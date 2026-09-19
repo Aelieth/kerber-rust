@@ -227,8 +227,6 @@ BUDGET_REQUIRED_JOBS = (
     "mit-image",
 )
 EXCEPTIONS_REL = "scripts/gate-wall-exceptions.txt"
-_SLEEP_RE = re.compile(r"\bsleep\s+([0-9]+(?:\.[0-9]+)?)")
-_ENTRYPOINT_SLEEP = re.compile(r"--entrypoint\s+sleep")
 
 FULL_RUN_SCHEDULED = (
     "cargo nextest run --workspace --release",
@@ -3164,35 +3162,49 @@ def check_stock_boots_per_job(ci_text: str | None = None) -> None:
     check_s4_shared_boots(ci_text)
 
 
-def _in_poll_loop(lines: list[str], idx: int) -> bool:
-    # A G2 au.log wait is a 30+ line python heredoc inside `for $(seq)`.
-    for j in range(idx, max(-1, idx - 80), -1):
-        if re.search(r"for\s+\S+\s+in\s+\$\(seq", lines[j]):
-            return True
-        if re.search(r"^\s*while\b", lines[j]):
-            return True
-        if re.match(r"^\s*done\b", lines[j]):
-            return False
-    return False
+def _hygiene_inventory():
+    spec = importlib.util.spec_from_file_location(
+        "hygiene_inventory", SCRIPTS / "lib" / "hygiene_inventory.py"
+    )
+    if spec is None or spec.loader is None:
+        _die("cannot load scripts/lib/hygiene_inventory.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def classify_gate_sleeps(text: str) -> list[tuple[str, float]]:
-    rows: list[tuple[str, float]] = []
-    lines = text.splitlines()
-    for i, line in enumerate(lines):
-        if _ENTRYPOINT_SLEEP.search(line) or re.search(r"docker\s+run.*sleep\s+3600", line):
-            continue
-        code = line.split("#", 1)[0]
-        m = _SLEEP_RE.search(code)
-        if not m:
-            continue
-        sec = float(m.group(1))
-        kind = "poll" if _in_poll_loop(lines, i) else "padding"
-        comment = line[line.index("#") :] if "#" in line else ""
-        if kind != "poll" and comment.strip().startswith("# proto:"):
-            kind = "proto"
-        rows.append((kind, sec))
-    return rows
+    inv = _hygiene_inventory()
+    return [(kind, float(sec)) for _ln, sec, kind in inv.classify_sleeps(text)]
+
+
+def check_sleep_classifiers_agree(text: str | None = None) -> None:
+    """ci-policy and the snapshot must book the same kind for each sleep."""
+    inv = _hygiene_inventory()
+
+    def one(label: str, body: str) -> None:
+        policy = classify_gate_sleeps(body)
+        inventory = [(kind, float(sec)) for _ln, sec, kind in inv.classify_sleeps(body)]
+        if policy != inventory:
+            _die(f"sleep classifiers disagree in {label}: policy={policy} inventory={inventory}")
+
+    if text is not None:
+        one("fixture", text)
+        return
+    one(
+        "self",
+        "for _ in $(seq 1 10); do\n"
+        "    sleep 0.1\n"
+        "done\n"
+        "sleep 0.1 # proto: krb5kdc pid reuse\n"
+        + ("# pad\n" * 40)
+        + "sleep 0.1 # proto: far from any loop\n",
+    )
+    for path in sorted(SCRIPTS.glob("*-gate.sh")):
+        one(path.name, path.read_text(encoding="utf-8"))
+    common = SCRIPTS / "lib" / "gate-common.sh"
+    if common.is_file():
+        one(common.name, common.read_text(encoding="utf-8"))
 
 
 def check_gate_wall(
@@ -4636,8 +4648,9 @@ jobs:
     )
     ok_sleep = "sleep 2 # proto: ticket age\n"
     check_sleep_ratchet({"renew-gate.sh": ok_sleep}, unit_sleep_count=5)
-    long_poll = "for _ in $(seq 1 80); do\n" + ("echo x\n" * 40) + "sleep 0.1\ndone\n"
+    long_poll = "for _ in $(seq 1 200); do\nsleep 0.1\ndone\n"
     check_sleep_ratchet({"kdc-gate.sh": long_poll}, unit_sleep_count=5)
+    check_sleep_classifiers_agree()
     _must_die(
         check_sleep_ratchet,
         {"pad-gate.sh": "sleep 3\n"},
@@ -4645,7 +4658,7 @@ jobs:
     )
     _must_die(
         check_sleep_ratchet,
-        {"pad-gate.sh": "sleep 3 # lockout\n"},
+        {"pad-gate.sh": "sleep 3 # leftover\n"},
         5,
     )
     _must_die(
@@ -5701,6 +5714,7 @@ def main() -> None:
     check_stock_boots_per_job()
     check_gate_wall()
     check_sleep_ratchet()
+    check_sleep_classifiers_agree()
     check_ci_budgets()
     check_need_bins_strict()
     check_testing_doc_budgets()

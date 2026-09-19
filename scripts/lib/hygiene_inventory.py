@@ -122,8 +122,11 @@ def gate_tags(text: str) -> list[tuple[str, str]]:
     return tags
 
 
-def _in_poll_loop(lines: list[str], idx: int) -> bool:
-    for j in range(idx, max(-1, idx - 30), -1):
+POLL_LOOKBACK = 30
+
+
+def _in_poll_loop(lines: list[str], idx: int, lookback: int = POLL_LOOKBACK) -> bool:
+    for j in range(idx, max(-1, idx - lookback), -1):
         if re.search(r"for\s+\S+\s+in\s+\$\(seq", lines[j]):
             return True
         if re.search(r"^\s*while\b", lines[j]):
@@ -133,13 +136,14 @@ def _in_poll_loop(lines: list[str], idx: int) -> bool:
     return False
 
 
-def sleep_sites(text: str, rel: str) -> list[str]:
-    rows: list[str] = []
+def classify_sleeps(text: str) -> list[tuple[int, str, str]]:
+    """(1-based line, seconds token, kind) for each gate sleep."""
+    rows: list[tuple[int, str, str]] = []
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        code = line.split("#", 1)[0]
         if ENTRYPOINT_SLEEP.search(line) or re.search(r"docker\s+run.*sleep\s+3600", line):
             continue
+        code = line.split("#", 1)[0]
         m = SLEEP_RE.search(code)
         if not m:
             continue
@@ -148,8 +152,12 @@ def sleep_sites(text: str, rel: str) -> list[str]:
         comment = line[line.index("#") :] if "#" in line else ""
         if kind != "poll" and (comment.strip().startswith("# proto:") or PROTO_HINT.search(line)):
             kind = "proto"
-        rows.append(f"{rel}\t{i + 1}\t{sec}\t{kind}")
+        rows.append((i + 1, sec, kind))
     return rows
+
+
+def sleep_sites(text: str, rel: str) -> list[str]:
+    return [f"{rel}\t{ln}\t{sec}\t{kind}" for ln, sec, kind in classify_sleeps(text)]
 
 
 def inventory_gates(root: pathlib.Path) -> tuple[list[str], list[str], list[str], list[str]]:

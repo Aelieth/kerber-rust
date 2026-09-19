@@ -248,9 +248,8 @@ echo "$MITLOG" | grep -F 'ses='
 echo "==== audit field names both legs ===="
 # /tmp/au.log is rewritten by the live MIT audit plugin after rm -f.
 # Wait until the rows both python reads need exist (AS/TGS finish + TGS seed).
-_au_ready=0
-for _ in $(seq 1 80); do
-    if docker exec -i "$NAME" python3 - <<'PY'
+_au_rows_ready() {
+    docker exec -i "$NAME" python3 - <<'PY'
 import json, sys
 try:
     text = open("/tmp/au.log").read()
@@ -282,16 +281,8 @@ def tgs_seed():
     )
 sys.exit(0 if finish("AS_REQ") and finish("TGS_REQ") and tgs_seed() else 1)
 PY
-    then
-        _au_ready=1
-        break
-    fi
-    sleep 0.1
-done
-if [ "$_au_ready" != 1 ]; then
-    docker exec "$NAME" cat /tmp/au.log >&2 || true
-    die "expected rows in /tmp/au.log never appeared"
-fi
+}
+retry_until 200 "expected rows in /tmp/au.log" _au_rows_ready
 docker exec -i "$NAME" python3 - <<'PY'
 import json, re, sys
 def rows(path):
