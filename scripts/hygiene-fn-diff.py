@@ -453,6 +453,9 @@ IMPL_START_RE = re.compile(r"^\s*(?:unsafe\s+)?impl\b")
 MOD_NEST_RE = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{"
 )
+MOD_SEMI_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;"
+)
 
 
 def _norm_header(text: str) -> str:
@@ -521,6 +524,61 @@ def _attr_doc_start(raw_lines: list[str], decl_line: int) -> int:
             continue
         break
     return start
+
+
+def _header_end(lines: list[str], start_1: int) -> int:
+    """1-based last line of a `mod` / `impl` header."""
+    raw = lines[start_1 - 1]
+    if raw.rstrip().endswith(";") or "{" in raw:
+        return start_1
+    for j in range(start_1, len(lines) + 1):
+        if "{" in lines[j - 1] or lines[j - 1].rstrip().endswith(";"):
+            return j
+    return start_1
+
+
+_IMPL_FN_RE = re.compile(
+    r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(?:const\s+)?(?:unsafe\s+)?fn\s+"
+    r"([A-Za-z_][A-Za-z0-9_]*)"
+)
+
+
+def _first_fn_in_impl(lines: list[str], start_1: int) -> str | None:
+    depth = 0
+    seen_open = False
+    for i in range(start_1 - 1, len(lines)):
+        raw = lines[i]
+        if seen_open:
+            m = _IMPL_FN_RE.match(raw)
+            if m and depth == 1:
+                return m.group(1)
+        depth += raw.count("{") - raw.count("}")
+        if "{" in raw:
+            seen_open = True
+        if seen_open and depth <= 0:
+            break
+    return None
+
+
+def scan_mod_impl_headers(code: str) -> list[tuple[int, int, str, str]]:
+    """(start, end, kind, name) for `mod x;` / inline `mod` / `impl` headers."""
+    lines = code.split("\n")
+    out: list[tuple[int, int, str, str]] = []
+    for i, line in enumerate(lines, 1):
+        m = MOD_SEMI_RE.match(line)
+        if m:
+            out.append((i, i, "mod", m.group(1)))
+            continue
+        m = MOD_NEST_RE.match(line)
+        if m:
+            end = _header_end(lines, i)
+            out.append((i, end, "mod", m.group(1)))
+            continue
+        if IMPL_START_RE.match(line):
+            end = _header_end(lines, i)
+            header = _impl_header_at(lines, end) or _norm_header(line.split("{", 1)[0])
+            out.append((i, end, "impl-header", header))
+    return out
 
 
 def _has_test_attr(raw_lines: list[str], decl_line: int) -> bool:
@@ -659,6 +717,28 @@ def extract(
             ty = _impl_header_at(code_lines, start)
             prefix = f"{ty}::{kind}" if ty else kind
             key = fn_key(crate, full_mod, prefix, name)
+            prelude = _attr_doc_start(raw_lines, start)
+            src = "\n".join(raw_lines[prelude:end])
+            if key in found:
+                key = f"{key}#{rel}:{start}"
+            found[key] = {"src": src, "file": rel, "name": name, "kind": kind}
+        for start, end, kind, name in scan_mod_impl_headers(code):
+            if any(a <= start <= b for a, b in test_ranges):
+                continue
+            if _has_test_attr(raw_lines, start):
+                continue
+            inline = _inline_mod_at(code_lines, start)
+            if kind == "mod" and (inline == name or inline.endswith(f"::{name}")):
+                parent = inline[: -len(name)].rstrip(":")
+                full_mod = "::".join(p for p in (module, parent) if p)
+            else:
+                full_mod = "::".join(p for p in (module, inline) if p)
+            item_name = name
+            if kind == "impl-header":
+                first = _first_fn_in_impl(code_lines, start)
+                if first:
+                    item_name = f"{name}::{first}"
+            key = fn_key(crate, full_mod, kind, item_name)
             prelude = _attr_doc_start(raw_lines, start)
             src = "\n".join(raw_lines[prelude:end])
             if key in found:
@@ -1439,7 +1519,7 @@ def _self_test() -> int:
             "}\n",
         )
         keyed = extract(old)
-        from_keys = [k for k in keyed if k.endswith("::from")]
+        from_keys = [k for k in keyed if k.endswith("::from") and "impl-header" not in k]
         if len(from_keys) != 2 or any("#" in k for k in from_keys):
             raise SystemExit(f"hygiene-fn-diff --self-test: From::from keys: {from_keys}")
         if not any("From<Foo>" in k for k in from_keys) or not any(
@@ -1469,6 +1549,42 @@ def _self_test() -> int:
         ex = extract(old, ["examples"])
         if "examples\tdiffsend::main" not in ex:
             raise SystemExit(f"hygiene-fn-diff --self-test: --roots examples: {sorted(ex)}")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "mod sub;\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            '#[cfg(feature = "extra")]\nmod sub;\n',
+        )
+        cfg_mod = compare_trees(old, new, {}, {}, {}, [])
+        if cfg_mod["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: #[cfg] on mod sub; must be changed")
+        _must_red(cfg_mod, "#[cfg] on mod sub;")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "mod inner {\n    fn m() {}\n}\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            '#[cfg(feature = "extra")]\nmod inner {\n    fn m() {}\n}\n',
+        )
+        cfg_inline = compare_trees(old, new, {}, {}, {}, [])
+        if cfg_inline["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: #[cfg] on inline mod must be changed")
+        _must_red(cfg_inline, "#[cfg] on inline mod")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "impl Foo {\n    fn m() {}\n}\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            '#[cfg(feature = "extra")]\nimpl Foo {\n    fn m() {}\n}\n',
+        )
+        cfg_impl = compare_trees(old, new, {}, {}, {}, [])
+        if cfg_impl["changed"] != 1:
+            raise SystemExit("hygiene-fn-diff --self-test: #[cfg] on impl must be changed")
+        _must_red(cfg_impl, "#[cfg] on impl")
         n += 1
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
