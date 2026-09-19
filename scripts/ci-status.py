@@ -94,7 +94,11 @@ def is_fixture_annotation(note: dict) -> bool:
     if (note.get("title") or "").strip().lower() == "fixture":
         return True
     path = (note.get("path") or "").replace("\\", "/")
-    return path.endswith("probe-gate.sh") or path.endswith("/probe-gate.sh")
+    return (
+        path.endswith("probe-gate.sh")
+        or path.endswith("/probe-gate.sh")
+        or path.endswith("-probe.sh")
+    )
 
 
 def annotations(repo: str, job: dict) -> list[str]:

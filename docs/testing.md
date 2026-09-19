@@ -83,8 +83,10 @@ naming the failing command; GitHub stores it as an annotation and `ci-status.py`
 failed job, so a red step names its cell without the log. KDC starts wait
 for the listener (or a log line) through `require_listen` /
 `require_log` / `require_port_in` in `scripts/lib/gate-common.sh`: a
-hard cap, then `die` naming what never appeared. Deliberate failures under `set +e`, `||`, `!`
-and `if` conditions are not annotated, and `log … error; exit 1` paths speak for themselves.
+hard cap, then `die` naming what never appeared. `die` and `unavailable` print the same `::error file=…,line=…::`
+form when `GITHUB_ACTIONS` is set (error path only). Deliberate
+failures under `set +e`, `||`, `!` and `if` conditions are not
+annotated by the ERR trap.
 `scripts/gate-err-trap-selftest.sh` (the `test` job) keeps the trap honest. Check CI after every push;
 a job stops at its first red step, so every gate behind that step has no CI evidence until the run is
 green again.

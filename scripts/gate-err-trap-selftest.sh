@@ -45,4 +45,51 @@ if echo "$OUT" | grep -q '::error'; then
     exit 1
 fi
 echo "$OUT" | grep -qF '"outcome":"error"'
+
+# die / unavailable are plain exits (no ERR trap). Under GITHUB_ACTIONS they
+# must still print a file:line annotation (run 649 had none).
+cat >"$TMP/scripts/die-probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$KERBER_ROOT"
+. "$KERBER_ROOT/scripts/lib/provenance.sh" >/dev/null
+. "$KERBER_ROOT/scripts/lib/gate-common.sh"
+die "forced failure"
+PROBE
+cat >"$TMP/scripts/unavail-probe.sh" <<'PROBE'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$KERBER_ROOT"
+. "$KERBER_ROOT/scripts/lib/provenance.sh" >/dev/null
+. "$KERBER_ROOT/scripts/lib/gate-common.sh"
+unavailable "forced unavailable"
+PROBE
+chmod +x "$TMP/scripts/die-probe.sh" "$TMP/scripts/unavail-probe.sh"
+run_die() {
+    (
+        cd "$TMP" || exit 1
+        export KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 KERBER_SCRATCH="$TMP/scratch"
+        if [ -n "${1-}" ]; then
+            export GITHUB_ACTIONS="$1"
+        else
+            unset GITHUB_ACTIONS
+        fi
+        bash ./scripts/die-probe.sh 2>&1
+    ) || true
+}
+OUT="$(run_die 1)"
+echo "$OUT"
+echo "$OUT" | grep -qF '::error file=scripts/die-probe.sh,line=6,title=fixture::die-probe.sh: forced failure'
+OUT="$(run_die)"
+if echo "$OUT" | grep -q '::error'; then
+    echo "die must not annotate without GITHUB_ACTIONS" >&2
+    exit 1
+fi
+OUT="$(
+    cd "$TMP" && KERBER_ROOT="$ROOT" KERBER_NO_IMAGE=1 \
+        KERBER_SCRATCH="$TMP/scratch" GITHUB_ACTIONS=1 \
+        bash ./scripts/unavail-probe.sh 2>&1 || true
+)"
+echo "$OUT"
+echo "$OUT" | grep -qF '::error file=scripts/unavail-probe.sh,line=6,title=fixture::unavail-probe.sh: forced unavailable'
 echo "gate-err-trap-selftest: ok"

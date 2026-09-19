@@ -27,7 +27,23 @@ log() {
         "$1" "$CORRELATION_ID" "$COMPONENT" "${2:-}" "${3:-}"
 }
 
+# Error-path annotation for GitHub Actions. Call from die / unavailable
+# only (not the green path). The caller passes its file and line so a
+# 6-second red step is not a bare "Process completed with exit code 1".
+_gate_annotate_at() {
+    [ -n "${GITHUB_ACTIONS:-}" ] || return 0
+    local src="$1" line="$2" msg="$3"
+    src=${src#"$PWD"/}
+    src=${src#./}
+    local title=
+    case "${src##*/}" in
+        probe-gate.sh|*-probe.sh) title=',title=fixture' ;;
+    esac
+    printf '::error file=%s,line=%s%s::%s: %s\n' "$src" "$line" "$title" "${src##*/}" "$msg"
+}
+
 die() {
+    _gate_annotate_at "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}" "${BASH_LINENO[0]:-0}" "$1"
     log "${COMPONENT}.gate" "error" ",\"error\":\"$1\""
     echo "$1" >&2
     exit 1
@@ -45,6 +61,7 @@ refuse_golden_capture_dir() {
 }
 
 unavailable() {
+    _gate_annotate_at "${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}" "${BASH_LINENO[0]:-0}" "$1"
     {
         echo "date=$(date -Iseconds)"
         echo "$1"
@@ -513,15 +530,49 @@ mit_kdc_restart() {
     die "mit krb5kdc did not restart"
 }
 
+# Shared-job attach (KERBER_LIVE=1): the boot-stock-mit.sh step may
+# return while the container is still coming up, or the container may
+# die between steps. Run 649 (b3471f0, mit-extra-2): boot 4 s, flows
+# gate 6 s, no product annotation — the old LIVE path died on one
+# inspect or returned without waiting for :88.
+_stock_mit_running() {
+    [ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null)" = true ]
+}
+
+_stock_mit_ready() {
+    local n=$1 logs
+    if wait_port_in "$n" 88 1; then
+        return 0
+    fi
+    logs="$(docker logs "$n" 2>&1 || true)"
+    echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'
+}
+
 stock_mit_kdc() {
     local n="${1:-${KERBER_MIT_NAME:-kerber-rust-mit-kdc}}"
     local logs
     if [ "${KERBER_LIVE:-}" = 1 ]; then
         n="${KERBER_MIT_NAME:-kerber-rust-mit-kdc}"
-        [ "$(docker inspect -f '{{.State.Running}}' "$n" 2>/dev/null)" = true ] \
-            || die "KERBER_LIVE=1 but $n is not running"
         NAME="$n"
-        return 0
+        for _ in $(seq 1 200); do
+            if _stock_mit_running "$n" && _stock_mit_ready "$n"; then
+                return 0
+            fi
+            if _stock_mit_running "$n"; then
+                logs="$(docker logs "$n" 2>&1 || true)"
+                if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"error"'; then
+                    echo "$logs" >&2
+                    die "stock MIT KDC harness kinit failed"
+                fi
+            fi
+            sleep 0.1
+        done
+        if _stock_mit_running "$n"; then
+            docker logs "$n" >&2 || true
+            die "KERBER_LIVE=1 but $n never became ready"
+        fi
+        # Still dead: start a stock instance and keep it for later steps.
+        KERBER_STOCK_KEEP=1
     fi
     docker rm -f "$n" >/dev/null 2>&1 || true
     docker run -d --name "$n" \
