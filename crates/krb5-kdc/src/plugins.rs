@@ -772,7 +772,7 @@ pub trait KdcPolicy: Send + Sync {
     ) -> Result<PolicyAdjustment, Error>;
 }
 
-/// Default policy: records nothing; built-in ticket rules stay in issue.rs.
+/// Default policy: records nothing; built-in ticket rules stay in issue/.
 pub struct DefaultPolicy;
 
 impl KdcPolicy for DefaultPolicy {

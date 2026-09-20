@@ -1,6 +1,7 @@
 //! Shared KDC helpers (`kdc_util.c`, `addr_srch.c`, `rd_req_dec.c`,
-//! `valid_times.c`, `authdata_dec.c`): `kdc_process_tgs_req`, header
-//! ticket decrypt, `validate_as_request`, session etype, and the
+//! `valid_times.c`, `authdata_dec.c`, `kdc_authdata.c`):
+//! `kdc_process_tgs_req`, header ticket decrypt,
+//! `validate_as_request`, session etype, `include_pac_p`, and the
 //! small encoding helpers.
 
 use krb5_asn1::{decode, encode};

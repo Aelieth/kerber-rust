@@ -1,5 +1,5 @@
-//! FAST (`fast_util.c`): hide-client-names, `check_fast_options`, and
-//! the AS FAST error wrap (`kdc_fast_handle_error`).
+//! FAST (`fast_util.c`): hide-client-names, FAST option check
+//! (`:226`), and the AS FAST error wrap (`kdc_fast_handle_error`).
 
 use krb5_asn1::{decode, encode};
 use krb5_types::{AsReq, HostAddress, KdcReqBody, MethodData, PaData, TgsReq, err, pa};

@@ -110,9 +110,9 @@ pub(super) fn issue_as_from(
 /// MIT `lookup_client` carried state. Data only.
 struct AsLookup {
     client: Principal,
-    pub(super) cname: PrincipalName,
-    pub(super) sname: PrincipalName,
-    pub(super) server: Principal,
+    cname: PrincipalName,
+    sname: PrincipalName,
+    server: Principal,
     session_etype: EncryptionType,
     work_padata: Option<Vec<PaData>>,
     req_cname: PrincipalName,
@@ -122,15 +122,15 @@ struct AsLookup {
 /// MIT `finish_preauth` carried state. Data only.
 struct AsPreauth {
     client: Principal,
-    pub(super) cname: PrincipalName,
-    pub(super) sname: PrincipalName,
-    pub(super) server: Principal,
+    cname: PrincipalName,
+    sname: PrincipalName,
+    server: Principal,
     session_etype: EncryptionType,
     work_padata: Option<Vec<PaData>>,
     ckey: KeyEntry,
     extra_padata: Vec<PaData>,
     as_rep_key: ProtocolKey,
-    pub(super) etype: EncryptionType,
+    etype: EncryptionType,
     skip_timestamp: bool,
     hw_preauth: bool,
     reply_key_replaced: bool,

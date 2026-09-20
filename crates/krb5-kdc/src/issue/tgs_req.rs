@@ -1,6 +1,6 @@
-//! TGS-REQ (`do_tgs_req.c`): `gather_tgs_req_info`, `check_tgs_req`,
-//! `tgs_flags_times_policy`, `tgs_issue_ticket`, referral / alternate
-//! TGS, and the second-ticket helpers.
+//! TGS-REQ (`do_tgs_req.c`): `gather_tgs_req_info`, `check_tgs_req`
+//! (flags/times/kdcpolicy tail `:900-945`), `tgs_issue_ticket`,
+//! referral / alternate TGS, and the second-ticket helpers.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2};
@@ -97,14 +97,14 @@ struct TgsGather<'a> {
     ap: krb5_types::ApReq,
     enc_tkt: EncTicketPart,
     tgt_session: ProtocolKey,
-    pub(super) authenticator: krb5_types::Authenticator,
+    authenticator: krb5_types::Authenticator,
     header_realm: String,
     renew: bool,
     validate: bool,
-    pub(super) sname: PrincipalName,
+    sname: PrincipalName,
     req_realm: String,
     header_pac: Option<Vec<u8>>,
-    pub(super) server: Principal,
+    server: Principal,
 }
 
 /// MIT `check_tgs_req` (`do_tgs_req.c:857`) carried state. Data only.
@@ -113,11 +113,11 @@ struct TgsChecked<'a> {
     ap: krb5_types::ApReq,
     enc_tkt: EncTicketPart,
     tgt_session: ProtocolKey,
-    pub(super) authenticator: krb5_types::Authenticator,
+    authenticator: krb5_types::Authenticator,
     renew: bool,
     validate: bool,
-    pub(super) sname: PrincipalName,
-    pub(super) server: Principal,
+    sname: PrincipalName,
+    server: Principal,
     auth_indicators: Vec<String>,
     s4u2self: bool,
     s4u_local: Option<Principal>,
@@ -147,11 +147,11 @@ struct TgsTimes<'a> {
     ap: krb5_types::ApReq,
     enc_tkt: EncTicketPart,
     tgt_session: ProtocolKey,
-    pub(super) authenticator: krb5_types::Authenticator,
+    authenticator: krb5_types::Authenticator,
     renew: bool,
     validate: bool,
-    pub(super) sname: PrincipalName,
-    pub(super) server: Principal,
+    sname: PrincipalName,
+    server: Principal,
     auth_indicators: Vec<String>,
     s4u2self: bool,
     stkt: Option<SecondTicket>,
@@ -168,11 +168,11 @@ struct TgsTimes<'a> {
     tkt_kvno: u32,
     tkt_etype: EncryptionType,
     transited: TransitedEncoding,
-    pub(super) session: ProtocolKey,
-    pub(super) authtime: KerberosTime,
-    pub(super) starttime: KerberosTime,
-    pub(super) end: KerberosTime,
-    pub(super) flags: TicketFlags,
+    session: ProtocolKey,
+    authtime: KerberosTime,
+    starttime: KerberosTime,
+    end: KerberosTime,
+    flags: TicketFlags,
     ticket_renew_till: Option<KerberosTime>,
 }
 
