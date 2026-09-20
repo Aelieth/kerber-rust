@@ -447,8 +447,9 @@ fn issue_as_body(
 }
 
 /// MIT `lookup_client` (`do_as_req.c:134-151`) plus the AS server lookup,
-/// `validate_as_request` (`kdc_util.c:716`), and `select_client_key`
-/// (`do_as_req.c:103`).
+/// `validate_as_request` (`kdc_util.c:716`), `select_client_key`
+/// (`do_as_req.c:103`), `select_session_keytype` (`do_as_req.c:641`),
+/// and the FAST options check (`fast_util.c:226`).
 fn lookup_client(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -521,8 +522,10 @@ fn lookup_client(
     })
 }
 
-/// MIT `finish_preauth` (`do_as_req.c:434-466`): run padata and enforce
-/// required preauth before the ticket is issued.
+/// MIT `finish_preauth` (`do_as_req.c:434-466`) is `check_padata`'s
+/// completion callback; this slice also runs `check_padata`
+/// (`do_as_req.c:758`) and the REQUEST_ANONYMOUS rewrite (MIT
+/// `do_as_req.c:716-734`, before `select_client_key`).
 fn finish_preauth(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -732,8 +735,8 @@ fn finish_preauth(
     })
 }
 
-/// MIT `finish_process_as_req` (`do_as_req.c:194-329`): mint the TGT and
-/// encode the AS-REP.
+/// MIT `finish_process_as_req` (`do_as_req.c:194-423`) plus
+/// `process_as_req` session key, flags, and times (`do_as_req.c:651-703`).
 fn finish_process_as_req(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -1246,7 +1249,7 @@ fn issue_tgs_body(
     tgs_issue_ticket(store, req, raw, body, tgs_fast, t)
 }
 
-/// MIT `gather_tgs_req_info` (`do_tgs_req.c:592`).
+/// MIT `gather_tgs_req_info` through `search_sprinc` (`do_tgs_req.c:592-673`).
 fn gather_tgs_req_info<'a>(
     store: &dyn PrincipalRead,
     req: &'a TgsReq,
@@ -1327,7 +1330,9 @@ fn gather_tgs_req_info<'a>(
     })
 }
 
-/// MIT `check_tgs_req` (`do_tgs_req.c:857`).
+/// MIT `check_tgs_req` (`do_tgs_req.c:857`) plus gather's tail
+/// (`do_tgs_req.c:692-804`: S4U2Self, `decrypt_2ndtkt`, `RBCD_PAC_PRINC`,
+/// auth indicators, transited); Rust runs the constraints skeleton first.
 fn check_tgs_req<'a>(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -1607,7 +1612,10 @@ fn check_tgs_req<'a>(
     tgs_flags_times_policy(store, body, c)
 }
 
-/// MIT `compute_ticket_times` (`do_tgs_req.c:812`).
+/// Flags, times, and kdcpolicy: MIT `get_ticket_flags` (`do_tgs_req.c:905`),
+/// `compute_ticket_times` (`do_tgs_req.c:812` via `:907`),
+/// `check_kdcpolicy_tgs` (`do_tgs_req.c:919`), `gen_session_key`
+/// (`do_tgs_req.c:980`), and the S4U client fetch (`do_tgs_req.c:775`).
 fn tgs_flags_times_policy<'a>(
     store: &dyn PrincipalRead,
     body: &KdcReqBody,
@@ -1810,7 +1818,8 @@ fn tgs_flags_times_policy<'a>(
     })
 }
 
-/// MIT `tgs_issue_ticket` (`do_tgs_req.c:956`).
+/// MIT `tgs_issue_ticket` (`do_tgs_req.c:956`); session-key generation
+/// lives in `tgs_flags_times_policy`.
 fn tgs_issue_ticket(
     store: &dyn PrincipalRead,
     req: &TgsReq,

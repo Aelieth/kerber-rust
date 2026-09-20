@@ -18,6 +18,13 @@ this project uses semantic versioning once a crate is published.
   cites its MIT line. Carried state is data-only. File split is 3b.
   Ledger rust-sites that named the old bodies follow the phase that
   now holds the status word.
+- **tool.** `--split` compares attribute blocks, optional `head:` /
+  `tail:` glue (start / end after rewrap), and `let mut` → `let`
+  edits. `rustfmt_skip` is a quality key. Self-test 63 cases.
+- **kdc.** The nine `#[rustfmt::skip]` and two `#[allow(unused_mut)]`
+  come off; rustfmt wraps the glue. The TGS dispatcher makes MIT's
+  three calls; flags / times / kdcpolicy is `tgs_flags_times_policy`
+  at the tail of `check_tgs_req`.
 
 ### W3-S3.2-R residues
 
