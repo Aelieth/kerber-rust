@@ -90,7 +90,17 @@ old = a + b + …` checks that the concatenated new bodies equal the
 old body modulo per-split line-anchored `--glue` lines (whole lines
 present in the new bodies and absent from the old; each listed line
 excuses one occurrence; unused glue is
-red). `--roots` adds `examples/` and `fuzz/` to the default `crates/`
+red), optional per-phase `head:` / `tail:` blocks (matched only at
+the start / end of that phase after whitespace and rewrap
+normalisation; a block found anywhere else is red), and
+occurrence-counted `edit: OLD => NEW` rows that drop the single
+`mut` token after `let` (anything else is red). Under `--split` the
+old fn's attribute block must equal the dispatcher's (a doc edit is
+`doc-only`); a phase attribute block is empty or a blob-pinned
+`--accept`. Phase signatures are named as `split-sig` in the report.
+`hygiene_inventory` counts `rustfmt_skip` under `crates/*/src`;
+`hygiene-diff` fails on a rise. `--roots` adds `examples/` and
+`fuzz/` to the default `crates/`
 scan. A body
 edit, a dropped item, a reordered `--split`, or an unused `--accept`
 is red; a pure move and a vis-only widening are green. `--accept` is

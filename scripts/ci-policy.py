@@ -2851,9 +2851,9 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 
 
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
-HYGIENE_DIFF_MIN_CASES = 30
+HYGIENE_DIFF_MIN_CASES = 31
 HYGIENE_BODY_DIFF_MIN_CASES = 24
-HYGIENE_FN_DIFF_MIN_CASES = 56
+HYGIENE_FN_DIFF_MIN_CASES = 63
 HYGIENE_INVENTORY_MIN_CASES = 2
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
@@ -3071,7 +3071,13 @@ def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
         fn_at = testing.find("hygiene-fn-diff.py")
         if dead_at < 0 or not (diff_at < dead_at < fn_at):
             _die("docs/testing.md must describe --dead on the hygiene-diff paragraph")
-        for needle in ("byte-string", "line-anchored", "impl-header"):
+        for needle in (
+            "byte-string",
+            "line-anchored",
+            "impl-header",
+            "head:",
+            "rustfmt_skip",
+        ):
             if needle not in testing:
                 _die(f"docs/testing.md must describe fn-diff {needle}")
     elif _self_test_n_from_text(text) is None or (
@@ -5163,7 +5169,7 @@ jobs:
         "def _self_test_duplicates():\n    pass\n"
         "def _self_test():\n    pass\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (30 cases)')\n"
+        "        print('hygiene-diff: self-test ok (31 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n"
     )
@@ -5186,7 +5192,7 @@ jobs:
         '    """merged: load_duplicates_map load_renames_map _self_test_duplicates"""\n'
         "    return None\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (30 cases)')\n"
+        "        print('hygiene-diff: self-test ok (31 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n",
     )
@@ -5216,7 +5222,7 @@ jobs:
         "def _self_test():\n    x + 2 phase_b pub(crate)\n"
         "    # unused-accept fixture must be otherwise green\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (56 cases)')\n"
+        "        print('hygiene-fn-diff: self-test ok (63 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_fn_diff_self_test, "def main():\n    return 0\n")
@@ -5232,7 +5238,7 @@ jobs:
         '    """x + 2 phase_b pub(crate)"""\n'
         "    return None\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (56 cases)')\n"
+        "        print('hygiene-fn-diff: self-test ok (63 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
     )
     with tempfile.TemporaryDirectory() as tmp:

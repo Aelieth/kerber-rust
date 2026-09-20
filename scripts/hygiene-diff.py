@@ -12,7 +12,7 @@ Fails on:
   - a (file,kind,tag) multiplicity drop (a (kind,tag) count that fell)
   - a diffsend case, client-differential flow, or ledger row removed or regraded
   - a gate_rc that went from 0 to non-zero
-  - quality counts that went up (allow=, allow_sites=, unwrap_expect_panic_src=, traces_untracked=,
+  - quality counts that went up (allow=, allow_sites=, rustfmt_skip=, unwrap_expect_panic_src=, traces_untracked=,
     clippy_warnings=, doc_warnings=, fmt_files=, shellcheck_findings=, undocumented_pub=)
     unless `--accept-rise key=N:reason` names that exact rise
   - a quality rc that went from 0 to non-zero (fmt_rc, clippy_rc, doc_rc, doctest_rc,
@@ -347,6 +347,7 @@ def _self_test_quality(root: pathlib.Path) -> int:
     n = 0
     red = [
         ("undocumented_pub rose", {"undocumented_pub": "5"}, {"undocumented_pub": "7"}),
+        ("rustfmt_skip rose", {"rustfmt_skip": "0"}, {"rustfmt_skip": "1"}),
         ("shellcheck_findings rose", {"shellcheck_findings": "90"}, {"shellcheck_findings": "91"}),
         ("doc_warnings rose", {"doc_warnings": "0"}, {"doc_warnings": "1"}),
         ("doc_rc went red", {"doc_rc": "0"}, {"doc_rc": "1"}),
@@ -662,6 +663,7 @@ def _compare(args) -> int:
     for key in (
         "allow",
         "allow_sites",
+        "rustfmt_skip",
         "unwrap_expect_panic_src",
         "traces_untracked",
         "clippy_warnings",

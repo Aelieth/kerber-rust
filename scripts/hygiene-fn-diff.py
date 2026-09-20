@@ -21,7 +21,13 @@ Fails on any `changed`, `added` or `removed` not in `--accept` (keyed,
 blob-pinned, unused entry red). `--split old_key = new_a + new_b + …`
 checks that the concatenated new bodies equal the old body modulo
 per-split `--glue` lines (whole lines present in the new bodies and
-absent from the old; unused glue is red).
+absent from the old; unused glue is red), optional per-phase `head:` /
+`tail:` blocks (start / end only, after whitespace + rewrap
+normalisation), and occurrence-counted `edit: OLD => NEW` rows that
+drop the single `mut` token after `let`. Under `--split` the old fn's
+attribute block must equal the dispatcher's (doc edits are
+`doc-only`); a phase attribute block is empty or a blob-pinned
+`--accept`. Phase signatures are named in the report.
 
 Usage:
   python3 scripts/hygiene-fn-diff.py --old SHA --new SHA \\
@@ -198,32 +204,108 @@ def load_accept(path: pathlib.Path | None) -> dict[str, dict[str, str]]:
     return out
 
 
+def _empty_split_extra() -> dict[str, object]:
+    return {"heads": {}, "tails": {}, "edits": []}
+
+
+def _is_let_mut_to_let(old: str, new: str) -> bool:
+    """True when NEW is OLD with the single token `mut` removed after `let`."""
+    o = " ".join(old.split())
+    n = " ".join(new.split())
+    if not o.startswith("let mut ") or not n.startswith("let "):
+        return False
+    if n.startswith("let mut "):
+        return False
+    return o[len("let mut ") :] == n[len("let ") :]
+
+
+def _parse_edit_line(payload: str) -> tuple[str, str]:
+    if " => " not in payload:
+        raise SystemExit(f"bad edit: {payload!r} (want OLD => NEW)")
+    old, new = payload.split(" => ", 1)
+    old, new = old.strip(), new.strip()
+    if not _is_let_mut_to_let(old, new):
+        raise SystemExit(
+            f"edit: only let mut → let (got {old!r} => {new!r})"
+        )
+    return old, new
+
+
+def _block_indent_body(line: str) -> str:
+    """Strip one map-file indent from a `head:` / `tail:` continuation."""
+    if line.startswith("|"):
+        raw = line[1:]
+        return raw[1:] if raw.startswith(" ") else raw
+    if line.startswith("\t"):
+        return line[1:]
+    if line.startswith("    "):
+        return line[4:]
+    return line.lstrip()
+
+
 def load_splits(
     path: pathlib.Path | None, extra: list[str]
-) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
-    """`old_key = new_a + new_b + …` plus optional `glue: LINE` rows."""
+) -> tuple[dict[str, list[str]], dict[str, list[str]], dict[str, dict[str, object]]]:
+    """`old_key = new_a + new_b + …` plus `glue:` / `head:` / `tail:` / `edit:`."""
     _require_map_file(path, "--split")
-    rows: list[str] = []
-    if path is not None and path.is_file():
-        in_stamp = True
-        for line in path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if in_stamp and _HD._STAMP_LINE_RE.match(line):
-                continue
-            in_stamp = False
-            rows.append(line)
-    rows.extend(extra)
     out: dict[str, list[str]] = {}
     file_glue: dict[str, list[str]] = {}
+    extras: dict[str, dict[str, object]] = {}
     last_old = ""
-    for line in rows:
+    block_kind = ""
+    block_key = ""
+    block_lines: list[str] = []
+
+    def extra_of(old: str) -> dict[str, object]:
+        return extras.setdefault(old, _empty_split_extra())
+
+    def flush_block() -> None:
+        nonlocal block_kind, block_key, block_lines
+        if not block_kind:
+            return
+        if not last_old:
+            raise SystemExit(f"{block_kind}: with no preceding --split line")
+        text = "\n".join(block_lines).rstrip("\n")
+        if not text.strip():
+            raise SystemExit(f"empty {block_kind}: {block_key}")
+        if "\t" not in block_key:
+            raise SystemExit(
+                f"{block_kind}: keys must be crate<TAB>path: {block_key!r}"
+            )
+        bucket = extra_of(last_old)[f"{block_kind}s"]
+        assert isinstance(bucket, dict)
+        if block_key in bucket:
+            raise SystemExit(f"duplicate {block_kind}: {block_key}")
+        bucket[block_key] = text
+        block_kind = ""
+        block_key = ""
+        block_lines = []
+
+    def handle_stripped(line: str) -> None:
+        nonlocal last_old, block_kind, block_key, block_lines
         if line.startswith("glue:"):
+            flush_block()
             if not last_old:
                 raise SystemExit("glue: with no preceding --split line")
             file_glue.setdefault(last_old, []).append(line[5:].strip())
-            continue
+            return
+        if line.startswith("head:") or line.startswith("tail:"):
+            flush_block()
+            kind, _, rest = line.partition(":")
+            block_kind = kind
+            block_key = rest.strip()
+            block_lines = []
+            return
+        if line.startswith("edit:"):
+            flush_block()
+            if not last_old:
+                raise SystemExit("edit: with no preceding --split line")
+            old_e, new_e = _parse_edit_line(line[5:].strip())
+            edits = extra_of(last_old)["edits"]
+            assert isinstance(edits, list)
+            edits.append((old_e, new_e))
+            return
+        flush_block()
         m = SPLIT_LINE_RE.match(line)
         if not m:
             raise SystemExit(f"bad --split line: {line!r}")
@@ -239,12 +321,34 @@ def load_splits(
             raise SystemExit(f"--split duplicate part: {line!r}")
         out[old] = parts
         last_old = old
+
+    if path is not None and path.is_file():
+        in_stamp = True
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            stripped = raw.strip()
+            if in_stamp and stripped and _HD._STAMP_LINE_RE.match(stripped):
+                continue
+            if in_stamp and not stripped:
+                continue
+            in_stamp = False
+            if block_kind and (
+                raw.startswith((" ", "\t")) or raw.startswith("|")
+            ):
+                block_lines.append(_block_indent_body(raw))
+                continue
+            if not stripped or stripped.startswith("#"):
+                flush_block()
+                continue
+            handle_stripped(stripped)
+        flush_block()
+    for line in extra:
+        handle_stripped(line.strip())
     lhs = set(out)
     for old, parts in out.items():
         for p in parts:
             if p in lhs and p != old:
                 raise SystemExit(f"--split RHS is also a LHS: {p}")
-    return out, file_glue
+    return out, file_glue, extras
 
 
 def parse_glue_args(items: list[str]) -> dict[str, list[str]] | list[str]:
@@ -1000,6 +1104,101 @@ def _glue_for_split(
     return glue.get(old_key, [])
 
 
+def _prelude_attr_doc(src: str) -> tuple[str, str]:
+    """Non-doc `#[]` attributes and `///` docs before the item declaration."""
+    attrs: list[str] = []
+    docs: list[str] = []
+    for line in src.splitlines():
+        s = line.strip()
+        if not s:
+            continue
+        if s.startswith("///"):
+            docs.append(s)
+            continue
+        if s.startswith("#[") or (
+            (s.startswith("#") or s.endswith(",") or s == "]" or s.endswith(")]"))
+            and not s.startswith("#!")
+        ):
+            attrs.append(s)
+            continue
+        break
+    return "\n".join(attrs), "\n".join(docs)
+
+
+def _drop_trailing_commas(src: str) -> str:
+    """Drop rustfmt trailing commas before `}` / `)` / `]` outside literals."""
+    out: list[str] = []
+    for is_code, text in _literal_spans(src):
+        if not is_code:
+            out.append(text)
+            continue
+        out.append(re.sub(r",(\s*[}\])])", r"\1", text))
+    return "".join(out)
+
+
+def _block_norm(src: str) -> str:
+    return compare_norm(_drop_trailing_commas(src))
+
+
+def _strip_norm_prefix(body: str, block: str) -> str | None:
+    """If `body` starts with `block` under rewrap-norm, return the rest."""
+    target = _block_norm(block)
+    if not target:
+        return body
+    lines = body.splitlines()
+    i = 0
+    while i < len(lines) and not lines[i].strip():
+        i += 1
+    accum: list[str] = []
+    while i < len(lines):
+        accum.append(lines[i])
+        got = _block_norm("\n".join(accum))
+        if got == target:
+            return "\n".join(lines[i + 1 :])
+        if len(got) > len(target):
+            return None
+        i += 1
+    return None
+
+
+def _strip_norm_suffix(body: str, block: str) -> str | None:
+    """If `body` ends with `block` under rewrap-norm, return the prefix."""
+    target = _block_norm(block)
+    if not target:
+        return body
+    lines = body.splitlines()
+    j = len(lines)
+    while j > 0 and not lines[j - 1].strip():
+        j -= 1
+    accum: list[str] = []
+    while j > 0:
+        j -= 1
+        accum.insert(0, lines[j])
+        got = _block_norm("\n".join(accum))
+        if got == target:
+            return "\n".join(lines[:j])
+        if len(got) > len(target):
+            return None
+    return None
+
+
+def _apply_edits(
+    body: str, edits: list[tuple[str, str]]
+) -> tuple[str, list[str]]:
+    unused: list[str] = []
+    text = body
+    for old, new in edits:
+        if old not in text:
+            unused.append(old)
+            continue
+        text = text.replace(old, new, 1)
+    return text, unused
+
+
+def _sig_one_line(src: str) -> str:
+    return " ".join(signature_of(src).split())
+
+
 def compare_trees(
     old_root: pathlib.Path,
     new_root: pathlib.Path,
@@ -1008,6 +1207,7 @@ def compare_trees(
     splits: dict[str, list[str]],
     glue: dict[str, list[str]] | list[str],
     roots: list[str] | None = None,
+    split_extra: dict[str, dict[str, object]] | None = None,
 ) -> dict[str, object]:
     old = extract(old_root, roots)
     new = extract(new_root, roots)
@@ -1024,6 +1224,14 @@ def compare_trees(
     missing_split: list[str] = []
     unused_glue: list[str] = []
     illegal_glue: list[str] = []
+    unused_edit: list[str] = []
+    unused_head: list[str] = []
+    unused_tail: list[str] = []
+    split_problems: list[str] = []
+    split_sigs: list[tuple[str, str]] = []
+    accepted: list[tuple[str, str, str]] = []
+    used_accept: set[str] = set()
+    extras = split_extra or {}
 
     for old_key, new_keys in splits.items():
         if old_key not in old:
@@ -1033,21 +1241,103 @@ def compare_trees(
         if missing:
             missing_split.extend(f"{old_key} -> {k}" for k in missing)
             continue
+        ex = extras.get(old_key, _empty_split_extra())
+        heads = ex.get("heads") or {}
+        tails = ex.get("tails") or {}
+        edits = list(ex.get("edits") or [])
+        assert isinstance(heads, dict) and isinstance(tails, dict)
+        for hk in heads:
+            if hk not in new_keys:
+                unused_head.append(f"{old_key}: {hk}")
+        for tk in tails:
+            if tk not in new_keys:
+                unused_tail.append(f"{old_key}: {tk}")
+        dispatcher = old_key if old_key in new_keys else new_keys[0]
+        old_attrs, old_docs = _prelude_attr_doc(old[old_key]["src"])
+        disp_attrs, disp_docs = _prelude_attr_doc(new[dispatcher]["src"])
+        attr_ok = compare_norm(old_attrs) == compare_norm(disp_attrs)
+        doc_only_disp = compare_norm(old_docs) != compare_norm(disp_docs)
+        if not attr_ok:
+            split_problems.append(f"--split attribute mismatch: {old_key}")
+        phase_attr_ok = True
+        for k in new_keys:
+            if k == dispatcher:
+                continue
+            phase_attrs, _docs = _prelude_attr_doc(new[k]["src"])
+            if not phase_attrs.strip():
+                continue
+            entry = accept.get(k)
+            if (
+                entry is not None
+                and entry["new"] == k
+                and entry["new_hash"] == blob_hash(new[k]["src"])
+            ):
+                used_accept_early = True
+            else:
+                used_accept_early = False
+            if not used_accept_early:
+                phase_attr_ok = False
+                split_problems.append(f"--split phase attributes: {k}")
+            else:
+                used_accept.add(k)
+                accepted.append((k, k, entry["reason"]))
+        cores: list[str] = []
+        placed = True
+        for k in new_keys:
+            body = inner_body(new[k]["src"])
+            head = heads.get(k)
+            tail = tails.get(k)
+            if head:
+                rest = _strip_norm_prefix(body, str(head))
+                if rest is None:
+                    placed = False
+                    split_problems.append(f"--split head not at start: {k}")
+                    break
+                if _block_norm(str(head)) in _block_norm(rest):
+                    placed = False
+                    split_problems.append(f"--split head found elsewhere: {k}")
+                    break
+                body = rest
+            if tail:
+                rest = _strip_norm_suffix(body, str(tail))
+                if rest is None:
+                    placed = False
+                    split_problems.append(f"--split tail not at end: {k}")
+                    break
+                if _block_norm(str(tail)) in _block_norm(rest):
+                    placed = False
+                    split_problems.append(f"--split tail found elsewhere: {k}")
+                    break
+                body = rest
+            cores.append(body)
         g_lines = _glue_for_split(glue, old_key)
         old_body = inner_body(old[old_key]["src"])
-        concat = "\n".join(inner_body(new[k]["src"]) for k in new_keys)
-        unused, illegal = glue_problems(old_body, concat, g_lines)
+        old_edited, edit_unused = _apply_edits(old_body, edits)
+        unused_edit.extend(f"{old_key}: {e}" for e in edit_unused)
+        concat = "\n".join(cores) if placed else ""
+        unused, illegal = glue_problems(old_edited, concat, g_lines)
         unused_glue.extend(f"{old_key}: {g}" for g in unused)
         illegal_glue.extend(f"{old_key}: {g}" for g in illegal)
         stripped = strip_glue_lines(concat, g_lines)
-        if (
-            compare_norm(old_body) == compare_norm(stripped)
+        affix_unused = any(
+            x.startswith(f"{old_key}:") for x in unused_head + unused_tail
+        )
+        body_ok = (
+            placed
+            and compare_norm(old_edited) == compare_norm(stripped)
             and not unused
             and not illegal
-        ):
+            and not edit_unused
+            and not affix_unused
+        )
+        if body_ok and attr_ok and phase_attr_ok:
             split_ok.append(old_key)
             used_old.add(old_key)
             used_new.update(new_keys)
+            if doc_only_disp:
+                pairs.append((old_key, dispatcher, "doc-only"))
+            for k in new_keys:
+                split_sigs.append((k, _sig_one_line(new[k]["src"])))
         else:
             split_fail.append(old_key)
 
@@ -1066,8 +1356,6 @@ def compare_trees(
 
     removed = sorted(k for k in old if k not in used_old)
     added = sorted(k for k in new if k not in used_new)
-    accepted: list[tuple[str, str, str]] = []
-    used_accept: set[str] = set()
     empty_h = blob_hash("")
     still_removed: list[str] = []
     still_added: list[str] = []
@@ -1153,6 +1441,11 @@ def compare_trees(
         "unused_moves": unused_moves,
         "unused_glue": unused_glue,
         "illegal_glue": illegal_glue,
+        "unused_edit": unused_edit,
+        "unused_head": unused_head,
+        "unused_tail": unused_tail,
+        "split_problems": split_problems,
+        "split_sigs": split_sigs,
         "missing_rhs": missing_rhs,
         "old": len(old),
         "new": len(new),
@@ -1188,6 +1481,8 @@ def render(report: dict[str, object]) -> str:
         lines.append(f"doc-only {o} -> {n}")
     for o, n, reason in report["accepted"]:  # type: ignore[misc]
         lines.append(f"accepted {o} -> {n}: {reason}")
+    for k, sig in report.get("split_sigs", []):  # type: ignore[misc]
+        lines.append(f"split-sig {k}: {sig}")
     return "\n".join(lines) + "\n"
 
 
@@ -1213,6 +1508,14 @@ def evaluate(report: dict[str, object]) -> None:
         errs.append(f"--glue present in old body: {k}")
     for k in report["missing_rhs"]:  # type: ignore[misc]
         errs.append(f"--accept RHS missing in new tree: {k}")
+    for k in report.get("unused_edit", []):  # type: ignore[misc]
+        errs.append(f"--split edit unused: {k}")
+    for k in report.get("unused_head", []):  # type: ignore[misc]
+        errs.append(f"--split head unused: {k}")
+    for k in report.get("unused_tail", []):  # type: ignore[misc]
+        errs.append(f"--split tail unused: {k}")
+    for k in report.get("split_problems", []):  # type: ignore[misc]
+        errs.append(str(k))
     if errs:
         raise FnDiffError("; ".join(errs[:8]))
 
@@ -1733,7 +2036,7 @@ def _self_test() -> int:
         else:
             raise SystemExit("hygiene-fn-diff --self-test: --split RHS-as-LHS must fail")
 
-        natural_map, _g = load_splits(None, ["demo\twhole = demo\twhole + demo\ttail"])
+        natural_map, _g, _e = load_splits(None, ["demo\twhole = demo\twhole + demo\ttail"])
         if natural_map != {"demo\twhole": ["demo\twhole", "demo\ttail"]}:
             raise SystemExit("hygiene-fn-diff --self-test: old = old + tail must parse")
         n += 1
@@ -1769,7 +2072,7 @@ def _self_test() -> int:
             "glue: d();\n",
             encoding="utf-8",
         )
-        smap, sglue = load_splits(splitpath, [])
+        smap, sglue, _sex = load_splits(splitpath, [])
         if sglue != {"demo\tone": ["b();"], "demo\ttwo": ["d();"]}:
             raise SystemExit(f"hygiene-fn-diff --self-test: per-split glue map: {sglue}")
         n += 1
@@ -2051,6 +2354,175 @@ def _self_test() -> int:
             raise SystemExit("hygiene-fn-diff --self-test: #[cfg] on impl must be changed")
         _must_red(cfg_impl, "#[cfg] on impl")
         n += 1
+
+        # R1 (a): attributes under --split. The S3.3a auditor fixture
+        # (allow + rustfmt::skip on the dispatcher and the phases) is red.
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn big() {\n    let mut x = a();\n    b(x);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "#[allow(clippy::all)]\n#[rustfmt::skip]\n"
+            "fn big() {\n    let x = p1();\n    p2(x)\n}\n\n"
+            "#[allow(unused_mut)]\n#[rustfmt::skip]\n"
+            "fn p1() -> u32 {\n    let mut x = a();\n    x\n}\n\n"
+            "#[allow(clippy::all, unsafe_code)]\n"
+            "fn p2(x: u32) {\n    b(x);\n}\n",
+        )
+        attr_fix = compare_trees(
+            old,
+            new,
+            {},
+            {},
+            {"demo\tbig": ["demo\tbig", "demo\tp1", "demo\tp2"]},
+            ["let x = p1();", "p2(x)", "x"],
+        )
+        if not attr_fix["split_fail"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: split-attr fixture must fail"
+            )
+        _must_red(attr_fix, "split-attr fixture")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "fn whole() {\n    a();\n    b();\n}\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    a();\n    tail();\n}\n"
+            "#[allow(dead_code)]\nfn tail() {\n    b();\n}\n",
+        )
+        phase_allow = compare_trees(
+            old,
+            new,
+            {},
+            {},
+            {"demo\twhole": ["demo\twhole", "demo\ttail"]},
+            ["tail();"],
+        )
+        _must_red(phase_allow, "phase #[allow] without accept")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "#[allow(dead_code)]\nfn whole() {\n    a();\n    b();\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    a();\n    tail();\n}\nfn tail() {\n    b();\n}\n",
+        )
+        dropped_attr = compare_trees(
+            old,
+            new,
+            {},
+            {},
+            {"demo\twhole": ["demo\twhole", "demo\ttail"]},
+            ["tail();"],
+        )
+        _must_red(dropped_attr, "attribute dropped from the old fn")
+        n += 1
+
+        # R1 (b): head: / tail: at the boundary after rewrap; elsewhere is red.
+        wrap_map = pathlib.Path(tmp) / "split-wrap.txt"
+        wrap_map.write_text(
+            "demo\twhole = demo\twhole + demo\ttail\n"
+            "glue: tail(x);\n"
+            "head: demo\ttail\n"
+            "    let Packed {\n"
+            "        x,\n"
+            "    } = Packed { x };\n"
+            "tail: demo\ttail\n"
+            "    Ok(Out {\n"
+            "        x,\n"
+            "    })\n"
+            "edit: let mut x => let x\n",
+            encoding="utf-8",
+        )
+        _wmap, wglue, wextra = load_splits(wrap_map, [])
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    let mut x = a();\n    b(x);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    let x = a();\n    tail(x);\n}\n"
+            "fn tail(x: i32) {\n    let Packed {\n        x,\n    } = Packed { x };\n"
+            "    b(x);\n    Ok(Out {\n        x,\n    })\n}\n",
+        )
+        wrapped = compare_trees(
+            old, new, {}, {}, _wmap, wglue, split_extra=wextra
+        )
+        if wrapped["split_ok"] != ["demo\twhole"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: wrapped head: / let-mut edit must split-ok"
+            )
+        shown = render(wrapped)
+        if "split-sig demo\ttail:" not in shown:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: phase signature missing: {shown}"
+            )
+        evaluate(wrapped)
+        n += 1
+
+        mid_map = pathlib.Path(tmp) / "split-mid.txt"
+        mid_map.write_text(
+            "demo\twhole = demo\twhole + demo\ttail\n"
+            "glue: tail();\n"
+            "head: demo\ttail\n"
+            "    let Packed { x } = g;\n",
+            encoding="utf-8",
+        )
+        _mmap, mglue, mextra = load_splits(mid_map, [])
+        _write_crate(old, "crates/demo/src/lib.rs", "fn whole() {\n    a();\n    b();\n}\n")
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    a();\n    tail();\n}\n"
+            "fn tail() {\n    b();\n    let Packed { x } = g;\n}\n",
+        )
+        mid_head = compare_trees(
+            old, new, {}, {}, _mmap, mglue, split_extra=mextra
+        )
+        _must_red(mid_head, "head: block in the middle of a body")
+        n += 1
+
+        # R1 (c): only let mut → let.
+        try:
+            load_splits(None, ["demo\twhole = demo\ta + demo\tb", "edit: foo => bar"])
+        except SystemExit:
+            n += 1
+        else:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: edit: that is not let mut → let must fail"
+            )
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    let mut x = a();\n    b(x);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn whole() {\n    let x = a();\n    tail(x);\n}\n"
+            "fn tail(x: i32) {\n    b(x);\n}\n",
+        )
+        no_edit = compare_trees(
+            old,
+            new,
+            {},
+            {},
+            {"demo\twhole": ["demo\twhole", "demo\ttail"]},
+            ["tail(x);"],
+        )
+        _must_red(no_edit, "let mut without a declared edit")
+        n += 1
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
     if suffixed:
@@ -2102,7 +2574,7 @@ def main(argv: list[str] | None = None) -> int:
         _self_test()
     moves = load_keyed_id_map(ns.moves, "moves")
     accept = load_accept(ns.accept)
-    splits, file_glue = load_splits(ns.split, ns.split_line)
+    splits, file_glue, split_extra = load_splits(ns.split, ns.split_line)
     glue = merge_glue(file_glue, parse_glue_args(ns.glue))
     if ns.roots:
         roots: list[str] | None = []
@@ -2123,6 +2595,7 @@ def main(argv: list[str] | None = None) -> int:
             splits,
             glue,
             roots=roots,
+            split_extra=split_extra,
         )
     sys.stdout.write(render(report))
     try:

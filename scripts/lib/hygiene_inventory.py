@@ -247,6 +247,7 @@ def rust_sleeps(root: pathlib.Path) -> list[str]:
 def quality_grep(root: pathlib.Path) -> list[str]:
     rows: list[str] = []
     allow_n = 0
+    rustfmt_skip_n = 0
     unwrap_n = 0
     src_loc = 0
     test_files = 0
@@ -272,7 +273,9 @@ def quality_grep(root: pathlib.Path) -> list[str]:
         # `kadm5/tests/*.rs`), not product.
         if "/src/" in norm and "/krb5-testkit/" not in norm and norm not in src_test_rels:
             unwrap_n += len(re.findall(r"\bunwrap\(|\bexpect\(|\bpanic!\(", text))
+            rustfmt_skip_n += len(re.findall(r"#\[rustfmt::skip\]", text))
     rows.append(f"allow={allow_n}")
+    rows.append(f"rustfmt_skip={rustfmt_skip_n}")
     rows.append(f"unwrap_expect_panic_src={unwrap_n}")
     rows.append(f"rs_loc={src_loc}")
     rows.append(f"test_rs_files={test_files}")
