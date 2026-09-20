@@ -1092,11 +1092,15 @@ def host_tmp_write_lines(text: str) -> list[int]:
 
 def check_isolate_test_krb5(text: str | None = None) -> None:
     """Unit-test isolate helper must not write host `/tmp`."""
+    tests_text = ""
     if text is None:
-        path = ROOT / "crates/krb5-config/src/lib.rs"
+        path = ROOT / "crates/krb5-config/src/testenv.rs"
         if not path.is_file():
-            _die("missing crates/krb5-config/src/lib.rs")
+            _die("missing crates/krb5-config/src/testenv.rs")
         text = path.read_text()
+        tests_path = ROOT / "crates/krb5-config/src/tests.rs"
+        if tests_path.is_file():
+            tests_text = tests_path.read_text()
     if "fn isolate_test_krb5" not in text:
         _die("isolate_test_krb5 missing")
     start = text.find("fn isolate_scratch_dir")
@@ -1111,6 +1115,8 @@ def check_isolate_test_krb5(text: str | None = None) -> None:
         _die("isolate_test_krb5 writes host /tmp")
     test_start = text.find("#[cfg(test)]")
     if test_start >= 0 and "temp_dir()" in text[test_start:]:
+        _die("cfg(test) writes host /tmp via temp_dir()")
+    if "temp_dir()" in tests_text:
         _die("cfg(test) writes host /tmp via temp_dir()")
 
 

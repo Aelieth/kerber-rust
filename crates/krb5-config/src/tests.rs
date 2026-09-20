@@ -1,5 +1,9 @@
 //! In-crate config tests (private-bound; moved out of `lib.rs`).
 
+use super::ccname::{unix_euid, unix_uid};
+use super::profile::parse_duration_secs;
+use super::testenv::TEST_KRB5_PATHS;
+
 use super::*;
 
 #[test]
@@ -17,19 +21,19 @@ fn isolate_test_krb5_stays_off_host_tmp() {
 fn parse_krb5_conf_realms_and_libdefaults() {
     let text = r"
 [libdefaults]
-default_realm = KERBER.TEST
-allow_weak_crypto = false
-clockskew = 300
-dns_lookup_kdc = no
+    default_realm = KERBER.TEST
+    allow_weak_crypto = false
+    clockskew = 300
+    dns_lookup_kdc = no
 
 [realms]
-KERBER.TEST = {
-    kdc = 127.0.0.1:88
-    admin_server = 127.0.0.1:749
-}
+    KERBER.TEST = {
+        kdc = 127.0.0.1:88
+        admin_server = 127.0.0.1:749
+    }
 
 [domain_realm]
-.kerber.test = KERBER.TEST
+    .kerber.test = KERBER.TEST
 ";
     let c = Krb5Conf::parse(text).unwrap();
     assert_eq!(c.default_realm.as_deref(), Some("KERBER.TEST"));
@@ -53,10 +57,10 @@ KERBER.TEST = {
     let mapped = Krb5Conf::parse(
         r"
 [domain_realm]
-testhost.kerber.test = EXACT.TEST
-.kerber.test = DOT.TEST
-kerber.test = BARE.TEST
-.test = SHORT.TEST
+    testhost.kerber.test = EXACT.TEST
+    .kerber.test = DOT.TEST
+    kerber.test = BARE.TEST
+    .test = SHORT.TEST
 ",
     )
     .unwrap();
@@ -74,8 +78,8 @@ kerber.test = BARE.TEST
     let numeric = Krb5Conf::parse(
         r"
 [domain_realm]
-1.2.3.4 = OTHER.TEST
-.kerber.test = KERBER.TEST
+    1.2.3.4 = OTHER.TEST
+    .kerber.test = KERBER.TEST
 ",
     )
     .unwrap();
@@ -91,18 +95,18 @@ fn parse_fleet_knobs_and_ignore_heimdal_spellings() {
     let c = Krb5Conf::parse(
         r"
 [libdefaults]
-udp_preference_limit = 0
-rdns = false
-kdc_timesync = no
-forwardable = true
-ticket_lifetime = 10h
-renew_lifetime = 7d
-dns_lookup_realm = no
-permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
-default_tkt_enctypes = aes256-cts-hmac-sha1-96
-default_tgs_enctypes = aes128-cts-hmac-sha1-96
-kdc_timeout = 1
-max_retries = 1
+    udp_preference_limit = 0
+    rdns = false
+    kdc_timesync = no
+    forwardable = true
+    ticket_lifetime = 10h
+    renew_lifetime = 7d
+    dns_lookup_realm = no
+    permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96
+    default_tkt_enctypes = aes256-cts-hmac-sha1-96
+    default_tgs_enctypes = aes128-cts-hmac-sha1-96
+    kdc_timeout = 1
+    max_retries = 1
 ",
     )
     .unwrap();
@@ -239,19 +243,19 @@ fn parse_ccspec_file_memory_dir_and_unknown() {
 fn parse_kdc_conf_policy() {
     let text = r"
 [kdcdefaults]
-kdc_ports = 88
-kdc_tcp_ports = 88
+    kdc_ports = 88
+    kdc_tcp_ports = 88
 
 [realms]
-KERBER.TEST = {
-    max_life = 10h
-    max_renewable_life = 7d
-    requires_preauth = yes
-    database_name = /var/lib/krb5kdc/principal
-    master_key_type = aes256-cts-hmac-sha384-192
-    db_library = db2
-    domain_sid = S-1-5-21-891046300-1937985867-1481223175
-}
+    KERBER.TEST = {
+        max_life = 10h
+        max_renewable_life = 7d
+        requires_preauth = yes
+        database_name = /var/lib/krb5kdc/principal
+        master_key_type = aes256-cts-hmac-sha384-192
+        db_library = db2
+        domain_sid = S-1-5-21-891046300-1937985867-1481223175
+    }
 ";
     let c = KdcConf::parse(text).unwrap();
     assert_eq!(c.realm, "KERBER.TEST");
@@ -273,17 +277,17 @@ KERBER.TEST = {
     let rc4 = KdcConf::parse(
         r"
 [libdefaults]
-allow_rc4 = true
-allow_des3 = yes
-permitted_enctypes = aes256-cts arcfour-hmac
+    allow_rc4 = true
+    allow_des3 = yes
+    permitted_enctypes = aes256-cts arcfour-hmac
 
 [kdcdefaults]
-allow_weak_crypto = true
+    allow_weak_crypto = true
 
 [realms]
-KERBER.TEST = {
-    supported_enctypes = aes256-cts:normal rc4-hmac:normal
-}
+    KERBER.TEST = {
+        supported_enctypes = aes256-cts:normal rc4-hmac:normal
+    }
 ",
     )
     .unwrap();
@@ -297,16 +301,16 @@ KERBER.TEST = {
     let elsewhere = KdcConf::parse(
         r"
 [kdcdefaults]
-allow_rc4 = true
-allow_des3 = true
-permitted_enctypes = arcfour-hmac
+    allow_rc4 = true
+    allow_des3 = true
+    permitted_enctypes = arcfour-hmac
 
 [realms]
-KERBER.TEST = {
-    allow_rc4 = true
-    allow_weak_crypto = true
-    permitted_enctypes = arcfour-hmac
-}
+    KERBER.TEST = {
+        allow_rc4 = true
+        allow_weak_crypto = true
+        permitted_enctypes = arcfour-hmac
+    }
 ",
     )
     .unwrap();
@@ -321,12 +325,12 @@ KERBER.TEST = {
     let mit = KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    max_life = 10h 0m 0s
-    max_renewable_life = 7d 0h 0m 0s
-    database_name = /var/lib/krb5kdc/principal
-    key_stash_file = /var/lib/krb5kdc/.k5.KERBER.TEST
-}
+    KERBER.TEST = {
+        max_life = 10h 0m 0s
+        max_renewable_life = 7d 0h 0m 0s
+        database_name = /var/lib/krb5kdc/principal
+        key_stash_file = /var/lib/krb5kdc/.k5.KERBER.TEST
+    }
 ",
     )
     .unwrap();
@@ -334,9 +338,9 @@ KERBER.TEST = {
     let lax = KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    reject_bad_transit = false
-}
+    KERBER.TEST = {
+        reject_bad_transit = false
+    }
 ",
     )
     .unwrap();
@@ -360,9 +364,9 @@ fn dict_file_is_a_realm_relation_only() {
     let realm = KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    dict_file = /tmp/dict.txt
-}
+    KERBER.TEST = {
+        dict_file = /tmp/dict.txt
+    }
 ",
     )
     .unwrap();
@@ -370,11 +374,11 @@ KERBER.TEST = {
     let defaults = KdcConf::parse(
         r"
 [kdcdefaults]
-dict_file = /tmp/dict.txt
+    dict_file = /tmp/dict.txt
 [realms]
-KERBER.TEST = {
-    max_life = 10h
-}
+    KERBER.TEST = {
+        max_life = 10h
+    }
 ",
     )
     .unwrap();
@@ -389,10 +393,10 @@ fn libdefaults_does_not_honour_kdcdefaults_knobs() {
     let lib = KdcConf::parse(
         r"
 [libdefaults]
-kdc_ports = 12345
-kdc_tcp_ports = 12345
-reject_bad_transit = false
-allow_rc4 = true
+    kdc_ports = 12345
+    kdc_tcp_ports = 12345
+    reject_bad_transit = false
+    allow_rc4 = true
 ",
     )
     .unwrap();
@@ -406,8 +410,8 @@ allow_rc4 = true
     let kdc = KdcConf::parse(
         r"
 [kdcdefaults]
-kdc_ports = 12345
-reject_bad_transit = false
+    kdc_ports = 12345
+    reject_bad_transit = false
 ",
     )
     .unwrap();
@@ -420,7 +424,7 @@ fn restrict_anonymous_to_tgt_from_kdcdefaults_and_realm() {
     let kdc = KdcConf::parse(
         r"
 [kdcdefaults]
-restrict_anonymous_to_tgt = true
+    restrict_anonymous_to_tgt = true
 ",
     )
     .unwrap();
@@ -428,9 +432,9 @@ restrict_anonymous_to_tgt = true
     let realm = KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    restrict_anonymous_to_tgt = true
-}
+    KERBER.TEST = {
+        restrict_anonymous_to_tgt = true
+    }
 ",
     )
     .unwrap();
@@ -438,7 +442,7 @@ KERBER.TEST = {
     let lib = KdcConf::parse(
         r"
 [libdefaults]
-restrict_anonymous_to_tgt = true
+    restrict_anonymous_to_tgt = true
 ",
     )
     .unwrap();
@@ -450,17 +454,17 @@ fn realm_booleans_win_over_later_kdcdefaults() {
     let conf = KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    restrict_anonymous_to_tgt = false
-    pkinit_require_freshness = false
-    disable_pac = false
-    reject_bad_transit = false
-}
+    KERBER.TEST = {
+        restrict_anonymous_to_tgt = false
+        pkinit_require_freshness = false
+        disable_pac = false
+        reject_bad_transit = false
+    }
 [kdcdefaults]
-restrict_anonymous_to_tgt = true
-pkinit_require_freshness = true
-disable_pac = true
-reject_bad_transit = true
+    restrict_anonymous_to_tgt = true
+    pkinit_require_freshness = true
+    disable_pac = true
+    reject_bad_transit = true
 ",
     )
     .unwrap();
@@ -475,7 +479,7 @@ fn pkinit_require_freshness_from_kdcdefaults_and_realm() {
     let kdc = KdcConf::parse(
         r"
 [kdcdefaults]
-pkinit_require_freshness = true
+    pkinit_require_freshness = true
 ",
     )
     .unwrap();
@@ -483,9 +487,9 @@ pkinit_require_freshness = true
     let realm = KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    pkinit_require_freshness = true
-}
+    KERBER.TEST = {
+        pkinit_require_freshness = true
+    }
 ",
     )
     .unwrap();
@@ -493,7 +497,7 @@ KERBER.TEST = {
     let lib = KdcConf::parse(
         r"
 [libdefaults]
-pkinit_require_freshness = true
+    pkinit_require_freshness = true
 ",
     )
     .unwrap();
@@ -505,8 +509,8 @@ fn host_based_and_no_host_referral_from_kdcdefaults_and_realm() {
     let kdc = KdcConf::parse(
         r"
 [kdcdefaults]
-host_based_services = host
-no_host_referral = imap
+    host_based_services = host
+    no_host_referral = imap
 ",
     )
     .unwrap();
@@ -515,12 +519,12 @@ no_host_referral = imap
     let both = KdcConf::parse(
         r"
 [kdcdefaults]
-host_based_services = host
+    host_based_services = host
 [realms]
-KERBER.TEST = {
-    host_based_services = smtp
-    no_host_referral = *
-}
+    KERBER.TEST = {
+        host_based_services = smtp
+        no_host_referral = *
+    }
 ",
     )
     .unwrap();
@@ -529,8 +533,8 @@ KERBER.TEST = {
     let lib = KdcConf::parse(
         r"
 [libdefaults]
-host_based_services = host
-no_host_referral = imap
+    host_based_services = host
+    no_host_referral = imap
 ",
     )
     .unwrap();
@@ -543,7 +547,7 @@ fn disable_pac_from_kdcdefaults_and_realm() {
     let kdc = KdcConf::parse(
         r"
 [kdcdefaults]
-disable_pac = true
+    disable_pac = true
 ",
     )
     .unwrap();
@@ -551,9 +555,9 @@ disable_pac = true
     let realm = KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    disable_pac = true
-}
+    KERBER.TEST = {
+        disable_pac = true
+    }
 ",
     )
     .unwrap();
@@ -561,7 +565,7 @@ KERBER.TEST = {
     let lib = KdcConf::parse(
         r"
 [libdefaults]
-disable_pac = true
+    disable_pac = true
 ",
     )
     .unwrap();
@@ -573,12 +577,12 @@ fn realm_auth_indicator_knobs() {
     let kdc = KdcConf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    encrypted_challenge_indicator = encrypted_challenge
-    pkinit_indicator = pkinit
-    pkinit_indicator = certauth
-    spake_preauth_indicator = spake
-}
+    KERBER.TEST = {
+        encrypted_challenge_indicator = encrypted_challenge
+        pkinit_indicator = pkinit
+        pkinit_indicator = certauth
+        spake_preauth_indicator = spake
+    }
 ",
     )
     .unwrap();
@@ -595,11 +599,11 @@ fn parse_pkinit_identities_and_anchors() {
     let c = Krb5Conf::parse(
         r"
 [realms]
-KERBER.TEST = {
-    kdc = 127.0.0.1
-    pkinit_identities = FILE:/tmp/pkinit/user.pem
-    pkinit_anchors = FILE:/tmp/pkinit/ca.pem
-}
+    KERBER.TEST = {
+        kdc = 127.0.0.1
+        pkinit_identities = FILE:/tmp/pkinit/user.pem
+        pkinit_anchors = FILE:/tmp/pkinit/ca.pem
+    }
 ",
     )
     .unwrap();
@@ -641,13 +645,13 @@ fn parse_capaths_client_server_hops() {
     let c = Krb5Conf::parse(
         r"
 [capaths]
-A.TEST = {
-    C.TEST = B.TEST
-    B.TEST = .
-}
-C.TEST = {
-    A.TEST = B.TEST
-}
+    A.TEST = {
+        C.TEST = B.TEST
+        B.TEST = .
+    }
+    C.TEST = {
+        A.TEST = B.TEST
+    }
 ",
     )
     .unwrap();
@@ -661,10 +665,10 @@ fn parse_capaths_space_separated_intermediates() {
     let c = Krb5Conf::parse(
         r"
 [capaths]
-A.TEST = {
-    C.TEST = B.TEST D.TEST
-    B.TEST = .
-}
+    A.TEST = {
+        C.TEST = B.TEST D.TEST
+        B.TEST = .
+    }
 ",
     )
     .unwrap();

@@ -6,6 +6,23 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.4b krb5-config module split
+
+- **krb5-config.** `lib.rs` is split into
+  `{profile,kdcconf,ccname,srv,testenv}.rs`. Inner attributes,
+  `Error`, `Endpoint`, `Krb5Conf`, `KdcConf`, and `CcSpec` stay on
+  the crate root so every `pub` path `krb5_config::X` / method /
+  field / variant is unchanged (complete before/after list
+  identical, 141 paths). Process-global test state
+  (`TEST_KRB5_PATHS`, `TEST_KRB5_ISOLATION`, `ISOLATE_SEQ`) moves
+  once, into `testenv`. Sibling-only names are `pub(super)`,
+  nothing became `pub`. In-src tests moved to `tests.rs` first
+  (path `tests`). No wire, text or store behaviour changed. The
+  six `Result<_, String>` ccache fns keep those signatures (4c).
+- **docs.** The parity ledger's `krb5-config/lib.rs` rust-sites
+  name the module files; `CcSpec` stays on `lib.rs`.
+  `check_isolate_test_krb5` reads `testenv.rs`.
+
 ### W3-S3.4a krb5-gss module split
 
 - **krb5-gss.** `lib.rs` is split into
