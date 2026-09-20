@@ -6,6 +6,19 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.4c ccache errors use `Error`
+
+- **krb5-config.** The six public ccache-name fns and private
+  `ccache_param` return `Result<_, Error>` via a new `Error::Ccache`
+  variant whose Display is the previous string (`Unknown credential
+  cache type`, `unterminated %{token}`, `unknown ccache parameter
+  %{…}`). `kswitch` / `vfy-increds` map that through `.to_string()`
+  at the `?` sites; bins that print `{e}` are unchanged. No wire,
+  store or gate-grep text changed.
+- **scripts.** `check_isolate_test_krb5` dies if `tests.rs` is
+  missing, scans every `src/*.rs` cfg(test) region for `temp_dir()`,
+  and the self-test reds those arms.
+
 ### W3-S3.4b krb5-config module split
 
 - **krb5-config.** `lib.rs` is split into

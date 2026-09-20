@@ -259,14 +259,16 @@ mod tests {
 
     #[test]
     fn ccache_path_rejects_keyring() {
-        let e = resolve_ccspec(Some("KEYRING:user:foo")).unwrap_err();
+        let e = resolve_ccspec(Some("KEYRING:user:foo"))
+            .unwrap_err()
+            .to_string();
         assert_eq!(e, krb5_config::KRB5_CC_UNKNOWN_TYPE);
         assert!(!e.contains("G8"), "{e}");
         assert_eq!(
             resolve_ccspec(Some("KCM:")).unwrap(),
             krb5_config::CcSpec::Kcm(String::new())
         );
-        let e = resolve_ccspec(Some("NOTATYPE:x")).unwrap_err();
+        let e = resolve_ccspec(Some("NOTATYPE:x")).unwrap_err().to_string();
         assert_eq!(e, krb5_config::KRB5_CC_UNKNOWN_TYPE);
     }
 

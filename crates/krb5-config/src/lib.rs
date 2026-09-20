@@ -35,6 +35,11 @@ pub enum Error {
     /// DNS SRV lookup failed.
     #[error("dns srv: {0}")]
     Dns(String),
+    /// Ccache name / `%{token}` expansion. Display is the MIT text
+    /// (`Unknown credential cache type`, `unterminated %{token}`,
+    /// `unknown ccache parameter %{…}`).
+    #[error("{0}")]
+    Ccache(String),
 }
 
 /// One KDC (or kpasswd / admin) endpoint.

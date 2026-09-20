@@ -49,7 +49,7 @@ fn run(ccname: Option<&str>, princ: Option<&str>) -> Result<(), String> {
     if let Some(p) = princ {
         return switch_principal(p);
     }
-    let spec = resolve_ccspec(ccname)?;
+    let spec = resolve_ccspec(ccname).map_err(|e| e.to_string())?;
     match spec {
         CcSpec::Dir(r) if r.starts_with(':') => dir_switch(&r).map_err(|e| e.to_string()),
         CcSpec::Dir(_) => Err("kswitch -c needs DIR::subsidiary".into()),
@@ -59,7 +59,7 @@ fn run(ccname: Option<&str>, princ: Option<&str>) -> Result<(), String> {
 }
 
 fn switch_principal(princ: &str) -> Result<(), String> {
-    let spec = resolve_ccspec(None)?;
+    let spec = resolve_ccspec(None).map_err(|e| e.to_string())?;
     if matches!(spec, CcSpec::Kcm(_)) {
         return kcm_switch_principal(princ).map_err(|e| e.to_string());
     }

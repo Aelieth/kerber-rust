@@ -177,11 +177,13 @@ fn expand_ccache_params_uid_tokens() {
     assert!(
         expand_ccache_params("FILE:/tmp/%{nope}")
             .unwrap_err()
+            .to_string()
             .contains("nope")
     );
     assert!(
         expand_ccache_params("FILE:/tmp/x_%{uid")
             .unwrap_err()
+            .to_string()
             .contains("unterminated")
     );
     let expanded = expand_ccache_params("FILE:/tmp/krb5cc_%{uid}").unwrap();
@@ -198,7 +200,7 @@ fn parse_ccname_file_and_rejects_other_types() {
         PathBuf::from("/tmp/krb5cc_1")
     );
     assert_eq!(
-        parse_ccname("KEYRING:user:foo").unwrap_err(),
+        parse_ccname("KEYRING:user:foo").unwrap_err().to_string(),
         KRB5_CC_UNKNOWN_TYPE
     );
     assert_eq!(
@@ -230,13 +232,51 @@ fn parse_ccspec_file_memory_dir_and_unknown() {
         CcSpec::Dir(":/tmp/cc/tkt".into())
     );
     assert_eq!(
-        parse_ccspec("KEYRING:persistent:1").unwrap_err(),
+        parse_ccspec("KEYRING:persistent:1")
+            .unwrap_err()
+            .to_string(),
         KRB5_CC_UNKNOWN_TYPE
     );
     assert_eq!(parse_ccspec("KCM:").unwrap(), CcSpec::Kcm(String::new()));
     assert_eq!(parse_ccspec("KCM:0").unwrap(), CcSpec::Kcm("0".into()));
-    assert_eq!(parse_ccspec("JUNK:x").unwrap_err(), KRB5_CC_UNKNOWN_TYPE);
-    assert!(!parse_ccspec("KEYRING:x").unwrap_err().contains("G8"));
+    assert_eq!(
+        parse_ccspec("JUNK:x").unwrap_err().to_string(),
+        KRB5_CC_UNKNOWN_TYPE
+    );
+    assert!(
+        !parse_ccspec("KEYRING:x")
+            .unwrap_err()
+            .to_string()
+            .contains("G8")
+    );
+}
+
+#[test]
+fn expand_ccache_params_unterminated_display_is_exact() {
+    assert_eq!(
+        expand_ccache_params("FILE:/tmp/x_%{uid")
+            .unwrap_err()
+            .to_string(),
+        "unterminated %{token}"
+    );
+}
+
+#[test]
+fn expand_ccache_params_unknown_token_display_is_exact() {
+    assert_eq!(
+        expand_ccache_params("FILE:/tmp/%{nope}")
+            .unwrap_err()
+            .to_string(),
+        "unknown ccache parameter %{nope}"
+    );
+}
+
+#[test]
+fn parse_ccspec_unknown_type_display_is_exact() {
+    assert_eq!(
+        parse_ccspec("KEYRING:x").unwrap_err().to_string(),
+        KRB5_CC_UNKNOWN_TYPE
+    );
 }
 
 #[test]

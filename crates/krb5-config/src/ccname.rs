@@ -9,6 +9,7 @@
 use std::path::PathBuf;
 
 use super::CcSpec;
+use super::Error;
 use super::profile::load_krb5_conf;
 
 /// MIT `KRB5_CC_UNKNOWN_TYPE`.
@@ -27,14 +28,14 @@ const BUILTIN_CCACHE: &str = "FILE:/tmp/krb5cc_%{uid}";
 /// # Errors
 ///
 /// Unknown `%{token}` or unterminated `%{` (MIT fails closed).
-pub fn expand_ccache_params(s: &str) -> Result<String, String> {
+pub fn expand_ccache_params(s: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(start) = rest.find("%{") {
         out.push_str(&rest[..start]);
         rest = &rest[start + 2..];
         let Some(end) = rest.find('}') else {
-            return Err("unterminated %{token}".into());
+            return Err(Error::Ccache("unterminated %{token}".into()));
         };
         let token = &rest[..end];
         rest = &rest[end + 1..];
@@ -44,14 +45,16 @@ pub fn expand_ccache_params(s: &str) -> Result<String, String> {
     Ok(out)
 }
 
-fn ccache_param(token: &str) -> Result<String, String> {
+fn ccache_param(token: &str) -> Result<String, Error> {
     match token {
         "uid" | "USERID" => Ok(unix_uid().to_string()),
         "euid" => Ok(unix_euid().to_string()),
         "null" => Ok(String::new()),
         "TEMP" => Ok("/tmp".into()),
         "username" => Ok(unix_username()),
-        _ => Err(format!("unknown ccache parameter %{{{token}}}")),
+        _ => Err(Error::Ccache(format!(
+            "unknown ccache parameter %{{{token}}}"
+        ))),
     }
 }
 
@@ -97,7 +100,7 @@ fn unix_username() -> String {
 /// # Errors
 ///
 /// [`KRB5_CC_UNKNOWN_TYPE`] or an unknown `%{token}`.
-pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, String> {
+pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, Error> {
     if let Some(s) = flag {
         return parse_ccspec(s);
     }
@@ -112,7 +115,7 @@ pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, String> {
 /// # Errors
 ///
 /// Unknown `%{token}` or [`KRB5_CC_UNKNOWN_TYPE`].
-pub fn default_ccspec() -> Result<CcSpec, String> {
+pub fn default_ccspec() -> Result<CcSpec, Error> {
     let raw = load_krb5_conf()
         .and_then(|c| c.default_ccache_name)
         .unwrap_or_else(|| BUILTIN_CCACHE.to_owned());
@@ -124,10 +127,10 @@ pub fn default_ccspec() -> Result<CcSpec, String> {
 /// # Errors
 ///
 /// [`KRB5_CC_UNKNOWN_TYPE`].
-pub fn resolve_ccname(flag: Option<&str>) -> Result<PathBuf, String> {
+pub fn resolve_ccname(flag: Option<&str>) -> Result<PathBuf, Error> {
     match resolve_ccspec(flag)? {
         CcSpec::File(p) => Ok(p),
-        _ => Err(KRB5_CC_UNKNOWN_TYPE.to_owned()),
+        _ => Err(Error::Ccache(KRB5_CC_UNKNOWN_TYPE.to_owned())),
     }
 }
 
@@ -136,14 +139,14 @@ pub fn resolve_ccname(flag: Option<&str>) -> Result<PathBuf, String> {
 /// # Errors
 ///
 /// [`KRB5_CC_UNKNOWN_TYPE`] for unrecognized or unbuilt prefixes.
-pub fn parse_ccspec(spec: &str) -> Result<CcSpec, String> {
+pub fn parse_ccspec(spec: &str) -> Result<CcSpec, Error> {
     match split_cc_type(spec) {
         None => Ok(CcSpec::File(PathBuf::from(spec))),
         Some(("FILE", rest)) => Ok(CcSpec::File(PathBuf::from(rest))),
         Some(("MEMORY", rest)) => Ok(CcSpec::Memory(rest.to_owned())),
         Some(("DIR", rest)) => Ok(CcSpec::Dir(rest.to_owned())),
         Some(("KCM", rest)) => Ok(CcSpec::Kcm(rest.to_owned())),
-        Some(_) => Err(KRB5_CC_UNKNOWN_TYPE.to_owned()),
+        Some(_) => Err(Error::Ccache(KRB5_CC_UNKNOWN_TYPE.to_owned())),
     }
 }
 
@@ -152,10 +155,10 @@ pub fn parse_ccspec(spec: &str) -> Result<CcSpec, String> {
 /// # Errors
 ///
 /// [`KRB5_CC_UNKNOWN_TYPE`].
-pub fn parse_ccname(spec: &str) -> Result<PathBuf, String> {
+pub fn parse_ccname(spec: &str) -> Result<PathBuf, Error> {
     match parse_ccspec(spec)? {
         CcSpec::File(p) => Ok(p),
-        _ => Err(KRB5_CC_UNKNOWN_TYPE.to_owned()),
+        _ => Err(Error::Ccache(KRB5_CC_UNKNOWN_TYPE.to_owned())),
     }
 }
 

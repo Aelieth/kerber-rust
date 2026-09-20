@@ -29,7 +29,7 @@ fn run() -> Result<(), String> {
         opt_nofail = Some(true);
         args.remove(0);
     }
-    let spec = resolve_ccspec(None)?;
+    let spec = resolve_ccspec(None).map_err(|e| e.to_string())?;
     let cc = load_ccache(&spec).map_err(|e| e.to_string())?;
     let cred = cc
         .list()
