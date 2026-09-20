@@ -1090,17 +1090,37 @@ def host_tmp_write_lines(text: str) -> list[int]:
     return hits
 
 
-def check_isolate_test_krb5(text: str | None = None) -> None:
+def _cfg_test_has_temp_dir(src: str) -> bool:
+    """True if `temp_dir()` appears after a `#[cfg(test)]` in `src`."""
+    i = src.find("#[cfg(test)]")
+    return i >= 0 and "temp_dir()" in src[i:]
+
+
+def check_isolate_test_krb5(
+    text: str | None = None,
+    tests_text: str | None = "",
+    tests_missing: bool = False,
+    src_files: dict[str, str] | None = None,
+) -> None:
     """Unit-test isolate helper must not write host `/tmp`."""
-    tests_text = ""
+    if tests_missing:
+        _die("missing crates/krb5-config/src/tests.rs")
     if text is None:
         path = ROOT / "crates/krb5-config/src/testenv.rs"
         if not path.is_file():
             _die("missing crates/krb5-config/src/testenv.rs")
         text = path.read_text()
         tests_path = ROOT / "crates/krb5-config/src/tests.rs"
-        if tests_path.is_file():
-            tests_text = tests_path.read_text()
+        if not tests_path.is_file():
+            _die("missing crates/krb5-config/src/tests.rs")
+        tests_text = tests_path.read_text()
+        if src_files is None:
+            src_dir = ROOT / "crates/krb5-config/src"
+            src_files = {
+                p.name: p.read_text()
+                for p in sorted(src_dir.glob("*.rs"))
+                if p.is_file()
+            }
     if "fn isolate_test_krb5" not in text:
         _die("isolate_test_krb5 missing")
     start = text.find("fn isolate_scratch_dir")
@@ -1116,8 +1136,14 @@ def check_isolate_test_krb5(text: str | None = None) -> None:
     test_start = text.find("#[cfg(test)]")
     if test_start >= 0 and "temp_dir()" in text[test_start:]:
         _die("cfg(test) writes host /tmp via temp_dir()")
-    if "temp_dir()" in tests_text:
+    if tests_text and "temp_dir()" in tests_text:
         _die("cfg(test) writes host /tmp via temp_dir()")
+    if src_files:
+        for name, src in src_files.items():
+            if name == "tests.rs":
+                continue
+            if _cfg_test_has_temp_dir(src):
+                _die(f"{name} cfg(test) writes host /tmp via temp_dir()")
 
 
 def check_no_host_tmp_writes(
@@ -5395,11 +5421,14 @@ jobs:
         'echo "cat <<EOF"\necho ok\ncat <<<hello\n# <<EOF\n',
         "ok-quoted-and-comment-heredoc.sh",
     )
-    # A'-3 R34: _must_die(check_isolate_test_krb5) unless a temp_dir() isolate helper is refused.
-    check_isolate_test_krb5(
+    # A'-3 R34 / S3.4c: _must_die(check_isolate_test_krb5) unless a temp_dir()
+    # isolate helper is refused. The tests.rs and per-src cfg(test) arms
+    # fire in production; fixtures must hit them (not only text=).
+    _isolate_ok = (
         "fn isolate_scratch_dir() -> PathBuf {\n    PathBuf::from(\"target\").join(\"test-krb5\")\n}\n"
         "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
     )
+    check_isolate_test_krb5(_isolate_ok)
     _must_die(
         check_isolate_test_krb5,
         "pub fn isolate_test_krb5() {\n"
@@ -5412,6 +5441,31 @@ jobs:
         "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
         "#[cfg(test)]\nmod tests {\n    fn f() { let _ = std::env::temp_dir(); }\n}\n",
     )
+
+    def _isolate_missing_tests() -> None:
+        check_isolate_test_krb5(_isolate_ok, tests_missing=True)
+
+    def _isolate_tests_rs_temp_dir() -> None:
+        check_isolate_test_krb5(
+            _isolate_ok,
+            tests_text="fn f() { let _ = std::env::temp_dir(); }\n",
+        )
+
+    def _isolate_src_cfg_test_temp_dir() -> None:
+        check_isolate_test_krb5(
+            _isolate_ok,
+            src_files={
+                "kdcconf.rs": (
+                    "#[cfg(test)]\nmod tests {\n"
+                    "    fn f() { let _ = std::env::temp_dir(); }\n"
+                    "}\n"
+                )
+            },
+        )
+
+    _must_die(_isolate_missing_tests)
+    _must_die(_isolate_tests_rs_temp_dir)
+    _must_die(_isolate_src_cfg_test_temp_dir)
     check_unit_evidence_helper()
     check_settle_helper()
     check_evidence_check_tool()
