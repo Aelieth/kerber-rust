@@ -188,7 +188,7 @@ requirement that a `die` in the same script enforces. `{ … }`, `( … )`,
 and heredoc arms are inspected. The ledger header
 tally must match a recount of the verdict cells and the A1/A2/A3/A4
 section split; a missing total line fails. Rust-site cells that use
-`file.rs symbol` (optional crate prefix `krb5-kdc/issue.rs fn_name`,
+`file.rs symbol` (optional crate prefix `krb5-kdc/reply.rs mint_ticket`,
 optional `:N` after the symbol) must resolve to an item (`fn`,
 `const fn`, `async fn`, `unsafe fn`, `struct`, `enum`, `const`,
 `static`) under `crates/*/src`. A bare basename is an error unless
