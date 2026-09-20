@@ -6,6 +6,22 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.3b issue.rs module split
+
+- **krb5-kdc.** `issue.rs` is split into
+  `issue/{dispatch,as_req,tgs_req,tgs_policy,kdc_util,fast_util,reply}.rs`,
+  each headed by the MIT file or function family it mirrors; the root
+  keeps the crate's re-exports so `lib.rs` and the `crate::issue::`
+  sites stay byte-identical. Every item moved whole (`hygiene-fn-diff`:
+  0 changed); sibling-only names are `pub(super)`, nothing became
+  `pub`. `mod a2_6_crossrealm` stays beside `tgs_header_is_crossrealm`.
+  No wire, text or store behaviour changed.
+- **docs.** The parity ledger's `issue.rs` rust-sites name the module
+  files; colliding `dispatch.rs` admin sites are `krb5-admin/…` and
+  the new KDC dispatcher is `krb5-kdc/dispatch.rs`. Line pins on
+  `finish_preauth` and `mint_ticket` follow the moved statements.
+  `security.md` cites follow.
+
 ### W3-S3.3 issue.rs phase split
 
 - **tool.** `hygiene-body-diff.py` keeps a zero-length interior line
