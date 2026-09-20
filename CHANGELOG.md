@@ -6,6 +6,18 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.4a krb5-gss module split
+
+- **krb5-gss.** `lib.rs` is split into
+  `{context,wrap,mic,iov,export,spnego,deleg,oid}.rs`. Inner attributes,
+  `Error`, and `GssContext` stay on the crate root so every `pub` path
+  `krb5_gss::X` / `GssContext::method` is unchanged (before/after list
+  identical). Sibling-only names are `pub(super)`, nothing became
+  `pub`. In-src tests moved to `tests.rs` first (path `tests`). No wire,
+  text or store behaviour changed.
+- **docs.** The parity ledger's `krb5-gss/lib.rs` rust-sites name the
+  module files; `Error` stays on `lib.rs`.
+
 ### W3-S3.3b issue.rs module split
 
 - **krb5-kdc.** `issue.rs` is split into

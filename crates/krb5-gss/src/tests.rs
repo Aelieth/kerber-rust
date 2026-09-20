@@ -1,6 +1,21 @@
 //! In-crate GSS tests (private-bound; moved out of `lib.rs`).
 
+use super::context::{
+    FLAG_ACCEPTOR_SUBKEY, KRB5_GSS_FOR_CREDS, TOK_AP_REP, TOK_AP_REQ, authenticator_checksum,
+    random_subkey,
+};
+use super::deleg::krb_cred_for_deleg;
+use super::oid::{der_tlv, gss_unwrap_app, gss_wrap_app};
+use super::spnego::parse_neg_init;
+use super::wrap::{FLAG_SEALED, TOK_WRAP, mit_shaped_wrap_flags};
 use super::*;
+use krb5_asn1::{decode, encode};
+use krb5_crypto::{KeyUsage, decrypt, encrypt};
+use krb5_protocol::build_ap_req_with_cksum;
+use krb5_types::{
+    ApOptions, ApRep, Checksum, EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime,
+    KrbCred, KrbCredInfo, Microseconds, PrincipalName, TicketFlags, ku,
+};
 
 use krb5_crypto::{EncryptionType, string_to_key};
 
