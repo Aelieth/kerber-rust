@@ -3,65 +3,96 @@
 //! `PAC_LOGON_INFO` is MS-RPCE Type-Serialization v1 / NDR32
 //! `KERB_VALIDATION_INFO`. Pointer referents are deferred in
 //! field-encounter order (not dumped after the whole struct as a bag).
+//!
+//! The NDR32 reader/writer for `KERB_VALIDATION_INFO` lives in `ndr`.
 
 use std::fmt::Write as _;
 
+mod ndr;
+
+use ndr::{NdrR, NdrW};
+
 /// PAC buffer type: logon info (`KERB_VALIDATION_INFO`).
 pub const PAC_LOGON_INFO: u32 = 1;
+
 /// PAC buffer type: credentials.
 pub const PAC_CREDENTIAL_INFO: u32 = 2;
+
 /// PAC buffer type: server checksum.
 pub const PAC_SERVER_CHECKSUM: u32 = 6;
+
 /// PAC buffer type: KDC / privilege-server checksum.
 pub const PAC_PRIVSVR_CHECKSUM: u32 = 7;
+
 /// PAC buffer type: client name and ticket info.
 pub const PAC_CLIENT_INFO: u32 = 10;
+
 /// PAC buffer type: constrained delegation info.
 pub const PAC_DELEGATION_INFO: u32 = 11;
+
 /// PAC buffer type: UPN/DNS info (MS-PAC `ulType` 12, not 16).
 pub const PAC_UPN_DNS_INFO: u32 = 12;
+
 /// PAC buffer type: client claims.
 pub const PAC_CLIENT_CLAIMS: u32 = 13;
+
 /// PAC buffer type: device info.
 pub const PAC_DEVICE_INFO: u32 = 14;
+
 /// PAC buffer type: device claims.
 pub const PAC_DEVICE_CLAIMS: u32 = 15;
+
 /// PAC buffer type: ticket checksum (CVE-2020-17049). **Not** UPN/DNS.
 pub const PAC_TICKET_CHECKSUM: u32 = 16;
+
 /// PAC buffer type: PAC attributes.
 pub const PAC_ATTRIBUTES_INFO: u32 = 17;
+
 /// PAC buffer type: requester SID.
 pub const PAC_REQUESTER_SID: u32 = 18;
+
 /// PAC buffer type: extended KDC / full PAC checksum (CVE-2022-37967).
 pub const PAC_FULL_CHECKSUM: u32 = 19;
+
 /// MIT `pac.c` `MAX_BUFFERS`.
 pub const MAX_BUFFERS: usize = 4096;
+
 /// MIT `PAC_ALIGNMENT`: every buffer starts on an 8-byte boundary.
 pub const PAC_ALIGNMENT: usize = 8;
 
 /// Signature type HMAC-MD5 (RC4). RFC 4757 cksumtype -138.
 pub const CKSUM_HMAC_MD5: i32 = -138;
+
 /// Signature type HMAC-SHA1-96-AES128.
 pub const CKSUM_HMAC_SHA1_96_AES128: i32 = 15;
+
 /// Signature type HMAC-SHA1-96-AES256.
 pub const CKSUM_HMAC_SHA1_96_AES256: i32 = 16;
 
 /// SE_GROUP_MANDATORY | SE_GROUP_ENABLED_BY_DEFAULT | SE_GROUP_ENABLED.
 pub const SE_GROUP_DEFAULT: u32 = 7;
+
 /// `USER_NORMAL_ACCOUNT`.
 pub const USER_NORMAL_ACCOUNT: u32 = 0x10;
+
 /// PAC attributes: `PAC_WAS_REQUESTED`.
 pub const PAC_ATTRIBUTE_WAS_REQUESTED: u32 = 0x0000_0001;
+
 /// PAC attributes: `PAC_WAS_GIVEN_IMPLICITLY` (MS-PAC).
 pub const PAC_ATTRIBUTE_WAS_GIVEN_IMPLICITLY: u32 = 0x0000_0002;
+
 /// UPN/DNS: SAM name + SID extension present.
 pub const PAC_UPN_DNS_HAS_SAM_AND_SID: u32 = 0x0000_0002;
+
 /// `LOGON_EXTRA_SIDS`.
 pub const LOGON_EXTRA_SIDS: u32 = 0x20;
+
 /// NDR unique-pointer IDs start here and increment by 4 (Windows).
-const NDR_PTR_BASE: u32 = 0x0002_0000;
+pub(super) const NDR_PTR_BASE: u32 = 0x0002_0000;
+
 /// FILETIME "never" (AD logoff / kickoff / must-change).
 const NT_TIME_NEVER: u64 = 0x7fff_ffff_ffff_ffff;
+
 /// NT time of Unix epoch.
 const NT_UNIX_EPOCH: u64 = 116_444_736_000_000_000;
 
@@ -1270,265 +1301,6 @@ fn encode_kerb_validation_info(info: &KerbValidationInfo) -> Vec<u8> {
     let objlen = u32::try_from(w.b.len().saturating_sub(16)).unwrap_or(u32::MAX);
     w.b[obj_at..obj_at + 4].copy_from_slice(&objlen.to_le_bytes());
     w.b
-}
-
-struct NdrR<'a> {
-    b: &'a [u8],
-    i: usize,
-}
-
-impl NdrR<'_> {
-    fn need(&self, n: usize) -> Result<(), PacError> {
-        if self.i.checked_add(n).is_none_or(|e| e > self.b.len()) {
-            Err(PacError::Truncated)
-        } else {
-            Ok(())
-        }
-    }
-
-    fn align4(&mut self) {
-        let pad = (4 - (self.i % 4)) % 4;
-        self.i = self.i.saturating_add(pad).min(self.b.len());
-    }
-
-    fn u8(&mut self) -> Result<u8, PacError> {
-        self.need(1)?;
-        let v = self.b[self.i];
-        self.i += 1;
-        Ok(v)
-    }
-
-    fn u16(&mut self) -> Result<u16, PacError> {
-        self.need(2)?;
-        let v = u16::from_le_bytes(
-            self.b[self.i..self.i + 2]
-                .try_into()
-                .map_err(|_| PacError::Truncated)?,
-        );
-        self.i += 2;
-        Ok(v)
-    }
-
-    fn u32(&mut self) -> Result<u32, PacError> {
-        self.need(4)?;
-        let v = u32::from_le_bytes(
-            self.b[self.i..self.i + 4]
-                .try_into()
-                .map_err(|_| PacError::Truncated)?,
-        );
-        self.i += 4;
-        Ok(v)
-    }
-
-    fn u64(&mut self) -> Result<u64, PacError> {
-        self.need(8)?;
-        let v = u64::from_le_bytes(
-            self.b[self.i..self.i + 8]
-                .try_into()
-                .map_err(|_| PacError::Truncated)?,
-        );
-        self.i += 8;
-        Ok(v)
-    }
-
-    fn take_str(&mut self, s: RpcUnicode) -> Result<RpcUnicode, PacError> {
-        if s.pointed {
-            self.conf_string(s)
-        } else {
-            Ok(s)
-        }
-    }
-
-    fn bytes(&mut self, n: usize) -> Result<&[u8], PacError> {
-        self.need(n)?;
-        let s = &self.b[self.i..self.i + n];
-        self.i += n;
-        Ok(s)
-    }
-
-    fn ustr(&mut self) -> Result<RpcUnicode, PacError> {
-        let length = self.u16()?;
-        let maximum_length = self.u16()?;
-        let ptr = self.u32()?;
-        Ok(RpcUnicode {
-            length,
-            maximum_length,
-            pointed: ptr != 0,
-            value: String::new(),
-        })
-    }
-
-    fn conf_string(&mut self, mut s: RpcUnicode) -> Result<RpcUnicode, PacError> {
-        self.align4();
-        let maxc = self.u32()?;
-        let _off = self.u32()?;
-        let act = self.u32()?;
-        if act > maxc || act > 1024 {
-            return Err(PacError::Truncated);
-        }
-        let nbytes = usize::try_from(act.saturating_mul(2)).map_err(|_| PacError::Truncated)?;
-        let raw = self.bytes(nbytes)?;
-        let mut u16s = Vec::with_capacity(act as usize);
-        for k in 0..act as usize {
-            u16s.push(u16::from_le_bytes([raw[k * 2], raw[k * 2 + 1]]));
-        }
-        s.value = String::from_utf16(&u16s).map_err(|_| PacError::Truncated)?;
-        let pad = (4 - (nbytes % 4)) % 4;
-        self.i = self.i.saturating_add(pad).min(self.b.len());
-        Ok(s)
-    }
-
-    fn group_array(&mut self, expect: u32) -> Result<Vec<GroupMembership>, PacError> {
-        self.align4();
-        let maxc = self.u32()?;
-        if maxc != expect || maxc > 1024 {
-            return Err(PacError::Truncated);
-        }
-        let mut out = Vec::with_capacity(maxc as usize);
-        for _ in 0..maxc {
-            out.push(GroupMembership {
-                relative_id: self.u32()?,
-                attributes: self.u32()?,
-            });
-        }
-        Ok(out)
-    }
-
-    fn sid(&mut self) -> Result<RpcSid, PacError> {
-        self.align4();
-        let maxc = self.u32()?;
-        let revision = self.u8()?;
-        let subc = self.u8()?;
-        if u32::from(subc) > maxc || subc > 15 {
-            return Err(PacError::Truncated);
-        }
-        let ia = self.bytes(6)?;
-        let mut identifier_authority = [0u8; 6];
-        identifier_authority.copy_from_slice(ia);
-        let mut sub_authority = Vec::with_capacity(usize::from(subc));
-        for _ in 0..subc {
-            sub_authority.push(self.u32()?);
-        }
-        Ok(RpcSid {
-            revision,
-            identifier_authority,
-            sub_authority,
-        })
-    }
-
-    fn extra_sids(&mut self, expect: u32) -> Result<Vec<ExtraSid>, PacError> {
-        self.align4();
-        let maxc = self.u32()?;
-        if maxc != expect || maxc > 64 {
-            return Err(PacError::Truncated);
-        }
-        let mut hdrs = Vec::with_capacity(maxc as usize);
-        for _ in 0..maxc {
-            let ptr = self.u32()?;
-            let attributes = self.u32()?;
-            hdrs.push((ptr, attributes));
-        }
-        let mut out = Vec::with_capacity(hdrs.len());
-        for (ptr, attributes) in hdrs {
-            if ptr == 0 {
-                return Err(PacError::Truncated);
-            }
-            out.push(ExtraSid {
-                sid: self.sid()?,
-                attributes,
-            });
-        }
-        Ok(out)
-    }
-}
-
-struct NdrW {
-    b: Vec<u8>,
-    next: u32,
-}
-
-impl Default for NdrW {
-    fn default() -> Self {
-        Self {
-            b: Vec::new(),
-            next: NDR_PTR_BASE,
-        }
-    }
-}
-
-impl NdrW {
-    fn u8(&mut self, v: u8) {
-        self.b.push(v);
-    }
-    fn u16(&mut self, v: u16) {
-        self.b.extend_from_slice(&v.to_le_bytes());
-    }
-    fn u32(&mut self, v: u32) {
-        self.b.extend_from_slice(&v.to_le_bytes());
-    }
-    fn u64(&mut self, v: u64) {
-        self.b.extend_from_slice(&v.to_le_bytes());
-    }
-    fn align4(&mut self) {
-        while !self.b.len().is_multiple_of(4) {
-            self.b.push(0);
-        }
-    }
-    fn ptr(&mut self, present: bool) {
-        if present {
-            self.u32(self.next);
-            self.next = self.next.saturating_add(4);
-        } else {
-            self.u32(0);
-        }
-    }
-    fn ustr_hdr(&mut self, s: &RpcUnicode) {
-        self.u16(s.length);
-        self.u16(s.maximum_length);
-        self.ptr(s.pointed);
-    }
-    fn ustr_body(&mut self, s: &RpcUnicode) {
-        if !s.pointed {
-            return;
-        }
-        self.align4();
-        self.u32(s.max_chars());
-        self.u32(0);
-        self.u32(s.actual_chars());
-        let utf16: Vec<u8> = s.value.encode_utf16().flat_map(u16::to_le_bytes).collect();
-        self.b.extend_from_slice(&utf16);
-        self.align4();
-    }
-    fn group_array(&mut self, g: &[GroupMembership]) {
-        self.align4();
-        self.u32(u32::try_from(g.len()).unwrap_or(0));
-        for m in g {
-            self.u32(m.relative_id);
-            self.u32(m.attributes);
-        }
-    }
-    fn sid(&mut self, s: &RpcSid) {
-        self.align4();
-        let n = u32::try_from(s.sub_authority.len()).unwrap_or(0);
-        self.u32(n);
-        self.u8(s.revision);
-        self.u8(u8::try_from(s.sub_authority.len()).unwrap_or(0));
-        self.b.extend_from_slice(&s.identifier_authority);
-        for r in &s.sub_authority {
-            self.u32(*r);
-        }
-    }
-    fn extra_sids(&mut self, extras: &[ExtraSid]) {
-        self.align4();
-        self.u32(u32::try_from(extras.len()).unwrap_or(0));
-        for e in extras {
-            self.ptr(true);
-            self.u32(e.attributes);
-        }
-        for e in extras {
-            self.sid(&e.sid);
-        }
-    }
 }
 
 fn parse_legacy_utf8_logon(data: &[u8]) -> Result<(String, String), PacError> {

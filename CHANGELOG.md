@@ -22,6 +22,12 @@ this project uses semantic versioning once a crate is published.
   `fast_error_material` keep their crate paths. Ledger rust-sites
   follow the new files. Sibling-only names are `pub(super)`. No
   wire, text or store behaviour changed.
+- **krb5-types.** `pac.rs` is split into `pac/ndr.rs` (MS-PAC /
+  MS-RPCE Type-Serialization v1; MIT `pac.c` does not parse
+  `KERB_VALIDATION_INFO`). Ledger anchors stay on `pac.rs`.
+  `pac/tests.rs` and its `include_bytes!` are untouched. Every
+  `pub` path `krb5_types::pac::X` is unchanged. Sibling-only names
+  are `pub(super)`. No wire, text or store behaviour changed.
 
 ### W3-S3.4d-R residues
 
