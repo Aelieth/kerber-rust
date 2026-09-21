@@ -123,14 +123,21 @@ HELPERS = (
     "krbtgt_name",
     "documented_host",
     "bootstrap_documented",
+    "documented_kadmin",
+    "documented_changepw",
+    "documented_history",
+    "harness_master_etype",
     "inet",
     "decrypt_ticket_part",
     "unique_dir",
 )
+# `testrealm::` / `principals::` strip only after `krb5_kdc::`, `crate::`,
+# or `super::`. A bare `testrealm::` is left alone.
 PATHPFX = re.compile(
     r"\b(?:krb5_testkit|testkit|common|crate::common|self::common|"
-    r"krb5_kdc|krb5_admin|krb5_protocol|krb5_client|krb5_gss|krb5_config|"
-    r"super|crate)::"
+    r"krb5_admin|krb5_protocol|krb5_client|krb5_gss|krb5_config|"
+    r"(?:krb5_kdc|super|crate)(?:::(?:testrealm|principals))?)"
+    r"::"
 )
 ASSERT_RE = re.compile(r"\bassert(?:_eq|_ne|_matches)?!")
 TEST_ATTR = re.compile(r"#\[\s*(?:tokio::test|test|test_case|rstest|proptest)")
@@ -1303,6 +1310,126 @@ def _self_test() -> int:
                 "hygiene-body-diff --self-test: a zero-length interior line of an asserted literal must be an assertion change"
             )
         _must_red(blank, "zero-length interior literal line")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(krb5_kdc::TEST_REALM, 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(krb5_kdc::testrealm::TEST_REALM, 1);\n}\n",
+            encoding="utf-8",
+        )
+        realm = compare_trees(old, new, {}, {}, [], {})
+        evaluate(realm)
+        if realm["identical"] != 1 or realm["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: krb5_kdc::testrealm:: must normalise like krb5_kdc::"
+            )
+        n += 1
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(crate::principals::TEST_REALM, 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(crate::TEST_REALM, 1);\n}\n",
+            encoding="utf-8",
+        )
+        princ = compare_trees(old, new, {}, {}, [], {})
+        evaluate(princ)
+        if princ["identical"] != 1 or princ["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: crate::principals:: must normalise like crate::"
+            )
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert!(super::documented_host());\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert!(super::testrealm::documented_host());\n}\n",
+            encoding="utf-8",
+        )
+        host = compare_trees(old, new, {}, {}, [], {})
+        evaluate(host)
+        if host["identical"] != 1 and host["helper_only"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: super::testrealm:: must normalise like super::"
+            )
+        if host["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: super::testrealm:: must not be an assertion change"
+            )
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(krb5_kdc::TEST_REALM, 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(krb5_kdc::other::TEST_REALM, 1);\n}\n",
+            encoding="utf-8",
+        )
+        missing_seg = compare_trees(old, new, {}, {}, [], {})
+        if missing_seg["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: an undeclared module segment must be an assertion change"
+            )
+        _must_red(missing_seg, "path segment absent")
+        n += 1
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(testrealm::TEST_REALM, 1);\n}\n",
+            encoding="utf-8",
+        )
+        bare = compare_trees(old, new, {}, {}, [], {})
+        if bare["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a bare testrealm:: path must stay an assertion change"
+            )
+        _must_red(bare, "bare testrealm::")
+        n += 1
+        declared = load_subst(
+            None,
+            [
+                "documented_kadmin=kadmin_admin",
+                "documented_changepw=kadmin_changepw",
+                "documented_history=kadmin_history",
+                "harness_master_etype=default_master_etype",
+            ],
+        )
+        if declared != [
+            ("documented_kadmin", "kadmin_admin"),
+            ("documented_changepw", "kadmin_changepw"),
+            ("documented_history", "kadmin_history"),
+            ("harness_master_etype", "default_master_etype"),
+        ]:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: the four renames must be declared helpers"
+            )
+        n += 1
+        try:
+            load_subst(None, ["documented_kiprop=kiprop"])
+        except SystemExit:
+            pass
+        else:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: an undeclared helper subst must fail"
+            )
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert!(krb5_kdc::documented_kadmin());\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert!(krb5_kdc::principals::kadmin_admin());\n}\n",
+            encoding="utf-8",
+        )
+        renamed_path = compare_trees(
+            old, new, {}, {}, [("documented_kadmin", "kadmin_admin")], {}
+        )
+        evaluate(renamed_path)
+        if renamed_path["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: path segment plus declared rename must pass"
+            )
         n += 1
     return n
 

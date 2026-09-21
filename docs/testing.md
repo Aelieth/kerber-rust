@@ -56,8 +56,11 @@ and an unused entry or a blob mismatch is red. Same-file helpers are
 smashed only when the name exists on both sides; a rename compares the
 helper bodies. The blob keeps helper-call arguments (smash the callee
 name only). `--subst` / `--subst-file` rewrite only call positions of
-names in the declared helper list (`user_as()`, `temp_dir()`, …),
-never constants, numerics, or string literals. `--self-test` on the
+names in the declared helper list (`user_as()`, `temp_dir()`,
+`documented_kadmin()`, `harness_master_etype()`, …), never
+constants, numerics, or string literals. `testrealm::` and
+`principals::` are stripped only after `krb5_kdc::`, `crate::`,
+or `super::`. `--self-test` on the
 compare tools prints `self-test ok (N cases)`. There is no
 request-shape column (no canonical built-request form).
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]

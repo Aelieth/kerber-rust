@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.5 test-realm namespace
+
+- **tool.** `hygiene-body-diff.py` strips `testrealm::` and
+  `principals::` only after `krb5_kdc::`, `crate::`, or `super::`.
+  `--subst` accepts `documented_kadmin`, `documented_changepw`,
+  `documented_history`, and `harness_master_etype`. Self-test 32
+  cases.
+
 ### W3-S3.4e remaining >1,500-line module splits
 
 - **krb5-types.** `pkinit.rs` is split into `pkinit/{ca,cms}.rs`.
