@@ -5,7 +5,8 @@
 //! the protocol functions (S3 records the pub-surface move).
 
 use krb5_crypto::ProtocolKey;
-use krb5_kdc::TEST_REALM;
+use krb5_kdc::testrealm::TEST_REALM;
+
 use krb5_protocol::{as_req, as_req_sname, tgs_req_ex_subkey};
 use krb5_types::{
     AsReq, EncryptedData, HostAddresses, KdcOptions, KerberosTime, PaData, PrincipalName, TgsReq,

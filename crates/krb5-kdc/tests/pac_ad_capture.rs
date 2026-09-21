@@ -5,11 +5,12 @@
 //! skip cleanly.
 
 use krb5_asn1::decode;
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
-    Error, PacTicket, TEST_REALM, TEST_USER, bootstrap_documented, decrypt_ticket_part,
-    documented_host, pac_from_ticket_part, sign_pac, ticket_checksum_der, verify_pac,
-    verify_pac_signatures,
+    Error, PacTicket, decrypt_ticket_part, pac_from_ticket_part, sign_pac, ticket_checksum_der,
+    verify_pac, verify_pac_signatures,
 };
+
 use krb5_protocol::{FileCcache, Keytab, as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::pac::{
     PAC_ATTRIBUTES_INFO, PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM,

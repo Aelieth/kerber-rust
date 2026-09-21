@@ -8,11 +8,12 @@
 //! `kadmin/history` key (kvno 2), which is itself under the master key.
 
 use krb5_crypto::{EncryptionType, kdb_decrypt_key, string_to_key};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
 use krb5_kdc::{
     Error, KADM5_POLICY, NamedPolicy, OsaPrincEnt, PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC,
-    PrincipalStore, TEST_REALM, TEST_USER, bootstrap_documented, decrypt_history_entry, load_dump,
-    master_key_from_password, parse_dump,
+    PrincipalStore, decrypt_history_entry, load_dump, master_key_from_password, parse_dump,
 };
+
 use krb5_testkit::{scratch_dir, user};
 use krb5_types::PrincipalName;
 use std::path::PathBuf;

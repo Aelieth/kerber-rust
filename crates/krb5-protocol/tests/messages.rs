@@ -6,9 +6,9 @@ use common::{client_key, isolate_host_krb5};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, unkeyed_checksum};
-use krb5_kdc::{
-    TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_host, pa_enc_timestamp, tgs_req,
-};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
+use krb5_kdc::{as_req, pa_enc_timestamp, tgs_req};
+
 use krb5_protocol::{
     ReplayCache, build_ap_rep, build_ap_req, build_ap_req_opts, build_krb_cred, build_krb_priv,
     build_krb_safe, unwrap_krb_priv, unwrap_krb_safe, verify_ap_rep, verify_ap_req,
@@ -129,7 +129,11 @@ fn ap_rep_mutual_and_safe_priv() {
     .unwrap();
     let raw = encode(&ap).unwrap();
     let kt = store
-        .export_keytab(&acl, &krb5_kdc::documented_admin_id(), &documented_host())
+        .export_keytab(
+            &acl,
+            &krb5_kdc::testrealm::documented_admin_id(),
+            &documented_host(),
+        )
         .unwrap();
     let ok = verify_ap_req(&raw, &kt.entries[0].key, &ReplayCache::new()).unwrap();
     let ap_rep = build_ap_rep(&tgs_out.session_key, &ok.authenticator, None, Some(1)).unwrap();
@@ -209,7 +213,11 @@ fn ap_req_checksum_uses_declared_type() {
             .into();
     let raw = encode(&ap).unwrap();
     let kt = store
-        .export_keytab(&acl, &krb5_kdc::documented_admin_id(), &documented_host())
+        .export_keytab(
+            &acl,
+            &krb5_kdc::testrealm::documented_admin_id(),
+            &documented_host(),
+        )
         .unwrap();
     let params = krb5_protocol::ApVerifyParams {
         keys: std::slice::from_ref(&kt.entries[0].key),
@@ -625,10 +633,9 @@ fn fast_client_continue_uses_etype20_from_info2() {
     use std::thread;
 
     use krb5_crypto::{EncryptionType, string_to_key};
-    use krb5_kdc::{
-        TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, s2k_params, serve,
-        shared_store,
-    };
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
+    use krb5_kdc::{s2k_params, serve, shared_store};
+
     use krb5_protocol::{AsTicketOpts, FastArmor, as_exchange, as_req_sname, pa_enc_timestamp};
     use krb5_types::{PrincipalName, ascii};
 

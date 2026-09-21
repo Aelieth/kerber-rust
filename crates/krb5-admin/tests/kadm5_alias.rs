@@ -8,7 +8,8 @@ mod common;
 use common::*;
 
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
-use krb5_kdc::{Acl, TEST_REALM, TEST_USER, bootstrap_documented, documented_host, shared_dump};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
+use krb5_kdc::{Acl, shared_dump};
 
 use krb5_types::PrincipalName;
 

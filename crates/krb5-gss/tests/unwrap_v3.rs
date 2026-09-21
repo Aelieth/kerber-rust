@@ -7,10 +7,11 @@ use common::issue_tgt;
 
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt, string_to_key};
 use krb5_gss::{DelegCred, Error, GSS_C_DELEG, GSS_C_PROT_READY, GssContext};
-use krb5_kdc::{
-    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_host, pa_enc_timestamp, tgs_req,
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
+use krb5_kdc::{S2K_ITERS, as_req, pa_enc_timestamp, tgs_req};
+
 use krb5_protocol::ReplayCache;
 use krb5_types::{PrincipalName, TicketFlags, ascii, ku};
 

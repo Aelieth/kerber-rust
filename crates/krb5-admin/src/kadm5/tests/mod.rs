@@ -82,7 +82,8 @@ fn admin_gss_token() -> (
     ProtocolKey,
 ) {
     use krb5_crypto::EncryptionType;
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     use krb5_kdc::principals::kadmin_admin;
 
     use krb5_protocol::{as_req_sname, pa_enc_timestamp};
@@ -146,7 +147,7 @@ fn admin_rpcsec_init_svc(
     Vec<u8>,
     Option<RpcsecGss>,
 ) {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
 
     let (store, acl, mut ctx, token, kadm_key, session) = admin_gss_token();
     let cred = rpcsec_cred(RPG_INIT, 0, svc, &[]);
@@ -323,8 +324,8 @@ fn cpw_dispatch(
 }
 
 fn setup() -> (krb5_kdc::SharedDump, Acl, String) {
-    let (store, acl) = krb5_kdc::bootstrap_documented().unwrap();
-    let actor = krb5_kdc::documented_admin_id();
+    let (store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
     (krb5_kdc::shared_dump(store), acl, actor)
 }
 

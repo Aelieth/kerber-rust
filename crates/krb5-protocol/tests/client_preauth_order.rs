@@ -8,7 +8,8 @@
 mod common;
 use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
-use krb5_kdc::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
+
 use krb5_protocol::{
     AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, KdcAddr, as_exchange,
     insert_module_padata_before_info_pa, sort_krb5_padata_sequence,

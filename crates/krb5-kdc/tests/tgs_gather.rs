@@ -6,14 +6,17 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
+use krb5_kdc::testrealm::{
+    TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    bootstrap_documented, documented_admin_id, documented_host,
+};
 use krb5_kdc::{
     Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
-    KdcEnv, KeyEntry, PacTicket, Policy, Principal, PrincipalRead, PrincipalStore, TEST_ADMIN,
-    TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    decrypt_ticket_part, documented_admin_id, documented_host, handle_request_from,
-    pa_enc_timestamp, pac_from_ticket_part, random_key, sign_pac, tgs_req, ticket_checksum_der,
-    wrap_win2k_pac,
+    KdcEnv, KeyEntry, PacTicket, Policy, Principal, PrincipalRead, PrincipalStore, as_req,
+    decrypt_ticket_part, handle_request_from, pa_enc_timestamp, pac_from_ticket_part, random_key,
+    sign_pac, tgs_req, ticket_checksum_der, wrap_win2k_pac,
 };
+
 use krb5_testkit::{
     TgsReqBuilder, err_of, issue_tgt, issue_tgt_password, password_key, pref_etypes, reseal, status,
 };

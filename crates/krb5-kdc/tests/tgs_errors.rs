@@ -13,11 +13,14 @@ mod common;
 use common::client_key;
 
 use krb5_asn1::{decode, encode};
-use krb5_kdc::{
-    Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    decrypt_ticket_part, documented_host, pa_enc_timestamp, pac_from_ticket_part, tgs_req,
-    wrap_win2k_pac,
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
+use krb5_kdc::{
+    Error, PrincipalStore, as_req, decrypt_ticket_part, pa_enc_timestamp, pac_from_ticket_part,
+    tgs_req, wrap_win2k_pac,
+};
+
 use krb5_testkit::{
     TgsReqBuilder, expect_status, host_tgt, issue_tgt, issue_tgt_password, pref_etypes,
     reseal_store,

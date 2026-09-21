@@ -4,9 +4,9 @@
 #[path = "common/mod.rs"]
 mod common;
 use common::client_key;
-use krb5_kdc::{
-    TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_host, pa_enc_timestamp, tgs_req,
-};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
+use krb5_kdc::{as_req, pa_enc_timestamp, tgs_req};
+
 use krb5_protocol::{
     CcacheCred, CcacheKeyblock, KdcAddr, Keytab, host_princs_from_keytab, keytab_has_server, realm,
     tgt_cred, verify_init_creds, verify_init_creds_nofail,
@@ -150,7 +150,7 @@ fn vfy_increds_matching_service_ticket_verifies() {
     )
     .unwrap();
     let kt = store
-        .export_keytab(&acl, &krb5_kdc::documented_admin_id(), &host)
+        .export_keytab(&acl, &krb5_kdc::testrealm::documented_admin_id(), &host)
         .unwrap();
     let kdc = dummy_kdc();
     verify_init_creds(
@@ -216,7 +216,7 @@ fn vfy_increds_wrong_keytab_is_err() {
     )
     .unwrap();
     let good = store
-        .export_keytab(&acl, &krb5_kdc::documented_admin_id(), &host)
+        .export_keytab(&acl, &krb5_kdc::testrealm::documented_admin_id(), &host)
         .unwrap();
     let mut bad = good;
     for e in &mut bad.entries {

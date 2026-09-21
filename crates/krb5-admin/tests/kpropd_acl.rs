@@ -7,10 +7,9 @@
 
 use krb5_admin::{Error, KpropAuth, kprop_send_dump, kprop_sendauth, kpropd_recvauth};
 use krb5_crypto::ProtocolKey;
-use krb5_kdc::{
-    PrincipalStore, TEST_HOST, TEST_REALM, bootstrap_documented, documented_host, issue_as,
-    issue_tgs,
-};
+use krb5_kdc::testrealm::{TEST_HOST, TEST_REALM, bootstrap_documented, documented_host};
+use krb5_kdc::{PrincipalStore, issue_as, issue_tgs};
+
 use krb5_protocol::{ReplayCache, as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::Ticket;
 use std::net::{TcpListener, TcpStream};

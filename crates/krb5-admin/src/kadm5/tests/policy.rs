@@ -29,7 +29,10 @@ fn policy_min_max_life_round_trip_and_min_life() {
     assert_eq!(r.nullstring().unwrap().as_deref(), Some("life"));
     assert_eq!(r.u32().unwrap(), 3600);
     assert_eq!(r.u32().unwrap(), 86400);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     {
         let mut g = store.write().unwrap();
         g.set_principal_policy(&user, Some("life".into())).unwrap();
@@ -70,7 +73,10 @@ fn min_life_requires_pwchange_bypasses() {
     let (store, acl, _actor) = setup();
     let mut pol = krb5_kdc::NamedPolicy::new("soon");
     pol.pw_min_life = 3600;
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     {
         let mut g = store.write().unwrap();
         g.put_policy(pol);
@@ -362,7 +368,10 @@ fn kadm5_policy_verbs_and_pwqual() {
         assert_eq!(p.min_length, 10);
     }
 
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     {
         let mut g = store.write().unwrap();
         g.set_principal_policy(&user, Some("strict".into()))

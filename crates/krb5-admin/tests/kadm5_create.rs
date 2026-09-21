@@ -12,9 +12,9 @@ mod common;
 use common::*;
 
 use krb5_kdc::principals::kadmin_admin;
+use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, bootstrap_documented};
 use krb5_kdc::{
-    Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, NamedPolicy, PrincipalRead, TEST_ADMIN,
-    TEST_REALM, bootstrap_documented, shared_dump,
+    Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, NamedPolicy, PrincipalRead, shared_dump,
 };
 
 use krb5_types::PrincipalName;

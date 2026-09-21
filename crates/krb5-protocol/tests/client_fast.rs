@@ -6,10 +6,9 @@ mod common;
 use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt};
-use krb5_kdc::{
-    PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, serve,
-    shared_store,
-};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
+use krb5_kdc::{PrincipalStore, serve, shared_store};
+
 use krb5_protocol::{
     AsRequest, AsTicketOpts, Error, FastArmor, KdcAddr, armor_key, as_exchange, as_req,
     attach_fast, build_fast_armor, pa_enc_timestamp, unwrap_fast_rep, unwrap_fast_rep_checked,

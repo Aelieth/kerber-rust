@@ -9,9 +9,10 @@
 mod common;
 
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
+use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
 use krb5_kdc::{
     Acl, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE,
-    KDB_REQUIRES_PRE_AUTH, TEST_REALM, bootstrap_documented,
+    KDB_REQUIRES_PRE_AUTH,
 };
 
 use krb5_types::PrincipalName;

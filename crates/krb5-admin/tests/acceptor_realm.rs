@@ -4,7 +4,8 @@ use krb5_admin::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
 };
 use krb5_gss::GssContext;
-use krb5_kdc::TEST_REALM;
+use krb5_kdc::testrealm::TEST_REALM;
+
 use krb5_types::PrincipalName;
 
 #[test]

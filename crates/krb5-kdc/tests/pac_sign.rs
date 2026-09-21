@@ -13,12 +13,15 @@ use krb5_asn1::encode;
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, derive_prfplus_enctype, encrypt,
 };
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
+};
 use krb5_kdc::{
-    PacTicket, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    decrypt_ticket_part, documented_host, pa_enc_timestamp, pac_from_ticket_part,
+    PacTicket, as_req, decrypt_ticket_part, pa_enc_timestamp, pac_from_ticket_part,
     should_have_ticket_signature, sign_pac, sign_reply_pac, tgs_req, ticket_checksum_der,
     verify_pac, verify_pac_signatures, wrap_win2k_pac,
 };
+
 use krb5_testkit::{issue_tgt_password, password_key, protocol_code};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,

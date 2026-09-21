@@ -17,9 +17,8 @@ fn parse_rename_reads_two_principals() {
 
 #[test]
 fn rename_dispatch_keeps_rid_and_requires_add_delete() {
-    use krb5_kdc::{
-        TEST_REALM, bootstrap_documented, documented_admin_id, shared_dump as shared_store,
-    };
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_admin_id};
 
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();

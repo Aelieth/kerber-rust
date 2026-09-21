@@ -2,10 +2,11 @@
 
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
-    PrincipalStore, TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part,
-    documented_host, handle_request_from, pa_enc_timestamp,
+    PrincipalStore, as_req, decrypt_ticket_part, handle_request_from, pa_enc_timestamp,
 };
+
 use krb5_protocol::tgs_req;
 use krb5_testkit::{TgsReqBuilder, err_of_cname, pref_etypes};
 use krb5_types::{

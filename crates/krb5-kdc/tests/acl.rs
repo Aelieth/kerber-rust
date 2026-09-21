@@ -5,10 +5,11 @@
 mod common;
 
 use krb5_crypto::EncryptionType;
-use krb5_kdc::{
-    Acl, AdminOp, Error, KDB_LOCKDOWN_KEYS, TEST_REALM, TEST_USER, acl_for_store,
-    bootstrap_documented, default_acl_path, documented_admin_id, documented_host,
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id, documented_host,
 };
+use krb5_kdc::{Acl, AdminOp, Error, KDB_LOCKDOWN_KEYS, acl_for_store, default_acl_path};
+
 use krb5_protocol::Keytab;
 use krb5_testkit::scratch_dir;
 use krb5_types::{PrincipalName, deltat};

@@ -15,11 +15,12 @@ use common::client_key;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
     Error, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_RENEWABLE, KDB_REQUIRES_PRE_AUTH, PrincipalStore,
-    TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part, documented_host,
-    pa_enc_timestamp, tgs_req,
+    as_req, decrypt_ticket_part, pa_enc_timestamp, tgs_req,
 };
+
 use krb5_testkit::{TgsReqBuilder, admin, s4u_admin, status, user, user_as, user_as_bits};
 use krb5_types::{
     EncTicketPart, EncryptedData, KdcOptions, KerberosTime, OctetString, PaData, PaPacRequest,

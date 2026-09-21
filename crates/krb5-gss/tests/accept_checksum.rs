@@ -7,10 +7,11 @@ use krb5_gss::{
     ChannelBindings, Error, GSS_C_CHANNEL_BOUND, GSS_C_DELEG, GSS_C_INTEG, GSS_C_MUTUAL,
     GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE, GSS_C_TRANS, GSS_CHECKSUM_TYPE, GssContext,
 };
-use krb5_kdc::{
-    S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_host, pa_enc_timestamp, tgs_req,
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
+use krb5_kdc::{S2K_ITERS, as_req, pa_enc_timestamp, tgs_req};
+
 use krb5_protocol::{ReplayCache, build_ap_req_with_cksum};
 use krb5_types::{ApOptions, Checksum, EncryptionKey, PrincipalName, ascii, ku};
 

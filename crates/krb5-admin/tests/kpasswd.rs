@@ -20,10 +20,8 @@ use common::*;
 use krb5_admin::{encode_kpasswd_req, handle_kpasswd_rfc3244, *};
 use krb5_asn1::encode;
 use krb5_kdc::principals::kadmin_changepw;
-use krb5_kdc::{
-    TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id, load_store, save_store,
-    shared_dump, tl_mod_princ_name,
-};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id};
+use krb5_kdc::{load_store, save_store, shared_dump, tl_mod_princ_name};
 
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, build_krb_priv, pa_enc_timestamp};
 use krb5_testkit::scratch_dir;
@@ -99,7 +97,8 @@ fn kpasswd_host_ticket_under_changepw_key_is_refused() {
 fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
@@ -184,7 +183,8 @@ fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
 fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
@@ -269,7 +269,8 @@ fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
 fn kpasswd_target_realm_mismatch_is_harderror() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_ADMIN, TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
@@ -355,7 +356,8 @@ fn kpasswd_target_realm_mismatch_is_harderror() {
 fn kpasswd_foreign_self_change_needs_initial() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::TEST_USER;
 
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
@@ -442,7 +444,8 @@ fn kpasswd_foreign_self_change_needs_initial() {
 fn kpasswd_unprivileged_other_principal_is_accessdenied() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_ADMIN, TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
@@ -529,7 +532,8 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
 fn kpasswd_self_change_with_initial_succeeds() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
@@ -612,7 +616,8 @@ fn kpasswd_self_change_with_initial_succeeds() {
 fn kpasswd_admin_change_ignores_initial() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_ADMIN, TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv};
     use krb5_types::ChangePasswdData;
@@ -699,7 +704,8 @@ fn kpasswd_self_service_and_admin_acl() {
 fn kpasswd_policy_rejection_is_softerror() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{NamedPolicy, TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
+    use krb5_kdc::{NamedPolicy, shared_dump as shared_store};
 
     use krb5_protocol::{ReplayCache, build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
@@ -873,7 +879,8 @@ fn kpasswd_ap_req_fills_datagram_is_bailout() {
 #[test]
 fn kpasswd_bad_priv_after_ap_req_is_harderror() {
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, unwrap_krb_priv_ex};
 
@@ -926,7 +933,8 @@ fn kpasswd_bad_priv_after_ap_req_is_harderror() {
 fn kpasswd_setpw_decode_failure_is_malformed() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
 
@@ -1001,7 +1009,8 @@ fn kpasswd_setpw_decode_failure_is_malformed() {
 fn kpasswd_rfc3244_bumps_kvno() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp};
     use krb5_types::ChangePasswdData;
@@ -1104,10 +1113,10 @@ fn kpasswd_rfc3244_bumps_kvno() {
 fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{
+    use krb5_kdc::testrealm::{
         TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-        bootstrap_realm_with_kdc_conf, shared_dump as shared_store,
     };
+    use krb5_kdc::{bootstrap_realm_with_kdc_conf, shared_dump as shared_store};
 
     use krb5_protocol::{build_ap_req, build_krb_priv};
     use krb5_types::ChangePasswdData;
@@ -1180,7 +1189,8 @@ fn kpasswd_udp_listener_then_issue_as() {
 
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp};
     use krb5_types::ChangePasswdData;
@@ -1261,7 +1271,8 @@ fn kpasswd_udp_listener_then_issue_as() {
 fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req_with_cksum, build_krb_priv_with_seq, pa_enc_timestamp};
     use krb5_types::ApOptions;
@@ -1337,7 +1348,8 @@ fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
 fn kpasswd_vno1_der_stays_password() {
     use krb5_asn1::encode;
     use krb5_kdc::principals::kadmin_changepw;
-    use krb5_kdc::{TEST_ADMIN, TEST_REALM, TEST_USER, shared_dump as shared_store};
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER};
 
     use krb5_protocol::{build_ap_req, build_krb_priv};
     use krb5_types::ChangePasswdData;

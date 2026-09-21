@@ -10,10 +10,12 @@ use common::client_key;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
-use krb5_kdc::{
-    Error, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
-    bootstrap_documented, documented_admin_id, documented_host, pa_enc_timestamp, tgs_req,
+use krb5_kdc::testrealm::{
+    TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
+    documented_admin_id, documented_host,
 };
+use krb5_kdc::{Error, PrincipalStore, as_req, pa_enc_timestamp, tgs_req};
+
 use krb5_protocol::{ReplayCache, build_ap_req, verify_ap_req};
 use krb5_testkit::issue_tgt_password;
 use krb5_types::{ApReq, KrbError, PrincipalName, ascii, err, ku, pa};

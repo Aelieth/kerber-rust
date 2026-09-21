@@ -18,7 +18,8 @@ use common::*;
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::principals::kadmin_admin;
-use krb5_kdc::{Acl, NamedPolicy, TEST_ADMIN, TEST_REALM, bootstrap_documented, shared_dump};
+use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, bootstrap_documented};
+use krb5_kdc::{Acl, NamedPolicy, shared_dump};
 
 use krb5_types::PrincipalName;
 

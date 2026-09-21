@@ -3,10 +3,12 @@
 
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 use krb5_kdc::{
-    Error, KDB_REQUIRES_PRE_AUTH, NamedPolicy, S2K_ITERS, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, dump_store, load_dump, pa_enc_timestamp,
+    Error, KDB_REQUIRES_PRE_AUTH, NamedPolicy, S2K_ITERS, as_req, dump_store, load_dump,
+    pa_enc_timestamp,
 };
+
 use krb5_types::{
     PaData, PrincipalName, err, pa,
     spake::{GROUP_EDWARDS25519, PaSpake, SpakeSupport},

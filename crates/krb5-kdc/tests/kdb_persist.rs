@@ -21,10 +21,12 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, string_to_key};
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
+};
 use krb5_kdc::{
-    Acl, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, TL_MOD_PRINC, as_req,
-    bootstrap_documented, documented_admin_id, handle_request, load_store, pa_enc_timestamp,
-    save_store, tl_mod_princ_name,
+    Acl, S2K_ITERS, TL_MOD_PRINC, as_req, handle_request, load_store, pa_enc_timestamp, save_store,
+    tl_mod_princ_name,
 };
 
 use krb5_testkit::scratch_dir;
@@ -156,7 +158,9 @@ fn reload_if_stale_sees_kadmin_create() {
 
 #[test]
 fn reload_if_stale_keeps_lockout_and_pa_replay() {
-    use krb5_kdc::{NamedPolicy, TEST_USER};
+    use krb5_kdc::NamedPolicy;
+    use krb5_kdc::testrealm::TEST_USER;
+
     use krb5_protocol::ReplayKey;
 
     let dir = scratch_dir("krb5-reload-overlay");

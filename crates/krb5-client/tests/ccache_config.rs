@@ -11,9 +11,9 @@ use std::thread;
 
 use krb5_client::kinit_to_spec;
 use krb5_config::CcSpec;
-use krb5_kdc::{
-    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, serve, shared_store,
-};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
+use krb5_kdc::{serve, shared_store};
+
 use krb5_protocol::{FileCcache, KdcAddr};
 use krb5_testkit::scratch_dir;
 

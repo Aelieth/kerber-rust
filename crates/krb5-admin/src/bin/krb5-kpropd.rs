@@ -19,7 +19,9 @@ use std::time::Duration;
 
 use krb5_admin::{KPROP_PORT, kpropd_handle_conn};
 use krb5_crypto::ProtocolKey;
-use krb5_kdc::{documented_host, load_store};
+use krb5_kdc::load_store;
+use krb5_kdc::testrealm::documented_host;
+
 use krb5_protocol::{Keytab, ReplayCache};
 
 fn main() {
@@ -105,7 +107,7 @@ fn main() {
 fn kpropd_realm() -> String {
     std::env::var("KRB5_KDC_REALM")
         .or_else(|_| std::env::var("KRB5_TEST_REALM"))
-        .unwrap_or_else(|_| krb5_kdc::TEST_REALM.to_owned())
+        .unwrap_or_else(|_| krb5_kdc::testrealm::TEST_REALM.to_owned())
 }
 
 /// Raw `kpropd.acl` lines for `kpropd_authorized_principal`, read per
@@ -133,7 +135,7 @@ fn load_host_keys() -> Vec<ProtocolKey> {
     let stash = std::env::var("KRB5_KDC_STASH").ok();
     if let (Some(db), Some(stash)) = (db, stash)
         && let Ok(store) = load_store(std::path::Path::new(&db), std::path::Path::new(&stash))
-        && store.realm() == krb5_kdc::TEST_REALM
+        && store.realm() == krb5_kdc::testrealm::TEST_REALM
     {
         let host = documented_host();
         if let Some(p) = store.get_name(&host) {

@@ -233,7 +233,8 @@ fn rpc_reply_gss_verf_is_rpcsec_gss_mic() {
 #[test]
 fn rpcsec_init_reply_mic_is_window() {
     use krb5_crypto::EncryptionType;
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     use krb5_kdc::principals::kadmin_admin;
 
     use krb5_protocol::{as_req_sname, pa_enc_timestamp};
@@ -408,7 +409,8 @@ fn rpcsec_destroy_without_context_is_credproblem() {
 
 #[test]
 fn rpcsec_bad_mic_is_credproblem() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, _ctx, handle, mut gss) = admin_rpcsec_init();
     let cred = rpcsec_cred(RPG_DATA, 1, GSS_PRIVACY, &handle);
     let rec = rpcsec_call(
@@ -442,7 +444,8 @@ fn rpcsec_bad_mic_is_credproblem() {
 
 #[test]
 fn rpcsec_wrong_handle_data_is_dispatched() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, _handle, mut gss) = admin_rpcsec_init();
     let rec = rpcsec_data_rec(
         &mut ctx,
@@ -480,7 +483,8 @@ fn rpcsec_wrong_handle_data_is_dispatched() {
 
 #[test]
 fn rpcsec_seq_over_maxseq_is_ctxproblem() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
     let rec = rpcsec_data_rec(
         &mut ctx,
@@ -514,7 +518,8 @@ fn rpcsec_seq_over_maxseq_is_ctxproblem() {
 
 #[test]
 fn rpcsec_seq_replay_is_ctxproblem() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
     let rec1 = rpcsec_data_rec(
         &mut ctx,
@@ -576,7 +581,8 @@ fn rpcsec_seq_replay_is_ctxproblem() {
 
 #[test]
 fn rpcsec_destroy_then_data_is_credproblem() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
     let cred = rpcsec_cred(RPG_DESTROY, 1, GSS_PRIVACY, &handle);
     let mut header = XdrW::default();
@@ -640,7 +646,8 @@ fn rpcsec_destroy_then_data_is_credproblem() {
 
 #[test]
 fn rpcsec_unknown_program_data_carries_xp_verf() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
     let rec = rpcsec_data_rec(&mut ctx, 31, 99_999, 1, 0, 1, &handle, &[], true);
     let mut agss = None;
@@ -671,7 +678,8 @@ fn rpcsec_unknown_program_data_carries_xp_verf() {
 
 #[test]
 fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
     let cred = rpcsec_cred(RPG_DATA, 1, GSS_PRIVACY, &handle);
     let mut header = XdrW::default();
@@ -715,7 +723,8 @@ fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
 
 #[test]
 fn rpcsec_integrity_data_round_trips() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init_svc(GSS_INTEGRITY);
     let rec = rpcsec_integ_rec(&mut ctx, 40, GET_PRINCS, 1, &handle, &list_args(), false);
     let mut agss = None;
@@ -751,7 +760,8 @@ fn rpcsec_integrity_data_round_trips() {
 
 #[test]
 fn rpcsec_integrity_bad_checksum_is_garbage_args() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init_svc(GSS_INTEGRITY);
     let rec = rpcsec_integ_rec(&mut ctx, 41, GET_PRINCS, 1, &handle, &list_args(), true);
     let mut agss = None;
@@ -779,7 +789,8 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
 
 #[test]
 fn rpcsec_none_service_data_is_plain_body() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init_svc(GSS_NONE);
     let cred = rpcsec_cred(RPG_DATA, 1, GSS_NONE, &handle);
     let mut header = XdrW::default();

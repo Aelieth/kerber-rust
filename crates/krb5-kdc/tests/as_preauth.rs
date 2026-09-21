@@ -57,12 +57,16 @@ use common::client_key;
 
 use krb5_asn1::{decode, decode_enc_kdc_rep_part, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, string_to_key};
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
+    documented_host,
+};
 use krb5_kdc::{
     Error, KdcEnv, KdcPolicy, KdcPreauth, KeyEntry, Policy, PolicyAdjustment, Principal,
-    PrincipalRead, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req,
-    bootstrap_documented, clear_thread_policy, documented_admin_id, documented_host,
-    pa_enc_timestamp, random_key, register_preauth, set_thread_policy, tgs_req,
+    PrincipalRead, PrincipalStore, S2K_ITERS, as_req, clear_thread_policy, pa_enc_timestamp,
+    random_key, register_preauth, set_thread_policy, tgs_req,
 };
+
 use krb5_protocol::{
     armor_key, as_req_sname, attach_fast, build_fast_armor, pa_pac_options, pa_pk_as_req_spki,
     unwrap_fast_rep,

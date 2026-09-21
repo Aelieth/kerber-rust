@@ -15,17 +15,18 @@ fn chpass_reload_keeps_concurrent_local_create() {
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (store, acl) = krb5_kdc::bootstrap_documented().unwrap();
+    let (store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     save_store(&store, &db, &stash).unwrap();
     let mut local = load_store(&db, &stash).unwrap();
     let kadmind = load_store(&db, &stash).unwrap();
     let n7 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["n7local"]);
     {
-        let mut sess = AdminSession::local(&mut local, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut local, &acl, krb5_kdc::testrealm::documented_admin_id());
         sess.create_password(&n7, b"n7-secret").unwrap();
     }
     let shared = krb5_kdc::shared_dump(kadmind);
-    let actor = krb5_kdc::documented_admin_id();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
     let out = dispatch_kadm5(
         &shared,
         &acl,
@@ -61,7 +62,7 @@ fn extract_reload_sees_local_cpw() {
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (store, acl) = krb5_kdc::bootstrap_documented().unwrap();
+    let (store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     save_store(&store, &db, &stash).unwrap();
     let mut local = load_store(&db, &stash).unwrap();
     let kadmind = load_store(&db, &stash).unwrap();
@@ -75,7 +76,8 @@ fn extract_reload_sees_local_cpw() {
         .max()
         .unwrap();
     {
-        let mut sess = AdminSession::local(&mut local, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut local, &acl, krb5_kdc::testrealm::documented_admin_id());
         sess.change_password(&user, b"o3-new-secret").unwrap();
     }
     let after = local
@@ -88,7 +90,7 @@ fn extract_reload_sees_local_cpw() {
         .unwrap();
     assert!(after > before, "cpw must bump kvno");
     let shared = krb5_kdc::shared_dump(kadmind);
-    let actor = krb5_kdc::documented_admin_id();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
     let out = dispatch_kadm5(
         &shared,
         &acl,

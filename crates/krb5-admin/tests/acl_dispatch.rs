@@ -4,7 +4,9 @@
 mod common;
 
 use krb5_admin::*;
-use krb5_kdc::{AdminOp, bootstrap_documented, documented_admin_id, documented_host};
+use krb5_kdc::AdminOp;
+use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id, documented_host};
+
 use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;
 
@@ -39,9 +41,9 @@ fn kadmind_denies_user() {
 #[test]
 fn kadmind_wire_create_is_visible_after_reload() {
     use krb5_asn1::encode;
-    use krb5_kdc::{
-        TEST_REALM, documented_host, load_store, save_store, shared_dump as shared_store,
-    };
+    use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+    use krb5_kdc::{load_store, save_store, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, pa_enc_timestamp, tgs_req};
 
     let dir = std::env::temp_dir().join(format!(

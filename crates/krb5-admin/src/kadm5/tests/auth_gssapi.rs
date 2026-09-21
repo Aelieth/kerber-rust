@@ -91,7 +91,8 @@ fn auth_gssapi_on_iprop_init_is_success() {
 
 #[test]
 fn auth_gssapi_destroy_on_iprop_is_auth_layer() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (store, acl, _ctx, token, kadm_key, _session) = admin_gss_token();
     let mut cred = XdrW::default();
     cred.u32(AUTH_GSSAPI_CREDS_VERS);

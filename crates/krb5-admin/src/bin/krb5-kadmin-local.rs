@@ -698,7 +698,7 @@ mod tests {
     use super::*;
 
     fn sess_pair() -> (krb5_kdc::PrincipalStore, krb5_kdc::Acl) {
-        krb5_kdc::bootstrap_documented().unwrap()
+        krb5_kdc::testrealm::bootstrap_documented().unwrap()
     }
 
     fn q(sess: &mut AdminSession<'_>, line: &str) -> Result<LineOutcome, String> {
@@ -714,19 +714,28 @@ mod tests {
         )
         .unwrap();
         store
-            .create_interrealm_key(&acl, &krb5_kdc::documented_admin_id(), "AD.KERBER.TEST", ir)
+            .create_interrealm_key(
+                &acl,
+                &krb5_kdc::testrealm::documented_admin_id(),
+                "AD.KERBER.TEST",
+                ir,
+            )
             .unwrap();
         {
-            let sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
-            let name =
-                PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", krb5_kdc::TEST_REALM]);
+            let sess =
+                AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
+            let name = PrincipalName::new(
+                PrincipalName::NT_SRV_INST,
+                ["krbtgt", krb5_kdc::testrealm::TEST_REALM],
+            );
             let p = sess
                 .get_principal_record_in(&name, "AD.KERBER.TEST")
                 .expect("incoming");
             assert_eq!(p.id(), "krbtgt/KERBER.TEST@AD.KERBER.TEST");
             assert_eq!(p.realm, "AD.KERBER.TEST");
         }
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         assert!(q(&mut sess, "getprinc krbtgt/KERBER.TEST@AD.KERBER.TEST").is_ok());
     }
 
@@ -738,7 +747,8 @@ mod tests {
     fn addprinc_rejected_password_creates_no_principal() {
         let (mut store, acl) = sess_pair();
         {
-            let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+            let mut sess =
+                AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
             q(&mut sess, "addpol -minlength 8 p8").unwrap();
             q(&mut sess, "addprinc -pw short -policy p8 pqshort").unwrap();
             q(&mut sess, "addprinc -pw pqname -policy p8 pqname").unwrap();
@@ -780,7 +790,8 @@ mod tests {
     fn modprinc_maxrenewlife_writes_store() {
         let (mut store, acl) = sess_pair();
         {
-            let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+            let mut sess =
+                AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
             q(&mut sess, "modprinc -maxrenewlife 1d user").unwrap();
         }
         let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
@@ -790,7 +801,8 @@ mod tests {
     #[test]
     fn delete_prompts_unless_forced() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         q(&mut sess, "addpol keep").unwrap();
         q(&mut sess, "delpol keep").unwrap();
         assert!(sess.get_policy("keep").is_ok());
@@ -829,7 +841,8 @@ mod tests {
     #[test]
     fn quoted_interval_keeps_trailing_whitespace() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         q(&mut sess, "addpol -maxlife \"1d \" tws").unwrap();
         assert!(
             sess.get_policy("tws")
@@ -845,14 +858,16 @@ mod tests {
     #[test]
     fn unknown_verb_is_error() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         assert!(q(&mut sess, "nope").is_err());
     }
 
     #[test]
     fn getstrs_prints_set_attr() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         q(&mut sess, "setstr user m5k m5v").unwrap();
         q(&mut sess, "getstrs user").unwrap();
         let attrs = sess
@@ -870,7 +885,8 @@ mod tests {
     #[test]
     fn stdin_nope_then_quit_exits_1() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         assert_eq!(run_stdin(&mut sess, ["nope", "q"]), 1);
         assert_eq!(run_stdin(&mut sess, ["nope", "quit"]), 1);
         assert_eq!(run_stdin(&mut sess, ["nope", "exit"]), 1);
@@ -879,7 +895,8 @@ mod tests {
     #[test]
     fn addpol_flags_getpol_layout() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         q(&mut sess, "addpol floors").unwrap();
         let text = sess.get_policy("floors").unwrap();
         assert!(text.starts_with("Policy: floors\n"), "{text}");
@@ -926,7 +943,8 @@ mod tests {
     #[test]
     fn stdin_quit_stops_before_later_failure() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         assert_eq!(run_stdin(&mut sess, ["q"]), 0);
         assert_eq!(run_stdin(&mut sess, ["q", "nope"]), 0);
         assert!(matches!(q(&mut sess, "quit"), Ok(LineOutcome::Quit)));
@@ -935,11 +953,13 @@ mod tests {
     #[test]
     fn stdin_invalid_utf8_exits_1() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         let rc = run_stdin_reader(&mut sess, std::io::Cursor::new(b"\xff\nq\n"));
         assert_eq!(rc, 1);
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         let rc = run_stdin_reader(&mut sess, std::io::Cursor::new(b"\xff\nnope\nq\n"));
         assert_eq!(rc, 1);
     }
@@ -959,7 +979,8 @@ mod tests {
     #[test]
     fn stdin_read_error_breaks() {
         let (mut store, acl) = sess_pair();
-        let mut sess = AdminSession::local(&mut store, &acl, krb5_kdc::documented_admin_id());
+        let mut sess =
+            AdminSession::local(&mut store, &acl, krb5_kdc::testrealm::documented_admin_id());
         let rc = run_stdin_reader(
             &mut sess,
             io::BufReader::new(InjectedErr {

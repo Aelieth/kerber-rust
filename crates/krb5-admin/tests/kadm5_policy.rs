@@ -5,7 +5,7 @@
 //! and a tab in the parser with a different text.
 
 use krb5_admin::{AdminSession, PolicyArgs, parse_policy_args};
-use krb5_kdc::{bootstrap_documented, documented_admin_id};
+use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
 
 #[test]
 fn create_policy_dup_before_floors() {
@@ -155,7 +155,8 @@ fn modify_missing_policy_is_policy_does_not_exist() {
 
 #[test]
 fn kadmin_local_alias_creates_a_stub_for_the_target() {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     let (mut store, acl) = bootstrap_documented().unwrap();
     let actor = documented_admin_id();
     let mut sess = AdminSession::local(&mut store, &acl, actor);

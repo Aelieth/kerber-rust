@@ -15,8 +15,8 @@ const A256: EncryptionType = EncryptionType::Aes256CtsHmacSha196;
 
 /// A principal with keys `(etype, kvno)` stored in the given order.
 fn keyed(keys: &[(EncryptionType, u32)]) -> Principal {
-    let (mut store, _) = crate::bootstrap_documented().unwrap();
-    let name = crate::documented_host();
+    let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let name = crate::testrealm::documented_host();
     let entries = keys
         .iter()
         .map(|&(e, v)| KeyEntry::new(e, random_key(e).unwrap(), v))
@@ -64,10 +64,10 @@ fn as_req_sname_etype(
 ) -> Result<krb5_types::AsReq, krb5_protocol::Error> {
     krb5_protocol::as_req_sname(
         cname.clone(),
-        crate::TEST_REALM,
+        crate::testrealm::TEST_REALM,
         500,
         None,
-        PrincipalName::krbtgt(crate::TEST_REALM),
+        PrincipalName::krbtgt(crate::testrealm::TEST_REALM),
         vec![etype],
     )
 }
@@ -131,8 +131,8 @@ fn find_enctype_top_kvno_skips_non_permitted_and_names_the_miss() {
 
 #[test]
 fn chrand_stamps_last_pwd_and_mod() {
-    let (mut store, _) = crate::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+    let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let mut p = store.get_name(&user).unwrap().clone();
     plant_stale_admin_tl(&mut p, 1_000);
     store.debug_insert(p);
@@ -152,8 +152,8 @@ fn chrand_stamps_last_pwd_and_mod() {
 
 #[test]
 fn set_keys_stamps_last_pwd_and_mod() {
-    let (mut store, _) = crate::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+    let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let mut p = store.get_name(&user).unwrap().clone();
     let etype = p.best_key().unwrap().etype;
     plant_stale_admin_tl(&mut p, 1_000);
@@ -177,8 +177,8 @@ fn set_keys_stamps_last_pwd_and_mod() {
 
 #[test]
 fn set_keys_clears_requires_pwchange_and_fail_count() {
-    let (mut store, _) = crate::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+    let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let mut p = store.get_name(&user).unwrap().clone();
     p.attributes |= KDB_REQUIRES_PWCHANGE;
     p.fail_auth_count = 4;
@@ -481,14 +481,14 @@ fn persist_round_trip_keeps_serial_not_mtime() {
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (mut store, acl) = crate::bootstrap_documented().unwrap();
+    let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["serialed"]);
     store
         .create_password(
             &acl,
-            &crate::documented_admin_id(),
+            &crate::testrealm::documented_admin_id(),
             &extra,
             b"serial-secret",
         )
@@ -515,15 +515,15 @@ fn create_host_changepw_flag_survives_save() {
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (mut store, acl) = crate::bootstrap_documented().unwrap();
+    let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
     let cpw = crate::principals::kadmin_changepw();
     store
-        .delete(&acl, &crate::documented_admin_id(), &cpw)
+        .delete(&acl, &crate::testrealm::documented_admin_id(), &cpw)
         .unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     store
-        .create_host(&acl, &crate::documented_admin_id(), &cpw)
+        .create_host(&acl, &crate::testrealm::documented_admin_id(), &cpw)
         .unwrap();
     let loaded = crate::persist::load_store(&db, &stash).unwrap();
     let p = loaded.get_name(&cpw).expect("changepw");
@@ -552,20 +552,25 @@ fn ktadd_chrand_save_fail_rolls_back_rotation() {
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (mut store, acl) = crate::bootstrap_documented().unwrap();
+    let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
     let extra = PrincipalName::new(
         PrincipalName::NT_SRV_HST,
         ["host", "chrandfail.kerber.test"],
     );
     store
-        .create_host(&acl, &crate::documented_admin_id(), &extra)
+        .create_host(&acl, &crate::testrealm::documented_admin_id(), &extra)
         .unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     let before = max_kvno(&store, &extra);
     super::FAIL_NEXT_CHRAND_SAVE.with(|c| c.set(true));
     let err = store
-        .ktadd_local_atomic(&extra, true, &crate::documented_admin_id(), |_| Ok(()))
+        .ktadd_local_atomic(
+            &extra,
+            true,
+            &crate::testrealm::documented_admin_id(),
+            |_| Ok(()),
+        )
         .unwrap_err();
     assert!(
         err.to_string().contains("injected chrand save fail"),
@@ -587,20 +592,25 @@ fn ktadd_export_fail_rolls_back_rotation() {
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (mut store, acl) = crate::bootstrap_documented().unwrap();
+    let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
     let extra = PrincipalName::new(
         PrincipalName::NT_SRV_HST,
         ["host", "exportfail.kerber.test"],
     );
     store
-        .create_host(&acl, &crate::documented_admin_id(), &extra)
+        .create_host(&acl, &crate::testrealm::documented_admin_id(), &extra)
         .unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     let before = max_kvno(&store, &extra);
     super::FAIL_NEXT_KTADD_EXPORT.with(|c| c.set(true));
     let err = store
-        .ktadd_local_atomic(&extra, true, &crate::documented_admin_id(), |_| Ok(()))
+        .ktadd_local_atomic(
+            &extra,
+            true,
+            &crate::testrealm::documented_admin_id(),
+            |_| Ok(()),
+        )
         .unwrap_err();
     assert!(err.to_string().contains("injected export fail"), "{err}");
     assert_eq!(max_kvno(&store, &extra), before);
@@ -619,22 +629,27 @@ fn ktadd_rollback_save_fail_surfaces_both() {
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (mut store, acl) = crate::bootstrap_documented().unwrap();
+    let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
     let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "rbsave.kerber.test"]);
     store
-        .create_host(&acl, &crate::documented_admin_id(), &extra)
+        .create_host(&acl, &crate::testrealm::documented_admin_id(), &extra)
         .unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     let err = store
-        .ktadd_local_atomic(&extra, true, &crate::documented_admin_id(), |_| {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
-            }
-            Err(Error::Crypto("disk full".into()))
-        })
+        .ktadd_local_atomic(
+            &extra,
+            true,
+            &crate::testrealm::documented_admin_id(),
+            |_| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+                }
+                Err(Error::Crypto("disk full".into()))
+            },
+        )
         .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("disk full"), "{msg}");
@@ -650,8 +665,8 @@ fn ktadd_rollback_save_fail_surfaces_both() {
 #[test]
 fn as_cant_find_client_key_is_etype_nosupp() {
     use krb5_types::err;
-    let (mut store, _) = crate::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+    let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let mut p = store.get_name(&user).unwrap().clone();
     p.keys
         .retain(|k| k.etype == EncryptionType::Aes256CtsHmacSha384192);
@@ -673,12 +688,12 @@ fn as_cant_find_client_key_is_etype_nosupp() {
 fn as_no_server_key_is_finding_server_key() {
     use krb5_protocol::{as_req, pa_enc_timestamp};
     use krb5_types::err;
-    let (mut store, _) = crate::bootstrap_documented().unwrap();
-    let krbtgt = PrincipalName::krbtgt(crate::TEST_REALM);
+    let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let krbtgt = PrincipalName::krbtgt(crate::testrealm::TEST_REALM);
     let mut p = store.get_name(&krbtgt).unwrap().clone();
     p.keys.clear();
     store.debug_insert(p);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     let key = {
         let u = store.get_name(&user).unwrap();
         u.key_for(EncryptionType::Aes256CtsHmacSha196)
@@ -688,7 +703,7 @@ fn as_no_server_key_is_finding_server_key() {
     };
     let req = as_req(
         user,
-        crate::TEST_REALM,
+        crate::testrealm::TEST_REALM,
         501,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )
@@ -706,8 +721,8 @@ fn as_no_server_key_is_finding_server_key() {
 #[test]
 fn last_admin_unlock_skips_failcount_lockout() {
     use krb5_protocol::{as_req, pa_enc_timestamp};
-    let (mut store, _) = crate::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
+    let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
     store.put_policy(NamedPolicy {
         name: "lock".into(),
         min_length: 1,
@@ -741,7 +756,7 @@ fn last_admin_unlock_skips_failcount_lockout() {
         .clone();
     let req = as_req(
         user,
-        crate::TEST_REALM,
+        crate::testrealm::TEST_REALM,
         504,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )
@@ -753,13 +768,13 @@ fn last_admin_unlock_skips_failcount_lockout() {
 fn as_missing_krbtgt_is_get_local_tgt() {
     use krb5_protocol::{as_req_sname, pa_enc_timestamp};
     use krb5_types::err;
-    let (mut store, _) = crate::bootstrap_documented().unwrap();
-    let krbtgt = PrincipalName::krbtgt(crate::TEST_REALM);
+    let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let krbtgt = PrincipalName::krbtgt(crate::testrealm::TEST_REALM);
     let mut p = store.get_name(&krbtgt).unwrap().clone();
     p.keys.clear();
     store.debug_insert(p);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
-    let host = crate::documented_host();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
+    let host = crate::testrealm::documented_host();
     let key = store
         .get_name(&user)
         .unwrap()
@@ -769,7 +784,7 @@ fn as_missing_krbtgt_is_get_local_tgt() {
         .clone();
     let req = as_req_sname(
         user,
-        crate::TEST_REALM,
+        crate::testrealm::TEST_REALM,
         503,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
         host,

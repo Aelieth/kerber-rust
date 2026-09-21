@@ -949,8 +949,10 @@ pub fn current_policy() -> Arc<dyn KdcPolicy> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootstrap_documented;
-    use crate::{TEST_REALM, TEST_USER};
+    use crate::testrealm::bootstrap_documented;
+
+    use crate::testrealm::{TEST_REALM, TEST_USER};
+
     use krb5_protocol::{as_req, pa_enc_timestamp};
     use krb5_types::PrincipalName;
 
@@ -1005,7 +1007,8 @@ mod tests {
 
     #[test]
     fn deny_policy_blocks_issue_as_and_issue_tgs() {
-        use crate::documented_host;
+        use crate::testrealm::documented_host;
+
         use krb5_protocol::tgs_req;
 
         set_thread_policy(Arc::new(DenyPolicy));

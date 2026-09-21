@@ -3,7 +3,8 @@
 #![allow(dead_code)]
 
 use krb5_crypto::ProtocolKey;
-use krb5_kdc::{TEST_USER, TEST_USER_PASSWORD};
+use krb5_kdc::testrealm::{TEST_USER, TEST_USER_PASSWORD};
+
 use krb5_testkit::password_key;
 
 /// `TEST_USER` string-to-key with the documented password.

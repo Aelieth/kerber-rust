@@ -8,11 +8,15 @@
 //! (`do_tgs_req.c:280-289` via `kdc_get_server_key(stkt)`).
 
 use krb5_crypto::EncryptionType;
-use krb5_kdc::{
-    KDB_DISALLOW_DUP_SKEY, PrincipalStore, TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part, documented_host,
-    pa_enc_timestamp, pac_from_ticket_part, tgs_req, wrap_win2k_pac,
+use krb5_kdc::testrealm::{
+    TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    bootstrap_documented, documented_host,
 };
+use krb5_kdc::{
+    KDB_DISALLOW_DUP_SKEY, PrincipalStore, as_req, decrypt_ticket_part, pa_enc_timestamp,
+    pac_from_ticket_part, tgs_req, wrap_win2k_pac,
+};
+
 use krb5_testkit::{
     TgsReqBuilder, expect_status, host_tgt, issue_tgt, issue_tgt_password, pref_etypes,
     reseal_store, status,

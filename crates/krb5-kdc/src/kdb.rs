@@ -611,8 +611,10 @@ impl StoreLifecycle for PrincipalStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::TEST_REALM;
-    use crate::bootstrap_documented;
+    use crate::testrealm::TEST_REALM;
+
+    use crate::testrealm::bootstrap_documented;
+
     use krb5_protocol::as_req;
     use krb5_types::PrincipalName;
 
@@ -652,7 +654,8 @@ mod tests {
         use krb5_protocol::{pa_enc_timestamp, pa_enc_timestamp_at};
         use krb5_types::KerberosTime;
 
-        use crate::TEST_USER;
+        use crate::testrealm::TEST_USER;
+
         use crate::error::Error;
 
         let (mut dump, _) = bootstrap_documented().unwrap();

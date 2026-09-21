@@ -3,7 +3,8 @@
 #![allow(dead_code)]
 
 use krb5_crypto::ProtocolKey;
-use krb5_kdc::{TEST_USER, TEST_USER_PASSWORD};
+use krb5_kdc::testrealm::{TEST_USER, TEST_USER_PASSWORD};
+
 use krb5_testkit::password_key;
 
 /// Pin a realm-only profile so host `udp_preference_limit` cannot force TCP.

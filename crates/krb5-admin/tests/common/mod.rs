@@ -6,7 +6,9 @@
 use krb5_admin::{Kadm5RpcSession, encode_kpasswd_req, kadm5_handle_rpc};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::GssContext;
-use krb5_kdc::{Acl, PrincipalStore, SharedDump, TEST_REALM, issue_as};
+use krb5_kdc::testrealm::TEST_REALM;
+use krb5_kdc::{Acl, PrincipalStore, SharedDump, issue_as};
+
 use krb5_protocol::{ReplayCache, as_req_sname, pa_enc_timestamp};
 use krb5_types::{PrincipalName, ascii};
 
@@ -273,7 +275,8 @@ pub fn changepw_as_ticket(
     user_key: &krb5_crypto::ProtocolKey,
     nonce: u32,
 ) -> krb5_kdc::IssuedAs {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     use krb5_kdc::principals::kadmin_changepw;
 
     use krb5_protocol::pa_enc_timestamp;
@@ -334,7 +337,8 @@ pub fn changepw_tgs_ticket(
     user_key: &krb5_crypto::ProtocolKey,
     nonce: u32,
 ) -> krb5_kdc::IssuedTgs {
-    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::testrealm::TEST_REALM;
+
     use krb5_kdc::principals::kadmin_changepw;
 
     use krb5_protocol::{pa_enc_timestamp, tgs_req};

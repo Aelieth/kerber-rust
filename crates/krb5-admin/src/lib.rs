@@ -1113,7 +1113,7 @@ mod tests {
 
     use super::*;
 
-    use krb5_kdc::{bootstrap_documented, documented_admin_id};
+    use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
 
     #[test]
     fn parse_kadmin_args_flags() {

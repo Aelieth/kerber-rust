@@ -17,10 +17,8 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_kdc::principals::kadmin_changepw;
-use krb5_kdc::{
-    KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore, TEST_REALM, TEST_USER,
-    bootstrap_documented,
-};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_kdc::{KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore};
 
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;

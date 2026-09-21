@@ -10,10 +10,11 @@ use krb5_crypto::{
     EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, checksum, decrypt, dh_generate, dh_shared,
     encrypt, octetstring2key, p256_generate,
 };
-use krb5_kdc::{
-    Error, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    documented_admin_id,
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
 };
+use krb5_kdc::{Error, as_req};
+
 use krb5_protocol::{
     armor_key, attach_fast, build_fast_armor, pa_pk_as_req, pa_pk_as_req_agile, pa_pk_as_req_cn,
     pa_pk_as_req_signed, pa_pk_as_req_spki, pa_pk_as_req_unsigned, pkinit_reply_key,

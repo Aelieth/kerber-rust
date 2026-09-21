@@ -791,7 +791,8 @@ fn kprop_send_store_ex(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use krb5_kdc::{bootstrap_documented, documented_admin_id};
+    use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
+
     use krb5_types::PrincipalName;
 
     #[test]
@@ -812,7 +813,7 @@ mod tests {
             other => panic!("expected Applied, got {other:?}"),
         }
         assert!(slave.get_name(&extra).is_some());
-        let mut empty = krb5_kdc::PrincipalStore::new(krb5_kdc::TEST_REALM);
+        let mut empty = krb5_kdc::PrincipalStore::new(krb5_kdc::testrealm::TEST_REALM);
         assert!(matches!(
             iprop_poll_once(&master, &mut empty),
             IpropPoll::FullResync(_)
@@ -840,7 +841,8 @@ mod tests {
         use std::time::Duration;
 
         use krb5_asn1::decode;
-        use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_host};
+        use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
+
         use krb5_protocol::ReplayCache;
 
         let (store, _) = bootstrap_documented().unwrap();
@@ -907,7 +909,8 @@ mod tests {
         use std::time::Duration;
 
         use krb5_asn1::decode;
-        use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_host};
+        use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
+
         use krb5_protocol::ReplayCache;
 
         let (store, _) = bootstrap_documented().unwrap();
@@ -963,7 +966,8 @@ mod tests {
         use std::time::Duration;
 
         use krb5_asn1::decode;
-        use krb5_kdc::{TEST_REALM, bootstrap_documented, documented_host};
+        use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
+
         use krb5_protocol::ReplayCache;
 
         let (store, _) = bootstrap_documented().unwrap();

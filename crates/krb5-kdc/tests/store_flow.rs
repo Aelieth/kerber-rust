@@ -28,8 +28,11 @@ fn wait_unix_past(target: u32) {
 
 #[test]
 fn pw_expiration_on_modify_is_last_pwd_change_plus_max_life() {
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     let mut pol = NamedPolicy::new("life");
     pol.pw_max_life = 3600;
     store.put_policy(pol);
@@ -52,11 +55,14 @@ fn pw_expiration_on_modify_is_last_pwd_change_plus_max_life() {
 
 #[test]
 fn spake_not_advertised_without_groups() {
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     store.policy.spake_preauth_groups.clear();
     let req = krb5_protocol::as_req(
-        PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]),
-        krb5_kdc::TEST_REALM,
+        PrincipalName::new(
+            PrincipalName::NT_PRINCIPAL,
+            [krb5_kdc::testrealm::TEST_USER],
+        ),
+        krb5_kdc::testrealm::TEST_REALM,
         30003,
         None,
     )
@@ -76,13 +82,16 @@ fn spake_not_advertised_without_groups() {
 
 #[test]
 fn bootstrap_sid_rid_are_real_not_dummy() {
-    let (store, _) = krb5_kdc::bootstrap_documented().unwrap();
+    let (store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     assert_ne!(
         store.domain_sid().to_sddl(),
         RpcSid::dummy_domain().to_sddl()
     );
     assert_eq!(store.krbtgt().unwrap().rid, RID_KRBTGT);
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     assert_eq!(store.get_name(&user).unwrap().rid, RID_FIRST_USER);
     let ident = store.pac_identity(&user, store.realm());
     assert_eq!(ident.rid, RID_FIRST_USER);
@@ -94,8 +103,8 @@ fn bootstrap_sid_rid_are_real_not_dummy() {
 
 #[test]
 fn rename_keeps_rid_and_keys() {
-    let (mut store, acl) = krb5_kdc::bootstrap_documented().unwrap();
-    let actor = krb5_kdc::documented_admin_id();
+    let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
     let old = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["renamefrom"]);
     let new = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["renameto"]);
     store
@@ -131,8 +140,11 @@ fn named_policy_pwqual_and_lockout() {
     use krb5_protocol::{as_req, pa_enc_timestamp_at};
     use krb5_types::KerberosTime;
 
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     store.put_policy(NamedPolicy {
         name: "strict".into(),
         min_length: 8,
@@ -173,7 +185,7 @@ fn named_policy_pwqual_and_lockout() {
         .clone();
     let good = as_req(
         user.clone(),
-        krb5_kdc::TEST_REALM,
+        krb5_kdc::testrealm::TEST_REALM,
         1,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )
@@ -189,7 +201,7 @@ fn named_policy_pwqual_and_lockout() {
         let ts = KerberosTime::now().add_seconds(skew).unwrap();
         as_req(
             user.clone(),
-            krb5_kdc::TEST_REALM,
+            krb5_kdc::testrealm::TEST_REALM,
             1,
             Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
         )
@@ -212,8 +224,11 @@ fn named_policy_pwqual_and_lockout() {
 
 #[test]
 fn pwqual_counts_five_mit_classes() {
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     store.put_policy(NamedPolicy {
         name: "five".into(),
         min_length: 8,
@@ -241,22 +256,25 @@ fn pwqual_counts_five_mit_classes() {
 
 #[test]
 fn iprop_get_ships_principals_only_like_ulog_get_entries() {
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     let before = store.serial();
     store.put_policy(NamedPolicy::new("ipol"));
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     store
         .set_principal_policy(&user, Some("ipol".into()))
         .unwrap();
     store.set_password(&user, b"Ipol-pw1").unwrap();
     // A principal literally named `policy:svc` must still ship (its id
     // carries @REALM; only the marker `policy:ipol` is filtered).
-    let acl = Acl::allow_admin(krb5_kdc::documented_admin_id()).unwrap();
+    let acl = Acl::allow_admin(krb5_kdc::testrealm::documented_admin_id()).unwrap();
     let colliding = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["policy:svc"]);
     store
         .create_password(
             &acl,
-            &krb5_kdc::documented_admin_id(),
+            &krb5_kdc::testrealm::documented_admin_id(),
             &colliding,
             b"collide-pw",
         )
@@ -293,8 +311,11 @@ fn kadmin_history_is_created_before_a_rejected_quality_chpass() {
     // MIT kadm5_chpass_principal_3 fetches the history key (creating
     // kadmin/history) before passwd_check, so a chpass rejected for a
     // short password still leaves kadmin/history created.
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     let mut pol = NamedPolicy::new("minlen");
     pol.min_length = 8;
     pol.history = 2;
@@ -319,8 +340,11 @@ fn kadmin_history_is_created_before_a_rejected_quality_chpass() {
 
 #[test]
 fn password_history_matches_mit_window() {
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     store.put_policy(NamedPolicy {
         name: "h1".into(),
         min_length: 8,
@@ -413,8 +437,11 @@ fn failed_as_stamps_last_failed() {
     use krb5_protocol::{as_req, pa_enc_timestamp_at};
     use krb5_types::KerberosTime;
 
-    let (store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     let p0 = store.get_name(&user).unwrap().clone();
     assert_eq!(store.last_failed_of(&p0), 0);
     assert_eq!(store.last_success_of(&p0), 0);
@@ -426,7 +453,7 @@ fn failed_as_stamps_last_failed() {
     let ts = KerberosTime::now().add_seconds(1).unwrap();
     let bad = as_req(
         user.clone(),
-        krb5_kdc::TEST_REALM,
+        krb5_kdc::testrealm::TEST_REALM,
         1,
         Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
     )
@@ -441,7 +468,7 @@ fn failed_as_stamps_last_failed() {
     let key = p1.best_key().unwrap().key.clone();
     let good = as_req(
         user.clone(),
-        krb5_kdc::TEST_REALM,
+        krb5_kdc::testrealm::TEST_REALM,
         1,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )
@@ -461,8 +488,11 @@ fn lockout_duration_only_unlocks_after_sleep() {
     use krb5_protocol::{as_req, pa_enc_timestamp_at};
     use krb5_types::KerberosTime;
 
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     store.put_policy(NamedPolicy {
         name: "dur".into(),
         min_length: 0,
@@ -487,7 +517,7 @@ fn lockout_duration_only_unlocks_after_sleep() {
         .clone();
     let good = as_req(
         user.clone(),
-        krb5_kdc::TEST_REALM,
+        krb5_kdc::testrealm::TEST_REALM,
         1,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )
@@ -503,7 +533,7 @@ fn lockout_duration_only_unlocks_after_sleep() {
         let ts = KerberosTime::now().add_seconds(skew).unwrap();
         as_req(
             user.clone(),
-            krb5_kdc::TEST_REALM,
+            krb5_kdc::testrealm::TEST_REALM,
             1,
             Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
         )
@@ -523,8 +553,11 @@ fn lockout_interval_only_resets_fail_count() {
     use krb5_protocol::{as_req, pa_enc_timestamp_at};
     use krb5_types::KerberosTime;
 
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     store.put_policy(NamedPolicy {
         name: "intv".into(),
         min_length: 0,
@@ -551,7 +584,7 @@ fn lockout_interval_only_resets_fail_count() {
         let ts = KerberosTime::now().add_seconds(skew).unwrap();
         as_req(
             user.clone(),
-            krb5_kdc::TEST_REALM,
+            krb5_kdc::testrealm::TEST_REALM,
             1,
             Some(vec![pa_enc_timestamp_at(&zeros, &ts).unwrap()]),
         )
@@ -571,9 +604,9 @@ fn lockout_interval_only_resets_fail_count() {
 fn serial_ulog_delta_then_issue_as() {
     use krb5_protocol::as_req;
 
-    let (mut master, acl) = krb5_kdc::bootstrap_documented().unwrap();
-    let (mut slave, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let actor = krb5_kdc::documented_admin_id();
+    let (mut master, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let (mut slave, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
     let sno0 = master.serial();
     assert!(
         sno0 > 0,
@@ -616,7 +649,7 @@ fn serial_ulog_delta_then_issue_as() {
         .clone();
     let req = as_req(
         extra,
-        krb5_kdc::TEST_REALM,
+        krb5_kdc::testrealm::TEST_REALM,
         11,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )
@@ -630,10 +663,13 @@ fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
     use krb5_protocol::as_req;
     use krb5_types::pac::{PAC_LOGON_INFO, Pac, parse_kerb_validation_info};
 
-    let (mut master, acl) = krb5_kdc::bootstrap_documented().unwrap();
-    let (mut slave, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let actor = krb5_kdc::documented_admin_id();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut master, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let (mut slave, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     let user_rid = slave.get_name(&user).unwrap().rid;
     assert_eq!(user_rid, RID_FIRST_USER);
 
@@ -660,7 +696,7 @@ fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
     let key = got.best_key().unwrap().key.clone();
     let req = as_req(
         extra.clone(),
-        krb5_kdc::TEST_REALM,
+        krb5_kdc::testrealm::TEST_REALM,
         21,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )
@@ -678,8 +714,8 @@ fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
 
 #[test]
 fn apply_updates_keeps_keys_on_keyless_incremental() {
-    let (mut store, acl) = krb5_kdc::bootstrap_documented().unwrap();
-    let actor = krb5_kdc::documented_admin_id();
+    let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["keyless"]);
     store
         .create_password(&acl, &actor, &extra, b"keyless-secret")
@@ -710,8 +746,8 @@ fn apply_updates_keeps_keys_on_keyless_incremental() {
 
 #[test]
 fn ulog_records_delete_rename_chrand() {
-    let (mut store, acl) = krb5_kdc::bootstrap_documented().unwrap();
-    let actor = krb5_kdc::documented_admin_id();
+    let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
     let a = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["ulogdel"]);
     let b = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["ulogren"]);
     store
@@ -737,13 +773,16 @@ fn ulog_records_delete_rename_chrand() {
                 .any(|e| e.name.contains("ulogren") && !e.deleted && e.princ.is_some()),
         "rename must ulog delete+add: {ren:?}"
     );
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     let after_ren = store.serial();
     store.chrand(&user).unwrap();
     let ch = store.updates_after(after_ren);
     assert!(
         ch.iter()
-            .any(|e| e.name.contains(krb5_kdc::TEST_USER) && e.princ.is_some()),
+            .any(|e| e.name.contains(krb5_kdc::testrealm::TEST_USER) && e.princ.is_some()),
         "chrand must be ulogged: {ch:?}"
     );
     store.set_status(&user, true, 0).unwrap();
@@ -751,7 +790,7 @@ fn ulog_records_delete_rename_chrand() {
         store
             .ulog()
             .iter()
-            .any(|e| e.name.contains(krb5_kdc::TEST_USER)
+            .any(|e| e.name.contains(krb5_kdc::testrealm::TEST_USER)
                 && e.princ.as_ref().is_some_and(|p| p.locked)),
         "set_status must be ulogged"
     );
@@ -761,8 +800,11 @@ fn ulog_records_delete_rename_chrand() {
 fn admin_unlock_clears_failcount_lockout() {
     use krb5_protocol::as_req;
     use krb5_types::err;
-    let (mut store, _) = krb5_kdc::bootstrap_documented().unwrap();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     store.put_policy(NamedPolicy {
         name: "lock".into(),
         min_length: 1,
@@ -788,7 +830,7 @@ fn admin_unlock_clears_failcount_lockout() {
         .clone();
     let req = as_req(
         user.clone(),
-        krb5_kdc::TEST_REALM,
+        krb5_kdc::testrealm::TEST_REALM,
         502,
         Some(vec![pa_enc_timestamp(&key).unwrap()]),
     )

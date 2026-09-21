@@ -6,11 +6,12 @@
 //! `working/logs/audit-polish-0902/w1k/m3a-settle-mit-alias.log`.
 
 use krb5_asn1::decode;
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
     Error, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, MAX_ALIAS_DEPTH, PrincipalStore,
-    TEST_REALM, TEST_USER, TL_ALIAS_TARGET, bootstrap_documented, decrypt_ticket_part,
-    documented_host, dump_store, issue_as, issue_tgs, load_dump,
+    TL_ALIAS_TARGET, decrypt_ticket_part, dump_store, issue_as, issue_tgs, load_dump,
 };
+
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::{EtypeInfo2, PrincipalName, flag_bit, pa};
 

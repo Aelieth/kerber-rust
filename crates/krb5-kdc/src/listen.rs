@@ -635,7 +635,8 @@ impl Drop for ConnGuard {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bootstrap_documented;
+    use crate::testrealm::bootstrap_documented;
+
     use krb5_asn1::{decode, encode};
     use krb5_types::{PrincipalName, err};
 
@@ -725,7 +726,7 @@ mod tests {
             );
         });
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
-        let mut req = crate::as_req(cname, crate::TEST_REALM, 1, None).unwrap();
+        let mut req = crate::as_req(cname, crate::testrealm::TEST_REALM, 1, None).unwrap();
         req.0.padata = Some(vec![PaData {
             padata_type: 9999,
             padata_value: OctetString::from(vec![0u8; 128 * 1024]),
@@ -872,8 +873,8 @@ mod tests {
                 },
             );
         });
-        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
-        let req = crate::as_req(cname, crate::TEST_REALM, 1, None).unwrap();
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
+        let req = crate::as_req(cname, crate::testrealm::TEST_REALM, 1, None).unwrap();
         let bytes = encode(&req).unwrap();
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -909,8 +910,8 @@ mod tests {
                 },
             )
         });
-        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::TEST_USER]);
-        let req = crate::as_req(cname, crate::TEST_REALM, 1, None).unwrap();
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
+        let req = crate::as_req(cname, crate::testrealm::TEST_REALM, 1, None).unwrap();
         let bytes = encode(&req).unwrap();
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();

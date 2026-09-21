@@ -19,9 +19,10 @@ use std::time::Duration;
 use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
+use krb5_kdc::testrealm::{bootstrap_documented, documented_kiprop};
 use krb5_kdc::{
-    Acl, Error, PrincipalStore, acl_for_store, bootstrap_documented, default_acl_path,
-    documented_kiprop, open_store, shared_dump as shared_store,
+    Acl, Error, PrincipalStore, acl_for_store, default_acl_path, open_store,
+    shared_dump as shared_store,
 };
 
 use krb5_protocol::ReplayCache;

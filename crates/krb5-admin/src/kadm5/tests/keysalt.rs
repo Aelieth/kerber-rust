@@ -421,7 +421,10 @@ fn setkey_keepold_kvno_collision_is_bad_kvno() {
 #[test]
 fn chrand_bumps_kvno() {
     let (store, acl, actor) = setup();
-    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
+    let user = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
     let kvno_before = {
         let g = store.read().unwrap();
         g.get_name(&user)

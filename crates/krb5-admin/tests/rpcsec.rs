@@ -17,7 +17,8 @@ use common::*;
 use krb5_admin::{Kadm5RpcSession, kadm5_handle_rpc, serve_kadm5_conn};
 use krb5_gss::GssContext;
 use krb5_kdc::principals::kadmin_admin;
-use krb5_kdc::{Acl, TEST_REALM, bootstrap_documented, shared_dump};
+use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
+use krb5_kdc::{Acl, shared_dump};
 
 use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;

@@ -4,7 +4,8 @@
 mod common;
 
 use krb5_admin::*;
-use krb5_kdc::bootstrap_documented;
+use krb5_kdc::testrealm::bootstrap_documented;
+
 use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;
 
@@ -60,8 +61,9 @@ fn kprop_tcp_replica_issues_as_with_shared_stash() {
     use std::thread;
     use std::time::Duration;
 
-    use krb5_kdc::TEST_REALM;
-    use krb5_kdc::TEST_USER;
+    use krb5_kdc::testrealm::TEST_REALM;
+
+    use krb5_kdc::testrealm::TEST_USER;
 
     const MASTER: &[u8] = b"masterpassword";
 
@@ -130,8 +132,11 @@ fn kprop_dump_payload_is_version_7_not_kdb3() {
     );
     assert!(!bytes.starts_with(b"KDB3"));
     let replica = kprop_load_bytes(&bytes, MASTER).unwrap();
-    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [krb5_kdc::TEST_USER]);
-    let salt = cname.default_salt(krb5_kdc::TEST_REALM);
+    let cname = PrincipalName::new(
+        PrincipalName::NT_PRINCIPAL,
+        [krb5_kdc::testrealm::TEST_USER],
+    );
+    let salt = cname.default_salt(krb5_kdc::testrealm::TEST_REALM);
     let key = krb5_crypto::string_to_key(
         krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
         b"userpassword",
@@ -141,7 +146,7 @@ fn kprop_dump_payload_is_version_7_not_kdb3() {
     .unwrap();
     let req = krb5_kdc::as_req(
         cname,
-        krb5_kdc::TEST_REALM,
+        krb5_kdc::testrealm::TEST_REALM,
         92,
         Some(vec![krb5_kdc::pa_enc_timestamp(&key).unwrap()]),
     )
@@ -163,7 +168,8 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
     use std::thread;
     use std::time::Duration;
 
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_host};
+    use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, documented_host};
+
     use krb5_protocol::{pa_enc_timestamp, tgs_req};
 
     const MASTER: &[u8] = b"masterpassword";
@@ -275,7 +281,8 @@ fn kpropd_rejects_client_not_on_allowlist() {
     use std::thread;
     use std::time::Duration;
 
-    use krb5_kdc::{TEST_REALM, documented_host};
+    use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+
     use krb5_protocol::{pa_enc_timestamp, tgs_req};
 
     const MASTER: &[u8] = b"masterpassword";
@@ -372,7 +379,8 @@ fn kpropd_rejects_when_acl_unset() {
     use std::thread;
     use std::time::Duration;
 
-    use krb5_kdc::{TEST_REALM, documented_host};
+    use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+
     use krb5_protocol::{pa_enc_timestamp, tgs_req};
 
     const MASTER: &[u8] = b"masterpassword";

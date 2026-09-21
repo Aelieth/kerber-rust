@@ -21,10 +21,10 @@ use common::client_key;
 use krb5_asn1::{decode, decode_enc_kdc_rep_part, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, PrincipalStore,
-    TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part, documented_host,
-    dump_store, pa_enc_timestamp, parse_dump, tgs_req,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, PrincipalStore, as_req,
+    decrypt_ticket_part, dump_store, pa_enc_timestamp, parse_dump, tgs_req,
 };
 
 use krb5_testkit::{TgsReqBuilder, status, user, user_as};

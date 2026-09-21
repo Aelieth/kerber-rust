@@ -17,11 +17,14 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2, string_to_key,
 };
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
+};
 use krb5_kdc::{
-    Error, KeyEntry, NamedPolicy, PrincipalStore, S2K_ITERS, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, decrypt_ticket_part, documented_host,
+    Error, KeyEntry, NamedPolicy, PrincipalStore, S2K_ITERS, as_req, decrypt_ticket_part,
     pa_enc_timestamp, random_key, tgs_req,
 };
+
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, attach_fast_with_options,
     build_fast_armor, pa_spake_response, pa_spake_support, unwrap_fast_rep,

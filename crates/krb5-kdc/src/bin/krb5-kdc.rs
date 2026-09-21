@@ -14,11 +14,11 @@
 use std::path::PathBuf;
 
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
+use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, documented_kiprop};
 use krb5_kdc::{
     Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR,
-    KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER,
-    apply_kadm5_create_service_attrs, bind_preferred, documented_kiprop, drop_privileges,
-    open_store, serve, shared_store,
+    KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, apply_kadm5_create_service_attrs, bind_preferred,
+    drop_privileges, open_store, serve, shared_store,
 };
 
 fn main() {
@@ -142,7 +142,7 @@ fn main() {
     if let Some(path) = export_keytab.as_ref() {
         let host_inst = std::env::var("KRB5_TEST_HOST").unwrap_or_else(|_| {
             if store.realm() == TEST_REALM {
-                krb5_kdc::TEST_HOST.to_owned()
+                krb5_kdc::testrealm::TEST_HOST.to_owned()
             } else {
                 "svc.other.test".into()
             }
@@ -354,7 +354,7 @@ fn bootstrap_test_realm(kdc: Option<&krb5_config::KdcConf>) -> PrincipalStore {
     });
     let host_inst = std::env::var("KRB5_TEST_HOST").unwrap_or_else(|_| {
         if realm == TEST_REALM {
-            krb5_kdc::TEST_HOST.to_owned()
+            krb5_kdc::testrealm::TEST_HOST.to_owned()
         } else {
             "svc.other.test".into()
         }

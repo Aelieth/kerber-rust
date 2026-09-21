@@ -9,10 +9,11 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2, unkeyed_checksum,
 };
-use krb5_kdc::{
-    Error, PrincipalStore, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    decrypt_ticket_part, documented_host, pa_enc_timestamp, tgs_req,
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
+use krb5_kdc::{Error, PrincipalStore, as_req, decrypt_ticket_part, pa_enc_timestamp, tgs_req};
+
 use krb5_protocol::{
     AsOutcome, KdcAddr, apply_strengthen, armor_key, build_fast_armor, tgs_exchange,
     unwrap_fast_rep,

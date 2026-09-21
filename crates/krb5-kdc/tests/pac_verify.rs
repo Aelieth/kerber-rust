@@ -1,10 +1,9 @@
 //! PAC checksums over received bytes (MIT `pac.c` `verify_pac_checksums`).
 
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum};
-use krb5_kdc::{
-    Error, PacTicket, TEST_REALM, TEST_USER, bootstrap_documented, documented_host, sign_pac,
-    ticket_checksum_der, verify_pac_signatures,
-};
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
+use krb5_kdc::{Error, PacTicket, sign_pac, ticket_checksum_der, verify_pac_signatures};
+
 use krb5_protocol::{as_req, pa_enc_timestamp};
 use krb5_types::pac::{
     PAC_CLIENT_INFO, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, PacError,

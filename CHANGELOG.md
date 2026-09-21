@@ -19,6 +19,11 @@ this project uses semantic versioning once a crate is published.
   bodies are unchanged. No wire or text change.
 - **krb5-kdc.** `harness_master_etype` is `default_master_etype`.
   The body is unchanged. No wire or text change.
+- **krb5-kdc.** The documented test realm (`TEST_REALM` and the
+  other constants, `documented_host`, `documented_kiprop`,
+  `documented_admin_id`, `bootstrap_documented`) lives in
+  `testrealm`. No root re-export. Always compiled. No wire or
+  text change.
 
 ### W3-S3.4e remaining >1,500-line module splits
 

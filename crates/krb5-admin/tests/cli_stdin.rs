@@ -65,7 +65,7 @@ fn kadmin_local_nope_then_q_exits_1() {
     let dir = scratch_dir("kadmin-stdin");
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (store, _) = krb5_kdc::bootstrap_documented().unwrap();
+    let (store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     krb5_kdc::save_store(&store, &db, &stash).unwrap();
     let bin = env!("CARGO_BIN_EXE_krb5-kadmin-local");
     let run = |input: &[u8]| {
@@ -161,7 +161,7 @@ fn kadmin_local_directory_stdin_terminates() {
     let dir = scratch_dir("kadmin-dirin");
     let db = dir.join("principal");
     let stash = dir.join("stash");
-    let (store, _) = krb5_kdc::bootstrap_documented().unwrap();
+    let (store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     krb5_kdc::save_store(&store, &db, &stash).unwrap();
     let bin = env!("CARGO_BIN_EXE_krb5-kadmin-local");
     let out = dir_stdin(

@@ -10,10 +10,9 @@ mod common;
 use common::*;
 
 use krb5_admin::{AdminSession, *};
-use krb5_kdc::{
-    Acl, KDB_LOCKDOWN_KEYS, TEST_REALM, bootstrap_documented, documented_admin_id,
-    tl_mod_princ_name,
-};
+use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_admin_id};
+use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, tl_mod_princ_name};
+
 use krb5_types::PrincipalName;
 
 #[test]
@@ -125,7 +124,7 @@ fn setstr_reload_keeps_concurrent_create() {
 #[test]
 fn ktadd_local_krbtgt_rotates_like_mit() {
     let (mut store, acl) = bootstrap_documented().unwrap();
-    let tgt = PrincipalName::krbtgt(krb5_kdc::TEST_REALM);
+    let tgt = PrincipalName::krbtgt(krb5_kdc::testrealm::TEST_REALM);
     store
         .apply_admin_fields(
             &tgt,

@@ -7,10 +7,10 @@ use common::*;
 
 use krb5_admin::{AdminSession, Error};
 use krb5_kdc::principals::kadmin_admin;
-use krb5_kdc::{
-    Acl, NamedPolicy, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id,
-    shared_dump,
+use krb5_kdc::testrealm::{
+    TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id,
 };
+use krb5_kdc::{Acl, NamedPolicy, shared_dump};
 
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;

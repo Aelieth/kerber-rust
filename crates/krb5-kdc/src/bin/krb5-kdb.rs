@@ -18,10 +18,12 @@
 use std::path::PathBuf;
 
 use krb5_crypto::EncryptionType;
+use krb5_kdc::testrealm::{TEST_ADMIN, TEST_USER};
 use krb5_kdc::{
-    KDB_DUMP_VERSION, NamedPolicy, TEST_ADMIN, TEST_USER, bootstrap_realm_with_kdc_conf,
-    load_dump_etype, load_store, parse_dump, save_store, write_dump_path_etype,
+    KDB_DUMP_VERSION, NamedPolicy, bootstrap_realm_with_kdc_conf, load_dump_etype, load_store,
+    parse_dump, save_store, write_dump_path_etype,
 };
+
 use krb5_types::PrincipalName;
 
 fn main() {

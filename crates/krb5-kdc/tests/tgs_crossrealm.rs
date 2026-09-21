@@ -7,13 +7,16 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
-use krb5_kdc::{
-    Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, RID_KRBTGT, TEST_ADMIN,
-    TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, as_req, bootstrap_documented,
-    decrypt_ticket_part, documented_admin_id, documented_host, dump_store, dump_store_iprop,
-    load_dump, pa_enc_timestamp, pac_from_ticket_part, tgs_req, ticket_checksum_der,
-    verify_pac_signatures, wrap_win2k_pac,
+use krb5_kdc::testrealm::{
+    TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
+    bootstrap_documented, documented_admin_id, documented_host,
 };
+use krb5_kdc::{
+    Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, RID_KRBTGT, as_req,
+    decrypt_ticket_part, dump_store, dump_store_iprop, load_dump, pa_enc_timestamp,
+    pac_from_ticket_part, tgs_req, ticket_checksum_der, verify_pac_signatures, wrap_win2k_pac,
+};
+
 use krb5_testkit::{
     TgsReqBuilder, aes_key, expect_status, issue_tgt_password, issue_tgt_renewable, password_key,
     pref_etypes, reseal_mut,

@@ -8,10 +8,11 @@ mod common;
 use common::client_key;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
-use krb5_kdc::{
-    TEST_REALM, TEST_USER, as_req, bootstrap_documented, documented_admin_id, documented_host,
-    pa_enc_timestamp, tgs_req,
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id, documented_host,
 };
+use krb5_kdc::{as_req, pa_enc_timestamp, tgs_req};
+
 use krb5_protocol::{ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_req, verify_ap_req_ex};
 use krb5_types::{
     ApReq, EncTicketPart, KerberosTime, PrincipalName, TransitedEncoding, err, flag_bit, ku,

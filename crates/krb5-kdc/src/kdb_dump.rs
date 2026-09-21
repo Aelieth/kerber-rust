@@ -1177,7 +1177,9 @@ mod tests {
     #[test]
     fn named_policy_dump_round_trip() {
         use crate::store::NamedPolicy;
-        use crate::{TEST_USER, bootstrap_documented, dump_store, load_dump};
+        use crate::testrealm::{TEST_USER, bootstrap_documented};
+        use crate::{dump_store, load_dump};
+
         use krb5_types::PrincipalName;
 
         let (mut store, _) = bootstrap_documented().unwrap();
@@ -1223,11 +1225,13 @@ mod tests {
 
     #[test]
     fn dump_round_trip_keeps_slash_in_component() {
-        use crate::{bootstrap_documented, dump_store, load_dump};
+        use crate::testrealm::bootstrap_documented;
+        use crate::{dump_store, load_dump};
+
         use krb5_types::PrincipalName;
 
         let (mut store, acl) = bootstrap_documented().unwrap();
-        let actor = crate::documented_admin_id();
+        let actor = crate::testrealm::documented_admin_id();
         let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["foo/admin"]);
         store
             .create_password(&acl, &actor, &name, b"slash-secret")
@@ -1253,7 +1257,9 @@ mod tests {
 
     #[test]
     fn string_attrs_dump_round_trip() {
-        use crate::{TEST_USER, bootstrap_documented, dump_store, load_dump};
+        use crate::testrealm::{TEST_USER, bootstrap_documented};
+        use crate::{dump_store, load_dump};
+
         use krb5_types::PrincipalName;
 
         let (mut store, _) = bootstrap_documented().unwrap();

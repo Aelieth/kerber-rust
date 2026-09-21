@@ -10,10 +10,9 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, prf_plus};
-use krb5_kdc::{
-    Error, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER, as_req, bootstrap_documented,
-    load_dump_path,
-};
+use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_kdc::{Error, PrincipalStore, as_req, load_dump_path};
+
 use krb5_protocol::{AsOutcome, KdcAddr, pa_spake_response, pa_spake_support, tgs_exchange};
 use krb5_testkit::{status, user};
 use krb5_types::{
