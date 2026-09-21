@@ -14,6 +14,10 @@ this project uses semantic versioning once a crate is published.
   `Invalid token` / `variable missing }`). The unknown-type unit
   pins that MIT literal. The 4b entry no longer says the six fns
   keep `Result<_, String>`.
+- **scripts.** `check_isolate_test_krb5`'s missing-`tests.rs`
+  fixture is a directory tree under scratch so the production
+  `is_file()` branch is what goes red; cfg(test) `temp_dir()` is
+  scanned by item range, not from the first `#[cfg(test)]` to EOF.
 
 ### W3-S3.4c ccache errors use `Error`
 

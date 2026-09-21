@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import inspect
+import io
 import os
 import pathlib
 import re
@@ -1090,32 +1092,91 @@ def host_tmp_write_lines(text: str) -> list[int]:
     return hits
 
 
+def _cfg_test_ranges(src: str) -> list[tuple[int, int]]:
+    """Byte ranges of `#[cfg(test)]` items (mod / fn / use), not to EOF."""
+    ranges: list[tuple[int, int]] = []
+    n = len(src)
+    i = 0
+    while True:
+        j = src.find("#[cfg(test)]", i)
+        if j < 0:
+            break
+        line_start = src.rfind("\n", 0, j) + 1
+        if src[line_start:j].strip() != "":
+            i = j + 1
+            continue
+        k = j + len("#[cfg(test)]")
+        while True:
+            while k < n and src[k] in " \t\r\n":
+                k += 1
+            if k < n and src.startswith("#[", k):
+                close = src.find("]", k)
+                if close < 0:
+                    k = n
+                    break
+                k = close + 1
+                continue
+            break
+        if k >= n:
+            break
+        p = k
+        depth = 0
+        in_str: str | None = None
+        end = n
+        while p < n:
+            c = src[p]
+            if in_str:
+                if c == "\\":
+                    p += 2
+                    continue
+                if c == in_str:
+                    in_str = None
+                p += 1
+                continue
+            if c in "\"'":
+                in_str = c
+                p += 1
+                continue
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    end = p + 1
+                    break
+            elif c == ";" and depth == 0:
+                end = p + 1
+                break
+            p += 1
+        ranges.append((k, end))
+        i = end
+    return ranges
+
+
 def _cfg_test_has_temp_dir(src: str) -> bool:
-    """True if `temp_dir()` appears after a `#[cfg(test)]` in `src`."""
-    i = src.find("#[cfg(test)]")
-    return i >= 0 and "temp_dir()" in src[i:]
+    """True if `temp_dir()` sits inside a cfg(test) item, not after one."""
+    return any("temp_dir()" in src[a:b] for a, b in _cfg_test_ranges(src))
 
 
 def check_isolate_test_krb5(
     text: str | None = None,
     tests_text: str | None = "",
-    tests_missing: bool = False,
     src_files: dict[str, str] | None = None,
+    root: pathlib.Path | None = None,
 ) -> None:
     """Unit-test isolate helper must not write host `/tmp`."""
-    if tests_missing:
-        _die("missing crates/krb5-config/src/tests.rs")
+    root_dir = pathlib.Path(root) if root is not None else ROOT
     if text is None:
-        path = ROOT / "crates/krb5-config/src/testenv.rs"
+        path = root_dir / "crates/krb5-config/src/testenv.rs"
         if not path.is_file():
             _die("missing crates/krb5-config/src/testenv.rs")
         text = path.read_text()
-        tests_path = ROOT / "crates/krb5-config/src/tests.rs"
+        tests_path = root_dir / "crates/krb5-config/src/tests.rs"
         if not tests_path.is_file():
             _die("missing crates/krb5-config/src/tests.rs")
         tests_text = tests_path.read_text()
         if src_files is None:
-            src_dir = ROOT / "crates/krb5-config/src"
+            src_dir = root_dir / "crates/krb5-config/src"
             src_files = {
                 p.name: p.read_text()
                 for p in sorted(src_dir.glob("*.rs"))
@@ -1129,12 +1190,40 @@ def check_isolate_test_krb5(
         start = fn
     if fn < 0:
         _die("isolate_test_krb5 missing")
-    end = text.find("\npub fn ", fn + 1)
-    chunk = text[start : end if end > 0 else None]
+    brace = text.find("{", fn)
+    if brace < 0:
+        _die("isolate_test_krb5 missing")
+    depth = 0
+    i = brace
+    n = len(text)
+    in_str: str | None = None
+    end = n
+    while i < n:
+        c = text[i]
+        if in_str:
+            if c == "\\":
+                i += 2
+                continue
+            if c == in_str:
+                in_str = None
+            i += 1
+            continue
+        if c in "\"'":
+            in_str = c
+            i += 1
+            continue
+        if c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+        i += 1
+    chunk = text[start:end]
     if re.search(r"temp_dir\(\)|/tmp/kerber-test-krb5", chunk):
         _die("isolate_test_krb5 writes host /tmp")
-    test_start = text.find("#[cfg(test)]")
-    if test_start >= 0 and "temp_dir()" in text[test_start:]:
+    if _cfg_test_has_temp_dir(text):
         _die("cfg(test) writes host /tmp via temp_dir()")
     if tests_text and "temp_dir()" in tests_text:
         _die("cfg(test) writes host /tmp via temp_dir()")
@@ -3976,6 +4065,25 @@ def _must_die(fn, *args) -> None:
         raise AssertionError(f"{fn.__name__} must fail closed")
 
 
+def _must_die_msg(needle: str, fn, *args, **kwargs) -> None:
+    buf = io.StringIO()
+    err = sys.stderr
+    sys.stderr = buf
+    try:
+        fn(*args, **kwargs)
+        died = False
+    except SystemExit:
+        died = True
+    finally:
+        sys.stderr = err
+    text = buf.getvalue()
+    name = getattr(fn, "__name__", "callable")
+    if not died:
+        raise AssertionError(f"{name} must fail closed")
+    if needle not in text:
+        raise AssertionError(f"{name} died without {needle!r}: {text!r}")
+
+
 def _self_test() -> None:
     snippet = """name: ci
 on:
@@ -5421,9 +5529,11 @@ jobs:
         'echo "cat <<EOF"\necho ok\ncat <<<hello\n# <<EOF\n',
         "ok-quoted-and-comment-heredoc.sh",
     )
-    # A'-3 R34 / S3.4c: _must_die(check_isolate_test_krb5) unless a temp_dir()
-    # isolate helper is refused. The tests.rs and per-src cfg(test) arms
-    # fire in production; fixtures must hit them (not only text=).
+    # A'-3 R34 / S3.4c / S3.4c-R: _must_die(check_isolate_test_krb5)
+    # unless a temp_dir() isolate helper is refused. Missing tests.rs
+    # dies on the production is_file() branch (a ROOT-like tree under
+    # scratch, text=None); cfg(test) temp_dir() is an item range, not
+    # "everything after the first #[cfg(test)]".
     _isolate_ok = (
         "fn isolate_scratch_dir() -> PathBuf {\n    PathBuf::from(\"target\").join(\"test-krb5\")\n}\n"
         "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
@@ -5441,9 +5551,35 @@ jobs:
         "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
         "#[cfg(test)]\nmod tests {\n    fn f() { let _ = std::env::temp_dir(); }\n}\n",
     )
+    # product temp_dir() after a cfg(test) use is not a cfg(test) item
+    check_isolate_test_krb5(
+        _isolate_ok
+        + "#[cfg(test)]\nuse super::foo;\nfn product() {\n    let _ = std::env::temp_dir();\n}\n"
+    )
+    check_isolate_test_krb5(
+        _isolate_ok,
+        src_files={
+            "kdcconf.rs": (
+                "#[cfg(test)]\nuse foo::bar;\n"
+                "fn product() { let _ = std::env::temp_dir(); }\n"
+            )
+        },
+    )
 
     def _isolate_missing_tests() -> None:
-        check_isolate_test_krb5(_isolate_ok, tests_missing=True)
+        fake = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+        src = fake / "crates/krb5-config/src"
+        src.mkdir(parents=True)
+        (src / "testenv.rs").write_text(_isolate_ok)
+        check_isolate_test_krb5(root=fake)
+
+    def _isolate_tree_with_tests() -> None:
+        fake = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+        src = fake / "crates/krb5-config/src"
+        src.mkdir(parents=True)
+        (src / "testenv.rs").write_text(_isolate_ok)
+        (src / "tests.rs").write_text("// no temp_dir\n")
+        check_isolate_test_krb5(root=fake)
 
     def _isolate_tests_rs_temp_dir() -> None:
         check_isolate_test_krb5(
@@ -5463,7 +5599,16 @@ jobs:
             },
         )
 
-    _must_die(_isolate_missing_tests)
+    _iso_src = inspect.getsource(check_isolate_test_krb5)
+    if "if not tests_path.is_file():" not in _iso_src:
+        raise AssertionError("missing tests.rs must go through is_file()")
+    if "tests_missing" in _iso_src:
+        raise AssertionError("tests_missing short-circuit must stay gone")
+    _must_die_msg(
+        "missing crates/krb5-config/src/tests.rs",
+        _isolate_missing_tests,
+    )
+    _isolate_tree_with_tests()
     _must_die(_isolate_tests_rs_temp_dir)
     _must_die(_isolate_src_cfg_test_temp_dir)
     check_unit_evidence_helper()
