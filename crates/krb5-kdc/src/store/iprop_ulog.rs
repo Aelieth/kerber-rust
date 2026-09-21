@@ -64,7 +64,7 @@ impl PrincipalStore {
             && let Ok(k) = crate::master_key_from_password(
                 &self.realm,
                 pw.as_bytes(),
-                crate::harness_master_etype(),
+                crate::default_master_etype(),
             )
         {
             return Some(k);

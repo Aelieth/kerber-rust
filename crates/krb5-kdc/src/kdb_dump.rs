@@ -21,7 +21,7 @@ use krb5_types::pac::RpcSid;
 use krb5_types::{PrincipalName, infer_name_type, parse_name};
 
 use crate::error::Error as KdcError;
-use crate::mkey::{MASTER_NAME, harness_master_etype, master_key_from_password};
+use crate::mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
 use crate::osa::OsaPrincEnt;
 use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KadmData, KeyEntry,
@@ -380,7 +380,7 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
 ///
 /// Parse or crypto failures.
 pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
-    load_dump_etype(text, master_password, harness_master_etype())
+    load_dump_etype(text, master_password, default_master_etype())
 }
 
 /// [`load_dump`] with an explicit master-key etype.
@@ -427,7 +427,7 @@ pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalSt
 ///
 /// Crypto failures.
 pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<String, DumpError> {
-    dump_store_etype(store, master_password, harness_master_etype())
+    dump_store_etype(store, master_password, default_master_etype())
 }
 
 /// [`dump_store`] with an explicit master-key etype.
@@ -508,7 +508,7 @@ pub fn write_dump_path(
     path: &Path,
     master_password: &[u8],
 ) -> Result<(), DumpError> {
-    write_dump_path_etype(store, path, master_password, harness_master_etype())
+    write_dump_path_etype(store, path, master_password, default_master_etype())
 }
 
 /// [`write_dump_path`] with an explicit master-key etype.

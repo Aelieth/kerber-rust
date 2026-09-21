@@ -17,6 +17,8 @@ this project uses semantic versioning once a crate is published.
   live in `principals` as `kadmin_admin`, `kadmin_changepw`, and
   `kadmin_history` (MIT `admin.h:64-66`). No root alias. The function
   bodies are unchanged. No wire or text change.
+- **krb5-kdc.** `harness_master_etype` is `default_master_etype`.
+  The body is unchanged. No wire or text change.
 
 ### W3-S3.4e remaining >1,500-line module splits
 

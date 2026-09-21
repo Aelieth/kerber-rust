@@ -122,7 +122,7 @@ impl PrincipalStore {
         let etype = self
             .get(&format!("K/M@{}", self.realm))
             .and_then(|km| km.keys.first().map(|k| k.etype))
-            .unwrap_or_else(crate::mkey::harness_master_etype);
+            .unwrap_or_else(crate::mkey::default_master_etype);
         let key = random_key(etype)?;
         let salt = name.default_salt(&self.realm);
         let mut p = Principal::from_keys(

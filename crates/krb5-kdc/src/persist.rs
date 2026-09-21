@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::kdb_dump::{load_dump_mkey, write_dump};
-use crate::mkey::{harness_master_etype, master_key_from_password};
+use crate::mkey::{default_master_etype, master_key_from_password};
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS, UlogEntry};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_protocol::{Keytab, write_secret_file};
@@ -329,7 +329,7 @@ fn persist_master_etype() -> EncryptionType {
 
 fn master_etype_or_default(raw: Option<&str>) -> EncryptionType {
     raw.and_then(|s| EncryptionType::from_mit_name(s).ok())
-        .unwrap_or_else(harness_master_etype)
+        .unwrap_or_else(default_master_etype)
 }
 
 fn stash_etypes() -> [EncryptionType; 2] {
@@ -531,7 +531,7 @@ fn take_str(b: &[u8], i: &mut usize) -> Result<String, PersistError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{harness_master_etype, master_etype_or_default};
+    use super::{default_master_etype, master_etype_or_default};
     use krb5_crypto::EncryptionType;
 
     #[test]
@@ -539,7 +539,7 @@ mod tests {
         // MIT's DEFAULT_KDC_ENCTYPE (master_key_type unset) is
         // aes256-cts-hmac-sha1-96 (settled live); Rust keeps the stronger
         // aes256-cts-hmac-sha384-192 as its default.
-        assert_eq!(master_etype_or_default(None), harness_master_etype());
+        assert_eq!(master_etype_or_default(None), default_master_etype());
         assert_eq!(
             master_etype_or_default(None),
             EncryptionType::Aes256CtsHmacSha384192

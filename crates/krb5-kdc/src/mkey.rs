@@ -30,7 +30,7 @@ pub fn master_key_from_password(
 
 /// Documented harness master-key etype (`aes256-cts-hmac-sha384-192`).
 #[must_use]
-pub fn harness_master_etype() -> EncryptionType {
+pub fn default_master_etype() -> EncryptionType {
     EncryptionType::Aes256CtsHmacSha384192
 }
 
