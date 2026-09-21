@@ -15,6 +15,13 @@ this project uses semantic versioning once a crate is published.
   `cms_signeddata_verify`). Every `pub` path `krb5_types::pkinit::X`
   is unchanged. Sibling-only names are `pub(super)`. No wire, text
   or store behaviour changed.
+- **krb5-protocol.** `as_ex.rs` is split into `as_ex/{fast,spake}.rs`.
+  FAST armor (`fast.c`) and SPAKE (`spake_client.c`) leave
+  `PkinitClient`, `build_as_req`, and the reply-time checks on
+  `as_ex.rs` so the three text pins stay. `FastArmor` and
+  `fast_error_material` keep their crate paths. Ledger rust-sites
+  follow the new files. Sibling-only names are `pub(super)`. No
+  wire, text or store behaviour changed.
 
 ### W3-S3.4d-R residues
 

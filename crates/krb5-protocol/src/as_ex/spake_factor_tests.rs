@@ -1,4 +1,4 @@
-use super::spake_contains_sf_none;
+use super::spake::spake_contains_sf_none;
 use krb5_types::OctetString;
 use krb5_types::spake::{GROUP_P256, SF_NONE, SpakeChallenge, SpakeSecondFactor};
 
