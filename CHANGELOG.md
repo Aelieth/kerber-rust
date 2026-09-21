@@ -6,6 +6,16 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.4e remaining >1,500-line module splits
+
+- **krb5-types.** `pkinit.rs` is split into `pkinit/{ca,cms}.rs`.
+  `PkinitCa` and `cms_wrap` live in `ca` (so `cms` does not import
+  the CA); CMS SignedData wrap/verify lives in `cms`
+  (`pkinit_crypto_openssl.c` `cms_signeddata_create` /
+  `cms_signeddata_verify`). Every `pub` path `krb5_types::pkinit::X`
+  is unchanged. Sibling-only names are `pub(super)`. No wire, text
+  or store behaviour changed.
+
 ### W3-S3.4d-R residues
 
 - **docs.** Five ledger proof cells follow the moved tests:

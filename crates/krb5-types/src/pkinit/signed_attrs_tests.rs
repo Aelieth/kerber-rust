@@ -1,3 +1,4 @@
+use super::cms::{cert_issuer_serial, p256_sign};
 use super::*;
 
 #[test]
