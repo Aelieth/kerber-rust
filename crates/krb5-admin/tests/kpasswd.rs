@@ -19,10 +19,12 @@ use common::*;
 
 use krb5_admin::{encode_kpasswd_req, handle_kpasswd_rfc3244, *};
 use krb5_asn1::encode;
+use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
-    TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id, documented_changepw,
-    load_store, save_store, shared_dump, tl_mod_princ_name,
+    TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id, load_store, save_store,
+    shared_dump, tl_mod_princ_name,
 };
+
 use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, build_krb_priv, pa_enc_timestamp};
 use krb5_testkit::scratch_dir;
 use krb5_types::{ChangePasswdData, PrincipalName};
@@ -39,7 +41,7 @@ fn kpasswd_host_ticket_under_changepw_key_is_refused() {
         .expect("key")
         .key
         .clone();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .expect("changepw")
@@ -56,7 +58,7 @@ fn kpasswd_host_ticket_under_changepw_key_is_refused() {
             TEST_REALM,
             0x2400_0001,
             Some(vec![pa_enc_timestamp(&user_key).expect("pa")]),
-            documented_changepw(),
+            kadmin_changepw(),
             krb5_crypto::EncryptionType::preferred()
                 .iter()
                 .map(|e| e.to_iana())
@@ -96,7 +98,9 @@ fn kpasswd_host_ticket_under_changepw_key_is_refused() {
 #[test]
 fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
     use krb5_asn1::encode;
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
@@ -119,7 +123,7 @@ fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
         .max()
         .unwrap();
     let tgs_out = changepw_tgs_ticket(&store, &user, &user_key, 901);
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -179,7 +183,9 @@ fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
 #[test]
 fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
     use krb5_asn1::encode;
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
@@ -202,7 +208,7 @@ fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
         .max()
         .unwrap();
     let tgs_out = changepw_tgs_ticket(&store, &user, &user_key, 931);
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -262,9 +268,9 @@ fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
 #[test]
 fn kpasswd_target_realm_mismatch_is_harderror() {
     use krb5_asn1::encode;
-    use krb5_kdc::{
-        TEST_ADMIN, TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store,
-    };
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_ADMIN, TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
@@ -287,7 +293,7 @@ fn kpasswd_target_realm_mismatch_is_harderror() {
         .max()
         .unwrap();
     let as_out = changepw_as_ticket(&store, &admin, &admin_key, 941);
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -348,7 +354,9 @@ fn kpasswd_target_realm_mismatch_is_harderror() {
 #[test]
 fn kpasswd_foreign_self_change_needs_initial() {
     use krb5_asn1::encode;
-    use krb5_kdc::{TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
@@ -371,7 +379,7 @@ fn kpasswd_foreign_self_change_needs_initial() {
         .max()
         .unwrap();
     let tgs_out = changepw_tgs_ticket(&store, &user, &user_key, 951);
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -433,9 +441,9 @@ fn kpasswd_foreign_self_change_needs_initial() {
 #[test]
 fn kpasswd_unprivileged_other_principal_is_accessdenied() {
     use krb5_asn1::encode;
-    use krb5_kdc::{
-        TEST_ADMIN, TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store,
-    };
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_ADMIN, TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
@@ -459,7 +467,7 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
         .max()
         .unwrap();
     let tgs_out = changepw_tgs_ticket(&store, &user, &user_key, 961);
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -520,7 +528,9 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
 #[test]
 fn kpasswd_self_change_with_initial_succeeds() {
     use krb5_asn1::encode;
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
@@ -542,7 +552,7 @@ fn kpasswd_self_change_with_initial_succeeds() {
         .max()
         .unwrap();
     let as_out = changepw_as_ticket(&store, &user, &user_key, 911);
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -601,9 +611,9 @@ fn kpasswd_self_change_with_initial_succeeds() {
 #[test]
 fn kpasswd_admin_change_ignores_initial() {
     use krb5_asn1::encode;
-    use krb5_kdc::{
-        TEST_ADMIN, TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store,
-    };
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_ADMIN, TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv};
     use krb5_types::ChangePasswdData;
 
@@ -618,7 +628,7 @@ fn kpasswd_admin_change_ignores_initial() {
         .key
         .clone();
     let tgs_out = changepw_tgs_ticket(&store, &admin, &admin_key, 921);
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -688,9 +698,9 @@ fn kpasswd_self_service_and_admin_acl() {
 #[test]
 fn kpasswd_policy_rejection_is_softerror() {
     use krb5_asn1::encode;
-    use krb5_kdc::{
-        NamedPolicy, TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store,
-    };
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{NamedPolicy, TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{ReplayCache, build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
@@ -718,7 +728,7 @@ fn kpasswd_policy_rejection_is_softerror() {
         .unwrap()
         .key
         .clone();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let as_out = changepw_as_ticket(&store, &user, &user_key, 47);
     let cpw_key = store
         .get_name(&changepw)
@@ -763,11 +773,12 @@ fn kpasswd_policy_rejection_is_softerror() {
 
 #[test]
 fn kpasswd_unknown_version_is_bad_version() {
-    use krb5_kdc::{documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::shared_dump as shared_store;
 
     let (store, acl) = bootstrap_documented().unwrap();
     let cpw_key = store
-        .get_name(&documented_changepw())
+        .get_name(&kadmin_changepw())
         .unwrap()
         .best_key()
         .unwrap()
@@ -786,11 +797,12 @@ fn kpasswd_unknown_version_is_bad_version() {
 
 #[test]
 fn kpasswd_inconsistent_length_is_malformed() {
-    use krb5_kdc::{documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::shared_dump as shared_store;
 
     let (store, acl) = bootstrap_documented().unwrap();
     let cpw_key = store
-        .get_name(&documented_changepw())
+        .get_name(&kadmin_changepw())
         .unwrap()
         .best_key()
         .unwrap()
@@ -806,12 +818,14 @@ fn kpasswd_inconsistent_length_is_malformed() {
 #[test]
 fn kpasswd_bad_ap_req_is_chpwfail_autherror() {
     use krb5_asn1::decode;
-    use krb5_kdc::{documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::shared_dump as shared_store;
+
     use krb5_types::KrbError;
 
     let (store, acl) = bootstrap_documented().unwrap();
     let cpw_key = store
-        .get_name(&documented_changepw())
+        .get_name(&kadmin_changepw())
         .unwrap()
         .best_key()
         .unwrap()
@@ -838,11 +852,12 @@ fn kpasswd_bad_ap_req_is_chpwfail_autherror() {
 
 #[test]
 fn kpasswd_ap_req_fills_datagram_is_bailout() {
-    use krb5_kdc::{documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::shared_dump as shared_store;
 
     let (store, acl) = bootstrap_documented().unwrap();
     let cpw_key = store
-        .get_name(&documented_changepw())
+        .get_name(&kadmin_changepw())
         .unwrap()
         .best_key()
         .unwrap()
@@ -857,7 +872,9 @@ fn kpasswd_ap_req_fills_datagram_is_bailout() {
 
 #[test]
 fn kpasswd_bad_priv_after_ap_req_is_harderror() {
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, unwrap_krb_priv_ex};
 
     let (store, acl) = bootstrap_documented().unwrap();
@@ -871,7 +888,7 @@ fn kpasswd_bad_priv_after_ap_req_is_harderror() {
         .clone();
     let as_out = changepw_as_ticket(&store, &user, &user_key, 77);
     let cpw_key = store
-        .get_name(&documented_changepw())
+        .get_name(&kadmin_changepw())
         .unwrap()
         .best_key()
         .unwrap()
@@ -908,7 +925,9 @@ fn kpasswd_bad_priv_after_ap_req_is_harderror() {
 #[test]
 fn kpasswd_setpw_decode_failure_is_malformed() {
     use krb5_asn1::encode;
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
 
     let (store, acl) = bootstrap_documented().unwrap();
@@ -930,7 +949,7 @@ fn kpasswd_setpw_decode_failure_is_malformed() {
         .unwrap();
     let as_out = changepw_as_ticket(&store, &user, &user_key, 62);
     let cpw_key = store
-        .get_name(&documented_changepw())
+        .get_name(&kadmin_changepw())
         .unwrap()
         .best_key()
         .unwrap()
@@ -981,7 +1000,9 @@ fn kpasswd_setpw_decode_failure_is_malformed() {
 #[test]
 fn kpasswd_rfc3244_bumps_kvno() {
     use krb5_asn1::encode;
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp};
     use krb5_types::ChangePasswdData;
 
@@ -1002,7 +1023,7 @@ fn kpasswd_rfc3244_bumps_kvno() {
         .map(|k| k.kvno)
         .max()
         .unwrap();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let as_out = changepw_as_ticket(&store, &user, &user_key, 43);
     let cpw_key = store
         .get_name(&changepw)
@@ -1082,10 +1103,12 @@ fn kpasswd_rfc3244_bumps_kvno() {
 #[test]
 fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
     use krb5_asn1::encode;
+    use krb5_kdc::principals::kadmin_changepw;
     use krb5_kdc::{
         TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_REALM, TEST_USER, TEST_USER_PASSWORD,
-        bootstrap_realm_with_kdc_conf, documented_changepw, shared_dump as shared_store,
+        bootstrap_realm_with_kdc_conf, shared_dump as shared_store,
     };
+
     use krb5_protocol::{build_ap_req, build_krb_priv};
     use krb5_types::ChangePasswdData;
 
@@ -1107,7 +1130,7 @@ fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
         Some(&kdc),
     )
     .unwrap();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw = store.get_name(&changepw).unwrap();
     let first = cpw.first_current_key().unwrap();
     let best = cpw.best_key().unwrap();
@@ -1156,7 +1179,9 @@ fn kpasswd_udp_listener_then_issue_as() {
     use std::time::Duration;
 
     use krb5_asn1::encode;
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp};
     use krb5_types::ChangePasswdData;
 
@@ -1169,7 +1194,7 @@ fn kpasswd_udp_listener_then_issue_as() {
         .unwrap()
         .key
         .clone();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -1235,7 +1260,9 @@ fn kpasswd_udp_listener_then_issue_as() {
 #[test]
 fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
     use krb5_asn1::encode;
-    use krb5_kdc::{TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store};
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req_with_cksum, build_krb_priv_with_seq, pa_enc_timestamp};
     use krb5_types::ApOptions;
 
@@ -1248,7 +1275,7 @@ fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
         .unwrap()
         .key
         .clone();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .unwrap()
@@ -1309,9 +1336,9 @@ fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
 #[test]
 fn kpasswd_vno1_der_stays_password() {
     use krb5_asn1::encode;
-    use krb5_kdc::{
-        TEST_ADMIN, TEST_REALM, TEST_USER, documented_changepw, shared_dump as shared_store,
-    };
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::{TEST_ADMIN, TEST_REALM, TEST_USER, shared_dump as shared_store};
+
     use krb5_protocol::{build_ap_req, build_krb_priv};
     use krb5_types::ChangePasswdData;
 
@@ -1343,7 +1370,7 @@ fn kpasswd_vno1_der_stays_password() {
         .clone();
     let as_out = changepw_as_ticket(&store, &user, &user_key, 61);
     let cpw_key = store
-        .get_name(&documented_changepw())
+        .get_name(&kadmin_changepw())
         .unwrap()
         .best_key()
         .unwrap()
@@ -1432,7 +1459,7 @@ fn kpasswd_stamps_kadmind_not_the_client() {
         .expect("key")
         .key
         .clone();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .expect("changepw")
@@ -1447,7 +1474,7 @@ fn kpasswd_stamps_kadmind_not_the_client() {
             TEST_REALM,
             0x2400_0001,
             Some(vec![pa_enc_timestamp(&user_key).expect("pa")]),
-            documented_changepw(),
+            kadmin_changepw(),
             krb5_crypto::EncryptionType::preferred()
                 .iter()
                 .map(|e| e.to_iana())
@@ -1507,7 +1534,7 @@ fn kpasswd_keeps_an_out_of_process_principal() {
         .expect("key")
         .key
         .clone();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     let cpw_key = store
         .get_name(&changepw)
         .expect("changepw")
@@ -1522,7 +1549,7 @@ fn kpasswd_keeps_an_out_of_process_principal() {
             TEST_REALM,
             0x2400_0001,
             Some(vec![pa_enc_timestamp(&user_key).expect("pa")]),
-            documented_changepw(),
+            kadmin_changepw(),
             krb5_crypto::EncryptionType::preferred()
                 .iter()
                 .map(|e| e.to_iana())

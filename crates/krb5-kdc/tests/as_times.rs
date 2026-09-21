@@ -20,11 +20,13 @@ use common::client_key;
 
 use krb5_asn1::{decode, decode_enc_kdc_rep_part, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
+use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, PrincipalStore,
-    TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part, documented_changepw,
-    documented_host, documented_kadmin, dump_store, pa_enc_timestamp, parse_dump, tgs_req,
+    TEST_REALM, TEST_USER, as_req, bootstrap_documented, decrypt_ticket_part, documented_host,
+    dump_store, pa_enc_timestamp, parse_dump, tgs_req,
 };
+
 use krb5_testkit::{TgsReqBuilder, status, user, user_as};
 use krb5_types::{
     EncKdcRepPart, EncTicketPart, KdcOptions, KerberosTime, KrbError, PrincipalName, err, flag_bit,
@@ -657,7 +659,7 @@ fn client_till_default_is_one_day() {
 #[test]
 fn kadmin_admin_max_life_is_three_hours() {
     let (store, _) = bootstrap_documented().unwrap();
-    let p = store.get_name(&documented_kadmin()).expect("kadmin/admin");
+    let p = store.get_name(&kadmin_admin()).expect("kadmin/admin");
     assert_eq!(
         p.max_life,
         60 * 60 * 3,
@@ -669,9 +671,7 @@ fn kadmin_admin_max_life_is_three_hours() {
 #[test]
 fn kadmin_changepw_max_life_is_five_minutes() {
     let (store, _) = bootstrap_documented().unwrap();
-    let p = store
-        .get_name(&documented_changepw())
-        .expect("kadmin/changepw");
+    let p = store.get_name(&kadmin_changepw()).expect("kadmin/changepw");
     assert_eq!(
         p.max_life,
         60 * 5,

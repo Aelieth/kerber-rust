@@ -516,7 +516,7 @@ fn create_host_changepw_flag_survives_save() {
     let db = dir.join("principal");
     let stash = dir.join("stash");
     let (mut store, acl) = crate::bootstrap_documented().unwrap();
-    let cpw = crate::documented_changepw();
+    let cpw = crate::principals::kadmin_changepw();
     store
         .delete(&acl, &crate::documented_admin_id(), &cpw)
         .unwrap();

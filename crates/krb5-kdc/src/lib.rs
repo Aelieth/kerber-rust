@@ -29,6 +29,7 @@ mod osa;
 mod persist;
 mod plugins;
 mod preauth;
+pub mod principals;
 mod status;
 mod store;
 
@@ -114,28 +115,10 @@ pub fn documented_host() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", TEST_HOST])
 }
 
-/// `kadmin/admin` as NT-SRV-INST (MIT kadmind acceptor).
-#[must_use]
-pub fn documented_kadmin() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"])
-}
-
-/// `kadmin/changepw` as NT-SRV-INST (RFC 3244 kpasswd acceptor).
-#[must_use]
-pub fn documented_changepw() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"])
-}
-
 /// `kiprop/testhost.kerber.test` as NT-SRV-HST (MIT iprop acceptor).
 #[must_use]
 pub fn documented_kiprop() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["kiprop", TEST_HOST])
-}
-
-/// `kadmin/history` as NT-SRV-INST (MIT `create_hist` key-history principal).
-#[must_use]
-pub fn documented_history() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "history"])
 }
 
 /// `admin@KERBER.TEST` actor string.
@@ -251,8 +234,8 @@ pub fn bootstrap_realm_with_kdc_conf(
     let actor = admin_id_for_realm(realm);
     let acl = Acl::allow_admin(&actor)?;
     store.create_host(&acl, &actor, &host_for_realm(realm))?;
-    store.create_host(&acl, &actor, &documented_kadmin())?;
-    store.create_host(&acl, &actor, &documented_changepw())?;
+    store.create_host(&acl, &actor, &principals::kadmin_admin())?;
+    store.create_host(&acl, &actor, &principals::kadmin_changepw())?;
     store.create_host(&acl, &actor, &documented_kiprop())?;
     apply_kadm5_create_service_attrs(&mut store)?;
     Ok((store, acl))
@@ -272,7 +255,7 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
     let realm = store.realm().to_owned();
     let actor = kdb5_util_id_for_realm(&realm);
     store.apply_admin_fields_in(
-        &documented_kadmin(),
+        &principals::kadmin_admin(),
         &realm,
         Some(store::KDB_DISALLOW_TGT_BASED | store::KDB_LOCKDOWN_KEYS),
         Some(KADM5_ADMIN_LIFETIME),
@@ -284,7 +267,7 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
         &actor,
     )?;
     store.apply_admin_fields_in(
-        &documented_changepw(),
+        &principals::kadmin_changepw(),
         &realm,
         Some(
             store::KDB_DISALLOW_TGT_BASED | store::KDB_PWCHANGE_SERVICE | store::KDB_LOCKDOWN_KEYS,

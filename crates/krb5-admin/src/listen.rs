@@ -347,7 +347,7 @@ fn changepw_verify_keys(
 ) -> (Vec<ProtocolKey>, Vec<u32>) {
     let mut keys = Vec::new();
     let mut kvnos = Vec::new();
-    if let Some(p) = store.get_name(&krb5_kdc::documented_changepw()) {
+    if let Some(p) = store.get_name(&krb5_kdc::principals::kadmin_changepw()) {
         for k in &p.keys {
             keys.push(k.key.clone());
             kvnos.push(k.kvno);
@@ -419,7 +419,7 @@ fn handle_kpasswd_from(
     // MIT schpw.c / the changepw acceptor acquires the kadmin/changepw cred, so
     // krb5_rd_req is pinned to that service: a ticket for any other principal
     // (e.g. host/x) is refused even if it decrypts under a shared key.
-    let changepw = krb5_kdc::documented_changepw();
+    let changepw = krb5_kdc::principals::kadmin_changepw();
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: Some(kvnos.as_slice()),

@@ -233,13 +233,15 @@ fn rpc_reply_gss_verf_is_rpcsec_gss_mic() {
 #[test]
 fn rpcsec_init_reply_mic_is_window() {
     use krb5_crypto::EncryptionType;
-    use krb5_kdc::{TEST_REALM, documented_kadmin};
+    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::principals::kadmin_admin;
+
     use krb5_protocol::{as_req_sname, pa_enc_timestamp};
     use krb5_types::ascii;
 
     let (store, acl, _) = setup();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
-    let kadm = documented_kadmin();
+    let kadm = kadmin_admin();
     let (admin_key, kadm_key) = {
         let g = store.read().unwrap();
         (

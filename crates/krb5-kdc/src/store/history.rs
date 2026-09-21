@@ -98,7 +98,7 @@ impl PrincipalStore {
     /// without the creation), if the principal exists.
     #[must_use]
     pub fn history_key(&self) -> Option<(u32, ProtocolKey)> {
-        let p = self.get_name(&crate::documented_history())?;
+        let p = self.get_name(&crate::principals::kadmin_history())?;
         let k = p.keys.iter().max_by_key(|k| k.kvno)?;
         Some((k.kvno, k.key.clone()))
     }
@@ -118,7 +118,7 @@ impl PrincipalStore {
         if let Some(h) = self.history_key() {
             return Ok(h);
         }
-        let name = crate::documented_history();
+        let name = crate::principals::kadmin_history();
         let etype = self
             .get(&format!("K/M@{}", self.realm))
             .and_then(|km| km.keys.first().map(|k| k.etype))

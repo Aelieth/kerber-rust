@@ -9,11 +9,13 @@ mod common;
 use common::client_key;
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::{
     Acl, AdminOp, Error, KDB_REQUIRES_PWCHANGE, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER,
-    TEST_USER_PASSWORD, as_req, bootstrap_documented, documented_admin_id, documented_changepw,
-    documented_kadmin, pa_enc_timestamp, tgs_req,
+    TEST_USER_PASSWORD, as_req, bootstrap_documented, documented_admin_id, pa_enc_timestamp,
+    tgs_req,
 };
+
 use krb5_protocol::as_req_sname;
 use krb5_testkit::{password_key, status};
 use krb5_types::{PrincipalName, err};
@@ -104,7 +106,7 @@ fn as_rejects_expired_password_unless_pwchange_service() {
         TEST_REALM,
         44,
         Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
-        documented_changepw(),
+        kadmin_changepw(),
         vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
     .unwrap();
@@ -136,7 +138,7 @@ fn as_needchange_is_key_expired_unless_changepw() {
         TEST_REALM,
         49,
         Some(vec![pa_enc_timestamp(&key).expect("pa-ts")]),
-        documented_changepw(),
+        kadmin_changepw(),
         vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
     )
     .unwrap();
@@ -148,7 +150,7 @@ fn tgs_for_changepw_with_tgt_is_tgt_based_not_allowed() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let issued = krb5_kdc::issue_as(&store, &user_as_req(801)).expect("AS");
     let err =
-        krb5_kdc::issue_tgs(&store, &service_tgs(&issued, documented_changepw(), 802)).unwrap_err();
+        krb5_kdc::issue_tgs(&store, &service_tgs(&issued, kadmin_changepw(), 802)).unwrap_err();
     assert_tgt_based_not_allowed(err);
 }
 
@@ -156,8 +158,7 @@ fn tgs_for_changepw_with_tgt_is_tgt_based_not_allowed() {
 fn tgs_for_admin_with_tgt_is_tgt_based_not_allowed() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let issued = krb5_kdc::issue_as(&store, &user_as_req(803)).expect("AS");
-    let err =
-        krb5_kdc::issue_tgs(&store, &service_tgs(&issued, documented_kadmin(), 804)).unwrap_err();
+    let err = krb5_kdc::issue_tgs(&store, &service_tgs(&issued, kadmin_admin(), 804)).unwrap_err();
     assert_tgt_based_not_allowed(err);
 }
 

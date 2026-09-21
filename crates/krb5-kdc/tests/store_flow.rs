@@ -1,6 +1,7 @@
 //! Store whole-flow tests (bootstrap + issue_as + public methods).
 
 use krb5_crypto::EncryptionType;
+use krb5_kdc::principals::kadmin_history;
 use krb5_kdc::*;
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
@@ -396,7 +397,7 @@ fn password_history_matches_mit_window() {
     );
     let again = krb5_kdc::load_dump(&text, b"masterpassword").unwrap();
     assert!(
-        again.get_name(&krb5_kdc::documented_history()).is_some(),
+        again.get_name(&kadmin_history()).is_some(),
         "kadmin/history was created on the first policy chpass and dumped"
     );
     let p2 = again.get_name(&user).unwrap();

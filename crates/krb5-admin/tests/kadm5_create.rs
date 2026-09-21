@@ -11,10 +11,12 @@
 mod common;
 use common::*;
 
+use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::{
     Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, NamedPolicy, PrincipalRead, TEST_ADMIN,
-    TEST_REALM, bootstrap_documented, documented_kadmin, shared_dump,
+    TEST_REALM, bootstrap_documented, shared_dump,
 };
+
 use krb5_types::PrincipalName;
 
 const CREATE_PRINCIPAL: u32 = 1;
@@ -113,13 +115,7 @@ fn rig(acl_text: &str, setup: impl FnOnce(&mut krb5_kdc::PrincipalStore)) -> Rig
     setup(&mut store);
     let acl = Acl::parse(acl_text).unwrap();
     let store = shared_dump(store);
-    let client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     Rig { store, acl, client }
 }
 
@@ -445,7 +441,7 @@ fn create_reserved_tl_does_not_write() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = create_args(

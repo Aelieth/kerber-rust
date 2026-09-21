@@ -13,11 +13,12 @@
 
 use std::path::PathBuf;
 
+use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::{
     Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR,
     KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, TEST_ADMIN, TEST_REALM, TEST_USER,
-    apply_kadm5_create_service_attrs, bind_preferred, documented_changepw, documented_kadmin,
-    documented_kiprop, drop_privileges, open_store, serve, shared_store,
+    apply_kadm5_create_service_attrs, bind_preferred, documented_kiprop, drop_privileges,
+    open_store, serve, shared_store,
 };
 
 fn main() {
@@ -428,11 +429,11 @@ fn bootstrap_test_realm(kdc: Option<&krb5_config::KdcConf>) -> PrincipalStore {
             std::process::exit(1);
         }
     }
-    if let Err(e) = store.create_host(&acl, &actor, &documented_kadmin()) {
+    if let Err(e) = store.create_host(&acl, &actor, &kadmin_admin()) {
         eprintln!("krb5-kdc: kadmin/admin: {e}");
         std::process::exit(1);
     }
-    if let Err(e) = store.create_host(&acl, &actor, &documented_changepw()) {
+    if let Err(e) = store.create_host(&acl, &actor, &kadmin_changepw()) {
         eprintln!("krb5-kdc: kadmin/changepw: {e}");
         std::process::exit(1);
     }

@@ -20,11 +20,13 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, string_to_key};
+use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::{
     Acl, S2K_ITERS, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, TL_MOD_PRINC, as_req,
-    bootstrap_documented, documented_admin_id, documented_changepw, documented_kadmin,
-    handle_request, load_store, pa_enc_timestamp, save_store, tl_mod_princ_name,
+    bootstrap_documented, documented_admin_id, handle_request, load_store, pa_enc_timestamp,
+    save_store, tl_mod_princ_name,
 };
+
 use krb5_testkit::scratch_dir;
 use krb5_types::{AsRep, PrincipalName, ku};
 
@@ -437,8 +439,8 @@ fn bootstrap_krbtgt_is_stamped_db_creation() {
 fn bootstrap_kadmin_services_are_stamped_kdb5_util() {
     let (store, _) = bootstrap_documented().unwrap();
     for (label, name) in [
-        ("kadmin/admin", documented_kadmin()),
-        ("kadmin/changepw", documented_changepw()),
+        ("kadmin/admin", kadmin_admin()),
+        ("kadmin/changepw", kadmin_changepw()),
     ] {
         let p = store.get_name(&name).unwrap_or_else(|| panic!("{label}"));
         let got = tl_mod_princ_name(&p.tl_data);

@@ -16,7 +16,9 @@ use common::*;
 
 use krb5_admin::{Kadm5RpcSession, kadm5_handle_rpc, serve_kadm5_conn};
 use krb5_gss::GssContext;
-use krb5_kdc::{Acl, TEST_REALM, bootstrap_documented, documented_kadmin, shared_dump};
+use krb5_kdc::principals::kadmin_admin;
+use krb5_kdc::{Acl, TEST_REALM, bootstrap_documented, shared_dump};
+
 use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;
 use std::io::{Read, Write};
@@ -163,7 +165,7 @@ fn init_svc(
     let (store, acl) = bootstrap_documented().unwrap();
     let store = shared_dump(store);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
-    let c = init_client(&store, &acl, &admin, &documented_kadmin(), svc);
+    let c = init_client(&store, &acl, &admin, &kadmin_admin(), svc);
     (store, acl, c.ctx, c.handle, c.sess)
 }
 

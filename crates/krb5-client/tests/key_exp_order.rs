@@ -16,10 +16,12 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
+use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
     KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE, PrincipalStore, TEST_REALM, TEST_USER,
-    bootstrap_documented, documented_changepw,
+    bootstrap_documented,
 };
+
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
@@ -135,7 +137,7 @@ fn changepw_as_failure_is_reported_before_any_prompt() {
     // No kadmin/changepw principal: the changepw AS is S_PRINCIPAL_UNKNOWN
     // (7) with the *right* password — reported as such, never prompted.
     let mut store = expired_user_store();
-    store.remove_in(&documented_changepw(), TEST_REALM).unwrap();
+    store.remove_in(&kadmin_changepw(), TEST_REALM).unwrap();
     let kdc = serve(store);
     let (code, err) = kinit(&kdc, "userpassword", "new-pw\nnew-pw\n");
     assert_eq!(code, Some(1), "stderr: {err}");

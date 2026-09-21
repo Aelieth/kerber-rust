@@ -6,7 +6,9 @@
 mod common;
 use common::*;
 
-use krb5_kdc::{Acl, TEST_REALM, bootstrap_documented, documented_kadmin, shared_dump};
+use krb5_kdc::principals::kadmin_admin;
+use krb5_kdc::{Acl, TEST_REALM, bootstrap_documented, shared_dump};
+
 use krb5_types::PrincipalName;
 
 fn name(s: &str) -> PrincipalName {
@@ -42,13 +44,7 @@ fn get_princs_glob_matches_svr_iters() {
     }
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
-    let mut c = init_client(
-        &store,
-        &acl,
-        &name("admin"),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut c = init_client(&store, &acl, &name("admin"), &kadmin_admin(), GSS_INTEGRITY);
 
     let (stat, body) = data_call(&mut c, &store, &acl, GET_PRINCS, &gprincs_args("*1"));
     assert_eq!(stat, SUCCESS);

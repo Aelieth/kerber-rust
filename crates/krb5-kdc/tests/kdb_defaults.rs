@@ -8,26 +8,25 @@
 #[path = "common/mod.rs"]
 mod common;
 
+use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::{
     Acl, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE,
-    KDB_REQUIRES_PRE_AUTH, TEST_REALM, bootstrap_documented, documented_changepw,
-    documented_kadmin,
+    KDB_REQUIRES_PRE_AUTH, TEST_REALM, bootstrap_documented,
 };
+
 use krb5_types::PrincipalName;
 
 #[test]
 fn bootstrap_changepw_and_admin_carry_kadm5_create_attributes() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    let admin = store.get_name(&documented_kadmin()).expect("kadmin/admin");
+    let admin = store.get_name(&kadmin_admin()).expect("kadmin/admin");
     assert_eq!(admin.attributes, KDB_DISALLOW_TGT_BASED | KDB_LOCKDOWN_KEYS);
     assert_eq!(
         admin.max_life,
         60 * 60 * 3,
         "kadm5_create.c:54 ADMIN_LIFETIME"
     );
-    let changepw = store
-        .get_name(&documented_changepw())
-        .expect("kadmin/changepw");
+    let changepw = store.get_name(&kadmin_changepw()).expect("kadmin/changepw");
     assert_eq!(
         changepw.attributes,
         KDB_DISALLOW_TGT_BASED | KDB_PWCHANGE_SERVICE | KDB_LOCKDOWN_KEYS

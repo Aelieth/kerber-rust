@@ -7,10 +7,9 @@
 mod common;
 use common::*;
 
-use krb5_kdc::{
-    Acl, TEST_REALM, TEST_USER, bootstrap_documented, documented_changepw, documented_host,
-    documented_kadmin, shared_dump,
-};
+use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
+use krb5_kdc::{Acl, TEST_REALM, TEST_USER, bootstrap_documented, documented_host, shared_dump};
+
 use krb5_types::PrincipalName;
 
 const CREATE_ALIAS: u32 = 27;
@@ -67,13 +66,7 @@ fn t_kadmin_acl() -> (krb5_kdc::SharedDump, Acl) {
 #[test]
 fn create_alias_then_getprinc_returns_the_target() {
     let (store, acl) = t_kadmin_acl();
-    let mut c = init_client(
-        &store,
-        &acl,
-        &name("admin"),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut c = init_client(&store, &acl, &name("admin"), &kadmin_admin(), GSS_INTEGRITY);
     let (stat, body) = data_call(
         &mut c,
         &store,
@@ -156,13 +149,7 @@ fn acl_addalias_needs_unrestricted_add_on_alias_and_modify_on_target() {
         ),
     ];
     for (actor, alias, target, want) in cases {
-        let mut c = init_client(
-            &store,
-            &acl,
-            &name(actor),
-            &documented_kadmin(),
-            GSS_INTEGRITY,
-        );
+        let mut c = init_client(&store, &acl, &name(actor), &kadmin_admin(), GSS_INTEGRITY);
         let (stat, body) = data_call(
             &mut c,
             &store,
@@ -184,7 +171,7 @@ fn changepw_service_denies_create_alias() {
         &store,
         &acl,
         &name("admin"),
-        &documented_changepw(),
+        &kadmin_changepw(),
         GSS_INTEGRITY,
     );
     let (stat, body) = data_call(
@@ -205,7 +192,7 @@ fn proc_28_is_still_proc_unavail() {
         &store,
         &acl,
         &name(TEST_USER),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let (stat, _) = data_call(

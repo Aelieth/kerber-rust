@@ -15,10 +15,12 @@
 mod common;
 use common::*;
 
+use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::{
-    Acl, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id,
-    documented_kadmin, load_store, save_store, shared_dump,
+    Acl, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id, load_store,
+    save_store, shared_dump,
 };
+
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
@@ -85,7 +87,7 @@ fn modify_nonzero_failcount_does_not_write() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let want_life = u32::try_from(orig_life.saturating_add(60)).unwrap_or(60);
@@ -118,7 +120,7 @@ fn modify_reserved_tl_type_does_not_write() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let want_life = u32::try_from(orig_life.saturating_add(60)).unwrap_or(60);
@@ -201,7 +203,7 @@ fn modify_policy_and_policy_clr_is_bad_mask() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = modify_args_r9_kadm5_validate(
@@ -231,7 +233,7 @@ fn modify_tl_type_0x10003_is_bad_tl_type() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = modify_args_r9_kadm5_validate(
@@ -261,7 +263,7 @@ fn create_fail_auth_count_mask_is_bad_mask() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let name = format!("r9create@{TEST_REALM}");
@@ -354,7 +356,7 @@ fn create_tl_type_0x10003_is_bad_tl_type() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = create_args(
@@ -385,7 +387,7 @@ fn modify_policy_clr_with_policy_name_is_bad_mask() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let mut w = Vec::new();
@@ -474,7 +476,7 @@ fn admin_client(store: &krb5_kdc::SharedDump, acl: &Acl) -> common::Client {
         store,
         acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     )
 }
@@ -560,7 +562,7 @@ fn ro_policy_and_policy_clr_is_auth_modify() {
         .unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\nro@KERBER.TEST i\n").unwrap();
     let store = shared_dump(store);
-    let mut c = init_client(&store, &acl, &ro, &documented_kadmin(), GSS_INTEGRITY);
+    let mut c = init_client(&store, &acl, &ro, &kadmin_admin(), GSS_INTEGRITY);
     let args = modify_args_r12_kadm5_order(
         &format!("{TEST_USER}@{TEST_REALM}"),
         60,
@@ -659,7 +661,7 @@ fn ro_modify_nosuch_is_unk_princ() {
         .unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\nro@KERBER.TEST i\n").unwrap();
     let store = shared_dump(store);
-    let mut c = init_client(&store, &acl, &ro, &documented_kadmin(), GSS_INTEGRITY);
+    let mut c = init_client(&store, &acl, &ro, &kadmin_admin(), GSS_INTEGRITY);
     let args = modify_args_r12_kadm5_lookup(&format!("nosuch@{TEST_REALM}"), 60, KADM5_MAX_LIFE);
     let (stat, body) = data_call(&mut c, &store, &acl, MODIFY_PRINCIPAL, &args);
     assert_eq!(stat, SUCCESS);
@@ -676,7 +678,7 @@ fn admin_bad_mask_on_nosuch_is_unk_princ() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = modify_args_r12_kadm5_lookup(
@@ -699,7 +701,7 @@ fn stub_setup_unk_before_acl_on_modify() {
         &store,
         &none,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = modify_args_r12_kadm5_lookup(&format!("nosuch@{TEST_REALM}"), 60, KADM5_MAX_LIFE);
@@ -743,7 +745,7 @@ fn kadm5_modify_sets_max_rlife() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = modify_rlife_args(
@@ -829,13 +831,7 @@ fn getprinc_mod_name_is_the_rpc_caller() {
     let (store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
-    let mut client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     let (stat, body) = data_call(
         &mut client,
         &store,

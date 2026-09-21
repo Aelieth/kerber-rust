@@ -18,11 +18,12 @@ use std::time::Duration;
 
 use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
 use krb5_crypto::ProtocolKey;
+use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::{
     Acl, Error, PrincipalStore, acl_for_store, bootstrap_documented, default_acl_path,
-    documented_changepw, documented_history, documented_kadmin, documented_kiprop, open_store,
-    shared_dump as shared_store,
+    documented_kiprop, open_store, shared_dump as shared_store,
 };
+
 use krb5_protocol::ReplayCache;
 
 fn main() {
@@ -67,7 +68,7 @@ fn main() {
     }
 
     let realm = store.realm().to_owned();
-    let changepw = documented_changepw();
+    let changepw = kadmin_changepw();
     if acceptor_keys(&store).is_empty() {
         eprintln!("krb5-kadmind: no kadmin/admin keys");
         std::process::exit(1);
@@ -176,10 +177,10 @@ fn main() {
 fn acceptor_keys(store: &PrincipalStore) -> Vec<ProtocolKey> {
     let mut keys = Vec::new();
     for name in [
-        documented_kadmin(),
-        documented_changepw(),
+        kadmin_admin(),
+        kadmin_changepw(),
         documented_kiprop(),
-        documented_history(),
+        kadmin_history(),
     ] {
         if let Some(p) = store.get_name(&name) {
             keys.extend(p.keys.iter().map(|k| k.key.clone()));

@@ -17,9 +17,9 @@ mod common;
 use common::*;
 
 use krb5_crypto::EncryptionType;
-use krb5_kdc::{
-    Acl, NamedPolicy, TEST_ADMIN, TEST_REALM, bootstrap_documented, documented_kadmin, shared_dump,
-};
+use krb5_kdc::principals::kadmin_admin;
+use krb5_kdc::{Acl, NamedPolicy, TEST_ADMIN, TEST_REALM, bootstrap_documented, shared_dump};
+
 use krb5_types::PrincipalName;
 
 const CREATE_PRINCIPAL3: u32 = 18;
@@ -86,13 +86,7 @@ fn create3_ks_tuple_is_the_only_key() {
     let (store, _) = bootstrap_documented().unwrap();
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
-    let mut client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     let args = create3_randkey(
         &format!("z65@{TEST_REALM}"),
         None,
@@ -119,13 +113,7 @@ fn create3_ks_tuple_outside_allowed_keysalts_is_bad_keysalts() {
     store.put_policy(pol);
     let acl = Acl::parse("admin@KERBER.TEST *\n").unwrap();
     let store = shared_dump(store);
-    let mut client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     let args = create3_randkey(
         &format!("z65bad@{TEST_REALM}"),
         Some("ksonly"),
@@ -190,13 +178,7 @@ fn chpass3_ks_tuple_is_the_only_key() {
         .create_password(&acl, "admin@KERBER.TEST", &n("z72c"), b"z72-old-secret")
         .unwrap();
     let store = shared_dump(store);
-    let mut client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     let args = chpass3(
         &format!("z72c@{TEST_REALM}"),
         ETYPE_AES128_SHA1,
@@ -225,13 +207,7 @@ fn chrand3_ks_tuple_is_the_only_key() {
         .create_password(&acl, "admin@KERBER.TEST", &n("z72r"), b"z72-rand-secret")
         .unwrap();
     let store = shared_dump(store);
-    let mut client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     let args = chrand3(&format!("z72r@{TEST_REALM}"), ETYPE_AES128_SHA1);
     let (stat, body) = data_call(&mut client, &store, &acl, CHRAND_PRINCIPAL3, &args);
     assert_eq!(stat, SUCCESS);
@@ -256,13 +232,7 @@ fn chpass3_unknown_etype_is_bad_keysalts() {
         .create_password(&acl, "admin@KERBER.TEST", &n("z72bad"), b"z72-bad-secret")
         .unwrap();
     let store = shared_dump(store);
-    let mut client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     let args = chpass3(
         &format!("z72bad@{TEST_REALM}"),
         ETYPE_UNKNOWN,
@@ -281,13 +251,7 @@ fn chrand3_unknown_etype_is_bad_keysalts() {
         .create_password(&acl, "admin@KERBER.TEST", &n("z72rbad"), b"z72-rbad-secret")
         .unwrap();
     let store = shared_dump(store);
-    let mut client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     let args = chrand3(&format!("z72rbad@{TEST_REALM}"), ETYPE_UNKNOWN);
     let (stat, body) = data_call(&mut client, &store, &acl, CHRAND_PRINCIPAL3, &args);
     assert_eq!(stat, SUCCESS, "unknown ks_tuple must not be RPC SYSTEM_ERR");
@@ -317,13 +281,7 @@ fn chpass3_outside_allowed_keysalts_is_bad_keysalts() {
         )
         .unwrap();
     let store = shared_dump(store);
-    let mut client = init_client(
-        &store,
-        &acl,
-        &n(TEST_ADMIN),
-        &documented_kadmin(),
-        GSS_INTEGRITY,
-    );
+    let mut client = init_client(&store, &acl, &n(TEST_ADMIN), &kadmin_admin(), GSS_INTEGRITY);
     let args = chpass3(
         &format!("z72pol@{TEST_REALM}"),
         ETYPE_AES128_SHA1,

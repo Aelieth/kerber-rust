@@ -6,10 +6,12 @@ mod common;
 use common::*;
 
 use krb5_admin::{AdminSession, Error};
+use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::{
     Acl, NamedPolicy, TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id,
-    documented_kadmin, shared_dump,
+    shared_dump,
 };
+
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
@@ -79,7 +81,7 @@ fn kadm5_create_empty_password_is_pass_q_tooshort_and_creates_nothing() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = create_args(&format!("c1empty@{TEST_REALM}"), "", None);
@@ -105,7 +107,7 @@ fn kadm5_create_principal_name_password_is_pass_q_dict_only_with_policy() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let args = create_args(&format!("pqu@{TEST_REALM}"), "PQU", Some("pq"));
@@ -136,7 +138,7 @@ fn kadm5_create_null_password_is_a_random_key_not_the_empty_password() {
         &store,
         &acl,
         &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]),
-        &documented_kadmin(),
+        &kadmin_admin(),
         GSS_INTEGRITY,
     );
     let mut args = Vec::new();

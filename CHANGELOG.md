@@ -13,6 +13,10 @@ this project uses semantic versioning once a crate is published.
   `--subst` accepts `documented_kadmin`, `documented_changepw`,
   `documented_history`, and `harness_master_etype`. Self-test 32
   cases.
+- **krb5-kdc.** `kadmin/admin`, `kadmin/changepw`, and `kadmin/history`
+  live in `principals` as `kadmin_admin`, `kadmin_changepw`, and
+  `kadmin_history` (MIT `admin.h:64-66`). No root alias. The function
+  bodies are unchanged. No wire or text change.
 
 ### W3-S3.4e remaining >1,500-line module splits
 

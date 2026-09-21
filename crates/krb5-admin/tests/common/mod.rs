@@ -273,7 +273,9 @@ pub fn changepw_as_ticket(
     user_key: &krb5_crypto::ProtocolKey,
     nonce: u32,
 ) -> krb5_kdc::IssuedAs {
-    use krb5_kdc::{TEST_REALM, documented_changepw};
+    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::principals::kadmin_changepw;
+
     use krb5_protocol::pa_enc_timestamp;
     krb5_kdc::issue_as(
         store,
@@ -282,7 +284,7 @@ pub fn changepw_as_ticket(
             TEST_REALM,
             nonce,
             Some(vec![pa_enc_timestamp(user_key).unwrap()]),
-            documented_changepw(),
+            kadmin_changepw(),
             krb5_crypto::EncryptionType::preferred()
                 .iter()
                 .map(|e| e.to_iana())
@@ -294,8 +296,10 @@ pub fn changepw_as_ticket(
 }
 
 pub fn allow_tgs_changepw(store: &mut krb5_kdc::PrincipalStore) {
-    use krb5_kdc::{KDB_DISALLOW_TGT_BASED, documented_changepw};
-    let changepw = documented_changepw();
+    use krb5_kdc::KDB_DISALLOW_TGT_BASED;
+    use krb5_kdc::principals::kadmin_changepw;
+
+    let changepw = kadmin_changepw();
     let a = store.get_name(&changepw).unwrap().attributes & !KDB_DISALLOW_TGT_BASED;
     store
         .apply_admin_fields(&changepw, Some(a), None, None, None, None, false, None)
@@ -330,7 +334,9 @@ pub fn changepw_tgs_ticket(
     user_key: &krb5_crypto::ProtocolKey,
     nonce: u32,
 ) -> krb5_kdc::IssuedTgs {
-    use krb5_kdc::{TEST_REALM, documented_changepw};
+    use krb5_kdc::TEST_REALM;
+    use krb5_kdc::principals::kadmin_changepw;
+
     use krb5_protocol::{pa_enc_timestamp, tgs_req};
     let as_out = krb5_kdc::issue_as(
         store,
@@ -350,7 +356,7 @@ pub fn changepw_tgs_ticket(
             &as_out.session_key,
             TEST_REALM,
             user,
-            documented_changepw(),
+            kadmin_changepw(),
             TEST_REALM,
             nonce + 1,
         )
