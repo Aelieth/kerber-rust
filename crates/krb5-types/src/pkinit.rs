@@ -132,13 +132,13 @@ pub const OID_KP_CLIENT_AUTH: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x04
 /// id-pkinit-KPKdc 1.3.6.1.5.2.3.5 (OID body).
 pub const OID_KP_KDC: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x05];
 
-pub(super) const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
+const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
 
-pub(super) const OID_EKU: &[u8] = &[0x55, 0x1d, 0x25];
+const OID_EKU: &[u8] = &[0x55, 0x1d, 0x25];
 
-pub(super) const OID_BC: &[u8] = &[0x55, 0x1d, 0x13];
+const OID_BC: &[u8] = &[0x55, 0x1d, 0x13];
 
-pub(super) const OID_KU: &[u8] = &[0x55, 0x1d, 0x0f];
+const OID_KU: &[u8] = &[0x55, 0x1d, 0x0f];
 
 /// SubjectPublicKeyInfo for an uncompressed P-256 point (RFC 5480).
 #[must_use]
@@ -807,7 +807,7 @@ fn sha1_bytes(data: &[u8]) -> Vec<u8> {
     Sha1::digest(data).to_vec()
 }
 
-pub(super) fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
     let mut out = vec![tag];
     if let Ok(b) = u8::try_from(body.len()) {
         if b < 128 {
@@ -824,7 +824,7 @@ pub(super) fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
     out
 }
 
-pub(super) fn oid_der(arcs: &[u8]) -> Vec<u8> {
+fn oid_der(arcs: &[u8]) -> Vec<u8> {
     tlv(0x06, arcs)
 }
 
@@ -842,7 +842,7 @@ fn der_take_len(b: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-pub(super) fn take_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+fn take_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     let tag = *input.first()?;
     let (hlen, ln) = der_take_len(input.get(1..)?)?;
     let start = 1 + hlen;

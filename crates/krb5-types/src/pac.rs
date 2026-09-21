@@ -88,7 +88,7 @@ pub const PAC_UPN_DNS_HAS_SAM_AND_SID: u32 = 0x0000_0002;
 pub const LOGON_EXTRA_SIDS: u32 = 0x20;
 
 /// NDR unique-pointer IDs start here and increment by 4 (Windows).
-pub(super) const NDR_PTR_BASE: u32 = 0x0002_0000;
+const NDR_PTR_BASE: u32 = 0x0002_0000;
 
 /// FILETIME "never" (AD logoff / kickoff / must-change).
 const NT_TIME_NEVER: u64 = 0x7fff_ffff_ffff_ffff;

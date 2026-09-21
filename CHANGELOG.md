@@ -13,8 +13,9 @@ this project uses semantic versioning once a crate is published.
   the CA); CMS SignedData wrap/verify lives in `cms`
   (`pkinit_crypto_openssl.c` `cms_signeddata_create` /
   `cms_signeddata_verify`). Every `pub` path `krb5_types::pkinit::X`
-  is unchanged. Sibling-only names are `pub(super)`. No wire, text
-  or store behaviour changed.
+  is unchanged. Names the parent uses from a child are
+  `pub(super)`; names that stay in the parent stay private. No wire,
+  text or store behaviour changed.
 - **krb5-protocol.** `as_ex.rs` is split into `as_ex/{fast,spake}.rs`.
   FAST armor (`fast.c`) and SPAKE (`spake_client.c`) leave
   `PkinitClient`, `build_as_req`, and the reply-time checks on
@@ -27,8 +28,9 @@ this project uses semantic versioning once a crate is published.
   MS-RPCE Type-Serialization v1; MIT `pac.c` does not parse
   `KERB_VALIDATION_INFO`). Ledger anchors stay on `pac.rs`.
   `pac/tests.rs` and its `include_bytes!` are untouched. Every
-  `pub` path `krb5_types::pac::X` is unchanged. Sibling-only names
-  are `pub(super)`. No wire, text or store behaviour changed.
+  `pub` path `krb5_types::pac::X` is unchanged. Names the parent
+  uses from a child are `pub(super)`; names that stay in the parent
+  stay private. No wire, text or store behaviour changed.
 
 ### W3-S3.4d-R residues
 
