@@ -6,7 +6,7 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
-### W3-S3.4d isolate host-/tmp scan
+### W3-S3.4d isolate host-/tmp scan and tests-out
 
 - **scripts.** `check_isolate_test_krb5` tokenises through
   `hygiene_inventory.strip_noncode` then brace-matches on the
@@ -14,6 +14,11 @@ this project uses semantic versioning once a crate is published.
   call. `testenv.rs` is scanned whole (`temp_dir()` in code or
   `/tmp/kerber-test-krb5` anywhere). `#[cfg(test)]` matches
   anywhere on the line; `cfg(all|any(..., test, ...))` counts.
+- **tests-out.** In-src test modules leave the five remaining
+  files over 1,500 lines (`pkinit.rs`, `krb5-types/src/lib.rs`,
+  `as_ex.rs`, `pac.rs`, `ad.rs`). Named modules keep their names
+  and nextest ids. `pac/tests.rs` retargets `include_bytes!` of
+  the kbruser NDR trace by one `../`.
 
 ### W3-S3.4c-R residues
 
