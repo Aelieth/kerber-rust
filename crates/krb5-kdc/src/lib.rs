@@ -41,8 +41,8 @@ pub use ad::{
 };
 pub use audit::{
     AUTHN_REQ_CL, AuditState, ENCR_REP, ISSUE_TKT, JsonAudit, KdcAudit, REQID_LEN, SRVC_PRINC,
-    TestAudit, VALIDATE_POL, clear_thread_audit, current_audit, enctype_name, ktypes2str,
-    make_tkt_id, new_req_id, rep_etypes2str, set_audit, set_client_port, set_thread_audit,
+    VALIDATE_POL, clear_thread_audit, current_audit, enctype_name, ktypes2str, make_tkt_id,
+    new_req_id, rep_etypes2str, set_audit, set_client_port, set_thread_audit,
 };
 pub use error::Error;
 pub use issue::{
@@ -74,11 +74,8 @@ pub use osa::{
     decrypt_entry as decrypt_history_entry, history_entry as encrypt_history_entry,
 };
 pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
-#[cfg(test)]
-pub use plugins::DenyPolicy;
 pub use plugins::{
-    DemoPolicy, DemoPreauth, GREET_AD_TYPE, GREET_TEXT, GreetAuth, KdcAuthdata, KdcPolicy,
-    KdcPreauth, PolicyAdjustment, PreauthAction, TestPolicy, apply_policy_times,
+    KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, apply_policy_times,
     clear_thread_policy, current_policy, register_authdata, register_preauth, set_policy,
     set_thread_policy,
 };

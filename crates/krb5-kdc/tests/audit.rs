@@ -3,10 +3,11 @@
 //! F5 TGS audit seed + unknown-server stage. Compiles at `70de1ac`.
 
 use krb5_asn1::encode;
+use krb5_kdc::testrealm::TestAudit;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
-    AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, TestAudit, as_req, clear_thread_audit, ktypes2str,
-    make_tkt_id, pa_enc_timestamp, set_thread_audit, tgs_req,
+    AUTHN_REQ_CL, ENCR_REP, SRVC_PRINC, as_req, clear_thread_audit, ktypes2str, make_tkt_id,
+    pa_enc_timestamp, set_thread_audit, tgs_req,
 };
 
 use krb5_testkit::{issue_tgt, scratch_dir, user};

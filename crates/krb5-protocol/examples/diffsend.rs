@@ -18,10 +18,8 @@ use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2, p256_generate,
     string_to_key,
 };
-use krb5_kdc::{
-    GREET_AD_TYPE, GREET_TEXT, PacTicket, pac_from_ticket_part, sign_pac, ticket_checksum_der,
-    wrap_win2k_pac,
-};
+use krb5_kdc::testrealm::{GREET_AD_TYPE, GREET_TEXT};
+use krb5_kdc::{PacTicket, pac_from_ticket_part, sign_pac, ticket_checksum_der, wrap_win2k_pac};
 use krb5_protocol::{
     KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, attach_fast_with_options,
     build_fast_armor, compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp,

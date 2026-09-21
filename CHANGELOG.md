@@ -24,6 +24,11 @@ this project uses semantic versioning once a crate is published.
   `documented_admin_id`, `bootstrap_documented`) lives in
   `testrealm`. No root re-export. Always compiled. No wire or
   text change.
+- **krb5-kdc.** `TestAudit`, `TestPolicy`, `DenyPolicy`,
+  `DemoPreauth`, `DemoPolicy`, `GreetAuth`, and the `GREET_*`
+  constants live in `testrealm` (`test_plugins.rs`; `plugins.rs`
+  already names the product registry). `DenyPolicy`
+  stays `#[cfg(test)]`. No root re-export. No wire or text change.
 
 ### W3-S3.4e remaining >1,500-line module splits
 

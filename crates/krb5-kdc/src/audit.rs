@@ -1,9 +1,6 @@
 //! MIT `kdc_log.c` ISSUE tuple and `kdc_audit.c` plugin registry.
 
 use std::fmt::Write as _;
-use std::fs::{File, OpenOptions};
-use std::io::Write as _;
-use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use krb5_asn1::decode;
@@ -210,67 +207,6 @@ impl KdcAudit for JsonAudit {
     }
     fn u2u(&self, success: bool, state: &AuditState) {
         emit_trace_record(&state.to_json(success));
-    }
-}
-
-/// MIT `plugins/audit/test` twin: append one JSON object per line.
-pub struct TestAudit {
-    file: Mutex<File>,
-    path: PathBuf,
-}
-
-impl TestAudit {
-    /// Open `path` for append (MIT `fopen("au.log", "a+")`).
-    ///
-    /// # Errors
-    ///
-    /// The file could not be created or opened.
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
-        let path = path.as_ref().to_path_buf();
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
-        Ok(Self {
-            file: Mutex::new(file),
-            path,
-        })
-    }
-
-    /// Destination path.
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    fn write_line(&self, line: &str) {
-        let mut f = self
-            .file
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let _ = writeln!(f, "{line}");
-        let _ = f.flush();
-    }
-}
-
-impl KdcAudit for TestAudit {
-    fn kdc_start(&self, success: bool) {
-        self.write_line(&start_stop_json("KDC_START", success));
-    }
-    fn kdc_stop(&self, success: bool) {
-        self.write_line(&start_stop_json("KDC_STOP", success));
-    }
-    fn as_req(&self, success: bool, state: &AuditState) {
-        self.write_line(&state.to_json(success));
-    }
-    fn tgs_req(&self, success: bool, state: &AuditState) {
-        self.write_line(&state.to_json(success));
-    }
-    fn s4u2self(&self, success: bool, state: &AuditState) {
-        self.write_line(&state.to_json(success));
-    }
-    fn s4u2proxy(&self, success: bool, state: &AuditState) {
-        self.write_line(&state.to_json(success));
-    }
-    fn u2u(&self, success: bool, state: &AuditState) {
-        self.write_line(&state.to_json(success));
     }
 }
 
@@ -918,7 +854,7 @@ fn emit_trace_record(record: &str) {
     );
 }
 
-fn start_stop_json(name: &str, success: bool) -> String {
+pub(super) fn start_stop_json(name: &str, success: bool) -> String {
     format!(
         "{{\"event_name\":\"{name}\",\"event_success\":{}}}",
         if success { "true" } else { "false" }
@@ -926,7 +862,7 @@ fn start_stop_json(name: &str, success: bool) -> String {
 }
 
 impl AuditState {
-    fn to_json(&self, success: bool) -> String {
+    pub(super) fn to_json(&self, success: bool) -> String {
         let mut j = JsonObj::new();
         j.str("event_name", self.event_name);
         j.int("stage", i64::from(self.stage));

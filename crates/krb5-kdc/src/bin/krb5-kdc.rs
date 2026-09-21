@@ -120,11 +120,11 @@ fn main() {
         std::process::exit(2);
     }
     if std::env::var("KRB5_KDCPOLICY").ok().as_deref() == Some("test") {
-        krb5_kdc::set_policy(std::sync::Arc::new(krb5_kdc::TestPolicy));
+        krb5_kdc::set_policy(std::sync::Arc::new(krb5_kdc::testrealm::TestPolicy));
     }
     if std::env::var("KRB5_KDC_AUDIT").ok().as_deref() == Some("test") {
         let path = std::env::var("KRB5_KDC_AUDIT_LOG").unwrap_or_else(|_| "au.log".into());
-        match krb5_kdc::TestAudit::open(&path) {
+        match krb5_kdc::testrealm::TestAudit::open(&path) {
             Ok(a) => krb5_kdc::set_audit(std::sync::Arc::new(a)),
             Err(e) => {
                 eprintln!("krb5-kdc: KRB5_KDC_AUDIT_LOG {path}: {e}");
@@ -272,7 +272,7 @@ fn main() {
         eprintln!("krb5-kdc: privilege drop skipped (shared persist db)");
     }
     if std::env::var("KERBER_KDC_GREET").ok().as_deref() == Some("1") {
-        krb5_kdc::register_authdata(std::sync::Arc::new(krb5_kdc::GreetAuth));
+        krb5_kdc::register_authdata(std::sync::Arc::new(krb5_kdc::testrealm::GreetAuth));
     }
     println!("listening {addr}");
     if let Err(e) = serve(store, udp, tcp) {

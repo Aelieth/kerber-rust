@@ -7,11 +7,9 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, unkeyed_checksum,
 };
+use krb5_kdc::testrealm::{GREET_AD_TYPE, GREET_TEXT, GreetAuth};
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
-use krb5_kdc::{
-    Error, GREET_AD_TYPE, GREET_TEXT, GreetAuth, PrincipalStore, decrypt_ticket_part, issue_tgs,
-    register_authdata,
-};
+use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part, issue_tgs, register_authdata};
 
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_testkit::{krbtgt, status, user, user_as, wrap_if_relevant};
