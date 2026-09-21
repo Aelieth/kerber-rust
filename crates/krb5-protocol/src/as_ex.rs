@@ -101,7 +101,7 @@ pub struct AsTicketOpts {
 
 /// Request times/options MIT `verify_as_reply` compares to EncKDCRepPart.
 #[derive(Clone, Debug)]
-pub(super) struct AsReqTimes {
+struct AsReqTimes {
     till: KerberosTime,
     rtime: Option<KerberosTime>,
     from: Option<KerberosTime>,
@@ -205,7 +205,7 @@ fn wrap_as(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error
     result
 }
 
-pub(super) fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
+fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
     req.sname
         .cloned()
         .unwrap_or_else(|| PrincipalName::krbtgt(req.realm))
@@ -368,7 +368,7 @@ fn finish_as_rep_keys(
     Err(last)
 }
 
-pub(super) fn pick_key(keys: &[ProtocolKey], etype: Option<EncryptionType>) -> Option<ProtocolKey> {
+fn pick_key(keys: &[ProtocolKey], etype: Option<EncryptionType>) -> Option<ProtocolKey> {
     if keys.is_empty() {
         return None;
     }
@@ -637,18 +637,18 @@ fn continue_pkinit(
     }
 }
 
-pub(super) fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {
+fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {
     let Some(ed) = &err.e_data else {
         return Ok(Vec::new());
     };
     decode(ed.as_ref()).map_err(Error::from)
 }
 
-pub(super) fn find_pa(method: &[PaData], ty: i32) -> Option<&PaData> {
+fn find_pa(method: &[PaData], ty: i32) -> Option<&PaData> {
     method.iter().find(|p| p.padata_type == ty)
 }
 
-pub(super) fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
+fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
     match e.error_code {
         err::SKEW => Err(Error::KrbError {
             code: err::SKEW,
@@ -672,13 +672,13 @@ pub(super) fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
     }
 }
 
-pub(super) enum KdcMsg {
+enum KdcMsg {
     AsRep(AsRep),
     TgsRep,
     Error(KrbError),
 }
 
-pub(super) fn classify(bytes: &[u8]) -> Result<KdcMsg, Error> {
+fn classify(bytes: &[u8]) -> Result<KdcMsg, Error> {
     if bytes.is_empty() {
         return Err(Error::TruncatedReply);
     }
@@ -713,7 +713,7 @@ fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn finish_as_rep(
+fn finish_as_rep(
     rep: AsRep,
     nonce: u32,
     client_key: Option<ProtocolKey>,
@@ -995,11 +995,11 @@ pub(crate) fn check_as_rep_times_sync(
     Ok(())
 }
 
-pub(super) fn decode_enc_as(plain: &[u8]) -> Result<EncKdcRepPart, Error> {
+fn decode_enc_as(plain: &[u8]) -> Result<EncKdcRepPart, Error> {
     krb5_asn1::decode_enc_kdc_rep_part(plain).map_err(|e| Error::Asn1(e.to_string()))
 }
 
-pub(super) fn salt_cname(cname: &PrincipalName) -> PrincipalName {
+fn salt_cname(cname: &PrincipalName) -> PrincipalName {
     if cname.name_type != PrincipalName::NT_ENTERPRISE {
         return cname.clone();
     }
@@ -1011,7 +1011,7 @@ pub(super) fn salt_cname(cname: &PrincipalName) -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user])
 }
 
-pub(super) fn build_as_req_from(
+fn build_as_req_from(
     req: &AsRequest<'_>,
     nonce: u32,
     bound: &AsReqTimes,
@@ -1112,7 +1112,7 @@ pub fn conf_etypes(tgs: bool) -> Vec<i32> {
     if v.is_empty() { preferred } else { v }
 }
 
-pub(super) fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddresses>) {
+fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddresses>) {
     let now = KerberosTime::now();
     // MIT `get_in_tkt.c:711-714` omits `from` unless start_time != 0.
     // `get_in_tkt.c:932-934` then sets ALLOW_POSTDATE | POSTDATED.
@@ -1182,7 +1182,7 @@ pub fn as_init_creds_options(req: &AsRequest<'_>) -> (KdcOptions, Option<Kerbero
     (t.opts, t.from)
 }
 
-pub(super) fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
+fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
     pa_enc_timestamp_at(key, &KerberosTime::now())
 }
 
@@ -1208,14 +1208,14 @@ fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, 
 
 type S2kMaterial = (EncryptionType, Vec<u8>, Option<Vec<u8>>);
 
-pub(super) fn first_etype(etypes: &[i32]) -> EncryptionType {
+fn first_etype(etypes: &[i32]) -> EncryptionType {
     etypes
         .first()
         .and_then(|n| EncryptionType::known(*n).ok())
         .unwrap_or(EncryptionType::Aes256CtsHmacSha196)
 }
 
-pub(super) fn select_s2k(
+fn select_s2k(
     error: &KrbError,
     cname: &PrincipalName,
     realm: &str,
@@ -1249,11 +1249,7 @@ pub(super) fn select_s2k(
     Ok((fallback, default_salt, None))
 }
 
-pub(super) fn pick_info2(
-    info: &EtypeInfo2,
-    default_salt: &[u8],
-    etypes: &[i32],
-) -> Option<S2kMaterial> {
+fn pick_info2(info: &EtypeInfo2, default_salt: &[u8], etypes: &[i32]) -> Option<S2kMaterial> {
     let mut order: Vec<EncryptionType> = etypes
         .iter()
         .filter_map(|n| EncryptionType::known(*n).ok())

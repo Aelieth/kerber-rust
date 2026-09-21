@@ -20,7 +20,8 @@ this project uses semantic versioning once a crate is published.
   `PkinitClient`, `build_as_req`, and the reply-time checks on
   `as_ex.rs` so the three text pins stay. `FastArmor` and
   `fast_error_material` keep their crate paths. Ledger rust-sites
-  follow the new files. Sibling-only names are `pub(super)`. No
+  follow the new files. Names the parent uses from a child are
+  `pub(super)`; names that stay in the parent stay private. No
   wire, text or store behaviour changed.
 - **krb5-types.** `pac.rs` is split into `pac/ndr.rs` (MS-PAC /
   MS-RPCE Type-Serialization v1; MIT `pac.c` does not parse
