@@ -2390,70 +2390,7 @@ impl PkinitCa {
 }
 
 #[cfg(test)]
-mod rfc8636_tests {
-    use super::*;
-    use sha2::{Digest, Sha256};
-
-    #[test]
-    fn rfc8636_other_info_is_stable_and_oid_specific() {
-        let client = encode_krb5_principal_name("SU.SE", 1, &["lha"]);
-        let server = encode_krb5_principal_name("SU.SE", 2, &["krbtgt", "SU.SE"]);
-        let supp = encode_pkinit_supp_pub_info(18, &[0xAA; 10], &[0xBB; 9]);
-        let other = encode_rfc8636_other_info(KDF_AH_SHA256_OID, &client, &server, &supp);
-        let oid384: &[u8] = &[0x2b, 0x06, 0x01, 0x05, 0x02, 0x03, 0x06, 0x04];
-        let other384 = encode_rfc8636_other_info(oid384, &client, &server, &supp);
-        assert_ne!(other, other384);
-        assert!(other.starts_with(&[0x30]));
-        let z = vec![0u8; 256];
-        let mut h = Sha256::new();
-        h.update(1u32.to_be_bytes());
-        h.update(&z);
-        h.update(&other);
-        let key: [u8; 32] = h.finalize().into();
-        let again = encode_rfc8636_other_info(KDF_AH_SHA256_OID, &client, &server, &supp);
-        let mut h2 = Sha256::new();
-        h2.update(1u32.to_be_bytes());
-        h2.update(&z);
-        h2.update(&again);
-        let key2: [u8; 32] = h2.finalize().into();
-        assert_eq!(key, key2);
-    }
-}
+mod rfc8636_tests;
 
 #[cfg(test)]
-mod signed_attrs_tests {
-    use super::*;
-
-    #[test]
-    fn cms_verify_refuses_missing_signed_attrs() {
-        let ca = PkinitCa::generate().expect("CA");
-        let (cert, key) = ca.client_identity_for("user@KERBER.TEST").expect("id");
-        let inner = b"bare-econtent";
-        let (issuer, serial) = cert_issuer_serial(&cert).expect("ias");
-        let sig = p256_sign(&key, inner).expect("sig");
-        let cms = cms_wrap_signed(
-            inner,
-            &cert,
-            &sig,
-            &issuer,
-            &serial,
-            ECONTENT_AUTHDATA,
-            None,
-        );
-        assert_eq!(
-            cms_verify_full(&cms, &ca.ca_cert).expect_err("bare"),
-            "cms signedAttrs"
-        );
-    }
-
-    #[test]
-    fn cms_unsigned_contentinfo_round_trips() {
-        let inner = b"anon-authpack";
-        let wrap = cms_wrap_unsigned(inner);
-        assert_eq!(
-            cms_extract_unsigned(&wrap).as_deref(),
-            Some(inner.as_slice())
-        );
-        assert!(cms_verify_full(&wrap, &[]).is_err());
-    }
-}
+mod signed_attrs_tests;
