@@ -92,7 +92,9 @@ pub use store::{
     s2k_params, strip_db_args,
 };
 
-use krb5_types::PrincipalName;
+use std::fmt::Write as _;
+
+use krb5_types::{HostAddress, PrincipalName};
 use testrealm::{TEST_ADMIN, documented_kiprop};
 
 /// `admin@<realm>` actor string used by kadmind when no `acl_file` is set.
@@ -249,4 +251,164 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
         &actor,
     )?;
     Ok(())
+}
+
+fn start_stop_json(name: &str, success: bool) -> String {
+    format!(
+        "{{\"event_name\":\"{name}\",\"event_success\":{}}}",
+        if success { "true" } else { "false" }
+    )
+}
+
+impl AuditState {
+    fn to_json(&self, success: bool) -> String {
+        let mut j = JsonObj::new();
+        j.str("event_name", self.event_name);
+        j.int("stage", i64::from(self.stage));
+        j.bool("event_success", success);
+        j.opt_str("tkt_in_id", self.tkt_in_id.as_deref());
+        j.opt_str("tkt_out_id", self.tkt_out_id.as_deref());
+        j.str("req_id", &self.req_id);
+        j.int("fromport", i64::from(self.cl_port));
+        if let Some(addr) = &self.cl_addr {
+            j.raw("fromaddr", &addr_json(addr));
+        }
+        j.opt_str("kdc_status", self.status.as_deref());
+        if let Some(c) = &self.req_client {
+            j.raw(
+                "req.client",
+                &princ_json(c, self.req_client_realm.as_deref().unwrap_or("")),
+            );
+        }
+        if let Some(s) = &self.req_server {
+            j.raw(
+                "req.server",
+                &princ_json(s, self.req_server_realm.as_deref().unwrap_or("")),
+            );
+        }
+        j.int("req.kdc_options", i64::from(self.kdc_options));
+        if !self.avail_etypes.is_empty() {
+            j.raw("req.avail_etypes", &int_array(&self.avail_etypes));
+        }
+        if self.tkt_renewed != 0 {
+            j.int("tkt_renewed", i64::from(self.tkt_renewed));
+        }
+        if self.tkt_validated != 0 {
+            j.int("tkt_validated", i64::from(self.tkt_validated));
+        }
+        j.finish()
+    }
+}
+
+fn princ_json(name: &PrincipalName, realm: &str) -> String {
+    let comps: Vec<String> = name
+        .name_string
+        .iter()
+        .map(|s| json_escape(&String::from_utf8_lossy(s.as_bytes())))
+        .collect();
+    let mut arr = String::from("[");
+    for (i, c) in comps.iter().enumerate() {
+        if i > 0 {
+            arr.push(',');
+        }
+        arr.push('"');
+        arr.push_str(c);
+        arr.push('"');
+    }
+    arr.push(']');
+    format!(
+        "{{\"components\":{arr},\"realm\":\"{}\",\"length\":{},\"type\":{}}}",
+        json_escape(realm),
+        name.name_string.len(),
+        name.name_type
+    )
+}
+
+fn addr_json(addr: &HostAddress) -> String {
+    let mut j = JsonObj::new();
+    j.int("type", i64::from(addr.addr_type));
+    j.int(
+        "length",
+        i64::from(u32::try_from(addr.address.len()).unwrap_or(u32::MAX)),
+    );
+    if addr.addr_type == HostAddress::ADDRTYPE_INET || addr.addr_type == HostAddress::ADDRTYPE_INET6
+    {
+        let ips: Vec<i32> = addr.address.iter().map(|b| i32::from(*b)).collect();
+        j.raw("ip", &int_array(&ips));
+    }
+    j.finish()
+}
+
+fn int_array(v: &[i32]) -> String {
+    let mut s = String::from("[");
+    for (i, n) in v.iter().enumerate() {
+        if i > 0 {
+            s.push(',');
+        }
+        let _ = write!(s, "{n}");
+    }
+    s.push(']');
+    s
+}
+
+struct JsonObj(String);
+
+impl JsonObj {
+    fn new() -> Self {
+        Self("{".into())
+    }
+    fn comma(&mut self) {
+        if !self.0.ends_with('{') {
+            self.0.push(',');
+        }
+    }
+    fn str(&mut self, k: &str, v: &str) {
+        self.comma();
+        let _ = write!(self.0, "\"{}\":\"{}\"", json_escape(k), json_escape(v));
+    }
+    fn opt_str(&mut self, k: &str, v: Option<&str>) {
+        if let Some(v) = v {
+            self.str(k, v);
+        }
+    }
+    fn int(&mut self, k: &str, v: i64) {
+        self.comma();
+        let _ = write!(self.0, "\"{}\":{v}", json_escape(k));
+    }
+    fn bool(&mut self, k: &str, v: bool) {
+        self.comma();
+        let _ = write!(
+            self.0,
+            "\"{}\":{}",
+            json_escape(k),
+            if v { "true" } else { "false" }
+        );
+    }
+    fn raw(&mut self, k: &str, json: &str) {
+        self.comma();
+        let _ = write!(self.0, "\"{}\":{json}", json_escape(k));
+    }
+    fn finish(self) -> String {
+        let mut s = self.0;
+        s.push('}');
+        s
+    }
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => {
+                let _ = write!(out, "\\u{:04x}", u32::from(c));
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
