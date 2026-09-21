@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.4d-R residues
+
+- **docs.** Five ledger proof cells follow the moved tests:
+  `cammac_round_trip_and_bad_mac_ignored` and
+  `cammac_bad_kdcver_mac_is_skipped` cite
+  `ad/handle_authdata_tests.rs`; `omitted_lifetime_is_one_day`
+  and `renew_life_shorter_than_till_is_clamped` cite
+  `as_ex/as_kdc_options_tests.rs`.
+
 ### W3-S3.4d isolate host-/tmp scan and tests-out
 
 - **scripts.** `check_isolate_test_krb5` tokenises through
