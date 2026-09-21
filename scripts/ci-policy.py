@@ -1092,51 +1092,118 @@ def host_tmp_write_lines(text: str) -> list[int]:
     return hits
 
 
-def _cfg_test_ranges(src: str) -> list[tuple[int, int]]:
-    """Byte ranges of `#[cfg(test)]` items (mod / fn / use), not to EOF."""
-    ranges: list[tuple[int, int]] = []
+def _blank_rust(src: str) -> str:
+    """Blank comments and string/char bodies via `strip_noncode`. Same length."""
+    try:
+        blanked = _hygiene_inventory().strip_noncode(src)
+    except Exception as exc:
+        _die(f"isolate_test_krb5 strip_noncode failed: {exc}")
+    if len(blanked) != len(src):
+        _die("isolate_test_krb5 strip_noncode length mismatch")
+    return blanked
+
+
+def _attr_end(src: str, start: int) -> int | None:
+    """Index after the `]` that closes `#[…]` at `start`, or None if unclosed."""
+    if not src.startswith("#[", start):
+        return None
+    depth = 0
+    i = start + 1
     n = len(src)
+    while i < n:
+        c = src[i]
+        if c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return None
+
+
+def _top_level_comma_args(inner: str) -> list[str]:
+    args: list[str] = []
+    buf: list[str] = []
+    depth = 0
+    for c in inner:
+        if c == "(":
+            depth += 1
+            buf.append(c)
+        elif c == ")":
+            depth -= 1
+            buf.append(c)
+        elif c == "," and depth == 0:
+            args.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(c)
+    if buf:
+        args.append("".join(buf).strip())
+    return args
+
+
+def _cfg_pred_is_test(pred: str) -> bool:
+    compact = "".join(pred.split())
+    if compact == "test":
+        return True
+    for head in ("all(", "any("):
+        if compact.startswith(head) and compact.endswith(")"):
+            inner = compact[len(head) : -1]
+            if any(arg == "test" for arg in _top_level_comma_args(inner)):
+                return True
+    return False
+
+
+def _cfg_attr_is_test(attr: str) -> bool:
+    compact = "".join(attr.split())
+    if not (compact.startswith("#[cfg(") and compact.endswith(")]")):
+        return False
+    return _cfg_pred_is_test(compact[len("#[cfg(") : -2])
+
+
+def _cfg_test_ranges(src: str) -> list[tuple[int, int]]:
+    """Byte ranges of cfg(test) items on blanked source.
+
+    `#[cfg(test)]` matches anywhere on a line; `cfg(all|any(..., test, ...))`
+    counts. Brace-match on the blanked text (no quote scanner). An unclosed
+    item runs to EOF.
+    """
+    blanked = _blank_rust(src)
+    ranges: list[tuple[int, int]] = []
+    n = len(blanked)
     i = 0
     while True:
-        j = src.find("#[cfg(test)]", i)
+        j = blanked.find("#[cfg(", i)
         if j < 0:
             break
-        line_start = src.rfind("\n", 0, j) + 1
-        if src[line_start:j].strip() != "":
-            i = j + 1
+        end_attr = _attr_end(blanked, j)
+        if end_attr is None:
+            ranges.append((j, n))
+            break
+        if not _cfg_attr_is_test(blanked[j:end_attr]):
+            i = end_attr
             continue
-        k = j + len("#[cfg(test)]")
+        k = end_attr
         while True:
-            while k < n and src[k] in " \t\r\n":
+            while k < n and blanked[k] in " \t\r\n":
                 k += 1
-            if k < n and src.startswith("#[", k):
-                close = src.find("]", k)
-                if close < 0:
-                    k = n
-                    break
-                k = close + 1
+            if k < n and blanked.startswith("#[", k):
+                close = _attr_end(blanked, k)
+                if close is None:
+                    ranges.append((k, n))
+                    return ranges
+                k = close
                 continue
             break
         if k >= n:
+            ranges.append((end_attr, n))
             break
         p = k
         depth = 0
-        in_str: str | None = None
         end = n
         while p < n:
-            c = src[p]
-            if in_str:
-                if c == "\\":
-                    p += 2
-                    continue
-                if c == in_str:
-                    in_str = None
-                p += 1
-                continue
-            if c in "\"'":
-                in_str = c
-                p += 1
-                continue
+            c = blanked[p]
             if c == "{":
                 depth += 1
             elif c == "}":
@@ -1154,8 +1221,12 @@ def _cfg_test_ranges(src: str) -> list[tuple[int, int]]:
 
 
 def _cfg_test_has_temp_dir(src: str) -> bool:
-    """True if `temp_dir()` sits inside a cfg(test) item, not after one."""
-    return any("temp_dir()" in src[a:b] for a, b in _cfg_test_ranges(src))
+    """True if a host-/tmp call sits inside a cfg(test) item, not after one."""
+    blanked = _blank_rust(src)
+    for a, b in _cfg_test_ranges(src):
+        if "temp_dir()" in blanked[a:b] or "/tmp/kerber-test-krb5" in src[a:b]:
+            return True
+    return False
 
 
 def check_isolate_test_krb5(
@@ -1184,52 +1255,16 @@ def check_isolate_test_krb5(
             }
     if "fn isolate_test_krb5" not in text:
         _die("isolate_test_krb5 missing")
-    start = text.find("fn isolate_scratch_dir")
-    fn = text.find("pub fn isolate_test_krb5")
-    if start < 0 or start > fn:
-        start = fn
-    if fn < 0:
-        _die("isolate_test_krb5 missing")
-    brace = text.find("{", fn)
-    if brace < 0:
-        _die("isolate_test_krb5 missing")
-    depth = 0
-    i = brace
-    n = len(text)
-    in_str: str | None = None
-    end = n
-    while i < n:
-        c = text[i]
-        if in_str:
-            if c == "\\":
-                i += 2
-                continue
-            if c == in_str:
-                in_str = None
-            i += 1
-            continue
-        if c in "\"'":
-            in_str = c
-            i += 1
-            continue
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                end = i + 1
-                break
-        i += 1
-    chunk = text[start:end]
-    if re.search(r"temp_dir\(\)|/tmp/kerber-test-krb5", chunk):
+    blanked = _blank_rust(text)
+    if "temp_dir()" in blanked or "/tmp/kerber-test-krb5" in text:
         _die("isolate_test_krb5 writes host /tmp")
-    if _cfg_test_has_temp_dir(text):
-        _die("cfg(test) writes host /tmp via temp_dir()")
-    if tests_text and "temp_dir()" in tests_text:
-        _die("cfg(test) writes host /tmp via temp_dir()")
+    if tests_text:
+        tests_blanked = _blank_rust(tests_text)
+        if "temp_dir()" in tests_blanked:
+            _die("cfg(test) writes host /tmp via temp_dir()")
     if src_files:
         for name, src in src_files.items():
-            if name == "tests.rs":
+            if name in ("tests.rs", "testenv.rs"):
                 continue
             if _cfg_test_has_temp_dir(src):
                 _die(f"{name} cfg(test) writes host /tmp via temp_dir()")
@@ -5529,33 +5564,43 @@ jobs:
         'echo "cat <<EOF"\necho ok\ncat <<<hello\n# <<EOF\n',
         "ok-quoted-and-comment-heredoc.sh",
     )
-    # A'-3 R34 / S3.4c / S3.4c-R: _must_die(check_isolate_test_krb5)
-    # unless a temp_dir() isolate helper is refused. Missing tests.rs
-    # dies on the production is_file() branch (a ROOT-like tree under
-    # scratch, text=None); cfg(test) temp_dir() is an item range, not
-    # "everything after the first #[cfg(test)]".
+    # S3.4d: tokenise via strip_noncode, scan testenv.rs whole, cfg(test)
+    # anywhere on the line including cfg(all|any(..., test, ...)). Missing
+    # tests.rs dies on the production is_file() branch (a ROOT-like tree
+    # under scratch, text=None).
     _isolate_ok = (
         "fn isolate_scratch_dir() -> PathBuf {\n    PathBuf::from(\"target\").join(\"test-krb5\")\n}\n"
         "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
     )
     check_isolate_test_krb5(_isolate_ok)
-    _must_die(
+    _must_die_msg(
+        "isolate_test_krb5 writes host /tmp",
         check_isolate_test_krb5,
         "pub fn isolate_test_krb5() {\n"
         "    let path = std::env::temp_dir().join(\"kerber-test-krb5-1.conf\");\n"
         "}\n",
     )
-    _must_die(
+    _must_die_msg(
+        "isolate_test_krb5 writes host /tmp",
         check_isolate_test_krb5,
         "fn isolate_scratch_dir() -> PathBuf { PathBuf::from(\"target/test-krb5\") }\n"
         "pub fn isolate_test_krb5() {\n    let dir = isolate_scratch_dir();\n}\n"
         "#[cfg(test)]\nmod tests {\n    fn f() { let _ = std::env::temp_dir(); }\n}\n",
     )
-    # product temp_dir() after a cfg(test) use is not a cfg(test) item
-    check_isolate_test_krb5(
-        _isolate_ok
-        + "#[cfg(test)]\nuse super::foo;\nfn product() {\n    let _ = std::env::temp_dir();\n}\n"
+    # C1 / C2: a private helper after isolate_test_krb5 is still testenv.rs
+    _must_die_msg(
+        "isolate_test_krb5 writes host /tmp",
+        check_isolate_test_krb5,
+        _isolate_ok + "fn helper_dir() -> PathBuf {\n    std::env::temp_dir()\n}\n",
     )
+    _must_die_msg(
+        "isolate_test_krb5 writes host /tmp",
+        check_isolate_test_krb5,
+        _isolate_ok
+        + "fn helper_dir() -> PathBuf {\n    PathBuf::from(\"/tmp/kerber-test-krb5\")\n}\n",
+    )
+    # product temp_dir() after a cfg(test) use is not a cfg(test) item
+    # (sibling file: testenv.rs is scanned whole)
     check_isolate_test_krb5(
         _isolate_ok,
         src_files={
@@ -5564,6 +5609,57 @@ jobs:
                 "fn product() { let _ = std::env::temp_dir(); }\n"
             )
         },
+    )
+    # temp_dir() inside a string literal in a cfg(test) mod is not a call
+    check_isolate_test_krb5(
+        _isolate_ok,
+        src_files={
+            "kdcconf.rs": (
+                "#[cfg(test)]\nmod t {\n"
+                '    fn f() { let _ = "temp_dir()"; }\n'
+                "}\n"
+            )
+        },
+    )
+
+    def _isolate_src_file(name: str, src: str) -> None:
+        check_isolate_test_krb5(_isolate_ok, src_files={name: src})
+
+    # U1: lifetime + &'static before the temp_dir() fn (quote scanner ate it)
+    _must_die_msg(
+        "u1.rs cfg(test) writes host /tmp via temp_dir()",
+        _isolate_src_file,
+        "u1.rs",
+        "#[cfg(test)]\nmod t {\n"
+        " fn a<'x>(v: &str) { let r: &'static str = \"k\"; }\n"
+        " fn f(){ std::env::temp_dir(); }\n}\n",
+    )
+    # U3: // comment containing }
+    _must_die_msg(
+        "u3.rs cfg(test) writes host /tmp via temp_dir()",
+        _isolate_src_file,
+        "u3.rs",
+        "#[cfg(test)]\nmod t {\n // closes } here\n fn f(){ std::env::temp_dir(); }\n}\n",
+    )
+    # U6: #[cfg(test)] after code on the same line
+    _must_die_msg(
+        "u6.rs cfg(test) writes host /tmp via temp_dir()",
+        _isolate_src_file,
+        "u6.rs",
+        "fn p(){} #[cfg(test)] mod t { fn f(){ std::env::temp_dir(); } }\n",
+    )
+    # U4: cfg(all(test, …)) / cfg(any(test, …))
+    _must_die_msg(
+        "u4.rs cfg(test) writes host /tmp via temp_dir()",
+        _isolate_src_file,
+        "u4.rs",
+        "#[cfg(all(test, unix))]\nmod t {\n fn f(){ std::env::temp_dir(); }\n}\n",
+    )
+    _must_die_msg(
+        "u4any.rs cfg(test) writes host /tmp via temp_dir()",
+        _isolate_src_file,
+        "u4any.rs",
+        "#[cfg(any(test, windows))]\nmod t {\n fn f(){ std::env::temp_dir(); }\n}\n",
     )
 
     def _isolate_missing_tests() -> None:
@@ -5600,10 +5696,20 @@ jobs:
         )
 
     _iso_src = inspect.getsource(check_isolate_test_krb5)
+    _blank_src = inspect.getsource(_blank_rust)
+    _range_src = inspect.getsource(_cfg_test_ranges)
     if "if not tests_path.is_file():" not in _iso_src:
         raise AssertionError("missing tests.rs must go through is_file()")
     if "tests_missing" in _iso_src:
         raise AssertionError("tests_missing short-circuit must stay gone")
+    if "strip_noncode" not in _blank_src:
+        raise AssertionError("must tokenise via strip_noncode")
+    if "except" not in _blank_src:
+        raise AssertionError("strip_noncode failure must die")
+    if "in_str" in _iso_src or "in_str" in _range_src:
+        raise AssertionError("hand-rolled string scanner must stay gone")
+    if "isolate_scratch_dir" in _iso_src:
+        raise AssertionError("testenv.rs must be scanned whole, not as an isolate chunk")
     _must_die_msg(
         "missing crates/krb5-config/src/tests.rs",
         _isolate_missing_tests,
@@ -5611,6 +5717,7 @@ jobs:
     _isolate_tree_with_tests()
     _must_die(_isolate_tests_rs_temp_dir)
     _must_die(_isolate_src_cfg_test_temp_dir)
+    check_isolate_test_krb5()
     check_unit_evidence_helper()
     check_settle_helper()
     check_evidence_check_tool()

@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.4d isolate host-/tmp scan
+
+- **scripts.** `check_isolate_test_krb5` tokenises through
+  `hygiene_inventory.strip_noncode` then brace-matches on the
+  blanked text, so a `temp_dir()` in a string or comment is not a
+  call. `testenv.rs` is scanned whole (`temp_dir()` in code or
+  `/tmp/kerber-test-krb5` anywhere). `#[cfg(test)]` matches
+  anywhere on the line; `cfg(all|any(..., test, ...))` counts.
+
 ### W3-S3.4c-R residues
 
 - **krb5-config.** `Error::Ccache`'s doc names MIT only for
