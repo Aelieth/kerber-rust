@@ -6,6 +6,15 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.4c-R residues
+
+- **krb5-config.** `Error::Ccache`'s doc names MIT only for
+  `Unknown credential cache type` (`krb5_err.et:190`); the two
+  `%{token}` texts are this crate's (MIT `expand_path.c` says
+  `Invalid token` / `variable missing }`). The unknown-type unit
+  pins that MIT literal. The 4b entry no longer says the six fns
+  keep `Result<_, String>`.
+
 ### W3-S3.4c ccache errors use `Error`
 
 - **krb5-config.** The six public ccache-name fns and private
@@ -31,7 +40,8 @@ this project uses semantic versioning once a crate is published.
   once, into `testenv`. Sibling-only names are `pub(super)`,
   nothing became `pub`. In-src tests moved to `tests.rs` first
   (path `tests`). No wire, text or store behaviour changed. The
-  six `Result<_, String>` ccache fns keep those signatures (4c).
+  six ccache fns still returned `Result<_, String>` here; 4c
+  above takes them to `Error`.
 - **docs.** The parity ledger's `krb5-config/lib.rs` rust-sites
   name the module files; `CcSpec` stays on `lib.rs`.
   `check_isolate_test_krb5` reads `testenv.rs`.

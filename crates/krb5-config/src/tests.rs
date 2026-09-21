@@ -275,7 +275,7 @@ fn expand_ccache_params_unknown_token_display_is_exact() {
 fn parse_ccspec_unknown_type_display_is_exact() {
     assert_eq!(
         parse_ccspec("KEYRING:x").unwrap_err().to_string(),
-        KRB5_CC_UNKNOWN_TYPE
+        "Unknown credential cache type",
     );
 }
 

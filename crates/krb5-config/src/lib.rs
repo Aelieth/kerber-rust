@@ -35,9 +35,10 @@ pub enum Error {
     /// DNS SRV lookup failed.
     #[error("dns srv: {0}")]
     Dns(String),
-    /// Ccache name / `%{token}` expansion. Display is the MIT text
-    /// (`Unknown credential cache type`, `unterminated %{token}`,
-    /// `unknown ccache parameter %{…}`).
+    /// Ccache name / `%{token}` expansion. `Unknown credential cache
+    /// type` is MIT `KRB5_CC_UNKNOWN_TYPE` (`krb5_err.et:190`); the two
+    /// `%{token}` texts are this crate's (MIT `expand_path.c` says
+    /// `Invalid token` / `variable missing }`).
     #[error("{0}")]
     Ccache(String),
 }
