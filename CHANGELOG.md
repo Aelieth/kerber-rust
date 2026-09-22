@@ -60,6 +60,11 @@ this project uses semantic versioning once a crate is published.
   `dump_store_etype`, `write_dump`, and `into_store`.
   `write_dump_path` had no caller and is gone. Types in the public
   dump signatures stay `pub`. No wire or text change.
+- **krb5-kdc.** Audit, plugin, lookaside, and listen items with no
+  external name are `pub(crate)`, including `Lookaside`,
+  `set_client_port`, `bind_udp_tcp`, and `drop_privileges_to`.
+  `ISSUE_TKT` and `VALIDATE_POL` had no caller and are gone. No wire
+  or text change.
 
 ### W3-S3.6 harness tools
 

@@ -41,9 +41,9 @@ pub use ad::{
     sign_reply_pac, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
 };
 pub use audit::{
-    AUTHN_REQ_CL, AuditState, ENCR_REP, ISSUE_TKT, JsonAudit, KdcAudit, REQID_LEN, SRVC_PRINC,
-    VALIDATE_POL, clear_thread_audit, current_audit, enctype_name, ktypes2str, make_tkt_id,
-    new_req_id, rep_etypes2str, set_audit, set_client_port, set_thread_audit,
+    AUTHN_REQ_CL, AuditState, ENCR_REP, JsonAudit, KdcAudit, REQID_LEN, SRVC_PRINC,
+    clear_thread_audit, current_audit, enctype_name, ktypes2str, make_tkt_id, new_req_id,
+    rep_etypes2str, set_audit, set_thread_audit,
 };
 pub use error::Error;
 pub use issue::{
@@ -64,8 +64,7 @@ pub use kdb_dump::{
 pub use listen::{
     BIND_CANDIDATES, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST,
     MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
-    bind_preferred, bind_udp_tcp, drop_privileges, drop_privileges_to, serve, serve_until,
-    shared_dump, shared_store,
+    bind_preferred, drop_privileges, serve, serve_until, shared_dump, shared_store,
 };
 pub use mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
 pub use osa::{

@@ -31,7 +31,7 @@ fn log_dispatch_drop(_udp: bool) {
 
 /// The lookaside reply cache (MIT `kdc/replay.c`), shared across the UDP and
 /// TCP listener threads.
-pub type SharedCache = Arc<Mutex<Lookaside>>;
+pub(crate) type SharedCache = Arc<Mutex<Lookaside>>;
 
 fn lock_cache(cache: &Mutex<Lookaside>) -> std::sync::MutexGuard<'_, Lookaside> {
     cache.lock().unwrap_or_else(PoisonError::into_inner)
@@ -201,7 +201,7 @@ impl Default for ListenLimits {
 /// # Errors
 ///
 /// Returns the first I/O error from either bind.
-pub fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListener)> {
+pub(crate) fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListener)> {
     let udp = UdpSocket::bind(addr)?;
     let tcp = TcpListener::bind(addr)?;
     Ok((udp, tcp))
@@ -264,7 +264,7 @@ pub fn drop_privileges() -> io::Result<bool> {
 /// # Errors
 ///
 /// Unknown user or credential change failure.
-pub fn drop_privileges_to(username: &str) -> io::Result<bool> {
+pub(crate) fn drop_privileges_to(username: &str) -> io::Result<bool> {
     if !nix::unistd::Uid::effective().is_root() {
         tracing::info!(
             event = krb5_log::events::KDC_LISTEN,

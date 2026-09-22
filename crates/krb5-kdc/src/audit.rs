@@ -20,10 +20,6 @@ use crate::store::Principal;
 pub const AUTHN_REQ_CL: i32 = 1;
 /// Determine service principal.
 pub const SRVC_PRINC: i32 = 2;
-/// Validate local and protocol policies.
-pub const VALIDATE_POL: i32 = 3;
-/// Issue ticket.
-pub const ISSUE_TKT: i32 = 4;
 /// Encrypt reply.
 pub const ENCR_REP: i32 = 5;
 
@@ -156,31 +152,31 @@ pub struct AuditState {
     /// SHA-256 hex of the issued ticket ciphertext.
     pub tkt_out_id: Option<String>,
     /// SHA-256 hex of the header / evidence ticket ciphertext.
-    pub tkt_in_id: Option<String>,
+    pub(crate) tkt_in_id: Option<String>,
     /// 31-character alphanumeric request id.
     pub req_id: String,
     /// Client UDP/TCP port.
-    pub cl_port: u32,
+    pub(crate) cl_port: u32,
     /// Client address.
     pub cl_addr: Option<HostAddress>,
     /// KDC status word (`ISSUE`, `NEEDED_PREAUTH`, …). Omitted when empty.
     pub status: Option<String>,
     /// Requested client principal.
-    pub req_client: Option<PrincipalName>,
+    pub(crate) req_client: Option<PrincipalName>,
     /// Requested client realm.
-    pub req_client_realm: Option<String>,
+    pub(crate) req_client_realm: Option<String>,
     /// Requested server principal.
-    pub req_server: Option<PrincipalName>,
+    pub(crate) req_server: Option<PrincipalName>,
     /// Requested server realm.
-    pub req_server_realm: Option<String>,
+    pub(crate) req_server_realm: Option<String>,
     /// `KDCOptions` as MIT's packed integer.
     pub kdc_options: u32,
     /// Requested etypes (`req.avail_etypes`).
-    pub avail_etypes: Vec<i32>,
+    pub(crate) avail_etypes: Vec<i32>,
     /// TGS RENEW bit was set (1) or not (2) on success; 0 when unused.
-    pub tkt_renewed: i32,
+    pub(crate) tkt_renewed: i32,
     /// TGS VALIDATE bit was set (1) or not (2) on success; 0 when unused.
-    pub tkt_validated: i32,
+    pub(crate) tkt_validated: i32,
 }
 
 /// Built-in JSON sink: one `kdc.audit` tracing event per record.
@@ -251,13 +247,13 @@ pub fn current_audit() -> Arc<dyn KdcAudit> {
 }
 
 /// Peer port from the UDP/TCP listener (`kau_init_kdc_req` `cl_port`).
-pub fn set_client_port(port: u32) {
+pub(crate) fn set_client_port(port: u32) {
     CL_PORT.with(|c| c.set(port));
 }
 
 /// Current peer port (0 when the caller is not the listener).
 #[must_use]
-pub fn client_port() -> u32 {
+pub(crate) fn client_port() -> u32 {
     CL_PORT.with(std::cell::Cell::get)
 }
 

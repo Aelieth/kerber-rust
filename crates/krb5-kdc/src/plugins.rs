@@ -380,7 +380,7 @@ pub fn register_preauth(m: Arc<dyn KdcPreauth>) {
 
 /// All modules, built-ins first.
 #[must_use]
-pub fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
+pub(crate) fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
     let mut v: Vec<Arc<dyn KdcPreauth>> = builtins().to_vec();
     v.extend(
         EXTRA
@@ -425,7 +425,7 @@ pub fn register_authdata(m: Arc<dyn KdcAuthdata>) {
 
 /// Loaded kdcauthdata modules (empty unless [`register_authdata`] was called).
 #[must_use]
-pub fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
+pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
     EXTRA_AD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)

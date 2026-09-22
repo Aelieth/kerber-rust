@@ -12,9 +12,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// MIT `STALE_TIME` (`replay.c:59`): two minutes.
-pub const STALE_TIME: Duration = Duration::from_secs(120);
+pub(crate) const STALE_TIME: Duration = Duration::from_secs(120);
 /// MIT `LOOKASIDE_MAX_SIZE` (`replay.c:44`): 10 MiB.
-pub const MAX_SIZE: usize = 10 * 1024 * 1024;
+pub(crate) const MAX_SIZE: usize = 10 * 1024 * 1024;
 /// Rough per-entry overhead, standing in for MIT's `sizeof(struct entry)`.
 const ENTRY_OVERHEAD: usize = 64;
 
@@ -42,7 +42,7 @@ pub enum Check {
 /// A bounded request→reply cache with stale-entry and total-size eviction.
 /// The request bytes are held once, shared by the map and the FIFO, so memory
 /// tracks MIT's accounting (`req_packet + reply_packet + sizeof(entry)`).
-pub struct Lookaside {
+pub(crate) struct Lookaside {
     map: HashMap<Arc<[u8]>, Entry>,
     /// `(key, generation)` in insertion order; the FIFO MIT keeps in `expiration_queue`.
     /// Superseded pairs (whose generation no longer matches the map) are skipped
@@ -88,7 +88,7 @@ impl Lookaside {
     /// a hit resends the cached reply, an in-progress hit drops the duplicate,
     /// and a miss records an in-progress marker so a concurrent duplicate is
     /// dropped while this request is processed.
-    pub fn check_or_mark(&mut self, req: &[u8]) -> Check {
+    pub(crate) fn check_or_mark(&mut self, req: &[u8]) -> Check {
         if let Some(e) = self.map.get(req) {
             return match &e.reply {
                 Some(reply) => Check::Hit(reply.clone()),
