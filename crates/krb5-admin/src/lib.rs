@@ -13,10 +13,7 @@ mod kprop;
 mod listen;
 
 use krb5_crypto::EncryptionType;
-use krb5_kdc::{
-    Acl, AdminOp, KDB_LOCKDOWN_KEYS, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_REQUIRES_PRE_AUTH,
-    PrincipalStore, kadmin_flagspec,
-};
+use krb5_kdc::{Acl, AdminOp, PrincipalStore, kadmin_flagspec};
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
@@ -172,17 +169,6 @@ pub fn strdur(duration: i64) -> String {
         if neg { "-" } else { "" },
         if days == 1 { "day" } else { "days" },
     )
-}
-
-/// MIT `+requires_preauth` (and the matching `-requires_preauth` clear).
-#[must_use]
-pub fn kadmin_attr_bit(name: &str) -> Option<u32> {
-    match name {
-        "requires_preauth" => Some(KDB_REQUIRES_PRE_AUTH),
-        "lockdown_keys" => Some(KDB_LOCKDOWN_KEYS),
-        "ok_to_auth_as_delegate" => Some(KDB_OK_TO_AUTH_AS_DELEGATE),
-        _ => None,
-    }
 }
 
 /// Parse flags after the verb. Unknown `-foo` / `+foo` is an error.
@@ -1065,24 +1051,6 @@ impl<'a> AdminSession<'a> {
     }
 }
 
-/// RFC 3244 kpasswd request: AP-REQ + new password octets.
-///
-/// # Errors
-///
-/// AP-REQ verify or ACL.
-pub fn kpasswd_set(
-    store: &mut PrincipalStore,
-    acl: &Acl,
-    service_key: &krb5_crypto::ProtocolKey,
-    ap_req: &[u8],
-    replay: &ReplayCache,
-    name: &PrincipalName,
-    new_password: &[u8],
-) -> Result<(), Error> {
-    let mut sess = AdminSession::from_ap_req(store, acl, service_key, ap_req, replay)?;
-    sess.change_password(name, new_password)
-}
-
 /// kprop-equivalent: serialize the store (dump) and load on a replica.
 ///
 /// # Errors
@@ -1114,6 +1082,7 @@ mod tests {
     use super::*;
 
     use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
+    use krb5_kdc::{KDB_LOCKDOWN_KEYS, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_REQUIRES_PRE_AUTH};
 
     #[test]
     fn parse_kadmin_args_flags() {

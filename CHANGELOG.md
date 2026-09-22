@@ -35,6 +35,9 @@ this project uses semantic versioning once a crate is published.
   `key_for_kvno`, so those helpers go too. No wire or text change.
 - **krb5-gss.** `wrap_with_ec` is gone. Nothing called it. Wrap still
   goes through `wrap_with_rrc` and `wrap_integ`. No wire or text change.
+- **krb5-admin.** `kadmin_attr_bit` and `kpasswd_set` are gone.
+  Nothing called them. Flag parsing still sets the same attribute
+  bits. No wire or text change.
 
 ### W3-S3.6 harness tools
 
