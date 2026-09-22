@@ -196,9 +196,10 @@ if [ "$NEED_BINS" = 1 ]; then
     BUILD_LOG="$KERBER_SCRATCH/red-at-${BASE:0:12}-build.log"
     (
         cd "$WT"
-        cargo build -p krb5-kdc --bin krb5-kdc --bin krb5-forge-tgt \
+        cargo build -p krb5-kdc --bin krb5-kdc \
             -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd \
-            -p krb5-client --bin krb5-kinit 2>&1 | tee "$BUILD_LOG"
+            -p krb5-client --bin krb5-kinit \
+            -p krb5-tools --bin krb5-forge-tgt 2>&1 | tee "$BUILD_LOG"
     ) || {
         echo "red-at-sha: cargo build failed at $BASE" >&2
         echo "gate_rc=1"

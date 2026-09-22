@@ -148,6 +148,29 @@ fn bootstrap_honours_supported_enctypes_order() {
     assert_eq!(keys, vec![20, 19, 18, 17]);
 }
 
+/// `krb5-forge-tgt` lives in `krb5-tools`. Cargo sets `CARGO_BIN_EXE_*`
+/// only for bins of the package under test, so this integration test
+/// resolves the debug binary from the cargo target dir.
+fn forge_tgt_exe() -> std::path::PathBuf {
+    if let Some(path) = option_env!("CARGO_BIN_EXE_krb5-forge-tgt") {
+        return std::path::PathBuf::from(path);
+    }
+    // The test binary is `target/<profile>/deps/<test>`. The harness bin
+    // is `target/<profile>/krb5-forge-tgt` once `krb5-tools` has been built.
+    let mut path = std::path::PathBuf::from("krb5-forge-tgt");
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(profile) = exe.parent().and_then(|deps| deps.parent())
+    {
+        path = profile.join("krb5-forge-tgt");
+    }
+    if !path.is_file()
+        && let Some(dir) = std::env::var_os("CARGO_TARGET_DIR")
+    {
+        path = std::path::PathBuf::from(dir).join("debug/krb5-forge-tgt");
+    }
+    path
+}
+
 #[test]
 fn tgt_hex_must_use_ticket_etype_not_preferred() {
     let kdc = krb5_config::KdcConf::parse(
@@ -237,7 +260,7 @@ fn tgt_hex_must_use_ticket_etype_not_preferred() {
         hex.push(char::from(b"0123456789abcdef"[(b >> 4) as usize]));
         hex.push(char::from(b"0123456789abcdef"[(b & 0x0f) as usize]));
     }
-    let status = std::process::Command::new(env!("CARGO_BIN_EXE_krb5-forge-tgt"))
+    let status = std::process::Command::new(forge_tgt_exe())
         .args([
             "--ccache",
             in_cc.to_str().unwrap(),
