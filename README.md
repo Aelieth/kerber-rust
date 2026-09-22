@@ -44,6 +44,7 @@ Focused crates under `crates/`:
 | `krb5-kdc` | AS/TGS issue, persist/stash, MIT dump/load, named policies, iprop, plugin traits |
 | `krb5-gss` | GSS wrap/unwrap/MIC, SPNEGO framing (library; no C FFI) |
 | `krb5-admin` | kadmind (AUTH_GSSAPI 300001), kpasswd 464, kprop/kpropd 754, iprop |
+| `krb5-tools` | Harness-only gate tools (`publish = false`). Not a product surface. |
 | `krb5-testkit` | Shared test helpers (`publish = false`, dev-dependency only) |
 
 See [docs/architecture.md](docs/architecture.md) and

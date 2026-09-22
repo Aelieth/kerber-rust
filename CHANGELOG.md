@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.8 dead code and surface
+
+- **krb5-tools.** `tgt_hex_must_use_ticket_etype_not_preferred` lives
+  in `krb5-tools` tests and runs `krb5-forge-tgt` through
+  `CARGO_BIN_EXE_krb5-forge-tgt`. `forge_tgt_exe` and
+  `link_forge_tgt.rs` are gone. The assertion text is unchanged.
+  `cargo nextest run -p krb5-kdc` no longer needs that bin.
+
 ### W3-S3.6 harness tools
 
 - **krb5-kdc.** `start_stop_json` and `AuditState::to_json` return to
