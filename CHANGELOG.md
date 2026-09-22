@@ -40,6 +40,9 @@ this project uses semantic versioning once a crate is published.
   bits. No wire or text change.
 - **krb5-asn1.** `round_trip` is gone. Tests encode and decode
   through their own helpers. No wire or text change.
+- **krb5-types.** The `err` and `pa` modules, and the PAC buffer
+  constants, stay. The module doc says they are the complete MIT
+  tables, including values this crate does not raise.
 
 ### W3-S3.6 harness tools
 

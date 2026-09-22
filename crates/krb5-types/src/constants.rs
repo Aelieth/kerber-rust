@@ -1,4 +1,8 @@
 //! RFC 4120 error codes, key-usage numbers, and PA-DATA types.
+//!
+//! `err` and `pa` are the complete MIT tables, including codes and
+//! pa-types this crate does not raise. The PAC buffer constants in
+//! `pac` are the complete MIT PAC table.
 
 /// RFC 4120 and related error codes used by the client and KDC.
 pub mod err {
