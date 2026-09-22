@@ -1264,9 +1264,6 @@ impl PrincipalRead for Faulty<'_> {
         }
         <PrincipalStore as PrincipalRead>::fetch(self.inner, id)
     }
-    fn krbtgt_keys(&self) -> Result<Vec<krb5_crypto::ProtocolKey>, Error> {
-        <PrincipalStore as PrincipalRead>::krbtgt_keys(self.inner)
-    }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         <PrincipalStore as PrincipalRead>::list_ids(self.inner)
     }

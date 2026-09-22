@@ -17,6 +17,13 @@ this project uses semantic versioning once a crate is published.
   no `-p`, so the same line works before and after the harness crate.
   `ci-policy` requires `hygiene-body-diff` self-test N ≥ 32 and
   `hygiene-fn-diff` self-test N ≥ 64.
+- **krb5-kdc.** `PrincipalRead` no longer has `krbtgt_keys`. The
+  trait method, the `Arc` forward, both product impls, the inherent
+  wrapper, and the two test wrapper impls are gone. A KLLDAP
+  `PrincipalRead` implementor has one fewer method. `krbtgt_key_vec`
+  went with them: those wrappers were its only callers. Issuance
+  still uses `fetch_krbtgt` and `first_current_key`. No wire or
+  text change.
 
 ### W3-S3.6 harness tools
 

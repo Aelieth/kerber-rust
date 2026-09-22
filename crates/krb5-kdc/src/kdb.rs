@@ -9,7 +9,6 @@ use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use krb5_crypto::ProtocolKey;
 use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
@@ -128,12 +127,6 @@ pub trait PrincipalRead: Send + Sync {
     fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
         self.fetch_name(&PrincipalName::krbtgt(self.realm()))
     }
-    /// Local + inter-realm krbtgt keys.
-    ///
-    /// # Errors
-    ///
-    /// Backend failures.
-    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error>;
     /// Principal ids, sorted.
     ///
     /// # Errors
@@ -262,9 +255,6 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error> {
         (**self).fetch(id)
     }
-    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error> {
-        <T as PrincipalRead>::krbtgt_keys(&**self)
-    }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         (**self).list_ids()
     }
@@ -380,18 +370,6 @@ impl PrincipalRead for MemoryStore {
         self.lookups.fetch_add(1, Ordering::SeqCst);
         let id = resolve_alias_id(&self.realm, |k| self.map.get(k), id);
         Ok(id.and_then(|id| self.map.get(&id).cloned()))
-    }
-    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error> {
-        let mut out = Vec::new();
-        if let Some(p) = self.fetch_krbtgt()? {
-            out.extend(p.keys.iter().map(|k| k.key.clone()));
-        }
-        for p in self.map.values() {
-            if p.name.is_krbtgt() && !p.name.is_krbtgt_for(&self.realm) {
-                out.extend(p.keys.iter().map(|k| k.key.clone()));
-            }
-        }
-        Ok(out)
     }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         Ok(self.map.keys().cloned().collect())
@@ -552,9 +530,6 @@ impl PrincipalRead for PrincipalStore {
     }
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
         Ok(self.get_name(name).cloned())
-    }
-    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error> {
-        Ok(self.krbtgt_key_vec())
     }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         Ok(self.ids())

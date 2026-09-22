@@ -764,9 +764,6 @@ impl PrincipalRead for HideLocalTgt<'_> {
     fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
         Ok(None)
     }
-    fn krbtgt_keys(&self) -> Result<Vec<ProtocolKey>, Error> {
-        PrincipalRead::krbtgt_keys(self.0)
-    }
     fn list_ids(&self) -> Result<Vec<String>, Error> {
         PrincipalRead::list_ids(self.0)
     }

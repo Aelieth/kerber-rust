@@ -96,29 +96,6 @@ impl PrincipalStore {
         self.get_name(&PrincipalName::krbtgt(&self.realm))
     }
 
-    /// Local TGT keys plus inter-realm `krbtgt/FOREIGN` keys (incoming referrals).
-    #[must_use]
-    pub fn krbtgt_keys(&self) -> Vec<ProtocolKey> {
-        self.krbtgt_key_vec()
-    }
-
-    pub(crate) fn krbtgt_key_vec(&self) -> Vec<ProtocolKey> {
-        let mut out = Vec::new();
-        if let Some(p) = self.krbtgt() {
-            for k in &p.keys {
-                out.push(k.key.clone());
-            }
-        }
-        for p in self.map.values() {
-            if p.name.is_krbtgt() && !p.name.is_krbtgt_for(&self.realm) {
-                for k in &p.keys {
-                    out.push(k.key.clone());
-                }
-            }
-        }
-        out
-    }
-
     /// ACL-gated keytab export using the existing v2 writer.
     ///
     /// `LOCKDOWN_KEYS` is refused. Local CLI export uses
