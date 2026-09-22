@@ -74,6 +74,9 @@ this project uses semantic versioning once a crate is published.
 - **tool.** Raising `pub(crate)` or `pub(super)` to bare `pub`, with
   the same body, is vis-only. Adding `pub` onto a private item stays
   changed. Self-test count stays 64.
+- **tool.** A doc line added beside a legal visibility edit stays
+  vis-only, so a newly `pub(crate)` helper can satisfy
+  `missing_docs`. Self-test count stays 64.
 
 ### W3-S3.6 harness tools
 
