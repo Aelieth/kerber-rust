@@ -17,15 +17,6 @@ pub fn lookup_srv_kdc(realm: &str) -> Result<Vec<Endpoint>, Error> {
     lookup_srv(&format!("_kerberos._udp.{realm}"), 88)
 }
 
-/// RFC 2782 lookup of `_kerberos-adm._tcp.{realm}`.
-///
-/// # Errors
-///
-/// Returns [`Error::Dns`] when lookup fails.
-pub fn lookup_srv_admin(realm: &str) -> Result<Vec<Endpoint>, Error> {
-    lookup_srv(&format!("_kerberos-adm._tcp.{realm}"), 749)
-}
-
 fn lookup_srv(name: &str, default_port: u16) -> Result<Vec<Endpoint>, Error> {
     let qname = encode_qname(name);
     let mut msg = Vec::with_capacity(12 + qname.len() + 4);

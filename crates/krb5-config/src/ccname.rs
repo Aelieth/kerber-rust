@@ -15,12 +15,6 @@ use super::profile::load_krb5_conf;
 /// MIT `KRB5_CC_UNKNOWN_TYPE`.
 pub const KRB5_CC_UNKNOWN_TYPE: &str = "Unknown credential cache type";
 
-/// `KRB5CCNAME` (FILE: prefix stripped). Non-FILE names are ignored.
-#[must_use]
-pub fn env_ccname() -> Option<PathBuf> {
-    std::env::var_os("KRB5CCNAME").and_then(|v| parse_ccname(&v.to_string_lossy()).ok())
-}
-
 const BUILTIN_CCACHE: &str = "FILE:/tmp/krb5cc_%{uid}";
 
 /// Expand MIT `default_ccache_name` tokens (`%{uid}` / `%{USERID}` / `%{euid}`).
@@ -120,18 +114,6 @@ pub fn default_ccspec() -> Result<CcSpec, Error> {
         .and_then(|c| c.default_ccache_name)
         .unwrap_or_else(|| BUILTIN_CCACHE.to_owned());
     parse_ccspec(&expand_ccache_params(&raw)?)
-}
-
-/// `-c` flag, else `KRB5CCNAME`, else [`default_ccache_name`]. FILE only.
-///
-/// # Errors
-///
-/// [`KRB5_CC_UNKNOWN_TYPE`].
-pub fn resolve_ccname(flag: Option<&str>) -> Result<PathBuf, Error> {
-    match resolve_ccspec(flag)? {
-        CcSpec::File(p) => Ok(p),
-        _ => Err(Error::Ccache(KRB5_CC_UNKNOWN_TYPE.to_owned())),
-    }
 }
 
 /// Split `TYPE:residual`. A residual with no type prefix is FILE.

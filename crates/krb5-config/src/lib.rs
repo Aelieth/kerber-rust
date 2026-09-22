@@ -229,15 +229,14 @@ pub enum CcSpec {
 }
 
 pub use ccname::{
-    KRB5_CC_UNKNOWN_TYPE, default_ccache_name, default_ccspec, env_ccname, expand_ccache_params,
-    parse_ccname, parse_ccspec, resolve_ccname, resolve_ccspec,
+    KRB5_CC_UNKNOWN_TYPE, default_ccache_name, default_ccspec, expand_ccache_params, parse_ccname,
+    parse_ccspec, resolve_ccspec,
 };
 pub use kdcconf::{env_kdc_config, kdc_conf_path};
 pub use profile::{
-    client_realm_path, discover_kdc, discover_kdc_in, env_krb5_config, env_ktname,
-    env_new_password, env_password, host_to_realm, is_numeric_address, krb5_conf_paths,
-    load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
-    udp_preference_limit,
+    client_realm_path, discover_kdc, discover_kdc_in, env_ktname, env_new_password, env_password,
+    host_to_realm, is_numeric_address, krb5_conf_paths, load_krb5_conf, load_krb5_conf_paths,
+    parse_deltat, split_krb5_config_paths, udp_preference_limit,
 };
-pub use srv::{lookup_srv_admin, lookup_srv_kdc};
+pub use srv::lookup_srv_kdc;
 pub use testenv::{isolate_test_krb5, set_test_krb5_paths};

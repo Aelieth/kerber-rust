@@ -518,12 +518,6 @@ pub(super) fn parse_duration_secs(v: &str) -> Option<u64> {
         .and_then(|n| u64::try_from(n).ok())
 }
 
-/// `KRB5_CONFIG` path list (colon-split). Missing env is [`None`].
-#[must_use]
-pub fn env_krb5_config() -> Option<PathBuf> {
-    std::env::var_os("KRB5_CONFIG").map(PathBuf::from)
-}
-
 /// Colon-split `KRB5_CONFIG` (empty components dropped).
 #[must_use]
 pub fn split_krb5_config_paths(value: &str) -> Vec<PathBuf> {
