@@ -235,9 +235,9 @@ impl KdcPolicy for DenyPolicy {
 #[derive(Debug, Default)]
 pub struct DemoPolicy {
     /// AS checks.
-    pub as_checks: AtomicU64,
+    pub(crate) as_checks: AtomicU64,
     /// TGS checks.
-    pub tgs_checks: AtomicU64,
+    pub(crate) tgs_checks: AtomicU64,
 }
 
 impl KdcPolicy for DemoPolicy {

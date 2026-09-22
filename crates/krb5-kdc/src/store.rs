@@ -56,9 +56,9 @@ pub mod kadm5_mask {
     /// `KADM5_PRINCIPAL`.
     pub const PRINCIPAL: u32 = 0x0000_0001;
     /// `KADM5_PRINC_EXPIRE_TIME`.
-    pub const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
+    pub(crate) const PRINC_EXPIRE_TIME: u32 = 0x0000_0002;
     /// `KADM5_PW_EXPIRATION`.
-    pub const PW_EXPIRATION: u32 = 0x0000_0004;
+    pub(crate) const PW_EXPIRATION: u32 = 0x0000_0004;
     /// `KADM5_ATTRIBUTES`.
     pub const ATTRIBUTES: u32 = 0x0000_0010;
     /// `KADM5_MAX_LIFE`.
@@ -70,7 +70,7 @@ pub mod kadm5_mask {
     /// `KADM5_POLICY_CLR`.
     pub const POLICY_CLR: u32 = 0x0000_1000;
     /// `KADM5_MAX_RLIFE`.
-    pub const MAX_RLIFE: u32 = 0x0000_2000;
+    pub(crate) const MAX_RLIFE: u32 = 0x0000_2000;
     /// `KADM5_KEY_DATA`.
     pub const KEY_DATA: u32 = 0x0002_0000;
 }
@@ -392,11 +392,12 @@ impl PrincipalStore {
 pub use alias::MAX_ALIAS_DEPTH;
 pub use flags::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
-    KDB_DISALLOW_PROXIABLE, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
-    KDB_LOCKDOWN_KEYS, KDB_NEW_PRINC, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE,
-    KDB_OK_TO_AUTH_AS_DELEGATE, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH,
-    KDB_REQUIRES_PWCHANGE, KDB_SUPPORT_DESMD5, KDB_V1_BASE_LENGTH,
+    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
+    KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
+    KDB_V1_BASE_LENGTH,
 };
+pub(crate) use flags::{KDB_DISALLOW_PROXIABLE, KDB_NEW_PRINC, KDB_SUPPORT_DESMD5};
 pub use iprop_ulog::{
     IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, UlogEntry,
 };
@@ -404,8 +405,8 @@ pub use keys::{KeyEntry, KeyLookup, random_key};
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy, s2k_params,
 };
-pub use policy::{NamedPolicy, Policy, parse_dict_words, parse_spake_preauth_groups};
-pub use principal::{AdminEnt, KadmData, Principal, TlData, db_args_put_error, strip_db_args};
-pub(crate) use principal::{AsFailState, refresh_kadm_tl};
-pub use rid::{RID_ADMINISTRATOR, RID_FIRST_USER, RID_KRBTGT};
+pub use policy::{NamedPolicy, Policy, parse_dict_words};
+pub use principal::{AdminEnt, KadmData, Principal, TlData, strip_db_args};
+pub(crate) use principal::{AsFailState, db_args_put_error, refresh_kadm_tl};
+pub use rid::{RID_FIRST_USER, RID_KRBTGT};
 pub(crate) use transit::walk_realm_instances;

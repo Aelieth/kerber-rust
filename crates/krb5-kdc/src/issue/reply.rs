@@ -25,7 +25,7 @@ use crate::store::Principal;
 
 /// KRB-ERROR with empty text (`make_too_big_error` / `make_toolong_error`).
 #[must_use]
-pub fn kdc_error_bytes(store: &dyn PrincipalRead, code: i32) -> Vec<u8> {
+pub(crate) fn kdc_error_bytes(store: &dyn PrincipalRead, code: i32) -> Vec<u8> {
     encode_krb_error(store, code, None, None, None, false)
 }
 

@@ -39,7 +39,7 @@ pub struct TlData {
 
 /// `extract_db_args_from_tl_data` + DB2 reject (`kdb5.c:893-945`, `kdb_db2.c:817-822`).
 #[must_use]
-pub fn db_args_put_error(tl: &[TlData]) -> Option<Error> {
+pub(crate) fn db_args_put_error(tl: &[TlData]) -> Option<Error> {
     for t in tl {
         if t.ty != TL_DB_ARGS {
             continue;
@@ -55,7 +55,7 @@ pub fn db_args_put_error(tl: &[TlData]) -> Option<Error> {
     None
 }
 
-/// Remove every `KRB5_TL_DB_ARGS` after [`db_args_put_error`].
+/// Remove every `KRB5_TL_DB_ARGS` after `db_args_put_error`.
 ///
 /// # Errors
 ///
@@ -481,7 +481,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] or [`Error::AlreadyExists`].
-    pub fn create_password_etypes_in(
+    pub(crate) fn create_password_etypes_in(
         &mut self,
         acl: &Acl,
         actor: &str,
@@ -890,7 +890,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] or [`Error::NotFound`].
-    pub fn delete_in(
+    pub(crate) fn delete_in(
         &mut self,
         acl: &Acl,
         actor: &str,
@@ -936,7 +936,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`], [`Error::NotFound`], or [`Error::AlreadyExists`].
-    pub fn rename_in(
+    pub(crate) fn rename_in(
         &mut self,
         acl: &Acl,
         actor: &str,
@@ -1107,7 +1107,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`].
-    pub fn impose_acl_restrictions_in(
+    pub(crate) fn impose_acl_restrictions_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
@@ -1254,7 +1254,7 @@ impl PrincipalStore {
     }
 
     /// Zero the overlay fail count without stamping last_success (interval reset).
-    pub fn clear_as_fail_count(&self, name: &PrincipalName) {
+    pub(crate) fn clear_as_fail_count(&self, name: &PrincipalName) {
         let id = self.lockout_id(name);
         let fallback = self
             .map

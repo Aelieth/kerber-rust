@@ -196,7 +196,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing.
-    pub fn set_password_keepold(
+    pub(crate) fn set_password_keepold(
         &mut self,
         name: &PrincipalName,
         password: &[u8],
@@ -210,7 +210,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing.
-    pub fn set_password_keepold_n(
+    pub(crate) fn set_password_keepold_n(
         &mut self,
         name: &PrincipalName,
         password: &[u8],
@@ -221,7 +221,7 @@ impl PrincipalStore {
         self.set_password_keepold_n_in(name, &realm, password, keepold, &actor)
     }
 
-    /// [`Self::set_password_keepold_n`] for `name@princ_realm`.
+    /// `set_password_keepold_n` for `name@princ_realm`.
     ///
     /// # Errors
     ///

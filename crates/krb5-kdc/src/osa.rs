@@ -10,11 +10,11 @@ use crate::kdb_dump::TL_KADM_DATA;
 use crate::store::{KeyEntry, TlData};
 
 /// `OSA_ADB_PRINC_VERSION_1`.
-pub const OSA_ADB_PRINC_VERSION_1: u32 = 0x1234_5c01;
+pub(crate) const OSA_ADB_PRINC_VERSION_1: u32 = 0x1234_5c01;
 /// `KADM5_POLICY` in `aux_attributes`: a policy is bound.
 pub const KADM5_POLICY: u32 = 0x0000_0800;
 /// `INITIAL_HIST_KVNO` (`server_internal.h`): the history kvno a new record starts at.
-pub const INITIAL_HIST_KVNO: u32 = 2;
+pub(crate) const INITIAL_HIST_KVNO: u32 = 2;
 
 /// One `krb5_key_data` as stored in an `osa_pw_hist_ent`: slot 0 is the key
 /// (`kdb_encrypt_key` form) under the history key, slot 1 the salt.

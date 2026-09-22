@@ -119,7 +119,7 @@ pub struct Policy {
     /// `[realms] dict_file` words, ASCII-lowercased and sorted, for the MIT
     /// `dict` password-quality module (`pwqual_dict.c:66-69` `strcasecmp`
     /// order). Empty = no dictionary.
-    pub dict_words: Vec<String>,
+    pub(crate) dict_words: Vec<String>,
 }
 
 impl Default for Policy {
@@ -173,7 +173,7 @@ pub fn parse_dict_words(text: &str) -> Vec<String> {
 /// MIT `parse_groups` (`groups.c:175-210`): unknown names skipped.
 /// Rust implements P-256 only; other IANA names are skipped.
 #[must_use]
-pub fn parse_spake_preauth_groups(names: &[String]) -> Vec<i32> {
+pub(crate) fn parse_spake_preauth_groups(names: &[String]) -> Vec<i32> {
     let mut out = Vec::new();
     for n in names {
         if n.eq_ignore_ascii_case("P-256") && !out.contains(&krb5_types::spake::GROUP_P256) {
@@ -186,7 +186,7 @@ pub fn parse_spake_preauth_groups(names: &[String]) -> Vec<i32> {
 impl Policy {
     /// MIT `krb5_check_transited_list`: anonymous crealm passes; then capaths if present, else hierarchical.
     #[must_use]
-    pub fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
+    pub(crate) fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
         if crealm == "WELLKNOWN:ANONYMOUS" {
             return true;
         }
@@ -412,7 +412,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`].
-    pub fn set_principal_policy_in(
+    pub(crate) fn set_principal_policy_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
@@ -441,7 +441,7 @@ impl PrincipalStore {
 
     /// Bound named policy, if any.
     #[must_use]
-    pub fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
+    pub(crate) fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         p.pw_policy
             .as_ref()
             .and_then(|n| self.policies.get(n).cloned())

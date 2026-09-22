@@ -9,7 +9,7 @@ use super::principal::Principal;
 use crate::error::Error;
 
 /// Well-known RID: Administrator.
-pub const RID_ADMINISTRATOR: u32 = 500;
+pub(crate) const RID_ADMINISTRATOR: u32 = 500;
 
 /// Well-known RID: krbtgt.
 pub const RID_KRBTGT: u32 = 502;
@@ -46,7 +46,7 @@ impl PrincipalStore {
 
     /// Next RID that would be allocated for an ordinary principal.
     #[must_use]
-    pub fn next_rid(&self) -> u32 {
+    pub(crate) fn next_rid(&self) -> u32 {
         self.next_rid
     }
 

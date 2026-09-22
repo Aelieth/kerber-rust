@@ -166,7 +166,7 @@ pub fn default_principal_flags(spec: &str) -> u32 {
 
 /// One ACL line: a principal pattern and permission flags.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AclEntry {
+pub(crate) struct AclEntry {
     /// Exact `name@REALM` (or glob) as written.
     pub principal: String,
     /// `a` / `*`

@@ -65,6 +65,12 @@ this project uses semantic versioning once a crate is published.
   `set_client_port`, `bind_udp_tcp`, and `drop_privileges_to`.
   `ISSUE_TKT` and `VALIDATE_POL` had no caller and are gone. No wire
   or text change.
+- **krb5-kdc.** Store, ACL, OSA, and realm helpers with no external
+  name are `pub(crate)`. `OsaError` stays `pub` because public OSA
+  decoders return it. `Restrictions::require_attrs` stays `pub`
+  because tests build the struct with `..Default`.
+  `MemoryStore::lookup_count` stays `pub` because its only caller is
+  `cfg(test)`. No wire or text change.
 
 ### W3-S3.6 harness tools
 

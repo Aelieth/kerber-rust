@@ -11,7 +11,7 @@ use krb5_types::PrincipalName;
 use crate::error::Error;
 
 /// MIT master principal name components (`K/M`).
-pub const MASTER_NAME: [&str; 2] = ["K", "M"];
+pub(crate) const MASTER_NAME: [&str; 2] = ["K", "M"];
 
 /// Derive the KDB master key from `password` for `realm`.
 ///

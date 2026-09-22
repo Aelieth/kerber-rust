@@ -35,7 +35,7 @@ mod status;
 mod store;
 pub mod testrealm;
 
-pub use acl::{Acl, AclEntry, AdminOp, Restrictions, kadmin_flagspec};
+pub use acl::{Acl, AdminOp, Restrictions, kadmin_flagspec};
 pub use ad::{
     PacTicket, decrypt_ticket_part, pac_from_ticket_part, should_have_ticket_signature, sign_pac,
     sign_reply_pac, ticket_checksum_der, verify_pac, verify_pac_signatures, wrap_win2k_pac,
@@ -46,8 +46,9 @@ pub use audit::{
     rep_etypes2str, set_audit, set_thread_audit,
 };
 pub use error::Error;
+pub(crate) use issue::kdc_error_bytes;
 pub use issue::{
-    IssuedAs, IssuedTgs, handle_request, handle_request_from, issue_as, issue_tgs, kdc_error_bytes,
+    IssuedAs, IssuedTgs, handle_request, handle_request_from, issue_as, issue_tgs,
     tgs_header_is_crossrealm,
 };
 pub use kdb::{
@@ -66,10 +67,10 @@ pub use listen::{
     MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
     bind_preferred, drop_privileges, serve, serve_until, shared_dump, shared_store,
 };
-pub use mkey::{MASTER_NAME, default_master_etype, master_key_from_password};
+pub use mkey::{default_master_etype, master_key_from_password};
 pub use osa::{
-    INITIAL_HIST_KVNO, KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt,
-    decrypt_entry as decrypt_history_entry, history_entry as encrypt_history_entry,
+    KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt, decrypt_entry as decrypt_history_entry,
+    history_entry as encrypt_history_entry,
 };
 pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
 pub use plugins::{
@@ -80,13 +81,12 @@ pub use plugins::{
 pub use store::{
     AdminEnt, IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED,
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
-    KDB_DISALLOW_PROXIABLE, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
-    KDB_LOCKDOWN_KEYS, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
+    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
     KDB_V1_BASE_LENGTH, KadmData, KeyEntry, KeyLookup, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT,
-    PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, RID_ADMINISTRATOR,
-    RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, TlData, UlogEntry, apply_keysalt_policy,
-    db_args_put_error, kadm5_mask, parse_dict_words, parse_spake_preauth_groups, random_key,
+    PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, RID_FIRST_USER, RID_KRBTGT,
+    S2K_ITERS, TlData, UlogEntry, apply_keysalt_policy, kadm5_mask, parse_dict_words, random_key,
     s2k_params, strip_db_args,
 };
 
@@ -95,7 +95,7 @@ use testrealm::{TEST_ADMIN, documented_kiprop};
 
 /// `admin@<realm>` actor string used by kadmind when no `acl_file` is set.
 #[must_use]
-pub fn admin_id_for_realm(realm: &str) -> String {
+pub(crate) fn admin_id_for_realm(realm: &str) -> String {
     format!("{TEST_ADMIN}@{realm}")
 }
 
@@ -103,13 +103,13 @@ pub fn admin_id_for_realm(realm: &str) -> String {
 /// `kdb5_util create` seeds `kadmin/admin` and `kadmin/changepw`
 /// (`kadm5_create.c:100`).
 #[must_use]
-pub fn kdb5_util_id_for_realm(realm: &str) -> String {
+pub(crate) fn kdb5_util_id_for_realm(realm: &str) -> String {
     format!("kdb5_util@{realm}")
 }
 
 /// `host/testhost.<realm-as-dns>` as NT-SRV-HST.
 #[must_use]
-pub fn host_for_realm(realm: &str) -> PrincipalName {
+pub(crate) fn host_for_realm(realm: &str) -> PrincipalName {
     let inst = format!("testhost.{}", realm.to_ascii_lowercase());
     PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", inst.as_str()])
 }
@@ -166,7 +166,7 @@ pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<
 /// # Errors
 ///
 /// Returns crypto failures from string-to-key or ACL-gated host create.
-pub fn bootstrap_realm(
+pub(crate) fn bootstrap_realm(
     realm: &str,
     user: &str,
     user_password: &[u8],
@@ -176,7 +176,7 @@ pub fn bootstrap_realm(
     bootstrap_realm_with_kdc_conf(realm, user, user_password, admin, admin_password, None)
 }
 
-/// [`bootstrap_realm`] honouring `kdc.conf` `supported_enctypes`.
+/// `bootstrap_realm` honouring `kdc.conf` `supported_enctypes`.
 ///
 /// # Errors
 ///
