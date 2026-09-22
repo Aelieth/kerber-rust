@@ -72,7 +72,10 @@ nesting in the path; a file's (or inline mod's) `#![…]` inner
 attributes are one more item, `module::path::inner-attrs`, so a
 dropped `#![forbid]` or an added `#![allow]` is `changed` / `added` /
 `removed`, while a `//!` module header belongs to no item and is not
-compared. Bodies are compared after a normaliser that keeps string,
+compared. A `fn …;` declaration inside a trait is its own item, and
+the trait item is the header through `{`, so dropping one semicolon
+method removes that method and leaves the trait header identical.
+Bodies are compared after a normaliser that keeps string,
 byte-string, raw-string and char literal contents (whitespace and
 comments are still normalised outside literals). A pair is
 `identical`, `vis-only` (private → `pub(super)` / `pub(crate)`,
@@ -80,7 +83,8 @@ comments are still normalised outside literals). A pair is
 `pub(crate)` / `pub(super)` on the item or a field, including
 brace-less `const` / `static` / `type`, with a vis-stripped rest; a
 `pub(crate)` / `pub(super)` raised to bare `pub` is vis-only, and
-adding bare `pub` onto a private item stays `changed`), `fmt-only`,
+adding bare `pub` onto a private item stays `changed`; `pub` inside
+an identifier such as `pubkey` is not a visibility token), `fmt-only`,
 `doc-only`, or `changed`. Before the vis-stripped compare the text ahead of the
 body is re-flowed: whitespace around punctuation goes, and a trailing
 comma is dropped only when its `(` / `<` follows an identifier that is

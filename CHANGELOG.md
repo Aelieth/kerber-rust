@@ -93,6 +93,11 @@ this project uses semantic versioning once a crate is published.
 - **krb5-kdc.** Fields of crate-private structs (`AclEntry`,
   `S4u2Self`, `SecondTicket`, `FastOk`, `AsFailState`) are
   `pub(crate)`. No wire or text change.
+- **tool.** A `fn …;` inside a trait is its own item, and the trait
+  item is the header through `{`. `PrincipalRead` losing
+  `krbtgt_keys` is a removal, not a changed trait. `pub` at the
+  start of an identifier is not a visibility token. Self-test
+  count is 66.
 
 ### W3-S3.6 harness tools
 

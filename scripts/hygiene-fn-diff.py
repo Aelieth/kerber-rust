@@ -680,8 +680,10 @@ def _restricted_vis_tokens(src: str) -> list[str]:
     return [re.sub(r"\s+", "", t) for t in RESTRICTED_VIS_RE.findall(src)]
 
 
-_ALL_VIS_RE = re.compile(r"\bpub(?:\([^)]*\))?\s*")
-_VIS_TOKEN_RE = re.compile(r"\bpub(?:\([^)]*\))?")
+# `(?!\w)` so `pubkey` is not a visibility token. `\b` alone matches the
+# `pub` prefix of an identifier.
+_ALL_VIS_RE = re.compile(r"\bpub(?:\([^)]*\))?(?!\w)\s*")
+_VIS_TOKEN_RE = re.compile(r"\bpub(?:\([^)]*\))?(?!\w)")
 
 
 def _map_code(src: str, fn) -> str:
@@ -999,10 +1001,84 @@ def scan_non_fn(code: str) -> list[tuple[int, int, str, str]]:
         kind = m.group("kind") or m.group("kind2") or "macro_rules"
         name = m.group("csname") or m.group("name") or m.group("macro")
         end_li, braced = find_term(li, m.end())
+        if braced and kind == "trait":
+            # Header through `{` only. A semicolon method is its own item
+            # (`scan_trait_semi_fns`); a default method with a body is an
+            # `fn` item. Removing one method must not mark the trait changed.
+            items.append((li + 1, end_li + 1, kind, name))
+            continue
         if braced:
             end_li = find_close(end_li, lines[end_li].find("{"))
         items.append((li + 1, end_li + 1, kind, name))
     return items
+
+
+def scan_trait_semi_fns(code: str) -> list[tuple[int, int, str, str]]:
+    """`(start, end, name, trait_name)` for `fn …;` inside a trait. 1-based.
+
+    A default method with a body stays an `fn` item from `scan_items`.
+    """
+    lines = code.split("\n")
+    out: list[tuple[int, int, str, str]] = []
+    depth = 0
+    paren = 0
+    stack: list[tuple[str, int]] = []
+    pending: str | None = None
+    trait_re = re.compile(
+        r"^\s*(?:pub(?:\([^)]*\))?\s+)?trait\s+([A-Za-z_][A-Za-z0-9_]*)\b"
+    )
+
+    def sig_semi_end(li: int, ci: int) -> int | None:
+        """Line index of the terminating `;`, or None when the sig opens a body."""
+        p = br = 0
+        while li < len(lines):
+            s = lines[li]
+            while ci < len(s):
+                ch = s[ci]
+                if ch == "(":
+                    p += 1
+                elif ch == ")":
+                    p -= 1
+                elif ch == "[":
+                    br += 1
+                elif ch == "]":
+                    br -= 1
+                elif ch == "{" and p <= 0 and br <= 0:
+                    return None
+                elif ch == ";" and p <= 0 and br <= 0:
+                    return li
+                ci += 1
+            li += 1
+            ci = 0
+        return None
+
+    for i, line in enumerate(lines):
+        at_item = depth == (stack[-1][1] if stack else 0)
+        if pending is None and at_item:
+            m = trait_re.match(line)
+            if m:
+                pending = m.group(1)
+        if stack and depth == stack[-1][1] and pending is None:
+            fm = FN_RE.match(line)
+            if fm:
+                end = sig_semi_end(i, fm.end())
+                if end is not None:
+                    out.append((i + 1, end + 1, fm.group("name"), stack[-1][0]))
+        for ch in line:
+            if ch == "(":
+                paren += 1
+            elif ch == ")":
+                paren = max(0, paren - 1)
+            elif ch == "{" and paren == 0:
+                depth += 1
+                if pending is not None:
+                    stack.append((pending, depth))
+                    pending = None
+            elif ch == "}" and paren == 0:
+                depth -= 1
+                while stack and depth < stack[-1][1]:
+                    stack.pop()
+    return out
 
 
 def extract(
@@ -1061,6 +1137,19 @@ def extract(
             if key in found:
                 # Never drop a colliding body. Disambiguate with file:line
                 # when two items still share a key.
+                key = f"{key}#{rel}:{start}"
+            found[key] = {"src": src, "file": rel, "name": name, "kind": "fn"}
+        for start, end, name, trait_name in scan_trait_semi_fns(code):
+            if any(a <= start <= b for a, b in test_ranges):
+                continue
+            if _has_test_attr(raw_lines, start):
+                continue
+            inline = _inline_mod_at(code_lines, start)
+            full_mod = "::".join(p for p in (module, inline) if p)
+            key = fn_key(crate, full_mod, f"trait {trait_name}", name)
+            prelude = _attr_doc_start(raw_lines, start)
+            src = "\n".join(raw_lines[prelude:end])
+            if key in found:
                 key = f"{key}#{rel}:{start}"
             found[key] = {"src": src, "file": rel, "name": name, "kind": "fn"}
         fn_spans = [(a, b) for a, b, _, _ in fns]
@@ -1783,6 +1872,49 @@ def _self_test() -> int:
         evaluate(pub_to_crate)
         if pub_to_crate["vis_only"] != 1 or pub_to_crate["changed"] != 0:
             raise SystemExit("hygiene-fn-diff --self-test: pub → pub(crate) must be vis-only")
+        n += 1
+
+        # `pub` is a prefix of `pubkey`, not a visibility token. Narrowing
+        # the fn while renaming that call is a body edit.
+        _write_crate(old, "crates/demo/src/lib.rs", "pub fn f() {\n    pubkey()\n}\n")
+        _write_crate(
+            new, "crates/demo/src/lib.rs", "pub(crate) fn f() {\n    key()\n}\n"
+        )
+        ident = compare_trees(old, new, {}, {}, {}, [])
+        if ident["changed"] != 1 or ident["vis_only"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: pub prefix of an identifier "
+                f"must be changed: {ident}"
+            )
+        _must_red(ident, "pub prefix of an identifier")
+        _write_crate(
+            new, "crates/demo/src/lib.rs", "pub(crate) fn f() {\n    pubkey()\n}\n"
+        )
+        ident_vis = compare_trees(old, new, {}, {}, {}, [])
+        if ident_vis["vis_only"] != 1 or ident_vis["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: vis edit beside pubkey() "
+                f"must stay vis-only: {ident_vis}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "pub trait T {\n    fn kept(&self) -> i32;\n    fn gone(&self);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub trait T {\n    fn kept(&self) -> i32;\n}\n",
+        )
+        semi = compare_trees(old, new, {}, {}, {}, [])
+        if semi["changed"] != 0 or semi["removed"] != ["demo\ttrait T::gone"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: semicolon trait method is a "
+                f"removal, trait header stays: {semi}"
+            )
+        _must_red(semi, "semicolon trait method removal")
         n += 1
 
         names = ["codes", "xdr", "rpc", "auth", "iprop", "dispatch"]
