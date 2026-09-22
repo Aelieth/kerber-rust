@@ -36,6 +36,8 @@ this project uses semantic versioning once a crate is published.
 - **krb5-tools.** `krb5-forge-tgt` is a bin of this crate.
   `debug/krb5-forge-tgt` is unchanged. `red-at-sha.sh` builds
   it from `krb5-tools`. Flags are unchanged.
+- **krb5-tools.** `krb5-pac-extract` is a bin of this crate.
+  `debug/krb5-pac-extract` is unchanged. Flags are unchanged.
 
 ### W3-S3.5 test-realm namespace
 
