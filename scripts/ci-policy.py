@@ -1439,7 +1439,7 @@ _LEDGER_CASES_HDR = re.compile(
 )
 
 
-DIFFSEND_SRC = ROOT / "crates/krb5-protocol/examples/diffsend.rs"
+DIFFSEND_SRC = ROOT / "crates/krb5-tools/src/bin/diffsend.rs"
 
 
 def diffsend_source_cases(src: str) -> set[str]:
@@ -1468,7 +1468,7 @@ def check_diffsend_cases(
         gate = gate_path.read_text()
     if src is None:
         if not DIFFSEND_SRC.is_file():
-            _die("missing crates/krb5-protocol/examples/diffsend.rs")
+            _die(f"missing {DIFFSEND_SRC.relative_to(ROOT)}")
         src = DIFFSEND_SRC.read_text()
     hdr = _LEDGER_CASES_HDR.search(ledger)
     if not hdr:
@@ -1769,9 +1769,8 @@ def _case_text() -> str:
     global _CASE_TEXT
     if _CASE_TEXT is None:
         parts = [q.read_text(errors="replace") for q in (ROOT / "scripts").glob("*-gate.sh")]
-        diffsend = ROOT / "crates/krb5-protocol/examples/diffsend.rs"
-        if diffsend.is_file():
-            parts.append(diffsend.read_text(errors="replace"))
+        if DIFFSEND_SRC.is_file():
+            parts.append(DIFFSEND_SRC.read_text(errors="replace"))
         _CASE_TEXT = "\n".join(parts)
     return _CASE_TEXT
 
@@ -3658,14 +3657,24 @@ def check_gate_no_exit_trap(text: str, name: str = "gate.sh") -> None:
 
 
 def check_build_bins_examples() -> None:
-    """Job-level build-bins.sh must produce every example the gates docker-cp."""
+    """build-bins.sh must build krb5-tools and name the seven harness bins."""
     path = SCRIPTS / "lib" / "build-bins.sh"
     if not path.is_file():
         _die("missing scripts/lib/build-bins.sh")
     text = path.read_text(encoding="utf-8")
-    for ex in ("diffsend",):
+    if "krb5-tools" not in text:
+        _die("build-bins.sh must build -p krb5-tools")
+    for ex in (
+        "kprop-expired-apreq",
+        "ccache-probe",
+        "loadgen",
+        "krb5-vfy-increds",
+        "krb5-forge-tgt",
+        "krb5-pac-extract",
+        "diffsend",
+    ):
         if ex not in text:
-            _die(f"build-bins.sh must build example {ex}")
+            _die(f"build-bins.sh must name harness bin {ex}")
 
 
 def check_gate_cargo_leftover(text: str, name: str = "gate.sh") -> None:
@@ -6016,9 +6025,8 @@ def check_no_case_whitelists(text: str | None = None, name: str = "diffsend.rs")
     if text is not None:
         scan(text, name)
         return
-    diffsend = ROOT / "crates/krb5-protocol/examples/diffsend.rs"
-    if diffsend.is_file():
-        scan(diffsend.read_text(), "crates/krb5-protocol/examples/diffsend.rs")
+    if DIFFSEND_SRC.is_file():
+        scan(DIFFSEND_SRC.read_text(), str(DIFFSEND_SRC.relative_to(ROOT)))
     for path in sorted(SCRIPTS.glob("*-gate.sh")):
         scan(path.read_text(), str(path.relative_to(ROOT)))
     # R2-T7: the differential compare itself (diff.rs) and the shared gate

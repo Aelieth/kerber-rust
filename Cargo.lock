@@ -643,6 +643,7 @@ dependencies = [
 name = "krb5-tools"
 version = "1.0.0"
 dependencies = [
+ "getrandom 0.2.17",
  "krb5-admin",
  "krb5-asn1",
  "krb5-client",

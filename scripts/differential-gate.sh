@@ -45,7 +45,7 @@ shell_container
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local && docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kvno" "$NAME":/tmp/krb5-kvno
-docker cp "${CARGO_TARGET_DIR:-target}/debug/examples/diffsend" "$NAME":/tmp/diffsend
+docker cp "${CARGO_TARGET_DIR:-target}/debug/diffsend" "$NAME":/tmp/diffsend
 docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local /tmp/krb5-kvno /tmp/diffsend
 

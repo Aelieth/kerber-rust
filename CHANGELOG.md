@@ -38,6 +38,9 @@ this project uses semantic versioning once a crate is published.
   it from `krb5-tools`. Flags are unchanged.
 - **krb5-tools.** `krb5-pac-extract` is a bin of this crate.
   `debug/krb5-pac-extract` is unchanged. Flags are unchanged.
+- **krb5-tools.** `diffsend` is a bin. `krb5-protocol` keeps
+  `default = ["diff"]` and its dev-dependency on `krb5-kdc`.
+  The gate copies `debug/diffsend`. Case count stays 111.
 
 ### W3-S3.5 test-realm namespace
 

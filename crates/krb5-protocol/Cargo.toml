@@ -13,10 +13,6 @@ autotests = false
 default = ["diff"]
 diff = []
 
-[[example]]
-name = "diffsend"
-required-features = ["diff"]
-
 [[test]]
 name = "golden_traces"
 path = "tests/golden_traces.rs"
