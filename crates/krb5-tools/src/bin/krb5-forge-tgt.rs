@@ -5,7 +5,7 @@
 //!   krb5-forge-tgt --ccache IN --out OUT --claim-realm REALM --tgt krbtgt/C.TEST --password PW --principal NAME
 //!   optional --reseal-key-hex / --reseal-password + --reseal-principal to encrypt with a different key
 //!   optional `--decrypt-keytab <kt>` auto-selects the key matching the ticket's own etype+kvno
-//!   optional --authtime <+secs|epoch> / --drop-starttime rewrite the ticket times (acceptor NYV tests)
+//!   optional --authtime \<+secs|epoch\> / --drop-starttime rewrite the ticket times (acceptor NYV tests)
 //!   optional `--set-kvno <n>` relabels the ticket's cleartext kvno (acceptor key-pinning tests)
 
 #![forbid(unsafe_code)]

@@ -51,6 +51,10 @@ this project uses semantic versioning once a crate is published.
 - **tool.** `hygiene-fn-diff` extracts `crates/<crate>/examples/*.rs`
   so a harness example can be a move row when it becomes a bin.
   Self-test gains that case.
+- **krb5-tools.** Usage lines in `loadgen`, `diffsend`, and
+  `krb5-forge-tgt` escape `[` and `<` so rustdoc does not read
+  them as links. The rendered usage text is unchanged. Flags,
+  stdout, and stderr are unchanged.
 
 ### W3-S3.5 test-realm namespace
 

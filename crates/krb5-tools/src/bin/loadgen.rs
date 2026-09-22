@@ -1,6 +1,6 @@
 //! Concurrent AS+TGS load driver against a live KDC.
 //!
-//! Usage: loadgen \<kdc-host\> \<user@REALM\> [service]
+//! Usage: loadgen \<kdc-host\> \<user@REALM\> \[service\]
 //!
 //! Password is `KRB5_PASSWORD`. Concurrency is `KERBER_LOAD_WORKERS` (default 8)
 //! times `KERBER_LOAD_ITERS` (default 8), or loop until `KERBER_LOAD_SECONDS`.

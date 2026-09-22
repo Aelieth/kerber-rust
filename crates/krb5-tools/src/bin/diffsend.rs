@@ -1,6 +1,6 @@
 //! Dual-send driver: encode each AS/TGS case once, `exchange_on_tcp` to both KDCs.
 //!
-//! Usage: diffsend <rust-host:port> <mit-host:port> [out-dir]
+//! Usage: diffsend \<rust-host:port\> \<mit-host:port\> \[out-dir\]
 //!
 //! Env: `KRB5_PASSWORD`, `KERBER_PAUSER_PASSWORD`, `KERBER_DIFF_REALM`,
 //! `KERBER_KRBTGT_KEYTAB`, `KERBER_HOST_KEYTAB`.
