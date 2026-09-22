@@ -728,18 +728,18 @@ def classify(old_src: str, new_src: str) -> str:
         if _restricted_vis_tokens(old_src) != _restricted_vis_tokens(new_src):
             return "vis-only"
         return "fmt-only"
-    old_all = _sig_rewrap_norm(_map_code(old_src, lambda text: _ALL_VIS_RE.sub("", text)))
-    new_all = _sig_rewrap_norm(_map_code(new_src, lambda text: _ALL_VIS_RE.sub("", text)))
+    old_stripped = _map_code(old_src, lambda text: _ALL_VIS_RE.sub("", text))
+    new_stripped = _map_code(new_src, lambda text: _ALL_VIS_RE.sub("", text))
+    old_all = _sig_rewrap_norm(old_stripped)
+    new_all = _sig_rewrap_norm(new_stripped)
     vis_ok = _narrowing_only(old_src, new_src) or _restricted_to_pub(old_src, new_src)
     if compare_norm(old_all) == compare_norm(new_all) and vis_ok:
         return "vis-only"
-    # A doc line added beside a legal visibility edit is still vis-only.
-    # `missing_docs` requires the doc on a newly `pub(crate)` helper.
-    old_bare = _sig_rewrap_norm(_strip_doc_lines(old_all))
-    new_bare = _sig_rewrap_norm(_strip_doc_lines(new_all))
-    if compare_norm(old_bare) == compare_norm(new_bare) and (
-        vis_ok or _restricted_vis_tokens(old_src) != _restricted_vis_tokens(new_src)
-    ):
+    # Doc lines beside a legal visibility edit. Skip signature rewrap
+    # here: a `(` inside a `///` comment is not a parameter list.
+    if compare_norm(_strip_doc_lines(old_stripped)) == compare_norm(
+        _strip_doc_lines(new_stripped)
+    ) and (vis_ok or _restricted_vis_tokens(old_src) != _restricted_vis_tokens(new_src)):
         return "vis-only"
     return "changed"
 

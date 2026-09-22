@@ -77,6 +77,9 @@ this project uses semantic versioning once a crate is published.
 - **tool.** A doc line added beside a legal visibility edit stays
   vis-only, so a newly `pub(crate)` helper can satisfy
   `missing_docs`. Self-test count stays 64.
+- **tool.** A visibility compare that also strips doc lines does
+  not treat a parenthesis inside a doc comment as a parameter
+  list. Self-test count stays 64.
 
 ### W3-S3.6 harness tools
 
