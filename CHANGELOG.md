@@ -30,6 +30,9 @@ this project uses semantic versioning once a crate is published.
 - **krb5-tools.** `loadgen` is a bin. `prod-realm-common.sh` copies
   `${CARGO_TARGET_DIR:-$ROOT/target}/debug/loadgen`. The JSON
   summary is unchanged.
+- **krb5-tools.** `krb5-vfy-increds` is a bin of this crate.
+  `debug/krb5-vfy-increds` is unchanged. Flags and exit codes
+  are unchanged.
 
 ### W3-S3.5 test-realm namespace
 

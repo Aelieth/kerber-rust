@@ -28,10 +28,6 @@ path = "src/bin/krb5-kvno.rs"
 name = "krb5-kswitch"
 path = "src/bin/krb5-kswitch.rs"
 
-[[bin]]
-name = "krb5-vfy-increds"
-path = "src/bin/krb5-vfy-increds.rs"
-
 [dependencies]
 chrono.workspace = true
 krb5-asn1.workspace = true
