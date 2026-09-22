@@ -13,6 +13,9 @@ this project uses semantic versioning once a crate is published.
   outside that module. `princ_json`, `addr_json`, `int_array`,
   `JsonObj`, and `json_escape` move with them and stay private.
   Bodies are unchanged. No wire or text change.
+- **krb5-kdc.** `testrealm/mod.rs` is `testrealm.rs`. The child
+  `testrealm/test_plugins.rs` stays. Every `krb5_kdc::testrealm`
+  path is unchanged.
 
 ### W3-S3.5 test-realm namespace
 
