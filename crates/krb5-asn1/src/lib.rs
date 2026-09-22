@@ -79,16 +79,6 @@ pub fn decode_enc_kdc_rep_part(bytes: &[u8]) -> Result<EncKdcRepPart, Error> {
     )))
 }
 
-/// Encode and immediately decode, used by tests and the consumer.
-///
-/// # Errors
-///
-/// Returns encode or decode errors. Successful results are not compared here.
-pub fn round_trip<T: Encode + Decode>(value: &T) -> Result<T, Error> {
-    let bytes = encode(value)?;
-    decode(&bytes)
-}
-
 fn encode_named<T: Encode>(value: &T, pdu: &str) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();

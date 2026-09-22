@@ -38,6 +38,8 @@ this project uses semantic versioning once a crate is published.
 - **krb5-admin.** `kadmin_attr_bit` and `kpasswd_set` are gone.
   Nothing called them. Flag parsing still sets the same attribute
   bits. No wire or text change.
+- **krb5-asn1.** `round_trip` is gone. Tests encode and decode
+  through their own helpers. No wire or text change.
 
 ### W3-S3.6 harness tools
 
