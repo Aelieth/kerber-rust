@@ -25,9 +25,9 @@ use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
 };
 use krb5_kdc::{
-    Acl, S2K_ITERS, TL_MOD_PRINC, as_req, handle_request, load_store, pa_enc_timestamp, save_store,
-    tl_mod_princ_name,
+    Acl, S2K_ITERS, TL_MOD_PRINC, handle_request, load_store, save_store, tl_mod_princ_name,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp};
 
 use krb5_testkit::scratch_dir;
 use krb5_types::{AsRep, PrincipalName, ku};

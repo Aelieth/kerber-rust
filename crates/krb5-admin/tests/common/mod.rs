@@ -344,7 +344,7 @@ pub fn changepw_tgs_ticket(
     use krb5_protocol::{pa_enc_timestamp, tgs_req};
     let as_out = krb5_kdc::issue_as(
         store,
-        &krb5_kdc::as_req(
+        &krb5_protocol::as_req(
             user.clone(),
             TEST_REALM,
             nonce,

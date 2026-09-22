@@ -6,11 +6,12 @@
 use krb5_asn1::{decode, encode};
 use krb5_client::Keytab;
 use krb5_crypto::{KeyUsage, decrypt};
+use krb5_kdc::pac_from_ticket_part;
 use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
     documented_host,
 };
-use krb5_kdc::{as_req, pa_enc_timestamp, pac_from_ticket_part, tgs_req};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{ReplayCache, build_ap_req, verify_ap_req};
 use krb5_types::{EncTicketPart, PrincipalName, ascii, ku};

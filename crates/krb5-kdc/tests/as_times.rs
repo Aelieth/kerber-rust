@@ -23,9 +23,10 @@ use krb5_crypto::{EncryptionType, KeyUsage, decrypt};
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, PrincipalStore, as_req,
-    decrypt_ticket_part, dump_store, pa_enc_timestamp, parse_dump, tgs_req,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, PrincipalStore,
+    decrypt_ticket_part, dump_store, parse_dump,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{TgsReqBuilder, status, user, user_as};
 use krb5_types::{

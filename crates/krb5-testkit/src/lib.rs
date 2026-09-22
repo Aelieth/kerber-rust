@@ -15,9 +15,10 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt, string_to_key};
 use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, documented_host};
 use krb5_kdc::{
-    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, pa_enc_timestamp, sign_reply_pac,
-    ticket_checksum_der, wrap_win2k_pac,
+    IssuedAs, PacTicket, PrincipalStore, S2K_ITERS, sign_reply_pac, ticket_checksum_der,
+    wrap_win2k_pac,
 };
+use krb5_protocol::pa_enc_timestamp;
 
 use krb5_protocol::{pa_for_user, tgs_req};
 use krb5_types::AuthorizationData;

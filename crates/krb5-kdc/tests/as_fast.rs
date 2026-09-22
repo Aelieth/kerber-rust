@@ -21,9 +21,9 @@ use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
 use krb5_kdc::{
-    Error, KeyEntry, NamedPolicy, PrincipalStore, S2K_ITERS, as_req, decrypt_ticket_part,
-    pa_enc_timestamp, random_key, tgs_req,
+    Error, KeyEntry, NamedPolicy, PrincipalStore, S2K_ITERS, decrypt_ticket_part, random_key,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{
     apply_strengthen, armor_key, as_req_sname, attach_fast, attach_fast_with_options,

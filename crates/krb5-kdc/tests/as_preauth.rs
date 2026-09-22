@@ -63,9 +63,10 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{
     Error, KdcEnv, KdcPolicy, KdcPreauth, KeyEntry, Policy, PolicyAdjustment, Principal,
-    PrincipalRead, PrincipalStore, S2K_ITERS, as_req, clear_thread_policy, pa_enc_timestamp,
-    random_key, register_preauth, set_thread_policy, tgs_req,
+    PrincipalRead, PrincipalStore, S2K_ITERS, clear_thread_policy, random_key, register_preauth,
+    set_thread_policy,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{
     armor_key, as_req_sname, attach_fast, build_fast_armor, pa_pac_options, pa_pk_as_req_spki,

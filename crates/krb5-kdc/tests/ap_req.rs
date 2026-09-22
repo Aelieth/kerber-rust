@@ -14,7 +14,8 @@ use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
     documented_admin_id, documented_host,
 };
-use krb5_kdc::{Error, PrincipalStore, as_req, pa_enc_timestamp, tgs_req};
+use krb5_kdc::{Error, PrincipalStore};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{ReplayCache, build_ap_req, verify_ap_req};
 use krb5_testkit::issue_tgt_password;

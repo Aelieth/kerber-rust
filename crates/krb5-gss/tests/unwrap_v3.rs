@@ -7,10 +7,11 @@ use common::issue_tgt;
 
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt, string_to_key};
 use krb5_gss::{DelegCred, Error, GSS_C_DELEG, GSS_C_PROT_READY, GssContext};
+use krb5_kdc::S2K_ITERS;
 use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
-use krb5_kdc::{S2K_ITERS, as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::ReplayCache;
 use krb5_types::{PrincipalName, TicketFlags, ascii, ku};
@@ -160,7 +161,7 @@ fn linked() -> (GssContext, GssContext) {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, 40);
-    let tgs = krb5_kdc::tgs_req(
+    let tgs = krb5_protocol::tgs_req(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,
@@ -244,7 +245,7 @@ fn delegation_sets_the_deleg_flag() {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, 42);
-    let tgs = krb5_kdc::tgs_req(
+    let tgs = krb5_protocol::tgs_req(
         tgt.rep.0.ticket.clone(),
         &tgt.session_key,
         TEST_REALM,

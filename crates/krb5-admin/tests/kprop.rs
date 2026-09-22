@@ -44,11 +44,11 @@ fn kprop_replica_issues_with_same_krbtgt() {
         Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
     )
     .unwrap();
-    let req = krb5_kdc::as_req(
+    let req = krb5_protocol::as_req(
         cname,
         "KERBER.TEST",
         9,
-        Some(vec![krb5_kdc::pa_enc_timestamp(&key).unwrap()]),
+        Some(vec![krb5_protocol::pa_enc_timestamp(&key).unwrap()]),
     )
     .unwrap();
     krb5_kdc::issue_as(&replica, &req).unwrap();
@@ -110,11 +110,11 @@ fn kprop_tcp_replica_issues_as_with_shared_stash() {
         Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
     )
     .unwrap();
-    let req = krb5_kdc::as_req(
+    let req = krb5_protocol::as_req(
         cname,
         TEST_REALM,
         91,
-        Some(vec![krb5_kdc::pa_enc_timestamp(&key).unwrap()]),
+        Some(vec![krb5_protocol::pa_enc_timestamp(&key).unwrap()]),
     )
     .unwrap();
     krb5_kdc::issue_as(&replica, &req).expect("replica issue_as");
@@ -144,11 +144,11 @@ fn kprop_dump_payload_is_version_7_not_kdb3() {
         Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
     )
     .unwrap();
-    let req = krb5_kdc::as_req(
+    let req = krb5_protocol::as_req(
         cname,
         krb5_kdc::testrealm::TEST_REALM,
         92,
-        Some(vec![krb5_kdc::pa_enc_timestamp(&key).unwrap()]),
+        Some(vec![krb5_protocol::pa_enc_timestamp(&key).unwrap()]),
     )
     .unwrap();
     krb5_kdc::issue_as(&replica, &req).expect("dump-codec replica issue_as");
@@ -191,7 +191,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
         .unwrap()
         .key
         .clone();
-    let as_req = krb5_kdc::as_req(
+    let as_req = krb5_protocol::as_req(
         admin.clone(),
         TEST_REALM,
         71,
@@ -265,11 +265,11 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
         Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
     )
     .unwrap();
-    let req = krb5_kdc::as_req(
+    let req = krb5_protocol::as_req(
         cname,
         TEST_REALM,
         93,
-        Some(vec![krb5_kdc::pa_enc_timestamp(&key).unwrap()]),
+        Some(vec![krb5_protocol::pa_enc_timestamp(&key).unwrap()]),
     )
     .unwrap();
     krb5_kdc::issue_as(&replica, &req).expect("MIT-wire replica issue_as");
@@ -303,7 +303,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
         .unwrap()
         .key
         .clone();
-    let as_req = krb5_kdc::as_req(
+    let as_req = krb5_protocol::as_req(
         admin.clone(),
         TEST_REALM,
         81,
@@ -400,7 +400,7 @@ fn kpropd_rejects_when_acl_unset() {
         .unwrap()
         .key
         .clone();
-    let as_req = krb5_kdc::as_req(
+    let as_req = krb5_protocol::as_req(
         host.clone(),
         TEST_REALM,
         83,

@@ -7,7 +7,7 @@ use common::{client_key, isolate_host_krb5};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, unkeyed_checksum};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{
     ReplayCache, build_ap_rep, build_ap_req, build_ap_req_opts, build_krb_cred, build_krb_priv,

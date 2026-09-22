@@ -14,9 +14,8 @@ use krb5_kdc::testrealm::{
     TEST_ADMIN, TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented,
     documented_admin_id,
 };
-use krb5_kdc::{
-    Acl, AdminOp, Error, KDB_REQUIRES_PWCHANGE, PrincipalStore, as_req, pa_enc_timestamp, tgs_req,
-};
+use krb5_kdc::{Acl, AdminOp, Error, KDB_REQUIRES_PWCHANGE, PrincipalStore};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::as_req_sname;
 use krb5_testkit::{password_key, status};

@@ -18,8 +18,9 @@ use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
     Error, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_RENEWABLE, KDB_REQUIRES_PRE_AUTH, PrincipalStore,
-    as_req, decrypt_ticket_part, pa_enc_timestamp, tgs_req,
+    decrypt_ticket_part,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{TgsReqBuilder, admin, s4u_admin, status, user, user_as, user_as_bits};
 use krb5_types::{

@@ -8,9 +8,10 @@ use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
 use krb5_kdc::{
-    MAX_TCP_REQUEST, S2K_ITERS, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, as_req,
-    handle_request, pa_enc_timestamp, serve, shared_store, tgs_req,
+    MAX_TCP_REQUEST, S2K_ITERS, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, handle_request,
+    serve, shared_store,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_types::{AsRep, PrincipalName, err, ku};
 use std::net::UdpSocket;

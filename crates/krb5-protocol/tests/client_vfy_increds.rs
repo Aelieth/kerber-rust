@@ -5,7 +5,7 @@
 mod common;
 use common::client_key;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{
     CcacheCred, CcacheKeyblock, KdcAddr, Keytab, host_princs_from_keytab, keytab_has_server, realm,

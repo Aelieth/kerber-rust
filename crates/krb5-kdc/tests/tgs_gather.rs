@@ -12,10 +12,11 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{
     Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
-    KdcEnv, KeyEntry, PacTicket, Policy, Principal, PrincipalRead, PrincipalStore, as_req,
-    decrypt_ticket_part, handle_request_from, pa_enc_timestamp, pac_from_ticket_part, random_key,
-    sign_pac, tgs_req, ticket_checksum_der, wrap_win2k_pac,
+    KdcEnv, KeyEntry, PacTicket, Policy, Principal, PrincipalRead, PrincipalStore,
+    decrypt_ticket_part, handle_request_from, pac_from_ticket_part, random_key, sign_pac,
+    ticket_checksum_der, wrap_win2k_pac,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{
     TgsReqBuilder, err_of, issue_tgt, issue_tgt_password, password_key, pref_etypes, reseal, status,

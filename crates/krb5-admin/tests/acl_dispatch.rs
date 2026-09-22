@@ -70,7 +70,7 @@ fn kadmind_wire_create_is_visible_after_reload() {
         .unwrap()
         .key
         .clone();
-    let as_req = krb5_kdc::as_req(
+    let as_req = krb5_protocol::as_req(
         admin.clone(),
         TEST_REALM,
         41,

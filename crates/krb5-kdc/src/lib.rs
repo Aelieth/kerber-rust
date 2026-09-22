@@ -62,7 +62,6 @@ pub use kdb_dump::{
     load_dump, load_dump_etype, load_dump_mkey, load_dump_path, parse_dump, tl_mod_princ,
     tl_mod_princ_name, write_dump, write_dump_path, write_dump_path_etype,
 };
-pub use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 pub use listen::{
     BIND_CANDIDATES, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST,
     MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,

@@ -1087,7 +1087,7 @@ fn kpasswd_rfc3244_bumps_kvno() {
         Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
     )
     .unwrap();
-    let as_new = krb5_kdc::as_req(
+    let as_new = krb5_protocol::as_req(
         user.clone(),
         TEST_REALM,
         45,
@@ -1096,7 +1096,7 @@ fn kpasswd_rfc3244_bumps_kvno() {
     .unwrap();
     krb5_kdc::issue_as(&*after, &as_new).expect("AS with RFC 3244 new password");
 
-    let as_old = krb5_kdc::as_req(
+    let as_old = krb5_protocol::as_req(
         user,
         TEST_REALM,
         46,
@@ -1257,7 +1257,7 @@ fn kpasswd_udp_listener_then_issue_as() {
         Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
     )
     .unwrap();
-    let as_new = krb5_kdc::as_req(
+    let as_new = krb5_protocol::as_req(
         user,
         TEST_REALM,
         49,
@@ -1334,7 +1334,7 @@ fn kpasswd_mit_style_subkey_seq0_then_issue_as() {
         Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
     )
     .unwrap();
-    let as_new = krb5_kdc::as_req(
+    let as_new = krb5_protocol::as_req(
         user,
         TEST_REALM,
         52,

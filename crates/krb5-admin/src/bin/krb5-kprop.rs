@@ -13,8 +13,9 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 
 use krb5_admin::{KPROP_PORT, kprop_send_store, kprop_send_store_iprop};
-use krb5_kdc::{as_req, issue_as, issue_tgs, load_store, pa_enc_timestamp, tgs_req};
+use krb5_kdc::{issue_as, issue_tgs, load_store};
 use krb5_protocol::Keytab;
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::PrincipalName;
 
 fn main() {

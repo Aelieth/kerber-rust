@@ -15,10 +15,8 @@ use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_admin_id,
     documented_host,
 };
-use krb5_kdc::{
-    Acl, Error, PrincipalStore, as_req, decrypt_ticket_part, pa_enc_timestamp,
-    pac_from_ticket_part, tgs_req,
-};
+use krb5_kdc::{Acl, Error, PrincipalStore, decrypt_ticket_part, pac_from_ticket_part};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{pa_for_user, pa_pac_options};
 use krb5_testkit::{

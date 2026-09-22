@@ -12,9 +12,10 @@ use krb5_kdc::testrealm::{
     bootstrap_documented, documented_admin_id, documented_host,
 };
 use krb5_kdc::{
-    Error, PacTicket, PrincipalStore, as_req, decrypt_ticket_part, pa_enc_timestamp,
-    pac_from_ticket_part, sign_reply_pac, tgs_req, ticket_checksum_der, wrap_win2k_pac,
+    Error, PacTicket, PrincipalStore, decrypt_ticket_part, pac_from_ticket_part, sign_reply_pac,
+    ticket_checksum_der, wrap_win2k_pac,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::pa_pac_options;
 use krb5_testkit::{

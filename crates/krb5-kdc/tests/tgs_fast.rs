@@ -12,7 +12,8 @@ use krb5_crypto::{
 use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
-use krb5_kdc::{Error, PrincipalStore, as_req, decrypt_ticket_part, pa_enc_timestamp, tgs_req};
+use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part};
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{
     AsOutcome, KdcAddr, apply_strengthen, armor_key, build_fast_armor, tgs_exchange,

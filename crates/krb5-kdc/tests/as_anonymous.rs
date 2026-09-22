@@ -4,7 +4,8 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, p256_generate};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{Error, PrincipalStore, as_req, decrypt_ticket_part, tgs_req};
+use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part};
+use krb5_protocol::{as_req, tgs_req};
 
 use krb5_protocol::{
     armor_key, attach_fast, build_fast_armor, pa_pk_as_req_unsigned, pkinit_reply_key_agile,

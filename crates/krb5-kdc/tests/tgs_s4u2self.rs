@@ -14,9 +14,10 @@ use krb5_kdc::testrealm::{
 };
 use krb5_kdc::{
     Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_OK_TO_AUTH_AS_DELEGATE, PacTicket, PrincipalStore,
-    RID_FIRST_USER, as_req, decrypt_ticket_part, pa_enc_timestamp, pac_from_ticket_part,
-    sign_reply_pac, tgs_req, ticket_checksum_der, verify_pac, wrap_win2k_pac,
+    RID_FIRST_USER, decrypt_ticket_part, pac_from_ticket_part, sign_reply_pac, ticket_checksum_der,
+    verify_pac, wrap_win2k_pac,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{pa_for_user, pa_s4u_x509_user};
 use krb5_testkit::{

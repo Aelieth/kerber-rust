@@ -43,6 +43,9 @@ this project uses semantic versioning once a crate is published.
 - **krb5-types.** The `err` and `pa` modules, and the PAC buffer
   constants, stay. The module doc says they are the complete MIT
   tables, including values this crate does not raise.
+- **krb5-kdc.** The crate no longer re-exports `as_req`,
+  `pa_enc_timestamp`, or `tgs_req`. Callers name `krb5_protocol`.
+  No wire or text change.
 
 ### W3-S3.6 harness tools
 

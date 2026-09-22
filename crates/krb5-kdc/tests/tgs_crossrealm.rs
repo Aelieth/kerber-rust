@@ -12,10 +12,11 @@ use krb5_kdc::testrealm::{
     bootstrap_documented, documented_admin_id, documented_host,
 };
 use krb5_kdc::{
-    Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, RID_KRBTGT, as_req,
-    decrypt_ticket_part, dump_store, dump_store_iprop, load_dump, pa_enc_timestamp,
-    pac_from_ticket_part, tgs_req, ticket_checksum_der, verify_pac_signatures, wrap_win2k_pac,
+    Acl, Error, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, PrincipalStore, RID_KRBTGT,
+    decrypt_ticket_part, dump_store, dump_store_iprop, load_dump, pac_from_ticket_part,
+    ticket_checksum_der, verify_pac_signatures, wrap_win2k_pac,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_testkit::{
     TgsReqBuilder, aes_key, expect_status, issue_tgt_password, issue_tgt_renewable, password_key,

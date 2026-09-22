@@ -3,6 +3,7 @@
 use krb5_crypto::EncryptionType;
 use krb5_kdc::principals::kadmin_history;
 use krb5_kdc::*;
+use krb5_protocol::pa_enc_timestamp;
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -659,8 +660,9 @@ fn serial_ulog_delta_then_issue_as() {
 
 #[test]
 fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
-    use krb5_kdc::{decrypt_ticket_part, pa_enc_timestamp, pac_from_ticket_part};
+    use krb5_kdc::{decrypt_ticket_part, pac_from_ticket_part};
     use krb5_protocol::as_req;
+    use krb5_protocol::pa_enc_timestamp;
     use krb5_types::pac::{PAC_LOGON_INFO, Pac, parse_kerb_validation_info};
 
     let (mut master, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();

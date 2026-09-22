@@ -15,8 +15,9 @@ use krb5_crypto::{EncryptionType, KeyUsage, decrypt, encrypt, p256_generate};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 use krb5_kdc::{
     Error, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_SVR, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH,
-    KDB_REQUIRES_PWCHANGE, PrincipalStore, Restrictions, as_req, pa_enc_timestamp,
+    KDB_REQUIRES_PWCHANGE, PrincipalStore, Restrictions,
 };
+use krb5_protocol::{as_req, pa_enc_timestamp};
 
 use krb5_protocol::{as_req_sname, pa_pk_as_req};
 use krb5_testkit::{TgsReqBuilder, krbtgt, pref_etypes, status, user, user_as_bits};
