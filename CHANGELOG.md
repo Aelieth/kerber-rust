@@ -20,6 +20,10 @@ this project uses semantic versioning once a crate is published.
   `krb5-protocol` is a dependency with `features = ["diff"]`.
   `build-bins.sh` builds it. The seven tools still build from
   their old crates.
+- **krb5-tools.** `kprop-expired-apreq` is a bin and depends on
+  `krb5-admin` for `kprop_expired_ap_req`. The gate copies
+  `debug/kprop-expired-apreq`. Stdout, stderr, and the usage text
+  are unchanged.
 
 ### W3-S3.5 test-realm namespace
 

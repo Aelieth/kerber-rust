@@ -8,4 +8,3 @@ cargo build -p krb5-kdc -p krb5-admin -p krb5-client -p krb5-gss -p krb5-tools -
 cargo build -p krb5-client --example loadgen
 cargo build -p krb5-protocol --example diffsend --features diff
 cargo build -p krb5-protocol --example ccache-probe
-cargo build -p krb5-admin --example kprop-expired-apreq

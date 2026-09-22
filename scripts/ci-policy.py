@@ -3663,7 +3663,7 @@ def check_build_bins_examples() -> None:
     if not path.is_file():
         _die("missing scripts/lib/build-bins.sh")
     text = path.read_text(encoding="utf-8")
-    for ex in ("ccache-probe", "diffsend", "kprop-expired-apreq", "loadgen"):
+    for ex in ("ccache-probe", "diffsend", "loadgen"):
         if ex not in text:
             _die(f"build-bins.sh must build example {ex}")
 
