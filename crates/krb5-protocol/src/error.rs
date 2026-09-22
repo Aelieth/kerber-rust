@@ -115,18 +115,6 @@ impl Error {
         }
     }
 
-    /// Preauth-related KRB-ERROR (25/24).
-    #[must_use]
-    pub fn is_preauth(&self) -> bool {
-        matches!(
-            self,
-            Self::KrbError {
-                code: krb5_types::err::PREAUTH_REQUIRED | krb5_types::err::PREAUTH_FAILED,
-                ..
-            }
-        )
-    }
-
     /// Transport failure from a formatted message (retryable by default).
     #[must_use]
     pub fn transport_msg(msg: impl Into<String>) -> Self {

@@ -27,6 +27,8 @@ this project uses semantic versioning once a crate is published.
 - **krb5-config.** `env_ccname`, `resolve_ccname`, `env_krb5_config`,
   and `lookup_srv_admin` are gone, with their crate-root re-exports.
   Nothing in the workspace called them. No wire or text change.
+- **krb5-protocol.** `Error::is_preauth` and `create_exclusive_secret`
+  are gone. Nothing called them. No wire or text change.
 
 ### W3-S3.6 harness tools
 

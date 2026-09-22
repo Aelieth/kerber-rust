@@ -69,22 +69,6 @@ pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     Ok(())
 }
 
-/// Open `path` for exclusive create with mode 0600 (ccache TOCTOU-safe create).
-///
-/// # Errors
-///
-/// Returns I/O errors. Already-exists is an error (`create_new`).
-#[allow(dead_code)]
-pub fn create_exclusive_secret(path: &Path) -> io::Result<std::fs::File> {
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        opts.mode(0o600);
-    }
-    opts.open(path)
-}
-
 /// Overwrite `path` with zeros, fsync, then unlink (kdestroy).
 ///
 /// Symlinks and non-regular files are refused. Unix `open` uses
