@@ -311,25 +311,4 @@ fn wrap_iov_token(ctx: &mut GssContext, msg: &[u8]) -> Result<Vec<u8>, krb5_gss:
     Ok(tok)
 }
 
-fn read_token(s: &mut TcpStream) -> std::io::Result<Vec<u8>> {
-    let mut hdr = [0u8; 4];
-    s.read_exact(&mut hdr)?;
-    let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(usize::MAX);
-    if n == 0 || n > 1024 * 1024 {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("bad token length {n}"),
-        ));
-    }
-    let mut buf = vec![0u8; n];
-    s.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
-fn write_token(s: &mut TcpStream, tok: &[u8]) -> std::io::Result<()> {
-    let n = u32::try_from(tok.len())
-        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "token too large"))?;
-    s.write_all(&n.to_be_bytes())?;
-    s.write_all(tok)?;
-    s.flush()
-}
+include!("../token_io.rs");

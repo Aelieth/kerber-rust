@@ -44,6 +44,10 @@ this project uses semantic versioning once a crate is published.
 - **krb5-tools.** `hex_decode` is one private function, included by
   `krb5-forge-tgt` and `krb5-pac-extract`. The body matches both
   originals. A bin cannot call a private item of the library.
+- **krb5-gss.** `read_token` and `write_token` are one private
+  pair in `token_io.rs`, included by `krb5-gss-init` and
+  `krb5-gss-accept`. The body is the fully spelled `TcpStream`
+  form. Call sites are unchanged.
 
 ### W3-S3.5 test-realm namespace
 
