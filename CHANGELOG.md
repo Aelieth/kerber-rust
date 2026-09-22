@@ -54,6 +54,12 @@ this project uses semantic versioning once a crate is published.
   `CLIENT_NOT_FOUND`, `SERVER_LOCKED_OUT`, and `SERVER_NOT_ALLOWED`
   stay at the same file and symbol for the ledger. No wire or text
   change.
+- **krb5-kdc.** Dump helpers with no external name are `pub(crate)`:
+  `KDB_DUMP_VERSION_R18`, `TL_MKVNO`, `TL_ACTKVNO`, `TL_KERBER_POLICY`,
+  `SALTTYPE_SPECIAL`, `tl_mod_princ`, `load_dump_mkey`,
+  `dump_store_etype`, `write_dump`, and `into_store`.
+  `write_dump_path` had no caller and is gone. Types in the public
+  dump signatures stay `pub`. No wire or text change.
 
 ### W3-S3.6 harness tools
 

@@ -31,7 +31,7 @@ use crate::store::{
 /// MIT 1.22.2 default (`kdb5_util load_dump version 7`).
 pub const KDB_DUMP_VERSION: u32 = 7;
 /// Older `-r18` header. Princ records match version 7.
-pub const KDB_DUMP_VERSION_R18: u32 = 6;
+pub(crate) const KDB_DUMP_VERSION_R18: u32 = 6;
 
 /// `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put (`kdb5.c:893-945`).
 pub const TL_DB_ARGS: i32 = 0x7fff;
@@ -45,7 +45,7 @@ pub const TL_MOD_PRINC: i32 = 2;
 /// MIT `krb5_dbe_lookup_mod_princ_data` (`kdb5.c:1637-1663`): 4-byte LE
 /// timestamp + NUL-terminated unparsed principal.
 #[must_use]
-pub fn tl_mod_princ(contents: &[u8]) -> Option<(u32, String)> {
+pub(crate) fn tl_mod_princ(contents: &[u8]) -> Option<(u32, String)> {
     if contents.len() < 5 || contents.last() != Some(&0) {
         return None;
     }
@@ -66,17 +66,17 @@ pub fn tl_mod_princ_name(tl: &[TlData]) -> Option<String> {
 /// `KRB5_TL_KADM_DATA`.
 pub const TL_KADM_DATA: i32 = 3;
 /// `KRB5_TL_MKVNO`.
-pub const TL_MKVNO: i32 = 8;
+pub(crate) const TL_MKVNO: i32 = 8;
 /// `KRB5_TL_STRING_ATTRS`.
 pub const TL_STRING_ATTRS: i32 = 0x000b;
 /// `KRB5_TL_ALIAS_TARGET`: NUL-terminated unparsed target of an alias stub.
 pub const TL_ALIAS_TARGET: i32 = 0x000c;
 /// `KRB5_TL_ACTKVNO`.
-pub const TL_ACTKVNO: i32 = 9;
+pub(crate) const TL_ACTKVNO: i32 = 9;
 /// Private `tl_data` type: domain SID + RID (MIT has no SID; opaque round-trip).
 pub const TL_KERBER_SID: i32 = 0x4B01;
 /// Private `tl_data` type: bound named-policy name (UTF-8).
-pub const TL_KERBER_POLICY: i32 = 0x4B02;
+pub(crate) const TL_KERBER_POLICY: i32 = 0x4B02;
 /// Private `tl_data` type: iprop serial (4-byte BE).
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
 /// Private `tl_data` type: password history keys (MIT preserves unknown types).
@@ -84,7 +84,7 @@ pub const TL_KERBER_HIST: i32 = 0x4B04;
 /// `KRB5_KDB_SALTTYPE_NORMAL`.
 pub const SALTTYPE_NORMAL: i32 = 0;
 /// `KRB5_KDB_SALTTYPE_SPECIAL`.
-pub const SALTTYPE_SPECIAL: i32 = 4;
+pub(crate) const SALTTYPE_SPECIAL: i32 = 4;
 
 /// Dump/load failure.
 #[derive(Debug, thiserror::Error)]
@@ -203,7 +203,7 @@ impl DumpFile {
     /// # Errors
     ///
     /// Crypto or name-parse failures.
-    pub fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
+    pub(crate) fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         for p in &self.princs {
             if let Some(e) = crate::store::db_args_put_error(&p.tl_data) {
                 return Err(DumpError::Format(format!("{e} while storing {}", p.name)));
@@ -404,7 +404,7 @@ pub fn load_dump_etype(
 /// # Errors
 ///
 /// Parse or crypto failures.
-pub fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
+pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
     parse_dump(text)?.into_store(mkey)
 }
 
@@ -435,7 +435,7 @@ pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<Stri
 /// # Errors
 ///
 /// Crypto failures.
-pub fn dump_store_etype(
+pub(crate) fn dump_store_etype(
     store: &PrincipalStore,
     master_password: &[u8],
     etype: EncryptionType,
@@ -449,7 +449,7 @@ pub fn dump_store_etype(
 /// # Errors
 ///
 /// Crypto failures.
-pub fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
+pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
     let now = unix_now();
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
     princs.sort_by_key(|p| {
@@ -498,20 +498,7 @@ pub fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, 
     Ok(out)
 }
 
-/// Write a dump file (0600).
-///
-/// # Errors
-///
-/// Crypto or I/O failures.
-pub fn write_dump_path(
-    store: &PrincipalStore,
-    path: &Path,
-    master_password: &[u8],
-) -> Result<(), DumpError> {
-    write_dump_path_etype(store, path, master_password, default_master_etype())
-}
-
-/// [`write_dump_path`] with an explicit master-key etype.
+/// Write a dump file (0600) with an explicit master-key etype.
 ///
 /// # Errors
 ///
