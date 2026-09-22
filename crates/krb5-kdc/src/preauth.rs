@@ -13,6 +13,7 @@ use krb5_types::{
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
 };
 
+use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::status;
@@ -135,25 +136,6 @@ fn fast_req_body_der(plain: &[u8]) -> Option<Vec<u8>> {
         cur = rest;
     }
     None
-}
-
-fn take_der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-    let tag = *input.first()?;
-    let first = *input.get(1)?;
-    let (hlen, ln) = if first < 128 {
-        (1usize, usize::from(first))
-    } else if first == 0x81 && input.len() >= 3 {
-        (2, usize::from(input[2]))
-    } else if first == 0x82 && input.len() >= 4 {
-        (3, usize::from(u16::from_be_bytes([input[2], input[3]])))
-    } else {
-        return None;
-    };
-    let start = 1 + hlen;
-    let end = start.checked_add(ln)?;
-    let inner = input.get(start..end)?;
-    let rest = input.get(end..)?;
-    Some((tag, inner, rest))
 }
 
 fn verify_fast_req_checksum(

@@ -87,6 +87,9 @@ this project uses semantic versioning once a crate is published.
   module allows `clippy::must_use_candidate`: that lint applies only
   to a `pub` function, and `#[must_use]` would not match the KDC
   copy. No wire or text change.
+- **krb5-kdc.** `take_der` is one `pub(crate)` function in `der`.
+  `kdc_util` and `preauth` both call it. `take_der_slice` stays
+  separate. No wire or text change.
 
 ### W3-S3.6 harness tools
 

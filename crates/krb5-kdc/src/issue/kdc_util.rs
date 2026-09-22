@@ -16,6 +16,7 @@ use krb5_types::{
 };
 
 use super::as_req::is_anonymous_principal;
+use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
 use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
@@ -470,25 +471,6 @@ pub(super) fn kdc_req_body_der(raw: &[u8]) -> Option<&[u8]> {
         cur = rest;
     }
     None
-}
-
-fn take_der(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-    let tag = *input.first()?;
-    let first = *input.get(1)?;
-    let (hlen, ln) = if first < 128 {
-        (1usize, usize::from(first))
-    } else if first == 0x81 && input.len() >= 3 {
-        (2, usize::from(input[2]))
-    } else if first == 0x82 && input.len() >= 4 {
-        (3, usize::from(u16::from_be_bytes([input[2], input[3]])))
-    } else {
-        return None;
-    };
-    let start = 1 + hlen;
-    let end = start.checked_add(ln)?;
-    let inner = input.get(start..end)?;
-    let rest = input.get(end..)?;
-    Some((tag, inner, rest))
 }
 
 /// MIT `s4u2self_forwardable` (`kdc_util.c:1625-1644`).

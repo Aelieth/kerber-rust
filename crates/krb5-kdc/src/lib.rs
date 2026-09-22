@@ -19,6 +19,7 @@
 mod acl;
 mod ad;
 mod audit;
+mod der;
 mod error;
 mod issue;
 mod kdb;
