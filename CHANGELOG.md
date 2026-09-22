@@ -46,6 +46,9 @@ this project uses semantic versioning once a crate is published.
 - **krb5-kdc.** The crate no longer re-exports `as_req`,
   `pa_enc_timestamp`, or `tgs_req`. Callers name `krb5_protocol`.
   No wire or text change.
+- **tool.** `hygiene-fn-diff` treats a bare `pub` narrowed to
+  `pub(crate)` or `pub(super)` as vis-only. A widening to bare `pub`
+  stays changed. Self-test count stays 64.
 
 ### W3-S3.6 harness tools
 

@@ -75,10 +75,11 @@ dropped `#![forbid]` or an added `#![allow]` is `changed` / `added` /
 compared. Bodies are compared after a normaliser that keeps string,
 byte-string, raw-string and char literal contents (whitespace and
 comments are still normalised outside literals). A pair is
-`identical`, `vis-only` (private → `pub(super)` / `pub(crate)` or
-`pub(crate)` ↔ `pub(super)` on the item or a field, including
-brace-less `const` / `static` / `type`, with a vis-stripped rest; any
-change to or from bare `pub` stays `changed`), `fmt-only`, `doc-only`,
+`identical`, `vis-only` (private → `pub(super)` / `pub(crate)`,
+`pub(crate)` ↔ `pub(super)`, or bare `pub` narrowed to
+`pub(crate)` / `pub(super)` on the item or a field, including
+brace-less `const` / `static` / `type`, with a vis-stripped rest; a
+widening to bare `pub` stays `changed`), `fmt-only`, `doc-only`,
 or `changed`. Before the vis-stripped compare the text ahead of the
 body is re-flowed: whitespace around punctuation goes, and a trailing
 comma is dropped only when its `(` / `<` follows an identifier that is

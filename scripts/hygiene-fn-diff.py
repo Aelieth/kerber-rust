@@ -680,6 +680,43 @@ def _restricted_vis_tokens(src: str) -> list[str]:
     return [re.sub(r"\s+", "", t) for t in RESTRICTED_VIS_RE.findall(src)]
 
 
+_ALL_VIS_RE = re.compile(r"\bpub(?:\([^)]*\))?\s*")
+_VIS_TOKEN_RE = re.compile(r"\bpub(?:\([^)]*\))?")
+
+
+def _map_code(src: str, fn) -> str:
+    return "".join(fn(text) if is_code else text for is_code, text in _literal_spans(src))
+
+
+def _vis_rank(token: str) -> int:
+    """Bare `pub` outranks `pub(crate)` / `pub(super)` / `pub(in …)`."""
+    compact = re.sub(r"\s+", "", token)
+    if compact == "pub":
+        return 2
+    if compact.startswith("pub("):
+        return 1
+    return 0
+
+
+def _code_vis_tokens(src: str) -> list[str]:
+    tokens: list[str] = []
+    for is_code, text in _literal_spans(src):
+        if is_code:
+            tokens.extend(_VIS_TOKEN_RE.findall(text))
+    return [re.sub(r"\s+", "", tok) for tok in tokens]
+
+
+def _narrowing_only(old_src: str, new_src: str) -> bool:
+    """True when every visibility edit drops bare `pub` toward a restricted vis."""
+    old_toks = _code_vis_tokens(old_src)
+    new_toks = _code_vis_tokens(new_src)
+    if len(old_toks) != len(new_toks) or old_toks == new_toks:
+        return False
+    return all(_vis_rank(new) <= _vis_rank(old) for old, new in zip(old_toks, new_toks)) and any(
+        _vis_rank(new) < _vis_rank(old) for old, new in zip(old_toks, new_toks)
+    )
+
+
 def classify(old_src: str, new_src: str) -> str:
     if compare_norm(old_src) == compare_norm(new_src):
         return "identical"
@@ -691,6 +728,10 @@ def classify(old_src: str, new_src: str) -> str:
         if _restricted_vis_tokens(old_src) != _restricted_vis_tokens(new_src):
             return "vis-only"
         return "fmt-only"
+    old_all = _sig_rewrap_norm(_map_code(old_src, lambda text: _ALL_VIS_RE.sub("", text)))
+    new_all = _sig_rewrap_norm(_map_code(new_src, lambda text: _ALL_VIS_RE.sub("", text)))
+    if compare_norm(old_all) == compare_norm(new_all) and _narrowing_only(old_src, new_src):
+        return "vis-only"
     return "changed"
 
 
@@ -1711,9 +1752,9 @@ def _self_test() -> int:
             "pub(crate) fn ready(x: i32) -> i32 { x + 1 }\n",
         )
         pub_to_crate = compare_trees(old, new, {}, {}, {}, [])
-        if pub_to_crate["changed"] != 1:
-            raise SystemExit("hygiene-fn-diff --self-test: pub → pub(crate) must be changed")
-        _must_red(pub_to_crate, "pub → pub(crate)")
+        evaluate(pub_to_crate)
+        if pub_to_crate["vis_only"] != 1 or pub_to_crate["changed"] != 0:
+            raise SystemExit("hygiene-fn-diff --self-test: pub → pub(crate) must be vis-only")
         n += 1
 
         names = ["codes", "xdr", "rpc", "auth", "iprop", "dispatch"]
