@@ -217,9 +217,9 @@ impl Principal {
 /// Process-local AS fail overlay (count + timestamps). Dump rows stay stale.
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct AsFailState {
-    pub count: u32,
-    pub last_failed: u32,
-    pub last_success: u32,
+    pub(crate) count: u32,
+    pub(crate) last_failed: u32,
+    pub(crate) last_success: u32,
 }
 
 /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3`

@@ -20,11 +20,11 @@ use crate::status;
 use crate::store::{KeyLookup, Principal};
 
 pub(crate) struct FastOk {
-    pub armor_key: ProtocolKey,
-    pub inner_padata: Vec<PaData>,
-    pub inner_body: Vec<u8>,
-    pub nonce: u32,
-    pub fast_options: krb5_types::fast::FastOptions,
+    pub(crate) armor_key: ProtocolKey,
+    pub(crate) inner_padata: Vec<PaData>,
+    pub(crate) inner_body: Vec<u8>,
+    pub(crate) nonce: u32,
+    pub(crate) fast_options: krb5_types::fast::FastOptions,
 }
 
 /// Unwrap PA-FX-FAST from an AS-REQ. `body_der` is the wire KDC-REQ-BODY.

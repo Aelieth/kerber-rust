@@ -645,10 +645,10 @@ pub fn pac_from_ticket_part(part: &EncTicketPart) -> Option<Vec<u8>> {
 
 /// Result of `kdc_process_s4u2self_req` (`kdc_util.c:1556-1621`).
 pub(crate) struct S4u2Self {
-    pub user: PrincipalName,
-    pub realm: String,
-    pub local: Option<Principal>,
-    pub x509: Option<krb5_types::s4u::PaS4uX509User>,
+    pub(crate) user: PrincipalName,
+    pub(crate) realm: String,
+    pub(crate) local: Option<Principal>,
+    pub(crate) x509: Option<krb5_types::s4u::PaS4uX509User>,
 }
 
 /// S4U2Self: 130 wins over 129 (`kdc_util.c:1570-1586`).
@@ -897,9 +897,9 @@ pub(crate) fn make_s4u2self_rep(
 
 /// Decrypted second ticket (`decrypt_2ndtkt`).
 pub(crate) struct SecondTicket {
-    pub part: EncTicketPart,
-    pub server: Principal,
-    pub pac: Option<Vec<u8>>,
+    pub(crate) part: EncTicketPart,
+    pub(crate) server: Principal,
+    pub(crate) pac: Option<Vec<u8>>,
 }
 
 /// MIT `verify_deleg_pac` (`tgs_policy.c:366-421`).

@@ -168,31 +168,31 @@ pub fn default_principal_flags(spec: &str) -> u32 {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct AclEntry {
     /// Exact `name@REALM` (or glob) as written.
-    pub principal: String,
+    pub(crate) principal: String,
     /// `a` / `*`
-    pub add: bool,
+    pub(crate) add: bool,
     /// `d` / `*`
-    pub delete: bool,
+    pub(crate) delete: bool,
     /// `i` (inquire) / `*`
-    pub inquire: bool,
+    pub(crate) inquire: bool,
     /// `e` (extract keys). MIT does not include this in `*`/`x`.
-    pub extract: bool,
+    pub(crate) extract: bool,
     /// `c` (changepw) / `*`
-    pub changepw: bool,
+    pub(crate) changepw: bool,
     /// `m` (modify) / `*`
-    pub modify: bool,
+    pub(crate) modify: bool,
     /// `s` (setkey) / `*`
-    pub setkey: bool,
+    pub(crate) setkey: bool,
     /// `l` (list) / `*`
-    pub list: bool,
+    pub(crate) list: bool,
     /// `p` (propagate) / `*`
-    pub propagate: bool,
+    pub(crate) propagate: bool,
     /// Parsed client; `None` is MIT `*` (any).
     client: Option<PrincPat>,
     /// Parsed target; `None` is missing or `*` (any).
     target: Option<PrincPat>,
     /// Optional restrictions imposed on create/modify.
-    pub restrictions: Option<Restrictions>,
+    pub(crate) restrictions: Option<Restrictions>,
 }
 
 /// Ordered ACL; first matching principal wins. Unlisted principals are denied.
