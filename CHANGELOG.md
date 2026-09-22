@@ -49,6 +49,11 @@ this project uses semantic versioning once a crate is published.
 - **tool.** `hygiene-fn-diff` treats a bare `pub` narrowed to
   `pub(crate)` or `pub(super)` as vis-only. A widening to bare `pub`
   stays changed. Self-test count stays 64.
+- **krb5-kdc.** Every `status` constant is `pub(crate)`. The module
+  is private, so the names were never a path outside the crate.
+  `CLIENT_NOT_FOUND`, `SERVER_LOCKED_OUT`, and `SERVER_NOT_ALLOWED`
+  stay at the same file and symbol for the ledger. No wire or text
+  change.
 
 ### W3-S3.6 harness tools
 
