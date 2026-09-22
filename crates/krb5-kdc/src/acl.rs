@@ -355,12 +355,6 @@ impl Acl {
             .and_then(|e| e.restrictions.as_ref())
     }
 
-    /// kadm5.acl principal glob (`*/admin@REALM`, `host/*@REALM`).
-    #[must_use]
-    pub fn name_matches(pattern: &str, actor: &str) -> bool {
-        principal_matches(pattern, actor)
-    }
-
     fn find(&self, actor: &str, target: Option<&str>) -> Option<&AclEntry> {
         let actor_pat = parse_princ_pat(actor).ok()?;
         let target_pat = target.and_then(|t| parse_princ_pat(t).ok());
@@ -795,16 +789,6 @@ fn match_princ(
         }
     }
     true
-}
-
-fn principal_matches(pattern: &str, actor: &str) -> bool {
-    if pattern == actor {
-        return true;
-    }
-    let (Ok(p), Ok(a)) = (parse_princ_pat(pattern), parse_princ_pat(actor)) else {
-        return false;
-    };
-    match_princ(&p, &a, false, None)
 }
 
 #[cfg(test)]

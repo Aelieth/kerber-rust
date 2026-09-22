@@ -29,6 +29,10 @@ this project uses semantic versioning once a crate is published.
   Nothing in the workspace called them. No wire or text change.
 - **krb5-protocol.** `Error::is_preauth` and `create_exclusive_secret`
   are gone. Nothing called them. No wire or text change.
+- **krb5-kdc.** `name_matches`, `key_kvno`, and `chrand_keepold_n_in`
+  are gone. `name_matches` was the only caller of the private
+  `principal_matches` helper, and `key_kvno` was the only caller of
+  `key_for_kvno`, so those helpers go too. No wire or text change.
 
 ### W3-S3.6 harness tools
 

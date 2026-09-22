@@ -208,21 +208,6 @@ impl PrincipalStore {
         })
     }
 
-    /// Key of `etype` at `kvno` for principal `name`.
-    #[must_use]
-    pub fn key_kvno(
-        &self,
-        name: &PrincipalName,
-        etype: EncryptionType,
-        kvno: Option<u32>,
-    ) -> Option<&KeyEntry> {
-        let p = self.get_name(name)?;
-        match kvno {
-            Some(v) => p.key_for_kvno(etype, v),
-            None => p.key_for(etype),
-        }
-    }
-
     /// Replace long-term keys with a new random kvno (kadm5 `chrand`).
     ///
     /// Default MIT `cpw -randkey` / `ktadd` does not keep old kvnos, so the
@@ -248,21 +233,6 @@ impl PrincipalStore {
         let realm = self.realm.clone();
         let actor = default_mod_actor(&realm);
         self.chrand_etypes_keepold_in(name, &realm, &[], keepold, &actor)
-    }
-
-    /// [`Self::chrand_keepold_n`] for `name@princ_realm`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::NotFound`] or RNG failure.
-    pub fn chrand_keepold_n_in(
-        &mut self,
-        name: &PrincipalName,
-        princ_realm: &str,
-        keepold: u32,
-        actor: &str,
-    ) -> Result<Vec<KeyEntry>, Error> {
-        self.chrand_etypes_keepold_in(name, princ_realm, &[], keepold, actor)
     }
 
     /// [`Self::chrand_etypes_keepold`] for `name@princ_realm`.

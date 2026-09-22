@@ -342,15 +342,6 @@ impl Principal {
         })
     }
 
-    /// Key matching `etype` and `kvno`.
-    #[must_use]
-    pub fn key_for_kvno(&self, etype: EncryptionType, kvno: u32) -> Option<&KeyEntry> {
-        self.keys
-            .iter()
-            .find(|k| k.etype == etype && k.kvno == kvno)
-            .or_else(|| self.key_for(etype))
-    }
-
     /// Preferred stored key (highest etype in [`EncryptionType::preferred`]).
     #[must_use]
     pub fn best_key(&self) -> Option<&KeyEntry> {
