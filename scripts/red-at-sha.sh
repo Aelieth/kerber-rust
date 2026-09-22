@@ -199,7 +199,7 @@ if [ "$NEED_BINS" = 1 ]; then
         cargo build -p krb5-kdc --bin krb5-kdc \
             -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd \
             -p krb5-client --bin krb5-kinit \
-            -p krb5-tools --bin krb5-forge-tgt 2>&1 | tee "$BUILD_LOG"
+            --bin krb5-forge-tgt 2>&1 | tee "$BUILD_LOG"
     ) || {
         echo "red-at-sha: cargo build failed at $BASE" >&2
         echo "gate_rc=1"

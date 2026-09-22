@@ -3007,8 +3007,8 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 31
-HYGIENE_BODY_DIFF_MIN_CASES = 24
-HYGIENE_FN_DIFF_MIN_CASES = 63
+HYGIENE_BODY_DIFF_MIN_CASES = 32
+HYGIENE_FN_DIFF_MIN_CASES = 64
 HYGIENE_INVENTORY_MIN_CASES = 2
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
@@ -5383,7 +5383,7 @@ jobs:
     check_hygiene_body_diff_self_test(
         'def _self_test():\n    assert_eq!(1, 2) vs user_as helper "a  b" r"a\\n\\nb"\n'
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-body-diff: self-test ok (24 cases)')\n"
+        "        print('hygiene-body-diff: self-test ok (32 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_body_diff_self_test, "def main():\n    return 0\n")
@@ -5399,14 +5399,14 @@ jobs:
         '    """assert_eq!(1, 2) vs user_as helper "a  b" r"a\\n\\nb" """\n'
         "    return None\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-body-diff: self-test ok (24 cases)')\n"
+        "        print('hygiene-body-diff: self-test ok (32 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
     )
     check_hygiene_fn_diff_self_test(
         "def _self_test():\n    x + 2 phase_b pub(crate)\n"
         "    # unused-accept fixture must be otherwise green\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (63 cases)')\n"
+        "        print('hygiene-fn-diff: self-test ok (64 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_fn_diff_self_test, "def main():\n    return 0\n")
@@ -5422,7 +5422,7 @@ jobs:
         '    """x + 2 phase_b pub(crate)"""\n'
         "    return None\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (63 cases)')\n"
+        "        print('hygiene-fn-diff: self-test ok (64 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
     )
     with tempfile.TemporaryDirectory() as tmp:

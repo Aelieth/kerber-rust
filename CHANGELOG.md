@@ -13,6 +13,10 @@ this project uses semantic versioning once a crate is published.
   `CARGO_BIN_EXE_krb5-forge-tgt`. `forge_tgt_exe` and
   `link_forge_tgt.rs` are gone. The assertion text is unchanged.
   `cargo nextest run -p krb5-kdc` no longer needs that bin.
+- **tool.** `red-at-sha.sh` builds `krb5-forge-tgt` with `--bin` and
+  no `-p`, so the same line works before and after the harness crate.
+  `ci-policy` requires `hygiene-body-diff` self-test N ≥ 32 and
+  `hygiene-fn-diff` self-test N ≥ 64.
 
 ### W3-S3.6 harness tools
 
