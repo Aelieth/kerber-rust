@@ -32,7 +32,7 @@ prod_wait_log() {
 }
 
 prod_stage_loadgen() {
-    local bin="$ROOT/target/debug/examples/loadgen"
+    local bin="${CARGO_TARGET_DIR:-$ROOT/target}/debug/loadgen"
     [ -x "$bin" ] || {
         echo "missing $bin" >&2
         return 1

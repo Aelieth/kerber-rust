@@ -27,6 +27,9 @@ this project uses semantic versioning once a crate is published.
 - **krb5-tools.** `ccache-probe` is a bin. The ccache gate and
   `boot-shell.sh` copy `debug/ccache-probe`. Commands and exit
   codes are unchanged.
+- **krb5-tools.** `loadgen` is a bin. `prod-realm-common.sh` copies
+  `${CARGO_TARGET_DIR:-$ROOT/target}/debug/loadgen`. The JSON
+  summary is unchanged.
 
 ### W3-S3.5 test-realm namespace
 

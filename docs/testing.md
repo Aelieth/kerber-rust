@@ -837,7 +837,7 @@ Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
   AS/TGS PDUs 10/11/12/13). CI sets `KERBER_REQUIRE_REAL_PCAP=1` so
   missing eth0 capture fails red. In CI after `prod-gate`.
 - `scripts/stress-gate.sh` — C2a: concurrent wire AS+TGS via
-  `crates/krb5-client/examples/loadgen.rs` plus MIT `kinit`/`kvno` under load. Throughput
+  `crates/krb5-tools/src/bin/loadgen.rs` plus MIT `kinit`/`kvno` under load. Throughput
   uses `kdc.issue` timestamps or `duration_us`, not Docker wall clock.
   p99/throughput undershoot with `kdc_issue_err==0` and no panics is a
   warning; error-rate and panics stay hard-fail. `kdc_issue_krb_error`
