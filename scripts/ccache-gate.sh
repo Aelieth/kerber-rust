@@ -18,7 +18,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME":/tmp/krb5-kinit
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-klist" "$NAME":/tmp/krb5-klist
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdestroy" "$NAME":/tmp/krb5-kdestroy
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kswitch" "$NAME":/tmp/krb5-kswitch
-docker cp "${CARGO_TARGET_DIR:-target}/debug/examples/ccache-probe" "$NAME":/tmp/ccache-probe
+docker cp "${CARGO_TARGET_DIR:-target}/debug/ccache-probe" "$NAME":/tmp/ccache-probe
 docker cp "$ROOT/scripts/ccache-mit-remove.c" "$NAME":/tmp/ccache-mit-remove.c
 docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy /tmp/krb5-kswitch /tmp/ccache-probe
 if ! docker exec "$NAME" cc -o /tmp/ccache-mit-remove /tmp/ccache-mit-remove.c -lkrb5; then

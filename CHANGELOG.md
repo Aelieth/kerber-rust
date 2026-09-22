@@ -24,6 +24,9 @@ this project uses semantic versioning once a crate is published.
   `krb5-admin` for `kprop_expired_ap_req`. The gate copies
   `debug/kprop-expired-apreq`. Stdout, stderr, and the usage text
   are unchanged.
+- **krb5-tools.** `ccache-probe` is a bin. The ccache gate and
+  `boot-shell.sh` copy `debug/ccache-probe`. Commands and exit
+  codes are unchanged.
 
 ### W3-S3.5 test-realm namespace
 

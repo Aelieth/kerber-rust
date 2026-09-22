@@ -18,15 +18,11 @@ DEST="${CARGO_TARGET_DIR:-$ROOT/target}/debug"
 for b in krb5-kdc krb5-kadmind krb5-kdb krb5-kadmin-local krb5-kinit krb5-kvno \
     krb5-klist krb5-kdestroy krb5-ktutil krb5-kpasswd krb5-kprop krb5-kpropd \
     krb5-iprop-pull krb5-gss-accept krb5-gss-init krb5-forge-tgt krb5-pac-extract \
-    krb5-kswitch krb5-vfy-increds; do
+    krb5-kswitch krb5-vfy-increds ccache-probe; do
     if [ -x "$DEST/$b" ]; then
         docker cp "$DEST/$b" "$NAME":/tmp/"$b"
         docker exec "$NAME" chmod +x /tmp/"$b"
     fi
 done
-if [ -x "$DEST/examples/ccache-probe" ]; then
-    docker cp "$DEST/examples/ccache-probe" "$NAME":/tmp/ccache-probe
-    docker exec "$NAME" chmod +x /tmp/ccache-probe
-fi
 echo "KERBER_SHELL=$NAME" >>"${GITHUB_ENV:-/dev/null}"
 log "boot.shell" "ok" ",\"name\":\"$NAME\""
