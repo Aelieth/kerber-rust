@@ -730,9 +730,30 @@ def classify(old_src: str, new_src: str) -> str:
         return "fmt-only"
     old_all = _sig_rewrap_norm(_map_code(old_src, lambda text: _ALL_VIS_RE.sub("", text)))
     new_all = _sig_rewrap_norm(_map_code(new_src, lambda text: _ALL_VIS_RE.sub("", text)))
-    if compare_norm(old_all) == compare_norm(new_all) and _narrowing_only(old_src, new_src):
+    if compare_norm(old_all) == compare_norm(new_all) and (
+        _narrowing_only(old_src, new_src) or _restricted_to_pub(old_src, new_src)
+    ):
         return "vis-only"
     return "changed"
+
+
+def _restricted_to_pub(old_src: str, new_src: str) -> bool:
+    """`pub(crate)` / `pub(super)` raised to bare `pub`, rest identical.
+
+    Adding `pub` onto a private item stays `changed` (token counts differ).
+    """
+    old_toks = _code_vis_tokens(old_src)
+    new_toks = _code_vis_tokens(new_src)
+    if len(old_toks) != len(new_toks) or not old_toks:
+        return False
+    widened = False
+    for old, new in zip(old_toks, new_toks):
+        old_rank, new_rank = _vis_rank(old), _vis_rank(new)
+        if new_rank < old_rank or (new_rank > old_rank and (old_rank != 1 or new_rank != 2)):
+            return False
+        if new_rank > old_rank:
+            widened = True
+    return widened
 
 
 IMPL_START_RE = re.compile(r"^\s*(?:unsafe\s+)?impl\b")

@@ -71,6 +71,9 @@ this project uses semantic versioning once a crate is published.
   because tests build the struct with `..Default`.
   `MemoryStore::lookup_count` stays `pub` because its only caller is
   `cfg(test)`. No wire or text change.
+- **tool.** Raising `pub(crate)` or `pub(super)` to bare `pub`, with
+  the same body, is vis-only. Adding `pub` onto a private item stays
+  changed. Self-test count stays 64.
 
 ### W3-S3.6 harness tools
 

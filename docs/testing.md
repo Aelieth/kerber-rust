@@ -79,8 +79,9 @@ comments are still normalised outside literals). A pair is
 `pub(crate)` ↔ `pub(super)`, or bare `pub` narrowed to
 `pub(crate)` / `pub(super)` on the item or a field, including
 brace-less `const` / `static` / `type`, with a vis-stripped rest; a
-widening to bare `pub` stays `changed`), `fmt-only`, `doc-only`,
-or `changed`. Before the vis-stripped compare the text ahead of the
+`pub(crate)` / `pub(super)` raised to bare `pub` is vis-only, and
+adding bare `pub` onto a private item stays `changed`), `fmt-only`,
+`doc-only`, or `changed`. Before the vis-stripped compare the text ahead of the
 body is re-flowed: whitespace around punctuation goes, and a trailing
 comma is dropped only when its `(` / `<` follows an identifier that is
 not a keyword and not a lifetime — `wide(a, b,)` and `f<T, U,>` lose
