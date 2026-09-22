@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.6 harness tools
+
+- **krb5-kdc.** `start_stop_json` and `AuditState::to_json` return to
+  `audit` as `pub(crate)`. `TestAudit` in `testrealm` is the user
+  outside that module. `princ_json`, `addr_json`, `int_array`,
+  `JsonObj`, and `json_escape` move with them and stay private.
+  Bodies are unchanged. No wire or text change.
+
 ### W3-S3.5 test-realm namespace
 
 - **tool.** `hygiene-body-diff.py` strips `testrealm::` and

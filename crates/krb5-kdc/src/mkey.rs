@@ -2,7 +2,7 @@
 //!
 //! First cut derives `K/M@REALM` from the master password. The salt is the
 //! RFC 4120 default salt of that principal (`REALM` ‖ `"KM"`). The harness
-//! `master_key_type` is etype 20 (`aes256-cts-hmac-sha384-192`); s2kparams
+//! `default_master_etype` is etype 20 (`aes256-cts-hmac-sha384-192`); s2kparams
 //! are the etype default (32768). Stash `.k5.REALM` parsing is later.
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
