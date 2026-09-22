@@ -640,6 +640,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "krb5-tools"
+version = "1.0.0"
+dependencies = [
+ "krb5-asn1",
+ "krb5-client",
+ "krb5-config",
+ "krb5-crypto",
+ "krb5-kdc",
+ "krb5-protocol",
+ "krb5-types",
+ "sha1",
+]
+
+[[package]]
 name = "krb5-types"
 version = "1.0.0"
 dependencies = [

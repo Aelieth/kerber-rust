@@ -16,6 +16,10 @@ this project uses semantic versioning once a crate is published.
 - **krb5-kdc.** `testrealm/mod.rs` is `testrealm.rs`. The child
   `testrealm/test_plugins.rs` stays. Every `krb5_kdc::testrealm`
   path is unchanged.
+- **krb5-tools.** Empty harness crate (`publish = false`).
+  `krb5-protocol` is a dependency with `features = ["diff"]`.
+  `build-bins.sh` builds it. The seven tools still build from
+  their old crates.
 
 ### W3-S3.5 test-realm namespace
 

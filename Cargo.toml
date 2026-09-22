@@ -11,6 +11,7 @@ members = [
     "crates/krb5-kdc",
     "crates/krb5-gss",
     "crates/krb5-admin",
+    "crates/krb5-tools",
     "crates/krb5-testkit",
     "examples/consumer",
     "examples/kdc-consumer",
