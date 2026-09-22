@@ -80,6 +80,13 @@ this project uses semantic versioning once a crate is published.
 - **tool.** A visibility compare that also strips doc lines does
   not treat a parenthesis inside a doc comment as a parameter
   list. Self-test count stays 64.
+- **krb5-types.** `transited::hierarchical_walk_realms` is the one
+  copy of MIT `rtree_hier_realms`. The KDC transit walk and
+  `krb5-protocol` both call it. It names `MAX_TRANSIT_RAW` the same
+  way the KDC copy did. The module doc cites `walk_rtree.c`. The
+  module allows `clippy::must_use_candidate`: that lint applies only
+  to a `pub` function, and `#[must_use]` would not match the KDC
+  copy. No wire or text change.
 
 ### W3-S3.6 harness tools
 

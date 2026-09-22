@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 
 use krb5_crypto::ProtocolKey;
+use krb5_types::transited::hierarchical_walk_realms;
 use krb5_types::{MAX_TRANSIT_RAW, PrincipalName};
 
 use super::PrincipalStore;
@@ -49,46 +50,6 @@ pub(crate) fn walk_realm_instances(
         return out;
     }
     hierarchical_walk_realms(client, server)
-}
-
-/// MIT `rtree_hier_realms` (`walk_rtree.c:393-451`): client suffixes through
-/// the common component suffix, then the server's suffixes below that
-/// suffix in reverse. `common == 0` walks every suffix of both realms.
-/// Transit still uses [`hierarchical_intermediates`].
-pub(super) fn hierarchical_walk_realms(client: &str, server: &str) -> Vec<String> {
-    if client.len() >= MAX_TRANSIT_RAW || server.len() >= MAX_TRANSIT_RAW {
-        return Vec::new();
-    }
-    if client == server {
-        return Vec::new();
-    }
-    let c: Vec<&str> = client.split('.').collect();
-    let s: Vec<&str> = server.split('.').collect();
-    if c.is_empty() || s.is_empty() {
-        return Vec::new();
-    }
-    let mut common = 0usize;
-    while common < c.len() && common < s.len() && c[c.len() - 1 - common] == s[s.len() - 1 - common]
-    {
-        common += 1;
-    }
-    let ct: Vec<String> = (0..c.len()).map(|k| c[k..].join(".")).collect();
-    let st: Vec<String> = (0..s.len()).map(|k| s[k..].join(".")).collect();
-    let c_keep = if common == 0 {
-        ct.len()
-    } else {
-        ct.len() - common + 1
-    };
-    let s_keep = if common == 0 {
-        st.len()
-    } else {
-        st.len() - common
-    };
-    let mut out: Vec<String> = ct.into_iter().take(c_keep).collect();
-    for hop in st.into_iter().take(s_keep).rev() {
-        out.push(hop);
-    }
-    out
 }
 
 pub(super) fn hierarchical_intermediates(client: &str, server: &str) -> Vec<String> {

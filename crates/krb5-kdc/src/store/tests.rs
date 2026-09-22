@@ -1,10 +1,11 @@
 //! In-memory store tests (private-bound; moved out of `store.rs`).
 
 use super::rid::sid_from_random_bytes;
-use super::transit::{hierarchical_intermediates, hierarchical_walk_realms};
+use super::transit::hierarchical_intermediates;
 use super::*;
 use crate::kdb_dump::{TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC};
 use krb5_crypto::EncryptionType;
+use krb5_types::transited::hierarchical_walk_realms;
 use std::collections::BTreeMap;
 
 const TEST_REALM_STR: &str = "KERBER.TEST";

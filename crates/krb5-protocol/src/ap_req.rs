@@ -7,6 +7,7 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum_type,
 };
+use krb5_types::transited::hierarchical_walk_realms;
 use krb5_types::{
     ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddresses, KerberosTime,
     PrincipalName, Realm, Ticket, err, flag_bit, ku,
@@ -516,42 +517,6 @@ fn walk_realm_tree(
         return out;
     }
     hierarchical_walk_realms(client, server)
-}
-
-fn hierarchical_walk_realms(client: &str, server: &str) -> Vec<String> {
-    if client.len() >= krb5_types::MAX_TRANSIT_RAW || server.len() >= krb5_types::MAX_TRANSIT_RAW {
-        return Vec::new();
-    }
-    if client == server {
-        return Vec::new();
-    }
-    let c: Vec<&str> = client.split('.').collect();
-    let s: Vec<&str> = server.split('.').collect();
-    if c.is_empty() || s.is_empty() {
-        return Vec::new();
-    }
-    let mut common = 0usize;
-    while common < c.len() && common < s.len() && c[c.len() - 1 - common] == s[s.len() - 1 - common]
-    {
-        common += 1;
-    }
-    let ct: Vec<String> = (0..c.len()).map(|k| c[k..].join(".")).collect();
-    let st: Vec<String> = (0..s.len()).map(|k| s[k..].join(".")).collect();
-    let c_keep = if common == 0 {
-        ct.len()
-    } else {
-        ct.len() - common + 1
-    };
-    let s_keep = if common == 0 {
-        st.len()
-    } else {
-        st.len() - common
-    };
-    let mut out: Vec<String> = ct.into_iter().take(c_keep).collect();
-    for hop in st.into_iter().take(s_keep).rev() {
-        out.push(hop);
-    }
-    out
 }
 
 /// MIT `sname_match.c:30-57` `krb5_sname_match`.
