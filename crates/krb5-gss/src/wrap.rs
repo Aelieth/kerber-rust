@@ -298,15 +298,6 @@ impl GssContext {
         self.wrap_conf_inner(plaintext, 0, rrc)
     }
 
-    /// Confidential wrap with RFC 4121 EC padding (`unwrap.c` `out.len = plain - ec - 16`).
-    ///
-    /// # Errors
-    ///
-    /// Crypto failures.
-    pub fn wrap_with_ec(&mut self, plaintext: &[u8], ec: u16) -> Result<Vec<u8>, Error> {
-        self.wrap_conf_inner(plaintext, ec, 0)
-    }
-
     /// Wrap without confidentiality (`gss_seal` conf=0). AUTH_GSSAPI
     /// `signed_isn` / sequence verifiers use this (MIT `auth_gssapi_seal_seq`).
     ///

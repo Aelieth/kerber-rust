@@ -33,6 +33,8 @@ this project uses semantic versioning once a crate is published.
   are gone. `name_matches` was the only caller of the private
   `principal_matches` helper, and `key_kvno` was the only caller of
   `key_for_kvno`, so those helpers go too. No wire or text change.
+- **krb5-gss.** `wrap_with_ec` is gone. Nothing called it. Wrap still
+  goes through `wrap_with_rrc` and `wrap_integ`. No wire or text change.
 
 ### W3-S3.6 harness tools
 
