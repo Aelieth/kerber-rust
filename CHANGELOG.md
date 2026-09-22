@@ -41,6 +41,9 @@ this project uses semantic versioning once a crate is published.
 - **krb5-tools.** `diffsend` is a bin. `krb5-protocol` keeps
   `default = ["diff"]` and its dev-dependency on `krb5-kdc`.
   The gate copies `debug/diffsend`. Case count stays 111.
+- **krb5-tools.** `hex_decode` is one private function, included by
+  `krb5-forge-tgt` and `krb5-pac-extract`. The body matches both
+  originals. A bin cannot call a private item of the library.
 
 ### W3-S3.5 test-realm namespace
 
