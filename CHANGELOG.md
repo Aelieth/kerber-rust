@@ -48,6 +48,9 @@ this project uses semantic versioning once a crate is published.
   pair in `token_io.rs`, included by `krb5-gss-init` and
   `krb5-gss-accept`. The body is the fully spelled `TcpStream`
   form. Call sites are unchanged.
+- **tool.** `hygiene-fn-diff` extracts `crates/<crate>/examples/*.rs`
+  so a harness example can be a move row when it becomes a bin.
+  Self-test gains that case.
 
 ### W3-S3.5 test-realm namespace
 

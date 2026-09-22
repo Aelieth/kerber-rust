@@ -962,7 +962,13 @@ def extract(
             continue
         if "/krb5-testkit/" in f"/{rel}/":
             continue
-        if rel.startswith("crates/") and "/src/" not in f"/{rel}/":
+        # Crate examples are harness tools (S3.6 moves them into src/bin).
+        # build.rs and other non-source files under the crate stay out.
+        if (
+            rel.startswith("crates/")
+            and "/src/" not in f"/{rel}/"
+            and "/examples/" not in f"/{rel}/"
+        ):
             continue
         if rel in src_test:
             continue
@@ -2317,6 +2323,15 @@ def _self_test() -> int:
         ex = extract(old, ["examples"])
         if "examples\tdiffsend::main" not in ex:
             raise SystemExit(f"hygiene-fn-diff --self-test: --roots examples: {sorted(ex)}")
+        n += 1
+
+        _write_crate(old, "crates/demo/examples/diffsend.rs", "fn main() {}\nfn helper() {}\n")
+        crate_ex = extract(old)
+        (old / "crates/demo/examples/diffsend.rs").unlink()
+        if "demo\tdiffsend::main" not in crate_ex or "demo\tdiffsend::helper" not in crate_ex:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: crate examples: {sorted(crate_ex)}"
+            )
         n += 1
 
         _write_crate(old, "crates/demo/src/lib.rs", "mod sub;\n")
