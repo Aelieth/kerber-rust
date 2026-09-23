@@ -719,7 +719,6 @@ pub fn kprop_send_dump(
 /// # Errors
 ///
 /// Dump, auth, or I/O.
-#[allow(clippy::too_many_arguments)]
 pub fn kprop_send_store(
     stream: &mut TcpStream,
     store: &PrincipalStore,
@@ -746,7 +745,6 @@ pub fn kprop_send_store(
 /// # Errors
 ///
 /// Dump, auth, or I/O.
-#[allow(clippy::too_many_arguments)]
 pub fn kprop_send_store_iprop(
     stream: &mut TcpStream,
     store: &PrincipalStore,

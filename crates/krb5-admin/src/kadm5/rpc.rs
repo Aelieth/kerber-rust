@@ -26,7 +26,7 @@ use crate::Error;
 /// # Errors
 ///
 /// I/O or GSS/RPC failures.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(clippy::needless_pass_by_value)]
 pub fn serve_kadm5_conn(
     store: SharedStore,
     acl: Acl,

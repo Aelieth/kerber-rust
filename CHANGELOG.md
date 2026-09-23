@@ -25,6 +25,10 @@ this project uses semantic versioning once a crate is published.
   `walk_rtree.c:394-452`. No wire or text change.
 - **krb5-protocol.** `tgs_service_once` has seven parameters, so its
   `too_many_arguments` suppression is gone. No wire or text change.
+- **krb5-admin.** `kprop_send_store`, `kprop_send_store_iprop`, and
+  `serve_kadm5_conn` no longer carry a stale `too_many_arguments`
+  suppression. `serve_kadm5_conn` keeps `needless_pass_by_value`.
+  No wire or text change.
 
 ### W3-S3.8 dead code and surface
 
