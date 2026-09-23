@@ -1011,6 +1011,17 @@ def _param_names_of(src: str) -> list[str] | None:
     return names
 
 
+def _bare_param(name: str) -> str:
+    """`_store` is the unused spelling of `store`."""
+    if name.startswith("_") and len(name) > 1 and not name.startswith("__"):
+        return name[1:]
+    return name
+
+
+def _bare_names(names: list[str]) -> list[str]:
+    return [_bare_param(n) for n in names]
+
+
 def _find_slice(names: list[str], fields: list[str]) -> tuple[int, int] | None:
     if not fields or len(fields) > len(names):
         return None
@@ -1061,6 +1072,32 @@ def _type_is_struct(chunk: str, struct: str) -> bool:
     )
 
 
+def _skip_stmt_attrs(src: str, i: int) -> int:
+    """Skip `#[...]` attributes that decorate the destructure `let`."""
+    n = len(src)
+    while True:
+        i = _skip_code_ws(src, i)
+        if not src.startswith("#[", i):
+            return i
+        depth = 0
+        j = i + 1
+        while j < n:
+            if src[j] == "[":
+                depth += 1
+            elif src[j] == "]":
+                depth -= 1
+                if depth == 0:
+                    i = j + 1
+                    break
+            j += 1
+        else:
+            return i
+
+
+def _is_semi_fn(src: str) -> bool:
+    return "{" not in src and src.rstrip().endswith(";")
+
+
 def _strip_leading_rest(inner: str) -> str | None:
     """Drop a trailing `..` from the first `let` destructure, if it has one."""
     i = _skip_code_ws(inner, 0)
@@ -1095,7 +1132,7 @@ def _match_destructure_exact(
     inner: str, struct: str, fields: list[str]
 ) -> tuple[str, str] | None:
     """`let Struct { f1, f2, … } = binder;` or `= *binder`. Shorthand only."""
-    i = _skip_code_ws(inner, 0)
+    i = _skip_stmt_attrs(inner, _skip_code_ws(inner, 0))
     if not inner.startswith("let", i):
         return None
     if i + 3 < len(inner) and (inner[i + 3].isalnum() or inner[i + 3] == "_"):
@@ -1254,12 +1291,12 @@ def prepare_params(
             raise SystemExit(
                 f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
             )
-        if _find_slice(names, fields) is not None:
+        if _find_slice(_bare_names(names), fields) is not None:
             by_callee[old[key]["name"]] = (struct, list(fields))
             continue
         ult_name, ult_src = _walk_forward(by_name, old[key]["name"], old[key]["src"], steps)
         ult_names = _param_names_of(ult_src)
-        if ult_names != list(fields) or names != list(fields)[: len(names)]:
+        if ult_names != list(fields) or _bare_names(names) != list(fields)[: len(names)]:
             raise SystemExit(
                 f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
             )
@@ -1295,18 +1332,18 @@ def _definition_params(
     new_chunks = _param_chunks(new_s)
     if old_names is None or new_names is None or new_chunks is None:
         return False
-    sl = _find_slice(old_names, fields)
+    sl = _find_slice(_bare_names(old_names), fields)
     expected_fields = list(fields)
     body_old = inner_body(old_s)
     if sl is None:
         steps: dict[str, tuple] = {}
         ult_name, ult_src = _walk_forward(by_name, self_name, old_s, steps)
-        if _param_names_of(ult_src) != list(fields) or old_names != list(fields)[: len(old_names)]:
+        if _param_names_of(ult_src) != list(fields) or _bare_names(old_names) != list(fields)[: len(old_names)]:
             return False
-        if any(name != "self" and name not in fields for name in old_names):
+        if any(name != "self" and _bare_param(name) not in fields for name in old_names):
             return False
         # The whole parameter list is the field prefix.
-        if old_names != list(fields)[: len(old_names)] or len(new_names) != 1:
+        if _bare_names(old_names) != list(fields)[: len(old_names)] or len(new_names) != 1:
             return False
         if not _type_is_struct(new_chunks[0], struct):
             return False
@@ -1321,6 +1358,8 @@ def _definition_params(
             return False
         binder = new_names[a]
         sl_index = a
+    if _is_semi_fn(old_s) and _is_semi_fn(new_s):
+        return True
     canon = list((structs or {}).get(struct) or fields)
     allow_rest = list(fields) != canon
     matched = _match_destructure(
@@ -3971,6 +4010,44 @@ def _self_test() -> int:
             raise SystemExit(
                 "hygiene-fn-diff --self-test: &Struct { } must be params-only: "
                 f"{borrowed}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(_a: i32, b: i32) -> i32 {\n    b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    #[allow(unused_variables)]\n"
+            "    let S { a, b } = p;\n    b\n}\n",
+        )
+        unused = compare_trees(old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a", "b"])})
+        evaluate(unused)
+        if unused["params_only"] != 1 or unused["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a leading underscore and an allow "
+                f"on the destructure must be params-only: {unused}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "trait T {\n    fn g(a: i32, b: i32);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "trait T {\n    fn g(p: S);\n}\n",
+        )
+        semi = compare_trees(old, new, {}, {}, {}, [], params={"demo\ttrait T::g": ("S", ["a", "b"])})
+        evaluate(semi)
+        if semi["params_only"] != 1 or semi["changed"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: a semicolon trait method must be params-only: {semi}"
             )
         n += 1
     live = extract(ROOT)

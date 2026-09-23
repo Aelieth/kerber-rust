@@ -54,6 +54,10 @@ this project uses semantic versioning once a crate is published.
 - **tool.** An `&` that borrows a parameter struct as a whole argument
   is consumed when the literal is rewritten. `hygiene-fn-diff`
   self-test count is 85.
+- **tool.** A parameter written `_name` matches the field `name`. A
+  semicolon trait method needs no destructure, and an attribute on the
+  destructure `let` is not part of the body. `hygiene-fn-diff`
+  self-test count is 87.
 - **krb5-admin.** `kadm5_handle_rpc`, `handle_rpc`, `handle_rpcsec_gss`,
   `handle_auth_gssapi`, `rpcsec_dispatch`, and `kadm5_or_iprop` take
   `RpcCtx` (store, ACL, service keys, realm). `serve_kadm5_conn` builds
