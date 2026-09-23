@@ -194,13 +194,15 @@ fn impose_acl_restrictions_on_an_empty_request_takes_every_cap() {
     store
         .apply_admin_fields(
             &name("z1cap"),
-            None,
-            Some(600),
-            None,
-            None,
-            None,
-            false,
-            Some(0),
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: Some(600),
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: Some(0),
+            },
         )
         .unwrap();
     let rs = acl

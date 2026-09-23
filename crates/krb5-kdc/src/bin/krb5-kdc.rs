@@ -374,9 +374,18 @@ fn bootstrap_test_realm(kdc: Option<&krb5_config::KdcConf>) -> PrincipalStore {
             eprintln!("krb5-kdc: host missing after create");
             std::process::exit(1);
         };
-        if let Err(e) =
-            store.apply_admin_fields(&host, Some(a), None, None, None, None, false, None)
-        {
+        if let Err(e) = store.apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        ) {
             eprintln!("krb5-kdc: ok_to_auth_as_delegate: {e}");
             std::process::exit(1);
         }
@@ -422,9 +431,18 @@ fn bootstrap_test_realm(kdc: Option<&krb5_config::KdcConf>) -> PrincipalStore {
             eprintln!("krb5-kdc: host missing after create");
             std::process::exit(1);
         };
-        if let Err(e) =
-            store.apply_admin_fields(&host, Some(a), None, None, None, None, false, None)
-        {
+        if let Err(e) = store.apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        ) {
             eprintln!("krb5-kdc: disallow_dup_skey: {e}");
             std::process::exit(1);
         }
@@ -529,9 +547,18 @@ fn bootstrap_test_realm(kdc: Option<&krb5_config::KdcConf>) -> PrincipalStore {
             eprintln!("krb5-kdc: expired user: {e}");
             std::process::exit(1);
         }
-        if let Err(e) =
-            store.apply_admin_fields(&expired, None, None, None, Some(1), None, false, None)
-        {
+        if let Err(e) = store.apply_admin_fields(
+            &expired,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: None,
+                pw_expire: Some(1),
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        ) {
             eprintln!("krb5-kdc: expire user: {e}");
             std::process::exit(1);
         }
@@ -564,13 +591,15 @@ fn apply_test_disallow(store: &mut PrincipalStore, env: &str, flag: u32) {
     if let Err(e) = store.apply_admin_fields_in(
         &name,
         &princ_realm,
-        Some(a),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
+        krb5_kdc::AdminFields {
+            attributes: Some(a),
+            max_life: None,
+            expiration: None,
+            pw_expire: None,
+            policy: None,
+            clear_policy: false,
+            max_renewable_life: None,
+        },
         &format!("kadmin/admin@{princ_realm}"),
     ) {
         eprintln!("krb5-kdc: {env}: {e}");

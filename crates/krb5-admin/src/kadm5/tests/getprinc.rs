@@ -106,8 +106,19 @@ fn getprinc_dates_from_create_cpw_mod() {
     assert_ne!(mod1, 0);
     {
         let mut g = store.write().unwrap();
-        g.apply_admin_fields(&name, None, None, Some(u32::MAX), None, None, false, None)
-            .unwrap();
+        g.apply_admin_fields(
+            &name,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(u32::MAX),
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
+        .unwrap();
     }
     let after_mod = dispatch_kadm5(&store, &acl, &actor, GET_PRINCIPAL, &{
         let mut w = XdrW::default();

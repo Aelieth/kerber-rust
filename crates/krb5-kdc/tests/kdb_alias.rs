@@ -141,13 +141,15 @@ fn modify_cpw_and_lockout_through_alias_act_on_target_and_delete_removes_stub_on
         .apply_admin_fields_in(
             &name("a1"),
             TEST_REALM,
-            Some(before | KDB_REQUIRES_PRE_AUTH),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(before | KDB_REQUIRES_PRE_AUTH),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
             ACTOR,
         )
         .unwrap();
@@ -314,13 +316,17 @@ fn as_rep_via_alias_carries_the_target_salt_in_etype_info2() {
         .apply_admin_fields_in(
             &name(TEST_USER),
             TEST_REALM,
-            Some(store.get_name(&name(TEST_USER)).unwrap().attributes & !KDB_REQUIRES_PRE_AUTH),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(
+                    store.get_name(&name(TEST_USER)).unwrap().attributes & !KDB_REQUIRES_PRE_AUTH,
+                ),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
             ACTOR,
         )
         .unwrap();

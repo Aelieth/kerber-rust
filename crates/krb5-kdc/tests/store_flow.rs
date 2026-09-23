@@ -41,13 +41,15 @@ fn pw_expiration_on_modify_is_last_pwd_change_plus_max_life() {
     store
         .apply_admin_fields(
             &user,
-            None,
-            None,
-            None,
-            None,
-            Some("life".into()),
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: Some("life".into()),
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     let after = store.get_name(&user).unwrap();

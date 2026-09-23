@@ -84,13 +84,15 @@ fn min_life_requires_pwchange_bypasses() {
         g.set_password(&user, b"need-change").unwrap();
         g.apply_admin_fields(
             &user,
-            Some(krb5_kdc::KDB_REQUIRES_PWCHANGE),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(krb5_kdc::KDB_REQUIRES_PWCHANGE),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }

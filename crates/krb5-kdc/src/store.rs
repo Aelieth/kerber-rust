@@ -302,13 +302,15 @@ impl PrincipalStore {
         )?;
         store.apply_admin_fields(
             &tgt,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )?;
         store.insert_password(
             &PrincipalName::new(PrincipalName::NT_PRINCIPAL, [user]),
@@ -406,7 +408,7 @@ pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy, s2k_params,
 };
 pub use policy::{NamedPolicy, Policy, parse_dict_words};
-pub use principal::{AdminEnt, KadmData, Principal, TlData, strip_db_args};
+pub use principal::{AdminEnt, AdminFields, KadmData, Principal, TlData, strip_db_args};
 pub(crate) use principal::{AsFailState, db_args_put_error, refresh_kadm_tl};
 pub use rid::{RID_FIRST_USER, RID_KRBTGT};
 pub(crate) use transit::walk_realm_instances;

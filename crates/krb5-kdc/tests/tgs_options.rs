@@ -27,7 +27,18 @@ use krb5_types::{ApReq, EncTicketPart, KdcOptions, PrincipalName, err, flag_bit,
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
-        .apply_admin_fields(name, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            name,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 }
 

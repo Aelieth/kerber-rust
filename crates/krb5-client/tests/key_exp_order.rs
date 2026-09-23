@@ -71,7 +71,18 @@ fn expired_user_store() -> PrincipalStore {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let attrs = store.get_name(&user).unwrap().attributes | KDB_REQUIRES_PWCHANGE;
     store
-        .apply_admin_fields(&user, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &user,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     store
 }
@@ -159,7 +170,18 @@ fn wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let attrs = store.get_name(&user).unwrap().attributes & !KDB_REQUIRES_PRE_AUTH;
     store
-        .apply_admin_fields(&user, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &user,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let kdc = serve(store);
     let (code, err) = kinit(&kdc, "not-the-password", "new-pw\nnew-pw\n");

@@ -779,13 +779,15 @@ impl<'a> AdminSession<'a> {
             .apply_admin_fields_in(
                 name,
                 &realm,
-                attributes,
-                None,
-                None,
-                None,
-                None,
-                false,
-                None,
+                krb5_kdc::AdminFields {
+                    attributes,
+                    max_life: None,
+                    expiration: None,
+                    pw_expire: None,
+                    policy: None,
+                    clear_policy: false,
+                    max_renewable_life: None,
+                },
                 &self.actor,
             )
             .map_err(Error::from)?;
@@ -817,13 +819,15 @@ impl<'a> AdminSession<'a> {
             .apply_admin_fields_in(
                 name,
                 &realm,
-                None,
-                None,
-                Some(expiration),
-                None,
-                None,
-                false,
-                None,
+                krb5_kdc::AdminFields {
+                    attributes: None,
+                    max_life: None,
+                    expiration: Some(expiration),
+                    pw_expire: None,
+                    policy: None,
+                    clear_policy: false,
+                    max_renewable_life: None,
+                },
                 &self.actor,
             )
             .map_err(Error::from)
@@ -867,13 +871,15 @@ impl<'a> AdminSession<'a> {
             .apply_admin_fields_in(
                 name,
                 &realm,
-                None,
-                max_life,
-                None,
-                None,
-                None,
-                false,
-                max_renewable_life,
+                krb5_kdc::AdminFields {
+                    attributes: None,
+                    max_life,
+                    expiration: None,
+                    pw_expire: None,
+                    policy: None,
+                    clear_policy: false,
+                    max_renewable_life,
+                },
                 &self.actor,
             )
             .map_err(Error::from)?;
@@ -901,13 +907,15 @@ impl<'a> AdminSession<'a> {
             .apply_admin_fields_in(
                 name,
                 &realm,
-                None,
-                None,
-                None,
-                None,
-                Some(policy.to_owned()),
-                false,
-                None,
+                krb5_kdc::AdminFields {
+                    attributes: None,
+                    max_life: None,
+                    expiration: None,
+                    pw_expire: None,
+                    policy: Some(policy.to_owned()),
+                    clear_policy: false,
+                    max_renewable_life: None,
+                },
                 &self.actor,
             )
             .map_err(Error::from)?;

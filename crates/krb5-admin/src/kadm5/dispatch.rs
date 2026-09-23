@@ -279,13 +279,15 @@ pub(super) fn dispatch_kadm5_ticket(
             match g.apply_admin_fields_in(
                 &name,
                 &req,
-                attributes,
-                max_life,
-                expiration,
-                pw_expire,
-                policy,
-                clear_policy,
-                max_renewable_life,
+                krb5_kdc::AdminFields {
+                    attributes,
+                    max_life,
+                    expiration,
+                    pw_expire,
+                    policy,
+                    clear_policy,
+                    max_renewable_life,
+                },
                 actor,
             ) {
                 Ok(()) => {

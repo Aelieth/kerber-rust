@@ -305,7 +305,18 @@ pub fn allow_tgs_changepw(store: &mut krb5_kdc::PrincipalStore) {
     let changepw = kadmin_changepw();
     let a = store.get_name(&changepw).unwrap().attributes & !KDB_DISALLOW_TGT_BASED;
     store
-        .apply_admin_fields(&changepw, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &changepw,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 }
 

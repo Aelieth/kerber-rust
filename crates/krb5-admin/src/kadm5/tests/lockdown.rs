@@ -12,13 +12,15 @@ fn chpass_lockdown_self_is_auth_changepw_before_initial() {
             .unwrap();
         g.apply_admin_fields(
             &name,
-            Some(krb5_kdc::KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(krb5_kdc::KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -47,13 +49,15 @@ fn extract_keys_lockdown_is_protect_keys() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -85,13 +89,15 @@ fn chpass_lockdown_is_protect_keys() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -130,13 +136,15 @@ fn chrand_lockdown_returns_empty_keys() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -177,13 +185,15 @@ fn purgekeys_locked_down_target_is_allowed() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -206,13 +216,15 @@ fn setkey_lockdown_is_auth_setkey() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -235,13 +247,15 @@ fn delete_lockdown_is_auth_delete() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -265,13 +279,15 @@ fn modify_clear_lockdown_is_auth_modify() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -315,13 +331,15 @@ fn modprinc_keeping_lockdown_bit_is_allowed() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -365,13 +383,15 @@ fn rename_lockdown_source_is_auth_delete() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }
@@ -392,13 +412,15 @@ fn rename_unauthorised_lockdown_is_auth_insufficient() {
         let mut g = store.write().unwrap();
         g.apply_admin_fields(
             &user,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     }

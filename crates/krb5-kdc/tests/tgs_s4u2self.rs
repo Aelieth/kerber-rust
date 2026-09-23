@@ -257,7 +257,18 @@ fn s4u2self_pw_expired_user_still_issues() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     store
-        .apply_admin_fields(&admin, None, None, None, Some(1), None, false, None)
+        .apply_admin_fields(
+            &admin,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: None,
+                pw_expire: Some(1),
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let tgt = host_tgt(&store, 7140);
     let pa = pa_for_user(&tgt.session_key, admin, TEST_REALM).unwrap();
@@ -864,7 +875,18 @@ fn or_host_attr(store: &mut PrincipalStore, bit: u32) {
     let host = documented_host();
     let a = store.get_name(&host).unwrap().attributes | bit;
     store
-        .apply_admin_fields(&host, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 }
 
@@ -1085,7 +1107,18 @@ fn s4u2self_disabled_for_user_is_revoked() {
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     let a = store.get_name(&admin).unwrap().attributes | KDB_DISALLOW_ALL_TIX;
     store
-        .apply_admin_fields(&admin, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &admin,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, admin, 620)).unwrap_err();
     assert_eq!(s4u_code(err), err::CLIENT_REVOKED);
@@ -1096,7 +1129,18 @@ fn s4u2self_expired_for_user_is_name_exp() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     store
-        .apply_admin_fields(&admin, None, None, Some(1), None, None, false, None)
+        .apply_admin_fields(
+            &admin,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(1),
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &s4u2self_tgs(&store, admin, 630)).unwrap_err();
     assert_eq!(s4u_code(err), err::NAME_EXP);

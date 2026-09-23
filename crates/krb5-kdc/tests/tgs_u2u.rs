@@ -152,7 +152,18 @@ fn u2u_dup_skey_disallowed_is_policy() {
     let host = documented_host();
     let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_DUP_SKEY;
     store
-        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let extra = host_tgt(&store, 9150).rep.0.ticket;
     let req = u2u_req(&store, host, Some(vec![extra]), 9151);

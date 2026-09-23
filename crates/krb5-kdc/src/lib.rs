@@ -80,7 +80,7 @@ pub use plugins::{
     set_thread_policy,
 };
 pub use store::{
-    AdminEnt, IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED,
+    AdminEnt, AdminFields, IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED,
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
     KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
@@ -224,27 +224,33 @@ pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<()
     store.apply_admin_fields_in(
         &principals::kadmin_admin(),
         &realm,
-        Some(store::KDB_DISALLOW_TGT_BASED | store::KDB_LOCKDOWN_KEYS),
-        Some(KADM5_ADMIN_LIFETIME),
-        None,
-        None,
-        None,
-        false,
-        None,
+        AdminFields {
+            attributes: Some(store::KDB_DISALLOW_TGT_BASED | store::KDB_LOCKDOWN_KEYS),
+            max_life: Some(KADM5_ADMIN_LIFETIME),
+            expiration: None,
+            pw_expire: None,
+            policy: None,
+            clear_policy: false,
+            max_renewable_life: None,
+        },
         &actor,
     )?;
     store.apply_admin_fields_in(
         &principals::kadmin_changepw(),
         &realm,
-        Some(
-            store::KDB_DISALLOW_TGT_BASED | store::KDB_PWCHANGE_SERVICE | store::KDB_LOCKDOWN_KEYS,
-        ),
-        Some(KADM5_CHANGEPW_LIFETIME),
-        None,
-        None,
-        None,
-        false,
-        None,
+        AdminFields {
+            attributes: Some(
+                store::KDB_DISALLOW_TGT_BASED
+                    | store::KDB_PWCHANGE_SERVICE
+                    | store::KDB_LOCKDOWN_KEYS,
+            ),
+            max_life: Some(KADM5_CHANGEPW_LIFETIME),
+            expiration: None,
+            pw_expire: None,
+            policy: None,
+            clear_policy: false,
+            max_renewable_life: None,
+        },
         &actor,
     )?;
     Ok(())

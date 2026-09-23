@@ -470,7 +470,18 @@ fn every_ticket_sets_enc_pa_rep_flag_without_padata() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let attrs = store.get_name(&cname).unwrap().attributes & !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
     store
-        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let key = user_key();
     let req = as_req(cname, TEST_REALM, 207, None).unwrap();
@@ -607,7 +618,18 @@ fn as_rep_enc_part_carries_no_kvno_like_mit() {
     // A no-preauth AS keeps skip_timestamp false, so it exercises the reply kvno.
     let attrs = store.get_name(&cname).unwrap().attributes & !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
     store
-        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let req = as_req(cname, TEST_REALM, 206, None).unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).expect("reply");

@@ -272,13 +272,15 @@ fn chpass3_outside_allowed_keysalts_is_bad_keysalts() {
     store
         .apply_admin_fields(
             &n("z72pol"),
-            None,
-            None,
-            None,
-            None,
-            Some("ksonly".into()),
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: Some("ksonly".into()),
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     let store = shared_dump(store);

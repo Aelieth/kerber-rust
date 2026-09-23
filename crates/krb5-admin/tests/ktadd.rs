@@ -128,13 +128,15 @@ fn ktadd_local_krbtgt_rotates_like_mit() {
     store
         .apply_admin_fields(
             &tgt,
-            Some(KDB_LOCKDOWN_KEYS),
-            None,
-            None,
-            None,
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: Some(KDB_LOCKDOWN_KEYS),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     let before = max_kvno(&store, &tgt);

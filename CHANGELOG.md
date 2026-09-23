@@ -36,6 +36,9 @@ this project uses semantic versioning once a crate is published.
   wrappers `tgs_req_ex_addr`, `tgs_req_ex_from`, `tgs_req_ex_till`,
   and `tgs_req_ex_subkey` are gone; callers pass the fields those
   wrappers used to fill. No wire or text change.
+- **krb5-kdc.** `apply_admin_fields` and `apply_admin_fields_in` take
+  `AdminFields` (the kadm5 principal mask). Callers still set every
+  field. No wire or text change.
 
 ### W3-S3.8 dead code and surface
 

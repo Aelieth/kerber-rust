@@ -278,7 +278,18 @@ fn as_exchange_rejects_reply_missing_enc_pa_rep_checksum() {
     // No-preauth so the KDC issues on the first AS-REQ (single round-trip).
     let attrs = store.get_name(&cname).unwrap().attributes & !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
     store
-        .apply_admin_fields(&cname, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();

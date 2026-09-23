@@ -36,7 +36,18 @@ fn user_as_req(nonce: u32) -> krb5_types::AsReq {
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
-        .apply_admin_fields(name, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            name,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 }
 
@@ -96,7 +107,18 @@ fn as_rejects_expired_password_unless_pwchange_service() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&cname, None, None, Some(0), Some(1), None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(0),
+                pw_expire: Some(1),
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let err = krb5_kdc::issue_as(&store, &user_as_req(43)).unwrap_err();
     assert_eq!(status(&err).0, err::KEY_EXPIRED);

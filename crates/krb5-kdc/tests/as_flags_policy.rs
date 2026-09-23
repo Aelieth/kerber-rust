@@ -81,7 +81,18 @@ fn etypes() -> Vec<i32> {
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
-        .apply_admin_fields(name, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            name,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 }
 
@@ -505,7 +516,18 @@ fn as_disallow_svr_is_service_not_allowed() {
     let host = documented_host();
     let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_SVR;
     store
-        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req_sname(cname, TEST_REALM, 416, None, host, pref_etypes()).unwrap();

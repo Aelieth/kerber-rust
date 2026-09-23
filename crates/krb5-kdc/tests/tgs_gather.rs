@@ -243,7 +243,18 @@ fn tgs_disallow_svr_service_header_is_process_tgs() {
     let host = documented_host();
     let attrs = store.get_name(&host).unwrap().attributes | KDB_DISALLOW_SVR;
     store
-        .apply_admin_fields(&host, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let renew = TgsReqBuilder::new(
@@ -493,7 +504,18 @@ fn pac_mismatch_tgt(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> Tick
 fn or_attrs(store: &mut PrincipalStore, name: &PrincipalName, bits: u32) {
     let attrs = store.get_name(name).unwrap().attributes | bits;
     store
-        .apply_admin_fields(name, Some(attrs), None, None, None, None, false, None)
+        .apply_admin_fields(
+            name,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 }
 

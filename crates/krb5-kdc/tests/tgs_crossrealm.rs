@@ -992,13 +992,15 @@ fn tgs_krbtgt_disallow_all_tix_is_process_tgs() {
     c.apply_admin_fields_in(
         &irn,
         "B.TEST",
-        Some(a),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
+        krb5_kdc::AdminFields {
+            attributes: Some(a),
+            max_life: None,
+            expiration: None,
+            pw_expire: None,
+            policy: None,
+            clear_policy: false,
+            max_renewable_life: None,
+        },
         "kadmin/admin@B.TEST",
     )
     .unwrap();
@@ -1025,7 +1027,18 @@ fn tgs_local_krbtgt_disallow_all_tix_is_process_tgs() {
     let krbtgt = PrincipalName::krbtgt("C.TEST");
     let a = store.get_name(&krbtgt).unwrap().attributes | KDB_DISALLOW_ALL_TIX;
     store
-        .apply_admin_fields(&krbtgt, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &krbtgt,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req(
@@ -1050,7 +1063,18 @@ fn tgs_local_krbtgt_disallow_svr_is_process_tgs() {
     let krbtgt = PrincipalName::krbtgt("C.TEST");
     let a = store.get_name(&krbtgt).unwrap().attributes | KDB_DISALLOW_SVR;
     store
-        .apply_admin_fields(&krbtgt, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &krbtgt,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = tgs_req(
@@ -1076,13 +1100,15 @@ fn tgs_cross_krbtgt_disallow_svr_is_process_tgs() {
     c.apply_admin_fields_in(
         &irn,
         "B.TEST",
-        Some(a),
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
+        krb5_kdc::AdminFields {
+            attributes: Some(a),
+            max_life: None,
+            expiration: None,
+            pw_expire: None,
+            policy: None,
+            clear_policy: false,
+            max_renewable_life: None,
+        },
         "kadmin/admin@B.TEST",
     )
     .unwrap();
@@ -1310,7 +1336,18 @@ fn tgs_service_deny_opts_precedes_deny_all() {
     let a =
         store.get_name(&host).unwrap().attributes | KDB_DISALLOW_ALL_TIX | KDB_DISALLOW_POSTDATED;
     store
-        .apply_admin_fields(&host, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let tgt = as_tgt_may_postdate(&store, "C.TEST", 973);
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);

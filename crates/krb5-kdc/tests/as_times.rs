@@ -153,13 +153,15 @@ fn as_key_exp_is_min_of_expiration_and_pw_expire() {
     store
         .apply_admin_fields(
             &user(),
-            None,
-            None,
-            Some(now + 4 * 86400),
-            Some(now + 2 * 86400),
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(now + 4 * 86400),
+                pw_expire: Some(now + 2 * 86400),
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     let enc = enc_as(&user_as(&store, 1902));
@@ -246,7 +248,18 @@ fn user_as_req(nonce: u32) -> krb5_types::AsReq {
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
-        .apply_admin_fields(name, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            name,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 }
 
@@ -366,7 +379,18 @@ fn as_rejects_expired_principal_before_expired_password() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&cname, None, None, Some(1), Some(1), None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(1),
+                pw_expire: Some(1),
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let err = krb5_kdc::issue_as(&store, &user_as_req(41)).unwrap_err();
     assert_eq!(status(&err).0, err::NAME_EXP);
@@ -382,19 +406,32 @@ fn as_zero_expiration_still_issues() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&cname, None, None, Some(0), Some(0), None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(0),
+                pw_expire: Some(0),
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     krb5_kdc::issue_as(&store, &user_as_req(45)).expect("0 = never");
     store
         .apply_admin_fields(
             &cname,
-            None,
-            None,
-            Some(u32::MAX),
-            Some(u32::MAX),
-            None,
-            false,
-            None,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(u32::MAX),
+                pw_expire: Some(u32::MAX),
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
         )
         .unwrap();
     krb5_kdc::issue_as(&store, &user_as_req(46)).expect("future still issues");
@@ -563,25 +600,29 @@ fn realm_cap_omitted_rlife_allows_five_day_renew() {
     store
         .apply_admin_fields(
             &user,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            Some(7 * 24 * 3600),
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: Some(7 * 24 * 3600),
+            },
         )
         .unwrap();
     store
         .apply_admin_fields(
             &tgt,
-            None,
-            None,
-            None,
-            None,
-            None,
-            false,
-            Some(7 * 24 * 3600),
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: Some(7 * 24 * 3600),
+            },
         )
         .unwrap();
 

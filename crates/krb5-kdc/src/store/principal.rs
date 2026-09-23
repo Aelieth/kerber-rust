@@ -412,6 +412,30 @@ pub(super) fn stamp_admin_tl(p: &mut Principal, pwd_change: bool, actor: &str) {
     }
 }
 
+/// kadm5 modify-principal fields.
+///
+/// MIT `kadm5_principal_ent_rec` (`lib/kadm5/admin.h:213`). The `Option`
+/// values are the mask bits `KADM5_ATTRIBUTES`, `KADM5_MAX_LIFE`,
+/// `KADM5_PRINC_EXPIRE_TIME`, `KADM5_PW_EXPIRATION`, `KADM5_POLICY`,
+/// `KADM5_POLICY_CLR`, and `KADM5_MAX_RLIFE` (`admin.h:89-102`).
+#[derive(Clone, Default)]
+pub struct AdminFields {
+    /// Principal attributes.
+    pub attributes: Option<u32>,
+    /// Maximum ticket life, seconds.
+    pub max_life: Option<u64>,
+    /// Principal expiration, Unix time.
+    pub expiration: Option<u32>,
+    /// Password expiration, Unix time.
+    pub pw_expire: Option<u32>,
+    /// Policy name.
+    pub policy: Option<String>,
+    /// Clear the policy when set.
+    pub clear_policy: bool,
+    /// Maximum renewable life, seconds.
+    pub max_renewable_life: Option<u64>,
+}
+
 impl PrincipalStore {
     pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
         self.map.remove(id).ok_or(Error::NotFound)?;
@@ -1002,23 +1026,12 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`].
-    #[allow(clippy::too_many_arguments)]
     pub fn apply_admin_fields(
         &mut self,
         name: &PrincipalName,
-        attributes: Option<u32>,
-        max_life: Option<u64>,
-        expiration: Option<u32>,
-        pw_expire: Option<u32>,
-        policy: Option<String>,
-        clear_policy: bool,
-        max_renewable_life: Option<u64>,
+        fields: AdminFields,
     ) -> Result<(), Error> {
-        let realm = self.realm.clone();
-        let actor = default_mod_actor(&realm);
-        self.apply_admin_fields_in(
-            name,
-            &realm,
+        let AdminFields {
             attributes,
             max_life,
             expiration,
@@ -1026,6 +1039,21 @@ impl PrincipalStore {
             policy,
             clear_policy,
             max_renewable_life,
+        } = fields;
+        let realm = self.realm.clone();
+        let actor = default_mod_actor(&realm);
+        self.apply_admin_fields_in(
+            name,
+            &realm,
+            AdminFields {
+                attributes,
+                max_life,
+                expiration,
+                pw_expire,
+                policy,
+                clear_policy,
+                max_renewable_life,
+            },
             &actor,
         )
     }
@@ -1035,20 +1063,22 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`].
-    #[allow(clippy::too_many_arguments)]
     pub fn apply_admin_fields_in(
         &mut self,
         name: &PrincipalName,
         princ_realm: &str,
-        attributes: Option<u32>,
-        max_life: Option<u64>,
-        expiration: Option<u32>,
-        pw_expire: Option<u32>,
-        policy: Option<String>,
-        clear_policy: bool,
-        max_renewable_life: Option<u64>,
+        fields: AdminFields,
         actor: &str,
     ) -> Result<(), Error> {
+        let AdminFields {
+            attributes,
+            max_life,
+            expiration,
+            pw_expire,
+            policy,
+            clear_policy,
+            max_renewable_life,
+        } = fields;
         let id = self.canonical_id(name, princ_realm)?;
         let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
         {

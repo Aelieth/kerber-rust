@@ -31,7 +31,18 @@ use krb5_types::{
 fn or_attr(store: &mut PrincipalStore, name: &PrincipalName, bit: u32) {
     let a = store.get_name(name).unwrap().attributes | bit;
     store
-        .apply_admin_fields(name, Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            name,
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
 }
 
@@ -124,7 +135,18 @@ fn tgs_caps_endtime_at_client_max_life() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 12021);
     store
-        .apply_admin_fields(&user(), None, Some(60), None, None, None, false, None)
+        .apply_admin_fields(
+            &user(),
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: Some(60),
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
@@ -277,7 +299,18 @@ fn tgt_part_a3_r27(store: &PrincipalStore, issued: &krb5_kdc::IssuedAs) -> EncTi
 fn s4u2self_caps_endtime_at_impersonated_max_life() {
     let (mut store, _) = bootstrap_documented().unwrap();
     store
-        .apply_admin_fields(&admin(), None, Some(60), None, None, None, false, None)
+        .apply_admin_fields(
+            &admin(),
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: Some(60),
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let tgt = host_as(&store, 27001, false);
     let out =
@@ -297,7 +330,18 @@ fn s4u2self_disallow_renewable_user_has_no_r() {
     let (mut store, _) = bootstrap_documented().unwrap();
     let a = store.get_name(&admin()).unwrap().attributes | KDB_DISALLOW_RENEWABLE;
     store
-        .apply_admin_fields(&admin(), Some(a), None, None, None, None, false, None)
+        .apply_admin_fields(
+            &admin(),
+            krb5_kdc::AdminFields {
+                attributes: Some(a),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let tgt = host_as(&store, 27011, true);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::RENEWABLE, true);
@@ -315,7 +359,18 @@ fn tgs_expired_server_beats_require_auth() {
         .set_string(&host, "require_auth", Some("pkinit"))
         .unwrap();
     store
-        .apply_admin_fields(&host, None, None, Some(1), None, None, false, None)
+        .apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(1),
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let tgs = TgsReqBuilder::new(
         issued.rep.0.ticket.clone(),
@@ -562,14 +617,36 @@ fn tgs_issues_after_client_expires() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let issued = krb5_kdc::issue_as(&store, &user_as_req(47)).expect("AS while unexpired");
     store
-        .apply_admin_fields(&cname, None, None, Some(1), None, None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(1),
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 48)).expect("TGS after NAME_EXP");
 
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let issued = krb5_kdc::issue_as(&store, &user_as_req(49)).expect("AS while unexpired");
     store
-        .apply_admin_fields(&cname, None, None, None, Some(1), None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: None,
+                pw_expire: Some(1),
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 50)).expect("TGS after KEY_EXPIRED");
 }
@@ -580,7 +657,18 @@ fn tgs_rejects_expired_server() {
     let host = documented_host();
     let issued = krb5_kdc::issue_as(&store, &user_as_req(51)).expect("AS");
     store
-        .apply_admin_fields(&host, None, None, Some(1), None, None, false, None)
+        .apply_admin_fields(
+            &host,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: None,
+                expiration: Some(1),
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 52)).unwrap_err();
     assert_eq!(status(&err).0, err::SERVICE_EXP);
@@ -660,7 +748,18 @@ fn tgs_renew_after_endtime_is_process_tgs() {
     store.policy.skew = 0;
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
-        .apply_admin_fields(&cname, None, Some(1), None, None, None, false, None)
+        .apply_admin_fields(
+            &cname,
+            krb5_kdc::AdminFields {
+                attributes: None,
+                max_life: Some(1),
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
         .unwrap();
     let issued = renewable_as(&store, 95);
     // max_life is 1 s; wait until the integer endtime second has passed.
