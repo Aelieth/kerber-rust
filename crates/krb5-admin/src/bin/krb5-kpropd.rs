@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use krb5_admin::{KPROP_PORT, kpropd_handle_conn};
+use krb5_admin::{KPROP_PORT, KpropdConfig, kpropd_handle_conn};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::load_store;
 use krb5_kdc::testrealm::documented_host;
@@ -79,13 +79,15 @@ fn main() {
                 thread::spawn(move || {
                     match kpropd_handle_conn(
                         &mut stream,
-                        &keys,
-                        None,
-                        Some(realm.as_str()),
-                        master.as_bytes(),
-                        &db,
-                        &stash,
-                        allowed.as_deref(),
+                        &KpropdConfig {
+                            host_keys: &keys,
+                            expected_server: None,
+                            expected_realm: Some(realm.as_str()),
+                            master_password: master.as_bytes(),
+                            db: &db,
+                            stash: &stash,
+                            allowed_clients: allowed.as_deref(),
+                        },
                         replay,
                     ) {
                         Ok(_) => println!("kprop ok"),

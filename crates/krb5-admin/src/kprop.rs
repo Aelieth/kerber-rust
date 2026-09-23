@@ -566,23 +566,47 @@ pub fn kpropd_send_ack(
     Ok(())
 }
 
+/// kpropd's parsed configuration.
+///
+/// MIT `kpropd.c:131-143`: the realm, database path, stash, and ACL the
+/// daemon was started with.
+#[derive(Clone, Copy)]
+pub struct KpropdConfig<'a> {
+    /// Host keys that accept the kprop `sendauth`.
+    pub host_keys: &'a [ProtocolKey],
+    /// Expected kprop client principal, when the caller set one.
+    pub expected_server: Option<&'a PrincipalName>,
+    /// Expected client realm, when the caller set one.
+    pub expected_realm: Option<&'a str>,
+    /// Master password that decrypts the dump.
+    pub master_password: &'a [u8],
+    /// Replica database path.
+    pub db: &'a Path,
+    /// Replica stash path.
+    pub stash: &'a Path,
+    /// Client principals allowed to propagate.
+    pub allowed_clients: Option<&'a [String]>,
+}
+
 /// Full replica handler: recvauth, dump v7 body, `load_dump`, persist, ack.
 ///
 /// # Errors
 ///
 /// Auth, dump, persist, or I/O.
-#[allow(clippy::too_many_arguments)]
 pub fn kpropd_handle_conn(
     stream: &mut TcpStream,
-    host_keys: &[ProtocolKey],
-    expected_server: Option<&PrincipalName>,
-    expected_realm: Option<&str>,
-    master_password: &[u8],
-    db: &Path,
-    stash: &Path,
-    allowed_clients: Option<&[String]>,
+    cfg: &KpropdConfig<'_>,
     replay: ReplayCache,
 ) -> Result<PrincipalStore, Error> {
+    let KpropdConfig {
+        host_keys,
+        expected_server,
+        expected_realm,
+        master_password,
+        db,
+        stash,
+        allowed_clients,
+    } = *cfg;
     let mut auth = kpropd_recvauth(
         stream,
         host_keys,

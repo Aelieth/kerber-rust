@@ -24,7 +24,7 @@ pub use kadm5::{
     iprop_fullresync, iprop_pull, kadm5_handle_rpc, serve_kadm5_conn,
 };
 pub use kprop::{
-    IpropPoll, KpropAuth, iprop_poll_once, kprop_dump_bytes, kprop_dump_iprop,
+    IpropPoll, KpropAuth, KpropdConfig, iprop_poll_once, kprop_dump_bytes, kprop_dump_iprop,
     kprop_expired_ap_req, kprop_load_bytes, kprop_send_dump, kprop_send_store,
     kprop_send_store_iprop, kprop_sendauth, kpropd_handle_conn, kpropd_recv_dump, kpropd_recvauth,
     kpropd_send_ack,

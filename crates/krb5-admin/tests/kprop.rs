@@ -230,13 +230,15 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
         let stash = dir.join("stash");
         let store = kpropd_handle_conn(
             &mut stream,
-            &host_keys2,
-            Some(&host_for_server),
-            Some(TEST_REALM),
-            MASTER,
-            &db,
-            &stash,
-            Some(allowed.as_slice()),
+            &KpropdConfig {
+                host_keys: &host_keys2,
+                expected_server: Some(&host_for_server),
+                expected_realm: Some(TEST_REALM),
+                master_password: MASTER,
+                db: &db,
+                stash: &stash,
+                allowed_clients: Some(allowed.as_slice()),
+            },
             ReplayCache::new(),
         )
         .expect("kpropd_handle_conn");
@@ -341,13 +343,15 @@ fn kpropd_rejects_client_not_on_allowlist() {
         let stash = dir.join("stash");
         let err = kpropd_handle_conn(
             &mut stream,
-            &host_keys2,
-            Some(&host_for_server),
-            Some(TEST_REALM),
-            MASTER,
-            &db,
-            &stash,
-            Some(allowed.as_slice()),
+            &KpropdConfig {
+                host_keys: &host_keys2,
+                expected_server: Some(&host_for_server),
+                expected_realm: Some(TEST_REALM),
+                master_password: MASTER,
+                db: &db,
+                stash: &stash,
+                allowed_clients: Some(allowed.as_slice()),
+            },
             ReplayCache::new(),
         )
         .unwrap_err();
@@ -437,13 +441,15 @@ fn kpropd_rejects_when_acl_unset() {
         let stash = dir.join("stash");
         let err = kpropd_handle_conn(
             &mut stream,
-            &host_keys2,
-            Some(&host_for_server),
-            Some(TEST_REALM),
-            MASTER,
-            &db,
-            &stash,
-            None,
+            &KpropdConfig {
+                host_keys: &host_keys2,
+                expected_server: Some(&host_for_server),
+                expected_realm: Some(TEST_REALM),
+                master_password: MASTER,
+                db: &db,
+                stash: &stash,
+                allowed_clients: None,
+            },
             ReplayCache::new(),
         )
         .unwrap_err();
