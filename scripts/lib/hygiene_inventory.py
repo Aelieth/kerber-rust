@@ -785,12 +785,39 @@ def _preceded_by_let(src: str, i: int) -> bool:
     return j == 3 or not (src[j - 4].isalnum() or src[j - 4] == "_")
 
 
+def _arg_borrow_at(src: str, path_start: int) -> int | None:
+    """Index of an `&` that borrows this struct as a whole call argument."""
+    j = path_start
+    while j > 0 and src[j - 1].isspace():
+        j -= 1
+    if j == 0 or src[j - 1] != "&" or (j > 1 and src[j - 2] == "&"):
+        return None
+    k = j - 1
+    while k > 0 and src[k - 1].isspace():
+        k -= 1
+    if k == 0 or src[k - 1] in "(,":
+        return j - 1
+    return None
+
+
+def _drop_out_suffix(out: list[str], n: int) -> None:
+    while n > 0 and out:
+        chunk = out[-1]
+        if len(chunk) <= n:
+            n -= len(chunk)
+            out.pop()
+        else:
+            out[-1] = chunk[:-n]
+            n = 0
+
+
 def params_literal_to_args(src: str, structs: dict[str, list[str]]) -> str:
     """Replace an exact `Struct { f1: e1, … }` with `e1, …`.
 
     Field order is the map's. Shorthand `f` is `f: f`. A `..` tail, a
     renamed binding (`f: g` is still an expression; a field list that is
-    not exactly the map), or a `let` pattern is left alone.
+    not exactly the map), or a `let` pattern is left alone. An `&` that
+    borrows the struct as a whole argument is consumed with the literal.
     """
     if not structs or not src:
         return src
@@ -841,6 +868,9 @@ def params_literal_to_args(src: str, structs: dict[str, list[str]]) -> str:
                 end, exprs = _parse_exact_literal(src, brace, fields)
                 if end > brace:
                     if exprs is not None:
+                        borrow = _arg_borrow_at(src, path_start)
+                        if borrow is not None:
+                            _drop_out_suffix(out, path_start - borrow)
                         out.append(", ".join(exprs))
                     else:
                         out.append(src[path_start:end])

@@ -3952,6 +3952,27 @@ def _self_test() -> int:
             raise SystemExit(
                 "hygiene-fn-diff --self-test: a non-consecutive field slice must fail"
             )
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(&S { a: x, b: y })\n}\n",
+        )
+        borrowed = compare_trees(
+            old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a", "b"])}
+        )
+        evaluate(borrowed)
+        if borrowed["params_only"] != 1 or borrowed["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: &Struct { } must be params-only: "
+                f"{borrowed}"
+            )
+        n += 1
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
     if suffixed:

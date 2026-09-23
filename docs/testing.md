@@ -97,7 +97,8 @@ with one struct value or reference and whose body is the old body
 prefixed by `let Struct { f1, f2, … } = p;` (or `= *p` when the
 parameter is `&Struct`), and a call site whose body matches the old
 body after the struct literal is rewritten back to those field
-expressions in order. Shorthand `f` means `f: f`. One struct's map
+expressions in order. Shorthand `f` means `f: f`. An `&` that borrows the struct as a whole
+argument is consumed with the literal. One struct's map
 entries may name a consecutive slice of its longest field list, for a
 function that never took the other fields: the destructure then ends
 with `..`, a call still names every field, and the rewrite keeps that
