@@ -264,15 +264,17 @@ def quality_grep(root: pathlib.Path) -> list[str]:
         src_loc += text.count("\n") + (0 if text.endswith("\n") or not text else 1)
         if "/tests/" in rel.replace("\\", "/"):
             test_files += 1
-        allow_n += len(re.findall(r"#\[allow\(", text))
+        allow_n += len(_ALLOW_OPEN_RE.findall(text))
         norm = rel.replace("\\", "/")
         # Product src only. `krb5-testkit` is a test-only crate (workspace
         # `publish = false`); its unwraps are the helpers S2.2 moved out of
         # `tests/`, which this key never counted. A `src/**` file the parent
         # declared `#[cfg(test)] mod` is src-test (`diff_compare.rs`,
         # `kadm5/tests/*.rs`), not product.
+        # `(?<!\[)` so `#[expect(` / `#![expect(` is not a panic. `.expect(`
+        # still counts: the character before `expect` is `.`, not `[`.
         if "/src/" in norm and "/krb5-testkit/" not in norm and norm not in src_test_rels:
-            unwrap_n += len(re.findall(r"\bunwrap\(|\bexpect\(|\bpanic!\(", text))
+            unwrap_n += len(re.findall(r"\bunwrap\(|(?<!\[)expect\(|\bpanic!\(", text))
             rustfmt_skip_n += len(re.findall(r"#\[rustfmt::skip\]", text))
     rows.append(f"allow={allow_n}")
     rows.append(f"rustfmt_skip={rustfmt_skip_n}")
@@ -308,7 +310,9 @@ PUB_ITEM_RE = re.compile(
     r"^\s*pub(?P<restrict>\s*\([^)]*\))?\s+(?:(?:const|async|unsafe|extern\s+\"[^\"]*\")\s+)*"
     r"(?:fn|struct|enum|trait|type|const|static|mod|use|union|macro_rules!)\b"
 )
-ALLOW_SITE_RE = re.compile(r"#!?\[allow\(([^)]*)\)\]")
+# `#[expect(` is a suppression, same as `#[allow(` / `#![allow(`.
+ALLOW_SITE_RE = re.compile(r"#!?\[(?:allow|expect)\(([^)]*)\)\]")
+_ALLOW_OPEN_RE = re.compile(r"#!?\[(?:allow|expect)\(")
 # The S4 acceptance grep: process tags that do not belong in source comments.
 PROCESS_HISTORY_RE = re.compile(r"\bR[0-9]+\b|A′-[0-9]|W0[a-f]|W1-[A-Z]|Round [0-9]|parent [0-9a-f]{7}")
 DIE_RE = re.compile(r"\bdie\b")
@@ -617,6 +621,356 @@ def cfg_test_files_in_pkg(pdir: pathlib.Path) -> set[str]:
     return rels
 
 
+def _skip_ws_comments(src: str, i: int) -> int:
+    n = len(src)
+    while i < n:
+        if src[i].isspace():
+            i += 1
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        break
+    return i
+
+
+def _copy_literal(src: str, i: int) -> int | None:
+    """Index past a string or char literal starting at `i`, else None."""
+    n = len(src)
+    if i >= n:
+        return None
+    if src.startswith(("r#", "br#", 'r"', "br\"")):
+        j = i
+        if src[j] == "b":
+            j += 1
+        if j < n and src[j] == "r":
+            j += 1
+            hashes = 0
+            while j < n and src[j] == "#":
+                hashes += 1
+                j += 1
+            if j < n and src[j] == '"':
+                close = '"' + "#" * hashes
+                k = src.find(close, j + 1)
+                return n if k < 0 else k + len(close)
+    if src.startswith(('b"', '"'), i):
+        j = i + (2 if src.startswith('b"', i) else 1)
+        while j < n:
+            if src[j] == "\\":
+                j += 2
+                continue
+            if src[j] == '"':
+                return j + 1
+            j += 1
+        return n
+    if src.startswith(("b'", "'"), i):
+        j = i + (2 if src.startswith("b'", i) else 1)
+        if j < n and src[j] == "\\":
+            k = src.find("'", j + 2)
+            if 0 < k <= j + 12:
+                return k + 1
+            return None
+        if j + 1 < n and src[j + 1] == "'":
+            return j + 2
+    return None
+
+
+def _scan_expr(src: str, i: int) -> int:
+    """Index of the comma or `}` that ends a field expression at depth 0."""
+    n = len(src)
+    paren = brack = brace = 0
+    while i < n:
+        lit = _copy_literal(src, i)
+        if lit is not None:
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        c = src[i]
+        if c == "(":
+            paren += 1
+        elif c == ")":
+            paren = max(0, paren - 1)
+        elif c == "[":
+            brack += 1
+        elif c == "]":
+            brack = max(0, brack - 1)
+        elif c == "{":
+            brace += 1
+        elif c == "}":
+            if paren == brack == brace == 0:
+                return i
+            brace = max(0, brace - 1)
+        elif c == "," and paren == brack == brace == 0:
+            return i
+        i += 1
+    return i
+
+
+def _parse_exact_literal(
+    src: str, brace_at: int, fields: list[str]
+) -> tuple[int, list[str] | None]:
+    """Parse `Struct { … }` at `brace_at` (`{`).
+
+    Returns `(index_after, exprs)` when the fields are exactly `fields`,
+    in that order, with shorthand `f` meaning `f: f` and no `..`.
+    Otherwise `(index_after, None)` and the caller leaves the literal.
+    """
+    i = brace_at + 1
+    n = len(src)
+    got: list[tuple[str, str]] = []
+    while i < n:
+        i = _skip_ws_comments(src, i)
+        if i >= n:
+            return n, None
+        if src[i] == "}":
+            i += 1
+            break
+        if src.startswith("..", i):
+            end = _scan_expr(src, i)
+            if end < n and src[end] == "}":
+                end += 1
+            return end, None
+        m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", src[i:])
+        if not m:
+            end = _scan_expr(src, i)
+            if end < n and src[end] == "}":
+                end += 1
+            return end, None
+        name = m.group(0)
+        i += len(name)
+        j = _skip_ws_comments(src, i)
+        if j < n and src[j] == ":":
+            expr_at = _skip_ws_comments(src, j + 1)
+            end = _scan_expr(src, expr_at)
+            expr = src[expr_at:end].strip()
+            i = end
+        else:
+            expr = name
+            i = j
+        got.append((name, expr))
+        i = _skip_ws_comments(src, i)
+        if i < n and src[i] == ",":
+            i += 1
+            continue
+        if i < n and src[i] == "}":
+            i += 1
+            break
+        end = _scan_expr(src, i)
+        if end < n and src[end] == "}":
+            end += 1
+        return end, None
+    if [name for name, _expr in got] != list(fields):
+        return i, None
+    return i, [expr for _name, expr in got]
+
+
+def _preceded_by_let(src: str, i: int) -> bool:
+    j = i
+    while j > 0 and src[j - 1].isspace():
+        j -= 1
+    if j < 3 or src[j - 3 : j] != "let":
+        return False
+    return j == 3 or not (src[j - 4].isalnum() or src[j - 4] == "_")
+
+
+def params_literal_to_args(src: str, structs: dict[str, list[str]]) -> str:
+    """Replace an exact `Struct { f1: e1, … }` with `e1, …`.
+
+    Field order is the map's. Shorthand `f` is `f: f`. A `..` tail, a
+    renamed binding (`f: g` is still an expression; a field list that is
+    not exactly the map), or a `let` pattern is left alone.
+    """
+    if not structs or not src:
+        return src
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        lit = _copy_literal(src, i)
+        if lit is not None:
+            out.append(src[i:lit])
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            out.append(src[i:j])
+            i = j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(src[i:j])
+            i = j
+            continue
+        if src[i].isalpha() or src[i] == "_":
+            m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", src[i:])
+            assert m is not None
+            path_start = i
+            last = m.group(0)
+            k = i + len(last)
+            while True:
+                j = _skip_ws_comments(src, k)
+                if not src.startswith("::", j):
+                    break
+                j = _skip_ws_comments(src, j + 2)
+                m2 = re.match(r"[A-Za-z_][A-Za-z0-9_]*", src[j:])
+                if not m2:
+                    break
+                last = m2.group(0)
+                k = j + len(last)
+            brace = _skip_ws_comments(src, k)
+            fields = structs.get(last)
+            if (
+                fields is not None
+                and brace < n
+                and src[brace] == "{"
+                and not _preceded_by_let(src, path_start)
+            ):
+                end, exprs = _parse_exact_literal(src, brace, fields)
+                if end > brace:
+                    if exprs is not None:
+                        out.append(", ".join(exprs))
+                    else:
+                        out.append(src[path_start:end])
+                    i = end
+                    continue
+        out.append(src[i])
+        i += 1
+    return "".join(out)
+
+
+def _binding_exprs(text: str, bindings: dict[str, str]) -> str | None:
+    raw = text.strip()
+    if raw in bindings:
+        return bindings[raw]
+    if raw.startswith("&") and raw[1:].strip() in bindings:
+        return bindings[raw[1:].strip()]
+    return None
+
+
+def expand_threaded_structs(src: str, structs: dict[str, list[str]]) -> str:
+    """A `let name = Struct { … };` of an exact literal threads `name`.
+
+    The let is removed and each call argument that is `name` or `&name`
+    is the field expressions. Anything else is left for
+    `params_literal_to_args`.
+    """
+    if not structs or not src:
+        return src
+    bindings: dict[str, str] = {}
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        lit = _copy_literal(src, i)
+        if lit is not None:
+            out.append(src[i:lit])
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            out.append(src[i:j])
+            i = j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(src[i:j])
+            i = j
+            continue
+        if src.startswith("let", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_")):
+            m = re.match(r"let\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*", src[i:])
+            if m:
+                rest = i + m.end()
+                path = re.match(
+                    r"(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+                    src[rest:],
+                )
+                if path and path.group(1) in structs:
+                    brace = rest + path.end() - 1
+                    end, exprs = _parse_exact_literal(src, brace, structs[path.group(1)])
+                    semi = _skip_ws_comments(src, end)
+                    if exprs is not None and semi < n and src[semi] == ";":
+                        bindings[m.group(1)] = ", ".join(exprs)
+                        i = semi + 1
+                        continue
+        out.append(src[i])
+        i += 1
+    rewritten = "".join(out)
+    if not bindings:
+        return rewritten
+    return _splice_args(rewritten, bindings)
+
+
+def _splice_args(src: str, bindings: dict[str, str]) -> str:
+    out: list[str] = []
+    i, n = 0, len(src)
+    depth = 0
+    arg_at = 0
+    buf_start = 0
+
+    def flush_to(pos: int) -> None:
+        nonlocal buf_start
+        out.append(src[buf_start:pos])
+        buf_start = pos
+
+    while i < n:
+        lit = _copy_literal(src, i)
+        if lit is not None:
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        c = src[i]
+        if c == "(":
+            depth += 1
+            if depth == 1:
+                arg_at = i + 1
+            i += 1
+            continue
+        if depth == 1 and c in ",)":
+            repl = _binding_exprs(src[arg_at:i], bindings)
+            if repl is not None:
+                flush_to(arg_at)
+                out.append(repl)
+                buf_start = i
+            if c == ",":
+                arg_at = i + 1
+                i += 1
+                continue
+            depth = 0
+            i += 1
+            continue
+        if c == ")" and depth > 1:
+            depth -= 1
+        i += 1
+    flush_to(n)
+    return "".join(out)
+
+
+def params_rewrite_new(src: str, structs: dict[str, list[str]]) -> str:
+    """Thread one exact `let` binding, then rewrite remaining literals."""
+    return params_literal_to_args(expand_threaded_structs(src, structs), structs)
+
+
 def self_test_cfg_test() -> int:
     """Single-line `#[cfg(test)] mod x;` is src-test."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -642,7 +996,41 @@ def self_test_cfg_test() -> int:
             raise SystemExit("a package's own target/ is not scanned for cfg(test) mods")
         if cfg_test_files_in_pkg(root / "target" / "pkg") != {"src/t.rs"}:
             raise SystemExit("a package under a target/ ancestor must still classify its cfg(test) mods")
-    return 2
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        lib = root / "crates" / "demo" / "src"
+        lib.mkdir(parents=True)
+        (lib / "lib.rs").write_text(
+            "#![allow(dead_code)]\n"
+            "#[expect(clippy::too_many_arguments)]\n"
+            "fn f() {\n"
+            "    let _ = x.expect(\"e\");\n"
+            "    panic!(\"p\");\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        quality = {row.split("=", 1)[0]: row.split("=", 1)[1] for row in quality_grep(root)}
+        if quality.get("allow") != "2":
+            raise SystemExit(
+                f"#[expect( must count as a suppression, got allow={quality.get('allow')}"
+            )
+        if quality.get("unwrap_expect_panic_src") != "2":
+            raise SystemExit(
+                "#[expect( must not count as a panic, "
+                f"got unwrap_expect_panic_src={quality.get('unwrap_expect_panic_src')}"
+            )
+        sites = shape_inventory(
+            root, [{"name": "demo", "dir": "crates/demo", "lib": True, "bins": [], "deps": []}]
+        )["allow_sites"]
+        if not any("too_many_arguments" in row for row in sites):
+            raise SystemExit(f"allow_sites must list #[expect(: {sites}")
+    got = params_literal_to_args("g(S { b: y, a: x })", {"S": ["a", "b"]})
+    if got != "g(S { b: y, a: x })":
+        raise SystemExit(f"swapped fields must not rewrite: {got}")
+    got = params_literal_to_args("g(S { a, ..Default::default() })", {"S": ["a", "b"]})
+    if "Default" not in got or got.count(",") < 1:
+        raise SystemExit(f"..Default tail must not rewrite: {got}")
+    return 3
 
 
 def _scope(

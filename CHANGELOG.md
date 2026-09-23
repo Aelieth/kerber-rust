@@ -12,6 +12,14 @@ this project uses semantic versioning once a crate is published.
   or private → any `pub`) is `vis-widen` and red unless accepted.
   Narrowing stays vis-only. A `pub(crate)` inside a doc comment is
   not a visibility token. `hygiene-fn-diff` self-test count is 70.
+- **tool.** `hygiene-fn-diff --params` classifies a parameter-struct
+  conversion as `params-only` when the new body is the old body after
+  the rule-7 destructure, and a call site as `params-only` when the
+  struct literal rewrites back to the old arguments. A map whose
+  field order disagrees with the old signature exits 2.
+  `hygiene-body-diff --params` uses that rewrite on test bodies.
+  `#[expect(` counts as a suppression and not as a panic.
+  Self-test counts are fn-diff 78, body-diff 34, inventory 3.
 
 ### W3-S3.8 dead code and surface
 

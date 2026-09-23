@@ -34,7 +34,7 @@ attribute block must equal the dispatcher's (doc edits are
 
 Usage:
   python3 scripts/hygiene-fn-diff.py --old SHA --new SHA \\
-      [--moves map.txt] [--accept map.txt] [--split map.txt] \\
+      [--moves map.txt] [--accept map.txt] [--params map.txt] [--split map.txt] \\
       [--glue LINE] [--roots DIR]
 """
 from __future__ import annotations
@@ -174,6 +174,26 @@ def load_keyed_id_map(path: pathlib.Path | None, kind: str) -> dict[str, str]:
                 if not right.startswith("merged:"):
                     raise SystemExit(f"many-to-one {rhs} needs merged: (from {left})")
     return {left: strip_merged(right) for left, right in mapping.items()}
+
+
+def load_params(path: pathlib.Path | None) -> dict[str, tuple[str, list[str]]]:
+    """`crate<TAB>path = Struct: f1, f2, …`. Field order is the old parameter order."""
+    if path is None:
+        return {}
+    _require_map_file(path, "--params")
+    raw = load_map(path, "=")
+    out: dict[str, tuple[str, list[str]]] = {}
+    for left, right in raw.items():
+        if "\t" not in left:
+            raise SystemExit(f"--params LHS must be crate<TAB>path: {left!r}")
+        m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.+)$", right.strip())
+        if not m:
+            raise SystemExit(f"--params RHS must be Struct: f1, f2: {right!r}")
+        fields = [part.strip() for part in m.group(2).split(",") if part.strip()]
+        if not fields:
+            raise SystemExit(f"--params needs at least one field: {left}")
+        out[left] = (m.group(1), fields)
+    return out
 
 
 def load_accept(path: pathlib.Path | None) -> dict[str, dict[str, str]]:
@@ -828,7 +848,7 @@ def _vis_delta_class(old_src: str, new_src: str) -> str | None:
     return None
 
 
-def classify(old_src: str, new_src: str) -> str:
+def classify(old_src: str, new_src: str, params_ctx: dict | None = None) -> str:
     if compare_norm(old_src) == compare_norm(new_src):
         return "identical"
     if compare_norm(_strip_doc_lines(old_src)) == compare_norm(_strip_doc_lines(new_src)):
@@ -854,7 +874,478 @@ def classify(old_src: str, new_src: str) -> str:
         _strip_doc_lines(new_stripped)
     ):
         return kind
+    if params_ctx is not None and _params_only(old_src, new_src, params_ctx):
+        return "params-only"
     return "changed"
+
+
+def _skip_code_ws(src: str, i: int) -> int:
+    n = len(src)
+    while i < n:
+        if src[i].isspace():
+            i += 1
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        break
+    return i
+
+
+def _scan_balanced(src: str, i: int, open_c: str, close_c: str) -> int:
+    """`i` points at `open_c`. Return the index past the matching close."""
+    depth = 0
+    n = len(src)
+    while i < n:
+        lit = _INV._copy_literal(src, i)
+        if lit is not None:
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        c = src[i]
+        if open_c == "<" and c == ">" and i > 0 and src[i - 1] == "-":
+            i += 1
+            continue
+        if c == open_c:
+            depth += 1
+        elif c == close_c:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return n
+
+
+def _split_top_commas(src: str) -> list[str]:
+    parts: list[str] = []
+    start = 0
+    i, n = 0, len(src)
+    paren = brack = brace = angle = 0
+    while i < n:
+        lit = _INV._copy_literal(src, i)
+        if lit is not None:
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        c = src[i]
+        if c == "(":
+            paren += 1
+        elif c == ")":
+            paren = max(0, paren - 1)
+        elif c == "[":
+            brack += 1
+        elif c == "]":
+            brack = max(0, brack - 1)
+        elif c == "{":
+            brace += 1
+        elif c == "}":
+            brace = max(0, brace - 1)
+        elif c == "<" and paren == brack == brace == 0:
+            angle += 1
+        elif c == ">" and angle and not (i > 0 and src[i - 1] == "-"):
+            angle -= 1
+        elif c == "," and paren == brack == brace == angle == 0:
+            parts.append(src[start:i])
+            start = i + 1
+        i += 1
+    tail = src[start:]
+    if tail.strip():
+        parts.append(tail)
+    return parts
+
+
+def _param_chunks(src: str) -> list[str] | None:
+    sig = signature_of(src)
+    m = re.search(r"\bfn\s+", sig)
+    if not m:
+        return None
+    i = m.end()
+    while i < len(sig) and (sig[i].isalnum() or sig[i] == "_"):
+        i += 1
+    i = _skip_code_ws(sig, i)
+    if i < len(sig) and sig[i] == "<":
+        i = _scan_balanced(sig, i, "<", ">")
+        i = _skip_code_ws(sig, i)
+    if i >= len(sig) or sig[i] != "(":
+        return None
+    j = _scan_balanced(sig, i, "(", ")")
+    return _split_top_commas(sig[i + 1 : j - 1])
+
+
+def _param_name(chunk: str) -> str | None:
+    s = " ".join(chunk.split())
+    if s in {"self", "&self", "&mut self", "mut self"}:
+        return "self"
+    s = re.sub(r"^mut\s+", "", s)
+    m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)\s*:", s)
+    return m.group(1) if m else None
+
+
+def _param_names_of(src: str) -> list[str] | None:
+    chunks = _param_chunks(src)
+    if chunks is None:
+        return None
+    names: list[str] = []
+    for chunk in chunks:
+        if not chunk.strip():
+            continue
+        name = _param_name(chunk)
+        if name is None:
+            return None
+        names.append(name)
+    return names
+
+
+def _find_slice(names: list[str], fields: list[str]) -> tuple[int, int] | None:
+    if not fields or len(fields) > len(names):
+        return None
+    width = len(fields)
+    for i in range(len(names) - width + 1):
+        if names[i : i + width] == fields:
+            return i, i + width
+    return None
+
+
+_TMA_RE = re.compile(
+    r"^#\[(?:allow|expect)\(\s*clippy::too_many_arguments\b[^]]*\)\]\s*$"
+)
+
+
+def _strip_tma_attr(src: str) -> str:
+    return "\n".join(ln for ln in src.splitlines() if not _TMA_RE.match(ln.strip()))
+
+
+def _blank_fn_params(src: str) -> str:
+    """Replace the fn parameter list with `()` so two signatures can share a skeleton."""
+    sig = signature_of(src)
+    m = re.search(r"\bfn\s+", sig)
+    if not m:
+        return src
+    i = m.end()
+    while i < len(sig) and (sig[i].isalnum() or sig[i] == "_"):
+        i += 1
+    i = _skip_code_ws(sig, i)
+    if i < len(sig) and sig[i] == "<":
+        i = _scan_balanced(sig, i, "<", ">")
+        i = _skip_code_ws(sig, i)
+    if i >= len(sig) or sig[i] != "(":
+        return src
+    j = _scan_balanced(sig, i, "(", ")")
+    return src[:i] + "()" + src[j:]
+
+
+def _type_is_struct(chunk: str, struct: str) -> bool:
+    text = " ".join(chunk.split())
+    text = re.sub(r"^(?:mut\s+)?[A-Za-z_][A-Za-z0-9_]*\s*:\s*", "", text)
+    text = text.replace(" ", "")
+    return bool(
+        re.fullmatch(
+            rf"(?:&(?:mut)?)?{re.escape(struct)}(?:<'(?:[A-Za-z_][A-Za-z0-9_]*|_)>)?",
+            text,
+        )
+    )
+
+
+def _match_destructure(inner: str, struct: str, fields: list[str]) -> tuple[str, str] | None:
+    """`let Struct { f1, f2, … } = binder;` or `= *binder`. Shorthand only."""
+    i = _skip_code_ws(inner, 0)
+    if not inner.startswith("let", i):
+        return None
+    if i + 3 < len(inner) and (inner[i + 3].isalnum() or inner[i + 3] == "_"):
+        return None
+    i = _skip_code_ws(inner, i + 3)
+    if inner.startswith("mut", i) and not (
+        i + 3 < len(inner) and (inner[i + 3].isalnum() or inner[i + 3] == "_")
+    ):
+        i = _skip_code_ws(inner, i + 3)
+    m = re.match(r"(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*\{", inner[i:])
+    if not m or m.group(1) != struct:
+        return None
+    brace = i + m.end() - 1
+    end, _exprs = _INV._parse_exact_literal(inner, brace, fields)
+    if _exprs is None:
+        return None
+    # shorthand expressions must be the field names themselves
+    if [e.strip() for e in _exprs] != list(fields):
+        return None
+    j = _skip_code_ws(inner, end)
+    if j >= len(inner) or inner[j] != "=":
+        return None
+    j = _skip_code_ws(inner, j + 1)
+    if j < len(inner) and inner[j] == "*":
+        j = _skip_code_ws(inner, j + 1)
+    mname = re.match(r"[A-Za-z_][A-Za-z0-9_]*", inner[j:])
+    if not mname:
+        return None
+    j += len(mname.group(0))
+    j = _skip_code_ws(inner, j)
+    if j >= len(inner) or inner[j] != ";":
+        return None
+    return mname.group(0), inner[j + 1 :]
+
+
+def _code_has_semi(src: str) -> bool:
+    i, n = 0, len(src)
+    while i < n:
+        lit = _INV._copy_literal(src, i)
+        if lit is not None:
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j + 1
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        if src[i] == ";":
+            return True
+        i += 1
+    return False
+
+
+def _pure_forward(src: str) -> tuple[str, list[str]] | None:
+    inner = inner_body(src).strip()
+    if not inner or _code_has_semi(inner):
+        return None
+    m = re.match(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*\(",
+        inner,
+    )
+    if not m:
+        return None
+    paren = inner.rfind("(", 0, m.end())
+    end = _scan_balanced(inner, paren, "(", ")")
+    if inner[end:].strip():
+        return None
+    args = [a.strip() for a in _split_top_commas(inner[paren + 1 : end - 1])]
+    return m.group(1), args
+
+
+def _fns_by_name(fns: dict[str, dict[str, str]]) -> dict[str, str]:
+    buckets: dict[str, list[str]] = {}
+    for rec in fns.values():
+        buckets.setdefault(rec["name"], []).append(rec["src"])
+    return {name: srcs[0] for name, srcs in buckets.items() if len(srcs) == 1}
+
+
+def _walk_forward(
+    by_name: dict[str, str], name: str, src: str, steps: dict[str, tuple]
+) -> tuple[str, str]:
+    seen: set[str] = set()
+    while name not in seen:
+        parsed = _pure_forward(src)
+        if parsed is None:
+            return name, src
+        callee, args = parsed
+        params = _param_names_of(src) or []
+        if len(args) < len(params) or any(
+            compare_norm(a) != compare_norm(p) for a, p in zip(args, params)
+        ):
+            return name, src
+        steps[name] = (params, callee, [a.strip() for a in args[len(params) :]])
+        seen.add(name)
+        nxt = by_name.get(callee)
+        if nxt is None:
+            return callee, src
+        name, src = callee, nxt
+    return name, src
+
+
+def prepare_params(
+    old: dict[str, dict[str, str]],
+    new: dict[str, dict[str, str]],
+    params: dict[str, tuple[str, list[str]]],
+    moves: dict[str, str],
+) -> tuple[dict[str, list[str]], dict[str, tuple], dict[str, str]]:
+    """Order-check the map. Return structs, forward steps, ultimate→survivor names."""
+    by_name = _fns_by_name(old)
+    steps: dict[str, tuple] = {}
+    survivor: dict[str, str] = {}
+    structs: dict[str, list[str]] = {}
+    for key, (struct, fields) in params.items():
+        if key not in old:
+            raise SystemExit(f"hygiene-fn-diff: --params key missing in old tree: {key}")
+        prev = structs.get(struct)
+        if prev is not None and prev != fields:
+            raise SystemExit(f"hygiene-fn-diff: --params struct {struct} fields disagree: {key}")
+        structs[struct] = list(fields)
+        names = _param_names_of(old[key]["src"])
+        if names is None:
+            raise SystemExit(
+                f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
+            )
+        if _find_slice(names, fields) is not None:
+            continue
+        ult_name, ult_src = _walk_forward(by_name, old[key]["name"], old[key]["src"], steps)
+        ult_names = _param_names_of(ult_src)
+        if ult_names != list(fields) or names != list(fields)[: len(names)]:
+            raise SystemExit(
+                f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
+            )
+        survivor[ult_name] = old[key]["name"]
+    for key, rec in old.items():
+        if key in new or key in moves or rec["name"] in steps:
+            continue
+        _walk_forward(by_name, rec["name"], rec["src"], steps)
+    return structs, steps, survivor
+
+
+def _definition_params(
+    old_src: str,
+    new_src: str,
+    struct: str,
+    fields: list[str],
+    by_name: dict[str, str],
+    self_name: str,
+) -> bool:
+    old_s = _strip_doc_lines(_strip_tma_attr(old_src))
+    new_s = _strip_doc_lines(_strip_tma_attr(new_src))
+    old_sk = signature_of(_blank_fn_params(old_s))
+    new_sk = signature_of(_blank_fn_params(new_s))
+    if compare_norm(old_sk) != compare_norm(new_sk):
+        return False
+    old_names = _param_names_of(old_s)
+    new_names = _param_names_of(new_s)
+    new_chunks = _param_chunks(new_s)
+    if old_names is None or new_names is None or new_chunks is None:
+        return False
+    sl = _find_slice(old_names, fields)
+    expected_fields = list(fields)
+    body_old = inner_body(old_s)
+    if sl is None:
+        steps: dict[str, tuple] = {}
+        ult_name, ult_src = _walk_forward(by_name, self_name, old_s, steps)
+        if _param_names_of(ult_src) != list(fields) or old_names != list(fields)[: len(old_names)]:
+            return False
+        if any(name != "self" and name not in fields for name in old_names):
+            return False
+        # The whole parameter list is the field prefix.
+        if old_names != list(fields)[: len(old_names)] or len(new_names) != 1:
+            return False
+        if not _type_is_struct(new_chunks[0], struct):
+            return False
+        binder = new_names[0]
+        body_old = inner_body(ult_src)
+        sl_index = 0
+    else:
+        a, b = sl
+        if new_names[:a] != old_names[:a] or new_names[a + 1 :] != old_names[b:]:
+            return False
+        if not _type_is_struct(new_chunks[a], struct):
+            return False
+        binder = new_names[a]
+        sl_index = a
+    matched = _match_destructure(inner_body(new_s), struct, expected_fields)
+    if matched is None:
+        return False
+    got_binder, rest = matched
+    if got_binder != binder or sl_index < 0:
+        return False
+    return compare_norm(rest) == compare_norm(body_old)
+
+
+def _expand_call_args(
+    name: str, args: list[str], steps: dict[str, tuple], survivor: dict[str, str]
+) -> tuple[str, list[str]]:
+    seen: set[str] = set()
+    while name in steps and name not in seen:
+        seen.add(name)
+        params, callee, tail = steps[name]
+        if len(args) != len(params):
+            break
+        args = [*args, *tail]
+        name = callee
+    if name in survivor:
+        name = survivor[name]
+    return name, args
+
+
+def expand_forwards(src: str, steps: dict[str, tuple], survivor: dict[str, str]) -> str:
+    """Inline pure forwards and rename a removed ultimate to the survivor."""
+    if not steps and not survivor:
+        return src
+    out: list[str] = []
+    i, n = 0, len(src)
+
+    def expand_from(pos: int) -> tuple[str, int] | None:
+        m = re.match(r"([A-Za-z_][A-Za-z0-9_]*)", src[pos:])
+        if not m:
+            return None
+        name = m.group(1)
+        k = pos + len(name)
+        j = _skip_code_ws(src, k)
+        if j >= n or src[j] != "(" or (name not in steps and name not in survivor):
+            return None
+        end = _scan_balanced(src, j, "(", ")")
+        raw_args = _split_top_commas(src[j + 1 : end - 1])
+        args = [expand_forwards(a.strip(), steps, survivor) for a in raw_args if a.strip() or len(raw_args) > 1]
+        if len(raw_args) == 1 and not raw_args[0].strip():
+            args = []
+        new_name, new_args = _expand_call_args(name, [a.strip() for a in raw_args], steps, survivor)
+        # Expand tails and nested calls in the rewritten argument text.
+        rendered = ", ".join(expand_forwards(a, steps, survivor) for a in new_args)
+        return f"{new_name}({rendered})", end
+
+    while i < n:
+        lit = _INV._copy_literal(src, i)
+        if lit is not None:
+            out.append(src[i:lit])
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            out.append(src[i:j])
+            i = j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(src[i:j])
+            i = j
+            continue
+        if src[i].isalpha() or src[i] == "_":
+            hit = expand_from(i)
+            if hit is not None:
+                out.append(hit[0])
+                i = hit[1]
+                continue
+        out.append(src[i])
+        i += 1
+    return "".join(out)
+
+
+def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
+    spec = ctx.get("spec")
+    structs: dict[str, list[str]] = ctx.get("structs") or {}
+    steps: dict[str, tuple] = ctx.get("steps") or {}
+    survivor: dict[str, str] = ctx.get("survivor") or {}
+    if spec is not None:
+        struct, fields = spec
+        if _definition_params(old_src, new_src, struct, fields, ctx.get("by_name") or {}, ctx.get("self_name") or ""):
+            return True
+    if not structs:
+        return False
+    new_rw = _INV.params_rewrite_new(new_src, structs)
+    old_ex = expand_forwards(old_src, steps, survivor)
+    return compare_norm(new_rw) == compare_norm(old_ex)
 
 
 IMPL_START_RE = re.compile(r"^\s*(?:unsafe\s+)?impl\b")
@@ -1464,9 +1955,18 @@ def compare_trees(
     glue: dict[str, list[str]] | list[str],
     roots: list[str] | None = None,
     split_extra: dict[str, dict[str, object]] | None = None,
+    params: dict[str, tuple[str, list[str]]] | None = None,
 ) -> dict[str, object]:
     old = extract(old_root, roots)
     new = extract(new_root, roots)
+    params = params or {}
+    structs: dict[str, list[str]] = {}
+    steps: dict[str, tuple] = {}
+    survivor: dict[str, str] = {}
+    by_name: dict[str, str] = {}
+    if params:
+        structs, steps, survivor = prepare_params(old, new, params, moves)
+        by_name = _fns_by_name(old)
     used_old: set[str] = set()
     used_new: set[str] = set()
     used_moves: set[str] = set()
@@ -1605,11 +2105,27 @@ def compare_trees(
             used_moves.add(okey)
         if nkey not in new or (nkey in used_new and nkey not in merged_targets):
             continue
-        kind = classify(ofn["src"], new[nkey]["src"])
+        ctx = None
+        if params:
+            ctx = {
+                "spec": params.get(okey),
+                "structs": structs,
+                "steps": steps,
+                "survivor": survivor,
+                "by_name": by_name,
+                "self_name": ofn["name"],
+            }
+        kind = classify(ofn["src"], new[nkey]["src"], ctx)
         pairs.append((okey, nkey, kind))
         used_old.add(okey)
         used_new.add(nkey)
 
+    if params:
+        unused_params = sorted(k for k in params if k not in used_old)
+        if unused_params:
+            raise SystemExit(
+                f"hygiene-fn-diff: --params entry unused: {unused_params[0]}"
+            )
     removed = sorted(k for k in old if k not in used_old)
     added = sorted(k for k in new if k not in used_new)
     empty_h = blob_hash("")
@@ -1646,6 +2162,7 @@ def compare_trees(
     fmt_only = [(o, n) for o, n, k in pairs if k == "fmt-only"]
     doc_only = [(o, n) for o, n, k in pairs if k == "doc-only"]
     changed = [(o, n) for o, n, k in pairs if k == "changed"]
+    params_only = [(o, n) for o, n, k in pairs if k == "params-only"]
 
     unaccepted: list[tuple[str, str]] = []
     missing_rhs: list[str] = []
@@ -1689,6 +2206,8 @@ def compare_trees(
         "doc_only": len(doc_only),
         "doc_only_items": doc_only,
         "changed": len(changed),
+        "params_only": len(params_only),
+        "params_only_items": params_only,
         "accepted": accepted,
         "unaccepted": unaccepted,
         "removed": removed,
@@ -1722,6 +2241,7 @@ def render(report: dict[str, object]) -> str:
         f"fmt-only {report['fmt_only']}",
         f"doc-only {report['doc_only']}",
         f"changed {report['changed']}",
+        f"params-only {report.get('params_only', 0)}",
         f"accepted {len(report['accepted'])}",  # type: ignore[arg-type]
         f"removed {len(report['removed'])}",  # type: ignore[arg-type]
         f"added {len(report['added'])}",  # type: ignore[arg-type]
@@ -1741,6 +2261,8 @@ def render(report: dict[str, object]) -> str:
         lines.append(f"fmt-only {o} -> {n}")
     for o, n in report["doc_only_items"]:  # type: ignore[misc]
         lines.append(f"doc-only {o} -> {n}")
+    for o, n in report.get("params_only_items") or []:  # type: ignore[misc]
+        lines.append(f"params-only {o} -> {n}")
     for o, n, reason in report["accepted"]:  # type: ignore[misc]
         lines.append(f"accepted {o} -> {n}: {reason}")
     for k, sig in report.get("split_sigs", []):  # type: ignore[misc]
@@ -2911,6 +3433,139 @@ def _self_test() -> int:
         )
         _must_red(no_edit, "let mut without a declared edit")
         n += 1
+
+        pmap = {"demo\tg": ("S", ["a", "b"])}
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    let S { a, b } = p;\n    a + b\n}\n",
+        )
+        defined = compare_trees(old, new, {}, {}, {}, [], params=pmap)
+        evaluate(defined)
+        if defined["params_only"] != 1 or defined["changed"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: params definition must be params-only: {defined}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn caller() {\n    g(x, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\nfn caller() {\n    g(S { a: x, b: y })\n}\n",
+        )
+        called = compare_trees(old, new, {}, {}, {}, [], params=pmap)
+        evaluate(called)
+        if called["params_only"] != 1 or called["changed"] != 0:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: params call site must be params-only: {called}"
+            )
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+            "fn caller() {\n    g(S { b: y, a: x })\n}\n",
+        )
+        swapped = compare_trees(old, new, {}, {}, {}, [], params=pmap)
+        if swapped["params_only"] != 0 or swapped["changed"] != 1:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: swapped fields must be changed: {swapped}"
+            )
+        _must_red(swapped, "two fields swapped")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+            "fn caller() {\n    let x = a;\n    g(S { a: x, b: y })\n}\n",
+        )
+        hoisted = compare_trees(old, new, {}, {}, {}, [], params=pmap)
+        if hoisted["params_only"] != 0 or hoisted["changed"] != 1:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: hoisted argument must be changed: {hoisted}"
+            )
+        _must_red(hoisted, "argument hoisted into a let")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+            "fn caller() {\n    g(S { a: x, ..Default::default() })\n}\n",
+        )
+        defaulted = compare_trees(old, new, {}, {}, {}, [], params=pmap)
+        if defaulted["params_only"] != 0 or defaulted["changed"] != 1:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: ..Default tail must be changed: {defaulted}"
+            )
+        _must_red(defaulted, "..Default::default() tail")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    let S { a, b: c } = p;\n    a + b\n}\n",
+        )
+        renamed = compare_trees(old, new, {}, {}, {}, [], params=pmap)
+        if renamed["params_only"] != 0 or renamed["changed"] != 1:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: renamed destructure must be changed: {renamed}"
+            )
+        _must_red(renamed, "destructure renames a field")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    let S { a, b } = p;\n    a + c\n}\n",
+        )
+        body_tok = compare_trees(old, new, {}, {}, {}, [], params=pmap)
+        if body_tok["params_only"] != 0 or body_tok["changed"] != 1:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: body token in a converted fn must be changed: {body_tok}"
+            )
+        _must_red(body_tok, "body token changed inside a converted fn")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    let S { b, a } = p;\n    a + b\n}\n",
+        )
+        try:
+            compare_trees(old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["b", "a"])})
+        except SystemExit as exc:
+            if "disagrees" not in str(exc):
+                raise SystemExit(
+                    f"hygiene-fn-diff --self-test: map order must name the function: {exc}"
+                )
+            n += 1
+        else:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: map order that disagrees with the signature must fail"
+            )
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
     if suffixed:
@@ -2934,6 +3589,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--new", required=True, help="SHA or directory")
     ap.add_argument("--moves", type=pathlib.Path)
     ap.add_argument("--accept", type=pathlib.Path)
+    ap.add_argument("--params", type=pathlib.Path, help="struct field map (crate<TAB>fn = Struct: f1, f2)")
     ap.add_argument("--split", type=pathlib.Path)
     ap.add_argument(
         "--split-line",
@@ -2962,6 +3618,7 @@ def main(argv: list[str] | None = None) -> int:
         _self_test()
     moves = load_keyed_id_map(ns.moves, "moves")
     accept = load_accept(ns.accept)
+    params = load_params(ns.params)
     splits, file_glue, split_extra = load_splits(ns.split, ns.split_line)
     glue = merge_glue(file_glue, parse_glue_args(ns.glue))
     if ns.roots:
@@ -2984,6 +3641,7 @@ def main(argv: list[str] | None = None) -> int:
             glue,
             roots=roots,
             split_extra=split_extra,
+            params=params,
         )
     sys.stdout.write(render(report))
     try:

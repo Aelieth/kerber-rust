@@ -27,7 +27,7 @@ target must exist).
 
 Usage:
   python3 scripts/hygiene-body-diff.py --old SHA --new SHA \\
-      --renames map.txt --duplicates map.txt [--accept accept.txt]
+      --renames map.txt --duplicates map.txt [--accept accept.txt] [--params map.txt]
 """
 from __future__ import annotations
 
@@ -839,15 +839,27 @@ def compare_trees(
     dups: dict[str, str],
     subst: list[tuple[str, str]],
     accept: dict[str, dict[str, str]],
+    params: dict[str, tuple[str, list[str]]] | None = None,
 ) -> dict[str, object]:
     old, new = extract(old_root), extract(new_root)
+    structs: dict[str, list[str]] = {}
+    steps: dict[str, tuple] = {}
+    survivor: dict[str, str] = {}
+    if params:
+        old_fns = _FN.extract(old_root)
+        new_fns = _FN.extract(new_root)
+        structs, steps, survivor = _FN.prepare_params(old_fns, new_fns, params, {})
     pairs, unmatched_old, unmatched_new = link(old, new, renames, dups)
     identical = helper_only = 0
     differ: list[tuple[dict, dict, list[str], list[str]]] = []
     assert_changes: list[tuple[dict, dict, str, str]] = []
     attr_changes: list[tuple[dict, dict]] = []
     for o, n in pairs:
-        ol, nl = apply_subst(norm_body(o["body"]), subst), apply_subst(norm_body(n["body"]), subst)
+        obody, nbody = o["body"], n["body"]
+        if params:
+            obody = _FN.expand_forwards(obody, steps, survivor)
+            nbody = _FN._INV.params_rewrite_new(nbody, structs)
+        ol, nl = apply_subst(norm_body(obody), subst), apply_subst(norm_body(nbody), subst)
         if ol == nl:
             identical += 1
             continue
@@ -1431,6 +1443,43 @@ def _self_test() -> int:
                 "hygiene-body-diff --self-test: path segment plus declared rename must pass"
             )
         n += 1
+        (old / "crates" / "demo" / "src").mkdir(parents=True, exist_ok=True)
+        (new / "crates" / "demo" / "src").mkdir(parents=True, exist_ok=True)
+        (old / "crates" / "demo" / "src" / "lib.rs").write_text(
+            "fn g(a: i32, b: i32) {}\n", encoding="utf-8"
+        )
+        (new / "crates" / "demo" / "src" / "lib.rs").write_text(
+            "fn g(a: i32, b: i32) {}\n", encoding="utf-8"
+        )
+        pmap = {"demo\tg": ("S", ["a", "b"])}
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(g(x, y), 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(g(S { a: x, b: y }), 1);\n}\n",
+            encoding="utf-8",
+        )
+        param_ok = compare_trees(old, new, {}, {}, [], {}, pmap)
+        evaluate(param_ok)
+        if param_ok["differ"] != 0 or param_ok["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: --params test body must be identical: "
+                f"{param_ok}"
+            )
+        n += 1
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(g(S { b: y, a: x }), 1);\n}\n",
+            encoding="utf-8",
+        )
+        param_swap = compare_trees(old, new, {}, {}, [], {}, pmap)
+        if param_swap["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: swapped fields in a test must differ: "
+                f"{param_swap}"
+            )
+        _must_red(param_swap, "swapped fields in a test body")
+        n += 1
     return n
 
 
@@ -1449,6 +1498,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--accept", type=pathlib.Path)
     ap.add_argument("--subst", action="append", default=[], metavar="OLD=NEW")
     ap.add_argument("--subst-file", type=pathlib.Path)
+    ap.add_argument("--params", type=pathlib.Path, help="struct field map shared with hygiene-fn-diff")
     ap.add_argument("--git-dir", type=pathlib.Path, default=ROOT)
     ns = ap.parse_args(argv)
     from contextlib import redirect_stdout
@@ -1459,11 +1509,12 @@ def main(argv: list[str] | None = None) -> int:
     dups = load_duplicates_map(ns.duplicates)
     subst = load_subst(ns.subst_file, ns.subst)
     accept = load_accept(ns.accept)
+    params = _FN.load_params(ns.params)
     with tempfile.TemporaryDirectory() as tmp:
         tmp_p = pathlib.Path(tmp)
         old_root = materialize(ns.old, tmp_p / "old", ns.git_dir)
         new_root = materialize(ns.new, tmp_p / "new", ns.git_dir)
-        report = compare_trees(old_root, new_root, renames, dups, subst, accept)
+        report = compare_trees(old_root, new_root, renames, dups, subst, accept, params)
     sys.stdout.write(render(report))
     try:
         evaluate(report)

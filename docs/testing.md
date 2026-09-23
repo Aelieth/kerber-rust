@@ -84,11 +84,25 @@ comments are still normalised outside literals). A pair is
 brace-less `const` / `static` / `type`, with a vis-stripped rest),
 `vis-widen` (`pub(crate)` / `pub(super)` → bare `pub`, or private →
 any `pub`; counted and listed, red unless `--accept` gives a reason,
-never folded into `vis-only`), `fmt-only`, `doc-only`, or `changed`.
+never folded into `vis-only`), `fmt-only`, `doc-only`, `params-only`, or `changed`.
 Doc-stripping uses that same class, and only from visibility tokens
 in code: a `pub(crate)` that appears only inside a `///` comment is
 not a token. `pub` inside an identifier such as `pubkey` is not a
-visibility token. Before the vis-stripped compare the text ahead of the
+visibility token. `--params` is a map
+`crate<TAB>path = Struct: f1, f2, …` whose field order is the old
+parameter order (a disagreement exits 2 and names the function).
+`params-only` is counted like `vis-only` and needs no accept row.
+It covers a definition whose new signature replaces those parameters
+with one struct value or reference and whose body is the old body
+prefixed by `let Struct { f1, f2, … } = p;` (or `= *p` when the
+parameter is `&Struct`), and a call site whose body matches the old
+body after the struct literal is rewritten back to those field
+expressions in order. Shorthand `f` means `f: f`. A swapped field, a
+`..` tail, an argument hoisted into a `let`, or a destructure that
+renames a field stays `changed`. Rule 7: the literal names every
+field, in the old parameter order, each expression the old argument
+verbatim, and the destructure is the first statement of the converted
+function. Before the vis-stripped compare the text ahead of the
 body is re-flowed: whitespace around punctuation goes, and a trailing
 comma is dropped only when its `(` / `<` follows an identifier that is
 not a keyword and not a lifetime — `wide(a, b,)` and `f<T, U,>` lose
@@ -111,7 +125,11 @@ occurrence-counted `edit: OLD => NEW` rows that drop the single
 old fn's attribute block must equal the dispatcher's (a doc edit is
 `doc-only`); a phase attribute block is empty or a blob-pinned
 `--accept`. Phase signatures are named as `split-sig` in the report.
-`hygiene_inventory` counts `rustfmt_skip` under `crates/*/src`;
+`hygiene_inventory` counts `rustfmt_skip` under `crates/*/src`, and
+counts `#[expect(` / `#![expect(` as a suppression in `allow` and
+`allow_sites` (with `#[allow(` / `#![allow(`). An attribute `expect`
+does not increment `unwrap_expect_panic_src`; `.expect(` and `panic!`
+still do.
 `hygiene-diff` fails on a rise. `--roots` adds `examples/` and
 `fuzz/` to the default `crates/`
 scan. A body
