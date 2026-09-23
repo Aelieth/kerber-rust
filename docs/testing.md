@@ -81,11 +81,14 @@ comments are still normalised outside literals). A pair is
 `identical`, `vis-only` (private → `pub(super)` / `pub(crate)`,
 `pub(crate)` ↔ `pub(super)`, or bare `pub` narrowed to
 `pub(crate)` / `pub(super)` on the item or a field, including
-brace-less `const` / `static` / `type`, with a vis-stripped rest; a
-`pub(crate)` / `pub(super)` raised to bare `pub` is vis-only, and
-adding bare `pub` onto a private item stays `changed`; `pub` inside
-an identifier such as `pubkey` is not a visibility token), `fmt-only`,
-`doc-only`, or `changed`. Before the vis-stripped compare the text ahead of the
+brace-less `const` / `static` / `type`, with a vis-stripped rest),
+`vis-widen` (`pub(crate)` / `pub(super)` → bare `pub`, or private →
+any `pub`; counted and listed, red unless `--accept` gives a reason,
+never folded into `vis-only`), `fmt-only`, `doc-only`, or `changed`.
+Doc-stripping uses that same class, and only from visibility tokens
+in code: a `pub(crate)` that appears only inside a `///` comment is
+not a token. `pub` inside an identifier such as `pubkey` is not a
+visibility token. Before the vis-stripped compare the text ahead of the
 body is re-flowed: whitespace around punctuation goes, and a trailing
 comma is dropped only when its `(` / `<` follows an identifier that is
 not a keyword and not a lifetime — `wide(a, b,)` and `f<T, U,>` lose
@@ -113,7 +116,8 @@ old fn's attribute block must equal the dispatcher's (a doc edit is
 `fuzz/` to the default `crates/`
 scan. A body
 edit, a dropped item, a reordered `--split`, or an unused `--accept`
-is red; a pure move and a vis-only widening are green. `--accept` is
+is red; a pure move and a vis-only narrowing are green. A
+`vis-widen` row is red unless `--accept` pins it. `--accept` is
 one line per pair: `old_key = new_key | sha256:<old> | sha256:<new> |
 reason` (keys are `crate<TAB>path`). A removal pins the old key as
 both sides and the empty-blob hash on the new side; an addition pins

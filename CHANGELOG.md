@@ -6,6 +6,13 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S3.10 parameter structs
+
+- **tool.** A visibility widening (`pub(crate)` / `pub(super)` → `pub`,
+  or private → any `pub`) is `vis-widen` and red unless accepted.
+  Narrowing stays vis-only. A `pub(crate)` inside a doc comment is
+  not a visibility token. `hygiene-fn-diff` self-test count is 70.
+
 ### W3-S3.8 dead code and surface
 
 - **krb5-tools.** `tgt_hex_must_use_ticket_etype_not_preferred` lives

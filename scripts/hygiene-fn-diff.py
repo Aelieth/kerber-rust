@@ -10,9 +10,12 @@ a comparison normaliser that keeps string, byte-string, raw-string
 and char literal contents (whitespace and comments are still
 normalised outside literals), and classifies each pair
 `identical` / `vis-only` (private → `pub(crate)` / `pub(super)`, or
-those two restricted forms, with a rest equal modulo a rustfmt
-signature rewrap) / `fmt-only` (that rewrap alone) / `doc-only` /
-`changed`. The compared blob includes the attribute block above the
+those two restricted forms, or bare `pub` narrowed to a restricted
+form, with a rest equal modulo a rustfmt signature rewrap) /
+`vis-widen` (`pub(crate)` / `pub(super)` → `pub`, or private → any
+`pub`; listed and red unless `--accept`) / `fmt-only` (that rewrap
+alone) / `doc-only` / `changed`. A `pub` token inside a comment is
+not visibility. The compared blob includes the attribute block above the
 fn; a file's `#![…]` inner attributes are the `inner-attrs` item of
 its module. Reports `added` and `removed`. A key collision never
 drops a body.
@@ -579,9 +582,54 @@ def vis_kind_and_rest(sig: str) -> tuple[str, str]:
     return kind, sig[: m.start()] + sig[m.end() :]
 
 
+def _rewrite_skipping_comments(text: str, fn) -> str:
+    """Apply `fn` to code; copy `//` and `/* */` through unchanged.
+
+    The caller has already split string and char literals out, so a
+    `//` here is a comment. `///` and `//!` start with `//`.
+    """
+    out: list[str] = []
+    buf: list[str] = []
+    i, n = 0, len(text)
+
+    def flush() -> None:
+        if buf:
+            out.append(fn("".join(buf)))
+            buf.clear()
+
+    while i < n:
+        if text.startswith("/*", i):
+            flush()
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(text[i:j])
+            i = j
+            continue
+        if text.startswith("//", i):
+            flush()
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(text[i:j])
+            i = j
+            continue
+        buf.append(text[i])
+        i += 1
+    flush()
+    return "".join(out)
+
+
+def _sub_vis_outside_comments(src: str, pattern: re.Pattern[str]) -> str:
+    """Drop visibility tokens in code. Comments and string literals stay."""
+
+    def sub_span(text: str) -> str:
+        return _rewrite_skipping_comments(text, lambda code: pattern.sub("", code))
+
+    return _map_code(src, sub_span)
+
+
 def strip_restricted_vis(src: str) -> str:
     """Drop `pub(crate)` / `pub(super)` / `pub(in …)` tokens. Bare `pub` stays."""
-    return RESTRICTED_VIS_RE.sub("", src)
+    return _sub_vis_outside_comments(src, RESTRICTED_VIS_RE)
 
 
 def _strip_doc_lines(src: str) -> str:
@@ -677,7 +725,7 @@ def _sig_rewrap_norm(src: str) -> str:
 
 
 def _restricted_vis_tokens(src: str) -> list[str]:
-    return [re.sub(r"\s+", "", t) for t in RESTRICTED_VIS_RE.findall(src)]
+    return [tok for tok in _code_vis_tokens(src) if tok.startswith("pub(")]
 
 
 # `(?!\w)` so `pubkey` is not a visibility token. `\b` alone matches the
@@ -701,22 +749,83 @@ def _vis_rank(token: str) -> int:
 
 
 def _code_vis_tokens(src: str) -> list[str]:
+    """Visibility tokens in code. A `pub(crate)` inside `///` is not one."""
     tokens: list[str] = []
+
+    def take(piece: str) -> str:
+        tokens.extend(_VIS_TOKEN_RE.findall(piece))
+        return piece
+
     for is_code, text in _literal_spans(src):
         if is_code:
-            tokens.extend(_VIS_TOKEN_RE.findall(text))
+            _rewrite_skipping_comments(text, take)
     return [re.sub(r"\s+", "", tok) for tok in tokens]
 
 
-def _narrowing_only(old_src: str, new_src: str) -> bool:
-    """True when every visibility edit drops bare `pub` toward a restricted vis."""
+def _token_step_ok(old: str, new: str) -> bool:
+    """One token may stay, narrow `pub` → restricted, widen restricted → `pub`, or swap restricted forms."""
+    if old == new:
+        return True
+    ro, rn = _vis_rank(old), _vis_rank(new)
+    if ro == 1 and rn == 1:
+        return True
+    if ro == 2 and rn == 1:
+        return True
+    return ro == 1 and rn == 2
+
+
+def _vis_delta_class(old_src: str, new_src: str) -> str | None:
+    """`vis-only` for a narrowing or a restricted edit; `vis-widen` when any token becomes or is added as bare `pub`.
+
+    Comment text is not a token. `None` means the tokens are not a pure visibility edit.
+    """
     old_toks = _code_vis_tokens(old_src)
     new_toks = _code_vis_tokens(new_src)
-    if len(old_toks) != len(new_toks) or old_toks == new_toks:
-        return False
-    return all(_vis_rank(new) <= _vis_rank(old) for old, new in zip(old_toks, new_toks)) and any(
-        _vis_rank(new) < _vis_rank(old) for old, new in zip(old_toks, new_toks)
-    )
+    if old_toks == new_toks:
+        return None
+    if len(old_toks) == len(new_toks):
+        widened = narrowed = swapped = False
+        for old, new in zip(old_toks, new_toks):
+            if not _token_step_ok(old, new):
+                return None
+            ro, rn = _vis_rank(old), _vis_rank(new)
+            if rn > ro:
+                widened = True
+            elif rn < ro:
+                narrowed = True
+            elif old != new:
+                swapped = True
+        if widened:
+            return "vis-widen"
+        if narrowed or swapped:
+            return "vis-only"
+        return None
+    if len(new_toks) < len(old_toks):
+        return None
+    oi = 0
+    widened = False
+    inserted_bare = False
+    inserted_restricted = False
+    for nt in new_toks:
+        if oi < len(old_toks) and _token_step_ok(old_toks[oi], nt):
+            if _vis_rank(nt) > _vis_rank(old_toks[oi]):
+                widened = True
+            oi += 1
+            continue
+        rank = _vis_rank(nt)
+        if rank == 2:
+            inserted_bare = True
+        elif rank == 1:
+            inserted_restricted = True
+        else:
+            return None
+    if oi != len(old_toks):
+        return None
+    if widened or inserted_bare:
+        return "vis-widen"
+    if inserted_restricted:
+        return "vis-only"
+    return None
 
 
 def classify(old_src: str, new_src: str) -> str:
@@ -730,39 +839,22 @@ def classify(old_src: str, new_src: str) -> str:
         if _restricted_vis_tokens(old_src) != _restricted_vis_tokens(new_src):
             return "vis-only"
         return "fmt-only"
-    old_stripped = _map_code(old_src, lambda text: _ALL_VIS_RE.sub("", text))
-    new_stripped = _map_code(new_src, lambda text: _ALL_VIS_RE.sub("", text))
+    old_stripped = _sub_vis_outside_comments(old_src, _ALL_VIS_RE)
+    new_stripped = _sub_vis_outside_comments(new_src, _ALL_VIS_RE)
     old_all = _sig_rewrap_norm(old_stripped)
     new_all = _sig_rewrap_norm(new_stripped)
-    vis_ok = _narrowing_only(old_src, new_src) or _restricted_to_pub(old_src, new_src)
-    if compare_norm(old_all) == compare_norm(new_all) and vis_ok:
-        return "vis-only"
-    # Doc lines beside a legal visibility edit. Skip signature rewrap
+    kind = _vis_delta_class(old_src, new_src)
+    if kind is not None and compare_norm(old_all) == compare_norm(new_all):
+        return kind
+    # Doc lines beside a real visibility edit. Skip signature rewrap
     # here: a `(` inside a `///` comment is not a parameter list.
-    if compare_norm(_strip_doc_lines(old_stripped)) == compare_norm(
+    # The class comes from comment-free tokens, so a `pub(crate)` that
+    # appears only in the doc is not enough.
+    if kind is not None and compare_norm(_strip_doc_lines(old_stripped)) == compare_norm(
         _strip_doc_lines(new_stripped)
-    ) and (vis_ok or _restricted_vis_tokens(old_src) != _restricted_vis_tokens(new_src)):
-        return "vis-only"
+    ):
+        return kind
     return "changed"
-
-
-def _restricted_to_pub(old_src: str, new_src: str) -> bool:
-    """`pub(crate)` / `pub(super)` raised to bare `pub`, rest identical.
-
-    Adding `pub` onto a private item stays `changed` (token counts differ).
-    """
-    old_toks = _code_vis_tokens(old_src)
-    new_toks = _code_vis_tokens(new_src)
-    if len(old_toks) != len(new_toks) or not old_toks:
-        return False
-    widened = False
-    for old, new in zip(old_toks, new_toks):
-        old_rank, new_rank = _vis_rank(old), _vis_rank(new)
-        if new_rank < old_rank or (new_rank > old_rank and (old_rank != 1 or new_rank != 2)):
-            return False
-        if new_rank > old_rank:
-            widened = True
-    return widened
 
 
 IMPL_START_RE = re.compile(r"^\s*(?:unsafe\s+)?impl\b")
@@ -1550,13 +1642,14 @@ def compare_trees(
     unused_moves = sorted(k for k in moves if k not in used_moves)
     identical = sum(1 for _o, _n, k in pairs if k == "identical")
     vis_only = [(o, n) for o, n, k in pairs if k == "vis-only"]
+    vis_widen = [(o, n) for o, n, k in pairs if k == "vis-widen"]
     fmt_only = [(o, n) for o, n, k in pairs if k == "fmt-only"]
     doc_only = [(o, n) for o, n, k in pairs if k == "doc-only"]
     changed = [(o, n) for o, n, k in pairs if k == "changed"]
 
     unaccepted: list[tuple[str, str]] = []
     missing_rhs: list[str] = []
-    for okey, nkey in changed:
+    for okey, nkey in [*changed, *vis_widen]:
         entry = accept.get(okey)
         if entry is None:
             unaccepted.append((okey, nkey))
@@ -1589,6 +1682,8 @@ def compare_trees(
         "identical": identical,
         "vis_only": len(vis_only),
         "vis_only_items": vis_only,
+        "vis_widen": len(vis_widen),
+        "vis_widen_items": vis_widen,
         "fmt_only": len(fmt_only),
         "fmt_only_items": fmt_only,
         "doc_only": len(doc_only),
@@ -1623,6 +1718,7 @@ def render(report: dict[str, object]) -> str:
         f"pairs {report['pairs']}",
         f"identical {report['identical']}",
         f"vis-only {report['vis_only']}",
+        f"vis-widen {report['vis_widen']}",
         f"fmt-only {report['fmt_only']}",
         f"doc-only {report['doc_only']}",
         f"changed {report['changed']}",
@@ -1639,6 +1735,8 @@ def render(report: dict[str, object]) -> str:
     ]
     for o, n in report["vis_only_items"]:  # type: ignore[misc]
         lines.append(f"vis-only {o} -> {n}")
+    for o, n in report["vis_widen_items"]:  # type: ignore[misc]
+        lines.append(f"vis-widen {o} -> {n}")
     for o, n in report["fmt_only_items"]:  # type: ignore[misc]
         lines.append(f"fmt-only {o} -> {n}")
     for o, n in report["doc_only_items"]:  # type: ignore[misc]
@@ -1652,8 +1750,12 @@ def render(report: dict[str, object]) -> str:
 
 def evaluate(report: dict[str, object]) -> None:
     errs: list[str] = []
+    widen = {(o, n) for o, n in report.get("vis_widen_items", [])}  # type: ignore[union-attr]
     for o, n in report["unaccepted"]:  # type: ignore[misc]
-        errs.append(f"changed not in --accept: {o} -> {n}")
+        if (o, n) in widen:
+            errs.append(f"vis-widen not in --accept: {o} -> {n}")
+        else:
+            errs.append(f"changed not in --accept: {o} -> {n}")
     for k in report["removed"]:  # type: ignore[misc]
         errs.append(f"removed item: {k}")
     for k in report["added"]:  # type: ignore[misc]
@@ -1872,6 +1974,73 @@ def _self_test() -> int:
         evaluate(pub_to_crate)
         if pub_to_crate["vis_only"] != 1 or pub_to_crate["changed"] != 0:
             raise SystemExit("hygiene-fn-diff --self-test: pub → pub(crate) must be vis-only")
+        n += 1
+
+        # A widening is vis-widen and red. Narrowing the other way stays vis-only.
+        _write_crate(old, "crates/demo/src/lib.rs", "struct S { a: i32 }\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "pub struct S { pub(crate) a: i32 }\n")
+        widen_struct = compare_trees(old, new, {}, {}, {}, [])
+        if (
+            widen_struct["vis_widen"] != 1
+            or widen_struct["vis_only"] != 0
+            or widen_struct["changed"] != 0
+        ):
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: private struct → pub struct "
+                f"with a pub(crate) field must be vis-widen: {widen_struct}"
+            )
+        _must_red(widen_struct, "private struct → pub struct")
+        if "vis-widen demo\tstruct::S -> demo\tstruct::S" not in render(widen_struct):
+            raise SystemExit("hygiene-fn-diff --self-test: render must name the vis-widen struct")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "struct S { pub(crate) a: i32, pub(crate) b: i32 }\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "struct S { pub a: i32, pub(crate) b: i32 }\n",
+        )
+        widen_mixed = compare_trees(old, new, {}, {}, {}, [])
+        if widen_mixed["vis_widen"] != 1 or widen_mixed["vis_only"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: pub(crate) fields → pub and "
+                f"pub(crate) mixed must be vis-widen: {widen_mixed}"
+            )
+        _must_red(widen_mixed, "mixed pub and pub(crate) fields")
+        n += 1
+
+        _write_crate(old, "crates/demo/src/lib.rs", "pub(crate) fn f() { 1 }\n")
+        _write_crate(new, "crates/demo/src/lib.rs", "pub fn f() { 1 }\n")
+        widen_fn = compare_trees(old, new, {}, {}, {}, [])
+        if widen_fn["vis_widen"] != 1 or widen_fn["changed"] != 0 or widen_fn["vis_only"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: pub(crate) → pub with an identical "
+                f"body must be vis-widen: {widen_fn}"
+            )
+        _must_red(widen_fn, "pub(crate) → pub")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "/// was pub(crate)\npub(crate) fn f() { 1 }\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "/// now public\npub fn f() { 1 }\n",
+        )
+        widen_doc = compare_trees(old, new, {}, {}, {}, [])
+        if widen_doc["vis_widen"] != 1 or widen_doc["vis_only"] != 0 or widen_doc["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: pub(crate) inside /// is not a "
+                f"visibility token: {widen_doc}"
+            )
+        _must_red(widen_doc, "/// text that contains pub(crate)")
         n += 1
 
         # `pub` is a prefix of `pubkey`, not a visibility token. Narrowing
@@ -2160,8 +2329,11 @@ def _self_test() -> int:
         _write_crate(old, "crates/demo/src/lib.rs", "struct S { a: i32 }\n")
         _write_crate(new, "crates/demo/src/lib.rs", "struct S { pub a: i32 }\n")
         fld_pub = compare_trees(old, new, {}, {}, {}, [])
-        if fld_pub["changed"] != 1:
-            raise SystemExit("hygiene-fn-diff --self-test: field → pub must be changed")
+        if fld_pub["vis_widen"] != 1 or fld_pub["changed"] != 0 or fld_pub["vis_only"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: field → pub must be vis-widen: "
+                f"{fld_pub}"
+            )
         _must_red(fld_pub, "struct field → pub")
         n += 1
 
