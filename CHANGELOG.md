@@ -51,6 +51,11 @@ this project uses semantic versioning once a crate is published.
   `hygiene-fn-diff` self-test count is 83.
 - **tool.** Reading `ctx.field` for a field the callee never took is the
   same binding, not a new call. `hygiene-fn-diff` self-test count is 84.
+- **krb5-admin.** `kadm5_handle_rpc`, `handle_rpc`, `handle_rpcsec_gss`,
+  `handle_auth_gssapi`, `rpcsec_dispatch`, and `kadm5_or_iprop` take
+  `RpcCtx` (store, ACL, service keys, realm). `serve_kadm5_conn` builds
+  that value once. The two procedure dispatchers still carry
+  `too_many_arguments`. No wire or text change.
 
 ### W3-S3.8 dead code and surface
 

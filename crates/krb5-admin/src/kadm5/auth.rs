@@ -5,9 +5,7 @@
 //! the realm the ticket named, and the acceptor must be the kadmin or
 //! kiprop service of that realm before any procedure runs.
 
-use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
-use krb5_kdc::{Acl, SharedDump as SharedStore};
 use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;
 
@@ -21,9 +19,9 @@ use super::codes::{
 use super::dispatch::kadm5_or_iprop;
 use super::log::kadm5_log_op;
 use super::rpc::{
-    parse_gcred, rpc_reply_accepted, rpc_reply_accepted_verf, rpc_reply_agss, rpc_reply_auth_error,
-    rpc_reply_clear, rpc_reply_gss, rpc_reply_gss_verf, rpc_reply_mismatch_verf,
-    rpc_reply_weakauth,
+    RpcCtx, parse_gcred, rpc_reply_accepted, rpc_reply_accepted_verf, rpc_reply_agss,
+    rpc_reply_auth_error, rpc_reply_clear, rpc_reply_gss, rpc_reply_gss_verf,
+    rpc_reply_mismatch_verf, rpc_reply_weakauth,
 };
 use super::xdr::{XdrR, XdrW};
 use crate::Error;
@@ -44,10 +42,7 @@ pub(super) struct RpcsecGss {
 
 #[allow(clippy::too_many_arguments, clippy::unnecessary_wraps)]
 pub(super) fn handle_rpcsec_gss(
-    store: &SharedStore,
-    acl: &Acl,
-    service_keys: &[ProtocolKey],
-    expected_realm: &str,
+    ctx: RpcCtx<'_>,
     handle: &[u8],
     gss: &mut Option<RpcsecGss>,
     xid: u32,
@@ -64,6 +59,12 @@ pub(super) fn handle_rpcsec_gss(
     rcache: &ReplayCache,
     addr: &str,
 ) -> Result<Vec<u8>, Error> {
+    let RpcCtx {
+        store,
+        acl,
+        service_keys,
+        expected_realm,
+    } = ctx;
     let _ = verf_flavor;
     let mut r = XdrR::new(args);
     let Ok(gcred) = parse_gcred(cred) else {
@@ -177,8 +178,12 @@ pub(super) fn handle_rpcsec_gss(
                 }
             };
             Ok(rpcsec_dispatch(
-                store,
-                acl,
+                RpcCtx {
+                    store,
+                    acl,
+                    service_keys,
+                    expected_realm,
+                },
                 gd,
                 xid,
                 proc,
@@ -235,8 +240,7 @@ fn seq_window_ok(gd: &mut RpcsecGss, seq: u32) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 fn rpcsec_dispatch(
-    store: &SharedStore,
-    acl: &Acl,
+    ctx: RpcCtx<'_>,
     gd: &mut RpcsecGss,
     xid: u32,
     proc: u32,
@@ -247,6 +251,7 @@ fn rpcsec_dispatch(
     seq: u32,
     addr: &str,
 ) -> Vec<u8> {
+    let RpcCtx { store, acl, .. } = ctx;
     let Some(actor) = gd.ctx.client.clone() else {
         return rpc_reply_weakauth(xid);
     };
@@ -258,8 +263,12 @@ fn rpcsec_dispatch(
         return rpc_reply_weakauth(xid);
     }
     let result = match kadm5_or_iprop(
-        store,
-        acl,
+        RpcCtx {
+            store,
+            acl,
+            service_keys: ctx.service_keys,
+            expected_realm: ctx.expected_realm,
+        },
         &actor,
         proc,
         kadm_args,
@@ -305,10 +314,7 @@ fn rpcsec_dispatch(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_auth_gssapi(
-    store: &SharedStore,
-    acl: &Acl,
-    service_keys: &[ProtocolKey],
-    expected_realm: &str,
+    ctx: RpcCtx<'_>,
     agss: &mut Option<Agss>,
     xid: u32,
     proc: u32,
@@ -318,6 +324,12 @@ pub(super) fn handle_auth_gssapi(
     args: &[u8],
     rcache: &ReplayCache,
 ) -> Result<Vec<u8>, Error> {
+    let RpcCtx {
+        store,
+        acl,
+        service_keys,
+        expected_realm,
+    } = ctx;
     let mut cr = XdrR::new(cred);
     let version = cr.u32()?;
     let auth_msg = cr.bool()?;
@@ -492,8 +504,12 @@ pub(super) fn handle_auth_gssapi(
         return Ok(rpc_reply_weakauth(xid));
     }
     let result = match kadm5_or_iprop(
-        store,
-        acl,
+        RpcCtx {
+            store,
+            acl,
+            service_keys,
+            expected_realm,
+        },
         &actor,
         proc,
         kadm_args,

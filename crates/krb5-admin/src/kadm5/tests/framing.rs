@@ -100,10 +100,12 @@ fn auth_none_is_auth_too_weak() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -127,10 +129,12 @@ fn bad_program_is_prog_unavail() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -155,10 +159,12 @@ fn kadm_vers_99_is_prog_mismatch_2_2() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -195,10 +201,12 @@ fn reply_typed_rpc_is_no_reply() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,

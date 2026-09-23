@@ -186,10 +186,12 @@ fn rpcsec_integrity_request_is_databody_plus_mic() {
     let (store, acl, mut ctx, handle, mut sess) = init_svc(GSS_INTEGRITY);
     let rec = integ_rec_rpcsec(&mut ctx, 40, 1, &handle, &list_args(), false);
     let out = kadm5_handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        krb5_admin::RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
@@ -211,10 +213,12 @@ fn rpcsec_integrity_reply_is_databody_plus_mic() {
     let (store, acl, mut ctx, handle, mut sess) = init_svc(GSS_INTEGRITY);
     let rec = integ_rec_rpcsec(&mut ctx, 40, 1, &handle, &list_args(), false);
     let out = kadm5_handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        krb5_admin::RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
@@ -257,10 +261,12 @@ fn rpcsec_none_service_body_is_plain() {
     let mic = ctx.get_mic(&header).unwrap();
     let rec = call(43, GET_PRINCS, &cred, FLAVOR_GSS, &mic, &list_args());
     let out = kadm5_handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        krb5_admin::RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
@@ -285,10 +291,12 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
     let (store, acl, mut ctx, handle, mut sess) = init_svc(GSS_INTEGRITY);
     let rec = integ_rec_rpcsec(&mut ctx, 41, 1, &handle, &list_args(), true);
     let out = kadm5_handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        krb5_admin::RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
@@ -310,10 +318,12 @@ fn rpcsec_wrong_handle_with_valid_mic_dispatches() {
     let (store, acl, mut ctx, _handle, mut sess) = init_svc(GSS_INTEGRITY);
     let rec = integ_rec_rpcsec(&mut ctx, 42, 1, b"not-the-handle", &list_args(), false);
     let out = kadm5_handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        krb5_admin::RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
@@ -470,10 +480,12 @@ fn reply_words(version: u32) -> Vec<u32> {
     let acl = Acl::parse("*/admin@KERBER.TEST *\n").unwrap();
     let mut sess = Kadm5RpcSession::default();
     let out = kadm5_handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        krb5_admin::RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),

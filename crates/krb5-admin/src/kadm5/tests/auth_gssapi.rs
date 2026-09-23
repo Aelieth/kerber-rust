@@ -23,10 +23,12 @@ fn auth_gssapi_on_iprop_data_is_auth_failed() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -68,10 +70,12 @@ fn auth_gssapi_on_iprop_init_is_success() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -118,10 +122,12 @@ fn auth_gssapi_destroy_on_iprop_is_auth_layer() {
     let keys = [kadm_key];
     let rc = krb5_protocol::ReplayCache::new();
     let out = handle_rpc(
-        &store,
-        &acl,
-        &keys,
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &keys,
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -151,10 +157,12 @@ fn auth_gssapi_destroy_on_iprop_is_auth_layer() {
     d.u32(FLAVOR_NONE);
     d.opaque(&[]);
     let out = handle_rpc(
-        &store,
-        &acl,
-        &keys,
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &keys,
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,

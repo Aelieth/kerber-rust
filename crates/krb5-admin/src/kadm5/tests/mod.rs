@@ -165,10 +165,12 @@ fn admin_rpcsec_init_svc(
     let mut agss = None;
     let keys = [kadm_key];
     let out = handle_rpc(
-        &store,
-        &acl,
-        &keys,
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &keys,
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,

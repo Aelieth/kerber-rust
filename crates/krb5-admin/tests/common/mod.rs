@@ -155,10 +155,12 @@ pub fn init_client(
     let rec = call(1, 0, &cred, FLAVOR_NONE, &[], &arg);
     let mut sess = Kadm5RpcSession::default();
     let out = kadm5_handle_rpc(
-        store,
-        acl,
-        &[service_key],
-        TEST_REALM,
+        krb5_admin::RpcCtx {
+            store,
+            acl,
+            service_keys: &[service_key],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
@@ -233,10 +235,12 @@ pub fn data_call(
     c.xid += 1;
     let rec = integ_rec(&mut c.ctx, c.xid, c.seq, &c.handle, proc, args, false);
     let out = kadm5_handle_rpc(
-        store,
-        acl,
-        &[],
-        TEST_REALM,
+        krb5_admin::RpcCtx {
+            store,
+            acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut c.sess,
         &ReplayCache::new(),

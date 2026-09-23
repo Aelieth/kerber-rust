@@ -21,6 +21,21 @@ use super::codes::{
 use super::xdr::{XdrR, XdrW};
 use crate::Error;
 
+/// Kadmind server handle: the store, ACL, service keys, and realm.
+///
+/// MIT `kadm5_server_handle_rec` (`lib/kadm5/server_internal.h:53`).
+#[derive(Clone, Copy)]
+pub struct RpcCtx<'a> {
+    /// KDC store the procedure reads and writes.
+    pub store: &'a SharedStore,
+    /// Kadm5 ACL.
+    pub acl: &'a Acl,
+    /// Keys that accept an AP-REQ for this service.
+    pub service_keys: &'a [ProtocolKey],
+    /// Realm the acceptor name must belong to.
+    pub expected_realm: &'a str,
+}
+
 /// Serve one TCP connection until EOF.
 ///
 /// # Errors
@@ -42,24 +57,19 @@ pub fn serve_kadm5_conn(
         .peer_addr()
         .map(|a| a.ip().to_string())
         .unwrap_or_default();
+    let ctx = RpcCtx {
+        store: &store,
+        acl: &acl,
+        service_keys: &service_keys,
+        expected_realm: &expected_realm,
+    };
     loop {
         let rec = match read_record(&mut stream) {
             Ok(r) => r,
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(()),
             Err(e) => return Err(e),
         };
-        let reply = match handle_rpc(
-            &store,
-            &acl,
-            &service_keys,
-            &expected_realm,
-            &handle,
-            &mut gss,
-            &mut agss,
-            &rcache,
-            &rec,
-            &addr,
-        ) {
+        let reply = match handle_rpc(ctx, &handle, &mut gss, &mut agss, &rcache, &rec, &addr) {
             Ok(r) => r,
             Err(e) => {
                 tracing::error!(
@@ -131,23 +141,27 @@ pub struct Kadm5RpcSession {
 /// # Errors
 ///
 /// Truncated record or I/O.
-#[allow(clippy::too_many_arguments)]
 pub fn kadm5_handle_rpc(
-    store: &SharedStore,
-    acl: &Acl,
-    service_keys: &[ProtocolKey],
-    expected_realm: &str,
+    ctx: RpcCtx<'_>,
     handle: &[u8],
     sess: &mut Kadm5RpcSession,
     rcache: &ReplayCache,
     rec: &[u8],
     addr: &str,
 ) -> Result<Vec<u8>, Error> {
-    handle_rpc(
+    let RpcCtx {
         store,
         acl,
         service_keys,
         expected_realm,
+    } = ctx;
+    handle_rpc(
+        RpcCtx {
+            store,
+            acl,
+            service_keys,
+            expected_realm,
+        },
         handle,
         &mut sess.gss,
         &mut sess.agss,
@@ -157,12 +171,8 @@ pub fn kadm5_handle_rpc(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_rpc(
-    store: &SharedStore,
-    acl: &Acl,
-    service_keys: &[ProtocolKey],
-    expected_realm: &str,
+    ctx: RpcCtx<'_>,
     handle: &[u8],
     gss: &mut Option<RpcsecGss>,
     agss: &mut Option<Agss>,
@@ -170,6 +180,12 @@ pub(super) fn handle_rpc(
     rec: &[u8],
     addr: &str,
 ) -> Result<Vec<u8>, Error> {
+    let RpcCtx {
+        store,
+        acl,
+        service_keys,
+        expected_realm,
+    } = ctx;
     let mut r = XdrR::new(rec);
     let xid = r.u32()?;
     let mtype = r.u32()?;
@@ -208,10 +224,12 @@ pub(super) fn handle_rpc(
     let iprop = prog == IPROP_PROG;
     if cred_flavor == FLAVOR_GSS {
         return handle_rpcsec_gss(
-            store,
-            acl,
-            service_keys,
-            expected_realm,
+            RpcCtx {
+                store,
+                acl,
+                service_keys,
+                expected_realm,
+            },
             handle,
             gss,
             xid,
@@ -243,10 +261,12 @@ pub(super) fn handle_rpc(
 
     if cred_flavor == FLAVOR_AUTH_GSSAPI {
         return handle_auth_gssapi(
-            store,
-            acl,
-            service_keys,
-            expected_realm,
+            RpcCtx {
+                store,
+                acl,
+                service_keys,
+                expected_realm,
+            },
             agss,
             xid,
             proc,

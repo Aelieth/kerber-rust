@@ -36,13 +36,12 @@ use super::principal::{
     parse_get, parse_gprincs, parse_gstrings, parse_ks, parse_modify, parse_one_princ,
     parse_purgekeys, parse_rename, parse_setkey, parse_sstring, unix_now,
 };
+use super::rpc::RpcCtx;
 use super::xdr::XdrW;
 use crate::Error;
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn kadm5_or_iprop(
-    store: &SharedStore,
-    acl: &Acl,
+    ctx: RpcCtx<'_>,
     actor: &str,
     proc: u32,
     args: &[u8],
@@ -50,6 +49,7 @@ pub(super) fn kadm5_or_iprop(
     changepw: bool,
     iprop: bool,
 ) -> Result<Vec<u8>, Error> {
+    let RpcCtx { store, acl, .. } = ctx;
     if proc == 0 {
         return Ok(Vec::new());
     }

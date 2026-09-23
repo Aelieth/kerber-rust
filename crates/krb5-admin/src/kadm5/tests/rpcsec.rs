@@ -25,10 +25,12 @@ fn rpcsec_bad_version_is_auth_badcred() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -68,10 +70,12 @@ fn rpcsec_unknown_program_bad_version_is_auth_badcred() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -111,10 +115,12 @@ fn rpcsec_init_non_nullproc_is_auth_failed() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -154,10 +160,12 @@ fn rpcsec_data_without_context_is_credproblem() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -197,10 +205,12 @@ fn rpcsec_unknown_program_data_without_context_is_credproblem() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -299,10 +309,12 @@ fn rpcsec_init_reply_mic_is_window() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[kadm_key],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[kadm_key],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -348,10 +360,12 @@ fn rpcsec_unknown_gc_proc_is_rejectedcred() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -386,10 +400,12 @@ fn rpcsec_init_garbage_token_is_rejectedcred() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -423,10 +439,12 @@ fn rpcsec_destroy_without_context_is_credproblem() {
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        "KERBER.TEST",
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: "KERBER.TEST",
+        },
         &[],
         &mut gss,
         &mut agss,
@@ -460,10 +478,12 @@ fn rpcsec_bad_mic_is_credproblem() {
     );
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -497,10 +517,12 @@ fn rpcsec_wrong_handle_data_is_dispatched() {
     );
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -538,10 +560,12 @@ fn rpcsec_seq_over_maxseq_is_ctxproblem() {
     );
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -575,10 +599,12 @@ fn rpcsec_seq_replay_is_ctxproblem() {
     );
     let mut agss = None;
     let out1 = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -605,10 +631,12 @@ fn rpcsec_seq_replay_is_ctxproblem() {
         true,
     );
     let out2 = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -652,10 +680,12 @@ fn rpcsec_destroy_then_data_is_credproblem() {
     );
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -683,10 +713,12 @@ fn rpcsec_destroy_then_data_is_credproblem() {
         true,
     );
     let out2 = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -720,10 +752,12 @@ fn rpcsec_unknown_program_data_carries_xp_verf() {
     );
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -776,10 +810,12 @@ fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
     );
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -806,10 +842,12 @@ fn rpcsec_integrity_data_round_trips() {
     let rec = rpcsec_integ_rec(&mut ctx, 40, GET_PRINCS, 1, &handle, &list_args(), false);
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -843,10 +881,12 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
     let rec = rpcsec_integ_rec(&mut ctx, 41, GET_PRINCS, 1, &handle, &list_args(), true);
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
@@ -894,10 +934,12 @@ fn rpcsec_none_service_data_is_plain_body() {
     );
     let mut agss = None;
     let out = handle_rpc(
-        &store,
-        &acl,
-        &[],
-        TEST_REALM,
+        RpcCtx {
+            store: &store,
+            acl: &acl,
+            service_keys: &[],
+            expected_realm: TEST_REALM,
+        },
         b"hdl",
         &mut gss,
         &mut agss,
