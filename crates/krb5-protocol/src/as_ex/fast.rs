@@ -102,7 +102,7 @@ pub(super) fn continue_fast(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_fast_as(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],

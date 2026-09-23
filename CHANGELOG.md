@@ -81,6 +81,10 @@ this project uses semantic versioning once a crate is published.
   wire or text change.
 - **krb5-admin.** `admin_gss_token` returns `AdminGssToken`. The
   `type_complexity` suppression is gone. No wire or text change.
+- **lint.** The 26 remaining `too_many_arguments` suppressions are
+  `#[expect]` with a reason. `tgs_once` keeps `needless_pass_by_value`
+  and `handle_rpcsec_gss` keeps `unnecessary_wraps`. No wire or text
+  change.
 
 ### W3-S3.8 dead code and surface
 

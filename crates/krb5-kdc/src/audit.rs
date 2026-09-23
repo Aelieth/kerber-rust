@@ -590,7 +590,7 @@ fn tgs_failure(
     clear_req_id();
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "kau state, not a params struct")]
 fn emit_issue(
     kind: &str,
     req_etypes: &str,

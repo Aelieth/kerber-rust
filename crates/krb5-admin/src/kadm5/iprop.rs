@@ -560,7 +560,7 @@ fn rpcsec_init(
     Ok(handle)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "xid is advanced inside the body")]
 fn rpcsec_data(
     stream: &mut TcpStream,
     ctx: &mut GssContext,

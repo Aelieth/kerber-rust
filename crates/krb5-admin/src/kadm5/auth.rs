@@ -40,7 +40,8 @@ pub(super) struct RpcsecGss {
     pub(super) svc: u32,
 }
 
-#[allow(clippy::too_many_arguments, clippy::unnecessary_wraps)]
+#[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
+#[allow(clippy::unnecessary_wraps)]
 pub(super) fn handle_rpcsec_gss(
     ctx: RpcCtx<'_>,
     handle: &[u8],
@@ -238,7 +239,7 @@ fn seq_window_ok(gd: &mut RpcsecGss, seq: u32) -> bool {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 fn rpcsec_dispatch(
     ctx: RpcCtx<'_>,
     gd: &mut RpcsecGss,
@@ -312,7 +313,7 @@ fn rpcsec_dispatch(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 pub(super) fn handle_auth_gssapi(
     ctx: RpcCtx<'_>,
     agss: &mut Option<Agss>,

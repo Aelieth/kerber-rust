@@ -681,7 +681,7 @@ pub(super) fn get_ticket_flags(
     flags
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(super) fn kdc_get_ticket_renewtime(
     store: &dyn PrincipalRead,
     body: &KdcReqBody,

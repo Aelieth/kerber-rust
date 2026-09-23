@@ -297,7 +297,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_as_rep_keys(
     rep: AsRep,
     nonce: u32,
@@ -712,7 +712,7 @@ fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_as_rep(
     rep: AsRep,
     nonce: u32,
@@ -1034,7 +1034,7 @@ fn build_as_req_from(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn build_as_req(
     cname: &PrincipalName,
     realm: &str,

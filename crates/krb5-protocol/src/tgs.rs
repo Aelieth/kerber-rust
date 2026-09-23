@@ -520,7 +520,8 @@ fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
     )
 }
 
-#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+#[expect(clippy::too_many_arguments, reason = "client TGS, not a params struct")]
+#[allow(clippy::needless_pass_by_value)]
 fn tgs_once(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -800,7 +801,7 @@ fn princ_eq(
 /// # Errors
 ///
 /// [`Error::ReplyMismatch`] for either MIT status.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "name and realm stay separate")]
 pub fn tgs_reply_client_ok(
     tgt_cname: &PrincipalName,
     tgt_crealm: &krb5_types::Realm,

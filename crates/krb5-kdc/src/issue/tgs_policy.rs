@@ -47,7 +47,7 @@ fn non_tgt_option(body: &KdcReqBody) -> bool {
         || body.kdc_options.bit(flag_bit::VALIDATE)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(super) fn check_tgs_constraints_skeleton(
     body: &KdcReqBody,
     header_sname: &PrincipalName,

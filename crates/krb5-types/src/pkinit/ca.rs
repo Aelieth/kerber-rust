@@ -66,7 +66,7 @@ fn p256_cert(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "test CA, not a params struct")]
 fn p256_cert_window(
     serial: u8,
     issuer_cn: &str,

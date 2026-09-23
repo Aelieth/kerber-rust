@@ -944,7 +944,7 @@ fn pac_princ_with_realm(pac: &krb5_types::pac::Pac) -> Option<(String, String, u
 }
 
 /// MIT `check_tgs_s4u2proxy` (`tgs_policy.c:424-518`).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(crate) fn check_tgs_s4u2proxy(
     store: &dyn PrincipalRead,
     body: &krb5_types::KdcReqBody,
@@ -1040,7 +1040,7 @@ fn is_client_db_alias(store: &dyn PrincipalRead, entry: &Principal, princ: &Prin
 }
 
 /// MIT `check_s4u2proxy_policy` (`tgs_policy.c:522-572`).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(crate) fn check_s4u2proxy_policy(
     padata: Option<&[PaData]>,
     dest: &PrincipalName,
@@ -1223,7 +1223,7 @@ fn copy_tgt_authdata(
 ///
 /// Order: copy TGS body AD → modules (skip anonymous) → copy TGT AD.
 /// `handle_pac` stays in `mint_ticket` (PAC at index 0).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(crate) fn handle_authdata(
     is_tgs: bool,
     anonymous: bool,

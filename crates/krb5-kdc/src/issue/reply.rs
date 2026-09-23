@@ -358,7 +358,7 @@ pub(super) fn encode_enc_kdc_rep_part(part: EncKdcRepPart) -> Result<Vec<u8>, Er
     Ok(encode(&EncTgsRepPart(part))?)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "EncKdcRepPart, not params")]
 pub(super) fn enc_rep_part(
     session: &ProtocolKey,
     nonce: u32,

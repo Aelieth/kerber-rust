@@ -706,7 +706,7 @@ fn expect_as_ok(
     Ok((session, rr.ticket, mit_session, mr.ticket))
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_tgt(
     krbtgt: &ProtocolKey,
     kvno: u32,
@@ -722,7 +722,7 @@ fn mint_tgt(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_tgt_caddr(
     krbtgt: &ProtocolKey,
     kvno: u32,
@@ -759,7 +759,7 @@ fn mint_tgt_caddr(
 
 /// `mint_tgt` with explicit `authtime` / optional `starttime` / `endtime`
 /// (the KDC-side `krb5int_validate_times` starttime-absent oracle).
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_tgt_times(
     krbtgt: &ProtocolKey,
     kvno: u32,
@@ -794,7 +794,7 @@ fn mint_tgt_times(
     seal_ticket(krbtgt, kvno, realm, sname, &part)
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_tgt_ad(
     krbtgt: &ProtocolKey,
     kvno: u32,
@@ -860,7 +860,7 @@ fn dummy_ident(sam: &str, realm: &str) -> PacIdentity {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_signed_header(
     key: &ProtocolKey,
     kvno: u32,
@@ -890,7 +890,7 @@ fn mint_signed_header(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_signed_header_ex(
     key: &ProtocolKey,
     kvno: u32,
@@ -968,7 +968,7 @@ fn mint_signed_header_ex(
 }
 
 /// Service ticket: server checksum under `server`, privsvr under `kdc`.
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "diffsend ticket forge helper")]
 fn mint_signed_stkt(
     server: &ProtocolKey,
     server_kvno: u32,

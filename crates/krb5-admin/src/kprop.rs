@@ -790,7 +790,7 @@ pub fn kprop_send_store_iprop(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "krb5_creds args, no value type")]
 fn kprop_send_store_ex(
     stream: &mut TcpStream,
     store: &PrincipalStore,
