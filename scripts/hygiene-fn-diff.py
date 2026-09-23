@@ -1037,7 +1037,7 @@ def _find_slice(names: list[str], fields: list[str]) -> tuple[int, int] | None:
 
 
 _TMA_RE = re.compile(
-    r"^#\[(?:allow|expect)\(\s*clippy::too_many_arguments\b[^]]*\)\]\s*$"
+    r"^#\[(?:allow|expect)\([^]]*clippy::too_many_arguments\b[^]]*\)\]\s*$"
 )
 # Sibling lints that share an attribute with too_many_arguments today and
 # stay on their own allow after the expect split.
@@ -1047,12 +1047,15 @@ _SIBLING_ALLOW_RE = re.compile(
 
 
 def _strip_tma_attr(src: str) -> str:
-    lines = src.splitlines()
-    if not any(_TMA_RE.match(ln.strip()) for ln in lines):
-        return src
+    """Drop too_many_arguments suppressions and the two sibling allows.
+
+    The sibling allows are stripped even on a function that no longer has
+    too_many_arguments, so splitting one combined attribute stays identical
+    after the positional rewrite of a converted call.
+    """
     return "\n".join(
         ln
-        for ln in lines
+        for ln in src.splitlines()
         if not _TMA_RE.match(ln.strip()) and not _SIBLING_ALLOW_RE.match(ln.strip())
     )
 
@@ -1610,9 +1613,9 @@ def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
             return True
     if not structs:
         return False
-    new_rw = _params_rewrite(new_src, structs, by_callee, None)
-    old_ex = expand_forwards(old_src, steps, survivor)
-    if new_rw == new_src and old_ex == old_src:
+    new_rw = _strip_tma_attr(_params_rewrite(new_src, structs, by_callee, None))
+    old_ex = _strip_tma_attr(expand_forwards(old_src, steps, survivor))
+    if new_rw == _strip_tma_attr(new_src) and old_ex == _strip_tma_attr(old_src):
         return False
     return _params_norm(new_rw) == _params_norm(old_ex)
 

@@ -61,6 +61,9 @@ this project uses semantic versioning once a crate is published.
 - **tool.** Splitting `needless_pass_by_value` or `unnecessary_wraps`
   off a `too_many_arguments` attribute stays identical.
   `hygiene-fn-diff` self-test count is 88.
+- **tool.** A `too_many_arguments` suppression is recognized in either
+  position inside a combined attribute, and a converted call is still
+  `params-only` after that suppression becomes `expect`.
 - **krb5-admin.** `kadm5_handle_rpc`, `handle_rpc`, `handle_rpcsec_gss`,
   `handle_auth_gssapi`, `rpcsec_dispatch`, and `kadm5_or_iprop` take
   `RpcCtx` (store, ACL, service keys, realm). `serve_kadm5_conn` builds
