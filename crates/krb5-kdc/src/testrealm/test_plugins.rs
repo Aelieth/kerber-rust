@@ -19,7 +19,9 @@ use krb5_types::{
 use crate::audit::{AuditState, KdcAudit, start_stop_json};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::plugins::{KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction};
+use crate::plugins::{
+    KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,
+};
 use crate::preauth::proto;
 use crate::status;
 use crate::store::Principal;
@@ -61,17 +63,18 @@ impl KdcPreauth for DemoPreauth {
         self.ads.fetch_add(1, Ordering::SeqCst);
         Vec::new()
     }
-    fn process_as(
-        &self,
-        _store: &dyn PrincipalRead,
-        _client: &Principal,
-        _padata: Option<&[PaData]>,
-        _ikey: &ProtocolKey,
-        _etype: krb5_crypto::EncryptionType,
-        _as_req_der: &[u8],
-        _body_der: &[u8],
-        _cname: &PrincipalName,
-    ) -> Result<Option<PreauthAction>, Error> {
+    fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
+        #[allow(unused_variables)]
+        let PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        } = *rock;
         self.procs.fetch_add(1, Ordering::SeqCst);
         Ok(None)
     }

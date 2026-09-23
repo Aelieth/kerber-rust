@@ -31,6 +31,29 @@ pub enum PreauthAction {
     EncTsOk,
 }
 
+/// Rock passed to a kdcpreauth module's AS handler.
+///
+/// MIT `krb5_kdcpreauth_rock` (`kdc/kdc_util.h:422`).
+#[derive(Clone, Copy)]
+pub struct PreauthRock<'a> {
+    /// KDC store the module reads.
+    pub store: &'a dyn PrincipalRead,
+    /// Client principal entry.
+    pub client: &'a Principal,
+    /// AS-REQ padata. `None` when the request carried none.
+    pub padata: Option<&'a [PaData]>,
+    /// Initial reply key.
+    pub ikey: &'a ProtocolKey,
+    /// Selected encryption type.
+    pub etype: EncryptionType,
+    /// Encoded AS-REQ.
+    pub as_req_der: &'a [u8],
+    /// Encoded request body.
+    pub body_der: &'a [u8],
+    /// Client name from the request.
+    pub cname: &'a PrincipalName,
+}
+
 /// One kdcpreauth module.
 pub trait KdcPreauth: Send + Sync {
     /// Stable name (built-in or demo).
@@ -57,18 +80,7 @@ pub trait KdcPreauth: Send + Sync {
     /// # Errors
     ///
     /// Protocol / crypto failures.
-    #[allow(clippy::too_many_arguments)]
-    fn process_as(
-        &self,
-        store: &dyn PrincipalRead,
-        client: &Principal,
-        padata: Option<&[PaData]>,
-        ikey: &ProtocolKey,
-        etype: krb5_crypto::EncryptionType,
-        as_req_der: &[u8],
-        body_der: &[u8],
-        cname: &PrincipalName,
-    ) -> Result<Option<PreauthAction>, Error>;
+    fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error>;
 }
 
 struct FastMod;
@@ -95,17 +107,18 @@ impl KdcPreauth for FastMod {
             padata_value: Vec::<u8>::new().into(),
         }]
     }
-    fn process_as(
-        &self,
-        _store: &dyn PrincipalRead,
-        _client: &Principal,
-        _padata: Option<&[PaData]>,
-        _ikey: &ProtocolKey,
-        _etype: krb5_crypto::EncryptionType,
-        _as_req_der: &[u8],
-        _body_der: &[u8],
-        _cname: &PrincipalName,
-    ) -> Result<Option<PreauthAction>, Error> {
+    fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
+        #[allow(unused_variables)]
+        let PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        } = *rock;
         Ok(None)
     }
 }
@@ -143,17 +156,18 @@ impl KdcPreauth for PkinitMod {
         }
         out
     }
-    fn process_as(
-        &self,
-        store: &dyn PrincipalRead,
-        _client: &Principal,
-        padata: Option<&[PaData]>,
-        _ikey: &ProtocolKey,
-        etype: krb5_crypto::EncryptionType,
-        as_req_der: &[u8],
-        body_der: &[u8],
-        cname: &PrincipalName,
-    ) -> Result<Option<PreauthAction>, Error> {
+    fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
+        #[allow(unused_variables)]
+        let PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        } = *rock;
         match process_pkinit(
             store,
             padata,
@@ -204,17 +218,18 @@ impl KdcPreauth for SpakeMod {
             padata_value: Vec::<u8>::new().into(),
         }]
     }
-    fn process_as(
-        &self,
-        store: &dyn PrincipalRead,
-        client: &Principal,
-        padata: Option<&[PaData]>,
-        ikey: &ProtocolKey,
-        _etype: krb5_crypto::EncryptionType,
-        _as_req_der: &[u8],
-        body_der: &[u8],
-        cname: &PrincipalName,
-    ) -> Result<Option<PreauthAction>, Error> {
+    fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
+        #[allow(unused_variables)]
+        let PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        } = *rock;
         match process_spake(store, client, padata, ikey, body_der) {
             Ok(Some(SpakeStep::Challenge(e_data))) => Ok(Some(PreauthAction::Challenge(e_data))),
             Ok(Some(SpakeStep::Done(k))) => {
@@ -254,17 +269,18 @@ impl KdcPreauth for EncTsMod {
             padata_value: Vec::<u8>::new().into(),
         }]
     }
-    fn process_as(
-        &self,
-        store: &dyn PrincipalRead,
-        client: &Principal,
-        padata: Option<&[PaData]>,
-        _ikey: &ProtocolKey,
-        _etype: krb5_crypto::EncryptionType,
-        _as_req_der: &[u8],
-        _body_der: &[u8],
-        cname: &PrincipalName,
-    ) -> Result<Option<PreauthAction>, Error> {
+    fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
+        #[allow(unused_variables)]
+        let PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        } = *rock;
         let Some(blob) = crate::issue::extract_enc_timestamp(padata) else {
             return Ok(None);
         };
@@ -340,17 +356,18 @@ impl KdcPreauth for EncChallengeMod {
             padata_value: Vec::<u8>::new().into(),
         }]
     }
-    fn process_as(
-        &self,
-        _store: &dyn PrincipalRead,
-        _client: &Principal,
-        _padata: Option<&[PaData]>,
-        _ikey: &ProtocolKey,
-        _etype: krb5_crypto::EncryptionType,
-        _as_req_der: &[u8],
-        _body_der: &[u8],
-        _cname: &PrincipalName,
-    ) -> Result<Option<PreauthAction>, Error> {
+    fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
+        #[allow(unused_variables)]
+        let PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        } = *rock;
         Ok(None)
     }
 }
@@ -476,21 +493,29 @@ fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[
 /// # Errors
 ///
 /// Module protocol failures.
-#[allow(clippy::too_many_arguments)]
-pub fn run_as_preauth(
-    store: &dyn PrincipalRead,
-    client: &Principal,
-    padata: Option<&[PaData]>,
-    ikey: &ProtocolKey,
-    etype: krb5_crypto::EncryptionType,
-    as_req_der: &[u8],
-    body_der: &[u8],
-    cname: &PrincipalName,
-) -> Result<Option<PreauthAction>, Error> {
+pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
+    #[allow(unused_variables)]
+    let PreauthRock {
+        store,
+        client,
+        padata,
+        ikey,
+        etype,
+        as_req_der,
+        body_der,
+        cname,
+    } = *rock;
     for m in preauth_modules() {
-        match m.process_as(
-            store, client, padata, ikey, etype, as_req_der, body_der, cname,
-        ) {
+        match m.process_as(&PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        }) {
             Ok(Some(a)) => return Ok(Some(a)),
             Ok(None) => {}
             Err(e) => return Err(filter_preauth_error(e)),

@@ -71,6 +71,8 @@ this project uses semantic versioning once a crate is published.
 - **krb5-client.** `kinit_ex` and `kinit_to_spec` take `&InitCredsOpt`
   (service, SPAKE, armor ccache, PKINIT identity, anchors, enterprise).
   No wire or text change.
+- **krb5-kdc.** `KdcPreauth::process_as` and `run_as_preauth` take
+  `&PreauthRock`. No wire or text change.
 
 ### W3-S3.8 dead code and surface
 

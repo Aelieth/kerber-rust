@@ -1515,15 +1515,19 @@ impl krb5_kdc::KdcPreauth for FailingModule {
     }
     fn process_as(
         &self,
-        _store: &dyn PrincipalRead,
-        _client: &Principal,
-        padata: Option<&[krb5_types::PaData]>,
-        _ikey: &krb5_crypto::ProtocolKey,
-        _etype: krb5_crypto::EncryptionType,
-        _as_req_der: &[u8],
-        _body_der: &[u8],
-        _cname: &PrincipalName,
+        rock: &krb5_kdc::PreauthRock<'_>,
     ) -> Result<Option<krb5_kdc::PreauthAction>, Error> {
+        #[allow(unused_variables)]
+        let krb5_kdc::PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        } = *rock;
         let Some(p) = padata.and_then(|p| p.iter().find(|p| p.padata_type == PA_PRIVATE)) else {
             return Ok(None);
         };
@@ -1776,15 +1780,19 @@ impl KdcPreauth for DiscardMod {
     }
     fn process_as(
         &self,
-        _store: &dyn PrincipalRead,
-        _client: &Principal,
-        padata: Option<&[krb5_types::PaData]>,
-        _ikey: &krb5_crypto::ProtocolKey,
-        _etype: krb5_crypto::EncryptionType,
-        _as_req_der: &[u8],
-        _body_der: &[u8],
-        _cname: &PrincipalName,
+        rock: &krb5_kdc::PreauthRock<'_>,
     ) -> Result<Option<krb5_kdc::PreauthAction>, Error> {
+        #[allow(unused_variables)]
+        let krb5_kdc::PreauthRock {
+            store,
+            client,
+            padata,
+            ikey,
+            etype,
+            as_req_der,
+            body_der,
+            cname,
+        } = *rock;
         let Some(p) = padata.and_then(|p| p.iter().find(|p| p.padata_type == PA_DISCARD)) else {
             return Ok(None);
         };

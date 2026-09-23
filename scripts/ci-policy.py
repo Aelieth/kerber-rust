@@ -4656,7 +4656,7 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(fake_mit)], check=False)
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:129", verdict="absent"))
+    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:136", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))

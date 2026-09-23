@@ -21,7 +21,9 @@ use super::reply::{enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_en
 use crate::ad::{authind_add, check_indicators, handle_authdata};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::plugins::{PreauthAction, apply_policy_times, current_policy, run_as_preauth};
+use crate::plugins::{
+    PreauthAction, PreauthRock, apply_policy_times, current_policy, run_as_preauth,
+};
 use crate::preauth::{
     FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, mint_freshness_token_now,
     pa_cookie_last, proto, unwrap_fast, wrap_fast_rep,
@@ -301,16 +303,16 @@ fn finish_preauth(
         Some(r) => r.to_vec(),
         None => encode(req)?,
     };
-    match run_as_preauth(
+    match run_as_preauth(&PreauthRock {
         store,
-        &client,
-        work_padata.as_deref(),
-        &ckey.key,
+        client: &client,
+        padata: work_padata.as_deref(),
+        ikey: &ckey.key,
         etype,
-        &as_req_der,
-        pa_body,
-        &cname,
-    )
+        as_req_der: &as_req_der,
+        body_der: pa_body,
+        cname: &cname,
+    })
     .map_err(|e| {
         attach_preauth_hint(
             store,
