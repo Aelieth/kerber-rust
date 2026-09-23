@@ -848,7 +848,7 @@ def compare_trees(
     if params:
         old_fns = _FN.extract(old_root)
         new_fns = _FN.extract(new_root)
-        structs, steps, survivor = _FN.prepare_params(old_fns, new_fns, params, {})
+        structs, steps, survivor, _by_callee = _FN.prepare_params(old_fns, new_fns, params, {})
     pairs, unmatched_old, unmatched_new = link(old, new, renames, dups)
     identical = helper_only = 0
     differ: list[tuple[dict, dict, list[str], list[str]]] = []

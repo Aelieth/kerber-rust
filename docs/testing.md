@@ -97,12 +97,18 @@ with one struct value or reference and whose body is the old body
 prefixed by `let Struct { f1, f2, … } = p;` (or `= *p` when the
 parameter is `&Struct`), and a call site whose body matches the old
 body after the struct literal is rewritten back to those field
-expressions in order. Shorthand `f` means `f: f`. A swapped field, a
-`..` tail, an argument hoisted into a `let`, or a destructure that
-renames a field stays `changed`. Rule 7: the literal names every
-field, in the old parameter order, each expression the old argument
-verbatim, and the destructure is the first statement of the converted
-function. Before the vis-stripped compare the text ahead of the
+expressions in order. Shorthand `f` means `f: f`. One struct's map
+entries may name a consecutive slice of its longest field list, for a
+function that never took the other fields: the destructure then ends
+with `..`, a call still names every field, and the rewrite keeps that
+function's fields. Passing the struct binding does the same. An extra
+field whose expression is not that binding stays `changed`. A swapped
+field, a `..` tail on a call-site literal, a `..` that drops a field
+the function did take, an argument hoisted into a `let`, or a
+destructure that renames a field stays `changed`. Rule 7: the literal
+names every field, in the old parameter order, each expression the old
+argument verbatim, and the destructure is the first statement of the
+converted function. Before the vis-stripped compare the text ahead of the
 body is re-flowed: whitespace around punctuation goes, and a trailing
 comma is dropped only when its `(` / `<` follows an identifier that is
 not a keyword and not a lifetime — `wide(a, b,)` and `f<T, U,>` lose

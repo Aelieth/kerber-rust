@@ -1061,7 +1061,39 @@ def _type_is_struct(chunk: str, struct: str) -> bool:
     )
 
 
-def _match_destructure(inner: str, struct: str, fields: list[str]) -> tuple[str, str] | None:
+def _strip_leading_rest(inner: str) -> str | None:
+    """Drop a trailing `..` from the first `let` destructure, if it has one."""
+    i = _skip_code_ws(inner, 0)
+    if not inner.startswith("let", i):
+        return None
+    brace = inner.find("{", i)
+    if brace < 0:
+        return None
+    depth = 0
+    dot_at = None
+    j = brace
+    while j < len(inner):
+        if inner[j] == "{":
+            depth += 1
+        elif inner[j] == "}":
+            depth -= 1
+            if depth == 0:
+                break
+        elif inner.startswith("..", j) and depth == 1:
+            dot_at = j
+            break
+        j += 1
+    if dot_at is None:
+        return None
+    pre = inner[:dot_at].rstrip()
+    if pre.endswith(","):
+        pre = pre[:-1].rstrip()
+    return pre + inner[dot_at + 2 :]
+
+
+def _match_destructure_exact(
+    inner: str, struct: str, fields: list[str]
+) -> tuple[str, str] | None:
     """`let Struct { f1, f2, … } = binder;` or `= *binder`. Shorthand only."""
     i = _skip_code_ws(inner, 0)
     if not inner.startswith("let", i):
@@ -1097,6 +1129,19 @@ def _match_destructure(inner: str, struct: str, fields: list[str]) -> tuple[str,
     if j >= len(inner) or inner[j] != ";":
         return None
     return mname.group(0), inner[j + 1 :]
+
+
+def _match_destructure(
+    inner: str, struct: str, fields: list[str], allow_rest: bool = False
+) -> tuple[str, str] | None:
+    """Exact shorthand destructure. `..` only when `allow_rest` is set."""
+    matched = _match_destructure_exact(inner, struct, fields)
+    if matched is not None or not allow_rest:
+        return matched
+    stripped = _strip_leading_rest(inner)
+    if stripped is None:
+        return None
+    return _match_destructure_exact(stripped, struct, fields)
 
 
 def _code_has_semi(src: str) -> bool:
@@ -1173,25 +1218,44 @@ def prepare_params(
     new: dict[str, dict[str, str]],
     params: dict[str, tuple[str, list[str]]],
     moves: dict[str, str],
-) -> tuple[dict[str, list[str]], dict[str, tuple], dict[str, str]]:
-    """Order-check the map. Return structs, forward steps, ultimate→survivor names."""
+) -> tuple[
+    dict[str, list[str]],
+    dict[str, tuple],
+    dict[str, str],
+    dict[str, tuple[str, list[str]]],
+]:
+    """Order-check the map. Return structs, steps, survivors, callee fields.
+
+    Every entry for one struct names that struct's full field list or a
+    consecutive slice of it (a function that never took the other fields).
+    The longest list is the one call-site literals must name.
+    """
     by_name = _fns_by_name(old)
     steps: dict[str, tuple] = {}
     survivor: dict[str, str] = {}
+    grouped: dict[str, list[tuple[str, list[str]]]] = {}
+    for key, (struct, fields) in params.items():
+        grouped.setdefault(struct, []).append((key, list(fields)))
     structs: dict[str, list[str]] = {}
+    for struct, entries in grouped.items():
+        longest = max((fields for _key, fields in entries), key=len)
+        for key, fields in entries:
+            if _find_slice(longest, fields) is None:
+                raise SystemExit(
+                    f"hygiene-fn-diff: --params struct {struct} fields disagree: {key}"
+                )
+        structs[struct] = list(longest)
+    by_callee: dict[str, tuple[str, list[str]]] = {}
     for key, (struct, fields) in params.items():
         if key not in old:
             raise SystemExit(f"hygiene-fn-diff: --params key missing in old tree: {key}")
-        prev = structs.get(struct)
-        if prev is not None and prev != fields:
-            raise SystemExit(f"hygiene-fn-diff: --params struct {struct} fields disagree: {key}")
-        structs[struct] = list(fields)
         names = _param_names_of(old[key]["src"])
         if names is None:
             raise SystemExit(
                 f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
             )
         if _find_slice(names, fields) is not None:
+            by_callee[old[key]["name"]] = (struct, list(fields))
             continue
         ult_name, ult_src = _walk_forward(by_name, old[key]["name"], old[key]["src"], steps)
         ult_names = _param_names_of(ult_src)
@@ -1200,11 +1264,12 @@ def prepare_params(
                 f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
             )
         survivor[ult_name] = old[key]["name"]
+        by_callee[old[key]["name"]] = (struct, list(fields))
     for key, rec in old.items():
         if key in new or key in moves or rec["name"] in steps:
             continue
         _walk_forward(by_name, rec["name"], rec["src"], steps)
-    return structs, steps, survivor
+    return structs, steps, survivor, by_callee
 
 
 def _definition_params(
@@ -1217,6 +1282,7 @@ def _definition_params(
     structs: dict[str, list[str]] | None = None,
     steps: dict[str, tuple] | None = None,
     survivor: dict[str, str] | None = None,
+    by_callee: dict[str, tuple[str, list[str]]] | None = None,
 ) -> bool:
     old_s = _strip_doc_lines(_strip_tma_attr(old_src))
     new_s = _strip_doc_lines(_strip_tma_attr(new_src))
@@ -1255,7 +1321,11 @@ def _definition_params(
             return False
         binder = new_names[a]
         sl_index = a
-    matched = _match_destructure(inner_body(new_s), struct, expected_fields)
+    canon = list((structs or {}).get(struct) or fields)
+    allow_rest = list(fields) != canon
+    matched = _match_destructure(
+        inner_body(new_s), struct, expected_fields, allow_rest=allow_rest
+    )
     if matched is None:
         return False
     got_binder, rest = matched
@@ -1263,7 +1333,7 @@ def _definition_params(
         return False
     # The rest may call another converted function. Rewrite those literals
     # back to positional arguments before comparing with the old body.
-    rest_rw = _INV.params_rewrite_new(rest, structs or {})
+    rest_rw = _params_rewrite(rest, structs or {}, by_callee, got_binder)
     old_ex = expand_forwards(body_old, steps or {}, survivor or {})
     return _params_norm(rest_rw) == _params_norm(old_ex)
 
@@ -1339,11 +1409,124 @@ def expand_forwards(src: str, steps: dict[str, tuple], survivor: dict[str, str])
     return "".join(out)
 
 
+def _shrink_struct_arg(
+    arg: str,
+    struct: str,
+    canon: list[str],
+    fields: list[str],
+    binder: str | None,
+) -> str | None:
+    """A full struct literal, or the struct binding, as this callee's fields."""
+    raw = arg.strip()
+    if binder and (raw == binder or (raw.startswith("&") and raw[1:].strip() == binder)):
+        return ", ".join(fields)
+    body = raw[1:].strip() if raw.startswith("&") else raw
+    m = re.match(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+        body,
+    )
+    if not m or m.group(1) != struct:
+        return None
+    brace = m.end() - 1
+    end, exprs = _INV._parse_exact_literal(body, brace, canon)
+    if exprs is None or body[end:].strip():
+        return None
+    # Fields this callee never took must be the binding itself, not a new call.
+    for name, expr in zip(canon, exprs):
+        if name not in fields and expr.strip() != name:
+            return None
+    chosen = [exprs[canon.index(name)].strip() for name in fields]
+    return ", ".join(chosen)
+
+
+def _subset_calls(
+    src: str,
+    structs: dict[str, list[str]],
+    by_callee: dict[str, tuple[str, list[str]]],
+    binder: str | None,
+) -> str:
+    """Rewrite a call that takes only some of the struct's fields."""
+    out: list[str] = []
+    i, n = 0, len(src)
+    while i < n:
+        lit = _INV._copy_literal(src, i)
+        if lit is not None:
+            out.append(src[i:lit])
+            i = lit
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            j = n if j < 0 else j
+            out.append(src[i:j])
+            i = j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(src[i:j])
+            i = j
+            continue
+        if src[i].isalpha() or src[i] == "_":
+            m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", src[i:])
+            assert m is not None
+            name = m.group(0)
+            k = i + len(name)
+            spec = by_callee.get(name)
+            j = _skip_code_ws(src, k)
+            preceded_fn = False
+            p = i
+            while p > 0 and src[p - 1].isspace():
+                p -= 1
+            if p >= 2 and src[p - 2 : p] == "fn" and (
+                p == 2 or not (src[p - 3].isalnum() or src[p - 3] == "_")
+            ):
+                preceded_fn = True
+            if (
+                spec is not None
+                and not preceded_fn
+                and j < n
+                and src[j] == "("
+            ):
+                struct, fields = spec
+                canon = structs.get(struct) or fields
+                if list(fields) != list(canon):
+                    end = _scan_balanced(src, j, "(", ")")
+                    args = _split_top_commas(src[j + 1 : end - 1])
+                    if args and not (len(args) == 1 and not args[0].strip()):
+                        shrunk = _shrink_struct_arg(args[0], struct, list(canon), list(fields), binder)
+                        if shrunk is not None:
+                            rest = ", ".join(a.strip() for a in args[1:] if a.strip())
+                            rendered = shrunk if not rest else f"{shrunk}, {rest}"
+                            out.append(f"{name}({rendered})")
+                            i = end
+                            continue
+            out.append(name)
+            i = k
+            continue
+        out.append(src[i])
+        i += 1
+    return "".join(out)
+
+
+def _params_rewrite(
+    src: str,
+    structs: dict[str, list[str]],
+    by_callee: dict[str, tuple[str, list[str]]] | None = None,
+    binder: str | None = None,
+) -> str:
+    """Thread a let, shrink subset calls, then rewrite remaining literals."""
+    src = _INV.expand_threaded_structs(src, structs)
+    if by_callee:
+        src = _subset_calls(src, structs, by_callee, binder)
+    return _INV.params_literal_to_args(src, structs)
+
+
 def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
     spec = ctx.get("spec")
     structs: dict[str, list[str]] = ctx.get("structs") or {}
     steps: dict[str, tuple] = ctx.get("steps") or {}
     survivor: dict[str, str] = ctx.get("survivor") or {}
+    by_callee: dict[str, tuple[str, list[str]]] = ctx.get("by_callee") or {}
     if spec is not None:
         struct, fields = spec
         if _definition_params(
@@ -1356,11 +1539,12 @@ def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
             structs,
             steps,
             survivor,
+            by_callee,
         ):
             return True
     if not structs:
         return False
-    new_rw = _INV.params_rewrite_new(new_src, structs)
+    new_rw = _params_rewrite(new_src, structs, by_callee, None)
     old_ex = expand_forwards(old_src, steps, survivor)
     if new_rw == new_src and old_ex == old_src:
         return False
@@ -2012,9 +2196,10 @@ def compare_trees(
     structs: dict[str, list[str]] = {}
     steps: dict[str, tuple] = {}
     survivor: dict[str, str] = {}
+    by_callee: dict[str, tuple[str, list[str]]] = {}
     by_name: dict[str, str] = {}
     if params:
-        structs, steps, survivor = prepare_params(old, new, params, moves)
+        structs, steps, survivor, by_callee = prepare_params(old, new, params, moves)
         by_name = _fns_by_name(old)
     used_old: set[str] = set()
     used_new: set[str] = set()
@@ -2161,6 +2346,7 @@ def compare_trees(
                 "structs": structs,
                 "steps": steps,
                 "survivor": survivor,
+                "by_callee": by_callee,
                 "by_name": by_name,
                 "self_name": ofn["name"],
             }
@@ -3635,6 +3821,97 @@ def _self_test() -> int:
                 f"copied argument must be params-only: {wrapped}"
             )
         n += 1
+
+        # A callee may take a consecutive slice of the struct. `..` covers
+        # the fields that function never had. The extra literal fields must
+        # be those bindings, and passing the struct value expands to the slice.
+        slice_map = {
+            "demo\twide": ("S", ["a", "b", "c"]),
+            "demo\tnarrow": ("S", ["a", "b"]),
+        }
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n    narrow(a, b)\n}\n"
+            "fn narrow(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+            "fn caller() {\n    narrow(x, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n    narrow(p)\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, b, .. } = p;\n    a + b\n}\n"
+            "fn caller() {\n    narrow(S { a: x, b: y, c })\n}\n",
+        )
+        sliced = compare_trees(old, new, {}, {}, {}, [], params=slice_map)
+        evaluate(sliced)
+        if sliced["params_only"] != 3 or sliced["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: struct slice must be params-only: "
+                f"{sliced}"
+            )
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n    narrow(p)\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, .. } = p;\n    a + b\n}\n"
+            "fn caller() {\n    narrow(S { a: x, b: y, c })\n}\n",
+        )
+        dropped = compare_trees(old, new, {}, {}, {}, [], params=slice_map)
+        if dropped["params_only"] != 2 or dropped["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: .. that drops a mapped field must be "
+                f"changed: {dropped}"
+            )
+        _must_red(dropped, ".. drops a mapped field")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n    narrow(p)\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, b, .. } = p;\n    a + b\n}\n"
+            "fn caller() {\n    narrow(S { a: x, b: y, c: side() })\n}\n",
+        )
+        side = compare_trees(old, new, {}, {}, {}, [], params=slice_map)
+        if side["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an extra field expression must stay "
+                f"changed: {side}"
+            )
+        _must_red(side, "extra field is not the binding")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) {}\nfn narrow(a: i32, c: i32) {}\n",
+        )
+        try:
+            compare_trees(
+                old,
+                new,
+                {},
+                {},
+                {},
+                [],
+                params={
+                    "demo\twide": ("S", ["a", "b", "c"]),
+                    "demo\tnarrow": ("S", ["a", "c"]),
+                },
+            )
+        except SystemExit as exc:
+            if "fields disagree" not in str(exc):
+                raise SystemExit(
+                    f"hygiene-fn-diff --self-test: non-slice fields must disagree: {exc}"
+                )
+            n += 1
+        else:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a non-consecutive field slice must fail"
+            )
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
     if suffixed:

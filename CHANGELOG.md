@@ -45,6 +45,10 @@ this project uses semantic versioning once a crate is published.
 - **krb5-admin.** `rpc_call_bytes`, `rpcsec_call`, and `rpcsec_data_rec`
   take `RpcCallId` (`xid`, `prog`, `vers`, `proc`). `rpcsec_data` still
   advances its own `xid`. No wire or text change.
+- **tool.** A parameter struct may replace a consecutive slice of its
+  fields. The destructure ends with `..` for the fields that function
+  never took. A call may pass the whole struct or the struct binding.
+  `hygiene-fn-diff` self-test count is 83.
 
 ### W3-S3.8 dead code and surface
 
