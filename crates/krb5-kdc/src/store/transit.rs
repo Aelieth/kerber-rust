@@ -136,10 +136,12 @@ impl PrincipalStore {
             self.realm.clone(),
             vec![KeyEntry::new(key.etype(), key, 1)],
             salt,
-            false,
-            0,
-            false,
-            0,
+            crate::store::PrincipalFields {
+                requires_preauth: false,
+                max_life: 0,
+                locked: false,
+                pw_expire: 0,
+            },
         );
         self.put_principal(p);
         self.ensure_incoming_trust(foreign_realm);
@@ -214,10 +216,12 @@ impl PrincipalStore {
             foreign_realm.to_owned(),
             vec![KeyEntry::new(key.etype(), key, 1)],
             salt,
-            false,
-            0,
-            false,
-            0,
+            crate::store::PrincipalFields {
+                requires_preauth: false,
+                max_life: 0,
+                locked: false,
+                pw_expire: 0,
+            },
         );
         self.put_principal(p);
         self.save_if_configured()

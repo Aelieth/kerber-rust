@@ -55,10 +55,12 @@ fn check_indicators_any_match_and_policy() {
         "KERBER.TEST".into(),
         Vec::new(),
         Vec::new(),
-        false,
-        0,
-        false,
-        0,
+        crate::store::PrincipalFields {
+            requires_preauth: false,
+            max_life: 0,
+            locked: false,
+            pw_expire: 0,
+        },
     );
     assert!(check_indicators(&server, &[]).is_ok());
     server
@@ -86,10 +88,12 @@ fn cammac_round_trip_and_bad_mac_ignored() {
         "KERBER.TEST".into(),
         Vec::new(),
         Vec::new(),
-        false,
-        0,
-        false,
-        0,
+        crate::store::PrincipalFields {
+            requires_preauth: false,
+            max_life: 0,
+            locked: false,
+            pw_expire: 0,
+        },
     );
     tgt.keys.push(crate::store::KeyEntry::new(
         EncryptionType::Aes256CtsHmacSha196,
@@ -141,10 +145,12 @@ fn cammac_bad_kdcver_mac_is_skipped() {
         "KERBER.TEST".into(),
         Vec::new(),
         Vec::new(),
-        false,
-        0,
-        false,
-        0,
+        crate::store::PrincipalFields {
+            requires_preauth: false,
+            max_life: 0,
+            locked: false,
+            pw_expire: 0,
+        },
     );
     tgt.keys.push(crate::store::KeyEntry::new(
         EncryptionType::Aes256CtsHmacSha196,

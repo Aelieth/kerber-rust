@@ -63,10 +63,12 @@ impl PrincipalStore {
             alias_realm.to_owned(),
             Vec::new(),
             Vec::new(),
-            false,
-            0,
-            true,
-            0,
+            crate::store::PrincipalFields {
+                requires_preauth: false,
+                max_life: 0,
+                locked: true,
+                pw_expire: 0,
+            },
         );
         p.tl_data.push(TlData {
             ty: TL_KADM_DATA,

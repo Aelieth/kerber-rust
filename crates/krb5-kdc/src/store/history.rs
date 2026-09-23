@@ -130,10 +130,12 @@ impl PrincipalStore {
             self.realm.clone(),
             vec![KeyEntry::new(etype, key.clone(), INITIAL_HIST_KVNO)],
             salt,
-            false,
-            64,
-            false,
-            0,
+            crate::store::PrincipalFields {
+                requires_preauth: false,
+                max_life: 64,
+                locked: false,
+                pw_expire: 0,
+            },
         );
         p.max_renewable_life = self.policy.max_renewable_life;
         refresh_kadm_tl(&mut p);

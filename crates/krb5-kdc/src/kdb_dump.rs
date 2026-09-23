@@ -1145,10 +1145,12 @@ fn synthesize_km(
         realm.to_owned(),
         vec![KeyEntry::new(mkey.etype(), mkey.clone(), 1)],
         salt,
-        false,
-        max_life,
-        true,
-        0,
+        crate::store::PrincipalFields {
+            requires_preauth: false,
+            max_life,
+            locked: true,
+            pw_expire: 0,
+        },
     );
     p.attributes = KDB_DISALLOW_ALL_TIX | KDB_LOCKDOWN_KEYS;
     p.max_renewable_life = max_renewable_life;

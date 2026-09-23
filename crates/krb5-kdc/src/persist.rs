@@ -424,10 +424,12 @@ fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, Persi
             store.realm().to_owned(),
             keys,
             salt,
-            requires_preauth,
-            max_life,
-            locked,
-            pw_expire,
+            crate::store::PrincipalFields {
+                requires_preauth,
+                max_life,
+                locked,
+                pw_expire,
+            },
         );
         store_insert(&mut store, p);
         let _ = S2K_ITERS;

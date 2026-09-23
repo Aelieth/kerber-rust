@@ -164,19 +164,37 @@ pub struct Principal {
     pub string_attrs: Vec<(String, String)>,
 }
 
+/// Attributes stored on a `krb5_db_entry`.
+///
+/// MIT `krb5_db_entry` (`include/kdb.h:191-213`): preauth, maximum
+/// ticket life, the disallow-all-tickets lock, and password expiration.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct PrincipalFields {
+    /// `KRB5_KDB_REQUIRES_PRE_AUTH`.
+    pub(crate) requires_preauth: bool,
+    /// Maximum ticket life, seconds.
+    pub(crate) max_life: u64,
+    /// `KRB5_KDB_DISALLOW_ALL_TIX`.
+    pub(crate) locked: bool,
+    /// Password expiration, Unix time. Zero means none.
+    pub(crate) pw_expire: u32,
+}
+
 impl Principal {
     /// Construct a principal with dump metadata zeroed (bootstrap / KDB3 load).
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn from_keys(
         name: PrincipalName,
         realm: String,
         keys: Vec<KeyEntry>,
         salt: Vec<u8>,
-        requires_preauth: bool,
-        max_life: u64,
-        locked: bool,
-        pw_expire: u32,
+        fields: PrincipalFields,
     ) -> Self {
+        let PrincipalFields {
+            requires_preauth,
+            max_life,
+            locked,
+            pw_expire,
+        } = fields;
         let mut attributes = 0u32;
         if requires_preauth {
             attributes |= KDB_REQUIRES_PRE_AUTH;
@@ -660,10 +678,12 @@ impl PrincipalStore {
             princ_realm.to_owned(),
             keys,
             salt,
-            attributes & KDB_REQUIRES_PRE_AUTH != 0,
-            0,
-            attributes & KDB_DISALLOW_ALL_TIX != 0,
-            0,
+            PrincipalFields {
+                requires_preauth: attributes & KDB_REQUIRES_PRE_AUTH != 0,
+                max_life: 0,
+                locked: attributes & KDB_DISALLOW_ALL_TIX != 0,
+                pw_expire: 0,
+            },
         );
         p.attributes = attributes;
         p.max_life = if ent.mask & kadm5_mask::MAX_LIFE != 0 {

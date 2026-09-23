@@ -408,6 +408,7 @@ pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy, s2k_params,
 };
 pub use policy::{NamedPolicy, Policy, parse_dict_words};
+pub(crate) use principal::PrincipalFields;
 pub use principal::{AdminEnt, AdminFields, KadmData, Principal, TlData, strip_db_args};
 pub(crate) use principal::{AsFailState, db_args_put_error, refresh_kadm_tl};
 pub use rid::{RID_FIRST_USER, RID_KRBTGT};

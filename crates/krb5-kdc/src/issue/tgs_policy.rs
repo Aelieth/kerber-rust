@@ -157,10 +157,12 @@ pub(super) fn check_tgs_s4u2self(
             String::new(),
             Vec::new(),
             Vec::new(),
-            false,
-            0,
-            false,
-            0,
+            crate::store::PrincipalFields {
+                requires_preauth: false,
+                max_life: 0,
+                locked: false,
+                pw_expire: 0,
+            },
         );
         validate_as_request(store, client, &empty, body)?;
     } else if !pac_client_info_eq(
