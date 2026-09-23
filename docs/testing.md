@@ -101,8 +101,8 @@ expressions in order. Shorthand `f` means `f: f`. One struct's map
 entries may name a consecutive slice of its longest field list, for a
 function that never took the other fields: the destructure then ends
 with `..`, a call still names every field, and the rewrite keeps that
-function's fields. Passing the struct binding does the same. An extra
-field whose expression is not that binding stays `changed`. A swapped
+function's fields. Passing the struct binding does the same. An extra field whose expression is not that binding, and not a field
+read of the struct value, stays `changed`. A swapped
 field, a `..` tail on a call-site literal, a `..` that drops a field
 the function did take, an argument hoisted into a `let`, or a
 destructure that renames a field stays `changed`. Rule 7: the literal

@@ -49,6 +49,8 @@ this project uses semantic versioning once a crate is published.
   fields. The destructure ends with `..` for the fields that function
   never took. A call may pass the whole struct or the struct binding.
   `hygiene-fn-diff` self-test count is 83.
+- **tool.** Reading `ctx.field` for a field the callee never took is the
+  same binding, not a new call. `hygiene-fn-diff` self-test count is 84.
 
 ### W3-S3.8 dead code and surface
 

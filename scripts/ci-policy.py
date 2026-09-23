@@ -3008,7 +3008,7 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 31
 HYGIENE_BODY_DIFF_MIN_CASES = 34
-HYGIENE_FN_DIFF_MIN_CASES = 83
+HYGIENE_FN_DIFF_MIN_CASES = 84
 HYGIENE_INVENTORY_MIN_CASES = 3
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
@@ -5406,7 +5406,7 @@ jobs:
         "def _self_test():\n    x + 2 phase_b pub(crate)\n"
         "    # unused-accept fixture must be otherwise green\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (83 cases)')\n"
+        "        print('hygiene-fn-diff: self-test ok (84 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_fn_diff_self_test, "def main():\n    return 0\n")

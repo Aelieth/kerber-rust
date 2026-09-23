@@ -1409,6 +1409,16 @@ def expand_forwards(src: str, steps: dict[str, tuple], survivor: dict[str, str])
     return "".join(out)
 
 
+def _pure_field(expr: str, name: str, binder: str | None) -> bool:
+    """The field binding, or `binder.name` / `(*binder).name`."""
+    e = expr.strip()
+    if e == name:
+        return True
+    if not binder:
+        return False
+    return e in {f"{binder}.{name}", f"(*{binder}).{name}"}
+
+
 def _shrink_struct_arg(
     arg: str,
     struct: str,
@@ -1431,9 +1441,10 @@ def _shrink_struct_arg(
     end, exprs = _INV._parse_exact_literal(body, brace, canon)
     if exprs is None or body[end:].strip():
         return None
-    # Fields this callee never took must be the binding itself, not a new call.
+    # Fields this callee never took must be the binding itself, or a
+    # field read of the struct value. Anything else is a new call.
     for name, expr in zip(canon, exprs):
-        if name not in fields and expr.strip() != name:
+        if name not in fields and not _pure_field(expr, name, binder):
             return None
     chosen = [exprs[canon.index(name)].strip() for name in fields]
     return ", ".join(chosen)
@@ -3852,6 +3863,35 @@ def _self_test() -> int:
             )
         n += 1
 
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n    narrow(a, b)\n}\n"
+            "fn narrow(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n"
+            "    narrow(S { a, b, c: p.c })\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, b, .. } = p;\n    a + b\n}\n",
+        )
+        read = compare_trees(old, new, {}, {}, {}, [], params=slice_map)
+        evaluate(read)
+        if read["params_only"] != 2 or read["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: binder.field on an unused struct "
+                f"field must be params-only: {read}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n    narrow(a, b)\n}\n"
+            "fn narrow(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+            "fn caller() {\n    narrow(x, y)\n}\n",
+        )
         _write_crate(
             new,
             "crates/demo/src/lib.rs",
