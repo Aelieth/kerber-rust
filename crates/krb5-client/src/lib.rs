@@ -117,13 +117,35 @@ pub fn kinit(
         principal,
         password,
         ccache_path,
-        service,
-        false,
-        None,
-        None,
-        None,
-        false,
+        &InitCredsOpt {
+            service,
+            want_spake: false,
+            armor_ccache: None,
+            pkinit_identity: None,
+            pkinit_anchors: None,
+            enterprise: false,
+        },
     )
+}
+
+/// Options for [`kinit_ex`] and [`kinit_to_spec`].
+///
+/// MIT `krb5_get_init_creds_opt` (`include/krb5/krb5.hin:6839-6851`).
+/// `service` is `krb5_get_init_creds_password`'s `in_tkt_service`.
+#[derive(Clone, Copy)]
+pub struct InitCredsOpt<'a> {
+    /// Optional TGS service (`-S` or positional).
+    pub service: Option<&'a str>,
+    /// PA-SPAKE.
+    pub want_spake: bool,
+    /// FAST armor ccache.
+    pub armor_ccache: Option<&'a Path>,
+    /// PKINIT identity PEM.
+    pub pkinit_identity: Option<&'a Path>,
+    /// PKINIT anchors PEM.
+    pub pkinit_anchors: Option<&'a Path>,
+    /// NT-ENTERPRISE.
+    pub enterprise: bool,
 }
 
 /// [`kinit`] with a preauth mode (`want_spake` = PA-SPAKE P-256).
@@ -131,19 +153,21 @@ pub fn kinit(
 /// # Errors
 ///
 /// Protocol or I/O errors. The password buffer is zeroized before return.
-#[allow(clippy::too_many_arguments)]
 pub fn kinit_ex(
     kdc: &KdcAddr,
     principal: &str,
     password: &mut [u8],
     ccache_path: impl AsRef<Path>,
-    service: Option<&str>,
-    want_spake: bool,
-    armor_ccache: Option<&Path>,
-    pkinit_identity: Option<&Path>,
-    pkinit_anchors: Option<&Path>,
-    enterprise: bool,
+    opts: &InitCredsOpt<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let InitCredsOpt {
+        service,
+        want_spake,
+        armor_ccache,
+        pkinit_identity,
+        pkinit_anchors,
+        enterprise,
+    } = *opts;
     let spec = CcSpec::File(ccache_path.as_ref().to_path_buf());
     let params = KinitParams {
         service,
@@ -162,19 +186,21 @@ pub fn kinit_ex(
 /// # Errors
 ///
 /// Protocol or I/O errors. The password buffer is zeroized before return.
-#[allow(clippy::too_many_arguments)]
 pub fn kinit_to_spec(
     kdc: &KdcAddr,
     principal: &str,
     password: &mut [u8],
     spec: &CcSpec,
-    service: Option<&str>,
-    want_spake: bool,
-    armor_ccache: Option<&Path>,
-    pkinit_identity: Option<&Path>,
-    pkinit_anchors: Option<&Path>,
-    enterprise: bool,
+    opts: &InitCredsOpt<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let InitCredsOpt {
+        service,
+        want_spake,
+        armor_ccache,
+        pkinit_identity,
+        pkinit_anchors,
+        enterprise,
+    } = *opts;
     kinit_with(
         kdc,
         principal,

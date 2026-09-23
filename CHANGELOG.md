@@ -64,6 +64,9 @@ this project uses semantic versioning once a crate is published.
 - **krb5-admin.** `kpropd_handle_conn` takes `&KpropdConfig` (host keys,
   expected peer, realm, master password, database, stash, ACL). No wire
   or text change.
+- **krb5-client.** `kinit_ex` and `kinit_to_spec` take `&InitCredsOpt`
+  (service, SPAKE, armor ccache, PKINIT identity, anchors, enterprise).
+  No wire or text change.
 
 ### W3-S3.8 dead code and surface
 

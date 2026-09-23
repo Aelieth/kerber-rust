@@ -53,12 +53,14 @@ fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
         &format!("{TEST_USER}@{TEST_REALM}"),
         &mut pw,
         &CcSpec::File(path.clone()),
-        None,
-        false,
-        None,
-        None,
-        None,
-        false,
+        &krb5_client::InitCredsOpt {
+            service: None,
+            want_spake: false,
+            armor_ccache: None,
+            pkinit_identity: None,
+            pkinit_anchors: None,
+            enterprise: false,
+        },
     )
     .expect("kinit");
     let cache = FileCcache::parse(&std::fs::read(&path).unwrap()).unwrap();
