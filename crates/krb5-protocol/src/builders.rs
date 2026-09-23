@@ -125,7 +125,7 @@ pub fn tgs_req(
     realm: &str,
     nonce: u32,
 ) -> Result<TgsReq, Error> {
-    tgs_req_ex(
+    tgs_req_ex(TgsReqParams {
         ticket,
         session,
         crealm,
@@ -133,156 +133,68 @@ pub fn tgs_req(
         sname,
         realm,
         nonce,
-        KdcOptions::forwardable(),
-        None,
-        Vec::new(),
-        EncryptionType::preferred()
+        kdc_options: KdcOptions::forwardable(),
+        additional_tickets: None,
+        extra_padata: Vec::new(),
+        etypes: EncryptionType::preferred()
             .iter()
             .map(|e| e.to_iana())
             .collect(),
-    )
+        addresses: None,
+        from: None,
+        enc_authorization_data: None,
+        till: None,
+        subkey: None,
+    })
 }
 
-/// TGS-REQ with explicit KDCOptions, additional-tickets, and extra padata.
+/// Inputs of a TGS-REQ.
+///
+/// MIT `k5_make_tgs_req` (`lib/krb5/krb/send_tgs.c:119`) takes the same
+/// values positionally. This is the parameter struct for [`tgs_req_ex`],
+/// not a wire type.
+pub struct TgsReqParams<'a> {
+    /// Header ticket.
+    pub ticket: Ticket,
+    /// Key that checksums the body and encrypts the authenticator.
+    pub session: &'a ProtocolKey,
+    /// Client realm.
+    pub crealm: &'a str,
+    /// Client name.
+    pub cname: &'a PrincipalName,
+    /// Server name. Owned because the body stores it.
+    pub sname: PrincipalName,
+    /// Server realm.
+    pub realm: &'a str,
+    /// Request nonce.
+    pub nonce: u32,
+    /// KDC options copied onto the body.
+    pub kdc_options: KdcOptions,
+    /// Additional tickets, when the caller has them.
+    pub additional_tickets: Option<Vec<Ticket>>,
+    /// Padata appended after the PA-TGS-REQ.
+    pub extra_padata: Vec<PaData>,
+    /// Offered encryption types.
+    pub etypes: Vec<i32>,
+    /// Request addresses. `None` omits them.
+    pub addresses: Option<HostAddresses>,
+    /// Postdated `from`. `None` omits it.
+    pub from: Option<KerberosTime>,
+    /// Encrypted authorization data. `None` omits it.
+    pub enc_authorization_data: Option<EncryptedData>,
+    /// Explicit end time. `None` is ten hours from now.
+    pub till: Option<KerberosTime>,
+    /// Authenticator subkey. `None` omits it.
+    pub subkey: Option<&'a ProtocolKey>,
+}
+
+/// TGS-REQ with explicit KDC options, tickets, padata, addresses, and times.
 ///
 /// # Errors
 ///
 /// Returns crypto or DER failures.
-#[allow(clippy::too_many_arguments)]
-pub fn tgs_req_ex(
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &str,
-    cname: &PrincipalName,
-    sname: PrincipalName,
-    realm: &str,
-    nonce: u32,
-    kdc_options: KdcOptions,
-    additional_tickets: Option<Vec<Ticket>>,
-    extra_padata: Vec<PaData>,
-    etypes: Vec<i32>,
-) -> Result<TgsReq, Error> {
-    tgs_req_ex_from(
-        ticket,
-        session,
-        crealm,
-        cname,
-        sname,
-        realm,
-        nonce,
-        kdc_options,
-        additional_tickets,
-        extra_padata,
-        etypes,
-        None,
-        None,
-        None,
-    )
-}
-
-/// [`tgs_req_ex`] with request addresses (FORWARDED/PROXY / `kinit -a`).
-///
-/// # Errors
-///
-/// Returns crypto or DER failures.
-#[allow(clippy::too_many_arguments)]
-pub fn tgs_req_ex_addr(
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &str,
-    cname: &PrincipalName,
-    sname: PrincipalName,
-    realm: &str,
-    nonce: u32,
-    kdc_options: KdcOptions,
-    additional_tickets: Option<Vec<Ticket>>,
-    extra_padata: Vec<PaData>,
-    etypes: Vec<i32>,
-    addresses: Option<HostAddresses>,
-) -> Result<TgsReq, Error> {
-    tgs_req_ex_from(
-        ticket,
-        session,
-        crealm,
-        cname,
-        sname,
-        realm,
-        nonce,
-        kdc_options,
-        additional_tickets,
-        extra_padata,
-        etypes,
-        addresses,
-        None,
-        None,
-    )
-}
-
-/// [`tgs_req_ex_addr`] with optional `from` (POSTDATED).
-///
-/// # Errors
-///
-/// Returns crypto or DER failures.
-#[allow(clippy::too_many_arguments)]
-pub fn tgs_req_ex_from(
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &str,
-    cname: &PrincipalName,
-    sname: PrincipalName,
-    realm: &str,
-    nonce: u32,
-    kdc_options: KdcOptions,
-    additional_tickets: Option<Vec<Ticket>>,
-    extra_padata: Vec<PaData>,
-    etypes: Vec<i32>,
-    addresses: Option<HostAddresses>,
-    from: Option<KerberosTime>,
-    enc_authorization_data: Option<EncryptedData>,
-) -> Result<TgsReq, Error> {
-    tgs_req_ex_till(
-        ticket,
-        session,
-        crealm,
-        cname,
-        sname,
-        realm,
-        nonce,
-        kdc_options,
-        additional_tickets,
-        extra_padata,
-        etypes,
-        addresses,
-        from,
-        enc_authorization_data,
-        None,
-    )
-}
-
-/// [`tgs_req_ex_from`] with an explicit `till`.
-///
-/// # Errors
-///
-/// Returns crypto or DER failures.
-#[allow(clippy::too_many_arguments)]
-pub fn tgs_req_ex_till(
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &str,
-    cname: &PrincipalName,
-    sname: PrincipalName,
-    realm: &str,
-    nonce: u32,
-    kdc_options: KdcOptions,
-    additional_tickets: Option<Vec<Ticket>>,
-    extra_padata: Vec<PaData>,
-    etypes: Vec<i32>,
-    addresses: Option<HostAddresses>,
-    from: Option<KerberosTime>,
-    enc_authorization_data: Option<EncryptedData>,
-    till: Option<KerberosTime>,
-) -> Result<TgsReq, Error> {
-    tgs_req_ex_subkey(
+pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
+    let TgsReqParams {
         ticket,
         session,
         crealm,
@@ -298,34 +210,9 @@ pub fn tgs_req_ex_till(
         from,
         enc_authorization_data,
         till,
-        None,
-    )
-}
+        subkey,
+    } = p;
 
-/// [`tgs_req_ex_till`] with an authenticator subkey (TGS body AD usage 5).
-///
-/// # Errors
-///
-/// Returns crypto or DER failures.
-#[allow(clippy::too_many_arguments)]
-pub fn tgs_req_ex_subkey(
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &str,
-    cname: &PrincipalName,
-    sname: PrincipalName,
-    realm: &str,
-    nonce: u32,
-    kdc_options: KdcOptions,
-    additional_tickets: Option<Vec<Ticket>>,
-    extra_padata: Vec<PaData>,
-    etypes: Vec<i32>,
-    addresses: Option<HostAddresses>,
-    from: Option<KerberosTime>,
-    enc_authorization_data: Option<EncryptedData>,
-    till: Option<KerberosTime>,
-    subkey: Option<&ProtocolKey>,
-) -> Result<TgsReq, Error> {
     let till = till.unwrap_or_else(|| {
         KerberosTime::now()
             .add_hours(10)

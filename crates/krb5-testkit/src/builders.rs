@@ -7,7 +7,7 @@
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::TEST_REALM;
 
-use krb5_protocol::{as_req, as_req_sname, tgs_req_ex_subkey};
+use krb5_protocol::{TgsReqParams, as_req, as_req_sname, tgs_req_ex};
 use krb5_types::{
     AsReq, EncryptedData, HostAddresses, KdcOptions, KerberosTime, PaData, PrincipalName, TgsReq,
     Ticket,
@@ -84,7 +84,7 @@ impl AsReqBuilder {
     }
 }
 
-/// TGS-REQ builder wrapping [`krb5_protocol::tgs_req_ex_subkey`].
+/// TGS-REQ builder wrapping [`krb5_protocol::tgs_req_ex`].
 ///
 /// Defaults match [`krb5_protocol::tgs_req`]: FORWARDABLE, no
 /// additional tickets, empty extra padata, preferred etypes, no
@@ -198,25 +198,25 @@ impl TgsReqBuilder {
     ///
     /// # Errors
     ///
-    /// Same as [`krb5_protocol::tgs_req_ex_subkey`].
+    /// Same as [`krb5_protocol::tgs_req_ex`].
     pub fn build(self) -> Result<TgsReq, krb5_protocol::Error> {
-        tgs_req_ex_subkey(
-            self.ticket,
-            &self.session,
-            &self.crealm,
-            &self.cname,
-            self.sname,
-            &self.realm,
-            self.nonce,
-            self.options,
-            self.additional,
-            self.padata,
-            self.etypes,
-            self.addresses,
-            self.from,
-            self.enc_ad,
-            self.till,
-            self.subkey.as_ref(),
-        )
+        tgs_req_ex(TgsReqParams {
+            ticket: self.ticket,
+            session: &self.session,
+            crealm: &self.crealm,
+            cname: &self.cname,
+            sname: self.sname,
+            realm: &self.realm,
+            nonce: self.nonce,
+            kdc_options: self.options,
+            additional_tickets: self.additional,
+            extra_padata: self.padata,
+            etypes: self.etypes,
+            addresses: self.addresses,
+            from: self.from,
+            enc_authorization_data: self.enc_ad,
+            till: self.till,
+            subkey: self.subkey.as_ref(),
+        })
     }
 }

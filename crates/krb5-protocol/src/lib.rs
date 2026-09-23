@@ -49,8 +49,7 @@ pub use as_ex::{
     sort_krb5_padata_sequence, verify_as_reply_req_times, verify_as_reply_server,
 };
 pub use builders::{
-    as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
-    tgs_req_ex_addr, tgs_req_ex_from, tgs_req_ex_subkey, tgs_req_ex_till,
+    TgsReqParams, as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
 };
 pub use capture::capture_pdu;
 pub use ccache::{

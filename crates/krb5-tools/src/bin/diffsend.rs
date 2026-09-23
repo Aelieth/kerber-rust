@@ -21,11 +21,11 @@ use krb5_crypto::{
 use krb5_kdc::testrealm::{GREET_AD_TYPE, GREET_TEXT};
 use krb5_kdc::{PacTicket, pac_from_ticket_part, sign_pac, ticket_checksum_der, wrap_win2k_pac};
 use krb5_protocol::{
-    KdcAddr, Keytab, armor_key, as_req, as_req_sname, attach_fast, attach_fast_with_options,
-    build_fast_armor, compare_krb_error, compare_stable_rep, decode_enc_kdc_rep, exchange_on_tcp,
-    pa_enc_timestamp, pa_enc_timestamp_at, pa_for_user, pa_pac_options, pa_pk_as_req_signed,
-    pa_pk_as_req_unsigned, pa_s4u_x509_user, pa_spake_support, tgs_req, tgs_req_ex,
-    tgs_req_ex_addr, tgs_req_ex_from, tgs_req_ex_subkey, tgs_req_ex_till,
+    KdcAddr, Keytab, TgsReqParams, armor_key, as_req, as_req_sname, attach_fast,
+    attach_fast_with_options, build_fast_armor, compare_krb_error, compare_stable_rep,
+    decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp, pa_enc_timestamp_at, pa_for_user,
+    pa_pac_options, pa_pk_as_req_signed, pa_pk_as_req_unsigned, pa_s4u_x509_user, pa_spake_support,
+    tgs_req, tgs_req_ex,
 };
 use krb5_types::cammac::AdKdcIssued;
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
@@ -1820,8 +1820,8 @@ fn run() -> Result<(), String> {
     )?;
     let u2u_tgs = |extra: Ticket, nonce: u32| -> Result<krb5_types::TgsReq, String> {
         let opts = KdcOptions::forwardable().with_bit(krb5_types::flag_bit::ENC_TKT_IN_SKEY, true);
-        tgs_req_ex(
-            mint_tgt(
+        tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -1834,17 +1834,22 @@ fn run() -> Result<(), String> {
                 ),
                 TicketFlags::initial_preauth(),
             )?,
-            &sess,
-            realm,
-            &user,
-            user.clone(),
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: user.clone(),
             realm,
             nonce,
-            opts,
-            Some(vec![extra]),
-            Vec::new(),
-            etypes.clone(),
-        )
+            kdc_options: opts,
+            additional_tickets: Some(vec![extra]),
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())
     };
 
@@ -1969,25 +1974,30 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-pac-request-false",
         &encode(
-            &tgs_req_ex(
-                pac_tkt,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: pac_tkt,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: host.clone(),
                 realm,
-                &user,
-                host.clone(),
-                realm,
-                0x1000_0032,
-                KdcOptions::forwardable(),
-                None,
-                vec![PaData {
+                nonce: 0x1000_0032,
+                kdc_options: KdcOptions::forwardable(),
+                additional_tickets: None,
+                extra_padata: vec![PaData {
                     padata_type: pa::PAC_REQUEST,
                     padata_value: pac_req.into(),
                 }],
-                EncryptionType::preferred()
+                etypes: EncryptionType::preferred()
                     .iter()
                     .map(|e| e.to_iana())
                     .collect(),
-            )
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -2050,24 +2060,29 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-renew-service-ticket",
         &encode(
-            &tgs_req_ex(
-                svc_renew,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: svc_renew,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: host.clone(),
                 realm,
-                &user,
-                host.clone(),
-                realm,
-                0x1000_0034,
-                KdcOptions::forwardable()
+                nonce: 0x1000_0034,
+                kdc_options: KdcOptions::forwardable()
                     .with_bit(flag_bit::RENEWABLE, true)
                     .with_bit(flag_bit::RENEW, true),
-                None,
-                Vec::new(),
-                EncryptionType::preferred()
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: EncryptionType::preferred()
                     .iter()
                     .map(|e| e.to_iana())
                     .collect(),
-            )
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -2087,22 +2102,27 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-proxy-krbtgt",
         &encode(
-            &tgs_req_ex(
-                proxy_tgt,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: proxy_tgt,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: krbtgt_sname.clone(),
                 realm,
-                &user,
-                krbtgt_sname.clone(),
-                realm,
-                0x1000_0035,
-                KdcOptions::forwardable().with_bit(flag_bit::PROXY, true),
-                None,
-                Vec::new(),
-                EncryptionType::preferred()
+                nonce: 0x1000_0035,
+                kdc_options: KdcOptions::forwardable().with_bit(flag_bit::PROXY, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: EncryptionType::preferred()
                     .iter()
                     .map(|e| e.to_iana())
                     .collect(),
-            )
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -2133,25 +2153,30 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-canonicalize-renew",
         &encode(
-            &tgs_req_ex(
-                can_tgt,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: can_tgt,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: krbtgt_sname.clone(),
                 realm,
-                &user,
-                krbtgt_sname.clone(),
-                realm,
-                0x1000_0036,
-                KdcOptions::forwardable()
+                nonce: 0x1000_0036,
+                kdc_options: KdcOptions::forwardable()
                     .with_bit(flag_bit::RENEWABLE, true)
                     .with_bit(flag_bit::RENEW, true)
                     .with_bit(flag_bit::CANONICALIZE, true),
-                None,
-                Vec::new(),
-                EncryptionType::preferred()
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: EncryptionType::preferred()
                     .iter()
                     .map(|e| e.to_iana())
                     .collect(),
-            )
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -2208,19 +2233,24 @@ fn run() -> Result<(), String> {
     };
     let s4u_req = |tkt: Ticket, extra: Vec<PaData>, nonce: u32| -> Result<Vec<u8>, String> {
         encode(
-            &tgs_req_ex(
-                tkt,
-                &sess,
-                realm,
-                &host,
-                host.clone(),
+            &tgs_req_ex(TgsReqParams {
+                ticket: tkt,
+                session: &sess,
+                crealm: realm,
+                cname: &host,
+                sname: host.clone(),
                 realm,
                 nonce,
-                KdcOptions::forwardable(),
-                None,
-                extra,
-                etypes.clone(),
-            )
+                kdc_options: KdcOptions::forwardable(),
+                additional_tickets: None,
+                extra_padata: extra,
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())
@@ -2365,19 +2395,24 @@ fn run() -> Result<(), String> {
                      nonce: u32|
      -> Result<Vec<u8>, String> {
         encode(
-            &tgs_req_ex(
-                header,
-                &sess,
-                realm,
-                &host,
-                dest,
+            &tgs_req_ex(TgsReqParams {
+                ticket: header,
+                session: &sess,
+                crealm: realm,
+                cname: &host,
+                sname: dest,
                 realm,
                 nonce,
-                opts,
-                extra,
-                Vec::new(),
-                etypes.clone(),
-            )
+                kdc_options: opts,
+                additional_tickets: extra,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())
@@ -2551,8 +2586,8 @@ fn run() -> Result<(), String> {
     let u2u_to =
         |dest: PrincipalName, extra: Option<Vec<Ticket>>, nonce: u32| -> Result<Vec<u8>, String> {
             encode(
-                &tgs_req_ex(
-                    mint_tgt(
+                &tgs_req_ex(TgsReqParams {
+                    ticket: mint_tgt(
                         tkt_key,
                         tkt_kvno,
                         &user,
@@ -2562,17 +2597,22 @@ fn run() -> Result<(), String> {
                         window10.clone(),
                         TicketFlags::initial_preauth(),
                     )?,
-                    &sess,
-                    realm,
-                    &user,
-                    dest,
+                    session: &sess,
+                    crealm: realm,
+                    cname: &user,
+                    sname: dest,
                     realm,
                     nonce,
-                    u2u_opts.clone(),
-                    extra,
-                    Vec::new(),
-                    etypes.clone(),
-                )
+                    kdc_options: u2u_opts.clone(),
+                    additional_tickets: extra,
+                    extra_padata: Vec::new(),
+                    etypes: etypes.clone(),
+                    addresses: None,
+                    from: None,
+                    enc_authorization_data: None,
+                    till: None,
+                    subkey: None,
+                })
                 .map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())
@@ -2687,8 +2727,8 @@ fn run() -> Result<(), String> {
     let stkt_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let u2u_ok_etypes = vec![EncryptionType::Aes128CtsHmacSha196.to_iana()];
     let u2u_ok = encode(
-        &tgs_req_ex(
-            mint_tgt(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -2698,14 +2738,14 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_005e,
-            u2u_opts.clone(),
-            Some(vec![mint_tgt(
+            nonce: 0x1000_005e,
+            kdc_options: u2u_opts.clone(),
+            additional_tickets: Some(vec![mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &host,
@@ -2715,9 +2755,14 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?]),
-            Vec::new(),
-            u2u_ok_etypes,
-        )
+            extra_padata: Vec::new(),
+            etypes: u2u_ok_etypes,
+            addresses: None,
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -2802,20 +2847,24 @@ fn run() -> Result<(), String> {
         TicketFlags::initial_preauth().with_bit(flag_bit::FORWARDABLE, true),
     )?;
     let fwd = encode(
-        &tgs_req_ex_addr(
-            fwd_tkt,
-            &sess,
+        &tgs_req_ex(TgsReqParams {
+            ticket: fwd_tkt,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0061,
-            KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            Some(fwd_addrs.clone()),
-        )
+            nonce: 0x1000_0061,
+            kdc_options: KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: Some(fwd_addrs.clone()),
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -2871,19 +2920,26 @@ fn run() -> Result<(), String> {
         &cfg,
         "s4u2self-renew-options",
         &encode(
-            &tgs_req_ex(
-                host_hdr(&host, false)?,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: host_hdr(&host, false)?,
+                session: &sess,
+                crealm: realm,
+                cname: &host,
+                sname: host.clone(),
                 realm,
-                &host,
-                host.clone(),
-                realm,
-                0x1000_0063,
-                KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
-                None,
-                vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
-                etypes.clone(),
-            )
+                nonce: 0x1000_0063,
+                kdc_options: KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true),
+                additional_tickets: None,
+                extra_padata: vec![
+                    pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?,
+                ],
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -2907,19 +2963,26 @@ fn run() -> Result<(), String> {
         &cfg,
         "s4u2self-krbtgt-other",
         &encode(
-            &tgs_req_ex(
-                host_hdr(&host, false)?,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: host_hdr(&host, false)?,
+                session: &sess,
+                crealm: realm,
+                cname: &host,
+                sname: other_tgs,
                 realm,
-                &host,
-                other_tgs,
-                realm,
-                0x1000_0065,
-                KdcOptions::forwardable(),
-                None,
-                vec![pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?],
-                etypes.clone(),
-            )
+                nonce: 0x1000_0065,
+                kdc_options: KdcOptions::forwardable(),
+                additional_tickets: None,
+                extra_padata: vec![
+                    pa_for_user(&sess, user.clone(), realm).map_err(|e| e.to_string())?,
+                ],
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3168,8 +3231,8 @@ fn run() -> Result<(), String> {
     )?;
     let stkt_offered = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let u2u_offered = encode(
-        &tgs_req_ex(
-            mint_tgt(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -3179,14 +3242,14 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0070,
-            u2u_opts.clone(),
-            Some(vec![mint_tgt(
+            nonce: 0x1000_0070,
+            kdc_options: u2u_opts.clone(),
+            additional_tickets: Some(vec![mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &host,
@@ -3196,9 +3259,14 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?]),
-            Vec::new(),
-            vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
-        )
+            extra_padata: Vec::new(),
+            etypes: vec![EncryptionType::Aes256CtsHmacSha196.to_iana()],
+            addresses: None,
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -3233,8 +3301,8 @@ fn run() -> Result<(), String> {
         address: vec![192, 0, 2, 2].into(),
     }];
     let ftgt = encode(
-        &tgs_req_ex_addr(
-            mint_tgt(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -3244,18 +3312,22 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth().with_bit(flag_bit::FORWARDABLE, true),
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: krbtgt_sname.clone(),
             realm,
-            &user,
-            krbtgt_sname.clone(),
-            realm,
-            0x1000_006d,
-            KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            Some(ftgt_addrs.clone()),
-        )
+            nonce: 0x1000_006d,
+            kdc_options: KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: Some(ftgt_addrs.clone()),
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -3299,19 +3371,24 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-forwarded-on-non-f-tgt",
         &encode(
-            &tgs_req_ex(
-                no_f,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: no_f,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: host.clone(),
                 realm,
-                &user,
-                host.clone(),
-                realm,
-                0x1000_0070,
-                KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
-                None,
-                Vec::new(),
-                etypes.clone(),
-            )
+                nonce: 0x1000_0070,
+                kdc_options: KdcOptions::none().with_bit(flag_bit::FORWARDED, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3332,19 +3409,24 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-proxy-on-non-p-tgt",
         &encode(
-            &tgs_req_ex(
-                no_p,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: no_p,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: host.clone(),
                 realm,
-                &user,
-                host.clone(),
-                realm,
-                0x1000_0071,
-                KdcOptions::none().with_bit(flag_bit::PROXY, true),
-                None,
-                Vec::new(),
-                etypes.clone(),
-            )
+                nonce: 0x1000_0071,
+                kdc_options: KdcOptions::none().with_bit(flag_bit::PROXY, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3355,8 +3437,8 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-postdate-on-non-postdatable",
         &encode(
-            &tgs_req_ex(
-                mint_tgt(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
                     tkt_key,
                     tkt_kvno,
                     &user,
@@ -3366,17 +3448,22 @@ fn run() -> Result<(), String> {
                     window10.clone(),
                     TicketFlags::initial_preauth(),
                 )?,
-                &sess,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: host.clone(),
                 realm,
-                &user,
-                host.clone(),
-                realm,
-                0x1000_0072,
-                KdcOptions::none().with_bit(flag_bit::MAY_POSTDATE, true),
-                None,
-                Vec::new(),
-                etypes.clone(),
-            )
+                nonce: 0x1000_0072,
+                kdc_options: KdcOptions::none().with_bit(flag_bit::MAY_POSTDATE, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3395,24 +3482,26 @@ fn run() -> Result<(), String> {
         TicketFlags::initial_preauth().with_bit(flag_bit::MAY_POSTDATE, true),
     )?;
     let postdated = encode(
-        &tgs_req_ex_from(
-            post_tgt,
-            &sess,
+        &tgs_req_ex(TgsReqParams {
+            ticket: post_tgt,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0073,
-            KdcOptions::none()
+            nonce: 0x1000_0073,
+            kdc_options: KdcOptions::none()
                 .with_bit(flag_bit::MAY_POSTDATE, true)
                 .with_bit(flag_bit::POSTDATED, true),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            None,
-            Some(from),
-            None,
-        )
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: Some(from),
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -3444,8 +3533,8 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-validate-invalid-non-renewable",
         &encode(
-            &tgs_req_ex(
-                mint_tgt(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
                     tkt_key,
                     tkt_kvno,
                     &user,
@@ -3457,17 +3546,22 @@ fn run() -> Result<(), String> {
                         .with_bit(flag_bit::INITIAL, true)
                         .with_bit(flag_bit::INVALID, true),
                 )?,
-                &sess,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: PrincipalName::krbtgt(realm),
                 realm,
-                &user,
-                PrincipalName::krbtgt(realm),
-                realm,
-                0x1000_0076,
-                KdcOptions::none().with_bit(flag_bit::RENEW, true),
-                None,
-                Vec::new(),
-                etypes.clone(),
-            )
+                nonce: 0x1000_0076,
+                kdc_options: KdcOptions::none().with_bit(flag_bit::RENEW, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3479,8 +3573,8 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-no-preauth-flag",
         &encode(
-            &tgs_req_ex(
-                mint_tgt(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
                     tkt_key,
                     tkt_kvno,
                     &user,
@@ -3490,17 +3584,22 @@ fn run() -> Result<(), String> {
                     window10.clone(),
                     TicketFlags::none().with_bit(flag_bit::INITIAL, true),
                 )?,
-                &sess,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: pauser,
                 realm,
-                &user,
-                pauser,
-                realm,
-                0x1000_0074,
-                KdcOptions::none(),
-                None,
-                Vec::new(),
-                etypes.clone(),
-            )
+                nonce: 0x1000_0074,
+                kdc_options: KdcOptions::none(),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3512,8 +3611,8 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-hw-preauth-flag",
         &encode(
-            &tgs_req_ex(
-                mint_tgt(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
                     tkt_key,
                     tkt_kvno,
                     &user,
@@ -3523,17 +3622,22 @@ fn run() -> Result<(), String> {
                     window10.clone(),
                     TicketFlags::initial_preauth(),
                 )?,
-                &sess,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: hwuser,
                 realm,
-                &user,
-                hwuser,
-                realm,
-                0x1000_0075,
-                KdcOptions::none(),
-                None,
-                Vec::new(),
-                etypes.clone(),
-            )
+                nonce: 0x1000_0075,
+                kdc_options: KdcOptions::none(),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3545,8 +3649,8 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-nyv-inside-skew",
         &encode(
-            &tgs_req_ex(
-                mint_tgt(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
                     tkt_key,
                     tkt_kvno,
                     &user,
@@ -3563,17 +3667,22 @@ fn run() -> Result<(), String> {
                         .with_bit(flag_bit::POSTDATED, true)
                         .with_bit(flag_bit::INVALID, true),
                 )?,
-                &sess,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: host.clone(),
                 realm,
-                &user,
-                host.clone(),
-                realm,
-                0x1000_0076,
-                KdcOptions::none().with_bit(flag_bit::VALIDATE, true),
-                None,
-                Vec::new(),
-                etypes.clone(),
-            )
+                nonce: 0x1000_0076,
+                kdc_options: KdcOptions::none().with_bit(flag_bit::VALIDATE, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3592,8 +3701,8 @@ fn run() -> Result<(), String> {
     }];
     let copy_enc = enc_ad_usage(&sess, ku::TGS_REQ_AD_SESSKEY, &copy_ad)?;
     let copy_req = encode(
-        &tgs_req_ex_from(
-            mint_signed_header(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_signed_header(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -3606,20 +3715,22 @@ fn run() -> Result<(), String> {
                 false,
                 None,
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0077,
-            KdcOptions::none(),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            None,
-            None,
-            Some(copy_enc),
-        )
+            nonce: 0x1000_0077,
+            kdc_options: KdcOptions::none(),
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: Some(copy_enc),
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -3682,8 +3793,8 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-ad-mandatory-for-kdc",
         &encode(
-            &tgs_req_ex_from(
-                mint_tgt(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
                     tkt_key,
                     tkt_kvno,
                     &user,
@@ -3693,20 +3804,22 @@ fn run() -> Result<(), String> {
                     window10.clone(),
                     TicketFlags::initial_preauth(),
                 )?,
-                &sess,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: host.clone(),
                 realm,
-                &user,
-                host.clone(),
-                realm,
-                0x1000_0078,
-                KdcOptions::none(),
-                None,
-                Vec::new(),
-                etypes.clone(),
-                None,
-                None,
-                Some(mand_enc),
-            )
+                nonce: 0x1000_0078,
+                kdc_options: KdcOptions::none(),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: Some(mand_enc),
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -3745,8 +3858,8 @@ fn run() -> Result<(), String> {
         }
     };
     let strip_req = encode(
-        &tgs_req_ex_from(
-            mint_tgt(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -3756,20 +3869,22 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0079,
-            KdcOptions::none(),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            None,
-            None,
-            Some(strip_enc),
-        )
+            nonce: 0x1000_0079,
+            kdc_options: KdcOptions::none(),
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: Some(strip_enc),
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -3813,8 +3928,8 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let sub_enc = enc_ad_usage(&sub, ku::TGS_REQ_AD_SUBKEY, &sub_ad)?;
     let sub_req = encode(
-        &tgs_req_ex_subkey(
-            mint_tgt(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -3824,22 +3939,22 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0080,
-            KdcOptions::none(),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            None,
-            None,
-            Some(sub_enc),
-            None,
-            Some(&sub),
-        )
+            nonce: 0x1000_0080,
+            kdc_options: KdcOptions::none(),
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: Some(sub_enc),
+            till: None,
+            subkey: Some(&sub),
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -3871,8 +3986,8 @@ fn run() -> Result<(), String> {
     }];
     let ku5_enc = enc_ad_usage(&sess, ku::TGS_REQ_AD_SUBKEY, &ku5_ad)?;
     let ku5_req = encode(
-        &tgs_req_ex_from(
-            mint_tgt(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -3882,20 +3997,22 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0081,
-            KdcOptions::none(),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            None,
-            None,
-            Some(ku5_enc),
-        )
+            nonce: 0x1000_0081,
+            kdc_options: KdcOptions::none(),
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: Some(ku5_enc),
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -3957,22 +4074,24 @@ fn run() -> Result<(), String> {
     });
     keep_part.authorization_data = Some(keep_ad);
     let keep_req = encode(
-        &tgs_req_ex_from(
-            seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, &keep_part)?,
-            &sess,
+        &tgs_req_ex(TgsReqParams {
+            ticket: seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, &keep_part)?,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0082,
-            KdcOptions::none(),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            None,
-            None,
-            None,
-        )
+            nonce: 0x1000_0082,
+            kdc_options: KdcOptions::none(),
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -4007,8 +4126,8 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-truncated-cammac",
         &encode(
-            &tgs_req_ex_from(
-                mint_tgt_ad(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt_ad(
                     tkt_key,
                     tkt_kvno,
                     &user,
@@ -4019,20 +4138,22 @@ fn run() -> Result<(), String> {
                     TicketFlags::initial_preauth(),
                     Some(cammac_ad),
                 )?,
-                &sess,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: host.clone(),
                 realm,
-                &user,
-                host.clone(),
-                realm,
-                0x1000_007a,
-                KdcOptions::none(),
-                None,
-                Vec::new(),
-                etypes.clone(),
-                None,
-                None,
-                None,
-            )
+                nonce: 0x1000_007a,
+                kdc_options: KdcOptions::none(),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -4060,8 +4181,8 @@ fn run() -> Result<(), String> {
 
     let past = now.add_seconds(-60).unwrap_or_else(|_| now.clone());
     let till_past = encode(
-        &tgs_req_ex_till(
-            mint_tgt(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -4071,21 +4192,22 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_007d,
-            KdcOptions::none(),
-            None,
-            Vec::new(),
-            etypes.clone(),
-            None,
-            None,
-            None,
-            Some(past.clone()),
-        )
+            nonce: 0x1000_007d,
+            kdc_options: KdcOptions::none(),
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: None,
+            till: Some(past.clone()),
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -4116,8 +4238,8 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-service-expired-require-auth",
         &encode(
-            &tgs_req_ex(
-                mint_tgt(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
                     tkt_key,
                     tkt_kvno,
                     &user,
@@ -4127,25 +4249,30 @@ fn run() -> Result<(), String> {
                     window10.clone(),
                     TicketFlags::initial_preauth(),
                 )?,
-                &sess,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: expiredsvc,
                 realm,
-                &user,
-                expiredsvc,
-                realm,
-                0x1000_007e,
-                KdcOptions::none(),
-                None,
-                Vec::new(),
-                etypes.clone(),
-            )
+                nonce: 0x1000_007e,
+                kdc_options: KdcOptions::none(),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
         err::SERVICE_EXP,
     )?;
 
-    let from_past = tgs_req_ex_from(
-        mint_tgt(
+    let from_past = tgs_req_ex(TgsReqParams {
+        ticket: mint_tgt(
             tkt_key,
             tkt_kvno,
             &user,
@@ -4155,22 +4282,24 @@ fn run() -> Result<(), String> {
             window10.clone(),
             TicketFlags::initial_preauth().with_bit(flag_bit::MAY_POSTDATE, true),
         )?,
-        &sess,
+        session: &sess,
+        crealm: realm,
+        cname: &user,
+        sname: host.clone(),
         realm,
-        &user,
-        host.clone(),
-        realm,
-        0x1000_007f,
-        KdcOptions::none()
+        nonce: 0x1000_007f,
+        kdc_options: KdcOptions::none()
             .with_bit(flag_bit::MAY_POSTDATE, true)
             .with_bit(flag_bit::POSTDATED, true),
-        None,
-        Vec::new(),
-        etypes.clone(),
-        None,
-        None,
-        None,
-    )
+        additional_tickets: None,
+        extra_padata: Vec::new(),
+        etypes: etypes.clone(),
+        addresses: None,
+        from: None,
+        enc_authorization_data: None,
+        till: None,
+        subkey: None,
+    })
     .map_err(|e| e.to_string())?;
     let from_past = encode(&from_past).map_err(|e| e.to_string())?;
     let (tr, tm) = send_both(&cfg, "tgs-postdated-from", &from_past)?;
@@ -4210,21 +4339,26 @@ fn run() -> Result<(), String> {
     };
     let inverted_svc = seal_ticket(hkey, hkvno, realm, &host, &inverted)?;
     let renew_inv = encode(
-        &tgs_req_ex(
-            inverted_svc,
-            &sess,
+        &tgs_req_ex(TgsReqParams {
+            ticket: inverted_svc,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host.clone(),
             realm,
-            &user,
-            host.clone(),
-            realm,
-            0x1000_0080,
-            KdcOptions::forwardable()
+            nonce: 0x1000_0080,
+            kdc_options: KdcOptions::forwardable()
                 .with_bit(flag_bit::RENEWABLE, true)
                 .with_bit(flag_bit::RENEW, true),
-            None,
-            Vec::new(),
-            etypes.clone(),
-        )
+            additional_tickets: None,
+            extra_padata: Vec::new(),
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -4248,8 +4382,8 @@ fn run() -> Result<(), String> {
 
     let pac_opts = pa_pac_options(true).map_err(|e| e.to_string())?;
     let rbcd_req = encode(
-        &tgs_req_ex(
-            mint_tgt(
+        &tgs_req_ex(TgsReqParams {
+            ticket: mint_tgt(
                 tkt_key,
                 tkt_kvno,
                 &user,
@@ -4259,17 +4393,22 @@ fn run() -> Result<(), String> {
                 window10.clone(),
                 TicketFlags::initial_preauth(),
             )?,
-            &sess,
+            session: &sess,
+            crealm: realm,
+            cname: &user,
+            sname: host,
             realm,
-            &user,
-            host,
-            realm,
-            0x1000_007c,
-            KdcOptions::none(),
-            None,
-            vec![pac_opts],
-            etypes.clone(),
-        )
+            nonce: 0x1000_007c,
+            kdc_options: KdcOptions::none(),
+            additional_tickets: None,
+            extra_padata: vec![pac_opts],
+            etypes: etypes.clone(),
+            addresses: None,
+            from: None,
+            enc_authorization_data: None,
+            till: None,
+            subkey: None,
+        })
         .map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
@@ -4446,22 +4585,27 @@ fn run() -> Result<(), String> {
         &cfg,
         "tgs-referral-no-dot",
         &encode(
-            &tgs_req_ex(
-                nodot_tgt,
-                &sess,
+            &tgs_req_ex(TgsReqParams {
+                ticket: nodot_tgt,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: nodot,
                 realm,
-                &user,
-                nodot,
-                realm,
-                0x1000_0094,
-                KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
-                None,
-                Vec::new(),
-                EncryptionType::preferred()
+                nonce: 0x1000_0094,
+                kdc_options: KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: EncryptionType::preferred()
                     .iter()
                     .map(|e| e.to_iana())
                     .collect(),
-            )
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
             .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?,
@@ -4548,24 +4692,26 @@ fn run() -> Result<(), String> {
         caddr: None,
         authorization_data: None,
     };
-    let renew_from = tgs_req_ex_from(
-        seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, &renew_pd_part)?,
-        &sess,
+    let renew_from = tgs_req_ex(TgsReqParams {
+        ticket: seal_ticket(tkt_key, tkt_kvno, realm, &krbtgt_sname, &renew_pd_part)?,
+        session: &sess,
+        crealm: realm,
+        cname: &user,
+        sname: krbtgt_sname.clone(),
         realm,
-        &user,
-        krbtgt_sname.clone(),
-        realm,
-        0x1000_0095,
-        KdcOptions::none()
+        nonce: 0x1000_0095,
+        kdc_options: KdcOptions::none()
             .with_bit(flag_bit::RENEW, true)
             .with_bit(flag_bit::POSTDATED, true),
-        None,
-        Vec::new(),
-        etypes.clone(),
-        None,
-        Some(from.clone()),
-        None,
-    )
+        additional_tickets: None,
+        extra_padata: Vec::new(),
+        etypes: etypes.clone(),
+        addresses: None,
+        from: Some(from.clone()),
+        enc_authorization_data: None,
+        till: None,
+        subkey: None,
+    })
     .map_err(|e| e.to_string())?;
     let renew_from = encode(&renew_from).map_err(|e| e.to_string())?;
     let (tr, tm) = send_both(&cfg, "tgs-renew-postdated-from", &renew_from)?;
