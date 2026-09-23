@@ -56,6 +56,8 @@ this project uses semantic versioning once a crate is published.
   `RpcCtx` (store, ACL, service keys, realm). `serve_kadm5_conn` builds
   that value once. The two procedure dispatchers still carry
   `too_many_arguments`. No wire or text change.
+- **krb5-admin.** `iprop_pull` takes `IpropLast` (`last_sno`, `last_sec`,
+  `last_usec`). No wire or text change.
 
 ### W3-S3.8 dead code and surface
 

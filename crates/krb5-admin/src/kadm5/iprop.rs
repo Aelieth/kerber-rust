@@ -392,23 +392,39 @@ pub struct IpropPull {
     pub applied: usize,
 }
 
+/// Replica cursor passed to `IPROP_GET_UPDATES`.
+///
+/// MIT `kdb_last_t` (`include/iprop.h:176-180`): the serial number and
+/// the timestamp's seconds and microseconds.
+#[derive(Clone, Copy)]
+pub struct IpropLast {
+    /// `kdb_last_t.last_sno`.
+    pub last_sno: u32,
+    /// `kdb_last_t.last_time.seconds`.
+    pub last_sec: u32,
+    /// `kdb_last_t.last_time.useconds`.
+    pub last_usec: u32,
+}
+
 /// RPCSEC_GSS IPROP_GET_UPDATES against MIT `kadmind` (program 100423).
 ///
 /// # Errors
 ///
 /// GSS, RPC, XDR, or crypto failures.
-#[allow(clippy::too_many_arguments)]
 pub fn iprop_pull(
     stream: &mut TcpStream,
     ticket: Ticket,
     session: &ProtocolKey,
     crealm: &krb5_types::Realm,
     cname: &PrincipalName,
-    last_sno: u32,
-    last_sec: u32,
-    last_usec: u32,
+    last: IpropLast,
     store: &mut krb5_kdc::PrincipalStore,
 ) -> Result<IpropPull, Error> {
+    let IpropLast {
+        last_sno,
+        last_sec,
+        last_usec,
+    } = last;
     let (mut ctx, token) =
         GssContext::init_sec_context(ticket, session, crealm, cname, true, None, None)
             .map_err(|e| Error::Inner(e.to_string()))?;

@@ -29,6 +29,6 @@ pub use auth::{
 };
 pub use glob::glob_pattern_ok;
 pub(crate) use glob::{glob_expand, glob_is_match};
-pub use iprop::{IpropPull, iprop_fullresync, iprop_pull};
+pub use iprop::{IpropLast, IpropPull, iprop_fullresync, iprop_pull};
 pub(crate) use policy::{create_policy_local, modify_policy_local};
 pub use rpc::{Kadm5RpcSession, RpcCallId, RpcCtx, kadm5_handle_rpc, serve_kadm5_conn};

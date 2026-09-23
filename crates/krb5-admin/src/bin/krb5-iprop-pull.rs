@@ -191,9 +191,11 @@ fn main() {
         &tgs.session_key,
         &krb5_types::ascii(&realm),
         &ent.name,
-        sno,
-        last_sec,
-        last_usec,
+        krb5_admin::IpropLast {
+            last_sno: sno,
+            last_sec,
+            last_usec,
+        },
         &mut store,
     )
     .unwrap_or_else(|e| {
