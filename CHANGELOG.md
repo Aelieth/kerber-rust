@@ -76,6 +76,8 @@ this project uses semantic versioning once a crate is published.
 - **krb5-kdc.** `mint_ticket` takes `MintTicket` (the enc-ticket fields
   plus the PAC inputs). It is a parameter struct, not a wire type. No
   wire or text change.
+- **krb5-admin.** `admin_gss_token` returns `AdminGssToken`. The
+  `type_complexity` suppression is gone. No wire or text change.
 
 ### W3-S3.8 dead code and surface
 

@@ -68,15 +68,16 @@ fn decode_denied(out: &[u8]) -> (u32, u32) {
     (xid, r.u32().unwrap())
 }
 
-#[allow(clippy::type_complexity)]
-fn admin_gss_token() -> (
+type AdminGssToken = (
     krb5_kdc::SharedDump,
     Acl,
     GssContext,
     Vec<u8>,
     ProtocolKey,
     ProtocolKey,
-) {
+);
+
+fn admin_gss_token() -> AdminGssToken {
     use krb5_crypto::EncryptionType;
     use krb5_kdc::testrealm::TEST_REALM;
 
