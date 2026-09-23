@@ -180,35 +180,97 @@ pub(super) fn tgs_reply(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn mint_ticket(
-    service_key: &ProtocolKey,
-    kvno: u32,
-    service_etype: EncryptionType,
-    session: &ProtocolKey,
-    srealm: &str,
-    sname: &PrincipalName,
-    crealm: &str,
-    cname: &PrincipalName,
-    authtime: &KerberosTime,
-    endtime: &KerberosTime,
-    flags: TicketFlags,
-    kdc_key: &ProtocolKey,
-    transited: TransitedEncoding,
-    renew_till: Option<KerberosTime>,
-    store: &dyn PrincipalRead,
-    include_pac: bool,
-    logon_override: Option<&[u8]>,
-    starttime: &KerberosTime,
-    subject_pac: Option<&[u8]>,
-    caddr: Option<HostAddresses>,
-    s4u_client_info: Option<&str>,
-    extra_ad: Option<AuthorizationData>,
-    indicators: &[String],
-    krbtgt: &Principal,
-    krbtgt_key: &ProtocolKey,
-    no_auth_data: bool,
-) -> Result<Ticket, Error> {
+/// Inputs for minting one ticket.
+///
+/// Not a wire type. The ticket fields are MIT `krb5_enc_tkt_part`
+/// (`include/krb5/krb5.hin:1930`) filled the way `do_as_req.c` and
+/// `do_tgs_req.c` fill them before `krb5_encrypt_tkt_part`
+/// (`lib/krb5/krb/encrypt_tk.c:42`). The rest are the PAC inputs from
+/// `kdc_authdata.c`.
+pub struct MintTicket<'a> {
+    /// Service long-term key.
+    pub service_key: &'a ProtocolKey,
+    /// Service key version.
+    pub kvno: u32,
+    /// Service key encryption type.
+    pub service_etype: EncryptionType,
+    /// Session key sealed in the ticket.
+    pub session: &'a ProtocolKey,
+    /// Server realm.
+    pub srealm: &'a str,
+    /// Server name.
+    pub sname: &'a PrincipalName,
+    /// Client realm.
+    pub crealm: &'a str,
+    /// Client name.
+    pub cname: &'a PrincipalName,
+    /// Authentication time.
+    pub authtime: &'a KerberosTime,
+    /// Ticket end time.
+    pub endtime: &'a KerberosTime,
+    /// Ticket flags.
+    pub flags: TicketFlags,
+    /// Key that signs the PAC.
+    pub kdc_key: &'a ProtocolKey,
+    /// Transited encoding.
+    pub transited: TransitedEncoding,
+    /// Renew-till, when the ticket is renewable.
+    pub renew_till: Option<KerberosTime>,
+    /// KDC store the PAC modules read.
+    pub store: &'a dyn PrincipalRead,
+    /// Include a PAC.
+    pub include_pac: bool,
+    /// Logon-info override bytes.
+    pub logon_override: Option<&'a [u8]>,
+    /// Ticket start time.
+    pub starttime: &'a KerberosTime,
+    /// Subject PAC bytes for S4U.
+    pub subject_pac: Option<&'a [u8]>,
+    /// Client addresses.
+    pub caddr: Option<HostAddresses>,
+    /// S4U client info string.
+    pub s4u_client_info: Option<&'a str>,
+    /// Authorization data supplied by the caller.
+    pub extra_ad: Option<AuthorizationData>,
+    /// Auth indicators.
+    pub indicators: &'a [String],
+    /// krbtgt principal.
+    pub krbtgt: &'a Principal,
+    /// krbtgt key.
+    pub krbtgt_key: &'a ProtocolKey,
+    /// Skip authorization data.
+    pub no_auth_data: bool,
+}
+
+pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
+    let MintTicket {
+        service_key,
+        kvno,
+        service_etype,
+        session,
+        srealm,
+        sname,
+        crealm,
+        cname,
+        authtime,
+        endtime,
+        flags,
+        kdc_key,
+        transited,
+        renew_till,
+        store,
+        include_pac,
+        logon_override,
+        starttime,
+        subject_pac,
+        caddr,
+        s4u_client_info,
+        extra_ad,
+        indicators,
+        krbtgt,
+        krbtgt_key,
+        no_auth_data,
+    } = p;
     let mut extra = extra_ad.unwrap_or_default();
     let mut part = EncTicketPart {
         flags,

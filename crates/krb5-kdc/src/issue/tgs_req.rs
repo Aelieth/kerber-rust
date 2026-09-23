@@ -18,7 +18,9 @@ use super::kdc_util::{
     include_pac_for_reply, kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks,
     process_tgs_header, s4u2self_forwardable, select_session_keytype, utf8_realm,
 };
-use super::reply::{enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata};
+use super::reply::{
+    MintTicket, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
+};
 use super::tgs_policy::{
     check_tgs_constraints_skeleton, check_tgs_policy_flags, check_tgs_s4u2self, check_tgs_u2u,
 };
@@ -872,38 +874,38 @@ fn tgs_issue_ticket(
     } else {
         sname.clone()
     };
-    let ticket = mint_ticket(
-        &tkt_key,
-        tkt_kvno,
-        tkt_etype,
-        &session,
-        store.realm(),
-        &ticket_sname,
-        &ticket_crealm,
-        &ticket_cname,
-        &authtime,
-        &end,
-        flags.clone(),
-        &pac_kdc,
+    let ticket = mint_ticket(MintTicket {
+        service_key: &tkt_key,
+        kvno: tkt_kvno,
+        service_etype: tkt_etype,
+        session: &session,
+        srealm: store.realm(),
+        sname: &ticket_sname,
+        crealm: &ticket_crealm,
+        cname: &ticket_cname,
+        authtime: &authtime,
+        endtime: &end,
+        flags: flags.clone(),
+        kdc_key: &pac_kdc,
         transited,
-        ticket_renew_till.clone(),
+        renew_till: ticket_renew_till.clone(),
         store,
         include_pac,
-        evidence_logon.as_deref(),
-        &starttime,
-        if s4u2self {
+        logon_override: evidence_logon.as_deref(),
+        starttime: &starttime,
+        subject_pac: if s4u2self {
             None
         } else {
             subject_pac.as_deref()
         },
-        tgs_ticket_caddr(body, renew, validate, &enc_tkt),
-        s4u_client_info.as_deref(),
+        caddr: tgs_ticket_caddr(body, renew, validate, &enc_tkt),
+        s4u_client_info: s4u_client_info.as_deref(),
         extra_ad,
-        &auth_indicators,
-        &krbtgt_p,
-        &krbtgt_key.key,
-        attr(&server, KDB_NO_AUTH_DATA_REQUIRED),
-    )?;
+        indicators: &auth_indicators,
+        krbtgt: &krbtgt_p,
+        krbtgt_key: &krbtgt_key.key,
+        no_auth_data: attr(&server, KDB_NO_AUTH_DATA_REQUIRED),
+    })?;
     let mut s4u_rep_pa = None;
     let mut s4u_enc_pa = None;
     if let Some(ref x509) = s4u_x509 {

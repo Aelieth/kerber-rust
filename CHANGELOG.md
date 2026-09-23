@@ -73,6 +73,9 @@ this project uses semantic versioning once a crate is published.
   No wire or text change.
 - **krb5-kdc.** `KdcPreauth::process_as` and `run_as_preauth` take
   `&PreauthRock`. No wire or text change.
+- **krb5-kdc.** `mint_ticket` takes `MintTicket` (the enc-ticket fields
+  plus the PAC inputs). It is a parameter struct, not a wire type. No
+  wire or text change.
 
 ### W3-S3.8 dead code and surface
 

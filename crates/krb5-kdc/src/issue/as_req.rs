@@ -17,7 +17,9 @@ use super::kdc_util::{
     kdc_get_ticket_endtime, kdc_get_ticket_renewtime, kdc_req_body_der, ks, select_session_keytype,
     utf8_realm, validate_as_request,
 };
-use super::reply::{enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata};
+use super::reply::{
+    MintTicket, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
+};
 use crate::ad::{authind_add, check_indicators, handle_authdata};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
@@ -556,34 +558,34 @@ fn finish_process_as_req(
     } else {
         store.realm()
     };
-    let ticket = mint_ticket(
-        &skey.key,
-        skey.kvno,
-        skey.etype,
-        &session,
-        store.realm(),
-        &ticket_sname,
-        issue_crealm,
-        &cname,
-        &now,
-        &end,
-        flags.clone(),
-        &pac_kdc,
-        TransitedEncoding::empty(),
-        ticket_renew_till.clone(),
+    let ticket = mint_ticket(MintTicket {
+        service_key: &skey.key,
+        kvno: skey.kvno,
+        service_etype: skey.etype,
+        session: &session,
+        srealm: store.realm(),
+        sname: &ticket_sname,
+        crealm: issue_crealm,
+        cname: &cname,
+        authtime: &now,
+        endtime: &end,
+        flags: flags.clone(),
+        kdc_key: &pac_kdc,
+        transited: TransitedEncoding::empty(),
+        renew_till: ticket_renew_till.clone(),
         store,
         include_pac,
-        None,
-        &starttime,
-        None,
-        body.addresses.clone(),
-        None,
+        logon_override: None,
+        starttime: &starttime,
+        subject_pac: None,
+        caddr: body.addresses.clone(),
+        s4u_client_info: None,
         extra_ad,
-        &auth_indicators,
-        &krbtgt_p,
-        &krbtgt_key.key,
-        attr(&server, KDB_NO_AUTH_DATA_REQUIRED),
-    )?;
+        indicators: &auth_indicators,
+        krbtgt: &krbtgt_p,
+        krbtgt_key: &krbtgt_key.key,
+        no_auth_data: attr(&server, KDB_NO_AUTH_DATA_REQUIRED),
+    })?;
     let renew_till = ticket_renew_till;
     let mut reply_key = as_rep_key.clone();
     let mut outer_padata = extra_padata;
