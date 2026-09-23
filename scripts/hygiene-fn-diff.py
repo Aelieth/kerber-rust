@@ -1722,8 +1722,6 @@ def extract(
         rel = path.relative_to(root).as_posix()
         if "/target/" in f"/{rel}/" or "/tests/" in f"/{rel}/" or "/benches/" in f"/{rel}/":
             continue
-        if "/krb5-testkit/" in f"/{rel}/":
-            continue
         # Crate examples are harness tools (S3.6 moves them into src/bin).
         # build.rs and other non-source files under the crate stay out.
         if (

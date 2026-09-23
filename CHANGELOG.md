@@ -21,7 +21,8 @@ this project uses semantic versioning once a crate is published.
   `#[expect(` counts as a suppression and not as a panic.
   Self-test counts are fn-diff 79, body-diff 34, inventory 3.
   A copied argument that rustfmt wraps, including a trailing comma,
-  stays `params-only`.
+  stays `params-only`. `krb5-testkit` `src/` is scanned, so a
+  testkit builder call site is judged with the product functions.
 - **krb5-types.** `hierarchical_walk_realms` is `#[must_use]`. The
   module `allow(clippy::must_use_candidate)` is gone. The doc cites
   `walk_rtree.c:394-452`. No wire or text change.
