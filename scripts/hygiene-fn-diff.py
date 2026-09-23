@@ -1214,6 +1214,9 @@ def _definition_params(
     fields: list[str],
     by_name: dict[str, str],
     self_name: str,
+    structs: dict[str, list[str]] | None = None,
+    steps: dict[str, tuple] | None = None,
+    survivor: dict[str, str] | None = None,
 ) -> bool:
     old_s = _strip_doc_lines(_strip_tma_attr(old_src))
     new_s = _strip_doc_lines(_strip_tma_attr(new_src))
@@ -1258,7 +1261,11 @@ def _definition_params(
     got_binder, rest = matched
     if got_binder != binder or sl_index < 0:
         return False
-    return compare_norm(rest) == compare_norm(body_old)
+    # The rest may call another converted function. Rewrite those literals
+    # back to positional arguments before comparing with the old body.
+    rest_rw = _INV.params_rewrite_new(rest, structs or {})
+    old_ex = expand_forwards(body_old, steps or {}, survivor or {})
+    return _params_norm(rest_rw) == _params_norm(old_ex)
 
 
 def _expand_call_args(
@@ -1339,7 +1346,17 @@ def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
     survivor: dict[str, str] = ctx.get("survivor") or {}
     if spec is not None:
         struct, fields = spec
-        if _definition_params(old_src, new_src, struct, fields, ctx.get("by_name") or {}, ctx.get("self_name") or ""):
+        if _definition_params(
+            old_src,
+            new_src,
+            struct,
+            fields,
+            ctx.get("by_name") or {},
+            ctx.get("self_name") or "",
+            structs,
+            steps,
+            survivor,
+        ):
             return True
     if not structs:
         return False
