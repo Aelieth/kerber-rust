@@ -857,8 +857,14 @@ def compare_trees(
     for o, n in pairs:
         obody, nbody = o["body"], n["body"]
         if params:
-            obody = _FN.expand_forwards(obody, steps, survivor)
-            nbody = _FN._INV.params_rewrite_new(nbody, structs)
+            obody2 = _FN.expand_forwards(obody, steps, survivor)
+            nbody2 = _FN._INV.params_rewrite_new(nbody, structs)
+            if (obody2 != obody or nbody2 != nbody) and _FN._params_norm(obody2) == _FN._params_norm(
+                nbody2
+            ):
+                identical += 1
+                continue
+            obody, nbody = obody2, nbody2
         ol, nl = apply_subst(norm_body(obody), subst), apply_subst(norm_body(nbody), subst)
         if ol == nl:
             identical += 1

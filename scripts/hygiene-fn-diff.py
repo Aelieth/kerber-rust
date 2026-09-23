@@ -1345,7 +1345,41 @@ def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
         return False
     new_rw = _INV.params_rewrite_new(new_src, structs)
     old_ex = expand_forwards(old_src, steps, survivor)
-    return compare_norm(new_rw) == compare_norm(old_ex)
+    if new_rw == new_src and old_ex == old_src:
+        return False
+    return _params_norm(new_rw) == _params_norm(old_ex)
+
+
+def _params_norm(src: str) -> str:
+    """Whitespace-insensitive compare for a rewritten call.
+
+    rustfmt may wrap a copied argument and insert a trailing comma.
+    String and char literals stay whole. A comma that is not before a
+    closer still counts, so a real argument edit does not match.
+    """
+    parts: list[str] = []
+    for is_code, text in _literal_spans(src):
+        if not is_code:
+            parts.append(text)
+            continue
+        # Drop `//` comments. Keep `///` text so a doc edit is visible.
+        kept: list[str] = []
+        i, n = 0, len(text)
+        while i < n:
+            if text.startswith("//", i) and not text.startswith(("///", "//!"), i):
+                j = text.find("\n", i)
+                i = n if j < 0 else j
+                continue
+            if text.startswith("/*", i):
+                j = text.find("*/", i + 2)
+                i = n if j < 0 else j + 2
+                continue
+            kept.append(text[i])
+            i += 1
+        code = re.sub(r"\s+", "", "".join(kept))
+        code = re.sub(r",(?=[)\]}])", "", code)
+        parts.append(code)
+    return "".join(parts)
 
 
 IMPL_START_RE = re.compile(r"^\s*(?:unsafe\s+)?impl\b")
@@ -3566,6 +3600,26 @@ def _self_test() -> int:
             raise SystemExit(
                 "hygiene-fn-diff --self-test: map order that disagrees with the signature must fail"
             )
+
+        # rustfmt may wrap a copied argument and insert a trailing comma.
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: Vec<i32>) {}\nfn caller() {\n    g(vec![x])\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: Vec<i32>) {}\nfn caller() {\n    g(S { a: vec![ x, ] })\n}\n",
+        )
+        wrapped = compare_trees(old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a"])})
+        evaluate(wrapped)
+        if wrapped["params_only"] != 1 or wrapped["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: rustfmt trailing comma in a "
+                f"copied argument must be params-only: {wrapped}"
+            )
+        n += 1
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
     if suffixed:
