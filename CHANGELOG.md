@@ -58,6 +58,9 @@ this project uses semantic versioning once a crate is published.
   semicolon trait method needs no destructure, and an attribute on the
   destructure `let` is not part of the body. `hygiene-fn-diff`
   self-test count is 87.
+- **tool.** Splitting `needless_pass_by_value` or `unnecessary_wraps`
+  off a `too_many_arguments` attribute stays identical.
+  `hygiene-fn-diff` self-test count is 88.
 - **krb5-admin.** `kadm5_handle_rpc`, `handle_rpc`, `handle_rpcsec_gss`,
   `handle_auth_gssapi`, `rpcsec_dispatch`, and `kadm5_or_iprop` take
   `RpcCtx` (store, ACL, service keys, realm). `serve_kadm5_conn` builds

@@ -851,6 +851,10 @@ def _vis_delta_class(old_src: str, new_src: str) -> str | None:
 def classify(old_src: str, new_src: str, params_ctx: dict | None = None) -> str:
     if compare_norm(old_src) == compare_norm(new_src):
         return "identical"
+    # allow → expect on too_many_arguments, and a sibling lint moved onto
+    # its own allow, is not a body edit.
+    if compare_norm(_strip_tma_attr(old_src)) == compare_norm(_strip_tma_attr(new_src)):
+        return "identical"
     if compare_norm(_strip_doc_lines(old_src)) == compare_norm(_strip_doc_lines(new_src)):
         return "doc-only"
     old_vis = _sig_rewrap_norm(strip_restricted_vis(old_src))
@@ -1035,10 +1039,22 @@ def _find_slice(names: list[str], fields: list[str]) -> tuple[int, int] | None:
 _TMA_RE = re.compile(
     r"^#\[(?:allow|expect)\(\s*clippy::too_many_arguments\b[^]]*\)\]\s*$"
 )
+# Sibling lints that share an attribute with too_many_arguments today and
+# stay on their own allow after the expect split.
+_SIBLING_ALLOW_RE = re.compile(
+    r"^#\[allow\(\s*clippy::(?:needless_pass_by_value|unnecessary_wraps)\s*\)\]\s*$"
+)
 
 
 def _strip_tma_attr(src: str) -> str:
-    return "\n".join(ln for ln in src.splitlines() if not _TMA_RE.match(ln.strip()))
+    lines = src.splitlines()
+    if not any(_TMA_RE.match(ln.strip()) for ln in lines):
+        return src
+    return "\n".join(
+        ln
+        for ln in lines
+        if not _TMA_RE.match(ln.strip()) and not _SIBLING_ALLOW_RE.match(ln.strip())
+    )
 
 
 def _blank_fn_params(src: str) -> str:
@@ -4048,6 +4064,28 @@ def _self_test() -> int:
         if semi["params_only"] != 1 or semi["changed"] != 0:
             raise SystemExit(
                 f"hygiene-fn-diff --self-test: a semicolon trait method must be params-only: {semi}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]\n"
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "#[expect(clippy::too_many_arguments, reason = \"kept\")]\n"
+            "#[allow(clippy::needless_pass_by_value)]\n"
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        split_allow = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(split_allow)
+        if split_allow["identical"] != 1 or split_allow["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: splitting a sibling allow off "
+                f"too_many_arguments must stay identical: {split_allow}"
             )
         n += 1
     live = extract(ROOT)
