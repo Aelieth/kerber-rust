@@ -42,6 +42,9 @@ this project uses semantic versioning once a crate is published.
 - **krb5-kdc.** `Principal::from_keys` takes `PrincipalFields`
   (`requires_preauth`, `max_life`, `locked`, `pw_expire`). The struct
   is crate-private. No wire or text change.
+- **krb5-admin.** `rpc_call_bytes`, `rpcsec_call`, and `rpcsec_data_rec`
+  take `RpcCallId` (`xid`, `prog`, `vers`, `proc`). `rpcsec_data` still
+  advances its own `xid`. No wire or text change.
 
 ### W3-S3.8 dead code and surface
 

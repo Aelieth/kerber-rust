@@ -386,18 +386,37 @@ pub(super) fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+/// ONC RPC call identity: transaction id plus the call-body triple.
+///
+/// RFC 5531 §9 `rpc_msg.xid` and `call_body` (`prog`, `vers`, `proc`).
+/// MIT `struct rpc_msg` and `struct call_body`
+/// (`include/gssrpc/rpc_msg.h:138,150`).
+#[derive(Clone, Copy)]
+pub struct RpcCallId {
+    /// Transaction id (`rpc_msg.xid`).
+    pub xid: u32,
+    /// Remote program number.
+    pub prog: u32,
+    /// Remote program version.
+    pub vers: u32,
+    /// Remote procedure number.
+    pub proc: u32,
+}
+
 pub(super) fn rpc_call_bytes(
-    xid: u32,
-    prog: u32,
-    vers: u32,
-    proc: u32,
+    id: RpcCallId,
     cred_flavor: u32,
     cred: &[u8],
     verf_flavor: u32,
     verf: &[u8],
     args: &[u8],
 ) -> Vec<u8> {
+    let RpcCallId {
+        xid,
+        prog,
+        vers,
+        proc,
+    } = id;
     let mut w = XdrW::default();
     w.u32(xid);
     w.u32(MSG_CALL);

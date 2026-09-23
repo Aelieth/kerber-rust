@@ -19,7 +19,7 @@ use krb5_types::PrincipalName;
 use thiserror::Error;
 
 pub use kadm5::{
-    IpropPull, Kadm5RpcSession, changepw_acceptor, check_auth_gssapi_names,
+    IpropPull, Kadm5RpcSession, RpcCallId, changepw_acceptor, check_auth_gssapi_names,
     check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok, iprop_fullresync, iprop_pull,
     kadm5_handle_rpc, serve_kadm5_conn,
 };

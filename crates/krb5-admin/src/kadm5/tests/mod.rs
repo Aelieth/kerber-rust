@@ -37,17 +37,13 @@ fn rpcsec_cred(proc: u32, seq: u32, svc: u32, handle: &[u8]) -> Vec<u8> {
     cred.b
 }
 
-#[allow(clippy::too_many_arguments)]
-fn rpcsec_call(
-    xid: u32,
-    prog: u32,
-    vers: u32,
-    proc: u32,
-    cred: &[u8],
-    verf_flavor: u32,
-    verf: &[u8],
-    args: &[u8],
-) -> Vec<u8> {
+fn rpcsec_call(id: RpcCallId, cred: &[u8], verf_flavor: u32, verf: &[u8], args: &[u8]) -> Vec<u8> {
+    let RpcCallId {
+        xid,
+        prog,
+        vers,
+        proc,
+    } = id;
     let mut w = XdrW::default();
     w.u32(xid);
     w.u32(MSG_CALL);
@@ -153,7 +149,18 @@ fn admin_rpcsec_init_svc(
     let cred = rpcsec_cred(RPG_INIT, 0, svc, &[]);
     let mut arg = XdrW::default();
     arg.opaque(&token);
-    let rec = rpcsec_call(1, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &arg.b);
+    let rec = rpcsec_call(
+        RpcCallId {
+            xid: 1,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: 0,
+        },
+        &cred,
+        FLAVOR_NONE,
+        &[],
+        &arg.b,
+    );
     let mut gss = None;
     let mut agss = None;
     let keys = [kadm_key];
@@ -191,18 +198,20 @@ fn admin_rpcsec_init_svc(
     (store, acl, ctx, handle, gss)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn rpcsec_data_rec(
     ctx: &mut GssContext,
-    xid: u32,
-    prog: u32,
-    vers: u32,
-    proc: u32,
+    id: RpcCallId,
     seq: u32,
     handle: &[u8],
     args: &[u8],
     wrap: bool,
 ) -> Vec<u8> {
+    let RpcCallId {
+        xid,
+        prog,
+        vers,
+        proc,
+    } = id;
     let cred = rpcsec_cred(RPG_DATA, seq, GSS_PRIVACY, handle);
     let mut header = XdrW::default();
     header.u32(xid);
@@ -224,7 +233,18 @@ fn rpcsec_data_rec(
     } else {
         arg.b.extend_from_slice(args);
     }
-    rpcsec_call(xid, prog, vers, proc, &cred, FLAVOR_GSS, &mic, &arg.b)
+    rpcsec_call(
+        RpcCallId {
+            xid,
+            prog,
+            vers,
+            proc,
+        },
+        &cred,
+        FLAVOR_GSS,
+        &mic,
+        &arg.b,
+    )
 }
 
 fn rpcsec_integ_rec(
@@ -258,7 +278,16 @@ fn rpcsec_integ_rec(
     arg.opaque(&databody);
     arg.opaque(&checksum);
     rpcsec_call(
-        xid, KADM_PROG, KADM_VERS, proc, &cred, FLAVOR_GSS, &mic, &arg.b,
+        RpcCallId {
+            xid,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc,
+        },
+        &cred,
+        FLAVOR_GSS,
+        &mic,
+        &arg.b,
     )
 }
 

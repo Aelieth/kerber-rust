@@ -333,7 +333,18 @@ fn rpcsec_init_reply_mic_is_window() {
 fn rpcsec_unknown_gc_proc_is_rejectedcred() {
     let (store, acl, _) = setup();
     let cred = rpcsec_cred(99, 0, GSS_PRIVACY, &[]);
-    let rec = rpcsec_call(22, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &[]);
+    let rec = rpcsec_call(
+        RpcCallId {
+            xid: 22,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: 0,
+        },
+        &cred,
+        FLAVOR_NONE,
+        &[],
+        &[],
+    );
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
@@ -360,7 +371,18 @@ fn rpcsec_init_garbage_token_is_rejectedcred() {
     let cred = rpcsec_cred(RPG_INIT, 0, GSS_PRIVACY, &[]);
     let mut arg = XdrW::default();
     arg.opaque(&[0xff, 0x00]);
-    let rec = rpcsec_call(23, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &arg.b);
+    let rec = rpcsec_call(
+        RpcCallId {
+            xid: 23,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: 0,
+        },
+        &cred,
+        FLAVOR_NONE,
+        &[],
+        &arg.b,
+    );
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
@@ -386,7 +408,18 @@ fn rpcsec_init_garbage_token_is_rejectedcred() {
 fn rpcsec_destroy_without_context_is_credproblem() {
     let (store, acl, _) = setup();
     let cred = rpcsec_cred(RPG_DESTROY, 1, GSS_PRIVACY, &[]);
-    let rec = rpcsec_call(24, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_NONE, &[], &[]);
+    let rec = rpcsec_call(
+        RpcCallId {
+            xid: 24,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: 0,
+        },
+        &cred,
+        FLAVOR_NONE,
+        &[],
+        &[],
+    );
     let mut gss = None;
     let mut agss = None;
     let out = handle_rpc(
@@ -414,10 +447,12 @@ fn rpcsec_bad_mic_is_credproblem() {
     let (store, acl, _ctx, handle, mut gss) = admin_rpcsec_init();
     let cred = rpcsec_cred(RPG_DATA, 1, GSS_PRIVACY, &handle);
     let rec = rpcsec_call(
-        25,
-        KADM_PROG,
-        KADM_VERS,
-        GET_PRIVS,
+        RpcCallId {
+            xid: 25,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: GET_PRIVS,
+        },
         &cred,
         FLAVOR_GSS,
         b"not-a-mic",
@@ -449,10 +484,12 @@ fn rpcsec_wrong_handle_data_is_dispatched() {
     let (store, acl, mut ctx, _handle, mut gss) = admin_rpcsec_init();
     let rec = rpcsec_data_rec(
         &mut ctx,
-        50,
-        KADM_PROG,
-        KADM_VERS,
-        GET_PRIVS,
+        RpcCallId {
+            xid: 50,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: GET_PRIVS,
+        },
         1,
         b"WRONGHDL",
         &[],
@@ -488,10 +525,12 @@ fn rpcsec_seq_over_maxseq_is_ctxproblem() {
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
     let rec = rpcsec_data_rec(
         &mut ctx,
-        26,
-        KADM_PROG,
-        KADM_VERS,
-        GET_PRIVS,
+        RpcCallId {
+            xid: 26,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: GET_PRIVS,
+        },
         MAXSEQ.saturating_add(1),
         &handle,
         &[],
@@ -523,10 +562,12 @@ fn rpcsec_seq_replay_is_ctxproblem() {
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
     let rec1 = rpcsec_data_rec(
         &mut ctx,
-        27,
-        KADM_PROG,
-        KADM_VERS,
-        GET_PRIVS,
+        RpcCallId {
+            xid: 27,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: GET_PRIVS,
+        },
         1,
         &handle,
         &[],
@@ -552,10 +593,12 @@ fn rpcsec_seq_replay_is_ctxproblem() {
     assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
     let rec2 = rpcsec_data_rec(
         &mut ctx,
-        28,
-        KADM_PROG,
-        KADM_VERS,
-        GET_PRIVS,
+        RpcCallId {
+            xid: 28,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: GET_PRIVS,
+        },
         1,
         &handle,
         &[],
@@ -595,7 +638,18 @@ fn rpcsec_destroy_then_data_is_credproblem() {
     header.u32(FLAVOR_GSS);
     header.opaque(&cred);
     let mic = ctx.get_mic(&header.b).unwrap();
-    let rec = rpcsec_call(29, KADM_PROG, KADM_VERS, 0, &cred, FLAVOR_GSS, &mic, &[]);
+    let rec = rpcsec_call(
+        RpcCallId {
+            xid: 29,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: 0,
+        },
+        &cred,
+        FLAVOR_GSS,
+        &mic,
+        &[],
+    );
     let mut agss = None;
     let out = handle_rpc(
         &store,
@@ -617,10 +671,12 @@ fn rpcsec_destroy_then_data_is_credproblem() {
     assert!(gss.is_none(), "DESTROY drops the context");
     let rec2 = rpcsec_data_rec(
         &mut ctx,
-        30,
-        KADM_PROG,
-        KADM_VERS,
-        GET_PRIVS,
+        RpcCallId {
+            xid: 30,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: GET_PRIVS,
+        },
         2,
         &handle,
         &[],
@@ -649,7 +705,19 @@ fn rpcsec_unknown_program_data_carries_xp_verf() {
     use krb5_kdc::testrealm::TEST_REALM;
 
     let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
-    let rec = rpcsec_data_rec(&mut ctx, 31, 99_999, 1, 0, 1, &handle, &[], true);
+    let rec = rpcsec_data_rec(
+        &mut ctx,
+        RpcCallId {
+            xid: 31,
+            prog: 99_999,
+            vers: 1,
+            proc: 0,
+        },
+        1,
+        &handle,
+        &[],
+        true,
+    );
     let mut agss = None;
     let out = handle_rpc(
         &store,
@@ -695,7 +763,16 @@ fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
     let mut arg = XdrW::default();
     arg.opaque(b"\x00\x01");
     let rec = rpcsec_call(
-        32, KADM_PROG, KADM_VERS, GET_PRIVS, &cred, FLAVOR_GSS, &mic, &arg.b,
+        RpcCallId {
+            xid: 32,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: GET_PRIVS,
+        },
+        &cred,
+        FLAVOR_GSS,
+        &mic,
+        &arg.b,
     );
     let mut agss = None;
     let out = handle_rpc(
@@ -804,10 +881,12 @@ fn rpcsec_none_service_data_is_plain_body() {
     header.opaque(&cred);
     let mic = ctx.get_mic(&header.b).unwrap();
     let rec = rpcsec_call(
-        43,
-        KADM_PROG,
-        KADM_VERS,
-        GET_PRINCS,
+        RpcCallId {
+            xid: 43,
+            prog: KADM_PROG,
+            vers: KADM_VERS,
+            proc: GET_PRINCS,
+        },
         &cred,
         FLAVOR_GSS,
         &mic,

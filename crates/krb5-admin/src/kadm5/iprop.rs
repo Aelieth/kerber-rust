@@ -495,10 +495,12 @@ fn rpcsec_init(
     let mut arg = XdrW::default();
     arg.opaque(token);
     let rec = rpc_call_bytes(
-        *xid,
-        IPROP_PROG,
-        IPROP_VERS,
-        IPROP_NULL,
+        super::rpc::RpcCallId {
+            xid: *xid,
+            prog: IPROP_PROG,
+            vers: IPROP_VERS,
+            proc: IPROP_NULL,
+        },
         FLAVOR_GSS,
         &cred.b,
         FLAVOR_NONE,
@@ -583,7 +585,17 @@ fn rpcsec_data(
     let mut arg = XdrW::default();
     arg.opaque(&wrap);
     let rec = rpc_call_bytes(
-        *xid, prog, vers, proc, FLAVOR_GSS, &cred.b, FLAVOR_GSS, &mic, &arg.b,
+        super::rpc::RpcCallId {
+            xid: *xid,
+            prog,
+            vers,
+            proc,
+        },
+        FLAVOR_GSS,
+        &cred.b,
+        FLAVOR_GSS,
+        &mic,
+        &arg.b,
     );
     *xid = xid.wrapping_add(1);
     write_record(stream, &rec).map_err(|e| Error::Inner(e.to_string()))?;
