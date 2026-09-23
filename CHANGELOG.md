@@ -23,6 +23,8 @@ this project uses semantic versioning once a crate is published.
 - **krb5-types.** `hierarchical_walk_realms` is `#[must_use]`. The
   module `allow(clippy::must_use_candidate)` is gone. The doc cites
   `walk_rtree.c:394-452`. No wire or text change.
+- **krb5-protocol.** `tgs_service_once` has seven parameters, so its
+  `too_many_arguments` suppression is gone. No wire or text change.
 
 ### W3-S3.8 dead code and surface
 

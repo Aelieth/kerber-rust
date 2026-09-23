@@ -973,7 +973,6 @@ pub fn tgs_non_referral_options(opts: KdcOptions) -> KdcOptions {
 }
 
 /// First referral TGS, then `try_fallback` on a KDC error.
-#[allow(clippy::too_many_arguments)]
 fn tgs_service_once(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
