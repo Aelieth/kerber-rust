@@ -1517,16 +1517,15 @@ impl krb5_kdc::KdcPreauth for FailingModule {
         &self,
         rock: &krb5_kdc::PreauthRock<'_>,
     ) -> Result<Option<krb5_kdc::PreauthAction>, Error> {
-        #[allow(unused_variables)]
         let krb5_kdc::PreauthRock {
-            store,
-            client,
+            store: _store,
+            client: _client,
             padata,
-            ikey,
-            etype,
-            as_req_der,
-            body_der,
-            cname,
+            ikey: _ikey,
+            etype: _etype,
+            as_req_der: _as_req_der,
+            body_der: _body_der,
+            cname: _cname,
         } = *rock;
         let Some(p) = padata.and_then(|p| p.iter().find(|p| p.padata_type == PA_PRIVATE)) else {
             return Ok(None);
@@ -1782,16 +1781,15 @@ impl KdcPreauth for DiscardMod {
         &self,
         rock: &krb5_kdc::PreauthRock<'_>,
     ) -> Result<Option<krb5_kdc::PreauthAction>, Error> {
-        #[allow(unused_variables)]
         let krb5_kdc::PreauthRock {
-            store,
-            client,
+            store: _store,
+            client: _client,
             padata,
-            ikey,
-            etype,
-            as_req_der,
-            body_der,
-            cname,
+            ikey: _ikey,
+            etype: _etype,
+            as_req_der: _as_req_der,
+            body_der: _body_der,
+            cname: _cname,
         } = *rock;
         let Some(p) = padata.and_then(|p| p.iter().find(|p| p.padata_type == PA_DISCARD)) else {
             return Ok(None);

@@ -64,16 +64,15 @@ impl KdcPreauth for DemoPreauth {
         Vec::new()
     }
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
-        #[allow(unused_variables)]
         let PreauthRock {
-            store,
-            client,
-            padata,
-            ikey,
-            etype,
-            as_req_der,
-            body_der,
-            cname,
+            store: _store,
+            client: _client,
+            padata: _padata,
+            ikey: _ikey,
+            etype: _etype,
+            as_req_der: _as_req_der,
+            body_der: _body_der,
+            cname: _cname,
         } = *rock;
         self.procs.fetch_add(1, Ordering::SeqCst);
         Ok(None)

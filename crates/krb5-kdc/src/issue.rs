@@ -17,6 +17,5 @@ mod tgs_req;
 pub use as_req::{IssuedAs, issue_as};
 pub(crate) use as_req::{extract_enc_timestamp, verify_enc_timestamp};
 pub use dispatch::{handle_request, handle_request_from};
-pub use reply::MintTicket;
 pub(crate) use reply::kdc_error_bytes;
 pub use tgs_req::{IssuedTgs, issue_tgs, tgs_header_is_crossrealm};

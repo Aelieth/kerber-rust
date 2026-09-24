@@ -187,7 +187,7 @@ pub(super) fn tgs_reply(
 /// `do_tgs_req.c` fill them before `krb5_encrypt_tkt_part`
 /// (`lib/krb5/krb/encrypt_tk.c:42`). The rest are the PAC inputs from
 /// `kdc_authdata.c`.
-pub struct MintTicket<'a> {
+pub(super) struct MintTicket<'a> {
     /// Service long-term key.
     pub service_key: &'a ProtocolKey,
     /// Service key version.

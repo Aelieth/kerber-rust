@@ -49,7 +49,7 @@ pub use audit::{
 pub use error::Error;
 pub(crate) use issue::kdc_error_bytes;
 pub use issue::{
-    IssuedAs, IssuedTgs, MintTicket, handle_request, handle_request_from, issue_as, issue_tgs,
+    IssuedAs, IssuedTgs, handle_request, handle_request_from, issue_as, issue_tgs,
     tgs_header_is_crossrealm,
 };
 pub use kdb::{

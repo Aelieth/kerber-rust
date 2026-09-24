@@ -108,16 +108,15 @@ impl KdcPreauth for FastMod {
         }]
     }
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
-        #[allow(unused_variables)]
         let PreauthRock {
-            store,
-            client,
-            padata,
-            ikey,
-            etype,
-            as_req_der,
-            body_der,
-            cname,
+            store: _store,
+            client: _client,
+            padata: _padata,
+            ikey: _ikey,
+            etype: _etype,
+            as_req_der: _as_req_der,
+            body_der: _body_der,
+            cname: _cname,
         } = *rock;
         Ok(None)
     }
@@ -157,12 +156,11 @@ impl KdcPreauth for PkinitMod {
         out
     }
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
-        #[allow(unused_variables)]
         let PreauthRock {
             store,
-            client,
+            client: _client,
             padata,
-            ikey,
+            ikey: _ikey,
             etype,
             as_req_der,
             body_der,
@@ -219,14 +217,13 @@ impl KdcPreauth for SpakeMod {
         }]
     }
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
-        #[allow(unused_variables)]
         let PreauthRock {
             store,
             client,
             padata,
             ikey,
-            etype,
-            as_req_der,
+            etype: _etype,
+            as_req_der: _as_req_der,
             body_der,
             cname,
         } = *rock;
@@ -270,15 +267,14 @@ impl KdcPreauth for EncTsMod {
         }]
     }
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
-        #[allow(unused_variables)]
         let PreauthRock {
             store,
             client,
             padata,
-            ikey,
-            etype,
-            as_req_der,
-            body_der,
+            ikey: _ikey,
+            etype: _etype,
+            as_req_der: _as_req_der,
+            body_der: _body_der,
             cname,
         } = *rock;
         let Some(blob) = crate::issue::extract_enc_timestamp(padata) else {
@@ -357,16 +353,15 @@ impl KdcPreauth for EncChallengeMod {
         }]
     }
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
-        #[allow(unused_variables)]
         let PreauthRock {
-            store,
-            client,
-            padata,
-            ikey,
-            etype,
-            as_req_der,
-            body_der,
-            cname,
+            store: _store,
+            client: _client,
+            padata: _padata,
+            ikey: _ikey,
+            etype: _etype,
+            as_req_der: _as_req_der,
+            body_der: _body_der,
+            cname: _cname,
         } = *rock;
         Ok(None)
     }
@@ -494,7 +489,6 @@ fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[
 ///
 /// Module protocol failures.
 pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
-    #[allow(unused_variables)]
     let PreauthRock {
         store,
         client,
