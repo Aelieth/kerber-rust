@@ -99,17 +99,28 @@ parameter is `&Struct`), and a call site whose body matches the old
 body after the struct literal is rewritten back to those field
 expressions in order. The rewrite compares tokens: whitespace is not a
 token, a trailing comma is dropped only before the `)` of a call or a
-macro, or a `]` / `}`, and a one-tuple `(x,)` keeps its comma. A
+macro, or a `]` / `}`, and a one-tuple `(x,)` keeps its comma. A `(`
+after `break`, `let`, `continue`, `return`, `>`, or another operator
+or keyword is a tuple, not a call, so `break (z,)`, `let (w,) = t`,
+and `a > (z,)` keep the comma. `>` is never a call opener, so a
+turbofish `foo::<T>(z,)` keeps it too. `!` still marks a macro, so
+`format!(…,)` drops the comma. A
 literal stays one token, so the call's `)` is still matched. `& &` is not `&&`.
-A struct literal is rewritten only as the direct argument of a call to
-a function in the map; `vec![…]`, `dbg!(…)`, and an unmapped call stay
+A struct literal is rewritten only as the direct argument of a bare
+call `g(`, or of a method call when that function took `self`.
+`other::g(S { … })` and `obj.g(S { … })` for a free function stay
+text. An impl associated function is still rewritten at `Type::name(`.
+The literal's struct must be that callee's: `g(T { … })` stays
+text when `g` maps to `S`. `vec![…]`, `dbg!(…)`, and an unmapped call stay
 text. A key whose path contains `::tests::` names a helper fn-diff does
 not extract; that helper's calls still rewrite, and any other missing
 key exits 2. A `let p = Struct { … }` is not threaded into later calls, so a
 whole-struct hoist is `changed`, including a binding used twice and a
 statement between the `let` and the call. Passing the struct binding
 is valid only when no destructured name is re-bound (`let`, `let mut`,
-or a closure parameter) before that call. Shorthand `f` means `f: f`.
+a closure parameter, `for`, `if let`, `while let`, or a `match` arm
+pattern) before that call. The destructure `let Struct { a, … }` does
+not itself rebind `a`. Shorthand `f` means `f: f`.
 An `&` that borrows the struct as a whole argument is consumed with
 the literal. A parameter written `_name` matches the field written
 `name: _name`. A semicolon trait method has no destructure. The
@@ -119,12 +130,15 @@ that never took the other fields: the destructure then ends with `..`,
 a call still names every field, and the rewrite keeps that function's
 fields. A reversed field order stays `changed`. A field the old signature
 did not keep next to the others is written back at that argument
-index. Passing the struct binding does the same. An extra field whose expression is not that
+index, including when the map names every field of the struct and not
+only a subsequence. Passing the struct binding does the same. An extra field whose expression is not that
 binding, and not a field read of the struct value, stays `changed`.
 `#[allow(L…)]` and `#[expect(L…, reason = "…")]` are identical only
 when the lint set is the same, including a sibling lint kept on its
 own attribute; a lint added or removed, an attribute removed, or a
-sibling allow added or removed is `changed`. A conversion may drop
+sibling allow added or removed is `changed`. The direction is ignored
+on purpose: `#[expect]` rewritten as `#[allow]` is the same set even
+though the suppression is weaker. A conversion may drop
 `too_many_arguments` because the arity fell; any other lint still has
 to match. A swapped field, a `..`
 tail on a call-site literal, a `..` that drops a field the function
@@ -132,7 +146,10 @@ did take, an argument hoisted into a `let`, or a destructure that
 renames a field stays `changed`. Rule 7: the literal
 names every field, in the old parameter order, each expression the old
 argument verbatim, and the destructure is the first statement of the
-converted function. Before the vis-stripped compare the text ahead of the
+converted function. `hygiene-body-diff --params` applies that order to
+a shared helper the test calls, so a reordered literal there is
+`differ` and the run fails. Self-test floors are fn-diff 134 and
+body-diff 41. Before the vis-stripped compare the text ahead of the
 body is re-flowed: whitespace around punctuation goes, and a trailing
 comma is dropped only when its `(` / `<` follows an identifier that is
 not a keyword and not a lifetime — `wide(a, b,)` and `f<T, U,>` lose

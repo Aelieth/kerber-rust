@@ -1384,6 +1384,7 @@ def prepare_params(
     dict[str, tuple],
     dict[str, str],
     dict[str, tuple[str, list[str]]],
+    set[str],
 ]:
     """Order-check the map. Return structs, steps, survivors, callee fields.
 
@@ -1407,6 +1408,9 @@ def prepare_params(
                 )
         structs[struct] = list(longest)
     by_callee: dict[str, tuple[str, list[str]]] = {}
+    # Impl associated functions (no `self`) are called as `Type::name(`.
+    # A free function's `other::name(` is a different item and is not rewritten.
+    assoc: set[str] = set()
     for key, (struct, fields) in params.items():
         if key not in old:
             if _test_helper_key(key):
@@ -1423,6 +1427,8 @@ def prepare_params(
         bare = _bare_names(names)
         if _ordered_subseq(bare, fields):
             by_callee[old[key]["name"]] = (struct, list(fields), bare)
+            if _impl_assoc_key(key) and not (bare and bare[0] == "self"):
+                assoc.add(old[key]["name"])
             continue
         ult_name, ult_src = _walk_forward(by_name, old[key]["name"], old[key]["src"], steps)
         ult_names = _param_names_of(ult_src)
@@ -1432,11 +1438,19 @@ def prepare_params(
             )
         survivor[ult_name] = old[key]["name"]
         by_callee[old[key]["name"]] = (struct, list(fields), _bare_names(names))
+        if _impl_assoc_key(key) and names and names[0] != "self":
+            assoc.add(old[key]["name"])
     for key, rec in old.items():
         if key in new or key in moves or rec["name"] in steps:
             continue
         _walk_forward(by_name, rec["name"], rec["src"], steps)
-    return structs, steps, survivor, by_callee
+    return structs, steps, survivor, by_callee, assoc
+
+
+def _impl_assoc_key(key: str) -> bool:
+    """True when the map key is an `impl` item (associated function or method)."""
+    path = key.split("\t", 1)[-1]
+    return path.startswith("impl ") or "::impl " in path
 
 
 def _definition_params(
@@ -1450,6 +1464,7 @@ def _definition_params(
     steps: dict[str, tuple] | None = None,
     survivor: dict[str, str] | None = None,
     by_callee: dict[str, tuple[str, list[str]]] | None = None,
+    assoc: set[str] | None = None,
 ) -> bool:
     if not _tma_ok_for_params(old_src, new_src):
         return False
@@ -1503,7 +1518,7 @@ def _definition_params(
         return False
     # The rest may call another converted function. Rewrite those literals
     # back to positional arguments before comparing with the old body.
-    rest_rw = _params_rewrite(rest, structs or {}, by_callee, got_binder)
+    rest_rw = _params_rewrite(rest, structs or {}, by_callee, got_binder, assoc)
     old_ex = expand_forwards(body_old, steps or {}, survivor or {})
     return _params_norm(rest_rw) == _params_norm(old_ex)
 
@@ -1579,13 +1594,115 @@ def expand_forwards(src: str, steps: dict[str, tuple], survivor: dict[str, str])
     return "".join(out)
 
 
+def _for_binds(window: str, name: str) -> bool:
+    """`for <pattern> in` binds `name` before the call."""
+    pat = re.compile(rf"\b{re.escape(name)}\b")
+    for m in re.finditer(r"\bfor\s+", window):
+        depth = 0
+        j = m.end()
+        while j < len(window):
+            c = window[j]
+            if c in "({[":
+                depth += 1
+            elif c in ")}]":
+                depth = max(0, depth - 1)
+            elif (
+                depth == 0
+                and window.startswith("in", j)
+                and (j == 0 or not (window[j - 1].isalnum() or window[j - 1] == "_"))
+                and (j + 2 >= len(window) or not (window[j + 2].isalnum() or window[j + 2] == "_"))
+            ):
+                if pat.search(window[m.end() : j]):
+                    return True
+                break
+            j += 1
+    return False
+
+
+def _let_pat_binds(window: str, name: str) -> bool:
+    """`if let` / `while let` pattern binds `name`. The scrutinee does not count."""
+    pat = re.compile(rf"\b{re.escape(name)}\b")
+    for m in re.finditer(r"\b(?:if|while)\s+let\b", window):
+        depth = 0
+        j = m.end()
+        while j < len(window):
+            c = window[j]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth = max(0, depth - 1)
+            elif c == "=" and depth == 0 and not window.startswith("=>", j):
+                if pat.search(window[m.end() : j]):
+                    return True
+                break
+            elif c == ";" and depth == 0:
+                break
+            j += 1
+    return False
+
+
+def _match_arm_binds(window: str, name: str) -> bool:
+    """A match-arm pattern binds `name`. The scrutinee and the arm body do not."""
+    pat = re.compile(rf"\b{re.escape(name)}\b")
+    i = 0
+    n = len(window)
+    while True:
+        m = re.search(r"\bmatch\b", window[i:])
+        if not m:
+            return False
+        brace = window.find("{", i + m.end())
+        if brace < 0:
+            return False
+        depth = 1
+        j = brace + 1
+        arm_at = j
+        while j < n and depth > 0:
+            if window.startswith("=>", j) and depth == 1:
+                if pat.search(window[arm_at:j]):
+                    return True
+                j += 2
+                while j < n and depth > 0:
+                    c2 = window[j]
+                    if c2 == "{":
+                        depth += 1
+                    elif c2 == "}":
+                        depth -= 1
+                        if depth == 0:
+                            break
+                    elif c2 == "," and depth == 1:
+                        j += 1
+                        arm_at = j
+                        break
+                    j += 1
+                continue
+            c = window[j]
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+            j += 1
+        i = brace + 1
+    return False
+
+
 def _rebinds(src: str, end: int, names: list[str]) -> bool:
-    """A field binding is shadowed before `end` (`let` or a closure parameter)."""
+    """A field binding is shadowed before `end`.
+
+    `let` / `let mut`, a closure parameter, `for` pattern, `if let` /
+    `while let` pattern, or a `match` arm pattern. The destructure
+    `let Struct { a, … }` is not itself a rebind of `a`.
+    """
     window = src[:end]
     for name in names:
         if re.search(rf"\blet\s+(?:mut\s+)?{re.escape(name)}\b", window):
             return True
         if re.search(rf"\|[^|]*\b{re.escape(name)}\b", window):
+            return True
+        if _for_binds(window, name):
+            return True
+        if _let_pat_binds(window, name):
+            return True
+        if _match_arm_binds(window, name):
             return True
     return False
 
@@ -1662,6 +1779,7 @@ def _subset_calls(
     structs: dict[str, list[str]],
     by_callee: dict[str, tuple[str, list[str]]],
     binder: str | None,
+    assoc: set[str] | None = None,
 ) -> str:
     """Rewrite a call that takes only some of the struct's fields."""
     out: list[str] = []
@@ -1706,8 +1824,29 @@ def _subset_calls(
                 and src[j] == "("
             ):
                 struct, fields, old_names = spec
+                rel = _INV.path_before_ident(src, i)
+                is_method = bool(old_names) and old_names[0] == "self"
+                if (rel == "::" and name not in (assoc or set())) or (
+                    rel == "." and not is_method
+                ):
+                    out.append(name)
+                    i = k
+                    continue
                 canon = structs.get(struct) or fields
-                if list(fields) != list(canon):
+                # The slice path interleaves. So does a full-list callee
+                # whose old parameters were not adjacent (`g(a, mid, c)`
+                # with map `S: a, c`): dumping the fields in one block
+                # puts the wrong value in `c`. A shorter old signature
+                # that is a prefix of the field list is a deleted wrapper
+                # (`tgs_req_ex` → the full struct); that one still dumps
+                # the literal, and forward-expansion supplies the Nones.
+                full_list_gap = (
+                    list(fields) == list(canon)
+                    and bool(old_names)
+                    and old_names[0] == fields[0]
+                    and any(name not in fields for name in old_names)
+                )
+                if list(fields) != list(canon) or full_list_gap:
                     end = _scan_balanced(src, j, "(", ")")
                     args = _split_top_commas(src[j + 1 : end - 1])
                     if args and not (len(args) == 1 and not args[0].strip()):
@@ -1759,6 +1898,7 @@ def _params_rewrite(
     structs: dict[str, list[str]],
     by_callee: dict[str, tuple[str, list[str]]] | None = None,
     binder: str | None = None,
+    assoc: set[str] | None = None,
 ) -> str:
     """Shrink subset calls, then rewrite literals that are call arguments.
 
@@ -1766,9 +1906,32 @@ def _params_rewrite(
     use and a statement between the let and the call.
     """
     callers = set(by_callee or {})
+    assoc = assoc or set()
     if by_callee:
-        src = _subset_calls(src, structs, by_callee, binder)
-    return _INV.params_literal_to_args(src, structs, callers)
+        src = _subset_calls(src, structs, by_callee, binder, assoc)
+    callee_struct, methods = callee_views(by_callee or {})
+    return _INV.params_literal_to_args(
+        src,
+        structs,
+        callers,
+        callee_struct=callee_struct,
+        methods=methods,
+        assoc=assoc,
+    )
+
+
+def callee_views(
+    by_callee: dict[str, tuple],
+) -> tuple[dict[str, str], set[str]]:
+    """Callee name → struct, and names whose old signature starts with `self`."""
+    structs_of: dict[str, str] = {}
+    methods: set[str] = set()
+    for name, spec in by_callee.items():
+        structs_of[name] = spec[0]
+        old_names = spec[2] if len(spec) > 2 else ()
+        if old_names and old_names[0] == "self":
+            methods.add(name)
+    return structs_of, methods
 
 
 def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
@@ -1790,13 +1953,16 @@ def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
             steps,
             survivor,
             by_callee,
+            ctx.get("assoc") or set(),
         ):
             return True
     if not structs:
         return False
     if not _tma_ok_for_params(old_src, new_src):
         return False
-    new_rw = _strip_tma_attr(_params_rewrite(new_src, structs, by_callee, None))
+    new_rw = _strip_tma_attr(
+        _params_rewrite(new_src, structs, by_callee, None, ctx.get("assoc") or set())
+    )
     old_ex = _strip_tma_attr(expand_forwards(old_src, steps, survivor))
     if new_rw == _strip_tma_attr(new_src) and old_ex == _strip_tma_attr(old_src):
         return False
@@ -1862,16 +2028,34 @@ def _code_tokens(text: str) -> list[str]:
     return toks
 
 
+# A `(` after one of these words is a tuple or a keyword form, not a call.
+# `>` is not a call opener either: `a > (z,)` keeps the comma, and so does
+# a turbofish `foo::<T>(z,)`. `!` stays, so `format!(…,)` still drops it.
+NOT_CALL_WORDS = frozenset(
+    {
+        "if",
+        "while",
+        "for",
+        "match",
+        "return",
+        "in",
+        "loop",
+        "break",
+        "continue",
+        "let",
+    }
+)
+
+
 def _drop_call_commas(toks: list[str]) -> list[str]:
     """Drop a comma before `]` / `}` or the `)` of a call, not of a tuple."""
     out: list[str] = []
     stack: list[bool] = []
-    keywords = {"if", "while", "for", "match", "return", "in", "loop"}
     for tok in toks:
         if tok == "(":
             prev = out[-1] if out else ""
-            is_call = bool(prev) and prev not in keywords and (
-                prev[0].isalpha() or prev[0] == "_" or prev in {">", "!"}
+            is_call = bool(prev) and prev not in NOT_CALL_WORDS and (
+                prev[0].isalpha() or prev[0] == "_" or prev == "!"
             )
             stack.append(is_call)
             out.append(tok)
@@ -1895,9 +2079,10 @@ def _params_norm(src: str) -> str:
 
     rustfmt may wrap an argument and insert a trailing comma before a
     call's or a macro's `)` or a `]` / `}`. A one-tuple's `(x,)` keeps
-    its comma. `& &` is not `&&`. String and char literals stay one
-    token, so a call that has a literal in its argument list still sees
-    the matching `)`.
+    its comma, including after `break`, `let`, `return`, or `>`. `>` is
+    not a call opener. `& &` is not `&&`. String and char literals stay
+    one token, so a call that has a literal in its argument list still
+    sees the matching `)`.
     """
     toks: list[str] = []
     for is_code, text in _literal_spans(src):
@@ -2522,9 +2707,10 @@ def compare_trees(
     steps: dict[str, tuple] = {}
     survivor: dict[str, str] = {}
     by_callee: dict[str, tuple[str, list[str]]] = {}
+    assoc: set[str] = set()
     by_name: dict[str, str] = {}
     if params:
-        structs, steps, survivor, by_callee = prepare_params(old, new, params, moves)
+        structs, steps, survivor, by_callee, assoc = prepare_params(old, new, params, moves)
         by_name = _fns_by_name(old)
     used_old: set[str] = set()
     used_new: set[str] = set()
@@ -2672,6 +2858,7 @@ def compare_trees(
                 "steps": steps,
                 "survivor": survivor,
                 "by_callee": by_callee,
+                "assoc": assoc,
                 "by_name": by_name,
                 "self_name": ofn["name"],
             }
@@ -4962,6 +5149,293 @@ def _self_test() -> int:
             raise SystemExit(
                 "hygiene-fn-diff --self-test: a tests:: helper call must be "
                 f"params-only: {helper}"
+            )
+        n += 1
+
+        # Full-list non-adjacent: map S: a, c is the whole struct, old
+        # signature is g(a, mid, c). Dumping the literal in place reads
+        # the wrong index as params-only.
+        full_gap = {"demo\tg": ("S", ["a", "c"])}
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, mid: i32, c: i32) -> i32 {\n    a + mid + c\n}\n"
+            "fn caller() {\n    g(x, m, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S, mid: i32) -> i32 {\n    let S { a, c } = p;\n    a + mid + c\n}\n"
+            "fn caller() {\n    g(S { a: x, c: m }, y)\n}\n",
+        )
+        wrong_index = compare_trees(old, new, {}, {}, {}, [], params=full_gap)
+        if wrong_index["params_only"] != 1 or wrong_index["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a full-list wrong index must be "
+                f"changed: {wrong_index}"
+            )
+        _must_red(wrong_index, "full-list wrong index")
+        n += 1
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S, mid: i32) -> i32 {\n    let S { a, c } = p;\n    a + mid + c\n}\n"
+            "fn caller() {\n    g(S { a: x, c: y }, m)\n}\n",
+        )
+        right_index = compare_trees(old, new, {}, {}, {}, [], params=full_gap)
+        evaluate(right_index)
+        if right_index["params_only"] != 2 or right_index["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a full-list field at its old "
+                f"index must be params-only: {right_index}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    break (z,);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n    break (z);\n}\n",
+        )
+        break_tuple = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if break_tuple["params_only"] != 0 or break_tuple["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: break (z,) must keep its comma: "
+                f"{break_tuple}"
+            )
+        _must_red(break_tuple, "break (z,) beside a converted call")
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    let (w,) = t;\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n    let (w) = t;\n}\n",
+        )
+        let_tuple = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if let_tuple["params_only"] != 0 or let_tuple["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: let (w,) must keep its comma: "
+                f"{let_tuple}"
+            )
+        _must_red(let_tuple, "let (w,) beside a converted call")
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    a > (z,);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n    a > (z);\n}\n",
+        )
+        gt_tuple = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if gt_tuple["params_only"] != 0 or gt_tuple["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a > (z,) must keep its comma: "
+                f"{gt_tuple}"
+            )
+        _must_red(gt_tuple, "a > (z,) beside a converted call")
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    f(z,);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n    f(z);\n}\n",
+        )
+        call_comma = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        evaluate(call_comma)
+        if call_comma["params_only"] != 1 or call_comma["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a call's trailing comma must be "
+                f"params-only: {call_comma}"
+            )
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    foo::<T>(z,);\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n    foo::<T>(z);\n}\n",
+        )
+        turbo = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if turbo["params_only"] != 0 or turbo["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a turbofish trailing comma must be "
+                f"changed: {turbo}"
+            )
+        _must_red(turbo, "turbofish trailing comma")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n"
+            "    for a in 0..1 { narrow(a, b) }\n    a\n}\n"
+            "fn narrow(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n"
+            "    for a in 0..1 { narrow(p) }\n    a\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, b, .. } = p;\n    a + b\n}\n",
+        )
+        for_shadow = compare_trees(old, new, {}, {}, {}, [], params=shadow_map)
+        if for_shadow["params_only"] != 1 or for_shadow["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: for-loop rebind before a binder "
+                f"call must be changed: {for_shadow}"
+            )
+        _must_red(for_shadow, "for-loop rebind")
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n"
+            "    if let Some(a) = o { narrow(a, b) }\n    a\n}\n"
+            "fn narrow(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n"
+            "    if let Some(a) = o { narrow(p) }\n    a\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, b, .. } = p;\n    a + b\n}\n",
+        )
+        iflet_shadow = compare_trees(old, new, {}, {}, {}, [], params=shadow_map)
+        if iflet_shadow["params_only"] != 1 or iflet_shadow["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: if-let rebind before a binder "
+                f"call must be changed: {iflet_shadow}"
+            )
+        _must_red(iflet_shadow, "if-let rebind")
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n"
+            "    match o { a => narrow(a, b) }\n    a\n}\n"
+            "fn narrow(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n"
+            "    match o { a => narrow(p) }\n    a\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, b, .. } = p;\n    a + b\n}\n",
+        )
+        match_shadow = compare_trees(old, new, {}, {}, {}, [], params=shadow_map)
+        if match_shadow["params_only"] != 1 or match_shadow["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: match-arm rebind before a binder "
+                f"call must be changed: {match_shadow}"
+            )
+        _must_red(match_shadow, "match-arm rebind")
+        n += 1
+
+        both = {
+            "demo\tg": ("S", ["a", "b"]),
+            "demo\th": ("T", ["c", "d"]),
+        }
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn h(c: i32, d: i32) {}\n"
+            "fn caller() {\n    other::g(x, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) {\n    let S { a, b } = p;\n}\n"
+            "fn h(q: T) {\n    let T { c, d } = q;\n}\n"
+            "fn caller() {\n    other::g(S { a: x, b: y })\n}\n",
+        )
+        path_call = compare_trees(old, new, {}, {}, {}, [], params=both)
+        if path_call["params_only"] != 2 or path_call["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: other::g must not rewrite: "
+                f"{path_call}"
+            )
+        _must_red(path_call, "path-qualified call")
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn h(c: i32, d: i32) {}\n"
+            "fn caller() {\n    obj.g(x, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) {\n    let S { a, b } = p;\n}\n"
+            "fn h(q: T) {\n    let T { c, d } = q;\n}\n"
+            "fn caller() {\n    obj.g(S { a: x, b: y })\n}\n",
+        )
+        method_free = compare_trees(old, new, {}, {}, {}, [], params=both)
+        if method_free["params_only"] != 2 or method_free["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: obj.g of a free function must "
+                f"not rewrite: {method_free}"
+            )
+        _must_red(method_free, "method call of a free function")
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn h(c: i32, d: i32) {}\n"
+            "fn caller() {\n    g(c, d)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) {\n    let S { a, b } = p;\n}\n"
+            "fn h(q: T) {\n    let T { c, d } = q;\n}\n"
+            "fn caller() {\n    g(T { c: c, d: d })\n}\n",
+        )
+        other_struct = compare_trees(old, new, {}, {}, {}, [], params=both)
+        if other_struct["params_only"] != 2 or other_struct["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: g(T { .. }) must not rewrite: "
+                f"{other_struct}"
+            )
+        _must_red(other_struct, "literal struct is not the callee's")
+        n += 1
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "impl Foo {\n    fn g(&mut self, a: i32, b: i32) {}\n}\n"
+            "fn caller() {\n    obj.g(x, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "impl Foo {\n    fn g(&mut self, p: S) {\n        let S { a, b } = p;\n    }\n}\n"
+            "fn caller() {\n    obj.g(S { a: x, b: y })\n}\n",
+        )
+        method_ok = compare_trees(
+            old, new, {}, {}, {}, [], params={"demo\timpl Foo::g": ("S", ["a", "b"])}
+        )
+        evaluate(method_ok)
+        if method_ok["params_only"] != 2 or method_ok["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a mapped method call must be "
+                f"params-only: {method_ok}"
             )
         n += 1
 

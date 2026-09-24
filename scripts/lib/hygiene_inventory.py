@@ -827,8 +827,28 @@ def _drop_out_suffix(out: list[str], n: int) -> None:
             n = 0
 
 
-def _whole_arg_literal(arg: str, structs: dict[str, list[str]]) -> str | None:
-    """Field expressions when `arg` is exactly `&? Struct { … }` for a mapped struct."""
+def path_before_ident(src: str, i: int) -> str:
+    """`::`, `.`, or `` immediately before the ident at `i`."""
+    p = i
+    while p > 0 and src[p - 1].isspace():
+        p -= 1
+    if p >= 2 and src[p - 2 : p] == "::":
+        return "::"
+    if p >= 1 and src[p - 1] == ".":
+        return "."
+    return ""
+
+
+def _whole_arg_literal(
+    arg: str,
+    structs: dict[str, list[str]],
+    only_struct: str | None = None,
+) -> str | None:
+    """Field expressions when `arg` is exactly `&? Struct { … }` for a mapped struct.
+
+    `only_struct` limits the rewrite to that callee's struct. A different
+    mapped struct (`g(T { … })` when `g` maps to `S`) stays text.
+    """
     raw = arg.strip()
     if raw.startswith("&") and not raw.startswith(("&mut", "&&")):
         raw = raw[1:].strip()
@@ -837,6 +857,8 @@ def _whole_arg_literal(arg: str, structs: dict[str, list[str]]) -> str | None:
         raw,
     )
     if not m or m.group(1) not in structs:
+        return None
+    if only_struct is not None and m.group(1) != only_struct:
         return None
     brace = m.end() - 1
     end, exprs = _parse_exact_literal(raw, brace, structs[m.group(1)])
@@ -890,22 +912,44 @@ def params_literal_to_args(
     src: str,
     structs: dict[str, list[str]],
     callers: set[str] | None = None,
+    *,
+    callee_struct: dict[str, str] | None = None,
+    methods: set[str] | None = None,
+    assoc: set[str] | None = None,
 ) -> str:
     """Rewrite `callee(Struct { … })` back to positional arguments.
 
     Only a direct argument of a call whose name is in `callers` is
-    rewritten. A literal in `vec![…]`, `dbg!(…)`, or an unmapped call
-    stays text. Field order is the map's. Shorthand `f` is `f: f`. A
-    `..` tail or a reordered field list is left alone. An `&` that
-    borrows the struct as that whole argument is consumed with it.
+    rewritten. The call is a bare name, a method call when that name
+    is in `methods` (the old signature took `self`), or `Type::name`
+    when that name is in `assoc` (an impl associated function).
+    `other::g` and `obj.g` for a free function stay text. The literal's
+    struct must be that callee's (`callee_struct`); another mapped
+    struct stays text. A literal in `vec![…]`, `dbg!(…)`, or an
+    unmapped call stays text. Field order is the map's. Shorthand `f`
+    is `f: f`. A `..` tail or a reordered field list is left alone. An
+    `&` that borrows the struct as that whole argument is consumed with
+    it. `&mut` and `&&` do not.
     """
     if not structs or not src or not callers:
         return src
-    return _rewrite_mapped_calls(src, structs, callers)
+    return _rewrite_mapped_calls(
+        src,
+        structs,
+        callers,
+        callee_struct or {},
+        methods or set(),
+        assoc or set(),
+    )
 
 
 def _rewrite_mapped_calls(
-    src: str, structs: dict[str, list[str]], callers: set[str]
+    src: str,
+    structs: dict[str, list[str]],
+    callers: set[str],
+    callee_struct: dict[str, str],
+    methods: set[str],
+    assoc: set[str],
 ) -> str:
     out: list[str] = []
     i, n = 0, len(src)
@@ -946,18 +990,35 @@ def _rewrite_mapped_calls(
                 p == 2 or not (src[p - 3].isalnum() or src[p - 3] == "_")
             ):
                 preceded_fn = True
+            rel = path_before_ident(src, i)
+            bare_or_method = (
+                rel == ""
+                or (rel == "." and name in methods)
+                or (rel == "::" and name in assoc)
+            )
             if (
                 name in callers
+                and bare_or_method
                 and not preceded_fn
                 and j < n
                 and src[j] == "("
             ):
                 end = _scan_balanced_paren(src, j)
-                inner = _rewrite_mapped_calls(src[j + 1 : end - 1], structs, callers)
+                inner = _rewrite_mapped_calls(
+                    src[j + 1 : end - 1],
+                    structs,
+                    callers,
+                    callee_struct,
+                    methods,
+                    assoc,
+                )
                 args = _split_call_args(inner)
+                # An empty map means the caller did not name structs (any
+                # mapped struct). A provided map rewrites only that callee's.
+                only = None if not callee_struct else callee_struct.get(name, "")
                 rendered = []
                 for arg in args:
-                    rep = _whole_arg_literal(arg, structs)
+                    rep = _whole_arg_literal(arg, structs, only)
                     rendered.append(rep if rep is not None else arg.strip())
                 out.append(f"{name}({', '.join(a for a in rendered if a)})")
                 i = end
@@ -1001,13 +1062,24 @@ def params_rewrite_new(
     src: str,
     structs: dict[str, list[str]],
     callers: set[str] | None = None,
+    *,
+    callee_struct: dict[str, str] | None = None,
+    methods: set[str] | None = None,
+    assoc: set[str] | None = None,
 ) -> str:
     """Rewrite struct literals that are direct arguments of mapped calls.
 
     A `let name = Struct { … }` is not threaded: that hid evaluation
     order. The one real site (`serve_kadm5_conn`) is an accept row.
     """
-    return params_literal_to_args(src, structs, callers)
+    return params_literal_to_args(
+        src,
+        structs,
+        callers,
+        callee_struct=callee_struct,
+        methods=methods,
+        assoc=assoc,
+    )
 
 
 def self_test_cfg_test() -> int:
@@ -1085,6 +1157,43 @@ def self_test_cfg_test() -> int:
     got = params_literal_to_args("dbg!((S { a: x, b: y }))", {"S": ["a", "b"]}, callers)
     if got != "dbg!((S { a: x, b: y }))":
         raise SystemExit(f"dbg! must not rewrite: {got}")
+    owned = {"g": "S"}
+    got = params_literal_to_args(
+        "other::g(S { a: x, b: y })", {"S": ["a", "b"]}, callers, callee_struct=owned
+    )
+    if got != "other::g(S { a: x, b: y })":
+        raise SystemExit(f"a path-qualified call must not rewrite: {got}")
+    got = params_literal_to_args(
+        "obj.g(S { a: x, b: y })", {"S": ["a", "b"]}, callers, callee_struct=owned
+    )
+    if got != "obj.g(S { a: x, b: y })":
+        raise SystemExit(f"a method call of a free function must not rewrite: {got}")
+    got = params_literal_to_args(
+        "obj.g(S { a: x, b: y })",
+        {"S": ["a", "b"]},
+        callers,
+        callee_struct=owned,
+        methods={"g"},
+    )
+    if got != "obj.g(x, y)":
+        raise SystemExit(f"a method call of a mapped method must rewrite: {got}")
+    got = params_literal_to_args(
+        "Principal::g(S { a: x, b: y })",
+        {"S": ["a", "b"]},
+        callers,
+        callee_struct=owned,
+        assoc={"g"},
+    )
+    if got != "Principal::g(x, y)":
+        raise SystemExit(f"an associated function must rewrite: {got}")
+    got = params_literal_to_args(
+        "g(T { c: c, d: d })",
+        {"S": ["a", "b"], "T": ["c", "d"]},
+        callers,
+        callee_struct=owned,
+    )
+    if got == "g(c, d)" or "T {" not in got:
+        raise SystemExit(f"a different struct must not rewrite: {got}")
     return 3
 
 

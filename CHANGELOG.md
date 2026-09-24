@@ -135,6 +135,28 @@ Residues of this item are under W3-S3.10-R.
   `#[expect(`; at `e48c0371` that is 80 where the outer-only count was
   73.
 
+### W3-S3.10-R2 judge holes
+
+- **tool.** `hygiene-body-diff --params` compares a shared helper the
+  test calls. A converted literal whose fields are not in the map's
+  order is `differ` and the run fails. No wire or text change.
+- **tool.** A struct argument whose old parameters were not adjacent
+  is written back at those indexes even when the map names every field.
+  A wrong index is `changed`. The interleave in `685e7108` had no
+  wrong-index fixture.
+- **tool.** A `(` after `break`, `let`, `continue`, or `>` is a tuple.
+  A one-tuple there keeps its comma. `>` is not a call opener, so a
+  turbofish call with a trailing comma reads `changed`.
+- **tool.** Passing the struct binding is not expanded when `for`,
+  `if let`, `while let`, or a `match` arm rebinds a field before the
+  call.
+- **tool.** A mapped call is a bare name, a method call when that
+  function took `self`, or `Type::name` for an impl associated
+  function. The literal's struct must be that callee's.
+  `other::g`, `obj.g` of a free function, and `g(T { … })` stay text.
+  `#[expect]` and `#[allow]` stay the same lint set in either
+  direction. Self-test counts are fn-diff 134 and body-diff 41.
+
 ### W3-S3.8 dead code and surface
 
 - **krb5-tools.** `tgt_hex_must_use_ticket_etype_not_preferred` lives

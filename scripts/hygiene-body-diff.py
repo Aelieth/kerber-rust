@@ -22,8 +22,9 @@ canonical built-request form).
 
 Fails when an assertion-line change is not in `--accept` (with a matching
 blob pin), a `#[ignore]` / `#[should_panic]` attribute is added or
-removed, or a dropped test is not covered by the duplicates map (keyed,
-target must exist).
+removed, a dropped test is not covered by the duplicates map (keyed,
+target must exist), or `--params` leaves a mapped struct literal in a
+shared helper the test calls (fields out of the map's order).
 
 Usage:
   python3 scripts/hygiene-body-diff.py --old SHA --new SHA \\
@@ -567,7 +568,7 @@ def _call_close_positions(text: str) -> set[int]:
     """Indexes of `)` that close a call or a macro, not a tuple."""
     closes: set[int] = set()
     stack: list[bool] = []
-    keywords = {"if", "while", "for", "match", "return", "in", "loop"}
+    keywords = _FN.NOT_CALL_WORDS
     i, n = 0, len(text)
     prev = ""
     while i < n:
@@ -577,7 +578,7 @@ def _call_close_positions(text: str) -> set[int]:
             continue
         if c == "(":
             is_call = bool(prev) and prev not in keywords and (
-                prev[0].isalpha() or prev[0] == "_" or prev in {">", "!"}
+                prev[0].isalpha() or prev[0] == "_" or prev == "!"
             )
             stack.append(is_call)
             prev = "("
@@ -894,6 +895,60 @@ def blob_hash(blob: str) -> str:
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
 
+def _has_mapped_struct_literal(src: str, structs: dict[str, list[str]]) -> bool:
+    """A mapped `Struct {` is still in the text (the rewrite left it)."""
+    for name in structs:
+        if re.search(rf"\b{re.escape(name)}\s*\{{", src):
+            return True
+    return False
+
+
+def _helper_order_mismatches(
+    o: dict,
+    n: dict,
+    structs: dict[str, list[str]],
+    steps: dict[str, tuple],
+    survivor: dict[str, str],
+    by_callee: dict[str, tuple],
+    callee_struct: dict[str, str],
+    methods: set[str],
+    assoc: set[str],
+) -> list[str]:
+    """Shared helpers whose rewritten body still has a mapped literal.
+
+    body-diff compares `#[test]` bodies. A converted literal in a helper
+    (`or_attr`) is invisible unless the helper is compared too. A
+    converted *definition* is skipped: fn-diff judges that body, and the
+    destructure is not a call. A mismatch counts only when the rewrite
+    left a mapped `Struct {` in place (field order, `..`, or a struct
+    that is not the callee's).
+    """
+    old_bodies = o.get("helper_bodies") or {}
+    new_bodies = n.get("helper_bodies") or {}
+    if not old_bodies or not new_bodies:
+        return []
+    ol = norm_body(o["body"])
+    bad: list[str] = []
+    callers = set(by_callee)
+    for name in sorted(set(old_bodies) & set(new_bodies)):
+        if name in callers or not _name_called(ol, name):
+            continue
+        ob = _FN.expand_forwards(old_bodies[name], steps, survivor)
+        nb = _FN._INV.params_rewrite_new(
+            new_bodies[name],
+            structs,
+            callers,
+            callee_struct=callee_struct,
+            methods=methods,
+            assoc=assoc,
+        )
+        if _FN._params_norm(ob) == _FN._params_norm(nb):
+            continue
+        if _has_mapped_struct_literal(nb, structs):
+            bad.append(name)
+    return bad
+
+
 def compare_trees(
     old_root: pathlib.Path,
     new_root: pathlib.Path,
@@ -907,34 +962,69 @@ def compare_trees(
     structs: dict[str, list[str]] = {}
     steps: dict[str, tuple] = {}
     survivor: dict[str, str] = {}
+    _by_callee: dict[str, tuple] = {}
+    assoc: set[str] = set()
     if params:
         old_fns = _FN.extract(old_root)
         new_fns = _FN.extract(new_root)
-        structs, steps, survivor, _by_callee = _FN.prepare_params(old_fns, new_fns, params, {})
+        structs, steps, survivor, _by_callee, assoc = _FN.prepare_params(
+            old_fns, new_fns, params, {}
+        )
+    callee_struct, methods = _FN.callee_views(_by_callee)
     pairs, unmatched_old, unmatched_new = link(old, new, renames, dups)
     identical = helper_only = 0
     differ: list[tuple[dict, dict, list[str], list[str]]] = []
     assert_changes: list[tuple[dict, dict, str, str]] = []
     attr_changes: list[tuple[dict, dict]] = []
+    helper_mismatches: list[tuple[dict, dict, str]] = []
     for o, n in pairs:
         obody, nbody = o["body"], n["body"]
+        helper_bad: list[str] = []
         if params:
             obody2 = _FN.expand_forwards(obody, steps, survivor)
-            nbody2 = _FN._INV.params_rewrite_new(nbody, structs, set(_by_callee))
-            if (obody2 != obody or nbody2 != nbody) and _FN._params_norm(obody2) == _FN._params_norm(
-                nbody2
+            nbody2 = _FN._INV.params_rewrite_new(
+                nbody,
+                structs,
+                set(_by_callee),
+                callee_struct=callee_struct,
+                methods=methods,
+                assoc=assoc,
+            )
+            helper_bad = _helper_order_mismatches(
+                o,
+                n,
+                structs,
+                steps,
+                survivor,
+                _by_callee,
+                callee_struct,
+                methods,
+                assoc,
+            )
+            if (
+                not helper_bad
+                and (obody2 != obody or nbody2 != nbody)
+                and _FN._params_norm(obody2) == _FN._params_norm(nbody2)
             ):
                 identical += 1
                 continue
             obody, nbody = obody2, nbody2
         ol, nl = apply_subst(norm_body(obody), subst), apply_subst(norm_body(nbody), subst)
-        if ol == nl:
+        if ol == nl and not helper_bad:
             identical += 1
             continue
+        if helper_bad and ol == nl:
+            differ.append((o, n, ol, nl))
+            for name in helper_bad:
+                helper_mismatches.append((o, n, name))
+            continue
         so, sn, helper = smash_pair(o, n, ol, nl)
-        if helper:
+        if helper and not helper_bad:
             helper_only += 1
             continue
+        if helper_bad:
+            for name in helper_bad:
+                helper_mismatches.append((o, n, name))
         differ.append((o, n, ol, nl))
         def assert_blob(lines: list[str]) -> str:
             text = flatten_code(lines)
@@ -996,6 +1086,7 @@ def compare_trees(
         "dropped_unmapped_tests": dropped_unmapped,
         "accepted": accepted,
         "attr_changes": attr_changes,
+        "helper_mismatches": helper_mismatches,
         "unused_accept": unused_accept,
         "missing_accept_rhs": missing_rhs,
         "differ_items": [
@@ -1031,6 +1122,8 @@ def render(report: dict[str, object]) -> str:
     for item in report.get("differ_items") or []:
         kind = "assertion" if item["assertion"] else "body"
         lines.append(f"differ {kind} {item['file']} {item['leaf']}")
+    for o, _n, name in report.get("helper_mismatches") or []:  # type: ignore[misc]
+        lines.append(f"helper-mismatch {o['file']} {name} from {o['leaf']}")
     return "\n".join(lines) + "\n"
 
 
@@ -1053,6 +1146,10 @@ def evaluate(report: dict[str, object]) -> None:
         errs.append(f"--accept entry unused: {key}")
     for rhs in report.get("missing_accept_rhs") or []:  # type: ignore[misc]
         errs.append(f"--accept RHS missing in new tree: {rhs}")
+    for o, _n, name in report.get("helper_mismatches") or []:  # type: ignore[misc]
+        errs.append(
+            f"converted helper body differs: {o['file']} {name} (called from {o['leaf']})"
+        )
     if errs:
         raise BodyDiffError("; ".join(errs[:8]))
 
@@ -1547,6 +1644,37 @@ def _self_test() -> int:
                 f"{param_swap}"
             )
         _must_red(param_swap, "swapped fields in a test body")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "fn or_attr() {\n    g(x, y);\n}\n"
+            "#[test]\nfn sample() {\n    or_attr();\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "fn or_attr() {\n    g(S { a: x, b: y });\n}\n"
+            "#[test]\nfn sample() {\n    or_attr();\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        helper_ok = compare_trees(old, new, {}, {}, [], {}, pmap)
+        evaluate(helper_ok)
+        if helper_ok["differ"] != 0 or helper_ok["helper_mismatches"]:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a helper literal in map order "
+                f"must be identical: {helper_ok}"
+            )
+        n += 1
+        src_n.joinpath("t.rs").write_text(
+            "fn or_attr() {\n    g(S { b: y, a: x });\n}\n"
+            "#[test]\nfn sample() {\n    or_attr();\n    assert_eq!(1, 1);\n}\n",
+            encoding="utf-8",
+        )
+        helper_swap = compare_trees(old, new, {}, {}, [], {}, pmap)
+        if helper_swap["differ"] != 1 or helper_swap["assertion_changes"] != 0:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: swapped fields in a helper "
+                f"must differ: {helper_swap}"
+            )
+        _must_red(helper_swap, "swapped fields in a helper")
         n += 1
         src_o.joinpath("t.rs").write_text(
             "#[test]\nfn sample() {\n    g(x, y);\n    assert_eq!((z,), 1);\n}\n",
