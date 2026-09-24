@@ -274,7 +274,9 @@ def quality_grep(root: pathlib.Path) -> list[str]:
         # `(?<!\[)` so `#[expect(` / `#![expect(` is not a panic. `.expect(`
         # still counts: the character before `expect` is `.`, not `[`.
         if "/src/" in norm and "/krb5-testkit/" not in norm and norm not in src_test_rels:
-            unwrap_n += len(re.findall(r"\bunwrap\(|(?<!\[)expect\(|\bpanic!\(", text))
+            unwrap_n += len(
+                re.findall(r"\bunwrap\(|(?<!\[)\bexpect\(|\bpanic!\(", text)
+            )
             rustfmt_skip_n += len(re.findall(r"#\[rustfmt::skip\]", text))
     rows.append(f"allow={allow_n}")
     rows.append(f"rustfmt_skip={rustfmt_skip_n}")
@@ -311,7 +313,21 @@ PUB_ITEM_RE = re.compile(
     r"(?:fn|struct|enum|trait|type|const|static|mod|use|union|macro_rules!)\b"
 )
 # `#[expect(` is a suppression, same as `#[allow(` / `#![allow(`.
+# The capture is the attribute interior; `allow_lints` drops `reason = "…"`.
 ALLOW_SITE_RE = re.compile(r"#!?\[(?:allow|expect)\(([^)]*)\)\]")
+_ALLOW_REASON_RE = re.compile(r'reason\s*=\s*"(?:\\.|[^"\\])*"')
+_ALLOW_LINT_RE = re.compile(r"(?:clippy::)?[A-Za-z_][A-Za-z0-9_]*")
+
+
+def allow_lints(interior: str) -> str:
+    """Lint names inside an allow/expect attribute, without the reason clause."""
+    text = _ALLOW_REASON_RE.sub("", interior)
+    names = [
+        name
+        for name in _ALLOW_LINT_RE.findall(text)
+        if name not in {"reason"}
+    ]
+    return ", ".join(names)
 _ALLOW_OPEN_RE = re.compile(r"#!?\[(?:allow|expect)\(")
 # The S4 acceptance grep: process tags that do not belong in source comments.
 PROCESS_HISTORY_RE = re.compile(r"\bR[0-9]+\b|A′-[0-9]|W0[a-f]|W1-[A-Z]|Round [0-9]|parent [0-9a-f]{7}")
@@ -811,16 +827,86 @@ def _drop_out_suffix(out: list[str], n: int) -> None:
             n = 0
 
 
-def params_literal_to_args(src: str, structs: dict[str, list[str]]) -> str:
-    """Replace an exact `Struct { f1: e1, … }` with `e1, …`.
+def _whole_arg_literal(arg: str, structs: dict[str, list[str]]) -> str | None:
+    """Field expressions when `arg` is exactly `&? Struct { … }` for a mapped struct."""
+    raw = arg.strip()
+    if raw.startswith("&") and not raw.startswith(("&mut", "&&")):
+        raw = raw[1:].strip()
+    m = re.match(
+        r"(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*\{",
+        raw,
+    )
+    if not m or m.group(1) not in structs:
+        return None
+    brace = m.end() - 1
+    end, exprs = _parse_exact_literal(raw, brace, structs[m.group(1)])
+    if exprs is None or raw[end:].strip():
+        return None
+    return ", ".join(exprs)
 
-    Field order is the map's. Shorthand `f` is `f: f`. A `..` tail, a
-    renamed binding (`f: g` is still an expression; a field list that is
-    not exactly the map), or a `let` pattern is left alone. An `&` that
-    borrows the struct as a whole argument is consumed with the literal.
+
+def _split_call_args(inner: str) -> list[str]:
+    args: list[str] = []
+    start = 0
+    i, n = 0, len(inner)
+    paren = brack = brace = 0
+    while i < n:
+        lit = _copy_literal(inner, i)
+        if lit is not None:
+            i = lit
+            continue
+        if inner.startswith("//", i):
+            j = inner.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if inner.startswith("/*", i):
+            j = inner.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        c = inner[i]
+        if c == "(":
+            paren += 1
+        elif c == ")":
+            paren = max(0, paren - 1)
+        elif c == "[":
+            brack += 1
+        elif c == "]":
+            brack = max(0, brack - 1)
+        elif c == "{":
+            brace += 1
+        elif c == "}":
+            brace = max(0, brace - 1)
+        elif c == "," and paren == brack == brace == 0:
+            args.append(inner[start:i])
+            start = i + 1
+        i += 1
+    tail = inner[start:]
+    if args or tail.strip():
+        args.append(tail)
+    return args
+
+
+def params_literal_to_args(
+    src: str,
+    structs: dict[str, list[str]],
+    callers: set[str] | None = None,
+) -> str:
+    """Rewrite `callee(Struct { … })` back to positional arguments.
+
+    Only a direct argument of a call whose name is in `callers` is
+    rewritten. A literal in `vec![…]`, `dbg!(…)`, or an unmapped call
+    stays text. Field order is the map's. Shorthand `f` is `f: f`. A
+    `..` tail or a reordered field list is left alone. An `&` that
+    borrows the struct as that whole argument is consumed with it.
     """
-    if not structs or not src:
+    if not structs or not src or not callers:
         return src
+    return _rewrite_mapped_calls(src, structs, callers)
+
+
+def _rewrite_mapped_calls(
+    src: str, structs: dict[str, list[str]], callers: set[str]
+) -> str:
     out: list[str] = []
     i, n = 0, len(src)
     while i < n:
@@ -844,118 +930,50 @@ def params_literal_to_args(src: str, structs: dict[str, list[str]]) -> str:
         if src[i].isalpha() or src[i] == "_":
             m = re.match(r"[A-Za-z_][A-Za-z0-9_]*", src[i:])
             assert m is not None
-            path_start = i
-            last = m.group(0)
-            k = i + len(last)
-            while True:
-                j = _skip_ws_comments(src, k)
-                if not src.startswith("::", j):
-                    break
-                j = _skip_ws_comments(src, j + 2)
-                m2 = re.match(r"[A-Za-z_][A-Za-z0-9_]*", src[j:])
-                if not m2:
-                    break
-                last = m2.group(0)
-                k = j + len(last)
-            brace = _skip_ws_comments(src, k)
-            fields = structs.get(last)
-            if (
-                fields is not None
-                and brace < n
-                and src[brace] == "{"
-                and not _preceded_by_let(src, path_start)
+            name = m.group(0)
+            k = i + len(name)
+            j = _skip_ws_comments(src, k)
+            preceded_fn = _preceded_by_let(src, i) or (
+                i >= 2
+                and src[i - 2 : i].rstrip().endswith("fn")
+                and (i < 3 or not (src[i - 3].isalnum() or src[i - 3] == "_"))
+            )
+            # `fn` immediately before the name, allowing whitespace.
+            p = i
+            while p > 0 and src[p - 1].isspace():
+                p -= 1
+            if p >= 2 and src[p - 2 : p] == "fn" and (
+                p == 2 or not (src[p - 3].isalnum() or src[p - 3] == "_")
             ):
-                end, exprs = _parse_exact_literal(src, brace, fields)
-                if end > brace:
-                    if exprs is not None:
-                        borrow = _arg_borrow_at(src, path_start)
-                        if borrow is not None:
-                            _drop_out_suffix(out, path_start - borrow)
-                        out.append(", ".join(exprs))
-                    else:
-                        out.append(src[path_start:end])
-                    i = end
-                    continue
+                preceded_fn = True
+            if (
+                name in callers
+                and not preceded_fn
+                and j < n
+                and src[j] == "("
+            ):
+                end = _scan_balanced_paren(src, j)
+                inner = _rewrite_mapped_calls(src[j + 1 : end - 1], structs, callers)
+                args = _split_call_args(inner)
+                rendered = []
+                for arg in args:
+                    rep = _whole_arg_literal(arg, structs)
+                    rendered.append(rep if rep is not None else arg.strip())
+                out.append(f"{name}({', '.join(a for a in rendered if a)})")
+                i = end
+                continue
+            out.append(name)
+            i = k
+            continue
         out.append(src[i])
         i += 1
     return "".join(out)
 
 
-def _binding_exprs(text: str, bindings: dict[str, str]) -> str | None:
-    raw = text.strip()
-    if raw in bindings:
-        return bindings[raw]
-    if raw.startswith("&") and raw[1:].strip() in bindings:
-        return bindings[raw[1:].strip()]
-    return None
-
-
-def expand_threaded_structs(src: str, structs: dict[str, list[str]]) -> str:
-    """A `let name = Struct { … };` of an exact literal threads `name`.
-
-    The let is removed and each call argument that is `name` or `&name`
-    is the field expressions. Anything else is left for
-    `params_literal_to_args`.
-    """
-    if not structs or not src:
-        return src
-    bindings: dict[str, str] = {}
-    out: list[str] = []
-    i, n = 0, len(src)
-    while i < n:
-        lit = _copy_literal(src, i)
-        if lit is not None:
-            out.append(src[i:lit])
-            i = lit
-            continue
-        if src.startswith("//", i):
-            j = src.find("\n", i)
-            j = n if j < 0 else j
-            out.append(src[i:j])
-            i = j
-            continue
-        if src.startswith("/*", i):
-            j = src.find("*/", i + 2)
-            j = n if j < 0 else j + 2
-            out.append(src[i:j])
-            i = j
-            continue
-        if src.startswith("let", i) and (i == 0 or not (src[i - 1].isalnum() or src[i - 1] == "_")):
-            m = re.match(r"let\s+(?:mut\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*", src[i:])
-            if m:
-                rest = i + m.end()
-                path = re.match(
-                    r"(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*\{",
-                    src[rest:],
-                )
-                if path and path.group(1) in structs:
-                    brace = rest + path.end() - 1
-                    end, exprs = _parse_exact_literal(src, brace, structs[path.group(1)])
-                    semi = _skip_ws_comments(src, end)
-                    if exprs is not None and semi < n and src[semi] == ";":
-                        bindings[m.group(1)] = ", ".join(exprs)
-                        i = semi + 1
-                        continue
-        out.append(src[i])
-        i += 1
-    rewritten = "".join(out)
-    if not bindings:
-        return rewritten
-    return _splice_args(rewritten, bindings)
-
-
-def _splice_args(src: str, bindings: dict[str, str]) -> str:
-    out: list[str] = []
-    i, n = 0, len(src)
+def _scan_balanced_paren(src: str, open_at: int) -> int:
+    """Index just past the `)` matching `src[open_at] == '('`."""
     depth = 0
-    arg_at = 0
-    buf_start = 0
-
-    def flush_to(pos: int) -> None:
-        nonlocal buf_start
-        out.append(src[buf_start:pos])
-        buf_start = pos
-
+    i, n = open_at, len(src)
     while i < n:
         lit = _copy_literal(src, i)
         if lit is not None:
@@ -969,36 +987,27 @@ def _splice_args(src: str, bindings: dict[str, str]) -> str:
             j = src.find("*/", i + 2)
             i = n if j < 0 else j + 2
             continue
-        c = src[i]
-        if c == "(":
+        if src[i] == "(":
             depth += 1
-            if depth == 1:
-                arg_at = i + 1
-            i += 1
-            continue
-        if depth == 1 and c in ",)":
-            repl = _binding_exprs(src[arg_at:i], bindings)
-            if repl is not None:
-                flush_to(arg_at)
-                out.append(repl)
-                buf_start = i
-            if c == ",":
-                arg_at = i + 1
-                i += 1
-                continue
-            depth = 0
-            i += 1
-            continue
-        if c == ")" and depth > 1:
+        elif src[i] == ")":
             depth -= 1
+            if depth == 0:
+                return i + 1
         i += 1
-    flush_to(n)
-    return "".join(out)
+    return n
 
 
-def params_rewrite_new(src: str, structs: dict[str, list[str]]) -> str:
-    """Thread one exact `let` binding, then rewrite remaining literals."""
-    return params_literal_to_args(expand_threaded_structs(src, structs), structs)
+def params_rewrite_new(
+    src: str,
+    structs: dict[str, list[str]],
+    callers: set[str] | None = None,
+) -> str:
+    """Rewrite struct literals that are direct arguments of mapped calls.
+
+    A `let name = Struct { … }` is not threaded: that hid evaluation
+    order. The one real site (`serve_kadm5_conn`) is an accept row.
+    """
+    return params_literal_to_args(src, structs, callers)
 
 
 def self_test_cfg_test() -> int:
@@ -1032,9 +1041,10 @@ def self_test_cfg_test() -> int:
         lib.mkdir(parents=True)
         (lib / "lib.rs").write_text(
             "#![allow(dead_code)]\n"
-            "#[expect(clippy::too_many_arguments)]\n"
+            "#[expect(clippy::too_many_arguments, reason = \"kept\")]\n"
             "fn f() {\n"
             "    let _ = x.expect(\"e\");\n"
+            "    myexpect(1);\n"
             "    panic!(\"p\");\n"
             "}\n",
             encoding="utf-8",
@@ -1052,14 +1062,29 @@ def self_test_cfg_test() -> int:
         sites = shape_inventory(
             root, [{"name": "demo", "dir": "crates/demo", "lib": True, "bins": [], "deps": []}]
         )["allow_sites"]
-        if not any("too_many_arguments" in row for row in sites):
-            raise SystemExit(f"allow_sites must list #[expect(: {sites}")
-    got = params_literal_to_args("g(S { b: y, a: x })", {"S": ["a", "b"]})
+        if not any("too_many_arguments" in row and "reason" not in row for row in sites):
+            raise SystemExit(f"allow_sites must list lint names, not the reason: {sites}")
+    callers = {"g"}
+    got = params_literal_to_args("g(S { b: y, a: x })", {"S": ["a", "b"]}, callers)
     if got != "g(S { b: y, a: x })":
         raise SystemExit(f"swapped fields must not rewrite: {got}")
-    got = params_literal_to_args("g(S { a, ..Default::default() })", {"S": ["a", "b"]})
+    got = params_literal_to_args(
+        "g(S { a, ..Default::default() })", {"S": ["a", "b"]}, callers
+    )
     if "Default" not in got or got.count(",") < 1:
         raise SystemExit(f"..Default tail must not rewrite: {got}")
+    got = params_literal_to_args("g(S { a: x, b: y })", {"S": ["a", "b"]}, callers)
+    if got != "g(x, y)":
+        raise SystemExit(f"mapped call must rewrite: {got}")
+    got = params_literal_to_args("vec![S { a: x, b: y }]", {"S": ["a", "b"]}, callers)
+    if got != "vec![S { a: x, b: y }]":
+        raise SystemExit(f"a literal that is not a call argument must stay: {got}")
+    got = params_literal_to_args("h(S { a: x, b: y })", {"S": ["a", "b"]}, callers)
+    if got != "h(S { a: x, b: y })":
+        raise SystemExit(f"an unmapped call must not rewrite: {got}")
+    got = params_literal_to_args("dbg!((S { a: x, b: y }))", {"S": ["a", "b"]}, callers)
+    if got != "dbg!((S { a: x, b: y }))":
+        raise SystemExit(f"dbg! must not rewrite: {got}")
     return 3
 
 
@@ -1151,7 +1176,7 @@ def shape_inventory(root: pathlib.Path, members: list[dict]) -> dict[str, object
                     else:
                         p["tests_in_tests"] += 1
                 for am in ALLOW_SITE_RE.finditer(line):
-                    allow_sites.append(f"{rel}:{i}\t{am.group(1).strip()}")
+                    allow_sites.append(f"{rel}:{i}\t{allow_lints(am.group(1))}")
                 if s.startswith("//") and PROCESS_HISTORY_RE.search(s):
                     history.append(f"{rel}:{i}\t{s}")
                 if file_scope == "src" and not any(a <= i <= b for a, b in test_ranges):
@@ -1466,7 +1491,7 @@ def write_index(out: pathlib.Path, quality: bool, counts: dict[str, object], q: 
         "| `loc-crates.txt` / `loc-files.txt` | LOC, SLOC, comment, doc, blank per package / file |",
         "| `pub-items.txt` | `pub` vs restricted items per package |",
         "| `fn-sizes.txt` | functions > 40 lines with scope, visibility, doc header |",
-        "| `allow-sites.txt` / `process-history.txt` | `#[allow]` sites / process-tag comments |",
+        "| `allow-sites.txt` / `process-history.txt` | `#[allow]` / `#[expect]` lint names / process-tag comments |",
         "| `quality.txt` | grep counts; with `--quality` fmt/clippy/doc/doctest/missing_docs/shellcheck |",
     ]
     if quality:

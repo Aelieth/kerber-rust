@@ -64,7 +64,7 @@ or `super::`. `--self-test` on the
 compare tools prints `self-test ok (N cases)`. There is no
 request-shape column (no canonical built-request form).
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
-[--accept] [--split] [--glue] [--roots]` is the product-fn sibling:
+[--accept] [--params] [--split] [--glue] [--roots]` is the product-fn sibling:
 every non-test `fn` (and `const` / `static` / `enum` / `struct` /
 `trait` / `type` / `macro_rules` items) is keyed
 `crate<TAB>module::path::[impl-header::]name`, with inline `mod`
@@ -97,18 +97,38 @@ with one struct value or reference and whose body is the old body
 prefixed by `let Struct { f1, f2, … } = p;` (or `= *p` when the
 parameter is `&Struct`), and a call site whose body matches the old
 body after the struct literal is rewritten back to those field
-expressions in order. Shorthand `f` means `f: f`. An `&` that borrows the struct as a whole
-argument is consumed with the literal. A parameter written `_name`
-matches the field `name`. A semicolon trait method has no destructure.
-An attribute on the destructure `let` is not part of the body. One struct's map
-entries may name a consecutive slice of its longest field list, for a
-function that never took the other fields: the destructure then ends
-with `..`, a call still names every field, and the rewrite keeps that
-function's fields. Passing the struct binding does the same. An extra field whose expression is not that binding, and not a field
-read of the struct value, stays `changed`. A swapped
-field, a `..` tail on a call-site literal, a `..` that drops a field
-the function did take, an argument hoisted into a `let`, or a
-destructure that renames a field stays `changed`. Rule 7: the literal
+expressions in order. The rewrite compares tokens: whitespace is not a
+token, a trailing comma is dropped only before the `)` of a call or a
+macro, or a `]` / `}`, and a one-tuple `(x,)` keeps its comma. A
+literal stays one token, so the call's `)` is still matched. `& &` is not `&&`.
+A struct literal is rewritten only as the direct argument of a call to
+a function in the map; `vec![…]`, `dbg!(…)`, and an unmapped call stay
+text. A key whose path contains `::tests::` names a helper fn-diff does
+not extract; that helper's calls still rewrite, and any other missing
+key exits 2. A `let p = Struct { … }` is not threaded into later calls, so a
+whole-struct hoist is `changed`, including a binding used twice and a
+statement between the `let` and the call. Passing the struct binding
+is valid only when no destructured name is re-bound (`let`, `let mut`,
+or a closure parameter) before that call. Shorthand `f` means `f: f`.
+An `&` that borrows the struct as a whole argument is consumed with
+the literal. A parameter written `_name` matches the field written
+`name: _name`. A semicolon trait method has no destructure. The
+destructure `let` carries no attribute. One struct's map entries may
+name an ordered subsequence of its longest field list, for a function
+that never took the other fields: the destructure then ends with `..`,
+a call still names every field, and the rewrite keeps that function's
+fields. A reversed field order stays `changed`. Passing the struct
+binding does the same. An extra field whose expression is not that
+binding, and not a field read of the struct value, stays `changed`.
+`#[allow(L…)]` and `#[expect(L…, reason = "…")]` are identical only
+when the lint set is the same, including a sibling lint kept on its
+own attribute; a lint added or removed, an attribute removed, or a
+sibling allow added or removed is `changed`. A conversion may drop
+`too_many_arguments` because the arity fell; any other lint still has
+to match. A swapped field, a `..`
+tail on a call-site literal, a `..` that drops a field the function
+did take, an argument hoisted into a `let`, or a destructure that
+renames a field stays `changed`. Rule 7: the literal
 names every field, in the old parameter order, each expression the old
 argument verbatim, and the destructure is the first statement of the
 converted function. Before the vis-stripped compare the text ahead of the
@@ -134,11 +154,13 @@ occurrence-counted `edit: OLD => NEW` rows that drop the single
 old fn's attribute block must equal the dispatcher's (a doc edit is
 `doc-only`); a phase attribute block is empty or a blob-pinned
 `--accept`. Phase signatures are named as `split-sig` in the report.
-`hygiene_inventory` counts `rustfmt_skip` under `crates/*/src`, and
-counts `#[expect(` / `#![expect(` as a suppression in `allow` and
-`allow_sites` (with `#[allow(` / `#![allow(`). An attribute `expect`
-does not increment `unwrap_expect_panic_src`; `.expect(` and `panic!`
-still do.
+`hygiene_inventory` counts `rustfmt_skip` under `crates/*/src`. The
+`allow` metric is outer `#[allow(`, inner `#![allow(`, and
+`#[expect(` / `#![expect(`. `allow-sites.txt` lists lint names only;
+a `reason = "…"` clause is not a lint. At `e48c0371` the older
+outer-only count was 73 and this count is 80. An attribute `expect`
+does not increment `unwrap_expect_panic_src` (`(?<!\[)\bexpect\(`);
+`.expect(` and `panic!` still do.
 `hygiene-diff` fails on a rise. `--roots` adds `examples/` and
 `fuzz/` to the default `crates/`
 scan. A body

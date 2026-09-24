@@ -19,7 +19,7 @@ this project uses semantic versioning once a crate is published.
   field order disagrees with the old signature exits 2.
   `hygiene-body-diff --params` uses that rewrite on test bodies.
   `#[expect(` counts as a suppression and not as a panic.
-  Self-test counts are fn-diff 79, body-diff 34, inventory 3.
+  Self-test counts are fn-diff 78, body-diff 34, inventory 3.
   A copied argument that rustfmt wraps, including a trailing comma,
   stays `params-only`. `krb5-testkit` `src/` is scanned, so a
   testkit builder call site is judged with the product functions.
@@ -88,6 +88,21 @@ this project uses semantic versioning once a crate is published.
   `#[expect]` with a reason. `tgs_once` keeps `needless_pass_by_value`
   and `handle_rpcsec_gss` keeps `unnecessary_wraps`. No wire or text
   change.
+- **tool.** The parameter-struct judge compares tokens. A trailing
+  comma is dropped only before a call's `)` or a `]` / `}`, never a
+  one-tuple `(x,)`, and `& &` is not `&&`. A struct literal is
+  rewritten only as a direct argument of a mapped call. A threaded
+  `let` is not expanded. A shadowed field binding is not the struct
+  value. `allow` and `expect` match only when the lint set is the
+  same. A conversion may drop `too_many_arguments` because the arity
+  fell; any other lint still has to match. The destructure `let`
+  carries no attribute; `name: _name` matches an old `_name`
+  parameter. A map entry may name an ordered subsequence of the
+  struct's fields. `allow` counts outer `#[allow(`, inner `#![allow(`,
+  and `#[expect(`; at `e48c0371` that is 80 where the outer-only count
+  was 73. A `::tests::` key names a helper the product judge does not
+  extract; its calls still rewrite. Self-test counts are fn-diff 119,
+  body-diff 39, inventory 3.
 
 ### W3-S3.8 dead code and surface
 

@@ -563,11 +563,73 @@ def smash_helpers(lines: list[str], extra: list[str] | tuple[str, ...] = ()) -> 
     return out
 
 
+def _call_close_positions(text: str) -> set[int]:
+    """Indexes of `)` that close a call or a macro, not a tuple."""
+    closes: set[int] = set()
+    stack: list[bool] = []
+    keywords = {"if", "while", "for", "match", "return", "in", "loop"}
+    i, n = 0, len(text)
+    prev = ""
+    while i < n:
+        c = text[i]
+        if c.isspace():
+            i += 1
+            continue
+        if c == "(":
+            is_call = bool(prev) and prev not in keywords and (
+                prev[0].isalpha() or prev[0] == "_" or prev in {">", "!"}
+            )
+            stack.append(is_call)
+            prev = "("
+            i += 1
+            continue
+        if c in "[{":
+            stack.append(False)
+            prev = c
+            i += 1
+            continue
+        if c in ")]}":
+            is_call = stack.pop() if stack else False
+            if c == ")" and is_call:
+                closes.add(i)
+            prev = c
+            i += 1
+            continue
+        if c.isalnum() or c == "_":
+            j = i + 1
+            while j < n and (text[j].isalnum() or text[j] == "_"):
+                j += 1
+            prev = text[i:j]
+            i = j
+            continue
+        prev = c
+        i += 1
+    return closes
+
+
+def _drop_call_trailing_commas(text: str) -> str:
+    """Drop a comma before a call's `)`. A one-tuple `(x,)` keeps it."""
+    closes = _call_close_positions(text)
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i] == ",":
+            j = i + 1
+            while j < n and text[j].isspace():
+                j += 1
+            if j < n and text[j] == ")" and j in closes:
+                i += 1
+                continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
 def _flatten_code_span(text: str) -> str:
     text = re.sub(r"\s+", " ", text)
     text = re.sub(r"\(\s+", "(", text)
     text = re.sub(r"\s+\)", ")", text)
-    text = re.sub(r",\s*\)", ")", text)
+    text = _drop_call_trailing_commas(text)
     text = re.sub(r"\s+,", ",", text)
     return re.sub(r",\s*", ", ", text)
 
@@ -858,7 +920,7 @@ def compare_trees(
         obody, nbody = o["body"], n["body"]
         if params:
             obody2 = _FN.expand_forwards(obody, steps, survivor)
-            nbody2 = _FN._INV.params_rewrite_new(nbody, structs)
+            nbody2 = _FN._INV.params_rewrite_new(nbody, structs, set(_by_callee))
             if (obody2 != obody or nbody2 != nbody) and _FN._params_norm(obody2) == _FN._params_norm(
                 nbody2
             ):
@@ -1485,6 +1547,90 @@ def _self_test() -> int:
                 f"{param_swap}"
             )
         _must_red(param_swap, "swapped fields in a test body")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    g(x, y);\n    assert_eq!((z,), 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    g(S { a: x, b: y });\n    assert_eq!((z), 1);\n}\n",
+            encoding="utf-8",
+        )
+        one_tuple = compare_trees(old, new, {}, {}, [], {}, pmap)
+        if one_tuple["differ"] != 1 or one_tuple["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a one-tuple comma in a test must differ: "
+                f"{one_tuple}"
+            )
+        _must_red(one_tuple, "one-tuple comma in a test")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    g(x, y);\n    assert!(p & & q());\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    g(S { a: x, b: y });\n    assert!(p && q());\n}\n",
+            encoding="utf-8",
+        )
+        amp = compare_trees(old, new, {}, {}, [], {}, pmap)
+        if amp["differ"] != 1 or amp["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: & & inside a test must differ: "
+                f"{amp}"
+            )
+        _must_red(amp, "& & inside a test")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    g(x, y);\n    assert_eq!(keep(vec![x, y]), 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    g(S { a: x, b: y });\n"
+            "    assert_eq!(keep(vec![S { a: x, b: y }]), 1);\n}\n",
+            encoding="utf-8",
+        )
+        vec_lit = compare_trees(old, new, {}, {}, [], {}, pmap)
+        if vec_lit["differ"] != 1 or vec_lit["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a struct literal inside vec! must differ: "
+                f"{vec_lit}"
+            )
+        _must_red(vec_lit, "struct literal inside vec! in a test")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    g(x, y);\n    assert_eq!(dbg!((x, y)), 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    g(S { a: x, b: y });\n"
+            "    assert_eq!(dbg!((S { a: x, b: y })), 1);\n}\n",
+            encoding="utf-8",
+        )
+        dbg_lit = compare_trees(old, new, {}, {}, [], {}, pmap)
+        if dbg_lit["differ"] != 1 or dbg_lit["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a struct literal inside dbg! must differ: "
+                f"{dbg_lit}"
+            )
+        _must_red(dbg_lit, "struct literal inside dbg! in a test")
+        n += 1
+        src_o.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    assert_eq!(g(next(), y), 1);\n"
+            "    assert_eq!(g(next(), y), 1);\n}\n",
+            encoding="utf-8",
+        )
+        src_n.joinpath("t.rs").write_text(
+            "#[test]\nfn sample() {\n    let p = S { a: next(), b: y };\n"
+            "    assert_eq!(g(&p), 1);\n    assert_eq!(g(&p), 1);\n}\n",
+            encoding="utf-8",
+        )
+        threaded = compare_trees(old, new, {}, {}, [], {}, pmap)
+        if threaded["differ"] != 1 or threaded["assertion_changes"] != 1:
+            raise SystemExit(
+                "hygiene-body-diff --self-test: a threaded let used twice must differ: "
+                f"{threaded}"
+            )
+        _must_red(threaded, "threaded let used twice in a test")
         n += 1
     return n
 

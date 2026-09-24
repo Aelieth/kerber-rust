@@ -853,7 +853,9 @@ def classify(old_src: str, new_src: str, params_ctx: dict | None = None) -> str:
         return "identical"
     # allow → expect on too_many_arguments, and a sibling lint moved onto
     # its own allow, is not a body edit.
-    if compare_norm(_strip_tma_attr(old_src)) == compare_norm(_strip_tma_attr(new_src)):
+    if _tma_lints(old_src) == _tma_lints(new_src) and compare_norm(
+        _strip_tma_attr(old_src)
+    ) == compare_norm(_strip_tma_attr(new_src)):
         return "identical"
     if compare_norm(_strip_doc_lines(old_src)) == compare_norm(_strip_doc_lines(new_src)):
         return "doc-only"
@@ -1036,28 +1038,96 @@ def _find_slice(names: list[str], fields: list[str]) -> tuple[int, int] | None:
     return None
 
 
-_TMA_RE = re.compile(
-    r"^#\[(?:allow|expect)\([^]]*clippy::too_many_arguments\b[^]]*\)\]\s*$"
-)
-# Sibling lints that share an attribute with too_many_arguments today and
-# stay on their own allow after the expect split.
-_SIBLING_ALLOW_RE = re.compile(
-    r"^#\[allow\(\s*clippy::(?:needless_pass_by_value|unnecessary_wraps)\s*\)\]\s*$"
-)
+def _ordered_subseq(names: list[str], fields: list[str]) -> bool:
+    """`fields` appears in `names` in that order, not necessarily consecutively."""
+    if not fields or len(fields) > len(names):
+        return False
+    i = 0
+    for name in names:
+        if name == fields[i]:
+            i += 1
+            if i == len(fields):
+                return True
+    return False
+
+
+_PRE_FN_ATTR_RE = re.compile(r"^#\[(?:allow|expect)\((.*)\)\]\s*$")
+_TMA_REASON_RE = re.compile(r'reason\s*=\s*"(?:\\.|[^"\\])*"')
+
+
+def _pre_fn_allow_expect(src: str) -> list[tuple[int, str]]:
+    """`(line index, interior)` of allow/expect lines directly above `fn`."""
+    lines = src.splitlines()
+    fn_at = None
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
+        if re.search(r"\bfn\b", line):
+            fn_at = i
+            break
+    if fn_at is None:
+        return []
+    found: list[tuple[int, str]] = []
+    i = fn_at - 1
+    while i >= 0:
+        stripped = lines[i].strip()
+        if not stripped or stripped.startswith(("///", "//!", "//")):
+            i -= 1
+            continue
+        matched = _PRE_FN_ATTR_RE.match(stripped)
+        if matched and stripped.startswith(("#[allow(", "#[expect(")):
+            found.append((i, matched.group(1)))
+            i -= 1
+            continue
+        break
+    return found
+
+
+def _lints_of(interior: str) -> frozenset[str]:
+    text = _TMA_REASON_RE.sub("", interior)
+    return frozenset(
+        name
+        for name in re.findall(r"(?:clippy::)?[A-Za-z_][A-Za-z0-9_]*", text)
+        if name != "reason"
+    )
+
+
+def _tma_lints(src: str) -> frozenset[str]:
+    """Lint names on the allow/expect lines directly above `fn`."""
+    lints: set[str] = set()
+    for _i, interior in _pre_fn_allow_expect(src):
+        lints.update(_lints_of(interior))
+    return frozenset(lints)
+
+
+_TMA_LINT = "clippy::too_many_arguments"
+
+
+def _tma_ok_for_params(old_src: str, new_src: str) -> bool:
+    """True when the lint sets match, or the new side only dropped too_many.
+
+    Folding parameters into a struct drops the suppression the arity no
+    longer needs. Any other lint added or removed is not a params edit.
+    An attribute-only removal never reaches here: the signature did not
+    become a struct parameter, so the pair stays `changed`.
+    """
+    old, new = _tma_lints(old_src), _tma_lints(new_src)
+    if old == new:
+        return True
+    return _TMA_LINT in old and _TMA_LINT not in new and (old - {_TMA_LINT}) == new
 
 
 def _strip_tma_attr(src: str) -> str:
-    """Drop too_many_arguments suppressions and the two sibling allows.
+    """Drop the allow/expect lines directly above `fn`.
 
-    The sibling allows are stripped even on a function that no longer has
-    too_many_arguments, so splitting one combined attribute stays identical
-    after the positional rewrite of a converted call.
+    Callers compare `_tma_lints` first. A lint added or removed, or an
+    attribute that is not the same set, is not stripped and stays `changed`.
     """
-    return "\n".join(
-        ln
-        for ln in src.splitlines()
-        if not _TMA_RE.match(ln.strip()) and not _SIBLING_ALLOW_RE.match(ln.strip())
-    )
+    drop = {i for i, _interior in _pre_fn_allow_expect(src)}
+    if not drop:
+        return src
+    return "\n".join(line for i, line in enumerate(src.splitlines()) if i not in drop)
 
 
 def _blank_fn_params(src: str) -> str:
@@ -1089,28 +1159,6 @@ def _type_is_struct(chunk: str, struct: str) -> bool:
             text,
         )
     )
-
-
-def _skip_stmt_attrs(src: str, i: int) -> int:
-    """Skip `#[...]` attributes that decorate the destructure `let`."""
-    n = len(src)
-    while True:
-        i = _skip_code_ws(src, i)
-        if not src.startswith("#[", i):
-            return i
-        depth = 0
-        j = i + 1
-        while j < n:
-            if src[j] == "[":
-                depth += 1
-            elif src[j] == "]":
-                depth -= 1
-                if depth == 0:
-                    i = j + 1
-                    break
-            j += 1
-        else:
-            return i
 
 
 def _is_semi_fn(src: str) -> bool:
@@ -1147,11 +1195,56 @@ def _strip_leading_rest(inner: str) -> str | None:
     return pre + inner[dot_at + 2 :]
 
 
+def _struct_slot(
+    old_names: list[str],
+    new_names: list[str],
+    new_chunks: list[str],
+    fields: list[str],
+    struct: str,
+) -> tuple[int, str] | None:
+    """Index of the struct parameter when `fields` were replaced by one value.
+
+    The fields may be an ordered subsequence of the old parameters, not
+    only a consecutive run. The struct parameter sits where the first
+    field sat. A reversed field order does not match.
+    """
+    if not _ordered_subseq([_bare_param(name) for name in old_names], fields):
+        return None
+    expected: list[str | None] = []
+    slot: int | None = None
+    fi = 0
+    for name in old_names:
+        bare = _bare_param(name)
+        if fi < len(fields) and bare == fields[fi]:
+            if slot is None:
+                slot = len(expected)
+                expected.append(None)
+            fi += 1
+            continue
+        expected.append(name)
+    if fi != len(fields) or slot is None or len(new_names) != len(expected):
+        return None
+    for i, exp in enumerate(expected):
+        if exp is None:
+            if not _type_is_struct(new_chunks[i], struct):
+                return None
+        elif new_names[i] != exp:
+            return None
+    return slot, new_names[slot]
+
+
 def _match_destructure_exact(
-    inner: str, struct: str, fields: list[str]
+    inner: str,
+    struct: str,
+    fields: list[str],
+    spellings: dict[str, str] | None = None,
 ) -> tuple[str, str] | None:
-    """`let Struct { f1, f2, … } = binder;` or `= *binder`. Shorthand only."""
-    i = _skip_stmt_attrs(inner, _skip_code_ws(inner, 0))
+    """`let Struct { f1, f2, … } = binder;` or `= *binder`.
+
+    A field the old parameter spelled `_f` is written `f: _f`. An
+    attribute on the `let` is part of the body, not skipped.
+    """
+    i = _skip_code_ws(inner, 0)
     if not inner.startswith("let", i):
         return None
     if i + 3 < len(inner) and (inner[i + 3].isalnum() or inner[i + 3] == "_"):
@@ -1168,9 +1261,11 @@ def _match_destructure_exact(
     end, _exprs = _INV._parse_exact_literal(inner, brace, fields)
     if _exprs is None:
         return None
-    # shorthand expressions must be the field names themselves
-    if [e.strip() for e in _exprs] != list(fields):
-        return None
+    # shorthand `f` is the field. `f: _f` only when the old parameter was `_f`.
+    for expr, field in zip(_exprs, fields):
+        want = (spellings or {}).get(field, field)
+        if expr.strip() != want:
+            return None
     j = _skip_code_ws(inner, end)
     if j >= len(inner) or inner[j] != "=":
         return None
@@ -1188,16 +1283,20 @@ def _match_destructure_exact(
 
 
 def _match_destructure(
-    inner: str, struct: str, fields: list[str], allow_rest: bool = False
+    inner: str,
+    struct: str,
+    fields: list[str],
+    allow_rest: bool = False,
+    spellings: dict[str, str] | None = None,
 ) -> tuple[str, str] | None:
     """Exact shorthand destructure. `..` only when `allow_rest` is set."""
-    matched = _match_destructure_exact(inner, struct, fields)
+    matched = _match_destructure_exact(inner, struct, fields, spellings)
     if matched is not None or not allow_rest:
         return matched
     stripped = _strip_leading_rest(inner)
     if stripped is None:
         return None
-    return _match_destructure_exact(stripped, struct, fields)
+    return _match_destructure_exact(stripped, struct, fields, spellings)
 
 
 def _code_has_semi(src: str) -> bool:
@@ -1269,6 +1368,12 @@ def _walk_forward(
     return name, src
 
 
+def _test_helper_key(key: str) -> bool:
+    """A test helper lives under `tests` and is not an fn-diff item."""
+    path = key.split("\t", 1)[-1]
+    return "::tests::" in f"::{path}::"
+
+
 def prepare_params(
     old: dict[str, dict[str, str]],
     new: dict[str, dict[str, str]],
@@ -1282,9 +1387,9 @@ def prepare_params(
 ]:
     """Order-check the map. Return structs, steps, survivors, callee fields.
 
-    Every entry for one struct names that struct's full field list or a
-    consecutive slice of it (a function that never took the other fields).
-    The longest list is the one call-site literals must name.
+    Every entry for one struct names that struct's full field list or an
+    ordered subsequence of it (a function that never took the other
+    fields). The longest list is the one call-site literals must name.
     """
     by_name = _fns_by_name(old)
     steps: dict[str, tuple] = {}
@@ -1296,7 +1401,7 @@ def prepare_params(
     for struct, entries in grouped.items():
         longest = max((fields for _key, fields in entries), key=len)
         for key, fields in entries:
-            if _find_slice(longest, fields) is None:
+            if not _ordered_subseq(longest, fields):
                 raise SystemExit(
                     f"hygiene-fn-diff: --params struct {struct} fields disagree: {key}"
                 )
@@ -1304,13 +1409,17 @@ def prepare_params(
     by_callee: dict[str, tuple[str, list[str]]] = {}
     for key, (struct, fields) in params.items():
         if key not in old:
+            if _test_helper_key(key):
+                # fn-diff skips `/tests/`. The helper's calls are still rewritten.
+                by_callee[key.split("\t", 1)[-1].split("::")[-1]] = (struct, list(fields))
+                continue
             raise SystemExit(f"hygiene-fn-diff: --params key missing in old tree: {key}")
         names = _param_names_of(old[key]["src"])
         if names is None:
             raise SystemExit(
                 f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
             )
-        if _find_slice(_bare_names(names), fields) is not None:
+        if _ordered_subseq(_bare_names(names), fields):
             by_callee[old[key]["name"]] = (struct, list(fields))
             continue
         ult_name, ult_src = _walk_forward(by_name, old[key]["name"], old[key]["src"], steps)
@@ -1340,6 +1449,8 @@ def _definition_params(
     survivor: dict[str, str] | None = None,
     by_callee: dict[str, tuple[str, list[str]]] | None = None,
 ) -> bool:
+    if not _tma_ok_for_params(old_src, new_src):
+        return False
     old_s = _strip_doc_lines(_strip_tma_attr(old_src))
     new_s = _strip_doc_lines(_strip_tma_attr(new_src))
     old_sk = signature_of(_blank_fn_params(old_s))
@@ -1351,10 +1462,10 @@ def _definition_params(
     new_chunks = _param_chunks(new_s)
     if old_names is None or new_names is None or new_chunks is None:
         return False
-    sl = _find_slice(_bare_names(old_names), fields)
     expected_fields = list(fields)
     body_old = inner_body(old_s)
-    if sl is None:
+    slot = _struct_slot(old_names, new_names, new_chunks, fields, struct)
+    if slot is None:
         steps: dict[str, tuple] = {}
         ult_name, ult_src = _walk_forward(by_name, self_name, old_s, steps)
         if _param_names_of(ult_src) != list(fields) or _bare_names(old_names) != list(fields)[: len(old_names)]:
@@ -1370,19 +1481,18 @@ def _definition_params(
         body_old = inner_body(ult_src)
         sl_index = 0
     else:
-        a, b = sl
-        if new_names[:a] != old_names[:a] or new_names[a + 1 :] != old_names[b:]:
-            return False
-        if not _type_is_struct(new_chunks[a], struct):
-            return False
-        binder = new_names[a]
-        sl_index = a
+        sl_index, binder = slot
     if _is_semi_fn(old_s) and _is_semi_fn(new_s):
         return True
     canon = list((structs or {}).get(struct) or fields)
     allow_rest = list(fields) != canon
+    spellings = {_bare_param(name): name for name in old_names}
     matched = _match_destructure(
-        inner_body(new_s), struct, expected_fields, allow_rest=allow_rest
+        inner_body(new_s),
+        struct,
+        expected_fields,
+        allow_rest=allow_rest,
+        spellings=spellings,
     )
     if matched is None:
         return False
@@ -1465,6 +1575,17 @@ def expand_forwards(src: str, steps: dict[str, tuple], survivor: dict[str, str])
         out.append(src[i])
         i += 1
     return "".join(out)
+
+
+def _rebinds(src: str, end: int, names: list[str]) -> bool:
+    """A field binding is shadowed before `end` (`let` or a closure parameter)."""
+    window = src[:end]
+    for name in names:
+        if re.search(rf"\blet\s+(?:mut\s+)?{re.escape(name)}\b", window):
+            return True
+        if re.search(rf"\|[^|]*\b{re.escape(name)}\b", window):
+            return True
+    return False
 
 
 def _pure_field(expr: str, name: str, binder: str | None) -> bool:
@@ -1562,6 +1683,21 @@ def _subset_calls(
                     end = _scan_balanced(src, j, "(", ")")
                     args = _split_top_commas(src[j + 1 : end - 1])
                     if args and not (len(args) == 1 and not args[0].strip()):
+                        raw_arg = args[0].strip()
+                        passed_binder = bool(
+                            binder
+                            and (
+                                raw_arg == binder
+                                or (
+                                    raw_arg.startswith("&")
+                                    and raw_arg[1:].strip() == binder
+                                )
+                            )
+                        )
+                        if passed_binder and _rebinds(src, j, list(fields)):
+                            out.append(name)
+                            i = k
+                            continue
                         shrunk = _shrink_struct_arg(args[0], struct, list(canon), list(fields), binder)
                         if shrunk is not None:
                             rest = ", ".join(a.strip() for a in args[1:] if a.strip())
@@ -1583,11 +1719,15 @@ def _params_rewrite(
     by_callee: dict[str, tuple[str, list[str]]] | None = None,
     binder: str | None = None,
 ) -> str:
-    """Thread a let, shrink subset calls, then rewrite remaining literals."""
-    src = _INV.expand_threaded_structs(src, structs)
+    """Shrink subset calls, then rewrite literals that are call arguments.
+
+    A `let name = Struct { … }` is not expanded. That arm hid a second
+    use and a statement between the let and the call.
+    """
+    callers = set(by_callee or {})
     if by_callee:
         src = _subset_calls(src, structs, by_callee, binder)
-    return _INV.params_literal_to_args(src, structs)
+    return _INV.params_literal_to_args(src, structs, callers)
 
 
 def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
@@ -1613,6 +1753,8 @@ def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
             return True
     if not structs:
         return False
+    if not _tma_ok_for_params(old_src, new_src):
+        return False
     new_rw = _strip_tma_attr(_params_rewrite(new_src, structs, by_callee, None))
     old_ex = _strip_tma_attr(expand_forwards(old_src, steps, survivor))
     if new_rw == _strip_tma_attr(new_src) and old_ex == _strip_tma_attr(old_src):
@@ -1620,36 +1762,109 @@ def _params_only(old_src: str, new_src: str, ctx: dict) -> bool:
     return _params_norm(new_rw) == _params_norm(old_ex)
 
 
-def _params_norm(src: str) -> str:
-    """Whitespace-insensitive compare for a rewritten call.
+_PARAM_OPS = (
+    "..=",
+    "<<",
+    ">>",
+    "&&",
+    "||",
+    "==",
+    "!=",
+    "<=",
+    ">=",
+    "+=",
+    "-=",
+    "*=",
+    "/=",
+    "%=",
+    "=>",
+    "->",
+    "::",
+    "..",
+)
 
-    rustfmt may wrap a copied argument and insert a trailing comma.
-    String and char literals stay whole. A comma that is not before a
-    closer still counts, so a real argument edit does not match.
+
+def _code_tokens(text: str) -> list[str]:
+    """Tokens of code. Whitespace is not a token. `&&` stays one token."""
+    toks: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        if text[i].isspace():
+            i += 1
+            continue
+        if text.startswith("//", i) and not text.startswith(("///", "//!"), i):
+            j = text.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            i = n if j < 0 else j + 2
+            continue
+        matched = False
+        for op in _PARAM_OPS:
+            if text.startswith(op, i):
+                toks.append(op)
+                i += len(op)
+                matched = True
+                break
+        if matched:
+            continue
+        if text[i].isalnum() or text[i] == "_":
+            j = i + 1
+            while j < n and (text[j].isalnum() or text[j] == "_"):
+                j += 1
+            toks.append(text[i:j])
+            i = j
+            continue
+        toks.append(text[i])
+        i += 1
+    return toks
+
+
+def _drop_call_commas(toks: list[str]) -> list[str]:
+    """Drop a comma before `]` / `}` or the `)` of a call, not of a tuple."""
+    out: list[str] = []
+    stack: list[bool] = []
+    keywords = {"if", "while", "for", "match", "return", "in", "loop"}
+    for tok in toks:
+        if tok == "(":
+            prev = out[-1] if out else ""
+            is_call = bool(prev) and prev not in keywords and (
+                prev[0].isalpha() or prev[0] == "_" or prev in {">", "!"}
+            )
+            stack.append(is_call)
+            out.append(tok)
+            continue
+        if tok in "[{":
+            stack.append(False)
+            out.append(tok)
+            continue
+        if tok in ")]}":
+            is_call = stack.pop() if stack else False
+            if out and out[-1] == "," and (tok in "]}" or (tok == ")" and is_call)):
+                out.pop()
+            out.append(tok)
+            continue
+        out.append(tok)
+    return out
+
+
+def _params_norm(src: str) -> str:
+    """Token compare for a rewritten call or converted body.
+
+    rustfmt may wrap an argument and insert a trailing comma before a
+    call's or a macro's `)` or a `]` / `}`. A one-tuple's `(x,)` keeps
+    its comma. `& &` is not `&&`. String and char literals stay one
+    token, so a call that has a literal in its argument list still sees
+    the matching `)`.
     """
-    parts: list[str] = []
+    toks: list[str] = []
     for is_code, text in _literal_spans(src):
         if not is_code:
-            parts.append(text)
+            toks.append(text)
             continue
-        # Drop `//` comments. Keep `///` text so a doc edit is visible.
-        kept: list[str] = []
-        i, n = 0, len(text)
-        while i < n:
-            if text.startswith("//", i) and not text.startswith(("///", "//!"), i):
-                j = text.find("\n", i)
-                i = n if j < 0 else j
-                continue
-            if text.startswith("/*", i):
-                j = text.find("*/", i + 2)
-                i = n if j < 0 else j + 2
-                continue
-            kept.append(text[i])
-            i += 1
-        code = re.sub(r"\s+", "", "".join(kept))
-        code = re.sub(r",(?=[)\]}])", "", code)
-        parts.append(code)
-    return "".join(parts)
+        toks.extend(_code_tokens(text))
+    return "\0".join(_drop_call_commas(toks))
 
 
 IMPL_START_RE = re.compile(r"^\s*(?:unsafe\s+)?impl\b")
@@ -2425,7 +2640,9 @@ def compare_trees(
         used_new.add(nkey)
 
     if params:
-        unused_params = sorted(k for k in params if k not in used_old)
+        unused_params = sorted(
+            k for k in params if k not in used_old and not _test_helper_key(k)
+        )
         if unused_params:
             raise SystemExit(
                 f"hygiene-fn-diff: --params entry unused: {unused_params[0]}"
@@ -3891,6 +4108,48 @@ def _self_test() -> int:
             )
         n += 1
 
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: Vec<i32>) {}\nfn caller() {\n    g(vec![x, y])\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: Vec<i32>) {}\nfn caller() {\n    g(S { a: vec![x,] })\n}\n",
+        )
+        comma_edit = compare_trees(
+            old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a"])}
+        )
+        if comma_edit["params_only"] != 0 or comma_edit["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a real comma edit inside a copied "
+                f"argument must be changed: {comma_edit}"
+            )
+        _must_red(comma_edit, "real comma edit")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: String) {}\nfn caller() {\n    g(format!(\"a\",))\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: String) {}\nfn caller() {\n    g(S { a: format!(\"a\") })\n}\n",
+        )
+        macro_comma = compare_trees(
+            old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a"])}
+        )
+        evaluate(macro_comma)
+        if macro_comma["params_only"] != 1 or macro_comma["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a trailing comma in a macro call "
+                f"must be params-only: {macro_comma}"
+            )
+        n += 1
+
         # A callee may take a consecutive slice of the struct. `..` covers
         # the fields that function never had. The extra literal fields must
         # be those bindings, and passing the struct value expands to the slice.
@@ -3944,6 +4203,22 @@ def _self_test() -> int:
         n += 1
 
         _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n"
+            "    narrow(S { a, b, c: p.d })\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, b, .. } = p;\n    a + b\n}\n",
+        )
+        foreign = compare_trees(old, new, {}, {}, {}, [], params=slice_map)
+        if foreign["params_only"] != 1 or foreign["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: binder.other_field must be changed: "
+                f"{foreign}"
+            )
+        _must_red(foreign, "binder.other_field")
+        n += 1
+
+        _write_crate(
             old,
             "crates/demo/src/lib.rs",
             "fn wide(a: i32, b: i32, c: i32) -> i32 {\n    narrow(a, b)\n}\n"
@@ -3982,34 +4257,47 @@ def _self_test() -> int:
         _must_red(side, "extra field is not the binding")
         n += 1
 
+        # An ordered subsequence of the struct's fields is params-only.
+        # A reversed destructure stays changed.
+        sub_map = {
+            "demo\twide": ("S", ["a", "b", "c"]),
+            "demo\tnarrow": ("S", ["a", "c"]),
+        }
         _write_crate(
             old,
             "crates/demo/src/lib.rs",
-            "fn wide(a: i32, b: i32, c: i32) {}\nfn narrow(a: i32, c: i32) {}\n",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n    narrow(a, c)\n}\n"
+            "fn narrow(a: i32, c: i32) -> i32 {\n    a + c\n}\n",
         )
-        try:
-            compare_trees(
-                old,
-                new,
-                {},
-                {},
-                {},
-                [],
-                params={
-                    "demo\twide": ("S", ["a", "b", "c"]),
-                    "demo\tnarrow": ("S", ["a", "c"]),
-                },
-            )
-        except SystemExit as exc:
-            if "fields disagree" not in str(exc):
-                raise SystemExit(
-                    f"hygiene-fn-diff --self-test: non-slice fields must disagree: {exc}"
-                )
-            n += 1
-        else:
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n    narrow(p)\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, c, .. } = p;\n    a + c\n}\n",
+        )
+        ordered = compare_trees(old, new, {}, {}, {}, [], params=sub_map)
+        evaluate(ordered)
+        if ordered["params_only"] != 2 or ordered["changed"] != 0:
             raise SystemExit(
-                "hygiene-fn-diff --self-test: a non-consecutive field slice must fail"
+                "hygiene-fn-diff --self-test: an ordered field subsequence must be "
+                f"params-only: {ordered}"
             )
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n    narrow(p)\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { c, a, .. } = p;\n    a + c\n}\n",
+        )
+        reordered = compare_trees(old, new, {}, {}, {}, [], params=sub_map)
+        if reordered["params_only"] != 1 or reordered["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a reversed field subsequence must be "
+                f"changed: {reordered}"
+            )
+        _must_red(reordered, "reversed field subsequence")
+        n += 1
 
         _write_crate(
             old,
@@ -4040,16 +4328,65 @@ def _self_test() -> int:
         _write_crate(
             new,
             "crates/demo/src/lib.rs",
-            "fn g(p: S) -> i32 {\n    #[allow(unused_variables)]\n"
-            "    let S { a, b } = p;\n    b\n}\n",
+            "fn g(p: S) -> i32 {\n    let S { a: _a, b } = p;\n    b\n}\n",
         )
         unused = compare_trees(old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a", "b"])})
         evaluate(unused)
         if unused["params_only"] != 1 or unused["changed"] != 0:
             raise SystemExit(
-                "hygiene-fn-diff --self-test: a leading underscore and an allow "
-                f"on the destructure must be params-only: {unused}"
+                "hygiene-fn-diff --self-test: a field written name: _name must be "
+                f"params-only: {unused}"
             )
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    #[allow(unused_variables)]\n"
+            "    let S { a: _a, b } = p;\n    b\n}\n",
+        )
+        allow_let = compare_trees(
+            old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a", "b"])}
+        )
+        if allow_let["params_only"] != 0 or allow_let["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an allow on the destructure must be "
+                f"changed: {allow_let}"
+            )
+        _must_red(allow_let, "allow on the destructure")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    #[cfg(any())]\n"
+            "    let S { a: _a, b } = p;\n    b\n}\n",
+        )
+        cfg_let = compare_trees(
+            old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a", "b"])}
+        )
+        if cfg_let["params_only"] != 0 or cfg_let["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: cfg on the destructure must be "
+                f"changed: {cfg_let}"
+            )
+        _must_red(cfg_let, "cfg on the destructure")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    let S { a: _g, b } = p;\n    b\n}\n",
+        )
+        wrong_under = compare_trees(
+            old, new, {}, {}, {}, [], params={"demo\tg": ("S", ["a", "b"])}
+        )
+        if wrong_under["params_only"] != 0 or wrong_under["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: name: _g for an old _name must be "
+                f"changed: {wrong_under}"
+            )
+        _must_red(wrong_under, "field spelling is not the old parameter")
         n += 1
 
         _write_crate(
@@ -4091,6 +4428,488 @@ def _self_test() -> int:
                 f"too_many_arguments must stay identical: {split_allow}"
             )
         n += 1
+
+        # Token compare, mapped calls only, no threaded let, no shadow.
+        pair = {"demo\tg": ("S", ["a", "b"])}
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    h((z,))\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n    h((z))\n}\n",
+        )
+        one_tuple = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if one_tuple["params_only"] != 0 or one_tuple["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a one-tuple comma beside a converted "
+                f"call must be changed: {one_tuple}"
+            )
+        _must_red(one_tuple, "one-tuple comma dropped")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    h(p & & q())\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n    h(p && q())\n}\n",
+        )
+        amp = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if amp["params_only"] != 0 or amp["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: & & beside a converted call must be "
+                f"changed: {amp}"
+            )
+        _must_red(amp, "& & merged into &&")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) -> i32 {\n    (a,)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    let S { a, b } = p;\n    (a)\n}\n",
+        )
+        def_tuple = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if def_tuple["params_only"] != 0 or def_tuple["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a one-tuple comma in a converted body "
+                f"must be changed: {def_tuple}"
+            )
+        _must_red(def_tuple, "one-tuple comma in a converted body")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: bool, b: bool) -> bool {\n    a & & b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> bool {\n    let S { a, b } = p;\n    a && b\n}\n",
+        )
+        def_amp = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if def_amp["params_only"] != 0 or def_amp["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: & & in a converted body must be "
+                f"changed: {def_amp}"
+            )
+        _must_red(def_amp, "& & in a converted body")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    keep(vec![x, y])\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n"
+            "    keep(vec![S { a: x, b: y }])\n}\n",
+        )
+        vec_lit = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if vec_lit["params_only"] != 0 or vec_lit["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a struct literal inside vec! must be "
+                f"changed: {vec_lit}"
+            )
+        _must_red(vec_lit, "struct literal inside vec!")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    dbg!((x, y))\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n"
+            "    dbg!((S { a: x, b: y }))\n}\n",
+        )
+        dbg_lit = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if dbg_lit["params_only"] != 0 or dbg_lit["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a struct literal inside dbg! must be "
+                f"changed: {dbg_lit}"
+            )
+        _must_red(dbg_lit, "struct literal inside dbg!")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    h(x, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n"
+            "    h(S { a: x, b: y })\n}\n",
+        )
+        unmapped = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if unmapped["params_only"] != 0 or unmapped["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an unmapped call's struct literal must "
+                f"be changed: {unmapped}"
+            )
+        _must_red(unmapped, "unmapped call")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(next(), y);\n    g(next(), y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    let p = S { a: next(), b: y };\n"
+            "    g(&p);\n    g(&p)\n}\n",
+        )
+        twice = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if twice["params_only"] != 0 or twice["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a threaded let used twice must be "
+                f"changed: {twice}"
+            )
+        _must_red(twice, "threaded let used twice")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    bar();\n    g(x(), y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    let p = S { a: x(), b: y };\n"
+            "    bar();\n    g(&p)\n}\n",
+        )
+        between = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if between["params_only"] != 0 or between["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a statement between a threaded let and "
+                f"the call must be changed: {between}"
+            )
+        _must_red(between, "statement between threaded let and call")
+        n += 1
+
+        shadow_map = {
+            "demo\twide": ("S", ["a", "b", "c"]),
+            "demo\tnarrow": ("S", ["a", "b"]),
+        }
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n    let a = 5;\n    narrow(a, b)\n}\n"
+            "fn narrow(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n    let a = 5;\n"
+            "    narrow(p)\n}\n"
+            "fn narrow(p: S) -> i32 {\n    let S { a, b, .. } = p;\n    a + b\n}\n",
+        )
+        shadow = compare_trees(old, new, {}, {}, {}, [], params=shadow_map)
+        if shadow["params_only"] != 1 or shadow["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a shadowed field before a binder call "
+                f"must be changed: {shadow}"
+            )
+        _must_red(shadow, "shadowed field before binder call")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "#[allow(clippy::too_many_arguments)]\nfn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "#[expect(clippy::too_many_arguments, unsafe_code, dead_code)]\n"
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        extra_lint = compare_trees(old, new, {}, {}, {}, [])
+        if extra_lint["identical"] != 0 or extra_lint["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a lint added inside expect must be "
+                f"changed: {extra_lint}"
+            )
+        _must_red(extra_lint, "lint added inside expect")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        removed_attr = compare_trees(old, new, {}, {}, {}, [])
+        if removed_attr["identical"] != 0 or removed_attr["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a removed too_many_arguments attribute "
+                f"must be changed: {removed_attr}"
+            )
+        _must_red(removed_attr, "too_many_arguments attribute removed")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "#[allow(clippy::too_many_arguments, clippy::unwrap_used)]\n"
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        added_lints = compare_trees(old, new, {}, {}, {}, [])
+        if added_lints["identical"] != 0 or added_lints["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an added too_many_arguments attribute "
+                f"must be changed: {added_lints}"
+            )
+        _must_red(added_lints, "too_many_arguments attribute added")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g() {\n    a()\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g() {\n    #[allow(clippy::too_many_arguments)]\n    a()\n}\n",
+        )
+        body_attr = compare_trees(old, new, {}, {}, {}, [])
+        if body_attr["identical"] != 0 or body_attr["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an allow on a body statement must be "
+                f"changed: {body_attr}"
+            )
+        _must_red(body_attr, "allow on a body statement")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "#[allow(clippy::needless_pass_by_value)]\nfn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        sibling_add = compare_trees(old, new, {}, {}, {}, [])
+        if sibling_add["identical"] != 0 or sibling_add["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a sibling allow added to a function "
+                f"without too_many_arguments must be changed: {sibling_add}"
+            )
+        _must_red(sibling_add, "sibling allow added")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "#[allow(clippy::too_many_arguments)]\n"
+            "#[allow(clippy::needless_pass_by_value)]\n"
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "#[expect(clippy::too_many_arguments, reason = \"kept\")]\n"
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        sibling_drop = compare_trees(old, new, {}, {}, {}, [])
+        if sibling_drop["identical"] != 0 or sibling_drop["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a sibling allow removed must be "
+                f"changed: {sibling_drop}"
+            )
+        _must_red(sibling_drop, "sibling allow removed")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "#[allow(dead_code, clippy::too_many_arguments)]\n"
+            "fn g(a: i32) -> i32 {\n    a\n}\n",
+        )
+        combined_allow = compare_trees(old, new, {}, {}, {}, [])
+        if combined_allow["identical"] != 0 or combined_allow["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: dead_code added beside "
+                f"too_many_arguments must be changed: {combined_allow}"
+            )
+        _must_red(combined_allow, "dead_code added beside too_many_arguments")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "#[allow(clippy::too_many_arguments)]\n"
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    let S { a, b } = p;\n    a + b\n}\n",
+        )
+        dropped_tma = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        evaluate(dropped_tma)
+        if dropped_tma["params_only"] != 1 or dropped_tma["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: dropping too_many_arguments in a "
+                f"conversion must be params-only: {dropped_tma}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]\n"
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(p: S) -> i32 {\n    let S { a, b } = p;\n    a + b\n}\n",
+        )
+        dropped_sibling = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if dropped_sibling["params_only"] != 0 or dropped_sibling["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: dropping a sibling lint in a "
+                f"conversion must be changed: {dropped_sibling}"
+            )
+        _must_red(dropped_sibling, "sibling lint dropped in a conversion")
+        n += 1
+
+        nest = {
+            "demo\tg": ("S", ["a", "b"]),
+            "demo\tkeep": ("T", ["c", "d"]),
+        }
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn keep(c: i32, d: i32) -> i32 {\n    c + d\n}\n"
+            "fn g(a: i32, b: i32) -> i32 {\n    a + b\n}\n"
+            "fn caller() {\n    g(x, keep(y, z))\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn keep(q: T) -> i32 {\n    let T { c, d } = q;\n    c + d\n}\n"
+            "fn g(p: S) -> i32 {\n    let S { a, b } = p;\n    a + b\n}\n"
+            "fn caller() {\n    g(S { a: x, b: keep(T { c: y, d: z }) })\n}\n",
+        )
+        nested = compare_trees(old, new, {}, {}, {}, [], params=nest)
+        evaluate(nested)
+        if nested["params_only"] != 3 or nested["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a nested struct literal must be "
+                f"params-only: {nested}"
+            )
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn keep(q: T) -> i32 {\n    let T { c, d } = q;\n    c + d\n}\n"
+            "fn g(p: S) -> i32 {\n    let S { a, b } = p;\n    a + b\n}\n"
+            "fn caller() {\n    g(S { a: x, b: keep(T { d: z, c: y }) })\n}\n",
+        )
+        nested_swap = compare_trees(old, new, {}, {}, {}, [], params=nest)
+        if nested_swap["params_only"] != 2 or nested_swap["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a swapped nested literal must be "
+                f"changed: {nested_swap}"
+            )
+        _must_red(nested_swap, "swapped nested literal")
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(x, y);\n    keep(vec![w, x, y])\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn g(a: i32, b: i32) {}\nfn caller() {\n    g(S { a: x, b: y });\n"
+            "    keep(vec![w, &S { a: x, b: y }])\n}\n",
+        )
+        vec_borrow = compare_trees(old, new, {}, {}, {}, [], params=pair)
+        if vec_borrow["params_only"] != 0 or vec_borrow["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: &Struct inside vec! must be changed: "
+                f"{vec_borrow}"
+            )
+        _must_red(vec_borrow, "&Struct inside vec!")
+        n += 1
+
+        helper_map = {"demo\ttests::helper": ("S", ["a", "b"])}
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn caller() {\n    helper(x, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn caller() {\n    helper(S { a: x, b: y })\n}\n",
+        )
+        helper = compare_trees(old, new, {}, {}, {}, [], params=helper_map)
+        evaluate(helper)
+        if helper["params_only"] != 1 or helper["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a tests:: helper call must be "
+                f"params-only: {helper}"
+            )
+        n += 1
+
+        try:
+            compare_trees(
+                old,
+                new,
+                {},
+                {},
+                {},
+                [],
+                params={"demo\tmissing": ("S", ["a", "b"])},
+            )
+        except SystemExit as exc:
+            if "missing in old tree" not in str(exc):
+                raise SystemExit(
+                    f"hygiene-fn-diff --self-test: a missing params key must say so: {exc}"
+                )
+            n += 1
+        else:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a missing params key must fail"
+            )
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
     if suffixed:
