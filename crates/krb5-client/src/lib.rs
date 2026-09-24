@@ -130,8 +130,12 @@ pub fn kinit(
 
 /// Options for [`kinit_ex`] and [`kinit_to_spec`].
 ///
-/// MIT `krb5_get_init_creds_opt` (`include/krb5/krb5.hin:6839-6851`).
+/// MIT keeps the option block in `krb5_get_init_creds_opt`
+/// (`include/krb5/krb5.hin:6839-6851`) and its `extended_options`
+/// (`lib/krb5/krb/gic_opt.c:19-32`): `fast_ccache_name` is the armor
+/// ccache, and `preauth_data` carries the PKINIT identity and anchors.
 /// `service` is `krb5_get_init_creds_password`'s `in_tkt_service`.
+/// SPAKE and enterprise are request flags, not fields of that struct.
 #[derive(Clone, Copy)]
 pub struct InitCredsOpt<'a> {
     /// Optional TGS service (`-S` or positional).
