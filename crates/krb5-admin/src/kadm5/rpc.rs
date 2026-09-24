@@ -412,7 +412,7 @@ pub(super) fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
 /// MIT `struct rpc_msg` and `struct call_body`
 /// (`include/gssrpc/rpc_msg.h:138,150`).
 #[derive(Clone, Copy)]
-pub struct RpcCallId {
+pub(crate) struct RpcCallId {
     /// Transaction id (`rpc_msg.xid`).
     pub xid: u32,
     /// Remote program number.

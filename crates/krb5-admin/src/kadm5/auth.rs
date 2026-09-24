@@ -190,7 +190,6 @@ pub(super) fn handle_rpcsec_gss(
                 proc,
                 &kadm_args,
                 iprop,
-                expected_realm,
                 &mic,
                 gcred.seq_num,
                 addr,
@@ -247,12 +246,16 @@ fn rpcsec_dispatch(
     proc: u32,
     kadm_args: &[u8],
     iprop: bool,
-    expected_realm: &str,
     mic: &[u8],
     seq: u32,
     addr: &str,
 ) -> Vec<u8> {
-    let RpcCtx { store, acl, .. } = ctx;
+    let RpcCtx {
+        store,
+        acl,
+        expected_realm,
+        ..
+    } = ctx;
     let Some(actor) = gd.ctx.client.clone() else {
         return rpc_reply_weakauth(xid);
     };

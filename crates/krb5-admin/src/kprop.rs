@@ -574,9 +574,9 @@ pub fn kpropd_send_ack(
 pub struct KpropdConfig<'a> {
     /// Host keys that accept the kprop `sendauth`.
     pub host_keys: &'a [ProtocolKey],
-    /// Expected kprop client principal, when the caller set one.
+    /// AP-REQ server principal kpropd checks (`ApVerifyParams.expected_server`).
     pub expected_server: Option<&'a PrincipalName>,
-    /// Expected client realm, when the caller set one.
+    /// AP-REQ server realm kpropd checks (`ApVerifyParams.expected_realm`).
     pub expected_realm: Option<&'a str>,
     /// Master password that decrypts the dump.
     pub master_password: &'a [u8],
