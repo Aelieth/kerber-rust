@@ -103,6 +103,9 @@ this project uses semantic versioning once a crate is published.
   was 73. A `::tests::` key names a helper the product judge does not
   extract; its calls still rewrite. Self-test counts are fn-diff 119,
   body-diff 39, inventory 3.
+- **tool.** A field the old signature did not keep next to the others
+  is put back at that argument index when the struct argument is
+  rewritten. `hygiene-fn-diff` self-test count is 120.
 
 ### W3-S3.8 dead code and surface
 

@@ -117,8 +117,9 @@ destructure `let` carries no attribute. One struct's map entries may
 name an ordered subsequence of its longest field list, for a function
 that never took the other fields: the destructure then ends with `..`,
 a call still names every field, and the rewrite keeps that function's
-fields. A reversed field order stays `changed`. Passing the struct
-binding does the same. An extra field whose expression is not that
+fields. A reversed field order stays `changed`. A field the old signature
+did not keep next to the others is written back at that argument
+index. Passing the struct binding does the same. An extra field whose expression is not that
 binding, and not a field read of the struct value, stays `changed`.
 `#[allow(L…)]` and `#[expect(L…, reason = "…")]` are identical only
 when the lint set is the same, including a sibling lint kept on its

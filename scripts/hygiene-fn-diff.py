@@ -1411,7 +1411,8 @@ def prepare_params(
         if key not in old:
             if _test_helper_key(key):
                 # fn-diff skips `/tests/`. The helper's calls are still rewritten.
-                by_callee[key.split("\t", 1)[-1].split("::")[-1]] = (struct, list(fields))
+                name = key.split("\t", 1)[-1].split("::")[-1]
+                by_callee[name] = (struct, list(fields), list(fields))
                 continue
             raise SystemExit(f"hygiene-fn-diff: --params key missing in old tree: {key}")
         names = _param_names_of(old[key]["src"])
@@ -1419,8 +1420,9 @@ def prepare_params(
             raise SystemExit(
                 f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
             )
-        if _ordered_subseq(_bare_names(names), fields):
-            by_callee[old[key]["name"]] = (struct, list(fields))
+        bare = _bare_names(names)
+        if _ordered_subseq(bare, fields):
+            by_callee[old[key]["name"]] = (struct, list(fields), bare)
             continue
         ult_name, ult_src = _walk_forward(by_name, old[key]["name"], old[key]["src"], steps)
         ult_names = _param_names_of(ult_src)
@@ -1429,7 +1431,7 @@ def prepare_params(
                 f"hygiene-fn-diff: --params field order disagrees with signature: {key}"
             )
         survivor[ult_name] = old[key]["name"]
-        by_callee[old[key]["name"]] = (struct, list(fields))
+        by_callee[old[key]["name"]] = (struct, list(fields), _bare_names(names))
     for key, rec in old.items():
         if key in new or key in moves or rec["name"] in steps:
             continue
@@ -1604,11 +1606,11 @@ def _shrink_struct_arg(
     canon: list[str],
     fields: list[str],
     binder: str | None,
-) -> str | None:
-    """A full struct literal, or the struct binding, as this callee's fields."""
+) -> list[str] | None:
+    """Field expressions for this callee, from a literal or the struct binding."""
     raw = arg.strip()
     if binder and (raw == binder or (raw.startswith("&") and raw[1:].strip() == binder)):
-        return ", ".join(fields)
+        return list(fields)
     body = raw[1:].strip() if raw.startswith("&") else raw
     m = re.match(
         r"(?:[A-Za-z_][A-Za-z0-9_]*\s*::\s*)*([A-Za-z_][A-Za-z0-9_]*)\s*\{",
@@ -1625,8 +1627,34 @@ def _shrink_struct_arg(
     for name, expr in zip(canon, exprs):
         if name not in fields and not _pure_field(expr, name, binder):
             return None
-    chosen = [exprs[canon.index(name)].strip() for name in fields]
-    return ", ".join(chosen)
+    return [exprs[canon.index(name)].strip() for name in fields]
+
+
+def _interleave_args(
+    old_names: list[str], fields: list[str], chosen: list[str], new_args: list[str]
+) -> str | None:
+    """Put each folded field back where the old signature had it.
+
+    `new_args[0]` is the struct argument. The rest are the parameters
+    that stayed positional, in their old order. A field that was not
+    next to the others (`store`, `acl`, then later `expected_realm`)
+    is inserted at that old index instead of beside the struct.
+    """
+    expr = dict(zip(fields, chosen))
+    rest = [arg for arg in new_args[1:] if arg]
+    index = 0
+    out: list[str] = []
+    for name in old_names:
+        if name in expr:
+            out.append(expr[name])
+            continue
+        if index >= len(rest):
+            return None
+        out.append(rest[index])
+        index += 1
+    if index != len(rest):
+        return None
+    return ", ".join(out)
 
 
 def _subset_calls(
@@ -1677,7 +1705,7 @@ def _subset_calls(
                 and j < n
                 and src[j] == "("
             ):
-                struct, fields = spec
+                struct, fields, old_names = spec
                 canon = structs.get(struct) or fields
                 if list(fields) != list(canon):
                     end = _scan_balanced(src, j, "(", ")")
@@ -1698,10 +1726,23 @@ def _subset_calls(
                             out.append(name)
                             i = k
                             continue
-                        shrunk = _shrink_struct_arg(args[0], struct, list(canon), list(fields), binder)
-                        if shrunk is not None:
-                            rest = ", ".join(a.strip() for a in args[1:] if a.strip())
-                            rendered = shrunk if not rest else f"{shrunk}, {rest}"
+                        chosen = _shrink_struct_arg(
+                            args[0], struct, list(canon), list(fields), binder
+                        )
+                        if chosen is not None:
+                            bits = [a.strip() for a in args]
+                            if old_names and fields and old_names[0] == fields[0]:
+                                rendered = _interleave_args(
+                                    old_names, list(fields), chosen, bits
+                                )
+                            else:
+                                rest = ", ".join(a for a in bits[1:] if a)
+                                head = ", ".join(chosen)
+                                rendered = head if not rest else f"{head}, {rest}"
+                            if rendered is None:
+                                out.append(name)
+                                i = k
+                                continue
                             out.append(f"{name}({rendered})")
                             i = end
                             continue
@@ -4284,6 +4325,40 @@ def _self_test() -> int:
             )
         n += 1
 
+        # A field that was not next to the others goes back to its old index.
+        gap_map = {
+            "demo\twide": ("S", ["a", "b", "c"]),
+            "demo\tg": ("S", ["a", "c"]),
+        }
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n    g(a, 1, c)\n}\n"
+            "fn g(a: i32, mid: i32, c: i32) -> i32 {\n    a + mid + c\n}\n"
+            "fn caller() {\n    g(x, m, y)\n}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn wide(p: S) -> i32 {\n    let S { a, b, c } = p;\n    g(p, 1)\n}\n"
+            "fn g(p: S, mid: i32) -> i32 {\n    let S { a, c, .. } = p;\n    a + mid + c\n}\n"
+            "fn caller() {\n    g(S { a: x, b, c: y }, m)\n}\n",
+        )
+        gap = compare_trees(old, new, {}, {}, {}, [], params=gap_map)
+        evaluate(gap)
+        if gap["params_only"] != 3 or gap["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a non-adjacent field must return to "
+                f"its old argument index: {gap}"
+            )
+        n += 1
+
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn wide(a: i32, b: i32, c: i32) -> i32 {\n    narrow(a, c)\n}\n"
+            "fn narrow(a: i32, c: i32) -> i32 {\n    a + c\n}\n",
+        )
         _write_crate(
             new,
             "crates/demo/src/lib.rs",
