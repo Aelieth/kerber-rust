@@ -107,6 +107,34 @@ this project uses semantic versioning once a crate is published.
   is put back at that argument index when the struct argument is
   rewritten. `hygiene-fn-diff` self-test count is 120.
 
+Residues of this item are under W3-S3.10-R.
+
+### W3-S3.10-R residues
+
+- **krb5-admin.** Three `RpcCtx` functions keep `too_many_arguments`:
+  `handle_rpcsec_gss`, `handle_auth_gssapi`, and `rpcsec_dispatch`.
+  `rpcsec_dispatch` reads `expected_realm` from the context. `RpcCtx`
+  is the per-connection server context; MIT keeps the store and ACL as
+  kadmind globals beside `kadm5_server_handle_rec`. No wire or text
+  change.
+- **krb5-kdc.** `MintTicket` is `pub(super)`. The crate-root re-export
+  is gone. No wire or text change.
+- **krb5-admin.** `RpcCallId` is `pub(crate)`. The crate-root re-export
+  is gone. No wire or text change.
+- **krb5-kdc.** The nine `unused_variables` allows on preauth
+  destructures are gone. A field the old parameter spelled `_name` is
+  written `name: _name`. No wire or text change.
+- **krb5-admin.** `KpropdConfig`'s `expected_server` and
+  `expected_realm` are the AP-REQ server principal and realm
+  (`kprop/kpropd.c:127-143`), not the client's. No wire or text change.
+- **krb5-client.** `InitCredsOpt` also cites `extended_options`
+  (`lib/krb5/krb/gic_opt.c:19-32`). SPAKE and enterprise are request
+  flags. No wire or text change.
+- **tool.** Nested struct literals are rewritten before the body
+  compare. `allow` counts outer `#[allow(`, inner `#![allow(`, and
+  `#[expect(`; at `e48c0371` that is 80 where the outer-only count was
+  73.
+
 ### W3-S3.8 dead code and surface
 
 - **krb5-tools.** `tgt_hex_must_use_ticket_etype_not_preferred` lives
