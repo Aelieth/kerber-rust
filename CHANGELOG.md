@@ -103,6 +103,9 @@ this project uses semantic versioning once a crate is published.
   without that print. `KeyExpChange` is not an added item when it
   does not print. A different string, `password_expired: true`, or an
   `eprintln!` in that impl stays red. No product behaviour change.
+- **log.** The pure doctests live on the crate docs. The event
+  strings, the authdata fields, and the binary stderr lines are
+  unchanged. rustfmt drops the blank lines that move left behind.
 
 ### W3-S3.10 parameter structs
 
