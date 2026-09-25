@@ -371,6 +371,8 @@ pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
     unsigned_signeddata_econtent(der)
 }
 
+/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1668-1670`): a message type with no content OID produces no ContentInfo.
+/// The encapsulated content is returned without checking a signer, so the bytes are not an authenticated pack.
 fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
     let (tag, ci, _) = take_tlv(der)?;
     if tag != 0x30 {
@@ -655,6 +657,8 @@ struct TbsWalk<'a> {
     extensions: Option<&'a [u8]>,
 }
 
+/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1668-1670`): a content type that is not recognized produces no object.
+/// A certificate that is not a sequence yields no issuer or validity, and an optional version is skipped rather than read as the serial.
 fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
     let (t, body, _) = take_tlv(cert)?;
     if t != 0x30 {
@@ -841,6 +845,8 @@ fn cert_pkinit_san(cert: &[u8]) -> Option<(String, Vec<String>)> {
     out
 }
 
+/// MIT `pkinit_client_cert_match` (`pkinit_matching.c:728-731`): a rule that does not parse leaves the certificate unmatched.
+/// A realm that is not a string, or a name that is not the principal-name tag, is not a principal.
 fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
     let seq = if der.first() == Some(&0x30) {
         take_tlv(der)?.1
@@ -963,6 +969,8 @@ struct CmsParts {
     e_content_type: Vec<u8>,
 }
 
+/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1668-1670`): a message type with no content OID produces no ContentInfo.
+/// A body that is not SignedData is not a certificate list or a set of signers.
 fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     let (tag, ci, _) = take_tlv(der).ok_or("cms")?;
     if tag != 0x30 {

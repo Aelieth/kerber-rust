@@ -65,6 +65,9 @@ this project uses semantic versioning once a crate is published.
 - **config.** The profile parser states that an include is a directive
   only at the start of a line, and that the first value of a key wins.
   No behaviour change.
+- **types.** The ten long functions state when a parse is not a
+  principal, a duration, a transit path, or a certificate. No
+  behaviour change.
 
 ### W3-S3.10 parameter structs
 

@@ -1229,6 +1229,8 @@ pub fn parse_kerb_validation_info(data: &[u8]) -> Result<KerbValidationInfo, Pac
     })
 }
 
+/// MIT `k5_pac_add_buffer` (`pac.c:102-102`): a buffer just added is not a verified PAC.
+/// The six FILETIME fields are written before the string bodies, so a reader that stops at the header does not see the names as times.
 fn encode_kerb_validation_info(info: &KerbValidationInfo) -> Vec<u8> {
     let mut w = NdrW::default();
     w.u8(1);

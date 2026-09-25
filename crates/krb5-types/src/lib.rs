@@ -1400,6 +1400,8 @@ fn escape_transit_realm(realm: &str) -> String {
     out
 }
 
+/// MIT `krb5_check_transited_list` (`chk_trans.c:326-327`): an empty transit list is not a failure.
+/// More commas than the realm cap is an error, not a truncated path.
 fn expand_domain_x500(raw: &[u8], crealm: &str, srealm: &str) -> Result<Vec<String>, TransitError> {
     let raw = strip_trailing_nul(raw);
     if raw.is_empty() {
@@ -1508,6 +1510,8 @@ fn push_hop(out: &mut Vec<String>, hop: String) -> Result<(), TransitError> {
     Ok(())
 }
 
+/// MIT `rtree_hier_tree` (`walk_rtree.c:358-361`): a hierarchy that cannot be built returns the error and no tree.
+/// Two names of equal length add no hop unless they are the same name, and a domain hop is emitted only when the longer name ends with the shorter one.
 fn process_intermediates(n1: &str, n2: &str, out: &mut Vec<String>) -> Result<(), TransitError> {
     let (short, long) = if n1.len() > n2.len() {
         (n2, n1)
