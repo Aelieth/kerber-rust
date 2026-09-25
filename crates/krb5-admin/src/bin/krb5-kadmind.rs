@@ -28,6 +28,7 @@ use krb5_kdc::{
 use krb5_protocol::ReplayCache;
 
 fn main() {
+    krb5_admin::set_kadm5_error_hook(print_kadm5_error);
     let _ = tracing_subscriber::fmt()
         .json()
         .with_env_filter(
@@ -249,4 +250,8 @@ fn load_acl(conf: Option<&krb5_config::KdcConf>, realm: &str, db: &Path, stash: 
         }
         std::process::exit(1);
     })
+}
+
+fn print_kadm5_error(msg: &str) {
+    eprintln!("kadm5: {msg}");
 }

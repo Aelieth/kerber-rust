@@ -91,6 +91,8 @@ this project uses semantic versioning once a crate is published.
   No wire change.
 - **client.** `krb5-kinit` prints the key-expiry banner. The library
   does not. `client-gate` checks that stderr line.
+- **admin.** `krb5-kadmind` prints `kadm5: {error}`. The library does
+  not. `kadmin-rust-gate` checks that line.
 
 ### W3-S3.10 parameter structs
 

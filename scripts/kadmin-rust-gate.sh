@@ -566,6 +566,24 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+echo "==== kadmind stderr names an RPC decode failure ===="
+docker exec "$NAME" python3 -c '
+import socket, struct
+s = socket.create_connection(("127.0.0.1", 749), 2)
+s.sendall(struct.pack(">I", 0x80000000 | 1) + b"\x00")
+s.close()
+'
+kadm_err=""
+for _ in $(seq 1 40); do
+    kadm_err="$(docker exec "$NAME" grep -F 'kadm5: rpc garbage args' /tmp/kadmind.log || true)"
+    if [ -n "$kadm_err" ]; then
+        break
+    fi
+    sleep 0.1
+done
+echo "$kadm_err"
+test -n "$kadm_err"
+
 echo "==== Rust kadmind AUTH_NONE is AUTH_TOOWEAK ===="
 kadmind_auth_too_weak "$NAME"
 echo "==== Rust kadmind RPC PROG_UNAVAIL / PROG_MISMATCH / REPLY ===="

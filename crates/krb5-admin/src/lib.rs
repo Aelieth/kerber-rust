@@ -24,7 +24,7 @@ use thiserror::Error;
 pub use kadm5::{
     IpropLast, IpropPull, Kadm5RpcSession, RpcCtx, changepw_acceptor, check_auth_gssapi_names,
     check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok, iprop_fullresync, iprop_pull,
-    kadm5_handle_rpc, serve_kadm5_conn,
+    kadm5_handle_rpc, serve_kadm5_conn, set_kadm5_error_hook,
 };
 pub use kprop::{
     IpropPoll, KpropAuth, KpropdConfig, iprop_poll_once, kprop_dump_bytes, kprop_dump_iprop,

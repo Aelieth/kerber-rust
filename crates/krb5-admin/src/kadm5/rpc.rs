@@ -78,7 +78,7 @@ pub fn serve_kadm5_conn(
                     outcome = "error",
                     error = %e,
                 );
-                eprintln!("kadm5: {e}");
+                emit_kadm5_error(&e.to_string());
                 return Err(io::Error::other(e.to_string()));
             }
         };
@@ -452,4 +452,24 @@ pub(super) fn rpc_call_bytes(
     w.opaque(verf);
     w.b.extend_from_slice(args);
     w.b
+}
+
+static KADM5_ERROR_HOOK: std::sync::Mutex<Option<fn(&str)>> = std::sync::Mutex::new(None);
+
+/// Install the function `krb5-kadmind` uses to write `kadm5: {error}`.
+///
+/// The library calls it and does not write that line itself.
+pub fn set_kadm5_error_hook(hook: fn(&str)) {
+    *KADM5_ERROR_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(hook);
+}
+
+fn emit_kadm5_error(msg: &str) {
+    let hook = *KADM5_ERROR_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(hook) = hook {
+        hook(msg);
+    }
 }
