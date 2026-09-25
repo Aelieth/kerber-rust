@@ -102,6 +102,20 @@ brace-less `const` / `static` / `type`, with a vis-stripped rest),
 `vis-widen` (`pub(crate)` / `pub(super)` → bare `pub`, or private →
 any `pub`; counted and listed, red unless `--accept` gives a reason,
 never folded into `vis-only`), `fmt-only`, `doc-only`, `params-only`, or `changed`.
+`krb5_log::events::NAME` compares equal to the `&str` that const is
+defined as, so naming an unchanged event string is `identical` (or
+`doc-only` when only docs differ). A tracing call that only gains
+`event`, `correlation_id`, `component`, and `outcome` compares equal
+to the call without those fields; any other field or a different
+message stays `changed`. The key-expiry banner `if` and
+`if let Err(e) = … { eprintln!("kadm5: {e}"); }` compare equal to the
+caller without that print. A `password_expired: bool` field, and a
+`password_expired: false` literal, compare equal to the item without
+them; `password_expired: true` stays `changed`. A new `&str` const in
+`events` is not `added` when a paired body uses it in place of that
+literal; a different value stays `added`. `KeyExpChange` and its
+`Display` / `Debug` / `Error` impls are not `added` when they do not
+print; an `eprintln!` in that impl stays `added`.
 Doc-stripping uses that same class, and only from visibility tokens
 in code: a `pub(crate)` that appears only inside a `///` comment is
 not a token. `pub` inside an identifier such as `pubkey` is not a

@@ -97,6 +97,12 @@ this project uses semantic versioning once a crate is published.
   `serve_kadm5_conn` returns the RPC error. The library logs
   `tracing::error!` and does not print. `kadmin-rust-gate` checks
   that line.
+- **tool.** `hygiene-fn-diff` treats an event const as its string,
+  a tracing call that only gains the four foundation fields as the
+  same call, and the binary key-expiry / `kadm5:` print as the caller
+  without that print. `KeyExpChange` is not an added item when it
+  does not print. A different string, `password_expired: true`, or an
+  `eprintln!` in that impl stays red. No product behaviour change.
 
 ### W3-S3.10 parameter structs
 
