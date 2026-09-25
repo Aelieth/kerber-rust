@@ -3013,6 +3013,7 @@ HYGIENE_INVENTORY_MIN_CASES = 3
 # S4 advisory baseline at 0d5fa7f4. A later commit that removes a hit
 # lowers this constant in the same commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 728
+PROCESS_TAG_ALLOW = 117
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
     "scripts/lib/prod-realm-common.sh",
@@ -6056,6 +6057,42 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(anchor_root)], check=False)
 
+    tag_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        src = tag_root / "crates" / "demo" / "src"
+        src.mkdir(parents=True)
+        good = src / "lib.rs"
+        good.write_text("// the parent principal stays\n", encoding="utf-8")
+        check_no_process_history(tag_root, allow=0)
+        good.write_text('fn f() {\n    let s = "// R12 in a string";\n}\n', encoding="utf-8")
+        check_no_process_history(tag_root, allow=0)
+        tagged = {
+            "R12": "// R12 left the suppression\n",
+            "A-prime": "// A\u2032-3 item 14\n",
+            "W0": "// W0e H7\n",
+            "W1": "// W1-Z follow-up\n",
+            "Round": "// Round 2\n",
+            "parent": "// parent abcdef0\n",
+            "R2-S3": "// limit (R2-S3).\n",
+            "B3": "// referral (B3).\n",
+            "Y0": "// the Y0 mismatch\n",
+            "Z": "// before Z6.3 the wire code was 60\n",
+        }
+        for body in tagged.values():
+            good.write_text(body, encoding="utf-8")
+            _must_die_msg(
+                "process-history lines 1 != allow 0",
+                check_no_process_history,
+                tag_root,
+                allow=0,
+            )
+        good.write_text(tagged["B3"], encoding="utf-8")
+        check_no_process_history(tag_root, allow=1)
+        if len(tagged) != 10:
+            _die("process-history fixtures dropped a tag")
+    finally:
+        subprocess.run(["rm", "-rf", str(tag_root)], check=False)
+
 
 # W1-K M2b: after the differential oracle's whitelist mechanism is deleted, no
 # case may be excused by name. Ban the mechanism identifiers from the diffsend
@@ -6216,6 +6253,48 @@ def check_mit_anchor_form(
         )
 
 
+_PROCESS_TAG = re.compile(
+    r"\bR[0-9]+\b"
+    r"|A\u2032-[0-9]"
+    r"|W0[a-f]"
+    r"|W1-[A-Z]"
+    r"|Round [0-9]"
+    r"|parent [0-9a-f]{7}"
+    r"|R[0-9]-[A-Z][0-9]+"
+    r"|\bB3\b"
+    r"|\bY0\b"
+    r"|Z[0-9]b?\.[0-9]"
+)
+
+
+def process_tag_violations(root: pathlib.Path | None = None) -> list[str]:
+    """Process-history tags on `//` comments under `crates/`."""
+    root = ROOT if root is None else root
+    bad: list[str] = []
+    for path in _rs_under(root, None):
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(root)
+        for lineno, comment in _comment_lines(text):
+            if _PROCESS_TAG.search(comment):
+                bad.append(f"{rel}:{lineno}:{comment.strip()[:160]}")
+    return bad
+
+
+def check_no_process_history(
+    root: pathlib.Path | None = None, *, allow: int | None = None
+) -> None:
+    """No process-history tag in a `crates/` comment. Advisory until allow is 0."""
+    if allow is None:
+        allow = PROCESS_TAG_ALLOW
+    bad = process_tag_violations(ROOT if root is None else root)
+    if len(bad) != allow:
+        sample = "; ".join(bad[:6])
+        _die(
+            f"process-history lines {len(bad)} != allow {allow}"
+            + (f": {sample}" if sample else "")
+        )
+
+
 def main() -> None:
     _self_test()
     if not WORKFLOWS.is_dir():
@@ -6294,6 +6373,7 @@ def main() -> None:
     check_ledger_mit_cites()
     check_claim_audit()
     check_mit_anchor_form()
+    check_no_process_history()
     print("ci-policy: ok")
 
 

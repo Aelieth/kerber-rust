@@ -13,6 +13,12 @@ this project uses semantic versioning once a crate is published.
   guarantee. The six older shapes are red. The check is advisory at
   the `0d5fa7f4` count until a later commit sets the allow to 0.
   No wire or text change in product code.
+- **ci.** `check_no_process_history` rejects a process tag (`R12`,
+  `A′-3`, `W0e`, `W1-Z`, `Round 2`, a `parent` SHA, `R2-S3`, `B3`,
+  `Y0`, `Z6.3`) on a `//` comment under `crates/`. Advisory at the
+  `0d5fa7f4` count. The baseline list is
+  `working/logs/w3-hygiene/s4/process-tags-before.txt`. No wire or
+  text change in product code.
 
 ### W3-S3.10 parameter structs
 
