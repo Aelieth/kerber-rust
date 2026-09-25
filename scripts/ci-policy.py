@@ -808,7 +808,10 @@ def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
     if wf.path.name != "ci.yml":
         return
     folded = _fold_continuations(wf.text)
-    if _CARGO_TEST_WS.search(folded) or _CARGO_TEST_ALL.search(folded):
+    # `cargo test --workspace --doc` is the doctest runner. nextest never
+    # runs doctests. Any other workspace `cargo test` re-runs the unit suite.
+    allowed = re.sub(r"cargo\s+test\s+--workspace\s+--doc\b", "", folded)
+    if _CARGO_TEST_WS.search(allowed) or _CARGO_TEST_ALL.search(allowed):
         _die(f"{wf.path.name} must not run cargo test --workspace/--all on per-push")
 
 

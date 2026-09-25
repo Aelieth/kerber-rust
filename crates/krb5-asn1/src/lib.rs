@@ -171,3 +171,5 @@ fn emit(
         );
     }
 }
+
+pub mod examples;

@@ -1593,5 +1593,7 @@ pub struct EncTicketPart {
     pub authorization_data: Option<AuthorizationData>,
 }
 
+pub mod examples;
+
 #[cfg(test)]
 mod tests;

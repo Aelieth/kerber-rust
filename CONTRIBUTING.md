@@ -73,7 +73,8 @@ The `test` job in CI is `make safety` (fmt, clippy, nextest,
 `ci-policy.py`) plus CI-only extras (nextest `--no-run`, junit, the
 gate ERR-trap self-test). `make doc` and `make shellcheck` are the
 sibling `doc` and `shellcheck` jobs. Do not run `cargo test --workspace`
-— CI forbids it on per-push; nextest is the runner. Linking needs `lld`
+for the unit suite — CI forbids that on per-push; nextest is the runner.
+Doctests are `cargo test --workspace --doc` on the test job. Linking needs `lld`
 (`ld.lld` on `$PATH`; see
 `.cargo/config.toml`).
 

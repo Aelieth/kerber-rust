@@ -83,6 +83,12 @@ this project uses semantic versioning once a crate is published.
 - **kdc.** `PrincipalStore::new` still exits if the CSPRNG cannot
   build the realm SID. `docs/security.md` records that abort.
   No wire change.
+- **log.** Client and KDC event names that were string literals are
+  `krb5_log::events` constants with the same text. The authdata
+  module error carries `event`, `correlation_id`, `component`, and
+  `outcome`. `target` is the Rust module path and is not part of the
+  log contract. The test job runs `cargo test --workspace --doc`.
+  No wire change.
 
 ### W3-S3.10 parameter structs
 

@@ -414,7 +414,7 @@ fn tgs_fast_reply_key(
         .as_ref()
         .ok_or_else(|| Error::ReplyMismatch("FAST TGS reply missing strengthen-key".into()))?;
     tracing::info!(
-        event = "client.tgs",
+        event = krb5_log::events::CLIENT_TGS,
         component = "krb5-protocol",
         outcome = "ok",
         fast_strengthen = true,

@@ -240,3 +240,5 @@ pub use profile::{
 };
 pub use srv::lookup_srv_kdc;
 pub use testenv::{isolate_test_krb5, set_test_krb5_paths};
+
+pub mod examples;

@@ -33,7 +33,14 @@ never install a subscriber. Tests and the harness do.
 
 Canonical Rust `event` strings live in `krb5_log::events`; the field
 names above are written literally at each `tracing` call site (there
-are no `FIELD_*` constants).
+are no `FIELD_*` constants). `client.tgs`, `client.pkinit`,
+`client.fast`, `kdc.lookaside.full`, and `kdc.pkinit` are those
+constants. Their string values are the names above.
+
+`target` is the Rust module path (`tracing`'s default). It is not part
+of the log contract. Gates and tests match `event` and the fields in
+the table. Moving a function into another module may change `target`
+and must leave `event` unchanged.
 
 ## Harness log lines
 

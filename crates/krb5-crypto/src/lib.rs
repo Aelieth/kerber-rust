@@ -66,3 +66,5 @@ pub use spake::{
     spake_m_bytes, spake_n_bytes, spake_public, spake_public_wbytes, spake_result_wbytes,
     spake_thash_update, spake_wbytes,
 };
+
+pub mod examples;

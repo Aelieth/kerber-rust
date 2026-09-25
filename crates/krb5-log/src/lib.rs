@@ -61,6 +61,16 @@ pub mod events {
     pub const PROTOCOL_TRANSPORT: &str = "protocol.transport";
     /// Admin protocol (kadmind / kpasswd / kprop).
     pub const ADMIN: &str = "admin";
+    /// Client TGS reply that carried a FAST strengthen-key.
+    pub const CLIENT_TGS: &str = "client.tgs";
+    /// Client PKINIT AS that built `PA-PK-AS-REQ`.
+    pub const CLIENT_PKINIT: &str = "client.pkinit";
+    /// Client FAST unwrap of an inner KDC error.
+    pub const CLIENT_FAST: &str = "client.fast";
+    /// KDC lookaside cache reached its byte cap.
+    pub const KDC_LOOKASIDE_FULL: &str = "kdc.lookaside.full";
+    /// KDC PKINIT preauth decision.
+    pub const KDC_PKINIT: &str = "kdc.pkinit";
 }
 
 thread_local! {
