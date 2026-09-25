@@ -1,3 +1,7 @@
+// Length-prefixed GSS tokens on a TCP stream.
+// A length of 0 or above 1 MiB is refused. A short read is an error,
+// not a partial token.
+
 fn read_token(s: &mut std::net::TcpStream) -> std::io::Result<Vec<u8>> {
     let mut hdr = [0u8; 4];
     s.read_exact(&mut hdr)?;
