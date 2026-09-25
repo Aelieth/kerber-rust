@@ -514,7 +514,7 @@ fn kinit_inner(
             let chpw_as = as_exchange(&chpw_req)?;
             let mut new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
-                    eprintln!("{KEY_EXP_BANNER}");
+                    banner::emit_key_exp_banner();
                     krb5_protocol::change_password(&resolved, &chpw_as, p)?;
                     p.to_vec()
                 }
@@ -581,7 +581,7 @@ fn kinit_inner(
     cache.creds.extend(creds);
     if let Some(e) = tgs_err {
         tracing::error!(
-            event = "client.tgs",
+            event = krb5_log::events::CLIENT_TGS,
             component = "krb5-client",
             outcome = "error",
             error = e.as_str(),
@@ -754,6 +754,9 @@ fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
         },
     )
 }
+
+pub mod banner;
+pub use banner::set_key_exp_banner_hook;
 
 #[cfg(test)]
 mod tests {

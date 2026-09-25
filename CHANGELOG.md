@@ -89,6 +89,8 @@ this project uses semantic versioning once a crate is published.
   `outcome`. `target` is the Rust module path and is not part of the
   log contract. The test job runs `cargo test --workspace --doc`.
   No wire change.
+- **client.** `krb5-kinit` prints the key-expiry banner. The library
+  does not. `client-gate` checks that stderr line.
 
 ### W3-S3.10 parameter structs
 
