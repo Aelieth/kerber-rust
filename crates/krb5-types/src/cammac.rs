@@ -1,4 +1,8 @@
 //! AD-CAMMAC (RFC 4120 / MIT `cammac.asn1`).
+//!
+//! `ad-checksum` is a keyed checksum over the DER of `elements`, key
+//! usage 19. `i-realm` and `i-sname` are absent when the issuer is the
+//! KDC itself.
 
 use rasn::prelude::*;
 

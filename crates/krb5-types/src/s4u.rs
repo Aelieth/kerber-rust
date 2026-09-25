@@ -1,4 +1,7 @@
 //! MS-SFU PA-FOR-USER / PA-S4U-X509-USER (S4U2Self) and MS-KILE PA-PAC-OPTIONS.
+//!
+//! The PA-FOR-USER checksum is key usage 17 over the name encoding.
+//! Resource-based constrained delegation is bit 3 of PA-PAC-OPTIONS.
 
 use rasn::prelude::*;
 

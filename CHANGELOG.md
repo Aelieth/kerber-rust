@@ -42,6 +42,9 @@ this project uses semantic versioning once a crate is published.
 - **admin.** The `listen` header states that a malformed kpasswd
   datagram is not answered and a failed AP-REQ is a framed chpwfail.
   No behaviour change.
+- **types.** Module headers on `fast`, `s4u`, `cammac`, and `spake`
+  state which fields are required and what the checksum covers. No
+  behaviour change.
 
 ### W3-S3.10 parameter structs
 
