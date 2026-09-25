@@ -1,4 +1,8 @@
 //! Legacy / AD enctypes (16, 23, 25, 26) used only when `allow_weak_crypto`.
+//!
+//! The etype gate refuses these while the flag is off. This module does
+//! not repeat that check. RC4 string-to-key is MD4 of the UTF-16LE
+//! password.
 
 use des::TdesEde3;
 use des::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};

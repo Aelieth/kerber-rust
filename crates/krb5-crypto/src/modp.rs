@@ -1,4 +1,7 @@
 //! RFC 3526 Oakley MODP groups used by RFC 4556 PKINIT.
+//!
+//! The exponent is wiped on drop. The public value is `g^x mod p`,
+//! padded to the prime length. The groups are 14 (2048) and 16 (4096).
 
 use std::sync::OnceLock;
 

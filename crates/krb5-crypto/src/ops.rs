@@ -1,4 +1,8 @@
 //! Public RFC 3961 operations: string-to-key, encrypt, decrypt, checksum.
+//!
+//! A string-to-key iteration count of 0 is refused, and so is a count
+//! above `MAX_ITERATIONS`. On an HMAC mismatch the recovered plaintext
+//! is wiped and the error is `Error::Integrity`.
 
 use std::time::Instant;
 

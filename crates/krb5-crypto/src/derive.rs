@@ -1,4 +1,7 @@
 //! RFC 3961 DK and RFC 8009 KDF-HMAC-SHA2.
+//!
+//! Checksum comparison is constant-time. A length mismatch is
+//! `Error::Integrity`, the same result as a wrong MAC.
 
 use hmac::{Hmac, Mac};
 use sha1::Sha1;

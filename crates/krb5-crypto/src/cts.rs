@@ -1,4 +1,7 @@
 //! AES CBC-CS3 (RFC 3962 / NIST SP 800-38A addendum), matching MIT krb5 1.22.2.
+//!
+//! An AES key that is not 16 or 32 bytes is `Error::InvalidKeyLength`.
+//! The block size is 16.
 
 use aes::{
     Aes128, Aes256,

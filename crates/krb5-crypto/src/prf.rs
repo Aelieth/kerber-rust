@@ -1,4 +1,7 @@
 //! RFC 3961 §5.3 PRF and RFC 6113 PRF+.
+//!
+//! PRF is one block for the key's etype. PRF+ concatenates until the
+//! requested length is met, and zeroizes the counter block it built.
 
 use sha1::{Digest, Sha1};
 use zeroize::Zeroize;

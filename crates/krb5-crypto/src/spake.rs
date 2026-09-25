@@ -1,4 +1,7 @@
 //! MIT 1.22.2 SPAKE2 (draft-ietf-kitten-krb-spake-preauth) on P-256.
+//!
+//! A point that does not decode, a scalar that is zero, or a scalar of
+//! the wrong length is `Error::Integrity`. The only group is P-256.
 
 use sha2::{Digest as Sha2Digest, Sha256};
 use zeroize::Zeroize;
