@@ -109,6 +109,7 @@ pub(crate) fn unix_now_u32() -> u32 {
 
 impl PrincipalStore {
     /// Empty store for `realm`.
+    /// A failed CSPRNG aborts the process instead of minting a domain SID.
     #[must_use]
     pub fn new(realm: impl Into<String>) -> Self {
         Self {

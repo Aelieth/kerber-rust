@@ -80,6 +80,9 @@ this project uses semantic versioning once a crate is published.
   `crates/*/tests` is one line: a C function, a `file.c` range inside
   that function, and the guarantee. `check_mit_anchor_form` is hard.
   `diffsend` names its cases in the module header. No behaviour change.
+- **kdc.** `PrincipalStore::new` still exits if the CSPRNG cannot
+  build the realm SID. `docs/security.md` records that abort.
+  No wire change.
 
 ### W3-S3.10 parameter structs
 
