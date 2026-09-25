@@ -60,7 +60,7 @@ pub(super) fn continue_fast(
                 cookie,
                 retry,
             } = fast_error_material(&akey, &e, nonce)?;
-            // `get_in_tkt.c:1721-1724`: only `PREAUTH_REQUIRED && retry`
+            // MIT `init_creds_step_reply` (`get_in_tkt.c:1721-1724`): only `PREAUTH_REQUIRED && retry`
             // continues; an outer error that did not unwrap (retry = 0) is
             // returned as-is — no second AS-REQ, whatever its code.
             if !retry || inner.error_code != err::PREAUTH_REQUIRED {
@@ -144,7 +144,7 @@ fn finish_fast_as(
     // finished checksum holds, the reply's client *is* the finished message's
     // client and the reply padata is the FAST-inner list — the outer cname /
     // crealm / padata are unauthenticated and never looked at again
-    // (`get_in_tkt.c:236-241` compares the replaced client).
+    // MIT `verify_as_reply` (`get_in_tkt.c:236-241`): compares the replaced client).
     rep.0.crealm = finished.crealm.clone();
     rep.0.cname = finished.cname.clone();
     rep.0.padata = Some(fast.padata.clone());
@@ -209,7 +209,7 @@ fn fast_armor_ap(armor: &FastArmor, sub: &ProtocolKey) -> Result<krb5_types::ApR
     )
 }
 
-/// What MIT `krb5int_fast_process_error` (`fast.c:428-511`) hands back for a
+/// MIT `krb5int_fast_process_error` (`fast.c:428-511`): What hands back for a
 /// KRB-ERROR received under an armor key.
 pub(crate) struct FastErrorMaterial {
     /// The error to act on: the FX-ERROR inner error when the FAST envelope
@@ -222,7 +222,7 @@ pub(crate) struct FastErrorMaterial {
     pub(crate) retry: bool,
 }
 
-/// MIT `krb5int_fast_process_error` with an armor key (`fast.c:445-495`):
+/// MIT `krb5int_fast_process_error` (`fast.c:445-495`): with an armor key
 /// the e_data must decode as a padata sequence whose PA-FX-FAST decrypts
 /// under the armor key with the request nonce; when it does not ("the KDC
 /// does not understand FAST" — or a man in the middle stripped it) the outer

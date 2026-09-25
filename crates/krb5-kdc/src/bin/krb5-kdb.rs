@@ -1,4 +1,4 @@
-//! MIT `kdb5_util` dump/load CLI.
+//! kdb5_util dump/load CLI.
 //!
 //! Usage:
 //!   `krb5-kdb load <dump>` — MIT dump → `KRB5_KDC_DB` / `KRB5_KDC_STASH`

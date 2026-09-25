@@ -25,7 +25,7 @@ use crate::store::{
 /// NT-ENTERPRISE is a single `user@suffix` component (RFC 6806), not a
 /// `/`-joined name. A suffix equal to `realm` (RFC 4120 §6.1, exact
 /// octets) maps to `user@realm`. Mixed-case `user@kerber.test` in
-/// `KERBER.TEST` is not a local alias (MIT `CLIENT_NOT_FOUND`).
+/// `KERBER.TEST` is not a local alias (CLIENT_NOT_FOUND).
 #[must_use]
 pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     if name.name_type == PrincipalName::NT_ENTERPRISE {
@@ -43,7 +43,7 @@ pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     name.unparse_with_realm(realm)
 }
 
-/// `krb5_db_get_principal` (`kdb5.c:800-840`): follow alias stubs up to
+/// MIT `krb5_db_get_principal` (`kdb5.c:803-844`): `krb5_db_get_principal` : follow alias stubs up to
 /// [`MAX_ALIAS_DEPTH`] hops and return the canonical id, `None` past the
 /// depth, on a missing hop or an unparsable target.
 pub fn resolve_alias_id<'a>(

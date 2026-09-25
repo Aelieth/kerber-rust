@@ -1,4 +1,4 @@
-//! Switch the DIR collection primary (MIT `kswitch`).
+//! Switch the DIR collection primary (kswitch).
 //!
 //! Usage: krb5-kswitch [-c ccache | -p principal]
 

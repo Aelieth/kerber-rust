@@ -27,7 +27,7 @@ pub const SPAKE_N: [u8; 33] = [
     0x49,
 ];
 
-/// MIT `derive_wbytes`: PRF+(`ikey`, `"SPAKEsecret" || group-id`).
+/// MIT `derive_wbytes` (`util.c:104-141`): PRF+(`ikey`, `"SPAKEsecret" || group-id`).
 ///
 /// # Errors
 ///
@@ -110,7 +110,7 @@ fn spake_n() -> Result<p256::ProjectivePoint, Error> {
     decode_compressed(&SPAKE_N)
 }
 
-/// SPAKE2 public share as a compressed P-256 point (MIT `elem_len` = 33).
+/// SPAKE2 public share as a compressed P-256 point (elem_len = 33).
 ///
 /// KDC (`server`) computes `xG + wM`; client computes `yG + wN`.
 ///
@@ -121,7 +121,7 @@ pub fn spake_public(w: &[u8; 32], secret: &[u8; 32], server: bool) -> Result<Vec
     spake_public_wbytes(w, secret, server)
 }
 
-/// Like [`spake_public`] with unreduced MIT `wbytes`.
+/// Like [`spake_public`] with unreduced wbytes.
 ///
 /// # Errors
 ///
@@ -139,7 +139,7 @@ pub fn spake_public_wbytes(
     Ok(encode_compressed(ProjectivePoint::GENERATOR * xs + mn * ws))
 }
 
-/// SPAKE2 shared element (compressed, 33 octets) matching MIT `group_result`.
+/// MIT `group_result` (`groups.c:374-412`): SPAKE2 shared element (compressed, 33 octets) matching.
 ///
 /// KDC: `x(S - wN)`; client: `y(T - wM)`.
 ///
@@ -164,7 +164,7 @@ pub fn spake_finish(
     Ok(x)
 }
 
-/// Compressed SPAKE result (33 bytes) used as MIT `spakeresult`.
+/// Compressed SPAKE result (33 bytes) used as spakeresult.
 ///
 /// # Errors
 ///
@@ -187,7 +187,7 @@ pub fn spake_result_wbytes(
     Ok(encode_compressed((peer - mn * ws) * xs))
 }
 
-/// Transcript hash: `SHA-256(thash || data1 || data2)` (MIT `update_thash`).
+/// MIT `update_thash` (`util.c:75-99`): Transcript hash: `SHA-256(thash || data1 || data2)`.
 #[must_use]
 pub fn spake_thash_update(thash: &[u8], data1: &[u8], data2: &[u8]) -> [u8; 32] {
     let mut h = <Sha256 as Sha2Digest>::new();
@@ -197,7 +197,7 @@ pub fn spake_thash_update(thash: &[u8], data1: &[u8], data2: &[u8]) -> [u8; 32] 
     Sha2Digest::finalize(h).into()
 }
 
-/// MIT `derive_key`: `K'[n] = CF2(ikey, "SPAKE", random-to-key(H), "keyderiv")`.
+/// MIT `derive_key` (`util.c:149-212`): `K'[n] = CF2(ikey, "SPAKE", random-to-key(H), "keyderiv")`.
 ///
 /// # Errors
 ///

@@ -138,7 +138,7 @@ pub(crate) fn policy_text(code: u32) -> &'static str {
     }
 }
 
-/// MIT `validate_allowed_keysalts` (`svr_policy.c:20-36`): a tab is
+/// MIT `validate_allowed_keysalts` (`svr_policy.c:22-36`): a tab is
 /// `KADM5_BAD_KEYSALTS`. `krb5_string_to_keysalts` skips unknown tokens
 /// and only fails ENOMEM, so `addpol -allowedkeysalts bogus:normal`
 /// succeeds on MIT 1.22.2 (live settle).
@@ -194,7 +194,7 @@ pub(crate) fn build_policy(a: &crate::PolicyArgs) -> (krb5_kdc::NamedPolicy, u32
 }
 
 /// `kadm5_create_policy` for kadmin.local: DUP -> name -> min>max -> length ->
-/// classes -> history (`svr_policy.c`). Returns the MIT `com_err` text on failure.
+/// MIT `com_err` (`com_err.c:131-140`): classes -> history (`svr_policy.c`). Returns the text on failure.
 pub(crate) fn create_policy_local(
     exists: bool,
     a: &crate::PolicyArgs,

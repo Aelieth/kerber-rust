@@ -1,11 +1,11 @@
-//! Obtain a service ticket via TGS and print its kvno (MIT `kvno`).
+//! MIT `kvno` (`kvno.c:293-411`): Obtain a service ticket via TGS and print its kvno.
 //!
 //! Usage: `krb5-kvno [-c ccache] [--disable-transited-check] [--body-realm REALM]
 //! [kdc-host] <service>`
 //!
-//! `--disable-transited-check` is gate-only (MIT `kvno` cannot set bit 26).
+//! MIT `kvno` (`kvno.c:293-411`): `--disable-transited-check` is gate-only ( cannot set bit 26).
 //! `--body-realm` is gate-only: send that TGS-REQ realm with no chase.
-//! `--renew` requires `--body-realm` (MIT `kvno` has no renew; `kinit -R` is
+//! MIT `kvno` (`kvno.c:293-411`): `--renew` requires `--body-realm` ( has no renew; `kinit -R` is
 //! `renew-gate.sh`). `-U <user>` sends PA-FOR-USER with `body.realm` of the
 //! presented TGT (single request; no S4U referral walk). MIT `kvno -U` also
 //! requires the ccache principal to equal the service; this binary does not,

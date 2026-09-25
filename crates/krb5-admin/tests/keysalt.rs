@@ -1,14 +1,14 @@
 //! `kadm5_create_principal_3` honours the v3 `ks_tuple` array
-//! (`svr_principal.c:444-447` `apply_keysalt_policy`). Compiles at the
+//! MIT `kadm5_create_principal_3` (`svr_principal.c:444-447`): `apply_keysalt_policy`. Compiles at the
 //! parent: CREATE_PRINCIPAL3 already parses the array (and skips it) and
 //! `create_principal_3_in` already accepts an etype slice — the parent
 //! passes `&[]`, so `-e` is ignored and a tuple outside
 //! `allowed_keysalts` is accepted.
 //! (d): `kadm5_chpass_principal_3` / `kadm5_randkey_principal_3`
-//! honour the v3 `ks_tuple` (`svr_principal.c:1259,1425`). Compiles at
+//! MIT `kadm5_chpass_principal_3` (`svr_principal.c:1259-1259`): honour the v3 `ks_tuple`. Compiles at
 //! the parent: CHPASS3/CHRAND3 already exist and skip the array, so `-e`
 //! is ignored and an unknown etype is not `KADM5_BAD_KEYSALTS`.
-//! v3 `ks_tuple` uses MIT `ETYPE_WEAK` (`is_mit_weak`), not the
+//! v3 `ks_tuple` uses ETYPE_WEAK (`is_mit_weak`), not the
 //! house `is_weak` set. Source pin so the inject compiles at the parent
 //! (`key_salt_tuples` already exists) and still fails.
 

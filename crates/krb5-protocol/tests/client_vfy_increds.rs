@@ -1,5 +1,5 @@
 //! `vfy_increds.c` `krb5_verify_init_creds`.
-//! Live oracle: `client-differential-gate.sh` vs MIT `t_vfy_increds`.
+//! Live oracle: `client-differential-gate.sh` vs t_vfy_increds.
 
 #[path = "common/mod.rs"]
 mod common;

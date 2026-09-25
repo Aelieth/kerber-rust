@@ -11,9 +11,9 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// MIT `STALE_TIME` (`replay.c:59`): two minutes.
+/// STALE_TIME (`replay.c`): two minutes.
 pub(crate) const STALE_TIME: Duration = Duration::from_secs(120);
-/// MIT `LOOKASIDE_MAX_SIZE` (`replay.c:44`): 10 MiB.
+/// LOOKASIDE_MAX_SIZE (`replay.c`): 10 MiB.
 pub(crate) const MAX_SIZE: usize = 10 * 1024 * 1024;
 /// Rough per-entry overhead, standing in for MIT's `sizeof(struct entry)`.
 const ENTRY_OVERHEAD: usize = 64;
@@ -84,7 +84,7 @@ impl Lookaside {
         }
     }
 
-    /// MIT `kdc_check_lookaside` + the `kdc_insert_lookaside(pkt, NULL)` marker:
+    /// MIT `kdc_check_lookaside` (`replay.c:166-187`): + the `kdc_insert_lookaside(pkt, NULL)` marker
     /// a hit resends the cached reply, an in-progress hit drops the duplicate,
     /// and a miss records an in-progress marker so a concurrent duplicate is
     /// dropped while this request is processed.
@@ -99,7 +99,7 @@ impl Lookaside {
         Check::Fresh
     }
 
-    /// MIT `finish_dispatch_cache`: drop the in-progress marker and cache the
+    /// MIT `finish_dispatch_cache` (`dispatch.c:70-87`): drop the in-progress marker and cache the
     /// produced reply. A reply of `None` (a drop, or an internal error) caches
     /// nothing, like MIT removing the marker without inserting a response.
     pub fn finish(&mut self, req: &[u8], reply: Option<&[u8]>) {
@@ -147,7 +147,7 @@ impl Lookaside {
         );
     }
 
-    /// MIT `kdc_insert_lookaside`'s purge loop: from the oldest end, drop stale
+    /// MIT `kdc_insert_lookaside` (`replay.c:197-217`): 's purge loop: from the oldest end, drop stale
     /// entries and keep dropping until `incoming` fits under `max_size`.
     fn evict(&mut self, incoming: usize) {
         let now = Instant::now();

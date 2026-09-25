@@ -2,7 +2,7 @@
 //! (`svr_iters.c` `glob_to_regexp`): the pre-flight MIT answers `EINVAL`
 //! for, and the match itself with POSIX bracket classes.
 
-/// MIT compiles the glob to a POSIX BRE with `regcomp` (`svr_iters.c:175`); a
+/// MIT `kadm5_get_either` (`svr_iters.c:175-175`): MIT compiles the glob to a POSIX BRE with `regcomp`; a
 /// pattern that fails to compile (trailing `\\`, an unterminated `[...]`) is
 /// `EINVAL` from `kadm5_get_either`. This mirrors that pre-flight.
 #[must_use]
@@ -82,7 +82,7 @@ pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
     }
 }
 
-/// `glob_to_regexp` + `regexec` (`svr_iters.c:41-115`) as a direct anchored
+/// MIT `glob_to_regexp` (`svr_iters.c:55-109`): `glob_to_regexp` + `regexec` as a direct anchored
 /// matcher: `?`=one, `*`=run, `[...]`=class, `\\x`=literal.
 pub(crate) fn glob_is_match(pattern: &[u8], text: &[u8]) -> bool {
     let (mut p, mut t) = (0usize, 0usize);

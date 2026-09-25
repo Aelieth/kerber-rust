@@ -1,4 +1,4 @@
-//! Realm ticket policy (`alt_prof.c`, `kdc/main.c:316-319`) and named
+//! MIT `gss_inquire_sec_context_by_oid` (`main.c:316-319`): Realm ticket policy (`alt_prof.c`, `kdc/ and named
 //! kadm5 `osa_policy_ent` (`svr_policy.c`): defaults, kdc.conf /
 //! krb5.conf overlay, and the policy CRUD on the store.
 
@@ -31,9 +31,9 @@ pub struct NamedPolicy {
     pub pw_failcnt_interval: u32,
     /// Seconds the lock lasts after `last_failed` (0 = until a successful AS).
     pub pw_lockout_duration: u32,
-    /// MIT `pw_min_life` seconds (`osa_policy_ent`).
+    /// pw_min_life seconds (`osa_policy_ent`).
     pub pw_min_life: u32,
-    /// MIT `pw_max_life` seconds; 0 = no password expiration.
+    /// pw_max_life seconds; 0 = no password expiration.
     pub pw_max_life: u32,
     /// MIT `osa_policy_ent.allowed_keysalts`; `None` is NULL (getpol omits the line).
     pub allowed_keysalts: Option<String>,
@@ -63,47 +63,47 @@ impl NamedPolicy {
 pub struct Policy {
     /// Max ticket lifetime seconds (MIT `alt_prof.c`: omitted = 24 h).
     pub max_life: u64,
-    /// kadm5 create default (`alt_prof.c:577-578`: omitted = 0).
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:577-578`): kadm5 create default : omitted = 0).
     pub max_renewable_life: u64,
-    /// KDC issue cap (`kdc/main.c:316-319` `realm_maxrlife`: omitted = 7 d).
+    /// MIT `gss_inquire_sec_context_by_oid` (`main.c:316-319`): KDC issue cap (`kdc/ `realm_maxrlife`: omitted = 7 d).
     pub realm_max_renewable_life: u64,
     /// Clock skew seconds.
     pub skew: i64,
     /// Allow weak etypes.
     pub allow_weak_crypto: bool,
-    /// MIT `allow_rc4` (session keys).
+    /// allow_rc4 (session keys).
     pub allow_rc4: bool,
-    /// MIT `allow_des3` (session keys).
+    /// allow_des3 (session keys).
     pub allow_des3: bool,
-    /// MIT `permitted_enctypes`. `None` = DEFAULT (every implemented type).
+    /// permitted_enctypes. `None` = DEFAULT (every implemented type).
     pub permitted_enctypes: Option<Vec<EncryptionType>>,
-    /// MIT `supported_enctypes`. Empty = AES 17–20.
+    /// supported_enctypes. Empty = AES 17–20.
     pub supported_enctypes: Vec<EncryptionType>,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
-    /// MIT `[realms] default_principal_flags` (`alt_prof.c:596-632`): the
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): MIT `[realms] default_principal_flags` : the
     /// `handle->params.flags` a kadm5 create takes when `KADM5_ATTRIBUTES` is
     /// not in the mask. `None` = the stanza is absent (MIT
     /// `KRB5_KDB_DEF_FLAGS` 0; here the `requires_preauth` knob's bit).
     pub default_principal_flags: Option<u32>,
-    /// MIT `[realms] default_principal_expiration` (`alt_prof.c:580-594`,
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:580-594`): MIT `[realms] default_principal_expiration`
     /// `krb5_string_to_timestamp`): `handle->params.expiration`, the
     /// `expiration` of a create without `KADM5_PRINC_EXPIRE_TIME`. 0 when
     /// absent or unparsable (MIT leaves the zeroed field).
     pub default_principal_expiration: u32,
     /// `[capaths]` client → server → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
-    /// MIT `reject_bad_transit` (default true).
+    /// reject_bad_transit (default true).
     pub reject_bad_transit: bool,
-    /// MIT `disable_pac` (default false): issue no PAC.
+    /// disable_pac (default false): issue no PAC.
     pub disable_pac: bool,
-    /// MIT `restrict_anonymous_to_tgt` (default false).
+    /// restrict_anonymous_to_tgt (default false).
     pub restrict_anon: bool,
-    /// MIT `pkinit_require_freshness` (default false).
+    /// pkinit_require_freshness (default false).
     pub pkinit_require_freshness: bool,
-    /// MIT `host_based_services` (NT-UNKNOWN referral allow-list).
+    /// host_based_services (NT-UNKNOWN referral allow-list).
     pub host_based_services: String,
-    /// MIT `no_host_referral` (service-type deny-list).
+    /// no_host_referral (service-type deny-list).
     pub no_host_referral: String,
     /// `[domain_realm]` for `krb5_get_host_realm`.
     pub domain_realm: BTreeMap<String, String>,
@@ -114,10 +114,10 @@ pub struct Policy {
     /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
     /// `[libdefaults] spake_preauth_groups` as implemented group numbers.
-    /// Empty = MIT KDC default (`groups.c:60`) — SPAKE is not advertised.
+    /// Empty = MIT KDC default (`groups.c`) — SPAKE is not advertised.
     pub spake_preauth_groups: Vec<i32>,
     /// `[realms] dict_file` words, ASCII-lowercased and sorted, for the MIT
-    /// `dict` password-quality module (`pwqual_dict.c:66-69` `strcasecmp`
+    /// MIT `word_compare` (`pwqual_dict.c:66-68`): `dict` password-quality module `strcasecmp`
     /// order). Empty = no dictionary.
     pub(crate) dict_words: Vec<String>,
 }
@@ -170,7 +170,7 @@ pub fn parse_dict_words(text: &str) -> Vec<String> {
     words
 }
 
-/// MIT `parse_groups` (`groups.c:175-210`): unknown names skipped.
+/// MIT `parse_groups` (`groups.c:178-210`): unknown names skipped.
 /// Rust implements P-256 only; other IANA names are skipped.
 #[must_use]
 pub(crate) fn parse_spake_preauth_groups(names: &[String]) -> Vec<i32> {
@@ -184,7 +184,7 @@ pub(crate) fn parse_spake_preauth_groups(names: &[String]) -> Vec<i32> {
 }
 
 impl Policy {
-    /// MIT `krb5_check_transited_list`: anonymous crealm passes; then capaths if present, else hierarchical.
+    /// MIT `krb5_check_transited_list` (`chk_trans.c:309-356`): anonymous crealm passes; then capaths if present, else hierarchical.
     #[must_use]
     pub(crate) fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
         if crealm == "WELLKNOWN:ANONYMOUS" {
@@ -198,7 +198,7 @@ impl Policy {
             .all(|h| h == crealm || h == srealm || permitted.iter().any(|p| p == h))
     }
 
-    /// MIT `krb5_is_permitted_enctype`.
+    /// MIT `krb5_is_permitted_enctype` (`init_ctx.c:598-608`): same check.
     #[must_use]
     pub fn etype_permitted(&self, e: EncryptionType) -> bool {
         self.permitted_enctypes
@@ -206,7 +206,7 @@ impl Policy {
             .is_none_or(|v| v.contains(&e))
     }
 
-    /// MIT `krb5_dbe_find_enctype` under this policy's `permitted_enctypes`
+    /// MIT `krb5_dbe_find_enctype` (`kdb5.c:1452-1459`): under this policy's `permitted_enctypes`
     /// ([`Principal::find_enctype`] with [`Policy::etype_permitted`]).
     ///
     /// # Errors
@@ -233,7 +233,7 @@ impl Policy {
         self.find_enctype(p, None, 0)
     }
 
-    /// MIT `krb5_get_host_realm` profile half (no DNS).
+    /// MIT `krb5_get_host_realm` (`hostrealm.c:361-398`): profile half (no DNS).
     #[must_use]
     pub fn realm_for_host(&self, host: &str) -> Option<&str> {
         krb5_config::host_to_realm(&self.domain_realm, host)
@@ -320,7 +320,7 @@ impl PrincipalStore {
             self.domain_sid = sid;
         }
         if let Some(path) = &conf.dict_file {
-            // MIT init_dict (pwqual_dict.c:96-111): a missing file is logged
+            // MIT `init_dict` (`pwqual_dict.c:97-111`): a missing file is logged
             // and the server continues without a dictionary; any other open
             // or read failure is returned and kadm5_init fails.
             match std::fs::read(path) {

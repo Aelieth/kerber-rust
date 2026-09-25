@@ -5,8 +5,8 @@
 //! the changepw key was accepted and drove a password change. At HEAD the
 //! sname mismatch is refused before the KRB-PRIV is ever read.
 //! Admin whole-flow tests moved from `src/lib.rs`.
-//! (a): kpasswd stamps `kadmind@REALM` (`ovsec_kadmd.c:446`,
-//! `schpw.c:407`). Compiles at the parent: `handle_kpasswd_rfc3244` and
+//! MIT `main` (`ovsec_kadmd.c:446-446`): (a): kpasswd stamps `kadmind@REALM`
+//! MIT `dispatch` (`schpw.c:407-407`): . Compiles at the parent: `handle_kpasswd_rfc3244` and
 //! `tl_mod_princ_name` already exist; the parent stamps the ticket client.
 //! kpasswd reloads before mutate (`write_store` house rule).
 //! Compiles at the parent: `handle_kpasswd_rfc3244`, `save_store` /

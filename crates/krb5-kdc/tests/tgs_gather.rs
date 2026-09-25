@@ -2,7 +2,7 @@
 //! PAC shape on the shipped issue path.
 //! TGS constraint slots before svc policy; rd_req times after BADMATCH/BADADDR.
 //! Remaining `GET_LOCAL_TGT` sites (`ad.rs` S4U2Proxy PAC) wire 60,
-//! and `kdc_rd_ap_req` kvno 0 decrypts the previous kvno (`kdc_util.c:325-346`).
+//! MIT `kdc_rd_ap_req` (`kdc_util.c:325-346`): and `kdc_rd_ap_req` kvno 0 decrypts the previous kvno.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};

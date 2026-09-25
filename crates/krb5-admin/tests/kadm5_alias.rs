@@ -1,5 +1,5 @@
 //! kadmind `CREATE_ALIAS` (proc 27) like `create_alias_2_svc`
-//! (`server_stubs.c:1727-1758`) over `acl_addalias` (`auth_acl.c:723-734`),
+//! MIT `create_alias_2_svc` (`server_stubs.c:1727-1758`): over `acl_addalias` (`auth_acl.c`)
 //! with the ACL matrix of MIT `tests/t_kadmin_acl.py` and the codes settled in
 //! `working/logs/audit-polish-0902/w1k/m3a-settle-mit-alias.log` §D.
 

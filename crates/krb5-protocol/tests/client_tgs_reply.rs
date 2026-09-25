@@ -1,4 +1,4 @@
-//! TGS-REP validation. MIT `gc_via_tkt.c:247-297`
+//! TGS-REP validation. MIT `gc_via_tkt.c`
 //! `krb5int_process_tgs_reply`. Live oracle: existing `kvno_plain` /
 //! `kvno_s4u` cells (`MIT_tgs_reply_client`). Unit-only: these helpers
 //! are new at the parent.

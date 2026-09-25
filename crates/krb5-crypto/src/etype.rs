@@ -110,7 +110,7 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `krb5int_c_deprecated_enctype` (`etypes.c`): des3-cbc-sha1 and
+    /// MIT `krb5int_c_deprecated_enctype` (`enctype_util.c:67-71`): (`etypes.c`): des3-cbc-sha1 and
     /// arcfour-hmac (and, absent from this enum, des3-cbc-raw / arcfour-exp).
     #[must_use]
     pub const fn is_deprecated(self) -> bool {
@@ -147,7 +147,7 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `enc->keybytes`: PRF+ / random-to-key input size (`crypto_int.h:95-97`).
+    /// MIT `enc->keybytes`: PRF+ / random-to-key input size (`crypto_int.h`).
     #[must_use]
     pub const fn keybytes(self) -> usize {
         match self {
@@ -197,7 +197,7 @@ impl EncryptionType {
         }
     }
 
-    /// AES-only AS/TGS etype list. MIT `init_ctx.c:59-66`
+    /// AES-only AS/TGS etype list. MIT `init_ctx.c`
     /// `default_enctype_list` also offers DES3 (16), RC4 (23), and
     /// Camellia (25, 26); those stay behind `is_weak` / an explicit
     /// `default_tkt_enctypes` / `permitted_enctypes` list.
@@ -264,7 +264,7 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `enctype` name as used in `kdc.conf` (`aes256-cts-hmac-sha384-192`).
+    /// enctype name as used in `kdc.conf` (`aes256-cts-hmac-sha384-192`).
     ///
     /// # Errors
     ///
@@ -291,7 +291,7 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `etype.c` `ETYPE_WEAK`. None of the implemented types set that flag.
+    /// MIT `krb5int_c_weak_enctype` (`enctype_util.c:58-64`): none of the implemented types set ETYPE_WEAK.
     #[must_use]
     pub const fn is_mit_weak(self) -> bool {
         false
@@ -314,7 +314,7 @@ impl EncryptionType {
     }
 }
 
-/// MIT `krb5_c_is_keyed_cksum`: types in `cksumtypes.c` without `CKSUM_UNKEYED`.
+/// MIT `krb5_c_is_keyed_cksum` (`keyed_cksum.c:31-39`): types in `cksumtypes.c` without `CKSUM_UNKEYED`.
 #[must_use]
 pub const fn cksumtype_is_keyed(cksumtype: i32) -> bool {
     matches!(cksumtype, 12 | 15 | 16 | 17 | 18 | 19 | 20 | -137 | -138)
@@ -327,13 +327,13 @@ pub const fn cksumtype_is_unkeyed(cksumtype: i32) -> bool {
     matches!(cksumtype, 2 | 7 | 9 | 14)
 }
 
-/// MIT `krb5_c_valid_cksumtype`: a row in `cksumtypes.c`.
+/// MIT `krb5_c_valid_cksumtype` (`valid_cksumtype.c:31-39`): a row in `cksumtypes.c`.
 #[must_use]
 pub const fn cksumtype_is_known(cksumtype: i32) -> bool {
     cksumtype_is_keyed(cksumtype) || cksumtype_is_unkeyed(cksumtype)
 }
 
-/// MIT `krb5_c_is_coll_proof_cksum` (`coll_proof_cksum.c:30-40`).
+/// MIT `krb5_c_is_coll_proof_cksum` (`coll_proof_cksum.c:31-37`): same check.
 ///
 /// 1.22.2 sets `CKSUM_NOT_COLL_PROOF` on no table row, so every known
 /// type is collision-proof.
@@ -342,7 +342,7 @@ pub const fn cksumtype_is_coll_proof(cksumtype: i32) -> bool {
     cksumtype_is_known(cksumtype)
 }
 
-/// MIT `default_enctype_list` (`init_ctx.c:59-66`).
+/// default_enctype_list (`init_ctx.c`).
 #[must_use]
 pub const fn default_enctype_list() -> [EncryptionType; 8] {
     [
@@ -357,7 +357,7 @@ pub const fn default_enctype_list() -> [EncryptionType; 8] {
     ]
 }
 
-/// MIT `krb5int_parse_enctype_list`. Empty result is `None` (`KRB5_CONFIG_ETYPE_NOSUPP`).
+/// MIT `krb5int_parse_enctype_list` (`init_ctx.c:447-503`): . Empty result is `None` (`KRB5_CONFIG_ETYPE_NOSUPP`.
 #[must_use]
 pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<EncryptionType>> {
     let mut list = Vec::new();

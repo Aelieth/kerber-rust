@@ -1,4 +1,4 @@
-//! FAST reply nonce. MIT `fast.c:397-402` `decrypt_fast_reply`.
+//! MIT `decrypt_fast_reply` (`fast.c:397-402`): FAST reply nonce. decrypt_fast_reply.
 //! Unit-only: no MIT tool emits a flipped FAST nonce.
 
 #[path = "common/mod.rs"]
@@ -252,7 +252,7 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
         port,
     };
     // The documented user requires preauth and the KDC advertises SPAKE.
-    // MIT `sort_krb5_padata_sequence` + `k5_preauth` records pa_type 151.
+    // MIT `sort_krb5_padata_sequence` (`get_in_tkt.c:403-471`): + `k5_preauth` records pa_type 151.
     let plain = as_exchange(&request(&cname, &kdc, None)).expect("plain AS exchange");
     assert!(plain.fast_avail);
     assert_eq!(plain.pa_type, Some(pa::SPAKE));
@@ -504,7 +504,7 @@ fn rewrite_outer_cname(reply: Vec<u8>) -> Vec<u8> {
     encode(&rep).unwrap()
 }
 
-/// `fast.c:548-551`: after the finished checksum verifies, `resp->client`
+/// MIT `krb5int_fast_process_response` (`fast.c:548-551`): after the finished checksum verifies, `resp->client`
 /// is the finished client; the outer cname is never compared or returned.
 /// With CANONICALIZE the outer name would otherwise be accepted as the
 /// canonical name.
@@ -521,7 +521,7 @@ fn fast_as_rep_client_is_the_finished_client_under_canonicalize() {
     );
 }
 
-/// Without CANONICALIZE the compare in `get_in_tkt.c:239` runs on the
+/// MIT `verify_as_reply` (`get_in_tkt.c:239-239`): Without CANONICALIZE the compare in runs on the
 /// replaced (finished) client, which is the requested one — the rewritten
 /// outer name is not a mismatch.
 #[test]
@@ -565,10 +565,10 @@ fn fast_as_rep_finished_cname_mismatch_is_kdcrep_modified() {
     );
 }
 
-/// `fast.c:445-458`: under an armor key, an error whose e_data carries no
+/// MIT `krb5int_fast_process_error` (`fast.c:445-458`): under an armor key, an error whose e_data carries no
 /// PA-FX-FAST is "the fatal error indicated by the KDC" with `retry = 0`;
 /// nothing outer is trusted — not the plaintext ETYPE-INFO2, not an outer
-/// FX-COOKIE — and no second AS-REQ is sent (`get_in_tkt.c:1721-1724`
+/// MIT `init_creds_step_reply` (`get_in_tkt.c:1721-1724`): FX-COOKIE — and no second AS-REQ is sent
 /// continues only on `PREAUTH_REQUIRED && retry`).
 #[test]
 fn fast_error_without_fx_fast_is_the_fatal_outer_error() {
@@ -647,7 +647,7 @@ fn fast_error_with_a_corrupt_fx_fast_is_the_fatal_outer_error() {
     assert_eq!(count.load(Ordering::SeqCst), 1, "no second AS-REQ");
 }
 
-/// `fast.c:462-469`: a FAST response that unwraps but carries no FX-ERROR is
+/// MIT `krb5int_fast_process_error` (`fast.c:462-469`): a FAST response that unwraps but carries no FX-ERROR is
 /// `KRB5KDC_ERR_PREAUTH_FAILED` "Expecting FX_ERROR pa-data inside FAST
 /// container" — an error, not a synthesized retry.
 #[test]
@@ -685,12 +685,12 @@ fn fast_error_without_inner_fx_error_is_preauth_failed() {
     assert_eq!(count.load(Ordering::SeqCst), 1, "no second AS-REQ");
 }
 
-/// `gc_via_tkt.c:190-194`: the TGS path runs `krb5int_fast_process_error`
+/// MIT `krb5_is_krb_error` (`gc_via_tkt.c:190-194`): the TGS path runs `krb5int_fast_process_error`
 /// too — the authenticated FX-ERROR inside the FAST envelope is the error
 /// the client reports; the outer code and e_text are unauthenticated. A man
 /// in the middle turns the outer 7 into a 60 "mitm" and leaves the envelope:
 /// the client still sees `S_PRINCIPAL_UNKNOWN`. With the envelope stripped
-/// the outer error stands (fast.c:445-458).
+/// MIT `krb5int_fast_process_error` (`fast.c:445-458`): the outer error stands.
 #[test]
 fn fast_tgs_error_is_the_inner_fx_error() {
     let (store, _) = bootstrap_documented().unwrap();

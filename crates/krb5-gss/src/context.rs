@@ -200,7 +200,7 @@ fn process_checksum(
                 let ext_type =
                     u32::from_be_bytes(rest[0..4].try_into().map_err(|_| Error::Truncated)?);
                 // MIT kg_process_extension: GSS_EXTS_FINISHED is IAKERB-only; a
-                // plain krb5 acceptor fails it (accept_sec_context.c:380-384).
+                // MIT `kg_process_extension` (`accept_sec_context.c:380-384`): plain krb5 acceptor fails it.
                 if ext_type == GSS_EXTS_FINISHED {
                     return Err(Error::Inner("gss failure".into()));
                 }
@@ -411,7 +411,7 @@ impl GssContext {
 
     /// [`accept_sec_context`](Self::accept_sec_context) with a per-key kvno
     /// slice (parallel to `service_keys`, as read from a keytab). MIT
-    /// `try_one_princ` (`rd_req_dec.c:325-347`) fetches the keytab entry by the
+    /// MIT `try_one_princ` (`rd_req_dec.c:325-347`): `try_one_princ` fetches the keytab entry by the
     /// exact ticket kvno when the server principal is fully specified; a
     /// wildcard name (`is_matching`) iterates instead. We mirror that: the
     /// kvnos pin the ticket kvno only when `expected_server` is `Some`.
@@ -504,7 +504,7 @@ impl GssContext {
             gss_flags |= GSS_C_MUTUAL | GSS_C_DCE;
         }
         // MIT sets GSS_C_PROT_READY_FLAG on the established single-leg context
-        // (accept_sec_context.c:1089).
+        // MIT `kg_accept_krb5` (`accept_sec_context.c:1089-1089`): same check.
         gss_flags |= GSS_C_PROT_READY;
         let want_mutual = gss_flags & GSS_C_MUTUAL != 0;
         let sess = subkey.unwrap_or_else(|| ticket_session.clone());
@@ -536,7 +536,7 @@ impl GssContext {
         };
         let mut ap_rep_tok = None;
         if want_mutual {
-            // MIT `krb5_mk_rep` encrypts EncAPRepPart with the ticket session.
+            // MIT `krb5_mk_rep` (`mk_rep.c:143-146`): encrypts EncAPRepPart with the ticket session.
             let ap_rep = build_ap_rep(&ticket_session, &ok.authenticator, None, Some(0))?;
             let der = encode(&ap_rep)?;
             ap_rep_tok = Some(if dce_style {
@@ -548,7 +548,7 @@ impl GssContext {
         Ok((out, ap_rep_tok))
     }
 
-    /// MIT `kg_accept_dce` / `krb5_rd_rep_dce`.
+    /// MIT `kg_accept_dce` (`accept_sec_context.c:286-367`): `krb5_rd_rep_dce`.
     ///
     /// # Errors
     ///
@@ -581,7 +581,7 @@ impl GssContext {
 
     /// Consume the MIT CFX AP-REP token (acceptor subkey).
     ///
-    /// MIT `krb5_mk_rep` encrypts EncAPRepPart with the **ticket session**
+    /// MIT `krb5_mk_rep` (`mk_rep.c:143-146`): encrypts EncAPRepPart with the **ticket session**
     /// (`auth_context->key`), not the authenticator subkey.
     ///
     /// # Errors
@@ -599,7 +599,7 @@ impl GssContext {
         let ap: ApRep = decode(&inner[2..])?;
         let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
         let cipher = ap.enc_part.cipher.as_ref();
-        // MIT `init_sec_context.c:785-794`: ticket session, then subkey.
+        // MIT `init_sec_context.c`: ticket session, then subkey.
         let plain = decrypt(ticket_session, usage, cipher)
             .or_else(|_| decrypt(&self.session, usage, cipher))?;
         let part: EncApRepPart = decode(&plain)?;
@@ -617,7 +617,7 @@ impl GssContext {
         &self.session
     }
 
-    /// MIT `gss_krb5_get_tkt_flags` INITIAL bit.
+    /// MIT `gss_krb5_get_tkt_flags` (`krb5_gss_glue.c:58-92`): INITIAL bit.
     #[must_use]
     pub fn ticket_is_initial(&self) -> bool {
         self.ticket_initial

@@ -1,8 +1,8 @@
-//! kpropd `authorized_principal` (MIT `kpropd.c:1298-1348`) on the
+//! MIT `authorized_principal` (`kpropd.c:1298-1348`): kpropd `authorized_principal` (MIT on the
 //! wire. The ACL is a list of exact unparsed principals with an optional
 //! enctype restriction; there are no wildcards; the check runs after
 //! `recvauth` has sent the AP-REP, and a refused peer just sees the socket
-//! close (`kpropd.c:528-546`). Live oracle: MIT kpropd in
+//! MIT `doit` (`kpropd.c:528-546`): close. Live oracle: MIT kpropd in
 //! `scripts/prop-acl-gate.sh` (`acl-*` cells).
 
 use krb5_admin::{Error, KpropAuth, kprop_send_dump, kprop_sendauth, kpropd_recvauth};
@@ -217,7 +217,7 @@ fn kpropd_acl_is_a_prefix_match_ended_by_whitespace_or_eol() {
 
 #[test]
 fn kpropd_refuses_after_the_ap_rep_so_kprop_fails_on_the_dump_not_sendauth() {
-    // kpropd.c:526-546: authorized_principal runs after kerberos_authenticate;
+    // MIT `doit` (`kpropd.c:526-546`): authorized_principal runs after kerberos_authenticate
     // MIT kprop completes sendauth (gets the AP-REP) and then dies with
     // `Broken pipe while sending database block starting at 0`.
     let (store, _) = bootstrap_documented().unwrap();

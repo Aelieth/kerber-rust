@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use super::principal::{Principal, strip_db_args};
 use super::{PrincipalStore, unix_now_u32};
 
-/// Circular iprop update-log entry (serial-numbered; MIT `kdb_incr_update`).
+/// Circular iprop update-log entry (serial-numbered; kdb_incr_update).
 #[derive(Clone, Debug)]
 pub struct UlogEntry {
     /// Monotonic serial (`kdb_sno_t`).
@@ -24,21 +24,21 @@ pub struct UlogEntry {
 
 const ULOG_CAP: usize = 1024;
 
-/// MIT `UPDATE_OK`.
+/// UPDATE_OK.
 pub const IPROP_OK: u32 = 0;
 
-/// MIT `UPDATE_ERROR`: the master could not build the update (here: no master
+/// UPDATE_ERROR: the master could not build the update (here: no master
 /// key to wrap the plaintext keys the Rust store holds, so it refuses rather
 /// than ship them in the clear).
 pub const IPROP_ERROR: u32 = 1;
 
-/// MIT `UPDATE_FULL_RESYNC_NEEDED`.
+/// UPDATE_FULL_RESYNC_NEEDED.
 pub const IPROP_FULL_RESYNC: u32 = 2;
 
-/// MIT `UPDATE_NIL`.
+/// UPDATE_NIL.
 pub const IPROP_NIL: u32 = 4;
 
-/// MIT `UPDATE_PERM_DENIED`.
+/// UPDATE_PERM_DENIED.
 pub const IPROP_PERM_DENIED: u32 = 5;
 
 impl PrincipalStore {

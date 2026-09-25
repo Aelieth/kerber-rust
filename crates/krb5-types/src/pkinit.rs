@@ -740,10 +740,10 @@ pub fn encode_td_dh_p256() -> Vec<u8> {
     tlv(0x30, &alg)
 }
 
-/// MIT `KRB5_ANONYMOUS_REALMSTR`.
+/// KRB5_ANONYMOUS_REALMSTR.
 pub const ANONYMOUS_REALM: &str = "WELLKNOWN:ANONYMOUS";
 
-/// MIT `krb5_anonymous_principal`: `WELLKNOWN/ANONYMOUS` (NT-WELLKNOWN).
+/// MIT `krb5_anonymous_principal` (`bld_princ.c:179-182`): `WELLKNOWN/ANONYMOUS` (NT-WELLKNOWN).
 #[must_use]
 pub fn anonymous_client() -> crate::PrincipalName {
     crate::PrincipalName::new(

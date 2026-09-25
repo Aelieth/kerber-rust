@@ -76,7 +76,7 @@ pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Er
     derive_prfplus_enctype(key, input, key.etype())
 }
 
-/// MIT `krb5_c_derive_prfplus` with an explicit output enctype (`cf2.c:93`).
+/// MIT `krb5_c_derive_prfplus` (`cf2.c:93-93`): with an explicit output enctype.
 ///
 /// # Errors
 ///

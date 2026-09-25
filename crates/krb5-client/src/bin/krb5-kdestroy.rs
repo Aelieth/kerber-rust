@@ -1,4 +1,4 @@
-//! Zero and unlink a FILE ccache (MIT `kdestroy`).
+//! Zero and unlink a FILE ccache (kdestroy).
 //!
 //! Usage: krb5-kdestroy [-c ccache]
 

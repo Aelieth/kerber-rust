@@ -15,7 +15,7 @@ use crate::store::{
     Principal,
 };
 
-/// MIT `check_tgs_u2u` (`tgs_policy.c:575-598`).
+/// MIT `check_tgs_u2u` (`tgs_policy.c:575-598`): same check.
 pub(super) fn check_tgs_u2u(
     store: &dyn PrincipalRead,
     stkt: Option<&SecondTicket>,
@@ -98,7 +98,7 @@ pub(super) fn check_tgs_constraints_skeleton(
         }
     }
     if non_tgt_option(body) {
-        // MIT tgs_policy.c:636: krb5_principal_compare includes the realm.
+        // MIT `check_tgs_nontgt` (`tgs_policy.c:636-636`): krb5_principal_compare includes the realm.
         if header_sname != req_sname || header_realm != req_realm {
             return Err(proto(err::SERVER_NOMATCH, status::RENEW_SERVER_MISMATCH));
         }
@@ -116,7 +116,7 @@ pub(super) fn check_tgs_constraints_skeleton(
     Ok(())
 }
 
-/// MIT `check_tgs_s4u2self` (`tgs_policy.c:261-358`).
+/// MIT `check_tgs_s4u2self` (`tgs_policy.c:262-358`): same check.
 pub(super) fn check_tgs_s4u2self(
     store: &dyn PrincipalRead,
     body: &krb5_types::KdcReqBody,
@@ -193,7 +193,7 @@ pub(super) fn check_tgs_policy_flags(
     header_is_tgt: bool,
     tkt: &EncTicketPart,
 ) -> Result<(), Error> {
-    // MIT `svc_pol_fns` (`tgs_policy.c:60-63`): deny_opts, deny_all, reqd_flags, svc_time.
+    // MIT `check_tgs_svc_policy` (`tgs_policy.c:201-215`): deny_opts, deny_all, reqd_flags, svc_time.
     // deny_opts:
     if attr(server, KDB_DISALLOW_RENEWABLE) && body.kdc_options.bit(flag_bit::RENEWABLE) {
         return Err(proto(err::POLICY, status::NON_RENEWABLE_TICKET));
@@ -221,8 +221,8 @@ pub(super) fn check_tgs_policy_flags(
     if attr(server, KDB_REQUIRES_PRE_AUTH) && !tkt.flags.bit(flag_bit::PRE_AUTHENT) {
         return Err(proto(err::GENERIC, status::NO_PREAUTH));
     }
-    // svc_time (`tgs_policy.c:190-198`) last in `svc_pol_fns`, before
-    // `check_indicators` (`do_tgs_req.c:897-902`).
+    // MIT `check_tgs_svc_time` (`tgs_policy.c:190-198`): svc_time last in `svc_pol_fns`, before
+    // MIT `check_tgs_req` (`do_tgs_req.c:897-902`): `check_indicators`.
     check_db_times(None, server)?;
     Ok(())
 }

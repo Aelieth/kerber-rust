@@ -1,4 +1,4 @@
-//! Realm-qualified kadm5 acceptor checks (`server_stubs.c:28-32`).
+//! Realm-qualified kadm5 acceptor checks (`server_stubs.c`).
 
 use krb5_admin::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,

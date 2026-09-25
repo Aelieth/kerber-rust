@@ -6,7 +6,7 @@
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
 //! SPAKE 91 carries ETYPE-INFO2 when the client has not yet seen a cookie
-//! (`kdc_preauth.c:1141-1170 maybe_add_etype_info2`).
+//! MIT `maybe_add_etype_info2` (`kdc_preauth.c:1142-1170`): maybe_add_etype_info2`).
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, prf_plus};

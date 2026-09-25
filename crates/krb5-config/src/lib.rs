@@ -36,7 +36,7 @@ pub enum Error {
     #[error("dns srv: {0}")]
     Dns(String),
     /// Ccache name / `%{token}` expansion. `Unknown credential cache
-    /// type` is MIT `KRB5_CC_UNKNOWN_TYPE` (`krb5_err.et:190`); the two
+    /// type` is KRB5_CC_UNKNOWN_TYPE (`krb5_err.et:190`); the two
     /// `%{token}` texts are this crate's (MIT `expand_path.c` says
     /// `Invalid token` / `variable missing }`).
     #[error("{0}")]
@@ -78,16 +78,16 @@ pub struct Krb5Conf {
     pub clockskew: u32,
     /// `dns_lookup_kdc`.
     pub dns_lookup_kdc: bool,
-    /// `dns_lookup_realm` (MIT `krb5_get_host_realm`).
+    /// MIT `krb5_get_host_realm` (`hostrealm.c:361-398`): `dns_lookup_realm`.
     pub dns_lookup_realm: bool,
     /// `udp_preference_limit` (MIT default 1465). `None` = default.
     pub udp_preference_limit: Option<u32>,
     /// `rdns`. Parsed; we do not reverse-resolve addresses.
     pub rdns: bool,
-    /// `kdc_timesync`. Default true (`init_ctx.c:268-270`). AS-REP
+    /// MIT `krb5_init_context_profile` (`init_ctx.c:268-270`): `kdc_timesync`. Default true. AS-REP
     /// `verify_as_reply` skips starttime vs the local clock when set.
     pub kdc_timesync: bool,
-    /// `verify_ap_req_nofail`. Default false (`vfy_increds.c:38-51`).
+    /// MIT `nofail` (`vfy_increds.c:39-51`): `verify_ap_req_nofail`. Default false.
     pub verify_ap_req_nofail: bool,
     /// `permitted_enctypes`.
     pub permitted_enctypes: Vec<String>,
@@ -99,7 +99,7 @@ pub struct Krb5Conf {
     pub forwardable: bool,
     /// `proxiable`.
     pub proxiable: bool,
-    /// `canonicalize`. Default false (`get_in_tkt.c:921-930`).
+    /// MIT `krb5_init_creds_init` (`get_in_tkt.c:921-930`): `canonicalize`. Default false.
     pub canonicalize: bool,
     /// `ticket_lifetime` seconds.
     pub ticket_lifetime: Option<u64>,
@@ -118,7 +118,7 @@ pub struct Krb5Conf {
     /// `[libdefaults] preferred_preauth_types`. Empty = MIT default `17, 16, 15, 14`.
     pub preferred_preauth_types: Vec<i32>,
     /// `[libdefaults] ignore_acceptor_hostname`. Default false
-    /// (`sname_match.c:51-53`).
+    /// MIT `krb5_sname_match` (`sname_match.c:51-53`): same check.
     pub ignore_acceptor_hostname: bool,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
@@ -147,10 +147,10 @@ pub struct KdcConf {
     pub realm: String,
     /// Maximum ticket lifetime in seconds (default 1 day, `alt_prof.c`).
     pub max_life: u64,
-    /// kadm5 create default for `max_renewable_life` (`alt_prof.c:577-578`
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:577-578`): kadm5 create default for `max_renewable_life`
     /// `GET_DELTAT_PARAM(max_rlife, …, 0)`). Omitted = 0.
     pub max_renewable_life: u64,
-    /// KDC realm renewable cap (`kdc/main.c:316-319` `realm_maxrlife`,
+    /// MIT `gss_inquire_sec_context_by_oid` (`main.c:316-319`): KDC realm renewable cap (`kdc/ `realm_maxrlife`
     /// omitted = `KRB5_KDB_MAX_RLIFE` = 7 days). A written
     /// `max_renewable_life` sets this and [`Self::max_renewable_life`].
     pub realm_max_renewable_life: u64,
@@ -174,12 +174,12 @@ pub struct KdcConf {
     pub supported_enctypes: Vec<String>,
     /// Per-principal `requires_preauth` default.
     pub requires_preauth: bool,
-    /// `[realms] default_principal_flags` as written (MIT `alt_prof.c:596-632`
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): `[realms] default_principal_flags` as written (MIT
     /// `KADM5_CONFIG_FLAGS`; the flagspec list is parsed by the store). `None`
     /// = `KRB5_KDB_DEF_FLAGS` (0).
     pub default_principal_flags: Option<String>,
     /// `[realms] default_principal_expiration` as written (MIT
-    /// `alt_prof.c:580-594` `KADM5_CONFIG_EXPIRATION`, a
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:580-594`): `KADM5_CONFIG_EXPIRATION`, a
     /// `krb5_string_to_timestamp` form; the store converts it). `None` = 0.
     pub default_principal_expiration: Option<String>,
     /// `master_key_type` (MIT name, e.g. `aes256-cts-hmac-sha384-192`).
@@ -191,15 +191,15 @@ pub struct KdcConf {
     /// `reject_bad_transit` (default true). When false, a failed transited
     /// check is accepted without `TRANSITED_POLICY_CHECKED`.
     pub reject_bad_transit: bool,
-    /// MIT `disable_pac` (default false).
+    /// disable_pac (default false).
     pub disable_pac: bool,
-    /// MIT `restrict_anonymous_to_tgt` (default false).
+    /// restrict_anonymous_to_tgt (default false).
     pub restrict_anon: bool,
-    /// MIT `pkinit_require_freshness` (default false).
+    /// pkinit_require_freshness (default false).
     pub pkinit_require_freshness: bool,
-    /// MIT `host_based_services` (space/comma-separated).
+    /// host_based_services (space/comma-separated).
     pub host_based_services: String,
-    /// MIT `no_host_referral` (space/comma-separated).
+    /// no_host_referral (space/comma-separated).
     pub no_host_referral: String,
     /// `[realms] encrypted_challenge_indicator`.
     pub encrypted_challenge_indicator: Option<String>,
@@ -210,7 +210,7 @@ pub struct KdcConf {
     /// `[libdefaults] spake_preauth_groups`. `None` = omitted.
     pub spake_preauth_groups: Option<Vec<String>>,
     /// `[realms] dict_file` for the `dict` password-quality module. MIT
-    /// `alt_prof.c:486-513` reads it from the realm stanza only, never from
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:486-513`): reads it from the realm stanza only, never from
     /// `[kdcdefaults]`.
     pub dict_file: Option<PathBuf>,
 }

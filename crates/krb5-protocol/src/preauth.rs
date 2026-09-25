@@ -101,7 +101,7 @@ pub fn attach_fast(
 
 /// [`attach_fast`] with an explicit `FastOptions` (RFC 6113 bit 1
 /// hide-client-names, etc.). The KDC honours hide-client-names by returning
-/// the anonymous principal as the outer reply client (MIT `kdc_fast_hide_client`).
+/// MIT `kdc_fast_hide_client` (`fast_util.c:444-447`): the anonymous principal as the outer reply client.
 ///
 /// # Errors
 ///
@@ -120,11 +120,11 @@ pub fn attach_fast_with_options(
     // so the enc-pa-rep negotiation works through the armor too.
     //
     // Outer times stay at the `krb5int_fast_prep_req_body` snapshot
-    // (`get_in_tkt.c:836-838`, `fast.c:157-161`) taken before
-    // `set_request_times` (`get_in_tkt.c:1278-1280`): required `till` is
+    // MIT `restart_init_creds_loop` (`get_in_tkt.c:836-838`): `fast.c`) taken before
+    // MIT `init_creds_step_request` (`get_in_tkt.c:1278-1280`): `set_request_times` : required `till` is
     // epoch (`19700101`); optional `from`/`rtime` stay omitted. The inner
     // FAST-REQ body keeps the live times. `req_checksum` is over the
-    // snapshotted outer body (`fast.c:310-313`).
+    // MIT `krb5int_fast_prep_req` (`fast.c:310-313`): snapshotted outer body.
     let mut inner = inner_padata;
     inner.extend(req.0.padata.take().unwrap_or_default());
     let inner_body = req.0.req_body.clone();
@@ -170,7 +170,7 @@ pub fn fx_fast_padata(
 
 /// [`fx_fast_padata`] with an explicit FAST req_checksum input.
 ///
-/// TGS FAST checksums the PA-TGS-REQ AP-REQ (`fast.c:279`, `send_tgs.c:279`).
+/// MIT `krb5int_fast_prep_req` (`fast.c:279-279`): TGS FAST checksums the PA-TGS-REQ AP-REQ, `send_tgs.c`).
 ///
 /// # Errors
 ///
@@ -218,7 +218,7 @@ pub fn fx_fast_padata_over(
     })
 }
 
-/// MIT `fast.c:543-551`: verify `KrbFastFinished.ticket_checksum` over the ticket DER.
+/// MIT `krb5int_fast_process_response` (`fast.c:543-551`): verify `KrbFastFinished.ticket_checksum` over the ticket DER.
 ///
 /// # Errors
 ///
@@ -240,7 +240,7 @@ pub fn verify_fast_finished(
     .map_err(|_| Error::ReplyMismatch("Ticket modified in KDC reply".into()))
 }
 
-/// MIT `fast.c:648-664`: PA-REQ-ENC-PA-REP over the AS-REQ when `enc-pa-rep` is set.
+/// MIT `krb5int_fast_verify_nego` (`fast.c:648-664`): PA-REQ-ENC-PA-REP over the AS-REQ when `enc-pa-rep` is set.
 ///
 /// # Errors
 ///
@@ -286,7 +286,7 @@ pub fn unwrap_fast_rep(
     decode(&plain).map_err(Error::from)
 }
 
-/// MIT `fast.c:397-402` `decrypt_fast_reply`: `local_resp->nonce != state->nonce`
+/// MIT `decrypt_fast_reply` (`fast.c:397-402`): decrypt_fast_reply: `local_resp->nonce != state->nonce`
 /// is `KRB5_KDCREP_MODIFIED` ("nonce modified in FAST response").
 ///
 /// # Errors
@@ -780,7 +780,7 @@ fn s4u_not_newer(etype: EncryptionType) -> bool {
     matches!(etype, EncryptionType::Des3CbcSha1 | EncryptionType::Rc4Hmac)
 }
 
-/// MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`). Missing 130 on
+/// MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): . Missing 130 on
 /// both the (FAST-swapped) reply padata and enc-padata is accepted.
 /// Enc-only 130, a nonce/user/checksum mismatch, or an unkeyed reply
 /// checksum on a modern etype is refused.

@@ -3012,7 +3012,7 @@ HYGIENE_FN_DIFF_MIN_CASES = 134
 HYGIENE_INVENTORY_MIN_CASES = 3
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
-MIT_ANCHOR_ALLOW = 728
+MIT_ANCHOR_ALLOW = 0
 PROCESS_TAG_ALLOW = 0
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (

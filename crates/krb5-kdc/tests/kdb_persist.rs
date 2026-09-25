@@ -1,20 +1,20 @@
 //! Persist round-trip and UDP listener adversarial tests.
 //! `kdb_put_entry` stamps `KRB5_TL_MOD_PRINC` with
-//! `handle->current_caller` (`server_kdb.c:376-377`), not a hard-coded
+//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): `handle->current_caller`, not a hard-coded
 //! `kadmin/admin@REALM`. Compiles at the parent: `create_password` already
 //! takes `actor`, but `stamp_admin_tl` ignored it.
 //! `kdb5_util create` stamps `db_creation@REALM`
-//! (`kdb5_create.c:114-133`). Compiles at the parent: bootstrap and
+//! (`kdb5_create.c`). Compiles at the parent: bootstrap and
 //! `tl_mod_princ_name` exist; the parent hard-codes `kadmin/admin@REALM`.
 //! `kadm5_create` stamps `kadmin/admin` and `kadmin/changepw`
-//! `kdb5_util@REALM` (`kadm5_create.c:100`). Compiles at the parent:
+//! MIT `kadm5_create_magic_princs` (`kadm5_create.c:100-100`): `kdb5_util@REALM`. Compiles at the parent
 //! bootstrap and `tl_mod_princ_name` exist; the parent restamps them
 //! `db_creation@` via `apply_admin_fields`.
 //! Z8 leftover: `kadm5_purgekeys` → `kdb_put_entry` stamps
-//! `current_caller` (`server_kdb.c:376-377`). Compiles at the parent:
+//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): `current_caller`. Compiles at the parent
 //! `purgekeys` and `tl_mod_princ_name` exist; the parent does not stamp.
 //! Z8 leftover: `kadm5_set_string` → `kdb_put_entry` stamps
-//! `current_caller` (`svr_principal.c:2022-2043`). Compiles at the
+//! MIT `kadm5_set_string` (`svr_principal.c:2022-2043`): `current_caller`. Compiles at the
 //! parent: `set_string` and `tl_mod_princ_name` exist; the parent
 //! writes the attr and does not stamp.
 

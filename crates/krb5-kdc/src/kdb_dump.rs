@@ -1,6 +1,6 @@
-//! MIT `kdb5_util` dump version 6/7 textual codec.
+//! kdb5_util dump version 6/7 textual codec.
 //!
-//! Grammar (MIT `k5beta7_common` / `process_k5beta7_princ`):
+//! MIT `k5beta7_common` (`dump.c:294-374`): Grammar ( / `process_k5beta7_princ`
 //! `princ\tlen\tnamelen\tn_tl_data\tn_key_data\te_length\tname\t`
 //! `attributes\tmax_life\tmax_renewable_life\texpiration\t`
 //! `pw_expiration\tlast_success\tlast_failed\tfail_auth_count`
@@ -33,7 +33,7 @@ pub const KDB_DUMP_VERSION: u32 = 7;
 /// Older `-r18` header. Princ records match version 7.
 pub(crate) const KDB_DUMP_VERSION_R18: u32 = 6;
 
-/// `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put (`kdb5.c:893-945`).
+/// MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put.
 pub const TL_DB_ARGS: i32 = 0x7fff;
 /// `KRB5_TL_LAST_PWD_CHANGE`.
 pub const TL_LAST_PWD_CHANGE: i32 = 1;

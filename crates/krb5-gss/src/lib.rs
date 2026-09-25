@@ -1,6 +1,6 @@
 //! GSS-API Kerberos V5 mechanism (RFC 4121) and SPNEGO (RFC 4178).
 //!
-//! Interop with MIT `libgssapi_krb5` is out-of-process only. This crate
+//! Interop with libgssapi_krb5 is out-of-process only. This crate
 //! never links C libraries.
 //!
 //! One module per MIT source family: `context` (init/accept), `wrap`,

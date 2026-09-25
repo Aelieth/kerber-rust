@@ -341,7 +341,7 @@ impl PrincipalStore {
         self.get_in_realm(name, &self.realm)
     }
 
-    /// Lookup `name@princ_realm` (MIT `kdb_get_entry` uses the request realm).
+    /// MIT `kdb_get_entry` (`server_kdb.c:257-309`): Lookup `name@princ_realm` ( uses the request realm).
     #[must_use]
     pub fn get_in_realm(&self, name: &PrincipalName, princ_realm: &str) -> Option<&Principal> {
         self.get(&crate::kdb::lookup_principal_id(name, princ_realm))

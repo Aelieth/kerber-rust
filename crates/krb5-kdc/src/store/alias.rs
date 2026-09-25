@@ -35,7 +35,7 @@ impl PrincipalStore {
             .ok_or(Error::NotFound)
     }
 
-    /// `kadm5_create_alias` (`svr_principal.c:2051-2087`): an alias stub is
+    /// MIT `kadm5_create_alias` (`svr_principal.c:2051-2087`): `kadm5_create_alias` : an alias stub is
     /// a keyless `DISALLOW_ALL_TIX` entry whose only content is
     /// `KRB5_TL_ALIAS_TARGET`. The target need not exist; the alias name must
     /// not resolve to anything.

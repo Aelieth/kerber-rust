@@ -1,4 +1,4 @@
-//! MIT `log_tgs_req` / `log_as_req` status words (`do_as_req.c`,
+//! MIT `log_tgs_req` (`kdc_log.c:117-173`): `log_as_req` status words (`do_as_req.c`
 //! `do_tgs_req.c`, `tgs_policy.c`, `kdc_util.c`). These are the KRB-ERROR
 //! `e_text` values; `k5_setmsg` strings stay in `Error::Protocol.detail`.
 
@@ -57,7 +57,7 @@ pub(crate) const NULL_SERVER: &str = "NULL_SERVER";
 pub(crate) const POSTDATE_NOT_ALLOWED: &str = "POSTDATE NOT ALLOWED";
 pub(crate) const PREAUTH_FAILED: &str = "PREAUTH_FAILED";
 pub(crate) const PROCESS_TGS: &str = "PROCESS_TGS";
-/// MIT `do_as_req.c:747-751` status; Rust's `open_cookie` ignores bad cookies
+/// MIT `process_as_req` (`do_as_req.c:747-751`): MIT status; Rust's `open_cookie` ignores bad cookies
 /// like MIT's `return 0` path, so this word is never emitted.
 pub(crate) const READ_COOKIE: &str = "READ_COOKIE";
 pub(crate) const RENEW_SERVER_MISMATCH: &str = "SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC";

@@ -37,16 +37,16 @@ pub const GSS_C_PROT_READY: u32 = 128;
 /// RFC 2744 `GSS_C_TRANS_FLAG` (context is exportable).
 pub const GSS_C_TRANS: u32 = 256;
 
-/// MIT `GSS_C_CHANNEL_BOUND_FLAG` (`gssapi_ext.h`).
+/// GSS_C_CHANNEL_BOUND_FLAG (`gssapi_ext.h`).
 pub const GSS_C_CHANNEL_BOUND: u32 = 0x0800;
 
-/// MIT `GSS_C_DCE_STYLE` (`gssapi_ext.h`).
+/// GSS_C_DCE_STYLE (`gssapi_ext.h`).
 pub const GSS_C_DCE: u32 = 0x1000;
 
-/// MIT `GSS_C_IDENTIFY_FLAG`.
+/// GSS_C_IDENTIFY_FLAG.
 pub const GSS_C_IDENTIFY: u32 = 0x2000;
 
-/// MIT `GSS_C_EXTENDED_ERROR_FLAG`.
+/// GSS_C_EXTENDED_ERROR_FLAG.
 pub const GSS_C_EXTENDED_ERROR: u32 = 0x4000;
 
 /// RFC 4121 per-message tokens are bare (no RFC 2743 APPLICATION 0 wrapper).

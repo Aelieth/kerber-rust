@@ -25,11 +25,11 @@ use krb5_types::{
 
 use crate::Error;
 
-/// MIT `KPROP_PROT_VERSION`.
+/// KPROP_PROT_VERSION.
 const KPROP_PROT_VERSION: &[u8] = b"kprop5_01\0";
 /// MIT `KRB5_SENDAUTH_V1.0`.
 const SENDAUTH_VERSION: &[u8] = b"KRB5_SENDAUTH_V1.0\0";
-/// MIT `KPROP_BUFSIZ`.
+/// KPROP_BUFSIZ.
 const KPROP_BUFSIZ: usize = 32_768;
 
 /// Dump text from a store (version 7). Used as the kprop body.
@@ -144,7 +144,7 @@ fn session_from_ticket(ok: &krb5_protocol::ApVerifyOk) -> Result<ProtocolKey, Er
     protocol_key_from_enc(&ok.ticket_part.key)
 }
 
-/// MIT `create_krbsafe`: checksum the full KRB-SAFE encoding with a
+/// MIT `create_krbsafe` (`mk_safe.c:45-97`): checksum the full KRB-SAFE encoding with a
 /// zero-type/zero-length checksum, then replace the checksum.
 fn mit_safe_dummy_der(msg: &krb5_types::KrbSafe) -> Result<Vec<u8>, Error> {
     let mut dummy = msg.clone();
@@ -214,7 +214,7 @@ impl KpropAuth {
 ///
 /// `acl_lines` are the raw `kpropd.acl` lines (`None` = no readable file);
 /// after `recvauth` completes they are checked with
-/// `kpropd_authorized_principal` exactly as MIT `kpropd.c:528-546` does
+/// MIT `doit` (`kpropd.c:528-546`): `kpropd_authorized_principal` exactly as MIT does
 /// (the AP-REP has already been sent; a rejected peer sees the connection
 /// close).
 ///
@@ -275,10 +275,10 @@ pub fn kpropd_recvauth(
             .map_err(|e| Error::Inner(e.to_string()))?;
         let der = encode(&ap_rep).map_err(|e| Error::Inner(e.to_string()))?;
         write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
-        // MIT `rd_rep` stores this seq as remote_seq; the size-ack SAFE
+        // rd_rep stores this seq as remote_seq; the size-ack SAFE
         // must use the same value (then increment).
     }
-    // MIT kpropd.c:526-546: `authorized_principal` runs after
+    // MIT `doit` (`kpropd.c:526-546`): `authorized_principal` runs after
     // `kerberos_authenticate` (recvauth complete, AP-REP sent) and a rejected
     // peer gets `exit(1)` — no KRB-ERROR, the socket just closes, so MIT
     // kprop reports `Broken pipe while sending database block starting at 0`.
@@ -295,7 +295,7 @@ pub fn kpropd_recvauth(
     })
 }
 
-/// MIT `kpropd.c:1298-1348` `authorized_principal`.
+/// MIT `authorized_principal` (`kpropd.c:1298-1348`): authorized_principal.
 ///
 /// `acl_lines` are the file's lines with only the trailing `\n` removed
 /// (`fgets` + `buf[end] = '\0'`); `None` is an unopenable file. `name` is
@@ -334,7 +334,7 @@ pub fn kpropd_authorized_principal(
     false
 }
 
-/// `krb5_string_to_enctype` (`enctype_util.c:89-114`) as used by the kpropd
+/// MIT `krb5_string_to_enctype` (`enctype_util.c:89-114`): `krb5_string_to_enctype` as used by the kpropd
 /// ACL: the whole remainder must be an enctype name or alias, compared with
 /// `strcasecmp`; a number, trailing whitespace or `\r` is `EINVAL`.
 fn kpropd_acl_string_to_enctype(s: &str) -> Option<i32> {
@@ -349,7 +349,7 @@ fn kpropd_acl_string_to_enctype(s: &str) -> Option<i32> {
         .map(EncryptionType::to_iana)
 }
 
-/// MIT `krb5int_is_app_tag(dat, 14)` (`k5-int.h:1334-1336`).
+/// MIT `krb5int_is_app_tag(dat, 14)` (`k5-int.h`).
 fn is_ap_req(raw: &[u8]) -> bool {
     raw.first().is_some_and(|b| b & !0x20 == 0x4e)
 }
@@ -475,7 +475,7 @@ fn e_text_with_nul(text: &str) -> Option<krb5_types::KerberosString> {
     krb5_types::kerberos_string_from_bytes(&bytes).ok()
 }
 
-/// MIT `recvauth.c:150-188`: AP-REQ failure is a length-prefixed KRB-ERROR.
+/// MIT `recvauth.c`: AP-REQ failure is a length-prefixed KRB-ERROR.
 fn kprop_rd_req_error(
     raw: &[u8],
     e: &krb5_protocol::Error,
@@ -549,7 +549,7 @@ pub fn kpropd_recv_dump(stream: &mut TcpStream, auth: &mut KpropAuth) -> Result<
     Ok(dump)
 }
 
-/// Send the SAFE size-ack MIT `kprop` waits for.
+/// Send the SAFE size-ack kprop waits for.
 ///
 /// # Errors
 ///
@@ -568,7 +568,7 @@ pub fn kpropd_send_ack(
 
 /// kpropd's parsed configuration.
 ///
-/// MIT `kpropd.c:131-143`: the realm, database path, stash, and ACL the
+/// MIT `kpropd.c`: the realm, database path, stash, and ACL the
 /// daemon was started with.
 #[derive(Clone, Copy)]
 pub struct KpropdConfig<'a> {

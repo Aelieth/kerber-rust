@@ -99,7 +99,7 @@ pub struct KrbFastArmoredRep {
     pub enc_fast_rep: EncryptedData,
 }
 
-/// MIT `SecureCookie` (`asn1_k_encode.c:1683-1688`): untagged SEQUENCE.
+/// SecureCookie is an untagged SEQUENCE of a timestamp and PA-DATA.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct SecureCookie {
     /// Unix timestamp when the cookie was minted.

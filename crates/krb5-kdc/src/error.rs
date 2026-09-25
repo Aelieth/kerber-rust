@@ -17,7 +17,7 @@ pub enum Error {
         text: Option<String>,
         /// Optional KRB-ERROR `e-data` (METHOD-DATA / TD-DH-PARAMETERS).
         e_data: Option<Vec<u8>>,
-        /// MIT `k5_setmsg` text for `kdc.issue` `detail` (not on the wire).
+        /// k5_setmsg text for `kdc.issue` `detail` (not on the wire).
         detail: Option<String>,
     },
     /// Actor is not permitted this admin operation.
@@ -43,7 +43,7 @@ pub enum Error {
         /// `last_pwd_change + pw_min_life`.
         until: u32,
     },
-    /// `EINVAL` from `krb5_db_put_principal` / DB2 `db_args` (`kdb_db2.c:817-822`).
+    /// MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): `EINVAL` from `krb5_db_put_principal` / DB2 `db_args`.
     InvalidArgument(String),
     /// Request PDU was not AS-REQ or TGS-REQ.
     UnexpectedPdu,
@@ -112,7 +112,7 @@ impl From<krb5_protocol::Error> for Error {
     }
 }
 
-/// MIT `kdc_util.c:691-697` `errcode_to_protocol`.
+/// MIT `errcode_to_protocol` (`kdc_util.c:692-697`): errcode_to_protocol.
 #[must_use]
 pub fn errcode_to_protocol(code: i32) -> i32 {
     if (0..=128).contains(&code) {

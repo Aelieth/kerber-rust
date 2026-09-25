@@ -8,7 +8,7 @@ use krb5_types::PrincipalName;
 
 /// Documented test realm.
 pub const TEST_REALM: &str = "KERBER.TEST";
-/// Password principal used by MIT `kinit` gates.
+/// MIT `kinit` (`t_kadm5.c:247-260`): Password principal used by gates.
 pub const TEST_USER: &str = "user";
 /// Password for [`TEST_USER`].
 pub const TEST_USER_PASSWORD: &[u8] = b"userpassword";

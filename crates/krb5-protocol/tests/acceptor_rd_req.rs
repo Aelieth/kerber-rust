@@ -313,7 +313,7 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
 
 #[test]
 fn no_starttime_future_authtime_is_nyv() {
-    // MIT valid_times.c:44-51: starttime==0 falls back to authtime; a ticket
+    // MIT `krb5int_validate_times` (`valid_times.c:44-51`): starttime==0 falls back to authtime; a ticket
     // whose authtime is well beyond the skew is not yet valid.
     let far = KerberosTime::now()
         .add_seconds(DEFAULT_SKEW + 3600)
@@ -332,7 +332,7 @@ fn no_starttime_future_authtime_is_nyv() {
 
 #[test]
 fn invalid_flag_is_tkt_invalid() {
-    // MIT rd_req_dec.c:634-638: the INVALID flag yields KRB5KRB_AP_ERR_TKT_INVALID
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): the INVALID flag yields KRB5KRB_AP_ERR_TKT_INVALID
     // (offset 145), distinct from TKT_NYV.
     let (raw, key) = host_ap_req_forged(|part| {
         part.flags = part.flags.clone().with_bit(flag_bit::INVALID, true);
@@ -350,9 +350,9 @@ fn invalid_flag_is_tkt_invalid() {
 
 #[test]
 fn pinned_name_wrong_kvno_is_badkeyver() {
-    // MIT rd_req_dec.c:374-376 try_one_princ → krb5_kt_get_entry(princ, kvno,
-    // etype); kt_file.c:380-384 an entry for the principal+enctype at another
-    // kvno is KRB5_KT_KVNONOTFOUND; rd_req_dec.c:139-148 keytab_fetch_error
+    // MIT `decrypt_try_server` (`rd_req_dec.c:374-376`): MIT try_one_princ → krb5_kt_get_entry(princ, kvno
+    // MIT `krb5_ktfile_get_entry` (`kt_file.c:380-384`): etype); an entry for the principal+enctype at another
+    // MIT `keytab_fetch_error` (`rd_req_dec.c:139-148`): kvno is KRB5_KT_KVNONOTFOUND; keytab_fetch_error
     // maps it to KRB5KRB_AP_ERR_BADKEYVER (44) "Cannot find key for %s kvno %d
     // in keytab" when the pinned name is the ticket's server. Parent: 45 NOKEY.
     let (raw, key) = host_ap_req_forged(|_| {});

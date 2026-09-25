@@ -1,6 +1,6 @@
 //! `kvno -U` emits PA-S4U-X509-USER 130 and PA-FOR-USER 129
-//! on the FAST TGS outer list (`s4u_creds.c:517-567`, `fast.c:227-250`)
-//! and `verify_s4u2self_reply` (`s4u_creds.c:273-397`) fails closed.
+//! MIT `krb5_get_self_cred_from_kdc` (`s4u_creds.c:517-567`): on the FAST TGS outer list, `fast.c`)
+//! MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): and `verify_s4u2self_reply` fails closed.
 //! Live oracle: `client-differential-gate.sh` `MIT_kvno_U_tgs_padata`.
 //! `verify_s4u2self_reply` is new at the parent so a re-export inject
 //! does not compile; the live MIT `kvno -U` cell is the production oracle.

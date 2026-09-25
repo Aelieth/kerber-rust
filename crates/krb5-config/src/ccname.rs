@@ -12,12 +12,12 @@ use super::CcSpec;
 use super::Error;
 use super::profile::load_krb5_conf;
 
-/// MIT `KRB5_CC_UNKNOWN_TYPE`.
+/// KRB5_CC_UNKNOWN_TYPE.
 pub const KRB5_CC_UNKNOWN_TYPE: &str = "Unknown credential cache type";
 
 const BUILTIN_CCACHE: &str = "FILE:/tmp/krb5cc_%{uid}";
 
-/// Expand MIT `default_ccache_name` tokens (`%{uid}` / `%{USERID}` / `%{euid}`).
+/// Expand default_ccache_name tokens (`%{uid}` / `%{USERID}` / `%{euid}`).
 ///
 /// # Errors
 ///

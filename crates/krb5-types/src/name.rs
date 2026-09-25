@@ -9,11 +9,11 @@ pub struct ParsedName {
     pub components: Vec<String>,
     /// Realm; empty when the input was `foo@` or `NO_DEF_REALM`.
     pub realm: String,
-    /// Whether an unquoted `@` started a realm (`parse.c:116`).
+    /// MIT `allocate_princ` (`parse.c:116-116`): Whether an unquoted `@` started a realm.
     pub has_realm: bool,
 }
 
-/// Parse `name[@realm]` with MIT quoting (`parse.c:62-102`).
+/// MIT `allocate_princ` (`parse.c:62-102`): Parse `name[@realm]` with MIT quoting.
 ///
 /// Empty components are allowed. `foo@` keeps an empty realm. No `@`
 /// uses `default_realm`. Trailing `\` is an error. `/` or a second `@`
@@ -88,7 +88,7 @@ fn push_char(comps: &mut [String], realm: &mut Option<String>, in_realm: bool, c
     }
 }
 
-/// MIT `k5_infer_principal_type` (`bld_princ.c:31-42`).
+/// MIT `k5_infer_principal_type` (`bld_princ.c:31-42`): same check.
 #[must_use]
 pub fn infer_name_type(comps: &[String]) -> i32 {
     if comps.len() == 2 && comps[0] == "krbtgt" {
@@ -161,7 +161,7 @@ pub fn unparse_components(comps: &[String]) -> String {
         .join("/")
 }
 
-/// MIT `krb5_unparse_name`: quoted components `@` quoted realm.
+/// MIT `krb5_unparse_name` (`unparse.c:221-228`): quoted components `@` quoted realm.
 #[must_use]
 pub fn unparse_name(comps: &[String], realm: &str) -> String {
     format!("{}@{}", unparse_components(comps), quote_component(realm))

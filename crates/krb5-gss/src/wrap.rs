@@ -153,7 +153,7 @@ pub(super) fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
 
 /// Build a MIT-shaped wrap token (16-byte RFC 4121 header + `encrypt(plain||header)`).
 ///
-/// Used by tests to prove unwrap accepts the layout MIT `libgssapi_krb5` emits.
+/// Used by tests to prove unwrap accepts the layout libgssapi_krb5 emits.
 ///
 /// # Errors
 ///
@@ -225,8 +225,8 @@ impl GssContext {
     }
 
     /// Like [`Self::unwrap`] but also returns whether the token was sealed
-    /// (`conf_state`, MIT `unwrap.c:363-364`); the RPCSEC_GSS privacy service
-    /// rejects an integrity-only body (`authgss_prot.c:238-240`).
+    /// MIT `unwrap_v3` (`unwrap.c:363-364`): (`conf_state`, MIT; the RPCSEC_GSS privacy service
+    /// MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:238-240`): rejects an integrity-only body.
     ///
     /// # Errors
     ///
@@ -301,7 +301,7 @@ impl GssContext {
     }
 
     /// Wrap without confidentiality (`gss_seal` conf=0). AUTH_GSSAPI
-    /// `signed_isn` / sequence verifiers use this (MIT `auth_gssapi_seal_seq`).
+    /// MIT `auth_gssapi_seal_seq` (`auth_gssapi_misc.c:92-114`): `signed_isn` / sequence verifiers use this.
     ///
     /// # Errors
     ///

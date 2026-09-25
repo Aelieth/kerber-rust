@@ -61,9 +61,9 @@ pub(super) fn as_reply(
             e_data,
             detail,
         }) => {
-            // do_as_req.c:371-372: `KRB5KDC_ERR_DISCARD` skips
+            // MIT `finish_process_as_req` (`do_as_req.c:371-372`): `KRB5KDC_ERR_DISCARD` skips
             // `prepare_error_as` (no KRB-ERROR). The filter kept the code
-            // (`kdc_preauth.c:1125`); `dispatch.c:78` also drops it.
+            // MIT `filter_preauth_error` (`kdc_preauth.c:1125-1125`): `dispatch.c` also drops it.
             if code == err::DISCARD {
                 return Ok((Vec::new(), detail.filter(|s| !s.is_empty())));
             }
@@ -101,7 +101,7 @@ pub(super) fn as_reply(
             ),
             Some(d).filter(|s| !s.is_empty()),
         )),
-        // do_as_req.c:346-347: an error that set no status of its own is
+        // MIT `finish_process_as_req` (`do_as_req.c:346-347`): an error that set no status of its own is
         // `UNKNOWN_REASON` (the lookups label theirs in `lookup_as_princ`).
         Err(e) => Ok((
             encode_krb_error(
@@ -125,7 +125,7 @@ pub(super) fn tgs_reply(
     raw: &[u8],
     sender: Option<&HostAddress>,
 ) -> Result<(Vec<u8>, Option<String>), Error> {
-    // MIT prepare_error_tgs (do_tgs_req.c:201-204): errpkt.client is the header
+    // MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): errpkt.client is the header
     // ticket's client when it decrypts, else NULL. gather_tgs_req_info returns
     // before kdc_process_tgs_req when msg_type != 12, so that error has no
     // cname. The TGS-REQ body carries no cname, so derive it for the error.
@@ -186,10 +186,10 @@ pub(super) fn tgs_reply(
 
 /// Inputs for minting one ticket.
 ///
-/// Not a wire type. The ticket fields are MIT `krb5_enc_tkt_part`
+/// Not a wire type. The ticket fields are krb5_enc_tkt_part
 /// (`include/krb5/krb5.hin:1930`) filled the way `do_as_req.c` and
 /// `do_tgs_req.c` fill them before `krb5_encrypt_tkt_part`
-/// (`lib/krb5/krb/encrypt_tk.c:42`). The rest are the PAC inputs from
+/// MIT `krb5_encrypt_tkt_part` (`encrypt_tk.c:42-42`): (`lib/krb5/krb/. The rest are the PAC inputs from
 /// `kdc_authdata.c`.
 pub(super) struct MintTicket<'a> {
     /// Service long-term key.
@@ -399,7 +399,7 @@ pub(super) fn enc_rep_part(
     })
 }
 
-/// MIT `return_enc_padata` (`kdc_preauth.c:1636-1663`): FAST nego then
+/// MIT `return_enc_padata` (`kdc_preauth.c:1637-1663`): FAST nego then
 /// PA-PAC-OPTIONS masked to RBCD. Referral PA-20 is omitted — nothing in
 /// 1.22.2 writes `KRB5_TL_SVR_REFERRAL_DATA`.
 pub(super) fn return_enc_padata(
@@ -489,7 +489,7 @@ pub(super) fn encode_krb_error(
     };
     let mut cname = body.and_then(|b| b.cname.clone());
     let mut crealm = cname.as_ref().map(|_| realm.clone());
-    // do_as_req.c:831-832 / do_tgs_req.c:235-236: FAST hide-client on the
+    // MIT `prepare_error_as` (`do_as_req.c:831-832`): do_tgs_req.c: FAST hide-client on the
     // outer KRB-ERROR. Inner FX-ERROR keeps the real client.
     if hide_client && cname.is_some() {
         cname = Some(anonymous_principal_name());
@@ -502,14 +502,14 @@ pub(super) fn encode_krb_error(
         cusec: None,
         stime: KerberosTime::now(),
         susec: Microseconds::ZERO,
-        // do_as_req.c:804 / do_tgs_req.c:199 `errcode_to_protocol`: only
+        // MIT `prepare_error_as` (`do_as_req.c:804-804`): do_tgs_req.c `errcode_to_protocol`: only
         // 0..=128 is a protocol code; anything else (a `KdcPolicy` handing
         // back a raw library code) goes out as KRB_ERR_GENERIC 60.
         error_code: crate::error::errcode_to_protocol(code),
         // MIT prepare_error_as echoes request->client. prepare_error_tgs
         // sets errpkt.client from the decrypted header ticket, else NULL;
         // opt_realm_of_principal omits crealm when client is NULL
-        // (do_tgs_req.c:201-204, asn1_k_encode.c:919).
+        // MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): asn1_k_encode.c).
         crealm,
         cname,
         realm,

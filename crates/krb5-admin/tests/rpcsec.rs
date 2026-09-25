@@ -1,10 +1,10 @@
-//! RPCSEC DATA without a context is MIT `CREDPROBLEM` (connection kept).
-//! RPCSEC_GSS `gc_v` mismatch is MIT `AUTH_BADCRED` (connection kept).
-//! RPCSEC_GSS integrity is databody_integ + checksum (`authgss_prot.c:203-225`).
-//! AUTH_NONE unknown program is MIT `svcerr_prog_unavail` (connection kept).
+//! RPCSEC DATA without a context is CREDPROBLEM (connection kept).
+//! RPCSEC_GSS `gc_v` mismatch is AUTH_BADCRED (connection kept).
+//! MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:203-225`): RPCSEC_GSS integrity is databody_integ + checksum.
+//! AUTH_NONE unknown program is svcerr_prog_unavail (connection kept).
 //! AUTH_GSSAPI INIT on IPROP_PROG is auth-layer SUCCESS (`no_dispatch`).
 //! the AUTH_GSSAPI `GSSAPI_INIT` arg-version switch
-//! (`lib/rpc/svc_auth_gssapi.c:326-341`): versions 1 and 2 are answered with
+//! MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:326-341`): (`lib/rpc/: versions 1 and 2 are answered with
 //! `call_res.version` 1 (the OpenVision compat downgrade), 3 and 4 are
 //! echoed, anything else is `AUTH_BADCRED` before the token is looked at.
 //! Compiles at `59c363b` (parent-red): the parent echoed every version and

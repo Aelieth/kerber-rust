@@ -6,7 +6,7 @@
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
 //! TGS KRB-ERROR omits `crealm` when `errpkt.client` is NULL
-//! (`do_tgs_req.c:201-204`, `asn1_k_encode.c:919`).
+//! MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): `asn1_k_encode.c`).
 
 #[path = "common/mod.rs"]
 mod common;
@@ -163,7 +163,7 @@ fn tgs_bad_checksum_is_error() {
 
 #[test]
 fn tgs_error_echoes_the_header_ticket_client_like_prepare_error_tgs() {
-    // MIT prepare_error_tgs (do_tgs_req.c:201-204) sets errpkt.client to the
+    // MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): sets errpkt.client to the
     // decrypted header ticket's client, so a TGS KRB-ERROR carries the TGT
     // client's cname even though the TGS-REQ body has none.
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -223,7 +223,7 @@ fn hostile_keytab_does_not_panic() {
 
 #[test]
 fn as_error_echoes_the_requested_client_like_prepare_error_as() {
-    // MIT prepare_error_as (do_as_req.c:806-808) sets errpkt.client =
+    // MIT `prepare_error_as` (`do_as_req.c:806-808`): sets errpkt.client =
     // request->client, so the AS KRB-ERROR echoes the requested crealm/cname
     // even for an unknown client.
     let (store, _) = bootstrap_documented().unwrap();

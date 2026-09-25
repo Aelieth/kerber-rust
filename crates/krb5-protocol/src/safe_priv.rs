@@ -50,7 +50,7 @@ pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe
 
 /// Build a KRB-SAFE with explicit sequence and optional timestamp.
 ///
-/// MIT `kprop` sets `KRB5_AUTH_CONTEXT_DO_SEQUENCE` only (no `DO_TIME`).
+/// kprop sets `KRB5_AUTH_CONTEXT_DO_SEQUENCE` only (no `DO_TIME`).
 ///
 /// # Errors
 ///
@@ -82,7 +82,7 @@ pub fn build_krb_safe_ex(
     };
     let body_der = encode(&body)?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
-    // MIT `create_krbsafe` (`mk_safe.c:68-80`) checksums the full KRB-SAFE with a
+    // MIT `create_krbsafe` (`mk_safe.c:68-80`): checksums the full KRB-SAFE with a
     // zero checksum spliced in — the verifier's primary branch (`rd_safe.c`);
     // body-only was accepted only via the RFC 1510 fallback.
     let dummy = encode_safe_with_body(
@@ -149,11 +149,11 @@ enum FreshPolicy {
     TimeOnly,
     /// MIT kpasswd: seq 0 and missing timestamp are legal.
     HashOnly,
-    /// MIT `kprop` (`DO_SEQUENCE` only): seq required, timestamp optional.
+    /// kprop (`DO_SEQUENCE` only): seq required, timestamp optional.
     SeqOnly,
 }
 
-/// MIT `rd_safe.c:43-125`: APPLICATION 20, saved body DER, addrs, dummy, body fallback.
+/// MIT `read_krbsafe` (`rd_safe.c:44-125`): APPLICATION 20, saved body DER, addrs, dummy, body fallback.
 ///
 /// # Errors
 ///
@@ -211,7 +211,7 @@ pub fn verify_krb_safe_checksum(
     })
 }
 
-/// MIT `k5_privsafe_check_addrs` (`privsafe.c:312-382`).
+/// MIT `k5_privsafe_check_addrs` (`privsafe.c:312-382`): same check.
 ///
 /// # Errors
 ///
@@ -437,7 +437,7 @@ pub fn build_krb_priv_with_seq(
     build_krb_priv_chained(session, user_data, seq_number, true, &mut state)
 }
 
-/// Build a KRB-PRIV with cipher-state chaining (MIT `auth_con_initivector`).
+/// Build a KRB-PRIV with cipher-state chaining (auth_con_initivector).
 ///
 /// # Errors
 ///
@@ -499,7 +499,7 @@ pub fn unwrap_krb_priv(
 
 /// Decrypt a KRB-PRIV.
 ///
-/// MIT `kpasswd` (`krb5int_mk_chpw_req`) sets `DO_SEQUENCE` only, clearing
+/// kpasswd (`krb5int_mk_chpw_req`) sets `DO_SEQUENCE` only, clearing
 /// `DO_TIME`, so the request KRB-PRIV often has seq 0 and no timestamp.
 /// Pass `require_seq`/`require_time` false on that path.
 ///

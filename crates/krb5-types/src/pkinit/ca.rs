@@ -1,4 +1,4 @@
-//! Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
+//! Test CA used as a pkinit_anchors FILE trust anchor.
 //!
 //! `cms_wrap` lives here (it names [`PkinitCa`]) so `cms` does not
 //! import this module.
@@ -229,7 +229,7 @@ fn pem_ec_key(secret: &[u8; 32], public: &[u8]) -> String {
     pem("EC PRIVATE KEY", &tlv(0x30, &body))
 }
 
-/// Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
+/// Test CA used as a pkinit_anchors FILE trust anchor.
 #[derive(Clone, Debug)]
 pub struct PkinitCa {
     /// CA private scalar.

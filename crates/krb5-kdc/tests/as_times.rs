@@ -2,7 +2,7 @@
 //! Ticket lifetime when `max_life` is unset.
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 //! unset `kdc.conf` `max_life` is `params.max_life` = 24 h
-//! (`alt_prof.c:574-575` `GET_DELTAT_PARAM(…, 24 * 60 * 60)`). Compiles
+//! MIT `kadm5_get_config_params` (`alt_prof.c:574-575`): `GET_DELTAT_PARAM(…, 24 * 60 * 60)`). Compiles
 //! at the parent: create already takes `Policy::max_life` / `KdcConf::max_life`;
 //! the parent defaults both to 10 h.
 //! Lifetime defaults. Previously:
@@ -10,7 +10,7 @@
 //! KDC issue cap, `synthesize_km` hard-coded 10 h / 7 d, and `as_ex`
 //! `till` fell back to 10 h. Do not name `realm_max_renewable_life` here.
 //! Z8 leftover: `add_admin_princ` sets `KADM5_MAX_LIFE`
-//! (`kadm5_create.c:54-55,207-213`). Compiles at the parent:
+//! (`kadm5_create.c-213`). Compiles at the parent:
 //! `bootstrap_documented` and the kadmin names exist; the parent
 //! leaves `params.max_life` (24 h).
 

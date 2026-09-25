@@ -1,6 +1,6 @@
 //! after PREAUTH_REQUIRED, pick the first runnable mechanism
-//! in MIT `sort_krb5_padata_sequence` order (`get_in_tkt.c:400-471`,
-//! `preauth2.c:649-713`). Default preferred is `17, 16, 15, 14`; the
+//! MIT `sort_krb5_padata_sequence` (`get_in_tkt.c:403-471`): in order
+//! MIT `process_pa_data` (`preauth2.c:649-713`): . Default preferred is `17, 16, 15, 14`; the
 //! remainder keeps hint order, so advertised 151 is tried before 2.
 //! Live oracle: `client-differential-gate.sh` `MIT_preauth_cascade`.
 

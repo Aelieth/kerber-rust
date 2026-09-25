@@ -76,7 +76,7 @@ impl Krb5Conf {
         Ok(Vec::new())
     }
 
-    /// MIT `k5_client_realm_path`: client, `[capaths]` hops, server.
+    /// MIT `k5_client_realm_path` (`walk_rtree.c:124-172`): client, `[capaths]` hops, server.
     ///
     /// `.` means a direct path (`[client, server]`). Missing capaths is
     /// also direct (hierarchical tweens are `krb5_walk_realm_tree` only).
@@ -86,7 +86,7 @@ impl Krb5Conf {
     }
 }
 
-/// MIT `k5_client_realm_path` over an already-parsed `[capaths]` map.
+/// MIT `k5_client_realm_path` (`walk_rtree.c:124-172`): over an already-parsed `[capaths]` map.
 #[must_use]
 pub fn client_realm_path(
     capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
@@ -141,7 +141,7 @@ fn valid_include_name(name: &str) -> bool {
     if name.starts_with('.') {
         return false;
     }
-    // MIT `valid_name`: suffix is the lowercase bytes ".conf", not a case-fold.
+    // MIT `valid_name` (`prof_parse.c:239-256`): suffix is the lowercase bytes ".conf", not a case-fold.
     if name.len() >= 5 && name.as_bytes().ends_with(b".conf") {
         return true;
     }
@@ -149,7 +149,7 @@ fn valid_include_name(name: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// MIT `k5_is_numeric_address` (`hostrealm.c:318-338`).
+/// MIT `k5_is_numeric_address` (`hostrealm.c:318-338`): same check.
 #[must_use]
 pub fn is_numeric_address(name: &str) -> bool {
     if name.contains(':') {
@@ -510,7 +510,7 @@ fn parse_endpoint(v: &str) -> Endpoint {
     Endpoint::kdc(v)
 }
 
-/// Parse MIT `krb5_string_to_deltat` (`x-deltat.y`).
+/// MIT `krb5_string_to_deltat` (`deltat.c:1575-1584`): Parse (`x-deltat.y`).
 #[must_use]
 pub fn parse_deltat(v: &str) -> Option<u64> {
     parse_duration_secs(v)
@@ -602,7 +602,7 @@ pub fn load_krb5_conf() -> Option<Krb5Conf> {
     load_krb5_conf_paths(krb5_conf_paths()).ok()
 }
 
-/// MIT `udp_preference_limit` (default 1465). Messages larger go TCP first.
+/// udp_preference_limit (default 1465). Messages larger go TCP first.
 #[must_use]
 pub fn udp_preference_limit() -> usize {
     load_krb5_conf()

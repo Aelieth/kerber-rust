@@ -76,6 +76,10 @@ this project uses semantic versioning once a crate is published.
   No behaviour change.
 - **all.** Process-history tags are gone from comments under
   `crates/`. `check_no_process_history` is hard. No behaviour change.
+- **all.** Every MIT cite in a `//` comment under `crates/*/src` and
+  `crates/*/tests` is one line: a C function, a `file.c` range inside
+  that function, and the guarantee. `check_mit_anchor_form` is hard.
+  `diffsend` names its cases in the module header. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

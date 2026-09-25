@@ -3,7 +3,7 @@
 //! New writes are dump text (`kdb5_util load_dump version 7`). SID/RID live
 //! in dump `tl_data` (`TL_KERBER_SID`). Legacy `KDB1`/`KDB2`/`KDB3`
 //! ciphertext still loads for one release. The stash is a keytab-format
-//! `.k5.REALM` (a single `K/M@REALM` entry, MIT `krb5_def_store_mkey_list`);
+//! MIT `krb5_def_store_mkey_list` (`kdb_default.c:111-213`): `.k5.REALM` (a single `K/M@REALM` entry, )
 //! a legacy raw-key stash still loads (`krb5_db_def_fetch_mkey`) and is
 //! rewritten in keytab format on the next save.
 

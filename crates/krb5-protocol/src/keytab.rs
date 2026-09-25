@@ -407,7 +407,7 @@ fn eof() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "keytab truncated")
 }
 
-/// MIT `gic_keytab.c:84-143` `lookup_etypes_for_keytab`.
+/// MIT `lookup_etypes_for_keytab` (`gic_keytab.c:84-143`): lookup_etypes_for_keytab.
 ///
 /// Only the highest kvno for `name` in `realm` (name-type ignored).
 /// Returns those keys and their etype list, or `None` if none match.
@@ -446,7 +446,7 @@ pub fn keytab_init_creds_keys(
     }
 }
 
-/// MIT `gic_keytab.c:149-174` `sort_enctypes`.
+/// MIT `sort_enctypes` (`gic_keytab.c:149-174`): sort_enctypes.
 ///
 /// Moves etypes that appear in `keytab` to the front of `req`, preserving
 /// relative order in each group.

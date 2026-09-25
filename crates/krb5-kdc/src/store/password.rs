@@ -20,14 +20,14 @@ use crate::kdb_dump::TL_LAST_PWD_CHANGE;
 /// Default PBKDF2 iteration count advertised in ETYPE-INFO2 (RFC 3962 default).
 pub const S2K_ITERS: u32 = 4096;
 
-/// MIT `pwqual_empty.c:40-44` extended message (`KADM5_PASS_Q_TOOSHORT`).
+/// MIT `empty_check` (`pwqual_empty.c:40-44`): MIT extended message (`KADM5_PASS_Q_TOOSHORT`.
 pub const PWQUAL_EMPTY: &str = "Empty passwords are not allowed";
 
-/// MIT `pwqual_princ.c:50-51` extended message (`KADM5_PASS_Q_DICT`).
+/// MIT `princ_check` (`pwqual_princ.c:50-51`): MIT extended message (`KADM5_PASS_Q_DICT`.
 pub const PWQUAL_PRINC: &str = "Password may not match principal name";
 
 /// MIT `kadm_err.et` `KADM5_PASS_Q_DICT` text: the `dict` module and the
-/// realm branch of `princ_check` (`pwqual_princ.c:45-47`) set no message.
+/// MIT `princ_check` (`pwqual_princ.c:45-47`): realm branch of `princ_check` set no message.
 pub const PWQUAL_DICT: &str = "Password is in the password dictionary";
 
 fn last_pwd_unix(p: &Principal) -> u32 {
@@ -151,7 +151,7 @@ impl PrincipalStore {
         self.set_password_keepold(name, password, false)
     }
 
-    /// MIT `check_min_life` (`misc.c:60-121`).
+    /// MIT `check_min_life` (`misc.c:60-121`): same check.
     ///
     /// # Errors
     ///
@@ -239,7 +239,7 @@ impl PrincipalStore {
     }
 
     /// [`Self::set_password_keepold_n_in`] with a v3 `ks_tuple` list
-    /// (`kadm5_chpass_principal_3`, `svr_principal.c:1259`).
+    /// MIT `kadm5_chpass_principal_3` (`svr_principal.c:1259-1259`): (`kadm5_chpass_principal_3`,.
     ///
     /// # Errors
     ///
@@ -255,7 +255,7 @@ impl PrincipalStore {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
-        // MIT `kadm5_chpass_principal_3`: a bound policy (`have_pol`) fetches
+        // MIT `kadm5_chpass_principal_3` (`svr_principal.c:1220-1374`): a bound policy (`have_pol` fetches
         // the history key — creating `kadmin/history` on first use — and
         // records the old keys BEFORE `passwd_check`, so a chpass rejected for
         // quality still leaves `kadmin/history` created; `pw_history_num` counts
@@ -379,7 +379,7 @@ impl PrincipalStore {
         }
     }
 
-    /// MIT `passwd_check` for a new principal (`svr_principal.c:364-373`):
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): passwd_check for a new principal
     /// the named policy's length and class floors when the policy exists
     /// (`get_policy` treats an unknown name as no policy), then the built-in
     /// quality modules. `-randkey` creates do not come here.
@@ -401,9 +401,9 @@ impl PrincipalStore {
     }
 
     /// MIT built-in password-quality modules in `k5_pwqual_load` order
-    /// (`server_misc.c:44-58`: `dict`, `empty`, `princ`). `dict` and `princ`
-    /// skip a principal without a policy (`pwqual_dict.c:222-223`,
-    /// `pwqual_princ.c:40-41`); `empty` always applies (`pwqual_empty.c:38-44`).
+    /// MIT `init_pwqual` (`server_misc.c:44-58`): `dict`, `empty`, `princ`. `dict` and `princ`
+    /// MIT `dict_check` (`pwqual_dict.c:222-223`): skip a principal without a policy
+    /// MIT `princ_check` (`pwqual_princ.c:40-41`): `empty` always applies (`pwqual_empty.c`).
     /// `princ_check` compares the realm first (plain `KADM5_PASS_Q_DICT`) and
     /// then every component (`Password may not match principal name`), all
     /// with `strcasecmp`.
@@ -441,7 +441,7 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// MIT `passwd_check` on a password change (`svr_principal.c:1282`):
+    /// MIT `kadm5_chpass_principal_3` (`svr_principal.c:1282-1282`): passwd_check on a password change
     /// the bound policy's floors, the built-in quality modules, then the
     /// policy's history.
     ///

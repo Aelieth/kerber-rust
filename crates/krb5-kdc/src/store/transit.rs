@@ -28,7 +28,7 @@ pub(super) fn permitted_transited(
     hierarchical_intermediates(crealm, srealm)
 }
 
-/// MIT `krb5_walk_realm_tree` instance list (`walk_rtree.c`): local, hops, dest.
+/// MIT `krb5_walk_realm_tree` (`walk_rtree.c:96-121`): instance list : local, hops, dest.
 pub(crate) fn walk_realm_instances(
     capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
     client: &str,

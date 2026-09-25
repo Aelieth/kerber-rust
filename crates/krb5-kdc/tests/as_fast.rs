@@ -4,12 +4,12 @@
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
 //! Old-kvno cookie arm: a cookie minted under krbtgt kvno N still opens
-//! after a keepold rollover (`fast_util.c:545-611` `first_key_at_kvno`).
-//! FAST armor-TGT decrypt is MIT `krb5_ktkdb_get_entry`
-//! (`lib/kdb/keytab.c:157`) — `krb5_dbe_find_enctype(entry, xrealm ? etype : -1,
+//! MIT `kdc_fast_read_cookie` (`fast_util.c:546-611`): after a keepold rollover `first_key_at_kvno`.
+//! MIT `krb5_ktkdb_get_entry` (`keytab.c:117-197`): FAST armor-TGT decrypt is
+//! MIT `krb5_ktkdb_get_entry` (`keytab.c:157-157`): (`lib/kdb/ — `krb5_dbe_find_enctype(entry, xrealm ? etype : -1
 //! -1, kvno)` pins the ticket kvno and skips non-permitted enctypes; a local
 //! TGS whose first permitted key is not similar to the ticket etype is
-//! `KRB5_KDB_NO_PERMITTED_KEY` → wire 60 `FIND_FAST` (`fast_util.c:52-59`,
+//! `KRB5_KDB_NO_PERMITTED_KEY` → wire 60 `FIND_FAST` (`fast_util.c`,
 //! `errcode_to_protocol`). Compiles at the parent and fails there:
 //! `armor_key_from_ap` iterated every krbtgt key unfiltered.
 
@@ -516,7 +516,7 @@ fn fast_as_exchange_strengthen_and_finished() {
 
 #[test]
 fn fast_hide_client_names_returns_the_anonymous_outer_client() {
-    // MIT kdc_fast_hide_client (fast_util.c:444) + do_as_req.c:324: a FAST
+    // MIT `kdc_fast_hide_client` (`fast_util.c:444-444`): + do_as_req.c: a FAST
     // request that sets KRB5_FAST_OPTION_HIDE_CLIENT_NAMES (RFC 6113 bit 1) is
     // answered with the anonymous principal WELLKNOWN/ANONYMOUS@WELLKNOWN:
     // ANONYMOUS as the outer reply client; the real client stays inside the

@@ -45,7 +45,7 @@ pub use name_error::{NameError, TimeError};
 
 /// Name-type-insensitive equality of components and realm.
 ///
-/// MIT `krb5_principal_compare` (`princ_comp.c:79-124`) ignores name type.
+/// MIT `krb5_principal_compare_flags` (`princ_comp.c:79-124`): krb5_principal_compare ignores name type.
 #[must_use]
 pub fn principal_compare(
     name_a: &PrincipalName,
@@ -101,7 +101,7 @@ pub type AuthorizationData = SequenceOf<AuthorizationDataValue>;
 /// METHOD-DATA ::= SEQUENCE OF PA-DATA
 pub type MethodData = SequenceOf<PaData>;
 /// `TYPED-DATA ::= SEQUENCE OF SEQUENCE { data-type [0], data-value [1] OPTIONAL }`
-/// (RFC 6113; MIT `encode_krb5_typed_data`, tags `[0]`/`[1]` not PA-DATA `[1]`/`[2]`).
+/// (RFC 6113; encode_krb5_typed_data, tags `[0]`/`[1]` not PA-DATA `[1]`/`[2]`).
 pub type TypedDataList = SequenceOf<TypedData>;
 /// KerberosFlags ::= BIT STRING (SIZE (32..MAX))
 pub type KerberosFlags = BitString;
@@ -184,7 +184,7 @@ impl PrincipalName {
     pub const NT_ENTERPRISE: i32 = 10;
     /// NT-WELLKNOWN (11), RFC 6111.
     pub const NT_WELLKNOWN: i32 = 11;
-    /// `KRB5_NT_MS_PRINCIPAL` (−128). MIT `get_pac_princ_with_realm`.
+    /// MIT `get_pac_princ_with_realm` (`kdc_util.c:638-675`): `KRB5_NT_MS_PRINCIPAL` (−128)..
     pub const NT_MS_PRINCIPAL: i32 = -128;
 
     /// Build a principal from a name type and GeneralString components.
@@ -259,7 +259,7 @@ impl PrincipalName {
             .join("/")
     }
 
-    /// MIT `krb5_unparse_name` quoting of components (`unparse.c`).
+    /// MIT `krb5_unparse_name` (`unparse.c:221-228`): quoting of components.
     #[must_use]
     pub fn unparse(&self) -> String {
         crate::unparse_components(&self.component_strings())
@@ -306,13 +306,13 @@ impl PrincipalName {
             && self.name_string[1].as_bytes() == realm.as_bytes()
     }
 
-    /// MIT `is_local_tgs_principal`: TGS whose instance equals the principal realm.
+    /// MIT `is_local_tgs_principal` (`kdc_util.c:106-110`): TGS whose instance equals the principal realm.
     #[must_use]
     pub fn is_local_tgs_principal(&self, princ_realm: &str) -> bool {
         self.is_krbtgt() && self.is_krbtgt_for(princ_realm)
     }
 
-    /// MIT `is_cross_tgs_principal`: TGS whose instance is not the principal realm.
+    /// MIT `is_cross_tgs_principal` (`kdc_util.c:98-102`): TGS whose instance is not the principal realm.
     #[must_use]
     pub fn is_cross_tgs_principal(&self, princ_realm: &str) -> bool {
         self.is_krbtgt() && !self.is_krbtgt_for(princ_realm)
@@ -331,14 +331,14 @@ pub struct HostAddress {
 }
 
 impl HostAddress {
-    /// MIT `ADDRTYPE_INET`.
+    /// ADDRTYPE_INET.
     pub const ADDRTYPE_INET: i32 = 2;
-    /// MIT `ADDRTYPE_NETBIOS`.
+    /// ADDRTYPE_NETBIOS.
     pub const ADDRTYPE_NETBIOS: i32 = 0x14;
-    /// MIT `ADDRTYPE_INET6`.
+    /// ADDRTYPE_INET6.
     pub const ADDRTYPE_INET6: i32 = 0x18;
 
-    /// MIT `k5_sockaddr_to_address` (`addr.c:44-75`, `local_use` false).
+    /// MIT `k5_sockaddr_to_address` (`addr.c:44-75`): `local_use` false).
     #[must_use]
     pub fn from_socket(addr: std::net::SocketAddr) -> Self {
         match addr {
@@ -385,9 +385,9 @@ pub struct PaData {
     pub padata_value: OctetString,
 }
 
-/// One TYPED-DATA element (`asn1_k_encode.c:1547-1556`).
+/// One TYPED-DATA element (`asn1_k_encode.c`).
 ///
-/// MIT `DEFCNFIELD` always encodes `data-value` (possibly empty); it is not
+/// DEFCNFIELD always encodes `data-value` (possibly empty); it is not
 /// optional on the wire.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct TypedData {
@@ -646,7 +646,7 @@ impl KdcOptions {
         self.to_u32() & !supported
     }
 
-    /// MIT `AS_INVALID_OPTIONS` (`kdc_util.h:456-463`): TGS-only options that
+    /// AS_INVALID_OPTIONS (`kdc_util.h`): TGS-only options that
     /// are invalid in an AS-REQ.
     #[must_use]
     pub fn as_invalid_bits(&self) -> u32 {
@@ -1171,7 +1171,7 @@ pub struct TransitedEncoding {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum TransitError {
     /// Check-path raw ≥ 512 or joined > 512; add-path raw ≥ 500, joined ≥ 499,
-    /// or rebuilt encoding ≥ 500 (MIT `MAX_REALM_LN`).
+    /// or rebuilt encoding ≥ 500 (MAX_REALM_LN).
     #[error("transited field too long")]
     FieldTooLong,
     /// More than 256 commas, or more than [`MAX_TRANSIT_HOPS`] emitted hops
@@ -1220,7 +1220,7 @@ impl TransitedEncoding {
         expand_domain_x500(self.contents.as_ref(), crealm, srealm)
     }
 
-    /// Append `realm` onto the original contents (MIT `add_to_transited`:
+    /// MIT `add_to_transited` (`kdc_transit.c:144-414`): Append `realm` onto the original contents (
     /// add-path tokenizer, trailing-comma drop, space before `/`, appended
     /// length ≤ 499). Escapes `\\` and `,` in `realm`. Does not
     /// expand-then-rejoin. `crealm`/`srealm` are unused (no null-subfields).
@@ -1269,13 +1269,13 @@ pub const MAX_TRANSIT_REALMS: usize = 256;
 pub const MAX_TRANSIT_HOPS: usize = 4096;
 /// MIT `chk_trans.c` `MAXLEN`. Writing the 512th raw unescaped byte errors.
 pub const MAX_TRANSIT_RAW: usize = 512;
-/// MIT `maybe_join`: `last + cur > 512` errors; joined of 512 is accepted.
+/// MIT `maybe_join` (`chk_trans.c:138-163`): `last + cur > 512` errors; joined of 512 is accepted.
 const MAX_TRANSIT_JOINED: usize = 512;
 /// MIT `kdc_transit.c` `MAX_REALM_LN`. Raw field of 500 unescaped bytes errors.
 const MAX_ADD_PATH_RAW: usize = 500;
 /// MIT `strlen(exp)+strlen(x)+1 >= 500`: joined ≥ 499 errors.
 const MAX_ADD_PATH_JOINED: usize = 499;
-/// MIT `strlcat` into a 500-byte buffer: rebuilt encoding ≥ 500 errors.
+/// strlcat into a 500-byte buffer: rebuilt encoding ≥ 500 errors.
 const MAX_ADD_PATH_TOTAL: usize = 500;
 
 fn strip_trailing_nul(raw: &[u8]) -> &[u8] {

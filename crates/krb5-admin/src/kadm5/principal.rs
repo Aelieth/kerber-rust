@@ -30,7 +30,7 @@ pub(super) fn unix_now() -> u32 {
 }
 
 /// `auth_restrict` for a modify request: the actor's ACL restrictions, if
-/// any, imposed on the parsed `(mask, fields)` (`auth.c:205-272`).
+/// any, imposed on the parsed `(mask, fields)` (`auth.c`).
 pub(super) fn impose_request_restrictions(
     acl: &krb5_kdc::Acl,
     actor: &str,
@@ -59,7 +59,7 @@ pub(super) fn clamp_self_keepold(self_change: bool, keepold: bool) -> u32 {
     }
 }
 
-/// MIT `kadm5_create_principal` mask checks (`svr_principal.c:313-326`).
+/// MIT `kadm5_create_principal_3` (`svr_principal.c:313-326`): kadm5_create_principal mask checks.
 pub(super) fn create_princ_mask_err(
     mask: u32,
     policy: Option<&str>,
@@ -94,7 +94,7 @@ pub(super) fn create_princ_mask_err(
     None
 }
 
-/// MIT `kadm5_modify_principal` mask checks (`svr_principal.c:569-580`).
+/// MIT `kadm5_modify_principal` (`svr_principal.c:569-580`): mask checks.
 pub(super) fn modify_princ_mask_err(mask: u32, policy: Option<&str>) -> Option<u32> {
     if mask
         & (KADM5_PRINCIPAL
@@ -130,11 +130,11 @@ pub(super) struct CreateFields {
     pub(super) name: PrincipalName,
     pub(super) prealm: String,
     /// `None` is the XDR NULL `passwd` of `kadmin addprinc -randkey`
-    /// (1.8+): `svr_principal.c:463-470` creates with a random key and
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:463-470`): (1.8+): creates with a random key and
     /// `:369` skips `passwd_check`.
     pub(super) pass: Option<String>,
     /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3`
-    /// applies under `mask` (`svr_principal.c:376-420`), as sent.
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): applies under `mask`, as sent.
     pub(super) ent: AdminEnt,
     pub(super) tl_data: Vec<TlData>,
     pub(super) n_key_data: u32,
@@ -233,7 +233,7 @@ pub(super) fn parse_rename(
     Ok((old, old_realm, new, new_realm))
 }
 
-/// `xdr_calias_arg` (`kadm_rpc_xdr.c:1214-1227`): api version, alias, target.
+/// MIT `xdr_calias_arg` (`kadm_rpc_xdr.c:1214-1226`): `xdr_calias_arg` : api version, alias, target.
 pub(super) fn parse_alias(
     args: &[u8],
 ) -> Result<(PrincipalName, String, PrincipalName, String), Error> {
@@ -534,7 +534,7 @@ pub(super) fn encode_gprincs(ids: &[String]) -> Vec<u8> {
     w.u32(API_V2);
     w.u32(0);
     let n = u32::try_from(ids.len()).unwrap_or(0);
-    // MIT `xdr_gprincs_ret`: `xdr_int count` then `xdr_array` of
+    // MIT `xdr_gprincs_ret` (`kadm_rpc_xdr.c:658-678`): `xdr_int count` then `xdr_array` of
     // `xdr_nullstring` (the array writes count again).
     w.u32(n);
     w.u32(n);

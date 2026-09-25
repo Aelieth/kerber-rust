@@ -170,7 +170,7 @@ pub(super) fn handle_rpcsec_gss(
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
                     // rpc_gss_svc_privacy: the body must be sealed
-                    // (authgss_prot.c:238-240 rejects conf_state != TRUE).
+                    // MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:238-240`): rejects conf_state != TRUE).
                     let Ok((plain, conf)) = gd.ctx.unwrap_conf(&wrapped) else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
@@ -358,7 +358,7 @@ pub(super) fn handle_auth_gssapi(
     );
 
     if auth_msg && (proc == AUTH_GSSAPI_INIT || proc == AUTH_GSSAPI_CONTINUE_INIT) {
-        // svc_auth_gssapi.c:308-315: an undecodable `authgssapi_init_arg`
+        // MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:308-315`): an undecodable `authgssapi_init_arg`
         // is AUTH_BADCRED ("protocol error in procedure arguments").
         let mut ar = XdrR::new(args);
         let (Ok(arg_ver), Ok(token)) = (ar.u32(), ar.opaque()) else {
@@ -370,7 +370,7 @@ pub(super) fn handle_auth_gssapi(
             );
             return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
         };
-        // svc_auth_gssapi.c:326-341: the init-arg version switch. 1 and 2
+        // MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:326-341`): the init-arg version switch. 1 and 2
         // are the OpenVision protocol — answered with `call_res.version`
         // 1 and a compat warning; 3 and 4 are echoed; anything else is
         // AUTH_BADCRED ("unsupported GSSAPI_INIT version"). The version

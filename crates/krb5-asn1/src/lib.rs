@@ -55,7 +55,7 @@ pub fn decode<T: Decode>(bytes: &[u8]) -> Result<T, Error> {
     decode_named(bytes, std::any::type_name::<T>())
 }
 
-/// MIT `decode_krb5_enc_kdc_rep_part`: APPLICATION 26, then 25, then untagged.
+/// MIT `decode_krb5_enc_kdc_rep_part` (`asn1_k_encode.c:1135-1155`): APPLICATION 26, then 25, then untagged.
 ///
 /// Failed tag probes are silent (`ASN1_BAD_ID` is not an ERROR log).
 ///

@@ -528,9 +528,9 @@ fn hmac_md5_simple(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
 
 /// RFC 4757 HMAC-MD5-ARCFOUR (`-138`) / MD5-HMAC-ARCFOUR (`-137`).
 ///
-/// MIT `checksum_hmac_md5.c:53-66`: `-138` signs with HMAC(key,
+/// MIT `krb5int_hmacmd5_checksum` (`checksum_hmac_md5.c:53-66`): `-138` signs with HMAC(key
 /// `"signaturekey\0"`); `-137` uses the raw key. Usage map is
-/// `enc_rc4.c:17-35`.
+/// MIT `krb5int_arcfour_translate_usage` (`enc_rc4.c:17-35`): same check.
 ///
 /// # Errors
 ///
@@ -571,7 +571,7 @@ pub fn checksum_output_size(cksumtype: i32) -> Option<usize> {
     }
 }
 
-/// MIT `krb5int_unkeyed_checksum` (`cksumtypes.c` types 2, 7, 9, 14).
+/// MIT `krb5int_unkeyed_checksum` (`checksum_unkeyed.c:30-36`): (`cksumtypes.c` types 2, 7, 9, 14).
 ///
 /// # Errors
 ///
@@ -594,7 +594,7 @@ pub fn unkeyed_checksum(cksumtype: i32, message: &[u8]) -> Result<Vec<u8>, Error
     }
 }
 
-/// MIT `krb5_c_verify_checksum`: table lookup, length, then compute.
+/// MIT `krb5_c_verify_checksum` (`verify_checksum.c:83-98`): table lookup, length, then compute.
 ///
 /// `cksumtype` 0 uses the key's mandatory type.
 ///
@@ -617,7 +617,7 @@ pub fn verify_checksum_type(
     let Some(want) = checksum_output_size(ctype) else {
         return Err(Error::UnsupportedChecksum(ctype));
     };
-    // MIT `krb5_c_verify_checksum_iov` (`verify_checksum.c:53-68`) finds the
+    // MIT `krb5_k_verify_checksum` (`verify_checksum.c:53-68`): krb5_c_verify_checksum_iov finds the
     // cksumtype and runs `verify_key` (the keyed/provider gate) BEFORE checking
     // the length, so an unsupported keyed type is `UnsupportedChecksum` even
     // when the mac length is also wrong.
@@ -632,7 +632,7 @@ pub fn verify_checksum_type(
         return Err(Error::UnsupportedChecksum(ctype));
     }
     // verify_key: keyed type with ctp->enc != NULL requires ktp->enc ==
-    // ctp->enc; ctp->enc == NULL (-138) accepts any key (`crypto_int.h:596-608`).
+    // ctp->enc; ctp->enc == NULL (-138) accepts any key (`crypto_int.h`).
     if !keyed_cksum_accepts_key(ctype, key.etype()) {
         return Err(Error::UnsupportedChecksum(ctype));
     }
@@ -643,7 +643,7 @@ pub fn verify_checksum_type(
     mac_verify(mac, &expected)
 }
 
-/// `krb5_c_is_keyed_cksum` then [`verify_checksum_type`] (`kdc_util.c:1244`, `pac.c:499`).
+/// MIT `verify_for_user_checksum` (`kdc_util.c:1244-1244`): `krb5_c_is_keyed_cksum` then [`verify_checksum_type`], `pac.c`).
 ///
 /// The keyed gate uses the declared type; `cksumtype` 0 is not keyed.
 ///
@@ -665,7 +665,7 @@ pub fn verify_checksum_keyed(
 }
 
 /// `krb5_c_valid_cksumtype` + coll-proof + keyed, then [`verify_checksum_type`]
-/// (`rd_safe.c:66-74`).
+/// MIT `read_krbsafe` (`rd_safe.c:66-74`): same check.
 ///
 /// # Errors
 ///

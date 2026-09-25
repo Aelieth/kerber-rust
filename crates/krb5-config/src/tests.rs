@@ -398,7 +398,7 @@ fn parse_kdc_conf_policy() {
 
 #[test]
 fn dict_file_is_a_realm_relation_only() {
-    // MIT alt_prof.c:486-513: kadm5_get_config_params reads dict_file
+    // MIT `kadm5_get_config_params` (`alt_prof.c:486-513`): kadm5_get_config_params reads dict_file
     // under [realms] REALM; a [kdcdefaults] dict_file is not consulted
     // (live: MIT logs "No dictionary file specified").
     let realm = KdcConf::parse(
@@ -428,7 +428,7 @@ fn dict_file_is_a_realm_relation_only() {
 #[test]
 fn libdefaults_does_not_honour_kdcdefaults_knobs() {
     // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
-    // [kdcdefaults] or a realm stanza (main.c:257-261,622-626); a copy
+    // MIT `main` (`main.c:257-622`): [kdcdefaults] or a realm stanza -626); a copy
     // under [libdefaults] is ignored (no fallthrough).
     let lib = KdcConf::parse(
         r"

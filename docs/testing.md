@@ -70,10 +70,9 @@ on those lines is one line, ``MIT `<c_function>` (`<file>.c:<a>-<b>`): <guarante
 A single source line is written `<a>-<a>`. The six older shapes are
 red: a backticked name with no file, a backticked `file.c` range or
 point with no name, a name plus a range with no guarantee, a bare
-`MIT file.c:N`, and a name plus a single point. The check is advisory
-while `MIT_ANCHOR_ALLOW` equals the live count, and hard when that
-constant is 0. Prose that does not cite a function or a `.c` / `.h`
-line is not an anchor.
+`MIT file.c:N`, and a name plus a single point. `MIT_ANCHOR_ALLOW` is
+0, so the check is hard. Prose that does not cite a function or a
+`.c` / `.h` line is not an anchor.
 
 `check_no_process_history` rejects a process tag on a `//` comment
 anywhere under `crates/`: `R12`, `A′-3`, `W0e`, `W1-Z`, `Round 2`,

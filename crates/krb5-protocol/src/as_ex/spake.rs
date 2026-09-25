@@ -66,7 +66,7 @@ fn send_spake_response(
             chal.group
         )));
     }
-    // MIT spake_client.c:221: without second-factor support the only
+    // MIT `process_challenge` (`spake_client.c:221-221`): without second-factor support the only
     // answerable challenge is one that offers SF-NONE; a challenge whose
     // factor list omits it is KRB5KDC_ERR_PREAUTH_FAILED there, so refuse it
     // rather than deriving a key against a factor set we cannot satisfy.
@@ -121,7 +121,7 @@ fn send_spake_response(
     }
 }
 
-/// MIT `contains_sf_none` (spake_client.c:51): true when the challenge lists
+/// MIT `contains_sf_none` (`spake_client.c:51-51`): true when the challenge lists
 /// the SF-NONE second factor, the only factor type this client can answer.
 pub(super) fn spake_contains_sf_none(chal: &krb5_types::spake::SpakeChallenge) -> bool {
     chal.factors
@@ -135,8 +135,8 @@ fn spake_challenge(
     let Some(p) = find_pa(method, pa::SPAKE) else {
         return Ok(None);
     };
-    // PREAUTH_REQUIRED advertises an empty PA-SPAKE (MIT `spake_kdc.c:321`).
-    // That is not a challenge; `spake_client.c:151` sends support instead.
+    // MIT `spake_edata` (`spake_kdc.c:321-321`): PREAUTH_REQUIRED advertises an empty PA-SPAKE (MIT.
+    // That is not a challenge; `spake_client.c` sends support instead.
     if p.padata_value.as_ref().is_empty() {
         return Ok(None);
     }

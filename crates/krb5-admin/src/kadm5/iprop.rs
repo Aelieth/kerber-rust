@@ -287,7 +287,7 @@ pub(super) fn encode_kdbe(
         .collect();
     body.u32(u32::try_from(comps.len()).unwrap_or(0));
     for c in &comps {
-        // MIT `KV5M_DATA` (`krb5_data.magic`).
+        // KV5M_DATA (`krb5_data.magic`).
         body.u32((-1_760_647_422i32).cast_unsigned());
         encode_utf8str(&mut body, c);
     }
@@ -384,7 +384,7 @@ pub(super) fn encode_fullresync(last: u32) -> Vec<u8> {
 /// Outcome of [`iprop_pull`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpropPull {
-    /// MIT `update_status_t`.
+    /// update_status_t.
     pub status: u32,
     /// `kdb_last_t.last_sno` from the reply.
     pub last_sno: u32,
@@ -398,7 +398,7 @@ pub struct IpropPull {
 
 /// Replica cursor passed to `IPROP_GET_UPDATES`.
 ///
-/// MIT `kdb_last_t` (`include/iprop.h:176-180`): the serial number and
+/// kdb_last_t (`include/iprop.h`): the serial number and
 /// the timestamp's seconds and microseconds.
 #[derive(Clone, Copy)]
 pub struct IpropLast {
@@ -410,7 +410,7 @@ pub struct IpropLast {
     pub last_usec: u32,
 }
 
-/// RPCSEC_GSS IPROP_GET_UPDATES against MIT `kadmind` (program 100423).
+/// RPCSEC_GSS IPROP_GET_UPDATES against kadmind (program 100423).
 ///
 /// # Errors
 ///
@@ -598,7 +598,7 @@ fn rpcsec_data(
     let mic = ctx
         .get_mic(&header.b)
         .map_err(|e| Error::Inner(format!("rpcsec mic: {e}")))?;
-    // MIT `xdr_rpc_gss_wrap_data`: gss_wrap(xdr_u_int32(seq) || args).
+    // MIT `xdr_rpc_gss_wrap_data` (`authgss_prot.c:130-182`): gss_wrap(xdr_u_int32(seq) || args).
     // libgssrpc unwraps RRC=0 (same as the acceptor path above).
     let mut inner = Vec::with_capacity(4 + args.len());
     inner.extend_from_slice(&seq.to_be_bytes());

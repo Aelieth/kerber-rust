@@ -173,7 +173,7 @@ impl FileCcache {
         }
     }
 
-    /// MIT `krb5_cc_set_config` (`ccfns.c k5_build_conf_principals`): an
+    /// MIT `krb5_cc_set_config` (`ccfns.c:236-261`): (`ccfns.c k5_build_conf_principals`): an
     /// `X-CACHECONF:` entry named `krb5_ccache_conf_data/{key}[/{principal}]`
     /// (etype 0, the value in the ticket field), replacing an existing one.
     pub fn set_config(&mut self, principal: Option<&str>, key: &str, value: &[u8]) {

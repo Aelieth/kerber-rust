@@ -26,7 +26,7 @@ pub const SRVC_PRINC: i32 = 2;
 /// Encrypt reply.
 pub const ENCR_REP: i32 = 5;
 
-/// MIT `REQID_LEN`: C buffer including the NUL that `krb5int_random_string`
+/// REQID_LEN: C buffer including the NUL that `krb5int_random_string`
 /// writes, so the printable id is 31 alphanumeric characters.
 pub const REQID_LEN: usize = 32;
 const REQID_CHARS: usize = REQID_LEN - 1;
@@ -47,7 +47,7 @@ pub fn make_tkt_id(ciphertext: &[u8]) -> String {
     out
 }
 
-/// MIT `krb5int_random_string` over a `REQID_LEN` buffer (31 chars + NUL).
+/// MIT `krb5int_random_string` (`random_str.c:37-68`): over a `REQID_LEN` buffer (31 chars + NUL).
 #[must_use]
 pub fn new_req_id() -> String {
     let mut bytes = [0u8; REQID_CHARS];
@@ -85,7 +85,7 @@ pub fn enctype_name(etype: i32) -> String {
     }
 }
 
-/// MIT `ktypes2str`: `"%d etypes {%s(%ld), ...}"`.
+/// MIT `ktypes2str` (`kdc_util.c:1184-1201`): `"%d etypes {%s(%ld),...}"`.
 #[must_use]
 pub fn ktypes2str(etypes: &[i32]) -> String {
     let mut out = format!("{} etypes {{", etypes.len());
@@ -99,7 +99,7 @@ pub fn ktypes2str(etypes: &[i32]) -> String {
     out
 }
 
-/// MIT `rep_etypes2str`: `"etypes {rep=%s(%ld), tkt=%s(%ld), ses=%s(%ld)}"`.
+/// MIT `rep_etypes2str` (`kdc_util.c:1204-1230`): `"etypes {rep=%s(%ld), tkt=%s(%ld), ses=%s(%ld)}"`.
 #[must_use]
 pub fn rep_etypes2str(rep: i32, tkt: Option<i32>, ses: Option<i32>) -> String {
     let mut out = format!("etypes {{rep={}({rep})", enctype_name(rep));
@@ -145,7 +145,7 @@ pub trait KdcAudit: Send + Sync {
     }
 }
 
-/// MIT `krb5_audit_state` fields the JSON sink emits.
+/// krb5_audit_state fields the JSON sink emits.
 #[derive(Clone, Debug, Default)]
 pub struct AuditState {
     /// `event_name` (`AS_REQ` / `TGS_REQ` / `S4U2SELF` / `S4U2PROXY` / `U2U`).
@@ -275,7 +275,7 @@ fn clear_req_id() {
     CUR_REQ_ID.with(|c| *c.borrow_mut() = None);
 }
 
-/// MIT `do_as_req.c:520` seeds `kau_as_req(TRUE)` before a ticket exists.
+/// MIT `process_as_req` (`do_as_req.c:520-520`): MIT seeds `kau_as_req(TRUE)` before a ticket exists.
 fn seed_as_req(req: &AsReq, sender: Option<&HostAddress>) {
     clear_req_id();
     let mut state = base_state("AS_REQ", &req.0.req_body, sender);
@@ -283,7 +283,7 @@ fn seed_as_req(req: &AsReq, sender: Option<&HostAddress>) {
     current_audit().as_req(true, &state);
 }
 
-/// MIT `do_tgs_req.c:1181-1184` seeds `kau_tgs_req(TRUE)` at `AUTHN_REQ_CL`.
+/// MIT `process_tgs_req` (`do_tgs_req.c:1181-1184`): MIT seeds `kau_tgs_req(TRUE)` at `AUTHN_REQ_CL`.
 fn seed_tgs_req(req: &TgsReq, sender: Option<&HostAddress>) {
     clear_req_id();
     let mut state = base_state("TGS_REQ", &req.0.req_body, sender);
@@ -292,7 +292,7 @@ fn seed_tgs_req(req: &TgsReq, sender: Option<&HostAddress>) {
     current_audit().tgs_req(true, &state);
 }
 
-/// Unknown-server words after MIT `do_tgs_req.c:667` `SRVC_PRINC`.
+/// MIT `gather_tgs_req_info` (`do_tgs_req.c:667-667`): Unknown-server words after SRVC_PRINC.
 fn tgs_fail_stage(e_text: &str) -> i32 {
     match e_text {
         status::LOOKING_UP_SERVER
@@ -311,7 +311,7 @@ fn tgs_fail_emsg(code: i32) -> &'static str {
     }
 }
 
-/// MIT `log_tgs_badtrans` unexpected path: `LOG_ERR`, then treat as unchecked.
+/// MIT `log_tgs_badtrans` (`kdc_log.c:176-212`): unexpected path: `LOG_ERR`, then treat as unchecked.
 #[must_use]
 pub fn unexpected_transit_false(
     err: TransitError,

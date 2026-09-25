@@ -78,7 +78,7 @@ impl CcacheCred {
         self.server.0.as_bytes() == b"X-CACHECONF:"
     }
 
-    /// MIT `cred_removed`: `endtime == 0 && authtime != 0`.
+    /// MIT `cred_removed` (`cc_file.c:754-757`): `endtime == 0 && authtime != 0`.
     #[must_use]
     pub fn is_removed(&self) -> bool {
         self.endtime == 0 && self.authtime != 0

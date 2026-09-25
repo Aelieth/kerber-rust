@@ -66,7 +66,7 @@ pub struct Restrictions {
     /// Bits allowed to stay (`~0` with `-flag` bits cleared).
     pub forbid_attrs: u32,
     /// `rs->mask & KADM5_ATTRIBUTES`: at least one flag token was parsed
-    /// (`auth_acl.c:189-192`), so the request's attributes are rewritten
+    /// MIT `parse_restrictions` (`auth_acl.c:189-192`): so the request's attributes are rewritten
     /// even when the flag names cancel out.
     pub attrs: bool,
 }
@@ -88,9 +88,9 @@ impl Default for Restrictions {
 }
 
 impl Restrictions {
-    /// MIT `impose_restrictions` (`kadmin/server/auth.c:205-272`), run on
+    /// MIT `impose_restrictions` (`auth.c:206-265`): (`kadmin/server/, run on
     /// the kadm5 create/modify *request* before the library call
-    /// (`auth_restrict` ← `stub_auth_restrict`, `server_stubs.c:478,519,630`).
+    /// MIT `create_principal_2_svc` (`server_stubs.c:478-478`): (`auth_restrict` ← `stub_auth_restrict`,.
     /// Every restriction sets its mask bit, so the entry field wins over the
     /// realm default afterwards; a caller value is only *lowered* to the cap
     /// (an in-mask 0 stays 0), a value absent from the mask becomes the cap;
@@ -145,8 +145,8 @@ impl Restrictions {
     }
 }
 
-/// MIT `kadm5_get_config_params` `default_principal_flags`
-/// (`alt_prof.c:596-632`): tokens split on `,`, space or tab, each fed to
+/// MIT `kadm5_get_config_params` (`alt_prof.c:446-741`): `default_principal_flags`
+/// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): tokens split on `,`, space or tab, each fed to
 /// `krb5_flagspec_to_mask(sp, &flags, &flags)` — a `+flag` sets, a `-flag`
 /// clears — stopping at the first token the table does not know (the flags
 /// parsed so far are kept, as MIT keeps `params.flags`). Starts from
@@ -212,7 +212,7 @@ impl Acl {
         Self::default()
     }
 
-    /// Self-only: `acl_init(NULL)` → `KRB5_PLUGIN_NO_HANDLE` (`auth_acl.c:554-555`).
+    /// MIT `acl_init` (`auth_acl.c:554-555`): Self-only: `acl_init(NULL)` → `KRB5_PLUGIN_NO_HANDLE`.
     #[must_use]
     pub fn none() -> Self {
         Self::new()
@@ -227,7 +227,7 @@ impl Acl {
         Self::parse_with_realm(text, "")
     }
 
-    /// Like [`Self::parse`] with MIT `krb5_parse_name` default realm.
+    /// MIT `krb5_parse_name` (`parse.c:234-238`): Like [`Self::parse`] with default realm.
     ///
     /// # Errors
     ///
@@ -318,7 +318,7 @@ impl Acl {
     }
 
     /// Rename: delete on `src` and add on `dest` with no restrictions
-    /// (`auth_acl.c:638-648` `acl_renprinc`).
+    /// MIT `acl_renprinc` (`auth_acl.c:638-648`): `acl_renprinc`.
     ///
     /// # Errors
     ///
@@ -336,7 +336,7 @@ impl Acl {
     }
 
     /// Alias: add on `alias` with no restrictions and modify on `target`
-    /// (`auth_acl.c:723-734` `acl_addalias`).
+    /// MIT `acl_addalias` (`auth_acl.c:724-734`): `acl_addalias`.
     ///
     /// # Errors
     ///
@@ -423,7 +423,7 @@ struct WildState {
     backref: Vec<String>,
 }
 
-/// MIT `auth_acl.c:102-153` `get_line`: `\` continuation; `#` only at column 0.
+/// MIT `get_line` (`auth_acl.c:103-153`): get_line: `\` continuation; `#` only at column 0.
 fn logical_lines_numbered(text: &str) -> Vec<(usize, String)> {
     if text.is_empty() {
         return Vec::new();
@@ -435,7 +435,7 @@ fn logical_lines_numbered(text: &str) -> Vec<(usize, String)> {
     let mut phys = 0usize;
     for raw in text.split_inclusive('\n') {
         phys += 1;
-        // MIT get_line strips only `\n` (`auth_acl.c:136-140`); CRLF `\\\r`
+        // MIT `get_line` (`auth_acl.c:136-140`): strips only `\n`; CRLF `\\\r`
         // is not a continuation marker.
         let chunk = raw.strip_suffix('\n').unwrap_or(raw);
         if continuing {
@@ -631,7 +631,7 @@ fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
     Ok(rs)
 }
 
-/// MIT `str_conv.c:50-95`.
+/// MIT `str_conv.c`.
 const FLAG_TABLE: &[(&str, u32, bool)] = &[
     ("allow_postdated", KDB_DISALLOW_POSTDATED, true),
     ("postdateable", KDB_DISALLOW_POSTDATED, true),
@@ -678,8 +678,8 @@ const FLAG_TABLE: &[(&str, u32, bool)] = &[
     ("lockdown_keys", KDB_LOCKDOWN_KEYS, false),
 ];
 
-/// MIT `krb5_flagspec_to_mask` kadmin-modify semantics (`kadm5/str_conv.c:171-197`
-/// with `toset == toclear` as `kadmin.c:1164-1165`).
+/// MIT `krb5_flagspec_to_mask` (`str_conv.c:171-197`): kadmin-modify semantics (`kadm5
+/// MIT `kadmin_parse_princ_args` (`kadmin.c:1164-1165`): with `toset == toclear` as.
 #[must_use]
 pub fn kadmin_flagspec(spec: &str) -> Option<(u32, u32)> {
     let (req_neg, body) = spec
@@ -712,7 +712,7 @@ pub fn kadmin_flagspec(spec: &str) -> Option<(u32, u32)> {
     }
 }
 
-/// MIT `krb5_flagspec_to_mask` (`str_conv.c:170-198`).
+/// MIT `krb5_flagspec_to_mask` (`str_conv.c:171-198`): same check.
 fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
     let (req_neg, body) = if let Some(rest) = spec.strip_prefix('-') {
         (true, rest)
@@ -747,7 +747,7 @@ fn flagspec_to_mask(spec: &str, toset: &mut u32, toclear: &mut u32) -> bool {
     true
 }
 
-/// MIT `str_conv.c:147-152`: `strtoul(s, NULL, 16) & 0xffffffff`.
+/// MIT `raw_flagspec_to_mask` (`str_conv.c:147-152`): `strtoul(s, NULL, 16) & 0xffffffff`.
 fn hex_flag32(hex: &str) -> u32 {
     let digits: String = hex.chars().take_while(char::is_ascii_hexdigit).collect();
     let v = u64::from_str_radix(&digits, 16).unwrap_or(0);

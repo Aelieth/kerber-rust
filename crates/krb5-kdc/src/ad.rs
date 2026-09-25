@@ -278,7 +278,7 @@ fn set_sig(pac: &mut krb5_types::pac::Pac, kind: u32, cksumtype: i32, mac: &[u8]
     }
 }
 
-/// MIT `k5_pac_should_have_ticket_signature`: ticket and full checksums
+/// MIT `k5_pac_should_have_ticket_signature` (`pac.c:584-592`): ticket and full checksums
 /// belong to service tickets, never to TGTs or `kadmin/changepw` tickets.
 #[must_use]
 pub fn should_have_ticket_signature(sname: &PrincipalName) -> bool {
@@ -303,7 +303,7 @@ pub fn verify_pac(
     verify_pac_signatures(pac_bytes, server, Some(kdc), None, is_service_tkt)
 }
 
-/// MIT `krb5_kdc_verify_ticket`: the server checksum always; with `kdc` the
+/// MIT `krb5_kdc_verify_ticket` (`pac.c:595-689`): the server checksum always; with `kdc` the
 /// privsvr checksum, and for a service ticket the full checksum and — given
 /// `enc_tkt_der` (PAC ad-data = 0x00) — the ticket checksum.
 ///
@@ -375,7 +375,7 @@ fn verify_pac_checksums(
     last
 }
 
-/// MIT `pac.c:478-514` `verify_checksum`: SignatureType, SHA-1-on-server, keyed, length.
+/// MIT `verify_checksum` (`pac.c:479-514`): verify_checksum: SignatureType, SHA-1-on-server, keyed, length.
 fn verify_pac_sig<'a>(
     key: &ProtocolKey,
     data: &[u8],
@@ -428,7 +428,7 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
     encode(&clone).map_err(Error::from)
 }
 
-/// MIT `get_verified_pac` (`kdc_util.c:589-630`): TGS header → server
+/// MIT `get_verified_pac` (`kdc_util.c:590-630`): TGS header → server
 /// signature only; service header → privsvr + kvno−1/−2 retry.
 ///
 /// # Errors
@@ -462,7 +462,7 @@ pub(crate) fn get_verified_pac(
         first?;
         return Ok(Some(pac));
     }
-    // `kdc_util.c:614-616`: `key_data[0].key_data_kvno - 1`, then
+    // MIT `get_verified_pac` (`kdc_util.c:614-616`): `key_data[0].key_data_kvno - 1`, then
     // `krb5_dbe_find_enctype(tgt, -1, -1, kvno)` for each of two tries.
     let mut kvno = tgt
         .first_current_key()
@@ -494,7 +494,7 @@ fn pac_verify_retryable(r: &Result<(), Error>) -> bool {
     )
 }
 
-/// MIT `KRB5_BAD_ENCTYPE` (index 188) → protocol 60 on non-retry PAC exits.
+/// KRB5_BAD_ENCTYPE (index 188) → protocol 60 on non-retry PAC exits.
 fn wire_unsupported_pac_cksum(e: Error) -> Error {
     match e {
         Error::Protocol {
@@ -544,7 +544,7 @@ pub(crate) fn pac_privsvr_key(
         .map_err(|_| proto(err::GENERIC, status::HEADER_PAC))
 }
 
-/// MIT `check_normal_tgs_pac` (`tgs_policy.c:601-624`). Missing PAC is ok.
+/// MIT `check_normal_tgs_pac` (`tgs_policy.c:602-624`): . Missing PAC is ok.
 pub(crate) fn check_normal_tgs_pac(
     enc_tkt: &EncTicketPart,
     pac: Option<&[u8]>,
@@ -653,7 +653,7 @@ pub fn pac_from_ticket_part(part: &EncTicketPart) -> Option<Vec<u8>> {
     None
 }
 
-/// Result of `kdc_process_s4u2self_req` (`kdc_util.c:1556-1621`).
+/// MIT `kdc_process_s4u2self_req` (`kdc_util.c:1557-1621`): Result of `kdc_process_s4u2self_req`.
 pub(crate) struct S4u2Self {
     pub(crate) user: PrincipalName,
     pub(crate) realm: String,
@@ -661,7 +661,7 @@ pub(crate) struct S4u2Self {
     pub(crate) x509: Option<krb5_types::s4u::PaS4uX509User>,
 }
 
-/// S4U2Self: 130 wins over 129 (`kdc_util.c:1570-1586`).
+/// MIT `kdc_process_s4u2self_req` (`kdc_util.c:1570-1586`): S4U2Self: 130 wins over 129.
 pub(crate) fn process_s4u2self_req(
     store: &dyn PrincipalRead,
     tgt_session: &ProtocolKey,
@@ -867,7 +867,7 @@ pub(crate) fn make_s4u2self_rep(
     tgs_subkey: Option<&EncryptionKey>,
 ) -> Result<(PaData, Option<PaData>), Error> {
     let key = x509_cksum_key(tgt_session, tgs_subkey)?;
-    // MIT kdc_util.c:1467-1472 copies nonce, user, and masked options only.
+    // MIT `kdc_make_s4u2self_rep` (`kdc_util.c:1467-1472`): MIT copies nonce, user, and masked options only.
     let user_id = krb5_types::s4u::S4uUserId {
         nonce: req.user_id.nonce,
         user: req.user_id.user.clone(),
@@ -918,7 +918,7 @@ pub(crate) struct SecondTicket {
     pub(crate) pac: Option<Vec<u8>>,
 }
 
-/// MIT `verify_deleg_pac` (`tgs_policy.c:366-421`).
+/// MIT `verify_deleg_pac` (`tgs_policy.c:366-421`): same check.
 pub(crate) fn verify_deleg_pac(
     pac: &krb5_types::pac::Pac,
     enc_tkt: &EncTicketPart,
@@ -959,7 +959,7 @@ fn pac_princ_with_realm(pac: &krb5_types::pac::Pac) -> Option<(String, String, u
     Some((user.to_owned(), realm.to_owned(), authtime))
 }
 
-/// MIT `check_tgs_s4u2proxy` (`tgs_policy.c:424-518`).
+/// MIT `check_tgs_s4u2proxy` (`tgs_policy.c:424-518`): same check.
 ///
 /// # Errors
 ///
@@ -1059,7 +1059,7 @@ fn is_client_db_alias(store: &dyn PrincipalRead, entry: &Principal, princ: &Prin
         .is_some_and(|p| p.name == entry.name && p.realm == entry.realm)
 }
 
-/// MIT `check_s4u2proxy_policy` (`tgs_policy.c:522-572`).
+/// MIT `check_s4u2proxy_policy` (`tgs_policy.c:522-572`): same check.
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(crate) fn check_s4u2proxy_policy(
     padata: Option<&[PaData]>,
@@ -1124,7 +1124,7 @@ fn check_allowed_to_delegate(impersonator: &Principal, resource: &PrincipalName)
     impersonator.s4u_allowed_to.iter().any(|n| n == &want)
 }
 
-/// First-hop `update_delegation_info` (`kdc_authdata.c:382-439`).
+/// MIT `update_delegation_info` (`kdc_authdata.c:383-439`): First-hop `update_delegation_info`.
 pub(crate) fn update_delegation_info(
     subject_pac: &[u8],
     proxy_target: &PrincipalName,
@@ -1155,7 +1155,7 @@ pub(crate) fn update_delegation_info(
     Ok(krb5_types::pac::Pac::built(0, buffers).to_bytes())
 }
 
-/// MIT `get_pac_princ_with_realm` for cross-realm S4U2Proxy (`do_tgs_req.c:737-745`).
+/// MIT `gather_tgs_req_info` (`do_tgs_req.c:737-745`): get_pac_princ_with_realm for cross-realm S4U2Proxy.
 pub(crate) fn rbcd_pac_client(pac: &[u8]) -> Result<(PrincipalName, String), Error> {
     let parsed = krb5_types::pac::Pac::parse(pac)
         .map_err(|_| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
@@ -1179,7 +1179,7 @@ fn is_kdc_issued_type(ad_type: i32) -> bool {
     )
 }
 
-/// MIT `is_kdc_issued_authdatum` (`kdc_authdata.c:110-150`).
+/// MIT `is_kdc_issued_authdatum` (`kdc_authdata.c:111-150`): same check.
 ///
 /// An IF-RELEVANT whose immediate containee types include a KDC-issued
 /// type is dropped whole. Decode failure of IF-RELEVANT is not issued.
@@ -1239,7 +1239,7 @@ fn copy_tgt_authdata(
     Ok(())
 }
 
-/// MIT `handle_authdata` (`kdc_authdata.c:576-628`) without `handle_pac`.
+/// handle_authdata (`kdc_authdata.c`) without `handle_pac`.
 ///
 /// Order: copy TGS body AD → modules (skip anonymous) → copy TGT AD.
 /// `handle_pac` stays in `mint_ticket` (PAC at index 0).
@@ -1428,7 +1428,7 @@ fn cammac_check_kdcver(
     let Some(ver) = cammac.kdc_verifier.as_ref() else {
         return false;
     };
-    // `cammac.c:152-158`: `current_kvno(tgt)` is `key_data[0]` unfiltered;
+    // MIT `cammac_check_kdcver` (`cammac.c:152-158`): `current_kvno(tgt)` is `key_data[0]` unfiltered
     // another kvno is `krb5_dbe_find_enctype(tgt, -1, -1, ver->kvno)`.
     let current = tgt.first_current_key().map_or(0, |k| k.kvno);
     let want_kvno = ver.kvno.unwrap_or(0);
@@ -1450,7 +1450,7 @@ fn cammac_check_kdcver(
     let Ok(usage) = KeyUsage::new(ku::CAMMAC) else {
         return false;
     };
-    // MIT `cammac.c:168` calls `krb5_c_verify_checksum` with no keyed
+    // MIT `cammac_check_kdcver` (`cammac.c:168-168`): MIT calls `krb5_c_verify_checksum` with no keyed
     // gate. Refuse unkeyed types on the KDC verifier (security.md).
     verify_checksum_keyed(
         key,
