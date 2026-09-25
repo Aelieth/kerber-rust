@@ -58,6 +58,8 @@ this project uses semantic versioning once a crate is published.
   anchor and one sentence stating the fail-closed rule. The PAC, S4U,
   PKINIT, and SPAKE results that clippy does not require still name
   their error conditions. No behaviour change.
+- **client.** `kinit_inner` states that key-expired is the only change
+  path and that a keytab request has none. No behaviour change.
 
 ### W3-S3.10 parameter structs
 
