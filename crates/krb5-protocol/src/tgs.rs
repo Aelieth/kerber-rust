@@ -524,6 +524,8 @@ fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
     )
 }
 
+/// MIT `krb5int_fast_process_response` (`fast.c:534-550`): a FAST reply with no finished message, or a finished checksum that fails, is not accepted.
+/// An outer error whose FAST envelope does not unwrap stays the fatal answer, and nothing inside that envelope is trusted.
 #[expect(clippy::too_many_arguments, reason = "client TGS, not a params struct")]
 #[allow(clippy::needless_pass_by_value)]
 fn tgs_once(

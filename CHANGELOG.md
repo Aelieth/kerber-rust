@@ -51,6 +51,9 @@ this project uses semantic versioning once a crate is published.
 - **admin.** The sixteen src functions over 40 lines each gain one
   MIT anchor and one sentence stating the fail-closed rule for that
   function. No behaviour change.
+- **protocol.** The nineteen src functions over 40 lines each gain one
+  MIT anchor and one sentence stating the check that makes a success.
+  `fast_error_material` names its error conditions. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

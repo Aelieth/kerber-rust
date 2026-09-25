@@ -105,6 +105,8 @@ fn princ_eq(a: &(Realm, PrincipalName), realm: &Realm, name: &PrincipalName) -> 
     a.0.as_bytes() == realm.as_bytes() && a.1.name_string == name.name_string
 }
 
+/// MIT `get_vfy_cred` (`vfy_increds.c:90-94`): a credential already for the named server is what builds the AP-REQ.
+/// Any other server is reached by a TGS exchange first, and the AP-REQ is checked only against that server's keytab entries.
 fn get_vfy_cred(
     creds: &CcacheCred,
     realm: &Realm,

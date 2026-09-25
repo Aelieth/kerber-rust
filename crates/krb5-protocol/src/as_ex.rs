@@ -211,6 +211,8 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
         .unwrap_or_else(|| PrincipalName::krbtgt(req.realm))
 }
 
+/// MIT `restart_init_creds_loop` (`get_in_tkt.c:807-813`): optimistic preauth is sent only when the caller supplied a preauth list.
+/// The default first request therefore carries no module padata, and a preauth-required hint is what selects the real mechanism.
 fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     refuse_spake_combo(req)?;
@@ -297,6 +299,8 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     }
 }
 
+/// MIT `get_as_key_keytab` (`gic_keytab.c:68-71`): the reply etype selects the keytab key, and a wrong etype is not reused.
+/// A checksum failure on that key is not final: every other supplied key is tried before the reply is rejected.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_as_rep_keys(
     rep: AsRep,
@@ -437,6 +441,8 @@ fn continue_from_hint(
     continue_preauth(req, keys, nonce, bound, etypes, err, skew_hint)
 }
 
+/// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1729`): the KDC time is what the next encrypted timestamp is built from.
+/// A skew error is retried once at that time, and an unsupported etype is retried once as aes256; any other error is not another guess.
 fn continue_preauth(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -543,6 +549,8 @@ pub fn insert_module_padata_before_info_pa(list: &mut Vec<PaData>, module_pa: Pa
     list.insert(at, module_pa);
 }
 
+/// MIT `pkinit_as_req_create` (`pkinit_clnt.c:194-195`): the freshness token is placed in the auth pack when freshness is enabled.
+/// The first request carries no PKINIT, and a reply that is not preauth-required or preauth-failed is not turned into an AuthPack.
 fn continue_pkinit(
     req: &AsRequest<'_>,
     nonce: u32,
@@ -712,6 +720,8 @@ fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
     })
 }
 
+/// MIT `krb5int_fast_verify_nego` (`fast.c:648-664`): a ticket with the enc-pa-rep flag and no matching checksum over the request is not accepted.
+/// The client name in the reply may differ only for an anonymous or canonicalized request.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_as_rep(
     rep: AsRep,
@@ -1034,6 +1044,8 @@ fn build_as_req_from(
     )
 }
 
+/// MIT `init_creds_step_request` (`get_in_tkt.c:1365-1372`): every request advertises an empty freshness token and an enc-pa-rep request.
+/// Those two items are appended after the caller's padata, so a mechanism that replaces the list would drop the checksum the reply is checked against.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn build_as_req(
     cname: &PrincipalName,
@@ -1112,6 +1124,8 @@ pub fn conf_etypes(tgs: bool) -> Vec<i32> {
     if v.is_empty() { preferred } else { v }
 }
 
+/// MIT `set_request_times` (`get_in_tkt.c:711-722`): the start time is omitted unless the caller asked for one, and a renewable end is not requested before the ticket end.
+/// Asking for a start time marks the request postdated, and omitting a renewable lifetime asks only for renewable-ok.
 fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddresses>) {
     let now = KerberosTime::now();
     // MIT `get_in_tkt.c:711-714` omits `from` unless start_time != 0.

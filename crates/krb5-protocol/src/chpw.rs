@@ -224,6 +224,8 @@ pub fn set_password(
     Ok(())
 }
 
+/// MIT `krb5int_rd_chpw_rep` (`chpw.c:227-229`): a success code carried inside an error reply is not accepted.
+/// The generated subkey buffer is wiped as soon as the key exists, and a non-error reply is not accepted until its AP-REP verifies.
 fn change_or_set(
     kdc: &KdcAddr,
     as_out: &AsOutcome,

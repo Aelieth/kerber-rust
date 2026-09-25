@@ -363,6 +363,8 @@ fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
     }
 }
 
+/// MIT `k5_memrcache_store` (`memrcache.c:136-139`): a tag already stored is a replay and is not accepted again.
+/// A timestamp more than 300 seconds from now is not fresh, and a required sequence of zero is not a sequence.
 fn accept_fresh(
     replay: &ReplayCache,
     kind: &str,

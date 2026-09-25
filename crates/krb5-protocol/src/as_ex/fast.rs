@@ -28,6 +28,8 @@ pub struct FastArmor {
     pub cname: PrincipalName,
 }
 
+/// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1728`): only a preauth-required error that is marked retry continues.
+/// An outer error that did not unwrap is returned as itself, and the cookie leads the inner padata on the retry.
 pub(super) fn continue_fast(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -102,6 +104,8 @@ pub(super) fn continue_fast(
     }
 }
 
+/// MIT `krb5int_fast_process_response` (`fast.c:548-556`): once the finished checksum holds, the reply client is the finished client.
+/// The outer client name and padata are unauthenticated and are not consulted again after that replacement.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_fast_as(
     req: &AsRequest<'_>,
@@ -231,6 +235,11 @@ pub(crate) struct FastErrorMaterial {
 ///
 /// The inner error's `e_data` is filled with the inner padata when it is
 /// empty so `method_from_error` / `select_s2k` read the protected hints.
+///
+/// # Errors
+///
+/// `PREAUTH_FAILED` when the decrypted reply has no FX-ERROR, and a
+/// failure decoding that inner error.
 pub(crate) fn fast_error_material(
     akey: &ProtocolKey,
     err: &KrbError,

@@ -254,6 +254,8 @@ pub fn verify_ap_req_ex(
     result
 }
 
+/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): the invalid flag is tested only after the ticket times.
+/// A ticket outside the caller skew, using starttime or else authtime, is not a successful verify.
 fn verify_inner(
     raw: &[u8],
     params: &ApVerifyParams<'_>,

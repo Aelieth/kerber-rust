@@ -188,6 +188,8 @@ pub(crate) fn marshal_cred(w: &mut Writer, c: &CcacheCred) {
     w.data(&c.second_ticket);
 }
 
+/// MIT `k5_unmarshal_cred` (`ccmarshal.c:306-310`): a truncated credential is a format error and is not returned half-parsed.
+/// An address or authdata count larger than the bytes still in the buffer is rejected before those lists are walked.
 pub(crate) fn unmarshal_cred(b: &[u8], i: &mut usize) -> Result<CcacheCred, io::Error> {
     let client = unmarshal_princ(b, i)?;
     let server = unmarshal_princ(b, i)?;

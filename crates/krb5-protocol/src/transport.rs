@@ -73,6 +73,8 @@ pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u
     Err(last)
 }
 
+/// MIT `k5_init_creds_get` (`get_in_tkt.c:570-572`): a response-too-big error retries the same request over TCP.
+/// A UDP timeout prefers the TCP error, because a reply that cannot fit in a datagram otherwise hides that failure.
 fn exchange_one(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     crate::capture_pdu("client-req", request);
     if request.len() > krb5_config::udp_preference_limit() {
@@ -145,6 +147,8 @@ fn dest_addr(addr: &KdcAddr) -> Result<SocketAddr, Error> {
         .ok_or_else(|| Error::transport_msg("no KDC address"))
 }
 
+/// MIT `service_udp_read` (`sendto_kdc.c:1209-1216`): a UDP read is taken from the connected peer, and a receive error drops that attempt.
+/// This socket is not connected, so a datagram whose source is not the KDC address is ignored and is not the reply.
 fn exchange_udp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     // Bind loopback when the KDC is loopback so replies stay on lo (Docker
     // bridge + 0.0.0.0 ephemeral ports drop UDP replies).

@@ -314,6 +314,8 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32),
     ))
 }
 
+/// MIT `krb5_ktfileint_internal_read_entry` (`kt_file.c:1091-1095`): a version-2 entry's 32-bit kvno replaces the one-byte kvno.
+/// A key whose bytes are not that etype's length is not an entry.
 fn parse_entry(body: &[u8], ver: u16) -> Result<KeytabEntry, EntryErr> {
     let mut i = 0;
     let ncomp = take_u16(body, &mut i)?;

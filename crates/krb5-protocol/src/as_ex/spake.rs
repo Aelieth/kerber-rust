@@ -46,6 +46,8 @@ pub(super) fn continue_spake(
     }
 }
 
+/// MIT `process_challenge` (`spake_client.c:221-222`): a challenge that does not offer SF-NONE is preauth-failed.
+/// The cookie is placed ahead of the SPAKE response so the freshness and enc-pa-rep advertisements stay on the request.
 fn send_spake_response(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
