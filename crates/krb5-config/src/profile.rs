@@ -188,6 +188,8 @@ fn take_first(seen: &mut BTreeSet<String>, key: &str) -> bool {
     seen.insert(key.to_owned())
 }
 
+/// MIT `profile_parse_file` (`prof_parse.c:431-434`): a parse error is not a successful profile.
+/// An indented include inside a section is a format error, and one before any section is ignored.
 fn parse_into(
     conf: &mut Krb5Conf,
     seen: &mut BTreeSet<String>,
@@ -351,6 +353,8 @@ fn load_dir_into(
     Ok(())
 }
 
+/// MIT `profile_get_string` (`prof_get.c:265-270`): a missing relation keeps the default, and a found value is what is returned.
+/// The first occurrence of a key wins, and a line with no equals sign is not a setting.
 fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;

@@ -62,6 +62,9 @@ this project uses semantic versioning once a crate is published.
   path and that a keytab request has none. No behaviour change.
 - **gss.** The eight long functions state when a token, a direction,
   or a delegated credential is rejected. No behaviour change.
+- **config.** The profile parser states that an include is a directive
+  only at the start of a line, and that the first value of a key wins.
+  No behaviour change.
 
 ### W3-S3.10 parameter structs
 
