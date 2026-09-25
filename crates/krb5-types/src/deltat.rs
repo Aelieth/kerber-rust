@@ -163,6 +163,8 @@ fn opt_hms(b: &[u8], i: &mut usize) -> Result<i32, DeltatError> {
     }
 }
 
+/// MIT `krb5_string_to_deltat` (`deltat.c:1580-1581`): a string the parser rejects is a bad format, not a zero duration.
+/// A day count outside the allowed range is not a duration.
 fn deltat(b: &[u8], i: &mut usize) -> Result<i32, DeltatError> {
     let n = num(b, i)?;
     if eat(b, i, b'd') {

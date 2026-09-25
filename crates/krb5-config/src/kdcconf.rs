@@ -52,7 +52,7 @@ impl KdcConf {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Parse`] on malformed input.
+    /// [`Error::Parse`] on malformed input.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::default();
         let mut section = String::new();
@@ -98,7 +98,7 @@ impl KdcConf {
                 parse_kdc_libdefaults(&mut conf, line);
             }
         }
-        // MIT `main.c:286-345`: realm stanza, then `[kdcdefaults]` fallback.
+        // MIT `otp_verify` (`main.c:286-345`): realm stanza, then `[kdcdefaults]` fallback.
         // Re-apply realm booleans so a later defaults section cannot win.
         for line in &realm_lines {
             overlay_realm_booleans(&mut conf, line);
@@ -110,7 +110,7 @@ impl KdcConf {
     ///
     /// # Errors
     ///
-    /// Returns I/O or parse errors.
+    /// [`Error::Io`] or [`Error::Parse`].
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let text = std::fs::read_to_string(path)?;
         Self::parse(&text)
@@ -171,7 +171,7 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
         "spake_preauth_groups" => conf.spake_preauth_groups = Some(split_ws(&v)),
         // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
-        // [kdcdefaults] or a realm stanza (main.c:257-261,622-626), never
+        // MIT `main` (`main.c:257-622`): [kdcdefaults] or a realm stanza -626), never
         // [libdefaults]; no fallthrough, so a kdcdefaults knob placed under
         // [libdefaults] is ignored like MIT.
         _ => {}

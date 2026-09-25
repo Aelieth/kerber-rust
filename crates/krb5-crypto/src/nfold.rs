@@ -1,4 +1,7 @@
 //! RFC 3961 n-fold. Ported from MIT krb5 `krb5int_nfold` (1.22.2).
+//!
+//! An empty input or a zero output length is `Error::InvalidParams`.
+//! The expansion is 1's-complement addition of 13-bit rotations.
 
 /// Expand `input` to exactly `out_len` octets using 1's-complement addition
 /// of 13-bit rotations, as specified in RFC 3961 section 5.1.

@@ -1,4 +1,8 @@
 //! FAST, SPAKE, and PKINIT processing on the KDC.
+//!
+//! A successful FAST unwrap returns the armor key and the inner body
+//! together. The outer wire body is not the client request once armor
+//! has been accepted. SPAKE and PKINIT run on that inner request.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
@@ -45,7 +49,7 @@ pub(crate) fn unwrap_fast_as(
     kdc_find_fast(store, padata, body_der, None, None).map_err(map_fast_unwrap)
 }
 
-/// MIT `kdc_find_fast` for TGS: armor from the PA-TGS-REQ subkey, or
+/// MIT `kdc_find_fast` (`fast_util.c:127-247`): for TGS: armor from the PA-TGS-REQ subkey, or
 /// `armor_ap_request` when explicit AP-REQ armor is present without that subkey.
 pub(crate) fn unwrap_fast_tgs(
     store: &dyn PrincipalRead,
@@ -57,7 +61,7 @@ pub(crate) fn unwrap_fast_tgs(
     kdc_find_fast(store, padata, pa_tgs_raw, subkey, Some(session)).map_err(map_fast_unwrap)
 }
 
-/// MIT `kdc_find_fast` (`fast_util.c:126-247`). Inner `msg_type` is the outer
+/// MIT `kdc_find_fast` (`fast_util.c:127-247`): . Inner `msg_type` is the outer
 /// APPLICATION tag in Rust (AS vs TGS dispatch already happened).
 fn kdc_find_fast(
     store: &dyn PrincipalRead,
@@ -143,7 +147,7 @@ fn verify_fast_req_checksum(
     ck_data: &[u8],
     ck: &krb5_types::Checksum,
 ) -> Result<(), Error> {
-    // MIT krb5_c_verify_checksum then krb5_c_is_keyed_cksum (fast_util.c:207-224).
+    // MIT `kdc_find_fast` (`fast_util.c:207-224`): MIT krb5_c_verify_checksum then krb5_c_is_keyed_cksum.
     // Type 0 is not in the keyed/unkeyed tables; verify_checksum_type substitutes
     // the key's mandatory type, then is_keyed(0) is false → 12.
     let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM)?;
@@ -174,7 +178,7 @@ fn verify_fast_req_checksum(
     Ok(())
 }
 
-/// MIT `krb5_ktkdb_get_entry` key pick (`lib/kdb/keytab.c:152-178`).
+/// MIT `krb5_ktkdb_get_entry` (`keytab.c:152-178`): key pick (`lib/kdb/.
 fn armor_ticket_key(
     store: &dyn PrincipalRead,
     p: &Principal,
@@ -198,6 +202,8 @@ fn armor_ticket_key(
     }
 }
 
+/// MIT `krb5_ktkdb_get_entry` (`keytab.c:157-163`): the key search is pinned to the ticket kvno, and a non-permitted enctype is not a candidate.
+/// An unknown server or a foreign-realm armor ticket is not-us, and a local ticket that is not a TGT is not armor.
 fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
@@ -212,12 +218,12 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     let Some(p) = store.fetch_name(&ap.ticket.sname)? else {
         return Err(proto_fast(err::NOT_US, "FAST armor TGT"));
     };
-    // MIT `krb5_rd_req` → KDB keytab `krb5_ktkdb_get_entry` (`keytab.c:157-163`):
+    // MIT `krb5_ktkdb_get_entry` (`keytab.c:157-163`): krb5_rd_req → KDB keytab `krb5_ktkdb_get_entry`
     // `krb5_dbe_find_enctype(entry, xrealm ? etype : -1, -1, kvno)` pins the
     // ticket kvno and skips non-permitted enctypes. A local TGS then fails
     // `krb5_c_enctype_compare` (`:171-178`) as `KRB5_KDB_NO_PERMITTED_KEY`
     // (wire 60 via `errcode_to_protocol`). `NO_MATCHING_KEY` becomes
-    // `KRB5_KT_KVNONOTFOUND` → `BADKEYVER` 44 (`rd_req_dec.c:137-147`).
+    // MIT `keytab_fetch_error` (`rd_req_dec.c:137-147`): `KRB5_KT_KVNONOTFOUND` → `BADKEYVER` 44.
     let key = armor_ticket_key(store, &p, &ap.ticket)?;
     let enc_tkt = match decrypt(&key, tkt_usage, cipher) {
         Ok(plain) => decode::<krb5_types::EncTicketPart>(&plain)
@@ -236,7 +242,7 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     if i64::from(enc_tkt.endtime.unix_seconds()) < now {
         return Err(proto_fast(err::TKT_EXPIRED, "FAST armor expired"));
     }
-    // MIT armor_ap_request: 26 only after rd_req decrypts (`fast_util.c:51-68`).
+    // MIT armor_ap_request: 26 only after rd_req decrypts (`fast_util.c`).
     if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
         return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
     }
@@ -261,7 +267,7 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
 
 const COOKIE_LIFETIME: i32 = 600;
 const COOKIE_MAGIC: &[u8] = b"MIT1";
-/// MIT `FRESHNESS_LIFETIME` (`kdc_preauth.c:91`).
+/// FRESHNESS_LIFETIME (`kdc_preauth.c`).
 pub(crate) const FRESHNESS_LIFETIME: i64 = 600;
 
 /// RFC 8070 token: `ts(BE32) ‖ krbtgt kvno(BE32) ‖ checksum(ku 514, ts)`.
@@ -308,7 +314,7 @@ pub(crate) fn check_freshness_token(
     let Some(tgt) = store.fetch_krbtgt().ok().flatten() else {
         return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
     };
-    // `kdc_preauth.c:545` `krb5_dbe_find_enctype(local_tgt, -1, -1, token_kvno)`.
+    // MIT `check_freshness_token` (`kdc_preauth.c:545-545`): `krb5_dbe_find_enctype(local_tgt, -1, -1, token_kvno)`.
     let Ok(key) = store.policy().find_enctype(&tgt, None, kvno) else {
         return Err(proto(err::PREAUTH_EXPIRED, status::PREAUTH_FAILED));
     };
@@ -332,7 +338,7 @@ fn derive_cookie_key(
     derive_prfplus(tgt_key, &seed).map_err(Error::from)
 }
 
-/// MIT `kdc_fast_make_cookie` (`fast_util.c:655-721`). Empty contents → `MIT`.
+/// MIT `kdc_fast_make_cookie` (`fast_util.c:656-721`): . Empty contents → `MIT`.
 pub(crate) fn make_cookie(
     store: &dyn PrincipalRead,
     client: &PrincipalName,
@@ -372,7 +378,7 @@ pub(crate) fn make_cookie_at(
     Ok(out)
 }
 
-/// MIT `kdc_fast_read_cookie` (`fast_util.c:545-611`): errors leave the
+/// MIT `kdc_fast_read_cookie` (`fast_util.c:546-611`): errors leave the
 /// state empty and return 0 (never 24).
 pub(crate) fn open_cookie(
     store: &dyn PrincipalRead,
@@ -386,7 +392,7 @@ pub(crate) fn open_cookie(
     let Ok(Some(krbtgt_p)) = store.fetch_krbtgt() else {
         return Vec::new();
     };
-    // `fast_util.c:506-516`: the current kvno uses the already-chosen first
+    // MIT `get_cookie_key` (`fast_util.c:506-516`): the current kvno uses the already-chosen first
     // permitted key; an older kvno is `krb5_dbe_find_enctype(tgt, -1, -1, kvno)`.
     let Ok(ke) = store.policy().find_enctype(&krbtgt_p, None, kvno) else {
         return Vec::new();
@@ -452,6 +458,12 @@ pub(crate) enum SpakeStep {
     Done(ProtocolKey),
 }
 
+/// MIT `next_padata` (`kdc_preauth.c:1306-1307`): a padata type that is not a module is skipped rather than failed.
+/// With no SPAKE groups configured a PA-SPAKE is skipped, and an empty token when groups are configured is preauth-failed.
+///
+/// # Errors
+///
+/// `PREAUTH_FAILED` when the token is empty or the SPAKE message is not one this KDC accepts.
 pub(crate) fn process_spake(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -462,8 +474,8 @@ pub(crate) fn process_spake(
     let Some(raw) = find_pa(padata, pa::SPAKE) else {
         return Ok(None);
     };
-    // MIT `kdc_preauth.c:1306-1307`: empty groups → SPAKE not a pa_system
-    // (`groups.c:60`); a stray PA-SPAKE is skipped, not 24.
+    // MIT `next_padata` (`kdc_preauth.c:1306-1307`): empty groups → SPAKE not a pa_system
+    // (`groups.c`); a stray PA-SPAKE is skipped, not 24.
     if store.policy().spake_preauth_groups.is_empty() {
         return Ok(None);
     }
@@ -532,6 +544,8 @@ pub(crate) fn process_spake(
     Ok(None)
 }
 
+/// MIT `send_challenge` (`spake_kdc.c:241-246`): the challenge offers only the factor type none.
+/// The private scalar is stored in the cookie, and a key-generation failure is not sent as a challenge.
 fn send_spake_challenge(
     store: &dyn PrincipalRead,
     client: &PrincipalName,
@@ -579,8 +593,12 @@ fn send_spake_challenge(
 ///
 /// A client-caused verify failure (CMS, cert, eContentType, checksum, ctime,
 /// AuthPack, DH group, SPKI) is logged at `info` like MIT's
-/// `kdc_preauth.c:1224-1228` `LOG_INFO "preauth (%s) verify failure: %s"`,
+/// MIT `finish_verify_padata` (`kdc_preauth.c:1224-1228`): `LOG_INFO "preauth (%s) verify failure: %s"`
 /// `outcome = "denied"`; the KDC's own faults stay `error`.
+///
+/// # Errors
+///
+/// `PREAUTH_FAILED` when the CMS, certificate, checksum, time, or Diffie-Hellman group does not verify.
 pub(crate) fn process_pkinit(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
@@ -609,7 +627,7 @@ pub(crate) fn process_pkinit(
         Ok(verified) => {
             if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
                 tracing::info!(
-                    event = "kdc.pkinit",
+                    event = krb5_log::events::KDC_PKINIT,
                     component = "krb5-kdc",
                     outcome = "denied",
                     error = "pkinit eContentType"
@@ -620,7 +638,7 @@ pub(crate) fn process_pkinit(
                 krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm)
             {
                 tracing::info!(
-                    event = "kdc.pkinit",
+                    event = krb5_log::events::KDC_PKINIT,
                     component = "krb5-kdc",
                     outcome = "denied",
                     error = e
@@ -632,7 +650,7 @@ pub(crate) fn process_pkinit(
         Err(e) => {
             let Some(inner) = krb5_types::pkinit::cms_extract_unsigned(&cms) else {
                 tracing::info!(
-                    event = "kdc.pkinit",
+                    event = krb5_log::events::KDC_PKINIT,
                     component = "krb5-kdc",
                     outcome = "denied",
                     error = e,
@@ -640,7 +658,7 @@ pub(crate) fn process_pkinit(
                 );
                 return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
             };
-            // pkinit_srv.c:508-516: WITH-realm after do_as_req.c:718-734 rewrite
+            // MIT `krb5_principal_compare` (`pkinit_srv.c:509-516`): WITH-realm after do_as_req.c rewrite
             // (`request->client` is WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS).
             // Rewrite runs only for REQUEST_ANONYMOUS + an anonymous name.
             let rewritten = decode::<KdcReqBody>(body_der)
@@ -658,7 +676,7 @@ pub(crate) fn process_pkinit(
     };
     if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
         tracing::info!(
-            event = "kdc.pkinit",
+            event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
             error = e
@@ -672,7 +690,7 @@ pub(crate) fn process_pkinit(
     }
     if is_signed && store.policy().pkinit_require_freshness && !valid_freshness {
         tracing::info!(
-            event = "kdc.pkinit",
+            event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "error",
             detail = "no freshness token, rejecting auth"
@@ -682,14 +700,14 @@ pub(crate) fn process_pkinit(
     if is_signed {
         if valid_freshness {
             tracing::info!(
-                event = "kdc.pkinit",
+                event = krb5_log::events::KDC_PKINIT,
                 component = "krb5-kdc",
                 outcome = "ok",
                 detail = "freshness token received"
             );
         } else {
             tracing::info!(
-                event = "kdc.pkinit",
+                event = krb5_log::events::KDC_PKINIT,
                 component = "krb5-kdc",
                 outcome = "ok",
                 detail = "no freshness token received"
@@ -698,7 +716,7 @@ pub(crate) fn process_pkinit(
     }
     let (ctime, cusec) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
         tracing::info!(
-            event = "kdc.pkinit",
+            event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
             error = "pkinit ctime"
@@ -721,7 +739,7 @@ pub(crate) fn process_pkinit(
     }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
         tracing::info!(
-            event = "kdc.pkinit",
+            event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
             error = "AuthPack",
@@ -750,7 +768,7 @@ pub(crate) fn process_pkinit(
     } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
         let group = dh_group_for_prime(&p).ok_or_else(|| {
             tracing::info!(
-                event = "kdc.pkinit",
+                event = krb5_log::events::KDC_PKINIT,
                 component = "krb5-kdc",
                 outcome = "denied",
                 error = "unknown DH prime",
@@ -759,7 +777,7 @@ pub(crate) fn process_pkinit(
             dh_params_not_accepted(store, cname)
         })?;
         tracing::info!(
-            event = "kdc.pkinit",
+            event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "ok",
             group = group.name,
@@ -773,7 +791,7 @@ pub(crate) fn process_pkinit(
         (z, info)
     } else {
         tracing::info!(
-            event = "kdc.pkinit",
+            event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "denied",
             error = "SPKI",
@@ -799,7 +817,7 @@ pub(crate) fn process_pkinit(
     }
     let reply_key = if agile {
         tracing::info!(
-            event = "kdc.pkinit",
+            event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
             outcome = "ok",
             detail = "rfc8636 sha256 kdf",
@@ -875,7 +893,7 @@ pub(crate) fn proto_fast(code: i32, detail: impl Into<String>) -> Error {
     }
 }
 
-// MIT do_as_req.c:531-535 / kdc_util.c:691-698: any kdc_find_fast failure
+// MIT `process_as_req` (`do_as_req.c:531-535`): MIT / kdc_util.c: any kdc_find_fast failure
 // is status FIND_FAST; decrypt → 31, ASN.1 → 60.
 fn map_fast_unwrap(err: Error) -> Error {
     match err {

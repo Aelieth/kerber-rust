@@ -33,7 +33,7 @@ pub struct KeyEntry {
     pub kdb_salt: Option<Vec<u8>>,
 }
 
-/// Why [`Principal::find_enctype`] found nothing: MIT `KRB5_KDB_NO_MATCHING_KEY`
+/// Why [`Principal::find_enctype`] found nothing: KRB5_KDB_NO_MATCHING_KEY
 /// (no key of that etype/kvno at all) versus `KRB5_KDB_NO_PERMITTED_KEY` (the
 /// requested etype, or every matching key, is outside `permitted_enctypes`).
 /// Both are KDB-library codes the KDC clamps to 60 `GENERIC` on the wire; the
@@ -220,7 +220,7 @@ impl PrincipalStore {
         self.chrand_keepold_n(name, 0)
     }
 
-    /// [`Self::chrand`] with MIT `keepold` (0 / 1 / N versions).
+    /// [`Self::chrand`] with keepold (0 / 1 / N versions).
     ///
     /// # Errors
     ///
@@ -237,7 +237,7 @@ impl PrincipalStore {
 
     /// [`Self::chrand_etypes_keepold`] for `name@princ_realm`.
     ///
-    /// Empty `etypes` is MIT's omitted `-e` (`svr_principal.c:1425`
+    /// MIT `kadm5_randkey_principal_3` (`svr_principal.c:1425-1425`): Empty `etypes` is MIT's omitted `-e`
     /// `apply_keysalt_policy`).
     ///
     /// # Errors
@@ -294,7 +294,7 @@ impl PrincipalStore {
         Ok(new_keys)
     }
 
-    /// `cpw -randkey -e` with MIT `keepold`. Empty `etypes` uses policy salts.
+    /// `cpw -randkey -e` with keepold. Empty `etypes` uses policy salts.
     ///
     /// # Errors
     ///
@@ -311,7 +311,7 @@ impl PrincipalStore {
     }
 
     /// Drop keys with kvno below `keepkvno`. `keepkvno <= 0` keeps only the
-    /// newest kvno (MIT `purgekeys` without `-keepkvno`).
+    /// newest kvno (purgekeys without `-keepkvno`).
     ///
     /// # Errors
     ///
@@ -324,7 +324,7 @@ impl PrincipalStore {
 
     /// [`Self::purgekeys`] for `name@princ_realm`.
     ///
-    /// MIT `kadm5_purgekeys` → `kdb_put_entry` stamps `current_caller`
+    /// MIT `kadm5_purgekeys` (`svr_principal.c:1937-1996`): → `kdb_put_entry` stamps `current_caller`
     /// even when no old keys are dropped.
     ///
     /// # Errors

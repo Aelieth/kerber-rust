@@ -355,7 +355,7 @@ pub struct KvnoArgs {
     pub kdc_host: Option<String>,
     /// Service principals.
     pub services: Vec<String>,
-    /// `--disable-transited-check` (gate-only; MIT `kvno` cannot set bit 26).
+    /// MIT `kvno` (`kvno.c:293-411`): `--disable-transited-check` (gate-only; cannot set bit 26).
     pub disable_transited_check: bool,
     /// `--body-realm` (gate-only): TGS-REQ realm with no chase. MIT clients
     /// never send a foreign `body.realm`.
@@ -366,10 +366,10 @@ pub struct KvnoArgs {
     pub renew_ticket: bool,
     /// `--u2u FILE:cc` (gate-only): ENC_TKT_IN_SKEY with that TGT.
     pub u2u: Option<String>,
-    /// `-U` impersonated user (S4U2Self). Unlike MIT `kvno`, the ccache
+    /// MIT `kvno` (`kvno.c:293-411`): `-U` impersonated user (S4U2Self). Unlike, the ccache
     /// principal need not equal the service; the KDC enforces that.
     pub for_user: Option<String>,
-    /// `-P` S4U2Proxy after `-U` (`kvno.c:163-168`).
+    /// MIT `main` (`kvno.c:163-168`): `-P` S4U2Proxy after `-U`.
     pub proxy: bool,
 }
 
@@ -514,7 +514,7 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
 }
 
 /// `Password for <principal>: ` — the `krb5_get_init_creds_password`
-/// prompt (`gic_pwd.c:96`) through [`read_prompt_line`].
+/// prompt (`gic_pwd.c`) through [`read_prompt_line`].
 ///
 /// # Errors
 ///
@@ -523,7 +523,7 @@ pub fn read_password_line(principal: &str) -> Result<Vec<u8>, String> {
     read_prompt_line(&format!("Password for {principal}: "))
 }
 
-/// One hidden prompt like MIT `krb5_prompter_posix` (`prompter.c:78-92`):
+/// MIT `krb5_prompter_posix` (`prompter.c:78-92`): One hidden prompt like
 /// the prompt on **stdout**, echo off while stdin is a terminal
 /// (`setup_tty`), the line read, echo restored, and a newline printed
 /// after every hidden prompt whether or not stdin is a tty (`:91-92`);

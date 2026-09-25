@@ -1,4 +1,8 @@
 //! Atomic 0600 writes for keytab and ccache files.
+//!
+//! The bytes go to a temp file created `O_EXCL` with mode 0600, then
+//! rename onto the destination. A partial write is not the path the
+//! caller named.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};

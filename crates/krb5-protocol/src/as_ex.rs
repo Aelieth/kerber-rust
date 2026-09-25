@@ -48,7 +48,7 @@ pub struct AsOutcome {
     pub fast_avail: bool,
     /// The AS-REQ itself was FAST-armored.
     pub used_fast: bool,
-    /// The preauth type that produced the reply (MIT `selected_preauth_type`,
+    /// The preauth type that produced the reply (selected_preauth_type,
     /// recorded as the ccache `pa_type` config); `None` without preauth.
     pub pa_type: Option<i32>,
 }
@@ -83,7 +83,7 @@ pub struct AsRequest<'a> {
 #[derive(Clone, Debug)]
 pub struct AsTicketOpts {
     /// Ticket lifetime in seconds (`-l`). `None` is 24 hours
-    /// (`get_in_tkt.c:936-947`).
+    /// MIT `krb5_init_creds_init` (`get_in_tkt.c:936-947`): same check.
     pub lifetime: Option<u64>,
     /// Renewable lifetime in seconds (`-r`).
     pub rlife: Option<u64>,
@@ -99,7 +99,7 @@ pub struct AsTicketOpts {
     pub starttime: Option<u64>,
 }
 
-/// Request times/options MIT `verify_as_reply` compares to EncKDCRepPart.
+/// MIT `verify_as_reply` (`get_in_tkt.c:207-272`): Request times/options compares to EncKDCRepPart.
 #[derive(Clone, Debug)]
 struct AsReqTimes {
     till: KerberosTime,
@@ -139,7 +139,7 @@ impl Drop for PkinitClient {
 }
 
 /// Obtain a TGT. Sends a bare AS-REQ first; if the KDC requires preauth,
-/// walks the hint list in MIT `sort_krb5_padata_sequence` order and runs
+/// MIT `sort_krb5_padata_sequence` (`get_in_tkt.c:403-471`): walks the hint list in order and runs
 /// the first mechanism we can (SPAKE before enc-timestamp when both are
 /// advertised).
 ///
@@ -154,7 +154,7 @@ pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn as_exchange_with_keys(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -166,7 +166,7 @@ pub fn as_exchange_with_keys(
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn as_exchange_key(
     cname: PrincipalName,
     realm: &str,
@@ -211,6 +211,8 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
         .unwrap_or_else(|| PrincipalName::krbtgt(req.realm))
 }
 
+/// MIT `restart_init_creds_loop` (`get_in_tkt.c:807-813`): optimistic preauth is sent only when the caller supplied a preauth list.
+/// The default first request therefore carries no module padata, and a preauth-required hint is what selects the real mechanism.
 fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     refuse_spake_combo(req)?;
@@ -230,7 +232,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     if req.pkinit.is_some() || req.ticket.anonymous {
         return continue_pkinit(req, nonce, &bound, &etypes);
     }
-    // MIT `get_in_tkt.c:807-813` only sets `optimistic_padata` when the
+    // MIT `restart_init_creds_loop` (`get_in_tkt.c:807-813`): MIT only sets `optimistic_padata` when the
     // app called `krb5_get_init_creds_opt_set_preauth_list`. Default
     // kinit (even with `preferred_preauth_types = 151`) first-shots
     // empty module padata — `info_pa_permitted` 150/149 only — and
@@ -297,6 +299,8 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     }
 }
 
+/// MIT `get_as_key_keytab` (`gic_keytab.c:68-71`): the reply etype selects the keytab key, and a wrong etype is not reused.
+/// A checksum failure on that key is not final: every other supplied key is tried before the reply is rejected.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_as_rep_keys(
     rep: AsRep,
@@ -380,7 +384,7 @@ fn pick_key(keys: &[ProtocolKey], etype: Option<EncryptionType>) -> Option<Proto
     keys.first().cloned()
 }
 
-/// MIT `get_in_tkt.c:400-471` default when `preferred_preauth_types` is unset.
+/// MIT `get_in_tkt.c` default when `preferred_preauth_types` is unset.
 pub const DEFAULT_PREFERRED_PREAUTH_TYPES: &[i32] = &[17, 16, 15, 14];
 
 /// `[libdefaults] preferred_preauth_types`, or MIT's PKINIT-first default.
@@ -394,7 +398,7 @@ pub fn conf_preferred_preauth_types() -> Vec<i32> {
 
 /// Bubble `preferred` types to the front, keeping the rest in hint order.
 ///
-/// MIT `sort_krb5_padata_sequence` (`get_in_tkt.c:400-471`).
+/// MIT `sort_krb5_padata_sequence` (`get_in_tkt.c:403-471`): same check.
 #[must_use]
 pub fn sort_krb5_padata_sequence(padata: &[PaData], preferred: &[i32]) -> Vec<PaData> {
     let mut out = padata.to_vec();
@@ -437,6 +441,8 @@ fn continue_from_hint(
     continue_preauth(req, keys, nonce, bound, etypes, err, skew_hint)
 }
 
+/// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1729`): the KDC time is what the next encrypted timestamp is built from.
+/// A skew error is retried once at that time, and an unsupported etype is retried once as aes256; any other error is not another guess.
 fn continue_preauth(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -532,8 +538,8 @@ fn continue_preauth(
 /// Place a selected preauth module's PA-DATA after any FX-COOKIE and
 /// before the `info_pa_permitted` pair (150/149).
 ///
-/// MIT `k5_preauth` (`preauth2.c:992-1019`) copies the cookie first,
-/// then the module output; `get_in_tkt.c:1365-1372` appends empty
+/// MIT `k5_preauth` (`preauth2.c:992-1019`): copies the cookie first
+/// MIT `init_creds_step_request` (`get_in_tkt.c:1365-1372`): then the module output; appends empty
 /// PA-AS-FRESHNESS and PA-REQ-ENC-PA-REP after that.
 pub fn insert_module_padata_before_info_pa(list: &mut Vec<PaData>, module_pa: PaData) {
     let at = list
@@ -543,6 +549,8 @@ pub fn insert_module_padata_before_info_pa(list: &mut Vec<PaData>, module_pa: Pa
     list.insert(at, module_pa);
 }
 
+/// MIT `pkinit_as_req_create` (`pkinit_clnt.c:194-195`): the freshness token is placed in the auth pack when freshness is enabled.
+/// The first request carries no PKINIT, and a reply that is not preauth-required or preauth-failed is not turned into an AuthPack.
 fn continue_pkinit(
     req: &AsRequest<'_>,
     nonce: u32,
@@ -598,7 +606,7 @@ fn continue_pkinit(
     insert_module_padata_before_info_pa(req2.0.padata.get_or_insert_with(Vec::new), pa);
     let wire = encode(&req2)?;
     tracing::info!(
-        event = "client.pkinit",
+        event = krb5_log::events::CLIENT_PKINIT,
         component = "krb5-protocol",
         outcome = "ok",
         pa_type = pa::PK_AS_REQ,
@@ -712,6 +720,8 @@ fn krb_err(e: &KrbError) -> Result<AsOutcome, Error> {
     })
 }
 
+/// MIT `krb5int_fast_verify_nego` (`fast.c:648-664`): a ticket with the enc-pa-rep flag and no matching checksum over the request is not accepted.
+/// The client name in the reply may differ only for an anonymous or canonicalized request.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_as_rep(
     rep: AsRep,
@@ -745,7 +755,7 @@ fn finish_as_rep(
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
-    // MIT krb5int_fast_verify_nego (fast.c:635-675): a ticket with enc-pa-rep
+    // MIT `krb5int_fast_verify_nego` (`fast.c:635-675`): a ticket with enc-pa-rep
     // must carry a PA-REQ-ENC-PA-REP checksum over the AS-REQ (the outer
     // request under FAST) under the reply key, else KRB5_KDCREP_MODIFIED.
     if let Some(rd) = req_der {
@@ -861,7 +871,7 @@ pub(crate) fn as_sname_eq(
     Ok(())
 }
 
-/// MIT `get_in_tkt.c:227-239` `verify_as_reply` server half.
+/// MIT `verify_as_reply` (`get_in_tkt.c:227-239`): verify_as_reply server half.
 ///
 /// Always requires `enc.server == ticket.server` (name and realm).
 /// `canon_req` (CANONICALIZE, NT-ENTERPRISE, or anonymous) plus both
@@ -895,7 +905,7 @@ pub fn verify_as_reply_server(
     Ok(())
 }
 
-/// MIT `get_in_tkt.c:243-255` `verify_as_reply` request-time half.
+/// MIT `verify_as_reply` (`get_in_tkt.c:243-255`): verify_as_reply request-time half.
 ///
 /// `till`/`rtime`/`from` of 0 are unspecified (MIT). `endtime` after `till`,
 /// `renew_till` after `rtime` (RENEWABLE) or after `till` (RENEWABLE_OK
@@ -955,7 +965,7 @@ pub fn verify_as_reply_req_times(
     Ok(())
 }
 
-/// MIT `get_in_tkt.c:260-270` `verify_as_reply` time half.
+/// MIT `verify_as_reply` (`get_in_tkt.c:260-270`): verify_as_reply time half.
 ///
 /// Default `kdc_timesync` (1) skips starttime vs the local clock (MIT
 /// then sets a per-context `time_offset`; we have no `krb5_context`).
@@ -1034,6 +1044,8 @@ fn build_as_req_from(
     )
 }
 
+/// MIT `init_creds_step_request` (`get_in_tkt.c:1365-1372`): every request advertises an empty freshness token and an enc-pa-rep request.
+/// Those two items are appended after the caller's padata, so a mechanism that replaces the list would drop the checksum the reply is checked against.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn build_as_req(
     cname: &PrincipalName,
@@ -1049,7 +1061,7 @@ fn build_as_req(
     sname: &PrincipalName,
 ) -> Result<AsReq, Error> {
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
-    // MIT get_in_tkt.c:1365-1372 info_pa_permitted: every AS-REQ advertises an
+    // MIT `init_creds_step_request` (`get_in_tkt.c:1365-1372`): MIT info_pa_permitted: every AS-REQ advertises an
     // empty PA-AS-FRESHNESS then PA-REQ-ENC-PA-REP so the KDC echoes an
     // enc-pa-rep checksum (verified by krb5int_fast_verify_nego).
     let mut pa_list = padata.unwrap_or_default();
@@ -1112,10 +1124,12 @@ pub fn conf_etypes(tgs: bool) -> Vec<i32> {
     if v.is_empty() { preferred } else { v }
 }
 
+/// MIT `set_request_times` (`get_in_tkt.c:711-722`): the start time is omitted unless the caller asked for one, and a renewable end is not requested before the ticket end.
+/// Asking for a start time marks the request postdated, and omitting a renewable lifetime asks only for renewable-ok.
 fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddresses>) {
     let now = KerberosTime::now();
-    // MIT `get_in_tkt.c:711-714` omits `from` unless start_time != 0.
-    // `get_in_tkt.c:932-934` then sets ALLOW_POSTDATE | POSTDATED.
+    // MIT `set_request_times` (`get_in_tkt.c:711-714`): MIT omits `from` unless start_time != 0.
+    // MIT `krb5_init_creds_init` (`get_in_tkt.c:932-934`): then sets ALLOW_POSTDATE | POSTDATED.
     let from = match req.ticket.starttime {
         Some(s) if s > 0 => now.add_seconds(i64::try_from(s).unwrap_or(i64::MAX)).ok(),
         _ => None,
@@ -1138,8 +1152,8 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
             .with_bit(flag_bit::MAY_POSTDATE, true)
             .with_bit(flag_bit::POSTDATED, true);
     }
-    // MIT `init_ctx.c:265-267` `kdc_default_options` = `KDC_OPT_RENEWABLE_OK`.
-    // `get_in_tkt.c:723` clears it when `renew_life > 0` (RENEWABLE is set).
+    // MIT `krb5_init_context_profile` (`init_ctx.c:265-267`): kdc_default_options = `KDC_OPT_RENEWABLE_OK`.
+    // MIT `set_request_times` (`get_in_tkt.c:723-723`): clears it when `renew_life > 0` (RENEWABLE is set).
     let mut rtime = match req.ticket.rlife {
         Some(r) if r > 0 => {
             opts = opts.with_bit(flag_bit::RENEWABLE, true);
@@ -1150,7 +1164,7 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
             None
         }
     };
-    // MIT `get_in_tkt.c:718-722`: don't ask for a smaller renewable time
+    // MIT `set_request_times` (`get_in_tkt.c:718-722`): don't ask for a smaller renewable time
     // than the lifetime (`rtime = from+renew_life; if till > rtime then
     // rtime = till`).
     if let Some(rt) = rtime.as_mut()
@@ -1175,7 +1189,7 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
     )
 }
 
-/// KDCOptions and optional `from` MIT `get_in_tkt.c:700-934` would set.
+/// KDCOptions and optional `from` MIT `get_in_tkt.c` would set.
 #[must_use]
 pub fn as_init_creds_options(req: &AsRequest<'_>) -> (KdcOptions, Option<KerberosTime>) {
     let (t, _) = ticket_body(req);

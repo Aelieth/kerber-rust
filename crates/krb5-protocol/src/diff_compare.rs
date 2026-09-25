@@ -336,7 +336,7 @@ fn ticket_flag_bit_differences_fail_red() {
     let (r_rep, r_enc, r_tkt) = sample_parts("user", 0xaa, 0);
 
     // The enc-pa-rep bit (== CANONICALIZE bit 15) is compared: MIT sets it on
-    // every ticket, so a divergence must fail red (W1-J L3a).
+    // every ticket, so a divergence must fail red.
     let (m_rep, mut m_enc, mut m_tkt) = sample_parts("user", 0xbb, 11);
     m_enc.flags = m_enc.flags.with_bit(flag_bit::ENC_PA_REP, true);
     m_tkt.flags = m_tkt.flags.with_bit(flag_bit::ENC_PA_REP, true);
@@ -355,7 +355,7 @@ fn ticket_flag_bit_differences_fail_red() {
         err.0
     );
 
-    // With the whitelist mechanism deleted (W1-K M2b), the RENEWABLE bit is no
+    // With no flag whitelist, the RENEWABLE bit is no
     // longer masked; a renewable divergence must also fail red.
     let (n_rep, mut n_enc, mut n_tkt) = sample_parts("user", 0xbb, 11);
     n_enc.flags = n_enc.flags.with_bit(flag_bit::RENEWABLE, true);

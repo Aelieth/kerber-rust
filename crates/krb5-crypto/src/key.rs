@@ -1,4 +1,7 @@
 //! Long-term protocol keys. Bytes are zeroized on drop.
+//!
+//! `from_bytes` refuses a buffer that is not the etype's key length.
+//! Drop wipes the secret. Cloning copies it.
 
 use zeroize::Zeroize;
 

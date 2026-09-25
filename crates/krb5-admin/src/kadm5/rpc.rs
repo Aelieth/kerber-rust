@@ -23,7 +23,7 @@ use crate::Error;
 
 /// Kadmind server handle: the store, ACL, service keys, and realm.
 ///
-/// MIT `kadm5_server_handle_rec` (`lib/kadm5/server_internal.h:53`).
+/// kadm5_server_handle_rec (`lib/kadm5/server_internal.h`).
 #[derive(Clone, Copy)]
 pub struct RpcCtx<'a> {
     /// KDC store the procedure reads and writes.
@@ -78,7 +78,6 @@ pub fn serve_kadm5_conn(
                     outcome = "error",
                     error = %e,
                 );
-                eprintln!("kadm5: {e}");
                 return Err(io::Error::other(e.to_string()));
             }
         };
@@ -96,10 +95,10 @@ fn random_handle() -> Vec<u8> {
 }
 
 /// Total accumulated record cap. MIT drives kadmind over the net-server's fixed
-/// 1 MiB per-connection buffer (`net-server.c:1278`) and processes the RPC as it
+/// MIT `accept_stream_connection` (`net-server.c:1278-1278`): 1 MiB per-connection buffer and processes the RPC as it
 /// streams; Rust buffers the whole record, so it bounds the accumulated total to
 /// the same size rather than letting a pre-auth client chain fragments without
-/// limit (R2-S3).
+/// limit.
 const MAX_KADM5_RECORD: usize = 1024 * 1024;
 
 pub(super) fn read_record(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
@@ -171,6 +170,8 @@ pub fn kadm5_handle_rpc(
     )
 }
 
+/// MIT `kadm_1` (`kadm_rpc_svc.c:80-88`): a flavor other than AUTH_GSSAPI or RPCSEC_GSS is weak auth and is not dispatched.
+/// RPCSEC_GSS is authenticated before the program version is checked, so a bad sequence is not reported as a version mismatch.
 pub(super) fn handle_rpc(
     ctx: RpcCtx<'_>,
     handle: &[u8],
@@ -248,7 +249,7 @@ pub(super) fn handle_rpc(
         );
     }
 
-    // svc.c:486-520: AUTH_NONE is AUTH_OK, then program/version.
+    // MIT `svc_do_xprt` (`svc.c:486-520`): AUTH_NONE is AUTH_OK, then program/version.
     if kadm && vers != KADM_VERS {
         return Ok(rpc_reply_mismatch(xid, KADM_VERS, KADM_VERS));
     }
@@ -278,7 +279,7 @@ pub(super) fn handle_rpc(
         );
     }
 
-    // kadm_rpc_svc.c:80-87: only AUTH_GSSAPI / RPCSEC_GSS.
+    // MIT `kadm_1` (`kadm_rpc_svc.c:80-87`): only AUTH_GSSAPI / RPCSEC_GSS.
     Ok(rpc_reply_weakauth(xid))
 }
 
@@ -410,7 +411,7 @@ pub(super) fn parse_gcred(data: &[u8]) -> Result<Gcred, Error> {
 ///
 /// RFC 5531 §9 `rpc_msg.xid` and `call_body` (`prog`, `vers`, `proc`).
 /// MIT `struct rpc_msg` and `struct call_body`
-/// (`include/gssrpc/rpc_msg.h:138,150`).
+/// (`include/gssrpc/rpc_msg.h`).
 #[derive(Clone, Copy)]
 pub(crate) struct RpcCallId {
     /// Transaction id (`rpc_msg.xid`).

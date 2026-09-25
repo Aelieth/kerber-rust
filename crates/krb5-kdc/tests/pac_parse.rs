@@ -1,4 +1,4 @@
-//! MIT `krb5_pac_parse` refusals (`pac.c:281-317`): version, buffer count,
+//! MIT `krb5_pac_parse` (`pac.c:281-317`): refusals : version, buffer count
 //! 8-byte alignment, offsets inside the header or past the end.
 
 use krb5_types::pac::{PAC_LOGON_INFO, Pac, PacBuffer};

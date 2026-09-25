@@ -1,11 +1,11 @@
-//! A′-2 item 9 U2U / second-ticket statuses.
+//! U2U / second-ticket statuses.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
-//! R13: `u2u_session` statuses (`do_tgs_req.c:250-307`, `kdc_util.c:420-450`).
-//! R9: U2U missing second-ticket server is 7 `2ND_TKT_SERVER`
-//! (`do_tgs_req.c:280-289` via `kdc_get_server_key(stkt)`).
+//! `u2u_session` statuses (`do_tgs_req.c`, `kdc_util.c`).
+//! U2U missing second-ticket server is 7 `2ND_TKT_SERVER`
+//! MIT `decrypt_2ndtkt` (`do_tgs_req.c:280-289`): via `kdc_get_server_key(stkt)`).
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::testrealm::{
@@ -315,7 +315,7 @@ fn u2u_missing_second_ticket_server_is_2nd_tkt_server() {
     let user_tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 741);
     let admin_tgt = issue_tgt_password(&store, TEST_ADMIN, TEST_ADMIN_PASSWORD, 742);
     let mut second = admin_tgt.rep.0.ticket.clone();
-    // Outer sname does not exist; MIT `kdc_get_server_key` → 7 `2ND_TKT_SERVER`.
+    // MIT `kdc_get_server_key` (`kdc_util.c:360-409`): Outer sname does not exist; → 7 `2ND_TKT_SERVER`.
     second.sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["no-such-2ndtkt", TEST_REALM]);
     let opts = KdcOptions::forwardable().with_bit(flag_bit::ENC_TKT_IN_SKEY, true);
     let tgs = TgsReqBuilder::new(

@@ -1,5 +1,5 @@
-//! A′-4 item 18 units that compile at `6be3b65` and fail there.
-//! A′-4 item 18 units that need `domain_realm` / host-based knobs.
+//! Host-based referral and `domain_realm`.
+//! units that need `domain_realm` / host-based knobs.
 //! F4 hierarchical `find_alternate_tgs` / numeric host referral.
 //!
 //! These compile at `b749e73` and fail there: the walk reused transit
@@ -477,13 +477,13 @@ fn s4u2proxy_referral_with_rbcd_issues() {
         out.rep.0.ticket.sname.components_joined(),
         "krbtgt/OTHER.TEST"
     );
-    // MIT `do_tgs_req.c:756-759` + `gc_via_tkt.c:261-269`: referral TGT
+    // MIT `gather_tgs_req_info` (`do_tgs_req.c:756-759`): MIT + `gc_via_tkt.c`: referral TGT
     // client is the header impersonator, not the evidence user.
     assert_eq!(
         out.rep.0.cname.components_joined(),
         host.components_joined()
     );
-    // MIT `kdc_authdata.c:534-539`: S4U referral PAC client info is the
+    // MIT `kdc_authdata.c`: S4U referral PAC client info is the
     // subject with realm (B's `RBCD_PAC_PRINC` read).
     let ir = store
         .get_name(&foreign())

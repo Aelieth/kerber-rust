@@ -1,4 +1,8 @@
 //! Thin UDP/TCP 88 listener around [`crate::issue::handle_request`].
+//!
+//! A duplicate that arrives while a request is in flight is dropped.
+//! An empty KDC response is not sent. Past the TCP worker cap the
+//! listener evicts the oldest live stream and keeps the new connection.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
@@ -15,9 +19,9 @@ use crate::kdb::Store;
 use crate::lookaside::{Check, Lookaside};
 use krb5_types::HostAddress;
 
-/// MIT `net-server.c:1101-1105`.
+/// MIT `process_packet_response` (`net-server.c:1101-1105`): MIT.
 pub const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
-/// MIT `net-server.c:1314-1315`.
+/// MIT `process_stream_response` (`net-server.c:1314-1315`): MIT.
 pub const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
 
 fn log_dispatch_drop(_udp: bool) {
@@ -37,7 +41,7 @@ fn lock_cache(cache: &Mutex<Lookaside>) -> std::sync::MutexGuard<'_, Lookaside> 
     cache.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// MIT `dispatch.c:126-127`: a retransmit answered from the cache.
+/// MIT `dispatch` (`dispatch.c:126-127`): a retransmit answered from the cache.
 fn log_dispatch_resend() {
     tracing::info!(
         event = krb5_log::events::KDC_ISSUE,
@@ -48,7 +52,7 @@ fn log_dispatch_resend() {
     );
 }
 
-/// MIT `dispatch.c:130-132`: a duplicate arriving during processing is dropped.
+/// MIT `dispatch` (`dispatch.c:130-132`): a duplicate arriving during processing is dropped.
 fn log_dispatch_inflight_drop() {
     tracing::info!(
         event = krb5_log::events::KDC_ISSUE,
@@ -158,12 +162,12 @@ fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn Store) -> R) -> R {
 pub const BIND_CANDIDATES: &[&str] = &["127.0.0.1:88", "127.0.0.1:8888"];
 
 /// Default cap on concurrent TCP request handlers. MIT
-/// `max_stream_data_connections` (`net-server.c:85`); at the cap a new
+/// `max_stream_data_connections` (`net-server.c`); at the cap a new
 /// connection evicts the oldest rather than being refused.
 pub const MAX_TCP_WORKERS: usize = 45;
-/// MIT `net-server.c:1278` `bufsiz` 1 MiB; FIELD_TOOLONG at `msglen > bufsiz-4`.
+/// MIT `accept_stream_connection` (`net-server.c:1278-1278`): bufsiz 1 MiB; FIELD_TOOLONG at `msglen > bufsiz-4`.
 pub const MAX_TCP_REQUEST: usize = 1024 * 1024 - 4;
-/// MIT `MAX_DGRAM_SIZE` / `kdc_max_dgram_reply_size` default (`osconf.hin`).
+/// MAX_DGRAM_SIZE / `kdc_max_dgram_reply_size` default (`osconf.hin`).
 pub const MAX_DGRAM_REPLY: usize = 65_536;
 
 /// Resource caps and I/O timeouts for [`serve_until`].
@@ -173,7 +177,7 @@ pub struct ListenLimits {
     pub max_tcp_workers: usize,
     /// Maximum TCP length-prefix body.
     pub max_tcp_request: usize,
-    /// UDP reply cap; over is KRB-ERROR 52 (`dispatch.c:54-63`).
+    /// MIT `finish_dispatch` (`dispatch.c:54-63`): UDP reply cap; over is KRB-ERROR 52.
     pub max_dgram_reply_size: usize,
     /// Read/write timeout for a single TCP exchange.
     pub io_timeout: Duration,
@@ -339,6 +343,8 @@ pub fn serve_until(
     Ok(())
 }
 
+/// MIT `make_too_big_error` (`dispatch.c:191-191`): a reply larger than a datagram is replaced by a response-too-big error.
+/// An empty dispatch result is not sent, so a discarded request produces no datagram.
 #[allow(clippy::needless_pass_by_value)] // UDP socket is owned by the worker thread
 fn udp_loop(
     store: &SharedStore,
@@ -410,6 +416,8 @@ fn udp_loop(
     }
 }
 
+/// MIT `accept_stream_connection` (`net-server.c:1282-1283`): past the connection cap the oldest stream is dropped and the new connection is kept.
+/// A read error on an existing stream does not refuse the newcomer.
 #[allow(clippy::needless_pass_by_value)] // TCP listener is owned by the worker thread
 fn tcp_loop(
     store: &SharedStore,
@@ -422,7 +430,7 @@ fn tcp_loop(
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
-                // MIT net-server.c:1281-1282: accept the connection and, when
+                // MIT `accept_stream_connection` (`net-server.c:1281-1282`): accept the connection and, when
                 // over the cap, evict the oldest live stream
                 // (kill_lru_stream_connection) rather than refuse the newcomer.
                 let seq = registry.register(&stream);
@@ -470,6 +478,8 @@ fn tcp_loop(
     }
 }
 
+/// MIT `process_stream_connection_read` (`net-server.c:1385-1391`): end of file before a length word drops the connection, and a length past the buffer is too long.
+/// A peer that sends nothing gets no KDC error, and an oversize length is answered with a field-too-long error before the body is read.
 fn handle_tcp(
     store: &SharedStore,
     mut stream: TcpStream,
@@ -563,7 +573,7 @@ fn handle_tcp(
 
 /// Decrements the TCP worker counter on drop, including unwind.
 /// Live TCP connections, so the accept loop can evict the oldest when the cap
-/// is reached (MIT `kill_lru_stream_connection`, `net-server.c:1192-1282`)
+/// MIT `kill_lru_stream_connection` (`net-server.c:1192-1225`): is reached (
 /// rather than refusing the newcomer. Each entry keeps a `try_clone` of the
 /// stream purely to `shutdown` it from the accept thread, which unblocks the
 /// victim worker's `read` so it exits and deregisters itself.
@@ -950,7 +960,7 @@ mod tests {
 
     #[test]
     fn tcp_over_cap_evicts_the_oldest_connection() {
-        // MIT net-server.c:1281-1282: at the cap a new TCP connection evicts the
+        // MIT `accept_stream_connection` (`net-server.c:1281-1282`): at the cap a new TCP connection evicts the
         // oldest live stream (kill_lru_stream_connection), not the newcomer.
         // With cap 2, a third connection shuts down the first; its read = EOF.
         use std::io::Read as _;

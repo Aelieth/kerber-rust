@@ -808,7 +808,10 @@ def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
     if wf.path.name != "ci.yml":
         return
     folded = _fold_continuations(wf.text)
-    if _CARGO_TEST_WS.search(folded) or _CARGO_TEST_ALL.search(folded):
+    # `cargo test --workspace --doc` is the doctest runner. nextest never
+    # runs doctests. Any other workspace `cargo test` re-runs the unit suite.
+    allowed = re.sub(r"cargo\s+test\s+--workspace\s+--doc\b", "", folded)
+    if _CARGO_TEST_WS.search(allowed) or _CARGO_TEST_ALL.search(allowed):
         _die(f"{wf.path.name} must not run cargo test --workspace/--all on per-push")
 
 
@@ -3008,8 +3011,12 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 31
 HYGIENE_BODY_DIFF_MIN_CASES = 41
-HYGIENE_FN_DIFF_MIN_CASES = 134
+HYGIENE_FN_DIFF_MIN_CASES = 148
 HYGIENE_INVENTORY_MIN_CASES = 3
+# S4. A commit that changes a live hit count updates the matching
+# constant in that commit. Hard means 0.
+MIT_ANCHOR_ALLOW = 0
+PROCESS_TAG_ALLOW = 0
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
     "scripts/lib/prod-realm-common.sh",
@@ -4656,7 +4663,14 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(fake_mit)], check=False)
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:136", verdict="absent"))
+    # Several impls define advertise. Pin a line inside one of them rather
+    # than a fixed number, so a module-header shift does not move the pin
+    # out of the item.
+    advertise_spans = _item_spans(ROOT / "crates/krb5-kdc/src/plugins.rs", "advertise")
+    advertise_at = next(s[0] for s in advertise_spans if s[1] - s[0] > 5)
+    check_ledger_anchors(
+        _row(f"krb5-kdc/plugins.rs advertise:{advertise_at}", verdict="absent")
+    )
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))
@@ -5406,7 +5420,7 @@ jobs:
         "def _self_test():\n    x + 2 phase_b pub(crate)\n"
         "    # unused-accept fixture must be otherwise green\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (134 cases)')\n"
+        "        print('hygiene-fn-diff: self-test ok (148 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_fn_diff_self_test, "def main():\n    return 0\n")
@@ -6005,6 +6019,90 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(froot)], check=False)
 
+    anchor_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        src = anchor_root / "crates" / "demo" / "src"
+        src.mkdir(parents=True)
+        good = src / "lib.rs"
+        good.write_text(
+            '/// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n',
+            encoding="utf-8",
+        )
+        check_mit_anchor_form(anchor_root, allow=0)
+        rejected = {
+            "name-only": '/// MIT `krb5_rd_req` walks the keytab\n',
+            "file-range-only": "/// (`do_as_req.c:10-20`)\n",
+            "name-and-range": "/// MIT `krb5_rd_req` (`do_as_req.c:10-20`)\n",
+            "file-point-only": "/// (`do_as_req.c:10`)\n",
+            "bare-file": "/// MIT do_as_req.c:10 sets the flag\n",
+            "name-and-point": "/// MIT `krb5_rd_req` (`do_as_req.c:10`)\n",
+        }
+        for shape, body in rejected.items():
+            good.write_text(body, encoding="utf-8")
+            _must_die_msg(
+                "mit anchor lines 1 != allow 0",
+                check_mit_anchor_form,
+                anchor_root,
+                allow=0,
+            )
+        good.write_text(rejected["name-only"], encoding="utf-8")
+        check_mit_anchor_form(anchor_root, allow=1)
+        _must_die_msg(
+            "mit anchor lines 1 != allow 2",
+            check_mit_anchor_form,
+            anchor_root,
+            allow=2,
+        )
+        # The shape name is part of the fixture so a deleted shape is a
+        # missing key, not a silent pass.
+        if set(rejected) != {
+            "name-only",
+            "file-range-only",
+            "name-and-range",
+            "file-point-only",
+            "bare-file",
+            "name-and-point",
+        }:
+            _die("mit anchor fixtures dropped a rejected shape")
+    finally:
+        subprocess.run(["rm", "-rf", str(anchor_root)], check=False)
+
+    tag_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        src = tag_root / "crates" / "demo" / "src"
+        src.mkdir(parents=True)
+        good = src / "lib.rs"
+        good.write_text("// the parent principal stays\n", encoding="utf-8")
+        check_no_process_history(tag_root, allow=0)
+        good.write_text('fn f() {\n    let s = "// R12 in a string";\n}\n', encoding="utf-8")
+        check_no_process_history(tag_root, allow=0)
+        tagged = {
+            "R12": "// R12 left the suppression\n",
+            "A-prime": "// A\u2032-3 item 14\n",
+            "W0": "// W0e H7\n",
+            "W1": "// W1-Z follow-up\n",
+            "Round": "// Round 2\n",
+            "parent": "// parent abcdef0\n",
+            "R2-S3": "// limit (R2-S3).\n",
+            "B3": "// referral (B3).\n",
+            "Y0": "// the Y0 mismatch\n",
+            "Z": "// before Z6.3 the wire code was 60\n",
+        }
+        for body in tagged.values():
+            good.write_text(body, encoding="utf-8")
+            _must_die_msg(
+                "process-history lines 1 != allow 0",
+                check_no_process_history,
+                tag_root,
+                allow=0,
+            )
+        good.write_text(tagged["B3"], encoding="utf-8")
+        check_no_process_history(tag_root, allow=1)
+        if len(tagged) != 10:
+            _die("process-history fixtures dropped a tag")
+    finally:
+        subprocess.run(["rm", "-rf", str(tag_root)], check=False)
+
 
 # W1-K M2b: after the differential oracle's whitelist mechanism is deleted, no
 # case may be excused by name. Ban the mechanism identifiers from the diffsend
@@ -6036,6 +6134,175 @@ def check_no_case_whitelists(text: str | None = None, name: str = "diffsend.rs")
         scan(path.read_text(), str(path.relative_to(ROOT)))
     for path in sorted((SCRIPTS / "lib").glob("*.sh")):
         scan(path.read_text(), str(path.relative_to(ROOT)))
+
+
+_CANON_ANCHOR = re.compile(
+    r"MIT `([A-Za-z_][A-Za-z0-9_]*)` \(`([A-Za-z0-9_./+-]+\.c):(\d+)-(\d+)`\): \S"
+)
+# A cite that is not inside a canonical anchor. The six shapes the brief
+# names are name-only, file-range-only, name-and-range without a guarantee,
+# file-point-only, bare `MIT file.c:N`, and name-and-point.
+_ANCHOR_CITE = re.compile(
+    r"MIT `[A-Za-z_][A-Za-z0-9_]*`"
+    r"|MIT `[A-Za-z0-9_./+-]+\.[ch]:\d+"
+    r"|\(`[^`]*\.[ch]:\d+(?:-\d+)?`\)"
+    r"|MIT [A-Za-z0-9_./+-]+\.[ch]:\d+"
+    r"|(?<![\w.`])[A-Za-z0-9_./+-]+\.[ch]:\d+(?:-\d+)?"
+)
+def _comment_lexer():
+    spec = importlib.util.spec_from_file_location(
+        "hygiene_fn_diff_comments", SCRIPTS / "hygiene-fn-diff.py"
+    )
+    if spec is None or spec.loader is None:
+        _die("missing scripts/hygiene-fn-diff.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_COMMENT_LEXER = None
+
+
+def _comment_lines(src: str) -> list[tuple[int, str]]:
+    """`//` comments, including `///` and `//!`, outside string literals."""
+    global _COMMENT_LEXER
+    if _COMMENT_LEXER is None:
+        _COMMENT_LEXER = _comment_lexer()
+    mod = _COMMENT_LEXER
+    out: list[tuple[int, str]] = []
+    i, n = 0, len(src)
+    line = 1
+
+    def bump(chunk: str) -> None:
+        nonlocal line
+        line += chunk.count("\n")
+
+    while i < n:
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            if j < 0:
+                j = n
+            out.append((line, src[i:j]))
+            i = j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            bump(src[i:j])
+            i = j
+            continue
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        end: int | None = None
+        if c == "r" or (c == "b" and nxt == "r"):
+            end = mod._scan_raw(src, i)
+        if end is None and c == "b" and nxt == '"':
+            end = mod._scan_quoted(src, i + 1)
+        if end is None and c == '"':
+            end = mod._scan_quoted(src, i)
+        if end is None and c in "'b":
+            end = mod._scan_char(src, i)
+        if end is not None:
+            bump(src[i:end])
+            i = end
+            continue
+        if c == "\n":
+            line += 1
+        i += 1
+    return out
+
+
+def _rs_under(root: pathlib.Path, kinds: tuple[str, ...] | None) -> list[pathlib.Path]:
+    crates = root / "crates"
+    if not crates.is_dir():
+        return []
+    if kinds is None:
+        return sorted(crates.rglob("*.rs"))
+    out: list[pathlib.Path] = []
+    for crate in sorted(p for p in crates.iterdir() if p.is_dir()):
+        for kind in kinds:
+            base = crate / kind
+            if base.is_dir():
+                out.extend(sorted(base.rglob("*.rs")))
+    return out
+
+
+def mit_anchor_violations(root: pathlib.Path | None = None) -> list[str]:
+    """Comment lines whose MIT cite is not the one R1 anchor form."""
+    root = ROOT if root is None else root
+    bad: list[str] = []
+    for path in _rs_under(root, ("src", "tests")):
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(root)
+        for lineno, comment in _comment_lines(text):
+            if _CANON_ANCHOR.search(comment):
+                rest = _CANON_ANCHOR.sub("", comment)
+                if not _ANCHOR_CITE.search(rest):
+                    continue
+            elif not _ANCHOR_CITE.search(comment):
+                continue
+            bad.append(f"{rel}:{lineno}:{comment.strip()[:160]}")
+    return bad
+
+
+def check_mit_anchor_form(
+    root: pathlib.Path | None = None, *, allow: int | None = None
+) -> None:
+    """Every MIT anchor in `//` / `///` / `//!` is the R1 one-line form.
+
+    Advisory while `allow` equals the live count. Hard when `allow` is 0.
+    """
+    if allow is None:
+        allow = MIT_ANCHOR_ALLOW
+    bad = mit_anchor_violations(ROOT if root is None else root)
+    if len(bad) != allow:
+        sample = "; ".join(bad[:6])
+        _die(
+            f"mit anchor lines {len(bad)} != allow {allow}"
+            + (f": {sample}" if sample else "")
+        )
+
+
+_PROCESS_TAG = re.compile(
+    r"\bR[0-9]+\b"
+    r"|A\u2032-[0-9]"
+    r"|W0[a-f]"
+    r"|W1-[A-Z]"
+    r"|Round [0-9]"
+    r"|parent [0-9a-f]{7}"
+    r"|R[0-9]-[A-Z][0-9]+"
+    r"|\bB3\b"
+    r"|\bY0\b"
+    r"|Z[0-9]b?\.[0-9]"
+)
+
+
+def process_tag_violations(root: pathlib.Path | None = None) -> list[str]:
+    """Process-history tags on `//` comments under `crates/`."""
+    root = ROOT if root is None else root
+    bad: list[str] = []
+    for path in _rs_under(root, None):
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(root)
+        for lineno, comment in _comment_lines(text):
+            if _PROCESS_TAG.search(comment):
+                bad.append(f"{rel}:{lineno}:{comment.strip()[:160]}")
+    return bad
+
+
+def check_no_process_history(
+    root: pathlib.Path | None = None, *, allow: int | None = None
+) -> None:
+    """No process-history tag in a `crates/` comment. Advisory until allow is 0."""
+    if allow is None:
+        allow = PROCESS_TAG_ALLOW
+    bad = process_tag_violations(ROOT if root is None else root)
+    if len(bad) != allow:
+        sample = "; ".join(bad[:6])
+        _die(
+            f"process-history lines {len(bad)} != allow {allow}"
+            + (f": {sample}" if sample else "")
+        )
 
 
 def main() -> None:
@@ -6115,6 +6382,8 @@ def main() -> None:
     check_ledger_anchors()
     check_ledger_mit_cites()
     check_claim_audit()
+    check_mit_anchor_form()
+    check_no_process_history()
     print("ci-policy: ok")
 
 

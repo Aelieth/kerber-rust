@@ -1,4 +1,8 @@
 //! RFC 6113 FAST types (armor, KrbFastReq/Rep, cookie).
+//!
+//! On an armored request the req-checksum is required. It is the
+//! checksum of the KDC-REQ-BODY under the armor key. Armor itself is
+//! optional and is present on the first request.
 
 use rasn::prelude::*;
 
@@ -95,7 +99,7 @@ pub struct KrbFastArmoredRep {
     pub enc_fast_rep: EncryptedData,
 }
 
-/// MIT `SecureCookie` (`asn1_k_encode.c:1683-1688`): untagged SEQUENCE.
+/// SecureCookie is an untagged SEQUENCE of a timestamp and PA-DATA.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct SecureCookie {
     /// Unix timestamp when the cookie was minted.

@@ -137,6 +137,8 @@ fn split_wrap_token(
     write_iov_one(iov, IovType::Trailer, &tok[header_len + n..])
 }
 
+/// MIT `gss_krb5int_make_seal_token_v3` (`k5sealv3.c:87-93`): a wrap token is checksummed under the seal usage, not the MIC usage.
+/// Sign-only bytes are included in that checksum, and a ciphertext shorter than the confounder is not a checksum input.
 fn iov_hmac_input(
     iov: &[IovBuf<'_>],
     rfc8009: bool,
@@ -236,6 +238,8 @@ impl GssContext {
         }
     }
 
+    /// MIT `kg_seal` (`k5seal.c:318-320`): a context that is not established does not produce a token.
+    /// Sign-only buffers are authenticated and are not written out as ciphertext.
     fn wrap_iov_sealed(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let (key, extra) = self.send_key();
         let key = key.clone();
@@ -310,6 +314,8 @@ impl GssContext {
         Ok(())
     }
 
+    /// MIT `unwrap_v3` (`unwrap.c:300-304`): a wrap token from the wrong direction is a bad signature and is not decrypted.
+    /// A header that is not a sealed wrap token, or whose right-rotation count is not zero, is not plaintext.
     fn unwrap_iov_sealed(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let has_ad = iov
             .iter()

@@ -3,7 +3,7 @@
 //! New writes are dump text (`kdb5_util load_dump version 7`). SID/RID live
 //! in dump `tl_data` (`TL_KERBER_SID`). Legacy `KDB1`/`KDB2`/`KDB3`
 //! ciphertext still loads for one release. The stash is a keytab-format
-//! `.k5.REALM` (a single `K/M@REALM` entry, MIT `krb5_def_store_mkey_list`);
+//! MIT `krb5_def_store_mkey_list` (`kdb_default.c:111-213`): `.k5.REALM` (a single `K/M@REALM` entry, )
 //! a legacy raw-key stash still loads (`krb5_db_def_fetch_mkey`) and is
 //! rewritten in keytab format on the next save.
 
@@ -89,7 +89,7 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 ///
 /// # Errors
 ///
-/// I/O or dump crypto failures.
+/// [`PersistError::Io`] or a key failure.
 pub fn save_store(
     store: &PrincipalStore,
     db_path: &Path,
@@ -124,6 +124,8 @@ fn save_ulog(store: &PrincipalStore, db_path: &Path) -> Result<(), PersistError>
     Ok(())
 }
 
+/// MIT `ulog_map` (`kdb_log.c:514-518`): a missing update log is not a corrupt log.
+/// A file whose first line is not the ulog header is not loaded, and a missing file leaves the store's log empty.
 fn load_ulog(store: &mut PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
     let path = ulog_path(db_path);
     let Ok(text) = fs::read_to_string(&path) else {
@@ -383,6 +385,8 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
     out
 }
 
+/// MIT `krb5_decode_princ_entry` (`kdb_xdr.c:253-256`): a record shorter than the base principal is truncated and not loaded.
+/// An unknown etype or a key of the wrong length fails the whole store, so a partial database is not opened.
 fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, PersistError> {
     let mut i = 0;
     let realm = take_str(plain, &mut i)?;

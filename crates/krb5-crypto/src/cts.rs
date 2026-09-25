@@ -1,4 +1,7 @@
 //! AES CBC-CS3 (RFC 3962 / NIST SP 800-38A addendum), matching MIT krb5 1.22.2.
+//!
+//! An AES key that is not 16 or 32 bytes is `Error::InvalidKeyLength`.
+//! The block size is 16.
 
 use aes::{
     Aes128, Aes256,
@@ -109,6 +112,8 @@ fn xor_in_place(block: &mut [u8; BLOCK], mask: &[u8; BLOCK]) {
     }
 }
 
+/// MIT `krb5int_aes_encrypt` (`aes.c:255-258`): a single-block input is one CBC block, not ciphertext stealing.
+/// The last two blocks are encrypted and then written back swapped.
 fn encrypt_with<C: BlockEncrypt>(
     cipher: C,
     iv: &[u8; BLOCK],
@@ -166,6 +171,8 @@ fn encrypt_with<C: BlockEncrypt>(
     Ok(out)
 }
 
+/// MIT `krb5int_aes_decrypt` (`aes.c:319-324`): a single-block ciphertext is one CBC block, not ciphertext stealing.
+/// The last two ciphertext blocks are swapped back before the CBC decrypt, and a short final block is not a full block.
 fn decrypt_with<C: BlockDecrypt>(
     cipher: C,
     iv: &[u8; BLOCK],

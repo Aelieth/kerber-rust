@@ -1,4 +1,4 @@
-//! `krb5_string_to_timestamp` (`lib/krb5/krb/str_conv.c:146-196`).
+//! MIT `krb5_string_to_timestamp` (`str_conv.c:146-196`): `krb5_string_to_timestamp` (`lib/krb5/krb/.
 //!
 //! MIT tries a fixed `strptime` format table against the string, in order,
 //! over a `struct tm` seeded from `localtime(now)` (so a time-only form is
@@ -11,7 +11,7 @@
 
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 
-/// `atime_format_table` (`str_conv.c:152-165`) minus `%x:%X`.
+/// MIT `krb5_string_to_timestamp` (`str_conv.c:152-165`): `atime_format_table` minus `%x:%X`.
 const FORMATS: &[&str] = &[
     "%Y%m%d%H%M%S",
     "%Y.%m.%d.%H.%M.%S",

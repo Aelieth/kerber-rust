@@ -57,7 +57,7 @@ pub const PAC_FULL_CHECKSUM: u32 = 19;
 /// MIT `pac.c` `MAX_BUFFERS`.
 pub const MAX_BUFFERS: usize = 4096;
 
-/// MIT `PAC_ALIGNMENT`: every buffer starts on an 8-byte boundary.
+/// PAC_ALIGNMENT: every buffer starts on an 8-byte boundary.
 pub const PAC_ALIGNMENT: usize = 8;
 
 /// Signature type HMAC-MD5 (RC4). RFC 4757 cksumtype -138.
@@ -137,7 +137,7 @@ pub enum PacError {
     Integrity,
     /// Required buffer missing.
     MissingBuffer,
-    /// Header, buffer table or buffer placement that MIT `krb5_pac_parse` refuses.
+    /// MIT `krb5_pac_parse` (`pac.c:264-337`): Header, buffer table or buffer placement that refuses.
     Malformed,
 }
 
@@ -264,7 +264,7 @@ impl Pac {
             .map(|b| b.data.as_slice())
     }
 
-    /// MIT `k5_pac_locate_buffer`: the buffer of `kind`, refused when it occurs twice.
+    /// MIT `k5_pac_locate_buffer` (`pac.c:128-156`): the buffer of `kind`, refused when it occurs twice.
     ///
     /// # Errors
     ///
@@ -303,7 +303,7 @@ impl Pac {
     }
 
     /// Copy of the received PAC with signature payloads of `kinds` zeroed in
-    /// place (MIT `zero_signature`). Falls back to a re-encode when this PAC
+    /// MIT `zero_signature` (`pac.c:444-476`): place. Falls back to a re-encode when this PAC
     /// was built rather than parsed.
     ///
     /// # Errors
@@ -1229,6 +1229,8 @@ pub fn parse_kerb_validation_info(data: &[u8]) -> Result<KerbValidationInfo, Pac
     })
 }
 
+/// MIT `k5_pac_add_buffer` (`pac.c:102-102`): a buffer just added is not a verified PAC.
+/// The six FILETIME fields are written before the string bodies, so a reader that stops at the header does not see the names as times.
 fn encode_kerb_validation_info(info: &KerbValidationInfo) -> Vec<u8> {
     let mut w = NdrW::default();
     w.u8(1);

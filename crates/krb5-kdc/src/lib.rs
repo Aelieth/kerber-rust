@@ -11,6 +11,9 @@
 //! Ticket issuance, ACL checks, and keytab export are pure functions so tests
 //! do not need a bound socket. UDP/TCP 88 is a thin listener over
 //! [`handle_request`]. There is no C FFI.
+//!
+//! The public surface is the names this root re-exports, plus `principals`
+//! and `testrealm`. Every other module stays private.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -102,7 +105,7 @@ pub(crate) fn admin_id_for_realm(realm: &str) -> String {
 
 /// `kdb5_util@<realm>` — `kadm5_init(context, progname, …)` when
 /// `kdb5_util create` seeds `kadmin/admin` and `kadmin/changepw`
-/// (`kadm5_create.c:100`).
+/// MIT `kadm5_create_magic_princs` (`kadm5_create.c:100-100`): same check.
 #[must_use]
 pub(crate) fn kdb5_util_id_for_realm(realm: &str) -> String {
     format!("kdb5_util@{realm}")
@@ -123,7 +126,7 @@ pub fn default_acl_path(kdc_dir: &std::path::Path) -> std::path::PathBuf {
 
 /// Load `acl_file` (`auth_acl.c` `acl_init` / `load_acl_file`).
 ///
-/// `None` or an empty path is self-only (`ovsec_kadmd.c:497` empty → NULL;
+/// MIT `main` (`ovsec_kadmd.c:497-497`): `None` or an empty path is self-only empty → NULL
 /// `acl_init` `:554-555` → `KRB5_PLUGIN_NO_HANDLE`). A missing path is MIT
 /// `Cannot open … while initializing ACL file`.
 ///
@@ -208,12 +211,12 @@ pub fn bootstrap_realm_with_kdc_conf(
     Ok((store, acl))
 }
 
-/// MIT `kadm5_create.c:54` `ADMIN_LIFETIME`.
+/// MIT `kadm5_create.c` `ADMIN_LIFETIME`.
 const KADM5_ADMIN_LIFETIME: u64 = 60 * 60 * 3;
-/// MIT `kadm5_create.c:55` `CHANGEPW_LIFETIME`.
+/// MIT `kadm5_create.c` `CHANGEPW_LIFETIME`.
 const KADM5_CHANGEPW_LIFETIME: u64 = 60 * 5;
 
-/// MIT `kadm5_create` (`kadm5_create.c`) flags. `create_principal` does not set these.
+/// MIT `kadm5_create` (`kadm5_create.c:68-89`): flags. `create_principal` does not set these.
 ///
 /// # Errors
 ///

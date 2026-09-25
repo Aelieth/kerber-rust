@@ -1,4 +1,4 @@
-//! MIT `KRB5_TL_KADM_DATA`: the XDR `osa_princ_ent_rec` kadm5 keeps in every
+//! KRB5_TL_KADM_DATA: the XDR `osa_princ_ent_rec` kadm5 keeps in every
 //! principal (`lib/kadm5/srv/adb_xdr.c`) — the bound policy, `aux_attributes`,
 //! and the password history: `old_keys` holds one entry per old password, its
 //! key data encrypted under the `kadmin/history` key of `admin_history_kvno`

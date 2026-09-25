@@ -6,6 +6,107 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S4 comments and rustdoc
+
+- **ci.** `check_mit_anchor_form` requires a MIT anchor in a `//`
+  comment to be one line: a function, a `file.c` range, and a
+  guarantee. The six older shapes are red. The check is advisory at
+  the `0d5fa7f4` count until a later commit sets the allow to 0.
+  No wire or text change in product code.
+- **ci.** `check_no_process_history` rejects a process tag (`R12`,
+  `A′-3`, `W0e`, `W1-Z`, `Round 2`, a `parent` SHA, `R2-S3`, `B3`,
+  `Y0`, `Z6.3`) on a `//` comment under `crates/`. Advisory at the
+  `0d5fa7f4` count. The baseline list is
+  `working/logs/w3-hygiene/s4/process-tags-before.txt`. No wire or
+  text change in product code.
+- **docs.** `docs/architecture.md` and `CONTRIBUTING.md` state the
+  comment rules R1–R4: one MIT anchor form, an invariant rather than
+  a step list, no process history, and `# Errors` naming variants.
+- **crates.** The `krb5-admin` header drops `kdb5_util` and names
+  ktutil, iprop, and kpropd. The `krb5-crypto` header names weak
+  etypes 16/23/25/26 behind `allow_weak_crypto`, plus SPAKE, MODP,
+  CF2, and PRF+. `krb5-kdc` and `krb5-protocol` headers end on the
+  public-surface line, as do the other two. The `krb5-admin` and
+  `krb5-crypto` crate descriptions match those headers. No behaviour
+  change.
+- **kdc.** Module headers on `acl`, `ad`, `audit`, `listen`, `plugins`,
+  and `preauth` state the fail-closed rule for that module. Ledger
+  rust-site lines in `ad.rs` and `plugins.rs` move with those headers.
+  No behaviour change.
+- **protocol.** Module headers on `ap_req`, `tgs`, `safe_priv`,
+  `preauth`, `replay`, `chpw`, `keytab`, and `secret_file` state the
+  check that makes a success. No behaviour change.
+- **crypto.** Module headers on `ops`, `weak`, `cf2`, `derive`, `prf`,
+  `spake`, `key`, `cts`, `nfold`, and `modp` state the fail-closed
+  rule for that module. No behaviour change.
+- **admin.** The `listen` header states that a malformed kpasswd
+  datagram is not answered and a failed AP-REQ is a framed chpwfail.
+  No behaviour change.
+- **types.** Module headers on `fast`, `s4u`, `cammac`, and `spake`
+  state which fields are required and what the checksum covers. No
+  behaviour change.
+- **gss.** The `mic` header states that a bad checksum is rejected
+  before the sequence is consumed. The shared token reader refuses a
+  length of 0 or above 1 MiB. No behaviour change.
+- **admin.** The sixteen src functions over 40 lines each gain one
+  MIT anchor and one sentence stating the fail-closed rule for that
+  function. No behaviour change.
+- **protocol.** The nineteen src functions over 40 lines each gain one
+  MIT anchor and one sentence stating the check that makes a success.
+  `fast_error_material` names its error conditions. No behaviour change.
+- **kdc.** The thirty-two src functions over 40 lines each gain one MIT
+  anchor and one sentence stating the fail-closed rule. The PAC, S4U,
+  PKINIT, and SPAKE results that clippy does not require still name
+  their error conditions. No behaviour change.
+- **client.** `kinit_inner` states that key-expired is the only change
+  path and that a keytab request has none. No behaviour change.
+- **gss.** The eight long functions state when a token, a direction,
+  or a delegated credential is rejected. No behaviour change.
+- **config.** The profile parser states that an include is a directive
+  only at the start of a line, and that the first value of a key wins.
+  No behaviour change.
+- **types.** The ten long functions state when a parse is not a
+  principal, a duration, a transit path, or a certificate. No
+  behaviour change.
+- **crypto.** The five long functions state when a derive or a
+  checksum failure wipes key material. No behaviour change.
+- **all.** Each `# Errors` section under 45 characters names a
+  variant or a condition. The ones that named a family, or opened
+  with "Returns", now say which variant or which check failed.
+  No behaviour change.
+- **all.** Process-history tags are gone from comments under
+  `crates/`. `check_no_process_history` is hard. No behaviour change.
+- **all.** Every MIT cite in a `//` comment under `crates/*/src` and
+  `crates/*/tests` is one line: a C function, a `file.c` range inside
+  that function, and the guarantee. `check_mit_anchor_form` is hard.
+  `diffsend` names its cases in the module header. No behaviour change.
+- **kdc.** `PrincipalStore::new` still exits if the CSPRNG cannot
+  build the realm SID. `docs/security.md` records that abort.
+  No wire change.
+- **log.** `client.tgs`, `client.pkinit`, `client.fast`,
+  `kdc.lookaside.full`, and `kdc.pkinit` are `krb5_log::events`
+  constants, and the library `event` sites use them. The authdata-module
+  error carries `event`, `correlation_id`, `component`, and `outcome`.
+  `target` is the Rust module path and is not part of the log contract.
+  The test job runs `cargo test --workspace --doc`. No wire change.
+- **client.** `krb5-kinit` prints `Password expired.  You must change it now.`
+  when `kinit_with` returns `KeyExpChange` or
+  `KinitResult.password_expired`. The library does not print it.
+  `client-gate` checks that line.
+- **admin.** `krb5-kadmind` prints `kadm5: {error}` when
+  `serve_kadm5_conn` returns the RPC error. The library logs
+  `tracing::error!` and does not print. `kadmin-rust-gate` checks
+  that line.
+- **tool.** `hygiene-fn-diff` treats an event const as its string,
+  a tracing call that only gains the four foundation fields as the
+  same call, and the binary key-expiry / `kadm5:` print as the caller
+  without that print. `KeyExpChange` is not an added item when it
+  does not print. A different string, `password_expired: true`, or an
+  `eprintln!` in that impl stays red. No product behaviour change.
+- **log.** The pure doctests live on the crate docs. The event
+  strings, the authdata fields, and the binary stderr lines are
+  unchanged. rustfmt drops the blank lines that move left behind.
+
 ### W3-S3.10 parameter structs
 
 - **tool.** A visibility widening (`pub(crate)` / `pub(super)` → `pub`,

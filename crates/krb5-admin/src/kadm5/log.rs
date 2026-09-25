@@ -67,7 +67,7 @@ fn kadm5_service_name(ctx: &GssContext) -> String {
     }
 }
 
-/// MIT `prime_arg` (`stub_setup`): the unparsed principal for a principal op,
+/// prime_arg (`stub_setup`): the unparsed principal for a principal op,
 /// the policy/expression for a policy or list op, else the client.
 pub(super) fn kadm5_prime_arg(proc: u32, args: &[u8], client: &str) -> String {
     let mut r = XdrR::new(args);
@@ -107,7 +107,7 @@ fn kadm5_result_text(code: u32) -> &'static str {
     }
 }
 
-/// MIT `log_done`/`log_unauth` (`server_stubs.c:403-459`): one `Request:` or
+/// MIT `log_done` (`server_stubs.c:431-459`): then MIT `log_unauth` (`server_stubs.c:403-428`): `log_unauth` : one `Request:` or
 /// `Unauthorized request:` line per kadmind operation with client/service/addr.
 pub(super) fn kadm5_log_op(
     proc: u32,

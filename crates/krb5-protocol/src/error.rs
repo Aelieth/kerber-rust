@@ -36,7 +36,7 @@ pub enum Error {
     /// The KDC-REP enc-part did not verify under the client's key — MIT
     /// `krb5_kdc_rep_decrypt_proc` → `krb5_c_decrypt` returns
     /// `KRB5KRB_AP_ERR_BAD_INTEGRITY` (31), the "wrong password" of a
-    /// password AS (`kinit.c:787`).
+    /// MIT `k5_kinit` (`kinit.c:787-787`): password AS.
     #[error("Decrypt integrity check failed")]
     ReplyIntegrity,
     /// Encrypted reply nonce did not match the request.

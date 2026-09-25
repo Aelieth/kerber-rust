@@ -44,7 +44,7 @@ impl FileCcache {
     ///
     /// # Errors
     ///
-    /// Returns I/O errors (length overflow).
+    /// Does not return an error.
     pub fn to_bytes(&self) -> Result<Vec<u8>, io::Error> {
         let mut w = Writer::default();
         w.u16(0x0504);
@@ -80,7 +80,7 @@ impl FileCcache {
     ///
     /// # Errors
     ///
-    /// Returns I/O errors from create/write/rename.
+    /// Create, write, sync, or rename failed.
     pub fn write_file(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
         let bytes = self.to_bytes()?;
         write_secret_file(path.as_ref(), &bytes)
@@ -173,7 +173,7 @@ impl FileCcache {
         }
     }
 
-    /// MIT `krb5_cc_set_config` (`ccfns.c k5_build_conf_principals`): an
+    /// MIT `krb5_cc_set_config` (`ccfns.c:236-261`): (`ccfns.c k5_build_conf_principals`): an
     /// `X-CACHECONF:` entry named `krb5_ccache_conf_data/{key}[/{principal}]`
     /// (etype 0, the value in the ticket field), replacing an existing one.
     pub fn set_config(&mut self, principal: Option<&str>, key: &str, value: &[u8]) {
@@ -255,7 +255,7 @@ pub fn realm(s: &str) -> Realm {
 ///
 /// # Errors
 ///
-/// Returns DER encode failures.
+/// [`krb5_asn1::Error`] on encode.
 pub fn tgt_cred(
     crealm: &Realm,
     cname: &PrincipalName,

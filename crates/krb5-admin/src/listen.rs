@@ -1,4 +1,8 @@
 //! TCP/UDP listeners for kadmind (749), kpasswd (464), and kprop (754).
+//!
+//! A kpasswd datagram whose length, version, or framing does not match
+//! is not answered. A failed AP-REQ is a framed chpwfail with result 3.
+//! The ticket must be for `kadmin/changepw`.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
@@ -254,7 +258,7 @@ fn protocol_key_from_enc(kt: &EncryptionKey) -> Result<ProtocolKey, Error> {
 
 /// Frame a kpasswd reply: `len, version=1, AP-REP-len, AP-REP, KRB-PRIV`.
 ///
-/// MIT `krb5int_rd_chpw_rep` treats AP-REP length 0 as a framed KRB-ERROR
+/// MIT `krb5int_rd_chpw_rep` (`chpw.c:195-242`): treats AP-REP length 0 as a framed KRB-ERROR
 /// and will not accept a successful result. Success replies must include
 /// AP-REP; the following KRB-PRIV is encrypted in the authenticator subkey
 /// (else the ticket session key).
@@ -272,7 +276,7 @@ fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
 }
 
 fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8>, Error> {
-    // schpw.c:273-345: alloc_data overwrites `ret` with 0, so
+    // MIT `process_chpw_request` (`schpw.c:273-345`): alloc_data overwrites `ret` with 0, so
     // `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
     let mut e_data = Vec::from(result.to_be_bytes());
     e_data.extend_from_slice(text.as_bytes());
@@ -316,7 +320,7 @@ fn kpasswd_success_rep(
 
 /// RFC 3244 / MIT changepw request: `len, version, ap-req-len, AP-REQ, KRB-PRIV`.
 ///
-/// Version 1 (MIT `kpasswd`) carries the raw password in KRB-PRIV. Version
+/// Version 1 (kpasswd) carries the raw password in KRB-PRIV. Version
 /// `0xff80` (setpw) carries `ChangePasswdData`. KRB-PRIV is encrypted with
 /// the authenticator subkey when present (MIT always sends one).
 ///
@@ -338,7 +342,7 @@ const UNK_PRINC_PRIV: &str =
     "Password not changed.\nPrincipal does not exist while trying to change password.\n";
 const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
 
-/// MIT `krb5_rd_req` walks the changepw keytab. Ticket etype is
+/// MIT `krb5_rd_req` (`rd_req.c:46-109`): walks the changepw keytab. Ticket etype is
 /// `first_current_key` (profile order); `best_key` follows
 /// [`EncryptionType::preferred`] (sha1-first) and is not enough alone.
 fn changepw_verify_keys(
@@ -376,6 +380,8 @@ security administrator."
     )
 }
 
+/// MIT `process_chpw_request` (`schpw.c:62-95`): a length, version, or framing mismatch bails out before a reply is built.
+/// That mismatch returns an error and no datagram is sent, while a failed AP-REQ is a framed chpwfail with result 3 for kadmin/changepw only.
 fn handle_kpasswd_from(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
@@ -384,13 +390,13 @@ fn handle_kpasswd_from(
     raw: &[u8],
     from: &str,
 ) -> Result<Vec<u8>, Error> {
-    // MIT schpw.c:47-82: length then version before AP-REQ; ChangePasswdData only for 0xff80.
+    // MIT `process_chpw_request` (`schpw.c:47-82`): length then version before AP-REQ; ChangePasswdData only for 0xff80.
     if raw.len() < 4 {
         return Err(Error::Inner("kpasswd truncated".into()));
     }
     let plen = usize::from(u16::from_be_bytes([raw[0], raw[1]]));
     if plen != raw.len() {
-        // MIT schpw.c:62-68 goto bailout; dispatch sends no datagram.
+        // MIT `process_chpw_request` (`schpw.c:62-68`): MIT goto bailout; dispatch sends no datagram.
         return Err(Error::Inner("Message stream modified".into()));
     }
     let ver = u16::from_be_bytes([raw[2], raw[3]]);
@@ -404,7 +410,7 @@ fn handle_kpasswd_from(
     }
     let ap_len = usize::from(u16::from_be_bytes([raw[4], raw[5]]));
     if 6 + ap_len >= raw.len() {
-        // schpw.c:89-95 `>=` (no PRIV byte) → bailout, no datagram.
+        // MIT `process_chpw_request` (`schpw.c:89-95`): `>=` (no PRIV byte) → bailout, no datagram.
         return Err(Error::Inner("Message stream modified".into()));
     }
     let ap_req = &raw[6..6 + ap_len];
@@ -467,7 +473,7 @@ fn handle_kpasswd_from(
     };
     let client = ok.ticket_part.cname.unparse_with_realm(&ticket_crealm);
     let target_unparsed = targ.unparse_with_realm(&targ_realm);
-    // MIT misc.c:33-54: compare first, INITIAL, auth(OP_CPW), then DB.
+    // MIT `schpw_util_wrapper` (`misc.c:33-54`): compare first, INITIAL, auth(OP_CPW), then DB.
     let self_change = principal_compare(&targ, &targ_realm, &ok.ticket_part.cname, &ticket_crealm);
     let (code, text, log_err) = if self_change && !ok.ticket_part.flags.initial() {
         (
@@ -500,9 +506,9 @@ fn handle_kpasswd_from(
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // House rule (`kadm5/dispatch.rs` `write_store`): reload then mutate then
-        // save. `AdminSession::change_password` did this; the Z7.2 inline
+        // save. `AdminSession::change_password` did this; the inline
         // path skipped it and could save over a `kadmin.local` write.
-        // MIT `ovsec_kadmd.c:446` `kadm5_init(…, "kadmind", …)` + `schpw.c:407`:
+        // MIT `main` (`ovsec_kadmd.c:446-446`): MIT `kadm5_init(…, "kadmind", …)` + `schpw.c`
         // the changepw dispatcher uses the global handle, so `current_caller`
         // is `kadmind@REALM`, not the ticket client.
         let stamp = format!("kadmind@{store_realm}");
@@ -600,7 +606,7 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// Socket I/O.
+/// A socket read failed.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_udp(
     store: SharedStore,
@@ -651,7 +657,7 @@ pub fn serve_kpasswd_udp(
 ///
 /// # Errors
 ///
-/// Bind / accept failures.
+/// Accept on the listener failed.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_tcp(
     store: SharedStore,
@@ -732,7 +738,7 @@ pub fn kprop_send(
 ///
 /// # Errors
 ///
-/// I/O or dump parse/crypto.
+/// Read, parse, or a key failure.
 pub fn kprop_recv(
     stream: &mut TcpStream,
     master_password: &[u8],

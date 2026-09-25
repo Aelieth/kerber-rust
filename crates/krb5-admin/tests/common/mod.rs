@@ -1,5 +1,5 @@
 //! In-process kadm5 RPCSEC_GSS client: one `RPG_INIT`, then `RPG_DATA` calls
-//! with `databody_integ` + checksum (`authgss_prot.c:203-225`).
+//! MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:203-225`): with `databody_integ` + checksum.
 
 #![allow(dead_code)]
 

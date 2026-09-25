@@ -1,4 +1,7 @@
 //! RFC 3961 DK and RFC 8009 KDF-HMAC-SHA2.
+//!
+//! Checksum comparison is constant-time. A length mismatch is
+//! `Error::Integrity`, the same result as a wrong MAC.
 
 use hmac::{Hmac, Mac};
 use sha1::Sha1;
@@ -137,7 +140,7 @@ impl Drop for DerivedKeys {
 ///
 /// # Errors
 ///
-/// Returns derivation failures.
+/// A refused etype or a bad key length.
 pub fn derive_keys(
     key: &crate::key::ProtocolKey,
     usage: crate::etype::KeyUsage,

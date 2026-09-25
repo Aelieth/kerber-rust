@@ -1,4 +1,8 @@
 //! RFC 3244 kpasswd client (`chpw.c` / `gic_pwd.c` KEY_EXP).
+//!
+//! KEY_EXP is the expired-password path. The change is not finished
+//! until the AP-REP verifies. The generated subkey bytes are zeroized
+//! after the key is built.
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};
@@ -19,21 +23,21 @@ use crate::replay::ReplayCache;
 use crate::safe_priv::{build_krb_priv_with_seq, unwrap_krb_priv_ex};
 use crate::transport::KdcAddr;
 
-/// MIT `KRB5_KPASSWD_SUCCESS`.
+/// KRB5_KPASSWD_SUCCESS.
 pub const KPASSWD_SUCCESS: u16 = 0;
-/// MIT `KRB5_KPASSWD_MALFORMED`.
+/// KRB5_KPASSWD_MALFORMED.
 pub const KPASSWD_MALFORMED: u16 = 1;
-/// MIT `KRB5_KPASSWD_HARDERROR`.
+/// KRB5_KPASSWD_HARDERROR.
 pub const KPASSWD_HARDERROR: u16 = 2;
-/// MIT `KRB5_KPASSWD_AUTHERROR`.
+/// KRB5_KPASSWD_AUTHERROR.
 pub const KPASSWD_AUTHERROR: u16 = 3;
-/// MIT `KRB5_KPASSWD_SOFTERROR`.
+/// KRB5_KPASSWD_SOFTERROR.
 pub const KPASSWD_SOFTERROR: u16 = 4;
-/// MIT `KRB5_KPASSWD_ACCESSDENIED`.
+/// KRB5_KPASSWD_ACCESSDENIED.
 pub const KPASSWD_ACCESSDENIED: u16 = 5;
-/// MIT `KRB5_KPASSWD_BAD_VERSION`.
+/// KRB5_KPASSWD_BAD_VERSION.
 pub const KPASSWD_BAD_VERSION: u16 = 6;
-/// MIT `KRB5_KPASSWD_INITIAL_FLAG_NEEDED` — last valid result code.
+/// KRB5_KPASSWD_INITIAL_FLAG_NEEDED — last valid result code.
 pub const KPASSWD_INITIAL_FLAG_NEEDED: u16 = 7;
 /// RFC 3244 set-password version (`krb5int_mk_setpw_req`).
 pub const KPASSWD_SETPW_VERSION: u16 = 0xff80;
@@ -44,7 +48,7 @@ const AD_POLICY_LEN: usize = 30;
 const AD_POLICY_COMPLEX: u32 = 0x0000_0001;
 const AD_POLICY_TICKS_PER_DAY: u64 = 86_400 * 10_000_000;
 
-/// MIT `chpw.c:244-279` `krb5_chpw_result_code_string`.
+/// MIT `krb5_chpw_result_code_string` (`chpw.c:245-279`): krb5_chpw_result_code_string.
 #[must_use]
 pub fn chpw_result_code_string(code: u16) -> &'static str {
     match code {
@@ -60,7 +64,7 @@ pub fn chpw_result_code_string(code: u16) -> &'static str {
     }
 }
 
-/// MIT `chpw.c:476-510` `krb5_chpw_message`.
+/// MIT `krb5_chpw_message` (`chpw.c:477-510`): krb5_chpw_message.
 #[must_use]
 pub fn chpw_message(server_string: &[u8]) -> String {
     if let Some(msg) = decode_ad_policy_info(server_string) {
@@ -75,7 +79,7 @@ pub fn chpw_message(server_string: &[u8]) -> String {
     "Try a more complex password, or contact your administrator.".into()
 }
 
-/// MIT `chpw.c:389-474` AD 30-byte policy blob.
+/// MIT `decode_ad_policy_info` (`chpw.c:390-474`): MIT AD 30-byte policy blob.
 fn decode_ad_policy_info(data: &[u8]) -> Option<String> {
     if data.len() != AD_POLICY_LEN {
         return None;
@@ -126,7 +130,7 @@ fn decode_ad_policy_info(data: &[u8]) -> Option<String> {
     Some(parts.join("  "))
 }
 
-/// MIT `chpw.c:217-231` `krb5int_rd_chpw_rep` result-code half.
+/// MIT `krb5int_rd_chpw_rep` (`chpw.c:217-231`): krb5int_rd_chpw_rep result-code half.
 ///
 /// Out-of-range codes, a truncated payload, or SUCCESS taken from a
 /// KRB-ERROR, are `KRB5KRB_AP_ERR_MODIFIED`.
@@ -161,7 +165,7 @@ pub fn parse_chpw_rep(clear: &[u8], from_error: bool) -> Result<(u16, &[u8]), Er
     Ok((code, &clear[2..]))
 }
 
-/// Format MIT `kpasswd` stdout: `code_string[: message]`.
+/// Format kpasswd stdout: `code_string[: message]`.
 #[must_use]
 pub fn format_chpw_failure(code: u16, result_data: &[u8]) -> String {
     let title = chpw_result_code_string(code);
@@ -187,7 +191,7 @@ pub fn change_password(kdc: &KdcAddr, as_out: &AsOutcome, new_pw: &[u8]) -> Resu
 }
 
 /// [`change_password`] returning the kpasswd result code and result data
-/// like MIT `krb5_change_password` (`result_code`, `result_string`), so a
+/// MIT `krb5_change_password` (`changepw.c:308-317`): like (`result_code`, `result_string`, so a
 /// caller can tell a soft rejection (`KRB5_KPASSWD_SOFTERROR`) apart.
 ///
 /// # Errors
@@ -220,6 +224,8 @@ pub fn set_password(
     Ok(())
 }
 
+/// MIT `krb5int_rd_chpw_rep` (`chpw.c:227-229`): a success code carried inside an error reply is not accepted.
+/// The generated subkey buffer is wiped as soon as the key exists, and a non-error reply is not accepted until its AP-REP verifies.
 fn change_or_set(
     kdc: &KdcAddr,
     as_out: &AsOutcome,
@@ -289,7 +295,7 @@ fn change_or_set(
     Ok((code, data))
 }
 
-/// MIT `gic_pwd.c:211-222`: KEY_EXP plus a new-password source, not keytab.
+/// MIT `gic_pwd.c`: KEY_EXP plus a new-password source, not keytab.
 #[must_use]
 pub fn key_exp_should_changepw(err: &Error, has_new_password: bool, keytab: bool) -> bool {
     has_new_password

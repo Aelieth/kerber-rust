@@ -188,5 +188,18 @@ docker exec "$NAME" test ! -e "/tmp/krb5cc_${NUID}"
 KEEP="$(docker exec "$NAME" cat /tmp/krb5cc_0)"
 echo "default_uid=${NUID} krb5cc_0=$KEEP uid_file_gone=yes"
 test "$KEEP" = "keep"
+
+echo "==== KEY_EXP banner is on krb5-kinit stderr ===="
+docker exec "$NAME" kadmin.local -q 'delprinc -force s4keyexp' >/dev/null 2>&1 || true
+docker exec "$NAME" kadmin.local -q 'addprinc -pw exp-old -pwexpire 2020-01-01 s4keyexp' >/dev/null
+docker exec "$NAME" rm -f /tmp/s4keyexp.out /tmp/s4keyexp.err /tmp/cc_s4keyexp
+set +e
+docker exec -e KRB5_PASSWORD=exp-old -e KRB5_NEW_PASSWORD=exp-new "$NAME" \
+    sh -c '/tmp/krb5-kinit -c /tmp/cc_s4keyexp s4keyexp@KERBER.TEST >/tmp/s4keyexp.out 2>/tmp/s4keyexp.err'
+set -e
+KEYEXP_ERR="$(docker exec "$NAME" cat /tmp/s4keyexp.err)"
+echo "$KEYEXP_ERR"
+echo "$KEYEXP_ERR" | grep -qF 'Password expired.  You must change it now.'
+
 log "client.gate" "ok" ',"principal":"user@KERBER.TEST"'
 exit 0

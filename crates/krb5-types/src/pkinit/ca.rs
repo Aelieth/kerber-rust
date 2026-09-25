@@ -1,4 +1,4 @@
-//! Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
+//! Test CA used as a pkinit_anchors FILE trust anchor.
 //!
 //! `cms_wrap` lives here (it names [`PkinitCa`]) so `cms` does not
 //! import this module.
@@ -66,6 +66,8 @@ fn p256_cert(
     )
 }
 
+/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1685-1687`): a DER encode that fails is not a successful object.
+/// The certificate is returned only when the signature over the to-be-signed body is produced.
 #[expect(clippy::too_many_arguments, reason = "test CA, not a params struct")]
 fn p256_cert_window(
     serial: u8,
@@ -115,6 +117,8 @@ fn p256_cert_window(
     Some(tlv(0x30, &[tbs, alg_id, tlv(0x03, &sig_bit)].concat()))
 }
 
+/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1685-1687`): a DER encode that fails is not a successful object.
+/// A KDC certificate carries a krbtgt name in that realm and the KDC extended key usage, and a CA without key usage still carries basic constraints.
 fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {
     let is_ca = matches!(
         kind,
@@ -225,7 +229,7 @@ fn pem_ec_key(secret: &[u8; 32], public: &[u8]) -> String {
     pem("EC PRIVATE KEY", &tlv(0x30, &body))
 }
 
-/// Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
+/// Test CA used as a pkinit_anchors FILE trust anchor.
 #[derive(Clone, Debug)]
 pub struct PkinitCa {
     /// CA private scalar.

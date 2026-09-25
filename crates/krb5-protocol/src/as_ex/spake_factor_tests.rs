@@ -26,7 +26,7 @@ fn sf_none_present_is_answerable() {
 
 #[test]
 fn no_sf_none_is_refused() {
-    // MIT spake_client.c:221 returns KRB5KDC_ERR_PREAUTH_FAILED: a factor
+    // MIT `process_challenge` (`spake_client.c:221-221`): MIT returns KRB5KDC_ERR_PREAUTH_FAILED: a factor
     // list without SF-NONE (or an empty one) offers nothing we can answer.
     assert!(!spake_contains_sf_none(&challenge(&[])));
     assert!(!spake_contains_sf_none(&challenge(&[2, 7])));

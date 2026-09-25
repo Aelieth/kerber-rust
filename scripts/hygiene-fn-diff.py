@@ -848,7 +848,208 @@ def _vis_delta_class(old_src: str, new_src: str) -> str | None:
     return None
 
 
-def classify(old_src: str, new_src: str, params_ctx: dict | None = None) -> str:
+_EVENT_CONST_RE = re.compile(
+    r'pub\s+const\s+([A-Z0-9_]+)\s*:\s*&str\s*=\s*"([^"]*)"'
+)
+_EVENT_PATH_RE = re.compile(r"\bkrb5_log::events::([A-Z0-9_]+)\b")
+_SCHEMA_FIELDS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("event", re.compile(r'\bevent\s*=\s*"(?:[^"\\]|\\.)*"\s*,?')),
+    (
+        "correlation_id",
+        re.compile(r"\bcorrelation_id\s*=\s*krb5_log::current_correlation_id\(\)\s*,?"),
+    ),
+    ("component", re.compile(r'\bcomponent\s*=\s*"(?:[^"\\]|\\.)*"\s*,?')),
+    ("outcome", re.compile(r'\boutcome\s*=\s*"(?:ok|error)"\s*,?')),
+)
+_KEY_EXP_BANNER = '"Password expired.  You must change it now."'
+_BANNER_IF_RE = re.compile(
+    r"if\s+(?:r\.password_expired|e\.downcast_ref::<KeyExpChange>\(\)\.is_some\(\))\s*"
+    r"\{[^{}]*eprintln!\s*\(\s*"
+    + re.escape(_KEY_EXP_BANNER)
+    + r"\s*\)\s*;\s*\}",
+    re.S,
+)
+_KADM_IF_RE = re.compile(
+    r"if\s+let\s+Err\(e\)\s*=\s*(?P<expr>[^{]*?)\s*\{\s*"
+    r'eprintln!\s*\(\s*"kadm5:\s*\{e\}"\s*\)\s*;\s*\}',
+    re.S,
+)
+
+
+def _event_const_map(items: dict[str, dict[str, str]]) -> dict[str, str]:
+    """`events::NAME` → the `&str` literal in that const item."""
+    out: dict[str, str] = {}
+    for key, rec in items.items():
+        if "events::const::" not in key:
+            continue
+        found = _EVENT_CONST_RE.search(rec["src"])
+        if found:
+            out[found.group(1)] = found.group(2)
+    return out
+
+
+def _fold_event_consts(src: str, consts: dict[str, str]) -> str:
+    """Replace `krb5_log::events::NAME` with the const's string literal."""
+    if not consts or "krb5_log::events::" not in src:
+        return src
+
+    def sub(text: str) -> str:
+        def repl(match: re.Match[str]) -> str:
+            value = consts.get(match.group(1))
+            if value is None:
+                return match.group(0)
+            escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+            return f'"{escaped}"'
+
+        return _EVENT_PATH_RE.sub(repl, text)
+
+    return _map_code(src, sub)
+
+
+def _has_schema_name(src: str, name: str) -> bool:
+    return re.search(rf"\b{name}\s*=", src) is not None
+
+
+def _tighten_punct_space(src: str) -> str:
+    """Drop whitespace next to punctuation in code. String interiors stay."""
+
+    def sub(text: str) -> str:
+        return re.sub(r"\s*([(){}\[\],;])\s*", r"\1", text)
+
+    return _map_code(src, sub)
+
+
+def _drop_one_sided_schema(old: str, new: str) -> tuple[str, str, bool]:
+    """Drop foundation fields that only one side of a tracing call carries.
+
+    A field present on both sides stays, so a changed event string or
+    component is still a difference. The comma before `)` is dropped only
+    when a field was removed (rustfmt adds one after the new fields).
+    """
+    stripped = False
+    for name, pattern in _SCHEMA_FIELDS:
+        old_has = _has_schema_name(old, name)
+        new_has = _has_schema_name(new, name)
+        if new_has and not old_has:
+            new = pattern.sub(" ", new)
+            stripped = True
+        elif old_has and not new_has:
+            old = pattern.sub(" ", old)
+            stripped = True
+    if stripped:
+        old = _tighten_punct_space(_drop_trailing_commas(old))
+        new = _tighten_punct_space(_drop_trailing_commas(new))
+    return old, new, stripped
+
+
+def _relocate_stderr(src: str) -> str:
+    """The binary print compares equal to the caller that did not print yet.
+
+    Only the key-expiry banner `if` and `if let Err(e) { eprintln!("kadm5: {e}"); }`
+    match. A different string or an extra statement stays in the body.
+    """
+    src = _BANNER_IF_RE.sub(" ", src)
+    return _KADM_IF_RE.sub(r"let _ = \g<expr>;", src)
+
+
+def _strip_password_expired_field(src: str) -> str:
+    """The `password_expired` field compares equal to the struct without it.
+
+    Assignments stay. `password_expired: true` stays, so a renew that
+    starts reporting expiry is still `changed`.
+    """
+    src = re.sub(
+        r"(?m)^[ \t]*///[^\n]*\n(?=[ \t]*pub password_expired\s*:)",
+        "",
+        src,
+    )
+    src = re.sub(r"\bpub\s+password_expired\s*:\s*bool\s*,?", "", src)
+    return re.sub(r"\bpassword_expired\s*:\s*false\s*,?", "", src)
+
+
+def _s4_relax(
+    old_src: str,
+    new_src: str,
+    old_consts: dict[str, str],
+    new_consts: dict[str, str],
+) -> tuple[str, str]:
+    """Logging-schema and stderr-move shapes the S4 brief does not count as a new body."""
+    old_f = _fold_event_consts(old_src, old_consts)
+    new_f = _fold_event_consts(new_src, new_consts)
+    old_s, new_s, schema = _drop_one_sided_schema(old_f, new_f)
+    old_e = _relocate_stderr(old_s)
+    new_e = _relocate_stderr(new_s)
+    old_p = _strip_password_expired_field(old_e)
+    new_p = _strip_password_expired_field(new_e)
+    # A removed field or print leaves rustfmt's trailing comma and a space
+    # where the old token had none. Tighten only then, so a spacing-only
+    # edit with no schema or stderr move stays changed.
+    if schema or old_e != old_s or new_e != new_s or old_p != old_e or new_p != new_e:
+        old_p = _tighten_punct_space(_drop_trailing_commas(old_p))
+        new_p = _tighten_punct_space(_drop_trailing_commas(new_p))
+    return old_p, new_p
+
+
+def _suppress_s4_added(
+    added: list[str],
+    old: dict[str, dict[str, str]],
+    new: dict[str, dict[str, str]],
+    pairs: list[tuple[str, str, str]],
+    new_consts: dict[str, str],
+) -> list[str]:
+    """Hide added items that only name an existing event string or carry KeyExpChange.
+
+    A const whose value is not the literal it replaced stays added. An
+    `eprintln!` inside the KeyExpChange impl stays added.
+    """
+    kept: list[str] = []
+    for key in added:
+        rec = new[key]
+        if _is_event_const_alias(key, rec, old, new, pairs, new_consts):
+            continue
+        if _is_keyexp_carrier(key, rec):
+            continue
+        kept.append(key)
+    return kept
+
+
+def _is_event_const_alias(
+    key: str,
+    rec: dict[str, str],
+    old: dict[str, dict[str, str]],
+    new: dict[str, dict[str, str]],
+    pairs: list[tuple[str, str, str]],
+    new_consts: dict[str, str],
+) -> bool:
+    found = re.search(r"events::const::([A-Z0-9_]+)$", key)
+    if not found:
+        return False
+    name = found.group(1)
+    value = new_consts.get(name)
+    if value is None or _EVENT_CONST_RE.search(rec["src"]) is None:
+        return False
+    needle = f"krb5_log::events::{name}"
+    literal = f'"{value}"'
+    for old_key, new_key, _kind in pairs:
+        if needle in new[new_key]["src"] and literal in old[old_key]["src"]:
+            return True
+    return False
+
+
+def _is_keyexp_carrier(key: str, rec: dict[str, str]) -> bool:
+    if "KeyExpChange" not in key:
+        return False
+    src = rec["src"]
+    return "eprintln!" not in src and "println!" not in src
+
+
+def classify(
+    old_src: str,
+    new_src: str,
+    params_ctx: dict | None = None,
+    old_consts: dict[str, str] | None = None,
+    new_consts: dict[str, str] | None = None,
+) -> str:
     if compare_norm(old_src) == compare_norm(new_src):
         return "identical"
     # allow → expect on too_many_arguments, and a sibling lint moved onto
@@ -882,6 +1083,11 @@ def classify(old_src: str, new_src: str, params_ctx: dict | None = None) -> str:
         return kind
     if params_ctx is not None and _params_only(old_src, new_src, params_ctx):
         return "params-only"
+    old_r, new_r = _s4_relax(old_src, new_src, old_consts or {}, new_consts or {})
+    if compare_norm(old_r) == compare_norm(new_r):
+        return "identical"
+    if compare_norm(_strip_doc_lines(old_r)) == compare_norm(_strip_doc_lines(new_r)):
+        return "doc-only"
     return "changed"
 
 
@@ -2720,6 +2926,8 @@ def compare_trees(
         move_hits[v] = move_hits.get(v, 0) + 1
     merged_targets = {v for v, n in move_hits.items() if n > 1}
     pairs: list[tuple[str, str, str]] = []
+    old_consts = _event_const_map(old)
+    new_consts = _event_const_map(new)
     split_ok: list[str] = []
     split_fail: list[str] = []
     missing_split: list[str] = []
@@ -2862,7 +3070,7 @@ def compare_trees(
                 "by_name": by_name,
                 "self_name": ofn["name"],
             }
-        kind = classify(ofn["src"], new[nkey]["src"], ctx)
+        kind = classify(ofn["src"], new[nkey]["src"], ctx, old_consts, new_consts)
         pairs.append((okey, nkey, kind))
         used_old.add(okey)
         used_new.add(nkey)
@@ -2903,7 +3111,7 @@ def compare_trees(
         else:
             still_added.append(k)
     removed = still_removed
-    added = still_added
+    added = _suppress_s4_added(still_added, old, new, pairs, new_consts)
     unused_moves = sorted(k for k in moves if k not in used_moves)
     identical = sum(1 for _o, _n, k in pairs if k == "identical")
     vis_only = [(o, n) for o, n, k in pairs if k == "vis-only"]
@@ -5459,6 +5667,326 @@ def _self_test() -> int:
             raise SystemExit(
                 "hygiene-fn-diff --self-test: a missing params key must fail"
             )
+
+        def _clear_rs(root: pathlib.Path) -> None:
+            base = root / "crates"
+            if not base.is_dir():
+                return
+            for path in base.rglob("*.rs"):
+                path.unlink()
+
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(
+            old, "crates/demo/src/lib.rs", 'fn note() { event = "kdc.pkinit"; }\n'
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn note() { event = krb5_log::events::KDC_PKINIT; }\n",
+        )
+        _write_crate(old, "crates/krb5-log/src/lib.rs", "pub mod events {\n}\n")
+        _write_crate(
+            new,
+            "crates/krb5-log/src/lib.rs",
+            'pub mod events {\n    pub const KDC_PKINIT: &str = "kdc.pkinit";\n}\n',
+        )
+        alias = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(alias)
+        if alias["changed"] != 0 or alias["added"] or alias["identical"] < 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an event const of the same "
+                f"literal must be identical: {alias}"
+            )
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/krb5-log/src/lib.rs",
+            'pub mod events {\n    pub const KDC_PKINIT: &str = "other";\n}\n',
+        )
+        wrong = compare_trees(old, new, {}, {}, {}, [])
+        if wrong["changed"] != 1 or not wrong["added"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an event const of a different "
+                f"literal must stay changed and added: {wrong}"
+            )
+        _must_red(wrong, "event const value")
+        n += 1
+
+        _write_crate(
+            new,
+            "crates/krb5-log/src/lib.rs",
+            "pub mod events {\n"
+            '    pub const KDC_PKINIT: &str = "kdc.pkinit";\n'
+            '    pub const ORPHAN: &str = "nope";\n'
+            "}\n",
+        )
+        orphan = compare_trees(old, new, {}, {}, {}, [])
+        if orphan["changed"] != 0 or len(orphan["added"]) != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an unused event const must stay "
+                f"added: {orphan}"
+            )
+        _must_red(orphan, "unused event const")
+        n += 1
+
+        events_both = (
+            "pub mod events {\n"
+            '    pub const KDC_ISSUE: &str = "kdc.issue";\n'
+            "}\n"
+        )
+        old_call = (
+            'fn auth() { tracing::error!(module = m.name(), error = %e, "from authdata module"); }\n'
+        )
+        new_call = (
+            "fn auth() {\n"
+            "    tracing::error!(\n"
+            "        event = krb5_log::events::KDC_ISSUE,\n"
+            "        correlation_id = krb5_log::current_correlation_id(),\n"
+            '        component = "krb5-kdc",\n'
+            '        outcome = "error",\n'
+            "        module = m.name(),\n"
+            "        error = %e,\n"
+            '        "from authdata module",\n'
+            "    );\n"
+            "}\n"
+        )
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", old_call)
+        _write_crate(new, "crates/demo/src/lib.rs", new_call)
+        _write_crate(old, "crates/krb5-log/src/lib.rs", events_both)
+        _write_crate(new, "crates/krb5-log/src/lib.rs", events_both)
+        schema = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(schema)
+        if schema["changed"] != 0 or schema["added"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: foundation fields on a tracing "
+                f"call must not be changed: {schema}"
+            )
+        n += 1
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            new_call.replace("from authdata module", "nope"),
+        )
+        schema_msg = compare_trees(old, new, {}, {}, {}, [])
+        if schema_msg["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a tracing message change stays "
+                f"changed: {schema_msg}"
+            )
+        _must_red(schema_msg, "tracing message")
+        n += 1
+
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "pub struct KinitResult { pub as_out: i32, pub tgs_out: i32 }\n"
+            "fn renew() -> KinitResult { KinitResult { as_out: 1, tgs_out: 2 } }\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub struct KinitResult {\n"
+            "    pub as_out: i32,\n"
+            "    pub tgs_out: i32,\n"
+            "    /// A supplied new password replaced an expired key.\n"
+            "    pub password_expired: bool,\n"
+            "}\n"
+            "fn renew() -> KinitResult {\n"
+            "    KinitResult { as_out: 1, tgs_out: 2, password_expired: false }\n"
+            "}\n",
+        )
+        expired = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(expired)
+        if expired["changed"] != 0 or expired["added"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: password_expired: false must "
+                f"compare equal: {expired}"
+            )
+        n += 1
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "pub struct KinitResult {\n"
+            "    pub as_out: i32,\n"
+            "    pub tgs_out: i32,\n"
+            "    pub password_expired: bool,\n"
+            "}\n"
+            "fn renew() -> KinitResult {\n"
+            "    KinitResult { as_out: 1, tgs_out: 2, password_expired: true }\n"
+            "}\n",
+        )
+        expired_true = compare_trees(old, new, {}, {}, {}, [])
+        if expired_true["changed"] == 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: password_expired: true must stay changed"
+            )
+        _must_red(expired_true, "password_expired true")
+        n += 1
+
+        banner = '"Password expired.  You must change it now."'
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn main() {\n"
+            "    match k() {\n"
+            '        Ok(r) => { println!("ok"); }\n'
+            '        Err(e) => { eprintln!("kinit failed: {e}"); }\n'
+            "    }\n"
+            "}\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn main() {\n"
+            "    match k() {\n"
+            "        Ok(r) => {\n"
+            "            if r.password_expired {\n"
+            f"                eprintln!({banner});\n"
+            "            }\n"
+            '            println!("ok");\n'
+            "        }\n"
+            "        Err(e) => {\n"
+            "            if e.downcast_ref::<KeyExpChange>().is_some() {\n"
+            f"                eprintln!({banner});\n"
+            "            }\n"
+            '            eprintln!("kinit failed: {e}");\n'
+            "        }\n"
+            "    }\n"
+            "}\n",
+        )
+        prints = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(prints)
+        if prints["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: the key-expiry banner if must "
+                f"compare equal: {prints}"
+            )
+        n += 1
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn main() {\n"
+            "    match k() {\n"
+            "        Ok(r) => {\n"
+            "            if r.password_expired {\n"
+            '                eprintln!("other");\n'
+            "            }\n"
+            '            println!("ok");\n'
+            "        }\n"
+            '        Err(e) => { eprintln!("kinit failed: {e}"); }\n'
+            "    }\n"
+            "}\n",
+        )
+        bad_banner = compare_trees(old, new, {}, {}, {}, [])
+        if bad_banner["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a different banner must stay "
+                f"changed: {bad_banner}"
+            )
+        _must_red(bad_banner, "different banner")
+        n += 1
+
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(
+            old,
+            "crates/demo/src/lib.rs",
+            "fn main() { let _ = serve_kadm5_conn(store, stream); }\n",
+        )
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn main() {\n"
+            "    if let Err(e) = serve_kadm5_conn(store, stream) {\n"
+            '        eprintln!("kadm5: {e}");\n'
+            "    }\n"
+            "}\n",
+        )
+        kadm = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(kadm)
+        if kadm["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: kadm5 eprintln must compare "
+                f"equal to let _: {kadm}"
+            )
+        n += 1
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn main() {\n"
+            "    if let Err(e) = serve_kadm5_conn(store, stream) {\n"
+            '        eprintln!("kadm5: {e}");\n'
+            "        other();\n"
+            "    }\n"
+            "}\n",
+        )
+        kadm_more = compare_trees(old, new, {}, {}, {}, [])
+        if kadm_more["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an extra statement in the kadm5 "
+                f"arm must stay changed: {kadm_more}"
+            )
+        _must_red(kadm_more, "kadm5 arm extra statement")
+        n += 1
+
+        carrier = (
+            "fn keep() {}\n"
+            "pub struct KeyExpChange { inner: i32 }\n"
+            "impl std::fmt::Display for KeyExpChange {\n"
+            "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {\n"
+            '        write!(f, "{}", self.inner)\n'
+            "    }\n"
+            "}\n"
+        )
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", "fn keep() {}\n")
+        _write_crate(new, "crates/demo/src/lib.rs", carrier)
+        carried = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(carried)
+        if carried["changed"] != 0 or carried["added"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: KeyExpChange without a print "
+                f"must not be added: {carried}"
+            )
+        n += 1
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            carrier.replace(
+                'write!(f, "{}", self.inner)',
+                'eprintln!("kadm5: {e}"); write!(f, "{}", self.inner)',
+            ),
+        )
+        printed = compare_trees(old, new, {}, {}, {}, [])
+        if not printed["added"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: eprintln inside KeyExpChange "
+                f"must stay added: {printed}"
+            )
+        _must_red(printed, "KeyExpChange eprintln")
+        n += 1
+        _write_crate(
+            new,
+            "crates/demo/src/lib.rs",
+            "fn keep() {}\n pub struct Other { x: i32 }\n",
+        )
+        other = compare_trees(old, new, {}, {}, {}, [])
+        if not other["added"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: an unrelated struct must stay "
+                f"added: {other}"
+            )
+        _must_red(other, "unrelated struct")
+        n += 1
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
     if suffixed:

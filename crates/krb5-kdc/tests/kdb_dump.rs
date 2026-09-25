@@ -1,8 +1,8 @@
-//! MIT `kdb5_util` dump parser, KDB usage-0 crypto, and dump/load CLI.
+//! kdb5_util dump parser, KDB usage-0 crypto, and dump/load CLI.
 //!
 //! Drives the shipped codec on the committed 1.22.2 golden (not a
 //! reimplementation, not hardcoded key bytes).
-//! R12: `KRB5_TL_DB_ARGS` is rejected at put (`kdb5.c:893-945`, `kdb_db2.c:817-822`).
+//! MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): `KRB5_TL_DB_ARGS` is rejected at put, `kdb_db2.c`).
 
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};

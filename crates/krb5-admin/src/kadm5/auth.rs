@@ -40,6 +40,8 @@ pub(super) struct RpcsecGss {
     pub(super) svc: u32,
 }
 
+/// MIT `gssrpc__svcauth_gss` (`svc_auth_gss.c:460-471`): a sequence above the maximum or already seen inside the window is a context problem and is not dispatched.
+/// A privacy body that unwraps without confidentiality is garbage and is not passed to the procedure.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 #[allow(clippy::unnecessary_wraps)]
 pub(super) fn handle_rpcsec_gss(
@@ -168,7 +170,7 @@ pub(super) fn handle_rpcsec_gss(
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
                     // rpc_gss_svc_privacy: the body must be sealed
-                    // (authgss_prot.c:238-240 rejects conf_state != TRUE).
+                    // MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:238-240`): rejects conf_state != TRUE).
                     let Ok((plain, conf)) = gd.ctx.unwrap_conf(&wrapped) else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
@@ -238,6 +240,8 @@ fn seq_window_ok(gd: &mut RpcsecGss, seq: u32) -> bool {
     }
 }
 
+/// MIT `check_rpcsec_auth` (`kadm_rpc_svc.c:324-331`): the acceptor must be two components, kadmin, not history, in the server realm.
+/// A context with no client name, or an iprop acceptor that is not kiprop in that realm, is weak auth and the procedure is not run.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 fn rpcsec_dispatch(
     ctx: RpcCtx<'_>,
@@ -316,6 +320,8 @@ fn rpcsec_dispatch(
     }
 }
 
+/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:326-341`): an init version other than 1 through 4 is AUTH_BADCRED before the token is used.
+/// Versions 1 and 2 are answered as version 1, and an undecodable init argument is AUTH_BADCRED rather than a failed context.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 pub(super) fn handle_auth_gssapi(
     ctx: RpcCtx<'_>,
@@ -352,7 +358,7 @@ pub(super) fn handle_auth_gssapi(
     );
 
     if auth_msg && (proc == AUTH_GSSAPI_INIT || proc == AUTH_GSSAPI_CONTINUE_INIT) {
-        // svc_auth_gssapi.c:308-315: an undecodable `authgssapi_init_arg`
+        // MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:308-315`): an undecodable `authgssapi_init_arg`
         // is AUTH_BADCRED ("protocol error in procedure arguments").
         let mut ar = XdrR::new(args);
         let (Ok(arg_ver), Ok(token)) = (ar.u32(), ar.opaque()) else {
@@ -364,7 +370,7 @@ pub(super) fn handle_auth_gssapi(
             );
             return Ok(rpc_reply_auth_error(xid, AUTH_BADCRED));
         };
-        // svc_auth_gssapi.c:326-341: the init-arg version switch. 1 and 2
+        // MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:326-341`): the init-arg version switch. 1 and 2
         // are the OpenVision protocol — answered with `call_res.version`
         // 1 and a compat warning; 3 and 4 are echoed; anything else is
         // AUTH_BADCRED ("unsupported GSSAPI_INIT version"). The version

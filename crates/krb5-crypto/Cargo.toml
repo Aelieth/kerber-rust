@@ -1,6 +1,6 @@
 [package]
 name = "krb5-crypto"
-description = "RFC 3961/3962/8009 encryption types 17–20 for Kerberos V5"
+description = "Kerberos V5 etypes 17–20, weak etypes 16/23/25/26 behind allow_weak_crypto, plus SPAKE, MODP, CF2, and PRF+"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

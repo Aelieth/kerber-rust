@@ -1,5 +1,5 @@
 //! Lockout stamp-0 and REQUIRES_PRE_AUTH fail-count clear
-//! (`kdb5.c:1539-1545,1574-1576`, `lockout.c:181-190`).
+//! MIT `krb5_dbe_lookup_last_admin_unlock` (`kdb5.c:1539-1545`): -1576`, `lockout.c`).
 
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};

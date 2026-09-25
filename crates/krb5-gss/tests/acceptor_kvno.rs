@@ -1,4 +1,4 @@
-//! Z1.3 GSS acceptor kvno pinning (MIT `try_one_princ`, `rd_req_dec.c:325-347`).
+//! MIT `try_one_princ` (`rd_req_dec.c:325-347`): GSS acceptor kvno pinning (,.
 //! A fully specified acceptor name fetches the keytab entry by the exact ticket
 //! kvno; a key labelled M != N is not tried for a kvno-N ticket. The plain
 //! `accept_sec_context` keeps MIT's wildcard/no-kvno iteration.

@@ -63,6 +63,23 @@ constants, numerics, or string literals. `testrealm::` and
 or `super::`. `--self-test` on the
 compare tools prints `self-test ok (N cases)`. There is no
 request-shape column (no canonical built-request form).
+
+`check_mit_anchor_form` (`scripts/ci-policy.py`) reads `//`, `///`, and
+`//!` comments under `crates/*/src` and `crates/*/tests`. A MIT anchor
+on those lines is one line, ``MIT `<c_function>` (`<file>.c:<a>-<b>`): <guarantee>``.
+A single source line is written `<a>-<a>`. The six older shapes are
+red: a backticked name with no file, a backticked `file.c` range or
+point with no name, a name plus a range with no guarantee, a bare
+`MIT file.c:N`, and a name plus a single point. `MIT_ANCHOR_ALLOW` is
+0, so the check is hard. Prose that does not cite a function or a
+`.c` / `.h` line is not an anchor.
+
+`check_no_process_history` rejects a process tag on a `//` comment
+anywhere under `crates/`: `R12`, `A′-3`, `W0e`, `W1-Z`, `Round 2`,
+`parent` plus seven hex digits, `R2-S3`, `B3`, `Y0`, and `Z6.3`.
+`PROCESS_TAG_ALLOW` is 0, so the check is hard. A tag inside a
+string literal is not a comment.
+
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
 [--accept] [--params] [--split] [--glue] [--roots]` is the product-fn sibling:
 every non-test `fn` (and `const` / `static` / `enum` / `struct` /
@@ -85,6 +102,20 @@ brace-less `const` / `static` / `type`, with a vis-stripped rest),
 `vis-widen` (`pub(crate)` / `pub(super)` → bare `pub`, or private →
 any `pub`; counted and listed, red unless `--accept` gives a reason,
 never folded into `vis-only`), `fmt-only`, `doc-only`, `params-only`, or `changed`.
+`krb5_log::events::NAME` compares equal to the `&str` that const is
+defined as, so naming an unchanged event string is `identical` (or
+`doc-only` when only docs differ). A tracing call that only gains
+`event`, `correlation_id`, `component`, and `outcome` compares equal
+to the call without those fields; any other field or a different
+message stays `changed`. The key-expiry banner `if` and
+`if let Err(e) = … { eprintln!("kadm5: {e}"); }` compare equal to the
+caller without that print. A `password_expired: bool` field, and a
+`password_expired: false` literal, compare equal to the item without
+them; `password_expired: true` stays `changed`. A new `&str` const in
+`events` is not `added` when a paired body uses it in place of that
+literal; a different value stays `added`. `KeyExpChange` and its
+`Display` / `Debug` / `Error` impls are not `added` when they do not
+print; an `eprintln!` in that impl stays `added`.
 Doc-stripping uses that same class, and only from visibility tokens
 in code: a `pub(crate)` that appears only inside a `///` comment is
 not a token. `pub` inside an identifier such as `pubkey` is not a

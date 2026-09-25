@@ -26,7 +26,7 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
 ///
 /// # Errors
 ///
-/// Same as [`handle_request`].
+/// A store failure that is not a KDC error.
 pub fn handle_request_from(
     store: &dyn PrincipalRead,
     raw: &[u8],
@@ -109,7 +109,7 @@ fn handle_inner(
     raw: &[u8],
     sender: Option<&HostAddress>,
 ) -> Result<(Vec<u8>, Option<String>), Error> {
-    // MIT dispatch.c:145-153: not AS/TGS or decode fail → no response.
+    // MIT `dispatch` (`dispatch.c:145-153`): .c: not AS/TGS or decode fail → no response.
     if raw.is_empty() {
         return Ok((Vec::new(), None));
     }

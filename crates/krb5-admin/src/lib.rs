@@ -1,8 +1,11 @@
 //! Administration: kadmind (kadm5 over ONC RPC `AUTH_GSSAPI`), kadmin.local,
-//! kdb5_util, kpasswd (RFC 3244 on 464), kprop / kpropd (dump v7 on 754) and
-//! iprop (`IPROP_GET_UPDATES` / `FULL_RESYNC`, `krb5-iprop-pull`), ktutil.
+//! kpasswd (RFC 3244 on 464), kprop / kpropd (dump v7 on 754),
+//! iprop (`IPROP_GET_UPDATES` / `FULL_RESYNC`, `krb5-iprop-pull`), and ktutil.
 //!
 //! The kadmind path enforces the KDC ACL. There is no C FFI.
+//!
+//! The public surface is the names this root re-exports. `kadm5`, `kprop`,
+//! and `listen` stay private.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -35,7 +38,7 @@ pub use listen::{
     parse_kpasswd_rep, serve_kpasswd_tcp, serve_kpasswd_udp,
 };
 
-/// MIT `kadmin.c:455-536` `princstr` for `kadm5_init`: `-p` / explicit name,
+/// MIT `kadmin_startup` (`kadmin.c:455-536`): princstr for `kadm5_init`: `-p` / explicit name
 /// else `$USER/admin@REALM`, else the euid's passwd name `/admin@REALM`.
 #[must_use]
 pub fn kadmin_local_princstr(realm: &str, explicit: Option<&str>) -> String {
@@ -125,7 +128,7 @@ pub struct KadminArgs {
     pub expire: Option<u32>,
 }
 
-/// Parsed `kadmin.local addpol` operands (`kadmin.c:1600-1689`).
+/// MIT `kadmin_parse_policy_args` (`kadmin.c:1600-1689`): Parsed `kadmin.local addpol` operands.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PolicyArgs {
     /// Policy name (last argument).
@@ -146,11 +149,11 @@ pub struct PolicyArgs {
     pub pw_failcnt_interval: Option<u32>,
     /// `-lockoutduration`.
     pub pw_lockout_duration: Option<u32>,
-    /// `-allowedkeysalts` (`kadmin.c:1669`).
+    /// MIT `kadmin_parse_policy_args` (`kadmin.c:1669-1669`): `-allowedkeysalts`.
     pub allowed_keysalts: Option<String>,
 }
 
-/// MIT `kadmin.c:118-138` `strdur`.
+/// MIT `strdur` (`kadmin.c:118-138`): strdur.
 #[must_use]
 pub fn strdur(duration: i64) -> String {
     let (neg, mut rest) = if duration < 0 {
@@ -259,7 +262,7 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
     Ok(out)
 }
 
-/// Parse `addpol` flags. Last token is the policy name (`kadmin.c:1600-1695`).
+/// MIT `kadmin_parse_policy_args` (`kadmin.c:1600-1695`): Parse `addpol` flags. Last token is the policy name.
 ///
 /// # Errors
 ///
@@ -319,7 +322,7 @@ pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
 }
 
 fn parse_pol_interval(s: &str) -> Result<u32, String> {
-    // MIT parse_interval (kadmin.c:170-195): krb5_string_to_deltat, else getdate.y
+    // MIT `parse_interval` (`kadmin.c:174-197`): krb5_string_to_deltat, else getdate.y
     // (natural-language dates are the deferred getdate.y gap). The error text is
     // parse_date's `Invalid date specification "%s".`.
     krb5_types::deltat::parse(s)
@@ -335,7 +338,7 @@ pub enum Error {
     #[error("acl denied")]
     AclDenied,
     /// kpropd `authorized_principal` refused the authenticated peer
-    /// (`kpropd.c:540-543` syslog text).
+    /// MIT `doit` (`kpropd.c:540-543`): syslog text).
     #[error("Rejected connection from unauthorized principal {0}")]
     KpropUnauthorized(String),
     /// Principal missing.
@@ -443,7 +446,7 @@ impl<'a> AdminSession<'a> {
         self.create_password_etypes(name, password, &[])
     }
 
-    /// MIT `kadm5_create_principal_3` `passwd_check` (`svr_principal.c:364-373`)
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): `passwd_check`
     /// for `addprinc [-policy P] -pw PW`: the named policy's floors (if the
     /// policy exists) and the built-in `dict` / `empty` / `princ` modules run
     /// before the principal is created.
@@ -484,7 +487,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or already exists.
+    /// [`Error::AclDenied`] or the name exists.
     pub fn create_randkey(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.create_randkey_etypes(name, &[])
     }
@@ -493,7 +496,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or already exists.
+    /// [`Error::AclDenied`] or the name exists.
     pub fn create_randkey_etypes(
         &mut self,
         name: &PrincipalName,
@@ -506,7 +509,7 @@ impl<'a> AdminSession<'a> {
     }
 
     /// `addprinc [-randkey] [-e] [-policy]`: bind the policy before
-    /// `apply_keysalt_policy` (`svr_principal.c:444-447`).
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:444-447`): `apply_keysalt_policy`.
     ///
     /// # Errors
     ///
@@ -528,7 +531,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.chrand_etypes_keepold(name, &[], false)
     }
@@ -537,7 +540,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
@@ -568,7 +571,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn delete(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         self.store
@@ -580,7 +583,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL, not found, or already exists.
+    /// Denied, missing, or the name exists.
     pub fn rename(&mut self, old: &PrincipalName, new: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         self.store
@@ -616,7 +619,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn ktadd(&mut self, name: &PrincipalName) -> Result<Keytab, Error> {
         self.reload()?;
         self.store
@@ -629,7 +632,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL, not found, or `write`.
+    /// Denied, missing, or the write failed.
     pub fn ktadd_local(
         &mut self,
         name: &PrincipalName,
@@ -709,7 +712,7 @@ impl<'a> AdminSession<'a> {
         self.store.ids()
     }
 
-    /// `listprincs [glob]` with MIT `glob_to_regexp` semantics (implicit `@*`).
+    /// MIT `glob_to_regexp` (`svr_iters.c:55-109`): `listprincs [glob]` with semantics (implicit `@*`).
     #[must_use]
     pub fn list_ids_glob(&self, glob: Option<&str>) -> Vec<String> {
         let ids = self.store.ids();
@@ -763,7 +766,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn modify_attributes(
         &mut self,
         name: &PrincipalName,
@@ -803,7 +806,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn modify_expiration(
         &mut self,
         name: &PrincipalName,
@@ -837,7 +840,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         let tid = self.target_id(name);
@@ -854,7 +857,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn modify_ticket_lives(
         &mut self,
         name: &PrincipalName,
@@ -895,7 +898,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn set_policy(&mut self, name: &PrincipalName, policy: &str) -> Result<(), Error> {
         self.reload()?;
         let tid = self.target_id(name);
@@ -949,7 +952,7 @@ impl<'a> AdminSession<'a> {
         Ok(())
     }
 
-    /// `modpol` (`svr_policy.c:292-322` on the merged record).
+    /// MIT `kadm5_modify_policy` (`svr_policy.c:292-322`): `modpol` on the merged record).
     ///
     /// # Errors
     ///
@@ -986,7 +989,7 @@ impl<'a> AdminSession<'a> {
         n
     }
 
-    /// `listpols [glob]` with MIT `glob_to_regexp` semantics (no realm append).
+    /// MIT `glob_to_regexp` (`svr_iters.c:55-109`): `listpols [glob]` with semantics (no realm append).
     #[must_use]
     pub fn list_policies_glob(&self, glob: Option<&str>) -> Vec<String> {
         let mut n: Vec<String> = match glob {
@@ -1005,7 +1008,7 @@ impl<'a> AdminSession<'a> {
         n
     }
 
-    /// `getpol` (`kadmin.c:1794-1807` via `strdur`).
+    /// MIT `kadmin_getpol` (`kadmin.c:1794-1807`): `getpol` via `strdur`.
     ///
     /// # Errors
     ///
@@ -1063,7 +1066,7 @@ impl<'a> AdminSession<'a> {
 ///
 /// # Errors
 ///
-/// Persist errors.
+/// Write failed, or a key was refused.
 pub fn propagate(
     store: &PrincipalStore,
     db_path: &std::path::Path,
@@ -1076,7 +1079,7 @@ pub fn propagate(
 ///
 /// # Errors
 ///
-/// Persist errors.
+/// Read failed, or the dump was refused.
 pub fn receive_propagate(
     db_path: &std::path::Path,
     stash_path: &std::path::Path,

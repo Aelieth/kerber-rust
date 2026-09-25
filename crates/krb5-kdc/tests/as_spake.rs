@@ -1,12 +1,12 @@
-//! A′-3 item 15: SPAKE 91 e_data is module, ETYPE-INFO2, cookie.
-//! A′-3 R30 inject: verify_support 24, PKINIT [16, 147], TGS FAST armor.
-//! A′-3 R33: TGS FAST_REQUIRED swallow + empty-groups stray PA-SPAKE skip.
+//! SPAKE 91 e_data is module, ETYPE-INFO2, cookie.
+//! `verify_support` 24, PKINIT [16, 147], TGS FAST armor.
+//! TGS FAST_REQUIRED swallow + empty-groups stray PA-SPAKE skip.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
 //! SPAKE 91 carries ETYPE-INFO2 when the client has not yet seen a cookie
-//! (`kdc_preauth.c:1141-1170 maybe_add_etype_info2`).
+//! MIT `maybe_add_etype_info2` (`kdc_preauth.c:1142-1170`): maybe_add_etype_info2`).
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, prf_plus};

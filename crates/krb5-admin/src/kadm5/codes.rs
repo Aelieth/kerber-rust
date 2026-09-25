@@ -9,7 +9,7 @@ pub(super) const LAST_FRAG: u32 = 0x8000_0000;
 pub(super) const RPC_VERSION: u32 = 2;
 pub(super) const KADM_PROG: u32 = 2112;
 pub(super) const KADM_VERS: u32 = 2;
-/// MIT `KRB5_IPROP_PROG`.
+/// KRB5_IPROP_PROG.
 pub(super) const IPROP_PROG: u32 = 100_423;
 pub(super) const IPROP_VERS: u32 = 1;
 pub(super) const IPROP_NULL: u32 = 0;
@@ -18,7 +18,7 @@ pub(super) const IPROP_FULL_RESYNC: u32 = 2;
 pub(super) const IPROP_FULL_RESYNC_EXT: u32 = 3;
 pub(super) const FLAVOR_GSS: u32 = 6;
 pub(super) const FLAVOR_NONE: u32 = 0;
-/// OpenVision / MIT `AUTH_GSSAPI` (`<gssrpc/auth.h>`).
+/// OpenVision / AUTH_GSSAPI (`<gssrpc/auth.h>`).
 pub(super) const FLAVOR_AUTH_GSSAPI: u32 = 300_001;
 pub(super) const AUTH_GSSAPI_INIT: u32 = 1;
 pub(super) const AUTH_GSSAPI_CONTINUE_INIT: u32 = 2;
@@ -53,7 +53,7 @@ pub(super) const AUTH_FAILED: u32 = 7;
 pub(super) const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
 /// MIT `gssrpc/auth.h` `RPCSEC_GSS_CTXPROBLEM`.
 pub(super) const RPCSEC_GSS_CTXPROBLEM: u32 = 14;
-/// MIT `svc_auth_gss.c:226` `sizeof(seqmask)*8`.
+/// MIT `svcauth_gss_accept_sec_context` (`svc_auth_gss.c:226-226`): MIT `sizeof(seqmask)*8`.
 pub(super) const RPCSEC_SEQ_WINDOW: u32 = 32;
 
 pub(super) const CREATE_PRINCIPAL: u32 = 1;
@@ -83,9 +83,9 @@ pub(super) const SET_STRING: u32 = 24;
 pub(super) const EXTRACT_KEYS: u32 = 26;
 pub(super) const CREATE_ALIAS: u32 = 27;
 
-/// MIT `KADM5_UNK_PRINC`.
+/// KADM5_UNK_PRINC.
 pub(super) const KADM5_UNK_PRINC: u32 = 43_787_532;
-/// MIT `KADM5_UNK_POLICY`.
+/// KADM5_UNK_POLICY.
 pub(super) const KADM5_UNK_POLICY: u32 = 43_787_533;
 pub(super) const KADM5_BAD_MASK: u32 = 43_787_534;
 pub(super) const KADM5_BAD_CLASS: u32 = 43_787_535;
@@ -93,55 +93,55 @@ pub(super) const KADM5_BAD_LENGTH: u32 = 43_787_536;
 pub(super) const KADM5_BAD_POLICY: u32 = 43_787_537;
 pub(super) const KADM5_BAD_HISTORY: u32 = 43_787_540;
 pub(super) const KADM5_BAD_MIN_PASS_LIFE: u32 = 43_787_541;
-/// MIT `KADM5_DUP`.
+/// KADM5_DUP.
 pub(super) const KADM5_DUP: u32 = 43_787_527;
-/// MIT `KADM5_FAILURE`.
+/// KADM5_FAILURE.
 pub(super) const KADM5_FAILURE: u32 = 43_787_520;
-/// MIT `ovk` 22 (`kadm_err.et`; base `43787520`).
+/// ovk 22 (`kadm_err.et`; base `43787520`).
 pub(super) const KADM5_PASS_Q_TOOSHORT: u32 = 43_787_542;
-/// MIT `ovk` 23.
+/// ovk 23.
 pub(super) const KADM5_PASS_Q_CLASS: u32 = 43_787_543;
-/// MIT `ovk` 24 (`KADM5_PASS_Q_DICT`): `dict` and `princ` modules.
+/// ovk 24 (`KADM5_PASS_Q_DICT`): `dict` and `princ` modules.
 pub(super) const KADM5_PASS_Q_DICT: u32 = 43_787_544;
-/// MIT `ovk` 25.
+/// ovk 25.
 pub(super) const KADM5_PASS_REUSE: u32 = 43_787_545;
-/// MIT `ovk` 26 (`KADM5_PASS_TOOSOON`).
+/// ovk 26 (`KADM5_PASS_TOOSOON`).
 pub(super) const KADM5_PASS_TOOSOON: u32 = 43_787_546;
-/// MIT `ovk` 2 (`KADM5_AUTH_ADD`).
+/// ovk 2 (`KADM5_AUTH_ADD`).
 pub(super) const KADM5_AUTH_ADD: u32 = 43_787_522;
-/// MIT `ovk` 3 (`KADM5_AUTH_MODIFY`).
+/// ovk 3 (`KADM5_AUTH_MODIFY`).
 pub(super) const KADM5_AUTH_MODIFY: u32 = 43_787_523;
-/// MIT `ovk` 4 (`KADM5_AUTH_DELETE`).
+/// ovk 4 (`KADM5_AUTH_DELETE`).
 pub(super) const KADM5_AUTH_DELETE: u32 = 43_787_524;
-/// MIT `ovk` 5 (`KADM5_AUTH_INSUFFICIENT`).
+/// ovk 5 (`KADM5_AUTH_INSUFFICIENT`).
 pub(super) const KADM5_AUTH_INSUFFICIENT: u32 = 43_787_525;
-/// MIT `ovk` 63 (`KADM5_ALIAS_REALM`).
+/// ovk 63 (`KADM5_ALIAS_REALM`).
 pub(super) const KADM5_ALIAS_REALM: u32 = 43_787_583;
-/// MIT `KRB5_KDB_ALIAS_UNSUPPORTED` (`kdb5_err.et`, -1780008402) as the
+/// KRB5_KDB_ALIAS_UNSUPPORTED (`kdb5_err.et`, -1780008402) as the
 /// `kadm5_ret_t` the client decodes.
 pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
-/// MIT `ovk` 1 (`KADM5_AUTH_GET`).
+/// ovk 1 (`KADM5_AUTH_GET`).
 pub(super) const KADM5_AUTH_GET: u32 = 43_787_521;
-/// MIT `ovk` 44 (`KADM5_AUTH_LIST`).
+/// ovk 44 (`KADM5_AUTH_LIST`).
 pub(super) const KADM5_AUTH_LIST: u32 = 43_787_564;
-/// MIT `ovk` 62 (`KADM5_AUTH_INITIAL`).
+/// ovk 62 (`KADM5_AUTH_INITIAL`).
 pub(super) const KADM5_AUTH_INITIAL: u32 = 43_787_582;
-/// MIT `ovk` 45 (`KADM5_AUTH_CHANGEPW`).
+/// ovk 45 (`KADM5_AUTH_CHANGEPW`).
 pub(super) const KADM5_AUTH_CHANGEPW: u32 = 43_787_565;
-/// MIT `ovk` 50 (`KADM5_AUTH_SETKEY`).
+/// ovk 50 (`KADM5_AUTH_SETKEY`).
 pub(super) const KADM5_AUTH_SETKEY: u32 = 43_787_570;
-/// MIT `ovk` 58 (`KADM5_BAD_KEYSALTS`).
+/// ovk 58 (`KADM5_BAD_KEYSALTS`).
 pub(super) const KADM5_BAD_KEYSALTS: u32 = 43_787_578;
-/// MIT `ovk` 59 (`KADM5_SETKEY_BAD_KVNO`).
+/// ovk 59 (`KADM5_SETKEY_BAD_KVNO`).
 pub(super) const KADM5_SETKEY_BAD_KVNO: u32 = 43_787_579;
-/// MIT `ovk` 60 (`KADM5_AUTH_EXTRACT`).
+/// ovk 60 (`KADM5_AUTH_EXTRACT`).
 pub(super) const KADM5_AUTH_EXTRACT: u32 = 43_787_580;
 pub(super) const KADM5_ATTRIBUTES: u32 = 0x0000_0010;
 pub(super) const KADM5_FAIL_AUTH_COUNT: u32 = 0x0001_0000;
 pub(super) const KADM5_TL_DATA: u32 = 0x0004_0000;
 pub(super) const KADM5_KEY_DATA: u32 = 0x0002_0000;
 pub(super) const KADM5_BAD_SERVER_PARAMS: u32 = 43_787_563;
-/// MIT `ovk` 47 (`KADM5_BAD_TL_TYPE`, `kadm_err.et:54`).
+/// ovk 47 (`KADM5_BAD_TL_TYPE`, `kadm_err.et:54`).
 pub(super) const KADM5_BAD_TL_TYPE: u32 = 43_787_567;
 pub(super) const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 pub(super) const KADM5_PRINCIPAL: u32 = 0x0000_0001;
@@ -156,9 +156,9 @@ pub(super) const KADM5_AUX_ATTRIBUTES: u32 = 0x0000_0400;
 pub(super) const KADM5_MAX_RLIFE: u32 = 0x0000_2000;
 pub(super) const KADM5_LAST_SUCCESS: u32 = 0x0000_4000;
 pub(super) const KADM5_LAST_FAILED: u32 = 0x0000_8000;
-/// MIT `KADM5_PW_MAX_LIFE`.
+/// KADM5_PW_MAX_LIFE.
 pub(super) const KADM5_PW_MAX_LIFE: u32 = 0x0000_4000;
-/// MIT `KADM5_PW_MIN_LIFE`.
+/// KADM5_PW_MIN_LIFE.
 pub(super) const KADM5_PW_MIN_LIFE: u32 = 0x0000_8000;
 pub(super) const KADM5_POLICY: u32 = 0x0000_0800;
 pub(super) const KADM5_POLICY_CLR: u32 = 0x0000_1000;
@@ -207,7 +207,7 @@ pub(super) const ALL_POLICY_MASK: u32 = KADM5_POLICY
     | KADM5_POLICY_ALLOWED_KEYSALTS
     | KADM5_POLICY_TL_DATA;
 
-/// OpenVision/MIT `KADM5_API_VERSION_2`.
+/// OpenVision/KADM5_API_VERSION_2.
 pub(super) const API_V2: u32 = 0x1234_5702;
 pub(super) const API_V3: u32 = 0x1234_5703;
 pub(super) const API_V4: u32 = 0x1234_5704;
@@ -232,5 +232,5 @@ pub(super) const AT_PW_POLICY_SWITCH: u32 = 17;
 pub(super) const AT_PW_HIST_KVNO: u32 = 18;
 pub(super) const AT_PW_HIST: u32 = 19;
 
-/// MIT `glob_to_regexp` EINVAL for a trailing backslash (`svr_iters.c:63-64`).
+/// MIT `glob_to_regexp` (`svr_iters.c:63-64`): EINVAL for a trailing backslash.
 pub(super) const EINVAL: u32 = 22;

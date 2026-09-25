@@ -71,7 +71,7 @@ fn resolve_dir(residual: &str, init: bool) -> io::Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Same as [`dir_cache_path`].
+/// Missing directory, or a bad subsidiary.
 pub fn dir_display_name(residual: &str) -> io::Result<String> {
     let path = dir_cache_path(residual)?;
     Ok(format!("DIR::{}", path.display()))
@@ -111,7 +111,7 @@ pub fn dir_switch(residual: &str) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// Directory read failures.
+/// The directory could not be read.
 pub fn dir_subsidiaries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut v = Vec::new();
     for e in fs::read_dir(dir)? {

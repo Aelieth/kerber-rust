@@ -1,6 +1,6 @@
-//! MIT `kdb5_util` dump version 6/7 textual codec.
+//! kdb5_util dump version 6/7 textual codec.
 //!
-//! Grammar (MIT `k5beta7_common` / `process_k5beta7_princ`):
+//! MIT `k5beta7_common` (`dump.c:294-374`): Grammar ( / `process_k5beta7_princ`
 //! `princ\tlen\tnamelen\tn_tl_data\tn_key_data\te_length\tname\t`
 //! `attributes\tmax_life\tmax_renewable_life\texpiration\t`
 //! `pw_expiration\tlast_success\tlast_failed\tfail_auth_count`
@@ -33,7 +33,7 @@ pub const KDB_DUMP_VERSION: u32 = 7;
 /// Older `-r18` header. Princ records match version 7.
 pub(crate) const KDB_DUMP_VERSION_R18: u32 = 6;
 
-/// `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put (`kdb5.c:893-945`).
+/// MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put.
 pub const TL_DB_ARGS: i32 = 0x7fff;
 /// `KRB5_TL_LAST_PWD_CHANGE`.
 pub const TL_LAST_PWD_CHANGE: i32 = 1;
@@ -202,7 +202,7 @@ impl DumpFile {
     ///
     /// # Errors
     ///
-    /// Crypto or name-parse failures.
+    /// Name, format, or a key failure.
     pub(crate) fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         for p in &self.princs {
             if let Some(e) = crate::store::db_args_put_error(&p.tl_data) {
@@ -241,6 +241,8 @@ impl DumpFile {
 }
 
 impl DumpPrincipal {
+    /// MIT `process_k5beta7_princ` (`dump.c:676-690`): eight attribute fields are required, and a short record is not a principal.
+    /// The master-key principal is refused when its key does not match the derived master key, and the policy binding is taken from the admin tagged data.
     fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
@@ -378,7 +380,7 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
 ///
 /// # Errors
 ///
-/// Parse or crypto failures.
+/// [`DumpError::Format`] or a key failure.
 pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     load_dump_etype(text, master_password, default_master_etype())
 }
@@ -387,7 +389,7 @@ pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, D
 ///
 /// # Errors
 ///
-/// Parse or crypto failures.
+/// [`DumpError::Format`] or a key failure.
 pub fn load_dump_etype(
     text: &str,
     master_password: &[u8],
@@ -403,7 +405,7 @@ pub fn load_dump_etype(
 ///
 /// # Errors
 ///
-/// Parse or crypto failures.
+/// [`DumpError::Format`] or a key failure.
 pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
     parse_dump(text)?.into_store(mkey)
 }
@@ -412,7 +414,7 @@ pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<Principal
 ///
 /// # Errors
 ///
-/// I/O, parse, or crypto failures.
+/// Read, parse, or a key failure.
 pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     let text = fs::read_to_string(path)?;
     load_dump(&text, master_password)
@@ -425,7 +427,7 @@ pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalSt
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// String-to-key or key wrap failed.
 pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<String, DumpError> {
     dump_store_etype(store, master_password, default_master_etype())
 }
@@ -434,7 +436,7 @@ pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<Stri
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// String-to-key or key wrap failed.
 pub(crate) fn dump_store_etype(
     store: &PrincipalStore,
     master_password: &[u8],
@@ -448,7 +450,7 @@ pub(crate) fn dump_store_etype(
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// A key could not be wrapped.
 pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
     let now = unix_now();
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
@@ -502,7 +504,7 @@ pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<S
 ///
 /// # Errors
 ///
-/// Crypto or I/O failures.
+/// [`DumpError::Io`] or a key failure.
 pub fn write_dump_path_etype(
     store: &PrincipalStore,
     path: &Path,
@@ -560,7 +562,7 @@ fn parse_header(line: &str) -> Result<u32, DumpError> {
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// String-to-key or key wrap failed.
 pub fn dump_store_iprop(
     store: &PrincipalStore,
     master_password: &[u8],
@@ -574,6 +576,8 @@ pub fn dump_store_iprop(
     ))
 }
 
+/// MIT `process_k5beta7_princ` (`dump.c:666-674`): a name that cannot be read is not a principal.
+/// The name's length must equal the header count, so a truncated name does not consume the attribute fields.
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {
     let mut raw: Vec<&str> = rest.split('\t').collect();
     if let Some(last) = raw.last_mut() {
@@ -777,6 +781,8 @@ fn dump_attributes(p: &Principal) -> u32 {
     a
 }
 
+/// MIT `k5beta7_common` (`dump.c:327-331`): a tagged-data count that does not match the list is an error and the record is not written.
+/// An alias is written with zero lifetimes, and the database-arguments tag is stripped before the record is emitted.
 fn write_princ_record(
     out: &mut String,
     p: &Principal,

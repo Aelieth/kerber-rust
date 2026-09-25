@@ -1,4 +1,8 @@
 //! Bounded, time-windowed, thread-safe replay cache.
+//!
+//! A key already seen inside the window is a replay and is rejected.
+//! The map does not grow without a bound. Callers share it across
+//! threads. The lock is what makes that share one cache.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

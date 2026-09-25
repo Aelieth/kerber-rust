@@ -1,4 +1,4 @@
-//! A′-3 item 11: `get_ticket_flags` + `check_tgs_opts` + deny_opts.
+//! `get_ticket_flags` + `check_tgs_opts` + deny_opts.
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!

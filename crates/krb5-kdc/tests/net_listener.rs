@@ -1,4 +1,4 @@
-//! MIT `net-server.c:1101-1105,1314-1317` dispatch suffix strings.
+//! MIT `process_packet_response` (`net-server.c:1101-1105`): MIT -1317` dispatch suffix strings.
 //! MIT `net-server.c` TCP `bufsiz` 1 MiB, `FIELD_TOOLONG` at `msglen > bufsiz-4`.
 //! Persist round-trip and UDP listener adversarial tests.
 
@@ -63,7 +63,7 @@ fn udp_listener_answers_wrong_password() {
 
 #[test]
 fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
-    // MIT kdc/replay.c lookaside (dispatch.c:114-140): an identical request
+    // MIT `dispatch` (`dispatch.c:114-140`): MIT kdc/replay.c lookaside : an identical request
     // resent to the listener is answered from the cache, so the second reply is
     // byte-for-byte the first, not a freshly minted AS-REP (new session key) or a
     // PA-ENC-TIMESTAMP replay error.

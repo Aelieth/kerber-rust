@@ -1,7 +1,7 @@
-//! A′-3 item 13: `handle_authdata` copy / filter / mandatory.
-//! A′-3 item 14: require_auth, CAMMAC extract, GET_AUTH_INDICATORS.
-//! A′-3 R28: PAC at index 0, greet KDC-ISSUED, ku-5 body AD.
-//! A′-3 R29: unkeyed CAMMAC KDC verifier is skipped.
+//! `handle_authdata` copy / filter / mandatory.
+//! require_auth, CAMMAC extract, GET_AUTH_INDICATORS.
+//! PAC at index 0, greet KDC-ISSUED, ku-5 body AD.
+//! unkeyed CAMMAC KDC verifier is skipped.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{

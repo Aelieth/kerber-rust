@@ -1,4 +1,8 @@
 //! AP-REQ construction (RFC 4120 §5.5.1) and service-side verification.
+//!
+//! The caller supplies the skew window. When it does not,
+//! `DEFAULT_SKEW` is 300 seconds. A ticket outside that window is not
+//! a successful verify.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -60,7 +64,7 @@ impl<'a> ApVerifyParams<'a> {
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_req(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -74,7 +78,7 @@ pub fn build_ap_req(
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_req_opts(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -98,11 +102,11 @@ pub fn build_ap_req_opts(
 
 /// Build an AP-REQ with mutual auth and an explicit authenticator sequence.
 ///
-/// MIT `kprop` `sendauth` uses `AP_OPTS_MUTUAL_REQUIRED` and `DO_SEQUENCE`.
+/// kprop `sendauth` uses `AP_OPTS_MUTUAL_REQUIRED` and `DO_SEQUENCE`.
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_req_mutual_seq(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -143,7 +147,7 @@ pub fn build_ap_req_mutual_seq(
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_req_with_cksum(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -219,7 +223,7 @@ pub fn verify_ap_req(
 ///
 /// # Errors
 ///
-/// See [`verify_ap_req`].
+/// Truncation, HMAC, replay, skew, or expiry.
 pub fn verify_ap_req_ex(
     raw: &[u8],
     params: &ApVerifyParams<'_>,
@@ -250,6 +254,8 @@ pub fn verify_ap_req_ex(
     result
 }
 
+/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): the invalid flag is tested only after the ticket times.
+/// A ticket outside the caller skew, using starttime or else authtime, is not a successful verify.
 fn verify_inner(
     raw: &[u8],
     params: &ApVerifyParams<'_>,
@@ -286,7 +292,7 @@ fn verify_inner(
         .filter(|&v| v != 0)
         .or(params.kvno.filter(|&v| v != 0));
     let tkt_etype = ap.ticket.enc_part.etype;
-    // MIT kt_file.c:355-384 `krb5_ktfile_get_entry`: an entry for the
+    // MIT `krb5_ktfile_get_entry` (`kt_file.c:355-384`): krb5_ktfile_get_entry: an entry for the
     // principal and enctype at another kvno is `found_wrong_kvno` →
     // KRB5_KT_KVNONOTFOUND when nothing matched.
     let mut found_wrong_kvno = false;
@@ -316,7 +322,7 @@ fn verify_inner(
         }
     }
     let Some(ticket_part) = ticket_part else {
-        // MIT rd_req_dec.c:118-148 `keytab_fetch_error`: KVNONOTFOUND is
+        // MIT `keytab_fetch_error` (`rd_req_dec.c:118-148`): keytab_fetch_error: KVNONOTFOUND is
         // KRB5KRB_AP_ERR_BADKEYVER "Cannot find key for %s kvno %d in
         // keytab" when the pinned name is the ticket's server
         // (`krb5_principal_compare`, name type ignored), else NOT_US;
@@ -355,7 +361,7 @@ fn verify_inner(
     };
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
     let skew = params.skew.max(0);
-    // MIT krb5int_validate_times (valid_times.c:36-58): use starttime, else
+    // MIT `krb5int_validate_times` (`valid_times.c:36-57`): use starttime, else
     // authtime, for the not-yet-valid test — a ticket with no starttime is
     // gated by its authtime, not left unchecked.
     let start = ticket_part
@@ -374,7 +380,7 @@ fn verify_inner(
             text: Some("ticket expired".into()),
         });
     }
-    // MIT rd_req_dec.c:634-638 checks the INVALID flag after krb5int_validate_times
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): MIT checks the INVALID flag after krb5int_validate_times
     // and returns KRB5KRB_AP_ERR_TKT_INVALID, not TKT_NYV.
     if ticket_part.flags.invalid() {
         return Err(Error::KrbError {
@@ -456,9 +462,9 @@ fn verify_inner(
     })
 }
 
-/// MIT `rd_req_dec.c:590-610`: when `TRANSITED_POLICY_CHECKED` is unset
+/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:590-610`): when `TRANSITED_POLICY_CHECKED` is unset
 /// and the transited field is non-empty, `krb5_check_transited_list`
-/// (`chk_trans.c:309-355`) requires every hop in the
+/// MIT `krb5_check_transited_list` (`chk_trans.c:309-355`): requires every hop in the
 /// `krb5_walk_realm_tree` list. Anonymous crealm skips the check.
 fn check_ap_req_transited(part: &EncTicketPart, srealm: &str) -> Result<(), Error> {
     if part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED) {
@@ -519,7 +525,7 @@ fn walk_realm_tree(
     hierarchical_walk_realms(client, server)
 }
 
-/// MIT `sname_match.c:30-57` `krb5_sname_match`.
+/// MIT `krb5_sname_match` (`sname_match.c:31-57`): krb5_sname_match.
 ///
 /// `matching == NULL` accepts any ticket server. A two-component
 /// `NT-SRV-HST` matching name checks realm (when present), the service

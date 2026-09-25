@@ -1,7 +1,7 @@
-//! Principal aliases like MIT 1.22.2: `kadm5_create_alias` (`svr_principal.c:2051-2087`),
-//! `krb5_dbe_make_alias_entry` / `krb5_dbe_read_alias` (`kdb5.c:2826-2895`),
-//! `krb5_db_get_principal` resolution (`kdb5.c:800-840`), the AS cname decision
-//! (`do_as_req.c:681-687`) and the TGS requested sname (`do_tgs_req.c:1029`).
+//! MIT `kadm5_create_alias` (`svr_principal.c:2051-2087`): Principal aliases like MIT 1.22.2: `kadm5_create_alias`
+//! MIT `krb5_dbe_make_alias_entry` (`kdb5.c:2826-2870`): then MIT `krb5_dbe_read_alias` (`kdb5.c:2873-2893`): `krb5_dbe_make_alias_entry` / `krb5_dbe_read_alias`
+//! MIT `krb5_db_get_principal` (`kdb5.c:803-844`): `krb5_db_get_principal` resolution, the AS cname decision
+//! MIT `process_as_req` (`do_as_req.c:681-687`): and the TGS requested sname (`do_tgs_req.c`).
 //! Texts and the dump line were settled live in
 //! `working/logs/audit-polish-0902/w1k/m3a-settle-mit-alias.log`.
 

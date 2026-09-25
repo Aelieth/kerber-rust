@@ -1,4 +1,7 @@
 //! SPAKE preauth (MIT PA-SPAKE, type 151) message envelopes.
+//!
+//! Group 2 is P-256. SF-NONE is factor type 1. The factor type is
+//! required; the factor data is optional.
 
 use rasn::prelude::*;
 

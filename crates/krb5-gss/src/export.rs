@@ -55,7 +55,7 @@ fn read_opt_str(token: &[u8], i: &mut usize) -> Result<Option<String>, Error> {
 }
 
 impl GssContext {
-    /// Serialize context state (private Rust↔Rust format, not MIT `kg_ctx_externalize`).
+    /// MIT `kg_ctx_externalize` (`ser_sctx.c:314-464`): Serialize context state (private Rust↔Rust format, not ).
     ///
     /// # Errors
     ///

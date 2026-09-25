@@ -27,6 +27,8 @@ use super::rpc::{read_record, rpc_call_bytes, write_record};
 use super::xdr::{XdrR, XdrW};
 use crate::Error;
 
+/// MIT `iprop_get_updates_1_svc` (`ipropd_svc.c:191-200`): a caller who fails the iprop ACL gets permission denied and no entries.
+/// The null procedure skips that check, and an incremental update that carries keys is refused when no master key exists rather than sending those keys in the clear.
 pub(super) fn dispatch_iprop(
     store: &SharedStore,
     acl: &Acl,
@@ -242,6 +244,8 @@ fn encode_incr_update(
     w.u32(0);
 }
 
+/// MIT `ulog_conv_2logentry` (`kdb_convert.c:472-486`): a stored mod-principal is shipped as its own attribute.
+/// This encoder writes that attribute on every entry, using kadmin/admin when the record has none, because omitting it corrupts the replica.
 pub(super) fn encode_kdbe(
     w: &mut XdrW,
     p: &krb5_kdc::Principal,
@@ -283,7 +287,7 @@ pub(super) fn encode_kdbe(
         .collect();
     body.u32(u32::try_from(comps.len()).unwrap_or(0));
     for c in &comps {
-        // MIT `KV5M_DATA` (`krb5_data.magic`).
+        // KV5M_DATA (`krb5_data.magic`).
         body.u32((-1_760_647_422i32).cast_unsigned());
         encode_utf8str(&mut body, c);
     }
@@ -380,7 +384,7 @@ pub(super) fn encode_fullresync(last: u32) -> Vec<u8> {
 /// Outcome of [`iprop_pull`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IpropPull {
-    /// MIT `update_status_t`.
+    /// update_status_t.
     pub status: u32,
     /// `kdb_last_t.last_sno` from the reply.
     pub last_sno: u32,
@@ -394,7 +398,7 @@ pub struct IpropPull {
 
 /// Replica cursor passed to `IPROP_GET_UPDATES`.
 ///
-/// MIT `kdb_last_t` (`include/iprop.h:176-180`): the serial number and
+/// kdb_last_t (`include/iprop.h`): the serial number and
 /// the timestamp's seconds and microseconds.
 #[derive(Clone, Copy)]
 pub struct IpropLast {
@@ -406,11 +410,11 @@ pub struct IpropLast {
     pub last_usec: u32,
 }
 
-/// RPCSEC_GSS IPROP_GET_UPDATES against MIT `kadmind` (program 100423).
+/// RPCSEC_GSS IPROP_GET_UPDATES against kadmind (program 100423).
 ///
 /// # Errors
 ///
-/// GSS, RPC, XDR, or crypto failures.
+/// Context, RPC, decode, or a key failure.
 pub fn iprop_pull(
     stream: &mut TcpStream,
     ticket: Ticket,
@@ -464,7 +468,7 @@ pub fn iprop_pull(
 ///
 /// # Errors
 ///
-/// GSS, RPC, XDR, or crypto failures.
+/// Context, RPC, decode, or a key failure.
 pub fn iprop_fullresync(
     stream: &mut TcpStream,
     ticket: Ticket,
@@ -495,6 +499,8 @@ pub fn iprop_fullresync(
     r.u32()
 }
 
+/// MIT `authgss_validate` (`auth_gss.c:369-389`): the init verifier is a MIC of the sequence window, and a bad MIC is not success.
+/// A non-zero GSS major status is not a context, and the AP-REP is processed only after that status is zero.
 fn rpcsec_init(
     stream: &mut TcpStream,
     ctx: &mut GssContext,
@@ -560,6 +566,8 @@ fn rpcsec_init(
     Ok(handle)
 }
 
+/// MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:239-256`): a privacy reply that is not sealed, or whose sequence does not match, is not the arguments.
+/// The wrapped body is the sequence number followed by the arguments, so a reply that omits that prefix is rejected.
 #[expect(clippy::too_many_arguments, reason = "xid is advanced inside the body")]
 fn rpcsec_data(
     stream: &mut TcpStream,
@@ -590,7 +598,7 @@ fn rpcsec_data(
     let mic = ctx
         .get_mic(&header.b)
         .map_err(|e| Error::Inner(format!("rpcsec mic: {e}")))?;
-    // MIT `xdr_rpc_gss_wrap_data`: gss_wrap(xdr_u_int32(seq) || args).
+    // MIT `xdr_rpc_gss_wrap_data` (`authgss_prot.c:130-182`): gss_wrap(xdr_u_int32(seq) || args).
     // libgssrpc unwraps RRC=0 (same as the acceptor path above).
     let mut inner = Vec::with_capacity(4 + args.len());
     inner.extend_from_slice(&seq.to_be_bytes());
@@ -698,6 +706,8 @@ fn decode_incr_update(
     })
 }
 
+/// MIT `ulog_conv_2dbentry` (`kdb_convert.c:725-731`): the mod-principal attribute is a principal, not an opaque blob.
+/// An unrecognized attribute is consumed as one opaque value so later attributes stay aligned, and a zero-length update is not a principal.
 pub(super) fn decode_kdbe(
     r: &mut XdrR<'_>,
     mkey: Option<&ProtocolKey>,
@@ -849,6 +859,8 @@ fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), Error> {
     krb5_types::principal_from_unparsed(s, "").map_err(|e| Error::Inner(e.to_string()))
 }
 
+/// MIT `krb5_dbe_def_decrypt_key_data` (`decrypt_key.c:91-93`): a master-key decrypt failure is not a usable key.
+/// An etype this build does not know, or a plaintext of the wrong length, is omitted and the other keys in the entry are kept.
 fn decode_keydata(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<Vec<KeyEntry>, Error> {
     let n = r.u32()? as usize;
     let mut keys = Vec::with_capacity(n.min(16));

@@ -1,8 +1,8 @@
-//! W1-Z Z1b.2: `kinit`'s expired-password flow runs in MIT's order
-//! (`lib/krb5/krb/gic_pwd.c:205-240`): a typed `KDC_ERR_KEY_EXP` → the
+//! `kinit`'s expired-password flow runs in MIT's order
+//! (`lib/krb5/krb/gic_pwd.c`): a typed `KDC_ERR_KEY_EXP` → the
 //! `kadmin/changepw` AS *first*, with the password just typed → only then the
 //! `Enter new password` prompts. So a wrong password on an expired principal
-//! is the password failure and never prompts (`kinit.c:785-790` "Password
+//! MIT `k5_kinit` (`kinit.c:785-790`): is the password failure and never prompts "Password
 //! incorrect while getting initial credentials"), and a changepw AS that
 //! fails for any other reason is that error, unprompted. Drives the shipped
 //! `krb5-kinit` against an in-process KDC. Compiles at `59c363b`
@@ -65,7 +65,7 @@ fn serve(store: PrincipalStore) -> String {
 
 /// `user` set `+needchange` (`KDB_REQUIRES_PWCHANGE`): every AS but the one
 /// for `kadmin/changepw` is KEY_EXP 23 "REQUIRED PWCHANGE"
-/// (`kdc_util.c:762-766`).
+/// MIT `validate_as_request` (`kdc_util.c:762-766`): same check.
 fn expired_user_store() -> PrincipalStore {
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -165,7 +165,7 @@ fn wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
     // MIT's harness principals carry no REQUIRES_PRE_AUTH: the changepw AS
     // with a wrong password is answered with an AS-REP the client cannot
     // verify — `krb5_kdc_rep_decrypt_proc` → `KRB5KRB_AP_ERR_BAD_INTEGRITY`
-    // (31), which `kinit.c:787` also reports as `Password incorrect`.
+    // MIT `k5_kinit` (`kinit.c:787-787`): (31), which also reports as `Password incorrect`.
     let mut store = expired_user_store();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let attrs = store.get_name(&user).unwrap().attributes & !KDB_REQUIRES_PRE_AUTH;

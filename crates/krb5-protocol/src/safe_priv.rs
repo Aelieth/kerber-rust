@@ -1,4 +1,8 @@
 //! KRB-SAFE, KRB-PRIV, and KRB-CRED (RFC 4120 §5.6–5.8).
+//!
+//! SAFE and PRIV sequence numbers come from a process-global counter.
+//! A repeat is rejected by the replay cache, not by handing the same
+//! sequence out twice on purpose.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -39,18 +43,18 @@ fn local_addr() -> HostAddress {
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe, Error> {
     build_krb_safe_ex(session, user_data, Some(take_seq(&NEXT_SAFE_SEQ)), true)
 }
 
 /// Build a KRB-SAFE with explicit sequence and optional timestamp.
 ///
-/// MIT `kprop` sets `KRB5_AUTH_CONTEXT_DO_SEQUENCE` only (no `DO_TIME`).
+/// kprop sets `KRB5_AUTH_CONTEXT_DO_SEQUENCE` only (no `DO_TIME`).
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_safe_ex(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -78,7 +82,7 @@ pub fn build_krb_safe_ex(
     };
     let body_der = encode(&body)?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
-    // MIT `create_krbsafe` (`mk_safe.c:68-80`) checksums the full KRB-SAFE with a
+    // MIT `create_krbsafe` (`mk_safe.c:68-80`): checksums the full KRB-SAFE with a
     // zero checksum spliced in — the verifier's primary branch (`rd_safe.c`);
     // body-only was accepted only via the RFC 1510 fallback.
     let dummy = encode_safe_with_body(
@@ -103,7 +107,7 @@ pub fn build_krb_safe_ex(
 ///
 /// # Errors
 ///
-/// Integrity, window, replay, or DER failures.
+/// Integrity, window, replay, or encode.
 pub fn unwrap_krb_safe(
     session: &ProtocolKey,
     raw: &[u8],
@@ -116,7 +120,7 @@ pub fn unwrap_krb_safe(
 ///
 /// # Errors
 ///
-/// Integrity, window, replay, or DER failures.
+/// Integrity, window, replay, or encode.
 pub fn unwrap_krb_safe_ex(
     session: &ProtocolKey,
     raw: &[u8],
@@ -145,11 +149,11 @@ enum FreshPolicy {
     TimeOnly,
     /// MIT kpasswd: seq 0 and missing timestamp are legal.
     HashOnly,
-    /// MIT `kprop` (`DO_SEQUENCE` only): seq required, timestamp optional.
+    /// kprop (`DO_SEQUENCE` only): seq required, timestamp optional.
     SeqOnly,
 }
 
-/// MIT `rd_safe.c:43-125`: APPLICATION 20, saved body DER, addrs, dummy, body fallback.
+/// MIT `read_krbsafe` (`rd_safe.c:44-125`): APPLICATION 20, saved body DER, addrs, dummy, body fallback.
 ///
 /// # Errors
 ///
@@ -207,7 +211,7 @@ pub fn verify_krb_safe_checksum(
     })
 }
 
-/// MIT `k5_privsafe_check_addrs` (`privsafe.c:312-382`).
+/// MIT `k5_privsafe_check_addrs` (`privsafe.c:312-382`): same check.
 ///
 /// # Errors
 ///
@@ -359,6 +363,8 @@ fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
     }
 }
 
+/// MIT `k5_memrcache_store` (`memrcache.c:136-139`): a tag already stored is a replay and is not accepted again.
+/// A timestamp more than 300 seconds from now is not fresh, and a required sequence of zero is not a sequence.
 fn accept_fresh(
     replay: &ReplayCache,
     kind: &str,
@@ -408,7 +414,7 @@ fn accept_fresh(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv, Error> {
     build_krb_priv_with_seq(session, user_data, Some(take_seq(&NEXT_PRIV_SEQ)))
 }
@@ -421,7 +427,7 @@ pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_priv_with_seq(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -431,11 +437,11 @@ pub fn build_krb_priv_with_seq(
     build_krb_priv_chained(session, user_data, seq_number, true, &mut state)
 }
 
-/// Build a KRB-PRIV with cipher-state chaining (MIT `auth_con_initivector`).
+/// Build a KRB-PRIV with cipher-state chaining (auth_con_initivector).
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_priv_chained(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -482,7 +488,7 @@ pub fn build_krb_priv_chained(
 ///
 /// # Errors
 ///
-/// Crypto, window, replay, or DER failures.
+/// Checksum, window, replay, or encode.
 pub fn unwrap_krb_priv(
     session: &ProtocolKey,
     raw: &[u8],
@@ -493,13 +499,13 @@ pub fn unwrap_krb_priv(
 
 /// Decrypt a KRB-PRIV.
 ///
-/// MIT `kpasswd` (`krb5int_mk_chpw_req`) sets `DO_SEQUENCE` only, clearing
+/// kpasswd (`krb5int_mk_chpw_req`) sets `DO_SEQUENCE` only, clearing
 /// `DO_TIME`, so the request KRB-PRIV often has seq 0 and no timestamp.
 /// Pass `require_seq`/`require_time` false on that path.
 ///
 /// # Errors
 ///
-/// Crypto, window, replay, or DER failures.
+/// Checksum, window, replay, or encode.
 pub fn unwrap_krb_priv_ex(
     session: &ProtocolKey,
     raw: &[u8],
@@ -515,7 +521,7 @@ pub fn unwrap_krb_priv_ex(
 ///
 /// # Errors
 ///
-/// Crypto, window, replay, or DER failures.
+/// Checksum, window, replay, or encode.
 pub fn unwrap_krb_priv_chained(
     session: &ProtocolKey,
     raw: &[u8],
@@ -544,7 +550,7 @@ pub fn unwrap_krb_priv_chained(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_cred(
     session: &ProtocolKey,
     tickets: Vec<Ticket>,
@@ -580,7 +586,7 @@ pub fn build_krb_cred(
 ///
 /// # Errors
 ///
-/// Crypto, window, replay, or DER failures.
+/// Checksum, window, replay, or encode.
 pub fn unwrap_krb_cred(
     session: &ProtocolKey,
     raw: &[u8],

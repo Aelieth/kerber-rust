@@ -1,53 +1,53 @@
-//! A′-3 item 15: hint-list order, EC outside FAST, enc_padata PAC-OPTIONS.
+//! hint-list order, EC outside FAST, enc_padata PAC-OPTIONS.
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
 //! AS e_data-bearing errors carry PA-FX-COOKIE; PKINIT 65 is TYPED-DATA
-//! (`do_as_req.c:785-814`, `pkinit_srv.c:932`); FAST inner FX-ERROR has no
-//! e_data (`fast_util.c:384-386`).
-//! Z1.4: every KDC long-term key lookup is MIT `krb5_dbe_find_enctype`
-//! (`kdb_default.c:47-94`), which never returns a key whose enctype is outside
+//! MIT `prepare_error_as` (`do_as_req.c:785-814`): `pkinit_srv.c`); FAST inner FX-ERROR has no
+//! MIT `kdc_fast_handle_error` (`fast_util.c:384-386`): e_data.
+//! MIT `krb5_dbe_find_enctype` (`kdb5.c:1452-1459`): every KDC long-term key lookup is
+//! MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:48-94`): which never returns a key whose enctype is outside
 //! `permitted_enctypes` and, for the AS client key, looks only at the highest
 //! kvno. Compiles at the parent `77d8a48` and fails there: `first_current_key`
 //! / `key_for` took the first stored key regardless of `permitted_enctypes`
 //! and `key_for` reached down to older kvnos.
-//! W1-Z Z1b.3 follow-up: AS client/server lookup faults are labelled like
-//! MIT `do_as_req.c:577-607` — `CANTLOCK_DB` is 29 `SVC_UNAVAILABLE` on
+//! AS client/server lookup faults are labelled like
+//! MIT `process_as_req` (`do_as_req.c:577-607`): MIT — `CANTLOCK_DB` is 29 `SVC_UNAVAILABLE` on
 //! either lookup **with** the lookup's status word (`LOOKING_UP_CLIENT` /
-//! `LOOKING_UP_SERVER`; Z6.3), any other backend fault is 60 with the same
+//! `LOOKING_UP_SERVER`), any other backend fault is 60 with the same
 //! words. No in-tree store fails a lookup; a `PrincipalRead` wrapper stands
 //! in for a backend that does. Compiles at `7a44ef8` (parent-red): the
 //! parent labelled a server-lookup fault `LOOKING_UP_CLIENT` (the catch-all
-//! arm). The CANTLOCK e_text half was wrong until Z6.3 (`z6_lookup.rs`).
-//! W1-Z Z1b.3 follow-up: MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`)
+//! arm). The CANTLOCK `e_text` matches MIT (`z6_lookup.rs`).
+//! MIT `filter_preauth_error` (`kdc_preauth.c:1093-1133`): same check.
 //! at the kdcpreauth module boundary (`finish_check_padata` `:1206`). A module
 //! failure whose code is not on the pass-through list reaches the client as
 //! 24 `PREAUTH_FAILED`, under the `PREAUTH_FAILED` status `finish_preauth`
-//! sets for every module failure (`do_as_req.c:442`). Compiles at `7a44ef8`
+//! MIT `finish_preauth` (`do_as_req.c:442-442`): sets for every module failure. Compiles at `7a44ef8`
 //! (parent-red): the parent put each module's own code on the wire — 60 for
 //! both cells here — and CI 550-552 were red on `differential-gate.sh`
 //! `as-optimistic-encts-wrong-etype` because of the first one.
-//! W1-Z Z1b.3: the KRB-ERROR encoder applies MIT `errcode_to_protocol`
-//! (`kdc_util.c:691-697`, called at `do_as_req.c:804` / `do_tgs_req.c:199`):
+//! MIT `errcode_to_protocol` (`kdc_util.c:692-698`): the KRB-ERROR encoder applies
+//! MIT `errcode_to_protocol` (`kdc_util.c:692-697`): called at `do_as_req.c` / `do_tgs_req.c`)
 //! only 0..=128 is a protocol error-code, anything else goes out as
 //! `KRB_ERR_GENERIC` 60. Reachable only through a `KdcPolicy` handing back a
 //! raw code (no in-tree path does). Compiles at `59c363b` (parent-red): the
 //! parent put the raw code on the wire.
-//! Z6.2: ENC-TS (2) / ENC-CHALLENGE (138) are advertised only when
-//! `have_client_keys` (`kdc_preauth.c:434-447`) is true — a permitted key of
+//! ENC-TS (2) / ENC-CHALLENGE (138) are advertised only when
+//! MIT `have_client_keys` (`kdc_preauth.c:435-447`): `have_client_keys` is true — a permitted key of
 //! a requested etype at the top kvno. SPAKE (151) uses the same condition
-//! via `client_keyblock` (`spake_kdc.c:309-314`). Compiles at the parent
+//! MIT `spake_edata` (`spake_kdc.c:309-314`): via `client_keyblock`. Compiles at the parent
 //! and fails there: EncTsMod advertised 2 whenever armor was absent,
 //! EncChallengeMod advertised 138 whenever the client had any key, SpakeMod
 //! advertised 151 whenever groups were configured, and a preauth-required
 //! client with no selected key was 14 `CANT_FIND_CLIENT_KEY` instead of 25.
-//! Z6.3: AS lookup `CANTLOCK_DB` is 29 with MIT's status word
-//! (`do_as_req.c:579-590`, `:598-606`: remap to `SVC_UNAVAILABLE`, **then**
+//! AS lookup `CANTLOCK_DB` is 29 with MIT's status word
+//! MIT `process_as_req` (`do_as_req.c:579-590`): `:598-606`: remap to `SVC_UNAVAILABLE`, **then**
 //! `LOOKING_UP_CLIENT` / `LOOKING_UP_SERVER`), and `KRB5KDC_ERR_DISCARD`
 //! from a kdcpreauth module is passed through `filter_preauth_error`
-//! (`kdc_preauth.c:1125`) and suppresses the reply (`do_as_req.c:371-372`).
+//! MIT `filter_preauth_error` (`kdc_preauth.c:1125-1125`): and suppresses the reply (`do_as_req.c`).
 //! Compiles at the parent: CANTLOCK was 29 with no e_text, and DISCARD was
 //! rewritten to 24 `PREAUTH_FAILED`. Forge-only — no lockable KDB in tree.
 
@@ -559,7 +559,7 @@ fn as_enc_timestamp_wrong_etype_is_preauth_failed_like_mit() {
 
 #[test]
 fn as_preauth_failed_carries_the_hint_list_like_mit() {
-    // MIT finish_preauth (do_as_req.c:443-447) attaches the get_preauth_hint_list
+    // MIT `finish_preauth` (`do_as_req.c:443-447`): attaches the get_preauth_hint_list
     // e_data to a PREAUTH_FAILED (24) so the client can retry with the right
     // salt/etype.
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -612,7 +612,7 @@ fn preauth_required_hint_lists_one_etype_info2_entry_like_mit() {
 #[test]
 fn as_rep_enc_part_carries_no_kvno_like_mit() {
     // MIT sets reply.enc_part.kvno only after krb5_encode_kdc_rep, so the wire
-    // AS-REP enc-part has no kvno (do_as_req.c:329).
+    // MIT `finish_process_as_req` (`do_as_req.c:329-329`): AS-REP enc-part has no kvno.
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     // A no-preauth AS keeps skip_timestamp false, so it exercises the reply kvno.
@@ -1356,7 +1356,7 @@ fn as_lookup_faults_are_labelled_like_do_as_req() {
         (err::GENERIC, Some("LOOKING_UP_SERVER".into()))
     );
     // :579-590, :598-606 — CANTLOCK_DB is remapped to 29, then the
-    // `else if (errcode)` chain sets the lookup status (Z6.3).
+    // `else if (errcode)` chain sets the lookup status.
     assert_eq!(
         as_error(&client_id, cantlock),
         (err::SVC_UNAVAILABLE, Some("LOOKING_UP_CLIENT".into()))

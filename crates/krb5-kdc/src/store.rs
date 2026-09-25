@@ -109,6 +109,7 @@ pub(crate) fn unix_now_u32() -> u32 {
 
 impl PrincipalStore {
     /// Empty store for `realm`.
+    /// A failed CSPRNG aborts the process instead of minting a domain SID.
     #[must_use]
     pub fn new(realm: impl Into<String>) -> Self {
         Self {
@@ -140,7 +141,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// Persist load failures.
+    /// The store file could not be loaded.
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
         let Some((db, stash)) = self.persist_paths.clone() else {
             return Ok(());
@@ -250,7 +251,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// Returns crypto failures from string-to-key.
+    /// String-to-key was refused.
     pub fn bootstrap(
         realm: &str,
         user: &str,
@@ -341,7 +342,7 @@ impl PrincipalStore {
         self.get_in_realm(name, &self.realm)
     }
 
-    /// Lookup `name@princ_realm` (MIT `kdb_get_entry` uses the request realm).
+    /// MIT `kdb_get_entry` (`server_kdb.c:257-309`): Lookup `name@princ_realm` ( uses the request realm).
     #[must_use]
     pub fn get_in_realm(&self, name: &PrincipalName, princ_realm: &str) -> Option<&Principal> {
         self.get(&crate::kdb::lookup_principal_id(name, princ_realm))

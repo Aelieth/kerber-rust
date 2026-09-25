@@ -1,4 +1,4 @@
-//! A′-4 item 19 HEAD-only: TestPolicy, profile `supported_enctypes`, TGS key_exp.
+//! TestPolicy, profile `supported_enctypes`, and TGS key expiry.
 
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{KeyUsage, decrypt};

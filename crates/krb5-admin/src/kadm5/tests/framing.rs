@@ -4,7 +4,7 @@ use super::*;
 
 #[test]
 fn read_record_bounds_the_total_accumulated_size() {
-    // R2-S3: a pre-auth client that chains fragments without ever setting
+    // a pre-auth client that chains fragments without ever setting
     // LAST_FRAG must not accumulate unbounded memory. Two 600 KiB non-last
     // fragments sum to 1.2 MiB, over the 1 MiB total cap, so read_record
     // errors on the second fragment (parent: no total cap -> it waits for

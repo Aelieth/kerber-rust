@@ -79,9 +79,9 @@ impl KdcPreauth for DemoPreauth {
     }
 }
 
-/// MIT greet_server AD type (`greet_auth.c:55`).
+/// MIT `greet_kdc_sign` (`greet_auth.c:55-55`): MIT greet_server AD type.
 pub const GREET_AD_TYPE: i32 = -42;
-/// MIT greet_server greeting (`greet_auth.c:38`).
+/// MIT `greet_hello` (`greet_auth.c:38-38`): MIT greet_server greeting.
 pub const GREET_TEXT: &[u8] = b"Hello, KDC issued acceptor world!";
 
 /// Test / deploy greet module. Production loads none unless `KERBER_KDC_GREET=1`.

@@ -35,6 +35,8 @@ pub struct DelegCred {
     pub renew_till: Option<KerberosTime>,
 }
 
+/// MIT `krb5_mk_1cred` (`mk_cred.c:221-224`): a failure to allocate the credential list emits no credential.
+/// The encrypted part names krbtgt in the client realm, not the acceptor's service.
 pub(super) fn krb_cred_for_deleg(
     ticket_session: &ProtocolKey,
     deleg: &DelegCred,
@@ -83,6 +85,8 @@ pub(super) fn krb_cred_for_deleg(
     Ok(encode(&cred)?)
 }
 
+/// MIT `krb5_rd_cred` (`rd_cred.c:165-167`): a credential that does not decrypt is not a credential list.
+/// The delegation flag clear means there is no credential, and a trailer longer than the checksum is not one.
 pub(super) fn extract_delegated(
     cksum: &[u8],
     flags: u32,

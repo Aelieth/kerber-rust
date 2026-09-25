@@ -1,6 +1,6 @@
-//! W1-C C1: MIT built-in password-quality modules (`dict`, `empty`, `princ`)
+//! MIT built-in password-quality modules (`dict`, `empty`, `princ`)
 //! on create and on change. Compiles at `370461b` (parent-red).
-//! Round-up R1: MIT 1.22.2 password history as the oracle. The fixture
+//! MIT 1.22.2 password history as the oracle. The fixture
 //! `tests/traces/kdb/mit-dump-v7-history.txt` is a `kdb5_util dump` after
 //! `addpol -history 3 hp`, `addprinc -pw s3cret1 -policy hp hpuser`,
 //! `cpw -pw s3cret2`, `cpw -pw s3cret3`: hpuser's `KRB5_TL_KADM_DATA` carries

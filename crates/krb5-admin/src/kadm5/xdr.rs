@@ -8,7 +8,7 @@ use krb5_types::PrincipalName;
 
 use crate::Error;
 
-/// MIT `xdr_krb5_int16` truncates `tl_data_type` before the `< 256` guard.
+/// MIT `xdr_krb5_int16` (`kadm_rpc_xdr.c:183-195`): truncates `tl_data_type` before the `< 256` guard.
 #[allow(clippy::cast_possible_truncation)]
 pub(super) fn xdr_tl_type(wire: u32) -> i32 {
     i32::from(wire as i16)

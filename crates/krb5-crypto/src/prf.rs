@@ -1,4 +1,7 @@
 //! RFC 3961 §5.3 PRF and RFC 6113 PRF+.
+//!
+//! PRF is one block for the key's etype. PRF+ concatenates until the
+//! requested length is met, and zeroizes the counter block it built.
 
 use sha1::{Digest, Sha1};
 use zeroize::Zeroize;
@@ -68,16 +71,16 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
 ///
 /// # Errors
 ///
-/// PRF or key-length failures.
+/// Bad length or [`Error::InvalidParams`].
 pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Error> {
     derive_prfplus_enctype(key, input, key.etype())
 }
 
-/// MIT `krb5_c_derive_prfplus` with an explicit output enctype (`cf2.c:93`).
+/// MIT `krb5_c_derive_prfplus` (`cf2.c:93-93`): with an explicit output enctype.
 ///
 /// # Errors
 ///
-/// PRF or key-length failures.
+/// Bad length or [`Error::InvalidParams`].
 pub fn derive_prfplus_enctype(
     key: &ProtocolKey,
     input: &[u8],

@@ -28,7 +28,7 @@ pub(super) fn permitted_transited(
     hierarchical_intermediates(crealm, srealm)
 }
 
-/// MIT `krb5_walk_realm_tree` instance list (`walk_rtree.c`): local, hops, dest.
+/// MIT `krb5_walk_realm_tree` (`walk_rtree.c:96-121`): instance list : local, hops, dest.
 pub(crate) fn walk_realm_instances(
     capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
     client: &str,
@@ -181,6 +181,8 @@ impl PrincipalStore {
         self.put_incoming_trust_key(acl, actor, foreign_realm, key, true)
     }
 
+    /// MIT `create_principal_2_svc` (`server_stubs.c:477-485`): an ACL denial does not create the principal.
+    /// Replacing the trust key drops the previous versions, and adding one uses the next kvno rather than reusing the current one.
     fn put_incoming_trust_key(
         &mut self,
         acl: &Acl,

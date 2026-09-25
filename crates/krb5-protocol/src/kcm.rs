@@ -5,8 +5,8 @@
 //! bytes starting with another status. sssd-kcm 2.11/2.12 implements
 //! GET_CRED_LIST; RETRIEVE and REPLACE return FCC_INTERNAL.
 //! Empty-residual `kinit -c KCM:` re-INITIALIZEs the collection default
-//! (same as MIT `kinit`). A second principal uses GEN_NEW (kcm-gate)
-//! rather than MIT `krb5_cc_new_unique` on a plain `KCM:` residual.
+//! MIT `kinit` (`t_kadm5.c:247-260`): (same as ). A second principal uses GEN_NEW (kcm-gate)
+//! MIT `krb5_cc_new_unique` (`ccbase.c:290-307`): rather than on a plain `KCM:` residual.
 
 use std::env;
 use std::io::{self, Read, Write};
@@ -43,7 +43,7 @@ const KRB5_CC_IO: i32 = -1_765_328_183;
 const KRB5_FCC_INTERNAL: i32 = -1_765_328_188;
 const KRB5_FCC_NOFILE: i32 = -1_765_328_189;
 
-/// Default Heimdal/sssd-kcm socket (MIT `DEFAULT_KCM_SOCKET_PATH`).
+/// Default Heimdal/sssd-kcm socket (DEFAULT_KCM_SOCKET_PATH).
 pub const KCM_SOCKET_DEFAULT: &str = "/var/run/.heim_org.h5l.kcm-socket";
 
 struct KcmIo {
@@ -377,7 +377,7 @@ pub fn kcm_destroy(residual: &str) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// Daemon I/O.
+/// The KCM socket failed.
 pub fn kcm_switch(residual: &str) -> io::Result<()> {
     if residual.is_empty() {
         return Err(io::Error::new(
@@ -393,7 +393,7 @@ pub fn kcm_switch(residual: &str) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// Daemon I/O.
+/// The KCM socket failed.
 pub fn kcm_cache_names() -> io::Result<Vec<String>> {
     let mut io = KcmIo::connect()?;
     let uuids = match io.call(OP_GET_CACHE_UUID_LIST, &[]) {

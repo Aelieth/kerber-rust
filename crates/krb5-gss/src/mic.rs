@@ -1,4 +1,8 @@
 //! MIC tokens (`verify_mic.c`, `k5seal.c`).
+//!
+//! A MIC is token id `0x0404`. Verify rejects a bad direction or a bad
+//! checksum before it consumes the sequence. The send sequence
+//! increments only after the token is built.
 
 use krb5_crypto::{checksum, verify_checksum_type};
 
@@ -24,7 +28,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Crypto failures.
+    /// The checksum could not be built.
     pub fn get_mic(&mut self, data: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = sign_usage(self.initiator);
         let header = mic_header(self.initiator, self.send_seq);

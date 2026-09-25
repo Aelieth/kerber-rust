@@ -1,6 +1,6 @@
-//! Round-up R1: `kinit` records `fast_avail` and the selected `pa_type` as
+//! `kinit` records `fast_avail` and the selected `pa_type` as
 //! ccache config entries keyed by the TGT's server, like MIT
-//! `write_out_ccache` (`get_in_tkt.c:1617-1640`, `save_selected_preauth_type`).
+//! MIT `write_out_ccache` (`get_in_tkt.c:1617-1640`): `write_out_ccache`, `save_selected_preauth_type`.
 
 #[path = "common/mod.rs"]
 mod common;

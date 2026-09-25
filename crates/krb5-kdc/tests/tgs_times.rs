@@ -1,10 +1,10 @@
-//! A′-3 item 12: `check_tgs_svc_reqd_flags` PRE_AUTH + `compute_ticket_times`.
-//! A′-3 R26: `max_renewable_life` 0, AS `PRE_AUTHENT`, `check_tgs_opts` order.
-//! A′-3 R27: S4U `t->client`, signed `ts_delta`, `check_tgs_svc_time` slot.
+//! `check_tgs_svc_reqd_flags` PRE_AUTH + `compute_ticket_times`.
+//! `max_renewable_life` 0, AS `PRE_AUTHENT`, `check_tgs_opts` order.
+//! S4U `t->client`, signed `ts_delta`, `check_tgs_svc_time` slot.
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! Z1.3 follow-up: the KDC's header-ticket time check is `krb5int_validate_times`
+//! the KDC's header-ticket time check is `krb5int_validate_times`
 //! too (`kdc_util.c` `kdc_rd_ap_req` → `krb5_rd_req_decoded_anyflag` →
-//! `rd_req_dec.c:627` → `valid_times.c:44-51`): a TGT with no `starttime` is
+//! MIT `rd_req_decoded_opt` (`rd_req_dec.c:627-627`): → `valid_times.c`): a TGT with no `starttime` is
 //! judged by its `authtime`. Compiles at the parent `284ec70` and fails there —
 //! `check_header_times_rd_req` only tested NYV when `starttime` was present, so
 //! a resealed TGT with a future `authtime` and no `starttime` was accepted.
@@ -770,7 +770,7 @@ fn tgs_renew_after_endtime_is_process_tgs() {
     );
     let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 96)).unwrap_err();
     // MIT reports an expired header ticket at the rd_req stage: code 32 with
-    // e_text PROCESS_TGS (do_tgs_req.c:623), not TKT_EXPIRED.
+    // MIT `gather_tgs_req_info` (`do_tgs_req.c:623-623`): e_text PROCESS_TGS, not TKT_EXPIRED.
     match err {
         Error::Protocol { code, text, .. } => {
             assert_eq!(code, err::TKT_EXPIRED);
@@ -927,7 +927,7 @@ fn tgs_header_tgt_without_starttime_and_future_authtime_is_nyv() {
     .unwrap();
     krb5_kdc::issue_tgs(&store, &ok_req).expect("control TGS issues");
 
-    // valid_times.c:44-46 starttime == 0 → authtime; :47-51 far-future → NYV.
+    // MIT `krb5int_validate_times` (`valid_times.c:44-46`): starttime == 0 → authtime; :47-51 far-future → NYV.
     let far = KerberosTime::now()
         .add_seconds(store.policy().skew + 3600)
         .unwrap();

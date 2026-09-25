@@ -133,14 +133,14 @@ fn main() {
     let rcache = ReplayCache::new();
     // MIT drives kadmind through the same net-server as the KDC: cap concurrent
     // connections and evict the oldest over the cap (kill_lru_stream_connection)
-    // rather than spawning unbounded threads (R2-S3).
+    // rather than spawning unbounded threads.
     let registry = krb5_kdc::ConnRegistry::new(krb5_kdc::MAX_TCP_WORKERS);
     loop {
         let accepted = listener.accept();
         match accepted {
             Ok((stream, _)) => {
                 // A write timeout bounds a slow-reading client that would
-                // otherwise pin a worker in write_all (R2-S3). No short read
+                // otherwise pin a worker in write_all. No short read
                 // timeout: MIT's net-server sets none on established kadmind
                 // connections (SO_KEEPALIVE only) and defends slow-loris with
                 // the connection cap + LRU eviction above; a 5 s read timeout
@@ -161,7 +161,9 @@ fn main() {
                 let rcache = rcache.clone();
                 thread::spawn(move || {
                     let _guard = krb5_kdc::ConnGuard(registry_g, seq);
-                    let _ = serve_kadm5_conn(store, acl, keys, realm, rcache, stream);
+                    if let Err(e) = serve_kadm5_conn(store, acl, keys, realm, rcache, stream) {
+                        eprintln!("kadm5: {e}");
+                    }
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {

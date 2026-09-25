@@ -630,7 +630,7 @@ fn parse_authpack_accepts_spki_sequence() {
 
 #[test]
 fn typed_data_uses_rfc6113_tags_not_padata() {
-    // MIT encode_krb5_typed_data (asn1_k_encode.c:1547-1556): [0] Int32, [1] OCTET STRING.
+    // MIT encode_krb5_typed_data (asn1_k_encode.c): [0] Int32, [1] OCTET STRING.
     let td: crate::TypedDataList = vec![crate::TypedData {
         data_type: 13,
         data_value: b"pa-data".to_vec().into(),

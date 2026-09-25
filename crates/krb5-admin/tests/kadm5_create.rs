@@ -1,11 +1,11 @@
-//! W1-Z Z1.1: `kadm5_create_principal_3` applies the `kadm5_principal_ent_rec`
-//! fields under the request mask (`svr_principal.c:376-420`) and the ACL
+//! `kadm5_create_principal_3` applies the `kadm5_principal_ent_rec`
+//! MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): fields under the request mask and the ACL
 //! restrictions are imposed on the *request* before the create/modify runs
-//! (`kadmin/server/auth.c:205-272` `impose_restrictions`, called from
-//! `server_stubs.c:478,519,630` `stub_auth_restrict`). Compiles at `b50d6bf`
+//! MIT `impose_restrictions` (`auth.c:206-265`): (`kadmin/server/ `impose_restrictions`, called from
+//! MIT `create_principal_2_svc` (`server_stubs.c:478-478`): `stub_auth_restrict`. Compiles at `b50d6bf`
 //! (parent-red): every assertion here is on the stored entry through the RPC
 //! path, which the parent accepted while silently dropping the fields.
-//! R9 green-only: create reserved TL (already at Round 2 parent) + dump TL width.
+//! Create reserved TL (already covered) and the dump TL width.
 
 #[path = "common/mod.rs"]
 mod common;

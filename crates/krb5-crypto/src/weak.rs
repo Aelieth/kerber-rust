@@ -1,4 +1,8 @@
 //! Legacy / AD enctypes (16, 23, 25, 26) used only when `allow_weak_crypto`.
+//!
+//! The etype gate refuses these while the flag is off. This module does
+//! not repeat that check. RC4 string-to-key is MD4 of the UTF-16LE
+//! password.
 
 use des::TdesEde3;
 use des::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
@@ -84,7 +88,7 @@ fn hmac_md5(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-/// MIT `enc_rc4.c:17-35` `krb5int_arcfour_translate_usage`.
+/// MIT `krb5int_arcfour_translate_usage` (`enc_rc4.c:17-35`): krb5int_arcfour_translate_usage.
 pub(crate) fn arcfour_translate_usage(usage: u32) -> u32 {
     match usage {
         3 => 8,

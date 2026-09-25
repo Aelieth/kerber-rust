@@ -1,4 +1,8 @@
 //! Client builders for FAST, SPAKE, and PKINIT padata.
+//!
+//! These functions build padata. They do not send it. The AS and TGS
+//! exchanges do. A builder that fails returns the error. It does not
+//! emit an empty padata list and continue.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
@@ -19,7 +23,7 @@ use crate::error::Error;
 ///
 /// # Errors
 ///
-/// CF2 failures.
+/// A bad length or a PRF failure.
 pub fn armor_key(
     session: &ProtocolKey,
     subkey: Option<&ProtocolKey>,
@@ -34,7 +38,7 @@ pub fn armor_key(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_fast_armor(
     ticket: Ticket,
     session: &ProtocolKey,
@@ -79,7 +83,7 @@ pub fn build_fast_armor(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn attach_fast(
     req: &mut AsReq,
     armor: &ApReq,
@@ -97,11 +101,11 @@ pub fn attach_fast(
 
 /// [`attach_fast`] with an explicit `FastOptions` (RFC 6113 bit 1
 /// hide-client-names, etc.). The KDC honours hide-client-names by returning
-/// the anonymous principal as the outer reply client (MIT `kdc_fast_hide_client`).
+/// MIT `kdc_fast_hide_client` (`fast_util.c:444-447`): the anonymous principal as the outer reply client.
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn attach_fast_with_options(
     req: &mut AsReq,
     armor: &ApReq,
@@ -116,11 +120,11 @@ pub fn attach_fast_with_options(
     // so the enc-pa-rep negotiation works through the armor too.
     //
     // Outer times stay at the `krb5int_fast_prep_req_body` snapshot
-    // (`get_in_tkt.c:836-838`, `fast.c:157-161`) taken before
-    // `set_request_times` (`get_in_tkt.c:1278-1280`): required `till` is
+    // MIT `restart_init_creds_loop` (`get_in_tkt.c:836-838`): `fast.c`) taken before
+    // MIT `init_creds_step_request` (`get_in_tkt.c:1278-1280`): `set_request_times` : required `till` is
     // epoch (`19700101`); optional `from`/`rtime` stay omitted. The inner
     // FAST-REQ body keeps the live times. `req_checksum` is over the
-    // snapshotted outer body (`fast.c:310-313`).
+    // MIT `krb5int_fast_prep_req` (`fast.c:310-313`): snapshotted outer body.
     let mut inner = inner_padata;
     inner.extend(req.0.padata.take().unwrap_or_default());
     let inner_body = req.0.req_body.clone();
@@ -145,7 +149,7 @@ pub fn attach_fast_with_options(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn fx_fast_padata(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -166,11 +170,11 @@ pub fn fx_fast_padata(
 
 /// [`fx_fast_padata`] with an explicit FAST req_checksum input.
 ///
-/// TGS FAST checksums the PA-TGS-REQ AP-REQ (`fast.c:279`, `send_tgs.c:279`).
+/// MIT `krb5int_fast_prep_req` (`fast.c:279-279`): TGS FAST checksums the PA-TGS-REQ AP-REQ, `send_tgs.c`).
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn fx_fast_padata_over(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -214,7 +218,7 @@ pub fn fx_fast_padata_over(
     })
 }
 
-/// MIT `fast.c:543-551`: verify `KrbFastFinished.ticket_checksum` over the ticket DER.
+/// MIT `krb5int_fast_process_response` (`fast.c:543-551`): verify `KrbFastFinished.ticket_checksum` over the ticket DER.
 ///
 /// # Errors
 ///
@@ -236,7 +240,7 @@ pub fn verify_fast_finished(
     .map_err(|_| Error::ReplyMismatch("Ticket modified in KDC reply".into()))
 }
 
-/// MIT `fast.c:648-664`: PA-REQ-ENC-PA-REP over the AS-REQ when `enc-pa-rep` is set.
+/// MIT `krb5int_fast_verify_nego` (`fast.c:648-664`): PA-REQ-ENC-PA-REP over the AS-REQ when `enc-pa-rep` is set.
 ///
 /// # Errors
 ///
@@ -264,7 +268,7 @@ pub fn verify_req_enc_pa_rep(
 ///
 /// # Errors
 ///
-/// Missing padata, crypto, or DER failures.
+/// Missing padata, key, or encode failure.
 pub fn unwrap_fast_rep(
     armor_key: &ProtocolKey,
     padata: &Option<Vec<PaData>>,
@@ -282,7 +286,7 @@ pub fn unwrap_fast_rep(
     decode(&plain).map_err(Error::from)
 }
 
-/// MIT `fast.c:397-402` `decrypt_fast_reply`: `local_resp->nonce != state->nonce`
+/// MIT `decrypt_fast_reply` (`fast.c:397-402`): decrypt_fast_reply: `local_resp->nonce != state->nonce`
 /// is `KRB5_KDCREP_MODIFIED` ("nonce modified in FAST response").
 ///
 /// # Errors
@@ -306,7 +310,7 @@ pub fn unwrap_fast_rep_checked(
 ///
 /// # Errors
 ///
-/// CF2 or key-length failures.
+/// A bad length or a PRF failure.
 pub fn apply_strengthen(
     strengthen: &EncryptionKey,
     base: &ProtocolKey,
@@ -397,7 +401,7 @@ pub fn pa_spake_response(
 ///
 /// # Errors
 ///
-/// DER failures.
+/// [`Error::Asn1`].
 pub fn pa_pk_as_req(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -415,7 +419,7 @@ pub fn pa_pk_as_req(
 ///
 /// # Errors
 ///
-/// DER or CMS wrap failures.
+/// Encode or CMS wrap failure.
 pub fn pa_pk_as_req_spki(
     spki: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -428,7 +432,7 @@ pub fn pa_pk_as_req_spki(
 ///
 /// # Errors
 ///
-/// DER or CMS wrap failures.
+/// Encode or CMS wrap failure.
 pub fn pa_pk_as_req_cn(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -479,7 +483,7 @@ fn pa_pk_as_req_spki_cn(
 ///
 /// # Errors
 ///
-/// DER or CMS wrap failures.
+/// Encode or CMS wrap failure.
 pub fn pa_pk_as_req_agile(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -520,7 +524,7 @@ pub fn pa_pk_as_req_agile(
 ///
 /// # Errors
 ///
-/// DER or CMS wrap failures.
+/// Encode or CMS wrap failure.
 pub fn pa_pk_as_req_signed(
     client_public: &[u8],
     cert_der: &[u8],
@@ -563,7 +567,7 @@ pub fn pa_pk_as_req_signed(
 ///
 /// # Errors
 ///
-/// DER failures.
+/// [`Error::Asn1`].
 pub fn pa_pk_as_req_unsigned(
     client_public: &[u8],
     nonce: u32,
@@ -704,7 +708,7 @@ pub fn pkinit_reply_key_agile(
 ///
 /// # Errors
 ///
-/// Checksum failures.
+/// [`Error::ReplyMismatch`] or a bad checksum.
 pub fn pa_for_user(
     session: &ProtocolKey,
     user: PrincipalName,
@@ -735,7 +739,7 @@ pub fn pa_for_user(
 ///
 /// # Errors
 ///
-/// Crypto or DER.
+/// An encode failure or a key failure.
 pub fn pa_s4u_x509_user(
     key: &ProtocolKey,
     user: PrincipalName,
@@ -776,7 +780,7 @@ fn s4u_not_newer(etype: EncryptionType) -> bool {
     matches!(etype, EncryptionType::Des3CbcSha1 | EncryptionType::Rc4Hmac)
 }
 
-/// MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`). Missing 130 on
+/// MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): . Missing 130 on
 /// both the (FAST-swapped) reply padata and enc-padata is accepted.
 /// Enc-only 130, a nonce/user/checksum mismatch, or an unkeyed reply
 /// checksum on a modern etype is refused.
@@ -859,7 +863,7 @@ pub fn verify_s4u2self_reply(
 ///
 /// # Errors
 ///
-/// DER encode.
+/// [`Error::Asn1`].
 pub fn pa_pac_options(rbcd: bool) -> Result<PaData, Error> {
     let body = if rbcd {
         krb5_types::s4u::PaPacOptions::rbcd()

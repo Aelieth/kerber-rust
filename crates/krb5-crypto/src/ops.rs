@@ -1,4 +1,8 @@
 //! Public RFC 3961 operations: string-to-key, encrypt, decrypt, checksum.
+//!
+//! A string-to-key iteration count of 0 is refused, and so is a count
+//! above `MAX_ITERATIONS`. On an HMAC mismatch the recovered plaintext
+//! is wiped and the error is `Error::Integrity`.
 
 use std::time::Instant;
 
@@ -63,6 +67,8 @@ pub fn string_to_key(
     result
 }
 
+/// MIT `krb5_c_string_to_key_with_params` (`string_to_key.c:72-75`): a failed derive zaps the key bytes and does not return them.
+/// An iteration count of zero or above five million is refused before any key bytes are produced.
 fn string_to_key_inner(
     etype: EncryptionType,
     password: &[u8],
@@ -254,7 +260,7 @@ fn encrypt_inner(
 ///
 /// # Errors
 ///
-/// Same as [`encrypt`].
+/// [`Error::Rng`] or a refused etype.
 pub fn encrypt_with_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -266,6 +272,8 @@ pub fn encrypt_with_state(
     encrypt_inner_state(key, usage, &conf, plaintext, state)
 }
 
+/// MIT `krb5int_dk_encrypt` (`enc_dk_hmac.c:156-168`): the trailer is the truncated HMAC of the ciphertext, not of the plaintext.
+/// A confounder that is not one block is not encrypted.
 fn encrypt_inner_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -356,7 +364,7 @@ fn decrypt_inner(key: &ProtocolKey, usage: KeyUsage, ciphertext: &[u8]) -> Resul
 ///
 /// # Errors
 ///
-/// Same as [`decrypt`].
+/// [`Error::Integrity`] or short ciphertext.
 pub fn decrypt_with_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -366,6 +374,8 @@ pub fn decrypt_with_state(
     decrypt_inner_state(key, usage, ciphertext, state)
 }
 
+/// MIT `krb5int_dk_decrypt` (`enc_dk_hmac.c:259-261`): a checksum mismatch is an integrity failure.
+/// The recovered plaintext is wiped before that error is returned.
 fn decrypt_inner_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -428,7 +438,7 @@ fn decrypt_inner_state(
 ///
 /// # Errors
 ///
-/// Key-derivation failures.
+/// A refused etype or a bad key length.
 pub fn integrity_mac(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     if !key.etype().is_aes() {
         return Err(Error::UnsupportedEtype(key.etype().to_iana()));
@@ -472,7 +482,7 @@ pub fn decrypt_cts(
 ///
 /// # Errors
 ///
-/// Returns key-derivation errors.
+/// A refused etype or a bad key length.
 pub fn checksum(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
@@ -518,9 +528,9 @@ fn hmac_md5_simple(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
 
 /// RFC 4757 HMAC-MD5-ARCFOUR (`-138`) / MD5-HMAC-ARCFOUR (`-137`).
 ///
-/// MIT `checksum_hmac_md5.c:53-66`: `-138` signs with HMAC(key,
+/// MIT `krb5int_hmacmd5_checksum` (`checksum_hmac_md5.c:53-66`): `-138` signs with HMAC(key
 /// `"signaturekey\0"`); `-137` uses the raw key. Usage map is
-/// `enc_rc4.c:17-35`.
+/// MIT `krb5int_arcfour_translate_usage` (`enc_rc4.c:17-35`): same check.
 ///
 /// # Errors
 ///
@@ -561,7 +571,7 @@ pub fn checksum_output_size(cksumtype: i32) -> Option<usize> {
     }
 }
 
-/// MIT `krb5int_unkeyed_checksum` (`cksumtypes.c` types 2, 7, 9, 14).
+/// MIT `krb5int_unkeyed_checksum` (`checksum_unkeyed.c:30-36`): (`cksumtypes.c` types 2, 7, 9, 14).
 ///
 /// # Errors
 ///
@@ -584,7 +594,7 @@ pub fn unkeyed_checksum(cksumtype: i32, message: &[u8]) -> Result<Vec<u8>, Error
     }
 }
 
-/// MIT `krb5_c_verify_checksum`: table lookup, length, then compute.
+/// MIT `krb5_c_verify_checksum` (`verify_checksum.c:83-98`): table lookup, length, then compute.
 ///
 /// `cksumtype` 0 uses the key's mandatory type.
 ///
@@ -607,7 +617,7 @@ pub fn verify_checksum_type(
     let Some(want) = checksum_output_size(ctype) else {
         return Err(Error::UnsupportedChecksum(ctype));
     };
-    // MIT `krb5_c_verify_checksum_iov` (`verify_checksum.c:53-68`) finds the
+    // MIT `krb5_k_verify_checksum` (`verify_checksum.c:53-68`): krb5_c_verify_checksum_iov finds the
     // cksumtype and runs `verify_key` (the keyed/provider gate) BEFORE checking
     // the length, so an unsupported keyed type is `UnsupportedChecksum` even
     // when the mac length is also wrong.
@@ -622,7 +632,7 @@ pub fn verify_checksum_type(
         return Err(Error::UnsupportedChecksum(ctype));
     }
     // verify_key: keyed type with ctp->enc != NULL requires ktp->enc ==
-    // ctp->enc; ctp->enc == NULL (-138) accepts any key (`crypto_int.h:596-608`).
+    // ctp->enc; ctp->enc == NULL (-138) accepts any key (`crypto_int.h`).
     if !keyed_cksum_accepts_key(ctype, key.etype()) {
         return Err(Error::UnsupportedChecksum(ctype));
     }
@@ -633,7 +643,7 @@ pub fn verify_checksum_type(
     mac_verify(mac, &expected)
 }
 
-/// `krb5_c_is_keyed_cksum` then [`verify_checksum_type`] (`kdc_util.c:1244`, `pac.c:499`).
+/// MIT `verify_for_user_checksum` (`kdc_util.c:1244-1244`): `krb5_c_is_keyed_cksum` then [`verify_checksum_type`], `pac.c`).
 ///
 /// The keyed gate uses the declared type; `cksumtype` 0 is not keyed.
 ///
@@ -655,7 +665,7 @@ pub fn verify_checksum_keyed(
 }
 
 /// `krb5_c_valid_cksumtype` + coll-proof + keyed, then [`verify_checksum_type`]
-/// (`rd_safe.c:66-74`).
+/// MIT `read_krbsafe` (`rd_safe.c:66-74`): same check.
 ///
 /// # Errors
 ///

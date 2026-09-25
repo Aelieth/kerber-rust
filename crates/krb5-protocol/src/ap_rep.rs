@@ -12,7 +12,7 @@ use crate::error::Error;
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_rep(
     session: &ProtocolKey,
     authenticator: &Authenticator,

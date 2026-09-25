@@ -1,9 +1,9 @@
-//! A′-2 item 6 PAC-shape units that need APIs parent `2e5995a` does not export.
-//! RODCIdentifier trailer on the server checksum (MIT `pac.c:557-569`).
+//! PAC shape at issue and verify.
+//! MIT `verify_pac_checksums` (`pac.c:557-569`): RODCIdentifier trailer on the server checksum (MIT.
 //! PAC shape and placement rules MIT 1.22.2 applies at issue and verify time:
-//! `k5_pac_should_have_ticket_signature` (`pac.c:583-592`, `pac_sign.c:239-243`),
-//! `get_verified_pac` for TGS principals (`kdc_util.c:597-602`),
-//! `krb5_pac_parse` (`pac.c:281-317`) and `k5_pac_locate_buffer` (`pac.c:137-147`).
+//! MIT `k5_pac_should_have_ticket_signature` (`pac.c:584-592`): `k5_pac_should_have_ticket_signature`, `pac_sign.c`)
+//! MIT `get_verified_pac` (`kdc_util.c:597-602`): `get_verified_pac` for TGS principals
+//! MIT `krb5_pac_parse` (`pac.c:281-317`): `krb5_pac_parse` and `k5_pac_locate_buffer`.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry

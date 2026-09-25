@@ -1,4 +1,4 @@
-//! MIT `t_vfy_increds`: verify the first non-config ccache cred against a keytab.
+//! t_vfy_increds: verify the first non-config ccache cred against a keytab.
 //!
 //! Usage: `krb5-vfy-increds [-n] [server]`
 

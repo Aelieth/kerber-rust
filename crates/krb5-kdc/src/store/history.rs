@@ -45,7 +45,7 @@ fn resolve_history(p: &mut Principal, hist: Option<&(u32, ProtocolKey)>) {
         .collect();
 }
 
-/// MIT `create_history_entry` + `add_to_history`: the replaced keys of the
+/// MIT `create_history_entry` (`svr_principal.c:1004-1062`): + `add_to_history`: the replaced keys of the
 /// most recent kvno become one history entry under the history key; a history
 /// key newer than the record's resets the ring; `pw_history_num` counts the
 /// current password, so `nhist - 1` entries are kept, oldest dropped first.
@@ -103,14 +103,14 @@ impl PrincipalStore {
         Some((k.kvno, k.key.clone()))
     }
 
-    /// MIT `kdb_get_hist_key` + `create_hist` (`server_kdb.c:140-188`): the
+    /// MIT `kdb_get_hist_key` (`server_kdb.c:174-223`): then MIT `create_hist` (`server_kdb.c:142-164`): + `create_hist` : the
     /// history key, creating `kadmin/history` on first use with MIT's shape —
     /// `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`),
     /// no attributes, one random key of the master enctype at kvno 2.
     ///
     /// # Errors
     ///
-    /// Random-key generation failures.
+    /// [`Error::Rng`] when the history key fails.
     pub(crate) fn ensure_history_principal(
         &mut self,
         actor: &str,

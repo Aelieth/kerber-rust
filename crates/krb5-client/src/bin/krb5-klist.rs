@@ -131,7 +131,7 @@ fn cred_ticket_server(cred: &CcacheCred) -> Option<String> {
     (tkt_s != cred_s).then_some(tkt_s)
 }
 
-/// MIT `etype_string` (`klist.c`): a `DEPRECATED:` prefix for a deprecated etype.
+/// MIT `etype_string` (`klist.c:588-603`): a `DEPRECATED:` prefix for a deprecated etype.
 fn etype_display(etype: EncryptionType) -> String {
     let prefix = if etype.is_deprecated() {
         "DEPRECATED:"

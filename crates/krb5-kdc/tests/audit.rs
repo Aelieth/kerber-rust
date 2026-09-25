@@ -1,5 +1,5 @@
-//! A′-4 item 20 units that compile at `7fc6980` and fail there.
-//! A′-4 item 20 HEAD-only: tkt_id, TestAudit fields, ktypes2str.
+//! Audit record fields.
+//! `tkt_id`, TestAudit fields, and `ktypes2str`.
 //! F5 TGS audit seed + unknown-server stage. Compiles at `70de1ac`.
 
 use krb5_asn1::encode;

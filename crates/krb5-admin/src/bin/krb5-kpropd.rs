@@ -113,7 +113,7 @@ fn kpropd_realm() -> String {
 }
 
 /// Raw `kpropd.acl` lines for `kpropd_authorized_principal`, read per
-/// connection like MIT `authorized_principal` (`fopen` on every peer, so
+/// MIT `authorized_principal` (`kpropd.c:1298-1354`): connection like (`fopen` on every peer, so
 /// edits apply without a restart). Unset `KRB5_KPROP_ACL` or an unopenable
 /// file is `None`: every peer is refused. Only the trailing `\n` is
 /// stripped (`fgets`, `buf[end] == '\n'`); a `\r`, leading whitespace or a
