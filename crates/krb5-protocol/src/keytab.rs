@@ -1,4 +1,7 @@
 //! MIT keytab v1 (`0x0501`) and v2 (`0x0502`). Unknown etypes are skipped.
+//!
+//! A skipped etype stays in file order as an unparsed slot. A rewrite
+//! can put that slot back. It is not dropped on the floor.
 
 use std::io;
 use std::path::Path;

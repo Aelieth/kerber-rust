@@ -33,6 +33,9 @@ this project uses semantic versioning once a crate is published.
   and `preauth` state the fail-closed rule for that module. Ledger
   rust-site lines in `ad.rs` and `plugins.rs` move with those headers.
   No behaviour change.
+- **protocol.** Module headers on `ap_req`, `tgs`, `safe_priv`,
+  `preauth`, `replay`, `chpw`, `keytab`, and `secret_file` state the
+  check that makes a success. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

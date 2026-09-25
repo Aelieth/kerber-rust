@@ -1,4 +1,8 @@
 //! Client builders for FAST, SPAKE, and PKINIT padata.
+//!
+//! These functions build padata. They do not send it. The AS and TGS
+//! exchanges do. A builder that fails returns the error. It does not
+//! emit an empty padata list and continue.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{

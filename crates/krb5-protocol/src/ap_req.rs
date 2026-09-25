@@ -1,4 +1,8 @@
 //! AP-REQ construction (RFC 4120 §5.5.1) and service-side verification.
+//!
+//! The caller supplies the skew window. When it does not,
+//! `DEFAULT_SKEW` is 300 seconds. A ticket outside that window is not
+//! a successful verify.
 
 use std::collections::BTreeMap;
 use std::time::Instant;

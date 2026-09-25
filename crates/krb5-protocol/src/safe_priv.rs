@@ -1,4 +1,8 @@
 //! KRB-SAFE, KRB-PRIV, and KRB-CRED (RFC 4120 §5.6–5.8).
+//!
+//! SAFE and PRIV sequence numbers come from a process-global counter.
+//! A repeat is rejected by the replay cache, not by handing the same
+//! sequence out twice on purpose.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 

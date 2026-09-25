@@ -1,4 +1,8 @@
 //! RFC 3244 kpasswd client (`chpw.c` / `gic_pwd.c` KEY_EXP).
+//!
+//! KEY_EXP is the expired-password path. The change is not finished
+//! until the AP-REP verifies. The generated subkey bytes are zeroized
+//! after the key is built.
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};

@@ -1,4 +1,8 @@
 //! TGS-REQ / TGS-REP using an existing TGT.
+//!
+//! The request is built from an existing TGT. When the exchange is
+//! armored, the reply is not accepted until the FAST finished check
+//! passes.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
