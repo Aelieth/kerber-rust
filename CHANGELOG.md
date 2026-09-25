@@ -19,6 +19,9 @@ this project uses semantic versioning once a crate is published.
   `0d5fa7f4` count. The baseline list is
   `working/logs/w3-hygiene/s4/process-tags-before.txt`. No wire or
   text change in product code.
+- **docs.** `docs/architecture.md` and `CONTRIBUTING.md` state the
+  comment rules R1–R4: one MIT anchor form, an invariant rather than
+  a step list, no process history, and `# Errors` naming variants.
 
 ### W3-S3.10 parameter structs
 

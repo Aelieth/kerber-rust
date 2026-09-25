@@ -50,7 +50,22 @@ We use [GitHub Flow](https://docs.github.com/en/get-started/using-git/github-flo
 
 Comments explain non-obvious intent, invariants, security considerations,
 and protocol subtleties. Do not restate the obvious. Public APIs need
-rustdoc.
+rustdoc. The four rules in [docs/architecture.md](docs/architecture.md)
+are the form:
+
+- **R1.** A MIT anchor is one line:
+  ``MIT `<c_function>` (`<file>.c:<a>-<b>`): <what the port guarantees>``.
+  A single source line is `<a>-<a>`. The anchor slot is a C function.
+- **R2.** State the invariant (order, fail-closed, key material, or a
+  deliberate deviation). Do not narrate the next two lines.
+- **R3.** No process history (`R12`, `W1-Z`, `Round 2`, a parent SHA).
+  A deferred gap is a ledger row and at most a pointer.
+- **R4.** `# Errors` names variants or conditions, never a family word
+  and never "Returns …". `# Panics` only where a panic exists.
+
+`check_mit_anchor_form` and `check_no_process_history` in
+`scripts/ci-policy.py` keep R1 and R3 true. See
+[docs/testing.md](docs/testing.md).
 
 ## Local checks
 

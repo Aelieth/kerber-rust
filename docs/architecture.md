@@ -117,6 +117,30 @@ then `/etc/krb5.conf`); argv remains the fallback.
 - No `unsafe` in this workspace (`forbid(unsafe_code)`).
 - No C FFI.
 
+## Comments and rustdoc
+
+Four rules. They do not raise comment density. A sentence a reader can
+derive from the next two lines is deleted. The budget moves from process
+tags into invariants that are otherwise unstated.
+
+**R1.** A MIT anchor is one line, in one form:
+``MIT `<c_function>` (`<file>.c:<a>-<b>`): <what the port guarantees>``.
+The named function's body contains the cited range. One anchor per line.
+The anchor slot is a C function, never a Rust symbol. A single source
+line is written `<a>-<a>`.
+
+**R2.** State the invariant, not the steps: an ordering, a fail-closed
+rule, a key-material rule, an attacker-relevant subtlety, or a deliberate
+deviation. Do not narrate the statements below the comment.
+
+**R3.** No process history in source. No `R12`, `A′-3`, `W0e`, `W1-Z`,
+`Round 2`, `B3`, `Y0`, `Z6.3`, or `parent` plus a commit hash. A deferred
+parity gap gets a ledger row and at most a one-line pointer.
+
+**R4.** `# Errors` names variants or conditions. It does not use a family
+word ("crypto", "DER") and it does not open with "Returns". `# Panics`
+appears only where a panic exists.
+
 ## Observability
 
 Every crypto and ASN.1 operation emits a `tracing` event with
