@@ -1,4 +1,7 @@
 //! MIT `kdc_log.c` ISSUE tuple and `kdc_audit.c` plugin registry.
+//!
+//! The success and error paths emit the tuple and then call the plugin.
+//! The tuple records the decision. It is not the reply.
 
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex};

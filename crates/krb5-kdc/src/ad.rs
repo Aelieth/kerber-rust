@@ -1,4 +1,8 @@
 //! PAC issuance and S4U2Self / S4U2Proxy / U2U.
+//!
+//! PAC bytes are authorization data on the ticket. This module builds
+//! and checks them. The UDP/TCP listener does not. A checksum that fails
+//! is not treated as a verified PAC.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{

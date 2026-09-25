@@ -1,4 +1,8 @@
 //! FAST, SPAKE, and PKINIT processing on the KDC.
+//!
+//! A successful FAST unwrap returns the armor key and the inner body
+//! together. The outer wire body is not the client request once armor
+//! has been accepted. SPAKE and PKINIT run on that inner request.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{

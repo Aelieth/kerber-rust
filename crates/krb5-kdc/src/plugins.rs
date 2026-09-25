@@ -1,4 +1,8 @@
-//! kdcpreauth / kdcpolicy / kdcauthdata extension points (Rust traits, not dlopen).
+//! kdcpreauth, kdcpolicy, and kdcauthdata extension points.
+//!
+//! These are Rust traits, not loaded objects. A preauth module returns
+//! an action the KDC already understands. There is no dlopen path that
+//! can change that action after the module returns.
 
 use std::sync::{Arc, Mutex, OnceLock};
 

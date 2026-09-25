@@ -29,6 +29,10 @@ this project uses semantic versioning once a crate is published.
   public-surface line, as do the other two. The `krb5-admin` and
   `krb5-crypto` crate descriptions match those headers. No behaviour
   change.
+- **kdc.** Module headers on `acl`, `ad`, `audit`, `listen`, `plugins`,
+  and `preauth` state the fail-closed rule for that module. Ledger
+  rust-site lines in `ad.rs` and `plugins.rs` move with those headers.
+  No behaviour change.
 
 ### W3-S3.10 parameter structs
 

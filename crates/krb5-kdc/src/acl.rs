@@ -1,4 +1,8 @@
 //! kadm5.acl-style allow/deny for admin operations.
+//!
+//! No matching line is a denial. A matching line grants only the
+//! operations that line sets, so extract is not implied by a wildcard.
+//! Rename also denies when the destination line carries restrictions.
 
 use crate::error::Error;
 use crate::store::{AdminEnt, kadm5_mask};

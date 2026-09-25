@@ -1,4 +1,8 @@
 //! Thin UDP/TCP 88 listener around [`crate::issue::handle_request`].
+//!
+//! A duplicate that arrives while a request is in flight is dropped.
+//! An empty KDC response is not sent. Past the TCP worker cap the
+//! listener evicts the oldest live stream and keeps the new connection.
 
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};

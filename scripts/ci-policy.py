@@ -4660,7 +4660,14 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(fake_mit)], check=False)
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/plugins.rs advertise:136", verdict="absent"))
+    # Several impls define advertise. Pin a line inside one of them rather
+    # than a fixed number, so a module-header shift does not move the pin
+    # out of the item.
+    advertise_spans = _item_spans(ROOT / "crates/krb5-kdc/src/plugins.rs", "advertise")
+    advertise_at = next(s[0] for s in advertise_spans if s[1] - s[0] > 5)
+    check_ledger_anchors(
+        _row(f"krb5-kdc/plugins.rs advertise:{advertise_at}", verdict="absent")
+    )
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))
