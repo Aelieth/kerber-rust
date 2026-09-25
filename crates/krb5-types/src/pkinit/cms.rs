@@ -464,7 +464,7 @@ pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static s
 ///
 /// # Errors
 ///
-/// Same as [`cms_verify`].
+/// Bad CMS, untrusted cert, or ECDSA.
 pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &'static str> {
     let p = cms_parts(der)?;
     cert_path_ok(&p.cert, trust_anchor)?;

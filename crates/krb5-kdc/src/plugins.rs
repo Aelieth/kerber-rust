@@ -83,7 +83,7 @@ pub trait KdcPreauth: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Protocol / crypto failures.
+    /// A preauth check or a key failure.
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error>;
 }
 
@@ -493,7 +493,7 @@ fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[
 ///
 /// # Errors
 ///
-/// Module protocol failures.
+/// A preauth check or a key failure.
 pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
     let PreauthRock {
         store,
@@ -649,7 +649,7 @@ pub trait KdcPolicy: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Policy denial.
+    /// The check refuses the request.
     fn check_as(
         &self,
         store: &dyn PrincipalRead,
@@ -660,7 +660,7 @@ pub trait KdcPolicy: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Policy denial.
+    /// The check refuses the request.
     fn check_tgs(
         &self,
         store: &dyn PrincipalRead,

@@ -71,7 +71,7 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
 ///
 /// # Errors
 ///
-/// PRF or key-length failures.
+/// Bad length or [`Error::InvalidParams`].
 pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Error> {
     derive_prfplus_enctype(key, input, key.etype())
 }
@@ -80,7 +80,7 @@ pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Er
 ///
 /// # Errors
 ///
-/// PRF or key-length failures.
+/// Bad length or [`Error::InvalidParams`].
 pub fn derive_prfplus_enctype(
     key: &ProtocolKey,
     input: &[u8],

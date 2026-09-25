@@ -23,7 +23,7 @@ use crate::error::Error;
 ///
 /// # Errors
 ///
-/// CF2 failures.
+/// A bad length or a PRF failure.
 pub fn armor_key(
     session: &ProtocolKey,
     subkey: Option<&ProtocolKey>,
@@ -38,7 +38,7 @@ pub fn armor_key(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_fast_armor(
     ticket: Ticket,
     session: &ProtocolKey,
@@ -83,7 +83,7 @@ pub fn build_fast_armor(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn attach_fast(
     req: &mut AsReq,
     armor: &ApReq,
@@ -105,7 +105,7 @@ pub fn attach_fast(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn attach_fast_with_options(
     req: &mut AsReq,
     armor: &ApReq,
@@ -149,7 +149,7 @@ pub fn attach_fast_with_options(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn fx_fast_padata(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -174,7 +174,7 @@ pub fn fx_fast_padata(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn fx_fast_padata_over(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -268,7 +268,7 @@ pub fn verify_req_enc_pa_rep(
 ///
 /// # Errors
 ///
-/// Missing padata, crypto, or DER failures.
+/// Missing padata, key, or encode failure.
 pub fn unwrap_fast_rep(
     armor_key: &ProtocolKey,
     padata: &Option<Vec<PaData>>,
@@ -310,7 +310,7 @@ pub fn unwrap_fast_rep_checked(
 ///
 /// # Errors
 ///
-/// CF2 or key-length failures.
+/// A bad length or a PRF failure.
 pub fn apply_strengthen(
     strengthen: &EncryptionKey,
     base: &ProtocolKey,
@@ -401,7 +401,7 @@ pub fn pa_spake_response(
 ///
 /// # Errors
 ///
-/// DER failures.
+/// [`Error::Asn1`].
 pub fn pa_pk_as_req(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -419,7 +419,7 @@ pub fn pa_pk_as_req(
 ///
 /// # Errors
 ///
-/// DER or CMS wrap failures.
+/// Encode or CMS wrap failure.
 pub fn pa_pk_as_req_spki(
     spki: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -432,7 +432,7 @@ pub fn pa_pk_as_req_spki(
 ///
 /// # Errors
 ///
-/// DER or CMS wrap failures.
+/// Encode or CMS wrap failure.
 pub fn pa_pk_as_req_cn(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -483,7 +483,7 @@ fn pa_pk_as_req_spki_cn(
 ///
 /// # Errors
 ///
-/// DER or CMS wrap failures.
+/// Encode or CMS wrap failure.
 pub fn pa_pk_as_req_agile(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -524,7 +524,7 @@ pub fn pa_pk_as_req_agile(
 ///
 /// # Errors
 ///
-/// DER or CMS wrap failures.
+/// Encode or CMS wrap failure.
 pub fn pa_pk_as_req_signed(
     client_public: &[u8],
     cert_der: &[u8],
@@ -567,7 +567,7 @@ pub fn pa_pk_as_req_signed(
 ///
 /// # Errors
 ///
-/// DER failures.
+/// [`Error::Asn1`].
 pub fn pa_pk_as_req_unsigned(
     client_public: &[u8],
     nonce: u32,
@@ -708,7 +708,7 @@ pub fn pkinit_reply_key_agile(
 ///
 /// # Errors
 ///
-/// Checksum failures.
+/// [`Error::ReplyMismatch`] or a bad checksum.
 pub fn pa_for_user(
     session: &ProtocolKey,
     user: PrincipalName,
@@ -739,7 +739,7 @@ pub fn pa_for_user(
 ///
 /// # Errors
 ///
-/// Crypto or DER.
+/// An encode failure or a key failure.
 pub fn pa_s4u_x509_user(
     key: &ProtocolKey,
     user: PrincipalName,
@@ -863,7 +863,7 @@ pub fn verify_s4u2self_reply(
 ///
 /// # Errors
 ///
-/// DER encode.
+/// [`Error::Asn1`].
 pub fn pa_pac_options(rbcd: bool) -> Result<PaData, Error> {
     let body = if rbcd {
         krb5_types::s4u::PaPacOptions::rbcd()

@@ -109,13 +109,13 @@ pub trait PrincipalRead: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Backend I/O or decode failures.
+    /// A decode failure or store I/O.
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error>;
     /// Lookup by name in this realm.
     ///
     /// # Errors
     ///
-    /// Backend failures.
+    /// A decode failure or store I/O.
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
         self.fetch(&lookup_principal_id(name, self.realm()))
     }
@@ -123,7 +123,7 @@ pub trait PrincipalRead: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Backend failures.
+    /// A decode failure or store I/O.
     fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
         self.fetch_name(&PrincipalName::krbtgt(self.realm()))
     }
@@ -131,13 +131,13 @@ pub trait PrincipalRead: Send + Sync {
     ///
     /// # Errors
     ///
-    /// Backend failures.
+    /// A decode failure or store I/O.
     fn list_ids(&self) -> Result<Vec<String>, Error>;
     /// All principals (iterate).
     ///
     /// # Errors
     ///
-    /// Backend failures.
+    /// A decode failure or store I/O.
     fn list_principals(&self) -> Result<Vec<Principal>, Error>;
     /// TGS replay cache.
     fn tgs_replay(&self) -> &ReplayCache {
@@ -201,19 +201,19 @@ pub trait PrincipalWrite: PrincipalRead {
     ///
     /// # Errors
     ///
-    /// Backend failures.
+    /// A decode failure or store I/O.
     fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
     /// Delete by `name@REALM`.
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] or backend failures.
+    /// [`Error::NotFound`] or store I/O.
     fn remove_id(&mut self, id: &str) -> Result<(), Error>;
     /// Provision a PKINIT CA on the process-local env.
     ///
     /// # Errors
     ///
-    /// Key generation failure.
+    /// P-256 key generation failed.
     fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error>;
 }
 
@@ -223,13 +223,13 @@ pub trait StoreLifecycle {
     ///
     /// # Errors
     ///
-    /// Persist load failures.
+    /// The store file could not be loaded.
     fn reload_if_stale(&mut self) -> Result<(), Error>;
     /// Write through when persist paths are set.
     ///
     /// # Errors
     ///
-    /// Persist save failures.
+    /// The store file could not be written.
     fn save_if_configured(&self) -> Result<(), Error>;
 }
 

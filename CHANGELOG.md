@@ -70,6 +70,10 @@ this project uses semantic versioning once a crate is published.
   behaviour change.
 - **crypto.** The five long functions state when a derive or a
   checksum failure wipes key material. No behaviour change.
+- **all.** Each `# Errors` section under 45 characters names a
+  variant or a condition. The ones that named a family, or opened
+  with "Returns", now say which variant or which check failed.
+  No behaviour change.
 
 ### W3-S3.10 parameter structs
 

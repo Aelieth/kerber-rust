@@ -30,7 +30,7 @@ use crate::store::Principal;
 ///
 /// # Errors
 ///
-/// DER encode of the inner authorization-data.
+/// Encode of the inner authorization-data.
 pub fn wrap_win2k_pac(pac_bytes: &[u8]) -> Result<krb5_types::AuthorizationData, Error> {
     let inner = vec![AuthorizationDataValue {
         ad_type: pa::AD_WIN2K_PAC,
@@ -419,7 +419,7 @@ fn verify_pac_sig<'a>(
 ///
 /// # Errors
 ///
-/// DER encode.
+/// [`Error::Asn1`].
 pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
     let mut clone = part.clone();
     if let Some(ad) = clone.authorization_data.take() {
@@ -1530,7 +1530,7 @@ fn utf8(s: &krb5_types::KerberosString) -> &str {
 ///
 /// # Errors
 ///
-/// Decrypt or DER failures.
+/// Decrypt or encode failure.
 pub fn decrypt_ticket_part(key: &ProtocolKey, ticket: &Ticket) -> Result<EncTicketPart, Error> {
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(key, usage, ticket.enc_part.cipher.as_ref())?;

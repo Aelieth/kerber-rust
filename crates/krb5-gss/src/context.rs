@@ -310,7 +310,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Crypto / DER failures.
+    /// The initial token could not be built.
     pub fn init_sec_context(
         ticket: Ticket,
         session: &ProtocolKey,
@@ -586,7 +586,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Truncated token, decrypt, or DER failures.
+    /// Truncated token, decrypt, or encode.
     pub fn process_ap_rep(
         &mut self,
         token: &[u8],

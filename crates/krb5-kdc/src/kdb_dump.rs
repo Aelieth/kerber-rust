@@ -202,7 +202,7 @@ impl DumpFile {
     ///
     /// # Errors
     ///
-    /// Crypto or name-parse failures.
+    /// Name, format, or a key failure.
     pub(crate) fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         for p in &self.princs {
             if let Some(e) = crate::store::db_args_put_error(&p.tl_data) {
@@ -380,7 +380,7 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
 ///
 /// # Errors
 ///
-/// Parse or crypto failures.
+/// [`DumpError::Format`] or a key failure.
 pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     load_dump_etype(text, master_password, default_master_etype())
 }
@@ -389,7 +389,7 @@ pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, D
 ///
 /// # Errors
 ///
-/// Parse or crypto failures.
+/// [`DumpError::Format`] or a key failure.
 pub fn load_dump_etype(
     text: &str,
     master_password: &[u8],
@@ -405,7 +405,7 @@ pub fn load_dump_etype(
 ///
 /// # Errors
 ///
-/// Parse or crypto failures.
+/// [`DumpError::Format`] or a key failure.
 pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
     parse_dump(text)?.into_store(mkey)
 }
@@ -414,7 +414,7 @@ pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<Principal
 ///
 /// # Errors
 ///
-/// I/O, parse, or crypto failures.
+/// Read, parse, or a key failure.
 pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     let text = fs::read_to_string(path)?;
     load_dump(&text, master_password)
@@ -427,7 +427,7 @@ pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalSt
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// String-to-key or key wrap failed.
 pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<String, DumpError> {
     dump_store_etype(store, master_password, default_master_etype())
 }
@@ -436,7 +436,7 @@ pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<Stri
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// String-to-key or key wrap failed.
 pub(crate) fn dump_store_etype(
     store: &PrincipalStore,
     master_password: &[u8],
@@ -450,7 +450,7 @@ pub(crate) fn dump_store_etype(
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// A key could not be wrapped.
 pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
     let now = unix_now();
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
@@ -504,7 +504,7 @@ pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<S
 ///
 /// # Errors
 ///
-/// Crypto or I/O failures.
+/// [`DumpError::Io`] or a key failure.
 pub fn write_dump_path_etype(
     store: &PrincipalStore,
     path: &Path,
@@ -562,7 +562,7 @@ fn parse_header(line: &str) -> Result<u32, DumpError> {
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// String-to-key or key wrap failed.
 pub fn dump_store_iprop(
     store: &PrincipalStore,
     master_password: &[u8],

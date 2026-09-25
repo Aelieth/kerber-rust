@@ -377,7 +377,7 @@ pub fn kcm_destroy(residual: &str) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// Daemon I/O.
+/// The KCM socket failed.
 pub fn kcm_switch(residual: &str) -> io::Result<()> {
     if residual.is_empty() {
         return Err(io::Error::new(
@@ -393,7 +393,7 @@ pub fn kcm_switch(residual: &str) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// Daemon I/O.
+/// The KCM socket failed.
 pub fn kcm_cache_names() -> io::Result<Vec<String>> {
     let mut io = KcmIo::connect()?;
     let uuids = match io.call(OP_GET_CACHE_UUID_LIST, &[]) {

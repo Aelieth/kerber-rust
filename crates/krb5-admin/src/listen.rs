@@ -606,7 +606,7 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// Socket I/O.
+/// A socket read failed.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_udp(
     store: SharedStore,
@@ -657,7 +657,7 @@ pub fn serve_kpasswd_udp(
 ///
 /// # Errors
 ///
-/// Bind / accept failures.
+/// Accept on the listener failed.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_tcp(
     store: SharedStore,
@@ -738,7 +738,7 @@ pub fn kprop_send(
 ///
 /// # Errors
 ///
-/// I/O or dump parse/crypto.
+/// Read, parse, or a key failure.
 pub fn kprop_recv(
     stream: &mut TcpStream,
     master_password: &[u8],

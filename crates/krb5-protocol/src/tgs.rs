@@ -76,7 +76,7 @@ pub fn tgs_exchange_ex(
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 #[allow(clippy::needless_pass_by_value)]
 pub fn tgs_exchange_once(
     kdc: &KdcAddr,
@@ -138,7 +138,7 @@ pub fn tgs_exchange_path(
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);
@@ -150,7 +150,7 @@ pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> 
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);
@@ -199,7 +199,7 @@ pub fn tgs_renew_options(flags: &krb5_types::TicketFlags) -> KdcOptions {
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn tgs_s4u(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -226,7 +226,7 @@ pub fn tgs_s4u(
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn tgs_u2u(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -738,7 +738,7 @@ fn random_nonce31() -> Result<u32, Error> {
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn tgs_s4u2proxy(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -764,7 +764,7 @@ pub fn tgs_s4u2proxy(
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn tgs_validate(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);

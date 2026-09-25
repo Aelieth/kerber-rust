@@ -140,7 +140,7 @@ impl Drop for DerivedKeys {
 ///
 /// # Errors
 ///
-/// Returns derivation failures.
+/// A refused etype or a bad key length.
 pub fn derive_keys(
     key: &crate::key::ProtocolKey,
     usage: crate::etype::KeyUsage,

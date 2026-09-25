@@ -31,7 +31,7 @@ pub const SPAKE_N: [u8; 33] = [
 ///
 /// # Errors
 ///
-/// PRF+ failures.
+/// [`Error::InvalidParams`].
 pub fn spake_wbytes(ikey: &ProtocolKey, group: i32) -> Result<Vec<u8>, Error> {
     let mut seed = b"SPAKEsecret".to_vec();
     seed.extend_from_slice(&group.to_be_bytes());
@@ -201,7 +201,7 @@ pub fn spake_thash_update(thash: &[u8], data1: &[u8], data2: &[u8]) -> [u8; 32] 
 ///
 /// # Errors
 ///
-/// PRF/CF2/key-length failures.
+/// Bad length or [`Error::InvalidParams`].
 pub fn spake_derive_key(
     ikey: &ProtocolKey,
     group: i32,

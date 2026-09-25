@@ -260,7 +260,7 @@ fn encrypt_inner(
 ///
 /// # Errors
 ///
-/// Same as [`encrypt`].
+/// [`Error::Rng`] or a refused etype.
 pub fn encrypt_with_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -364,7 +364,7 @@ fn decrypt_inner(key: &ProtocolKey, usage: KeyUsage, ciphertext: &[u8]) -> Resul
 ///
 /// # Errors
 ///
-/// Same as [`decrypt`].
+/// [`Error::Integrity`] or short ciphertext.
 pub fn decrypt_with_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -438,7 +438,7 @@ fn decrypt_inner_state(
 ///
 /// # Errors
 ///
-/// Key-derivation failures.
+/// A refused etype or a bad key length.
 pub fn integrity_mac(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     if !key.etype().is_aes() {
         return Err(Error::UnsupportedEtype(key.etype().to_iana()));
@@ -482,7 +482,7 @@ pub fn decrypt_cts(
 ///
 /// # Errors
 ///
-/// Returns key-derivation errors.
+/// A refused etype or a bad key length.
 pub fn checksum(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();

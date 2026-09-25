@@ -36,7 +36,7 @@ const KPROP_BUFSIZ: usize = 32_768;
 ///
 /// # Errors
 ///
-/// Dump crypto failures.
+/// The dump key could not be wrapped.
 pub fn kprop_dump_bytes(store: &PrincipalStore, master_password: &[u8]) -> Result<Vec<u8>, Error> {
     dump_store(store, master_password)
         .map(String::into_bytes)
@@ -47,7 +47,7 @@ pub fn kprop_dump_bytes(store: &PrincipalStore, master_password: &[u8]) -> Resul
 ///
 /// # Errors
 ///
-/// Dump crypto failures.
+/// The dump key could not be wrapped.
 pub fn kprop_dump_iprop(store: &PrincipalStore, master_password: &[u8]) -> Result<Vec<u8>, Error> {
     dump_store_iprop(store, master_password)
         .map(String::into_bytes)
@@ -59,7 +59,7 @@ pub fn kprop_dump_iprop(store: &PrincipalStore, master_password: &[u8]) -> Resul
 ///
 /// # Errors
 ///
-/// Not a dump, parse, or crypto failures.
+/// Not a dump, bad parse, or a key failure.
 pub fn kprop_load_bytes(bytes: &[u8], master_password: &[u8]) -> Result<PrincipalStore, Error> {
     if bytes.starts_with(b"KDB1") || bytes.starts_with(b"KDB2") || bytes.starts_with(b"KDB3") {
         return Err(Error::Inner(
@@ -419,7 +419,7 @@ fn recvauth_protocol_text(code: i32) -> String {
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn kprop_expired_ap_req(
     host_key: &ProtocolKey,
     kvno: u32,

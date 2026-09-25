@@ -198,7 +198,7 @@ impl TgsReqBuilder {
     ///
     /// # Errors
     ///
-    /// Same as [`krb5_protocol::tgs_req_ex`].
+    /// An encode failure or a key failure.
     pub fn build(self) -> Result<TgsReq, krb5_protocol::Error> {
         tgs_req_ex(TgsReqParams {
             ticket: self.ticket,

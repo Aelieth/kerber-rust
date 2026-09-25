@@ -64,7 +64,7 @@ impl<'a> ApVerifyParams<'a> {
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_req(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -78,7 +78,7 @@ pub fn build_ap_req(
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_req_opts(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -106,7 +106,7 @@ pub fn build_ap_req_opts(
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_req_mutual_seq(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -147,7 +147,7 @@ pub fn build_ap_req_mutual_seq(
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_ap_req_with_cksum(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -223,7 +223,7 @@ pub fn verify_ap_req(
 ///
 /// # Errors
 ///
-/// See [`verify_ap_req`].
+/// Truncation, HMAC, replay, skew, or expiry.
 pub fn verify_ap_req_ex(
     raw: &[u8],
     params: &ApVerifyParams<'_>,

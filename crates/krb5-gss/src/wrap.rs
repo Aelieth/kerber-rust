@@ -157,7 +157,7 @@ pub(super) fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
 ///
 /// # Errors
 ///
-/// Crypto failures.
+/// The token could not be sealed.
 pub fn mit_shaped_wrap(
     session: &ProtocolKey,
     initiator: bool,
@@ -208,7 +208,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Crypto failures.
+    /// The token could not be sealed.
     pub fn wrap(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         // MIT 1.22.2 libgssapi_krb5 wrap tokens use RRC=0 (observed in
         // gss-gate). wrap_with_rrc(16) remains for SSPI in-place decrypt.
@@ -295,7 +295,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Crypto failures.
+    /// The token could not be sealed.
     pub fn wrap_with_rrc(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
         self.wrap_conf_inner(plaintext, 0, rrc)
     }
@@ -305,7 +305,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Crypto failures.
+    /// Checksum failed, or the MAC does not fit.
     pub fn wrap_integ(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = seal_usage(self.initiator);
         let mut header = wrap_header(self.initiator, false, self.send_seq);

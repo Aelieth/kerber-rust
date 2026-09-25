@@ -102,7 +102,7 @@ impl Keytab {
     ///
     /// # Errors
     ///
-    /// Returns I/O errors.
+    /// Create, write, sync, or rename failed.
     pub fn write_file(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
         write_secret_file(path.as_ref(), &self.to_bytes())
     }

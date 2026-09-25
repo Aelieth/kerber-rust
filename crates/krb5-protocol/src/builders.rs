@@ -80,7 +80,7 @@ pub fn as_req_sname(
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
     pa_enc_timestamp_at(key, &KerberosTime::now())
 }
@@ -89,7 +89,7 @@ pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
     let ts = PaEncTsEnc {
         patimestamp: now.clone(),
@@ -115,7 +115,7 @@ pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaDa
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn tgs_req(
     ticket: Ticket,
     session: &ProtocolKey,
@@ -192,7 +192,7 @@ pub struct TgsReqParams<'a> {
 ///
 /// # Errors
 ///
-/// Returns crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
     let TgsReqParams {
         ticket,

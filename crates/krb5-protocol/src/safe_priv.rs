@@ -43,7 +43,7 @@ fn local_addr() -> HostAddress {
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe, Error> {
     build_krb_safe_ex(session, user_data, Some(take_seq(&NEXT_SAFE_SEQ)), true)
 }
@@ -54,7 +54,7 @@ pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_safe_ex(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -107,7 +107,7 @@ pub fn build_krb_safe_ex(
 ///
 /// # Errors
 ///
-/// Integrity, window, replay, or DER failures.
+/// Integrity, window, replay, or encode.
 pub fn unwrap_krb_safe(
     session: &ProtocolKey,
     raw: &[u8],
@@ -120,7 +120,7 @@ pub fn unwrap_krb_safe(
 ///
 /// # Errors
 ///
-/// Integrity, window, replay, or DER failures.
+/// Integrity, window, replay, or encode.
 pub fn unwrap_krb_safe_ex(
     session: &ProtocolKey,
     raw: &[u8],
@@ -414,7 +414,7 @@ fn accept_fresh(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv, Error> {
     build_krb_priv_with_seq(session, user_data, Some(take_seq(&NEXT_PRIV_SEQ)))
 }
@@ -427,7 +427,7 @@ pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_priv_with_seq(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -441,7 +441,7 @@ pub fn build_krb_priv_with_seq(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_priv_chained(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -488,7 +488,7 @@ pub fn build_krb_priv_chained(
 ///
 /// # Errors
 ///
-/// Crypto, window, replay, or DER failures.
+/// Checksum, window, replay, or encode.
 pub fn unwrap_krb_priv(
     session: &ProtocolKey,
     raw: &[u8],
@@ -505,7 +505,7 @@ pub fn unwrap_krb_priv(
 ///
 /// # Errors
 ///
-/// Crypto, window, replay, or DER failures.
+/// Checksum, window, replay, or encode.
 pub fn unwrap_krb_priv_ex(
     session: &ProtocolKey,
     raw: &[u8],
@@ -521,7 +521,7 @@ pub fn unwrap_krb_priv_ex(
 ///
 /// # Errors
 ///
-/// Crypto, window, replay, or DER failures.
+/// Checksum, window, replay, or encode.
 pub fn unwrap_krb_priv_chained(
     session: &ProtocolKey,
     raw: &[u8],
@@ -550,7 +550,7 @@ pub fn unwrap_krb_priv_chained(
 ///
 /// # Errors
 ///
-/// Crypto or DER failures.
+/// An encode failure or a key failure.
 pub fn build_krb_cred(
     session: &ProtocolKey,
     tickets: Vec<Ticket>,
@@ -586,7 +586,7 @@ pub fn build_krb_cred(
 ///
 /// # Errors
 ///
-/// Crypto, window, replay, or DER failures.
+/// Checksum, window, replay, or encode.
 pub fn unwrap_krb_cred(
     session: &ProtocolKey,
     raw: &[u8],

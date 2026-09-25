@@ -140,7 +140,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// Persist load failures.
+    /// The store file could not be loaded.
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
         let Some((db, stash)) = self.persist_paths.clone() else {
             return Ok(());
@@ -250,7 +250,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// Returns crypto failures from string-to-key.
+    /// String-to-key was refused.
     pub fn bootstrap(
         realm: &str,
         user: &str,

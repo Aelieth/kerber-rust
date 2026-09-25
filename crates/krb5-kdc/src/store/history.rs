@@ -110,7 +110,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// Random-key generation failures.
+    /// [`Error::Rng`] when the history key fails.
     pub(crate) fn ensure_history_principal(
         &mut self,
         actor: &str,

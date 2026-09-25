@@ -16,7 +16,7 @@ use crate::prf::prf_plus;
 ///
 /// # Errors
 ///
-/// PRF or key-length failures.
+/// Bad length or [`Error::InvalidParams`].
 pub fn krb_fx_cf2(
     k1: &ProtocolKey,
     k2: &ProtocolKey,
@@ -158,7 +158,7 @@ fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
 ///
 /// # Errors
 ///
-/// Key-length failures.
+/// A bad key length or a refused etype.
 pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, Error> {
     let n = etype.key_len();
     let mut buf = Vec::with_capacity(n + 20);
@@ -185,7 +185,7 @@ pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, E
 ///
 /// # Errors
 ///
-/// Key-length failures.
+/// A bad key length or a refused etype.
 pub fn pkinit_kdf_agile(
     etype: EncryptionType,
     shared: &[u8],

@@ -41,7 +41,7 @@ impl KdcAddr {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Io`] on network failure.
+/// [`Error::Io`] on network failure.
 pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     exchange_with_failover(std::slice::from_ref(addr), request)
 }
@@ -50,7 +50,7 @@ pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Io`] on network failure.
+/// [`Error::Io`] on network failure.
 pub fn exchange_on_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     crate::capture_pdu("client-req", request);
     exchange_tcp(addr, request)
@@ -60,7 +60,7 @@ pub fn exchange_on_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error>
 ///
 /// # Errors
 ///
-/// Returns the last transport error.
+/// The last transport error.
 pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u8>, Error> {
     let mut last = Error::transport_msg("no KDC addresses");
     for addr in addrs {

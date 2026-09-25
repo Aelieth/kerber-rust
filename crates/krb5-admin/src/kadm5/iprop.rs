@@ -414,7 +414,7 @@ pub struct IpropLast {
 ///
 /// # Errors
 ///
-/// GSS, RPC, XDR, or crypto failures.
+/// Context, RPC, decode, or a key failure.
 pub fn iprop_pull(
     stream: &mut TcpStream,
     ticket: Ticket,
@@ -468,7 +468,7 @@ pub fn iprop_pull(
 ///
 /// # Errors
 ///
-/// GSS, RPC, XDR, or crypto failures.
+/// Context, RPC, decode, or a key failure.
 pub fn iprop_fullresync(
     stream: &mut TcpStream,
     ticket: Ticket,

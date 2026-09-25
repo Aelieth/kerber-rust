@@ -487,7 +487,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or already exists.
+    /// [`Error::AclDenied`] or the name exists.
     pub fn create_randkey(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.create_randkey_etypes(name, &[])
     }
@@ -496,7 +496,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or already exists.
+    /// [`Error::AclDenied`] or the name exists.
     pub fn create_randkey_etypes(
         &mut self,
         name: &PrincipalName,
@@ -531,7 +531,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.chrand_etypes_keepold(name, &[], false)
     }
@@ -540,7 +540,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
@@ -571,7 +571,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn delete(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         self.store
@@ -583,7 +583,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL, not found, or already exists.
+    /// Denied, missing, or the name exists.
     pub fn rename(&mut self, old: &PrincipalName, new: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         self.store
@@ -619,7 +619,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn ktadd(&mut self, name: &PrincipalName) -> Result<Keytab, Error> {
         self.reload()?;
         self.store
@@ -632,7 +632,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL, not found, or `write`.
+    /// Denied, missing, or the write failed.
     pub fn ktadd_local(
         &mut self,
         name: &PrincipalName,
@@ -766,7 +766,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn modify_attributes(
         &mut self,
         name: &PrincipalName,
@@ -806,7 +806,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn modify_expiration(
         &mut self,
         name: &PrincipalName,
@@ -840,7 +840,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         let tid = self.target_id(name);
@@ -857,7 +857,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn modify_ticket_lives(
         &mut self,
         name: &PrincipalName,
@@ -898,7 +898,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL or not found.
+    /// [`Error::AclDenied`] or [`Error::NotFound`].
     pub fn set_policy(&mut self, name: &PrincipalName, policy: &str) -> Result<(), Error> {
         self.reload()?;
         let tid = self.target_id(name);
@@ -1066,7 +1066,7 @@ impl<'a> AdminSession<'a> {
 ///
 /// # Errors
 ///
-/// Persist errors.
+/// Write failed, or a key was refused.
 pub fn propagate(
     store: &PrincipalStore,
     db_path: &std::path::Path,
@@ -1079,7 +1079,7 @@ pub fn propagate(
 ///
 /// # Errors
 ///
-/// Persist errors.
+/// Read failed, or the dump was refused.
 pub fn receive_propagate(
     db_path: &std::path::Path,
     stash_path: &std::path::Path,

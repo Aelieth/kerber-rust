@@ -154,7 +154,7 @@ pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn as_exchange_with_keys(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -166,7 +166,7 @@ pub fn as_exchange_with_keys(
 ///
 /// # Errors
 ///
-/// Transport, crypto, or `KRB-ERROR` failures.
+/// Transport, key, or a KDC error.
 pub fn as_exchange_key(
     cname: PrincipalName,
     realm: &str,

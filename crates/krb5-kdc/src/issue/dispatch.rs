@@ -26,7 +26,7 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
 ///
 /// # Errors
 ///
-/// Same as [`handle_request`].
+/// A store failure that is not a KDC error.
 pub fn handle_request_from(
     store: &dyn PrincipalRead,
     raw: &[u8],

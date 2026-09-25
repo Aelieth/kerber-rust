@@ -28,7 +28,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Crypto failures.
+    /// The checksum could not be built.
     pub fn get_mic(&mut self, data: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = sign_usage(self.initiator);
         let header = mic_header(self.initiator, self.send_seq);

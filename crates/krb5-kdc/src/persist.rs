@@ -89,7 +89,7 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 ///
 /// # Errors
 ///
-/// I/O or dump crypto failures.
+/// [`PersistError::Io`] or a key failure.
 pub fn save_store(
     store: &PrincipalStore,
     db_path: &Path,

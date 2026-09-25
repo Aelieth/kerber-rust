@@ -232,7 +232,7 @@ fn etype_info2_etypes(m: &MethodData) -> Result<Vec<i32>, DiffError> {
 ///
 /// # Errors
 ///
-/// No recognized DER tag.
+/// No recognized tag.
 pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<EncKdcRepPart, DiffError> {
     krb5_asn1::decode_enc_kdc_rep_part(plain).map_err(|e| DiffError(e.to_string()))
 }

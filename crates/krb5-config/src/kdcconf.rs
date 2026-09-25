@@ -52,7 +52,7 @@ impl KdcConf {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Parse`] on malformed input.
+    /// [`Error::Parse`] on malformed input.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::default();
         let mut section = String::new();
@@ -110,7 +110,7 @@ impl KdcConf {
     ///
     /// # Errors
     ///
-    /// Returns I/O or parse errors.
+    /// [`Error::Io`] or [`Error::Parse`].
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let text = std::fs::read_to_string(path)?;
         Self::parse(&text)
