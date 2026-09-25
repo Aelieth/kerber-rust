@@ -1,4 +1,4 @@
-//! W1-C C2: kpropd `authorized_principal` (MIT `kpropd.c:1298-1348`) on the
+//! kpropd `authorized_principal` (MIT `kpropd.c:1298-1348`) on the
 //! wire. The ACL is a list of exact unparsed principals with an optional
 //! enctype restriction; there are no wildcards; the check runs after
 //! `recvauth` has sent the AP-REP, and a refused peer just sees the socket

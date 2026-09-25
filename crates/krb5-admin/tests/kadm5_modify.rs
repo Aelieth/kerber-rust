@@ -1,12 +1,12 @@
 //! `kadm5_modify_principal` validates TL type and fail_auth_count before
 //! the store write (`svr_principal.c:581-588,671-675`).
-//! R9: `KADM5_BAD_MASK`, int16 TL types, create-path TL guard
+//! `KADM5_BAD_MASK`, int16 TL types, create-path TL guard
 //! (`svr_principal.c:310-326,565-580`, `kadm_rpc_xdr.c:349`).
-//! R12: ACL before mask on an existing principal; `KEY_DATA`+`n_key_data`;
+//! ACL before mask on an existing principal; `KEY_DATA`+`n_key_data`;
 //! `0x7fff` is EINVAL 22. Lookup-before-ACL is the GET-before-ACL tests below.
 //! MIT `stub_setup` GETs the principal before ACL or mask on modify.
-//! A′-3 R26: kadm5 modify honours `KADM5_MAX_RLIFE` (`svr_principal.c:642-643`).
-//! Z6.4: `get_principal` unparses `mod_name` from `KRB5_TL_MOD_PRINC`
+//! kadm5 modify honours `KADM5_MAX_RLIFE` (`svr_principal.c:642-643`).
+//! `get_principal` unparses `mod_name` from `KRB5_TL_MOD_PRINC`
 //! (`kadmin.c:1476`, `kdb5.c:1637-1663`). Compiles at the parent: CREATE
 //! and GET already exist; the parent hard-codes `kadmin/admin@REALM` on
 //! the wire regardless of the GSS client.

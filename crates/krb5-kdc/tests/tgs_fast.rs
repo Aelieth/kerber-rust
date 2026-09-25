@@ -1,5 +1,5 @@
-//! A′-3 R33: TGS FAST_REQUIRED swallow + empty-groups stray PA-SPAKE skip.
-//! A′-4 item 16 units that compile at `e483047` and fail there.
+//! TGS FAST_REQUIRED swallow + empty-groups stray PA-SPAKE skip.
+//! TGS FAST armor.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry

@@ -1,6 +1,6 @@
-//! A′-2 R23: PAC UnsupportedChecksum wires 60 on non-retry exits.
+//! PAC UnsupportedChecksum wires 60 on non-retry exits.
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! W1-H J3: an unknown client's KRB-ERROR carries MIT's status word `CLIENT_NOT_FOUND` as `e_text`.
+//! an unknown client's KRB-ERROR carries MIT's status word `CLIENT_NOT_FOUND` as `e_text`.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry

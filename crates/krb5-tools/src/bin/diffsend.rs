@@ -1335,7 +1335,7 @@ fn run() -> Result<(), String> {
     // only after preauth because validate_as_request tests AS_INVALID_OPTIONS
     // only (kdc_util.c:727) and lets the bit through, unlike the TGS-only
     // options in as-invalid-opts. Both legs send code 13 with the same wire
-    // status; before R2-P3 the Rust KDC refused the bit early as "INVALID AS
+    // status. An early refusal of the bit as "INVALID AS
     // OPTIONS", so the e_text diverged from MIT here.
     let pa_anon = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
     let mut anon =
@@ -1486,7 +1486,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // W1-Z Z1.3: krb5int_validate_times (valid_times.c:44-51) judges a header
+    // krb5int_validate_times (valid_times.c:44-51) judges a header
     // ticket with no starttime by its authtime — kdc_rd_ap_req →
     // krb5_rd_req_decoded_anyflag → rd_req_dec.c:627. A forged TGT with a
     // future authtime and starttime absent is 33 PROCESS_TGS on both KDCs.
@@ -1520,7 +1520,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // A′-1 item 1: AS FAST AP-REQ armor without authenticator subkey.
+    // AS FAST AP-REQ armor without authenticator subkey.
     // MIT armor_ap_request (fast_util.c:70-77) → 12 FIND_FAST. MIT clients
     // always send a subkey, so this forge is the both-legs oracle.
     let armor_tkt = mint_tgt(
@@ -1554,7 +1554,7 @@ fn run() -> Result<(), String> {
         err::POLICY,
     )?;
 
-    // A′-1 item 3: header ticket or authenticator carrying AD-FX-ARMOR 71.
+    // header ticket or authenticator carrying AD-FX-ARMOR 71.
     // MIT kdc_util.c:217-229 → 12 PROCESS_TGS. Nothing in 1.22.2 emits 71.
     let inner_ad = encode(&vec![AuthorizationDataValue {
         ad_type: pa::AD_FX_ARMOR,
@@ -1649,7 +1649,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // A′-1 item 4: AS/TGS entry validation (do_as_req.c:513-517, dispatch.c:145-158,
+    // AS/TGS entry validation (do_as_req.c:513-517, dispatch.c:145-158,
     // do_tgs_req.c:609-610, kdc_util.c:179-184,790-793, kdc_rd_ap_req kvno 0).
     let mut bad_as = as_req(user.clone(), realm, 0x1000_0023, None).map_err(|e| e.to_string())?;
     bad_as.0.msg_type = krb5_types::KdcReq::MSG_TGS_REQ;

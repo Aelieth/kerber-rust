@@ -1,6 +1,6 @@
-//! A′-3 item 15: SPAKE 91 e_data is module, ETYPE-INFO2, cookie.
-//! A′-3 R30 inject: verify_support 24, PKINIT [16, 147], TGS FAST armor.
-//! A′-3 R33: TGS FAST_REQUIRED swallow + empty-groups stray PA-SPAKE skip.
+//! SPAKE 91 e_data is module, ETYPE-INFO2, cookie.
+//! `verify_support` 24, PKINIT [16, 147], TGS FAST armor.
+//! TGS FAST_REQUIRED swallow + empty-groups stray PA-SPAKE skip.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry

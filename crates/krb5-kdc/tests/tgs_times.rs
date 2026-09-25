@@ -1,8 +1,8 @@
-//! A′-3 item 12: `check_tgs_svc_reqd_flags` PRE_AUTH + `compute_ticket_times`.
-//! A′-3 R26: `max_renewable_life` 0, AS `PRE_AUTHENT`, `check_tgs_opts` order.
-//! A′-3 R27: S4U `t->client`, signed `ts_delta`, `check_tgs_svc_time` slot.
+//! `check_tgs_svc_reqd_flags` PRE_AUTH + `compute_ticket_times`.
+//! `max_renewable_life` 0, AS `PRE_AUTHENT`, `check_tgs_opts` order.
+//! S4U `t->client`, signed `ts_delta`, `check_tgs_svc_time` slot.
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! Z1.3 follow-up: the KDC's header-ticket time check is `krb5int_validate_times`
+//! the KDC's header-ticket time check is `krb5int_validate_times`
 //! too (`kdc_util.c` `kdc_rd_ap_req` → `krb5_rd_req_decoded_anyflag` →
 //! `rd_req_dec.c:627` → `valid_times.c:44-51`): a TGT with no `starttime` is
 //! judged by its `authtime`. Compiles at the parent `284ec70` and fails there —

@@ -3,7 +3,7 @@
 //! RPCSEC_GSS integrity is databody_integ + checksum (`authgss_prot.c:203-225`).
 //! AUTH_NONE unknown program is MIT `svcerr_prog_unavail` (connection kept).
 //! AUTH_GSSAPI INIT on IPROP_PROG is auth-layer SUCCESS (`no_dispatch`).
-//! W1-Z Z1b.1: the AUTH_GSSAPI `GSSAPI_INIT` arg-version switch
+//! the AUTH_GSSAPI `GSSAPI_INIT` arg-version switch
 //! (`lib/rpc/svc_auth_gssapi.c:326-341`): versions 1 and 2 are answered with
 //! `call_res.version` 1 (the OpenVision compat downgrade), 3 and 4 are
 //! echoed, anything else is `AUTH_BADCRED` before the token is looked at.

@@ -533,7 +533,7 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
 /// for every module failure (`do_as_req.c:442`), so the e_text is too. The
 /// module's e-data rides along (`:1194-1196`), and the original failure
 /// stays in the log detail. 34 `REPEAT` is the
-/// documented R2-D1 exception (the replay cache answers before the filter
+/// documented exception (the replay cache answers before the filter
 /// would run); FAST errors never pass here (`FastMod::process_as` is a
 /// no-op, `kdc_find_fast` is not a module in MIT either).
 pub(crate) fn filter_preauth_error(e: Error) -> Error {
@@ -568,7 +568,7 @@ pub(crate) fn filter_preauth_error(e: Error) -> Error {
         // k5e1 KRB5KDC_ERR_DISCARD (kdc_preauth.c:1125); do_as_req.c:372
         // suppresses the reply
         err::DISCARD,
-        // R2-D1 (docs/security.md replay row): not in MIT's list
+        // Not in MIT's list (docs/security.md replay row).
         err::REPEAT,
     ];
     match e {

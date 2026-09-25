@@ -1,11 +1,11 @@
-//! A′-3 R27: S4U `t->client`, signed `ts_delta`, `check_tgs_svc_time` slot.
-//! A′-4 item 19 units that compile at `7403ec6` and fail there.
+//! S4U `t->client`, signed `ts_delta`, `check_tgs_svc_time` slot.
+//! Ticket lifetime when `max_life` is unset.
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! Z6.6: unset `kdc.conf` `max_life` is `params.max_life` = 24 h
+//! unset `kdc.conf` `max_life` is `params.max_life` = 24 h
 //! (`alt_prof.c:574-575` `GET_DELTAT_PARAM(…, 24 * 60 * 60)`). Compiles
 //! at the parent: create already takes `Policy::max_life` / `KdcConf::max_life`;
 //! the parent defaults both to 10 h.
-//! Z7.1: lifetime defaults whole. Compiles at `818d4d6` (parent-red):
+//! Lifetime defaults. Previously:
 //! omitted `max_renewable_life` still fed the create field (0) into the
 //! KDC issue cap, `synthesize_km` hard-coded 10 h / 7 d, and `as_ex`
 //! `till` fell back to 10 h. Do not name `realm_max_renewable_life` here.

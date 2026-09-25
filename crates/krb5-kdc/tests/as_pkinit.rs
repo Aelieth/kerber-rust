@@ -1,5 +1,5 @@
-//! A′-4 item 17 units that compile at `7470962` and fail there.
-//! A′-4 item 17 units that need `pkinit_require_freshness` / token mint.
+//! PKINIT freshness and the client token.
+//! units that need `pkinit_require_freshness` / token mint.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry

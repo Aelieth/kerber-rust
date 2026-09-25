@@ -39,7 +39,7 @@ pub struct StableKrbError {
     pub sname: String,
     /// MIT status word (`e_text`).
     pub e_text: String,
-    /// Whether `crealm` is present (R4: omit with a missing client).
+    /// Whether `crealm` is present (omit with a missing client).
     pub has_crealm: bool,
     /// Whether `cname` is present.
     pub has_cname: bool,

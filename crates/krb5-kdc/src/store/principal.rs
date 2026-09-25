@@ -589,7 +589,7 @@ impl PrincipalStore {
     /// parsed over 0 like MIT. Without the stanza MIT's `KRB5_KDB_DEF_FLAGS`
     /// is 0; the Rust `requires_preauth` knob (predates the stanza, default
     /// on) adds `REQUIRES_PRE_AUTH` to *password-keyed* creates only — its
-    /// scope since before W1-Z — so random-key (service) creates are MIT's 0
+    /// scope is those creates, so random-key (service) creates are MIT's 0
     /// and U2U to a fresh `-randkey` service keeps working
     /// (`docs/security.md`). A written stanza overrides the knob for both.
     #[must_use]

@@ -1,11 +1,11 @@
-//! A′-4 item 16 units that compile at `e483047` and fail there.
+//! FAST armor and hide-client-names.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
 //! Old-kvno cookie arm: a cookie minted under krbtgt kvno N still opens
 //! after a keepold rollover (`fast_util.c:545-611` `first_key_at_kvno`).
-//! Z6.1: FAST armor-TGT decrypt is MIT `krb5_ktkdb_get_entry`
+//! FAST armor-TGT decrypt is MIT `krb5_ktkdb_get_entry`
 //! (`lib/kdb/keytab.c:157`) — `krb5_dbe_find_enctype(entry, xrealm ? etype : -1,
 //! -1, kvno)` pins the ticket kvno and skips non-permitted enctypes; a local
 //! TGS whose first permitted key is not similar to the ticket etype is
@@ -520,7 +520,7 @@ fn fast_hide_client_names_returns_the_anonymous_outer_client() {
     // request that sets KRB5_FAST_OPTION_HIDE_CLIENT_NAMES (RFC 6113 bit 1) is
     // answered with the anonymous principal WELLKNOWN/ANONYMOUS@WELLKNOWN:
     // ANONYMOUS as the outer reply client; the real client stays inside the
-    // FAST-armored reply, which still strengthens and finishes. Before R2-P4
+    // FAST-armored reply, which still strengthens and finishes. Earlier,
     // the KDC refused the option as UNKNOWN_CRITICAL_FAST_OPTION.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -660,7 +660,7 @@ fn encrypted_challenge_skew_is_fast_wrapped() {
 #[test]
 fn unknown_critical_fast_option_is_refused() {
     // MIT UNSUPPORTED_CRITICAL_FAST_OPTIONS = 0xbfff0000: RFC bits 0 and 2..15
-    // are refused; only bit 1 (hide-client-names) is honoured (R2-P4).
+    // are refused; only bit 1 (hide-client-names) is honoured.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let err = wrap_as_fast_bit(&store, 840, 2).expect_err("critical option");
     assert_eq!(issue_code(err), err::UNKNOWN_CRITICAL_FAST_OPTION);

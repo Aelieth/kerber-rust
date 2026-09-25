@@ -99,7 +99,7 @@ fn random_handle() -> Vec<u8> {
 /// 1 MiB per-connection buffer (`net-server.c:1278`) and processes the RPC as it
 /// streams; Rust buffers the whole record, so it bounds the accumulated total to
 /// the same size rather than letting a pre-auth client chain fragments without
-/// limit (R2-S3).
+/// limit.
 const MAX_KADM5_RECORD: usize = 1024 * 1024;
 
 pub(super) fn read_record(stream: &mut TcpStream) -> io::Result<Vec<u8>> {

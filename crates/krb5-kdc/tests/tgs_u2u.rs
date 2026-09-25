@@ -1,10 +1,10 @@
-//! A′-2 item 9 U2U / second-ticket statuses.
+//! U2U / second-ticket statuses.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
-//! R13: `u2u_session` statuses (`do_tgs_req.c:250-307`, `kdc_util.c:420-450`).
-//! R9: U2U missing second-ticket server is 7 `2ND_TKT_SERVER`
+//! `u2u_session` statuses (`do_tgs_req.c:250-307`, `kdc_util.c:420-450`).
+//! U2U missing second-ticket server is 7 `2ND_TKT_SERVER`
 //! (`do_tgs_req.c:280-289` via `kdc_get_server_key(stkt)`).
 
 use krb5_crypto::EncryptionType;

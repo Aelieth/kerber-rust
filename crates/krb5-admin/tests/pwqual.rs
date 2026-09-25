@@ -1,4 +1,4 @@
-//! W1-C C1: MIT built-in password-quality modules (`dict`, `empty`, `princ`)
+//! MIT built-in password-quality modules (`dict`, `empty`, `princ`)
 //! on kadm5 create and on chpass. Compiles at `370461b` (parent-red).
 
 #[path = "common/mod.rs"]

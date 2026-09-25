@@ -1,4 +1,4 @@
-//! A′-2 item 6 PAC-shape units that need APIs parent `2e5995a` does not export.
+//! PAC shape at issue and verify.
 //! RODCIdentifier trailer on the server checksum (MIT `pac.c:557-569`).
 //! PAC shape and placement rules MIT 1.22.2 applies at issue and verify time:
 //! `k5_pac_should_have_ticket_signature` (`pac.c:583-592`, `pac_sign.c:239-243`),

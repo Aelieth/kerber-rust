@@ -1,5 +1,5 @@
 //! Admin whole-flow tests moved from `src/lib.rs`.
-//! Z7.2 (b): local `ktadd` rotate and `modprinc -unlock` stamp the
+//! (b): local `ktadd` rotate and `modprinc -unlock` stamp the
 //! session princstr (`svr_principal.c:685,1490` → `server_kdb.c:376-377`).
 //! Compiles at the parent: `AdminSession::ktadd_local` / `admin_unlock`
 //! already exist; the parent uses `default_mod_actor` on rotate and does

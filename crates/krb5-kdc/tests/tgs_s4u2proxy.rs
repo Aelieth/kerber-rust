@@ -1,6 +1,6 @@
-//! A′-2 item 8 S4U2Proxy constraint and policy statuses.
-//! A′-2 R18: S4U2Proxy identity, PAC client info, cross-realm gather.
-//! A′-2 R22: realm-aware RBCD ACL; create_host seeds no s4u_allowed_from.
+//! S4U2Proxy constraint and policy statuses.
+//! S4U2Proxy identity, PAC client info, cross-realm gather.
+//! realm-aware RBCD ACL; create_host seeds no s4u_allowed_from.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry

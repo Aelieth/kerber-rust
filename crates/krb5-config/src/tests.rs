@@ -429,7 +429,7 @@ fn dict_file_is_a_realm_relation_only() {
 fn libdefaults_does_not_honour_kdcdefaults_knobs() {
     // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
     // [kdcdefaults] or a realm stanza (main.c:257-261,622-626); a copy
-    // under [libdefaults] is ignored (R2-P8: no fallthrough).
+    // under [libdefaults] is ignored (no fallthrough).
     let lib = KdcConf::parse(
         r"
 [libdefaults]

@@ -1,5 +1,5 @@
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! W1-Z Z1.1, store side: the realm defaults `kadm5_create_principal_3`
+//! store side: the realm defaults `kadm5_create_principal_3`
 //! takes for fields absent from the mask (`svr_principal.c:381-401`
 //! `handle->params.*`, `alt_prof.c:573-632`) and the local-verb shape of
 //! `impose_restrictions` (`auth.c:205-272`). Compiles at `b50d6bf`

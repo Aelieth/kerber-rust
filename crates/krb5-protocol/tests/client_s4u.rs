@@ -1,4 +1,4 @@
-//! W1-B B2: `kvno -U` emits PA-S4U-X509-USER 130 and PA-FOR-USER 129
+//! `kvno -U` emits PA-S4U-X509-USER 130 and PA-FOR-USER 129
 //! on the FAST TGS outer list (`s4u_creds.c:517-567`, `fast.c:227-250`)
 //! and `verify_s4u2self_reply` (`s4u_creds.c:273-397`) fails closed.
 //! Live oracle: `client-differential-gate.sh` `MIT_kvno_U_tgs_padata`.

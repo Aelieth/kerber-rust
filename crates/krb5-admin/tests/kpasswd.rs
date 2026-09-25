@@ -1,14 +1,14 @@
-//! Z1.3 kpasswd acceptor pins the changepw service (`schpw.c` / MIT
+//! kpasswd acceptor pins the changepw service (`schpw.c` / MIT
 //! `krb5_rd_req` on the kadmin/changepw cred). Compiles at the parent
 //! `d6ae0c1` and fails there: the listener passed `expected_server: None`, so a
 //! ticket whose sname is anything else (here `host/x`) that still decrypts under
 //! the changepw key was accepted and drove a password change. At HEAD the
 //! sname mismatch is refused before the KRB-PRIV is ever read.
 //! Admin whole-flow tests moved from `src/lib.rs`.
-//! Z7.2 (a): kpasswd stamps `kadmind@REALM` (`ovsec_kadmd.c:446`,
+//! (a): kpasswd stamps `kadmind@REALM` (`ovsec_kadmd.c:446`,
 //! `schpw.c:407`). Compiles at the parent: `handle_kpasswd_rfc3244` and
 //! `tl_mod_princ_name` already exist; the parent stamps the ticket client.
-//! Z8.1: kpasswd reloads before mutate (`write_store` house rule).
+//! kpasswd reloads before mutate (`write_store` house rule).
 //! Compiles at the parent: `handle_kpasswd_rfc3244`, `save_store` /
 //! `load_store`, and `persist_paths` already exist; the parent writes
 //! without `reload_if_stale()`.

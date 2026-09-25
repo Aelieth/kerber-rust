@@ -1,4 +1,4 @@
-//! W1-Z Z1b.2: `kinit`'s expired-password flow runs in MIT's order
+//! `kinit`'s expired-password flow runs in MIT's order
 //! (`lib/krb5/krb/gic_pwd.c:205-240`): a typed `KDC_ERR_KEY_EXP` → the
 //! `kadmin/changepw` AS *first*, with the password just typed → only then the
 //! `Enter new password` prompts. So a wrong password on an expired principal

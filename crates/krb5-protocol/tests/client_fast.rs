@@ -1,4 +1,4 @@
-//! W1-B B1: FAST reply nonce. MIT `fast.c:397-402` `decrypt_fast_reply`.
+//! FAST reply nonce. MIT `fast.c:397-402` `decrypt_fast_reply`.
 //! Unit-only: no MIT tool emits a flipped FAST nonce.
 
 #[path = "common/mod.rs"]

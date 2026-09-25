@@ -9,7 +9,7 @@
 //! `renew-gate.sh`). `-U <user>` sends PA-FOR-USER with `body.realm` of the
 //! presented TGT (single request; no S4U referral walk). MIT `kvno -U` also
 //! requires the ccache principal to equal the service; this binary does not,
-//! so a user TGT can present the Y0 mismatch cell. `-P` after `-U` is
+//! so a user TGT can present the mismatch cell. `-P` after `-U` is
 //! S4U2Proxy (`s4u_creds.c` `krb5_get_credentials_for_proxy`).
 
 #![forbid(unsafe_code)]

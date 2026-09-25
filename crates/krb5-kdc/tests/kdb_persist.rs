@@ -1,12 +1,12 @@
 //! Persist round-trip and UDP listener adversarial tests.
-//! Z6.4: `kdb_put_entry` stamps `KRB5_TL_MOD_PRINC` with
+//! `kdb_put_entry` stamps `KRB5_TL_MOD_PRINC` with
 //! `handle->current_caller` (`server_kdb.c:376-377`), not a hard-coded
 //! `kadmin/admin@REALM`. Compiles at the parent: `create_password` already
 //! takes `actor`, but `stamp_admin_tl` ignored it.
-//! Z7.2 (c): `kdb5_util create` stamps `db_creation@REALM`
+//! `kdb5_util create` stamps `db_creation@REALM`
 //! (`kdb5_create.c:114-133`). Compiles at the parent: bootstrap and
 //! `tl_mod_princ_name` exist; the parent hard-codes `kadmin/admin@REALM`.
-//! Z8.3: `kadm5_create` stamps `kadmin/admin` and `kadmin/changepw`
+//! `kadm5_create` stamps `kadmin/admin` and `kadmin/changepw`
 //! `kdb5_util@REALM` (`kadm5_create.c:100`). Compiles at the parent:
 //! bootstrap and `tl_mod_princ_name` exist; the parent restamps them
 //! `db_creation@` via `apply_admin_fields`.

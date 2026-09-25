@@ -74,6 +74,8 @@ this project uses semantic versioning once a crate is published.
   variant or a condition. The ones that named a family, or opened
   with "Returns", now say which variant or which check failed.
   No behaviour change.
+- **all.** Process-history tags are gone from comments under
+  `crates/`. `check_no_process_history` is hard. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

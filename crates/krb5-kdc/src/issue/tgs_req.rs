@@ -1248,7 +1248,7 @@ pub(super) fn tgs_header_client(store: &dyn PrincipalRead, req: &TgsReq) -> Opti
 /// MIT `db_get_svc_princ` (`do_tgs_req.c:525-538`): `CANTLOCK_DB` is 29
 /// `SVC_UNAVAILABLE`, and **any** backend error (including CANTLOCK) sets
 /// `LOOKING_UP_SERVER`. Other faults stay 7 `S_PRINCIPAL_UNKNOWN` with that
-/// status (the pre-Z6.3 wire code; MIT would send the remapped KDB code).
+/// status (the previous wire code; MIT would send the remapped KDB code).
 fn lookup_svc_princ(
     store: &dyn PrincipalRead,
     name: &PrincipalName,

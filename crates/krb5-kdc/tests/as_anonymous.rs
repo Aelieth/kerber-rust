@@ -1,5 +1,5 @@
-//! A′-4 item 16 units that compile at `e483047` and fail there.
-//! A′-4 item 16 units that need the new `restrict_anon` / unsigned-AuthPack surface.
+//! Anonymous AS requests.
+//! units that need the new `restrict_anon` / unsigned-AuthPack surface.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, p256_generate};

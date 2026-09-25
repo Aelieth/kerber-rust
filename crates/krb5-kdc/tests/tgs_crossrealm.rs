@@ -1,4 +1,4 @@
-//! A′-2 R16: incoming-trust principals and realm-aware TGS lookup.
+//! incoming-trust principals and realm-aware TGS lookup.
 //! Capaths transited check on the shipped `issue_tgs` path.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!

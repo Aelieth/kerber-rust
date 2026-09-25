@@ -1,5 +1,5 @@
-//! A′-3 R26: `max_renewable_life` 0, AS `PRE_AUTHENT`, `check_tgs_opts` order.
-//! A′-3 R32: PKINIT does not set `HW_AUTHENT`; RENEW uses signed header life.
+//! `max_renewable_life` 0, AS `PRE_AUTHENT`, `check_tgs_opts` order.
+//! PKINIT does not set `HW_AUTHENT`; RENEW uses signed header life.
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!

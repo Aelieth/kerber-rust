@@ -949,7 +949,7 @@ pub enum TgsFallback {
     NonReferral,
     /// Referral realm and fewer than two name components.
     HostRealmUnknown,
-    /// Referral realm + hostname: MIT `krb5_get_fallback_host_realm` (B3).
+    /// Referral realm + hostname: MIT `krb5_get_fallback_host_realm`.
     HostRealm,
 }
 

@@ -1,5 +1,5 @@
-//! A′-2 item 7 S4U2Self units that fail at parent `2e5995a`.
-//! A′-2 R17: S4U2Self keep-F default, is_referral, reply 130, policy cells.
+//! S4U2Self units.
+//! S4U2Self keep-F default, is_referral, reply 130, policy cells.
 //! Capaths transited check on the shipped `issue_tgs` path.
 //! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
 //!

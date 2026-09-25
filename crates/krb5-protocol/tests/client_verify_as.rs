@@ -1,4 +1,4 @@
-//! W1-B B1: `verify_as_reply` server principals.
+//! `verify_as_reply` server principals.
 //! MIT `get_in_tkt.c:227-239`. Live oracle: `client-differential-gate.sh`.
 
 use krb5_config::set_test_krb5_paths;
@@ -219,7 +219,7 @@ fn kdc_timesync_off_is_kdcrep_skew() {
     );
 }
 
-/// Z8.2: `set_request_times` clamps `rtime` to `till`
+/// `set_request_times` clamps `rtime` to `till`
 /// (`get_in_tkt.c:718-722`). Source pin so the inject compiles at the
 /// parent (no public rtime getter there) and still fails.
 #[test]

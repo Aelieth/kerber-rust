@@ -1,5 +1,5 @@
 //! `svr_policy.c` create DUP before floors; modify validates the merged record.
-//! Z8.4: `validate_allowed_keysalts` at addpol/modpol
+//! `validate_allowed_keysalts` at addpol/modpol
 //! (`svr_policy.c:20-36`). Compiles at the parent: `parse_policy_args`
 //! and `add_policy_ent` exist; the parent CLI rejects `bogus:normal`
 //! and a tab in the parser with a different text.

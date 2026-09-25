@@ -1,5 +1,5 @@
-//! A′-4 item 18 units that compile at `6be3b65` and fail there.
-//! A′-4 item 18 units that need `domain_realm` / host-based knobs.
+//! Host-based referral and `domain_realm`.
+//! units that need `domain_realm` / host-based knobs.
 //! F4 hierarchical `find_alternate_tgs` / numeric host referral.
 //!
 //! These compile at `b749e73` and fail there: the walk reused transit
