@@ -68,6 +68,8 @@ this project uses semantic versioning once a crate is published.
 - **types.** The ten long functions state when a parse is not a
   principal, a duration, a transit path, or a certificate. No
   behaviour change.
+- **crypto.** The five long functions state when a derive or a
+  checksum failure wipes key material. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

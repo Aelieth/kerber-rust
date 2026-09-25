@@ -67,6 +67,8 @@ pub fn string_to_key(
     result
 }
 
+/// MIT `krb5_c_string_to_key_with_params` (`string_to_key.c:72-75`): a failed derive zaps the key bytes and does not return them.
+/// An iteration count of zero or above five million is refused before any key bytes are produced.
 fn string_to_key_inner(
     etype: EncryptionType,
     password: &[u8],
@@ -270,6 +272,8 @@ pub fn encrypt_with_state(
     encrypt_inner_state(key, usage, &conf, plaintext, state)
 }
 
+/// MIT `krb5int_dk_encrypt` (`enc_dk_hmac.c:156-168`): the trailer is the truncated HMAC of the ciphertext, not of the plaintext.
+/// A confounder that is not one block is not encrypted.
 fn encrypt_inner_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -370,6 +374,8 @@ pub fn decrypt_with_state(
     decrypt_inner_state(key, usage, ciphertext, state)
 }
 
+/// MIT `krb5int_dk_decrypt` (`enc_dk_hmac.c:259-261`): a checksum mismatch is an integrity failure.
+/// The recovered plaintext is wiped before that error is returned.
 fn decrypt_inner_state(
     key: &ProtocolKey,
     usage: KeyUsage,
