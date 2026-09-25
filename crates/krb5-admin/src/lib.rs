@@ -1,8 +1,11 @@
 //! Administration: kadmind (kadm5 over ONC RPC `AUTH_GSSAPI`), kadmin.local,
-//! kdb5_util, kpasswd (RFC 3244 on 464), kprop / kpropd (dump v7 on 754) and
-//! iprop (`IPROP_GET_UPDATES` / `FULL_RESYNC`, `krb5-iprop-pull`), ktutil.
+//! kpasswd (RFC 3244 on 464), kprop / kpropd (dump v7 on 754),
+//! iprop (`IPROP_GET_UPDATES` / `FULL_RESYNC`, `krb5-iprop-pull`), and ktutil.
 //!
 //! The kadmind path enforces the KDC ACL. There is no C FFI.
+//!
+//! The public surface is the names this root re-exports. `kadm5`, `kprop`,
+//! and `listen` stay private.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

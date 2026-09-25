@@ -11,6 +11,9 @@
 //! Ticket issuance, ACL checks, and keytab export are pure functions so tests
 //! do not need a bound socket. UDP/TCP 88 is a thin listener over
 //! [`handle_request`]. There is no C FFI.
+//!
+//! The public surface is the names this root re-exports, plus `principals`
+//! and `testrealm`. Every other module stays private.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

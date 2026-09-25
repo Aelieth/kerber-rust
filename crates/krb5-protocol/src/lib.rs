@@ -8,6 +8,9 @@
 //! `krb5_verify_init_creds` (`vfy_increds`), the replay cache (`replay`),
 //! and the capture / differential tooling (`capture`, `diff`). There is no
 //! C FFI.
+//!
+//! The public surface is the names this root re-exports. Child modules
+//! stay private.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

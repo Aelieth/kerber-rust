@@ -1,8 +1,13 @@
-//! Kerberos V5 encryption types 17–20 (RFC 3961, 3962, 8009).
+//! Kerberos V5 encryption types (RFC 3961, 3962, 8009).
 //!
-//! This crate implements string-to-key, key-usage derivation, AES-CTS
-//! encrypt/decrypt, and keyed checksums. Long-term key material is zeroized
-//! on drop. There is no `unsafe` code.
+//! Default profiles are etypes 17–20: string-to-key, key-usage derivation,
+//! AES-CTS, and keyed checksums. Etypes 16, 23, 25, and 26 exist only when
+//! `allow_weak_crypto` is set. SPAKE, MODP, CF2, and PRF+ sit beside those
+//! profiles. Long-term key material is zeroized on drop. There is no
+//! `unsafe` code.
+//!
+//! The public surface is the names this root re-exports. Weak etypes are
+//! not part of the default profile.
 //!
 //! # Profiles
 //!

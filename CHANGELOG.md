@@ -22,6 +22,13 @@ this project uses semantic versioning once a crate is published.
 - **docs.** `docs/architecture.md` and `CONTRIBUTING.md` state the
   comment rules R1–R4: one MIT anchor form, an invariant rather than
   a step list, no process history, and `# Errors` naming variants.
+- **crates.** The `krb5-admin` header drops `kdb5_util` and names
+  ktutil, iprop, and kpropd. The `krb5-crypto` header names weak
+  etypes 16/23/25/26 behind `allow_weak_crypto`, plus SPAKE, MODP,
+  CF2, and PRF+. `krb5-kdc` and `krb5-protocol` headers end on the
+  public-surface line, as do the other two. The `krb5-admin` and
+  `krb5-crypto` crate descriptions match those headers. No behaviour
+  change.
 
 ### W3-S3.10 parameter structs
 
