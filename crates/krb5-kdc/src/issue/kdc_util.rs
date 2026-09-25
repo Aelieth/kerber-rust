@@ -38,6 +38,8 @@ pub(super) struct HeaderTgt {
     pub(super) header_server: Principal,
 }
 
+/// MIT `kdc_process_tgs_req` (`kdc_util.c:217-229`): a ticket that is valid only as FAST armor is refused after the request is authenticated.
+/// An address or time failure is reported before that armor check, and an unknown or non-collision-proof checksum is not accepted.
 pub(super) fn process_tgs_header(
     store: &dyn PrincipalRead,
     ap_raw: &[u8],
@@ -225,6 +227,8 @@ pub(super) fn kdc_get_ticket_endtime(
         .map_err(|_| proto(err::NEVER_VALID, status::UNKNOWN_REASON))
 }
 
+/// MIT `kdc_get_server_key` (`kdc_util.c:377-379`): the server key is the ticket's own server, with no fallback principal.
+/// A local TGS searches every enctype at the ticket kvno, and a missing server is not that ticket's key.
 pub(super) fn decrypt_presented_tgt(
     store: &dyn PrincipalRead,
     ap: &krb5_types::ApReq,
@@ -617,6 +621,8 @@ pub(super) fn validate_as_request(
     Ok(())
 }
 
+/// MIT `get_ticket_flags` (`kdc_util.c:849-850`): a header ticket that is not forwardable does not yield a forwardable ticket.
+/// A validate or renew request copies the header flags and clears the invalid bit, and a postdated request sets invalid.
 pub(super) fn get_ticket_flags(
     req: &krb5_types::KdcOptions,
     client: Option<&Principal>,
@@ -681,6 +687,8 @@ pub(super) fn get_ticket_flags(
     flags
 }
 
+/// MIT `kdc_get_ticket_renewtime` (`kdc_util.c:1749-1752`): renewable-ok does not issue a renewable ticket unless the truncated renew time is past the ticket end.
+/// A client, server, or header ticket that disallows renewable yields no renew-till, and a zero maximum is a cap of zero.
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(super) fn kdc_get_ticket_renewtime(
     store: &dyn PrincipalRead,

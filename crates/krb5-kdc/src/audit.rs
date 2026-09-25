@@ -459,6 +459,8 @@ fn as_failure(req: &AsReq, sender: Option<&HostAddress>, code: i32, e_text: &str
     clear_req_id();
 }
 
+/// MIT `log_tgs_req` (`kdc_log.c:132-135`): a missing client or server name is logged as unknown, not omitted.
+/// A body that does not decode as a TGS-REP is not logged as a success.
 fn tgs_success(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -532,6 +534,8 @@ fn tgs_success(
     clear_req_id();
 }
 
+/// MIT `log_tgs_req` (`kdc_log.c:142-148`): a server-mismatch is not logged on the normal status line.
+/// An empty status is recorded as unknown rather than as a success.
 fn tgs_failure(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -593,6 +597,8 @@ fn tgs_failure(
     clear_req_id();
 }
 
+/// MIT `log_as_req` (`kdc_log.c:76-83`): a null status is the issue line, and that line is not the reply.
+/// A missing client or server name is logged as unknown rather than omitted.
 #[expect(clippy::too_many_arguments, reason = "kau state, not a params struct")]
 fn emit_issue(
     kind: &str,

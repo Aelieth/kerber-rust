@@ -29,6 +29,8 @@ pub(crate) fn kdc_error_bytes(store: &dyn PrincipalRead, code: i32) -> Vec<u8> {
     encode_krb_error(store, code, None, None, None, false)
 }
 
+/// MIT `finish_process_as_req` (`do_as_req.c:372-373`): a discard error is not turned into a KRB-ERROR.
+/// The bytes returned for that discard are empty, so the datagram path sends nothing.
 pub(super) fn as_reply(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -115,6 +117,8 @@ pub(super) fn as_reply(
     }
 }
 
+/// MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): the error client is the header ticket's client only when that ticket decrypted.
+/// A request that is not a TGS-REQ fails before that decryption, so its error has no client name.
 pub(super) fn tgs_reply(
     store: &dyn PrincipalRead,
     req: &TgsReq,
@@ -242,6 +246,8 @@ pub(super) struct MintTicket<'a> {
     pub no_auth_data: bool,
 }
 
+/// MIT `tgs_issue_ticket` (`do_tgs_req.c:1056-1060`): a user-to-user ticket's kvno is zero, and any other ticket carries the server's current kvno.
+/// A zero kvno is omitted from the encrypted-data, so a user-to-user ticket is not pinned to a key version.
 pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
     let MintTicket {
         service_key,
@@ -441,6 +447,8 @@ pub(super) fn krb_error_log_fields(bytes: &[u8]) -> (i32, String) {
     }
 }
 
+/// MIT `prepare_error_as` (`do_as_req.c:831-832`): when the client must be hidden, the error does not carry the client name.
+/// The error realm and server are the request's, and a realm that is not ASCII produces no error bytes.
 pub(super) fn encode_krb_error(
     store: &dyn PrincipalRead,
     code: i32,

@@ -202,6 +202,8 @@ fn armor_ticket_key(
     }
 }
 
+/// MIT `krb5_ktkdb_get_entry` (`keytab.c:157-163`): the key search is pinned to the ticket kvno, and a non-permitted enctype is not a candidate.
+/// An unknown server or a foreign-realm armor ticket is not-us, and a local ticket that is not a TGT is not armor.
 fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<ProtocolKey, Error> {
     let ap: krb5_types::ApReq = decode(ap_raw)?;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
@@ -456,6 +458,12 @@ pub(crate) enum SpakeStep {
     Done(ProtocolKey),
 }
 
+/// MIT `next_padata` (`kdc_preauth.c:1306-1307`): a padata type that is not a module is skipped rather than failed.
+/// With no SPAKE groups configured a PA-SPAKE is skipped, and an empty token when groups are configured is preauth-failed.
+///
+/// # Errors
+///
+/// `PREAUTH_FAILED` when the token is empty or the SPAKE message is not one this KDC accepts.
 pub(crate) fn process_spake(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -536,6 +544,8 @@ pub(crate) fn process_spake(
     Ok(None)
 }
 
+/// MIT `send_challenge` (`spake_kdc.c:241-246`): the challenge offers only the factor type none.
+/// The private scalar is stored in the cookie, and a key-generation failure is not sent as a challenge.
 fn send_spake_challenge(
     store: &dyn PrincipalRead,
     client: &PrincipalName,
@@ -585,6 +595,10 @@ fn send_spake_challenge(
 /// AuthPack, DH group, SPKI) is logged at `info` like MIT's
 /// `kdc_preauth.c:1224-1228` `LOG_INFO "preauth (%s) verify failure: %s"`,
 /// `outcome = "denied"`; the KDC's own faults stay `error`.
+///
+/// # Errors
+///
+/// `PREAUTH_FAILED` when the CMS, certificate, checksum, time, or Diffie-Hellman group does not verify.
 pub(crate) fn process_pkinit(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,

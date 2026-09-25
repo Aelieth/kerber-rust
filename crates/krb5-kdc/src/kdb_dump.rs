@@ -241,6 +241,8 @@ impl DumpFile {
 }
 
 impl DumpPrincipal {
+    /// MIT `process_k5beta7_princ` (`dump.c:676-690`): eight attribute fields are required, and a short record is not a principal.
+    /// The master-key principal is refused when its key does not match the derived master key, and the policy binding is taken from the admin tagged data.
     fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
@@ -574,6 +576,8 @@ pub fn dump_store_iprop(
     ))
 }
 
+/// MIT `process_k5beta7_princ` (`dump.c:666-674`): a name that cannot be read is not a principal.
+/// The name's length must equal the header count, so a truncated name does not consume the attribute fields.
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {
     let mut raw: Vec<&str> = rest.split('\t').collect();
     if let Some(last) = raw.last_mut() {
@@ -777,6 +781,8 @@ fn dump_attributes(p: &Principal) -> u32 {
     a
 }
 
+/// MIT `k5beta7_common` (`dump.c:327-331`): a tagged-data count that does not match the list is an error and the record is not written.
+/// An alias is written with zero lifetimes, and the database-arguments tag is stripped before the record is emitted.
 fn write_princ_record(
     out: &mut String,
     p: &Principal,

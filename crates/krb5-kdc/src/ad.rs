@@ -125,6 +125,8 @@ pub fn sign_reply_pac(
     )
 }
 
+/// MIT `krb5_kdc_sign_ticket` (`pac_sign.c:397-409`): a service ticket's checksum is added before the PAC is signed, and a sign failure attaches nothing.
+/// The KDC checksum covers the server checksum, so a PAC whose server checksum was never filled is not signed.
 fn sign_reply_pac_inner(
     cname: &PrincipalName,
     authtime: u32,
@@ -428,6 +430,10 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
 
 /// MIT `get_verified_pac` (`kdc_util.c:589-630`): TGS header → server
 /// signature only; service header → privsvr + kvno−1/−2 retry.
+///
+/// # Errors
+///
+/// A missing local TGT, or a PAC checksum that does not verify.
 pub(crate) fn get_verified_pac(
     policy: &crate::store::Policy,
     part: &EncTicketPart,
@@ -705,6 +711,8 @@ fn verify_for_user_checksum(
     .map_err(|e| map_s4u_cksum(&e))
 }
 
+/// MIT `kdc_process_s4u_x509_user` (`kdc_util.c:1428-1438`): a checksum that does not verify is not an S4U2Self user, and the decoded request is discarded.
+/// The user-id nonce must be the TGS request nonce, and an unkeyed checksum is rejected when the etype requires a keyed checksum.
 fn process_s4u_x509_user(
     raw: &[u8],
     tgt_session: &ProtocolKey,
@@ -849,6 +857,10 @@ fn take_der_slice(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
 }
 
 /// Reply PA-S4U-X509-USER (`kdc_make_s4u2self_rep`).
+///
+/// # Errors
+///
+/// A failure building the checksum key, or encoding the reply padata.
 pub(crate) fn make_s4u2self_rep(
     req: &krb5_types::s4u::PaS4uX509User,
     tgt_session: &ProtocolKey,
@@ -948,6 +960,10 @@ fn pac_princ_with_realm(pac: &krb5_types::pac::Pac) -> Option<(String, String, u
 }
 
 /// MIT `check_tgs_s4u2proxy` (`tgs_policy.c:424-518`).
+///
+/// # Errors
+///
+/// `BADOPTION` when the second ticket is absent, and a policy denial when delegation is refused.
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(crate) fn check_tgs_s4u2proxy(
     store: &dyn PrincipalRead,
@@ -1400,6 +1416,8 @@ fn cammac_create(
     }])
 }
 
+/// MIT `cammac_check_kdcver` (`cammac.c:152-168`): the verifier key is the current krbtgt key only when the kvno matches, otherwise that kvno is looked up.
+/// A checksum that does not verify is not a KDC-verified CAMMAC.
 fn cammac_check_kdcver(
     policy: &crate::store::Policy,
     cammac: &Cammac,

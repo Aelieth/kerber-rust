@@ -54,6 +54,10 @@ this project uses semantic versioning once a crate is published.
 - **protocol.** The nineteen src functions over 40 lines each gain one
   MIT anchor and one sentence stating the check that makes a success.
   `fast_error_material` names its error conditions. No behaviour change.
+- **kdc.** The thirty-two src functions over 40 lines each gain one MIT
+  anchor and one sentence stating the fail-closed rule. The PAC, S4U,
+  PKINIT, and SPAKE results that clippy does not require still name
+  their error conditions. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

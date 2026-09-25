@@ -469,6 +469,8 @@ fn logical_lines_numbered(text: &str) -> Vec<(usize, String)> {
     out
 }
 
+/// MIT `parse_line` (`auth_acl.c:360-364`): the target and the restrictions may be absent, and the client and the operation list may not.
+/// A line whose client or operation list is empty is a syntax error and adds no entry.
 fn parse_line(line: &str, default_realm: &str) -> Result<AclEntry, Error> {
     let (client_s, ops, target_s, rs_s) = split_fields(line);
     if client_s.is_empty() || ops.is_empty() {
@@ -581,6 +583,8 @@ fn parse_princ_pat_in(s: &str, default_realm: &str) -> Result<PrincPat, Error> {
     Ok(PrincPat { components, realm })
 }
 
+/// MIT `parse_restrictions` (`auth_acl.c:185-196`): a flag token sets the attribute mask, and clearpolicy sets the clear-policy bit.
+/// A restriction that needs an argument and does not have one is a parse error and adds no entry.
 fn parse_restrictions(str: &str) -> Result<Restrictions, Error> {
     let mut rs = Restrictions::default();
     let tokens: Vec<&str> = str

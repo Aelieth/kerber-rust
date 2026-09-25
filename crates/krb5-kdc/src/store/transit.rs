@@ -181,6 +181,8 @@ impl PrincipalStore {
         self.put_incoming_trust_key(acl, actor, foreign_realm, key, true)
     }
 
+    /// MIT `create_principal_2_svc` (`server_stubs.c:477-485`): an ACL denial does not create the principal.
+    /// Replacing the trust key drops the previous versions, and adding one uses the next kvno rather than reusing the current one.
     fn put_incoming_trust_key(
         &mut self,
         acl: &Acl,

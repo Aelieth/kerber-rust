@@ -124,6 +124,8 @@ fn save_ulog(store: &PrincipalStore, db_path: &Path) -> Result<(), PersistError>
     Ok(())
 }
 
+/// MIT `ulog_map` (`kdb_log.c:514-518`): a missing update log is not a corrupt log.
+/// A file whose first line is not the ulog header is not loaded, and a missing file leaves the store's log empty.
 fn load_ulog(store: &mut PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
     let path = ulog_path(db_path);
     let Ok(text) = fs::read_to_string(&path) else {
@@ -383,6 +385,8 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
     out
 }
 
+/// MIT `krb5_decode_princ_entry` (`kdb_xdr.c:253-256`): a record shorter than the base principal is truncated and not loaded.
+/// An unknown etype or a key of the wrong length fails the whole store, so a partial database is not opened.
 fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, PersistError> {
     let mut i = 0;
     let realm = take_str(plain, &mut i)?;

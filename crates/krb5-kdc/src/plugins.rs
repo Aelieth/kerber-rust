@@ -270,6 +270,8 @@ impl KdcPreauth for EncTsMod {
             padata_value: Vec::<u8>::new().into(),
         }]
     }
+    /// MIT `enc_ts_verify` (`kdc_preauth_encts.c:74-97`): the timestamp is tried against keys of that etype, and a clock skew after decrypt is still a failure.
+    /// Only the highest kvno is tried, so a timestamp under a retired key does not succeed.
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
         let PreauthRock {
             store,

@@ -94,6 +94,8 @@ pub(super) fn peek_tgs_hides_client(
     .is_some_and(|f| fast_hides_client(&f.fast_options))
 }
 
+/// MIT `kdc_fast_handle_error` (`fast_util.c:382-386`): with no armor key the error is unchanged, and the inner error carries no e-data.
+/// The caller's e-data travels as FAST padata beside the inner error, so the outer error alone is not the protected result.
 pub(super) fn wrap_as_fast(
     store: &dyn PrincipalRead,
     fast: Option<&FastOk>,

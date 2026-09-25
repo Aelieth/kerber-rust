@@ -47,6 +47,8 @@ fn non_tgt_option(body: &KdcReqBody) -> bool {
         || body.kdc_options.bit(flag_bit::VALIDATE)
 }
 
+/// MIT `check_tgs_nontgt` (`tgs_policy.c:636-638`): renew, forward, or proxy of a ticket whose server does not match the request, realm included, is rejected.
+/// A requested forward, proxy, or postdate that the ticket does not allow is rejected, and a renew past renew-till is expired.
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(super) fn check_tgs_constraints_skeleton(
     body: &KdcReqBody,

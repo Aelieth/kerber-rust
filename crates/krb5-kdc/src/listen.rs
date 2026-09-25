@@ -343,6 +343,8 @@ pub fn serve_until(
     Ok(())
 }
 
+/// MIT `make_too_big_error` (`dispatch.c:191-191`): a reply larger than a datagram is replaced by a response-too-big error.
+/// An empty dispatch result is not sent, so a discarded request produces no datagram.
 #[allow(clippy::needless_pass_by_value)] // UDP socket is owned by the worker thread
 fn udp_loop(
     store: &SharedStore,
@@ -414,6 +416,8 @@ fn udp_loop(
     }
 }
 
+/// MIT `accept_stream_connection` (`net-server.c:1282-1283`): past the connection cap the oldest stream is dropped and the new connection is kept.
+/// A read error on an existing stream does not refuse the newcomer.
 #[allow(clippy::needless_pass_by_value)] // TCP listener is owned by the worker thread
 fn tcp_loop(
     store: &SharedStore,
@@ -474,6 +478,8 @@ fn tcp_loop(
     }
 }
 
+/// MIT `process_stream_connection_read` (`net-server.c:1385-1391`): end of file before a length word drops the connection, and a length past the buffer is too long.
+/// A peer that sends nothing gets no KDC error, and an oversize length is answered with a field-too-long error before the body is read.
 fn handle_tcp(
     store: &SharedStore,
     mut stream: TcpStream,
