@@ -1,4 +1,8 @@
 //! TCP/UDP listeners for kadmind (749), kpasswd (464), and kprop (754).
+//!
+//! A kpasswd datagram whose length, version, or framing does not match
+//! is not answered. A failed AP-REQ is a framed chpwfail with result 3.
+//! The ticket must be for `kadmin/changepw`.
 
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};

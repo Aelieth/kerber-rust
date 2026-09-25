@@ -39,6 +39,9 @@ this project uses semantic versioning once a crate is published.
 - **crypto.** Module headers on `ops`, `weak`, `cf2`, `derive`, `prf`,
   `spake`, `key`, `cts`, `nfold`, and `modp` state the fail-closed
   rule for that module. No behaviour change.
+- **admin.** The `listen` header states that a malformed kpasswd
+  datagram is not answered and a failed AP-REQ is a framed chpwfail.
+  No behaviour change.
 
 ### W3-S3.10 parameter structs
 
