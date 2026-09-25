@@ -63,6 +63,18 @@ constants, numerics, or string literals. `testrealm::` and
 or `super::`. `--self-test` on the
 compare tools prints `self-test ok (N cases)`. There is no
 request-shape column (no canonical built-request form).
+
+`check_mit_anchor_form` (`scripts/ci-policy.py`) reads `//`, `///`, and
+`//!` comments under `crates/*/src` and `crates/*/tests`. A MIT anchor
+on those lines is one line, ``MIT `<c_function>` (`<file>.c:<a>-<b>`): <guarantee>``.
+A single source line is written `<a>-<a>`. The six older shapes are
+red: a backticked name with no file, a backticked `file.c` range or
+point with no name, a name plus a range with no guarantee, a bare
+`MIT file.c:N`, and a name plus a single point. The check is advisory
+while `MIT_ANCHOR_ALLOW` equals the live count, and hard when that
+constant is 0. Prose that does not cite a function or a `.c` / `.h`
+line is not an anchor.
+
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
 [--accept] [--params] [--split] [--glue] [--roots]` is the product-fn sibling:
 every non-test `fn` (and `const` / `static` / `enum` / `struct` /

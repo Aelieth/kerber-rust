@@ -3010,6 +3010,9 @@ HYGIENE_DIFF_MIN_CASES = 31
 HYGIENE_BODY_DIFF_MIN_CASES = 41
 HYGIENE_FN_DIFF_MIN_CASES = 134
 HYGIENE_INVENTORY_MIN_CASES = 3
+# S4 advisory baseline at 0d5fa7f4. A later commit that removes a hit
+# lowers this constant in the same commit. Hard means 0.
+MIT_ANCHOR_ALLOW = 728
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
     "scripts/lib/prod-realm-common.sh",
@@ -6005,6 +6008,54 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(froot)], check=False)
 
+    anchor_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        src = anchor_root / "crates" / "demo" / "src"
+        src.mkdir(parents=True)
+        good = src / "lib.rs"
+        good.write_text(
+            '/// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n',
+            encoding="utf-8",
+        )
+        check_mit_anchor_form(anchor_root, allow=0)
+        rejected = {
+            "name-only": '/// MIT `krb5_rd_req` walks the keytab\n',
+            "file-range-only": "/// (`do_as_req.c:10-20`)\n",
+            "name-and-range": "/// MIT `krb5_rd_req` (`do_as_req.c:10-20`)\n",
+            "file-point-only": "/// (`do_as_req.c:10`)\n",
+            "bare-file": "/// MIT do_as_req.c:10 sets the flag\n",
+            "name-and-point": "/// MIT `krb5_rd_req` (`do_as_req.c:10`)\n",
+        }
+        for shape, body in rejected.items():
+            good.write_text(body, encoding="utf-8")
+            _must_die_msg(
+                "mit anchor lines 1 != allow 0",
+                check_mit_anchor_form,
+                anchor_root,
+                allow=0,
+            )
+        good.write_text(rejected["name-only"], encoding="utf-8")
+        check_mit_anchor_form(anchor_root, allow=1)
+        _must_die_msg(
+            "mit anchor lines 1 != allow 2",
+            check_mit_anchor_form,
+            anchor_root,
+            allow=2,
+        )
+        # The shape name is part of the fixture so a deleted shape is a
+        # missing key, not a silent pass.
+        if set(rejected) != {
+            "name-only",
+            "file-range-only",
+            "name-and-range",
+            "file-point-only",
+            "bare-file",
+            "name-and-point",
+        }:
+            _die("mit anchor fixtures dropped a rejected shape")
+    finally:
+        subprocess.run(["rm", "-rf", str(anchor_root)], check=False)
+
 
 # W1-K M2b: after the differential oracle's whitelist mechanism is deleted, no
 # case may be excused by name. Ban the mechanism identifiers from the diffsend
@@ -6036,6 +6087,133 @@ def check_no_case_whitelists(text: str | None = None, name: str = "diffsend.rs")
         scan(path.read_text(), str(path.relative_to(ROOT)))
     for path in sorted((SCRIPTS / "lib").glob("*.sh")):
         scan(path.read_text(), str(path.relative_to(ROOT)))
+
+
+_CANON_ANCHOR = re.compile(
+    r"MIT `([A-Za-z_][A-Za-z0-9_]*)` \(`([A-Za-z0-9_./+-]+\.c):(\d+)-(\d+)`\): \S"
+)
+# A cite that is not inside a canonical anchor. The six shapes the brief
+# names are name-only, file-range-only, name-and-range without a guarantee,
+# file-point-only, bare `MIT file.c:N`, and name-and-point.
+_ANCHOR_CITE = re.compile(
+    r"MIT `[A-Za-z_][A-Za-z0-9_]*`"
+    r"|MIT `[A-Za-z0-9_./+-]+\.[ch]:\d+"
+    r"|\(`[^`]*\.[ch]:\d+(?:-\d+)?`\)"
+    r"|MIT [A-Za-z0-9_./+-]+\.[ch]:\d+"
+    r"|(?<![\w.`])[A-Za-z0-9_./+-]+\.[ch]:\d+(?:-\d+)?"
+)
+def _comment_lexer():
+    spec = importlib.util.spec_from_file_location(
+        "hygiene_fn_diff_comments", SCRIPTS / "hygiene-fn-diff.py"
+    )
+    if spec is None or spec.loader is None:
+        _die("missing scripts/hygiene-fn-diff.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_COMMENT_LEXER = None
+
+
+def _comment_lines(src: str) -> list[tuple[int, str]]:
+    """`//` comments, including `///` and `//!`, outside string literals."""
+    global _COMMENT_LEXER
+    if _COMMENT_LEXER is None:
+        _COMMENT_LEXER = _comment_lexer()
+    mod = _COMMENT_LEXER
+    out: list[tuple[int, str]] = []
+    i, n = 0, len(src)
+    line = 1
+
+    def bump(chunk: str) -> None:
+        nonlocal line
+        line += chunk.count("\n")
+
+    while i < n:
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            if j < 0:
+                j = n
+            out.append((line, src[i:j]))
+            i = j
+            continue
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            bump(src[i:j])
+            i = j
+            continue
+        c = src[i]
+        nxt = src[i + 1] if i + 1 < n else ""
+        end: int | None = None
+        if c == "r" or (c == "b" and nxt == "r"):
+            end = mod._scan_raw(src, i)
+        if end is None and c == "b" and nxt == '"':
+            end = mod._scan_quoted(src, i + 1)
+        if end is None and c == '"':
+            end = mod._scan_quoted(src, i)
+        if end is None and c in "'b":
+            end = mod._scan_char(src, i)
+        if end is not None:
+            bump(src[i:end])
+            i = end
+            continue
+        if c == "\n":
+            line += 1
+        i += 1
+    return out
+
+
+def _rs_under(root: pathlib.Path, kinds: tuple[str, ...] | None) -> list[pathlib.Path]:
+    crates = root / "crates"
+    if not crates.is_dir():
+        return []
+    if kinds is None:
+        return sorted(crates.rglob("*.rs"))
+    out: list[pathlib.Path] = []
+    for crate in sorted(p for p in crates.iterdir() if p.is_dir()):
+        for kind in kinds:
+            base = crate / kind
+            if base.is_dir():
+                out.extend(sorted(base.rglob("*.rs")))
+    return out
+
+
+def mit_anchor_violations(root: pathlib.Path | None = None) -> list[str]:
+    """Comment lines whose MIT cite is not the one R1 anchor form."""
+    root = ROOT if root is None else root
+    bad: list[str] = []
+    for path in _rs_under(root, ("src", "tests")):
+        text = path.read_text(encoding="utf-8")
+        rel = path.relative_to(root)
+        for lineno, comment in _comment_lines(text):
+            if _CANON_ANCHOR.search(comment):
+                rest = _CANON_ANCHOR.sub("", comment)
+                if not _ANCHOR_CITE.search(rest):
+                    continue
+            elif not _ANCHOR_CITE.search(comment):
+                continue
+            bad.append(f"{rel}:{lineno}:{comment.strip()[:160]}")
+    return bad
+
+
+def check_mit_anchor_form(
+    root: pathlib.Path | None = None, *, allow: int | None = None
+) -> None:
+    """Every MIT anchor in `//` / `///` / `//!` is the R1 one-line form.
+
+    Advisory while `allow` equals the live count. Hard when `allow` is 0.
+    """
+    if allow is None:
+        allow = MIT_ANCHOR_ALLOW
+    bad = mit_anchor_violations(ROOT if root is None else root)
+    if len(bad) != allow:
+        sample = "; ".join(bad[:6])
+        _die(
+            f"mit anchor lines {len(bad)} != allow {allow}"
+            + (f": {sample}" if sample else "")
+        )
 
 
 def main() -> None:
@@ -6115,6 +6293,7 @@ def main() -> None:
     check_ledger_anchors()
     check_ledger_mit_cites()
     check_claim_audit()
+    check_mit_anchor_form()
     print("ci-policy: ok")
 
 

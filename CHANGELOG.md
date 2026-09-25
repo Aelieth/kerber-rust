@@ -6,6 +6,14 @@ this project uses semantic versioning once a crate is published.
 
 ## [Unreleased] — targeting 1.1.0
 
+### W3-S4 comments and rustdoc
+
+- **ci.** `check_mit_anchor_form` requires a MIT anchor in a `//`
+  comment to be one line: a function, a `file.c` range, and a
+  guarantee. The six older shapes are red. The check is advisory at
+  the `0d5fa7f4` count until a later commit sets the allow to 0.
+  No wire or text change in product code.
+
 ### W3-S3.10 parameter structs
 
 - **tool.** A visibility widening (`pub(crate)` / `pub(super)` → `pub`,
