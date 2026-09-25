@@ -11,6 +11,8 @@ publish.workspace = true
 [dependencies]
 chrono.workspace = true
 krb5-asn1.workspace = true
+krb5-cli-install = { path = "../krb5-cli-install" }
+krb5-cli-print = { path = "../krb5-cli-print" }
 krb5-config.workspace = true
 getrandom.workspace = true
 krb5-crypto.workspace = true

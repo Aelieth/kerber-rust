@@ -138,7 +138,7 @@ impl Lookaside {
         }
         self.full_logged = true;
         tracing::info!(
-            event = krb5_log::events::KDC_LOOKASIDE_FULL,
+            event = "kdc.lookaside.full",
             component = "krb5-kdc",
             outcome = "ok",
             total_bytes = self.total,

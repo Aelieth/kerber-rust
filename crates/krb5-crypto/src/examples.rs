@@ -109,6 +109,53 @@
 //!     }
 //! }
 //! assert!(values.len() >= 10, "event constants: {}", values.len());
+//! let mut files = Vec::new();
+//! fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+//!     let Ok(rd) = std::fs::read_dir(dir) else {
+//!         return;
+//!     };
+//!     for ent in rd.flatten() {
+//!         let path = ent.path();
+//!         if path.is_dir() {
+//!             if path.file_name().is_some_and(|n| n == "target") {
+//!                 continue;
+//!             }
+//!             rust_files(&path, out);
+//!         } else if path.extension().is_some_and(|e| e == "rs")
+//!             && path.components().any(|c| c.as_os_str() == "src")
+//!         {
+//!             out.push(path);
+//!         }
+//!     }
+//! }
+//! rust_files(
+//!     &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."),
+//!     &mut files,
+//! );
+//! let known: std::collections::BTreeSet<&str> = values.iter().map(String::as_str).collect();
+//! for path in files {
+//!     let text = std::fs::read_to_string(&path).expect("read");
+//!     for line in text.lines() {
+//!         let Some(rest) = line.split("event = \"").nth(1) else {
+//!             continue;
+//!         };
+//!         let Some(lit) = rest.split('"').next() else {
+//!             continue;
+//!         };
+//!         if lit.is_empty()
+//!             || !lit
+//!                 .chars()
+//!                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.')
+//!         {
+//!             continue;
+//!         }
+//!         assert!(
+//!             known.contains(lit),
+//!             "{} has event {lit} with no krb5_log::events constant",
+//!             path.display()
+//!         );
+//!     }
+//! }
 //! for value in &values {
 //!     tracing::info!(
 //!         event = value.as_str(),

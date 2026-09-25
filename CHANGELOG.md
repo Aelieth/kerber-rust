@@ -83,16 +83,17 @@ this project uses semantic versioning once a crate is published.
 - **kdc.** `PrincipalStore::new` still exits if the CSPRNG cannot
   build the realm SID. `docs/security.md` records that abort.
   No wire change.
-- **log.** Client and KDC event names that were string literals are
-  `krb5_log::events` constants with the same text. The authdata
-  module error carries `event`, `correlation_id`, `component`, and
-  `outcome`. `target` is the Rust module path and is not part of the
-  log contract. The test job runs `cargo test --workspace --doc`.
-  No wire change.
-- **client.** `krb5-kinit` prints the key-expiry banner. The library
-  does not. `client-gate` checks that stderr line.
-- **admin.** `krb5-kadmind` prints `kadm5: {error}`. The library does
-  not. `kadmin-rust-gate` checks that line.
+- **log.** `client.tgs`, `client.pkinit`, `client.fast`,
+  `kdc.lookaside.full`, and `kdc.pkinit` are `krb5_log::events`
+  constants. Library call sites keep those strings. `target` is the
+  Rust module path and is not part of the log contract. The test job
+  runs `cargo test --workspace --doc`. No wire change.
+- **client.** `krb5-kinit` links `krb5-cli-install`, which prints the
+  key-expiry banner. The library does not. `client-gate` checks that
+  stderr line.
+- **admin.** `krb5-kadmind` links the same installer, which prints
+  `kadm5: {error}`. The library does not. `kadmin-rust-gate` checks
+  that line.
 
 ### W3-S3.10 parameter structs
 

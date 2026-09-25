@@ -10,6 +10,7 @@
 
 use std::path::Path;
 
+use krb5_cli_install as _;
 use krb5_client::cli::{parse_kinit, read_password_line, read_prompt_line};
 use krb5_client::{
     KinitParams, NewPasswordPrompter, kinit_with, local_host_addresses, mit_error_code,
@@ -19,7 +20,6 @@ use krb5_protocol::{AsTicketOpts, KdcAddr, parse_principal_ex};
 use zeroize::Zeroize;
 
 fn main() {
-    krb5_client::set_key_exp_banner_hook(print_key_exp_banner);
     let _ = tracing_subscriber::fmt()
         .json()
         .with_env_filter("krb5_crypto=info,krb5_asn1=info,krb5_protocol=info,krb5_client=info")
@@ -234,10 +234,6 @@ fn parse_host(host: &str) -> KdcAddr {
     } else {
         KdcAddr::new(host)
     }
-}
-
-fn print_key_exp_banner() {
-    eprintln!("Password expired.  You must change it now.");
 }
 
 #[cfg(test)]

@@ -266,7 +266,7 @@ pub(crate) fn fast_error_material(
     };
     let types: Vec<i32> = fast.padata.iter().map(|p| p.padata_type).collect();
     tracing::info!(
-        event = krb5_log::events::CLIENT_FAST,
+        event = "client.fast",
         component = "krb5-protocol",
         outcome = "ok",
         inner_padata = ?types,

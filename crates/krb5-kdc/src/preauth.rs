@@ -627,7 +627,7 @@ pub(crate) fn process_pkinit(
         Ok(verified) => {
             if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
                 tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
+                    event = "kdc.pkinit",
                     component = "krb5-kdc",
                     outcome = "denied",
                     error = "pkinit eContentType"
@@ -638,7 +638,7 @@ pub(crate) fn process_pkinit(
                 krb5_types::pkinit::require_client_pkinit_cert(&verified.cert, cname, realm)
             {
                 tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
+                    event = "kdc.pkinit",
                     component = "krb5-kdc",
                     outcome = "denied",
                     error = e
@@ -650,7 +650,7 @@ pub(crate) fn process_pkinit(
         Err(e) => {
             let Some(inner) = krb5_types::pkinit::cms_extract_unsigned(&cms) else {
                 tracing::info!(
-                    event = krb5_log::events::KDC_PKINIT,
+                    event = "kdc.pkinit",
                     component = "krb5-kdc",
                     outcome = "denied",
                     error = e,
@@ -676,7 +676,7 @@ pub(crate) fn process_pkinit(
     };
     if let Err(e) = krb5_types::pkinit::authpack_pa_checksum_ok(&inner, body_der) {
         tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
+            event = "kdc.pkinit",
             component = "krb5-kdc",
             outcome = "denied",
             error = e
@@ -690,7 +690,7 @@ pub(crate) fn process_pkinit(
     }
     if is_signed && store.policy().pkinit_require_freshness && !valid_freshness {
         tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
+            event = "kdc.pkinit",
             component = "krb5-kdc",
             outcome = "error",
             detail = "no freshness token, rejecting auth"
@@ -700,14 +700,14 @@ pub(crate) fn process_pkinit(
     if is_signed {
         if valid_freshness {
             tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
+                event = "kdc.pkinit",
                 component = "krb5-kdc",
                 outcome = "ok",
                 detail = "freshness token received"
             );
         } else {
             tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
+                event = "kdc.pkinit",
                 component = "krb5-kdc",
                 outcome = "ok",
                 detail = "no freshness token received"
@@ -716,7 +716,7 @@ pub(crate) fn process_pkinit(
     }
     let (ctime, cusec) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
         tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
+            event = "kdc.pkinit",
             component = "krb5-kdc",
             outcome = "denied",
             error = "pkinit ctime"
@@ -739,7 +739,7 @@ pub(crate) fn process_pkinit(
     }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
         tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
+            event = "kdc.pkinit",
             component = "krb5-kdc",
             outcome = "denied",
             error = "AuthPack",
@@ -768,7 +768,7 @@ pub(crate) fn process_pkinit(
     } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
         let group = dh_group_for_prime(&p).ok_or_else(|| {
             tracing::info!(
-                event = krb5_log::events::KDC_PKINIT,
+                event = "kdc.pkinit",
                 component = "krb5-kdc",
                 outcome = "denied",
                 error = "unknown DH prime",
@@ -777,7 +777,7 @@ pub(crate) fn process_pkinit(
             dh_params_not_accepted(store, cname)
         })?;
         tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
+            event = "kdc.pkinit",
             component = "krb5-kdc",
             outcome = "ok",
             group = group.name,
@@ -791,7 +791,7 @@ pub(crate) fn process_pkinit(
         (z, info)
     } else {
         tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
+            event = "kdc.pkinit",
             component = "krb5-kdc",
             outcome = "denied",
             error = "SPKI",
@@ -817,7 +817,7 @@ pub(crate) fn process_pkinit(
     }
     let reply_key = if agile {
         tracing::info!(
-            event = krb5_log::events::KDC_PKINIT,
+            event = "kdc.pkinit",
             component = "krb5-kdc",
             outcome = "ok",
             detail = "rfc8636 sha256 kdf",

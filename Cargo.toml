@@ -1,6 +1,8 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/krb5-cli-print",
+    "crates/krb5-cli-install",
     "crates/krb5-log",
     "crates/krb5-crypto",
     "crates/krb5-types",

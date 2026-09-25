@@ -606,7 +606,7 @@ fn continue_pkinit(
     insert_module_padata_before_info_pa(req2.0.padata.get_or_insert_with(Vec::new), pa);
     let wire = encode(&req2)?;
     tracing::info!(
-        event = krb5_log::events::CLIENT_PKINIT,
+        event = "client.pkinit",
         component = "krb5-protocol",
         outcome = "ok",
         pa_type = pa::PK_AS_REQ,
