@@ -19,3 +19,7 @@ in `config.toml`.
 Local audit: `rasn-derive` 0.28.14 (`audits.toml`; 0.27.0 kept). Remaining
 third-party crates are honest exemptions; the list is smaller than a blank
 `cargo vet init`.
+
+**`ctor` 0.4.3** (and `ctor-proc-macro` 0.0.6, `dtor` 0.0.6,
+`dtor-proc-macro` 0.0.5) are exempt. `krb5-kinit` and `krb5-kadmind`
+link them to install the two stderr printers. Not a full local audit.

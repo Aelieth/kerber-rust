@@ -89,6 +89,16 @@ criteria = "safe-to-deploy"
 version = "0.1.7"
 criteria = "safe-to-deploy"
 
+[[exemptions.ctor]]
+version = "0.4.3"
+criteria = "safe-to-deploy"
+notes = "Linked by krb5-kinit and krb5-kadmind so those binaries install the two stderr printers. Not a full local audit."
+
+[[exemptions.ctor-proc-macro]]
+version = "0.0.6"
+criteria = "safe-to-deploy"
+notes = "Proc-macro for ctor 0.4.3. Build-time only."
+
 [[exemptions.dbl]]
 version = "0.3.2"
 criteria = "safe-to-deploy"
@@ -100,6 +110,16 @@ criteria = "safe-to-deploy"
 [[exemptions.digest]]
 version = "0.10.7"
 criteria = "safe-to-deploy"
+
+[[exemptions.dtor]]
+version = "0.0.6"
+criteria = "safe-to-deploy"
+notes = "Pulled by ctor 0.4.3. The product printers do not call it."
+
+[[exemptions.dtor-proc-macro]]
+version = "0.0.5"
+criteria = "safe-to-deploy"
+notes = "Proc-macro for dtor 0.0.6. Build-time only."
 
 [[exemptions.ecdsa]]
 version = "0.16.9"

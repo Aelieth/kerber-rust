@@ -94,6 +94,10 @@ this project uses semantic versioning once a crate is published.
 - **admin.** `krb5-kadmind` links the same installer, which prints
   `kadm5: {error}`. The library does not. `kadmin-rust-gate` checks
   that line.
+- **ci.** `ctor` 0.4.3, `ctor-proc-macro` 0.0.6, `dtor` 0.0.6, and
+  `dtor-proc-macro` 0.0.5 are cargo-vet exemptions. They exist so
+  `krb5-kinit` and `krb5-kadmind` can install the two stderr printers.
+  No wire change.
 
 ### W3-S3.10 parameter structs
 
