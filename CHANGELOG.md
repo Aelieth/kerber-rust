@@ -45,6 +45,9 @@ this project uses semantic versioning once a crate is published.
 - **types.** Module headers on `fast`, `s4u`, `cammac`, and `spake`
   state which fields are required and what the checksum covers. No
   behaviour change.
+- **gss.** The `mic` header states that a bad checksum is rejected
+  before the sequence is consumed. The shared token reader refuses a
+  length of 0 or above 1 MiB. No behaviour change.
 
 ### W3-S3.10 parameter structs
 
