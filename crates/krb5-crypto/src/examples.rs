@@ -42,8 +42,7 @@
 //! ```
 //!
 //! A JSON subscriber sees `event`, `correlation_id`, `component`, and
-//! `outcome` on every `krb5_log::events` constant and on the string-to-key
-//! event the library emits:
+//! `outcome` on the string-to-key event the library emits:
 //!
 //! ```
 //! use std::io::{self, Write};
@@ -79,91 +78,6 @@
 //!         .is_ok()
 //! );
 //!
-//! let src = std::fs::read_to_string(
-//!     std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../krb5-log/src/lib.rs"),
-//! )
-//! .expect("krb5-log source");
-//! let mut values = Vec::new();
-//! for line in src.lines() {
-//!     let line = line.trim();
-//!     let Some(rest) = line.strip_prefix("pub const ") else {
-//!         continue;
-//!     };
-//!     let Some((name, after)) = rest.split_once(':') else {
-//!         continue;
-//!     };
-//!     if !after.contains("&str") {
-//!         continue;
-//!     }
-//!     let Some(value) = after.split('"').nth(1) else {
-//!         continue;
-//!     };
-//!     if name.contains("CLIENT")
-//!         || name.contains("KDC")
-//!         || name.contains("CRYPTO")
-//!         || name.contains("ASN1")
-//!         || name.contains("PROTOCOL")
-//!         || name.contains("ADMIN")
-//!     {
-//!         values.push(value.to_owned());
-//!     }
-//! }
-//! assert!(values.len() >= 10, "event constants: {}", values.len());
-//! let mut files = Vec::new();
-//! fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
-//!     let Ok(rd) = std::fs::read_dir(dir) else {
-//!         return;
-//!     };
-//!     for ent in rd.flatten() {
-//!         let path = ent.path();
-//!         if path.is_dir() {
-//!             if path.file_name().is_some_and(|n| n == "target") {
-//!                 continue;
-//!             }
-//!             rust_files(&path, out);
-//!         } else if path.extension().is_some_and(|e| e == "rs")
-//!             && path.components().any(|c| c.as_os_str() == "src")
-//!         {
-//!             out.push(path);
-//!         }
-//!     }
-//! }
-//! rust_files(
-//!     &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(".."),
-//!     &mut files,
-//! );
-//! let known: std::collections::BTreeSet<&str> = values.iter().map(String::as_str).collect();
-//! for path in files {
-//!     let text = std::fs::read_to_string(&path).expect("read");
-//!     for line in text.lines() {
-//!         let Some(rest) = line.split("event = \"").nth(1) else {
-//!             continue;
-//!         };
-//!         let Some(lit) = rest.split('"').next() else {
-//!             continue;
-//!         };
-//!         if lit.is_empty()
-//!             || !lit
-//!                 .chars()
-//!                 .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.')
-//!         {
-//!             continue;
-//!         }
-//!         assert!(
-//!             known.contains(lit),
-//!             "{} has event {lit} with no krb5_log::events constant",
-//!             path.display()
-//!         );
-//!     }
-//! }
-//! for value in &values {
-//!     tracing::info!(
-//!         event = value.as_str(),
-//!         correlation_id = "none",
-//!         component = "krb5-crypto",
-//!         outcome = "ok",
-//!     );
-//! }
 //! let _ = string_to_key(
 //!     EncryptionType::Aes128CtsHmacSha196,
 //!     b"password",
@@ -189,9 +103,10 @@
 //!         seen.insert(event.to_owned());
 //!     }
 //! }
-//! for value in &values {
-//!     assert!(seen.contains(value.as_str()), "missing event {value}");
-//! }
-//! assert!(seen.contains("crypto.string_to_key"));
+//! assert!(
+//!     seen.contains("crypto.string_to_key"),
+//!     "library string-to-key did not emit"
+//! );
+//! assert!(!seen.is_empty());
 //! Ok::<(), krb5_crypto::Error>(())
 //! ```

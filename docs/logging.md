@@ -35,8 +35,7 @@ Canonical Rust `event` strings live in `krb5_log::events`; the field
 names above are written literally at each `tracing` call site (there
 are no `FIELD_*` constants). `client.tgs`, `client.pkinit`,
 `client.fast`, `kdc.lookaside.full`, and `kdc.pkinit` are constants
-there, and every library `event = "..."` literal is one of those
-strings.
+there. Library `event` sites use those constants.
 
 `target` is the Rust module path (`tracing`'s default). It is not part
 of the log contract. Gates and tests match `event` and the fields in

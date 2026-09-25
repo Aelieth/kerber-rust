@@ -10,10 +10,10 @@
 
 use std::path::Path;
 
-use krb5_cli_install as _;
 use krb5_client::cli::{parse_kinit, read_password_line, read_prompt_line};
 use krb5_client::{
-    KinitParams, NewPasswordPrompter, kinit_with, local_host_addresses, mit_error_code,
+    KeyExpChange, KinitParams, NewPasswordPrompter, kinit_with, local_host_addresses,
+    mit_error_code,
 };
 use krb5_config::{env_ktname, env_new_password, env_password, parse_deltat, resolve_ccspec};
 use krb5_protocol::{AsTicketOpts, KdcAddr, parse_principal_ex};
@@ -183,6 +183,9 @@ fn main() {
         };
         match kinit_with(&addr, &principal, &mut password, &spec, params) {
             Ok(r) => {
+                if r.password_expired {
+                    eprintln!("Password expired.  You must change it now.");
+                }
                 println!(
                     "ok tgt={} tgs={}",
                     r.as_out.enc_part.sname.name_string.len(),
@@ -190,6 +193,9 @@ fn main() {
                 );
             }
             Err(e) => {
+                if e.downcast_ref::<KeyExpChange>().is_some() {
+                    eprintln!("Password expired.  You must change it now.");
+                }
                 // MIT `k5_kinit` (`kinit.c:785-793`): BAD_INTEGRITY, or PREAUTH_FAILED after a
                 // password prompt, is "Password incorrect while getting
                 // initial credentials".

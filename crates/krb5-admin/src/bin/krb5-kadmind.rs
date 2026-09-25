@@ -17,7 +17,6 @@ use std::thread;
 use std::time::Duration;
 
 use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
-use krb5_cli_install as _;
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::testrealm::{bootstrap_documented, documented_kiprop};
@@ -162,7 +161,9 @@ fn main() {
                 let rcache = rcache.clone();
                 thread::spawn(move || {
                     let _guard = krb5_kdc::ConnGuard(registry_g, seq);
-                    let _ = serve_kadm5_conn(store, acl, keys, realm, rcache, stream);
+                    if let Err(e) = serve_kadm5_conn(store, acl, keys, realm, rcache, stream) {
+                        eprintln!("kadm5: {e}");
+                    }
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {

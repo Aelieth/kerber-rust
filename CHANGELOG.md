@@ -85,19 +85,18 @@ this project uses semantic versioning once a crate is published.
   No wire change.
 - **log.** `client.tgs`, `client.pkinit`, `client.fast`,
   `kdc.lookaside.full`, and `kdc.pkinit` are `krb5_log::events`
-  constants. Library call sites keep those strings. `target` is the
-  Rust module path and is not part of the log contract. The test job
-  runs `cargo test --workspace --doc`. No wire change.
-- **client.** `krb5-kinit` links `krb5-cli-install`, which prints the
-  key-expiry banner. The library does not. `client-gate` checks that
-  stderr line.
-- **admin.** `krb5-kadmind` links the same installer, which prints
-  `kadm5: {error}`. The library does not. `kadmin-rust-gate` checks
+  constants, and the library `event` sites use them. The authdata-module
+  error carries `event`, `correlation_id`, `component`, and `outcome`.
+  `target` is the Rust module path and is not part of the log contract.
+  The test job runs `cargo test --workspace --doc`. No wire change.
+- **client.** `krb5-kinit` prints `Password expired.  You must change it now.`
+  when `kinit_with` returns `KeyExpChange` or
+  `KinitResult.password_expired`. The library does not print it.
+  `client-gate` checks that line.
+- **admin.** `krb5-kadmind` prints `kadm5: {error}` when
+  `serve_kadm5_conn` returns the RPC error. The library logs
+  `tracing::error!` and does not print. `kadmin-rust-gate` checks
   that line.
-- **ci.** `ctor` 0.4.3, `ctor-proc-macro` 0.0.6, `dtor` 0.0.6, and
-  `dtor-proc-macro` 0.0.5 are cargo-vet exemptions. They exist so
-  `krb5-kinit` and `krb5-kadmind` can install the two stderr printers.
-  No wire change.
 
 ### W3-S3.10 parameter structs
 

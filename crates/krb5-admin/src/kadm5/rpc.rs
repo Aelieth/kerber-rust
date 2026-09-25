@@ -78,7 +78,6 @@ pub fn serve_kadm5_conn(
                     outcome = "error",
                     error = %e,
                 );
-                krb5_cli_print::emit_kadm5_error(&e.to_string());
                 return Err(io::Error::other(e.to_string()));
             }
         };

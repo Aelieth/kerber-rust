@@ -96,6 +96,36 @@ pub struct KinitResult {
     pub as_out: AsOutcome,
     /// Optional TGS outcome.
     pub tgs_out: Option<TgsOutcome>,
+    /// A supplied new password replaced an expired key.
+    pub password_expired: bool,
+}
+
+/// A password change after key expiry failed.
+///
+/// `Display` is the inner error, so `kinit failed: {e}` keeps that text.
+/// `krb5-kinit` prints the key-expiry banner when it sees this error.
+pub struct KeyExpChange {
+    inner: Box<dyn std::error::Error + Send + Sync>,
+}
+
+impl std::fmt::Debug for KeyExpChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyExpChange")
+            .field("inner", &self.inner.to_string())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for KeyExpChange {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.inner)
+    }
+}
+
+impl std::error::Error for KeyExpChange {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        Some(self.inner.as_ref())
+    }
 }
 
 /// Obtain a TGT from `kdc` for `principal` (`user@REALM`) and write a FILE
@@ -466,6 +496,7 @@ fn kinit_inner(
         etypes: Some(&etypes),
         ticket,
     };
+    let mut password_expired = false;
     let as_out = match if let Some(keys) = keytab_keys.as_deref() {
         as_exchange_with_keys(&req, keys)
     } else {
@@ -514,8 +545,12 @@ fn kinit_inner(
             let chpw_as = as_exchange(&chpw_req)?;
             let mut new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
-                    krb5_cli_print::emit_key_exp_banner();
-                    krb5_protocol::change_password(&resolved, &chpw_as, p)?;
+                    if let Err(err) = krb5_protocol::change_password(&resolved, &chpw_as, p) {
+                        return Err(Box::new(KeyExpChange {
+                            inner: Box::new(err),
+                        }));
+                    }
+                    password_expired = true;
                     p.to_vec()
                 }
                 (None, Some(prompter)) => prompt_and_change(&resolved, &chpw_as, prompter)?,
@@ -581,14 +616,21 @@ fn kinit_inner(
     cache.creds.extend(creds);
     if let Some(e) = tgs_err {
         tracing::error!(
-            event = "client.tgs",
+            event = krb5_log::events::CLIENT_TGS,
             component = "krb5-client",
             outcome = "error",
             error = e.as_str(),
         );
         return Err(e.into());
     }
-    Ok((KinitResult { as_out, tgs_out }, cache))
+    Ok((
+        KinitResult {
+            as_out,
+            tgs_out,
+            password_expired,
+        },
+        cache,
+    ))
 }
 
 /// `gic_pwd.c` banner shown ahead of the new-password prompts.
@@ -689,6 +731,7 @@ fn valrenew_inner(
         KinitResult {
             as_out: tgt,
             tgs_out: Some(tgs),
+            password_expired: false,
         },
         cc,
     ))
