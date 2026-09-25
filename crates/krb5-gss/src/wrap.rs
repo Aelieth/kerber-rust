@@ -235,6 +235,8 @@ impl GssContext {
         self.unwrap_v3(token)
     }
 
+    /// MIT `unwrap_v3` (`unwrap.c:295-304`): a bad token type, a bad filler, or the wrong direction is rejected before the payload is decrypted.
+    /// The right-rotation is undone before the checksum or the seal is checked, so a rotated trailer is not left in the plaintext.
     fn unwrap_v3(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         let owned = message_token(token)?;
         let inner = owned.as_slice();

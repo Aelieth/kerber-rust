@@ -127,6 +127,8 @@ pub(super) fn authenticator_checksum(
     v
 }
 
+/// MIT `kg_process_extension` (`accept_sec_context.c:381-383`): a finished extension is rejected unless this is an IAKERB acceptor.
+/// A short extension header is an error, not a skipped option.
 fn process_checksum(
     cksum: Option<&Checksum>,
     ap_mutual: bool,

@@ -60,6 +60,8 @@ this project uses semantic versioning once a crate is published.
   their error conditions. No behaviour change.
 - **client.** `kinit_inner` states that key-expired is the only change
   path and that a keytab request has none. No behaviour change.
+- **gss.** The eight long functions state when a token, a direction,
+  or a delegated credential is rejected. No behaviour change.
 
 ### W3-S3.10 parameter structs
 
