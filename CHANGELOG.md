@@ -48,6 +48,9 @@ this project uses semantic versioning once a crate is published.
 - **gss.** The `mic` header states that a bad checksum is rejected
   before the sequence is consumed. The shared token reader refuses a
   length of 0 or above 1 MiB. No behaviour change.
+- **admin.** The sixteen src functions over 40 lines each gain one
+  MIT anchor and one sentence stating the fail-closed rule for that
+  function. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

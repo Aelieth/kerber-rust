@@ -248,6 +248,8 @@ pub(super) fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, String
     Ok((api, princ, prealm, keep))
 }
 
+/// MIT `xdr_kadm5_key_data` (`kadm_rpc_xdr.c:1166-1174`): a version-4 key carries kvno, keyblock, and salt, with no key-data version word in front.
+/// Older setkey procedures omit that kvno and salt, so reading them on a version-3 body would steal the next key's etype.
 pub(super) fn parse_setkey(
     args: &[u8],
     proc: u32,
@@ -390,6 +392,8 @@ impl ModFields {
     }
 }
 
+/// MIT `_xdr_kadm5_principal_ent_rec` (`kadm_rpc_xdr.c:410-416`): a null mod-principal pointer is not followed by a principal encoding.
+/// The attribute mask is the word after the key and typed-data lists, so skipping that optional principal is what keeps the mask aligned.
 pub(super) fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), Error> {
     let mut r = XdrR::new(args);
     let _ = r.u32()?;
@@ -464,6 +468,8 @@ pub(super) fn encode_gprinc(p: &krb5_kdc::Principal) -> Vec<u8> {
     w.b
 }
 
+/// MIT `kadm5_get_principal` (`svr_principal.c:809-822`): a mod-principal lookup failure fails the get, and the name is cleared when that mask bit is off.
+/// This encoder never sends the null pointer; a missing mod-princ record is written as kadmin/admin in the entry realm.
 fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     let id = p.id();
     w.nullstring(Some(&id));

@@ -40,6 +40,8 @@ pub(super) struct RpcsecGss {
     pub(super) svc: u32,
 }
 
+/// MIT `gssrpc__svcauth_gss` (`svc_auth_gss.c:460-471`): a sequence above the maximum or already seen inside the window is a context problem and is not dispatched.
+/// A privacy body that unwraps without confidentiality is garbage and is not passed to the procedure.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 #[allow(clippy::unnecessary_wraps)]
 pub(super) fn handle_rpcsec_gss(
@@ -238,6 +240,8 @@ fn seq_window_ok(gd: &mut RpcsecGss, seq: u32) -> bool {
     }
 }
 
+/// MIT `check_rpcsec_auth` (`kadm_rpc_svc.c:324-331`): the acceptor must be two components, kadmin, not history, in the server realm.
+/// A context with no client name, or an iprop acceptor that is not kiprop in that realm, is weak auth and the procedure is not run.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 fn rpcsec_dispatch(
     ctx: RpcCtx<'_>,
@@ -316,6 +320,8 @@ fn rpcsec_dispatch(
     }
 }
 
+/// MIT `gssrpc__svcauth_gssapi` (`svc_auth_gssapi.c:326-341`): an init version other than 1 through 4 is AUTH_BADCRED before the token is used.
+/// Versions 1 and 2 are answered as version 1, and an undecodable init argument is AUTH_BADCRED rather than a failed context.
 #[expect(clippy::too_many_arguments, reason = "over seven inputs after RpcCtx")]
 pub(super) fn handle_auth_gssapi(
     ctx: RpcCtx<'_>,

@@ -127,6 +127,8 @@ pub(super) fn dispatch_kadm5(
     dispatch_kadm5_ticket(store, acl, actor, proc, args, true, false)
 }
 
+/// MIT `modify_principal_2_svc` (`server_stubs.c:630-644`): an ACL denial or a lockdown clear is AUTH_MODIFY before the entry is written.
+/// A missing principal on get or modify is reported unknown before that ACL check, and a changepw ticket is accepted only for a self get or a self key change.
 pub(super) fn dispatch_kadm5_ticket(
     store: &SharedStore,
     acl: &Acl,

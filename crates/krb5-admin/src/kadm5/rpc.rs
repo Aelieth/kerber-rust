@@ -171,6 +171,8 @@ pub fn kadm5_handle_rpc(
     )
 }
 
+/// MIT `kadm_1` (`kadm_rpc_svc.c:80-88`): a flavor other than AUTH_GSSAPI or RPCSEC_GSS is weak auth and is not dispatched.
+/// RPCSEC_GSS is authenticated before the program version is checked, so a bad sequence is not reported as a version mismatch.
 pub(super) fn handle_rpc(
     ctx: RpcCtx<'_>,
     handle: &[u8],

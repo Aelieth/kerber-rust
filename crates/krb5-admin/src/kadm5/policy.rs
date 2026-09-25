@@ -25,6 +25,8 @@ pub(super) fn parse_gpols(args: &[u8]) -> (u32, Option<String>) {
     (api, r.nullstring().ok().flatten())
 }
 
+/// MIT `_xdr_kadm5_policy_ent_rec` (`kadm_rpc_xdr.c:507-514`): lockout fields are present only at API version 3 or later.
+/// Allowed keysalts are read only at version 4 or later, so an older argument's mask is not consumed as a lockout field.
 pub(super) fn parse_policy_arg(args: &[u8]) -> Result<(u32, krb5_kdc::NamedPolicy, u32), Error> {
     let mut r = XdrR::new(args);
     let api = r.u32()?;
