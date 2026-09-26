@@ -1,4 +1,5 @@
-//! acceptor `krb5_sname_match`. MIT `sname_match.c:30-57`.
+//! acceptor `krb5_sname_match`.
+//! MIT `krb5_sname_match` (`sname_match.c:30-57`): matches the ticket server to the acceptor name.
 //! Live oracle: GSS / `vfy_increds` cells (`MIT_sname_match`).
 //! Unit-only: `sname_match` is new at the parent.
 

@@ -107,8 +107,12 @@ fn kadm5_result_text(code: u32) -> &'static str {
     }
 }
 
-/// MIT `log_done`/`log_unauth` (`server_stubs.c:403-459`): one `Request:` or
-/// `Unauthorized request:` line per kadmind operation with client/service/addr.
+/// MIT `log_done`/`log_unauth`: one `Request:` or `Unauthorized request:` line per kadmind
+/// operation with client/service/addr.
+/// MIT `log_unauth` (`server_stubs.c:403-428`): the `Unauthorized request:` line carries the
+/// op, target, client, service, and addr.
+/// MIT `log_done` (`server_stubs.c:430-459`): the `Request:` line carries the op, target,
+/// result text, client, service, and addr.
 pub(super) fn kadm5_log_op(
     proc: u32,
     args: &[u8],

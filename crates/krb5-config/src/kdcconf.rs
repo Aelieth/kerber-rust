@@ -98,7 +98,7 @@ impl KdcConf {
                 parse_kdc_libdefaults(&mut conf, line);
             }
         }
-        // MIT `main.c:286-345`: realm stanza, then `[kdcdefaults]` fallback.
+        // MIT `init_realm` (`kdc/main.c:286-345`): realm stanza, then `[kdcdefaults]` fallback.
         // Re-apply realm booleans so a later defaults section cannot win.
         for line in &realm_lines {
             overlay_realm_booleans(&mut conf, line);
@@ -157,7 +157,7 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
 }
 
 /// MIT reads the enctype policy knobs from `[libdefaults]` only
-/// (`init_ctx.c get_boolean`, `krb5_get_permitted_enctypes`); a copy under
+/// (`krb/init_ctx.c get_boolean`, `krb5_get_permitted_enctypes`); a copy under
 /// `[kdcdefaults]` or a realm stanza is ignored, so the KDC's own context
 /// sees what every krb5 library on the host sees.
 fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
@@ -171,9 +171,12 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
         "spake_preauth_groups" => conf.spake_preauth_groups = Some(split_ws(&v)),
         // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
-        // [kdcdefaults] or a realm stanza (main.c:257-261,622-626), never
-        // [libdefaults]; no fallthrough, so a kdcdefaults knob placed under
-        // [libdefaults] is ignored like MIT.
+        // [kdcdefaults] or a realm stanza, never [libdefaults]; no fallthrough,
+        // so a kdcdefaults knob placed under [libdefaults] is ignored like MIT.
+        // MIT `init_realm` (`kdc/main.c:257-261`): the realm stanza's `kdc_listen`, then
+        // `kdc_ports`.
+        // MIT `initialize_realms` (`kdc/main.c:622-626`): the `[kdcdefaults]` `kdc_listen`,
+        // then `kdc_ports`.
         _ => {}
     }
 }

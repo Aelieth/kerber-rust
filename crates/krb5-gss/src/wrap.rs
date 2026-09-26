@@ -224,9 +224,11 @@ impl GssContext {
         Ok(self.unwrap_v3(token)?.0)
     }
 
-    /// Like [`Self::unwrap`] but also returns whether the token was sealed
-    /// (`conf_state`, MIT `unwrap.c:363-364`); the RPCSEC_GSS privacy service
-    /// rejects an integrity-only body (`authgss_prot.c:238-240`).
+    /// Like [`Self::unwrap`] but also returns whether the token was sealed (`conf_state`).
+    /// MIT `unwrap_v3` (`unwrap.c:363-364`): `conf_state` is the token's
+    /// `FLAG_WRAP_CONFIDENTIAL` (sealed) flag.
+    /// MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:238-240`): the RPCSEC_GSS privacy service
+    /// rejects an integrity-only body.
     ///
     /// # Errors
     ///
@@ -235,8 +237,10 @@ impl GssContext {
         self.unwrap_v3(token)
     }
 
-    /// MIT `unwrap_v3` (`unwrap.c:295-304`): a bad token type, a bad filler, or the wrong direction is rejected before the payload is decrypted.
-    /// The right-rotation is undone before the checksum or the seal is checked, so a rotated trailer is not left in the plaintext.
+    /// MIT `unwrap_v3` (`unwrap.c:295-304`): a bad token type, a bad filler, or the wrong
+    /// direction is rejected before the payload is decrypted.
+    /// The right-rotation is undone before the checksum or the seal is checked, so a rotated
+    /// trailer is not left in the plaintext.
     fn unwrap_v3(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         let owned = message_token(token)?;
         let inner = owned.as_slice();

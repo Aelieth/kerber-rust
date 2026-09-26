@@ -15,7 +15,8 @@ use crate::store::{
     Principal,
 };
 
-/// MIT `check_tgs_u2u` (`tgs_policy.c:575-598`).
+/// MIT `check_tgs_u2u` (`tgs_policy.c:575-598`): the second ticket must be present, be a local
+/// TGT to the server realm, and name the requested server as its client.
 pub(super) fn check_tgs_u2u(
     store: &dyn PrincipalRead,
     stkt: Option<&SecondTicket>,
@@ -47,8 +48,10 @@ fn non_tgt_option(body: &KdcReqBody) -> bool {
         || body.kdc_options.bit(flag_bit::VALIDATE)
 }
 
-/// MIT `check_tgs_nontgt` (`tgs_policy.c:636-638`): renew, forward, or proxy of a ticket whose server does not match the request, realm included, is rejected.
-/// A requested forward, proxy, or postdate that the ticket does not allow is rejected, and a renew past renew-till is expired.
+/// MIT `check_tgs_nontgt` (`tgs_policy.c:636-638`): renew, forward, or proxy of a ticket whose
+/// server does not match the request, realm included, is rejected. A requested forward, proxy,
+/// or postdate that the ticket does not allow is rejected, and a renew past renew-till is
+/// expired.
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(super) fn check_tgs_constraints_skeleton(
     body: &KdcReqBody,
@@ -98,7 +101,8 @@ pub(super) fn check_tgs_constraints_skeleton(
         }
     }
     if non_tgt_option(body) {
-        // MIT tgs_policy.c:636: krb5_principal_compare includes the realm.
+        // MIT `check_tgs_nontgt` (`tgs_policy.c:636-636`): krb5_principal_compare includes
+        // the realm.
         if header_sname != req_sname || header_realm != req_realm {
             return Err(proto(err::SERVER_NOMATCH, status::RENEW_SERVER_MISMATCH));
         }
@@ -116,7 +120,9 @@ pub(super) fn check_tgs_constraints_skeleton(
     Ok(())
 }
 
-/// MIT `check_tgs_s4u2self` (`tgs_policy.c:261-358`).
+/// MIT `check_tgs_s4u2self` (`tgs_policy.c:261-358`): AS-valid options only, one of the four
+/// valid local/cross-realm combinations, and a header PAC that names the impersonator (then
+/// the local client's AS policy) or the foreign subject.
 pub(super) fn check_tgs_s4u2self(
     store: &dyn PrincipalRead,
     body: &krb5_types::KdcReqBody,
@@ -221,8 +227,10 @@ pub(super) fn check_tgs_policy_flags(
     if attr(server, KDB_REQUIRES_PRE_AUTH) && !tkt.flags.bit(flag_bit::PRE_AUTHENT) {
         return Err(proto(err::GENERIC, status::NO_PREAUTH));
     }
-    // svc_time (`tgs_policy.c:190-198`) last in `svc_pol_fns`, before
-    // `check_indicators` (`do_tgs_req.c:897-902`).
+    // svc_time last in `svc_pol_fns`, before `check_indicators`.
+    // MIT `check_tgs_svc_time` (`tgs_policy.c:190-198`): an expired server is SERVICE EXPIRED.
+    // MIT `check_tgs_req` (`do_tgs_req.c:897-902`): `check_indicators` runs after
+    // `check_tgs_policy`, and not for S4U2Self.
     check_db_times(None, server)?;
     Ok(())
 }

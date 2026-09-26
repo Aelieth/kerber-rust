@@ -4,13 +4,17 @@
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
 //! Old-kvno cookie arm: a cookie minted under krbtgt kvno N still opens
-//! after a keepold rollover (`fast_util.c:545-611` `first_key_at_kvno`).
-//! FAST armor-TGT decrypt is MIT `krb5_ktkdb_get_entry`
-//! (`lib/kdb/keytab.c:157`) — `krb5_dbe_find_enctype(entry, xrealm ? etype : -1,
-//! -1, kvno)` pins the ticket kvno and skips non-permitted enctypes; a local
-//! TGS whose first permitted key is not similar to the ticket etype is
-//! `KRB5_KDB_NO_PERMITTED_KEY` → wire 60 `FIND_FAST` (`fast_util.c:52-59`,
-//! `errcode_to_protocol`). Compiles at the parent and fails there:
+//! after a keepold rollover.
+//! MIT `kdc_fast_read_cookie` (`fast_util.c:545-611`): the cookie opens under the krbtgt key
+//! of the kvno it carries, which the Rust side finds with `first_key_at_kvno`.
+//! FAST armor-TGT decrypt is MIT `krb5_ktkdb_get_entry`.
+//! MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:157-157`): `krb5_dbe_find_enctype(entry,
+//! xrealm ? etype : -1, -1, kvno)` pins the ticket kvno and skips non-permitted enctypes;
+//! a local TGS whose first permitted key is not similar to the ticket etype is
+//! `KRB5_KDB_NO_PERMITTED_KEY`.
+//! MIT `armor_ap_request` (`fast_util.c:52-59`): `krb5_rd_req` hands the armor's
+//! `KRB5_KDB_NO_PERMITTED_KEY` back, and it goes out as wire 60 `FIND_FAST`
+//! (`errcode_to_protocol`). Compiles at the parent and fails there:
 //! `armor_key_from_ap` iterated every krbtgt key unfiltered.
 
 use krb5_asn1::{decode, encode};
@@ -516,12 +520,12 @@ fn fast_as_exchange_strengthen_and_finished() {
 
 #[test]
 fn fast_hide_client_names_returns_the_anonymous_outer_client() {
-    // MIT kdc_fast_hide_client (fast_util.c:444) + do_as_req.c:324: a FAST
-    // request that sets KRB5_FAST_OPTION_HIDE_CLIENT_NAMES (RFC 6113 bit 1) is
-    // answered with the anonymous principal WELLKNOWN/ANONYMOUS@WELLKNOWN:
-    // ANONYMOUS as the outer reply client; the real client stays inside the
-    // FAST-armored reply, which still strengthens and finishes. Earlier,
-    // the KDC refused the option as UNKNOWN_CRITICAL_FAST_OPTION.
+    // MIT `kdc_fast_hide_client` (`fast_util.c:444-444`): a FAST request that sets
+    // KRB5_FAST_OPTION_HIDE_CLIENT_NAMES (RFC 6113 bit 1) asks to hide the client.
+    // MIT `finish_process_as_req` (`do_as_req.c:324-324`): such a request is answered with
+    // the anonymous principal WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS as the outer reply
+    // client; the real client stays inside the FAST-armored reply, which still strengthens
+    // and finishes. Earlier, the KDC refused the option as UNKNOWN_CRITICAL_FAST_OPTION.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();

@@ -46,7 +46,7 @@ pub struct IssuedAs {
     pub as_rep_key: ProtocolKey,
 }
 
-/// MIT `do_as_req.c:577-607`: `KRB5_KDB_CANTLOCK_DB` is remapped to 29
+/// MIT `process_as_req` (`do_as_req.c:577-607`): `KRB5_KDB_CANTLOCK_DB` is remapped to 29
 /// `SVC_UNAVAILABLE` (`:579-580` / `:598-599`), **then** the `else if
 /// (errcode)` chain sets `LOOKING_UP_CLIENT` / `LOOKING_UP_SERVER`
 /// (`:588-590` / `:604-606`). Any other backend fault is 60 under the same
@@ -154,10 +154,18 @@ fn issue_as_body(
     finish_process_as_req(store, req, raw, body, fast, pre)
 }
 
-/// MIT `lookup_client` (`do_as_req.c:134-151`) plus the AS server lookup,
-/// `validate_as_request` (`kdc_util.c:716`), `select_client_key`
-/// (`do_as_req.c:103`), `select_session_keytype` (`do_as_req.c:641`),
-/// and the FAST options check (`fast_util.c:226`).
+/// MIT `lookup_client` plus the AS server lookup, `validate_as_request`, `select_client_key`,
+/// `select_session_keytype`, and the FAST options check.
+/// MIT `lookup_client` (`do_as_req.c:134-151`): the client entry comes from
+/// `krb5_db_get_principal`, or from the S4U X.509 lookup when a PA-S4U-X509-USER comes with an
+/// X.500 client name.
+/// MIT `validate_as_request` (`kdc_util.c:716-716`): the AS policy checks on client and server.
+/// MIT `select_client_key` (`do_as_req.c:103-103`): the client key for the most preferred
+/// requested etype.
+/// MIT `process_as_req` (`do_as_req.c:641-641`): the session key type is
+/// `select_session_keytype` over the server entry and the requested etypes.
+/// MIT `kdc_find_fast` (`fast_util.c:226-226`): a FAST request with an unsupported critical
+/// option is rejected.
 fn lookup_client(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -189,8 +197,9 @@ fn lookup_client(
         .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
     let server = lookup_as_princ(store, &sname, status::LOOKING_UP_SERVER)?
         .ok_or_else(|| proto(err::S_PRINCIPAL_UNKNOWN, status::SERVER_NOT_FOUND))?;
-    // MIT validate_as_request runs after the client/server lookups and before
-    // preauth (do_as_req.c:630 precedes check_padata at :758).
+    // MIT validate_as_request runs after the client/server lookups and before preauth.
+    // MIT `process_as_req` (`do_as_req.c:630-630`): `validate_as_request` precedes
+    // check_padata at :758.
     validate_as_request(store, &client, &server, body)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
     let work_padata = if let Some(f) = fast {
@@ -198,11 +207,12 @@ fn lookup_client(
     } else {
         req.0.padata.clone()
     };
-    // MIT `select_client_key` (`do_as_req.c:736-745`) returns success with
-    // `ENCTYPE_NULL` when no requested etype has a permitted top-kvno key;
-    // `CANT_FIND_CLIENT_KEY` is only after preauth (`:259-265`). A
-    // preauth-required client with no padata still gets 25 so
-    // `have_client_keys` can omit ENC-TS / ENC-CHALLENGE (`kdc_preauth.c:442`).
+    // MIT `process_as_req` (`do_as_req.c:736-745`): the `select_client_key` step returns
+    // success with `ENCTYPE_NULL` when no requested etype has a permitted top-kvno key;
+    // `CANT_FIND_CLIENT_KEY` is only after preauth (`:259-265`). A preauth-required client
+    // with no padata still gets 25 so `have_client_keys` can omit ENC-TS / ENC-CHALLENGE.
+    // MIT `have_client_keys` (`kdc_preauth.c:442-442`): true only when
+    // `krb5_dbe_find_enctype` finds a key for a requested etype.
     let Some(ckey) = select_client_key(store.policy(), &client, &body.etype) else {
         let empty = work_padata.as_deref().is_none_or(<[PaData]>::is_empty);
         if client.requires_preauth && empty {
@@ -230,10 +240,12 @@ fn lookup_client(
     })
 }
 
-/// MIT `finish_preauth` (`do_as_req.c:434-466`) is `check_padata`'s
-/// completion callback; this slice also runs `check_padata`
-/// (`do_as_req.c:758`) and the REQUEST_ANONYMOUS rewrite (MIT
-/// `do_as_req.c:716-734`, before `select_client_key`).
+/// MIT `finish_preauth` (`do_as_req.c:434-466`): the completion callback of `check_padata`;
+/// this slice also runs `check_padata` and the REQUEST_ANONYMOUS rewrite.
+/// MIT `process_as_req` (`do_as_req.c:758-758`): `check_padata` runs when the request carries
+/// padata.
+/// MIT `process_as_req` (`do_as_req.c:716-734`): the REQUEST_ANONYMOUS rewrite, before
+/// `select_client_key`.
 fn finish_preauth(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -265,7 +277,7 @@ fn finish_preauth(
         Some(f) => f.inner_body.as_slice(),
         None => body_der,
     };
-    // ec_verify (kdc_preauth_ec.c:71-76): 138 outside FAST is ENOENT → 24.
+    // MIT `ec_verify` (`kdc_preauth_ec.c:71-76`): 138 outside FAST is ENOENT → 24.
     if fast.is_none()
         && work_padata
             .as_deref()
@@ -283,8 +295,8 @@ fn finish_preauth(
             work_padata.as_deref(),
         ));
     }
-    // do_as_req.c:718-734: REQUEST_ANONYMOUS before check_padata. Named client
-    // is 13; WELLKNOWN/ANONYMOUS (any-realm) is rewritten to
+    // MIT `process_as_req` (`do_as_req.c:718-734`): REQUEST_ANONYMOUS before check_padata.
+    // Named client is 13; WELLKNOWN/ANONYMOUS (any-realm) is rewritten to
     // WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS and REQUIRES_PRE_AUTH is forced.
     let mut anonymous_as = false;
     if body.kdc_options.bit(flag_bit::ANONYMOUS) {
@@ -338,9 +350,11 @@ fn finish_preauth(
             }
         }
         Some(PreauthAction::Challenge(e_data)) => {
-            // do_as_req.c:439-442,809: status PREAUTH_FAILED even for 91.
-            // kdc_preauth.c:1141-1170 maybe_add_etype_info2 then
-            // prepare_error_as cookie last (do_as_req.c:785-795).
+            // MIT `finish_preauth` (`do_as_req.c:439-442`): status PREAUTH_FAILED even for 91.
+            // MIT `prepare_error_as` (`do_as_req.c:809-809`): that status is the error text.
+            // MIT `maybe_add_etype_info2` (`kdc_preauth.c:1141-1170`): adds ETYPE-INFO2 on a
+            // 91 with a client key and no cookie in the request.
+            // MIT `prepare_error_as` (`do_as_req.c:785-795`): then the cookie, last.
             let mut method = decode_edata_padata(&e_data);
             if find_pa(work_padata.as_deref(), pa::FX_COOKIE).is_none()
                 && !method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2)
@@ -443,8 +457,11 @@ fn finish_preauth(
     })
 }
 
-/// MIT `finish_process_as_req` (`do_as_req.c:194-423`) plus
-/// `process_as_req` session key, flags, and times (`do_as_req.c:651-703`).
+/// MIT `finish_process_as_req` plus the `process_as_req` session key, flags, and times.
+/// MIT `finish_process_as_req` (`do_as_req.c:194-423`): assembles and encodes the AS-REP, or
+/// the KRB-ERROR on failure.
+/// MIT `process_as_req` (`do_as_req.c:651-703`): the session key, ticket server, flags, and
+/// times.
 fn finish_process_as_req(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -530,10 +547,11 @@ fn finish_process_as_req(
             &krbtgt_key.key
         },
     )?;
-    // do_as_req.c:660-666: with CANONICALIZE a krbtgt request is issued under
-    // the canonical DB server name (Windows short-realm aliases), and
-    // reply_encpart.server follows the ticket server (do_as_req.c:243). Any
-    // other request keeps the requested server name.
+    // MIT `process_as_req` (`do_as_req.c:660-666`): with CANONICALIZE a krbtgt request is issued
+    // under the canonical DB server name (Windows short-realm aliases). Any other request keeps
+    // the requested server name.
+    // MIT `finish_process_as_req` (`do_as_req.c:243-243`): reply_encpart.server follows the
+    // ticket server.
     let ticket_sname = if body.kdc_options.bit(flag_bit::CANONICALIZE)
         && sname.is_krbtgt()
         && server.name.is_krbtgt()
@@ -589,9 +607,13 @@ fn finish_process_as_req(
     let renew_till = ticket_renew_till;
     let mut reply_key = as_rep_key.clone();
     let mut outer_padata = extra_padata;
-    // return_padata add_etype_info/add_pw_salt (kdc_preauth.c:769-829,1487-1495):
-    // key-info follows the reply key unless a module replaced it. RFC 4120
-    // 5.2.7.5 forbids describing a replaced reply key.
+    // MIT `return_padata` (`kdc_preauth.c:1487-1495`): key-info (`add_etype_info`, then
+    // `add_pw_salt`) follows the reply key unless a module replaced it. RFC 4120 5.2.7.5
+    // forbids describing a replaced reply key.
+    // MIT `add_etype_info` (`kdc_preauth.c:769-800`): the etype-info describes the client key.
+    // MIT `add_pw_salt` (`kdc_preauth.c:802-824`): the pw-salt, for pre-info2 clients only.
+    // MIT `add_freshness_token` (`kdc_preauth.c:826-829`): not key-info; only
+    // `hint_list_finish` adds the freshness token.
     if !reply_key_replaced {
         outer_padata.extend(as_rep_key_info(&client, ckey, &body.etype));
     }
@@ -625,18 +647,18 @@ fn finish_process_as_req(
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
     let cipher = encrypt(&reply_key, usage, &enc_der)?;
-    // MIT sets reply.enc_part.kvno only after krb5_encode_kdc_rep (do_as_req.c:329),
-    // so the wire AS-REP enc-part carries no kvno.
+    // MIT `finish_process_as_req` (`do_as_req.c:329-329`): sets reply.enc_part.kvno only after
+    // krb5_encode_kdc_rep, so the wire AS-REP enc-part carries no kvno.
     let kvno = None;
     let padata = if outer_padata.is_empty() {
         None
     } else {
         Some(outer_padata)
     };
-    // do_as_req.c:324: with FAST hide-client-names the outer reply client is
-    // the anonymous principal (WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS); the
-    // real client is carried only inside the FAST-armored reply. Non-FAST or
-    // unset leaves the true cname/crealm.
+    // MIT `finish_process_as_req` (`do_as_req.c:324-324`): with FAST hide-client-names the outer
+    // reply client is the anonymous principal (WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS); the
+    // real client is carried only inside the FAST-armored reply. Non-FAST or unset leaves the
+    // true cname/crealm.
     let (rep_crealm, rep_cname) = if fast.is_some_and(|f| fast_hides_client(&f.fast_options)) {
         (ks(ANONYMOUS_REALM)?, anonymous_principal_name())
     } else {
@@ -662,7 +684,8 @@ fn finish_process_as_req(
     })
 }
 
-/// MIT `get_key_exp` (`do_as_req.c:83-91`). 0 on both sides is omitted.
+/// MIT `get_key_exp` (`do_as_req.c:83-91`): the earlier of `expiration` and `pw_expiration`,
+/// a zero one ignored. 0 on both sides is omitted.
 fn get_key_exp(client: &crate::store::Principal) -> Option<KerberosTime> {
     let exp = client.expiration;
     let pw = client.pw_expire;
@@ -676,8 +699,8 @@ fn get_key_exp(client: &crate::store::Principal) -> Option<KerberosTime> {
     (ts != 0).then(|| KerberosTime::from_unix_seconds(ts))
 }
 
-/// `add_etype_info` (`kdc_preauth.c:769-799`): PA-ETYPE-INFO only for
-/// pre-info2 clients, then PA-ETYPE-INFO2 for every client.
+/// MIT `add_etype_info` (`kdc_preauth.c:769-799`): PA-ETYPE-INFO only for pre-info2 clients,
+/// then PA-ETYPE-INFO2 for every client.
 fn etype_info_padata(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
     let mut out = Vec::new();
     let salt = KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
@@ -708,10 +731,14 @@ fn etype_info_padata(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> 
     out
 }
 
-/// AS-REP key-info like `add_etype_info`/`add_pw_salt` (`kdc_preauth.c:769-829`):
-/// etype-info then pw-salt for pre-info2 clients. The single entry's salt is
-/// the canonical client's (`_make_etype_info_entry` uses `client->princ`), so a
-/// `kinit` under an alias derives the target's key.
+/// AS-REP key-info like `add_etype_info`/`add_pw_salt`: etype-info then pw-salt for pre-info2
+/// clients. The single entry's salt is the canonical client's (`_make_etype_info_entry` uses
+/// `client->princ`), so a `kinit` under an alias derives the target's key.
+/// MIT `add_etype_info` (`kdc_preauth.c:769-800`): etype-info from `client->princ` and the
+/// client key.
+/// MIT `add_pw_salt` (`kdc_preauth.c:802-824`): pw-salt only for pre-info2 clients.
+/// MIT `add_freshness_token` (`kdc_preauth.c:826-829`): not AS-REP key-info; only
+/// `hint_list_finish` adds the freshness token.
 fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
     let mut out = etype_info_padata(client, ckey, requested);
     if !requested.iter().copied().any(enctype_requires_etype_info_2) {
@@ -852,7 +879,7 @@ pub(crate) fn verify_enc_timestamp(
     Ok(())
 }
 
-/// MIT `KRB5_ANONYMOUS_REALMSTR` (krb5.hin:305): the anonymous principal's realm.
+/// MIT `KRB5_ANONYMOUS_REALMSTR` (`krb5.hin:305-305`): the anonymous principal's realm.
 pub(super) const ANONYMOUS_REALM: &str = "WELLKNOWN:ANONYMOUS";
 
 /// MIT `krb5_anonymous_principal`: `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS`.
@@ -861,9 +888,9 @@ pub(super) fn anonymous_principal_name() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_WELLKNOWN, ["WELLKNOWN", "ANONYMOUS"])
 }
 
-/// `get_preauth_hint_list` (`kdc_preauth.c:974-1014`): empty 136, then
-/// `add_etype_info` (11 if pre-info2, always 19), then modules, cookie last
-/// (`prepare_error_as` when e_data is present).
+/// MIT `get_preauth_hint_list` (`kdc_preauth.c:974-1014`): empty 136, then `add_etype_info`
+/// (11 if pre-info2, always 19), then modules, cookie last (`prepare_error_as` when e_data is
+/// present).
 fn preauth_hint_edata(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -881,8 +908,10 @@ fn preauth_hint_edata(
             method.insert(at + i, p);
         }
     }
-    // kdc_preauth.c:826-871,895-898: populated 150 last in the hint list when
-    // PKINIT asked and the request advertised the type; cookie is still last.
+    // MIT `add_freshness_token` (`kdc_preauth.c:826-871`): a populated 150 only when PKINIT
+    // asked and the request advertised the type.
+    // MIT `hint_list_finish` (`kdc_preauth.c:895-898`): that token goes last in the hint list;
+    // cookie is still last.
     if store.pkinit_ca().is_some()
         && request_padata
             .into_iter()
@@ -953,8 +982,10 @@ fn attach_preauth_hint(
     }
 }
 
-/// MIT `krb5_anonymous_principal`: the WELLKNOWN/ANONYMOUS name, compared by
-/// components only like `krb5_principal_compare_any_realm` (do_as_req.c:719).
+/// MIT `krb5_anonymous_principal`: the WELLKNOWN/ANONYMOUS name, compared by components only
+/// like `krb5_principal_compare_any_realm`.
+/// MIT `process_as_req` (`do_as_req.c:719-719`): a REQUEST_ANONYMOUS client is compared with
+/// `krb5_principal_compare_any_realm`.
 pub(super) fn is_anonymous_principal(name: &PrincipalName) -> bool {
     name.components_eq(&anonymous_principal_name())
 }

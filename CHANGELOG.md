@@ -102,6 +102,15 @@ this project uses semantic versioning once a crate is published.
   hash, `parent-red`, `Compiles at`, `item N`, `S2.3`, `Z8 leftover`, a
   lone `B2` / `F4`, "the parent `…`", and a `working/` path in a
   `crates/` comment. Advisory at the live count, 47.
+- **all.** MIT cites under `crates/` are re-derived from their ranges.
+  Each keeps its original range, names the MIT definition that contains
+  it, opens its own sentence, and carries the claim that sentence made.
+  A range over two definitions or several table entries is one anchor
+  per definition; five trailing overhangs are trimmed to the closing
+  brace; `svr_iters.c:61-62` corrects an off-by-two cite; ambiguous MIT
+  basenames carry a directory. The `diffsend` header lists its 111
+  cases. Both anchor checks are hard; the process-tag allow follows the
+  live count, 45. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

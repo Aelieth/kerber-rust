@@ -1,9 +1,15 @@
 //! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
 //! store side: the realm defaults `kadm5_create_principal_3`
-//! takes for fields absent from the mask (`svr_principal.c:381-401`
-//! `handle->params.*`, `alt_prof.c:573-632`) and the local-verb shape of
-//! `impose_restrictions` (`auth.c:205-272`). Compiles at `b50d6bf`
-//! (parent-red).
+//! takes for fields absent from the mask and the local-verb shape of
+//! `impose_restrictions`.
+//! MIT `kadm5_create_principal_3` (`svr_principal.c:381-401`): a field absent from the mask
+//! takes `handle->params.*`.
+//! MIT `kadm5_get_config_params` (`alt_prof.c:573-632`): the realm defaults behind
+//! `handle->params.*` (`max_life`, `max_rlife`, `expiration`, `flags`).
+//! MIT `impose_restrictions` (`auth.c:205-265`): an ACL line's restrictions rewrite the record
+//! and the mask.
+//! MIT `auth_restrict` (`auth.c:267-272`): the hook that applies them, given the record and
+//! the mask. Compiles at `b50d6bf` (parent-red).
 
 #[path = "common/mod.rs"]
 mod common;

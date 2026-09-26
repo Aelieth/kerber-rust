@@ -143,7 +143,7 @@ fn as_needchange_is_key_expired_unless_changepw() {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     or_attr(&mut store, &cname, KDB_REQUIRES_PWCHANGE);
     let err = krb5_kdc::issue_as(&store, &user_as_req(48)).unwrap_err();
-    // MIT validate_as_request (kdc_util.c:762-766): REQUIRES_PWCHANGE is its own
+    // MIT `validate_as_request` (`kdc_util.c:762-766`): REQUIRES_PWCHANGE is its own
     // "REQUIRED PWCHANGE" status (code KEY_EXP 23), not "CLIENT KEY EXPIRED".
     let (code, text) = match err {
         Error::Protocol { code, text, .. } => (code, text),

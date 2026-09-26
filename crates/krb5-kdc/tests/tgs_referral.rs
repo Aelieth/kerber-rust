@@ -477,13 +477,15 @@ fn s4u2proxy_referral_with_rbcd_issues() {
         out.rep.0.ticket.sname.components_joined(),
         "krbtgt/OTHER.TEST"
     );
-    // MIT `do_tgs_req.c:756-759` + `gc_via_tkt.c:261-269`: referral TGT
-    // client is the header impersonator, not the evidence user.
+    // MIT `gather_tgs_req_info` (`do_tgs_req.c:756-759`): a referral TGT's client is the
+    // header impersonator, not the evidence user.
+    // MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:261-269`): the client checks that a
+    // referral's client matches its TGT client.
     assert_eq!(
         out.rep.0.cname.components_joined(),
         host.components_joined()
     );
-    // MIT `kdc_authdata.c:534-539`: S4U referral PAC client info is the
+    // MIT `handle_pac` (`kdc_authdata.c:534-539`): S4U referral PAC client info is the
     // subject with realm (B's `RBCD_PAC_PRINC` read).
     let ir = store
         .get_name(&foreign())

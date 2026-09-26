@@ -1,7 +1,7 @@
 //! MIT `kdc/replay.c` lookaside reply cache: a retransmitted request, keyed by
 //! its exact request bytes, is answered from the cache instead of re-processed.
 //!
-//! MIT's KDC is single-threaded, so `replay.c` uses no locking; the Rust
+//! MIT's KDC is single-threaded, so `kdc/replay.c` uses no locking; the Rust
 //! listener runs the UDP and TCP paths on separate threads, so a shared
 //! [`Lookaside`] is wrapped in a mutex ([`crate::listen`]). Direct callers of
 //! `issue_as`/`issue_tgs`/`handle_request` bypass the cache, as MIT's request
@@ -11,9 +11,9 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// MIT `STALE_TIME` (`replay.c:59`): two minutes.
+/// MIT `STALE_TIME` (`kdc/replay.c:59-59`): two minutes.
 pub(crate) const STALE_TIME: Duration = Duration::from_secs(120);
-/// MIT `LOOKASIDE_MAX_SIZE` (`replay.c:44`): 10 MiB.
+/// MIT `LOOKASIDE_MAX_SIZE` (`kdc/replay.c:44-44`): 10 MiB.
 pub(crate) const MAX_SIZE: usize = 10 * 1024 * 1024;
 /// Rough per-entry overhead, standing in for MIT's `sizeof(struct entry)`.
 const ENTRY_OVERHEAD: usize = 64;

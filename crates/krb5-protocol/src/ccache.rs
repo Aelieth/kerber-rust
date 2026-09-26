@@ -218,7 +218,7 @@ pub fn parse_principal(spec: &str) -> Result<(PrincipalName, String), String> {
 }
 
 /// Parse `name@REALM`. `enterprise` uses NT-ENTERPRISE (one component).
-/// MIT parse.c: first `@` is the UPN; only a later `@` is the realm.
+/// MIT krb/parse.c: first `@` is the UPN; only a later `@` is the realm.
 ///
 /// # Errors
 ///

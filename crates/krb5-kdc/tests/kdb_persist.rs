@@ -1,22 +1,27 @@
 //! Persist round-trip and UDP listener adversarial tests.
-//! `kdb_put_entry` stamps `KRB5_TL_MOD_PRINC` with
-//! `handle->current_caller` (`server_kdb.c:376-377`), not a hard-coded
-//! `kadmin/admin@REALM`. Compiles at the parent: `create_password` already
-//! takes `actor`, but `stamp_admin_tl` ignored it.
-//! `kdb5_util create` stamps `db_creation@REALM`
-//! (`kdb5_create.c:114-133`). Compiles at the parent: bootstrap and
-//! `tl_mod_princ_name` exist; the parent hard-codes `kadmin/admin@REALM`.
-//! `kadm5_create` stamps `kadmin/admin` and `kadmin/changepw`
-//! `kdb5_util@REALM` (`kadm5_create.c:100`). Compiles at the parent:
-//! bootstrap and `tl_mod_princ_name` exist; the parent restamps them
-//! `db_creation@` via `apply_admin_fields`.
-//! Z8 leftover: `kadm5_purgekeys` → `kdb_put_entry` stamps
-//! `current_caller` (`server_kdb.c:376-377`). Compiles at the parent:
-//! `purgekeys` and `tl_mod_princ_name` exist; the parent does not stamp.
-//! Z8 leftover: `kadm5_set_string` → `kdb_put_entry` stamps
-//! `current_caller` (`svr_principal.c:2022-2043`). Compiles at the
-//! parent: `set_string` and `tl_mod_princ_name` exist; the parent
-//! writes the attr and does not stamp.
+//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps `KRB5_TL_MOD_PRINC` with
+//! `handle->current_caller`, not a hard-coded `kadmin/admin@REALM`. Compiles at the parent:
+//! `create_password` already takes `actor`, but `stamp_admin_tl` ignored it.
+//! `kdb5_util create` stamps `db_creation@REALM`.
+//! MIT `db_creator_entries` (`kdb5_create.c:114-115`): the stamp's one name component is
+//! `db_creation`.
+//! MIT `db_create_princ` (`kdb5_create.c:127-133`): the `db_creation` principal that
+//! `add_principal` stamps as the modifier of each principal `kdb5_util create` writes.
+//! Compiles at the parent: bootstrap and `tl_mod_princ_name` exist; the parent hard-codes
+//! `kadmin/admin@REALM`.
+//! `kadm5_create` stamps `kadmin/admin` and `kadmin/changepw` `kdb5_util@REALM`.
+//! MIT `kadm5_create_magic_princs` (`kadm5_create.c:100-100`): the kadm5 handle is opened
+//! with `progname` as the client name, so its `current_caller` is `kdb5_util@REALM`.
+//! Compiles at the parent: bootstrap and `tl_mod_princ_name` exist; the parent restamps
+//! them `db_creation@` via `apply_admin_fields`.
+//! Z8 leftover: `kadm5_purgekeys` → `kdb_put_entry` stamps `current_caller`.
+//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the put stamps the modifier as
+//! `handle->current_caller`. Compiles at the parent: `purgekeys` and
+//! `tl_mod_princ_name` exist; the parent does not stamp.
+//! Z8 leftover: `kadm5_set_string` → `kdb_put_entry` stamps `current_caller`.
+//! MIT `kadm5_set_string` (`svr_principal.c:2022-2043`): the string is stored through
+//! `kdb_put_entry`. Compiles at the parent: `set_string` and `tl_mod_princ_name` exist; the
+//! parent writes the attr and does not stamp.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, decrypt, string_to_key};

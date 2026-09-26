@@ -237,8 +237,9 @@ impl PrincipalStore {
 
     /// [`Self::chrand_etypes_keepold`] for `name@princ_realm`.
     ///
-    /// Empty `etypes` is MIT's omitted `-e` (`svr_principal.c:1425`
-    /// `apply_keysalt_policy`).
+    /// Empty `etypes` is MIT's omitted `-e`.
+    /// MIT `kadm5_randkey_principal_3` (`svr_principal.c:1425-1425`): an omitted `-e` reaches
+    /// `apply_keysalt_policy` as zero keysalts, so the policy or realm default applies.
     ///
     /// # Errors
     ///

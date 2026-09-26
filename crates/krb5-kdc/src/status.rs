@@ -57,8 +57,9 @@ pub(crate) const NULL_SERVER: &str = "NULL_SERVER";
 pub(crate) const POSTDATE_NOT_ALLOWED: &str = "POSTDATE NOT ALLOWED";
 pub(crate) const PREAUTH_FAILED: &str = "PREAUTH_FAILED";
 pub(crate) const PROCESS_TGS: &str = "PROCESS_TGS";
-/// MIT `do_as_req.c:747-751` status; Rust's `open_cookie` ignores bad cookies
-/// like MIT's `return 0` path, so this word is never emitted.
+/// MIT `process_as_req` (`do_as_req.c:747-751`): the status of a `kdc_fast_read_cookie`
+/// failure. Rust's `open_cookie` ignores bad cookies like MIT's `return 0` path, so this
+/// word is never emitted.
 pub(crate) const READ_COOKIE: &str = "READ_COOKIE";
 pub(crate) const RENEW_SERVER_MISMATCH: &str = "SERVER DIDN'T MATCH TICKET FOR RENEW/FORWARD/ETC";
 pub(crate) const REQUIRED_PWCHANGE: &str = "REQUIRED PWCHANGE";

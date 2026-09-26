@@ -133,14 +133,18 @@ pub mod err {
     /// KRB_AP_ERR_USER_TO_USER_REQUIRED
     pub const USER_TO_USER_REQUIRED: i32 = 69;
     /// KRB5KRB_AP_ERR_TKT_INVALID (`krb5_err.et` offset 145): "Ticket has
-    /// invalid flag set". A library-local code, not an RFC 4120 wire number;
-    /// MIT's `errcode_to_protocol` (`kdc_util.c:691-697`) clamps offsets over
-    /// 128 to `GENERIC` (60). The acceptor returns it to GSS as a minor.
+    /// invalid flag set". A library-local code, not an RFC 4120 wire number.
+    /// MIT `errcode_to_protocol` (`kdc_util.c:691-697`): clamps offsets over 128 to `GENERIC`
+    /// (60). The acceptor returns it to GSS as a minor.
     pub const TKT_INVALID: i32 = 145;
     /// MIT `k5e1_err.et` `KRB5KDC_ERR_DISCARD` (table `k5e1` offset 3,
     /// com_err base ×256 with the 2³² wrap). Library-local: not an RFC 4120
-    /// wire number. `filter_preauth_error` (`kdc_preauth.c:1125`) passes it
-    /// through; `do_as_req.c:372` / `dispatch.c:78` suppress the reply.
+    /// wire number.
+    /// MIT `filter_preauth_error` (`kdc_preauth.c:1125-1125`): passes it through.
+    /// MIT `finish_process_as_req` (`do_as_req.c:372-372`): builds no KRB-ERROR for it, so no
+    /// reply is sent.
+    /// MIT `finish_dispatch_cache` (`dispatch.c:78-78`): keeps the request's null lookaside
+    /// entry for it, so a resend gets no reply either.
     pub const DISCARD: i32 = -1_750_600_189;
 }
 
@@ -188,9 +192,13 @@ pub mod ku {
     pub const GSS_INITIATOR_SEAL: u32 = 24;
     /// GSS initiator sign (RFC 4121).
     pub const GSS_INITIATOR_SIGN: u32 = 25;
-    /// PA-S4U-X509-USER request checksum (`kdc_util.c:1374`).
+    /// PA-S4U-X509-USER request checksum.
+    /// MIT `verify_s4u_x509_user_checksum` (`kdc_util.c:1374-1374`): the request checksum is
+    /// verified with this usage.
     pub const PA_S4U_X509_USER_REQUEST: u32 = 26;
-    /// PA-S4U-X509-USER reply checksum (`kdc_util.c:1479`).
+    /// PA-S4U-X509-USER reply checksum.
+    /// MIT `kdc_make_s4u2self_rep` (`kdc_util.c:1479-1479`): the reply checksum uses it when
+    /// the request set `KRB5_S4U_OPTS_USE_REPLY_KEY_USAGE`.
     pub const PA_S4U_X509_USER_REPLY: u32 = 27;
     /// RFC 6113 FAST request checksum.
     pub const FAST_REQ_CHKSUM: u32 = 50;
@@ -203,9 +211,11 @@ pub mod ku {
     /// Unused: collision with ENC_CHALLENGE_CLIENT. MIT PA-FX-COOKIE is [`PA_FX_COOKIE`].
     #[allow(dead_code)]
     pub const FAST_COOKIE: u32 = 54;
-    /// MIT `KRB5_KEYUSAGE_PA_FX_COOKIE` (`krb5.hin:1006`).
+    /// MIT `KRB5_KEYUSAGE_PA_FX_COOKIE` (`krb5.hin:1006-1006`): 513, used for encrypted FAST
+    /// cookies.
     pub const PA_FX_COOKIE: u32 = 513;
-    /// MIT `KRB5_KEYUSAGE_PA_AS_FRESHNESS` (`krb5.hin:1007`).
+    /// MIT `KRB5_KEYUSAGE_PA_AS_FRESHNESS` (`krb5.hin:1007-1007`): 514, used for freshness
+    /// tokens.
     pub const PA_AS_FRESHNESS: u32 = 514;
     /// RFC 6113 KEY_USAGE_ENC_CHALLENGE_CLIENT.
     pub const ENC_CHALLENGE_CLIENT: u32 = 54;
@@ -219,7 +229,8 @@ pub mod ku {
     pub const CAMMAC: u32 = 64;
     /// SPAKE factor encryption (MIT `KRB5_KEYUSAGE_SPAKE`).
     pub const SPAKE: u32 = 65;
-    /// PA-PKINIT-KX (`krb5.hin:991` `KRB5_KEYUSAGE_PA_PKINIT_KX`).
+    /// PA-PKINIT-KX.
+    /// MIT `KRB5_KEYUSAGE_PA_PKINIT_KX` (`krb5.hin:991-991`): the PA-PKINIT-KX key usage, 44.
     pub const PA_PKINIT_KX: u32 = 44;
 }
 

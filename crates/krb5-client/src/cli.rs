@@ -369,7 +369,8 @@ pub struct KvnoArgs {
     /// `-U` impersonated user (S4U2Self). Unlike MIT `kvno`, the ccache
     /// principal need not equal the service; the KDC enforces that.
     pub for_user: Option<String>,
-    /// `-P` S4U2Proxy after `-U` (`kvno.c:163-168`).
+    /// `-P` S4U2Proxy after `-U`.
+    /// MIT `main` (`kvno.c:163-168`): `-P` without `-I`, `-U` or `-F` is a usage error.
     pub proxy: bool,
 }
 
@@ -514,7 +515,9 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
 }
 
 /// `Password for <principal>: ` — the `krb5_get_init_creds_password`
-/// prompt (`gic_pwd.c:96`) through [`read_prompt_line`].
+/// prompt, read through [`read_prompt_line`].
+/// MIT `krb5_get_as_key_password` (`gic_pwd.c:96-96`): the reply to the `Password for`
+/// prompt becomes the password.
 ///
 /// # Errors
 ///
@@ -523,11 +526,11 @@ pub fn read_password_line(principal: &str) -> Result<Vec<u8>, String> {
     read_prompt_line(&format!("Password for {principal}: "))
 }
 
-/// One hidden prompt like MIT `krb5_prompter_posix` (`prompter.c:78-92`):
-/// the prompt on **stdout**, echo off while stdin is a terminal
-/// (`setup_tty`), the line read, echo restored, and a newline printed
-/// after every hidden prompt whether or not stdin is a tty (`:91-92`);
-/// the trailing newline is stripped from the reply.
+/// One hidden prompt like MIT `krb5_prompter_posix`.
+/// MIT `krb5_prompter_posix` (`prompter.c:78-92`): the prompt on **stdout**, echo off while
+/// stdin is a terminal (`setup_tty`), the line read, echo restored, and a newline printed
+/// after every hidden prompt whether or not stdin is a tty (`:91-92`); the trailing newline
+/// is stripped from the reply.
 ///
 /// # Errors
 ///

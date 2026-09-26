@@ -150,9 +150,8 @@ pub fn tgs_req(
 
 /// Inputs of a TGS-REQ.
 ///
-/// MIT `k5_make_tgs_req` (`lib/krb5/krb/send_tgs.c:119`) takes the same
-/// values positionally. This is the parameter struct for [`tgs_req_ex`],
-/// not a wire type.
+/// MIT `k5_make_tgs_req` (`lib/krb5/krb/send_tgs.c:119-119`): takes the same values
+/// positionally. This is the parameter struct for [`tgs_req_ex`], not a wire type.
 pub struct TgsReqParams<'a> {
     /// Header ticket.
     pub ticket: Ticket,

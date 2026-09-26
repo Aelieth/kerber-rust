@@ -2,7 +2,10 @@
 //!
 //! Drives the shipped codec on the committed 1.22.2 golden (not a
 //! reimplementation, not hardcoded key bytes).
-//! `KRB5_TL_DB_ARGS` is rejected at put (`kdb5.c:893-945`, `kdb_db2.c:817-822`).
+//! `KRB5_TL_DB_ARGS` is rejected at put.
+//! MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): the `KRB5_TL_DB_ARGS` records are
+//! pulled out of the entry as the put's `db_args`, and one without a trailing NUL is `EINVAL`.
+//! MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): DB2 refuses any `db_args` with `EINVAL`.
 
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};

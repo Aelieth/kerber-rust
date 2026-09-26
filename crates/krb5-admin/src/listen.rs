@@ -276,8 +276,8 @@ fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
 }
 
 fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8>, Error> {
-    // schpw.c:273-345: alloc_data overwrites `ret` with 0, so
-    // `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
+    // MIT `process_chpw_request` (`schpw.c:273-345`): alloc_data overwrites `ret` with 0,
+    // so `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
     let mut e_data = Vec::from(result.to_be_bytes());
     e_data.extend_from_slice(text.as_bytes());
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::Inner(e.to_string()))?;
@@ -380,8 +380,10 @@ security administrator."
     )
 }
 
-/// MIT `process_chpw_request` (`schpw.c:62-95`): a length, version, or framing mismatch bails out before a reply is built.
-/// That mismatch returns an error and no datagram is sent, while a failed AP-REQ is a framed chpwfail with result 3 for kadmin/changepw only.
+/// MIT `process_chpw_request` (`schpw.c:62-95`): a length, version, or framing mismatch
+/// bails out before a reply is built.
+/// That mismatch returns an error and no datagram is sent, while a failed AP-REQ is a framed
+/// chpwfail with result 3 for kadmin/changepw only.
 fn handle_kpasswd_from(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
@@ -390,13 +392,14 @@ fn handle_kpasswd_from(
     raw: &[u8],
     from: &str,
 ) -> Result<Vec<u8>, Error> {
-    // MIT schpw.c:47-82: length then version before AP-REQ; ChangePasswdData only for 0xff80.
+    // MIT `process_chpw_request` (`schpw.c:47-82`): length then version before AP-REQ;
+    // ChangePasswdData only for 0xff80.
     if raw.len() < 4 {
         return Err(Error::Inner("kpasswd truncated".into()));
     }
     let plen = usize::from(u16::from_be_bytes([raw[0], raw[1]]));
     if plen != raw.len() {
-        // MIT schpw.c:62-68 goto bailout; dispatch sends no datagram.
+        // MIT `process_chpw_request` (`schpw.c:62-68`): goto bailout; dispatch sends no datagram.
         return Err(Error::Inner("Message stream modified".into()));
     }
     let ver = u16::from_be_bytes([raw[2], raw[3]]);
@@ -410,7 +413,8 @@ fn handle_kpasswd_from(
     }
     let ap_len = usize::from(u16::from_be_bytes([raw[4], raw[5]]));
     if 6 + ap_len >= raw.len() {
-        // schpw.c:89-95 `>=` (no PRIV byte) → bailout, no datagram.
+        // MIT `process_chpw_request` (`schpw.c:89-95`): the AP-REQ length check is `>=`
+        // (no PRIV byte) → bailout, no datagram.
         return Err(Error::Inner("Message stream modified".into()));
     }
     let ap_req = &raw[6..6 + ap_len];
@@ -473,7 +477,7 @@ fn handle_kpasswd_from(
     };
     let client = ok.ticket_part.cname.unparse_with_realm(&ticket_crealm);
     let target_unparsed = targ.unparse_with_realm(&targ_realm);
-    // MIT misc.c:33-54: compare first, INITIAL, auth(OP_CPW), then DB.
+    // MIT `schpw_util_wrapper` (`misc.c:33-54`): compare first, INITIAL, auth(OP_CPW), then DB.
     let self_change = principal_compare(&targ, &targ_realm, &ok.ticket_part.cname, &ticket_crealm);
     let (code, text, log_err) = if self_change && !ok.ticket_part.flags.initial() {
         (
@@ -508,9 +512,10 @@ fn handle_kpasswd_from(
         // House rule (`kadm5/dispatch.rs` `write_store`): reload then mutate then
         // save. `AdminSession::change_password` did this; the inline
         // path skipped it and could save over a `kadmin.local` write.
-        // MIT `ovsec_kadmd.c:446` `kadm5_init(…, "kadmind", …)` + `schpw.c:407`:
-        // the changepw dispatcher uses the global handle, so `current_caller`
-        // is `kadmind@REALM`, not the ticket client.
+        // MIT `main` (`ovsec_kadmd.c:446-446`): the global handle comes from
+        // `kadm5_init(…, "kadmind", …)`.
+        // MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses the global handle,
+        // so `current_caller` is `kadmind@REALM`, not the ticket client.
         let stamp = format!("kadmind@{store_realm}");
         let changed = (|| {
             g.reload_if_stale()?;

@@ -1,10 +1,21 @@
 //! `kadm5_create_principal_3` applies the `kadm5_principal_ent_rec`
-//! fields under the request mask (`svr_principal.c:376-420`) and the ACL
-//! restrictions are imposed on the *request* before the create/modify runs
-//! (`kadmin/server/auth.c:205-272` `impose_restrictions`, called from
-//! `server_stubs.c:478,519,630` `stub_auth_restrict`). Compiles at `b50d6bf`
-//! (parent-red): every assertion here is on the stored entry through the RPC
-//! path, which the parent accepted while silently dropping the fields.
+//! fields under the request mask and the ACL restrictions are imposed on the
+//! *request* before the create/modify runs (`impose_restrictions`, called from
+//! `stub_auth_restrict`).
+//! MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): a field under the request mask
+//! is taken from the request, else from the server defaults.
+//! MIT `impose_restrictions` (`kadmin/server/auth.c:205-265`): the ACL restrictions rewrite
+//! the request's fields and mask.
+//! MIT `auth_restrict` (`kadmin/server/auth.c:267-272`): takes the request's entry and mask,
+//! which it may rewrite.
+//! MIT `create_principal_2_svc` (`server_stubs.c:478-478`): `stub_auth_restrict` runs on the
+//! request before the create.
+//! MIT `create_principal3_2_svc` (`server_stubs.c:519-519`): `stub_auth_restrict` runs on
+//! the request before the create.
+//! MIT `modify_principal_2_svc` (`server_stubs.c:630-630`): `stub_auth_restrict` runs on the
+//! request before the modify.
+//! Compiles at `b50d6bf` (parent-red): every assertion here is on the stored entry through the
+//! RPC path, which the parent accepted while silently dropping the fields.
 //! Create reserved TL (already covered) and the dump TL width.
 
 #[path = "common/mod.rs"]

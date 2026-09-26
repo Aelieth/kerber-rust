@@ -48,7 +48,8 @@ const AD_POLICY_LEN: usize = 30;
 const AD_POLICY_COMPLEX: u32 = 0x0000_0001;
 const AD_POLICY_TICKS_PER_DAY: u64 = 86_400 * 10_000_000;
 
-/// MIT `chpw.c:244-279` `krb5_chpw_result_code_string`.
+/// MIT `krb5_chpw_result_code_string` (`chpw.c:244-279`): the message for each kpasswd result
+/// code; an unknown code is "Password change failed".
 #[must_use]
 pub fn chpw_result_code_string(code: u16) -> &'static str {
     match code {
@@ -64,7 +65,8 @@ pub fn chpw_result_code_string(code: u16) -> &'static str {
     }
 }
 
-/// MIT `chpw.c:476-510` `krb5_chpw_message`.
+/// MIT `krb5_chpw_message` (`chpw.c:476-510`): an AD policy blob is decoded into a message, else
+/// a valid UTF-8 server string is returned, else a generic hint.
 #[must_use]
 pub fn chpw_message(server_string: &[u8]) -> String {
     if let Some(msg) = decode_ad_policy_info(server_string) {
@@ -79,7 +81,7 @@ pub fn chpw_message(server_string: &[u8]) -> String {
     "Try a more complex password, or contact your administrator.".into()
 }
 
-/// MIT `chpw.c:389-474` AD 30-byte policy blob.
+/// MIT `decode_ad_policy_info` (`chpw.c:389-474`): decodes the AD 30-byte policy blob.
 fn decode_ad_policy_info(data: &[u8]) -> Option<String> {
     if data.len() != AD_POLICY_LEN {
         return None;
@@ -130,7 +132,7 @@ fn decode_ad_policy_info(data: &[u8]) -> Option<String> {
     Some(parts.join("  "))
 }
 
-/// MIT `chpw.c:217-231` `krb5int_rd_chpw_rep` result-code half.
+/// MIT `krb5int_rd_chpw_rep` (`chpw.c:217-231`): the result-code half of the kpasswd reply check.
 ///
 /// Out-of-range codes, a truncated payload, or SUCCESS taken from a
 /// KRB-ERROR, are `KRB5KRB_AP_ERR_MODIFIED`.
@@ -224,8 +226,9 @@ pub fn set_password(
     Ok(())
 }
 
-/// MIT `krb5int_rd_chpw_rep` (`chpw.c:227-229`): a success code carried inside an error reply is not accepted.
-/// The generated subkey buffer is wiped as soon as the key exists, and a non-error reply is not accepted until its AP-REP verifies.
+/// MIT `krb5int_rd_chpw_rep` (`chpw.c:227-229`): a success code carried inside an error reply is
+/// not accepted. The generated subkey buffer is wiped as soon as the key exists, and a non-error
+/// reply is not accepted until its AP-REP verifies.
 fn change_or_set(
     kdc: &KdcAddr,
     as_out: &AsOutcome,
@@ -295,7 +298,9 @@ fn change_or_set(
     Ok((code, data))
 }
 
-/// MIT `gic_pwd.c:211-222`: KEY_EXP plus a new-password source, not keytab.
+/// KEY_EXP plus a new-password source, not keytab.
+/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:211-222`): only KEY_EXP with a prompter,
+/// and the change-password prompt not turned off, goes on to a password change.
 #[must_use]
 pub fn key_exp_should_changepw(err: &Error, has_new_password: bool, keytab: bool) -> bool {
     has_new_password

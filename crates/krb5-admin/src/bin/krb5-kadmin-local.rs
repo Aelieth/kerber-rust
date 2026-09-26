@@ -238,7 +238,7 @@ fn run(
             let a = parse_kadmin_args(&parts[1..])?;
             let name = parse_name(sess, &a.name)?;
             let canon = name.unparse_with_realm(sess.realm());
-            // MIT kadmin_addprinc (kadmin.c:1281-1355): the policy note goes to
+            // MIT `kadmin_addprinc` (`kadmin.c:1281-1355`): the policy note goes to
             // stderr, a failure is com_err("add_principal", …) and the
             // session continues, success is `Principal "…" created.`.
             if a.policy.is_none() {
@@ -254,11 +254,12 @@ fn run(
                 }
             } else {
                 let pw = a.pw.clone().map_or_else(password, Ok)?;
-                // MIT kadm5_create_principal_3 runs passwd_check with the
-                // -policy before the entry exists (svr_principal.c:364-373),
-                // so a rejected password creates nothing. Bind `-policy`
-                // before create so `apply_keysalt_policy` sees
-                // `allowed_keysalts` (`svr_principal.c:444-447`).
+                // MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): passwd_check
+                // runs with the -policy before the entry exists, so a rejected password
+                // creates nothing.
+                // MIT `kadm5_create_principal_3` (`svr_principal.c:444-447`): keysalts
+                // come from `apply_keysalt_policy` over the -policy's `allowed_keysalts`,
+                // so bind `-policy` before create.
                 sess.check_new_password(&name, a.policy.as_deref(), pw.as_bytes())
                     .and_then(|()| {
                         if a.policy.is_some() {
@@ -315,7 +316,10 @@ fn run(
             match done {
                 Ok(()) if a.randkey => println!("Key for \"{canon}\" randomized."),
                 Ok(()) => println!("Password for \"{canon}\" changed."),
-                // MIT kadmin.c:926,963: com_err("change_password", …).
+                // MIT `kadmin_cpw` (`kadmin.c:926-926`): a failed `-pw` change is
+                // com_err("change_password", …) "while changing password for …".
+                // MIT `kadmin_cpw` (`kadmin.c:963-963`): a failed prompted change is
+                // com_err("change_password", …) with the same text.
                 Err(e) => eprintln!(
                     "change_password: {} while changing password for \"{canon}\".",
                     kadm_err_text(&e)
@@ -510,8 +514,8 @@ fn print_getprinc(p: &krb5_kdc::Principal, policy_missing: bool) {
     }
     println!("MKey: vno {}", p.mkvno);
     println!("Attributes:{}", flags_to_string(p.attributes));
-    // MIT `kadmin_getprinc` (`kadmin.c:1543-1546`) appends ` [does not exist]`
-    // when the bound policy has been deleted.
+    // MIT `kadmin_getprinc` (`kadmin.c:1543-1546`): appends ` [does not exist]` when the
+    // bound policy has been deleted.
     match p.pw_policy.as_deref().filter(|s| !s.is_empty()) {
         Some(pol) if policy_missing => println!("Policy: {pol} [does not exist]"),
         Some(pol) => println!("Policy: {pol}"),
@@ -551,7 +555,7 @@ fn strdur(duration: u64) -> String {
     )
 }
 
-/// `krb5_flags_to_strings` (`str_conv.c outflags`): one name per set bit, in
+/// `krb5_flags_to_strings` (`kadm5/str_conv.c outflags`): one name per set bit, in
 /// bit order, each preceded by a space.
 fn flags_to_string(attributes: u32) -> String {
     const NAMES: [Option<&str>; 24] = [
@@ -581,8 +585,9 @@ fn flags_to_string(attributes: u32) -> String {
         Some("LOCKDOWN_KEYS"),
     ];
     let mut out = String::new();
-    // MIT `krb5_flags_to_strings` loops all 32 bits and prints an unnamed bit
-    // as `0x%08lx` (`str_conv.c:214`).
+    // MIT `krb5_flags_to_strings` loops all 32 bits.
+    // MIT `krb5_flagnum_to_string` (`kadm5/str_conv.c:214-214`): an unnamed bit prints
+    // as `0x%08lx`.
     for bit in 0..32u32 {
         if attributes & (1u32 << bit) == 0 {
             continue;
@@ -600,7 +605,7 @@ fn flags_to_string(attributes: u32) -> String {
 
 /// `krb5_salttype_to_string` names.
 fn salttype_name(t: i32) -> String {
-    // MIT 1.22.2 `salttype_table` (`str_conv.c`) has only normal/norealm/
+    // MIT 1.22.2 `salttype_table` (`krb/str_conv.c`) has only normal/norealm/
     // onlyrealm/special; V4 (1) and AFS3 (5) are compiled out, so they print as
     // `<Salt type 0x..>`.
     match t {
@@ -739,10 +744,10 @@ mod tests {
         assert!(q(&mut sess, "getprinc krbtgt/KERBER.TEST@AD.KERBER.TEST").is_ok());
     }
 
-    /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`) runs
-    /// `passwd_check` before the entry exists: `addprinc -pw short -policy p8`
-    /// creates nothing, and `-pw ""` is refused even without a policy
-    /// (`pwqual_empty.c`). Live MIT 1.22.2 `kadmin.local` agrees.
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): runs `passwd_check`
+    /// before the entry exists: `addprinc -pw short -policy p8` creates nothing, and
+    /// `-pw ""` is refused even without a policy (`pwqual_empty.c`). Live MIT 1.22.2
+    /// `kadmin.local` agrees.
     #[test]
     fn addprinc_rejected_password_creates_no_principal() {
         let (mut store, acl) = sess_pair();

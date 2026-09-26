@@ -35,10 +35,10 @@ pub enum Error {
     /// DNS SRV lookup failed.
     #[error("dns srv: {0}")]
     Dns(String),
-    /// Ccache name / `%{token}` expansion. `Unknown credential cache
-    /// type` is MIT `KRB5_CC_UNKNOWN_TYPE` (`krb5_err.et:190`); the two
-    /// `%{token}` texts are this crate's (MIT `expand_path.c` says
-    /// `Invalid token` / `variable missing }`).
+    /// Ccache name / `%{token}` expansion. The two `%{token}` texts are this
+    /// crate's (MIT `expand_path.c` says `Invalid token` / `variable missing }`).
+    /// MIT `KRB5_CC_UNKNOWN_TYPE` (`krb5_err.et:190-190`): the error for
+    /// `Unknown credential cache type`.
     #[error("{0}")]
     Ccache(String),
 }
@@ -84,10 +84,13 @@ pub struct Krb5Conf {
     pub udp_preference_limit: Option<u32>,
     /// `rdns`. Parsed; we do not reverse-resolve addresses.
     pub rdns: bool,
-    /// `kdc_timesync`. Default true (`init_ctx.c:268-270`). AS-REP
-    /// `verify_as_reply` skips starttime vs the local clock when set.
+    /// `kdc_timesync`. AS-REP `verify_as_reply` skips starttime vs the local clock
+    /// when set.
+    /// MIT `krb5_init_context_profile` (`krb/init_ctx.c:268-270`): `kdc_timesync` defaults
+    /// to true.
     pub kdc_timesync: bool,
-    /// `verify_ap_req_nofail`. Default false (`vfy_increds.c:38-51`).
+    /// `verify_ap_req_nofail`.
+    /// MIT `nofail` (`vfy_increds.c:38-51`): `verify_ap_req_nofail` defaults to false.
     pub verify_ap_req_nofail: bool,
     /// `permitted_enctypes`.
     pub permitted_enctypes: Vec<String>,
@@ -99,7 +102,8 @@ pub struct Krb5Conf {
     pub forwardable: bool,
     /// `proxiable`.
     pub proxiable: bool,
-    /// `canonicalize`. Default false (`get_in_tkt.c:921-930`).
+    /// `canonicalize`.
+    /// MIT `krb5_init_creds_init` (`get_in_tkt.c:921-930`): `canonicalize` defaults to false.
     pub canonicalize: bool,
     /// `ticket_lifetime` seconds.
     pub ticket_lifetime: Option<u64>,
@@ -117,8 +121,9 @@ pub struct Krb5Conf {
     pub spake_preauth_groups: Option<Vec<String>>,
     /// `[libdefaults] preferred_preauth_types`. Empty = MIT default `17, 16, 15, 14`.
     pub preferred_preauth_types: Vec<i32>,
-    /// `[libdefaults] ignore_acceptor_hostname`. Default false
-    /// (`sname_match.c:51-53`).
+    /// `[libdefaults] ignore_acceptor_hostname`. Default false.
+    /// MIT `krb5_sname_match` (`sname_match.c:51-53`): a hostname in the matching principal is
+    /// checked unless this is set.
     pub ignore_acceptor_hostname: bool,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
@@ -147,12 +152,14 @@ pub struct KdcConf {
     pub realm: String,
     /// Maximum ticket lifetime in seconds (default 1 day, `alt_prof.c`).
     pub max_life: u64,
-    /// kadm5 create default for `max_renewable_life` (`alt_prof.c:577-578`
-    /// `GET_DELTAT_PARAM(max_rlife, …, 0)`). Omitted = 0.
+    /// kadm5 create default for `max_renewable_life`.
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:577-578`): an omitted value is 0
+    /// (`GET_DELTAT_PARAM(max_rlife, …, 0)`).
     pub max_renewable_life: u64,
-    /// KDC realm renewable cap (`kdc/main.c:316-319` `realm_maxrlife`,
-    /// omitted = `KRB5_KDB_MAX_RLIFE` = 7 days). A written
-    /// `max_renewable_life` sets this and [`Self::max_renewable_life`].
+    /// KDC realm renewable cap. A written `max_renewable_life` sets this and
+    /// [`Self::max_renewable_life`].
+    /// MIT `init_realm` (`kdc/main.c:316-319`): `realm_maxrlife`; omitted, it is
+    /// `KRB5_KDB_MAX_RLIFE` = 7 days.
     pub realm_max_renewable_life: u64,
     /// Database path.
     pub database_name: Option<PathBuf>,
@@ -174,13 +181,14 @@ pub struct KdcConf {
     pub supported_enctypes: Vec<String>,
     /// Per-principal `requires_preauth` default.
     pub requires_preauth: bool,
-    /// `[realms] default_principal_flags` as written (MIT `alt_prof.c:596-632`
-    /// `KADM5_CONFIG_FLAGS`; the flagspec list is parsed by the store). `None`
-    /// = `KRB5_KDB_DEF_FLAGS` (0).
+    /// `[realms] default_principal_flags` as written (the flagspec list is parsed by the
+    /// store). `None` = `KRB5_KDB_DEF_FLAGS` (0).
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): `KADM5_CONFIG_FLAGS` from the
+    /// flagspec list, else `KRB5_KDB_DEF_FLAGS`.
     pub default_principal_flags: Option<String>,
-    /// `[realms] default_principal_expiration` as written (MIT
-    /// `alt_prof.c:580-594` `KADM5_CONFIG_EXPIRATION`, a
-    /// `krb5_string_to_timestamp` form; the store converts it). `None` = 0.
+    /// `[realms] default_principal_expiration` as written (the store converts it). `None` = 0.
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:580-594`): `KADM5_CONFIG_EXPIRATION`, a
+    /// `krb5_string_to_timestamp` form.
     pub default_principal_expiration: Option<String>,
     /// `master_key_type` (MIT name, e.g. `aes256-cts-hmac-sha384-192`).
     pub master_key_type: Option<String>,
@@ -209,9 +217,9 @@ pub struct KdcConf {
     pub spake_preauth_indicators: Vec<String>,
     /// `[libdefaults] spake_preauth_groups`. `None` = omitted.
     pub spake_preauth_groups: Option<Vec<String>>,
-    /// `[realms] dict_file` for the `dict` password-quality module. MIT
-    /// `alt_prof.c:486-513` reads it from the realm stanza only, never from
-    /// `[kdcdefaults]`.
+    /// `[realms] dict_file` for the `dict` password-quality module.
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:486-513`): reads it from the realm stanza
+    /// only, never from `[kdcdefaults]`.
     pub dict_file: Option<PathBuf>,
 }
 

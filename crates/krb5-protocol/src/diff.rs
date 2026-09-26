@@ -114,9 +114,9 @@ pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffErro
             "krb-error stable mismatch rust={a:?} mit={b:?}"
         )));
     }
-    // MIT finish_preauth (do_as_req.c:443-447) attaches the get_preauth_hint_list
-    // e_data to PREAUTH_FAILED (24) as well as PREAUTH_REQUIRED (25). 91 carries
-    // module METHOD-DATA (+ maybe_add_etype_info2). 65 is TYPED-DATA.
+    // MIT `finish_preauth` (`do_as_req.c:443-447`): attaches the get_preauth_hint_list e_data
+    // to PREAUTH_FAILED (24) as well as PREAUTH_REQUIRED (25). 91 carries module METHOD-DATA
+    // (+ maybe_add_etype_info2). 65 is TYPED-DATA.
     if matches!(
         a.error_code,
         err::PREAUTH_REQUIRED
@@ -161,10 +161,10 @@ fn type_multiset(m: &MethodData) -> Vec<i32> {
 ///
 /// Both legs' padata type **multisets** must match (order is item 15). When
 /// FX-FAST (136) is present (hint list), FX-COOKIE is required. ETYPE-INFO2
-/// is required only when either leg listed it — `add_etype_info`
-/// (`kdc_preauth.c:776-778`) skips it when there is no client key. When
-/// both list it, the etype sets must be equal. ENC_TIMESTAMP agreement is
-/// implied by the multiset.
+/// is required only when either leg listed it.
+/// MIT `add_etype_info` (`kdc_preauth.c:776-778`): skips ETYPE-INFO2 when there is no client key.
+/// When both list it, the etype sets must be equal. ENC_TIMESTAMP agreement is implied by the
+/// multiset.
 ///
 /// # Errors
 ///
@@ -183,7 +183,11 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
     }
     if sa.contains(&pa::FX_FAST) {
         // FAST-wrapped outer 25/24 is empty 136 only; cookie and ETYPE-INFO2
-        // live inside FX-ERROR (kdc_fast.c / prepare_error_as).
+        // live inside FX-ERROR.
+        // MIT `prepare_error_as` (`do_as_req.c:785-826`): adds the cookie to the error padata,
+        // then lets `kdc_fast_handle_error` replace the e_data under an armor key.
+        // MIT `kdc_fast_handle_error` (`kdc/fast_util.c:380-418`): puts that padata and the
+        // FX-ERROR inside the encrypted FAST response; the outer e_data is one PA-FX-FAST.
         if sa == [pa::FX_FAST] {
             return Ok(());
         }
@@ -193,9 +197,9 @@ pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), 
                 pa::FX_COOKIE
             )));
         }
-        // `add_etype_info` (`kdc_preauth.c:776-778`) skips PA-ETYPE-INFO2 when
-        // `select_client_key` found no key (`have_client_keys` is then also
-        // false). The type multiset still has to match; do not require 19.
+        // MIT `add_etype_info` (`kdc_preauth.c:776-778`): skips PA-ETYPE-INFO2 when
+        // `select_client_key` found no key (`have_client_keys` is then also false).
+        // The type multiset still has to match; do not require 19.
     }
     if sa.contains(&pa::ETYPE_INFO2) {
         let ea = etype_info2_etypes(&ma)?;

@@ -1,4 +1,4 @@
-//! Public `parse_name` / `deltat::parse` (MIT `parse.c` / `x-deltat.y`).
+//! Public `parse_name` / `deltat::parse` (MIT `krb/parse.c` / `x-deltat.y`).
 
 use krb5_types::{deltat, parse_name, unparse_components, unparse_name};
 

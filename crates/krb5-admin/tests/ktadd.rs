@@ -1,6 +1,12 @@
 //! Admin whole-flow tests moved from `src/lib.rs`.
 //! (b): local `ktadd` rotate and `modprinc -unlock` stamp the
-//! session princstr (`svr_principal.c:685,1490` → `server_kdb.c:376-377`).
+//! session princstr.
+//! MIT `kadm5_modify_principal` (`svr_principal.c:685-685`): the modify is stored through
+//! `kdb_put_entry`.
+//! MIT `kadm5_randkey_principal_3` (`svr_principal.c:1490-1490`): the new keys are stored
+//! through `kdb_put_entry`.
+//! MIT `kdb_put_entry` (`server_kdb.c:376-377`): the entry's modifier is stamped as the
+//! handle's `current_caller`.
 //! Compiles at the parent: `AdminSession::ktadd_local` / `admin_unlock`
 //! already exist; the parent uses `default_mod_actor` on rotate and does
 //! not stamp unlock.

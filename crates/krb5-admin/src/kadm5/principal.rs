@@ -30,7 +30,11 @@ pub(super) fn unix_now() -> u32 {
 }
 
 /// `auth_restrict` for a modify request: the actor's ACL restrictions, if
-/// any, imposed on the parsed `(mask, fields)` (`auth.c:205-272`).
+/// any, imposed on the parsed `(mask, fields)`.
+/// MIT `auth_restrict` (`auth.c:267-272`): takes the request's entry and mask, which it may
+/// rewrite.
+/// MIT `impose_restrictions` (`auth.c:205-265`): the restrictions rewrite the request's
+/// fields and mask.
 pub(super) fn impose_request_restrictions(
     acl: &krb5_kdc::Acl,
     actor: &str,
@@ -59,7 +63,9 @@ pub(super) fn clamp_self_keepold(self_change: bool, keepold: bool) -> u32 {
     }
 }
 
-/// MIT `kadm5_create_principal` mask checks (`svr_principal.c:313-326`).
+/// MIT `kadm5_create_principal` mask checks.
+/// MIT `kadm5_create_principal_3` (`svr_principal.c:313-326`): each failed mask check is
+/// `KADM5_BAD_MASK`.
 pub(super) fn create_princ_mask_err(
     mask: u32,
     policy: Option<&str>,
@@ -94,7 +100,9 @@ pub(super) fn create_princ_mask_err(
     None
 }
 
-/// MIT `kadm5_modify_principal` mask checks (`svr_principal.c:569-580`).
+/// MIT `kadm5_modify_principal` mask checks.
+/// MIT `kadm5_modify_principal` (`svr_principal.c:569-580`): each failed mask check is
+/// `KADM5_BAD_MASK`.
 pub(super) fn modify_princ_mask_err(mask: u32, policy: Option<&str>) -> Option<u32> {
     if mask
         & (KADM5_PRINCIPAL
@@ -129,12 +137,14 @@ pub(super) fn db_args_code(tls: &[TlData]) -> Option<u32> {
 pub(super) struct CreateFields {
     pub(super) name: PrincipalName,
     pub(super) prealm: String,
-    /// `None` is the XDR NULL `passwd` of `kadmin addprinc -randkey`
-    /// (1.8+): `svr_principal.c:463-470` creates with a random key and
-    /// `:369` skips `passwd_check`.
+    /// `None` is the XDR NULL `passwd` of `kadmin addprinc -randkey` (1.8+).
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:463-470`): a NULL password creates
+    /// with a random key, and `:369` skips `passwd_check`.
     pub(super) pass: Option<String>,
     /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3`
-    /// applies under `mask` (`svr_principal.c:376-420`), as sent.
+    /// applies under `mask`, as sent.
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): a field under `mask` is
+    /// taken from the request, else from the server defaults.
     pub(super) ent: AdminEnt,
     pub(super) tl_data: Vec<TlData>,
     pub(super) n_key_data: u32,
@@ -233,7 +243,7 @@ pub(super) fn parse_rename(
     Ok((old, old_realm, new, new_realm))
 }
 
-/// `xdr_calias_arg` (`kadm_rpc_xdr.c:1214-1227`): api version, alias, target.
+/// MIT `xdr_calias_arg` (`kadm_rpc_xdr.c:1214-1226`): api version, alias, target.
 pub(super) fn parse_alias(
     args: &[u8],
 ) -> Result<(PrincipalName, String, PrincipalName, String), Error> {
@@ -248,8 +258,10 @@ pub(super) fn parse_purgekeys(args: &[u8]) -> Result<(u32, PrincipalName, String
     Ok((api, princ, prealm, keep))
 }
 
-/// MIT `xdr_kadm5_key_data` (`kadm_rpc_xdr.c:1166-1174`): a version-4 key carries kvno, keyblock, and salt, with no key-data version word in front.
-/// Older setkey procedures omit that kvno and salt, so reading them on a version-3 body would steal the next key's etype.
+/// MIT `xdr_kadm5_key_data` (`kadm_rpc_xdr.c:1166-1174`): a version-4 key carries kvno,
+/// keyblock, and salt, with no key-data version word in front.
+/// Older setkey procedures omit that kvno and salt, so reading them on a version-3 body would
+/// steal the next key's etype.
 pub(super) fn parse_setkey(
     args: &[u8],
     proc: u32,
@@ -392,8 +404,10 @@ impl ModFields {
     }
 }
 
-/// MIT `_xdr_kadm5_principal_ent_rec` (`kadm_rpc_xdr.c:410-416`): a null mod-principal pointer is not followed by a principal encoding.
-/// The attribute mask is the word after the key and typed-data lists, so skipping that optional principal is what keeps the mask aligned.
+/// MIT `_xdr_kadm5_principal_ent_rec` (`kadm_rpc_xdr.c:410-416`): a null mod-principal
+/// pointer is not followed by a principal encoding.
+/// The attribute mask is the word after the key and typed-data lists, so skipping that
+/// optional principal is what keeps the mask aligned.
 pub(super) fn parse_modify(args: &[u8]) -> Result<(PrincipalName, String, u32, ModFields), Error> {
     let mut r = XdrR::new(args);
     let _ = r.u32()?;
@@ -468,8 +482,10 @@ pub(super) fn encode_gprinc(p: &krb5_kdc::Principal) -> Vec<u8> {
     w.b
 }
 
-/// MIT `kadm5_get_principal` (`svr_principal.c:809-822`): a mod-principal lookup failure fails the get, and the name is cleared when that mask bit is off.
-/// This encoder never sends the null pointer; a missing mod-princ record is written as kadmin/admin in the entry realm.
+/// MIT `kadm5_get_principal` (`svr_principal.c:809-822`): a mod-principal lookup failure
+/// fails the get, and the name is cleared when that mask bit is off.
+/// This encoder never sends the null pointer; a missing mod-princ record is written as
+/// kadmin/admin in the entry realm.
 fn encode_principal_ent(w: &mut XdrW, p: &krb5_kdc::Principal) {
     let id = p.id();
     w.nullstring(Some(&id));

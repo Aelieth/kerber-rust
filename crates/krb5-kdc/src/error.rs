@@ -43,7 +43,9 @@ pub enum Error {
         /// `last_pwd_change + pw_min_life`.
         until: u32,
     },
-    /// `EINVAL` from `krb5_db_put_principal` / DB2 `db_args` (`kdb_db2.c:817-822`).
+    /// `EINVAL` from `krb5_db_put_principal` / DB2 `db_args`.
+    /// MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): any `db_args` is `EINVAL`,
+    /// since DB2 supports no DB arguments for a principal.
     InvalidArgument(String),
     /// Request PDU was not AS-REQ or TGS-REQ.
     UnexpectedPdu,
@@ -112,7 +114,8 @@ impl From<krb5_protocol::Error> for Error {
     }
 }
 
-/// MIT `kdc_util.c:691-697` `errcode_to_protocol`.
+/// MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the code past the krb5 table base is
+/// kept when it is 0 to 128, and anything else is `KRB_ERR_GENERIC`.
 #[must_use]
 pub fn errcode_to_protocol(code: i32) -> i32 {
     if (0..=128).contains(&code) {

@@ -141,17 +141,21 @@ fn main() {
     let pk_id = args.pkinit_identity.clone();
     let pk_an = args.pkinit_anchors.clone();
     let new_password = env_new_password();
-    // kinit.c:625-633 `pwprompt`: the password came from the user, so a
-    // PREAUTH_FAILED is reported as "Password incorrect" (`:785-790`).
+    // MIT `kinit_prompter` (`kinit.c:625-633`): `pwprompt` is set when the password came
+    // from the user, so a PREAUTH_FAILED is reported as "Password incorrect" (`:785-790`).
     let pw_auth = !(args.keytab
         || args.renew
         || args.validate
         || args.pkinit_identity.is_some()
         || args.anonymous);
-    // gic_pwd.c:238-263 through `kinit_prompter` (kinit.c:620-640): the
-    // banner, then `Enter new password` / `Enter it again`.
+    // MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): the banner, then
+    // `Enter new password` / `Enter it again`.
+    // MIT `kinit_prompter` (`kinit.c:621-636`): those prompts go through this prompter,
+    // which hands them to `krb5_prompter_posix`.
+    // MIT `k5_kinit` (`kinit.c:638-640`): the kinit driver that installs `kinit_prompter`
+    // as the prompter.
     let prompter = |banner: &str| -> Result<(Vec<u8>, Vec<u8>), String> {
-        // `krb5_prompter_posix` prints the banner on stdout (`prompter.c:54`).
+        // MIT `krb5_prompter_posix` (`prompter.c:54-54`): prints the banner on stdout.
         println!("{banner}");
         let a = read_prompt_line("Enter new password: ")?;
         let b = read_prompt_line("Enter it again: ")?;
@@ -189,9 +193,9 @@ fn main() {
                 );
             }
             Err(e) => {
-                // kinit.c:785-793: BAD_INTEGRITY, or PREAUTH_FAILED after a
-                // password prompt, is "Password incorrect while getting
-                // initial credentials".
+                // MIT `k5_kinit` (`kinit.c:785-793`): BAD_INTEGRITY, or PREAUTH_FAILED after
+                // a password prompt, is "Password incorrect while getting initial
+                // credentials".
                 match mit_error_code(e.as_ref()) {
                     Some(krb5_types::err::BAD_INTEGRITY) => {
                         eprintln!("kinit: Password incorrect while getting initial credentials");

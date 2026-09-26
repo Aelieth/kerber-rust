@@ -127,8 +127,10 @@ pub(super) fn dispatch_kadm5(
     dispatch_kadm5_ticket(store, acl, actor, proc, args, true, false)
 }
 
-/// MIT `modify_principal_2_svc` (`server_stubs.c:630-644`): an ACL denial or a lockdown clear is AUTH_MODIFY before the entry is written.
-/// A missing principal on get or modify is reported unknown before that ACL check, and a changepw ticket is accepted only for a self get or a self key change.
+/// MIT `modify_principal_2_svc` (`server_stubs.c:630-644`): an ACL denial or a lockdown clear
+/// is AUTH_MODIFY before the entry is written.
+/// A missing principal on get or modify is reported unknown before that ACL check, and a
+/// changepw ticket is accepted only for a self get or a self key change.
 pub(super) fn dispatch_kadm5_ticket(
     store: &SharedStore,
     acl: &Acl,
@@ -229,8 +231,11 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            // stub_setup rec_out, then ACL, then check_lockdown, then mask
-            // (server_stubs.c:296-301,621-638).
+            // stub_setup rec_out, then ACL, then check_lockdown, then mask.
+            // MIT `stub_setup` (`server_stubs.c:296-301`): with rec_out it fetches the
+            // entry, so an unknown principal fails before the ACL check.
+            // MIT `modify_principal_2_svc` (`server_stubs.c:621-638`): stub_setup with
+            // rec_out, then the ACL check, then check_lockdown.
             if g.get_in_realm(&name, &req).is_none() {
                 return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
             }
@@ -241,9 +246,13 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_MODIFY));
             }
-            // stub_auth_restrict → auth_restrict → impose_restrictions on
-            // the request (`auth.c:205-272`) before check_lockdown and the
-            // library's mask validation (`server_stubs.c:630-638`).
+            // stub_auth_restrict → auth_restrict → impose_restrictions on the request.
+            // MIT `impose_restrictions` (`auth.c:205-265`): the ACL line's restrictions
+            // rewrite the request's fields and mask.
+            // MIT `auth_restrict` (`auth.c:267-272`): takes the request's entry and mask,
+            // which it may rewrite.
+            // MIT `modify_principal_2_svc` (`server_stubs.c:630-638`): stub_auth_restrict
+            // runs before check_lockdown and the library's mask validation.
             let (mask, fields) = impose_request_restrictions(acl, actor, &tid, mask, fields);
             if mask & KADM5_ATTRIBUTES != 0
                 && fields.attributes & KDB_LOCKDOWN_KEYS == 0
@@ -322,11 +331,18 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_ADD));
             }
-            // stub_auth_restrict (`server_stubs.c:478,519`): the ACL line's
-            // restrictions rewrite the request (`auth.c:205-272`) before
-            // kadm5_create_principal_3 validates the mask, loads the policy
-            // and runs passwd_check — so a `-policy P` restriction is
-            // enforced by P's floors and the quality modules.
+            // stub_auth_restrict: the ACL line's restrictions rewrite the request before
+            // kadm5_create_principal_3 validates the mask, loads the policy and runs
+            // passwd_check — so a `-policy P` restriction is enforced by P's floors and
+            // the quality modules.
+            // MIT `create_principal_2_svc` (`server_stubs.c:478-478`): stub_auth_restrict
+            // rewrites the request before kadm5_create_principal.
+            // MIT `create_principal3_2_svc` (`server_stubs.c:519-519`): stub_auth_restrict
+            // rewrites the request before kadm5_create_principal_3.
+            // MIT `impose_restrictions` (`auth.c:205-265`): the restrictions rewrite the
+            // request's fields and mask.
+            // MIT `auth_restrict` (`auth.c:267-272`): takes the request's entry and mask,
+            // which it may rewrite.
             if let Some(rs) = acl.restrictions(actor, Some(&tid)) {
                 rs.impose(&mut c.ent, unix_now());
             }
@@ -372,8 +388,10 @@ pub(super) fn dispatch_kadm5_ticket(
             let (old, old_realm, new, new_realm) = parse_rename(args)?;
             let old_req = req_realm(&old_realm, &realm);
             let new_req = req_realm(&new_realm, &realm);
-            // MIT server_stubs.c:700-712: ACL (AUTH_INSUFFICIENT) then lockdown (AUTH_DELETE).
-            // auth_acl.c:638-648: delete on src and add on dest without restrictions.
+            // MIT `rename_principal_2_svc` (`server_stubs.c:700-712`): ACL (AUTH_INSUFFICIENT)
+            // then lockdown (AUTH_DELETE).
+            // MIT `acl_renprinc` (`auth_acl.c:638-648`): delete on src and add on dest without
+            // restrictions.
             if changepw
                 || acl
                     .check_rename(actor, &acl_id(&old, &old_req), &acl_id(&new, &new_req))
@@ -752,7 +770,8 @@ pub(super) fn dispatch_kadm5_ticket(
             let (alias, alias_realm, target, target_realm) = parse_alias(args)?;
             let alias_req = req_realm(&alias_realm, &realm);
             let target_req = req_realm(&target_realm, &realm);
-            // server_stubs.c:1727-1758: CHANGEPW deny, acl_addalias, no lockdown check.
+            // MIT `create_alias_2_svc` (`server_stubs.c:1727-1758`): CHANGEPW deny,
+            // acl_addalias, no lockdown check.
             if changepw
                 || acl
                     .check_addalias(

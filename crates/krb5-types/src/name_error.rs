@@ -14,7 +14,7 @@ pub enum NameError {
     /// Empty name component or realm.
     #[error("empty principal component")]
     Empty,
-    /// Trailing `\` or other `parse.c` malformation.
+    /// Trailing `\` or other `krb/parse.c` malformation.
     #[error("malformed principal name")]
     Malformed,
 }

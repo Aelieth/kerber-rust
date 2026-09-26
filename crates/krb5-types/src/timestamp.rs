@@ -1,17 +1,19 @@
-//! `krb5_string_to_timestamp` (`lib/krb5/krb/str_conv.c:146-196`).
+//! `krb5_string_to_timestamp`.
 //!
-//! MIT tries a fixed `strptime` format table against the string, in order,
-//! over a `struct tm` seeded from `localtime(now)` (so a time-only form is
-//! *today* at that time and a form without `%S` keeps now's seconds), skips a parse that leaves anything but whitespace
-//! behind or a year at or before 1900 (`tm_year <= 0`), and converts the
-//! first hit with `mktime` — local time. The locale-dependent `%x:%X` entry
-//! is skipped here (MIT's comment: "not really supported unless native
-//! strptime present"). Digit fields are the fixed widths the formats spell
-//! out; `%b` is the C-locale three-letter month, case-insensitive.
+//! MIT `krb5_string_to_timestamp` (`lib/krb5/krb/str_conv.c:146-196`): tries a fixed
+//! `strptime` format table against the string, in order, over a `struct tm` seeded from
+//! `localtime(now)` (so a time-only form is *today* at that time and a form without `%S`
+//! keeps now's seconds), skips a parse that leaves anything but whitespace behind or a year
+//! at or before 1900 (`tm_year <= 0`), and converts the first hit with `mktime` — local
+//! time. The locale-dependent `%x:%X` entry is skipped here (MIT's comment: "not really
+//! supported unless native strptime present"). Digit fields are the fixed widths the
+//! formats spell out; `%b` is the C-locale three-letter month, case-insensitive.
 
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
 
-/// `atime_format_table` (`str_conv.c:152-165`) minus `%x:%X`.
+/// `atime_format_table` minus `%x:%X`.
+/// MIT `krb5_string_to_timestamp` (`krb/str_conv.c:152-165`): the `atime_format_table`
+/// formats, tried in this order.
 const FORMATS: &[&str] = &[
     "%Y%m%d%H%M%S",
     "%Y.%m.%d.%H.%M.%S",

@@ -147,7 +147,9 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `enc->keybytes`: PRF+ / random-to-key input size (`crypto_int.h:95-97`).
+    /// MIT `enc->keybytes`: PRF+ / random-to-key input size.
+    /// MIT `struct krb5_enc_provider` (`crypto_int.h:95-97`): `keybytes` is the input size to
+    /// `make_key`; `keylength` is the output size.
     #[must_use]
     pub const fn keybytes(self) -> usize {
         match self {
@@ -197,9 +199,9 @@ impl EncryptionType {
         }
     }
 
-    /// AES-only AS/TGS etype list. MIT `init_ctx.c:59-66`
-    /// `default_enctype_list` also offers DES3 (16), RC4 (23), and
-    /// Camellia (25, 26); those stay behind `is_weak` / an explicit
+    /// AES-only AS/TGS etype list.
+    /// MIT `default_enctype_list` (`krb/init_ctx.c:59-66`): also offers DES3 (16), RC4 (23),
+    /// and Camellia (25, 26); those stay behind `is_weak` / an explicit
     /// `default_tkt_enctypes` / `permitted_enctypes` list.
     #[must_use]
     pub const fn preferred() -> [Self; 4] {
@@ -291,7 +293,8 @@ impl EncryptionType {
         }
     }
 
-    /// MIT `etype.c` `ETYPE_WEAK`. None of the implemented types set that flag.
+    /// MIT `etypes.c` `ETYPE_WEAK` (the flag is defined in `crypto_int.h`). None of the
+    /// implemented types set that flag.
     #[must_use]
     pub const fn is_mit_weak(self) -> bool {
         false
@@ -333,7 +336,8 @@ pub const fn cksumtype_is_known(cksumtype: i32) -> bool {
     cksumtype_is_keyed(cksumtype) || cksumtype_is_unkeyed(cksumtype)
 }
 
-/// MIT `krb5_c_is_coll_proof_cksum` (`coll_proof_cksum.c:30-40`).
+/// MIT `krb5_c_is_coll_proof_cksum` (`coll_proof_cksum.c:30-37`): a known checksum type is
+/// collision-proof unless its row sets `CKSUM_NOT_COLL_PROOF`.
 ///
 /// 1.22.2 sets `CKSUM_NOT_COLL_PROOF` on no table row, so every known
 /// type is collision-proof.
@@ -342,7 +346,8 @@ pub const fn cksumtype_is_coll_proof(cksumtype: i32) -> bool {
     cksumtype_is_known(cksumtype)
 }
 
-/// MIT `default_enctype_list` (`init_ctx.c:59-66`).
+/// MIT `default_enctype_list` (`krb/init_ctx.c:59-66`): the eight default enctypes, AES-SHA1
+/// first and Camellia last.
 #[must_use]
 pub const fn default_enctype_list() -> [EncryptionType; 8] {
     [
@@ -409,8 +414,8 @@ pub fn parse_enctype_list(profstr: &str, allow_weak: bool) -> Option<Vec<Encrypt
     if list.is_empty() { None } else { Some(list) }
 }
 
-/// MIT `krb5_string_to_keysalts` (`str_conv.c:337-343`): unrecognized
-/// tokens are discarded. Used for `supported_enctypes`.
+/// MIT `krb5_string_to_keysalts` (`kadm5/str_conv.c:337-343`): unrecognized tokens are
+/// discarded. Used for `supported_enctypes`.
 #[must_use]
 pub fn parse_keysalt_list(s: &str) -> Vec<EncryptionType> {
     let mut out = Vec::new();

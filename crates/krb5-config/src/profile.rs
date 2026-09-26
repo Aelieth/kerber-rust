@@ -149,7 +149,8 @@ fn valid_include_name(name: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
-/// MIT `k5_is_numeric_address` (`hostrealm.c:318-338`).
+/// MIT `k5_is_numeric_address` (`hostrealm.c:318-338`): a name of only digits and three dots
+/// (IPv4), or with a colon (IPv6), is a numeric address.
 #[must_use]
 pub fn is_numeric_address(name: &str) -> bool {
     if name.contains(':') {
@@ -353,7 +354,8 @@ fn load_dir_into(
     Ok(())
 }
 
-/// MIT `profile_get_string` (`prof_get.c:265-270`): a missing relation keeps the default, and a found value is what is returned.
+/// MIT `profile_get_string` (`prof_get.c:265-270`): a missing relation keeps the default, and
+/// a found value is what is returned.
 /// The first occurrence of a key wins, and a line with no equals sign is not a setting.
 fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &str) {
     let Some((k, v)) = split_kv(line) else {

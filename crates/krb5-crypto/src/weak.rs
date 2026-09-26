@@ -88,7 +88,8 @@ fn hmac_md5(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-/// MIT `enc_rc4.c:17-35` `krb5int_arcfour_translate_usage`.
+/// MIT `krb5int_arcfour_translate_usage` (`enc_rc4.c:17-35`): 3 → 8 and 23 → 13, every other
+/// usage unchanged.
 pub(crate) fn arcfour_translate_usage(usage: u32) -> u32 {
     match usage {
         3 => 8,

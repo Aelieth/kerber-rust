@@ -82,9 +82,9 @@ pub fn build_krb_safe_ex(
     };
     let body_der = encode(&body)?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
-    // MIT `create_krbsafe` (`mk_safe.c:68-80`) checksums the full KRB-SAFE with a
-    // zero checksum spliced in — the verifier's primary branch (`rd_safe.c`);
-    // body-only was accepted only via the RFC 1510 fallback.
+    // MIT `create_krbsafe` (`mk_safe.c:68-80`): checksums the full KRB-SAFE with a zero checksum
+    // spliced in — the verifier's primary branch (`rd_safe.c`); body-only was accepted only via
+    // the RFC 1510 fallback.
     let dummy = encode_safe_with_body(
         KrbSafe::PVNO,
         KrbSafe::MSG_TYPE,
@@ -153,7 +153,8 @@ enum FreshPolicy {
     SeqOnly,
 }
 
-/// MIT `rd_safe.c:43-125`: APPLICATION 20, saved body DER, addrs, dummy, body fallback.
+/// MIT `read_krbsafe` (`rd_safe.c:43-125`): APPLICATION 20, saved body DER, addrs, dummy, body
+/// fallback.
 ///
 /// # Errors
 ///
@@ -211,7 +212,9 @@ pub fn verify_krb_safe_checksum(
     })
 }
 
-/// MIT `k5_privsafe_check_addrs` (`privsafe.c:312-382`).
+/// MIT `k5_privsafe_check_addrs` (`privsafe.c:312-382`): the sender address must match the
+/// remote address when one is set; a receiver address, when present, must match the local
+/// address, or one of the host's addresses when no local address is set.
 ///
 /// # Errors
 ///
@@ -363,8 +366,9 @@ fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
     }
 }
 
-/// MIT `k5_memrcache_store` (`memrcache.c:136-139`): a tag already stored is a replay and is not accepted again.
-/// A timestamp more than 300 seconds from now is not fresh, and a required sequence of zero is not a sequence.
+/// MIT `k5_memrcache_store` (`memrcache.c:136-139`): a tag already stored is a replay and is not
+/// accepted again. A timestamp more than 300 seconds from now is not fresh, and a required
+/// sequence of zero is not a sequence.
 fn accept_fresh(
     replay: &ReplayCache,
     kind: &str,

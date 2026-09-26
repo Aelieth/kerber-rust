@@ -1,6 +1,8 @@
-//! Realm ticket policy (`alt_prof.c`, `kdc/main.c:316-319`) and named
+//! Realm ticket policy (`alt_prof.c`, `kdc/main.c`) and named
 //! kadm5 `osa_policy_ent` (`svr_policy.c`): defaults, kdc.conf /
 //! krb5.conf overlay, and the policy CRUD on the store.
+//! MIT `init_realm` (`kdc/main.c:316-319`): the realm's `max_renewable_life` is read into
+//! `realm_maxrlife`, `KRB5_KDB_MAX_RLIFE` (7 d) when omitted.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -63,9 +65,11 @@ impl NamedPolicy {
 pub struct Policy {
     /// Max ticket lifetime seconds (MIT `alt_prof.c`: omitted = 24 h).
     pub max_life: u64,
-    /// kadm5 create default (`alt_prof.c:577-578`: omitted = 0).
+    /// kadm5 create default.
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:577-578`): `max_rlife` omitted = 0.
     pub max_renewable_life: u64,
-    /// KDC issue cap (`kdc/main.c:316-319` `realm_maxrlife`: omitted = 7 d).
+    /// KDC issue cap.
+    /// MIT `init_realm` (`kdc/main.c:316-319`): `realm_maxrlife` omitted = 7 d.
     pub realm_max_renewable_life: u64,
     /// Clock skew seconds.
     pub skew: i64,
@@ -81,15 +85,17 @@ pub struct Policy {
     pub supported_enctypes: Vec<EncryptionType>,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
-    /// MIT `[realms] default_principal_flags` (`alt_prof.c:596-632`): the
-    /// `handle->params.flags` a kadm5 create takes when `KADM5_ATTRIBUTES` is
-    /// not in the mask. `None` = the stanza is absent (MIT
+    /// MIT `[realms] default_principal_flags`: the `handle->params.flags` a
+    /// kadm5 create takes when `KADM5_ATTRIBUTES` is not in the mask.
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): the stanza is parsed
+    /// into `params.flags`. `None` = the stanza is absent (MIT
     /// `KRB5_KDB_DEF_FLAGS` 0; here the `requires_preauth` knob's bit).
     pub default_principal_flags: Option<u32>,
-    /// MIT `[realms] default_principal_expiration` (`alt_prof.c:580-594`,
-    /// `krb5_string_to_timestamp`): `handle->params.expiration`, the
-    /// `expiration` of a create without `KADM5_PRINC_EXPIRE_TIME`. 0 when
-    /// absent or unparsable (MIT leaves the zeroed field).
+    /// MIT `[realms] default_principal_expiration`: `handle->params.expiration`,
+    /// the `expiration` of a create without `KADM5_PRINC_EXPIRE_TIME`.
+    /// MIT `kadm5_get_config_params` (`alt_prof.c:580-594`): the stanza goes
+    /// through `krb5_string_to_timestamp`. 0 when absent or unparsable (MIT
+    /// leaves the zeroed field).
     pub default_principal_expiration: u32,
     /// `[capaths]` client → server → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
@@ -114,11 +120,13 @@ pub struct Policy {
     /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
     /// `[libdefaults] spake_preauth_groups` as implemented group numbers.
-    /// Empty = MIT KDC default (`groups.c:60`) — SPAKE is not advertised.
+    /// Empty = MIT KDC default — SPAKE is not advertised.
+    /// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
     pub spake_preauth_groups: Vec<i32>,
     /// `[realms] dict_file` words, ASCII-lowercased and sorted, for the MIT
-    /// `dict` password-quality module (`pwqual_dict.c:66-69` `strcasecmp`
-    /// order). Empty = no dictionary.
+    /// `dict` password-quality module.
+    /// MIT `word_compare` (`pwqual_dict.c:66-68`): dictionary words sort and match in
+    /// `strcasecmp` order. Empty = no dictionary.
     pub(crate) dict_words: Vec<String>,
 }
 
@@ -320,7 +328,7 @@ impl PrincipalStore {
             self.domain_sid = sid;
         }
         if let Some(path) = &conf.dict_file {
-            // MIT init_dict (pwqual_dict.c:96-111): a missing file is logged
+            // MIT `init_dict` (`pwqual_dict.c:96-111`): a missing file is logged
             // and the server continues without a dictionary; any other open
             // or read failure is returned and kadm5_init fails.
             match std::fs::read(path) {

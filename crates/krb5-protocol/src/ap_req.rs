@@ -254,8 +254,9 @@ pub fn verify_ap_req_ex(
     result
 }
 
-/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): the invalid flag is tested only after the ticket times.
-/// A ticket outside the caller skew, using starttime or else authtime, is not a successful verify.
+/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): the invalid flag is tested only after the
+/// ticket times. A ticket outside the caller skew, using starttime or else authtime, is not a
+/// successful verify.
 fn verify_inner(
     raw: &[u8],
     params: &ApVerifyParams<'_>,
@@ -292,9 +293,8 @@ fn verify_inner(
         .filter(|&v| v != 0)
         .or(params.kvno.filter(|&v| v != 0));
     let tkt_etype = ap.ticket.enc_part.etype;
-    // MIT kt_file.c:355-384 `krb5_ktfile_get_entry`: an entry for the
-    // principal and enctype at another kvno is `found_wrong_kvno` →
-    // KRB5_KT_KVNONOTFOUND when nothing matched.
+    // MIT `krb5_ktfile_get_entry` (`kt_file.c:355-384`): an entry for the principal and enctype
+    // at another kvno is `found_wrong_kvno` → KRB5_KT_KVNONOTFOUND when nothing matched.
     let mut found_wrong_kvno = false;
     let mut tried_any = false;
     for (i, key) in params.keys.iter().enumerate() {
@@ -322,10 +322,9 @@ fn verify_inner(
         }
     }
     let Some(ticket_part) = ticket_part else {
-        // MIT rd_req_dec.c:118-148 `keytab_fetch_error`: KVNONOTFOUND is
-        // KRB5KRB_AP_ERR_BADKEYVER "Cannot find key for %s kvno %d in
-        // keytab" when the pinned name is the ticket's server
-        // (`krb5_principal_compare`, name type ignored), else NOT_US;
+        // MIT `keytab_fetch_error` (`rd_req_dec.c:118-148`): KVNONOTFOUND is
+        // KRB5KRB_AP_ERR_BADKEYVER "Cannot find key for %s kvno %d in keytab" when the pinned
+        // name is the ticket's server (`krb5_principal_compare`, name type ignored), else NOT_US;
         // no entry at all stays NOKEY.
         if found_wrong_kvno && !tried_any && params.expected_server.is_some() {
             let same_princ = params
@@ -361,9 +360,9 @@ fn verify_inner(
     };
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
     let skew = params.skew.max(0);
-    // MIT krb5int_validate_times (valid_times.c:36-58): use starttime, else
-    // authtime, for the not-yet-valid test — a ticket with no starttime is
-    // gated by its authtime, not left unchecked.
+    // MIT `krb5int_validate_times` (`valid_times.c:36-57`): use starttime, else authtime, for
+    // the not-yet-valid test — a ticket with no starttime is gated by its authtime, not left
+    // unchecked.
     let start = ticket_part
         .starttime
         .as_ref()
@@ -380,8 +379,8 @@ fn verify_inner(
             text: Some("ticket expired".into()),
         });
     }
-    // MIT rd_req_dec.c:634-638 checks the INVALID flag after krb5int_validate_times
-    // and returns KRB5KRB_AP_ERR_TKT_INVALID, not TKT_NYV.
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): checks the INVALID flag after
+    // krb5int_validate_times and returns KRB5KRB_AP_ERR_TKT_INVALID, not TKT_NYV.
     if ticket_part.flags.invalid() {
         return Err(Error::KrbError {
             code: err::TKT_INVALID,
@@ -462,9 +461,9 @@ fn verify_inner(
     })
 }
 
-/// MIT `rd_req_dec.c:590-610`: when `TRANSITED_POLICY_CHECKED` is unset
-/// and the transited field is non-empty, `krb5_check_transited_list`
-/// (`chk_trans.c:309-355`) requires every hop in the
+/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:590-610`): when `TRANSITED_POLICY_CHECKED` is unset
+/// and the transited field is non-empty, `krb5_check_transited_list` checks the transited list.
+/// MIT `krb5_check_transited_list` (`chk_trans.c:309-355`): requires every hop in the
 /// `krb5_walk_realm_tree` list. Anonymous crealm skips the check.
 fn check_ap_req_transited(part: &EncTicketPart, srealm: &str) -> Result<(), Error> {
     if part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED) {
@@ -525,7 +524,7 @@ fn walk_realm_tree(
     hierarchical_walk_realms(client, server)
 }
 
-/// MIT `sname_match.c:30-57` `krb5_sname_match`.
+/// MIT `krb5_sname_match` (`sname_match.c:30-57`): whether `princ` matches the `matching` name.
 ///
 /// `matching == NULL` accepts any ticket server. A two-component
 /// `NT-SRV-HST` matching name checks realm (when present), the service

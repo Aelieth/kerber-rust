@@ -43,7 +43,7 @@ pub fn lookup_principal_id(name: &PrincipalName, realm: &str) -> String {
     name.unparse_with_realm(realm)
 }
 
-/// `krb5_db_get_principal` (`kdb5.c:800-840`): follow alias stubs up to
+/// MIT `krb5_db_get_principal` (`kdb5.c:800-840`): follow alias stubs up to
 /// [`MAX_ALIAS_DEPTH`] hops and return the canonical id, `None` past the
 /// depth, on a missing hop or an unparsable target.
 pub fn resolve_alias_id<'a>(
@@ -404,8 +404,10 @@ impl PrincipalRead for MemoryStore {
             .and_then(|n| self.policies.get(n))
             .map_or(0, |pol| pol.max_fail)
     }
-    /// MIT `krb5_db2_lockout_audit` (`lockout.c:183-189`): a success clears the fail count only when the principal requires preauth.
-    /// A failure increments the count and stamps last-failed, and a success that did not require preauth leaves the previous count in place.
+    /// MIT `krb5_db2_lockout_audit` (`db2/lockout.c:183-189`): a success clears the fail
+    /// count only when the principal requires preauth.
+    /// A failure increments the count and stamps last-failed, and a success that did not
+    /// require preauth leaves the previous count in place.
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         let id = lookup_principal_id(name, &self.realm);
         let fallback = self

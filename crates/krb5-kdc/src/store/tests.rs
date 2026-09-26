@@ -73,8 +73,8 @@ fn as_req_sname_etype(
     )
 }
 
-/// `kdb_default.c:60-61`: a requested etype outside the permitted set is
-/// `NO_PERMITTED_KEY` before the key list is read, even when the
+/// MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:60-61`): a requested etype outside the
+/// permitted set is `NO_PERMITTED_KEY` before the key list is read, even when the
 /// principal holds such a key.
 #[test]
 fn find_enctype_non_permitted_request_is_no_permitted_key_up_front() {

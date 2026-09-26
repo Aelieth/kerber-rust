@@ -53,7 +53,8 @@ pub(super) const AUTH_FAILED: u32 = 7;
 pub(super) const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
 /// MIT `gssrpc/auth.h` `RPCSEC_GSS_CTXPROBLEM`.
 pub(super) const RPCSEC_GSS_CTXPROBLEM: u32 = 14;
-/// MIT `svc_auth_gss.c:226` `sizeof(seqmask)*8`.
+/// MIT `svcauth_gss_accept_sec_context` (`svc_auth_gss.c:226-226`): the sequence window
+/// `gr_win` is `sizeof(seqmask)*8`.
 pub(super) const RPCSEC_SEQ_WINDOW: u32 = 32;
 
 pub(super) const CREATE_PRINCIPAL: u32 = 1;
@@ -141,7 +142,8 @@ pub(super) const KADM5_FAIL_AUTH_COUNT: u32 = 0x0001_0000;
 pub(super) const KADM5_TL_DATA: u32 = 0x0004_0000;
 pub(super) const KADM5_KEY_DATA: u32 = 0x0002_0000;
 pub(super) const KADM5_BAD_SERVER_PARAMS: u32 = 43_787_563;
-/// MIT `ovk` 47 (`KADM5_BAD_TL_TYPE`, `kadm_err.et:54`).
+/// MIT `ovk` 47 (`KADM5_BAD_TL_TYPE`).
+/// MIT `KADM5_BAD_TL_TYPE` (`kadm_err.et:54-54`): entry 47 of the `ovk` error table.
 pub(super) const KADM5_BAD_TL_TYPE: u32 = 43_787_567;
 pub(super) const KADM5_MAX_LIFE: u32 = 0x0000_0020;
 pub(super) const KADM5_PRINCIPAL: u32 = 0x0000_0001;
@@ -232,5 +234,6 @@ pub(super) const AT_PW_POLICY_SWITCH: u32 = 17;
 pub(super) const AT_PW_HIST_KVNO: u32 = 18;
 pub(super) const AT_PW_HIST: u32 = 19;
 
-/// MIT `glob_to_regexp` EINVAL for a trailing backslash (`svr_iters.c:63-64`).
+/// MIT `glob_to_regexp` EINVAL for a trailing backslash.
+/// MIT `glob_to_regexp` (`svr_iters.c:61-62`): a glob that ends in a backslash is EINVAL.
 pub(super) const EINVAL: u32 = 22;

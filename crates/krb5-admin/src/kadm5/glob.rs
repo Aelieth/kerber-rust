@@ -2,9 +2,11 @@
 //! (`svr_iters.c` `glob_to_regexp`): the pre-flight MIT answers `EINVAL`
 //! for, and the match itself with POSIX bracket classes.
 
-/// MIT compiles the glob to a POSIX BRE with `regcomp` (`svr_iters.c:175`); a
-/// pattern that fails to compile (trailing `\\`, an unterminated `[...]`) is
-/// `EINVAL` from `kadm5_get_either`. This mirrors that pre-flight.
+/// MIT compiles the glob to a POSIX BRE with `regcomp`; a pattern that fails to compile
+/// (trailing `\\`, an unterminated `[...]`) is `EINVAL` from `kadm5_get_either`. This
+/// mirrors that pre-flight.
+/// MIT `kadm5_get_either` (`svr_iters.c:175-175`): the converted glob is compiled with
+/// `regcomp` as a POSIX BRE.
 #[must_use]
 pub fn glob_pattern_ok(glob: &str) -> bool {
     // MIT's `ss_parse` unescapes a `\\` pair before `glob_to_regexp`; the Rust
@@ -82,8 +84,11 @@ pub(crate) fn glob_expand(glob: &str, append_realm: bool) -> String {
     }
 }
 
-/// `glob_to_regexp` + `regexec` (`svr_iters.c:41-115`) as a direct anchored
-/// matcher: `?`=one, `*`=run, `[...]`=class, `\\x`=literal.
+/// `glob_to_regexp` + `regexec` as a direct anchored matcher: `?`=one, `*`=run,
+/// `[...]`=class, `\\x`=literal.
+/// MIT `glob_to_regexp` (`svr_iters.c:41-109`): `?` becomes `.`, `*` becomes `.*`, `[...]`
+/// is copied, a quoted character stays quoted, and the regexp is anchored with `^` and `$`.
+/// MIT `get_either_iter` (`svr_iters.c:111-115`): a name matches when `regexec` returns 0.
 pub(crate) fn glob_is_match(pattern: &[u8], text: &[u8]) -> bool {
     let (mut p, mut t) = (0usize, 0usize);
     let (mut star_p, mut star_t): (Option<usize>, usize) = (None, 0);

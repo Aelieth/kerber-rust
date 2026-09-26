@@ -70,13 +70,16 @@ pub struct KinitParams<'a> {
     /// New password for `gic_pwd.c` KEY_EXP → changepw (`KRB5_NEW_PASSWORD`),
     /// the non-interactive stand-in for [`KinitParams::prompter`].
     pub new_password: Option<&'a [u8]>,
-    /// MIT `krb5_prompter_fct` for the KEY_EXP new-password prompts
-    /// (`gic_pwd.c:238-263`). `None` with no `new_password` leaves
-    /// `KDC_ERR_KEY_EXP` as the error (`gic_pwd.c:213-214`).
+    /// MIT `krb5_prompter_fct` for the KEY_EXP new-password prompts.
+    /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): the new-password prompts
+    /// this prompter answers.
+    /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:213-214`): with no prompter,
+    /// `KDC_ERR_KEY_EXP` stays the error, so `None` with no `new_password` leaves it too.
     pub prompter: Option<NewPasswordPrompter<'a>>,
 }
 
-/// `krb5_prompter_fct` narrowed to `gic_pwd.c:238-263`: shown `banner`, it
+/// `krb5_prompter_fct` narrowed to the KEY_EXP new-password prompts.
+/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): shown `banner`, the prompter
 /// returns the `Enter new password` / `Enter it again` replies.
 #[derive(Clone, Copy)]
 pub struct NewPasswordPrompter<'a>(pub &'a (dyn Fn(&str) -> PromptReply + 'a));
@@ -130,10 +133,11 @@ pub fn kinit(
 
 /// Options for [`kinit_ex`] and [`kinit_to_spec`].
 ///
-/// MIT keeps the option block in `krb5_get_init_creds_opt`
-/// (`include/krb5/krb5.hin:6839-6851`) and its `extended_options`
-/// (`lib/krb5/krb/gic_opt.c:19-32`): `fast_ccache_name` is the armor
-/// ccache, and `preauth_data` carries the PKINIT identity and anchors.
+/// MIT keeps the option block in two structs.
+/// MIT `krb5_get_init_creds_opt` (`include/krb5/krb5.hin:6839-6851`): the public option block.
+/// MIT `struct extended_options` (`lib/krb5/krb/gic_opt.c:19-32`): its extension;
+/// `fast_ccache_name` is the armor ccache, and `preauth_data` carries the PKINIT identity and
+/// anchors.
 /// `service` is `krb5_get_init_creds_password`'s `in_tkt_service`.
 /// SPAKE and enterprise are request flags, not fields of that struct.
 #[derive(Clone, Copy)]
@@ -247,7 +251,9 @@ pub fn kinit_with(
 /// text): the KRB-ERROR code the KDC sent, or `KRB5KRB_AP_ERR_BAD_INTEGRITY`
 /// (31) for a KDC-REP that did not verify under the derived key, which is
 /// what `krb5_get_init_creds_password` returns for a wrong password when the
-/// KDC did not require preauth (`kinit.c:787`).
+/// KDC did not require preauth.
+/// MIT `k5_kinit` (`kinit.c:787-787`): kinit reports `KRB5KRB_AP_ERR_BAD_INTEGRITY` as a
+/// wrong password.
 #[must_use]
 pub fn mit_error_code(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Option<i32> {
     match e.downcast_ref::<krb5_protocol::Error>() {
@@ -400,8 +406,10 @@ fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::pat
     (id, an)
 }
 
-/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:211-214`): an error other than key-expired is returned unchanged, and key-expired with no prompter is not a change.
-/// A keytab request has no change-password flow, and the credential cache is written only after the exchange succeeds.
+/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:211-214`): an error other than key-expired
+/// is returned unchanged, and key-expired with no prompter is not a change.
+/// A keytab request has no change-password flow, and the credential cache is written only
+/// after the exchange succeeds.
 fn kinit_inner(
     kdc: &KdcAddr,
     principal: &str,
@@ -472,12 +480,12 @@ fn kinit_inner(
         as_exchange(&req)
     } {
         Ok(o) => o,
-        // gic_pwd.c:205-240: a typed KDC_ERR_KEY_EXP from a password AS (not
-        // keytab — `krb5_get_init_creds_keytab` has no change flow) with a
-        // prompter or a new-password source. The kadmin/changepw AS comes
-        // *first*, with the password just used, so a wrong password is the
-        // password failure (`:229-236`); only then the new-password prompts
-        // (`:238-258`), the change (`:283-286`) and the final AS (`:333`).
+        // MIT `krb5_get_init_creds_password` (`gic_pwd.c:205-240`): a typed KDC_ERR_KEY_EXP
+        // from a password AS (not keytab — `krb5_get_init_creds_keytab` has no change flow)
+        // with a prompter or a new-password source. The kadmin/changepw AS comes *first*,
+        // with the password just used, so a wrong password is the password failure
+        // (`:229-236`); only then the new-password prompts (`:238-258`), the change
+        // (`:283-286`) and the final AS (`:333`).
         Err(e)
             if krb5_protocol::key_exp_should_changepw(
                 &e,
@@ -566,9 +574,8 @@ fn kinit_inner(
             Err(e) => tgs_err = Some(e.to_string()),
         }
     }
-    // MIT write_out_ccache (get_in_tkt.c:1617-1640): fast_avail and the
-    // selected pa_type are ccache config entries keyed by the TGT's server,
-    // stored ahead of the credentials.
+    // MIT `write_out_ccache` (`get_in_tkt.c:1617-1640`): fast_avail and the selected pa_type
+    // are ccache config entries keyed by the TGT's server, stored ahead of the credentials.
     let mut cache = FileCcache::new((as_out.crealm.clone(), as_out.cname.clone()), Vec::new());
     let tgt_realm = String::from_utf8_lossy(as_out.ticket.realm.as_bytes()).into_owned();
     let tgt_server = as_out.ticket.sname.unparse_with_realm(&tgt_realm);
@@ -591,12 +598,15 @@ fn kinit_inner(
     Ok((KinitResult { as_out, tgs_out }, cache))
 }
 
-/// `gic_pwd.c:238` banner shown ahead of the new-password prompts.
+/// Banner shown ahead of the new-password prompts.
+/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-238`): the new-password prompts set up
+/// here are shown under this banner.
 const KEY_EXP_BANNER: &str = "Password expired.  You must change it now.";
 
-/// `gic_pwd.c:249-326`: three tries of prompt, compare, `krb5_change_password`
-/// over `chpw_as`; a soft kpasswd result re-prompts with the result text in
-/// the banner, anything else is the error. Returns the accepted password.
+/// Three tries of prompt, compare, `krb5_change_password` over `chpw_as`. Returns the
+/// accepted password.
+/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:249-326`): three tries; a soft kpasswd
+/// result re-prompts with the result text in the banner, anything else is the error.
 fn prompt_and_change(
     kdc: &KdcAddr,
     chpw_as: &krb5_protocol::AsOutcome,

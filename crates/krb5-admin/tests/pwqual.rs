@@ -191,9 +191,10 @@ fn chpass_runs_empty_and_princ_modules() {
         rejected(sess.change_password(&user(), TEST_REALM.to_ascii_lowercase().as_bytes())),
         DICT
     );
-    // Under a policy the floors run first (server_misc.c:114-117): addpol
-    // defaults pw_min_length to 1 (svr_policy.c:114), so "" is the policy's
-    // KADM5_PASS_Q_TOOSHORT, not the empty module's text.
+    // Under a policy the floors run first: addpol defaults pw_min_length to 1, so "" is the
+    // policy's KADM5_PASS_Q_TOOSHORT, not the empty module's text.
+    // MIT `passwd_check` (`server_misc.c:114-117`): under a policy the floors run first.
+    // MIT `kadm5_create_policy` (`svr_policy.c:114-114`): addpol defaults pw_min_length to 1.
     assert_eq!(rejected(sess.change_password(&user(), b"")), "min_length 1");
     sess.change_password(&user(), b"userpassword").unwrap();
 }

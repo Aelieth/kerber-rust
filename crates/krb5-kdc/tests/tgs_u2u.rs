@@ -3,9 +3,15 @@
 //!
 //! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
 //! points from a bootstrapped realm. They fail if those paths are type-only.
-//! `u2u_session` statuses (`do_tgs_req.c:250-307`, `kdc_util.c:420-450`).
-//! U2U missing second-ticket server is 7 `2ND_TKT_SERVER`
-//! (`do_tgs_req.c:280-289` via `kdc_get_server_key(stkt)`).
+//! `u2u_session` statuses.
+//! MIT `decrypt_2ndtkt` (`do_tgs_req.c:250-307`): the second-ticket statuses are
+//! `2ND_TKT_SERVER`, `2ND_TKT_DECRYPT` and `2ND_TKT_PAC`, by the step that failed.
+//! MIT `find_server_key` (`kdc_util.c:420-450`): the key is looked up by enctype and kvno
+//! (`krb5_dbe_find_enctype`), and a key whose enctype is not similar is
+//! `KRB5_KDB_NO_PERMITTED_KEY`.
+//! U2U missing second-ticket server is 7 `2ND_TKT_SERVER`.
+//! MIT `decrypt_2ndtkt` (`do_tgs_req.c:280-289`): a second-ticket server that
+//! `kdc_get_server_key(stkt)` cannot find is `2ND_TKT_SERVER`.
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::testrealm::{

@@ -214,9 +214,9 @@ impl KpropAuth {
 ///
 /// `acl_lines` are the raw `kpropd.acl` lines (`None` = no readable file);
 /// after `recvauth` completes they are checked with
-/// `kpropd_authorized_principal` exactly as MIT `kpropd.c:528-546` does
-/// (the AP-REP has already been sent; a rejected peer sees the connection
-/// close).
+/// `kpropd_authorized_principal`, exactly as MIT does.
+/// MIT `doit` (`kpropd.c:528-546`): `authorized_principal` is checked after authentication
+/// (the AP-REP has already been sent; a rejected peer sees the connection close).
 ///
 /// # Errors
 ///
@@ -278,7 +278,7 @@ pub fn kpropd_recvauth(
         // MIT `rd_rep` stores this seq as remote_seq; the size-ack SAFE
         // must use the same value (then increment).
     }
-    // MIT kpropd.c:526-546: `authorized_principal` runs after
+    // MIT `doit` (`kpropd.c:526-546`): `authorized_principal` runs after
     // `kerberos_authenticate` (recvauth complete, AP-REP sent) and a rejected
     // peer gets `exit(1)` — no KRB-ERROR, the socket just closes, so MIT
     // kprop reports `Broken pipe while sending database block starting at 0`.
@@ -295,7 +295,9 @@ pub fn kpropd_recvauth(
     })
 }
 
-/// MIT `kpropd.c:1298-1348` `authorized_principal`.
+/// MIT `authorized_principal` (`kpropd.c:1298-1348`): a `kpropd.acl` line authorizes the
+/// client when it starts with the unparsed name followed by whitespace or the end, and any
+/// enctype after the name matches the ticket's.
 ///
 /// `acl_lines` are the file's lines with only the trailing `\n` removed
 /// (`fgets` + `buf[end] = '\0'`); `None` is an unopenable file. `name` is
@@ -334,9 +336,10 @@ pub fn kpropd_authorized_principal(
     false
 }
 
-/// `krb5_string_to_enctype` (`enctype_util.c:89-114`) as used by the kpropd
-/// ACL: the whole remainder must be an enctype name or alias, compared with
-/// `strcasecmp`; a number, trailing whitespace or `\r` is `EINVAL`.
+/// `krb5_string_to_enctype` as used by the kpropd ACL.
+/// MIT `krb5_string_to_enctype` (`enctype_util.c:89-114`): the whole remainder must be an
+/// enctype name or alias, compared with `strcasecmp`; a number, trailing whitespace or `\r`
+/// is `EINVAL`.
 fn kpropd_acl_string_to_enctype(s: &str) -> Option<i32> {
     if s.is_empty()
         || s.chars().all(|c| c.is_ascii_digit())
@@ -349,7 +352,8 @@ fn kpropd_acl_string_to_enctype(s: &str) -> Option<i32> {
         .map(EncryptionType::to_iana)
 }
 
-/// MIT `krb5int_is_app_tag(dat, 14)` (`k5-int.h:1334-1336`).
+/// MIT `krb5int_is_app_tag` (`k5-int.h:1334-1336`): the first byte, with the constructed bit
+/// `0x20` cleared, must be `tag | 0x40`; an AP-REQ is `krb5int_is_app_tag(dat, 14)`.
 fn is_ap_req(raw: &[u8]) -> bool {
     raw.first().is_some_and(|b| b & !0x20 == 0x4e)
 }
@@ -475,7 +479,7 @@ fn e_text_with_nul(text: &str) -> Option<krb5_types::KerberosString> {
     krb5_types::kerberos_string_from_bytes(&bytes).ok()
 }
 
-/// MIT `recvauth.c:150-188`: AP-REQ failure is a length-prefixed KRB-ERROR.
+/// MIT `recvauth_common` (`recvauth.c:150-188`): AP-REQ failure is a length-prefixed KRB-ERROR.
 fn kprop_rd_req_error(
     raw: &[u8],
     e: &krb5_protocol::Error,
@@ -568,8 +572,11 @@ pub fn kpropd_send_ack(
 
 /// kpropd's parsed configuration.
 ///
-/// MIT `kpropd.c:131-143`: the realm, database path, stash, and ACL the
-/// daemon was started with.
+/// The realm, database path, stash, and ACL the daemon was started with.
+/// MIT `realm` (`kpropd.c:131-131`): the realm kpropd serves, from `-r` or the default realm.
+/// MIT `kerb_database` (`kpropd.c:136-136`): the database path, set by `-F`.
+/// MIT `acl_file_name` (`kpropd.c:137-137`): the ACL file, `KPROPD_ACL_FILE` unless `-a`
+/// names another.
 #[derive(Clone, Copy)]
 pub struct KpropdConfig<'a> {
     /// Host keys that accept the kprop `sendauth`.

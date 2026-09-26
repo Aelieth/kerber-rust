@@ -314,8 +314,9 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32),
     ))
 }
 
-/// MIT `krb5_ktfileint_internal_read_entry` (`kt_file.c:1091-1095`): a version-2 entry's 32-bit kvno replaces the one-byte kvno.
-/// A key whose bytes are not that etype's length is not an entry.
+/// MIT `krb5_ktfileint_internal_read_entry` (`kt_file.c:1091-1095`): a version-2 entry's 32-bit
+/// kvno replaces the one-byte kvno. A key whose bytes are not that etype's length is not an
+/// entry.
 fn parse_entry(body: &[u8], ver: u16) -> Result<KeytabEntry, EntryErr> {
     let mut i = 0;
     let ncomp = take_u16(body, &mut i)?;
@@ -407,7 +408,8 @@ fn eof() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "keytab truncated")
 }
 
-/// MIT `gic_keytab.c:84-143` `lookup_etypes_for_keytab`.
+/// MIT `lookup_etypes_for_keytab` (`gic_keytab.c:84-143`): lists the etypes of the client's
+/// highest-kvno entries, skipping invalid enctypes.
 ///
 /// Only the highest kvno for `name` in `realm` (name-type ignored).
 /// Returns those keys and their etype list, or `None` if none match.
@@ -446,7 +448,8 @@ pub fn keytab_init_creds_keys(
     }
 }
 
-/// MIT `gic_keytab.c:149-174` `sort_enctypes`.
+/// MIT `sort_enctypes` (`gic_keytab.c:149-174`): moves the keytab's etypes to the front of the
+/// request list, preserving order otherwise.
 ///
 /// Moves etypes that appear in `keytab` to the front of `req`, preserving
 /// relative order in each group.

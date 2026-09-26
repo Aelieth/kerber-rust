@@ -1,8 +1,8 @@
 //! MIT kadm5 service principal names.
 //!
-//! MIT `KADM5_ADMIN_SERVICE` (`lib/kadm5/admin.h:64`),
-//! `KADM5_CHANGEPW_SERVICE` (`lib/kadm5/admin.h:65`), and
-//! `KADM5_HIST_PRINCIPAL` (`lib/kadm5/admin.h:66`).
+//! MIT `KADM5_ADMIN_SERVICE` (`lib/kadm5/admin.h:64-64`): `"kadmin/admin"`.
+//! MIT `KADM5_CHANGEPW_SERVICE` (`lib/kadm5/admin.h:65-65`): `"kadmin/changepw"`.
+//! MIT `KADM5_HIST_PRINCIPAL` (`lib/kadm5/admin.h:66-66`): `"kadmin/history"`.
 
 use krb5_types::PrincipalName;
 

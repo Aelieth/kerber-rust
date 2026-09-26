@@ -1,7 +1,8 @@
-//! TGS-REP validation. MIT `gc_via_tkt.c:247-297`
-//! `krb5int_process_tgs_reply`. Live oracle: existing `kvno_plain` /
-//! `kvno_s4u` cells (`MIT_tgs_reply_client`). Unit-only: these helpers
-//! are new at the parent.
+//! TGS-REP validation.
+//! MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:247-297`): validates the TGS-REP —
+//! ok-as-delegate, client, server, nonce and request times.
+//! Live oracle: existing `kvno_plain` / `kvno_s4u` cells (`MIT_tgs_reply_client`). Unit-only:
+//! these helpers are new at the parent.
 
 use krb5_protocol::{
     TgsFallback, tgs_forward_options, tgs_non_referral_options, tgs_reply_client_ok,

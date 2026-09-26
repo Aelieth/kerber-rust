@@ -275,7 +275,7 @@ fn clear_req_id() {
     CUR_REQ_ID.with(|c| *c.borrow_mut() = None);
 }
 
-/// MIT `do_as_req.c:520` seeds `kau_as_req(TRUE)` before a ticket exists.
+/// MIT `process_as_req` (`do_as_req.c:520-520`): seeds `kau_as_req(TRUE)` before a ticket exists.
 fn seed_as_req(req: &AsReq, sender: Option<&HostAddress>) {
     clear_req_id();
     let mut state = base_state("AS_REQ", &req.0.req_body, sender);
@@ -283,7 +283,7 @@ fn seed_as_req(req: &AsReq, sender: Option<&HostAddress>) {
     current_audit().as_req(true, &state);
 }
 
-/// MIT `do_tgs_req.c:1181-1184` seeds `kau_tgs_req(TRUE)` at `AUTHN_REQ_CL`.
+/// MIT `process_tgs_req` (`do_tgs_req.c:1181-1184`): seeds `kau_tgs_req(TRUE)` at `AUTHN_REQ_CL`.
 fn seed_tgs_req(req: &TgsReq, sender: Option<&HostAddress>) {
     clear_req_id();
     let mut state = base_state("TGS_REQ", &req.0.req_body, sender);
@@ -292,7 +292,9 @@ fn seed_tgs_req(req: &TgsReq, sender: Option<&HostAddress>) {
     current_audit().tgs_req(true, &state);
 }
 
-/// Unknown-server words after MIT `do_tgs_req.c:667` `SRVC_PRINC`.
+/// Unknown-server words after MIT `SRVC_PRINC`.
+/// MIT `gather_tgs_req_info` (`do_tgs_req.c:667-667`): the audit stage becomes `SRVC_PRINC`
+/// before the server principal is looked up.
 fn tgs_fail_stage(e_text: &str) -> i32 {
     match e_text {
         status::LOOKING_UP_SERVER
@@ -459,7 +461,8 @@ fn as_failure(req: &AsReq, sender: Option<&HostAddress>, code: i32, e_text: &str
     clear_req_id();
 }
 
-/// MIT `log_tgs_req` (`kdc_log.c:132-135`): a missing client or server name is logged as unknown, not omitted.
+/// MIT `log_tgs_req` (`kdc_log.c:132-135`): a missing client or server name is logged as
+/// unknown, not omitted.
 /// A body that does not decode as a TGS-REP is not logged as a success.
 fn tgs_success(
     store: &dyn PrincipalRead,
@@ -534,7 +537,8 @@ fn tgs_success(
     clear_req_id();
 }
 
-/// MIT `log_tgs_req` (`kdc_log.c:142-148`): a server-mismatch is not logged on the normal status line.
+/// MIT `log_tgs_req` (`kdc_log.c:142-148`): a server-mismatch is not logged on the normal
+/// status line.
 /// An empty status is recorded as unknown rather than as a success.
 fn tgs_failure(
     store: &dyn PrincipalRead,
@@ -597,7 +601,8 @@ fn tgs_failure(
     clear_req_id();
 }
 
-/// MIT `log_as_req` (`kdc_log.c:76-83`): a null status is the issue line, and that line is not the reply.
+/// MIT `log_as_req` (`kdc_log.c:76-83`): a null status is the issue line, and that line is
+/// not the reply.
 /// A missing client or server name is logged as unknown rather than omitted.
 #[expect(clippy::too_many_arguments, reason = "kau state, not a params struct")]
 fn emit_issue(

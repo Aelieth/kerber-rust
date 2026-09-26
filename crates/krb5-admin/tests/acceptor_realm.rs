@@ -1,4 +1,6 @@
-//! Realm-qualified kadm5 acceptor checks (`server_stubs.c:28-32`).
+//! Realm-qualified kadm5 acceptor checks.
+//! MIT `CHANGEPW_SERVICE` (`server_stubs.c:28-32`): the acceptor name is compared with the
+//! changepw service name, and with the old changepw name when one is set.
 
 use krb5_admin::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,

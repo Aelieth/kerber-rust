@@ -38,8 +38,8 @@ pub use listen::{
     parse_kpasswd_rep, serve_kpasswd_tcp, serve_kpasswd_udp,
 };
 
-/// MIT `kadmin.c:455-536` `princstr` for `kadm5_init`: `-p` / explicit name,
-/// else `$USER/admin@REALM`, else the euid's passwd name `/admin@REALM`.
+/// MIT `kadmin_startup` (`kadmin.c:455-536`): the `princstr` for `kadm5_init` is `-p` /
+/// explicit name, else `$USER/admin@REALM`, else the euid's passwd name `/admin@REALM`.
 #[must_use]
 pub fn kadmin_local_princstr(realm: &str, explicit: Option<&str>) -> String {
     if let Some(p) = explicit.filter(|s| !s.is_empty()) {
@@ -128,7 +128,9 @@ pub struct KadminArgs {
     pub expire: Option<u32>,
 }
 
-/// Parsed `kadmin.local addpol` operands (`kadmin.c:1600-1689`).
+/// Parsed `kadmin.local addpol` operands.
+/// MIT `kadmin_parse_policy_args` (`kadmin.c:1600-1689`): the flags and the policy name MIT's
+/// `addpol` parses.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PolicyArgs {
     /// Policy name (last argument).
@@ -149,11 +151,13 @@ pub struct PolicyArgs {
     pub pw_failcnt_interval: Option<u32>,
     /// `-lockoutduration`.
     pub pw_lockout_duration: Option<u32>,
-    /// `-allowedkeysalts` (`kadmin.c:1669`).
+    /// `-allowedkeysalts`.
+    /// MIT `kadmin_parse_policy_args` (`kadmin.c:1669-1669`): `addpol` and `modpol` take the
+    /// `-allowedkeysalts` flag.
     pub allowed_keysalts: Option<String>,
 }
 
-/// MIT `kadmin.c:118-138` `strdur`.
+/// MIT `strdur` (`kadmin.c:118-138`): formats a duration as `kadmin` prints it.
 #[must_use]
 pub fn strdur(duration: i64) -> String {
     let (neg, mut rest) = if duration < 0 {
@@ -262,7 +266,9 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
     Ok(out)
 }
 
-/// Parse `addpol` flags. Last token is the policy name (`kadmin.c:1600-1695`).
+/// Parse `addpol` flags. Last token is the policy name.
+/// MIT `kadmin_parse_policy_args` (`kadmin.c:1600-1695`): the flags run up to the last
+/// argument, which is the policy name.
 ///
 /// # Errors
 ///
@@ -322,7 +328,7 @@ pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
 }
 
 fn parse_pol_interval(s: &str) -> Result<u32, String> {
-    // MIT parse_interval (kadmin.c:170-195): krb5_string_to_deltat, else getdate.y
+    // MIT `parse_interval` (`kadmin.c:170-195`): krb5_string_to_deltat, else getdate.y
     // (natural-language dates are the deferred getdate.y gap). The error text is
     // parse_date's `Invalid date specification "%s".`.
     krb5_types::deltat::parse(s)
@@ -337,8 +343,9 @@ pub enum Error {
     /// ACL denied.
     #[error("acl denied")]
     AclDenied,
-    /// kpropd `authorized_principal` refused the authenticated peer
-    /// (`kpropd.c:540-543` syslog text).
+    /// kpropd `authorized_principal` refused the authenticated peer (MIT's syslog text).
+    /// MIT `doit` (`kpropd.c:540-543`): a refused peer is logged to syslog as
+    /// `Rejected connection from unauthorized principal %s`.
     #[error("Rejected connection from unauthorized principal {0}")]
     KpropUnauthorized(String),
     /// Principal missing.
@@ -446,10 +453,11 @@ impl<'a> AdminSession<'a> {
         self.create_password_etypes(name, password, &[])
     }
 
-    /// MIT `kadm5_create_principal_3` `passwd_check` (`svr_principal.c:364-373`)
-    /// for `addprinc [-policy P] -pw PW`: the named policy's floors (if the
-    /// policy exists) and the built-in `dict` / `empty` / `princ` modules run
-    /// before the principal is created.
+    /// MIT `kadm5_create_principal_3` `passwd_check` for `addprinc [-policy P] -pw PW`: the
+    /// named policy's floors (if the policy exists) and the built-in `dict` / `empty` /
+    /// `princ` modules run before the principal is created.
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): the policy is loaded, then
+    /// `passwd_check` runs, before the entry exists.
     ///
     /// # Errors
     ///
@@ -509,7 +517,9 @@ impl<'a> AdminSession<'a> {
     }
 
     /// `addprinc [-randkey] [-e] [-policy]`: bind the policy before
-    /// `apply_keysalt_policy` (`svr_principal.c:444-447`).
+    /// `apply_keysalt_policy`.
+    /// MIT `kadm5_create_principal_3` (`svr_principal.c:444-447`): `apply_keysalt_policy` runs
+    /// with the entry's policy.
     ///
     /// # Errors
     ///
@@ -952,7 +962,9 @@ impl<'a> AdminSession<'a> {
         Ok(())
     }
 
-    /// `modpol` (`svr_policy.c:292-322` on the merged record).
+    /// `modpol` on the merged record.
+    /// MIT `kadm5_modify_policy` (`svr_policy.c:292-322`): each masked field is merged into the
+    /// stored record, and the min-life check reads the merged max life.
     ///
     /// # Errors
     ///
@@ -1008,7 +1020,9 @@ impl<'a> AdminSession<'a> {
         n
     }
 
-    /// `getpol` (`kadmin.c:1794-1807` via `strdur`).
+    /// `getpol`, durations via `strdur`.
+    /// MIT `kadmin_getpol` (`kadmin.c:1794-1807`): prints the policy fields, the lifetimes and
+    /// intervals via `strdur`.
     ///
     /// # Errors
     ///

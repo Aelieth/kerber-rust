@@ -478,7 +478,7 @@ fn rfc6803_camellia_cts_cmac() {
     assert_eq!(decrypt(&cam256_empty, u0, &got256).unwrap(), b"");
 }
 
-/// MIT `t_prf.c` PRF vectors (RFC 8009 etypes 19/20 and AES-SHA1 PRF+).
+/// MIT `crypto_tests/t_prf.c` PRF vectors (RFC 8009 etypes 19/20 and AES-SHA1 PRF+).
 #[test]
 fn mit_t_prf_and_rfc6113_prf_plus() {
     let k128 = ProtocolKey::from_bytes(
@@ -501,7 +501,7 @@ fn mit_t_prf_and_rfc6113_prf_plus() {
             "9801f69a368c2bf675e59521e177d9a07f67efe1cfde8d3c8d6f6a0256e3b17db3c1b62ad1b8553360d17367eb1514d2"
         )
     );
-    // MIT t_prf.c AES-128-SHA1: PRF(K, 0x01 || "a") — the first PRF+ block.
+    // MIT crypto_tests/t_prf.c AES-128-SHA1: PRF(K, 0x01 || "a") — the first PRF+ block.
     let k_sha1 = ProtocolKey::from_bytes(
         EncryptionType::Aes128CtsHmacSha196,
         &hex("ae272e7cdec86ac5138cdb196d8e297d"),

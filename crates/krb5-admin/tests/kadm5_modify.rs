@@ -1,15 +1,28 @@
 //! `kadm5_modify_principal` validates TL type and fail_auth_count before
-//! the store write (`svr_principal.c:581-588,671-675`).
-//! `KADM5_BAD_MASK`, int16 TL types, create-path TL guard
-//! (`svr_principal.c:310-326,565-580`, `kadm_rpc_xdr.c:349`).
+//! the store write.
+//! MIT `kadm5_modify_principal` (`svr_principal.c:581-588`): a TL type below 256 is
+//! `KADM5_BAD_TL_TYPE` before the entry is read.
+//! MIT `kadm5_modify_principal` (`svr_principal.c:671-675`): a non-zero fail_auth_count is
+//! `KADM5_BAD_SERVER_PARAMS` before the store write.
+//! `KADM5_BAD_MASK`, int16 TL types, create-path TL guard.
+//! MIT `kadm5_create_principal_3` (`svr_principal.c:310-326`): a NULL entry is EINVAL and a
+//! bad create mask is `KADM5_BAD_MASK`.
+//! MIT `kadm5_modify_principal` (`svr_principal.c:565-580`): a NULL entry is EINVAL and a
+//! bad modify mask is `KADM5_BAD_MASK`.
+//! MIT `xdr_krb5_tl_data` (`kadm_rpc_xdr.c:349-349`): a TL type that does not decode as an
+//! int16 fails the decode.
 //! ACL before mask on an existing principal; `KEY_DATA`+`n_key_data`;
 //! `0x7fff` is EINVAL 22. Lookup-before-ACL is the GET-before-ACL tests below.
 //! MIT `stub_setup` GETs the principal before ACL or mask on modify.
-//! kadm5 modify honours `KADM5_MAX_RLIFE` (`svr_principal.c:642-643`).
-//! `get_principal` unparses `mod_name` from `KRB5_TL_MOD_PRINC`
-//! (`kadmin.c:1476`, `kdb5.c:1637-1663`). Compiles at the parent: CREATE
-//! and GET already exist; the parent hard-codes `kadmin/admin@REALM` on
-//! the wire regardless of the GSS client.
+//! kadm5 modify honours `KADM5_MAX_RLIFE`.
+//! MIT `kadm5_modify_principal` (`svr_principal.c:642-643`): `KADM5_MAX_RLIFE` sets the
+//! entry's max renewable life.
+//! `get_principal` unparses `mod_name` from `KRB5_TL_MOD_PRINC`.
+//! MIT `kadmin_getprinc` (`kadmin.c:1476-1476`): `mod_name` is unparsed for display.
+//! MIT `krb5_dbe_lookup_mod_princ_data` (`kdb5.c:1637-1663`): the mod principal is parsed
+//! from `KRB5_TL_MOD_PRINC` after its 4-byte time.
+//! Compiles at the parent: CREATE and GET already exist; the parent hard-codes
+//! `kadmin/admin@REALM` on the wire regardless of the GSS client.
 
 #[path = "common/mod.rs"]
 mod common;

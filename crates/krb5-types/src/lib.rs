@@ -45,7 +45,8 @@ pub use name_error::{NameError, TimeError};
 
 /// Name-type-insensitive equality of components and realm.
 ///
-/// MIT `krb5_principal_compare` (`princ_comp.c:79-124`) ignores name type.
+/// MIT `krb5_principal_compare_flags` (`princ_comp.c:79-124`): ignores name type;
+/// `krb5_principal_compare` is this with no flags.
 #[must_use]
 pub fn principal_compare(
     name_a: &PrincipalName,
@@ -338,7 +339,8 @@ impl HostAddress {
     /// MIT `ADDRTYPE_INET6`.
     pub const ADDRTYPE_INET6: i32 = 0x18;
 
-    /// MIT `k5_sockaddr_to_address` (`addr.c:44-75`, `local_use` false).
+    /// MIT `k5_sockaddr_to_address` (`addr.c:44-75`): with `local_use` false, IPv4 is
+    /// `ADDRTYPE_INET`, a v4-mapped IPv6 address is IPv4, and other IPv6 is `ADDRTYPE_INET6`.
     #[must_use]
     pub fn from_socket(addr: std::net::SocketAddr) -> Self {
         match addr {
@@ -385,7 +387,11 @@ pub struct PaData {
     pub padata_value: OctetString,
 }
 
-/// One TYPED-DATA element (`asn1_k_encode.c:1547-1556`).
+/// One TYPED-DATA element.
+/// MIT `typed_data_fields` (`asn1_k_encode.c:1549-1551`): the element's two fields,
+/// `data-type [0]` and `data-value [1]`.
+/// MIT `typed_data` (`asn1_k_encode.c:1552-1552`): the element is the SEQUENCE of those
+/// fields, held in a `krb5_pa_data`.
 ///
 /// MIT `DEFCNFIELD` always encodes `data-value` (possibly empty); it is not
 /// optional on the wire.
@@ -646,8 +652,10 @@ impl KdcOptions {
         self.to_u32() & !supported
     }
 
-    /// MIT `AS_INVALID_OPTIONS` (`kdc_util.h:456-463`): TGS-only options that
-    /// are invalid in an AS-REQ.
+    /// MIT `AS_INVALID_OPTIONS`: TGS-only options that are invalid in an AS-REQ.
+    /// MIT `NON_TGT_OPTION` (`kdc_util.h:456-457`): FORWARDED, PROXY, RENEW and VALIDATE.
+    /// MIT `NO_REFERRAL_OPTION` (`kdc_util.h:460-460`): those plus ENC_TKT_IN_SKEY.
+    /// MIT `AS_INVALID_OPTIONS` (`kdc_util.h:463-463`): those plus CNAME_IN_ADDL_TKT.
     #[must_use]
     pub fn as_invalid_bits(&self) -> u32 {
         let mask = (1u32 << (31 - flag_bit::FORWARDED))
@@ -1510,8 +1518,10 @@ fn push_hop(out: &mut Vec<String>, hop: String) -> Result<(), TransitError> {
     Ok(())
 }
 
-/// MIT `rtree_hier_tree` (`walk_rtree.c:358-361`): a hierarchy that cannot be built returns the error and no tree.
-/// Two names of equal length add no hop unless they are the same name, and a domain hop is emitted only when the longer name ends with the shorter one.
+/// MIT `rtree_hier_tree` (`walk_rtree.c:358-361`): a hierarchy that cannot be built returns
+/// the error and no tree.
+/// Two names of equal length add no hop unless they are the same name, and a domain hop is
+/// emitted only when the longer name ends with the shorter one.
 fn process_intermediates(n1: &str, n2: &str, out: &mut Vec<String>) -> Result<(), TransitError> {
     let (short, long) = if n1.len() > n2.len() {
         (n2, n1)

@@ -33,7 +33,9 @@ pub const KDB_DUMP_VERSION: u32 = 7;
 /// Older `-r18` header. Princ records match version 7.
 pub(crate) const KDB_DUMP_VERSION_R18: u32 = 6;
 
-/// `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put (`kdb5.c:893-945`).
+/// `KRB5_TL_DB_ARGS` (`kdb.h`); stripped at put.
+/// MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): every `KRB5_TL_DB_ARGS` entry is
+/// removed from the tagged data and passed on as a DB argument instead.
 pub const TL_DB_ARGS: i32 = 0x7fff;
 /// `KRB5_TL_LAST_PWD_CHANGE`.
 pub const TL_LAST_PWD_CHANGE: i32 = 1;
@@ -241,8 +243,10 @@ impl DumpFile {
 }
 
 impl DumpPrincipal {
-    /// MIT `process_k5beta7_princ` (`dump.c:676-690`): eight attribute fields are required, and a short record is not a principal.
-    /// The master-key principal is refused when its key does not match the derived master key, and the policy binding is taken from the admin tagged data.
+    /// MIT `process_k5beta7_princ` (`dump.c:676-690`): eight attribute fields are required,
+    /// and a short record is not a principal.
+    /// The master-key principal is refused when its key does not match the derived master
+    /// key, and the policy binding is taken from the admin tagged data.
     fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
@@ -577,7 +581,8 @@ pub fn dump_store_iprop(
 }
 
 /// MIT `process_k5beta7_princ` (`dump.c:666-674`): a name that cannot be read is not a principal.
-/// The name's length must equal the header count, so a truncated name does not consume the attribute fields.
+/// The name's length must equal the header count, so a truncated name does not consume the
+/// attribute fields.
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {
     let mut raw: Vec<&str> = rest.split('\t').collect();
     if let Some(last) = raw.last_mut() {
@@ -781,8 +786,10 @@ fn dump_attributes(p: &Principal) -> u32 {
     a
 }
 
-/// MIT `k5beta7_common` (`dump.c:327-331`): a tagged-data count that does not match the list is an error and the record is not written.
-/// An alias is written with zero lifetimes, and the database-arguments tag is stripped before the record is emitted.
+/// MIT `k5beta7_common` (`dump.c:327-331`): a tagged-data count that does not match the
+/// list is an error and the record is not written.
+/// An alias is written with zero lifetimes, and the database-arguments tag is stripped
+/// before the record is emitted.
 fn write_princ_record(
     out: &mut String,
     p: &Principal,

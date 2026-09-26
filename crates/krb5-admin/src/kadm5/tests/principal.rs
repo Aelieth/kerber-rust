@@ -98,10 +98,11 @@ fn modify_foreign_realm_existing_user_is_unk_princ() {
     assert_eq!(ret_code(&local), 0);
 }
 
-/// MIT `kadm5_create_principal_3` `passwd_check` (`svr_principal.c:370`):
-/// `empty` rejects without a policy as `KADM5_PASS_Q_TOOSHORT`; `princ`
-/// rejects a component match under a policy as `KADM5_PASS_Q_DICT`; a
-/// rejected create leaves no entry.
+/// MIT `kadm5_create_principal_3` `passwd_check`: `empty` rejects without a policy as
+/// `KADM5_PASS_Q_TOOSHORT`; `princ` rejects a component match under a policy as
+/// `KADM5_PASS_Q_DICT`; a rejected create leaves no entry.
+/// MIT `kadm5_create_principal_3` (`svr_principal.c:370-370`): `passwd_check` runs with the
+/// loaded policy, or none, before the entry is stored.
 #[test]
 fn create_runs_pwqual_modules_before_the_entry_exists() {
     let (store, acl, actor) = setup();

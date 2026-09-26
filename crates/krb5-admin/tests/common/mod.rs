@@ -1,5 +1,7 @@
 //! In-process kadm5 RPCSEC_GSS client: one `RPG_INIT`, then `RPG_DATA` calls
-//! with `databody_integ` + checksum (`authgss_prot.c:203-225`).
+//! with `databody_integ` + checksum.
+//! MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:203-225`): an integrity body is
+//! `databody_integ` then a checksum, a MIC over it that must verify.
 
 #![allow(dead_code)]
 

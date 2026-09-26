@@ -1,4 +1,4 @@
-//! `krb5_parse_name` / `krb5_unparse_name` (`parse.c`, `unparse.c`).
+//! `krb5_parse_name` / `krb5_unparse_name` (`krb/parse.c`, `unparse.c`).
 
 use super::{NameError, PrincipalName};
 
@@ -9,11 +9,15 @@ pub struct ParsedName {
     pub components: Vec<String>,
     /// Realm; empty when the input was `foo@` or `NO_DEF_REALM`.
     pub realm: String,
-    /// Whether an unquoted `@` started a realm (`parse.c:116`).
+    /// Whether an unquoted `@` started a realm.
+    /// MIT `allocate_princ` (`krb/parse.c:116-116`): `has_realm_out` is set when an unquoted
+    /// `@` moved the parse into the realm.
     pub has_realm: bool,
 }
 
-/// Parse `name[@realm]` with MIT quoting (`parse.c:62-102`).
+/// Parse `name[@realm]` with MIT quoting.
+/// MIT `allocate_princ` (`krb/parse.c:62-102`): `/` separates components, an unquoted `@`
+/// starts the realm, and `\` quotes the next character.
 ///
 /// Empty components are allowed. `foo@` keeps an empty realm. No `@`
 /// uses `default_realm`. Trailing `\` is an error. `/` or a second `@`
@@ -88,7 +92,9 @@ fn push_char(comps: &mut [String], realm: &mut Option<String>, in_realm: bool, c
     }
 }
 
-/// MIT `k5_infer_principal_type` (`bld_princ.c:31-42`).
+/// MIT `k5_infer_principal_type` (`bld_princ.c:31-42`): two components under `krbtgt` are
+/// NT-SRV-INST, two or more under `WELLKNOWN` are NT-WELLKNOWN, and anything else is
+/// NT-PRINCIPAL.
 #[must_use]
 pub fn infer_name_type(comps: &[String]) -> i32 {
     if comps.len() == 2 && comps[0] == "krbtgt" {

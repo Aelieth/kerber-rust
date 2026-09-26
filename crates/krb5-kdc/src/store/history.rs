@@ -103,10 +103,11 @@ impl PrincipalStore {
         Some((k.kvno, k.key.clone()))
     }
 
-    /// MIT `kdb_get_hist_key` + `create_hist` (`server_kdb.c:140-188`): the
-    /// history key, creating `kadmin/history` on first use with MIT's shape —
-    /// `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`),
-    /// no attributes, one random key of the master enctype at kvno 2.
+    /// MIT `kdb_get_hist_key` (`server_kdb.c:166-188`): the history key, creating
+    /// `kadmin/history` on first use.
+    /// MIT `create_hist` (`server_kdb.c:141-164`): the first-use creation has MIT's shape —
+    /// `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`), no attributes,
+    /// one random key of the master enctype at kvno 2.
     ///
     /// # Errors
     ///

@@ -4,6 +4,44 @@
 //!
 //! Env: `KRB5_PASSWORD`, `KERBER_PAUSER_PASSWORD`, `KERBER_DIFF_REALM`,
 //! `KERBER_KRBTGT_KEYTAB`, `KERBER_HOST_KEYTAB`.
+//!
+//! The 111 cases, in send order (`DIFFSEND_CASES` in `scripts/ci-policy.py` pins the same
+//! set):
+//! `garbage-pdu`, `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`,
+//! `pauser-no-preauth`, `as-needpreauth-hints-unpermitted`, `skewed-timestamp`, `as-needchange`,
+//! `as-invalid-opts`, `as-validate-before-preauth`, `as-optimistic-encts-wrong-etype`,
+//! `unknown-sname`, `as-success`, `as-retransmit`, `as-request-anonymous`, `tgs-success`,
+//! `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`, `fast-armor-no-subkey`,
+//! `armor-ap-req-as-pa-tgs-req`, `tgs-ad-fx-armor-authenticator`, `as-bad-msg-type`,
+//! `as-bad-pvno`, `tgs-bad-msg-type`, `as-service-not-allowed`, `tgs-ap-options`,
+//! `tgs-header-kvno-zero`, `as-hw-preauth`, `as-spake-round1`, `u2u-2nd-ticket-unknown-server`,
+//! `u2u-2nd-ticket-bad-etype`, `u2u-2nd-ticket-corrupt`, `tgs-pac-client-mismatch`,
+//! `tgs-pac-corrupt-before-sname`, `tgs-pac-request-false`, `tgs-from-pacless-tgt`,
+//! `tgs-renew-service-ticket`, `tgs-proxy-krbtgt`, `tgs-canonicalize-renew`,
+//! `tgs-expired-vs-unknown-sname`, `s4u2self-no-pac`, `s4u2self-pac-client-mismatch`,
+//! `pa-s4u-x509-user-bad-checksum`, `pa-s4u-x509-user-nonce`, `pa-for-user-only`,
+//! `pa-s4u-x509-user-empty`, `pa-for-user-undecodable`, `pa-s4u-x509-user`,
+//! `s4u2proxy-no-2nd-tkt`, `s4u2proxy-not-forwardable`, `s4u2proxy-u2u-combo`,
+//! `s4u2proxy-tgs-target`, `s4u2proxy-no-header-pac`, `s4u2proxy-header-pac`,
+//! `s4u2proxy-no-stkt-pac`, `s4u2proxy-evidence-mismatch`, `s4u2proxy-local-stkt-pac`,
+//! `u2u-no-2nd-tkt`, `u2u-2nd-ticket-not-tgs`, `u2u-2nd-ticket-mismatch`,
+//! `u2u-2nd-ticket-bad-pac`, `u2u-bad-etype`, `u2u-success`, `tgs-addr-mismatch`,
+//! `tgs-forwarded-addresses`, `u2u-2nd-ticket-foreign-realm`, `s4u2self-renew-options`,
+//! `pa-s4u-x509-user-truncated`, `s4u2self-krbtgt-other`, `tgs-locked-pac-mismatch`,
+//! `u2u-dup-skey-tgt-based`, `tgs-expired-addr-mismatch`, `tgs-expired-badmatch`,
+//! `u2u-2nd-ticket-kvno-miss`, `u2u-2nd-ticket-disallow-svr`, `s4u2self-cert-only`,
+//! `tgs-pac-server-cksum-wrong-enctype`, `u2u-2nd-ticket-pac-wrong-enctype`,
+//! `u2u-success-offered`, `tgs-forwarded-tgt-addresses`, `tgs-forwarded-on-non-f-tgt`,
+//! `tgs-proxy-on-non-p-tgt`, `tgs-postdate-on-non-postdatable`, `tgs-postdated-is-invalid`,
+//! `tgs-validate-invalid-non-renewable`, `tgs-no-preauth-flag`, `tgs-hw-preauth-flag`,
+//! `tgs-nyv-inside-skew`, `tgs-body-authdata`, `tgs-ad-mandatory-for-kdc`,
+//! `tgs-body-authdata-kdc-issued-stripped`, `tgs-body-authdata-subkey`,
+//! `tgs-body-authdata-session-ku5`, `tgs-tgt-and-or-kept`, `tgs-truncated-cammac`,
+//! `ec-outside-fast`, `tgs-till-in-past`, `tgs-service-expired-require-auth`,
+//! `tgs-postdated-from`, `tgs-renew-header-end-before-start`, `tgs-rbcd-pac-options`,
+//! `as-anonymous-unsigned-authpack-named-client`, `as-fast-hide-error-client`,
+//! `tgs-fast-hide-client`, `pkinit-stale-freshness`, `tgs-referral-no-dot`,
+//! `tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`.
 
 #![forbid(unsafe_code)]
 
@@ -585,7 +623,10 @@ fn decrypt_tgs_enc(
 }
 
 /// U2U TGS-REP: reply enc-part is the header session; the issued ticket is
-/// the second-ticket session (`do_tgs_req.c:997-1000,1056-1057`).
+/// the second-ticket session.
+/// MIT `tgs_issue_ticket` (`do_tgs_req.c:997-1000`): with ENC_TKT_IN_SKEY the ticket is
+/// encrypted in the second ticket's session key.
+/// MIT `tgs_issue_ticket` (`do_tgs_req.c:1056-1057`): a U2U ticket's enc-part kvno is 0.
 fn decrypt_u2u(
     raw: &[u8],
     header_session: &ProtocolKey,
@@ -622,9 +663,9 @@ fn decrypt_u2u(
     Ok((enc, rep.ticket, tkt))
 }
 
-// MIT kdc/replay.c lookaside (dispatch.c:114-140): the identical request resent
-// is answered from the cache, so the second reply is byte-for-byte the first on
-// both legs. Without the cache a fresh AS-REP carries a new random session key.
+// MIT `dispatch` (`dispatch.c:114-140`): the kdc/replay.c lookaside answers the identical
+// request resent from the cache, so the second reply is byte-for-byte the first on both
+// legs. Without the cache a fresh AS-REP carries a new random session key.
 fn expect_retransmit(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(), String> {
     let (r1, m1) = send_both(cfg, case, req)?;
     let r2 = exchange_on_tcp(&cfg.rust, req).map_err(|e| format!("{case} rust#2: {e}"))?;
@@ -1207,10 +1248,10 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "pauser-no-preauth", &req, err::PREAUTH_REQUIRED)?;
 
-    // hintu is keyed only aes128; the request lists only aes256. MIT
-    // `have_client_keys` (`kdc_preauth.c:442`) is false → 25 with no PA 2,
-    // no ETYPE-INFO2 (`add_etype_info` skips a NULL client key), and no
-    // PA 151 (`spake_edata` omits when client_keyblock is NULL).
+    // hintu is keyed only aes128; the request lists only aes256.
+    // MIT `have_client_keys` (`kdc_preauth.c:442-442`): with no client key of a requested
+    // enctype it is false → 25 with no PA 2, no ETYPE-INFO2 (`add_etype_info` skips a NULL
+    // client key), and no PA 151 (`spake_edata` omits when client_keyblock is NULL).
     let hintu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["hintu"]);
     let req = encode(
         &as_req_sname(
@@ -1250,8 +1291,13 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-needchange", &req, err::KEY_EXPIRED)?;
 
-    // MIT AS_INVALID_OPTIONS (kdc_util.h:456-463): a TGS-only option (RENEW) in
-    // an AS-REQ is INVALID AS OPTIONS / BADOPTION (13) on both legs.
+    // MIT `AS_INVALID_OPTIONS`: a TGS-only option (RENEW) in an AS-REQ is
+    // INVALID AS OPTIONS / BADOPTION (13) on both legs.
+    // MIT `NON_TGT_OPTION` (`kdc_util.h:456-457`): RENEW is one of the TGS-only options.
+    // MIT `NO_REFERRAL_OPTION` (`kdc_util.h:460-460`): every `NON_TGT_OPTION` plus
+    // ENC_TKT_IN_SKEY.
+    // MIT `AS_INVALID_OPTIONS` (`kdc_util.h:463-463`): every `NO_REFERRAL_OPTION` plus
+    // CNAME_IN_ADDL_TKT.
     let mut inv = as_req(user.clone(), realm, 0x1000_0010, None).map_err(|e| e.to_string())?;
     inv.0.req_body.kdc_options = inv
         .0
@@ -1261,9 +1307,10 @@ fn run() -> Result<(), String> {
     let req = encode(&inv).map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-invalid-opts", &req, err::BADOPTION)?;
 
-    // pwprau requires preauth AND needs a password change. MIT validate_as_request
-    // (do_as_req.c:630) runs before check_padata (:758), so a bare AS-REQ is
-    // "REQUIRED PWCHANGE" / KEY_EXP (23), not "NEEDED_PREAUTH" (25), on both legs.
+    // pwprau requires preauth AND needs a password change.
+    // MIT `process_as_req` (`do_as_req.c:630-630`): validate_as_request runs before
+    // check_padata (:758), so a bare AS-REQ is "REQUIRED PWCHANGE" / KEY_EXP (23), not
+    // "NEEDED_PREAUTH" (25), on both legs.
     let pwprau = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwprau"]);
     let req = encode(&as_req(pwprau, realm, 0x1000_0011, None).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
@@ -1330,13 +1377,13 @@ fn run() -> Result<(), String> {
     .map_err(|e| e.to_string())?;
     expect_retransmit(&cfg, "as-retransmit", &as_req_rt)?;
 
-    // do_as_req.c:717-724: REQUEST_ANONYMOUS with a named (non-anonymous)
-    // client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL", reached
-    // only after preauth because validate_as_request tests AS_INVALID_OPTIONS
-    // only (kdc_util.c:727) and lets the bit through, unlike the TGS-only
-    // options in as-invalid-opts. Both legs send code 13 with the same wire
-    // status. An early refusal of the bit as "INVALID AS
-    // OPTIONS", so the e_text diverged from MIT here.
+    // MIT `process_as_req` (`do_as_req.c:717-724`): REQUEST_ANONYMOUS with a named
+    // (non-anonymous) client is KRB5KDC_ERR_BADOPTION "VALIDATE_ANONYMOUS_PRINCIPAL",
+    // reached only after preauth.
+    // MIT `validate_as_request` (`kdc_util.c:727-727`): tests AS_INVALID_OPTIONS only and
+    // lets the bit through, unlike the TGS-only options in as-invalid-opts.
+    // Both legs send code 13 with the same wire status. An early refusal of the bit as
+    // "INVALID AS OPTIONS", so the e_text diverged from MIT here.
     let pa_anon = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
     let mut anon =
         as_req(user.clone(), realm, 0x1000_0013, Some(vec![pa_anon])).map_err(|e| e.to_string())?;
@@ -1486,10 +1533,11 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // krb5int_validate_times (valid_times.c:44-51) judges a header
-    // ticket with no starttime by its authtime — kdc_rd_ap_req →
-    // krb5_rd_req_decoded_anyflag → rd_req_dec.c:627. A forged TGT with a
-    // future authtime and starttime absent is 33 PROCESS_TGS on both KDCs.
+    // MIT `krb5int_validate_times` (`valid_times.c:44-51`): judges a header ticket with no
+    // starttime by its authtime.
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:627-627`): runs that check on the path
+    // kdc_rd_ap_req → krb5_rd_req_decoded_anyflag. A forged TGT with a future authtime and
+    // starttime absent is 33 PROCESS_TGS on both KDCs.
     let nyv_no_start = mint_tgt_times(
         tkt_key,
         tkt_kvno,
@@ -1521,7 +1569,7 @@ fn run() -> Result<(), String> {
     )?;
 
     // AS FAST AP-REQ armor without authenticator subkey.
-    // MIT armor_ap_request (fast_util.c:70-77) → 12 FIND_FAST. MIT clients
+    // MIT `armor_ap_request` (`fast_util.c:70-77`): no subkey → 12 FIND_FAST. MIT clients
     // always send a subkey, so this forge is the both-legs oracle.
     let armor_tkt = mint_tgt(
         tkt_key,
@@ -1555,7 +1603,8 @@ fn run() -> Result<(), String> {
     )?;
 
     // header ticket or authenticator carrying AD-FX-ARMOR 71.
-    // MIT kdc_util.c:217-229 → 12 PROCESS_TGS. Nothing in 1.22.2 emits 71.
+    // MIT `kdc_process_tgs_req` (`kdc_util.c:217-229`): "ticket valid only as FAST armor" →
+    // 12 PROCESS_TGS. Nothing in 1.22.2 emits 71.
     let inner_ad = encode(&vec![AuthorizationDataValue {
         ad_type: pa::AD_FX_ARMOR,
         ad_data: Vec::<u8>::new().into(),
@@ -1649,8 +1698,17 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // AS/TGS entry validation (do_as_req.c:513-517, dispatch.c:145-158,
-    // do_tgs_req.c:609-610, kdc_util.c:179-184,790-793, kdc_rd_ap_req kvno 0).
+    // AS/TGS entry validation (and kdc_rd_ap_req kvno 0).
+    // MIT `process_as_req` (`do_as_req.c:513-517`): an AS request of another msg-type is
+    // KRB5_BADMSGTYPE.
+    // MIT `dispatch` (`dispatch.c:145-158`): a packet that is neither TGS-REQ nor AS-REQ is
+    // MSG_TYPE, and a server realm the KDC does not serve is WRONG_REALM.
+    // MIT `gather_tgs_req_info` (`do_tgs_req.c:609-610`): a TGS request of another msg-type
+    // is KRB5_BADMSGTYPE.
+    // MIT `kdc_process_tgs_req` (`kdc_util.c:179-184`): a TGS AP-REQ with USE_SESSION_KEY or
+    // MUTUAL_REQUIRED is POLICY.
+    // MIT `validate_as_request` (`kdc_util.c:790-793`): a DISALLOW_SVR server is
+    // MUST_USE_USER2USER.
     let mut bad_as = as_req(user.clone(), realm, 0x1000_0023, None).map_err(|e| e.to_string())?;
     bad_as.0.msg_type = krb5_types::KdcReq::MSG_TGS_REQ;
     expect_error(
@@ -1788,7 +1846,8 @@ fn run() -> Result<(), String> {
         err::PREAUTH_REQUIRED,
     )?;
 
-    // kdc_preauth.c:1141-1170: SPAKE support → 91 + ETYPE-INFO2 (no cookie yet).
+    // MIT `maybe_add_etype_info2` (`kdc_preauth.c:1141-1170`): SPAKE support → 91 + ETYPE-INFO2
+    // (no cookie yet).
     expect_error(
         &cfg,
         "as-spake-round1",
@@ -4438,7 +4497,8 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
     );
 
-    // pkinit_srv.c:508-516: unsigned AuthPack + named client → 24.
+    // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): unsigned AuthPack + named
+    // client → 24.
     let kp = p256_generate().map_err(|e| e.to_string())?;
     let mut unsigned_named =
         as_req(user.clone(), realm, 0x1000_0090, None).map_err(|e| e.to_string())?;
@@ -4456,7 +4516,7 @@ fn run() -> Result<(), String> {
         err::PREAUTH_FAILED,
     )?;
 
-    // do_as_req.c:831-832: FAST hide-client on the outer KRB-ERROR.
+    // MIT `prepare_error_as` (`do_as_req.c:831-832`): FAST hide-client on the outer KRB-ERROR.
     let hide_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let hide_tkt = mint_tgt(
         tkt_key,
@@ -4495,7 +4555,7 @@ fn run() -> Result<(), String> {
         err::PREAUTH_REQUIRED,
     )?;
 
-    // do_tgs_req.c:1111-1112: FAST hide-client on the outer TGS-REP.
+    // MIT `tgs_issue_ticket` (`do_tgs_req.c:1111-1112`): FAST hide-client on the outer TGS-REP.
     let hide_tgs_tgt = mint_tgt(
         tkt_key,
         tkt_kvno,
