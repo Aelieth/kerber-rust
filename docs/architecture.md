@@ -124,22 +124,37 @@ derive from the next two lines is deleted. The budget moves from process
 tags into invariants that are otherwise unstated.
 
 **R1.** A MIT anchor is one line, in one form:
-``MIT `<c_function>` (`<file>.c:<a>-<b>`): <what the port guarantees>``.
-The named function's body contains the cited range. One anchor per line.
-The anchor slot is a C function, never a Rust symbol. A single source
-line is written `<a>-<a>`.
+``MIT `<symbol>` (`<path>:<a>-<b>`): <what the port guarantees>``.
+The symbol names the MIT definition whose extent contains the cited
+range: a C function, a `struct` / `union` / `enum` or typedef, a table
+or global, a macro or macro-generated item, an error-table entry, or an
+ASN.1 type (its `NAME ::=` comment block). Never a Rust symbol, and
+never a callee or macro standing in for the function. One anchor per
+line, opening its own sentence. A single source line is written
+`<a>-<a>`. A path whose basename names more than one MIT file carries
+enough directories to name one. A mention without a range (``MIT `X` ``,
+or a MIT file named in prose) is not an anchor and is legal.
 
 **R2.** State the invariant, not the steps: an ordering, a fail-closed
 rule, a key-material rule, an attacker-relevant subtlety, or a deliberate
 deviation. Do not narrate the statements below the comment.
 
-**R3.** No process history in source. No `R12`, `A′-3`, `W0e`, `W1-Z`,
-`Round 2`, `B3`, `Y0`, `Z6.3`, or `parent` plus a commit hash. A deferred
-parity gap gets a ledger row and at most a one-line pointer.
+**R3.** No process history in source: no section or item tags (`R12`,
+`A′-3`, `W0e`, `W1-Z`, `Round 2`, `B3`, `Y0`, `Z6.3`, `S2.3`, `item 15`,
+`Z8 leftover`, a lone `B2` / `F4`), no commit hashes (`parent` plus a
+hash, a backticked hash, "fails at" a hash), no red-at-parent notes
+(`parent-red`, `Compiles at`, "the parent did X"), and no `working/`
+paths. A deferred parity gap gets a ledger row and at most a one-line
+pointer.
 
 **R4.** `# Errors` names variants or conditions. It does not use a family
-word ("crypto", "DER") and it does not open with "Returns". `# Panics`
-appears only where a panic exists.
+word ("crypto", "DER") and it does not open with "Returns". A function
+that cannot fail says "None:" and why. `# Panics` appears only where a
+panic exists.
+
+`check_mit_anchor_form`, `check_mit_anchor_truth` and
+`check_no_process_history` in `scripts/ci-policy.py` keep R1 and R3 true
+(see [testing.md](testing.md)).
 
 ## Observability
 

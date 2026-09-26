@@ -8,196 +8,101 @@ this project uses semantic versioning once a crate is published.
 
 ### W3-S4 comments and rustdoc
 
-- **ci.** `check_mit_anchor_form` requires a MIT anchor in a `//`
-  comment to be one line: a function, a `file.c` range, and a
-  guarantee. The six older shapes are red. The check is advisory at
-  the `0d5fa7f4` count until a later commit sets the allow to 0.
-  No wire or text change in product code.
-- **ci.** `check_no_process_history` rejects a process tag (`R12`,
-  `A′-3`, `W0e`, `W1-Z`, `Round 2`, a `parent` SHA, `R2-S3`, `B3`,
-  `Y0`, `Z6.3`) on a `//` comment under `crates/`. Advisory at the
-  `0d5fa7f4` count. The baseline list is
-  `working/logs/w3-hygiene/s4/process-tags-before.txt`. No wire or
-  text change in product code.
-- **docs.** `docs/architecture.md` and `CONTRIBUTING.md` state the
-  comment rules R1–R4: one MIT anchor form, an invariant rather than
-  a step list, no process history, and `# Errors` naming variants.
-- **crates.** The `krb5-admin` header drops `kdb5_util` and names
-  ktutil, iprop, and kpropd. The `krb5-crypto` header names weak
-  etypes 16/23/25/26 behind `allow_weak_crypto`, plus SPAKE, MODP,
-  CF2, and PRF+. `krb5-kdc` and `krb5-protocol` headers end on the
-  public-surface line, as do the other two. The `krb5-admin` and
-  `krb5-crypto` crate descriptions match those headers. No behaviour
-  change.
-- **kdc.** Module headers on `acl`, `ad`, `audit`, `listen`, `plugins`,
-  and `preauth` state the fail-closed rule for that module. Ledger
-  rust-site lines in `ad.rs` and `plugins.rs` move with those headers.
-  No behaviour change.
-- **protocol.** Module headers on `ap_req`, `tgs`, `safe_priv`,
-  `preauth`, `replay`, `chpw`, `keytab`, and `secret_file` state the
-  check that makes a success. No behaviour change.
-- **crypto.** Module headers on `ops`, `weak`, `cf2`, `derive`, `prf`,
-  `spake`, `key`, `cts`, `nfold`, and `modp` state the fail-closed
-  rule for that module. No behaviour change.
-- **admin.** The `listen` header states that a malformed kpasswd
-  datagram is not answered and a failed AP-REQ is a framed chpwfail.
-  No behaviour change.
-- **types.** Module headers on `fast`, `s4u`, `cammac`, and `spake`
-  state which fields are required and what the checksum covers. No
-  behaviour change.
-- **gss.** The `mic` header states that a bad checksum is rejected
-  before the sequence is consumed. The shared token reader refuses a
-  length of 0 or above 1 MiB. No behaviour change.
-- **admin.** The sixteen src functions over 40 lines each gain one
-  MIT anchor and one sentence stating the fail-closed rule for that
-  function. No behaviour change.
-- **protocol.** The nineteen src functions over 40 lines each gain one
-  MIT anchor and one sentence stating the check that makes a success.
-  `fast_error_material` names its error conditions. No behaviour change.
-- **kdc.** The thirty-two src functions over 40 lines each gain one MIT
-  anchor and one sentence stating the fail-closed rule. The PAC, S4U,
-  PKINIT, and SPAKE results that clippy does not require still name
-  their error conditions. No behaviour change.
-- **client.** `kinit_inner` states that key-expired is the only change
-  path and that a keytab request has none. No behaviour change.
-- **gss.** The eight long functions state when a token, a direction,
-  or a delegated credential is rejected. No behaviour change.
-- **config.** The profile parser states that an include is a directive
-  only at the start of a line, and that the first value of a key wins.
-  No behaviour change.
-- **types.** The ten long functions state when a parse is not a
-  principal, a duration, a transit path, or a certificate. No
-  behaviour change.
-- **crypto.** The five long functions state when a derive or a
-  checksum failure wipes key material. No behaviour change.
-- **all.** Each `# Errors` section under 45 characters names a
-  variant or a condition. The ones that named a family, or opened
-  with "Returns", now say which variant or which check failed.
-  No behaviour change.
-- **all.** Process-history tags are gone from comments under
-  `crates/`. `check_no_process_history` is hard. No behaviour change.
+- **ci.** Three comment checks are hard (allow 0). `check_mit_anchor_form`:
+  a MIT anchor is one line, ``MIT `X` (`path:a-b`): guarantee``, where
+  `X` is a function, type, table, macro, error-table entry or ASN.1
+  type, in a `.c`, `.h`, `.hin`, `.et`, `.x` or `.y` file; a mention
+  (``MIT `X` ``) and a rangeless file mention are legal; a line cite
+  outside an anchor, two anchors on a line, an empty or name-only
+  guarantee, and an ambiguous basename without a directory are red,
+  block comments included. `check_mit_anchor_truth` (the `ledger-mit`
+  job, against the MIT 1.22.2 tree) proves each range lies inside a
+  definition of the named symbol and refuses a callee in a function's
+  place, a trailing overhang, MIT test code cited from product code,
+  and an unknown or ambiguous file. `check_no_process_history` rejects
+  process tags on `crates/` comments: section and item tags, commit
+  hashes, `parent-red`, `Compiles at`, "the parent `…`", and `working/`
+  paths. Fixtures pin every form.
 - **tool.** `hygiene-fn-diff` folds `krb5_log::events::NAME` to the
-  literal of `krb5-log`'s const NAME and reports such a pair as the
-  counted class `const-fold`, and the new const as `const-fold-added`.
-  A same-named `events` const in another crate is an error. Nothing
-  else folds; a moved print, a new field or a new type is an accept
+  literal of `krb5-log`'s const `NAME`, reports such a pair as the
+  counted class `const-fold` and the new const as `const-fold-added`,
+  and errors on a same-named `events` const in another crate. Nothing
+  else folds: a moved print, a new field or a new type is an accept
   row. Self-test floor 142.
 - **ci.** `check_ci_no_workspace_cargo_test` lets the test job run
-  `cargo test --workspace --doc` (nextest runs no doctests). Any other
-  workspace `cargo test` is still red; fixtures pin both.
-- **ci.** `check_mit_anchor_form` v2: a mention (``MIT `X` ``) and a
-  rangeless file mention are legal; an anchor may name a type, macro,
-  table or error-table entry in a `.h`, `.hin`, `.et`, `.x` or `.y`
-  file. A line cite outside an anchor, two anchors on one line, an
-  empty or name-only guarantee, and an ambiguous MIT basename without
-  a directory are red. Block comments are scanned. Advisory at the
-  live count, 574.
-- **ci.** `check_mit_anchor_truth` (the `ledger-mit` job, against the
-  MIT 1.22.2 tree) proves each anchor's range lies inside the named
-  definition: a function, type, table, macro-generated item, or header
-  entry. A callee or macro in a function's place, a trailing overhang,
-  MIT test code cited from product code, and an ambiguous or unknown file
-  are red. Advisory at the live count, 45.
-- **ci.** `check_no_process_history` v2 also rejects a backticked commit
-  hash, `parent-red`, `Compiles at`, `item N`, `S2.3`, `Z8 leftover`, a
-  lone `B2` / `F4`, "the parent `…`", and a `working/` path in a
-  `crates/` comment. Advisory at the live count, 47.
-- **all.** MIT cites under `crates/` are re-derived from their ranges.
-  Each keeps its original range, names the MIT definition that contains
+  `cargo test --workspace --doc` (nextest runs no doctests); any other
+  workspace `cargo test` is red. The job runs twelve worked examples on
+  the `krb5-asn1`, `krb5-config`, `krb5-crypto` and `krb5-types` crate
+  docs: DER round-trips, profile parsing, the RFC 3962 string-to-key
+  answers, principal names, deltat and time parsing.
+- **docs.** `docs/architecture.md` and `CONTRIBUTING.md` state the
+  comment rules R1–R4 and the restraint clause: one anchor form whose
+  named definition contains the range, one anchor per line; the
+  invariant, including an attacker-relevant subtlety, not the steps; no
+  process history; `# Errors` naming variants or conditions.
+- **crates.** The crate headers state what each crate holds and end on
+  the public-surface line. `krb5-crypto` names its one weak-etype gate
+  (`from_iana_policy` admits 16, 23, 25 and 26 only with `allow_weak`;
+  `known` admits them with no check) and says it is stricter than MIT's
+  `ETYPE_WEAK`; `krb5-protocol` no longer claims encrypted challenge.
+  The Cargo descriptions of `krb5-admin` and `krb5-crypto` are updated.
+- **all.** Module headers state their check or fail-closed rule, true to
+  the code: kdc `acl`, `ad`, `audit`, `listen`, `plugins`, `preauth`;
+  protocol `ap_req` (the skew field is required), `tgs` (a reply without
+  PA-FX-FAST is accepted, as MIT accepts it), `safe_priv` (no
+  remote-sequence check), `preauth` (builders and the client verifiers),
+  `replay` (a full cache evicts its oldest entry even inside the window),
+  `chpw` (only the random subkey buffer is wiped), `keytab`,
+  `secret_file`; crypto `ops`, `weak`, `cf2` and `prf` (what is wiped),
+  `derive`, `spake`, `key`, `cts`, `nfold`, `modp`; admin `listen`;
+  types `fast` (the TGS req-checksum covers the AP-REQ), `s4u`, `cammac`
+  (usage 19 is AD-KDCIssued, 64 the CAMMAC verifier), `spake`; gss `mic`.
+- **all.** The 93 undocumented functions over 40 lines each carry one
+  invariant and, where MIT has a counterpart, one MIT anchor naming it
+  (admin 16, protocol 19, kdc 32, client 1, gss 8, config 2, types 10,
+  crypto 5), and so does `check_tgs_policy_flags`, which the anchor
+  rewrite took to 41 lines; where MIT has none, the doc says so.
+  `encode_kdbe`, `continue_preauth`, `kinit_inner`,
+  `sign_reply_pac_inner`, `write_princ_record`, `into_principal` and
+  `handle_kpasswd_from` state what the code does, and `lookup_svc_princ`
+  says MIT sends 7 for every lookup error but 29.
+- **all.** MIT cites under `crates/` are re-derived from their ranges:
+  each keeps its original range, names the MIT definition that contains
   it, opens its own sentence, and carries the claim that sentence made.
   A range over two definitions or several table entries is one anchor
   per definition; five trailing overhangs are trimmed to the closing
-  brace; `svr_iters.c:61-62` corrects an off-by-two cite; ambiguous MIT
-  basenames carry a directory. The `diffsend` header lists its 111
-  cases. Both anchor checks are hard; the process-tag allow follows the
-  live count, 45. No behaviour change.
-- **protocol.** The crate header and the `tgs`, `replay`, `preauth`,
-  `ap_req`, `safe_priv`, and `chpw` headers state what the code does.
-  A TGS reply without PA-FX-FAST is accepted, as MIT accepts it. A
-  full replay cache evicts its oldest entry even inside the window.
-  The skew window is a required field. A received sequence number is
-  not checked against the peer's. Only the random subkey buffer is
-  wiped. `continue_preauth` builds its timestamp from the local clock
-  unless a skew error gave the KDC's time. The crate header no longer
-  claims encrypted challenge. No behaviour change.
-- **crypto.** The crate header names the one weak-etype gate:
-  `from_iana_policy` admits etypes 16, 23, 25 and 26 only with
-  `allow_weak`, `from_iana` calls it with the flag off, and `known`
-  admits them with no check. It says the gate is stricter than MIT's
-  `ETYPE_WEAK` and ends with the public-surface line. The `cf2`, `prf`
-  and `weak` headers say what is wiped and where the gate lives. No
-  behaviour change.
-- **types.** The `fast` header says the TGS req-checksum covers the
-  PA-TGS-REQ AP-REQ and that armor rides on every armored AS request.
-  The `cammac` header separates AD-KDCIssued (usage 19) from the
-  CAMMAC verifier MAC (usage 64, RFC 7751). The long-function anchors
-  that named an unrelated MIT function now name the counterpart
-  (`process_intermediates`, `cms_signeddata_verify`, `verify_kdc_eku`,
-  the KRB5PrincipalName type), or say there is none. No behaviour
-  change.
-- **kdc.** The `# Errors` sections of `process_pkinit`, `process_spake`,
-  `get_verified_pac`, `check_tgs_s4u2proxy` and `decrypt_ticket_part`
-  name the codes and variants each body returns, and `process_spake`
-  says a client Challenge or EncData is `Ok(None)`. The PAC-signing,
-  dump-record and TGS server-lookup docs state what MIT and this code
-  do: a failed sign leaves no signed PAC, the tagged-data count always
-  matches, the eight attribute fields are read where they are parsed,
-  and every lookup error but 29 is 7, as in MIT. `kadmin_history` says
-  MIT's copy is NT-PRINCIPAL. No behaviour change.
-- **admin.** `encode_kdbe` says it always ships `kadmin/admin@REALM`
-  as the mod-principal and still sends the raw last-password-change
-  and mod-principal records in `AT_TL_DATA`, which MIT leaves out.
-  `handle_kpasswd_from` says the AP-REQ is verified only as a
-  `kadmin/changepw` ticket and that any failure is a framed KRB-ERROR
-  carrying result code 3. No behaviour change.
-- **client.** `kinit_inner` says key-expired leads to a password change
-  when a prompter or a `new_password` source is given, and that
-  `kinit_with` writes the cache. No behaviour change.
-- **all.** Every `# Errors` section under `crates/*/src` (446) was
-  re-read against its function. Each names the variants the body can
-  return and the condition behind each; bare family words ("crypto",
-  "I/O", "an encode failure") and "Returns …" openings are gone. Errors
-  a body cannot produce are dropped (the four the audit named and their
-  siblings), missing ones are added (store reload and save failures,
-  `PasswordPolicy`, `BadKeysalts`, des3 block lengths), and a function
-  that cannot fail says so. Two summary lines the pass found wrong
-  (`exchange_with_failover`'s UDP waits, `to_bytes`) are fixed. No
-  behaviour change.
-- **all.** The fragments the tag removal left are sentences again: the
-  merged test headers under `crates/*/tests` say what each file pins,
-  with every MIT anchor kept, and the "Compiles at the parent" notes,
-  `Z8 leftover`, `F4` / `F5`, `B2`, `(S2.3)`, `item 15` and the "the
-  parent did X" asides are gone or restated as the invariant. The three
-  `working/` paths become a `docs/testing.md` pointer to the settle they
-  cite. `check_no_process_history` is hard (allow 0), and
-  `docs/testing.md` says all three comment checks are hard. No behaviour
-  change.
+  brace; `svr_iters.c:61-62` corrects an off-by-two cite. The
+  `diffsend` header lists its 111 cases.
+- **all.** Every `# Errors` section under `crates/*/src` (446) names the
+  variants its function can return and the condition behind each, with
+  no family word and no "Returns …"; errors a body cannot produce are
+  dropped and missing ones added, and a function that cannot fail says
+  "None:".
+- **all.** No process history is left in `crates/` comments: the merged
+  test headers say what each file pins, and the settle three test files
+  cite has a `docs/testing.md` pointer instead of a `working/` path.
 - **kdc.** `PrincipalStore::new` and a `docs/security.md` row state that
   the store exits the process instead of storing a predictable domain
   SID: when `getrandom` fails, its twelve bytes are all zero, or the SID
-  equals the dummy domain SID. No behaviour change.
+  equals the dummy domain SID.
 - **log.** `krb5_log::events` gains `CLIENT_TGS`, `CLIENT_PKINIT`,
   `CLIENT_FAST`, `KDC_LOOKASIDE_FULL`, `KDC_PKINIT` and
-  `KDC_AUTHDATA_MODULE`, and the 18 library sites that wrote those event
-  strings as literals use the constants (same strings). A kdcauthdata
-  module error now logs `event=kdc.authdata.module` with
-  `correlation_id`, `component`, `outcome=error`, `module` and `error`;
-  it is not a `kdc.issue` line. Unit tests read the four schema fields
-  off a JSON subscriber for that event and for `crypto.string_to_key`.
-  `docs/logging.md` names the constants, the new event, and says
+  `KDC_AUTHDATA_MODULE`; the 18 library sites that wrote those strings
+  as literals use the constants (same strings). A kdcauthdata module
+  error logs `event=kdc.authdata.module` with `correlation_id`,
+  `component`, `outcome=error`, `module` and `error`; it is not a
+  `kdc.issue` line. Unit tests read the four schema fields off a JSON
+  subscriber for that event and for `crypto.string_to_key`.
+  `docs/logging.md` names the constants and the event, and says
   `target` is not part of the log contract.
-- **ci.** The `krb5-asn1`, `krb5-config`, `krb5-crypto` and `krb5-types`
-  crate docs carry twelve worked examples on pure entry points (DER
-  round-trips, profile parsing, the RFC 3962 string-to-key answers,
-  principal names, deltat and time parsing), and the CI test job runs
-  them with `cargo test --workspace --doc`.
 - **client.** `krb5-client` no longer prints. The key-expired banner
   reaches the caller through `KinitParams::key_exp_notice`, a
   `KeyExpNotice` callback called at the statement where the library
   printed, and `krb5-kinit` passes an `eprintln!`. Its stderr is
-  byte-equal to `0d5fa7f4`'s on every path: `rust-kpasswd-mit-gate.sh`
-  K1 (the change and the kinit succeed) and K2 (the ccache write fails
-  after the change), and `client-gate.sh` C1 (nothing listens on 464).
+  byte-equal to `0d5fa7f4`'s on every path the library printed:
+  `rust-kpasswd-mit-gate.sh` K1 (the change and the kinit succeed) and
+  K2 (the ccache write fails after the change), and `client-gate.sh`
+  C1 (nothing listens on 464).
 - **admin.** `krb5-admin` no longer prints. An RPC `serve_kadm5_conn`
   cannot handle ends the connection with an `io::Error` carrying a
   `Kadm5RpcError`, and `krb5-kadmind` prints `kadm5: <message>` only for

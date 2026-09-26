@@ -193,6 +193,10 @@ fn s4u2self_as_invalid_options(body: &krb5_types::KdcReqBody) -> bool {
         || body.kdc_options.bit(flag_bit::CNAME_IN_ADDL_TKT)
 }
 
+/// MIT `check_tgs_svc_policy` (`tgs_policy.c:209-213`): the service-policy checks run in
+/// `svc_pol_fns` order, and the first that fails is the error.
+/// That order is denied options, deny-all, required ticket flags, then the server's times, so a
+/// locked-out server is refused before its preauth requirement is looked at.
 pub(super) fn check_tgs_policy_flags(
     server: &Principal,
     body: &krb5_types::KdcReqBody,
