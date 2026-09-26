@@ -1518,10 +1518,10 @@ fn push_hop(out: &mut Vec<String>, hop: String) -> Result<(), TransitError> {
     Ok(())
 }
 
-/// MIT `rtree_hier_tree` (`walk_rtree.c:358-361`): a hierarchy that cannot be built returns
-/// the error and no tree.
-/// Two names of equal length add no hop unless they are the same name, and a domain hop is
-/// emitted only when the longer name ends with the shorter one.
+/// MIT `process_intermediates` (`chk_trans.c:45-135`): names of equal length must be the same
+/// name, and the longer name must extend the shorter one (a common X.500 prefix or a common
+/// domain suffix) before any intermediate realm is emitted.
+/// Two equal names add no hop; a mismatch is `BadIntermediates`, not an empty path.
 fn process_intermediates(n1: &str, n2: &str, out: &mut Vec<String>) -> Result<(), TransitError> {
     let (short, long) = if n1.len() > n2.len() {
         (n2, n1)

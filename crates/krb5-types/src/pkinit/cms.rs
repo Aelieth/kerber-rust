@@ -371,8 +371,8 @@ pub fn cms_extract_unsigned(der: &[u8]) -> Option<Vec<u8>> {
     unsigned_signeddata_econtent(der)
 }
 
-/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1668-1670`): a message type with no
-/// content OID produces no ContentInfo.
+/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2052-2063`): a SignedData with no
+/// SignerInfo is the anonymous case, and its content is read with no signature check.
 /// The encapsulated content is returned without checking a signer, so the bytes are not an
 /// authenticated pack.
 fn unsigned_signeddata_econtent(der: &[u8]) -> Option<Vec<u8>> {
@@ -659,8 +659,8 @@ struct TbsWalk<'a> {
     extensions: Option<&'a [u8]>,
 }
 
-/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1668-1670`): a content type that is not
-/// recognized produces no object.
+/// Locate the issuer, validity, subject and extensions of a DER certificate. MIT has no walker of
+/// its own: its PKINIT reads these fields through OpenSSL.
 /// A certificate that is not a sequence yields no issuer or validity, and an optional version is
 /// skipped rather than read as the serial.
 fn walk_tbs(cert: &[u8]) -> Option<TbsWalk<'_>> {
@@ -849,8 +849,8 @@ fn cert_pkinit_san(cert: &[u8]) -> Option<(String, Vec<String>)> {
     out
 }
 
-/// MIT `pkinit_client_cert_match` (`pkinit_matching.c:728-731`): a rule that does not parse leaves
-/// the certificate unmatched.
+/// MIT `pkinit_krb5_principal_name_data` (`asn1_k_encode.c:1360-1364`): KRB5PrincipalName is a
+/// SEQUENCE of `realm [0]` and `principalName [1]`, not RFC 4120's PrincipalName.
 /// A realm that is not a string, or a name that is not the principal-name tag, is not a principal.
 fn parse_krb5_principal_name(der: &[u8]) -> Option<(String, Vec<String>)> {
     let seq = if der.first() == Some(&0x30) {
@@ -974,8 +974,8 @@ struct CmsParts {
     e_content_type: Vec<u8>,
 }
 
-/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1668-1670`): a message type with no
-/// content OID produces no ContentInfo.
+/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2022-2028`): a received message that is
+/// not id-signedData is refused.
 /// A body that is not SignedData is not a certificate list or a set of signers.
 fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     let (tag, ci, _) = take_tlv(der).ok_or("cms")?;

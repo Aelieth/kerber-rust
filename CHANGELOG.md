@@ -127,6 +127,14 @@ this project uses semantic versioning once a crate is published.
   `ETYPE_WEAK` and ends with the public-surface line. The `cf2`, `prf`
   and `weak` headers say what is wiped and where the gate lives. No
   behaviour change.
+- **types.** The `fast` header says the TGS req-checksum covers the
+  PA-TGS-REQ AP-REQ and that armor rides on every armored AS request.
+  The `cammac` header separates AD-KDCIssued (usage 19) from the
+  CAMMAC verifier MAC (usage 64, RFC 7751). The long-function anchors
+  that named an unrelated MIT function now name the counterpart
+  (`process_intermediates`, `cms_signeddata_verify`, `verify_kdc_eku`,
+  the KRB5PrincipalName type), or say there is none. No behaviour
+  change.
 
 ### W3-S3.10 parameter structs
 

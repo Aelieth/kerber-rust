@@ -66,8 +66,8 @@ fn p256_cert(
     )
 }
 
-/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1685-1687`): a DER encode that fails is
-/// not a successful object.
+/// Build a P-256 certificate valid from `not_before` to `not_after`. MIT has no counterpart: its
+/// PKINIT reads certificates and never issues one.
 /// The certificate is returned only when the signature over the to-be-signed body is produced.
 #[expect(clippy::too_many_arguments, reason = "test CA, not a params struct")]
 fn p256_cert_window(
@@ -118,8 +118,8 @@ fn p256_cert_window(
     Some(tlv(0x30, &[tbs, alg_id, tlv(0x03, &sig_bit)].concat()))
 }
 
-/// MIT `cms_contentinfo_create` (`pkinit_crypto_openssl.c:1685-1687`): a DER encode that fails is
-/// not a successful object.
+/// MIT `verify_kdc_eku` (`pkinit_clnt.c:461-472`): unless EKU checking is off, the KDC
+/// certificate must pass `crypto_check_cert_eku` as a KDC certificate.
 /// A KDC certificate carries a krbtgt name in that realm and the KDC extended key usage, and a CA
 /// without key usage still carries basic constraints.
 fn cert_extensions(kind: CertKind, subject_cn: &str, realm: &str) -> Vec<u8> {

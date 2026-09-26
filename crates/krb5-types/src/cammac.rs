@@ -1,8 +1,10 @@
-//! AD-CAMMAC (RFC 4120 / MIT `cammac.asn1`).
+//! AD-KDCIssued (RFC 4120 §5.2.6.2) and AD-CAMMAC (RFC 7751; MIT
+//! `cammac.asn1`).
 //!
-//! `ad-checksum` is a keyed checksum over the DER of `elements`, key
-//! usage 19. `i-realm` and `i-sname` are absent when the issuer is the
-//! KDC itself.
+//! AD-KDCIssued's `ad-checksum` is a keyed checksum over the DER of
+//! `elements` with key usage 19, and its `i-realm` and `i-sname` are
+//! absent when the issuer is the KDC itself. A CAMMAC verifier's `mac` is
+//! a checksum over the DER of the CAMMAC `elements` with key usage 64.
 
 use rasn::prelude::*;
 
