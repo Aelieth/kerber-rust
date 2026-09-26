@@ -221,7 +221,6 @@ impl Acl {
         Self::default()
     }
 
-    /// Self-only: `acl_init(NULL)` → `KRB5_PLUGIN_NO_HANDLE`.
     /// MIT `acl_init` (`auth_acl.c:554-555`): a null ACL file returns
     /// `KRB5_PLUGIN_NO_HANDLE` before any file is read.
     #[must_use]

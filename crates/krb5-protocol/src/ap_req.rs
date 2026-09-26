@@ -22,8 +22,8 @@ use krb5_types::{
 use crate::error::Error;
 use crate::replay::{ReplayCache, ReplayKey};
 
-/// Clock-skew window in seconds that [`ApVerifyParams::single_key`] and
-/// `verify_init_creds` pass.
+/// Clock-skew window in seconds, passed by [`ApVerifyParams::single_key`], `verify_init_creds`,
+/// the GSS acceptor (`krb5-gss`) and the kpasswd listener (`krb5-admin`).
 pub const DEFAULT_SKEW: i64 = 300;
 
 /// Parameters for [`verify_ap_req`].

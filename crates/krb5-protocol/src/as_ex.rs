@@ -1235,7 +1235,7 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
     )
 }
 
-/// KDCOptions and optional `from` MIT would set.
+/// Computes the KDCOptions and the optional `from` time that MIT would set for this request.
 /// MIT `krb5_init_creds_init` (`get_in_tkt.c:850-934`): the KDCOptions start from
 /// `kdc_default_options`, then add forwardable, proxiable and canonicalize as asked or
 /// configured, and ALLOW_POSTDATE | POSTDATED for a start time.

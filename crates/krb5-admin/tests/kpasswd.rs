@@ -1,7 +1,7 @@
+//! Admin whole-flow tests.
 //! The kpasswd acceptor pins the changepw service (`schpw.c` / MIT `krb5_rd_req` on the
 //! kadmin/changepw cred): a ticket whose sname is anything else (here `host/x`) is refused
 //! even when it decrypts under the changepw key, before the KRB-PRIV is read.
-//! Admin whole-flow tests.
 //! kpasswd stamps `kadmind@REALM` as the modifier.
 //! MIT `main` (`ovsec_kadmd.c:446-446`): the global handle is `kadm5_init(…, "kadmind", …)`.
 //! MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses that global handle.

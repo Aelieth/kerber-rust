@@ -234,6 +234,5 @@ pub(super) const AT_PW_POLICY_SWITCH: u32 = 17;
 pub(super) const AT_PW_HIST_KVNO: u32 = 18;
 pub(super) const AT_PW_HIST: u32 = 19;
 
-/// MIT `glob_to_regexp` EINVAL for a trailing backslash.
 /// MIT `glob_to_regexp` (`svr_iters.c:61-62`): a glob that ends in a backslash is EINVAL.
 pub(super) const EINVAL: u32 = 22;
