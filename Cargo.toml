@@ -46,7 +46,7 @@ cmac = "0.7"
 des = "0.8"
 getrandom = "0.2"
 hmac = "0.12"
-md-5 = "0.10"
+md-5 = "0.11"
 md4 = "0.10"
 nix = { version = "0.31", default-features = false, features = ["user"] }
 num-bigint = { version = "0.4", default-features = false, features = ["std"] }
