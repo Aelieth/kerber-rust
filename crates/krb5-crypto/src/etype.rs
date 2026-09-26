@@ -117,7 +117,8 @@ impl EncryptionType {
         matches!(self, Self::Des3CbcSha1 | Self::Rc4Hmac)
     }
 
-    /// DES3, RC4, and Camellia are behind `allow_weak_crypto`.
+    /// DES3, RC4, and Camellia: the etypes [`Self::from_iana`] refuses and
+    /// [`Self::from_iana_policy`] admits only with `allow_weak`.
     #[must_use]
     pub const fn is_weak(self) -> bool {
         matches!(

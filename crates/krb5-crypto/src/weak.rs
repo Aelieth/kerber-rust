@@ -1,7 +1,9 @@
-//! Legacy / AD enctypes (16, 23, 25, 26) used only when `allow_weak_crypto`.
+//! Legacy / AD enctypes 16, 23, 25, and 26.
 //!
-//! The etype gate refuses these while the flag is off. This module does
-//! not repeat that check. RC4 string-to-key is MD4 of the UTF-16LE
+//! This module applies no policy. The weak-etype gate lives only in
+//! `EncryptionType::from_iana` and `from_iana_policy`; an etype admitted
+//! through `EncryptionType::known` reaches this code whatever
+//! `allow_weak_crypto` says. RC4 string-to-key is MD4 of the UTF-16LE
 //! password.
 
 use des::TdesEde3;

@@ -1,7 +1,9 @@
 //! RFC 6113 KRB-FX-CF2 and P-256 ECDH used by FAST, SPAKE, and PKINIT.
 //!
 //! CF2 is PRF+ of each key under its pepper, XOR, then random-to-key.
-//! The PRF+ buffer is zeroized after the key is built.
+//! The first PRF+ output, which holds the XOR, is wiped once the key is
+//! built. The second output and the blocks inside `prf_plus` are not
+//! wiped.
 
 use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::{Digest as Sha2Digest, Sha256};

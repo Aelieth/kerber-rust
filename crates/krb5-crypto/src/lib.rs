@@ -1,13 +1,19 @@
 //! Kerberos V5 encryption types (RFC 3961, 3962, 8009).
 //!
 //! Default profiles are etypes 17–20: string-to-key, key-usage derivation,
-//! AES-CTS, and keyed checksums. Etypes 16, 23, 25, and 26 exist only when
-//! `allow_weak_crypto` is set. SPAKE, MODP, CF2, and PRF+ sit beside those
-//! profiles. Long-term key material is zeroized on drop. There is no
-//! `unsafe` code.
+//! AES-CTS, and keyed checksums. Etypes 16, 23, 25, and 26 are implemented
+//! too. The only weak-etype gate is [`EncryptionType::from_iana_policy`]:
+//! it admits them only when its `allow_weak` argument is set, and
+//! [`EncryptionType::from_iana`] calls it with `allow_weak` off.
+//! [`EncryptionType::known`] admits them with no policy check. The gate is
+//! stricter than MIT, whose `allow_weak_crypto` gates only its
+//! `ETYPE_WEAK` enctypes.
+//! MIT `krb5int_enctypes_list` (`etypes.c:37-127`): `ETYPE_WEAK` marks only des3-cbc-raw and
+//! arcfour-hmac-exp; des3-cbc-sha1 and arcfour-hmac are deprecated, the camellia entries
+//! unflagged.
 //!
-//! The public surface is the names this root re-exports. Weak etypes are
-//! not part of the default profile.
+//! SPAKE, MODP, CF2, and PRF+ sit beside those profiles. Long-term key
+//! material is zeroized on drop. There is no `unsafe` code.
 //!
 //! # Profiles
 //!
@@ -21,6 +27,9 @@
 //! [`KeyUsage::from_rfc`] with usage 0 plus a cleartext `int16_LE` length
 //! prefix). PBKDF2 iteration count 0 (RFC 3962 = 2^32) is rejected as a
 //! local DoS control.
+//!
+//! The public surface is the names this root re-exports. Weak etypes are
+//! not part of the default profile.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

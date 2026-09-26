@@ -120,6 +120,13 @@ this project uses semantic versioning once a crate is published.
   wiped. `continue_preauth` builds its timestamp from the local clock
   unless a skew error gave the KDC's time. The crate header no longer
   claims encrypted challenge. No behaviour change.
+- **crypto.** The crate header names the one weak-etype gate:
+  `from_iana_policy` admits etypes 16, 23, 25 and 26 only with
+  `allow_weak`, `from_iana` calls it with the flag off, and `known`
+  admits them with no check. It says the gate is stricter than MIT's
+  `ETYPE_WEAK` and ends with the public-surface line. The `cf2`, `prf`
+  and `weak` headers say what is wiped and where the gate lives. No
+  behaviour change.
 
 ### W3-S3.10 parameter structs
 
