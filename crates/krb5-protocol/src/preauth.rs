@@ -1,8 +1,13 @@
-//! Client builders for FAST, SPAKE, and PKINIT padata.
+//! Client padata for FAST, SPAKE, PKINIT, and S4U, and the client checks
+//! on the KDC's reply.
 //!
-//! These functions build padata. They do not send it. The AS and TGS
+//! The builders make padata. They do not send it. The AS and TGS
 //! exchanges do. A builder that fails returns the error. It does not
-//! emit an empty padata list and continue.
+//! emit an empty padata list and continue. The verifiers
+//! (`verify_fast_finished`, `verify_req_enc_pa_rep`,
+//! `unwrap_fast_rep_checked`, `pkinit_reply_key`,
+//! `pkinit_reply_key_agile`, `verify_s4u2self_reply`) return an error for
+//! a reply that fails its check, so the exchange does not use it.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{

@@ -446,9 +446,12 @@ fn continue_from_hint(
     continue_preauth(req, keys, nonce, bound, etypes, err, skew_hint)
 }
 
-/// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1729`): the KDC time is what the next
-/// encrypted timestamp is built from. A skew error is retried once at that time, and an
-/// unsupported etype is retried once as aes256; any other error is not another guess.
+/// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1729`): the PREAUTH_REQUIRED error's stime
+/// sets the offset from which MIT builds the next encrypted timestamp.
+/// This function builds it at `skew_hint`, which is set only after a first-reply skew error, and
+/// otherwise from the local clock. A skew error is retried once at the KDC's time, and an
+/// unsupported etype is retried once with aes256 alone, a retry MIT's error branch does not
+/// have; any other error is not another guess.
 fn continue_preauth(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],

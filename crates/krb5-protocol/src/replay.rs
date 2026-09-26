@@ -1,8 +1,10 @@
 //! Bounded, time-windowed, thread-safe replay cache.
 //!
-//! A key already seen inside the window is a replay and is rejected.
-//! The map does not grow without a bound. Callers share it across
-//! threads. The lock is what makes that share one cache.
+//! A key already seen inside the window is a replay. The map holds at
+//! most `max_entries` keys (50,000 by default). When it is full, a new
+//! key evicts the oldest entry even if that entry is still inside the
+//! window, and the evicted key is then accepted again. A poisoned lock
+//! reads as a replay. Clones share one map.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};

@@ -111,6 +111,15 @@ this project uses semantic versioning once a crate is published.
   basenames carry a directory. The `diffsend` header lists its 111
   cases. Both anchor checks are hard; the process-tag allow follows the
   live count, 45. No behaviour change.
+- **protocol.** The crate header and the `tgs`, `replay`, `preauth`,
+  `ap_req`, `safe_priv`, and `chpw` headers state what the code does.
+  A TGS reply without PA-FX-FAST is accepted, as MIT accepts it. A
+  full replay cache evicts its oldest entry even inside the window.
+  The skew window is a required field. A received sequence number is
+  not checked against the peer's. Only the random subkey buffer is
+  wiped. `continue_preauth` builds its timestamp from the local clock
+  unless a skew error gave the KDC's time. The crate header no longer
+  claims encrypted challenge. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

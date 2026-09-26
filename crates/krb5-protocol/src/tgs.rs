@@ -1,8 +1,11 @@
 //! TGS-REQ / TGS-REP using an existing TGT.
 //!
-//! The request is built from an existing TGT. When the exchange is
-//! armored, the reply is not accepted until the FAST finished check
-//! passes.
+//! Every request is FAST-armored with the subkey armor key. A reply that
+//! carries PA-FX-FAST is not accepted until its finished checksum
+//! verifies, and its reply key is the strengthened subkey. A reply
+//! without PA-FX-FAST is accepted and decrypted under the subkey alone.
+//! MIT `krb5int_decode_tgs_rep` (`decode_kdc.c:64-67`): a TGS-REP without PA-FX-FAST is
+//! accepted the same way, its `KRB5_ERR_FAST_REQUIRED` ignored.
 
 use std::collections::BTreeMap;
 use std::time::Instant;

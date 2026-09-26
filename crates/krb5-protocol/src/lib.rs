@@ -1,13 +1,12 @@
 //! Kerberos V5 AS, TGS, AP, SAFE/PRIV/CRED exchanges (RFC 4120).
 //!
 //! Transport is UDP with TCP fallback. Preauthentication covers
-//! PA-ENC-TIMESTAMP / ETYPE-INFO2, encrypted challenge, FAST armor,
-//! SPAKE and PKINIT padata (`preauth`). Keytab (v1/v2) and the FILE, DIR,
-//! MEMORY and KCM ccaches live here so the KDC does not depend on the
-//! client crate; so do RFC 3244 password change (`chpw`),
-//! `krb5_verify_init_creds` (`vfy_increds`), the replay cache (`replay`),
-//! and the capture / differential tooling (`capture`, `diff`). There is no
-//! C FFI.
+//! PA-ENC-TIMESTAMP / ETYPE-INFO2, FAST armor, SPAKE and PKINIT padata
+//! (`preauth`). Keytab (v1/v2) and the FILE, DIR, MEMORY and KCM ccaches
+//! live here so the KDC does not depend on the client crate; so do RFC
+//! 3244 password change (`chpw`), `krb5_verify_init_creds`
+//! (`vfy_increds`), the replay cache (`replay`), and the capture /
+//! differential tooling (`capture`, `diff`). There is no C FFI.
 //!
 //! The public surface is the names this root re-exports. Child modules
 //! stay private.

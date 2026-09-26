@@ -1,8 +1,10 @@
 //! RFC 3244 kpasswd client (`chpw.c` / `gic_pwd.c` KEY_EXP).
 //!
-//! KEY_EXP is the expired-password path. The change is not finished
-//! until the AP-REP verifies. The generated subkey bytes are zeroized
-//! after the key is built.
+//! KEY_EXP is the expired-password path. A reply that is not a
+//! KRB-ERROR is not read until its AP-REP verifies, and a success code
+//! inside a KRB-ERROR is not accepted. The random subkey buffer is wiped
+//! once the key is built; the subkey copy in the authenticator and the
+//! authenticator DER are not wiped.
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, UdpSocket};

@@ -1,8 +1,10 @@
 //! AP-REQ construction (RFC 4120 §5.5.1) and service-side verification.
 //!
-//! The caller supplies the skew window. When it does not,
-//! `DEFAULT_SKEW` is 300 seconds. A ticket outside that window is not
-//! a successful verify.
+//! Every verify takes its skew window from `ApVerifyParams::skew`, a
+//! required field; `ApVerifyParams::single_key` and `verify_init_creds`
+//! pass `DEFAULT_SKEW`, 300 seconds. A ticket whose start (starttime,
+//! else authtime) or end lies outside that window, or an authenticator
+//! whose ctime does, is not a successful verify.
 
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -20,7 +22,8 @@ use krb5_types::{
 use crate::error::Error;
 use crate::replay::{ReplayCache, ReplayKey};
 
-/// Clock-skew window (seconds) used when the caller does not specify one.
+/// Clock-skew window in seconds that [`ApVerifyParams::single_key`] and
+/// `verify_init_creds` pass.
 pub const DEFAULT_SKEW: i64 = 300;
 
 /// Parameters for [`verify_ap_req`].

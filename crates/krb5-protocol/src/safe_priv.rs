@@ -1,8 +1,12 @@
 //! KRB-SAFE, KRB-PRIV, and KRB-CRED (RFC 4120 §5.6–5.8).
 //!
-//! SAFE and PRIV sequence numbers come from a process-global counter.
-//! A repeat is rejected by the replay cache, not by handing the same
-//! sequence out twice on purpose.
+//! Outgoing SAFE and PRIV sequence numbers come from two process-global
+//! counters that start at 1, wrap, and skip 0. The `unwrap_*` functions
+//! accept a received message only after its checksum or decryption
+//! succeeds, a timestamp it carries is within 300 seconds, and the replay
+//! cache has not seen it. A received sequence number must be present when
+//! the caller requires one. It is not compared with an expected remote
+//! sequence, which MIT `k5_privsafe_check_seqnum` does.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
