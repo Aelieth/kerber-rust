@@ -6,8 +6,7 @@
 //! MIT `verify_s4u2self_reply` (`s4u_creds.c:273-397`): fails closed — a reply 130 with a bad
 //! nonce, checksum or user is `KRB5_KDCREP_MODIFIED`.
 //! Live oracle: `client-differential-gate.sh` `MIT_kvno_U_tgs_padata`.
-//! `verify_s4u2self_reply` is new at the parent so a re-export inject
-//! does not compile; the live MIT `kvno -U` cell is the production oracle.
+//! The live MIT `kvno -U` cell is the production oracle.
 
 #[path = "common/mod.rs"]
 mod common;

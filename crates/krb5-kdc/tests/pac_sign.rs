@@ -1,5 +1,5 @@
-//! PAC shape at issue and verify.
-//! RODCIdentifier trailer on the server checksum.
+//! PAC shape at issue and verify, including the RODCIdentifier trailer on the server
+//! checksum.
 //! MIT `verify_pac_checksums` (`pac.c:557-569`): the privsvr checksum covers the server
 //! checksum buffer past its 4-byte type, a trailer included.
 //! PAC shape and placement rules MIT 1.22.2 applies at issue and verify time:
@@ -13,10 +13,8 @@
 //! alignment, or offset.
 //! MIT `k5_pac_locate_buffer` (`pac.c:137-147`): a buffer type present twice is `EINVAL`,
 //! and one that is absent is `ENOENT`.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
 
 use krb5_asn1::encode;
 use krb5_crypto::{

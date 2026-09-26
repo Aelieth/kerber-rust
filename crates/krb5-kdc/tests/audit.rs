@@ -1,6 +1,5 @@
-//! Audit record fields.
-//! `tkt_id`, TestAudit fields, and `ktypes2str`.
-//! F5 TGS audit seed + unknown-server stage. Compiles at `70de1ac`.
+//! Audit record fields: the issue log, `tkt_id`, the TestAudit field names, `ktypes2str`,
+//! and the TGS audit seed and unknown-server stage.
 
 use krb5_asn1::encode;
 use krb5_kdc::testrealm::TestAudit;

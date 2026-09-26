@@ -273,7 +273,7 @@ pub fn ret_code(databody: &[u8]) -> u32 {
     u32::from_be_bytes(databody[4..8].try_into().unwrap())
 }
 
-// Helpers moved from src/lib.rs in-src tests (S2.3).
+// Helpers the admin whole-flow tests share.
 
 pub fn changepw_as_ticket(
     store: &krb5_kdc::PrincipalStore,

@@ -2,9 +2,10 @@
 //!
 //! KRB-ERROR mask: `stime`/`susec`/`ctime`/`cusec`. `e_text` is compared.
 //! PREAUTH / MORE_PREAUTH / TYPED-DATA `e_data` is structural (type
-//! **multiset**; order stays item 15). Success nulls session key, times,
-//! `last_req`, both `enc_part.cipher`s, and PAC auth-data. Any other field
-//! difference is fail-red.
+//! **multiset**; `differential-gate.sh` pins the wire order through
+//! `kdc-padata-proxy.py`). Success nulls session key, times, `last_req`,
+//! both `enc_part.cipher`s, and PAC auth-data. Any other field difference
+//! is fail-red.
 
 use krb5_asn1::decode;
 use krb5_types::{
@@ -161,9 +162,9 @@ fn type_multiset(m: &MethodData) -> Vec<i32> {
 
 /// Structural METHOD-DATA / TYPED-DATA compare for 25/24/91/65 e_data.
 ///
-/// Both legs' padata type **multisets** must match (order is item 15). When
-/// FX-FAST (136) is present (hint list), FX-COOKIE is required. ETYPE-INFO2
-/// is required only when either leg listed it.
+/// Both legs' padata type **multisets** must match; the wire order is pinned by the
+/// differential gate's `kdc-padata-proxy.py`, not here. When FX-FAST (136) is present (hint
+/// list), FX-COOKIE is required. ETYPE-INFO2 is required only when either leg listed it.
 /// MIT `add_etype_info` (`kdc_preauth.c:776-778`): skips ETYPE-INFO2 when there is no client key.
 /// When both list it, the etype sets must be equal. ENC_TIMESTAMP agreement is implied by the
 /// multiset.

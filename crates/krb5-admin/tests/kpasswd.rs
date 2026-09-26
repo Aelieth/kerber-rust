@@ -1,19 +1,13 @@
-//! kpasswd acceptor pins the changepw service (`schpw.c` / MIT
-//! `krb5_rd_req` on the kadmin/changepw cred). Compiles at the parent
-//! `d6ae0c1` and fails there: the listener passed `expected_server: None`, so a
-//! ticket whose sname is anything else (here `host/x`) that still decrypts under
-//! the changepw key was accepted and drove a password change. At HEAD the
-//! sname mismatch is refused before the KRB-PRIV is ever read.
-//! Admin whole-flow tests moved from `src/lib.rs`.
-//! (a): kpasswd stamps `kadmind@REALM`.
+//! The kpasswd acceptor pins the changepw service (`schpw.c` / MIT `krb5_rd_req` on the
+//! kadmin/changepw cred): a ticket whose sname is anything else (here `host/x`) is refused
+//! even when it decrypts under the changepw key, before the KRB-PRIV is read.
+//! Admin whole-flow tests.
+//! kpasswd stamps `kadmind@REALM` as the modifier.
 //! MIT `main` (`ovsec_kadmd.c:446-446`): the global handle is `kadm5_init(…, "kadmind", …)`.
 //! MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses that global handle.
-//! Compiles at the parent: `handle_kpasswd_rfc3244` and
-//! `tl_mod_princ_name` already exist; the parent stamps the ticket client.
-//! kpasswd reloads before mutate (`write_store` house rule).
-//! Compiles at the parent: `handle_kpasswd_rfc3244`, `save_store` /
-//! `load_store`, and `persist_paths` already exist; the parent writes
-//! without `reload_if_stale()`.
+//! The modifier is that global handle's caller, not the ticket client.
+//! kpasswd reloads the store before it changes it (the `write_store` rule), so a change
+//! made by another process is kept.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -86,8 +80,8 @@ fn kpasswd_host_ticket_under_changepw_key_is_refused() {
     let shared = shared_dump(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
         .expect("handler returns a datagram");
-    // A refusal before processing is a framed KRB-ERROR: AP-REP length 0.
-    // The parent accepted the host/x ticket and replied with a real AP-REP.
+    // A refusal before processing is a framed KRB-ERROR: AP-REP length 0, not a
+    // real AP-REP for the host/x ticket.
     let ap_len = u16::from_be_bytes([rep[4], rep[5]]);
     assert_eq!(
         ap_len, 0,

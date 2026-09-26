@@ -2,8 +2,8 @@
 //! `validate_allowed_keysalts` at addpol/modpol.
 //! MIT `validate_allowed_keysalts` (`svr_policy.c:20-36`): a tab or a string that does not
 //! parse as key/salt tuples is `KADM5_BAD_KEYSALTS`.
-//! Compiles at the parent: `parse_policy_args` and `add_policy_ent` exist; the parent CLI
-//! rejects `bogus:normal` and a tab in the parser with a different text.
+//! An unknown key/salt name such as `bogus:normal` is stored as MIT stores it, and a tab
+//! is `KADM5_BAD_KEYSALTS` ("Invalid key/salt tuples").
 
 use krb5_admin::{AdminSession, PolicyArgs, parse_policy_args};
 use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};

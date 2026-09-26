@@ -1,10 +1,8 @@
-//! PAC UnsupportedChecksum wires 60 on non-retry exits.
-//! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! an unknown client's KRB-ERROR carries MIT's status word `CLIENT_NOT_FOUND` as `e_text`.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! TGS and AS error replies: a PAC `UnsupportedChecksum` goes out as 60 on the exits that
+//! do not retry, an unknown client's KRB-ERROR carries MIT's status word
+//! `CLIENT_NOT_FOUND` as `e_text`, and the gating negatives.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
 //! TGS KRB-ERROR omits `crealm` when `errpkt.client` is NULL.
 //! MIT `prepare_error_tgs` (`do_tgs_req.c:201-204`): `errpkt.client` is the header ticket's
 //! client, or NULL when there is no decrypted ticket.

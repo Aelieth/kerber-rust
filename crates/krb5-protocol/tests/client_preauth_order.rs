@@ -1,5 +1,5 @@
-//! after PREAUTH_REQUIRED, pick the first runnable mechanism in MIT `sort_krb5_padata_sequence`
-//! order.
+//! After PREAUTH_REQUIRED the client picks the first runnable mechanism in MIT
+//! `sort_krb5_padata_sequence` order.
 //! MIT `sort_krb5_padata_sequence` (`get_in_tkt.c:400-471`): default preferred is
 //! `17, 16, 15, 14`; the remainder keeps hint order, so advertised 151 is tried before 2.
 //! MIT `process_pa_data` (`preauth2.c:649-713`): picks the first runnable real mechanism in list

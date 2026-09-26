@@ -1382,8 +1382,8 @@ fn run() -> Result<(), String> {
     // reached only after preauth.
     // MIT `validate_as_request` (`kdc_util.c:727-727`): tests AS_INVALID_OPTIONS only and
     // lets the bit through, unlike the TGS-only options in as-invalid-opts.
-    // Both legs send code 13 with the same wire status. An early refusal of the bit as
-    // "INVALID AS OPTIONS", so the e_text diverged from MIT here.
+    // Both legs send code 13 with the same wire status; refusing the bit early as
+    // "INVALID AS OPTIONS" would send an e_text MIT does not.
     let pa_anon = pa_enc_timestamp(&ukey).map_err(|e| e.to_string())?;
     let mut anon =
         as_req(user.clone(), realm, 0x1000_0013, Some(vec![pa_anon])).map_err(|e| e.to_string())?;
@@ -1568,7 +1568,7 @@ fn run() -> Result<(), String> {
         true,
     )?;
 
-    // AS FAST AP-REQ armor without authenticator subkey.
+    // An AS FAST armor AP-REQ without an authenticator subkey.
     // MIT `armor_ap_request` (`fast_util.c:70-77`): no subkey → 12 FIND_FAST. MIT clients
     // always send a subkey, so this forge is the both-legs oracle.
     let armor_tkt = mint_tgt(
@@ -1602,7 +1602,7 @@ fn run() -> Result<(), String> {
         err::POLICY,
     )?;
 
-    // header ticket or authenticator carrying AD-FX-ARMOR 71.
+    // A header ticket or authenticator carrying AD-FX-ARMOR 71.
     // MIT `kdc_process_tgs_req` (`kdc_util.c:217-229`): "ticket valid only as FAST armor" →
     // 12 PROCESS_TGS. Nothing in 1.22.2 emits 71.
     let inner_ad = encode(&vec![AuthorizationDataValue {

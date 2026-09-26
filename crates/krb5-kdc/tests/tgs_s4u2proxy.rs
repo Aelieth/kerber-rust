@@ -1,10 +1,8 @@
-//! S4U2Proxy constraint and policy statuses.
-//! S4U2Proxy identity, PAC client info, cross-realm gather.
-//! realm-aware RBCD ACL; create_host seeds no s4u_allowed_from.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! S4U2Proxy: the constraint and policy statuses, the identity and PAC client info, the
+//! cross-realm gather, the realm-aware RBCD ACL, and `create_host` seeding no
+//! `s4u_allowed_from`.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
 
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::{

@@ -1,21 +1,17 @@
-//! FAST armor and hide-client-names.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
-//! Old-kvno cookie arm: a cookie minted under krbtgt kvno N still opens
-//! after a keepold rollover.
+//! FAST armor and hide-client-names on the AS path.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
+//! A cookie minted under krbtgt kvno N still opens after a keepold rollover.
 //! MIT `kdc_fast_read_cookie` (`fast_util.c:545-611`): the cookie opens under the krbtgt key
 //! of the kvno it carries, which the Rust side finds with `first_key_at_kvno`.
-//! FAST armor-TGT decrypt is MIT `krb5_ktkdb_get_entry`.
+//! The armor TGT is decrypted with the key MIT `krb5_ktkdb_get_entry` would find.
 //! MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:157-157`): `krb5_dbe_find_enctype(entry,
 //! xrealm ? etype : -1, -1, kvno)` pins the ticket kvno and skips non-permitted enctypes;
 //! a local TGS whose first permitted key is not similar to the ticket etype is
 //! `KRB5_KDB_NO_PERMITTED_KEY`.
 //! MIT `armor_ap_request` (`fast_util.c:52-59`): `krb5_rd_req` hands the armor's
 //! `KRB5_KDB_NO_PERMITTED_KEY` back, and it goes out as wire 60 `FIND_FAST`
-//! (`errcode_to_protocol`). Compiles at the parent and fails there:
-//! `armor_key_from_ap` iterated every krbtgt key unfiltered.
+//! (`errcode_to_protocol`); no other krbtgt key is tried.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
@@ -525,7 +521,7 @@ fn fast_hide_client_names_returns_the_anonymous_outer_client() {
     // MIT `finish_process_as_req` (`do_as_req.c:324-324`): such a request is answered with
     // the anonymous principal WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS as the outer reply
     // client; the real client stays inside the FAST-armored reply, which still strengthens
-    // and finishes. Earlier, the KDC refused the option as UNKNOWN_CRITICAL_FAST_OPTION.
+    // and finishes. The option is not refused as UNKNOWN_CRITICAL_FAST_OPTION.
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();

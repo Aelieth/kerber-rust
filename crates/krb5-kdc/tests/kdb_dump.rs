@@ -2,7 +2,7 @@
 //!
 //! Drives the shipped codec on the committed 1.22.2 golden (not a
 //! reimplementation, not hardcoded key bytes).
-//! `KRB5_TL_DB_ARGS` is rejected at put.
+//! A put that carries `KRB5_TL_DB_ARGS` is refused.
 //! MIT `extract_db_args_from_tl_data` (`kdb5.c:893-945`): the `KRB5_TL_DB_ARGS` records are
 //! pulled out of the entry as the put's `db_args`, and one without a trailing NUL is `EINVAL`.
 //! MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): DB2 refuses any `db_args` with `EINVAL`.

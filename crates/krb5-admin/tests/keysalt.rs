@@ -2,20 +2,17 @@
 //! (`apply_keysalt_policy`).
 //! MIT `kadm5_create_principal_3` (`svr_principal.c:444-447`): the requested `ks_tuple` goes
 //! through `apply_keysalt_policy` against the policy's `allowed_keysalts`.
-//! Compiles at the parent: CREATE_PRINCIPAL3 already parses the array (and skips it) and
-//! `create_principal_3_in` already accepts an etype slice — the parent passes `&[]`, so `-e`
-//! is ignored and a tuple outside `allowed_keysalts` is accepted.
-//! (d): `kadm5_chpass_principal_3` / `kadm5_randkey_principal_3`
-//! honour the v3 `ks_tuple`.
+//! The requested tuple is the only key the create writes, and a tuple outside
+//! `allowed_keysalts` is `KADM5_BAD_KEYSALTS`.
+//! `kadm5_chpass_principal_3` and `kadm5_randkey_principal_3` honour the v3 `ks_tuple` the
+//! same way.
 //! MIT `kadm5_chpass_principal_3` (`svr_principal.c:1259-1259`): the requested `ks_tuple`
 //! goes through `apply_keysalt_policy` with the entry's policy.
 //! MIT `kadm5_randkey_principal_3` (`svr_principal.c:1425-1425`): the requested `ks_tuple`
 //! goes through `apply_keysalt_policy` with the entry's policy.
-//! Compiles at the parent: CHPASS3/CHRAND3 already exist and skip the array, so `-e` is
-//! ignored and an unknown etype is not `KADM5_BAD_KEYSALTS`.
-//! v3 `ks_tuple` uses MIT `ETYPE_WEAK` (`is_mit_weak`), not the
-//! house `is_weak` set. Source pin so the inject compiles at the parent
-//! (`key_salt_tuples` already exists) and still fails.
+//! On those two procedures an unknown etype is `KADM5_BAD_KEYSALTS`.
+//! The v3 `ks_tuple` filter drops only MIT's `ETYPE_WEAK` types (`is_mit_weak`), not this
+//! crate's wider `is_weak` set.
 
 #[path = "common/mod.rs"]
 mod common;

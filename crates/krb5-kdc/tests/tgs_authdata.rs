@@ -1,7 +1,7 @@
-//! `handle_authdata` copy / filter / mandatory.
-//! require_auth, CAMMAC extract, GET_AUTH_INDICATORS.
-//! PAC at index 0, greet KDC-ISSUED, ku-5 body AD.
-//! unkeyed CAMMAC KDC verifier is skipped.
+//! TGS authorization data: `handle_authdata`'s copy, filter and mandatory checks,
+//! `require_auth`, CAMMAC extraction, `GET_AUTH_INDICATORS`, the PAC at index 0, the greet
+//! module's KDC-issued element, body AD under key usage 5, and a CAMMAC KDC verifier with an
+//! unkeyed checksum skipped.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{

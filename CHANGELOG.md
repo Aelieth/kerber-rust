@@ -163,6 +163,15 @@ this project uses semantic versioning once a crate is published.
   that cannot fail says so. Two summary lines the pass found wrong
   (`exchange_with_failover`'s UDP waits, `to_bytes`) are fixed. No
   behaviour change.
+- **all.** The fragments the tag removal left are sentences again: the
+  merged test headers under `crates/*/tests` say what each file pins,
+  with every MIT anchor kept, and the "Compiles at the parent" notes,
+  `Z8 leftover`, `F4` / `F5`, `B2`, `(S2.3)`, `item 15` and the "the
+  parent did X" asides are gone or restated as the invariant. The three
+  `working/` paths become a `docs/testing.md` pointer to the settle they
+  cite. `check_no_process_history` is hard (allow 0), and
+  `docs/testing.md` says all three comment checks are hard. No behaviour
+  change.
 
 ### W3-S3.10 parameter structs
 

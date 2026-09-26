@@ -1,8 +1,8 @@
-//! TGS gather order, `is_crossrealm`, constraints skeleton, header PAC.
-//! PAC shape on the shipped issue path.
-//! TGS constraint slots before svc policy; rd_req times after BADMATCH/BADADDR.
-//! Remaining `GET_LOCAL_TGT` sites (`ad.rs` S4U2Proxy PAC) wire 60,
-//! and `kdc_rd_ap_req` kvno 0 decrypts the previous kvno.
+//! TGS gather order: `is_crossrealm`, the constraint skeleton and its slots before the
+//! service policy, the header PAC and PAC shape on the shipped issue path, and the rd_req
+//! times after BADMATCH / BADADDR.
+//! The remaining `GET_LOCAL_TGT` sites (the S4U2Proxy PAC in `ad.rs`) go out as 60, and a
+//! kvno-0 header ticket in `kdc_rd_ap_req` decrypts under the previous kvno.
 //! MIT `kdc_rd_ap_req` (`kdc_util.c:325-346`): a kvno-0 ticket that fails to decrypt is
 //! retried with the previous kvno's key.
 

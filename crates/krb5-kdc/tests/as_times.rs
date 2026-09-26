@@ -1,21 +1,17 @@
-//! S4U `t->client`, signed `ts_delta`, `check_tgs_svc_time` slot.
-//! Ticket lifetime when `max_life` is unset.
-//! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! unset `kdc.conf` `max_life` is `params.max_life` = 24 h.
+//! AS ticket times: `from` / `till` / `rtime`, postdating, the key-expiry field, the realm
+//! lifetime defaults, and the kadmin service lifetimes.
+//! When `kdc.conf` sets no `max_life`, `params.max_life` is 24 h.
 //! MIT `kadm5_get_config_params` (`alt_prof.c:574-575`): the `max_life` default is
-//! `GET_DELTAT_PARAM(…, 24 * 60 * 60)`. Compiles at the parent: create already takes
-//! `Policy::max_life` / `KdcConf::max_life`; the parent defaults both to 10 h.
-//! Lifetime defaults. Previously:
-//! omitted `max_renewable_life` still fed the create field (0) into the
-//! KDC issue cap, `synthesize_km` hard-coded 10 h / 7 d, and `as_ex`
-//! `till` fell back to 10 h. Do not name `realm_max_renewable_life` here.
-//! Z8 leftover: `add_admin_princ` sets `KADM5_MAX_LIFE`.
+//! `GET_DELTAT_PARAM(…, 24 * 60 * 60)`. The store's `Policy::max_life` and
+//! `KdcConf::max_life` default to it too.
+//! An omitted `max_renewable_life` is not fed into the KDC issue cap as 0, the K/M record
+//! uses the realm lifetimes, and the client `till` defaults to one day.
+//! `add_admin_princ` sets `KADM5_MAX_LIFE`.
 //! MIT `ADMIN_LIFETIME` (`kadm5_create.c:54-54`): the 3 h `max_life` of `kadmin/admin`.
 //! MIT `CHANGEPW_LIFETIME` (`kadm5_create.c:55-55`): the 5 min `max_life` of `kadmin/changepw`.
 //! MIT `add_admin_princ` (`kadm5_create.c:207-213`): a nonzero lifetime is written as
-//! `max_life` with `KADM5_MAX_LIFE` in the mask. Compiles at the parent:
-//! `bootstrap_documented` and the kadmin names exist; the parent
-//! leaves `params.max_life` (24 h).
+//! `max_life` with `KADM5_MAX_LIFE` in the mask, so the kadmin principals do not take
+//! `params.max_life`.
 
 #[path = "common/mod.rs"]
 mod common;

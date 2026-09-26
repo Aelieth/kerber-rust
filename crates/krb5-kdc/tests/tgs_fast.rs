@@ -1,9 +1,7 @@
-//! TGS FAST_REQUIRED swallow + empty-groups stray PA-SPAKE skip.
-//! TGS FAST armor.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! TGS FAST armor, the TGS FAST_REQUIRED swallow, and a stray PA-SPAKE skipped when no
+//! groups are configured.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{

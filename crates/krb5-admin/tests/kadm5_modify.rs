@@ -4,15 +4,17 @@
 //! `KADM5_BAD_TL_TYPE` before the entry is read.
 //! MIT `kadm5_modify_principal` (`svr_principal.c:671-675`): a non-zero fail_auth_count is
 //! `KADM5_BAD_SERVER_PARAMS` before the store write.
-//! `KADM5_BAD_MASK`, int16 TL types, create-path TL guard.
+//! A bad create or modify mask is `KADM5_BAD_MASK`, and a TL type must decode as an int16
+//! on both paths.
 //! MIT `kadm5_create_principal_3` (`svr_principal.c:310-326`): a NULL entry is EINVAL and a
 //! bad create mask is `KADM5_BAD_MASK`.
 //! MIT `kadm5_modify_principal` (`svr_principal.c:565-580`): a NULL entry is EINVAL and a
 //! bad modify mask is `KADM5_BAD_MASK`.
 //! MIT `xdr_krb5_tl_data` (`kadm_rpc_xdr.c:349-349`): a TL type that does not decode as an
 //! int16 fails the decode.
-//! ACL before mask on an existing principal; `KEY_DATA`+`n_key_data`;
-//! `0x7fff` is EINVAL 22. Lookup-before-ACL is the GET-before-ACL tests below.
+//! On an existing principal the ACL is checked before the mask; a `KEY_DATA` mask with a
+//! key count is `KADM5_BAD_MASK`; a DB-args TL (`0x7fff`) is EINVAL 22 and changes nothing;
+//! a missing principal is `KADM5_UNK_PRINC` before the ACL, because the GET runs first.
 //! MIT `stub_setup` GETs the principal before ACL or mask on modify.
 //! kadm5 modify honours `KADM5_MAX_RLIFE`.
 //! MIT `kadm5_modify_principal` (`svr_principal.c:642-643`): `KADM5_MAX_RLIFE` sets the
@@ -21,8 +23,8 @@
 //! MIT `kadmin_getprinc` (`kadmin.c:1476-1476`): `mod_name` is unparsed for display.
 //! MIT `krb5_dbe_lookup_mod_princ_data` (`kdb5.c:1637-1663`): the mod principal is parsed
 //! from `KRB5_TL_MOD_PRINC` after its 4-byte time.
-//! Compiles at the parent: CREATE and GET already exist; the parent hard-codes
-//! `kadmin/admin@REALM` on the wire regardless of the GSS client.
+//! The mod name `GET_PRINCIPAL` returns is the RPC caller's GSS name, never a fixed
+//! `kadmin/admin@REALM`.
 
 #[path = "common/mod.rs"]
 mod common;

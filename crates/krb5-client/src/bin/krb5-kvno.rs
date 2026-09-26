@@ -9,8 +9,9 @@
 //! `renew-gate.sh`). `-U <user>` sends PA-FOR-USER with `body.realm` of the
 //! presented TGT (single request; no S4U referral walk). MIT `kvno -U` also
 //! requires the ccache principal to equal the service; this binary does not,
-//! so a user TGT can present the mismatch cell. `-P` after `-U` is
-//! S4U2Proxy (`s4u_creds.c` `krb5_get_credentials_for_proxy`).
+//! so a user TGT can send the S4U2Self request that `s4u-mit-gate.sh` expects
+//! both KDCs to refuse with 36. `-P` after `-U` is S4U2Proxy (`s4u_creds.c`
+//! `krb5_get_credentials_for_proxy`).
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

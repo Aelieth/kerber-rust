@@ -519,9 +519,9 @@ fn handle_kpasswd_from(
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // House rule (`kadm5/dispatch.rs` `write_store`): reload then mutate then
-        // save. `AdminSession::change_password` did this; the inline
-        // path skipped it and could save over a `kadmin.local` write.
+        // House rule (`kadm5/dispatch.rs` `write_store`): reload, then mutate, then
+        // save, as `AdminSession::change_password` does, so this path cannot save
+        // over a `kadmin.local` write.
         // MIT `main` (`ovsec_kadmd.c:446-446`): the global handle comes from
         // `kadm5_init(…, "kadmind", …)`.
         // MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses the global handle,

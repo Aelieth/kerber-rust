@@ -14,9 +14,9 @@
 //! the request before the create.
 //! MIT `modify_principal_2_svc` (`server_stubs.c:630-630`): `stub_auth_restrict` runs on the
 //! request before the modify.
-//! Compiles at `b50d6bf` (parent-red): every assertion here is on the stored entry through the
-//! RPC path, which the parent accepted while silently dropping the fields.
-//! Create reserved TL (already covered) and the dump TL width.
+//! Every assertion is on the stored entry read back through the RPC path, so a field the
+//! server accepts and then drops fails. A reserved TL type on create writes nothing, and a
+//! dump carries no TL type at or above 0x10000.
 
 #[path = "common/mod.rs"]
 mod common;

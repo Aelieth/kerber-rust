@@ -2,7 +2,7 @@
 
 use super::*;
 
-/// a store-level `AclDenied` takes the stub's own
+/// A store-level `AclDenied` takes the stub's own
 /// `KADM5_AUTH_*` (`server_stubs.c`), not `KADM5_AUTH_GET` for every op.
 #[test]
 fn store_acl_denied_is_the_stubs_auth_code() {

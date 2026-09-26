@@ -1,4 +1,5 @@
-//! TestPolicy, profile `supported_enctypes`, and TGS key expiry.
+//! The TestPolicy kdcpolicy module, the profile `supported_enctypes` order, and the TGS
+//! key-expiry field.
 
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{KeyUsage, decrypt};

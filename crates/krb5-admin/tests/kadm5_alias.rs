@@ -1,6 +1,6 @@
 //! kadmind `CREATE_ALIAS` (proc 27) like `create_alias_2_svc` over `acl_addalias`, with the
-//! ACL matrix of MIT `tests/t_kadmin_acl.py` and the codes settled in
-//! `working/logs/audit-polish-0902/w1k/m3a-settle-mit-alias.log` §D.
+//! ACL matrix of MIT `tests/t_kadmin_acl.py` and the result codes MIT 1.22.2 returned in a
+//! live settle (`docs/testing.md` lists the settles unit tests pin).
 //! MIT `create_alias_2_svc` (`server_stubs.c:1727-1758`): a changepw ticket or an ACL denial
 //! is `KADM5_AUTH_INSUFFICIENT`; there is no lockdown check.
 //! MIT `acl_addalias` (`auth_acl.c:723-734`): the caller needs add on the alias without

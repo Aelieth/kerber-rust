@@ -9,8 +9,7 @@
 //! `GSSAPI_INIT` arg-version switch: versions 1 and 2 are answered with `call_res.version` 1
 //! (the OpenVision compat downgrade), 3 and 4 are echoed, anything else is `AUTH_BADCRED`
 //! before the token is looked at.
-//! Compiles at `59c363b` (parent-red): the parent echoed every version and
-//! answered version 5 with an accepted `init_res`.
+//! Version 5 is `AUTH_BADCRED`, not an accepted `init_res`.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -516,7 +515,7 @@ fn init_arg_version_2_is_answered_with_version_1() {
     assert_eq!(accepted_res_version(&reply_words(4)), 4);
     assert_eq!(accepted_res_version(&reply_words(3)), 3);
     // … 1 and 2 are the OpenVision protocol and get `call_res.version = 1`
-    // (`:328-331`); the parent echoed 2.
+    // (`:328-331`), so 2 is not echoed.
     assert_eq!(accepted_res_version(&reply_words(2)), 1);
     assert_eq!(accepted_res_version(&reply_words(1)), 1);
 }
@@ -524,7 +523,7 @@ fn init_arg_version_2_is_answered_with_version_1() {
 #[test]
 fn init_arg_version_5_is_auth_badcred() {
     // `:337-341` default: "unsupported GSSAPI_INIT version" → AUTH_BADCRED,
-    // an RPC MSG_DENIED / AUTH_ERROR; the parent accepted it and echoed 5.
+    // an RPC MSG_DENIED / AUTH_ERROR, never an accepted reply echoing 5.
     let w = reply_words(5);
     assert_eq!(
         &w[..5],

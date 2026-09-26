@@ -1,15 +1,13 @@
-//! U2U / second-ticket statuses.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
-//! `u2u_session` statuses.
+//! User-to-user and second-ticket statuses.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
+//! The `u2u_session` statuses follow MIT.
 //! MIT `decrypt_2ndtkt` (`do_tgs_req.c:250-307`): the second-ticket statuses are
 //! `2ND_TKT_SERVER`, `2ND_TKT_DECRYPT` and `2ND_TKT_PAC`, by the step that failed.
 //! MIT `find_server_key` (`kdc_util.c:420-450`): the key is looked up by enctype and kvno
 //! (`krb5_dbe_find_enctype`), and a key whose enctype is not similar is
 //! `KRB5_KDB_NO_PERMITTED_KEY`.
-//! U2U missing second-ticket server is 7 `2ND_TKT_SERVER`.
+//! A U2U second ticket whose server is missing is 7 `2ND_TKT_SERVER`.
 //! MIT `decrypt_2ndtkt` (`do_tgs_req.c:280-289`): a second-ticket server that
 //! `kdc_get_server_key(stkt)` cannot find is `2ND_TKT_SERVER`.
 

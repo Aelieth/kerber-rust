@@ -78,10 +78,9 @@ anchor's head, two anchors on one line, an anchor with no guarantee on
 its line, a guarantee that is empty, starts with punctuation, or says
 only "same check.", "MIT." or the symbol's name, and a basename that
 names more than one file under the MIT tree (`main.c`, `str_conv.c`,
-`auth.h`, …) without a directory. The check is advisory while
-`MIT_ANCHOR_ALLOW` equals the live count, and hard when that constant
-is 0. `check_mit_anchor_truth` (the `ledger-mit` job) proves that each
-anchor's range lies inside that definition.
+`auth.h`, …) without a directory. `MIT_ANCHOR_ALLOW` is 0, so the
+check is hard. `check_mit_anchor_truth` (the `ledger-mit` job) proves
+that each anchor's range lies inside that definition.
 
 `check_mit_anchor_truth` runs where `KERBER_MIT_SRC` names the MIT
 1.22.2 tree (the `ledger-mit` job) and resolves each anchor against a
@@ -100,8 +99,8 @@ a range past the closing brace, MIT test code (`t_*.c`, `tests/`) cited
 from product code, an unknown file, and a basename that names more than
 one file are red, and so is a rangeless file mention that does not name
 exactly one file. It lists every violation. The resolution is a port of
-the audit's reference resolver. `MIT_TRUTH_ALLOW` holds it advisory at
-the live count until the anchors are rewritten.
+the audit's reference resolver. `MIT_TRUTH_ALLOW` is 0, so the check is
+hard.
 
 `check_no_process_history` rejects a process tag on any comment line
 under `crates/` (block comments included): `R12`, `A′-3`, `W0e`,
@@ -109,9 +108,9 @@ under `crates/` (block comments included): `R12`, `A′-3`, `W0e`,
 `Y0`, `Z6.3`, a backticked seven- or eight-digit commit hash,
 `parent-red`, `Compiles at`, `item 15`, `S2.3`, `Z8 leftover`, a lone
 `B2` / `F4`, "the parent `…`", and a `working/` path. A tag inside a
-string literal is not a comment. The check is advisory while
-`PROCESS_TAG_ALLOW` equals the live count and hard at 0. Rule names
-(`R1`–`R4`) live in `docs/`, never in `crates/`.
+string literal is not a comment. `PROCESS_TAG_ALLOW` is 0, so the
+check is hard. Rule names (`R1`–`R4`) live in `docs/`, never in
+`crates/`.
 
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
 [--accept] [--params] [--split] [--glue] [--roots]` is the product-fn sibling:
@@ -381,6 +380,12 @@ Live settles use `scripts/lib/settle.sh <name> -- <command…>`
 (provenance, echoed command, `2>&1 | tee`; a `grep` of an existing
 file is refused). A dirty-tree bypass via `KERBER_SETTLE_ALLOW_DIRTY=1`
 prints `override=KERBER_SETTLE_ALLOW_DIRTY` into the artefact header.
+Three unit files pin answers from a settle that predates `settle.sh`: the
+kadmind `CREATE_ALIAS` ACL codes (`crates/krb5-admin/tests/kadm5_alias.rs`,
+§D), the GET_PRINCS glob (`kadm5_glob.rs`, §E), and the KDB alias texts and
+dump line (`crates/krb5-kdc/tests/kdb_alias.rs`, §A–§C) are MIT 1.22.2's
+output in
+`working/logs/audit-polish-0902/w1k/notes-unstamped/m3a-settle-mit-alias.log`.
 `scripts/ci-status.py --save SHA [--out DIR]` writes `ci-<sha>.txt` only
 from a **completed**, non-rate-limited run (retries with backoff; exit 2
 otherwise) and drops `title=fixture` / `probe-gate.sh` annotations from

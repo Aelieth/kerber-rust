@@ -1,14 +1,10 @@
-//! Host-based referral and `domain_realm`.
-//! units that need `domain_realm` / host-based knobs.
-//! F4 hierarchical `find_alternate_tgs` / numeric host referral.
-//!
-//! These compile at `b749e73` and fail there: the walk reused transit
-//! intermediates, so `.skip(1)` dropped the hop MIT issues, `common == 0`
-//! walked nothing, a numeric host still took `[domain_realm]`, and
-//! `is_referral` compared name-type.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! Host-based referrals, `domain_realm`, the hierarchical `find_alternate_tgs` walk and
+//! numeric-host referrals.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
+//! The walk issues the near hop MIT issues, a zero common suffix still issues the
+//! organisational hop, a numeric host never takes `[domain_realm]`, and `is_referral` does
+//! not compare the name type.
 
 use krb5_crypto::{KeyUsage, decrypt};
 use krb5_kdc::testrealm::{

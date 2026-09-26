@@ -1,53 +1,45 @@
-//! hint-list order, EC outside FAST, enc_padata PAC-OPTIONS.
-//! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! AS preauthentication: the hint-list order, encrypted challenge outside FAST, PAC-OPTIONS
+//! in `enc_padata`, and the codes and e_data of the AS errors, with the ACL, issue and
+//! AP-REQ negatives beside them.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
 //! AS e_data-bearing errors carry PA-FX-COOKIE; PKINIT 65 is TYPED-DATA; FAST inner
 //! FX-ERROR has no e_data.
 //! MIT `prepare_error_as` (`do_as_req.c:785-814`): an error with e_data gets a PA-FX-COOKIE
 //! added, and typed e_data is encoded as TYPED-DATA.
 //! MIT `pkinit_server_get_flags` (`pkinit_srv.c:932-932`): PKINIT sets `PA_TYPED_E_DATA`.
 //! MIT `kdc_fast_handle_error` (`fast_util.c:384-386`): the inner FX-ERROR carries no e_data.
-//! every KDC long-term key lookup is MIT `krb5_dbe_find_enctype`.
+//! Every KDC long-term key lookup works like MIT `krb5_dbe_find_enctype`.
 //! MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:47-94`): the lookup never returns a key
 //! whose enctype is outside `permitted_enctypes` and, for the AS client key, looks only at
-//! the highest kvno. Compiles at the parent `77d8a48` and fails there: `first_current_key`
-//! / `key_for` took the first stored key regardless of `permitted_enctypes`
-//! and `key_for` reached down to older kvnos.
+//! the highest kvno.
 //! AS client/server lookup faults are labelled like MIT.
 //! MIT `process_as_req` (`do_as_req.c:577-607`): `CANTLOCK_DB` is 29 `SVC_UNAVAILABLE` on
 //! either lookup **with** the lookup's status word (`LOOKING_UP_CLIENT` /
 //! `LOOKING_UP_SERVER`), any other backend fault is 60 with the same
 //! words. No in-tree store fails a lookup; a `PrincipalRead` wrapper stands
-//! in for a backend that does. Compiles at `7a44ef8` (parent-red): the
-//! parent labelled a server-lookup fault `LOOKING_UP_CLIENT` (the catch-all
-//! arm). The CANTLOCK `e_text` matches MIT (`z6_lookup.rs`).
+//! in for a backend that does. A server-lookup fault is never labelled
+//! `LOOKING_UP_CLIENT`, and the CANTLOCK `e_text` matches MIT.
 //! MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): applied at the kdcpreauth module
 //! boundary (`finish_check_padata` `:1206`). A module failure whose code is not on the
 //! pass-through list reaches the client as 24 `PREAUTH_FAILED`.
 //! MIT `finish_preauth` (`do_as_req.c:442-442`): the status is `PREAUTH_FAILED` for every
-//! module failure. Compiles at `7a44ef8` (parent-red): the parent put each module's own code
-//! on the wire — 60 for both cells here — and CI 550-552 were red on `differential-gate.sh`
-//! `as-optimistic-encts-wrong-etype` because of the first one.
-//! the KRB-ERROR encoder applies MIT `errcode_to_protocol`.
+//! module failure, never the module's own code (`differential-gate.sh`
+//! `as-optimistic-encts-wrong-etype` exercises the first cell live).
+//! The KRB-ERROR encoder applies MIT `errcode_to_protocol`.
 //! MIT `errcode_to_protocol` (`kdc_util.c:691-697`): only 0..=128 is a protocol error-code,
 //! anything else goes out as `KRB_ERR_GENERIC` 60.
 //! MIT `prepare_error_as` (`do_as_req.c:804-804`): the AS KRB-ERROR's code goes through
 //! `errcode_to_protocol`.
 //! MIT `prepare_error_tgs` (`do_tgs_req.c:199-199`): the TGS KRB-ERROR's code goes through
 //! `errcode_to_protocol`. Reachable only through a `KdcPolicy` handing back a
-//! raw code (no in-tree path does). Compiles at `59c363b` (parent-red): the
-//! parent put the raw code on the wire.
+//! raw code (no in-tree path does).
 //! ENC-TS (2) / ENC-CHALLENGE (138) are advertised only when `have_client_keys` is true.
 //! MIT `have_client_keys` (`kdc_preauth.c:434-447`): true when there is a permitted key of
 //! a requested etype at the top kvno.
 //! MIT `spake_edata` (`spake_kdc.c:309-314`): SPAKE (151) uses the same condition via
-//! `client_keyblock`. Compiles at the parent and fails there: EncTsMod advertised 2
-//! whenever armor was absent, EncChallengeMod advertised 138 whenever the client had any
-//! key, SpakeMod advertised 151 whenever groups were configured, and a preauth-required
-//! client with no selected key was 14 `CANT_FIND_CLIENT_KEY` instead of 25.
+//! `client_keyblock`. A preauth-required client with no usable key gets 25, not 14
+//! `CANT_FIND_CLIENT_KEY`.
 //! AS lookup `CANTLOCK_DB` is 29 with MIT's status word, and `KRB5KDC_ERR_DISCARD`
 //! from a kdcpreauth module is passed through `filter_preauth_error` and suppresses the
 //! reply.
@@ -57,8 +49,8 @@
 //! pass-through list.
 //! MIT `finish_process_as_req` (`do_as_req.c:371-372`): a `KRB5KDC_ERR_DISCARD` builds no
 //! error reply.
-//! Compiles at the parent: CANTLOCK was 29 with no e_text, and DISCARD was
-//! rewritten to 24 `PREAUTH_FAILED`. Forge-only — no lockable KDB in tree.
+//! DISCARD is never rewritten to 24 `PREAUTH_FAILED`. Forge-only: no in-tree KDB can be
+//! locked.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -1357,8 +1349,8 @@ fn as_lookup_faults_are_labelled_like_do_as_req() {
         as_error(&client_id, backend_fault),
         (err::GENERIC, Some("LOOKING_UP_CLIENT".into()))
     );
-    // :604-606 — a server-lookup fault is 60 LOOKING_UP_SERVER (the parent
-    // said LOOKING_UP_CLIENT for every fault after the decode).
+    // :604-606 — a server-lookup fault is 60 LOOKING_UP_SERVER, not the
+    // LOOKING_UP_CLIENT of a client-lookup fault.
     assert_eq!(
         as_error(&tgs_id, backend_fault),
         (err::GENERIC, Some("LOOKING_UP_SERVER".into()))

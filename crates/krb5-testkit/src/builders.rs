@@ -2,7 +2,7 @@
 //!
 //! These wrap the protocol `as_req*` / `tgs_req_ex*` helpers so test
 //! sites share one type. Product `src/` and `diffsend` keep calling
-//! the protocol functions (S3 records the pub-surface move).
+//! the protocol functions.
 
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::TEST_REALM;

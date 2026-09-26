@@ -1,15 +1,12 @@
-//! `check_tgs_svc_reqd_flags` PRE_AUTH + `compute_ticket_times`.
-//! `max_renewable_life` 0, AS `PRE_AUTHENT`, `check_tgs_opts` order.
-//! S4U `t->client`, signed `ts_delta`, `check_tgs_svc_time` slot.
-//! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! the KDC's header-ticket time check is `krb5int_validate_times`
-//! too (`kdc_util.c` `kdc_rd_ap_req` → `krb5_rd_req_decoded_anyflag`).
+//! TGS ticket times: `check_tgs_svc_reqd_flags` PRE_AUTH, `compute_ticket_times`, the S4U
+//! client lifetime, renewal, and the header-ticket time check.
+//! The KDC's header-ticket time check is `krb5int_validate_times` too
+//! (`kdc_util.c` `kdc_rd_ap_req` → `krb5_rd_req_decoded_anyflag`).
 //! MIT `rd_req_decoded_opt` (`rd_req_dec.c:627-627`): the decoded AP-REQ's ticket times go
 //! through `krb5int_validate_times`.
 //! MIT `krb5int_validate_times` (`valid_times.c:44-51`): a TGT with no `starttime` is
-//! judged by its `authtime`. Compiles at the parent `284ec70` and fails there —
-//! `check_header_times_rd_req` only tested NYV when `starttime` was present, so
-//! a resealed TGT with a future `authtime` and no `starttime` was accepted.
+//! judged by its `authtime`, so a resealed TGT with a future `authtime` and no `starttime`
+//! is not yet valid.
 
 #[path = "common/mod.rs"]
 mod common;

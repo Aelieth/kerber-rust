@@ -1,7 +1,6 @@
-//! B2 `rd_req_dec.c`: acceptor key selection uses ticket kvno + etype
-//! (`try_one_princ` → `krb5_kt_get_entry(..., tkt_kvno, tkt_etype)`).
-//! These compile at `7e55747` and fail there: `want_kvno` was discarded
-//! and every key was tried.
+//! Acceptor key selection uses the ticket kvno and etype, like MIT `rd_req_dec.c`
+//! (`try_one_princ` → `krb5_kt_get_entry(..., tkt_kvno, tkt_etype)`): only the matching key
+//! is tried, never every key.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -339,9 +338,8 @@ fn invalid_flag_is_tkt_invalid() {
     });
     match accept(&raw, &key) {
         Err(krb5_protocol::Error::KrbError { code, .. }) => {
-            // 145 = MIT KRB5KRB_AP_ERR_TKT_INVALID (krb5_err.et offset). Literal
-            // so this inject file still compiles at the parent, where the
-            // `err::TKT_INVALID` constant does not exist. Parent returns 33.
+            // 145 = MIT KRB5KRB_AP_ERR_TKT_INVALID (krb5_err.et offset), not 33
+            // TKT_NYV.
             assert_eq!(code, 145, "KRB5KRB_AP_ERR_TKT_INVALID");
         }
         other => panic!("expected TKT_INVALID, got {other:?}"),

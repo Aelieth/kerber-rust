@@ -1,4 +1,4 @@
-//! ticket addresses and TGS sender bind.
+//! Ticket addresses and the TGS sender bind.
 
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, decrypt, encrypt};

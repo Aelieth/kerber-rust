@@ -1,10 +1,8 @@
-//! `max_renewable_life` 0, AS `PRE_AUTHENT`, `check_tgs_opts` order.
-//! PKINIT does not set `HW_AUTHENT`; RENEW uses signed header life.
-//! Gating tests: ACL allow/deny, AS/TGS issue, AP-REQ verify negatives.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! AS flag policy: a zero `max_renewable_life`, `PRE_AUTHENT` only after preauth, the
+//! `check_tgs_opts` order, `HW_AUTHENT` never set by PKINIT, and RENEW judged by the signed
+//! header lifetime.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
 
 #[path = "common/mod.rs"]
 mod common;
@@ -326,9 +324,8 @@ fn as_req_with_tgs_only_option_is_invalid_as_options() {
 fn as_request_reserved_option_bit_is_ignored_like_mit() {
     // MIT `validate_as_request` (`kdc_util.c:727-727`): the option test is AS_INVALID_OPTIONS
     // only; a reserved KDCOptions bit (RFC bit 17) is neither rejected nor acted on.
-    // Before this parity fix the Rust KDC refused any unknown bit as BADOPTION
-    // at validate, ahead of preauth. Now the bit passes validate, so a
-    // preauth-required client reaches PREAUTH_REQUIRED, not BADOPTION.
+    // The bit passes validate, so a preauth-required client reaches
+    // PREAUTH_REQUIRED, not BADOPTION.
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     or_attr(&mut store, &cname, KDB_REQUIRES_PRE_AUTH);

@@ -1,10 +1,8 @@
-//! SPAKE 91 e_data is module, ETYPE-INFO2, cookie.
-//! `verify_support` 24, PKINIT [16, 147], TGS FAST armor.
-//! TGS FAST_REQUIRED swallow + empty-groups stray PA-SPAKE skip.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! SPAKE preauthentication: the 91 e_data (module, ETYPE-INFO2, cookie), `verify_support`'s
+//! 24, the PKINIT hint `[16, 147]`, TGS FAST armor after a password AS, the TGS
+//! FAST_REQUIRED swallow, and a stray PA-SPAKE skipped when no groups are configured.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
 //! SPAKE 91 carries ETYPE-INFO2 when the client has not yet seen a cookie.
 //! MIT `maybe_add_etype_info2` (`kdc_preauth.c:1141-1170`): a 91 reply gets PA-ETYPE-INFO2
 //! only while the request carries no cookie.

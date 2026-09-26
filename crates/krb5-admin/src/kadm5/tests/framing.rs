@@ -4,11 +4,11 @@ use super::*;
 
 #[test]
 fn read_record_bounds_the_total_accumulated_size() {
-    // a pre-auth client that chains fragments without ever setting
+    // A pre-auth client that chains fragments without ever setting
     // LAST_FRAG must not accumulate unbounded memory. Two 600 KiB non-last
     // fragments sum to 1.2 MiB, over the 1 MiB total cap, so read_record
-    // errors on the second fragment (parent: no total cap -> it waits for
-    // more and hits EOF, a different error kind).
+    // errors on the second fragment instead of waiting for more and hitting
+    // EOF, a different error kind.
     use std::io::Write as _;
     use std::net::{TcpListener, TcpStream};
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();

@@ -221,7 +221,7 @@ fn etype_info2_requires_exact_etype_set() {
     let one = method_edata(&[18]);
     compare_preauth_e_data(Some(&one), Some(&one)).expect("equal etype sets pass");
 
-    // Rust listing every key (a superset) no longer passes.
+    // Rust listing every key (a superset) fails.
     let rust_super = method_edata(&[17, 18, 19, 20]);
     let mit_one = method_edata(&[18]);
     let err = compare_preauth_e_data(Some(&rust_super), Some(&mit_one))
@@ -355,8 +355,7 @@ fn ticket_flag_bit_differences_fail_red() {
         err.0
     );
 
-    // With no flag whitelist, the RENEWABLE bit is no
-    // longer masked; a renewable divergence must also fail red.
+    // No flag bit is masked, so a RENEWABLE divergence must also fail red.
     let (n_rep, mut n_enc, mut n_tkt) = sample_parts("user", 0xbb, 11);
     n_enc.flags = n_enc.flags.with_bit(flag_bit::RENEWABLE, true);
     n_tkt.flags = n_tkt.flags.with_bit(flag_bit::RENEWABLE, true);

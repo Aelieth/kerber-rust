@@ -11,8 +11,8 @@
 //! CANONICALIZE, else the requested name with the canonical realm.
 //! MIT `tgs_issue_ticket` (`do_tgs_req.c:1029-1029`): the TGS ticket's sname is the requested
 //! sname unless the reply is a referral.
-//! Texts and the dump line were settled live in
-//! `working/logs/audit-polish-0902/w1k/m3a-settle-mit-alias.log`.
+//! The texts and the dump line are the ones MIT 1.22.2 produced in a live settle
+//! (`docs/testing.md` lists the settles unit tests pin).
 
 use krb5_asn1::decode;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};

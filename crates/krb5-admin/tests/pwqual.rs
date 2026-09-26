@@ -1,5 +1,5 @@
 //! MIT built-in password-quality modules (`dict`, `empty`, `princ`)
-//! on kadm5 create and on chpass. Compiles at `370461b` (parent-red).
+//! on kadm5 create and on chpass.
 
 #[path = "common/mod.rs"]
 mod common;

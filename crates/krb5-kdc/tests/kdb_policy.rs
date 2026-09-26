@@ -1,5 +1,5 @@
 //! MIT built-in password-quality modules (`dict`, `empty`, `princ`)
-//! on create and on change. Compiles at `370461b` (parent-red).
+//! on create and on change.
 //! MIT 1.22.2 password history as the oracle. The fixture
 //! `tests/traces/kdb/mit-dump-v7-history.txt` is a `kdb5_util dump` after
 //! `addpol -history 3 hp`, `addprinc -pw s3cret1 -policy hp hpuser`,

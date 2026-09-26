@@ -6,9 +6,8 @@
 //! that error, unprompted.
 //! MIT `k5_kinit` (`kinit.c:785-790`): that password failure is "Password incorrect while
 //! getting initial credentials".
-//! Drives the shipped `krb5-kinit` against an in-process KDC. Compiles at `59c363b`
-//! (parent-red): the parent prompted for the new password before any changepw AS and
-//! matched the KDC error by text.
+//! Drives the shipped `krb5-kinit` against an in-process KDC: no new-password prompt comes
+//! before the changepw AS, and the KDC error is matched by its code, not its text.
 
 use std::io::{Read, Write};
 use std::net::{TcpListener, UdpSocket};

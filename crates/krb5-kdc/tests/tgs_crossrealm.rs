@@ -1,9 +1,7 @@
-//! incoming-trust principals and realm-aware TGS lookup.
-//! Capaths transited check on the shipped `issue_tgs` path.
-//! Phase 5–8 protocol tests: kpasswd, FAST, SPAKE, PKINIT, PAC, S4U, U2U.
-//!
-//! These call shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry
-//! points from a bootstrapped realm. They fail if those paths are type-only.
+//! Incoming-trust principals, realm-aware TGS lookup, and the capaths transited check on the
+//! shipped `issue_tgs` path.
+//! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
+//! bootstrapped realm.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};

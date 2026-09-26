@@ -1,5 +1,4 @@
-//! Anonymous AS requests.
-//! units that need the new `restrict_anon` / unsigned-AuthPack surface.
+//! Anonymous AS requests: `restrict_anon`, anonymous PKINIT, and the unsigned AuthPack.
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, p256_generate};
