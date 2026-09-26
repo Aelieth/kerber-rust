@@ -85,6 +85,13 @@ this project uses semantic versioning once a crate is published.
 - **ci.** `check_ci_no_workspace_cargo_test` lets the test job run
   `cargo test --workspace --doc` (nextest runs no doctests). Any other
   workspace `cargo test` is still red; fixtures pin both.
+- **ci.** `check_mit_anchor_form` v2: a mention (``MIT `X` ``) and a
+  rangeless file mention are legal; an anchor may name a type, macro,
+  table or error-table entry in a `.h`, `.hin`, `.et`, `.x` or `.y`
+  file. A line cite outside an anchor, two anchors on one line, an
+  empty or name-only guarantee, and an ambiguous MIT basename without
+  a directory are red. Block comments are scanned. Advisory at the
+  live count, 574.
 
 ### W3-S3.10 parameter structs
 

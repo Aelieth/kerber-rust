@@ -64,16 +64,24 @@ or `super::`. `--self-test` on the
 compare tools prints `self-test ok (N cases)`. There is no
 request-shape column (no canonical built-request form).
 
-`check_mit_anchor_form` (`scripts/ci-policy.py`) reads `//`, `///`, and
-`//!` comments under `crates/*/src` and `crates/*/tests`. A MIT anchor
-on those lines is one line, ``MIT `<c_function>` (`<file>.c:<a>-<b>`): <guarantee>``.
-A single source line is written `<a>-<a>`. The six older shapes are
-red: a backticked name with no file, a backticked `file.c` range or
-point with no name, a name plus a range with no guarantee, a bare
-`MIT file.c:N`, and a name plus a single point. The check is advisory
-while `MIT_ANCHOR_ALLOW` equals the live count, and hard when that
-constant is 0. Prose that does not cite a function or a `.c` / `.h`
-line is not an anchor.
+`check_mit_anchor_form` (`scripts/ci-policy.py`) reads every comment
+line under `crates/*/src` and `crates/*/tests`: `//`, `///`, `//!`, and
+each line of a `/* */`, `/** */` or `/*! */` block. A MIT anchor is one
+line, ``MIT `<symbol>` (`<path>:<a>-<b>`): <guarantee>``, where the
+symbol is a C function, or the type (`struct x`, `union x`, `enum x`),
+macro, table or error-table entry of a non-function anchor, and the path ends in `.c`, `.h`, `.hin`,
+`.et`, `.x` or `.y`. A single source line is written `<a>-<a>`. A
+mention, ``MIT `X` `` with no range, is legal, and so is a rangeless
+file mention (``(`gic_pwd.c`)``, a module header naming the MIT file it
+mirrors). Red: a `path.ext:N` or `path.ext:N-M` anywhere outside an
+anchor's head, two anchors on one line, an anchor with no guarantee on
+its line, a guarantee that is empty, starts with punctuation, or says
+only "same check.", "MIT." or the symbol's name, and a basename that
+names more than one file under the MIT tree (`main.c`, `str_conv.c`,
+`auth.h`, …) without a directory. The check is advisory while
+`MIT_ANCHOR_ALLOW` equals the live count, and hard when that constant
+is 0. `check_mit_anchor_truth` (the `ledger-mit` job) proves that each
+anchor's range lies inside that definition.
 
 `check_no_process_history` rejects a process tag on a `//` comment
 anywhere under `crates/`: `R12`, `A′-3`, `W0e`, `W1-Z`, `Round 2`,

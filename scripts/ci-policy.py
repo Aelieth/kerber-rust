@@ -3016,7 +3016,7 @@ HYGIENE_FN_DIFF_MIN_CASES = 142
 HYGIENE_INVENTORY_MIN_CASES = 3
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
-MIT_ANCHOR_ALLOW = 728
+MIT_ANCHOR_ALLOW = 574
 PROCESS_TAG_ALLOW = 0
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
@@ -6040,19 +6040,61 @@ jobs:
     try:
         src = anchor_root / "crates" / "demo" / "src"
         src.mkdir(parents=True)
+        tests_dir = anchor_root / "crates" / "demo" / "tests"
+        tests_dir.mkdir(parents=True)
         good = src / "lib.rs"
-        good.write_text(
-            '/// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n',
-            encoding="utf-8",
-        )
+        in_tests = tests_dir / "t.rs"
+        in_tests.write_text("", encoding="utf-8")
+        accepted = {
+            "fn-anchor": "/// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n",
+            "line-comment": "// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n",
+            "inner-doc": "//! MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n",
+            "block": "/* MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */\n",
+            "header-anchor": "/// MIT `krb5_get_init_creds_opt` (`krb5.hin:6839-6851`): the option block\n",
+            "et-anchor": "/// MIT `KADM5_UNK_PRINC` (`kadm_err.et:54-54`): an unknown principal\n",
+            "type-anchor": "/// MIT `struct extended_options` (`krb/gic_opt.c:19-32`): the option tail\n",
+            "qualified-basename": "// MIT `init_realm` (`kdc/main.c:286-345`): the realm stanza wins\n",
+            "mention": "/// MIT `KRB5_KDB_DISALLOW_TGT_BASED`.\n",
+            "file-mention": "//! Context establishment (`init_sec_context.c`, `accept_sec_context.c`).\n",
+            "file-and-mention": "/// MIT `pac.c` `MAX_BUFFERS`.\n",
+            "bare-file-mention": "// The loop mirrors gic_pwd.c.\n",
+            "anchor-and-mention": "/// MIT `f` (`a.c:1-2`): calls `g` in `b.c` first\n",
+            "backtick-guarantee": "/// MIT `f` (`a.c:1-2`): `KDC_ERR_X` on a bad key\n",
+        }
+        for body in accepted.values():
+            good.write_text(body, encoding="utf-8")
+            check_mit_anchor_form(anchor_root, allow=0)
+        good.write_text("", encoding="utf-8")
+        in_tests.write_text(accepted["fn-anchor"], encoding="utf-8")
         check_mit_anchor_form(anchor_root, allow=0)
+        in_tests.write_text("", encoding="utf-8")
         rejected = {
-            "name-only": '/// MIT `krb5_rd_req` walks the keytab\n',
             "file-range-only": "/// (`do_as_req.c:10-20`)\n",
             "name-and-range": "/// MIT `krb5_rd_req` (`do_as_req.c:10-20`)\n",
             "file-point-only": "/// (`do_as_req.c:10`)\n",
             "bare-file": "/// MIT do_as_req.c:10 sets the flag\n",
             "name-and-point": "/// MIT `krb5_rd_req` (`do_as_req.c:10`)\n",
+            "mit-backtick-point": "/// MIT `do_as_req.c:10` sets the flag\n",
+            "prose-range": "// the check at do_tgs_req.c:10-20 runs first\n",
+            "header-point": "// the rock (`kdc_util.h:422`)\n",
+            "hin-range": "/// the option block (krb5.hin:6839-6851)\n",
+            "et-point": "/// `kadm_err.et:54` names it\n",
+            "multi-range": "/// (`server_stubs.c:478,519`)\n",
+            "leftover-beside-anchor": "/// MIT `f` (`a.c:1-2`): checks first, see b.c:3\n",
+            "two-anchors": "/// MIT `f` (`a.c:1-2`): x; MIT `g` (`b.c:3-4`): y\n",
+            "no-guarantee": "/// MIT `f` (`a.c:1-2`):\n",
+            "empty-guarantee": "/// MIT `f` (`a.c:1-2`): \n",
+            "punct-guarantee": "/// MIT `stub_setup` (`server_stubs.c:296-301`): -638).\n",
+            "paren-guarantee": "/// MIT `f` (`a.c:1-2`): (`g`,.\n",
+            "same-check": "/// MIT `f` (`a.c:1-2`): same check.\n",
+            "mit-guarantee": "/// MIT `f` (`a.c:1-2`): MIT.\n",
+            "name-guarantee": "/// MIT `strdur` (`kadmin.c:118-138`): strdur.\n",
+            "ambiguous-anchor": "// MIT `init_realm` (`main.c:286-345`): the realm stanza wins\n",
+            "ambiguous-mention": "//! Principal names (`str_conv.c`).\n",
+            "block-cite": "/* see do_as_req.c:10 */\n",
+            "doc-block-cite": "/**\n * the check (`do_as_req.c:10-20`)\n */\n",
+            "inner-doc-cite": "//! the check (`do_as_req.c:10-20`)\n",
+            "line-comment-cite": "// the check (`do_as_req.c:10-20`)\n",
         }
         for shape, body in rejected.items():
             good.write_text(body, encoding="utf-8")
@@ -6062,7 +6104,11 @@ jobs:
                 anchor_root,
                 allow=0,
             )
-        good.write_text(rejected["name-only"], encoding="utf-8")
+        good.write_text("", encoding="utf-8")
+        in_tests.write_text(rejected["file-range-only"], encoding="utf-8")
+        _must_die_msg(
+            "mit anchor lines 1 != allow 0", check_mit_anchor_form, anchor_root, allow=0
+        )
         check_mit_anchor_form(anchor_root, allow=1)
         _must_die_msg(
             "mit anchor lines 1 != allow 2",
@@ -6070,17 +6116,10 @@ jobs:
             anchor_root,
             allow=2,
         )
-        # The shape name is part of the fixture so a deleted shape is a
+        # The shape names are part of the fixture, so a deleted shape is a
         # missing key, not a silent pass.
-        if set(rejected) != {
-            "name-only",
-            "file-range-only",
-            "name-and-range",
-            "file-point-only",
-            "bare-file",
-            "name-and-point",
-        }:
-            _die("mit anchor fixtures dropped a rejected shape")
+        if len(accepted) != 14 or len(rejected) != 26:
+            _die("mit anchor fixtures dropped a shape")
     finally:
         subprocess.run(["rm", "-rf", str(anchor_root)], check=False)
 
@@ -6153,19 +6192,70 @@ def check_no_case_whitelists(text: str | None = None, name: str = "diffsend.rs")
         scan(path.read_text(), str(path.relative_to(ROOT)))
 
 
-_CANON_ANCHOR = re.compile(
-    r"MIT `([A-Za-z_][A-Za-z0-9_]*)` \(`([A-Za-z0-9_./+-]+\.c):(\d+)-(\d+)`\): \S"
+_ANCHOR_EXT = r"(?:c|hin|h|et|x|y)"
+# The one anchor form (R1): MIT `symbol` (`path.ext:a-b`): guarantee. The
+# symbol is a C function, or the type (`struct x`, `union x`, `enum x`),
+# macro, table or error-table entry a non-function anchor names; the truth
+# check (ledger-mit job) proves that the range lies inside that definition.
+_ANCHOR_HEAD = re.compile(
+    r"MIT `((?:(?:struct|union|enum) )?[A-Za-z_][A-Za-z0-9_]*)` "
+    r"\(`([A-Za-z0-9_./+-]+\." + _ANCHOR_EXT + r"):(\d+)-(\d+)`\)"
 )
-# A cite that is not inside a canonical anchor. The six shapes the brief
-# names are name-only, file-range-only, name-and-range without a guarantee,
-# file-point-only, bare `MIT file.c:N`, and name-and-point.
-_ANCHOR_CITE = re.compile(
-    r"MIT `[A-Za-z_][A-Za-z0-9_]*`"
-    r"|MIT `[A-Za-z0-9_./+-]+\.[ch]:\d+"
-    r"|\(`[^`]*\.[ch]:\d+(?:-\d+)?`\)"
-    r"|MIT [A-Za-z0-9_./+-]+\.[ch]:\d+"
-    r"|(?<![\w.`])[A-Za-z0-9_./+-]+\.[ch]:\d+(?:-\d+)?"
+# Any MIT line cite: a source path with a line number. Outside an anchor
+# head it is the dodge the form forbids (a range that is not an anchor).
+_LINE_CITE = re.compile(
+    r"(?<![\w./+-])[A-Za-z0-9_+-][A-Za-z0-9_./+-]*\." + _ANCHOR_EXT + r":\d+"
 )
+# A MIT source path with or without a range; a rangeless mention is legal.
+_FILE_TOKEN = re.compile(
+    r"(?<![\w./+-])([A-Za-z_][A-Za-z0-9_./+-]*\." + _ANCHOR_EXT + r")(?![\w])"
+)
+# Basenames that name more than one file under the MIT 1.22.2 `src/` tree
+# (.c .h .hin .et .x .y). A cite of one of them must carry a directory;
+# check_mit_anchor_truth re-derives this set from KERBER_MIT_SRC.
+_AMBIGUOUS_MIT_BASENAMES = frozenset(
+    {
+        "aes.c", "auth.h", "camellia.c", "client.c", "cmac.c", "common.c",
+        "common.h", "copyright.h", "des3.c", "des_keys.c", "extern.h",
+        "gss-client.c", "gss-misc.c", "gss-misc.h", "gss-server.c", "hmac.c",
+        "init_ctx.c", "kdb_xdr.c", "kdf.c", "keytab.c", "localauth.c",
+        "lockout.c", "main.c", "mit-sipb-copyright.h", "openssl.c", "parse.c",
+        "pbkdf2.c", "prf.c", "rc4.c", "reminder.h", "replay.c", "resource.h",
+        "server.c", "sha256.c", "str_conv.c", "t_prf.c", "util.h",
+    }
+)
+_BAD_GUARANTEE_START = set(".,;:!?)(]}-\u2013\u2014\u2192")
+_EMPTY_GUARANTEES = {"same check", "mit"}
+
+
+def _anchor_line_problems(comment: str) -> list[str]:
+    """Why one comment line breaks the R1 anchor form (empty when it does not)."""
+    problems: list[str] = []
+    heads = list(_ANCHOR_HEAD.finditer(comment))
+    if len(heads) > 1:
+        problems.append("two anchors on one line")
+    for m in heads:
+        tail = comment[m.end():]
+        if not tail.startswith(": "):
+            problems.append("anchor without a guarantee on its line")
+            continue
+        guarantee = tail[2:].strip()
+        bare = guarantee.strip("` ").rstrip(".").strip("` ").lower()
+        if not guarantee:
+            problems.append("empty guarantee")
+        elif guarantee[0] in _BAD_GUARANTEE_START:
+            problems.append("guarantee starts with punctuation")
+        elif bare in _EMPTY_GUARANTEES or bare == m.group(1).split()[-1].lower():
+            problems.append("guarantee states nothing")
+    if _LINE_CITE.search(_ANCHOR_HEAD.sub(" ", comment)):
+        problems.append("line cite outside the anchor form")
+    for f in _FILE_TOKEN.finditer(comment):
+        path = f.group(1)
+        if "/" not in path and path in _AMBIGUOUS_MIT_BASENAMES:
+            problems.append(f"ambiguous basename {path} needs a directory")
+    return problems
+
+
 def _comment_lexer():
     spec = importlib.util.spec_from_file_location(
         "hygiene_fn_diff_comments", SCRIPTS / "hygiene-fn-diff.py"
@@ -6181,7 +6271,8 @@ _COMMENT_LEXER = None
 
 
 def _comment_lines(src: str) -> list[tuple[int, str]]:
-    """`//` comments, including `///` and `//!`, outside string literals."""
+    """Comment lines outside string literals: every `//`, `///` and `//!`
+    line, and every line of a (nested) `/* */`, `/** */` or `/*! */` block."""
     global _COMMENT_LEXER
     if _COMMENT_LEXER is None:
         _COMMENT_LEXER = _comment_lexer()
@@ -6203,8 +6294,18 @@ def _comment_lines(src: str) -> list[tuple[int, str]]:
             i = j
             continue
         if src.startswith("/*", i):
-            j = src.find("*/", i + 2)
-            j = n if j < 0 else j + 2
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if src.startswith("/*", j):
+                    depth += 1
+                    j += 2
+                elif src.startswith("*/", j):
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
+            for k, part in enumerate(src[i:j].split("\n")):
+                out.append((line + k, part))
             bump(src[i:j])
             i = j
             continue
@@ -6245,20 +6346,16 @@ def _rs_under(root: pathlib.Path, kinds: tuple[str, ...] | None) -> list[pathlib
 
 
 def mit_anchor_violations(root: pathlib.Path | None = None) -> list[str]:
-    """Comment lines whose MIT cite is not the one R1 anchor form."""
+    """Comment lines that break the R1 anchor form, one entry per line."""
     root = ROOT if root is None else root
     bad: list[str] = []
     for path in _rs_under(root, ("src", "tests")):
         text = path.read_text(encoding="utf-8")
         rel = path.relative_to(root)
         for lineno, comment in _comment_lines(text):
-            if _CANON_ANCHOR.search(comment):
-                rest = _CANON_ANCHOR.sub("", comment)
-                if not _ANCHOR_CITE.search(rest):
-                    continue
-            elif not _ANCHOR_CITE.search(comment):
-                continue
-            bad.append(f"{rel}:{lineno}:{comment.strip()[:160]}")
+            problems = _anchor_line_problems(comment)
+            if problems:
+                bad.append(f"{rel}:{lineno}: {'; '.join(problems)}: {comment.strip()[:140]}")
     return bad
 
 
