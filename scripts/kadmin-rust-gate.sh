@@ -566,6 +566,69 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+# kadm5_line_count: the kadmind log's `kadm5: ` stderr lines.
+kadm5_line_count() {
+    docker exec "$NAME" grep -c '^kadm5: ' /tmp/kadmind.log || true
+}
+# kadm5_garbage_probe: one RPC record holding a single zero byte; the call does
+# not decode, so kadmind prints `kadm5: rpc garbage args`.
+kadm5_garbage_probe() {
+    docker exec "$NAME" python3 -c '
+import socket, struct
+s = socket.create_connection(("127.0.0.1", 749), 2)
+s.sendall(struct.pack(">I", 0x80000000 | 1) + b"\x00")
+s.settimeout(2)
+try:
+    while s.recv(4096):
+        pass
+except OSError:
+    pass
+s.close()
+'
+}
+# kadm5_wait_count N: wait until the log holds N `kadm5: ` lines.
+kadm5_wait_count() {
+    for _ in $(seq 1 40); do
+        [ "$(kadm5_line_count)" -ge "$1" ] && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
+echo "==== D1 kadmind stderr names an RPC call that does not decode ===="
+d1_before="$(kadm5_line_count)"
+kadm5_garbage_probe
+kadm5_wait_count $((d1_before + 1)) || die "D1 no kadm5: line after the garbage probe"
+docker exec "$NAME" grep -F 'kadm5: rpc garbage args' /tmp/kadmind.log \
+    || die "D1 kadmind stderr has no kadm5: rpc garbage args line"
+echo "RUST_kadmind_stderr_garbage_args"
+
+echo "==== D2 kadmind stays silent on an oversize record; the garbage probe is the sync point ===="
+d2_before="$(kadm5_line_count)"
+docker exec "$NAME" python3 -c '
+import socket, struct
+s = socket.create_connection(("127.0.0.1", 749), 2)
+s.sendall(struct.pack(">I", 0x80000000 | ((1 << 20) + 1)))
+s.settimeout(2)
+try:
+    while s.recv(4096):
+        pass
+except OSError:
+    pass
+s.close()
+'
+kadm5_garbage_probe
+kadm5_wait_count $((d2_before + 1)) || die "D2 no kadm5: line after the sync probe"
+sleep 0.2
+d2_after="$(kadm5_line_count)"
+echo "kadm5 lines: before=$d2_before after=$d2_after"
+[ "$d2_after" -eq $((d2_before + 1)) ] \
+    || die "D2 kadm5: lines rose by $((d2_after - d2_before)), want 1 (the sync probe only)"
+if docker exec "$NAME" grep -F 'kadm5: rpc record' /tmp/kadmind.log; then
+    die "D2 kadmind printed the oversize record error"
+fi
+echo "RUST_kadmind_stderr_silent_record"
+
 echo "==== Rust kadmind AUTH_NONE is AUTH_TOOWEAK ===="
 kadmind_auth_too_weak "$NAME"
 echo "==== Rust kadmind RPC PROG_UNAVAIL / PROG_MISMATCH / REPLY ===="

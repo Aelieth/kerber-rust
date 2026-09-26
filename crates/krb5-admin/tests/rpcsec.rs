@@ -15,7 +15,7 @@
 mod common;
 use common::*;
 
-use krb5_admin::{Kadm5RpcSession, kadm5_handle_rpc, serve_kadm5_conn};
+use krb5_admin::{Kadm5RpcError, Kadm5RpcSession, kadm5_handle_rpc, serve_kadm5_conn};
 use krb5_gss::GssContext;
 use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
@@ -535,4 +535,37 @@ fn init_arg_version_5_is_auth_badcred() {
         &w[..5],
         &[77, MSG_REPLY, MSG_DENIED, REJECT_AUTH_ERROR, AUTH_BADCRED]
     );
+}
+
+#[test]
+fn unhandled_rpc_reaches_the_server_as_a_kadm5_rpc_error() {
+    let (store, acl) = bootstrap_documented().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let store = shared_dump(store);
+    let server = thread::spawn(move || {
+        let (s, _) = listener.accept().unwrap();
+        serve_kadm5_conn(
+            store,
+            acl,
+            Vec::new(),
+            "KERBER.TEST".into(),
+            ReplayCache::new(),
+            s,
+        )
+    });
+    let mut c = TcpStream::connect(addr).unwrap();
+    // One record holding a single zero byte: the call does not decode.
+    c.write_all(&(LAST_FRAG | 1).to_be_bytes()).unwrap();
+    c.write_all(&[0]).unwrap();
+    let err = server
+        .join()
+        .unwrap()
+        .expect_err("an RPC that does not decode ends the connection");
+    assert_eq!(err.kind(), std::io::ErrorKind::Other);
+    let rpc = err
+        .get_ref()
+        .and_then(|e| e.downcast_ref::<Kadm5RpcError>())
+        .expect("the handling error carries a Kadm5RpcError");
+    assert_eq!(rpc.to_string(), "rpc garbage args");
 }

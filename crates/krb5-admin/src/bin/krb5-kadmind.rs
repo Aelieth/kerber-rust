@@ -16,7 +16,7 @@ use std::sync::atomic::AtomicBool;
 use std::thread;
 use std::time::Duration;
 
-use krb5_admin::{serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
+use krb5_admin::{Kadm5RpcError, serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::testrealm::{bootstrap_documented, documented_kiprop};
@@ -161,7 +161,14 @@ fn main() {
                 let rcache = rcache.clone();
                 thread::spawn(move || {
                     let _guard = krb5_kdc::ConnGuard(registry_g, seq);
-                    let _ = serve_kadm5_conn(store, acl, keys, realm, rcache, stream);
+                    // Only an RPC that could not be handled is printed; a record or socket
+                    // error ends the connection silently.
+                    if let Err(e) = serve_kadm5_conn(store, acl, keys, realm, rcache, stream)
+                        && let Some(rpc) =
+                            e.get_ref().and_then(|x| x.downcast_ref::<Kadm5RpcError>())
+                    {
+                        eprintln!("kadm5: {rpc}");
+                    }
                 });
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {

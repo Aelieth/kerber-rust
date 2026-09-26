@@ -43,8 +43,8 @@ pub struct RpcCtx<'a> {
 ///
 /// An `ErrorKind::InvalidData` error when a record exceeds MIT's 1 MiB cap; the `io::Error` of
 /// any other failed read (EOF ends the loop with `Ok`) or of a failed reply write; an
-/// `ErrorKind::Other` error with the message when handling a record fails (see
-/// [`kadm5_handle_rpc`]).
+/// `ErrorKind::Other` error carrying a [`Kadm5RpcError`] with the message when handling a
+/// record fails (see [`kadm5_handle_rpc`]).
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kadm5_conn(
     store: SharedStore,
@@ -82,8 +82,7 @@ pub fn serve_kadm5_conn(
                     outcome = "error",
                     error = %e,
                 );
-                eprintln!("kadm5: {e}");
-                return Err(io::Error::other(e.to_string()));
+                return Err(io::Error::other(Kadm5RpcError(e.to_string())));
             }
         };
         if reply.is_empty() {
@@ -92,6 +91,20 @@ pub fn serve_kadm5_conn(
         write_record(&mut stream, &reply)?;
     }
 }
+
+/// The message of a kadm5 RPC that could not be handled, inside the `io::Error` that
+/// [`serve_kadm5_conn`] returns, so a server can print it; a record or socket error never
+/// carries one.
+#[derive(Debug)]
+pub struct Kadm5RpcError(String);
+
+impl std::fmt::Display for Kadm5RpcError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Kadm5RpcError {}
 
 fn random_handle() -> Vec<u8> {
     let mut h = [0u8; 8];

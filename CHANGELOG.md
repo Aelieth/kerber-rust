@@ -198,6 +198,12 @@ this project uses semantic versioning once a crate is published.
   byte-equal to `0d5fa7f4`'s on every path: `rust-kpasswd-mit-gate.sh`
   K1 (the change and the kinit succeed) and K2 (the ccache write fails
   after the change), and `client-gate.sh` C1 (nothing listens on 464).
+- **admin.** `krb5-admin` no longer prints. An RPC `serve_kadm5_conn`
+  cannot handle ends the connection with an `io::Error` carrying a
+  `Kadm5RpcError`, and `krb5-kadmind` prints `kadm5: <message>` only for
+  that; record and socket errors stay silent, as before.
+  `kadmin-rust-gate.sh` D1 pins the garbage-args line, and D2 pins that
+  an oversize record prints nothing.
 
 ### W3-S3.10 parameter structs
 
