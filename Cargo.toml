@@ -55,7 +55,7 @@ p256 = { version = "0.13", default-features = false, features = ["arithmetic", "
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 # Unpinned; take the newest 0.28 that still byte-matches MIT goldens.
 rasn = "0.28"
-rc4 = "0.1"
+rc4 = "0.2"
 sha1 = "0.10"
 sha2 = "0.10"
 subtle = "2.6"
