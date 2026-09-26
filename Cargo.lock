@@ -498,6 +498,7 @@ dependencies = [
  "krb5-config",
  "krb5-crypto",
  "krb5-kdc",
+ "krb5-log",
  "krb5-protocol",
  "krb5-testkit",
  "krb5-types",

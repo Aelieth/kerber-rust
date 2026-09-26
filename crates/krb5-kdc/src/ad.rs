@@ -1314,7 +1314,15 @@ pub(crate) fn handle_authdata(
     if !anonymous {
         for m in authdata_modules() {
             if let Err(e) = m.handle(is_tgs, &mut out, reply_session, issuer) {
-                tracing::error!(module = m.name(), error = %e, "from authdata module");
+                tracing::error!(
+                    event = krb5_log::events::KDC_AUTHDATA_MODULE,
+                    correlation_id = %krb5_log::current_correlation_id(),
+                    component = "krb5-kdc",
+                    outcome = "error",
+                    module = m.name(),
+                    error = %e,
+                    "from authdata module",
+                );
             }
         }
     }

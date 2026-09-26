@@ -194,3 +194,69 @@ fn cammac_bad_kdcver_mac_is_skipped() {
     let got = get_auth_indicators(&crate::store::Policy::default(), &issued, &tgt, &key).unwrap();
     assert!(got.is_empty());
 }
+
+#[test]
+fn module_error_is_logged_as_kdc_authdata_module_with_the_schema_fields() {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
+    struct Failing;
+    impl crate::plugins::KdcAuthdata for Failing {
+        fn name(&self) -> &'static str {
+            "schema-probe"
+        }
+        fn handle(
+            &self,
+            _is_tgs: bool,
+            _reply: &mut AuthorizationData,
+            _session: Option<&ProtocolKey>,
+            _issuer: Option<(&PrincipalName, &str)>,
+        ) -> Result<(), Error> {
+            Err(Error::Crypto("probe refused".into()))
+        }
+    }
+    struct Mem(Arc<Mutex<Vec<u8>>>);
+    impl Write for Mem {
+        fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .map_err(|_| io::Error::other("poison"))?
+                .extend_from_slice(data);
+            Ok(data.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+    fn string_field<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+        let pat = format!("\"{key}\":");
+        let rest = line[line.find(&pat)? + pat.len()..].trim_start();
+        let rest = rest.strip_prefix('"')?;
+        Some(&rest[..rest.find('"')?])
+    }
+
+    crate::plugins::register_authdata(Arc::new(Failing));
+    let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let writer = Arc::clone(&buf);
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_ansi(false)
+        .with_current_span(false)
+        .with_writer(move || Mem(Arc::clone(&writer)))
+        .finish();
+    let out = tracing::subscriber::with_default(subscriber, || {
+        handle_authdata(false, false, None, None, None, None, None, None)
+    });
+    assert!(out.is_ok(), "a module error is logged, not returned");
+    let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
+    let line = text
+        .lines()
+        .find(|l| string_field(l, "event") == Some("kdc.authdata.module"))
+        .unwrap_or_else(|| panic!("no kdc.authdata.module line in {text}"));
+    for key in ["event", "correlation_id", "component", "outcome"] {
+        assert!(string_field(line, key).is_some(), "{key} missing in {line}");
+    }
+    assert_eq!(string_field(line, "component"), Some("krb5-kdc"));
+    assert_eq!(string_field(line, "outcome"), Some("error"));
+    assert_eq!(string_field(line, "module"), Some("schema-probe"));
+}

@@ -623,7 +623,7 @@ fn kinit_inner(
     cache.creds.extend(creds);
     if let Some(e) = tgs_err {
         tracing::error!(
-            event = "client.tgs",
+            event = krb5_log::events::CLIENT_TGS,
             component = "krb5-client",
             outcome = "error",
             error = e.as_str(),

@@ -61,6 +61,19 @@ pub mod events {
     pub const PROTOCOL_TRANSPORT: &str = "protocol.transport";
     /// Admin protocol (kadmind / kpasswd / kprop).
     pub const ADMIN: &str = "admin";
+    /// Client TGS step: a FAST TGS reply that carried a strengthen key (`krb5-protocol`), or
+    /// a failed service-ticket request after `kinit`'s AS (`krb5-client`).
+    pub const CLIENT_TGS: &str = "client.tgs";
+    /// Client PKINIT AS request that carries `PA-PK-AS-REQ`.
+    pub const CLIENT_PKINIT: &str = "client.pkinit";
+    /// Client FAST unwrap of the inner padata of a KDC error.
+    pub const CLIENT_FAST: &str = "client.fast";
+    /// KDC lookaside cache reached its byte cap (logged once).
+    pub const KDC_LOOKASIDE_FULL: &str = "kdc.lookaside.full";
+    /// KDC PKINIT preauth decision.
+    pub const KDC_PKINIT: &str = "kdc.pkinit";
+    /// A kdcauthdata module returned an error; the KDC logs it and runs the next module.
+    pub const KDC_AUTHDATA_MODULE: &str = "kdc.authdata.module";
 }
 
 thread_local! {

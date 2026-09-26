@@ -176,6 +176,16 @@ this project uses semantic versioning once a crate is published.
   the store exits the process instead of storing a predictable domain
   SID: when `getrandom` fails, its twelve bytes are all zero, or the SID
   equals the dummy domain SID. No behaviour change.
+- **log.** `krb5_log::events` gains `CLIENT_TGS`, `CLIENT_PKINIT`,
+  `CLIENT_FAST`, `KDC_LOOKASIDE_FULL`, `KDC_PKINIT` and
+  `KDC_AUTHDATA_MODULE`, and the 18 library sites that wrote those event
+  strings as literals use the constants (same strings). A kdcauthdata
+  module error now logs `event=kdc.authdata.module` with
+  `correlation_id`, `component`, `outcome=error`, `module` and `error`;
+  it is not a `kdc.issue` line. Unit tests read the four schema fields
+  off a JSON subscriber for that event and for `crypto.string_to_key`.
+  `docs/logging.md` names the constants, the new event, and says
+  `target` is not part of the log contract.
 
 ### W3-S3.10 parameter structs
 

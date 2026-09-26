@@ -30,10 +30,19 @@ never install a subscriber. Tests and the harness do.
 | `server` | kdc.issue | Unparsed server (`krbtgt/REALM@REALM`) |
 | `s4u` / `s4u_client` | kdc.issue | `PROTOCOL-TRANSITION` or `CONSTRAINED-DELEGATION` |
 | `record` | kdc.audit | One JSON object using MIT `j_dict.h` keys |
+| `module` | kdc.authdata.module | Name of the kdcauthdata module that returned the error |
 
 Canonical Rust `event` strings live in `krb5_log::events`; the field
 names above are written literally at each `tracing` call site (there
-are no `FIELD_*` constants).
+are no `FIELD_*` constants). `client.tgs`, `client.pkinit`,
+`client.fast`, `kdc.lookaside.full`, `kdc.pkinit`, and
+`kdc.authdata.module` are constants there too, so no library call site
+writes an `event` string literal.
+
+`target` is the Rust module path (`tracing`'s default). It is not part
+of the log contract. Gates and tests match `event` and the fields in
+the table. Moving a function into another module may change `target`
+and must leave `event` unchanged.
 
 ## Harness log lines
 
@@ -74,6 +83,13 @@ A successful AS or TGS also emits the MIT ISSUE tuple on a second
 `authtime`, `etypes` (`rep_etypes2str`), `client`, and `server`.
 TGS S4U adds `s4u` + `s4u_client`. Unexpected transit-path errors
 are `tracing` **error** (`kdc_log.c:201-206` `LOG_ERR`).
+
+A kdcauthdata module that returns an error logs
+`event=kdc.authdata.module` at **error** with `correlation_id`,
+`component`, `outcome=error`, `module`, and `error`, and the KDC runs
+the next module (`kdc_authdata.c` `handle_authdata`). It is not a
+`kdc.issue` line, so a request still logs only the `kdc.issue` lines
+above.
 
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 with MIT `j_dict.h` field names (`event_name`, `event_success`,
