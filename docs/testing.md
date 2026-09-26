@@ -83,6 +83,26 @@ names more than one file under the MIT tree (`main.c`, `str_conv.c`,
 is 0. `check_mit_anchor_truth` (the `ledger-mit` job) proves that each
 anchor's range lies inside that definition.
 
+`check_mit_anchor_truth` runs where `KERBER_MIT_SRC` names the MIT
+1.22.2 tree (the `ledger-mit` job) and resolves each anchor against a
+definition, never a use: a C function (its `(` may open the next line)
+from the comment block directly above its storage-class and return-type
+lines (three more lines of slack) to its closing `}`; a `struct` /
+`union` / `enum`, a typedef (including a declarator list after `}` and
+rpcgen's `typedef struct X X;`), or a function-pointer typedef; a
+file-scope table or global; a macro-generated definition by its first
+argument; an ASN.1 type by the `NAME ::=` comment block MIT copies
+above it; and in a header, `.et`, `.x` or `.y` file a `#define`, a type,
+a static inline function, a prototype, an `error_code` or an rpcgen
+item. The anchor's range must
+lie inside that extent. A callee or macro named in a function's place,
+a range past the closing brace, MIT test code (`t_*.c`, `tests/`) cited
+from product code, an unknown file, and a basename that names more than
+one file are red, and so is a rangeless file mention that does not name
+exactly one file. It lists every violation. The resolution is a port of
+the audit's reference resolver. `MIT_TRUTH_ALLOW` holds it advisory at
+the live count until the anchors are rewritten.
+
 `check_no_process_history` rejects a process tag on a `//` comment
 anywhere under `crates/`: `R12`, `A′-3`, `W0e`, `W1-Z`, `Round 2`,
 `parent` plus seven hex digits, `R2-S3`, `B3`, `Y0`, and `Z6.3`.

@@ -92,6 +92,12 @@ this project uses semantic versioning once a crate is published.
   empty or name-only guarantee, and an ambiguous MIT basename without
   a directory are red. Block comments are scanned. Advisory at the
   live count, 574.
+- **ci.** `check_mit_anchor_truth` (the `ledger-mit` job, against the
+  MIT 1.22.2 tree) proves each anchor's range lies inside the named
+  definition: a function, type, table, macro-generated item, or header
+  entry. A callee or macro in a function's place, a trailing overhang,
+  MIT test code cited from product code, and an ambiguous or unknown file
+  are red. Advisory at the live count, 45.
 
 ### W3-S3.10 parameter structs
 
