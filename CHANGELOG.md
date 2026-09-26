@@ -150,6 +150,9 @@ this project uses semantic versioning once a crate is published.
   `handle_kpasswd_from` says the AP-REQ is verified only as a
   `kadmin/changepw` ticket and that any failure is a framed KRB-ERROR
   carrying result code 3. No behaviour change.
+- **client.** `kinit_inner` says key-expired leads to a password change
+  when a prompter or a `new_password` source is given, and that
+  `kinit_with` writes the cache. No behaviour change.
 
 ### W3-S3.10 parameter structs
 
