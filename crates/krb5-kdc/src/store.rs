@@ -109,6 +109,9 @@ pub(crate) fn unix_now_u32() -> u32 {
 
 impl PrincipalStore {
     /// Empty store for `realm`.
+    /// The realm's domain SID comes from twelve CSPRNG bytes. When the CSPRNG fails, the
+    /// bytes are all zero, or the SID equals the dummy domain SID, the process exits instead
+    /// of storing a predictable domain SID.
     #[must_use]
     pub fn new(realm: impl Into<String>) -> Self {
         Self {

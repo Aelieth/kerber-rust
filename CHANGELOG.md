@@ -172,6 +172,10 @@ this project uses semantic versioning once a crate is published.
   cite. `check_no_process_history` is hard (allow 0), and
   `docs/testing.md` says all three comment checks are hard. No behaviour
   change.
+- **kdc.** `PrincipalStore::new` and a `docs/security.md` row state that
+  the store exits the process instead of storing a predictable domain
+  SID: when `getrandom` fails, its twelve bytes are all zero, or the SID
+  equals the dummy domain SID. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

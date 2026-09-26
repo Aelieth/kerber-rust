@@ -36,6 +36,7 @@ uses a per-context sequence window in addition to that cache.
 | Product 0-unsafe | Workspace lint `unsafe_code = "forbid"`; `#![forbid(unsafe_code)]` on every library crate | compile (`clippy -D warnings`); `scripts/geiger.sh` |
 | iprop keys never sent in the clear | `dispatch_iprop` GET_UPDATES answers `UPDATE_ERROR` (`kadm5/iprop.rs`, `krb5_kdc::IPROP_ERROR`) when `iprop_master_key` is `None`, rather than ship the store's plaintext keys | `iprop_get_updates_refuses_plaintext_keys_without_master_key` |
 | Cross-realm PAC SID filtering | `filter_cross_realm_logon` (`ad.rs`) drops local-domain SIDs from a cross-realm subject's `LOGON_INFO`; `tgs_req.rs` `check_tgs_req` calls it when the header ticket is from a foreign realm | `cross_realm_pac_drops_local_domain_sids_keeps_foreign`, `cross_realm_pac_claiming_local_domain_base_is_policy` (`crates/krb5-kdc/tests/tgs_crossrealm.rs`) |
+| Store creation aborts when the domain SID would be predictable | `PrincipalStore::new` (`store.rs`) builds the realm's domain SID from twelve `getrandom` bytes and calls `process::exit(1)`, not a returned error, when `getrandom` fails, the bytes are all zero, or the SID equals the dummy domain SID (`store/rid.rs` `sid_from_random_bytes`); a zero or dummy SID would be fail-open | `random_sid_rejects_all_zero` (`crates/krb5-kdc/src/store/tests.rs`) |
 
 `DISABLE_TRANSITED_CHECK` and ticket flags are protocol policy, not
 timing. There is no injectable clock; replay windows use
