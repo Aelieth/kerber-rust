@@ -362,6 +362,7 @@ def check_nightly(workflows: list[Workflow]) -> None:
 _NEXTEST_RUN = re.compile(r"cargo\s+nextest\s+run[^\n]*")
 _CARGO_TEST_WS = re.compile(r"cargo\s+test\s+--workspace")
 _CARGO_TEST_ALL = re.compile(r"cargo\s+test\s+--all(?:\s|$)")
+_CARGO_TEST_WS_DOC = re.compile(r"cargo\s+test\s+--workspace\s+--doc\b")
 _IF_ONELINER = re.compile(
     r"^\s*(if|elif)\b.*;\s*then\b.*;\s*fi\b",
 )
@@ -808,7 +809,10 @@ def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
     if wf.path.name != "ci.yml":
         return
     folded = _fold_continuations(wf.text)
-    if _CARGO_TEST_WS.search(folded) or _CARGO_TEST_ALL.search(folded):
+    # `cargo test --workspace --doc` is the doctest runner (nextest never runs
+    # doctests). Any other workspace `cargo test` re-runs the unit suite.
+    allowed = _CARGO_TEST_WS_DOC.sub("", folded)
+    if _CARGO_TEST_WS.search(allowed) or _CARGO_TEST_ALL.search(allowed):
         _die(f"{wf.path.name} must not run cargo test --workspace/--all on per-push")
 
 
@@ -4352,6 +4356,21 @@ jobs:
         "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo test --workspace\n",
     )
     _must_die(check_ci_no_workspace_cargo_test, cargo_test)
+    doc_tests = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo test --workspace --doc\n",
+    )
+    check_ci_no_workspace_cargo_test(doc_tests)
+    doc_then_unit = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo test --workspace --doc && cargo test --workspace\n",
+    )
+    _must_die(check_ci_no_workspace_cargo_test, doc_then_unit)
+    docs_word = Workflow(
+        pathlib.Path("ci.yml"),
+        "name: ci\non:\n  push:\njobs:\n  test:\n    timeout-minutes: 1\n    steps:\n      - run: cargo test --workspace --docs\n",
+    )
+    _must_die(check_ci_no_workspace_cargo_test, docs_word)
 
     no_junit = Workflow(
         pathlib.Path("ci.yml"),

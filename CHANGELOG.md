@@ -82,6 +82,9 @@ this project uses semantic versioning once a crate is published.
   A same-named `events` const in another crate is an error. Nothing
   else folds; a moved print, a new field or a new type is an accept
   row. Self-test floor 142.
+- **ci.** `check_ci_no_workspace_cargo_test` lets the test job run
+  `cargo test --workspace --doc` (nextest runs no doctests). Any other
+  workspace `cargo test` is still red; fixtures pin both.
 
 ### W3-S3.10 parameter structs
 
