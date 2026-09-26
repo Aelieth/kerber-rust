@@ -28,6 +28,49 @@
 //! prefix). PBKDF2 iteration count 0 (RFC 3962 = 2^32) is rejected as a
 //! local DoS control.
 //!
+//! # Examples
+//!
+//! RFC 3962 appendix B, AES-128, one iteration:
+//!
+//! ```
+//! use krb5_crypto::{EncryptionType, string_to_key};
+//! let key = string_to_key(
+//!     EncryptionType::Aes128CtsHmacSha196,
+//!     b"password",
+//!     b"ATHENA.MIT.EDUraeburn",
+//!     Some(&1u32.to_be_bytes()),
+//! )?;
+//! assert_eq!(
+//!     key.as_bytes(),
+//!     &[
+//!         0x42, 0x26, 0x3c, 0x6e, 0x89, 0xf4, 0xfc, 0x28, 0xb8, 0xdf, 0x68, 0xee, 0x09, 0x79, 0x9f,
+//!         0x15,
+//!     ]
+//! );
+//! Ok::<(), krb5_crypto::Error>(())
+//! ```
+//!
+//! RFC 3962 appendix B, AES-256, one iteration:
+//!
+//! ```
+//! use krb5_crypto::{EncryptionType, string_to_key};
+//! let key = string_to_key(
+//!     EncryptionType::Aes256CtsHmacSha196,
+//!     b"password",
+//!     b"ATHENA.MIT.EDUraeburn",
+//!     Some(&1u32.to_be_bytes()),
+//! )?;
+//! assert_eq!(
+//!     key.as_bytes(),
+//!     &[
+//!         0xfe, 0x69, 0x7b, 0x52, 0xbc, 0x0d, 0x3c, 0xe1, 0x44, 0x32, 0xba, 0x03, 0x6a, 0x92, 0xe6,
+//!         0x5b, 0xbb, 0x52, 0x28, 0x09, 0x90, 0xa2, 0xfa, 0x27, 0x88, 0x39, 0x98, 0xd7, 0x2a, 0xf3,
+//!         0x01, 0x61,
+//!     ]
+//! );
+//! Ok::<(), krb5_crypto::Error>(())
+//! ```
+//!
 //! The public surface is the names this root re-exports. Weak etypes are
 //! not part of the default profile.
 

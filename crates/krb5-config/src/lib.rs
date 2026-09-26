@@ -4,6 +4,26 @@
 //!
 //! One module per MIT source family: `profile` (krb5.conf), `kdcconf`,
 //! `ccname`, `srv`, `testenv`. In-src tests stay under `tests`.
+//!
+//! # Examples
+//!
+//! `default_realm` is the `[libdefaults]` value:
+//!
+//! ```
+//! use krb5_config::Krb5Conf;
+//! let conf = Krb5Conf::parse("[libdefaults]\ndefault_realm = TESTLABBY.LOCAL\n")?;
+//! assert_eq!(conf.default_realm.as_deref(), Some("TESTLABBY.LOCAL"));
+//! Ok::<(), krb5_config::Error>(())
+//! ```
+//!
+//! `clockskew` is a duration in seconds:
+//!
+//! ```
+//! use krb5_config::Krb5Conf;
+//! let conf = Krb5Conf::parse("[libdefaults]\nclockskew = 120\n")?;
+//! assert_eq!(conf.clockskew, 120);
+//! Ok::<(), krb5_config::Error>(())
+//! ```
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

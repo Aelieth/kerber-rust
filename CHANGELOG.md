@@ -186,6 +186,11 @@ this project uses semantic versioning once a crate is published.
   off a JSON subscriber for that event and for `crypto.string_to_key`.
   `docs/logging.md` names the constants, the new event, and says
   `target` is not part of the log contract.
+- **ci.** The `krb5-asn1`, `krb5-config`, `krb5-crypto` and `krb5-types`
+  crate docs carry twelve worked examples on pure entry points (DER
+  round-trips, profile parsing, the RFC 3962 string-to-key answers,
+  principal names, deltat and time parsing), and the CI test job runs
+  them with `cargo test --workspace --doc`.
 
 ### W3-S3.10 parameter structs
 
