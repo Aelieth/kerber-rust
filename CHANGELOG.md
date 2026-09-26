@@ -76,6 +76,12 @@ this project uses semantic versioning once a crate is published.
   No behaviour change.
 - **all.** Process-history tags are gone from comments under
   `crates/`. `check_no_process_history` is hard. No behaviour change.
+- **tool.** `hygiene-fn-diff` folds `krb5_log::events::NAME` to the
+  literal of `krb5-log`'s const NAME and reports such a pair as the
+  counted class `const-fold`, and the new const as `const-fold-added`.
+  A same-named `events` const in another crate is an error. Nothing
+  else folds; a moved print, a new field or a new type is an accept
+  row. Self-test floor 142.
 
 ### W3-S3.10 parameter structs
 

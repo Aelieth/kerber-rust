@@ -102,7 +102,19 @@ comments are still normalised outside literals). A pair is
 brace-less `const` / `static` / `type`, with a vis-stripped rest),
 `vis-widen` (`pub(crate)` / `pub(super)` → bare `pub`, or private →
 any `pub`; counted and listed, red unless `--accept` gives a reason,
-never folded into `vis-only`), `fmt-only`, `doc-only`, `params-only`, or `changed`.
+never folded into `vis-only`), `fmt-only`, `doc-only`, `params-only`, `const-fold`,
+or `changed`.
+`const-fold` is the one folding rule: `krb5_log::events::NAME` in code
+compares equal to the literal of the `&str` const NAME in `krb5-log`'s
+`events` module, each tree against its own consts. A pair that differs
+only by that fold (and doc lines) is counted and listed as `const-fold`,
+never as `identical`. A new `krb5-log` events const whose literal a
+`const-fold` pair replaced is listed as `const-fold-added` instead of
+`added`. A same-named `events` const in another crate is an error. A
+const of another string, a changed const value, or a path to a non-`&str`
+const is `changed` or `added`. Nothing else folds: a print moved into a
+binary, a new tracing field, a new struct field and a new type are
+`changed` / `added` rows that need a blob-pinned `--accept` entry.
 Doc-stripping uses that same class, and only from visibility tokens
 in code: a `pub(crate)` that appears only inside a `///` comment is
 not a token. `pub` inside an identifier such as `pubkey` is not a

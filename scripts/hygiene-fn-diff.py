@@ -848,7 +848,102 @@ def _vis_delta_class(old_src: str, new_src: str) -> str | None:
     return None
 
 
-def classify(old_src: str, new_src: str, params_ctx: dict | None = None) -> str:
+_EVENT_CRATE = "krb5-log"
+_EVENT_CONST_RE = re.compile(
+    r"pub\s+const\s+([A-Z0-9_]+)\s*:\s*&(?:'static\s+)?str\s*=\s*\"((?:[^\"\\]|\\.)*)\""
+)
+_EVENT_PATH_RE = re.compile(r"\bkrb5_log::events::([A-Z0-9_]+)\b")
+_EVENT_KEY_RE = re.compile(r"(?:.*::)?events::const::([A-Z0-9_]+)")
+
+
+def _event_const_map(items: dict[str, dict[str, str]]) -> dict[str, str]:
+    """`krb5_log::events::NAME` → the literal of krb5-log's `&str` const NAME.
+
+    Only krb5-log's own `events` module counts. A same-named `events` const
+    in another crate is an error, so a reader never has to ask which one a
+    fold used.
+    """
+    out: dict[str, str] = {}
+    elsewhere: dict[str, str] = {}
+    for key, rec in items.items():
+        crate, _, path = key.partition("\t")
+        m = _EVENT_KEY_RE.fullmatch(path)
+        if not m:
+            continue
+        found = _EVENT_CONST_RE.search(rec["src"])
+        if found is None or found.group(1) != m.group(1):
+            continue
+        if crate == _EVENT_CRATE and path == f"events::const::{m.group(1)}":
+            out[m.group(1)] = found.group(2)
+        else:
+            elsewhere.setdefault(m.group(1), crate)
+    clash = sorted(name for name in elsewhere if name in out)
+    if clash:
+        raise SystemExit(
+            f"hygiene-fn-diff: events const {clash[0]} is also defined in crate "
+            f"{elsewhere[clash[0]]}; const-fold reads {_EVENT_CRATE} only"
+        )
+    return out
+
+
+def _fold_event_consts(src: str, consts: dict[str, str]) -> str:
+    """Replace `krb5_log::events::NAME` in code with that const's literal."""
+    if not consts or "krb5_log::events::" not in src:
+        return src
+
+    def sub(text: str) -> str:
+        def repl(match: re.Match[str]) -> str:
+            value = consts.get(match.group(1))
+            return match.group(0) if value is None else f'"{value}"'
+
+        return _EVENT_PATH_RE.sub(repl, text)
+
+    return _map_code(src, sub)
+
+
+def _const_fold_equal(
+    old_src: str, new_src: str, old_consts: dict[str, str], new_consts: dict[str, str]
+) -> bool:
+    """True when folding the event consts leaves only doc differences."""
+    old_f = _fold_event_consts(old_src, old_consts)
+    new_f = _fold_event_consts(new_src, new_consts)
+    if old_f == old_src and new_f == new_src:
+        return False
+    return compare_norm(_strip_doc_lines(old_f)) == compare_norm(_strip_doc_lines(new_f))
+
+
+def _is_const_fold_added(
+    key: str,
+    rec: dict[str, str],
+    old: dict[str, dict[str, str]],
+    new: dict[str, dict[str, str]],
+    folded: list[tuple[str, str]],
+    new_consts: dict[str, str],
+) -> bool:
+    """An added krb5-log events const whose value replaced a literal at a
+    `const-fold` pair (the pair names the const, the old body has the literal)."""
+    crate, _, path = key.partition("\t")
+    m = _EVENT_KEY_RE.fullmatch(path)
+    if crate != _EVENT_CRATE or m is None or path != f"events::const::{m.group(1)}":
+        return False
+    value = new_consts.get(m.group(1))
+    if value is None or _EVENT_CONST_RE.search(rec["src"]) is None:
+        return False
+    needle = f"krb5_log::events::{m.group(1)}"
+    literal = f'"{value}"'
+    for okey, nkey in folded:
+        if needle in new[nkey]["src"] and literal in old[okey]["src"]:
+            return True
+    return False
+
+
+def classify(
+    old_src: str,
+    new_src: str,
+    params_ctx: dict | None = None,
+    old_consts: dict[str, str] | None = None,
+    new_consts: dict[str, str] | None = None,
+) -> str:
     if compare_norm(old_src) == compare_norm(new_src):
         return "identical"
     # allow → expect on too_many_arguments, and a sibling lint moved onto
@@ -882,6 +977,8 @@ def classify(old_src: str, new_src: str, params_ctx: dict | None = None) -> str:
         return kind
     if params_ctx is not None and _params_only(old_src, new_src, params_ctx):
         return "params-only"
+    if _const_fold_equal(old_src, new_src, old_consts or {}, new_consts or {}):
+        return "const-fold"
     return "changed"
 
 
@@ -2720,6 +2817,8 @@ def compare_trees(
         move_hits[v] = move_hits.get(v, 0) + 1
     merged_targets = {v for v, n in move_hits.items() if n > 1}
     pairs: list[tuple[str, str, str]] = []
+    old_consts = _event_const_map(old)
+    new_consts = _event_const_map(new)
     split_ok: list[str] = []
     split_fail: list[str] = []
     missing_split: list[str] = []
@@ -2862,7 +2961,7 @@ def compare_trees(
                 "by_name": by_name,
                 "self_name": ofn["name"],
             }
-        kind = classify(ofn["src"], new[nkey]["src"], ctx)
+        kind = classify(ofn["src"], new[nkey]["src"], ctx, old_consts, new_consts)
         pairs.append((okey, nkey, kind))
         used_old.add(okey)
         used_new.add(nkey)
@@ -2903,7 +3002,11 @@ def compare_trees(
         else:
             still_added.append(k)
     removed = still_removed
-    added = still_added
+    folded = [(o, n) for o, n, k in pairs if k == "const-fold"]
+    const_fold_added = [
+        k for k in still_added if _is_const_fold_added(k, new[k], old, new, folded, new_consts)
+    ]
+    added = [k for k in still_added if k not in const_fold_added]
     unused_moves = sorted(k for k in moves if k not in used_moves)
     identical = sum(1 for _o, _n, k in pairs if k == "identical")
     vis_only = [(o, n) for o, n, k in pairs if k == "vis-only"]
@@ -2912,6 +3015,7 @@ def compare_trees(
     doc_only = [(o, n) for o, n, k in pairs if k == "doc-only"]
     changed = [(o, n) for o, n, k in pairs if k == "changed"]
     params_only = [(o, n) for o, n, k in pairs if k == "params-only"]
+    const_fold = [(o, n) for o, n, k in pairs if k == "const-fold"]
 
     unaccepted: list[tuple[str, str]] = []
     missing_rhs: list[str] = []
@@ -2957,6 +3061,9 @@ def compare_trees(
         "changed": len(changed),
         "params_only": len(params_only),
         "params_only_items": params_only,
+        "const_fold": len(const_fold),
+        "const_fold_items": const_fold,
+        "const_fold_added": const_fold_added,
         "accepted": accepted,
         "unaccepted": unaccepted,
         "removed": removed,
@@ -2991,6 +3098,8 @@ def render(report: dict[str, object]) -> str:
         f"doc-only {report['doc_only']}",
         f"changed {report['changed']}",
         f"params-only {report.get('params_only', 0)}",
+        f"const-fold {report.get('const_fold', 0)}",
+        f"const-fold-added {len(report.get('const_fold_added') or [])}",  # type: ignore[arg-type]
         f"accepted {len(report['accepted'])}",  # type: ignore[arg-type]
         f"removed {len(report['removed'])}",  # type: ignore[arg-type]
         f"added {len(report['added'])}",  # type: ignore[arg-type]
@@ -3012,6 +3121,10 @@ def render(report: dict[str, object]) -> str:
         lines.append(f"doc-only {o} -> {n}")
     for o, n in report.get("params_only_items") or []:  # type: ignore[misc]
         lines.append(f"params-only {o} -> {n}")
+    for o, n in report.get("const_fold_items") or []:  # type: ignore[misc]
+        lines.append(f"const-fold {o} -> {n}")
+    for k in report.get("const_fold_added") or []:  # type: ignore[misc]
+        lines.append(f"const-fold-added {k}")
     for o, n, reason in report["accepted"]:  # type: ignore[misc]
         lines.append(f"accepted {o} -> {n}: {reason}")
     for k, sig in report.get("split_sigs", []):  # type: ignore[misc]
@@ -5459,6 +5572,187 @@ def _self_test() -> int:
             raise SystemExit(
                 "hygiene-fn-diff --self-test: a missing params key must fail"
             )
+
+        def _clear_rs(root: pathlib.Path) -> None:
+            base = root / "crates"
+            if not base.is_dir():
+                return
+            for path in base.rglob("*.rs"):
+                path.unlink()
+
+        log_one = 'pub mod events {\n    pub const KDC_PKINIT: &str = "kdc.pkinit";\n}\n'
+        lit_site = 'fn note() { event = "kdc.pkinit"; }\n'
+        const_site = "fn note() { event = krb5_log::events::KDC_PKINIT; }\n"
+
+        # A literal replaced by the krb5-log const of the same string folds;
+        # the new const is listed as const-fold-added, not dropped.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", lit_site)
+        _write_crate(new, "crates/demo/src/lib.rs", const_site)
+        _write_crate(old, "crates/krb5-log/src/lib.rs", "pub mod events {\n}\n")
+        _write_crate(new, "crates/krb5-log/src/lib.rs", log_one)
+        alias = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(alias)
+        if (
+            alias["const_fold"] != 1
+            or alias["changed"] != 0
+            or alias["added"]
+            or alias["const_fold_added"] != ["krb5-log\tevents::const::KDC_PKINIT"]
+            or "const-fold 1" not in render(alias)
+        ):
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a krb5-log event const of the same "
+                f"literal must be counted const-fold: {alias}"
+            )
+        n += 1
+
+        # Reverse: the site goes from the const back to the same literal.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", const_site)
+        _write_crate(new, "crates/demo/src/lib.rs", lit_site)
+        _write_crate(old, "crates/krb5-log/src/lib.rs", log_one)
+        _write_crate(new, "crates/krb5-log/src/lib.rs", log_one)
+        back = compare_trees(old, new, {}, {}, {}, [])
+        evaluate(back)
+        if back["const_fold"] != 1 or back["changed"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a const back to the same literal "
+                f"must be const-fold: {back}"
+            )
+        n += 1
+
+        # The site switches to a const of a different string.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", lit_site)
+        _write_crate(
+            new, "crates/demo/src/lib.rs", "fn note() { event = krb5_log::events::KDC_OTHER; }\n"
+        )
+        _write_crate(old, "crates/krb5-log/src/lib.rs", log_one)
+        _write_crate(
+            new,
+            "crates/krb5-log/src/lib.rs",
+            'pub mod events {\n    pub const KDC_PKINIT: &str = "kdc.pkinit";\n'
+            '    pub const KDC_OTHER: &str = "kdc.other";\n}\n',
+        )
+        other = compare_trees(old, new, {}, {}, {}, [])
+        if other["changed"] != 1 or other["const_fold"] != 0:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a const of a different string "
+                f"must be changed: {other}"
+            )
+        _must_red(other, "const of a different string")
+        n += 1
+
+        # The const's value changes under an unchanged site: the site reads
+        # identical (its text did not change) and the const item is changed.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", const_site)
+        _write_crate(new, "crates/demo/src/lib.rs", const_site)
+        _write_crate(old, "crates/krb5-log/src/lib.rs", log_one)
+        _write_crate(
+            new,
+            "crates/krb5-log/src/lib.rs",
+            'pub mod events {\n    pub const KDC_PKINIT: &str = "kdc.pkinit.v2";\n}\n',
+        )
+        value = compare_trees(old, new, {}, {}, {}, [])
+        if [o for o, _n in value["unaccepted"]] != ["krb5-log\tevents::const::KDC_PKINIT"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a const value changed under an "
+                f"unchanged site must leave the const changed: {value}"
+            )
+        _must_red(value, "const value changed")
+        n += 1
+
+        # A krb5_log::events path that names no &str const does not fold.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", lit_site)
+        _write_crate(new, "crates/demo/src/lib.rs", const_site)
+        _write_crate(old, "crates/krb5-log/src/lib.rs", "pub mod events {\n}\n")
+        _write_crate(
+            new,
+            "crates/krb5-log/src/lib.rs",
+            "pub mod events {\n    pub const KDC_PKINIT: u32 = 7;\n}\n",
+        )
+        nofold = compare_trees(old, new, {}, {}, {}, [])
+        if nofold["changed"] != 1 or nofold["const_fold"] != 0 or not nofold["added"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a path to a non-&str const must "
+                f"not fold: {nofold}"
+            )
+        _must_red(nofold, "non-str const path")
+        n += 1
+
+        # A same-named events const in another crate is an error.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", lit_site)
+        _write_crate(new, "crates/demo/src/lib.rs", const_site)
+        _write_crate(old, "crates/krb5-log/src/lib.rs", log_one)
+        _write_crate(new, "crates/krb5-log/src/lib.rs", log_one)
+        _write_crate(
+            new,
+            "crates/other/src/lib.rs",
+            'pub mod events {\n    pub const KDC_PKINIT: &str = "kdc.pkinit";\n}\n',
+        )
+        try:
+            compare_trees(old, new, {}, {}, {}, [])
+        except SystemExit as exc:
+            if "also defined in crate other" not in str(exc):
+                raise SystemExit(
+                    f"hygiene-fn-diff --self-test: a const-fold clash must name the crate: {exc}"
+                )
+            n += 1
+        else:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a same-named events const in another "
+                "crate must be an error"
+            )
+
+        # An added events const that no folded pair uses stays added.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", lit_site)
+        _write_crate(new, "crates/demo/src/lib.rs", const_site)
+        _write_crate(old, "crates/krb5-log/src/lib.rs", "pub mod events {\n}\n")
+        _write_crate(
+            new,
+            "crates/krb5-log/src/lib.rs",
+            'pub mod events {\n    pub const KDC_PKINIT: &str = "kdc.pkinit";\n'
+            '    pub const ORPHAN: &str = "nope";\n}\n',
+        )
+        orphan = compare_trees(old, new, {}, {}, {}, [])
+        if orphan["added"] != ["krb5-log\tevents::const::ORPHAN"]:
+            raise SystemExit(
+                f"hygiene-fn-diff --self-test: an unused event const must stay added: {orphan}"
+            )
+        _must_red(orphan, "unused event const")
+        n += 1
+
+        # A const used only by a pair that is changed for another reason is
+        # not const-fold-added: the pair is red and the const stays added.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", 'fn note() { event = "kdc.pkinit"; x(); }\n')
+        _write_crate(
+            new, "crates/demo/src/lib.rs", "fn note() { event = krb5_log::events::KDC_PKINIT; y(); }\n"
+        )
+        _write_crate(old, "crates/krb5-log/src/lib.rs", "pub mod events {\n}\n")
+        _write_crate(new, "crates/krb5-log/src/lib.rs", log_one)
+        mixed = compare_trees(old, new, {}, {}, {}, [])
+        if mixed["changed"] != 1 or mixed["added"] != ["krb5-log\tevents::const::KDC_PKINIT"]:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a const behind a changed pair must "
+                f"stay added: {mixed}"
+            )
+        _must_red(mixed, "const behind a changed pair")
+        n += 1
+        _clear_rs(old)
+        _clear_rs(new)
     live = extract(ROOT)
     suffixed = [k for k in live if "#" in k]
     if suffixed:

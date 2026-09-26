@@ -3008,7 +3008,7 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 31
 HYGIENE_BODY_DIFF_MIN_CASES = 41
-HYGIENE_FN_DIFF_MIN_CASES = 134
+HYGIENE_FN_DIFF_MIN_CASES = 142
 HYGIENE_INVENTORY_MIN_CASES = 3
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
@@ -3236,6 +3236,7 @@ def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
             "impl-header",
             "head:",
             "rustfmt_skip",
+            "const-fold",
         ):
             if needle not in testing:
                 _die(f"docs/testing.md must describe fn-diff {needle}")
@@ -5417,7 +5418,7 @@ jobs:
         "def _self_test():\n    x + 2 phase_b pub(crate)\n"
         "    # unused-accept fixture must be otherwise green\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (134 cases)')\n"
+        "        print('hygiene-fn-diff: self-test ok (142 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_fn_diff_self_test, "def main():\n    return 0\n")
