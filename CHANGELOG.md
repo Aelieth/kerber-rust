@@ -191,6 +191,13 @@ this project uses semantic versioning once a crate is published.
   round-trips, profile parsing, the RFC 3962 string-to-key answers,
   principal names, deltat and time parsing), and the CI test job runs
   them with `cargo test --workspace --doc`.
+- **client.** `krb5-client` no longer prints. The key-expired banner
+  reaches the caller through `KinitParams::key_exp_notice`, a
+  `KeyExpNotice` callback called at the statement where the library
+  printed, and `krb5-kinit` passes an `eprintln!`. Its stderr is
+  byte-equal to `0d5fa7f4`'s on every path: `rust-kpasswd-mit-gate.sh`
+  K1 (the change and the kinit succeed) and K2 (the ccache write fails
+  after the change), and `client-gate.sh` C1 (nothing listens on 464).
 
 ### W3-S3.10 parameter structs
 

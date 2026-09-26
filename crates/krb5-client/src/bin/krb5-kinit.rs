@@ -12,7 +12,8 @@ use std::path::Path;
 
 use krb5_client::cli::{parse_kinit, read_password_line, read_prompt_line};
 use krb5_client::{
-    KinitParams, NewPasswordPrompter, kinit_with, local_host_addresses, mit_error_code,
+    KeyExpNotice, KinitParams, NewPasswordPrompter, kinit_with, local_host_addresses,
+    mit_error_code,
 };
 use krb5_config::{env_ktname, env_new_password, env_password, parse_deltat, resolve_ccspec};
 use krb5_protocol::{AsTicketOpts, KdcAddr, parse_principal_ex};
@@ -161,6 +162,7 @@ fn main() {
         let b = read_prompt_line("Enter it again: ")?;
         Ok((a, b))
     };
+    let key_exp_notice = |banner: &str| eprintln!("{banner}");
     {
         let params = KinitParams {
             service: service.as_deref(),
@@ -183,6 +185,7 @@ fn main() {
                 || conf.as_ref().is_some_and(|c| c.canonicalize),
             new_password: new_password.as_deref(),
             prompter: (!args.keytab).then_some(NewPasswordPrompter(&prompter)),
+            key_exp_notice: Some(KeyExpNotice(&key_exp_notice)),
         };
         match kinit_with(&addr, &principal, &mut password, &spec, params) {
             Ok(r) => {

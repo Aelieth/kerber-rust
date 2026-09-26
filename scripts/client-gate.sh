@@ -188,5 +188,23 @@ docker exec "$NAME" test ! -e "/tmp/krb5cc_${NUID}"
 KEEP="$(docker exec "$NAME" cat /tmp/krb5cc_0)"
 echo "default_uid=${NUID} krb5cc_0=$KEEP uid_file_gone=yes"
 test "$KEEP" = "keep"
+
+echo "==== C1 Rust krb5-kinit KEY_EXP with no kpasswd listener: banner, then the error ===="
+# The harness runs krb5kdc only, so the change password step finds nothing on 464;
+# stderr is byte-equal to 0d5fa7f4's on that path.
+if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',464),0.3)" 2>/dev/null; then
+    die "C1 needs nothing listening on 464 in $NAME"
+fi
+docker exec "$NAME" kadmin.local -q 'delprinc -force s4kc1' >/dev/null 2>&1 || true
+docker exec "$NAME" kadmin.local -q 'addprinc -pw exp-old -pwexpire 2020-01-01 s4kc1' >/dev/null
+docker exec -e KRB5_PASSWORD=exp-old -e KRB5_NEW_PASSWORD=exp-new "$NAME" \
+    sh -c '/tmp/krb5-kinit -c /tmp/cc_s4kc1 s4kc1@KERBER.TEST >/tmp/s4kc1.out 2>/tmp/s4kc1.err; echo $? >/tmp/s4kc1.rc'
+echo "s4kc1: rc=$(docker exec "$NAME" cat /tmp/s4kc1.rc)"
+docker exec "$NAME" sed 's/^/  s4kc1 stderr| /' /tmp/s4kc1.err
+[ "$(docker exec "$NAME" cat /tmp/s4kc1.rc)" = 1 ] || die "C1 krb5-kinit did not fail"
+docker exec "$NAME" sh -c "printf 'Password expired.  You must change it now.\\nkinit failed: transport: Connection refused (os error 111)\\n' | cmp -s - /tmp/s4kc1.err" \
+    || die "C1 stderr differs from 0d5fa7f4 (banner, then kinit failed: transport: Connection refused)"
+echo "RUST_kinit_keyexp_banner_chpw_refused"
+
 log "client.gate" "ok" ',"principal":"user@KERBER.TEST"'
 exit 0

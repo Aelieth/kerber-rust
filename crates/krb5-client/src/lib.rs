@@ -76,6 +76,9 @@ pub struct KinitParams<'a> {
     /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:213-214`): with no prompter,
     /// `KDC_ERR_KEY_EXP` stays the error, so `None` with no `new_password` leaves it too.
     pub prompter: Option<NewPasswordPrompter<'a>>,
+    /// Where the KEY_EXP banner goes when `new_password` answers the change: it is called
+    /// with the banner just before the change is sent. `None` shows no banner.
+    pub key_exp_notice: Option<KeyExpNotice<'a>>,
 }
 
 /// `krb5_prompter_fct` narrowed to the KEY_EXP new-password prompts.
@@ -90,6 +93,18 @@ pub type PromptReply = Result<(Vec<u8>, Vec<u8>), String>;
 impl std::fmt::Debug for NewPasswordPrompter<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("NewPasswordPrompter")
+    }
+}
+
+/// Receives the KEY_EXP banner (`Password expired.  You must change it now.`) when
+/// [`KinitParams::new_password`] answers an expired password; `krb5-kinit` prints it on
+/// stderr.
+#[derive(Clone, Copy)]
+pub struct KeyExpNotice<'a>(pub &'a (dyn Fn(&str) + 'a));
+
+impl std::fmt::Debug for KeyExpNotice<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("KeyExpNotice")
     }
 }
 
@@ -443,7 +458,8 @@ fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::pat
 /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:211-214`): an error other than key-expired
 /// is returned unchanged, and key-expired with no prompter is not a change.
 /// Here key-expired from a password AS leads to the change only when a prompter or a
-/// `new_password` source is given, and a keytab request never does. This function builds the
+/// `new_password` source is given, and a keytab request never does; with `new_password`,
+/// `key_exp_notice` gets the banner before the change is sent. This function builds the
 /// credentials; `kinit_with` writes the cache only when they come back.
 fn kinit_inner(
     kdc: &KdcAddr,
@@ -557,7 +573,9 @@ fn kinit_inner(
             let chpw_as = as_exchange(&chpw_req)?;
             let mut new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
-                    eprintln!("{KEY_EXP_BANNER}");
+                    if let Some(n) = params.key_exp_notice {
+                        (n.0)(KEY_EXP_BANNER);
+                    }
                     krb5_protocol::change_password(&resolved, &chpw_as, p)?;
                     p.to_vec()
                 }
@@ -633,7 +651,8 @@ fn kinit_inner(
     Ok((KinitResult { as_out, tgs_out }, cache))
 }
 
-/// Banner shown ahead of the new-password prompts.
+/// Banner shown ahead of the new-password prompts, and passed to `key_exp_notice` when
+/// `new_password` answers the change.
 /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-238`): the new-password prompts set up
 /// here are shown under this banner.
 const KEY_EXP_BANNER: &str = "Password expired.  You must change it now.";
