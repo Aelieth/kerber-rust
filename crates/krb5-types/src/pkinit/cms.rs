@@ -989,9 +989,10 @@ struct CmsParts {
     e_content_type: Vec<u8>,
 }
 
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2022-2028`): a received message that is
-/// not id-signedData is refused.
-/// A body that is not SignedData is not a certificate list or a set of signers.
+/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2022-2028`): MIT refuses a message whose
+/// ContentInfo type is not id-signedData ("wrong oid"); this port does not check that type and
+/// reads the `[0]` content as SignedData whatever the OID.
+/// Content that does not parse as SignedData is an error.
 fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     let (tag, ci, _) = take_tlv(der).ok_or("cms")?;
     if tag != 0x30 {

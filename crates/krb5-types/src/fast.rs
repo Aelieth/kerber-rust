@@ -27,10 +27,12 @@ pub struct KrbFastArmor {
 /// KrbFastArmoredReq ::= SEQUENCE { armor, req-checksum, enc-fast-req }
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct KrbFastArmoredReq {
-    /// Optional armor (present on the first FAST request).
+    /// Armor: present on every armored AS request, absent on a TGS request, whose PA-TGS-REQ
+    /// supplies the armor key.
     #[rasn(tag(explicit(0)))]
     pub armor: Option<KrbFastArmor>,
-    /// Checksum over the KDC-REQ-BODY using the armor key.
+    /// Checksum keyed with the armor key: over the outer KDC-REQ-BODY on an AS request, over the
+    /// PA-TGS-REQ AP-REQ on a TGS request.
     #[rasn(tag(explicit(1)))]
     pub req_checksum: Checksum,
     /// Encrypted [`KrbFastReq`].
