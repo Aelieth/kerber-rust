@@ -455,12 +455,12 @@ fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::pat
     (id, an)
 }
 
-/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:211-214`): an error other than key-expired
-/// is returned unchanged, and key-expired with no prompter is not a change.
-/// Here key-expired from a password AS leads to the change only when a prompter or a
-/// `new_password` source is given, and a keytab request never does; with `new_password`,
-/// `key_exp_notice` gets the banner before the change is sent. This function builds the
-/// credentials; `kinit_with` writes the cache only when they come back.
+/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:211-214`): MIT returns any error but
+/// key-expired unchanged, and key-expired too when there is no prompter; this port changes the
+/// password on key-expired from a password AS when a prompter or a `new_password` source is
+/// given, and never for a keytab request.
+/// With `new_password`, `key_exp_notice` gets the banner before the change is sent. This function
+/// builds the credentials; `kinit_with` writes the cache only when they come back.
 fn kinit_inner(
     kdc: &KdcAddr,
     principal: &str,

@@ -246,11 +246,10 @@ fn encode_incr_update(
     w.u32(0);
 }
 
-/// MIT `ulog_conv_2logentry` (`kdb_convert.c:472-486`): a stored mod-principal is shipped as its
-/// own attribute.
-/// This encoder always writes `kadmin/admin@REALM` as that attribute, whatever the record holds,
-/// and takes only the modification time from the record, because an entry without the attribute
-/// corrupts the replica.
+/// MIT `ulog_conv_2logentry` (`kdb_convert.c:472-486`): MIT ships the stored mod-principal and its
+/// time as `AT_MOD_PRINC` and `AT_MOD_TIME`; this encoder always writes `kadmin/admin@REALM` as
+/// `AT_MOD_PRINC`, whatever the record holds, and takes only the time from the record, because an
+/// entry without the attribute corrupts the replica.
 /// MIT `ulog_conv_2logentry` (`kdb_convert.c:490-493`): the raw `KRB5_TL_LAST_PWD_CHANGE` and
 /// `KRB5_TL_MOD_PRINC` records stay out of `AT_TL_DATA`; this encoder still sends them there.
 pub(super) fn encode_kdbe(
