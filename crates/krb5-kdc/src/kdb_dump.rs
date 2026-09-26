@@ -247,10 +247,11 @@ impl DumpFile {
 }
 
 impl DumpPrincipal {
-    /// MIT `process_k5beta7_princ` (`dump.c:702-723`): the policy binding comes only from a
-    /// KRB5_TL_KADM_DATA record that decodes and names a policy.
-    /// The master-key principal is refused when its key does not match the derived master
-    /// key, and the policy binding is taken from the admin tagged data.
+    /// MIT `process_k5beta7_princ` (`dump.c:702-723`): MIT binds a policy only from a
+    /// `KRB5_TL_KADM_DATA` record that decodes and names one, and loads the principal when that
+    /// record does not decode; this port also takes the policy from the legacy `0x4B02` record of
+    /// older Rust dumps, and fails the load when `KRB5_TL_KADM_DATA` does not decode.
+    /// The master-key principal is refused when its key does not match the derived master key.
     fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
