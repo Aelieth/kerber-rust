@@ -3018,7 +3018,7 @@ HYGIENE_INVENTORY_MIN_CASES = 3
 # constant in that commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 574
 MIT_TRUTH_ALLOW = 45
-PROCESS_TAG_ALLOW = 0
+PROCESS_TAG_ALLOW = 47
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
     "scripts/lib/prod-realm-common.sh",
@@ -6230,8 +6230,14 @@ jobs:
         src = tag_root / "crates" / "demo" / "src"
         src.mkdir(parents=True)
         good = src / "lib.rs"
-        good.write_text("// the parent principal stays\n", encoding="utf-8")
-        check_no_process_history(tag_root, allow=0)
+        for body in (
+            "// the parent principal stays\n",
+            "/// the magic word `deadbeef` and `0x12345678`\n",
+            "/// each item is checked; networking/ is not a path here\n",
+            "/// a SHA-256 digest; B-frames; F-strings\n",
+        ):
+            good.write_text(body, encoding="utf-8")
+            check_no_process_history(tag_root, allow=0)
         good.write_text('fn f() {\n    let s = "// R12 in a string";\n}\n', encoding="utf-8")
         check_no_process_history(tag_root, allow=0)
         tagged = {
@@ -6245,6 +6251,15 @@ jobs:
             "B3": "// referral (B3).\n",
             "Y0": "// the Y0 mismatch\n",
             "Z": "// before Z6.3 the wire code was 60\n",
+            "sha": "//! the check landed in `59c363b`.\n",
+            "parent-red": "//! the unit is (parent-red).\n",
+            "compiles-at": "//! Compiles at the parent and fails there.\n",
+            "item": "/// order stays item 15.\n",
+            "S-section": "// Helpers moved here in S2.3.\n",
+            "Z-leftover": "//! Z8 leftover: the stamp.\n",
+            "B-F": "//! F4 hierarchical referral.\n",
+            "the-parent": "//! at the parent `abcdef0` it fails.\n",
+            "working": "//! see `working/logs/x.log`.\n",
         }
         for body in tagged.values():
             good.write_text(body, encoding="utf-8")
@@ -6256,7 +6271,7 @@ jobs:
             )
         good.write_text(tagged["B3"], encoding="utf-8")
         check_no_process_history(tag_root, allow=1)
-        if len(tagged) != 10:
+        if len(tagged) != 19:
             _die("process-history fixtures dropped a tag")
     finally:
         subprocess.run(["rm", "-rf", str(tag_root)], check=False)
@@ -6839,6 +6854,16 @@ _PROCESS_TAG = re.compile(
     r"|\bB3\b"
     r"|\bY0\b"
     r"|Z[0-9]b?\.[0-9]"
+    # v2: what survived the first regex.
+    r"|`(?=[0-9a-f]*[a-f])(?=[0-9a-f]*[0-9])[0-9a-f]{7,8}`"
+    r"|parent-red"
+    r"|Compiles at"
+    r"|\bitem [0-9]+\b"
+    r"|\bS[0-9]\.[0-9]"
+    r"|\bZ[0-9] leftover"
+    r"|\b[BF][0-9]\b"
+    r"|the parent `"
+    r"|(?<![\w/.-])working/"
 )
 
 

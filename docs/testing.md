@@ -103,11 +103,15 @@ exactly one file. It lists every violation. The resolution is a port of
 the audit's reference resolver. `MIT_TRUTH_ALLOW` holds it advisory at
 the live count until the anchors are rewritten.
 
-`check_no_process_history` rejects a process tag on a `//` comment
-anywhere under `crates/`: `R12`, `A′-3`, `W0e`, `W1-Z`, `Round 2`,
-`parent` plus seven hex digits, `R2-S3`, `B3`, `Y0`, and `Z6.3`.
-`PROCESS_TAG_ALLOW` is 0, so the check is hard. A tag inside a
-string literal is not a comment.
+`check_no_process_history` rejects a process tag on any comment line
+under `crates/` (block comments included): `R12`, `A′-3`, `W0e`,
+`W1-Z`, `Round 2`, `parent` plus seven hex digits, `R2-S3`, `B3`,
+`Y0`, `Z6.3`, a backticked seven- or eight-digit commit hash,
+`parent-red`, `Compiles at`, `item 15`, `S2.3`, `Z8 leftover`, a lone
+`B2` / `F4`, "the parent `…`", and a `working/` path. A tag inside a
+string literal is not a comment. The check is advisory while
+`PROCESS_TAG_ALLOW` equals the live count and hard at 0. Rule names
+(`R1`–`R4`) live in `docs/`, never in `crates/`.
 
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
 [--accept] [--params] [--split] [--glue] [--roots]` is the product-fn sibling:

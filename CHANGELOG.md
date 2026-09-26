@@ -98,6 +98,10 @@ this project uses semantic versioning once a crate is published.
   entry. A callee or macro in a function's place, a trailing overhang,
   MIT test code cited from product code, and an ambiguous or unknown file
   are red. Advisory at the live count, 45.
+- **ci.** `check_no_process_history` v2 also rejects a backticked commit
+  hash, `parent-red`, `Compiles at`, `item N`, `S2.3`, `Z8 leftover`, a
+  lone `B2` / `F4`, "the parent `…`", and a `working/` path in a
+  `crates/` comment. Advisory at the live count, 47.
 
 ### W3-S3.10 parameter structs
 
