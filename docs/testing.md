@@ -439,7 +439,8 @@ carries the oracle leg) or `diff <(` — cell-header prose is not a
 leg — or an oracle `settle.sh` artefact whose `cmd=` runs a MIT, Samba
 or Heimdal tool (a Rust-side gate run is not a leg); a tooling bullet
 (references into `scripts/*.py`) must name the `_self_test` fixture line
-that exercises the rule; and every named artefact must exist, be stamped
+that exercises the rule (a `_must_die(`, `_must_die_msg(`, `must_fail(`, `_must_pass(`,
+`assert` or `raise AssertionError` line); and every named artefact must exist, be stamped
 and carry a quoted value. `ci-policy` runs its fixtures; the audit runs it on the
 landed summary with `--stamp` into the evidence directory.
 

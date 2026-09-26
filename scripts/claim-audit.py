@@ -18,8 +18,9 @@ from container variables around the line — `"$NAME"`, `NAME_MIT`,
 line is both; a cell in a Samba, Heimdal or AD gate carries the oracle
 leg) or an oracle settle artefact (its `cmd=` runs a MIT,
 Samba or Heimdal tool — a Rust-side gate run is not a leg), a tooling
-bullet (references into `scripts/*.py`) names a fixture line or a line
-inside a check that runs the tool, and every artefact exists, is stamped (`head_sha=`
+bullet (references into `scripts/*.py`) names a fixture line (`_must_die(`,
+`_must_die_msg(`, `must_fail(`, `_must_pass(`, `assert`, `raise AssertionError`)
+or a line inside a check that runs the tool, and every artefact exists, is stamped (`head_sha=`
 and `tree_sha=`) and carries a quoted value.
 
 Freeze rule (W1-Z Z3): a closed summary carries `Frozen-at: <sha>` under its
@@ -49,7 +50,8 @@ CITE_RE = re.compile(r"^[\w./-]+\.(?:c|h|y|et|x|rs|md|txt)(?::[\d,-]+)?$")
 UNIT_RE = re.compile(r"^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$")
 ASSERT_RE = re.compile(
     r"grep -[a-zA-Z]*[qFEx]\b|diff <\(|\bdie\b|\bexit [1-9]|^\s*\[{1,2} |\bif \[|\belif \[|^\s*test "
-    r"|\|\| \{|^\s*assert\b|raise SystemExit|\b_die\(|_must_die\(|must_fail\(|_must_pass\(|raise AssertionError",
+    r"|\|\| \{|^\s*assert\b|raise SystemExit|\b_die\(|_must_die\(|_must_die_msg\(|must_fail\("
+    r"|_must_pass\(|raise AssertionError",
     re.M,
 )
 FUNC_RE = re.compile(r"^(\w+)\(\) \{$", re.M)
@@ -70,8 +72,8 @@ ORACLE_TOOLS = {
 ORACLE_RE = re.compile(r"\b(?:mit|oracle|samba|heimdal)\b", re.I)
 ORACLE_GATE_RE = re.compile(r"(?:samba|heimdal|ad-)[\w-]*-gate\.sh$")
 DOCKER_OPT_ARG = {"-e", "--env", "-w", "--workdir", "-u", "--user", "--entrypoint", "--name", "--network"}
-FIXTURE_RE = re.compile(r"_must_die\(|must_fail\(|_must_pass\(|\bassert\b|raise AssertionError")
-PROBE_RE = re.compile(r"subprocess\.(?:run|check_output|Popen)\(|_must_die\(|must_fail\(|\bassert\b")
+FIXTURE_RE = re.compile(r"_must_die\(|_must_die_msg\(|must_fail\(|_must_pass\(|\bassert\b|raise AssertionError")
+PROBE_RE = re.compile(r"subprocess\.(?:run|check_output|Popen)\(|_must_die\(|_must_die_msg\(|must_fail\(|\bassert\b")
 DEF_RE = re.compile(r"^(?:def |[A-Za-z_])")
 HEADER = "asserting cell"
 FROZEN_RE = re.compile(r"^Frozen-at:\s*`?([0-9a-f]{7,40})`?", re.M)

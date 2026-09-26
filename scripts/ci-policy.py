@@ -4100,6 +4100,17 @@ def check_claim_audit() -> None:
         tooling = "- **Tooling with fixture:** `value=1` at `scripts/fx-policy.py:3` / `:7`.\n"
         if any(r[1] != "ok" for r in rows(tooling)):
             _die(f"claim-audit refused a tooling claim with its fixture: {rows(tooling)}")
+        # A fixture that asserts the die message counts, by that exact name.
+        (root / "scripts" / "fx-msg-policy.py").write_text(
+            "def check():\n    if bad:\n        _die('value=1 wrong')\n\n\n"
+            "def _self_test():\n    _must_die_msg('value=1 wrong', check)\n"
+        )
+        msg_tooling = "- **Message fixture:** `value=1` at `scripts/fx-msg-policy.py:3` / `:7`.\n"
+        if any(r[1] != "ok" for r in rows(msg_tooling)):
+            _die(f"claim-audit refused a tooling claim with its _must_die_msg fixture: {rows(msg_tooling)}")
+        no_fixture = "- **Message tooling alone:** `value=1` at `scripts/fx-msg-policy.py:3`.\n"
+        if not any("tooling claim names no fixture line" in r[2] for r in rows(no_fixture)):
+            _die(f"claim-audit must fail a tooling claim with no fixture call in its window: {rows(no_fixture)}")
     finally:
         subprocess.run(["rm", "-rf", str(root)], check=False)
 

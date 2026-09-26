@@ -29,6 +29,9 @@ this project uses semantic versioning once a crate is published.
   and errors on a same-named `events` const in another crate. Nothing
   else folds: a moved print, a new field or a new type is an accept
   row. Self-test floor 142.
+- **tool.** `claim-audit.py` accepts a `_must_die_msg(` call, by that
+  exact name, as the fixture line a tooling bullet must cite; the three
+  comment checks' fixtures assert through it.
 - **ci.** `check_ci_no_workspace_cargo_test` lets the test job run
   `cargo test --workspace --doc` (nextest runs no doctests); any other
   workspace `cargo test` is red. The job runs twelve worked examples on
