@@ -68,7 +68,7 @@ impl AsReqBuilder {
     ///
     /// # Errors
     ///
-    /// Same as [`krb5_protocol::as_req`] / [`krb5_protocol::as_req_sname`].
+    /// [`krb5_protocol::Error::ReplyMismatch`] when the realm is not ASCII GeneralString.
     pub fn build(self) -> Result<AsReq, krb5_protocol::Error> {
         match (self.sname, self.etypes) {
             (None, None) => as_req(self.cname, &self.realm, self.nonce, self.padata),
@@ -198,7 +198,10 @@ impl TgsReqBuilder {
     ///
     /// # Errors
     ///
-    /// An encode failure or a key failure.
+    /// [`krb5_protocol::Error::ReplyMismatch`] when the realm or client realm is not ASCII
+    /// GeneralString; [`krb5_protocol::Error::Asn1`] when the body, authenticator, or AP-REQ
+    /// does not encode; [`krb5_protocol::Error::Crypto`] when the body checksum or the
+    /// authenticator encryption fails.
     pub fn build(self) -> Result<TgsReq, krb5_protocol::Error> {
         tgs_req_ex(TgsReqParams {
             ticket: self.ticket,

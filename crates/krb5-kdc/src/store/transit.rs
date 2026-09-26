@@ -86,7 +86,9 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::AlreadyExists`].
+    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `krbtgt/FOREIGN`;
+    /// [`Error::AlreadyExists`] when that principal exists; [`Error::PasswordPolicy`] when
+    /// `password` is empty; [`Error::Crypto`] when saving the store to `persist_paths` fails.
     pub fn create_interrealm(
         &mut self,
         acl: &Acl,
@@ -116,7 +118,9 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::AlreadyExists`].
+    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `krbtgt/FOREIGN`;
+    /// [`Error::AlreadyExists`] when that principal exists; [`Error::Crypto`] when saving the
+    /// store to `persist_paths` fails.
     pub fn create_interrealm_key(
         &mut self,
         acl: &Acl,
@@ -155,7 +159,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`].
+    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on the incoming trust
+    /// principal; [`Error::Crypto`] when saving the store to `persist_paths` fails.
     pub fn add_interrealm_decrypt_key(
         &mut self,
         acl: &Acl,
@@ -170,7 +175,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`].
+    /// [`Error::AclDenied`] when the ACL does not grant `actor` add on the incoming trust
+    /// principal; [`Error::Crypto`] when saving the store to `persist_paths` fails.
     pub fn set_interrealm_decrypt_key(
         &mut self,
         acl: &Acl,

@@ -146,7 +146,17 @@ impl Drop for PkinitClient {
 ///
 /// # Errors
 ///
-/// Returns transport, crypto, or `KRB-ERROR` failures.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or FAST subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (`PREAUTH_FAILED` also
+/// when a decrypted FAST error holds no FX-ERROR); [`Error::ReplyIntegrity`] when the AS-REP
+/// enc-part fails its integrity check under the reply key (a wrong password);
+/// [`Error::NonceMismatch`] for another nonce; [`Error::ReplyMismatch`] when the reply fails a
+/// check against the request (names, etype, flags, times, the enc-pa-rep checksum, or the FAST,
+/// SPAKE, or PKINIT exchange) or the request is refused before it is sent (a realm that is not a
+/// GeneralString, SPAKE with FAST or PKINIT, anonymous without a PKINIT identity);
+/// [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for one that is
+/// neither AS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
+/// [`Error::Crypto`] when a key cannot be derived or another crypto step fails.
 pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
     wrap_as(req, &[])
 }
@@ -155,7 +165,17 @@ pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or FAST subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (`PREAUTH_FAILED` also
+/// when a decrypted FAST error holds no FX-ERROR); [`Error::ReplyIntegrity`] when the AS-REP
+/// enc-part fails its integrity check under the reply key (a wrong key or password);
+/// [`Error::NonceMismatch`] for another nonce; [`Error::ReplyMismatch`] when the reply fails a
+/// check against the request (names, etype, flags, times, the enc-pa-rep checksum, or the FAST,
+/// SPAKE, or PKINIT exchange) or the request is refused before it is sent (a realm that is not a
+/// GeneralString, SPAKE with FAST or PKINIT, anonymous without a PKINIT identity);
+/// [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for one that is
+/// neither AS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
+/// [`Error::Crypto`] when a key cannot be derived or another crypto step fails.
 pub fn as_exchange_with_keys(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -167,7 +187,15 @@ pub fn as_exchange_with_keys(
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request;
+/// [`Error::ReplyIntegrity`] when the AS-REP enc-part fails its integrity check under the reply
+/// key (a wrong key); [`Error::NonceMismatch`] for another nonce; [`Error::ReplyMismatch`] when
+/// the reply fails a check against the request (names, etype, flags, times, the enc-pa-rep
+/// checksum, or a SPAKE exchange) or `realm` is not a GeneralString; [`Error::TruncatedReply`]
+/// for an empty reply and [`Error::UnexpectedPdu`] for one that is neither AS-REP nor KRB-ERROR;
+/// [`Error::Asn1`] when a message does not encode or decode; [`Error::Crypto`] when a key cannot
+/// be derived or another crypto step fails.
 pub fn as_exchange_key(
     cname: PrincipalName,
     realm: &str,
@@ -891,7 +919,8 @@ pub(crate) fn as_sname_eq(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`).
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) when the enc-part server is not the ticket
+/// server, or is not the requested server outside the `canon_req` case where both are TGS names.
 pub fn verify_as_reply_server(
     enc_sname: &PrincipalName,
     enc_srealm: &krb5_types::Realm,
@@ -925,7 +954,8 @@ pub fn verify_as_reply_server(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`).
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) when `endtime` is after `till`, `renew_till`
+/// is after the bound `opts` set, or a POSTDATED starttime is not `from`.
 pub fn verify_as_reply_req_times(
     enc: &EncKdcRepPart,
     till: &KerberosTime,

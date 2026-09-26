@@ -28,7 +28,8 @@ pub struct LongOpt {
 ///
 /// # Errors
 ///
-/// Unknown option or missing argument.
+/// An error message when an option is not in `optstring` or `longs`, an option that takes an
+/// argument has none, or a long option that takes none is given one (`--name=value`).
 pub fn getopt(
     args: &[String],
     optstring: &str,
@@ -225,7 +226,8 @@ fn kinit_longs() -> &'static [LongOpt] {
 ///
 /// # Errors
 ///
-/// Unknown option or missing argument.
+/// An error message when an option is not a `kinit` option, an option that takes an argument
+/// has none, or `--spake`, `--fast` or `--enterprise` is given `=value`.
 pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, String> {
     let (opts, rest) = getopt(args, KINIT_OPTSTRING, kinit_longs())?;
     let mut out = KinitArgs::default();
@@ -408,7 +410,9 @@ fn kvno_longs() -> &'static [LongOpt] {
 ///
 /// # Errors
 ///
-/// Unknown option or missing argument.
+/// An error message when an option is not a `kvno` option, an option that takes an argument
+/// has none, or a flag-only long option is given `=value`; when `--renew`, `--renew-ticket` or
+/// `--u2u` comes without `--body-realm`; or when `-P` comes without `-U`.
 pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
     let (opts, rest) = getopt(args, "c:U:P", kvno_longs())?;
     let mut out = KvnoArgs::default();
@@ -521,7 +525,8 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// Stdin read failure.
+/// The message `failed to read password from stdin` when stdin cannot be read or the line is
+/// not UTF-8.
 pub fn read_password_line(principal: &str) -> Result<Vec<u8>, String> {
     read_prompt_line(&format!("Password for {principal}: "))
 }
@@ -534,7 +539,8 @@ pub fn read_password_line(principal: &str) -> Result<Vec<u8>, String> {
 ///
 /// # Errors
 ///
-/// stdin read failure.
+/// The message `failed to read password from stdin` when stdin cannot be read or the line is
+/// not UTF-8.
 pub fn read_prompt_line(prompt: &str) -> Result<Vec<u8>, String> {
     use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
     use std::io::Write as _;

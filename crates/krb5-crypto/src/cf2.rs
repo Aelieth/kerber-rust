@@ -18,7 +18,8 @@ use crate::prf::prf_plus;
 ///
 /// # Errors
 ///
-/// Bad length or [`Error::InvalidParams`].
+/// None: both [`prf_plus`] calls ask for `k1`'s key length, which is never 0 (the only length it
+/// refuses), and [`ProtocolKey::from_bytes`] gets exactly that many octets.
 pub fn krb_fx_cf2(
     k1: &ProtocolKey,
     k2: &ProtocolKey,
@@ -40,7 +41,8 @@ pub fn krb_fx_cf2(
 ///
 /// # Errors
 ///
-/// [`Error::InvalidKeyLength`] should not occur after truncation.
+/// None: the key is always `etype.key_len()` octets (a prefix of `bytes`, or its SHA-256
+/// repeated), the length [`ProtocolKey::from_bytes`] requires.
 pub fn key_from_shared(etype: EncryptionType, bytes: &[u8]) -> Result<ProtocolKey, Error> {
     let n = etype.key_len();
     if bytes.len() >= n {
@@ -88,7 +90,8 @@ pub fn p256_generate() -> Result<P256Keypair, Error> {
 ///
 /// # Errors
 ///
-/// Invalid peer public key or scalar.
+/// [`Error::Integrity`] when `secret` is zero or not below the P-256 order, or `peer_public` is
+/// not a SEC1 encoding of a curve point or is the identity.
 pub fn p256_shared(secret: &[u8; 32], peer_public: &[u8]) -> Result<[u8; 32], Error> {
     use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
     use p256::{AffinePoint, EncodedPoint, ProjectivePoint};
@@ -112,7 +115,7 @@ pub fn p256_shared(secret: &[u8; 32], peer_public: &[u8]) -> Result<[u8; 32], Er
 ///
 /// # Errors
 ///
-/// Invalid scalar or signing failure.
+/// [`Error::Integrity`] when `secret` is zero or not below the P-256 order.
 pub fn p256_ecdsa_sign(secret: &[u8; 32], message: &[u8]) -> Result<Vec<u8>, Error> {
     use p256::ecdsa::signature::Signer;
     use p256::ecdsa::{Signature, SigningKey};
@@ -125,7 +128,8 @@ pub fn p256_ecdsa_sign(secret: &[u8; 32], message: &[u8]) -> Result<Vec<u8>, Err
 ///
 /// # Errors
 ///
-/// Invalid public key, signature, or verify failure.
+/// [`Error::Integrity`] when `public` is not a SEC1 P-256 public key, `der_sig` is not a DER
+/// ECDSA signature, or the signature does not verify over `message`.
 pub fn p256_ecdsa_verify(public: &[u8], message: &[u8], der_sig: &[u8]) -> Result<(), Error> {
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
@@ -160,7 +164,8 @@ fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
 ///
 /// # Errors
 ///
-/// A bad key length or a refused etype.
+/// None: the SHA-1 stream is cut to exactly `etype.key_len()` octets, the length
+/// [`ProtocolKey::from_bytes`] requires.
 pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, Error> {
     let n = etype.key_len();
     let mut buf = Vec::with_capacity(n + 20);
@@ -187,7 +192,8 @@ pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, E
 ///
 /// # Errors
 ///
-/// A bad key length or a refused etype.
+/// None: the SHA-256 stream is cut to exactly `etype.key_len()` octets, the length
+/// [`ProtocolKey::from_bytes`] requires.
 pub fn pkinit_kdf_agile(
     etype: EncryptionType,
     shared: &[u8],

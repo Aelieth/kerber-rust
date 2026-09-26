@@ -73,7 +73,7 @@ pub fn ascii(s: &str) -> KerberosString {
 ///
 /// # Errors
 ///
-/// Returns [`NameError`] when `s` is not a GeneralString.
+/// [`NameError::NotGeneralString`] when `s` is not ASCII.
 pub fn try_ascii(s: &str) -> Result<KerberosString, NameError> {
     if !s.is_ascii() {
         return Err(NameError::NotGeneralString);
@@ -85,7 +85,8 @@ pub fn try_ascii(s: &str) -> Result<KerberosString, NameError> {
 ///
 /// # Errors
 ///
-/// Returns [`NameError`] when the bytes are not UTF-8 GeneralString.
+/// [`NameError::NotUtf8`] when the bytes are not UTF-8; [`NameError::NotGeneralString`] when the
+/// text is not ASCII.
 pub fn kerberos_string_from_bytes(bytes: &[u8]) -> Result<KerberosString, NameError> {
     let s = std::str::from_utf8(bytes).map_err(|_| NameError::NotUtf8)?;
     try_ascii(s)
@@ -123,7 +124,7 @@ impl Microseconds {
     ///
     /// # Errors
     ///
-    /// Returns [`TimeError::MicrosecondsOutOfRange`] when `n > 999999`.
+    /// [`TimeError::MicrosecondsOutOfRange`] when `n > 999999`.
     pub fn new(n: u32) -> Result<Self, TimeError> {
         if n > Self::MAX {
             Err(TimeError::MicrosecondsOutOfRange(n))
@@ -148,8 +149,7 @@ impl Microseconds {
     ///
     /// # Errors
     ///
-    /// Returns [`TimeError::MicrosecondsOutOfRange`] when the stored integer
-    /// is greater than 999999.
+    /// [`TimeError::MicrosecondsOutOfRange`] when the stored integer is greater than 999999.
     pub fn validate(self) -> Result<Self, TimeError> {
         Self::new(self.0)
     }
@@ -204,7 +204,7 @@ impl PrincipalName {
     ///
     /// # Errors
     ///
-    /// Returns [`NameError`] when a component is not a GeneralString.
+    /// [`NameError::NotGeneralString`] when a component is not ASCII.
     pub fn try_new(
         name_type: i32,
         parts: impl IntoIterator<Item = impl AsRef<str>>,
@@ -223,7 +223,8 @@ impl PrincipalName {
     ///
     /// # Errors
     ///
-    /// Returns [`NameError`] when a component is not UTF-8 GeneralString.
+    /// [`NameError::NotUtf8`] when a component is not UTF-8; [`NameError::NotGeneralString`]
+    /// when it is not ASCII.
     pub fn try_from_bytes(
         name_type: i32,
         parts: impl IntoIterator<Item = impl AsRef<[u8]>>,
@@ -922,7 +923,8 @@ impl KrbError {
 ///
 /// # Errors
 ///
-/// Returns [`TimeError::Parse`] when `s` is not that form.
+/// [`TimeError::Parse`] when `s` has no trailing `Z` or the rest is not a valid `YYYYMMDDHHMMSS`
+/// time.
 pub fn kerberos_time_from_utc_z(s: &str) -> Result<KerberosTime, TimeError> {
     let body = s
         .strip_suffix('Z')
@@ -974,8 +976,8 @@ impl KerberosTime {
     ///
     /// # Errors
     ///
-    /// Returns [`TimeError::Overflow`] when the calendar cannot represent
-    /// the result.
+    /// [`TimeError::Overflow`] when `hours` is out of the duration range or the calendar cannot
+    /// represent the result.
     pub fn add_hours(&self, hours: i64) -> Result<Self, TimeError> {
         let dur = chrono::TimeDelta::try_hours(hours).ok_or(TimeError::Overflow)?;
         let dt = self.0.checked_add_signed(dur).ok_or(TimeError::Overflow)?;
@@ -986,8 +988,8 @@ impl KerberosTime {
     ///
     /// # Errors
     ///
-    /// Returns [`TimeError::Overflow`] when the calendar cannot represent
-    /// the result.
+    /// [`TimeError::Overflow`] when `seconds` is out of the duration range or the calendar cannot
+    /// represent the result.
     pub fn add_seconds(&self, seconds: i64) -> Result<Self, TimeError> {
         let dur = chrono::TimeDelta::try_seconds(seconds).ok_or(TimeError::Overflow)?;
         let dt = self.0.checked_add_signed(dur).ok_or(TimeError::Overflow)?;
@@ -1223,7 +1225,11 @@ impl TransitedEncoding {
     ///
     /// # Errors
     ///
-    /// Bound or structure failure. A lone NUL is the empty list, not an error.
+    /// [`TransitError::TooManyFields`] on more than 256 commas or [`MAX_TRANSIT_HOPS`] hops;
+    /// [`TransitError::FieldTooLong`] when a field reaches 512 bytes, a joined name exceeds 512,
+    /// or a null subfield brings in a `crealm` or `srealm` of 512 or more;
+    /// [`TransitError::BadIntermediates`] when the names around a null subfield are not
+    /// hierarchical. A lone NUL is the empty list, not an error.
     pub fn realms_for(&self, crealm: &str, srealm: &str) -> Result<Vec<String>, TransitError> {
         expand_domain_x500(self.contents.as_ref(), crealm, srealm)
     }
@@ -1237,7 +1243,9 @@ impl TransitedEncoding {
     ///
     /// # Errors
     ///
-    /// Inbound add-path bound failure, or appended encoding ≥ 500.
+    /// [`TransitError::FieldTooLong`] when the inbound contents (trailing NUL and comma dropped)
+    /// reach 500 bytes, one of their fields reaches 500 or a joined name 499, or the appended
+    /// encoding reaches 500 bytes.
     pub fn append_realm(
         &self,
         realm: &str,
@@ -1263,7 +1271,8 @@ impl TransitedEncoding {
     ///
     /// # Errors
     ///
-    /// Add-path raw ≥ 500 or joined ≥ 499.
+    /// [`TransitError::FieldTooLong`] when the contents (trailing NUL and comma dropped) reach
+    /// 500 bytes, one of their fields reaches 500, or a joined name reaches 499.
     pub fn validate_add_path(&self) -> Result<(), TransitError> {
         expand_add_path(self.contents.as_ref()).map(|_| ())
     }

@@ -28,7 +28,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// The checksum could not be built.
+    /// [`Error::Inner`] when the keyed checksum under the session key cannot be computed.
     pub fn get_mic(&mut self, data: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = sign_usage(self.initiator);
         let header = mic_header(self.initiator, self.send_seq);
@@ -45,7 +45,11 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Integrity failure or sequence mismatch.
+    /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
+    /// MIC token, has a bad filler, or its checksum is the wrong length; [`Error::Integrity`] when
+    /// the token comes from this side or its checksum does not verify; [`Error::Inner`] when it
+    /// names an acceptor subkey this context lacks; [`Error::Sequence`] when its sequence number
+    /// is a replay or outside the receive window.
     pub fn verify_mic(&mut self, data: &[u8], token: &[u8]) -> Result<(), Error> {
         let owned = message_token(token)?;
         let inner = owned.as_slice();

@@ -21,7 +21,8 @@ const BUILTIN_CCACHE: &str = "FILE:/tmp/krb5cc_%{uid}";
 ///
 /// # Errors
 ///
-/// Unknown `%{token}` or unterminated `%{` (MIT fails closed).
+/// [`Error::Ccache`] when a `%{` has no closing `}` or names a token other than `uid`,
+/// `USERID`, `euid`, `null`, `TEMP`, or `username` (MIT fails closed).
 pub fn expand_ccache_params(s: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
@@ -93,7 +94,9 @@ fn unix_username() -> String {
 ///
 /// # Errors
 ///
-/// [`KRB5_CC_UNKNOWN_TYPE`] or an unknown `%{token}`.
+/// [`Error::Ccache`]: [`KRB5_CC_UNKNOWN_TYPE`] when the chosen name's type prefix is not
+/// `FILE`, `MEMORY`, `DIR`, or `KCM`, or (for the conf default only) an unknown or
+/// unterminated `%{token}`.
 pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, Error> {
     if let Some(s) = flag {
         return parse_ccspec(s);
@@ -108,7 +111,9 @@ pub fn resolve_ccspec(flag: Option<&str>) -> Result<CcSpec, Error> {
 ///
 /// # Errors
 ///
-/// Unknown `%{token}` or [`KRB5_CC_UNKNOWN_TYPE`].
+/// [`Error::Ccache`] when `default_ccache_name` has an unknown or unterminated `%{token}`, or
+/// carrying [`KRB5_CC_UNKNOWN_TYPE`] when its type prefix is not `FILE`, `MEMORY`, `DIR`, or
+/// `KCM`.
 pub fn default_ccspec() -> Result<CcSpec, Error> {
     let raw = load_krb5_conf()
         .and_then(|c| c.default_ccache_name)
@@ -120,7 +125,8 @@ pub fn default_ccspec() -> Result<CcSpec, Error> {
 ///
 /// # Errors
 ///
-/// [`KRB5_CC_UNKNOWN_TYPE`] for unrecognized or unbuilt prefixes.
+/// [`Error::Ccache`] carrying [`KRB5_CC_UNKNOWN_TYPE`] when the type prefix is not `FILE`,
+/// `MEMORY`, `DIR`, or `KCM` (an unbuilt type such as `KEYRING` included).
 pub fn parse_ccspec(spec: &str) -> Result<CcSpec, Error> {
     match split_cc_type(spec) {
         None => Ok(CcSpec::File(PathBuf::from(spec))),
@@ -136,7 +142,8 @@ pub fn parse_ccspec(spec: &str) -> Result<CcSpec, Error> {
 ///
 /// # Errors
 ///
-/// [`KRB5_CC_UNKNOWN_TYPE`].
+/// [`Error::Ccache`] carrying [`KRB5_CC_UNKNOWN_TYPE`] when `spec` is not a FILE name (any
+/// other type prefix, `MEMORY`, `DIR`, and `KCM` included).
 pub fn parse_ccname(spec: &str) -> Result<PathBuf, Error> {
     match parse_ccspec(spec)? {
         CcSpec::File(p) => Ok(p),

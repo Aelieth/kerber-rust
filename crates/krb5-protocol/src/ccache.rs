@@ -44,7 +44,7 @@ impl FileCcache {
     ///
     /// # Errors
     ///
-    /// Does not return an error.
+    /// None: every field is written into memory, so this is always `Ok`.
     pub fn to_bytes(&self) -> Result<Vec<u8>, io::Error> {
         let mut w = Writer::default();
         w.u16(0x0504);
@@ -94,7 +94,10 @@ impl FileCcache {
     ///
     /// # Errors
     ///
-    /// Truncation or invalid version / principal.
+    /// `io::ErrorKind::InvalidData` when `bytes` is under 4 bytes or not version `0x0504`, a
+    /// header tag overruns the header, a count exceeds the bytes left, or a realm or name
+    /// component is not ASCII GeneralString; `io::ErrorKind::UnexpectedEof` when the header or
+    /// a record is truncated.
     pub fn parse(bytes: &[u8]) -> Result<Self, io::Error> {
         if bytes.len() < 4 || bytes[0] != 0x05 || bytes[1] != 0x04 {
             return Err(io::Error::new(
@@ -212,7 +215,8 @@ impl FileCcache {
 ///
 /// # Errors
 ///
-/// Returns a message when the spec has no `@` or a component is not IA5.
+/// An error message when `spec` has no `@REALM`, an empty name or realm, a trailing `\`, a `/`
+/// or an unquoted `@` inside the realm, or a component that is not ASCII GeneralString.
 pub fn parse_principal(spec: &str) -> Result<(PrincipalName, String), String> {
     parse_principal_ex(spec, false)
 }
@@ -222,8 +226,9 @@ pub fn parse_principal(spec: &str) -> Result<(PrincipalName, String), String> {
 ///
 /// # Errors
 ///
-/// Returns a message when the spec has no `@` (non-enterprise) or a
-/// component is not IA5.
+/// An error message when `spec` has an empty name, a trailing `\`, an unquoted `@` inside the
+/// realm, or a component that is not ASCII GeneralString; unless `enterprise`, also when it
+/// has no `@REALM`, an empty realm, or a `/` inside the realm.
 pub fn parse_principal_ex(spec: &str, enterprise: bool) -> Result<(PrincipalName, String), String> {
     let p = krb5_types::parse_name_ex(spec, "", enterprise).map_err(|e| e.to_string())?;
     if p.components.first().is_some_and(String::is_empty) && p.components.len() == 1 {
@@ -255,7 +260,7 @@ pub fn realm(s: &str) -> Realm {
 ///
 /// # Errors
 ///
-/// [`krb5_asn1::Error`] on encode.
+/// [`krb5_asn1::Error::Encode`] when `ticket` does not DER-encode.
 pub fn tgt_cred(
     crealm: &Realm,
     cname: &PrincipalName,

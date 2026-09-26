@@ -59,7 +59,8 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Key length overflows `u16`.
+    /// [`Error::Truncated`] when the receive window holds more than `u16::MAX` sequence numbers,
+    /// or the client name, delegated name, or SPNEGO mechanism list exceeds `u16::MAX` bytes.
     pub fn export_sec_context(&self) -> Result<Vec<u8>, Error> {
         let mut o = Vec::new();
         o.extend_from_slice(EXPORT_MAGIC);
@@ -99,7 +100,9 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Truncated or unknown version.
+    /// [`Error::Truncated`] when the token lacks the `K5G1` magic or version 1, runs short, lists
+    /// more than 64 window entries, holds a non-UTF-8 name, or has trailing bytes;
+    /// [`Error::Inner`] when a key's etype is unknown or its length does not match the etype.
     pub fn import_sec_context(token: &[u8]) -> Result<Self, Error> {
         let mut i = 0usize;
         if token.get(i..i + 4) != Some(EXPORT_MAGIC.as_slice()) {

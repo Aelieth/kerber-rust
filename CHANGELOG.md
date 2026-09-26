@@ -153,6 +153,16 @@ this project uses semantic versioning once a crate is published.
 - **client.** `kinit_inner` says key-expired leads to a password change
   when a prompter or a `new_password` source is given, and that
   `kinit_with` writes the cache. No behaviour change.
+- **all.** Every `# Errors` section under `crates/*/src` (446) was
+  re-read against its function. Each names the variants the body can
+  return and the condition behind each; bare family words ("crypto",
+  "I/O", "an encode failure") and "Returns …" openings are gone. Errors
+  a body cannot produce are dropped (the four the audit named and their
+  siblings), missing ones are added (store reload and save failures,
+  `PasswordPolicy`, `BadKeysalts`, des3 block lengths), and a function
+  that cannot fail says so. Two summary lines the pass found wrong
+  (`exchange_with_failover`'s UDP waits, `to_bytes`) are fixed. No
+  behaviour change.
 
 ### W3-S3.10 parameter structs
 

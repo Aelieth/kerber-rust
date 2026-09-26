@@ -140,7 +140,8 @@ impl Drop for DerivedKeys {
 ///
 /// # Errors
 ///
-/// A refused etype or a bad key length.
+/// [`Error::InvalidKeyLength`] when `key` is des3-cbc-sha1, whose 24-octet key the AES-based
+/// RFC 3961 derivation refuses.
 pub fn derive_keys(
     key: &crate::key::ProtocolKey,
     usage: crate::etype::KeyUsage,

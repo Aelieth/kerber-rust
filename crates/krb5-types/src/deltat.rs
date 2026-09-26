@@ -19,7 +19,9 @@ pub struct DeltatError;
 ///
 /// # Errors
 ///
-/// A form `t_deltat.c` rejects, including int32 overflow.
+/// [`DeltatError`] when `s` does not start with a number, a `:`-separated field is not one or two
+/// digits, a value or the total overflows int32, or the text after the duration starts with a
+/// digit, `-`, `:`, `d`, `h`, `m`, `s`, or a blank (`3dd`, `3d4m5h`, `3 4`).
 pub fn parse(s: &str) -> Result<i32, DeltatError> {
     let b = s.as_bytes();
     let mut i = 0;

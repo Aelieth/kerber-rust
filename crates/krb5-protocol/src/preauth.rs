@@ -28,7 +28,7 @@ use crate::error::Error;
 ///
 /// # Errors
 ///
-/// A bad length or a PRF failure.
+/// [`Error::Crypto`] when the KRB-FX-CF2 of `subkey` and `session` fails.
 pub fn armor_key(
     session: &ProtocolKey,
     subkey: Option<&ProtocolKey>,
@@ -43,7 +43,8 @@ pub fn armor_key(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the authenticator does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` fails.
 pub fn build_fast_armor(
     ticket: Ticket,
     session: &ProtocolKey,
@@ -88,7 +89,8 @@ pub fn build_fast_armor(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the outer body, the FAST request, the armor, or the PA-FX-FAST does not
+/// encode, and [`Error::Crypto`] when the checksum or the encryption under `armor_key` fails.
 pub fn attach_fast(
     req: &mut AsReq,
     armor: &ApReq,
@@ -110,7 +112,8 @@ pub fn attach_fast(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the outer body, the FAST request, the armor, or the PA-FX-FAST does not
+/// encode, and [`Error::Crypto`] when the checksum or the encryption under `armor_key` fails.
 pub fn attach_fast_with_options(
     req: &mut AsReq,
     armor: &ApReq,
@@ -159,7 +162,8 @@ pub fn attach_fast_with_options(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when `req_body`, the FAST request, the armor, or the PA-FX-FAST does not
+/// encode, and [`Error::Crypto`] when the checksum or the encryption under `armor_key` fails.
 pub fn fx_fast_padata(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -187,7 +191,8 @@ pub fn fx_fast_padata(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the FAST request, the armor, or the PA-FX-FAST does not encode, and
+/// [`Error::Crypto`] when the checksum or the encryption under `armor_key` fails.
 pub fn fx_fast_padata_over(
     armor: Option<&ApReq>,
     armor_key: &ProtocolKey,
@@ -237,7 +242,7 @@ pub fn fx_fast_padata_over(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] when the checksum is absent or does not match.
+/// [`Error::ReplyMismatch`] when the ticket checksum does not verify under `armor_key`.
 pub fn verify_fast_finished(
     armor_key: &ProtocolKey,
     ticket: &Ticket,
@@ -261,7 +266,8 @@ pub fn verify_fast_finished(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) on a missing or bad checksum.
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) on a missing or bad checksum;
+/// [`Error::Asn1`] when the PA-REQ-ENC-PA-REP value is not a Checksum.
 pub fn verify_req_enc_pa_rep(
     enc: &EncKdcRepPart,
     key: &ProtocolKey,
@@ -285,7 +291,9 @@ pub fn verify_req_enc_pa_rep(
 ///
 /// # Errors
 ///
-/// Missing padata, key, or encode failure.
+/// [`Error::ReplyMismatch`] when `padata` has no PA-FX-FAST, [`Error::Asn1`] when it or the
+/// decrypted response does not decode, and [`Error::Crypto`] when it does not decrypt under
+/// `armor_key`.
 pub fn unwrap_fast_rep(
     armor_key: &ProtocolKey,
     padata: &Option<Vec<PaData>>,
@@ -308,7 +316,9 @@ pub fn unwrap_fast_rep(
 ///
 /// # Errors
 ///
-/// Decrypt/DER failures, or [`Error::ReplyMismatch`] on a flipped nonce.
+/// [`Error::ReplyMismatch`] when `padata` has no PA-FX-FAST or the response nonce is not
+/// `expected_nonce`, [`Error::Asn1`] when the PA-FX-FAST or the decrypted response does not
+/// decode, and [`Error::Crypto`] when it does not decrypt under `armor_key`.
 pub fn unwrap_fast_rep_checked(
     armor_key: &ProtocolKey,
     padata: &Option<Vec<PaData>>,
@@ -327,7 +337,8 @@ pub fn unwrap_fast_rep_checked(
 ///
 /// # Errors
 ///
-/// A bad length or a PRF failure.
+/// [`Error::Crypto`] when the strengthen key's etype is unknown, its length does not fit that
+/// etype, or the KRB-FX-CF2 with `base` fails.
 pub fn apply_strengthen(
     strengthen: &EncryptionKey,
     base: &ProtocolKey,
@@ -357,7 +368,9 @@ pub fn pa_spake_support() -> PaData {
 ///
 /// # Errors
 ///
-/// Curve, PRF, or encrypt failures.
+/// [`Error::Crypto`] when `challenge_pubkey` is not a P-256 point, or the key generation, a
+/// SPAKE derivation, or the factor encryption fails; [`Error::Asn1`] when the second factor or
+/// the response does not encode.
 pub fn pa_spake_response(
     ikey: &ProtocolKey,
     support_der: &[u8],
@@ -418,7 +431,8 @@ pub fn pa_spake_response(
 ///
 /// # Errors
 ///
-/// [`Error::Asn1`].
+/// [`Error::ReplyMismatch`] when `ca` cannot sign the AuthPack, and [`Error::Asn1`] when the
+/// AuthPack or the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -436,7 +450,8 @@ pub fn pa_pk_as_req(
 ///
 /// # Errors
 ///
-/// Encode or CMS wrap failure.
+/// [`Error::ReplyMismatch`] when `ca` cannot sign the AuthPack, and [`Error::Asn1`] when the
+/// AuthPack or the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_spki(
     spki: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -449,7 +464,8 @@ pub fn pa_pk_as_req_spki(
 ///
 /// # Errors
 ///
-/// Encode or CMS wrap failure.
+/// [`Error::ReplyMismatch`] when `ca` cannot sign the AuthPack as `cn`, and [`Error::Asn1`] when
+/// the AuthPack or the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_cn(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -500,7 +516,8 @@ fn pa_pk_as_req_spki_cn(
 ///
 /// # Errors
 ///
-/// Encode or CMS wrap failure.
+/// [`Error::ReplyMismatch`] when the SHA-256 KDF cannot be appended to the encoded AuthPack or
+/// `ca` cannot sign it, and [`Error::Asn1`] when the AuthPack or the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_agile(
     client_public: &[u8],
     ca: &krb5_types::pkinit::PkinitCa,
@@ -541,7 +558,9 @@ pub fn pa_pk_as_req_agile(
 ///
 /// # Errors
 ///
-/// Encode or CMS wrap failure.
+/// [`Error::ReplyMismatch`] when the PKAuthenticator does not encode or the CMS signature fails
+/// (`cert_der` has no issuer and serial, or `leaf_secret` cannot sign), and [`Error::Asn1`] when
+/// the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_signed(
     client_public: &[u8],
     cert_der: &[u8],
@@ -584,7 +603,8 @@ pub fn pa_pk_as_req_signed(
 ///
 /// # Errors
 ///
-/// [`Error::Asn1`].
+/// [`Error::ReplyMismatch`] when the PKAuthenticator does not encode, and [`Error::Asn1`] when
+/// the PA-PK-AS-REQ does not encode.
 pub fn pa_pk_as_req_unsigned(
     client_public: &[u8],
     nonce: u32,
@@ -636,7 +656,10 @@ fn verify_kdc_pkinit_cms(
 ///
 /// # Errors
 ///
-/// Missing padata, ECDH, or key-length failures.
+/// [`Error::ReplyMismatch`] when `padata` has no PA-PK-AS-REP, the reply is an encKeyPack, the
+/// KDC's CMS signature, certificate, or content type does not verify against `kdc_trust_anchor`
+/// and `realm`, its DH value does not decode, or the reply names the RFC 8636 SHA-256 KDF;
+/// [`Error::Asn1`] when the PA-PK-AS-REP does not decode; [`Error::Crypto`] when the ECDH fails.
 pub fn pkinit_reply_key(
     client_secret: &[u8; 32],
     padata: &Option<Vec<PaData>>,
@@ -674,7 +697,10 @@ pub fn pkinit_reply_key(
 ///
 /// # Errors
 ///
-/// Missing padata, ECDH, or KDF failures.
+/// [`Error::ReplyMismatch`] when `padata` has no PA-PK-AS-REP or it carries no dhSignedData, the
+/// KDC's CMS signature, certificate, or content type does not verify against `kdc_trust_anchor`
+/// and `realm`, its DH value does not decode, or the reply names a KDF other than SHA-256;
+/// [`Error::Crypto`] when the ECDH fails.
 pub fn pkinit_reply_key_agile(
     client_secret: &[u8; 32],
     padata: &Option<Vec<PaData>>,
@@ -725,7 +751,9 @@ pub fn pkinit_reply_key_agile(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] or a bad checksum.
+/// [`Error::ReplyMismatch`] when `realm` is not a GeneralString, [`Error::Crypto`] when the
+/// checksum under `session` cannot be computed, and [`Error::Asn1`] when the PA-FOR-USER does
+/// not encode.
 pub fn pa_for_user(
     session: &ProtocolKey,
     user: PrincipalName,
@@ -756,7 +784,9 @@ pub fn pa_for_user(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::ReplyMismatch`] when `realm` is not a GeneralString, [`Error::Asn1`] when the user-id
+/// or the padata does not encode, and [`Error::Crypto`] when the checksum under `key` cannot be
+/// computed.
 pub fn pa_s4u_x509_user(
     key: &ProtocolKey,
     user: PrincipalName,
@@ -803,8 +833,12 @@ fn s4u_not_newer(etype: EncryptionType) -> bool {
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) or
-/// [`Error::KrbError`] `INAPP_CKSUM`.
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) when the reply's PA-S4U-X509-USER is only in
+/// `enc_padata`, its checksum does not verify under `subkey`, its nonce or user does not match
+/// `req`, or, under a DES3 or RC4 `subkey`, its encrypted-padata binding does not hold;
+/// [`Error::KrbError`] `INAPP_CKSUM` for an unkeyed reply checksum under a newer etype;
+/// [`Error::Asn1`] when the reply's PA-S4U-X509-USER does not decode or its user-id does not
+/// re-encode.
 pub fn verify_s4u2self_reply(
     subkey: &ProtocolKey,
     req: &krb5_types::s4u::PaS4uX509User,
@@ -879,7 +913,7 @@ pub fn verify_s4u2self_reply(
 ///
 /// # Errors
 ///
-/// [`Error::Asn1`].
+/// [`Error::Asn1`] when the PA-PAC-OPTIONS does not encode.
 pub fn pa_pac_options(rbcd: bool) -> Result<PaData, Error> {
     let body = if rbcd {
         krb5_types::s4u::PaPacOptions::rbcd()

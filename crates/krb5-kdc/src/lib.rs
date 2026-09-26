@@ -172,7 +172,10 @@ pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<
 ///
 /// # Errors
 ///
-/// Returns crypto failures from string-to-key or ACL-gated host create.
+/// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty,
+/// [`Error::AlreadyExists`] when `user` and `admin` are the same name, [`Error::AclParse`] when
+/// `admin@<realm>` is not a principal name (a realm with `/` or `@`), and [`Error::Rng`] when the
+/// CSPRNG fails while generating a random key.
 pub(crate) fn bootstrap_realm(
     realm: &str,
     user: &str,
@@ -187,7 +190,12 @@ pub(crate) fn bootstrap_realm(
 ///
 /// # Errors
 ///
-/// Returns crypto failures from string-to-key or ACL-gated host create.
+/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL, and
+/// [`Error::InvalidArgument`] when its `dict_file` cannot be read for any reason but being missing.
+/// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty,
+/// [`Error::AlreadyExists`] when `user` and `admin` are the same name, [`Error::AclParse`] when
+/// `admin@<realm>` is not a principal name (a realm with `/` or `@`), and [`Error::Rng`] when the
+/// CSPRNG fails while generating a random key.
 pub fn bootstrap_realm_with_kdc_conf(
     realm: &str,
     user: &str,
@@ -223,7 +231,8 @@ const KADM5_CHANGEPW_LIFETIME: u64 = 60 * 5;
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] when the kadmin principals are missing.
+/// [`Error::NotFound`] when `kadmin/admin` or `kadmin/changepw` is missing, and [`Error::Crypto`]
+/// when the store's configured file cannot be written after an update.
 pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<(), Error> {
     let realm = store.realm().to_owned();
     let actor = kdb5_util_id_for_realm(&realm);

@@ -210,7 +210,8 @@ impl Default for ListenLimits {
 ///
 /// # Errors
 ///
-/// Returns the first I/O error from either bind.
+/// The `io::Error` from binding the UDP socket to `addr`, or from binding the TCP listener when
+/// the UDP bind succeeded.
 pub(crate) fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListener)> {
     let udp = UdpSocket::bind(addr)?;
     let tcp = TcpListener::bind(addr)?;
@@ -221,7 +222,9 @@ pub(crate) fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListen
 ///
 /// # Errors
 ///
-/// Returns the last bind error if every candidate fails.
+/// The last candidate's error when none binds: `io::ErrorKind::InvalidInput` for a candidate that
+/// is not a socket address, else that candidate's bind error; `io::ErrorKind::AddrNotAvailable`
+/// when `candidates` is empty.
 pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket, TcpListener)> {
     let mut last = io::Error::new(io::ErrorKind::AddrNotAvailable, "no bind candidates");
     for c in candidates {
@@ -258,7 +261,8 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
 ///
 /// # Errors
 ///
-/// Unknown target user, or `setgid`/`setuid` failure.
+/// Only as root: `io::ErrorKind::NotFound` when the target user does not exist, and
+/// `io::ErrorKind::Other` when the user lookup, `setgid` or `setuid` fails.
 pub fn drop_privileges() -> io::Result<bool> {
     drop_privileges_to(
         std::env::var("KRB5_KDC_USER")
@@ -273,7 +277,8 @@ pub fn drop_privileges() -> io::Result<bool> {
 ///
 /// # Errors
 ///
-/// Unknown user or credential change failure.
+/// Only as root: `io::ErrorKind::NotFound` when `username` does not exist, and
+/// `io::ErrorKind::Other` when the user lookup, `setgid` or `setuid` fails.
 pub(crate) fn drop_privileges_to(username: &str) -> io::Result<bool> {
     if !nix::unistd::Uid::effective().is_root() {
         tracing::info!(
@@ -310,7 +315,8 @@ fn install_shutdown_flag(flag: &Arc<AtomicBool>) {
 ///
 /// # Errors
 ///
-/// Returns if a listener thread panics; individual datagrams are logged.
+/// The `io::Error` when the UDP read timeout or the TCP listener's non-blocking mode cannot be set.
+/// Per-request failures are only logged, and a panicked listener thread still yields `Ok(())`.
 pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener) -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     install_shutdown_flag(&shutdown);
@@ -321,7 +327,9 @@ pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener) -> io::Result
 ///
 /// # Errors
 ///
-/// Listener thread panic, or bind/socket option failures.
+/// `io::ErrorKind::InvalidInput` when `limits.shutdown_poll` is zero, and the OS error when the
+/// UDP read timeout or the TCP listener's non-blocking mode cannot be set for another reason.
+/// Per-request failures are only logged, and a panicked listener thread still yields `Ok(())`.
 #[allow(clippy::needless_pass_by_value)] // Arc is cloned into the UDP/TCP threads
 pub fn serve_until(
     store: SharedStore,

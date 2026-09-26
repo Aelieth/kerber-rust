@@ -12,7 +12,8 @@ use crate::error::Error;
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the EncAPRepPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` fails.
 pub fn build_ap_rep(
     session: &ProtocolKey,
     authenticator: &Authenticator,
@@ -43,7 +44,9 @@ pub fn build_ap_rep(
 ///
 /// # Errors
 ///
-/// Returns crypto, DER, or `ctime`/`cusec` mismatch.
+/// [`Error::Asn1`] when `raw` or its decrypted part does not decode, [`Error::Crypto`] when the
+/// enc-part does not decrypt under `session`, and [`Error::ReplyMismatch`] when `ctime`/`cusec`
+/// differ from the authenticator's.
 pub fn verify_ap_rep(
     raw: &[u8],
     session: &ProtocolKey,

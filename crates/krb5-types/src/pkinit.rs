@@ -387,7 +387,8 @@ pub fn parse_authpack_freshness(der: &[u8]) -> Option<(u32, u32)> {
 ///
 /// # Errors
 ///
-/// Missing or mismatched checksum.
+/// `"pkinit paChecksum"` when `authpack` has no `paChecksum` in its PKAuthenticator, or the
+/// checksum is not the SHA-1 of `body`.
 pub fn authpack_pa_checksum_ok(authpack: &[u8], body: &[u8]) -> Result<(), &'static str> {
     let got = parse_authpack_pa_checksum(authpack).ok_or("pkinit paChecksum")?;
     let expect = sha1_bytes(body);

@@ -28,7 +28,8 @@ pub fn spnego_init(krb_token: &[u8]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// Truncated input.
+/// [`Error::Truncated`] when `token` is not a well-formed GSS APPLICATION 0 token (tag, length,
+/// mechanism OID), or wraps a SPNEGO NegTokenInit whose mechToken is missing or runs short.
 pub fn spnego_inner(token: &[u8]) -> Result<&[u8], Error> {
     if token.len() < 2 || token[0] != 0x60 {
         return Err(Error::Truncated);
@@ -244,7 +245,13 @@ fn mech_token_as_gss(mech_token: &[u8]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// Truncated SPNEGO, AP-REQ verify, or MIC verify.
+/// [`Error::Truncated`] when `service_keys` is empty, the token is not a well-formed SPNEGO
+/// NegTokenInit offering Kerberos, or the framing of its mechToken or `mechListMIC`, or its
+/// delegated KRB-CRED, is malformed; [`Error::Integrity`] when the AP-REQ or `mechListMIC` fails
+/// its integrity check; [`Error::ChannelBindings`] on a binding mismatch; [`Error::Sequence`]
+/// when the `mechListMIC` sequence is refused; [`Error::Inner`] for any other AP-REQ or
+/// `mechListMIC` refusal (see [`GssContext::accept_sec_context_kt`]) and when the reply MIC
+/// cannot be computed.
 pub fn spnego_accept(
     token: &[u8],
     service_keys: &[ProtocolKey],
@@ -269,7 +276,13 @@ pub fn spnego_accept(
 ///
 /// # Errors
 ///
-/// Truncated SPNEGO, AP-REQ verify, or MIC verify.
+/// [`Error::Truncated`] when `service_keys` is empty, the token is not a well-formed SPNEGO
+/// NegTokenInit offering Kerberos, or the framing of its mechToken or `mechListMIC`, or its
+/// delegated KRB-CRED, is malformed; [`Error::Integrity`] when the AP-REQ or `mechListMIC` fails
+/// its integrity check; [`Error::ChannelBindings`] on a binding mismatch; [`Error::Sequence`]
+/// when the `mechListMIC` sequence is refused; [`Error::Inner`] for any other AP-REQ or
+/// `mechListMIC` refusal (see [`GssContext::accept_sec_context_kt`]) and when the reply MIC
+/// cannot be computed.
 pub fn spnego_accept_kt(
     token: &[u8],
     service_keys: &[ProtocolKey],
@@ -341,7 +354,11 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Truncated token or MIC verify.
+    /// [`Error::Truncated`] when the context holds no SPNEGO mechanism list, or the token is not
+    /// a NegTokenResp with a well-formed `mechListMIC`; [`Error::Integrity`] when the MIC comes
+    /// from this side or does not verify; [`Error::Inner`] when it names an acceptor subkey this
+    /// context lacks; [`Error::Sequence`] when its sequence number is a replay or outside the
+    /// receive window.
     pub fn verify_spnego_mic(&mut self, token: &[u8]) -> Result<(), Error> {
         let list = self.spnego_mech_list.clone().ok_or(Error::Truncated)?;
         let mic = parse_neg_resp_mic(token)?;

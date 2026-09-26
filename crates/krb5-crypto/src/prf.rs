@@ -18,7 +18,7 @@ use crate::key::ProtocolKey;
 ///
 /// # Errors
 ///
-/// Returns crypto failures from key derivation or the underlying HMAC/cipher.
+/// None: no PRF step can fail on a [`ProtocolKey`], whose length always matches its etype.
 pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     match key.etype() {
         EncryptionType::Aes128CtsHmacSha196
@@ -43,7 +43,7 @@ pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
 ///
 /// # Errors
 ///
-/// Returns PRF failures or [`Error::InvalidParams`] when `len` is 0.
+/// [`Error::InvalidParams`] when `len` is 0.
 pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, Error> {
     if len == 0 {
         return Err(Error::InvalidParams);
@@ -73,7 +73,8 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
 ///
 /// # Errors
 ///
-/// Bad length or [`Error::InvalidParams`].
+/// None: PRF+ returns exactly `keybytes()` octets for `key`'s etype (never 0), so the des3
+/// length check and [`ProtocolKey::from_bytes`] always pass.
 pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Error> {
     derive_prfplus_enctype(key, input, key.etype())
 }
@@ -84,7 +85,8 @@ pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Er
 ///
 /// # Errors
 ///
-/// Bad length or [`Error::InvalidParams`].
+/// None: PRF+ returns exactly `enctype.keybytes()` octets (never 0), so the des3 length check
+/// and [`ProtocolKey::from_bytes`] always pass.
 pub fn derive_prfplus_enctype(
     key: &ProtocolKey,
     input: &[u8],

@@ -17,7 +17,7 @@ pub(crate) const MASTER_NAME: [&str; 2] = ["K", "M"];
 ///
 /// # Errors
 ///
-/// String-to-key failures from [`string_to_key`].
+/// [`Error::Crypto`] when [`string_to_key`] cannot derive a key for `etype` from `password`.
 pub fn master_key_from_password(
     realm: &str,
     password: impl AsRef<[u8]>,

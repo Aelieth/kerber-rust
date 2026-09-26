@@ -111,7 +111,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::Rng`] when the history key fails.
+    /// [`Error::Rng`] when `kadmin/history` must be created and the CSPRNG fails.
     pub(crate) fn ensure_history_principal(
         &mut self,
         actor: &str,

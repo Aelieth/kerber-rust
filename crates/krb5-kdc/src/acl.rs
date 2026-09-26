@@ -233,7 +233,8 @@ impl Acl {
     ///
     /// # Errors
     ///
-    /// [`Error::AclParse`] on syntax, unknown op letter, or restriction errors.
+    /// [`Error::AclParse`] when a line has no client or no operation list, an unknown operation
+    /// letter, a client or target that is not a principal name, or restrictions that do not parse.
     pub fn parse(text: &str) -> Result<Self, Error> {
         Self::parse_with_realm(text, "")
     }
@@ -242,7 +243,8 @@ impl Acl {
     ///
     /// # Errors
     ///
-    /// [`Error::AclParse`] on syntax, unknown op letter, or restriction errors.
+    /// [`Error::AclParse`] when a line has no client or no operation list, an unknown operation
+    /// letter, a client or target that is not a principal name, or restrictions that do not parse.
     pub fn parse_with_realm(text: &str, default_realm: &str) -> Result<Self, Error> {
         Self::parse_located(text, default_realm).map_err(|e| Error::AclParse(e.message))
     }
@@ -299,7 +301,8 @@ impl Acl {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::AclDenied`] when no matching line grants the op.
+    /// [`Error::AclDenied`] when no line matches `actor` and `target`, or the first line that
+    /// matches does not grant `op`.
     pub fn check(&self, actor: &str, op: AdminOp, target: Option<&str>) -> Result<(), Error> {
         let Some(e) = self.find(actor, target) else {
             return deny(actor, op);
@@ -334,7 +337,8 @@ impl Acl {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`].
+    /// [`Error::AclDenied`] when `actor` may not delete `src` or add `dest`, or the line that
+    /// grants the add carries restrictions.
     pub fn check_rename(&self, actor: &str, src: &str, dest: &str) -> Result<(), Error> {
         self.check(actor, AdminOp::Delete, Some(src))?;
         self.check(actor, AdminOp::Create, Some(dest))?;
@@ -353,7 +357,8 @@ impl Acl {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`].
+    /// [`Error::AclDenied`] when `actor` may not add `alias` or modify `target`, or the line that
+    /// grants the add carries restrictions.
     pub fn check_addalias(&self, actor: &str, alias: &str, target: &str) -> Result<(), Error> {
         self.check(actor, AdminOp::Create, Some(alias))?;
         if self

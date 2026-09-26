@@ -219,8 +219,9 @@ impl Policy {
     ///
     /// # Errors
     ///
-    /// [`KeyLookup::NoMatchingKey`] / [`KeyLookup::NoPermittedKey`] as
-    /// [`Principal::find_enctype`].
+    /// [`KeyLookup::NoMatchingKey`] when no key of `p` matches `etype`/`kvno` at all;
+    /// [`KeyLookup::NoPermittedKey`] when `etype` itself, or every matching key, is outside
+    /// `permitted_enctypes`.
     pub fn find_enctype<'p>(
         &self,
         p: &'p Principal,
@@ -263,7 +264,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// Unparseable `domain_sid` SDDL.
+    /// [`Error::Crypto`] when `domain_sid` is not valid SDDL; [`Error::InvalidArgument`] when
+    /// reading `dict_file` fails for any reason but a missing file.
     pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
@@ -394,7 +396,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Crypto`] when saving the
+    /// store to `persist_paths` fails.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         self.policies.remove(name).ok_or(Error::NotFound)?;
         self.note_ulog(format!("policy:{name}"), true, None);
@@ -405,7 +408,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// store to `persist_paths` fails.
     pub fn set_principal_policy(
         &mut self,
         name: &PrincipalName,
@@ -419,7 +423,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// store to `persist_paths` fails.
     pub(crate) fn set_principal_policy_in(
         &mut self,
         name: &PrincipalName,

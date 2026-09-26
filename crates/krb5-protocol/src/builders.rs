@@ -18,7 +18,7 @@ fn realm_string(realm: &str) -> Result<krb5_types::Realm, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::ReplyMismatch`] when `realm` is not a GeneralString.
+/// [`Error::ReplyMismatch`] when `realm` is not a GeneralString.
 pub fn as_req(
     cname: PrincipalName,
     realm: &str,
@@ -43,7 +43,7 @@ pub fn as_req(
 ///
 /// # Errors
 ///
-/// Returns [`Error::ReplyMismatch`] when `realm` is not a GeneralString.
+/// [`Error::ReplyMismatch`] when `realm` is not a GeneralString.
 pub fn as_req_sname(
     cname: PrincipalName,
     realm: &str,
@@ -80,7 +80,8 @@ pub fn as_req_sname(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the timestamp or its EncryptedData does not encode, and
+/// [`Error::Crypto`] when encrypting it under `key` fails.
 pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
     pa_enc_timestamp_at(key, &KerberosTime::now())
 }
@@ -89,7 +90,8 @@ pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the timestamp or its EncryptedData does not encode, and
+/// [`Error::Crypto`] when encrypting it under `key` fails.
 pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
     let ts = PaEncTsEnc {
         patimestamp: now.clone(),
@@ -115,7 +117,9 @@ pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaDa
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::ReplyMismatch`] when `realm` or `crealm` is not a GeneralString, [`Error::Asn1`] when
+/// the body, the authenticator, or the AP-REQ does not encode, and [`Error::Crypto`] when the
+/// checksum or the authenticator encryption under `session` fails.
 pub fn tgs_req(
     ticket: Ticket,
     session: &ProtocolKey,
@@ -191,7 +195,9 @@ pub struct TgsReqParams<'a> {
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::ReplyMismatch`] when `realm` or `crealm` is not a GeneralString, [`Error::Asn1`] when
+/// the body, the authenticator, or the AP-REQ does not encode, and [`Error::Crypto`] when the
+/// checksum or the authenticator encryption under `session` fails.
 pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
     let TgsReqParams {
         ticket,

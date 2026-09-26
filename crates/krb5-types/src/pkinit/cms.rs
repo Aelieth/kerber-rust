@@ -191,7 +191,8 @@ pub fn cms_wrap_signed(
 ///
 /// # Errors
 ///
-/// Missing issuer/serial, or ECDSA failure.
+/// `"cms issuer"` when the issuer and serial number cannot be read from `cert_der`;
+/// `"cms ecdsa"` when `secret` is not a valid P-256 private scalar.
 pub fn cms_sign_leaf(
     e_content: &[u8],
     cert_der: &[u8],
@@ -205,7 +206,8 @@ pub fn cms_sign_leaf(
 ///
 /// # Errors
 ///
-/// Missing issuer/serial, or ECDSA failure.
+/// `"cms issuer"` when the issuer and serial number cannot be read from `cert_der`;
+/// `"cms ecdsa"` when `secret` is not a valid P-256 private scalar.
 pub fn cms_sign_leaf_oids(
     e_content: &[u8],
     cert_der: &[u8],
@@ -457,7 +459,12 @@ pub struct CmsVerified {
 ///
 /// # Errors
 ///
-/// Missing CMS fields, untrusted certificate, or ECDSA failure.
+/// A field-named string (`"cms"`, `"encap"`, `"signer"`, …) when the SignedData is malformed;
+/// a `"cms …"` chain string (`"cms trust"`, `"cms chain"`, `"cms expired"`, …) when
+/// `trust_anchor` is not a usable CA or did not validly issue the leaf; `"cms spki"` for a leaf
+/// with no P-256 key; `"cms signedAttrs"` when signedAttrs are absent, `"cms ecdsa attrs"` when
+/// their signature fails, `"cms message-digest"` when their digest is not SHA-256 of the
+/// eContent, and `"cms content-type"` when their content type is absent or not the eContentType.
 pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static str> {
     Ok(cms_verify_full(der, trust_anchor)?.e_content)
 }
@@ -466,7 +473,12 @@ pub fn cms_verify(der: &[u8], trust_anchor: &[u8]) -> Result<Vec<u8>, &'static s
 ///
 /// # Errors
 ///
-/// Bad CMS, untrusted cert, or ECDSA.
+/// A field-named string (`"cms"`, `"encap"`, `"signer"`, …) when the SignedData is malformed;
+/// a `"cms …"` chain string (`"cms trust"`, `"cms chain"`, `"cms expired"`, …) when
+/// `trust_anchor` is not a usable CA or did not validly issue the leaf; `"cms spki"` for a leaf
+/// with no P-256 key; `"cms signedAttrs"` when signedAttrs are absent, `"cms ecdsa attrs"` when
+/// their signature fails, `"cms message-digest"` when their digest is not SHA-256 of the
+/// eContent, and `"cms content-type"` when their content type is absent or not the eContentType.
 pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &'static str> {
     let p = cms_parts(der)?;
     cert_path_ok(&p.cert, trust_anchor)?;
@@ -499,7 +511,8 @@ pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &
 ///
 /// # Errors
 ///
-/// Missing EKU or SAN mismatch.
+/// `"pkinit kdc eku"` when `cert` lacks the id-pkinit-KPKdc extended key usage;
+/// `"pkinit kdc san"` when it has no PKINIT SAN or the SAN is not `krbtgt/<realm>@<realm>`.
 pub fn require_kdc_pkinit_cert(cert: &[u8], realm: &str) -> Result<(), &'static str> {
     if !cert_has_eku(cert, OID_KP_KDC) {
         return Err("pkinit kdc eku");
@@ -515,7 +528,9 @@ pub fn require_kdc_pkinit_cert(cert: &[u8], realm: &str) -> Result<(), &'static 
 ///
 /// # Errors
 ///
-/// Missing EKU or SAN↔cname mismatch.
+/// `"pkinit client eku"` when `cert` lacks the id-pkinit-KPClientAuth extended key usage;
+/// `"pkinit client san"` when it has no PKINIT SAN, or the SAN realm is not `realm` or its name
+/// is not `cname` (an enterprise `cname` compares the part before its last `@`).
 pub fn require_client_pkinit_cert(
     cert: &[u8],
     cname: &crate::PrincipalName,

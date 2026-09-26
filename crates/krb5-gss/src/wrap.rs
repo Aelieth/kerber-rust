@@ -157,7 +157,8 @@ pub(super) fn wrap_header(initiator: bool, sealed: bool, seq: u64) -> [u8; 16] {
 ///
 /// # Errors
 ///
-/// The token could not be sealed.
+/// [`Error::Inner`] when encryption under `session` fails (the OS random source cannot supply a
+/// confounder).
 pub fn mit_shaped_wrap(
     session: &ProtocolKey,
     initiator: bool,
@@ -208,7 +209,8 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// The token could not be sealed.
+    /// [`Error::Inner`] when encryption under the send key fails (the OS random source cannot
+    /// supply a confounder).
     pub fn wrap(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         // MIT 1.22.2 libgssapi_krb5 wrap tokens use RRC=0 (observed in
         // gss-gate). wrap_with_rrc(16) remains for SSPI in-place decrypt.
@@ -219,7 +221,12 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Integrity, truncated tokens, or sequence mismatch.
+    /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
+    /// wrap token, has a bad filler, has an EC or length that does not fit its checksum, or
+    /// decrypts to a header that differs from its own; [`Error::Integrity`] when the token comes
+    /// from this side or its checksum or seal does not verify; [`Error::Inner`] when it names an
+    /// acceptor subkey this context lacks or its sealed payload is too short to decrypt;
+    /// [`Error::Sequence`] when its sequence number is a replay or outside the receive window.
     pub fn unwrap(&mut self, token: &[u8]) -> Result<Vec<u8>, Error> {
         Ok(self.unwrap_v3(token)?.0)
     }
@@ -232,7 +239,12 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Integrity, truncated tokens, or sequence mismatch.
+    /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
+    /// wrap token, has a bad filler, has an EC or length that does not fit its checksum, or
+    /// decrypts to a header that differs from its own; [`Error::Integrity`] when the token comes
+    /// from this side or its checksum or seal does not verify; [`Error::Inner`] when it names an
+    /// acceptor subkey this context lacks or its sealed payload is too short to decrypt;
+    /// [`Error::Sequence`] when its sequence number is a replay or outside the receive window.
     pub fn unwrap_conf(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         self.unwrap_v3(token)
     }
@@ -299,7 +311,8 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// The token could not be sealed.
+    /// [`Error::Inner`] when encryption under the send key fails (the OS random source cannot
+    /// supply a confounder).
     pub fn wrap_with_rrc(&mut self, plaintext: &[u8], rrc: u16) -> Result<Vec<u8>, Error> {
         self.wrap_conf_inner(plaintext, 0, rrc)
     }
@@ -309,7 +322,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Checksum failed, or the MAC does not fit.
+    /// [`Error::Inner`] when the keyed checksum under the session key cannot be computed.
     pub fn wrap_integ(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = seal_usage(self.initiator);
         let mut header = wrap_header(self.initiator, false, self.send_seq);

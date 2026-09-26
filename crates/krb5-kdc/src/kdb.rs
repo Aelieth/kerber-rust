@@ -109,13 +109,17 @@ pub trait PrincipalRead: Send + Sync {
     ///
     /// # Errors
     ///
-    /// A decode failure or store I/O.
+    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
+    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
+    /// fail.
     fn fetch(&self, id: &str) -> Result<Option<Principal>, Error>;
     /// Lookup by name in this realm.
     ///
     /// # Errors
     ///
-    /// A decode failure or store I/O.
+    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
+    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
+    /// fail.
     fn fetch_name(&self, name: &PrincipalName) -> Result<Option<Principal>, Error> {
         self.fetch(&lookup_principal_id(name, self.realm()))
     }
@@ -123,7 +127,9 @@ pub trait PrincipalRead: Send + Sync {
     ///
     /// # Errors
     ///
-    /// A decode failure or store I/O.
+    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
+    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
+    /// fail.
     fn fetch_krbtgt(&self) -> Result<Option<Principal>, Error> {
         self.fetch_name(&PrincipalName::krbtgt(self.realm()))
     }
@@ -131,13 +137,17 @@ pub trait PrincipalRead: Send + Sync {
     ///
     /// # Errors
     ///
-    /// A decode failure or store I/O.
+    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
+    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
+    /// fail.
     fn list_ids(&self) -> Result<Vec<String>, Error>;
     /// All principals (iterate).
     ///
     /// # Errors
     ///
-    /// A decode failure or store I/O.
+    /// The backend's [`Error`] when a read fails, [`Error::Protocol`] `SVC_UNAVAILABLE` for a
+    /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
+    /// fail.
     fn list_principals(&self) -> Result<Vec<Principal>, Error>;
     /// TGS replay cache.
     fn tgs_replay(&self) -> &ReplayCache {
@@ -201,19 +211,21 @@ pub trait PrincipalWrite: PrincipalRead {
     ///
     /// # Errors
     ///
-    /// A decode failure or store I/O.
+    /// [`Error::InvalidArgument`] when `p.tl_data` holds a `KRB5_TL_DB_ARGS` entry, which neither
+    /// [`PrincipalStore`] nor [`MemoryStore`] accepts; other backends may add their own [`Error`].
     fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
     /// Delete by `name@REALM`.
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] or store I/O.
+    /// [`Error::NotFound`] when no principal is stored under `id`, and [`Error::Crypto`] when
+    /// [`PrincipalStore`] then cannot write its configured store file.
     fn remove_id(&mut self, id: &str) -> Result<(), Error>;
     /// Provision a PKINIT CA on the process-local env.
     ///
     /// # Errors
     ///
-    /// P-256 key generation failed.
+    /// [`Error::Crypto`] when the P-256 CA key cannot be generated.
     fn enable_pkinit_ca(&mut self) -> Result<&PkinitCa, Error>;
 }
 
@@ -223,13 +235,15 @@ pub trait StoreLifecycle {
     ///
     /// # Errors
     ///
-    /// The store file could not be loaded.
+    /// [`Error::Crypto`] when [`PrincipalStore`] finds its store file changed and cannot load it;
+    /// [`MemoryStore`] never fails.
     fn reload_if_stale(&mut self) -> Result<(), Error>;
     /// Write through when persist paths are set.
     ///
     /// # Errors
     ///
-    /// The store file could not be written.
+    /// [`Error::Crypto`] when [`PrincipalStore`] cannot write its configured store file;
+    /// [`MemoryStore`] never fails.
     fn save_if_configured(&self) -> Result<(), Error>;
 }
 
@@ -288,7 +302,9 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
 ///
 /// # Errors
 ///
-/// Unknown `db_library`, or dump load failures.
+/// [`PersistError::UnknownDbLibrary`] when `db_library` is set to anything but `dump`, `dump-v7`
+/// or `kdb5_dump`; otherwise the [`PersistError::Io`], [`PersistError::Format`] or
+/// [`PersistError::Crypto`] of [`load_store`] when the dump does not load.
 pub fn open_store(
     db_library: Option<&str>,
     db: &Path,

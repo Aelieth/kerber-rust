@@ -41,7 +41,10 @@ pub struct RpcCtx<'a> {
 ///
 /// # Errors
 ///
-/// I/O or GSS/RPC failures.
+/// An `ErrorKind::InvalidData` error when a record exceeds MIT's 1 MiB cap; the `io::Error` of
+/// any other failed read (EOF ends the loop with `Ok`) or of a failed reply write; an
+/// `ErrorKind::Other` error with the message when handling a record fails (see
+/// [`kadm5_handle_rpc`]).
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kadm5_conn(
     store: SharedStore,
@@ -142,7 +145,11 @@ pub struct Kadm5RpcSession {
 ///
 /// # Errors
 ///
-/// Truncated record or I/O.
+/// [`Error::GarbageArgs`] when the call header, an AUTH_GSSAPI credential, or its wrapped
+/// argument is truncated; [`Error::AclDenied`] when the AUTH_GSSAPI context names no client;
+/// [`Error::Inner`] for a wrong AUTH_GSSAPI credential version or handle, a verifier or body
+/// that does not unseal or has the wrong sequence, a failed seal, or procedure arguments that
+/// do not decode (a non-UTF-8 string, a bad principal, an unknown enctype or key).
 pub fn kadm5_handle_rpc(
     ctx: RpcCtx<'_>,
     handle: &[u8],

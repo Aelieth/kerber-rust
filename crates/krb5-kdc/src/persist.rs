@@ -62,7 +62,11 @@ impl From<crate::kdb_dump::DumpError> for PersistError {
 ///
 /// # Errors
 ///
-/// I/O or decrypt failures. A missing db is [`PersistError::Format`].
+/// [`PersistError::Io`] when the stash or the database cannot be read (a missing file included);
+/// [`PersistError::Format`] when a dump is not UTF-8, a legacy database has no KDB magic or a
+/// malformed record, or the `.ulog` file beside it is malformed; [`PersistError::Crypto`] when no
+/// key from the stash loads the dump (a malformed dump included) or decrypts a legacy database,
+/// or a legacy key is unusable.
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
     let stash = fs::read(stash_path)?;
     let blob = fs::read(db_path)?;
@@ -89,7 +93,10 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 ///
 /// # Errors
 ///
-/// [`PersistError::Io`] or a key failure.
+/// [`PersistError::Io`] when the stash cannot be read or the stash, database or `.ulog` file
+/// cannot be written; [`PersistError::Crypto`] when an existing stash is not a usable master key,
+/// a new master key cannot be derived or generated, or a key cannot be wrapped;
+/// [`PersistError::Format`] when a new keytab-format stash is needed and the realm is not ASCII.
 pub fn save_store(
     store: &PrincipalStore,
     db_path: &Path,
@@ -182,7 +189,9 @@ fn load_ulog(store: &mut PrincipalStore, db_path: &Path) -> Result<(), PersistEr
 ///
 /// # Errors
 ///
-/// I/O or encrypt failures.
+/// [`PersistError::Io`] when an existing stash cannot be read or the stash or database cannot be
+/// written; [`PersistError::Crypto`] when an existing stash is not a 32-byte key, a new one cannot
+/// be generated, or the encryption fails.
 pub fn save_store_legacy_kdb3(
     store: &PrincipalStore,
     db_path: &Path,

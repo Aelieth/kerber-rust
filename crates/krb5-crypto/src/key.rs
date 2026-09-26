@@ -22,7 +22,7 @@ impl ProtocolKey {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidKeyLength`] when `bytes` is not the etype's key size.
+    /// [`Error::InvalidKeyLength`] when `bytes` is not the etype's key size.
     pub fn from_bytes(etype: EncryptionType, bytes: &[u8]) -> Result<Self, Error> {
         if bytes.len() != etype.key_len() {
             return Err(Error::InvalidKeyLength);

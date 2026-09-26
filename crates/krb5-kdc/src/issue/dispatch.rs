@@ -17,7 +17,8 @@ use crate::kdb::PrincipalRead;
 ///
 /// # Errors
 ///
-/// Only store-programming failures that cannot be encoded as KRB-ERROR.
+/// [`Error::Asn1`] when an issued AS-REP or TGS-REP does not encode; every refusal is returned as
+/// KRB-ERROR bytes instead.
 pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, Error> {
     handle_request_from(store, raw, None)
 }
@@ -26,7 +27,8 @@ pub fn handle_request(store: &dyn PrincipalRead, raw: &[u8]) -> Result<Vec<u8>, 
 ///
 /// # Errors
 ///
-/// A store failure that is not a KDC error.
+/// [`Error::Asn1`] when an issued AS-REP or TGS-REP does not encode; every refusal is returned as
+/// KRB-ERROR bytes instead.
 pub fn handle_request_from(
     store: &dyn PrincipalRead,
     raw: &[u8],

@@ -41,7 +41,7 @@ pub fn documented_admin_id() -> String {
 ///
 /// # Errors
 ///
-/// Returns crypto failures from string-to-key or ACL-gated host create.
+/// [`Error::Rng`] when the CSPRNG fails while generating a random key.
 pub fn bootstrap_documented() -> Result<(PrincipalStore, Acl), Error> {
     bootstrap_realm(
         TEST_REALM,

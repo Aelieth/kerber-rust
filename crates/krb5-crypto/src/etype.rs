@@ -11,7 +11,7 @@ impl KeyUsage {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidKeyUsage`] when `n` is 0.
+    /// [`Error::InvalidKeyUsage`] when `n` is 0.
     pub fn new(n: u32) -> Result<Self, Error> {
         if n == 0 {
             return Err(Error::InvalidKeyUsage);
@@ -72,7 +72,8 @@ impl EncryptionType {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedEtype`] or [`Error::WeakEtypeRefused`].
+    /// [`Error::UnsupportedEtype`] when `n` is not implemented, or [`Error::WeakEtypeRefused`]
+    /// when it is a weak etype (16, 23, 25, 26).
     pub fn from_iana(n: i32) -> Result<Self, Error> {
         Self::from_iana_policy(n, false)
     }
@@ -81,8 +82,8 @@ impl EncryptionType {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedEtype`] when `n` is unknown, or
-    /// [`Error::WeakEtypeRefused`] when it is known-but-disabled.
+    /// [`Error::UnsupportedEtype`] when `n` is unknown, or [`Error::WeakEtypeRefused`] when it is
+    /// weak (16, 23, 25, 26) and `allow_weak` is false.
     pub fn from_iana_policy(n: i32, allow_weak: bool) -> Result<Self, Error> {
         let e = Self::known(n)?;
         if e.is_weak() && !allow_weak {
@@ -95,7 +96,7 @@ impl EncryptionType {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::UnsupportedEtype`] when `n` is not implemented.
+    /// [`Error::UnsupportedEtype`] when `n` is not implemented.
     pub fn known(n: i32) -> Result<Self, Error> {
         match n {
             16 => Ok(Self::Des3CbcSha1),

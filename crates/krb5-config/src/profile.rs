@@ -32,7 +32,8 @@ impl Krb5Conf {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Parse`] on malformed braces.
+    /// [`Error::Parse`] when an indented `include` / `includedir` directive (no `=`) sits inside
+    /// a section (MIT's improper format); no other line fails.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
@@ -44,7 +45,9 @@ impl Krb5Conf {
     ///
     /// # Errors
     ///
-    /// Returns I/O or parse errors, including include cycles.
+    /// [`Error::Io`] when `path` or an included file or directory cannot be read;
+    /// [`Error::Parse`] when an `include` target is missing, an `includedir` is not a directory,
+    /// includes form a cycle or nest 32 deep, or an indented include sits inside a section.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
@@ -63,7 +66,8 @@ impl Krb5Conf {
     ///
     /// # Errors
     ///
-    /// Returns DNS errors when lookup is enabled and fails with no static list.
+    /// [`Error::Dns`] when `realm` has no static KDC list, `dns_lookup_kdc` is on, and the SRV
+    /// lookup fails or finds no records.
     pub fn kdcs_for(&self, realm: &str) -> Result<Vec<Endpoint>, Error> {
         if let Some(list) = self.kdcs.get(realm)
             && !list.is_empty()
@@ -559,7 +563,10 @@ pub fn krb5_conf_paths() -> Vec<PathBuf> {
 ///
 /// # Errors
 ///
-/// Missing paths are skipped. A present file with a bad include is an error.
+/// [`Error::Io`] with `ErrorKind::NotFound` when none of `paths` exists (each missing path is
+/// skipped), or the `io::Error` of a present file or directory that cannot be read;
+/// [`Error::Parse`] as [`Krb5Conf::load_file`] reports it (a missing include target, a
+/// non-directory `includedir`, an include cycle or 32-deep nesting, an indented include).
 pub fn load_krb5_conf_paths<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
 ) -> Result<Krb5Conf, Error> {

@@ -67,7 +67,8 @@ impl<'a> ApVerifyParams<'a> {
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the authenticator does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session_key` fails.
 pub fn build_ap_req(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -81,7 +82,8 @@ pub fn build_ap_req(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the authenticator does not encode, and [`Error::Crypto`] when the
+/// checksum over `cksum_data` or the encryption under `session_key` fails.
 pub fn build_ap_req_opts(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -109,7 +111,8 @@ pub fn build_ap_req_opts(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the authenticator does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session_key` fails.
 pub fn build_ap_req_mutual_seq(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -150,7 +153,8 @@ pub fn build_ap_req_mutual_seq(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the authenticator does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session_key` fails.
 pub fn build_ap_req_with_cksum(
     ticket: Ticket,
     session_key: &ProtocolKey,
@@ -212,8 +216,12 @@ pub struct ApVerifyOk {
 ///
 /// # Errors
 ///
-/// Returns [`Error`] on truncated input, HMAC failure, replay, skew, expiry,
-/// or server-name mismatch.
+/// [`Error::KrbError`] with the code of the failed check: `NOKEY` (`service_key` is not the
+/// ticket's etype), `TKT_NYV` / `TKT_EXPIRED` (outside 300 seconds), `TKT_INVALID`, `ILL_CR_TKT`
+/// (transited), `BAD_INTEGRITY` (authenticator client), `SKEW`, `REPEAT` (replay).
+/// [`Error::Crypto`] when the ticket or the authenticator does not decrypt or the session key is
+/// unusable; [`Error::Asn1`] when a part does not decode; [`Error::TruncatedReply`] for an empty
+/// `raw`; [`Error::ReplyMismatch`] for an authenticator `cusec` out of range.
 pub fn verify_ap_req(
     raw: &[u8],
     service_key: &ProtocolKey,
@@ -226,7 +234,13 @@ pub fn verify_ap_req(
 ///
 /// # Errors
 ///
-/// Truncation, HMAC, replay, skew, or expiry.
+/// [`Error::KrbError`] with the code of the failed check: `NOT_US` (not the expected server),
+/// `NOKEY` / `BADKEYVER` (no key for the etype or kvno), `TKT_NYV` / `TKT_EXPIRED` (outside
+/// `params.skew`), `TKT_INVALID`, `BADADDR`, `ILL_CR_TKT` (transited), `BAD_INTEGRITY`
+/// (authenticator client), `SKEW`, `REPEAT` (replay). [`Error::Crypto`] when the ticket or the
+/// authenticator does not decrypt, the session key is unusable, or the checksum over `app_cksum`
+/// does not verify; [`Error::Asn1`] when a part does not decode; [`Error::TruncatedReply`] for an
+/// empty `raw`; [`Error::ReplyMismatch`] for an authenticator `cusec` out of range.
 pub fn verify_ap_req_ex(
     raw: &[u8],
     params: &ApVerifyParams<'_>,

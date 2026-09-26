@@ -421,7 +421,11 @@ pub struct IpropLast {
 ///
 /// # Errors
 ///
-/// Context, RPC, decode, or a key failure.
+/// [`Error::GarbageArgs`] when a reply is truncated; [`Error::Inner`] when the GSS context
+/// cannot be built, a read or write on `stream` fails, a reply is not an accepted `SUCCESS`
+/// or carries a non-zero GSS major status, a reply's AP-REP, MIC, or seal does not verify or
+/// has the wrong sequence, or an update's name or KADM data does not decode or its keys do not
+/// decrypt under the replica's iprop master key.
 pub fn iprop_pull(
     stream: &mut TcpStream,
     ticket: Ticket,
@@ -475,7 +479,10 @@ pub fn iprop_pull(
 ///
 /// # Errors
 ///
-/// Context, RPC, decode, or a key failure.
+/// [`Error::GarbageArgs`] when a reply is truncated; [`Error::Inner`] when the GSS context
+/// cannot be built, a read or write on `stream` fails, a reply is not an accepted `SUCCESS`
+/// or carries a non-zero GSS major status, or a reply's AP-REP, MIC, or seal does not verify
+/// or has the wrong sequence.
 pub fn iprop_fullresync(
     stream: &mut TcpStream,
     ticket: Ticket,

@@ -38,7 +38,9 @@ const WIRE_VERSION: u8 = 1;
 ///
 /// # Errors
 ///
-/// Bind, send, timeout, or I/O.
+/// The `io::Error` when binding the socket or setting its read timeout fails, or a receive
+/// fails other than by timing out; after three sends (0.5 s, 1 s, 2 s waits) with no reply
+/// from `dest`, the last send error or an `ErrorKind::TimedOut` (or `WouldBlock`) timeout.
 pub fn kpasswd_udp_exchange_to(dest: SocketAddr, body: &[u8]) -> io::Result<Vec<u8>> {
     let bind = if dest.ip().is_loopback() {
         "127.0.0.1:0"
@@ -133,7 +135,11 @@ fn status_bytes(status: u32) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// AP-REQ, ACL, or truncated framing.
+/// [`Error::Inner`] when `body` is under 10 bytes, not version 1, an unknown op, or its AP-REQ
+/// or payload overruns it; when the AP-REQ does not verify or the payload is not a usable name
+/// (or `name\0password`); or when the Dump op cannot save or read back its dump. The create,
+/// cpw, delete, and ktadd ops also return their [`AdminSession`] call's [`Error::AclDenied`],
+/// [`Error::NotFound`], [`Error::PasswordPolicy`], [`Error::PassTooSoon`], or [`Error::Inner`].
 pub fn dispatch_kadmind(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
@@ -326,7 +332,10 @@ fn kpasswd_success_rep(
 ///
 /// # Errors
 ///
-/// AP-REQ, PRIV unwrap, or ACL.
+/// [`Error::Inner`] when `raw` is shorter than its header, its length field is not its size,
+/// its version is neither 1 nor `0xff80`, or its AP-REQ leaves no KRB-PRIV (framing MIT drops
+/// unanswered), or when the ticket's session key or subkey is unusable or the reply cannot be
+/// built. A bad AP-REQ, KRB-PRIV, ACL, or password change is an `Ok` framed result code.
 pub fn handle_kpasswd_rfc3244(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
@@ -579,7 +588,8 @@ fn handle_kpasswd_from(
 ///
 /// # Errors
 ///
-/// Truncation or framed error.
+/// [`Error::Inner`] when `raw` is shorter than 6 bytes, its AP-REP length is 0 (a framed
+/// KRB-ERROR), or the AP-REP overruns `raw`.
 pub fn parse_kpasswd_rep(raw: &[u8]) -> Result<(Vec<u8>, Vec<u8>), Error> {
     if raw.len() < 6 {
         return Err(Error::Inner("kpasswd truncated".into()));
@@ -612,7 +622,8 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// A socket read failed.
+/// The `io::Error` when setting the read timeout fails or `recv_from` fails with a kind other
+/// than `WouldBlock`, `TimedOut`, or `Interrupted`; request failures are logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_udp(
     store: SharedStore,
@@ -663,7 +674,8 @@ pub fn serve_kpasswd_udp(
 ///
 /// # Errors
 ///
-/// Accept on the listener failed.
+/// The `io::Error` when `set_nonblocking` fails or `accept` fails with a kind other than
+/// `WouldBlock` or `Interrupted`; per-connection failures are logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_tcp(
     store: SharedStore,
@@ -726,7 +738,9 @@ pub fn serve_kpasswd_tcp(
 ///
 /// # Errors
 ///
-/// Dump or I/O.
+/// An `ErrorKind::Other` error carrying the message when the store cannot be dumped
+/// (string-to-key or key wrap under `master_password`), or the `io::Error` of a failed write
+/// or flush on `stream`.
 pub fn kprop_send(
     store: &krb5_kdc::PrincipalStore,
     master_password: &[u8],
@@ -744,7 +758,9 @@ pub fn kprop_send(
 ///
 /// # Errors
 ///
-/// Read, parse, or a key failure.
+/// [`Error::Inner`] when the length prefix or body cannot be read from `stream`, or the body
+/// is a KDB blob, is not UTF-8, lacks a dump header, does not parse, or does not decrypt under
+/// the master key from `master_password`.
 pub fn kprop_recv(
     stream: &mut TcpStream,
     master_password: &[u8],

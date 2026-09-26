@@ -195,7 +195,9 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Non-AES etype, missing HEADER/DATA/TRAILER, or crypto failures.
+    /// [`Error::Inner`] when the send key is not AES, or (with `conf`) the OS random source
+    /// fails; [`Error::Truncated`] when the HEADER or TRAILER buffer is missing or repeated, or
+    /// (with `conf`) there is no DATA buffer.
     pub fn wrap_iov(&mut self, conf: bool, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         if conf {
             self.wrap_iov_sealed(iov)
@@ -208,7 +210,12 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Truncated buffers, integrity, sequence, or non-AES etype.
+    /// [`Error::Truncated`] when a HEADER, TRAILER, or DATA buffer is missing, a HEADER or
+    /// TRAILER is repeated or the wrong size, the token header is malformed, or the plaintext
+    /// does not fill the DATA buffers; [`Error::Integrity`] when the token comes from this side
+    /// or its seal or checksum does not verify; [`Error::Inner`] when the receive key is not AES,
+    /// the token names an acceptor subkey this context lacks, or the payload is too short to
+    /// decrypt; [`Error::Sequence`] when its sequence number is a replay or outside the window.
     pub fn unwrap_iov(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let sealed = iov
             .iter()
@@ -228,7 +235,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Non-AES etype.
+    /// [`Error::Inner`] when the send key is not an AES etype.
     pub fn wrap_iov_length(&self, conf: bool) -> Result<(usize, usize, usize), Error> {
         let (key, _) = self.send_key();
         require_aes(key.etype())?;

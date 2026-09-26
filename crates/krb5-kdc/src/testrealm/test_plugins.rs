@@ -277,7 +277,7 @@ impl TestAudit {
     ///
     /// # Errors
     ///
-    /// The file could not be created or opened.
+    /// The `std::io::Error` when `path` cannot be created or opened for appending.
     pub fn open(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let path = path.as_ref().to_path_buf();
         let file = OpenOptions::new().create(true).append(true).open(&path)?;

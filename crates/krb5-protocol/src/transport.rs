@@ -41,7 +41,13 @@ impl KdcAddr {
 ///
 /// # Errors
 ///
-/// [`Error::Io`] on network failure.
+/// [`Error::Io`] when no reply arrives. A UDP send or receive error keeps its kind
+/// (`WouldBlock` when none of the three waits, 0.5, 1 and 2 s, gets a reply); every other
+/// failure is `kind: Other`, `retryable: true`: an unresolvable host, a UDP bind, a TCP connect
+/// refused or timed out (5 s), a failed TCP write, no TCP reply within 5 s, a TCP reply cut
+/// short, or a TCP length of 0 or over 1 MiB. TCP is tried for a request above
+/// `udp_preference_limit`, after a `RESPONSE_TOO_BIG` reply, or after UDP fails; when both
+/// fail, a UDP timeout yields the TCP error and any other UDP failure the UDP error.
 pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     exchange_with_failover(std::slice::from_ref(addr), request)
 }
@@ -50,17 +56,23 @@ pub fn exchange(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
 ///
 /// # Errors
 ///
-/// [`Error::Io`] on network failure.
+/// [`Error::Io`] with `kind: Other` and `retryable: true` when the host does not resolve, the
+/// connect is refused or takes over 5 s, the socket cannot be configured, the request cannot be
+/// framed or written, no reply arrives within 5 s, the reply is cut short, or its length prefix
+/// is 0 or over 1 MiB.
 pub fn exchange_on_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     crate::capture_pdu("client-req", request);
     exchange_tcp(addr, request)
 }
 
-/// Try each KDC in order with UDP retransmit/backoff (1s, 2s) then TCP.
+/// Try each KDC in order: UDP with retransmit waits of 0.5 s, 1 s and 2 s, then TCP.
 ///
 /// # Errors
 ///
-/// The last transport error.
+/// [`Error::Io`] (`kind: Other`) when `addrs` is empty. Otherwise each KDC is tried as in
+/// [`exchange`]: the first failure that is not retryable (a UDP send or receive error other
+/// than a timeout, refusal, reset, or interrupt) is returned at once, else the last KDC's
+/// [`Error::Io`].
 pub fn exchange_with_failover(addrs: &[KdcAddr], request: &[u8]) -> Result<Vec<u8>, Error> {
     let mut last = Error::transport_msg("no KDC addresses");
     for addr in addrs {

@@ -86,7 +86,11 @@ pub trait KdcPreauth: Send + Sync {
     ///
     /// # Errors
     ///
-    /// A preauth check or a key failure.
+    /// The [`Error`] with which a module refuses its padata. The built-in modules return
+    /// [`Error::Protocol`] for a failed check (`PREAUTH_FAILED`, `SKEW`, `REPEAT`, ...),
+    /// [`Error::Crypto`] when a timestamp does not decrypt or a PKINIT or SPAKE derivation fails,
+    /// and [`Error::Asn1`] when padata does not decode or a reply does not encode; `run_as_preauth`
+    /// then applies MIT's `filter_preauth_error`.
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error>;
 }
 
@@ -513,7 +517,11 @@ fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[
 ///
 /// # Errors
 ///
-/// A preauth check or a key failure.
+/// [`Error::Protocol`] with status `PREAUTH_FAILED` when the first module to fail refuses its
+/// padata: the module's code when MIT's pass-through list keeps it (`SKEW`, `BAD_INTEGRITY`,
+/// `ETYPE_NOSUPP`, `MORE_PREAUTH_DATA_REQUIRED`, `REPEAT`, the PKINIT codes, ...), else
+/// `PREAUTH_FAILED` for any other code or variant. A module's [`Error::PreauthRequired`] passes
+/// through unchanged.
 pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
     let PreauthRock {
         store,
@@ -673,7 +681,8 @@ pub trait KdcPolicy: Send + Sync {
     ///
     /// # Errors
     ///
-    /// The check refuses the request.
+    /// The [`Error`] that denies the request, usually [`Error::Protocol`] with the KRB-ERROR code
+    /// to send (such as `POLICY`); `DefaultPolicy` never fails.
     fn check_as(
         &self,
         store: &dyn PrincipalRead,
@@ -684,7 +693,8 @@ pub trait KdcPolicy: Send + Sync {
     ///
     /// # Errors
     ///
-    /// The check refuses the request.
+    /// The [`Error`] that denies the request, usually [`Error::Protocol`] with the KRB-ERROR code
+    /// to send (such as `POLICY`); `DefaultPolicy` never fails.
     fn check_tgs(
         &self,
         store: &dyn PrincipalRead,

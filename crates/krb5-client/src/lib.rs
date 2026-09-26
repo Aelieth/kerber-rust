@@ -106,8 +106,13 @@ pub struct KinitResult {
 ///
 /// # Errors
 ///
-/// Returns protocol or I/O errors. The password buffer is zeroized before
-/// return.
+/// A boxed [`ProtocolError`] from the AS exchange (for example [`ProtocolError::KrbError`]
+/// with the KDC's code, [`ProtocolError::ReplyIntegrity`] for a wrong password); a boxed
+/// `std::io::Error` when a `krb5.conf` PKINIT PEM cannot be read or the ccache cannot be
+/// written; a boxed `krb5_asn1::Error` when a ticket does not encode; a message when
+/// `principal` or `service` is malformed, the `krb5.conf` PKINIT pair is incomplete or its PEM
+/// unparsable, or the TGS-REQ for `service` fails (then nothing is stored). The password
+/// buffer is zeroized before return.
 pub fn kinit(
     kdc: &KdcAddr,
     principal: &str,
@@ -160,7 +165,13 @@ pub struct InitCredsOpt<'a> {
 ///
 /// # Errors
 ///
-/// Protocol or I/O errors. The password buffer is zeroized before return.
+/// A boxed [`ProtocolError`] from the AS exchange (for example [`ProtocolError::KrbError`]
+/// with the KDC's code, [`ProtocolError::ReplyIntegrity`] for a wrong password); a boxed
+/// `std::io::Error` when the armor ccache or a PKINIT PEM cannot be read or parsed, or the
+/// ccache cannot be written; a boxed `krb5_asn1::Error` when a ticket does not decode or
+/// encode; a message when an input is missing or malformed (principal, service, realm, armor
+/// TGT, PKINIT pair or PEM) or the service TGS-REQ fails (then nothing is stored). The password
+/// buffer is zeroized before return.
 pub fn kinit_ex(
     kdc: &KdcAddr,
     principal: &str,
@@ -193,7 +204,13 @@ pub fn kinit_ex(
 ///
 /// # Errors
 ///
-/// Protocol or I/O errors. The password buffer is zeroized before return.
+/// A boxed [`ProtocolError`] from the AS exchange (for example [`ProtocolError::KrbError`]
+/// with the KDC's code, [`ProtocolError::ReplyIntegrity`] for a wrong password); a boxed
+/// `std::io::Error` when the armor ccache or a PKINIT PEM cannot be read or parsed, or `spec`
+/// cannot be stored (FILE, DIR, or KCM); a boxed `krb5_asn1::Error` when a ticket does not
+/// decode or encode; a message when an input is missing or malformed (principal, service,
+/// realm, armor TGT, PKINIT pair or PEM) or the service TGS-REQ fails (then nothing is
+/// stored). The password buffer is zeroized before return.
 pub fn kinit_to_spec(
     kdc: &KdcAddr,
     principal: &str,
@@ -230,7 +247,15 @@ pub fn kinit_to_spec(
 ///
 /// # Errors
 ///
-/// Protocol or I/O errors. The password buffer is zeroized before return.
+/// A boxed [`ProtocolError`] from a KDC or kpasswd exchange: the AS (for example
+/// [`ProtocolError::KrbError`] with the KDC's code, [`ProtocolError::ReplyIntegrity`] for a
+/// wrong password), the `renew` / `validate` TGS-REQ, or the key-expired password change; a
+/// boxed `std::io::Error` when a keytab, armor ccache, PKINIT PEM, or cache cannot be read,
+/// parsed, or stored; a boxed `krb5_asn1::Error` when a ticket does not decode or encode; a
+/// message when an input is missing or malformed (principal, service, realm, keytab entry,
+/// MEMORY cache, TGT, PKINIT pair or PEM), the prompter fails or its tries end with the new
+/// password refused, mismatched, or empty, or the service TGS-REQ fails (then nothing is
+/// stored). The password buffer is zeroized before return.
 pub fn kinit_with(
     kdc: &KdcAddr,
     principal: &str,
@@ -267,7 +292,9 @@ pub fn mit_error_code(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Op
 ///
 /// # Errors
 ///
-/// Missing cache or parse failure.
+/// A boxed `std::io::Error` when a FILE or DIR cache cannot be read (`NotFound` if missing) or
+/// parsed (`InvalidData`, `UnexpectedEof`), or when [`dir_cache_path`] or [`kcm_load`] fails;
+/// the message `No credentials cache found` when no MEMORY cache has that name.
 pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Error + Send + Sync>> {
     match spec {
         CcSpec::File(p) => Ok(FileCcache::parse(&std::fs::read(p)?)?),
@@ -284,7 +311,9 @@ pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Erro
 ///
 /// # Errors
 ///
-/// I/O or DIR residual errors.
+/// A boxed `std::io::Error` when the FILE or DIR cache file cannot be written (temp file
+/// create, write, sync, or rename), or when [`dir_cache_path_for_store`] or [`kcm_store`]
+/// fails. A MEMORY store does not fail.
 pub fn store_ccache(
     spec: &CcSpec,
     cc: FileCcache,
@@ -307,7 +336,9 @@ pub fn store_ccache(
 ///
 /// # Errors
 ///
-/// I/O or DIR residual errors.
+/// A boxed `std::io::Error` when the FILE or DIR cache file cannot be written (temp file
+/// create, write, sync, or rename), or when [`dir_cache_path_for_store`] or
+/// [`kcm_store_keep_default`] fails. A MEMORY store does not fail.
 pub fn store_ccache_keep_default(
     spec: &CcSpec,
     cc: FileCcache,
@@ -322,7 +353,10 @@ pub fn store_ccache_keep_default(
 ///
 /// # Errors
 ///
-/// Missing cache or I/O.
+/// A boxed `std::io::Error` when the FILE or DIR cache cannot be zeroed and removed (`NotFound`
+/// if missing, `InvalidInput` if not a regular file), or when [`dir_cache_path`] or
+/// [`kcm_destroy`] fails; the message `No credentials cache found` when no MEMORY cache has
+/// that name.
 pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     match spec {
         CcSpec::File(p) => krb5_protocol::destroy_secret_file(p).map_err(Into::into),

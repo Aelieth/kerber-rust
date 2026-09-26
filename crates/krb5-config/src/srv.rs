@@ -12,7 +12,9 @@ use super::{Endpoint, Error};
 ///
 /// # Errors
 ///
-/// Returns [`Error::Dns`] when no records are found or the query fails.
+/// [`Error::Dns`] when the UDP socket cannot be bound or given its 2 s timeout, or no resolver
+/// in the fixed list returns an SRV record (no reply, a short or malformed reply, or an empty
+/// answer).
 pub fn lookup_srv_kdc(realm: &str) -> Result<Vec<Endpoint>, Error> {
     lookup_srv(&format!("_kerberos._udp.{realm}"), 88)
 }

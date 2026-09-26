@@ -105,7 +105,9 @@ pub fn stable_krb_error(e: &KrbError) -> StableKrbError {
 ///
 /// # Errors
 ///
-/// Stable fields differ, or e_data is not structurally equal.
+/// [`DiffError`] when the stable fields differ, or, for error codes 24, 25, 65 and 91, when
+/// the two `e_data`s fail [`compare_preauth_e_data`] (missing, undecodable, or structurally
+/// different).
 pub fn compare_krb_error(rust: &KrbError, mit: &KrbError) -> Result<(), DiffError> {
     let a = stable_krb_error(rust);
     let b = stable_krb_error(mit);
@@ -168,7 +170,9 @@ fn type_multiset(m: &MethodData) -> Vec<i32> {
 ///
 /// # Errors
 ///
-/// Missing `e_data`, decode failure, type-multiset mismatch, or etype mismatch.
+/// [`DiffError`] when either leg is `None` or does not decode as a non-empty METHOD-DATA or
+/// TYPED-DATA; when the padata type multisets differ; when FX-FAST comes with other types but
+/// no FX-COOKIE; or when an ETYPE-INFO2 does not decode, is empty, or lists different etypes.
 pub fn compare_preauth_e_data(a: Option<&[u8]>, b: Option<&[u8]>) -> Result<(), DiffError> {
     let a = a.ok_or_else(|| DiffError("rust e_data missing".into()))?;
     let b = b.ok_or_else(|| DiffError("mit e_data missing".into()))?;
@@ -236,7 +240,8 @@ fn etype_info2_etypes(m: &MethodData) -> Result<Vec<i32>, DiffError> {
 ///
 /// # Errors
 ///
-/// No recognized tag.
+/// [`DiffError`] with the decode message when `plain` is none of APPLICATION 26,
+/// APPLICATION 25, or an untagged EncKDCRepPart, a known tag with a malformed body included.
 pub fn decode_enc_kdc_rep(plain: &[u8]) -> Result<EncKdcRepPart, DiffError> {
     krb5_asn1::decode_enc_kdc_rep_part(plain).map_err(|e| DiffError(e.to_string()))
 }
@@ -278,7 +283,8 @@ pub fn stable_rep(rep: &KdcRep, enc: &EncKdcRepPart, ticket: &EncTicketPart) -> 
 ///
 /// # Errors
 ///
-/// Any stable-field mismatch.
+/// [`DiffError`] when the two [`StableRep`] projections differ; a kvno carried by only one
+/// leg is not compared.
 pub fn compare_stable_rep(
     rust_rep: &KdcRep,
     rust_enc: &EncKdcRepPart,

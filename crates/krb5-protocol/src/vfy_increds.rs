@@ -64,7 +64,14 @@ pub fn host_princs_from_keytab(keytab: &Keytab) -> Vec<(Realm, PrincipalName)> {
 ///
 /// # Errors
 ///
-/// Missing keys under `nofail`, TGS failure, or AP-REQ verification failure.
+/// [`Error::File`] (`NotFound`) when `nofail` is set and there is no keytab key to verify with
+/// (none for `server`, or no `host/` key); [`Error::File`] (`InvalidData`) or [`Error::Asn1`]
+/// when the cred's session key or ticket does not parse; [`Error::Asn1`] or [`Error::Crypto`]
+/// when the AP-REQ cannot be built; the [`tgs_exchange`] error (for example
+/// [`Error::KrbError`] or [`Error::Io`]) when a ticket for the server must be fetched first;
+/// the [`verify_ap_req_ex`] error when the AP-REQ does not verify (for example
+/// [`Error::KrbError`] `NOKEY`, `BADKEYVER` or `TKT_EXPIRED`, or [`Error::Crypto`] for a wrong
+/// key).
 pub fn verify_init_creds(
     creds: &CcacheCred,
     server: Option<(&Realm, &PrincipalName)>,

@@ -36,7 +36,8 @@ const KPROP_BUFSIZ: usize = 32_768;
 ///
 /// # Errors
 ///
-/// The dump key could not be wrapped.
+/// [`Error::Inner`] when string-to-key of `master_password` fails or a key cannot be wrapped
+/// under the derived master key.
 pub fn kprop_dump_bytes(store: &PrincipalStore, master_password: &[u8]) -> Result<Vec<u8>, Error> {
     dump_store(store, master_password)
         .map(String::into_bytes)
@@ -47,7 +48,8 @@ pub fn kprop_dump_bytes(store: &PrincipalStore, master_password: &[u8]) -> Resul
 ///
 /// # Errors
 ///
-/// The dump key could not be wrapped.
+/// [`Error::Inner`] when string-to-key of `master_password` fails or a key cannot be wrapped
+/// under the derived master key.
 pub fn kprop_dump_iprop(store: &PrincipalStore, master_password: &[u8]) -> Result<Vec<u8>, Error> {
     dump_store_iprop(store, master_password)
         .map(String::into_bytes)
@@ -59,7 +61,9 @@ pub fn kprop_dump_iprop(store: &PrincipalStore, master_password: &[u8]) -> Resul
 ///
 /// # Errors
 ///
-/// Not a dump, bad parse, or a key failure.
+/// [`Error::Inner`] when `bytes` is a KDB1/KDB2/KDB3 blob, is not UTF-8, lacks a dump or iprop
+/// header, does not parse as a dump, or holds keys that do not decrypt under the master key
+/// string-to-key derives from `master_password`.
 pub fn kprop_load_bytes(bytes: &[u8], master_password: &[u8]) -> Result<PrincipalStore, Error> {
     if bytes.starts_with(b"KDB1") || bytes.starts_with(b"KDB2") || bytes.starts_with(b"KDB3") {
         return Err(Error::Inner(
@@ -220,7 +224,10 @@ impl KpropAuth {
 ///
 /// # Errors
 ///
-/// I/O, sendauth, dump framing, or [`Error::KpropUnauthorized`].
+/// [`Error::Inner`] when a read or write on `stream` fails or a message exceeds 8 MiB, the
+/// peer's sendauth or `kprop5_01` version is wrong, the AP-REQ does not verify (a KRB-ERROR is
+/// sent back first), or the session key or AP-REP cannot be built;
+/// [`Error::KpropUnauthorized`] when `acl_lines` does not authorize the client.
 pub fn kpropd_recvauth(
     stream: &mut TcpStream,
     host_keys: &[ProtocolKey],
@@ -423,7 +430,8 @@ fn recvauth_protocol_text(code: i32) -> String {
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Inner`] when `realm` is not ASCII, the CSPRNG fails, or the ticket or AP-REQ
+/// cannot be encoded or encrypted.
 pub fn kprop_expired_ap_req(
     host_key: &ProtocolKey,
     kvno: u32,
@@ -520,7 +528,9 @@ fn kprop_rd_req_error(
 ///
 /// # Errors
 ///
-/// SAFE/PRIV unwrap or I/O.
+/// [`Error::Inner`] when a read on `stream` fails or a message exceeds 8 MiB, the size
+/// KRB-SAFE does not verify, lacks or breaks the sequence number, or carries a malformed
+/// size, a KRB-PRIV chunk does not unwrap, or the chunks overrun the announced size.
 pub fn kpropd_recv_dump(stream: &mut TcpStream, auth: &mut KpropAuth) -> Result<Vec<u8>, Error> {
     let size_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     let (size_plain, size_seq) = verify_safe_user_data(&auth.session, &size_raw)?;
@@ -557,7 +567,8 @@ pub fn kpropd_recv_dump(stream: &mut TcpStream, auth: &mut KpropAuth) -> Result<
 ///
 /// # Errors
 ///
-/// SAFE encode or I/O.
+/// [`Error::Inner`] when the size KRB-SAFE cannot be built or checksummed, or the write on
+/// `stream` fails.
 pub fn kpropd_send_ack(
     stream: &mut TcpStream,
     auth: &mut KpropAuth,
@@ -599,7 +610,10 @@ pub struct KpropdConfig<'a> {
 ///
 /// # Errors
 ///
-/// Auth, dump, persist, or I/O.
+/// [`Error::KpropUnauthorized`] when `cfg.allowed_clients` does not authorize the client;
+/// [`Error::Inner`] when [`kpropd_recvauth`], [`kpropd_recv_dump`], or [`kpropd_send_ack`]
+/// fails, the dump does not load under `cfg.master_password`, or the store cannot be saved to
+/// `cfg.db` / `cfg.stash`.
 pub fn kpropd_handle_conn(
     stream: &mut TcpStream,
     cfg: &KpropdConfig<'_>,
@@ -666,7 +680,9 @@ pub fn iprop_poll_once(master: &PrincipalStore, slave: &mut PrincipalStore) -> I
 ///
 /// # Errors
 ///
-/// I/O or sendauth.
+/// [`Error::Inner`] when a read or write on `stream` fails or a message exceeds 8 MiB, the
+/// replica rejects the sendauth version, the AP-REQ cannot be built, the replica answers with
+/// a KRB-ERROR, or the AP-REP does not verify under `session`.
 pub fn kprop_sendauth(
     stream: &mut TcpStream,
     ticket: Ticket,
@@ -715,7 +731,9 @@ pub fn kprop_sendauth(
 ///
 /// # Errors
 ///
-/// SAFE/PRIV or I/O.
+/// [`Error::Inner`] when a read or write on `stream` fails or a message exceeds 8 MiB, the size
+/// KRB-SAFE or a KRB-PRIV chunk cannot be built, the ack KRB-SAFE does not verify or carries a
+/// malformed size, or the acked size is not `dump.len()`.
 pub fn kprop_send_dump(
     stream: &mut TcpStream,
     auth: &mut KpropAuth,
@@ -749,7 +767,8 @@ pub fn kprop_send_dump(
 ///
 /// # Errors
 ///
-/// Dump, auth, or I/O.
+/// [`Error::Inner`] when the dump cannot be made (string-to-key or key wrap under
+/// `master_password`), or when [`kprop_sendauth`] or [`kprop_send_dump`] fails.
 pub fn kprop_send_store(
     stream: &mut TcpStream,
     store: &PrincipalStore,
@@ -775,7 +794,8 @@ pub fn kprop_send_store(
 ///
 /// # Errors
 ///
-/// Dump, auth, or I/O.
+/// [`Error::Inner`] when the dump cannot be made (string-to-key or key wrap under
+/// `master_password`), or when [`kprop_sendauth`] or [`kprop_send_dump`] fails.
 pub fn kprop_send_store_iprop(
     stream: &mut TcpStream,
     store: &PrincipalStore,

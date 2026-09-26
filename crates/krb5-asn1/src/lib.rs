@@ -41,7 +41,7 @@ impl std::error::Error for Error {}
 ///
 /// # Errors
 ///
-/// Returns [`Error::Encode`] when the value cannot be represented in DER.
+/// [`Error::Encode`] when the value cannot be represented in DER.
 pub fn encode<T: Encode>(value: &T) -> Result<Vec<u8>, Error> {
     encode_named(value, std::any::type_name::<T>())
 }
@@ -50,7 +50,7 @@ pub fn encode<T: Encode>(value: &T) -> Result<Vec<u8>, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Decode`] on truncated or malformed encodings. Does not panic.
+/// [`Error::Decode`] on truncated or malformed encodings. Does not panic.
 pub fn decode<T: Decode>(bytes: &[u8]) -> Result<T, Error> {
     decode_named(bytes, std::any::type_name::<T>())
 }
@@ -61,7 +61,7 @@ pub fn decode<T: Decode>(bytes: &[u8]) -> Result<T, Error> {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Decode`] when none of the three forms decode.
+/// [`Error::Decode`] when none of the three forms decode.
 pub fn decode_enc_kdc_rep_part(bytes: &[u8]) -> Result<EncKdcRepPart, Error> {
     if let Ok(EncTgsRepPart(part)) = rasn::der::decode(bytes) {
         return Ok(part);

@@ -31,7 +31,7 @@ pub const SPAKE_N: [u8; 33] = [
 ///
 /// # Errors
 ///
-/// [`Error::InvalidParams`].
+/// None: the PRF+ length is the fixed 32 octets, and PRF cannot fail on a [`ProtocolKey`].
 pub fn spake_wbytes(ikey: &ProtocolKey, group: i32) -> Result<Vec<u8>, Error> {
     let mut seed = b"SPAKEsecret".to_vec();
     seed.extend_from_slice(&group.to_be_bytes());
@@ -54,7 +54,7 @@ pub fn spake_n_bytes() -> &'static [u8] {
 ///
 /// # Errors
 ///
-/// Invalid encoding or a point not on the curve.
+/// [`Error::Integrity`] when `bytes` is not a SEC1 encoding of a point on P-256.
 pub fn spake_decode_point(bytes: &[u8]) -> Result<(), Error> {
     decode_compressed(bytes).map(|_| ())
 }
@@ -116,7 +116,8 @@ fn spake_n() -> Result<p256::ProjectivePoint, Error> {
 ///
 /// # Errors
 ///
-/// Invalid scalars.
+/// [`Error::Integrity`] when `w` reduces to zero modulo the P-256 order, or `secret` is zero or
+/// not below that order.
 pub fn spake_public(w: &[u8; 32], secret: &[u8; 32], server: bool) -> Result<Vec<u8>, Error> {
     spake_public_wbytes(w, secret, server)
 }
@@ -125,7 +126,8 @@ pub fn spake_public(w: &[u8; 32], secret: &[u8; 32], server: bool) -> Result<Vec
 ///
 /// # Errors
 ///
-/// Invalid scalars.
+/// [`Error::Integrity`] when `wbytes` is not 32 octets or reduces to zero modulo the P-256 order,
+/// or `secret` is zero or not below that order.
 pub fn spake_public_wbytes(
     wbytes: &[u8],
     secret: &[u8; 32],
@@ -145,7 +147,8 @@ pub fn spake_public_wbytes(
 ///
 /// # Errors
 ///
-/// Invalid points or scalars.
+/// [`Error::Integrity`] when `w` reduces to zero modulo the P-256 order, `secret` is zero or not
+/// below that order, `peer_public` is not a SEC1 point on P-256, or the result is the identity.
 pub fn spake_finish(
     w: &[u8; 32],
     secret: &[u8; 32],
@@ -168,7 +171,8 @@ pub fn spake_finish(
 ///
 /// # Errors
 ///
-/// Invalid points or scalars.
+/// [`Error::Integrity`] when `wbytes` is not 32 octets or reduces to zero modulo the P-256 order,
+/// `secret` is zero or not below that order, or `peer_public` is not a SEC1 point on P-256.
 pub fn spake_result_wbytes(
     wbytes: &[u8],
     secret: &[u8; 32],
@@ -201,7 +205,7 @@ pub fn spake_thash_update(thash: &[u8], data1: &[u8], data2: &[u8]) -> [u8; 32] 
 ///
 /// # Errors
 ///
-/// Bad length or [`Error::InvalidParams`].
+/// None: the hash seed is cut to `ikey`'s key length, and [`krb_fx_cf2`] cannot fail.
 pub fn spake_derive_key(
     ikey: &ProtocolKey,
     group: i32,
@@ -240,7 +244,8 @@ pub fn spake_derive_key(
 ///
 /// # Errors
 ///
-/// RNG or curve failures.
+/// [`Error::Rng`] when the CSPRNG fails; [`Error::Integrity`] when `wbytes` is not 32 octets or
+/// reduces to zero modulo the P-256 order.
 pub fn spake_kdc_keygen(wbytes: &[u8]) -> Result<([u8; 32], Vec<u8>), Error> {
     let kp = p256_generate()?;
     let pub_y = spake_public_wbytes(wbytes, &kp.secret, true)?;

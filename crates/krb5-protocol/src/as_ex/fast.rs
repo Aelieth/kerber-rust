@@ -239,8 +239,8 @@ pub(crate) struct FastErrorMaterial {
 ///
 /// # Errors
 ///
-/// `PREAUTH_FAILED` when the decrypted reply has no FX-ERROR, and a
-/// failure decoding that inner error.
+/// [`Error::KrbError`] `PREAUTH_FAILED` when the decrypted FAST response has no FX-ERROR, and
+/// [`Error::Asn1`] when that FX-ERROR does not decode or the inner padata does not re-encode.
 pub(crate) fn fast_error_material(
     akey: &ProtocolKey,
     err: &KrbError,

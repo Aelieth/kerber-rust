@@ -213,7 +213,8 @@ fn eku(oid_body: &[u8]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// Returns `"cms wrap"` when a leaf cannot be issued or signed.
+/// `"cms wrap"` when no leaf key can be generated (the OS random source fails) or `ca.ca_secret`
+/// is not a valid P-256 scalar, so the leaf cannot be issued or signed.
 pub fn cms_wrap(e_content: &[u8], ca: &PkinitCa) -> Result<Vec<u8>, &'static str> {
     ca.sign_cms(e_content, "pkinit-test").ok_or("cms wrap")
 }

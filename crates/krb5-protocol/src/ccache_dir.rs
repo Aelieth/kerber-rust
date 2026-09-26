@@ -13,7 +13,11 @@ const DEFAULT_SUB: &str = "tkt";
 ///
 /// # Errors
 ///
-/// Missing directory, non-directory, or subsidiary name not starting with `tkt`.
+/// `io::ErrorKind::InvalidInput` when `dirname` is not a directory, or a `:filepath` residual
+/// has no UTF-8 file name, one not starting with `tkt`, or no parent directory;
+/// `io::ErrorKind::InvalidData` when `primary` does not hold a bare `tkt*` name; the OS error
+/// when `dirname` cannot be stat'ed (`NotFound` if missing) or an existing `primary` cannot be
+/// read.
 pub fn dir_cache_path(residual: &str) -> io::Result<PathBuf> {
     resolve_dir(residual, false)
 }
@@ -22,7 +26,11 @@ pub fn dir_cache_path(residual: &str) -> io::Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Missing parent, non-directory, or subsidiary name not starting with `tkt`.
+/// `io::ErrorKind::InvalidInput` when the collection path exists but is not a directory, or a
+/// `:filepath` residual has no UTF-8 file name, one not starting with `tkt`, or no parent
+/// directory; `io::ErrorKind::InvalidData` when `primary` does not hold a bare `tkt*` name;
+/// the OS error when the directory cannot be stat'ed or created (`NotFound` for a missing
+/// parent) or `primary` cannot be read or written.
 pub fn dir_cache_path_for_store(residual: &str) -> io::Result<PathBuf> {
     resolve_dir(residual, true)
 }
@@ -71,7 +79,11 @@ fn resolve_dir(residual: &str, init: bool) -> io::Result<PathBuf> {
 ///
 /// # Errors
 ///
-/// Missing directory, or a bad subsidiary.
+/// `io::ErrorKind::InvalidInput` when `dirname` is not a directory, or a `:filepath` residual
+/// has no UTF-8 file name, one not starting with `tkt`, or no parent directory;
+/// `io::ErrorKind::InvalidData` when `primary` does not hold a bare `tkt*` name; the OS error
+/// when `dirname` cannot be stat'ed (`NotFound` if missing) or an existing `primary` cannot be
+/// read.
 pub fn dir_display_name(residual: &str) -> io::Result<String> {
     let path = dir_cache_path(residual)?;
     Ok(format!("DIR::{}", path.display()))
@@ -81,7 +93,9 @@ pub fn dir_display_name(residual: &str) -> io::Result<String> {
 ///
 /// # Errors
 ///
-/// Residual is not a subsidiary, or primary write fails.
+/// `io::ErrorKind::InvalidInput` when `residual` is not `:filepath`, its file name is missing,
+/// not UTF-8, or not `tkt*`, it has no parent directory, or the parent is not a directory; the
+/// OS error when the parent cannot be stat'ed or created or `primary` cannot be written.
 pub fn dir_switch(residual: &str) -> io::Result<()> {
     let path = residual.strip_prefix(':').ok_or_else(|| {
         io::Error::new(io::ErrorKind::InvalidInput, "kswitch needs DIR::subsidiary")
@@ -111,7 +125,7 @@ pub fn dir_switch(residual: &str) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// The directory could not be read.
+/// The OS error when `dir` cannot be listed or an entry or its file type cannot be read.
 pub fn dir_subsidiaries(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut v = Vec::new();
     for e in fs::read_dir(dir)? {

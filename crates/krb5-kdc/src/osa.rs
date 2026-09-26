@@ -162,7 +162,9 @@ impl OsaPrincEnt {
     ///
     /// # Errors
     ///
-    /// [`OsaError`] on a wrong version or malformed XDR.
+    /// [`OsaError::Version`] when the first word is not `OSA_ADB_PRINC_VERSION_1`, and
+    /// [`OsaError::Xdr`] when the XDR is short, the policy is not a NUL-terminated UTF-8 string, or
+    /// a key field is out of range or its length does not match.
     pub fn decode(b: &[u8]) -> Result<Self, OsaError> {
         let mut x = Xdr { b, i: 0 };
         let version = x.u32()?;
@@ -222,7 +224,8 @@ impl OsaPrincEnt {
     ///
     /// # Errors
     ///
-    /// [`OsaError`] when the `KRB5_TL_KADM_DATA` value is malformed.
+    /// [`OsaError::Version`] or [`OsaError::Xdr`] when the first `KRB5_TL_KADM_DATA` value has the
+    /// wrong version word or malformed XDR.
     pub fn from_tl(tl: &[TlData]) -> Result<Option<Self>, OsaError> {
         tl.iter()
             .find(|t| t.ty == TL_KADM_DATA)
@@ -257,7 +260,7 @@ impl OsaPrincEnt {
 ///
 /// # Errors
 ///
-/// Encryption failures from the history key's etype.
+/// `krb5_crypto::Error::Rng` when the CSPRNG fails while a key is encrypted under `hist_key`.
 pub fn history_entry(
     keys: &[KeyEntry],
     hist_key: &ProtocolKey,

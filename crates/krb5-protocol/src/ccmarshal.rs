@@ -31,7 +31,8 @@ impl CcacheKeyblock {
     ///
     /// # Errors
     ///
-    /// Unknown enctype or wrong key length.
+    /// `io::ErrorKind::InvalidData` when the enctype is not implemented or the key length does
+    /// not match it.
     pub fn protocol_key(&self) -> Result<ProtocolKey, io::Error> {
         let et = EncryptionType::known(i32::from(self.etype))
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
@@ -88,7 +89,8 @@ impl CcacheCred {
     ///
     /// # Errors
     ///
-    /// Unknown enctype or wrong key length.
+    /// `io::ErrorKind::InvalidData` when the enctype is not implemented or the key length does
+    /// not match it.
     pub fn session_key(&self) -> Result<ProtocolKey, io::Error> {
         self.key.protocol_key()
     }

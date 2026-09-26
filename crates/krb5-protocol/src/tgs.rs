@@ -44,7 +44,17 @@ pub struct TgsOutcome {
 ///
 /// # Errors
 ///
-/// Returns transport, crypto, or `KRB-ERROR` failures.
+/// [`Error::Io`] when a KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses a request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when a reply fails a check against its request (FAST
+/// finished message or strengthen key, client, server, times), `realm` is not a GeneralString,
+/// or the referral chase returns to the start realm, loops, or finds no host realm;
+/// [`Error::Referral`] when a referral names no new realm or the chase passes ten hops;
+/// [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for one that is
+/// neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
+/// [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or a key
+/// in the reply is unusable.
 pub fn tgs_exchange(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -60,7 +70,17 @@ pub fn tgs_exchange(
 ///
 /// # Errors
 ///
-/// Returns transport, crypto, or `KRB-ERROR` failures.
+/// [`Error::Io`] when a KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses a request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when a reply fails a check against its request (FAST
+/// finished message or strengthen key, client, server, times), `realm` is not a GeneralString,
+/// or the referral chase returns to the start realm, loops, or finds no host realm;
+/// [`Error::Referral`] when a referral names no new realm or the chase passes ten hops;
+/// [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for one that is
+/// neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
+/// [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or a key
+/// in the reply is unusable.
 #[allow(clippy::needless_pass_by_value)]
 pub fn tgs_exchange_ex(
     kdc: &KdcAddr,
@@ -79,7 +99,15 @@ pub fn tgs_exchange_ex(
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when the reply fails a check against the request (FAST
+/// finished message or strengthen key, client, server, or times unless `renew`) or `realm` is
+/// not a GeneralString; [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`]
+/// for one that is neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode
+/// or decode; [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails,
+/// or a key in the reply is unusable.
 #[allow(clippy::needless_pass_by_value)]
 pub fn tgs_exchange_once(
     kdc: &KdcAddr,
@@ -103,7 +131,17 @@ pub fn tgs_exchange_once(
 ///
 /// # Errors
 ///
-/// Returns transport, crypto, or `KRB-ERROR` failures.
+/// [`Error::Io`] when a KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses a request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when a reply fails a check against its request (FAST
+/// finished message or strengthen key, client, server, times), `realm` is not a GeneralString,
+/// or the referral chase returns to the start realm, loops, or finds no host realm;
+/// [`Error::Referral`] when a referral names no new realm or the chase passes ten hops;
+/// [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for one that is
+/// neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
+/// [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or a key
+/// in the reply is unusable.
 #[allow(clippy::needless_pass_by_value)] // `tgt` is cloned into the path-TGT vec
 pub fn tgs_exchange_path(
     kdc: &KdcAddr,
@@ -141,7 +179,15 @@ pub fn tgs_exchange_path(
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when the reply fails a check against the request (FAST
+/// finished message or strengthen key, client, server, or times) or the TGT's client realm is not
+/// a GeneralString; [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for
+/// one that is neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or
+/// decode; [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or
+/// a key in the reply is unusable.
 pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);
@@ -153,7 +199,15 @@ pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> 
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when the reply fails a check against the request (FAST
+/// finished message or strengthen key, client, or server) or the TGT's client realm is not a
+/// GeneralString; [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for
+/// one that is neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or
+/// decode; [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or
+/// a key in the reply is unusable.
 pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);
@@ -203,7 +257,17 @@ pub fn tgs_renew_options(flags: &krb5_types::TicketFlags) -> KdcOptions {
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none), or `INAPP_CKSUM` for an unkeyed
+/// S4U reply checksum under a newer etype; [`Error::NonceMismatch`] for another nonce;
+/// [`Error::ReplyMismatch`] when the reply fails a check against the request (FAST finished
+/// message or strengthen key, client, server, times, the PA-S4U-X509-USER reply, or a KDC that
+/// ignored PA-FOR-USER) or `realm` or `for_realm` is not a GeneralString;
+/// [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for one that is
+/// neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
+/// [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or a key
+/// in the reply is unusable.
 pub fn tgs_s4u(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -230,7 +294,15 @@ pub fn tgs_s4u(
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when the reply fails a check against the request (FAST
+/// finished message or strengthen key, client, server, or times) or `realm` is not a
+/// GeneralString; [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for
+/// one that is neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or
+/// decode; [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or
+/// a key in the reply is unusable.
 pub fn tgs_u2u(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -744,7 +816,15 @@ fn random_nonce31() -> Result<u32, Error> {
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when the reply fails a check against the request (FAST
+/// finished message or strengthen key, client, server, or times) or `realm` is not a
+/// GeneralString; [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for
+/// one that is neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message (PA-PAC-OPTIONS
+/// included) does not encode or decode; [`Error::Crypto`] when a checksum, encryption,
+/// decryption, or key derivation fails, or a key in the reply is unusable.
 pub fn tgs_s4u2proxy(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
@@ -770,7 +850,15 @@ pub fn tgs_s4u2proxy(
 ///
 /// # Errors
 ///
-/// Transport, key, or a KDC error.
+/// [`Error::Io`] when the KDC cannot be reached or the nonce or subkey cannot be drawn;
+/// [`Error::KrbError`] with the KDC's code when it refuses the request (the FX-ERROR's once the
+/// FAST envelope unwraps, `PREAUTH_FAILED` when that holds none); [`Error::NonceMismatch`] for
+/// another nonce; [`Error::ReplyMismatch`] when the reply fails a check against the request (FAST
+/// finished message or strengthen key, client, or server) or the TGT's client realm is not a
+/// GeneralString; [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for
+/// one that is neither TGS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or
+/// decode; [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or
+/// a key in the reply is unusable.
 pub fn tgs_validate(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
     let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
     let sname = PrincipalName::krbtgt(&realm);
@@ -812,7 +900,9 @@ fn princ_eq(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] for either MIT status.
+/// [`Error::ReplyMismatch`] when a final S4U2Self reply names the requested server as its client
+/// (`KRB5KDC_ERR_PADATA_TYPE_NOSUPP`), or, on any hop but a final S4U2Self or S4U2Proxy one, the
+/// reply client is not the TGT client (`KRB5_KDCREP_MODIFIED`).
 #[expect(clippy::too_many_arguments, reason = "name and realm stay separate")]
 pub fn tgs_reply_client_ok(
     tgt_cname: &PrincipalName,
@@ -846,7 +936,8 @@ pub fn tgs_reply_client_ok(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`).
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) when the ticket server and the enc-part
+/// server differ in name or realm.
 pub fn tgs_reply_server_consistent(
     ticket_sname: &PrincipalName,
     ticket_realm: &krb5_types::Realm,
@@ -874,7 +965,8 @@ pub fn tgs_reply_server_consistent(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`).
+/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_MODIFIED`) when `endtime` is after `till`, `renew_till`
+/// is after the bound `opts` set, or a POSTDATED starttime is not `from`.
 pub fn tgs_reply_req_times(
     enc: &EncKdcRepPart,
     till: &KerberosTime,

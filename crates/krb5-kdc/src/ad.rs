@@ -30,7 +30,7 @@ use crate::store::Principal;
 ///
 /// # Errors
 ///
-/// Encode of the inner authorization-data.
+/// [`Error::Asn1`] when the inner AD-WIN2K-PAC authorization-data does not encode.
 pub fn wrap_win2k_pac(pac_bytes: &[u8]) -> Result<krb5_types::AuthorizationData, Error> {
     let inner = vec![AuthorizationDataValue {
         ad_type: pa::AD_WIN2K_PAC,
@@ -72,7 +72,7 @@ fn is_pac_signature(kind: u32) -> bool {
 ///
 /// # Errors
 ///
-/// Crypto or DER failures while building checksums.
+/// [`Error::Crypto`] when a checksum cannot be computed under the server or KDC key.
 pub fn sign_pac(
     cname: &PrincipalName,
     authtime: u32,
@@ -105,7 +105,8 @@ pub(crate) fn sign_reply_pac_s4u(
 
 /// # Errors
 ///
-/// Crypto or DER failures while building checksums.
+/// [`Error::Protocol`] `GENERIC` with status `HEADER_PAC` when `subject_pac` does not parse, and
+/// [`Error::Crypto`] when a checksum cannot be computed under the server or KDC key.
 pub fn sign_reply_pac(
     cname: &PrincipalName,
     authtime: u32,
@@ -296,7 +297,11 @@ pub fn should_have_ticket_signature(sname: &PrincipalName) -> bool {
 ///
 /// # Errors
 ///
-/// PAC parse or integrity failure.
+/// [`Error::Protocol`] with status `HEADER_PAC`: `BAD_INTEGRITY` when the PAC does not parse;
+/// `MODIFIED` when the KDC checksum, or for a service ticket the full checksum, does not verify
+/// (their result replaces the server checksum's); `ETYPE_NOSUPP` when a checksum type does not
+/// fit its key; `GENERIC` for a missing, duplicated or short checksum buffer or an unkeyed or
+/// unknown checksum type.
 pub fn verify_pac(
     pac_bytes: &[u8],
     server: &ProtocolKey,
@@ -312,7 +317,13 @@ pub fn verify_pac(
 ///
 /// # Errors
 ///
-/// PAC parse or integrity failure.
+/// [`Error::Protocol`] with status `HEADER_PAC`: `BAD_INTEGRITY` when the PAC does not parse;
+/// `MODIFIED` when a checked checksum does not verify: the server checksum without `kdc`, else
+/// the KDC checksum and, for a service ticket, the full and (given `enc_tkt_der`) ticket
+/// checksums, whose result replaces the server one; `SUMTYPE_NOSUPP` when, without `kdc`, the
+/// server checksum is type 14; `ETYPE_NOSUPP` when a checksum type does not fit its key;
+/// `GENERIC` for a missing, duplicated or short checksum buffer or an unkeyed or unknown
+/// checksum type.
 pub fn verify_pac_signatures(
     pac_bytes: &[u8],
     server: &ProtocolKey,
@@ -422,7 +433,7 @@ fn verify_pac_sig<'a>(
 ///
 /// # Errors
 ///
-/// [`Error::Asn1`].
+/// [`Error::Asn1`] when the `EncTicketPart` copy does not encode.
 pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
     let mut clone = part.clone();
     if let Some(ad) = clone.authorization_data.take() {
@@ -617,8 +628,8 @@ pub(crate) fn pac_client_info_eq(
 ///
 /// # Errors
 ///
-/// [`Error::Proto`] `POLICY` when the `LOGON_INFO` is undecodable or its base
-/// domain is the local domain.
+/// [`Error::Protocol`] `POLICY` with status `INVALID_LINEAGE` when the `LOGON_INFO` does not
+/// decode or its logon domain SID is in the local domain.
 pub(crate) fn filter_cross_realm_logon(
     logon: &[u8],
     local_domain: &krb5_types::pac::RpcSid,
@@ -878,7 +889,9 @@ fn take_der_slice(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
 ///
 /// # Errors
 ///
-/// A failure building the checksum key, or encoding the reply padata.
+/// [`Error::Crypto`] when the TGS subkey's enctype is unknown or its length does not match it, or
+/// the reply checksum cannot be computed; [`Error::Asn1`] when the user id or the reply padata
+/// does not encode.
 pub(crate) fn make_s4u2self_rep(
     req: &krb5_types::s4u::PaS4uX509User,
     tgt_session: &ProtocolKey,

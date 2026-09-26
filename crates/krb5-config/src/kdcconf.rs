@@ -52,7 +52,8 @@ impl KdcConf {
     ///
     /// # Errors
     ///
-    /// [`Error::Parse`] on malformed input.
+    /// None: a malformed or unknown line is skipped, so this is `Ok` even when `text` is not
+    /// valid kdc.conf.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::default();
         let mut section = String::new();
@@ -110,7 +111,7 @@ impl KdcConf {
     ///
     /// # Errors
     ///
-    /// [`Error::Io`] or [`Error::Parse`].
+    /// [`Error::Io`] when `path` cannot be read as UTF-8 text; the parse itself cannot fail.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let text = std::fs::read_to_string(path)?;
         Self::parse(&text)

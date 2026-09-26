@@ -139,7 +139,7 @@ impl Keytab {
     ///
     /// # Errors
     ///
-    /// Slot 0 or past the last slot.
+    /// `io::ErrorKind::InvalidInput` when `slot` is 0 or past the last slot.
     pub fn remove_slot(&mut self, slot: usize) -> io::Result<()> {
         let n = self.slots().len();
         if slot == 0 || slot > n {
@@ -193,7 +193,10 @@ impl Keytab {
     ///
     /// # Errors
     ///
-    /// Truncation, `i32::MIN` hole size, or a non-keytab header.
+    /// `io::ErrorKind::InvalidData` for a missing version or one other than `0x0501` /
+    /// `0x0502`, a hole size of `i32::MIN`, a key whose length does not match its enctype, or a
+    /// realm or name component that is not ASCII GeneralString; `io::ErrorKind::UnexpectedEof`
+    /// when an entry is truncated.
     pub fn parse(bytes: &[u8]) -> Result<Self, io::Error> {
         if bytes.len() < 2 || bytes[0] != 0x05 || (bytes[1] != 0x01 && bytes[1] != 0x02) {
             return Err(io::Error::new(

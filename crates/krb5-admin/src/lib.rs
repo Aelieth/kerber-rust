@@ -83,7 +83,9 @@ fn euid_passwd_name() -> Option<String> {
 ///
 /// # Errors
 ///
-/// `path` is set and cannot be read.
+/// The message when `path` is set and cannot be read or does not parse as a kadm5.acl (a
+/// syntax error, an unknown op letter, or a bad restriction); with no `path`, when `actor` is
+/// not a principal name.
 pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl, String> {
     match path {
         Some(p) => {
@@ -182,7 +184,10 @@ pub fn strdur(duration: i64) -> String {
 ///
 /// # Errors
 ///
-/// Missing principal, missing option value, or unknown flag.
+/// A message when `-pw`, `-policy`, `-k`, `-e`, `-maxlife`, `-maxrenewlife`, or `-expire` has
+/// no value, `-e` names no known keysalt, a duration or `-expire` timestamp does not parse
+/// (`Invalid date specification`), a `-`/`+` flag is unknown, or there is no principal or more
+/// than one (`missing principal`, `extra argument`).
 pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
     let mut out = KadminArgs::default();
     let mut rest = Vec::new();
@@ -272,7 +277,10 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
 ///
 /// # Errors
 ///
-/// Missing name, missing option value, or unknown flag.
+/// A message when no policy name is left after the flag/value pairs (`addpol <name>`: no
+/// arguments, an even token count, or a last token that is empty or starts with `-`), a flag
+/// is unknown, an interval does not parse (`Invalid date specification`), or a `-minlength`,
+/// `-minclasses`, `-history`, or `-maxfailure` value is not an unsigned integer.
 pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
     if parts.is_empty() {
         return Err("addpol <name>".into());
@@ -411,7 +419,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// AP-REQ verify or missing cname.
+    /// [`Error::Inner`] carrying the `verify_ap_req` text when `ap_req` does not verify under
+    /// `service_key` (truncated, a bad checksum, a replay, clock skew, or an expired ticket).
     pub fn from_ap_req(
         store: &'a mut PrincipalStore,
         acl: &'a Acl,
@@ -448,7 +457,9 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] when the actor is not permitted.
+    /// [`Error::AclDenied`] when the actor lacks ACL `a` on `name`; [`Error::PasswordPolicy`]
+    /// when `password` is empty; [`Error::Inner`] when `name` exists or the store cannot be
+    /// reloaded or saved.
     pub fn create_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.create_password_etypes(name, password, &[])
     }
@@ -461,7 +472,9 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::PasswordPolicy`] with the MIT text.
+    /// [`Error::PasswordPolicy`] when `password` fails the policy's length or class floor or a
+    /// quality module (`dict`, `empty`, `princ`); [`Error::Inner`] when the store cannot be
+    /// reloaded.
     pub fn check_new_password(
         &mut self,
         name: &PrincipalName,
@@ -478,7 +491,9 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] when the actor is not permitted.
+    /// [`Error::AclDenied`] when the actor lacks ACL `a` on `name`; [`Error::PasswordPolicy`]
+    /// when `password` is empty; [`Error::Inner`] when `name` exists or the store cannot be
+    /// reloaded or saved.
     pub fn create_password_etypes(
         &mut self,
         name: &PrincipalName,
@@ -495,7 +510,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or the name exists.
+    /// [`Error::AclDenied`] when the actor lacks ACL `a` on `name`; [`Error::Inner`] when `name`
+    /// exists, a random key cannot be drawn, or the store cannot be reloaded or saved.
     pub fn create_randkey(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.create_randkey_etypes(name, &[])
     }
@@ -504,7 +520,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or the name exists.
+    /// [`Error::AclDenied`] when the actor lacks ACL `a` on `name`; [`Error::Inner`] when `name`
+    /// exists, a random key cannot be drawn, or the store cannot be reloaded or saved.
     pub fn create_randkey_etypes(
         &mut self,
         name: &PrincipalName,
@@ -523,7 +540,11 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL, already exists, or [`krb5_kdc::Error::BadKeysalts`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `a` on `name`; [`Error::PasswordPolicy`]
+    /// when `password` fails the named policy's floors or a quality module; [`Error::Inner`]
+    /// carrying [`krb5_kdc::Error::BadKeysalts`] when `etypes` is outside the policy's
+    /// `allowed_keysalts`, or when `name` exists, a random key cannot be drawn, or the store
+    /// cannot be reloaded or saved.
     pub fn create_etypes_pol(
         &mut self,
         name: &PrincipalName,
@@ -541,7 +562,9 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `c` on `name`; [`Error::NotFound`] when
+    /// `name` is not in the store; [`Error::Inner`] when a random key cannot be drawn or the
+    /// store cannot be reloaded or saved.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.chrand_etypes_keepold(name, &[], false)
     }
@@ -550,7 +573,10 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `c` on `name`; [`Error::NotFound`] when
+    /// `name` is not in the store; [`Error::Inner`] carrying [`krb5_kdc::Error::BadKeysalts`]
+    /// when `etypes` is outside the policy's `allowed_keysalts`, or when a random key cannot be
+    /// drawn or the store cannot be reloaded or saved.
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
@@ -572,7 +598,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when `name` is not in the store.
     pub fn principal_attributes(&self, name: &PrincipalName) -> Result<u32, Error> {
         Ok(self.store.get_name(name).ok_or(Error::NotFound)?.attributes)
     }
@@ -581,7 +607,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `d` on `name`; [`Error::NotFound`] when
+    /// `name` is not in the store; [`Error::Inner`] when the store cannot be reloaded or saved.
     pub fn delete(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         self.store
@@ -593,7 +620,9 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// Denied, missing, or the name exists.
+    /// [`Error::AclDenied`] when the actor lacks ACL `d` on `old` or unrestricted `a` on `new`;
+    /// [`Error::NotFound`] when `old` is not in the store; [`Error::Inner`] when `new` exists,
+    /// `old` is an alias stub, or the store cannot be reloaded or saved.
     pub fn rename(&mut self, old: &PrincipalName, new: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         self.store
@@ -605,7 +634,9 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error`](enum@Error) wrapping `KADM5_ALIAS_REALM` or `KADM5_DUP`.
+    /// [`Error::Inner`] with the `KADM5_ALIAS_REALM` text when `alias_realm` is not
+    /// `target_realm`, the `KADM5_DUP` text when `alias` already exists, or the failure's text
+    /// when the store cannot be reloaded or saved.
     pub fn create_alias(
         &mut self,
         alias: &PrincipalName,
@@ -629,7 +660,9 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `e` on `name` or `name` has
+    /// `LOCKDOWN_KEYS`; [`Error::NotFound`] when `name` is missing or keyless; [`Error::Inner`]
+    /// when the store cannot be reloaded or the realm is not ASCII.
     pub fn ktadd(&mut self, name: &PrincipalName) -> Result<Keytab, Error> {
         self.reload()?;
         self.store
@@ -642,7 +675,10 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// Denied, missing, or the write failed.
+    /// [`Error::AclDenied`] when the actor lacks ACL `e` on `name`, or `c` when `rotate`;
+    /// [`Error::NotFound`] when `name` is missing or keyless; [`Error::Inner`] carrying `write`'s
+    /// message when it fails, or when the rotation cannot draw a key or save, the realm is not
+    /// ASCII, or the store cannot be reloaded.
     pub fn ktadd_local(
         &mut self,
         name: &PrincipalName,
@@ -673,7 +709,11 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL denied or principal missing.
+    /// [`Error::AclDenied`] when changing another principal without ACL `c` on `name`;
+    /// [`Error::NotFound`] when `name` is missing; [`Error::PassTooSoon`] for a self-change inside
+    /// `pw_min_life`; [`Error::PasswordPolicy`] when `password` fails the policy floors, a quality
+    /// module, or the history; [`Error::Inner`] when the history key or entry cannot be made or
+    /// the store cannot be reloaded or saved.
     pub fn change_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.change_password_etypes(name, password, &[])
     }
@@ -682,7 +722,12 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// ACL denied, principal missing, or [`krb5_kdc::Error::BadKeysalts`].
+    /// [`Error::AclDenied`] when changing another principal without ACL `c` on `name`;
+    /// [`Error::NotFound`] when `name` is missing; [`Error::PassTooSoon`] for a self-change inside
+    /// `pw_min_life`; [`Error::PasswordPolicy`] when `password` fails the policy floors, a quality
+    /// module, or the history; [`Error::Inner`] carrying [`krb5_kdc::Error::BadKeysalts`] when
+    /// `etypes` is outside `allowed_keysalts`, or when the history key or entry cannot be made or
+    /// the store cannot be reloaded or saved.
     pub fn change_password_etypes(
         &mut self,
         name: &PrincipalName,
@@ -741,7 +786,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when `name` is not in the store.
     pub fn get_principal_id(&self, name: &PrincipalName) -> Result<String, Error> {
         let p = self.store.get_name(name).ok_or(Error::NotFound)?;
         Ok(p.id())
@@ -751,7 +796,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when `name` is not in the store.
     pub fn get_principal_record(&self, name: &PrincipalName) -> Result<krb5_kdc::Principal, Error> {
         self.get_principal_record_in(name, self.store.realm())
     }
@@ -760,7 +805,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when `name@princ_realm` is not in the store.
     pub fn get_principal_record_in(
         &self,
         name: &PrincipalName,
@@ -776,7 +821,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `m` on `name`; [`Error::NotFound`] when
+    /// `name` is not in the store; [`Error::Inner`] when the store cannot be reloaded or saved.
     pub fn modify_attributes(
         &mut self,
         name: &PrincipalName,
@@ -816,7 +862,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `m` on `name`; [`Error::NotFound`] when
+    /// `name` is not in the store; [`Error::Inner`] when the store cannot be reloaded or saved.
     pub fn modify_expiration(
         &mut self,
         name: &PrincipalName,
@@ -850,7 +897,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `m` on `name`; [`Error::NotFound`] when
+    /// `name` is not in the store; [`Error::Inner`] when the store cannot be reloaded or saved.
     pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
         let tid = self.target_id(name);
@@ -867,7 +915,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `m` on `name`; [`Error::NotFound`] when
+    /// `name` is not in the store; [`Error::Inner`] when the store cannot be reloaded or saved.
     pub fn modify_ticket_lives(
         &mut self,
         name: &PrincipalName,
@@ -908,7 +957,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the actor lacks ACL `m` on `name`; [`Error::NotFound`] when
+    /// `name` is not in the store; [`Error::Inner`] when the store cannot be reloaded or saved.
     pub fn set_policy(&mut self, name: &PrincipalName, policy: &str) -> Result<(), Error> {
         self.reload()?;
         let tid = self.target_id(name);
@@ -952,7 +1002,10 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// Explicit values below the MIT floors.
+    /// [`Error::Inner`] with the MIT text of `KADM5_BAD_KEYSALTS` (a tab in `-allowedkeysalts`),
+    /// `KADM5_DUP` (the policy exists), `KADM5_BAD_POLICY` (an empty or non-printable name), or
+    /// `KADM5_BAD_MIN_PASS_LIFE`, `KADM5_BAD_LENGTH`, `KADM5_BAD_CLASS`, or `KADM5_BAD_HISTORY`
+    /// (an explicit value outside MIT's bounds).
     pub fn add_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
         let exists = self.store.policies().contains_key(&a.name);
@@ -968,7 +1021,10 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] or a floor/lifetime error.
+    /// [`Error::Inner`] `Policy does not exist` when no policy is named `a.name`, or with the MIT
+    /// text of `KADM5_BAD_KEYSALTS` (a tab in `-allowedkeysalts`) or `KADM5_BAD_MIN_PASS_LIFE`,
+    /// `KADM5_BAD_LENGTH`, `KADM5_BAD_CLASS`, or `KADM5_BAD_HISTORY` (a merged value outside
+    /// MIT's bounds).
     pub fn modify_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
         let existing = self
@@ -987,7 +1043,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Inner`] when the store cannot
+    /// be saved.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         let _ = self.reload();
         self.store.delete_policy(name).map_err(Error::from)
@@ -1026,7 +1083,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when no policy is named `name`.
     pub fn get_policy(&self, name: &str) -> Result<String, Error> {
         let p = self.store.policies().get(name).ok_or(Error::NotFound)?;
         let mut text = format!(
@@ -1052,7 +1109,8 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when `name` is not in the store; [`Error::Inner`] when the store
+    /// cannot be reloaded or saved.
     pub fn set_string_attr(
         &mut self,
         name: &PrincipalName,
@@ -1070,7 +1128,7 @@ impl<'a> AdminSession<'a> {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`].
+    /// [`Error::NotFound`] when `name` is not in the store.
     pub fn string_attrs(&self, name: &PrincipalName) -> Result<Vec<(String, String)>, Error> {
         self.store.get_strings(name).map_err(Error::from)
     }
@@ -1080,7 +1138,10 @@ impl<'a> AdminSession<'a> {
 ///
 /// # Errors
 ///
-/// Write failed, or a key was refused.
+/// [`krb5_kdc::PersistError::Io`] when the stash, dump, or `.ulog` file cannot be read or
+/// written; [`krb5_kdc::PersistError::Crypto`] when an existing stash is not a usable master
+/// key, a new master key cannot be derived or drawn, or a key cannot be wrapped;
+/// [`krb5_kdc::PersistError::Format`] when a stash is written for a non-ASCII realm.
 pub fn propagate(
     store: &PrincipalStore,
     db_path: &std::path::Path,
@@ -1093,7 +1154,10 @@ pub fn propagate(
 ///
 /// # Errors
 ///
-/// Read failed, or the dump was refused.
+/// [`krb5_kdc::PersistError::Io`] when the stash or database cannot be read;
+/// [`krb5_kdc::PersistError::Format`] when the database is neither UTF-8 dump text nor a sound
+/// KDB1/KDB2/KDB3 blob, or its `.ulog` is malformed; [`krb5_kdc::PersistError::Crypto`] when
+/// the stash key does not load the dump or the legacy blob.
 pub fn receive_propagate(
     db_path: &std::path::Path,
     stash_path: &std::path::Path,

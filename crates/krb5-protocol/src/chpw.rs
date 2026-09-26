@@ -141,7 +141,8 @@ fn decode_ad_policy_info(data: &[u8]) -> Option<String> {
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] (`KRB5KRB_AP_ERR_MODIFIED`).
+/// [`Error::ReplyMismatch`] (`KRB5KRB_AP_ERR_MODIFIED`) when `clear` is under two bytes, the
+/// code is above `KPASSWD_INITIAL_FLAG_NEEDED`, or `from_error` carries `KPASSWD_SUCCESS`.
 pub fn parse_chpw_result(clear: &[u8], from_error: bool) -> Result<u16, Error> {
     Ok(parse_chpw_rep(clear, from_error)?.0)
 }
@@ -150,7 +151,8 @@ pub fn parse_chpw_result(clear: &[u8], from_error: bool) -> Result<u16, Error> {
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] (`KRB5KRB_AP_ERR_MODIFIED`).
+/// [`Error::ReplyMismatch`] (`KRB5KRB_AP_ERR_MODIFIED`) when `clear` is under two bytes, the
+/// code is above `KPASSWD_INITIAL_FLAG_NEEDED`, or `from_error` carries `KPASSWD_SUCCESS`.
 pub fn parse_chpw_rep(clear: &[u8], from_error: bool) -> Result<(u16, &[u8]), Error> {
     if clear.len() < 2 {
         return Err(Error::ReplyMismatch(
@@ -185,7 +187,14 @@ pub fn format_chpw_failure(code: u16, result_data: &[u8]) -> String {
 ///
 /// # Errors
 ///
-/// Transport, crypto, or a non-success / modified result code.
+/// [`Error::Io`] (kind kept) when a TCP write or read fails (`WouldBlock` after 5 s,
+/// `UnexpectedEof` for a cut-short reply) or, when TCP does not connect, the UDP bind, connect,
+/// send, or receive fails (`WouldBlock` after 5 s); [`Error::KrbError`] `BAD_PVNO` for a reply
+/// version other than 1 or `0xff80`; [`Error::Crypto`] or [`Error::Asn1`] when the subkey or a
+/// message cannot be generated, encrypted, encoded, decrypted, or decoded;
+/// [`Error::ReplyMismatch`] for a malformed frame, a KRB-ERROR reply, a missing or out-of-range
+/// result code or a success inside an error reply, an AP-REP or KRB-PRIV failing its time
+/// check, or a result other than `KPASSWD_SUCCESS` (carrying its text).
 pub fn change_password(kdc: &KdcAddr, as_out: &AsOutcome, new_pw: &[u8]) -> Result<(), Error> {
     let (code, data) = change_password_result(kdc, as_out, new_pw)?;
     if code != KPASSWD_SUCCESS {
@@ -200,8 +209,14 @@ pub fn change_password(kdc: &KdcAddr, as_out: &AsOutcome, new_pw: &[u8]) -> Resu
 ///
 /// # Errors
 ///
-/// Transport, crypto, or a modified reply; a non-success result code is
-/// returned, not an error.
+/// [`Error::Io`] (kind kept) when a TCP write or read fails (`WouldBlock` after 5 s,
+/// `UnexpectedEof` for a cut-short reply) or, when TCP does not connect, the UDP bind, connect,
+/// send, or receive fails (`WouldBlock` after 5 s); [`Error::KrbError`] `BAD_PVNO` for a reply
+/// version other than 1 or `0xff80`; [`Error::Crypto`] or [`Error::Asn1`] when the subkey or a
+/// message cannot be generated, encrypted, encoded, decrypted, or decoded;
+/// [`Error::ReplyMismatch`] for a malformed frame, a KRB-ERROR reply, a missing or out-of-range
+/// result code or a success inside an error reply, or an AP-REP or KRB-PRIV failing its time
+/// check. A non-success result code is returned, not an error.
 pub fn change_password_result(
     kdc: &KdcAddr,
     as_out: &AsOutcome,
@@ -214,7 +229,14 @@ pub fn change_password_result(
 ///
 /// # Errors
 ///
-/// Transport, crypto, or a non-success / modified result code.
+/// [`Error::Io`] (kind kept) when a TCP write or read fails (`WouldBlock` after 5 s,
+/// `UnexpectedEof` for a cut-short reply) or, when TCP does not connect, the UDP bind, connect,
+/// send, or receive fails (`WouldBlock` after 5 s); [`Error::KrbError`] `BAD_PVNO` for a reply
+/// version other than 1 or `0xff80`; [`Error::Crypto`] or [`Error::Asn1`] when the subkey or a
+/// message cannot be generated, encrypted, encoded, decrypted, or decoded;
+/// [`Error::ReplyMismatch`] for a malformed frame, a KRB-ERROR reply, a missing or out-of-range
+/// result code or a success inside an error reply, an AP-REP or KRB-PRIV failing its time
+/// check, or a result other than `KPASSWD_SUCCESS` (carrying its text).
 pub fn set_password(
     kdc: &KdcAddr,
     as_out: &AsOutcome,

@@ -181,7 +181,8 @@ impl DumpFile {
     ///
     /// # Errors
     ///
-    /// No principals, or a name without `@`.
+    /// [`DumpError::Format`] when there are no principal records or the first name has no realm
+    /// after `@`.
     pub fn realm(&self) -> Result<&str, DumpError> {
         let name = self
             .princs
@@ -204,7 +205,10 @@ impl DumpFile {
     ///
     /// # Errors
     ///
-    /// Name, format, or a key failure.
+    /// [`DumpError::Format`] when a record carries `KRB5_TL_DB_ARGS`, the first name has no realm,
+    /// or a name, a key block, or the SID, history or `KRB5_TL_KADM_DATA` tl-data is malformed;
+    /// [`DumpError::Crypto`] when a key or history key has an unknown enctype, does not decrypt
+    /// under `mkey` or has the wrong length, or the `K/M` key is not `mkey`.
     pub(crate) fn into_store(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
         for p in &self.princs {
             if let Some(e) = crate::store::db_args_put_error(&p.tl_data) {
@@ -344,7 +348,9 @@ impl DumpPrincipal {
 ///
 /// # Errors
 ///
-/// Truncated lines, unknown version, or field-count mismatch.
+/// [`DumpError::Format`] when the text is empty or holds no `princ` record, the header is not a
+/// version 6 or 7 (or iprop) dump header, a line is neither `princ` nor `policy`, or a `princ`
+/// record has a missing, extra or malformed field.
 pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
     let mut lines = text.lines();
     let header = lines
@@ -384,7 +390,10 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
 ///
 /// # Errors
 ///
-/// [`DumpError::Format`] or a key failure.
+/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
+/// realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`]
+/// when the master key cannot be derived from `master_password`, a key does not decrypt under it
+/// into a usable key, or the `K/M` key is not the derived key.
 pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     load_dump_etype(text, master_password, default_master_etype())
 }
@@ -393,7 +402,10 @@ pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, D
 ///
 /// # Errors
 ///
-/// [`DumpError::Format`] or a key failure.
+/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
+/// realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`]
+/// when the master key cannot be derived from `master_password`, a key does not decrypt under it
+/// into a usable key, or the `K/M` key is not the derived key.
 pub fn load_dump_etype(
     text: &str,
     master_password: &[u8],
@@ -409,7 +421,9 @@ pub fn load_dump_etype(
 ///
 /// # Errors
 ///
-/// [`DumpError::Format`] or a key failure.
+/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
+/// realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`]
+/// when a key does not decrypt under `mkey` into a usable key or the `K/M` key is not `mkey`.
 pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
     parse_dump(text)?.into_store(mkey)
 }
@@ -418,7 +432,9 @@ pub(crate) fn load_dump_mkey(text: &str, mkey: &ProtocolKey) -> Result<Principal
 ///
 /// # Errors
 ///
-/// Read, parse, or a key failure.
+/// [`DumpError::Io`] when `path` cannot be read as UTF-8 text; otherwise as [`load_dump`]:
+/// [`DumpError::Format`] when the dump does not parse or a record cannot be stored, and
+/// [`DumpError::Crypto`] when the master key cannot be derived or a key does not decrypt under it.
 pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
     let text = fs::read_to_string(path)?;
     load_dump(&text, master_password)
@@ -431,7 +447,8 @@ pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalSt
 ///
 /// # Errors
 ///
-/// String-to-key or key wrap failed.
+/// [`DumpError::Crypto`] when the master key cannot be derived from `master_password` or a key
+/// cannot be wrapped under it.
 pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<String, DumpError> {
     dump_store_etype(store, master_password, default_master_etype())
 }
@@ -440,7 +457,8 @@ pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<Stri
 ///
 /// # Errors
 ///
-/// String-to-key or key wrap failed.
+/// [`DumpError::Crypto`] when the master key cannot be derived from `master_password` or a key
+/// cannot be wrapped under it.
 pub(crate) fn dump_store_etype(
     store: &PrincipalStore,
     master_password: &[u8],
@@ -454,7 +472,7 @@ pub(crate) fn dump_store_etype(
 ///
 /// # Errors
 ///
-/// A key could not be wrapped.
+/// [`DumpError::Crypto`] when a principal or history key cannot be wrapped under `mkey`.
 pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
     let now = unix_now();
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
@@ -508,7 +526,8 @@ pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<S
 ///
 /// # Errors
 ///
-/// [`DumpError::Io`] or a key failure.
+/// [`DumpError::Crypto`] when the master key cannot be derived or a key cannot be wrapped under
+/// it, and [`DumpError::Io`] when `path` cannot be written.
 pub fn write_dump_path_etype(
     store: &PrincipalStore,
     path: &Path,
@@ -566,7 +585,8 @@ fn parse_header(line: &str) -> Result<u32, DumpError> {
 ///
 /// # Errors
 ///
-/// String-to-key or key wrap failed.
+/// [`DumpError::Crypto`] when the master key cannot be derived from `master_password` or a key
+/// cannot be wrapped under it.
 pub fn dump_store_iprop(
     store: &PrincipalStore,
     master_password: &[u8],

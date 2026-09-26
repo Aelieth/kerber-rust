@@ -11,7 +11,7 @@
 ///
 /// # Errors
 ///
-/// Returns [`Error::InvalidParams`] when `input` is empty or `out_len` is 0.
+/// `Error::InvalidParams` when `input` is empty or `out_len` is 0.
 pub fn nfold(input: &[u8], out_len: usize) -> Result<Vec<u8>, crate::error::Error> {
     if input.is_empty() || out_len == 0 {
         return Err(crate::error::Error::InvalidParams);

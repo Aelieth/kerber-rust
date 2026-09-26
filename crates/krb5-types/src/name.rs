@@ -35,7 +35,8 @@ pub fn parse_name(s: &str, default_realm: &str) -> Result<(Vec<String>, String),
 ///
 /// # Errors
 ///
-/// [`NameError::Malformed`] on a trailing `\` or a second `@` in the realm.
+/// [`NameError::Malformed`] on a trailing `\`, an `@` inside the realm, or (without `enterprise`)
+/// a `/` inside the realm.
 pub fn parse_name_ex(
     s: &str,
     default_realm: &str,
@@ -110,7 +111,8 @@ pub fn infer_name_type(comps: &[String]) -> i32 {
 ///
 /// # Errors
 ///
-/// [`NameError`] from [`parse_name_ex`] or [`PrincipalName::try_new`].
+/// [`NameError::Malformed`] on a trailing `\` or a `/`/`@` in the realm;
+/// [`NameError::NotGeneralString`] when a component is not ASCII.
 pub fn principal_from_unparsed(
     s: &str,
     default_realm: &str,
@@ -122,7 +124,8 @@ pub fn principal_from_unparsed(
 ///
 /// # Errors
 ///
-/// [`NameError`] from [`parse_name_ex`] or [`PrincipalName::try_new`].
+/// [`NameError::Malformed`] on a trailing `\`, an `@` inside the realm, or (without `enterprise`)
+/// a `/` inside the realm; [`NameError::NotGeneralString`] when a component is not ASCII.
 pub fn principal_from_unparsed_ex(
     s: &str,
     default_realm: &str,

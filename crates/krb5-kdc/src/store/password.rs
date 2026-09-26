@@ -88,7 +88,8 @@ fn check_pwqual(password: &[u8], pol: &NamedPolicy) -> Result<(), Error> {
 ///
 /// # Errors
 ///
-/// [`Error::BadKeysalts`].
+/// [`Error::BadKeysalts`] when `requested` names an enctype outside a non-empty
+/// `allowed_keysalts`.
 pub fn apply_keysalt_policy(
     allowed_keysalts: Option<&str>,
     requested: &[EncryptionType],
@@ -150,7 +151,10 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing.
+    /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
+    /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
+    /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
+    /// history or saving the store to `persist_paths` fails.
     pub fn set_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.set_password_keepold(name, password, false)
     }
@@ -160,7 +164,9 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] or [`Error::PassTooSoon`].
+    /// [`Error::NotFound`] when the principal is missing; [`Error::PassTooSoon`] when its bound
+    /// policy's `pw_min_life` has not elapsed since the last password change and
+    /// `REQUIRES_PWCHANGE` is clear.
     pub fn check_min_life(&self, name: &PrincipalName) -> Result<(), Error> {
         self.check_min_life_in(name, &self.realm)
     }
@@ -169,7 +175,9 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] or [`Error::PassTooSoon`].
+    /// [`Error::NotFound`] when the principal is missing; [`Error::PassTooSoon`] when its bound
+    /// policy's `pw_min_life` has not elapsed since the last password change and
+    /// `REQUIRES_PWCHANGE` is clear.
     pub fn check_min_life_in(&self, name: &PrincipalName, princ_realm: &str) -> Result<(), Error> {
         let p = self
             .get_in_realm(name, princ_realm)
@@ -200,7 +208,10 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing.
+    /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
+    /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
+    /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
+    /// history or saving the store to `persist_paths` fails.
     pub(crate) fn set_password_keepold(
         &mut self,
         name: &PrincipalName,
@@ -214,7 +225,10 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing.
+    /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
+    /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
+    /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
+    /// history or saving the store to `persist_paths` fails.
     pub(crate) fn set_password_keepold_n(
         &mut self,
         name: &PrincipalName,
@@ -230,8 +244,10 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing, or
-    /// [`Error::BadKeysalts`].
+    /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
+    /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
+    /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
+    /// history or saving the store to `persist_paths` fails.
     pub fn set_password_keepold_n_in(
         &mut self,
         name: &PrincipalName,
@@ -249,8 +265,11 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing, or
-    /// [`Error::BadKeysalts`].
+    /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
+    /// password fails the quality or history checks; [`Error::BadKeysalts`] when `etypes` names
+    /// an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the CSPRNG
+    /// fails creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into
+    /// the history or saving the store to `persist_paths` fails.
     pub fn set_password_etypes_keepold_n_in(
         &mut self,
         name: &PrincipalName,
@@ -358,7 +377,11 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::AclDenied`] or [`Error::NotFound`].
+    /// [`Error::AclDenied`] when the ACL does not grant `actor` change-password on `name`;
+    /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
+    /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
+    /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
+    /// history or saving the store to `persist_paths` fails.
     pub fn change_password(
         &mut self,
         acl: &Acl,
@@ -392,7 +415,9 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::PasswordPolicy`].
+    /// [`Error::PasswordPolicy`] when the password is empty or, under an existing `policy`, is
+    /// short of its `min_length` or `min_classes`, is a dictionary word, or matches the realm
+    /// or a component of `name`.
     pub fn check_new_password(
         &self,
         name: &PrincipalName,
@@ -455,7 +480,10 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::PasswordPolicy`].
+    /// [`Error::PasswordPolicy`] when `name` exists and the password is empty or, under its
+    /// bound policy, is short of `min_length` or `min_classes`, is a dictionary word, matches
+    /// the realm or a component of `name`, or (when `history` is set) re-derives a current
+    /// or kept old key.
     pub fn check_password_quality(
         &self,
         name: &PrincipalName,

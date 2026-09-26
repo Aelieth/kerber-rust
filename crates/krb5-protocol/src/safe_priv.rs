@@ -47,7 +47,8 @@ fn local_addr() -> HostAddress {
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the KRB-SAFE body does not encode, and [`Error::Crypto`] when the
+/// checksum under `session` cannot be computed.
 pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe, Error> {
     build_krb_safe_ex(session, user_data, Some(take_seq(&NEXT_SAFE_SEQ)), true)
 }
@@ -58,7 +59,8 @@ pub fn build_krb_safe(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbSafe
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the KRB-SAFE body does not encode, and [`Error::Crypto`] when the
+/// checksum under `session` cannot be computed.
 pub fn build_krb_safe_ex(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -111,7 +113,11 @@ pub fn build_krb_safe_ex(
 ///
 /// # Errors
 ///
-/// Integrity, window, replay, or encode.
+/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` or `INAPP_CKSUM`
+/// for an unknown or unsuitable checksum type, and `MODIFIED` when the checksum does not verify;
+/// [`Error::Asn1`] when `raw` does not decode; [`Error::ReplyMismatch`] when the timestamp or a
+/// non-zero sequence number is missing, the timestamp is more than 300 seconds from now, or
+/// `replay` has seen the message.
 pub fn unwrap_krb_safe(
     session: &ProtocolKey,
     raw: &[u8],
@@ -124,7 +130,11 @@ pub fn unwrap_krb_safe(
 ///
 /// # Errors
 ///
-/// Integrity, window, replay, or encode.
+/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` or `INAPP_CKSUM`
+/// for an unknown or unsuitable checksum type, and `MODIFIED` when the checksum does not verify;
+/// [`Error::Asn1`] when `raw` does not decode; [`Error::ReplyMismatch`] when a required timestamp
+/// or sequence number is missing (zero counts as missing when both are required), the timestamp
+/// is more than 300 seconds from now, or `replay` has seen the message.
 pub fn unwrap_krb_safe_ex(
     session: &ProtocolKey,
     raw: &[u8],
@@ -162,7 +172,10 @@ enum FreshPolicy {
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] 40 / 38 / 15 / 50 / 41.
+/// [`Error::KrbError`] `MSG_TYPE` (40) when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` (15) for an
+/// unknown checksum type, `INAPP_CKSUM` (50) for one that is not keyed and collision-proof,
+/// `BADADDR` (38) when `remote` or `local` does not match, and `MODIFIED` (41) when the checksum
+/// verifies over neither the message nor the body; [`Error::Asn1`] when `raw` does not decode.
 pub fn verify_krb_safe_checksum(
     session: &ProtocolKey,
     raw: &[u8],
@@ -422,7 +435,8 @@ fn accept_fresh(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the EncKrbPrivPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` fails.
 pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv, Error> {
     build_krb_priv_with_seq(session, user_data, Some(take_seq(&NEXT_PRIV_SEQ)))
 }
@@ -435,7 +449,8 @@ pub fn build_krb_priv(session: &ProtocolKey, user_data: &[u8]) -> Result<KrbPriv
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the EncKrbPrivPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` fails.
 pub fn build_krb_priv_with_seq(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -449,7 +464,8 @@ pub fn build_krb_priv_with_seq(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the EncKrbPrivPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` and `state` fails.
 pub fn build_krb_priv_chained(
     session: &ProtocolKey,
     user_data: &[u8],
@@ -496,7 +512,10 @@ pub fn build_krb_priv_chained(
 ///
 /// # Errors
 ///
-/// Checksum, window, replay, or encode.
+/// [`Error::Asn1`] when `raw` or its decrypted part does not decode, [`Error::Crypto`] when the
+/// enc-part does not decrypt under `session`, and [`Error::ReplyMismatch`] when the timestamp or
+/// a non-zero sequence number is missing, the timestamp is more than 300 seconds from now, or
+/// `replay` has seen the message.
 pub fn unwrap_krb_priv(
     session: &ProtocolKey,
     raw: &[u8],
@@ -513,7 +532,10 @@ pub fn unwrap_krb_priv(
 ///
 /// # Errors
 ///
-/// Checksum, window, replay, or encode.
+/// [`Error::Asn1`] when `raw` or its decrypted part does not decode, [`Error::Crypto`] when the
+/// enc-part does not decrypt under `session`, and [`Error::ReplyMismatch`] when a required
+/// timestamp or sequence number is missing (zero counts as missing when both are required), the
+/// timestamp is more than 300 seconds from now, or `replay` has seen the message.
 pub fn unwrap_krb_priv_ex(
     session: &ProtocolKey,
     raw: &[u8],
@@ -529,7 +551,10 @@ pub fn unwrap_krb_priv_ex(
 ///
 /// # Errors
 ///
-/// Checksum, window, replay, or encode.
+/// [`Error::Asn1`] when `raw` or its decrypted part does not decode, [`Error::Crypto`] when the
+/// enc-part does not decrypt under `session` and `state`, and [`Error::ReplyMismatch`] when a
+/// required timestamp or sequence number is missing (zero counts as missing when both are
+/// required), the timestamp is more than 300 seconds from now, or `replay` has seen the message.
 pub fn unwrap_krb_priv_chained(
     session: &ProtocolKey,
     raw: &[u8],
@@ -558,7 +583,8 @@ pub fn unwrap_krb_priv_chained(
 ///
 /// # Errors
 ///
-/// An encode failure or a key failure.
+/// [`Error::Asn1`] when the EncKrbCredPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` fails.
 pub fn build_krb_cred(
     session: &ProtocolKey,
     tickets: Vec<Ticket>,
@@ -594,7 +620,9 @@ pub fn build_krb_cred(
 ///
 /// # Errors
 ///
-/// Checksum, window, replay, or encode.
+/// [`Error::Asn1`] when `raw` or its decrypted part does not decode, [`Error::Crypto`] when the
+/// enc-part does not decrypt under `session`, and [`Error::ReplyMismatch`] when the timestamp is
+/// missing or more than 300 seconds from now, or `replay` has seen the message.
 pub fn unwrap_krb_cred(
     session: &ProtocolKey,
     raw: &[u8],

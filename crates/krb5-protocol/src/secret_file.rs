@@ -28,7 +28,8 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 ///
 /// # Errors
 ///
-/// Returns I/O errors from create, write, sync, or rename.
+/// The OS error when the temp file beside `path` cannot be created (`O_EXCL`, mode 0600),
+/// written, or synced, or cannot be renamed onto `path`.
 pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path
         .parent()
@@ -82,7 +83,9 @@ pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 ///
 /// # Errors
 ///
-/// Returns I/O errors from open/write/sync/remove. Missing file is an error.
+/// `io::ErrorKind::InvalidInput` when `path` is not a regular file or is swapped for another
+/// file between the `lstat` and the open; the OS error when it cannot be stat'ed (`NotFound`
+/// if missing), opened, overwritten, synced, or removed.
 pub fn destroy_secret_file(path: &Path) -> io::Result<()> {
     let lmeta = fs::symlink_metadata(path)?;
     #[cfg(test)]

@@ -80,7 +80,13 @@ fn lookup_as_princ(
 ///
 /// # Errors
 ///
-/// Unknown client, bad preauth, or crypto/DER failures.
+/// [`Error::PreauthRequired`] (hints in `e_data`) when preauthentication is required and none
+/// succeeded. [`Error::Protocol`] with the KRB-ERROR code and MIT status word for every other
+/// refusal (an unknown client or server, a failed preauth, FAST or policy check, a SPAKE challenge
+/// as `MORE_PREAUTH_DATA_REQUIRED`) and, under FAST, for any other failure after the unwrap.
+/// [`Error::Asn1`] when a request or reply structure does not decode or encode, [`Error::Crypto`]
+/// when a key derivation, checksum or encryption fails, [`Error::Rng`] when the CSPRNG fails to
+/// produce a new key; a store backend or `KdcPolicy` hook may return its own [`Error`].
 pub fn issue_as(store: &dyn PrincipalRead, req: &AsReq) -> Result<IssuedAs, Error> {
     issue_as_from(store, req, None)
 }

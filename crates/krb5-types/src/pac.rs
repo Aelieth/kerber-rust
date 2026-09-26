@@ -169,7 +169,10 @@ impl Pac {
     ///
     /// # Errors
     ///
-    /// Returns [`PacError::Truncated`] when headers or offsets are invalid.
+    /// [`PacError::Truncated`] when the blob is shorter than its 8-byte header or its buffer
+    /// table; [`PacError::Malformed`] when the version is not 0, the buffer count is 0 or above
+    /// [`MAX_BUFFERS`], or a buffer is misaligned, starts inside the header, or runs past the
+    /// blob.
     pub fn parse(bytes: &[u8]) -> Result<Self, PacError> {
         if bytes.len() < 8 {
             return Err(PacError::Truncated);
@@ -268,7 +271,7 @@ impl Pac {
     ///
     /// # Errors
     ///
-    /// `Malformed` for a duplicate type.
+    /// [`PacError::Malformed`] for a duplicate type.
     pub fn unique_buffer(&self, kind: u32) -> Result<Option<&[u8]>, PacError> {
         let mut hits = self.buffers.iter().filter(|b| b.kind == kind);
         let first = hits.next();
@@ -308,7 +311,9 @@ impl Pac {
     ///
     /// # Errors
     ///
-    /// Missing buffer or truncated signature.
+    /// [`PacError::MissingBuffer`] when a type in `kinds` is absent; for a parsed PAC,
+    /// [`PacError::Malformed`] when such a type occurs twice and [`PacError::Truncated`] when its
+    /// buffer is under the 4-byte signature type or no longer fits the received bytes.
     pub fn received_zeroed(&self, kinds: &[u32]) -> Result<Vec<u8>, PacError> {
         if self.raw.is_empty() {
             for kind in kinds {
@@ -350,7 +355,7 @@ impl Pac {
     ///
     /// # Errors
     ///
-    /// `Malformed` when the type occurs twice.
+    /// [`PacError::Malformed`] when the type occurs twice.
     pub fn server_checksum(&self) -> Result<Option<&[u8]>, PacError> {
         self.unique_buffer(PAC_SERVER_CHECKSUM)
     }
@@ -359,7 +364,7 @@ impl Pac {
     ///
     /// # Errors
     ///
-    /// `Malformed` when the type occurs twice.
+    /// [`PacError::Malformed`] when the type occurs twice.
     pub fn kdc_checksum(&self) -> Result<Option<&[u8]>, PacError> {
         self.unique_buffer(PAC_PRIVSVR_CHECKSUM)
     }
@@ -368,7 +373,7 @@ impl Pac {
     ///
     /// # Errors
     ///
-    /// `Malformed` when the type occurs twice.
+    /// [`PacError::Malformed`] when the type occurs twice.
     pub fn ticket_checksum(&self) -> Result<Option<&[u8]>, PacError> {
         self.unique_buffer(PAC_TICKET_CHECKSUM)
     }
@@ -377,7 +382,7 @@ impl Pac {
     ///
     /// # Errors
     ///
-    /// `Malformed` when the type occurs twice.
+    /// [`PacError::Malformed`] when the type occurs twice.
     pub fn full_checksum(&self) -> Result<Option<&[u8]>, PacError> {
         self.unique_buffer(PAC_FULL_CHECKSUM)
     }
@@ -498,7 +503,10 @@ pub fn delegation_info_buffer(info: &S4uDelegationInfo) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// Truncated header, bad RPC version, or malformed NDR strings.
+/// [`PacError::Truncated`] when the data is under 16 bytes or a field or string runs past it;
+/// [`PacError::Malformed`] when the header is not NDR Type-Serialization v1 (`01 10 08 00`), the
+/// object length does not match, the transited-service count exceeds the data, or a string is
+/// not valid UTF-16.
 pub fn parse_delegation_info(data: &[u8]) -> Result<S4uDelegationInfo, PacError> {
     if data.len() < 16 {
         return Err(PacError::Truncated);
@@ -1037,7 +1045,8 @@ pub struct UpnDnsInfo {
 ///
 /// # Errors
 ///
-/// Truncated header or offsets.
+/// [`PacError::Truncated`] when the buffer is under 12 bytes, a UPN, DNS, or SAM string runs past
+/// it, has an odd length, or is not valid UTF-16, or the SID runs past it or does not parse.
 pub fn parse_upn_dns(data: &[u8]) -> Result<UpnDnsInfo, PacError> {
     if data.len() < 12 {
         return Err(PacError::Truncated);
@@ -1092,7 +1101,8 @@ fn utf16_str(data: &[u8], off: usize, len: usize) -> Result<String, PacError> {
 ///
 /// # Errors
 ///
-/// Returns [`PacError::Truncated`] when the buffer is too short.
+/// [`PacError::Truncated`] when the buffer is neither an NDR `KERB_VALIDATION_INFO` nor a legacy
+/// pair of length-prefixed UTF-8 client and realm strings that fit in it.
 pub fn parse_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
     if let Ok(v) = parse_kerb_validation_info(data) {
         return Ok((v.effective_name.value, v.logon_domain_name.value));
@@ -1104,7 +1114,10 @@ pub fn parse_logon_info(data: &[u8]) -> Result<(String, String), PacError> {
 ///
 /// # Errors
 ///
-/// Truncated or malformed NDR.
+/// [`PacError::Truncated`] for every refusal: a header that is not Type-Serialization v1, a null
+/// top-level or domain-SID pointer, data that runs short, a string, group, or SID count over its
+/// cap or not matching its header, invalid UTF-16, a null extra-SID pointer, or an empty
+/// effective name.
 pub fn parse_kerb_validation_info(data: &[u8]) -> Result<KerbValidationInfo, PacError> {
     let mut r = NdrR { b: data, i: 0 };
     if r.u8()? != 1 || r.u8()? != 0x10 {

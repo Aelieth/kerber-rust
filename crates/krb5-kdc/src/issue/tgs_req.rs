@@ -51,7 +51,13 @@ pub struct IssuedTgs {
 ///
 /// # Errors
 ///
-/// Bad authenticator, unknown server, or crypto/DER failures.
+/// [`Error::Protocol`] with the KRB-ERROR code and MIT status word for every refusal (a bad,
+/// expired or replayed header ticket, an unknown server, a failed PAC, S4U, user-to-user or
+/// policy check) and, under FAST, for any other failure after the unwrap. [`Error::Asn1`] when a
+/// request or reply structure does not decode or encode, [`Error::Crypto`] when a presented key or
+/// enctype is unusable, the authenticator does not decrypt, or a key derivation, checksum or
+/// encryption fails, [`Error::Rng`] when the CSPRNG fails to produce a new key; a store backend or
+/// `KdcPolicy` hook may return its own [`Error`].
 pub fn issue_tgs(store: &dyn PrincipalRead, req: &TgsReq) -> Result<IssuedTgs, Error> {
     issue_tgs_from(store, req, None, None)
 }

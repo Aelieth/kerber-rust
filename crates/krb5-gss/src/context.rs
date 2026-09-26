@@ -279,7 +279,7 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Dummy AES-256 key construction.
+    /// None: the fixed all-zero 32-byte AES-256 key always builds, so this is always `Ok`.
     pub fn for_kadm5_acceptor(
         acceptor: PrincipalName,
         ticket_realm: impl Into<String>,
@@ -311,7 +311,8 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// The initial token could not be built.
+    /// [`Error::Inner`] when the OS random source fails (for the subkey or a confounder), or the
+    /// delegated KRB-CRED or the AP-REQ does not encode.
     pub fn init_sec_context(
         ticket: Ticket,
         session: &ProtocolKey,
@@ -390,7 +391,12 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// AP-REQ verify failures or channel-binding mismatch.
+    /// [`Error::Truncated`] when `service_keys` is empty, the GSS framing is bad or lacks the
+    /// AP-REQ token ID, or a delegated KRB-CRED lacks its credential fields; [`Error::Integrity`]
+    /// when the ticket or authenticator fails its integrity check; [`Error::ChannelBindings`] when
+    /// the 0x8003 checksum is under 24 bytes or its bindings (sent or demanded) do not match;
+    /// [`Error::Inner`] for every other refusal of the AP-REQ, its subkey, 0x8003 checksum,
+    /// authorization data, or delegated KRB-CRED, and when the AP-REP cannot be built.
     pub fn accept_sec_context(
         token: &[u8],
         service_keys: &[ProtocolKey],
@@ -419,7 +425,12 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Truncated token, AP-REQ verification, or checksum failure.
+    /// [`Error::Truncated`] when `service_keys` is empty, the GSS framing is bad or lacks the
+    /// AP-REQ token ID, or a delegated KRB-CRED lacks its credential fields; [`Error::Integrity`]
+    /// when the ticket or authenticator fails its integrity check; [`Error::ChannelBindings`] when
+    /// the 0x8003 checksum is under 24 bytes or its bindings (sent or demanded) do not match;
+    /// [`Error::Inner`] for every other refusal of the AP-REQ, its subkey, 0x8003 checksum,
+    /// authorization data, or delegated KRB-CRED, and when the AP-REP cannot be built.
     pub fn accept_sec_context_kt(
         token: &[u8],
         service_keys: &[ProtocolKey],
@@ -553,7 +564,10 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Truncated token, decrypt, sequence, or unexpected subkey.
+    /// [`Error::Truncated`] when the context is not DCE-style or its AP-REP key is already spent;
+    /// [`Error::Inner`] when the AP-REP or its enc-part does not decode or does not decrypt under
+    /// the ticket session key; [`Error::Integrity`] when the enc-part carries a subkey or a
+    /// sequence number other than this context's send sequence.
     pub fn accept_dce(&mut self, token: &[u8]) -> Result<(), Error> {
         if !self.dce_style {
             return Err(Error::Truncated);
@@ -587,7 +601,10 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// Truncated token, decrypt, or encode.
+    /// [`Error::Truncated`] when the GSS framing is bad or lacks the AP-REP token ID;
+    /// [`Error::Inner`] when the AP-REP or its enc-part does not decode, the enc-part decrypts
+    /// under neither `ticket_session` nor the context key, or the acceptor subkey has an unknown
+    /// etype or a wrong length.
     pub fn process_ap_rep(
         &mut self,
         token: &[u8],

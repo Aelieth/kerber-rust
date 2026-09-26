@@ -140,7 +140,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// The store file could not be loaded.
+    /// [`Error::Crypto`] when the changed db, its stash, or its update log cannot be read,
+    /// parsed, or decrypted.
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
         let Some((db, stash)) = self.persist_paths.clone() else {
             return Ok(());
@@ -250,7 +251,9 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// String-to-key was refused.
+    /// [`Error::Rng`] when the CSPRNG fails generating the krbtgt key;
+    /// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty;
+    /// [`Error::AlreadyExists`] when `user` and `admin` are the same name.
     pub fn bootstrap(
         realm: &str,
         user: &str,
@@ -266,8 +269,11 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// Returns crypto failures from string-to-key, or an unparseable
-    /// `domain_sid`.
+    /// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL;
+    /// [`Error::InvalidArgument`] when reading its `dict_file` fails for any reason but a
+    /// missing file; [`Error::Rng`] when the CSPRNG fails generating the krbtgt key;
+    /// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty;
+    /// [`Error::AlreadyExists`] when `user` and `admin` are the same name.
     pub fn bootstrap_with_kdc_conf(
         realm: &str,
         user: &str,
