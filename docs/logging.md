@@ -67,22 +67,33 @@ Gate scripts depend on two of these by exact string:
 `"outcome":"error"`), and `scripts/heimdal-gate.sh` waits for
 `"event":"heimdal.start"`. Renaming an event renames those greps.
 
-Every request logs one `event=kdc.issue` line from `handle_request`
-at `info`, including `duration_us`. A **KRB-ERROR** PDU is
+A request that reaches `handle_request` and gets a reply logs one
+`event=kdc.issue` line at `info`, including `duration_us`:
+`outcome=ok` for an AS-REP or TGS-REP, and for a **KRB-ERROR** PDU
 `outcome=krb-error` plus `code` (RFC 4120 error-code) and `e_text`
 (MIT `log_tgs_req` status word, e.g. `BAD_TRANSIT`, `FIND_FAST`).
 FAST unwrap failures also log `detail` when non-empty (MIT's
 `k5_setmsg` message where MIT has one; Rust's own otherwise). The
 critical-FAST-option `detail` (`FAST option`) is Rust's text — MIT
 has no `k5_setmsg` for `UNKNOWN_CRITICAL_FAST_OPTION`.
-Code 25 logs `e_text=NEEDED_PREAUTH`. Store-programming failures
-that cannot be encoded stay `outcome=error`.
+Code 25 logs `e_text=NEEDED_PREAUTH`. A handler error (an issued reply
+that cannot be encoded) logs `outcome=error` at **error** instead. An
+empty reply (MIT DISCARD) logs nothing from `handle_request`.
 
-A successful AS or TGS also emits the MIT ISSUE tuple on a second
-`kdc.issue` line: `kind`, `req_etypes`, `from`, `status=ISSUE`,
-`authtime`, `etypes` (`rep_etypes2str`), `client`, and `server`.
-TGS S4U adds `s4u` + `s4u_client`. Unexpected transit-path errors
+When the request decodes as an AS-REQ or TGS-REQ, a second `kdc.issue`
+line carries MIT's tuple. On success it is the ISSUE tuple: `kind`,
+`req_etypes`, `from`, `status=ISSUE`, `authtime`, `etypes`
+(`rep_etypes2str`), `client`, and `server`; TGS S4U adds a third line
+with `s4u` + `s4u_client`. After a KRB-ERROR it is the fail tuple, with
+the status word and `outcome=krb-error`. Unexpected transit-path errors
 are `tracing` **error** (`kdc_log.c:201-206` `LOG_ERR`).
+
+The listener logs its own `kdc.issue` lines: an empty reply at
+**debug**, a reply resent from the lookaside cache at `info` with
+`outcome=retransmit`, a duplicate that arrives while the first copy is
+being processed at `info` with `outcome=discard`, and a handler error
+at **error** with `error_suffix` `while dispatching (udp)` or
+`while dispatching (tcp)`, after the handler's own line.
 
 A kdcauthdata module that returns an error logs
 `event=kdc.authdata.module` at **error** with `correlation_id`,
