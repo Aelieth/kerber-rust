@@ -442,13 +442,13 @@ pub struct PaData {
 }
 
 /// One TYPED-DATA element.
-/// MIT `typed_data_fields` (`asn1_k_encode.c:1549-1551`): the element's two fields,
-/// `data-type [0]` and `data-value [1]`.
+/// MIT `typed_data_0` (`asn1_k_encode.c:1547-1547`): `data-type [0]` is an Int32.
+/// MIT `typed_data_1` (`asn1_k_encode.c:1548-1548`): `data-value [1]` is an OCTET STRING, encoded
+/// even when empty, so it is not optional on the wire.
+/// MIT `typed_data_fields` (`asn1_k_encode.c:1549-1551`): the element's two fields, in that
+/// order.
 /// MIT `typed_data` (`asn1_k_encode.c:1552-1552`): the element is the SEQUENCE of those
 /// fields, held in a `krb5_pa_data`.
-///
-/// MIT `DEFCNFIELD` always encodes `data-value` (possibly empty); it is not
-/// optional on the wire.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct TypedData {
     /// `data-type [0]`: the TYPED-DATA element type.
