@@ -135,6 +135,15 @@ this project uses semantic versioning once a crate is published.
   (`process_intermediates`, `cms_signeddata_verify`, `verify_kdc_eku`,
   the KRB5PrincipalName type), or say there is none. No behaviour
   change.
+- **kdc.** The `# Errors` sections of `process_pkinit`, `process_spake`,
+  `get_verified_pac`, `check_tgs_s4u2proxy` and `decrypt_ticket_part`
+  name the codes and variants each body returns, and `process_spake`
+  says a client Challenge or EncData is `Ok(None)`. The PAC-signing,
+  dump-record and TGS server-lookup docs state what MIT and this code
+  do: a failed sign leaves no signed PAC, the tagged-data count always
+  matches, the eight attribute fields are read where they are parsed,
+  and every lookup error but 29 is 7, as in MIT. `kadmin_history` says
+  MIT's copy is NT-PRINCIPAL. No behaviour change.
 
 ### W3-S3.10 parameter structs
 

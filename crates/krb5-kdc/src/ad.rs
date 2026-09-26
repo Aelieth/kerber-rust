@@ -125,8 +125,9 @@ pub fn sign_reply_pac(
     )
 }
 
-/// MIT `krb5_kdc_sign_ticket` (`pac_sign.c:397-409`): a service ticket's checksum is added
-/// before the PAC is signed, and a sign failure attaches nothing.
+/// MIT `krb5_kdc_sign_ticket` (`pac_sign.c:397-409`): a service ticket's checksum is taken over
+/// the ticket with a dummy PAC before the PAC is signed, and a failure returns the error with no
+/// signed PAC in the ticket.
 /// The KDC checksum covers the server checksum, so a PAC whose server checksum was never
 /// filled is not signed.
 fn sign_reply_pac_inner(
@@ -435,7 +436,14 @@ pub fn ticket_checksum_der(part: &EncTicketPart) -> Result<Vec<u8>, Error> {
 ///
 /// # Errors
 ///
-/// A missing local TGT, or a PAC checksum that does not verify.
+/// [`Error::Protocol`] with status `HEADER_PAC`: `BAD_INTEGRITY` when the PAC does not parse;
+/// `MODIFIED` when a PAC checksum does not verify (for a service header, under the current krbtgt
+/// key and then the two previous kvnos, where an unsupported checksum type also ends);
+/// `SUMTYPE_NOSUPP` when a TGS header's server checksum is type 14; `GENERIC` for a missing,
+/// duplicated or short checksum buffer, an unkeyed or unknown checksum type, an unsupported
+/// checksum type under a TGS header, a service header with no local TGT or no current TGT key,
+/// or an unknown `pac_privsvr_enctype`. [`Error::Asn1`] when the ticket-checksum DER does not
+/// encode. A ticket without a PAC is `Ok(None)`.
 pub(crate) fn get_verified_pac(
     policy: &crate::store::Policy,
     part: &EncTicketPart,
@@ -978,7 +986,12 @@ fn pac_princ_with_realm(pac: &krb5_types::pac::Pac) -> Option<(String, String, u
 ///
 /// # Errors
 ///
-/// `BADOPTION` when the second ticket is absent, and a policy denial when delegation is refused.
+/// [`Error::Protocol`]: `TGT_REVOKED` when the header ticket has no PAC; `MODIFIED` when the
+/// second ticket has none; `POLICY` when the requested server is a krbtgt; `SERVER_NOMATCH` when a
+/// same-realm second ticket was not issued to the impersonator; `BADOPTION` for everything else
+/// refused (no second ticket, one that is not forwardable, a forward, proxy, renew, validate or
+/// user-to-user option, a PAC that does not parse or names another client, a cross-realm evidence
+/// ticket or delegation PAC that does not match).
 #[expect(clippy::too_many_arguments, reason = "MIT passes args positionally")]
 pub(crate) fn check_tgs_s4u2proxy(
     store: &dyn PrincipalRead,
@@ -1556,7 +1569,8 @@ fn utf8(s: &krb5_types::KerberosString) -> &str {
 ///
 /// # Errors
 ///
-/// Decrypt or encode failure.
+/// [`Error::Crypto`] when the ticket does not decrypt under `key`, and [`Error::Asn1`] when the
+/// plaintext is not an `EncTicketPart`.
 pub fn decrypt_ticket_part(key: &ProtocolKey, ticket: &Ticket) -> Result<EncTicketPart, Error> {
     let usage = KeyUsage::new(ku::TICKET)?;
     let plain = decrypt(key, usage, ticket.enc_part.cipher.as_ref())?;

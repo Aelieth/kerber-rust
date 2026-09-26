@@ -243,8 +243,8 @@ impl DumpFile {
 }
 
 impl DumpPrincipal {
-    /// MIT `process_k5beta7_princ` (`dump.c:676-690`): eight attribute fields are required,
-    /// and a short record is not a principal.
+    /// MIT `process_k5beta7_princ` (`dump.c:702-723`): the policy binding comes only from a
+    /// KRB5_TL_KADM_DATA record that decodes and names a policy.
     /// The master-key principal is refused when its key does not match the derived master
     /// key, and the policy binding is taken from the admin tagged data.
     fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
@@ -581,6 +581,8 @@ pub fn dump_store_iprop(
 }
 
 /// MIT `process_k5beta7_princ` (`dump.c:666-674`): a name that cannot be read is not a principal.
+/// MIT `process_k5beta7_princ` (`dump.c:676-690`): eight attribute fields are required, and a
+/// short record is not a principal.
 /// The name's length must equal the header count, so a truncated name does not consume the
 /// attribute fields.
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {
@@ -788,6 +790,7 @@ fn dump_attributes(p: &Principal) -> u32 {
 
 /// MIT `k5beta7_common` (`dump.c:327-331`): a tagged-data count that does not match the
 /// list is an error and the record is not written.
+/// The count written here is the length of the list that follows it, so it always matches.
 /// An alias is written with zero lifetimes, and the database-arguments tag is stripped
 /// before the record is emitted.
 fn write_princ_record(

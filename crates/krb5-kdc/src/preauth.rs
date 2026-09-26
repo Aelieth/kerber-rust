@@ -476,7 +476,13 @@ pub(crate) enum SpakeStep {
 ///
 /// # Errors
 ///
-/// `PREAUTH_FAILED` when the token is empty or the SPAKE message is not one this KDC accepts.
+/// [`Error::Protocol`] `PREAUTH_FAILED` when SPAKE groups are configured and the PA-SPAKE token is
+/// empty, a Support shares no configured group or the first one it shares is not P-256, or a
+/// Response has no readable FX-COOKIE secret or a factor that does not decrypt, does not decode,
+/// or is not factor type 1.
+/// [`Error::Asn1`] when the PA-SPAKE does not decode or the challenge does not encode, and
+/// [`Error::Crypto`] when a SPAKE derivation or the cookie encryption fails. No PA-SPAKE, no
+/// configured groups, and a Challenge or EncData message from the client are `Ok(None)`.
 pub(crate) fn process_spake(
     store: &dyn PrincipalRead,
     client: &Principal,
@@ -614,8 +620,15 @@ fn send_spake_challenge(
 ///
 /// # Errors
 ///
-/// `PREAUTH_FAILED` when the CMS, certificate, checksum, time, or Diffie-Hellman group does not
-/// verify.
+/// [`Error::Protocol`] with `PREAUTH_EXPIRED` when the AuthPack's freshness token is short,
+/// expired, or does not verify under a local krbtgt key; `SKEW` when the AuthPack ctime is outside
+/// the clock skew; `DH_KEY_PARAMETERS_NOT_ACCEPTED` when a signed request has no DH public value,
+/// or its group or value is not accepted; `PREAUTH_FAILED` for every other check that fails (the
+/// request encoding, a KDC with no PKINIT CA, the CMS signature, the client certificate, the
+/// eContentType, the paChecksum, a required freshness token, the ctime, a replay, an unsigned
+/// request from a client that is not anonymous, the reply signature). [`Error::Crypto`] when the
+/// key agreement or the reply-key derivation fails, and [`Error::Asn1`] when the reply does not
+/// encode. A request without PA-PK-AS-REQ is `Ok(None)`.
 pub(crate) fn process_pkinit(
     store: &dyn PrincipalRead,
     padata: Option<&[PaData]>,
