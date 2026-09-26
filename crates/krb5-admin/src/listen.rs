@@ -382,8 +382,9 @@ security administrator."
 
 /// MIT `process_chpw_request` (`schpw.c:62-95`): a length, version, or framing mismatch
 /// bails out before a reply is built.
-/// That mismatch returns an error and no datagram is sent, while a failed AP-REQ is a framed
-/// chpwfail with result 3 for kadmin/changepw only.
+/// That mismatch returns an error and no datagram is sent. The AP-REQ is verified only as a
+/// ticket for `kadmin/changepw` in this realm; any failure, a ticket for another service
+/// included, is answered with a framed KRB-ERROR (code 60) whose e-data carries result code 3.
 fn handle_kpasswd_from(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,

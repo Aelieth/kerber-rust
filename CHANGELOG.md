@@ -144,6 +144,12 @@ this project uses semantic versioning once a crate is published.
   matches, the eight attribute fields are read where they are parsed,
   and every lookup error but 29 is 7, as in MIT. `kadmin_history` says
   MIT's copy is NT-PRINCIPAL. No behaviour change.
+- **admin.** `encode_kdbe` says it always ships `kadmin/admin@REALM`
+  as the mod-principal and still sends the raw last-password-change
+  and mod-principal records in `AT_TL_DATA`, which MIT leaves out.
+  `handle_kpasswd_from` says the AP-REQ is verified only as a
+  `kadmin/changepw` ticket and that any failure is a framed KRB-ERROR
+  carrying result code 3. No behaviour change.
 
 ### W3-S3.10 parameter structs
 
