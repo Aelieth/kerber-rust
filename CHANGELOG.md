@@ -20,9 +20,11 @@ this project uses semantic versioning once a crate is published.
   definition of the named symbol and refuses a callee in a function's
   place, a trailing overhang, MIT test code cited from product code,
   and an unknown or ambiguous file. `check_no_process_history` rejects
-  process tags on `crates/` comments: section and item tags, commit
-  hashes, `parent-red`, `Compiles at`, "the parent `…`", and `working/`
-  paths. Fixtures pin every form.
+  process tags on `crates/` comments: section and item tags, backticked
+  commit hashes and `parent <hash>`, `parent-red`, `Compiles at`, "the
+  parent `…`", and `working/` paths. Fixtures pin the form check's 14
+  legal and 26 red shapes, the truth check's 17 held and 10 flagged
+  cases, and the process-history check's 19 tag forms.
 - **tool.** `hygiene-fn-diff` folds `krb5_log::events::NAME` to the
   literal of `krb5-log`'s const `NAME`, reports such a pair as the
   counted class `const-fold` and the new const as `const-fold-added`,
@@ -40,9 +42,12 @@ this project uses semantic versioning once a crate is published.
   answers, principal names, deltat and time parsing.
 - **docs.** `docs/architecture.md` and `CONTRIBUTING.md` state the
   comment rules R1–R4 and the restraint clause: one anchor form whose
-  named definition contains the range, one anchor per line; the
-  invariant, including an attacker-relevant subtlety, not the steps; no
-  process history; `# Errors` naming variants or conditions.
+  named definition contains the range, one anchor per line, a guarantee
+  that says what this port does, and a deviation stated on the anchor
+  line ("MIT does X; this port does Y") with its ledger or
+  `docs/security.md` row; the invariant, including an attacker-relevant
+  subtlety, not the steps; no process history; `# Errors` naming
+  variants or conditions.
 - **crates.** The crate headers state what each crate holds and end on
   the public-surface line. `krb5-crypto` names its one weak-etype gate
   (`from_iana_policy` admits 16, 23, 25 and 26 only with `allow_weak`;
@@ -65,17 +70,28 @@ this project uses semantic versioning once a crate is published.
   (admin 16, protocol 19, kdc 32, client 1, gss 8, config 2, types 10,
   crypto 5), and so does `check_tgs_policy_flags`, which the anchor
   rewrite took to 41 lines; where MIT has none, the doc says so.
-  `encode_kdbe`, `continue_preauth`, `kinit_inner`,
-  `sign_reply_pac_inner`, `write_princ_record`, `into_principal` and
-  `handle_kpasswd_from` state what the code does, and `lookup_svc_princ`
-  says MIT sends 7 for every lookup error but 29.
+  `sign_reply_pac_inner`, `write_princ_record` and `handle_kpasswd_from`
+  state what the code does; the anchors of `encode_kdbe`,
+  `continue_preauth`, `kinit_inner` and `into_principal` state MIT's
+  rule and this port's deviation; and `lookup_svc_princ` says MIT sends
+  7 for every lookup error but 29.
 - **all.** MIT cites under `crates/` are re-derived from their ranges:
-  each keeps its original range, names the MIT definition that contains
-  it, opens its own sentence, and carries the claim that sentence made.
-  A range over two definitions or several table entries is one anchor
-  per definition; five trailing overhangs are trimmed to the closing
-  brace; `svr_iters.c:61-62` corrects an off-by-two cite. The
-  `diffsend` header lists its 111 cases.
+  each names the MIT definition that contains its range, opens its own
+  sentence, and carries the claim that sentence made. Each keeps its
+  original range, except five trailing trims, one past-end trim, ten
+  splits that drop lines between definitions, and one corrected range
+  (`svr_iters.c:61-62`), all listed in the record. A range over two
+  definitions or several table entries is one anchor per definition,
+  and the TYPED-DATA fields keep macro anchors for both field
+  encodings. The `diffsend` header lists its 111 cases.
+- **docs.** The ledger's B1 section gains two `deviation` rows: a
+  `new_password` source changes an expired password without a prompter
+  (`gic_pwd.c:211-214`; K1 and K2), and `continue_preauth` takes its
+  timestamp from `skew_hint` or the local clock and retries an
+  unsupported etype once with aes256 alone
+  (`get_in_tkt.c:1727-1729,1759-1766`). The `krb5-types` FAST field docs
+  say where armor and the req-checksum apply, and `cms_parts` says it
+  does not check the ContentInfo type that MIT checks.
 - **all.** Every `# Errors` section under `crates/*/src` (446) names the
   variants its function can return and the condition behind each, with
   no family word and no "Returns …"; errors a body cannot produce are
@@ -94,10 +110,11 @@ this project uses semantic versioning once a crate is published.
   as literals use the constants (same strings). A kdcauthdata module
   error logs `event=kdc.authdata.module` with `correlation_id`,
   `component`, `outcome=error`, `module` and `error`; it is not a
-  `kdc.issue` line. Unit tests read the four schema fields off a JSON
+  `kdc.issue` line. Tests read the four schema fields off a JSON
   subscriber for that event and for `crypto.string_to_key`.
-  `docs/logging.md` names the constants and the event, and says
-  `target` is not part of the log contract.
+  `docs/logging.md` names the constants and the event, says `target` is
+  not part of the log contract, and states which `kdc.issue` lines the
+  handler, the MIT tuple and the listener log for a request.
 - **client.** `krb5-client` no longer prints. The key-expired banner
   reaches the caller through `KinitParams::key_exp_notice`, a
   `KeyExpNotice` callback called at the statement where the library
