@@ -1704,18 +1704,15 @@ def check_doc_file_cites(
     texts: dict[str, str] | None = None,
     root: pathlib.Path | None = None,
 ) -> None:
-    """Every backticked crates/scripts/docs/tests/harness/.github/examples file path exists."""
+    """Every backticked crates/scripts/docs/tests/harness/.github/examples file path exists.
+
+    The files read are `doc_files(root)` less the CHANGELOG (history keeps old paths).
+    """
     root = pathlib.Path(root) if root is not None else ROOT
     if texts is None:
-        texts = {}
-        docs = root / "docs"
-        if docs.is_dir():
-            for path in sorted(docs.glob("*.md")):
-                texts[str(path.relative_to(root))] = path.read_text(encoding="utf-8")
-        for rel in ("README.md", "tests/traces/README.md"):
-            path = root / rel
-            if path.is_file():
-                texts[rel] = path.read_text(encoding="utf-8")
+        texts = {
+            str(path.relative_to(root)): path.read_text(encoding="utf-8") for path in doc_files(root)
+        }
     missing: list[str] = []
     for doc, text in texts.items():
         if pathlib.Path(doc).name == "CHANGELOG.md":
@@ -1728,6 +1725,243 @@ def check_doc_file_cites(
                 missing.append(f"{doc}: `{rel}`")
     if missing:
         _die("doc file cite(s) do not exist: " + "; ".join(missing[:8]))
+
+
+def doc_files(root: pathlib.Path | None = None) -> list[pathlib.Path]:
+    """The public docs: README.md, CONTRIBUTING.md, CHANGELOG.md, docs/**/*.md, and every README.md
+    under examples/, harness/, scripts/ and tests/."""
+    root = ROOT if root is None else root
+    out = [root / rel for rel in ("README.md", "CONTRIBUTING.md", "CHANGELOG.md") if (root / rel).is_file()]
+    if (root / "docs").is_dir():
+        out += sorted((root / "docs").rglob("*.md"))
+    for top in ("examples", "harness", "scripts", "tests"):
+        if (root / top).is_dir():
+            out += sorted((root / top).rglob("README.md"))
+    return out
+
+
+_MD_FENCE = re.compile(r"^(\s*)(```|~~~)")
+_MD_LINK = re.compile(r"!?\[((?:[^\[\]]|\[[^\[\]]*\])*)\]\(\s*<?([^()\s>]+)>?(?:\s+\"[^\"]*\")?\s*\)")
+_MD_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+_MD_HTML_ANCHOR = re.compile(r"<a\s+(?:name|id)=\"([^\"]+)\"")
+
+
+def _md_prose_lines(text: str) -> list[tuple[int, str]]:
+    """(line number, line) outside fenced code blocks, with inline code spans blanked."""
+    out: list[tuple[int, str]] = []
+    fence: str | None = None
+    for i, line in enumerate(text.splitlines(), 1):
+        m = _MD_FENCE.match(line)
+        if m:
+            if fence is None:
+                fence = m.group(2)
+            elif m.group(2) == fence:
+                fence = None
+            continue
+        if fence is None:
+            out.append((i, re.sub(r"(`+)(?:(?!\1).)+\1", lambda c: " " * len(c.group(0)), line)))
+    return out
+
+
+def github_slug(heading: str) -> str:
+    """GitHub's heading anchor: the rendered text lowercased, every character that is not a
+    letter, digit, space, hyphen or underscore dropped, and each space turned into a hyphen."""
+    text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", heading)
+    text = text.replace("`", "").strip().lower()
+    return "".join(ch for ch in text if ch.isalnum() or ch in "-_ ").replace(" ", "-")
+
+
+def md_anchors(text: str) -> set[str]:
+    """Every anchor a Markdown file offers: its headings' slugs (a repeated slug takes -1, -2, ...)
+    and explicit `<a name="..">` / `<a id="..">` targets."""
+    anchors: set[str] = set()
+    seen: dict[str, int] = {}
+    fence: str | None = None
+    for line in text.splitlines():
+        m = _MD_FENCE.match(line)
+        if m:
+            fence = m.group(2) if fence is None else (None if m.group(2) == fence else fence)
+            continue
+        if fence is not None:
+            continue
+        h = re.match(r"^#{1,6}\s+(.*?)\s*#*\s*$", line)
+        if h:
+            slug = github_slug(h.group(1))
+            n = seen.get(slug, 0)
+            anchors.add(slug if n == 0 else f"{slug}-{n}")
+            seen[slug] = n + 1
+        anchors.update(_MD_HTML_ANCHOR.findall(line))
+    return anchors
+
+
+def doc_link_violations(root: pathlib.Path | None = None) -> list[str]:
+    """Relative links in `doc_files` whose file or `#anchor` does not exist."""
+    root = ROOT if root is None else root
+    bad: list[str] = []
+    anchors_of: dict[pathlib.Path, set[str]] = {}
+    for doc in doc_files(root):
+        rel = doc.relative_to(root)
+        text = doc.read_text(encoding="utf-8")
+        for lineno, line in _md_prose_lines(text):
+            for m in _MD_LINK.finditer(line):
+                target = m.group(2)
+                if _MD_SCHEME.match(target):
+                    continue
+                path_part, _, anchor = target.partition("#")
+                dest = (doc.parent / path_part).resolve() if path_part else doc
+                if not dest.exists():
+                    bad.append(f"{rel}:{lineno}: {target} (no such file)")
+                    continue
+                if anchor and dest.suffix == ".md":
+                    if dest not in anchors_of:
+                        anchors_of[dest] = md_anchors(dest.read_text(encoding="utf-8"))
+                    if anchor not in anchors_of[dest]:
+                        bad.append(f"{rel}:{lineno}: {target} (no such anchor)")
+    return bad
+
+
+def check_doc_links(root: pathlib.Path | None = None) -> None:
+    """Every relative link and anchor in the public docs resolves (GitHub slug rules)."""
+    bad = doc_link_violations(root)
+    if bad:
+        _die(f"broken doc link(s) ({len(bad)}): " + "; ".join(bad[:8]))
+
+
+_CHANGELOG_HEADING = re.compile(
+    r"^### (?!Security|Added|Changed|Fixed|Tests and CI|Deprecated|Removed|How to)", re.M
+)
+
+
+def check_changelog_headings(text: str | None = None, *, allow: int | None = None) -> None:
+    """CHANGELOG.md groups use the Keep-a-Changelog headings only (plus Tests and CI, How to).
+
+    Advisory while `allow` equals the live count; hard at 0.
+    """
+    if text is None:
+        text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    allow = CHANGELOG_HEADINGS_ALLOW if allow is None else allow
+    n = len(_CHANGELOG_HEADING.findall(text))
+    if n != allow:
+        _die(f"CHANGELOG.md has {n} ### headings outside the Keep-a-Changelog set, allow {allow}")
+
+
+def check_docs_size(
+    root: pathlib.Path | None = None, *, allow: int | None = None, changelog_max: int | None = None
+) -> None:
+    """No docs/**/*.md is over DOCS_SIZE_LIMIT bytes, and CHANGELOG.md (history, exempt from that
+    limit) is not over CHANGELOG_MAX_BYTES. Advisory while `allow` equals the live count."""
+    root = ROOT if root is None else root
+    allow = DOCS_SIZE_ALLOW if allow is None else allow
+    changelog_max = CHANGELOG_MAX_BYTES if changelog_max is None else changelog_max
+    over = [
+        f"{p.relative_to(root)} {p.stat().st_size}"
+        for p in sorted((root / "docs").rglob("*.md"))
+        if p.stat().st_size > DOCS_SIZE_LIMIT
+    ] if (root / "docs").is_dir() else []
+    if len(over) != allow:
+        _die(f"{len(over)} docs file(s) over {DOCS_SIZE_LIMIT} bytes, allow {allow}: " + "; ".join(over))
+    log = root / "CHANGELOG.md"
+    if log.is_file() and log.stat().st_size > changelog_max:
+        _die(f"CHANGELOG.md is {log.stat().st_size} bytes, over its ceiling {changelog_max}")
+
+
+WRAPPER_GATES = frozenset({"kadmin-gate.sh", "kpasswd-gate.sh", "client-differential-gate.sh"})
+_GATE_ORACLES = frozenset({"MIT", "Samba", "Heimdal", "Windows", "none"})
+_GATE_ROW = re.compile(r"^\|\s*`scripts/([A-Za-z0-9._-]+-gate\.sh)`\s*\|")
+
+
+def gate_placements(workflows: list[Workflow] | None = None) -> dict[str, list[tuple[str, str]]]:
+    """scripts/*-gate.sh -> [(`workflow:job`, lane)] read from .github/workflows.
+
+    The lane is `nightly` for a workflow that only runs on a schedule, `soft` for a
+    continue-on-error job, `skip2` for a step that runs the gate through `skip2` (exit 2 is
+    green), and `fail-red` otherwise.
+    """
+    if workflows is None:
+        workflows = [Workflow(p, p.read_text()) for p in sorted(WORKFLOWS.glob("*.yml"))]
+    out: dict[str, list[tuple[str, str]]] = {}
+    for w in workflows:
+        for job in w.jobs.values():
+            for script in job.scripts:
+                if not script.endswith("-gate.sh"):
+                    continue
+                if w.scheduled and not w.per_push:
+                    lane = "nightly"
+                elif job.continue_on_error:
+                    lane = "soft"
+                elif re.search(rf"skip2 \./scripts/{re.escape(script)}\b", job.body):
+                    lane = "skip2"
+                else:
+                    lane = "fail-red"
+                place = (f"{w.path.stem}:{job.name}", lane)
+                if place not in out.setdefault(script, []):
+                    out[script].append(place)
+    return out
+
+
+def gate_doc_violations(
+    text: str,
+    gate_names: list[str],
+    placements: dict[str, list[tuple[str, str]]],
+    stubs: frozenset[str],
+) -> list[str]:
+    """docs/gates.md rows against the scripts and the workflows: one row per gate, the workflow
+    column equal to the gates' placements (`stub` / `wrapper` for DOCUMENTED_STUBS), the lane
+    column equal to their lanes, a known oracle, and a non-empty assertion."""
+    bad: list[str] = []
+    rows: dict[str, list[str]] = {}
+    for line in text.splitlines():
+        m = _GATE_ROW.match(line)
+        if not m:
+            continue
+        name = m.group(1)
+        if name in rows:
+            bad.append(f"{name}: two rows")
+            continue
+        rows[name] = _split_ledger_row(line)
+    for name in gate_names:
+        if name not in rows:
+            bad.append(f"{name}: no row")
+            continue
+        cells = rows[name]
+        if len(cells) != 5:
+            bad.append(f"{name}: {len(cells)} cells, want 5 (gate, oracle, workflow, lane, asserts)")
+            continue
+        _gate, oracle, workflow, lane, asserts = cells
+        if name in placements:
+            want_wf = ", ".join(f"`{p}`" for p, _l in placements[name])
+            want_lane = ", ".join(lane_ for _p, lane_ in placements[name])
+        elif name in stubs:
+            want_wf = "wrapper" if name in WRAPPER_GATES else "stub"
+            want_lane = "—"
+        else:
+            want_wf, want_lane = "(in no workflow)", "—"
+        if workflow != want_wf:
+            bad.append(f"{name}: workflow {workflow!r}, want {want_wf!r}")
+        if lane != want_lane:
+            bad.append(f"{name}: lane {lane!r}, want {want_lane!r}")
+        if oracle not in _GATE_ORACLES:
+            bad.append(f"{name}: oracle {oracle!r} not in {sorted(_GATE_ORACLES)}")
+        if not asserts.strip():
+            bad.append(f"{name}: empty assertion cell")
+    for name in sorted(set(rows) - set(gate_names)):
+        bad.append(f"{name}: row for a gate that does not exist")
+    return bad
+
+
+def check_gate_documented(root: pathlib.Path | None = None, *, allow: int | None = None) -> None:
+    """docs/gates.md has one true row per scripts/*-gate.sh (`gate_doc_violations`).
+
+    Advisory while `allow` equals the live count; hard at 0.
+    """
+    root = ROOT if root is None else root
+    allow = GATE_DOC_ALLOW if allow is None else allow
+    doc = root / "docs" / "gates.md"
+    text = doc.read_text(encoding="utf-8") if doc.is_file() else ""
+    gate_names = [p.name for p in sorted((root / "scripts").glob("*-gate.sh"))]
+    bad = gate_doc_violations(text, gate_names, gate_placements(), DOCUMENTED_STUBS)
+    if len(bad) != allow:
+        _die(f"docs/gates.md: {len(bad)} gate row problem(s), allow {allow}: " + "; ".join(bad[:8]))
 
 
 def _dump_key_hexes(line: str) -> tuple[str, tuple[str, ...]] | None:
@@ -3091,6 +3325,12 @@ HYGIENE_INVENTORY_MIN_CASES = 6
 MIT_ANCHOR_ALLOW = 0
 MIT_TRUTH_ALLOW = 0
 PROCESS_TAG_ALLOW = 0
+# S5 doc checks: advisory at the live count until the commit that clears each.
+CHANGELOG_HEADINGS_ALLOW = 94
+DOCS_SIZE_ALLOW = 2
+GATE_DOC_ALLOW = 73
+DOCS_SIZE_LIMIT = 60 * 1024
+CHANGELOG_MAX_BYTES = 236563
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
     "scripts/lib/prod-realm-common.sh",
@@ -4582,6 +4822,76 @@ jobs:
         {"docs/testing.md": "see `crates/krb5-kdc/tests/ad_pac.rs`\n"},
         ROOT,
     )
+    # The S5 doc checks on a temp tree: links and anchors, recursive cites, the CHANGELOG
+    # headings, the size limits, and docs/gates.md against the scripts and workflows.
+    droot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (droot / "docs" / "sub").mkdir(parents=True)
+        (droot / "docs" / "a.md").write_text("# A\n\n## Setup — first\n\n## Setup — first\n", encoding="utf-8")
+        readme = droot / "README.md"
+        readme.write_text(
+            "See [a](docs/a.md), [setup](docs/a.md#setup--first), [again](docs/a.md#setup--first-1),\n"
+            "[site](https://example.org/x) and `[code](nowhere.md)`.\n\n```\n[fenced](nowhere.md)\n```\n",
+            encoding="utf-8",
+        )
+        if doc_link_violations(droot):
+            _die(f"check_doc_links must accept files, slugs, repeats, URLs and code: {doc_link_violations(droot)}")
+        readme.write_text("See [gone](docs/gone.md).\n", encoding="utf-8")
+        _must_die_msg("docs/gone.md (no such file)", check_doc_links, droot)
+        readme.write_text("See [bad](docs/a.md#setup).\n", encoding="utf-8")
+        _must_die_msg("docs/a.md#setup (no such anchor)", check_doc_links, droot)
+        readme.write_text("See [a](docs/a.md).\n", encoding="utf-8")
+        (droot / "docs" / "sub" / "deep.md").write_text("see `docs/missing.md`\n", encoding="utf-8")
+        _must_die_msg("docs/sub/deep.md: `docs/missing.md`", check_doc_file_cites, None, droot)
+        (droot / "docs" / "sub" / "deep.md").write_text("see `docs/a.md`\n", encoding="utf-8")
+        (droot / "CONTRIBUTING.md").write_text("see `scripts/none.sh`\n", encoding="utf-8")
+        _must_die_msg("CONTRIBUTING.md: `scripts/none.sh`", check_doc_file_cites, None, droot)
+        (droot / "CONTRIBUTING.md").write_text("see `docs/a.md`\n", encoding="utf-8")
+        check_doc_file_cites(None, droot)
+        log = "## [Unreleased]\n\n### Added\n\n### Tests and CI\n\n### How to add an entry\n\n### W3-S4 comments\n"
+        check_changelog_headings(log, allow=1)
+        _must_die_msg("1 ### headings outside", check_changelog_headings, log, allow=0)
+        check_changelog_headings(log.replace("### W3-S4 comments\n", ""), allow=0)
+        (droot / "docs" / "big.md").write_text("x" * (DOCS_SIZE_LIMIT + 1), encoding="utf-8")
+        check_docs_size(droot, allow=1, changelog_max=10)
+        _must_die_msg("1 docs file(s) over", check_docs_size, droot, allow=0, changelog_max=10)
+        (droot / "docs" / "big.md").unlink()
+        (droot / "CHANGELOG.md").write_text("y" * 11, encoding="utf-8")
+        _must_die_msg("over its ceiling 10", check_docs_size, droot, allow=0, changelog_max=10)
+        check_docs_size(droot, allow=0, changelog_max=11)
+    finally:
+        subprocess.run(["rm", "-rf", str(droot)], check=False)
+    gates = ["a-gate.sh", "b-gate.sh", "s-gate.sh", "w-gate.sh"]
+    places = {
+        "a-gate.sh": [("ci:harness", "fail-red")],
+        "b-gate.sh": [("ci:soak", "soft"), ("soak:soak", "nightly")],
+    }
+    stubs_fx = frozenset({"s-gate.sh", "w-gate.sh"})
+    head = "| Gate | Oracle | Workflow | Lane | Asserts |\n| --- | --- | --- | --- | --- |\n"
+    rows_ok = {
+        "a": "| `scripts/a-gate.sh` | MIT | `ci:harness` | fail-red | the wire code |\n",
+        "b": "| `scripts/b-gate.sh` | none | `ci:soak`, `soak:soak` | soft, nightly | no leak |\n",
+        "s": "| `scripts/s-gate.sh` | Windows | stub | — | exits 2 |\n",
+        "w": "| `scripts/w-gate.sh` | MIT | stub | — | runs a and b |\n",
+    }
+    good_doc = head + "".join(rows_ok.values())
+    got = gate_doc_violations(good_doc, gates, places, stubs_fx)
+    if got:
+        _die(f"check_gate_documented must accept a true table: {got}")
+    for label, doc, needle in (
+        ("missing row", head + rows_ok["a"] + rows_ok["b"] + rows_ok["s"], "w-gate.sh: no row"),
+        ("two rows", good_doc + rows_ok["a"], "a-gate.sh: two rows"),
+        ("wrong workflow", good_doc.replace("`ci:harness` | fail-red", "`ci:harness-2` | fail-red"), "a-gate.sh: workflow"),
+        ("wrong lane", good_doc.replace("soft, nightly", "fail-red"), "b-gate.sh: lane"),
+        ("bad oracle", good_doc.replace("| MIT | `ci:harness`", "| Kerberos | `ci:harness`"), "a-gate.sh: oracle"),
+        ("empty asserts", good_doc.replace("the wire code", " "), "a-gate.sh: empty assertion"),
+        ("unknown gate", good_doc + "| `scripts/z-gate.sh` | MIT | stub | — | x |\n", "z-gate.sh: row for a gate"),
+        ("cell count", good_doc.replace("| exits 2 |", "|"), "s-gate.sh: 4 cells"),
+    ):
+        if not any(needle in v for v in gate_doc_violations(doc, gates, places, stubs_fx)):
+            _die(f"check_gate_documented must flag {label}")
+    if gate_placements()["kdc-gate.sh"] != [("ci:harness", "fail-red")]:
+        _die(f"gate_placements must read kdc-gate.sh as ci:harness fail-red: {gate_placements()['kdc-gate.sh']}")
 
     check_capture_env_only(
         'pub fn capture_pdu() {\n    let _ = std::env::var("KERBER_CAPTURE_DIR");\n}\n',
@@ -7096,6 +7406,10 @@ def main() -> None:
     check_diffsend_cases()
     check_gate_unit_index()
     check_doc_file_cites()
+    check_doc_links()
+    check_changelog_headings()
+    check_docs_size()
+    check_gate_documented()
     check_capture_env_only()
     check_golden_dump_unique_keys()
     check_ledger_tally()

@@ -462,6 +462,25 @@ not re-open a closed summary. An open summary (no header) resolves against
 the working tree; `--at SHA` overrides the header for every summary given.
 The bare invocation over every summary is the check.
 
+The public docs are `README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`,
+every `docs/**/*.md`, and every `README.md` under `examples/`,
+`harness/`, `scripts/` and `tests/`. `check_doc_links` resolves every
+relative link in them, and its `#anchor` by GitHub's slug rules (the
+heading lowercased, characters other than letters, digits, spaces,
+hyphens and underscores dropped, spaces turned into hyphens, a repeat
+suffixed `-1`, `-2`); links in code are not links. `check_doc_file_cites`
+reads the same files except the CHANGELOG. `check_changelog_headings`
+allows only the Keep-a-Changelog group headings (plus `Tests and CI`
+and `How to`) as `###` headings; `check_docs_size` holds every
+`docs/**/*.md` to 60 KiB and `CHANGELOG.md` to its ceiling
+(`CHANGELOG_MAX_BYTES`). `check_gate_documented` holds docs/gates.md
+to one row per `scripts/*-gate.sh`, with the workflow and lane columns
+equal to the gates' placements in `.github/workflows` (`fail-red`,
+`skip2`, `soft`, `nightly`; `stub` or `wrapper` for the documented
+stubs), a known oracle, and a non-empty assertion. A check that the tree
+does not meet yet is advisory at the live count and goes hard with the
+commit that clears it.
+
 Wire `e_text` is MIT's status word (`do_as_req.c:806`,
 `do_tgs_req.c:205-206`). MIT `k5_setmsg` texts are KDC-log messages
 and land in the `kdc.issue` `detail` field, not on the wire. A cell
