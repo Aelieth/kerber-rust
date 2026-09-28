@@ -3326,11 +3326,13 @@ MIT_ANCHOR_ALLOW = 0
 MIT_TRUTH_ALLOW = 0
 PROCESS_TAG_ALLOW = 0
 # S5 doc checks: advisory at the live count until the commit that clears each.
-CHANGELOG_HEADINGS_ALLOW = 94
+CHANGELOG_HEADINGS_ALLOW = 0
 DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
-CHANGELOG_MAX_BYTES = 236563
+# The regrouped CHANGELOG (235,117 bytes at the S5 regroup) plus 600 bytes for the S5 examples
+# commit's two bullets; re-based only by a tool: commit at the start of a swath that adds bullets.
+CHANGELOG_MAX_BYTES = 235717
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
     "scripts/lib/prod-realm-common.sh",
