@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import pathlib
 import re
+import subprocess
 import sys
+import tempfile
 
-from .common import ROOT, SCRIPTS, WORKFLOWS, _die, _hygiene_inventory
+from .common import ROOT, SCRIPTS, WORKFLOWS, _die, _hygiene_inventory, _scratch_root
 from .workflows import RUST_PREAMBLE, Workflow
 
 GATE_WALL_MAX = 45
@@ -36,6 +39,46 @@ def check_gate_provenance(text: str | None = None, name: str = "gate.sh") -> Non
         missing.append(ras.name)
     if missing:
         _die(f"must source scripts/lib/provenance.sh: {missing}")
+
+
+_PROV_MEMO_RUNNERS = ("scripts/checkpoint.sh", "scripts/red-at-sha.sh")
+_PROV_MEMO_MAKE = 'KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX")"'
+
+
+def check_provenance_memo(texts: dict[str, str] | None = None) -> None:
+    """provenance.sh writes no file of its own that outlives it: the MIT image's kadm5.acl memo is
+    only the KERBER_PROV_MEMO file a runner (checkpoint.sh, red-at-sha.sh) makes with mktemp under
+    its KERBER_SCRATCH and removes on exit, and ci-policy gives the scripts it runs a scratch. The
+    old memo, `prov-<image>` in `${KERBER_SCRATCH:-${TMPDIR:-/tmp}}`, was left in host /tmp by any
+    run with neither variable set."""
+    live = texts is None
+    if texts is None:
+        names = ["scripts/lib/provenance.sh", *_PROV_MEMO_RUNNERS, "scripts/ci_policy/__init__.py"]
+        texts = {n: (ROOT / n).read_text(encoding="utf-8") for n in names}
+    prov = texts.get("scripts/lib/provenance.sh", "")
+    if "/prov-${" in prov or "KERBER_PROV_MEMO" not in prov:
+        _die("provenance.sh must memoise only through KERBER_PROV_MEMO, never a prov-<image> file of its own")
+    for runner in _PROV_MEMO_RUNNERS:
+        text = texts.get(runner, "")
+        if _PROV_MEMO_MAKE not in text or 'rm -f "$KERBER_PROV_MEMO"' not in text:
+            _die(f"{runner} must make KERBER_PROV_MEMO with mktemp under KERBER_SCRATCH and remove it on exit")
+    if 'os.environ.setdefault("KERBER_SCRATCH"' not in texts.get("scripts/ci_policy/__init__.py", ""):
+        _die("ci-policy must give the scripts it runs a KERBER_SCRATCH")
+    if not live:
+        return
+    probe = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        env = {k: v for k, v in os.environ.items() if k not in ("KERBER_SCRATCH", "KERBER_PROV_MEMO")}
+        env.update({"TMPDIR": str(probe), "KERBER_NO_IMAGE": "1"})
+        r = subprocess.run(["bash", "-c", ". scripts/lib/provenance.sh"], cwd=ROOT, env=env, capture_output=True,
+                           text=True, check=False)
+        if r.returncode != 0:
+            _die(f"provenance.sh failed with no scratch set: {(r.stdout + r.stderr)[-300:]}")
+        left = sorted(p.name for p in probe.iterdir())
+        if left:
+            _die(f"provenance.sh with no KERBER_SCRATCH left files in TMPDIR: {left}")
+    finally:
+        subprocess.run(["rm", "-rf", str(probe)], check=False)
 
 
 def check_docker_cp_cargo_target() -> None:

@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import os
 import sys
 
 from .comments import check_mit_anchor_form, check_mit_anchor_truth, check_no_process_history
-from .common import WORKFLOWS, _die
+from .common import WORKFLOWS, _die, _scratch_root
 from .docs import (
     check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size, check_gate_documented,
     check_testing_doc_budgets,
@@ -19,8 +20,8 @@ from .gates import (
     check_capture_env_only, check_docker_cp_cargo_target, check_gate_common_sourced, check_gate_provenance,
     check_gate_unit_index, check_gate_wall, check_golden_dump_unique_keys, check_kcm_stop_before_run, check_log_arity,
     check_need_bins_strict, check_no_gate_cargo_build, check_peers_unavailable_convention,
-    check_prod_gate_tcpdump_cleanup, check_samba_kdc_respawn, check_sleep_classifiers_agree, check_sleep_ratchet,
-    check_stock_boots_per_job, check_trace_dst,
+    check_prod_gate_tcpdump_cleanup, check_provenance_memo, check_samba_kdc_respawn, check_sleep_classifiers_agree,
+    check_sleep_ratchet, check_stock_boots_per_job, check_trace_dst,
 )
 from .hygiene import (
     check_autotests_registered, check_claim_remap_self_test, check_hygiene_body_diff_self_test,
@@ -42,6 +43,8 @@ from .workflows import (
 
 
 def main() -> None:
+    # The scripts the checks run stamp through provenance.sh; give them this run's scratch, never /tmp.
+    os.environ.setdefault("KERBER_SCRATCH", str(_scratch_root()))
     _self_test()
     if not WORKFLOWS.is_dir():
         _die(f"missing {WORKFLOWS}")
@@ -66,6 +69,7 @@ def main() -> None:
     check_no_informational_gates()
     check_no_case_whitelists()
     check_gate_provenance()
+    check_provenance_memo()
     check_docker_cp_cargo_target()
     check_no_host_tmp_writes()
     check_isolate_test_krb5()

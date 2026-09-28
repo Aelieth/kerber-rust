@@ -77,6 +77,11 @@ case "$KERBER_SCRATCH" in
         ;;
 esac
 
+mkdir -p "$KERBER_SCRATCH"
+# One memo of the MIT image's kadm5.acl hash for this run's stamps and the gate's (provenance.sh).
+KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX")"
+export KERBER_PROV_MEMO
+trap 'rm -f "$KERBER_PROV_MEMO"' EXIT
 . "$ROOT/scripts/lib/provenance.sh"
 
 BASE="$(git rev-parse --verify "$1^{commit}")"
@@ -113,6 +118,7 @@ git worktree add --detach "$WT" "$BASE"
 # for a follow-up run at the same base with KERBER_KEEP_RED_TARGET=1 (W1-Z Z3.4).
 cleanup() {
     cd "$ROOT" || true
+    rm -f "$KERBER_PROV_MEMO"
     git worktree remove --force "$WT" 2>/dev/null || true
     git worktree prune || true
     if [ "${KERBER_KEEP_RED_TARGET:-}" != "1" ]; then

@@ -10,13 +10,30 @@ from ..gates import (
     check_gate_no_exit_trap, check_gate_provenance, check_gate_unit_index, check_gate_wall,
     check_golden_dump_unique_keys, check_kadmin_glob_lib, check_kadmin_split_snaps, check_kcm_need_image,
     check_kcm_stop_before_run, check_log_arity, check_need_bins_strict, check_no_gate_cargo_build,
-    check_peers_unavailable_convention, check_prod_gate_tcpdump_cleanup, check_s4_shared_boots, check_samba_kdc_respawn,
-    check_sleep_classifiers_agree, check_sleep_ratchet, check_stock_boots_per_job, check_trace_dst,
+    check_peers_unavailable_convention, check_prod_gate_tcpdump_cleanup, check_provenance_memo, check_s4_shared_boots,
+    check_samba_kdc_respawn, check_sleep_classifiers_agree, check_sleep_ratchet, check_stock_boots_per_job,
+    check_trace_dst,
 )
-from .common import _must_die
+from .common import _must_die, _must_die_msg
 
 
 def _self_test_gates_1() -> None:
+    check_provenance_memo()
+    memo_ok = {
+        "scripts/lib/provenance.sh": 'if [ -n "${KERBER_PROV_MEMO:-}" ]; then read -r id sha <"$KERBER_PROV_MEMO"; fi\n',
+        "scripts/checkpoint.sh": 'KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX")"\nrm -f "$KERBER_PROV_MEMO"\n',
+        "scripts/red-at-sha.sh": 'KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX")"\nrm -f "$KERBER_PROV_MEMO"\n',
+        "scripts/ci_policy/__init__.py": 'os.environ.setdefault("KERBER_SCRATCH", str(_scratch_root()))\n',
+    }
+    check_provenance_memo(memo_ok)
+    _must_die_msg("never a prov-<image> file", check_provenance_memo,
+                  {**memo_ok, "scripts/lib/provenance.sh": '_memo="${_prov_dir}/prov-${_img_key}"\nKERBER_PROV_MEMO\n'})
+    _must_die_msg("scripts/checkpoint.sh must make KERBER_PROV_MEMO", check_provenance_memo,
+                  {**memo_ok, "scripts/checkpoint.sh": memo_ok["scripts/checkpoint.sh"].replace("rm -f", "true")})
+    _must_die_msg("scripts/red-at-sha.sh must make KERBER_PROV_MEMO", check_provenance_memo,
+                  {**memo_ok, "scripts/red-at-sha.sh": 'KERBER_PROV_MEMO="$(mktemp)"\nrm -f "$KERBER_PROV_MEMO"\n'})
+    _must_die_msg("give the scripts it runs a KERBER_SCRATCH", check_provenance_memo,
+                  {**memo_ok, "scripts/ci_policy/__init__.py": ""})
     with tempfile.TemporaryDirectory() as tmp:
         troot = pathlib.Path(tmp)
         testdir = troot / "crates" / "demo" / "tests"

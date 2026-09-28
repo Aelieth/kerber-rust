@@ -259,6 +259,10 @@ if [ "$PLAN" != 1 ]; then
     OUT="$(cd "$OUT" && pwd)"
     export KERBER_SCRATCH="${KERBER_SCRATCH:-$OUT/scratch}"
     mkdir -p "$KERBER_SCRATCH"
+    # One memo of the MIT image's kadm5.acl hash for every stamp of the run (provenance.sh).
+    KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX")"
+    export KERBER_PROV_MEMO
+    trap 'rm -f "$KERBER_PROV_MEMO"' EXIT
     export KERBER_NEED_BINS_STRICT=1
 
     if gate_or_cargo_running; then

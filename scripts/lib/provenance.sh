@@ -21,6 +21,12 @@ _gate_err() {
 }
 trap '_gate_err "$?" "$LINENO" "$BASH_COMMAND" "${BASH_SOURCE[0]}"' ERR
 
+# _prov_memo_put ID SHA: keep image ID's kadm5.acl hash in the runner's memo, when it made one.
+_prov_memo_put() {
+    [ -n "${KERBER_PROV_MEMO:-}" ] || return 0
+    printf '%s %s\n' "$1" "$2" >"$KERBER_PROV_MEMO"
+}
+
 head_sha="$(git rev-parse HEAD)"
 _prov_dir="${KERBER_SCRATCH:-${TMPDIR:-/tmp}}"
 mkdir -p "$_prov_dir"
@@ -50,17 +56,22 @@ if command -v docker >/dev/null 2>&1; then
     if docker image inspect kerber-rust-mit-kdc:1.22.2 >/dev/null 2>&1; then
         image="$(docker image inspect kerber-rust-mit-kdc:1.22.2 --format '{{.Id}} {{.Created}}')"
         _img_id="$(echo "$image" | awk '{print $1}')"
-        _img_key="${_img_id##*:}"
-        _img_key="${_img_key//\//_}"
-        _memo="${_prov_dir}/prov-${_img_key}"
-        if [ -f "$_memo" ]; then
-            acl_sha256_image="$(cat "$_memo")"
-        else
+        # The image's kadm5.acl hash costs a `docker run`. A runner that stamps many artefacts
+        # (checkpoint.sh, red-at-sha.sh) makes one memo file with mktemp under its KERBER_SCRATCH,
+        # exports it as KERBER_PROV_MEMO and removes it on exit; nothing else writes a memo.
+        acl_sha256_image=""
+        _memo_id=""
+        _memo_sha=""
+        if [ -n "${KERBER_PROV_MEMO:-}" ] && [ -f "$KERBER_PROV_MEMO" ]; then
+            read -r _memo_id _memo_sha <"$KERBER_PROV_MEMO" || true
+        fi
+        [ "$_memo_id" != "$_img_id" ] || acl_sha256_image="$_memo_sha"
+        if [ -z "$acl_sha256_image" ]; then
             acl_sha256_image="$(
                 docker run --rm --entrypoint cat kerber-rust-mit-kdc:1.22.2 \
                     /var/kerberos/krb5kdc/kadm5.acl | sha256sum | awk '{print $1}'
             )"
-            printf '%s\n' "$acl_sha256_image" >"$_memo"
+            _prov_memo_put "$_img_id" "$acl_sha256_image"
         fi
         if [ "$acl_sha256_image" != "$acl_sha256_tree" ]; then
             echo "stale MIT image; rebuild from harness/" >&2
