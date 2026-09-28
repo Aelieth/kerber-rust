@@ -326,9 +326,15 @@ Words in echo arguments and filenames never count; `/bin/echo` and
 `log_*` helpers are noise. `case` arms are walked like `if` arms. `log …
 skip` is accepted only when the arm names a `KERBER_REQUIRE_`
 requirement that a `die` in the same script enforces. `{ … }`, `( … )`,
-and heredoc arms are inspected. The ledger header
-tally must match a recount of the verdict cells and the A1/A2/A3/A4
-section split; a missing total line fails. Rust-site cells that use
+and heredoc arms are inspected. The ledger is one file
+(`docs/mit-parity-ledger.md`) or, split, a README.md under docs/parity/
+(the header) plus one file per section named `a1-…` to `a5-…` or `b1-…`
+whose first heading names that section; either layout is read. A split
+without its README, a file whose name or heading gives no section or the
+wrong one, rows left in the single file beside the split, and a row (MIT
+cite and check) present twice fail. The header tally must match a
+recount of the verdict cells and the A1–A5 / B1 section split; a missing
+total line fails. Rust-site cells that use
 `file.rs symbol` (optional crate prefix `krb5-kdc/reply.rs mint_ticket`,
 optional `:N` after the symbol) must resolve to an item (`fn`,
 `const fn`, `async fn`, `unsafe fn`, `struct`, `enum`, `const`,

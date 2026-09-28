@@ -34,7 +34,6 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 NEXTEST_TOML = ROOT / ".config" / "nextest.toml"
 GITIGNORE = ROOT / ".gitignore"
 SCRIPTS = ROOT / "scripts"
-LEDGER = ROOT / "docs" / "mit-parity-ledger.md"
 
 DIFFSEND_CASES = frozenset(
     {
@@ -1399,12 +1398,89 @@ def _split_ledger_row(line: str) -> list[str]:
     return [p.strip() for p in re.split(r"(?<!\\)\|", inner)]
 
 
-def check_ledger_proof_column(text: str | None = None) -> None:
+_LEDGER_KEYS = ("A1", "A2", "A3", "A4", "A5", "B1")
+_PARITY_FILE = re.compile(r"^(?P<key>[ab][1-9])-[a-z0-9][a-z0-9-]*\.md$")
+
+
+def _ledger_rows(text: str) -> list[tuple[int, str, list[str]]]:
+    """(line number, line, cells) of every ledger table row (seven or more cells, not a header)."""
+    rows = []
+    for i, line in enumerate(text.splitlines(), 1):
+        if not line.startswith("|") or "MIT file:line" in line or line.startswith("| ---"):
+            continue
+        cols = _split_ledger_row(line)
+        if len(cols) < 7 or cols[5] == "verdict":
+            continue
+        rows.append((i, line, cols))
+    return rows
+
+
+def ledger_sources(root: pathlib.Path | None = None) -> list[tuple[str, str, str | None]]:
+    """The ledger as (repo path, text, section key) triples, in reading order.
+
+    Split layout, once `docs/parity/` holds section files: `docs/parity/README.md` first (the
+    header: counts, verdict tally, the live diffsend list; no rows; key None), then every
+    `docs/parity/<a1..a5|b1>-*.md` in sorted order, keyed by its file name. Single layout
+    otherwise: `docs/mit-parity-ledger.md`, key None (its `## A1` ... headings give the sections).
+    Red: a split with no README, a section file whose name or first heading gives no section or
+    the wrong one, two files for one section, rows in the README, and rows left in
+    `docs/mit-parity-ledger.md` beside the split.
+    """
+    root = ROOT if root is None else root
+    single = root / "docs" / "mit-parity-ledger.md"
+    parity = root / "docs" / "parity"
+    sections = sorted(p for p in parity.glob("*.md") if p.name != "README.md") if parity.is_dir() else []
+    if not sections:
+        if not single.is_file():
+            _die("missing docs/mit-parity-ledger.md (or docs/parity/)")
+        return [("docs/mit-parity-ledger.md", single.read_text(encoding="utf-8"), None)]
+    readme = parity / "README.md"
+    if not readme.is_file():
+        _die("docs/parity/ has section files but no README.md (the ledger header)")
+    head = readme.read_text(encoding="utf-8")
+    if _ledger_rows(head):
+        _die("docs/parity/README.md holds ledger rows; rows live in the section files")
+    if single.is_file() and _ledger_rows(single.read_text(encoding="utf-8")):
+        _die("docs/mit-parity-ledger.md still holds rows beside docs/parity/; it must be a pointer")
+    out: list[tuple[str, str, str | None]] = [("docs/parity/README.md", head, None)]
+    seen: dict[str, str] = {}
+    for path in sections:
+        m = _PARITY_FILE.match(path.name)
+        key = m.group("key").upper() if m else None
+        if key not in _LEDGER_KEYS:
+            _die(f"docs/parity/{path.name} names no ledger section (want a1..a5 or b1)")
+        if key in seen:
+            _die(f"docs/parity/{path.name} and docs/parity/{seen[key]} both hold section {key}")
+        seen[key] = path.name
+        text = path.read_text(encoding="utf-8")
+        first = next((line for line in text.splitlines() if line.startswith("# ")), "")
+        if not re.match(rf"^# {key}\b", first):
+            _die(f"docs/parity/{path.name}: first heading {first!r} does not name section {key}")
+        out.append((f"docs/parity/{path.name}", text, key))
+    return out
+
+
+def check_ledger_layout(root: pathlib.Path | None = None) -> None:
+    """The ledger's files are well formed (`ledger_sources`) and no row appears twice.
+
+    A row is identified by its MIT cite and check cells, so a moved row left behind in its old file,
+    or one row copied into two files, is red in either layout.
+    """
+    seen: dict[tuple[str, str], str] = {}
+    for name, text, _key in ledger_sources(root):
+        for i, _line, cols in _ledger_rows(text):
+            ident = (cols[0], cols[1])
+            if ident in seen:
+                _die(f"{name}:{i} repeats the ledger row at {seen[ident]}")
+            seen[ident] = f"{name}:{i}"
+
+
+def check_ledger_proof_column(text: str | None = None, name: str = "docs/mit-parity-ledger.md") -> None:
     """Proof cells may name existing diffsend cases / *-gate.sh or `proposed`."""
     if text is None:
-        if not LEDGER.is_file():
-            _die("missing docs/mit-parity-ledger.md")
-        text = LEDGER.read_text()
+        for src_name, src_text, _key in ledger_sources():
+            check_ledger_proof_column(src_text, src_name)
+        return
     existing = {p.name for p in SCRIPTS.glob("*-gate.sh")}
     for i, line in enumerate(text.splitlines(), 1):
         if (
@@ -1423,16 +1499,16 @@ def check_ledger_proof_column(text: str | None = None) -> None:
                 case = m.group(1)
                 if case not in DIFFSEND_CASES and not proposed:
                     _die(
-                        f"docs/mit-parity-ledger.md:{i} proof names diffsend `{case}` "
+                        f"{name}:{i} proof names diffsend `{case}` "
                         "which is not a live case (use proposed)"
                     )
             for m in _LEDGER_GATE.finditer(clause):
-                name = m.group(1)
-                if not name.endswith(".sh"):
-                    name = name + ".sh"
-                if name not in existing and not proposed:
+                gate = m.group(1)
+                if not gate.endswith(".sh"):
+                    gate = gate + ".sh"
+                if gate not in existing and not proposed:
                     _die(
-                        f"docs/mit-parity-ledger.md:{i} proof names {name} "
+                        f"{name}:{i} proof names {gate} "
                         "which is not in scripts/ (use proposed)"
                     )
 
@@ -1462,9 +1538,7 @@ def check_diffsend_cases(
     must grep every case and pin the same ratchet the driver's summary
     claims (W1-Z Z3.3)."""
     if ledger is None:
-        if not LEDGER.is_file():
-            _die("missing docs/mit-parity-ledger.md")
-        ledger = LEDGER.read_text()
+        ledger = ledger_sources()[0][1]
     gate_path = SCRIPTS / "differential-gate.sh"
     if gate is None:
         if not gate_path.is_file():
@@ -1476,7 +1550,7 @@ def check_diffsend_cases(
         src = DIFFSEND_SRC.read_text()
     hdr = _LEDGER_CASES_HDR.search(ledger)
     if not hdr:
-        _die("docs/mit-parity-ledger.md missing live diffsend cases list")
+        _die("the ledger header (docs/parity/README.md or docs/mit-parity-ledger.md) missing live diffsend cases list")
     names = set(re.findall(r"`([^`]+)`", hdr.group(1)))
     if names != set(DIFFSEND_CASES):
         missing = sorted(DIFFSEND_CASES - names)
@@ -1729,7 +1803,7 @@ _HEADER_EXACT = re.compile(
 _HEADER_ABSENT = re.compile(r"absent\s+(\d+)\s*·\s*deferred\s+(\d+)")
 _HEADER_TOTAL = re.compile(
     r"\*\*(\d+)\*\*\s*=\s*A1\s+(\d+)\s*\+\s*A2\s+(\d+)\s*\+\s*A3\s+(\d+)"
-    r"(?:\s*\+\s*A4\s+(\d+))?(?:\s*\+\s*B1\s+(\d+))?"
+    r"(?:\s*\+\s*A4\s+(\d+))?(?:\s*\+\s*A5\s+(\d+))?(?:\s*\+\s*B1\s+(\d+))?"
 )
 _RUST_ANCHOR = re.compile(
     r"(?:`)?(?:(?P<crate>[A-Za-z0-9_-]+)/(?:src/)?)?(?P<file>[A-Za-z0-9_-]+\.rs)"
@@ -1800,11 +1874,11 @@ _CRATE_ALIASES = {
 
 
 def recount_ledger_sections(text: str) -> dict[str, int]:
-    """Row counts under `## A1` / `## A2` / `## A3` / `## A4` / `## B1` headings."""
-    counts = {"A1": 0, "A2": 0, "A3": 0, "A4": 0, "B1": 0}
+    """Row counts under `## A1` ... `## A5` / `## B1` headings (the single-file layout)."""
+    counts = {k: 0 for k in _LEDGER_KEYS}
     section: str | None = None
     for line in text.splitlines():
-        m = re.match(r"^## (A1|A2|A3|A4|B1)\b", line)
+        m = re.match(r"^## (A1|A2|A3|A4|A5|B1)\b", line)
         if m:
             section = m.group(1)
             continue
@@ -1854,17 +1928,22 @@ def recount_ledger_verdicts(text: str) -> dict[str, int]:
     return counts
 
 
-def check_ledger_tally(text: str | None = None) -> None:
-    """Header verdict counts must equal a recount of the table cells."""
-    if text is None:
-        if not LEDGER.is_file():
-            _die("missing docs/mit-parity-ledger.md")
-        text = LEDGER.read_text()
-    got = recount_ledger_verdicts(text)
-    exact = _HEADER_EXACT.search(text)
-    absent = _HEADER_ABSENT.search(text)
+def check_ledger_tally(text: str | None = None, root: pathlib.Path | None = None) -> None:
+    """Header verdict counts must equal a recount of the table cells, in total and per section.
+
+    `text` is a single-file ledger (the fixtures); otherwise the layout `ledger_sources` finds is
+    read, the header from its first file and the per-section counts from the section files.
+    """
+    sources = [("docs/mit-parity-ledger.md", text, None)] if text is not None else ledger_sources(root)
+    hname, head, _key = sources[0]
+    got = {k: 0 for k in _VERDICT_KEYS}
+    for _name, body, _k in sources:
+        for k, v in recount_ledger_verdicts(body).items():
+            got[k] += v
+    exact = _HEADER_EXACT.search(head)
+    absent = _HEADER_ABSENT.search(head)
     if not exact or not absent:
-        _die("docs/mit-parity-ledger.md missing verdict header tally")
+        _die(f"{hname} missing verdict header tally")
     want = {
         "exact": int(exact.group(1)),
         "stricter-documented": int(exact.group(2)),
@@ -1874,28 +1953,35 @@ def check_ledger_tally(text: str | None = None) -> None:
     }
     if got != want:
         _die(
-            "docs/mit-parity-ledger.md tally header "
+            f"{hname} tally header "
             f"{want} != recount {got}"
         )
-    total = _HEADER_TOTAL.search(text)
+    total = _HEADER_TOTAL.search(head)
     if not total:
-        _die("docs/mit-parity-ledger.md missing A1/A2/A3 total line")
+        _die(f"{hname} missing A1/A2/A3 total line")
     header_n = int(total.group(1))
     a1, a2, a3 = (int(total.group(i)) for i in (2, 3, 4))
     a4 = int(total.group(5) or 0)
-    b1 = int(total.group(6) or 0)
+    a5 = int(total.group(6) or 0)
+    b1 = int(total.group(7) or 0)
     n = sum(got.values())
-    parts = a1 + a2 + a3 + a4 + b1
+    parts = a1 + a2 + a3 + a4 + a5 + b1
     if header_n != n or header_n != parts:
         _die(
-            f"docs/mit-parity-ledger.md total {header_n} "
-            f"= A1 {a1} + A2 {a2} + A3 {a3} + A4 {a4} + B1 {b1} != recount {n}"
+            f"{hname} total {header_n} "
+            f"= A1 {a1} + A2 {a2} + A3 {a3} + A4 {a4} + A5 {a5} + B1 {b1} != recount {n}"
         )
-    sec = recount_ledger_sections(text)
-    want_sec = {"A1": a1, "A2": a2, "A3": a3, "A4": a4, "B1": b1}
+    if all(key is None for _name, _body, key in sources):
+        sec = recount_ledger_sections(head)
+    else:
+        sec = {k: 0 for k in _LEDGER_KEYS}
+        for _name, body, key in sources:
+            if key is not None:
+                sec[key] += len(_ledger_rows(body))
+    want_sec = {"A1": a1, "A2": a2, "A3": a3, "A4": a4, "A5": a5, "B1": b1}
     if sec != want_sec:
         _die(
-            f"docs/mit-parity-ledger.md section split "
+            f"{hname} section split "
             f"header {want_sec} != recount {sec}"
         )
 
@@ -2037,7 +2123,7 @@ def _resolve_src(
     return by_crate[crates_for[0]][fname]
 
 
-def check_ledger_anchors(text: str | None = None) -> None:
+def check_ledger_anchors(text: str | None = None, name: str = "docs/mit-parity-ledger.md") -> None:
     """Every rust-site `file.rs symbol[:N]` resolves to one item; exact rows verify their claim.
 
     The MIT column must cite a MIT file (or say n/a / absent). An `exact` row's
@@ -2047,24 +2133,13 @@ def check_ledger_anchors(text: str | None = None) -> None:
     needs `:N` inside the intended definition.
     """
     checking_file = text is None
-    if text is None:
-        if not LEDGER.is_file():
-            _die("missing docs/mit-parity-ledger.md")
-        text = LEDGER.read_text()
+    sources = ledger_sources() if text is None else [(name, text, None)]
     by_crate, by_base = _src_index()
     n_quote = 0
-    for i, line in enumerate(text.splitlines(), 1):
-        if (
-            not line.startswith("|")
-            or "MIT file:line" in line
-            or line.startswith("| ---")
-        ):
-            continue
-        cols = _split_ledger_row(line)
-        if len(cols) < 7 or cols[5] == "verdict":
-            continue
+    rows = [(src_name, i, cols) for src_name, body, _key in sources for i, _line, cols in _ledger_rows(body)]
+    for src_name, i, cols in rows:
         site, etext = cols[3], cols[4]
-        where = f"docs/mit-parity-ledger.md:{i}"
+        where = f"{src_name}:{i}"
         if not (_MIT_CITE.search(cols[0]) or _MIT_NA.match(cols[0])):
             _die(f"{where} MIT column names no MIT file: {cols[0].strip()}")
         bodies: list[str] = []
@@ -2108,7 +2183,7 @@ def check_ledger_anchors(text: str | None = None) -> None:
             if checked == 0 and not _proof_exists(cols[6]):
                 _die(f"{where} exact row verifies nothing: no e_text status word, no existing proof unit or cell")
     if checking_file and n_quote == 0:
-        _die("docs/mit-parity-ledger.md executed no quote checks")
+        _die("the ledger executed no quote checks")
 
 
 _MIT_CITE_FILE = re.compile(r"\b([\w.-]+\.(?:c|h|y|et|x|hin))\b")
@@ -2137,7 +2212,9 @@ def _mit_index(src: pathlib.Path) -> tuple[set[str], set[str], set[str]]:
     return _MIT_IDENTS[key]
 
 
-def check_ledger_mit_cites(text: str | None = None, src: pathlib.Path | None = None) -> None:
+def check_ledger_mit_cites(
+    text: str | None = None, src: pathlib.Path | None = None, name: str = "docs/mit-parity-ledger.md"
+) -> None:
     """Every MIT cite names a file of the tree; every MIT status word is an identifier there, a `_`-suffix of one, or a status string."""
     if src is None:
         env = os.environ.get("KERBER_MIT_SRC")
@@ -2152,16 +2229,11 @@ def check_ledger_mit_cites(text: str | None = None, src: pathlib.Path | None = N
         src = pathlib.Path(env)
     if not src.is_dir():
         _die(f"KERBER_MIT_SRC {src} is not a directory")
-    if text is None:
-        text = LEDGER.read_text()
+    sources = ledger_sources() if text is None else [(name, text, None)]
     names, idents, strings = _mit_index(src)
-    for i, line in enumerate(text.splitlines(), 1):
-        if not line.startswith("|") or "MIT file:line" in line or line.startswith("| ---"):
-            continue
-        cols = _split_ledger_row(line)
-        if len(cols) < 7 or cols[5] == "verdict":
-            continue
-        where = f"docs/mit-parity-ledger.md:{i}"
+    rows = [(src_name, i, cols) for src_name, body, _key in sources for i, _line, cols in _ledger_rows(body)]
+    for src_name, i, cols in rows:
+        where = f"{src_name}:{i}"
         for f in _MIT_CITE_FILE.findall(cols[0]):
             if f not in names:
                 _die(f"{where} MIT cite {f} is not a file under {src}")
@@ -4659,6 +4731,52 @@ jobs:
         "**1** = A1 0 + A2 1 + A3 0.",
     )
     _must_die(check_ledger_tally, ledger_tally_wrong_split)
+    # The ledger in either layout: one file, or docs/parity/ with a README header and one file
+    # per section keyed by its name. A row's identity is its MIT cite and check cells.
+    lroot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (lroot / "docs").mkdir()
+        single = lroot / "docs" / "mit-parity-ledger.md"
+        single.write_text(ledger_tally_ok_sections, encoding="utf-8")
+        check_ledger_layout(lroot)
+        check_ledger_tally(root=lroot)
+        table = (
+            "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
+            "| --- | --- | --- | --- | --- | --- | --- |\n"
+        )
+        row_a1 = "| kdc_util.c:1 | x | y | z | w | exact | diffsend `unknown-cname` |\n"
+        row_b1 = "| gic_pwd.c:2 | v | y | z | w | deviation | proposed |\n"
+        head = (
+            "Counts:\n**2** = A1 1 + A2 0 + A3 0 + A4 0 + A5 0 + B1 1.\n"
+            "exact 1 · stricter-documented 0 · deviation 1 ·\nabsent 0 · deferred 0.\n"
+        )
+        parity = lroot / "docs" / "parity"
+        parity.mkdir()
+        (parity / "a1-tgs.md").write_text("# A1 — tgs\n\n" + table + row_a1, encoding="utf-8")
+        (parity / "b1-client.md").write_text("# B1 — client\n\n" + table + row_b1, encoding="utf-8")
+        _must_die_msg("but no README.md", ledger_sources, lroot)
+        (parity / "README.md").write_text(head, encoding="utf-8")
+        _must_die_msg("still holds rows beside docs/parity/", ledger_sources, lroot)
+        single.write_text("The ledger is under docs/parity/.\n", encoding="utf-8")
+        check_ledger_layout(lroot)
+        check_ledger_tally(root=lroot)
+        if [k for _n, _t, k in ledger_sources(lroot)] != [None, "A1", "B1"]:
+            _die("ledger_sources must read the README, then the section files in order")
+        (parity / "b1-client.md").write_text(
+            "# B1 — client\n\n" + table + row_b1 + row_a1, encoding="utf-8"
+        )
+        _must_die_msg("repeats the ledger row at docs/parity/a1-tgs.md:5", check_ledger_layout, lroot)
+        (parity / "b1-client.md").write_text("# B1 — client\n\n" + table + row_b1, encoding="utf-8")
+        (parity / "a2-as.md").write_text("# A1 — as\n\n" + table, encoding="utf-8")
+        _must_die_msg("does not name section A2", ledger_sources, lroot)
+        (parity / "a2-as.md").unlink()
+        (parity / "c1-other.md").write_text("# C1 — other\n\n" + table, encoding="utf-8")
+        _must_die_msg("names no ledger section", ledger_sources, lroot)
+        (parity / "c1-other.md").unlink()
+        (parity / "README.md").write_text(head.replace("A1 1 + A2 0", "A1 0 + A2 1"), encoding="utf-8")
+        _must_die_msg("section split", check_ledger_tally, None, lroot)
+    finally:
+        subprocess.run(["rm", "-rf", str(lroot)], check=False)
     def _row(site: str, etext: str = "—", verdict: str = "exact", proof: str = "none") -> str:
         return (
             "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
@@ -6973,6 +7091,7 @@ def main() -> None:
         # checkpoint runner (`ci-policy.py --checkpoint`) can see it.
         check_no_red_target_trees()
     check_working_gitignored()
+    check_ledger_layout()
     check_ledger_proof_column()
     check_diffsend_cases()
     check_gate_unit_index()
