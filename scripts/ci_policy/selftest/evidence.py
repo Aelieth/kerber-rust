@@ -12,10 +12,10 @@ import tempfile
 from ..common import SCRIPTS, _die, _scratch_root
 from ..evidence import (
     _claim_audit_module, check_ci_status_save, check_evidence_check_tool, check_index_check_scratch,
-    check_no_red_target_trees, check_red_at_sha_inject, check_red_at_sha_overlay_order, check_red_at_sha_target_trap,
-    check_settle_helper, check_unit_evidence_helper,
+    check_no_red_target_trees, check_red_at_sha_build, check_red_at_sha_inject, check_red_at_sha_overlay_order,
+    check_red_at_sha_target_trap, check_settle_helper, check_unit_evidence_helper,
 )
-from .common import _must_die
+from .common import _must_die, _must_die_msg
 
 
 def _self_test_evidence() -> None:
@@ -44,6 +44,14 @@ def _self_test_evidence() -> None:
     _must_die(check_red_at_sha_target_trap, _trap_ok.replace('rm -rf "$TARGET"', "true"))
     _must_die(check_red_at_sha_target_trap, _trap_ok.replace("KERBER_KEEP_RED_TARGET", "X"))
     _must_die(check_red_at_sha_target_trap, _trap_ok.replace('echo "red-at-parent=1"', ""))
+    check_red_at_sha_build()
+    _build_ok = (SCRIPTS / "red-at-sha.sh").read_text(encoding="utf-8")
+    check_red_at_sha_build(_build_ok)
+    _must_die_msg("must not name krb5-forge-tgt's crate", check_red_at_sha_build,
+                  _build_ok + "\ncargo build -p krb5-client --bin krb5-kinit --bin krb5-forge-tgt\n")
+    _must_die_msg("base's own scripts/lib/build-bins.sh", check_red_at_sha_build,
+                  _build_ok.replace("build-bins.at-base.sh", "build-bins.sh"))
+    _must_die_msg("each fallback bin's crate", check_red_at_sha_build, _build_ok.replace("src/bin/$b", "src/bin/x"))
     _rt = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:
         check_no_red_target_trees(_rt)

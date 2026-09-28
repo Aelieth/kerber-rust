@@ -12,8 +12,8 @@ from .docs import (
 )
 from .evidence import (
     check_ci_status_save, check_claim_audit, check_evidence_check_tool, check_no_red_target_trees,
-    check_red_at_sha_inject, check_red_at_sha_overlay_order, check_red_at_sha_target_trap, check_settle_helper,
-    check_unit_evidence_helper,
+    check_red_at_sha_build, check_red_at_sha_inject, check_red_at_sha_overlay_order, check_red_at_sha_target_trap,
+    check_settle_helper, check_unit_evidence_helper,
 )
 from .gates import (
     check_capture_env_only, check_docker_cp_cargo_target, check_gate_common_sourced, check_gate_provenance,
@@ -106,6 +106,7 @@ def main() -> None:
     check_red_at_sha_inject()
     check_red_at_sha_overlay_order()
     check_red_at_sha_target_trap()
+    check_red_at_sha_build()
     if "--checkpoint" in sys.argv[1:]:
         # W1-Z Z3.4: the local evidence tree is gitignored, so only the
         # checkpoint runner (`ci-policy.py --checkpoint`) can see it.

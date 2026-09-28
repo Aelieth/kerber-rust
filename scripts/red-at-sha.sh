@@ -3,18 +3,26 @@
 # command against those binaries. Provenance header is printed first.
 # Usage: scripts/red-at-sha.sh [--overlay-probe] [--no-overlay] [--inject FILE ...] -- <base-sha> <command...>
 #        scripts/red-at-sha.sh [--overlay-probe] <base-sha> <command...>
+#        scripts/red-at-sha.sh --print-build <base-sha> <command...>
 # --no-overlay keeps the base tree's scripts/ and harness/ (a red for the tooling itself).
+# A gate command gets the base SHA's bins: its own scripts/lib/build-bins.sh when that file exists
+# at the base, else the five bins the older gates need. --print-build prints that choice and stops.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 PROBE=0
+PRINT_BUILD=0
 OVERLAY=1
 INJECT=()
 while [ $# -gt 0 ]; do
     case "$1" in
         --overlay-probe)
             PROBE=1
+            shift
+            ;;
+        --print-build)
+            PRINT_BUILD=1
             shift
             ;;
         --no-overlay)
@@ -26,7 +34,7 @@ while [ $# -gt 0 ]; do
             saw=0
             while [ $# -gt 0 ] && [ "$1" != "--" ]; do
                 case "$1" in
-                    --overlay-probe|--no-overlay|--inject)
+                    --overlay-probe|--print-build|--no-overlay|--inject)
                         echo "red-at-sha.sh: $1 is not an inject path" >&2
                         exit 2
                         ;;
@@ -74,6 +82,26 @@ esac
 BASE="$(git rev-parse --verify "$1^{commit}")"
 shift
 CMD=("$@")
+# The five bins of the gates from before build-bins.sh, each from the crate that holds it at the
+# base (krb5-forge-tgt was a krb5-kdc bin until it moved to krb5-tools, and absent before that).
+FIVE_BINS=()
+for b in krb5-kdc krb5-kadmind krb5-kpasswd krb5-kinit krb5-forge-tgt; do
+    path="$(git ls-tree -r --name-only "$BASE" -- crates | grep -m1 -E "^crates/[^/]+/src/bin/$b\.rs$" || true)"
+    [ -n "$path" ] || continue
+    crate="${path#crates/}"
+    FIVE_BINS+=(-p "${crate%%/*}" --bin "$b")
+done
+if git cat-file -e "$BASE:scripts/lib/build-bins.sh" 2>/dev/null; then
+    BUILD_HOW="scripts/lib/build-bins.sh at ${BASE:0:12}"
+else
+    BUILD_HOW="the five bins (no scripts/lib/build-bins.sh at ${BASE:0:12}): cargo build ${FIVE_BINS[*]}"
+fi
+if [ "$PRINT_BUILD" = 1 ]; then
+    echo "==== red-at-sha build ===="
+    echo "base_sha=$BASE"
+    echo "build=$BUILD_HOW"
+    exit 0
+fi
 WT="$KERBER_SCRATCH/red-at-${BASE:0:12}"
 TARGET="$KERBER_SCRATCH/red-target-${BASE:0:12}"
 mkdir -p "$KERBER_SCRATCH"
@@ -194,12 +222,16 @@ if [[ "${CMD[0]}" == scripts/*-gate.sh ]]; then
 fi
 if [ "$NEED_BINS" = 1 ]; then
     BUILD_LOG="$KERBER_SCRATCH/red-at-${BASE:0:12}-build.log"
+    echo "build=$BUILD_HOW"
     (
         cd "$WT"
-        cargo build -p krb5-kdc --bin krb5-kdc \
-            -p krb5-admin --bin krb5-kadmind --bin krb5-kpasswd \
-            -p krb5-client --bin krb5-kinit \
-            --bin krb5-forge-tgt 2>&1 | tee "$BUILD_LOG"
+        if git cat-file -e "$BASE:scripts/lib/build-bins.sh" 2>/dev/null; then
+            # The base's own recipe; the overlay may have replaced the worktree's copy with HEAD's.
+            git show "$BASE:scripts/lib/build-bins.sh" >"$WT/scripts/lib/build-bins.at-base.sh"
+            bash "$WT/scripts/lib/build-bins.at-base.sh" 2>&1 | tee "$BUILD_LOG"
+        else
+            cargo build "${FIVE_BINS[@]}" 2>&1 | tee "$BUILD_LOG"
+        fi
     ) || {
         echo "red-at-sha: cargo build failed at $BASE" >&2
         echo "gate_rc=1"
@@ -207,12 +239,7 @@ if [ "$NEED_BINS" = 1 ]; then
     }
     grep -E 'Compiling|Finished' "$BUILD_LOG" || true
     echo "==== binary sha256 ===="
-    for b in krb5-kdc krb5-kadmind krb5-kpasswd krb5-kinit krb5-forge-tgt; do
-        f="$TARGET/debug/$b"
-        if [ -f "$f" ]; then
-            sha256sum "$f"
-        fi
-    done
+    find "$TARGET/debug" -maxdepth 1 -type f -perm -u+x -print0 | sort -z | xargs -0 -r sha256sum
 else
     echo "skip_binary_build=${CMD[0]}"
 fi

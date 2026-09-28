@@ -475,6 +475,54 @@ def check_ci_status_save() -> None:
         _die("keep_listing_run must not keep empty pull_requests without pr_head")
 
 
+def check_red_at_sha_build(text: str | None = None) -> None:
+    """A gate run builds the base SHA's bins: its own scripts/lib/build-bins.sh when the base has
+    one, else the five older gate bins, each from the crate that holds it at the base. The old
+    fixed list asked for krb5-forge-tgt under krb5-client and failed at every base."""
+    live = text is None
+    if text is None:
+        path = SCRIPTS / "red-at-sha.sh"
+        if not path.is_file():
+            _die("missing scripts/red-at-sha.sh")
+        text = path.read_text(encoding="utf-8")
+    if 'git cat-file -e "$BASE:scripts/lib/build-bins.sh"' not in text or "build-bins.at-base.sh" not in text:
+        _die("red-at-sha.sh must build through the base's own scripts/lib/build-bins.sh when it has one")
+    if "src/bin/$b" not in text:
+        _die("red-at-sha.sh must look up each fallback bin's crate at the base")
+    if re.search(r"--bin krb5-forge-tgt", text):
+        _die("red-at-sha.sh must not name krb5-forge-tgt's crate: it moved (krb5-kdc, then krb5-tools)")
+    if not live:
+        return
+    env = os.environ.copy()
+    env["KERBER_NO_IMAGE"] = "1"
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=False)
+    old = subprocess.run(["git", "rev-parse", "--verify", "672e8e3b^^{commit}"], cwd=ROOT, capture_output=True,
+                         text=True, check=False)
+    scratch = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    env["KERBER_SCRATCH"] = str(scratch)
+    try:
+        def build_line(base: str) -> str:
+            r = subprocess.run(["bash", str(SCRIPTS / "red-at-sha.sh"), "--print-build", base, "scripts/kdc-gate.sh"],
+                               cwd=ROOT, env=env, capture_output=True, text=True, check=False)
+            if r.returncode != 0:
+                _die(f"red-at-sha --print-build {base} failed: {(r.stdout + r.stderr)[-400:]}")
+            return next((line for line in r.stdout.splitlines() if line.startswith("build=")), "")
+
+        if head.returncode == 0:
+            line = build_line(head.stdout.strip())
+            if line != f"build=scripts/lib/build-bins.sh at {head.stdout.strip()[:12]}":
+                _die(f"red-at-sha at HEAD must build through HEAD's build-bins.sh, got {line!r}")
+        if old.returncode != 0:
+            print("ci-policy: SKIP red-at-sha five-bin probe: base 672e8e3b^ not fetched (shallow clone?) "
+                  "— set fetch-depth: 0", file=sys.stderr)
+            return
+        line = build_line(old.stdout.strip())
+        if "no scripts/lib/build-bins.sh" not in line or "-p krb5-kdc --bin krb5-forge-tgt" not in line:
+            _die(f"red-at-sha before build-bins.sh must build the five bins from their crates, got {line!r}")
+    finally:
+        subprocess.run(["rm", "-rf", str(scratch)], check=False)
+
+
 def check_red_at_sha_inject(text: str | None = None) -> None:
     """K12: --inject copies named HEAD files before write-tree."""
     if text is None:
