@@ -12,7 +12,7 @@ logs. Unit tests alone do not promote a stage.
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | **In tree** (`krb5-gss` wrap/unwrap/MIC, SPNEGO framing; MIT GSS is out-of-process) |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | **In tree** (in-memory + dump-v7 at-rest; one-release KDB3 load; MIT `kdb5_util` dump/load; ACL; AP-REQ; gates: `kdc-gate.sh`, `bidirectional-gate.sh`, `kdb-dump-gate.sh`). MIT `kinit` both directions is the database oracle. |
 | 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (1.0: kadmind AUTH_GSSAPI, kpasswd, full-dump kprop both ways). **Era III Tier 1:** KDB traits + registries ([`plugins.md`](plugins.md), not dlopen); named policies (`policy-gate.sh`); iprop serial/ulog (`iprop-gate.sh`). |
-| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree (1.0).** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 9 cargo-fuzz targets; panic-deny lints (`unwrap_used` / `expect_used` / `panic`) on all ten library roots and every binary (W3-S1 closed the gap on `krb5-admin`, `krb5-asn1` and `krb5-log` at zero code cost). AD PAC NDR is golden-gated. Wire **stress/chaos/soak** run over `harness/prod` (`stress-gate`, `chaos-gate`, `soak-gate`; scheduled soak in `soak.yml`). Differential-vs-MIT is `scripts/differential-gate.sh` (same AS/TGS bytes to Rust and MIT 1.22.2 on one dump). Heimdal 7.8 bidirectional is `scripts/heimdal-gate.sh`. Inventory: [`interop-matrix.md`](interop-matrix.md). Live SSPI remains environment-dependent. |
+| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree (1.0).** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 9 cargo-fuzz targets; panic-deny lints (`unwrap_used` / `expect_used` / `panic`) on all eleven library roots (every crate but the test-only `krb5-testkit`) and every binary but the four harness-only `krb5-tools` probes (`ccache-probe`, `diffsend`, `kprop-expired-apreq`, `loadgen`) (W3-S1 closed the gap on `krb5-admin`, `krb5-asn1` and `krb5-log` at zero code cost). AD PAC NDR is golden-gated. Wire **stress/chaos/soak** run over `harness/prod` (`stress-gate`, `chaos-gate`, `soak-gate`; scheduled soak in `soak.yml`). Differential-vs-MIT is `scripts/differential-gate.sh` (same AS/TGS bytes to Rust and MIT 1.22.2 on one dump). Heimdal 7.8 bidirectional is `scripts/heimdal-gate.sh`. Inventory: [`interop-matrix.md`](interop-matrix.md). Live SSPI remains environment-dependent. |
 
 Stage 2 production-gate of a *Rust client* is Stage 3. This repository
 currently gates crypto/ASN.1 on known-answer tests, malformed-input
@@ -30,7 +30,7 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
   Issued PACs include buffers 12/17/18 and store SID/RID. Samba L1/L3
   gates: `samba-pac-verify-gate.sh`, `samba-pac-l2-gate.sh` (vendored kcrypto 6/7/16/19),
   `samba-crossrealm-gate.sh`. Production
-  GSS wrap emits RRC≠0. S4U2Self/Proxy against the Rust KDC:
+  GSS wrap emits RRC=0, as MIT does. S4U2Self/Proxy against the Rust KDC:
   `scripts/s4u-mit-gate.sh` (in CI; evidence PAC copy, classic
   constrained delegation, RBCD). Live Windows
   `kinit`/`kvno` (`ad-windows-gate.sh`) and AD S4U (`ad-s4u-gate.sh`)
@@ -56,7 +56,7 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
   **chaos-gate** (netem + memory + failover-under-load), and **soak-gate**
   (RSS leak check; scheduled longer run). Differential-vs-MIT
   (`differential-gate`) is in CI. Heimdal 7.8 bidirectional (`heimdal-gate`)
-  is in CI. `cargo deny`, per-crate `cargo geiger` (`scripts/geiger.sh`),
+  runs nightly in `peers.yml`. `cargo deny`, per-crate `cargo geiger` (`scripts/geiger.sh`),
   and `cargo vet --locked` are in the CI `audit` job. Timing/replay
   matrix: [`docs/security.md`](security.md). Export: [`NOTICE`](../NOTICE),
   [`docs/export-control.md`](export-control.md). Logs-as-metrics:
@@ -70,7 +70,7 @@ done. Samba L1 decodes the full buffer set of a Rust PAC
 both directions (`samba-crossrealm-gate.sh`). TGS
 verifies a presented PAC and copies LOGON_INFO (in-repo two-realm
 tests; `kvno` is not that copy proof). Rust S4U2Self/Proxy is
-MIT KDC + client gated (C1; `scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
+MIT KDC + client gated (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
 PAC, denies classic constrained delegation unless `s4u_allowed_to` lists
 the target, and denies RBCD unless allowed. `ad-windows-gate` / `ad-s4u-gate` are live Samba, run nightly in `peers.yml`.
 `ad-mit-trust-gate.sh` aliases `samba-realtrust-gate.sh`. **C1** is

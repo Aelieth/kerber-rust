@@ -60,7 +60,7 @@ host/svc.ad.kerber.test`) for the S4U work (A4). Names mirror
 ## Provisioning recipe (target — finalized in `harness/samba/`)
 
 Run once inside the image build/entrypoint (throwaway `<...>` passwords come from
-the gitignored accounts doc / build env):
+the untracked operator file / build env):
 
 ```bash
 samba-tool domain provision \
@@ -112,7 +112,7 @@ SAMBA_AD_PASSWORD=<admin pw> \
   ./scripts/samba-ad-gate.sh
 ```
 
-**A2/A5 payoff (in CI):** `scripts/samba-pac-verify-gate.sh` (L1: Samba
+**A2/A5 payoff (nightly in `peers.yml`):** `scripts/samba-pac-verify-gate.sh` (L1: Samba
 IDL decode of a Rust PAC), `scripts/samba-pac-l2-gate.sh` (L2: Samba
 `kcrypto` recomputes 6/7/16/19; type-16 pre-image is rebuilt in the
 oracle from raw EncTicketPart; a type-6 MAC flip fails with
@@ -123,7 +123,7 @@ two-realm tests). `kvno` is not that copy proof. Ubuntu
 `samba-testsuite` does not ship `samba.tests.krb5.kcrypto`; L2 vendors
 Samba 4.19.5's `kcrypto.py` (AES checksums) plus `python3-cryptography`.
 Missing image is still `exit 2`.
-**Real trust (D2, in CI):** `scripts/samba-realtrust-gate.sh` stands up
+**Real trust (D2, nightly in `peers.yml`):** `scripts/samba-realtrust-gate.sh` stands up
 `samba-ad-dc` (`AD.KERBER.TEST`) and `samba-kerber-dc` (`KERBER.TEST`)
 and runs `samba-tool domain trust create` (not only `trust_local.py`).
 Trust-create failure with images present is `exit 1`. Reverse PAC
@@ -141,7 +141,7 @@ must use a `~/adlab`-style isolated `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME`
 ## Relationship to the captured Windows DC
 
 - **Same realm/accounts by name** → `ad-windows-gate.sh` and
-  `ad-s4u-gate.sh` now run against live Samba in CI. `ad-mit-trust-gate.sh`
+  `ad-s4u-gate.sh` now run against live Samba nightly in `peers.yml`. `ad-mit-trust-gate.sh`
   aliases `samba-realtrust-gate.sh`. Samba vs Windows: domain SID is
   provisioned at image build (not the Windows `891046300…` golden);
   `host/svc.ad.kerber.test` is an SPN on `kbrsvc` (not a computer

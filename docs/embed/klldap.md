@@ -18,7 +18,7 @@ below were read from an older checkout at 0.7.4. Both are edition 2024 with
 | --- | --- | --- |
 | edition | 2024 | 2024 |
 | MSRV (`rust-version`) | 1.95 | 1.95.0 |
-| CI `msrv` job | `cargo test --workspace --locked` on 1.95 | (klldap's own CI) |
+| CI `msrv` job | `cargo build --workspace --all-targets --locked` on 1.95; the tests run on 1.95 in `full-test.yml`'s `msrv-test` | (klldap's own CI) |
 | async | sync (no tokio) | tokio; embed will be threads / `spawn_blocking` |
 | `unsafe` | product `forbid(unsafe_code)` | (klldap crate policy) |
 

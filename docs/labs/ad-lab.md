@@ -81,10 +81,15 @@ The DC has a bidirectional MIT realm trust `KERBER.TEST` (`netdom
 (rootless distrobox cannot bind host `:88`; TESTLABBY stays on
 `aurora.testlabby.local`).
 
-`scripts/ad-mit-trust-gate.sh` (twice): both directions, aes256:
+The retired Windows-DC one-shot `scripts/ad-mit-trust-gate.sh` ran this trust
+twice, both directions, aes256:
 
 - `kbruser@AD.KERBER.TEST` → `host/testhost.kerber.test@KERBER.TEST`
 - `user@KERBER.TEST` → `host/svc.ad.kerber.test@AD.KERBER.TEST`
+
+The script now only runs `scripts/samba-realtrust-gate.sh` (two Samba DCs and
+a real `samba-tool domain trust create`, nightly in `peers.yml`) and does not
+claim a Windows DC.
 
 Windows TDO inbound/outbound AES keys differ by salt. The Rust KDC
 issues `krbtgt/AD.KERBER.TEST` with the inbound key and decrypts

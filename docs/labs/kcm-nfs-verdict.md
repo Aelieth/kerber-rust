@@ -39,8 +39,9 @@ unsupported).
 
 **FILE stays the fleet default.** KCM is a working client type against
 live sssd-kcm (store/list/switch/destroy, restart persist, re-prime),
-but R7's NFS mount cells and the gssproxy/PAC-fat quota row were not
-run. R7 forbids a kit `KCM:` flip without those cells green.
+but the NFS mount cells and the gssproxy/PAC-fat quota row of the test
+matrix above were not run, and a kit `KCM:` flip stays forbidden until those
+cells are green.
 
 Kit license: **none**. Do not drop the `/tmp`↔gssproxy sync loop.
 
