@@ -5,6 +5,12 @@
 #                         [--skip-nextest] [--skip-harness] [--skip-policy]
 #   scripts/checkpoint.sh --plan ...     (print index/gate/label, do not run)
 #   scripts/checkpoint.sh --self-test
+# Exit 1 when a step fails: nextest rc != 0, ci-policy rc != 0, a gate rc other than 0 or 2
+# (2 is a lab that is not up), or the `ci-policy --checkpoint` gate-wall check. Every step still
+# runs; $OUT/CHECKPOINT_RC.txt (stamped) holds checkpoint_rc= and one fail= line per failure.
+# The self-test's fixtures swap the steps through KERBER_CHECKPOINT_NEXTEST (a bash command),
+# KERBER_CHECKPOINT_POLICY (a script run in place of ci-policy.py) and KERBER_CHECKPOINT_GATE_DIR
+# (where the *-gate.sh files are read); 00-head.txt records any that is set.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
@@ -42,6 +48,24 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+GATE_DIR="${KERBER_CHECKPOINT_GATE_DIR:-scripts}"
+FAILS=()
+fail() { FAILS+=("$1"); }
+run_nextest() {
+    if [ -n "${KERBER_CHECKPOINT_NEXTEST:-}" ]; then
+        bash -c "$KERBER_CHECKPOINT_NEXTEST"
+    else
+        KRB5_CONFIG="$ROOT/harness/nextest-krb5.conf" cargo nextest run --workspace --profile ci
+    fi
+}
+run_policy() {
+    if [ -n "${KERBER_CHECKPOINT_POLICY:-}" ]; then
+        bash "$KERBER_CHECKPOINT_POLICY" "$@"
+    else
+        python3 scripts/ci-policy.py "$@"
+    fi
+}
+
 # A gate that is running, not a process that merely names one: the command line
 # must be a shell interpreter with `scripts/<name>-gate.sh` as its script
 # argument (`bash scripts/kdc-gate.sh`, as checkpoint.sh's own `timeout 1200
@@ -55,6 +79,9 @@ GATE_PROCESS_RE='^([^ ]*/)?(ba|da)?sh( -[a-zA-Z]+)* ([^ ]*/)?scripts/[a-z0-9-]+-
 gate_or_cargo_running() {
     pgrep -f "$GATE_PROCESS_RE" >/dev/null || pgrep -x cargo >/dev/null
 }
+
+# The KEEP chains run whatever --gates says; the self-test's fixture directory needs a gate for each.
+KADMIN_KEEP_NAMES="kadmin-rust-gate kadmin-rust-acl-gate kadmin-mit-gate kadmin-both-gate kpasswd-rust-gate kpasswd-mit-gate client-differential-flows-gate client-differential-cli-gate"
 
 if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
     scratch_parent="${KERBER_SCRATCH:-${TMPDIR:-/tmp}}"
@@ -168,6 +195,48 @@ if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
         rm -rf "$t"
         exit 1
     fi
+    # Exit semantics, on fixture steps: every step runs, and a failed one makes the exit 1 and is
+    # named in CHECKPOINT_RC.txt; a gate that exits 2 (its lab is not up) is not a failure.
+    fx="$t/fx"
+    mkdir -p "$fx/gates"
+    for g in $KADMIN_KEEP_NAMES green-gate; do
+        printf '#!/usr/bin/env bash\nexit 0\n' >"$fx/gates/$g.sh"
+    done
+    printf '#!/usr/bin/env bash\nexit 2\n' >"$fx/gates/nolab-gate.sh"
+    printf '#!/usr/bin/env bash\nexit 1\n' >"$fx/gates/red-gate.sh"
+    cat >"$fx/policy.sh" <<'FAKE'
+#!/usr/bin/env bash
+case " $* " in *" --checkpoint "*) exit "${FX_WALL_RC:-0}" ;; esac
+exit "${FX_POLICY_RC:-0}"
+FAKE
+    fx_run() {  # fx_run NAME GATES [VAR=VALUE ...]: a checkpoint on the fixtures; prints its rc
+        local name="$1" gates="$2"
+        shift 2
+        env KERBER_ALLOW_HOST_REALM=1 KERBER_CHECKPOINT_GATE_DIR="$fx/gates" KERBER_CHECKPOINT_POLICY="$fx/policy.sh" \
+            KERBER_CHECKPOINT_NEXTEST="exit 0" KERBER_SCRATCH="$fx/$name-scratch" "$@" \
+            "$0" --out "$fx/$name" --skip-harness --gates "$gates" >"$fx/$name.out" 2>&1
+        echo $?
+    }
+    fx_fail() {
+        echo "checkpoint.sh --self-test: $1" >&2
+        [ -f "$fx/$2.out" ] && cat "$fx/$2.out" >&2
+        rm -rf "$t"
+        exit 1
+    }
+    [ "$(fx_run green green-gate,nolab-gate)" = 0 ] || fx_fail "an all-green run (a gate at rc 2 included) must exit 0" green
+    grep -qx 'checkpoint_rc=0' "$fx/green/CHECKPOINT_RC.txt" || fx_fail "a green run must write checkpoint_rc=0" green
+    grep -qx 'CHECKPOINT_DONE' "$fx/green.out" || fx_fail "a green run must end CHECKPOINT_DONE" green
+    [ "$(fx_run nextest green-gate KERBER_CHECKPOINT_NEXTEST='exit 1')" = 1 ] || fx_fail "nextest rc 1 must exit 1" nextest
+    grep -qx 'fail=nextest nextest_rc=1' "$fx/nextest/CHECKPOINT_RC.txt" || fx_fail "nextest rc 1 must be named" nextest
+    grep -q '^green-gate' "$fx/nextest/timings.tsv" || fx_fail "the gates must still run after a red nextest" nextest
+    [ "$(fx_run gate green-gate,red-gate)" = 1 ] || fx_fail "a gate at rc 1 must exit 1" gate
+    grep -q '^fail=gate [0-9]*-red-gate gate_rc=1$' "$fx/gate/CHECKPOINT_RC.txt" || fx_fail "the red gate must be named" gate
+    grep -qx 'checkpoint_rc=1' "$fx/gate/CHECKPOINT_RC.txt" || fx_fail "a red run must write checkpoint_rc=1" gate
+    [ "$(fx_run policy green-gate FX_POLICY_RC=1)" = 1 ] || fx_fail "ci-policy rc 1 must exit 1" policy
+    grep -qx 'fail=ci-policy rc=1' "$fx/policy/CHECKPOINT_RC.txt" || fx_fail "ci-policy rc 1 must be named" policy
+    [ "$(fx_run wall green-gate FX_WALL_RC=1)" = 1 ] || fx_fail "a failed gate-wall check must exit 1" wall
+    grep -q '^fail=gate-wall ' "$fx/wall/CHECKPOINT_RC.txt" || fx_fail "the gate-wall failure must be named" wall
+    grep -q 'self_test_hook=KERBER_CHECKPOINT_GATE_DIR' "$fx/wall/00-head.txt" || fx_fail "00-head.txt must record the hooks" wall
     rm -rf "$t"
     echo "checkpoint.sh: self-test ok"
     exit 0
@@ -214,6 +283,9 @@ if [ "$PLAN" != 1 ]; then
         echo "host_krb5_default_realm=$(host_default_realm "$HOST_KRB5_CONF")"
         echo "lab_realm_override=$(lab_realm_override "$HOST_KRB5_CONF")"
         echo "nproc=$(nproc)"
+        for hook in KERBER_CHECKPOINT_NEXTEST KERBER_CHECKPOINT_POLICY KERBER_CHECKPOINT_GATE_DIR; do
+            [ -n "${!hook:-}" ] && echo "self_test_hook=$hook"
+        done
     } >"$OUT/00-head.txt"
 
     { printf '%s\n' "$STAMP"; echo "==== progress ===="; } >"$OUT/02-progress.txt"
@@ -236,7 +308,7 @@ rungate() {
     log="$OUT/$1-$2${3:+-$3}.log"
     echo "==== $2 ($3): scripts/$2.sh ====" >"$log"
     s=$(date +%s)
-    timeout 1200 bash "scripts/$2.sh" >>"$log" 2>&1
+    timeout 1200 bash "$GATE_DIR/$2.sh" >>"$log" 2>&1
     rc=$?
     e=$(date +%s)
     wall=$((e - s))
@@ -248,6 +320,10 @@ rungate() {
     echo "wall_s=$wall" >>"$log"
     printf '%s\t%s\t%s\t%s\n' "$2" "${3:-run1}" "$rc" "$wall" >>"$OUT/timings.tsv"
     prog "$1" "$2${3:+-$3}" "gate_rc=$rc wall_s=$wall"
+    case "$rc" in
+        0 | 2) ;;
+        *) fail "gate $1-$2${3:+-$3} gate_rc=$rc" ;;
+    esac
 }
 
 SKIP_ALWAYS="chaos-gate soak-gate stress-gate prod-gate prod-realm-gate nfs-krb5p-gate sssd-renew-gate ad-mit-trust-gate"
@@ -260,22 +336,23 @@ KPASSWD_KEEP="kpasswd-rust-gate kpasswd-mit-gate"
 CLIENT_DIFF_KEEP="client-differential-flows-gate client-differential-cli-gate"
 
 if [ "$SKIP_POLICY" != 1 ]; then
-    { . scripts/lib/provenance.sh; echo "label=python3 scripts/ci-policy.py"; python3 scripts/ci-policy.py; echo "rc=$?"; } \
+    { . scripts/lib/provenance.sh; echo "label=python3 scripts/ci-policy.py"; run_policy; policy_rc=$?; echo "rc=$policy_rc"; } \
         >"$OUT/03-ci-policy.log" 2>&1
-    prog 03 ci-policy "done"
+    prog 03 ci-policy "rc=$policy_rc"
+    [ "$policy_rc" = 0 ] || fail "ci-policy rc=$policy_rc"
 fi
 
 if [ "$SKIP_NEXTEST" != 1 ]; then
     { . scripts/lib/provenance.sh; echo "label=cargo nextest run --workspace --profile ci (isolated)"; } \
         >"$OUT/01-nextest-isolated.log" 2>&1
     s=$(date +%s)
-    KRB5_CONFIG="$ROOT/harness/nextest-krb5.conf" cargo nextest run --workspace --profile ci \
-        >>"$OUT/01-nextest-isolated.log" 2>&1
+    run_nextest >>"$OUT/01-nextest-isolated.log" 2>&1
     rc=$?
     e=$(date +%s)
     echo "nextest_rc=$rc" >>"$OUT/01-nextest-isolated.log"
     echo "wall_s=$((e - s))" >>"$OUT/01-nextest-isolated.log"
     prog 01 nextest-isolated "nextest_rc=$rc wall_s=$((e - s))"
+    [ "$rc" = 0 ] || fail "nextest nextest_rc=$rc"
 fi
 
 if [ "$SKIP_HARNESS" != 1 ]; then
@@ -310,7 +387,7 @@ wanted() {
 }
 
 i=20
-for f in scripts/*-gate.sh; do
+for f in "$GATE_DIR"/*-gate.sh; do
     g=$(basename "$f" .sh)
     wanted "$g" || continue
     i=$((i + 1))
@@ -448,6 +525,7 @@ write_index() {
                 04-gate-wall.log) what="\`ci-policy.py --checkpoint --timings timings.tsv\` (stamped)" ;;
                 07-run-harness.log) what="harness image build/run" ;;
                 timings.tsv) what="gate / run / gate_rc / wall_s (stamped)" ;;
+                CHECKPOINT_RC.txt) what="checkpoint_rc= and one fail= line per failed step (stamped)" ;;
                 *) what="gate log (stamped by provenance.sh)" ;;
             esac
             echo "| \`$n\` | $what |"
@@ -465,13 +543,22 @@ write_index() {
 
 if [ "$SKIP_POLICY" != 1 ]; then
     { printf '%s\n' "$STAMP"; echo "==== ci-policy --checkpoint ===="; } >"$OUT/04-gate-wall.log"
-    if ! python3 scripts/ci-policy.py --checkpoint --timings "$OUT/timings.tsv" \
-        >>"$OUT/04-gate-wall.log" 2>&1; then
-        write_index
-        echo "checkpoint: gate-wall check failed" >&2
+    if ! run_policy --checkpoint --timings "$OUT/timings.tsv" >>"$OUT/04-gate-wall.log" 2>&1; then
+        fail "gate-wall ci-policy --checkpoint failed (04-gate-wall.log)"
         cat "$OUT/04-gate-wall.log" >&2
-        exit 1
     fi
 fi
+checkpoint_rc=0
+[ "${#FAILS[@]}" -eq 0 ] || checkpoint_rc=1
+{
+    printf '%s\n' "$STAMP"
+    echo "checkpoint_rc=$checkpoint_rc"
+    for f in "${FAILS[@]}"; do echo "fail=$f"; done
+} >"$OUT/CHECKPOINT_RC.txt"
 write_index
+if [ "$checkpoint_rc" != 0 ]; then
+    echo "CHECKPOINT_FAILED: ${#FAILS[@]} step(s) failed" >&2
+    printf '  %s\n' "${FAILS[@]}" >&2
+    exit 1
+fi
 echo CHECKPOINT_DONE
