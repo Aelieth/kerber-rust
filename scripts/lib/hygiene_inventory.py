@@ -205,6 +205,13 @@ def diffsend_cases(root: pathlib.Path) -> list[str]:
 
 
 def ledger_rows(root: pathlib.Path) -> tuple[list[str], dict[str, int]]:
+    """Every ledger row as `mit_cite<TAB>check<TAB>verdict<TAB>file`, and the verdict recount.
+
+    A row is keyed by its MIT cite and check cells (ci-policy's `check_ledger_layout` identity),
+    and its file is a separate column, so a row that moves between `docs/mit-parity-ledger.md`
+    and `docs/parity/` reads as moved, not removed. The root's own ci-policy supplies the layout
+    reader (`ledger_sources`); a tree from before that reader reads the single file.
+    """
     sys.path.insert(0, str(root / "scripts"))
     import importlib.util
 
@@ -213,17 +220,65 @@ def ledger_rows(root: pathlib.Path) -> tuple[list[str], dict[str, int]]:
         raise SystemExit("cannot load ci-policy.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    text = (root / "docs" / "mit-parity-ledger.md").read_text(encoding="utf-8")
-    recount = mod.recount_ledger_verdicts(text)
+    if hasattr(mod, "ledger_sources"):
+        sources = [(name, text) for name, text, _key in mod.ledger_sources(root)]
+    else:
+        name = "docs/mit-parity-ledger.md"
+        sources = [(name, (root / name).read_text(encoding="utf-8"))]
+    recount: dict[str, int] = {}
     rows: list[str] = []
-    for line in text.splitlines():
-        if not line.startswith("|") or "MIT file:line" in line or line.startswith("| ---"):
-            continue
-        cols = mod._split_ledger_row(line)
-        if len(cols) < 7 or cols[5] == "verdict":
-            continue
-        rows.append(f"{cols[0]}\t{cols[5]}")
+    for name, text in sources:
+        for key, value in mod.recount_ledger_verdicts(text).items():
+            recount[key] = recount.get(key, 0) + value
+        for line in text.splitlines():
+            if not line.startswith("|") or "MIT file:line" in line or line.startswith("| ---"):
+                continue
+            cols = mod._split_ledger_row(line)
+            if len(cols) < 7 or cols[5] == "verdict":
+                continue
+            rows.append(f"{cols[0]}\t{cols[1]}\t{cols[5]}\t{name}")
     return rows, recount
+
+
+def self_test_ledger_rows() -> int:
+    """Ledger rows keep their key across the split; an old tree reads the single file."""
+    here = pathlib.Path(__file__).resolve().parents[1]
+    table = "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n| --- | --- | --- | --- | --- | --- | --- |\n"
+    row = "| kdc_util.c:1 | x | y | z | w | exact | none |\n"
+    head = "Counts:\n**1** = A1 1 + A2 0 + A3 0.\nexact 1 · stricter-documented 0 · deviation 0 ·\nabsent 0 · deferred 0.\n"
+    n = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        root = pathlib.Path(tmp)
+        (root / "scripts").mkdir()
+        (root / "docs").mkdir()
+        shutil.copy(here / "ci-policy.py", root / "scripts" / "ci-policy.py")
+        (root / "docs" / "mit-parity-ledger.md").write_text(head + "## A1 — tgs\n" + table + row, encoding="utf-8")
+        single, _ = ledger_rows(root)
+        if single != ["kdc_util.c:1\tx\texact\tdocs/mit-parity-ledger.md"]:
+            raise SystemExit(f"single-file ledger rows must carry cite, check, verdict, file: {single}")
+        n += 1
+        parity = root / "docs" / "parity"
+        parity.mkdir()
+        (parity / "README.md").write_text(head, encoding="utf-8")
+        (parity / "a1-tgs.md").write_text("# A1 — tgs\n" + table + row, encoding="utf-8")
+        (root / "docs" / "mit-parity-ledger.md").write_text("Moved to docs/parity/.\n", encoding="utf-8")
+        split, recount = ledger_rows(root)
+        if split != ["kdc_util.c:1\tx\texact\tdocs/parity/a1-tgs.md"] or recount.get("exact") != 1:
+            raise SystemExit(f"split ledger rows must keep the key and name the new file: {split} {recount}")
+        n += 1
+        (root / "scripts" / "ci-policy.py").write_text(
+            "import re\n"
+            "def _split_ledger_row(line):\n    return [p.strip() for p in line.strip().strip('|').split('|')]\n"
+            "def recount_ledger_verdicts(text):\n    return {'exact': text.count('| exact |')}\n",
+            encoding="utf-8",
+        )
+        shutil.rmtree(parity)
+        (root / "docs" / "mit-parity-ledger.md").write_text(head + "## A1 — tgs\n" + table + row, encoding="utf-8")
+        old, _ = ledger_rows(root)
+        if old != ["kdc_util.c:1\tx\texact\tdocs/mit-parity-ledger.md"]:
+            raise SystemExit(f"a tree without ledger_sources must read the single file: {old}")
+        n += 1
+    return n
 
 
 def client_diff_flows(root: pathlib.Path) -> list[str]:
@@ -1590,7 +1645,7 @@ def write_index(out: pathlib.Path, quality: bool, counts: dict[str, object], q: 
         "| `boots.txt` | static docker-run / rust-kdc sites |",
         "| `diffsend.txt` | diffsend case names |",
         "| `client-differential-flows.txt` | client-differential flow names |",
-        "| `ledger-rows.txt` | MIT cite + verdict |",
+        "| `ledger-rows.txt` | MIT cite, check, verdict, file |",
         "| `ledger-recount.txt` | ci-policy recount |",
         "| `ci-policy.txt` | `ci-policy.py` rc + tail |",
         "| `claim-audit.txt` | `claim-audit.py` rc per `working/summary-*.md` |",
@@ -1664,7 +1719,7 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
     flows = client_diff_flows(root)
     write_lines(out / "client-differential-flows.txt", "# flow", flows)
     rows, recount = ledger_rows(root)
-    write_lines(out / "ledger-rows.txt", "# mit_cite<TAB>verdict", rows)
+    write_lines(out / "ledger-rows.txt", "# mit_cite<TAB>check<TAB>verdict<TAB>file", rows)
     write_lines(
         out / "ledger-recount.txt",
         "# key=value",
@@ -1744,7 +1799,7 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
-        n = self_test_cfg_test()
+        n = self_test_cfg_test() + self_test_ledger_rows()
         print(f"hygiene_inventory: self-test ok ({n} cases)")
         return 0
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

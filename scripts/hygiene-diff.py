@@ -464,6 +464,38 @@ def _self_test() -> int:
             raise SystemExit("hygiene-diff --self-test: file move must not fail")
         n += 1
 
+        # Ledger rows keyed by MIT cite + check: a row that changes file is moved (green,
+        # counted), a row that disappears is removed (red), and an old two-column snapshot is
+        # compared by cite alone.
+        led_old, led_new = root / "led-old", root / "led-new"
+        _write_snap(led_old, ["a.sh\techo\tkeep"])
+        _write_snap(led_new, ["a.sh\techo\tkeep"])
+        rows_old = "a.c:1\tcheck a\texact\tdocs/mit-parity-ledger.md\nb.c:2\tcheck b\tdeviation\tdocs/mit-parity-ledger.md\n"
+        (led_old / "ledger-rows.txt").write_text("#\n" + rows_old, encoding="utf-8")
+        (led_new / "ledger-rows.txt").write_text(
+            "#\n" + rows_old.replace("docs/mit-parity-ledger.md", "docs/parity/a1-tgs.md"), encoding="utf-8"
+        )
+        import io
+        from contextlib import redirect_stdout
+
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main_compare(led_old, led_new)
+        if rc != 0 or "ledger rows moved: 2" not in buf.getvalue():
+            raise SystemExit("hygiene-diff --self-test: a ledger row that changes file must read moved")
+        n += 1
+        (led_new / "ledger-rows.txt").write_text(
+            "#\na.c:1\tcheck a\texact\tdocs/parity/a1-tgs.md\n", encoding="utf-8"
+        )
+        _must_fail(led_old, led_new, "a ledger row that disappears")
+        n += 1
+        (led_old / "ledger-rows.txt").write_text("#\na.c:1\texact\nb.c:2\tdeviation\n", encoding="utf-8")
+        (led_new / "ledger-rows.txt").write_text(
+            "#\n" + rows_old.replace("docs/mit-parity-ledger.md", "docs/parity/a1-tgs.md"), encoding="utf-8"
+        )
+        _must_pass(led_old, led_new, "an old two-column ledger snapshot compared by cite")
+        n += 1
+
         none_old, none_new = root / "none-old", root / "none-new"
         _write_snap(none_old, ["a.sh\techo\tkeep"])
         _write_snap(none_new, ["a.sh\techo\tkeep"])
@@ -480,6 +512,22 @@ def _self_test() -> int:
             raise SystemExit("hygiene-diff --self-test: missing gate_rc: not compared")
         n += 1
     return n
+
+
+def load_ledger_rows(path: pathlib.Path) -> dict[tuple[str, str | None], tuple[str, str | None]]:
+    """`ledger-rows.txt` as {(MIT cite, check): (verdict, file)}.
+
+    A snapshot from before the cite + check key has two columns (cite, verdict); its rows key on
+    the cite alone, with no check and no file.
+    """
+    rows: dict[tuple[str, str | None], tuple[str, str | None]] = {}
+    for ln in load_data_lines(path):
+        parts = ln.split("\t")
+        if len(parts) >= 4:
+            rows[(parts[0], parts[1])] = (parts[2], parts[3])
+        elif len(parts) >= 2:
+            rows[(parts[0], None)] = (parts[1], None)
+    return rows
 
 
 def main_compare(
@@ -620,13 +668,25 @@ def _compare(args) -> int:
         if extra:
             info(f"{label}s added: {len(extra)}")
 
-    old_led = {ln.split("\t", 1)[0]: ln.split("\t", 1)[1] for ln in load_data_lines(old / "ledger-rows.txt") if "\t" in ln}
-    new_led = {ln.split("\t", 1)[0]: ln.split("\t", 1)[1] for ln in load_data_lines(new / "ledger-rows.txt") if "\t" in ln}
-    for cite, verdict in old_led.items():
-        if cite not in new_led:
-            fail(f"ledger row removed: {cite}\t{verdict}")
-        elif new_led[cite] != verdict:
-            fail(f"ledger row regraded: {cite} {verdict} -> {new_led[cite]}")
+    old_led = load_ledger_rows(old / "ledger-rows.txt")
+    new_led = load_ledger_rows(new / "ledger-rows.txt")
+    if any(k[1] is None for k in old_led) != any(k[1] is None for k in new_led):
+        info("ledger rows compared by MIT cite alone (one snapshot predates the cite + check key)")
+        old_led = {(k[0], None): (v[0], None) for k, v in old_led.items()}
+        new_led = {(k[0], None): (v[0], None) for k, v in new_led.items()}
+    moved = 0
+    for key, (verdict, where) in old_led.items():
+        label = key[0] if key[1] is None else f"{key[0]}\t{key[1]}"
+        if key not in new_led:
+            fail(f"ledger row removed: {label}\t{verdict}")
+            continue
+        new_verdict, new_where = new_led[key]
+        if new_verdict != verdict:
+            fail(f"ledger row regraded: {label} {verdict} -> {new_verdict}")
+        if where and new_where and where != new_where:
+            moved += 1
+    if moved:
+        info(f"ledger rows moved: {moved}")
     if len(new_led) > len(old_led):
         info(f"ledger rows added: {len(new_led) - len(old_led)}")
 

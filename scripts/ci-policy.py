@@ -3082,10 +3082,10 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 
 
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
-HYGIENE_DIFF_MIN_CASES = 31
+HYGIENE_DIFF_MIN_CASES = 34
 HYGIENE_BODY_DIFF_MIN_CASES = 41
 HYGIENE_FN_DIFF_MIN_CASES = 142
-HYGIENE_INVENTORY_MIN_CASES = 3
+HYGIENE_INVENTORY_MIN_CASES = 6
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 0
@@ -5514,7 +5514,7 @@ jobs:
         "def _self_test_duplicates():\n    pass\n"
         "def _self_test():\n    pass\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (31 cases)')\n"
+        "        print('hygiene-diff: self-test ok (34 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n"
     )
@@ -5537,7 +5537,7 @@ jobs:
         '    """merged: load_duplicates_map load_renames_map _self_test_duplicates"""\n'
         "    return None\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (31 cases)')\n"
+        "        print('hygiene-diff: self-test ok (34 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n",
     )

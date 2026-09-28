@@ -32,7 +32,11 @@ is running — a process that only reads a gate script does not count.
 scripts/hygiene-diff.py <old> <new>` prints a provenance header, then
 fails if a test, cell tag, diffsend case, flow or ledger row
 disappeared, a gate went red, or a quality count rose; shape deltas are
-informational. A swath that renames or de-duplicates tests passes its
+informational. Ledger rows are keyed by MIT cite and check, with the
+file as a separate column, so a row that changes file (the single-file
+ledger split into docs/parity/) is counted as moved and a row that
+disappears fails; a snapshot from before that key is compared by MIT
+cite alone. A swath that renames or de-duplicates tests passes its
 map (`--renames`, `--duplicates`). `--duplicates` and `--renames` are
 keyed `old_binary<TAB>old_name` to `new_binary<TAB>new_name`; a RHS
 that is also a LHS is rejected, and many-to-one needs `merged:` on the
