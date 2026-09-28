@@ -597,12 +597,25 @@ def host_tmp_write_lines(text: str) -> list[int]:
     return hits
 
 
+# Gates that set their own SCRATCH over gate-common.sh's one default (S6.2 deletes them). Advisory
+# while the allow equals the live count.
+GATE_SCRATCH_ASSIGN_ALLOW = 46
+_GATE_SCRATCH_ASSIGN = re.compile(r"(?m)^[ \t]*SCRATCH=")
+
+
+def gate_scratch_assignments(files: dict[str, str]) -> list[str]:
+    """The gates (`*-gate.sh`) that assign SCRATCH themselves."""
+    return sorted(name for name, body in files.items() if name.endswith("-gate.sh") and _GATE_SCRATCH_ASSIGN.search(body))
+
+
 def check_no_host_tmp_writes(
     text: str | None = None,
     name: str = "gate.sh",
     files: dict[str, str] | None = None,
+    scratch_allow: int | None = None,
 ) -> None:
-    """No host `/tmp/` writes (nor bare `mktemp`) in scripts/*.sh or scripts/lib outside KERBER_SCRATCH defaults."""
+    """No host `/tmp/` writes (nor bare `mktemp`) in scripts/*.sh or scripts/lib outside KERBER_SCRATCH defaults,
+    and no gate assigns SCRATCH over gate-common.sh's one default (advisory at GATE_SCRATCH_ASSIGN_ALLOW)."""
     if text is not None:
         hits = host_tmp_write_lines(text)
         if hits:
@@ -621,3 +634,143 @@ def check_no_host_tmp_writes(
         hits = host_tmp_write_lines(body)
         if hits:
             _die(f"{fname} host /tmp write at line {hits[0]}")
+    scratch_allow = GATE_SCRATCH_ASSIGN_ALLOW if scratch_allow is None else scratch_allow
+    own = gate_scratch_assignments(files)
+    if len(own) != scratch_allow:
+        _die(f"{len(own)} gate(s) assign SCRATCH= over gate-common.sh's default, allow {scratch_allow}: "
+             + ", ".join(own[:8]))
+
+
+# Copies beyond the first of each byte-identical column-0 shell function in scripts/*.sh and
+# scripts/lib/*.sh (S6.2 moves them into scripts/lib/). Advisory while the allow equals the live count.
+DUPLICATE_FUNCTIONS_ALLOW = 45
+_SHELL_FUNCTION = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{\s*$")
+
+
+def duplicate_functions(files: dict[str, str]) -> list[list[str]]:
+    """Groups of `name@file:line` whose whole column-0 definition (`name() {` to its `}`) is byte-identical."""
+    seen: dict[str, list[str]] = {}
+    for fname, body in files.items():
+        lines = body.split("\n")
+        i = 0
+        while i < len(lines):
+            m = _SHELL_FUNCTION.match(lines[i])
+            if not m:
+                i += 1
+                continue
+            j = i + 1
+            while j < len(lines) and not re.match(r"^\}\s*$", lines[j]):
+                j += 1
+            seen.setdefault("\n".join(lines[i:j + 1]), []).append(f"{m.group(1)}@{fname}:{i + 1}")
+            i = j + 1
+    return [group for group in seen.values() if len(group) > 1]
+
+
+def _shell_files() -> dict[str, str]:
+    files = {p.name: p.read_text(encoding="utf-8") for p in sorted(SCRIPTS.glob("*.sh"))}
+    for p in sorted((SCRIPTS / "lib").glob("*.sh")):
+        files[f"lib/{p.name}"] = p.read_text(encoding="utf-8")
+    return files
+
+
+def check_no_duplicate_functions(files: dict[str, str] | None = None, allow: int | None = None) -> None:
+    """No shell function is defined twice byte for byte across scripts/*.sh and scripts/lib/*.sh: the copies
+    beyond the first of each group are counted (advisory at DUPLICATE_FUNCTIONS_ALLOW)."""
+    files = _shell_files() if files is None else files
+    allow = DUPLICATE_FUNCTIONS_ALLOW if allow is None else allow
+    groups = duplicate_functions(files)
+    extra = sum(len(g) - 1 for g in groups)
+    if extra != allow:
+        _die(f"{extra} duplicate shell function copies in {len(groups)} group(s), allow {allow}: "
+             + "; ".join(f"{g[0]} x{len(g)}" for g in groups[:8]))
+
+
+# Direct `kadmin` / `kadmin.local` / `krb5-kadmin(-local)` queries (`-q`) in the gates; S6.2 moves them
+# behind the scripts/lib helpers. The rule is the S6.2 classifier's: one logical line (continuations
+# joined, comments dropped), heredoc bodies included, the query's own `-q`. Advisory while the allow
+# equals the live count. One query cannot come from scripts/lib: capaths-transit-gate.sh defines `kad`
+# inside the heredoc it runs in the container.
+KADMIN_Q_DIRECT_ALLOW = 570
+_KADMIN_Q_EXCEPTION = ("capaths-transit-gate.sh", "kad")
+_KADMIN_CMD = re.compile(r"(?:^|[^\w.-])(?:[\w./$-]*/)?(?:krb5-)?kadmin(?:\.local|-local)?(?=\s)")
+
+
+def _strip_word_comment(line: str) -> str:
+    """Drop a `#` comment that starts a word outside quotes (so `${#a[@]}` and `$#` stay)."""
+    quote = None
+    for i, ch in enumerate(line):
+        if quote:
+            if ch == quote and line[i - 1] != "\\":
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "#" and (i == 0 or line[i - 1] in " \t;"):
+            return line[:i]
+    return line
+
+
+def _segment_end(code: str, start: int) -> int:
+    """The first `|`, `;`, `&&` or unmatched `)` after `start` at its nesting level."""
+    quote, depth, i = None, 0, start
+    while i < len(code):
+        ch = code[i]
+        if quote:
+            if ch == quote and code[i - 1] != "\\":
+                quote = None
+        elif ch in "'\"":
+            quote = ch
+        elif ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                return i
+            depth -= 1
+        elif depth == 0 and (ch in "|;" or code.startswith("&&", i)):
+            return i
+        i += 1
+    return len(code)
+
+
+def kadmin_direct_queries(text: str) -> list[tuple[int, str | None]]:
+    """(line, the heredoc function it sits in or None) of every direct kadmin query in a script."""
+    out: list[tuple[int, str | None]] = []
+    heredoc: str | None = None
+    heredoc_fn: str | None = None
+    for ln, raw in enumerate(_join_shell_continuations(text).split("\n"), 1):
+        if heredoc is not None:
+            if re.match(rf"^\s*{re.escape(heredoc)}\s*['\")\s;]*$", raw):
+                heredoc, heredoc_fn = None, None
+                continue
+            m = re.match(r"^\s*([A-Za-z_]\w*)\(\)\s*\{\s*$", raw)
+            if m:
+                heredoc_fn = m.group(1)
+            elif re.match(r"^\s*\}\s*$", raw):
+                heredoc_fn = None
+        code = _strip_word_comment(raw)
+        if code.strip():
+            for m in _KADMIN_CMD.finditer(code):
+                seg = code[m.end():_segment_end(code, m.end())]
+                if re.search(r"(?:^|\s)-q(?:\s|$|\")", seg):
+                    out.append((ln, heredoc_fn if heredoc is not None else None))
+        if heredoc is None:
+            h = re.search(r"<<(-?)\s*['\"]?([A-Za-z_]\w*)['\"]?", code)
+            if h and code[h.start():h.start() + 3] != "<<<":
+                heredoc = h.group(2)
+    return out
+
+
+def check_kadmin_q_via_lib(files: dict[str, str] | None = None, allow: int | None = None) -> None:
+    """No gate runs a kadmin query itself: every `kadmin -q` / `kadmin.local -q` goes through a
+    scripts/lib helper (advisory at KADMIN_Q_DIRECT_ALLOW; the capaths-transit heredoc `kad` excepted)."""
+    if files is None:
+        files = {p.name: p.read_text(encoding="utf-8") for p in sorted(SCRIPTS.glob("*-gate.sh"))}
+    allow = KADMIN_Q_DIRECT_ALLOW if allow is None else allow
+    hits = [
+        f"{name}:{ln}"
+        for name, body in files.items()
+        if name.endswith("-gate.sh")
+        for ln, fn in kadmin_direct_queries(body)
+        if (name, fn) != _KADMIN_Q_EXCEPTION
+    ]
+    if len(hits) != allow:
+        _die(f"{len(hits)} direct kadmin queries in the gates, allow {allow}: " + ", ".join(hits[:8]))

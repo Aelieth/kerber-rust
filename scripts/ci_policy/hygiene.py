@@ -612,3 +612,22 @@ def check_policy_module_attrs(path: pathlib.Path | None = None) -> None:
             f"{path.name} loaded as a module: ledger_sources reads {out['ledger'][:2]}, not the "
             "docs/parity/ split that hygiene_inventory.py's ledger_rows needs"
         )
+
+
+def check_python_compiles(files: dict[str, str] | None = None) -> None:
+    """Every scripts/**/*.py compiles (in memory, so no __pycache__ is written). ruff and pyflakes are
+    on neither the host nor the runner; this is the floor under them."""
+    if files is None:
+        files = {
+            str(path.relative_to(ROOT)): path.read_text(encoding="utf-8")
+            for path in sorted(SCRIPTS.rglob("*.py"))
+            if "__pycache__" not in path.parts
+        }
+    bad = []
+    for name, src in files.items():
+        try:
+            compile(src, name, "exec")
+        except SyntaxError as e:
+            bad.append(f"{name}:{e.lineno}: {e.msg}")
+    if bad:
+        _die(f"{len(bad)} Python file(s) do not compile: " + "; ".join(bad[:8]))

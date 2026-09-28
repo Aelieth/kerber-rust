@@ -7,8 +7,8 @@ import subprocess
 import tempfile
 
 from ..comments import (
-    _check_ambiguous_pin, check_mit_anchor_form, check_mit_anchor_truth, check_no_process_history,
-    mit_anchor_truth_violations,
+    _check_ambiguous_pin, check_mit_anchor_form, check_mit_anchor_truth, check_no_docs_process_tags,
+    check_no_process_history, mit_anchor_truth_violations,
 )
 from ..common import _die, _scratch_root
 from .common import _must_die_msg
@@ -253,3 +253,14 @@ def _self_test_comments() -> None:
             _die("process-history fixtures dropped a tag")
     finally:
         subprocess.run(["rm", "-rf", str(tag_root)], check=False)
+    # S6.1: the docs arm of the process-tag check (lines with a tag, fenced code excluded).
+    dt_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (dt_root / "docs").mkdir()
+        (dt_root / "docs" / "x.md").write_text(
+            "Plain text.\n| a | settled in W1-Z |\n```\nitem 4 in a fence\n```\nSee item 12 and Z7.1.\n", encoding="utf-8"
+        )
+        check_no_docs_process_tags(dt_root, allow=2)
+        _must_die_msg("2 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
+    finally:
+        subprocess.run(["rm", "-rf", str(dt_root)], check=False)

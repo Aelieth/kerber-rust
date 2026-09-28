@@ -600,3 +600,33 @@ def check_no_process_history(
             f"process-history lines {len(bad)} != allow {allow}"
             + (f": {sample}" if sample else "")
         )
+
+
+# Process-history tags in docs/**/*.md prose and table cells (S5 D13; S6.3 sweeps them): the W1 and
+# review-round names, the Z close-out steps, "item N" and the A′ list. The count is lines with a tag.
+# Advisory while the allow equals the live count.
+DOCS_PROCESS_TAG_ALLOW = 58
+_DOCS_PROCESS_TAG = re.compile(r"\bW1-[A-Z]|\bR[0-9]-[A-Z][0-9]+|\bZ[0-9]+(?:\.[0-9]+)?b?\b|\bitem [0-9]+\b|A\u2032-[0-9]")
+
+
+def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
+    """`path:line` of every docs/**/*.md line outside a code fence that carries a process tag."""
+    root = ROOT if root is None else root
+    out = []
+    for path in sorted((root / "docs").rglob("*.md")) if (root / "docs").is_dir() else []:
+        fence = False
+        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+            if line.startswith("```"):
+                fence = not fence
+            elif not fence and _DOCS_PROCESS_TAG.search(line):
+                out.append(f"{path.relative_to(root)}:{i}")
+    return out
+
+
+def check_no_docs_process_tags(root: pathlib.Path | None = None, *, allow: int | None = None) -> None:
+    """The docs arm of check_no_process_history: no process tag in docs/** prose or table cells
+    (advisory at DOCS_PROCESS_TAG_ALLOW)."""
+    allow = DOCS_PROCESS_TAG_ALLOW if allow is None else allow
+    hits = docs_process_tag_lines(root)
+    if len(hits) != allow:
+        _die(f"{len(hits)} docs line(s) with a process tag, allow {allow}: " + ", ".join(hits[:8]))

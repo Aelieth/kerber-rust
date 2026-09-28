@@ -9,7 +9,7 @@ import tempfile
 from ..common import ROOT, _die, _scratch_root
 from ..docs import (
     DOCS_SIZE_LIMIT, check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size,
-    check_testing_doc_budgets, doc_link_violations, gate_doc_violations, gate_placements,
+    check_no_plan_section_names, check_testing_doc_budgets, doc_link_violations, gate_doc_violations, gate_placements,
 )
 from .common import _must_die, _must_die_msg, good_toml
 
@@ -103,3 +103,15 @@ def _self_test_docs() -> None:
         "see ci-budget.toml\n",
         good_toml,
     )
+    # S6.1: no working-plan section name in a public doc; an RFC section is not one.
+    ps_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (ps_root / "docs").mkdir()
+        (ps_root / "docs" / "x.md").write_text("RFC 4120 \u00a75.4.1 applies.\n", encoding="utf-8")
+        check_no_plan_section_names(ps_root)
+        (ps_root / "docs" / "x.md").write_text("Moved to \u00a7 Deferred.\n", encoding="utf-8")
+        _must_die_msg("1 working-plan section name(s)", check_no_plan_section_names, ps_root)
+        (ps_root / "docs" / "x.md").write_text('See \u00a7 "S6 brief".\n', encoding="utf-8")
+        _must_die_msg("1 working-plan section name(s)", check_no_plan_section_names, ps_root)
+    finally:
+        subprocess.run(["rm", "-rf", str(ps_root)], check=False)

@@ -5,8 +5,11 @@ from __future__ import annotations
 import signal
 
 from ..common import ROOT, SCRIPTS
-from ..shell import _join_shell_continuations, check_no_host_tmp_writes, informational_if_starts
-from .common import _must_die
+from ..shell import (
+    _join_shell_continuations, check_kadmin_q_via_lib, check_no_duplicate_functions, check_no_host_tmp_writes,
+    informational_if_starts,
+)
+from .common import _must_die, _must_die_msg
 
 
 def _self_test_shell() -> None:
@@ -279,3 +282,26 @@ def _self_test_shell() -> None:
         'echo "cat <<EOF"\necho ok\ncat <<<hello\n# <<EOF\n',
         "ok-quoted-and-comment-heredoc.sh",
     )
+    # S6.1: a gate's own SCRATCH=, byte-identical shell functions, direct kadmin queries.
+    check_no_host_tmp_writes(files={"a-gate.sh": "echo ok\n", "lib/gate-common.sh": 'SCRATCH="$x"\n'}, scratch_allow=0)
+    _must_die_msg("1 gate(s) assign SCRATCH=", check_no_host_tmp_writes,
+                  files={"a-gate.sh": 'SCRATCH="${KERBER_SCRATCH:-x}"\n', "b-gate.sh": "export KERBER_SCRATCH=y\n"},
+                  scratch_allow=0)
+    dup_f = "f() {\n    echo a\n}\n"
+    check_no_duplicate_functions({"a.sh": dup_f, "b.sh": "f() {\n    echo b\n}\n"}, allow=0)
+    _must_die_msg("1 duplicate shell function copies", check_no_duplicate_functions,
+                  {"a.sh": dup_f, "lib/c.sh": dup_f}, allow=0)
+    check_no_duplicate_functions({"a.sh": dup_f, "lib/c.sh": dup_f}, allow=1)
+    kq_files = {
+        "a-gate.sh": 'docker exec "$NAME" kadmin.local -q "getprinc x"\n',
+        "b-gate.sh": 'docker exec "$NAME" \\\n    kadmin -p a -w b -q "addprinc y"\n',
+        "c-gate.sh": ('docker exec "$NAME" kadmin.local listprincs | grep -q user\n# kadmin.local -q "x"\n'
+                      'kadmin_q "addprinc z"\n'),
+        "d-gate.sh": 'docker exec "$NAME" /tmp/krb5-kadmin-local -q "getprinc x"\n',
+        "lib/e.sh": 'kadmin.local -q "x"\n',
+        "capaths-transit-gate.sh": ('docker exec -i "$NAME" bash <<EOF\nkad() {\n    kadmin.local -r "\\$2" -q "\\$*"\n}\n'
+                                    'EOF\nkadmin.local -q "outside"\n'),
+    }
+    check_kadmin_q_via_lib(kq_files, allow=4)
+    _must_die_msg("5 direct kadmin queries", check_kadmin_q_via_lib, {**kq_files, "f-gate.sh": 'kadmin.local -q "x"\n'},
+                  allow=4)

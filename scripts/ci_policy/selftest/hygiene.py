@@ -11,7 +11,7 @@ from ..common import _scratch_root
 from ..hygiene import (
     _PY_MOVE_KINDS, _blank_rust, _cfg_test_ranges, check_autotests_registered, check_claim_remap_self_test,
     check_hygiene_body_diff_self_test, check_hygiene_diff_self_test, check_hygiene_fn_diff_self_test,
-    check_isolate_test_krb5, check_policy_module_attrs, check_py_move_self_test,
+    check_isolate_test_krb5, check_policy_module_attrs, check_py_move_self_test, check_python_compiles,
 )
 from ..ledger import DIFFSEND_CASES
 from .common import _must_die, _must_die_msg
@@ -324,3 +324,6 @@ def _self_test_hygiene() -> None:
         _must_die_msg("does not load as a module from cwd=/", check_policy_module_attrs, fake)
     finally:
         subprocess.run(["rm", "-rf", str(mod_root)], check=False)
+    # S6.1: every scripts/**/*.py compiles.
+    check_python_compiles({"a.py": "x = 1\n"})
+    _must_die_msg("1 Python file(s) do not compile", check_python_compiles, {"a.py": "x = 1\n", "b.py": "def f(:\n"})

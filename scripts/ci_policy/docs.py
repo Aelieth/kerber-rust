@@ -317,3 +317,20 @@ def check_testing_doc_budgets(
     harness = str(budget["jobs"].get("harness", ""))
     if harness and harness not in testing_text:
         _die("docs/testing.md must quote the harness budget from ci-budget.toml")
+
+
+# A working-plan section named in a tracked doc (S5 D15): `§ Deferred`, or any `§ "…"`. RFC section
+# citations (`RFC 4120 §5.4.1`) are not plan sections.
+_PLAN_SECTION = re.compile(r"§\s*Deferred|§\s*[\"\u201c][^\"\u201d]+[\"\u201d]")
+
+
+def check_no_plan_section_names(root: pathlib.Path | None = None) -> None:
+    """No public doc (doc_files) names a section of the working plan."""
+    root = ROOT if root is None else root
+    hits = []
+    for path in doc_files(root):
+        for i, line in enumerate(path.read_text(encoding="utf-8").split("\n"), 1):
+            if _PLAN_SECTION.search(line):
+                hits.append(f"{path.relative_to(root)}:{i}")
+    if hits:
+        _die(f"{len(hits)} working-plan section name(s) in the public docs: " + ", ".join(hits[:8]))

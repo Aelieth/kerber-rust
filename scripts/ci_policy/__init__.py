@@ -5,11 +5,13 @@ from __future__ import annotations
 import os
 import sys
 
-from .comments import check_mit_anchor_form, check_mit_anchor_truth, check_no_process_history
+from .comments import (
+    check_mit_anchor_form, check_mit_anchor_truth, check_no_docs_process_tags, check_no_process_history,
+)
 from .common import WORKFLOWS, _die, _scratch_root
 from .docs import (
     check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size, check_gate_documented,
-    check_testing_doc_budgets,
+    check_no_plan_section_names, check_testing_doc_budgets,
 )
 from .evidence import (
     check_ci_status_save, check_claim_audit, check_evidence_check_tool, check_no_red_target_trees,
@@ -26,14 +28,16 @@ from .gates import (
 from .hygiene import (
     check_autotests_registered, check_claim_remap_self_test, check_hygiene_body_diff_self_test,
     check_hygiene_diff_self_test, check_hygiene_fn_diff_self_test, check_hygiene_inventory_cfg_test,
-    check_isolate_test_krb5, check_policy_module_attrs, check_py_move_self_test,
+    check_isolate_test_krb5, check_policy_module_attrs, check_py_move_self_test, check_python_compiles,
 )
 from .ledger import (
     check_diffsend_cases, check_ledger_anchors, check_ledger_layout, check_ledger_mit_cites, check_ledger_proof_column,
     check_ledger_tally, check_no_case_whitelists,
 )
 from .selftest import _self_test
-from .shell import check_no_host_tmp_writes, check_no_informational_gates
+from .shell import (
+    check_kadmin_q_via_lib, check_no_duplicate_functions, check_no_host_tmp_writes, check_no_informational_gates,
+)
 from .workflows import (
     Workflow, check_all_timeouts, check_build_profile, check_ci, check_ci_budgets, check_ci_nextest_split,
     check_ci_no_workspace_cargo_test, check_env_read, check_full_run_scheduled, check_gate_membership,
@@ -72,6 +76,8 @@ def main() -> None:
     check_provenance_memo()
     check_docker_cp_cargo_target()
     check_no_host_tmp_writes()
+    check_no_duplicate_functions()
+    check_kadmin_q_via_lib()
     check_isolate_test_krb5()
     check_unit_evidence_helper()
     check_settle_helper()
@@ -92,6 +98,7 @@ def main() -> None:
     check_hygiene_fn_diff_self_test()
     check_py_move_self_test()
     check_claim_remap_self_test()
+    check_python_compiles()
     check_hygiene_inventory_cfg_test()
     check_policy_module_attrs()
     check_autotests_registered()
@@ -122,6 +129,7 @@ def main() -> None:
     check_gate_unit_index()
     check_doc_file_cites()
     check_doc_links()
+    check_no_plan_section_names()
     check_changelog_headings()
     check_docs_size()
     check_gate_documented()
@@ -134,4 +142,5 @@ def main() -> None:
     check_mit_anchor_form()
     check_mit_anchor_truth()
     check_no_process_history()
+    check_no_docs_process_tags()
     print("ci-policy: ok")
