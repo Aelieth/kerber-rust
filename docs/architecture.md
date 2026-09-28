@@ -1,20 +1,21 @@
 # Architecture
 
-kerber-rust is a Cargo workspace of small crates. Dependencies flow
-downward only:
+kerber-rust is a Cargo workspace of small crates. A crate depends only on
+crates in the layers below it:
 
 ```
-examples/consumer, examples/kdc-consumer
-        │
-        ├──────────────► krb5-asn1 ──► krb5-types
-        │                     │
-        ├──────────────► krb5-kdc / krb5-admin / krb5-gss
-        │                      │
-        ├──────────────► krb5-client ──► krb5-protocol ──► krb5-crypto
-        │                      │                └──► krb5-config
-        │                      │                │
-        └──────────────► krb5-crypto            └──► krb5-asn1
+tools     krb5-tools (gate tools)       examples/consumer, examples/kdc-consumer
+daemons   krb5-admin
+roles     krb5-kdc     krb5-client     krb5-gss     (krb5-testkit: test helpers)
+wire      krb5-protocol
+codecs    krb5-asn1    krb5-crypto     krb5-config
+base      krb5-types   krb5-log
 ```
+
+`krb5-admin` uses `krb5-kdc` and `krb5-gss`; `krb5-kdc`, `krb5-client` and
+`krb5-gss` sit on `krb5-protocol`, which uses the three codec crates;
+`krb5-asn1` uses `krb5-types` and `krb5-log`, `krb5-crypto` uses `krb5-log`,
+and `krb5-config` uses `krb5-types`.
 
 ## Crate responsibilities
 
@@ -34,19 +35,16 @@ it does not catch codec errors.
 **`krb5-asn1`** is the DER boundary: `encode` / `decode` return
 `Result`, never panic, and emit log events for success and failure.
 
-**`krb5-protocol`** runs AS and TGS over UDP with TCP fallback, plus
-AP-REQ build/verify.
-
-**`krb5-client`** is `kinit`, MIT FILE ccache v4, and keytab v2.
-
-**`krb5-protocol`** runs AS/TGS/AP/SAFE/PRIV/CRED, plus MIT keytab and
-FILE ccache (so the KDC does not depend on the client crate). UDP uses
+**`krb5-protocol`** runs AS/TGS/AP/SAFE/PRIV/CRED (AS and TGS over UDP with
+TCP fallback), plus MIT keytab and FILE ccache, so the KDC does not depend
+on the client crate. UDP uses
 `send_to`/`recv_from` and ignores off-path source addresses. Reply
 compare (`diff`) masks KRB-ERROR times/`e_text` and nulls AS/TGS
 volatiles so `scripts/differential-gate.sh` can fail red on an
 un-whitelisted MIT divergence.
 
-**`krb5-client`** is `kinit` (password from env/stdin, never argv).
+**`krb5-client`** is `kinit` and the user CLIs over MIT FILE ccache v4 and
+keytab v2 (the password comes from env or stdin, never argv).
 
 **`krb5-kdc`** issues AS/TGS from an in-memory store. The at-rest file
 is MIT dump version 7 (stash still holds the master key; SID/RID in
@@ -85,8 +83,8 @@ version 7 (`sendauth` `kprop5_01`, KRB-SAFE size, KRB-PRIV chunks).
 MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
 Rust `krb5-kprop` → MIT `kpropd` then MIT `kinit` is
 `scripts/kprop-reverse-gate.sh` (additive to the in-process kprop tests).
-C1 multi-host MIT client vs Rust primary/replica is
-`scripts/prod-realm-gate.sh`. C2 wire stress/chaos/soak over that realm
+A multi-host MIT client against a Rust primary and replica is
+`scripts/prod-realm-gate.sh`. Wire stress, chaos and soak over that realm
 are `scripts/stress-gate.sh`, `scripts/chaos-gate.sh`, and
 `scripts/soak-gate.sh`.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
@@ -107,6 +105,12 @@ also takes `database_name` / `key_stash_file` / `master_key_type` /
 `db_library` / listen ports from that file. `kinit` and TGS referral chase call `discover_kdc` (`KRB5_CONFIG`
 then `/etc/krb5.conf`); argv remains the fallback.
 
+**`krb5-tools`** holds the harness-only gate tools (`diffsend`, `loadgen`,
+`krb5-forge-tgt`, …; `publish = false`). It is not a product surface.
+
+**`krb5-testkit`** holds shared test helpers (`publish = false`, a
+dev-dependency only).
+
 ## Security invariants
 
 - Key usage 0 is rejected (RFC 3961 §2).
@@ -117,48 +121,18 @@ then `/etc/krb5.conf`); argv remains the fallback.
 - No `unsafe` in this workspace (`forbid(unsafe_code)`).
 - No C FFI.
 
-## Comments and rustdoc
+## Code conventions
 
-Four rules. They do not raise comment density. A sentence a reader can
-derive from the next two lines is deleted. The budget moves from process
-tags into invariants that are otherwise unstated.
-
-**R1.** A MIT anchor is one line, in one form:
-``MIT `<symbol>` (`<path>:<a>-<b>`): <what the port guarantees>``.
-The symbol names the MIT definition whose extent contains the cited
-range: a C function, a `struct` / `union` / `enum` or typedef, a table
-or global, a macro or macro-generated item, an error-table entry, or an
-ASN.1 type (its `NAME ::=` comment block). Never a Rust symbol, and
-never a callee or macro standing in for the function. One anchor per
-line, opening its own sentence. A single source line is written
-`<a>-<a>`. A path whose basename names more than one MIT file carries
-enough directories to name one. A mention without a range (``MIT `X` ``,
-or a MIT file named in prose) is not an anchor and is legal. The
-guarantee is what this port does; where the port deviates, the anchor
-line says so ("MIT does X; this port does Y") and the deviation has a
-parity-ledger row under `docs/parity/` (verdict `deviation` or
-`stricter-documented`) or a `docs/security.md` row.
-
-**R2.** State the invariant, not the steps: an ordering, a fail-closed
-rule, a key-material rule, an attacker-relevant subtlety, or a deliberate
-deviation. Do not narrate the statements below the comment.
-
-**R3.** No process history in source: no section or item tags (`R12`,
-`A′-3`, `W0e`, `W1-Z`, `Round 2`, `B3`, `Y0`, `Z6.3`, `S2.3`, `item 15`,
-`Z8 leftover`, a lone `B2` / `F4`), no commit hashes (`parent` plus a
-hash, a backticked hash, "fails at" a hash), no red-at-parent notes
-(`parent-red`, `Compiles at`, "the parent did X"), and no `working/`
-paths. A deferred parity gap gets a ledger row and at most a one-line
-pointer.
-
-**R4.** `# Errors` names variants or conditions. It does not use a family
-word ("crypto", "DER") and it does not open with "Returns". A function
-that cannot fail says "None:" and why. `# Panics` appears only where a
-panic exists.
-
-`check_mit_anchor_form`, `check_mit_anchor_truth` and
-`check_no_process_history` in `scripts/ci-policy.py` keep R1 and R3 true
-(see [testing.md](testing.md)).
+- Errors are typed enums per crate (most derive `thiserror`). There is no
+  `anyhow` and no crate-wide `Result<T>` alias, so every signature names
+  its error type.
+- Logs carry explicit fields (see [Observability](#observability)) rather
+  than `#[instrument]` spans.
+- The comment and rustdoc rules (R1 to R4) are in
+  [CONTRIBUTING.md § Code comments](../CONTRIBUTING.md#code-comments);
+  `check_mit_anchor_form`, `check_mit_anchor_truth` and
+  `check_no_process_history` in `scripts/ci-policy.py` keep R1 and R3 true
+  (see [testing.md](testing.md)).
 
 ## Observability
 

@@ -73,11 +73,9 @@ request-shape column (no canonical built-request form).
 
 `check_mit_anchor_form` (`scripts/ci-policy.py`) reads every comment
 line under `crates/*/src` and `crates/*/tests`: `//`, `///`, `//!`, and
-each line of a `/* */`, `/** */` or `/*! */` block. A MIT anchor is one
-line, ``MIT `<symbol>` (`<path>:<a>-<b>`): <guarantee>``, where the
-symbol is a C function, or the type (`struct x`, `union x`, `enum x`),
-macro, table or error-table entry of a non-function anchor, and the path ends in `.c`, `.h`, `.hin`,
-`.et`, `.x` or `.y`. A single source line is written `<a>-<a>`. A
+each line of a `/* */`, `/** */` or `/*! */` block. A MIT anchor has the
+R1 form ([CONTRIBUTING.md § Code comments](../CONTRIBUTING.md#code-comments)),
+with a path ending in `.c`, `.h`, `.hin`, `.et`, `.x` or `.y`. A
 mention, ``MIT `X` `` with no range, is legal, and so is a rangeless
 file mention (``(`gic_pwd.c`)``, a module header naming the MIT file it
 mirrors). Red: a `path.ext:N` or `path.ext:N-M` anywhere outside an
