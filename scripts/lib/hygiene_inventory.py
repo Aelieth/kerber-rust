@@ -192,15 +192,35 @@ def inventory_gates(root: pathlib.Path) -> tuple[list[str], list[str], list[str]
     return cells, sleeps, builds, boots
 
 
-def diffsend_cases(root: pathlib.Path) -> list[str]:
+def _load_policy(root: pathlib.Path, name: str):
+    """The root's scripts/ci-policy.py as a module.
+
+    A ci-policy.py that is a shim imports its ci_policy/ package by name, so any ci_policy modules
+    cached from another root are dropped first: each root reads its own package, and a shim copied
+    without its package fails to load instead of borrowing one."""
+    for key in [k for k in sys.modules if k == "ci_policy" or k.startswith("ci_policy.")]:
+        del sys.modules[key]
     sys.path.insert(0, str(root / "scripts"))
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location("ci_policy", root / "scripts" / "ci-policy.py")
+    spec = importlib.util.spec_from_file_location(name, root / "scripts" / "ci-policy.py")
     if spec is None or spec.loader is None:
         raise SystemExit("cannot load ci-policy.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    return mod
+
+
+def copy_policy(src: pathlib.Path, dst: pathlib.Path) -> None:
+    """Copy ci-policy.py, and its ci_policy/ package when there is one, from the `src` scripts/
+    directory to the `dst` one: a shim is not loadable without its package."""
+    shutil.copy(src / "ci-policy.py", dst / "ci-policy.py")
+    if (src / "ci_policy").is_dir():
+        shutil.copytree(src / "ci_policy", dst / "ci_policy", ignore=shutil.ignore_patterns("__pycache__"))
+
+
+def diffsend_cases(root: pathlib.Path) -> list[str]:
+    mod = _load_policy(root, "ci_policy")
     return sorted(mod.DIFFSEND_CASES)
 
 
@@ -210,18 +230,18 @@ def ledger_rows(root: pathlib.Path) -> tuple[list[str], dict[str, int]]:
     A row is keyed by its MIT cite and check cells (ci-policy's `check_ledger_layout` identity),
     and its file is a separate column, so a row that moves between `docs/mit-parity-ledger.md`
     and `docs/parity/` reads as moved, not removed. The root's own ci-policy supplies the layout
-    reader (`ledger_sources`); a tree from before that reader reads the single file.
+    reader (`ledger_sources`); a tree from before that reader reads the single file. A tree with
+    `docs/parity/` whose ci-policy has no `ledger_sources` fails: read as one file, the split
+    ledger would count no rows.
     """
-    sys.path.insert(0, str(root / "scripts"))
-    import importlib.util
-
-    spec = importlib.util.spec_from_file_location("ci_policy_led", root / "scripts" / "ci-policy.py")
-    if spec is None or spec.loader is None:
-        raise SystemExit("cannot load ci-policy.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
+    mod = _load_policy(root, "ci_policy_led")
     if hasattr(mod, "ledger_sources"):
         sources = [(name, text) for name, text, _key in mod.ledger_sources(root)]
+    elif (root / "docs" / "parity").is_dir():
+        raise SystemExit(
+            f"{root / 'scripts' / 'ci-policy.py'} has no ledger_sources but {root / 'docs' / 'parity'} exists: "
+            "the split ledger cannot be read"
+        )
     else:
         name = "docs/mit-parity-ledger.md"
         sources = [(name, (root / name).read_text(encoding="utf-8"))]
@@ -251,7 +271,7 @@ def self_test_ledger_rows() -> int:
         root = pathlib.Path(tmp)
         (root / "scripts").mkdir()
         (root / "docs").mkdir()
-        shutil.copy(here / "ci-policy.py", root / "scripts" / "ci-policy.py")
+        copy_policy(here, root / "scripts")
         (root / "docs" / "mit-parity-ledger.md").write_text(head + "## A1 — tgs\n" + table + row, encoding="utf-8")
         single, _ = ledger_rows(root)
         if single != ["kdc_util.c:1\tx\texact\tdocs/mit-parity-ledger.md"]:
@@ -277,6 +297,60 @@ def self_test_ledger_rows() -> int:
         old, _ = ledger_rows(root)
         if old != ["kdc_util.c:1\tx\texact\tdocs/mit-parity-ledger.md"]:
             raise SystemExit(f"a tree without ledger_sources must read the single file: {old}")
+        n += 1
+    return n
+
+
+def self_test_policy_consumers() -> int:
+    """A shim copied without its ci_policy/ package fails to load and copy_policy copies both; a
+    split ledger read through a ci-policy without ledger_sources fails closed."""
+    table = "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n| --- | --- | --- | --- | --- | --- | --- |\n"
+    row = "| kdc_util.c:1 | x | y | z | w | exact | none |\n"
+    fake_reader = (
+        "def _split_ledger_row(line):\n    return [p.strip() for p in line.strip().strip('|').split('|')]\n"
+        "def recount_ledger_verdicts(text):\n    return {'exact': text.count('| exact |')}\n"
+    )
+    n = 0
+    with tempfile.TemporaryDirectory() as tmp:
+        base = pathlib.Path(tmp)
+        src = base / "src"
+        (src / "ci_policy").mkdir(parents=True)
+        (src / "ci_policy" / "__init__.py").write_text(fake_reader, encoding="utf-8")
+        (src / "ci-policy.py").write_text(
+            "import pathlib\nimport sys\n\nsys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))\n"
+            "from ci_policy import _split_ledger_row, recount_ledger_verdicts\n",
+            encoding="utf-8",
+        )
+        root = base / "root"
+        (root / "scripts").mkdir(parents=True)
+        (root / "docs").mkdir()
+        (root / "docs" / "mit-parity-ledger.md").write_text("## A1 — tgs\n" + table + row, encoding="utf-8")
+        shutil.copy(src / "ci-policy.py", root / "scripts" / "ci-policy.py")
+        try:
+            ledger_rows(root)
+        except ModuleNotFoundError as e:
+            if "ci_policy" not in str(e):
+                raise SystemExit(f"a shim copied without its package must fail on ci_policy: {e}") from e
+        else:
+            raise SystemExit("a shim copied without its ci_policy/ package must not load")
+        copy_policy(src, root / "scripts")
+        rows, recount = ledger_rows(root)
+        if rows != ["kdc_util.c:1\tx\texact\tdocs/mit-parity-ledger.md"] or recount.get("exact") != 1:
+            raise SystemExit(f"copy_policy must copy the shim and its package: {rows} {recount}")
+        n += 1
+        split = base / "split"
+        (split / "scripts").mkdir(parents=True)
+        (split / "docs" / "parity").mkdir(parents=True)
+        (split / "docs" / "parity" / "a1-tgs.md").write_text("# A1 — tgs\n" + table + row, encoding="utf-8")
+        (split / "docs" / "mit-parity-ledger.md").write_text("Moved to docs/parity/.\n", encoding="utf-8")
+        (split / "scripts" / "ci-policy.py").write_text(fake_reader, encoding="utf-8")
+        try:
+            ledger_rows(split)
+        except SystemExit as e:
+            if "no ledger_sources" not in str(e):
+                raise SystemExit(f"a split ledger without ledger_sources must name the missing reader: {e}") from e
+        else:
+            raise SystemExit("a split ledger read through a ci-policy without ledger_sources must fail closed")
         n += 1
     return n
 
@@ -1799,7 +1873,7 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
-        n = self_test_cfg_test() + self_test_ledger_rows()
+        n = self_test_cfg_test() + self_test_ledger_rows() + self_test_policy_consumers()
         print(f"hygiene_inventory: self-test ok ({n} cases)")
         return 0
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

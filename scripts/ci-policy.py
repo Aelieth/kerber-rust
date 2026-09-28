@@ -20,6 +20,7 @@ import ast
 import importlib.util
 import inspect
 import io
+import json
 import os
 import pathlib
 import re
@@ -3319,7 +3320,7 @@ _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 36
 HYGIENE_BODY_DIFF_MIN_CASES = 41
 HYGIENE_FN_DIFF_MIN_CASES = 142
-HYGIENE_INVENTORY_MIN_CASES = 6
+HYGIENE_INVENTORY_MIN_CASES = 8
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 0
@@ -3589,6 +3590,67 @@ def check_hygiene_inventory_cfg_test() -> None:
     if not path.is_file():
         _die("missing scripts/lib/hygiene_inventory.py")
     _run_script_self_test(path, "hygiene_inventory.py", HYGIENE_INVENTORY_MIN_CASES)
+
+
+# The two tools that load scripts/ci-policy.py as a module and read its attributes.
+_POLICY_MODULE_CONSUMERS = (
+    ("scripts/kdb-dump-gate.sh", ("ROOT", "_dump_key_hexes", "check_golden_dump_unique_keys")),
+    (
+        "scripts/lib/hygiene_inventory.py",
+        ("DIFFSEND_CASES", "ledger_sources", "recount_ledger_verdicts", "_split_ledger_row"),
+    ),
+)
+_POLICY_MODULE_PROBE = """import importlib.util
+import json
+import sys
+
+spec = importlib.util.spec_from_file_location("ci_policy", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+out = {"missing": [n for n in json.loads(sys.argv[2]) if not hasattr(mod, n)]}
+if not out["missing"]:
+    out["diffsend"] = sorted(mod.DIFFSEND_CASES)
+    out["ledger"] = [name for name, _text, _key in mod.ledger_sources(mod.ROOT)]
+print(json.dumps(out))
+"""
+
+
+def check_policy_module_attrs(path: pathlib.Path | None = None) -> None:
+    """scripts/ci-policy.py, loaded as a module the way kdb-dump-gate.sh:36-40 loads it (`python3 -`
+    from cwd=/, spec_from_file_location, no PYTHONPATH), has every name its two consumers read; its
+    DIFFSEND_CASES is this policy's list (what hygiene_inventory's diffsend_cases reads) and its
+    ledger_sources reads the docs/parity/ split, so a stub with the right names does not pass."""
+    path = SCRIPTS / "ci-policy.py" if path is None else path
+    names = [n for _consumer, group in _POLICY_MODULE_CONSUMERS for n in group]
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    r = subprocess.run(
+        [sys.executable, "-", str(path), json.dumps(names)],
+        input=_POLICY_MODULE_PROBE,
+        cwd="/",
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if r.returncode != 0:
+        tail = (r.stderr or r.stdout).strip().splitlines()[-1:]
+        _die(f"{path.name} does not load as a module from cwd=/: {tail}")
+    out = json.loads(r.stdout.strip().splitlines()[-1])
+    for consumer, group in _POLICY_MODULE_CONSUMERS:
+        missing = [n for n in group if n in out["missing"]]
+        if missing:
+            _die(f"{path.name} loaded as a module lacks {', '.join(missing)}, which {consumer} reads")
+    if out["diffsend"] != sorted(DIFFSEND_CASES):
+        _die(
+            f"{path.name} loaded as a module holds {len(out['diffsend'])} DIFFSEND_CASES, this policy "
+            f"{len(DIFFSEND_CASES)}: hygiene_inventory.py's diffsend_cases would read the wrong list"
+        )
+    if not out["ledger"] or not all(n.startswith("docs/parity/") for n in out["ledger"]):
+        _die(
+            f"{path.name} loaded as a module: ledger_sources reads {out['ledger'][:2]}, not the "
+            "docs/parity/ split that hygiene_inventory.py's ledger_rows needs"
+        )
 
 
 def check_gate_common_sourced(
@@ -6718,6 +6780,38 @@ jobs:
     finally:
         subprocess.run(["rm", "-rf", str(tag_root)], check=False)
 
+    # S6-14: the module-attribute consumers, each missing name and each shape red.
+    check_policy_module_attrs()
+    mod_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        full = {
+            "ROOT": "import pathlib\nROOT = pathlib.Path('/nonexistent')\n",
+            "_dump_key_hexes": "def _dump_key_hexes(line):\n    return None\n",
+            "check_golden_dump_unique_keys": "def check_golden_dump_unique_keys():\n    pass\n",
+            "DIFFSEND_CASES": f"DIFFSEND_CASES = frozenset({sorted(DIFFSEND_CASES)!r})\n",
+            "ledger_sources": "def ledger_sources(root=None):\n    return [('docs/parity/README.md', '', None)]\n",
+            "recount_ledger_verdicts": "def recount_ledger_verdicts(text):\n    return {}\n",
+            "_split_ledger_row": "def _split_ledger_row(line):\n    return []\n",
+        }
+        fake = mod_root / "ci-policy.py"
+        fake.write_text("".join(full.values()), encoding="utf-8")
+        check_policy_module_attrs(fake)
+        for gone, consumer in (("_dump_key_hexes", "kdb-dump-gate.sh"), ("ledger_sources", "hygiene_inventory.py")):
+            fake.write_text("".join(v for k, v in full.items() if k != gone), encoding="utf-8")
+            _must_die_msg(f"lacks {gone}, which scripts/", check_policy_module_attrs, fake)
+            _must_die_msg(consumer, check_policy_module_attrs, fake)
+        fake.write_text("".join(full.values()).replace(full["DIFFSEND_CASES"], "DIFFSEND_CASES = frozenset({'x'})\n"),
+                        encoding="utf-8")
+        _must_die_msg("holds 1 DIFFSEND_CASES", check_policy_module_attrs, fake)
+        fake.write_text(
+            "".join(full.values()).replace("docs/parity/README.md", "docs/mit-parity-ledger.md"), encoding="utf-8"
+        )
+        _must_die_msg("not the docs/parity/ split", check_policy_module_attrs, fake)
+        fake.write_text("raise SystemExit('no import')\n", encoding="utf-8")
+        _must_die_msg("does not load as a module from cwd=/", check_policy_module_attrs, fake)
+    finally:
+        subprocess.run(["rm", "-rf", str(mod_root)], check=False)
+
 
 # W1-K M2b: after the differential oracle's whitelist mechanism is deleted, no
 # case may be excused by name. Ban the mechanism identifiers from the diffsend
@@ -7383,6 +7477,7 @@ def main() -> None:
     check_hygiene_body_diff_self_test()
     check_hygiene_fn_diff_self_test()
     check_hygiene_inventory_cfg_test()
+    check_policy_module_attrs()
     check_autotests_registered()
     check_kcm_stop_before_run()
     check_prod_gate_tcpdump_cleanup()
