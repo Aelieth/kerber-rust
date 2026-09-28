@@ -3322,6 +3322,7 @@ HYGIENE_BODY_DIFF_MIN_CASES = 41
 HYGIENE_FN_DIFF_MIN_CASES = 142
 HYGIENE_INVENTORY_MIN_CASES = 8
 PY_MOVE_CHECK_MIN_CASES = 18
+CLAIM_REMAP_MIN_CASES = 7
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 0
@@ -3588,6 +3589,21 @@ def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
 _PY_MOVE_KINDS = ("missing", "extra", "defined-twice", "changed", "unresolved", "future", "stray", "shim", "cycles")
 
 
+def _main_self_test_calls(text: str) -> int:
+    """Calls of `_self_test()` inside `main`: the --self-test branch plus one before a normal run."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return 0
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "main":
+            return sum(
+                1 for x in ast.walk(node)
+                if isinstance(x, ast.Call) and isinstance(x.func, ast.Name) and x.func.id == "_self_test"
+            )
+    return 0
+
+
 def check_py_move_self_test(text: str | None = None) -> None:
     """py-move-check.py --self-test is executed; a gutted `_self_test` is red; every finding kind
     has a fixture, and a compare run self-tests first."""
@@ -3604,11 +3620,29 @@ def check_py_move_self_test(text: str | None = None) -> None:
         _die("py-move-check.py _self_test must not be gutted to return None")
     if "def _self_test" not in text or "def main" not in text:
         _die("py-move-check.py must define _self_test and main")
-    if text.count("_self_test()") < 2 or "redirect_stdout(sys.stderr)" not in text:
+    if _main_self_test_calls(text) < 2 or "redirect_stdout(sys.stderr)" not in text:
         _die("py-move-check.py must run _self_test (to stderr) before a compare run")
     for kind in _PY_MOVE_KINDS:
         if f'"{kind}"),' not in text:
             _die(f"py-move-check.py must self-test the {kind} finding")
+
+
+def check_claim_remap_self_test(text: str | None = None) -> None:
+    """claim-remap.py --self-test is executed with its floor; a gutted `_self_test` is red, and a
+    remap run self-tests first."""
+    path = SCRIPTS / "claim-remap.py"
+    if text is None:
+        if not path.is_file():
+            _die("missing scripts/claim-remap.py")
+        text = path.read_text(encoding="utf-8")
+        _run_script_self_test(path, "claim-remap.py", CLAIM_REMAP_MIN_CASES)
+        _gutted_self_test_must_not_count(path, text, "claim-remap.py", CLAIM_REMAP_MIN_CASES)
+    elif (_self_test_n_from_text(text) or 0) < CLAIM_REMAP_MIN_CASES:
+        _die(f"claim-remap.py must print self-test ok (N cases) with N>={CLAIM_REMAP_MIN_CASES}")
+    if _self_test_fn_is_gutted(text):
+        _die("claim-remap.py _self_test must not be gutted to return None")
+    if "def _self_test" not in text or _main_self_test_calls(text) < 2:
+        _die("claim-remap.py must run _self_test before a remap run")
 
 
 def check_hygiene_inventory_cfg_test() -> None:
@@ -4515,6 +4549,36 @@ def check_claim_audit() -> None:
         no_fixture = "- **Message tooling alone:** `value=1` at `scripts/fx-msg-policy.py:3`.\n"
         if not any("tooling claim names no fixture line" in r[2] for r in rows(no_fixture)):
             _die(f"claim-audit must fail a tooling claim with no fixture call in its window: {rows(no_fixture)}")
+        # S6.1: the enclosing def comes from the AST, so a column-0 YAML key inside a fixture string
+        # does not end it (the line scan stopped at `on:` and missed the _must_die below).
+        yaml_policy = (
+            "def check(text):\n    if 'value=1' not in text:\n        _die('value=1 missing')\n\n\n"
+            "def _self_test():\n"
+            '    snippet = """name: ci\non:\n  push:\n"""\n'
+            "    if snippet.count('on:') != 1:\n"
+            "        raise SystemExit('value=1 fixture lost its on: key')\n"
+            "    pad_a = 1\n    pad_b = 2\n    pad_c = 3\n"
+            "    _must_die(check, snippet)\n"
+        )
+        (root / "scripts" / "fx-yaml-policy.py").write_text(yaml_policy)
+        yaml_bullet = "- **YAML fixture:** `value=1` at `scripts/fx-yaml-policy.py:12`.\n"
+        if any(r[1] != "ok" for r in rows(yaml_bullet)):
+            _die(f"claim-audit must read the enclosing def whole past a column-0 YAML key: {rows(yaml_bullet)}")
+        (root / "scripts" / "fx-yaml-policy.py").write_text(
+            yaml_policy.replace("    _must_die(check, snippet)\n", "    pad_d = 4\n")
+        )
+        mod.script_lines.cache_clear()
+        mod.def_spans.cache_clear()
+        if not any("tooling claim names no fixture line" in r[2] for r in rows(yaml_bullet)):
+            _die(f"claim-audit must fail the YAML-fixture claim once its def has no fixture: {rows(yaml_bullet)}")
+        # A module of a package under scripts/ is a tooling reference like any scripts/*.py.
+        (root / "scripts" / "fx_pkg" / "sub").mkdir(parents=True)
+        (root / "scripts" / "fx_pkg" / "sub" / "mod.py").write_text(
+            "def check():\n    if bad:\n        _die('value=1 wrong')\n\n\ndef _self_test():\n    _must_die(check, 'value=1')\n"
+        )
+        pkg_bullet = "- **Package module:** `value=1` at `scripts/fx_pkg/sub/mod.py:3` / `:7`.\n"
+        if any(r[1] != "ok" for r in rows(pkg_bullet)):
+            _die(f"claim-audit refused a tooling claim in a package module: {rows(pkg_bullet)}")
     finally:
         subprocess.run(["rm", "-rf", str(root)], check=False)
 
@@ -6005,6 +6069,18 @@ jobs:
     _must_die_msg("before a compare run", check_py_move_self_test,
                   py_move_ok.replace("with contextlib.redirect_stdout(sys.stderr):\n        _self_test()\n", "pass\n"))
     _must_die_msg("the shim finding", check_py_move_self_test, py_move_ok.replace('"shim"),', '"other"),'))
+    remap_ok = (
+        "def _self_test():\n    n = 7\n    return n\n"
+        "def main(argv):\n    if argv == ['--self-test']:\n"
+        "        print(f'claim-remap: self-test ok ({_self_test()} cases)')\n        return 0\n"
+        "    _self_test()\n    return main_remap(argv)\n# self-test ok (7 cases)\n"
+    )
+    check_claim_remap_self_test(remap_ok)
+    _must_die_msg("self-test ok (N cases)", check_claim_remap_self_test, remap_ok.replace("(7 cases)", "(6 cases)"))
+    _must_die_msg("must not be gutted", check_claim_remap_self_test,
+                  remap_ok.replace("    n = 7\n    return n\n", "    return None\n"))
+    _must_die_msg("before a remap run", check_claim_remap_self_test,
+                  remap_ok.replace("    _self_test()\n    return main_remap", "    return main_remap"))
     with tempfile.TemporaryDirectory() as tmp:
         demo = pathlib.Path(tmp) / "crates" / "demo"
         (demo / "tests" / "common").mkdir(parents=True)
@@ -7521,6 +7597,7 @@ def main() -> None:
     check_hygiene_body_diff_self_test()
     check_hygiene_fn_diff_self_test()
     check_py_move_self_test()
+    check_claim_remap_self_test()
     check_hygiene_inventory_cfg_test()
     check_policy_module_attrs()
     check_autotests_registered()

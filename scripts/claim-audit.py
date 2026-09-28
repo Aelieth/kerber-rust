@@ -18,7 +18,7 @@ from container variables around the line — `"$NAME"`, `NAME_MIT`,
 line is both; a cell in a Samba, Heimdal or AD gate carries the oracle
 leg) or an oracle settle artefact (its `cmd=` runs a MIT,
 Samba or Heimdal tool — a Rust-side gate run is not a leg), a tooling
-bullet (references into `scripts/*.py`) names a fixture line (`_must_die(`,
+bullet (references into `scripts/**/*.py`, ci-policy's package included) names a fixture line (`_must_die(`,
 `_must_die_msg(`, `must_fail(`, `_must_pass(`, `assert`, `raise AssertionError`)
 or a line inside a check that runs the tool, and every artefact exists, is stamped (`head_sha=`
 and `tree_sha=`) and carries a quoted value.
@@ -36,6 +36,7 @@ usage: claim-audit.py [--evidence-dir DIR] [--stamp] [--at SHA] SUMMARY...
 from __future__ import annotations
 
 import argparse
+import ast
 import functools
 import pathlib
 import re
@@ -220,8 +221,33 @@ def asserting_text(
     return "\n".join([window, *called])
 
 
+@functools.lru_cache(maxsize=None)
+def def_spans(lines: tuple[str, ...]) -> tuple[tuple[int, int], ...] | None:
+    """(first line, last line) of every top-level def, decorators included, from the AST; None
+    when the text does not parse."""
+    try:
+        tree = ast.parse("\n".join(lines))
+    except SyntaxError:
+        return None
+    spans = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            first = min([node.lineno] + [d.lineno for d in node.decorator_list])
+            spans.append((first, node.end_lineno or node.lineno))
+    return tuple(spans)
+
+
 def enclosing_def(lines: tuple[str, ...], lineno: int) -> str:
-    """Body of the top-level `def` that contains `lineno` (1-based); empty when none."""
+    """Body of the top-level `def` that contains `lineno` (1-based); empty when none.
+
+    Read from the AST, so a column-0 line inside a string (a YAML key in a fixture) does not end
+    the def; a text that does not parse falls back to the line scan."""
+    spans = def_spans(lines)
+    if spans is not None:
+        for first, last in spans:
+            if first <= lineno <= last:
+                return "\n".join(lines[first - 1:last])
+        return ""
     start = next((i for i in range(lineno - 1, -1, -1) if lines[i].startswith("def ")), None)
     if start is None:
         return ""
