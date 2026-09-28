@@ -19,10 +19,7 @@ _ASSERT_CMDS = frozenset(
 )
 _TEST_CMDS = frozenset({"[", "[[", "test", "grep", "egrep", "fgrep", "cmp"})
 _NOISE_CMDS = frozenset({"echo", "printf", "true", "cat", "tee", ":"})
-_REQUIRE_DIE = re.compile(r"KERBER_REQUIRE_")
-_LOG_ERROR = re.compile(r"""log\s+\S+\s+(?:error|"error")""")
 _LOG_SKIP = re.compile(r"""log\s+\S+\s+(?:skip|"skip")""")
-_OR_TRUE = re.compile(r"\|\|\s*true\s*$")
 _PIPE = re.compile(r"(?<!\|)\|(?!\|)")
 _REDIR = re.compile(r"(?:\d*)(?:>>?|<)\s*(\S+)")
 _TEE_FILE = re.compile(r"\btee(?:\s+-a)?\s+(\S+)")
@@ -78,10 +75,6 @@ def _join_shell_continuations(text: str) -> str:
                 continue
         i += 1
     return "\n".join(lines)
-
-
-def _strip_quoted(s: str) -> str:
-    return _QUOTED.sub(" ", s)
 
 
 def _split_semi(line: str) -> list[str]:
@@ -419,6 +412,8 @@ def informational_if_starts(text: str) -> list[int]:
 
 
 def check_no_informational_gates() -> None:
+    """No scripts/*-gate.sh or scripts/lib/*.sh has an if / case arm that only prints (echo, printf,
+    a skip log): an arm that decides a gate's outcome fails or does work (informational_if_starts)."""
     paths = list(SCRIPTS.glob("*-gate.sh")) + list((SCRIPTS / "lib").glob("*.sh"))
     for path in sorted(paths):
         hits = informational_if_starts(path.read_text())

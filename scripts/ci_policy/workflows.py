@@ -144,6 +144,11 @@ def _scripts_in_jobs(jobs: dict[str, Job], script: str) -> list[Job]:
 
 
 def check_ci(wf: Workflow) -> None:
+    """ci.yml runs per push and is not scheduled; only SOFT_PER_PUSH_JOBS are continue-on-error, and all
+    exist; every TIMEOUT_JOBS job has timeout-minutes; each FAIL_RED_PER_PUSH gate runs on a job that is
+    not continue-on-error, and no NIGHTLY_BLOCKING gate runs per push; the MIT image is cached
+    (actions/cache keyed on hashFiles of harness/Dockerfile, docker save / load); nextest --release
+    stays in full-test.yml."""
     if wf.path.name != "ci.yml":
         return
     if not wf.per_push:
@@ -188,6 +193,8 @@ def check_ci(wf: Workflow) -> None:
 
 
 def check_nightly(workflows: list[Workflow]) -> None:
+    """Each NIGHTLY_BLOCKING gate runs on a scheduled workflow, in a job that is not continue-on-error
+    and has timeout-minutes."""
     scheduled = [w for w in workflows if w.scheduled]
     for script in NIGHTLY_BLOCKING:
         hits: list[tuple[Workflow, Job]] = []
@@ -213,6 +220,8 @@ def _fold_continuations(text: str) -> str:
 
 
 def check_nextest_profile(workflows: list[Workflow]) -> None:
+    """Every `cargo nextest run` in a workflow passes `--profile ci`, and a workflow that names nextest
+    runs it."""
     for wf in workflows:
         folded = _fold_continuations(wf.text)
         cmds = _NEXTEST_RUN.findall(folded)
@@ -224,6 +233,8 @@ def check_nextest_profile(workflows: list[Workflow]) -> None:
 
 
 def check_ci_nextest_split(wf: Workflow) -> None:
+    """ci.yml's test job builds with `cargo nextest --no-run` first, writes the nextest junit.xml and
+    uploads it as an artifact."""
     if wf.path.name != "ci.yml":
         return
     job = wf.jobs.get("test")
@@ -238,6 +249,8 @@ def check_ci_nextest_split(wf: Workflow) -> None:
 
 
 def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
+    """ci.yml runs no `cargo test --workspace` / `--all` but the doctest pass (`--doc`): the unit
+    suite runs once, under nextest."""
     if wf.path.name != "ci.yml":
         return
     folded = _fold_continuations(wf.text)
@@ -249,6 +262,7 @@ def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
 
 
 def check_all_timeouts(workflows: list[Workflow]) -> None:
+    """Every workflow has a job, and every job has timeout-minutes."""
     for wf in workflows:
         if not wf.jobs:
             _die(f"{wf.path.name} has no jobs")
@@ -258,6 +272,8 @@ def check_all_timeouts(workflows: list[Workflow]) -> None:
 
 
 def check_full_run_scheduled(workflows: list[Workflow]) -> None:
+    """Each FULL_RUN_SCHEDULED command runs on a scheduled workflow, in a job that is not
+    continue-on-error."""
     scheduled = [w for w in workflows if w.scheduled]
     for needle in FULL_RUN_SCHEDULED:
         hits: list[tuple[Workflow, Job]] = []
@@ -309,6 +325,7 @@ def check_gate_membership(
 
 
 def check_working_gitignored() -> None:
+    """.gitignore ignores working/ (the local evidence, never committed) and __pycache__/."""
     if not GITIGNORE.is_file():
         _die("missing .gitignore")
     text = GITIGNORE.read_text()
@@ -319,6 +336,7 @@ def check_working_gitignored() -> None:
 
 
 def check_nextest() -> None:
+    """.config/nextest.toml sets a slow-timeout with terminate-after, so a hung test ends the run."""
     if not NEXTEST_TOML.is_file():
         _die("missing .config/nextest.toml")
     text = NEXTEST_TOML.read_text()
