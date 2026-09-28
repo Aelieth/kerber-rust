@@ -59,14 +59,14 @@ See [docs/architecture.md](docs/architecture.md) and
 
 ## What's proven
 
-Every claim below is backed by a live gate in CI; [docs/gates.md](docs/gates.md)
-names each gate's job and lane, [docs/interop-matrix.md](docs/interop-matrix.md)
-the oracles, and [docs/stages.md](docs/stages.md) the stage map.
+Every claim below is backed by a live gate with a Rust leg, per push or nightly; [docs/gates.md](docs/gates.md)
+names each gate's job and lane (the `kadmin-gate` / `kpasswd-gate` wrappers stand for the legs CI runs),
+[docs/interop-matrix.md](docs/interop-matrix.md) the oracles, and [docs/stages.md](docs/stages.md) the stage map.
 
 | External oracle | Proves | Gates (examples) |
 | --- | --- | --- |
 | **MIT Kerberos 1.22.2** *(primary)* | AS/TGS · GSS wrap/unwrap (RFC 4121; wrap sends RRC=0, as MIT) · S4U2Self / S4U2Proxy / RBCD · PKINIT · SPAKE (`pa_type` 151 / group 2) · RFC 8009 SHA-2 · cross-realm · kadmin (add/get/list/mod/chrand/rename/del) · kpasswd (464) · kprop **both directions** · iprop · dump/load (v7) · byte-for-byte differential · stress / chaos / soak | `client-gate`, `kdc-gate`, `gss-gate`, `s4u-mit-gate`, `pkinit-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `spake-gate`, `sha2-gate`, `cross-realm-gate`, `kadmin-gate`, `kpasswd-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`, `kdb-dump-gate`, `differential-gate`, `store-gate`, `policy-gate`, `history-mit-gate`, `stress`/`chaos`/`soak-gate` |
-| **Samba 4 AD DC** *(live)* | AD PAC (NDR golden) · S4U2Self / S4U2Proxy by classic constrained delegation · live `AD.KERBER.TEST`↔`KERBER.TEST` trust via real `samba-tool domain trust create` | `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate` |
+| **Samba 4 AD DC** *(live)* | AD PAC (NDR golden) · live `AD.KERBER.TEST`↔`KERBER.TEST` trust via real `samba-tool domain trust create` | `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate` |
 | **Heimdal 7.8** *(live)* | Both directions (Heimdal client ↔ Rust KDC; Rust client ↔ Heimdal KDC), with AES256-SHA1 configured | `heimdal-gate` |
 
 The KDC's live at-rest file is MIT dump **version 7** (the stash holds the
@@ -105,7 +105,7 @@ make safety               # fmt --check, clippy -D warnings, nextest (CI profile
 ./scripts/client-gate.sh  # Rust kinit + MIT klist of the ccache
 ./scripts/stop-harness.sh
 ./scripts/run-rust-kdc.sh # the Rust KDC for KERBER.TEST on 127.0.0.1:88 (else :8888)
-./scripts/kdc-gate.sh     # MIT 1.22.2 kinit + kvno against its own Rust KDC container
+./scripts/kdc-gate.sh     # MIT 1.22.2 kinit + kvno vs the Rust krb5-kdc in the gate's MIT container
 ```
 
 `make safety` needs `cargo-nextest`; the harness needs Docker (Compose
