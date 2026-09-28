@@ -495,6 +495,30 @@ def _self_test() -> int:
         )
         _must_pass(led_old, led_new, "an old two-column ledger snapshot compared by cite")
         n += 1
+        # The regrade check compares the grade (the first verdict word): a reworded qualifier is
+        # listed, even one that names another grade inside the parenthetical; a new grade fails.
+        (led_old / "ledger-rows.txt").write_text(
+            "#\na.c:1\tcheck a\tdeviation (R2-D1: cache first)\tdocs/parity/a1-tgs.md\n", encoding="utf-8"
+        )
+        (led_new / "ledger-rows.txt").write_text(
+            "#\na.c:1\tcheck a\tdeviation (the cache answers first; not exact)\tdocs/parity/a1-tgs.md\n",
+            encoding="utf-8",
+        )
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main_compare(led_old, led_new)
+        if (
+            rc != 0
+            or "ledger verdict qualifiers reworded: 1" not in buf.getvalue()
+            or "qualifier reworded: a.c:1\tcheck a" not in buf.getvalue()
+        ):
+            raise SystemExit("hygiene-diff --self-test: a reworded verdict qualifier must pass and be listed")
+        n += 1
+        (led_new / "ledger-rows.txt").write_text(
+            "#\na.c:1\tcheck a\texact (the cache answers first)\tdocs/parity/a1-tgs.md\n", encoding="utf-8"
+        )
+        _must_fail(led_old, led_new, "a ledger row whose grade changes")
+        n += 1
 
         none_old, none_new = root / "none-old", root / "none-new"
         _write_snap(none_old, ["a.sh\techo\tkeep"])
@@ -512,6 +536,20 @@ def _self_test() -> int:
             raise SystemExit("hygiene-diff --self-test: missing gate_rc: not compared")
         n += 1
     return n
+
+
+_LEDGER_GRADES = ("exact", "stricter-documented", "deviation", "absent", "deferred")
+
+
+def ledger_grade(verdict: str) -> str:
+    """A verdict cell's grade: its first verdict word, the ledger tally's counting rule
+    (`exact (unit)` is `exact`); the parenthetical is a qualifier. A cell with no known grade
+    word is its own grade."""
+    v = verdict.strip()
+    for grade in _LEDGER_GRADES:
+        if v == grade or v.startswith(grade + " ") or v.startswith(grade + "("):
+            return grade
+    return v
 
 
 def load_ledger_rows(path: pathlib.Path) -> dict[tuple[str, str | None], tuple[str, str | None]]:
@@ -675,18 +713,25 @@ def _compare(args) -> int:
         old_led = {(k[0], None): (v[0], None) for k, v in old_led.items()}
         new_led = {(k[0], None): (v[0], None) for k, v in new_led.items()}
     moved = 0
+    requalified: list[str] = []
     for key, (verdict, where) in old_led.items():
         label = key[0] if key[1] is None else f"{key[0]}\t{key[1]}"
         if key not in new_led:
             fail(f"ledger row removed: {label}\t{verdict}")
             continue
         new_verdict, new_where = new_led[key]
-        if new_verdict != verdict:
+        if ledger_grade(new_verdict) != ledger_grade(verdict):
             fail(f"ledger row regraded: {label} {verdict} -> {new_verdict}")
+        elif new_verdict != verdict:
+            requalified.append(label)
         if where and new_where and where != new_where:
             moved += 1
     if moved:
         info(f"ledger rows moved: {moved}")
+    if requalified:
+        info(f"ledger verdict qualifiers reworded: {len(requalified)}")
+        for label in requalified:
+            info(f"  qualifier reworded: {label}")
     if len(new_led) > len(old_led):
         info(f"ledger rows added: {len(new_led) - len(old_led)}")
 

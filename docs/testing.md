@@ -36,7 +36,10 @@ informational. Ledger rows are keyed by MIT cite and check, with the
 file as a separate column, so a row that changes file (the single-file
 ledger split into `docs/parity/`) is counted as moved and a row that
 disappears fails; a snapshot from before that key is compared by MIT
-cite alone. A swath that renames or de-duplicates tests passes its
+cite alone. A regrade is a change of grade, the verdict cell's first
+word (the tally's counting rule), and fails; a change confined to the
+parenthetical qualifier is listed as `ledger verdict qualifiers
+reworded`. A swath that renames or de-duplicates tests passes its
 map (`--renames`, `--duplicates`). `--duplicates` and `--renames` are
 keyed `old_binary<TAB>old_name` to `new_binary<TAB>new_name`; a RHS
 that is also a LHS is rejected, and many-to-one needs `merged:` on the
