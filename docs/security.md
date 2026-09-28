@@ -51,25 +51,15 @@ the UTF-8 transited row below is mixed on absurd inputs.
 | Deviation | MIT | Rust | Why |
 | --- | --- | --- | --- |
 | Default AS/TGS etype list | `init_ctx.c:59-66` `default_enctype_list` = 18, 17, 20, 19, 16, 23, 25, 26 (AES + DES3 + RC4 + Camellia) | `EncryptionType::preferred()` = 18, 17, 20, 19; DES3/RC4/Camellia are `is_weak` and only advertised when named in `default_tkt_enctypes` / `permitted_enctypes` | **STRICTER** than MIT (does not offer deprecated/weak etypes unless the profile asks) |
-| Transited field-count cap | Checker has no comma cap; add path clamps rebuilt encoding at 499 bytes so a 300-hop path cannot be *built* | More than 256 commas (raw comma bytes, including escaped `\,`) is `TooManyFields` (POLICY on the non-add path) | **STRICTER** than MIT |
-| Transited hop-emission cap | No hop cap; `process_intermediates` streams callbacks at O(1) memory | More than 4096 emitted hops is `TooManyFields` (`MAX_TRANSIT_HOPS`) | **STRICTER** than MIT |
 | Transited component bounds | Raw field ≤ 511 unescaped bytes; joined ≤ 512 (`chk_trans.c` `MAXLEN`) | Same (511 raw / 512 joined); over is `FieldTooLong` out of band | MIT-exact |
 | Invalid UTF-8 in transited | Byte-exact `memcmp` | `from_utf8_lossy` inflates invalid bytes 3× against the 512 bound (STRICTER) and collapses distinct invalid sequences to one U+FFFD string, so equal-length compare can succeed where MIT errors (laxer; absurd inputs). Byte-exact matching is general-pass | Mixed; fail-closed on honest UTF-8 |
-| Append escaping | MIT `add_to_transited` does not escape `\` or `,` in the new realm | Escapes both | Stricter-correct than MIT's encoder |
-| Add-path bounds | `MAX_REALM_LN` 500: raw ≥ 500, joined ≥ 499, rebuilt ≥ 500 (`strlcat` clamp; whole transited ≤ 499). Trailing empty field of `EDU,` is dropped (`EDU,`+`X` → `EDU,X`). Internal `,,` truncates MIT's list | Same raw/joined/total bounds. Encode stays uncompressed (total bound is stricter by the compression delta). Trailing-comma drop. Internal `,,` is preserved | MIT-exact bounds; `,,` preservation is stricter-correct |
-| Encode-side X.500 RDN compression | MIT `add_to_transited` may emit compressed RDN form | Encode stays uncompressed (`from_realms`) | Deferred; decode still expands MIT compressed contents |
 | Hierarchical intermediates on ≥512-byte realm | MIT `walk_rtree.c` copies every tween unbounded | Empty permitted set (nothing allowed). `find_alternate_tgs` uses the same huge-realm empty guard on MIT's walk list | **STRICTER** on absurd `crealm`/`srealm` |
-| TGS realm octets that are not UTF-8 | MIT uses the bytes | `GENERIC` `non-ascii realm` | fail-closed (was the literal `KERBER.TEST`) |
-| Unknown TGS KDCOptions bit | The TGS acts only on the options it recognises (RENEWABLE / RENEWABLE-OK / POSTDATE / FORWARDED / PROXY / ENC-TKT-IN-SKEY) and ignores unknown or reserved KDCOption bits (`do_tgs_req.c`) | `gather_tgs_req_info` refuses any bit outside the honoured set with `BADOPTION` (`unsupported_bits`) | **STRICTER** than MIT (a TGT-authenticated request carrying an unknown option is anomalous; fail closed). The AS twin is now exact: `validate_as_request` tests `AS_INVALID_OPTIONS` only, and `do_as_req.c:718` then handles REQUEST_ANONYMOUS |
 | kadmind reserved TL types | `kadm5_modify_principal` / create refuse `tl_data_type < 256` with `KADM5_BAD_TL_TYPE` before `kdb_put_entry` (`svr_principal.c:327-333,581-588`) | same refuse before any store write (`kadm5/dispatch.rs`) | exact |
-| kadmind connection caps | net-server caps concurrent connections at 45 with LRU eviction (`net-server.c:85,1571`) and streams each RPC over a fixed 1 MiB buffer; established connections carry `SO_KEEPALIVE`, no short read timeout | Same cap + LRU eviction (kadmind reuses the KDC `ConnRegistry`); additionally bounds the accumulated RPC record at 1 MiB (`MAX_KADM5_RECORD`, `read_record`) and sets a 5 s write timeout; no short read timeout, so a paused interactive session is not dropped | **STRICTER** than MIT (an explicit total-record bound so a pre-auth fragment chain cannot exhaust memory, and a write timeout so a slow reader cannot pin a worker) |
 | TGS authenticator checksum retry | `kdc_process_tgs_req` verifies the PA-TGS-REQ authenticator checksum over the raw request body (packet field 4) and, when that fails, retries over its own canonical re-encoding of the KDC-REQ-BODY; with no raw packet the check is skipped (`kdc_util.c:246-255`) | `kdc_util.rs` `process_tgs_header` verifies once, over the wire body only; a mismatch is 31 `PROCESS_TGS` | **STRICTER** than MIT (a client whose body is not canonical DER is refused; MIT clients emit canonical DER, so the retry is never reached by an MIT or Rust client; ledger row `kdc_util.c:112-140; :248; :691-697`) |
 | TGS cross-TGS header PAC (`check_normal_tgs_pac`) | Client-info mismatch is 13 `HEADER_PAC` unless `is_crossrealm` and the requested server is a cross TGS and `verify_deleg_pac` succeeds (`tgs_policy.c:616-620`) | Same client-info match; `verify_deleg_pac` (`tgs_policy.c:366-421`) accepts a delegation PAC (CLIENT_INFO with realm, authtime, DELEGATION_INFO, last transited = impersonator) | exact; live accept path is Samba |
-| Acceptor ticket addresses (`rd_req_dec.c:536-540`) | `krb5_address_search`: NULL list matches; a lone NetBIOS entry is treated as empty; otherwise type+octets (`addr_srch.c:55-59`) | `verify_ap_req` (`ap_req.rs`) compares the whole `caddr` list to `ApVerifyParams.addresses` when both are present | **STRICTER** on the acceptor (B) path: a ticket whose `caddr` is a proper subset of the acceptor list, or a lone-NetBIOS ticket, is 38 where MIT would accept. Product callers (`verify_ap_req`, GSS accept, AP builders) pass `ApVerifyParams.addresses: None`, so the list-equality path is not taken unless a caller supplies addresses. The KDC TGS sender bind uses `address_search` (A′-2 item 10). Do not weaken KDC search to list-equality. |
 | Acceptor ticket kvno + etype (`rd_req_dec.c:325-347`; `kt_file.c:355-377`) | `try_one_princ` → `krb5_kt_get_entry(..., tkt_kvno, tkt_etype)` only when the server name is fully specified (`is_matching` false); kvno 0 = any; a keytab entry whose vno equals the low 8 bits of the requested kvno is a pre-1.14 truncation match; `decrypt_try_server` iterates similar-enctype keys for a wildcard/host-based name and uses kvno only for the error | `verify_inner` skips a key whose etype ≠ ticket etype; when `key_kvnos` is set, skip a nonzero label that is not the ticket kvno (0 is wildcard); a skipped-only outcome under a pinned name equal to the ticket sname is `BADKEYVER` (44) with `keytab_fetch_error`'s text, nothing at all `NOKEY` (45). kpasswd (`kadmin/changepw`, fully specified) and `verify_init_creds` pass keytab kvnos; product GSS accept (`accept_sec_context`) leaves `key_kvnos` unset (iteration), the `_kt` path pins only when `expected_server` is `Some` | exact on the pin/iterate split and the 44/45 codes (settled live against MIT `gss-server` with a fully-qualified vs host-based acceptor name — `client-differential-gate.sh` Z1.3); **STRICTER** in one corner: the pin is an exact kvno equality with no `kvno & 0xff` low-byte fallback, so a ticket labelled kvno > 255 whose keytab entry kept only the truncated vno is refused where MIT would decrypt (unreachable — kadmind never issues kvno > 255) |
 | Acceptor transited re-check (`rd_req_dec.c:590-610`) | Unset `TRANSITED_POLICY_CHECKED` + non-empty transited → `krb5_check_transited_list` / `krb5_walk_realm_tree`; empty or T flag or anonymous crealm skips | `check_ap_req_transited`: same skip rules; hop must sit on `[capaths]` or `rtree_hier_realms`; else 43 `ILL_CR_TKT` | exact |
 | Acceptor `sname_match` (`sname_match.c:30-57`) | NULL matching accepts any; NT-SRV-HST + 2 comps: realm/service + hostname unless empty or `ignore_acceptor_hostname` | `sname_match` + `[libdefaults] ignore_acceptor_hostname` (default false) | exact |
-| CAMMAC KDC verifier keyed checksum (`cammac.c:168`) | `krb5_c_verify_checksum` with no `krb5_c_is_keyed_cksum` gate; an unkeyed type (RSA-MD5 7, SHA1 14, …) or cksumtype 0 can validate | `cammac_check_kdcver` uses `verify_checksum_keyed` (`ops.rs`); unkeyed / type 0 is skipped (indicators not extracted) | **STRICTER** than MIT: never replicate an unkeyed KDC-verifier MAC. A bad keyed MAC is still skipped like MIT (`valid = FALSE`) |
 | CAMMAC absent kvno + present enctype (`cammac.c:152-162`, `kdb_default.c:41-68`) | `ver->kvno == current_kvno` (highest kvno) uses `tgt_key` and compares `ver->enctype` against a zeroed `tgtkey` (so a present enctype on the current-kvno path fails); kvno 0 that is not current takes the historical decrypt path | Absent/0 kvno uses `tgt_key`; a present `enctype` is compared to the historical etype (None on the current path) and fails closed | **STRICTER** on absent-kvno + present-enctype (Rust never decrypts kvno 0 as a historical key). Current-kvno + present-enctype fails on both (MIT via zeroed `tgtkey`) |
 | FAST TGS reply envelope (`decode_kdc.c:64-67`; `fast.c:557-558, 580-593`) | A TGS-REP with no PA-FX-FAST under an armored request is `KRB5_ERR_FAST_REQUIRED`, then ignored (`decode_kdc.c:64-67`); inside a present envelope the client copies `existing_key` when `strengthen_key` is NULL | `tgs.rs` `tgs_fast_reply_key`: a *missing* envelope is accepted like MIT (`29a5ec8`; Heimdal 7.8 leaves implicit TGS FAST unwrapped); a *present* envelope must carry the finished message and a `strengthen_key`, else `ReplyMismatch` | exact on the missing envelope; **STRICTER** inside one: a FAST TGS-REP envelope without a strengthen-key is refused. Both KDCs always mint one (`fast_util.c:277-355`) |
 | TGS-REP client / times (`gc_via_tkt.c:247-297`) | `process_tgs_reply`: reply client == TGT client (S4U exceptions); ticket server == enc server; `endtime` not after request `till`; strip O on a foreign TGT without O | `tgs_reply_client_ok` / `tgs_reply_server_consistent` / `tgs_reply_req_times` / `tgs_strip_ok_as_delegate` | exact. Starttime skew (`:302-307`) is deferred: MIT uses the per-context timestamp that `kdc_timesync` adjusts; this crate has no `krb5_context` |
@@ -80,588 +70,74 @@ the UTF-8 transited row below is mixed on absurd inputs.
 | SPAKE groups (`groups.c:59-60, 213-238`; `kdc_preauth.c:1131-1132,1306-1307`) | KDC default `""` (plugin `NOTSUPP`, SPAKE not advertised); a stray PA-SPAKE is skipped (`kdc_preauth.c:1306-1307`); client default `edwards25519`; empty PA-SPAKE may emit an optimistic challenge (`spake_kdc.c:316-323`); unmapped verify codes become 24 (`kdc_preauth.c:1131-1132`); `lockout.c:155-211` increments `fail_auth_count` on any 24 | KDC default empty (not advertised); documented/bootstrap realm and `harness/kdc.conf` permit P-256; unimplemented names (edwards25519, P-384, P-521) are skipped; empty-groups stray PA-SPAKE is skipped; with groups set, empty PA-SPAKE is 24 | **STRICTER** coverage: only P-256 is implemented, and there is no optimistic challenge. An edwards25519-only client against a P-256-only KDC is 24 on both (`verify_support`). With `maxfailure=1` that 24 locks before enc-ts |
 | FAST-outer PA-REQ-ENC-PA-REP 149 | MIT `kdc_find_fast` swaps the inner request in; 149 is consumed from the inner FAST-REQ | The rust FAST client also honours a 149 that arrived on the outer AS-REQ (superset of the inner-only path) | Coverage **superset**; the gated path is inner 149 like MIT |
 | kadm5 create default attributes (`svr_principal.c:376-379`, `alt_prof.c:573-583`) | A create without `KADM5_ATTRIBUTES` takes `params.flags` = `[realms] default_principal_flags`, else `KRB5_KDB_DEF_FLAGS` **0** (no `REQUIRES_PRE_AUTH`) | `default_principal_flags` when the stanza is written (MIT's `krb5_flagspec_to_mask` tokens over 0 — the stanza *is* `params.flags`, `kadmin-both-gate.sh` `z1def` both legs `Attributes: DISALLOW_SVR`); when it is absent the kdc.conf `requires_preauth` knob (default `yes`) supplies `REQUIRES_PRE_AUTH` alone to *password-keyed* creates (`addprinc -pw` / `addprinc` with a prompt); a random-key create (`addprinc -randkey`, `krb5_dbe_crk`) without the stanza is MIT's 0 | **STRICTER** (password-keyed creates only): an operator who never set `default_principal_flags` gets preauth-required user principals instead of MIT's 0; set `requires_preauth = no` or an explicit `default_principal_flags` for MIT's default. The knob's scope is unchanged from before W1-Z: it never applied to `-randkey` (service) creates, so U2U to a fresh service is not `NO PREAUTH` (`flags-gate.sh`). Every field the request masks is applied exactly like MIT (Z1.1) |
-| TGS AP-REQ authenticator replay | `kdc/kdc_util.c:189-191`: `krb5_rd_req` is called with a NULL rcache — the KDC keeps no TGS replay cache, a replayed PA-TGS-REQ is processed again | `gather_tgs_req_info` `tgs_replay` (`ReplayCache`, 5-minute window): a replayed authenticator is 34 `REPEAT` `PROCESS_TGS` | **STRICTER** than MIT (ledger `kdc_util.c:190` and `kdc_util.c:144-191` stricter-documented; `tgs_authenticator_replay_is_repeat`) |
-| PA-ENC-TIMESTAMP replay | no enc-ts replay cache anywhere in `kdc_preauth_encts.c`; a replayed timestamp inside the clock skew verifies again | `verify_enc_timestamp` `pa_replay`: a replayed blob is 34 `REPEAT` under the `PREAUTH_FAILED` status | **STRICTER** than MIT (ledger `kdc_preauth_encts.c:47-118` stricter-documented; `pa_enc_timestamp_replay_is_repeat`) — 34 is passed through `filter_preauth_error` deliberately (R2-D1) |
-| Encrypted-challenge replay | no replay cache; a replayed PA-ENCRYPTED-CHALLENGE inside the skew verifies again (a second failure is 24 through `filter_preauth_error`) | `verify_encrypted_challenge`: a replayed blob is 34 `REPEAT` | **a different code** where MIT would say 24 (deviation R2-D1, ledger `kdc_preauth.c:1092-1133`; `encrypted_challenge_replayed_blob_is_repeat`) |
+
+### Recorded in the parity ledger
+
+These deviations are recorded in full in the [parity ledger](parity/README.md):
+the row named by its MIT cite holds MIT's behaviour, the Rust behaviour and the
+proof. Each fails closed like the rows above; the encrypted-challenge replay is
+also a different code (34 where MIT answers 24), and the unset master key type
+is a stronger default rather than a refusal.
+
+| Deviation | Ledger row |
+| --- | --- |
+| Transited field-count cap; transited hop-emission cap | `kdc_util.c:1647` ([A1](parity/a1-tgs.md)) |
+| Append escaping; add-path bounds; encode-side X.500 RDN compression | `kdc_transit.c:143` ([A1](parity/a1-tgs.md)) |
+| TGS realm octets that are not UTF-8 | `asn1_k_encode.c:103-106` ([A1](parity/a1-tgs.md)) |
+| Unknown TGS KDCOptions bit | `kdc_util.c:813-824` ([A1](parity/a1-tgs.md)); `do_tgs_req.c`, recognised options only ([A2](parity/a2-as.md)) |
+| TGS AP-REQ authenticator replay | `kdc_util.c:190` ([A1](parity/a1-tgs.md)); `kdc_util.c:144-191` ([A2](parity/a2-as.md)) |
+| Acceptor ticket addresses (`rd_req_dec.c:536-540`) | `rd_req_dec.c:536-540` ([A2](parity/a2-as.md)) |
+| kadmind connection caps | `net-server.c:85,1571-1572,683,1278` ([A2](parity/a2-as.md)) |
+| PA-ENC-TIMESTAMP replay | `kdc_preauth_encts.c:47-118` ([A3](parity/a3-preauth.md)) |
+| Encrypted-challenge replay | `kdc_preauth.c:1092-1133` ([A3](parity/a3-preauth.md)) |
+| CAMMAC KDC verifier keyed checksum (`cammac.c:168`) | `cammac.c:168` ([A3](parity/a3-preauth.md)) |
+| FAST armor ticket server realm | `fast_util.c:62-67` ([A3](parity/a3-preauth.md)) |
+| Unset `master_key_type` | `osconf.hin:90` ([A4](parity/a4-kadmin.md)) |
+| kadm5 `ks_tuple` with an enctype that is not implemented | `svr_principal.c:444-447` ([A4](parity/a4-kadmin.md)) |
+| `kadmin.local` exit status after a failed verb | `ss_wrapper.c:66-76; kadmin.c:89-99` ([A4](parity/a4-kadmin.md)) |
 
 ### Parity decisions (not deviations)
 
-DOMAIN-X500-COMPRESS joins on unescaped field text (MIT `maybe_join`:
-`X.COM,C\.` → `C.X.COM`). Null subfields match MIT
-`process_intermediates` (leading/trailing comma, `,,`).
+Decisions and scope notes that no ledger row states. Every other parity fact
+that was prose here now lives in its [parity ledger](parity/README.md) row,
+found by MIT file and line. Most rows are MIT-exact; a row that is stricter or
+not yet settled says so.
 
-A TGS-REQ whose `body.realm` is not a realm this KDC serves is 60
-`GET_LOCAL_TGT` (MIT `get_local_tgt` on a single-realm KDC; a
-multi-realm MIT KDC may answer 68 `WRONG_REALM` from `dispatch.c`).
-Destination RENEW/VALIDATE is not exempt.
-
-An omitted `[realms]` `max_renewable_life` in `kdc.conf` is a cap of 0
-(`alt_prof.c:576-577`), not an unset “use 7d” default.
-
-Every KRB-ERROR `error-code` passes `errcode_to_protocol`
-(`kdc_util.c:691-697`) at the encoder itself (`do_as_req.c:804`,
-`do_tgs_req.c:199`): an `ERROR_TABLE_BASE_krb5` offset in `[0,128]` is
-sent as is, anything else — including a library-local code returned by
-a `KdcPolicy` plugin — is `KRB_ERR_GENERIC` 60. A client-caused PKINIT
-verify failure is logged at `info` (`outcome = "denied"`), MIT's
-`LOG_INFO "preauth (%s) verify failure"` (`kdc_preauth.c:1224-1228`);
-the KDC's own faults stay `error`.
-
-A kdcpreauth module failure leaves the KDC through MIT's
-`filter_preauth_error` (`kdc_preauth.c:1092-1133`, applied where
-`finish_check_padata` applies it): the code reaches the client only when
-it is on the pass-through list (31, 37, 25, 14, the RFC 4556 codes, 100,
-91); anything else — a KDB code such as `KRB5_KDB_NO_PERMITTED_KEY` for
-a timestamp under an enctype outside `permitted_enctypes`, an ASN.1 or
-crypto failure, 90 — is 24 `PREAUTH_FAILED`, indistinguishable from a
-wrong password, and the e_text is the `PREAUTH_FAILED` status
-`finish_preauth` sets for every module failure (`do_as_req.c:442`). The
-module's own status word and the rewritten code stay in the log detail.
-The one addition to MIT's list is 34 `REPEAT` (the PA-ENC-TIMESTAMP replay
-row above, R2-D1): a replayed enc-ts / enc-challenge blob is still refused as a
-replay, not reported as a wrong password.
-
-The master-key stash `.k5.REALM` is a FILE keytab with one `K/M@REALM`
-entry (etype and kvno embedded, MIT `krb5_def_store_mkey_list`); loading reads
-the keytab first, then a legacy raw-key stash, rewriting it in keytab format on
-the next save. This removes the blind etype trial the raw format required.
-
-Principal aliases resolve like `krb5_db_get_principal` (`kdb5.c:800-840`):
-an alias stub is a keyless `DISALLOW_ALL_TIX` entry whose only content is
-`KRB5_TL_ALIAS_TARGET`, followed up to `MAX_ALIAS_DEPTH` (10) hops to the
-canonical entry; a longer or self-referential chain is `NOENTRY`. Every
-`krb5_db_get_principal` caller resolves (AS/TGS lookup, kadm5 modify/cpw/
-delete-through-alias), so an alias is a live name for its target; kadmin's
-`getprinc` prints the target's record. The AS keeps the requested name in the
-ticket unless CANONICALIZE is set (`do_as_req.c:681-687`), and the AS-REP
-carries PA-ETYPE-INFO2 with the *canonical* client's salt
-(`_make_etype_info_entry`), so `kinit` under an alias derives the target key.
-The AS *server* name is canonicalized on the same condition, and only for a
-krbtgt request whose requested and DB server are both TGS principals: the
-ticket sname and `reply_encpart.server` then carry the canonical DB name
-(`do_as_req.c:660-666,243`), matching Windows short-realm aliasing.
-`create_alias` needs unrestricted ADD on the alias and MODIFY on the target
-(`acl_addalias`); the target need not exist and a dangling alias is
-overwritable (MIT emergent behavior); `renprinc` of an alias is
-`KRB5_KDB_ALIAS_UNSUPPORTED`.
-
-A cross-realm TGT whose client realm is this KDC (`check_tgs_lineage`)
-is 12 `INVALID LINEAGE` even when `reject_bad_transit = false`.
-S4U2Self is exempt (MIT `tgs_policy.c`). S4U2Self server match is by
-DB entry *and* realm (`is_client_db_alias`): a foreign TGT client with
-a colliding local name is 36 `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`.
-S4U2Self is not password authentication: the impersonated client's
-`pw_expiration` and `REQUIRES_PWCHANGE` are cleared (`kdc_util.c:1612-1615`).
-`s4u2self_forwardable` keeps FORWARDABLE when `allowed_to_delegate` is
-empty (MIT `addprinc -randkey` / Rust `create_host` seed no targets);
-a non-empty target list without `OK_TO_AUTH_AS_DELEGATE` clears F.
-S4U2Proxy implements both KDB delegation hooks (`tgs_policy.c:548-575`):
-classic `s4u_allowed_to` is realm-less (`kdb_test.c:733-741`
-`UNPARSE_NO_REALM`; same-realm only) and RBCD `s4u_allowed_from` is
-`name@REALM` (`kdb_test.c:761-774`). A bare RBCD grant is the local
-realm at insert. `create_host` seeds neither list (MIT db2 has no
-hooks and refuses 13 `UNSUPPORTED_S4U2PROXY_REQUEST`; MIT test-KDB
-issues only with an explicit `delegation`/`rbcd` entry). That is an
-LDAP/test-KDB-like superset over db2, fail-closed on an empty list.
-`s4u_allowed_from`/`_to` have no dump, kadm5 or iprop carrier
-(`kdb_dump.rs` loads empty lists; `kadm5` decode starts empty;
-`merge_iprop_princ` does not copy them). The only writers are the
-`KRB5_TEST_S4U_*` knobs, so a production Rust KDC refuses every
-S4U2Proxy like MIT db2. This is not a W1 gap: MIT db2 has no carrier
-either (dump v7 has no field; only the LDAP backend's
-`krbAllowedToDelegateTo` does), so a Rust TL-data extension is a design
-decision that belongs to the KLLDAP embed (`KerberosSync`), where the
-directory is the writer.
-
-FAST armor decrypt binds keys to the armor `ticket.realm`;
-forged-realm armor is 35 `NOT_US` (`rd_req`). A local non-krbtgt armor
-ticket is 26 `SERVER_NOMATCH`. **STRICTER** than MIT here: `fast_util.c:62-67`
-compares the decrypted armor ticket's server to the local TGS with
-`krb5_principal_compare_any_realm`, so MIT accepts an armor ticket
-whose server realm is not the KDC's own once it decrypts under the
-local TGS key (ledger `fast_util.c:62-67` stricter-documented).
-A presented-TGT krbtgt with `DISALLOW_SVR` or `DISALLOW_ALL_TIX` is 7
-`PROCESS_TGS` (`kdc_util.c:390-393`). AS `DISALLOW_SVR` is 27
-`SERVICE NOT ALLOWED` with no ENC-TKT-IN-SKEY exemption
-(`kdc_util.c:790-793`); that bit is already `INVALID AS OPTIONS` 13
-on an AS-REQ. Header-ticket decrypt uses only the labeled kvno, with
-at most three tries when kvno is 0 (`kdc_rd_ap_req`).
-
-Checksums are verified by the declared `cksumtype` (`verify_checksum.c`):
-type 0 substitutes the key's mandatory type, `output_size` is
-`KRB5_BAD_MSIZE`, unkeyed/not coll-proof is 50 (`rd_safe.c:70-74`,
-`kdc_util.c:1244`). KRB-SAFE checksums the dummy (zero-type/zero-length
-checksum) encoding that splices the received KRB-SAFE-BODY
-(`encode_krb5_safe_with_body`), then the saved body (RFC 1510). A
-non-APPLICATION-20 tag is 40 `MSG_TYPE`. Sender/receiver addresses are
-checked before the checksum (`privsafe.c:312-382`). Two `k5_privsafe_check_addrs`
-arms are deliberately laxer, fail-closed on the real wire: when no local address
-is set MIT walks `krb5_os_localaddr` and rejects a non-local r-address
-(`privsafe.c:366-375`), and MIT also runs the check on KRB-PRIV (`rd_priv.c:77-78`);
-Rust accepts an r-address when no local address is supplied and does not run the
-check on the KRB-PRIV path, because no product path (kprop, kpasswd) emits an
-r-address and the protocol crate has no OS address enumeration. The GSS sequence
-window (`accept_seq`) is enforced unconditionally where MIT's `g_seqstate_check`
-returns `GSS_S_COMPLETE` when neither replay nor sequence was negotiated
-(`util_seqstate.c:84-117`); Rust is stricter (it never delivers an out-of-order
-token), and MIT peers always negotiate replay/sequence so the window is enforced
-identically for them. `build_krb_safe_ex` checksums the full KRB-SAFE with a
-spliced zero checksum (`create_krbsafe`, `mk_safe.c:68-80`), MIT's primary verify
-branch, rather than the body alone. GSS wrap-without-conf requires `EC == cksumsize`;
-MIC fillers are 0xFF and the header is reconstructed (`util_crypt.c:322-334`).
-A GSS authenticator checksum that is not 0x8003 is verified over empty
-data with the ticket session key (`accept_sec_context.c:494-511`,
-`rd_req_dec.c:748-749`). Missing checksum: flags 0 and no AP-REP.
-0x8003 shorter than 24 is `GSS_S_BAD_BINDINGS`; `cb_len != 16` is
-`GSS_S_FAILURE`. An all-zero token CB is accepted when the acceptor has
-bindings; a mismatch is `GSS_S_BAD_BINDINGS`; a match sets
-`GSS_C_CHANNEL_BOUND_FLAG`. Token flags are masked with `INITIATOR_FLAGS`;
-a forwarded KRB-CRED sets `GSS_C_DELEG_FLAG` and the acceptor keeps only
-the delegated client name, not a usable credential handle (stricter than
-MIT `rd_and_store_for_creds`, `accept_sec_context.c:571-577`); the
-established context sets
-`GSS_C_PROT_READY_FLAG` (`:1089`), a `GSS_EXTS_FINISHED` extension and a
-bad forwarded KRB-CRED are `GSS_S_FAILURE` (`:380-384`, `:571-574`), and
-RRC is reduced modulo the payload length (`unwrap.c:255-263`). `unwrap`
-reports `conf_state`; the RPCSEC_GSS privacy service rejects an
-integrity-only body (`authgss_prot.c:238-240`), so a client that
-negotiated `rpc_gss_svc_privacy` cannot downgrade to an unsealed request.
-The Rust GSS acceptor's mutual AP-REP carries `seq-number` 0 and no acceptor
-subkey, so its tokens are keyed with the initiator subkey from sequence 0
-where MIT (`accept_sec_context.c:1021-1060`, `mk_rep.c:78-111`) generates a
-random initial sequence and a fresh acceptor subkey for CFX; the initiator
-side consumes an MIT acceptor subkey and `FLAG_ACCEPTOR_SUBKEY` exactly.
-Replay protection does not rest on the initial sequence (the authenticator
-rcache and the per-context window do that) and RFC 4121 makes the acceptor
-subkey optional, so this is a parity gap, not a downgrade. The SPNEGO acceptor
-is single-leg: krb5 must be in `mechTypes` or the token is refused, an
-initiator `mechListMIC` is verified over the DER list, and a MIC is always
-returned with `accept-completed`; MIT's `request-mic` leg for a
-non-first mech (`spnego_mech.c:3557-3578`) is not implemented, which for a
-krb5-only acceptor cannot be turned into a downgrade.
-PA-FOR-USER unkeyed is 50 and a bad MAC is 41
-(`INVALID_S4U2SELF_CHECKSUM`). PAC SHA-1 on the server checksum is 15
-(`pac.c:496-497`). PAC signatures are verified over the received bytes
-(`pac.c:478-579`): a copy zeros the server and privsvr payloads in place;
-privsvr covers the whole server-checksum buffer minus the 4-byte type
-(RODCIdentifier trailer included); a missing buffer is 60 `GENERIC`; a
-failed server checksum does not abort before privsvr. Ticket (16) and
-full (19) checksums exist only on service tickets
-(`k5_pac_should_have_ticket_signature`, `pac.c:583-592`,
-`pac_sign.c:239-243`); a presented TGT is checked on its server
-signature alone with the key that opened it (`kdc_util.c:597-602`), so
-MIT-issued TGTs are accepted and Rust-issued TGTs are accepted by MIT
-(`scripts/cross-kdc-gate.sh`). Because that server signature is the
-shared inter-realm key, a trusted realm could otherwise forge a
-`LOGON_INFO` asserting the local domain's Domain Admins or RID 500.
-On a reissue whose header ticket is from a foreign realm, MS-PAC SID
-filtering (`filter_cross_realm_logon`) drops every SID under the local
-domain from the subject's extra SIDs and resource groups, keeping the
-foreign realm's own SIDs and well-known SIDs (`S-1-18-1`); a base
-identity that itself claims the local domain is refused `POLICY`. This
-matches an Active Directory domain controller and is stricter than
-MIT with the db2 KDB, which carries no cross-realm `LOGON_INFO` at all.
-`scripts/samba-realtrust-gate.sh` shows the legitimate reverse PAC
-keeping the foreign Samba domain SID through the Rust KDC. `krb5_pac_parse` refusals (version,
-buffer count, 8-byte alignment, header overlap) and duplicate buffer
-types are 60 (`pac.c:281-317,137-147`). Ticket checksum
-(`pac.c:640-673`) is over the recoded EncTicketPart with PAC ad-data
-`0x00`. The FAST client verifies `ticket_checksum`
-(`fast.c:543-551`). PA-REQ-ENC-PA-REP (149) is produced when the AS-REQ
-advertises it; since the R0a SPAKE-padata fix the kinit client always
-appends the empty PA-AS-FRESHNESS (150) and PA-REQ-ENC-PA-REP (149) on
-every AS-REQ (`as_ex.rs build_as_req`) and verifies the returned 149
-checksum (`fast.c:646-666`), so a KDC that sets `enc-pa-rep` without
-returning 149 is rejected `KDCREP_MODIFIED`. Present-FAST
-`KrbFastResponse.nonce` must echo the request nonce
-(`fast.c:397-402` `decrypt_fast_reply`); a flip is
-`KRB5_KDCREP_MODIFIED` (`nonce modified in FAST response`) on AS and
-TGS success paths. A FAST error whose inner nonce does not match is
-treated as a non-FAST outer error (`fast.c:450-459`), not retried.
-Under an armor key the reply's client (`crealm`/`cname`) and padata
-are the `KrbFastFinished` message's once its ticket checksum verifies
-(`fast.c:548-558`) — the outer, unauthenticated fields are never
-compared or returned, so `verify_as_reply` (`get_in_tkt.c:236-241`)
-and the CANONICALIZE outcome see the finished client (W1-Z Z1.2; before
-it the outer cname was compared and returned). An armored KRB-ERROR
-whose `e_data` has no PA-FX-FAST or does not decrypt is the fatal outer
-error with no cookie and no method data — no second AS-REQ
-(`fast.c:445-458`); an envelope without FX-ERROR is
-`KRB5KDC_ERR_PREAUTH_FAILED` (`Expecting FX_ERROR pa-data inside FAST
-container`); the FX-COOKIE is taken only from the decrypted inner
-padata. The TGS path reports the inner FX-ERROR the same way
-(`gc_via_tkt.c:190-194`). Live: `scripts/mit-fast-kdc-gate.sh` Z1.2
-cells, MIT `kinit -T` and Rust `krb5-kinit --fast` behind
-`scripts/lib/kdc-rewrite-proxy.py` in front of the MIT KDC.
-Default `kdc_timesync` (`init_ctx.c:268-270`) skips the AS-REP
-starttime vs local clock (`get_in_tkt.c:260-270`); `kdc_timesync = 0`
-is `KRB5_KDCREP_SKEW` (`Clock skew too great in KDC reply`). There is
-no per-context `time_offset` (no `krb5_context`); ticket times stay
-the KDC's. `kdc_timesync = 0` also rejects an already-expired
-`endtime` (stricter than MIT's starttime-only check).
-`kinit -R` copies `old_creds.ticket_flags & KDC_TKT_COMMON_MASK` and
-sets `KDC_OPT_RENEW` (`val_renew.c:62-67`); it does not set
-`CANONICALIZE` (that bit is the `get_creds` referral walk).
-`kinit -v` is the same mask plus `KDC_OPT_VALIDATE`
-(`val_renew.c:116-121` `krb5_get_credentials_validate`).
-AS-REP `verify_as_reply` requires `enc.server == ticket.server`
-(name and realm) and, unless `canon_ok`, `enc.server == request.server`
-(`get_in_tkt.c:227-239`). `canon_ok` is CANONICALIZE, NT-ENTERPRISE,
-or anonymous, and only when both the requested and issued servers are
-TGS. Request `till`/`rtime`/`from` are compared to the issued times
-(`get_in_tkt.c:243-255`): `endtime` after `till`, `renew_till` after
-`rtime` (RENEWABLE) or after `till` (RENEWABLE_OK without RENEWABLE),
-or POSTDATED `from` ≠ starttime (omitted starttime = authtime), is
-`KRB5_KDCREP_MODIFIED`.
-`kinit -k` takes only the highest kvno for the requested principal
-(name and realm; name-type ignored) and puts those etypes first on
-the AS-REQ (`gic_keytab.c:84-174`). A stale lower kvno is not used
-to wrap PA-ENC-TIMESTAMP.
-Password `KEY_EXP` (23, typed) obtains a short non-forwardable
-`kadmin/changepw` ticket with the password just typed *before* any
-new-password prompt (`gic_pwd.c:229-236`), so a wrong password on an
-expired principal is the password failure (`Password incorrect while
-getting initial credentials`, `kinit.c:785-790`) and never a prompt;
-then the three prompt tries (`:249-326`), the change, and the final
-AS-REQ (`:333`). A kpasswd result code outside 0–7 or
-SUCCESS taken from a KRB-ERROR is `KRB5KRB_AP_ERR_MODIFIED`
-(`chpw.c:217-231`).
-`krb5_verify_init_creds` (`vfy_increds.c:259-321`) mk_req + rd_req
-against the keytab: a missing, empty, or non-`host/` keytab succeeds
-unless `ap_req_nofail` / `[libdefaults] verify_ap_req_nofail`; an
-outdated host key fails. No MIT CLI caller; `t_vfy_increds` is the
-oracle.
-kpasswd result codes 0–7 have MIT `krb5_chpw_result_code_string`
-texts (`chpw.c:244-279`). `krb5_chpw_message` decodes the 30-byte
-AD policy blob or a UTF-8 server string (`chpw.c:389-510`).
-`krb5_set_password` sends version `0xff80` with `ChangePasswdData`.
-A framed kpasswd reply whose length disagrees, or whose version is
-not 1 / `0xff80`, is `MODIFIED` / `BAD_PVNO` (`chpw.c:129-143`).
-`kinit -C` and `[libdefaults] canonicalize` set `KDC_OPT_CANONICALIZE`
-(`gic_opt.c:76-83`, `get_in_tkt.c:921-930`). `kinit -s` puts `from` on
-the AS-REQ and sets `ALLOW_POSTDATE`/`POSTDATED` (`get_in_tkt.c:711-714,932-934`).
-The default AS/TGS etype list is the AES quartet 18/17/20/19
-(`preferred()`). MIT `init_ctx.c:59-66` also offers DES3 (16), RC4 (23),
-and Camellia (25, 26); those stay behind `is_weak` unless named in
-`default_tkt_enctypes` / `permitted_enctypes`. kadm5 v3 `ks_tuple`
-(`-e`) uses MIT `ETYPE_WEAK` (`is_mit_weak`, none of the implemented
-types) so `des3-cbc-sha1` / `arcfour-hmac` / camellia mint like MIT
-kadmind under `allow_weak_crypto = false`; `from_iana` stays stricter.
-FAST AS outer `till` is the epoch (`19700101`) because
-`krb5int_fast_prep_req_body` snapshots the request before
-`set_request_times` (`get_in_tkt.c:836-838`, `fast.c:157-161`).
-Optional outer `from`/`rtime` stay omitted. The inner FAST-REQ body
-keeps the live times; `req_checksum` is over the snapshotted outer
-body (`fast.c:310-313`).
-PKINIT and anonymous `kinit -n` second-AS padata is cookie then
-PA-PK-AS-REQ then empty 150/149 (`preauth2.c:992-1019`,
-`get_in_tkt.c:1365-1372`): `[133, 16, 150, 149]`.
-SPAKE `--spake` first-shots `[150, 149]` like MIT
-(`get_in_tkt.c:807-813`); optimistic PA-SPAKE 151 is only for an
-explicit `krb5_get_init_creds_opt_set_preauth_list`. The first
-KRB-ERROR is PREAUTH_REQUIRED 25 with the full METHOD-DATA hint.
-After that hint, `sort_krb5_padata_sequence` (`get_in_tkt.c:400-471`)
-plus `k5_preauth` (`preauth2.c:649-713`) runs the first real
-mechanism we can: default preferred `17, 16, 15, 14` puts PKINIT
-first (skipped without an identity), then advertised SPAKE 151
-before enc-timestamp 2. Password `kinit` against a SPAKE-advertising
-KDC therefore uses the three-AS SPAKE cascade, not a one-shot
-enc-timestamp. An extra MIT plain AS on UDP then TCP is
-`sendto_kdc.c` pacing, not a second `get_in_tkt` request.
-`kvno -U` / S4U2Self TGS-REQ padata is `[1, 136, 130, 129]`
-(`s4u_creds.c:517-567`, `fast.c:227-250`): PA-S4U-X509-USER (130)
-is filled with the TGS subkey (ku 26) after nonce and subkey
-exist, then PA-FOR-USER (129) on the TGT session (ku 17); FAST
-outer padata duplicates both. `verify_s4u2self_reply`
-(`s4u_creds.c:273-397`) refuses enc-only 130, a nonce/user/
-checksum mismatch (`KRB5_KDCREP_MODIFIED`), or an unkeyed reply
-checksum on a modern etype (`INAPP_CKSUM`). Missing 130 on both
-the FAST-swapped reply padata and enc-padata is accepted.
-`kvno -U -P` is S4U2Proxy (`s4u_creds.c:1195-1262`
-`krb5_get_credentials_for_proxy`): S4U2Self for the ccache
-principal, then `CNAME_IN_ADDL_TKT` plus the evidence ticket and
-PA-PAC-OPTIONS RBCD (167). FAST outer padata is `[1, 136, 167]`.
-`-P` without `-U` is refused (`kvno.c:163-168`).
-AP-REQ acceptor key selection uses the ticket kvno and etype
-(`rd_req_dec.c:325-347` `try_one_princ`). Ticket kvno 0, or a key
-labeled 0, means any (`kdc_util.c:371-372` twin). kpasswd and
-`krb5_verify_init_creds` pass keytab kvnos. A claimed kvno with
-no matching key is `NOKEY`; a key at that kvno that fails decrypt
-is integrity. GSS accept iterates similar-enctype keys like MIT
-`decrypt_try_server` (kvno is for the error, not the try list).
-When `TRANSITED_POLICY_CHECKED` is unset and the transited field is
-non-empty, the acceptor runs `krb5_check_transited_list`
-(`rd_req_dec.c:590-610`); a hop off `krb5_walk_realm_tree` is
-`ILL_CR_TKT` 43. The T flag, an empty field, or anonymous crealm
-skips the check.
-
-FAST `req_checksum` is verified over the wire KDC-REQ-BODY (field 4)
-when a raw packet is present (`do_as_req.c:526-531`); socketless tests
-re-encode. Verify runs before the keyedness check (`fast_util.c:207-224`):
-a failed verify is 41 `MODIFIED` wire `FIND_FAST`; an unkeyed type is
-12 wire `FIND_FAST` (log `detail` `Unkeyed checksum used in fast_req`)
-only after verify succeeds (RSA-MD4 2, RSA-MD5 7, NIST-SHA 9, SHA-1 14;
-MIT `cksumtypes.c`). CRC32 (1) has no table entry. Unknown type or
-`output_size` length mismatch is 60 `GENERIC` wire `FIND_FAST`
-(`KRB5_BAD_ENCTYPE` / `KRB5_BAD_MSIZE`). Keyed types match by enc
-provider (`crypto_int.h:596-608`): 15/19 aes128, 16/20 aes256, 12 des3,
-17/18 camellia, `-138` NULL (any key), `-137` arcfour. `-137` is
-HMAC(raw key, MD5(le32(usage) ‖ msg)); `-138` first derives
-HMAC(key, `"signaturekey\0"`) (`checksum_hmac_md5.c:53-66`). RC4
-usage translation is `3→8, 9→9, 23→13` (`enc_rc4.c:17-35`). Session
-etype walks the request list like `select_session_keytype`
-(`kdc_util.c:1084-1112`): valid, permitted, `allow_des3`/`allow_rc4`,
-then `dbentry_supports_enctype` (`session_enctypes` attr, else
-AES256-sha1 assumed, else a long-term key). AS uses krbtgt; TGS uses
-the service. Ticket encryption stays the server long-term key — the
-first key of the top kvno whose enctype is in `permitted_enctypes`, as
-`krb5_dbe_find_enctype` (`kdb_default.c:47-94`) hands it to
-`get_first_current_key`; a server whose only keys are non-permitted is
-60 `FINDING_SERVER_KEY`, and the same lookup (top kvno only, permitted
-only) picks the AS client key, the `find_server_key` header key, the
-PAC / FAST-cookie / freshness / CAMMAC old-kvno keys, and the
-enc-timestamp verifier searches the client's keys of the timestamp's
-etype at the top kvno only (`kdc_preauth_encts.c:76-78`), so a key kept
-by `cpw -keepold` no longer authenticates an AS-REQ. RC4
-`checksum()` is RFC 4757 type `-138`. `cksumtype` 0
-substitutes the key's mandatory type, then `is_keyed(0)` is 12.
-Unknown armor type is
-24 with wire `FIND_FAST` (log `detail` is `Unknown FAST armor type %d`).
-TGS authenticator client ≠ ticket client is 36 `PROCESS_TGS`. Explicit
-TGS AP-REQ armor with a PA-TGS-REQ subkey is 24 `FIND_FAST` (log
-`Ap-request armor not permitted with TGS`); without that subkey the KDC
-runs `armor_ap_request` (`fast_util.c:159-166`). AP-REQ armor whose
-authenticator has no subkey is 12 `FIND_FAST` (log `ap-request armor
-without subkey`, `fast_util.c:70-77`) on both AS and TGS. A PA-TGS-REQ
-header ticket or authenticator carrying AD-FX-ARMOR (71) — including
-inside IF-RELEVANT — is 12 `PROCESS_TGS` (`kdc_util.c:217-229`); 1.22.2
-never emits 71 (RFC 6113 §5.4.1 defence in depth). The FAST armor AP-REQ
-is not scanned. PA-FX-COOKIE is bound to the unparsed client with PRF+
-and expires at 600 s (`fast_util.c:465-721`, ku 513); a garbage, expired,
-or wrong-client cookie is ignored, matching MIT's `return 0`.
-Corrupt `enc_fast_req` is 31 `FIND_FAST`; malformed `KrbFastReq` is
-60 `FIND_FAST` (`do_as_req.c:531-535`). Log `detail` is MIT's
-`k5_setmsg` where MIT has one; the critical-FAST-option `detail`
-(`FAST option`) is Rust's own (`UNKNOWN_CRITICAL_FAST_OPTION` has
-no MIT `k5_setmsg`). Hide-client-names (FAST option bit 1) is
-honoured (R2-P4): the AS-REP outer client becomes the anonymous
-principal `WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS`
-(`kdc_fast_hide_client`, `do_as_req.c:324`). Only critical bits 0 and
-2..15 are refused as 93 `FIND_FAST` (`UNSUPPORTED_CRITICAL_FAST_OPTIONS`
-`0xbfff0000`, `k5-int.h:802-803`).
-
-**FAST hide-client-names scope:** FAST option bit 1 anonymizes the
-outer client on the AS-REP, the outer KRB-ERROR (`do_as_req.c:831-832`,
-`do_tgs_req.c:235-236`), and the TGS-REP (`do_tgs_req.c:1111-1112`).
-Inner FAST / `fast_finished` keep the real client.
-
-### W1-J L1a — GSS unwrap_v3 / verify_enc_header
-
-MIT `unwrap.c` `unwrap_v3` checks toktype, filler `0xFF`, and direction
-(`FLAG_SENDER_IS_ACCEPTOR` vs `initiate` → `GSS_S_BAD_SIG`). Confidential
-tokens decrypt then `verify_enc_header` (toktype, flags, filler, EC, seq;
-RRC bytes are not compared) and return `plain.len - ec - 16`. Non-conf
-requires `ec == cksumsize`. Rust `unwrap_v3` is that function for wrap and
-the no-SIGN_ONLY wrap_iov path. DCE-style wrap_iov (real EC padding) is
-pinned by `gss-gate.sh`. DCE handshake (`kg_accept_dce`) is only the extra
-token needed for that cell; SIGN_ONLY + DCE trailer EC is out of this item.
-
-### W1-J L0 — EncKDCRepPart APPLICATION 26
-
-MIT encodes both EncASRepPart and EncTGSRepPart with application tag 26
-(`asn1_k_encode.c:1127-1133`) and decodes 26 then 25. Rust matches that
-on emit and decode. Other Kerberos clients that accept only RFC
-APPLICATION 25 are out of this item's scope.
-
-### W1-I — kadmind acceptors, RPCSEC_GSS, iprop, K13 policy, kadmin.local
-
-The W1-I surface is the kadmind AUTH_GSSAPI acceptors, the RPCSEC_GSS
-state machine (`_svcauth_gss` / `check_rpcsec_auth`), the iprop
-program (`ipropx_resync` / `kiprop`), K13 policy (`pw_min_life` /
-`pw_max_life` / `krb5_string_to_deltat`), and `kadmin.local` (no ACL;
-exit 1 after a failed verb). The paragraphs below pin that surface
-against MIT 1.22.2.
-
-`kadmin/admin` and `kadmin/changepw` are bootstrapped with MIT
-`kadm5_create` attributes and lifetimes (`kadm5_create.c:54-55,207-213`):
-both `DISALLOW_TGT_BASED|LOCKDOWN_KEYS`; changepw also
-`PWCHANGE_SERVICE`; `max_life` is 3 h / 5 min (`ADMIN_LIFETIME` /
-`CHANGEPW_LIFETIME`). A TGS from a TGT is 12
-`TGT BASED NOT ALLOWED`. `kdb5_util create` also sets `LOCKDOWN_KEYS`
-on `krbtgt/REALM` and `K/M` (`kdb5_create.c:465`). Remote kadm5
-maps lockdown to the privilege codes MIT kadmind remaps in
-`server_stubs.c`: extract `KADM5_AUTH_EXTRACT`, chpass
-`KADM5_AUTH_CHANGEPW`, setkey `KADM5_AUTH_SETKEY`, delete
-`KADM5_AUTH_DELETE`, modify that clears the bit `KADM5_AUTH_MODIFY`,
-rename of the source `KADM5_AUTH_DELETE` after the ACL check.
-Unauthorised rename is `KADM5_AUTH_INSUFFICIENT` first
-(`server_stubs.c:700-712`). kadm5.acl lines are
-`<principal> <opstring> [<target> [<restrictions>]]`
-(`auth_acl.c:330-338`). A target of `*` is any principal; otherwise
-`match_princ` (`:472-492`) requires the same component count and realm
-and matches each component with `*` (whole component only; `user*` is
-a literal) and `*N` back-references from the client pattern. The first
-entry whose client **and** target match wins (`find_entry` `:497-524`).
-Rename is `ACL_DELETE` on src **and** `ACL_ADD` on dest **and** the add
-entry carries no restrictions (`:638-648`). Restrictions
-(`-clearpolicy`, `-policy`, `-maxlife`, `-maxrenewlife`, `-expire`,
-`-pwexpire`, `+flag`/`-flag`) are imposed on create/modify
-(`auth.c:211-272`). Flag names use MIT aliases, hyphen→underscore,
-case-fold, and `0x` hex (`str_conv.c:50-95,147-197`). Lower-case op
-letters grant and upper-case letters revoke (`auth_acl.c:276-282`);
-an unknown letter is a load error (`:286-291`). `#` comments only at
-column 0; `\` continues a line (`:120-160`). Realm-less names take the
-store realm (`krb5_parse_name`). Principal strings use
-`krb5_parse_name` / `krb5_unparse_name` (`parse.c:62-102`,
-`unparse.c:85-134`): `\/` `\@` `\\` `\t` `\n` `\b` `\0`, empty
-components allowed, `foo@` keeps an empty realm. ACL `*/admin@R`
-does not match a one-component `foo/admin`. Restriction durations
-are `krb5_string_to_deltat` (`x-deltat.y`); `12:34` loads,
-`42x` is 42 s (`mylex` default is `YYEOF`), `3dd` is
-`invalid restrictions`, and trailing whitespace is `tok_WS`
-(`x-deltat.y:225`): `42 ` is invalid while `1d ` is absorbed by the
-`opt_s` slot after `d`/`h`/`m` (`:146,169-170`). CREATE/DELETE/RENAME authorise on the
-request principal with no lookup (`server_stubs.c:262-303`,
-`rec_out == NULL`). An authorised `addprinc user@OTHER.REALM`
-creates that principal in the local KDB. Unknown ACL op letters
-are `Unrecognized ACL operation '%c' in %s` (`auth_acl.c:286-290`). Unauthorised `getprinc` of a
-missing principal is `KADM5_UNK_PRINC` (`stub_setup` `:296-301`)
-before ACL. A readable ACL file is the ACL: it is
-not replaced when `admin@REALM` is absent (`acl_init:547-563`). With no
-`KRB5_ACL_FILE` and no kdc.conf `acl_file`, kadmind loads
-`<kdc dir>/kadm5.acl` (`alt_prof.c:509-510`, `osconf.hin:106`). A
-missing or unreadable file is `fail_to_start` (`ovsec_kadmd.c:497-500`,
-`auth_acl.c:398-406`): `Cannot open PATH: No such file or directory
-while initializing ACL file, aborting`. An empty `acl_file` is
-`acl_init(NULL)` (`ovsec_kadmd.c:497`) → self rules only
-(`auth_acl.c:554-555`); the embed API is `Acl::none()`. An
-unparseable target or unknown restriction token is a load error
-(`acl_init`); kadmind refuses the file. `*`/`x` still
-exclude extract (`e`). `listprincs`/`listpols` require `l`
-(`KADM5_AUTH_LIST`, `server_stubs.c:814,1443`). addpol is
-`KADM5_AUTH_ADD`, delpol `KADM5_AUTH_DELETE`. Self cpw/chrand/purgekeys/
-getprinc/getstrs (and own-policy getpol) follow `auth_self.c:38-75`.
-Self key change without an INITIAL ticket is `KADM5_AUTH_INITIAL`
-(`server_stubs.c:368-381`). Policy `pw_min_life` / `pw_max_life` round-trip
-on `getpol`. Self chpass/chrand/kpasswd run `check_min_life`
-(`misc.c:60-121`): `KADM5_PASS_TOOSOON` / kpasswd result 4 unless
-`REQUIRES_PWCHANGE`; a non-self admin ignores min_life. `pw_max_life`
-sets `pw_expiration` (`-policy` from `last_pwd_change`, cpw from now;
-`svr_principal.c:614-625,1336`). Self `-keepold` clamps to
-`MAX_SELF_KEEPOLD` 5 (`server_stubs.c:391-399`) for chpass, chrand and
-setkey alike as a version count (`kdb_cpw.c:117-137`). MIT 1.22.2
-`kadm5_setkey_principal_4` copies the old keys but never advances
-`n_new_key_data` past the new ones (`svr_principal.c:1695-1710`), so its
-setkey `-keepold` drops every old key; kerber-rust keeps them (deviation,
-pinned on both legs by `scripts/kadmin-gate.sh`). Chpass order is lockdown → ACL → self
-keychange (`:851-869`). `get_privs` returns `~0`
-(`server_misc.c:146-158`). `kadmin.local` applies no ACL (`KRB5_ACL_FILE`
-is kadmind-only). `addpol`/`modpol`/`alias` print a `com_err` line and
-exit 0 like MIT (`kadmin.c`); other verbs still exit 1 where MIT exits 0
-outside script mode (`ss_wrapper.c:66-76`, `kadmin.c:89-99`; stricter,
-so scripted runs fail loud). The `alias` verb and the shared policy
-create/modify path (`kadm5_create_policy` order min>max → length →
-classes → history, `kadm_err.et` texts) landed in W1-K M3b; the
-`getdate.y` natural-language interval (`1 day ago`) is a deferred gap
-(`parse_pol_interval` accepts only `krb5_string_to_deltat`). A `kadmin/changepw` GSS acceptor is
-`CHANGEPW_SERVICE` (`server_stubs.c:28-32`, a full realm-qualified
-name compare against `kadmin/changepw@REALM`): every stub denies with
-MIT's code except self `chpass`/`chrand`/`getprinc`
-(`changepw_not_self`, `:348-354`) and getpol of the caller's own
-policy (`:1401-1403`). `getstrs` and `purgekeys` use
-`CHANGEPW_SERVICE` (even self is denied).
-Kadmind AUTH_GSSAPI acceptors are the realm-qualified `kadmin/admin@REALM`
-and `kadmin/changepw@REALM`, built with `params.realm`
-(`ovsec_kadmd.c:468-477`). RPCSEC_GSS is
-`check_rpcsec_auth` (`kadm_rpc_svc.c:324-331`): two components,
-realm match, `kadmin`, not `history`, else `svcerr_weakauth`. All four
-acceptor checks are realm-qualified in Rust through `acceptor_realm_ok`;
-the realm is bound at `accept_sec_context` and re-checked at the gate.
-iprop is RPCSEC_GSS only (`ipropd_svc.c:481-483`) with
-`kiprop/<host>` (`:508-516`); AUTH_GSSAPI INIT is the auth-layer
-SUCCESS/`no_dispatch` path (`svc_auth_gssapi.c:495-497`), DESTROY is
-likewise answered in the auth layer (`:616-623`), and DATA is
-`AUTH_TOOWEAK` once a context exists (`ipropd_svc.c:542-548`). A
-`kadmin/admin` RPCSEC acceptor on the iprop program is `AUTH_TOOWEAK`;
-`kiprop/<host>` dispatches. MIT accepts any KDB principal as an acceptor
-(`setup_kdb_keytab`) and gates by name; the Rust kadmind loads the four
-documented kadm5 principals (`kadmin/admin`, `kadmin/changepw`,
-`kadmin/history`, `kiprop/<host>`). The RPCSEC_GSS INIT reply verifier is
-`gss_get_mic(htonl(seq_window))` (`svc_auth_gss.c:271-286,496-504`).
-MIT ships each key as the master-key ciphertext its KDB already stores
-(`kdb_convert.c` copies `key_data_contents`), so it structurally never
-sends plaintext. The Rust store holds plaintext keys and wraps them
-under the master key at ship time (`iprop_master_key`: stash, then
-`KRB5_MASTER_PASSWORD`, then the `K/M` principal). With none of those
-available it answers `UPDATE_ERROR` rather than send keys in the clear
-(a fail-closed deviation, stricter than MIT). A persisted primary always
-has a stash, so this is reached only by an in-memory or stash-less
-configuration.
-`_svcauth_gss` answers version mismatch as `AUTH_BADCRED`, INIT without
-NULLPROC as `AUTH_FAILED`, `accept_sec_context` / unknown `gc_proc` as
-`AUTH_REJECTEDCRED`, DATA/DESTROY header MIC failure as `CREDPROBLEM`,
-and `gc_seq > MAXSEQ` / window replay as `CTXPROBLEM`; DESTROY then
-drops the context (`:449-547`). The context is selected by the
-connection, so `gc_handle` is not compared (`:385-419`): a DATA with a
-wrong handle but a valid header MIC dispatches, matching MIT.
-Accepted/mismatch replies carry
-`xp_verf` (`svc.c:342,361`). Empty KDC drops are silent of
-`while dispatching` when the issue code is 0 (`net-server.c:1101-1105`).
-A full-resync deny is `kdb_fullresync_result_t`
-(`ipropd_svc.c:312-320`, `iprop.x:208-211`). Purgekeys of a
-locked-down principal is allowed (`server_stubs.c:1495-1530`).
-Kadmind ONC RPC (`svc.c:486-520`) answers `PROG_UNAVAIL` for an
-unknown program, `PROG_MISMATCH` with low=high=`KADMVERS` 2 for
-program 2112 and a wrong version, and `AUTH_TOOWEAK` for AUTH_NONE
-on a matching program (`kadm_rpc_svc.c:80-88`). A REPLY-typed
-message fails `xdr_callmsg` (`rpc_callmsg.c:107-108`) so no reply
-is sent and the connection is kept. The AUTH_GSSAPI `GSSAPI_INIT`
-arg-version switch is `svc_auth_gssapi.c:308-341`: an undecodable
-init arg is `AUTH_BADCRED`; versions 1 and 2 are answered with
-`init_res.version` 1 (a logged "Accepted old RPC protocol request"),
-3 and 4 are echoed, any other version is `AUTH_BADCRED` before the
-token is looked at. A store-level ACL refusal inside a stub is that
-procedure's own `KADM5_AUTH_*` code (`auth_code_for`), never a
-generic `AUTH_GET`.
-`kadmin.local` ktadd ignores lockdown like MIT. Create-time name
-special-casing keeps `PWCHANGE_SERVICE` only (`create_principal` has
-none of the `kdb5_util create` bits).
-
-kpasswd self-change (RFC 3244 target absent or equal to the ticket
-client on components and realm, name-type-insensitive like
-`krb5_principal_compare`) is checked first (`misc.c:33-54`). Non-INITIAL
-self is result 7 `Ticket must be derived from a password`. Unprivileged
-other principal is result 5 `Unauthorized request`
-(`KADM5_AUTH_CHANGEPW`). A privileged actor targeting a missing or
-foreign-realm principal is result 2 with `chpass_util.c:136-140`
-(`Password not changed.\nPrincipal does not exist while trying to
-change password.\n`). Admin-style changes ignore INITIAL. `min_life`
-is `check_min_life` (`misc.c:60-121`): a self change inside `pw_min_life`
-is `KADM5_PASS_TOOSOON`, an admin change ignores it (ledger
-`server_stubs.c:392-400`; `kadmin-gate.sh` `PASS_TOOSOON` both legs). Purgekeys of a locked-down principal is allowed
-(`server_stubs.c:1495-1530`, `svr_principal.c:1937`).
-Length prefix and version are checked before AP-REQ work
-(`schpw.c:47-82`). Inconsistent length, unknown version, and the
-truncated cases `goto bailout` (`:384-397`); `dispatch` calls
-`respond(..., NULL)` so no datagram is sent (`:424-435`). AP-REQ
-length `>=` remaining bytes (no PRIV) is that bailout (`:89-95`).
-Post-AP-REQ `chpwfail` (`:320-345`) is always `error_code` **60**
-(`alloc_data` zeros `ret` so `ERROR_TABLE_BASE_krb5` wraps past
-`KRB_ERR_MAX`), `client = NULL`, `server = kadmin/changepw@R`
-(`krb5_build_principal` NT_PRINCIPAL), empty `e_text`,
-`e_data = result‖text`. The UDP path logs MIT com_err text
-(`Message stream modified` / `Requested protocol version not
-supported`) plus `- while dispatching (udp)` (`net-server.c:1103`).
-Framing a KRB-ERROR here would be a 22–25× UDP reflector for a
-6-byte spoofable datagram; MIT does not have that.
-`ChangePasswdData` is decoded only for version `0xff80`. KDC TCP
-`bufsiz` is 1 MiB; `msglen > bufsiz-4` is **61** (`net-server.c:1278,
-1391-1414`). Concurrent KDC TCP connections are capped at 45
-(`max_stream_data_connections`); at the cap a new connection evicts the
-oldest live one (`kill_lru_stream_connection`, `net-server.c:1192-1282`)
-rather than being refused, so a slow-loris cannot starve the newcomer. kpropd `recvauth` junk that is not APPLICATION 14 is
-**40** `Invalid message type` plus the trailing NUL (`rd_req.c:56-57`,
-`recvauth.c:165-170`).
+| Decision | MIT | Rust | Proof |
+| --- | --- | --- | --- |
+| Transited DOMAIN-X500-COMPRESS join | `maybe_join` (`chk_trans.c:137-163`) joins on the unescaped field text: `X.COM,C\.` → `C.X.COM` | the transited decode joins the same way | `transited_x500_escaped_marker_still_joins` |
+| Null transited subfields | `process_intermediates` (`chk_trans.c:45-135`): a leading or trailing comma, `,,` | null subfields match MIT | `transited_mit_transit_tests_vectors` |
+| Rename of an alias | `krb5_db_rename_principal` refuses an alias source with `KRB5_KDB_ALIAS_UNSUPPORTED` (`kdb5.c:1076-1083`) | `renprinc` of an alias is `KRB5_KDB_ALIAS_UNSUPPORTED` (`Operation unsupported on alias principal name`) | `dup_realm_and_rename_refusals_carry_mit_texts` |
+| S4U delegation lists have no carrier | db2 dump v7 has no field for them; only the LDAP backend's `krbAllowedToDelegateTo` carries them | `s4u_allowed_from`/`_to` have no dump, kadm5 or iprop carrier (`kdb_dump.rs` loads empty lists; `kadm5` decode starts empty; `merge_iprop_princ` does not copy them); the only writers are the `KRB5_TEST_S4U_*` knobs, so a production Rust KDC refuses every S4U2Proxy like MIT db2; a Rust TL-data extension belongs to the KLLDAP embed (`KerberosSync`), where the directory is the writer | the refusal: ledger row `tgs_policy.c:569` ([A1](parity/a1-tgs.md)) |
+| FAST reply nonce echo | `decrypt_fast_reply` (`fast.c:397-402`): a present-FAST `KrbFastResponse.nonce` must echo the request nonce | a flip is `KRB5_KDCREP_MODIFIED` (`nonce modified in FAST response`) on AS and TGS success paths | `fast_reply_nonce_mismatch_is_kdcrep_modified`; `fast_reply_nonce_match_unwraps` |
+| FAST AS outer request body | `krb5int_fast_prep_req_body` snapshots the request before `set_request_times`, so the outer `till` is the epoch (`19700101`) (`get_in_tkt.c:836-838`, `fast.c:157-161`); optional outer `from`/`rtime` stay omitted; the inner FAST-REQ body keeps the live times; `req_checksum` is over the snapshotted outer body (`fast.c:310-313`) | same | `fast_outer_till_is_epoch`; `fast_outer_till_inner_nonce_unchanged` |
+| AS-REP clock check (`kdc_timesync`) | default `kdc_timesync` (`init_ctx.c:268-270`) skips the AS-REP starttime vs local clock (`get_in_tkt.c:260-270`); `kdc_timesync = 0` is `KRB5_KDCREP_SKEW` (`Clock skew too great in KDC reply`) | same; there is no per-context `time_offset` (no `krb5_context`), so ticket times stay the KDC's; `kdc_timesync = 0` also rejects an already-expired `endtime` (stricter than MIT's starttime-only check) | `kdc_timesync_accepts_authtime_outside_skew`; `kdc_timesync_off_is_kdcrep_skew` |
+| AS-REP server compare (`verify_as_reply`) | `enc.server == ticket.server` (name and realm) and, unless `canon_ok`, `enc.server == request.server` (`get_in_tkt.c:227-239`); `canon_ok` is CANONICALIZE, NT-ENTERPRISE or anonymous, and only when both the requested and issued servers are TGS | same | `verify_as_srealm_vs_ticket_is_kdcrep_modified`; `verify_as_srealm_vs_request_is_kdcrep_modified`; `verify_as_canon_ok_allows_tgs_rename`; `verify_as_canon_without_tgs_is_still_mismatch` |
+| AS-REP request-time compare (`verify_as_reply`) | request `till`/`rtime`/`from` are compared to the issued times (`get_in_tkt.c:243-255`): `endtime` after `till`, `renew_till` after `rtime` (RENEWABLE) or after `till` (RENEWABLE_OK without RENEWABLE), or POSTDATED `from` ≠ starttime (omitted starttime = authtime), is `KRB5_KDCREP_MODIFIED` | same | `verify_times_endtime_after_till_is_kdcrep_modified`; `verify_times_renew_till_after_rtime_is_kdcrep_modified`; `verify_times_renewable_ok_renew_till_after_till_is_kdcrep_modified`; `verify_times_postdated_from_mismatch_is_kdcrep_modified` |
+| PKINIT / anonymous second-AS padata order | cookie, then PA-PK-AS-REQ, then empty 150/149 (`preauth2.c:992-1019`, `get_in_tkt.c:1365-1372`): `[133, 16, 150, 149]` | same, for PKINIT and anonymous `kinit -n` | `pkinit_padata_cookie_then_module_then_info` |
+| SPAKE client first shot | the first AS-REQ carries `[150, 149]` (`get_in_tkt.c:807-813`); optimistic PA-SPAKE 151 only for an explicit `krb5_get_init_creds_opt_set_preauth_list`; the first KRB-ERROR is PREAUTH_REQUIRED 25 with the full METHOD-DATA hint | `--spake` first-shots `[150, 149]` like MIT | `spake_first_shot_omits_optimistic_151` |
+| Client preauth mechanism order | after the hint, `sort_krb5_padata_sequence` (`get_in_tkt.c:400-471`) plus `k5_preauth` (`preauth2.c:649-713`) run the first real mechanism available: default preferred `17, 16, 15, 14` puts PKINIT first (skipped without an identity), then advertised SPAKE 151 before enc-timestamp 2 | same: password `kinit` against a SPAKE-advertising KDC uses the three-AS SPAKE cascade, not a one-shot enc-timestamp; an extra MIT plain AS on UDP then TCP is `sendto_kdc.c` pacing, not a second `get_in_tkt` request | `sort_krb5_padata_sequence_default_puts_pkinit_first`; `optimistic_hint_picks_spake_before_enc_ts` |
+| S4U2Self client TGS-REQ padata | `[1, 136, 130, 129]` (`s4u_creds.c:517-567`, `fast.c:227-250`): PA-S4U-X509-USER (130) is filled with the TGS subkey (ku 26) after nonce and subkey exist, then PA-FOR-USER (129) on the TGT session (ku 17); FAST outer padata duplicates both | `kvno -U` sends the same | `s4u_tgs_outer_padata_is_1_136_130_129` |
+| S4U2Self reply verification | `verify_s4u2self_reply` (`s4u_creds.c:273-397`) refuses enc-only 130, a nonce/user/checksum mismatch (`KRB5_KDCREP_MODIFIED`), or an unkeyed reply checksum on a modern etype (`INAPP_CKSUM`); missing 130 on both the FAST-swapped reply padata and enc-padata is accepted | same | `s4u_verify_enc_only_is_modified`; `s4u_verify_bad_nonce_is_modified`; `s4u_verify_user_mismatch_is_modified`; `s4u_verify_unkeyed_is_inapp`; `s4u_verify_missing_both_is_ok` |
+| `krb5_verify_init_creds` keytab rule | mk_req + rd_req against the keytab (`vfy_increds.c:259-321`): a missing, empty or non-`host/` keytab succeeds unless `ap_req_nofail` / `[libdefaults] verify_ap_req_nofail`; an outdated host key fails; no MIT CLI caller (`t_vfy_increds` is the oracle) | same (`krb5-vfy-increds`) | `scripts/client-differential-cli-gate.sh` `MIT_vfy_increds_nokeytab` / `RUST_vfy_increds_nokeytab`, `MIT_vfy_increds_nofail` / `RUST_vfy_increds_nofail`, `MIT_vfy_increds_outdated` / `RUST_vfy_increds_outdated` |
+| kpasswd reply result-code range | a result code outside 0–7, or SUCCESS taken from a KRB-ERROR, is `KRB5KRB_AP_ERR_MODIFIED` (`chpw.c:217-231`) | same | `chpw_out_of_range_is_modified`; `chpw_success_from_error_is_modified` |
+| kpasswd result texts and server message | result codes 0–7 have `krb5_chpw_result_code_string` texts (`chpw.c:244-279`); `krb5_chpw_message` decodes the 30-byte AD policy blob or a UTF-8 server string (`chpw.c:389-510`) | the same texts and decode | `chpw_result_code_strings_match_mit`; `chpw_message_utf8_and_fallback`; `chpw_message_ad_policy_matches_mit_test_chpw_message` |
+| kpasswd set-password version and reply framing | `krb5_set_password` sends version `0xff80` with `ChangePasswdData`; a framed kpasswd reply whose length disagrees, or whose version is not 1 / `0xff80`, is `MODIFIED` / `BAD_PVNO` (`chpw.c:129-143`) | same | `chpw_framed_length_mismatch_is_modified`; `chpw_bad_version_is_bad_pvno`; `chpw_setpw_version_is_accepted` |
+| GSS DCE handshake scope | `kg_accept_dce` | only the extra token the `gss-gate.sh` DCE `wrap_iov` cell needs; SIGN_ONLY with a DCE trailer EC is out of scope | `scripts/gss-gate.sh` DCE cells |
+| krbtgt and K/M are created locked down | `kdb5_util create` sets `LOCKDOWN_KEYS` on `krbtgt/REALM` and `K/M` (`kdb5_create.c:465`) | the realm bootstrap does the same | `bootstrap_locks_down_krbtgt_and_master_key` |
+| Lockdown refusal codes on remote kadm5 | kadmind remaps a lockdown refusal in `server_stubs.c` to the privilege code: extract `KADM5_AUTH_EXTRACT`, chpass `KADM5_AUTH_CHANGEPW`, setkey `KADM5_AUTH_SETKEY`, delete `KADM5_AUTH_DELETE`, a modify that clears the bit `KADM5_AUTH_MODIFY`, rename of the source `KADM5_AUTH_DELETE` after the ACL check | the same codes | `export_keytab_lockdown_is_denied`; `scripts/kadmin-rust-gate.sh` `+lockdown_keys` cells |
+| `kadmin.local` ktadd ignores lockdown | MIT's `kadmin.local` ignores `LOCKDOWN_KEYS` on ktadd | same | `export_keytab_local_bypasses_lockdown` |
+| Create-time name special-casing | not settled (§ Deferred): the 1.22.2 source sets `PWCHANGE_SERVICE` only in `kadm5_create.c:150-153`, and `svr_principal.c` has no name special case | `create_principal` keeps only `PWCHANGE_SERVICE` by name (none of the `kdb5_util create` bits) | `create_host_changepw_flag_survives_save` |
+| kadm5.acl restriction flag names | `str_conv.c:50-95,147-197`: `+flag`/`-flag` names take MIT aliases, hyphen→underscore, case-fold and `0x` hex | same | `acl_flag_aliases_parse`; `acl_hex_flag_truncates_to_32bit` |
+| kadm5.acl comments and continuation lines | `auth_acl.c:120-160`: `#` starts a comment only at column 0; a trailing `\` continues the line | same | `acl_comment_only_at_column_zero`; `acl_backslash_continuation`; `acl_crlf_backslash_does_not_continue` |
+| A readable kadm5.acl is authoritative | `acl_init` (`auth_acl.c:547-563`) uses the file as written | nothing replaces it when `admin@REALM` is absent | `acl_file_without_admin_is_not_replaced` |
+| Wildcard ACL privileges exclude extract | `*` / `x` grant every privilege but extract (`e`) | same | `acl_parse_kadm5_style` |
+| iprop ships keys under the master key | MIT ships the master-key ciphertext its KDB already stores (`kdb_convert.c` copies `key_data_contents`) | the store holds plaintext keys and wraps them under the master key at ship time (`iprop_master_key`: stash, then `KRB5_MASTER_PASSWORD`, then the `K/M` principal); with no master key GET_UPDATES fails closed (the Matrix row "iprop keys never sent in the clear") | `scripts/iprop-gate.sh` |
+| kpasswd self-change test | `misc.c:33-54`: the RFC 3244 target is absent or equal to the ticket client on components and realm, name-type-insensitive like `krb5_principal_compare`; it is checked first | same | `scripts/kpasswd-rust-gate.sh`; `scripts/kpasswd-mit-gate.sh` |
+| kpasswd self change needs an INITIAL ticket | result 7 `Ticket must be derived from a password` | same on both kadminds | `scripts/kpasswd-rust-gate.sh`; `scripts/kpasswd-mit-gate.sh` |
+| kpasswd change of another principal without privilege | result 5 `Unauthorized request` (`KADM5_AUTH_CHANGEPW`) | same | `scripts/kpasswd-rust-gate.sh`; `scripts/kpasswd-mit-gate.sh` |
+| kpasswd privileged change of a missing or foreign-realm principal | `chpass_util.c:136-140`: result 2 with `Password not changed.\nPrincipal does not exist while trying to change password.\n`; admin-style changes ignore INITIAL | same | none named |
+| kpasswd request body by version | `ChangePasswdData` is decoded only for version `0xff80` | same (`krb5-admin` `listen.rs`) | none named |
 
 ## Open gaps
 

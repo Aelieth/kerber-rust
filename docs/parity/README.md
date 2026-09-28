@@ -115,13 +115,14 @@ row inserts (the plan's "27" counted the split inside the A2 9).
 W1-Z Z2 added the eight `deferred` A4 rows for the W1-C kadm5 folds
 that had no owner (`working/w1-sweep/plan-w1z-0913-1915.md` W3 handoff table).
 
-## Ranked F-batches (security > parity > e_text)
+## Ranked fix batches (security > parity > e_text)
 
 Corrected by the verification reports. Each batch ≤ 6 commits. One MIT
-check family per commit. F1 starts after this ledger lands; F3–F9 get
-a short plan when reached.
+check family per commit. The plan numbered the batches F1–F9 in the order
+below (ledger cells cite them by that number); F1 starts after this
+ledger lands; F3–F9 get a short plan when reached.
 
-### F1 FAST armor / AD-FX-ARMOR / cookie (security)
+### 1. FAST armor / AD-FX-ARMOR / cookie (security)
 
 1. `kdc: Refuse FAST armor without an authenticator subkey like armor_ap_request` —
    **landed (A′-1 item 1).** AS explicit armor (`fast_util.c:70-76`) and TGS
@@ -140,7 +141,7 @@ a short plan when reached.
 TGS reply-key strengthen is **parity** (F7): the MIT client copies
 `existing_key` when `strengthen_key` is NULL.
 
-### F2 S4U / header PAC integrity (security)
+### 2. S4U / header PAC integrity (security)
 
 Prerequisite: `kdc: Compute is_crossrealm from the header server entry
 like do_tgs_req` (`do_tgs_req.c:686`). Then `S4U2SELF_NO_PAC` 20,
@@ -149,7 +150,7 @@ like do_tgs_req` (`do_tgs_req.c:686`). Then `S4U2SELF_NO_PAC` 20,
 include_pac=false, `disable_pac`/anonymous no-PAC. S4U2Self pw-expiry
 exemption is stricter — document or match.
 
-### F3 second ticket (security / parity)
+### 3. Second ticket (security / parity)
 
 `2ND_TKT_NOT_TGS` 12, `2ND_TKT_MISMATCH` 26, `INVALID_S4U2PROXY_OPTIONS` 13,
 TGS-target `NOT_ALLOWED_TO_DELEGATE` 12, `CAN'T PROXY TGT` 13,
@@ -157,7 +158,7 @@ TGS-target `NOT_ALLOWED_TO_DELEGATE` 12, `CAN'T PROXY TGT` 13,
 not 50. Demoted to e_text (F9): `NO_2ND_TKT`, `EVIDENCE_TKT_NOT_FORWARDABLE`
 (both already refuse with 13).
 
-### F4 AS request validation (security)
+### 4. AS request validation (security)
 
 `INVALID AS OPTIONS` 13 (`kdc_util.c:727-729`) and drop the AS
 `DISALLOW_SVR` ENC_TKT_IN_SKEY exemption (`:789-793`) in the **same
@@ -168,7 +169,7 @@ unsupported 13 is parity + a security.md row, not a hole.
 `NEEDED_HW_PREAUTH` 25 (`do_as_req.c:455-457`; hw_only hint list).
 Admin unlock: `last_admin_unlock >= last_failed` (`lockout.c:102-104`).
 
-### F5 TGS options and ticket flags (security / parity)
+### 5. TGS options and ticket flags (security / parity)
 
 Implement `get_ticket_flags` (`kdc_util.c:813`). `TGT NOT
 FORWARDABLE/PROXIABLE/POSTDATABLE` 13. Ticket addresses.
@@ -178,13 +179,13 @@ FORWARDABLE/PROXIABLE/POSTDATABLE` 13. Ticket addresses.
 now implemented (`lookaside.rs`), so an identical retransmit is answered
 from the cache on both UDP and TCP.
 
-### F6 CAMMAC + HANDLE_AUTHDATA (security, latent)
+### 6. CAMMAC + HANDLE_AUTHDATA (security, latent)
 
 `cammac_create`/`cammac_check_kdcver` (ku 64) after copy, inside
 `handle_pac` / `mint_ticket`. `require_auth` → `HIGHER_AUTHENTICATION_REQUIRED`
 12. `GET_AUTH_INDICATORS`. `AD-MANDATORY-FOR-KDC` → 12.
 
-### F7 RFC 6806 negotiation, FAST reply parity (parity)
+### 7. RFC 6806 negotiation, FAST reply parity (parity)
 
 149 checksum (ku 56) + empty 136 in `enc_padata` + `TKT_FLG_ENC_PA_REP`,
 gated on request 149 — flag without 149 hard-fails MIT kinit. TGS
@@ -193,7 +194,7 @@ gated on request 149 — flag without 149 hard-fails MIT kinit. TGS
 `[136,(11),19,modules]`. ETYPE-INFO2 only when the reply key was not
 replaced.
 
-### F8 gather order and lookups (parity)
+### 8. Gather order and lookups (parity)
 
 AS lockout last; TGS `GET_LOCAL_TGT` before times; `HEADER_PAC` before
 `search_sprinc`. TCP `FIELD_TOOLONG` 61 above UDP `RESPONSE_TOO_BIG` 52
@@ -203,13 +204,13 @@ canonical sname. `CANTLOCK_DB` 29 (exact by pass-through on the AS and TGS
 lookups; no lockable KDB in tree — the unit fakes the backend).
 `select_session_keytype`.
 
-### F9 e_text and the differential unmask (parity, last)
+### 9. e_text and the differential unmask (parity, last)
 
 Token renames (`locked` → `CLIENT LOCKED OUT`, …). Then
 `compare_krb_error` compares `e_text` on every `diffsend` case.
 Whitelist names the documented stricter rows.
 
-## Not this ledger (W1-B / W1-C)
+## Not this ledger
 
 W1-B: `tgs_req_ex` FAST sibling; `get_dest_tgt` referral memory;
 start-realm in the service loop; acceptor transited re-check;
