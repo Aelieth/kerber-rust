@@ -86,9 +86,9 @@ to restate.
 | CAMMAC KDC verifier keyed checksum (`cammac.c:168`) | stricter-documented | `cammac.c:168` ([A3](parity/a3-preauth.md)) |
 | FAST armor ticket server realm | stricter-documented | `fast_util.c:62-67` ([A3](parity/a3-preauth.md)) |
 | Unset `master_key_type` | deviation | `osconf.hin:90` ([A4](parity/a4-kadmin.md)) |
-| kadm5 `ks_tuple` with an enctype that is not implemented | stricter-documented | `svr_principal.c:444-447` ([A4](parity/a4-kadmin.md)) |
+| kadm5 `ks_tuple` with an enctype that is not implemented | stricter-documented | `svr_principal.c:444-447` unknown v3 etype ([A4](parity/a4-kadmin.md)) |
 | `kadmin.local` exit status after a failed verb | stricter-documented | `ss_wrapper.c:66-76; kadmin.c:89-99` ([A4](parity/a4-kadmin.md)) |
-| kadmind reserved TL types | exact | `svr_principal.c:310-333,565-588` ([A4](parity/a4-kadmin.md)) |
+| kadmind reserved TL types | exact; deviation (multi-put) | `svr_principal.c:310-333,565-588,650-682` ([A4](parity/a4-kadmin.md)) |
 | TGS cross-TGS header PAC (`check_normal_tgs_pac`) | exact | `tgs_policy.c:622` ([A1](parity/a1-tgs.md)) |
 | Acceptor transited re-check (`rd_req_dec.c:590-610`) | exact | `rd_req_dec.c:590-610` ([B1](parity/b1-client.md)) |
 | Acceptor `sname_match` (`sname_match.c:30-57`) | exact | `sname_match.c:30-57` ([B1](parity/b1-client.md)) |
@@ -129,7 +129,7 @@ not yet settled says so.
 | krbtgt and K/M are created locked down | `kdb5_util create` sets `LOCKDOWN_KEYS` on `krbtgt/REALM` and `K/M` (`kdb5_create.c:465`) | the realm bootstrap does the same | `bootstrap_locks_down_krbtgt_and_master_key` |
 | Lockdown refusal codes on remote kadm5 | kadmind remaps a lockdown refusal in `server_stubs.c` to the privilege code: extract `KADM5_AUTH_EXTRACT`, chpass `KADM5_AUTH_CHANGEPW`, setkey `KADM5_AUTH_SETKEY`, delete `KADM5_AUTH_DELETE`, a modify that clears the bit `KADM5_AUTH_MODIFY`, rename of the source `KADM5_AUTH_DELETE` after the ACL check | the same codes | `export_keytab_lockdown_is_denied`; `scripts/kadmin-rust-gate.sh` `+lockdown_keys` cells |
 | `kadmin.local` ktadd ignores lockdown | MIT's `kadmin.local` ignores `LOCKDOWN_KEYS` on ktadd | same | `export_keytab_local_bypasses_lockdown` |
-| Create-time name special-casing | not settled (§ Deferred): the 1.22.2 source sets `PWCHANGE_SERVICE` only in `kadm5_create.c:150-153`, and `svr_principal.c` has no name special case | `create_principal` keeps only `PWCHANGE_SERVICE` by name (none of the `kdb5_util create` bits) | `create_host_changepw_flag_survives_save` |
+| Create-time name special-casing | not settled; open: the 1.22.2 source sets `PWCHANGE_SERVICE` only in `kadm5_create.c:150-153`, and `svr_principal.c` has no name special case | `create_principal` keeps only `PWCHANGE_SERVICE` by name (none of the `kdb5_util create` bits) | `create_host_changepw_flag_survives_save` |
 | kadm5.acl restriction flag names | `str_conv.c:50-95,147-197`: `+flag`/`-flag` names take MIT aliases, hyphen→underscore, case-fold and `0x` hex | same | `acl_flag_aliases_parse`; `acl_hex_flag_truncates_to_32bit` |
 | kadm5.acl comments and continuation lines | `auth_acl.c:120-160`: `#` starts a comment only at column 0; a trailing `\` continues the line | same | `acl_comment_only_at_column_zero`; `acl_backslash_continuation`; `acl_crlf_backslash_does_not_continue` |
 | A readable kadm5.acl is authoritative | `acl_init` (`auth_acl.c:547-563`) uses the file as written | nothing replaces it when `admin@REALM` is absent | `acl_file_without_admin_is_not_replaced` |
@@ -147,7 +147,7 @@ Known behaviour laxer than MIT 1.22.2. Each is a fix to make after a MIT settle,
 
 | Gap | MIT | Rust | Ledger row |
 | --- | --- | --- | --- |
-| CMS ContentInfo type not checked | `cms_signeddata_verify` refuses a type other than id-signedData ("wrong oid") | `cms_parts` reads the contentType and discards it, so a SignedData body under any OID is parsed | `pkinit_crypto_openssl.c:2022-2028` ([B1](parity/b1-client.md)) |
+| CMS ContentInfo type not checked | `cms_signeddata_verify` refuses a type other than id-signedData ("wrong oid") | `cms_parts` (`crates/krb5-types/src/pkinit/cms.rs`) reads the contentType and discards it, so a SignedData body under any OID is parsed | `pkinit_crypto_openssl.c:2022-2028` ([B1](parity/b1-client.md)) |
 
 ## Not in this matrix
 
