@@ -7,7 +7,7 @@ gets tickets with MIT `kinit` and `kvno`.
 
 | File | Read by | Install at |
 | --- | --- | --- |
-| `kdc.conf` | `krb5-kdc`, `krb5-kadmind`, `krb5-kdb` | `KRB5_KDC_PROFILE`, else `/etc/krb5kdc/kdc.conf` |
+| `kdc.conf` | `krb5-kdc`, `krb5-kadmind`, `krb5-kdb` | `KRB5_KDC_PROFILE` (or `KRB5_KDC_CONF`), else `/etc/krb5kdc/kdc.conf`; `master_key_type` is read only through the two variables |
 | `krb5.conf` | the Rust client tools, and MIT clients | `KRB5_CONFIG`, else `/etc/krb5.conf` |
 | `kadm5.acl` | `krb5-kadmind` | the `acl_file` path in `kdc.conf` |
 
@@ -34,15 +34,17 @@ krb5-kadmind                         # 127.0.0.1:749 unless given host:port
 | `kdc_listen` | `crates/krb5-kdc/src/bin/krb5-kdc.rs` (`bind_list`): the KDC binds UDP and TCP on the first listed address that binds, where MIT binds every listed address. A bare port binds `127.0.0.1`, where MIT binds every local address; write `host:port` for another address. |
 | `database_name`, `key_stash_file` | `krb5-kdc.rs` and `crates/krb5-admin/src/bin/krb5-kadmind.rs` (`db_and_stash`), when `KRB5_KDC_DB` / `KRB5_KDC_STASH` are unset |
 | `acl_file` | `krb5-kadmind.rs` (`load_acl`), when `KRB5_ACL_FILE` is unset; a missing file refuses to start |
-| `master_key_type` | `crates/krb5-kdc/src/bin/krb5-kdb.rs` (`master_etype`, for `create`) and `crates/krb5-kdc/src/persist.rs` (`persist_master_etype`); unset, this port uses aes256-cts-hmac-sha384-192 where MIT uses aes256-cts-hmac-sha1-96, so the example sets MIT's |
+| `master_key_type` | `crates/krb5-kdc/src/bin/krb5-kdb.rs` (`master_etype`, for `create`) and `crates/krb5-kdc/src/persist.rs` (`persist_master_etype`), through `KRB5_KDC_PROFILE` / `KRB5_KDC_CONF` only (`env_kdc_config`): a `kdc.conf` found only at `/etc/krb5kdc/kdc.conf` is not read for it, and `KRB5_MASTER_ETYPE` overrides it. Unset, this port uses aes256-cts-hmac-sha384-192 where MIT uses aes256-cts-hmac-sha1-96, so the example sets MIT's |
 | `supported_enctypes`, `max_life`, `max_renewable_life` | `crates/krb5-kdc/src/store/policy.rs` (`Policy::apply_kdc_conf`): the key types and salts new principals get, and the realm ticket caps |
 | `default_principal_flags` | `crates/krb5-kdc/src/store/policy.rs` (`Policy::apply_kdc_conf`, parsed by `default_principal_flags` in `crates/krb5-kdc/src/acl.rs`): the attributes a kadm5 create without an attribute mask gets |
 
 `krb5.conf`, parsed by `crates/krb5-config/src/profile.rs`: every
 `[libdefaults]` key here (`parse_libdefaults`), the realm's `kdc`
 (`parse_realm_line`, then `discover_kdc`), and `[domain_realm]`
-(`host_to_realm`). `admin_server` is parsed too, but no Rust tool uses it yet
-(there is no remote `kadmin` client); MIT `kadmin` uses it.
+(`host_to_realm`). Three keys are parsed but no Rust tool uses them yet; they
+stay for MIT clients: `dns_lookup_realm` and `rdns` (MIT `krb5_get_host_realm`,
+`krb5_sname_to_principal`), and `admin_server` (there is no remote `kadmin`
+client; MIT `kadmin` uses it).
 
 `kadm5.acl` lines are `<principal> <operations> [<target> [<restrictions>]]`,
 read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
@@ -54,6 +56,8 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
   `krb5-kdb` and `krb5-kadmin-local` read only these.
 - `KRB5_MASTER_PASSWORD`: `krb5-kdb` refuses to run `create`, `load`, `dump`
   or `addpol` without it; `load` and `dump` derive the master key from it.
+- `KRB5_MASTER_ETYPE`: overrides `master_key_type` (`krb5-kdb` and the persist
+  path).
 - `KRB5_ACL_FILE`: overrides `acl_file`.
 - `KRB5_KPROP_ACL`: `krb5-kpropd`'s allowlist (`kpropd.acl` form); unset or empty
   refuses every propagation (`crates/krb5-admin/src/bin/krb5-kpropd.rs`).
@@ -71,6 +75,9 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
   and kpasswd on `KRB5_KPASSWD_BIND`.
 - `kdc_tcp_listen` (and `kdc_tcp_ports`): parsed, but the KDC binds TCP on its
   `kdc_listen` address.
+- a realm stanza's `kdc_listen` / `kdc_ports`: not read; only `[kdcdefaults]`
+  sets the KDC's addresses in `kdc.conf`.
+- `[logging]`: no reader; `docs/logging.md` says what the daemons log.
 - `iprop_enable` and `iprop_port`: iprop (program 100423) always answers on the
   kadmind port; there is no separate listener.
 - `kdc_timeout` and `max_retries` in `krb5.conf`: parsed, but they do not change
