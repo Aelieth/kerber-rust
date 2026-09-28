@@ -3321,6 +3321,7 @@ HYGIENE_DIFF_MIN_CASES = 36
 HYGIENE_BODY_DIFF_MIN_CASES = 41
 HYGIENE_FN_DIFF_MIN_CASES = 142
 HYGIENE_INVENTORY_MIN_CASES = 8
+PY_MOVE_CHECK_MIN_CASES = 18
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 0
@@ -3582,6 +3583,32 @@ def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
         _die("hygiene-fn-diff.py must self-test a vis-only change")
     if "unused-accept fixture must be otherwise green" not in text:
         _die("hygiene-fn-diff.py must isolate unused --accept as its own case")
+
+
+_PY_MOVE_KINDS = ("missing", "extra", "defined-twice", "changed", "unresolved", "future", "stray", "shim", "cycles")
+
+
+def check_py_move_self_test(text: str | None = None) -> None:
+    """py-move-check.py --self-test is executed; a gutted `_self_test` is red; every finding kind
+    has a fixture, and a compare run self-tests first."""
+    path = SCRIPTS / "py-move-check.py"
+    if text is None:
+        if not path.is_file():
+            _die("missing scripts/py-move-check.py")
+        text = path.read_text(encoding="utf-8")
+        _run_script_self_test(path, "py-move-check.py", PY_MOVE_CHECK_MIN_CASES)
+        _gutted_self_test_must_not_count(path, text, "py-move-check.py", PY_MOVE_CHECK_MIN_CASES)
+    elif (_self_test_n_from_text(text) or 0) < PY_MOVE_CHECK_MIN_CASES:
+        _die(f"py-move-check.py must print self-test ok (N cases) with N>={PY_MOVE_CHECK_MIN_CASES}")
+    if _self_test_fn_is_gutted(text):
+        _die("py-move-check.py _self_test must not be gutted to return None")
+    if "def _self_test" not in text or "def main" not in text:
+        _die("py-move-check.py must define _self_test and main")
+    if text.count("_self_test()") < 2 or "redirect_stdout(sys.stderr)" not in text:
+        _die("py-move-check.py must run _self_test (to stderr) before a compare run")
+    for kind in _PY_MOVE_KINDS:
+        if f'"{kind}"),' not in text:
+            _die(f"py-move-check.py must self-test the {kind} finding")
 
 
 def check_hygiene_inventory_cfg_test() -> None:
@@ -5961,6 +5988,23 @@ jobs:
         "        print('hygiene-fn-diff: self-test ok (64 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n",
     )
+    py_move_ok = (
+        "def _self_test():\n    cases = [" + "".join(f'("x", {{}}, s, a, "{k}"),' for k in _PY_MOVE_KINDS) + "]\n"
+        "def main(argv):\n    if argv == ['--self-test']:\n        _self_test()\n"
+        "        print('py-move-check: self-test ok (18 cases)')\n"
+        "        return 0\n    with contextlib.redirect_stdout(sys.stderr):\n        _self_test()\n"
+    )
+    check_py_move_self_test(py_move_ok)
+    _must_die_msg("self-test ok (N cases)", check_py_move_self_test, py_move_ok.replace("(18 cases)", "(17 cases)"))
+    _must_die_msg(
+        "must not be gutted",
+        check_py_move_self_test,
+        'def _self_test():\n    """' + "".join(f'"{k}"),' for k in _PY_MOVE_KINDS) + '"""\n    return None\n'
+        + py_move_ok[py_move_ok.index("def main(argv):"):],
+    )
+    _must_die_msg("before a compare run", check_py_move_self_test,
+                  py_move_ok.replace("with contextlib.redirect_stdout(sys.stderr):\n        _self_test()\n", "pass\n"))
+    _must_die_msg("the shim finding", check_py_move_self_test, py_move_ok.replace('"shim"),', '"other"),'))
     with tempfile.TemporaryDirectory() as tmp:
         demo = pathlib.Path(tmp) / "crates" / "demo"
         (demo / "tests" / "common").mkdir(parents=True)
@@ -7476,6 +7520,7 @@ def main() -> None:
     check_hygiene_diff_self_test()
     check_hygiene_body_diff_self_test()
     check_hygiene_fn_diff_self_test()
+    check_py_move_self_test()
     check_hygiene_inventory_cfg_test()
     check_policy_module_attrs()
     check_autotests_registered()
