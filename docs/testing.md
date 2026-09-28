@@ -11,13 +11,21 @@ is the sibling `doc` job, `cargo doc --workspace --no-deps` under
 deny with eight named allows (`Cargo.toml` says why for each),
 `missing_docs` is denied workspace-wide, and every library and binary
 root carries `#![deny(clippy::unwrap_used, clippy::expect_used,
-clippy::panic)]`. `make snapshot OUT=<dir>` records the
-test/gate/oracle inventory and the shape of the tree (LOC and comment
-lines per package and file, function and file maxima, `pub` surface,
+clippy::panic)]`. `make snapshot OUT=<dir>` (`scripts/hygiene-snapshot.sh`)
+records the test/gate/oracle inventory and the shape of the tree (LOC and
+comment lines per package and file, the comment lines that carry a MIT
+anchor counted apart from the prose, function and file maxima, `pub` surface,
 `#[allow]` sites, binaries, dependencies); `QUALITY=1` adds the
 compiler-backed counts (fmt, clippy, rustdoc under `-D warnings`,
 doctests, `missing_docs`, shellcheck). `make checkpoint OUT=<dir>` runs
-nextest and the gates into a stamped `timings.tsv`. Both refuse to run
+nextest and the gates into a stamped `timings.tsv`, and exits 1 when a
+step fails: nextest, ci-policy, a gate whose rc is neither 0 nor 2 (2 is a
+lab that is not up), or the `ci-policy --checkpoint` gate-wall check. It
+runs every step first; `CHECKPOINT_RC.txt` holds `checkpoint_rc=` and one
+`fail=` line per failed step. `scripts/checkpoint.sh --self-test`, a step of
+the `test` job, runs fixture checkpoints through three hooks
+(`KERBER_CHECKPOINT_NEXTEST`, `KERBER_CHECKPOINT_POLICY`,
+`KERBER_CHECKPOINT_GATE_DIR`); `00-head.txt` records any that is set. Both refuse to run
 unless the host `default_realm` is the `TESTLABBY.LOCAL` lab stub
 (`scripts/lib/lab-realm.sh` reads the first live `default_realm =` line
 of `/etc/krb5.conf`, not a commented one; `KERBER_ALLOW_HOST_REALM=1`
@@ -36,7 +44,8 @@ informational. Ledger rows are keyed by MIT cite and check, with the
 file as a separate column, so a row that changes file (the single-file
 ledger split into `docs/parity/`) is counted as moved and a row that
 disappears fails; a snapshot from before that key is compared by MIT
-cite alone. A regrade is a change of grade, the verdict cell's first
+cite alone, the verdicts under each cite as a multiset, so a cite the
+ledger holds twice stays two rows. A regrade is a change of grade, the verdict cell's first
 word (the tally's counting rule), and fails; a change confined to the
 parenthetical qualifier is listed as `ledger verdict qualifiers
 reworded`. A swath that renames or de-duplicates tests passes its
@@ -311,7 +320,22 @@ the directory; `--all working/logs/w1-sweep` unnamed = 0 is a close-out conditio
 path that does not exist. `CHANGELOG.md` is excluded (history: a
 retired path in an old entry is not a live cite).
 
-`scripts/ci-policy.py` enforces workflow YAML (fail-red jobs, nextest
+`scripts/ci-policy.py` is a shim over the `scripts/ci_policy/` package:
+one module per domain (`workflows`, `shell`, `gates`, `ledger`, `docs`,
+`evidence`, `hygiene`, `comments`; the shared paths in `common`, `main()` in
+`__init__`) and the self-test one file per domain under `selftest/`. The
+shim re-exports the names `kdb-dump-gate.sh` and `hygiene_inventory.py`
+read, and `check_policy_module_attrs` loads it from `/` the way they do.
+`scripts/py-move-check.py` judged the split: every def, class and
+assignment of the old module defined once and identical, each global it
+reads bound to its home module, the shim's imports right, no import cycle
+(`check_py_move_self_test` keeps its fixtures). Some arms are advisory at
+their live counts until the work that clears them (the `*_ALLOW`
+constants): a gate that sets its own `SCRATCH=`, a shell function defined
+twice byte for byte, a direct `kadmin -q` in a gate instead of a
+`scripts/lib` helper, and process tags in `docs/**`. Working-plan section
+names in the public docs and a `scripts/**/*.py` that does not compile are
+hard. It enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
 --workspace` or `cargo test --all`, `--no-run` + junit upload, no
 echo-only `then`/`elif`/`else` arm in `scripts/*-gate.sh` or
@@ -367,7 +391,12 @@ prints `head_sha=`, `tree_sha=` (temporary-index `git add -A -- .
 ':!working'` then `write-tree`), `dirty=`, `captured_at=`, the MIT
 image id/created, and the SHA-256 of `harness/kadm5.acl` in the tree
 versus inside `kerber-rust-mit-kdc:1.22.2`. A hash mismatch dies
-`stale MIT image; rebuild from harness/`. An artefact without this
+`stale MIT image; rebuild from harness/`. The image's hash costs a
+`docker run`: a runner that stamps many files (`checkpoint.sh`,
+`red-at-sha.sh`) makes one `KERBER_PROV_MEMO` file with `mktemp` under its
+`KERBER_SCRATCH` and removes it on exit, and the helper writes no file of
+its own that outlives it (`check_provenance_memo`); ci-policy gives the
+scripts it runs a scratch. An artefact without this
 stamp is not evidence. A "settled live" claim must name its log
 file. Gate scripts write host files only under `KERBER_SCRATCH`
 (`ci-policy` fails a literal host `>/tmp/` write outside a
@@ -421,7 +450,10 @@ after the overlay and any `--inject` copies, `command=` including
 `scripts/*.{c,py}`, and the whole `harness/` tree copied into the
 worktree **before** `write-tree` so `tree_sha=` describes the tree
 that ran. `--inject` with no files is refused. Binary rebuild is
-only for `scripts/*-gate.sh`. The worktree is removed and
+only for `scripts/*-gate.sh`, and builds the base's bins: its own
+`scripts/lib/build-bins.sh` when the base has one, else the five older
+gate bins, each from the crate that holds it at the base; `--print-build`
+prints that choice and stops (`check_red_at_sha_build`). The worktree is removed and
 `git worktree prune`d on EXIT, and so is the `red-target-<sha>` cargo
 tree — it is rebuildable scratch (thirty of them held 36 GiB of W1
 evidence dirs) and the stamped log keeps the rc and the FAILED list;
@@ -461,7 +493,12 @@ unit names with `git show <sha>:<script>` / `git grep <sha>` instead of the
 working tree — the values were true at that SHA, and a later gate edit must
 not re-open a closed summary. An open summary (no header) resolves against
 the working tree; `--at SHA` overrides the header for every summary given.
-The bare invocation over every summary is the check.
+The bare invocation over every summary is the check. A tooling cite's
+enclosing def is read from the AST, so a column-0 line inside a string
+does not end it. `scripts/claim-remap.py SUMMARY OLD NEW [--moved PATH=DIR]
+[--write]` re-maps the Settled-live cites from one commit to another, across
+a module split with `--moved` (difflib's unchanged blocks; a cite it cannot
+place is flagged, not guessed).
 
 The public docs are `README.md`, `CONTRIBUTING.md`, `CHANGELOG.md`,
 every `docs/**/*.md`, and every `README.md` under `examples/`,
@@ -471,13 +508,13 @@ heading lowercased, characters other than letters, digits, spaces,
 hyphens and underscores dropped, spaces turned into hyphens, a repeat
 suffixed `-1`, `-2`); links in code are not links. `check_doc_file_cites`
 reads the same files except the CHANGELOG. `check_changelog_headings`
-allows only the Keep-a-Changelog group headings (plus `Tests and CI`
-and `How to`) as `###` headings; `check_docs_size` holds every
+allows only the Keep-a-Changelog group names, each the whole heading, plus
+`Tests and CI` and `How to …` headings, as `###` headings; `check_docs_size` holds every
 `docs/**/*.md` to 60 KiB and `CHANGELOG.md` to its ceiling
-(`CHANGELOG_MAX_BYTES`: the size at the S5 close, 235,552 bytes, plus a
-stated 9,000-byte allowance for S6's bullets, one per PR item; a `tool:`
-commit at the start of a swath that adds bullets re-bases it, never the
-commit that adds them). `check_gate_documented` holds `docs/gates.md`
+(`CHANGELOG_MAX_BYTES`: its size when last re-based, 235,552 bytes, plus
+a stated 9,000-byte allowance for the scripts and tooling work's bullets,
+one per change; a `tool:` commit at the start of a swath that adds bullets
+re-bases it, never the commit that adds them). `check_gate_documented` holds `docs/gates.md`
 to one row per `scripts/*-gate.sh`, with the workflow and lane columns
 equal to the gates' placements in `.github/workflows` (`fail-red`,
 `skip2`, `soft`, `nightly`; `stub` or `wrapper` for the documented

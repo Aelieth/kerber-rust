@@ -2506,6 +2506,38 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** `scripts/ci-policy.py` is a shim over the `scripts/ci_policy/`
+  package, one module per domain and the self-test one file per domain;
+  `py-move-check.py` proved the split a pure move, output byte-identical.
+- **tool.** The two tools that read `ci-policy.py` as a module fail closed:
+  the inventory refuses a split ledger without `ledger_sources`, and
+  `check_policy_module_attrs` loads the shim from `/` for its seven names.
+- **tool.** claim-audit reads a cite's enclosing def from the AST (a column-0
+  YAML key no longer ends it); `claim-remap.py` re-maps a summary's cites
+  across a module split.
+- **test.** The KDC oversize-length test sends the length word alone: unread
+  body bytes turned the server's close into a reset that could beat the
+  FIELD_TOOLONG reply. MIT's krb5kdc closes the same way.
+- **tool.** `checkpoint.sh` exits 1 when nextest, ci-policy, a gate (rc other
+  than 0 or 2) or the gate-wall check fails, and writes `CHECKPOINT_RC.txt`;
+  the `test` job runs its self-test.
+- **tool.** `red-at-sha.sh` builds a gate's bins from the base's own
+  `build-bins.sh`, or the five older gate bins from the crates that held
+  them; `--print-build` shows which.
+- **tool.** `provenance.sh` writes no memo of its own: the MIT image's acl
+  hash lives in one `KERBER_PROV_MEMO` file a runner makes under its scratch,
+  so no stamp leaves a file in host `/tmp`.
+- **ci.** New arms at their live counts: a gate's own `SCRATCH=`, shell
+  functions defined twice, direct `kadmin -q` in gates, process tags in
+  `docs/**`; plan-section names and non-compiling Python are hard.
+- **tool.** hygiene-diff asserts each self-test failure's message and
+  compares an old ledger snapshot per cite as a multiset; snapshots split
+  comment lines into MIT anchors and prose.
+- **tool.** Missing judge fixtures added: anchors in `.x`, `.y`, `/*!` and
+  nested blocks, red truth kinds, `fails at <hash>`, the ledger's two red
+  paths, every placement lane; ci-status admits a PR's run by repository.
+- **tool.** A CHANGELOG group name must be the whole `###` heading, and every
+  ci-policy check has a docstring.
 - **test.** `kdc-gate.sh` runs `examples/configs` as written: `krb5-kdb`
   creates the realm, `krb5-kdc` and `krb5-kadmind` start on `kdc.conf`, MIT
   `kadmin` adds principals, and MIT `kinit` + `kvno` get tickets.
