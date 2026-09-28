@@ -663,6 +663,14 @@ rather than being refused, so a slow-loris cannot starve the newcomer. kpropd `r
 **40** `Invalid message type` plus the trailing NUL (`rd_req.c:56-57`,
 `recvauth.c:165-170`).
 
+## Open gaps
+
+Known behaviour laxer than MIT 1.22.2. Each is a fix to make after a MIT settle, and has a ledger `deviation` row; none is a deliberate deviation.
+
+| Gap | MIT | Rust | Ledger row |
+| --- | --- | --- | --- |
+| CMS ContentInfo type not checked | `cms_signeddata_verify` refuses a type other than id-signedData ("wrong oid") | `cms_parts` reads the contentType and discards it, so a SignedData body under any OID is parsed | `pkinit_crypto_openssl.c:2022-2028` (B1) |
+
 ## Not in this matrix
 
 In-process metrics counters are deferred (logs already carry
