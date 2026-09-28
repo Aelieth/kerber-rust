@@ -53,7 +53,8 @@ See [docs/architecture.md](docs/architecture.md) and
 ## What's proven
 
 Every claim below is backed by a live gate in the CI `harness` job. Full
-inventory: [docs/interop-matrix.md](docs/interop-matrix.md); the stage map is
+inventory: [docs/gates.md](docs/gates.md), one row per gate, and
+[docs/interop-matrix.md](docs/interop-matrix.md), the oracles; the stage map is
 [docs/stages.md](docs/stages.md).
 
 | External oracle | Proves | Gates (examples) |

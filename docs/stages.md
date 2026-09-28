@@ -22,8 +22,8 @@ targets.
 ## Era II — Active Directory interop & production verification (closed at 1.0)
 
 Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
-**v1.0.0** claims. The external-oracle inventory is
-[`interop-matrix.md`](interop-matrix.md). Local breadcrumbs:
+**v1.0.0** claims. The external-oracle inventory is [`gates.md`](gates.md)
+(per gate) and [`interop-matrix.md`](interop-matrix.md) (per oracle). Local breadcrumbs:
 `working/era-ii/`.
 
 - **Track A — AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the

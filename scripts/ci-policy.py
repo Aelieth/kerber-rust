@@ -3327,8 +3327,8 @@ MIT_TRUTH_ALLOW = 0
 PROCESS_TAG_ALLOW = 0
 # S5 doc checks: advisory at the live count until the commit that clears each.
 CHANGELOG_HEADINGS_ALLOW = 94
-DOCS_SIZE_ALLOW = 1
-GATE_DOC_ALLOW = 73
+DOCS_SIZE_ALLOW = 0
+GATE_DOC_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
 CHANGELOG_MAX_BYTES = 236563
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
