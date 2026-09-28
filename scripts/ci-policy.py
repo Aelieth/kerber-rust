@@ -3330,9 +3330,10 @@ CHANGELOG_HEADINGS_ALLOW = 0
 DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
-# The regrouped CHANGELOG (235,117 bytes at the S5 regroup) plus 600 bytes for the S5 examples
-# commit's two bullets; re-based only by a tool: commit at the start of a swath that adds bullets.
-CHANGELOG_MAX_BYTES = 235717
+# The CHANGELOG at the S5 close (235,552 bytes) plus 9,000 bytes for S6's bullets: one per PR item
+# across S6.1-S6.3, at most 25 at 360 bytes (the median bullet is 341); re-based only by a tool:
+# commit at the start of a swath that adds bullets.
+CHANGELOG_MAX_BYTES = 244552
 _REFUSE_CALL_RE = re.compile(r"^\s*refuse_golden_capture_dir\s+\S", re.M)
 _REQUIRED_REFUSE_CALLERS = (
     "scripts/lib/prod-realm-common.sh",
