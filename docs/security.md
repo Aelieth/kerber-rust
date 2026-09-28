@@ -54,47 +54,49 @@ the UTF-8 transited row below is mixed on absurd inputs.
 | Transited component bounds | Raw field ≤ 511 unescaped bytes; joined ≤ 512 (`chk_trans.c` `MAXLEN`) | Same (511 raw / 512 joined); over is `FieldTooLong` out of band | MIT-exact |
 | Invalid UTF-8 in transited | Byte-exact `memcmp` | `from_utf8_lossy` inflates invalid bytes 3× against the 512 bound (STRICTER) and collapses distinct invalid sequences to one U+FFFD string, so equal-length compare can succeed where MIT errors (laxer; absurd inputs). Byte-exact matching is general-pass | Mixed; fail-closed on honest UTF-8 |
 | Hierarchical intermediates on ≥512-byte realm | MIT `walk_rtree.c` copies every tween unbounded | Empty permitted set (nothing allowed). `find_alternate_tgs` uses the same huge-realm empty guard on MIT's walk list | **STRICTER** on absurd `crealm`/`srealm` |
-| kadmind reserved TL types | `kadm5_modify_principal` / create refuse `tl_data_type < 256` with `KADM5_BAD_TL_TYPE` before `kdb_put_entry` (`svr_principal.c:327-333,581-588`) | same refuse before any store write (`kadm5/dispatch.rs`) | exact |
 | TGS authenticator checksum retry | `kdc_process_tgs_req` verifies the PA-TGS-REQ authenticator checksum over the raw request body (packet field 4) and, when that fails, retries over its own canonical re-encoding of the KDC-REQ-BODY; with no raw packet the check is skipped (`kdc_util.c:246-255`) | `kdc_util.rs` `process_tgs_header` verifies once, over the wire body only; a mismatch is 31 `PROCESS_TGS` | **STRICTER** than MIT (a client whose body is not canonical DER is refused; MIT clients emit canonical DER, so the retry is never reached by an MIT or Rust client; ledger row `kdc_util.c:112-140; :248; :691-697`) |
-| TGS cross-TGS header PAC (`check_normal_tgs_pac`) | Client-info mismatch is 13 `HEADER_PAC` unless `is_crossrealm` and the requested server is a cross TGS and `verify_deleg_pac` succeeds (`tgs_policy.c:616-620`) | Same client-info match; `verify_deleg_pac` (`tgs_policy.c:366-421`) accepts a delegation PAC (CLIENT_INFO with realm, authtime, DELEGATION_INFO, last transited = impersonator) | exact; live accept path is Samba |
 | Acceptor ticket kvno + etype (`rd_req_dec.c:325-347`; `kt_file.c:355-377`) | `try_one_princ` → `krb5_kt_get_entry(..., tkt_kvno, tkt_etype)` only when the server name is fully specified (`is_matching` false); kvno 0 = any; a keytab entry whose vno equals the low 8 bits of the requested kvno is a pre-1.14 truncation match; `decrypt_try_server` iterates similar-enctype keys for a wildcard/host-based name and uses kvno only for the error | `verify_inner` skips a key whose etype ≠ ticket etype; when `key_kvnos` is set, skip a nonzero label that is not the ticket kvno (0 is wildcard); a skipped-only outcome under a pinned name equal to the ticket sname is `BADKEYVER` (44) with `keytab_fetch_error`'s text, nothing at all `NOKEY` (45). kpasswd (`kadmin/changepw`, fully specified) and `verify_init_creds` pass keytab kvnos; product GSS accept (`accept_sec_context`) leaves `key_kvnos` unset (iteration), the `_kt` path pins only when `expected_server` is `Some` | exact on the pin/iterate split and the 44/45 codes (settled live against MIT `gss-server` with a fully-qualified vs host-based acceptor name — `client-differential-gate.sh` Z1.3); **STRICTER** in one corner: the pin is an exact kvno equality with no `kvno & 0xff` low-byte fallback, so a ticket labelled kvno > 255 whose keytab entry kept only the truncated vno is refused where MIT would decrypt (unreachable — kadmind never issues kvno > 255) |
-| Acceptor transited re-check (`rd_req_dec.c:590-610`) | Unset `TRANSITED_POLICY_CHECKED` + non-empty transited → `krb5_check_transited_list` / `krb5_walk_realm_tree`; empty or T flag or anonymous crealm skips | `check_ap_req_transited`: same skip rules; hop must sit on `[capaths]` or `rtree_hier_realms`; else 43 `ILL_CR_TKT` | exact |
-| Acceptor `sname_match` (`sname_match.c:30-57`) | NULL matching accepts any; NT-SRV-HST + 2 comps: realm/service + hostname unless empty or `ignore_acceptor_hostname` | `sname_match` + `[libdefaults] ignore_acceptor_hostname` (default false) | exact |
 | CAMMAC absent kvno + present enctype (`cammac.c:152-162`, `kdb_default.c:41-68`) | `ver->kvno == current_kvno` (highest kvno) uses `tgt_key` and compares `ver->enctype` against a zeroed `tgtkey` (so a present enctype on the current-kvno path fails); kvno 0 that is not current takes the historical decrypt path | Absent/0 kvno uses `tgt_key`; a present `enctype` is compared to the historical etype (None on the current path) and fails closed | **STRICTER** on absent-kvno + present-enctype (Rust never decrypts kvno 0 as a historical key). Current-kvno + present-enctype fails on both (MIT via zeroed `tgtkey`) |
 | FAST TGS reply envelope (`decode_kdc.c:64-67`; `fast.c:557-558, 580-593`) | A TGS-REP with no PA-FX-FAST under an armored request is `KRB5_ERR_FAST_REQUIRED`, then ignored (`decode_kdc.c:64-67`); inside a present envelope the client copies `existing_key` when `strengthen_key` is NULL | `tgs.rs` `tgs_fast_reply_key`: a *missing* envelope is accepted like MIT (`29a5ec8`; Heimdal 7.8 leaves implicit TGS FAST unwrapped); a *present* envelope must carry the finished message and a `strengthen_key`, else `ReplyMismatch` | exact on the missing envelope; **STRICTER** inside one: a FAST TGS-REP envelope without a strengthen-key is refused. Both KDCs always mint one (`fast_util.c:277-355`) |
-| TGS-REP client / times (`gc_via_tkt.c:247-297`) | `process_tgs_reply`: reply client == TGT client (S4U exceptions); ticket server == enc server; `endtime` not after request `till`; strip O on a foreign TGT without O | `tgs_reply_client_ok` / `tgs_reply_server_consistent` / `tgs_reply_req_times` / `tgs_strip_ok_as_delegate` | exact. Starttime skew (`:302-307`) is deferred: MIT uses the per-context timestamp that `kdc_timesync` adjusts; this crate has no `krb5_context` |
-| TGS `try_fallback` (`get_creds.c:503-543`) | First referral TGS error: specified realm retries without `CANONICALIZE`; referral realm uses `krb5_get_fallback_host_realm` | `tgs_try_fallback` + specified-realm retry; host-realm DNS rewrite absent | exact on the specified-realm arm; host-realm DNS deferred (B3) |
-| Forwarded TGT (`fwd_tgt.c:147-153`) | `flags2options \| FORWARDED`; optional clear `FORWARDABLE`; addresses from `k5_os_hostaddr` when the TGT has caddrs | `tgs_forward_options` + `tgs_forward`; request addresses empty | exact on options; hostaddr deferred (B3) |
-| Acceptor clockskew / replay (`rd_req_dec.c:620-631`) | `k5_rc_store` then `krb5_check_clockskew` | `verify_inner` replay 34 then `SKEW` 37 | exact |
-| kdc.conf realm vs `[kdcdefaults]` (`main.c:286-345`) | realm stanza first, then defaults fallback | `overlay_realm_booleans` after file-order parse | exact |
 | SPAKE groups (`groups.c:59-60, 213-238`; `kdc_preauth.c:1131-1132,1306-1307`) | KDC default `""` (plugin `NOTSUPP`, SPAKE not advertised); a stray PA-SPAKE is skipped (`kdc_preauth.c:1306-1307`); client default `edwards25519`; empty PA-SPAKE may emit an optimistic challenge (`spake_kdc.c:316-323`); unmapped verify codes become 24 (`kdc_preauth.c:1131-1132`); `lockout.c:155-211` increments `fail_auth_count` on any 24 | KDC default empty (not advertised); documented/bootstrap realm and `harness/kdc.conf` permit P-256; unimplemented names (edwards25519, P-384, P-521) are skipped; empty-groups stray PA-SPAKE is skipped; with groups set, empty PA-SPAKE is 24 | **STRICTER** coverage: only P-256 is implemented, and there is no optimistic challenge. An edwards25519-only client against a P-256-only KDC is 24 on both (`verify_support`). With `maxfailure=1` that 24 locks before enc-ts |
 | FAST-outer PA-REQ-ENC-PA-REP 149 | MIT `kdc_find_fast` swaps the inner request in; 149 is consumed from the inner FAST-REQ | The rust FAST client also honours a 149 that arrived on the outer AS-REQ (superset of the inner-only path) | Coverage **superset**; the gated path is inner 149 like MIT |
 | kadm5 create default attributes (`svr_principal.c:376-379`, `alt_prof.c:573-583`) | A create without `KADM5_ATTRIBUTES` takes `params.flags` = `[realms] default_principal_flags`, else `KRB5_KDB_DEF_FLAGS` **0** (no `REQUIRES_PRE_AUTH`) | `default_principal_flags` when the stanza is written (MIT's `krb5_flagspec_to_mask` tokens over 0 — the stanza *is* `params.flags`, `kadmin-both-gate.sh` `z1def` both legs `Attributes: DISALLOW_SVR`); when it is absent the kdc.conf `requires_preauth` knob (default `yes`) supplies `REQUIRES_PRE_AUTH` alone to *password-keyed* creates (`addprinc -pw` / `addprinc` with a prompt); a random-key create (`addprinc -randkey`, `krb5_dbe_crk`) without the stanza is MIT's 0 | **STRICTER** (password-keyed creates only): an operator who never set `default_principal_flags` gets preauth-required user principals instead of MIT's 0; set `requires_preauth = no` or an explicit `default_principal_flags` for MIT's default. The knob's scope is unchanged from before W1-Z: it never applied to `-randkey` (service) creates, so U2U to a fresh service is not `NO PREAUTH` (`flags-gate.sh`). Every field the request masks is applied exactly like MIT (Z1.1) |
 
 ### Recorded in the parity ledger
 
-These deviations are recorded in full in the [parity ledger](parity/README.md):
+These invariants are recorded in full in the [parity ledger](parity/README.md):
 the row named by its MIT cite holds MIT's behaviour, the Rust behaviour and the
-proof. Each fails closed like the rows above; the encrypted-challenge replay is
-also a different code (34 where MIT answers 24), and the unset master key type
-is a stronger default rather than a refusal.
+proof, and the grade is the ledger's. The stricter and deviation rows fail
+closed like the rows above: the encrypted-challenge replay is also a different
+code (34 where MIT answers 24), and the unset master key type is a stronger
+default rather than a refusal. The exact rows are MIT behaviour this table used
+to restate.
 
-| Deviation | Ledger row |
-| --- | --- |
-| Transited field-count cap; transited hop-emission cap | `kdc_util.c:1647` ([A1](parity/a1-tgs.md)) |
-| Append escaping; add-path bounds; encode-side X.500 RDN compression | `kdc_transit.c:143` ([A1](parity/a1-tgs.md)) |
-| TGS realm octets that are not UTF-8 | `asn1_k_encode.c:103-106` ([A1](parity/a1-tgs.md)) |
-| Unknown TGS KDCOptions bit | `kdc_util.c:813-824` ([A1](parity/a1-tgs.md)); `do_tgs_req.c`, recognised options only ([A2](parity/a2-as.md)) |
-| TGS AP-REQ authenticator replay | `kdc_util.c:190` ([A1](parity/a1-tgs.md)); `kdc_util.c:144-191` ([A2](parity/a2-as.md)) |
-| Acceptor ticket addresses (`rd_req_dec.c:536-540`) | `rd_req_dec.c:536-540` ([A2](parity/a2-as.md)) |
-| kadmind connection caps | `net-server.c:85,1571-1572,683,1278` ([A2](parity/a2-as.md)) |
-| PA-ENC-TIMESTAMP replay | `kdc_preauth_encts.c:47-118` ([A3](parity/a3-preauth.md)) |
-| Encrypted-challenge replay | `kdc_preauth.c:1092-1133` ([A3](parity/a3-preauth.md)) |
-| CAMMAC KDC verifier keyed checksum (`cammac.c:168`) | `cammac.c:168` ([A3](parity/a3-preauth.md)) |
-| FAST armor ticket server realm | `fast_util.c:62-67` ([A3](parity/a3-preauth.md)) |
-| Unset `master_key_type` | `osconf.hin:90` ([A4](parity/a4-kadmin.md)) |
-| kadm5 `ks_tuple` with an enctype that is not implemented | `svr_principal.c:444-447` ([A4](parity/a4-kadmin.md)) |
-| `kadmin.local` exit status after a failed verb | `ss_wrapper.c:66-76; kadmin.c:89-99` ([A4](parity/a4-kadmin.md)) |
+| Invariant | Grade | Ledger row |
+| --- | --- | --- |
+| Transited field-count cap; transited hop-emission cap | stricter-documented | `kdc_util.c:1647` ([A1](parity/a1-tgs.md)) |
+| Append escaping; add-path bounds; encode-side X.500 RDN compression | stricter-documented | `kdc_transit.c:143` ([A1](parity/a1-tgs.md)) |
+| TGS realm octets that are not UTF-8 | stricter-documented | `asn1_k_encode.c:103-106` ([A1](parity/a1-tgs.md)) |
+| Unknown TGS KDCOptions bit | stricter-documented | `kdc_util.c:813-824` ([A1](parity/a1-tgs.md)); `do_tgs_req.c`, recognised options only ([A2](parity/a2-as.md)) |
+| TGS AP-REQ authenticator replay | stricter-documented | `kdc_util.c:190` ([A1](parity/a1-tgs.md)); `kdc_util.c:144-191` ([A2](parity/a2-as.md)) |
+| Acceptor ticket addresses (`rd_req_dec.c:536-540`) | stricter-documented | `rd_req_dec.c:536-540` ([A2](parity/a2-as.md)) |
+| kadmind connection caps | stricter-documented | `net-server.c:85,1571-1572,683,1278` ([A2](parity/a2-as.md)) |
+| PA-ENC-TIMESTAMP replay | stricter-documented | `kdc_preauth_encts.c:47-118` ([A3](parity/a3-preauth.md)) |
+| Encrypted-challenge replay | deviation | `kdc_preauth.c:1092-1133` ([A3](parity/a3-preauth.md)) |
+| CAMMAC KDC verifier keyed checksum (`cammac.c:168`) | stricter-documented | `cammac.c:168` ([A3](parity/a3-preauth.md)) |
+| FAST armor ticket server realm | stricter-documented | `fast_util.c:62-67` ([A3](parity/a3-preauth.md)) |
+| Unset `master_key_type` | deviation | `osconf.hin:90` ([A4](parity/a4-kadmin.md)) |
+| kadm5 `ks_tuple` with an enctype that is not implemented | stricter-documented | `svr_principal.c:444-447` ([A4](parity/a4-kadmin.md)) |
+| `kadmin.local` exit status after a failed verb | stricter-documented | `ss_wrapper.c:66-76; kadmin.c:89-99` ([A4](parity/a4-kadmin.md)) |
+| kadmind reserved TL types | exact | `svr_principal.c:310-333,565-588` ([A4](parity/a4-kadmin.md)) |
+| TGS cross-TGS header PAC (`check_normal_tgs_pac`) | exact | `tgs_policy.c:622` ([A1](parity/a1-tgs.md)) |
+| Acceptor transited re-check (`rd_req_dec.c:590-610`) | exact | `rd_req_dec.c:590-610` ([B1](parity/b1-client.md)) |
+| Acceptor `sname_match` (`sname_match.c:30-57`) | exact | `sname_match.c:30-57` ([B1](parity/b1-client.md)) |
+| TGS-REP client / times (`gc_via_tkt.c:247-297`) | exact; the starttime skew deferred | `gc_via_tkt.c:247-297` and `:302-307` ([B1](parity/b1-client.md)) |
+| TGS `try_fallback` (`get_creds.c:503-543`) | exact; the host-realm DNS arm deferred | `get_creds.c:503-516` and `:517-542` ([B1](parity/b1-client.md)) |
+| Forwarded TGT (`fwd_tgt.c:147-153`) | exact; the host addresses deferred | `fwd_tgt.c:147-153` and `:123-145` ([B1](parity/b1-client.md)) |
+| Acceptor clockskew / replay (`rd_req_dec.c:620-631`) | exact | `rd_req_dec.c:631` and `:620-625` ([B1](parity/b1-client.md)) |
+| kdc.conf realm vs `[kdcdefaults]` (`main.c:286-345`) | exact | `main.c:286-345` ([A2](parity/a2-as.md)) |
 
 ### Parity decisions (not deviations)
 
