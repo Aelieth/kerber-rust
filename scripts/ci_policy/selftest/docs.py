@@ -11,6 +11,7 @@ from ..docs import (
     DOCS_SIZE_LIMIT, check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size,
     check_no_plan_section_names, check_testing_doc_budgets, doc_link_violations, gate_doc_violations, gate_placements,
 )
+from ..workflows import Workflow
 from .common import _must_die, _must_die_msg, good_toml
 
 
@@ -51,6 +52,8 @@ def _self_test_docs() -> None:
         check_changelog_headings(log, allow=1)
         _must_die_msg("1 ### headings outside", check_changelog_headings, log, allow=0)
         check_changelog_headings(log.replace("### W3-S4 comments\n", ""), allow=0)
+        _must_die_msg("1 ### headings outside", check_changelog_headings, "### Added in W3\n### How to add one\n", allow=0)
+        check_changelog_headings("### Added\n### Tests and CI\n### How to add an entry\n", allow=0)
         (droot / "docs" / "big.md").write_text("x" * (DOCS_SIZE_LIMIT + 1), encoding="utf-8")
         check_docs_size(droot, allow=1, changelog_max=10)
         _must_die_msg("1 docs file(s) over", check_docs_size, droot, allow=0, changelog_max=10)
@@ -91,6 +94,29 @@ def _self_test_docs() -> None:
             _die(f"check_gate_documented must flag {label}")
     if gate_placements()["kdc-gate.sh"] != [("ci:harness", "fail-red")]:
         _die(f"gate_placements must read kdc-gate.sh as ci:harness fail-red: {gate_placements()['kdc-gate.sh']}")
+    # S6.1: every lane gate_placements reads, and the wrapper row of a DOCUMENTED_STUBS wrapper.
+    lanes_wf = [
+        Workflow(pathlib.Path("ci.yml"),
+                 "name: ci\non:\n  push:\n    branches: [main]\njobs:\n  harness:\n    steps:\n"
+                 "      - run: ./scripts/red-gate.sh\n      - run: skip2 ./scripts/two-gate.sh\n"
+                 "  slo:\n    continue-on-error: true\n    steps:\n      - run: ./scripts/soft-gate.sh\n"),
+        Workflow(pathlib.Path("peers.yml"),
+                 "name: peers\non:\n  schedule:\n    - cron: '0 3 * * *'\njobs:\n  lab:\n    steps:\n"
+                 "      - run: ./scripts/night-gate.sh\n"),
+    ]
+    lanes_want = {
+        "red-gate.sh": [("ci:harness", "fail-red")], "two-gate.sh": [("ci:harness", "skip2")],
+        "soft-gate.sh": [("ci:slo", "soft")], "night-gate.sh": [("peers:lab", "nightly")],
+    }
+    if gate_placements(lanes_wf) != lanes_want:
+        _die(f"gate_placements must read fail-red, skip2, soft and nightly: {gate_placements(lanes_wf)}")
+    wrap_row = "| `scripts/kadmin-gate.sh` | MIT | wrapper | — | runs the kadmin legs |\n"
+    wrap_gates = {"kadmin-gate.sh": "#!/bin/sh\n"}
+    if gate_doc_violations(head + wrap_row, wrap_gates, {}, frozenset({"kadmin-gate.sh"})):
+        _die("a wrapper's row must name `wrapper`")
+    if not any("kadmin-gate.sh: workflow" in v for v in gate_doc_violations(
+            head + wrap_row.replace("| wrapper |", "| stub |"), wrap_gates, {}, frozenset({"kadmin-gate.sh"}))):
+        _die("a wrapper's row that says `stub` must be flagged")
     check_doc_file_cites({"CHANGELOG.md": "see `crates/missing/nope.rs`\n"}, ROOT)
     good_docs = (
         "Tier 1 test harness mit-extra msrv audit ledger-mit mit-image doc "

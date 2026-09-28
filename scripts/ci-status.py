@@ -24,7 +24,10 @@ breaches are info; fail when the median breaches or ≥ 3 of 5 runs breach
 (W2-Y4; a run cannot measure itself). Listings and `--check-budget` keep
 `main` pushes and the PR under test (`--pr` or `GITHUB_REF`); a run
 whose `pull_requests` list is empty still matches on `head_branch`
-(`--pr-head` or `GITHUB_HEAD_REF`). Dependabot runs are dropped.
+(`--pr-head` or `GITHUB_HEAD_REF`), then only from the PR's head repository
+and no earlier than the PR (its `/pulls/<n>` record), so a fork's branch of
+the same name or a branch name reused from a closed PR is not admitted.
+Dependabot runs are dropped.
 `--save` / `--sha` still match that commit.
 """
 from __future__ import annotations
@@ -263,13 +266,15 @@ def pr_head_under_test(explicit: str | None = None) -> str | None:
 
 
 def keep_listing_run(
-    run: dict, pr: int | None = None, pr_head: str | None = None
+    run: dict, pr: int | None = None, pr_head: str | None = None, pr_info: dict | None = None
 ) -> bool:
     """Listings and --check-budget keep main pushes and the PR under test.
 
     Dependabot rebases (PRs 46–53) fail on every main move and must not
     sit in the nightly median-of-5 window. GitHub sometimes returns an
-    empty `pull_requests` list; those runs still match on `head_branch`.
+    empty `pull_requests` list; those runs still match on `head_branch`,
+    and, when the PR's record is known (`pr_info`), only from its head
+    repository and no earlier than the PR was opened.
     """
     actor = ((run.get("actor") or {}).get("login") or "").lower()
     head = run.get("head_branch") or ""
@@ -286,6 +291,14 @@ def keep_listing_run(
             if item.get("number") == pr:
                 return True
         if not items and pr_head and head == pr_head:
+            if pr_info:
+                want_repo = ((pr_info.get("head") or {}).get("repo") or {}).get("full_name")
+                run_repo = (run.get("head_repository") or {}).get("full_name")
+                if want_repo and run_repo and run_repo != want_repo:
+                    return False
+                since = pr_info.get("created_at") or ""
+                if since and (run.get("created_at") or "") < since:
+                    return False
             return True
     return False
 
@@ -335,7 +348,14 @@ def fetch_runs(
                     if path_name == want or r.get("name") == workflow:
                         selected.append(r)
     if filter_ci:
-        selected = [r for r in selected if keep_listing_run(r, pr, pr_head)]
+        pr_info = None
+        if pr is not None:
+            try:
+                got = get(f"/repos/{repo}/pulls/{pr}")
+                pr_info = got if isinstance(got, dict) else None
+            except (urllib.error.HTTPError, urllib.error.URLError):
+                pr_info = None
+        selected = [r for r in selected if keep_listing_run(r, pr, pr_head, pr_info)]
     return selected[:n]
 
 

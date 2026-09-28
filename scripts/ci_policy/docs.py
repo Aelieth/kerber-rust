@@ -144,8 +144,10 @@ def check_doc_links(root: pathlib.Path | None = None) -> None:
         _die(f"broken doc link(s) ({len(bad)}): " + "; ".join(bad[:8]))
 
 
+# A ### heading outside the set: a group name must be the whole heading (`### Added in W3` is outside),
+# a how-to heading starts `How to `.
 _CHANGELOG_HEADING = re.compile(
-    r"^### (?!Security|Added|Changed|Fixed|Tests and CI|Deprecated|Removed|How to)", re.M
+    r"^### (?!(?:Security|Added|Changed|Fixed|Tests and CI|Deprecated|Removed)[ \t]*$|How to )", re.M
 )
 
 

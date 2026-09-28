@@ -39,6 +39,10 @@ def _self_test_comments() -> None:
             "bare-file-mention": "// The loop mirrors gic_pwd.c.\n",
             "anchor-and-mention": "/// MIT `f` (`a.c:1-2`): calls `g` in `b.c` first\n",
             "backtick-guarantee": "/// MIT `f` (`a.c:1-2`): `KDC_ERR_X` on a bad key\n",
+            "x-anchor": "/// MIT `kdb_incr_update_t` (`iprop.x:92-101`): one update\n",
+            "y-anchor": "/// MIT `yyparse` (`getdate.y:210-240`): a date\n",
+            "inner-doc-block": "/*! MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */\n",
+            "nested-block": "/* outer /* MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */ still outer */\n",
         }
         for body in accepted.values():
             good.write_text(body, encoding="utf-8")
@@ -74,6 +78,10 @@ def _self_test_comments() -> None:
             "doc-block-cite": "/**\n * the check (`do_as_req.c:10-20`)\n */\n",
             "inner-doc-cite": "//! the check (`do_as_req.c:10-20`)\n",
             "line-comment-cite": "// the check (`do_as_req.c:10-20`)\n",
+            "x-point": "/// `iprop.x:92` names it\n",
+            "y-range": "// the rule at getdate.y:210-240 runs first\n",
+            "inner-doc-block-cite": "/*! see do_as_req.c:10 */\n",
+            "nested-block-cite": "/* outer /* see do_as_req.c:10 */ still outer */\n",
         }
         for shape, body in rejected.items():
             good.write_text(body, encoding="utf-8")
@@ -97,7 +105,7 @@ def _self_test_comments() -> None:
         )
         # The shape names are part of the fixture, so a deleted shape is a
         # missing key, not a silent pass.
-        if len(accepted) != 14 or len(rejected) != 26:
+        if len(accepted) != 18 or len(rejected) != 30:
             _die("mit anchor fixtures dropped a shape")
     finally:
         subprocess.run(["rm", "-rf", str(anchor_root)], check=False)
@@ -120,7 +128,10 @@ def _self_test_comments() -> None:
             "lib/kadm5/t_kadm5.c": "static void\nkinit(int x)\n{\n}\n",
             "kdc/main.c": "static void\ninit_realm(void)\n{\n}\n",
             "clients/ksu/main.c": "static void\ninit_realm(void)\n{\n}\n",
-            "lib/kadm5/kadm_err.et": "error_table ovk\nerror_code KADM5_FAILURE, \"Operation failed\"\n",
+            "lib/kadm5/kadm_err.et": (
+                "error_table ovk\nerror_code KADM5_FAILURE, \"Operation failed\"\n"
+                "error_code KADM5_AUTH_GET, \"No get permission\"\n"
+            ),
             "kdc/fast_util.c": (
                 "static krb5_error_code armor_ap_request\n(struct state *s)\n{\n"
                 "    return 0;\n}\n"
@@ -179,6 +190,12 @@ def _self_test_comments() -> None:
                 _die(f"check_mit_anchor_truth must accept {label}: {mit_anchor_truth_violations(truth_root, fake)}")
         if truth("// MIT `kinit` (`t_kadm5.c:2-4`): a test ticket\n", in_tests=True) != 0:
             _die("check_mit_anchor_truth must accept a test citing MIT test code")
+        # src/tests.rs is a test file too: it may cite MIT test code.
+        (crate_src / "tests.rs").write_text("// MIT `kinit` (`t_kadm5.c:2-4`): a test ticket\n", encoding="utf-8")
+        if truth("") != 0:
+            _die(f"check_mit_anchor_truth must accept src/tests.rs citing MIT test code: "
+                 f"{mit_anchor_truth_violations(truth_root, fake)}")
+        (crate_src / "tests.rs").unlink()
         breaks = {
             "callee": "// MIT `callee` (`gic_pwd.c:6-6`): calls\n",
             "macro-slot": "// MIT `isflagset` (`gic_pwd.c:16-16`): tests\n",
@@ -190,6 +207,12 @@ def _self_test_comments() -> None:
             "unknown-file": "// MIT `f` (`nosuch.c:1-2`): gone\n",
             "mention-unknown": "//! Mirrors `nosuch.c`.\n",
             "mention-ambiguous": "//! Mirrors `main.c`.\n",
+            "type-outside": "// MIT `struct opt_tail` (`k5-int.h:6-8`): the tail\n",
+            "data-outside": "// MIT `names` (`gic_pwd.c:25-25`): the table\n",
+            "macro-gen-outside": "// MIT `error_7` (`gic_pwd.c:21-23`): the field\n",
+            "errcode-outside": "// MIT `KADM5_FAILURE` (`kadm_err.et:3-3`): unspecified\n",
+            "asn1-outside": "// MIT `SecureCookie` (`asn1_k_encode.c:6-6`): the cookie\n",
+            "path-boundary": "// MIT `init_realm` (`dc/main.c:2-4`): realm first\n",
         }
         for label, body in breaks.items():
             if truth(body) != 1:
@@ -198,7 +221,7 @@ def _self_test_comments() -> None:
         check_mit_anchor_truth(truth_root, fake, allow=1)
         _must_die_msg("mit anchor truth 1 != allow 0", check_mit_anchor_truth, truth_root, fake, allow=0)
         _must_die_msg("_AMBIGUOUS_MIT_BASENAMES differs", _check_ambiguous_pin, fake)
-        if len(holds) != 17 or len(breaks) != 10:
+        if len(holds) != 17 or len(breaks) != 16:
             _die("mit anchor truth fixtures dropped a case")
     finally:
         subprocess.run(["rm", "-rf", str(truth_root)], check=False)
@@ -237,6 +260,9 @@ def _self_test_comments() -> None:
             "Z-leftover": "//! Z8 leftover: the stamp.\n",
             "B-F": "//! F4 hierarchical referral.\n",
             "the-parent": "//! at the parent `abcdef0` it fails.\n",
+            "B-half": "//! B7 hierarchical referral.\n",
+            "the-parent-name": "//! at the parent `main` it fails.\n",
+            "fails-at": "//! fails at 1a2b3c4 without the fix.\n",
             "working": "//! see `working/logs/x.log`.\n",
         }
         for body in tagged.values():
@@ -249,7 +275,7 @@ def _self_test_comments() -> None:
             )
         good.write_text(tagged["B3"], encoding="utf-8")
         check_no_process_history(tag_root, allow=1)
-        if len(tagged) != 19:
+        if len(tagged) != 22:
             _die("process-history fixtures dropped a tag")
     finally:
         subprocess.run(["rm", "-rf", str(tag_root)], check=False)

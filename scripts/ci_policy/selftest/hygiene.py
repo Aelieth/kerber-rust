@@ -24,7 +24,7 @@ def _self_test_hygiene() -> None:
         "def _self_test_duplicates():\n    pass\n"
         "def _self_test():\n    pass\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (36 cases)')\n"
+        "        print('hygiene-diff: self-test ok (39 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n"
     )
@@ -47,7 +47,7 @@ def _self_test_hygiene() -> None:
         '    """merged: load_duplicates_map load_renames_map _self_test_duplicates"""\n'
         "    return None\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (36 cases)')\n"
+        "        print('hygiene-diff: self-test ok (39 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n",
     )
@@ -77,7 +77,7 @@ def _self_test_hygiene() -> None:
         "def _self_test():\n    x + 2 phase_b pub(crate)\n"
         "    # unused-accept fixture must be otherwise green\n"
         "def main():\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-fn-diff: self-test ok (142 cases)')\n"
+        "        print('hygiene-fn-diff: self-test ok (143 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     _must_die(check_hygiene_fn_diff_self_test, "def main():\n    return 0\n")

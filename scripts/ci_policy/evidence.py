@@ -473,6 +473,16 @@ def check_ci_status_save() -> None:
         _die("keep_listing_run must not match a different head_branch")
     if mod.keep_listing_run(pr_empty, pr=60):
         _die("keep_listing_run must not keep empty pull_requests without pr_head")
+    pr_info = {"head": {"repo": {"full_name": "Aelieth/kerber-rust"}}, "created_at": "2026-09-28T10:00:00Z"}
+    own = {**pr_empty, "head_repository": {"full_name": "Aelieth/kerber-rust"}, "created_at": "2026-09-28T11:00:00Z"}
+    if not mod.keep_listing_run(own, pr=60, pr_head="w3-hygiene-s3-0", pr_info=pr_info):
+        _die("keep_listing_run must keep the PR's own run when pull_requests is empty")
+    fork = {**own, "head_repository": {"full_name": "someone/kerber-rust"}}
+    if mod.keep_listing_run(fork, pr=60, pr_head="w3-hygiene-s3-0", pr_info=pr_info):
+        _die("keep_listing_run must drop a fork's branch of the same name")
+    stale = {**own, "created_at": "2026-09-01T00:00:00Z"}
+    if mod.keep_listing_run(stale, pr=60, pr_head="w3-hygiene-s3-0", pr_info=pr_info):
+        _die("keep_listing_run must drop a run from before the PR (a branch name reused from a closed PR)")
 
 
 def check_red_at_sha_build(text: str | None = None) -> None:

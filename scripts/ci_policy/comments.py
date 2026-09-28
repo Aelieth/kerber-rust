@@ -571,6 +571,7 @@ _PROCESS_TAG = re.compile(
     r"|\b[BF][0-9]\b"
     r"|the parent `"
     r"|(?<![\w/.-])working/"
+    r"|\bfails at [0-9a-f]{7,8}\b"
 )
 
 

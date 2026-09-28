@@ -5623,6 +5623,22 @@ def _self_test() -> int:
             )
         n += 1
 
+        # A path to an events const krb5-log does not define stays a path: the site is changed.
+        _clear_rs(old)
+        _clear_rs(new)
+        _write_crate(old, "crates/demo/src/lib.rs", lit_site)
+        _write_crate(new, "crates/demo/src/lib.rs", "fn note() { event = krb5_log::events::NO_SUCH; }\n")
+        _write_crate(old, "crates/krb5-log/src/lib.rs", log_one)
+        _write_crate(new, "crates/krb5-log/src/lib.rs", log_one)
+        undef = compare_trees(old, new, {}, {}, {}, [])
+        if undef["const_fold"] != 0 or undef["changed"] != 1:
+            raise SystemExit(
+                "hygiene-fn-diff --self-test: a path to an undefined krb5-log events const "
+                f"must read changed: {undef}"
+            )
+        _must_red(undef, "a path to an undefined events const")
+        n += 1
+
         # The site switches to a const of a different string.
         _clear_rs(old)
         _clear_rs(new)

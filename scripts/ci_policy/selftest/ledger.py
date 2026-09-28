@@ -163,6 +163,12 @@ def _self_test_ledger() -> None:
         (parity / "c1-other.md").write_text("# C1 — other\n\n" + table, encoding="utf-8")
         _must_die_msg("names no ledger section", ledger_sources, lroot)
         (parity / "c1-other.md").unlink()
+        (parity / "a1-more.md").write_text("# A1 — more\n\n" + table, encoding="utf-8")
+        _must_die_msg("both hold section A1", ledger_sources, lroot)
+        (parity / "a1-more.md").unlink()
+        (parity / "README.md").write_text(head + table + row_a1, encoding="utf-8")
+        _must_die_msg("README.md holds ledger rows", ledger_sources, lroot)
+        (parity / "README.md").write_text(head, encoding="utf-8")
         (parity / "README.md").write_text(head.replace("A1 1 + A2 0", "A1 0 + A2 1"), encoding="utf-8")
         _must_die_msg("section split", check_ledger_tally, None, lroot)
     finally:

@@ -301,6 +301,23 @@ def self_test_ledger_rows() -> int:
     return n
 
 
+def self_test_comment_split() -> int:
+    """classify_lines counts the comment lines that carry a MIT anchor apart from the prose; doc
+    lines are neither."""
+    lines = [
+        "// MIT `krb5_c_encrypt` (`encrypt.c:1-9`): seals.",
+        "// plain prose",
+        "/// MIT `x` in a doc line",
+        "/* MIT `y` (`y.c:2`) opens a block",
+        "   and prose inside it */",
+        "fn f() {}",
+    ]
+    sloc, comment, doc, blank, anchor = classify_lines(lines)
+    if (sloc, comment, doc, blank, anchor) != (1, 4, 1, 0, 2):
+        raise SystemExit(f"classify_lines must split anchor comment lines from prose: {(sloc, comment, doc, blank, anchor)}")
+    return 1
+
+
 def self_test_policy_consumers() -> int:
     """A shim copied without its ci_policy/ package fails to load and copy_policy copies both; a
     split ledger read through a ci-policy without ledger_sources fails closed."""
@@ -639,14 +656,19 @@ def has_doc_header(raw_lines: list[str], decl_line: int) -> bool:
     return False
 
 
-def classify_lines(raw_lines: list[str]) -> tuple[int, int, int, int]:
-    """(sloc, comment, doc, blank) — doc is `///` / `//!`; comment is other `//` or `/* */` lines."""
-    sloc = comment = doc = blank = 0
+_COMMENT_ANCHOR = re.compile(r"\bMIT `[^`]+`")
+
+
+def classify_lines(raw_lines: list[str]) -> tuple[int, int, int, int, int]:
+    """(sloc, comment, doc, blank, anchor) — doc is `///` / `//!`; comment is other `//` or `/* */`
+    lines; anchor is the comment lines that carry a MIT anchor (``MIT `name` ``), the rest prose."""
+    sloc = comment = doc = blank = anchor = 0
     in_block = False
     for line in raw_lines:
         s = line.strip()
         if in_block:
             comment += 1
+            anchor += bool(_COMMENT_ANCHOR.search(s))
             if "*/" in s:
                 in_block = False
             continue
@@ -656,13 +678,15 @@ def classify_lines(raw_lines: list[str]) -> tuple[int, int, int, int]:
             doc += 1
         elif s.startswith("//"):
             comment += 1
+            anchor += bool(_COMMENT_ANCHOR.search(s))
         elif s.startswith("/*"):
             comment += 1
+            anchor += bool(_COMMENT_ANCHOR.search(s))
             if "*/" not in s[2:]:
                 in_block = True
         else:
             sloc += 1
-    return sloc, comment, doc, blank
+    return sloc, comment, doc, blank, anchor
 
 
 def workspace_members(root: pathlib.Path) -> list[dict]:
@@ -1382,7 +1406,7 @@ def shape_inventory(root: pathlib.Path, members: list[dict]) -> dict[str, object
             if raw_lines and raw_lines[-1] == "":
                 raw_lines.pop()
             loc = len(raw_lines)
-            sloc, comment, doc, blank = classify_lines(raw_lines)
+            sloc, comment, doc, blank, anchor = classify_lines(raw_lines)
             loc_files.append(f"{rel}\t{loc}\t{sloc}\t{comment}\t{doc}\t{blank}")
             fns, test_ranges = scan_items(strip_noncode(text))
             file_scope = _scope(in_pkg, 1, [], src_test_files)
@@ -1392,6 +1416,7 @@ def shape_inventory(root: pathlib.Path, members: list[dict]) -> dict[str, object
             p["loc"] += loc
             p["sloc"] += sloc
             p["comment"] += comment
+            p["comment_anchor"] += anchor
             p["doc"] += doc
             p["blank"] += blank
             if is_product:
@@ -1467,6 +1492,8 @@ def shape_inventory(root: pathlib.Path, members: list[dict]) -> dict[str, object
             f"loc={tot['loc']}",
             f"sloc={tot['sloc']}",
             f"comment_lines={tot['comment']}",
+            f"comment_anchor_lines={tot['comment_anchor']}",
+            f"comment_prose_lines={tot['comment'] - tot['comment_anchor']}",
             f"doc_lines={tot['doc']}",
             f"src_test_loc={tot['src_test_loc']}",
             f"tests_in_src={tot['tests_in_src']}",
@@ -1873,7 +1900,7 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
-        n = self_test_cfg_test() + self_test_ledger_rows() + self_test_policy_consumers()
+        n = self_test_cfg_test() + self_test_ledger_rows() + self_test_policy_consumers() + self_test_comment_split()
         print(f"hygiene_inventory: self-test ok ({n} cases)")
         return 0
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

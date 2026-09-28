@@ -235,24 +235,35 @@ def _must_fail(
     old: pathlib.Path,
     new: pathlib.Path,
     label: str,
+    needle: str,
     dead_path: pathlib.Path | None = None,
     accept_rise: list[str] | None = None,
     duplicates_path: pathlib.Path | None = None,
     renames_path: pathlib.Path | None = None,
 ) -> None:
+    """The compare must fail, and its output must carry `needle`: the failure this case is about,
+    not some other one."""
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
     try:
-        rc = _quiet_compare(
-            old,
-            new,
-            dead_path,
-            accept_rise=accept_rise,
-            duplicates_path=duplicates_path,
-            renames_path=renames_path,
-        )
-    except SystemExit:
-        return
+        with redirect_stdout(buf):
+            rc = main_compare(
+                old,
+                new,
+                dead_path=dead_path,
+                accept_rise=accept_rise,
+                duplicates_path=duplicates_path,
+                renames_path=renames_path,
+            )
+    except SystemExit as e:
+        rc = 1
+        buf.write(f"\n{e}\n")
     if rc == 0:
         raise SystemExit(f"hygiene-diff --self-test: {label} must fail")
+    if needle not in buf.getvalue():
+        raise SystemExit(f"hygiene-diff --self-test: {label} failed without {needle!r}: {buf.getvalue()[-300:]!r}")
 
 
 def _must_pass(
@@ -284,7 +295,7 @@ def _self_test_duplicates(root: pathlib.Path) -> int:
     old, new = root / "dup-old", root / "dup-new"
     _write_snap(old, ["a.sh\techo\tkeep"], tests=["oldbin\tfoo", "oldbin\tkeep"])
     _write_snap(new, ["a.sh\techo\tkeep"], tests=["newbin\tbar", "oldbin\tkeep"])
-    _must_fail(old, new, "removed test without keyed map")
+    _must_fail(old, new, "removed test without keyed map", needle="FAIL test removed: oldbin\tfoo")
     n += 1
     good = root / "dup-good.txt"
     good.write_text("oldbin\tfoo = newbin\tbar\n", encoding="utf-8")
@@ -292,18 +303,21 @@ def _self_test_duplicates(root: pathlib.Path) -> int:
     n += 1
     name_only = root / "dup-name.txt"
     name_only.write_text("foo = bar\n", encoding="utf-8")
-    _must_fail(old, new, "name-only duplicates", duplicates_path=name_only)
+    _must_fail(
+        old, new, "name-only duplicates", needle="FAIL duplicates LHS must be binary<TAB>name",
+        duplicates_path=name_only,
+    )
     n += 1
     chained = root / "dup-chain.txt"
     chained.write_text("oldbin\tfoo = midbin\tmid\nmidbin\tmid = newbin\tbar\n", encoding="utf-8")
-    _must_fail(old, new, "RHS-as-LHS", duplicates_path=chained)
+    _must_fail(old, new, "RHS-as-LHS", needle="FAIL duplicates RHS is also a LHS", duplicates_path=chained)
     n += 1
     many_old, many_new = root / "many-old", root / "many-new"
     _write_snap(many_old, ["a.sh\techo\tkeep"], tests=["a\tx", "b\ty"])
     _write_snap(many_new, ["a.sh\techo\tkeep"], tests=["c\tz"])
     no_merged = root / "dup-nomerge.txt"
     no_merged.write_text("a\tx = c\tz\nb\ty = c\tz\n", encoding="utf-8")
-    _must_fail(many_old, many_new, "many-to-one without merged:", duplicates_path=no_merged)
+    _must_fail(many_old, many_new, "many-to-one without merged:", needle="needs merged:", duplicates_path=no_merged)
     n += 1
     merged = root / "dup-merged.txt"
     merged.write_text("a\tx = merged:c\tz\nb\ty = merged:c\tz\n", encoding="utf-8")
@@ -318,7 +332,7 @@ def _self_test_renames(root: pathlib.Path) -> int:
     old, new = root / "ren-old", root / "ren-new"
     _write_snap(old, ["a.sh\techo\tkeep"], tests=["oldbin\tfoo"])
     _write_snap(new, ["a.sh\techo\tkeep"], tests=["newbin\tbar"])
-    _must_fail(old, new, "removed test without keyed rename")
+    _must_fail(old, new, "removed test without keyed rename", needle="FAIL test removed: oldbin\tfoo")
     n += 1
     good = root / "ren-good.txt"
     good.write_text("oldbin\tfoo -> newbin\tbar\n", encoding="utf-8")
@@ -326,14 +340,14 @@ def _self_test_renames(root: pathlib.Path) -> int:
     n += 1
     name_only = root / "ren-name.txt"
     name_only.write_text("foo -> bar\n", encoding="utf-8")
-    _must_fail(old, new, "name-only renames", renames_path=name_only)
+    _must_fail(old, new, "name-only renames", needle="FAIL renames LHS must be binary<TAB>name", renames_path=name_only)
     n += 1
     many_old, many_new = root / "ren-many-old", root / "ren-many-new"
     _write_snap(many_old, ["a.sh\techo\tkeep"], tests=["a\tx", "b\ty"])
     _write_snap(many_new, ["a.sh\techo\tkeep"], tests=["c\tz"])
     no_merged = root / "ren-nomerge.txt"
     no_merged.write_text("a\tx -> c\tz\nb\ty -> c\tz\n", encoding="utf-8")
-    _must_fail(many_old, many_new, "rename many-to-one without merged:", renames_path=no_merged)
+    _must_fail(many_old, many_new, "rename many-to-one without merged:", needle="needs merged:", renames_path=no_merged)
     n += 1
     merged = root / "ren-merged.txt"
     merged.write_text("a\tx -> merged:c\tz\nb\ty -> merged:c\tz\n", encoding="utf-8")
@@ -361,7 +375,7 @@ def _self_test_quality(root: pathlib.Path) -> int:
     waiver_old, waiver_new = root / "waiver-old", root / "waiver-new"
     _write_snap(waiver_old, ["a.sh\techo\tkeep"], quality={"allow_sites": "77"})
     _write_snap(waiver_new, ["a.sh\techo\tkeep"], quality={"allow_sites": "81"})
-    _must_fail(waiver_old, waiver_new, "quality allow_sites rose")
+    _must_fail(waiver_old, waiver_new, "quality allow_sites rose", needle="FAIL quality allow_sites rose 77 -> 81")
     n += 1
     _must_pass(
         waiver_old,
@@ -374,6 +388,7 @@ def _self_test_quality(root: pathlib.Path) -> int:
         waiver_old,
         waiver_new,
         "accept-rise mismatched N",
+        needle="FAIL accept-rise allow_sites=2:wrong n unused",
         accept_rise=["allow_sites=2: wrong n"],
     )
     n += 1
@@ -384,6 +399,7 @@ def _self_test_quality(root: pathlib.Path) -> int:
         same_old,
         same_new,
         "accept-rise unused",
+        needle="FAIL accept-rise allow_sites=1:unused unused",
         accept_rise=["allow_sites=1: unused"],
     )
     n += 1
@@ -391,7 +407,7 @@ def _self_test_quality(root: pathlib.Path) -> int:
         old, new = root / f"red{i}-old", root / f"red{i}-new"
         _write_snap(old, ["a.sh\techo\tkeep"], quality=old_q)
         _write_snap(new, ["a.sh\techo\tkeep"], quality=new_q)
-        _must_fail(old, new, f"quality {label}")
+        _must_fail(old, new, f"quality {label}", needle=f"FAIL quality {label.split()[0]}")
         n += 1
     for i, (label, old_q, new_q) in enumerate(green):
         old, new = root / f"green{i}-old", root / f"green{i}-new"
@@ -399,6 +415,19 @@ def _self_test_quality(root: pathlib.Path) -> int:
         _write_snap(new, ["a.sh\techo\tkeep"], quality=new_q)
         _must_pass(old, new, f"quality {label}")
         n += 1
+    # comment_lines is reported split: the lines that carry a MIT anchor and the prose.
+    import io
+    from contextlib import redirect_stdout
+
+    csplit_old, csplit_new = root / "csplit-old", root / "csplit-new"
+    _write_snap(csplit_old, ["a.sh\techo\tkeep"], quality={"comment_anchor_lines": "10", "comment_prose_lines": "5"})
+    _write_snap(csplit_new, ["a.sh\techo\tkeep"], quality={"comment_anchor_lines": "12", "comment_prose_lines": "5"})
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main_compare(csplit_old, csplit_new)
+    if rc != 0 or "info comment_anchor_lines 10 -> 12" not in buf.getvalue():
+        raise SystemExit("hygiene-diff --self-test: the comment_lines split must be reported")
+    n += 1
     old, new = root / "bin-old", root / "bin-new"
     _write_snap(old, ["a.sh\techo\tkeep"], binaries=["krb5-kdc\tkrb5-forge-tgt"])
     _write_snap(new, ["a.sh\techo\tkeep"], binaries=["krb5-tools\tkrb5-forge-tgt"])
@@ -447,14 +476,19 @@ def _self_test() -> int:
         dead_old, dead_new = root / "dead-old", root / "dead-new"
         _write_snap(dead_old, ["a.sh\techo\tMIT_DEAD_PORT", "b.sh\techo\tMIT_DEAD_PORT", "a.sh\techo\tkeep"])
         _write_snap(dead_new, ["a.sh\techo\tkeep"])
-        _must_fail(dead_old, dead_new, "unlisted echo tag removal")
+        _must_fail(
+            dead_old, dead_new, "unlisted echo tag removal", needle="FAIL gate cell tag removed: echo\tMIT_DEAD_PORT"
+        )
         n += 1
         _must_pass(dead_old, dead_new, "--dead echo tag removal", dead_path=dead_map)
         n += 1
         sect_old, sect_new = root / "sect-old", root / "sect-new"
         _write_snap(sect_old, ["a.sh\tsection\tMIT_DEAD_PORT", "a.sh\techo\tkeep"])
         _write_snap(sect_new, ["a.sh\techo\tkeep"])
-        _must_fail(sect_old, sect_new, "--dead listed section tag removal", dead_path=dead_map)
+        _must_fail(
+            sect_old, sect_new, "--dead listed section tag removal",
+            needle="FAIL gate cell tag removed: section\tMIT_DEAD_PORT", dead_path=dead_map,
+        )
         n += 1
 
         moved_old, moved_new = root / "moved-old", root / "moved-new"
@@ -487,13 +521,24 @@ def _self_test() -> int:
         (led_new / "ledger-rows.txt").write_text(
             "#\na.c:1\tcheck a\texact\tdocs/parity/a1-tgs.md\n", encoding="utf-8"
         )
-        _must_fail(led_old, led_new, "a ledger row that disappears")
+        _must_fail(led_old, led_new, "a ledger row that disappears", needle="FAIL ledger row removed: b.c:2\tcheck b")
         n += 1
         (led_old / "ledger-rows.txt").write_text("#\na.c:1\texact\nb.c:2\tdeviation\n", encoding="utf-8")
         (led_new / "ledger-rows.txt").write_text(
             "#\n" + rows_old.replace("docs/mit-parity-ledger.md", "docs/parity/a1-tgs.md"), encoding="utf-8"
         )
         _must_pass(led_old, led_new, "an old two-column ledger snapshot compared by cite")
+        n += 1
+        # A cite the ledger holds twice stays two rows under the cite-only compare: dropping one fails.
+        (led_old / "ledger-rows.txt").write_text("#\nk.c:1\texact\nk.c:1\tdeviation\n", encoding="utf-8")
+        (led_new / "ledger-rows.txt").write_text(
+            "#\nk.c:1\tcheck x\texact\tdocs/parity/a1-tgs.md\nk.c:1\tcheck y\tdeviation\tdocs/parity/a1-tgs.md\n",
+            encoding="utf-8",
+        )
+        _must_pass(led_old, led_new, "a cite held twice, compared by cite")
+        n += 1
+        (led_new / "ledger-rows.txt").write_text("#\nk.c:1\tcheck x\texact\tdocs/parity/a1-tgs.md\n", encoding="utf-8")
+        _must_fail(led_old, led_new, "one of a cite's two rows dropped", needle="FAIL ledger row removed: k.c:1 (2 row(s) -> 1)")
         n += 1
         # The regrade check compares the grade (the first verdict word): a reworded qualifier is
         # listed, even one that names another grade inside the parenthetical; a new grade fails.
@@ -517,7 +562,9 @@ def _self_test() -> int:
         (led_new / "ledger-rows.txt").write_text(
             "#\na.c:1\tcheck a\texact (the cache answers first)\tdocs/parity/a1-tgs.md\n", encoding="utf-8"
         )
-        _must_fail(led_old, led_new, "a ledger row whose grade changes")
+        _must_fail(
+            led_old, led_new, "a ledger row whose grade changes", needle="FAIL ledger row regraded: a.c:1\tcheck a"
+        )
         n += 1
 
         none_old, none_new = root / "none-old", root / "none-new"
@@ -552,19 +599,18 @@ def ledger_grade(verdict: str) -> str:
     return v
 
 
-def load_ledger_rows(path: pathlib.Path) -> dict[tuple[str, str | None], tuple[str, str | None]]:
-    """`ledger-rows.txt` as {(MIT cite, check): (verdict, file)}.
+def load_ledger_rows(path: pathlib.Path) -> list[tuple[str, str | None, str, str | None]]:
+    """`ledger-rows.txt` as (MIT cite, check, verdict, file) rows, duplicates kept.
 
-    A snapshot from before the cite + check key has two columns (cite, verdict); its rows key on
-    the cite alone, with no check and no file.
+    A snapshot from before the cite + check key has two columns (cite, verdict): no check, no file.
     """
-    rows: dict[tuple[str, str | None], tuple[str, str | None]] = {}
+    rows: list[tuple[str, str | None, str, str | None]] = []
     for ln in load_data_lines(path):
         parts = ln.split("\t")
         if len(parts) >= 4:
-            rows[(parts[0], parts[1])] = (parts[2], parts[3])
+            rows.append((parts[0], parts[1], parts[2], parts[3]))
         elif len(parts) >= 2:
-            rows[(parts[0], None)] = (parts[1], None)
+            rows.append((parts[0], None, parts[1], None))
     return rows
 
 
@@ -706,12 +752,32 @@ def _compare(args) -> int:
         if extra:
             info(f"{label}s added: {len(extra)}")
 
-    old_led = load_ledger_rows(old / "ledger-rows.txt")
-    new_led = load_ledger_rows(new / "ledger-rows.txt")
-    if any(k[1] is None for k in old_led) != any(k[1] is None for k in new_led):
-        info("ledger rows compared by MIT cite alone (one snapshot predates the cite + check key)")
-        old_led = {(k[0], None): (v[0], None) for k, v in old_led.items()}
-        new_led = {(k[0], None): (v[0], None) for k, v in new_led.items()}
+    old_rows = load_ledger_rows(old / "ledger-rows.txt")
+    new_rows = load_ledger_rows(new / "ledger-rows.txt")
+    if any(r[1] is None for r in old_rows) or any(r[1] is None for r in new_rows):
+        # A snapshot from before the cite + check key: compare the verdicts under each cite as a
+        # multiset, so a cite the ledger holds twice is not merged into one row.
+        if any(r[1] is None for r in old_rows) != any(r[1] is None for r in new_rows):
+            info("ledger rows compared by MIT cite alone (one snapshot predates the cite + check key)")
+        old_by: dict[str, list[str]] = collections.defaultdict(list)
+        new_by: dict[str, list[str]] = collections.defaultdict(list)
+        for cite, _check, verdict, _where in old_rows:
+            old_by[cite].append(verdict)
+        for cite, _check, verdict, _where in new_rows:
+            new_by[cite].append(verdict)
+        for cite, verdicts in old_by.items():
+            got = new_by.get(cite, [])
+            if len(got) < len(verdicts):
+                fail(f"ledger row removed: {cite} ({len(verdicts)} row(s) -> {len(got)})")
+                continue
+            lost = collections.Counter(map(ledger_grade, verdicts)) - collections.Counter(map(ledger_grade, got))
+            if lost:
+                fail(f"ledger row regraded: {cite} lost {sorted(lost.elements())}")
+        old_led: dict[tuple[str, str | None], tuple[str, str | None]] = {}
+        new_led: dict[tuple[str, str | None], tuple[str, str | None]] = {}
+    else:
+        old_led = {(r[0], r[1]): (r[2], r[3]) for r in old_rows}
+        new_led = {(r[0], r[1]): (r[2], r[3]) for r in new_rows}
     moved = 0
     requalified: list[str] = []
     for key, (verdict, where) in old_led.items():
@@ -732,8 +798,8 @@ def _compare(args) -> int:
         info(f"ledger verdict qualifiers reworded: {len(requalified)}")
         for label in requalified:
             info(f"  qualifier reworded: {label}")
-    if len(new_led) > len(old_led):
-        info(f"ledger rows added: {len(new_led) - len(old_led)}")
+    if len(new_rows) > len(old_rows):
+        info(f"ledger rows added: {len(new_rows) - len(old_rows)}")
 
     old_rc = load_gate_rc(old / "timings.tsv") or load_gate_rc(old / "checkpoint" / "timings.tsv")
     new_rc = load_gate_rc(new / "timings.tsv") or load_gate_rc(new / "checkpoint" / "timings.tsv")
@@ -865,6 +931,8 @@ def _compare(args) -> int:
         "loc",
         "sloc",
         "comment_lines",
+        "comment_anchor_lines",
+        "comment_prose_lines",
         "doc_lines",
         "src_test_loc",
         "tests_in_src",
