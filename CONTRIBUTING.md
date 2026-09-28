@@ -61,7 +61,7 @@ Public APIs need rustdoc. The four rules in
   its own sentence. A single source line is `<a>-<a>`. A mention without
   a range is legal. The guarantee is what this port does; where the port
   deviates, the anchor line says so ("MIT does X; this port does Y") and
-  the deviation has a `docs/mit-parity-ledger.md` row (verdict
+  the deviation has a parity-ledger row under `docs/parity/` (verdict
   `deviation` or `stricter-documented`) or a `docs/security.md` row.
 - **R2.** State the invariant (order, fail-closed, key material, an
   attacker-relevant subtlety, or a deliberate deviation). Do not narrate

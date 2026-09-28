@@ -34,7 +34,7 @@ fails if a test, cell tag, diffsend case, flow or ledger row
 disappeared, a gate went red, or a quality count rose; shape deltas are
 informational. Ledger rows are keyed by MIT cite and check, with the
 file as a separate column, so a row that changes file (the single-file
-ledger split into docs/parity/) is counted as moved and a row that
+ledger split into `docs/parity/`) is counted as moved and a row that
 disappears fails; a snapshot from before that key is compared by MIT
 cite alone. A swath that renames or de-duplicates tests passes its
 map (`--renames`, `--duplicates`). `--duplicates` and `--renames` are
@@ -330,13 +330,13 @@ Words in echo arguments and filenames never count; `/bin/echo` and
 `log_*` helpers are noise. `case` arms are walked like `if` arms. `log …
 skip` is accepted only when the arm names a `KERBER_REQUIRE_`
 requirement that a `die` in the same script enforces. `{ … }`, `( … )`,
-and heredoc arms are inspected. The ledger is one file
-(`docs/mit-parity-ledger.md`) or, split, a README.md under docs/parity/
-(the header) plus one file per section named `a1-…` to `a5-…` or `b1-…`
-whose first heading names that section; either layout is read. A split
-without its README, a file whose name or heading gives no section or the
-wrong one, rows left in the single file beside the split, and a row (MIT
-cite and check) present twice fail. The header tally must match a
+and heredoc arms are inspected. The ledger is split:
+`docs/parity/README.md` (the header) plus one file per section named
+`a1-…` to `a5-…` or `b1-…` whose first heading names that section; the
+one-file layout (`docs/mit-parity-ledger.md`, now a pointer) is read
+too. A split without its README, a file whose name or heading gives no
+section or the wrong one, rows left in the single file beside the split,
+and a row (MIT cite and check) present twice fail. The header tally must match a
 recount of the verdict cells and the A1–A5 / B1 section split; a missing
 total line fails. Rust-site cells that use
 `file.rs symbol` (optional crate prefix `krb5-kdc/reply.rs mint_ticket`,
@@ -485,7 +485,7 @@ Wire `e_text` is MIT's status word (`do_as_req.c:806`,
 `do_tgs_req.c:205-206`). MIT `k5_setmsg` texts are KDC-log messages
 and land in the `kdc.issue` `detail` field, not on the wire. A cell
 that pins MIT text must say whether it is wire or log. The KDC MIT
-1.22.2 parity ledger is [`mit-parity-ledger.md`](mit-parity-ledger.md);
+1.22.2 parity ledger is [`parity/`](parity/README.md), one file per section;
 a `proof` cell may name an existing gate script or `diffsend` case,
 or mark that clause `proposed` / `propose`. `proposed` scopes only
 the clause it is in (semicolon-separated).

@@ -3,4 +3,4 @@
 docs/** linguist-documentation
 *.md linguist-documentation
 examples/configs/** linguist-documentation
-docs/mit-parity-ledger.md linguist-generated
+docs/parity/[ab]*.md linguist-generated

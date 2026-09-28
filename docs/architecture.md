@@ -136,7 +136,7 @@ enough directories to name one. A mention without a range (``MIT `X` ``,
 or a MIT file named in prose) is not an anchor and is legal. The
 guarantee is what this port does; where the port deviates, the anchor
 line says so ("MIT does X; this port does Y") and the deviation has a
-`docs/mit-parity-ledger.md` row (verdict `deviation` or
+parity-ledger row under `docs/parity/` (verdict `deviation` or
 `stricter-documented`) or a `docs/security.md` row.
 
 **R2.** State the invariant, not the steps: an ordering, a fail-closed

@@ -669,7 +669,7 @@ Known behaviour laxer than MIT 1.22.2. Each is a fix to make after a MIT settle,
 
 | Gap | MIT | Rust | Ledger row |
 | --- | --- | --- | --- |
-| CMS ContentInfo type not checked | `cms_signeddata_verify` refuses a type other than id-signedData ("wrong oid") | `cms_parts` reads the contentType and discards it, so a SignedData body under any OID is parsed | `pkinit_crypto_openssl.c:2022-2028` (B1) |
+| CMS ContentInfo type not checked | `cms_signeddata_verify` refuses a type other than id-signedData ("wrong oid") | `cms_parts` reads the contentType and discards it, so a SignedData body under any OID is parsed | `pkinit_crypto_openssl.c:2022-2028` ([B1](parity/b1-client.md)) |
 
 ## Not in this matrix
 
