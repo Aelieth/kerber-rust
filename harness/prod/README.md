@@ -1,4 +1,4 @@
-# `harness/prod/` — C1 multi-host prod-realm substrate
+# `harness/prod/` — the multi-host prod-realm substrate
 
 A resource-capped, docker-network testbed for the C1 production gate: a Rust KDC
 **primary**, a Rust KDC **replica**, and an **MIT client**, each in its own

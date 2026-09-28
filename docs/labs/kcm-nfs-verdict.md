@@ -1,4 +1,4 @@
-# KCM NFS verdict (G8c / R7)
+# KCM NFS verdict
 
 Date: 2026-09-01. Oracle: Fedora 43 `sssd-kcm` 2.12.0-3.fc43 (digest
 `sha256:96b2a05f8ce3111e10c236abe8055b01500880d95ee7c2f92fa30847fdbb667b`,
@@ -22,7 +22,7 @@ The Rust client therefore iterates with `GET_CRED_LIST` and stores with
 `INITIALIZE` + `STORE` (MIT's own fallback when REPLACE/RETRIEVE are
 unsupported).
 
-## R7 matrix
+## Test matrix
 
 | Cell | How it was driven | Result |
 | --- | --- | --- |

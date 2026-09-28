@@ -73,7 +73,7 @@ omit the env var and you will hit the home realm.
 `msDS-AllowedToDelegateTo` = `host/svc.ad.kerber.test`. Gate:
 `scripts/ad-s4u-gate.sh` (S4U2Self + S4U2Proxy, `for client kbruser`).
 
-## Cross-realm trust (A5)
+## Cross-realm trust
 
 The DC has a bidirectional MIT realm trust `KERBER.TEST` (`netdom
 /twoway`, `ksetup /addkdc` → `10.10.44.154`). Isolated

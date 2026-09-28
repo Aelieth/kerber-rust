@@ -32,7 +32,7 @@ in place); G8b gssproxy/SSSD oracles were unavailable (honest exit 2),
 so the in-place vs temp+rename decision stays **open**. Unknown ccache
 prefixes are `KRB5_CC_UNKNOWN_TYPE` with no FILE fallback. `KCM:` is a
 real type (sssd-kcm); `KEYRING:` stays unknown. Fleet default stays FILE
-until NFS `sec=krb5i` cells run — [`kcm-nfs-verdict.md`](kcm-nfs-verdict.md). FILE
+until NFS `sec=krb5i` cells run — [`kcm-nfs-verdict.md`](labs/kcm-nfs-verdict.md). FILE
 principal and realm octets must be ASCII GeneralString; non-ASCII MIT
 caches fail parse (no silent corruption). DIR resolve does not create
 `primary`.
@@ -73,4 +73,4 @@ job; `cargo test --workspace --locked` on 1.95 is `full-test.yml`'s
 `msrv-test` (nightly + tags). Edition 2024; `rasn` 0.28, goldens are the
 DER net. `publish = false` stays;
 this matrix is the 1.0 claim, not crates.io. KLLDAP alignment:
-[`integration-klldap.md`](integration-klldap.md).
+[`embed/klldap.md`](embed/klldap.md).

@@ -7,10 +7,10 @@ document is **Phase 1 only**: matching dependencies and toolchain so a
 future path-embed does not pull two generations of the same crate.
 The FFI replace is a later phase.
 
-Ground truth for shared versions is the KLLDAP checkout at
-`/home/local/Projects/klldap/` (workspace version **0.7.4**; upstream
-`Aelieth/klldap` is at 0.7.6 — same edition 2024, `rust-version` 1.95.0). kerber-rust stays Apache-2.0 OR MIT;
-`publish = false`.
+Ground truth for shared versions is the KLLDAP repository,
+[`Aelieth/klldap`](https://github.com/Aelieth/klldap), at **0.7.6**; the tables
+below were read from an older checkout at 0.7.4. Both are edition 2024 with
+`rust-version` 1.95.0. kerber-rust stays Apache-2.0 OR MIT; `publish = false`.
 
 ## Toolchain parity
 
@@ -48,6 +48,16 @@ When either tree bumps a shared crate, the other follows the same
 generation. Optional check: co-located checkouts, temporary path-dep,
 `cargo tree -d`, revert. Do not merge kerber into klldap until a later
 Era III phase owns that seam.
+
+## The seam
+
+KLLDAP reaches its KDC through the `KerberosSync` trait
+(klldap's `domain-handlers` crate, `src/kerberos.rs`): `sync_principal`,
+`delete_principal`, `set_principal_enabled` and `export_keytab_for_keycloak`,
+registered with `set_kerberos_backend`; the default `NoopKerberos` fails every
+operation that must reach a KDC. The embed implements that trait over
+kerber-rust's `PrincipalStore`, so the directory stays the writer, and its
+first gate is MIT `kinit` / `kvno` against the embedded KDC in klldap's CI.
 
 ## Later phases (not this document)
 

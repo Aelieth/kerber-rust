@@ -2,8 +2,8 @@
 
 Coordinates for the **Samba 4 Active Directory Domain Controller** used as the
 live AD interop oracle (Track A / phase A3). **This file contains no secrets.**
-Throwaway container test passwords live in the gitignored
-`working/samba-lab-accounts.md`; the provisioning admin password is injected at
+Throwaway container test passwords are kept outside the repository, in an
+untracked operator file; the provisioning admin password is injected at
 build/run time via env, never committed.
 
 This Samba DC is the **live successor** to the captured Windows Server 2022 DC in
@@ -23,7 +23,7 @@ passwords are test fixtures, not real secrets.
 >
 > *(Domain SID is baked at image build. First image
 > `S-1-5-21-891046300-…`; last-pass recapture `S-1-5-21-1813809682-…`,
-> `kbruser` RID 1103. Live values: `working/samba-lab-accounts.md`.
+> `kbruser` RID 1103. Live values are kept outside the repository.
 > `samba-realtrust-gate.sh` pins `--self-sid` / `--user-sid`.)*
 
 ## Topology
@@ -43,7 +43,7 @@ passwords are test fixtures, not real secrets.
 | PAC | type-1 LOGON_INFO, type-6 server checksum, type-7 KDC checksum, **type-16 ticket signature**, **type-19 extended-KDC signature** |
 | Image | `samba-ad-dc:latest` (built from `harness/samba/`), overridable via `SAMBA_AD_IMAGE` |
 
-## Accounts (names only — passwords in `working/samba-lab-accounts.md`)
+## Accounts (names only; passwords are kept outside the repository)
 
 | Principal | Role |
 | --- | --- |
@@ -85,7 +85,7 @@ samba-tool delegation add-service kbrsvc host/svc.ad.kerber.test
 on Samba 4.19.5. Beyond `samba` the build needs the `samba-ad-provision`,
 `samba-dsdb-modules`, and `samba-vfs-modules` packages. The two `--option` flags are
 the build-in-Docker workarounds — tdb-backed NT ACLs (no CAP_SYS_ADMIN) and the DC
-FL match; operational details in `working/samba-lab-accounts.md`.)*
+FL match; operational details are kept outside the repository.)*
 
 ## Ports (container-internal; the gate does not publish to the host)
 

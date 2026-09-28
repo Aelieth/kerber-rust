@@ -26,10 +26,10 @@ entry says what the file holds.
 10. [rfc-mapping.md](rfc-mapping.md): RFC sections mapped to code.
 11. [gate-unit-index.md](gate-unit-index.md): which unit test backs which gate
     cell.
-12. The labs: [ad-lab.md](ad-lab.md) (the AD lab and its isolation protocol),
-    [samba-lab.md](samba-lab.md) (the live Samba AD DC oracle) and
-    [kcm-nfs-verdict.md](kcm-nfs-verdict.md) (why the fleet default stays
-    FILE).
-13. The embed: [integration-klldap.md](integration-klldap.md), the KLLDAP
-    alignment.
+12. [labs/](labs/README.md): [ad-lab.md](labs/ad-lab.md) (the AD lab and its
+    isolation protocol), [samba-lab.md](labs/samba-lab.md) (the live Samba AD
+    DC oracle) and [kcm-nfs-verdict.md](labs/kcm-nfs-verdict.md) (why the
+    fleet default stays FILE).
+13. [embed/](embed/README.md): [klldap.md](embed/klldap.md), the KLLDAP
+    alignment and the `KerberosSync` seam.
 14. [export-control.md](export-control.md): the cryptography export note.

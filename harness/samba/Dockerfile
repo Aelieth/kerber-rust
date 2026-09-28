@@ -1,7 +1,7 @@
 # Samba 4 AD Domain Controller — live AD.KERBER.TEST oracle (Track A / A3).
 # The domain is provisioned at BUILD time so the domain SID is stable and baked
 # into the image (reproducible; recorded once). The entrypoint only starts samba
-# in the foreground. Coordinates + accounts: docs/samba-lab.md.
+# in the foreground. Coordinates + accounts: docs/labs/samba-lab.md.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive

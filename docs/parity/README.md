@@ -2,16 +2,14 @@
 
 Oracle: MIT Kerberos **1.22.2** source SHA `3243ffbc…af13`
 (`https://github.com/krb5/krb5/tree/krb5-1.22.2-final`) plus the live
-image `kerber-rust-mit-kdc:1.22.2`. Verified with `sha256sum -c` on
-`working/logs/audit-polish-0902/w0d/mit-src-sha256.txt` (and the W0e
-regeneration under `working/logs/audit-polish-0902/w0e/`).
+image `kerber-rust-mit-kdc:1.22.2`. The source is verified with
+`sha256sum -c` in CI: the `ledger-mit` job fetches the tarball and checks
+that SHA, as `harness/Dockerfile` does.
 Heimdal/Samba are regression, not the equality bar. Isolation: host
 `/etc/krb5.conf` stays `TESTLABBY.LOCAL`.
 
-The ledger began as the W1-A sweep (`working/polish-pass/ledger-w1a-0903-1702.md`) with
-Part 0 of `working/plan-audit-polish-w1a-f-0903-1330.md` applied from
-the three verification reports
-`working/logs/audit-polish-0902/w0c-audit/ledger-verify-a{1,2,3}-*.md`.
+The ledger began as the W1-A sweep, with Part 0 of its plan applied from
+the three verification reports (one per section A1–A3).
 Overlap (PROCESS_TGS, GET_LOCAL_TGT, FIND_FAST, HANDLE_AUTHDATA,
 AD-FX-ARMOR) is left in both sections on purpose — A1 owns TGS gather,
 A2 owns AS/`kdc_util`, A3 owns FAST residue.
@@ -105,7 +103,7 @@ Annotation rule: an `exact` row whose proof is unit-only carries
 state is reachable only by forged PDUs / faulted stores, so no live
 differential cell can exist); rows without it name a live gate cell or
 `diffsend` case. The per-row sweep that adds the annotation to every
-unit-only `exact` row is W3 (`working/w1-sweep/plan-w1z-0913-1915.md` §W3 handoff). The two
+unit-only `exact` row is W3's (the W1-Z handoff). The two
 `absent` rows are the user's stated non-goals (OTP preauth,
 `gss_wrap_size_limit`).
 
@@ -113,7 +111,7 @@ Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
 row inserts (the plan's "27" counted the split inside the A2 9).
 W1-Z Z2 added the eight `deferred` A4 rows for the W1-C kadm5 folds
-that had no owner (`working/w1-sweep/plan-w1z-0913-1915.md` W3 handoff table).
+that had no owner (the W1-Z handoff table).
 
 ## Ranked fix batches (security > parity > e_text)
 

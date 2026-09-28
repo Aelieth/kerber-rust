@@ -397,8 +397,8 @@ Three unit files pin answers from a settle that predates `settle.sh`: the
 kadmind `CREATE_ALIAS` ACL codes (`crates/krb5-admin/tests/kadm5_alias.rs`,
 §D), the GET_PRINCS glob (`kadm5_glob.rs`, §E), and the KDB alias texts and
 dump line (`crates/krb5-kdc/tests/kdb_alias.rs`, §A–§C) are MIT 1.22.2's
-output in
-`working/logs/audit-polish-0902/w1k/notes-unstamped/m3a-settle-mit-alias.log`.
+output, captured by hand before `settle.sh` existed; the capture is kept
+outside the repository.
 `scripts/ci-status.py --save SHA [--out DIR]` writes `ci-<sha>.txt` only
 from a **completed**, non-rate-limited run (retries with backoff; exit 2
 otherwise) and drops `title=fixture` / `probe-gate.sh` annotations from
@@ -533,7 +533,7 @@ The external-oracle inventory is [`gates.md`](gates.md) (per gate) and
 Primary oracle: MIT Kerberos **1.22.2** in `harness/`. Secondary:
 Heimdal **7.8** in `harness/heimdal/` (`scripts/heimdal-gate.sh`). A
 Windows Server 2022 Evaluation DC (`AD.KERBER.TEST`) is captured for
-the AD round; see [`ad-lab.md`](ad-lab.md). Live AD commands use
+the AD round; see [`labs/ad-lab.md`](labs/ad-lab.md). Live AD commands use
 `~/adlab` only — never `/etc/krb5.conf` or SSSD. SSPI remains later.
 
 ## Production-gate
@@ -558,7 +558,7 @@ toolchain; the full `cargo test --workspace --locked` on MSRV is the
 `msrv-test` job of `full-test.yml` (nightly + `v*` tags). `rasn` is
 unpinned (`0.28`); golden MIT DER is the protocol net if encodings
 drift. There is no unlocked `--locked` fallback. KLLDAP alignment:
-[`integration-klldap.md`](integration-klldap.md).
+[`embed/klldap.md`](embed/klldap.md).
 
 ### Tier contract
 
@@ -640,7 +640,7 @@ port 88, emits JSON logs with a `correlation_id`, and runs `kinit` for
 `user@KERBER.TEST`.
 
 Requires Docker (Compose optional — `harness/docker-compose.yml`).
-[ad-lab.md](ad-lab.md) has the AD lab coordinates and the `~/adlab`
+[labs/ad-lab.md](labs/ad-lab.md) has the AD lab coordinates and the `~/adlab`
 isolation protocol.
 
 | Item | Value |

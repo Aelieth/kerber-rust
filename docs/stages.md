@@ -23,8 +23,7 @@ targets.
 
 Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
 **v1.0.0** claims. The external-oracle inventory is [`gates.md`](gates.md)
-(per gate) and [`interop-matrix.md`](interop-matrix.md) (per oracle). Local breadcrumbs:
-`working/era-ii/`.
+(per gate) and [`interop-matrix.md`](interop-matrix.md) (per oracle).
 
 - **Track A — AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the
   captured `kbruser` PAC (`tests/traces/pac-kbruser.ndr`) byte-identically.
@@ -120,13 +119,13 @@ G5 (GSS) is a hard requirement: kerber-rust is meant to host real client
 networks that already use SSH GSSAPI delegation, HTTP `Negotiate`, and NFSv4
 `RPCSEC_GSS`. `KEYRING:` ccaches are a post-embed item (kernel keyrings need
 a shim under `forbid(unsafe_code)`; the fleet default is FILE, see
-[docs/kcm-nfs-verdict.md](kcm-nfs-verdict.md)), so `KEYRING:` is refused
+[labs/kcm-nfs-verdict.md](labs/kcm-nfs-verdict.md)), so `KEYRING:` is refused
 as an unknown cache type until then. Beyond 1.1 lies the pure-Rust KDC embed
-into [KLLDAP](integration-klldap.md).
+into [KLLDAP](embed/klldap.md).
 
 ## Era III — MIT 1.22.2 parity sweep (closed)
 
-W1 (`working/w1-sweep/plan-w1-index-0907-1954.md`, archive `working/w1-sweep/README.md`) swept the KDC against MIT 1.22.2 source
+The parity sweep swept the KDC against MIT 1.22.2 source
 function by function: A′-1…4 (FAST/cookie/entry validation, AS/`kdc_util`,
 TGS policy/S4U/PAC, kadm5) produced the graded
 [parity ledger](parity/README.md) (one row per MIT check:
@@ -145,7 +144,7 @@ oracle that promotes it. Deviations are in
 edition **2024**, MSRV **1.95**, `nix` 0.31, and unpinned `rasn` 0.28
 with KLLDAP (local checkout 0.7.4, upstream `Aelieth/klldap` 0.7.6) so a
 future embed has no overlapping crate majors.
-See [`integration-klldap.md`](integration-klldap.md). Replacing
+See [`embed/klldap.md`](embed/klldap.md). Replacing
 `lldap-kerberos` FFI-to-system-MIT is a later phase.
 
 **Tier 1 §6** (plugins / named policies / iprop) is in tree: KDB

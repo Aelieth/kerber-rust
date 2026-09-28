@@ -122,9 +122,9 @@ optional). The realms, principals and ports are in
 [logging](docs/logging.md) → [interop](docs/interop-matrix.md) →
 [plugins](docs/plugins.md) → [RFC mapping](docs/rfc-mapping.md) →
 [gate-unit index](docs/gate-unit-index.md) → the labs
-([AD](docs/ad-lab.md), [Samba](docs/samba-lab.md),
-[KCM / NFS verdict](docs/kcm-nfs-verdict.md)) → the
-[KLLDAP embed](docs/integration-klldap.md) →
+([AD](docs/labs/ad-lab.md), [Samba](docs/labs/samba-lab.md),
+[KCM / NFS verdict](docs/labs/kcm-nfs-verdict.md)) → the
+[KLLDAP embed](docs/embed/klldap.md) →
 [export control](docs/export-control.md).
 
 ## License & supply chain

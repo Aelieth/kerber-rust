@@ -3749,7 +3749,7 @@ breadth). 1.1 is cut after the remaining polish/general pass.
   `nix` **0.31**, and `rasn` unpinned at **0.28.14**. MIT golden DER
   still byte-matches `tests/traces/mit-*.der`. Privilege-drop still
   no-ops when not root. See
-  [`docs/integration-klldap.md`](docs/integration-klldap.md).
+  [`docs/embed/klldap.md`](docs/embed/klldap.md).
   Bisect: `c6c59d8` (MSRV bump) was clippy-red on stable until
   `d226f8c` folded MSRV-gated `is_multiple_of` / if-let-chains.
 

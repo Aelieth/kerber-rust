@@ -320,7 +320,7 @@ The detail behind the rows. A gate with no note is fully described by its row.
   runs `sssd_kcm` as in-container root (needs `/var/lib/sss/secrets`); host
   isolation is the throwaway container, not `useradd 4242`. Empty-residual
   `kinit -c KCM:` re-INITIALIZEs the default (not MIT `krb5_cc_new_unique`).
-  Verdict [`kcm-nfs-verdict.md`](kcm-nfs-verdict.md) (FILE stays until NFS
+  Verdict [`kcm-nfs-verdict.md`](labs/kcm-nfs-verdict.md) (FILE stays until NFS
   cells run).
 - `scripts/kcm-opcode-gate.sh` — live F43/F42 `sssd_kcm`; asserts
   `GET_CRED_LIST=ok` and `RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL`.
