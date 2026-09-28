@@ -694,8 +694,9 @@ mod tests {
             );
         });
         let mut c = std::net::TcpStream::connect(addr).unwrap();
+        // The length word alone: body bytes the server does not read turn its close into a
+        // reset, which can reach this socket before the reply has been read.
         c.write_all(&64u32.to_be_bytes()).unwrap();
-        c.write_all(&[0u8; 8]).unwrap();
         c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
         let mut hdr = [0u8; 4];
         c.read_exact(&mut hdr).expect("FIELD_TOOLONG length");
