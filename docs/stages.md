@@ -73,7 +73,7 @@ verifies a presented PAC and copies LOGON_INFO (in-repo two-realm
 tests; `kvno` is not that copy proof). Rust S4U2Self/Proxy is
 MIT KDC + client gated (C1; `scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
 PAC, denies classic constrained delegation unless `s4u_allowed_to` lists
-the target, and denies RBCD unless allowed. `ad-windows-gate` / `ad-s4u-gate` are live Samba in CI.
+the target, and denies RBCD unless allowed. `ad-windows-gate` / `ad-s4u-gate` are live Samba, run nightly in `peers.yml`.
 `ad-mit-trust-gate.sh` aliases `samba-realtrust-gate.sh`. **C1** is
 `prod-gate.sh` (loopback) plus **`prod-realm-gate.sh`** (multi-host MIT
 client, named realm, kprop failover; in CI). Wire `stress-gate` /
@@ -81,20 +81,50 @@ client, named realm, kprop failover; in CI). Wire `stress-gate` /
 remains. Differential-vs-MIT is `differential-gate` (in CI). **kprop** on 754
 is gated both directions (`kprop-gate` MIT→Rust; `kprop-reverse-gate`
 Rust→MIT, additive to the in-process dump/send tests). **kadmind** MIT-gates add/get/list/mod/chrand/
-`renprinc`/del. Per push, the `ci.yml` `harness` job runs `pkinit-gate`,
-`kadmin-gate`, `kpasswd-gate`, `policy-gate`, `kdb-dump-gate`,
+`renprinc`/del. Per push, `ci.yml` spreads them over four jobs, for example: `harness`
+(`pkinit-gate`, `policy-gate`, the four `kadmin-*` legs of the local
+`kadmin-gate` wrapper), `harness-2`
+(`kpasswd-rust-gate` / `kpasswd-mit-gate`, `kdb-dump-gate`,
 `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`,
-`restart-gate`, `prod-gate`, `prod-realm-gate` (and the rest of the
-per-push MIT gates listed in [`testing.md`](testing.md) § CI lanes); the
-`mit-extra` job runs `s4u-mit-gate` and the client/cross-realm/SPAKE/FAST
-gates. `stress-gate` (`slo` job), `chaos-gate` (`chaos`) and `soak-gate`
+`restart-gate`, `prod-gate`, `prod-realm-gate`), `mit-extra` (the
+cross-realm / SPAKE / FAST / PKINIT client gates) and `mit-extra-2`
+(`s4u-mit-gate`, the client differential); [`gates.md`](gates.md) has one
+row per gate with its job and lane. `stress-gate` (`slo` job), `chaos-gate` (`chaos`) and `soak-gate`
 (`soak`) are per-push but `continue-on-error`. The eight Samba/AD/Heimdal
 gates — `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`,
 `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`,
 `samba-realtrust-gate`, `heimdal-gate` — run **nightly** in `peers.yml`
 (not per push); a red there is a red, but a push does not wait for it.
 
-## Era III — W1 MIT parity sweep (closed)
+## Era III — the 1.1 roadmap
+
+A three-agent parity survey against MIT 1.22.2 found the core strong and
+interop-proven, but not yet 100%. **1.1 closes the gap** — nine feature
+phases and then a source-level parity sweep, each gated against real MIT
+before it counts as done:
+
+| Phase | Delivers |
+| --- | --- |
+| **G1** | **Faithfulness — landed.** Principal/password expiration, stored `DISALLOW_*` / `OK_AS_DELEGATE` / `REQUIRES_HW_AUTH` / `NO_AUTH_DATA_REQUIRED`, real `GET_PRIVS`, iprop/kpropd ACLs. Gates: `expire-gate`, `flags-gate`, `getprivs-gate`, `prop-acl-gate` |
+| **G2** | **Renewal & postdating — landed.** `kinit -R`, MAY-POSTDATE / POSTDATED / VALIDATE, the PROXIABLE flag. Gates: `renew-gate`, `postdate-gate` |
+| **G3** | **kadmin completeness — landed.** `getprinc` key metadata, `EXTRACT_KEYS` (`ktadd -norandkey`), PURGEKEYS, SETKEY, GET/SET_STRINGS. Gate: `kadmin-gate`. MIT `*`/`x` do not grant extract (`e`). SETKEY is unit-tested (no MIT `setkey` verb) |
+| **G4** | **iprop fidelity — landed.** Incremental kdbe carries string-attrs / history / policy / lockout; ulog persists across master restart. Gates: `iprop-gate`, `differential-gate` |
+| **G5** | **GSS breadth — landed.** Credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement*. Gate: `gss-gate` |
+| **G6** | **Client-side preauth & names — landed.** Wire PKINIT / SPAKE / FAST into `kinit`; NT-ENTERPRISE canonicalization. Gates: `rust-kinit-{fast,pkinit,spake,enterprise}-gate` |
+| **G7** | **Standalone user CLIs — landed.** `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin.local` (`krb5-kadmin-local`), `ktutil`. The remote `kadmin` client is deferred (W1-D, see CHANGELOG); `kadmin-gate` drives MIT `kadmin` against the Rust kadmind. Gates: `client-gate`, `kpasswd-gate`, `kadmin-gate`, `ktutil-gate`. Harness still uses MIT `kinit`/`kvno` as the oracle (retiring that is not this cut) |
+| **G8** | **ccache breadth — landed.** FILE/DIR/MEMORY/KCM; `KEYRING:` is rejected (`Unknown credential cache type`). Gates: `ccache-gate`, `kcm-gate` |
+| **G9** | **Config breadth — landed.** `[capaths]`, key `[libdefaults]` knobs, `include`/`includedir`. Gates: `capaths-transit-gate`, `knobs-gate`, `config-include-gate` |
+| **W1** | **MIT 1.22.2 parity sweep — closed.** KDC (`do_as_req`/`do_tgs_req`/`kdc_util`/`tgs_policy`/FAST/PAC), client library, acceptor and kadm5 graded function by function against MIT source in [docs/parity/](parity/README.md); every row is `exact`, `stricter-documented` ([docs/security.md](security.md)), `deviation`, `deferred` with a named promotion oracle, or one of the two `absent` non-goals. Also landed on the way: anonymous PKINIT + `restrict_anonymous_to_tgt`, RFC 8070 PKINIT freshness, FAST hide-client-names, client-side S4U2Self/S4U2Proxy, `krb5-vfy-increds`, `krb5-kswitch`. Gates: `differential-gate` (111 same-bytes cases), `client-differential-gate`, `kadmin-gate`, `mit-fast-kdc-gate`, `kdcpolicy-gate`, `cross-kdc-gate` |
+
+G5 (GSS) is a hard requirement: kerber-rust is meant to host real client
+networks that already use SSH GSSAPI delegation, HTTP `Negotiate`, and NFSv4
+`RPCSEC_GSS`. `KEYRING:` ccaches are a post-embed item (kernel keyrings need
+a shim under `forbid(unsafe_code)`; the fleet default is FILE, see
+[docs/kcm-nfs-verdict.md](kcm-nfs-verdict.md)), so `KEYRING:` is refused
+as an unknown cache type until then. Beyond 1.1 lies the pure-Rust KDC embed
+into [KLLDAP](integration-klldap.md).
+
+## Era III — MIT 1.22.2 parity sweep (closed)
 
 W1 (`working/w1-sweep/plan-w1-index-0907-1954.md`, archive `working/w1-sweep/README.md`) swept the KDC against MIT 1.22.2 source
 function by function: A′-1…4 (FAST/cookie/entry validation, AS/`kdc_util`,
@@ -109,7 +139,7 @@ unit-only claim either has a live cell or a `deferred` row naming the
 oracle that promotes it. Deviations are in
 [`security.md`](security.md) § Documented deviations.
 
-## Era III — KLLDAP integration (Phase 1 landed; Tier 1 §6 landed)
+## Era III — KLLDAP integration
 
 `v1.0.0` is the tagged MIT/Samba/Heimdal baseline. Phase 1 aligns
 edition **2024**, MSRV **1.95**, `nix` 0.31, and unpinned `rasn` 0.28

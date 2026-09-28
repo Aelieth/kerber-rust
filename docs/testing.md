@@ -560,7 +560,7 @@ unpinned (`0.28`); golden MIT DER is the protocol net if encodings
 drift. There is no unlocked `--locked` fallback. KLLDAP alignment:
 [`integration-klldap.md`](integration-klldap.md).
 
-### Tier contract (W2-S6)
+### Tier contract
 
 Job walls live in `ci-budget.toml` (one source). `ci-status.py --check-budget`
 compares a completed SHA, or the last N runs, against that file. A run cannot
@@ -634,6 +634,15 @@ Live AD work must set `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME` to
 
 ## MIT 1.22.2 harness
 
+The documented entry point is `scripts/run-harness.sh`. It builds an image
+pinned to MIT krb5 1.22.2, starts a KDC for realm `KERBER.TEST` on UDP/TCP
+port 88, emits JSON logs with a `correlation_id`, and runs `kinit` for
+`user@KERBER.TEST`.
+
+Requires Docker (Compose optional — `harness/docker-compose.yml`).
+[ad-lab.md](ad-lab.md) has the AD lab coordinates and the `~/adlab`
+isolation protocol.
+
 | Item | Value |
 | --- | --- |
 | Realm | `KERBER.TEST` |
@@ -659,3 +668,38 @@ field-diffed in `crates/krb5-protocol/tests/golden_traces.rs` (unit CI).
 Reply goldens are MIT-KDC bytes from `client-gate.sh`. Do not commit
 `/working`. `bidirectional-gate.sh` is a Rust-client↔Rust-KDC check,
 not a live MIT oracle.
+
+## Rust KDC test realm
+
+`scripts/run-rust-kdc.sh` (`krb5-kdc --test-realm`) bootstraps realm
+`KERBER.TEST` and listens on **127.0.0.1:88**, falling back to
+**127.0.0.1:8888** if the privileged port cannot be bound. It never silently
+binds `0.0.0.0`.
+
+| Item | Value |
+| --- | --- |
+| Realm | `KERBER.TEST` |
+| User | `user@KERBER.TEST` / `userpassword` |
+| Admin | `admin@KERBER.TEST` (ACL `*`; extract needs `e`) |
+| Host | `host/testhost.kerber.test` (random keys, etypes 17–20) |
+| Default etype | 18 (`aes256-cts-hmac-sha1-96`); krbtgt/host also hold RFC 8009 19/20 |
+
+```bash
+./scripts/run-rust-kdc.sh
+# or: cargo run -p krb5-kdc --bin krb5-kdc -- 127.0.0.1:8888
+./scripts/kdc-gate.sh    # MIT 1.22.2 kinit + kvno against the Rust KDC
+```
+
+Admin mutations go through MIT `kadmin` against `krb5-kadmind` on 749
+(AUTH_GSSAPI) for add/get/list/mod/chrand/rename/del, RFC 3244 `kpasswd` on
+UDP/TCP 464, and `kprop`/`kpropd` (TCP 754) both directions. Named password
+policies, lockout with time-based auto-unlock, and incremental propagation
+(iprop / ulog, program 100423) are in tree; the plugin surface is Rust traits,
+not `dlopen` ([docs/plugins.md](plugins.md)).
+
+## In-repo consumers
+
+The in-repo consumer (`examples/consumer`) depends on the crates as a
+downstream binary and asserts published encrypt and DER return values;
+`examples/kdc-consumer` issues a TGT and host ticket, exports a keytab, and
+verifies an AP-REQ without binding a socket.
