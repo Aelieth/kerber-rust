@@ -455,6 +455,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **examples.** `examples/configs/` is a working one-realm `kdc.conf`,
+  `krb5.conf` and `kadm5.acl`; its README names each key's reader, what is
+  set through the environment, and what MIT reads that this port ignores.
 - **client.** Password `KEY_EXP` (23) runs the `kadmin/changepw`
   ticket + kpasswd + retry path (`gic_pwd.c:211-336`). kpasswd
   result codes outside 0–7, or SUCCESS from a KRB-ERROR, are
@@ -2503,6 +2506,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **test.** `kdc-gate.sh` runs `examples/configs` as written: `krb5-kdb`
+  creates the realm, `krb5-kdc` and `krb5-kadmind` start on `kdc.conf`, MIT
+  `kadmin` adds principals, and MIT `kinit` + `kvno` get tickets.
 - **tool.** ci-policy reads the parity ledger as one file or as
   `docs/parity/`; a split without its README, a file naming no section, rows
   left in the one-file ledger and a repeated row are red.

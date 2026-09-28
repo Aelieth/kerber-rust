@@ -1,0 +1,4 @@
+# kadm5.acl for krb5-kadmind: <principal> <operations> [<target> [<restrictions>]].
+# `*` grants every operation except extract (`e`); README.md has the rules.
+admin@EXAMPLE.COM      *
+*/admin@EXAMPLE.COM    *

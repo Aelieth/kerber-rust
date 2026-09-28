@@ -8,7 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
-need_bins krb5-kdc
+need_bins krb5-kdc krb5-kdb krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-mit-client"
@@ -391,5 +391,63 @@ print("tgs-audit-seed-ok")
 PY
 echo "MIT_tgs_audit_seed"
 echo "RUST_tgs_audit_seed"
+
+# examples/configs as written: krb5-kdb creates EXAMPLE.COM from kdc.conf,
+# krb5-kdc and krb5-kadmind start on kdc.conf alone, MIT kadmin adds principals
+# through kadm5.acl, and MIT kinit + kvno read krb5.conf.
+echo "==== example configuration (examples/configs) ===="
+EXAMPLE="$ROOT/examples/configs"
+for f in kdc.conf krb5.conf kadm5.acl; do
+    [ -f "$EXAMPLE/$f" ] || die "examples/configs/$f is missing"
+done
+# The MIT krb5kdc of the audit cell above still holds :88.
+docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) $(pidof krb5-kdc) $(pidof krb5-kadmind) 2>/dev/null; true'
+wait_gone_in "$NAME" 88 || die "a KDC still holds port 88 before the example cell"
+docker exec "$NAME" sh -c 'rm -rf /etc/kerber-rust /var/lib/kerber-rust /tmp/example-cc && mkdir -p /etc/kerber-rust /var/lib/kerber-rust'
+for f in kdc.conf krb5.conf kadm5.acl; do
+    docker cp "$EXAMPLE/$f" "$NAME":/etc/kerber-rust/"$f"
+done
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
+docker exec "$NAME" chmod +x /tmp/krb5-kdb /tmp/krb5-kadmind
+docker exec "$NAME" sh -c 'grep -q " kdc.example.com$" /etc/hosts || echo "127.0.0.1 kdc.example.com" >>/etc/hosts'
+docker exec -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    -e KRB5_KDC_DB=/var/lib/kerber-rust/principal \
+    -e KRB5_KDC_STASH=/var/lib/kerber-rust/.k5.EXAMPLE.COM \
+    -e KRB5_MASTER_PASSWORD=example-master \
+    -e KRB5_TEST_USER_PASSWORD=example-user \
+    -e KRB5_TEST_ADMIN_PASSWORD=example-admin \
+    "$NAME" /tmp/krb5-kdb create EXAMPLE.COM || die "example: krb5-kdb create EXAMPLE.COM failed"
+docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc >/tmp/example-kdc.log 2>&1'
+require_listen "$NAME" /tmp/example-kdc.log "the example KDC (kdc.conf kdc_listen)"
+docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/example-kadmind.log 2>&1'
+require_listen "$NAME" /tmp/example-kadmind.log "the example kadmind (kdc.conf acl_file)"
+echo "RUST_example_kdc_kadmind"
+# ex: a MIT client in the container on the example krb5.conf and its own cache.
+ex() {
+    docker exec -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5CCNAME=FILE:/tmp/example-cc "$NAME" "$@"
+}
+# ex_addprinc ARGS PRINC: MIT kadmin -q exits 0 when the query is refused
+# (kadmin_rc= records it), so the "created" line is the proof.
+ex_addprinc() {
+    local out rc=0
+    out="$(ex kadmin -p admin@EXAMPLE.COM -w example-admin -q "addprinc $1" 2>&1)" || rc=$?
+    echo "$out"
+    echo "kadmin_rc=$rc"
+    [ "$rc" = 0 ] || die "example: MIT kadmin addprinc $2 failed"
+    grep -q "Principal \"$2\" created" <<<"$out" || die "example: MIT kadmin did not create $2"
+}
+ex_addprinc '-pw alice-secret alice' alice@EXAMPLE.COM
+ex_addprinc '-randkey host/kdc.example.com' host/kdc.example.com@EXAMPLE.COM
+ex sh -c 'printf "alice-secret\n" | kinit alice@EXAMPLE.COM' || die "example: MIT kinit alice@EXAMPLE.COM failed"
+ex kvno host/kdc.example.com || die "example: MIT kvno host/kdc.example.com failed"
+KLISTX="$(ex klist)"
+echo "$KLISTX"
+grep -q 'Default principal: alice@EXAMPLE.COM' <<<"$KLISTX" || die "example: klist does not name alice@EXAMPLE.COM"
+grep -q 'host/kdc.example.com@EXAMPLE.COM' <<<"$KLISTX" || die "example: klist has no host/kdc.example.com ticket"
+echo "MIT_example_kadmin_kinit_kvno"
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) $(pidof krb5-kadmind) 2>/dev/null; rm -rf /etc/kerber-rust /var/lib/kerber-rust /tmp/example-cc; true'
 
 log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\",\"issue\":true,\"audit\":true"

@@ -110,8 +110,8 @@ make safety               # fmt --check, clippy -D warnings, nextest (CI profile
 
 `make safety` needs `cargo-nextest`; the harness needs Docker (Compose
 optional). The realms, principals and ports are in
-[docs/testing.md](docs/testing.md). `examples/consumer` and
-`examples/kdc-consumer` use the crates as a downstream library.
+[docs/testing.md](docs/testing.md). [examples/](examples/README.md) has two
+downstream-consumer crates and a working one-realm config `kdc-gate.sh` runs.
 
 ## Documentation
 

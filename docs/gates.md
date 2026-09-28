@@ -58,7 +58,7 @@ peer, or **none** (Rust against Rust: it proves behaviour, not parity).
 | `scripts/kcm-gate.sh` | MIT | `ci:mit-extra-2` | fail-red | Rust `KCM:` vs Fedora `sssd-kcm` + MIT 1.22.2 `klist`: Rust `kinit -c KCM:` then MIT `klist` names `user@KERBER.TEST`; MIT `kinit -c KCM:` then Rust `klist` names the principal; `kswitch` two-principal (GEN_NEW residual); restart persist; re-prime; `kdestroy`; `KEYRING:` still unknown |
 | `scripts/kcm-opcode-gate.sh` | MIT | `kcm-opcode:kcm-opcode` | nightly | running F43/F42 `sssd_kcm`: NVR pin; `GET_CRED_LIST=ok`; `RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL` |
 | `scripts/kdb-dump-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kdb5_util` dump/load both ways: MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` |
-| `scripts/kdc-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs Rust KDC: MIT TGT + host ticket (FAST TGS `kvno` included); TGS audit seed stage 1 / no `tkt_out_id` / same `req_id` as `ENCR_REP` |
+| `scripts/kdc-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs Rust KDC: MIT TGT + host ticket (FAST TGS `kvno` included); TGS audit seed stage 1 / no `tkt_out_id` / same `req_id` as `ENCR_REP`; `examples/configs` as written: `krb5-kdb create`, `krb5-kdc` + `krb5-kadmind` on `kdc.conf` alone, MIT `kadmin` `addprinc`, MIT `kinit` + `kvno` on `krb5.conf` |
 | `scripts/kdcpolicy-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kdcpolicy_test.so` vs Rust `TestPolicy` (`KRB5_KDCPOLICY=test`): AS/TGS deny on a `fail` first component is `KDC policy rejects request` (`LOCAL_POLICY`) on both legs; SPAKE `spake_preauth_indicator = ONE_HOUR` rewrites AS/TGS life on both; a foreign indicator is `LOCAL_POLICY` on both |
 | `scripts/kit-conformance-gate.sh` | MIT | `ci:harness-2` | skip2 | kit twin 2×2: `KIT_TWIN` digest logged; **exit 2** if the twin is absent |
 | `scripts/knobs-gate.sh` | MIT | `ci:harness` | fail-red | kit-like `krb5.conf` vs MIT 1.22.2 and Rust `kinit`: `kdc_timeout`/`max_retries` do not change MIT (or Rust) kinit success; `forwardable` + `default_tkt_enctypes` show `F` and `aes256-cts-hmac-sha1-96` on `klist -f -e`; `default_ccache_name` env>conf>builtin path parity; `[domain_realm]` + conf `proxiable` host tickets `PT` |
@@ -339,7 +339,10 @@ The detail behind the rows. A gate with no note is fully described by its row.
   client-only MIT 1.22.2 container, binds 127.0.0.1:88 (fallback 8888), and
   runs MIT `kinit user@KERBER.TEST` plus `kvno host/testhost.kerber.test`.
   In-crate tests drive `issue_as` / `issue_tgs` / `Acl::check` /
-  `verify_ap_req` without a socket.
+  `verify_ap_req` without a socket. Its last cell runs `examples/configs` as
+  written: `krb5-kdb create EXAMPLE.COM`, `krb5-kdc` and `krb5-kadmind` on
+  `kdc.conf` alone, then MIT `kadmin`, `kinit` and `kvno` through `kadm5.acl`
+  and `krb5.conf`.
 - `scripts/knobs-gate.sh` — `kdc_timeout`/`max_retries` ignored; honored
   `forwardable` + `default_tkt_enctypes`; `default_ccache_name` env > conf
   (`%{uid}`) > builtin; `[domain_realm]` + conf `proxiable` (MIT and Rust
