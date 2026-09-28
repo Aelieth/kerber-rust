@@ -31,9 +31,9 @@ plus packet captures outrank unit tests.
 | **v1.1** *(in progress)* | **General-purpose MIT completeness**: the KDC behaves like MIT across the board and the client tools stand alone. The nine 1.1 phases and the MIT 1.22.2 parity sweep have landed ([docs/stages.md](docs/stages.md)); the swept MIT functions are graded one row per check in the [parity ledger](docs/parity/README.md). |
 
 Every push runs 59 gates in `ci.yml`: 52 fail-red, 4 that pass on exit 2
-while their oracle is not vendored, and 3 soft (`continue-on-error`). Ten
-more run nightly: the eight Samba / AD / Heimdal peers, the KCM opcode pin
-and the long soak. [docs/gates.md](docs/gates.md) has one row per gate.
+while their oracle is not vendored, and 3 soft (`continue-on-error`). Nine
+more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
+pin); soak also runs longer nightly. [docs/gates.md](docs/gates.md) has one row per gate.
 
 ## Architecture
 
@@ -65,9 +65,9 @@ the oracles, and [docs/stages.md](docs/stages.md) the stage map.
 
 | External oracle | Proves | Gates (examples) |
 | --- | --- | --- |
-| **MIT Kerberos 1.22.2** *(primary)* | AS/TGS · GSS wrap (RFC 4121 RRC=16) · PKINIT · SPAKE (`pa_type` 151 / group 2) · RFC 8009 SHA-2 · cross-realm · kadmin (add/get/list/mod/chrand/rename/del) · kpasswd (464) · kprop **both directions** · iprop · dump/load (v7) · byte-for-byte differential · stress / chaos / soak | `client-gate`, `kdc-gate`, `gss-gate`, `pkinit-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `spake-gate`, `sha2-gate`, `cross-realm-gate`, `kadmin-gate`, `kpasswd-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`, `kdb-dump-gate`, `differential-gate`, `store-gate`, `policy-gate`, `history-mit-gate`, `stress`/`chaos`/`soak-gate` |
-| **Samba 4 AD DC** *(live)* | AD PAC (NDR golden) · S4U2Self / S4U2Proxy / RBCD · live `AD.KERBER.TEST`↔`KERBER.TEST` trust via real `samba-tool domain trust create` | `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate` |
-| **Heimdal 7.8** *(live)* | AES-SHA1, both directions (Heimdal client ↔ Rust KDC; Rust client ↔ Heimdal KDC) | `heimdal-gate` |
+| **MIT Kerberos 1.22.2** *(primary)* | AS/TGS · GSS wrap/unwrap (RFC 4121; wrap sends RRC=0, as MIT) · S4U2Self / S4U2Proxy / RBCD · PKINIT · SPAKE (`pa_type` 151 / group 2) · RFC 8009 SHA-2 · cross-realm · kadmin (add/get/list/mod/chrand/rename/del) · kpasswd (464) · kprop **both directions** · iprop · dump/load (v7) · byte-for-byte differential · stress / chaos / soak | `client-gate`, `kdc-gate`, `gss-gate`, `s4u-mit-gate`, `pkinit-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `spake-gate`, `sha2-gate`, `cross-realm-gate`, `kadmin-gate`, `kpasswd-gate`, `kprop-gate`, `kprop-reverse-gate`, `iprop-gate`, `kdb-dump-gate`, `differential-gate`, `store-gate`, `policy-gate`, `history-mit-gate`, `stress`/`chaos`/`soak-gate` |
+| **Samba 4 AD DC** *(live)* | AD PAC (NDR golden) · S4U2Self / S4U2Proxy by classic constrained delegation · live `AD.KERBER.TEST`↔`KERBER.TEST` trust via real `samba-tool domain trust create` | `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate` |
+| **Heimdal 7.8** *(live)* | Both directions (Heimdal client ↔ Rust KDC; Rust client ↔ Heimdal KDC), with AES256-SHA1 configured | `heimdal-gate` |
 
 The KDC's live at-rest file is MIT dump **version 7** (the stash holds the
 master key); `krb5-kadmind` speaks ONC RPC program 2112 with AUTH_GSSAPI
@@ -105,7 +105,7 @@ make safety               # fmt --check, clippy -D warnings, nextest (CI profile
 ./scripts/client-gate.sh  # Rust kinit + MIT klist of the ccache
 ./scripts/stop-harness.sh
 ./scripts/run-rust-kdc.sh # the Rust KDC for KERBER.TEST on 127.0.0.1:88 (else :8888)
-./scripts/kdc-gate.sh     # MIT 1.22.2 kinit + kvno against the Rust KDC
+./scripts/kdc-gate.sh     # MIT 1.22.2 kinit + kvno against its own Rust KDC container
 ```
 
 `make safety` needs `cargo-nextest`; the harness needs Docker (Compose
