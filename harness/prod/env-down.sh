@@ -3,7 +3,7 @@
 # Pass --all to also remove any Samba oracle containers/networks left running.
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
-# shellcheck disable=SC1091
+# shellcheck source=SCRIPTDIR/limits.env
 . "$HERE/limits.env"
 
 echo "[env-down] removing prod nodes"

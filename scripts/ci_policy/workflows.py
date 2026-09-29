@@ -513,7 +513,7 @@ def check_workflow_hardening(
     `concurrency` + `cancel-in-progress` on ci.yml and fuzz.yml only; every
     third-party `uses:` (workflows and composite actions) is a 40-hex SHA with
     the tag in a trailing comment; dependabot covers github-actions and cargo;
-    ci.yml runs the fail-red shellcheck job over the three script globs with a
+    ci.yml runs the fail-red shellcheck job over the four script globs with a
     `.shellcheckrc` that follows sources, on a ShellCheck it installs itself by
     version and sha256 (the runner's package differs by two minor versions and
     hundreds of notes), and the Makefile fallback image and the hygiene

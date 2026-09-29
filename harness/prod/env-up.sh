@@ -15,7 +15,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
 cd "$ROOT" || exit 1
-# shellcheck disable=SC1091
+# shellcheck source=SCRIPTDIR/limits.env
 . "$HERE/limits.env"
 # refuse_golden_capture_dir (the gates' golden-home rule); env-up's own say/warn/die below replace its die.
 . "$ROOT/scripts/lib/gate-common.sh"
