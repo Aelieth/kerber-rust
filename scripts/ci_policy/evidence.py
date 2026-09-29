@@ -80,8 +80,14 @@ def check_no_red_target_trees(root: pathlib.Path | None = None) -> None:
         )
 
 
-def check_red_at_sha_overlay_order(text: str | None = None) -> None:
-    """`scripts/*.sh` must be copied before `write-tree` so tree_sha includes the gate."""
+RED_AT_SHA_OVERLAY_DIRS = ("lib", "oracle", "ci_policy")
+# The directories red-at-sha.sh does not overlay yet; pinned exactly.
+RED_AT_SHA_OVERLAY_MISSING_ALLOW = 3
+
+
+def check_red_at_sha_overlay_order(text: str | None = None, allow: int | None = None) -> None:
+    """`scripts/*.sh` and HEAD's script directories must be copied before `write-tree` so tree_sha includes
+    what the gates run."""
     if text is None:
         path = SCRIPTS / "red-at-sha.sh"
         if not path.is_file():
@@ -101,6 +107,15 @@ def check_red_at_sha_overlay_order(text: str | None = None) -> None:
         _die("red-at-sha.sh has no write-tree")
     if cp < 0 or cp > write:
         _die("red-at-sha.sh must overlay scripts/*.sh before write-tree")
+    # HEAD's gates read scripts/lib/, scripts/oracle/ and the ci_policy package (the ci-policy.py shim imports
+    # it): each directory is copied whole from HEAD, in one `for d in …` loop of `cp -a`, before write-tree.
+    loop = re.search(r"^\s*for d in ([\w ]+); do\n((?:.*\n){0,6}?)\s*done", text[:write], re.M)
+    listed = set(loop.group(1).split()) if loop and re.search(r'cp -a "\$ROOT/scripts/\$d"', loop.group(2)) else set()
+    missing = [d for d in RED_AT_SHA_OVERLAY_DIRS if d not in listed]
+    allow = RED_AT_SHA_OVERLAY_MISSING_ALLOW if allow is None else allow
+    if len(missing) != allow:
+        _die(f"red-at-sha.sh must overlay scripts/{missing[0] if missing else '?'}/ whole (cp -a) before write-tree: "
+             f"{len(missing)} directories missing ({', '.join(missing) or 'none'}), allow {allow}")
 
 
 def check_unit_evidence_helper() -> None:

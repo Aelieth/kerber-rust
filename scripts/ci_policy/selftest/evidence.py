@@ -24,13 +24,29 @@ def _self_test_evidence() -> None:
     check_evidence_check_tool()
     check_ci_status_save()
     check_red_at_sha_inject()
+    _overlay_dirs = ('    for d in lib oracle ci_policy; do\n        rm -rf "$WT/scripts/$d"\n'
+                     '        cp -a "$ROOT/scripts/$d" "$WT/scripts/$d"\n    done\n')
     check_red_at_sha_overlay_order(
-        'cp "$ROOT/scripts/"*.sh "$WT/scripts/"\nTREE="$(git write-tree)"\n'
+        'cp "$ROOT/scripts/"*.sh "$WT/scripts/"\n' + _overlay_dirs + 'TREE="$(git write-tree)"\n', allow=0
     )
     _must_die(
         check_red_at_sha_overlay_order,
-        'TREE="$(git write-tree)"\ncp "$ROOT/scripts/"*.sh "$WT/scripts/"\n',
+        'TREE="$(git write-tree)"\ncp "$ROOT/scripts/"*.sh "$WT/scripts/"\n' + _overlay_dirs, 0,
     )
+    # Each script directory HEAD's gates read is overlaid whole before write-tree; one fixture per directory.
+    for _d in ("lib", "oracle", "ci_policy"):
+        _must_die_msg(
+            f"must overlay scripts/{_d}/ whole",
+            check_red_at_sha_overlay_order,
+            'cp "$ROOT/scripts/"*.sh "$WT/scripts/"\n' + _overlay_dirs.replace(f" {_d}", "", 1)
+            + 'TREE="$(git write-tree)"\n',
+        )
+    _must_die_msg(
+        "must overlay scripts/lib/ whole",
+        check_red_at_sha_overlay_order,
+        'cp "$ROOT/scripts/"*.sh "$WT/scripts/"\nTREE="$(git write-tree)"\n' + _overlay_dirs, 0,
+    )
+    check_red_at_sha_overlay_order('cp "$ROOT/scripts/"*.sh "$WT/scripts/"\nTREE="$(git write-tree)"\n', allow=3)
     _must_die(
         check_red_at_sha_inject,
         '--inject\nTREE="$(git write-tree)"\ncp "$ROOT/$rel" "$WT/$rel"\n',

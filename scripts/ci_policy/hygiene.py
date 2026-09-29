@@ -207,9 +207,13 @@ TEST_TEMP_DIR_ALLOW = 0
 
 
 def test_temp_dir_sites(root: pathlib.Path | None = None) -> list[str]:
-    """`path:line` of each `temp_dir()` call in test code under crates/ (comments and strings blanked)."""
+    """`path:line` of each `temp_dir()` call in test code under crates/ (comments and strings blanked): tests/,
+    src/**/tests/ and tests.rs files, the files out-of-line `#[cfg(test)]` modules name, and `#[cfg(test)]` items."""
     root = ROOT if root is None else pathlib.Path(root)
     out = []
+    # a file an out-of-line `#[cfg(test)] mod x;` names is test code whole, whatever its name
+    test_mods = {f"crates/{pdir.name}/{rel}" for pdir in sorted((root / "crates").glob("*/"))
+                 for rel in _hygiene_inventory().cfg_test_files_in_pkg(pdir)}
     for path in sorted((root / "crates").rglob("*.rs")):
         rel = path.relative_to(root)
         parts = rel.parts
@@ -217,7 +221,8 @@ def test_temp_dir_sites(root: pathlib.Path | None = None) -> list[str]:
             continue
         src = path.read_text(encoding="utf-8")
         blanked = _blank_rust(src)
-        whole = parts[2] == "tests" or "tests" in parts[3:-1] or parts[-1] in ("tests.rs", "testenv.rs")
+        whole = (parts[2] == "tests" or "tests" in parts[3:-1] or parts[-1] in ("tests.rs", "testenv.rs")
+                 or rel.as_posix() in test_mods)
         ranges = [(0, len(blanked))] if whole else _cfg_test_ranges(src)
         for a, b in ranges:
             start = a
@@ -281,8 +286,8 @@ _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
 HYGIENE_DIFF_MIN_CASES = 44
 HYGIENE_BODY_DIFF_MIN_CASES = 41
 HYGIENE_FN_DIFF_MIN_CASES = 143
-HYGIENE_INVENTORY_MIN_CASES = 10
-PY_MOVE_CHECK_MIN_CASES = 18
+HYGIENE_INVENTORY_MIN_CASES = 12
+PY_MOVE_CHECK_MIN_CASES = 23
 CLAIM_REMAP_MIN_CASES = 7
 
 

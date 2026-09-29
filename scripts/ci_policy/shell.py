@@ -683,6 +683,8 @@ def check_no_duplicate_functions(files: dict[str, str] | None = None, allow: int
 # behind the scripts/lib helpers. The rule counts one logical line (continuations
 # joined, comments dropped), heredoc bodies included, the query's own `-q`. Pinned at the live count.
 KADMIN_Q_DIRECT_ALLOW = 0
+# The same count over scripts/lib/*.sh but lib/kadmin-q.sh itself (the runners' home); pinned exactly.
+KADMIN_Q_DIRECT_LIB_ALLOW = 6
 # The queries that cannot come from scripts/lib: each runs inside a container script (a `docker exec … sh -c`
 # body or a heredoc fed to one) between in-container steps, where no host function exists. Keyed by
 # (gate, the section's `==== title ====`, the number of sites, the reason); an exception matches only a query
@@ -800,9 +802,11 @@ def kadmin_direct_queries(text: str) -> list[tuple[int, str | None, bool]]:
 
 
 def check_kadmin_q_via_lib(files: dict[str, str] | None = None, allow: int | None = None,
-                           exceptions: tuple[tuple[str, str, int, str], ...] | None = None) -> None:
+                           exceptions: tuple[tuple[str, str, int, str], ...] | None = None,
+                           lib_files: dict[str, str] | None = None, lib_allow: int | None = None) -> None:
     """No gate runs a kadmin query itself: every `kadmin -q` / `kadmin.local -q` goes through a scripts/lib
-    helper (pinned at KADMIN_Q_DIRECT_ALLOW), bar the container-script sites KADMIN_Q_EXCEPTIONS keys."""
+    helper (pinned at KADMIN_Q_DIRECT_ALLOW), bar the container-script sites KADMIN_Q_EXCEPTIONS keys. The
+    other scripts/lib files run theirs through lib/kadmin-q.sh too (pinned at KADMIN_Q_DIRECT_LIB_ALLOW)."""
     if files is None:
         files = {p.name: p.read_text(encoding="utf-8") for p in sorted(SCRIPTS.glob("*-gate.sh"))}
     allow = KADMIN_Q_DIRECT_ALLOW if allow is None else allow
@@ -825,6 +829,13 @@ def check_kadmin_q_via_lib(files: dict[str, str] | None = None, allow: int | Non
         _die("kadmin query exception(s) out of step with their sites: " + "; ".join(wrong))
     if len(hits) != allow:
         _die(f"{len(hits)} direct kadmin queries in the gates, allow {allow}: " + ", ".join(hits[:8]))
+    if lib_files is None:
+        lib_files = {p.name: p.read_text(encoding="utf-8") for p in sorted((SCRIPTS / "lib").glob("*.sh"))}
+    lib_allow = KADMIN_Q_DIRECT_LIB_ALLOW if lib_allow is None else lib_allow
+    lib_hits = [f"lib/{name}:{ln}" for name, body in lib_files.items() if name != "kadmin-q.sh"
+                for ln, _section, _inside in kadmin_direct_queries(body)]
+    if len(lib_hits) != lib_allow:
+        _die(f"{len(lib_hits)} direct kadmin queries in scripts/lib, allow {lib_allow}: " + ", ".join(lib_hits[:8]))
 
 
 # Shell functions nothing calls. A gate's own function is live only through a call site in that gate; a

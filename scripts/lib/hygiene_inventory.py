@@ -443,6 +443,29 @@ def self_test_cell_reach() -> int:
         raise SystemExit(f"gate_cell_reach must list the dead cell with its function: {dead}")
     return 1
 
+def index_unnamed_writes(src: str) -> list[str]:
+    """The files a snapshot writes (`out / "NAME"` in src) that the INDEX rows (the `index` lists) do not name."""
+    # this check and its fixture name files that no snapshot writes; they are not scanned
+    cut_a, cut_b = src.find("\ndef index_unnamed_writes("), src.find("\ndef self_test_policy_consumers(")
+    if 0 <= cut_a < cut_b:
+        src = src[:cut_a] + src[cut_b:]
+    written = set(re.findall(r'\bout / "([\w.-]+)"', src))
+    block = src[src.rindex("    index = ["):src.rindex('(out / "INDEX.md").write_text')]
+    return sorted(n for n in written if n != "INDEX.md" and f"`{n}`" not in block)
+
+
+def self_test_index_names() -> int:
+    """Every file a snapshot writes has an INDEX row (index-check refuses an unnamed file)."""
+    missing = index_unnamed_writes(pathlib.Path(__file__).read_text(encoding="utf-8"))
+    if missing:
+        raise SystemExit(f"hygiene_inventory: the snapshot INDEX does not name {missing}")
+    fixture = ('    write_lines(out / "a.txt", "", [])\n    write_lines(out / "b.txt", "", [])\n'
+               '    index = [\n        "| `a.txt` | a |",\n    ]\n    (out / "INDEX.md").write_text("")\n')
+    if index_unnamed_writes(fixture) != ["b.txt"]:
+        raise SystemExit("index_unnamed_writes must name a written file with no INDEX row")
+    return 2
+
+
 def self_test_policy_consumers() -> int:
     """A shim copied without its ci_policy/ package fails to load and copy_policy copies both; a
     split ledger read through a ci-policy without ledger_sources fails closed."""
@@ -1865,6 +1888,8 @@ def write_index(out: pathlib.Path, quality: bool, counts: dict[str, object], q: 
         "| `tests.txt` | nextest binary + test name |",
         "| `tests.count` | number of tests |",
         "| `gates.txt` | cell tags (section/echo/flow/workflow) |",
+        "| `lib-cells.txt` | cells a gate reaches through a sourced `scripts/lib` function, with the function |",
+        "| `dead-cells.txt` | cell tags in a gate function nothing reaches (never counted), with the function |",
         "| `gate-asserts.txt` | `die` / `grep -q` / `diff <(` counts per gate |",
         "| `sleeps.txt` | gate and lib sleep sites |",
         "| `cargo-build-gates.txt` | gates that run cargo build |",
@@ -2029,7 +2054,7 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         n = (self_test_cfg_test() + self_test_ledger_rows() + self_test_policy_consumers() + self_test_comment_split()
-             + self_test_cell_reach())
+             + self_test_cell_reach() + self_test_index_names())
         print(f"hygiene_inventory: self-test ok ({n} cases)")
         return 0
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

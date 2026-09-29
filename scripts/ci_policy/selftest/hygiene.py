@@ -100,11 +100,11 @@ def _self_test_hygiene() -> None:
     py_move_ok = (
         "def _self_test():\n    cases = [" + "".join(f'("x", {{}}, s, a, "{k}"),' for k in _PY_MOVE_KINDS) + "]\n"
         "def main(argv):\n    if argv == ['--self-test']:\n        _self_test()\n"
-        "        print('py-move-check: self-test ok (18 cases)')\n"
+        "        print('py-move-check: self-test ok (23 cases)')\n"
         "        return 0\n    with contextlib.redirect_stdout(sys.stderr):\n        _self_test()\n"
     )
     check_py_move_self_test(py_move_ok)
-    _must_die_msg("self-test ok (N cases)", check_py_move_self_test, py_move_ok.replace("(18 cases)", "(17 cases)"))
+    _must_die_msg("self-test ok (N cases)", check_py_move_self_test, py_move_ok.replace("(23 cases)", "(22 cases)"))
     _must_die_msg(
         "must not be gutted",
         check_py_move_self_test,
@@ -342,11 +342,15 @@ def _self_test_hygiene() -> None:
         (demo / "src" / "store" / "tests" / "b.rs").write_text("fn t() { std::env::temp_dir(); }\n", encoding="utf-8")
         (demo / "src" / "lib.rs").write_text(
             "// temp_dir() in a comment\npub fn p() { let _ = std::env::temp_dir(); }\n"
-            "#[cfg(test)]\nmod tests {\n    fn t() { let _ = std::env::temp_dir(); let _s = \"temp_dir()\"; }\n}\n",
+            "#[cfg(test)]\nmod tests {\n    fn t() { let _ = std::env::temp_dir(); let _s = \"temp_dir()\"; }\n}\n"
+            "#[cfg(test)]\nmod helpers;\n",
             encoding="utf-8",
         )
-        check_no_test_temp_dir(td_root, allow=3)
-        _must_die_msg("3 temp_dir() call(s) in tests, allow 0", check_no_test_temp_dir, td_root, allow=0)
+        # an out-of-line cfg(test) module's file is test code, whatever its name
+        (demo / "src" / "helpers.rs").write_text("pub fn h() { let _ = std::env::temp_dir(); }\n", encoding="utf-8")
+        check_no_test_temp_dir(td_root, allow=4)
+        _must_die_msg("4 temp_dir() call(s) in tests, allow 0", check_no_test_temp_dir, td_root, allow=0)
+        _must_die_msg("crates/demo/src/helpers.rs:1", check_no_test_temp_dir, td_root, allow=0)
     finally:
         subprocess.run(["rm", "-rf", str(td_root)], check=False)
     # Every scripts/**/*.py compiles.

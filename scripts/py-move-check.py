@@ -20,8 +20,16 @@ module's place. Findings, each counted:
 - cycles: the package's relative imports form no cycle, and the package imports in a fresh
   interpreter.
 
+File-set mode (`--new FILE [FILE ...]` in place of `--pkg`) proves a module split into sibling files in
+one package: every top-level def, class and assignment of the old file is defined exactly once across the
+new files with the same AST; nothing new but imports (a relative import between the new files is the
+move's own); each new file keeps the future import and holds only imports, defs, classes and assignments;
+every global a new file reads is its own, imported from its home among the new files, or bound from the
+same module the old file bound it from.
 usage: py-move-check.py (--old FILE | --old-rev REV [--old-path PATH] [--git-dir DIR])
                         --pkg DIR [--shim FILE] [--accept NAME=REASON ...]
+       py-move-check.py (--old FILE | --old-rev REV [--old-path PATH] [--git-dir DIR])
+                        --new FILE [--new FILE ...] [--accept NAME=REASON ...]
        py-move-check.py --self-test
 Exit 0 when every count is 0 (accepted changes allowed), 1 when one is not, 2 on a usage error.
 """
@@ -427,6 +435,152 @@ def _fixture(root: pathlib.Path, edits: dict[str, tuple[str, str]] | None = None
     return pkg
 
 
+def check_fileset(old_label: str, old_src: str, new_files: list[pathlib.Path],
+                  accept: dict[str, str]) -> tuple[dict[str, list[str]], list[str]]:
+    """File-set mode: (findings by kind, accepted lines) for a module split into sibling files."""
+    found: dict[str, list[str]] = {k: [] for k in KINDS}
+    accepted: list[str] = []
+    old_tree = ast.parse(old_src, filename=old_label)
+    old = top_names(old_tree)
+    old_imports = imported_modules(old_tree)
+    old_future = has_future_annotations(old_tree)
+    pkg_dirs = {f.resolve().parent for f in new_files}
+    if len(pkg_dirs) != 1:
+        found["stray"].append("the new files must sit in one package directory")
+        return found, accepted
+    top = next(iter(pkg_dirs)).name
+    old_path = pathlib.Path(old_label.split(":", 1)[-1])
+    old_mod = old_path.stem
+    old_bound = bindings(old_mod, next(iter(pkg_dirs)) / old_path.name, old_tree, top)
+    mods = {f.resolve().stem: (f.resolve(), f.read_text(encoding="utf-8")) for f in new_files}
+    trees = {m: ast.parse(src, filename=str(path)) for m, (path, src) in mods.items()}
+    new: dict[str, list[ast.stmt]] = {}
+    home: dict[str, str] = {}
+    for mod, tree in trees.items():
+        for name, nodes in top_names(tree).items():
+            new.setdefault(name, []).extend(nodes)
+            if name in home and home[name] != mod:
+                found["defined-twice"].append(f"{name}: {home[name]} and {mod}")
+            elif len(nodes) > 1 and name not in home:
+                found["defined-twice"].append(f"{name}: {len(nodes)} times in {mod}")
+            home.setdefault(name, mod)
+        for extra_import in sorted(imported_modules(tree) - old_imports):
+            found["extra"].append(f"import {extra_import} in {mod} (the old file does not import it)")
+        if old_future and not has_future_annotations(tree):
+            found["future"].append(f"{mod} lacks `from __future__ import annotations`")
+        for i, node in enumerate(tree.body):
+            if not isinstance(node, ALLOWED_TOP) and not is_docstring(node, i):
+                found["stray"].append(f"{mod}:{node.lineno} {type(node).__name__}")
+    for name in sorted(set(old) - set(new)):
+        found["missing"].append(name)
+    for name in sorted(set(new) - set(old)):
+        found["extra"].append(f"{name} in {home.get(name)}")
+    dump = lambda n: ast.dump(n, include_attributes=False)  # noqa: E731
+    used_accept = set()
+    for name in sorted(set(old) & set(new)):
+        if [dump(n) for n in old[name]] != [dump(n) for n in new[name]]:
+            if name in accept:
+                used_accept.add(name)
+                accepted.append(f"{name}: {accept[name]}")
+            else:
+                found["changed"].append(f"{name} in {home.get(name)}")
+    for name in sorted(set(accept) - used_accept):
+        found["changed"].append(f"accept entry unused: {name}")
+    builtin_names = set(dir(builtins))
+    for mod, (path, src) in mods.items():
+        tree = trees[mod]
+        bound = bindings(mod, path, tree, top)
+        own = set(top_names(tree))
+        mod_imports = imported_modules(tree)
+        for name in sorted(global_reads(src, path)):
+            if name in own or name in mod_imports:
+                continue
+            if name in bound:
+                target, orig = bound[name]
+                if name in old:
+                    if orig != name or home.get(name) != target:
+                        found["unresolved"].append(
+                            f"{mod}: {name} is bound from {target}.{orig}, home {home.get(name)}")
+                elif old_bound.get(name) != (target, orig):
+                    found["unresolved"].append(f"{mod}: {name} is bound from {target}.{orig}, which the old file "
+                                               f"did not bind it from")
+                continue
+            if name in old:
+                found["unresolved"].append(f"{mod}: {name} (home {home.get(name)}) is read but not imported")
+            elif name in old_imports:
+                found["unresolved"].append(f"{mod}: module {name} is read but not imported")
+            elif name not in builtin_names and not (name.startswith("__") and name.endswith("__")):
+                found["unresolved"].append(f"{mod}: {name} is defined nowhere")
+    return found, accepted
+
+
+_FS_OLD = """from __future__ import annotations
+
+import re
+
+from .common import _die
+
+PAT = re.compile("x")
+
+
+def helper(text):
+    return PAT.findall(text)
+
+
+def check_a(text):
+    if not helper(text):
+        _die("no x")
+"""
+_FS_A = """from __future__ import annotations
+
+import re
+
+PAT = re.compile("x")
+
+
+def helper(text):
+    return PAT.findall(text)
+"""
+_FS_B = """from __future__ import annotations
+
+from .common import _die
+from .a import helper
+
+
+def check_a(text):
+    if not helper(text):
+        _die("no x")
+"""
+
+
+def _self_test_fileset(tmp: pathlib.Path) -> int:
+    """File-set mode: the correct split is clean; each mutation raises its finding kind."""
+    cases = [
+        ("fileset clean", _FS_A, _FS_B, None),
+        ("fileset def missing", _FS_A.replace("def helper(text):\n    return PAT.findall(text)\n", ""), _FS_B,
+         "missing"),
+        ("fileset def changed", _FS_A.replace("PAT.findall(text)", "PAT.findall(text.lower())"), _FS_B, "changed"),
+        ("fileset def in both", _FS_A, _FS_B.replace("from .a import helper\n",
+                                                     "\n\ndef helper(text):\n    return PAT.findall(text)\n"),
+         "defined-twice"),
+        ("fileset new statement", _FS_A + "print(PAT)\n", _FS_B, "stray"),
+    ]
+    n = 0
+    for i, (label, a, b, want) in enumerate(cases):
+        d = tmp / f"fs{i}" / "pkgx"
+        d.mkdir(parents=True)
+        (d / "a.py").write_text(a, encoding="utf-8")
+        (d / "b.py").write_text(b, encoding="utf-8")
+        found, _ = check_fileset("REV:pkgx/old.py", _FS_OLD, [d / "a.py", d / "b.py"], {})
+        hits = {k for k, v in found.items() if v}
+        if want is None and hits:
+            raise SystemExit(f"self-test {label}: expected clean, got {found}")
+        if want is not None and want not in hits:
+            raise SystemExit(f"self-test {label}: expected a {want} finding, got {found}")
+        n += 1
+    return n
+
+
 def _self_test() -> int:
     """The correct split is clean; each mutation raises exactly its finding kind."""
     cases = [
@@ -475,11 +629,12 @@ def _self_test() -> int:
         if any("PAT" in x for x in check("old.py", _OLD, _fixture(pathlib.Path(tmp) / "shadow"), None, _ACCEPT)[0]["unresolved"]):
             raise SystemExit("self-test shadow: a parameter that shadows a global must not need an import")
         n += 1
+        n += _self_test_fileset(pathlib.Path(tmp))
     return n
 
 
 def parse_args(argv: list[str]) -> dict:
-    args: dict = {"accept": {}}
+    args: dict = {"accept": {}, "new": []}
     it = iter(argv)
     for a in it:
         if a in ("--old", "--old-rev", "--old-path", "--git-dir", "--pkg", "--shim"):
@@ -487,6 +642,11 @@ def parse_args(argv: list[str]) -> dict:
             if val is None:
                 raise SystemExit(2)
             args[a[2:].replace("-", "_")] = val
+        elif a == "--new":
+            val = next(it, None)
+            if val is None:
+                raise SystemExit(2)
+            args["new"].append(val)
         elif a == "--accept":
             val = next(it, None)
             if val is None or "=" not in val:
@@ -497,7 +657,7 @@ def parse_args(argv: list[str]) -> dict:
         else:
             print(__doc__, file=sys.stderr)
             raise SystemExit(2)
-    if not args.get("pkg") or not (args.get("old") or args.get("old_rev")):
+    if bool(args.get("pkg")) == bool(args["new"]) or not (args.get("old") or args.get("old_rev")):
         print(__doc__, file=sys.stderr)
         raise SystemExit(2)
     return args
@@ -512,6 +672,10 @@ def main(argv: list[str]) -> int:
     with contextlib.redirect_stdout(sys.stderr):
         _self_test()
     label, src = read_old(args)
+    if args["new"]:
+        files = [pathlib.Path(f) for f in args["new"]]
+        found, accepted = check_fileset(label, src, files, args["accept"])
+        return report(label, files[0].resolve().parent, found, accepted, len(top_names(ast.parse(src))))
     pkg = pathlib.Path(args["pkg"]).resolve()
     shim = pathlib.Path(args["shim"]).resolve() if args.get("shim") else None
     found, accepted = check(label, src, pkg, shim, args["accept"])
