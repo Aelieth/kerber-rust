@@ -334,11 +334,12 @@ read, and `check_policy_module_attrs` loads it from `/` the way they do.
 `scripts/py-move-check.py` judged the split: every def, class and
 assignment of the old module defined once and identical, each global it
 reads bound to its home module, the shim's imports right, no import cycle
-(`check_py_move_self_test` keeps its fixtures). Some arms are advisory at
-their live counts until the work that clears them (the `*_ALLOW`
-constants): a gate that sets its own `SCRATCH=`, a shell function defined
-twice byte for byte, a direct `kadmin -q` in a gate instead of a
-`scripts/lib` helper, and process tags in `docs/**`. Working-plan section
+(`check_py_move_self_test` keeps its fixtures). Some arms are pinned at
+their live counts (the `*_ALLOW` constants): the count must equal the
+allow in either direction, so the commit that clears sites lowers the
+allow with them. They cover a gate that sets its own `SCRATCH=`, a shell
+function defined twice byte for byte, a direct `kadmin -q` in a gate
+instead of a `scripts/lib` helper, and process tags in `docs/**`. Working-plan section
 names in the public docs and a `scripts/**/*.py` that does not compile are
 hard. It enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
