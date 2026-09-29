@@ -160,8 +160,10 @@ def check_isolate_test_krb5(
     src_files: dict[str, str] | None = None,
     root: pathlib.Path | None = None,
 ) -> None:
-    """Unit-test isolate helper must not write host `/tmp`."""
+    """Unit-test isolate helper must not write host `/tmp`; live, every crate's tests too
+    (check_no_test_temp_dir)."""
     root_dir = pathlib.Path(root) if root is not None else ROOT
+    text_was_none = text is None
     if text is None:
         path = root_dir / "crates/krb5-config/src/testenv.rs"
         if not path.is_file():
@@ -193,7 +195,47 @@ def check_isolate_test_krb5(
                 continue
             if _cfg_test_has_temp_dir(src):
                 _die(f"{name} cfg(test) writes host /tmp via temp_dir()")
+    if root is None and text_was_none:
+        check_no_test_temp_dir()
 
+
+# Every crate's tests take a scratch directory from `krb5_testkit::scratch_dir`, never
+# `std::env::temp_dir()`, which is host /tmp when TMPDIR is unset. Test scope: files under a crate's
+# `tests/`, `src` files that are test modules (a `tests` path segment, `tests.rs`, `testenv.rs`), and the
+# cfg(test) items of any other `src` file. Pinned at the live count until the tests are fixed.
+TEST_TEMP_DIR_ALLOW = 25
+
+
+def test_temp_dir_sites(root: pathlib.Path | None = None) -> list[str]:
+    """`path:line` of each `temp_dir()` call in test code under crates/ (comments and strings blanked)."""
+    root = ROOT if root is None else pathlib.Path(root)
+    out = []
+    for path in sorted((root / "crates").rglob("*.rs")):
+        rel = path.relative_to(root)
+        parts = rel.parts
+        if "target" in parts or len(parts) < 3:
+            continue
+        src = path.read_text(encoding="utf-8")
+        blanked = _blank_rust(src)
+        whole = parts[2] == "tests" or "tests" in parts[3:-1] or parts[-1] in ("tests.rs", "testenv.rs")
+        ranges = [(0, len(blanked))] if whole else _cfg_test_ranges(src)
+        for a, b in ranges:
+            start = a
+            while True:
+                i = blanked.find("temp_dir()", start, b)
+                if i < 0:
+                    break
+                out.append(f"{rel}:{blanked.count(chr(10), 0, i) + 1}")
+                start = i + 1
+    return sorted(set(out))
+
+
+def check_no_test_temp_dir(root: pathlib.Path | None = None, *, allow: int | None = None) -> None:
+    """The every-crate arm of the test-isolation rule (pinned at TEST_TEMP_DIR_ALLOW)."""
+    allow = TEST_TEMP_DIR_ALLOW if allow is None else allow
+    sites = test_temp_dir_sites(root)
+    if len(sites) != allow:
+        _die(f"{len(sites)} temp_dir() call(s) in tests, allow {allow}: " + ", ".join(sites[:8]))
 
 def check_autotests_registered(root: pathlib.Path | None = None) -> None:
     """Every tests/*.rs in an autotests=false crate has a [[test]] entry.

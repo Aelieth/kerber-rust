@@ -11,7 +11,8 @@ from ..common import _scratch_root
 from ..hygiene import (
     _PY_MOVE_KINDS, _blank_rust, _cfg_test_ranges, check_autotests_registered, check_claim_remap_self_test,
     check_hygiene_body_diff_self_test, check_hygiene_diff_self_test, check_hygiene_fn_diff_self_test,
-    check_isolate_test_krb5, check_policy_module_attrs, check_py_move_self_test, check_python_compiles,
+    check_isolate_test_krb5, check_no_test_temp_dir, check_policy_module_attrs, check_py_move_self_test,
+    check_python_compiles,
 )
 from ..ledger import DIFFSEND_CASES
 from .common import _must_die, _must_die_msg
@@ -324,6 +325,24 @@ def _self_test_hygiene() -> None:
         _must_die_msg("does not load as a module from cwd=/", check_policy_module_attrs, fake)
     finally:
         subprocess.run(["rm", "-rf", str(mod_root)], check=False)
+    # Every crate's tests: temp_dir() in tests/, in test-module files and in cfg(test) items counts; product
+    # code, comments and strings do not.
+    td_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        demo = td_root / "crates" / "demo"
+        (demo / "tests").mkdir(parents=True)
+        (demo / "src" / "store" / "tests").mkdir(parents=True)
+        (demo / "tests" / "a.rs").write_text("fn t() { let _ = std::env::temp_dir(); }\n", encoding="utf-8")
+        (demo / "src" / "store" / "tests" / "b.rs").write_text("fn t() { std::env::temp_dir(); }\n", encoding="utf-8")
+        (demo / "src" / "lib.rs").write_text(
+            "// temp_dir() in a comment\npub fn p() { let _ = std::env::temp_dir(); }\n"
+            "#[cfg(test)]\nmod tests {\n    fn t() { let _ = std::env::temp_dir(); let _s = \"temp_dir()\"; }\n}\n",
+            encoding="utf-8",
+        )
+        check_no_test_temp_dir(td_root, allow=3)
+        _must_die_msg("3 temp_dir() call(s) in tests, allow 0", check_no_test_temp_dir, td_root, allow=0)
+    finally:
+        subprocess.run(["rm", "-rf", str(td_root)], check=False)
     # S6.1: every scripts/**/*.py compiles.
     check_python_compiles({"a.py": "x = 1\n"})
     _must_die_msg("1 Python file(s) do not compile", check_python_compiles, {"a.py": "x = 1\n", "b.py": "def f(:\n"})

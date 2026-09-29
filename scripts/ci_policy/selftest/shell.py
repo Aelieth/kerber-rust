@@ -6,8 +6,8 @@ import signal
 
 from ..common import ROOT, SCRIPTS
 from ..shell import (
-    _join_shell_continuations, check_kadmin_q_via_lib, check_no_duplicate_functions, check_no_host_tmp_writes,
-    informational_if_starts,
+    _join_shell_continuations, check_kadmin_q_via_lib, check_no_dead_shell_functions, check_no_duplicate_functions,
+    check_no_host_tmp_writes, informational_if_starts,
 )
 from .common import _must_die, _must_die_msg
 
@@ -305,3 +305,15 @@ def _self_test_shell() -> None:
     check_kadmin_q_via_lib(kq_files, allow=4)
     _must_die_msg("5 direct kadmin queries", check_kadmin_q_via_lib, {**kq_files, "f-gate.sh": 'kadmin.local -q "x"\n'},
                   allow=4)
+    # Dead shell functions: a gate's own function lives only through a call in that gate, a lib function
+    # through one anywhere; comments and definitions are not calls; a call from a dead body does not count.
+    dead_files = {
+        "scripts/a-gate.sh": "f() {\n    echo a\n}\ng() {\n    f\n}\ng\n# h is mentioned here\n",
+        "scripts/b-gate.sh": "h() {\n    echo b\n}\nk() {\n    m\n}\nm() {\n    :\n}\n",
+        "scripts/lib/l.sh": "lf() {\n    :\n}\nunused() {\n    :\n}\n",
+        "scripts/c-gate.sh": ". scripts/lib/l.sh\nlf\nh\n",
+    }
+    check_no_dead_shell_functions(dead_files, dead_files, allow=4)
+    _must_die_msg("4 dead shell function(s), allow 0: h@b-gate.sh:1, k@b-gate.sh:4, m@b-gate.sh:7, unused@lib/l.sh:4",
+                  check_no_dead_shell_functions, dead_files, dead_files, allow=0)
+    check_no_dead_shell_functions(dead_files, dead_files, allow=3, entry=frozenset({"unused"}))

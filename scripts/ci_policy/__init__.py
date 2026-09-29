@@ -37,7 +37,8 @@ from .ledger import (
 )
 from .selftest import _self_test
 from .shell import (
-    check_kadmin_q_via_lib, check_no_duplicate_functions, check_no_host_tmp_writes, check_no_informational_gates,
+    check_kadmin_q_via_lib, check_no_dead_shell_functions, check_no_duplicate_functions, check_no_host_tmp_writes,
+    check_no_informational_gates,
 )
 from .workflows import (
     Workflow, check_all_timeouts, check_build_profile, check_ci, check_ci_budgets, check_ci_nextest_split,
@@ -82,6 +83,7 @@ def main() -> None:
     check_docker_cp_cargo_target()
     check_no_host_tmp_writes()
     check_no_duplicate_functions()
+    check_no_dead_shell_functions()
     check_kadmin_q_via_lib()
     check_isolate_test_krb5()
     check_unit_evidence_helper()

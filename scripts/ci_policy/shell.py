@@ -769,3 +769,105 @@ def check_kadmin_q_via_lib(files: dict[str, str] | None = None, allow: int | Non
     ]
     if len(hits) != allow:
         _die(f"{len(hits)} direct kadmin queries in the gates, allow {allow}: " + ", ".join(hits[:8]))
+
+
+# Shell functions nothing calls. A gate's own function is live only through a call site in that gate; a
+# scripts/lib function through one anywhere under scripts/, harness/, .github/ or the Makefile. Comment
+# lines and definition lines are not call sites, nor is a call inside the body of a function already
+# dead (the rule is transitive). Pinned at the live count until the dead-code commit clears them.
+DEAD_SHELL_FUNCTIONS_ALLOW = 34
+# Functions called by name from outside that corpus; none today.
+DEAD_SHELL_ENTRY_POINTS: frozenset[str] = frozenset()
+_ANY_SHELL_FUNCTION = re.compile(r"^(\s*)(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
+_SHELL_WORD = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _shell_definitions(text: str) -> list[tuple[str, int, int]]:
+    """(name, first line, last line) of every function definition, a one-line `f() { …; }` included."""
+    lines = text.split("\n")
+    out = []
+    for i, line in enumerate(lines):
+        m = _ANY_SHELL_FUNCTION.match(line)
+        if not m:
+            continue
+        end = i
+        if not re.search(r"\}\s*(?:#.*)?$", line[m.end():]):
+            close = re.compile(rf"^{re.escape(m.group(1))}\}}\s*$")
+            end = next((j for j in range(i + 1, len(lines)) if close.match(lines[j])), len(lines) - 1)
+        out.append((m.group(2), i + 1, end + 1))
+    return out
+
+
+def _shell_corpus() -> dict[str, str]:
+    out = {}
+    for base in (SCRIPTS, ROOT / "harness", ROOT / ".github"):
+        for p in sorted(base.rglob("*")):
+            if p.is_file() and "__pycache__" not in p.parts:
+                try:
+                    out[str(p.relative_to(ROOT))] = p.read_text(encoding="utf-8")
+                except (UnicodeDecodeError, OSError):
+                    continue
+    if (ROOT / "Makefile").is_file():
+        out["Makefile"] = (ROOT / "Makefile").read_text(encoding="utf-8")
+    return out
+
+
+def dead_shell_functions(
+    files: dict[str, str], corpus: dict[str, str], entry: frozenset[str] = frozenset()
+) -> list[str]:
+    """`name@file:line` of every dead function of `files` (keys `scripts/x.sh`, `scripts/lib/y.sh`).
+
+    `corpus` maps every file that may call a lib function (keys the same form) to its text."""
+    defs = {f: _shell_definitions(t) for f, t in files.items()}
+    index: dict[str, list[tuple[str, int]]] = {}
+    for path, text in corpus.items():
+        for n, line in enumerate(text.split("\n"), 1):
+            code = line.lstrip()
+            if code.startswith("#"):
+                continue
+            code = re.sub(r"(?:^|\s)#.*$", "", line)
+            for w in set(_SHELL_WORD.findall(code)):
+                index.setdefault(w, []).append((path, n))
+    dead: set[tuple[str, str, int]] = set()
+    while True:
+        spans = {(f, a, b) for f, ds in defs.items() for name, a, b in ds if (f, name, a) in dead}
+        grew = False
+        for f, ds in defs.items():
+            def_lines = {(f2, a) for f2, ds2 in defs.items() for _n, a, _b in ds2}
+            for name, a, _b in ds:
+                if (f, name, a) in dead or name in entry:
+                    continue
+                lib = "/lib/" in f
+                live = False
+                for path, n in index.get(name, []):
+                    if (path, n) in def_lines and any(
+                        nm == name and aa == n for nm, aa, _bb in defs.get(path, [])
+                    ):
+                        continue
+                    if not lib and path != f:
+                        continue
+                    if any(sf == path and sa <= n <= sb for sf, sa, sb in spans):
+                        continue
+                    live = True
+                    break
+                if not live:
+                    dead.add((f, name, a))
+                    grew = True
+        if not grew:
+            break
+    return sorted(f"{name}@{f.removeprefix('scripts/')}:{a}" for f, name, a in dead)
+
+
+def check_no_dead_shell_functions(
+    files: dict[str, str] | None = None, corpus: dict[str, str] | None = None, allow: int | None = None,
+    entry: frozenset[str] | None = None,
+) -> None:
+    """No shell function under scripts/ that nothing calls (pinned at DEAD_SHELL_FUNCTIONS_ALLOW)."""
+    if files is None:
+        files = {f"scripts/{k}": v for k, v in _shell_files().items()}
+    corpus = _shell_corpus() if corpus is None else corpus
+    allow = DEAD_SHELL_FUNCTIONS_ALLOW if allow is None else allow
+    entry = DEAD_SHELL_ENTRY_POINTS if entry is None else entry
+    dead = dead_shell_functions(files, corpus, entry)
+    if len(dead) != allow:
+        _die(f"{len(dead)} dead shell function(s), allow {allow}: " + ", ".join(dead[:10]))
