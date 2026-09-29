@@ -10,6 +10,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -105,7 +106,7 @@ if abs(delta - want) > 90:
 ' "$1" "$2"
 }
 
-kill_named() {
+kill_comms() {
     docker exec "$NAME" sh -c '
 for want in '"$*"'; do
     for comm in /proc/[0-9]*/comm; do
@@ -123,15 +124,8 @@ done
 
 
 
-kadmin_q() {
-    docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$1" 2>&1 || true
-}
-
-kinit_try() {
-    docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
-        "$NAME" sh -c "$1" 2>&1 || true
-}
+GATE_CLIENT_CONF=/tmp/policy-krb5.conf
+KADMIN_Q_CONF="$GATE_CLIENT_CONF"
 
 echo "==== rust KDC TestPolicy ===="
 docker exec -d \
@@ -213,7 +207,7 @@ echo "$FAIL_TGS" | grep -q 'KDC policy rejects request'
 echo "RUST_tgs_fail" # RUST_tgs_fail
 
 echo "==== rust foreign indicator is LOCAL_POLICY ===="
-kill_named krb5-kdc krb5-kadmind
+kill_comms krb5-kdc krb5-kadmind
 if ! wait_gone_in "$NAME" 88; then
     log "kdcpolicy.gate" "error" ',"error":"rust kdc still bound :88"'
     exit 1
@@ -245,7 +239,7 @@ echo "$OTHER" | grep -q 'KDC policy rejects request'
 echo "RUST_foreign_indicator" # RUST_foreign_indicator
 
 echo "==== MIT kdcpolicy_test.so ===="
-kill_named krb5-kdc
+kill_comms krb5-kdc
 if ! wait_gone_in "$NAME" 88; then
     log "kdcpolicy.gate" "error" ',"error":"rust kdc still bound :88 before MIT"'
     exit 1
@@ -297,7 +291,7 @@ echo "$FAIL_TGS_MIT" | grep -q 'KDC policy rejects request'
 echo "MIT_tgs_fail" # MIT_tgs_fail
 
 echo "==== MIT foreign indicator is LOCAL_POLICY ===="
-kill_named krb5kdc
+kill_comms krb5kdc
 if ! wait_gone_in "$NAME" 88; then
     log "kdcpolicy.gate" "error" ',"error":"MIT krb5kdc still bound :88"'
     exit 1

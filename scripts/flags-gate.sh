@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -79,15 +80,8 @@ docker exec "$NAME" sh -c 'cat >/tmp/flags-krb5.conf <<EOF
     }
 EOF'
 
-kadmin_q() {
-    docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$1" 2>&1 || true
-}
-
-kinit_try() {
-    docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
-        "$NAME" sh -c "$1" 2>&1 || true
-}
+GATE_CLIENT_CONF=/tmp/flags-krb5.conf
+KADMIN_Q_CONF="$GATE_CLIENT_CONF"
 
 echo "==== kinit admin ===="
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \

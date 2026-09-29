@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -83,38 +84,35 @@ docker exec "$NAME" sh -c 'cat >/tmp/getprivs-krb5.conf <<EOF
     }
 EOF'
 
-kadmin_q() {
-    docker exec -e KRB5_CONFIG=/tmp/getprivs-krb5.conf \
-        "$NAME" kadmin -p "$1" -w "$2" -q "$3" 2>&1 || true
-}
+KADMIN_Q_CONF=/tmp/getprivs-krb5.conf
 
 echo "==== kinit admin ===="
 docker exec -e KRB5_CONFIG=/tmp/getprivs-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
 
 echo "==== admin getprivs is full ===="
-ADMINP="$(kadmin_q admin@KERBER.TEST adminpassword getprivs)"
+ADMINP="$(kadmin_q_as admin@KERBER.TEST adminpassword getprivs)"
 echo "$ADMINP"
 echo "$ADMINP" | grep -qiE 'INQUIRE|GET'
 echo "$ADMINP" | grep -qi ADD
 echo "$ADMINP" | grep -qi MODIFY
 
 echo "==== addprinc limited ===="
-ADD="$(kadmin_q admin@KERBER.TEST adminpassword 'addprinc -pw limited-secret limited')"
+ADD="$(kadmin_q_as admin@KERBER.TEST adminpassword 'addprinc -pw limited-secret limited')"
 echo "$ADD"
 
 echo "==== limited getprivs is all bits like MIT ~0 ===="
 docker exec -e KRB5_CONFIG=/tmp/getprivs-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/getprivs-krb5.conf \
     "$NAME" sh -c 'printf "limited-secret\n" | kinit limited@KERBER.TEST'
-LIMP="$(kadmin_q limited@KERBER.TEST limited-secret getprivs)"
+LIMP="$(kadmin_q_as limited@KERBER.TEST limited-secret getprivs)"
 echo "$LIMP"
 echo "$LIMP" | grep -qiE 'INQUIRE|GET'
 echo "$LIMP" | grep -qi ADD
 echo "$LIMP" | grep -qi MODIFY
 
 echo "==== limited cpw -randkey is AUTH_CHANGEPW ===="
-RAND="$(kadmin_q limited@KERBER.TEST limited-secret 'cpw -randkey user')"
+RAND="$(kadmin_q_as limited@KERBER.TEST limited-secret 'cpw -randkey user')"
 echo "$RAND"
 echo "$RAND" | grep -qi 'change-password'
 if echo "$RAND" | grep -qi "Operation requires \`\`get'' privilege"; then

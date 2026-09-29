@@ -12,14 +12,6 @@ NAME="kerber-rust-kinit-fast-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
-assert_no_error_log() {
-    if echo "$1" | grep -qF '"level":"ERROR"'; then
-        echo "$1" >&2
-        log "fast.client.gate" "error" ',"error":"happy-path ERROR log"'
-        exit 1
-    fi
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     log "fast.client.gate" "error" ',"error":"docker not available"'
     exit 1
@@ -65,8 +57,7 @@ if [ "$arc" -ne 0 ]; then
     log "fast.client.gate" "error" ',"error":"rust kinit armor failed","rc":'"$arc"
     exit 1
 fi
-assert_no_error_log "$ARMOR"
-
+assert_no_error_log "$ARMOR" fast.client.gate
 echo "==== Rust kinit --fast --armor-ccache ===="
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
@@ -82,7 +73,7 @@ if [ "$rc" -ne 0 ]; then
     log "fast.client.gate" "error" ',"error":"rust kinit --fast failed","rc":'"$rc"
     exit 1
 fi
-assert_no_error_log "$OUT"
+assert_no_error_log "$OUT" fast.client.gate
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
@@ -125,7 +116,7 @@ if [ "$rc2" -ne 0 ]; then
     log "fast.client.gate" "error" ',"error":"rust kinit --fast nopreauth failed","rc":'"$rc2"
     exit 1
 fi
-assert_no_error_log "$OUT2"
+assert_no_error_log "$OUT2" fast.client.gate
 KLIST2="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast_np 2>/dev/null || true)"
 echo "$KLIST2"
 echo "$KLIST2" | grep -q 'nopreauth@KERBER.TEST'
@@ -161,7 +152,7 @@ if [ "$rc3" -ne 0 ]; then
     log "fast.client.gate" "error" ',"error":"rust kinit --fast -S failed","rc":'"$rc3"
     exit 1
 fi
-assert_no_error_log "$OUT3"
+assert_no_error_log "$OUT3" fast.client.gate
 KLIST3="$(docker exec "$NAME" klist -c /tmp/krb5cc_fast_tgs 2>/dev/null || true)"
 echo "$KLIST3"
 echo "$KLIST3" | grep -q 'host/testhost.kerber.test'
@@ -408,7 +399,7 @@ if [ "$rtrc" -ne 0 ]; then
     log "fast.client.gate" "error" ',"error":"rust kinit --fast -S against rust KDC failed","rc":'"$rtrc"
     exit 1
 fi
-assert_no_error_log "$RUST_TGS"
+assert_no_error_log "$RUST_TGS" fast.client.gate
 echo "$RUST_TGS" | grep -q '"fast_strengthen":true' || {
     log "fast.client.gate" "error" ',"error":"rust KDC FAST TGS missing fast_strengthen"'
     exit 1

@@ -12,14 +12,6 @@ NAME="kerber-rust-kinit-spake-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
-assert_no_error_log() {
-    if echo "$1" | grep -qF '"level":"ERROR"'; then
-        echo "$1" >&2
-        log "spake.client.gate" "error" ',"error":"happy-path ERROR log"'
-        exit 1
-    fi
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     log "spake.client.gate" "error" ',"error":"docker not available"'
     exit 1
@@ -92,7 +84,7 @@ if [ "$rc" -ne 0 ]; then
     log "spake.client.gate" "error" ',"error":"rust kinit --spake failed","rc":'"$rc"
     exit 1
 fi
-assert_no_error_log "$OUT"
+assert_no_error_log "$OUT" spake.client.gate
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_spake 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'

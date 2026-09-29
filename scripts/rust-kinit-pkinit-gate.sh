@@ -13,14 +13,6 @@ NAME="kerber-rust-kinit-pkinit-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
-assert_no_error_log() {
-    if echo "$1" | grep -qF '"level":"ERROR"'; then
-        echo "$1" >&2
-        log "pkinit.client.gate" "error" ',"error":"happy-path ERROR log"'
-        exit 1
-    fi
-}
-
 if ! command -v docker >/dev/null 2>&1; then
     log "pkinit.client.gate" "error" ',"error":"docker not available"'
     exit 1
@@ -143,7 +135,7 @@ if [ "$rc" -ne 0 ]; then
     log "pkinit.client.gate" "error" ',"error":"rust kinit --pkinit failed","rc":'"$rc"
     exit 1
 fi
-assert_no_error_log "$OUT"
+assert_no_error_log "$OUT" pkinit.client.gate
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_pkinit 2>/dev/null || true)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
@@ -387,7 +379,7 @@ if [ "$anonrc" -ne 0 ]; then
     log "pkinit.client.gate" "error" ',"error":"rust kinit -n vs MIT KDC failed","rc":'"$anonrc"
     exit 1
 fi
-assert_no_error_log "$ANONOUT"
+assert_no_error_log "$ANONOUT" pkinit.client.gate
 ANONL="$(docker exec "$NAME" klist -c /tmp/krb5cc_anon 2>/dev/null || true)"
 echo "$ANONL"
 echo "$ANONL" | grep -q 'WELLKNOWN/ANONYMOUS' || {
@@ -428,7 +420,7 @@ if [ "$frrc" -ne 0 ]; then
     log "pkinit.client.gate" "error" ',"error":"rust kinit vs MIT require_freshness failed","rc":'"$frrc"
     exit 1
 fi
-assert_no_error_log "$FROUT"
+assert_no_error_log "$FROUT" pkinit.client.gate
 FRKL="$(docker exec "$NAME" klist -c /tmp/krb5cc_fresh 2>/dev/null || true)"
 echo "$FRKL"
 echo "$FRKL" | grep -q 'user@KERBER.TEST' || {

@@ -701,3 +701,13 @@ mit_live_guard() {
         register_cleanup "mit_conf_restore '$NAME'"
     fi
 }
+
+# assert_no_error_log OUTPUT COMPONENT: a happy-path client run logs no ERROR line; the failure is
+# logged under COMPONENT (the gate's client component, e.g. fast.client.gate).
+assert_no_error_log() {
+    if echo "$1" | grep -qF '"level":"ERROR"'; then
+        echo "$1" >&2
+        log "$2" "error" ',"error":"happy-path ERROR log"'
+        exit 1
+    fi
+}

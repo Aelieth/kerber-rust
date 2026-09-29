@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kpasswd-common.sh"
 need_bins krb5-kdc krb5-kadmind krb5-kpasswd krb5-kadmin-local krb5-kinit
 
@@ -188,10 +189,7 @@ if [ "$old2" -eq 0 ]; then
     exit 1
 fi
 
-kadmin_q() {
-    docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$1" 2>&1 || true
-}
+KADMIN_Q_CONF=/tmp/kpasswd-krb5.conf
 
 echo "==== getprinc kadmin/changepw and kadmin/admin ===="
 CPWGET="$(kadmin_q 'getprinc kadmin/changepw')"

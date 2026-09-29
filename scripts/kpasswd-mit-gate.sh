@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kpasswd-common.sh"
 need_bins krb5-kdc krb5-kadmind krb5-kpasswd krb5-kadmin-local krb5-kinit
 
@@ -27,10 +28,7 @@ NAME="${KERBER_SHELL:-$NAME}"
 if [ "$(docker inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null)" != true ]; then
     die "kpasswd-mit-gate needs rust container (run kpasswd-rust-gate.sh with KERBER_KPASSWD_KEEP=1 first)"
 fi
-kadmin_q() {
-    docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$1" 2>&1 || true
-}
+KADMIN_Q_CONF=/tmp/kpasswd-krb5.conf
 
 echo "==== MIT kadmind policy rejection is SOFTERROR ===="
 _saved=$NAME

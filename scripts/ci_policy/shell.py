@@ -638,7 +638,7 @@ def check_no_host_tmp_writes(
 
 # Copies beyond the first of each byte-identical column-0 shell function in scripts/*.sh and
 # scripts/lib/*.sh (S6.2 moves them into scripts/lib/). Advisory while the allow equals the live count.
-DUPLICATE_FUNCTIONS_ALLOW = 2
+DUPLICATE_FUNCTIONS_ALLOW = 0
 _SHELL_FUNCTION = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{\s*$")
 
 
@@ -685,7 +685,7 @@ def check_no_duplicate_functions(files: dict[str, str] | None = None, allow: int
 # joined, comments dropped), heredoc bodies included, the query's own `-q`. Advisory while the allow
 # equals the live count. One query cannot come from scripts/lib: capaths-transit-gate.sh defines `kad`
 # inside the heredoc it runs in the container.
-KADMIN_Q_DIRECT_ALLOW = 567
+KADMIN_Q_DIRECT_ALLOW = 558
 _KADMIN_Q_EXCEPTION = ("capaths-transit-gate.sh", "kad")
 _KADMIN_CMD = re.compile(r"(?:^|[^\w.-])(?:[\w./$-]*/)?(?:krb5-)?kadmin(?:\.local|-local)?(?=\s)")
 

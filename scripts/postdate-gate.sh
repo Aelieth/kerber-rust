@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -77,10 +78,7 @@ docker exec "$NAME" sh -c 'cat >/tmp/postdate-krb5.conf <<EOF
     }
 EOF'
 
-kadmin_q() {
-    docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$1" 2>&1 || true
-}
+KADMIN_Q_CONF=/tmp/postdate-krb5.conf
 
 echo "==== kinit admin ===="
 docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \
