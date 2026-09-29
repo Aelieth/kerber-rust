@@ -160,18 +160,126 @@ def sleep_sites(text: str, rel: str) -> list[str]:
     return [f"{rel}\t{ln}\t{sec}\t{kind}" for ln, sec, kind in classify_sleeps(text)]
 
 
+_LIB_SOURCE_RE = re.compile(r"""^\s*(?:\.|source)\s+"?\$(?:\{ROOT\}|ROOT)/scripts/lib/([\w.-]+\.sh)"?""", re.M)
+_SHELL_DEF_RE = re.compile(r"^(\s*)(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
+_SHELL_WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _shell_outer_functions(text: str) -> list[tuple[str, int, int]]:
+    """(name, first line, last line), 0-based, of each function not nested in another."""
+    lines = text.split("\n")
+    out: list[tuple[str, int, int]] = []
+    i = 0
+    while i < len(lines):
+        m = _SHELL_DEF_RE.match(lines[i])
+        if not m:
+            i += 1
+            continue
+        end = i
+        if not re.search(r"\}\s*(?:#.*)?$", lines[i][m.end():]):
+            close = re.compile(rf"^{re.escape(m.group(1))}\}}\s*$")
+            end = next((j for j in range(i + 1, len(lines)) if close.match(lines[j])), len(lines) - 1)
+        out.append((m.group(2), i, end))
+        i = end + 1
+    return out
+
+
+def _shell_code_words(text: str) -> set[str]:
+    words: set[str] = set()
+    for line in text.split("\n"):
+        if line.lstrip().startswith("#"):
+            continue
+        words.update(_SHELL_WORD_RE.findall(re.sub(r"(?:^|\s)#.*$", "", line)))
+    return words
+
+
+def gate_cell_reach(
+    gate: str, files: dict[str, str]
+) -> tuple[list[tuple[str, str]], list[tuple[str, str, str, str]], list[tuple[str, int, str, str]]]:
+    """A gate's cells by reachability: the tags of its top level and of the functions reachable from it,
+    transitively, through functions defined in the gate or in the scripts/lib files it sources (a gate's
+    own definition over a lib's). Returns (cells, lib cells as (lib, function, kind, tag), dead cells as
+    (function, 1-based line, kind, tag) for the gate's own unreachable functions). `files` maps
+    `scripts/<gate>` and `scripts/lib/<lib>` to their text."""
+    gtext = files[f"scripts/{gate}"]
+    libs: list[str] = []
+    todo = _LIB_SOURCE_RE.findall(gtext)
+    while todo:
+        lib = todo.pop(0)
+        if lib in libs or f"scripts/lib/{lib}" not in files:
+            continue
+        libs.append(lib)
+        todo.extend(_LIB_SOURCE_RE.findall(files[f"scripts/lib/{lib}"]))
+    table: dict[str, tuple[str, str]] = {}
+    for lib in libs:
+        ltext = files[f"scripts/lib/{lib}"].split("\n")
+        for name, a, b in _shell_outer_functions(files[f"scripts/lib/{lib}"]):
+            table[name] = (f"lib/{lib}", "\n".join(ltext[a:b + 1]))
+    glines = gtext.split("\n")
+    own = _shell_outer_functions(gtext)
+    inside: set[int] = set()
+    for name, a, b in own:
+        table[name] = (gate, "\n".join(glines[a:b + 1]))
+        inside.update(range(a, b + 1))
+    top = "\n".join(line for k, line in enumerate(glines) if k not in inside)
+    reach: list[str] = []
+    queue = sorted(_shell_code_words(top) & table.keys())
+    while queue:
+        name = queue.pop(0)
+        if name in reach:
+            continue
+        reach.append(name)
+        queue.extend(sorted((_shell_code_words(table[name][1]) & table.keys()) - set(reach)))
+    cells = gate_tags("\n".join([top] + [table[n][1] for n in sorted(reach)]))
+    lib_cells = [
+        (table[n][0], n, kind, tag)
+        for n in sorted(reach)
+        if table[n][0] != gate
+        for kind, tag in gate_tags(table[n][1])
+    ]
+    dead = [
+        (name, a + 1, kind, tag)
+        for name, a, _b in own
+        if name not in reach
+        for kind, tag in gate_tags("\n".join(glines[a:_b + 1]))
+    ]
+    return cells, lib_cells, dead
+
+
+def gate_shell_texts(root: pathlib.Path) -> dict[str, str]:
+    """`scripts/*.sh` and `scripts/lib/*.sh` under root, keyed by repo path."""
+    scripts = root / "scripts"
+    out = {}
+    for path in sorted(list(scripts.glob("*.sh")) + list((scripts / "lib").glob("*.sh"))):
+        out[str(path.relative_to(root))] = path.read_text(encoding="utf-8", errors="replace")
+    return out
+
+
+def gate_cell_extras(root: pathlib.Path) -> tuple[list[str], list[str]]:
+    """(lib cells, dead cells) of every gate, as snapshot lines."""
+    files = gate_shell_texts(root)
+    lib_lines: list[str] = []
+    dead_lines: list[str] = []
+    for path in sorted((root / "scripts").glob("*-gate.sh")):
+        _cells, lib_cells, dead = gate_cell_reach(path.name, files)
+        lib_lines += [f"{path.name}\t{lib}\t{fn}\t{kind}\t{tag}" for lib, fn, kind, tag in lib_cells]
+        dead_lines += [f"{path.name}\t{fn}\t{line}\t{kind}\t{tag}" for fn, line, kind, tag in dead]
+    return lib_lines, dead_lines
+
+
 def inventory_gates(root: pathlib.Path) -> tuple[list[str], list[str], list[str], list[str]]:
-    """cells, sleeps, cargo-builds, boots."""
+    """cells, sleeps, cargo-builds, boots. A gate's cells are counted by reachability (gate_cell_reach)."""
     membership = workflow_membership(root)
     cells: list[str] = []
     sleeps: list[str] = []
     builds: list[str] = []
     boots: list[str] = []
     scripts = root / "scripts"
+    files = gate_shell_texts(root)
     for path in sorted(scripts.glob("*-gate.sh")):
         rel = f"scripts/{path.name}"
         text = path.read_text(encoding="utf-8", errors="replace")
-        for kind, tag in gate_tags(text):
+        for kind, tag in gate_cell_reach(path.name, files)[0]:
             cells.append(f"{path.name}\t{kind}\t{tag}")
         for loc in membership.get(path.name, []):
             cells.append(f"{path.name}\tworkflow\t{loc}")
@@ -317,6 +425,23 @@ def self_test_comment_split() -> int:
         raise SystemExit(f"classify_lines must split anchor comment lines from prose: {(sloc, comment, doc, blank, anchor)}")
     return 1
 
+
+def self_test_cell_reach() -> int:
+    """A gate's cells are its top level's and its reachable functions', a lib's included; an unreachable
+    function's tags are dead cells, never counted."""
+    files = {
+        "scripts/x-gate.sh": ('. "$ROOT/scripts/lib/l.sh"\nf() {\n    echo "==== F called ===="\n}\n'
+                              'g() {\n    echo "==== G dead ===="\n}\n# g is only named here\nf\nlf\n'),
+        "scripts/lib/l.sh": 'lf() {\n    echo "==== LF via lib ===="\n}\nunused() {\n    echo "==== U ===="\n}\n',
+    }
+    cells, lib_cells, dead = gate_cell_reach("x-gate.sh", files)
+    if sorted(cells) != [("section", "F called"), ("section", "LF via lib")]:
+        raise SystemExit(f"gate_cell_reach must count the reachable cells only: {cells}")
+    if lib_cells != [("lib/l.sh", "lf", "section", "LF via lib")]:
+        raise SystemExit(f"gate_cell_reach must name a lib cell's function: {lib_cells}")
+    if dead != [("g", 5, "section", "G dead")]:
+        raise SystemExit(f"gate_cell_reach must list the dead cell with its function: {dead}")
+    return 1
 
 def self_test_policy_consumers() -> int:
     """A shim copied without its ci_policy/ package fails to load and copy_policy copies both; a
@@ -1811,6 +1936,9 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
 
     cells, sleeps, builds, boots = inventory_gates(root)
     write_lines(out / "gates.txt", "# gate<TAB>kind<TAB>tag", cells)
+    lib_cells, dead_cells = gate_cell_extras(root)
+    write_lines(out / "lib-cells.txt", "# gate<TAB>lib<TAB>function<TAB>kind<TAB>tag", lib_cells)
+    write_lines(out / "dead-cells.txt", "# gate<TAB>function<TAB>line<TAB>kind<TAB>tag", dead_cells)
     write_lines(out / "sleeps.txt", "# file<TAB>line<TAB>seconds<TAB>kind", sleeps)
     write_lines(out / "cargo-build-gates.txt", "# gate", builds)
     write_lines(out / "boots.txt", "# gate<TAB>mit<TAB>rust", boots)
@@ -1900,7 +2028,8 @@ def snapshot(root: pathlib.Path, out: pathlib.Path, skip_nextest: bool, quality:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
-        n = self_test_cfg_test() + self_test_ledger_rows() + self_test_policy_consumers() + self_test_comment_split()
+        n = (self_test_cfg_test() + self_test_ledger_rows() + self_test_policy_consumers() + self_test_comment_split()
+             + self_test_cell_reach())
         print(f"hygiene_inventory: self-test ok ({n} cases)")
         return 0
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])

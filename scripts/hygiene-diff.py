@@ -10,6 +10,11 @@ Fails on:
     information: the MIT_/RUST_ identifier scan also catches path and port
     constants that were never a cell; `section`/`flow` tags cannot be waived)
   - a (file,kind,tag) multiplicity drop (a (kind,tag) count that fell)
+  A gate's cells are counted by reachability (hygiene_inventory.gate_cell_reach): its top level and the
+  functions reachable from it, its own and those of the scripts/lib files it sources. A cell lost from
+  a gate is information only when the tool proves, from the old tree (the old snapshot's stamped
+  head_sha, or --old-rev) by that rule, that it sat only in an unreachable function; an old tree it
+  cannot read fails closed. A cell gained through a lib is information.
   - a diffsend case, client-differential flow, or ledger row removed or regraded
   - a gate_rc that went from 0 to non-zero
   - quality counts that went up (allow=, allow_sites=, rustfmt_skip=, unwrap_expect_panic_src=, traces_untracked=,
@@ -436,6 +441,69 @@ def _self_test_quality(root: pathlib.Path) -> int:
     return n
 
 
+def _self_test_cell_reach(root: pathlib.Path) -> int:
+    """A lost gate cell is information only when the old tree proves it unreachable there."""
+    import io
+    from contextlib import redirect_stdout
+
+    repo = root / "cells-repo"
+    (repo / "scripts" / "lib").mkdir(parents=True)
+    (repo / "scripts" / "x-gate.sh").write_text(
+        '. "$ROOT/scripts/lib/l.sh"\nf() {\n    echo "==== F called ===="\n}\n'
+        'g() {\n    echo "==== G dead ===="\n}\nf\nlf\n',
+        encoding="utf-8",
+    )
+    (repo / "scripts" / "lib" / "l.sh").write_text('lf() {\n    echo "==== LF via lib ===="\n}\n', encoding="utf-8")
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@x", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@x")
+    for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", "old"]):
+        subprocess.run(cmd, cwd=repo, env=env, check=True, capture_output=True)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+
+    def snap(d: pathlib.Path, cells: list[str], head: str | None, reach_format: bool = False) -> pathlib.Path:
+        _write_snap(d, [f"x-gate.sh\tsection\t{c}" for c in cells])
+        if head is not None:
+            (d / "provenance.txt").write_text(f"==== provenance ====\nhead_sha={head}\n", encoding="utf-8")
+        if reach_format:
+            (d / "dead-cells.txt").write_text("#\n", encoding="utf-8")
+        return d
+
+    def run(old: pathlib.Path, new: pathlib.Path) -> tuple[int, str]:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main_compare(old, new, old_git=str(repo))
+        return rc, buf.getvalue()
+
+    n = 0
+    # A dead cell (G, in an uncalled function at the old tree) removed: information naming the function.
+    rc, out = run(snap(root / "cr-old1", ["F called", "G dead"], sha), snap(root / "cr-new1", ["F called"], None))
+    if rc != 0 or "gate cell removed as dead at the old tree: x-gate.sh\tg\tsection\tG dead" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a cell dead at the old tree must be information: {out[-300:]}")
+    n += 1
+    # A cell of a called function removed: the old tree shows it reachable, so the "dead" claim fails.
+    rc, out = run(snap(root / "cr-old2", ["F called", "G dead"], sha), snap(root / "cr-new2", ["G dead"], None))
+    if rc == 0 or "FAIL gate cell tag removed: section\tF called" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a reachable cell removed must fail: {out[-300:]}")
+    n += 1
+    # An old tree the tool cannot read fails closed, even for a cell that was dead.
+    rc, out = run(snap(root / "cr-old3", ["F called", "G dead"], "0" * 40), snap(root / "cr-new3", ["F called"], None))
+    if rc == 0 or "FAIL gate cell tag removed: section\tG dead" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: an unreadable old tree must fail closed: {out[-300:]}")
+    n += 1
+    # A snapshot in the reachability format counts no dead cell: a removal there is red without the tree.
+    rc, out = run(snap(root / "cr-old4", ["F called"], sha, reach_format=True), snap(root / "cr-new4", [], None))
+    if rc == 0 or "FAIL gate cell tag removed: section\tF called" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a reachable cell of a reach-format snapshot must fail: {out[-300:]}")
+    n += 1
+    # A cell gained through a lib is information naming the gate and the function.
+    new5 = snap(root / "cr-new5", ["F called", "LF via lib"], None, reach_format=True)
+    (new5 / "lib-cells.txt").write_text("#\nx-gate.sh\tlib/l.sh\tlf\tsection\tLF via lib\n", encoding="utf-8")
+    rc, out = run(snap(root / "cr-old5", ["F called"], sha), new5)
+    if rc != 0 or "cells attributed through lib: x-gate.sh, lf, 1" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a cell gained through a lib must be information: {out[-300:]}")
+    n += 1
+    return n
+
 def _self_test() -> int:
     """Red on (file,kind,tag) multiplicity drop; gate_rc: not compared when no timings."""
     n = 0
@@ -444,6 +512,7 @@ def _self_test() -> int:
         n += _self_test_quality(root)
         n += _self_test_duplicates(root)
         n += _self_test_renames(root)
+        n += _self_test_cell_reach(root)
         old, new = root / "old", root / "new"
         _write_snap(
             old,
@@ -614,6 +683,52 @@ def load_ledger_rows(path: pathlib.Path) -> list[tuple[str, str | None, str, str
     return rows
 
 
+def _snapshot_head(snap: pathlib.Path) -> str | None:
+    """The head_sha a snapshot is stamped with (its provenance.txt), or None."""
+    prov = snap / "provenance.txt"
+    if not prov.is_file():
+        return None
+    m = re.search(r"^head_sha=([0-9a-f]{7,40})$", prov.read_text(encoding="utf-8", errors="replace"), re.M)
+    return m.group(1) if m else None
+
+
+def _tree_shell_texts(rev: str, git_dir: str | None = None) -> dict[str, str] | None:
+    """scripts/*.sh and scripts/lib/*.sh at rev (keyed by repo path), or None when git cannot read it."""
+    repo = git_dir or str(pathlib.Path(__file__).resolve().parent.parent)
+    ls = subprocess.run(["git", "-C", repo, "ls-tree", "-r", "--name-only", rev, "scripts"],
+                        capture_output=True, text=True, check=False)
+    if ls.returncode != 0:
+        return None
+    out: dict[str, str] = {}
+    for name in ls.stdout.split():
+        if re.fullmatch(r"scripts/[^/]+\.sh|scripts/lib/[^/]+\.sh", name):
+            r = subprocess.run(["git", "-C", repo, "show", f"{rev}:{name}"], capture_output=True, text=True,
+                               errors="replace", check=False)
+            if r.returncode != 0:
+                return None
+            out[name] = r.stdout
+    return out
+
+
+_INVENTORY = None
+
+
+def _inventory():
+    """scripts/lib/hygiene_inventory.py as a module (its gate_cell_reach is the one reachability rule)."""
+    global _INVENTORY
+    if _INVENTORY is None:
+        import importlib.util
+        import sys as _sys
+
+        path = pathlib.Path(__file__).resolve().parent / "lib" / "hygiene_inventory.py"
+        spec = importlib.util.spec_from_file_location("hygiene_inventory_for_diff", path)
+        mod = importlib.util.module_from_spec(spec)
+        _sys.modules["hygiene_inventory_for_diff"] = mod
+        spec.loader.exec_module(mod)
+        _INVENTORY = mod
+    return _INVENTORY
+
+
 def main_compare(
     old: pathlib.Path,
     new: pathlib.Path,
@@ -621,6 +736,8 @@ def main_compare(
     duplicates_path=None,
     dead_path=None,
     accept_rise=None,
+    old_rev=None,
+    old_git=None,
 ) -> int:
     class NS:
         pass
@@ -632,6 +749,8 @@ def main_compare(
     args.duplicates = duplicates_path
     args.dead = dead_path
     args.accept_rise = accept_rise
+    args.old_rev = old_rev
+    args.old_git = old_git
     return _compare(args)
 
 
@@ -691,37 +810,76 @@ def _compare(args) -> int:
         _fn, kind, tag = cell_key(line)
         return kind, tag
 
-    old_stable = {cell_tag(c) for c in old_cells if cell_tag(c)[0] != "workflow"}
-    new_stable = {cell_tag(c) for c in new_cells if cell_tag(c)[0] != "workflow"}
-    for kind, tag in sorted(old_stable - new_stable):
+    # A cell lost from a gate is red unless the tool proves, from the old tree by the inventory's own
+    # reachability rule, that the old gate never ran it (it sat only in an unreachable function). A
+    # snapshot in the reachability format (dead-cells.txt present) already left dead cells out.
+    old_by: dict[tuple[str, str], set[str]] = {}
+    new_by: dict[tuple[str, str], set[str]] = {}
+    for c in old_cells:
+        fn, kind, tag = cell_key(c)
+        if kind != "workflow":
+            old_by.setdefault((kind, tag), set()).add(fn)
+    for c in new_cells:
+        fn, kind, tag = cell_key(c)
+        if kind != "workflow":
+            new_by.setdefault((kind, tag), set()).add(fn)
+    old_reach: dict[str, object] = {}
+
+    def proven_dead(gate: str, kind: str, tag: str) -> tuple[bool, str]:
+        if (old / "dead-cells.txt").is_file():
+            return False, "the old snapshot counts reachable cells only"
+        if "err" not in old_reach and "files" not in old_reach:
+            rev = getattr(args, "old_rev", None) or _snapshot_head(old)
+            files = _tree_shell_texts(rev, getattr(args, "old_git", None)) if rev else None
+            if files is None:
+                old_reach["err"] = "cannot read the old tree" + (f" at {rev}" if rev else " (no head_sha, no --old-rev)")
+            else:
+                old_reach["files"] = files
+        if "err" in old_reach:
+            return False, str(old_reach["err"])
+        files = old_reach["files"]
+        if f"scripts/{gate}" not in files:
+            return False, f"{gate} is not in the old tree"
+        cells, _lib, dead = _inventory().gate_cell_reach(gate, files)
+        if (kind, tag) in cells:
+            return False, f"{gate} reaches it at the old tree"
+        fns = sorted({fn for fn, _line, k, tg in dead if (k, tg) == (kind, tag)})
+        if not fns:
+            return False, f"not a cell of {gate} at the old tree"
+        return True, ",".join(fns)
+
+    for (kind, tag), files_old in sorted(old_by.items()):
+        files_new = new_by.get((kind, tag), set())
+        drop = len(files_old) - len(files_new)
+        if drop <= 0:
+            continue
+        proven = []
+        for gate in sorted(files_old - files_new):
+            ok, why = proven_dead(gate, kind, tag)
+            if ok:
+                proven.append((gate, why))
+        if len(proven) >= drop:
+            for gate, why in proven:
+                info(f"gate cell removed as dead at the old tree: {gate}\t{why}\t{kind}\t{tag}")
+            continue
         if kind == "echo" and dead.get(tag):
             info(f"gate cell tag removed as dead: {kind}\t{tag} ({dead[tag]})")
             continue
-        fail(f"gate cell tag removed: {kind}\t{tag}")
-    added = new_stable - old_stable
+        if not files_new:
+            fail(f"gate cell tag removed: {kind}\t{tag}")
+        else:
+            fail(f"gate cell multiplicity drop: {kind}\t{tag} {len(files_old)} -> {len(files_new)}")
+    added = set(new_by) - set(old_by)
     if added:
         info(f"gate cell tags added: {len(added)}")
-    # (file,kind,tag) multiplicity: a tag that exists in two files and then
-    # only one is a lost cell even though the (kind,tag) set is unchanged.
-    # File moves (same (kind,tag) count, different files) stay informational.
-    old_ft = collections.Counter(
-        cell_key(c) for c in old_cells if cell_tag(c)[0] != "workflow"
-    )
-    new_ft = collections.Counter(
-        cell_key(c) for c in new_cells if cell_tag(c)[0] != "workflow"
-    )
-    old_tag_n = collections.Counter((k, t) for _, k, t in old_ft.elements())
-    new_tag_n = collections.Counter((k, t) for _, k, t in new_ft.elements())
-    for (kind, tag), n in sorted(old_tag_n.items()):
-        mapped = duplicates.get(tag) or renames.get(tag)
-        new_n = new_tag_n.get((kind, tag), 0)
-        if mapped:
-            new_n = max(new_n, new_tag_n.get((kind, mapped), 0))
-        if new_n < n:
-            if kind == "echo" and dead.get(tag):
-                info(f"gate cell multiplicity drop as dead: {kind}\t{tag} {n} -> {new_n} ({dead[tag]})")
-                continue
-            fail(f"gate cell multiplicity drop: {kind}\t{tag} {n} -> {new_n}")
+    old_keys = {cell_key(c) for c in old_cells}
+    via_lib: collections.Counter[tuple[str, str]] = collections.Counter()
+    for line in load_data_lines(new / "lib-cells.txt") if (new / "lib-cells.txt").is_file() else []:
+        parts = line.split("\t")
+        if len(parts) == 5 and (parts[0], parts[3], parts[4]) not in old_keys:
+            via_lib[(parts[0], parts[2])] += 1
+    for (gate, fn), n in sorted(via_lib.items()):
+        info(f"cells attributed through lib: {gate}, {fn}, {n}")
     old_files: dict[tuple[str, str], set[str]] = {}
     new_files: dict[tuple[str, str], set[str]] = {}
     for c in old_cells:
@@ -993,7 +1151,7 @@ def _compare(args) -> int:
     old_n = (old / "tests.count").read_text(encoding="utf-8").strip() if (old / "tests.count").is_file() else "?"
     new_n = (new / "tests.count").read_text(encoding="utf-8").strip() if (new / "tests.count").is_file() else "?"
     info(f"tests {old_n} -> {new_n}")
-    info(f"gate tags {len(old_stable)} -> {len(new_stable)}")
+    info(f"gate tags {len(old_by)} -> {len(new_by)}")
     info(f"diffsend {len(load_set(old / 'diffsend.txt'))} -> {len(load_set(new / 'diffsend.txt'))}")
 
     if failed:
@@ -1026,6 +1184,8 @@ def main() -> int:
         help="old_binary<TAB>old_name = [merged:]new_binary<TAB>new_name",
     )
     ap.add_argument("--dead", type=pathlib.Path, help="echo tag: reason (a MIT_/RUST_ name that was never a cell)")
+    ap.add_argument("--old-rev", help="the old tree's commit (default: the old snapshot's stamped head_sha), read to "
+                    "prove a lost gate cell was unreachable there")
     ap.add_argument(
         "--accept-rise",
         action="append",
