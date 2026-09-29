@@ -638,7 +638,7 @@ def check_no_host_tmp_writes(
 
 # Copies beyond the first of each byte-identical column-0 shell function in scripts/*.sh and
 # scripts/lib/*.sh (S6.2 moves them into scripts/lib/). Advisory while the allow equals the live count.
-DUPLICATE_FUNCTIONS_ALLOW = 11
+DUPLICATE_FUNCTIONS_ALLOW = 6
 _SHELL_FUNCTION = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{\s*$")
 
 
@@ -775,7 +775,7 @@ def check_kadmin_q_via_lib(files: dict[str, str] | None = None, allow: int | Non
 # scripts/lib function through one anywhere under scripts/, harness/, .github/ or the Makefile. Comment
 # lines and definition lines are not call sites, nor is a call inside the body of a function already
 # dead (the rule is transitive). Pinned at the live count until the dead-code commit clears them.
-DEAD_SHELL_FUNCTIONS_ALLOW = 8
+DEAD_SHELL_FUNCTIONS_ALLOW = 6
 # Functions called by name from outside that corpus; none today.
 DEAD_SHELL_ENTRY_POINTS: frozenset[str] = frozenset()
 _ANY_SHELL_FUNCTION = re.compile(r"^(\s*)(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")
