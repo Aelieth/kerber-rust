@@ -304,6 +304,25 @@ annotated by the ERR trap.
 a job stops at its first red step, so every gate behind that step has no CI evidence until the run is
 green again.
 
+Gate helpers live in `scripts/lib/`, one line each in [`scripts/README.md`](../scripts/README.md); the
+in-container C programs the gates build are in `scripts/oracle/`. Every kadmin query goes through
+`scripts/lib/kadmin-q.sh`: the runners `mit_kadmin_local` / `mit_kadmin` / `rust_kadmin_local` take the
+`docker exec` options and the container before `--` and the kadmin arguments after, and pass streams and exit
+status through. MIT's kadmin exits 0 on a refused query, so a query a cell relies on goes through
+`kadmin_q_ok`, which requires the verb's success line naming the principal. For a verb that prints nothing on
+success (the policy verbs; `modprinc` / `setstr` / `ktadd` on the Rust `krb5-kadmin-local`) it reads the
+effect back with read-only follow-ups derived from the query; `--then QUERY ERE` adds one by hand for what the
+query does not say, and `--next-asserts` skips the derived read-back where the cell's very next command reads
+the same object back and asserts every field. `kadmin_q_try` marks a best-effort cleanup. Two kinds of query
+cannot reach a host helper, because they run inside a container script between in-container steps, and
+ci-policy keys them by gate and section: capaths-transit's heredoc `kad` (a `kadmin.local -r` per realm with
+that realm's profile, in one container shell; it asserts MIT's success line itself) and the kadmin-local
+gate's two race cells (the kadmind `addprinc` must land while the fifo-fed `krb5-kadmin-local` session holds
+the store). `retry_until --log CONTAINER FILE... --` prints the log it polled before it dies. Gate cells are
+counted by reachability: a gate owns the cell tags at its top level and in the functions it reaches through
+its own and its sourced `scripts/lib` functions; a tag in a function nothing reaches is a dead cell, never
+counted, and `hygiene-diff.py` accepts its removal only once it has proven it dead from the old tree.
+
 A summary's `script:line` citations are moved to the current tree with `python3 scripts/claim-recite.py --at SHA
 [--at SHA …] [--widen N] [--apply] SUMMARY.md`: per file it keeps the one candidate SHA at which the most
 citations point at an asserting window (the tree the summary was written against), maps each cited range to
@@ -337,11 +356,13 @@ reads bound to its home module, the shim's imports right, no import cycle
 (`check_py_move_self_test` keeps its fixtures). Some arms are pinned at
 their live counts (the `*_ALLOW` constants): the count must equal the
 allow in either direction, so the commit that clears sites lowers the
-allow with them. They cover a gate that sets its own `SCRATCH=`, a shell
-function defined twice byte for byte, a direct `kadmin -q` in a gate
-instead of a `scripts/lib` helper, and process tags in `docs/**`. Working-plan section
-names in the public docs and a `scripts/**/*.py` that does not compile are
-hard. It enforces workflow YAML (fail-red jobs, nextest
+allow with them. Process tags in `docs/**` are pinned so. At 0, where any
+site is red: a gate that sets its own `SCRATCH=`, a shell function defined
+twice byte for byte, a shell function nothing calls (judged across files),
+a direct kadmin query in a gate outside `scripts/lib/kadmin-q.sh` and the
+keyed exceptions below, and a test that writes under `std::env::temp_dir()`.
+Working-plan section names in the public docs and a `scripts/**/*.py` that
+does not compile are hard. It enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test
 --workspace` or `cargo test --all`, `--no-run` + junit upload, no
 echo-only `then`/`elif`/`else` arm in `scripts/*-gate.sh` or

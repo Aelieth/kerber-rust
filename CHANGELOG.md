@@ -2462,6 +2462,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Removed
 
+- **config.** `KdcConf::kdc_user` is gone: it was parsed and never read. A `kdc_user` line in `kdc.conf` is
+  skipped like any other key the KDC does not use.
 - **kdc.** `PrincipalRead` no longer has `krbtgt_keys`. The
   trait method, the `Arc` forward, both product impls, the inherent
   wrapper, and the two test wrapper impls are gone. A KLLDAP
@@ -2506,6 +2508,19 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **scripts.** Every kadmin query a gate runs goes through `scripts/lib/kadmin-q.sh`; a query a cell relies on
+  must print MIT's success line or show its effect on read-back. The conversion found two setup queries MIT
+  had always refused (a bad `-pwexpire` date, the flag `+allow_postdate`); both are fixed.
+- **scripts.** The gates' duplicated shell helpers live once in `scripts/lib/` (kadmin, kpasswd, `/proc`,
+  kadmin query paths); the C oracles move to `scripts/oracle/`; dead functions are gone and `harness/prod`
+  joins the shellcheck scope.
+- **scripts.** Weak checks are exact: the flags gate's forwardable and hardware-auth cells, the postdate NYV
+  text, the SPAKE trace line, the S4U mismatch (36) and unknown-server (7) texts, the GSS replay wait.
+- **tool.** Gate cells are counted by reachability from each gate; `hygiene-diff.py` accepts a lost cell only
+  once it has proven the cell dead from the old tree.
+- **test.** Tests that bind a UDP and a TCP socket on one port retry the pair on `AddrInUse`
+  (`krb5_testkit::loopback_udp_tcp`), and no test writes under the host's temp directory
+  (`krb5_testkit::scratch_dir`).
 - **ci.** `policy-gate` runs in `harness-2` instead of `harness`: the kadmin
   query checks added seconds to `harness`, whose last five main-push runs
   reached 290 s of 270; `harness-2` keeps under its 300 s. No budget changes.
