@@ -200,6 +200,17 @@ def check_settle_helper() -> None:
     # The dev tree is dirty while iterating; the self-test exercises settle.sh's
     # tee/refusal logic, not the R2-T8 dirty guard (checked before it in CI).
     env["KERBER_SETTLE_ALLOW_DIRTY"] = "1"
+    # settle.sh tees each run into $KERBER_SCRATCH/settle-<name>.log: give the probes a scratch of their own.
+    probe = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    env["KERBER_SCRATCH"] = str(probe)
+    try:
+        _settle_probes(path, env)
+    finally:
+        subprocess.run(["rm", "-rf", str(probe)], check=False)
+
+
+def _settle_probes(path: pathlib.Path, env: dict[str, str]) -> None:
+    """The refusals and the one live run check_settle_helper drives through settle.sh."""
     existing = ROOT / "scripts" / "ci-policy.py"
     r = subprocess.run(
         [

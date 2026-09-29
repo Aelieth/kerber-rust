@@ -239,18 +239,24 @@ def _self_test_hygiene() -> None:
 
     def _isolate_missing_tests() -> None:
         fake = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
-        src = fake / "crates/krb5-config/src"
-        src.mkdir(parents=True)
-        (src / "testenv.rs").write_text(_isolate_ok)
-        check_isolate_test_krb5(root=fake)
+        try:
+            src = fake / "crates/krb5-config/src"
+            src.mkdir(parents=True)
+            (src / "testenv.rs").write_text(_isolate_ok)
+            check_isolate_test_krb5(root=fake)
+        finally:
+            subprocess.run(["rm", "-rf", str(fake)], check=False)
 
     def _isolate_tree_with_tests() -> None:
         fake = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
-        src = fake / "crates/krb5-config/src"
-        src.mkdir(parents=True)
-        (src / "testenv.rs").write_text(_isolate_ok)
-        (src / "tests.rs").write_text("// no temp_dir\n")
-        check_isolate_test_krb5(root=fake)
+        try:
+            src = fake / "crates/krb5-config/src"
+            src.mkdir(parents=True)
+            (src / "testenv.rs").write_text(_isolate_ok)
+            (src / "tests.rs").write_text("// no temp_dir\n")
+            check_isolate_test_krb5(root=fake)
+        finally:
+            subprocess.run(["rm", "-rf", str(fake)], check=False)
 
     def _isolate_tests_rs_temp_dir() -> None:
         check_isolate_test_krb5(
