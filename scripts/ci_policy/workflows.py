@@ -499,7 +499,7 @@ def check_rust_cache_shared_key(
 
 CONCURRENCY_WORKFLOWS = ("ci.yml", "fuzz.yml")
 _USES_PINNED = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$")
-SHELLCHECK_CMD = "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh"
+SHELLCHECK_CMD = "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh"
 
 
 def check_workflow_hardening(

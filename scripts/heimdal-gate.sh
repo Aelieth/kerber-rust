@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Bidirectional Heimdal 7.8 oracle. The only exit 0 is after both
-# directions content-assert AES-SHA1 tickets. Missing docker/image is
+# directions' klist names user@KERBER.TEST and host/testhost.kerber.test (the
+# client configs pin aes256-cts-hmac-sha1-96). Missing docker/image is
 # honest exit 2 + unavailability log — not a pass.
 set -euo pipefail
 

@@ -94,7 +94,7 @@ def _self_test_docs() -> None:
             _die(f"check_gate_documented must flag {label}")
     if gate_placements()["kdc-gate.sh"] != [("ci:harness", "fail-red")]:
         _die(f"gate_placements must read kdc-gate.sh as ci:harness fail-red: {gate_placements()['kdc-gate.sh']}")
-    # S6.1: every lane gate_placements reads, and the wrapper row of a DOCUMENTED_STUBS wrapper.
+    # Every lane gate_placements reads, and the wrapper row of a DOCUMENTED_STUBS wrapper.
     lanes_wf = [
         Workflow(pathlib.Path("ci.yml"),
                  "name: ci\non:\n  push:\n    branches: [main]\njobs:\n  harness:\n    steps:\n"
@@ -129,7 +129,7 @@ def _self_test_docs() -> None:
         "see ci-budget.toml\n",
         good_toml,
     )
-    # S6.1: no working-plan section name in a public doc; an RFC section is not one.
+    # No working-plan section name in a public doc; an RFC section is not one.
     ps_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:
         (ps_root / "docs").mkdir()

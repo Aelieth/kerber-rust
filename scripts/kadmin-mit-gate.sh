@@ -21,7 +21,7 @@ mkdir -p "$SCRATCH"
 load_rust_snap() {
     local f="$SCRATCH/kadmin-rust-$1"
     local k="$f.key"
-    [ -f "$f" ] || die "missing rust snapshot $1 (run kadmin-rust-gate.sh first)"
+    [ -f "$f" ] || die "missing rust snapshot $1 (run kadmin-rust-gate.sh and kadmin-rust-acl-gate.sh first, KERBER_KADMIN_KEEP=1)"
     [ -f "$k" ] || die "missing rust snapshot key $1"
     [ "$(cat "$k")" = "$(_snap_key)" ] || die "stale rust snapshot $1 (tree/run mismatch)"
     cat "$f"

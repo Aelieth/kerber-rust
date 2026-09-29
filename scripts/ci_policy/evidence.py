@@ -783,7 +783,7 @@ def check_claim_audit() -> None:
         no_fixture = "- **Message tooling alone:** `value=1` at `scripts/fx-msg-policy.py:3`.\n"
         if not any("tooling claim names no fixture line" in r[2] for r in rows(no_fixture)):
             _die(f"claim-audit must fail a tooling claim with no fixture call in its window: {rows(no_fixture)}")
-        # S6.1: the enclosing def comes from the AST, so a column-0 YAML key inside a fixture string
+        # The enclosing def comes from the AST, so a column-0 YAML key inside a fixture string
         # does not end it (the line scan stopped at `on:` and missed the _must_die below).
         yaml_policy = (
             "def check(text):\n    if 'value=1' not in text:\n        _die('value=1 missing')\n\n\n"

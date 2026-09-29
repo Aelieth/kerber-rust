@@ -16,7 +16,7 @@ mkdir -p "$SCRATCH"
     echo "DC ping:"
     ping -c 1 -W 2 10.10.38.38 || true
     echo "No SSPI acceptor binary or Windows GSS server is in this tree."
-    echo "Shipped bar remains krb5-gss wrap RRC=16 + scripts/gss-gate.sh (MIT libgssapi)."
+    echo "Shipped bar remains scripts/gss-gate.sh (MIT libgssapi vs krb5-gss)."
 } | tee "$SCRATCH/gss-sspi-gate-unavailable.log"
 echo "{\"event\":\"gss.sspi.gate\",\"correlation_id\":\"$CORRELATION_ID\",\"component\":\"gss-sspi-gate\",\"outcome\":\"error\",\"error\":\"no SSPI peer\"}"
 exit 2

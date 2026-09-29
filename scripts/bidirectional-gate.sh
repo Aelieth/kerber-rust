@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rust-client ↔ Rust-KDC: TGT + service ticket, FILE ccache 0x0504, keytab 0x0502.
+# Rust-client ↔ Rust-KDC: TGT + service ticket in a FILE ccache of version 0x0504.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"

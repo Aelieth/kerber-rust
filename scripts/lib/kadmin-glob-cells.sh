@@ -10,8 +10,8 @@ hist_shape() {
 
 # Principal aliases on one leg, like MIT tests/t_alias.py + t_kadmin_acl.py
 # (server_stubs.c:1727-1758, auth_acl.c:723-734, svr_principal.c:2051-2087,
-# do_as_req.c:681-687, do_tgs_req.c:1029). Texts settled live in
-# working/logs/audit-polish-0902/w1k/m3a-settle-mit-alias.log.
+# do_as_req.c:681-687, do_tgs_req.c:1029). Texts settled live against MIT;
+# the log is kept outside the repository.
 alias_cells() {
     local ctn=$1 conf=$2 admin=$3 leg=$4
     kq() {

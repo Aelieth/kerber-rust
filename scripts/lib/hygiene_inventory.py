@@ -608,7 +608,7 @@ GREP_Q_RE = re.compile(r"\bgrep\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*q[A-Za-z]*\b")
 DIFF_SUB_RE = re.compile(r"\bdiff\s+<\(")
 # The version the ci.yml shellcheck job installs and make shellcheck falls back to.
 SHELLCHECK_IMAGE = "koalaman/shellcheck:v0.11.0"
-SHELL_GLOBS = ("scripts/*.sh", "scripts/lib/*.sh", "harness/*.sh")
+SHELL_GLOBS = ("scripts/*.sh", "scripts/lib/*.sh", "harness/*.sh", "harness/prod/*.sh")
 WARN_LINE_RE = re.compile(r"^(?:warning|error)(?:\[[^\]]+\])?: ")
 WARN_SUMMARY_RE = re.compile(
     r"^(?:warning|error): (?:aborting|could not|build failed|\d+ warnings? emitted|`[^`]+` \([^)]*\) generated)"

@@ -215,8 +215,8 @@ def _mit_lines(path: pathlib.Path) -> list[str]:
     return _MIT_LINES[key]
 
 
-# The resolution below is a port of the reference resolver
-# `working/logs/w3-hygiene/s4-audit/resolve-anchors.py` (v3.2): a definition,
+# The resolution below is a port of the audit's reference resolver (v3.2,
+# kept outside the repository): a definition,
 # never a usage; a definition starts at the comment block directly above
 # its storage-class / return-type lines, with three more lines of slack.
 # Keep the two in step; the audit runs the reference.
@@ -603,9 +603,8 @@ def check_no_process_history(
         )
 
 
-# Process-history tags in docs/**/*.md prose and table cells (S5 D13; S6.3 sweeps them): the W1 and
-# review-round names, the Z close-out steps, "item N" and the A′ list. The count is lines with a tag.
-# Advisory while the allow equals the live count.
+# Process-history tags in docs/**/*.md prose and table cells: the W1 and review-round names, the Z
+# close-out steps, "item N" and the A′ list. The count is lines with a tag, pinned exactly.
 DOCS_PROCESS_TAG_ALLOW = 58
 _DOCS_PROCESS_TAG = re.compile(r"\bW1-[A-Z]|\bR[0-9]-[A-Z][0-9]+|\bZ[0-9]+(?:\.[0-9]+)?b?\b|\bitem [0-9]+\b|A\u2032-[0-9]")
 
@@ -626,7 +625,7 @@ def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
 
 def check_no_docs_process_tags(root: pathlib.Path | None = None, *, allow: int | None = None) -> None:
     """The docs arm of check_no_process_history: no process tag in docs/** prose or table cells
-    (advisory at DOCS_PROCESS_TAG_ALLOW)."""
+    (pinned at DOCS_PROCESS_TAG_ALLOW)."""
     allow = DOCS_PROCESS_TAG_ALLOW if allow is None else allow
     hits = docs_process_tag_lines(root)
     if len(hits) != allow:

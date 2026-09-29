@@ -300,7 +300,7 @@ def _self_test_hygiene() -> None:
     _must_die(_isolate_src_cfg_test_temp_dir)
     check_isolate_test_krb5()
 
-    # S6-14: the module-attribute consumers, each missing name and each shape red.
+    # The module-attribute consumers, each missing name and each shape red.
     check_policy_module_attrs()
     mod_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:
@@ -349,6 +349,6 @@ def _self_test_hygiene() -> None:
         _must_die_msg("3 temp_dir() call(s) in tests, allow 0", check_no_test_temp_dir, td_root, allow=0)
     finally:
         subprocess.run(["rm", "-rf", str(td_root)], check=False)
-    # S6.1: every scripts/**/*.py compiles.
+    # Every scripts/**/*.py compiles.
     check_python_compiles({"a.py": "x = 1\n"})
     _must_die_msg("1 Python file(s) do not compile", check_python_compiles, {"a.py": "x = 1\n", "b.py": "def f(:\n"})

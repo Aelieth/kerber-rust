@@ -592,8 +592,7 @@ def host_tmp_write_lines(text: str) -> list[int]:
     return hits
 
 
-# Gates that set their own SCRATCH over gate-common.sh's one default (S6.2 deletes them). Advisory
-# while the allow equals the live count.
+# Gates that set their own SCRATCH over gate-common.sh's one default; pinned exactly.
 GATE_SCRATCH_ASSIGN_ALLOW = 0
 _GATE_SCRATCH_ASSIGN = re.compile(r"(?m)^[ \t]*SCRATCH=")
 
@@ -610,7 +609,7 @@ def check_no_host_tmp_writes(
     scratch_allow: int | None = None,
 ) -> None:
     """No host `/tmp/` writes (nor bare `mktemp`) in scripts/*.sh or scripts/lib outside KERBER_SCRATCH defaults,
-    and no gate assigns SCRATCH over gate-common.sh's one default (advisory at GATE_SCRATCH_ASSIGN_ALLOW)."""
+    and no gate assigns SCRATCH over gate-common.sh's one default (pinned at GATE_SCRATCH_ASSIGN_ALLOW)."""
     if text is not None:
         hits = host_tmp_write_lines(text)
         if hits:
@@ -637,7 +636,7 @@ def check_no_host_tmp_writes(
 
 
 # Copies beyond the first of each byte-identical column-0 shell function in scripts/*.sh and
-# scripts/lib/*.sh (S6.2 moves them into scripts/lib/). Advisory while the allow equals the live count.
+# scripts/lib/*.sh; one copy belongs in scripts/lib/. Pinned exactly.
 DUPLICATE_FUNCTIONS_ALLOW = 0
 _SHELL_FUNCTION = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{\s*$")
 
@@ -670,7 +669,7 @@ def _shell_files() -> dict[str, str]:
 
 def check_no_duplicate_functions(files: dict[str, str] | None = None, allow: int | None = None) -> None:
     """No shell function is defined twice byte for byte across scripts/*.sh and scripts/lib/*.sh: the copies
-    beyond the first of each group are counted (advisory at DUPLICATE_FUNCTIONS_ALLOW)."""
+    beyond the first of each group are counted (pinned at DUPLICATE_FUNCTIONS_ALLOW)."""
     files = _shell_files() if files is None else files
     allow = DUPLICATE_FUNCTIONS_ALLOW if allow is None else allow
     groups = duplicate_functions(files)
@@ -680,8 +679,8 @@ def check_no_duplicate_functions(files: dict[str, str] | None = None, allow: int
              + "; ".join(f"{g[0]} x{len(g)}" for g in groups[:8]))
 
 
-# Direct `kadmin` / `kadmin.local` / `krb5-kadmin(-local)` queries (`-q`) in the gates; S6.2 moves them
-# behind the scripts/lib helpers. The rule is the S6.2 classifier's: one logical line (continuations
+# Direct `kadmin` / `kadmin.local` / `krb5-kadmin(-local)` queries (`-q`) in the gates; they belong
+# behind the scripts/lib helpers. The rule counts one logical line (continuations
 # joined, comments dropped), heredoc bodies included, the query's own `-q`. Pinned at the live count.
 KADMIN_Q_DIRECT_ALLOW = 0
 # The queries that cannot come from scripts/lib: each runs inside a container script (a `docker exec … sh -c`
@@ -831,8 +830,8 @@ def check_kadmin_q_via_lib(files: dict[str, str] | None = None, allow: int | Non
 # Shell functions nothing calls. A gate's own function is live only through a call site in that gate; a
 # scripts/lib function through one anywhere under scripts/, harness/, .github/ or the Makefile. Comment
 # lines and definition lines are not call sites, nor is a call inside the body of a function already
-# dead (the rule is transitive). Pinned at the live count until the dead-code commit clears them.
-DEAD_SHELL_FUNCTIONS_ALLOW = 6
+# dead (the rule is transitive). Pinned exactly.
+DEAD_SHELL_FUNCTIONS_ALLOW = 0
 # Functions called by name from outside that corpus; none today.
 DEAD_SHELL_ENTRY_POINTS: frozenset[str] = frozenset()
 _ANY_SHELL_FUNCTION = re.compile(r"^(\s*)(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{")

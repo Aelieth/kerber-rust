@@ -29,9 +29,9 @@ doc:
 
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh; \
+	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh; \
 	else \
-	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh; \
+	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh; \
 	fi
 
 policy:

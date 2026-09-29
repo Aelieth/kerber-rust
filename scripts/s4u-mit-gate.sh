@@ -32,7 +32,6 @@ mit_live_guard
 
 # The mismatch cell uses -U admin; the entrypoint only adds `user`.
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -randkey admin" >/dev/null
-kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -pw expirepw -pwexpire 1/1/1990 expired" >/dev/null
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5kdc || true
@@ -132,7 +131,8 @@ expect_s4u_host_mismatch() {
     set -e
     echo "$out"
     echo "${label}_mismatch_rc=$rc"
-    echo "$out" | grep -qiE "Ticket/authenticator don't match|BADMATCH|INVALID_S4U2SELF"
+    # MIT sets this status with KRB5KRB_AP_ERR_BADMATCH (36) alone (tgs_policy.c:275-276).
+    echo "$out" | grep -qxF 'kvno: INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'
     echo "$rc" | grep -qx 1
     local new
     new="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}")"

@@ -158,7 +158,7 @@ KPROPD_DENY="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf -e KRB5_KTNAME=/t
     "$NAME" sh -c 'timeout 25 kpropd -S -d -A testhost.kerber.test -a /tmp/kpropd.acl -P 754 -s /tmp/iprop.keytab -f /tmp/from_kprop.dump -p "$(command -v kdb5_util)" 2>&1' || true)"
 echo "$KPROPD_DENY"
 echo "$KPROPD_DENY" | grep -F 'get_updates permission denied'
-retry_until 200 'ACL denied in /tmp/kadmind-nop.log' \
+retry_until --log "$NAME" /tmp/kadmind-nop.log -- 200 'ACL denied in /tmp/kadmind-nop.log' \
     docker exec "$NAME" grep -qF '"op":"propagate","error":"ACL denied"' /tmp/kadmind-nop.log
 docker exec "$NAME" grep -F '"op":"propagate","error":"ACL denied"' /tmp/kadmind-nop.log
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
@@ -208,7 +208,7 @@ _iprop_rpcsec_gss() {
     docker exec "$NAME" grep -F '"prog":100423' /tmp/kadmind.log \
         | grep -qF '"rpc_flavor":"RPCSEC_GSS"'
 }
-retry_until 200 'RPCSEC_GSS on IPROP_PROG in /tmp/kadmind.log' _iprop_rpcsec_gss
+retry_until --log "$NAME" /tmp/kadmind.log -- 200 'RPCSEC_GSS on IPROP_PROG in /tmp/kadmind.log' _iprop_rpcsec_gss
 KADMLOG="$(docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true)"
 echo "$KADMLOG"
 echo "$KADMLOG" | grep -F '"prog":100423' | grep -F '"rpc_flavor":"RPCSEC_GSS"' || {

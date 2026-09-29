@@ -287,8 +287,8 @@ KADMIND_LOG="$(docker exec "$NAME" cat /tmp/kadmind.log 2>/dev/null || true)"
 echo "$KADMIND_LOG"
 # M4c: MIT log_done / log_unauth (server_stubs.c:403-459). The successful admin
 # addprinc logs "Request: ... success" and the changepw listprincs denial logs
-# "Unauthorized request: ...", each with client/service/addr. Settled live in
-# a live MIT kadmind settle (working/logs/audit-polish-0902/w1k/settle-m4c-kadmind-log.log).
+# "Unauthorized request: ...", each with client/service/addr. Settled live
+# against a MIT kadmind; the log is kept outside the repository.
 echo "$KADMIND_LOG" \
     | grep -F 'Request: kadm5_create_principal, extra@KERBER.TEST, success, client=admin@KERBER.TEST, service=kadmin/admin@KERBER.TEST, addr=' \
     || { echo "Rust kadmind did not log the create like MIT log_done" >&2; exit 1; }

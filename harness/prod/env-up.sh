@@ -14,9 +14,11 @@ set -uo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
-cd "$ROOT"
+cd "$ROOT" || exit 1
 # shellcheck disable=SC1091
 . "$HERE/limits.env"
+# refuse_golden_capture_dir (the gates' golden-home rule); env-up's own say/warn/die below replace its die.
+. "$ROOT/scripts/lib/gate-common.sh"
 
 REALM="$KERBER_PROD_REALM"
 DNS_DOMAIN="$(printf '%s' "$REALM" | tr '[:upper:]' '[:lower:]')"
@@ -30,16 +32,6 @@ REPLICA_FQDN="kdc2.${DNS_DOMAIN}"
 say()  { printf '\033[1;36m[env-up]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[env-up] WARN:\033[0m %s\n' "$*"; }
 die()  { printf '\033[1;31m[env-up] FATAL:\033[0m %s\n' "$*" >&2; exit 1; }
-
-# Same golden-home rule as scripts/lib/gate-common.sh (env-up is not a gate).
-refuse_golden_capture_dir() {
-    local d="${1:-}"
-    [ -z "$d" ] && return 0
-    local norm="${d//\\//}"
-    case "/$norm/" in
-        */tests/traces/*) die "KERBER_CAPTURE_DIR refuses tests/traces: $d" ;;
-    esac
-}
 
 command -v docker >/dev/null 2>&1 || die "docker not found"
 
@@ -194,7 +186,7 @@ docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" \
 docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" \
     kvno "host/testhost.${DNS_DOMAIN}@$REALM" >>/tmp/prod-smoke.log 2>&1 || smoke_rc=1
 KL="$(docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" klist 2>&1)"
-echo "$KL" | sed 's/^/    /'
+while IFS= read -r line; do printf '    %s\n' "$line"; done <<<"$KL"
 echo "$KL" | grep -q "krbtgt/$REALM" || smoke_rc=1
 echo "$KL" | grep -q "host/testhost.${DNS_DOMAIN}" || smoke_rc=1
 

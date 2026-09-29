@@ -286,9 +286,8 @@ CHANGELOG_HEADINGS_ALLOW = 0
 DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
-# The CHANGELOG at the S5 close (235,552 bytes) plus 9,000 bytes for S6's bullets: one per PR item
-# across S6.1-S6.3, at most 25 at 360 bytes (the median bullet is 341); re-based only by a tool:
-# commit at the start of a swath that adds bullets.
+# The CHANGELOG's size (235,552 bytes when it was set) plus 9,000 bytes for the next 25 bullets at 360
+# bytes (the median bullet is 341); re-based only by a tool: commit ahead of the bullets it allows.
 CHANGELOG_MAX_BYTES = 244552
 
 
@@ -321,7 +320,7 @@ def check_testing_doc_budgets(
         _die("docs/testing.md must quote the harness budget from ci-budget.toml")
 
 
-# A working-plan section named in a tracked doc (S5 D15): `§ Deferred`, or any `§ "…"`. RFC section
+# A working-plan section named in a tracked doc: `§ Deferred`, or any `§ "…"`. RFC section
 # citations (`RFC 4120 §5.4.1`) are not plan sections.
 _PLAN_SECTION = re.compile(r"§\s*Deferred|§\s*[\"\u201c][^\"\u201d]+[\"\u201d]")
 

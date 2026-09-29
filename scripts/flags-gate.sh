@@ -108,7 +108,8 @@ echo "$FLAGS"
 echo "$FLAGS" | grep -q 'flaguser@KERBER.TEST'
 FLAGBITS="$(echo "$FLAGS" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
 echo "flagbits=$FLAGBITS"
-echo "$FLAGBITS" | grep -qv F
+[ -n "$FLAGBITS" ] || die "DISALLOW_FORWARDABLE: klist -f printed no Flags line"
+[[ $FLAGBITS != *F* ]] || die "DISALLOW_FORWARDABLE: the TGT is forwardable ($FLAGBITS)"
 kadmin_q_ok kadmin_q 'modprinc +allow_forwardable flaguser'
 
 echo "==== OK_AS_DELEGATE sets O on kvno host ===="
@@ -156,7 +157,7 @@ echo "$GETHW" | grep '^Attributes:' | grep -qv 'REQUIRES_PRE_AUTH'
 HW="$(kinit_try 'printf "flag-secret\n" | KRB5_TRACE=/dev/stderr kinit flaguser@KERBER.TEST')"
 echo "$HW"
 echo "$HW" | grep -q 'Received error from KDC:.*Additional pre-authentication required'
-if echo "$HW" | grep -q 'Ticket cache: FILE:'; then
+if docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" klist -s; then
     echo "REQUIRES_HW_AUTH principal obtained a ticket" >&2
     exit 1
 fi

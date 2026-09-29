@@ -279,7 +279,7 @@ def _self_test_comments() -> None:
             _die("process-history fixtures dropped a tag")
     finally:
         subprocess.run(["rm", "-rf", str(tag_root)], check=False)
-    # S6.1: the docs arm of the process-tag check (lines with a tag, fenced code excluded), one line
+    # The docs arm of the process-tag check (lines with a tag, fenced code excluded), one line
     # per arm of the tag pattern, so a dropped arm changes the count.
     dt_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:

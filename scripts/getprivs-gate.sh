@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# MIT 1.22.2 kadmin getprivs vs Rust kadmind: limited ACL actor is not 0x3F.
+# MIT 1.22.2 kadmin getprivs vs Rust kadmind: a limited ACL actor reads all bits,
+# like MIT's ~0, and its cpw -randkey is AUTH_CHANGEPW.
 # Isolated: never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

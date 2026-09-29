@@ -695,7 +695,7 @@ def check_need_bins_strict(
 
 
 def check_no_gate_cargo_build(gate_texts: dict[str, str] | None = None) -> None:
-    """Named S6 rule: no scripts/*-gate.sh may run cargo build (use need_bins)."""
+    """No scripts/*-gate.sh runs cargo build; gates take their bins through need_bins."""
     if gate_texts is None:
         gate_texts = {
             p.name: p.read_text(encoding="utf-8")

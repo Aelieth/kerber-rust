@@ -106,7 +106,7 @@ echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
 _fast_krb_fast_response_ge2() {
     [ "$(docker exec "$NAME" grep -c 'fast::KrbFastResponse' /tmp/kdc.log || true)" -ge 2 ]
 }
-retry_until 200 "two fast::KrbFastResponse in /tmp/kdc.log" _fast_krb_fast_response_ge2
+retry_until --log "$NAME" /tmp/kdc.log -- 200 "two fast::KrbFastResponse in /tmp/kdc.log" _fast_krb_fast_response_ge2
 KDCLOG="$(docker exec "$NAME" cat /tmp/kdc.log)"
 echo "$KDCLOG" | tail -40
 FASTN="$(echo "$KDCLOG" | grep -c 'fast::KrbFastResponse' || true)"

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
-# Production-gate: MIT 1.22.2 kinit + kvno against the Rust KDC.
-# Copies the Rust binary into a client-only MIT image so UDP stays on 127.0.0.1
-# (host Docker publish of port 88 is unreliable).
+# Production-gate: MIT 1.22.2 kinit + kvno against the Rust KDC, with the Rust
+# binaries copied into one MIT container (the shared shell, or its own one started
+# without a KDC) so UDP stays on 127.0.0.1 (host Docker publish of port 88 is
+# unreliable). MIT's own krb5kdc with the audit test plugin runs there too, for the
+# audit cells; the last cell starts the examples/configs KDC.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -281,7 +283,7 @@ def tgs_seed():
 sys.exit(0 if finish("AS_REQ") and finish("TGS_REQ") and tgs_seed() else 1)
 PY
 }
-retry_until 200 "expected rows in /tmp/au.log" _au_rows_ready
+retry_until --log "$NAME" /tmp/au.log -- 200 "expected rows in /tmp/au.log" _au_rows_ready
 docker exec -i "$NAME" python3 - <<'PY'
 import json, re, sys
 def rows(path):

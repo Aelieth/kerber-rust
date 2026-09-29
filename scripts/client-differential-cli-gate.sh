@@ -261,7 +261,7 @@ ok=0
 REPLAY_LOG=""
 for _ in $(seq 1 20); do
     REPLAY_LOG="$(docker exec "$NAME" cat /tmp/gss-accept.log 2>/dev/null || true)"
-    if echo "$REPLAY_LOG" | grep -qiE '34|replay'; then
+    if echo "$REPLAY_LOG" | grep -qF 'accept_sec_context: KRB-ERROR 34: authenticator replay'; then
         ok=1
         break
     fi
@@ -269,9 +269,8 @@ for _ in $(seq 1 20); do
 done
 echo "$REPLAY_LOG"
 if [ "$ok" != 1 ]; then
-    die "replayed AP-REQ did not log 34/replay"
+    die "replayed AP-REQ did not log accept_sec_context: KRB-ERROR 34: authenticator replay"
 fi
-echo "$REPLAY_LOG" | grep -q '34'
 echo "MIT_gss_replay_token"
 echo "GSS_replay_major_34"
 
@@ -1071,8 +1070,8 @@ _z13_mit_kvno_log() {
     docker exec "$NAME" grep -q 'accept_sec_context:' /tmp/gss-z13-mit-kvno.log \
         && docker exec "$NAME" grep -q 'mech: Cannot find key for host/testhost.kerber.test@KERBER.TEST kvno 99 in keytab' /tmp/gss-z13-mit-kvno.log
 }
-retry_until 200 "Z1.3 MIT NYV log assertions" _z13_mit_nyv_log
-retry_until 200 "Z1.3 MIT kvno log assertions" _z13_mit_kvno_log
+retry_until --log "$NAME" /tmp/gss-z13-mit-nyv.log -- 200 "Z1.3 MIT NYV log assertions" _z13_mit_nyv_log
+retry_until --log "$NAME" /tmp/gss-z13-mit-kvno.log -- 200 "Z1.3 MIT kvno log assertions" _z13_mit_kvno_log
 MIT_NYV_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-mit-nyv.log)"
 MIT_KVNO_LOG="$(docker exec "$NAME" cat /tmp/gss-z13-mit-kvno.log)"
 echo "$MIT_NYV_LOG"

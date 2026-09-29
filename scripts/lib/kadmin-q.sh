@@ -119,7 +119,7 @@ _kadmin_ere() {
     printf '%s' "$e"
 }
 
-# The ERE of MIT's success line for QUERY (kadmin.c / keytab.c texts, settled on four legs in the S6.2 record),
+# The ERE of MIT's success line for QUERY (kadmin.c / keytab.c texts, which the Rust kadmind prints too),
 # naming the query's principal; empty for a verb that prints nothing on success.
 _kadmin_success_ere() {
     local verb p n last ere=''

@@ -282,7 +282,7 @@ def _self_test_shell() -> None:
         'echo "cat <<EOF"\necho ok\ncat <<<hello\n# <<EOF\n',
         "ok-quoted-and-comment-heredoc.sh",
     )
-    # S6.1: a gate's own SCRATCH=, byte-identical shell functions, direct kadmin queries.
+    # A gate's own SCRATCH=, byte-identical shell functions, direct kadmin queries.
     check_no_host_tmp_writes(files={"a-gate.sh": "echo ok\n", "lib/gate-common.sh": 'SCRATCH="$x"\n'}, scratch_allow=0)
     _must_die_msg("1 gate(s) assign SCRATCH=", check_no_host_tmp_writes,
                   files={"a-gate.sh": 'SCRATCH="${KERBER_SCRATCH:-x}"\n', "b-gate.sh": "export KERBER_SCRATCH=y\n"},

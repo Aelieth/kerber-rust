@@ -1,13 +1,11 @@
 # Shared gate preamble. Source after `cd "$ROOT"` and after provenance.sh.
 # shellcheck shell=bash
-# Provides: log, die, unavailable, register_cleanup, wait_port, wait_listen,
-# wait_gone, wait_log, require_listen, require_log, require_port_in,
-# retry_until,
-# wait_port_in, wait_udp_in, wait_tcp_bound_in, wait_gone_in, wait_pid_gone, need_image,
-# need_bins, shell_container, kdc_start, kdc_restart, mit_kdc_restart,
-# stock_mit_kdc. One EXIT trap writes gate_wall_s= and runs registered
-# cleanups. Does not replace provenance's ERR. Host wait_port/wait_gone need a
-# published port; wait_port_in/wait_gone_in probe inside $NAME.
+# Provides: log, die, unavailable, register_cleanup, wait_listen, wait_log,
+# require_listen, require_log, require_port_in, retry_until, wait_port_in,
+# wait_udp_in, wait_tcp_bound_in, wait_gone_in, wait_pid_gone, need_image,
+# need_bins, shell_container, stock_mit_kdc. One EXIT trap writes gate_wall_s=
+# and runs registered cleanups. Does not replace provenance's ERR. The port
+# waits probe inside $NAME (wait_port_in, wait_gone_in).
 
 GATE_NAME="${GATE_NAME:-$(basename "${BASH_SOURCE[1]:-${0}}" .sh)}"
 COMPONENT="${COMPONENT:-$GATE_NAME}"
@@ -108,27 +106,6 @@ _gate_common_exit() {
 }
 trap '_gate_common_exit' EXIT
 
-wait_port() {
-    local host="${1:-127.0.0.1}" port="${2:-88}" n="${3:-200}"
-    for _ in $(seq 1 "$n"); do
-        if python3 - "$host" "$port" <<'PY' 2>/dev/null
-import socket, sys
-s = socket.socket(); s.settimeout(0.2)
-try:
-    s.connect((sys.argv[1], int(sys.argv[2]))); sys.exit(0)
-except OSError:
-    sys.exit(1)
-finally:
-    s.close()
-PY
-        then
-            return 0
-        fi
-        sleep 0.1
-    done
-    return 1
-}
-
 wait_listen() {
     local ctn=$1 logfile=$2 n="${3:-200}"
     for _ in $(seq 1 "$n"); do
@@ -138,17 +115,6 @@ wait_listen() {
         sleep 0.1
     done
     docker exec "$ctn" cat "$logfile" >&2 || true
-    return 1
-}
-
-wait_gone() {
-    local host="${1:-127.0.0.1}" port="${2:-88}" n="${3:-100}"
-    for _ in $(seq 1 "$n"); do
-        if ! wait_port "$host" "$port" 1; then
-            return 0
-        fi
-        sleep 0.1
-    done
     return 1
 }
 
@@ -208,8 +174,20 @@ require_port_in() {
 }
 
 # Wait ≡ assertion: retry the assertion command itself. Default 20 s.
+# retry_until [--log CONTAINER FILE... --] N WHAT CMD...: run CMD every 0.1 s up to N times until it
+# succeeds; otherwise print each FILE from CONTAINER (the log the command polls) on stderr and die.
 retry_until() {
-    local n=$1 what=$2
+    local ctn='' logs=() n what f
+    if [ "${1:-}" = --log ]; then
+        ctn=$2
+        shift 2
+        while [ "$1" != -- ]; do
+            logs+=("$1")
+            shift
+        done
+        shift
+    fi
+    n=$1 what=$2
     shift 2
     for _ in $(seq 1 "$n"); do
         if "$@"; then
@@ -217,11 +195,15 @@ retry_until() {
         fi
         sleep 0.1
     done
+    for f in "${logs[@]}"; do
+        echo "---- $ctn:$f ----" >&2
+        docker exec "$ctn" cat "$f" >&2 || true
+    done
     die "$what never appeared"
 }
 
 # In-container TCP connect. Group-B shell containers do not publish KDC ports
-# to the host, so wait_port (host-side) cannot see them.
+# to the host, so a host-side probe cannot see them.
 wait_port_in() {
     local ctn="${1:-$NAME}" port="${2:-88}" n="${3:-200}"
     for _ in $(seq 1 "$n"); do
@@ -537,41 +519,6 @@ EOS
         docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" "$keep" >/dev/null
     fi
     register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
-}
-
-# Uncalled (kdc-gate inlines the start). Held for S6.
-kdc_start() {
-    local addr="${1:-127.0.0.1:88}"
-    docker exec -d \
-        -e KRB5_TEST_USER_PASSWORD="${KRB5_TEST_USER_PASSWORD:-userpassword}" \
-        -e KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}" \
-        -e KRB5_MASTER_PASSWORD="${KRB5_MASTER_PASSWORD:-masterpassword}" \
-        -e KRB5_KDC_DB="${KRB5_KDC_DB:-/tmp/principal}" \
-        -e KRB5_KDC_STASH="${KRB5_KDC_STASH:-/tmp/stash}" \
-        "$NAME" sh -c "/tmp/krb5-kdc --test-realm $addr >/tmp/kdc.log 2>&1"
-    require_listen "$NAME" /tmp/kdc.log "rust KDC listening in /tmp/kdc.log"
-}
-
-# Uncalled. Held for S6.
-kdc_restart() {
-    docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true' || true
-    wait_gone 127.0.0.1 88 40 || true
-    kdc_start "$@"
-}
-
-# Uncalled. Held for S6.
-mit_kdc_restart() {
-    local ctn="${1:-$NAME}"
-    docker exec "$ctn" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true' || true
-    sleep 0.1 # proto: krb5kdc pid reuse
-    docker exec -d "$ctn" krb5kdc
-    for _ in $(seq 1 80); do
-        if docker exec "$ctn" sh -c 'pidof krb5kdc >/dev/null' 2>/dev/null; then
-            return 0
-        fi
-        sleep 0.1
-    done
-    die "mit krb5kdc did not restart"
 }
 
 # Shared-job attach (KERBER_LIVE=1): the boot-stock-mit.sh step may

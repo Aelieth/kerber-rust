@@ -42,12 +42,6 @@ kadm5_changepw_list() {
         /tmp/kadm5-changepw-rpc "$client" "$pass" KERBER.TEST listprincs
 }
 
-kadm5_list_service() {
-    local ctn=$1 client=$2 pass=$3 svc=$4
-    docker exec -e KRB5_CONFIG="${5:-/etc/krb5.conf}" "$ctn" \
-        /tmp/kadm5-changepw-rpc --service "$svc" "$client" "$pass" KERBER.TEST listprincs
-}
-
 compile_kadm5_integrity() {
     local ctn=$1
     docker cp "$ROOT/scripts/oracle/kadm5-integrity-rpc.c" "$ctn":/tmp/kadm5-integrity-rpc.c

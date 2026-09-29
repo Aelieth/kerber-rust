@@ -108,7 +108,7 @@ echo "==== kvno before validate is TKT_NYV ===="
 NYV="$(docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test 2>&1 || true)"
 echo "$NYV"
-echo "$NYV" | grep -qiE "not yet valid|TKT_NYV|NYV"
+echo "$NYV" | grep -qF 'kvno: Ticket not yet valid while getting credentials for host/testhost.kerber.test@KERBER.TEST'
 if echo "$NYV" | grep -q 'kvno ='; then
     echo "invalid ticket issued a service ticket" >&2
     exit 1

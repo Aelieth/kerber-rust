@@ -144,7 +144,7 @@ _pkinit_evidence() {
     echo "$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)$OUT" \
         | grep -Eqi 'PKINIT|pa[_ ]?type[[:space:]]*16|padata type 16|PA-PK-AS|client.pkinit'
 }
-retry_until 200 "PKINIT evidence in TRACE+OUT" _pkinit_evidence
+retry_until --log "$NAME" /tmp/mit-kdc.trace -- 200 "PKINIT evidence in TRACE+OUT" _pkinit_evidence
 TRACE="$(docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true)"
 if ! echo "$TRACE$OUT" | grep -Eqi 'PKINIT|pa[_ ]?type[[:space:]]*16|padata type 16|PA-PK-AS|client.pkinit'; then
     log "pkinit.client.gate" "error" ',"error":"kinit succeeded without PKINIT evidence"'

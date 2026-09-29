@@ -79,11 +79,9 @@ if [ "$rc" -ne 0 ]; then
     exit 1
 fi
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
-if ! echo "$TRACE" | grep -Eq 'pa[_ ]?type[[:space:]]*151|padata type 151|PA-SPAKE[[:space:]]*\(151\)|etype 151'; then
-    if ! echo "$TRACE" | grep -q '151'; then
-        log "spake.gate" "error" ',"error":"kinit succeeded without pa_type 151"'
-        exit 1
-    fi
+if ! echo "$TRACE" | grep -qF 'Preauth module spake (151) (real) returned: 0/Success'; then
+    log "spake.gate" "error" ',"error":"kinit succeeded without pa_type 151"'
+    exit 1
 fi
 if ! echo "$TRACE" | grep -Eq 'group[[:space:]]*2|group=2|SPAKE challenge with group 2'; then
     log "spake.gate" "error" ',"error":"kinit succeeded without SPAKE group 2"'

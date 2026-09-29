@@ -432,7 +432,8 @@ expect_s4u_mismatch() {
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
         exit 1
     fi
-    echo "$out" | grep -qiE "Ticket/authenticator don't match|BADMATCH|INVALID_S4U2SELF"
+    # MIT sets this status with KRB5KRB_AP_ERR_BADMATCH (36) alone (tgs_policy.c:275-276).
+    echo "$out" | grep -qxF 'kvno: INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'
     if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q 'INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'"; then
         echo "$label: new lines of ${klog} missing INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH" >&2
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
@@ -610,7 +611,8 @@ if [ "$mitdis_rc" -eq 0 ]; then
     docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log" >&2 || true
     exit 1
 fi
-echo "$MITDIS" | grep -qiE "not found in Kerberos database|PROCESS_TGS"
+# The text is MIT's for KDC_ERR_S_PRINCIPAL_UNKNOWN (7) alone (gc_via_tkt.c:202-209).
+echo "$MITDIS" | grep -qF 'kvno: Server host/svc.c.test@C.TEST not found in Kerberos database'
 if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log | grep -q PROCESS_TGS"; then
     echo "MIT disallow: new mit-c.log lines missing PROCESS_TGS" >&2
     docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log" >&2 || true
@@ -906,7 +908,7 @@ if [ "$rustdis_rc" -eq 0 ]; then
     docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-c-disallow.log" >&2 || true
     exit 1
 fi
-echo "$RUSTDIS" | grep -qiE "not found in Kerberos database|PROCESS_TGS"
+echo "$RUSTDIS" | grep -qF 'kvno: Server host/svc.c.test@C.TEST not found in Kerberos database'
 if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-c-disallow.log | grep -q PROCESS_TGS"; then
     echo "Rust disallow: new kdc-c-disallow.log lines missing PROCESS_TGS" >&2
     docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/kdc-c-disallow.log" >&2 || true
