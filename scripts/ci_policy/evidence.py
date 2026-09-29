@@ -81,8 +81,8 @@ def check_no_red_target_trees(root: pathlib.Path | None = None) -> None:
 
 
 RED_AT_SHA_OVERLAY_DIRS = ("lib", "oracle", "ci_policy")
-# The directories red-at-sha.sh does not overlay yet; pinned exactly.
-RED_AT_SHA_OVERLAY_MISSING_ALLOW = 3
+# The directories red-at-sha.sh does not overlay; pinned exactly.
+RED_AT_SHA_OVERLAY_MISSING_ALLOW = 0
 
 
 def check_red_at_sha_overlay_order(text: str | None = None, allow: int | None = None) -> None:

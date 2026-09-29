@@ -473,7 +473,8 @@ SHA with `CARGO_TARGET_DIR` under an absolute `KERBER_SCRATCH`, a
 provenance header (`base_sha=`, `tree_sha=` from `git write-tree`
 after the overlay and any `--inject` copies, `command=` including
 `--inject` when used, worktree, probe sha256, `gate_rc=` /
-`cargo_test_rc=`), HEAD `scripts/lib/*.{sh,py}`, `scripts/*.sh`,
+`cargo_test_rc=`), HEAD's `scripts/lib/`, `scripts/oracle/` and
+`scripts/ci_policy/` whole (each replacing the base's), `scripts/*.sh`,
 `scripts/*.{c,py}`, and the whole `harness/` tree copied into the
 worktree **before** `write-tree` so `tree_sha=` describes the tree
 that ran. `--inject` with no files is refused. Binary rebuild is

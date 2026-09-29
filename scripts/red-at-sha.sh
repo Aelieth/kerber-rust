@@ -131,13 +131,15 @@ trap cleanup EXIT
 # inside the gate (resolved from $0 in the worktree) is current. Gate
 # scripts must land before write-tree so tree_sha describes what ran.
 if [ "$OVERLAY" = 1 ]; then
-    mkdir -p "$WT/scripts/lib"
-    if compgen -G "$ROOT/scripts/lib/*.sh" >/dev/null; then
-        cp "$ROOT/scripts/lib/"*.sh "$WT/scripts/lib/"
-    fi
-    if compgen -G "$ROOT/scripts/lib/*.py" >/dev/null; then
-        cp "$ROOT/scripts/lib/"*.py "$WT/scripts/lib/"
-    fi
+    # The directories HEAD's gates and helpers read, whole: the libs, the in-container C oracles, and the
+    # ci_policy package the ci-policy.py shim imports (kdb-dump-gate loads the shim).
+    for d in lib oracle ci_policy; do
+        if [ -d "$ROOT/scripts/$d" ]; then
+            rm -rf "$WT/scripts/$d"
+            cp -a "$ROOT/scripts/$d" "$WT/scripts/$d"
+            find "$WT/scripts/$d" -name __pycache__ -type d -prune -exec rm -rf {} +
+        fi
+    done
     if compgen -G "$ROOT/scripts/"*.sh >/dev/null; then
         cp "$ROOT/scripts/"*.sh "$WT/scripts/"
     fi
