@@ -187,8 +187,6 @@ pub struct KdcConf {
     pub acl_file: Option<PathBuf>,
     /// Stash file for the master key.
     pub key_stash_file: Option<PathBuf>,
-    /// User to drop to after binding a privileged port.
-    pub kdc_user: Option<String>,
     /// `allow_weak_crypto`.
     pub allow_weak_crypto: Option<bool>,
     /// `allow_rc4` (`[libdefaults]` / `[kdcdefaults]`).
