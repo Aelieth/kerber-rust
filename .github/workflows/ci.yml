@@ -268,8 +268,6 @@ jobs:
       - name: kadmin containers cleanup
         if: always()
         run: docker rm -f kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
-      - name: policy-gate (MIT kadmin addpol/modpol/getpol/delpol/listpols + kinit lockout)
-        run: ./scripts/policy-gate.sh
       - name: history-mit-gate (MIT kadmin.local history-window oracle)
         run: ./scripts/history-mit-gate.sh
       - name: shared topology cleanup
@@ -352,6 +350,8 @@ jobs:
         run: ./scripts/postdate-gate.sh
       - name: getprivs-gate (MIT kadmin getprivs limited ACL actor)
         run: ./scripts/getprivs-gate.sh
+      - name: policy-gate (MIT kadmin addpol/modpol/getpol/delpol/listpols + kinit lockout)
+        run: ./scripts/policy-gate.sh
       - name: prop-acl-gate (MIT kprop unauthorized GSS peer refused)
         run: ./scripts/prop-acl-gate.sh
       - name: restart-gate (persist mutation survives KDC relaunch)

@@ -2506,6 +2506,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **ci.** `policy-gate` runs in `harness-2` instead of `harness`: the kadmin
+  query checks added seconds to `harness`, whose last five main-push runs
+  reached 290 s of 270; `harness-2` keeps under its 300 s. No budget changes.
 - **tool.** `scripts/ci-policy.py` is a shim over the `scripts/ci_policy/`
   package, one module per domain and the self-test one file per domain;
   `py-move-check.py` proved the split a pure move, output byte-identical.
