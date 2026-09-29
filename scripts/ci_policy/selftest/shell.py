@@ -299,12 +299,34 @@ def _self_test_shell() -> None:
                       'kadmin_q "addprinc z"\n'),
         "d-gate.sh": 'docker exec "$NAME" /tmp/krb5-kadmin-local -q "getprinc x"\n',
         "lib/e.sh": 'kadmin.local -q "x"\n',
-        "capaths-transit-gate.sh": ('docker exec -i "$NAME" bash <<EOF\nkad() {\n    kadmin.local -r "\\$2" -q "\\$*"\n}\n'
-                                    'EOF\nkadmin.local -q "outside"\n'),
+        "h-gate.sh": ('echo "==== setup ===="\ndocker exec -i "$NAME" bash <<EOF\nkad() {\n'
+                      '    kadmin.local -r "\\$2" -q "\\$*"\n}\nEOF\nkadmin.local -q "outside"\n'),
+        "r-gate.sh": ("echo '==== race ===='\n"
+                      'docker exec "$NAME" sh -c \'\n  exec 3>/tmp/f\n  kadmin -p a -w b -q "addprinc r"\n'
+                      '  echo q >&3\n\'\nX="$(docker exec "$NAME" sh -c "$1" 2>&1)"\n'),
     }
-    check_kadmin_q_via_lib(kq_files, allow=4)
+    kq_keys = (("h-gate.sh", "setup", 1, "heredoc"), ("r-gate.sh", "race", 1, "fifo"))
+    check_kadmin_q_via_lib(kq_files, allow=4, exceptions=kq_keys)
     _must_die_msg("5 direct kadmin queries", check_kadmin_q_via_lib, {**kq_files, "f-gate.sh": 'kadmin.local -q "x"\n'},
-                  allow=4)
+                  allow=4, exceptions=kq_keys)
+    # A second direct query in an excepted gate outside its keyed section counts.
+    _must_die_msg("5 direct kadmin queries", check_kadmin_q_via_lib,
+                  {**kq_files, "r-gate.sh": kq_files["r-gate.sh"] + "echo '==== next ===='\nkadmin.local -q 'x'\n"},
+                  allow=4, exceptions=kq_keys)
+    # A host-side query in the keyed section is not inside its container script: it counts.
+    _must_die_msg("5 direct kadmin queries", check_kadmin_q_via_lib,
+                  {**kq_files, "r-gate.sh": kq_files["r-gate.sh"] + 'docker exec "$NAME" kadmin.local -q "y"\n'},
+                  allow=4, exceptions=kq_keys)
+    # A host-side query dressed in `sh -c` outside a keyed section counts, one line or several.
+    _must_die_msg("6 direct kadmin queries", check_kadmin_q_via_lib,
+                  {**kq_files, "s-gate.sh": ('docker exec "$NAME" sh -c \'kadmin.local -q "x"\'\n'
+                                             'docker exec "$NAME" sh -c "\n  kadmin.local -q \\"y\\"\n"\n')},
+                  allow=4, exceptions=kq_keys)
+    # An exception whose site is gone, or that matches more sites than keyed, is an error.
+    _must_die_msg("r-gate.sh 'race' matched 0 site(s), keyed 1", check_kadmin_q_via_lib,
+                  {**kq_files, "r-gate.sh": "echo '==== race ===='\n"}, allow=4, exceptions=kq_keys)
+    _must_die_msg("h-gate.sh 'setup' matched 1 site(s), keyed 2", check_kadmin_q_via_lib, kq_files, allow=4,
+                  exceptions=(("h-gate.sh", "setup", 2, "heredoc"), kq_keys[1]))
     # Dead shell functions: a gate's own function lives only through a call in that gate, a lib function
     # through one anywhere; comments and definitions are not calls; a call from a dead body does not count.
     dead_files = {

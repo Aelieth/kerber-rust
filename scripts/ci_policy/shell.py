@@ -682,12 +682,23 @@ def check_no_duplicate_functions(files: dict[str, str] | None = None, allow: int
 
 # Direct `kadmin` / `kadmin.local` / `krb5-kadmin(-local)` queries (`-q`) in the gates; S6.2 moves them
 # behind the scripts/lib helpers. The rule is the S6.2 classifier's: one logical line (continuations
-# joined, comments dropped), heredoc bodies included, the query's own `-q`. Advisory while the allow
-# equals the live count. One query cannot come from scripts/lib: capaths-transit-gate.sh defines `kad`
-# inside the heredoc it runs in the container.
-KADMIN_Q_DIRECT_ALLOW = 558
-_KADMIN_Q_EXCEPTION = ("capaths-transit-gate.sh", "kad")
+# joined, comments dropped), heredoc bodies included, the query's own `-q`. Pinned at the live count.
+KADMIN_Q_DIRECT_ALLOW = 556
+# The queries that cannot come from scripts/lib: each runs inside a container script (a `docker exec … sh -c`
+# body or a heredoc fed to one) between in-container steps, where no host function exists. Keyed by
+# (gate, the section's `==== title ====`, the number of sites, the reason); an exception matches only a query
+# inside a container script of that section, exactly that many, and one whose sites are gone is an error.
+KADMIN_Q_EXCEPTIONS: tuple[tuple[str, str, int, str], ...] = (
+    ("capaths-transit-gate.sh", "MIT kdb5_util A/B/C", 1,
+     "the heredoc's `kad` runs kadmin.local -r per realm with that realm's KRB5_KDC_PROFILE in one container shell"),
+    ("kadmin-local-gate.sh", "local setstr does not clobber concurrent kadmind create", 1,
+     "the kadmind addprinc must land while the fifo-fed krb5-kadmin-local session holds the store"),
+    ("kadmin-local-gate.sh", "setstr does not clobber concurrent kadmind create", 1,
+     "the kadmind addprinc must land while the fifo-fed krb5-kadmin-local session holds the store"),
+)
 _KADMIN_CMD = re.compile(r"(?:^|[^\w.-])(?:[\w./$-]*/)?(?:krb5-)?kadmin(?:\.local|-local)?(?=\s)")
+_GATE_SECTION = re.compile(r"""^\s*echo\s+(["'])====\s*(.*?)\s*====\1\s*$""")
+_CONTAINER_SH = re.compile(r"""\bdocker\s+exec\b.*?\b(?:ba)?sh\s+-c\s+(['"])""")
 
 
 def _strip_word_comment(line: str) -> str:
@@ -726,47 +737,93 @@ def _segment_end(code: str, start: int) -> int:
     return len(code)
 
 
-def kadmin_direct_queries(text: str) -> list[tuple[int, str | None]]:
-    """(line, the heredoc function it sits in or None) of every direct kadmin query in a script."""
-    out: list[tuple[int, str | None]] = []
+def _quote_close(text: str, quote: str, start: int = 0) -> int:
+    """The index of the quote that ends a `quote`-quoted string running from `start`, or -1 past the line."""
+    if quote == "'":
+        return text.find("'", start)
+    i = start
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
+            continue
+        if text[i] == '"':
+            return i
+        i += 1
+    return -1
+
+
+def kadmin_direct_queries(text: str) -> list[tuple[int, str | None, bool]]:
+    """(line, the section title it sits under or None, inside a container script) of every direct kadmin query
+    in a script. A container script is a heredoc opened on a `docker exec` line, or the quoted body of a
+    `docker exec … sh -c` that runs past its line."""
+    out: list[tuple[int, str | None, bool]] = []
+    section: str | None = None
     heredoc: str | None = None
-    heredoc_fn: str | None = None
+    heredoc_in = False
+    body_quote: str | None = None
     for ln, raw in enumerate(_join_shell_continuations(text).split("\n"), 1):
         if heredoc is not None:
             if re.match(rf"^\s*{re.escape(heredoc)}\s*['\")\s;]*$", raw):
-                heredoc, heredoc_fn = None, None
+                heredoc = None
                 continue
-            m = re.match(r"^\s*([A-Za-z_]\w*)\(\)\s*\{\s*$", raw)
+            body = (0, len(raw)) if heredoc_in else None
+            code = raw
+        elif body_quote is not None:
+            end = _quote_close(raw, body_quote)
+            body = (0, len(raw) if end < 0 else end)
+            code = raw
+        else:
+            m = _GATE_SECTION.match(raw)
             if m:
-                heredoc_fn = m.group(1)
-            elif re.match(r"^\s*\}\s*$", raw):
-                heredoc_fn = None
-        code = _strip_word_comment(raw)
+                section = m.group(2)
+            code = _strip_word_comment(raw)
+            m = _CONTAINER_SH.search(code)
+            body = (m.end(), len(code)) if m and _quote_close(code, m.group(1), m.end()) < 0 else None
         if code.strip():
             for m in _KADMIN_CMD.finditer(code):
                 seg = code[m.end():_segment_end(code, m.end())]
                 if re.search(r"(?:^|\s)-q(?:\s|$|\")", seg):
-                    out.append((ln, heredoc_fn if heredoc is not None else None))
-        if heredoc is None:
-            h = re.search(r"<<(-?)\s*['\"]?([A-Za-z_]\w*)['\"]?", code)
-            if h and code[h.start():h.start() + 3] != "<<<":
-                heredoc = h.group(2)
+                    out.append((ln, section, body is not None and body[0] <= m.start() < body[1]))
+        if heredoc is not None:
+            continue
+        if body_quote is not None:
+            if _quote_close(raw, body_quote) >= 0:
+                body_quote = None
+            continue
+        if body is not None:
+            body_quote = _CONTAINER_SH.search(code).group(1)
+            continue
+        h = re.search(r"<<(-?)\s*['\"]?([A-Za-z_]\w*)['\"]?", code)
+        if h and code[h.start():h.start() + 3] != "<<<":
+            heredoc = h.group(2)
+            heredoc_in = re.search(r"\bdocker\s+exec\b", code[:h.start()]) is not None
     return out
 
 
-def check_kadmin_q_via_lib(files: dict[str, str] | None = None, allow: int | None = None) -> None:
-    """No gate runs a kadmin query itself: every `kadmin -q` / `kadmin.local -q` goes through a
-    scripts/lib helper (advisory at KADMIN_Q_DIRECT_ALLOW; the capaths-transit heredoc `kad` excepted)."""
+def check_kadmin_q_via_lib(files: dict[str, str] | None = None, allow: int | None = None,
+                           exceptions: tuple[tuple[str, str, int, str], ...] | None = None) -> None:
+    """No gate runs a kadmin query itself: every `kadmin -q` / `kadmin.local -q` goes through a scripts/lib
+    helper (pinned at KADMIN_Q_DIRECT_ALLOW), bar the container-script sites KADMIN_Q_EXCEPTIONS keys."""
     if files is None:
         files = {p.name: p.read_text(encoding="utf-8") for p in sorted(SCRIPTS.glob("*-gate.sh"))}
     allow = KADMIN_Q_DIRECT_ALLOW if allow is None else allow
-    hits = [
-        f"{name}:{ln}"
-        for name, body in files.items()
-        if name.endswith("-gate.sh")
-        for ln, fn in kadmin_direct_queries(body)
-        if (name, fn) != _KADMIN_Q_EXCEPTION
-    ]
+    exceptions = KADMIN_Q_EXCEPTIONS if exceptions is None else exceptions
+    keyed = {(gate, title): n for gate, title, n, _ in exceptions}
+    matched: dict[tuple[str, str], int] = dict.fromkeys(keyed, 0)
+    hits = []
+    for name, body in files.items():
+        if not name.endswith("-gate.sh"):
+            continue
+        for ln, section, inside in kadmin_direct_queries(body):
+            key = (name, section or "")
+            if inside and key in keyed:
+                matched[key] += 1
+            else:
+                hits.append(f"{name}:{ln}")
+    wrong = [f"{g} '{t}' matched {matched[(g, t)]} site(s), keyed {n}" for (g, t), n in keyed.items()
+             if matched[(g, t)] != n]
+    if wrong:
+        _die("kadmin query exception(s) out of step with their sites: " + "; ".join(wrong))
     if len(hits) != allow:
         _die(f"{len(hits)} direct kadmin queries in the gates, allow {allow}: " + ", ".join(hits[:8]))
 
