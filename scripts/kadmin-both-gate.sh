@@ -393,7 +393,7 @@ z11_leg() {
     kadmin_q_ok kadm "$fixture" adminpassword 'addpol -minlength 8 shortpol'
     kadmin_q_ok kadm "$fixture" adminpassword 'addpol -maxlife 30d z1pw'
     if [ "$leg" = rust ]; then
-        kadmin_q_try kadm "$fixture" adminpassword 'addprinc -pw adminpassword admin/admin' 
+        kadmin_q_try kadm "$fixture" adminpassword 'addprinc -pw adminpassword admin/admin'
     fi
     z11_restart "$ctn" "$leg"
 

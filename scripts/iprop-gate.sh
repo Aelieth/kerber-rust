@@ -264,7 +264,7 @@ for _ in $(seq 1 40); do
     sleep 0.25
 done
 if [ "$ok" != 1 ]; then
-    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>&1 
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>&1
     docker exec "$NAME" cat /tmp/kpropd-iprop.log >&2 || true
     log "iprop.gate" "error" ',"error":"MIT replica missing user after full-resync kprop"'
     exit 1
@@ -358,8 +358,8 @@ if [ "$FR" -gt 1 ]; then
 fi
 echo "$DELTA_LOG" | grep -qi 'Got incremental updates'
 if [ "$ok" != 1 ]; then
-    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc extra' 2>&1 
-    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>&1 
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc extra' 2>&1
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>&1
     docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kdb5_util dump /tmp/after-delta.dump 2>&1 || true
     echo "==== replica dump extra ===="
     docker exec "$NAME" grep extra /tmp/after-delta.dump 2>/dev/null || true
@@ -387,7 +387,7 @@ for _ in $(seq 1 40); do
     sleep 1
 done
 if [ "$ok" != 1 ]; then
-    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc ihist' 2>&1 
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc ihist' 2>&1
     docker exec "$NAME" cat /tmp/kpropd-iprop.log >&2 || true
     log "iprop.gate" "error" ',"error":"MIT replica missing ihist with its policy after the history chpass"'
     exit 1

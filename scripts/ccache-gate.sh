@@ -27,7 +27,7 @@ if ! docker exec "$NAME" cc -o /tmp/ccache-mit-remove /tmp/ccache-mit-remove.c -
     exit 1
 fi
 
-kadmin_q_try mit_kadmin_local "$NAME" -- -q 'addprinc -pw extrapass extra' >/dev/null 2>&1 
+kadmin_q_try mit_kadmin_local "$NAME" -- -q 'addprinc -pw extrapass extra' >/dev/null 2>&1
 
 echo "==== FILE parse→to_bytes identity of MIT kinit cache ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_ident user@KERBER.TEST'

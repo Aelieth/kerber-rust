@@ -253,7 +253,7 @@ docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log ||
 }
 
 echo "==== PKINIT TGT has no H; +requires_hwauth host is NO HW PREAUTH ===="
-kadmin_q_try mit_kadmin_local "$NAME" -- -q 'delstr host/testhost.kerber.test require_auth' 
+kadmin_q_try mit_kadmin_local "$NAME" -- -q 'delstr host/testhost.kerber.test require_auth'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_hwauth host/testhost.kerber.test'
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
 set +e

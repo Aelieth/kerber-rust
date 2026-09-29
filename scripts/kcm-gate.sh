@@ -49,7 +49,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kswitch" "$KCM":/tmp/krb5-kswi
 docker cp "$ROOT/harness/kcm/krb5.conf" "$KCM":/etc/krb5.conf
 docker exec "$KCM" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy /tmp/krb5-kswitch
 
-kadmin_q_try mit_kadmin_local "$MIT" -- -q 'addprinc -pw extrapass extra' >/dev/null 2>&1 
+kadmin_q_try mit_kadmin_local "$MIT" -- -q 'addprinc -pw extrapass extra' >/dev/null 2>&1
 
 kcm_exec() {
     docker exec -e KRB5_CONFIG=/etc/krb5.conf -e KRB5CCNAME=KCM: "$KCM" "$@"

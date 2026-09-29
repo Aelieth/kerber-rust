@@ -140,7 +140,7 @@ wait_bound_free_in "$NAME" "$PROXY_PORT" udp || die "proxy :$PROXY_PORT already 
 docker exec -d "$NAME" python3 /tmp/kdc-req-proxy.py "$PROXY_PORT" 127.0.0.1 88 /tmp/cdiff/live.jsonl
 wait_udp_in "$NAME" "$PROXY_PORT" || die "kdc-req-proxy did not listen"
 
-kadmin_q_try mit_kadmin_local "$NAME" -- -q 'addprinc -randkey WELLKNOWN/ANONYMOUS@KERBER.TEST' >/dev/null 
+kadmin_q_try mit_kadmin_local "$NAME" -- -q 'addprinc -randkey WELLKNOWN/ANONYMOUS@KERBER.TEST' >/dev/null
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/user.keytab -norandkey user' >/dev/null
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/host.keytab -norandkey host/testhost.kerber.test' >/dev/null
 

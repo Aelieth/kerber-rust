@@ -118,7 +118,7 @@ docker exec "$NAME_MIT" sh -c 'cat >/tmp/mit-iprop-kdc.conf <<EOF
         iprop_master_ulogsize = 1000
     }
 EOF'
-kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -randkey kiprop/testhost.kerber.test' 
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -randkey kiprop/testhost.kerber.test'
 docker exec -d -e KRB5_KDC_PROFILE=/tmp/mit-iprop-kdc.conf "$NAME_MIT" kadmind
 ok=0
 for _ in $(seq 1 40); do
@@ -225,16 +225,16 @@ echo "$MIT_HIST_BEFORE"
 echo "$MIT_HIST_BEFORE" | grep -F 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".' \
     || { echo "MIT kadmin/history before first policy chpass: $MIT_HIST_BEFORE" >&2; exit 1; }
 
-kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addpol -minlength 8 -history 2 a8pol' 
-kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw a8-initial-secret -policy a8pol a8u' 
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addpol -minlength 8 -history 2 a8pol'
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw a8-initial-secret -policy a8pol a8u'
 MIT_A8CPW="$(mit_kadmin_local "$NAME_MIT" -- -q 'cpw -pw sh a8u' 2>&1 || true)"
 echo "$MIT_A8CPW"
 echo "$MIT_A8CPW" | grep -F 'Password is too short while changing password for "a8u@KERBER.TEST".'
 MIT_A8HIST="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$MIT_A8HIST" | grep -F 'Principal: kadmin/history@KERBER.TEST'
-kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addpol -history 2 g3bhist' 
-kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw hist-secret -policy g3bhist histee' 
-kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'cpw -pw hist-rotated histee' 
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addpol -history 2 g3bhist'
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw hist-secret -policy g3bhist histee'
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'cpw -pw hist-rotated histee'
 MIT_HIST_GET="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$MIT_HIST_GET"
 echo "$MIT_HIST_GET" | grep -F 'Principal: kadmin/history@KERBER.TEST'
@@ -577,7 +577,7 @@ echo "$MIT_MODM" | grep -F 'Password minimum life is greater than password maxim
     exit 1
 }
 echo "==== MIT modprinc +0x1ffffffff truncates ===="
-kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw hex-secret hexu' 
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw hex-secret hexu'
 MIT_HEXF="$(mit_kadmin_local "$NAME_MIT" -- -q 'modprinc +0x1ffffffff hexu' 2>&1 || true)"
 echo "$MIT_HEXF"
 echo "$MIT_HEXF" | grep -F 'Principal "hexu@KERBER.TEST" modified.'
@@ -667,7 +667,7 @@ MIT_GETNM="$(mit_kadmin_local "$NAME_MIT" -- -q 'getpol nomax' 2>&1 || true)"
 echo "$MIT_GETNM"
 diff <(echo "$GETNM" | grep -v '^Authenticating') <(echo "$MIT_GETNM" | grep -v -e '^Authenticating' -e 'No dictionary file')
 echo "==== MIT purgekeys locked-down target is allowed ===="
-kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw lock-secret lockp' 
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw lock-secret lockp'
 kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc +lockdown_keys lockp'
 MIT_PURGE_L="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'purgekeys lockp' 2>&1 || true)"
 echo "$MIT_PURGE_L"
@@ -738,7 +738,7 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen with -maxlife 42x"'
     exit 1
 fi
-kadmin_q_try mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw x life42' 
+kadmin_q_try mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw x life42'
 MIT_LIFE42="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprinc life42' 2>&1 || true)"
 echo "$MIT_LIFE42"
 echo "$MIT_LIFE42" | grep -F 'Maximum ticket life: 0 days 00:00:42' || {

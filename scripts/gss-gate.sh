@@ -37,9 +37,9 @@ kadmin_local() {
 }
 
 echo "==== kadmin.local listprincs ===="
-kadmin_q_try kadmin_local "listprincs" 
+kadmin_q_try kadmin_local "listprincs"
 # Old images swallowed ktadd; ensure the host principal and keytab exist.
-kadmin_q_try kadmin_local "addprinc -randkey host/testhost.kerber.test" 
+kadmin_q_try kadmin_local "addprinc -randkey host/testhost.kerber.test"
 kadmin_q_ok kadmin_local "ktadd -k /etc/krb5kdc/testhost.keytab host/testhost.kerber.test"
 if ! docker exec "$NAME" test -s /etc/krb5kdc/testhost.keytab; then
     log "gss.gate" "error" ',"error":"testhost.keytab missing after ktadd"'

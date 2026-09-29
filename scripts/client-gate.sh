@@ -196,7 +196,7 @@ echo "==== C1 Rust krb5-kinit KEY_EXP with no kpasswd listener: banner, then the
 if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',464),0.3)" 2>/dev/null; then
     die "C1 needs nothing listening on 464 in $NAME"
 fi
-kadmin_q_try mit_kadmin_local "$NAME" -- -q 'delprinc -force s4kc1' >/dev/null 2>&1 
+kadmin_q_try mit_kadmin_local "$NAME" -- -q 'delprinc -force s4kc1' >/dev/null 2>&1
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw exp-old -pwexpire 2020-01-01 s4kc1' >/dev/null
 docker exec -e KRB5_PASSWORD=exp-old -e KRB5_NEW_PASSWORD=exp-new "$NAME" \
     sh -c '/tmp/krb5-kinit -c /tmp/cc_s4kc1 s4kc1@KERBER.TEST >/tmp/s4kc1.out 2>/tmp/s4kc1.err; echo $? >/tmp/s4kc1.rc'

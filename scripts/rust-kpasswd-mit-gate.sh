@@ -63,7 +63,7 @@ fi
 # keyexp_run TAG PRINCIPAL CCACHE: Rust krb5-kinit with an expired password and
 # KRB5_NEW_PASSWORD; stdout, stderr and rc land in /tmp/TAG.{out,err,rc}.
 keyexp_run() {
-    kadmin_q_try mit_kadmin_local "$NAME" -- -q "delprinc -force $2" >/dev/null 2>&1 
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q "delprinc -force $2" >/dev/null 2>&1
     kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -pw exp-old -pwexpire 2020-01-01 $2" >/dev/null
     docker exec -e KRB5_PASSWORD=exp-old -e KRB5_NEW_PASSWORD=exp-new "$NAME" \
         sh -c "/tmp/krb5-kinit -c $3 $2@KERBER.TEST >/tmp/$1.out 2>/tmp/$1.err; echo \$? >/tmp/$1.rc"
