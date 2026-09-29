@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/proc-common.sh"
 need_bins krb5-kdc krb5-kdb krb5-forge-tgt krb5-pac-extract \
     krb5-kadmin-local krb5-kinit krb5-kvno krb5-klist
 
@@ -18,24 +19,6 @@ CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')
 export CORRELATION_ID
 OUT="$SCRATCH/rc4-session-gate"
 mkdir -p "$OUT"
-
-kill_comm() {
-    local comm_name=$1
-    docker exec "$NAME" sh -c '
-name="$1"
-for comm in /proc/[0-9]*/comm; do
-    [ -f "$comm" ] || continue
-    read -r n < "$comm" || continue
-    if [ "$n" = "$name" ]; then
-        pid=${comm#/proc/}
-        pid=${pid%/comm}
-        kill "$pid" 2>/dev/null || true
-    fi
-done
-' sh "$comm_name"
-}
-
-
 
 tkt_etype_of() {
     printf '%s\n' "$1" | awk '/krbtgt\//{getline; sub(/.*tkt\):[ \t]*/, ""); print; exit}'
@@ -102,7 +85,7 @@ docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test session_en
 docker exec "$NAME" kadmin.local -q 'getprinc rc4user' | tee "$OUT/mit-getprinc-rc4user.txt"
 
 echo "==== restart MIT krb5kdc via /proc/*/comm ===="
-kill_comm krb5kdc
+term_comm krb5kdc
 wait_gone_in "$NAME" 88 || die "MIT krb5kdc still bound :88 after kill"
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -270,7 +253,7 @@ docker exec "$NAME" grep -q allow_rc4 /etc/krb5kdc/kdc.conf || die "kdc.conf los
 if docker exec "$NAME" grep -q allow_rc4 /etc/krb5.conf; then
     die "krb5.conf still carries allow_rc4"
 fi
-kill_comm krb5kdc
+term_comm krb5kdc
 wait_gone_in "$NAME" 88 || die "MIT krb5kdc still bound :88 after kill (D)"
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
@@ -398,7 +381,7 @@ print("kdc krb5.conf permitted_enctypes lines:", n or 1)
 PY
 docker exec "$NAME" grep -E '^\s*permitted_enctypes = aes256-cts-hmac-sha1-96$' /tmp/krb5-e-kdc.conf >/dev/null ||
     die "E) /tmp/krb5-e-kdc.conf lacks the aes256-only permitted_enctypes"
-kill_comm krb5kdc
+term_comm krb5kdc
 wait_gone_in "$NAME" 88 || die "MIT krb5kdc still bound :88 after kill (E)"
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \

@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/proc-common.sh"
 need_bins krb5-kdc krb5-kpropd kprop-expired-apreq
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -210,22 +211,6 @@ print("e_text_hex=" + etext.hex())
 assert code == 40, code
 assert etext == b"Invalid message type\x00", etext
 ' "$port"
-}
-
-kill_comm() {
-    local comm="$1"
-    docker exec "$NAME" sh -c '
-comm="'"$comm"'"
-for f in /proc/[0-9]*/comm; do
-    [ -f "$f" ] || continue
-    read -r name < "$f" || continue
-    if [ "$name" = "$comm" ]; then
-        pid=${f#/proc/}
-        pid=${pid%/comm}
-        kill -9 "$pid" 2>/dev/null || true
-    fi
-done
-'
 }
 
 need_image

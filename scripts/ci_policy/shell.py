@@ -638,7 +638,7 @@ def check_no_host_tmp_writes(
 
 # Copies beyond the first of each byte-identical column-0 shell function in scripts/*.sh and
 # scripts/lib/*.sh (S6.2 moves them into scripts/lib/). Advisory while the allow equals the live count.
-DUPLICATE_FUNCTIONS_ALLOW = 6
+DUPLICATE_FUNCTIONS_ALLOW = 2
 _SHELL_FUNCTION = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{\s*$")
 
 
