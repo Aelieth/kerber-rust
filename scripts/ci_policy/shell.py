@@ -684,7 +684,7 @@ def check_no_duplicate_functions(files: dict[str, str] | None = None, allow: int
 # joined, comments dropped), heredoc bodies included, the query's own `-q`. Pinned at the live count.
 KADMIN_Q_DIRECT_ALLOW = 0
 # The same count over scripts/lib/*.sh but lib/kadmin-q.sh itself (the runners' home); pinned exactly.
-KADMIN_Q_DIRECT_LIB_ALLOW = 6
+KADMIN_Q_DIRECT_LIB_ALLOW = 0
 # The queries that cannot come from scripts/lib: each runs inside a container script (a `docker exec … sh -c`
 # body or a heredoc fed to one) between in-container steps, where no host function exists. Keyed by
 # (gate, the section's `==== title ====`, the number of sites, the reason); an exception matches only a query

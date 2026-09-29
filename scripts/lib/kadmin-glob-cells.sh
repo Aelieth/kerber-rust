@@ -15,7 +15,7 @@ hist_shape() {
 alias_cells() {
     local ctn=$1 conf=$2 admin=$3 leg=$4
     kq() {
-        docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$1" -w "$2" -q "$3" 2>&1 || true
+        mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$1" -w "$2" -q "$3" 2>&1 || true
     }
     kadm() { kq "$admin" adminpassword "$1"; }
     kinit_alias() {
@@ -135,7 +135,7 @@ alias_cells() {
 glob_cells() {
     local ctn=$1 conf=$2 admin=$3 leg=$4 out=$5
     kg() {
-        docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$admin" -w adminpassword -q "$1" 2>&1 || true
+        mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$admin" -w adminpassword -q "$1" 2>&1 || true
     }
     echo "==== $leg glob: fixtures ===="
     for pr in ga1 ga2 gb1 gaa ga.1; do
