@@ -121,6 +121,28 @@ pub fn scratch_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// A UDP socket and a TCP listener on one ephemeral loopback port, the pair a KDC serves on.
+///
+/// The kernel picks a UDP port that is free for UDP; another socket of a parallel test run can
+/// hold the same port for TCP, so the pair is bound again on `AddrInUse`.
+///
+/// # Panics
+///
+/// Panics on a bind error other than `AddrInUse`, or when 64 tries find no free pair.
+#[must_use]
+pub fn loopback_udp_tcp() -> (std::net::UdpSocket, std::net::TcpListener) {
+    for _ in 0..64 {
+        let udp = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind UDP 127.0.0.1:0");
+        let addr = udp.local_addr().expect("UDP local_addr");
+        match std::net::TcpListener::bind(addr) {
+            Ok(tcp) => return (udp, tcp),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {}
+            Err(e) => panic!("bind TCP {addr}: {e}"),
+        }
+    }
+    panic!("no free loopback UDP + TCP port pair in 64 tries");
+}
+
 /// IANA etype numbers in MIT `preferred()` order.
 ///
 /// Replaces the local `pref_etypes` copies in `krb5-kdc` tests. The two

@@ -885,9 +885,8 @@ mod tests {
     #[test]
     fn udp_oversize_reply_is_response_too_big() {
         let (store, _) = bootstrap_documented().unwrap();
-        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
         let addr = udp.local_addr().unwrap();
-        let tcp = TcpListener::bind(addr).unwrap();
         let flag = Arc::new(AtomicBool::new(false));
         let store = shared_store(store);
         let f2 = Arc::clone(&flag);
@@ -922,9 +921,8 @@ mod tests {
     #[test]
     fn serve_until_stops_on_flag() {
         let (store, _) = bootstrap_documented().unwrap();
-        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
         let addr = udp.local_addr().unwrap();
-        let tcp = TcpListener::bind(addr).unwrap();
         let flag = Arc::new(AtomicBool::new(false));
         let store = shared_store(store);
         let f2 = Arc::clone(&flag);
@@ -988,9 +986,8 @@ mod tests {
         // newcomer. With cap 2, a third connection shuts down the first; its read = EOF.
         use std::io::Read as _;
         let (store, _) = bootstrap_documented().unwrap();
-        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
         let addr = udp.local_addr().unwrap();
-        let tcp = TcpListener::bind(addr).unwrap();
         let flag = Arc::new(AtomicBool::new(false));
         let store = shared_store(store);
         let f2 = Arc::clone(&flag);

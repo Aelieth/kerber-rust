@@ -235,7 +235,6 @@ fn ap_req_checksum_uses_declared_type() {
 #[test]
 fn exchange_tcp_and_udp_round_trip_local_kdc() {
     use std::io::{Read, Write};
-    use std::net::{TcpListener, UdpSocket};
     use std::thread;
 
     use krb5_protocol::{KdcAddr, exchange};
@@ -259,9 +258,8 @@ fn exchange_tcp_and_udp_round_trip_local_kdc() {
     })
     .unwrap();
 
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let udp_port = udp.local_addr().unwrap().port();
-    let tcp = TcpListener::bind(("127.0.0.1", udp_port)).unwrap();
     let reply_u = reply.clone();
     thread::spawn(move || {
         let mut buf = [0u8; 4096];
@@ -629,7 +627,6 @@ fn fast_preauth_retry_carries_fx_fast() {
 
 #[test]
 fn fast_client_continue_uses_etype20_from_info2() {
-    use std::net::UdpSocket;
     use std::thread;
 
     use krb5_crypto::{EncryptionType, string_to_key};
@@ -667,9 +664,8 @@ fn fast_client_continue_uses_etype20_from_info2() {
         cname: cname.clone(),
     };
 
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let port = addr.port();
     let tgt_first = store.krbtgt().unwrap().first_current_key().unwrap().etype;
     let store = shared_store(store);

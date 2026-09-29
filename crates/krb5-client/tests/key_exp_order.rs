@@ -10,7 +10,6 @@
 //! before the changepw AS, and the KDC error is matched by its code, not its text.
 
 use std::io::{Read, Write};
-use std::net::{TcpListener, UdpSocket};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::thread;
@@ -25,10 +24,9 @@ use krb5_types::PrincipalName;
 
 /// Serve `store` on UDP and TCP at one ephemeral port; returns `host:port`.
 fn serve(store: PrincipalStore) -> String {
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     udp.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     let addr = udp.local_addr().unwrap();
-    let tcp = TcpListener::bind(addr).unwrap();
     let store = Arc::new(store);
     let s_udp = store.clone();
     thread::spawn(move || {

@@ -7,7 +7,6 @@
 mod common;
 use common::isolate_host_krb5;
 
-use std::net::UdpSocket;
 use std::thread;
 
 use krb5_client::kinit_to_spec;
@@ -35,9 +34,8 @@ fn config_value(cache: &FileCcache, key: &str, server: &str) -> Option<Vec<u8>> 
 fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
     isolate_host_krb5();
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);

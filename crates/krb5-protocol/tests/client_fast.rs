@@ -22,7 +22,7 @@ use krb5_types::{
     Ticket, ascii, err, ku, pa, try_ascii,
 };
 use std::io::{Read, Write};
-use std::net::{TcpListener, UdpSocket};
+use std::net::UdpSocket;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
@@ -185,9 +185,8 @@ fn as_exchange_records_fast_availability() {
     isolate_host_krb5();
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let port = addr.port();
     let store = shared_store(store);
     thread::spawn(move || {
@@ -241,9 +240,8 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
     isolate_host_krb5();
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let port = addr.port();
     let store = shared_store(store);
     thread::spawn(move || {
@@ -417,10 +415,9 @@ type Rewrite = dyn Fn(&[u8], Vec<u8>) -> Vec<u8> + Send + Sync + 'static;
 /// the KDC, the reply goes through `rewrite(request, reply)`, and the request
 /// count is kept.
 fn mitm(store: PrincipalStore, rewrite: Box<Rewrite>) -> (KdcAddr, Arc<AtomicUsize>) {
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     udp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let addr = udp.local_addr().unwrap();
-    let tcp = TcpListener::bind(addr).unwrap();
     let port = addr.port();
     let count = Arc::new(AtomicUsize::new(0));
     let store = Arc::new(store);

@@ -46,9 +46,8 @@ fn listener_empty_and_truncated_are_dropped() {
 #[test]
 fn udp_listener_answers_wrong_password() {
     let (store, _) = bootstrap_documented().unwrap();
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
@@ -74,9 +73,8 @@ fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     let (store, _) = bootstrap_documented().unwrap();
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
         let _ = serve(store, udp, tcp);
@@ -137,9 +135,8 @@ fn tcp_worker_cap_drops_excess_connections() {
     use krb5_kdc::{ListenLimits, serve_until};
 
     let (store, _) = bootstrap_documented().unwrap();
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let flag = Arc::new(AtomicBool::new(false));
     let store = shared_store(store);
     let f2 = Arc::clone(&flag);
@@ -184,9 +181,8 @@ fn listener_chaos_udp_garbage_then_valid() {
     use krb5_kdc::{ListenLimits, serve_until};
 
     let (store, _) = bootstrap_documented().unwrap();
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let flag = Arc::new(AtomicBool::new(false));
     let store = shared_store(store);
     let f2 = Arc::clone(&flag);
@@ -311,9 +307,8 @@ fn serve_until_honours_shutdown_within_the_poll_interval() {
     use krb5_kdc::{ListenLimits, serve_until};
 
     let (store, _) = bootstrap_documented().unwrap();
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
-    let tcp = std::net::TcpListener::bind(addr).unwrap();
     let flag = Arc::new(AtomicBool::new(false));
     let store = shared_store(store);
     let f2 = Arc::clone(&flag);

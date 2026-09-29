@@ -20,7 +20,6 @@ use krb5_types::{
     PaData, PrincipalName, TgsReq, Ticket, TicketFlags, ascii, err, ku, pa,
     spake::{GROUP_EDWARDS25519, PaSpake, SpakeSupport},
 };
-use std::net::UdpSocket;
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -132,15 +131,13 @@ fn pkinit_hint_is_16_147() {
 #[test]
 fn tgs_after_password_as_is_fast_armored() {
     use std::io::{Read, Write};
-    use std::net::TcpListener;
 
     // Capture UDP or TCP: host `udp_preference_limit` (or a FAST body
     // over MIT's 1465 default) must not hide the 136 assert.
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     udp.set_read_timeout(Some(Duration::from_millis(50)))
         .unwrap();
     let addr = udp.local_addr().unwrap();
-    let tcp = TcpListener::bind(addr).unwrap();
     tcp.set_nonblocking(true).unwrap();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {

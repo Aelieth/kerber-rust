@@ -24,7 +24,6 @@ use krb5_types::{
     PrincipalName, TgsRep, TgsReq, Ticket, TicketFlags, ascii, err, flag_bit, ku, pa,
 };
 use std::io::{Read, Write};
-use std::net::{TcpListener, UdpSocket};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -146,11 +145,10 @@ fn unwrapped_tgs_rep(tgt: &AsOutcome, wire: &[u8]) -> Vec<u8> {
 
 #[test]
 fn tgs_unwrapped_fast_is_accepted() {
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     udp.set_read_timeout(Some(Duration::from_millis(50)))
         .unwrap();
     let addr = udp.local_addr().unwrap();
-    let tcp = TcpListener::bind(addr).unwrap();
     tcp.set_nonblocking(true).unwrap();
     let tgt = password_as_tgt();
     let tgt_srv = tgt.clone();
