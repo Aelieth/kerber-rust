@@ -7,19 +7,13 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
+. "$ROOT/scripts/lib/kadmin-common.sh"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 mkdir -p "$SCRATCH"
-_snap_key() {
-    printf '%s\n' "${tree_sha:?}"
-}
-save_rust_snap() {
-    printf '%s\n' "$2" >"$SCRATCH/kadmin-rust-$1"
-    _snap_key >"$SCRATCH/kadmin-rust-$1.key"
-}
 
 if ! command -v docker >/dev/null 2>&1; then
     log "kadmin.gate" "error" ',"error":"docker not available"'
