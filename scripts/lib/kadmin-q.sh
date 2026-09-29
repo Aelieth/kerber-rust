@@ -109,7 +109,7 @@ _kadmin_words() {
 }
 
 # An ERE matching a literal string.
-_kadmin_lit() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|/]/\\&/g'; }
+_kadmin_lit() { printf '%s' "$1" | sed 's/[][\\.^$*+?(){}|]/\\&/g'; }
 
 # A principal name as an ERE; a name without a realm matches the printed name with any realm.
 _kadmin_ere() {
