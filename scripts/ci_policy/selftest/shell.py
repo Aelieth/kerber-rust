@@ -5,8 +5,9 @@ from __future__ import annotations
 import signal
 
 from ..common import ROOT, SCRIPTS
+from ..kadmin_q import check_kadmin_q_via_lib
 from ..shell import (
-    _join_shell_continuations, check_kadmin_q_via_lib, check_no_dead_shell_functions, check_no_duplicate_functions,
+    _join_shell_continuations, check_no_dead_shell_functions, check_no_duplicate_functions,
     check_no_host_tmp_writes, informational_if_starts,
 )
 from .common import _must_die, _must_die_msg

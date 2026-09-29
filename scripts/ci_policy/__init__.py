@@ -35,9 +35,10 @@ from .ledger import (
     check_diffsend_cases, check_ledger_anchors, check_ledger_layout, check_ledger_mit_cites, check_ledger_proof_column,
     check_ledger_tally, check_no_case_whitelists,
 )
+from .kadmin_q import check_kadmin_q_via_lib
 from .selftest import _self_test
 from .shell import (
-    check_kadmin_q_via_lib, check_no_dead_shell_functions, check_no_duplicate_functions, check_no_host_tmp_writes,
+    check_no_dead_shell_functions, check_no_duplicate_functions, check_no_host_tmp_writes,
     check_no_informational_gates,
 )
 from .workflows import (
