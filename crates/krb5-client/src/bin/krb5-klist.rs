@@ -231,13 +231,7 @@ mod tests {
     fn list_file_ccache_prints_renew_until() {
         let cred = sample_cred(1_700_720_000);
         let cc = FileCcache::new(cred.client.clone(), vec![cred]);
-        let path = std::env::temp_dir().join(format!(
-            "krb5cc-klist-renew-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        let path = krb5_testkit::scratch_dir("krb5cc-klist-renew").join("cc");
         cc.write_file(&path).unwrap();
         let spec = CcSpec::File(path.clone());
         list(&spec, false, false).unwrap();

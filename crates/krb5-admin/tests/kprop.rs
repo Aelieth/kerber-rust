@@ -11,7 +11,7 @@ use krb5_types::PrincipalName;
 
 #[test]
 fn kprop_replica_issues_with_same_krbtgt() {
-    let dir = std::env::temp_dir().join(format!("kprop-{}", std::process::id()));
+    let dir = krb5_testkit::scratch_dir("kprop");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
@@ -218,13 +218,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
     let allowed = vec![format!("admin@{TEST_REALM}")];
     let join = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let dir = std::env::temp_dir().join(format!(
-            "kprop-mit-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        let dir = krb5_testkit::scratch_dir("kprop-mit");
         let _ = std::fs::create_dir_all(&dir);
         let db = dir.join("replica");
         let stash = dir.join("stash");
@@ -331,13 +325,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
     let allowed = vec![format!("host/testhost.kerber.test@{TEST_REALM}")];
     let join = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let dir = std::env::temp_dir().join(format!(
-            "kprop-deny-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        let dir = krb5_testkit::scratch_dir("kprop-deny");
         let _ = std::fs::create_dir_all(&dir);
         let db = dir.join("replica");
         let stash = dir.join("stash");
@@ -429,13 +417,7 @@ fn kpropd_rejects_when_acl_unset() {
     let host_for_server = host.clone();
     let join = thread::spawn(move || {
         let (mut stream, _) = listener.accept().unwrap();
-        let dir = std::env::temp_dir().join(format!(
-            "kprop-unset-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        let dir = krb5_testkit::scratch_dir("kprop-unset");
         let _ = std::fs::create_dir_all(&dir);
         let db = dir.join("replica");
         let stash = dir.join("stash");

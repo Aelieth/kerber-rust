@@ -634,13 +634,7 @@ fn modify_policy_floor_code(mask: u32, set: impl Fn(&mut krb5_kdc::NamedPolicy))
 // `persist_paths` points `iprop_master_key` at it. Without this a store has
 // no master key and the encoder refuses to ship keys (see the negative test).
 fn seed_master_key(store: &krb5_kdc::SharedDump) {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-iprop-mk-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos()),
-    ));
+    let dir = krb5_testkit::scratch_dir("krb5-iprop-mk");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");

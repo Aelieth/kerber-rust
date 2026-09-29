@@ -509,16 +509,10 @@ mod tests {
 
     fn record_store(set_default: bool) -> Vec<u16> {
         use std::os::unix::net::UnixListener;
-        use std::sync::atomic::{AtomicU64, Ordering};
         use std::sync::{Arc, Mutex};
         use std::thread;
 
-        static N: AtomicU64 = AtomicU64::new(0);
-        let path = std::env::temp_dir().join(format!(
-            "kcm-ppass-{}-{}.sock",
-            std::process::id(),
-            N.fetch_add(1, Ordering::Relaxed)
-        ));
+        let path = krb5_testkit::scratch_dir("kcm").join("s");
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path).unwrap();
         let ops = Arc::new(Mutex::new(Vec::new()));

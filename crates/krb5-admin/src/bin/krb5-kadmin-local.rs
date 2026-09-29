@@ -998,13 +998,7 @@ mod tests {
 
     #[test]
     fn merge_write_refuses_unparseable() {
-        let dir = std::env::temp_dir().join(format!(
-            "kt-refuse-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        let dir = krb5_testkit::scratch_dir("kt-refuse");
         let _ = std::fs::create_dir_all(&dir);
         let path = dir.join("bad.keytab");
         std::fs::write(&path, b"not-a-keytab").unwrap();

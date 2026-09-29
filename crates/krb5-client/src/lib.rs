@@ -825,14 +825,7 @@ mod tests {
 
     #[test]
     fn discover_kdc_prefers_krb5_conf_over_argv() {
-        let path = std::env::temp_dir().join(format!(
-            "kerber-client-krb5-{}-{}.conf",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let path = krb5_testkit::scratch_dir("kerber-client-krb5").join("krb5.conf");
         std::fs::write(
             &path,
             r"

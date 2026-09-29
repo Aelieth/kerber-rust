@@ -5,13 +5,7 @@ use super::*;
 #[test]
 fn chpass_reload_keeps_concurrent_local_create() {
     use krb5_kdc::{load_store, save_store};
-    let dir = std::env::temp_dir().join(format!(
-        "n7-chpass-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
+    let dir = krb5_testkit::scratch_dir("n7-chpass");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
@@ -52,13 +46,7 @@ fn chpass_reload_keeps_concurrent_local_create() {
 #[test]
 fn extract_reload_sees_local_cpw() {
     use krb5_kdc::{load_store, save_store};
-    let dir = std::env::temp_dir().join(format!(
-        "o3-extract-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
+    let dir = krb5_testkit::scratch_dir("o3-extract");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");

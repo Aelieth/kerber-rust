@@ -474,11 +474,7 @@ fn random_sid_rejects_all_zero() {
 
 #[test]
 fn persist_round_trip_keeps_serial_not_mtime() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-iprop-serial-{}-{}",
-        std::process::id(),
-        unix_now_u32()
-    ));
+    let dir = krb5_testkit::scratch_dir("krb5-iprop-serial");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
@@ -508,11 +504,7 @@ fn persist_round_trip_keeps_serial_not_mtime() {
 
 #[test]
 fn create_host_changepw_flag_survives_save() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-changepw-{}-{}",
-        std::process::id(),
-        unix_now_u32()
-    ));
+    let dir = krb5_testkit::scratch_dir("krb5-changepw");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
@@ -545,11 +537,7 @@ fn create_host_changepw_flag_survives_save() {
 
 #[test]
 fn ktadd_chrand_save_fail_rolls_back_rotation() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-ktadd-chrand-{}-{}",
-        std::process::id(),
-        unix_now_u32()
-    ));
+    let dir = krb5_testkit::scratch_dir("krb5-ktadd-chrand");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
@@ -585,11 +573,7 @@ fn ktadd_chrand_save_fail_rolls_back_rotation() {
 
 #[test]
 fn ktadd_export_fail_rolls_back_rotation() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-ktadd-export-{}-{}",
-        std::process::id(),
-        unix_now_u32()
-    ));
+    let dir = krb5_testkit::scratch_dir("krb5-ktadd-export");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
@@ -622,11 +606,7 @@ fn ktadd_export_fail_rolls_back_rotation() {
 
 #[test]
 fn ktadd_rollback_save_fail_surfaces_both() {
-    let dir = std::env::temp_dir().join(format!(
-        "krb5-ktadd-rbsave-{}-{}",
-        std::process::id(),
-        unix_now_u32()
-    ));
+    let dir = krb5_testkit::scratch_dir("krb5-ktadd-rbsave");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");

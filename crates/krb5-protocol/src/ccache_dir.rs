@@ -224,13 +224,7 @@ mod tests {
 
     #[test]
     fn dir_default_tkt_and_switch() {
-        let dir = std::env::temp_dir().join(format!(
-            "krb5cc-dir-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        let dir = krb5_testkit::scratch_dir("krb5cc-dir").join("cc");
         let _ = fs::remove_dir_all(&dir);
         let residual = dir.to_string_lossy().into_owned();
         assert!(dir_cache_path(&residual).is_err());
@@ -249,13 +243,7 @@ mod tests {
 
     #[test]
     fn dir_resolve_does_not_create() {
-        let dir = std::env::temp_dir().join(format!(
-            "krb5cc-dir-ro-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        ));
+        let dir = krb5_testkit::scratch_dir("krb5cc-dir-ro").join("cc");
         let _ = fs::remove_dir_all(&dir);
         let residual = dir.to_string_lossy().into_owned();
         let err = dir_cache_path(&residual).expect_err("missing DIR");

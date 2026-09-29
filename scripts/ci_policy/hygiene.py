@@ -203,7 +203,7 @@ def check_isolate_test_krb5(
 # `std::env::temp_dir()`, which is host /tmp when TMPDIR is unset. Test scope: files under a crate's
 # `tests/`, `src` files that are test modules (a `tests` path segment, `tests.rs`, `testenv.rs`), and the
 # cfg(test) items of any other `src` file. Pinned at the live count until the tests are fixed.
-TEST_TEMP_DIR_ALLOW = 25
+TEST_TEMP_DIR_ALLOW = 0
 
 
 def test_temp_dir_sites(root: pathlib.Path | None = None) -> list[str]:

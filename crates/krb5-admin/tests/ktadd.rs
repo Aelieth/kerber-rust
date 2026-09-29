@@ -54,13 +54,7 @@ fn ktadd_local_lockdown_rotates_and_extracts() {
 #[test]
 fn ktadd_local_write_fail_does_not_persist_rotation() {
     use krb5_kdc::{load_store, save_store};
-    let dir = std::env::temp_dir().join(format!(
-        "ktadd-atomic-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
+    let dir = krb5_testkit::scratch_dir("ktadd-atomic");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
@@ -89,13 +83,7 @@ fn ktadd_local_write_fail_does_not_persist_rotation() {
 #[test]
 fn setstr_reload_keeps_concurrent_create() {
     use krb5_kdc::{load_store, save_store};
-    let dir = std::env::temp_dir().join(format!(
-        "setstr-race-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_nanos())
-    ));
+    let dir = krb5_testkit::scratch_dir("setstr-race");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");

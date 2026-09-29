@@ -147,7 +147,7 @@ mod tests {
 
     #[test]
     fn open_refuses_symlink_with_nofollow() {
-        let dir = std::env::temp_dir();
+        let dir = krb5_testkit::scratch_dir("krb5-nofollow");
         let pid = std::process::id();
         let target = dir.join(format!("krb5-nofollow-target-{pid}"));
         let link = dir.join(format!("krb5-nofollow-link-{pid}"));
@@ -164,7 +164,7 @@ mod tests {
 
     #[test]
     fn open_refuses_fifo_without_hang() {
-        let path = std::env::temp_dir().join(format!("krb5-nofollow-fifo-{}", std::process::id()));
+        let path = krb5_testkit::scratch_dir("krb5-nofollow-fifo").join("fifo");
         let _ = fs::remove_file(&path);
         let st = std::process::Command::new("mkfifo")
             .arg(&path)

@@ -46,14 +46,7 @@ fn kadmind_wire_create_is_visible_after_reload() {
 
     use krb5_protocol::{build_ap_req, pa_enc_timestamp, tgs_req};
 
-    let dir = std::env::temp_dir().join(format!(
-        "kadmind-wire-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    let dir = krb5_testkit::scratch_dir("kadmind-wire");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
@@ -123,7 +116,7 @@ fn kadmind_wire_create_is_visible_after_reload() {
 
 #[test]
 fn load_acl_file_missing_is_error() {
-    let path = std::env::temp_dir().join(format!("krb5-acl-missing-{}", std::process::id()));
+    let path = krb5_testkit::scratch_dir("krb5-acl-missing").join("acl");
     let _ = std::fs::remove_file(&path);
     assert!(load_acl_file("admin@KERBER.TEST", Some(&path)).is_err());
     let acl = load_acl_file("admin@KERBER.TEST", None).unwrap();
@@ -135,7 +128,7 @@ fn load_acl_file_missing_is_error() {
 
 #[test]
 fn load_acl_file_parses_readable() {
-    let path = std::env::temp_dir().join(format!("krb5-acl-ok-{}", std::process::id()));
+    let path = krb5_testkit::scratch_dir("krb5-acl-ok").join("acl");
     std::fs::write(&path, "admin@KERBER.TEST *\n").unwrap();
     let acl = load_acl_file("other@KERBER.TEST", Some(&path)).unwrap();
     assert!(
