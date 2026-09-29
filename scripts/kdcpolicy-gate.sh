@@ -247,10 +247,10 @@ fi
 docker exec "$NAME" sed -i 's/spake_preauth_indicator = OTHER/spake_preauth_indicator = ONE_HOUR/' /etc/krb5kdc/kdc.conf
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
-docker exec "$NAME" kadmin.local -q 'addprinc -pw userpassword user'
-docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/testhost.kerber.test'
-docker exec "$NAME" kadmin.local -q 'addprinc -pw fail-secret fail'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw userpassword user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/testhost.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw fail-secret fail'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 if ! wait_port_in "$NAME" 88; then

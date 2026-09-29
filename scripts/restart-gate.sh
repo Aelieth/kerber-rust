@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
 need_bins krb5-kdc krb5-kadmind
 
@@ -87,8 +88,8 @@ if [ "$ok" != 1 ]; then
 fi
 
 echo "==== MIT kadmin addprinc extra ===="
-docker exec -e KRB5_CONFIG=/tmp/restart-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/restart-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra'
 echo "==== MIT kinit extra before restart ===="
 docker exec -e KRB5_CONFIG=/tmp/restart-krb5.conf \
     "$NAME" sh -c 'printf "extra-secret\n" | kinit extra@KERBER.TEST'

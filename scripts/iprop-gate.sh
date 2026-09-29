@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
 need_bins krb5-kdc krb5-pac-extract krb5-kadmind krb5-kprop krb5-kpropd krb5-iprop-pull
 
@@ -99,16 +100,16 @@ fi
 
 docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
-docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
-    'addprinc -randkey kiprop/testhost.kerber.test' || true
-docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
+kadmin_q_try mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q \
+    'addprinc -randkey kiprop/testhost.kerber.test'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q \
     'ktadd -k /tmp/iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'
 
 echo "==== full-resync deny is kdb_fullresync_result_t (Rust) ===="
-docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q \
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q \
     'ktadd -k /tmp/user-iprop.keytab user'
 DENY="$(docker exec \
     -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
@@ -239,10 +240,10 @@ docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true
 
 # Policies never travel in the ulog (kdb5.c logs principals only), so the
 # history policy must be in the full dump the replica loads first.
-docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 3 ihp' 2>&1 | grep -v '^Authenticating' || true
-docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getpol ihp' 2>&1 | grep -F 'Policy: ihp'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 3 ihp'
+mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getpol ihp' 2>&1 | grep -F 'Policy: ihp'
 
 echo "==== first contact: Rust kprop -i dump (ipropx last_sno) ===="
 KPROP="$(docker exec \
@@ -256,22 +257,22 @@ echo "$KPROP"
 echo "$KPROP" | grep -q 'kprop ok'
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" kadmin.local -q 'getprinc user' 2>/dev/null | grep -q 'Principal: user@KERBER.TEST'; then
+    if mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>/dev/null | grep -q 'Principal: user@KERBER.TEST'; then
         ok=1
         break
     fi
     sleep 0.25
 done
 if [ "$ok" != 1 ]; then
-    docker exec "$NAME" kadmin.local -q 'getprinc user' 2>&1 || true
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>&1 
     docker exec "$NAME" cat /tmp/kpropd-iprop.log >&2 || true
     log "iprop.gate" "error" ',"error":"MIT replica missing user after full-resync kprop"'
     exit 1
 fi
 
 echo "==== mutate master: MIT kadmin addprinc extra ===="
-ADD="$(docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
+ADD="$(mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw extra-secret extra' 2>&1 || true)"
 echo "$ADD"
 echo "$ADD" | grep -qi 'created'
 
@@ -339,7 +340,7 @@ echo "$ULOG" | grep -q extra
 echo "==== wait MIT kpropd -A GET_UPDATES serial-delta ===="
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" kadmin.local -q 'getprinc extra' 2>/dev/null | grep -q 'Principal: extra@KERBER.TEST'; then
+    if mit_kadmin_local "$NAME" -- -q 'getprinc extra' 2>/dev/null | grep -q 'Principal: extra@KERBER.TEST'; then
         ok=1
         break
     fi
@@ -357,8 +358,8 @@ if [ "$FR" -gt 1 ]; then
 fi
 echo "$DELTA_LOG" | grep -qi 'Got incremental updates'
 if [ "$ok" != 1 ]; then
-    docker exec "$NAME" kadmin.local -q 'getprinc extra' 2>&1 || true
-    docker exec "$NAME" kadmin.local -q 'getprinc user' 2>&1 || true
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc extra' 2>&1 
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>&1 
     docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kdb5_util dump /tmp/after-delta.dump 2>&1 || true
     echo "==== replica dump extra ===="
     docker exec "$NAME" grep extra /tmp/after-delta.dump 2>/dev/null || true
@@ -374,30 +375,30 @@ echo "==== password history propagates: MIT kpropd applies the KADM_DATA record 
 # history as AT_PW_HIST/AT_PW_HIST_KVNO; a policy created meanwhile never
 # travels (kdb5.c), and the replica refuses the remembered password itself.
 for q in 'addpol -history 2 ihp2' 'addprinc -pw i3cret1 -policy ihp ihist' 'cpw -pw i3cret2 ihist'; do
-    docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "$q" 2>&1 | grep -v '^Authenticating' || true
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+        "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q "$q"
 done
 ok=0
 for _ in $(seq 1 40); do
-    if docker exec "$NAME" kadmin.local -q 'getprinc ihist' 2>/dev/null | grep -q 'Policy: ihp'; then
+    if mit_kadmin_local "$NAME" -- -q 'getprinc ihist' 2>/dev/null | grep -q 'Policy: ihp'; then
         ok=1
         break
     fi
     sleep 1
 done
 if [ "$ok" != 1 ]; then
-    docker exec "$NAME" kadmin.local -q 'getprinc ihist' 2>&1 || true
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q 'getprinc ihist' 2>&1 
     docker exec "$NAME" cat /tmp/kpropd-iprop.log >&2 || true
     log "iprop.gate" "error" ',"error":"MIT replica missing ihist with its policy after the history chpass"'
     exit 1
 fi
-REPL_HIST="$(docker exec "$NAME" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+REPL_HIST="$(mit_kadmin_local "$NAME" -- -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$REPL_HIST"
 echo "$REPL_HIST" | grep -F 'Principal: kadmin/history@KERBER.TEST'
-REPL_REUSE="$(docker exec "$NAME" kadmin.local -q 'cpw -pw i3cret1 ihist' 2>&1 || true)"
+REPL_REUSE="$(mit_kadmin_local "$NAME" -- -q 'cpw -pw i3cret1 ihist' 2>&1 || true)"
 echo "$REPL_REUSE"
 echo "$REPL_REUSE" | grep -F 'Cannot reuse password while changing password for "ihist@KERBER.TEST".'
-docker exec "$NAME" kadmin.local -q 'cpw -pw i3cret3 ihist' 2>&1 | grep -F 'Password for "ihist@KERBER.TEST" changed.'
+mit_kadmin_local "$NAME" -- -q 'cpw -pw i3cret3 ihist' 2>&1 | grep -F 'Password for "ihist@KERBER.TEST" changed.'
 
 echo "==== MIT kinit extra on replica after delta ===="
 kill_comm krb5-kdc
@@ -457,11 +458,11 @@ docker exec "$NAME" sh -c 'cat >/tmp/kdc.conf <<EOF
 EOF'
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kdb5_util create -s -P masterpassword
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -pw userpassword user'
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -pw adminpassword admin'
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -randkey kiprop/testhost.kerber.test'
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'addprinc -randkey host/testhost.kerber.test'
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" kadmin.local -q 'ktadd -k /tmp/mit-iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" -- -q 'addprinc -pw userpassword user'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" -- -q 'addprinc -pw adminpassword admin'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" -- -q 'addprinc -randkey kiprop/testhost.kerber.test'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" -- -q 'addprinc -randkey host/testhost.kerber.test'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf "$NAME" -- -q 'ktadd -k /tmp/mit-iprop.keytab kiprop/testhost.kerber.test host/testhost.kerber.test'
 kill_comm krb5kdc
 kill_comm kadmind
 docker exec -d -e KRB5_KDC_PROFILE=/tmp/kdc.conf -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
@@ -502,8 +503,8 @@ echo "$LOAD"
 echo "$LOAD" | grep -q 'iprop dump'
 
 echo "==== full-resync deny is kdb_fullresync_result_t (MIT) ===="
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
-    "$NAME" kadmin.local -q 'ktadd -k /tmp/user-iprop.keytab user'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" -- -q 'ktadd -k /tmp/user-iprop.keytab user'
 MIT_DENY="$(docker exec \
     -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     -e KRB5_MASTER_PASSWORD=masterpassword \
@@ -521,10 +522,10 @@ if echo "$MIT_DENY" | grep -q 'fullresync_status=0'; then
 fi
 
 echo "==== mutate MIT master: extra2 + setstr ===="
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
-    "$NAME" kadmin.local -q 'addprinc -pw extra2-secret extra2'
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
-    "$NAME" kadmin.local -q 'setstr extra2 note hello-g4a'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" -- -q 'addprinc -pw extra2-secret extra2'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" -- -q 'setstr extra2 note hello-g4a'
 
 echo "==== MIT kinit -k kiprop (keytab probe) ===="
 docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
@@ -617,8 +618,8 @@ if [ "$ok" != 1 ]; then
     log "iprop.gate" "error" ',"error":"MIT krb5kdc did not listen for delete pull"'
     exit 1
 fi
-docker exec -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
-    "$NAME" kadmin.local -q 'delprinc -force extra2'
+kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
+    "$NAME" -- -q 'delprinc -force extra2'
 PULL2="$(docker exec \
     -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     -e KRB5_MASTER_PASSWORD=masterpassword \

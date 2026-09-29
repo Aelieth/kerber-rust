@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
 need_bins krb5-kdc krb5-kdb krb5-forge-tgt krb5-pac-extract \
     krb5-kadmin-local krb5-kinit krb5-kvno krb5-klist
@@ -79,10 +80,10 @@ docker exec "$NAME" grep -q allow_rc4 /etc/krb5kdc/kdc.conf || die "kdc.conf mis
 docker exec "$NAME" grep -q arcfour-hmac /etc/krb5.conf || die "krb5.conf missing arcfour-hmac"
 
 echo "==== MIT kadmin.local rc4user + session_enctypes ===="
-docker exec "$NAME" kadmin.local -q 'addprinc -e rc4-hmac:normal -pw rc4-secret rc4user'
-docker exec "$NAME" kadmin.local -q 'setstr krbtgt/KERBER.TEST session_enctypes rc4-hmac'
-docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test session_enctypes rc4-hmac'
-docker exec "$NAME" kadmin.local -q 'getprinc rc4user' | tee "$OUT/mit-getprinc-rc4user.txt"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -e rc4-hmac:normal -pw rc4-secret rc4user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr krbtgt/KERBER.TEST session_enctypes rc4-hmac'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr host/testhost.kerber.test session_enctypes rc4-hmac'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'getprinc rc4user' | tee "$OUT/mit-getprinc-rc4user.txt"
 
 echo "==== restart MIT krb5kdc via /proc/*/comm ===="
 term_comm krb5kdc
@@ -139,23 +140,23 @@ done
 }
 
 echo "==== Rust kadmin.local rc4user + session_enctypes ===="
-docker exec \
+kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
     -e KRB5_PASSWORD=rc4-secret \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -e rc4-hmac:normal -pw rc4-secret rc4user'
-docker exec \
+    "$NAME" -- -q 'addprinc -e rc4-hmac:normal -pw rc4-secret rc4user'
+kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
-    "$NAME" /tmp/krb5-kadmin-local -q 'setstr krbtgt/KERBER.TEST session_enctypes rc4-hmac'
-docker exec \
+    "$NAME" -- -q 'setstr krbtgt/KERBER.TEST session_enctypes rc4-hmac'
+kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
-    "$NAME" /tmp/krb5-kadmin-local -q 'setstr host/testhost.kerber.test session_enctypes rc4-hmac'
+    "$NAME" -- -q 'setstr host/testhost.kerber.test session_enctypes rc4-hmac'
 
 echo "==== A) MIT kinit+kvno against Rust KDC :8888 ===="
 set +e
@@ -318,26 +319,26 @@ echo "==== E) permitted_enctypes on the KDC steers the service key (krb5_dbe_fin
 # A) left krbtgt with `session_enctypes rc4-hmac` and D) took rc4 away from
 # both KDCs, so a plain `kinit user` would be 14 on both legs for a reason
 # unrelated to this cell; point the TGT session etype at aes256 on both.
-docker exec "$NAME" kadmin.local -q 'setstr krbtgt/KERBER.TEST session_enctypes aes256-cts-hmac-sha1-96'
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal,aes256-cts-hmac-sha1-96:normal z14mixed'
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal z14only'
-docker exec "$NAME" kadmin.local -q 'getprinc z14mixed' | tee "$OUT/mit-getprinc-z14mixed.txt" | grep -E '^Key: vno'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr krbtgt/KERBER.TEST session_enctypes aes256-cts-hmac-sha1-96'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal,aes256-cts-hmac-sha1-96:normal z14mixed'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal z14only'
+mit_kadmin_local "$NAME" -- -q 'getprinc z14mixed' | tee "$OUT/mit-getprinc-z14mixed.txt" | grep -E '^Key: vno'
 for p in 'setstr krbtgt/KERBER.TEST session_enctypes aes256-cts-hmac-sha1-96' \
          'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal,aes256-cts-hmac-sha1-96:normal z14mixed' \
          'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal z14only'; do
-    docker exec \
+    kadmin_q_ok rust_kadmin_local \
         -e KRB5_KDC_DB=/tmp/rust.db \
         -e KRB5_KDC_STASH=/tmp/rust.stash \
         -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
         -e KRB5_CONFIG=/etc/krb5.conf \
-        "$NAME" /tmp/krb5-kadmin-local -q "$p"
+        "$NAME" -- -q "$p"
 done
-docker exec \
+rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc z14mixed' | tee "$OUT/rust-getprinc-z14mixed.txt" | grep -E '^Key: vno'
+    "$NAME" -- -q 'getprinc z14mixed' | tee "$OUT/rust-getprinc-z14mixed.txt" | grep -E '^Key: vno'
 
 # tkt etype of one service in `klist -e` output: the line after the service's
 # entry is "Etype (skey, tkt): <skey>, <tkt>".
@@ -441,15 +442,15 @@ echo "==== F) a stale keytab is Password incorrect (24): enc-ts keys are searche
 # kvno 2 in the DB; MIT still refuses the kvno-2 timestamp with 24, which
 # `kinit -kt` reports as "Password incorrect" (the wrong-password text).
 # Control first: the fresh keytab kinits on both legs.
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey z14kt'
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/z14kt-mit.kt z14kt'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey z14kt'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/z14kt-mit.kt z14kt'
 for p in 'addprinc -randkey z14kt' 'ktadd -k /tmp/z14kt-rust.kt z14kt'; do
-    docker exec \
+    kadmin_q_ok rust_kadmin_local \
         -e KRB5_KDC_DB=/tmp/rust.db \
         -e KRB5_KDC_STASH=/tmp/rust.stash \
         -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
         -e KRB5_CONFIG=/etc/krb5.conf \
-        "$NAME" /tmp/krb5-kadmin-local -q "$p"
+        "$NAME" -- -q "$p"
 done
 f_kinit() {
     local conf=$1 kt=$2 cc=$3
@@ -460,20 +461,20 @@ F_CTL_RUST="$(f_kinit /tmp/krb5-8888.conf /tmp/z14kt-rust.kt /tmp/f-ctl-rust.cc 
 echo "control fresh keytab: mit=$F_CTL_MIT rust=$F_CTL_RUST"
 [ "$F_CTL_MIT" = "kinit ok" ] || die "F control: MIT kinit -kt with the fresh keytab failed: $F_CTL_MIT"
 [ "$F_CTL_RUST" = "kinit ok" ] || die "F control: Rust kinit -kt with the fresh keytab failed: $F_CTL_RUST"
-docker exec "$NAME" kadmin.local -q 'cpw -randkey -keepold z14kt'
-docker exec "$NAME" kadmin.local -q 'getprinc z14kt' | grep -E '^Key: vno' | tee "$OUT/mit-getprinc-z14kt.txt"
-docker exec \
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'cpw -randkey -keepold z14kt'
+mit_kadmin_local "$NAME" -- -q 'getprinc z14kt' | grep -E '^Key: vno' | tee "$OUT/mit-getprinc-z14kt.txt"
+kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" /tmp/krb5-kadmin-local -q 'cpw -randkey -keepold z14kt'
-docker exec \
+    "$NAME" -- -q 'cpw -randkey -keepold z14kt'
+rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc z14kt' | grep -E '^Key: vno' | tee "$OUT/rust-getprinc-z14kt.txt"
+    "$NAME" -- -q 'getprinc z14kt' | grep -E '^Key: vno' | tee "$OUT/rust-getprinc-z14kt.txt"
 grep -q 'Key: vno 2,' "$OUT/mit-getprinc-z14kt.txt" || die "F) MIT did not keep the kvno-2 keys"
 grep -q 'Key: vno 2,' "$OUT/rust-getprinc-z14kt.txt" || die "F) Rust did not keep the kvno-2 keys"
 F_MIT="$(f_kinit /etc/krb5.conf /tmp/z14kt-mit.kt /tmp/f-mit.cc || true)"
@@ -496,37 +497,37 @@ echo "==== G) FAST armor TGT under a non-permitted etype (krb5_dbe_find_enctype)
 # under the leftover aes128 key with `krb5-forge-tgt`, and drive MIT
 # `kinit -T` against both KDCs. The walk that accepted any key would issue;
 # MIT's pick is `KRB5_KDB_NO_PERMITTED_KEY` → wire 60 `FIND_FAST`.
-docker exec "$NAME" kadmin.local -q \
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q \
     'cpw -randkey -keepold -e aes256-cts-hmac-sha1-96:normal,aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST'
-docker exec \
+kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" /tmp/krb5-kadmin-local -q \
+    "$NAME" -- -q \
     'cpw -randkey -keepold -e aes256-cts-hmac-sha1-96:normal,aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST'
-docker exec "$NAME" kadmin.local -q 'getprinc krbtgt/KERBER.TEST' \
+mit_kadmin_local "$NAME" -- -q 'getprinc krbtgt/KERBER.TEST' \
     | grep -E '^Key: vno' | tee "$OUT/mit-getprinc-z61-krbtgt.txt"
-docker exec \
+rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc krbtgt/KERBER.TEST' \
+    "$NAME" -- -q 'getprinc krbtgt/KERBER.TEST' \
     | grep -E '^Key: vno' | tee "$OUT/rust-getprinc-z61-krbtgt.txt"
 grep -q 'aes128-cts-hmac-sha1-96' "$OUT/mit-getprinc-z61-krbtgt.txt" \
     || die "G) MIT krbtgt has no aes128 key after cpw"
 grep -q 'aes128-cts-hmac-sha1-96' "$OUT/rust-getprinc-z61-krbtgt.txt" \
     || die "G) Rust krbtgt has no aes128 key after cpw"
-docker exec "$NAME" kadmin.local -q 'ktadd -norandkey -k /tmp/g-mit-krbtgt.kt krbtgt/KERBER.TEST' \
-    || die "G) MIT ktadd -norandkey krbtgt failed"
-docker exec \
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -norandkey -k /tmp/g-mit-krbtgt.kt krbtgt/KERBER.TEST' \
+
+kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     -e KRB5_CONFIG=/etc/krb5.conf \
-    "$NAME" /tmp/krb5-kadmin-local -q 'ktadd -norandkey -k /tmp/g-rust-krbtgt.kt krbtgt/KERBER.TEST' \
-    || die "G) Rust ktadd -norandkey krbtgt failed"
+    "$NAME" -- -q 'ktadd -norandkey -k /tmp/g-rust-krbtgt.kt krbtgt/KERBER.TEST' \
+
 G_MIT_AES128="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/g-mit-krbtgt.kt \
     | awk '$1=="KEY" && $2=="17" {hex=$3; kv=$NF} END {print hex}')"
 G_RUST_AES128="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/g-rust-krbtgt.kt \

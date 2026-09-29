@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kinit
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -24,7 +25,7 @@ mit_live_guard
 
 docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5kdc/kdc.conf || sed -i "/\[kdcdefaults\]/a\\    spake_preauth_groups = P-256" /etc/krb5kdc/kdc.conf'
 docker exec "$NAME" sh -c 'grep -q spake_preauth_groups /etc/krb5.conf || sed -i "/\[libdefaults\]/a\\    spake_preauth_groups = P-256\n    preferred_preauth_types = 151" /etc/krb5.conf'
-docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth user'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \

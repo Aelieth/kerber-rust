@@ -98,8 +98,7 @@ echo "$ADMINP" | grep -qi ADD
 echo "$ADMINP" | grep -qi MODIFY
 
 echo "==== addprinc limited ===="
-ADD="$(kadmin_q_as admin@KERBER.TEST adminpassword 'addprinc -pw limited-secret limited')"
-echo "$ADD"
+kadmin_q_ok kadmin_q_as admin@KERBER.TEST adminpassword 'addprinc -pw limited-secret limited'
 
 echo "==== limited getprivs is all bits like MIT ~0 ===="
 docker exec -e KRB5_CONFIG=/tmp/getprivs-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true

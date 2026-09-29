@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/client-diff-common.sh"
 need_bins krb5-kinit krb5-klist krb5-kvno krb5-kdestroy krb5-vfy-increds krb5-kdc krb5-forge-tgt krb5-pac-extract krb5-gss-accept krb5-gss-init krb5-kpasswd
 
@@ -81,13 +82,13 @@ cli_pair wrong_password \
 cli_pair unknown_principal \
     "printf 'userpassword\n' | kinit -c /tmp/cc_unk nosuch@KERBER.TEST" \
     "KRB5_PASSWORD=userpassword /tmp/krb5-kinit -c /tmp/cc_unk_r nosuch@KERBER.TEST"
-docker exec "$NAME" kadmin.local -q 'addprinc -pw userpassword expireduser' >/dev/null
-docker exec "$NAME" kadmin.local -q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" expireduser'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw userpassword expireduser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" expireduser'
 cli_pair expired \
     "printf 'userpassword\n' | kinit -c /tmp/cc_exp expireduser@KERBER.TEST" \
     "KRB5_PASSWORD=userpassword /tmp/krb5-kinit -c /tmp/cc_exp_r expireduser@KERBER.TEST"
-docker exec "$NAME" kadmin.local -q 'addprinc -pw userpassword revokeduser' >/dev/null
-docker exec "$NAME" kadmin.local -q 'modprinc +disallow_all_tix revokeduser'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw userpassword revokeduser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +disallow_all_tix revokeduser'
 cli_pair revoked \
     "printf 'userpassword\n' | kinit -c /tmp/cc_rev revokeduser@KERBER.TEST" \
     "KRB5_PASSWORD=userpassword /tmp/krb5-kinit -c /tmp/cc_rev_r revokeduser@KERBER.TEST"
@@ -275,10 +276,10 @@ echo "MIT_gss_replay_token"
 echo "GSS_replay_major_34"
 
 echo "==== kinit -k highest keytab kvno (gic_keytab.c) ===="
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey ktuser' >/dev/null
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/ktuser-v1.keytab -norandkey ktuser' >/dev/null
-docker exec "$NAME" kadmin.local -q 'cpw -randkey ktuser' >/dev/null
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/ktuser-v2.keytab -norandkey ktuser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey ktuser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/ktuser-v1.keytab -norandkey ktuser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'cpw -randkey ktuser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/ktuser-v2.keytab -norandkey ktuser' >/dev/null
 docker exec "$NAME" sh -c 'printf "rkt /tmp/ktuser-v1.keytab\nrkt /tmp/ktuser-v2.keytab\nwkt /tmp/ktuser-both.keytab\n" | ktutil'
 docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
     kinit -k -t /tmp/ktuser-both.keytab -c /tmp/cc_mit_kt_kvno ktuser@KERBER.TEST \
@@ -308,11 +309,11 @@ done
 if [ "$ok" != 1 ]; then
     die "MIT kadmind 464 did not listen"
 fi
-docker exec "$NAME" kadmin.local -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null
-docker exec "$NAME" kadmin.local -q 'addprinc -pw exp-old mitexpuser' >/dev/null
-docker exec "$NAME" kadmin.local -q 'modprinc +needchange mitexpuser' >/dev/null
-docker exec "$NAME" kadmin.local -q 'addprinc -pw exp-old rustexpuser' >/dev/null
-docker exec "$NAME" kadmin.local -q 'modprinc +needchange rustexpuser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +password_changing_service kadmin/changepw' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw exp-old mitexpuser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +needchange mitexpuser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw exp-old rustexpuser' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +needchange rustexpuser' >/dev/null
 MIT_CHPW="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
     sh -c 'printf "exp-old\nexp-new\nexp-new\n" | kinit -c /tmp/cc_mit_chpw mitexpuser@KERBER.TEST' 2>&1)" \
     || die "MIT kinit KEY_EXP changepw failed"
@@ -340,8 +341,8 @@ if ! docker exec "$NAME" cc -o /tmp/t_vfy_increds /tmp/t_vfy_increds.c -lkrb5 -l
 fi
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-vfy-increds" "$NAME":/tmp/krb5-vfy-increds
 docker exec "$NAME" chmod +x /tmp/krb5-vfy-increds
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/vfy.kerber.test' >/dev/null
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/vfy.kt host/vfy.kerber.test' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/vfy.kerber.test' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/vfy.kt host/vfy.kerber.test' >/dev/null
 docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
     sh -c 'printf "userpassword\n" | kinit -c /tmp/cc_vfy user@KERBER.TEST' \
     || die "kinit for vfy_increds failed"
@@ -350,7 +351,7 @@ docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds
 docker exec "${VFY_ENV[@]}" "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds host failed"
 echo "MIT_vfy_increds_host"
 echo "RUST_vfy_increds_host"
-docker exec "$NAME" kadmin.local -q 'cpw -randkey host/vfy.kerber.test' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'cpw -randkey host/vfy.kerber.test' >/dev/null
 set +e
 mit_vfy_old_out="$(docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds 2>&1)"
 mit_vfy_old=$?
@@ -383,8 +384,8 @@ set -e
 [ "$rust_vfy_n" != 0 ] || die "Rust t_vfy_increds -n no keytab unexpectedly succeeded"
 echo "MIT_vfy_increds_nokeytab"
 echo "RUST_vfy_increds_nokeytab"
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey nfs/vfy.kerber.test' >/dev/null
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/vfy.kt nfs/vfy.kerber.test' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey nfs/vfy.kerber.test' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/vfy.kt nfs/vfy.kerber.test' >/dev/null
 docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds || die "MIT t_vfy_increds nfs-default failed"
 docker exec "${VFY_ENV[@]}" "$NAME" /tmp/krb5-vfy-increds || die "Rust t_vfy_increds nfs-default failed"
 docker exec "${VFY_ENV[@]}" "$NAME" /tmp/t_vfy_increds nfs/vfy.kerber.test@KERBER.TEST \
@@ -419,10 +420,10 @@ if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c
     die "MIT kpasswd-tgs-client compile failed"
 fi
 docker exec "$NAME" chmod +x /tmp/krb5-kpasswd
-docker exec "$NAME" kadmin.local -q 'addpol -minlength 8 chpwmin' >/dev/null
-docker exec "$NAME" kadmin.local -q 'addprinc -policy chpwmin -pw LongPass1 chpwpol' >/dev/null
-docker exec "$NAME" kadmin.local -q 'addprinc -pw setold chpwset' >/dev/null
-docker exec "$NAME" kadmin.local -q 'addprinc -pw otherpw chpwother' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addpol -minlength 8 chpwmin' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -policy chpwmin -pw LongPass1 chpwpol' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw setold chpwset' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw otherpw chpwother' >/dev/null
 MIT_CHPW_POL="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
     sh -c 'printf "LongPass1\nshort\nshort\n" | kpasswd chpwpol@KERBER.TEST' 2>&1)" || true
 echo "$MIT_CHPW_POL"
@@ -454,7 +455,7 @@ echo "MIT_kpasswd_setpw_denied"
 echo "RUST_kpasswd_setpw_denied"
 
 echo "==== kinit -C / -s (gic_opt.c) ===="
-docker exec "$NAME" kadmin.local -q 'modprinc +allow_postdate user' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +allow_postdated user' >/dev/null
 reset_cap
 mit_kinit /tmp/cc_mit_canon -C || die "MIT kinit -C failed"
 save_cap mit-canon

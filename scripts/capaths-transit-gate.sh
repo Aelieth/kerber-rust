@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-pac-extract krb5-forge-tgt krb5-kvno
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -179,8 +180,15 @@ set -euo pipefail
 kad() {
     local profile="\$1"
     local realm="\$2"
+    local out
     shift 2
-    KRB5_KDC_PROFILE="\$profile" kadmin.local -r "\$realm" -q "\$*"
+    out="\$(KRB5_KDC_PROFILE="\$profile" kadmin.local -r "\$realm" -q "\$*" 2>&1)"
+    printf '%s\n' "\$out"
+    # MIT exits 0 on a refused query: the success line is the proof (kadmin.c, keytab.c).
+    printf '%s\n' "\$out" | grep -Eq '^(Principal "[^"]+" created\.|Entry for principal .* added to keytab )' || {
+        echo "kad \$realm: no success line for: \$*" >&2
+        exit 1
+    }
 }
 kad /tmp/kdc-A.conf A.TEST "addprinc -pw userpassword user"
 kad /tmp/kdc-A.conf A.TEST "addprinc -randkey host/svc.a.test"
@@ -586,10 +594,10 @@ expect_s4u_mismatch "MIT S4U mismatch" /tmp/krb5cc_mit_s4u /tmp/mit-c.log
 
 echo "==== MIT C DISALLOW_ALL_TIX on inbound krbtgt is PROCESS_TGS ===="
 seed_c_tgt /tmp/krb5cc_mit_disallow
-docker exec \
+kadmin_q_ok mit_kadmin_local \
     -e KRB5_CONFIG=/tmp/client-capaths.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-C.conf \
-    "$NAME" kadmin.local -r C.TEST -q "modprinc -allow_tix krbtgt/C.TEST@B.TEST"
+    "$NAME" -- -r C.TEST -q "modprinc -allow_tix krbtgt/C.TEST@B.TEST"
 n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-c.log' | tr -d '[:space:]')"
 set +e
 MITDIS="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
@@ -609,10 +617,10 @@ if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log | grep -q PRO
     exit 1
 fi
 docker exec "$NAME" sh -c "tail -n +$((n + 1)) /tmp/mit-c.log" || true
-docker exec \
+kadmin_q_ok mit_kadmin_local \
     -e KRB5_CONFIG=/tmp/client-capaths.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-C.conf \
-    "$NAME" kadmin.local -r C.TEST -q "modprinc +allow_tix krbtgt/C.TEST@B.TEST"
+    "$NAME" -- -r C.TEST -q "modprinc +allow_tix krbtgt/C.TEST@B.TEST"
 
 echo "==== MIT skip same-realm default is POLICY ===="
 kinit_a /tmp/krb5cc_mit_skip_a
@@ -1116,14 +1124,14 @@ wait_port_in "$NAME" 88 || {
     log "capaths.gate" "error" ',"error":"MIT A for R16 RENEW did not listen"'
     exit 1
 }
-docker exec \
+kadmin_q_ok mit_kadmin_local \
     -e KRB5_CONFIG=/tmp/client-capaths.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-A.conf \
-    "$NAME" kadmin.local -r A.TEST -q "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/A.TEST@B.TEST"
-docker exec \
+    "$NAME" -- -r A.TEST -q "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/A.TEST@B.TEST"
+kadmin_q_ok mit_kadmin_local \
     -e KRB5_CONFIG=/tmp/client-capaths.conf \
     -e KRB5_KDC_PROFILE=/tmp/kdc-A.conf \
-    "$NAME" kadmin.local -r A.TEST -q "ktadd -norandkey -k /tmp/mit-a-krbtgt.kt krbtgt/A.TEST"
+    "$NAME" -- -r A.TEST -q "ktadd -norandkey -k /tmp/mit-a-krbtgt.kt krbtgt/A.TEST"
 MIT_A_TGT_KEY="$(docker exec "$NAME" /tmp/krb5-pac-extract --dump-keytab /tmp/mit-a-krbtgt.kt \
     | awk '$1=="KEY" && !k {k=$3} END {if (k != "") print k}')"
 [ "${#MIT_A_TGT_KEY}" -eq 64 ]

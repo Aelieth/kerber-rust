@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmin-local krb5-kvno diffsend
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -56,63 +57,63 @@ LOAD="$(docker exec \
     "$NAME" /tmp/krb5-kdb load /tmp/mit.dump)"
 echo "$LOAD"
 grep -q 'ok load version=7' <<<"$LOAD" || die "rust kdb load failed"
-ADD="$(docker exec \
+ADD="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey krbtgt/OTHER.TEST')"
+    "$NAME" -- -q 'addprinc -randkey krbtgt/OTHER.TEST')"
 echo "$ADD"
 grep -q 'created' <<<"$ADD" || die "rust addprinc krbtgt/OTHER.TEST failed"
-ADDHIER="$(docker exec \
+ADDHIER="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey krbtgt/SUB.KERBER.TEST')"
+    "$NAME" -- -q 'addprinc -randkey krbtgt/SUB.KERBER.TEST')"
 echo "$ADDHIER"
 grep -q 'created' <<<"$ADDHIER" || die "rust addprinc krbtgt/SUB.KERBER.TEST failed"
-ADDLOCK="$(docker exec \
+ADDLOCK="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey +0x40 host/locked.kerber.test')"
+    "$NAME" -- -q 'addprinc -randkey +0x40 host/locked.kerber.test')"
 echo "$ADDLOCK"
 grep -q 'created' <<<"$ADDLOCK" || die "rust addprinc host/locked.kerber.test failed"
-ADDDUP="$(docker exec \
+ADDDUP="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey +0x24 host/dupskey.kerber.test')"
+    "$NAME" -- -q 'addprinc -randkey +0x24 host/dupskey.kerber.test')"
 echo "$ADDDUP"
 grep -q 'created' <<<"$ADDDUP" || die "rust addprinc host/dupskey.kerber.test failed"
-ADDNOSVR="$(docker exec \
+ADDNOSVR="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey +0x1000 host/nosvr.kerber.test')"
+    "$NAME" -- -q 'addprinc -randkey +0x1000 host/nosvr.kerber.test')"
 echo "$ADDNOSVR"
 grep -q 'created' <<<"$ADDNOSVR" || die "rust addprinc host/nosvr.kerber.test failed"
-ADDEXP="$(docker exec \
+ADDEXP="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey expiredsvc')"
+    "$NAME" -- -q 'addprinc -randkey expiredsvc')"
 echo "$ADDEXP"
 grep -q 'created' <<<"$ADDEXP" || die "rust addprinc expiredsvc failed"
-docker exec \
+kadmin_q_ok --then 'getprinc expiredsvc' '^Expiration date: Thu Jan 01 00:00:01 UTC 1970$' rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc -expire 1 expiredsvc'
-docker exec \
+    "$NAME" -- -q 'modprinc -expire 1 expiredsvc'
+kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'setstr expiredsvc require_auth pkinit'
-ADDHINT="$(docker exec \
+    "$NAME" -- -q 'setstr expiredsvc require_auth pkinit'
+ADDHINT="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
+    "$NAME" -- -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
 echo "$ADDHINT"
 grep -q 'created' <<<"$ADDHINT" || die "rust addprinc hintu failed"
 
@@ -163,22 +164,22 @@ echo "==== load identical dump into MIT krb5kdc on :88 ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" kdb5_util load /tmp/mit.dump
-MITADD="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey krbtgt/OTHER.TEST@KERBER.TEST')"
+MITADD="$(mit_kadmin_local "$NAME" -- -q 'addprinc -randkey krbtgt/OTHER.TEST@KERBER.TEST')"
 echo "$MITADD"
 grep -qi 'created' <<<"$MITADD" || die "MIT addprinc krbtgt/OTHER.TEST failed"
-MITHIER="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey krbtgt/SUB.KERBER.TEST@KERBER.TEST')"
+MITHIER="$(mit_kadmin_local "$NAME" -- -q 'addprinc -randkey krbtgt/SUB.KERBER.TEST@KERBER.TEST')"
 echo "$MITHIER"
 grep -qi 'created' <<<"$MITHIER" || die "MIT addprinc krbtgt/SUB.KERBER.TEST failed"
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/locked.kerber.test'
-docker exec "$NAME" kadmin.local -q 'modprinc -allow_tix host/locked.kerber.test'
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/dupskey.kerber.test'
-docker exec "$NAME" kadmin.local -q 'modprinc +disallow_dup_skey +disallow_tgt_based host/dupskey.kerber.test'
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/nosvr.kerber.test'
-docker exec "$NAME" kadmin.local -q 'modprinc +disallow_svr host/nosvr.kerber.test'
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey expiredsvc'
-docker exec "$NAME" kadmin.local -q 'modprinc -expire 1/1/1990 expiredsvc'
-docker exec "$NAME" kadmin.local -q 'setstr expiredsvc require_auth pkinit'
-MITHINT="$(docker exec "$NAME" kadmin.local -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/locked.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -allow_tix host/locked.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/dupskey.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +disallow_dup_skey +disallow_tgt_based host/dupskey.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/nosvr.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +disallow_svr host/nosvr.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey expiredsvc'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -expire 1/1/1990 expiredsvc'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr expiredsvc require_auth pkinit'
+MITHINT="$(mit_kadmin_local "$NAME" -- -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal +requires_preauth hintu')"
 echo "$MITHINT"
 grep -qi 'created' <<<"$MITHINT" || die "MIT addprinc hintu failed"
 docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
@@ -550,7 +551,7 @@ docker exec "$NAME" sh -c 'cat >/tmp/rust-client.conf <<EOF
     }
 EOF'
 docker exec "$NAME" sh -c "printf 'userpassword\n' | kinit -r 1d -S host/testhost.kerber.test@KERBER.TEST -c /tmp/krb5cc_mit_rekey user"
-MITCPW="$(docker exec "$NAME" kadmin.local -q 'cpw -randkey -keepold -e aes128-cts-hmac-sha1-96 krbtgt/KERBER.TEST')"
+MITCPW="$(mit_kadmin_local "$NAME" -- -q 'cpw -randkey -keepold -e aes128-cts-hmac-sha1-96 krbtgt/KERBER.TEST')"
 echo "$MITCPW"
 grep -qi 'randomized' <<<"$MITCPW" || die "MIT cpw -keepold krbtgt failed"
 set +e
@@ -564,11 +565,11 @@ echo "MIT_krbtgt_rekey_renew rc=${mitren_rc}"
 grep -q 'kvno =' <<<"$MITREN" || die "MIT RENEW after rekey missing kvno"
 docker exec -e KRB5_CONFIG=/tmp/rust-client.conf "$NAME" \
     sh -c "printf 'userpassword\n' | kinit -r 1d -S host/testhost.kerber.test@KERBER.TEST -c /tmp/krb5cc_rust_rekey user"
-RUSTCPW="$(docker exec \
+RUSTCPW="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'cpw -randkey -keepold -e aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST')"
+    "$NAME" -- -q 'cpw -randkey -keepold -e aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST')"
 echo "$RUSTCPW"
 grep -qi 'randomized' <<<"$RUSTCPW" || die "rust cpw -keepold krbtgt failed"
 docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue; echo "$cmd" | grep -q "/tmp/krb5-kdc" || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'

@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-forge-tgt krb5-kinit
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -378,7 +379,7 @@ echo "==== MIT KDC: FAST wrong-password and unknown-server outer shapes ===="
 # Harness user has empty Attributes; Rust --test-realm user has REQUIRES_PRE_AUTH.
 # Align REQUIRES_PRE_AUTH so both legs emit 25 then 24 method [136].
 # Default MIT client groups are edwards25519; both KDCs permit P-256 only.
-docker exec "$MITNAME" kadmin.local -q 'modprinc +requires_preauth user'
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc +requires_preauth user'
 docker exec "$MITNAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$MITNAME" krb5kdc || true
 docker exec -d "$MITNAME" sh -c 'krb5kdc -n >/tmp/mit-kdc.log 2>&1'

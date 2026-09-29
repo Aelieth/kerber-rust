@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-gss-accept krb5-gss-init
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -29,17 +30,17 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-gss-init" "$NAME":/tmp/krb5-gs
 docker exec "$NAME" chmod +x /tmp/krb5-gss-accept /tmp/krb5-gss-init
 
 kadmin_local() {
-    docker exec \
+    mit_kadmin_local \
         -e KRB5_CONFIG=/etc/krb5.conf \
         -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
-        "$NAME" kadmin.local -q "$1"
+        "$NAME" -- -q "$1"
 }
 
 echo "==== kadmin.local listprincs ===="
-kadmin_local "listprincs" || true
+kadmin_q_try kadmin_local "listprincs" 
 # Old images swallowed ktadd; ensure the host principal and keytab exist.
-kadmin_local "addprinc -randkey host/testhost.kerber.test" || true
-kadmin_local "ktadd -k /etc/krb5kdc/testhost.keytab host/testhost.kerber.test"
+kadmin_q_try kadmin_local "addprinc -randkey host/testhost.kerber.test" 
+kadmin_q_ok kadmin_local "ktadd -k /etc/krb5kdc/testhost.keytab host/testhost.kerber.test"
 if ! docker exec "$NAME" test -s /etc/krb5kdc/testhost.keytab; then
     log "gss.gate" "error" ',"error":"testhost.keytab missing after ktadd"'
     exit 1

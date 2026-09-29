@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
 . "$ROOT/scripts/lib/kadmin-common.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
@@ -58,15 +59,15 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"MIT harness did not become ready"'
     exit 1
 fi
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw extract-secret extract/admin'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw adminpassword admin/admin'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw norename-secret norename'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw scoped-secret scoped'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw restricted-secret restricted'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw nodel-secret nodel'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw victim-secret victim'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw ro-secret ro'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw rolist-secret rolist'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw extract-secret extract/admin'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw adminpassword admin/admin'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw norename-secret norename'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw scoped-secret scoped'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw restricted-secret restricted'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw nodel-secret nodel'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw victim-secret victim'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw ro-secret ro'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw rolist-secret rolist'
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" "scoped@KERBER.TEST ad *@KERBER.TEST" "restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy" "nodel@KERBER.TEST *D" "ro@KERBER.TEST i" "rolist@KERBER.TEST l" "some_alias@KERBER.TEST a aliasname@KERBER.TEST" "some_alias@KERBER.TEST m user@KERBER.TEST" "restricted_alias@KERBER.TEST ai *@KERBER.TEST +requires_preauth" > /var/kerberos/krb5kdc/kadm5.acl'
 echo "==== MIT backdate user last_pwd_change to 1000000000 (kdb5_util dump, edit tl-data 1, load) ===="
 docker exec "$NAME_MIT" sh -c 'kdb5_util dump /tmp/bd.dump >/dev/null 2>&1'
@@ -86,7 +87,7 @@ for l in lines:
 open("/tmp/bd.dump", "w").write("\n".join(out))
 PY
 docker exec "$NAME_MIT" sh -c 'kdb5_util load /tmp/bd.dump >/dev/null 2>&1'
-MIT_BD="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user' 2>&1 || true)"
+MIT_BD="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_BD" | grep -F 'Last password change: Sun Sep 09 01:46:40 UTC 2001'
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
@@ -117,7 +118,7 @@ docker exec "$NAME_MIT" sh -c 'cat >/tmp/mit-iprop-kdc.conf <<EOF
         iprop_master_ulogsize = 1000
     }
 EOF'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -randkey kiprop/testhost.kerber.test' || true
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -randkey kiprop/testhost.kerber.test' 
 docker exec -d -e KRB5_KDC_PROFILE=/tmp/mit-iprop-kdc.conf "$NAME_MIT" kadmind
 ok=0
 for _ in $(seq 1 40); do
@@ -210,8 +211,8 @@ echo "==== MIT kadmin/history service on kadm5 ===="
 # against a live DB2 kadmind can print a lock error instead of UNK_PRINC.
 MIT_HIST_BEFORE=""
 for _ in $(seq 1 10); do
-    MIT_HIST_BEFORE="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf \
-        "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
+    MIT_HIST_BEFORE="$(mit_kadmin -e KRB5_CONFIG=/etc/krb5.conf \
+        "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprinc kadmin/history' 2>&1 || true)"
     if echo "$MIT_HIST_BEFORE" | grep -qF 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".'; then
         break
     fi
@@ -224,17 +225,17 @@ echo "$MIT_HIST_BEFORE"
 echo "$MIT_HIST_BEFORE" | grep -F 'Principal does not exist while retrieving "kadmin/history@KERBER.TEST".' \
     || { echo "MIT kadmin/history before first policy chpass: $MIT_HIST_BEFORE" >&2; exit 1; }
 
-docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 -history 2 a8pol' || true
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw a8-initial-secret -policy a8pol a8u' || true
-MIT_A8CPW="$(docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw sh a8u' 2>&1 || true)"
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addpol -minlength 8 -history 2 a8pol' 
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw a8-initial-secret -policy a8pol a8u' 
+MIT_A8CPW="$(mit_kadmin_local "$NAME_MIT" -- -q 'cpw -pw sh a8u' 2>&1 || true)"
 echo "$MIT_A8CPW"
 echo "$MIT_A8CPW" | grep -F 'Password is too short while changing password for "a8u@KERBER.TEST".'
-MIT_A8HIST="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+MIT_A8HIST="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$MIT_A8HIST" | grep -F 'Principal: kadmin/history@KERBER.TEST'
-docker exec "$NAME_MIT" kadmin.local -q 'addpol -history 2 g3bhist' || true
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hist-secret -policy g3bhist histee' || true
-docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw hist-rotated histee' || true
-MIT_HIST_GET="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addpol -history 2 g3bhist' 
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw hist-secret -policy g3bhist histee' 
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'cpw -pw hist-rotated histee' 
+MIT_HIST_GET="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$MIT_HIST_GET"
 echo "$MIT_HIST_GET" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 MIT_HIST_PROBE="$(kadm5_probe "$NAME_MIT" admin/admin valid /etc/krb5.conf kadmin/history@KERBER.TEST 2>&1 || true)"
@@ -252,31 +253,31 @@ diff <(echo "$HIST_GET" | hist_shape | grep -v '^Last modified:') \
 echo "$HIST_GET" | grep -F 'Maximum ticket life: 0 days 00:01:04'
 echo "$HIST_GET" | grep -F 'Key: vno 2, aes256-cts-hmac-sha384-192'
 echo "==== MIT kadmin/admin is DISALLOW_TGT_BASED ===="
-MIT_GETADM="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/admin' 2>&1 || true)"
+MIT_GETADM="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc kadmin/admin' 2>&1 || true)"
 echo "$MIT_GETADM"
 echo "$MIT_GETADM" | grep -E '^Attributes:' | grep -F 'DISALLOW_TGT_BASED'
-MITTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"
+MITTGT="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc krbtgt/KERBER.TEST')"
 echo "$MITTGT"
 echo "$MITTGT" | grep -F 'LOCKDOWN_KEYS'
-MITCTL="$(docker exec "$NAME_MIT" kadmin -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/c.keytab user' 2>&1 || true)"
+MITCTL="$(mit_kadmin "$NAME_MIT" -- -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/c.keytab user' 2>&1 || true)"
 echo "$MITCTL"
 if echo "$MITCTL" | grep -qiE 'extract-keys|AUTH_EXTRACT|Operation requires|while adding'; then
     echo "MIT extract/admin ktadd user failed: $MITCTL" >&2
     exit 1
 fi
-MITKTGT="$(docker exec "$NAME_MIT" kadmin -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/krbtgt.keytab krbtgt/KERBER.TEST' 2>&1 || true)"
+MITKTGT="$(mit_kadmin "$NAME_MIT" -- -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/krbtgt.keytab krbtgt/KERBER.TEST' 2>&1 || true)"
 echo "$MITKTGT"
 echo "$MITKTGT" | grep -F 'extract-keys'
-MITKTCPW="$(docker exec "$NAME_MIT" kadmin -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw' 2>&1 || true)"
+MITKTCPW="$(mit_kadmin "$NAME_MIT" -- -p extract/admin -w extract-secret -q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw' 2>&1 || true)"
 echo "$MITKTCPW"
 echo "$MITKTCPW" | grep -F 'extract-keys'
-MITDEL="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'delprinc -force kadmin/changepw' 2>&1 || true)"
+MITDEL="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'delprinc -force kadmin/changepw' 2>&1 || true)"
 echo "$MITDEL"
 echo "$MITDEL" | grep -F "delete'' privilege"
-MITMOD="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'modprinc -lockdown_keys kadmin/changepw' 2>&1 || true)"
+MITMOD="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'modprinc -lockdown_keys kadmin/changepw' 2>&1 || true)"
 echo "$MITMOD"
 echo "$MITMOD" | grep -F "modify'' privilege"
-MITREN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'renprinc -force kadmin/changepw kadmin/changepw2' 2>&1 || true)"
+MITREN="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'renprinc -force kadmin/changepw kadmin/changepw2' 2>&1 || true)"
 echo "$MITREN"
 echo "$MITREN" | grep -F "delete'' privilege"
 
@@ -285,13 +286,13 @@ echo "==== C1 kadm5 create over the MIT kadmind: -randkey (NULL passwd) is a ran
 # the server skips passwd_check and keys with krb5_dbe_crk, so an
 # empty-password kinit fails; pwqual_empty.c refuses -pw "" with
 # KADM5_PASS_Q_TOOSHORT, which the remote kadmin prints as the et text.
-MIT_RK="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -randkey rkempty' 2>&1 || true)"
+MIT_RK="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -randkey rkempty' 2>&1 || true)"
 echo "$MIT_RK"
 echo "$MIT_RK" | grep -F 'Principal "rkempty@KERBER.TEST" created.'
 MIT_RK_KINIT="$(docker exec "$NAME_MIT" sh -c 'printf "\n" | kinit rkempty@KERBER.TEST' 2>&1 || true)"
 echo "$MIT_RK_KINIT"
 echo "$MIT_RK_KINIT" | grep -F 'kinit: Password incorrect while getting initial credentials'
-MIT_RK_EMPTY="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -pw "" rpcempty' 2>&1 || true)"
+MIT_RK_EMPTY="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw "" rpcempty' 2>&1 || true)"
 echo "$MIT_RK_EMPTY"
 echo "$MIT_RK_EMPTY" | grep -F 'add_principal: Password is too short while creating "rpcempty@KERBER.TEST".'
 echo "c1_kadm5_randkey_and_empty=mit-leg"
@@ -299,61 +300,61 @@ echo "c1_kadm5_randkey_and_empty=mit-leg"
 echo "==== MIT ACL without d renprinc krbtgt is AUTH_INSUFFICIENT ===="
 for run in 1 2; do
     echo "---- MIT norename krbtgt $run ----"
-    MITRENACL="$(docker exec "$NAME_MIT" kadmin -p norename -w norename-secret -q 'renprinc -force krbtgt/KERBER.TEST x' 2>&1 || true)"
+    MITRENACL="$(mit_kadmin "$NAME_MIT" -- -p norename -w norename-secret -q 'renprinc -force krbtgt/KERBER.TEST x' 2>&1 || true)"
     echo "$MITRENACL"
     echo "$MITRENACL" | grep -F 'Insufficient authorization for operation'
 done
-MITGETTGT="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc krbtgt/KERBER.TEST')"
+MITGETTGT="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc krbtgt/KERBER.TEST')"
 echo "$MITGETTGT" | grep -F 'Principal: krbtgt/KERBER.TEST@KERBER.TEST'
 
 echo "==== MIT ACL target pattern scoped addprinc user2 / svc/x ===="
-MIT_U2="$(docker exec "$NAME_MIT" kadmin -p scoped -w scoped-secret -q 'addprinc -pw x user2' 2>&1 || true)"
+MIT_U2="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'addprinc -pw x user2' 2>&1 || true)"
 echo "$MIT_U2"
 echo "$MIT_U2" | grep -F 'Principal "user2@KERBER.TEST" created.'
-MIT_SVC="$(docker exec "$NAME_MIT" kadmin -p scoped -w scoped-secret -q 'addprinc -pw x svc/x' 2>&1 || true)"
+MIT_SVC="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'addprinc -pw x svc/x' 2>&1 || true)"
 echo "$MIT_SVC"
 echo "$MIT_SVC" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
-MIT_REN_SVC="$(docker exec "$NAME_MIT" kadmin -p scoped -w scoped-secret -q 'renprinc -force user2 svc/y' 2>&1 || true)"
+MIT_REN_SVC="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'renprinc -force user2 svc/y' 2>&1 || true)"
 echo "$MIT_REN_SVC"
 echo "$MIT_REN_SVC" | grep -F 'Insufficient authorization for operation'
-MIT_REN_U3="$(docker exec "$NAME_MIT" kadmin -p scoped -w scoped-secret -q 'renprinc -force user2 user3' 2>&1 || true)"
+MIT_REN_U3="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'renprinc -force user2 user3' 2>&1 || true)"
 echo "$MIT_REN_U3"
 echo "$MIT_REN_U3" | grep -F 'Principal "user2@KERBER.TEST" renamed to "user3@KERBER.TEST".'
-MIT_U9="$(docker exec "$NAME_MIT" kadmin -p restricted -w restricted-secret -q 'addprinc -pw x -policy short8 user9' 2>&1 || true)"
+MIT_U9="$(mit_kadmin "$NAME_MIT" -- -p restricted -w restricted-secret -q 'addprinc -pw x -policy short8 user9' 2>&1 || true)"
 echo "$MIT_U9"
 echo "$MIT_U9" | grep -F 'Principal "user9@KERBER.TEST" created.'
-MIT_GET_U9="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user9')"
+MIT_GET_U9="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc user9')"
 echo "$MIT_GET_U9"
 echo "$MIT_GET_U9" | grep -F 'Policy: [none]'
 
 echo "==== MIT ACL uppercase *D revokes delete ===="
-MIT_NODEL="$(docker exec "$NAME_MIT" kadmin -p nodel -w nodel-secret -q 'delprinc -force victim' 2>&1 || true)"
+MIT_NODEL="$(mit_kadmin "$NAME_MIT" -- -p nodel -w nodel-secret -q 'delprinc -force victim' 2>&1 || true)"
 echo "$MIT_NODEL"
 echo "$MIT_NODEL" | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
 if echo "$MIT_NODEL" | grep -qiE 'Principal "victim@KERBER.TEST" deleted'; then
     echo "MIT nodel *D granted delete: $MIT_NODEL" >&2
     exit 1
 fi
-MIT_GET_V="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc victim')"
+MIT_GET_V="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc victim')"
 echo "$MIT_GET_V"
 echo "$MIT_GET_V" | grep -F 'Principal: victim@KERBER.TEST'
 
 echo "==== MIT ACL list vs inquire ===="
-MIT_LIST_I="$(docker exec "$NAME_MIT" kadmin -p ro -w ro-secret -q 'listprincs' 2>&1 || true)"
+MIT_LIST_I="$(mit_kadmin "$NAME_MIT" -- -p ro -w ro-secret -q 'listprincs' 2>&1 || true)"
 echo "$MIT_LIST_I"
 echo "$MIT_LIST_I" | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
-MIT_LIST_L="$(docker exec "$NAME_MIT" kadmin -p rolist -w rolist-secret -q 'listprincs' 2>&1 || true)"
+MIT_LIST_L="$(mit_kadmin "$NAME_MIT" -- -p rolist -w rolist-secret -q 'listprincs' 2>&1 || true)"
 echo "$MIT_LIST_L"
 echo "$MIT_LIST_L" | grep -F 'user@KERBER.TEST'
-MIT_ADDPOL="$(docker exec "$NAME_MIT" kadmin -p ro -w ro-secret -q 'addpol pol-ro' 2>&1 || true)"
+MIT_ADDPOL="$(mit_kadmin "$NAME_MIT" -- -p ro -w ro-secret -q 'addpol pol-ro' 2>&1 || true)"
 echo "$MIT_ADDPOL"
 echo "$MIT_ADDPOL" | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
-MIT_SELFGET="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'getprinc user' 2>&1 || true)"
+MIT_SELFGET="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_SELFGET"
 echo "$MIT_SELFGET" | grep -F 'Principal: user@KERBER.TEST'
 
 echo "==== MIT purgekeys krbtgt succeeds (no lockdown check) ===="
-MITPURGE="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
+MITPURGE="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'purgekeys krbtgt/KERBER.TEST' 2>&1 || true)"
 echo "$MITPURGE"
 echo "$MITPURGE" | grep -F 'Old keys for principal'
 if echo "$MITPURGE" | grep -qiE 'locked down|PROTECT_KEYS'; then
@@ -389,7 +390,7 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen after admin-less ACL"'
     exit 1
 fi
-MIT_NOADMIN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc user' 2>&1 || true)"
+MIT_NOADMIN="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_NOADMIN"
 echo "$MIT_NOADMIN" | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
 if echo "$MIT_NOADMIN" | grep -q 'Principal: user'; then
@@ -478,7 +479,7 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen on default ACL path"'
     exit 1
 fi
-MIT_GETPRIVS="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprivs' 2>&1 || true)"
+MIT_GETPRIVS="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprivs' 2>&1 || true)"
 echo "$MIT_GETPRIVS"
 echo "$MIT_GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
 RUST_PRIV="$(echo "$GETPRIVS" | grep -i 'current privileges' || true)"
@@ -491,24 +492,24 @@ if [ -z "$RUST_PRIV" ] || [ "$RUST_PRIV" != "$MIT_PRIV" ]; then
 fi
 
 echo "==== MIT getprinc user@OTHER.REALM is UNK_PRINC ===="
-MIT_FOREIGN="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
+MIT_FOREIGN="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
 echo "$MIT_FOREIGN"
 echo "$MIT_FOREIGN" | grep -F 'Principal does not exist'
 echo "==== MIT addprinc user@OTHER.REALM creates ===="
-MIT_ADDFOR="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -pw x user@OTHER.REALM' 2>&1 || true)"
+MIT_ADDFOR="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw x user@OTHER.REALM' 2>&1 || true)"
 echo "$MIT_ADDFOR"
 echo "$MIT_ADDFOR" | grep -F 'Principal "user@OTHER.REALM" created' || {
     echo "MIT addprinc user@OTHER.REALM did not create: $MIT_ADDFOR" >&2
     exit 1
 }
-MIT_GETFOR="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
+MIT_GETFOR="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
 echo "$MIT_GETFOR"
 echo "$MIT_GETFOR" | grep -F 'Principal: user@OTHER.REALM' || {
     echo "MIT getprinc user@OTHER.REALM after create missed: $MIT_GETFOR" >&2
     exit 1
 }
 echo "==== MIT denied addprinc user@OTHER.REALM is add privilege ===="
-MIT_DENYFOR="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
+MIT_DENYFOR="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
 echo "$MIT_DENYFOR"
 echo "$MIT_DENYFOR" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
     echo "MIT denied addprinc missed add privilege: $MIT_DENYFOR" >&2
@@ -519,21 +520,21 @@ if echo "$MIT_DENYFOR" | grep -q 'Principal "denied@OTHER.REALM" created'; then
     exit 1
 fi
 echo "==== MIT unauthorised modprinc nosuch is UNK_PRINC ===="
-MIT_MODNS="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'modprinc +requires_preauth nosuch' 2>&1 || true)"
+MIT_MODNS="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'modprinc +requires_preauth nosuch' 2>&1 || true)"
 echo "$MIT_MODNS"
 echo "$MIT_MODNS" | grep -F 'Principal does not exist'
 
 echo "==== MIT unauthorised setstr nosuch is UNK_PRINC ===="
-MIT_SETNS="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'setstr nosuch a b' 2>&1 || true)"
+MIT_SETNS="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'setstr nosuch a b' 2>&1 || true)"
 echo "$MIT_SETNS"
 echo "$MIT_SETNS" | grep -F 'Principal does not exist'
 echo "==== MIT unauthorised purgekeys nosuch is UNK_PRINC ===="
-MIT_PURNS="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'purgekeys nosuch' 2>&1 || true)"
+MIT_PURNS="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'purgekeys nosuch' 2>&1 || true)"
 echo "$MIT_PURNS"
 echo "$MIT_PURNS" | grep -F 'Principal does not exist'
 
 echo "==== MIT unauthorised getprinc nosuch is UNK_PRINC ===="
-MIT_NOSUCH="$(docker exec "$NAME_MIT" kadmin -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"
+MIT_NOSUCH="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"
 echo "$MIT_NOSUCH"
 echo "$MIT_NOSUCH" | grep -F 'Principal does not exist'
 if echo "$MIT_NOSUCH" | grep -qiE "requires \`\`get'' privilege"; then
@@ -542,8 +543,8 @@ if echo "$MIT_NOSUCH" | grep -qiE "requires \`\`get'' privilege"; then
 fi
 
 echo "==== MIT policy min/max life getpol ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlife 1h -maxlife 1d life'
-MIT_GETPOL="$(docker exec "$NAME_MIT" kadmin.local -q 'getpol life' 2>&1 || true)"
+kadmin_q_ok --next-asserts mit_kadmin_local "$NAME_MIT" -- -q 'addpol -minlife 1h -maxlife 1d life'
+MIT_GETPOL="$(mit_kadmin_local "$NAME_MIT" -- -q 'getpol life' 2>&1 || true)"
 echo "$MIT_GETPOL"
 echo "$MIT_GETPOL" | grep -F 'Minimum password life: 0 days 01:00:00'
 echo "$MIT_GETPOL" | grep -F 'Maximum password life: 1 day 00:00:00'
@@ -551,8 +552,8 @@ echo "$MIT_GETPOL" | grep -F 'Minimum password length: 1'
 echo "$MIT_GETPOL" | grep -F 'Minimum number of password character classes: 1'
 echo "$MIT_GETPOL" | grep -F 'Number of old keys kept: 1'
 echo "==== MIT addpol name-only getpol floors 1/1/1 ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addpol floors1'
-MIT_GETF="$(docker exec "$NAME_MIT" kadmin.local -q 'getpol floors1' 2>&1 || true)"
+kadmin_q_ok --next-asserts mit_kadmin_local "$NAME_MIT" -- -q 'addpol floors1'
+MIT_GETF="$(mit_kadmin_local "$NAME_MIT" -- -q 'getpol floors1' 2>&1 || true)"
 echo "$MIT_GETF"
 echo "$MIT_GETF" | grep -F 'Minimum password length: 1'
 echo "$MIT_GETF" | grep -F 'Minimum number of password character classes: 1'
@@ -561,29 +562,28 @@ echo "==== getpol output is identical on both legs (life, floors1) ===="
 diff <(echo "$GETPOL" | grep -v '^Authenticating') <(echo "$MIT_GETPOL" | grep -v -e '^Authenticating' -e 'No dictionary file')
 diff <(echo "$GETF" | grep -v '^Authenticating') <(echo "$MIT_GETF" | grep -v -e '^Authenticating' -e 'No dictionary file')
 echo "==== MIT modpol -minlength 0 is BAD_LENGTH ===="
-MIT_MOD0="$(docker exec "$NAME_MIT" kadmin.local -q 'modpol -minlength 0 floors1' 2>&1 || true)"
+MIT_MOD0="$(mit_kadmin_local "$NAME_MIT" -- -q 'modpol -minlength 0 floors1' 2>&1 || true)"
 echo "$MIT_MOD0"
 echo "$MIT_MOD0" | grep -F 'Invalid password length' || {
     echo "MIT modpol -minlength 0 missed BAD_LENGTH: $MIT_MOD0" >&2
     exit 1
 }
 echo "==== MIT modpol minlife over maxlife is BAD_MIN_PASS_LIFE ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addpol -maxlife 1d max1d'
-MIT_MODM="$(docker exec "$NAME_MIT" kadmin.local -q 'modpol -minlife 2d max1d' 2>&1 || true)"
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addpol -maxlife 1d max1d'
+MIT_MODM="$(mit_kadmin_local "$NAME_MIT" -- -q 'modpol -minlife 2d max1d' 2>&1 || true)"
 echo "$MIT_MODM"
 echo "$MIT_MODM" | grep -F 'Password minimum life is greater than password maximum life' || {
     echo "MIT modpol min>max missed BAD_MIN_PASS_LIFE: $MIT_MODM" >&2
     exit 1
 }
 echo "==== MIT modprinc +0x1ffffffff truncates ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw hex-secret hexu' || true
-MIT_HEXF="$(docker exec "$NAME_MIT" kadmin.local -q 'modprinc +0x1ffffffff hexu' 2>&1 || true)"
-echo "$MIT_HEXF"
-MIT_GETHEX="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc hexu' 2>&1 || true)"
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw hex-secret hexu' 
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc +0x1ffffffff hexu'
+MIT_GETHEX="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc hexu' 2>&1 || true)"
 echo "$MIT_GETHEX"
 echo "$MIT_GETHEX" | grep -E 'Attributes:' | grep -F 'DISALLOW_ALL_TIX'
-docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy life user'
-MIT_GETU="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user' 2>&1 || true)"
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc -policy life user'
+MIT_GETU="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_GETU"
 echo "$MIT_GETU" | grep -F 'Password expiration date:'
 echo "$MIT_GETU" | grep -F 'Password expiration date:' | grep -qv '\[never\]'
@@ -593,38 +593,37 @@ echo "$MIT_GETU" | grep -F 'Last password change: Sun Sep 09 01:46:40 UTC 2001'
 diff <(echo "$GETU" | grep -F 'Password expiration date:') <(echo "$MIT_GETU" | grep -F 'Password expiration date:')
 echo "$MIT_GETU" | grep -F 'Password expiration date: Mon Sep 10 01:46:40 UTC 2001'
 echo "==== MIT admin cpw new password then reuse ===="
-MIT_CPWA="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
+MIT_CPWA="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$MIT_CPWA"
 echo "$MIT_CPWA" | grep -F 'Password for "user@KERBER.TEST" changed.'
-MIT_GETU2="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc user' 2>&1 || true)"
+MIT_GETU2="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_GETU2" | grep -F 'Password expiration date:' | grep -v 2001 | grep -qv '\[never\]'
 if echo "$MIT_CPWA" | grep -qiE 'minimum life|too soon|too recently|Cannot reuse'; then
     echo "MIT admin cpw new password failed: $MIT_CPWA" >&2
     exit 1
 fi
-MIT_CPWR="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
+MIT_CPWR="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$MIT_CPWR"
 echo "$MIT_CPWR" | grep -F 'Cannot reuse password' || {
     echo "MIT admin cpw reuse missed: $MIT_CPWR" >&2
     exit 1
 }
 echo "==== MIT self cpw min_life is PASS_TOOSOON after the admin cpw ===="
-MIT_CPW1="$(docker exec "$NAME_MIT" kadmin -p user -w user-admin-new -q 'cpw -pw user-new1 user' 2>&1 || true)"
+MIT_CPW1="$(mit_kadmin "$NAME_MIT" -- -p user -w user-admin-new -q 'cpw -pw user-new1 user' 2>&1 || true)"
 echo "$MIT_CPW1"
 echo "$MIT_CPW1" | grep -F "Current password's minimum life has not expired"
-MIT_CPW2="$(docker exec "$NAME_MIT" kadmin -p user -w user-admin-new -q 'cpw -pw user-new2 user' 2>&1 || true)"
+MIT_CPW2="$(mit_kadmin "$NAME_MIT" -- -p user -w user-admin-new -q 'cpw -pw user-new2 user' 2>&1 || true)"
 echo "$MIT_CPW2"
 echo "$MIT_CPW2" | grep -F "Current password's minimum life has not expired"
 echo "==== MIT self keepold clamps to 5 ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw keep-0 keepoldself'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw keep-0 keepoldself'
 pw='keep-0'
 for i in 1 2 3 4 5 6; do
     nxt="keep-$i"
-    KEEP="$(docker exec "$NAME_MIT" kadmin -p keepoldself -w "$pw" -q "cpw -keepold -pw $nxt keepoldself" 2>&1 || true)"
-    echo "$KEEP"
+    kadmin_q_ok mit_kadmin "$NAME_MIT" -- -p keepoldself -w "$pw" -q "cpw -keepold -pw $nxt keepoldself"
     pw=$nxt
 done
-MIT_KEEPG="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc keepoldself' 2>&1 || true)"
+MIT_KEEPG="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc keepoldself' 2>&1 || true)"
 echo "$MIT_KEEPG"
 nkeys="$(echo "$MIT_KEEPG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
 echo "mit_keepold_kvnos=$nkeys"
@@ -633,15 +632,15 @@ if [ "$nkeys" != 5 ]; then
     exit 1
 fi
 echo "==== MIT self cpw -randkey -keepold x6 and setkey -keepold x6 clamp to 5 kvnos ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw rand-0 keepoldrand'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw set-0 keepoldset'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw rand-0 keepoldrand'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw set-0 keepoldset'
 MIT_RANDK="$(docker exec "$NAME_MIT" /tmp/kadm5-changepw-rpc --service kadmin/admin keepoldrand rand-0 KERBER.TEST randkey-keepold 6 2>&1 || true)"
 echo "$MIT_RANDK"
 echo "$MIT_RANDK" | grep -F 'randkey-keepold[6]=0'
 MIT_SETK="$(docker exec "$NAME_MIT" /tmp/kadm5-changepw-rpc --service kadmin/admin keepoldset set-0 KERBER.TEST setkey-keepold 6 2>&1 || true)"
 echo "$MIT_SETK"
 echo "$MIT_SETK" | grep -F 'setkey-keepold[6]=0'
-MIT_RANDG="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc keepoldrand' 2>&1 || true)"
+MIT_RANDG="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc keepoldrand' 2>&1 || true)"
 nk="$(echo "$MIT_RANDG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
 echo "mit_keepoldrand_kvnos=$nk"
 if [ "$nk" != 5 ]; then
@@ -649,7 +648,7 @@ if [ "$nk" != 5 ]; then
     exit 1
 fi
 echo "==== MIT 1.22.2 setkey keepold drops the old keys (svr_principal.c n_new_key_data); pinned as the deviation ===="
-MIT_SETG="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc keepoldset' 2>&1 || true)"
+MIT_SETG="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc keepoldset' 2>&1 || true)"
 echo "$MIT_SETG"
 nk="$(echo "$MIT_SETG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
 echo "mit_keepoldset_kvnos=$nk"
@@ -662,13 +661,13 @@ echo "==== MIT create_policy ignores an unmasked pw_max_life (KADM5_PW_MIN_LIFE 
 MIT_UNM="$(docker exec "$NAME_MIT" /tmp/kadm5-changepw-rpc --service kadmin/admin admin/admin adminpassword KERBER.TEST addpol-minlife-unmasked-max nomax 2>&1 || true)"
 echo "$MIT_UNM"
 echo "$MIT_UNM" | grep -F 'addpol_code=0'
-MIT_GETNM="$(docker exec "$NAME_MIT" kadmin.local -q 'getpol nomax' 2>&1 || true)"
+MIT_GETNM="$(mit_kadmin_local "$NAME_MIT" -- -q 'getpol nomax' 2>&1 || true)"
 echo "$MIT_GETNM"
 diff <(echo "$GETNM" | grep -v '^Authenticating') <(echo "$MIT_GETNM" | grep -v -e '^Authenticating' -e 'No dictionary file')
 echo "==== MIT purgekeys locked-down target is allowed ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw lock-secret lockp' || true
-docker exec "$NAME_MIT" kadmin.local -q 'modprinc +lockdown_keys lockp'
-MIT_PURGE_L="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'purgekeys lockp' 2>&1 || true)"
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw lock-secret lockp' 
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc +lockdown_keys lockp'
+MIT_PURGE_L="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'purgekeys lockp' 2>&1 || true)"
 echo "$MIT_PURGE_L"
 if echo "$MIT_PURGE_L" | grep -qiE 'protect|lockdown|Operation requires'; then
     echo "MIT purgekeys lockdown denied: $MIT_PURGE_L" >&2
@@ -676,7 +675,7 @@ if echo "$MIT_PURGE_L" | grep -qiE 'protect|lockdown|Operation requires'; then
 fi
 
 echo "==== MIT addprinc foo\\/admin then ACL */admin denies ===="
-MIT_ADDESC="$(docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw slashsecret foo\/admin' 2>&1 || true)"
+MIT_ADDESC="$(mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw slashsecret foo\/admin' 2>&1 || true)"
 echo "$MIT_ADDESC"
 echo "$MIT_ADDESC" | grep -F 'created'
 
@@ -737,8 +736,8 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen with -maxlife 42x"'
     exit 1
 fi
-docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'addprinc -pw x life42' || true
-MIT_LIFE42="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'getprinc life42' 2>&1 || true)"
+kadmin_q_try mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'addprinc -pw x life42' 
+MIT_LIFE42="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprinc life42' 2>&1 || true)"
 echo "$MIT_LIFE42"
 echo "$MIT_LIFE42" | grep -F 'Maximum ticket life: 0 days 00:00:42' || {
     echo "MIT 42x did not apply 42s max life: $MIT_LIFE42" >&2
@@ -788,7 +787,7 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"MIT kadmind did not listen with */admin ACL"'
     exit 1
 fi
-MIT_ESCDENY="$(docker exec "$NAME_MIT" kadmin -p 'foo\/admin' -w slashsecret -q 'listprincs' 2>&1 || true)"
+MIT_ESCDENY="$(mit_kadmin "$NAME_MIT" -- -p 'foo\/admin' -w slashsecret -q 'listprincs' 2>&1 || true)"
 echo "$MIT_ESCDENY"
 echo "$MIT_ESCDENY" | grep -F $'Operation requires ``list\'\' privilege'
 if echo "$MIT_ESCDENY" | grep -q 'user@KERBER.TEST'; then
@@ -828,10 +827,10 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"kadmind did not listen for unlock"'
     exit 1
 fi
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxfailure 1 -lockoutduration 0s -failurecountinterval 0s unlockpol'
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw unlock-secret -policy unlockpol +requires_preauth unlocku'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxfailure 1 -lockoutduration 0s -failurecountinterval 0s unlockpol'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw unlock-secret -policy unlockpol +requires_preauth unlocku'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
     "$NAME" sh -c 'printf "wrong-secret\n" | kinit unlocku@KERBER.TEST' >/dev/null 2>&1 || true
 LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
@@ -841,8 +840,8 @@ echo "$LOCKED" | grep -qiE 'revoked|locked out|CLIENT_REVOKED' || {
     echo "unlocku was not locked after one failure: $LOCKED" >&2
     exit 1
 }
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc -unlock unlocku'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'modprinc -unlock unlocku'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
     "$NAME" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST'
@@ -875,13 +874,13 @@ docker exec "$NAME_MIT" sh -c 'cat >/tmp/kadmin-unlock-krb5.conf <<EOF
         admin_server = 127.0.0.1
     }
 EOF'
-docker exec "$NAME_MIT" kadmin.local -q 'addpol -maxfailure 1 -lockoutduration 0s -failurecountinterval 0s unlockpol'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw unlock-secret -policy unlockpol +requires_preauth unlocku'
-docker exec "$NAME_MIT" kadmin.local -q 'getprinc unlocku'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addpol -maxfailure 1 -lockoutduration 0s -failurecountinterval 0s unlockpol'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw unlock-secret -policy unlockpol +requires_preauth unlocku'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'getprinc unlocku'
 MIT_WRONG="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
     "$NAME_MIT" sh -c 'printf "wrong-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
 echo "$MIT_WRONG"
-docker exec "$NAME_MIT" kadmin.local -q 'getprinc unlocku'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'getprinc unlocku'
 MIT_LOCKED="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
     "$NAME_MIT" sh -c 'printf "unlock-secret\n" | kinit unlocku@KERBER.TEST' 2>&1 || true)"
 echo "$MIT_LOCKED"
@@ -889,7 +888,7 @@ echo "$MIT_LOCKED" | grep -qiE 'revoked|locked out|CLIENT_REVOKED' || {
     echo "MIT unlocku was not locked after one failure: $MIT_LOCKED" >&2
     exit 1
 }
-docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'modprinc -unlock unlocku'
+kadmin_q_ok mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'modprinc -unlock unlocku'
 docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \
     "$NAME_MIT" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/kadmin-unlock-krb5.conf \

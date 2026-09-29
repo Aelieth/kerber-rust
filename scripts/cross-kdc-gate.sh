@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kdb krb5-pac-extract
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -203,10 +204,10 @@ spake_kinit_via mit
 echo "==== MIT-TGT → Rust-TGS PAC buffer types match MIT-TGT → MIT-TGS ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker exec "$NAME" chmod +x /tmp/krb5-pac-extract
-docker exec "$NAME" kadmin.local -q 'ktadd -norandkey -k /tmp/host.kt host/testhost.kerber.test' \
-    >/dev/null 2>&1 || die "ktadd -norandkey host failed"
-docker exec "$NAME" kadmin.local -q 'ktadd -norandkey -k /tmp/krbtgt.kt krbtgt/KERBER.TEST' \
-    >/dev/null 2>&1 || die "ktadd -norandkey krbtgt failed"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -norandkey -k /tmp/host.kt host/testhost.kerber.test' \
+    >/dev/null 2>&1
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -norandkey -k /tmp/krbtgt.kt krbtgt/KERBER.TEST' \
+    >/dev/null 2>&1
 pac_types_via() {
     local tgs=$1
     kinit_via mit
@@ -224,7 +225,7 @@ echo "mit_pac_types=$MIT_PAC_TYPES rust_pac_types=$RUST_PAC_TYPES"
 [ "$MIT_PAC_TYPES" = "$RUST_PAC_TYPES" ] || die "PAC types differ: mit=$MIT_PAC_TYPES rust=$RUST_PAC_TYPES"
 
 echo "==== setstr pac_privsvr_enctype + MIT kvno both legs ===="
-docker exec "$NAME" kadmin.local -q \
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q \
     'setstr host/testhost.kerber.test pac_privsvr_enctype aes128-cts-hmac-sha1-96'
 docker exec "$NAME" kdb5_util dump /tmp/privsvr.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
@@ -283,7 +284,7 @@ echo "rust_svc_ad_types=$SVC_AD"
 [ "$SVC_AD" = "1/128" ] || die "Rust TGS AD shape want 1/128 (no copied TGT PAC) got $SVC_AD"
 
 echo "==== require_auth password kvno is 12 both legs ===="
-docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth pkinit'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr host/testhost.kerber.test require_auth pkinit'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
@@ -323,7 +324,7 @@ docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log \
 require_log "$NAME" /tmp/rust-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/rust-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
     || die "Rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED after require_auth kvno"
-docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'delstr host/testhost.kerber.test require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-clear.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
@@ -351,7 +352,7 @@ done
 
 echo "==== require_auth on krbtgt password kinit is 12 both legs ===="
 docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log'
-docker exec "$NAME" kadmin.local -q 'setstr krbtgt/KERBER.TEST require_auth pkinit'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr krbtgt/KERBER.TEST require_auth pkinit'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-as.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
@@ -395,7 +396,7 @@ docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log \
 require_log "$NAME" /tmp/rust-kdc.log 'HIGHER_AUTHENTICATION_REQUIRED' "HIGHER_AUTHENTICATION_REQUIRED in /tmp/rust-kdc.log"
 docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/rust-kdc.log \
     || die "Rust KDC log missing HIGHER_AUTHENTICATION_REQUIRED after krbtgt require_auth"
-docker exec "$NAME" kadmin.local -q 'delstr krbtgt/KERBER.TEST require_auth'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'delstr krbtgt/KERBER.TEST require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-as-clear.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
@@ -484,7 +485,7 @@ echo "mit_spake_svc_ad=$MIT_CAMMAC_SVC"
 [ "$MIT_CAMMAC_SVC" = "1/128,1/96" ] || die "MIT TGS service ticket want 1/128,1/96 got $MIT_CAMMAC_SVC"
 
 echo "==== require_auth spake: SPAKE issued, password 12 both legs ===="
-docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth spake'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr host/testhost.kerber.test require_auth spake'
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-spake.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true

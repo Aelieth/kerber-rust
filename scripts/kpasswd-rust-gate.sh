@@ -212,7 +212,7 @@ echo "$KTN"
 echo "$KTN" | grep -F 'extract-keys'
 
 echo "==== TGS kpasswd self-change is INITIAL_FLAG_NEEDED (Rust) ===="
-kadmin_q 'modprinc +allow_tgs_req kadmin/changepw'
+kadmin_q_ok kadmin_q 'modprinc +allow_tgs_req kadmin/changepw'
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
 nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
@@ -250,7 +250,7 @@ docker exec "$NAME" sh -c "tail -n +$((nlog + 1)) /tmp/kadmind.log" | grep -F 's
 if docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "e1-should-fail\n" | kinit user@KERBER.TEST'; then
     echo "NT-UNKNOWN targname kpasswd changed the password" >&2
-    kadmin_q 'cpw -pw rust-kpw user'
+    kadmin_q_ok kadmin_q 'cpw -pw rust-kpw user'
     exit 1
 fi
 echo "==== TGS kpasswd other principal is ACCESSDENIED (Rust) ===="
@@ -269,11 +269,11 @@ echo "helper_rc=$d2o_rc"
 [ "$d2o_rc" -eq 0 ]
 echo "$D2O" | grep -F 'result_code=5'
 echo "$D2O" | grep -F 'Unauthorized request'
-kadmin_q 'modprinc -allow_tgs_req kadmin/changepw'
+kadmin_q_ok kadmin_q 'modprinc -allow_tgs_req kadmin/changepw'
 
 echo "==== kpasswd min_life is SOFTERROR ===="
-kadmin_q 'addpol -minlife 1h minlife'
-kadmin_q 'modprinc -policy minlife user'
+kadmin_q_ok kadmin_q 'addpol -minlife 1h minlife'
+kadmin_q_ok kadmin_q 'modprinc -policy minlife user'
 set +e
 KPMIN="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" \
     sh -c 'printf "rust-kpw\nrust-kpw2\nrust-kpw2\n" | kpasswd user@KERBER.TEST' 2>&1)"
@@ -301,8 +301,8 @@ echo "helper_rc=$kpmin4_rc"
 echo "$KPMIN4" | grep -F 'result_code=4'
 
 echo "==== Rust kadmind policy rejection is SOFTERROR ===="
-kadmin_q 'addpol -minlength 8 short8'
-kadmin_q 'modprinc -policy short8 user'
+kadmin_q_ok kadmin_q 'addpol -minlength 8 short8'
+kadmin_q_ok kadmin_q 'modprinc -policy short8 user'
 nlog="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kadmind.log' | tr -d '[:space:]')"
 set +e
 POL="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" \

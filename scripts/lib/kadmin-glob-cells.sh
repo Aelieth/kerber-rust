@@ -142,7 +142,7 @@ glob_cells() {
         kg "addprinc -pw pw $pr" | grep -F "Principal \"$pr@KERBER.TEST\" created."
     done
     for pol in gpol1 gpolx gp1; do
-        kg "addpol $pol" | grep -v '^Authenticating' || true
+        kadmin_q_ok kg "addpol $pol"
     done
     echo "==== $leg glob: listprincs / listpols patterns ===="
     : >"$out"

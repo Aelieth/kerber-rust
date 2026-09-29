@@ -66,14 +66,14 @@ prod_mit_sample() {
 }
 
 prod_kprop_replica() {
-    prod_client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
-        -q "addprinc -randkey $HOST_APP" || return 1
-    prod_client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
-        -q "ktadd -k /tmp/app.keytab $HOST_APP" || return 1
-    prod_client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
-        -q "addprinc -randkey $HOST_REPLICA" || return 1
-    prod_client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
-        -q "ktadd -k /tmp/kdc2.keytab $HOST_REPLICA" || return 1
+    kadmin_q_ok prod_client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
+        -q "addprinc -randkey $HOST_APP"
+    kadmin_q_ok prod_client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
+        -q "ktadd -k /tmp/app.keytab $HOST_APP"
+    kadmin_q_ok prod_client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
+        -q "addprinc -randkey $HOST_REPLICA"
+    kadmin_q_ok prod_client kadmin -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
+        -q "ktadd -k /tmp/kdc2.keytab $HOST_REPLICA"
     docker cp "$CLIENT":/tmp/kdc2.keytab "$OUT/kdc2.keytab" || return 1
     docker cp "$OUT/kdc2.keytab" "$PRIMARY":/tmp/kdc2.keytab || return 1
     docker cp "$OUT/kdc2.keytab" "$REPLICA":/tmp/kdc2.keytab || return 1

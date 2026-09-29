@@ -88,15 +88,15 @@ docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
 
 echo "==== DISALLOW_ALL_TIX client still CLIENT_REVOKED ===="
-kadmin_q 'addprinc -pw flag-secret flaguser'
-kadmin_q 'modprinc -allow_tix flaguser'
+kadmin_q_ok kadmin_q 'addprinc -pw flag-secret flaguser'
+kadmin_q_ok kadmin_q 'modprinc -allow_tix flaguser'
 REV="$(kinit_try 'printf "flag-secret\n" | kinit flaguser@KERBER.TEST')"
 echo "$REV"
 echo "$REV" | grep -qiE "credentials have been revoked|CLIENT_REVOKED"
-kadmin_q 'modprinc +allow_tix flaguser'
+kadmin_q_ok kadmin_q 'modprinc +allow_tix flaguser'
 
 echo "==== DISALLOW_FORWARDABLE strips F ===="
-kadmin_q 'modprinc -allow_forwardable flaguser'
+kadmin_q_ok kadmin_q 'modprinc -allow_forwardable flaguser'
 GET="$(kadmin_q 'getprinc flaguser')"
 echo "$GET"
 echo "$GET" | grep -q 'DISALLOW_FORWARDABLE'
@@ -109,10 +109,10 @@ echo "$FLAGS" | grep -q 'flaguser@KERBER.TEST'
 FLAGBITS="$(echo "$FLAGS" | awk -F'Flags: ' '/Flags:/{print $2}' | tail -1 | tr -d '[:space:]')"
 echo "flagbits=$FLAGBITS"
 echo "$FLAGBITS" | grep -qv F
-kadmin_q 'modprinc +allow_forwardable flaguser'
+kadmin_q_ok kadmin_q 'modprinc +allow_forwardable flaguser'
 
 echo "==== OK_AS_DELEGATE sets O on kvno host ===="
-kadmin_q 'modprinc +ok_as_delegate host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc +ok_as_delegate host/testhost.kerber.test'
 GETH="$(kadmin_q 'getprinc host/testhost.kerber.test')"
 echo "$GETH"
 echo "$GETH" | grep -q 'OK_AS_DELEGATE'
@@ -125,7 +125,7 @@ echo "host_flagbits=$OHOST"
 echo "$OHOST" | grep -q O
 
 echo "==== DISALLOW_SVR: kvno MUST_USE_USER2USER ===="
-kadmin_q 'modprinc -allow_svr host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc -allow_svr host/testhost.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
     "$NAME" sh -c 'printf "flag-secret\n" | kinit flaguser@KERBER.TEST'
@@ -133,10 +133,10 @@ SVR="$(docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test 2>&1 || true)"
 echo "$SVR"
 echo "$SVR" | grep -qiE "user2user|MUST_USE_USER2USER|KDC policy|cannot accommodate"
-kadmin_q 'modprinc +allow_svr host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc +allow_svr host/testhost.kerber.test'
 
 echo "==== DISALLOW_TGT_BASED: kvno POLICY ===="
-kadmin_q 'modprinc -allow_tgs_req host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc -allow_tgs_req host/testhost.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
     "$NAME" sh -c 'printf "flag-secret\n" | kinit flaguser@KERBER.TEST'
@@ -144,11 +144,11 @@ TGT="$(docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test 2>&1 || true)"
 echo "$TGT"
 echo "$TGT" | grep -qiE "KDC policy rejects|POLICY"
-kadmin_q 'modprinc +allow_tgs_req host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc +allow_tgs_req host/testhost.kerber.test'
 
 echo "==== REQUIRES_HW_AUTH: kinit NEEDED_HW_PREAUTH ===="
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
-kadmin_q 'modprinc +requires_hwauth -requires_preauth flaguser'
+kadmin_q_ok kadmin_q 'modprinc +requires_hwauth -requires_preauth flaguser'
 GETHW="$(kadmin_q 'getprinc flaguser')"
 echo "$GETHW"
 echo "$GETHW" | grep '^Attributes:' | grep -q 'REQUIRES_HW_AUTH'
@@ -160,7 +160,7 @@ if echo "$HW" | grep -q 'Ticket cache: FILE:'; then
     echo "REQUIRES_HW_AUTH principal obtained a ticket" >&2
     exit 1
 fi
-kadmin_q 'modprinc -requires_hwauth flaguser'
+kadmin_q_ok kadmin_q 'modprinc -requires_hwauth flaguser'
 
 echo "==== unexpired flaguser still kinit ===="
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
@@ -171,7 +171,7 @@ echo "$OKL"
 echo "$OKL" | grep -q 'flaguser@KERBER.TEST'
 
 echo "==== U2U kvno --u2u happy ===="
-kadmin_q 'ktadd -k /tmp/flags-host.kt host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'ktadd -k /tmp/flags-host.kt host/testhost.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
     "$NAME" kinit -k -t /tmp/flags-host.kt -c /tmp/krb5cc_flags_host \
     host/testhost.kerber.test@KERBER.TEST
@@ -185,7 +185,7 @@ echo "$U2UOK"
 echo "$U2UOK" | grep -q 'host/testhost.kerber.test'
 
 echo "==== DISALLOW_DUP_SKEY: kvno --u2u POLICY ===="
-kadmin_q 'modprinc -allow_dup_skey host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc -allow_dup_skey host/testhost.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
     "$NAME" sh -c 'printf "flag-secret\n" | kinit -c /tmp/krb5cc_flags_u2u flaguser@KERBER.TEST'
 docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
@@ -198,7 +198,7 @@ U2UDUP="$(docker exec -e KRB5_CONFIG=/tmp/flags-krb5.conf \
 set -e
 echo "$U2UDUP"
 echo "$U2UDUP" | grep -qiE "KDC policy rejects request|DUP_SKEY DISALLOWED"
-kadmin_q 'modprinc +allow_dup_skey host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc +allow_dup_skey host/testhost.kerber.test'
 
 log "flags.gate" "ok" ',"disallow_all_tix":true,"disallow_forwardable":true,"ok_as_delegate":true,"disallow_svr":true,"disallow_tgt_based":true,"requires_hw_auth":true,"disallow_dup_skey":true'
 exit 0

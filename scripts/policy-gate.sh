@@ -88,8 +88,7 @@ docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
 
 echo "==== MIT kadmin addpol lockme ===="
-ADD="$(kadmin_q 'addpol -minlength 8 -minclasses 2 -history 1 -maxfailure 2 lockme')"
-echo "$ADD"
+kadmin_q_ok kadmin_q 'addpol -minlength 8 -minclasses 2 -history 1 -maxfailure 2 lockme'
 
 echo "==== MIT kadmin getpol lockme ===="
 GET="$(kadmin_q 'getpol lockme')"
@@ -104,15 +103,14 @@ echo "$LIST"
 echo "$LIST" | grep -q 'lockme'
 
 echo "==== MIT kadmin modpol -minlength 10 lockme ===="
-kadmin_q 'modpol -minlength 10 lockme' >/dev/null
+kadmin_q_ok kadmin_q 'modpol -minlength 10 lockme' >/dev/null
 GET2="$(kadmin_q 'getpol lockme')"
 echo "$GET2"
 echo "$GET2" | grep -q 'Minimum password length: 10'
 echo "$GET2" | grep -qiE 'Maximum password failures.*2|failures before lockout: 2'
 
 echo "==== MIT kadmin addprinc -policy lockme lockuser ===="
-ADDPR="$(kadmin_q 'addprinc -policy lockme -pw lock-secret lockuser')"
-echo "$ADDPR"
+kadmin_q_ok kadmin_q 'addprinc -policy lockme -pw lock-secret lockuser'
 GETPR="$(kadmin_q 'getprinc lockuser')"
 echo "$GETPR"
 echo "$GETPR" | grep -q 'Principal: lockuser@KERBER.TEST'
@@ -167,7 +165,7 @@ if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     log "policy.gate" "error" ',"error":"armor TGT for FAST lockout failed"'
     exit 1
 fi
-kadmin_q 'addprinc -policy lockme -pw Fast-lock1 fastlock' >/dev/null
+kadmin_q_ok kadmin_q 'addprinc -policy lockme -pw Fast-lock1 fastlock' >/dev/null
 fast_kinit() {
     docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf -e KRB5_TRACE=/tmp/fastlock.trace \
         "$NAME" sh -c 'printf "wrong-password\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_fastlock fastlock@KERBER.TEST' 2>&1 || true
@@ -198,9 +196,8 @@ echo "$F3"
 echo "$F3" | grep -qiE 'revoked|CLIENT_REVOKED'
 
 echo "==== MIT kadmin cpw minclasses 5 ===="
-kadmin_q 'addpol -minlength 8 -minclasses 5 class5' >/dev/null
-ADD5="$(kadmin_q 'addprinc -policy class5 -pw "Aa1!aaa " classuser')"
-echo "$ADD5"
+kadmin_q_ok kadmin_q 'addpol -minlength 8 -minclasses 5 class5' >/dev/null
+kadmin_q_ok kadmin_q 'addprinc -policy class5 -pw "Aa1!aaa " classuser'
 FOUR="$(kadmin_q 'cpw -pw Aa1!aaaa classuser')"
 echo "$FOUR"
 if ! echo "$FOUR" | grep -qi 'enough character classes'; then
@@ -215,15 +212,15 @@ if ! echo "$FIVE" | grep -qi 'password .* changed'; then
     log "policy.gate" "error" ',"error":"cpw 5-class must succeed"'
     exit 1
 fi
-kadmin_q 'delprinc -force classuser' >/dev/null
-kadmin_q 'delpol -force class5' >/dev/null
+kadmin_q_ok kadmin_q 'delprinc -force classuser' >/dev/null
+kadmin_q_ok kadmin_q 'delpol -force class5' >/dev/null
 
 echo "==== MIT kadmin duration-only lockout ===="
-kadmin_q 'addpol -minlength 8 -minclasses 1 -maxfailure 1 -lockoutduration 3s -failurecountinterval 0s durpol' >/dev/null
+kadmin_q_ok kadmin_q 'addpol -minlength 8 -minclasses 1 -maxfailure 1 -lockoutduration 3s -failurecountinterval 0s durpol' >/dev/null
 DGET="$(kadmin_q 'getpol durpol')"
 echo "$DGET"
 echo "$DGET" | grep -qiE 'lockout duration: 0 days 00:00:03'
-kadmin_q 'addprinc -policy durpol -pw Time-sec1 duruser' >/dev/null
+kadmin_q_ok kadmin_q 'addprinc -policy durpol -pw Time-sec1 duruser' >/dev/null
 D1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit duruser@KERBER.TEST' 2>&1 || true)"
 echo "$D1"
@@ -238,15 +235,15 @@ if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     exit 1
 fi
 docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
-kadmin_q 'delprinc -force duruser' >/dev/null
-kadmin_q 'delpol -force durpol' >/dev/null
+kadmin_q_ok kadmin_q 'delprinc -force duruser' >/dev/null
+kadmin_q_ok kadmin_q 'delpol -force durpol' >/dev/null
 
 echo "==== MIT kadmin interval-only failcnt reset ===="
-kadmin_q 'addpol -minlength 8 -minclasses 1 -maxfailure 1 -lockoutduration 0s -failurecountinterval 2s intpol' >/dev/null
+kadmin_q_ok kadmin_q 'addpol -minlength 8 -minclasses 1 -maxfailure 1 -lockoutduration 0s -failurecountinterval 2s intpol' >/dev/null
 IGET="$(kadmin_q 'getpol intpol')"
 echo "$IGET"
 echo "$IGET" | grep -qiE 'failure count reset interval: 0 days 00:00:02'
-kadmin_q 'addprinc -policy intpol -pw Time-sec1 intuser' >/dev/null
+kadmin_q_ok kadmin_q 'addprinc -policy intpol -pw Time-sec1 intuser' >/dev/null
 I1="$(docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
     "$NAME" sh -c 'printf "wrong-password\n" | kinit intuser@KERBER.TEST' 2>&1 || true)"
 echo "$I1"
@@ -258,14 +255,14 @@ echo "$I2" | grep -qiE 'revoked|CLIENT_REVOKED' && {
     log "policy.gate" "error" ',"error":"interval-only elapsed must not lock on next wrong"'
     exit 1
 }
-kadmin_q 'delprinc -force intuser' >/dev/null
-kadmin_q 'delpol -force intpol' >/dev/null
+kadmin_q_ok kadmin_q 'delprinc -force intuser' >/dev/null
+kadmin_q_ok kadmin_q 'delpol -force intpol' >/dev/null
 
 echo "==== MIT kadmin history depth 2 (current counts inside N) ===="
-kadmin_q 'addpol -minlength 8 -minclasses 2 -history 2 histn' >/dev/null
-kadmin_q 'addprinc -policy histn -pw Hist-pw0 histuser' >/dev/null
-kadmin_q 'cpw -pw Hist-pw1 histuser' >/dev/null
-kadmin_q 'cpw -pw Hist-pw2 histuser' >/dev/null
+kadmin_q_ok kadmin_q 'addpol -minlength 8 -minclasses 2 -history 2 histn' >/dev/null
+kadmin_q_ok kadmin_q 'addprinc -policy histn -pw Hist-pw0 histuser' >/dev/null
+kadmin_q_ok kadmin_q 'cpw -pw Hist-pw1 histuser' >/dev/null
+kadmin_q_ok kadmin_q 'cpw -pw Hist-pw2 histuser' >/dev/null
 HB="$(kadmin_q 'cpw -pw Hist-pw1 histuser')"
 echo "$HB"
 if ! echo "$HB" | grep -qiE 'reuse|REUSE|history'; then
@@ -282,7 +279,7 @@ if ! echo "$HA" | grep -qi 'password .* changed'; then
 fi
 
 echo "==== MIT kadmin delpol lockme ===="
-kadmin_q 'delpol -force lockme' >/dev/null
+kadmin_q_ok kadmin_q 'delpol -force lockme' >/dev/null
 DELGET="$(kadmin_q 'getpol lockme')"
 echo "$DELGET"
 echo "$DELGET" | grep -qiE 'does not exist|not found|UNK|unknown policy'
@@ -333,7 +330,7 @@ if [ "$LOADRC" -ne 0 ] || echo "$LOADH" | grep -qiE 'error|fail|cannot parse'; t
     log "policy.gate" "error" ',"error":"MIT kdb5_util load rejected history dump"'
     exit 1
 fi
-GETH="$(docker exec "$NAME" kadmin.local -q 'getprinc histuser' 2>&1 || true)"
+GETH="$(mit_kadmin_local "$NAME" -- -q 'getprinc histuser' 2>&1 || true)"
 echo "$GETH"
 echo "$GETH" | grep -q 'Principal: histuser@KERBER.TEST'
 echo "$GETH" | grep -q 'Policy: histn'
@@ -342,12 +339,12 @@ echo "$GETH" | grep -q 'Policy: histn'
 # window; then MIT continues the same ring.
 echo "==== MIT enforces the history Rust recorded, and continues its ring ===="
 for reused in Hist-pw2 Hist-pw0; do
-    MR="$(docker exec "$NAME" kadmin.local -q "cpw -pw $reused histuser" 2>&1 || true)"
+    MR="$(mit_kadmin_local "$NAME" -- -q "cpw -pw $reused histuser" 2>&1 || true)"
     echo "$MR"
     echo "$MR" | grep -F 'Cannot reuse password while changing password for "histuser@KERBER.TEST".'
 done
-docker exec "$NAME" kadmin.local -q 'cpw -pw Hist-pw1 histuser' 2>&1 | grep -F 'Password for "histuser@KERBER.TEST" changed.'
-MR2="$(docker exec "$NAME" kadmin.local -q 'cpw -pw Hist-pw0 histuser' 2>&1 || true)"
+mit_kadmin_local "$NAME" -- -q 'cpw -pw Hist-pw1 histuser' 2>&1 | grep -F 'Password for "histuser@KERBER.TEST" changed.'
+MR2="$(mit_kadmin_local "$NAME" -- -q 'cpw -pw Hist-pw0 histuser' 2>&1 || true)"
 echo "$MR2"
 echo "$MR2" | grep -F 'Cannot reuse password while changing password for "histuser@KERBER.TEST".'
 DUMPH="$(docker exec "$NAME" kdb5_util dump /tmp/mit-hist.dump 2>&1 || true)"

@@ -87,10 +87,8 @@ docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
 
 echo "==== MIT kadmin addprinc expuser + modprinc -expire past ===="
-ADD="$(kadmin_q 'addprinc -pw exp-secret expuser')"
-echo "$ADD"
-MOD="$(kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" expuser')"
-echo "$MOD"
+kadmin_q_ok kadmin_q 'addprinc -pw exp-secret expuser'
+kadmin_q_ok kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" expuser'
 GET="$(kadmin_q 'getprinc expuser')"
 echo "$GET"
 echo "$GET" | grep '^Expiration date:' | grep -v '\[never\]'
@@ -105,10 +103,8 @@ if echo "$EXP" | grep -qiE 'Authenticated|Ticket cache'; then
 fi
 
 echo "==== MIT kadmin addprinc pwexpuser + modprinc -pwexpire past ===="
-ADD2="$(kadmin_q 'addprinc -pw pw-secret pwexpuser')"
-echo "$ADD2"
-MOD2="$(kadmin_q 'modprinc -pwexpire "Jan 1, 2020 00:00:00 UTC" pwexpuser')"
-echo "$MOD2"
+kadmin_q_ok kadmin_q 'addprinc -pw pw-secret pwexpuser'
+kadmin_q_ok kadmin_q 'modprinc -pwexpire "Jan 1, 2020 00:00:00 UTC" pwexpuser'
 GET2="$(kadmin_q 'getprinc pwexpuser')"
 echo "$GET2"
 echo "$GET2" | grep 'Password expiration date:' | grep -v '\[never\]'
@@ -116,7 +112,7 @@ echo "$GET2" | grep 'Password expiration date:' | grep -v '\[never\]'
 echo "==== MIT kinit pwexpuser (must KEY_EXPIRED, not a ticket) ===="
 # MIT kinit auto-tries kadmin/changepw when KEY_EXPIRED; strip the flag so
 # the protocol code is visible instead of an interactive cpw prompt.
-kadmin_q 'modprinc -password_changing_service kadmin/changepw'
+kadmin_q_ok kadmin_q 'modprinc -password_changing_service kadmin/changepw'
 PW="$(kinit_try 'printf "pw-secret\n" | kinit pwexpuser@KERBER.TEST')"
 echo "$PW"
 echo "$PW" | grep -qiE "Password has expired|key has expired|KEY_EXP"
@@ -124,7 +120,7 @@ if echo "$PW" | grep -qiE 'Authenticated|Ticket cache'; then
     echo "password-expired principal obtained a TGT" >&2
     exit 1
 fi
-kadmin_q 'modprinc +password_changing_service kadmin/changepw'
+kadmin_q_ok kadmin_q 'modprinc +password_changing_service kadmin/changepw'
 
 echo "==== kadmin/changepw carries PWCHANGE_SERVICE ===="
 CPWGET="$(kadmin_q 'getprinc kadmin/changepw')"
@@ -144,9 +140,8 @@ echo "$CPW"
 echo "$CPW" | grep -q 'kadmin/changepw'
 
 echo "==== both -expire and -pwexpire: NAME_EXP wins ===="
-ADD3="$(kadmin_q 'addprinc -pw both-secret bothexp')"
-echo "$ADD3"
-kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" -pwexpire "Jan 1, 2020 00:00:00 UTC" bothexp'
+kadmin_q_ok kadmin_q 'addprinc -pw both-secret bothexp'
+kadmin_q_ok kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" -pwexpire "Jan 1, 2020 00:00:00 UTC" bothexp'
 BOTH="$(kinit_try 'printf "both-secret\n" | kinit bothexp@KERBER.TEST')"
 echo "$BOTH"
 echo "$BOTH" | grep -qiE "entry in database has expired|name.exp"
@@ -164,11 +159,11 @@ echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 
 echo "==== TGS after pwexpire: kvno still succeeds ===="
-kadmin_q 'addprinc -pw tgs-secret tgsuser'
+kadmin_q_ok kadmin_q 'addprinc -pw tgs-secret tgsuser'
 docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     "$NAME" sh -c 'printf "tgs-secret\n" | kinit tgsuser@KERBER.TEST'
-kadmin_q 'modprinc -pwexpire "Jan 1, 2020 00:00:00 UTC" tgsuser'
+kadmin_q_ok kadmin_q 'modprinc -pwexpire "Jan 1, 2020 00:00:00 UTC" tgsuser'
 if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
@@ -176,7 +171,7 @@ if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     exit 1
 fi
 docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
-kadmin_q 'modprinc -password_changing_service kadmin/changepw'
+kadmin_q_ok kadmin_q 'modprinc -password_changing_service kadmin/changepw'
 PW_AS="$(kinit_try 'printf "tgs-secret\n" | kinit tgsuser@KERBER.TEST')"
 echo "$PW_AS"
 echo "$PW_AS" | grep -qiE "Password has expired|key has expired|KEY_EXP"
@@ -184,13 +179,13 @@ if echo "$PW_AS" | grep -qiE 'Authenticated|Ticket cache'; then
     echo "password-expired tgsuser obtained a TGT after TGS" >&2
     exit 1
 fi
-kadmin_q 'modprinc +password_changing_service kadmin/changepw'
+kadmin_q_ok kadmin_q 'modprinc +password_changing_service kadmin/changepw'
 
 echo "==== TGS after account expire: kvno still succeeds ===="
-kadmin_q 'addprinc -pw acct-secret tgsacct'
+kadmin_q_ok kadmin_q 'addprinc -pw acct-secret tgsacct'
 docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     "$NAME" sh -c 'printf "acct-secret\n" | kinit tgsacct@KERBER.TEST'
-kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" tgsacct'
+kadmin_q_ok kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" tgsacct'
 if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
@@ -209,7 +204,7 @@ fi
 echo "==== TGS expired server is SERVICE_EXP ===="
 docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     "$NAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'
-kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc -expire "Jan 1, 2020 00:00:00 UTC" host/testhost.kerber.test'
 SVC="$(docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     "$NAME" kvno host/testhost.kerber.test 2>&1 || true)"
 echo "$SVC"
@@ -218,14 +213,14 @@ if echo "$SVC" | grep -q 'kvno ='; then
     echo "expired server issued a service ticket" >&2
     exit 1
 fi
-kadmin_q 'modprinc -expire never host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc -expire never host/testhost.kerber.test'
 
 echo "==== MIT kadmin +needchange → KEY_EXPIRED; changepw still issues ===="
-kadmin_q 'addprinc -pw need-secret needuser'
+kadmin_q_ok kadmin_q 'addprinc -pw need-secret needuser'
 NEEDGET="$(kadmin_q 'modprinc +needchange needuser'; kadmin_q 'getprinc needuser')"
 echo "$NEEDGET"
 echo "$NEEDGET" | grep -q 'REQUIRES_PWCHANGE'
-kadmin_q 'modprinc -password_changing_service kadmin/changepw'
+kadmin_q_ok kadmin_q 'modprinc -password_changing_service kadmin/changepw'
 NEED="$(kinit_try 'printf "need-secret\n" | kinit needuser@KERBER.TEST')"
 echo "$NEED"
 echo "$NEED" | grep -qiE "Password has expired|key has expired|KEY_EXP"
@@ -233,7 +228,7 @@ if echo "$NEED" | grep -qiE 'Authenticated|Ticket cache'; then
     echo "+needchange principal obtained a TGT" >&2
     exit 1
 fi
-kadmin_q 'modprinc +password_changing_service kadmin/changepw'
+kadmin_q_ok kadmin_q 'modprinc +password_changing_service kadmin/changepw'
 docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf \
     "$NAME" sh -c 'printf "need-secret\n" | kinit -S kadmin/changepw@KERBER.TEST needuser@KERBER.TEST'; then
@@ -247,8 +242,8 @@ echo "$NEEDCPW" | grep -q 'kadmin/changepw'
 
 echo "==== MIT kinit password-expiry warning vs Rust KDC (key_expiration) ===="
 WARN_DATE="$(docker exec "$NAME" date -u -d '+2 days' '+%b %d, %Y %H:%M:%S UTC')"
-kadmin_q "addprinc -pw warn-secret warnuser"
-kadmin_q "modprinc -pwexpire \"$WARN_DATE\" warnuser"
+kadmin_q_ok kadmin_q "addprinc -pw warn-secret warnuser"
+kadmin_q_ok kadmin_q "modprinc -pwexpire \"$WARN_DATE\" warnuser"
 docker exec -e KRB5_CONFIG=/tmp/expire-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 WARN_RUST="$(kinit_try 'printf "warn-secret\n" | kinit warnuser@KERBER.TEST')"
 echo "$WARN_RUST"
@@ -284,8 +279,8 @@ if [ "$free" != 1 ]; then
 fi
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
-docker exec "$NAME" kadmin.local -q 'addprinc -pw warn-secret warnuser'
-docker exec "$NAME" kadmin.local -q "modprinc -pwexpire \"$WARN_DATE\" warnuser"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw warn-secret warnuser'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "modprinc -pwexpire \"$WARN_DATE\" warnuser"
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0

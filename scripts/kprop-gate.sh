@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
 need_bins krb5-kdc krb5-kpropd kprop-expired-apreq
 
@@ -245,11 +246,11 @@ EOF'
 echo "==== MIT realm + dump ===="
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword
-docker exec "$NAME" kadmin.local -q 'addprinc -pw userpassword user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw userpassword user'
 HN="$(docker exec "$NAME" hostname)"
-docker exec "$NAME" kadmin.local -q "addprinc -randkey host/localhost"
-docker exec "$NAME" kadmin.local -q "addprinc -randkey host/${HN}"
-docker exec "$NAME" kadmin.local -q "ktadd -k /tmp/host.keytab host/localhost host/${HN}"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -randkey host/localhost"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -randkey host/${HN}"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "ktadd -k /tmp/host.keytab host/localhost host/${HN}"
 docker exec "$NAME" kdb5_util dump /tmp/dump
 docker exec "$NAME" sh -c "printf 'host/localhost@KERBER.TEST\\nhost/${HN}@KERBER.TEST\\n' >/tmp/kpropd.acl"
 docker exec "$NAME" sh -c 'touch /tmp/dump.dump_ok'

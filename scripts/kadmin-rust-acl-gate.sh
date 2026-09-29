@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
 . "$ROOT/scripts/lib/kadmin-common.sh"
 
@@ -56,8 +57,8 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"kadmind did not listen after admin-less ACL"'
     exit 1
 fi
-NOADMIN="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
+NOADMIN="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
 echo "$NOADMIN"
 echo "$NOADMIN" | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
 if echo "$NOADMIN" | grep -q 'Principal: user'; then
@@ -166,35 +167,35 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"kadmind did not listen on default ACL path"'
     exit 1
 fi
-GETPRIVS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprivs' 2>&1 || true)"
+GETPRIVS="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprivs' 2>&1 || true)"
 save_rust_snap GETPRIVS "$GETPRIVS"
 echo "$GETPRIVS"
 echo "$GETPRIVS" | grep -qiE 'GET|ADD|MODIFY|DELETE'
 
 echo "==== getprinc user@OTHER.REALM is UNK_PRINC ===="
-FOREIGN="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
+FOREIGN="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
 echo "$FOREIGN"
 echo "$FOREIGN" | grep -F 'Principal does not exist'
 echo "==== addprinc user@OTHER.REALM creates ===="
-ADDFOR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x user@OTHER.REALM' 2>&1 || true)"
+ADDFOR="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x user@OTHER.REALM' 2>&1 || true)"
 echo "$ADDFOR"
 echo "$ADDFOR" | grep -F 'Principal "user@OTHER.REALM" created' || {
     echo "addprinc user@OTHER.REALM did not create: $ADDFOR" >&2
     exit 1
 }
-GETFOR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
+GETFOR="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc user@OTHER.REALM' 2>&1 || true)"
 echo "$GETFOR"
 echo "$GETFOR" | grep -F 'Principal: user@OTHER.REALM' || {
     echo "getprinc user@OTHER.REALM after create missed: $GETFOR" >&2
     exit 1
 }
 echo "==== denied addprinc user@OTHER.REALM is add privilege ===="
-DENYFOR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
+DENYFOR="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
 echo "$DENYFOR"
 echo "$DENYFOR" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
     echo "denied addprinc missed add privilege: $DENYFOR" >&2
@@ -205,8 +206,8 @@ if echo "$DENYFOR" | grep -q 'Principal "denied@OTHER.REALM" created'; then
     exit 1
 fi
 echo "==== unauthorised modprinc nosuch is UNK_PRINC ===="
-MODNS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w userpassword -q 'modprinc +requires_preauth nosuch' 2>&1 || true)"
+MODNS="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p user -w userpassword -q 'modprinc +requires_preauth nosuch' 2>&1 || true)"
 echo "$MODNS"
 echo "$MODNS" | grep -F 'Principal does not exist'
 if echo "$MODNS" | grep -qiE "requires \`\`modify'' privilege"; then
@@ -214,19 +215,19 @@ if echo "$MODNS" | grep -qiE "requires \`\`modify'' privilege"; then
     exit 1
 fi
 echo "==== unauthorised setstr nosuch is UNK_PRINC ===="
-SETNS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w userpassword -q 'setstr nosuch a b' 2>&1 || true)"
+SETNS="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p user -w userpassword -q 'setstr nosuch a b' 2>&1 || true)"
 echo "$SETNS"
 echo "$SETNS" | grep -F 'Principal does not exist'
 echo "==== unauthorised purgekeys nosuch is UNK_PRINC ===="
-PURNS="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w userpassword -q 'purgekeys nosuch' 2>&1 || true)"
+PURNS="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p user -w userpassword -q 'purgekeys nosuch' 2>&1 || true)"
 echo "$PURNS"
 echo "$PURNS" | grep -F 'Principal does not exist'
 
 echo "==== unauthorised getprinc nosuch is UNK_PRINC ===="
-NOSUCH="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"
+NOSUCH="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p user -w userpassword -q 'getprinc nosuch' 2>&1 || true)"
 echo "$NOSUCH"
 echo "$NOSUCH" | grep -F 'Principal does not exist'
 if echo "$NOSUCH" | grep -qiE "requires \`\`get'' privilege"; then
@@ -235,10 +236,10 @@ if echo "$NOSUCH" | grep -qiE "requires \`\`get'' privilege"; then
 fi
 
 echo "==== policy min/max life getpol ===="
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -minlife 1h -maxlife 1d life'
-GETPOL="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getpol life' 2>&1 || true)"
+kadmin_q_ok --next-asserts mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol -minlife 1h -maxlife 1d life'
+GETPOL="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getpol life' 2>&1 || true)"
 save_rust_snap GETPOL "$GETPOL"
 echo "$GETPOL"
 echo "$GETPOL" | grep -F 'Minimum password life: 0 days 01:00:00'
@@ -247,92 +248,90 @@ echo "$GETPOL" | grep -F 'Minimum password length: 1'
 echo "$GETPOL" | grep -F 'Minimum number of password character classes: 1'
 echo "$GETPOL" | grep -F 'Number of old keys kept: 1'
 echo "==== addpol name-only getpol floors 1/1/1 ===="
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol floors1'
-GETF="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getpol floors1' 2>&1 || true)"
+kadmin_q_ok --next-asserts mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol floors1'
+GETF="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getpol floors1' 2>&1 || true)"
 save_rust_snap GETF "$GETF"
 echo "$GETF"
 echo "$GETF" | grep -F 'Minimum password length: 1'
 echo "$GETF" | grep -F 'Minimum number of password character classes: 1'
 echo "$GETF" | grep -F 'Number of old keys kept: 1'
 echo "==== modpol -minlength 0 is BAD_LENGTH ===="
-MOD0="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modpol -minlength 0 floors1' 2>&1 || true)"
+MOD0="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'modpol -minlength 0 floors1' 2>&1 || true)"
 echo "$MOD0"
 echo "$MOD0" | grep -F 'Invalid password length' || {
     echo "modpol -minlength 0 missed BAD_LENGTH: $MOD0" >&2
     exit 1
 }
 echo "==== modpol minlife over maxlife is BAD_MIN_PASS_LIFE ===="
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxlife 1d max1d'
-MODM="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modpol -minlife 2d max1d' 2>&1 || true)"
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol -maxlife 1d max1d'
+MODM="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'modpol -minlife 2d max1d' 2>&1 || true)"
 echo "$MODM"
 echo "$MODM" | grep -F 'Password minimum life is greater than password maximum life' || {
     echo "modpol min>max missed BAD_MIN_PASS_LIFE: $MODM" >&2
     exit 1
 }
 echo "==== modprinc +0x1ffffffff truncates ===="
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw hex-secret hexu' || true
-HEXF="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc +0x1ffffffff hexu' 2>&1 || true)"
-echo "$HEXF"
-GETHEX="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc hexu' 2>&1 || true)"
+kadmin_q_try mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw hex-secret hexu'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'modprinc +0x1ffffffff hexu'
+GETHEX="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc hexu' 2>&1 || true)"
 echo "$GETHEX"
 echo "$GETHEX" | grep -E 'Attributes:' | grep -F 'DISALLOW_ALL_TIX'
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc -policy life user'
-GETU="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'modprinc -policy life user'
+GETU="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
 save_rust_snap GETU "$GETU"
 echo "$GETU"
 echo "$GETU" | grep -F 'Password expiration date:'
 echo "$GETU" | grep -F 'Password expiration date:' | grep -qv '\[never\]'
 echo "==== admin cpw new password then reuse ===="
-CPWA="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
+CPWA="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$CPWA"
 echo "$CPWA" | grep -F 'Password for "user@KERBER.TEST" changed.'
-GETU2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
+GETU2="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
 echo "$GETU2" | grep -F 'Password expiration date:' | grep -v 2001 | grep -qv '\[never\]'
 if echo "$CPWA" | grep -qiE 'minimum life|too soon|too recently|Cannot reuse'; then
     echo "admin cpw new password failed: $CPWA" >&2
     exit 1
 fi
-CPWR="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
+CPWR="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw user-admin-new user' 2>&1 || true)"
 echo "$CPWR"
 echo "$CPWR" | grep -F 'Cannot reuse password' || {
     echo "admin cpw reuse missed: $CPWR" >&2
     exit 1
 }
 echo "==== self cpw min_life is PASS_TOOSOON after the admin cpw ===="
-CPW1="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w user-admin-new -q 'cpw -pw user-new1 user' 2>&1 || true)"
+CPW1="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p user -w user-admin-new -q 'cpw -pw user-new1 user' 2>&1 || true)"
 echo "$CPW1"
 echo "$CPW1" | grep -F "Current password's minimum life has not expired"
-CPW2="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p user -w user-admin-new -q 'cpw -pw user-new2 user' 2>&1 || true)"
+CPW2="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p user -w user-admin-new -q 'cpw -pw user-new2 user' 2>&1 || true)"
 echo "$CPW2"
 echo "$CPW2" | grep -F "Current password's minimum life has not expired"
 echo "==== self keepold clamps to 5 ===="
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw keep-0 keepoldself'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw keep-0 keepoldself'
 pw='keep-0'
 for i in 1 2 3 4 5 6; do
     nxt="keep-$i"
-    KEEP="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-        "$NAME" kadmin -p keepoldself -w "$pw" -q "cpw -keepold -pw $nxt keepoldself" 2>&1 || true)"
-    echo "$KEEP"
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+        "$NAME" -- -p keepoldself -w "$pw" -q "cpw -keepold -pw $nxt keepoldself"
     pw=$nxt
 done
-KEEPG="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc keepoldself' 2>&1 || true)"
+KEEPG="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc keepoldself' 2>&1 || true)"
 echo "$KEEPG"
 nkeys="$(echo "$KEEPG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
 echo "keepold_kvnos=$nkeys"
@@ -341,10 +340,10 @@ if [ "$nkeys" != 5 ]; then
     exit 1
 fi
 echo "==== self cpw -randkey -keepold x6 and setkey -keepold x6 clamp to 5 kvnos ===="
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw rand-0 keepoldrand'
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw set-0 keepoldset'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw rand-0 keepoldrand'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw set-0 keepoldset'
 RANDK="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
     /tmp/kadm5-changepw-rpc --service kadmin/admin keepoldrand rand-0 KERBER.TEST randkey-keepold 6 2>&1 || true)"
 echo "$RANDK"
@@ -354,8 +353,8 @@ SETK="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
 echo "$SETK"
 echo "$SETK" | grep -F 'setkey-keepold[6]=0'
 for p in keepoldrand keepoldset; do
-    KG="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-        "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q "getprinc $p" 2>&1 || true)"
+    KG="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+        "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q "getprinc $p" 2>&1 || true)"
     nk="$(echo "$KG" | sed -n 's/^Key: vno \([0-9][0-9]*\).*/\1/p' | sort -u | wc -l | tr -d ' ')"
     echo "${p}_kvnos=$nk"
     if [ "$nk" != 5 ]; then
@@ -368,19 +367,19 @@ UNM="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
     /tmp/kadm5-changepw-rpc --service kadmin/admin admin adminpassword KERBER.TEST addpol-minlife-unmasked-max nomax 2>&1 || true)"
 echo "$UNM"
 echo "$UNM" | grep -F 'addpol_code=0'
-GETNM="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getpol nomax' 2>&1 || true)"
+GETNM="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getpol nomax' 2>&1 || true)"
 save_rust_snap GETNM "$GETNM"
 echo "$GETNM"
 echo "$GETNM" | grep -F 'Maximum password life: 0 days 00:00:00'
 echo "$GETNM" | grep -F 'Minimum password life: 0 days 01:00:00'
 echo "==== purgekeys locked-down target is allowed ===="
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw lock-secret lockp' || true
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'modprinc +lockdown_keys lockp'
-PURGE_L="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'purgekeys lockp' 2>&1 || true)"
+kadmin_q_try mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw lock-secret lockp'
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'modprinc +lockdown_keys lockp'
+PURGE_L="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'purgekeys lockp' 2>&1 || true)"
 echo "$PURGE_L"
 if echo "$PURGE_L" | grep -qiE 'protect|lockdown|Operation requires'; then
     echo "purgekeys lockdown denied: $PURGE_L" >&2
@@ -388,8 +387,8 @@ if echo "$PURGE_L" | grep -qiE 'protect|lockdown|Operation requires'; then
 fi
 
 echo "==== addprinc foo\\/admin then ACL */admin denies ===="
-ADDESC="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw slashsecret foo\/admin' 2>&1 || true)"
+ADDESC="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw slashsecret foo\/admin' 2>&1 || true)"
 echo "$ADDESC"
 echo "$ADDESC" | grep -F 'created'
 
@@ -458,10 +457,10 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"kadmind did not listen with -maxlife 42x"'
     exit 1
 fi
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x life42' || true
-LIFE42="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p admin@KERBER.TEST -w adminpassword -q 'getprinc life42' 2>&1 || true)"
+kadmin_q_try mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addprinc -pw x life42'
+LIFE42="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc life42' 2>&1 || true)"
 echo "$LIFE42"
 echo "$LIFE42" | grep -F 'Maximum ticket life: 0 days 00:00:42' || {
     echo "42x did not apply 42s max life: $LIFE42" >&2
@@ -519,8 +518,8 @@ if [ "$ok" != 1 ]; then
     log "kadmin.gate" "error" ',"error":"kadmind did not listen with */admin ACL"'
     exit 1
 fi
-ESCDENY="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
-    "$NAME" kadmin -p 'foo\/admin' -w slashsecret -q 'listprincs' 2>&1 || true)"
+ESCDENY="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
+    "$NAME" -- -p 'foo\/admin' -w slashsecret -q 'listprincs' 2>&1 || true)"
 echo "$ESCDENY"
 echo "$ESCDENY" | grep -F $'Operation requires ``list\'\' privilege'
 if echo "$ESCDENY" | grep -q 'user@KERBER.TEST'; then

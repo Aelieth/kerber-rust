@@ -9,6 +9,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmin-local
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -84,8 +85,8 @@ then
 fi
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local
 rust_local() {
-    docker exec -e KRB5_MASTER_PASSWORD=masterpassword -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
-        "$NAME" /tmp/krb5-kadmin-local -q "$1" 2>&1
+    rust_kadmin_local -e KRB5_MASTER_PASSWORD=masterpassword -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
+        "$NAME" -- -q "$1" 2>&1
 }
 hist_shape() { grep -E '^(Expiration date|Password expiration date|Maximum ticket life|Maximum renewable life|Attributes|Number of keys|Key: vno|MKey: vno|Policy):?' ; }
 
@@ -105,12 +106,12 @@ EOF'
 echo "==== half A: MIT kadmin.local aliases user, kdb5_util re-dumps ===="
 docker exec "$NAME" kdb5_util create -s -P masterpassword
 docker exec "$NAME" kdb5_util load /tmp/mit.dump
-docker exec "$NAME" kadmin.local -q 'alias a1 user' 2>&1 | grep -F 'Principal "a1@KERBER.TEST" aliased to "user@KERBER.TEST".'
+mit_kadmin_local "$NAME" -- -q 'alias a1 user' 2>&1 | grep -F 'Principal "a1@KERBER.TEST" aliased to "user@KERBER.TEST".'
 echo "==== half A: MIT records a password history (KADM_DATA old_keys under kadmin/history) ===="
-docker exec "$NAME" kadmin.local -q 'addpol -history 3 hp' 2>&1 | grep -v dictionary
-docker exec "$NAME" kadmin.local -q 'addprinc -pw s3cret1 -policy hp histee' 2>&1 | grep -F 'Principal "histee@KERBER.TEST" created.'
-docker exec "$NAME" kadmin.local -q 'cpw -pw s3cret2 histee' 2>&1 | grep -F 'Password for "histee@KERBER.TEST" changed.'
-MIT_HIST_A="$(docker exec "$NAME" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addpol -history 3 hp'
+mit_kadmin_local "$NAME" -- -q 'addprinc -pw s3cret1 -policy hp histee' 2>&1 | grep -F 'Principal "histee@KERBER.TEST" created.'
+mit_kadmin_local "$NAME" -- -q 'cpw -pw s3cret2 histee' 2>&1 | grep -F 'Password for "histee@KERBER.TEST" changed.'
+MIT_HIST_A="$(mit_kadmin_local "$NAME" -- -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$MIT_HIST_A"
 echo "$MIT_HIST_A" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 docker exec "$NAME" kdb5_util dump /tmp/mit-alias.dump
@@ -302,7 +303,7 @@ echo "$ALIAS_B" | grep -q 'ok alias a2 user'
 docker exec "$NAME" grep -E '^princ	38	14	3	0	0	a2@KERBER.TEST	64	0	0	0	0	0	0	0	' /tmp/principal | grep -q '	12	17	75736572404b45524245522e5445535400	'
 
 echo "==== half B: seed a Rust-written password history on the Rust dump ===="
-rust_local 'addpol -history 3 hpb' | grep -v dictionary || true
+kadmin_q_ok rust_local 'addpol -history 3 hpb'
 rust_local 'addprinc -pw b3cret1 -policy hpb histb' | grep -F 'Principal "histb@KERBER.TEST" created.'
 rust_local 'cpw -pw b3cret2 histb' | grep -F 'Password for "histb@KERBER.TEST" changed.'
 RUST_HIST_B="$(rust_local 'getprinc kadmin/history')"
@@ -319,27 +320,27 @@ echo "$LOAD_B" | grep -qiE 'error|fail' && {
     log "kdb.dump.gate" "error" ',"error":"MIT kdb5_util load rejected policy dump"'
     exit 1
 }
-GETPOL="$(docker exec "$NAME" kadmin.local -q 'getpol lockme' 2>&1 || true)"
+GETPOL="$(mit_kadmin_local "$NAME" -- -q 'getpol lockme' 2>&1 || true)"
 echo "$GETPOL"
 echo "$GETPOL" | grep -q 'Policy: lockme'
-GETSTRS="$(docker exec "$NAME" kadmin.local -q 'getstrs user' 2>&1 || true)"
+GETSTRS="$(mit_kadmin_local "$NAME" -- -q 'getstrs user' 2>&1 || true)"
 echo "$GETSTRS"
 echo "$GETSTRS" | grep -q 'note: hello-g3d'
-GETA2="$(docker exec "$NAME" kadmin.local -q 'getprinc a2' 2>&1 || true)"
+GETA2="$(mit_kadmin_local "$NAME" -- -q 'getprinc a2' 2>&1 || true)"
 echo "$GETA2"
 echo "$GETA2" | grep -F 'Principal: user@KERBER.TEST'
 
 echo "==== half B: MIT reads Rust's history — the old password is a reuse, the policy is bound, kadmin/history has the Rust shape ===="
-REUSE_B="$(docker exec "$NAME" kadmin.local -q 'cpw -pw b3cret1 histb' 2>&1 || true)"
+REUSE_B="$(mit_kadmin_local "$NAME" -- -q 'cpw -pw b3cret1 histb' 2>&1 || true)"
 echo "$REUSE_B"
 echo "$REUSE_B" | grep -F 'Cannot reuse password while changing password for "histb@KERBER.TEST".'
-GETH_B="$(docker exec "$NAME" kadmin.local -q 'getprinc histb' 2>&1 || true)"
+GETH_B="$(mit_kadmin_local "$NAME" -- -q 'getprinc histb' 2>&1 || true)"
 echo "$GETH_B"
 echo "$GETH_B" | grep -F 'Policy: hpb'
-MIT_HIST_B="$(docker exec "$NAME" kadmin.local -q 'getprinc kadmin/history' 2>&1 || true)"
+MIT_HIST_B="$(mit_kadmin_local "$NAME" -- -q 'getprinc kadmin/history' 2>&1 || true)"
 echo "$MIT_HIST_B"
 diff <(echo "$MIT_HIST_B" | hist_shape) <(echo "$RUST_HIST_B" | hist_shape)
-docker exec "$NAME" kadmin.local -q 'cpw -pw b3cret3 histb' 2>&1 | grep -F 'changed.'
+mit_kadmin_local "$NAME" -- -q 'cpw -pw b3cret3 histb' 2>&1 | grep -F 'changed.'
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0
@@ -400,8 +401,8 @@ echo "$KLIST_B2"
 echo "$KLIST_B2" | grep -F 'Default principal: a2@KERBER.TEST'
 
 echo "==== MIT dump max_renewable_life 0: kinit -r renew until = start (both KDCs) ===="
-docker exec "$NAME" kadmin.local -q 'addprinc -pw r0secret -maxrenewlife 0 rlife0' 2>&1 | grep -F 'Principal "rlife0@KERBER.TEST" created.'
-RLIFE0_P="$(docker exec "$NAME" kadmin.local -q 'getprinc rlife0')"
+mit_kadmin_local "$NAME" -- -q 'addprinc -pw r0secret -maxrenewlife 0 rlife0' 2>&1 | grep -F 'Principal "rlife0@KERBER.TEST" created.'
+RLIFE0_P="$(mit_kadmin_local "$NAME" -- -q 'getprinc rlife0')"
 echo "$RLIFE0_P"
 echo "$RLIFE0_P" | grep -E 'Maximum renewable life:' | grep -qE '0 days 00:00:00'
 docker exec -e KRB5_CONFIG=/tmp/kdb-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
@@ -451,11 +452,11 @@ LOAD_R0="$(docker exec \
     "$NAME" /tmp/krb5-kdb load /tmp/rlife0.dump)"
 echo "$LOAD_R0"
 echo "$LOAD_R0" | grep -q 'ok load version=7'
-GET_R0="$(docker exec \
+GET_R0="$(rust_kadmin_local \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rlife0-principal \
     -e KRB5_KDC_STASH=/tmp/rlife0-stash \
-    "$NAME" /tmp/krb5-kadmin-local -q 'getprinc rlife0')"
+    "$NAME" -- -q 'getprinc rlife0')"
 echo "$GET_R0"
 echo "$GET_R0" | grep -E 'Maximum renewable life:' | grep -qE '0 days 00:00:00'
 docker exec -d \
@@ -493,8 +494,8 @@ test "$RR_DELTA" -ge 0
 test "$RR_DELTA" -le 120
 
 echo "==== addprinc without -e Key: lines equal both legs ===="
-docker exec "$NAME" kadmin.local -q 'addprinc -pw keyord-secret keyordmit' 2>&1 | grep -F 'Principal "keyordmit@KERBER.TEST" created.'
-MIT_KEYORD="$(docker exec "$NAME" kadmin.local -q 'getprinc keyordmit')"
+mit_kadmin_local "$NAME" -- -q 'addprinc -pw keyord-secret keyordmit' 2>&1 | grep -F 'Principal "keyordmit@KERBER.TEST" created.'
+MIT_KEYORD="$(mit_kadmin_local "$NAME" -- -q 'getprinc keyordmit')"
 echo "$MIT_KEYORD"
 MIT_ETYPES="$(echo "$MIT_KEYORD" | grep '^Key:' | sed 's/^Key: vno [0-9]*, //')"
 echo "MIT_keyord_etypes:"

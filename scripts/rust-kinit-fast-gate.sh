@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kinit krb5-kdc krb5-kdb
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -98,8 +99,8 @@ fi
 echo "$TRACE" | grep -F 'Decrypted AP-REQ'
 
 echo "==== FAST immediate AS-REP (no +requires_preauth) ===="
-docker exec "$NAME" sh -c "kadmin.local -q 'addprinc -pw userpassword nopreauth' >/tmp/g9-nopreauth-add.out 2>&1" || true
-docker exec "$NAME" sh -c "kadmin.local -q 'modprinc -requires_preauth nopreauth' >/tmp/g9-nopreauth-mod.out 2>&1"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw userpassword nopreauth'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -requires_preauth nopreauth'
 docker exec "$NAME" sh -c 'cat /dev/null > /tmp/mit-kdc.trace' || true
 set +e
 OUT2="$(docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
@@ -111,8 +112,6 @@ echo "$OUT2"
 if [ "$rc2" -ne 0 ]; then
     echo "==== MIT kdc TRACE (nopreauth) ===="
     docker exec "$NAME" cat /tmp/mit-kdc.trace 2>/dev/null || true
-    docker exec "$NAME" cat /tmp/g9-nopreauth-add.out 2>/dev/null || true
-    docker exec "$NAME" cat /tmp/g9-nopreauth-mod.out 2>/dev/null || true
     log "fast.client.gate" "error" ',"error":"rust kinit --fast nopreauth failed","rc":'"$rc2"
     exit 1
 fi
@@ -183,8 +182,8 @@ Path("/tmp/rust-kdc.conf").write_text("""[libdefaults]
     }
 """)
 '
-docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
-docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth encrypted_challenge'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr host/testhost.kerber.test require_auth encrypted_challenge'
 docker exec "$NAME" kdb5_util dump /tmp/ec-ind.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5kdc || true
@@ -350,7 +349,7 @@ fast_inner_trace mit
 fast_inner_trace rust
 
 echo "==== Rust kinit --fast -S against rust KDC ===="
-docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'delstr host/testhost.kerber.test require_auth'
 docker exec "$NAME" kdb5_util dump /tmp/plain-host.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5-kdc || true

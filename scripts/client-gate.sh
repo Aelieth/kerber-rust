@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kvno
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
@@ -114,7 +115,7 @@ test "$MISS_RC" = "1"
 test -z "$MISS_OUT"
 
 echo "==== clustered kinit -kt is keytab mode ===="
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/user.keytab -norandkey user' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/user.keytab -norandkey user' >/dev/null
 set +e
 KT="$(docker exec "$NAME" /tmp/krb5-kinit -kt /tmp/user.keytab -c /tmp/krb5cc_kt user@KERBER.TEST 2>&1)"
 ktrc=$?
@@ -195,8 +196,8 @@ echo "==== C1 Rust krb5-kinit KEY_EXP with no kpasswd listener: banner, then the
 if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',464),0.3)" 2>/dev/null; then
     die "C1 needs nothing listening on 464 in $NAME"
 fi
-docker exec "$NAME" kadmin.local -q 'delprinc -force s4kc1' >/dev/null 2>&1 || true
-docker exec "$NAME" kadmin.local -q 'addprinc -pw exp-old -pwexpire 2020-01-01 s4kc1' >/dev/null
+kadmin_q_try mit_kadmin_local "$NAME" -- -q 'delprinc -force s4kc1' >/dev/null 2>&1 
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw exp-old -pwexpire 2020-01-01 s4kc1' >/dev/null
 docker exec -e KRB5_PASSWORD=exp-old -e KRB5_NEW_PASSWORD=exp-new "$NAME" \
     sh -c '/tmp/krb5-kinit -c /tmp/cc_s4kc1 s4kc1@KERBER.TEST >/tmp/s4kc1.out 2>/tmp/s4kc1.err; echo $? >/tmp/s4kc1.rc'
 echo "s4kc1: rc=$(docker exec "$NAME" cat /tmp/s4kc1.rc)"

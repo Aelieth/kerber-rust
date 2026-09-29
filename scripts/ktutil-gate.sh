@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-ktutil
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -26,7 +27,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-ktutil" "$NAME":/tmp/krb5-ktut
 docker exec "$NAME" chmod +x /tmp/krb5-ktutil
 
 echo "==== MIT ktadd then Rust ktutil list ===="
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/mit.keytab -norandkey user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/mit.keytab -norandkey user'
 MITK="$(docker exec "$NAME" klist -k -t -e /tmp/mit.keytab)"
 echo "$MITK"
 LIST="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/mit.keytab\nlist -t -e\n" | /tmp/krb5-ktutil')"

@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmin-local
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -236,11 +237,10 @@ EOF"
     }
 
     echo "==== PKINIT TGT has no H; +requires_hwauth host is NO HW PREAUTH ===="
-    HWMOD="$(docker exec \
+    kadmin_q_ok rust_kadmin_local \
         -e KRB5_KDC_DB=/tmp/rust.db \
         -e KRB5_KDC_STASH=/tmp/rust.stash \
-        "$NAME" /tmp/krb5-kadmin-local -q 'modprinc +requires_hwauth host/testhost.kerber.test')"
-    echo "$HWMOD"
+        "$NAME" -- -q 'modprinc +requires_hwauth host/testhost.kerber.test'
     docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
     set +e
     docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
@@ -278,19 +278,19 @@ EOF"
     }
 
     echo "==== anonymous PKINIT + restrict_anon kvno → 12 ===="
-    ADDANON="$(docker exec \
+    ADDANON="$(rust_kadmin_local \
         -e KRB5_KDC_DB=/tmp/rust.db \
         -e KRB5_KDC_STASH=/tmp/rust.stash \
-        "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey WELLKNOWN/ANONYMOUS')"
+        "$NAME" -- -q 'addprinc -randkey WELLKNOWN/ANONYMOUS')"
     echo "$ADDANON"
     echo "$ADDANON" | grep -qi created || {
         log "pkinit.gate" "error" ',"error":"addprinc WELLKNOWN/ANONYMOUS failed"'
         exit 1
     }
-    ADDHOST="$(docker exec \
+    ADDHOST="$(rust_kadmin_local \
         -e KRB5_KDC_DB=/tmp/rust.db \
         -e KRB5_KDC_STASH=/tmp/rust.stash \
-        "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey host/anonrestrict.kerber.test')"
+        "$NAME" -- -q 'addprinc -randkey host/anonrestrict.kerber.test')"
     echo "$ADDHOST"
     echo "$ADDHOST" | grep -qi created || {
         log "pkinit.gate" "error" ',"error":"addprinc host/anonrestrict.kerber.test failed"'
@@ -409,10 +409,10 @@ if "pkinit_require_freshness" not in t:
         exit 1
     }
     docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
-    docker exec \
+    kadmin_q_ok rust_kadmin_local \
         -e KRB5_KDC_DB=/tmp/rust.db \
         -e KRB5_KDC_STASH=/tmp/rust.stash \
-        "$NAME" /tmp/krb5-kadmin-local -q 'addprinc -randkey WELLKNOWN/ANONYMOUS' >/dev/null
+        "$NAME" -- -q 'addprinc -randkey WELLKNOWN/ANONYMOUS' >/dev/null
     set +e
     docker exec "$NAME" kinit -n -X disable_freshness=yes
     fanon=$?

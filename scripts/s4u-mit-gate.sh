@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-pac-extract krb5-kdb krb5-kvno krb5-kadmin-local
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -30,8 +31,8 @@ stock_mit_kdc "$NAME"
 mit_live_guard
 
 # The mismatch cell uses -U admin; the entrypoint only adds `user`.
-docker exec "$NAME" kadmin.local -q "addprinc -randkey admin" >/dev/null
-docker exec "$NAME" kadmin.local -q "addprinc -pw expirepw -pwexpire 19900101000000 expired" >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -randkey admin" >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -pw expirepw -pwexpire 1/1/1990 expired" >/dev/null
 
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5kdc || true
@@ -274,11 +275,11 @@ if [ "${KERBER_LIVE:-}" = 1 ]; then
     mit_conf_snapshot "$MITNAME"
     register_cleanup "mit_conf_restore '$MITNAME'"
 fi
-docker exec "$MITNAME" kadmin.local -q "addprinc -pw expirepw expired"
-EXPOUT="$(docker exec "$MITNAME" kadmin.local -q "modprinc -pwexpire 1/1/1990 expired")"
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q "addprinc -pw expirepw expired"
+EXPOUT="$(mit_kadmin_local "$MITNAME" -- -q "modprinc -pwexpire 1/1/1990 expired")"
 echo "$EXPOUT"
 echo "$EXPOUT" | grep -qi 'invalid date' && exit 1
-GETEXP="$(docker exec "$MITNAME" kadmin.local -q "getprinc expired")"
+GETEXP="$(mit_kadmin_local "$MITNAME" -- -q "getprinc expired")"
 echo "$GETEXP"
 echo "$GETEXP" | grep -i 'Password expiration date' | grep -qv never
 docker exec "$MITNAME" sh -c 'cat >/tmp/s4u-mit-oracle.conf <<EOF
@@ -409,7 +410,7 @@ echo "$U2U_DUP_RUST"
 echo "$U2U_DUP_RUST" | grep -qiE "KDC policy rejects request|DUP_SKEY DISALLOWED"
 
 echo "==== MIT kvno --u2u -allow_dup_skey mit ===="
-docker exec "$MITNAME" kadmin.local -q "modprinc -allow_dup_skey host/testhost.kerber.test"
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q "modprinc -allow_dup_skey host/testhost.kerber.test"
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
     "$MITNAME" sh -c 'printf "userpassword\n" | kinit -c /tmp/krb5cc_u2u_dup user@KERBER.TEST'
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
@@ -549,8 +550,8 @@ cat >/tmp/test-krb5.conf <<EOF
 [dbmodules]
     db_module_dir = /usr/lib/krb5/plugins/kdb
 EOF'
-docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
-    "$NAME" kadmin.local -r KERBER.TEST -q \
+kadmin_q_ok mit_kadmin_local -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
+    "$NAME" -- -r KERBER.TEST -q \
     'ktadd -norandkey -k /tmp/test-host.kt host/testhost.kerber.test'
 docker exec -d -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
     "$NAME" sh -c 'krb5kdc -n -P /tmp/mit-test.pid >/tmp/mit-test-stdout.log 2>&1'
@@ -660,8 +661,8 @@ echo "$RUST_PAC" | grep -q 'transited_services=host/testhost.kerber.test@KERBER.
 echo "MIT_testkdb_s4u2proxy_happy"
 
 echo "==== MIT test-KDB kvno -U user -P (RBCD) ===="
-docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
-    "$NAME" kadmin.local -r KERBER.TEST -q \
+kadmin_q_ok mit_kadmin_local -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc.conf \
+    "$NAME" -- -r KERBER.TEST -q \
     'ktadd -norandkey -k /tmp/test-rbcd.kt host/rbcd.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/test-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_mit_testkdb \
     "$NAME" kvno -U user -P host/rbcd.kerber.test
@@ -933,7 +934,7 @@ s4u_user_flags() {
 }
 
 echo "==== R27: user maxlife 1m caps S4U; -allow_renewable drops R (mit) ===="
-docker exec "$MITNAME" kadmin.local -q 'modprinc -maxlife "1 min" user'
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc -maxlife "1 min" user'
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
     "$MITNAME" kinit -f -k -t /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST
@@ -954,7 +955,7 @@ MIT_TGT_LIFE="$(s4u_tgt_life "$MIT_S4U")" || {
 }
 echo "mit_tgt_life=$MIT_TGT_LIFE"
 test "$MIT_TGT_LIFE" -gt 90
-docker exec "$MITNAME" kadmin.local -q 'modprinc -allow_renewable user'
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc -allow_renewable user'
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
 docker exec -e KRB5_CONFIG=/tmp/s4u-mit-oracle.conf \
     "$MITNAME" kinit -f -r 7d -k -t /etc/krb5kdc/testhost.keytab host/testhost.kerber.test@KERBER.TEST
@@ -995,9 +996,9 @@ echo "$LOAD_R27" | grep -q 'ok load version=7' || {
     log "s4u.mit.gate" "error" ',"error":"Rust krb5-kdb load r27.dump failed"'
     exit 1
 }
-docker exec -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
+kadmin_q_ok rust_kadmin_local -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc -maxlife 1m user'
+    "$NAME" -- -q 'modprinc -maxlife 1m user'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/r27.db \
     -e KRB5_KDC_STASH=/tmp/r27.stash \
@@ -1049,9 +1050,9 @@ RUST_TGT_LIFE="$(s4u_tgt_life "$RUST_S4U")" || {
 echo "rust_tgt_life=$RUST_TGT_LIFE"
 test "$RUST_TGT_LIFE" -gt 90
 docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
-docker exec -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
+kadmin_q_ok rust_kadmin_local -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kadmin-local -q 'modprinc -allow_renewable user'
+    "$NAME" -- -q 'modprinc -allow_renewable user'
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/r27.db \
     -e KRB5_KDC_STASH=/tmp/r27.stash \
@@ -1239,11 +1240,11 @@ cat >/tmp/test-krb5-xrealm.conf <<EOF
 [dbmodules]
     db_module_dir = /usr/lib/krb5/plugins/kdb
 EOF'
-docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-a.conf \
-    "$NAME" kadmin.local -r KERBER.TEST -q \
+kadmin_q_ok mit_kadmin_local -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-a.conf \
+    "$NAME" -- -r KERBER.TEST -q \
     'ktadd -norandkey -k /tmp/test-xrealm-host.kt host/testhost.kerber.test'
-docker exec -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-b.conf \
-    "$NAME" kadmin.local -r OTHER.TEST -q \
+kadmin_q_ok mit_kadmin_local -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-b.conf \
+    "$NAME" -- -r OTHER.TEST -q \
     'ktadd -norandkey -k /tmp/test-xrealm-rbcd.kt host/rbcd.other.test'
 docker exec -d -e KRB5_CONFIG=/tmp/test-krb5-xrealm.conf -e KRB5_KDC_PROFILE=/tmp/test-kdc-a.conf \
     "$NAME" sh -c 'krb5kdc -n -r KERBER.TEST -P /tmp/mit-xrealm-a.pid >/tmp/mit-xrealm-a-stdout.log 2>&1'

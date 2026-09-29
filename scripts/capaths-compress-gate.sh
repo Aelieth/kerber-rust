@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-pac-extract
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -96,8 +97,8 @@ CONF
 kad() {
     local profile="$1" realm="$2"
     shift 2
-    docker exec -e KRB5_CONFIG=/tmp/client.conf -e KRB5_KDC_PROFILE="$profile" \
-        "$NAME" kadmin.local -r "$realm" -q "$*"
+    mit_kadmin_local -e KRB5_CONFIG=/tmp/client.conf -e KRB5_KDC_PROFILE="$profile" \
+        "$NAME" -- -r "$realm" -q "$*"
 }
 
 echo "==== kdb5_util ===="
@@ -108,15 +109,15 @@ for spec in "A.EX.COM /tmp/kdc-a.conf" "EX.COM /tmp/kdc-x.conf" "B.EX.COM /tmp/k
 done
 
 echo "==== principals ===="
-kad /tmp/kdc-a.conf A.EX.COM "addprinc -pw userpassword user"
-kad /tmp/kdc-a.conf A.EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/EX.COM@A.EX.COM"
-kad /tmp/kdc-x.conf EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/EX.COM@A.EX.COM"
-kad /tmp/kdc-x.conf EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/B.EX.COM@EX.COM"
-kad /tmp/kdc-b.conf B.EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/B.EX.COM@EX.COM"
-kad /tmp/kdc-b.conf B.EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.EX.COM@B.EX.COM"
-kad /tmp/kdc-c.conf C.EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.EX.COM@B.EX.COM"
-kad /tmp/kdc-c.conf C.EX.COM "addprinc -randkey host/svc.c.ex.com"
-kad /tmp/kdc-c.conf C.EX.COM "ktadd -k /tmp/mit-c.host.kt host/svc.c.ex.com"
+kadmin_q_ok kad /tmp/kdc-a.conf A.EX.COM "addprinc -pw userpassword user"
+kadmin_q_ok kad /tmp/kdc-a.conf A.EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/EX.COM@A.EX.COM"
+kadmin_q_ok kad /tmp/kdc-x.conf EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/EX.COM@A.EX.COM"
+kadmin_q_ok kad /tmp/kdc-x.conf EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/B.EX.COM@EX.COM"
+kadmin_q_ok kad /tmp/kdc-b.conf B.EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/B.EX.COM@EX.COM"
+kadmin_q_ok kad /tmp/kdc-b.conf B.EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.EX.COM@B.EX.COM"
+kadmin_q_ok kad /tmp/kdc-c.conf C.EX.COM "addprinc -e aes256-cts-hmac-sha1-96:normal -pw ${XR_PW} krbtgt/C.EX.COM@B.EX.COM"
+kadmin_q_ok kad /tmp/kdc-c.conf C.EX.COM "addprinc -randkey host/svc.c.ex.com"
+kadmin_q_ok kad /tmp/kdc-c.conf C.EX.COM "ktadd -k /tmp/mit-c.host.kt host/svc.c.ex.com"
 
 start_mit() {
     local realm="$1" profile="$2" log="$3" pidf="$4" conf="${5:-/tmp/client.conf}"

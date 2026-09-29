@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins loadgen krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local krb5-kpasswd krb5-kprop krb5-kpropd
 . "$ROOT/scripts/lib/prod-realm-common.sh"
 

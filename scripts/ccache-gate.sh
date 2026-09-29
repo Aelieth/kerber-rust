@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kvno krb5-kswitch ccache-probe
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
@@ -26,7 +27,7 @@ if ! docker exec "$NAME" cc -o /tmp/ccache-mit-remove /tmp/ccache-mit-remove.c -
     exit 1
 fi
 
-docker exec "$NAME" kadmin.local -q 'addprinc -pw extrapass extra' >/dev/null 2>&1 || true
+kadmin_q_try mit_kadmin_local "$NAME" -- -q 'addprinc -pw extrapass extra' >/dev/null 2>&1 
 
 echo "==== FILE parse→to_bytes identity of MIT kinit cache ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_ident user@KERBER.TEST'

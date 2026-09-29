@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -210,13 +211,11 @@ if "k5audit_test.so" not in text:
 p.write_text(text)
 print("krb5.conf-ok")
 PY
-docker exec "$NAME" sh -c '
-kdb5_util destroy -f >/dev/null 2>&1 || true
-kdb5_util create -s -P masterpassword
-kadmin.local -q "addprinc -pw userpassword user"
-kadmin.local -q "addprinc -randkey host/testhost.kerber.test"
-rm -f /tmp/au.log /tmp/mit-issue.log
-'
+docker exec "$NAME" kdb5_util destroy -f >/dev/null 2>&1 || true
+docker exec "$NAME" kdb5_util create -s -P masterpassword
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -pw userpassword user"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -randkey host/testhost.kerber.test"
+docker exec "$NAME" rm -f /tmp/au.log /tmp/mit-issue.log
 docker exec -d \
     -e KRB5_KDC_PROFILE=/etc/krb5kdc/kdc.conf \
     "$NAME" sh -c 'cd /tmp && krb5kdc -n >/tmp/mit-kdc-stdout.log 2>&1'
@@ -433,7 +432,8 @@ ex() {
 # (kadmin_rc= records it), so the "created" line is the proof.
 ex_addprinc() {
     local out rc=0
-    out="$(ex kadmin -p admin@EXAMPLE.COM -w example-admin -q "addprinc $1" 2>&1)" || rc=$?
+    out="$(mit_kadmin -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5CCNAME=FILE:/tmp/example-cc "$NAME" -- \
+        -p admin@EXAMPLE.COM -w example-admin -q "addprinc $1" 2>&1)" || rc=$?
     echo "$out"
     echo "kadmin_rc=$rc"
     [ "$rc" = 0 ] || die "example: MIT kadmin addprinc $2 failed"

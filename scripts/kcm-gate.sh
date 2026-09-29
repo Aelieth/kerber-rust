@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kswitch
 mkdir -p "$SCRATCH"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
@@ -48,7 +49,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kswitch" "$KCM":/tmp/krb5-kswi
 docker cp "$ROOT/harness/kcm/krb5.conf" "$KCM":/etc/krb5.conf
 docker exec "$KCM" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy /tmp/krb5-kswitch
 
-docker exec "$MIT" kadmin.local -q 'addprinc -pw extrapass extra' >/dev/null 2>&1 || true
+kadmin_q_try mit_kadmin_local "$MIT" -- -q 'addprinc -pw extrapass extra' >/dev/null 2>&1 
 
 kcm_exec() {
     docker exec -e KRB5_CONFIG=/etc/krb5.conf -e KRB5CCNAME=KCM: "$KCM" "$@"

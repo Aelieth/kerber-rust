@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-history-mit-gate"
@@ -26,19 +27,19 @@ docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1 || true'
 docker exec "$NAME" kdb5_util create -s -P masterpassword >/dev/null
 
 klocal() {
-    docker exec "$NAME" kadmin.local -q "$1" 2>&1 || true
+    mit_kadmin_local "$NAME" -- -q "$1" 2>&1 || true
 }
 
 echo "==== MIT kadmin.local history=1 A→B→A ===="
-klocal 'addpol -minlength 8 -minclasses 2 -history 1 h1' >/dev/null
-klocal 'addprinc -policy h1 -pw Hist-pw0 u1' >/dev/null
+kadmin_q_ok klocal 'addpol -minlength 8 -minclasses 2 -history 1 h1' >/dev/null
+kadmin_q_ok klocal 'addprinc -policy h1 -pw Hist-pw0 u1' >/dev/null
 CUR="$(klocal 'cpw -pw Hist-pw0 u1')"
 echo "$CUR"
 echo "$CUR" | grep -qi 'reuse' || {
     log "history.mit" "error" ',"error":"history=1 must reject current A"'
     exit 1
 }
-klocal 'cpw -pw Hist-pw1 u1' >/dev/null
+kadmin_q_ok klocal 'cpw -pw Hist-pw1 u1' >/dev/null
 A1="$(klocal 'cpw -pw Hist-pw0 u1')"
 echo "$A1"
 echo "$A1" | grep -qi 'password .* changed' || {
@@ -47,10 +48,10 @@ echo "$A1" | grep -qi 'password .* changed' || {
 }
 
 echo "==== MIT kadmin.local history=2 A→B→C then B reject A allow ===="
-klocal 'addpol -minlength 8 -minclasses 2 -history 2 h2' >/dev/null
-klocal 'addprinc -policy h2 -pw Hist-pw0 u2' >/dev/null
-klocal 'cpw -pw Hist-pw1 u2' >/dev/null
-klocal 'cpw -pw Hist-pw2 u2' >/dev/null
+kadmin_q_ok klocal 'addpol -minlength 8 -minclasses 2 -history 2 h2' >/dev/null
+kadmin_q_ok klocal 'addprinc -policy h2 -pw Hist-pw0 u2' >/dev/null
+kadmin_q_ok klocal 'cpw -pw Hist-pw1 u2' >/dev/null
+kadmin_q_ok klocal 'cpw -pw Hist-pw2 u2' >/dev/null
 B="$(klocal 'cpw -pw Hist-pw1 u2')"
 echo "$B"
 echo "$B" | grep -qi 'reuse' || {

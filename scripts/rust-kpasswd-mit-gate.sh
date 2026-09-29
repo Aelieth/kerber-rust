@@ -8,6 +8,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kpasswd krb5-kinit
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -62,8 +63,8 @@ fi
 # keyexp_run TAG PRINCIPAL CCACHE: Rust krb5-kinit with an expired password and
 # KRB5_NEW_PASSWORD; stdout, stderr and rc land in /tmp/TAG.{out,err,rc}.
 keyexp_run() {
-    docker exec "$NAME" kadmin.local -q "delprinc -force $2" >/dev/null 2>&1 || true
-    docker exec "$NAME" kadmin.local -q "addprinc -pw exp-old -pwexpire 2020-01-01 $2" >/dev/null
+    kadmin_q_try mit_kadmin_local "$NAME" -- -q "delprinc -force $2" >/dev/null 2>&1 
+    kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -pw exp-old -pwexpire 2020-01-01 $2" >/dev/null
     docker exec -e KRB5_PASSWORD=exp-old -e KRB5_NEW_PASSWORD=exp-new "$NAME" \
         sh -c "/tmp/krb5-kinit -c $3 $2@KERBER.TEST >/tmp/$1.out 2>/tmp/$1.err; echo \$? >/tmp/$1.rc"
     echo "$1: rc=$(docker exec "$NAME" cat "/tmp/$1.rc")"

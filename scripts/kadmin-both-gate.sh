@@ -5,6 +5,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
 . "$ROOT/scripts/lib/kadmin-common.sh"
 need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
@@ -174,7 +175,7 @@ done
 kadm5_r12_db_args() {
     local ctn=$1 client=$2 conf=$3 is_mit=$4
     local userline before after mod add getx ro kd
-    kadm() { docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword -q "$1" 2>&1 || true; }
+    kadm() { mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword -q "$1" 2>&1 || true; }
     before="$(kadm 'getprinc user' | grep -v -e '^Authenticating' -e 'No dictionary')"
     mod="$(kadm 'modprinc -x foo=bar user')"
     echo "$ctn modprinc -x: $mod"
@@ -379,7 +380,7 @@ z11_leg() {
     local ctn=$1 fixture=$2 client=$3 conf=$4 leg=$5
     local out shape pwx
     kadm() {
-        docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$1" -w "$2" -q "$3" 2>&1 \
+        mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$1" -w "$2" -q "$3" 2>&1 \
             | grep -v -e '^Authenticating' -e 'No dictionary' -e 'No policy specified' || true
     }
     # Fixtures before the restart: the restricted actors, the two policies.
@@ -389,10 +390,10 @@ z11_leg() {
     kadm "$fixture" adminpassword 'addprinc -pw z1pol-secret z1pol' | grep -F 'Principal "z1pol@KERBER.TEST" created.'
     kadm "$fixture" adminpassword 'addprinc -pw z1rl-secret z1rl' | grep -F 'Principal "z1rl@KERBER.TEST" created.'
     kadm "$fixture" adminpassword 'addprinc -pw z1ml-secret z1ml' | grep -F 'Principal "z1ml@KERBER.TEST" created.'
-    kadm "$fixture" adminpassword 'addpol -minlength 8 shortpol'
-    kadm "$fixture" adminpassword 'addpol -maxlife 30d z1pw'
+    kadmin_q_ok kadm "$fixture" adminpassword 'addpol -minlength 8 shortpol'
+    kadmin_q_ok kadm "$fixture" adminpassword 'addpol -maxlife 30d z1pw'
     if [ "$leg" = rust ]; then
-        kadm "$fixture" adminpassword 'addprinc -pw adminpassword admin/admin' || true
+        kadmin_q_try kadm "$fixture" adminpassword 'addprinc -pw adminpassword admin/admin' 
     fi
     z11_restart "$ctn" "$leg"
 
@@ -492,11 +493,11 @@ echo "==== Z6.5 RPC create honours ks_tuple (svr_principal.c:444-447) ===="
 # Date-bearing lines are dropped; only Key: lines are compared.
 z65_leg() {
     local ctn=$1 client=$2 conf=$3 leg=$4
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addprinc -randkey -e aes128-cts-hmac-sha1-96:normal z65' 2>&1 \
         | grep -F 'Principal "z65@KERBER.TEST" created.'
     local keys
-    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'getprinc z65' | grep '^Key:')"
     echo "$leg: $keys"
     echo "$keys" | grep -Fx 'Key: vno 1, aes128-cts-hmac-sha1-96' >/dev/null
@@ -614,10 +615,10 @@ z66_restart "$NAME" rust
 z66_restart "$NAME_MIT" mit
 z66_leg() {
     local ctn=$1 client=$2 conf=$3 leg=$4
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addprinc -pw x z66' 2>&1 | grep -F 'Principal "z66@KERBER.TEST" created.'
     local life
-    life="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    life="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'getprinc z66' | grep '^Maximum ticket life:')"
     echo "$leg: $life"
     echo "$life" | grep -Fx 'Maximum ticket life: 1 day 00:00:00'
@@ -633,14 +634,14 @@ diff "$SCRATCH/z66-rust.txt" "$SCRATCH/z66-mit.txt" || {
 echo "==== Z7.2 RPC chpass/randkey honour ks_tuple (svr_principal.c:1259,1425) ===="
 z72_leg() {
     local ctn=$1 client=$2 conf=$3 leg=$4
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addprinc -pw z72old z72c' 2>&1 \
         | grep -F 'Principal "z72c@KERBER.TEST" created.'
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'cpw -pw z72new -e aes128-cts-hmac-sha1-96:normal z72c' 2>&1 \
         | grep -F 'Password for "z72c@KERBER.TEST" changed.'
     local keys
-    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'getprinc z72c' | grep '^Key:')"
     echo "$leg cpw -e: $keys"
     echo "$keys" | grep -Fx 'Key: vno 2, aes128-cts-hmac-sha1-96' >/dev/null
@@ -649,13 +650,13 @@ z72_leg() {
         exit 1
     }
     echo "$keys" > "$SCRATCH/z72c-$leg.txt"
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addprinc -randkey z72r' 2>&1 \
         | grep -F 'Principal "z72r@KERBER.TEST" created.'
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'cpw -randkey -e aes128-cts-hmac-sha1-96:normal z72r' 2>&1 \
         | grep -F 'Key for "z72r@KERBER.TEST" randomized.'
-    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'getprinc z72r' | grep '^Key:')"
     echo "$leg cpw -randkey -e: $keys"
     echo "$keys" | grep -Fx 'Key: vno 2, aes128-cts-hmac-sha1-96' >/dev/null
@@ -664,10 +665,10 @@ z72_leg() {
         exit 1
     }
     echo "$keys" > "$SCRATCH/z72r-$leg.txt"
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addpol -allowedkeysalts aes256-cts:normal z72ks' >/dev/null
     local refuse
-    refuse="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    refuse="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addprinc -policy z72ks -e aes128-cts:normal -pw ValidPass1 z72ksbad' 2>&1 || true)"
     echo "$leg refuse: $refuse"
     echo "$refuse" | grep -F 'Invalid key/salt tuples'
@@ -695,10 +696,10 @@ echo "==== Z8.3 bootstrap actors: kadmin/changepw kdb5_util@ (kadm5_create.c:100
 # (admin@ on rust, admin/admin@ on MIT — fixture princstr); bootstrap
 # db_creation@ is z8_bootstrap_mod.rs.
 z83_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
-R83="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
-    kadmin -p admin/admin -w adminpassword -q 'getprinc kadmin/changepw')"
-M83="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
-    kadmin -p admin/admin -w adminpassword -q 'getprinc kadmin/changepw')"
+R83="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    -- -p admin/admin -w adminpassword -q 'getprinc kadmin/changepw')"
+M83="$(mit_kadmin -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
+    -- -p admin/admin -w adminpassword -q 'getprinc kadmin/changepw')"
 echo "$R83" | hist_shape | sed 's/^/rust kadmin\/changepw: /'
 echo "$M83" | hist_shape | sed 's/^/mit kadmin\/changepw: /'
 R83MOD="$(echo "$R83" | z83_mod)"
@@ -708,10 +709,10 @@ echo "mit  kadmin/changepw modifier=$M83MOD"
 [ "$R83MOD" = "kdb5_util@KERBER.TEST" ]
 [ "$M83MOD" = "kdb5_util@KERBER.TEST" ]
 [ "$R83MOD" = "$M83MOD" ]
-R83T="$(docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
-    kadmin -p admin/admin -w adminpassword -q 'getprinc krbtgt/KERBER.TEST')"
-M83T="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
-    kadmin -p admin/admin -w adminpassword -q 'getprinc krbtgt/KERBER.TEST')"
+R83T="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    -- -p admin/admin -w adminpassword -q 'getprinc krbtgt/KERBER.TEST')"
+M83T="$(mit_kadmin -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
+    -- -p admin/admin -w adminpassword -q 'getprinc krbtgt/KERBER.TEST')"
 R83TMOD="$(echo "$R83T" | z83_mod)"
 M83TMOD="$(echo "$M83T" | z83_mod)"
 echo "rust krbtgt modifier=$R83TMOD (purgekeys caller)"
@@ -727,22 +728,22 @@ echo "==== Z8.4 addpol/modpol unknown keysalt matches MIT (string_to_keysalts sk
 z84_leg() {
     local ctn=$1 client=$2 conf=$3 leg=$4
     local add mod get
-    add="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    add="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addpol -allowedkeysalts bogus:normal z8pol' 2>&1 || true)"
     echo "$leg addpol: $add"
     if echo "$add" | grep -qF 'Invalid key/salt tuples'; then
         echo "$leg: addpol bogus:normal was refused" >&2
         exit 1
     fi
-    get="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    get="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'getpol z8pol' | grep -E '^(Policy|Allowed key/salt)')"
     echo "$leg getpol: $get"
     echo "$get" | grep -F 'Policy: z8pol'
     echo "$get" | grep -F 'Allowed key/salt types: bogus:normal'
     echo "$get" > "$SCRATCH/z84get-$leg.txt"
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addpol z8mod' >/dev/null
-    mod="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    mod="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'modpol -allowedkeysalts bogus:normal z8mod' 2>&1 || true)"
     echo "$leg modpol: $mod"
     if echo "$mod" | grep -qF 'Invalid key/salt tuples'; then
@@ -761,19 +762,19 @@ echo "==== Z8.5 weak/deprecated -e on both kadminds (allow_weak_crypto = false) 
 z85_leg() {
     local ctn=$1 client=$2 conf=$3 leg=$4
     local des3 rc4 keys
-    des3="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    des3="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addprinc -randkey -e des3-cbc-sha1:normal z8des3' 2>&1 || true)"
-    rc4="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    rc4="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'addprinc -randkey -e arcfour-hmac:normal z8rc4' 2>&1 || true)"
     echo "$leg des3: $des3"
     echo "$leg rc4: $rc4"
     echo "$des3" | grep -F 'Principal "z8des3@KERBER.TEST" created.'
     echo "$rc4" | grep -F 'Principal "z8rc4@KERBER.TEST" created.'
-    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'getprinc z8des3' | grep '^Key:')"
     echo "$leg des3 keys: $keys"
     echo "$keys" > "$SCRATCH/z85des3-$leg.txt"
-    keys="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" kadmin -p "$client" -w adminpassword \
+    keys="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" -- -p "$client" -w adminpassword \
         -q 'getprinc z8rc4' | grep '^Key:')"
     echo "$leg rc4 keys: $keys"
     echo "$keys" > "$SCRATCH/z85rc4-$leg.txt"
@@ -795,8 +796,8 @@ echo "==== Z8 leftover: kadm5_create max_life (kadm5_create.c:54-55,207-213) ===
 z8life() {
     local ctn=$1 client=$2 conf=$3 princ=$4 want=$5
     local life
-    life="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" \
-        kadmin -p "$client" -w adminpassword -q "getprinc $princ" \
+    life="$(mit_kadmin -e KRB5_CONFIG="$conf" "$ctn" \
+        -- -p "$client" -w adminpassword -q "getprinc $princ" \
         | grep '^Maximum ticket life:')"
     echo "$ctn $princ: $life"
     echo "$life" | grep -Fx "$want"
@@ -815,23 +816,23 @@ echo "RUST_z8_kadm5_create_max_life"
 echo "==== Z8 leftover: setstr stamps current_caller (svr_principal.c:2022-2043) ===="
 # RPC create stamps the kadmind caller; local setstr must restamp
 # like kdb_put_entry (Z7.2 local princstr is root/admin@ both legs).
-docker exec -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
-    kadmin -p admin/admin -w adminpassword -q 'addprinc -pw z8str-secret z8str' \
+mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" \
+    -- -p admin/admin -w adminpassword -q 'addprinc -pw z8str-secret z8str' \
     | grep -F 'Principal "z8str@KERBER.TEST" created.'
-docker exec -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
-    kadmin -p admin/admin -w adminpassword -q 'addprinc -pw z8str-secret z8str' \
+mit_kadmin -e KRB5_CONFIG=/etc/krb5.conf "$NAME_MIT" \
+    -- -p admin/admin -w adminpassword -q 'addprinc -pw z8str-secret z8str' \
     | grep -F 'Principal "z8str@KERBER.TEST" created.'
-docker exec \
+kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" /tmp/krb5-kadmin-local -p root/admin -q 'setstr z8str note leftover'
-docker exec "$NAME_MIT" kadmin.local -p root/admin -q 'setstr z8str note leftover'
+    "$NAME" -- -p root/admin -q 'setstr z8str note leftover'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -p root/admin -q 'setstr z8str note leftover'
 z8str_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
-RSTR="$(docker exec \
+RSTR="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" /tmp/krb5-kadmin-local -p root/admin -q 'getprinc z8str')"
-MSTR="$(docker exec "$NAME_MIT" kadmin.local -p root/admin -q 'getprinc z8str')"
+    "$NAME" -- -p root/admin -q 'getprinc z8str')"
+MSTR="$(mit_kadmin_local "$NAME_MIT" -- -p root/admin -q 'getprinc z8str')"
 echo "$RSTR" | hist_shape | sed 's/^/rust z8str: /'
 echo "$MSTR" | hist_shape | sed 's/^/mit  z8str: /'
 RSTRMOD="$(echo "$RSTR" | z8str_mod)"

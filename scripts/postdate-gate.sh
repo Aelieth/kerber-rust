@@ -85,7 +85,7 @@ docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
 
 echo "==== addprinc pduser ===="
-kadmin_q 'addprinc -pw pd-secret pduser'
+kadmin_q_ok kadmin_q 'addprinc -pw pd-secret pduser'
 
 echo "==== MIT kinit -s +20s ===="
 START="$(docker exec "$NAME" date -u -d '+2 seconds' '+%Y%m%d%H%M%S')"
@@ -160,8 +160,8 @@ if delta != 300:
 echo "life_secs=$LIFE"
 
 echo "==== DISALLOW_POSTDATED: kinit -s CANNOT_POSTDATE ===="
-kadmin_q 'addprinc -pw nd-secret nduser'
-kadmin_q 'modprinc -allow_postdated nduser'
+kadmin_q_ok kadmin_q 'addprinc -pw nd-secret nduser'
+kadmin_q_ok kadmin_q 'modprinc -allow_postdated nduser'
 docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 START2="$(docker exec "$NAME" date -u -d '+1 minute' '+%Y%m%d%H%M%S')"
 ND="$(docker exec -e KRB5_CONFIG=/tmp/postdate-krb5.conf \

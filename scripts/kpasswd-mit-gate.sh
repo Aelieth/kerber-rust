@@ -97,24 +97,24 @@ done
 docker exec "$NAME_MIT" grep -F 'TGT BASED NOT ALLOWED' /tmp/krb5kdc.log
 
 echo "==== MIT getprinc kadmin/changepw and kadmin/admin ===="
-MITCPW="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/changepw')"
+MITCPW="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc kadmin/changepw')"
 echo "$MITCPW"
 echo "$MITCPW" | grep -F 'DISALLOW_TGT_BASED'
 echo "$MITCPW" | grep -F 'PWCHANGE_SERVICE'
 echo "$MITCPW" | grep -F 'LOCKDOWN_KEYS'
-MITADM="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc kadmin/admin')"
+MITADM="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc kadmin/admin')"
 echo "$MITADM"
 echo "$MITADM" | grep -F 'DISALLOW_TGT_BASED'
 echo "$MITADM" | grep -F 'LOCKDOWN_KEYS'
 
 echo "==== MIT ktadd -norandkey kadmin/changepw is extract-keys ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw adminpassword admin/admin' >/dev/null
-MITKT="$(docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword -q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw' 2>&1 || true)"
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw adminpassword admin/admin' >/dev/null
+MITKT="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'ktadd -norandkey -k /tmp/changepw.keytab kadmin/changepw' 2>&1 || true)"
 echo "$MITKT"
 echo "$MITKT" | grep -F 'extract-keys'
 
 echo "==== TGS kpasswd self-change is INITIAL_FLAG_NEEDED (MIT) ===="
-docker exec "$NAME_MIT" kadmin.local -q 'modprinc +allow_tgs_req kadmin/changepw'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc +allow_tgs_req kadmin/changepw'
 docker cp "$ROOT/scripts/kpasswd-tgs-client.c" "$NAME_MIT":/tmp/kpasswd-tgs-client.c
 if ! docker exec "$NAME_MIT" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
     log "kpasswd.gate" "error" ',"error":"cc MIT kpasswd-tgs-client failed"'
@@ -153,11 +153,11 @@ docker logs "$NAME_MIT" 2>&1 | grep -F 'setpw request from 127.0.0.1 by user@KER
     || docker exec "$NAME_MIT" grep -F 'setpw request from 127.0.0.1 by user@KERBER.TEST for user@KERBER.TEST: Operation requires initial ticket' /tmp/kadmind.log
 if docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "e1-should-fail\n" | kinit user@KERBER.TEST'; then
     echo "MIT NT-UNKNOWN targname kpasswd changed the password" >&2
-    docker exec "$NAME_MIT" kadmin.local -q 'cpw -pw userpassword user'
+    kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'cpw -pw userpassword user'
     exit 1
 fi
 echo "==== TGS kpasswd other principal is ACCESSDENIED (MIT) ===="
-MIT_EXTRA="$(docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw extra-secret extra' 2>&1)"
+MIT_EXTRA="$(mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw extra-secret extra' 2>&1)"
 echo "$MIT_EXTRA"
 echo "$MIT_EXTRA" | grep -F 'Principal "extra@KERBER.TEST" created'
 docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "userpassword\n" | kinit user@KERBER.TEST'
@@ -170,11 +170,11 @@ echo "helper_rc=$d2mo_rc"
 [ "$d2mo_rc" -eq 0 ]
 echo "$D2MO" | grep -F 'result_code=5'
 echo "$D2MO" | grep -F 'Unauthorized request'
-docker exec "$NAME_MIT" kadmin.local -q 'modprinc -allow_tgs_req kadmin/changepw'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc -allow_tgs_req kadmin/changepw'
 
 echo "==== MIT kpasswd min_life is SOFTERROR ===="
-docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlife 1h minlife'
-docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy minlife user'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addpol -minlife 1h minlife'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc -policy minlife user'
 set +e
 MIT_KPMIN="$(docker exec "$NAME_MIT" sh -c 'printf "userpassword\nuser-new\nuser-new\n" | kpasswd user@KERBER.TEST' 2>&1)"
 mit_kpmin_rc=$?
@@ -197,8 +197,8 @@ echo "helper_rc=$mit_kpmin4_rc"
 [ "$mit_kpmin4_rc" -eq 0 ]
 echo "$MIT_KPMIN4" | grep -F 'result_code=4'
 
-docker exec "$NAME_MIT" kadmin.local -q 'addpol -minlength 8 short8'
-docker exec "$NAME_MIT" kadmin.local -q 'modprinc -policy short8 user'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addpol -minlength 8 short8'
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc -policy short8 user'
 set +e
 MITPOL="$(docker exec "$NAME_MIT" sh -c 'printf "userpassword\nabc\nabc\n" | kpasswd user@KERBER.TEST' 2>&1)"
 mit_rc=$?
@@ -237,9 +237,9 @@ pin_kpasswd_fill_datagram "$NAME_MIT" "MIT"
 echo "==== Z1b.2 kinit KEY_EXP flow order (gic_pwd.c:205-240): MIT kinit vs Rust krb5-kinit against the MIT KDC ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kinit" "$NAME_MIT":/tmp/krb5-kinit
 docker exec "$NAME_MIT" chmod +x /tmp/krb5-kinit
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw exp-old -pwexpire 2020-01-01 z1bmit' >/dev/null
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw exp-old -pwexpire 2020-01-01 z1brust' >/dev/null
-docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1brust' | grep -E '^Password expiration date: ' | grep -qv never
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw exp-old -pwexpire 2020-01-01 z1bmit' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw exp-old -pwexpire 2020-01-01 z1brust' >/dev/null
+mit_kadmin_local "$NAME_MIT" -- -q 'getprinc z1brust' | grep -E '^Password expiration date: ' | grep -qv never
 z1b2_check() {
     local leg=$1 out=$2 rc=$3 want_rc=$4
     echo "$leg (rc=$rc):"
@@ -264,7 +264,7 @@ if echo "$MIT_Z1B_WRONG$RUST_Z1B_WRONG" | grep -q 'Enter new password'; then
     echo "a kinit prompted for a new password before the changepw AS" >&2
     exit 1
 fi
-docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1brust' | grep -qE '^Key: vno 1, ' || { echo "Rust wrong-password run changed the key" >&2; exit 1; }
+mit_kadmin_local "$NAME_MIT" -- -q 'getprinc z1brust' | grep -qE '^Key: vno 1, ' || { echo "Rust wrong-password run changed the key" >&2; exit 1; }
 echo "---- right password: changepw AS, then the prompts, the change and a TGT ----"
 MIT_Z1B_OK="$(docker exec "$NAME_MIT" sh -c 'printf "exp-old\nexp-new\nexp-new\n" | kinit -c /tmp/cc_z1b_mit_ok z1bmit@KERBER.TEST' 2>&1)" \
     || { echo "$MIT_Z1B_OK"; echo "MIT kinit KEY_EXP change failed" >&2; exit 1; }
@@ -277,8 +277,8 @@ echo "$RUST_Z1B_OK" | grep -qF 'Password expired.  You must change it now.'
 echo "$RUST_Z1B_OK" | grep -qF 'Enter new password'
 docker exec "$NAME_MIT" klist -c /tmp/cc_z1b_mit_ok | grep -qF 'krbtgt/KERBER.TEST@KERBER.TEST'
 docker exec "$NAME_MIT" klist -c /tmp/cc_z1b_rust_ok | grep -qF 'krbtgt/KERBER.TEST@KERBER.TEST'
-docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1brust' | grep -qE '^Key: vno 2, ' || { echo "Rust change did not bump the kvno" >&2; exit 1; }
-docker exec "$NAME_MIT" kadmin.local -q 'getprinc z1bmit' | grep -qE '^Key: vno 2, ' || { echo "MIT change did not bump the kvno" >&2; exit 1; }
+mit_kadmin_local "$NAME_MIT" -- -q 'getprinc z1brust' | grep -qE '^Key: vno 2, ' || { echo "Rust change did not bump the kvno" >&2; exit 1; }
+mit_kadmin_local "$NAME_MIT" -- -q 'getprinc z1bmit' | grep -qE '^Key: vno 2, ' || { echo "MIT change did not bump the kvno" >&2; exit 1; }
 echo "MIT_z1b2_keyexp_order"
 echo "RUST_z1b2_keyexp_order"
 
@@ -286,12 +286,12 @@ echo "==== Z7.2 kpasswd stamps kadmind@REALM (ovsec_kadmd.c:446) ===="
 # Fresh principals: user@ already has min_life leftover from earlier cells.
 z72_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
 kadmin_q 'addprinc -pw z72old z72kpw' | grep -F 'Principal "z72kpw@KERBER.TEST" created.'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw z72old z72kpw' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw z72old z72kpw' >/dev/null
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "z72old\nz72new\nz72new\n" | kpasswd z72kpw@KERBER.TEST'
 docker exec "$NAME_MIT" sh -c 'printf "z72old\nz72new\nz72new\n" | kpasswd z72kpw@KERBER.TEST'
 R72="$(kadmin_q 'getprinc z72kpw')"
-M72="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc z72kpw')"
+M72="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc z72kpw')"
 echo "$R72"
 echo "$M72"
 R72MOD="$(echo "$R72" | z72_mod)"
@@ -314,21 +314,21 @@ echo "mit modifier=$M72MOD"
 echo "==== Z8.1 kpasswd reloads after kadmin.local (write_store house rule) ===="
 # kadmind is already up. A local addprinc must survive the next kpasswd save.
 kadmin_q 'addprinc -pw z8old z8kpw' | grep -F 'Principal "z8kpw@KERBER.TEST" created.'
-docker exec "$NAME_MIT" kadmin -p admin/admin -w adminpassword \
+mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword \
     -q 'addprinc -pw z8old z8kpw' | grep -F 'Principal "z8kpw@KERBER.TEST" created.'
-docker exec \
+rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_PASSWORD=z8x-secret \
-    "$NAME" /tmp/krb5-kadmin-local -q 'addprinc z8x' \
+    "$NAME" -- -q 'addprinc z8x' \
     | grep -F 'Principal "z8x@KERBER.TEST" created.'
-docker exec "$NAME_MIT" kadmin.local -q 'addprinc -pw z8x-secret z8x' \
+mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw z8x-secret z8x' \
     | grep -F 'Principal "z8x@KERBER.TEST" created.'
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "z8old\nz8new\nz8new\n" | kpasswd z8kpw@KERBER.TEST'
 docker exec "$NAME_MIT" sh -c 'printf "z8old\nz8new\nz8new\n" | kpasswd z8kpw@KERBER.TEST'
 R8X="$(kadmin_q 'getprinc z8x')"
-M8X="$(docker exec "$NAME_MIT" kadmin.local -q 'getprinc z8x')"
+M8X="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc z8x')"
 echo "$R8X"
 echo "$M8X"
 echo "$R8X" | grep -F 'Principal: z8x@KERBER.TEST'

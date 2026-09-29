@@ -6,6 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 need_bins krb5-kdc krb5-kinit
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
@@ -75,7 +76,7 @@ if "pkinit_indicator" not in t:
     t = t.replace("supported_enctypes", "        pkinit_indicator = pkinit\n        supported_enctypes", 1)
     p.write_text(t)
 '
-docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth user'
 docker exec "$NAME" sh -c 'grep -q pkinit_anchors /etc/krb5.conf || cat >> /etc/krb5.conf <<EOF
 
 [libdefaults]
@@ -203,7 +204,7 @@ EOF"
 mit_kdc_pkinit_dh1024
 
 echo "==== require_auth pkinit: MIT kinit PKINIT kvno issued, password kvno 12 ===="
-docker exec "$NAME" kadmin.local -q 'setstr host/testhost.kerber.test require_auth pkinit'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr host/testhost.kerber.test require_auth pkinit'
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
 set +e
 docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
@@ -252,8 +253,8 @@ docker exec "$NAME" grep -q 'HIGHER_AUTHENTICATION_REQUIRED' /tmp/mit-kdc.log ||
 }
 
 echo "==== PKINIT TGT has no H; +requires_hwauth host is NO HW PREAUTH ===="
-docker exec "$NAME" kadmin.local -q 'delstr host/testhost.kerber.test require_auth' || true
-docker exec "$NAME" kadmin.local -q 'modprinc +requires_hwauth host/testhost.kerber.test'
+kadmin_q_try mit_kadmin_local "$NAME" -- -q 'delstr host/testhost.kerber.test require_auth' 
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_hwauth host/testhost.kerber.test'
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
 set +e
 docker exec -e KRB5_TRACE=/dev/stderr "$NAME" \
@@ -344,8 +345,8 @@ if "restrict_anonymous_to_tgt" not in t:
     t = t.replace("[kdcdefaults]", "[kdcdefaults]\n    restrict_anonymous_to_tgt = true", 1)
     p.write_text(t)
 '
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey WELLKNOWN/ANONYMOUS@KERBER.TEST'
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey host/anonrestrict.kerber.test'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey WELLKNOWN/ANONYMOUS@KERBER.TEST'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/anonrestrict.kerber.test'
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
 wait_pid_gone "$NAME" krb5kdc || true
 docker exec -d \

@@ -683,7 +683,7 @@ def check_no_duplicate_functions(files: dict[str, str] | None = None, allow: int
 # Direct `kadmin` / `kadmin.local` / `krb5-kadmin(-local)` queries (`-q`) in the gates; S6.2 moves them
 # behind the scripts/lib helpers. The rule is the S6.2 classifier's: one logical line (continuations
 # joined, comments dropped), heredoc bodies included, the query's own `-q`. Pinned at the live count.
-KADMIN_Q_DIRECT_ALLOW = 556
+KADMIN_Q_DIRECT_ALLOW = 0
 # The queries that cannot come from scripts/lib: each runs inside a container script (a `docker exec … sh -c`
 # body or a heredoc fed to one) between in-container steps, where no host function exists. Keyed by
 # (gate, the section's `==== title ====`, the number of sites, the reason); an exception matches only a query

@@ -85,7 +85,7 @@ docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
     "$NAME" sh -c 'printf "adminpassword\n" | kinit admin@KERBER.TEST'
 
 echo "==== addprinc renewuser; four-term defaults ===="
-kadmin_q 'addprinc -pw renew-secret renewuser'
+kadmin_q_ok kadmin_q 'addprinc -pw renew-secret renewuser'
 KRBTGT_P="$(kadmin_q 'getprinc krbtgt/KERBER.TEST')"
 USER_P="$(kadmin_q 'getprinc renewuser')"
 echo "$KRBTGT_P"
@@ -93,8 +93,8 @@ echo "$USER_P"
 # New-principal default copies realm policy (7d), so maxrenewlife is not 0.
 echo "$KRBTGT_P" | grep -E 'Maximum renewable life:' | grep -qvE '0 days 00:00:00'
 echo "$USER_P" | grep -E 'Maximum renewable life:' | grep -qvE '0 days 00:00:00'
-kadmin_q 'modprinc -maxrenewlife "7 days" renewuser'
-kadmin_q 'modprinc -maxrenewlife "7 days" krbtgt/KERBER.TEST'
+kadmin_q_ok kadmin_q 'modprinc -maxrenewlife "7 days" renewuser'
+kadmin_q_ok kadmin_q 'modprinc -maxrenewlife "7 days" krbtgt/KERBER.TEST'
 
 echo "==== MIT kinit -r 7d -l 10h (renew until ≈ start + 7d) ===="
 docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
@@ -142,7 +142,7 @@ echo "flagbits2=$FLAG2"
 echo "$FLAG2" | grep -q R
 
 echo "==== DISALLOW_RENEWABLE: kinit -R strips R ===="
-kadmin_q 'modprinc -allow_renewable renewuser'
+kadmin_q_ok kadmin_q 'modprinc -allow_renewable renewuser'
 if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kinit -R; then
     docker exec "$NAME" cat /tmp/kdc.log >&2 || true
     log "renew.gate" "error" ',"error":"kinit -R after DISALLOW_RENEWABLE failed"'
@@ -168,7 +168,7 @@ if echo "$AGAIN" | grep -qiE 'Authenticated|Ticket cache'; then
 fi
 
 echo "==== MIT kinit -p shows P ===="
-kadmin_q 'modprinc +allow_renewable renewuser'
+kadmin_q_ok kadmin_q 'modprinc +allow_renewable renewuser'
 docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
     "$NAME" sh -c 'printf "renew-secret\n" | kinit -p renewuser@KERBER.TEST'; then
@@ -183,8 +183,8 @@ echo "pbits=$PBITS"
 echo "$PBITS" | grep -q P
 
 echo "==== NON-RENEWABLE TICKET: kvno after kinit -r vs -allow_renewable (rust) ===="
-kadmin_q 'addprinc -randkey host/norenew.kerber.test'
-kadmin_q 'modprinc -allow_renewable host/norenew.kerber.test'
+kadmin_q_ok kadmin_q 'addprinc -randkey host/norenew.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc -allow_renewable host/norenew.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
     "$NAME" sh -c 'printf "renew-secret\n" | kinit -r 7d renewuser@KERBER.TEST'; then
@@ -213,8 +213,8 @@ if [ "${KERBER_LIVE:-}" = 1 ]; then
     mit_conf_snapshot "$MITNAME"
     register_cleanup "mit_conf_restore '$MITNAME'"
 fi
-docker exec "$MITNAME" kadmin.local -q "addprinc -randkey host/norenew.kerber.test"
-docker exec "$MITNAME" kadmin.local -q "modprinc -allow_renewable host/norenew.kerber.test"
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q "addprinc -randkey host/norenew.kerber.test"
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q "modprinc -allow_renewable host/norenew.kerber.test"
 docker exec "$MITNAME" sh -c 'cat >/tmp/renew-mit-oracle.conf <<EOF
 [libdefaults]
     default_realm = KERBER.TEST
@@ -261,7 +261,7 @@ echo "$MIT_PBITS" | grep -q P || {
 }
 
 echo "==== max_renewable_life 0: renew until = start; kinit -R is 32 (rust) ===="
-kadmin_q 'modprinc -maxrenewlife 0 renewuser'
+kadmin_q_ok kadmin_q 'modprinc -maxrenewlife 0 renewuser'
 ZERO_P="$(kadmin_q 'getprinc renewuser')"
 echo "$ZERO_P"
 echo "$ZERO_P" | grep -E 'Maximum renewable life:' | grep -qE '0 days 00:00:00'
@@ -293,7 +293,7 @@ echo "$ZAGAIN" | grep -qiE 'expired|TKT_EXPIRED' || {
 }
 
 echo "==== max_renewable_life 1 day (rust kadm5 write) ===="
-kadmin_q 'modprinc -maxrenewlife "1 day" renewuser'
+kadmin_q_ok kadmin_q 'modprinc -maxrenewlife "1 day" renewuser'
 ONE_P="$(kadmin_q 'getprinc renewuser')"
 echo "$ONE_P"
 echo "$ONE_P" | grep -E 'Maximum renewable life:' | grep -qE '1 day 00:00:00'
@@ -315,8 +315,8 @@ test "$ODELTA" -ge 85200
 test "$ODELTA" -le 87600
 
 echo "==== -requires_preauth TGT has no A; +requires_preauth host is NO PREAUTH (rust) ===="
-kadmin_q 'modprinc -requires_preauth renewuser'
-kadmin_q 'modprinc +requires_preauth host/testhost.kerber.test'
+kadmin_q_ok kadmin_q 'modprinc -requires_preauth renewuser'
+kadmin_q_ok kadmin_q 'modprinc +requires_preauth host/testhost.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \
     "$NAME" sh -c 'printf "renew-secret\n" | kinit renewuser@KERBER.TEST'; then
@@ -350,8 +350,8 @@ docker exec "$NAME" grep -q 'NO PREAUTH' /tmp/kdc.log || {
 }
 
 echo "==== max_renewable_life 0 / 1 day / no A (mit oracle) ===="
-docker exec "$MITNAME" kadmin.local -q 'modprinc -maxrenewlife 0 user'
-MZERO_P="$(docker exec "$MITNAME" kadmin.local -q 'getprinc user')"
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc -maxrenewlife 0 user'
+MZERO_P="$(mit_kadmin_local "$MITNAME" -- -q 'getprinc user')"
 echo "$MZERO_P"
 echo "$MZERO_P" | grep -E 'Maximum renewable life:' | grep -qE '0 days 00:00:00'
 docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
@@ -379,8 +379,8 @@ echo "$MZAGAIN" | grep -qiE 'expired|TKT_EXPIRED' || {
     log "renew.gate" "error" ',"error":"MIT kinit -R after maxrenewlife 0 did not expire"'
     exit 1
 }
-docker exec "$MITNAME" kadmin.local -q 'modprinc -maxrenewlife "1 day" user'
-MONE_P="$(docker exec "$MITNAME" kadmin.local -q 'getprinc user')"
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc -maxrenewlife "1 day" user'
+MONE_P="$(mit_kadmin_local "$MITNAME" -- -q 'getprinc user')"
 echo "$MONE_P"
 echo "$MONE_P" | grep -E 'Maximum renewable life:' | grep -qE '1 day 00:00:00'
 docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
@@ -399,8 +399,8 @@ MODELT=$(($(date -d "$MOREN" +%s) - $(date -d "$MOSTART" +%s)))
 echo "mit_one_renew_delta_secs=$MODELT"
 test "$MODELT" -ge 85200
 test "$MODELT" -le 87600
-docker exec "$MITNAME" kadmin.local -q 'modprinc -requires_preauth user'
-docker exec "$MITNAME" kadmin.local -q 'modprinc +requires_preauth host/testhost.kerber.test'
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc -requires_preauth user'
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc +requires_preauth host/testhost.kerber.test'
 docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf "$MITNAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/renew-mit-oracle.conf \
     "$MITNAME" sh -c 'printf "userpassword\n" | kinit user@KERBER.TEST'; then
@@ -556,10 +556,10 @@ fi
 
 # Principals at 10 d so they do not clip first; -r 8d is above the 7 d
 # realm cap (`kdc/main.c:316-319` `KRB5_KDB_MAX_RLIFE`).
-kadmin_q 'modprinc -maxrenewlife 10d renewuser'
-kadmin_q 'modprinc -maxrenewlife 10d krbtgt/KERBER.TEST'
-docker exec "$MITNAME" kadmin.local -q 'modprinc -maxrenewlife 10d user'
-docker exec "$MITNAME" kadmin.local -q 'modprinc -maxrenewlife 10d krbtgt/KERBER.TEST'
+kadmin_q_ok kadmin_q 'modprinc -maxrenewlife 10d renewuser'
+kadmin_q_ok kadmin_q 'modprinc -maxrenewlife 10d krbtgt/KERBER.TEST'
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc -maxrenewlife 10d user'
+kadmin_q_ok mit_kadmin_local "$MITNAME" -- -q 'modprinc -maxrenewlife 10d krbtgt/KERBER.TEST'
 
 docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 if ! docker exec -e KRB5_CONFIG=/tmp/renew-krb5.conf \

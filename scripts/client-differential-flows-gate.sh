@@ -7,6 +7,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
+. "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/client-diff-common.sh"
 need_bins krb5-kinit krb5-klist krb5-kvno krb5-kdestroy krb5-vfy-increds krb5-kdc krb5-forge-tgt krb5-pac-extract krb5-gss-accept krb5-gss-init krb5-kpasswd
 
@@ -139,10 +140,9 @@ wait_bound_free_in "$NAME" "$PROXY_PORT" udp || die "proxy :$PROXY_PORT already 
 docker exec -d "$NAME" python3 /tmp/kdc-req-proxy.py "$PROXY_PORT" 127.0.0.1 88 /tmp/cdiff/live.jsonl
 wait_udp_in "$NAME" "$PROXY_PORT" || die "kdc-req-proxy did not listen"
 
-docker exec "$NAME" kadmin.local -q 'addprinc -randkey WELLKNOWN/ANONYMOUS@KERBER.TEST' >/dev/null || true
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/user.keytab -norandkey user' >/dev/null
-docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/host.keytab -norandkey host/testhost.kerber.test' >/dev/null || \
-    docker exec "$NAME" kadmin.local -q 'ktadd -k /tmp/host.keytab host/testhost.kerber.test' >/dev/null
+kadmin_q_try mit_kadmin_local "$NAME" -- -q 'addprinc -randkey WELLKNOWN/ANONYMOUS@KERBER.TEST' >/dev/null 
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/user.keytab -norandkey user' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/host.keytab -norandkey host/testhost.kerber.test' >/dev/null
 
 FLOW_N=0
 
@@ -276,7 +276,7 @@ save_cap rust-kvno_u2u
 compare_flow kvno_u2u
 
 echo "==== flow:preauth ===="
-docker exec "$NAME" kadmin.local -q 'modprinc +requires_preauth user'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth user'
 reset_cap
 mit_kinit /tmp/cc_mit_pa || die "MIT kinit preauth failed"
 save_cap mit-preauth
