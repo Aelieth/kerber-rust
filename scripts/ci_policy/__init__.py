@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 
 from .comments import (
     check_mit_anchor_form, check_mit_anchor_truth, check_no_docs_process_tags, check_no_process_history,
@@ -47,8 +48,12 @@ from .workflows import (
 
 
 def main() -> None:
-    # The scripts the checks run stamp through provenance.sh; give them this run's scratch, never /tmp.
+    # The scripts the checks run stamp through provenance.sh, and the self-tests make temp trees: give
+    # both this run's scratch as KERBER_SCRATCH and, unless the caller set one, as TMPDIR, never host /tmp.
     os.environ.setdefault("KERBER_SCRATCH", str(_scratch_root()))
+    if not os.environ.get("TMPDIR"):
+        os.environ["TMPDIR"] = os.environ["KERBER_SCRATCH"]
+        tempfile.tempdir = None
     _self_test()
     if not WORKFLOWS.is_dir():
         _die(f"missing {WORKFLOWS}")

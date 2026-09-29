@@ -19,13 +19,18 @@ anchor counted apart from the prose, function and file maxima, `pub` surface,
 compiler-backed counts (fmt, clippy, rustdoc under `-D warnings`,
 doctests, `missing_docs`, shellcheck). `make checkpoint OUT=<dir>` runs
 nextest and the gates into a stamped `timings.tsv`, and exits 1 when a
-step fails: nextest, ci-policy, a gate whose rc is neither 0 nor 2 (2 is a
-lab that is not up), or the `ci-policy --checkpoint` gate-wall check. It
-runs every step first; `CHECKPOINT_RC.txt` holds `checkpoint_rc=` and one
-`fail=` line per failed step. `scripts/checkpoint.sh --self-test`, a step of
-the `test` job, runs fixture checkpoints through three hooks
+step fails: nextest, ci-policy, `run-harness.sh`, a gate whose rc is neither
+0 nor 2 (2 is a lab that is not up), or the `ci-policy --checkpoint`
+gate-wall check. It runs every step first; `CHECKPOINT_RC.txt` holds
+`checkpoint_rc=` and one `fail=` line per failed step. The MIT image is a
+precondition: a missing or stale image, or no docker, stops the run with
+exit 2 before any step unless `KERBER_NO_IMAGE=1`, and a step whose stamp
+fails later is a failed step. `scripts/checkpoint.sh --self-test`, a step of
+the `test` job, runs fixture checkpoints through four hooks
 (`KERBER_CHECKPOINT_NEXTEST`, `KERBER_CHECKPOINT_POLICY`,
-`KERBER_CHECKPOINT_GATE_DIR`); `00-head.txt` records any that is set. Both refuse to run
+`KERBER_CHECKPOINT_HARNESS`, `KERBER_CHECKPOINT_GATE_DIR`) under a `docker`
+that always fails, so it needs neither docker nor the image; `00-head.txt`
+records any hook that is set. Both refuse to run
 unless the host `default_realm` is the `TESTLABBY.LOCAL` lab stub
 (`scripts/lib/lab-realm.sh` reads the first live `default_realm =` line
 of `/etc/krb5.conf`, not a commented one; `KERBER_ALLOW_HOST_REALM=1`

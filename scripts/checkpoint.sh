@@ -5,12 +5,16 @@
 #                         [--skip-nextest] [--skip-harness] [--skip-policy]
 #   scripts/checkpoint.sh --plan ...     (print index/gate/label, do not run)
 #   scripts/checkpoint.sh --self-test
-# Exit 1 when a step fails: nextest rc != 0, ci-policy rc != 0, a gate rc other than 0 or 2
-# (2 is a lab that is not up), or the `ci-policy --checkpoint` gate-wall check. Every step still
-# runs; $OUT/CHECKPOINT_RC.txt (stamped) holds checkpoint_rc= and one fail= line per failure.
+# Exit 1 when a step fails: nextest rc != 0, ci-policy rc != 0, run-harness.sh rc != 0, a gate rc
+# other than 0 or 2 (2 is a lab that is not up), or the `ci-policy --checkpoint` gate-wall check.
+# Every step still runs; $OUT/CHECKPOINT_RC.txt (stamped) holds checkpoint_rc= and one fail= line
+# per failure. The MIT image is a precondition: a missing or stale one, or no docker, stops the run
+# with exit 2 before any step, unless KERBER_NO_IMAGE=1 (every stamp then says image=unavailable).
 # The self-test's fixtures swap the steps through KERBER_CHECKPOINT_NEXTEST (a bash command),
-# KERBER_CHECKPOINT_POLICY (a script run in place of ci-policy.py) and KERBER_CHECKPOINT_GATE_DIR
-# (where the *-gate.sh files are read); 00-head.txt records any that is set.
+# KERBER_CHECKPOINT_POLICY (a script run in place of ci-policy.py), KERBER_CHECKPOINT_HARNESS (a bash
+# command run in place of run-harness.sh) and KERBER_CHECKPOINT_GATE_DIR (where the *-gate.sh files
+# are read); 00-head.txt records any that is set. The fixtures run under a docker that always
+# fails, so the self-test needs neither docker nor the MIT image.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 1
@@ -65,6 +69,20 @@ run_policy() {
         python3 scripts/ci-policy.py "$@"
     fi
 }
+run_harness() {
+    if [ -n "${KERBER_CHECKPOINT_HARNESS:-}" ]; then
+        bash -c "$KERBER_CHECKPOINT_HARNESS"
+    else
+        KERBER_SKIP_MIT_BUILD=1 ./scripts/run-harness.sh
+    fi
+}
+# A step log's stamp. provenance.sh runs in a subshell, so its exit (the image changed during the
+# run) is a failed step, not the end of the run.
+stamp_log() {
+    local rc=0
+    (. scripts/lib/provenance.sh) || rc=$?
+    [ "$rc" = 0 ] || fail "stamp $1 provenance_rc=$rc"
+}
 
 # A gate that is running, not a process that merely names one: the command line
 # must be a shell interpreter with `scripts/<name>-gate.sh` as its script
@@ -80,8 +98,10 @@ gate_or_cargo_running() {
     pgrep -f "$GATE_PROCESS_RE" >/dev/null || pgrep -x cargo >/dev/null
 }
 
-# The KEEP chains run whatever --gates says; the self-test's fixture directory needs a gate for each.
+# The KEEP chains and the harness-attached gates run whatever --gates says; the self-test's fixture
+# directory needs a gate for each.
 KADMIN_KEEP_NAMES="kadmin-rust-gate kadmin-rust-acl-gate kadmin-mit-gate kadmin-both-gate kpasswd-rust-gate kpasswd-mit-gate client-differential-flows-gate client-differential-cli-gate"
+HARNESS_ATTACH="knobs-gate ccache-gate client-gate config-include-gate"
 
 if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
     scratch_parent="${KERBER_SCRATCH:-${TMPDIR:-/tmp}}"
@@ -198,8 +218,27 @@ if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
     # Exit semantics, on fixture steps: every step runs, and a failed one makes the exit 1 and is
     # named in CHECKPOINT_RC.txt; a gate that exits 2 (its lab is not up) is not a failure.
     fx="$t/fx"
-    mkdir -p "$fx/gates"
-    for g in $KADMIN_KEEP_NAMES green-gate; do
+    mkdir -p "$fx/gates" "$fx/nodocker"
+    # A docker that always fails, as on the GitHub test job (docker without the MIT image): the
+    # fixture runs need neither, and stamp image=unavailable under KERBER_NO_IMAGE=1.
+    printf '#!/bin/sh\nexit 1\n' >"$fx/nodocker/docker"
+    chmod +x "$fx/nodocker/docker"
+    # A docker whose MIT image answers provenance.sh's three calls of the precondition, then is gone.
+    mkdir -p "$fx/vanish-docker"
+    cat >"$fx/vanish-docker/docker" <<'FAKE'
+#!/bin/sh
+n=$(($(cat "$FX_DOCKER_COUNT" 2>/dev/null || echo 0) + 1))
+echo "$n" >"$FX_DOCKER_COUNT"
+[ "$n" -le 3 ] || exit 1
+case "$*" in
+    "image inspect kerber-rust-mit-kdc:1.22.2") exit 0 ;;
+    "image inspect kerber-rust-mit-kdc:1.22.2 --format"*) echo "sha256:fixture 2026-01-01T00:00:00Z"; exit 0 ;;
+    "run --rm --entrypoint cat kerber-rust-mit-kdc:1.22.2 /var/kerberos/krb5kdc/kadm5.acl") cat harness/kadm5.acl; exit 0 ;;
+esac
+exit 1
+FAKE
+    chmod +x "$fx/vanish-docker/docker"
+    for g in $KADMIN_KEEP_NAMES $HARNESS_ATTACH green-gate; do
         printf '#!/usr/bin/env bash\nexit 0\n' >"$fx/gates/$g.sh"
     done
     printf '#!/usr/bin/env bash\nexit 2\n' >"$fx/gates/nolab-gate.sh"
@@ -209,12 +248,16 @@ if [ "${CHECKPOINT_SELF_TEST:-0}" = 1 ]; then
 case " $* " in *" --checkpoint "*) exit "${FX_WALL_RC:-0}" ;; esac
 exit "${FX_POLICY_RC:-0}"
 FAKE
-    fx_run() {  # fx_run NAME GATES [VAR=VALUE ...]: a checkpoint on the fixtures; prints its rc
-        local name="$1" gates="$2"
+    # fx_run NAME GATES [VAR=VALUE ...]: a checkpoint on the fixtures, under the failing docker and
+    # KERBER_NO_IMAGE=1; prints its rc. A KERBER_CHECKPOINT_HARNESS= argument runs the harness step.
+    fx_run() {
+        local name="$1" gates="$2" skip="--skip-harness"
         shift 2
-        env KERBER_ALLOW_HOST_REALM=1 KERBER_CHECKPOINT_GATE_DIR="$fx/gates" KERBER_CHECKPOINT_POLICY="$fx/policy.sh" \
-            KERBER_CHECKPOINT_NEXTEST="exit 0" KERBER_SCRATCH="$fx/$name-scratch" "$@" \
-            "$0" --out "$fx/$name" --skip-harness --gates "$gates" >"$fx/$name.out" 2>&1
+        case " $* " in *" KERBER_CHECKPOINT_HARNESS="*) skip="" ;; esac
+        env PATH="$fx/nodocker:$PATH" KERBER_NO_IMAGE=1 KERBER_ALLOW_HOST_REALM=1 KERBER_CHECKPOINT_GATE_DIR="$fx/gates" \
+            KERBER_CHECKPOINT_POLICY="$fx/policy.sh" KERBER_CHECKPOINT_NEXTEST="exit 0" \
+            KERBER_SCRATCH="$fx/$name-scratch" "$@" \
+            "$0" --out "$fx/$name" ${skip:+"$skip"} --gates "$gates" >"$fx/$name.out" 2>&1
         echo $?
     }
     fx_fail() {
@@ -226,6 +269,7 @@ FAKE
     [ "$(fx_run green green-gate,nolab-gate)" = 0 ] || fx_fail "an all-green run (a gate at rc 2 included) must exit 0" green
     grep -qx 'checkpoint_rc=0' "$fx/green/CHECKPOINT_RC.txt" || fx_fail "a green run must write checkpoint_rc=0" green
     grep -qx 'CHECKPOINT_DONE' "$fx/green.out" || fx_fail "a green run must end CHECKPOINT_DONE" green
+    grep -qx 'image=unavailable' "$fx/green/03-ci-policy.log" || fx_fail "a fixture step must stamp image=unavailable" green
     [ "$(fx_run nextest green-gate KERBER_CHECKPOINT_NEXTEST='exit 1')" = 1 ] || fx_fail "nextest rc 1 must exit 1" nextest
     grep -qx 'fail=nextest nextest_rc=1' "$fx/nextest/CHECKPOINT_RC.txt" || fx_fail "nextest rc 1 must be named" nextest
     grep -q '^green-gate' "$fx/nextest/timings.tsv" || fx_fail "the gates must still run after a red nextest" nextest
@@ -237,6 +281,22 @@ FAKE
     [ "$(fx_run wall green-gate FX_WALL_RC=1)" = 1 ] || fx_fail "a failed gate-wall check must exit 1" wall
     grep -q '^fail=gate-wall ' "$fx/wall/CHECKPOINT_RC.txt" || fx_fail "the gate-wall failure must be named" wall
     grep -q 'self_test_hook=KERBER_CHECKPOINT_GATE_DIR' "$fx/wall/00-head.txt" || fx_fail "00-head.txt must record the hooks" wall
+    [ "$(fx_run harness green-gate KERBER_CHECKPOINT_HARNESS='exit 1')" = 1 ] || fx_fail "run-harness.sh rc 1 must exit 1" harness
+    grep -qx 'fail=harness harness_rc=1' "$fx/harness/CHECKPOINT_RC.txt" || fx_fail "run-harness.sh rc 1 must be named" harness
+    grep -q '^knobs-gate' "$fx/harness/timings.tsv" || fx_fail "the harness gates must still run after a red harness" harness
+    grep -q 'self_test_hook=KERBER_CHECKPOINT_HARNESS' "$fx/harness/00-head.txt" || fx_fail "00-head.txt must record the harness hook" harness
+    # Without KERBER_NO_IMAGE=1 the missing image is a precondition: exit 2, named, before any step.
+    [ "$(fx_run noimage green-gate KERBER_NO_IMAGE=)" = 2 ] || fx_fail "a run without the MIT image must exit 2" noimage
+    grep -q 'the MIT image is a precondition: MIT image kerber-rust-mit-kdc:1.22.2 missing' "$fx/noimage.out" \
+        || fx_fail "the missing MIT image must be named" noimage
+    [ ! -e "$fx/noimage/00-head.txt" ] || fx_fail "no step may run before the MIT image precondition" noimage
+    # An image that is gone after the precondition: a step's stamp fails as a named step, and the run
+    # still ends with CHECKPOINT_RC.txt.
+    [ "$(fx_run vanish green-gate KERBER_NO_IMAGE= PATH="$fx/vanish-docker:$PATH" FX_DOCKER_COUNT="$fx/vanish.count")" = 1 ] \
+        || fx_fail "an image gone after the precondition must exit 1" vanish
+    grep -qx 'fail=stamp 03-ci-policy provenance_rc=2' "$fx/vanish/CHECKPOINT_RC.txt" \
+        || fx_fail "a stamp that fails must be a named step" vanish
+    grep -qx 'CHECKPOINT_FAILED: 2 step(s) failed' "$fx/vanish.out" || fx_fail "both step stamps must fail and the run end" vanish
     rm -rf "$t"
     echo "checkpoint.sh: self-test ok"
     exit 0
@@ -255,6 +315,15 @@ if [ "$PLAN" != 1 ]; then
     # shellcheck source=lib/lab-realm.sh
     . scripts/lib/lab-realm.sh
     require_lab_realm "$HOST_KRB5_CONF"
+    # The MIT image is a precondition, checked once before any step: a missing or stale image, or no
+    # docker, stops the run here and names why, never halfway with no CHECKPOINT_RC.txt.
+    # KERBER_NO_IMAGE=1 runs without it, and every stamp then says image=unavailable.
+    if [ "${KERBER_NO_IMAGE:-}" != 1 ]; then
+        if ! image_err="$(bash -c '. scripts/lib/provenance.sh' 2>&1 >/dev/null)"; then
+            echo "checkpoint.sh: the MIT image is a precondition: ${image_err%%$'\n'*} (KERBER_NO_IMAGE=1 runs without it)" >&2
+            exit 2
+        fi
+    fi
     mkdir -p "$OUT"
     OUT="$(cd "$OUT" && pwd)"
     export KERBER_SCRATCH="${KERBER_SCRATCH:-$OUT/scratch}"
@@ -287,7 +356,7 @@ if [ "$PLAN" != 1 ]; then
         echo "host_krb5_default_realm=$(host_default_realm "$HOST_KRB5_CONF")"
         echo "lab_realm_override=$(lab_realm_override "$HOST_KRB5_CONF")"
         echo "nproc=$(nproc)"
-        for hook in KERBER_CHECKPOINT_NEXTEST KERBER_CHECKPOINT_POLICY KERBER_CHECKPOINT_GATE_DIR; do
+        for hook in KERBER_CHECKPOINT_NEXTEST KERBER_CHECKPOINT_POLICY KERBER_CHECKPOINT_HARNESS KERBER_CHECKPOINT_GATE_DIR; do
             [ -n "${!hook:-}" ] && echo "self_test_hook=$hook"
         done
     } >"$OUT/00-head.txt"
@@ -332,7 +401,6 @@ rungate() {
 
 SKIP_ALWAYS="chaos-gate soak-gate stress-gate prod-gate prod-realm-gate nfs-krb5p-gate sssd-renew-gate ad-mit-trust-gate"
 PEERS_GATES="samba-ad-gate ad-windows-gate ad-s4u-gate samba-pac-verify-gate samba-pac-l2-gate samba-crossrealm-gate samba-realtrust-gate heimdal-gate"
-HARNESS_ATTACH="knobs-gate ccache-gate client-gate config-include-gate"
 # CI runs these KEEP-attached; local checkpoint runs them in that order
 # with KERBER_KADMIN_KEEP=1 so each wall_s is a CI leg, not the wrapper.
 KADMIN_KEEP="kadmin-rust-gate kadmin-rust-acl-gate kadmin-mit-gate kadmin-both-gate"
@@ -340,14 +408,14 @@ KPASSWD_KEEP="kpasswd-rust-gate kpasswd-mit-gate"
 CLIENT_DIFF_KEEP="client-differential-flows-gate client-differential-cli-gate"
 
 if [ "$SKIP_POLICY" != 1 ]; then
-    { . scripts/lib/provenance.sh; echo "label=python3 scripts/ci-policy.py"; run_policy; policy_rc=$?; echo "rc=$policy_rc"; } \
+    { stamp_log 03-ci-policy; echo "label=python3 scripts/ci-policy.py"; run_policy; policy_rc=$?; echo "rc=$policy_rc"; } \
         >"$OUT/03-ci-policy.log" 2>&1
     prog 03 ci-policy "rc=$policy_rc"
     [ "$policy_rc" = 0 ] || fail "ci-policy rc=$policy_rc"
 fi
 
 if [ "$SKIP_NEXTEST" != 1 ]; then
-    { . scripts/lib/provenance.sh; echo "label=cargo nextest run --workspace --profile ci (isolated)"; } \
+    { stamp_log 01-nextest-isolated; echo "label=cargo nextest run --workspace --profile ci (isolated)"; } \
         >"$OUT/01-nextest-isolated.log" 2>&1
     s=$(date +%s)
     run_nextest >>"$OUT/01-nextest-isolated.log" 2>&1
@@ -361,10 +429,11 @@ fi
 
 if [ "$SKIP_HARNESS" != 1 ]; then
     docker rm -f kerber-rust-mit-kdc >/dev/null 2>&1 || true
-    { . scripts/lib/provenance.sh; echo "label=KERBER_SKIP_MIT_BUILD=1 ./scripts/run-harness.sh"; s=$(date +%s)
-      KERBER_SKIP_MIT_BUILD=1 ./scripts/run-harness.sh; echo "harness_rc=$?"; echo "wall_s=$(($(date +%s) - s))"; } \
+    { stamp_log 07-run-harness; echo "label=KERBER_SKIP_MIT_BUILD=1 ./scripts/run-harness.sh"; s=$(date +%s)
+      run_harness; harness_rc=$?; echo "harness_rc=$harness_rc"; echo "wall_s=$(($(date +%s) - s))"; } \
         >"$OUT/07-run-harness.log" 2>&1
-    prog 07 run-harness "done"
+    prog 07 run-harness "harness_rc=$harness_rc"
+    [ "$harness_rc" = 0 ] || fail "harness harness_rc=$harness_rc"
     i=10
     for g in $HARNESS_ATTACH; do
         i=$((i + 1))

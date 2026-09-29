@@ -23,7 +23,10 @@ def _self_test_gates_1() -> None:
         "scripts/lib/provenance.sh": 'if [ -n "${KERBER_PROV_MEMO:-}" ]; then read -r id sha <"$KERBER_PROV_MEMO"; fi\n',
         "scripts/checkpoint.sh": 'KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX")"\nrm -f "$KERBER_PROV_MEMO"\n',
         "scripts/red-at-sha.sh": 'KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX")"\nrm -f "$KERBER_PROV_MEMO"\n',
-        "scripts/ci_policy/__init__.py": 'os.environ.setdefault("KERBER_SCRATCH", str(_scratch_root()))\n',
+        "scripts/ci_policy/__init__.py": (
+            'os.environ.setdefault("KERBER_SCRATCH", str(_scratch_root()))\n'
+            'os.environ["TMPDIR"] = os.environ["KERBER_SCRATCH"]\ntempfile.tempdir = None\n'
+        ),
     }
     check_provenance_memo(memo_ok)
     _must_die_msg("never a prov-<image> file", check_provenance_memo,
@@ -34,6 +37,8 @@ def _self_test_gates_1() -> None:
                   {**memo_ok, "scripts/red-at-sha.sh": 'KERBER_PROV_MEMO="$(mktemp)"\nrm -f "$KERBER_PROV_MEMO"\n'})
     _must_die_msg("give the scripts it runs a KERBER_SCRATCH", check_provenance_memo,
                   {**memo_ok, "scripts/ci_policy/__init__.py": ""})
+    _must_die_msg("a TMPDIR under its scratch", check_provenance_memo,
+                  {**memo_ok, "scripts/ci_policy/__init__.py": 'os.environ.setdefault("KERBER_SCRATCH", "x")\n'})
     with tempfile.TemporaryDirectory() as tmp:
         troot = pathlib.Path(tmp)
         testdir = troot / "crates" / "demo" / "tests"

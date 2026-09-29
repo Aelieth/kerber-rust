@@ -2518,15 +2518,17 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **test.** The KDC oversize-length test sends the length word alone: unread
   body bytes turned the server's close into a reset that could beat the
   FIELD_TOOLONG reply. MIT's krb5kdc closes the same way.
-- **tool.** `checkpoint.sh` exits 1 when nextest, ci-policy, a gate (rc other
-  than 0 or 2) or the gate-wall check fails, and writes `CHECKPOINT_RC.txt`;
-  the `test` job runs its self-test.
+- **tool.** `checkpoint.sh` exits 1 when nextest, ci-policy, `run-harness.sh`,
+  a gate (rc other than 0 or 2) or the gate-wall check fails, and writes
+  `CHECKPOINT_RC.txt`; a missing or stale MIT image stops it before any step.
+  The `test` job runs its self-test, which needs no docker.
 - **tool.** `red-at-sha.sh` builds a gate's bins from the base's own
   `build-bins.sh`, or the five older gate bins from the crates that held
   them; `--print-build` shows which.
 - **tool.** `provenance.sh` writes no memo of its own: the MIT image's acl
   hash lives in one `KERBER_PROV_MEMO` file a runner makes under its scratch,
-  so no stamp leaves a file in host `/tmp`.
+  and ci-policy gives its scripts and self-tests a `TMPDIR` there, so no run
+  leaves a file in host `/tmp`.
 - **ci.** New arms at their live counts: a gate's own `SCRATCH=`, shell
   functions defined twice, direct `kadmin -q` in gates, process tags in
   `docs/**`; plan-section names and non-compiling Python are hard.

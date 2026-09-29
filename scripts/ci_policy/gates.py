@@ -48,9 +48,10 @@ _PROV_MEMO_MAKE = 'KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX"
 def check_provenance_memo(texts: dict[str, str] | None = None) -> None:
     """provenance.sh writes no file of its own that outlives it: the MIT image's kadm5.acl memo is
     only the KERBER_PROV_MEMO file a runner (checkpoint.sh, red-at-sha.sh) makes with mktemp under
-    its KERBER_SCRATCH and removes on exit, and ci-policy gives the scripts it runs a scratch. The
-    old memo, `prov-<image>` in `${KERBER_SCRATCH:-${TMPDIR:-/tmp}}`, was left in host /tmp by any
-    run with neither variable set."""
+    its KERBER_SCRATCH and removes on exit, and ci-policy gives the scripts it runs and its
+    self-tests a scratch, as KERBER_SCRATCH and as TMPDIR. The old memo, `prov-<image>` in
+    `${KERBER_SCRATCH:-${TMPDIR:-/tmp}}`, was left in host /tmp by any run with neither variable
+    set."""
     live = texts is None
     if texts is None:
         names = ["scripts/lib/provenance.sh", *_PROV_MEMO_RUNNERS, "scripts/ci_policy/__init__.py"]
@@ -62,8 +63,11 @@ def check_provenance_memo(texts: dict[str, str] | None = None) -> None:
         text = texts.get(runner, "")
         if _PROV_MEMO_MAKE not in text or 'rm -f "$KERBER_PROV_MEMO"' not in text:
             _die(f"{runner} must make KERBER_PROV_MEMO with mktemp under KERBER_SCRATCH and remove it on exit")
-    if 'os.environ.setdefault("KERBER_SCRATCH"' not in texts.get("scripts/ci_policy/__init__.py", ""):
+    init = texts.get("scripts/ci_policy/__init__.py", "")
+    if 'os.environ.setdefault("KERBER_SCRATCH"' not in init:
         _die("ci-policy must give the scripts it runs a KERBER_SCRATCH")
+    if 'os.environ["TMPDIR"] = os.environ["KERBER_SCRATCH"]' not in init or "tempfile.tempdir = None" not in init:
+        _die("ci-policy must give the scripts and self-tests it runs a TMPDIR under its scratch")
     if not live:
         return
     probe = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))

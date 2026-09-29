@@ -279,14 +279,17 @@ def _self_test_comments() -> None:
             _die("process-history fixtures dropped a tag")
     finally:
         subprocess.run(["rm", "-rf", str(tag_root)], check=False)
-    # S6.1: the docs arm of the process-tag check (lines with a tag, fenced code excluded).
+    # S6.1: the docs arm of the process-tag check (lines with a tag, fenced code excluded), one line
+    # per arm of the tag pattern, so a dropped arm changes the count.
     dt_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:
         (dt_root / "docs").mkdir()
         (dt_root / "docs" / "x.md").write_text(
-            "Plain text.\n| a | settled in W1-Z |\n```\nitem 4 in a fence\n```\nSee item 12 and Z7.1.\n", encoding="utf-8"
+            "Plain text.\n| a | settled in W1-Z |\n```\nitem 4 in a fence\n```\nSee item 12.\nAs in Z7.1.\n"
+            "Graded R2-D1 here.\nThe A\u2032-3 row.\n",
+            encoding="utf-8",
         )
-        check_no_docs_process_tags(dt_root, allow=2)
-        _must_die_msg("2 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
+        check_no_docs_process_tags(dt_root, allow=5)
+        _must_die_msg("5 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
     finally:
         subprocess.run(["rm", "-rf", str(dt_root)], check=False)
