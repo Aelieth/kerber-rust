@@ -121,6 +121,54 @@ pub fn scratch_dir(name: &str) -> PathBuf {
     dir
 }
 
+/// A Unix-socket path for a test, short enough for `sun_path` (108 bytes) whatever `dir`'s length.
+///
+/// On Linux the path is always `/proc/self/fd/<fd>/<name>` through a descriptor this guard holds open on
+/// `dir`, so the socket file lands in `dir` itself and the path is a few bytes long. It is valid only
+/// inside the process that holds the guard, and only while the guard lives. Elsewhere it is `dir/name`
+/// when that fits in 107 bytes.
+pub struct SocketPath {
+    _dir: Option<std::fs::File>,
+    path: PathBuf,
+}
+
+impl SocketPath {
+    /// The path to bind and connect to.
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+/// A Unix-socket path under `dir` for a test (see [`SocketPath`]).
+///
+/// # Panics
+///
+/// Panics if `dir` cannot be opened, or, without `/proc/self/fd`, when `dir/name` does not fit in the
+/// 108-byte `sun_path` (the message names `CARGO_TARGET_DIR` and `KERBER_SCRATCH`, which set `dir`).
+#[must_use]
+pub fn socket_path(dir: &std::path::Path, name: &str) -> SocketPath {
+    if std::path::Path::new("/proc/self/fd").is_dir() {
+        use std::os::fd::AsRawFd;
+        let handle =
+            std::fs::File::open(dir).unwrap_or_else(|e| panic!("open {}: {e}", dir.display()));
+        let path = PathBuf::from(format!("/proc/self/fd/{}/{name}", handle.as_raw_fd()));
+        return SocketPath {
+            _dir: Some(handle),
+            path,
+        };
+    }
+    let path = dir.join(name);
+    assert!(
+        path.as_os_str().len() < 108,
+        "socket path {} is {} bytes; sun_path holds 108 with its NUL, and there is no /proc/self/fd \
+         (shorten CARGO_TARGET_DIR or KERBER_SCRATCH)",
+        path.display(),
+        path.as_os_str().len()
+    );
+    SocketPath { _dir: None, path }
+}
+
 /// A UDP socket and a TCP listener on one ephemeral loopback port, the pair a KDC serves on.
 ///
 /// The kernel picks a UDP port that is free for UDP; another socket of a parallel test run can
@@ -671,5 +719,35 @@ pub fn reseal_incoming(key: &ProtocolKey, tgt: &IssuedAs, part: &EncTicketPart) 
             kvno: Some(1),
             cipher: encrypt(key, usage, &der).unwrap().into(),
         },
+    }
+}
+
+#[cfg(test)]
+mod socket_path_tests {
+    use std::io::{Read, Write};
+    use std::os::unix::net::{UnixListener, UnixStream};
+
+    #[test]
+    fn socket_path_is_short_under_a_150_byte_root() {
+        let root = super::scratch_dir("sock").join("r".repeat(150));
+        std::fs::create_dir_all(&root).expect("long root");
+        assert!(root.as_os_str().len() > 150);
+        let sock = super::socket_path(&root, "s");
+        assert!(
+            sock.path().as_os_str().len() < 108,
+            "{}",
+            sock.path().display()
+        );
+        let listener = UnixListener::bind(sock.path()).expect("bind under a 150-byte root");
+        let mut client = UnixStream::connect(sock.path()).expect("connect");
+        let (mut server, _) = listener.accept().expect("accept");
+        client.write_all(b"k").expect("write");
+        let mut byte = [0u8; 1];
+        server.read_exact(&mut byte).expect("read");
+        assert_eq!(&byte, b"k");
+        assert!(
+            root.join("s").exists(),
+            "the socket file sits in the root itself"
+        );
     }
 }

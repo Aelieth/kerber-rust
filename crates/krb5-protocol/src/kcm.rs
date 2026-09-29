@@ -512,7 +512,10 @@ mod tests {
         use std::sync::{Arc, Mutex};
         use std::thread;
 
-        let path = krb5_testkit::scratch_dir("kcm").join("s");
+        // The listener thread and the KCM client below run in this process, where the descriptor path of
+        // `sock` is valid; it keeps the path short whatever the scratch root's length.
+        let sock = krb5_testkit::socket_path(&krb5_testkit::scratch_dir("kcm"), "s");
+        let path = sock.path().to_path_buf();
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path).unwrap();
         let ops = Arc::new(Mutex::new(Vec::new()));
@@ -555,6 +558,7 @@ mod tests {
         SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = None);
         drop(th.join());
         let _ = std::fs::remove_file(&path);
+        drop(sock);
         ops.lock().unwrap().clone()
     }
 
