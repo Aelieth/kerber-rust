@@ -77,7 +77,7 @@ peer, or **none** (Rust against Rust: it proves behaviour, not parity).
 | `scripts/prod-realm-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT client vs Rust primary/replica `PROD.KERBER.TEST`: MIT `kinit`/`kvno`/`kadmin`; kprop failover; NIC pcap when required |
 | `scripts/prop-acl-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kprop` vs Rust kpropd `KRB5_KPROP_ACL`, and vs MIT `kpropd` `-a` as the oracle: unset or empty allowlist: `Rejected connection from unauthorized principal`, no replica; host allowlist: `SUCCEEDED`, replica, MIT `kinit user`; `acl-$name` cells: 17 `kpropd.acl` variants (exact, other principal, glob lines, leading/trailing whitespace, no realm, longer name, `#`, enctype match / alias case / mismatch / unknown / number / two / CRLF, name CRLF, no final newline) give the same kprop verdict and refusal count on MIT kpropd and Rust kpropd |
 | `scripts/rc4-session-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit`/`kvno` vs Rust KDC and Rust `krb5-kinit`/`krb5-kvno` vs MIT, `session_enctypes rc4-hmac` on krbtgt + host: both legs: TGT and host session key `arcfour-hmac` in `klist -e`; Rust KDC log `"key_usage":9`; `DEPRECATED:arcfour-hmac` display parity on both `klist`; `allow_rc4` under `[kdcdefaults]` alone: both KDCs refuse the rc4-only client alike (`KDC has no support for encryption type`); KDC `permitted_enctypes` aes256: `z14mixed` sealed aes256 (control aes128) and `z14only` `FINDING_SERVER_KEY`, alike; stale keytab after `cpw -randkey -keepold` is `Password incorrect` on both; armor TGT resealed under the non-permitted aes128 key: `kinit -T` is `Generic error (see e-text)` on both, the genuine TGT still armors |
-| `scripts/rd-safe-oracle-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT 1.22.2 `krb5_rd_safe` in an in-container C oracle (`scripts/rd-safe-oracle.c`) over a KRB-SAFE the oracle builds with MIT `krb5_mk_safe`, rewrites and re-signs (no Rust code runs): canonical body verifies (`SAFE_CANON_OK`); non-canonical KRB-SAFE-BODY (seq-number INTEGER with a leading zero octet) verifies (`SAFE_NONCANON_BODY_OK`); seq-number 2^31 verifies (`SAFE_SEQ_2_31_OK`) |
+| `scripts/rd-safe-oracle-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT 1.22.2 `krb5_rd_safe` in an in-container C oracle (`scripts/oracle/rd-safe-oracle.c`) over a KRB-SAFE the oracle builds with MIT `krb5_mk_safe`, rewrites and re-signs (no Rust code runs): canonical body verifies (`SAFE_CANON_OK`); non-canonical KRB-SAFE-BODY (seq-number INTEGER with a leading zero octet) verifies (`SAFE_NONCANON_BODY_OK`); seq-number 2^31 verifies (`SAFE_SEQ_2_31_OK`) |
 | `scripts/renew-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kinit -R` / `kinit -p` vs Rust KDC: `renew until` preserved; `-allow_renewable` strips `R`; `klist -f` shows `P` |
 | `scripts/restart-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kadmin addprinc extra`; kill `krb5-kdc` by comm; relaunch: MIT `kinit extra` after relaunch; MIT load of persist dump v7 |
 | `scripts/rust-kinit-enterprise-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit -E` vs Rust KDC; Rust `kinit -E` vs MIT (must match MIT client): MIT db2: MIT and Rust `kinit -E` of `user@KERBER.TEST` exit non-zero with `not found`; Rust KDC: klist `Default principal: user@KERBER.TEST` (not `user@KERBER.TEST@KERBER.TEST`) |
@@ -246,7 +246,7 @@ not check (a unit test, or "not asserted").
   (`change-password` privilege), not AUTH_GET.
 - `scripts/gss-gate.sh` — copies `krb5-gss-accept` into the MIT 1.22.2
   container, exports `host/testhost.kerber.test` to a keytab, and runs an
-  out-of-process MIT `libgssapi_krb5` initiator (`scripts/gss-mit-client.c`)
+  out-of-process MIT `libgssapi_krb5` initiator (`scripts/oracle/gss-mit-client.c`)
   that wraps `hello-from-mit-gss`. The Rust acceptor must unwrap that
   plaintext. A second MIT initiator with `GSS_C_DELEG_FLAG` must make the
   acceptor print `gss-accept delegated=user@KERBER.TEST`. A Rust initiator
@@ -332,7 +332,7 @@ not check (a unit test, or "not asserted").
   / `kinit -k` new, `delprinc` then `getprinc` error. Rename uses
   `-randkey`. Crafted `kadm5_init_with_password(..., KADM5_CHANGEPW_SERVICE)`
   listprincs is `KADM5_AUTH_LIST` (`Operation requires ``list'' privilege`)
-  on both kadminds (`scripts/kadm5-changepw-rpc.c`); stock `kadmin` never
+  on both kadminds (`scripts/oracle/kadm5-changepw-rpc.c`); stock `kadmin` never
   selects `kadmin/changepw` (`kadmin.c:418-421`, `client_init.c:411`).
   `kadmin-mit-gate.sh` is the MIT-kadmind side of the RPC, lockdown,
   alias/glob, ACL and policy cells; `kadmin-both-gate.sh` diffs the two
@@ -388,7 +388,7 @@ not check (a unit test, or "not asserted").
   `DISALLOW_TGT_BASED`/`LOCKDOWN_KEYS`; remote `ktadd -norandkey` is
   `extract-keys`. After `+allow_tgs_req`, a TGS-obtained `kadmin/changepw`
   ticket self-change is result 7 `Ticket must be derived from a password` on
-  both kadminds (`scripts/kpasswd-tgs-client.c`), including
+  both kadminds (`scripts/oracle/kpasswd-tgs-client.c`), including
   `KPASSWD_TARGNAME_TYPE=0`. MIT vno-1 kadmind log is
   `chpw request from 127.0.0.1 for user@KERBER.TEST: Operation requires initial ticket`;
   the type-0 (`krb5_set_password`) cell pins

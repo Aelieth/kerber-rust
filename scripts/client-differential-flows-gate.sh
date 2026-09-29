@@ -52,8 +52,8 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-forge-tgt" "$NAME":/tmp/krb5-f
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker cp "$ROOT/scripts/lib/kdc-req-proxy.py" "$NAME":/tmp/kdc-req-proxy.py
 docker cp "$ROOT/scripts/lib/skew-preload.c" "$NAME":/tmp/skew-preload.c
-docker cp "$ROOT/scripts/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
-docker cp "$ROOT/scripts/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
+docker cp "$ROOT/scripts/oracle/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
+docker cp "$ROOT/scripts/oracle/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
 docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kvno /tmp/krb5-kdestroy \
     /tmp/krb5-kdc-export /tmp/krb5-gss-accept /tmp/krb5-gss-init /tmp/krb5-forge-tgt \
     /tmp/krb5-pac-extract /tmp/kdc-req-proxy.py

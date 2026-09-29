@@ -21,7 +21,7 @@ fi
 
 shell_container 180
 
-docker cp "$ROOT/scripts/rd-safe-oracle.c" "$NAME":/tmp/rd-safe-oracle.c
+docker cp "$ROOT/scripts/oracle/rd-safe-oracle.c" "$NAME":/tmp/rd-safe-oracle.c
 docker exec "$NAME" sh -c "gcc -O1 -o /tmp/rd-safe-oracle /tmp/rd-safe-oracle.c $MIT_LIBS"
 OUT="$(docker exec "$NAME" /tmp/rd-safe-oracle)"
 printf '%s\n' "$OUT"

@@ -55,7 +55,7 @@ wait_log "$NAME" /tmp/gss-accept.log listening || {
 
 echo "==== MIT libgssapi_krb5 initiator ===="
 MSG="hello-from-mit-gss"
-docker cp "$ROOT/scripts/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
+docker cp "$ROOT/scripts/oracle/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
 if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssapi_krb5 -lkrb5; then
     log "gss.gate" "error" ',"error":"cc gss-mit-client failed"'
     docker exec "$NAME" cat /tmp/gss-cc.log 2>/dev/null || true
@@ -128,7 +128,7 @@ echo "rust_acceptor_deleg_flags=$RUST_DELEG_FLAGS"
 
 echo "==== compile MIT acceptor helper ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
-docker cp "$ROOT/scripts/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
+docker cp "$ROOT/scripts/oracle/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
 if ! docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5; then
     log "gss.gate" "error" ',"error":"cc gss-mit-server failed"'
     exit 1
@@ -363,12 +363,12 @@ echo "$MIT2"
     exit 1
 }
 
-docker cp "$ROOT/scripts/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
+docker cp "$ROOT/scripts/oracle/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
 if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssapi_krb5 -lkrb5; then
     log "gss.gate" "error" ',"error":"cc gss-mit-client dce rebuild failed"'
     exit 1
 fi
-docker cp "$ROOT/scripts/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
+docker cp "$ROOT/scripts/oracle/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
 if ! docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5; then
     log "gss.gate" "error" ',"error":"cc gss-mit-server dce rebuild failed"'
     exit 1

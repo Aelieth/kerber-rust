@@ -208,9 +208,12 @@ echo "inject=${INJECT[*]}"
 echo "worktree=$WT"
 echo "CARGO_TARGET_DIR=$TARGET"
 echo "==== probe sha256 ===="
-if [ -f "$WT/scripts/kpasswd-tgs-client.c" ]; then
-    sha256sum "$WT/scripts/kpasswd-tgs-client.c"
-fi
+# The probe lives in scripts/oracle/ from S6.2 on, in scripts/ before it.
+for probe in "$WT/scripts/oracle/kpasswd-tgs-client.c" "$WT/scripts/kpasswd-tgs-client.c"; do
+    if [ -f "$probe" ]; then
+        sha256sum "$probe"
+    fi
+done
 if [ -f "$WT/scripts/lib/analyze-kdc-slo.py" ]; then
     sha256sum "$WT/scripts/lib/analyze-kdc-slo.py"
 fi

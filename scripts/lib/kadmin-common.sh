@@ -22,7 +22,7 @@ _kadmin_cleanup() {
 
 compile_kadm5_changepw() {
     local ctn=$1
-    docker cp "$ROOT/scripts/kadm5-changepw-rpc.c" "$ctn":/tmp/kadm5-changepw-rpc.c
+    docker cp "$ROOT/scripts/oracle/kadm5-changepw-rpc.c" "$ctn":/tmp/kadm5-changepw-rpc.c
     if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
         -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-cc.err"
     then
@@ -50,7 +50,7 @@ kadm5_list_service() {
 
 compile_kadm5_integrity() {
     local ctn=$1
-    docker cp "$ROOT/scripts/kadm5-integrity-rpc.c" "$ctn":/tmp/kadm5-integrity-rpc.c
+    docker cp "$ROOT/scripts/oracle/kadm5-integrity-rpc.c" "$ctn":/tmp/kadm5-integrity-rpc.c
     if ! docker exec "$ctn" cc -o /tmp/kadm5-integrity-rpc /tmp/kadm5-integrity-rpc.c \
         -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-int-cc.err"
     then
@@ -72,7 +72,7 @@ kadm5_integrity_list() {
 
 compile_kadm5_probe() {
     local ctn=$1
-    docker cp "$ROOT/scripts/kadm5-rpc-probe.c" "$ctn":/tmp/kadm5-rpc-probe.c
+    docker cp "$ROOT/scripts/oracle/kadm5-rpc-probe.c" "$ctn":/tmp/kadm5-rpc-probe.c
     if ! docker exec "$ctn" cc -o /tmp/kadm5-rpc-probe /tmp/kadm5-rpc-probe.c \
         -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-probe-cc.err"
     then

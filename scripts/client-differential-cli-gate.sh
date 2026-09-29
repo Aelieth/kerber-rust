@@ -335,7 +335,7 @@ echo "MIT_kinit_keyexp_changepw"
 echo "RUST_kinit_keyexp_changepw"
 
 echo "==== vfy_increds (vfy_increds.c) ===="
-docker cp "$ROOT/scripts/t_vfy_increds.c" "$NAME":/tmp/t_vfy_increds.c
+docker cp "$ROOT/scripts/oracle/t_vfy_increds.c" "$NAME":/tmp/t_vfy_increds.c
 if ! docker exec "$NAME" cc -o /tmp/t_vfy_increds /tmp/t_vfy_increds.c -lkrb5 -lcom_err; then
     die "MIT t_vfy_increds compile failed"
 fi
@@ -415,7 +415,7 @@ echo "RUST_vfy_increds_nofail"
 
 echo "==== chpw texts + setpw (chpw.c) ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
-docker cp "$ROOT/scripts/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
+docker cp "$ROOT/scripts/oracle/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
 if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
     die "MIT kpasswd-tgs-client compile failed"
 fi
