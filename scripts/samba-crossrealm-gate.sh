@@ -12,7 +12,6 @@ need_bins krb5-kdc krb5-pac-extract
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-samba-crossrealm}"
 mkdir -p "$SCRATCH"
 TRUST_PW="${SAMBA_TRUST_PASSWORD:-Trust-P@ss-Kerber-2026!}"
 

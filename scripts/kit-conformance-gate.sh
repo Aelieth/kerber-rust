@@ -6,7 +6,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kit-conformance}"
 mkdir -p "$SCRATCH"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID TZ=UTC LC_ALL=C

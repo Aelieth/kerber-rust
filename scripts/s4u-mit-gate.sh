@@ -14,7 +14,6 @@ NAME="kerber-rust-s4u-mit-gate"
 MITNAME="${NAME}-oracle"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-s4u-mit-gate}"
 mkdir -p "$SCRATCH"
 
 if ! command -v docker >/dev/null 2>&1; then

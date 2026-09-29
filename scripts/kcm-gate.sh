@@ -7,7 +7,6 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kswitch
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kcm-gate}"
 mkdir -p "$SCRATCH"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID

@@ -13,7 +13,6 @@ need_bins krb5-kdc krb5-pac-extract
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-samba-pac-verify}"
 mkdir -p "$SCRATCH"
 
 if ! command -v docker >/dev/null 2>&1; then

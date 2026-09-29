@@ -16,7 +16,6 @@ IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kdcpolicy-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kdcpolicy-gate}"
 mkdir -p "$SCRATCH"
 
 need_image

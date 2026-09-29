@@ -12,7 +12,6 @@ need_bins loadgen krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local krb5-kpasswd 
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-chaos-gate}"
 OUT="$SCRATCH/chaos-gate"
 mkdir -p "$OUT"
 

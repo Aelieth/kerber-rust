@@ -14,7 +14,6 @@ NAME="kerber-rust-cross-kdc-gate"
 GOLDEN="tests/traces/kdb/mit-dump-v7.txt"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-cross-kdc-gate}"
 OUT="$SCRATCH/cross-kdc-gate"
 mkdir -p "$OUT"
 CC=/tmp/cross-kdc.cc

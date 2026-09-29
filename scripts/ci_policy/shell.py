@@ -594,7 +594,7 @@ def host_tmp_write_lines(text: str) -> list[int]:
 
 # Gates that set their own SCRATCH over gate-common.sh's one default (S6.2 deletes them). Advisory
 # while the allow equals the live count.
-GATE_SCRATCH_ASSIGN_ALLOW = 46
+GATE_SCRATCH_ASSIGN_ALLOW = 0
 _GATE_SCRATCH_ASSIGN = re.compile(r"(?m)^[ \t]*SCRATCH=")
 
 

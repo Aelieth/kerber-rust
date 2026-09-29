@@ -16,7 +16,6 @@ IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-rc4-session-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-rc4-session-gate}"
 OUT="$SCRATCH/rc4-session-gate"
 mkdir -p "$OUT"
 

@@ -14,7 +14,6 @@ need_bins krb5-kdc krb5-kinit
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-prod-gate}"
 OUT="$SCRATCH/prod-gate"
 mkdir -p "$OUT"
 

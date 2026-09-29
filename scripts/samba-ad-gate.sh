@@ -11,7 +11,6 @@ cd "$ROOT"
 
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-samba-ad-gate}"
 mkdir -p "$SCRATCH"
 UNAVAIL="$SCRATCH/samba-ad-gate-unavailable.log"
 

@@ -14,7 +14,6 @@ NAME_MIT="kerber-rust-kadmin-mit"
 KADMIND_PORT=749
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-kadmin-gate}"
 mkdir -p "$SCRATCH"
 # mit-gate diffs these; KERBER_KADMIN_KEEP preserves containers, not shell vars.
 _snap_key() {

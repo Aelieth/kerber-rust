@@ -13,7 +13,6 @@ IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="${KERBER_MIT_NAME:-kerber-rust-mit-kdc}"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-client-diff-gate}"
 mkdir -p "$SCRATCH"
 
 if ! command -v docker >/dev/null 2>&1; then

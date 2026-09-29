@@ -8,7 +8,6 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-gss-sspi-gate}"
 mkdir -p "$SCRATCH"
 {
     echo "date=$(date -Iseconds)"

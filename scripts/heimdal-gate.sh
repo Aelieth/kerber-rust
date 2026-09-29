@@ -18,7 +18,6 @@ USER_PRINC="user@${REALM}"
 HOST_PRINC="host/testhost.kerber.test"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
-SCRATCH="${KERBER_SCRATCH:-/tmp/kerber-heimdal-gate}"
 mkdir -p "$SCRATCH"
 
 assert_klist() {
