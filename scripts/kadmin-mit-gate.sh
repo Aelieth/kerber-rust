@@ -578,7 +578,9 @@ echo "$MIT_MODM" | grep -F 'Password minimum life is greater than password maxim
 }
 echo "==== MIT modprinc +0x1ffffffff truncates ===="
 kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw hex-secret hexu' 
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc +0x1ffffffff hexu'
+MIT_HEXF="$(mit_kadmin_local "$NAME_MIT" -- -q 'modprinc +0x1ffffffff hexu' 2>&1 || true)"
+echo "$MIT_HEXF"
+echo "$MIT_HEXF" | grep -F 'Principal "hexu@KERBER.TEST" modified.'
 MIT_GETHEX="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc hexu' 2>&1 || true)"
 echo "$MIT_GETHEX"
 echo "$MIT_GETHEX" | grep -E 'Attributes:' | grep -F 'DISALLOW_ALL_TIX'
