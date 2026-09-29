@@ -304,12 +304,13 @@ annotated by the ERR trap.
 a job stops at its first red step, so every gate behind that step has no CI evidence until the run is
 green again.
 
-Gate helpers live in `scripts/lib/`, one line each in [`scripts/README.md`](../scripts/README.md); the
-in-container C programs the gates build are in `scripts/oracle/`. Every kadmin query goes through
-`scripts/lib/kadmin-q.sh`: the runners `mit_kadmin_local` / `mit_kadmin` / `rust_kadmin_local` take the
+Gate helpers live in `scripts/lib/`, one line each in [`scripts/README.md`](../scripts/README.md); the MIT
+C programs the gates build in their containers are in `scripts/oracle/` (the clock-skew preload is
+`scripts/lib/skew-preload.c`). Every kadmin query a gate or a `scripts/lib` helper runs goes through
+`scripts/lib/kadmin-q.sh`, but for the keyed container sites below: the runners `mit_kadmin_local` / `mit_kadmin` / `rust_kadmin_local` take the
 `docker exec` options and the container before `--` and the kadmin arguments after, and pass streams and exit
-status through. MIT's kadmin exits 0 on a refused query, so a query a cell relies on goes through
-`kadmin_q_ok`, which requires the verb's success line naming the principal. For a verb that prints nothing on
+status through. MIT's kadmin exits 0 on a refused query, so a query whose output the cell does not check
+itself goes through `kadmin_q_ok`, which requires the verb's success line naming the principal. For a verb that prints nothing on
 success (the policy verbs; `modprinc` / `setstr` / `ktadd` on the Rust `krb5-kadmin-local`) it reads the
 effect back with read-only follow-ups derived from the query; `--then QUERY ERE` adds one by hand for what the
 query does not say, and `--next-asserts` skips the derived read-back where the cell's very next command reads
@@ -359,8 +360,8 @@ allow in either direction, so the commit that clears sites lowers the
 allow with them. Process tags in `docs/**` are pinned so. At 0, where any
 site is red: a gate that sets its own `SCRATCH=`, a shell function defined
 twice byte for byte, a shell function nothing calls (judged across files),
-a direct kadmin query in a gate outside `scripts/lib/kadmin-q.sh` and the
-keyed exceptions below, and a test that writes under `std::env::temp_dir()`.
+a direct kadmin query in a gate or a `scripts/lib` file other than
+`scripts/lib/kadmin-q.sh`, bar the keyed container sites described above, and a test that writes under `std::env::temp_dir()`.
 Working-plan section names in the public docs and a `scripts/**/*.py` that
 does not compile are hard. It enforces workflow YAML (fail-red jobs, nextest
 `--profile ci` on every invocation, no per-push `cargo test

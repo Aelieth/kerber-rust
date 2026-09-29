@@ -171,8 +171,8 @@ not check (a unit test, or "not asserted").
   `client-differential-gate.sh`) — both clients against the live MIT KDC
   through `scripts/lib/kdc-req-proxy.py` (UDP+TCP). Eleven seeded flows
   compare AS-REQ/TGS-REQ CORE fields (`msg_type`, `sname`, nonce present,
-  etype list non-empty); SHAPE diffs (padata, KDCOptions, etype list,
-  addresses, rtime/till) are printed and do not fail the gate. Every seeded flow
+  etype list non-empty); SHAPE diffs (padata, etype list, addresses,
+  rtime/till) are printed and do not fail the gate; KDCOptions do. Every seeded flow
   must `SHAPE_MATCH kdc_options` (MIT = Rust on at least one request of the
   flow; the option names are not checked). MIT `klist -C -f -e -a` reads
   both FILE caches; seven CLI error paths (wrong password, unknown
@@ -427,7 +427,7 @@ not check (a unit test, or "not asserted").
   too-short and reuse; `-minclasses 5`; history-N (current counts inside N);
   `maxfailure 2` reset then `CLIENT_REVOKED`; lockout duration / failcnt
   interval.
-- `scripts/postdate-gate.sh` — MIT `kinit -s` is INVALID (`i`), `kvno` fails with exactly
+- `scripts/postdate-gate.sh` — MIT `kinit -s` is INVALID (`i`), `kvno` fails with
   `kvno: Ticket not yet valid while getting credentials for host/testhost.kerber.test@KERBER.TEST`;
   `kinit -v` after starttime is usable; `-allow_postdated` is CANNOT_POSTDATE.
 - `scripts/prod-gate.sh` — Rust KDC on `127.0.0.1:18888`, `krb5-kinit`
@@ -491,9 +491,9 @@ not check (a unit test, or "not asserted").
   `krb5kdc -n` relaunched on :88) and the Rust KDC (:8888); both log
   `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`. klist must name
   `for client user@KERBER.TEST`. `kvno -U nosuch` is
-  `not found in Kerberos database`; `kvno -U locked`
+  `not found in Kerberos database` (or `C_PRINCIPAL_UNKNOWN`); `kvno -U locked`
   (`KRB5_TEST_LOCKED_USER`, `DISALLOW_ALL_TIX`) is
-  `credentials have been revoked`. S4U2Proxy without a delegation grant
+  `credentials have been revoked` (or `CLIENT_REVOKED`). S4U2Proxy without a delegation grant
   (`KRB5_TEST_S4U_TO` unset on the Rust KDC) is `KDC can't fulfill requested option`
   on MIT db2 and the Rust KDC; the Rust KDC logs e_text `NOT_ALLOWED_TO_DELEGATE`,
   MIT db2 `UNSUPPORTED_S4U2PROXY_REQUEST`.

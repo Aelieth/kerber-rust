@@ -10,7 +10,7 @@ MIT 1.22.2, Heimdal and Samba peers; [`docs/gates.md`](../docs/gates.md) lists w
 |---|---|
 | `lib/gate-common.sh` | The gate preamble: `log`, `die`, `unavailable`, cleanups, the one scratch default, the listener and log waits, `retry_until`, `shell_container`, `stock_mit_kdc`, `assert_no_error_log`. |
 | `lib/provenance.sh` | Stamps every gate artefact with the tested tree; its `ERR` trap names the failing command. |
-| `lib/kadmin-q.sh` | Every kadmin query a gate runs: `kadmin_q` / `kadmin_q_as`, the runners `mit_kadmin_local` / `mit_kadmin` / `rust_kadmin_local`, `kadmin_q_ok` (the verb's MIT success line, or the effect read back for a verb silent on success) and `kadmin_q_try` (best-effort cleanups). |
+| `lib/kadmin-q.sh` | Every kadmin query a gate or a lib helper runs, but for the keyed container sites: `kadmin_q` / `kadmin_q_as`, the runners `mit_kadmin_local` / `mit_kadmin` / `rust_kadmin_local`, `kadmin_q_ok` (the verb's MIT success line, or the effect read back for a verb silent on success) and `kadmin_q_try` (best-effort cleanups). |
 | `lib/kadmin-common.sh` | The kadmin gates' shared cells: the kadm5 probe builds, the RPCSEC_GSS and framing cells, the snapshot helpers. |
 | `lib/kadmin-glob-cells.sh` | The alias and glob cells both kadmin legs run. |
 | `lib/kpasswd-common.sh` | The raw kpasswd exchange and the pinned wire cells both kpasswd legs run. |

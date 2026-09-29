@@ -2508,16 +2508,24 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
-- **scripts.** Every kadmin query a gate runs goes through `scripts/lib/kadmin-q.sh`; a query a cell relies on
-  must print MIT's success line or show its effect on read-back. The conversion found two setup queries MIT
-  had always refused (a bad `-pwexpire` date, the flag `+allow_postdate`); both are fixed.
+- **scripts.** Every kadmin query a gate or a `scripts/lib` helper runs goes through `scripts/lib/kadmin-q.sh`,
+  but for three keyed container sites; a query whose output the cell does not check must print MIT's success
+  line or show its effect on read-back. That found two setup queries MIT had always refused (a bad `-pwexpire`
+  date, the flag `+allow_postdate`): one is fixed, the other deleted as setup nothing read.
 - **scripts.** The gates' duplicated shell helpers live once in `scripts/lib/` (kadmin, kpasswd, `/proc`,
   kadmin query paths); the C oracles move to `scripts/oracle/`; dead functions are gone and `harness/prod`
   joins the shellcheck scope.
 - **scripts.** Weak checks are exact: the flags gate's forwardable and hardware-auth cells, the postdate NYV
-  text, the SPAKE trace line, the S4U mismatch (36) and unknown-server (7) texts, the GSS replay wait.
-- **tool.** Gate cells are counted by reachability from each gate; `hygiene-diff.py` accepts a lost cell only
-  once it has proven the cell dead from the old tree.
+  text, the SPAKE trace line, the S4U mismatch and unknown-server texts (MIT prints each for one code only,
+  36 and 7), the GSS replay wait.
+- **tool.** A gate's cells are the tags it reaches through its own and its sourced libs' functions;
+  `hygiene-diff.py` fails on a lost reachable cell and reports a lost cell as information only once it has
+  proven, from the old tree, that the gate never reached it.
+- **test.** A test's Unix socket gets a path short whatever the scratch root (`krb5_testkit::socket_path`, through
+  `/proc/self/fd`): the KCM socket test no longer fails on `SUN_LEN` under a long target or scratch dir.
+- **tool.** `red-at-sha.sh` overlays HEAD's `scripts/lib/`, `scripts/oracle/` and `scripts/ci_policy/` whole, so
+  a gate run at an older base no longer fails on a missing oracle or package; `py-move-check.py` proves a file
+  split into sibling modules; every file a hygiene snapshot writes has an INDEX row.
 - **test.** Tests that bind a UDP and a TCP socket on one port retry the pair on `AddrInUse`
   (`krb5_testkit::loopback_udp_tcp`), and no test writes under the host's temp directory
   (`krb5_testkit::scratch_dir`).
