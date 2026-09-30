@@ -692,7 +692,7 @@ Scheduled (a red is a red, but a push does not wait for it):
 | `full-test.yml` | nightly 05:27 UTC, `v*` tags, manual | `test-release` (release-profile tests) and `msrv-test` (`cargo test --workspace --locked` on 1.95) |
 
 Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
-2 without it) and `ad-mit-trust-gate.sh` (the retired MIT↔AD trust lab).
+2 without it), `ad-mit-trust-gate.sh` (the retired MIT↔AD trust lab), and the local wrappers `kadmin-gate.sh`, `kpasswd-gate.sh` and `client-differential-gate.sh` (CI runs their legs directly).
 `ad-*` are live Samba (`samba-ad-dc`), not the torn-down Windows DC.
 `heimdal-gate` is live Heimdal 7.8 both directions. Per-gate detail is in
 [gates.md](gates.md).
