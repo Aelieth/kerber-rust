@@ -596,6 +596,20 @@ def _self_test_ledger_rekey(root: pathlib.Path) -> int:
     if rc == 0 or "proof span not once in the old proof cell: docs/parity/a1-tgs.md a.c:1" not in out:
         raise SystemExit(f"hygiene-diff --self-test: a proof span that does not occur must fail: {out[-300:]}")
     n += 1
+    # A check cell may hold " = " itself: the entry is split where the keys match.
+    eq_base = commit("| a.c:1 | `e = f` in W1 | m | r | e | exact | pa |\n")
+    eq_new = commit("| a.c:1 | `e = f` here | m | r | e | exact | pa |\n")
+    eq_blob = subprocess.run(["git", "rev-parse", f"{eq_base}:docs/parity/a1-tgs.md"], cwd=repo, capture_output=True,
+                             text=True, check=True).stdout.strip()
+    eq_old = snap(root / "rk-old10", "`e = f` in W1", "exact", eq_base)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc = main_compare(eq_old, snap(root / "rk-new10", "`e = f` here", "exact", eq_new), old_git=str(repo),
+                          ledger_rekey=entries("rk-eq.txt", f"docs/parity/a1-tgs.md\ta.c:1\t`e = f` in W1 = `e = f` here"
+                                                            f"\tblob={eq_blob}"))
+    if rc != 0 or "info ledger row reworded (check cell): docs/parity/a1-tgs.md a.c:1" not in buf.getvalue():
+        raise SystemExit(f"hygiene-diff --self-test: a check cell holding ' = ' must re-key: {buf.getvalue()[-300:]}")
+    n += 1
     stale = entries("rk-stale.txt", f"docs/parity/a1-tgs.md\ta.c:1\tthe W1 sweep aligned = Rust follows MIT\tblob={'0' * 40}")
     rc, out = run(snap(root / "rk-new6", "Rust follows MIT", "exact", reworded), stale)
     if rc == 0 or "FAIL ledger rekey entry not pinned to docs/parity/a1-tgs.md at the old tree" not in out:
@@ -786,11 +800,12 @@ def load_ledger_rows(path: pathlib.Path) -> list[tuple[str, str | None, str, str
 
 def load_ledger_rekey(
     path: pathlib.Path | None,
-) -> list[tuple[str, str, str, str, str, tuple[str, str] | None]]:
+) -> list[tuple[str, str, str, str, tuple[str, str] | None]]:
     """`--ledger-rekey`: `path<TAB>cite<TAB>old check = new check<TAB>blob=<git blob of path at the base>`, with an
     optional fifth column `proof: <old span> = <new span>` naming the one substitution the row's proof cell may
-    carry, as (path, cite, old check, new check, blob, (old span, new span) or None)."""
-    out: list[tuple[str, str, str, str, str, tuple[str, str] | None]] = []
+    carry, as (path, cite, the `old check = new check` text, blob, (old span, new span) or None). A check cell can
+    itself hold " = ", so the text is split where the keys match, at compare time (`_rekey_splits`)."""
+    out: list[tuple[str, str, str, str, tuple[str, str] | None]] = []
     if path is None:
         return out
     for n, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
@@ -806,9 +821,13 @@ def load_ledger_rekey(
             raise SystemExit(
                 f"{path}:{n}: want path<TAB>cite<TAB>old check = new check<TAB>blob=<40 hex>[<TAB>proof: old = new]"
             )
-        old_check, new_check = parts[2].split(" = ", 1)
-        out.append((parts[0], parts[1], old_check, new_check, parts[3][5:], proof))
+        out.append((parts[0], parts[1], parts[2], parts[3][5:], proof))
     return out
+
+
+def _rekey_splits(text: str) -> list[tuple[str, str]]:
+    """Every (old check, new check) that `old check = new check` can mean: one per " = " in the text."""
+    return [(text[:m.start()], text[m.end():]) for m in re.finditer(" = ", text)]
 
 
 def _ledger_cells(line: str) -> list[str]:
@@ -1094,12 +1113,20 @@ def _compare(args) -> int:
     git_dir = getattr(args, "old_git", None) or str(pathlib.Path(__file__).resolve().parent.parent)
     old_head = getattr(args, "old_rev", None) or _snapshot_head(old)
     new_head = _snapshot_head(new)
-    for path, cite, old_check, new_check, blob, proof_span in rekey:
-        k_old, k_new = (cite, old_check), (cite, new_check)
+    for path, cite, pair, blob, proof_span in rekey:
         what = f"{path} {cite}"
-        if not (k_old in old_led and k_old not in new_led and k_new in new_led and k_new not in old_led):
+        splits = [
+            (o, n) for o, n in _rekey_splits(pair)
+            if (cite, o) in old_led and (cite, o) not in new_led and (cite, n) in new_led and (cite, n) not in old_led
+        ]
+        if len(splits) > 1:
+            fail(f"ledger rekey entry ambiguous (" + str(len(splits)) + f" ways to split it): {what}")
+            continue
+        if not splits:
             fail(f"ledger rekey entry unused: {what}")
             continue
+        old_check, new_check = splits[0]
+        k_old, k_new = (cite, old_check), (cite, new_check)
         pinned = _git_out(git_dir, "rev-parse", f"{old_head}:{path}") if old_head else None
         if pinned is None or pinned.strip() != blob:
             fail(f"ledger rekey entry not pinned to {path} at the old tree: {what}")
