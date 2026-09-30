@@ -350,14 +350,53 @@ def _cite_scan_files(root: pathlib.Path) -> list[pathlib.Path]:
     return [p for p in names if p.is_file()] + (sorted(docs_dir.rglob("*.md")) if docs_dir.is_dir() else [])
 
 
-def script_cite_findings(root: pathlib.Path | None = None) -> tuple[list[str], list[str]]:
-    """(script line cites, unresolved section cites), each as `doc:line: text`."""
-    root = ROOT if root is None else root
+def scripts_by_name(root: pathlib.Path) -> dict[str, pathlib.Path]:
+    """Every scripts/**/*.(sh|py|c) by its file name (the first in sorted order when two share one)."""
     scripts = root / "scripts"
     by_name: dict[str, pathlib.Path] = {}
     for p in sorted(scripts.rglob("*")) if scripts.is_dir() else []:
         if p.suffix in (".sh", ".py", ".c") and p.is_file() and "__pycache__" not in p.parts:
             by_name.setdefault(p.name, p)
+    return by_name
+
+
+def line_script_cites(
+    root: pathlib.Path, line: str, by_name: dict[str, pathlib.Path]
+) -> tuple[list[str], list[tuple[str, pathlib.Path, bool]]]:
+    """One doc line's script line cites, and its section cites as (text, script, resolved in that script)."""
+    cites: list[str] = []
+    sections: list[tuple[str, pathlib.Path, bool]] = []
+    for cell in line.split("|") if line.lstrip().startswith("|") else [line]:
+        events = [(m.start(), "file", m) for m in _CITE_FILE.finditer(cell)]
+        events += [(m.start(), "cont", m) for m in _CITE_CONT.finditer(cell)]
+        events += [(m.start(), "section", m) for m in _CITE_SECTION.finditer(cell)]
+        current: pathlib.Path | None = None
+        in_script = False  # after a script cite with a line number: a bare `:N` continues it
+        for _pos, kind, m in sorted(events, key=lambda e: e[0]):
+            if kind == "file":
+                name = m.group(1)
+                if name.startswith("scripts/"):
+                    current = root / name
+                elif "/" not in name and name in by_name and name not in _BARE_MIT_NAMES:
+                    current = by_name[name]
+                else:
+                    current = None
+                in_script = current is not None and bool(m.group(2))
+                if in_script:
+                    cites.append(m.group(0))
+            elif kind == "cont":
+                if in_script and not cell[: m.start()].endswith(tuple("0123456789")):
+                    cites.append(m.group(1))
+            elif current is not None:
+                text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
+                sections.append((m.group(1), current, m.group(1) in text))
+    return cites, sections
+
+
+def script_cite_findings(root: pathlib.Path | None = None) -> tuple[list[str], list[str]]:
+    """(script line cites, unresolved section cites), each as `doc:line: text`."""
+    root = ROOT if root is None else root
+    by_name = scripts_by_name(root)
     cites: list[str] = []
     unresolved: list[str] = []
     for doc in _cite_scan_files(root):
@@ -370,31 +409,9 @@ def script_cite_findings(root: pathlib.Path | None = None) -> tuple[list[str], l
                 continue
             if fence is not None:
                 continue
-            for cell in line.split("|") if line.lstrip().startswith("|") else [line]:
-                events = [(m.start(), "file", m) for m in _CITE_FILE.finditer(cell)]
-                events += [(m.start(), "cont", m) for m in _CITE_CONT.finditer(cell)]
-                events += [(m.start(), "section", m) for m in _CITE_SECTION.finditer(cell)]
-                current: pathlib.Path | None = None
-                in_script = False  # after a script cite with a line number: a bare `:N` continues it
-                for _pos, kind, m in sorted(events, key=lambda e: e[0]):
-                    if kind == "file":
-                        name = m.group(1)
-                        if name.startswith("scripts/"):
-                            current = root / name
-                        elif "/" not in name and name in by_name and name not in _BARE_MIT_NAMES:
-                            current = by_name[name]
-                        else:
-                            current = None
-                        in_script = current is not None and bool(m.group(2))
-                        if in_script:
-                            cites.append(f"{rel}:{i}: {m.group(0)}")
-                    elif kind == "cont":
-                        if in_script and not cell[: m.start()].endswith(tuple("0123456789")):
-                            cites.append(f"{rel}:{i}: {m.group(1)}")
-                    elif current is not None:
-                        text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
-                        if m.group(1) not in text:
-                            unresolved.append(f"{rel}:{i}: {m.group(1)} not in {current.relative_to(root)}")
+            line_cites, sections = line_script_cites(root, line, by_name)
+            cites += [f"{rel}:{i}: {c}" for c in line_cites]
+            unresolved += [f"{rel}:{i}: {t} not in {sc.relative_to(root)}" for t, sc, ok in sections if not ok]
     return cites, unresolved
 
 

@@ -293,5 +293,15 @@ def _self_test_comments() -> None:
         )
         check_no_docs_process_tags(dt_root, allow=11)
         _must_die_msg("11 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
+        # A section cite quoting a gate's own tagged echo text, resolved in that gate, is not counted (the
+        # temporary arm); the same text that does not resolve counts.
+        (dt_root / "scripts").mkdir()
+        (dt_root / "scripts" / "a-gate.sh").write_text('echo "==== Z7.1 omitted till ===="\n', encoding="utf-8")
+        (dt_root / "docs" / "x.md").write_text("| r | `scripts/a-gate.sh` `==== Z7.1 omitted till ====` |\n",
+                                               encoding="utf-8")
+        check_no_docs_process_tags(dt_root, allow=0)
+        (dt_root / "docs" / "x.md").write_text("| r | `scripts/a-gate.sh` `==== Z7.2 not there ====` |\n",
+                                               encoding="utf-8")
+        _must_die_msg("1 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
     finally:
         subprocess.run(["rm", "-rf", str(dt_root)], check=False)

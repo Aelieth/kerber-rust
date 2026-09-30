@@ -283,7 +283,7 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
 
 
 _SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
-HYGIENE_DIFF_MIN_CASES = 44
+HYGIENE_DIFF_MIN_CASES = 50
 HYGIENE_BODY_DIFF_MIN_CASES = 41
 HYGIENE_FN_DIFF_MIN_CASES = 143
 HYGIENE_INVENTORY_MIN_CASES = 12

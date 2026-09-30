@@ -504,6 +504,87 @@ def _self_test_cell_reach(root: pathlib.Path) -> int:
     n += 1
     return n
 
+def _self_test_ledger_rekey(root: pathlib.Path) -> int:
+    """A listed check-cell reword (--ledger-rekey) is information; without its entry, with an unused entry, or with
+    a changed verdict or proof it is red."""
+    import io
+    from contextlib import redirect_stdout
+
+    repo = root / "rekey-repo"
+    (repo / "docs" / "parity").mkdir(parents=True)
+    doc = repo / "docs" / "parity" / "a1-tgs.md"
+    head = "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n| --- | --- | --- | --- | --- | --- | --- |\n"
+    row_b = "| b.c:2 | check b | m | r | e | exact | pb |\n"
+    env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@x", GIT_COMMITTER_NAME="t",
+               GIT_COMMITTER_EMAIL="t@x")
+
+    def commit(text: str) -> str:
+        doc.write_text(head + text + row_b, encoding="utf-8")
+        for cmd in (["git", "add", "-A"], ["git", "commit", "-q", "-m", "x"]):
+            subprocess.run(cmd, cwd=repo, env=env, check=True, capture_output=True)
+        return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+                              check=True).stdout.strip()
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, env=env, check=True, capture_output=True)
+    base = commit("| a.c:1 | the W1 sweep aligned | m | r | e | exact | pa |\n")
+    blob = subprocess.run(["git", "rev-parse", f"{base}:docs/parity/a1-tgs.md"], cwd=repo, capture_output=True,
+                          text=True, check=True).stdout.strip()
+    reworded = commit("| a.c:1 | Rust follows MIT | m | r | e | exact | pa |\n")
+    regraded = commit("| a.c:1 | Rust follows MIT | m | r | e | deviation | pa |\n")
+    reproved = commit("| a.c:1 | Rust follows MIT | m | r | e | exact | pz |\n")
+
+    def snap(d: pathlib.Path, check: str, verdict: str, sha: str) -> pathlib.Path:
+        _write_snap(d, ["a.sh\techo\tkeep"])
+        (d / "ledger-rows.txt").write_text(
+            f"#\na.c:1\t{check}\t{verdict}\tdocs/parity/a1-tgs.md\nb.c:2\tcheck b\texact\tdocs/parity/a1-tgs.md\n",
+            encoding="utf-8")
+        (d / "provenance.txt").write_text(f"==== provenance ====\nhead_sha={sha}\n", encoding="utf-8")
+        return d
+
+    def entries(name: str, *rows: str) -> pathlib.Path:
+        f = root / name
+        f.write_text("# rekey\n" + "".join(r + "\n" for r in rows), encoding="utf-8")
+        return f
+
+    def run(new: pathlib.Path, rk: pathlib.Path | None) -> tuple[int, str]:
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main_compare(old, new, old_git=str(repo), ledger_rekey=rk)
+        return rc, buf.getvalue()
+
+    old = snap(root / "rk-old", "the W1 sweep aligned", "exact", base)
+    good = entries("rk-good.txt", f"docs/parity/a1-tgs.md\ta.c:1\tthe W1 sweep aligned = Rust follows MIT\tblob={blob}")
+    n = 0
+    rc, out = run(snap(root / "rk-new1", "Rust follows MIT", "exact", reworded), good)
+    if rc != 0 or "info ledger row reworded (check cell): docs/parity/a1-tgs.md a.c:1" not in out \
+            or "ledger row removed" in out:
+        raise SystemExit(f"hygiene-diff --self-test: a listed check-cell reword must be information: {out[-300:]}")
+    n += 1
+    rc, out = run(snap(root / "rk-new2", "Rust follows MIT", "exact", reworded), None)
+    if rc == 0 or "FAIL ledger row removed: a.c:1\tthe W1 sweep aligned" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a check-cell reword without an entry must fail: {out[-300:]}")
+    n += 1
+    unused = entries("rk-unused.txt", f"docs/parity/a1-tgs.md\tb.c:2\tcheck b = check b2\tblob={blob}")
+    rc, out = run(snap(root / "rk-new3", "the W1 sweep aligned", "exact", base), unused)
+    if rc == 0 or "FAIL ledger rekey entry unused: docs/parity/a1-tgs.md b.c:2" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: an unused rekey entry must fail: {out[-300:]}")
+    n += 1
+    rc, out = run(snap(root / "rk-new4", "Rust follows MIT", "deviation", regraded), good)
+    if rc == 0 or "with a changed verdict or proof: docs/parity/a1-tgs.md a.c:1" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a reword that also regrades must fail: {out[-300:]}")
+    n += 1
+    rc, out = run(snap(root / "rk-new5", "Rust follows MIT", "exact", reproved), good)
+    if rc == 0 or "with a changed verdict or proof: docs/parity/a1-tgs.md a.c:1" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a reword that also re-proves must fail: {out[-300:]}")
+    n += 1
+    stale = entries("rk-stale.txt", f"docs/parity/a1-tgs.md\ta.c:1\tthe W1 sweep aligned = Rust follows MIT\tblob={'0' * 40}")
+    rc, out = run(snap(root / "rk-new6", "Rust follows MIT", "exact", reworded), stale)
+    if rc == 0 or "FAIL ledger rekey entry not pinned to docs/parity/a1-tgs.md at the old tree" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a rekey entry pinned to another blob must fail: {out[-300:]}")
+    n += 1
+    return n
+
+
 def _self_test() -> int:
     """Red on (file,kind,tag) multiplicity drop; gate_rc: not compared when no timings."""
     n = 0
@@ -513,6 +594,7 @@ def _self_test() -> int:
         n += _self_test_duplicates(root)
         n += _self_test_renames(root)
         n += _self_test_cell_reach(root)
+        n += _self_test_ledger_rekey(root)
         old, new = root / "old", root / "new"
         _write_snap(
             old,
@@ -683,6 +765,45 @@ def load_ledger_rows(path: pathlib.Path) -> list[tuple[str, str | None, str, str
     return rows
 
 
+def load_ledger_rekey(path: pathlib.Path | None) -> list[tuple[str, str, str, str, str]]:
+    """`--ledger-rekey`: `path<TAB>cite<TAB>old check = new check<TAB>blob=<git blob of path at the base>` rows as
+    (path, cite, old check, new check, blob)."""
+    out: list[tuple[str, str, str, str, str]] = []
+    if path is None:
+        return out
+    for n, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not ln.strip() or ln.startswith("#"):
+            continue
+        parts = ln.split("\t")
+        if len(parts) != 4 or " = " not in parts[2] or not re.fullmatch(r"blob=[0-9a-f]{40}", parts[3]):
+            raise SystemExit(f"{path}:{n}: want path<TAB>cite<TAB>old check = new check<TAB>blob=<40 hex>")
+        old_check, new_check = parts[2].split(" = ", 1)
+        out.append((parts[0], parts[1], old_check, new_check, parts[3][5:]))
+    return out
+
+
+def _ledger_cells(line: str) -> list[str]:
+    """A ledger table row's cells (ci-policy's `_split_ledger_row` rule: `|` not after a backslash)."""
+    inner = line.strip()
+    inner = inner[1:] if inner.startswith("|") else inner
+    inner = inner[:-1] if inner.endswith("|") else inner
+    return [c.strip() for c in re.split(r"(?<!\\)\|", inner)]
+
+
+def _ledger_row_cells(text: str, cite: str, check: str) -> list[str] | None:
+    for line in text.splitlines():
+        if line.startswith("|"):
+            cells = _ledger_cells(line)
+            if len(cells) >= 7 and cells[0] == cite and cells[1] == check:
+                return cells
+    return None
+
+
+def _git_out(git_dir: str, *args: str) -> str | None:
+    r = subprocess.run(["git", "-C", git_dir, *args], capture_output=True, text=True, check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
 def _snapshot_head(snap: pathlib.Path) -> str | None:
     """The head_sha a snapshot is stamped with (its provenance.txt), or None."""
     prov = snap / "provenance.txt"
@@ -738,6 +859,7 @@ def main_compare(
     accept_rise=None,
     old_rev=None,
     old_git=None,
+    ledger_rekey=None,
 ) -> int:
     class NS:
         pass
@@ -751,6 +873,7 @@ def main_compare(
     args.accept_rise = accept_rise
     args.old_rev = old_rev
     args.old_git = old_git
+    args.ledger_rekey = ledger_rekey
     return _compare(args)
 
 
@@ -764,6 +887,7 @@ def _compare(args) -> int:
     try:
         renames = load_renames_map(args.renames)
         duplicates = load_duplicates_map(args.duplicates)
+        rekey = load_ledger_rekey(getattr(args, "ledger_rekey", None))
     except SystemExit as e:
         print(f"FAIL {e}")
         return 1
@@ -936,6 +1060,34 @@ def _compare(args) -> int:
     else:
         old_led = {(r[0], r[1]): (r[2], r[3]) for r in old_rows}
         new_led = {(r[0], r[1]): (r[2], r[3]) for r in new_rows}
+    # A listed check-cell reword (--ledger-rekey): the old key gone, the new key present, the verdict and proof
+    # cells unchanged. It counts in neither removed nor added; an entry that matches no such pair is red.
+    git_dir = getattr(args, "old_git", None) or str(pathlib.Path(__file__).resolve().parent.parent)
+    old_head = getattr(args, "old_rev", None) or _snapshot_head(old)
+    new_head = _snapshot_head(new)
+    for path, cite, old_check, new_check, blob in rekey:
+        k_old, k_new = (cite, old_check), (cite, new_check)
+        what = f"{path} {cite}"
+        if not (k_old in old_led and k_old not in new_led and k_new in new_led and k_new not in old_led):
+            fail(f"ledger rekey entry unused: {what}")
+            continue
+        pinned = _git_out(git_dir, "rev-parse", f"{old_head}:{path}") if old_head else None
+        if pinned is None or pinned.strip() != blob:
+            fail(f"ledger rekey entry not pinned to {path} at the old tree: {what}")
+            continue
+        old_doc = _git_out(git_dir, "cat-file", "blob", blob)
+        new_doc = _git_out(git_dir, "show", f"{new_head}:{path}") if new_head else None
+        old_cells = _ledger_row_cells(old_doc or "", cite, old_check)
+        new_cells = _ledger_row_cells(new_doc or "", cite, new_check)
+        if old_cells is None or new_cells is None:
+            fail(f"ledger rekey row not found in {path} at the old or new tree: {what}")
+            continue
+        if old_led[k_old][0] != new_led[k_new][0] or old_cells[6] != new_cells[6]:
+            fail(f"ledger row reworded (check cell) with a changed verdict or proof: {what}")
+            continue
+        info(f"ledger row reworded (check cell): {what}")
+        del old_led[k_old]
+        del new_led[k_new]
     moved = 0
     requalified: list[str] = []
     for key, (verdict, where) in old_led.items():
@@ -1192,6 +1344,11 @@ def main() -> int:
         default=[],
         metavar="KEY=N:REASON",
         help="allow quality KEY to rise by exactly N (recorded reason)",
+    )
+    ap.add_argument(
+        "--ledger-rekey",
+        type=pathlib.Path,
+        help="path<TAB>cite<TAB>old check = new check<TAB>blob=<git blob of path at the old tree>: a listed check-cell reword",
     )
     args = ap.parse_args()
     if args.old.is_dir() and args.new.is_dir():

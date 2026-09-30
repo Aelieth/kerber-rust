@@ -617,8 +617,16 @@ _DOCS_PROCESS_TAG = re.compile(
 
 
 def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
-    """`path:line` of every docs/**/*.md line outside a code fence that carries a process tag."""
+    """`path:line` of every docs/**/*.md line outside a code fence that carries a process tag.
+
+    A backticked `==== … ====` section cite that resolves verbatim in the script named before it (the cites
+    judge's rule) is the script's text, quoted faithfully, and is not counted; unresolved, it counts. This arm is
+    temporary: 25 gate sections carry a tag in their own echo text, and the commit that renames them deletes it.
+    """
+    from .docs import line_script_cites, scripts_by_name
+
     root = ROOT if root is None else root
+    by_name = scripts_by_name(root)
     out = []
     for path in sorted((root / "docs").rglob("*.md")) if (root / "docs").is_dir() else []:
         fence = False
@@ -626,7 +634,11 @@ def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
             if line.startswith("```"):
                 fence = not fence
             elif not fence and _DOCS_PROCESS_TAG.search(line):
-                out.append(f"{path.relative_to(root)}:{i}")
+                for text, _script, ok in line_script_cites(root, line, by_name)[1]:
+                    if ok:
+                        line = line.replace(f"`{text}`", "``")
+                if _DOCS_PROCESS_TAG.search(line):
+                    out.append(f"{path.relative_to(root)}:{i}")
     return out
 
 
