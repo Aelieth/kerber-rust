@@ -128,14 +128,17 @@ into [KLLDAP](embed/klldap.md).
 The parity sweep swept the KDC against MIT 1.22.2 source
 function by function; four passes (FAST/cookie/entry validation, AS/`kdc_util`,
 TGS policy/S4U/PAC, kadm5) produced the graded
-[parity ledger](parity/README.md) (one row per MIT check:
-exact / stricter-documented / deviation / absent / deferred, each with a
-live-oracle proof or a named promotion oracle); a client-library pass swept the client
-library (`lib/krb5/krb`) and the acceptor (`rd_req_dec.c`), and a kadm5 pass the
-kadm5 server. A close-out ended the section: the remaining `absent` rows are
-the stated non-goals (OTP preauth, `gss_wrap_size_limit`), and every
-unit-only claim either has a live cell or a `deferred` row naming the
-oracle that promotes it. Deviations are in
+[parity ledger](parity/README.md) (one row per MIT check); a
+client-library pass swept the client library (`lib/krb5/krb`) and the
+acceptor (`rd_req_dec.c`), and a kadm5 pass the kadm5 server. A close-out
+ended the section. Every row is graded `exact`, `stricter-documented`,
+`deviation`, `absent` or `deferred`; the two `absent` rows are the stated
+non-goals (OTP preauth, `gss_wrap_size_limit`), and each `deferred` row
+names the oracle that would promote it. 77 of the 362 `exact` rows prove
+by unit tests alone (no gate cell, `diffsend` case, forged-PDU or live
+cell in the proof), and the per-row sweep that marks such a row
+forge-only has not been done ([parity README](parity/README.md)).
+Deviations are in
 [`security.md`](security.md) § Documented deviations.
 
 ## Era III — KLLDAP integration

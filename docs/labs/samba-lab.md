@@ -17,8 +17,8 @@ passwords are test fixtures, not real secrets.
 > **Domain SID caveat.** A fresh `samba-tool domain provision` generates its own
 > domain SID, so `kbruser`'s SID will **not** match the captured Windows
 > `pac-kbruser.ndr` (which carries the real Windows domain SID). This is expected
-> and is reconciled in A2/A5 — either pin Samba's domain SID at provision time or
-> regenerate a Samba-sourced PAC fixture. The A3 gate does not depend on SID
+> and is reconciled in the PAC-verify and cross-realm gates — either pin Samba's domain SID at provision time or
+> regenerate a Samba-sourced PAC fixture. The PAC-verify gate does not depend on SID
 > equality; it depends on Samba **verifying a Rust-issued PAC's signatures**.
 >
 > *(Domain SID is baked at image build. First image
@@ -112,7 +112,7 @@ SAMBA_AD_PASSWORD=<admin pw> \
   ./scripts/samba-ad-gate.sh
 ```
 
-**A2/A5 payoff (nightly in `peers.yml`):** `scripts/samba-pac-verify-gate.sh` (L1: Samba
+**The PAC-verify and cross-realm gates (nightly in `peers.yml`):** `scripts/samba-pac-verify-gate.sh` (L1: Samba
 IDL decode of a Rust PAC), `scripts/samba-pac-l2-gate.sh` (L2: Samba
 `kcrypto` recomputes 6/7/16/19; type-16 pre-image is rebuilt in the
 oracle from raw EncTicketPart; a type-6 MAC flip fails with
@@ -123,7 +123,7 @@ two-realm tests). `kvno` is not that copy proof. Ubuntu
 `samba-testsuite` does not ship `samba.tests.krb5.kcrypto`; L2 vendors
 Samba 4.19.5's `kcrypto.py` (AES checksums) plus `python3-cryptography`.
 Missing image is still `exit 2`.
-**Real trust (D2, nightly in `peers.yml`):** `scripts/samba-realtrust-gate.sh` stands up
+**Real trust (nightly in `peers.yml`):** `scripts/samba-realtrust-gate.sh` stands up
 `samba-ad-dc` (`AD.KERBER.TEST`) and `samba-kerber-dc` (`KERBER.TEST`)
 and runs `samba-tool domain trust create` (not only `trust_local.py`).
 Trust-create failure with images present is `exit 1`. Reverse PAC
@@ -148,7 +148,7 @@ must use a `~/adlab`-style isolated `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME`
   account); ticket kvno is 2 (Windows lab was 3); etype remains
   `aes256-cts-hmac-sha1-96`.
 - **Different domain SID** → the committed `pac-kbruser.ndr` (Windows-sourced)
-  stays the NDR-codec golden; SID-dependent checks are reconciled in A2/A5.
+  stays the NDR-codec golden; SID-dependent checks are reconciled in the PAC-verify and cross-realm gates.
 - **Cross-realm trust** with `KERBER.TEST` is re-established against Samba
   via `samba-tool domain trust create` (replacing the Windows `netdom /twoway`);
   see [`ad-lab.md`](ad-lab.md) for the trust-key handling this must reproduce.

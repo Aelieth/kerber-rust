@@ -9,7 +9,7 @@ keys, pcaps, FILE ccaches, and passwords stay in operator-held
 > torn down. The **live** AD oracle going forward is a containerized Samba 4 AD
 > DC serving the **same realm** `AD.KERBER.TEST` with the same account names —
 > see [`samba-lab.md`](samba-lab.md). Its domain SID differs from the captured
-> `tests/traces/pac-kbruser.ndr` by design (reconciled in A2/A5).
+> `tests/traces/pac-kbruser.ndr` by design (reconciled in the PAC-verify and cross-realm gates).
 
 ## Topology
 

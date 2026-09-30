@@ -2,7 +2,7 @@
 # (harness-2=286 mit-extra-2=178) plus X1 run 607 (225 / 154). Named Exit
 # jobs stay test 300 / harness 270 / mit-extra 180 / run_wall 360. A run
 # cannot measure itself; --check-budget compares a completed SHA / last N.
-# S6.2 raised shellcheck 90 -> 150 (every sourced lib re-parsed per gate) and harness-2 300 -> 330 (policy-gate).
+# shellcheck 90 -> 150 after scripts/lib grew to 2,424 lines (every sourced lib re-parsed per gate); harness-2 300 -> 330 (policy-gate moved in).
 
 [jobs]
 test = 300

@@ -613,7 +613,7 @@ def check_no_process_history(
 # and the ledger's section keys A1–A5 / B1 (the check_ledger_* keys). A bare `A<n>` phase label is
 # indistinguishable from a section key by shape and is not judged. The count is lines with a tag, pinned
 # exactly.
-DOCS_PROCESS_TAG_ALLOW = 11
+DOCS_PROCESS_TAG_ALLOW = 0
 _DOCS_PROCESS_TAG = re.compile(
     r"\bW1-[A-Z]|\bR[0-9]-[A-Z][0-9]+|\bZ[0-9]+(?:\.[0-9]+)?b?\b|\bitem [0-9]+\b|A\u2032-[0-9]"
     r"|\bW[0-3]-S[0-9]+|\bW0[a-f]\b|\bTrack [A-C]\b|\((?:A|D)[0-9]\)|\bC[1-9]\b|\bW[0-3]\b(?!-)"

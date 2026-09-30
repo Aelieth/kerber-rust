@@ -3,8 +3,8 @@
 # clients through the gate's client config inside $NAME: a gate sets KADMIN_Q_CONF (and GATE_CLIENT_CONF for
 # kinit_try) to its config's path in the container. Every other query a gate or a scripts/lib file runs goes
 # through a runner below (the keyed container sites of ci_policy/kadmin_q.py aside). A query whose output the cell
-# does not check itself goes through kadmin_q_ok, unless kadmin_q_try marks it best-effort (a cleanup, or a setup
-# that may already have run on a shared container), which runs it with no success check.
+# does not check itself goes through kadmin_q_ok, unless kadmin_q_try marks it best-effort (a setup
+# that may already have run on a shared container, a cleanup, a diagnostic read), which runs it with no success check.
 # shellcheck shell=bash
 
 # kadmin_q QUERY: MIT kadmin as admin@KERBER.TEST; output and errors on stdout, never a failing rc.
@@ -401,7 +401,7 @@ _kadmin_q_fail() {
     } >&"$_KADMIN_Q_STDERR"
 }
 
-# kadmin_q_try CMD ARGS...: a best-effort cleanup query; streams pass through, never a failing rc.
+# kadmin_q_try CMD ARGS...: a best-effort query (a setup that may already have run, a cleanup, a diagnostic read); streams pass through, never a failing rc.
 kadmin_q_try() {
     "$@" || true
 }

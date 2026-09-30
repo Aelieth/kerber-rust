@@ -29,7 +29,7 @@ table in the schema below; a row lives in exactly one file.
 | [b1-client.md](b1-client.md) | B1 — the client library, crypto, GSS, the acceptor and the client tools |
 
 FAST unwrap failures put the MIT status word
-`FIND_FAST` on the wire `e_text` (`do_as_req.c:806`,
+`FIND_FAST` on the wire `e_text` (`do_as_req.c:808`,
 `do_tgs_req.c:205-206`) and the `k5_setmsg` text in the `kdc.issue`
 `detail` field. Rows that were `deviation (e_text)` only for that
 mismatch are `exact` here.
@@ -117,8 +117,9 @@ that had no owner.
 
 Corrected by the verification reports. Each batch ≤ 6 commits. One MIT
 check family per commit. The plan numbered the batches F1–F9 in the order
-below (ledger cells cite them by that number); F1 starts after this
-ledger lands; F3–F9 get a short plan when reached.
+below (ledger cells cite them by that number). The rows they targeted
+carry their grades in the section files; each batch's text below is the
+plan as it was written, not the current state.
 
 ### 1. FAST armor / AD-FX-ARMOR / cookie (security)
 
@@ -210,12 +211,11 @@ Whitelist names the documented stricter rows.
 
 ## Not this ledger
 
-Client library: `tgs_req_ex` FAST sibling; `get_dest_tgt` referral memory;
-start-realm in the service loop; acceptor transited re-check;
-ERROR-level `asn1.decode`/`crypto.decrypt` on expected failures.
-kadm5, kpasswd and kprop: kpasswd pre-AP-REQ drop and post-AP-REQ `chpwfail` (J4 / `schpw.c`); kadmind chpw log `from <addr>`;
-`kprop.rs` per-connection rcache; `dfl` restart cell; min_life (the dictionary check has landed);
-kadm5 ACL denial codes (the AUTH_INSUFFICIENT-before-lockdown rename has landed); policy-rejection text.
+Client library: the `tgs_req_ex` FAST sibling; ERROR-level
+`asn1.decode` / `crypto.decrypt` log lines on expected failures.
+kadm5 and kprop: the kadmind chpw log's `from <addr>`; `kprop.rs`'s
+per-connection replay cache.
 
-OTP kdcpreauth, PA-S4U-X509-USER, PKINIT freshness, anonymous PKINIT stay
-deferred with those promotion oracles (Batch D / user non-goal).
+OTP kdcpreauth is not implemented (a user non-goal; its row is
+`absent (otp)`). PKINIT freshness (`a3-preauth.md`), anonymous PKINIT
+(`a2-as.md`) and PA-S4U-X509-USER (`a1-tgs.md`) are graded `exact`.
