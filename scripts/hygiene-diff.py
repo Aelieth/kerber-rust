@@ -628,7 +628,7 @@ def _self_test_ledger_rekey(root: pathlib.Path) -> int:
     for label, rk, want_rc, needle in (
         ("with its entry", entries("rk-ct.txt", f"docs/parity/a1-tgs.md\ta.c:1 (step E3) = a.c:1\t"
                                                 f"same check = same check\tblob={ct_blob}"),
-         0, "info ledger row reworded (check cell): docs/parity/a1-tgs.md a.c:1"),
+         0, "info ledger row reworded (cite): docs/parity/a1-tgs.md a.c:1"),
         ("without an entry", None, 1, "FAIL ledger row removed: a.c:1 (step E3)\tsame check"),
     ):
         buf = io.StringIO()
@@ -1178,7 +1178,8 @@ def _compare(args) -> int:
         if old_led[k_old][0] != new_led[k_new][0] or old_proof != new_cells[6]:
             fail(f"ledger row reworded (check cell) with a changed verdict or proof: {what}")
             continue
-        info(f"ledger row reworded (check cell): {what}")
+        part = "cite" if old_check == new_check else ("check cell" if old_cite == new_cite else "cite and check")
+        info(f"ledger row reworded ({part}): {what}")
         del old_led[k_old]
         del new_led[k_new]
     moved = 0
