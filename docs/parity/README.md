@@ -115,7 +115,7 @@ that had no owner.
 
 ## Check families (security > parity > e_text)
 
-The rows are grouped in nine check families, in the order below, security first. Each family's paragraph says
+The KDC checks fall into nine families, in the order below, security first. Each family's paragraph says
 what its rows cover; the grades are in the section files, and a cell that names a family uses its title.
 
 ### 1. FAST armor / AD-FX-ARMOR / cookie (security)
@@ -149,8 +149,8 @@ password-expiry handling.
 
 `2ND_TKT_NOT_TGS` 12, `2ND_TKT_MISMATCH` 26, `INVALID_S4U2PROXY_OPTIONS` 13,
 TGS-target `NOT_ALLOWED_TO_DELEGATE` 12, `CAN'T PROXY TGT` 13,
-`BAD_ETYPE_IN_2ND_TKT` 14, RBCD/xrealm PAC, `INVALID_S4U2SELF_CHECKSUM` 41,
-not 50. `NO_2ND_TKT` and `EVIDENCE_TKT_NOT_FORWARDABLE` refuse with 13.
+`BAD_ETYPE_IN_2ND_TKT` 14, RBCD/xrealm PAC, `INVALID_S4U2SELF_CHECKSUM` 41 on a failed verify
+and 50 for an unkeyed checksum. `NO_2ND_TKT` and `EVIDENCE_TKT_NOT_FORWARDABLE` refuse with 13.
 
 ### 4. AS request validation (security)
 
@@ -164,22 +164,23 @@ admin unlock `last_admin_unlock >= last_failed` (`lockout.c:102-104`).
 ### 5. TGS options and ticket flags (security / parity)
 
 `get_ticket_flags` (`kdc_util.c:813`); a TGT not forwardable, proxiable or
-postdatable is 13; `check_tgs_nontgt` 26 and `check_tgs_tgt` after decrypt,
-only when `NON_TGT_OPTION` is clear; `NOT_YET_VALID` without skew;
+postdatable is 13; after decrypt, `check_tgs_nontgt` 26 when `NON_TGT_OPTION` is set and
+`check_tgs_tgt` only when it is clear; `NOT_YET_VALID` without skew;
 `NON-POSTDATABLE` only on `ALLOW_POSTDATE`. The lookaside reply cache is
 implemented (`lookaside.rs`): an identical retransmit is answered from the
 cache on both UDP and TCP.
 
 ### 6. CAMMAC + HANDLE_AUTHDATA (security, latent)
 
-`cammac_create` / `cammac_check_kdcver` (ku 64) after the authdata copy, inside
+`cammac_check_kdcver` (ku 64) on the header ticket in `get_auth_indicators`, before the authdata is handled;
+`cammac_create` after the authdata copy, inside
 `handle_pac` / `mint_ticket`; `require_auth` → `HIGHER_AUTHENTICATION_REQUIRED`
 12; `GET_AUTH_INDICATORS`; `AD-MANDATORY-FOR-KDC` → 12.
 
 ### 7. RFC 6806 negotiation, FAST reply parity (parity)
 
-149 checksum (ku 56) + empty 136 in `enc_padata` + `TKT_FLG_ENC_PA_REP`,
-gated on a request 149 (the flag without 149 hard-fails MIT kinit); TGS
+`TKT_FLG_ENC_PA_REP` on every ticket; the 149 checksum (ku 56) and the empty 136 in `enc_padata` only
+when the request carries 149; TGS
 `strengthen_key`; PA-FX-COOKIE on every e_data-bearing AS error; the FAST
 error inner-padata order; the hint-list order `[136,(11),19,modules]`;
 ETYPE-INFO2 only when the reply key was not replaced.
@@ -196,7 +197,7 @@ lookups; no lockable KDB in tree — the unit fakes the backend).
 
 ### 9. e_text and the differential compare (parity)
 
-MIT's e_text tokens (`locked` is `CLIENT LOCKED OUT`, …); `compare_krb_error`
+MIT's e_text tokens (`CLIENT LOCKED OUT` for a `DISALLOW_ALL_TIX` client, …); `compare_krb_error`
 compares `e_text` on every `diffsend` case.
 
 ## Not this ledger
