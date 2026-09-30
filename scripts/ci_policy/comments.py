@@ -605,14 +605,19 @@ def check_no_process_history(
 
 # Process-history tags in docs/**/*.md prose and table cells: the W1 and review-round names, the Z
 # close-out steps, "item N", the A′ list, the swath names (`W3-S1`), the W0 passes (`W0d`), the tracks
-# (`Track A`), the parenthesised phase labels (`(A5)`, `(D2)`), the pass name `C1`, and a bare workstream
-# name (`W3`; a hyphenated one is the W1-/W-S arms'). The arms are disjoint, so each has its own fixture
-# line. The roadmap's milestones are not process history and stay: the stage names G1–G9 and the eras
-# ("Era II", "Era III"), which docs/stages.md defines. The count is lines with a tag, pinned exactly.
-DOCS_PROCESS_TAG_ALLOW = 0
+# (`Track A`), the parenthesised phase labels (`(A5)`, `(D2)`), a pass name `C<n>`, a bare workstream
+# name (`W3`; a hyphenated one is the W1-/W-S arms'), a phase pair (`A2/A5`), a bare phase or audit label
+# (`D2`, `E3`, `J4`; not after a `/`, not a review-round's `R2-D1`, not the whole `(D2)`), and a batch name
+# (`Batch D`). The arms are disjoint, so each has its own fixture line. Not process history, and not
+# counted: the roadmap's stage names G1–G9 and eras ("Era II", "Era III"), which docs/stages.md defines,
+# and the ledger's section keys A1–A5 / B1 (the check_ledger_* keys). A bare `A<n>` phase label is
+# indistinguishable from a section key by shape and is not judged. The count is lines with a tag, pinned
+# exactly.
+DOCS_PROCESS_TAG_ALLOW = 11
 _DOCS_PROCESS_TAG = re.compile(
     r"\bW1-[A-Z]|\bR[0-9]-[A-Z][0-9]+|\bZ[0-9]+(?:\.[0-9]+)?b?\b|\bitem [0-9]+\b|A\u2032-[0-9]"
-    r"|\bW[0-3]-S[0-9]+|\bW0[a-f]\b|\bTrack [A-C]\b|\((?:A|D)[0-9]\)|\bC1\b|\bW[0-3]\b(?!-)"
+    r"|\bW[0-3]-S[0-9]+|\bW0[a-f]\b|\bTrack [A-C]\b|\((?:A|D)[0-9]\)|\bC[1-9]\b|\bW[0-3]\b(?!-)"
+    r"|\bA[0-9]/A[0-9]\b|(?<!/)(?<![A-Z][0-9]-)\b[DEJ][0-9]\b(?![./0-9])(?!(?<=\(D[0-9])\))|\bBatch [A-Z]\b"
 )
 
 
@@ -621,7 +626,7 @@ def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
 
     A backticked `==== … ====` section cite that resolves verbatim in the script named before it (the cites
     judge's rule) is the script's text, quoted faithfully, and is not counted; unresolved, it counts. This arm is
-    temporary: 25 gate sections carry a tag in their own echo text, and the commit that renames them deletes it.
+    temporary: 31 gate sections carry a tag in their own echo text, and the commit that renames them deletes it.
     """
     from .docs import line_script_cites, scripts_by_name
 

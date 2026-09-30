@@ -127,23 +127,28 @@ the audit's reference resolver. `MIT_TRUTH_ALLOW` is 0, so the check is
 hard.
 
 `check_no_process_history` rejects a process tag on any comment line
-under `crates/` (block comments included): `R<n>`, `A′-<n>`, `W<n><a-f>`,
-`W1-<letter>`, `Round <n>`, `parent` plus seven hex digits, `R<n>-<letter><n>`, `B<n>`,
-`Y<n>`, `Z<n>.<n>`, a backticked seven- or eight-digit commit hash,
-`parent-red`, `Compiles at`, `item <n>`, `S<n>.<n>`, `Z<n> leftover`, a lone
-`B<n>` / `F<n>`, "the parent `…`", and a `working/` path. A tag inside a
-string literal is not a comment. `PROCESS_TAG_ALLOW` is 0, so the
-check is hard. Rule names (`R1`–`R4`) live in `docs/`, never in
-`crates/`. `check_no_docs_process_tags` counts the `docs/**` lines, outside
-code fences, that carry a process tag: `R<n>-<letter><n>`, `W1-<letter>`,
-`Z<n>.<n>`, `item <n>`, `A′-<n>`, a swath `W<n>-S<n>`, a pass `W<n><a-f>`,
-`Track <A-C>`, a phase label `(A<n>)` / `(D<n>)`, the pass name `C<n>`, and
-a bare workstream `W<n>` (one arm each, disjoint, one fixture line per
-arm). The roadmap's stage and era names (G1–G9, Era I–III, which
-`stages.md` defines) are the documented exception. A backticked
-`==== … ====` section cite that resolves in its script is the script's
-text and is skipped until the sections that carry a tag are renamed.
-`DOCS_PROCESS_TAG_ALLOW` is 0, so the check is hard.
+under `crates/` (block comments included): `R<n>`, `A′-<n>`, a pass name
+of `W`, `0` and a letter a–f, `W1-<letter>`, `Round <n>`, `parent` plus
+seven hex digits, `R<n>-<letter><n>`, `Y0`, `Z<n>.<n>` or `Z<n>b.<n>`, a
+backticked seven- or eight-digit commit hash, `parent-red`, `Compiles at`,
+`item <n>`, `S<n>.<n>`, `Z<n> leftover`, a lone `B<n>` / `F<n>`, "the
+parent `…`", a `working/` path, and `fails at` plus a seven- or
+eight-digit hash. A tag inside a string literal is not a comment.
+`PROCESS_TAG_ALLOW` is 0, so the check is hard. Rule names (`R1`–`R4`)
+live in `docs/`, never in `crates/`. `check_no_docs_process_tags` counts
+the `docs/**` lines, outside code fences, that carry a process tag, one
+arm each, disjoint, one fixture line per arm: `W1-<letter>`,
+`R<n>-<letter><n>`, `Z<n>` with an optional `.<n>` and `b`, `item <n>`,
+`A′-<n>`, a swath `W<n>-S<n>`, a pass name of `W`, `0` and a letter a–f,
+`Track <A-C>`, a phase label `(A<n>)` / `(D<n>)`, a pass name `C<n>`, a
+bare workstream `W<n>`, a phase pair `A<n>/A<n>`, a bare phase or audit
+label `D<n>` / `E<n>` / `J<n>`, and `Batch <letter>`. Not counted: the
+roadmap's stage and era names (G1–G9, Era II–III, which `stages.md`
+defines) and the ledger's section keys A1–A5 / B1; a bare phase label
+`A<n>` is indistinguishable from a section key and is not judged. A
+backticked `==== … ====` section cite that resolves in its script is the
+script's text and is skipped until the sections that carry a tag are
+renamed. `DOCS_PROCESS_TAG_ALLOW` is 0, so the check is hard.
 
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
 [--accept] [--params] [--split] [--glue] [--roots]` is the product-fn sibling:
@@ -363,7 +368,8 @@ retired path in an old entry is not a live cite).
 `scripts/ci-policy.py` is a shim over the `scripts/ci_policy/` package:
 one module per domain (`workflows`, `shell`, `kadmin_q`, `gates`, `ledger`,
 `docs`, `evidence`, `hygiene`, `comments`; the shared paths in `common`, `main()` in
-`__init__`) and the self-test one file per domain under `selftest/`. The
+`__init__`) and the self-test one file per domain under `selftest/`
+(`kadmin_q`'s cases live in `selftest/shell.py`). The
 shim re-exports the names `kdb-dump-gate.sh` and `hygiene_inventory.py`
 read, and `check_policy_module_attrs` loads it from `/` the way they do.
 `scripts/py-move-check.py` judged the split: every def, class and

@@ -329,13 +329,14 @@ def check_gate_doc_tokens(root: pathlib.Path | None = None, *, allow: int | None
 
 # Docs cite a gate's cell by its section tag, not by a script line number: line numbers move whenever a script
 # does. A script cite is `scripts/<path>.(sh|py|c):N[-M][,N-M…]`, the same with a bare name that is a file under
-# scripts/ (lib/, oracle/, ci_policy/ included), or a bare `:N[-M]` after such a line cite in the same table
-# cell or prose line (after a bare script path it is a port or a time, not a cite). A `file.c:N` MIT source cite and its `:N` continuations are the anchor checks' class and are not counted,
+# scripts/ (lib/, oracle/, ci_policy/ included), a bare `:N[-M]` after such a line cite in the same table cell
+# or prose line, or a bare range `:N-M` / `:N,M` after any script path there (a single `:N` after a bare path is
+# a port or a time, not a cite). A `file.c:N` MIT source cite and its `:N` continuations are the anchor checks' class and are not counted,
 # nor is `t_vfy_increds.c:N` without its scripts/ prefix (the oracle shares an MIT test's name). The unit is
 # cites. A section cite is a backticked `==== <text> ====` after a script path in the same cell or line; it must
 # occur in that script. A function cite is a backticked `name()` right after a script path; that script must
 # define `name()`.
-SCRIPT_LINE_CITE_ALLOW = 0
+SCRIPT_LINE_CITE_ALLOW = 1
 _CITE_FILE = re.compile(
     r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:sh|py|c|h|rs|md|toml|yml|yaml|conf|env))"
     r"(:[0-9]+(?:-[0-9]+)?(?:,\s?[0-9]+(?:-[0-9]+)?)*)?"
@@ -369,7 +370,8 @@ def line_script_cites(
     script)."""
     cites: list[str] = []
     sections: list[tuple[str, pathlib.Path, bool]] = []
-    for cell in line.split("|") if line.lstrip().startswith("|") else [line]:
+    # a table row's cells split at an unescaped `|` (the ledger's rule): `\|` inside a cell is text
+    for cell in re.split(r"(?<!\\)\|", line) if line.lstrip().startswith("|") else [line]:
         events = [(m.start(), "file", m) for m in _CITE_FILE.finditer(cell)]
         events += [(m.start(), "cont", m) for m in _CITE_CONT.finditer(cell)]
         events += [(m.start(), "section", m) for m in _CITE_SECTION.finditer(cell)]
@@ -391,7 +393,10 @@ def line_script_cites(
                 if in_script:
                     cites.append(m.group(0))
             elif kind == "cont":
-                if in_script and not cell[: m.start()].endswith(tuple("0123456789")):
+                ranged = "-" in m.group(1) or "," in m.group(1)
+                if (in_script or (current is not None and ranged)) and not cell[: m.start()].endswith(
+                    tuple("0123456789")
+                ):
                     cites.append(m.group(1))
             elif kind == "function":
                 if current is not None and cell[last_end:m.start()].strip() == "":

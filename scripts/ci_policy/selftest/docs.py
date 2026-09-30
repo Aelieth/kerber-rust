@@ -147,6 +147,11 @@ def _self_test_docs() -> None:
         cdoc.write_text("| row | `scripts/a-gate.sh` `==== cell two ====` |\n", encoding="utf-8")
         _must_die_msg("1 section cite(s) that do not resolve: docs/x.md:1: ==== cell two ==== not in scripts/a-gate.sh",
                       check_no_script_line_cites, croot, allow=0)
+        # A bare range after a script path is a cite even when the path has no line number; a single :N is a port.
+        cdoc.write_text("| row | `scripts/a-gate.sh` `==== cell one ====` a\\|b; `:139-207` more |\n"
+                        "`scripts/a-gate.sh` listens on :8888.\n", encoding="utf-8")
+        _must_die_msg("1 script line cite(s) in the docs, allow 0: docs/x.md:1: :139-207", check_no_script_line_cites,
+                      croot, allow=0)
         # A function cite right after a script path must name a function that script defines.
         cdoc.write_text("| row | `scripts/lib/h.sh` `h()` and `scripts/a-gate.sh`, then `kinit()` in Rust |\n",
                         encoding="utf-8")

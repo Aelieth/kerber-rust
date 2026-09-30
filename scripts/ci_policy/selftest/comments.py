@@ -288,11 +288,12 @@ def _self_test_comments() -> None:
             "Plain text.\n| a | settled in W1-Z |\n```\nitem 4 in a fence\n```\nSee item 12.\nAs in Z7.1.\n"
             "Graded R2-D1 here.\nThe A\u2032-3 row.\nClosed in W3-S1.\nAfter W0d it moved.\nUnder Track B.\n"
             "The lab trust (A5).\nSince C1 the text differs.\nPromoted in W3.\n"
-            "Stage G4 and Era III are milestones, not tags.\n",
+            "Reconciled in A2/A5.\nThe trust (post-E3, nightly).\nThe Batch D rows.\n"
+            "Stage G4, Era III and section A2 are not tags.\n",
             encoding="utf-8",
         )
-        check_no_docs_process_tags(dt_root, allow=11)
-        _must_die_msg("11 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
+        check_no_docs_process_tags(dt_root, allow=14)
+        _must_die_msg("14 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
         # A section cite quoting a gate's own tagged echo text, resolved in that gate, is not counted (the
         # temporary arm); the same text that does not resolve counts.
         (dt_root / "scripts").mkdir()
