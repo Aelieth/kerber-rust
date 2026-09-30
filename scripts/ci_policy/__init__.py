@@ -11,8 +11,9 @@ from .comments import (
 )
 from .common import WORKFLOWS, _die, _scratch_root
 from .docs import (
-    check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size, check_gate_documented,
-    check_no_plan_section_names, check_testing_doc_budgets,
+    check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size, check_gate_doc_tokens,
+    check_gate_documented,
+    check_no_plan_section_names, check_no_script_line_cites, check_testing_doc_budgets,
 )
 from .evidence import (
     check_ci_status_save, check_claim_audit, check_evidence_check_tool, check_no_red_target_trees,
@@ -141,6 +142,8 @@ def main() -> None:
     check_changelog_headings()
     check_docs_size()
     check_gate_documented()
+    check_gate_doc_tokens()
+    check_no_script_line_cites()
     check_capture_env_only()
     check_golden_dump_unique_keys()
     check_ledger_tally()

@@ -9,6 +9,7 @@ import tempfile
 from ..common import ROOT, _die, _scratch_root
 from ..docs import (
     DOCS_SIZE_LIMIT, check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size,
+    check_gate_doc_tokens, check_no_script_line_cites,
     check_no_plan_section_names, check_testing_doc_budgets, doc_link_violations, gate_doc_violations, gate_placements,
 )
 from ..workflows import Workflow
@@ -92,6 +93,67 @@ def _self_test_docs() -> None:
     ):
         if not any(needle in v for v in gate_doc_violations(doc, gates, places, stubs_fx)):
             _die(f"check_gate_documented must flag {label}")
+    # An asserts cell's backticked tokens must be in its gate or a helper it sources or runs: one red per arm.
+    troot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (troot / "scripts" / "lib").mkdir(parents=True)
+        (troot / "harness").mkdir()
+        (troot / "docs").mkdir()
+        (troot / "scripts" / "a-gate.sh").write_text(
+            '. "$ROOT/scripts/lib/h.sh"\npython3 "$ROOT/harness/p.py"\ngrep -q "KDC_ERR_X" log\n', encoding="utf-8")
+        (troot / "scripts" / "lib" / "h.sh").write_text('need() { echo "lib-token"; }\n', encoding="utf-8")
+        (troot / "harness" / "p.py").write_text('print("harness-token")\n', encoding="utf-8")
+        (troot / "scripts" / "b-gate.sh").write_text('grep -q "b-only" log\n', encoding="utf-8")
+        cell = "`KDC_ERR_X`, `lib-token`, `harness-token`; see `scripts/b-gate.sh`, `ci:harness`, `docs/x.md`"
+        gdoc = troot / "docs" / "gates.md"
+        gdoc.write_text(head + f"| `scripts/a-gate.sh` | MIT | `ci:harness` | fail-red | {cell} |\n", encoding="utf-8")
+        check_gate_doc_tokens(troot, allow=0)
+        gdoc.write_text(head + f"| `scripts/a-gate.sh` | MIT | `ci:harness` | fail-red | {cell}, `nowhere` |\n",
+                        encoding="utf-8")
+        _must_die_msg("1 asserts token(s) in no script, allow 0: a-gate.sh: `nowhere`", check_gate_doc_tokens, troot,
+                      allow=0)
+        # a token only in an unrelated gate is not the claimed gate's
+        gdoc.write_text(head + f"| `scripts/a-gate.sh` | MIT | `ci:harness` | fail-red | {cell}, `b-only` |\n",
+                        encoding="utf-8")
+        _must_die_msg("a-gate.sh: `b-only`", check_gate_doc_tokens, troot, allow=0)
+    finally:
+        subprocess.run(["rm", "-rf", str(troot)], check=False)
+    # Script line cites in the docs, counted in cites; section cites must resolve in the script they follow.
+    croot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    try:
+        (croot / "scripts" / "lib").mkdir(parents=True)
+        (croot / "scripts" / "oracle").mkdir()
+        (croot / "docs").mkdir()
+        (croot / "scripts" / "a-gate.sh").write_text('echo "==== cell one ===="\n', encoding="utf-8")
+        (croot / "scripts" / "lib" / "h.sh").write_text("h() { :; }\n", encoding="utf-8")
+        (croot / "scripts" / "oracle" / "t_vfy_increds.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        cdoc = croot / "docs" / "x.md"
+        cdoc.write_text(
+            "| row | `scripts/a-gate.sh` `==== cell one ====`; MIT `kdc_util.c:12`, `:30` |\n"  # 0: a section, MIT
+            "The KDC on `scripts/a-gate.sh` listens on :8888.\n"  # 0: a port after a bare path
+            "MIT's `t_vfy_increds.c:5` test.\n"  # 0: the MIT name the oracle shares
+            "```\nscripts/a-gate.sh:3\n```\n",  # 0: fenced
+            encoding="utf-8",
+        )
+        check_no_script_line_cites(croot, allow=0)
+        cdoc.write_text(
+            cdoc.read_text(encoding="utf-8")
+            + "| row | `scripts/a-gate.sh:1-3,7` and `:9`; `h.sh:1` |\n"  # 3: a cite with a list, its continuation, a bare lib name
+            + "See `scripts/oracle/t_vfy_increds.c:1`.\n",  # 1: the oracle with its prefix
+            encoding="utf-8",
+        )
+        check_no_script_line_cites(croot, allow=4)
+        _must_die_msg("4 script line cite(s) in the docs, allow 0", check_no_script_line_cites, croot, allow=0)
+        cdoc.write_text("| row | `scripts/a-gate.sh` `==== cell two ====` |\n", encoding="utf-8")
+        _must_die_msg("1 section cite(s) that do not resolve: docs/x.md:1: ==== cell two ==== not in scripts/a-gate.sh",
+                      check_no_script_line_cites, croot, allow=0)
+        # README.md, CONTRIBUTING.md and scripts/README.md are read too
+        cdoc.unlink()
+        (croot / "CONTRIBUTING.md").write_text("see `scripts/a-gate.sh:1`\n", encoding="utf-8")
+        _must_die_msg("1 script line cite(s) in the docs, allow 0: CONTRIBUTING.md:1", check_no_script_line_cites,
+                      croot, allow=0)
+    finally:
+        subprocess.run(["rm", "-rf", str(croot)], check=False)
     if gate_placements()["kdc-gate.sh"] != [("ci:harness", "fail-red")]:
         _die(f"gate_placements must read kdc-gate.sh as ci:harness fail-red: {gate_placements()['kdc-gate.sh']}")
     # Every lane gate_placements reads, and the wrapper row of a DOCUMENTED_STUBS wrapper.
@@ -129,6 +191,20 @@ def _self_test_docs() -> None:
         "see ci-budget.toml\n",
         good_toml,
     )
+    # Each `name` N pair in the Tier 1 / Tier 2 bullets equals ci-budget.toml (a pair off by one is red).
+    tiers = (
+        "- **Tier 1** — per-push blocking: `test`, `harness`. Combined wall ≤ `[push].run_wall` (360 s).\n"
+        "  Per-job: `test` 300, `harness` 270, `doc` 90.\n"
+        "- **Tier 2** — per-push soft: `msrv` 120.\n"
+        "- **Tier 3** — nightly.\n"
+    )
+    check_testing_doc_budgets(good_docs + tiers, "see ci-budget.toml tier rule\n", good_toml)
+    _must_die_msg("Tier 1 says `harness` 271, ci-budget.toml says 270", check_testing_doc_budgets,
+                  good_docs + tiers.replace("`harness` 270", "`harness` 271"), "see ci-budget.toml\n", good_toml)
+    _must_die_msg("Tier 2 says `msrv` 121", check_testing_doc_budgets,
+                  good_docs + tiers.replace("`msrv` 120", "`msrv` 121"), "see ci-budget.toml\n", good_toml)
+    _must_die_msg("says `[push].run_wall` 361", check_testing_doc_budgets,
+                  good_docs + tiers.replace("(360 s)", "(361 s)"), "see ci-budget.toml\n", good_toml)
     # No working-plan section name in a public doc; an RFC section is not one.
     ps_root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:

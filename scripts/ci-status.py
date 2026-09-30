@@ -11,8 +11,11 @@ public for a public repository; job logs are not); `GITHUB_TOKEN` in the
 environment is sent when present. Exit status is 0 when the newest listed run of the selected
 workflow succeeded, 1 when it failed, 2 when it is still running or unknown.
 
-`--save SHA` writes `ci-<sha>.txt` only from a **completed**, non-rate-limited
-run (retries with backoff; exits 2 otherwise). Fixture annotations from
+`--save SHA` writes `<workflow>-<sha>.txt` (`ci-<sha>.txt`, `fuzz-<sha>.txt`) only
+from a **completed**, non-rate-limited run whose every job step carries its
+`started_at` / `completed_at` (GitHub stamps steps minutes after the run
+completes; retries with backoff capped at 60 s for at least 15 minutes; exits 2
+otherwise, never writing a partial file). Fixture annotations from
 `scripts/probe-gate.sh` (`title=fixture`) are omitted. Saved records include
 `job=<name> duration_s=<n>` lines and `run_wall_s=` (W2-S0).
 
@@ -209,7 +212,10 @@ def duration_lines(jobs: list[dict], run: dict | None = None) -> list[str]:
     return lines
 
 
-def format_run(repo: str, r: dict, jobs: bool, durations: bool = False) -> list[str]:
+def format_run(
+    repo: str, r: dict, jobs: bool, durations: bool = False, job_list: list[dict] | None = None
+) -> list[str]:
+    """The run's lines; `job_list` is the run's jobs when the caller already fetched them."""
     lines: list[str] = []
     state = r["conclusion"] or r["status"]
     head = (
@@ -217,12 +223,11 @@ def format_run(repo: str, r: dict, jobs: bool, durations: bool = False) -> list[
         f"{r['created_at']} id={r['id']}"
     )
     want_jobs = jobs or durations or state != "success"
-    job_list: list[dict] = []
-    if want_jobs:
+    fetched = job_list is not None
+    job_list = job_list or []
+    if want_jobs and not fetched:
         try:
-            job_list = get(f"/repos/{repo}/actions/runs/{r['id']}/jobs?per_page=50").get(
-                "jobs", []
-            )
+            job_list = fetch_jobs(repo, r["id"])
         except urllib.error.URLError as e:
             lines.append(head)
             lines.append(f"    jobs: unavailable ({e})")
@@ -359,10 +364,37 @@ def fetch_runs(
     return selected[:n]
 
 
-def save_run(repo: str, workflow: str, sha: str, out_dir: str, retries: int = 10) -> int:
-    """Write ci-<sha>.txt from a completed run only. Exit 2 on rate-limit / in_progress exhaustion."""
+def fetch_jobs(repo: str, run_id: int) -> list[dict]:
+    """The run's jobs with their steps (one page: a run has fewer than 50 jobs)."""
+    return get(f"/repos/{repo}/actions/runs/{run_id}/jobs?per_page=50").get("jobs", [])
+
+
+def unstamped_steps(jobs: list[dict]) -> int:
+    """Steps without started_at or completed_at: GitHub fills them in after the run completes."""
+    return sum(
+        1
+        for job in jobs
+        for step in job.get("steps") or []
+        if not step.get("started_at") or not step.get("completed_at")
+    )
+
+
+def save_name(workflow: str, sha: str) -> str:
+    """`<workflow>-<sha7>.txt`: `ci` → `ci-<sha>.txt`, `fuzz` or `fuzz.yml` → `fuzz-<sha>.txt`."""
+    stem = re.sub(r"[^a-z0-9-]+", "-", pathlib.Path(workflow).stem.lower()).strip("-") or "ci"
+    return f"{stem}-{sha[:7]}.txt"
+
+
+# --save retries: the backoff doubles from 5 s to a 60 s cap (120 s after a 403); 20 tries wait at least
+# 15 minutes, the time GitHub has been seen to take to stamp every step of a completed run.
+SAVE_RETRIES = 20
+
+
+def save_run(repo: str, workflow: str, sha: str, out_dir: str, retries: int = SAVE_RETRIES) -> int:
+    """Write <workflow>-<sha>.txt from a completed run whose steps are all stamped. Exit 2 on rate-limit,
+    in_progress or unstamped-step exhaustion, writing nothing."""
     os.makedirs(out_dir, exist_ok=True)
-    out_path = os.path.join(out_dir, f"ci-{sha[:7]}.txt")
+    out_path = os.path.join(out_dir, save_name(workflow, sha))
     backoff = 5.0
     last_err = "no matching runs"
     for attempt in range(retries):
@@ -397,7 +429,24 @@ def save_run(repo: str, workflow: str, sha: str, out_dir: str, retries: int = 10
             time.sleep(backoff)
             backoff = min(backoff * 2, 60)
             continue
-        lines = format_run(repo, newest, jobs=True, durations=True)
+        try:
+            job_list = fetch_jobs(repo, newest["id"])
+        except urllib.error.URLError as e:
+            last_err = f"run {newest.get('run_number')}: jobs unavailable ({e})"
+            print(f"ci-status: {last_err}; retrying", file=sys.stderr)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+            continue
+        missing = unstamped_steps(job_list)
+        if not job_list or missing:
+            last_err = f"run {newest.get('run_number')}: {missing} steps unstamped" if job_list else (
+                f"run {newest.get('run_number')}: no jobs listed"
+            )
+            print(f"ci-status: {last_err}; retrying", file=sys.stderr)
+            time.sleep(backoff)
+            backoff = min(backoff * 2, 60)
+            continue
+        lines = format_run(repo, newest, jobs=True, durations=True, job_list=job_list)
         # Stamp so evidence-check accepts the record.
         stamp = [
             "==== provenance ====",
@@ -619,7 +668,7 @@ def main() -> int:
     ap.add_argument(
         "--save",
         metavar="SHA",
-        help="write ci-<sha>.txt only from a completed run (retries; exit 2 otherwise)",
+        help="write <workflow>-<sha>.txt only from a completed run with every step stamped (retries; exit 2 otherwise)",
     )
     ap.add_argument(
         "--out",

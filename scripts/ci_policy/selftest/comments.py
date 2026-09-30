@@ -286,10 +286,12 @@ def _self_test_comments() -> None:
         (dt_root / "docs").mkdir()
         (dt_root / "docs" / "x.md").write_text(
             "Plain text.\n| a | settled in W1-Z |\n```\nitem 4 in a fence\n```\nSee item 12.\nAs in Z7.1.\n"
-            "Graded R2-D1 here.\nThe A\u2032-3 row.\n",
+            "Graded R2-D1 here.\nThe A\u2032-3 row.\nClosed in W3-S1.\nAfter W0d it moved.\nUnder Track B.\n"
+            "The lab trust (A5).\nSince C1 the text differs.\nPromoted in W3.\n"
+            "Stage G4 and Era III are milestones, not tags.\n",
             encoding="utf-8",
         )
-        check_no_docs_process_tags(dt_root, allow=5)
-        _must_die_msg("5 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
+        check_no_docs_process_tags(dt_root, allow=11)
+        _must_die_msg("11 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
     finally:
         subprocess.run(["rm", "-rf", str(dt_root)], check=False)

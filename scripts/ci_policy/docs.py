@@ -281,10 +281,139 @@ def check_gate_documented(root: pathlib.Path | None = None, *, allow: int | None
     bad = gate_doc_violations(text, gate_names, gate_placements(), DOCUMENTED_STUBS)
     if len(bad) != allow:
         _die(f"docs/gates.md: {len(bad)} gate row problem(s), allow {allow}: " + "; ".join(bad[:8]))
+_DOC_TICK = re.compile(r"`([^`]+)`")
+_GATE_HELPER_REF = re.compile(r"scripts/(?:lib|oracle)/[\w.-]+|harness/[\w./-]+\.(?:py|sh|c|conf|env)")
+_GATE_PATH_TOKEN = re.compile(r"(?:scripts/)?[\w.-]+-gate\.sh")
+
+
+def gate_script_text(root: pathlib.Path, rel: str, seen: set[pathlib.Path] | None = None) -> str:
+    """A gate script's text followed by every `scripts/lib`, `scripts/oracle` or `harness/` file it names,
+    recursively: the files it sources or runs."""
+    seen = set() if seen is None else seen
+    path = root / rel
+    if path in seen or not path.is_file():
+        return ""
+    seen.add(path)
+    text = path.read_text(encoding="utf-8", errors="replace")
+    return "\n".join([text] + [gate_script_text(root, m, seen) for m in _GATE_HELPER_REF.findall(text)])
+
+
+def gate_doc_token_misses(root: pathlib.Path | None = None) -> list[str]:
+    """Backticked tokens of each docs/gates.md row's asserts cell that appear in neither its gate script nor a
+    file that script sources or runs (gate paths and `ci:` / `docs/` / `crates/` tokens are names, not claims)."""
+    root = ROOT if root is None else root
+    doc = root / "docs" / "gates.md"
+    bad: list[str] = []
+    for line in doc.read_text(encoding="utf-8").splitlines() if doc.is_file() else []:
+        m = _GATE_ROW.match(line)
+        if not m:
+            continue
+        cells = _split_ledger_row(line)
+        text = gate_script_text(root, f"scripts/{m.group(1)}")
+        for tok in _DOC_TICK.findall(cells[-1]):
+            if _GATE_PATH_TOKEN.fullmatch(tok) or tok.startswith(("ci:", "docs/", "crates/")):
+                continue
+            if tok not in text:
+                bad.append(f"{m.group(1)}: `{tok}`")
+    return bad
+
+
+def check_gate_doc_tokens(root: pathlib.Path | None = None, *, allow: int | None = None) -> None:
+    """Every backticked token of a docs/gates.md asserts cell is in its gate or a helper it sources or runs
+    (pinned at GATE_DOC_TOKEN_ALLOW)."""
+    allow = GATE_DOC_TOKEN_ALLOW if allow is None else allow
+    bad = gate_doc_token_misses(root)
+    if len(bad) != allow:
+        _die(f"docs/gates.md: {len(bad)} asserts token(s) in no script, allow {allow}: " + "; ".join(bad[:8]))
+
+
+# Docs cite a gate's cell by its section tag, not by a script line number: line numbers move whenever a script
+# does. A script cite is `scripts/<path>.(sh|py|c):N[-M][,N-M…]`, the same with a bare name that is a file under
+# scripts/ (lib/, oracle/, ci_policy/ included), or a bare `:N[-M]` after such a line cite in the same table
+# cell or prose line (after a bare script path it is a port or a time, not a cite). A `file.c:N` MIT source cite and its `:N` continuations are the anchor checks' class and are not counted,
+# nor is `t_vfy_increds.c:N` without its scripts/ prefix (the oracle shares an MIT test's name). The unit is
+# cites. A section cite is a backticked `==== <text> ====` after a script path in the same cell or line; it must
+# occur in that script.
+SCRIPT_LINE_CITE_ALLOW = 43
+_CITE_FILE = re.compile(
+    r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:sh|py|c|h|rs|md|toml|yml|yaml|conf|env))"
+    r"(:[0-9]+(?:-[0-9]+)?(?:,\s?[0-9]+(?:-[0-9]+)?)*)?"
+)
+_CITE_CONT = re.compile(r"(?<![\w.)\]])(:[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)(?![\w:])")
+_CITE_SECTION = re.compile(r"`(==== .+? ====)`")
+_BARE_MIT_NAMES = frozenset({"t_vfy_increds.c"})
+
+
+def _cite_scan_files(root: pathlib.Path) -> list[pathlib.Path]:
+    names = [root / "README.md", root / "CONTRIBUTING.md", root / "scripts" / "README.md"]
+    docs_dir = root / "docs"
+    return [p for p in names if p.is_file()] + (sorted(docs_dir.rglob("*.md")) if docs_dir.is_dir() else [])
+
+
+def script_cite_findings(root: pathlib.Path | None = None) -> tuple[list[str], list[str]]:
+    """(script line cites, unresolved section cites), each as `doc:line: text`."""
+    root = ROOT if root is None else root
+    scripts = root / "scripts"
+    by_name: dict[str, pathlib.Path] = {}
+    for p in sorted(scripts.rglob("*")) if scripts.is_dir() else []:
+        if p.suffix in (".sh", ".py", ".c") and p.is_file() and "__pycache__" not in p.parts:
+            by_name.setdefault(p.name, p)
+    cites: list[str] = []
+    unresolved: list[str] = []
+    for doc in _cite_scan_files(root):
+        rel = doc.relative_to(root)
+        fence: str | None = None
+        for i, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), 1):
+            m = _MD_FENCE.match(line)
+            if m:
+                fence = m.group(2) if fence is None else (None if m.group(2) == fence else fence)
+                continue
+            if fence is not None:
+                continue
+            for cell in line.split("|") if line.lstrip().startswith("|") else [line]:
+                events = [(m.start(), "file", m) for m in _CITE_FILE.finditer(cell)]
+                events += [(m.start(), "cont", m) for m in _CITE_CONT.finditer(cell)]
+                events += [(m.start(), "section", m) for m in _CITE_SECTION.finditer(cell)]
+                current: pathlib.Path | None = None
+                in_script = False  # after a script cite with a line number: a bare `:N` continues it
+                for _pos, kind, m in sorted(events, key=lambda e: e[0]):
+                    if kind == "file":
+                        name = m.group(1)
+                        if name.startswith("scripts/"):
+                            current = root / name
+                        elif "/" not in name and name in by_name and name not in _BARE_MIT_NAMES:
+                            current = by_name[name]
+                        else:
+                            current = None
+                        in_script = current is not None and bool(m.group(2))
+                        if in_script:
+                            cites.append(f"{rel}:{i}: {m.group(0)}")
+                    elif kind == "cont":
+                        if in_script and not cell[: m.start()].endswith(tuple("0123456789")):
+                            cites.append(f"{rel}:{i}: {m.group(1)}")
+                    elif current is not None:
+                        text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
+                        if m.group(1) not in text:
+                            unresolved.append(f"{rel}:{i}: {m.group(1)} not in {current.relative_to(root)}")
+    return cites, unresolved
+
+
+def check_no_script_line_cites(root: pathlib.Path | None = None, *, allow: int | None = None) -> None:
+    """No script line cites in the docs (pinned at SCRIPT_LINE_CITE_ALLOW cites), and every section cite resolves
+    in the script it names (hard at 0)."""
+    allow = SCRIPT_LINE_CITE_ALLOW if allow is None else allow
+    cites, unresolved = script_cite_findings(root)
+    if unresolved:
+        _die(f"{len(unresolved)} section cite(s) that do not resolve: " + "; ".join(unresolved[:8]))
+    if len(cites) != allow:
+        _die(f"{len(cites)} script line cite(s) in the docs, allow {allow}: " + "; ".join(cites[:8]))
+
+
 # S5 doc checks: advisory at the live count until the commit that clears each.
 CHANGELOG_HEADINGS_ALLOW = 0
 DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
+GATE_DOC_TOKEN_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
 # The CHANGELOG's size (235,552 bytes when it was set) plus 9,000 bytes for the next 25 bullets at 360
 # bytes (the median bullet is 341); re-based only by a tool: commit ahead of the bullets it allows.
@@ -318,6 +447,20 @@ def check_testing_doc_budgets(
     harness = str(budget["jobs"].get("harness", ""))
     if harness and harness not in testing_text:
         _die("docs/testing.md must quote the harness budget from ci-budget.toml")
+    for where, name, value in tier_budget_pairs(testing_text):
+        want = budget["run_wall"] if name == "[push].run_wall" else budget["jobs"].get(name)
+        if want is None or int(value) != int(want):
+            _die(f"docs/testing.md {where} says `{name}` {value}, ci-budget.toml says {want}")
+
+
+_TIER_BULLET = re.compile(r"^- \*\*(Tier [12])\*\*(.*?)(?=^- \*\*Tier |^\s*$)", re.M | re.S)
+_TIER_PAIR = re.compile(r"`([\w.\[\]-]+)`\s+\(?([0-9]+)")
+
+
+def tier_budget_pairs(testing_text: str) -> list[tuple[str, str, str]]:
+    """(tier, name, number) for every `` `name` N `` in docs/testing.md's Tier 1 and Tier 2 bullets
+    (`[push].run_wall` (N s) included)."""
+    return [(m.group(1), n, v) for m in _TIER_BULLET.finditer(testing_text) for n, v in _TIER_PAIR.findall(m.group(2))]
 
 
 # A working-plan section named in a tracked doc: `§ Deferred`, or any `§ "…"`. RFC section

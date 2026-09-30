@@ -604,9 +604,16 @@ def check_no_process_history(
 
 
 # Process-history tags in docs/**/*.md prose and table cells: the W1 and review-round names, the Z
-# close-out steps, "item N" and the A′ list. The count is lines with a tag, pinned exactly.
-DOCS_PROCESS_TAG_ALLOW = 58
-_DOCS_PROCESS_TAG = re.compile(r"\bW1-[A-Z]|\bR[0-9]-[A-Z][0-9]+|\bZ[0-9]+(?:\.[0-9]+)?b?\b|\bitem [0-9]+\b|A\u2032-[0-9]")
+# close-out steps, "item N", the A′ list, the swath names (`W3-S1`), the W0 passes (`W0d`), the tracks
+# (`Track A`), the parenthesised phase labels (`(A5)`, `(D2)`), the pass name `C1`, and a bare workstream
+# name (`W3`; a hyphenated one is the W1-/W-S arms'). The arms are disjoint, so each has its own fixture
+# line. The roadmap's milestones are not process history and stay: the stage names G1–G9 and the eras
+# ("Era II", "Era III"), which docs/stages.md defines. The count is lines with a tag, pinned exactly.
+DOCS_PROCESS_TAG_ALLOW = 96
+_DOCS_PROCESS_TAG = re.compile(
+    r"\bW1-[A-Z]|\bR[0-9]-[A-Z][0-9]+|\bZ[0-9]+(?:\.[0-9]+)?b?\b|\bitem [0-9]+\b|A\u2032-[0-9]"
+    r"|\bW[0-3]-S[0-9]+|\bW0[a-f]\b|\bTrack [A-C]\b|\((?:A|D)[0-9]\)|\bC1\b|\bW[0-3]\b(?!-)"
+)
 
 
 def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:

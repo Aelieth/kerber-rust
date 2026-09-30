@@ -148,10 +148,42 @@ def _self_test_evidence() -> None:
 
         cistat.fetch_runs = _done
         cistat.format_run = lambda *_a, **_k: ["run ok"]
+        _stamped = {"started_at": "2026-09-30T13:00:00Z", "completed_at": "2026-09-30T13:00:05Z"}
+        cistat.fetch_jobs = lambda *_a, **_k: [{"name": "j", "steps": [dict(_stamped), dict(_stamped)]}]
         rc = _quiet_save("o/r", "ci", "abc1234", str(out_dir), retries=1)
         saved = out_dir / "ci-abc1234.txt"
         if rc != 0 or not saved.is_file() or "head_sha=" not in saved.read_text():
             _die("ci-status --save must exit 0 with head_sha= for a completed run")
+        # A completed run with a step GitHub has not stamped yet is not complete: retry, never a partial file.
+        saved.unlink()
+        cistat.fetch_jobs = lambda *_a, **_k: [
+            {"name": "j", "steps": [dict(_stamped), {"started_at": _stamped["started_at"], "completed_at": None}]}
+        ]
+        _sleeps: list[float] = []
+        cistat.time.sleep = _sleeps.append
+        sink = io.StringIO()
+        oldout, olderr = sys.stdout, sys.stderr
+        try:
+            sys.stdout = sink
+            sys.stderr = sink
+            rc = cistat.save_run("o/r", "ci", "abc1234", str(out_dir))
+        finally:
+            sys.stdout = oldout
+            sys.stderr = olderr
+            cistat.time.sleep = lambda _s: None
+        if rc != 2 or saved.exists():
+            _die("ci-status --save must exit 2 and write no file while a step is unstamped")
+        if "run 2: 1 steps unstamped; retrying" not in sink.getvalue():
+            _die("ci-status --save must say 'run N: K steps unstamped; retrying'")
+        if sum(_sleeps) < 900 or max(_sleeps) > 60:
+            _die(f"ci-status --save must retry unstamped steps for >= 15 min at a 60 s cap: {sum(_sleeps)} s")
+        # The file is named by workflow: --workflow fuzz writes fuzz-<sha>.txt and leaves ci-<sha>.txt alone.
+        cistat.fetch_jobs = lambda *_a, **_k: [{"name": "j", "steps": [dict(_stamped)]}]
+        rc = _quiet_save("o/r", "fuzz", "abc1234", str(out_dir), retries=1)
+        if rc != 0 or not (out_dir / "fuzz-abc1234.txt").is_file() or saved.exists():
+            _die("ci-status --save --workflow fuzz must write fuzz-<sha>.txt, not ci-<sha>.txt")
+        if cistat.save_name("fuzz.yml", "abc1234def") != "fuzz-abc1234.txt":
+            _die("ci-status save_name must name the file by the workflow's stem")
     finally:
         subprocess.run(["rm", "-rf", str(out_dir)], check=False)
 
