@@ -333,7 +333,8 @@ def check_gate_doc_tokens(root: pathlib.Path | None = None, *, allow: int | None
 # cell or prose line (after a bare script path it is a port or a time, not a cite). A `file.c:N` MIT source cite and its `:N` continuations are the anchor checks' class and are not counted,
 # nor is `t_vfy_increds.c:N` without its scripts/ prefix (the oracle shares an MIT test's name). The unit is
 # cites. A section cite is a backticked `==== <text> ====` after a script path in the same cell or line; it must
-# occur in that script.
+# occur in that script. A function cite is a backticked `name()` right after a script path; that script must
+# define `name()`.
 SCRIPT_LINE_CITE_ALLOW = 43
 _CITE_FILE = re.compile(
     r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:sh|py|c|h|rs|md|toml|yml|yaml|conf|env))"
@@ -341,6 +342,7 @@ _CITE_FILE = re.compile(
 )
 _CITE_CONT = re.compile(r"(?<![\w.)\]])(:[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)(?![\w:])")
 _CITE_SECTION = re.compile(r"`(==== .+? ====)`")
+_CITE_FUNCTION = re.compile(r"`([A-Za-z_][\w]*)\(\)`")
 _BARE_MIT_NAMES = frozenset({"t_vfy_increds.c"})
 
 
@@ -363,14 +365,17 @@ def scripts_by_name(root: pathlib.Path) -> dict[str, pathlib.Path]:
 def line_script_cites(
     root: pathlib.Path, line: str, by_name: dict[str, pathlib.Path]
 ) -> tuple[list[str], list[tuple[str, pathlib.Path, bool]]]:
-    """One doc line's script line cites, and its section cites as (text, script, resolved in that script)."""
+    """One doc line's script line cites, and its section and function cites as (text, script, resolved in that
+    script)."""
     cites: list[str] = []
     sections: list[tuple[str, pathlib.Path, bool]] = []
     for cell in line.split("|") if line.lstrip().startswith("|") else [line]:
         events = [(m.start(), "file", m) for m in _CITE_FILE.finditer(cell)]
         events += [(m.start(), "cont", m) for m in _CITE_CONT.finditer(cell)]
         events += [(m.start(), "section", m) for m in _CITE_SECTION.finditer(cell)]
+        events += [(m.start(), "function", m) for m in _CITE_FUNCTION.finditer(cell)]
         current: pathlib.Path | None = None
+        last_end = -1  # where the last script path ended: a function cite must follow it directly
         in_script = False  # after a script cite with a line number: a bare `:N` continues it
         for _pos, kind, m in sorted(events, key=lambda e: e[0]):
             if kind == "file":
@@ -382,11 +387,18 @@ def line_script_cites(
                 else:
                     current = None
                 in_script = current is not None and bool(m.group(2))
+                last_end = m.end() + 1 if current is not None else -1  # past the closing backtick
                 if in_script:
                     cites.append(m.group(0))
             elif kind == "cont":
                 if in_script and not cell[: m.start()].endswith(tuple("0123456789")):
                     cites.append(m.group(1))
+            elif kind == "function":
+                if current is not None and cell[last_end:m.start()].strip() == "":
+                    text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
+                    name = m.group(1)
+                    ok = re.search(rf"^\s*(?:function\s+)?{re.escape(name)}\s*\(\)", text, re.M) is not None
+                    sections.append((f"{name}()", current, ok))
             elif current is not None:
                 text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
                 sections.append((m.group(1), current, m.group(1) in text))

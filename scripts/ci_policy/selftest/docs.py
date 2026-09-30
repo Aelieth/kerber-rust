@@ -147,6 +147,13 @@ def _self_test_docs() -> None:
         cdoc.write_text("| row | `scripts/a-gate.sh` `==== cell two ====` |\n", encoding="utf-8")
         _must_die_msg("1 section cite(s) that do not resolve: docs/x.md:1: ==== cell two ==== not in scripts/a-gate.sh",
                       check_no_script_line_cites, croot, allow=0)
+        # A function cite right after a script path must name a function that script defines.
+        cdoc.write_text("| row | `scripts/lib/h.sh` `h()` and `scripts/a-gate.sh`, then `kinit()` in Rust |\n",
+                        encoding="utf-8")
+        check_no_script_line_cites(croot, allow=0)
+        cdoc.write_text("| row | `scripts/lib/h.sh` `nosuch()` |\n", encoding="utf-8")
+        _must_die_msg("1 section cite(s) that do not resolve: docs/x.md:1: nosuch() not in scripts/lib/h.sh",
+                      check_no_script_line_cites, croot, allow=0)
         # README.md, CONTRIBUTING.md and scripts/README.md are read too
         cdoc.unlink()
         (croot / "CONTRIBUTING.md").write_text("see `scripts/a-gate.sh:1`\n", encoding="utf-8")
