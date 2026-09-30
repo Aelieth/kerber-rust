@@ -577,6 +577,25 @@ def _self_test_ledger_rekey(root: pathlib.Path) -> int:
     if rc == 0 or "with a changed verdict or proof: docs/parity/a1-tgs.md a.c:1" not in out:
         raise SystemExit(f"hygiene-diff --self-test: a reword that also re-proves must fail: {out[-300:]}")
     n += 1
+    # A listed proof span excuses exactly that substitution in the proof cell, nothing more.
+    respan = commit("| a.c:1 | Rust follows MIT | m | r | e | exact | pa x |\n".replace("pa x", "pq"))
+    spanned = entries("rk-span.txt", f"docs/parity/a1-tgs.md\ta.c:1\tthe W1 sweep aligned = Rust follows MIT\t"
+                                     f"blob={blob}\tproof: pa = pq")
+    rc, out = run(snap(root / "rk-new7", "Rust follows MIT", "exact", respan), spanned)
+    if rc != 0 or "info ledger row reworded (check cell): docs/parity/a1-tgs.md a.c:1" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a reword with its listed proof span must be information: {out[-300:]}")
+    n += 1
+    beyond = commit("| a.c:1 | Rust follows MIT | m | r | e | exact | pq extra |\n")
+    rc, out = run(snap(root / "rk-new8", "Rust follows MIT", "exact", beyond), spanned)
+    if rc == 0 or "with a changed verdict or proof: docs/parity/a1-tgs.md a.c:1" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a proof change beyond the listed span must fail: {out[-300:]}")
+    n += 1
+    nospan = entries("rk-nospan.txt", f"docs/parity/a1-tgs.md\ta.c:1\tthe W1 sweep aligned = Rust follows MIT\t"
+                                      f"blob={blob}\tproof: zz = pq")
+    rc, out = run(snap(root / "rk-new9", "Rust follows MIT", "exact", respan), nospan)
+    if rc == 0 or "proof span not once in the old proof cell: docs/parity/a1-tgs.md a.c:1" not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a proof span that does not occur must fail: {out[-300:]}")
+    n += 1
     stale = entries("rk-stale.txt", f"docs/parity/a1-tgs.md\ta.c:1\tthe W1 sweep aligned = Rust follows MIT\tblob={'0' * 40}")
     rc, out = run(snap(root / "rk-new6", "Rust follows MIT", "exact", reworded), stale)
     if rc == 0 or "FAIL ledger rekey entry not pinned to docs/parity/a1-tgs.md at the old tree" not in out:
@@ -765,20 +784,30 @@ def load_ledger_rows(path: pathlib.Path) -> list[tuple[str, str | None, str, str
     return rows
 
 
-def load_ledger_rekey(path: pathlib.Path | None) -> list[tuple[str, str, str, str, str]]:
-    """`--ledger-rekey`: `path<TAB>cite<TAB>old check = new check<TAB>blob=<git blob of path at the base>` rows as
-    (path, cite, old check, new check, blob)."""
-    out: list[tuple[str, str, str, str, str]] = []
+def load_ledger_rekey(
+    path: pathlib.Path | None,
+) -> list[tuple[str, str, str, str, str, tuple[str, str] | None]]:
+    """`--ledger-rekey`: `path<TAB>cite<TAB>old check = new check<TAB>blob=<git blob of path at the base>`, with an
+    optional fifth column `proof: <old span> = <new span>` naming the one substitution the row's proof cell may
+    carry, as (path, cite, old check, new check, blob, (old span, new span) or None)."""
+    out: list[tuple[str, str, str, str, str, tuple[str, str] | None]] = []
     if path is None:
         return out
     for n, ln in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
         if not ln.strip() or ln.startswith("#"):
             continue
         parts = ln.split("\t")
+        proof = None
+        if len(parts) == 5 and parts[4].startswith("proof: ") and " = " in parts[4]:
+            old_span, new_span = parts[4][len("proof: "):].split(" = ", 1)
+            proof = (old_span, new_span)
+            parts = parts[:4]
         if len(parts) != 4 or " = " not in parts[2] or not re.fullmatch(r"blob=[0-9a-f]{40}", parts[3]):
-            raise SystemExit(f"{path}:{n}: want path<TAB>cite<TAB>old check = new check<TAB>blob=<40 hex>")
+            raise SystemExit(
+                f"{path}:{n}: want path<TAB>cite<TAB>old check = new check<TAB>blob=<40 hex>[<TAB>proof: old = new]"
+            )
         old_check, new_check = parts[2].split(" = ", 1)
-        out.append((parts[0], parts[1], old_check, new_check, parts[3][5:]))
+        out.append((parts[0], parts[1], old_check, new_check, parts[3][5:], proof))
     return out
 
 
@@ -1060,12 +1089,12 @@ def _compare(args) -> int:
     else:
         old_led = {(r[0], r[1]): (r[2], r[3]) for r in old_rows}
         new_led = {(r[0], r[1]): (r[2], r[3]) for r in new_rows}
-    # A listed check-cell reword (--ledger-rekey): the old key gone, the new key present, the verdict and proof
-    # cells unchanged. It counts in neither removed nor added; an entry that matches no such pair is red.
+    # A listed check-cell reword (--ledger-rekey): the old key gone, the new key present, the verdict cell unchanged
+    # and the proof cell unchanged but for the entry's one listed span. It counts in neither removed nor added; an entry that matches no such pair is red.
     git_dir = getattr(args, "old_git", None) or str(pathlib.Path(__file__).resolve().parent.parent)
     old_head = getattr(args, "old_rev", None) or _snapshot_head(old)
     new_head = _snapshot_head(new)
-    for path, cite, old_check, new_check, blob in rekey:
+    for path, cite, old_check, new_check, blob, proof_span in rekey:
         k_old, k_new = (cite, old_check), (cite, new_check)
         what = f"{path} {cite}"
         if not (k_old in old_led and k_old not in new_led and k_new in new_led and k_new not in old_led):
@@ -1082,7 +1111,13 @@ def _compare(args) -> int:
         if old_cells is None or new_cells is None:
             fail(f"ledger rekey row not found in {path} at the old or new tree: {what}")
             continue
-        if old_led[k_old][0] != new_led[k_new][0] or old_cells[6] != new_cells[6]:
+        old_proof = old_cells[6]
+        if proof_span is not None:
+            if old_proof.count(proof_span[0]) != 1:
+                fail(f"ledger rekey proof span not once in the old proof cell: {what}")
+                continue
+            old_proof = old_proof.replace(proof_span[0], proof_span[1])
+        if old_led[k_old][0] != new_led[k_new][0] or old_proof != new_cells[6]:
             fail(f"ledger row reworded (check cell) with a changed verdict or proof: {what}")
             continue
         info(f"ledger row reworded (check cell): {what}")
@@ -1348,7 +1383,8 @@ def main() -> int:
     ap.add_argument(
         "--ledger-rekey",
         type=pathlib.Path,
-        help="path<TAB>cite<TAB>old check = new check<TAB>blob=<git blob of path at the old tree>: a listed check-cell reword",
+        help="path<TAB>cite<TAB>old check = new check<TAB>blob=<git blob of path at the old tree>[<TAB>proof: old = new]: "
+        "a listed check-cell reword",
     )
     args = ap.parse_args()
     if args.old.is_dir() and args.new.is_dir():
