@@ -609,7 +609,7 @@ def check_no_process_history(
 # name (`W3`; a hyphenated one is the W1-/W-S arms'). The arms are disjoint, so each has its own fixture
 # line. The roadmap's milestones are not process history and stay: the stage names G1–G9 and the eras
 # ("Era II", "Era III"), which docs/stages.md defines. The count is lines with a tag, pinned exactly.
-DOCS_PROCESS_TAG_ALLOW = 96
+DOCS_PROCESS_TAG_ALLOW = 39
 _DOCS_PROCESS_TAG = re.compile(
     r"\bW1-[A-Z]|\bR[0-9]-[A-Z][0-9]+|\bZ[0-9]+(?:\.[0-9]+)?b?\b|\bitem [0-9]+\b|A\u2032-[0-9]"
     r"|\bW[0-3]-S[0-9]+|\bW0[a-f]\b|\bTrack [A-C]\b|\((?:A|D)[0-9]\)|\bC1\b|\bW[0-3]\b(?!-)"
