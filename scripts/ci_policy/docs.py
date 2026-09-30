@@ -335,7 +335,7 @@ def check_gate_doc_tokens(root: pathlib.Path | None = None, *, allow: int | None
 # cites. A section cite is a backticked `==== <text> ====` after a script path in the same cell or line; it must
 # occur in that script. A function cite is a backticked `name()` right after a script path; that script must
 # define `name()`.
-SCRIPT_LINE_CITE_ALLOW = 43
+SCRIPT_LINE_CITE_ALLOW = 0
 _CITE_FILE = re.compile(
     r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:sh|py|c|h|rs|md|toml|yml|yaml|conf|env))"
     r"(:[0-9]+(?:-[0-9]+)?(?:,\s?[0-9]+(?:-[0-9]+)?)*)?"
