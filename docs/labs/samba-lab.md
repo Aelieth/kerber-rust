@@ -18,8 +18,9 @@ passwords are test fixtures, not real secrets.
 > domain SID, so `kbruser`'s SID will **not** match the captured Windows
 > `pac-kbruser.ndr` (which carries the real Windows domain SID). This is expected
 > and is reconciled in the PAC-verify and cross-realm gates — either pin Samba's domain SID at provision time or
-> regenerate a Samba-sourced PAC fixture. The PAC-verify gate does not depend on SID
-> equality; it depends on Samba **verifying a Rust-issued PAC's signatures**.
+> regenerate a Samba-sourced PAC fixture. The PAC-verify gate (L1) decodes a Rust-issued PAC
+> with Samba's IDL and refuses a dummy SID; the L2 gate recomputes its four checksums (6, 7, 16,
+> 19) with Samba's kcrypto. Neither depends on SID equality with the Windows fixture.
 >
 > *(Domain SID is baked at image build. First image
 > `S-1-5-21-891046300-…`; last-pass recapture `S-1-5-21-1813809682-…`,

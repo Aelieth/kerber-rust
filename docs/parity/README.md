@@ -113,101 +113,91 @@ row inserts (the plan's "27" counted the split inside the A2 9).
 The close-out added the eight `deferred` A4 rows for the kadm5 folds
 that had no owner.
 
-## Ranked fix batches (security > parity > e_text)
+## Check families (security > parity > e_text)
 
-Corrected by the verification reports. Each batch ≤ 6 commits. One MIT
-check family per commit. The plan numbered the batches F1–F9 in the order
-below (ledger cells cite them by that number). The rows they targeted
-carry their grades in the section files; each batch's text below is the
-plan as it was written, not the current state.
+The rows are grouped in nine check families, in the order below, security first. Each family's paragraph says
+what its rows cover; the grades are in the section files, and a cell that names a family uses its title.
 
 ### 1. FAST armor / AD-FX-ARMOR / cookie (security)
 
-1. `kdc: Refuse FAST armor without an authenticator subkey like armor_ap_request` —
+1. FAST armor without an authenticator subkey is refused like `armor_ap_request` —
    **landed.** AS explicit armor (`fast_util.c:70-76`) and TGS
    explicit armor without a PA-TGS-REQ subkey (`:157-166`): 12, e_text
    `FIND_FAST`, detail `ap-request armor without subkey`. TGS explicit armor
    with a PA-TGS-REQ subkey stays 24. MIT clients always send a subkey.
-2. `kdc: Refuse a header ticket or authenticator carrying AD-FX-ARMOR like kdc_process_tgs_req` —
+2. A header ticket or authenticator carrying AD-FX-ARMOR is refused like `kdc_process_tgs_req` —
    **landed.** `kdc_util.c:217-229` → 12 `PROCESS_TGS` (detail
    `ticket valid only as FAST armor`). Recurses into IF-RELEVANT only
    (`authdata_dec.c:115-181`). Nothing in 1.22.2 emits 71.
-3. `kdc: Bind PA-FX-COOKIE to the client and expire it at 600 seconds like kdc_fast_make_cookie` —
+3. PA-FX-COOKIE is bound to the client and expires at 600 seconds like `kdc_fast_make_cookie` —
    **landed.** `MIT1` ‖ kvno ‖ enc(prf+(local TGT key, `COOKIE` ‖
    unparsed client), ku 513); non-`MIT1` ignored (`:588-590,:610`). The ku-54 /
    ENC_CHALLENGE_CLIENT collision is a naming collision with no shared key.
 
-TGS reply-key strengthen is **parity** (F7): the MIT client copies
+TGS reply-key strengthen belongs to the RFC 6806 family (7): the MIT client copies
 `existing_key` when `strengthen_key` is NULL.
 
 ### 2. S4U / header PAC integrity (security)
 
-Prerequisite: `kdc: Compute is_crossrealm from the header server entry
-like do_tgs_req` (`do_tgs_req.c:686`). Then `S4U2SELF_NO_PAC` 20,
-`S4U2PROXY_NO_HEADER_PAC` 20, `HEADER_PAC` 13, PAC client match,
+`is_crossrealm` from the header server entry like `do_tgs_req` (`do_tgs_req.c:686`); `S4U2SELF_NO_PAC` 20,
+`S4U2PROXY_NO_HEADER_PAC` 20, `HEADER_PAC` 13, the PAC client match,
 `S4U2PROXY_LOCAL_STKT_PAC` 13, U2U `2ND_TKT_PAC`, `PA-PAC-REQUEST`
-include_pac=false, `disable_pac`/anonymous no-PAC. S4U2Self pw-expiry
-exemption is stricter — document or match.
+include_pac=false, `disable_pac` / anonymous no-PAC, and the S4U2Self
+password-expiry handling.
 
 ### 3. Second ticket (security / parity)
 
 `2ND_TKT_NOT_TGS` 12, `2ND_TKT_MISMATCH` 26, `INVALID_S4U2PROXY_OPTIONS` 13,
 TGS-target `NOT_ALLOWED_TO_DELEGATE` 12, `CAN'T PROXY TGT` 13,
-`BAD_ETYPE_IN_2ND_TKT` 14, RBCD/xrealm PAC, `INVALID_S4U2SELF_CHECKSUM` 41
-not 50. Demoted to e_text (F9): `NO_2ND_TKT`, `EVIDENCE_TKT_NOT_FORWARDABLE`
-(both already refuse with 13).
+`BAD_ETYPE_IN_2ND_TKT` 14, RBCD/xrealm PAC, `INVALID_S4U2SELF_CHECKSUM` 41,
+not 50. `NO_2ND_TKT` and `EVIDENCE_TKT_NOT_FORWARDABLE` refuse with 13.
 
 ### 4. AS request validation (security)
 
-`INVALID AS OPTIONS` 13 (`kdc_util.c:727-729`) and drop the AS
-`DISALLOW_SVR` ENC_TKT_IN_SKEY exemption (`:789-793`) in the **same
-commit**. Validate `msg-type` (60 `VALIDATE_MESSAGE_TYPE`) and `pvno`
-(MIT drops). Failcount lockout last. `ANONYMOUS NOT ALLOWED` /
-`restrict_anon` (`kdc_util.c:700-712`; TGS `tgs_policy.c:763`) vs
-unsupported 13 is parity + a security.md row, not a hole.
-`NEEDED_HW_PREAUTH` 25 (`do_as_req.c:455-457`; hw_only hint list).
-Admin unlock: `last_admin_unlock >= last_failed` (`lockout.c:102-104`).
+`INVALID AS OPTIONS` 13 (`kdc_util.c:727-729`), with no AS `DISALLOW_SVR`
+ENC_TKT_IN_SKEY exemption (`:789-793`); `msg-type` (60 `VALIDATE_MESSAGE_TYPE`)
+and `pvno` (MIT drops); the failcount lockout checked last; `ANONYMOUS NOT
+ALLOWED` / `restrict_anon` (`kdc_util.c:700-712`; TGS `tgs_policy.c:763`);
+`NEEDED_HW_PREAUTH` 25 (`do_as_req.c:455-457`; the hw_only hint list); the
+admin unlock `last_admin_unlock >= last_failed` (`lockout.c:102-104`).
 
 ### 5. TGS options and ticket flags (security / parity)
 
-Implement `get_ticket_flags` (`kdc_util.c:813`). `TGT NOT
-FORWARDABLE/PROXIABLE/POSTDATABLE` 13. Ticket addresses.
-`check_tgs_nontgt` 26 + `check_tgs_tgt` after decrypt and only when
-`NON_TGT_OPTION` is clear. `NOT_YET_VALID` without skew.
+`get_ticket_flags` (`kdc_util.c:813`); a TGT not forwardable, proxiable or
+postdatable is 13; `check_tgs_nontgt` 26 and `check_tgs_tgt` after decrypt,
+only when `NON_TGT_OPTION` is clear; `NOT_YET_VALID` without skew;
 `NON-POSTDATABLE` only on `ALLOW_POSTDATE`. The lookaside reply cache is
-now implemented (`lookaside.rs`), so an identical retransmit is answered
-from the cache on both UDP and TCP.
+implemented (`lookaside.rs`): an identical retransmit is answered from the
+cache on both UDP and TCP.
 
 ### 6. CAMMAC + HANDLE_AUTHDATA (security, latent)
 
-`cammac_create`/`cammac_check_kdcver` (ku 64) after copy, inside
-`handle_pac` / `mint_ticket`. `require_auth` → `HIGHER_AUTHENTICATION_REQUIRED`
-12. `GET_AUTH_INDICATORS`. `AD-MANDATORY-FOR-KDC` → 12.
+`cammac_create` / `cammac_check_kdcver` (ku 64) after the authdata copy, inside
+`handle_pac` / `mint_ticket`; `require_auth` → `HIGHER_AUTHENTICATION_REQUIRED`
+12; `GET_AUTH_INDICATORS`; `AD-MANDATORY-FOR-KDC` → 12.
 
 ### 7. RFC 6806 negotiation, FAST reply parity (parity)
 
 149 checksum (ku 56) + empty 136 in `enc_padata` + `TKT_FLG_ENC_PA_REP`,
-gated on request 149 — flag without 149 hard-fails MIT kinit. TGS
-`strengthen_key`. PA-FX-COOKIE on every e_data-bearing AS error
-(**after F1 cookie**). FAST error inner-padata order. Hint-list order
-`[136,(11),19,modules]`. ETYPE-INFO2 only when the reply key was not
-replaced.
+gated on a request 149 (the flag without 149 hard-fails MIT kinit); TGS
+`strengthen_key`; PA-FX-COOKIE on every e_data-bearing AS error; the FAST
+error inner-padata order; the hint-list order `[136,(11),19,modules]`;
+ETYPE-INFO2 only when the reply key was not replaced.
 
 ### 8. Gather order and lookups (parity)
 
 AS lockout last; TGS `GET_LOCAL_TGT` before times; `HEADER_PAC` before
 `search_sprinc`. TCP `FIELD_TOOLONG` 61 above UDP `RESPONSE_TOO_BIG` 52
 (52 is dead at MIT's default 65536). `no PA-TGS-REQ` 16. `last_req` /
-`key_expiration`. `starttime == authtime` omission. CANONICALIZE
+`key_expiration`. The `starttime == authtime` omission. The CANONICALIZE
 canonical sname. `CANTLOCK_DB` 29 (exact by pass-through on the AS and TGS
 lookups; no lockable KDB in tree — the unit fakes the backend).
 `select_session_keytype`.
 
-### 9. e_text and the differential unmask (parity, last)
+### 9. e_text and the differential compare (parity)
 
-Token renames (`locked` → `CLIENT LOCKED OUT`, …). Then
-`compare_krb_error` compares `e_text` on every `diffsend` case.
-Whitelist names the documented stricter rows.
+MIT's e_text tokens (`locked` is `CLIENT LOCKED OUT`, …); `compare_krb_error`
+compares `e_text` on every `diffsend` case.
 
 ## Not this ledger
 

@@ -2527,7 +2527,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **tool.** `red-at-sha.sh` overlays HEAD's `scripts/lib/`, `scripts/oracle/` and `scripts/ci_policy/` whole, so
   a gate run at an older base no longer fails on a missing oracle or package; `py-move-check.py` proves a file
   split into sibling modules; every file a hygiene snapshot writes has an INDEX row.
-- **docs.** `docs/` carries no process tag of the fourteen forms the tag rule judges (hard at 0): the
+- **docs.** Outside code fences and quoted gate-section text, `docs/` carries no process tag of the fourteen
+  forms the tag rule judges (hard at 0): the
   ledger cells and the prose say what a pass or step did (the stale "W3 promotions" oracle tags go; a row
   whose check or cite loses a tag is a listed re-key); the roadmap's stage and era names and the ledger's
   section keys stay. Gate cells are cited by section, never by script
