@@ -610,6 +610,34 @@ def _self_test_ledger_rekey(root: pathlib.Path) -> int:
     if rc != 0 or "info ledger row reworded (check cell): docs/parity/a1-tgs.md a.c:1" not in buf.getvalue():
         raise SystemExit(f"hygiene-diff --self-test: a check cell holding ' = ' must re-key: {buf.getvalue()[-300:]}")
     n += 1
+    # The cite field may re-key the cite as well: with its entry the row is reworded; without it, removed.
+    ct_base = commit("| a.c:1 (step E3) | same check | m | r | e | exact | pa |\n")
+    ct_new = commit("| a.c:1 | same check | m | r | e | exact | pa |\n")
+    ct_blob = subprocess.run(["git", "rev-parse", f"{ct_base}:docs/parity/a1-tgs.md"], cwd=repo, capture_output=True,
+                             text=True, check=True).stdout.strip()
+
+    def ct_snap(d: pathlib.Path, cite: str, sha: str) -> pathlib.Path:
+        _write_snap(d, ["a.sh\techo\tkeep"])
+        (d / "ledger-rows.txt").write_text(
+            f"#\n{cite}\tsame check\texact\tdocs/parity/a1-tgs.md\nb.c:2\tcheck b\texact\tdocs/parity/a1-tgs.md\n",
+            encoding="utf-8")
+        (d / "provenance.txt").write_text(f"==== provenance ====\nhead_sha={sha}\n", encoding="utf-8")
+        return d
+
+    ct_old = ct_snap(root / "rk-old11", "a.c:1 (step E3)", ct_base)
+    for label, rk, want_rc, needle in (
+        ("with its entry", entries("rk-ct.txt", f"docs/parity/a1-tgs.md\ta.c:1 (step E3) = a.c:1\t"
+                                                f"same check = same check\tblob={ct_blob}"),
+         0, "info ledger row reworded (check cell): docs/parity/a1-tgs.md a.c:1"),
+        ("without an entry", None, 1, "FAIL ledger row removed: a.c:1 (step E3)\tsame check"),
+    ):
+        buf = io.StringIO()
+        with redirect_stdout(buf):
+            rc = main_compare(ct_old, ct_snap(root / f"rk-new11-{want_rc}", "a.c:1", ct_new), old_git=str(repo),
+                              ledger_rekey=rk)
+        if (rc == 0) != (want_rc == 0) or needle not in buf.getvalue():
+            raise SystemExit(f"hygiene-diff --self-test: a cite re-key {label}: {buf.getvalue()[-300:]}")
+        n += 1
     stale = entries("rk-stale.txt", f"docs/parity/a1-tgs.md\ta.c:1\tthe W1 sweep aligned = Rust follows MIT\tblob={'0' * 40}")
     rc, out = run(snap(root / "rk-new6", "Rust follows MIT", "exact", reworded), stale)
     if rc == 0 or "FAIL ledger rekey entry not pinned to docs/parity/a1-tgs.md at the old tree" not in out:
@@ -803,8 +831,9 @@ def load_ledger_rekey(
 ) -> list[tuple[str, str, str, str, tuple[str, str] | None]]:
     """`--ledger-rekey`: `path<TAB>cite<TAB>old check = new check<TAB>blob=<git blob of path at the base>`, with an
     optional fifth column `proof: <old span> = <new span>` naming the one substitution the row's proof cell may
-    carry, as (path, cite, the `old check = new check` text, blob, (old span, new span) or None). A check cell can
-    itself hold " = ", so the text is split where the keys match, at compare time (`_rekey_splits`)."""
+    carry, as (path, cite, the `old check = new check` text, blob, (old span, new span) or None). The cite field may
+    be `old cite = new cite` to re-key the cite too. A cell can itself hold " = ", so both texts are split where
+    the keys match, at compare time (`_rekey_splits`)."""
     out: list[tuple[str, str, str, str, tuple[str, str] | None]] = []
     if path is None:
         return out
@@ -1113,11 +1142,12 @@ def _compare(args) -> int:
     git_dir = getattr(args, "old_git", None) or str(pathlib.Path(__file__).resolve().parent.parent)
     old_head = getattr(args, "old_rev", None) or _snapshot_head(old)
     new_head = _snapshot_head(new)
-    for path, cite, pair, blob, proof_span in rekey:
-        what = f"{path} {cite}"
+    for path, cite_field, pair, blob, proof_span in rekey:
+        what = f"{path} {cite_field}"
+        cites = _rekey_splits(cite_field) + [(cite_field, cite_field)]
         splits = [
-            (o, n) for o, n in _rekey_splits(pair)
-            if (cite, o) in old_led and (cite, o) not in new_led and (cite, n) in new_led and (cite, n) not in old_led
+            (oc, o, nc, n) for oc, nc in cites for o, n in _rekey_splits(pair)
+            if (oc, o) in old_led and (oc, o) not in new_led and (nc, n) in new_led and (nc, n) not in old_led
         ]
         if len(splits) > 1:
             fail(f"ledger rekey entry ambiguous (" + str(len(splits)) + f" ways to split it): {what}")
@@ -1125,16 +1155,17 @@ def _compare(args) -> int:
         if not splits:
             fail(f"ledger rekey entry unused: {what}")
             continue
-        old_check, new_check = splits[0]
-        k_old, k_new = (cite, old_check), (cite, new_check)
+        old_cite, old_check, new_cite, new_check = splits[0]
+        what = f"{path} {new_cite}"
+        k_old, k_new = (old_cite, old_check), (new_cite, new_check)
         pinned = _git_out(git_dir, "rev-parse", f"{old_head}:{path}") if old_head else None
         if pinned is None or pinned.strip() != blob:
             fail(f"ledger rekey entry not pinned to {path} at the old tree: {what}")
             continue
         old_doc = _git_out(git_dir, "cat-file", "blob", blob)
         new_doc = _git_out(git_dir, "show", f"{new_head}:{path}") if new_head else None
-        old_cells = _ledger_row_cells(old_doc or "", cite, old_check)
-        new_cells = _ledger_row_cells(new_doc or "", cite, new_check)
+        old_cells = _ledger_row_cells(old_doc or "", old_cite, old_check)
+        new_cells = _ledger_row_cells(new_doc or "", new_cite, new_check)
         if old_cells is None or new_cells is None:
             fail(f"ledger rekey row not found in {path} at the old or new tree: {what}")
             continue

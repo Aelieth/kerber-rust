@@ -25,7 +25,7 @@ def _self_test_hygiene() -> None:
         "def _self_test_duplicates():\n    pass\n"
         "def _self_test():\n    pass\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (54 cases)')\n"
+        "        print('hygiene-diff: self-test ok (56 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n"
     )
@@ -48,7 +48,7 @@ def _self_test_hygiene() -> None:
         '    """merged: load_duplicates_map load_renames_map _self_test_duplicates"""\n'
         "    return None\n"
         "def main() -> int:\n    if argv[1] == '--self-test':\n        _self_test()\n"
-        "        print('hygiene-diff: self-test ok (54 cases)')\n"
+        "        print('hygiene-diff: self-test ok (56 cases)')\n"
         "        return 0\n    with redirect_stdout(sys.stderr):\n        _self_test()\n"
         "    return _compare()\n",
     )
