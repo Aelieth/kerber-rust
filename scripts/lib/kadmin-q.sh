@@ -2,8 +2,9 @@
 # The gates' kadmin query paths. Sourced after gate-common.sh. kadmin_q / kadmin_q_as / kinit_try run MIT
 # clients through the gate's client config inside $NAME: a gate sets KADMIN_Q_CONF (and GATE_CLIENT_CONF for
 # kinit_try) to its config's path in the container. Every other query a gate or a scripts/lib file runs goes
-# through a runner below (the keyed container sites of ci_policy/kadmin_q.py aside), and a query whose output the
-# cell does not check itself through kadmin_q_ok.
+# through a runner below (the keyed container sites of ci_policy/kadmin_q.py aside). A query whose output the cell
+# does not check itself goes through kadmin_q_ok, unless kadmin_q_try marks it best-effort (a cleanup, or a setup
+# that may already have run on a shared container), which runs it with no success check.
 # shellcheck shell=bash
 
 # kadmin_q QUERY: MIT kadmin as admin@KERBER.TEST; output and errors on stdout, never a failing rc.

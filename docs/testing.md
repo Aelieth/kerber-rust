@@ -310,11 +310,12 @@ C programs the gates build in their containers are in `scripts/oracle/` (the clo
 `scripts/lib/kadmin-q.sh`, but for the keyed container sites below: the runners `mit_kadmin_local` / `mit_kadmin` / `rust_kadmin_local` take the
 `docker exec` options and the container before `--` and the kadmin arguments after, and pass streams and exit
 status through. MIT's kadmin exits 0 on a refused query, so a query whose output the cell does not check
-itself goes through `kadmin_q_ok`, which requires the verb's success line naming the principal. For a verb that prints nothing on
+itself goes through `kadmin_q_ok` (unless it is best-effort, below), which requires the verb's success line naming the principal. For a verb that prints nothing on
 success (the policy verbs; `modprinc` / `setstr` / `ktadd` on the Rust `krb5-kadmin-local`) it reads the
 effect back with read-only follow-ups derived from the query; `--then QUERY ERE` adds one by hand for what the
 query does not say, and `--next-asserts` skips the derived read-back where the cell's very next command reads
-the same object back and asserts every field. `kadmin_q_try` marks a best-effort cleanup. Two kinds of query
+the same object back and asserts every field. `kadmin_q_try` marks a best-effort query (a cleanup, or a setup
+that may already have run on a shared container): it runs with no success check and never fails the gate. Two kinds of query
 cannot reach a host helper, because they run inside a container script between in-container steps, and
 ci-policy keys them by gate and section: capaths-transit's heredoc `kad` (a `kadmin.local -r` per realm with
 that realm's profile, in one container shell; it asserts MIT's success line itself) and the kadmin-local
@@ -346,8 +347,8 @@ path that does not exist. `CHANGELOG.md` is excluded (history: a
 retired path in an old entry is not a live cite).
 
 `scripts/ci-policy.py` is a shim over the `scripts/ci_policy/` package:
-one module per domain (`workflows`, `shell`, `gates`, `ledger`, `docs`,
-`evidence`, `hygiene`, `comments`; the shared paths in `common`, `main()` in
+one module per domain (`workflows`, `shell`, `kadmin_q`, `gates`, `ledger`,
+`docs`, `evidence`, `hygiene`, `comments`; the shared paths in `common`, `main()` in
 `__init__`) and the self-test one file per domain under `selftest/`. The
 shim re-exports the names `kdb-dump-gate.sh` and `hygiene_inventory.py`
 read, and `check_policy_module_attrs` loads it from `/` the way they do.

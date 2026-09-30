@@ -2510,7 +2510,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 - **scripts.** Every kadmin query a gate or a `scripts/lib` helper runs goes through `scripts/lib/kadmin-q.sh`,
   but for three keyed container sites; a query whose output the cell does not check must print MIT's success
-  line or show its effect on read-back. That found two setup queries MIT had always refused (a bad `-pwexpire`
+  line or show its effect on read-back, unless `kadmin_q_try` marks it best-effort (26 cleanups and setups that
+  may already have run on a shared container, with no success check). That found two setup queries MIT had always refused (a bad `-pwexpire`
   date, the flag `+allow_postdate`): one is fixed, the other deleted as setup nothing read.
 - **scripts.** The gates' duplicated shell helpers live once in `scripts/lib/` (kadmin, kpasswd, `/proc`,
   kadmin query paths); the C oracles move to `scripts/oracle/`; dead functions are gone and `harness/prod`
