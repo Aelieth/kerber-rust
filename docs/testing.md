@@ -53,7 +53,12 @@ cite alone, the verdicts under each cite as a multiset, so a cite the
 ledger holds twice stays two rows. A regrade is a change of grade, the verdict cell's first
 word (the tally's counting rule), and fails; a change confined to the
 parenthetical qualifier is listed as `ledger verdict qualifiers
-reworded`. A swath that renames or de-duplicates tests passes its
+reworded`. A reworded check cell is a re-key, listed with `--ledger-rekey
+FILE` (`path<TAB>cite<TAB>old check = new check<TAB>blob=<the doc at the
+old tree>`, and optionally `<TAB>proof: <old span> = <new span>` for one
+excused span of the proof cell): with the verdict and proof cells
+unchanged it reads `ledger row reworded (check cell)`; unlisted it stays
+removed and added, and an unused entry fails. A swath that renames or de-duplicates tests passes its
 map (`--renames`, `--duplicates`). `--duplicates` and `--renames` are
 keyed `old_binary<TAB>old_name` to `new_binary<TAB>new_name`; a RHS
 that is also a LHS is rejected, and many-to-one needs `merged:` on the
@@ -129,7 +134,16 @@ under `crates/` (block comments included): `R<n>`, `A′-<n>`, `W<n><a-f>`,
 `B<n>` / `F<n>`, "the parent `…`", and a `working/` path. A tag inside a
 string literal is not a comment. `PROCESS_TAG_ALLOW` is 0, so the
 check is hard. Rule names (`R1`–`R4`) live in `docs/`, never in
-`crates/`.
+`crates/`. `check_no_docs_process_tags` counts the `docs/**` lines, outside
+code fences, that carry a process tag: `R<n>-<letter><n>`, `W1-<letter>`,
+`Z<n>.<n>`, `item <n>`, `A′-<n>`, a swath `W<n>-S<n>`, a pass `W<n><a-f>`,
+`Track <A-C>`, a phase label `(A<n>)` / `(D<n>)`, the pass name `C<n>`, and
+a bare workstream `W<n>` (one arm each, disjoint, one fixture line per
+arm). The roadmap's stage and era names (G1–G9, Era I–III, which
+`stages.md` defines) are the documented exception. A backticked
+`==== … ====` section cite that resolves in its script is the script's
+text and is skipped until the sections that carry a tag are renamed.
+`DOCS_PROCESS_TAG_ALLOW` is 0, so the check is hard.
 
 `python3 scripts/hygiene-fn-diff.py --old SHA --new SHA [--moves]
 [--accept] [--params] [--split] [--glue] [--roots]` is the product-fn sibling:
@@ -455,9 +469,11 @@ kadmind `CREATE_ALIAS` ACL codes (`crates/krb5-admin/tests/kadm5_alias.rs`,
 dump line (`crates/krb5-kdc/tests/kdb_alias.rs`, §A–§C) are MIT 1.22.2's
 output, captured by hand before `settle.sh` existed; the capture is kept
 outside the repository.
-`scripts/ci-status.py --save SHA [--out DIR]` writes `ci-<sha>.txt` only
-from a **completed**, non-rate-limited run (retries with backoff; exit 2
-otherwise) and drops `title=fixture` / `probe-gate.sh` annotations from
+`scripts/ci-status.py --save SHA [--out DIR]` writes `<workflow>-<sha>.txt`
+(`ci-<sha>.txt`, `fuzz-<sha>.txt`) only from a **completed**,
+non-rate-limited run whose every step GitHub has stamped (it stamps steps
+minutes after the run completes; retries with backoff capped at 60 s for
+at least 15 minutes, then exit 2 with no file) and drops `title=fixture` / `probe-gate.sh` annotations from
 `scripts/gate-err-trap-selftest.sh`. `scripts/evidence-check.py <dir>
 --commits SHA…` flags every `.log`/`.txt` that is unstamped, whose
 `head_sha` is not a landed commit of the section, or whose `dirty=yes`
@@ -548,7 +564,15 @@ re-bases it, never the commit that adds them). `check_gate_documented` holds `do
 to one row per `scripts/*-gate.sh`, with the workflow and lane columns
 equal to the gates' placements in `.github/workflows` (`fail-red`,
 `skip2`, `soft`, `nightly`; `stub` or `wrapper` for the documented
-stubs), a known oracle, and a non-empty assertion. A check that the tree
+stubs), a known oracle, and a non-empty assertion; `check_gate_doc_tokens`
+requires every backticked token of an asserts cell in its gate or a
+`scripts/lib`, `scripts/oracle` or `harness/` file the gate names.
+`check_no_script_line_cites` keeps line numbers out of script cites: a
+doc cites a gate cell by the script path and the cell's `==== … ====`
+echo text, or a function by `name()` right after the path, and each must
+resolve in that script; a `scripts/…:N` cite, a bare script name with
+`:N`, or a `:N` after one is red. `check_testing_doc_budgets` holds every
+`name` N pair of the Tier 1 and Tier 2 bullets to `ci-budget.toml`. A check that the tree
 does not meet yet is advisory at the live count and goes hard with the
 commit that clears it.
 

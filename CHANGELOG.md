@@ -2527,6 +2527,17 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **tool.** `red-at-sha.sh` overlays HEAD's `scripts/lib/`, `scripts/oracle/` and `scripts/ci_policy/` whole, so
   a gate run at an older base no longer fails on a missing oracle or package; `py-move-check.py` proves a file
   split into sibling modules; every file a hygiene snapshot writes has an INDEX row.
+- **docs.** No process tag is left in `docs/`: the ledger cells and the prose say what a pass or step did
+  (the stale "W3 promotions" oracle tags go; a check cell's reword is a listed re-key), and the tag rule
+  is hard at 0; the roadmap's stage and era names stay. Gate cells are cited by section, never by script
+  line number (43 cites converted, the rule hard at 0), and every gates.md asserts token is in its gate.
+- **docs.** Statements the audits found untrue now match the scripts and MIT: the renew-gate realm cap
+  (7 d), both preauth replay paths (MIT verifies a replay again), ten gates' gates.md rows or notes, and MIT
+  cites for seven parity-decision rows.
+- **tool.** `hygiene-diff.py --ledger-rekey` accepts a listed check-cell reword whose verdict and proof are
+  unchanged; `ci-status.py --save` names the file by workflow and waits until GitHub has stamped every step.
+- **ci.** The `shellcheck` budget is 150 s and `harness-2`'s 330 s (every sourced lib is re-parsed per gate;
+  `policy-gate` moved in); testing.md's tier numbers must equal `ci-budget.toml`.
 - **test.** Tests that bind a UDP and a TCP socket on one port retry the pair on `AddrInUse`
   (`krb5_testkit::loopback_udp_tcp`), and no test writes under the host's temp directory
   (`krb5_testkit::scratch_dir`).
