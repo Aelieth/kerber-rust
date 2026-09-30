@@ -1,7 +1,7 @@
 # Samba AD DC lab (live `AD.KERBER.TEST` oracle)
 
 Coordinates for the **Samba 4 Active Directory Domain Controller** used as the
-live AD interop oracle (Track A / phase A3). **This file contains no secrets.**
+live AD interop oracle. **This file contains no secrets.**
 Throwaway container test passwords are kept outside the repository, in an
 untracked operator file; the provisioning admin password is injected at
 build/run time via env, never committed.
@@ -54,7 +54,7 @@ passwords are test fixtures, not real secrets.
 | `krbtgt/AD.KERBER.TEST@AD.KERBER.TEST` | Realm TGS (auto-created by provision) |
 
 `kbrsvc` is configured trusted-for-delegation (`msDS-AllowedToDelegateTo =
-host/svc.ad.kerber.test`) for the S4U work (A4). Names mirror
+host/svc.ad.kerber.test`) for the S4U work. Names mirror
 [`ad-lab.md`](ad-lab.md) so the same gates apply.
 
 ## Provisioning recipe (target — finalized in `harness/samba/`)
@@ -149,6 +149,6 @@ must use a `~/adlab`-style isolated `KRB5_CONFIG` / `KRB5CCNAME` / `KRB5_KTNAME`
   `aes256-cts-hmac-sha1-96`.
 - **Different domain SID** → the committed `pac-kbruser.ndr` (Windows-sourced)
   stays the NDR-codec golden; SID-dependent checks are reconciled in A2/A5.
-- **Cross-realm trust (A5)** with `KERBER.TEST` is re-established against Samba
+- **Cross-realm trust** with `KERBER.TEST` is re-established against Samba
   via `samba-tool domain trust create` (replacing the Windows `netdom /twoway`);
   see [`ad-lab.md`](ad-lab.md) for the trust-key handling this must reproduce.

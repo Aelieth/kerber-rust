@@ -122,11 +122,11 @@ the audit's reference resolver. `MIT_TRUTH_ALLOW` is 0, so the check is
 hard.
 
 `check_no_process_history` rejects a process tag on any comment line
-under `crates/` (block comments included): `R12`, `A′-3`, `W0e`,
-`W1-Z`, `Round 2`, `parent` plus seven hex digits, `R2-S3`, `B3`,
-`Y0`, `Z6.3`, a backticked seven- or eight-digit commit hash,
-`parent-red`, `Compiles at`, `item 15`, `S2.3`, `Z8 leftover`, a lone
-`B2` / `F4`, "the parent `…`", and a `working/` path. A tag inside a
+under `crates/` (block comments included): `R<n>`, `A′-<n>`, `W<n><a-f>`,
+`W1-<letter>`, `Round <n>`, `parent` plus seven hex digits, `R<n>-<letter><n>`, `B<n>`,
+`Y<n>`, `Z<n>.<n>`, a backticked seven- or eight-digit commit hash,
+`parent-red`, `Compiles at`, `item <n>`, `S<n>.<n>`, `Z<n> leftover`, a lone
+`B<n>` / `F<n>`, "the parent `…`", and a `working/` path. A tag inside a
 string literal is not a comment. `PROCESS_TAG_ALLOW` is 0, so the
 check is hard. Rule names (`R1`–`R4`) live in `docs/`, never in
 `crates/`.
@@ -407,7 +407,7 @@ bodies, and a row with no such word must name a proof unit, `diffsend`
 case or gate that exists. With `KERBER_MIT_SRC=<1.22.2 src>` every MIT
 cite must name a file of that tree and every MIT status word must be an
 identifier there, a `_`-suffix of one (the RFC form `PADATA_TYPE_NOSUPP`)
-or a quoted status string; CI wires the tree in W1-K §M1b.
+or a quoted status string; CI wires the tree in the `ledger-mit` job.
 Port commits carry a function
 coverage checklist (`file:line` → Rust line or `deviation:`),
 `Gates:`, and `Limitation:`. It cannot check
@@ -443,7 +443,7 @@ helper runs `cargo test --test <stem>` for each inject `tests/<stem>.rs`
 explicit filter still requires every inject-file test to appear as FAILED.
 It stamps `red-at-parent=1`. INDEX links only files those helpers or the
 gates produced.
-W1-J and W1-K units live under `crates/*/tests/` so `unit_red_at
+These units live under `crates/*/tests/` so `unit_red_at
 --inject` can fail them at the parent.
 Live settles use `scripts/lib/settle.sh <name> -- <command…>`
 (provenance, echoed command, `2>&1 | tee`; a `grep` of an existing
@@ -485,7 +485,7 @@ only for `scripts/*-gate.sh`, and builds the base's bins: its own
 gate bins, each from the crate that holds it at the base; `--print-build`
 prints that choice and stops (`check_red_at_sha_build`). The worktree is removed and
 `git worktree prune`d on EXIT, and so is the `red-target-<sha>` cargo
-tree — it is rebuildable scratch (thirty of them held 36 GiB of W1
+tree — it is rebuildable scratch (thirty of them held 36 GiB of one section's
 evidence dirs) and the stamped log keeps the rc and the FAILED list;
 `KERBER_KEEP_RED_TARGET=1` keeps it for a follow-up run at the same
 base. Every run stamps `red-at-parent=1` in its provenance block, so the

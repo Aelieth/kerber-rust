@@ -8,7 +8,7 @@ that SHA, as `harness/Dockerfile` does.
 Heimdal/Samba are regression, not the equality bar. Isolation: host
 `/etc/krb5.conf` stays `TESTLABBY.LOCAL`.
 
-The ledger began as the W1-A sweep, with Part 0 of its plan applied from
+The ledger began as a sweep of the KDC, with corrections applied from
 the three verification reports (one per section A1–A3).
 Overlap (PROCESS_TGS, GET_LOCAL_TGT, FIND_FAST, HANDLE_AUTHDATA,
 AD-FX-ARMOR) is left in both sections on purpose — A1 owns TGS gather,
@@ -28,7 +28,7 @@ table in the schema below; a row lives in exactly one file.
 | [a5-prop.md](a5-prop.md) | A5 — kprop, kpropd, iprop and the gssrpc layer |
 | [b1-client.md](b1-client.md) | B1 — the client library, crypto, GSS, the acceptor and the client tools |
 
-W0d G3 is in tree: FAST unwrap failures put the MIT status word
+FAST unwrap failures put the MIT status word
 `FIND_FAST` on the wire `e_text` (`do_as_req.c:806`,
 `do_tgs_req.c:205-206`) and the `k5_setmsg` text in the `kdc.issue`
 `detail` field. Rows that were `deviation (e_text)` only for that
@@ -103,15 +103,15 @@ Annotation rule: an `exact` row whose proof is unit-only carries
 state is reachable only by forged PDUs / faulted stores, so no live
 differential cell can exist); rows without it name a live gate cell or
 `diffsend` case. The per-row sweep that adds the annotation to every
-unit-only `exact` row is W3's (the W1-Z handoff). The two
+unit-only `exact` row has not been done. The two
 `absent` rows are the user's stated non-goals (OTP preauth,
 `gss_wrap_size_limit`).
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
 row inserts (the plan's "27" counted the split inside the A2 9).
-W1-Z Z2 added the eight `deferred` A4 rows for the W1-C kadm5 folds
-that had no owner (the W1-Z handoff table).
+The close-out added the eight `deferred` A4 rows for the kadm5 folds
+that had no owner.
 
 ## Ranked fix batches (security > parity > e_text)
 
@@ -123,16 +123,16 @@ ledger lands; F3–F9 get a short plan when reached.
 ### 1. FAST armor / AD-FX-ARMOR / cookie (security)
 
 1. `kdc: Refuse FAST armor without an authenticator subkey like armor_ap_request` —
-   **landed (A′-1 item 1).** AS explicit armor (`fast_util.c:70-76`) and TGS
+   **landed.** AS explicit armor (`fast_util.c:70-76`) and TGS
    explicit armor without a PA-TGS-REQ subkey (`:157-166`): 12, e_text
    `FIND_FAST`, detail `ap-request armor without subkey`. TGS explicit armor
    with a PA-TGS-REQ subkey stays 24. MIT clients always send a subkey.
 2. `kdc: Refuse a header ticket or authenticator carrying AD-FX-ARMOR like kdc_process_tgs_req` —
-   **landed (A′-1 item 3).** `kdc_util.c:217-229` → 12 `PROCESS_TGS` (detail
+   **landed.** `kdc_util.c:217-229` → 12 `PROCESS_TGS` (detail
    `ticket valid only as FAST armor`). Recurses into IF-RELEVANT only
    (`authdata_dec.c:115-181`). Nothing in 1.22.2 emits 71.
 3. `kdc: Bind PA-FX-COOKIE to the client and expire it at 600 seconds like kdc_fast_make_cookie` —
-   **landed (A′-1 item 2).** `MIT1` ‖ kvno ‖ enc(prf+(local TGT key, `COOKIE` ‖
+   **landed.** `MIT1` ‖ kvno ‖ enc(prf+(local TGT key, `COOKIE` ‖
    unparsed client), ku 513); non-`MIT1` ignored (`:588-590,:610`). The ku-54 /
    ENC_CHALLENGE_CLIENT collision is a naming collision with no shared key.
 
@@ -210,12 +210,12 @@ Whitelist names the documented stricter rows.
 
 ## Not this ledger
 
-W1-B: `tgs_req_ex` FAST sibling; `get_dest_tgt` referral memory;
+Client library: `tgs_req_ex` FAST sibling; `get_dest_tgt` referral memory;
 start-realm in the service loop; acceptor transited re-check;
 ERROR-level `asn1.decode`/`crypto.decrypt` on expected failures.
-W1-C: kpasswd pre-AP-REQ drop and post-AP-REQ `chpwfail` (J4 / `schpw.c`); kadmind chpw log `from <addr>`;
-`kprop.rs` per-connection rcache; `dfl` restart cell; min_life (dictionary landed W1-C C1);
-kadm5 ACL denial codes (rename AUTH_INSUFFICIENT-before-lockdown landed W0e H7); policy-rejection text.
+kadm5, kpasswd and kprop: kpasswd pre-AP-REQ drop and post-AP-REQ `chpwfail` (J4 / `schpw.c`); kadmind chpw log `from <addr>`;
+`kprop.rs` per-connection rcache; `dfl` restart cell; min_life (the dictionary check has landed);
+kadm5 ACL denial codes (the AUTH_INSUFFICIENT-before-lockdown rename has landed); policy-rejection text.
 
 OTP kdcpreauth, PA-S4U-X509-USER, PKINIT freshness, anonymous PKINIT stay
 deferred with those promotion oracles (Batch D / user non-goal).

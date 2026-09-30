@@ -1,7 +1,7 @@
 # A3 — kdc_preauth*.c / fast_util.c / kdc_authdata.c / cammac.c / kdc_log.c
 
 MIT 1.22.2 `src/kdc/` vs kerber-rust. Lines actually read. Wire codes
-are RFC 4120/6113 integers. After W0d G3, FAST unwrap failures wire
+are RFC 4120/6113 integers. FAST unwrap failures wire
 `FIND_FAST`; the MIT log message is `kdc.issue` `detail`.
 
 | MIT file:line | check (condition) | MIT status + wire code | Rust site | Rust e_text + code | verdict | proof |

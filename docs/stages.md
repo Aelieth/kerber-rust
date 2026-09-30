@@ -12,7 +12,7 @@ logs. Unit tests alone do not promote a stage.
 | 4 | Higher-level client, GSS-API/SPNEGO (RFC 4121) | **In tree** (`krb5-gss` wrap/unwrap/MIC, SPNEGO framing; MIT GSS is out-of-process) |
 | 5 | KDC core (AS+TGS) + database backend, bidirectional interop | **In tree** (in-memory + dump-v7 at-rest; one-release KDB3 load; MIT `kdb5_util` dump/load; ACL; AP-REQ; gates: `kdc-gate.sh`, `bidirectional-gate.sh`, `kdb-dump-gate.sh`). MIT `kinit` both directions is the database oracle. |
 | 6 | Admin tools, plugins, propagation, remaining parity | **In tree** (1.0: kadmind AUTH_GSSAPI, kpasswd, full-dump kprop both ways). **Era III Tier 1:** KDB traits + registries ([`plugins.md`](plugins.md), not dlopen); named policies (`policy-gate.sh`); iprop serial/ulog (`iprop-gate.sh`). |
-| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree (1.0).** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 9 cargo-fuzz targets; panic-deny lints (`unwrap_used` / `expect_used` / `panic`) on all eleven library roots (every crate but the test-only `krb5-testkit`) and every binary but the four harness-only `krb5-tools` probes (`ccache-probe`, `diffsend`, `kprop-expired-apreq`, `loadgen`) (W3-S1 closed the gap on `krb5-admin`, `krb5-asn1` and `krb5-log` at zero code cost). AD PAC NDR is golden-gated. Wire **stress/chaos/soak** run over `harness/prod` (`stress-gate`, `chaos-gate`, `soak-gate`; scheduled soak in `soak.yml`). Differential-vs-MIT is `scripts/differential-gate.sh` (same AS/TGS bytes to Rust and MIT 1.22.2 on one dump). Heimdal 7.8 bidirectional is `scripts/heimdal-gate.sh`. Inventory: [`interop-matrix.md`](interop-matrix.md). Live SSPI remains environment-dependent. |
+| 7–8 | Hardening, stress, chaos, adversarial, observability, final gates | **In tree (1.0).** MIT-oracle gates exist for AS/TGS, FAST TGS `kvno`, GSS wrap, PKINIT `kinit`, SPAKE `kinit` (`pa_type` 151 / group 2), two-realm `kvno`, and SHA-2 `kinit`/`kvno`. Golden MIT DER is byte-diffed; published crypto KATs; 9 cargo-fuzz targets; panic-deny lints (`unwrap_used` / `expect_used` / `panic`) on all eleven library roots (every crate but the test-only `krb5-testkit`) and every binary but the four harness-only `krb5-tools` probes (`ccache-probe`, `diffsend`, `kprop-expired-apreq`, `loadgen`) (the gap on `krb5-admin`, `krb5-asn1` and `krb5-log` closed at zero code cost). AD PAC NDR is golden-gated. Wire **stress/chaos/soak** run over `harness/prod` (`stress-gate`, `chaos-gate`, `soak-gate`; scheduled soak in `soak.yml`). Differential-vs-MIT is `scripts/differential-gate.sh` (same AS/TGS bytes to Rust and MIT 1.22.2 on one dump). Heimdal 7.8 bidirectional is `scripts/heimdal-gate.sh`. Inventory: [`interop-matrix.md`](interop-matrix.md). Live SSPI remains environment-dependent. |
 
 Stage 2 production-gate of a *Rust client* is Stage 3. This repository
 currently gates crypto/ASN.1 on known-answer tests, malformed-input
@@ -25,7 +25,7 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
 **v1.0.0** claims. The external-oracle inventory is [`gates.md`](gates.md)
 (per gate) and [`interop-matrix.md`](interop-matrix.md) (per oracle).
 
-- **Track A — AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the
+- **AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the
   captured `kbruser` PAC (`tests/traces/pac-kbruser.ndr`) byte-identically.
   Issued PACs include buffers 12/17/18 and store SID/RID. Samba L1/L3
   gates: `samba-pac-verify-gate.sh`, `samba-pac-l2-gate.sh` (vendored kcrypto 6/7/16/19),
@@ -35,7 +35,7 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
   constrained delegation, RBCD). Live Windows
   `kinit`/`kvno` (`ad-windows-gate.sh`) and AD S4U (`ad-s4u-gate.sh`)
   drive live Samba (`samba-ad-dc`), not the torn-down Windows DC.
-- **Track B — Operational parity:** serving store is `RwLock` so kadmind
+- **Operational parity:** serving store is `RwLock` so kadmind
   mutations persist; KDC reloads the db on mtime/length change.
   `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` add/cpw/get/list/mod/
   chrand/ktadd/`ktadd -norandkey`/purgekeys/setstr/`renprinc`/del then
@@ -49,7 +49,7 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
   backend is MIT `kdb5_util` dump/load (`krb5-kdb`, version 7): MIT
   `kinit` against the Rust KDC on a loaded dump, and MIT `krb5kdc` +
   `kinit` on a Rust-written dump (`scripts/kdb-dump-gate.sh`).
-- **Track C — Production verification:** `scripts/prod-gate.sh` (loopback
+- **Production verification:** `scripts/prod-gate.sh` (loopback
   Rust↔Rust) plus **`scripts/prod-realm-gate.sh`** (MIT client vs Rust
   primary/replica on a docker network, realm `PROD.KERBER.TEST`, kprop
   failover, structured logs + NIC pcap). Wire **stress-gate** (p99 SLO),
@@ -73,7 +73,7 @@ tests; `kvno` is not that copy proof). Rust S4U2Self/Proxy is
 MIT KDC + client gated (`scripts/s4u-mit-gate.sh`); S4U2Proxy copies the evidence
 PAC, denies classic constrained delegation unless `s4u_allowed_to` lists
 the target, and denies RBCD unless allowed. `ad-windows-gate` / `ad-s4u-gate` are live Samba, run nightly in `peers.yml`.
-`ad-mit-trust-gate.sh` aliases `samba-realtrust-gate.sh`. **C1** is
+`ad-mit-trust-gate.sh` aliases `samba-realtrust-gate.sh`. **Production verification** is
 `prod-gate.sh` (loopback) plus **`prod-realm-gate.sh`** (multi-host MIT
 client, named realm, kprop failover; in CI). Wire `stress-gate` /
 `chaos-gate` / `soak-gate` are in CI; in-process `bounded_stress`
@@ -110,10 +110,10 @@ before it counts as done:
 | **G4** | **iprop fidelity — landed.** Incremental kdbe carries string-attrs / history / policy / lockout; ulog persists across master restart. Gates: `iprop-gate`, `differential-gate` |
 | **G5** | **GSS breadth — landed.** Credential delegation, real SPNEGO negotiation, `wrap_iov`/`unwrap_iov` for NFSv4 `RPCSEC_GSS` / SSH / HTTP · *hard requirement*. Gate: `gss-gate` |
 | **G6** | **Client-side preauth & names — landed.** Wire PKINIT / SPAKE / FAST into `kinit`; NT-ENTERPRISE canonicalization. Gates: `rust-kinit-{fast,pkinit,spake,enterprise}-gate` |
-| **G7** | **Standalone user CLIs — landed.** `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin.local` (`krb5-kadmin-local`), `ktutil`. The remote `kadmin` client is deferred (W1-D, see CHANGELOG); `kadmin-gate` drives MIT `kadmin` against the Rust kadmind. Gates: `client-gate`, `kpasswd-gate`, `kadmin-gate`, `ktutil-gate`. Harness still uses MIT `kinit`/`kvno` as the oracle (retiring that is not this cut) |
+| **G7** | **Standalone user CLIs — landed.** `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin.local` (`krb5-kadmin-local`), `ktutil`. The remote `kadmin` client is deferred (see CHANGELOG); `kadmin-gate` drives MIT `kadmin` against the Rust kadmind. Gates: `client-gate`, `kpasswd-gate`, `kadmin-gate`, `ktutil-gate`. Harness still uses MIT `kinit`/`kvno` as the oracle (retiring that is not this cut) |
 | **G8** | **ccache breadth — landed.** FILE/DIR/MEMORY/KCM; `KEYRING:` is rejected (`Unknown credential cache type`). Gates: `ccache-gate`, `kcm-gate` |
 | **G9** | **Config breadth — landed.** `[capaths]`, key `[libdefaults]` knobs, `include`/`includedir`. Gates: `capaths-transit-gate`, `knobs-gate`, `config-include-gate` |
-| **W1** | **MIT 1.22.2 parity sweep — closed.** KDC (`do_as_req`/`do_tgs_req`/`kdc_util`/`tgs_policy`/FAST/PAC), client library, acceptor and kadm5 graded function by function against MIT source in [docs/parity/](parity/README.md); every row is `exact`, `stricter-documented` ([docs/security.md](security.md)), `deviation`, `deferred` with a named promotion oracle, or one of the two `absent` non-goals. Also landed on the way: anonymous PKINIT + `restrict_anonymous_to_tgt`, RFC 8070 PKINIT freshness, FAST hide-client-names, client-side S4U2Self/S4U2Proxy, `krb5-vfy-increds`, `krb5-kswitch`. Gates: `differential-gate` (111 same-bytes cases), `client-differential-gate`, `kadmin-gate`, `mit-fast-kdc-gate`, `kdcpolicy-gate`, `cross-kdc-gate` |
+| **Parity sweep** | **MIT 1.22.2 parity sweep — closed.** KDC (`do_as_req`/`do_tgs_req`/`kdc_util`/`tgs_policy`/FAST/PAC), client library, acceptor and kadm5 graded function by function against MIT source in [docs/parity/](parity/README.md); every row is `exact`, `stricter-documented` ([docs/security.md](security.md)), `deviation`, `deferred` with a named promotion oracle, or one of the two `absent` non-goals. Also landed on the way: anonymous PKINIT + `restrict_anonymous_to_tgt`, RFC 8070 PKINIT freshness, FAST hide-client-names, client-side S4U2Self/S4U2Proxy, `krb5-vfy-increds`, `krb5-kswitch`. Gates: `differential-gate` (111 same-bytes cases), `client-differential-gate`, `kadmin-gate`, `mit-fast-kdc-gate`, `kdcpolicy-gate`, `cross-kdc-gate` |
 
 G5 (GSS) is a hard requirement: kerber-rust is meant to host real client
 networks that already use SSH GSSAPI delegation, HTTP `Negotiate`, and NFSv4
@@ -126,13 +126,13 @@ into [KLLDAP](embed/klldap.md).
 ## Era III — MIT 1.22.2 parity sweep (closed)
 
 The parity sweep swept the KDC against MIT 1.22.2 source
-function by function: A′-1…4 (FAST/cookie/entry validation, AS/`kdc_util`,
+function by function; four passes (FAST/cookie/entry validation, AS/`kdc_util`,
 TGS policy/S4U/PAC, kadm5) produced the graded
 [parity ledger](parity/README.md) (one row per MIT check:
 exact / stricter-documented / deviation / absent / deferred, each with a
-live-oracle proof or a named promotion oracle); W1-B swept the client
-library (`lib/krb5/krb`) and the acceptor (`rd_req_dec.c`); W1-C the
-kadm5 server. W1-Z closed the section: the remaining `absent` rows are
+live-oracle proof or a named promotion oracle); a client-library pass swept the client
+library (`lib/krb5/krb`) and the acceptor (`rd_req_dec.c`), and a kadm5 pass the
+kadm5 server. A close-out ended the section: the remaining `absent` rows are
 the stated non-goals (OTP preauth, `gss_wrap_size_limit`), and every
 unit-only claim either has a live cell or a `deferred` row naming the
 oracle that promotes it. Deviations are in
