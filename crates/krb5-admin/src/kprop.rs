@@ -12,7 +12,7 @@ use std::path::Path;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{CipherState, EncryptionType, KeyUsage, ProtocolKey, encrypt};
-use krb5_kdc::{PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store};
+use krb5_kdc::{PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store_fresh};
 use krb5_protocol::{
     ApVerifyParams, ReplayCache, build_ap_rep, build_ap_req_mutual_seq, build_krb_priv_chained,
     build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
@@ -606,7 +606,8 @@ pub struct KpropdConfig<'a> {
     pub allowed_clients: Option<&'a [String]>,
 }
 
-/// Full replica handler: recvauth, dump v7 body, `load_dump`, persist, ack.
+/// Full replica handler: recvauth, dump v7 body, `load_dump`, persist, ack. The database is
+/// written as a full load leaves it, a new 0600 file owned by kpropd ([`save_store_fresh`]).
 ///
 /// # Errors
 ///
@@ -638,7 +639,7 @@ pub fn kpropd_handle_conn(
     )?;
     let dump = kpropd_recv_dump(stream, &mut auth)?;
     let store = kprop_load_bytes(&dump, master_password)?;
-    save_store(&store, db, stash).map_err(|e| Error::Inner(e.to_string()))?;
+    save_store_fresh(&store, db, stash).map_err(|e| Error::Inner(e.to_string()))?;
     kpropd_send_ack(stream, &mut auth, dump.len() as u64)?;
     tracing::info!(
         event = krb5_log::events::ADMIN,

@@ -395,6 +395,67 @@ fn legacy_raw_stash_loads_then_is_rewritten_as_keytab() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The keytab rewrite of a legacy raw stash is optional: a stash the writer may only read
+/// still serves the save, and stays as it was.
+#[cfg(unix)]
+#[test]
+fn legacy_raw_stash_the_writer_may_not_write_is_kept() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let dir = scratch_dir("krb5-stash-raw-ro");
+    let db = dir.join("principal");
+    let stash = dir.join(".k5.KERBER.TEST");
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let kt = krb5_protocol::Keytab::parse(&std::fs::read(&stash).unwrap()).unwrap();
+    let raw = kt.entries[0].key.as_bytes().to_vec();
+    std::fs::write(&stash, &raw).unwrap();
+    std::fs::set_permissions(&stash, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let loaded = load_store(&db, &stash).unwrap();
+    save_store(&loaded, &db, &stash).unwrap();
+    assert_eq!(
+        std::fs::read(&stash).unwrap(),
+        raw,
+        "the raw stash is left alone"
+    );
+    load_store(&db, &stash).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A full load leaves a new 0600 database owned by the writer (MIT `kdb5_util load`, kpropd);
+/// its update log is updated in place.
+#[cfg(unix)]
+#[test]
+fn a_full_load_save_leaves_a_new_database_file() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let dir = scratch_dir("krb5-save-fresh");
+    let db = dir.join("principal");
+    let ulog = dir.join("principal.ulog");
+    let stash = dir.join(".k5.KERBER.TEST");
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    for p in [&db, &ulog] {
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o640)).unwrap();
+    }
+    let (db_ino, ulog_ino) = (
+        std::fs::metadata(&db).unwrap().ino(),
+        std::fs::metadata(&ulog).unwrap().ino(),
+    );
+    let loaded = load_store(&db, &stash).unwrap();
+    krb5_kdc::save_store_fresh(&loaded, &db, &stash).unwrap();
+    let meta = std::fs::metadata(&db).unwrap();
+    assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+    assert_ne!(meta.ino(), db_ino);
+    // The ulog takes the replaced file's mode (it is written as an update, not a full load).
+    let ulog_meta = std::fs::metadata(&ulog).unwrap();
+    assert_eq!(ulog_meta.permissions().mode() & 0o777, 0o640);
+    assert_ne!(ulog_meta.ino(), ulog_ino);
+    assert_eq!(load_store(&db, &stash).unwrap().ids(), loaded.ids());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 fn tl_mod_name(p: &krb5_kdc::Principal) -> Option<String> {
     let t = p.tl_data.iter().find(|t| t.ty == TL_MOD_PRINC)?;
     let bytes = t.contents.get(4..)?;

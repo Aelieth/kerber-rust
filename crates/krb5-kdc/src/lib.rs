@@ -77,7 +77,10 @@ pub use osa::{
     KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt, decrypt_entry as decrypt_history_entry,
     history_entry as encrypt_history_entry,
 };
-pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
+pub use persist::{
+    DbWrite, PersistError, load_store, save_store, save_store_fresh, save_store_legacy_kdb3,
+    save_store_with_master,
+};
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,
     apply_policy_times, clear_thread_policy, current_policy, register_authdata, register_preauth,

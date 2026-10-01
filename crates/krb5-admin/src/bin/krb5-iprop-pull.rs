@@ -2,7 +2,8 @@
 //!
 //! Usage: `krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
 //!
-//! `--load-dump` writes the database and stash ([`krb5_config::KdcPaths`]) from a MIT dump
+//! `--load-dump` writes the database ([`krb5_config::KdcPaths`]; a new 0600 file, as a full load
+//! leaves it) and, when there is none, the stash from a MIT dump
 //! (version 7 or `ipropx`). A host argument then pulls serial-delta.
 
 #![forbid(unsafe_code)]
@@ -12,7 +13,7 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 
 use krb5_admin::{iprop_fullresync, iprop_pull};
-use krb5_kdc::{load_dump_path, load_store, save_store};
+use krb5_kdc::{load_dump_path, load_store, save_store_fresh};
 use krb5_protocol::{Keytab, as_exchange_key, tgs_exchange};
 use krb5_types::PrincipalName;
 
@@ -87,7 +88,7 @@ fn main() {
             eprintln!("krb5-iprop-pull: load dump: {e}");
             std::process::exit(1);
         });
-        save_store(&store, &db, &stash).unwrap_or_else(|e| {
+        save_store_fresh(&store, &db, &stash).unwrap_or_else(|e| {
             eprintln!("krb5-iprop-pull: save: {e}");
             std::process::exit(1);
         });

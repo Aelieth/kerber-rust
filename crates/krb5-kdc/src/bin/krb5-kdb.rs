@@ -26,7 +26,7 @@ use krb5_crypto::EncryptionType;
 use krb5_kdc::testrealm::{TEST_ADMIN, TEST_USER};
 use krb5_kdc::{
     KDB_DUMP_VERSION, NamedPolicy, bootstrap_realm_with_kdc_conf, load_dump, load_store,
-    parse_dump, save_store, write_dump_path_etype,
+    parse_dump, save_store, save_store_fresh, write_dump_path_etype,
 };
 
 use krb5_types::PrincipalName;
@@ -130,7 +130,7 @@ fn cmd_load(paths: &KdcPaths, path: &std::path::Path, password: &[u8]) {
         eprintln!("krb5-kdb: load: {e}");
         std::process::exit(1);
     });
-    save_store(&store, &paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
+    save_store_fresh(&store, &paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: save store: {e}");
         std::process::exit(1);
     });

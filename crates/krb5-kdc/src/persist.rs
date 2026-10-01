@@ -5,7 +5,7 @@
 //! ciphertext still loads for one release. The stash is a keytab-format
 //! `.k5.REALM` (a single `K/M@REALM` entry, MIT `krb5_def_store_mkey_list`);
 //! a legacy raw-key stash still loads (`krb5_db_def_fetch_mkey`) and is
-//! rewritten in keytab format on the next save.
+//! rewritten in keytab format on the next save the writer may make to it.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -16,7 +16,9 @@ use crate::kdb_dump::{load_dump_mkey, write_dump};
 use crate::mkey::master_key_from_password;
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS, UlogEntry};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
-use krb5_protocol::{Keytab, check_secret_file_writable, write_secret_file};
+use krb5_protocol::{
+    Keytab, check_secret_file_writable, write_fresh_secret_file, write_secret_file,
+};
 use krb5_types::pac::RpcSid;
 use krb5_types::{PrincipalName, parse_name};
 
@@ -108,13 +110,77 @@ pub fn save_store(
     db_path: &Path,
     stash_path: &Path,
 ) -> Result<(), PersistError> {
+    save_store_as(store, db_path, stash_path, DbWrite::InPlace)
+}
+
+/// Save `store` as a full load leaves it: the database is a new 0600 file owned by the writer,
+/// whatever it replaces; the `.ulog` and the stash are handled as [`save_store`] handles them.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1490-1508`): a full load is written to a temporary database.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1551-1569`): the temporary database is then made live.
+///
+/// # Errors
+///
+/// As [`save_store`], except that the database itself need not be writable: only its directory.
+pub fn save_store_fresh(
+    store: &PrincipalStore,
+    db_path: &Path,
+    stash_path: &Path,
+) -> Result<(), PersistError> {
+    save_store_as(store, db_path, stash_path, DbWrite::Fresh)
+}
+
+fn save_store_as(
+    store: &PrincipalStore,
+    db_path: &Path,
+    stash_path: &Path,
+    how: DbWrite,
+) -> Result<(), PersistError> {
     // MIT `ulog_map` (`lib/kdb/kdb_log.c:525-526`): an existing update log is reopened `O_RDWR` as the database is.
     // Both are checked before either changes, so a refused writer leaves no half-saved store.
-    check_secret_file_writable(db_path)?;
-    check_secret_file_writable(&ulog_path(db_path))?;
+    check_writable(db_path, how)?;
     let master = master_for_save(store, db_path, stash_path)?;
-    let text = write_dump(store, &master)?;
-    write_secret_file(db_path, text.as_bytes())?;
+    save_store_with_master(store, db_path, &master, how)
+}
+
+/// How [`save_store_with_master`] replaces the database file.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DbWrite {
+    /// An update in place: the database keeps its owner, group and mode, and a writer that may
+    /// not write it is refused ([`write_secret_file`]).
+    InPlace,
+    /// A new 0600 file owned by the writer ([`write_fresh_secret_file`]), as a full load leaves.
+    Fresh,
+}
+
+fn check_writable(db_path: &Path, how: DbWrite) -> Result<(), PersistError> {
+    if how == DbWrite::InPlace {
+        check_secret_file_writable(db_path)?;
+    }
+    check_secret_file_writable(&ulog_path(db_path))?;
+    Ok(())
+}
+
+/// Save `store` with every key wrapped under `master`; the stash is not read or written.
+///
+/// The `.ulog` beside the database is always updated in place.
+///
+/// # Errors
+///
+/// [`PersistError::Io`] when the database or `.ulog` cannot be written (for
+/// [`DbWrite::InPlace`], an existing database the writer may not open read-write is refused
+/// before any file changes); [`PersistError::Crypto`] when a key cannot be wrapped.
+pub fn save_store_with_master(
+    store: &PrincipalStore,
+    db_path: &Path,
+    master: &ProtocolKey,
+    how: DbWrite,
+) -> Result<(), PersistError> {
+    check_writable(db_path, how)?;
+    let text = write_dump(store, master)?;
+    match how {
+        DbWrite::InPlace => write_secret_file(db_path, text.as_bytes())?,
+        DbWrite::Fresh => write_fresh_secret_file(db_path, text.as_bytes())?,
+    }
     save_ulog(store, db_path)?;
     Ok(())
 }
@@ -290,9 +356,11 @@ fn master_for_save(
 ) -> Result<ProtocolKey, PersistError> {
     if stash_path.exists() {
         let master = existing_stash_key(db_path, stash_path)?;
-        // Rewrite a legacy raw-key stash in keytab format (one release later
-        // the raw fallback goes).
-        if stash_keytab_key(&fs::read(stash_path)?).is_none() {
+        // A legacy raw-key stash is rewritten in keytab format when the writer may write it. The
+        // rewrite is optional: a stash the writer may only read still serves this save.
+        if stash_keytab_key(&fs::read(stash_path)?).is_none()
+            && check_secret_file_writable(stash_path).is_ok()
+        {
             write_secret_file(stash_path, &stash_keytab_bytes(store.realm(), &master)?)?;
         }
         return Ok(master);
