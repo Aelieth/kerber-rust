@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_kdc::{SharedDump as SharedStore, save_store};
+use krb5_kdc::SharedDump as SharedStore;
 use krb5_protocol::{
     ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_rep, build_krb_priv_with_seq,
     unwrap_krb_priv_ex, verify_ap_req_ex,
@@ -137,8 +137,8 @@ fn status_bytes(status: u32) -> Vec<u8> {
 ///
 /// [`Error::Inner`] when `body` is under 10 bytes, not version 1, an unknown op, or its AP-REQ
 /// or payload overruns it; when the AP-REQ does not verify or the payload is not a usable name
-/// (or `name\0password`); or when the Dump op cannot save or read back its dump. The create,
-/// cpw, delete, and ktadd ops also return their [`AdminSession`] call's [`Error::AclDenied`],
+/// (or `name\0password`). The create, cpw, delete, and ktadd ops (1-4; there is no dump op:
+/// MIT kadmind serves none) also return their [`AdminSession`] call's [`Error::AclDenied`],
 /// [`Error::NotFound`], [`Error::PasswordPolicy`], [`Error::PassTooSoon`], or [`Error::Inner`].
 pub fn dispatch_kadmind(
     store: &SharedStore,
@@ -155,7 +155,6 @@ pub fn dispatch_kadmind(
         2 => Op::Delete,
         3 => Op::Ktadd,
         4 => Op::Cpw,
-        5 => Op::Dump,
         _ => return Err(Error::Inner("kadmind op".into())),
     };
     let ap_len = u32::from_be_bytes(
@@ -211,23 +210,6 @@ pub fn dispatch_kadmind(
             let kt = sess.ktadd(&name)?;
             let mut out = status_bytes(0);
             out.extend_from_slice(&kt.to_bytes());
-            Ok(out)
-        }
-        Op::Dump => {
-            drop(sess);
-            let tmp = std::env::temp_dir().join(format!("kprop-{}-{}", std::process::id(), {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_nanos())
-            }));
-            let db = tmp.with_extension("db");
-            let stash = tmp.with_extension("stash");
-            save_store(&g, &db, &stash).map_err(|e| Error::Inner(e.to_string()))?;
-            let blob = std::fs::read(&db).map_err(|e| Error::Inner(e.to_string()))?;
-            let _ = std::fs::remove_file(&db);
-            let _ = std::fs::remove_file(&stash);
-            let mut out = status_bytes(0);
-            out.extend_from_slice(&blob);
             Ok(out)
         }
     }

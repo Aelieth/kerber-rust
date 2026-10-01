@@ -55,6 +55,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **admin.** Compare an RPCSEC_GSS privacy body's sequence number with the
   credential's, as for integrity (MIT `xdr_rpc_gss_unwrap_data`), so a sealed
   body cannot be spliced under another call. Unit, red at the parent.
+- **admin.** Drop `dispatch_kadmind`'s dump op (op 5): no ACL, a `temp_dir()`
+  file, and no MIT counterpart.
 - **docs.** `docs/security.md` has an Open gaps table for behaviour laxer
   than MIT 1.22.2: the CMS ContentInfo type is not checked (`cms_parts`), a
   ledger `deviation` row until the fix.

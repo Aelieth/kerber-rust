@@ -403,8 +403,6 @@ pub enum Op {
     Ktadd = 3,
     /// Change password (kpasswd / RFC 3244 style).
     Cpw = 4,
-    /// Dump (kdb5_util / kprop).
-    Dump = 5,
 }
 
 /// Authenticated admin session: AP-REQ must succeed and ACL is checked per op.
