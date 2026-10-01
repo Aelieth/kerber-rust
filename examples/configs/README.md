@@ -16,9 +16,10 @@ gets tickets with MIT `kinit` and `kvno`.
 ```bash
 export KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf
 export KRB5_CONFIG=/etc/kerber-rust/krb5.conf   # default_realm EXAMPLE.COM: the daemons' realm
-# krb5-kdb writes the EXAMPLE.COM stanza's database_name / key_stash_file:
-KRB5_MASTER_PASSWORD=… KRB5_TEST_USER_PASSWORD=… KRB5_TEST_ADMIN_PASSWORD=… \
-    krb5-kdb create EXAMPLE.COM      # the realm, plus user@ and admin@EXAMPLE.COM
+# krb5-kdb is kdb5_util: it writes the EXAMPLE.COM stanza's database_name and, with -s,
+# key_stash_file; it asks for the master password twice (or takes -P):
+krb5-kdb -r EXAMPLE.COM create -s    # K/M, krbtgt, kadmin/admin and kadmin/changepw, as MIT's
+krb5-kadmin-local -q 'addprinc -pw … admin'   # the admin kadm5.acl names
 krb5-kdc                             # UDP and TCP on every kdc_listen address
 krb5-kadmind                         # kadm5 on 749 and kpasswd on 464, all local addresses
 ```
@@ -53,8 +54,9 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
 
 - `KRB5_KDC_DB`, `KRB5_KDC_STASH`: override `database_name` / `key_stash_file`
   for every KDC-side tool.
-- `KRB5_MASTER_PASSWORD`: `krb5-kdb` refuses to run `create`, `load`, `dump`
-  or `addpol` without it; `load` and `dump` derive the master key from it.
+- `KRB5_MASTER_PASSWORD`: only in a `test-hooks` build (the gates'), `krb5-kdb`
+  takes it for `create` instead of `-P` or the prompts, and for `load` when there
+  is no stash (and then writes the stash).
 - `KRB5_MASTER_ETYPE`: overrides `master_key_type`.
 - `KRB5_ACL_FILE`: overrides `acl_file`.
 - `KRB5_KPROP_ACL`: `krb5-kpropd`'s allowlist (`kpropd.acl` form); unset or empty

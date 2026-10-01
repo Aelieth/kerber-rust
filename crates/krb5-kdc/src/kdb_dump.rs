@@ -213,6 +213,27 @@ impl DumpFile {
         EncryptionType::known(ty).ok()
     }
 
+    /// Decrypt every `key_data` under `mkey` into a [`PrincipalStore`].
+    ///
+    /// # Errors
+    ///
+    /// As [`load_dump_with_key`].
+    pub fn into_store_with_key(self, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
+        self.into_store(mkey)
+    }
+
+    /// One policy record as the dump `version` writes it: version 7 (`-r18` is version 6)
+    /// carries the r1.11 fields; version 6 keeps the first ten (the r1.8 record).
+    /// MIT `dump_r1_8_policy` (`kadmin/dbutil/dump.c:404-413`): the r1.8 record is the name and nine counters.
+    #[must_use]
+    pub fn policy_record(rest: &str, version: u32) -> String {
+        if version == KDB_DUMP_VERSION {
+            return format!("policy\t{rest}");
+        }
+        let fields: Vec<&str> = rest.split('\t').take(10).collect();
+        format!("policy\t{}", fields.join("\t"))
+    }
+
     /// Decrypt `key_data` into a [`PrincipalStore`].
     ///
     /// # Errors
@@ -259,6 +280,65 @@ impl DumpFile {
 }
 
 impl DumpPrincipal {
+    /// The record as `kdb5_util dump` writes it, `key_data` still wrapped, without the newline.
+    /// MIT `k5beta7_common` (`kadmin/dbutil/dump.c:334-368`): the header, the eight attribute fields, the tagged data, the keys, the extra data and `;`.
+    #[must_use]
+    pub fn record(&self) -> String {
+        let mut out = format!(
+            "princ\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            self.db_len,
+            self.name.len(),
+            self.tl_data.len(),
+            self.keys.len(),
+            self.e_data.len(),
+            self.name,
+            self.attributes,
+            self.max_life,
+            self.max_renewable_life,
+            self.expiration,
+            self.pw_expiration,
+            self.last_success,
+            self.last_failed,
+            self.fail_auth_count
+        );
+        for t in &self.tl_data {
+            let _ = write!(
+                out,
+                "\t{}\t{}\t{}",
+                t.ty,
+                t.contents.len(),
+                encode_hex(&t.contents)
+            );
+        }
+        out.push('\t');
+        for k in &self.keys {
+            let _ = write!(out, "{}\t{}\t", k.ver, k.kvno);
+            for s in &k.slots {
+                let _ = write!(
+                    out,
+                    "{}\t{}\t{}\t",
+                    s.ty,
+                    s.contents.len(),
+                    encode_hex(&s.contents)
+                );
+            }
+        }
+        let _ = write!(out, "{};", encode_hex(&self.e_data));
+        out
+    }
+
+    /// Whether `mkey` opens this entry's first key: the enctypes agree and the key decrypts.
+    /// MIT `krb5_def_fetch_mkey_list` (`lib/kdb/kdb_default.c:431-437`): the master key is checked by decrypting `K/M`'s first key with it.
+    #[must_use]
+    pub fn opens_with(&self, mkey: &ProtocolKey) -> bool {
+        self.keys
+            .first()
+            .and_then(|k| k.slots.first())
+            .is_some_and(|s| {
+                s.ty == mkey.etype().to_iana() && kdb_decrypt_key(mkey, &s.contents).is_ok()
+            })
+    }
+
     /// MIT `process_k5beta7_princ` (`dump.c:702-723`): MIT binds a policy only from a
     /// `KRB5_TL_KADM_DATA` record that decodes and names one, and loads the principal when that
     /// record does not decode; this port also takes the policy from the legacy `0x4B02` record of
@@ -418,6 +498,31 @@ pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, D
     dump.into_store(&mkey)
 }
 
+/// Merge the entries of `loaded` into `store`, as `kdb5_util load -update` puts each record of
+/// a dump into the live database: a principal replaces the entry of the same name, and a
+/// policy is created or replaced.
+/// MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:775-779`): each record is put into the open database.
+/// MIT `process_k5beta7_policy` (`kadmin/dbutil/dump.c:820-822`): a policy is created, else replaced.
+pub fn update_store(store: &mut PrincipalStore, loaded: &PrincipalStore) {
+    for p in loaded.debug_principals() {
+        store.debug_insert(p.clone());
+    }
+    for pol in loaded.policies().values() {
+        store.put_policy(pol.clone());
+    }
+}
+
+/// Load dump text whose keys are wrapped under `mkey`.
+///
+/// # Errors
+///
+/// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
+/// realm, a malformed name, key block or tl-data, or `KRB5_TL_DB_ARGS`); [`DumpError::Crypto`]
+/// when a key does not decrypt under `mkey` into a usable key or the `K/M` key is not `mkey`.
+pub fn load_dump_with_key(text: &str, mkey: &ProtocolKey) -> Result<PrincipalStore, DumpError> {
+    load_dump_mkey(text, mkey)
+}
+
 /// [`load_dump`] with an explicit master-key etype.
 ///
 /// # Errors
@@ -476,6 +581,18 @@ pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<Stri
         .and_then(|km| km.keys.first())
         .map_or_else(default_master_etype, |k| k.etype);
     dump_store_etype(store, master_password, etype)
+}
+
+/// Dump text of `store` with every key wrapped under `mkey`.
+///
+/// # Errors
+///
+/// [`DumpError::Crypto`] when a principal or history key cannot be wrapped under `mkey`.
+pub fn dump_store_with_key(
+    store: &PrincipalStore,
+    mkey: &ProtocolKey,
+) -> Result<String, DumpError> {
+    write_dump(store, mkey)
 }
 
 /// [`dump_store`] with an explicit master-key etype.
@@ -626,9 +743,14 @@ pub fn dump_store_iprop(
     ))
 }
 
+/// One `princ` record, with MIT's message for the part that does not read.
+/// MIT `process_k5beta7_princ` (`dump.c:615-628`): the five size tokens.
 /// MIT `process_k5beta7_princ` (`dump.c:666-674`): a name that cannot be read is not a principal.
 /// MIT `process_k5beta7_princ` (`dump.c:676-690`): eight attribute fields are required, and a
 /// short record is not a principal.
+/// MIT `process_tl_data` (`dump.c:566-594`): each tagged datum's type and length, then its contents.
+/// MIT `process_k5beta7_princ` (`dump.c:729-762`): each key's version and kvno, then each slot's type, length and contents.
+/// MIT `process_k5beta7_princ` (`dump.c:766-770`): the extra data.
 /// The name's length must equal the header count, so a truncated name does not consume the
 /// attribute fields.
 fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpError> {
@@ -644,48 +766,70 @@ fn parse_princ_line(rest: &str, lineno: usize) -> Result<DumpPrincipal, DumpErro
         i: 0,
         line: lineno,
     };
-    let db_len = c.u32()?;
-    let namelen = c.usize()?;
-    let n_tl = c.usize()?;
-    let n_key = c.usize()?;
-    let e_len = c.usize()?;
-    let name = c.take()?.to_owned();
-    if name.len() != namelen {
-        return Err(c.err(&format!("name length {} != header {namelen}", name.len())));
-    }
-    let attributes = c.u32()?;
-    let max_life = c.u32()?;
-    let max_renewable_life = c.u32()?;
-    let expiration = c.u32()?;
-    let pw_expiration = c.u32()?;
-    let last_success = c.u32()?;
-    let last_failed = c.u32()?;
-    let fail_auth_count = c.u32()?;
+    let bad = |msg: &str| DumpError::Format(format!("line {lineno}: {msg}"));
+    let sizes =
+        (|| Ok::<_, DumpError>((c.u32()?, c.usize()?, c.usize()?, c.usize()?, c.usize()?)))();
+    let (db_len, namelen, n_tl, n_key, e_len) =
+        sizes.map_err(|_| bad("cannot match size tokens"))?;
+    let name = c
+        .take()
+        .ok()
+        .filter(|n| n.len() == namelen)
+        .ok_or_else(|| bad("cannot read name string"))?
+        .to_owned();
+    let attrs = (|| {
+        Ok::<_, DumpError>([
+            c.u32()?,
+            c.u32()?,
+            c.u32()?,
+            c.u32()?,
+            c.u32()?,
+            c.u32()?,
+            c.u32()?,
+            c.u32()?,
+        ])
+    })()
+    .map_err(|_| bad("cannot read principal attributes"))?;
+    let [
+        attributes,
+        max_life,
+        max_renewable_life,
+        expiration,
+        pw_expiration,
+        last_success,
+        last_failed,
+        fail_auth_count,
+    ] = attrs;
     let mut tl_data = Vec::with_capacity(n_tl);
     for _ in 0..n_tl {
-        let ty = c.i32()?;
-        let len = c.usize()?;
-        let contents = c.hex(len)?;
+        let (ty, len) = (|| Ok::<_, DumpError>((c.i32()?, c.usize()?)))()
+            .map_err(|_| bad("cannot read tagged data type and length"))?;
+        let contents = c
+            .hex(len)
+            .map_err(|_| bad("cannot read tagged data contents"))?;
         tl_data.push(TlData { ty, contents });
     }
     let mut keys = Vec::with_capacity(n_key);
     for _ in 0..n_key {
-        let ver = c.i32()?;
+        let (ver, kvno) = (|| Ok::<_, DumpError>((c.i32()?, c.u32()?)))()
+            .map_err(|_| bad("cannot read key size and version"))?;
         if !(1..=2).contains(&ver) {
-            return Err(c.err(&format!("unsupported key_data_ver {ver}")));
+            return Err(bad("unsupported key_data_ver version"));
         }
-        let kvno = c.u32()?;
-        let nslots = usize::try_from(ver).map_err(|_| c.err("key_data_ver"))?;
+        if kvno > u32::from(u16::MAX) {
+            return Err(bad("invalid kvno"));
+        }
+        let nslots = usize::try_from(ver).map_err(|_| bad("unsupported key_data_ver version"))?;
         let mut slots = Vec::with_capacity(nslots);
         for _ in 0..nslots {
-            let ty = c.i32()?;
-            let len = c.usize()?;
-            let contents = c.hex(len)?;
+            let (ty, len) = (|| Ok::<_, DumpError>((c.i32()?, c.usize()?)))()
+                .map_err(|_| bad("cannot read key type and length"))?;
+            let contents = c.hex(len).map_err(|_| bad("cannot read key data"))?;
             slots.push(DumpKeySlot { ty, contents });
         }
         keys.push(DumpKeyData { ver, kvno, slots });
     }
-    let e_data = c.hex(e_len)?;
+    let e_data = c.hex(e_len).map_err(|_| bad("cannot read extra data"))?;
     c.finish()?;
     Ok(DumpPrincipal {
         db_len,

@@ -414,10 +414,10 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kad
 docker exec "$NAME" chmod +x /tmp/krb5-kdb /tmp/krb5-kadmind
 docker exec "$NAME" sh -c 'grep -q " kdc.example.com$" /etc/hosts || echo "127.0.0.1 kdc.example.com" >>/etc/hosts'
 docker exec -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    -e KRB5_MASTER_PASSWORD=example-master \
     -e KRB5_TEST_USER_PASSWORD=example-user \
     -e KRB5_TEST_ADMIN_PASSWORD=example-admin \
-    "$NAME" /tmp/krb5-kdb create EXAMPLE.COM || die "example: krb5-kdb create EXAMPLE.COM failed"
+    "$NAME" /tmp/krb5-kdb -r EXAMPLE.COM -P example-master create -s \
+    || die "example: krb5-kdb -r EXAMPLE.COM create -s failed"
 docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kdc >/tmp/example-kdc.log 2>&1'
 require_listen "$NAME" /tmp/example-kdc.log "the example KDC (kdc.conf kdc_listen)"

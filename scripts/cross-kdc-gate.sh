@@ -41,13 +41,11 @@ docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb
 docker exec "$NAME" sh -c "sed 's/kdc = 127.0.0.1\$/kdc = 127.0.0.1:8888/' /tmp/mit-krb5.conf > /tmp/rust-krb5.conf && sed -i 's/kdc = 127.0.0.1\$/kdc = 127.0.0.1:88/' /tmp/mit-krb5.conf"
 
 echo "==== load identical dump into Rust KDC on :8888 ===="
-LOAD="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/mit.dump)"
-echo "$LOAD"
-echo "$LOAD" | grep -q 'ok load version=7' || die "rust kdb load failed"
+    "$NAME" /tmp/krb5-kdb load /tmp/mit.dump || die "rust kdb load failed"
 # Dump load does not carry groups; rust apply_libdefaults reads this at start.
 docker exec "$NAME" python3 -c '
 from pathlib import Path
@@ -230,13 +228,11 @@ kadmin_q_ok mit_kadmin_local "$NAME" -- -q \
 docker exec "$NAME" kdb5_util dump /tmp/privsvr.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
-LOAD_PRIV="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/privsvr.dump)"
-echo "$LOAD_PRIV"
-echo "$LOAD_PRIV" | grep -q 'ok load version=7' || die "rust kdb reload after setstr failed"
+    "$NAME" /tmp/krb5-kdb load /tmp/privsvr.dump || die "rust kdb reload after setstr failed"
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
@@ -288,13 +284,11 @@ kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr host/testhost.kerber.test req
 docker exec "$NAME" kdb5_util dump /tmp/reqauth.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
-LOAD_REQ="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/reqauth.dump)"
-echo "$LOAD_REQ"
-echo "$LOAD_REQ" | grep -q 'ok load version=7' || die "rust kdb reload after require_auth failed"
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth.dump || die "rust kdb reload after require_auth failed"
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
@@ -328,13 +322,11 @@ kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'delstr host/testhost.kerber.test req
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-clear.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
-LOAD_CLR="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-clear.dump)"
-echo "$LOAD_CLR"
-echo "$LOAD_CLR" | grep -q 'ok load version=7' || die "rust kdb reload after delstr failed"
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-clear.dump || die "rust kdb reload after delstr failed"
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
@@ -356,13 +348,11 @@ kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr krbtgt/KERBER.TEST require_au
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-as.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
-LOAD_AS="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-as.dump)"
-echo "$LOAD_AS"
-echo "$LOAD_AS" | grep -q 'ok load version=7' || die "rust kdb reload after krbtgt require_auth failed"
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-as.dump || die "rust kdb reload after krbtgt require_auth failed"
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
@@ -400,13 +390,11 @@ kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'delstr krbtgt/KERBER.TEST require_au
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-as-clear.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
-LOAD_ASC="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-as-clear.dump)"
-echo "$LOAD_ASC"
-echo "$LOAD_ASC" | grep -q 'ok load version=7' || die "rust kdb reload after krbtgt delstr failed"
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-as-clear.dump || die "rust kdb reload after krbtgt delstr failed"
 
 echo "==== SPAKE CAMMAC honor MIT TGT through Rust TGS ===="
 docker exec "$NAME" python3 -c '
@@ -489,13 +477,11 @@ kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'setstr host/testhost.kerber.test req
 docker exec "$NAME" kdb5_util dump /tmp/reqauth-spake.dump
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
 wait_pid_gone "$NAME" krb5-kdc || true
-LOAD_SP="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-spake.dump)"
-echo "$LOAD_SP"
-echo "$LOAD_SP" | grep -q 'ok load version=7' || die "rust kdb reload after require_auth spake failed"
+    "$NAME" /tmp/krb5-kdb load /tmp/reqauth-spake.dump || die "rust kdb reload after require_auth spake failed"
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \

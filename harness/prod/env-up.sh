@@ -104,12 +104,12 @@ CREATE="$(docker exec \
     -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
     -e KRB5_TEST_USER_PASSWORD="$KERBER_PROD_USER_PW" \
     -e KRB5_TEST_ADMIN_PASSWORD="$KERBER_PROD_ADMIN_PW" \
-    "$PRIMARY" /usr/local/bin/krb5-kdb create "$REALM" 2>&1)" || {
+    "$PRIMARY" /usr/local/bin/krb5-kdb -r "$REALM" create -s 2>&1)" || {
     echo "$CREATE" >&2
-    die "krb5-kdb create $REALM failed"
+    die "krb5-kdb -r $REALM create -s failed"
 }
-echo "$CREATE" | grep -q "ok create version=7" || die "create did not report dump v7: $CREATE"
-echo "$CREATE" | grep -q "realm=$REALM" || die "create did not report realm: $CREATE"
+echo "$CREATE" | grep -qF "Initializing database '/tmp/prod.db' for realm '$REALM'," \
+    || die "create did not name the database and realm: $CREATE"
 docker exec "$PRIMARY" head -1 /tmp/prod.db | grep -q 'kdb5_util load_dump version 7' \
     || die "created db is not dump version 7"
 docker exec "$PRIMARY" grep -q "krbtgt/${REALM}@${REALM}" /tmp/prod.db \

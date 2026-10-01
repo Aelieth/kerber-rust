@@ -185,13 +185,113 @@ pub fn save_store_with_master(
     Ok(())
 }
 
+/// Why [`create_store`] wrote nothing.
+#[derive(Debug, thiserror::Error)]
+pub enum CreateError {
+    /// The database path could not be created: it exists (`AlreadyExists`), its directory does
+    /// not (`NotFound`), or the OS refused.
+    #[error("{0}")]
+    Create(std::io::Error),
+    /// The database was reserved but could not be written.
+    #[error(transparent)]
+    Persist(#[from] PersistError),
+}
+
+/// Write a new database for `store` under `master`, as `kdb5_util create` makes one.
+///
+/// The path is reserved first with an exclusive create, so an existing database (or any file
+/// there) is never replaced; then the dump and its `.ulog` are written as new 0600 files owned
+/// by the writer. The stash is the caller's ([`write_stash`]).
+/// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:718-720`): the database is opened `O_RDWR | O_CREAT | O_EXCL`, mode 0600.
+///
+/// # Errors
+///
+/// [`CreateError::Create`] when the database path cannot be created exclusively (nothing is
+/// written); [`CreateError::Persist`] when the dump or `.ulog` cannot be written or a key cannot
+/// be wrapped (the reservation is removed again).
+pub fn create_store(
+    store: &PrincipalStore,
+    db_path: &Path,
+    master: &ProtocolKey,
+) -> Result<(), CreateError> {
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    opts.open(db_path).map_err(CreateError::Create)?;
+    let written = write_dump(store, master)
+        .map_err(PersistError::from)
+        .and_then(|text| Ok(write_fresh_secret_file(db_path, text.as_bytes())?))
+        .and_then(|()| {
+            let ulog = ulog_text(store);
+            Ok(write_fresh_secret_file(
+                &ulog_path(db_path),
+                ulog.as_bytes(),
+            )?)
+        });
+    if let Err(e) = written {
+        let _ = fs::remove_file(db_path);
+        return Err(e.into());
+    }
+    Ok(())
+}
+
+/// Write the master-key stash: a FILE keytab with one `K/M@realm` entry at `kvno`, as a new
+/// 0600 file owned by the writer, whatever it replaces.
+/// MIT `krb5_def_store_mkey_list` (`lib/kdb/kdb_default.c:111-213`): the stash is a keytab holding the master key list.
+///
+/// # Errors
+///
+/// [`PersistError::Format`] when `realm` is not ASCII; [`PersistError::Io`] when the file
+/// cannot be written.
+pub fn write_stash(
+    path: &Path,
+    realm: &str,
+    master: &ProtocolKey,
+    kvno: u32,
+) -> Result<(), PersistError> {
+    let realm_a = krb5_types::try_ascii(realm).map_err(|e| PersistError::Format(e.to_string()))?;
+    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, crate::mkey::MASTER_NAME);
+    let bytes = Keytab::single(realm_a, name, kvno, master.clone()).to_bytes();
+    write_fresh_secret_file(path, &bytes)?;
+    Ok(())
+}
+
+/// The master key a stash holds: its `K/M` entry, else (a legacy raw stash) the raw key that
+/// opens the database at `db_path`.
+/// MIT `krb5_db_def_fetch_mkey` (`lib/kdb/kdb_default.c:356-393`): the keytab form first, then the old stash form.
+///
+/// # Errors
+///
+/// [`PersistError::Io`] when the stash cannot be read (a missing file included);
+/// [`PersistError::Crypto`] when it holds no usable master key.
+pub fn read_stash(stash_path: &Path, db_path: &Path) -> Result<ProtocolKey, PersistError> {
+    existing_stash_key(db_path, stash_path)
+}
+
+/// The master keys stash bytes may hold: the `K/M` entry of a keytab stash, else each enctype a
+/// legacy raw stash may be. Empty when the bytes are neither.
+#[must_use]
+pub fn stash_keys(bytes: &[u8]) -> Vec<ProtocolKey> {
+    if let Some(k) = stash_keytab_key(bytes) {
+        return vec![k];
+    }
+    stash_etypes()
+        .into_iter()
+        .filter_map(|etype| ProtocolKey::from_bytes(etype, bytes).ok())
+        .collect()
+}
+
 fn ulog_path(db_path: &Path) -> PathBuf {
     let mut s = db_path.as_os_str().to_os_string();
     s.push(".ulog");
     PathBuf::from(s)
 }
 
-fn save_ulog(store: &PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
+fn ulog_text(store: &PrincipalStore) -> String {
     let mut text = String::from("ulog 1\n");
     for e in store.ulog() {
         let _ = writeln!(
@@ -203,7 +303,11 @@ fn save_ulog(store: &PrincipalStore, db_path: &Path) -> Result<(), PersistError>
             e.name
         );
     }
-    write_secret_file(&ulog_path(db_path), text.as_bytes())?;
+    text
+}
+
+fn save_ulog(store: &PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
+    write_secret_file(&ulog_path(db_path), ulog_text(store).as_bytes())?;
     Ok(())
 }
 

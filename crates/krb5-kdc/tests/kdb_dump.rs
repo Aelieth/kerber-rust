@@ -1,4 +1,4 @@
-//! MIT `kdb5_util` dump parser, KDB usage-0 crypto, and dump/load CLI.
+//! MIT `kdb5_util` dump parser and KDB usage-0 crypto (the CLI is `kdb5_util.rs`).
 //!
 //! Drives the shipped codec on the committed 1.22.2 golden (not a
 //! reimplementation, not hardcoded key bytes).
@@ -10,16 +10,15 @@
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
 use krb5_kdc::{
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_DUMP_VERSION,
-    KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH,
-    TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TlData, UlogEntry, dump_store, dump_store_iprop, load_dump,
-    master_key_from_password, parse_dump, save_store,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_DUMP_VERSION, KDB_LOCKDOWN_KEYS,
+    KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TlData,
+    UlogEntry, dump_store, dump_store_iprop, load_dump, master_key_from_password, parse_dump,
+    save_store,
 };
 
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 use std::path::PathBuf;
-use std::process::Command;
 
 fn traces() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/traces/kdb")
@@ -330,138 +329,6 @@ fn dump_load_preserves_sid_rid_not_dummy() {
         again.get("krbtgt/KERBER.TEST@KERBER.TEST").unwrap().rid,
         krb5_kdc::RID_KRBTGT
     );
-}
-
-#[test]
-fn krb5_kdb_cli_load_and_dump_content() {
-    let dir = scratch_dir("krb5-kdb-cli");
-    let db = dir.join("principal");
-    let stash = dir.join("stash");
-    let dumped = dir.join("rust.dump");
-    let golden = traces().join("mit-dump-v7.txt");
-    let bin = env!("CARGO_BIN_EXE_krb5-kdb");
-
-    let load = Command::new(bin)
-        .args(["load", golden.to_str().unwrap()])
-        .env("KRB5_MASTER_PASSWORD", "masterpassword")
-        .env("KRB5_KDC_DB", &db)
-        .env("KRB5_KDC_STASH", &stash)
-        .output()
-        .expect("run load");
-    let load_out = String::from_utf8_lossy(&load.stdout);
-    let load_err = String::from_utf8_lossy(&load.stderr);
-    assert!(load.status.success(), "load failed: {load_out}{load_err}");
-    assert!(
-        load_out.contains("ok load version=7"),
-        "load stdout must report version: {load_out}"
-    );
-    assert!(
-        load_out.contains("principals=12"),
-        "load stdout must report principal count: {load_out}"
-    );
-    assert!(load_out.contains("realm=KERBER.TEST"));
-
-    let dump = Command::new(bin)
-        .args([
-            "dump",
-            dumped.to_str().unwrap(),
-            "--from-dump",
-            golden.to_str().unwrap(),
-        ])
-        .env("KRB5_MASTER_PASSWORD", "masterpassword")
-        .output()
-        .expect("run dump");
-    let dump_out = String::from_utf8_lossy(&dump.stdout);
-    let dump_err = String::from_utf8_lossy(&dump.stderr);
-    assert!(dump.status.success(), "dump failed: {dump_out}{dump_err}");
-    assert!(
-        dump_out.contains("ok dump version=7"),
-        "dump stdout: {dump_out}"
-    );
-    let written = std::fs::read_to_string(&dumped).expect("read rust.dump");
-    assert!(
-        written.starts_with("kdb5_util load_dump version 7\n"),
-        "dumped file header"
-    );
-    assert!(written.contains("princ\t"));
-    assert!(written.contains("user@KERBER.TEST"));
-    assert!(written.contains("pauser@KERBER.TEST"));
-    assert!(written.contains("host/testhost.kerber.test@KERBER.TEST"));
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[test]
-fn krb5_kdb_cli_create_named_realm_dump_v7() {
-    let dir = scratch_dir("krb5-kdb-create");
-    let db = dir.join("principal");
-    let stash = dir.join("stash");
-    let bin = env!("CARGO_BIN_EXE_krb5-kdb");
-
-    let out = Command::new(bin)
-        .args(["create", "PROD.KERBER.TEST"])
-        .env("KRB5_MASTER_PASSWORD", "masterpassword")
-        .env("KRB5_TEST_USER_PASSWORD", "userpassword")
-        .env("KRB5_TEST_ADMIN_PASSWORD", "adminpassword")
-        .env("KRB5_KDC_DB", &db)
-        .env("KRB5_KDC_STASH", &stash)
-        .output()
-        .expect("run create");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "create failed: {stdout}{stderr}");
-    assert!(
-        stdout.contains("ok create version=7"),
-        "create stdout must report version: {stdout}"
-    );
-    assert!(
-        stdout.contains("realm=PROD.KERBER.TEST"),
-        "create stdout must report realm: {stdout}"
-    );
-    let written = std::fs::read_to_string(&db).expect("read created db");
-    assert!(
-        written.starts_with("kdb5_util load_dump version 7\n"),
-        "created file header"
-    );
-    assert!(
-        written.contains("krbtgt/PROD.KERBER.TEST@PROD.KERBER.TEST"),
-        "created file must contain krbtgt: {written}"
-    );
-    assert!(
-        written.contains("kadmin/admin@PROD.KERBER.TEST"),
-        "create must seed kadmin/admin: {written}"
-    );
-    assert!(
-        written.contains("kadmin/changepw@PROD.KERBER.TEST"),
-        "create must seed kadmin/changepw: {written}"
-    );
-    assert!(
-        written.contains("host/testhost.prod.kerber.test@PROD.KERBER.TEST"),
-        "create must seed host/testhost.<dns>: {written}"
-    );
-    let dump = parse_dump(&written).expect("parse created dump");
-    assert_eq!(
-        dump.princ("krbtgt/PROD.KERBER.TEST@PROD.KERBER.TEST")
-            .expect("krbtgt")
-            .attributes,
-        KDB_LOCKDOWN_KEYS
-    );
-    assert_eq!(
-        dump.princ("K/M@PROD.KERBER.TEST").expect("K/M").attributes,
-        KDB_DISALLOW_ALL_TIX | KDB_LOCKDOWN_KEYS
-    );
-    assert_eq!(
-        dump.princ("kadmin/admin@PROD.KERBER.TEST")
-            .expect("kadmin/admin")
-            .attributes,
-        KDB_DISALLOW_TGT_BASED | KDB_LOCKDOWN_KEYS
-    );
-    assert_eq!(
-        dump.princ("kadmin/changepw@PROD.KERBER.TEST")
-            .expect("kadmin/changepw")
-            .attributes,
-        KDB_DISALLOW_TGT_BASED | KDB_PWCHANGE_SERVICE | KDB_LOCKDOWN_KEYS
-    );
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 fn db_arg(nul: bool) -> TlData {

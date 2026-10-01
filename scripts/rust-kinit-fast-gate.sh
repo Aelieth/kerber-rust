@@ -205,13 +205,11 @@ if [ "$ok" != 1 ]; then
     log "fast.client.gate" "error" ',"error":"MIT krb5kdc did not listen after EC indicator"'
     exit 1
 fi
-LOAD_EC="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/ec-ind.dump)"
-echo "$LOAD_EC"
-echo "$LOAD_EC" | grep -q 'ok load version=7' || {
+    "$NAME" /tmp/krb5-kdb load /tmp/ec-ind.dump || {
     log "fast.client.gate" "error" ',"error":"rust kdb load after EC indicator failed"'
     exit 1
 }

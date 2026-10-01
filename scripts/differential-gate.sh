@@ -50,13 +50,11 @@ docker cp "$GOLDEN" "$NAME":/tmp/mit.dump
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local /tmp/krb5-kvno /tmp/diffsend
 
 echo "==== load identical dump into Rust KDC on :8888 ===="
-LOAD="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/mit.dump)"
-echo "$LOAD"
-grep -q 'ok load version=7' <<<"$LOAD" || die "rust kdb load failed"
+    "$NAME" /tmp/krb5-kdb load /tmp/mit.dump || die "rust kdb load failed"
 ADD="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \

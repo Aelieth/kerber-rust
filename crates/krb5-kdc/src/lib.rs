@@ -22,6 +22,7 @@
 mod acl;
 mod ad;
 mod audit;
+mod create;
 mod der;
 mod error;
 mod issue;
@@ -49,6 +50,9 @@ pub use audit::{
     clear_thread_audit, current_audit, enctype_name, ktypes2str, make_tkt_id, new_req_id,
     rep_etypes2str, set_audit, set_thread_audit,
 };
+#[cfg(feature = "test-hooks")]
+pub use create::seed_test_principals;
+pub use create::{create_realm, kdc_conf_for_realm};
 pub use error::Error;
 pub(crate) use issue::kdc_error_bytes;
 pub use issue::{
@@ -63,8 +67,8 @@ pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_SERIAL, TL_KERBER_SID,
     TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS, dump_store,
-    dump_store_iprop, load_dump, load_dump_etype, load_dump_path, parse_dump, tl_mod_princ_name,
-    write_dump_path_etype,
+    dump_store_iprop, dump_store_with_key, load_dump, load_dump_etype, load_dump_path,
+    load_dump_with_key, parse_dump, tl_mod_princ_name, update_store, write_dump_path_etype,
 };
 pub use listen::{
     BIND_CANDIDATES, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST,
@@ -78,8 +82,8 @@ pub use osa::{
     history_entry as encrypt_history_entry,
 };
 pub use persist::{
-    DbWrite, PersistError, load_store, save_store, save_store_fresh, save_store_legacy_kdb3,
-    save_store_with_master,
+    CreateError, DbWrite, PersistError, create_store, load_store, read_stash, save_store,
+    save_store_fresh, save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
 };
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,

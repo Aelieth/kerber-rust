@@ -736,8 +736,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
-- **kdc.** An unset `master_key_type` is MIT's aes256-cts-hmac-sha1-96 (was aes256-sha384);
-  a stash keeps its type, and a full load (`load`, kpropd) leaves a new 0600 file. Unit.
+- **kdc.** `krb5-kdb` is MIT's `kdb5_util`: `create` makes only `K/M`, `krbtgt`, `kadmin/*`
+  (test principals need `test-hooks`); `master_key_type` defaults to aes256-sha1; `stash`,
+  `dump`, `load`, `destroy` print and write as MIT's. Unit; side by side with MIT.
 - **config/kdc/admin.** One kdc.conf and database resolver (`KdcPaths`) for every KDC-side
   tool, as MIT's `kadm5_get_config_params`: `KDC_DIR/kdc.conf` (`/var/kerberos/krb5kdc`), a
   missing one empty, the realm's paths, env on top. Units; `kdc-gate` creates from kdc.conf.

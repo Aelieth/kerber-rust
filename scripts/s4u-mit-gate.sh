@@ -988,11 +988,9 @@ docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kadmin-local
 docker exec "$MITNAME" kdb5_util dump /tmp/r27.dump
 docker cp "$MITNAME":/tmp/r27.dump "$SCRATCH/r27.dump"
 docker cp "$SCRATCH/r27.dump" "$NAME":/tmp/r27.dump
-LOAD_R27="$(docker exec -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
+docker exec -e KRB5_KDC_DB=/tmp/r27.db -e KRB5_KDC_STASH=/tmp/r27.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kdb load /tmp/r27.dump)"
-echo "$LOAD_R27"
-echo "$LOAD_R27" | grep -q 'ok load version=7' || {
+    "$NAME" /tmp/krb5-kdb load /tmp/r27.dump || {
     log "s4u.mit.gate" "error" ',"error":"Rust krb5-kdb load r27.dump failed"'
     exit 1
 }

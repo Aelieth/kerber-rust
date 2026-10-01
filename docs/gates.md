@@ -368,7 +368,7 @@ not check (a unit test, or "not asserted").
   1.22.2 container (`shell_container`; its audit cell later runs MIT
   `krb5kdc` there), binds 127.0.0.1:88 (fallback 8888), and runs MIT
   `kinit user@KERBER.TEST` plus `kvno host/testhost.kerber.test`. Its last
-  cell runs `examples/configs` as written: `krb5-kdb create EXAMPLE.COM`,
+  cell runs `examples/configs` as written: `krb5-kdb -r EXAMPLE.COM create -s`,
   `krb5-kdc` and `krb5-kadmind` on `kdc.conf` alone, then MIT `kadmin`,
   `kinit` and `kvno` through `kadm5.acl` and `krb5.conf`. The same realm then
   restarts on KLLDAP's listener shape (`kdc_ports = 750,88`, no `kdc_listen`,
