@@ -2,7 +2,8 @@
 //!
 //! Usage: `krb5-kadmind [--test-realm] [host:port]`
 //!
-//! Shares `KRB5_KDC_DB` / `KRB5_KDC_STASH` with `krb5-kdc`. `--test-realm`
+//! Shares the database and stash with `krb5-kdc`, both resolved by
+//! [`krb5_config::KdcPaths`], as is `acl_file`. `--test-realm`
 //! bootstraps KERBER.TEST including `kadmin/admin` and `kadmin/changepw`.
 //! TCP 749 is kadm5; UDP + TCP 464 is RFC 3244 kpasswd. With no `host:port`, both
 //! listen where MIT kadmind would: kdc.conf's `kadmind_listen` / `kadmind_port` and
@@ -12,7 +13,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::{TcpListener, UdpSocket};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::thread;
@@ -21,10 +22,10 @@ use std::time::Duration;
 use krb5_admin::{Kadm5RpcError, serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
-use krb5_kdc::testrealm::{bootstrap_documented, documented_kiprop};
+use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_kiprop};
 use krb5_kdc::{
-    Acl, Error, PrincipalStore, acl_for_store, bind_tcp_listeners, bind_udp_listeners,
-    default_acl_path, open_store, shared_dump as shared_store,
+    Acl, Error, PrincipalStore, acl_for_store, bind_tcp_listeners, bind_udp_listeners, open_store,
+    shared_dump as shared_store,
 };
 
 use krb5_protocol::ReplayCache;
@@ -42,8 +43,18 @@ fn main() {
     let test_realm = args.iter().any(|a| a == "--test-realm");
     args.retain(|a| a != "--test-realm");
 
-    let kdc_conf = load_kdc_conf();
-    let (db, stash) = db_and_stash(kdc_conf.as_ref());
+    let paths =
+        krb5_config::KdcPaths::resolve(test_realm.then_some(TEST_REALM)).unwrap_or_else(|e| {
+            // MIT `main` (`ovsec_kadmd.c:446-450`): a failed `kadm5_init`, no realm included, is
+            // "<error> while initializing, aborting", exit 1.
+            let context = match e {
+                krb5_config::Error::NoDefaultRealm => " while initializing, aborting",
+                _ => "",
+            };
+            eprintln!("krb5-kadmind: {e}{context}");
+            std::process::exit(1);
+        });
+    let kdc_conf = paths.conf.as_ref();
     let mut store = if test_realm {
         bootstrap_documented()
             .unwrap_or_else(|e| {
@@ -52,14 +63,14 @@ fn main() {
             })
             .0
     } else {
-        let lib = kdc_conf.as_ref().and_then(|c| c.db_library.as_deref());
-        open_store(lib, &db, &stash).unwrap_or_else(|e| {
+        let lib = kdc_conf.and_then(|c| c.db_library.as_deref());
+        open_store(lib, &paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
             eprintln!("krb5-kadmind: load: {e}");
             std::process::exit(1);
         })
     };
-    let acl = load_acl(kdc_conf.as_ref(), store.realm(), &db, &stash);
-    if let Some(conf) = &kdc_conf
+    let acl = load_acl(paths.acl_file.as_deref(), store.realm());
+    if let Some(conf) = kdc_conf
         && let Err(e) = store.apply_kdc_conf(conf)
     {
         eprintln!("krb5-kadmind: kdc.conf: {e}");
@@ -90,7 +101,7 @@ fn main() {
     let (listeners, kpasswd_udp, kpasswd_tcp) = bind_sockets(
         test_realm,
         pinned,
-        kdc_conf.as_ref(),
+        kdc_conf,
         krb5_admin_server(krb5_conf.as_ref(), &realm).as_deref(),
     );
     for l in &listeners {
@@ -265,56 +276,9 @@ fn acceptor_keys(store: &PrincipalStore) -> Vec<ProtocolKey> {
     keys
 }
 
-fn load_kdc_conf() -> Option<krb5_config::KdcConf> {
-    let path = krb5_config::kdc_conf_path()?;
-    match krb5_config::KdcConf::load_file(&path) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("krb5-kadmind: kdc.conf: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn db_and_stash(conf: Option<&krb5_config::KdcConf>) -> (PathBuf, PathBuf) {
-    let db = std::env::var("KRB5_KDC_DB")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| conf.and_then(|c| c.database_name.clone()))
-        .unwrap_or_else(|| PathBuf::from("/var/lib/krb5kdc/principal"));
-    let stash = std::env::var("KRB5_KDC_STASH")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| conf.and_then(|c| c.key_stash_file.clone()))
-        .unwrap_or_else(|| PathBuf::from("/var/lib/krb5kdc/stash"));
-    (db, stash)
-}
-
-fn kdc_dir(db: &Path, stash: &Path) -> PathBuf {
-    stash
-        .parent()
-        .or_else(|| db.parent())
-        .unwrap_or_else(|| Path::new("/var/lib/krb5kdc"))
-        .to_path_buf()
-}
-
-fn load_acl(conf: Option<&krb5_config::KdcConf>, realm: &str, db: &Path, stash: &Path) -> Acl {
-    let spec = if let Ok(p) = std::env::var("KRB5_ACL_FILE") {
-        if p.is_empty() {
-            None
-        } else {
-            Some(PathBuf::from(p))
-        }
-    } else if let Some(p) = conf.and_then(|c| c.acl_file.clone()) {
-        if p.as_os_str().is_empty() {
-            None
-        } else {
-            Some(p)
-        }
-    } else {
-        Some(default_acl_path(&kdc_dir(db, stash)))
-    };
-    acl_for_store(realm, spec.as_deref()).unwrap_or_else(|e| {
+/// kadmind's ACL, `acl_file` as [`krb5_config::KdcPaths`] resolved it; `None` is self-service only.
+fn load_acl(acl_file: Option<&Path>, realm: &str) -> Acl {
+    acl_for_store(realm, acl_file).unwrap_or_else(|e| {
         let msg = match e {
             Error::AclParse(s) => s,
             other => other.to_string(),

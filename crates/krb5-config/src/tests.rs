@@ -397,6 +397,248 @@ fn parse_kdc_conf_policy() {
     );
 }
 
+/// A fake environment for [`KdcPaths::resolve_in`]: tests cannot set process variables.
+fn fake_env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+    let vars: Vec<(String, String)> = vars
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    move |name: &str| {
+        vars.iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| std::ffi::OsString::from(v))
+    }
+}
+
+fn resolve_paths(
+    vars: &[(&str, &str)],
+    realm: Option<&str>,
+    default_realm: Option<&str>,
+) -> Result<KdcPaths, Error> {
+    KdcPaths::resolve_in(&fake_env(vars), realm, || default_realm.map(str::to_owned))
+}
+
+fn kdc_dir_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(KDC_DIR).join(name)
+}
+
+#[test]
+fn kdc_profile_is_the_variable_else_kdc_dir() {
+    // MIT `add_kdc_config_file` (`init_os_ctx.c:340-366`): KRB5_KDC_PROFILE, else DEFAULT_KDC_PROFILE.
+    assert_eq!(
+        kdcconf::kdc_conf_path_in(&fake_env(&[])),
+        kdc_dir_path("kdc.conf")
+    );
+    assert_eq!(default_kdc_profile(), kdc_dir_path("kdc.conf"));
+    let alias = fake_env(&[("KRB5_KDC_CONF", "/b/kdc.conf")]);
+    assert_eq!(
+        kdcconf::kdc_conf_path_in(&alias),
+        std::path::Path::new("/b/kdc.conf")
+    );
+    let both = fake_env(&[
+        ("KRB5_KDC_PROFILE", "/a/kdc.conf"),
+        ("KRB5_KDC_CONF", "/b/kdc.conf"),
+    ]);
+    assert_eq!(
+        kdcconf::kdc_conf_path_in(&both),
+        std::path::Path::new("/a/kdc.conf")
+    );
+}
+
+#[test]
+fn a_missing_profile_leaves_mit_defaults_under_kdc_dir() {
+    // Live MIT 1.22.2: `KRB5_KDC_PROFILE=/nonexistent/kdc.conf kdb5_util -P pw create -s -r R`
+    // creates KDC_DIR/principal and KDC_DIR/.k5.R, exit 0.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-missing");
+    let missing = dir.join("no-such-kdc.conf");
+    let missing = missing.to_str().unwrap();
+    let p = resolve_paths(&[("KRB5_KDC_PROFILE", missing)], None, Some("KERBER.TEST")).unwrap();
+    assert_eq!(p.profile, std::path::Path::new(missing));
+    assert_eq!(p.conf, None);
+    assert_eq!(p.realm.as_deref(), Some("KERBER.TEST"));
+    assert_eq!(p.database_name, kdc_dir_path("principal"));
+    assert_eq!(p.key_stash_file, kdc_dir_path(".k5.KERBER.TEST"));
+    assert_eq!(p.acl_file, Some(kdc_dir_path("kadm5.acl")));
+    assert_eq!(p.master_key_type, None);
+    // A directory reads as an empty profile too; text that is not UTF-8 is refused.
+    let as_dir = resolve_paths(
+        &[("KRB5_KDC_PROFILE", dir.to_str().unwrap())],
+        Some("R"),
+        None,
+    );
+    assert_eq!(as_dir.unwrap().conf, None);
+    let bad = dir.join("bad-kdc.conf");
+    std::fs::write(&bad, b"[realms]\n\xff\n").unwrap();
+    let err = resolve_paths(
+        &[("KRB5_KDC_PROFILE", bad.to_str().unwrap())],
+        Some("R"),
+        None,
+    );
+    assert!(err.unwrap_err().to_string().contains("bad-kdc.conf"));
+}
+
+#[test]
+fn paths_come_from_the_realms_own_stanza() {
+    // MIT `get_string_param` (`alt_prof.c:310-336`): the realm's stanza, last value.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-stanza");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]\n    A.TEST = {\n        database_name = /a/principal\n        \
+         key_stash_file = /a/stash\n        acl_file = /a/kadm5.acl\n        \
+         master_key_type = aes256-cts-hmac-sha1-96\n    }\n    B.TEST = {\n        \
+         database_name = /b/old\n        database_name = /b/principal\n    }\n",
+    )
+    .unwrap();
+    let vars = [("KRB5_KDC_PROFILE", conf.to_str().unwrap())];
+    let a = resolve_paths(&vars, None, Some("A.TEST")).unwrap();
+    assert_eq!(a.database_name, std::path::Path::new("/a/principal"));
+    assert_eq!(a.key_stash_file, std::path::Path::new("/a/stash"));
+    assert_eq!(
+        a.acl_file.as_deref(),
+        Some(std::path::Path::new("/a/kadm5.acl"))
+    );
+    assert_eq!(
+        a.master_key_type.as_deref(),
+        Some("aes256-cts-hmac-sha1-96")
+    );
+    assert!(a.conf.is_some());
+    // B.TEST's stanza has no stash, ACL or master key type: MIT's defaults, not A.TEST's.
+    let b = resolve_paths(&vars, Some("B.TEST"), Some("A.TEST")).unwrap();
+    assert_eq!(b.realm.as_deref(), Some("B.TEST"));
+    assert_eq!(b.database_name, std::path::Path::new("/b/principal"));
+    assert_eq!(b.key_stash_file, kdc_dir_path(".k5.B.TEST"));
+    assert_eq!(b.acl_file, Some(kdc_dir_path("kadm5.acl")));
+    assert_eq!(b.master_key_type, None);
+}
+
+#[test]
+fn a_realm_with_no_stanza_gets_mit_defaults() {
+    // Live MIT 1.22.2: when kdc.conf holds a stanza only for another realm, `kdb5_util create -s`
+    // for the default realm writes KDC_DIR/principal and KDC_DIR/.k5.<default realm>.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-other");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]\n    EXAMPLE.COM = {\n        database_name = /x/principal\n        \
+         key_stash_file = /x/.k5.EXAMPLE.COM\n    }\n",
+    )
+    .unwrap();
+    let vars = [("KRB5_KDC_PROFILE", conf.to_str().unwrap())];
+    let p = resolve_paths(&vars, None, Some("KERBER.TEST")).unwrap();
+    assert_eq!(p.database_name, kdc_dir_path("principal"));
+    assert_eq!(p.key_stash_file, kdc_dir_path(".k5.KERBER.TEST"));
+    let named = resolve_paths(&vars, Some("EXAMPLE.COM"), Some("KERBER.TEST")).unwrap();
+    assert_eq!(named.database_name, std::path::Path::new("/x/principal"));
+    assert_eq!(
+        named.key_stash_file,
+        std::path::Path::new("/x/.k5.EXAMPLE.COM")
+    );
+}
+
+#[test]
+fn environment_overrides_sit_on_top() {
+    let dir = krb5_testkit::scratch_dir("kdcpaths-env");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]\n    KERBER.TEST = {\n        database_name = /c/principal\n        \
+         key_stash_file = /c/stash\n        acl_file = /c/kadm5.acl\n        \
+         master_key_type = aes256-cts-hmac-sha1-96\n    }\n",
+    )
+    .unwrap();
+    let p = resolve_paths(
+        &[
+            ("KRB5_KDC_CONF", conf.to_str().unwrap()),
+            ("KRB5_KDC_DB", "/e/principal"),
+            ("KRB5_KDC_STASH", "/e/stash"),
+            ("KRB5_ACL_FILE", "/e/acl"),
+            ("KRB5_MASTER_ETYPE", "aes128-cts-hmac-sha256-128"),
+        ],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(p.realm, None);
+    assert!(p.conf.is_some());
+    assert_eq!(p.database_name, std::path::Path::new("/e/principal"));
+    assert_eq!(p.key_stash_file, std::path::Path::new("/e/stash"));
+    assert_eq!(p.acl_file.as_deref(), Some(std::path::Path::new("/e/acl")));
+    assert_eq!(
+        p.master_key_type.as_deref(),
+        Some("aes128-cts-hmac-sha256-128")
+    );
+}
+
+#[test]
+fn the_acl_default_follows_a_relocated_stash_and_empty_means_none() {
+    let both = [
+        ("KRB5_KDC_DB", "/tmp/principal"),
+        ("KRB5_KDC_STASH", "/tmp/stash"),
+    ];
+    let p = resolve_paths(&both, None, None).unwrap();
+    assert_eq!(
+        p.acl_file.as_deref(),
+        Some(std::path::Path::new("/tmp/kadm5.acl"))
+    );
+    let p = resolve_paths(&both[1..], None, Some("R")).unwrap();
+    assert_eq!(p.database_name, kdc_dir_path("principal"));
+    assert_eq!(
+        p.acl_file.as_deref(),
+        Some(std::path::Path::new("/tmp/kadm5.acl"))
+    );
+    let none = resolve_paths(&[both[0], both[1], ("KRB5_ACL_FILE", "")], None, None);
+    assert_eq!(none.unwrap().acl_file, None);
+    let dir = krb5_testkit::scratch_dir("kdcpaths-acl");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(&conf, "[realms]\n    R = {\n        acl_file =\n    }\n").unwrap();
+    let empty = resolve_paths(
+        &[("KRB5_KDC_PROFILE", conf.to_str().unwrap())],
+        Some("R"),
+        None,
+    );
+    assert_eq!(empty.unwrap().acl_file, None);
+}
+
+#[test]
+fn no_realm_fails_unless_both_files_are_named() {
+    // Live MIT 1.22.2: with no -r and no default_realm, kdb5_util refuses before any path,
+    // even with -d and -sf: "Configuration file does not specify default realm while getting
+    // default realm", exit 1.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-norealm");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]
+    R = {
+        database_name = /r/principal
+                 key_stash_file = /r/stash
+    }
+",
+    )
+    .unwrap();
+    let vars = [("KRB5_KDC_PROFILE", conf.to_str().unwrap())];
+    let e = resolve_paths(&vars, None, None).unwrap_err();
+    assert!(matches!(e, Error::NoDefaultRealm));
+    assert_eq!(
+        e.to_string(),
+        "Configuration file does not specify default realm"
+    );
+    let stash_only = [vars[0], ("KRB5_KDC_STASH", "/s/stash")];
+    assert!(matches!(
+        resolve_paths(&stash_only, None, None),
+        Err(Error::NoDefaultRealm)
+    ));
+    let both = [
+        stash_only[0],
+        stash_only[1],
+        ("KRB5_KDC_DB", "/s/principal"),
+    ];
+    let p = resolve_paths(&both, None, None).unwrap();
+    assert_eq!(p.realm, None);
+    assert_eq!(p.database_name, std::path::Path::new("/s/principal"));
+}
+
 #[test]
 fn dict_file_is_a_realm_relation_only() {
     // MIT `kadm5_get_config_params` (`alt_prof.c:486-513`): reads dict_file under

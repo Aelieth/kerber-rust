@@ -736,6 +736,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **config/kdc/admin.** One kdc.conf and database resolver (`KdcPaths`) for every KDC-side
+  tool, as MIT's `kadm5_get_config_params`: `KDC_DIR/kdc.conf` (`/var/kerberos/krb5kdc`), a
+  missing one empty, the realm's paths, env on top. Units; `kdc-gate` creates from kdc.conf.
 - **docs.** The parity ledger is split by section under `docs/parity/` (a
   README with the rules and counts, one file per section); all 462 rows
   moved byte for byte, the old A4 re-cut into A4, A5 and B1.

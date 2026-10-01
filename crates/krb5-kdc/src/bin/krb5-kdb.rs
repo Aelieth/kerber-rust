@@ -1,15 +1,19 @@
 //! MIT `kdb5_util` dump/load CLI.
 //!
 //! Usage:
-//!   `krb5-kdb load <dump>` — MIT dump → `KRB5_KDC_DB` / `KRB5_KDC_STASH`
+//!   `krb5-kdb load <dump>` — MIT dump → the database and stash
 //!   `krb5-kdb dump <dump>` — store → MIT dump (version 7)
 //!   `krb5-kdb dump <dump> --from-dump <other>` — transcode a MIT dump
 //!   `krb5-kdb create <realm>` — bootstrap + dump-v7 persist
 //!   `krb5-kdb addpol <name>` — named policy + bind `user` if present
 //!   `krb5-kdb setstr <princ> <key> <value>` — string attr (`KRB5_TL_STRING_ATTRS`)
 //!
-//! Master password: `KRB5_MASTER_PASSWORD`. Optional `KRB5_MASTER_ETYPE`
-//! (MIT name or IANA number; default `aes256-cts-hmac-sha384-192`).
+//! The database, stash and master key type are kdc.conf's for the realm
+//! ([`krb5_config::KdcPaths`]): `KRB5_KDC_DB` / `KRB5_KDC_STASH` /
+//! `KRB5_MASTER_ETYPE` override `database_name` / `key_stash_file` /
+//! `master_key_type`, and MIT's defaults under `KDC_DIR` apply when neither is set
+//! (master key type default `aes256-cts-hmac-sha384-192`).
+//! Master password: `KRB5_MASTER_PASSWORD`.
 //! Create passwords: `KRB5_TEST_USER_PASSWORD` / `KRB5_TEST_ADMIN_PASSWORD`.
 
 #![forbid(unsafe_code)]
@@ -17,6 +21,7 @@
 
 use std::path::PathBuf;
 
+use krb5_config::KdcPaths;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::testrealm::{TEST_ADMIN, TEST_USER};
 use krb5_kdc::{
@@ -75,13 +80,20 @@ fn main() {
         eprintln!("krb5-kdb: set KRB5_MASTER_PASSWORD");
         std::process::exit(2);
     });
-    let etype = master_etype();
+    let paths = kdc_paths((cmd == "create").then_some(args[1].as_str()));
+    let etype = master_etype(&paths);
 
     match cmd {
-        "load" => cmd_load(&path, password.as_bytes(), etype),
-        "dump" => cmd_dump(&path, from_dump.as_deref(), password.as_bytes(), etype),
-        "create" => cmd_create(&args[1]),
-        "addpol" => cmd_addpol(&args[1]),
+        "load" => cmd_load(&paths, &path, password.as_bytes(), etype),
+        "dump" => cmd_dump(
+            &paths,
+            &path,
+            from_dump.as_deref(),
+            password.as_bytes(),
+            etype,
+        ),
+        "create" => cmd_create(&paths, &args[1]),
+        "addpol" => cmd_addpol(&paths, &args[1]),
         other => {
             eprintln!("krb5-kdb: unknown command {other}");
             std::process::exit(2);
@@ -96,7 +108,7 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
-fn cmd_load(path: &std::path::Path, password: &[u8], etype: EncryptionType) {
+fn cmd_load(paths: &KdcPaths, path: &std::path::Path, password: &[u8], etype: EncryptionType) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: read {}: {e}", path.display());
         std::process::exit(1);
@@ -118,8 +130,7 @@ fn cmd_load(path: &std::path::Path, password: &[u8], etype: EncryptionType) {
         eprintln!("krb5-kdb: load: {e}");
         std::process::exit(1);
     });
-    let (db, stash) = db_and_stash();
-    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+    save_store(&store, &paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: save store: {e}");
         std::process::exit(1);
     });
@@ -127,6 +138,7 @@ fn cmd_load(path: &std::path::Path, password: &[u8], etype: EncryptionType) {
 }
 
 fn cmd_dump(
+    paths: &KdcPaths,
     path: &std::path::Path,
     from_dump: Option<&str>,
     password: &[u8],
@@ -142,8 +154,7 @@ fn cmd_dump(
             std::process::exit(1);
         })
     } else {
-        let (db, stash) = db_and_stash();
-        load_store(&db, &stash).unwrap_or_else(|e| {
+        load_store(&paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
             eprintln!("krb5-kdb: load store: {e}");
             std::process::exit(1);
         })
@@ -166,7 +177,7 @@ fn cmd_dump(
     println!("ok dump version={KDB_DUMP_VERSION} principals={nprinc}");
 }
 
-fn cmd_create(realm: &str) {
+fn cmd_create(paths: &KdcPaths, realm: &str) {
     if realm.is_empty() {
         eprintln!("krb5-kdb: empty realm");
         std::process::exit(2);
@@ -179,25 +190,24 @@ fn cmd_create(realm: &str) {
         eprintln!("krb5-kdb: create requires KRB5_TEST_ADMIN_PASSWORD");
         std::process::exit(2);
     });
-    let kdc = krb5_config::kdc_conf_path().and_then(|p| krb5_config::KdcConf::load_file(p).ok());
     let (store, _) = bootstrap_realm_with_kdc_conf(
         realm,
         TEST_USER,
         user_pw.as_bytes(),
         TEST_ADMIN,
         admin_pw.as_bytes(),
-        kdc.as_ref(),
+        paths.conf.as_ref(),
     )
     .unwrap_or_else(|e| {
         eprintln!("krb5-kdb: bootstrap: {e}");
         std::process::exit(1);
     });
-    let (db, stash) = db_and_stash();
-    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+    let db = &paths.database_name;
+    save_store(&store, db, &paths.key_stash_file).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: save store: {e}");
         std::process::exit(1);
     });
-    let written = std::fs::read_to_string(&db).unwrap_or_else(|e| {
+    let written = std::fs::read_to_string(db).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: re-read db: {e}");
         std::process::exit(1);
     });
@@ -214,13 +224,13 @@ fn cmd_create(realm: &str) {
     println!("ok create version={KDB_DUMP_VERSION} realm={realm} principals={nprinc}");
 }
 
-fn cmd_addpol(name: &str) {
+fn cmd_addpol(paths: &KdcPaths, name: &str) {
     if name.is_empty() {
         eprintln!("krb5-kdb: empty policy name");
         std::process::exit(2);
     }
-    let (db, stash) = db_and_stash();
-    let mut store = load_store(&db, &stash).unwrap_or_else(|e| {
+    let (db, stash) = (&paths.database_name, &paths.key_stash_file);
+    let mut store = load_store(db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: load store: {e}");
         std::process::exit(1);
     });
@@ -245,7 +255,7 @@ fn cmd_addpol(name: &str) {
                 std::process::exit(1);
             });
     }
-    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+    save_store(&store, db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: save store: {e}");
         std::process::exit(1);
     });
@@ -257,8 +267,9 @@ fn cmd_setstr(princ: &str, key: &str, value: &str) {
         eprintln!("krb5-kdb: empty setstr key");
         std::process::exit(2);
     }
-    let (db, stash) = db_and_stash();
-    let mut store = load_store(&db, &stash).unwrap_or_else(|e| {
+    let paths = kdc_paths(None);
+    let (db, stash) = (&paths.database_name, &paths.key_stash_file);
+    let mut store = load_store(db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: load store: {e}");
         std::process::exit(1);
     });
@@ -275,7 +286,7 @@ fn cmd_setstr(princ: &str, key: &str, value: &str) {
             eprintln!("krb5-kdb: setstr: {e}");
             std::process::exit(1);
         });
-    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+    save_store(&store, db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: save store: {e}");
         std::process::exit(1);
     });
@@ -285,12 +296,13 @@ fn cmd_setstr(princ: &str, key: &str, value: &str) {
 fn cmd_stash() {
     // krb5_util stash: read the master key (existing stash or KRB5_MASTER_PASSWORD)
     // and (re)write the stash in keytab format via save_store.
-    let (db, stash) = db_and_stash();
-    let store = load_store(&db, &stash).unwrap_or_else(|e| {
+    let paths = kdc_paths(None);
+    let (db, stash) = (&paths.database_name, &paths.key_stash_file);
+    let store = load_store(db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: load store: {e}");
         std::process::exit(1);
     });
-    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+    save_store(&store, db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: stash: {e}");
         std::process::exit(1);
     });
@@ -298,8 +310,9 @@ fn cmd_stash() {
 }
 
 fn cmd_alias(alias: &str, target: &str) {
-    let (db, stash) = db_and_stash();
-    let mut store = load_store(&db, &stash).unwrap_or_else(|e| {
+    let paths = kdc_paths(None);
+    let (db, stash) = (&paths.database_name, &paths.key_stash_file);
+    let mut store = load_store(db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: load store: {e}");
         std::process::exit(1);
     });
@@ -318,7 +331,7 @@ fn cmd_alias(alias: &str, target: &str) {
             eprintln!("krb5-kdb: alias: {e}");
             std::process::exit(1);
         });
-    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+    save_store(&store, db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: save store: {e}");
         std::process::exit(1);
     });
@@ -330,8 +343,9 @@ fn cmd_setlastpwd(princ: &str, secs: &str) {
         eprintln!("krb5-kdb: setlastpwd wants unix seconds");
         std::process::exit(2);
     });
-    let (db, stash) = db_and_stash();
-    let mut store = load_store(&db, &stash).unwrap_or_else(|e| {
+    let paths = kdc_paths(None);
+    let (db, stash) = (&paths.database_name, &paths.key_stash_file);
+    let mut store = load_store(db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: load store: {e}");
         std::process::exit(1);
     });
@@ -343,36 +357,29 @@ fn cmd_setlastpwd(princ: &str, secs: &str) {
         }
     };
     store.set_last_pwd_unix(&name, ts);
-    save_store(&store, &db, &stash).unwrap_or_else(|e| {
+    save_store(&store, db, stash).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: save store: {e}");
         std::process::exit(1);
     });
     println!("ok setlastpwd {princ} {ts}");
 }
 
-fn db_and_stash() -> (PathBuf, PathBuf) {
-    let db = std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| {
-        eprintln!("krb5-kdb: set KRB5_KDC_DB");
-        std::process::exit(2);
-    });
-    let stash = std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| {
-        eprintln!("krb5-kdb: set KRB5_KDC_STASH");
-        std::process::exit(2);
-    });
-    (PathBuf::from(db), PathBuf::from(stash))
+/// The database, stash and master key type, as every KDC-side tool resolves them.
+/// MIT `main` (`kdb5_util.c:304-312`): no realm is "… while getting default realm", exit 1.
+fn kdc_paths(realm: Option<&str>) -> KdcPaths {
+    KdcPaths::resolve(realm).unwrap_or_else(|e| {
+        let context = match e {
+            krb5_config::Error::NoDefaultRealm => " while getting default realm",
+            _ => "",
+        };
+        eprintln!("krb5-kdb: {e}{context}");
+        std::process::exit(1);
+    })
 }
 
-fn master_etype() -> EncryptionType {
-    let raw = std::env::var("KRB5_MASTER_ETYPE").ok().or_else(|| {
-        krb5_config::env_kdc_config()
-            .and_then(|p| krb5_config::KdcConf::load_file(p).ok())
-            .and_then(|c| c.master_key_type)
-    });
-    match raw {
-        None => EncryptionType::Aes256CtsHmacSha384192,
-        Some(s) => EncryptionType::from_mit_name(&s).unwrap_or_else(|e| {
-            eprintln!("krb5-kdb: master etype {s}: {e}");
-            std::process::exit(2);
-        }),
-    }
+fn master_etype(paths: &KdcPaths) -> EncryptionType {
+    krb5_kdc::master_etype(paths.master_key_type.as_deref()).unwrap_or_else(|e| {
+        eprintln!("krb5-kdb: master etype {e}");
+        std::process::exit(2);
+    })
 }

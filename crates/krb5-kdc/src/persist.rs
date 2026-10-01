@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use crate::error::Error;
 use crate::kdb_dump::{load_dump_mkey, write_dump};
-use crate::mkey::{default_master_etype, master_key_from_password};
+use crate::mkey::master_key_from_password;
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS, UlogEntry};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_protocol::{Keytab, check_secret_file_writable, write_secret_file};
@@ -91,17 +91,18 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 /// they replace (`write_secret_file`), so `kadmind` as root and `kadmin.local` as another user
 /// can share them. A writer that may not write the database or its `.ulog` changes nothing.
 ///
-/// When `KRB5_MASTER_PASSWORD` is set and the stash is new, the master key
-/// is derived with the harness etype (MIT `aes256-cts-hmac-sha384-192`) so
-/// `kdb5_util load` of the live file succeeds after `create -s -P`.
+/// A new stash's master key has the realm's `master_key_type` ([`crate::master_etype`]); when
+/// `KRB5_MASTER_PASSWORD` is set it is derived from that password, so `kdb5_util load` of the
+/// live file succeeds after `create -s -P`.
 ///
 /// # Errors
 ///
 /// [`PersistError::Io`] when the stash cannot be read or the stash, database or `.ulog` file
 /// cannot be written (an existing one the writer may not open read-write is refused before any
 /// file changes); [`PersistError::Crypto`] when an existing stash is not a usable master key,
-/// a new master key cannot be derived or generated, or a key cannot be wrapped;
-/// [`PersistError::Format`] when a new keytab-format stash is needed and the realm is not ASCII.
+/// `master_key_type` names no supported enctype, a new master key cannot be derived or
+/// generated, or a key cannot be wrapped; [`PersistError::Format`] when a new stash is needed
+/// and the KDC profile cannot be read or the realm is not ASCII.
 pub fn save_store(
     store: &PrincipalStore,
     db_path: &Path,
@@ -296,11 +297,11 @@ fn master_for_save(
         }
         return Ok(master);
     }
+    let etype = persist_master_etype(store.realm())?;
     let master = if let Ok(pw) = std::env::var("KRB5_MASTER_PASSWORD") {
-        let etype = persist_master_etype();
         master_key_from_password(store.realm(), pw.as_bytes(), etype)?
     } else {
-        random_master()?
+        crate::store::random_key(etype)?
     };
     write_secret_file(stash_path, &stash_keytab_bytes(store.realm(), &master)?)?;
     Ok(master)
@@ -334,23 +335,15 @@ fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, 
     ))
 }
 
-fn persist_master_etype() -> EncryptionType {
-    // KRB5_MASTER_ETYPE, then kdc.conf `master_key_type`, like `krb5-kdb`'s
-    // create path (`krb5-kdb.rs master_etype`); previously this path ignored
-    // `master_key_type`. MIT's `DEFAULT_KDC_ENCTYPE` when unset is
-    // aes256-cts-hmac-sha1-96 (`osconf.hin`); Rust keeps the stronger
-    // aes256-cts-hmac-sha384-192 (a documented deviation, `docs/security.md`).
-    let raw = std::env::var("KRB5_MASTER_ETYPE").ok().or_else(|| {
-        krb5_config::env_kdc_config()
-            .and_then(|p| krb5_config::KdcConf::load_file(p).ok())
-            .and_then(|c| c.master_key_type)
-    });
-    master_etype_or_default(raw.as_deref())
-}
-
-fn master_etype_or_default(raw: Option<&str>) -> EncryptionType {
-    raw.and_then(|s| EncryptionType::from_mit_name(s).ok())
-        .unwrap_or_else(default_master_etype)
+/// The master key type of a new stash for `realm`: `KRB5_MASTER_ETYPE`, else the realm's kdc.conf
+/// `master_key_type`, else [`crate::default_master_etype`], as `krb5-kdb` resolves it. MIT's
+/// `DEFAULT_KDC_ENCTYPE` is aes256-cts-hmac-sha1-96 (`osconf.hin`); this port keeps the stronger
+/// aes256-cts-hmac-sha384-192 (a documented deviation, `docs/security.md`).
+fn persist_master_etype(realm: &str) -> Result<EncryptionType, PersistError> {
+    let paths = krb5_config::KdcPaths::resolve(Some(realm))
+        .map_err(|e| PersistError::Format(format!("kdc.conf: {e}")))?;
+    crate::mkey::master_etype(paths.master_key_type.as_deref())
+        .map_err(|e| PersistError::Crypto(format!("master_key_type {e}")))
 }
 
 fn stash_etypes() -> [EncryptionType; 2] {
@@ -363,11 +356,6 @@ fn stash_etypes() -> [EncryptionType; 2] {
 fn load_stash_etype(path: &Path, etype: EncryptionType) -> Result<ProtocolKey, PersistError> {
     let bytes = fs::read(path)?;
     ProtocolKey::from_bytes(etype, &bytes).map_err(|e| PersistError::Crypto(e.to_string()))
-}
-
-fn random_master() -> Result<ProtocolKey, PersistError> {
-    crate::store::random_key(persist_master_etype())
-        .map_err(|e| PersistError::Crypto(e.to_string()))
 }
 
 fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
@@ -558,7 +546,7 @@ fn take_str(b: &[u8], i: &mut usize) -> Result<String, PersistError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{default_master_etype, master_etype_or_default};
+    use crate::mkey::{default_master_etype, master_etype};
     use krb5_crypto::EncryptionType;
 
     #[test]
@@ -566,19 +554,21 @@ mod tests {
         // MIT's DEFAULT_KDC_ENCTYPE (master_key_type unset) is
         // aes256-cts-hmac-sha1-96 (settled live); Rust keeps the stronger
         // aes256-cts-hmac-sha384-192 as its default.
-        assert_eq!(master_etype_or_default(None), default_master_etype());
+        assert_eq!(master_etype(None), Ok(default_master_etype()));
         assert_eq!(
-            master_etype_or_default(None),
-            EncryptionType::Aes256CtsHmacSha384192
+            master_etype(None),
+            Ok(EncryptionType::Aes256CtsHmacSha384192)
         );
-        // A configured master_key_type is honored on the persist path.
+        // A configured master_key_type is honored on the persist path and by krb5-kdb.
         assert_eq!(
-            master_etype_or_default(Some("aes256-cts-hmac-sha1-96")),
-            EncryptionType::Aes256CtsHmacSha196
+            master_etype(Some("aes256-cts-hmac-sha1-96")),
+            Ok(EncryptionType::Aes256CtsHmacSha196)
         );
         assert_eq!(
-            master_etype_or_default(Some("aes256-cts-hmac-sha384-192")),
-            EncryptionType::Aes256CtsHmacSha384192
+            master_etype(Some("aes256-cts-hmac-sha384-192")),
+            Ok(EncryptionType::Aes256CtsHmacSha384192)
         );
+        // A name that is no enctype makes no master key, as in MIT.
+        assert!(master_etype(Some("no-such-enctype")).is_err());
     }
 }

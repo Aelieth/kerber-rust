@@ -62,6 +62,10 @@ pub enum Error {
     /// `Unknown credential cache type`.
     #[error("{0}")]
     Ccache(String),
+    /// No realm was given and krb5.conf names no `default_realm`.
+    /// MIT `KRB5_CONFIG_NODEFREALM` (`krb5_err.et:310-310`): the text.
+    #[error("Configuration file does not specify default realm")]
+    NoDefaultRealm,
 }
 
 /// One KDC (or kpasswd / admin) endpoint.
@@ -274,7 +278,10 @@ pub use ccname::{
     KRB5_CC_UNKNOWN_TYPE, default_ccache_name, default_ccspec, expand_ccache_params, parse_ccname,
     parse_ccspec, resolve_ccspec,
 };
-pub use kdcconf::{env_kdc_config, kdc_conf_path};
+pub use kdcconf::{
+    KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_stash_file,
+    env_kdc_config, kdc_conf_path,
+};
 pub use profile::{
     client_realm_path, discover_kdc, discover_kdc_in, env_ktname, env_new_password, env_password,
     host_to_realm, is_numeric_address, krb5_conf_paths, load_krb5_conf, load_krb5_conf_paths,

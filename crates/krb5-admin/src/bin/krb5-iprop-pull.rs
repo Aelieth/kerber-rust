@@ -2,7 +2,7 @@
 //!
 //! Usage: `krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
 //!
-//! `--load-dump` writes `KRB5_KDC_DB` / `KRB5_KDC_STASH` from a MIT dump
+//! `--load-dump` writes the database and stash ([`krb5_config::KdcPaths`]) from a MIT dump
 //! (version 7 or `ipropx`). A host argument then pulls serial-delta.
 
 #![forbid(unsafe_code)]
@@ -71,14 +71,11 @@ fn main() {
         eprintln!("krb5-iprop-pull: set KRB5_MASTER_PASSWORD");
         std::process::exit(2);
     });
-    let db = PathBuf::from(std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| {
-        eprintln!("krb5-iprop-pull: set KRB5_KDC_DB");
-        std::process::exit(2);
-    }));
-    let stash = PathBuf::from(std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| {
-        eprintln!("krb5-iprop-pull: set KRB5_KDC_STASH");
-        std::process::exit(2);
-    }));
+    let paths = krb5_config::KdcPaths::resolve(None).unwrap_or_else(|e| {
+        eprintln!("krb5-iprop-pull: {e}");
+        std::process::exit(1);
+    });
+    let (db, stash) = (paths.database_name, paths.key_stash_file);
 
     if let Some(path) = dump {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {

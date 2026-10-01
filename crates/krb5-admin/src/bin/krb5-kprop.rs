@@ -2,7 +2,7 @@
 //!
 //! Usage: `krb5-kprop [-P port] [-s keytab] [-n host-instance] replica`
 //!
-//! Loads `KRB5_KDC_DB` / `KRB5_KDC_STASH`, issues a `host/<instance>`
+//! Loads the database and stash [`krb5_config::KdcPaths`] resolves, issues a `host/<instance>`
 //! ticket from that store, and calls [`krb5_admin::kprop_send_store`].
 //! Dump keys are wrapped with `KRB5_MASTER_PASSWORD`.
 
@@ -63,15 +63,17 @@ fn main() {
         eprintln!("krb5-kprop: set KRB5_MASTER_PASSWORD");
         std::process::exit(2);
     });
-    let db = PathBuf::from(std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_KDC_DB");
-        std::process::exit(2);
-    }));
-    let stash = PathBuf::from(std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_KDC_STASH");
-        std::process::exit(2);
-    }));
-    let store = load_store(&db, &stash).unwrap_or_else(|e| {
+    let paths = krb5_config::KdcPaths::resolve(None).unwrap_or_else(|e| {
+        // MIT `parse_args` (`kprop/kprop.c:154-159`): no realm prints only this context (MIT
+        // passes errno, 0, to com_err), exit 1.
+        if matches!(e, krb5_config::Error::NoDefaultRealm) {
+            eprintln!("krb5-kprop: while getting default realm");
+        } else {
+            eprintln!("krb5-kprop: {e}");
+        }
+        std::process::exit(1);
+    });
+    let store = load_store(&paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
         eprintln!("krb5-kprop: load store: {e}");
         std::process::exit(1);
     });

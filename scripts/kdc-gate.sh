@@ -394,8 +394,9 @@ echo "MIT_tgs_audit_seed"
 echo "RUST_tgs_audit_seed"
 
 # examples/configs as written: krb5-kdb creates EXAMPLE.COM from kdc.conf,
-# krb5-kdc and krb5-kadmind start on kdc.conf alone, MIT kadmin adds principals
-# through kadm5.acl, and MIT kinit + kvno read krb5.conf.
+# krb5-kdc and krb5-kadmind start on kdc.conf and krb5.conf alone (its
+# default_realm is their realm, as MIT's), MIT kadmin adds principals through
+# kadm5.acl, and MIT kinit + kvno read krb5.conf.
 echo "==== example configuration (examples/configs) ===="
 EXAMPLE="$ROOT/examples/configs"
 for f in kdc.conf krb5.conf kadm5.acl; do
@@ -412,17 +413,15 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
 docker exec "$NAME" chmod +x /tmp/krb5-kdb /tmp/krb5-kadmind
 docker exec "$NAME" sh -c 'grep -q " kdc.example.com$" /etc/hosts || echo "127.0.0.1 kdc.example.com" >>/etc/hosts'
-docker exec -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    -e KRB5_KDC_DB=/var/lib/kerber-rust/principal \
-    -e KRB5_KDC_STASH=/var/lib/kerber-rust/.k5.EXAMPLE.COM \
+docker exec -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     -e KRB5_MASTER_PASSWORD=example-master \
     -e KRB5_TEST_USER_PASSWORD=example-user \
     -e KRB5_TEST_ADMIN_PASSWORD=example-admin \
     "$NAME" /tmp/krb5-kdb create EXAMPLE.COM || die "example: krb5-kdb create EXAMPLE.COM failed"
-docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kdc >/tmp/example-kdc.log 2>&1'
 require_listen "$NAME" /tmp/example-kdc.log "the example KDC (kdc.conf kdc_listen)"
-docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/example-kadmind.log 2>&1'
 require_listen "$NAME" /tmp/example-kadmind.log "the example kadmind (kdc.conf acl_file)"
 echo "RUST_example_kdc_kadmind"
@@ -464,10 +463,10 @@ docker exec "$NAME" grep -q '^    kdc_ports = 750,88$' /etc/kerber-rust/kdc.conf
     || die "listen: kdc.conf was not rewritten to kdc_ports = 750,88"
 LIP="$(docker exec "$NAME" hostname -i | tr ' ' '\n' | grep -v '^127\.' | grep -v ':' | head -1)"
 [ -n "$LIP" ] || die "listen: the container has no non-loopback IPv4 address"
-docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kdc >/tmp/listen-kdc.log 2>&1'
 require_listen "$NAME" /tmp/listen-kdc.log "the KDC on kdc_ports = 750,88"
-docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/listen-kadmind.log 2>&1'
 require_listen "$NAME" /tmp/listen-kadmind.log "kadmind on its default listeners"
 docker exec "$NAME" cat /tmp/listen-kdc.log /tmp/listen-kadmind.log | grep -E '^(listening|kpasswd) '

@@ -2,16 +2,16 @@
 //!
 //! Usage: `krb5-kpropd [host:port]`
 //!
-//! `KRB5_KPROP_KEYTAB` or host keys from `KRB5_KDC_DB`/`KRB5_KDC_STASH`
-//! authenticate `sendauth`. `KRB5_KPROP_ACL` is fail-closed (unset or empty
-//! denies every peer). The dump body is loaded with `KRB5_MASTER_PASSWORD`
-//! and saved to the replica db.
+//! `KRB5_KPROP_KEYTAB` or host keys from the database and stash
+//! ([`krb5_config::KdcPaths`]) authenticate `sendauth`. `KRB5_KPROP_ACL` is
+//! fail-closed (unset or empty denies every peer). The dump body is loaded with
+//! `KRB5_MASTER_PASSWORD` and saved to the replica db.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -42,13 +42,13 @@ fn main() {
         eprintln!("krb5-kpropd: set KRB5_MASTER_PASSWORD");
         std::process::exit(2);
     });
-    let db = PathBuf::from(
-        std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| "/var/lib/krb5kdc/principal".into()),
-    );
-    let stash = PathBuf::from(
-        std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| "/var/lib/krb5kdc/stash".into()),
-    );
-    let host_keys = load_host_keys();
+    let realm = kpropd_realm();
+    let paths = krb5_config::KdcPaths::resolve(Some(&realm)).unwrap_or_else(|e| {
+        eprintln!("krb5-kpropd: {e}");
+        std::process::exit(1);
+    });
+    let (db, stash) = (paths.database_name, paths.key_stash_file);
+    let host_keys = load_host_keys(&db, &stash);
     if host_keys.is_empty() {
         eprintln!("krb5-kpropd: no host keys (set KRB5_KPROP_KEYTAB or persist a host principal)");
         std::process::exit(1);
@@ -60,7 +60,6 @@ fn main() {
     listener.set_nonblocking(true).ok();
     println!("listening {bind}");
     let stop = Arc::new(AtomicBool::new(false));
-    let realm = kpropd_realm();
     let replay = ReplayCache::new();
     loop {
         if stop.load(Ordering::Relaxed) {
@@ -124,7 +123,7 @@ fn kpropd_acl() -> Option<Vec<String>> {
     Some(text.split('\n').map(str::to_owned).collect())
 }
 
-fn load_host_keys() -> Vec<ProtocolKey> {
+fn load_host_keys(db: &Path, stash: &Path) -> Vec<ProtocolKey> {
     if let Ok(path) = std::env::var("KRB5_KPROP_KEYTAB") {
         match std::fs::read(&path).and_then(|b| Keytab::parse(&b)) {
             Ok(kt) => {
@@ -133,10 +132,7 @@ fn load_host_keys() -> Vec<ProtocolKey> {
             Err(e) => eprintln!("krb5-kpropd: keytab {path}: {e}"),
         }
     }
-    let db = std::env::var("KRB5_KDC_DB").ok();
-    let stash = std::env::var("KRB5_KDC_STASH").ok();
-    if let (Some(db), Some(stash)) = (db, stash)
-        && let Ok(store) = load_store(std::path::Path::new(&db), std::path::Path::new(&stash))
+    if let Ok(store) = load_store(db, stash)
         && store.realm() == krb5_kdc::testrealm::TEST_REALM
     {
         let host = documented_host();

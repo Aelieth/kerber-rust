@@ -72,7 +72,7 @@ pub use listen::{
     bind_preferred, bind_tcp_listeners, bind_udp_listeners, drop_privileges, serve, serve_all,
     serve_all_until, serve_until, shared_dump, shared_store,
 };
-pub use mkey::{default_master_etype, master_key_from_password};
+pub use mkey::{default_master_etype, master_etype, master_key_from_password};
 pub use osa::{
     KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt, decrypt_entry as decrypt_history_entry,
     history_entry as encrypt_history_entry,

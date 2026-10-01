@@ -1,14 +1,14 @@
 //! Local kadm5 verbs against a dump/stash (MIT `kadmin.local`).
 //!
 //! Usage: krb5-kadmin.local [-p principal] [-q command]
-//! DB: `KRB5_KDC_DB` + `KRB5_KDC_STASH`. Passwords from `KRB5_PASSWORD`.
+//! DB: the database and stash [`krb5_config::KdcPaths`] resolves (`KRB5_KDC_DB` /
+//! `KRB5_KDC_STASH` over kdc.conf over MIT's defaults). Passwords from `KRB5_PASSWORD`.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::io::{self, BufRead, Write};
-use std::path::PathBuf;
 
 use krb5_admin::{AdminSession, KadminArgs, parse_kadmin_args, parse_policy_args};
 use krb5_kdc::{Acl, load_store};
@@ -31,14 +31,21 @@ fn main() {
             std::process::exit(2);
         }
     }
-    let (db, stash) = db_and_stash();
-    let mut store = load_store(&db, &stash).unwrap_or_else(|e| {
+    let paths = krb5_config::KdcPaths::resolve(None).unwrap_or_else(|e| {
+        // MIT `kadmin_startup` (`kadmin/cli/kadmin.c:410-413`): no realm is this line, exit 1.
+        if matches!(e, krb5_config::Error::NoDefaultRealm) {
+            eprintln!("kadmin.local: unable to get default realm");
+        } else {
+            eprintln!("kadmin.local: {e}");
+        }
+        std::process::exit(1);
+    });
+    let mut store = load_store(&paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
         eprintln!("kadmin.local: load: {e}");
         std::process::exit(1);
     });
-    if let Some(path) = krb5_config::kdc_conf_path()
-        && let Ok(c) = krb5_config::KdcConf::load_file(&path)
-        && let Err(e) = store.apply_kdc_conf(&c)
+    if let Some(c) = &paths.conf
+        && let Err(e) = store.apply_kdc_conf(c)
     {
         eprintln!("kadmin.local: kdc.conf: {e}");
         std::process::exit(1);
@@ -68,18 +75,6 @@ fn main() {
         }
     }
     drop(sess);
-}
-
-fn db_and_stash() -> (PathBuf, PathBuf) {
-    let db = std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| {
-        eprintln!("kadmin.local: set KRB5_KDC_DB");
-        std::process::exit(2);
-    });
-    let stash = std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| {
-        eprintln!("kadmin.local: set KRB5_KDC_STASH");
-        std::process::exit(2);
-    });
-    (PathBuf::from(db), PathBuf::from(stash))
 }
 
 enum LineOutcome {

@@ -99,11 +99,17 @@ local `addprinc` survives a remote `cpw`. There is still no dump
 file lock: the reload→mutate→save window can lose the last writer
 (dirty-flag/lock deferred with db2/LMDB).
 
-**`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
-applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /
-`KRB5_KDC_CONF` / `/etc/krb5kdc/kdc.conf`; without `--test-realm` it
-also takes `database_name` / `key_stash_file` / `master_key_type` /
-`db_library` / listen ports from that file. `kinit` and TGS referral chase call `discover_kdc` (`KRB5_CONFIG`
+**`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. Every
+KDC-side tool finds kdc.conf and the database through `KdcPaths`, as MIT's
+`kadm5_get_config_params` does: the profile is `KRB5_KDC_PROFILE` (or
+`KRB5_KDC_CONF`), else `KDC_DIR/kdc.conf`, and a missing one reads as empty;
+`database_name` / `key_stash_file` / `acl_file` / `master_key_type` come from
+the realm's own stanza (the named realm, else `default_realm`; with neither
+the tool stops as MIT's does), else MIT's defaults under `KDC_DIR`
+(`/var/kerberos/krb5kdc`, set at build time by `KERBER_KDC_DIR`), with
+`KRB5_KDC_DB` / `KRB5_KDC_STASH` / `KRB5_ACL_FILE` / `KRB5_MASTER_ETYPE` on
+top. The KDC also takes ticket policy, `db_library` and listen ports from
+that file. `kinit` and TGS referral chase call `discover_kdc` (`KRB5_CONFIG`
 then `/etc/krb5.conf`); argv remains the fallback.
 
 **`krb5-cli`** is MIT's command-line shapes and password prompts for the

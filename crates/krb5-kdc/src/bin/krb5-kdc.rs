@@ -8,16 +8,17 @@
 //! loopback candidates.
 //!
 //! `--test-realm` bootstraps the documented KERBER.TEST principals. Without
-//! it the daemon loads `KRB5_KDC_DB`/`KRB5_KDC_STASH` or `database_name` /
-//! `key_stash_file` from `kdc.conf`. Ticket policy comes from
-//! `KRB5_KDC_PROFILE` / `KRB5_KDC_CONF` / `/etc/krb5kdc/kdc.conf`.
+//! it the daemon loads the realm's database and stash as
+//! [`krb5_config::KdcPaths`] resolves them: `KRB5_KDC_DB` / `KRB5_KDC_STASH`,
+//! else kdc.conf's `database_name` / `key_stash_file`, else MIT's defaults under
+//! `KDC_DIR`. kdc.conf is `KRB5_KDC_PROFILE` (or `KRB5_KDC_CONF`), else
+//! `KDC_DIR/kdc.conf`; a missing one is read as empty, as MIT reads it.
 //! Passwords come from `KRB5_TEST_USER_PASSWORD` / `KRB5_TEST_ADMIN_PASSWORD`.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::{TcpListener, UdpSocket};
-use std::path::PathBuf;
 
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, documented_kiprop};
@@ -77,23 +78,28 @@ fn main() {
         export_krbtgt = std::env::var("KRB5_EXPORT_KRBTGT_KEYTAB").ok();
     }
 
-    let kdc_conf = load_kdc_conf();
+    // The test realm's name keeps the stash default from needing krb5.conf's default_realm.
+    let test_realm_name = test_realm
+        .then(|| std::env::var("KRB5_TEST_REALM").unwrap_or_else(|_| TEST_REALM.to_owned()));
+    let paths = krb5_config::KdcPaths::resolve(test_realm_name.as_deref()).unwrap_or_else(|e| {
+        // MIT `initialize_realms` (`kdc/main.c:793-800`): no realm is "…, attempting to retrieve
+        // default realm", exit 1.
+        let context = match e {
+            krb5_config::Error::NoDefaultRealm => ", attempting to retrieve default realm",
+            _ => "",
+        };
+        eprintln!("krb5-kdc: {e}{context}");
+        std::process::exit(1);
+    });
+    let kdc_conf = paths.conf;
     let mut store = if test_realm {
         bootstrap_test_realm(kdc_conf.as_ref())
     } else {
-        let (db, stash) = db_and_stash(kdc_conf.as_ref());
-        if let (Some(db), Some(stash)) = (db, stash) {
-            let lib = kdc_conf.as_ref().and_then(|c| c.db_library.as_deref());
-            open_store(lib, &db, &stash).unwrap_or_else(|e| {
-                eprintln!("krb5-kdc: load store: {e}");
-                std::process::exit(1);
-            })
-        } else {
-            eprintln!(
-                "krb5-kdc: pass --test-realm or set KRB5_KDC_DB and KRB5_KDC_STASH (or database_name / key_stash_file in kdc.conf)"
-            );
-            std::process::exit(2);
-        }
+        let lib = kdc_conf.as_ref().and_then(|c| c.db_library.as_deref());
+        open_store(lib, &paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
+            eprintln!("krb5-kdc: load store: {e}");
+            std::process::exit(1);
+        })
     };
     if test_realm
         && let (Ok(db), Ok(stash)) = (
@@ -291,29 +297,6 @@ fn main() {
         std::process::exit(1);
     }
     krb5_kdc::current_audit().kdc_stop(true);
-}
-
-fn load_kdc_conf() -> Option<krb5_config::KdcConf> {
-    let path = krb5_config::kdc_conf_path()?;
-    match krb5_config::KdcConf::load_file(&path) {
-        Ok(c) => Some(c),
-        Err(e) => {
-            eprintln!("krb5-kdc: kdc.conf: {e}");
-            std::process::exit(1);
-        }
-    }
-}
-
-fn db_and_stash(conf: Option<&krb5_config::KdcConf>) -> (Option<PathBuf>, Option<PathBuf>) {
-    let db = std::env::var("KRB5_KDC_DB")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| conf.and_then(|c| c.database_name.clone()));
-    let stash = std::env::var("KRB5_KDC_STASH")
-        .ok()
-        .map(PathBuf::from)
-        .or_else(|| conf.and_then(|c| c.key_stash_file.clone()));
-    (db, stash)
 }
 
 /// The listening sockets. An address on the command line or in `KRB5_KDC_BIND`, or
