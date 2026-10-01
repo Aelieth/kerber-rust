@@ -490,11 +490,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "krb5-cli"
+version = "1.0.0"
+dependencies = [
+ "nix",
+ "thiserror",
+ "zeroize",
+]
+
+[[package]]
 name = "krb5-client"
 version = "1.0.0"
 dependencies = [
  "chrono",
  "krb5-asn1",
+ "krb5-cli",
  "krb5-config",
  "krb5-crypto",
  "krb5-kdc",
@@ -502,7 +512,6 @@ dependencies = [
  "krb5-protocol",
  "krb5-testkit",
  "krb5-types",
- "nix",
  "tracing",
  "tracing-subscriber",
  "zeroize",

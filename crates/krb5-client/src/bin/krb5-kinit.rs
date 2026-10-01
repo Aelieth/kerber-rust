@@ -158,8 +158,8 @@ fn main() {
     let prompter = |banner: &str| -> Result<(Vec<u8>, Vec<u8>), String> {
         // MIT `krb5_prompter_posix` (`prompter.c:54-54`): prints the banner on stdout.
         println!("{banner}");
-        let a = read_prompt_line("Enter new password: ")?;
-        let b = read_prompt_line("Enter it again: ")?;
+        let a = read_prompt_line("Enter new password")?;
+        let b = read_prompt_line("Enter it again")?;
         Ok((a, b))
     };
     let key_exp_notice = |banner: &str| eprintln!("{banner}");

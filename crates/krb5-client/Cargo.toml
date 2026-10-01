@@ -31,12 +31,12 @@ path = "src/bin/krb5-kswitch.rs"
 [dependencies]
 chrono.workspace = true
 krb5-asn1.workspace = true
+krb5-cli.workspace = true
 krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
-nix = { workspace = true, features = ["term"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
 zeroize.workspace = true

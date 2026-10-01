@@ -463,6 +463,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **cli.** `krb5-cli`: glibc `getopt` (moved from `krb5-client`; a leading `+` stops at
+  the first operand), exact-spelling option tables for `kdb5_util` / `kadmind`, and the
+  MIT prompter (`krb5_read_password`: one line per prompt from a pipe). Unit-tested.
 - **examples.** `examples/configs/` is a working one-realm `kdc.conf`,
   `krb5.conf` and `kadm5.acl`; its README names each key's reader, what is
   set through the environment, and what MIT reads that this port ignores.

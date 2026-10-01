@@ -9,13 +9,14 @@ daemons   krb5-admin
 roles     krb5-kdc     krb5-client     krb5-gss     (krb5-testkit: test helpers)
 wire      krb5-protocol
 codecs    krb5-asn1    krb5-crypto     krb5-config
-base      krb5-types   krb5-log
+base      krb5-types   krb5-log        krb5-cli
 ```
 
 `krb5-admin` uses `krb5-kdc` and `krb5-gss`; `krb5-kdc`, `krb5-client` and
 `krb5-gss` sit on `krb5-protocol`, which uses the three codec crates;
 `krb5-asn1` uses `krb5-types` and `krb5-log`, `krb5-crypto` uses `krb5-log`,
-and `krb5-config` uses `krb5-types`.
+and `krb5-config` uses `krb5-types`. The tools' command lines and password
+prompts come from `krb5-cli`, which depends on no other crate here.
 
 ## Crate responsibilities
 
@@ -104,6 +105,13 @@ applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /
 also takes `database_name` / `key_stash_file` / `master_key_type` /
 `db_library` / listen ports from that file. `kinit` and TGS referral chase call `discover_kdc` (`KRB5_CONFIG`
 then `/etc/krb5.conf`); argv remains the fallback.
+
+**`krb5-cli`** is MIT's command-line shapes and password prompts for the
+tools: glibc `getopt` (with the leading `+` that stops at the first operand),
+option tables matched by exact spelling for the tools MIT parses by hand
+(`kdb5_util`'s globals anywhere on the line, `kadmind`'s `-nofork` / `-port`),
+and `krb5_prompter_posix` / `krb5_read_password` (one line per prompt from a
+pipe, echo off on a terminal, `Password mismatch`).
 
 **`krb5-tools`** holds the harness-only gate tools (`diffsend`, `loadgen`,
 `krb5-forge-tgt`, …; `publish = false`). It is not a product surface.

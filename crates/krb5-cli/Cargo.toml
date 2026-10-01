@@ -1,0 +1,17 @@
+[package]
+name = "krb5-cli"
+description = "MIT-style command lines and terminal password prompts for the kerber-rust tools"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+nix = { workspace = true, features = ["term"] }
+thiserror.workspace = true
+zeroize.workspace = true
+
+[lints]
+workspace = true

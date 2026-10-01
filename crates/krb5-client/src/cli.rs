@@ -1,136 +1,7 @@
 //! getopt-compatible CLI parsing for kinit/klist/kvno/kdestroy.
 
+pub use krb5_cli::{LongOpt, Opt, getopt};
 use krb5_protocol::{CcacheCred, FileCcache};
-
-/// One option from [`getopt`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Opt {
-    /// Short letter, or 0 when `long` is set.
-    pub flag: char,
-    /// Long name without `--` when this came from a long option.
-    pub long: Option<&'static str>,
-    /// Argument when the optstring requires one.
-    pub arg: Option<String>,
-}
-
-/// Long option (`name`, takes argument, optional short alias).
-#[derive(Clone, Copy, Debug)]
-pub struct LongOpt {
-    /// Without the leading `--`.
-    pub name: &'static str,
-    /// Whether a value is required.
-    pub takes_arg: bool,
-    /// MIT short equivalent.
-    pub short: Option<char>,
-}
-
-/// Split `args` (no argv0) into options and operands. Clustering is POSIX.
-///
-/// # Errors
-///
-/// An error message when an option is not in `optstring` or `longs`, an option that takes an
-/// argument has none, or a long option that takes none is given one (`--name=value`).
-pub fn getopt(
-    args: &[String],
-    optstring: &str,
-    longs: &[LongOpt],
-) -> Result<(Vec<Opt>, Vec<String>), String> {
-    let mut opts = Vec::new();
-    let mut rest = Vec::new();
-    let mut i = 0;
-    while i < args.len() {
-        let a = &args[i];
-        if a == "--" {
-            rest.extend(args[i + 1..].iter().cloned());
-            break;
-        }
-        if let Some(name) = a.strip_prefix("--") {
-            let (name, inline) = match name.split_once('=') {
-                Some((n, v)) => (n, Some(v.to_owned())),
-                None => (name, None),
-            };
-            let spec = longs
-                .iter()
-                .find(|l| l.name == name)
-                .ok_or_else(|| format!("unrecognized option '--{name}'"))?;
-            let arg = if spec.takes_arg {
-                if let Some(v) = inline {
-                    Some(v)
-                } else {
-                    i += 1;
-                    Some(
-                        args.get(i)
-                            .cloned()
-                            .ok_or_else(|| format!("option '{name}' requires an argument"))?,
-                    )
-                }
-            } else {
-                if inline.is_some() {
-                    return Err(format!("option '--{name}' doesn't allow an argument"));
-                }
-                None
-            };
-            opts.push(Opt {
-                flag: spec.short.unwrap_or('\0'),
-                long: Some(spec.name),
-                arg,
-            });
-            i += 1;
-            continue;
-        }
-        if a.starts_with('-') && a.len() > 1 {
-            let chars: Vec<char> = a[1..].chars().collect();
-            let mut ci = 0;
-            while ci < chars.len() {
-                let c = chars[ci];
-                let wants = opt_wants_arg(optstring, c)?;
-                let arg = if wants {
-                    let inline: String = chars[ci + 1..].iter().collect();
-                    if inline.is_empty() {
-                        i += 1;
-                        Some(
-                            args.get(i)
-                                .cloned()
-                                .ok_or_else(|| format!("option requires an argument -- '{c}'"))?,
-                        )
-                    } else {
-                        ci = chars.len();
-                        Some(inline)
-                    }
-                } else {
-                    None
-                };
-                opts.push(Opt {
-                    flag: c,
-                    long: None,
-                    arg,
-                });
-                if wants {
-                    break;
-                }
-                ci += 1;
-            }
-            i += 1;
-            continue;
-        }
-        rest.push(a.clone());
-        i += 1;
-    }
-    Ok((opts, rest))
-}
-
-fn opt_wants_arg(optstring: &str, c: char) -> Result<bool, String> {
-    let mut it = optstring.chars().peekable();
-    while let Some(ch) = it.next() {
-        if ch == ':' {
-            continue;
-        }
-        if ch == c {
-            return Ok(it.next() == Some(':'));
-        }
-    }
-    Err(format!("invalid option -- '{c}'"))
-}
 
 /// Parsed `kinit` argv (MIT shopts plus `--spake`/`--pkinit` aliases).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -525,43 +396,21 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// The message `failed to read password from stdin` when stdin cannot be read or the line is
-/// not UTF-8.
+/// The message `failed to read password from stdin` when stdin ends or cannot be read.
 pub fn read_password_line(principal: &str) -> Result<Vec<u8>, String> {
-    read_prompt_line(&format!("Password for {principal}: "))
+    read_prompt_line(&format!("Password for {principal}"))
 }
 
-/// One hidden prompt like MIT `krb5_prompter_posix`.
-/// MIT `krb5_prompter_posix` (`prompter.c:78-92`): the prompt on **stdout**, echo off while
-/// stdin is a terminal (`setup_tty`), the line read, echo restored, and a newline printed
-/// after every hidden prompt whether or not stdin is a tty (`:91-92`); the trailing newline
-/// is stripped from the reply.
+/// One hidden prompt, `prompt` and `: ` on stdout, through the shared MIT prompter
+/// [`krb5_cli::prompt_hidden`].
 ///
 /// # Errors
 ///
-/// The message `failed to read password from stdin` when stdin cannot be read or the line is
-/// not UTF-8.
+/// The message `failed to read password from stdin` when stdin ends or cannot be read.
 pub fn read_prompt_line(prompt: &str) -> Result<Vec<u8>, String> {
-    use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
-    use std::io::Write as _;
-    let stdin = std::io::stdin();
-    print!("{prompt}");
-    let _ = std::io::stdout().flush();
-    // `tcgetattr` fails with ENOTTY on a pipe: no echo to turn off.
-    let saved = tcgetattr(&stdin).ok();
-    if let Some(t) = &saved {
-        let mut hidden = t.clone();
-        hidden.local_flags.remove(LocalFlags::ECHO);
-        let _ = tcsetattr(&stdin, SetArg::TCSANOW, &hidden);
-    }
-    let mut s = String::new();
-    let read = stdin.read_line(&mut s);
-    if let Some(t) = &saved {
-        let _ = tcsetattr(&stdin, SetArg::TCSANOW, t);
-    }
-    println!();
-    read.map_err(|_| "failed to read password from stdin".to_owned())?;
-    Ok(s.trim_end_matches(['\n', '\r']).as_bytes().to_vec())
+    krb5_cli::prompt_hidden(prompt)
+        .map(|reply| reply.to_vec())
+        .map_err(|_| "failed to read password from stdin".to_owned())
 }
 
 #[cfg(test)]
