@@ -71,8 +71,7 @@ These invariants are recorded in full in the [parity ledger](parity/README.md):
 the row named by its MIT cite holds MIT's behaviour, the Rust behaviour and the
 proof, and the grade is the ledger's. The stricter and deviation rows fail
 closed like the rows above: the encrypted-challenge replay is also a different
-code (34 where MIT answers 24), and the unset master key type is a stronger
-default rather than a refusal. The exact rows are MIT behaviour this table used
+code (34 where MIT answers 24). The exact rows are MIT behaviour this table used
 to restate.
 
 | Invariant | Grade | Ledger row |
@@ -88,7 +87,7 @@ to restate.
 | Encrypted-challenge replay | deviation | `kdc_preauth.c:1092-1133` ([A3](parity/a3-preauth.md)) |
 | CAMMAC KDC verifier keyed checksum (`cammac.c:168`) | stricter-documented | `cammac.c:168` ([A3](parity/a3-preauth.md)) |
 | FAST armor ticket server realm | stricter-documented | `fast_util.c:62-67` ([A3](parity/a3-preauth.md)) |
-| Unset `master_key_type` | deviation | `osconf.hin:90` ([A4](parity/a4-kadmin.md)) |
+| Unset `master_key_type` | exact | `osconf.hin:90` ([A4](parity/a4-kadmin.md)) |
 | kadm5 `ks_tuple` with an enctype that is not implemented | stricter-documented | `svr_principal.c:444-447` unknown v3 etype ([A4](parity/a4-kadmin.md)) |
 | `kadmin.local` exit status after a failed verb | stricter-documented | `ss_wrapper.c:66-76; kadmin.c:89-99` ([A4](parity/a4-kadmin.md)) |
 | kadmind reserved TL types | exact; deviation (multi-put) | `svr_principal.c:310-333,565-588,650-682` ([A4](parity/a4-kadmin.md)) |

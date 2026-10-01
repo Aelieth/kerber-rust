@@ -1,9 +1,8 @@
 //! Master-key recovery for MIT KDB dump/load.
 //!
-//! First cut derives `K/M@REALM` from the master password. The salt is the
-//! RFC 4120 default salt of that principal (`REALM` ‖ `"KM"`). The harness
-//! `default_master_etype` is etype 20 (`aes256-cts-hmac-sha384-192`); s2kparams
-//! are the etype default (32768). Stash `.k5.REALM` parsing is later.
+//! The master key `K/M@REALM` is derived from the master password with the RFC 4120 default
+//! salt of that principal (`REALM` ‖ `"KM"`) and the etype default s2kparams. Its enctype is
+//! kdc.conf's `master_key_type`, else MIT's `DEFAULT_KDC_ENCTYPE`.
 
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_types::PrincipalName;
@@ -28,10 +27,11 @@ pub fn master_key_from_password(
     string_to_key(etype, password, &salt, None).map_err(Error::from)
 }
 
-/// Documented harness master-key etype (`aes256-cts-hmac-sha384-192`).
+/// The master key type of a realm whose kdc.conf sets no `master_key_type`.
+/// MIT `DEFAULT_KDC_ENCTYPE` (`osconf.hin:90-90`): aes256-cts-hmac-sha1-96.
 #[must_use]
 pub fn default_master_etype() -> EncryptionType {
-    EncryptionType::Aes256CtsHmacSha384192
+    EncryptionType::Aes256CtsHmacSha196
 }
 
 /// The master key type `master_key_type` names, else [`default_master_etype`]. Every tool takes

@@ -91,9 +91,9 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 /// they replace (`write_secret_file`), so `kadmind` as root and `kadmin.local` as another user
 /// can share them. A writer that may not write the database or its `.ulog` changes nothing.
 ///
-/// A new stash's master key has the realm's `master_key_type` ([`crate::master_etype`]); when
-/// `KRB5_MASTER_PASSWORD` is set it is derived from that password, so `kdb5_util load` of the
-/// live file succeeds after `create -s -P`.
+/// A new stash holds the store's `K/M` key when the store has one (the master key its dump
+/// was loaded with); otherwise a key of the realm's `master_key_type`
+/// ([`crate::master_etype`]), derived from `KRB5_MASTER_PASSWORD` when that is set.
 ///
 /// # Errors
 ///
@@ -297,13 +297,23 @@ fn master_for_save(
         }
         return Ok(master);
     }
-    let etype = persist_master_etype(store.realm())?;
-    let master = if let Ok(pw) = std::env::var("KRB5_MASTER_PASSWORD") {
-        master_key_from_password(store.realm(), pw.as_bytes(), etype)?
+    // MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:409-424`): `K/M`'s key is the master key, so a new stash holds it.
+    let realm = store.realm();
+    let km = store
+        .get(&format!("K/M@{realm}"))
+        .and_then(|km| km.keys.first())
+        .map(|k| k.key.clone());
+    let master = if let Some(key) = km {
+        key
     } else {
-        crate::store::random_key(etype)?
+        let etype = persist_master_etype(realm)?;
+        if let Ok(pw) = std::env::var("KRB5_MASTER_PASSWORD") {
+            master_key_from_password(realm, pw.as_bytes(), etype)?
+        } else {
+            crate::store::random_key(etype)?
+        }
     };
-    write_secret_file(stash_path, &stash_keytab_bytes(store.realm(), &master)?)?;
+    write_secret_file(stash_path, &stash_keytab_bytes(realm, &master)?)?;
     Ok(master)
 }
 
@@ -336,9 +346,7 @@ fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, 
 }
 
 /// The master key type of a new stash for `realm`: `KRB5_MASTER_ETYPE`, else the realm's kdc.conf
-/// `master_key_type`, else [`crate::default_master_etype`], as `krb5-kdb` resolves it. MIT's
-/// `DEFAULT_KDC_ENCTYPE` is aes256-cts-hmac-sha1-96 (`osconf.hin`); this port keeps the stronger
-/// aes256-cts-hmac-sha384-192 (a documented deviation, `docs/security.md`).
+/// `master_key_type`, else [`crate::default_master_etype`], as `krb5-kdb` resolves it.
 fn persist_master_etype(realm: &str) -> Result<EncryptionType, PersistError> {
     let paths = krb5_config::KdcPaths::resolve(Some(realm))
         .map_err(|e| PersistError::Format(format!("kdc.conf: {e}")))?;
@@ -550,15 +558,11 @@ mod tests {
     use krb5_crypto::EncryptionType;
 
     #[test]
-    fn master_key_type_is_honored_and_defaults_stronger_than_mit() {
-        // MIT's DEFAULT_KDC_ENCTYPE (master_key_type unset) is
-        // aes256-cts-hmac-sha1-96 (settled live); Rust keeps the stronger
-        // aes256-cts-hmac-sha384-192 as its default.
+    fn master_key_type_is_honored_and_defaults_to_mits() {
+        // MIT's DEFAULT_KDC_ENCTYPE (master_key_type unset) is aes256-cts-hmac-sha1-96
+        // (settled live: `getprinc K/M` of a realm created with no master_key_type).
         assert_eq!(master_etype(None), Ok(default_master_etype()));
-        assert_eq!(
-            master_etype(None),
-            Ok(EncryptionType::Aes256CtsHmacSha384192)
-        );
+        assert_eq!(master_etype(None), Ok(EncryptionType::Aes256CtsHmacSha196));
         // A configured master_key_type is honored on the persist path and by krb5-kdb.
         assert_eq!(
             master_etype(Some("aes256-cts-hmac-sha1-96")),

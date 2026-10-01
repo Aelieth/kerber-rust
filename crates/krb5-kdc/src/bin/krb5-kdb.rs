@@ -12,7 +12,7 @@
 //! ([`krb5_config::KdcPaths`]): `KRB5_KDC_DB` / `KRB5_KDC_STASH` /
 //! `KRB5_MASTER_ETYPE` override `database_name` / `key_stash_file` /
 //! `master_key_type`, and MIT's defaults under `KDC_DIR` apply when neither is set
-//! (master key type default `aes256-cts-hmac-sha384-192`).
+//! (master key type default `aes256-cts-hmac-sha1-96`, MIT's).
 //! Master password: `KRB5_MASTER_PASSWORD`.
 //! Create passwords: `KRB5_TEST_USER_PASSWORD` / `KRB5_TEST_ADMIN_PASSWORD`.
 
@@ -25,7 +25,7 @@ use krb5_config::KdcPaths;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::testrealm::{TEST_ADMIN, TEST_USER};
 use krb5_kdc::{
-    KDB_DUMP_VERSION, NamedPolicy, bootstrap_realm_with_kdc_conf, load_dump_etype, load_store,
+    KDB_DUMP_VERSION, NamedPolicy, bootstrap_realm_with_kdc_conf, load_dump, load_store,
     parse_dump, save_store, write_dump_path_etype,
 };
 
@@ -84,7 +84,7 @@ fn main() {
     let etype = master_etype(&paths);
 
     match cmd {
-        "load" => cmd_load(&paths, &path, password.as_bytes(), etype),
+        "load" => cmd_load(&paths, &path, password.as_bytes()),
         "dump" => cmd_dump(
             &paths,
             &path,
@@ -108,7 +108,7 @@ fn usage() -> ! {
     std::process::exit(2);
 }
 
-fn cmd_load(paths: &KdcPaths, path: &std::path::Path, password: &[u8], etype: EncryptionType) {
+fn cmd_load(paths: &KdcPaths, path: &std::path::Path, password: &[u8]) {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: read {}: {e}", path.display());
         std::process::exit(1);
@@ -126,7 +126,7 @@ fn cmd_load(paths: &KdcPaths, path: &std::path::Path, password: &[u8], etype: En
             std::process::exit(1);
         })
         .to_owned();
-    let store = load_dump_etype(&text, password, etype).unwrap_or_else(|e| {
+    let store = load_dump(&text, password).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: load: {e}");
         std::process::exit(1);
     });
@@ -149,7 +149,7 @@ fn cmd_dump(
             eprintln!("krb5-kdb: read {src}: {e}");
             std::process::exit(1);
         });
-        load_dump_etype(&text, password, etype).unwrap_or_else(|e| {
+        load_dump(&text, password).unwrap_or_else(|e| {
             eprintln!("krb5-kdb: load {src}: {e}");
             std::process::exit(1);
         })
@@ -159,6 +159,11 @@ fn cmd_dump(
             std::process::exit(1);
         })
     };
+    // The dump's master key has the type of the store's own `K/M` key.
+    let etype = store
+        .get(&format!("K/M@{}", store.realm()))
+        .and_then(|km| km.keys.first())
+        .map_or(etype, |k| k.etype);
     write_dump_path_etype(&store, path, password, etype).unwrap_or_else(|e| {
         eprintln!("krb5-kdb: dump: {e}");
         std::process::exit(1);

@@ -201,6 +201,18 @@ impl DumpFile {
         self.princs.iter().find(|p| p.name == unparsed)
     }
 
+    /// The enctype of the master key: that of `K/M@realm`'s first key, where the realm is the
+    /// first principal's. `None` when the dump has no such entry or its type is not one this
+    /// port knows.
+    /// MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:409-424`): `K/M`'s one key is the master key itself.
+    #[must_use]
+    pub fn master_etype(&self) -> Option<EncryptionType> {
+        let realm = self.realm().ok()?;
+        let km = self.princ(&format!("K/M@{realm}"))?;
+        let ty = km.keys.first()?.slots.first()?.ty;
+        EncryptionType::known(ty).ok()
+    }
+
     /// Decrypt `key_data` into a [`PrincipalStore`].
     ///
     /// # Errors
@@ -389,6 +401,9 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
 
 /// Load a dump: parse, derive the master key, decrypt `key_data`.
 ///
+/// The master key has the enctype of the dump's own `K/M` entry ([`DumpFile::master_etype`]),
+/// else [`default_master_etype`].
+///
 /// # Errors
 ///
 /// [`DumpError::Format`] when the text does not parse or a record cannot be stored (a missing
@@ -396,7 +411,11 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
 /// when the master key cannot be derived from `master_password`, a key does not decrypt under it
 /// into a usable key, or the `K/M` key is not the derived key.
 pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, DumpError> {
-    load_dump_etype(text, master_password, default_master_etype())
+    let dump = parse_dump(text)?;
+    let realm = dump.realm()?.to_owned();
+    let etype = dump.master_etype().unwrap_or_else(default_master_etype);
+    let mkey = master_key_from_password(&realm, master_password, etype)?;
+    dump.into_store(&mkey)
 }
 
 /// [`load_dump`] with an explicit master-key etype.
@@ -443,6 +462,7 @@ pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalSt
 
 /// Write a version-7 dump, re-encrypting keys under the derived master key.
 ///
+/// The master key has the enctype of the store's `K/M` key, else [`default_master_etype`].
 /// Missing `K/M` is synthesized. Empty `tl_data` is filled with
 /// `KRB5_TL_LAST_PWD_CHANGE` and `KRB5_TL_MOD_PRINC` (and `KRB5_TL_MKVNO`).
 ///
@@ -451,7 +471,11 @@ pub fn load_dump_path(path: &Path, master_password: &[u8]) -> Result<PrincipalSt
 /// [`DumpError::Crypto`] when the master key cannot be derived from `master_password` or a key
 /// cannot be wrapped under it.
 pub fn dump_store(store: &PrincipalStore, master_password: &[u8]) -> Result<String, DumpError> {
-    dump_store_etype(store, master_password, default_master_etype())
+    let etype = store
+        .get(&format!("K/M@{}", store.realm()))
+        .and_then(|km| km.keys.first())
+        .map_or_else(default_master_etype, |k| k.etype);
+    dump_store_etype(store, master_password, etype)
 }
 
 /// [`dump_store`] with an explicit master-key etype.
