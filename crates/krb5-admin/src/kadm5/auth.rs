@@ -154,18 +154,16 @@ pub(super) fn handle_rpcsec_gss(
             if !kadm && !iprop {
                 return Ok(rpc_reply_accepted_verf(xid, Some(&mic), PROG_UNAVAIL));
             }
-            let kadm_args = match gd.svc {
-                GSS_NONE => r.rest().to_vec(),
+            let databody = match gd.svc {
+                GSS_NONE => None,
                 GSS_INTEGRITY => {
                     let (Ok(databody), Ok(checksum)) = (r.opaque(), r.opaque()) else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
-                    if gd.ctx.verify_mic(&databody, &checksum).is_err()
-                        || databody.get(..4) != Some(gcred.seq_num.to_be_bytes().as_slice())
-                    {
+                    if gd.ctx.verify_mic(&databody, &checksum).is_err() {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     }
-                    databody[4..].to_vec()
+                    Some(databody)
                 }
                 _ => {
                     let Ok(wrapped) = r.opaque() else {
@@ -177,10 +175,22 @@ pub(super) fn handle_rpcsec_gss(
                     let Ok((plain, conf)) = gd.ctx.unwrap_conf(&wrapped) else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
-                    if !conf || plain.len() < 4 {
+                    if !conf {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     }
-                    plain[4..].to_vec()
+                    Some(plain)
+                }
+            };
+            // MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:246-256`): a protected body opens
+            // with a sequence number that must be the credential's, for integrity and privacy
+            // alike, so a body cannot be spliced under another request's header.
+            let kadm_args = match databody {
+                None => r.rest().to_vec(),
+                Some(body) => {
+                    if body.get(..4) != Some(gcred.seq_num.to_be_bytes().as_slice()) {
+                        return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                    }
+                    body[4..].to_vec()
                 }
             };
             Ok(rpcsec_dispatch(

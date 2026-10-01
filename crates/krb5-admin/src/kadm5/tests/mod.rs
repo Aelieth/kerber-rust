@@ -250,6 +250,34 @@ fn rpcsec_data_rec(
     )
 }
 
+/// An RPCSEC_GSS privacy DATA call whose sealed body opens with `body_seq`.
+fn rpcsec_priv_rec(
+    ctx: &mut GssContext,
+    id: RpcCallId,
+    seq: u32,
+    body_seq: u32,
+    handle: &[u8],
+    args: &[u8],
+) -> Vec<u8> {
+    let cred = rpcsec_cred(RPG_DATA, seq, GSS_PRIVACY, handle);
+    let mut header = XdrW::default();
+    header.u32(id.xid);
+    header.u32(MSG_CALL);
+    header.u32(RPC_VERSION);
+    header.u32(id.prog);
+    header.u32(id.vers);
+    header.u32(id.proc);
+    header.u32(FLAVOR_GSS);
+    header.opaque(&cred);
+    let mic = ctx.get_mic(&header.b).unwrap();
+    let mut databody = Vec::with_capacity(4 + args.len());
+    databody.extend_from_slice(&body_seq.to_be_bytes());
+    databody.extend_from_slice(args);
+    let mut arg = XdrW::default();
+    arg.opaque(&ctx.wrap(&databody).unwrap());
+    rpcsec_call(id, &cred, FLAVOR_GSS, &mic, &arg.b)
+}
+
 fn rpcsec_integ_rec(
     ctx: &mut GssContext,
     xid: u32,
