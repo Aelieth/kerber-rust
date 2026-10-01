@@ -97,7 +97,7 @@ pub use safe_priv::{
     unwrap_krb_priv_chained, unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
     verify_krb_safe_checksum,
 };
-pub use secret_file::{destroy_secret_file, write_secret_file};
+pub use secret_file::{destroy_secret_file, write_fresh_secret_file, write_secret_file};
 pub use tgs::{
     TgsFallback, TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_ex, tgs_exchange_once,
     tgs_exchange_path, tgs_forward, tgs_forward_options, tgs_non_referral_options, tgs_renew,

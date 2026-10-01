@@ -16,7 +16,7 @@ use std::fs;
 use std::path::Path;
 
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key, kdb_encrypt_key};
-use krb5_protocol::write_secret_file;
+use krb5_protocol::write_fresh_secret_file;
 use krb5_types::pac::RpcSid;
 use krb5_types::{PrincipalName, infer_name_type, parse_name};
 
@@ -523,7 +523,8 @@ pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<S
     Ok(out)
 }
 
-/// Write a dump file (0600) with an explicit master-key etype.
+/// Write a dump file with an explicit master-key etype: a new 0600 file owned by the writer,
+/// whatever it replaces, as MIT `kdb5_util dump` leaves one.
 ///
 /// # Errors
 ///
@@ -536,7 +537,7 @@ pub fn write_dump_path_etype(
     etype: EncryptionType,
 ) -> Result<(), DumpError> {
     let text = dump_store_etype(store, master_password, etype)?;
-    write_secret_file(path, text.as_bytes())?;
+    write_fresh_secret_file(path, text.as_bytes())?;
     Ok(())
 }
 

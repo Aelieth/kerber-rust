@@ -1263,6 +1263,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol/kdc.** A rewritten database, `.ulog`, stash or keytab keeps the old file's
+  owner, group and mode as MIT's in-place writes do, so root `kadmind` and KLLDAP's
+  `kadmin.local` user share a database. Ccaches and dumps stay new 0600 files. Unit.
 - **kdc.** Send the failcount lockout's status as MIT's DB module does,
   `LOCKED_OUT` (`CLIENT LOCKED OUT` stays the DISALLOW_ALL_TIX text). diffsend
   `as-locked-out` against MIT on a locked golden-dump principal.

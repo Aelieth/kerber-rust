@@ -31,13 +31,14 @@ never install a subscriber. Tests and the harness do.
 | `s4u` / `s4u_client` | kdc.issue | `PROTOCOL-TRANSITION` or `CONSTRAINED-DELEGATION` |
 | `record` | kdc.audit | One JSON object using MIT `j_dict.h` keys |
 | `module` | kdc.authdata.module | Name of the kdcauthdata module that returned the error |
+| `path` / `uid` / `gid` | protocol.secret_file | The file saved, and the owner and group of the file it replaced |
 
 Canonical Rust `event` strings live in `krb5_log::events`; the field
 names above are written literally at each `tracing` call site (there
 are no `FIELD_*` constants). `client.tgs`, `client.pkinit`,
-`client.fast`, `kdc.lookaside.full`, `kdc.pkinit`, and
-`kdc.authdata.module` are constants there too, so no library call site
-writes an `event` string literal.
+`client.fast`, `kdc.lookaside.full`, `kdc.pkinit`,
+`kdc.authdata.module`, and `protocol.secret_file` are constants there
+too, so no library call site writes an `event` string literal.
 
 `target` is the Rust module path (`tracing`'s default). It is not part
 of the log contract. Gates and tests match `event` and the fields in
@@ -101,6 +102,15 @@ A kdcauthdata module that returns an error logs
 the next module (`kdc_authdata.c` `handle_authdata`). It is not a
 `kdc.issue` line, so a request still logs only the `kdc.issue` lines
 above.
+
+A database, `.ulog`, stash or keytab save whose writer may not give
+the new file the replaced file's owner or group (an unprivileged
+writer) logs `event=protocol.secret_file` at **warn** with
+`correlation_id`, `component`, `outcome=ok`, `path`, the old `uid` and
+`gid`, `detail` (`owner not kept`, `group not kept`, or `owner and
+group not kept`), and `error`; the save completes. No daemon's
+default filter includes `krb5_protocol`, so `RUST_LOG` must name it to
+show the line.
 
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 with MIT `j_dict.h` field names (`event_name`, `event_success`,

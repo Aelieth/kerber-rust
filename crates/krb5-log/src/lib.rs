@@ -74,6 +74,9 @@ pub mod events {
     pub const KDC_PKINIT: &str = "kdc.pkinit";
     /// A kdcauthdata module returned an error; the KDC logs it and runs the next module.
     pub const KDC_AUTHDATA_MODULE: &str = "kdc.authdata.module";
+    /// A database, stash or keytab save could not give the new file the replaced file's owner or
+    /// group (an unprivileged writer); the save completes.
+    pub const PROTOCOL_SECRET_FILE: &str = "protocol.secret_file";
 }
 
 thread_local! {

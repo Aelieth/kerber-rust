@@ -11,7 +11,7 @@ use crate::ccmarshal::{
     FCC_TAG_DELTATIME, Writer, marshal_cred, marshal_princ, take_u16, unmarshal_cred,
     unmarshal_princ,
 };
-use crate::secret_file::write_secret_file;
+use crate::secret_file::write_fresh_secret_file;
 
 pub use crate::ccmarshal::{CcacheCred, CcacheKeyblock};
 
@@ -76,14 +76,15 @@ impl FileCcache {
         Ok(w.buf)
     }
 
-    /// Atomic exclusive write with mode 0600.
+    /// Atomic exclusive write: always a new file, mode 0600, owned by the writer, as MIT
+    /// `fcc_initialize` leaves a cache.
     ///
     /// # Errors
     ///
     /// Create, write, sync, or rename failed.
     pub fn write_file(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
         let bytes = self.to_bytes()?;
-        write_secret_file(path.as_ref(), &bytes)
+        write_fresh_secret_file(path.as_ref(), &bytes)
     }
 
     /// Parse a FILE ccache v4.

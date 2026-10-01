@@ -87,6 +87,10 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 
 /// Save `store` as MIT dump version 7. Creates `stash_path` if needed.
 ///
+/// The database, its `.ulog` and a rewritten stash keep the owner, group and mode of the files
+/// they replace (`write_secret_file`), so `kadmind` as root and `kadmin.local` as another user
+/// can share them.
+///
 /// When `KRB5_MASTER_PASSWORD` is set and the stash is new, the master key
 /// is derived with the harness etype (MIT `aes256-cts-hmac-sha384-192`) so
 /// `kdb5_util load` of the live file succeeds after `create -s -P`.
