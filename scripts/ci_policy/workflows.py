@@ -414,10 +414,14 @@ def check_msrv_pinned(
     fuzz_toml: str | None = None,
     toolchain_toml: str | None = None,
     wf_texts: dict[str, str] | None = None,
+    preamble: str | None = None,
 ) -> None:
-    """W3-S1: rust-version is MSRV in both manifests; rust-toolchain.toml tracks
-    stable; each msrv job installs MSRV and pins it with RUSTUP_TOOLCHAIN (the
-    toolchain file outranks `rustup default`, which is all the action sets)."""
+    """rust-version is MSRV in both manifests; rust-toolchain.toml pins one
+    exact stable release (`X.Y.Z`, bumped by hand) and the rust-preamble's
+    default toolchain installs that same release, so a new Rust release cannot
+    change a build; each msrv job installs MSRV and pins it with
+    RUSTUP_TOOLCHAIN (the toolchain file outranks `rustup default`, which is all
+    the action sets)."""
     if cargo_toml is None:
         cargo_toml = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     if fuzz_toml is None:
@@ -438,8 +442,17 @@ def check_msrv_pinned(
             _die(f"{label} has no rust-version")
         if m.group(1) != MSRV:
             _die(f"{label} rust-version {m.group(1)} != MSRV {MSRV}")
-    if not re.search(r'(?m)^channel\s*=\s*"stable"', toolchain_toml):
-        _die('rust-toolchain.toml must pin channel = "stable"')
+    pin = re.search(r'(?m)^channel\s*=\s*"(\d+\.\d+\.\d+)"', toolchain_toml)
+    if not pin:
+        _die('rust-toolchain.toml must pin channel = "X.Y.Z" (an exact stable release)')
+    if preamble is None:
+        preamble = RUST_PREAMBLE_FILE.read_text(encoding="utf-8") if RUST_PREAMBLE_FILE.is_file() else ""
+    default = re.search(r"(?ms)^  toolchain:\n(?:    .*\n)*?    default:\s*\"?([^\"\s]+)\"?\s*$", preamble)
+    if not default or default.group(1) != pin.group(1):
+        _die(
+            f"rust-preamble's default toolchain {default.group(1) if default else None} != "
+            f"rust-toolchain.toml channel {pin.group(1)}"
+        )
     for name, job_name in MSRV_JOBS:
         text = wf_texts.get(name)
         if text is None:

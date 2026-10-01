@@ -2519,6 +2519,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** Pin the toolchain to stable 1.99.0 in `rust-toolchain.toml` and the
+  rust-preamble default; `check_msrv_pinned` requires an exact `X.Y.Z` pin both
+  places agree on, so a Rust release cannot redden `main`.
 - **scripts.** Every kadmin query a gate or a `scripts/lib` helper runs goes through `scripts/lib/kadmin-q.sh`,
   but for three keyed container sites; a query whose output the cell does not check must print MIT's success
   line or show its effect on read-back, unless `kadmin_q_try` marks it best-effort (26 sites: 18 setups that
