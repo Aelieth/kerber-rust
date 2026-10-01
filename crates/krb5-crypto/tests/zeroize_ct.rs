@@ -70,7 +70,7 @@ fn dh_keypair_drop_zeroizes() {
         "DhKeypair Drop must zeroize the exponent"
     );
     let kp: DhKeypair = dh_generate(&OAKLEY_2048).unwrap();
-    assert!(!kp.secret.is_empty());
+    assert_ne!(kp.secret, [] as [u8; 0]);
     drop(kp);
 }
 

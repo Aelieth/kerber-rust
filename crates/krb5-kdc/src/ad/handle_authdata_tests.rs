@@ -192,7 +192,7 @@ fn cammac_bad_kdcver_mac_is_skipped() {
     let mut issued = part.clone();
     issued.authorization_data = Some(extra);
     let got = get_auth_indicators(&crate::store::Policy::default(), &issued, &tgt, &key).unwrap();
-    assert!(got.is_empty());
+    assert_eq!(got, [] as [String; 0]);
 }
 
 #[test]

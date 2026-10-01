@@ -187,7 +187,7 @@ fn auth_gssapi_creds_and_init_res_xdr() {
     let mut r = XdrR::new(&w.b);
     assert_eq!(r.u32().unwrap(), 2);
     assert!(r.bool().unwrap());
-    assert!(r.opaque().unwrap().is_empty());
+    assert_eq!(r.opaque().unwrap(), [] as [u8; 0]);
 
     let mut body = XdrW::default();
     encode_init_res(&mut body, 4, &1u32.to_le_bytes(), 0, 0, b"tok", b"isn");

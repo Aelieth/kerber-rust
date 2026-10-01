@@ -215,5 +215,5 @@ fn reply_typed_rpc_is_no_reply() {
         "127.0.0.1",
     )
     .unwrap();
-    assert!(out.is_empty());
+    assert_eq!(out, [] as [u8; 0]);
 }

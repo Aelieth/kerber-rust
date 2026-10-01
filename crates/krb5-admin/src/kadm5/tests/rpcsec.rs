@@ -830,7 +830,7 @@ fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
     assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
     assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
     let verf = r.opaque().unwrap();
-    assert!(!verf.is_empty());
+    assert_ne!(verf, [] as [u8; 0]);
     assert_eq!(r.u32().unwrap(), GARBAGE_ARGS);
 }
 

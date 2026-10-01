@@ -909,7 +909,7 @@ fn kpasswd_bad_priv_after_ap_req_is_harderror() {
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
         .expect("PRIV fail after AP-REQ");
     let (ap_rep, priv_rep) = parse_kpasswd_rep(&rep).expect("AP-REP + KRB-PRIV");
-    assert!(!ap_rep.is_empty());
+    assert_ne!(ap_rep, [] as [u8; 0]);
     let user_data = unwrap_krb_priv_ex(
         &as_out.session_key,
         &priv_rep,

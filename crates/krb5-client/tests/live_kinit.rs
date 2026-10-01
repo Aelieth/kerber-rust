@@ -49,7 +49,7 @@ fn kinit_obtains_tgt_from_mit_kdc() {
     );
     match result {
         Ok(r) => {
-            assert!(!r.as_out.session_key.as_bytes().is_empty());
+            assert_ne!(r.as_out.session_key.as_bytes(), [] as [u8; 0]);
             assert!(cc.is_file());
             let bytes = std::fs::read(&cc).unwrap();
             assert_eq!(&bytes[..2], &[0x05, 0x04]);

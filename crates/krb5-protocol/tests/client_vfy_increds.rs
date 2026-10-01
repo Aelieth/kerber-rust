@@ -62,7 +62,7 @@ fn vfy_increds_nfs_only_is_no_host_keys() {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["nfs", "vfy.kerber.test"]);
     let key = client_key();
     let kt = Keytab::single(realm(TEST_REALM), host.clone(), 1, key);
-    assert!(host_princs_from_keytab(&kt).is_empty());
+    assert_eq!(host_princs_from_keytab(&kt), []);
     assert!(keytab_has_server(&kt, &realm(TEST_REALM), &host));
     let cred = dummy_cred();
     let kdc = dummy_kdc();

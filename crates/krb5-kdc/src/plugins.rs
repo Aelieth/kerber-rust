@@ -1015,7 +1015,7 @@ mod tests {
                 Some((&tgs, "KERBER.TEST")),
             )
             .unwrap();
-        assert!(as_ad.is_empty());
+        assert_eq!(as_ad, [] as [krb5_types::AuthorizationDataValue; 0]);
         let mut tgs_ad = Vec::new();
         GreetAuth
             .handle(

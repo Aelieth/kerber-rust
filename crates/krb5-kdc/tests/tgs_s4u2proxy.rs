@@ -687,7 +687,7 @@ fn store_with_ir() -> (PrincipalStore, ProtocolKey) {
 fn create_host_has_no_s4u_from() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = store.get_name(&documented_host()).expect("host");
-    assert!(host.s4u_allowed_from.is_empty());
+    assert_eq!(host.s4u_allowed_from, [] as [String; 0]);
 }
 
 #[test]

@@ -307,7 +307,7 @@ const FOREIGN: &str = "OTHER.TEST";
 fn create_host_has_no_s4u_to_targets() {
     let (store, _) = bootstrap_documented().unwrap();
     let host = store.get_name(&documented_host()).expect("host");
-    assert!(host.s4u_allowed_to.is_empty());
+    assert_eq!(host.s4u_allowed_to, [] as [String; 0]);
 }
 
 #[test]

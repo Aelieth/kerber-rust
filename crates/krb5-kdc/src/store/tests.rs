@@ -359,8 +359,14 @@ fn hierarchical_intermediates_huge_realm_is_empty() {
         vec!["EX.COM".to_string(), "C.EX.COM".to_string()]
     );
     let big = format!("{}A.TEST", "A.".repeat(30_000));
-    assert!(hierarchical_intermediates("A.TEST", &big).is_empty());
-    assert!(hierarchical_intermediates(&big, "C.TEST").is_empty());
+    assert_eq!(
+        hierarchical_intermediates("A.TEST", &big),
+        [] as [String; 0]
+    );
+    assert_eq!(
+        hierarchical_intermediates(&big, "C.TEST"),
+        [] as [String; 0]
+    );
 }
 
 #[test]
@@ -404,8 +410,8 @@ fn hierarchical_walk_realms_matches_mit_rtree_hier() {
         hierarchical_walk_realms("A.EX.COM", "C.EX.COM")
     );
     let big = format!("{}A.TEST", "A.".repeat(30_000));
-    assert!(hierarchical_walk_realms("A.TEST", &big).is_empty());
-    assert!(hierarchical_walk_realms(&big, "C.TEST").is_empty());
+    assert_eq!(hierarchical_walk_realms("A.TEST", &big), [] as [String; 0]);
+    assert_eq!(hierarchical_walk_realms(&big, "C.TEST"), [] as [String; 0]);
 }
 
 #[test]

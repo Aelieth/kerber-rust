@@ -393,7 +393,7 @@ mod tests {
         );
         assert!(text.contains("   2    1 user@KERBER.TEST"), "{text}");
         run_line(&mut kt, "delent 1").unwrap();
-        assert!(kt.unparsed.is_empty());
+        assert_eq!(kt.unparsed, [] as [(usize, Vec<u8>); 0]);
         assert_eq!(kt.entries.len(), 1);
     }
 }

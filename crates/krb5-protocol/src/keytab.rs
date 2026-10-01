@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(parsed.slots().len(), 2);
         assert!(matches!(parsed.slots()[0], KeytabSlot::Entry(_)));
         assert!(matches!(parsed.slots()[1], KeytabSlot::Entry(_)));
-        assert!(parsed.unparsed.is_empty());
+        assert_eq!(parsed.unparsed, [] as [(usize, Vec<u8>); 0]);
     }
 
     #[test]

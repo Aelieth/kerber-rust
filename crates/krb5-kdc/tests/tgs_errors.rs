@@ -104,7 +104,7 @@ fn u2u_stkt_pac_wrong_cksumtype_is_generic() {
 fn handle_request_empty_is_dropped() {
     let store = PrincipalStore::new(TEST_REALM);
     let reply = krb5_kdc::handle_request(&store, &[]).expect("drop is empty");
-    assert!(reply.is_empty());
+    assert_eq!(reply, [] as [u8; 0]);
 }
 
 #[test]
@@ -130,7 +130,7 @@ fn non_ascii_realm_is_krb_error_not_panic() {
     let r = std::panic::catch_unwind(|| krb5_kdc::handle_request(&store, &[]));
     assert!(r.is_ok(), "untrusted realm must not panic ascii()");
     let reply = r.unwrap().expect("drop");
-    assert!(reply.is_empty());
+    assert_eq!(reply, [] as [u8; 0]);
 }
 
 #[test]

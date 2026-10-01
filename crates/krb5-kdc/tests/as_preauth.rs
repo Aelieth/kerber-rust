@@ -234,7 +234,7 @@ fn as_without_preauth_is_preauth_required() {
     let req = as_req(cname, TEST_REALM, 7, None).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).unwrap_err();
     match err {
-        Error::PreauthRequired { e_data } => assert!(!e_data.is_empty()),
+        Error::PreauthRequired { e_data } => assert_ne!(e_data, [] as [u8; 0]),
         other => panic!("expected PreauthRequired, got {other:?}"),
     }
 }
@@ -320,7 +320,7 @@ fn wrong_password_yields_preauth_failed_bytes() {
     )
     .unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
-    assert!(!bytes.is_empty());
+    assert_ne!(bytes, [] as [u8; 0]);
     let e: krb5_types::KrbError = decode(&bytes).expect("KRB-ERROR");
     assert_eq!(e.error_code, err::PREAUTH_FAILED);
 }

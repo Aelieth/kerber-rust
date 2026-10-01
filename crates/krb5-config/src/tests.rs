@@ -357,7 +357,7 @@ fn parse_kdc_conf_policy() {
     assert_eq!(elsewhere.allow_rc4, None);
     assert_eq!(elsewhere.allow_des3, None);
     assert_eq!(elsewhere.allow_weak_crypto, None);
-    assert!(elsewhere.permitted_enctypes.is_empty());
+    assert_eq!(elsewhere.permitted_enctypes, [] as [String; 0]);
     assert_eq!(
         rc4.supported_enctypes,
         vec!["aes256-cts:normal", "rc4-hmac:normal"]
@@ -582,8 +582,8 @@ fn host_based_and_no_host_referral_from_kdcdefaults_and_realm() {
 ",
     )
     .unwrap();
-    assert!(lib.host_based_services.is_empty());
-    assert!(lib.no_host_referral.is_empty());
+    assert_eq!(lib.host_based_services, "");
+    assert_eq!(lib.no_host_referral, "");
 }
 
 #[test]
@@ -677,7 +677,7 @@ fn split_krb5_config_paths_colon() {
         split_krb5_config_paths("/a.conf:/b.conf"),
         vec![PathBuf::from("/a.conf"), PathBuf::from("/b.conf")]
     );
-    assert!(split_krb5_config_paths("").is_empty());
+    assert_eq!(split_krb5_config_paths(""), [] as [std::path::PathBuf; 0]);
     assert_eq!(
         split_krb5_config_paths("/a.conf:"),
         vec![PathBuf::from("/a.conf")]

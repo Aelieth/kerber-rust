@@ -219,7 +219,7 @@ fn transited_x500_bounds_nul_and_append() {
     );
 
     assert_eq!(hops(b"EDU\0"), vec!["EDU".to_string()]);
-    assert!(te(b"\0").realms_for("", "").unwrap().is_empty());
+    assert_eq!(te(b"\0").realms_for("", "").unwrap(), [] as [String; 0]);
 
     let x500 = te(b"/COM,/HP").append_realm("X", "", "").unwrap();
     assert_eq!(x500.contents.as_ref(), b"/COM,/HP,X");
