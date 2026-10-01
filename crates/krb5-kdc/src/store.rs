@@ -292,6 +292,8 @@ impl PrincipalStore {
         // cap = 7 d (`kdc/main.c` vs `alt_prof.c`).
         store.policy.max_renewable_life = 7 * 24 * 3600;
         store.policy.spake_preauth_groups = vec![krb5_types::spake::GROUP_P256];
+        // The test realm's keys: a profile's `supported_enctypes` replaces these.
+        store.policy.supported_enctypes = crate::testrealm::TEST_SUPPORTED_ENCTYPES.to_vec();
         if let Some(c) = kdc {
             store.apply_kdc_conf(c)?;
         }

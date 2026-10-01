@@ -216,6 +216,35 @@ fn an_unset_master_key_type_is_mits_aes256_sha1() {
 }
 
 #[test]
+fn an_unset_supported_enctypes_keys_mits_default_pair() {
+    // MIT (settled live): krbtgt and the kadmin services get aes256 then aes128 sha1 only.
+    let realm = Realm::new("kdb5-create-default-keysalts", "");
+    realm.create();
+    let store = realm.store();
+    for id in [
+        "krbtgt/KL.TEST@KL.TEST",
+        "kadmin/admin@KL.TEST",
+        "kadmin/changepw@KL.TEST",
+    ] {
+        let etypes: Vec<EncryptionType> = store
+            .get(id)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.etype)
+            .collect();
+        assert_eq!(
+            etypes,
+            [
+                EncryptionType::Aes256CtsHmacSha196,
+                EncryptionType::Aes128CtsHmacSha196
+            ],
+            "{id}"
+        );
+    }
+}
+
+#[test]
 fn create_takes_the_stanzas_flags_lifetimes_and_keysalts() {
     let realm = Realm::new(
         "kdb5-create-stanza",

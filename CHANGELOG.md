@@ -736,6 +736,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **kdc.** With no `supported_enctypes`, new keys are MIT's aes256 + aes128 sha1 pair (was
+  all four AES types); `-e` and a profile list still rule. Unit; settled live.
 - **kdc.** `krb5-kdb` is MIT's `kdb5_util`: `create` makes only `K/M`, `krbtgt`, `kadmin/*`
   (test principals need `test-hooks`); `master_key_type` defaults to aes256-sha1; `stash`,
   `dump`, `load`, `destroy` print and write as MIT's. Unit; side by side with MIT.

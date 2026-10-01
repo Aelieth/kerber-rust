@@ -11,7 +11,7 @@ use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
 
 use super::PrincipalStore;
-use super::keys::{KeyEntry, KeyLookup, randkey_etypes};
+use super::keys::{KeyEntry, KeyLookup, default_supported_enctypes};
 use super::principal::{Principal, refresh_kadm_tl};
 use super::transit::permitted_transited;
 use crate::error::Error;
@@ -81,7 +81,8 @@ pub struct Policy {
     pub allow_des3: bool,
     /// MIT `permitted_enctypes`. `None` = DEFAULT (every implemented type).
     pub permitted_enctypes: Option<Vec<EncryptionType>>,
-    /// MIT `supported_enctypes`. Empty = AES 17–20.
+    /// MIT `supported_enctypes`. Empty = MIT's default, aes256-cts-hmac-sha1-96 and
+    /// aes128-cts-hmac-sha1-96.
     pub supported_enctypes: Vec<EncryptionType>,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
@@ -249,10 +250,11 @@ impl Policy {
     }
 
     /// Long-term keys minted by addprinc/cpw when `-e` is omitted.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:650-654`): the realm's `supported_enctypes`, else `KRB5_DEFAULT_SUPPORTED_ENCTYPES`.
     #[must_use]
     pub fn password_etypes(&self) -> Vec<EncryptionType> {
         if self.supported_enctypes.is_empty() {
-            randkey_etypes().to_vec()
+            default_supported_enctypes().to_vec()
         } else {
             self.supported_enctypes.clone()
         }

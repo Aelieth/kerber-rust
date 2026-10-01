@@ -80,12 +80,12 @@ pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
     ProtocolKey::from_bytes(etype, &buf).map_err(Error::from)
 }
 
-pub(super) fn randkey_etypes() -> [EncryptionType; 4] {
+/// The key types a new key set takes when kdc.conf names no `supported_enctypes`.
+/// MIT `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (`include/osconf.hin:109-111`): aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96, normal salt.
+pub(super) fn default_supported_enctypes() -> [EncryptionType; 2] {
     [
         EncryptionType::Aes256CtsHmacSha196,
         EncryptionType::Aes128CtsHmacSha196,
-        EncryptionType::Aes256CtsHmacSha384192,
-        EncryptionType::Aes128CtsHmacSha256128,
     ]
 }
 
