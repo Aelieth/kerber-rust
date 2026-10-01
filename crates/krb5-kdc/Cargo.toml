@@ -35,5 +35,10 @@ tracing-subscriber.workspace = true
 [dev-dependencies]
 krb5-testkit.workspace = true
 
+[features]
+# The gate and test hooks (test realms, KRB5_TEST_* seeding, key export) belong behind
+# this feature, off by default, so that a release build carries none of them.
+test-hooks = []
+
 [lints]
 workspace = true

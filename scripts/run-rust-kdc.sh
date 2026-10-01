@@ -11,7 +11,7 @@ export KRB5_TEST_ADMIN_PASSWORD="${KRB5_TEST_ADMIN_PASSWORD:-adminpassword}"
 
 echo "{\"event\":\"kdc.launch\",\"correlation_id\":\"${CORRELATION_ID}\",\"component\":\"krb5-kdc\",\"outcome\":\"ok\",\"realm\":\"KERBER.TEST\"}"
 
-cargo build -p krb5-kdc --bin krb5-kdc
+cargo build -p krb5-kdc --bin krb5-kdc --features krb5-kdc/test-hooks
 
 BIND="${KRB5_KDC_BIND:-}"
 if [ -n "$BIND" ]; then

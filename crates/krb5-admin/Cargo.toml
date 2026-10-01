@@ -55,5 +55,9 @@ path = "src/bin/krb5-kpasswd.rs"
 [dev-dependencies]
 krb5-testkit.workspace = true
 
+[features]
+# krb5-kdc's test-hooks, plus this crate's own gate and test hooks; off by default.
+test-hooks = ["krb5-kdc/test-hooks"]
+
 [lints]
 workspace = true

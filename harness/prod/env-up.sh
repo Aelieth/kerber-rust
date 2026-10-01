@@ -47,7 +47,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 for b in krb5-kdc krb5-kadmind krb5-kpropd krb5-kprop krb5-kdb; do
-    [ -x "target/debug/$b" ] || die "missing target/debug/$b — run: cargo build -p krb5-kdc -p krb5-admin"
+    [ -x "target/debug/$b" ] || die "missing target/debug/$b — run: scripts/lib/build-bins.sh"
 done
 
 # Safety ceiling: never launch past KERBER_PROD_MAX_NODES capped containers.

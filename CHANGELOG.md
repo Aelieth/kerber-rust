@@ -2531,6 +2531,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** A `test-hooks` cargo feature on `krb5-kdc` / `krb5-admin`, off by default;
+  `build-bins.sh`, CI, `full-test`, the Makefile and the checkpoint build with it.
 - **tool.** Pin the toolchain to stable 1.99.0 in `rust-toolchain.toml` and the
   rust-preamble default; `check_msrv_pinned` requires an exact `X.Y.Z` pin both
   places agree on, so a Rust release cannot redden `main`.

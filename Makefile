@@ -22,7 +22,7 @@ clippy:
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 test:
-	KRB5_CONFIG=$(KRB5_CONFIG) cargo nextest run --workspace --profile ci
+	KRB5_CONFIG=$(KRB5_CONFIG) cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks
 
 doc:
 	RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
