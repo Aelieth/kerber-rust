@@ -6,6 +6,9 @@
 .vscode/
 .DS_Store
 /working
+# Claude Code agent worktrees: never part of the tree (the gates' provenance
+# hashes `git add -A`, so an agent worktree here would change tree_sha).
+/.claude/
 __pycache__/
 /harness/data
 *.pcap
