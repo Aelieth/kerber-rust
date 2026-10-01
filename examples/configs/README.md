@@ -67,7 +67,10 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
 - `KRB5_KDC_USER`: the user the KDC drops to after binding as root (default
   `nobody`, `crates/krb5-kdc/src/listen.rs`). A KDC that serves a database
   file, as with this `kdc.conf`, keeps its user so it can re-read what
-  `krb5-kadmind` writes.
+  `krb5-kadmind` writes. MIT's `krb5kdc` and `kadmind` never change user
+  either; to run without root, start both daemons as one unprivileged user
+  that owns the database directory, with `CAP_NET_BIND_SERVICE` for ports
+  88, 464 and 749.
 
 ## What MIT reads that this port ignores
 
