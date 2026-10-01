@@ -1,0 +1,13 @@
+# cloud-init network config (v2) for kdc: NIC 1 on kerber-lab and NIC 2 on
+# the LAN (macvtap). lab.sh fills in @LAB_MAC@ and @LAN_MAC@. Both use DHCP.
+# The user-data's kerber-lab-lan-nic then drops the LAN default route and DNS.
+version: 2
+ethernets:
+  lab:
+    match:
+      macaddress: "@LAB_MAC@"
+    dhcp4: true
+  lan:
+    match:
+      macaddress: "@LAN_MAC@"
+    dhcp4: true
