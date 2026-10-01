@@ -142,6 +142,7 @@ fn as_success_clears_failcount_only_with_requires_preauth() {
     assert!(store.last_success_of(p) > 0);
 }
 
+// oracle: differential-gate.sh as-locked-out
 #[test]
 fn last_failed_nonzero_without_unlock_tl_still_locks() {
     let (mut store, _) = bootstrap_documented().unwrap();
@@ -162,9 +163,9 @@ fn last_failed_nonzero_without_unlock_tl_still_locks() {
     match err {
         Error::Protocol { code, text, .. } => {
             assert_eq!(code, err::CLIENT_REVOKED);
-            assert_eq!(text.as_deref(), Some("CLIENT LOCKED OUT"));
+            assert_eq!(text.as_deref(), Some("LOCKED_OUT"));
         }
-        other => panic!("expected 18 CLIENT LOCKED OUT, got {other:?}"),
+        other => panic!("expected 18 LOCKED_OUT, got {other:?}"),
     }
 }
 
@@ -208,8 +209,8 @@ fn unpermitted_spake_support_counts_toward_lockout() {
     match err {
         Error::Protocol { code, text, .. } => {
             assert_eq!(code, err::CLIENT_REVOKED);
-            assert_eq!(text.as_deref(), Some("CLIENT LOCKED OUT"));
+            assert_eq!(text.as_deref(), Some("LOCKED_OUT"));
         }
-        other => panic!("expected 18 CLIENT LOCKED OUT, got {other:?}"),
+        other => panic!("expected 18 LOCKED_OUT, got {other:?}"),
     }
 }

@@ -629,7 +629,7 @@ pub(super) fn validate_as_request(
         return Ok(());
     }
     if count_locked && in_lockout_window {
-        return Err(proto(err::CLIENT_REVOKED, status::CLIENT_LOCKED_OUT));
+        return Err(proto(err::CLIENT_REVOKED, status::LOCKED_OUT));
     }
     Ok(())
 }

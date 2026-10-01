@@ -15,6 +15,9 @@ pub(crate) const CANT_FIND_CLIENT_KEY: &str = "CANT_FIND_CLIENT_KEY";
 pub(crate) const CLIENT_EXPIRED: &str = "CLIENT EXPIRED";
 pub(crate) const CLIENT_KEY_EXPIRED: &str = "CLIENT KEY EXPIRED";
 pub(crate) const CLIENT_LOCKED_OUT: &str = "CLIENT LOCKED OUT";
+/// MIT `krb5_db2_check_policy_as` (`plugins/kdb/db2/kdb_db2.c:1539-1550`): the failcount
+/// lockout's status, set by the DB module (lmdb and ldap set the same).
+pub(crate) const LOCKED_OUT: &str = "LOCKED_OUT";
 pub(crate) const CLIENT_NOT_FOUND: &str = "CLIENT_NOT_FOUND";
 pub(crate) const EVIDENCE_TICKET_MISMATCH: &str = "EVIDENCE_TICKET_MISMATCH";
 pub(crate) const EVIDENCE_TKT_NOT_FORWARDABLE: &str = "EVIDENCE_TKT_NOT_FORWARDABLE";

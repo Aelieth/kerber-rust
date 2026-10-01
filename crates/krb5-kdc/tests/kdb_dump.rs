@@ -356,7 +356,7 @@ fn krb5_kdb_cli_load_and_dump_content() {
         "load stdout must report version: {load_out}"
     );
     assert!(
-        load_out.contains("principals=11"),
+        load_out.contains("principals=12"),
         "load stdout must report principal count: {load_out}"
     );
     assert!(load_out.contains("realm=KERBER.TEST"));

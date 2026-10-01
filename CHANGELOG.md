@@ -1263,6 +1263,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc.** Send the failcount lockout's status as MIT's DB module does,
+  `LOCKED_OUT` (`CLIENT LOCKED OUT` stays the DISALLOW_ALL_TIX text). diffsend
+  `as-locked-out` against MIT on a locked golden-dump principal.
 - **config/kdc/admin.** Listen like MIT: every `kdc_listen` / `kdc_ports` entry,
   a bare port on all local addresses, realm stanza first, `kdc_tcp_*`, and
   kadmind / kpasswd listen relations (KLLDAP's `750,88` made the KDC exit). `kdc-gate`.

@@ -88,6 +88,7 @@ DIFFSEND_CASES = frozenset(
         "as-needchange",
         "as-invalid-opts",
         "as-validate-before-preauth",
+        "as-locked-out",
         "as-optimistic-encts-wrong-etype",
         "as-retransmit",
         "as-request-anonymous",

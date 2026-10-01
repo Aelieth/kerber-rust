@@ -843,9 +843,9 @@ fn admin_unlock_clears_failcount_lockout() {
     match err {
         Error::Protocol { code, text, .. } => {
             assert_eq!(code, err::CLIENT_REVOKED);
-            assert_eq!(text.as_deref(), Some("CLIENT LOCKED OUT"));
+            assert_eq!(text.as_deref(), Some("LOCKED_OUT"));
         }
-        other => panic!("expected 18 CLIENT LOCKED OUT, got {other:?}"),
+        other => panic!("expected 18 LOCKED_OUT, got {other:?}"),
     }
     store.admin_unlock(&user).unwrap();
     krb5_kdc::issue_as(&store, &req).expect("unlocked");
