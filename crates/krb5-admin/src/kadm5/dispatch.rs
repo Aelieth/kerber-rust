@@ -492,8 +492,10 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, code));
             }
             apply_policy_floors(&mut pol, mask);
-            g.put_policy(pol);
-            Ok(generic_ret(api, 0))
+            match g.put_policy_and_save(pol) {
+                Ok(()) => Ok(generic_ret(api, 0)),
+                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+            }
         }
         DELETE_POLICY => {
             let (api, name) = parse_policy_name(args)?;
@@ -537,8 +539,10 @@ pub(super) fn dispatch_kadm5_ticket(
             if let Some(code) = policy_floor_err(&merged, mask) {
                 return Ok(generic_ret(api, code));
             }
-            g.put_policy(merged);
-            Ok(generic_ret(api, 0))
+            match g.put_policy_and_save(merged) {
+                Ok(()) => Ok(generic_ret(api, 0)),
+                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+            }
         }
         GET_POLICY => {
             let (api, name) = parse_policy_name(args)?;

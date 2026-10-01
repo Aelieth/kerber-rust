@@ -380,11 +380,22 @@ impl PrincipalStore {
         &self.policies
     }
 
-    /// Insert or replace a named policy.
+    /// Insert or replace a named policy; a failed save is not reported (see
+    /// [`Self::put_policy_and_save`]).
     pub fn put_policy(&mut self, pol: NamedPolicy) {
+        let _ = self.put_policy_and_save(pol);
+    }
+
+    /// Insert or replace a named policy and save the store when it persists.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Crypto`] when the store cannot be saved, a writer that may not write the database
+    /// included; the policy stays in memory and nothing on disk changes.
+    pub fn put_policy_and_save(&mut self, pol: NamedPolicy) -> Result<(), Error> {
         self.note_ulog(format!("policy:{}", pol.name), false, None);
         self.policies.insert(pol.name.clone(), pol);
-        let _ = self.save_if_configured();
+        self.save_if_configured()
     }
 
     /// Load a dump policy without logging (dump/iprop apply).

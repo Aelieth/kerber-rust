@@ -98,8 +98,9 @@ impl Keytab {
         out
     }
 
-    /// Atomic write: a new keytab is 0600; one it replaces keeps its owner, group and mode, as
-    /// MIT's in-place keytab writes leave it (`write_secret_file`).
+    /// Atomic write: a new keytab is 0600; one it replaces keeps its owner, group and mode, and
+    /// one the writer may not write is refused, as MIT's in-place keytab writes are
+    /// (`write_secret_file`).
     ///
     /// # Errors
     ///

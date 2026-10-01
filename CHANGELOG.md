@@ -52,6 +52,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **protocol/kdc.** Refuse to replace a database, `.ulog`, stash or keytab the writer may not
+  write, as MIT's in-place `O_RDWR` open does: a group that may only read the database could
+  rewrite it through a writable directory. `addpol` / `modpol` report a failed save. Unit.
 - **admin.** Compare an RPCSEC_GSS privacy body's sequence number with the
   credential's, as for integrity (MIT `xdr_rpc_gss_unwrap_data`), so a sealed
   body cannot be spliced under another call. Unit, red at the parent.

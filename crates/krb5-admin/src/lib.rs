@@ -1003,14 +1003,13 @@ impl<'a> AdminSession<'a> {
     /// [`Error::Inner`] with the MIT text of `KADM5_BAD_KEYSALTS` (a tab in `-allowedkeysalts`),
     /// `KADM5_DUP` (the policy exists), `KADM5_BAD_POLICY` (an empty or non-printable name), or
     /// `KADM5_BAD_MIN_PASS_LIFE`, `KADM5_BAD_LENGTH`, `KADM5_BAD_CLASS`, or `KADM5_BAD_HISTORY`
-    /// (an explicit value outside MIT's bounds).
+    /// (an explicit value outside MIT's bounds), or when the store cannot be saved.
     pub fn add_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
         let exists = self.store.policies().contains_key(&a.name);
         let pol =
             crate::kadm5::create_policy_local(exists, a).map_err(|t| Error::Inner(t.to_owned()))?;
-        self.store.put_policy(pol);
-        Ok(())
+        self.store.put_policy_and_save(pol).map_err(Error::from)
     }
 
     /// `modpol` on the merged record.
@@ -1022,7 +1021,7 @@ impl<'a> AdminSession<'a> {
     /// [`Error::Inner`] `Policy does not exist` when no policy is named `a.name`, or with the MIT
     /// text of `KADM5_BAD_KEYSALTS` (a tab in `-allowedkeysalts`) or `KADM5_BAD_MIN_PASS_LIFE`,
     /// `KADM5_BAD_LENGTH`, `KADM5_BAD_CLASS`, or `KADM5_BAD_HISTORY` (a merged value outside
-    /// MIT's bounds).
+    /// MIT's bounds), or when the store cannot be saved.
     pub fn modify_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
         let existing = self
@@ -1033,8 +1032,7 @@ impl<'a> AdminSession<'a> {
             .ok_or_else(|| Error::Inner("Policy does not exist".into()))?;
         let pol = crate::kadm5::modify_policy_local(&existing, a)
             .map_err(|t| Error::Inner(t.to_owned()))?;
-        self.store.put_policy(pol);
-        Ok(())
+        self.store.put_policy_and_save(pol).map_err(Error::from)
     }
 
     /// `delpol`.

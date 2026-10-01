@@ -34,10 +34,15 @@ enum Replace {
 /// Write `bytes` to `path` through a temp file + rename, keeping a replaced file's owner, group
 /// and permission bits.
 ///
-/// MIT updates the database, its update log and keytabs in place, so a file that `kadmind` (root)
-/// and `kadmin.local` (a service user) share keeps its owner and mode whoever writes:
+/// MIT updates the database, its update log and keytabs in place: only a writer that may write
+/// the existing file changes it, and the file keeps its owner and mode whoever writes, so one that
+/// `kadmind` (root) and `kadmin.local` (a service user) share stays shared:
 /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:450-455`): the principal database is reopened `O_RDWR`, not recreated.
 /// MIT `krb5_ktfileint_open` (`lib/krb5/keytab/kt_file.c:739-746`): an existing keytab is opened "rb+" and written in place.
+///
+/// A regular file at `path` that the writer may not open read-write is refused before anything is
+/// written ([`check_secret_file_writable`]); a missing path, a symlink or another non-regular file
+/// is replaced by a new file, and a symlink is not written through.
 ///
 /// On Unix the temp file is created with `O_EXCL` and mode 0600, takes the replaced regular file's
 /// uid, gid and permission bits (`fchown`, `fchmod`), and is `fsync`'d before the rename, so
@@ -50,11 +55,38 @@ enum Replace {
 ///
 /// # Errors
 ///
-/// The OS error when the temp file beside `path` cannot be created (`O_EXCL`, mode 0600),
-/// written, or synced, or cannot be renamed onto `path`. An owner or group that cannot be kept
-/// is a warning, not an error.
+/// The error of [`check_secret_file_writable`] for an existing regular file the writer may not
+/// write (`path` is left as it was); the OS error when the temp file beside `path` cannot be
+/// created (`O_EXCL`, mode 0600), written, or synced, or cannot be renamed onto `path`. An owner
+/// or group that cannot be kept is a warning, not an error.
 pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(path, bytes, Replace::Keep)
+}
+
+/// Fail as MIT's in-place update would when the writer may not write the regular file at `path`.
+///
+/// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:453-455`): the update opens the existing database `O_RDWR`, so a writer that may only read it is refused.
+///
+/// The file is opened `O_RDWR | O_NOFOLLOW`, without creating or truncating it, and closed again;
+/// nothing is read or written. The decision comes from `symlink_metadata`: a missing path, a
+/// symlink (never followed) or another non-regular file is not opened and passes.
+///
+/// # Errors
+///
+/// The OS error of that open, unchanged: `PermissionDenied` for a file the writer may not read
+/// and write, `ReadOnlyFilesystem` on a read-only mount.
+pub fn check_secret_file_writable(path: &Path) -> io::Result<()> {
+    if !fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_file()) {
+        return Ok(());
+    }
+    let mut opts = OpenOptions::new();
+    opts.read(true).write(true);
+    #[cfg(unix)]
+    {
+        opts.custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits());
+    }
+    opts.open(path)?;
+    Ok(())
 }
 
 /// Write `bytes` to `path` as a new file, mode 0600, owned by the writer, whatever it replaces.
@@ -62,14 +94,20 @@ pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// MIT `fcc_initialize` (`lib/krb5/ccache/cc_file.c:481-492`): a FILE ccache is unlinked and created again `O_EXCL`, mode 0600.
 /// MIT `create_ofile` (`kadmin/dbutil/dump.c:139-146`): a dump goes to a new `mkstemp` file that is renamed into place.
 ///
+/// Only the directory has to be writable: a file the writer may not write is replaced too.
+///
 /// # Errors
 ///
-/// As [`write_secret_file`].
+/// The OS error when the temp file beside `path` cannot be created (`O_EXCL`, mode 0600),
+/// written, or synced, or cannot be renamed onto `path`.
 pub fn write_fresh_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(path, bytes, Replace::Fresh)
 }
 
 fn write_atomic(path: &Path, bytes: &[u8], replace: Replace) -> io::Result<()> {
+    if matches!(replace, Replace::Keep) {
+        check_secret_file_writable(path)?;
+    }
     let dir = path
         .parent()
         .filter(|p| !p.as_os_str().is_empty())
@@ -279,6 +317,161 @@ mod tests {
 
     fn is_root() -> bool {
         nix::unistd::geteuid().is_root()
+    }
+
+    /// Run `f` on a thread whose filesystem identity is `uid` / `gid`: Linux `setfsuid` is per
+    /// thread and drops that thread's filesystem capabilities, so a root test can act as another
+    /// user. `None` when the switch does not take.
+    #[cfg(target_os = "linux")]
+    fn as_fs_identity<R: Send>(uid: u32, gid: u32, f: impl FnOnce() -> R + Send) -> Option<R> {
+        use nix::unistd::{Gid, Uid, setfsgid, setfsuid};
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                setfsgid(Gid::from_raw(gid));
+                setfsuid(Uid::from_raw(uid));
+                // Each call returns the previous identity, so a repeat reports whether it took.
+                let took = setfsgid(Gid::from_raw(gid)).as_raw() == gid
+                    && setfsuid(Uid::from_raw(uid)).as_raw() == uid;
+                let out = took.then(f);
+                setfsuid(Uid::from_raw(0));
+                setfsgid(Gid::from_raw(0));
+                out
+            })
+            .join()
+            .ok()
+            .flatten()
+        })
+    }
+
+    /// A root-owned directory and file that group 4243 may write and read as `file_mode` says.
+    #[cfg(target_os = "linux")]
+    fn group_db(name: &str, file_mode: u32) -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+        let dir = krb5_testkit::scratch_dir(name);
+        let db = dir.join("db");
+        fs::create_dir(&db).unwrap();
+        let path = db.join("principal");
+        fs::write(&path, b"old").unwrap();
+        if chown(&db, Some(0), Some(4243)).is_err() || chown(&path, Some(0), Some(4243)).is_err() {
+            eprintln!("skipped: gid 4243 is not mapped in this user namespace");
+            let _ = fs::remove_dir_all(&dir);
+            return None;
+        }
+        set_mode(&db, 0o770);
+        set_mode(&path, file_mode);
+        Some((dir, path))
+    }
+
+    #[test]
+    fn an_owner_who_may_not_write_its_file_is_refused() {
+        if is_root() {
+            eprintln!("skipped: root may write a 0400 file");
+            return;
+        }
+        let dir = krb5_testkit::scratch_dir("krb5-secret-readonly");
+        let path = dir.join("principal");
+        fs::write(&path, b"old").unwrap();
+        set_mode(&path, 0o400);
+        let before = meta(&path);
+        let err = write_secret_file(&path, b"new").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        assert_eq!(meta(&path), before);
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "no temp file is left"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_fresh_write_replaces_a_file_the_writer_may_not_write() {
+        let dir = krb5_testkit::scratch_dir("krb5-secret-fresh-readonly");
+        let path = dir.join("krb5cc");
+        fs::write(&path, b"old").unwrap();
+        set_mode(&path, 0o400);
+        write_fresh_secret_file(&path, b"new").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(meta(&path).2, 0o600);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_check_opens_only_a_regular_file_and_never_follows_a_symlink() {
+        let dir = krb5_testkit::scratch_dir("krb5-secret-check");
+        let target = dir.join("target");
+        fs::write(&target, b"target").unwrap();
+        set_mode(&target, 0o400);
+        let link = dir.join("link");
+        symlink(&target, &link).unwrap();
+        assert!(check_secret_file_writable(&dir.join("missing")).is_ok());
+        assert!(check_secret_file_writable(&link).is_ok());
+        assert!(check_secret_file_writable(&dir).is_ok());
+        if !is_root() {
+            let err = check_secret_file_writable(&target).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+        }
+        assert_eq!(fs::read(&target).unwrap(), b"target");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_a_group_reader_may_not_replace_the_file() {
+        if !is_root() {
+            eprintln!("skipped: acting as a second user needs euid 0");
+            return;
+        }
+        let Some((dir, path)) = group_db("krb5-secret-reader", 0o640) else {
+            return;
+        };
+        let before = (meta(&path), fs::metadata(&path).unwrap().ino());
+        let Some((read, write)) = as_fs_identity(4242, 4243, || {
+            (fs::read(&path).ok(), write_secret_file(&path, b"new"))
+        }) else {
+            eprintln!("skipped: setfsuid to 4242 did not take");
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        };
+        if read.is_none() {
+            eprintln!("skipped: the scratch path is not searchable by uid 4242");
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        let err = write.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::PermissionDenied, "{err}");
+        assert_eq!(fs::read(&path).unwrap(), b"old");
+        assert_eq!((meta(&path), fs::metadata(&path).unwrap().ino()), before);
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn root_a_group_writer_replaces_the_file_but_cannot_keep_its_owner() {
+        if !is_root() {
+            eprintln!("skipped: acting as a second user needs euid 0");
+            return;
+        }
+        let Some((dir, path)) = group_db("krb5-secret-writer", 0o660) else {
+            return;
+        };
+        let Some((read, write)) = as_fs_identity(4242, 4243, || {
+            (fs::read(&path).ok(), write_secret_file(&path, b"new"))
+        }) else {
+            eprintln!("skipped: setfsuid to 4242 did not take");
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        };
+        if read.is_none() {
+            eprintln!("skipped: the scratch path is not searchable by uid 4242");
+            let _ = fs::remove_dir_all(&dir);
+            return;
+        }
+        write.unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+        assert_eq!(meta(&path), (4242, 4243, 0o660));
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

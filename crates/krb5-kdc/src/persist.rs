@@ -16,7 +16,7 @@ use crate::kdb_dump::{load_dump_mkey, write_dump};
 use crate::mkey::{default_master_etype, master_key_from_password};
 use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS, UlogEntry};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
-use krb5_protocol::{Keytab, write_secret_file};
+use krb5_protocol::{Keytab, check_secret_file_writable, write_secret_file};
 use krb5_types::pac::RpcSid;
 use krb5_types::{PrincipalName, parse_name};
 
@@ -89,7 +89,7 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 ///
 /// The database, its `.ulog` and a rewritten stash keep the owner, group and mode of the files
 /// they replace (`write_secret_file`), so `kadmind` as root and `kadmin.local` as another user
-/// can share them.
+/// can share them. A writer that may not write the database or its `.ulog` changes nothing.
 ///
 /// When `KRB5_MASTER_PASSWORD` is set and the stash is new, the master key
 /// is derived with the harness etype (MIT `aes256-cts-hmac-sha384-192`) so
@@ -98,7 +98,8 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 /// # Errors
 ///
 /// [`PersistError::Io`] when the stash cannot be read or the stash, database or `.ulog` file
-/// cannot be written; [`PersistError::Crypto`] when an existing stash is not a usable master key,
+/// cannot be written (an existing one the writer may not open read-write is refused before any
+/// file changes); [`PersistError::Crypto`] when an existing stash is not a usable master key,
 /// a new master key cannot be derived or generated, or a key cannot be wrapped;
 /// [`PersistError::Format`] when a new keytab-format stash is needed and the realm is not ASCII.
 pub fn save_store(
@@ -106,6 +107,10 @@ pub fn save_store(
     db_path: &Path,
     stash_path: &Path,
 ) -> Result<(), PersistError> {
+    // MIT `ulog_map` (`lib/kdb/kdb_log.c:525-526`): an existing update log is reopened `O_RDWR` as the database is.
+    // Both are checked before either changes, so a refused writer leaves no half-saved store.
+    check_secret_file_writable(db_path)?;
+    check_secret_file_writable(&ulog_path(db_path))?;
     let master = master_for_save(store, db_path, stash_path)?;
     let text = write_dump(store, &master)?;
     write_secret_file(db_path, text.as_bytes())?;
