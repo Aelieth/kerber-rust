@@ -312,7 +312,8 @@ fn parse_kdc_conf_policy() {
         c.domain_sid.as_deref(),
         Some("S-1-5-21-891046300-1937985867-1481223175")
     );
-    assert_eq!(c.kdc_listen[0], "127.0.0.1:88");
+    assert_eq!(c.kdc_listen, "88");
+    assert_eq!(c.kdc_tcp_listen.as_deref(), Some("88"));
     assert!(c.reject_bad_transit);
     let rc4 = KdcConf::parse(
         r"
@@ -445,8 +446,8 @@ fn libdefaults_does_not_honour_kdcdefaults_knobs() {
     )
     .unwrap();
     // The kdcdefaults knobs under [libdefaults] are ignored: defaults kept.
-    assert_eq!(lib.kdc_listen, vec!["127.0.0.1:88".to_string()]);
-    assert_eq!(lib.kdc_tcp_listen, vec!["127.0.0.1:88".to_string()]);
+    assert_eq!(lib.kdc_listen, "88");
+    assert_eq!(lib.kdc_tcp_listen, None);
     assert!(lib.reject_bad_transit, "reject_bad_transit default kept");
     // The four enctype knobs under [libdefaults] are still honoured.
     assert_eq!(lib.allow_rc4, Some(true));
@@ -459,7 +460,7 @@ fn libdefaults_does_not_honour_kdcdefaults_knobs() {
 ",
     )
     .unwrap();
-    assert_eq!(kdc.kdc_listen, vec!["127.0.0.1:12345".to_string()]);
+    assert_eq!(kdc.kdc_listen, "12345");
     assert!(!kdc.reject_bad_transit);
 }
 
@@ -748,4 +749,136 @@ fn ignore_acceptor_hostname_defaults_false() {
     assert!(!c.ignore_acceptor_hostname);
     let on = Krb5Conf::parse("[libdefaults]\n    ignore_acceptor_hostname = true\n").unwrap();
     assert!(on.ignore_acceptor_hostname);
+}
+
+fn wild(port: u16) -> crate::listen::ListenAddr {
+    crate::listen::ListenAddr { host: None, port }
+}
+
+fn at(host: &str, port: u16) -> crate::listen::ListenAddr {
+    crate::listen::ListenAddr {
+        host: Some(host.to_owned()),
+        port,
+    }
+}
+
+#[test]
+fn kdc_ports_list_binds_every_port_on_the_wildcard_like_mit() {
+    // The three cases MIT krb5kdc / kadmind 1.22.2 bind, read from their sockets.
+    // Case 1, KLLDAP's kdc.template.conf: `kdc_ports = 750,88` and nothing else.
+    let c = KdcConf::parse("[kdcdefaults]\n    kdc_ports = 750,88\n").unwrap();
+    assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(750), wild(88)]);
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(750), wild(88)]);
+    assert_eq!(c.kadmind_listeners(None).unwrap(), vec![wild(749)]);
+    assert_eq!(c.kpasswd_listeners().unwrap(), vec![wild(464)]);
+    // Case 2: the realm stanza's lists beat [kdcdefaults], UDP and TCP apart.
+    let c = KdcConf::parse(
+        "[kdcdefaults]\n    kdc_ports = 750,88\n[realms]\n    R = {\n        kdc_listen = 127.0.0.2:8888 3333\n        kdc_tcp_listen = 9999\n    }\n",
+    )
+    .unwrap();
+    assert_eq!(
+        c.kdc_udp_listeners().unwrap(),
+        vec![at("127.0.0.2", 8888), wild(3333)]
+    );
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(9999)]);
+    // Case 3: a TCP-only list leaves UDP on the default; kadmind and kpasswd lists.
+    let c = KdcConf::parse(
+        "[kdcdefaults]\n    kdc_tcp_ports = 7777\n[realms]\n    R = {\n        kadmind_listen = 127.0.0.3:7749\n        kpasswd_port = 7464\n    }\n",
+    )
+    .unwrap();
+    assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(88)]);
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(7777)]);
+    assert_eq!(
+        c.kadmind_listeners(None).unwrap(),
+        vec![at("127.0.0.3", 7749)]
+    );
+    assert_eq!(c.kpasswd_listeners().unwrap(), vec![wild(7464)]);
+    // No kdc.conf listener relation at all: MIT DEFAULT_KDC_PORTLIST on the wildcard.
+    let c = KdcConf::default();
+    assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(88)]);
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(88)]);
+}
+
+#[test]
+fn kdc_listen_beats_kdc_ports_in_the_same_section() {
+    // MIT `init_realm` tries kdc_listen first and reads kdc_ports only when it is absent,
+    // whatever the order in the file.
+    let c = KdcConf::parse(
+        "[kdcdefaults]\n    kdc_ports = 88\n    kdc_listen = 127.0.0.1:1088\n    kdc_tcp_ports = 2088\n    kdc_tcp_listen = 3088\n",
+    )
+    .unwrap();
+    assert_eq!(c.kdc_udp_listeners().unwrap(), vec![at("127.0.0.1", 1088)]);
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(3088)]);
+}
+
+#[test]
+fn listen_entries_parse_like_k5_parse_host_string() {
+    use crate::listen::{listen_addrs, parse_host_string};
+    assert_eq!(parse_host_string("88", 88).unwrap(), wild(88));
+    assert_eq!(
+        parse_host_string("kdc.example.com", 88).unwrap(),
+        at("kdc.example.com", 88)
+    );
+    assert_eq!(
+        parse_host_string("10.0.0.1:750", 88).unwrap(),
+        at("10.0.0.1", 750)
+    );
+    assert_eq!(parse_host_string("[::1]:750", 88).unwrap(), at("::1", 750));
+    assert_eq!(parse_host_string("[::]", 88).unwrap(), at("::", 88));
+    for bad in ["", ":88", "10.0.0.1:", "10.0.0.1:x", "70000", "[::1]:99999"] {
+        assert!(
+            parse_host_string(bad, 88).is_err(),
+            "{bad:?} must be refused"
+        );
+    }
+    // `,`, `;` and space all separate; a /path entry (a UNIX socket in MIT) is skipped.
+    assert_eq!(
+        listen_addrs(Some("750, 88;127.0.0.1:89 /run/kdc.sock"), 88).unwrap(),
+        vec![wild(750), wild(88), at("127.0.0.1", 89)]
+    );
+    // MIT `loop_add_address`: a wildcard removes the direct addresses on its port, and a
+    // direct address on a wildcard's port (or a repeat) is dropped.
+    assert_eq!(
+        listen_addrs(
+            Some("127.0.0.1:88 88 10.0.0.1:88 88 127.0.0.1:89 127.0.0.1:89"),
+            88
+        )
+        .unwrap(),
+        vec![wild(88), at("127.0.0.1", 89)]
+    );
+    assert_eq!(listen_addrs(None, 749).unwrap(), vec![wild(749)]);
+    assert!(listen_addrs(Some("88,99999"), 88).is_err());
+}
+
+#[test]
+fn wildcard_resolves_to_both_families() {
+    let addrs = wild(88).resolve().unwrap();
+    assert_eq!(
+        addrs,
+        vec![
+            "0.0.0.0:88".parse::<std::net::SocketAddr>().unwrap(),
+            "[::]:88".parse().unwrap()
+        ]
+    );
+    assert_eq!(
+        at("127.0.0.1", 750).resolve().unwrap(),
+        vec!["127.0.0.1:750".parse::<std::net::SocketAddr>().unwrap()]
+    );
+}
+
+#[test]
+fn kadmind_port_follows_admin_server_then_kadmind_port() {
+    // MIT `kadm5_get_config_params`: a port written in admin_server sets kadmind's port
+    // before kadmind_port is read.
+    let c = KdcConf::parse("[realms]\n    R = {\n        kadmind_port = 7749\n    }\n").unwrap();
+    assert_eq!(c.kadmind_port(None), 7749);
+    assert_eq!(c.kadmind_port(Some("kdc.example.com")), 7749);
+    assert_eq!(c.kadmind_port(Some("kdc.example.com:8749")), 8749);
+    assert_eq!(c.kadmind_port(Some("[::1]:9749")), 9749);
+    let c = KdcConf::parse(
+        "[realms]\n    R = {\n        admin_server = kdc.example.com:6749\n        kadmind_port = 7749\n    }\n",
+    )
+    .unwrap();
+    assert_eq!(c.kadmind_port(Some("other:8749")), 6749);
+    assert_eq!(KdcConf::default().kadmind_port(None), 749);
 }

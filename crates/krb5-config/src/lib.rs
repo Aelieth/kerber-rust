@@ -31,6 +31,7 @@
 
 mod ccname;
 mod kdcconf;
+pub mod listen;
 mod profile;
 mod srv;
 mod testenv;
@@ -164,10 +165,25 @@ pub struct Krb5Conf {
 /// KDC policy from `kdc.conf`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdcConf {
-    /// Bind addresses (host:port). Empty means `127.0.0.1:88`.
-    pub kdc_listen: Vec<String>,
-    /// TCP listen addresses.
-    pub kdc_tcp_listen: Vec<String>,
+    /// The KDC's UDP listener list as written (MIT syntax, see [`listen`]): the realm
+    /// stanza's `kdc_listen` / `kdc_ports`, else `[kdcdefaults]`'s, else
+    /// [`listen::DEFAULT_KDC_PORTLIST`].
+    /// MIT `init_realm` (`kdc/main.c:257-263`): `kdc_listen`, then `kdc_ports`, then the default.
+    pub kdc_listen: String,
+    /// The KDC's TCP listener list (`kdc_tcp_listen` / `kdc_tcp_ports`, realm then
+    /// `[kdcdefaults]`); `None` listens on [`Self::kdc_listen`].
+    /// MIT `init_realm` (`kdc/main.c:267-282`): `kdc_tcp_listen`, then `kdc_tcp_ports`.
+    pub kdc_tcp_listen: Option<String>,
+    /// The realm stanza's `admin_server`, whose port (if written) is kadmind's port.
+    pub admin_server: Option<String>,
+    /// The realm stanza's `kadmind_listen` list.
+    pub kadmind_listen: Option<String>,
+    /// The realm stanza's `kadmind_port`.
+    pub kadmind_port: Option<u16>,
+    /// The realm stanza's `kpasswd_listen` list.
+    pub kpasswd_listen: Option<String>,
+    /// The realm stanza's `kpasswd_port`.
+    pub kpasswd_port: Option<u16>,
     /// Realm name.
     pub realm: String,
     /// Maximum ticket lifetime in seconds (default 1 day, `alt_prof.c`).

@@ -354,3 +354,124 @@ fn serve_until_honours_shutdown_within_the_poll_interval() {
         t0.elapsed()
     );
 }
+
+/// One AS-REQ without preauth over UDP to `addr`; the KDC's answer is PREAUTH_REQUIRED.
+fn udp_as_answers(addr: std::net::SocketAddr) -> bool {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let bytes = encode(&as_req(cname, TEST_REALM, 1, None).unwrap()).unwrap();
+    let local = if addr.is_ipv4() {
+        "127.0.0.1:0"
+    } else {
+        "[::1]:0"
+    };
+    let sock = UdpSocket::bind(local).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    sock.send_to(&bytes, addr).unwrap();
+    let mut buf = [0u8; 4096];
+    let Ok(n) = sock.recv(&mut buf) else {
+        return false;
+    };
+    decode::<krb5_types::KrbError>(&buf[..n]).is_ok_and(|e| e.error_code == err::PREAUTH_REQUIRED)
+}
+
+/// The same over TCP.
+fn tcp_as_answers(addr: std::net::SocketAddr) -> bool {
+    use std::io::{Read, Write};
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let bytes = encode(&as_req(cname, TEST_REALM, 2, None).unwrap()).unwrap();
+    let Ok(mut s) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
+        return false;
+    };
+    s.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    s.write_all(&u32::try_from(bytes.len()).unwrap().to_be_bytes())
+        .unwrap();
+    s.write_all(&bytes).unwrap();
+    let mut hdr = [0u8; 4];
+    if s.read_exact(&mut hdr).is_err() {
+        return false;
+    }
+    let mut buf = vec![0u8; u32::from_be_bytes(hdr) as usize];
+    s.read_exact(&mut buf).unwrap();
+    decode::<krb5_types::KrbError>(&buf).is_ok_and(|e| e.error_code == err::PREAUTH_REQUIRED)
+}
+
+#[test]
+fn kdc_listen_list_is_served_on_every_address_like_mit() {
+    // MIT `loop_add_addresses` (`lib/apputils/net-server.c:381-433`): every entry of a list
+    // is added, and `kdc_tcp_listen` is its own list; the first-binds-wins candidate walk
+    // answered on one address only.
+    use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all};
+    let conf = krb5_config::KdcConf::parse(
+        "[kdcdefaults]\n    kdc_listen = 127.0.0.1:0, 127.0.0.2:0\n    kdc_tcp_listen = 127.0.0.1:0;127.0.0.2:0\n",
+    )
+    .unwrap();
+    let udp = bind_udp_listeners(&conf.kdc_udp_listeners().unwrap()).unwrap();
+    let tcp = bind_tcp_listeners(&conf.kdc_tcp_listeners().unwrap()).unwrap();
+    assert_eq!((udp.len(), tcp.len()), (2, 2));
+    let udp_addrs: Vec<_> = udp.iter().map(|s| s.local_addr().unwrap()).collect();
+    let tcp_addrs: Vec<_> = tcp.iter().map(|s| s.local_addr().unwrap()).collect();
+    let (store, _) = bootstrap_documented().unwrap();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve_all(store, udp, tcp);
+    });
+    for a in udp_addrs {
+        assert!(udp_as_answers(a), "no UDP answer on {a}");
+    }
+    for a in tcp_addrs {
+        assert!(tcp_as_answers(a), "no TCP answer on {a}");
+    }
+}
+
+#[test]
+fn bare_port_listens_on_ipv4_and_ipv6_like_mit() {
+    // A bare port is MIT's wildcard (`loop_add_addresses` with no host): IPv4 peers and,
+    // where the host has IPv6, IPv6 peers both reach it. Port 0 lets the OS pick a port
+    // per socket, so each socket is probed on its own port.
+    use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all};
+    let conf = krb5_config::KdcConf::parse("[kdcdefaults]\n    kdc_ports = 0\n").unwrap();
+    let udp = bind_udp_listeners(&conf.kdc_udp_listeners().unwrap()).unwrap();
+    let tcp = bind_tcp_listeners(&conf.kdc_tcp_listeners().unwrap()).unwrap();
+    let dual_stack =
+        std::fs::read_to_string("/proc/sys/net/ipv6/bindv6only").is_ok_and(|v| v.trim() == "0");
+    let ipv6_host = UdpSocket::bind("[::1]:0").is_ok();
+    let mut probes: Vec<(bool, std::net::SocketAddr)> = Vec::new();
+    for (is_udp, a) in udp
+        .iter()
+        .map(|s| (true, s.local_addr().unwrap()))
+        .chain(tcp.iter().map(|s| (false, s.local_addr().unwrap())))
+    {
+        assert!(a.ip().is_unspecified(), "{a} is not a wildcard bind");
+        let v4 = std::net::SocketAddr::from(([127, 0, 0, 1], a.port()));
+        let v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, a.port()));
+        if a.is_ipv4() || dual_stack {
+            probes.push((is_udp, v4));
+        }
+        if a.is_ipv6() && ipv6_host {
+            probes.push((is_udp, v6));
+        }
+    }
+    for want_udp in [true, false] {
+        assert!(
+            probes.iter().any(|(u, a)| *u == want_udp && a.is_ipv4()),
+            "no IPv4 listener (udp={want_udp})"
+        );
+    }
+    let (store, _) = bootstrap_documented().unwrap();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve_all(store, udp, tcp);
+    });
+    for (is_udp, a) in probes {
+        let ok = if is_udp {
+            udp_as_answers(a)
+        } else {
+            tcp_as_answers(a)
+        };
+        assert!(
+            ok,
+            "no {} answer on {a}",
+            if is_udp { "udp" } else { "tcp" }
+        );
+    }
+}

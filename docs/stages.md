@@ -134,7 +134,7 @@ acceptor (`rd_req_dec.c`), and a kadm5 pass the kadm5 server. A close-out
 ended the section. Every row is graded `exact`, `stricter-documented`,
 `deviation`, `absent` or `deferred`; the two `absent` rows are the stated
 non-goals (OTP preauth, `gss_wrap_size_limit`), and each `deferred` row
-names the oracle that would promote it. 77 of the 362 `exact` rows have a
+names the oracle that would promote it. 77 of the 364 `exact` rows have a
 proof cell that names no gate, `diffsend` case, forge or live cell, and the
 per-row sweep that marks a unit-only row forge-only has not been done ([parity README](parity/README.md)).
 Deviations are in

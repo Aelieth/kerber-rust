@@ -58,7 +58,7 @@ peer, or **none** (Rust against Rust: it proves behaviour, not parity).
 | `scripts/kcm-gate.sh` | MIT | `ci:mit-extra-2` | fail-red | Rust `KCM:` vs Fedora `sssd-kcm` + Fedora's MIT `klist`: Rust `kinit -c KCM:` then MIT `klist` names `user@KERBER.TEST`; MIT `kinit -c KCM:` then Rust `klist` names the principal; `kswitch` two-principal (GEN_NEW residual); restart persist; re-prime; `kdestroy`; `KEYRING:` still unknown |
 | `scripts/kcm-opcode-gate.sh` | MIT | `kcm-opcode:kcm-opcode` | nightly | F43 and F42 `sssd-kcm` (KCM socket up, `GET_DEFAULT_CACHE` code 0): `GET_CRED_LIST=ok`; `RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL` |
 | `scripts/kdb-dump-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kdb5_util` dump/load both ways: MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` |
-| `scripts/kdc-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs Rust KDC: MIT TGT + host ticket; TGS audit seed stage 1 / no `tkt_out_id` / same `req_id` as `ENCR_REP`; `examples/configs` as written: `krb5-kdb create`, `krb5-kdc` + `krb5-kadmind` on `kdc.conf` alone, MIT `kadmin` `addprinc`, MIT `kinit` + `kvno` on `krb5.conf` |
+| `scripts/kdc-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs Rust KDC: MIT TGT + host ticket; TGS audit seed stage 1 / no `tkt_out_id` / same `req_id` as `ENCR_REP`; `examples/configs` as written: `krb5-kdb create`, `krb5-kdc` + `krb5-kadmind` on `kdc.conf` alone, MIT `kadmin` `addprinc`, MIT `kinit` + `kvno` on `krb5.conf`; the same realm on KLLDAP's `kdc_ports = 750,88` with no listener pins: MIT `kinit` over TCP 88 and UDP 750 to the container's non-loopback address, MIT `kadmin` `addprinc -randkey` + `ktadd` on 749, `kinit -k` |
 | `scripts/kdcpolicy-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kdcpolicy_test.so` vs Rust `TestPolicy` (`KRB5_KDCPOLICY=test`): AS/TGS deny on a `fail` first component is `KDC policy rejects request` on both legs (Rust AS also `LOCAL_POLICY` in `/tmp/kdc.log`); SPAKE `spake_preauth_indicator = ONE_HOUR` rewrites AS life to 3600 s and TGS life to 1800 s on both; a foreign indicator (`OTHER`) is `KDC policy rejects request` on both |
 | `scripts/kit-conformance-gate.sh` | MIT | `ci:harness-2` | skip2 | no check yet: **exit 2** whether `KIT_TWIN` is absent or present (the 2×2 is not vendored; a present twin prints `kit_twin_digest=`) |
 | `scripts/knobs-gate.sh` | MIT | `ci:harness` | fail-red | kit-like `krb5.conf` vs MIT 1.22.2 and Rust `kinit`: `kdc_timeout`/`max_retries` do not change MIT (or Rust) kinit success; `forwardable` + `default_tkt_enctypes` show `F` and `aes256-cts-hmac-sha1-96` on `klist -f -e`; `default_ccache_name` env>conf>builtin path parity; conf `proxiable`: MIT and Rust `kvno` host tickets show `P` |
@@ -370,7 +370,10 @@ not check (a unit test, or "not asserted").
   `kinit user@KERBER.TEST` plus `kvno host/testhost.kerber.test`. Its last
   cell runs `examples/configs` as written: `krb5-kdb create EXAMPLE.COM`,
   `krb5-kdc` and `krb5-kadmind` on `kdc.conf` alone, then MIT `kadmin`,
-  `kinit` and `kvno` through `kadm5.acl` and `krb5.conf`.
+  `kinit` and `kvno` through `kadm5.acl` and `krb5.conf`. The same realm then
+  restarts on KLLDAP's listener shape (`kdc_ports = 750,88`, no `kdc_listen`,
+  no kadmind or kpasswd relation) and MIT `kinit`, `kadmin` and `kinit -k`
+  reach it on the container's non-loopback address: TCP 88, UDP 750, 749.
 - `scripts/knobs-gate.sh` — `kdc_timeout = 1`/`max_retries = 1` leave MIT
   and Rust kinit succeeding; `forwardable` + `default_tkt_enctypes` show `F`
   and `aes256-cts-hmac-sha1-96` on `klist -f -e`; `default_ccache_name`

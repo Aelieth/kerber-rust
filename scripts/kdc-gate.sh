@@ -450,6 +450,64 @@ echo "$KLISTX"
 grep -q 'Default principal: alice@EXAMPLE.COM' <<<"$KLISTX" || die "example: klist does not name alice@EXAMPLE.COM"
 grep -q 'host/kdc.example.com@EXAMPLE.COM' <<<"$KLISTX" || die "example: klist has no host/kdc.example.com ticket"
 echo "MIT_example_kadmin_kinit_kvno"
+
+# The same realm restarted on KLLDAP's kdc.conf shape: [kdcdefaults] kdc_ports =
+# 750,88 and no listener relation for kadmind or kpasswd. MIT reads a bare port
+# as every local address (net-server.c loop_add_addresses), so MIT kinit reaches
+# the KDC over the container's own non-loopback address on TCP 88 and UDP 750,
+# and MIT kadmin reaches kadmind there on 749.
+echo "==== kdc_ports = 750,88 on every local address (KLLDAP kdc.conf shape) ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) $(pidof krb5-kadmind) 2>/dev/null; true'
+wait_gone_in "$NAME" 88 || die "the example KDC still holds port 88"
+docker exec "$NAME" sh -c 'sed -i "s/^    kdc_listen = .*/    kdc_ports = 750,88/" /etc/kerber-rust/kdc.conf'
+docker exec "$NAME" grep -q '^    kdc_ports = 750,88$' /etc/kerber-rust/kdc.conf \
+    || die "listen: kdc.conf was not rewritten to kdc_ports = 750,88"
+LIP="$(docker exec "$NAME" hostname -i | tr ' ' '\n' | grep -v '^127\.' | grep -v ':' | head -1)"
+[ -n "$LIP" ] || die "listen: the container has no non-loopback IPv4 address"
+docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc >/tmp/listen-kdc.log 2>&1'
+require_listen "$NAME" /tmp/listen-kdc.log "the KDC on kdc_ports = 750,88"
+docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/listen-kadmind.log 2>&1'
+require_listen "$NAME" /tmp/listen-kadmind.log "kadmind on its default listeners"
+docker exec "$NAME" cat /tmp/listen-kdc.log /tmp/listen-kadmind.log | grep -E '^(listening|kpasswd) '
+# lconf PORT UDP_LIMIT: a client krb5.conf naming the KDC and kadmind by address.
+lconf() {
+    docker exec "$NAME" sh -c "sed -e 's/kdc = kdc.example.com:88/kdc = $LIP:$1/' \
+        -e 's/admin_server = kdc.example.com:749/admin_server = $LIP:749/' \
+        -e 's/^\[libdefaults\]/[libdefaults]\n    udp_preference_limit = $2/' \
+        /etc/kerber-rust/krb5.conf >/tmp/listen-krb5-$1.conf"
+}
+lconf 88 1
+lconf 750 4096
+lx() {
+    local conf=$1
+    shift
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=FILE:/tmp/listen-cc -e KRB5_TRACE=/dev/stdout "$NAME" "$@"
+}
+TCP88="$(lx /tmp/listen-krb5-88.conf sh -c 'printf "alice-secret\n" | kinit alice@EXAMPLE.COM' 2>&1)" \
+    || { echo "$TCP88" >&2; die "listen: MIT kinit over TCP to $LIP:88 failed"; }
+grep -q "stream $LIP:88" <<<"$TCP88" || { echo "$TCP88" >&2; die "listen: kinit did not use TCP $LIP:88"; }
+echo "MIT_kinit_tcp_${LIP}_88"
+UDP750="$(lx /tmp/listen-krb5-750.conf sh -c 'printf "alice-secret\n" | kinit alice@EXAMPLE.COM' 2>&1)" \
+    || { echo "$UDP750" >&2; die "listen: MIT kinit over UDP to $LIP:750 failed"; }
+grep -q "dgram $LIP:750" <<<"$UDP750" || { echo "$UDP750" >&2; die "listen: kinit did not use UDP $LIP:750"; }
+grep -q "Received answer" <<<"$UDP750" || { echo "$UDP750" >&2; die "listen: no UDP answer from $LIP:750"; }
+echo "MIT_kinit_udp_${LIP}_750"
+KAD="$(mit_kadmin -e KRB5_CONFIG=/tmp/listen-krb5-88.conf -e KRB5CCNAME=FILE:/tmp/listen-cc "$NAME" -- \
+    -p admin@EXAMPLE.COM -w example-admin -q 'addprinc -randkey host/listen.example.com' 2>&1)" || true
+echo "$KAD"
+grep -q 'Principal "host/listen.example.com@EXAMPLE.COM" created' <<<"$KAD" \
+    || die "listen: MIT kadmin addprinc over $LIP:749 failed"
+KTA="$(mit_kadmin -e KRB5_CONFIG=/tmp/listen-krb5-88.conf -e KRB5CCNAME=FILE:/tmp/listen-cc "$NAME" -- \
+    -p admin@EXAMPLE.COM -w example-admin -q 'ktadd -k /tmp/listen.keytab host/listen.example.com' 2>&1)" || true
+echo "$KTA"
+grep -q 'Entry for principal host/listen.example.com with kvno 2' <<<"$KTA" \
+    || die "listen: MIT kadmin ktadd over $LIP:749 failed"
+lx /tmp/listen-krb5-88.conf kinit -k -t /tmp/listen.keytab host/listen.example.com >/dev/null \
+    || die "listen: MIT kinit -k with the ktadd keytab failed"
+echo "MIT_kadmin_${LIP}_749_addprinc_ktadd_kinit_k"
+docker exec "$NAME" rm -f /tmp/listen-cc /tmp/listen.keytab /tmp/listen-krb5-88.conf /tmp/listen-krb5-750.conf
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) $(pidof krb5-kadmind) 2>/dev/null; rm -rf /etc/kerber-rust /var/lib/kerber-rust /tmp/example-cc; true'
 
 log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\",\"issue\":true,\"audit\":true"

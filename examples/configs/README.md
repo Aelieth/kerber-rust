@@ -20,8 +20,8 @@ KRB5_KDC_DB=/var/lib/kerber-rust/principal \
 KRB5_KDC_STASH=/var/lib/kerber-rust/.k5.EXAMPLE.COM \
 KRB5_MASTER_PASSWORD=… KRB5_TEST_USER_PASSWORD=… KRB5_TEST_ADMIN_PASSWORD=… \
     krb5-kdb create EXAMPLE.COM      # the realm, plus user@ and admin@EXAMPLE.COM
-krb5-kdc                             # UDP and TCP on the kdc_listen address
-krb5-kadmind                         # 127.0.0.1:749 unless given host:port
+krb5-kdc                             # UDP and TCP on every kdc_listen address
+krb5-kadmind                         # kadm5 on 749 and kpasswd on 464, all local addresses
 ```
 
 ## Each key and its reader
@@ -31,7 +31,7 @@ krb5-kadmind                         # 127.0.0.1:749 unless given host:port
 
 | Key | Used by |
 | --- | --- |
-| `kdc_listen` | `crates/krb5-kdc/src/bin/krb5-kdc.rs` (`bind_list`): the KDC binds UDP and TCP on the first listed address that binds, where MIT binds every listed address. A bare port binds `127.0.0.1`, where MIT binds every local address; write `host:port` for another address. |
+| `kdc_listen` | `crates/krb5-kdc/src/bin/krb5-kdc.rs` (`bind_sockets`), parsed by `crates/krb5-config/src/listen.rs`: as in MIT, the KDC binds UDP and TCP on every listed address, and a bare port (`kdc_ports = 88`, or KLLDAP's `750,88`) on every local address. The realm stanza's `kdc_listen` / `kdc_ports` win over `[kdcdefaults]`, and `kdc_tcp_listen` / `kdc_tcp_ports` give TCP its own list. This file keeps the KDC on `127.0.0.1`; drop the line to listen on port 88 everywhere. |
 | `database_name`, `key_stash_file` | `krb5-kdc.rs` and `crates/krb5-admin/src/bin/krb5-kadmind.rs` (`db_and_stash`), when `KRB5_KDC_DB` / `KRB5_KDC_STASH` are unset |
 | `acl_file` | `krb5-kadmind.rs` (`load_acl`), when `KRB5_ACL_FILE` is unset; a missing file refuses to start |
 | `master_key_type` | `crates/krb5-kdc/src/bin/krb5-kdb.rs` (`master_etype`, for `create`) and `crates/krb5-kdc/src/persist.rs` (`persist_master_etype`), through `KRB5_KDC_PROFILE` / `KRB5_KDC_CONF` only (`env_kdc_config`): a `kdc.conf` found only at `/etc/krb5kdc/kdc.conf` is not read for it, and `KRB5_MASTER_ETYPE` overrides it. Unset, this port uses aes256-cts-hmac-sha384-192 where MIT uses aes256-cts-hmac-sha1-96, so the example sets MIT's |
@@ -62,8 +62,8 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
 - `KRB5_KPROP_ACL`: `krb5-kpropd`'s allowlist (`kpropd.acl` form); unset or empty
   refuses every propagation (`crates/krb5-admin/src/bin/krb5-kpropd.rs`).
 - `KRB5_KDC_BIND`: the one address the KDC binds, instead of `kdc_listen`.
-- `KRB5_KPASSWD_BIND`: where `krb5-kadmind` serves kpasswd (default
-  `127.0.0.1:464`).
+- `KRB5_KPASSWD_BIND`: the one address `krb5-kadmind` serves kpasswd on, instead
+  of `kpasswd_listen` / `kpasswd_port`.
 - `KRB5_KDC_USER`: the user the KDC drops to after binding as root (default
   `nobody`, `crates/krb5-kdc/src/listen.rs`). A KDC that serves a database
   file, as with this `kdc.conf`, keeps its user so it can re-read what
@@ -71,12 +71,9 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
 
 ## What MIT reads that this port ignores
 
-- `kadmind_port` and `kpasswd_port`: kadmind listens on its command-line address
-  and kpasswd on `KRB5_KPASSWD_BIND`.
-- `kdc_tcp_listen` (and `kdc_tcp_ports`): parsed, but the KDC binds TCP on its
-  `kdc_listen` address.
-- a realm stanza's `kdc_listen` / `kdc_ports`: not read; only `[kdcdefaults]`
-  sets the KDC's addresses in `kdc.conf`.
+- `/path` entries in a listen list: MIT binds a UNIX-domain socket there; this
+  port binds none.
+- `kdc_tcp_listen_backlog`: the TCP listen queue is the Rust runtime's default.
 - `[logging]`: no reader; `docs/logging.md` says what the daemons log.
 - `iprop_enable` and `iprop_port`: iprop (program 100423) always answers on the
   kadmind port; there is no separate listener.

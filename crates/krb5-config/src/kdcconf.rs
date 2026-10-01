@@ -5,14 +5,58 @@
 
 use std::path::{Path, PathBuf};
 
+use super::listen::{self, ListenAddr};
 use super::profile::{combine_ws, parse_duration_secs, split_kv, split_ws, truthy};
 use super::{Error, KdcConf};
+
+/// The four KDC listener relations of one profile section, as written.
+#[derive(Default)]
+struct ListenRelations {
+    listen: Option<String>,
+    ports: Option<String>,
+    tcp_listen: Option<String>,
+    tcp_ports: Option<String>,
+}
+
+impl ListenRelations {
+    /// Record `line` if it is one of the four; the first value wins, as
+    /// `krb5_aprof_get_string` returns the first.
+    fn take(&mut self, line: &str) -> bool {
+        let Some((k, v)) = split_kv(line) else {
+            return false;
+        };
+        let slot = match k.to_ascii_lowercase().as_str() {
+            "kdc_listen" => &mut self.listen,
+            "kdc_ports" => &mut self.ports,
+            "kdc_tcp_listen" => &mut self.tcp_listen,
+            "kdc_tcp_ports" => &mut self.tcp_ports,
+            _ => return false,
+        };
+        if slot.is_none() {
+            *slot = Some(v);
+        }
+        true
+    }
+
+    fn udp(&self) -> Option<&String> {
+        self.listen.as_ref().or(self.ports.as_ref())
+    }
+
+    fn tcp(&self) -> Option<&String> {
+        self.tcp_listen.as_ref().or(self.tcp_ports.as_ref())
+    }
+}
 
 impl Default for KdcConf {
     fn default() -> Self {
         Self {
-            kdc_listen: vec!["127.0.0.1:88".into()],
-            kdc_tcp_listen: vec!["127.0.0.1:88".into()],
+            kdc_listen: listen::DEFAULT_KDC_PORTLIST.into(),
+            kdc_tcp_listen: None,
+            admin_server: None,
+            kadmind_listen: None,
+            kadmind_port: None,
+            kpasswd_listen: None,
+            kpasswd_port: None,
             realm: "KERBER.TEST".into(),
             max_life: 24 * 3600,
             max_renewable_life: 0,
@@ -58,6 +102,8 @@ impl KdcConf {
         let mut section = String::new();
         let mut in_realm = false;
         let mut realm_lines = Vec::new();
+        let mut realm_listen = ListenRelations::default();
+        let mut default_listen = ListenRelations::default();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -88,10 +134,12 @@ impl KdcConf {
                 }
                 if in_realm {
                     realm_lines.push(line.to_owned());
-                    parse_kdc_realm_line(&mut conf, line);
+                    if !realm_listen.take(line) {
+                        parse_kdc_realm_line(&mut conf, line);
+                    }
                 }
             }
-            if section == "kdcdefaults" {
+            if section == "kdcdefaults" && !default_listen.take(line) {
                 parse_kdcdefaults(&mut conf, line);
             }
             if section == "libdefaults" {
@@ -103,7 +151,77 @@ impl KdcConf {
         for line in &realm_lines {
             overlay_realm_booleans(&mut conf, line);
         }
+        // MIT `initialize_realms` (`kdc/main.c:622-660`): the `[kdcdefaults]` lists, else `88`.
+        // MIT `init_realm` (`kdc/main.c:257-282`): the realm stanza's lists win over those.
+        if let Some(v) = realm_listen.udp().or(default_listen.udp()) {
+            conf.kdc_listen.clone_from(v);
+        }
+        conf.kdc_tcp_listen = realm_listen.tcp().or(default_listen.tcp()).cloned();
         Ok(conf)
+    }
+
+    /// The KDC's UDP listeners.
+    /// MIT `main` (`kdc/main.c:961-965`): UDP listens on the realm's `kdc_listen` list.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Parse`] for an entry [`listen::parse_host_string`] refuses.
+    pub fn kdc_udp_listeners(&self) -> Result<Vec<ListenAddr>, Error> {
+        listen::listen_addrs(Some(&self.kdc_listen), listen::KDC_PORT)
+    }
+
+    /// The KDC's TCP listeners: [`Self::kdc_tcp_listen`], else the UDP list.
+    /// MIT `main` (`kdc/main.c:969-973`): TCP falls back to the UDP list.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Parse`] for an entry [`listen::parse_host_string`] refuses.
+    pub fn kdc_tcp_listeners(&self) -> Result<Vec<ListenAddr>, Error> {
+        let list = self.kdc_tcp_listen.as_deref().unwrap_or(&self.kdc_listen);
+        listen::listen_addrs(Some(list), listen::KDC_PORT)
+    }
+
+    /// kadmind's port: the port written in `admin_server` (this file's, else
+    /// `krb5_admin_server` from krb5.conf), else `kadmind_port`, else 749.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:496-531`): `admin_server`'s port
+    /// is read before `kadmind_port`.
+    #[must_use]
+    pub fn kadmind_port(&self, krb5_admin_server: Option<&str>) -> u16 {
+        self.admin_server
+            .as_deref()
+            .or(krb5_admin_server)
+            .and_then(listen::admin_server_port)
+            .or(self.kadmind_port)
+            .unwrap_or(listen::KADMIND_PORT)
+    }
+
+    /// kadmind's RPC listeners; no `kadmind_listen` is the wildcard.
+    /// MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:153-156`): RPC on `kadmind_listen`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Parse`] for an entry [`listen::parse_host_string`] refuses.
+    pub fn kadmind_listeners(
+        &self,
+        krb5_admin_server: Option<&str>,
+    ) -> Result<Vec<ListenAddr>, Error> {
+        listen::listen_addrs(
+            self.kadmind_listen.as_deref(),
+            self.kadmind_port(krb5_admin_server),
+        )
+    }
+
+    /// kpasswd's UDP and TCP listeners, on `kpasswd_port` (default 464).
+    /// MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:147-152`): UDP and TCP on one list.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Parse`] for an entry [`listen::parse_host_string`] refuses.
+    pub fn kpasswd_listeners(&self) -> Result<Vec<ListenAddr>, Error> {
+        listen::listen_addrs(
+            self.kpasswd_listen.as_deref(),
+            self.kpasswd_port.unwrap_or(listen::KPASSWD_PORT),
+        )
     }
 
     /// Load from a path.
@@ -122,30 +240,6 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         return;
     };
     match k.to_ascii_lowercase().as_str() {
-        "kdc_ports" | "kdc_listen" => {
-            conf.kdc_listen = v
-                .split_whitespace()
-                .map(|p| {
-                    if p.contains(':') {
-                        p.to_owned()
-                    } else {
-                        format!("127.0.0.1:{p}")
-                    }
-                })
-                .collect();
-        }
-        "kdc_tcp_ports" | "kdc_tcp_listen" => {
-            conf.kdc_tcp_listen = v
-                .split_whitespace()
-                .map(|p| {
-                    if p.contains(':') {
-                        p.to_owned()
-                    } else {
-                        format!("127.0.0.1:{p}")
-                    }
-                })
-                .collect();
-        }
         "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
         "disable_pac" => conf.disable_pac = truthy(&v),
         "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
@@ -229,6 +323,17 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "pkinit_indicator" => conf.pkinit_indicators.push(v),
         "spake_preauth_indicator" => conf.spake_preauth_indicators.push(v),
         "dict_file" => conf.dict_file = Some(PathBuf::from(v)),
+        "admin_server" => {
+            conf.admin_server.get_or_insert(v);
+        }
+        "kadmind_listen" => {
+            conf.kadmind_listen.get_or_insert(v);
+        }
+        "kpasswd_listen" => {
+            conf.kpasswd_listen.get_or_insert(v);
+        }
+        "kadmind_port" if conf.kadmind_port.is_none() => conf.kadmind_port = v.parse().ok(),
+        "kpasswd_port" if conf.kpasswd_port.is_none() => conf.kpasswd_port = v.parse().ok(),
         _ => {}
     }
 }

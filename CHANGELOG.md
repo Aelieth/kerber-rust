@@ -1258,6 +1258,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **config/kdc/admin.** Listen like MIT: every `kdc_listen` / `kdc_ports` entry,
+  a bare port on all local addresses, realm stanza first, `kdc_tcp_*`, and
+  kadmind / kpasswd listen relations (KLLDAP's `750,88` made the KDC exit). `kdc-gate`.
 - **protocol.** Restore `capture.rs` product semantics: unset or empty
   `KERBER_CAPTURE_DIR` writes nothing. Golden-home protection lives in
   `gate-common.sh` `refuse_golden_capture_dir` and `ci-policy`

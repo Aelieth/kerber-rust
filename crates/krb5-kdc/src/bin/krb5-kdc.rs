@@ -2,6 +2,11 @@
 //!
 //! Usage: `krb5-kdc [--test-realm] [host:port]`
 //!
+//! With no `host:port` (and no `KRB5_KDC_BIND`) the KDC listens on kdc.conf's
+//! `kdc_listen` / `kdc_ports` and `kdc_tcp_listen` / `kdc_tcp_ports` like MIT's
+//! (default port 88 on all local addresses); `--test-realm` alone keeps the
+//! loopback candidates.
+//!
 //! `--test-realm` bootstraps the documented KERBER.TEST principals. Without
 //! it the daemon loads `KRB5_KDC_DB`/`KRB5_KDC_STASH` or `database_name` /
 //! `key_stash_file` from `kdc.conf`. Ticket policy comes from
@@ -11,6 +16,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::net::{TcpListener, UdpSocket};
 use std::path::PathBuf;
 
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
@@ -18,7 +24,7 @@ use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, documented_kiprop};
 use krb5_kdc::{
     Acl, BIND_CANDIDATES, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_SVR,
     KDB_OK_TO_AUTH_AS_DELEGATE, PrincipalStore, apply_kadm5_create_service_attrs, bind_preferred,
-    drop_privileges, open_store, serve, shared_store,
+    bind_tcp_listeners, bind_udp_listeners, drop_privileges, open_store, serve_all, shared_store,
 };
 
 fn main() {
@@ -250,13 +256,7 @@ fn main() {
         .into_iter()
         .next()
         .or_else(|| std::env::var("KRB5_KDC_BIND").ok());
-    let owned = bind_list(test_realm, pinned, kdc_conf.as_ref());
-    let candidates: Vec<&str> = owned.iter().map(String::as_str).collect();
-
-    let (addr, udp, tcp) = bind_preferred(&candidates).unwrap_or_else(|e| {
-        eprintln!("krb5-kdc: bind failed: {e}");
-        std::process::exit(1);
-    });
+    let (udp, tcp) = bind_sockets(test_realm, pinned, kdc_conf.as_ref());
     // Kadmind writes the db as the kadmind uid (root in the gate). Dropping
     // to nobody would make 0600 persist files unreadable on reload.
     if persist.is_none() {
@@ -274,8 +274,18 @@ fn main() {
     if std::env::var("KERBER_KDC_GREET").ok().as_deref() == Some("1") {
         krb5_kdc::register_authdata(std::sync::Arc::new(krb5_kdc::testrealm::GreetAuth));
     }
-    println!("listening {addr}");
-    if let Err(e) = serve(store, udp, tcp) {
+    // One `listening` line per UDP address (the gates' readiness probe), plus a
+    // `listening tcp` line for a TCP address that is not also a UDP one.
+    let udp_addrs: Vec<_> = udp.iter().filter_map(|u| u.local_addr().ok()).collect();
+    for a in &udp_addrs {
+        println!("listening {a}");
+    }
+    for a in tcp.iter().filter_map(|t| t.local_addr().ok()) {
+        if !udp_addrs.contains(&a) {
+            println!("listening tcp {a}");
+        }
+    }
+    if let Err(e) = serve_all(store, udp, tcp) {
         krb5_kdc::current_audit().kdc_stop(false);
         eprintln!("krb5-kdc: serve: {e}");
         std::process::exit(1);
@@ -306,21 +316,48 @@ fn db_and_stash(conf: Option<&krb5_config::KdcConf>) -> (Option<PathBuf>, Option
     (db, stash)
 }
 
-fn bind_list(
+/// The listening sockets. An address on the command line or in `KRB5_KDC_BIND`, or
+/// `--test-realm`, binds one UDP + TCP pair on the first of the pinned address /
+/// [`BIND_CANDIDATES`] that binds (the gates' path). Otherwise the KDC listens where MIT's
+/// would: every `kdc_listen` / `kdc_ports` entry for UDP and every `kdc_tcp_listen` /
+/// `kdc_tcp_ports` entry (else the UDP list) for TCP, a bare port on all local addresses,
+/// port 88 when kdc.conf names none.
+/// MIT `main` (`kdc/main.c:960-973`): UDP and TCP listeners for each realm's lists.
+fn bind_sockets(
     test_realm: bool,
     pinned: Option<String>,
     conf: Option<&krb5_config::KdcConf>,
-) -> Vec<String> {
-    if let Some(bind) = pinned {
-        return vec![bind];
+) -> (Vec<UdpSocket>, Vec<TcpListener>) {
+    if pinned.is_some() || test_realm {
+        let owned: Vec<String> = pinned.map_or_else(
+            || BIND_CANDIDATES.iter().map(|s| (*s).to_owned()).collect(),
+            |b| vec![b],
+        );
+        let candidates: Vec<&str> = owned.iter().map(String::as_str).collect();
+        let (_, udp, tcp) = bind_preferred(&candidates).unwrap_or_else(|e| {
+            eprintln!("krb5-kdc: bind failed: {e}");
+            std::process::exit(1);
+        });
+        return (vec![udp], vec![tcp]);
     }
-    if !test_realm
-        && let Some(c) = conf
-        && !c.kdc_listen.is_empty()
-    {
-        return c.kdc_listen.clone();
-    }
-    BIND_CANDIDATES.iter().map(|s| (*s).to_owned()).collect()
+    let default_conf = krb5_config::KdcConf::default();
+    let conf = conf.unwrap_or(&default_conf);
+    let lists = conf
+        .kdc_udp_listeners()
+        .and_then(|u| conf.kdc_tcp_listeners().map(|t| (u, t)));
+    let (udp_addrs, tcp_addrs) = lists.unwrap_or_else(|e| {
+        eprintln!("krb5-kdc: kdc.conf: {e}");
+        std::process::exit(1);
+    });
+    let udp = bind_udp_listeners(&udp_addrs).unwrap_or_else(|e| {
+        eprintln!("krb5-kdc: bind failed: {e}");
+        std::process::exit(1);
+    });
+    let tcp = bind_tcp_listeners(&tcp_addrs).unwrap_or_else(|e| {
+        eprintln!("krb5-kdc: bind failed: {e}");
+        std::process::exit(1);
+    });
+    (udp, tcp)
 }
 
 fn bootstrap_test_realm(kdc: Option<&krb5_config::KdcConf>) -> PrincipalStore {

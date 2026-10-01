@@ -17,6 +17,7 @@ use crate::Error;
 use crate::issue::handle_request_from;
 use crate::kdb::Store;
 use crate::lookaside::{Check, Lookaside};
+use krb5_config::listen::ListenAddr;
 use krb5_types::HostAddress;
 
 /// MIT `process_packet_response` (`net-server.c:1101-1105`): a dispatch error is logged
@@ -253,6 +254,99 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
     Err(last)
 }
 
+/// Bind a UDP socket on every listener in `addrs` (the `kdc_listen` list).
+///
+/// MIT `setup_addresses` (`lib/apputils/net-server.c:1012-1036`): an address family the host
+/// lacks (`EAFNOSUPPORT`) is skipped when another address of the entry binds; any other
+/// bind failure is fatal.
+/// The wildcard is `[::]` and `0.0.0.0`: std leaves `IPV6_V6ONLY` at the kernel default, so
+/// when `net.ipv6.bindv6only` is 0 the `[::]` socket is dual-stack and already serves IPv4;
+/// otherwise `0.0.0.0` is bound too. MIT binds the two with `IPV6_V6ONLY` set; the
+/// dual-stack socket serves the same peers (an IPv4-mapped peer reads as IPv4 through
+/// [`HostAddress::from_socket`]).
+///
+/// # Errors
+///
+/// `io::ErrorKind::InvalidInput` when an entry does not resolve, and the bind error, named
+/// with its address, for an address that does not bind.
+pub fn bind_udp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<UdpSocket>> {
+    bind_listeners(addrs, UdpSocket::bind, "udp")
+}
+
+/// [`bind_udp_listeners`] for the TCP list (`kdc_tcp_listen`, kadmind, kpasswd).
+///
+/// # Errors
+///
+/// As [`bind_udp_listeners`].
+pub fn bind_tcp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
+    bind_listeners(addrs, TcpListener::bind, "tcp")
+}
+
+/// The kernel default for a socket that does not set `IPV6_V6ONLY` (Linux
+/// `net.ipv6.bindv6only`); unreadable reads as v6-only, so `0.0.0.0` is bound as well.
+fn v6_wildcard_is_dual_stack() -> bool {
+    std::fs::read_to_string("/proc/sys/net/ipv6/bindv6only").is_ok_and(|v| v.trim() == "0")
+}
+
+fn bind_listeners<S>(
+    addrs: &[ListenAddr],
+    bind: impl Fn(SocketAddr) -> io::Result<S>,
+    proto: &str,
+) -> io::Result<Vec<S>> {
+    let named = |a: SocketAddr, e: io::Error| io::Error::new(e.kind(), format!("{proto} {a}: {e}"));
+    let no_family =
+        |e: &io::Error| e.raw_os_error() == Some(nix::errno::Errno::EAFNOSUPPORT as i32);
+    let mut out = Vec::new();
+    for entry in addrs {
+        let resolved = entry
+            .resolve()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+        let mut bound_any = false;
+        let mut skipped = None;
+        let mut dual_stack = false;
+        // The wildcard tries `[::]` first so a dual-stack socket can stand for both.
+        let order: Vec<SocketAddr> = if entry.host.is_none() {
+            resolved.iter().rev().copied().collect()
+        } else {
+            resolved
+        };
+        for a in order {
+            if dual_stack && a.is_ipv4() && a.ip().is_unspecified() {
+                continue;
+            }
+            match bind(a) {
+                Ok(sock) => {
+                    if entry.host.is_none() && a.is_ipv6() {
+                        dual_stack = v6_wildcard_is_dual_stack();
+                    }
+                    tracing::info!(
+                        event = krb5_log::events::KDC_LISTEN,
+                        correlation_id = krb5_log::current_correlation_id(),
+                        component = "krb5-kdc",
+                        outcome = "ok",
+                        bind = %a,
+                        proto,
+                        dual_stack,
+                    );
+                    out.push(sock);
+                    bound_any = true;
+                }
+                Err(e) if no_family(&e) => skipped = Some(named(a, e)),
+                Err(e) => return Err(named(a, e)),
+            }
+        }
+        if !bound_any {
+            return Err(skipped.unwrap_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::AddrNotAvailable,
+                    format!("{proto} {entry}: no address"),
+                )
+            }));
+        }
+    }
+    Ok(out)
+}
+
 /// Drop root after a privileged bind (port 88).
 ///
 /// When effective uid is 0, setgid/setuid to `KRB5_KDC_USER` (default
@@ -318,9 +412,18 @@ fn install_shutdown_flag(flag: &Arc<AtomicBool>) {
 /// The `io::Error` when the UDP read timeout or the TCP listener's non-blocking mode cannot be set.
 /// Per-request failures are only logged, and a panicked listener thread still yields `Ok(())`.
 pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener) -> io::Result<()> {
+    serve_all(store, vec![udp], vec![tcp])
+}
+
+/// [`serve`] on every socket of [`bind_udp_listeners`] / [`bind_tcp_listeners`].
+///
+/// # Errors
+///
+/// As [`serve_all_until`].
+pub fn serve_all(store: SharedStore, udp: Vec<UdpSocket>, tcp: Vec<TcpListener>) -> io::Result<()> {
     let shutdown = Arc::new(AtomicBool::new(false));
     install_shutdown_flag(&shutdown);
-    serve_until(store, udp, tcp, shutdown, ListenLimits::default())
+    serve_all_until(store, udp, tcp, shutdown, ListenLimits::default())
 }
 
 /// Serve until `shutdown` is true. UDP/TCP loops poll so they can exit.
@@ -330,7 +433,6 @@ pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener) -> io::Result
 /// `io::ErrorKind::InvalidInput` when `limits.shutdown_poll` is zero, and the OS error when the
 /// UDP read timeout or the TCP listener's non-blocking mode cannot be set for another reason.
 /// Per-request failures are only logged, and a panicked listener thread still yields `Ok(())`.
-#[allow(clippy::needless_pass_by_value)] // Arc is cloned into the UDP/TCP threads
 pub fn serve_until(
     store: SharedStore,
     udp: UdpSocket,
@@ -338,22 +440,57 @@ pub fn serve_until(
     shutdown: Arc<AtomicBool>,
     limits: ListenLimits,
 ) -> io::Result<()> {
+    serve_all_until(store, vec![udp], vec![tcp], shutdown, limits)
+}
+
+/// [`serve_until`] on several sockets: one thread per socket, one lookaside cache and one
+/// TCP connection cap across them all, as MIT's one net-server loop has.
+///
+/// # Errors
+///
+/// As [`serve_until`], for any of the sockets.
+#[allow(clippy::needless_pass_by_value)] // Arc is cloned into the UDP/TCP threads
+pub fn serve_all_until(
+    store: SharedStore,
+    udp: Vec<UdpSocket>,
+    tcp: Vec<TcpListener>,
+    shutdown: Arc<AtomicBool>,
+    limits: ListenLimits,
+) -> io::Result<()> {
     // The UDP read timeout is the shutdown-check interval, not an I/O deadline.
-    udp.set_read_timeout(Some(limits.shutdown_poll))?;
-    tcp.set_nonblocking(true)?;
+    for u in &udp {
+        u.set_read_timeout(Some(limits.shutdown_poll))?;
+    }
+    for t in &tcp {
+        t.set_nonblocking(true)?;
+    }
     let cache: SharedCache = Arc::new(Mutex::new(Lookaside::new()));
-    let udp_store = Arc::clone(&store);
-    let tcp_store = store;
-    let udp_flag = Arc::clone(&shutdown);
-    let tcp_flag = Arc::clone(&shutdown);
-    let udp_cache = Arc::clone(&cache);
-    let tcp_cache = cache;
-    let udp_thread =
-        thread::spawn(move || udp_loop(&udp_store, udp, &udp_flag, limits, &udp_cache));
-    let tcp_thread =
-        thread::spawn(move || tcp_loop(&tcp_store, tcp, &tcp_flag, limits, &tcp_cache));
-    let _ = udp_thread.join();
-    let _ = tcp_thread.join();
+    let registry = ConnRegistry::new(limits.max_tcp_workers);
+    let mut threads = Vec::new();
+    for sock in udp {
+        let (store, flag, cache) = (
+            Arc::clone(&store),
+            Arc::clone(&shutdown),
+            Arc::clone(&cache),
+        );
+        threads.push(thread::spawn(move || {
+            udp_loop(&store, sock, &flag, limits, &cache);
+        }));
+    }
+    for listener in tcp {
+        let (store, flag, cache) = (
+            Arc::clone(&store),
+            Arc::clone(&shutdown),
+            Arc::clone(&cache),
+        );
+        let registry = Arc::clone(&registry);
+        threads.push(thread::spawn(move || {
+            tcp_loop(&store, listener, &flag, limits, &cache, &registry);
+        }));
+    }
+    for t in threads {
+        let _ = t.join();
+    }
     Ok(())
 }
 
@@ -441,8 +578,8 @@ fn tcp_loop(
     shutdown: &AtomicBool,
     limits: ListenLimits,
     cache: &SharedCache,
+    registry: &Arc<ConnRegistry>,
 ) {
-    let registry = ConnRegistry::new(limits.max_tcp_workers);
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((stream, _)) => {
@@ -451,7 +588,7 @@ fn tcp_loop(
                 // (kill_lru_stream_connection) rather than refuse the newcomer.
                 let seq = registry.register(&stream);
                 let store = Arc::clone(store);
-                let registry_g = Arc::clone(&registry);
+                let registry_g = Arc::clone(registry);
                 let cache = Arc::clone(cache);
                 let max_body = limits.max_tcp_request;
                 let timeout = limits.io_timeout;

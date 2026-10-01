@@ -69,7 +69,8 @@ pub use kdb_dump::{
 pub use listen::{
     BIND_CANDIDATES, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST,
     MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
-    bind_preferred, drop_privileges, serve, serve_until, shared_dump, shared_store,
+    bind_preferred, bind_tcp_listeners, bind_udp_listeners, drop_privileges, serve, serve_all,
+    serve_all_until, serve_until, shared_dump, shared_store,
 };
 pub use mkey::{default_master_etype, master_key_from_password};
 pub use osa::{
