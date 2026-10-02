@@ -9,7 +9,7 @@
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
-use krb5_kdc::{Error, KDB_REQUIRES_PRE_AUTH, NamedPolicy, S2K_ITERS, dump_store, load_dump};
+use krb5_kdc::{Error, NamedPolicy, PrincipalStore, S2K_ITERS, dump_store, load_dump};
 use krb5_protocol::{as_req, pa_enc_timestamp};
 
 use krb5_types::{
@@ -44,6 +44,23 @@ fn lock_policy(name: &str, max_fail: u32) -> NamedPolicy {
     }
 }
 
+/// One AS exchange of `user` with its timestamp under the wrong key: a failed preauthentication,
+/// which the KDC's audit records.
+fn fail_preauth(store: &PrincipalStore, user: &PrincipalName, nonce: u32) {
+    let wrong = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32]).unwrap();
+    let req = as_req(
+        user.clone(),
+        TEST_REALM,
+        nonce,
+        Some(vec![pa_enc_timestamp(&wrong).unwrap()]),
+    )
+    .unwrap();
+    match krb5_kdc::issue_as(store, &req).unwrap_err() {
+        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
+        other => panic!("expected 24, got {other:?}"),
+    }
+}
+
 fn zero_last_failed(dump: &str, princ: &str) -> String {
     dump.lines()
         .map(|line| {
@@ -67,7 +84,7 @@ fn absent_unlock_tl_stamp_zero_does_not_lock_last_failed_zero() {
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
-    store.record_as_outcome(&user, false);
+    fail_preauth(&store, &user, 700);
     let p = store.get_name(&user).unwrap();
     assert_eq!(store.fail_auth_of(p), 1);
     assert!(store.last_failed_of(p) > 0);
@@ -90,8 +107,10 @@ fn absent_unlock_tl_stamp_zero_does_not_lock_last_failed_zero() {
     krb5_kdc::issue_as(&store, &req).expect("last_failed==0 is not locked (MIT stamp 0)");
 }
 
+#[cfg(feature = "test-hooks")]
 #[test]
 fn as_success_clears_failcount_only_with_requires_preauth() {
+    use krb5_kdc::KDB_REQUIRES_PRE_AUTH;
     let (mut store, _) = bootstrap_documented().unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
@@ -151,7 +170,7 @@ fn last_failed_nonzero_without_unlock_tl_still_locks() {
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
-    store.record_as_outcome(&user, false);
+    fail_preauth(&store, &user, 707);
     let req = as_req(
         user,
         TEST_REALM,

@@ -79,6 +79,8 @@ impl Default for KdcConf {
             default_principal_expiration: None,
             master_key_type: None,
             db_library: None,
+            disable_last_success: false,
+            disable_lockout: false,
             domain_sid: None,
             reject_bad_transit: true,
             disable_pac: false,
@@ -110,6 +112,9 @@ impl KdcConf {
         let mut realm_lines = Vec::new();
         let mut realm_listen = ListenRelations::default();
         let mut default_listen = ListenRelations::default();
+        let mut database_module: Option<String> = None;
+        let mut dbmodule: Option<String> = None;
+        let mut dbmodules: Vec<(String, String, String)> = Vec::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -118,6 +123,17 @@ impl KdcConf {
             if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 section = s.trim().to_ascii_lowercase();
                 in_realm = false;
+                dbmodule = None;
+                continue;
+            }
+            if section == "dbmodules" {
+                if let Some(head) = line.strip_suffix('{') {
+                    dbmodule = Some(head.trim().trim_end_matches('=').trim().to_owned());
+                } else if line == "}" {
+                    dbmodule = None;
+                } else if let (Some(module), Some((k, v))) = (&dbmodule, split_kv(line)) {
+                    dbmodules.push((module.clone(), k.to_ascii_lowercase(), v));
+                }
                 continue;
             }
             if section == "realms" {
@@ -140,6 +156,12 @@ impl KdcConf {
                 }
                 if in_realm {
                     realm_lines.push(line.to_owned());
+                    if database_module.is_none()
+                        && let Some((k, v)) = split_kv(line)
+                        && k.eq_ignore_ascii_case("database_module")
+                    {
+                        database_module = Some(v);
+                    }
                     if !realm_listen.take(line) {
                         parse_kdc_realm_line(&mut conf, line);
                     }
@@ -169,6 +191,16 @@ impl KdcConf {
         }
         conf.kdc_listen_in_realm = realm_listen.udp().is_some();
         conf.kdc_tcp_listen = realm_listen.tcp().or(default_listen.tcp()).cloned();
+        // MIT `get_conf_section` (`lib/kdb/kdb5.c:219-227`): the realm's `database_module`, else the realm name, names the module's section.
+        let module = database_module.unwrap_or_else(|| conf.realm.clone());
+        let flag = |name: &str| {
+            dbmodules
+                .iter()
+                .find(|(m, k, _)| *m == module && k == name)
+                .is_some_and(|(_, _, v)| truthy(v))
+        };
+        conf.disable_last_success = flag("disable_last_success");
+        conf.disable_lockout = flag("disable_lockout");
         Ok(conf)
     }
 

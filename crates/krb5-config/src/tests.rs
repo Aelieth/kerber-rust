@@ -280,6 +280,55 @@ fn parse_ccspec_unknown_type_display_is_exact() {
 }
 
 #[test]
+fn dbmodules_lockout_flags_come_from_the_realms_module_section() {
+    let realm_named = KdcConf::parse(
+        r"
+[realms]
+    P8.TEST = {
+        database_name = /w/db/principal
+    }
+[dbmodules]
+    OTHER = {
+        disable_lockout = true
+    }
+    P8.TEST = {
+        disable_last_success = true
+        disable_last_success = false
+    }
+",
+    )
+    .unwrap();
+    assert!(realm_named.disable_last_success, "the first value counts");
+    assert!(
+        !realm_named.disable_lockout,
+        "another module's section is not read"
+    );
+    let pointed = KdcConf::parse(
+        r"
+[realms]
+    P8.TEST = {
+        database_module = mod1
+    }
+[dbmodules]
+    P8.TEST = {
+        disable_last_success = true
+    }
+    mod1 = {
+        disable_lockout = yes
+    }
+",
+    )
+    .unwrap();
+    assert!(pointed.disable_lockout);
+    assert!(!pointed.disable_last_success);
+    assert!(
+        !KdcConf::parse("[realms]\n  P8.TEST = {\n  }\n")
+            .unwrap()
+            .disable_lockout
+    );
+}
+
+#[test]
 fn parse_kdc_conf_policy() {
     let text = r"
 [kdcdefaults]

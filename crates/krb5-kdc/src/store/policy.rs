@@ -124,6 +124,11 @@ pub struct Policy {
     /// Empty = MIT KDC default — SPAKE is not advertised.
     /// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
     pub spake_preauth_groups: Vec<i32>,
+    /// `[dbmodules] disable_last_success`: the KDC records no successful authentication.
+    pub disable_last_success: bool,
+    /// `[dbmodules] disable_lockout`: the KDC neither counts failed authentications nor
+    /// checks the lockout policy.
+    pub disable_lockout: bool,
 }
 
 impl Default for Policy {
@@ -153,6 +158,8 @@ impl Default for Policy {
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: Vec::new(),
+            disable_last_success: false,
+            disable_lockout: false,
         }
     }
 }
@@ -280,6 +287,8 @@ impl PrincipalStore {
             .and_then(krb5_types::timestamp::string_to_timestamp)
             .unwrap_or(0);
         self.policy.reject_bad_transit = conf.reject_bad_transit;
+        self.policy.disable_last_success = conf.disable_last_success;
+        self.policy.disable_lockout = conf.disable_lockout;
         self.policy.disable_pac = conf.disable_pac;
         self.policy.restrict_anon = conf.restrict_anon;
         self.policy.pkinit_require_freshness = conf.pkinit_require_freshness;

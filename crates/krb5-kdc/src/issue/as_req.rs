@@ -32,7 +32,8 @@ use crate::preauth::{
 };
 use crate::status;
 use crate::store::{
-    KDB_NO_AUTH_DATA_REQUIRED, KDB_REQUIRES_HW_AUTH, KeyEntry, Principal, random_key,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KeyEntry, Principal,
+    random_key,
 };
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -148,6 +149,10 @@ struct AsPreauth {
     anonymous_as: bool,
 }
 
+/// One AS exchange at the request's time, then the KDB's audit of its outcome for the client
+/// it looked up.
+/// MIT `process_as_req` (`kdc/do_as_req.c:522-526`): the request's time is taken once and used for every check and the ticket's times.
+/// MIT `finish_process_as_req` (`kdc/do_as_req.c:340-365`): the outcome is logged, and audited, with the request's time and the client entry looked up.
 fn issue_as_body(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -155,9 +160,39 @@ fn issue_as_body(
     body: &KdcReqBody,
     fast: Option<&FastOk>,
 ) -> Result<IssuedAs, Error> {
-    let lookup = lookup_client(store, req, body, fast)?;
+    let kdc_time = crate::store::unix_now_u32();
+    let mut client = None;
+    let out = issue_as_steps(store, req, raw, body, fast, kdc_time, &mut client);
+    if let Some(client) = &client {
+        crate::lockout::lockout_audit(store, client, kdc_time, crate::lockout::as_outcome(&out));
+    }
+    out
+}
+
+fn issue_as_steps(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    raw: Option<&[u8]>,
+    body: &KdcReqBody,
+    fast: Option<&FastOk>,
+    kdc_time: u32,
+    audited: &mut Option<Principal>,
+) -> Result<IssuedAs, Error> {
+    let lookup = lookup_client(store, req, body, fast, kdc_time, audited)?;
     let pre = finish_preauth(store, req, raw, body, fast, lookup)?;
-    finish_process_as_req(store, req, raw, body, fast, pre)
+    finish_process_as_req(store, req, raw, body, fast, pre, kdc_time)
+}
+
+/// The client entry as the outcome's audit sees it: an anonymous request's has
+/// `REQUIRES_PRE_AUTH`, so its reply stamps `last_success`. Only the audit's copy has the flag;
+/// the stored entry keeps its own.
+/// MIT `process_as_req` (`kdc/do_as_req.c:718-733`): a REQUEST_ANONYMOUS request for the anonymous principal sets `REQUIRES_PRE_AUTH` on the client entry the audit is given.
+fn audit_entry(client: &Principal, body: &KdcReqBody, req_cname: &PrincipalName) -> Principal {
+    let mut entry = client.clone();
+    if body.kdc_options.bit(flag_bit::ANONYMOUS) && is_anonymous_principal(req_cname) {
+        entry.attributes |= KDB_REQUIRES_PRE_AUTH;
+    }
+    entry
 }
 
 /// MIT `lookup_client` plus the AS server lookup, `validate_as_request`, `select_client_key`,
@@ -172,11 +207,15 @@ fn issue_as_body(
 /// `select_session_keytype` over the server entry and the requested etypes.
 /// MIT `kdc_find_fast` (`fast_util.c:226-226`): a FAST request with an unsupported critical
 /// option is rejected.
+/// The client entry found is given its lockout attributes as they are now and kept in
+/// `audited` for the outcome's audit ([`audit_entry`]).
 fn lookup_client(
     store: &dyn PrincipalRead,
     req: &AsReq,
     body: &KdcReqBody,
     fast: Option<&FastOk>,
+    kdc_time: u32,
+    audited: &mut Option<Principal>,
 ) -> Result<AsLookup, Error> {
     if let Some(f) = fast {
         check_fast_options(&f.fast_options)?;
@@ -188,8 +227,10 @@ fn lookup_client(
         .cname
         .clone()
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::NULL_CLIENT))?;
-    let client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
+    let mut client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
+    store.merge_lockout(&mut client);
+    *audited = Some(audit_entry(&client, body, &req_cname));
     let cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
         || body.kdc_options.bit(flag_bit::CANONICALIZE)
     {
@@ -206,7 +247,7 @@ fn lookup_client(
     // MIT validate_as_request runs after the client/server lookups and before preauth.
     // MIT `process_as_req` (`do_as_req.c:630-630`): `validate_as_request` precedes
     // check_padata at :758.
-    validate_as_request(store, &client, &server, body)?;
+    validate_as_request(store, &client, &server, body, kdc_time)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
     let work_padata = if let Some(f) = fast {
         Some(f.inner_padata.clone())
@@ -406,17 +447,13 @@ fn finish_preauth(
     {
         match verify_encrypted_challenge(store, &client, &ckey.key, &f.armor_key, blob) {
             Ok(()) => {
-                store.record_as_outcome(&cname, true);
                 skip_timestamp = true;
                 extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
                 if let Some(ai) = store.policy().encrypted_challenge_indicator.as_deref() {
                     authind_add(&mut auth_indicators, ai);
                 }
             }
-            Err(e) => {
-                store.record_as_outcome(&cname, false);
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         }
     }
     if (client.requires_preauth || anonymous_as) && !skip_timestamp {
@@ -475,6 +512,7 @@ fn finish_process_as_req(
     body: &KdcReqBody,
     fast: Option<&FastOk>,
     pre: AsPreauth,
+    kdc_time: u32,
 ) -> Result<IssuedAs, Error> {
     let AsPreauth {
         client,
@@ -503,7 +541,8 @@ fn finish_process_as_req(
         extra_padata.push(pa_pkinit_kx(&as_rep_key, &session)?);
         session = krb_fx_cf2(&session, &as_rep_key, b"PKINIT", b"KEYEXCHANGE")?;
     }
-    let now = KerberosTime::now();
+    // MIT `process_as_req` (`kdc/do_as_req.c:672-672`): the ticket's authtime is the request's time.
+    let now = KerberosTime::from_unix_seconds(kdc_time);
     let starttime = if body.kdc_options.bit(flag_bit::POSTDATED) {
         body.from
             .clone()

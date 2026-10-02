@@ -107,7 +107,7 @@ pub struct PrincipalStore {
     /// Next RID to allocate (`RID_FIRST_USER` and up).
     next_rid: u32,
     policies: HashMap<String, NamedPolicy>,
-    as_fail: Arc<Mutex<HashMap<String, AsFailState>>>,
+    lockout: Arc<crate::lockout::LockoutState>,
     serial: Arc<AtomicU32>,
     ulog: Arc<Mutex<VecDeque<UlogEntry>>>,
     pending: Arc<Mutex<Vec<UlogEntry>>>,
@@ -179,7 +179,7 @@ impl PrincipalStore {
             }),
             next_rid: RID_FIRST_USER,
             policies: HashMap::new(),
-            as_fail: Arc::new(Mutex::new(HashMap::new())),
+            lockout: Arc::default(),
             serial: Arc::new(AtomicU32::new(0)),
             ulog: Arc::new(Mutex::new(VecDeque::new())),
             pending: Arc::new(Mutex::new(Vec::new())),
@@ -259,7 +259,7 @@ impl PrincipalStore {
         loaded.policy = std::mem::take(&mut self.policy);
         loaded.pwqual_dict = self.pwqual_dict.take();
         loaded.domain_sid.clone_from(&self.domain_sid);
-        loaded.as_fail = Arc::clone(&self.as_fail);
+        loaded.lockout = Arc::clone(&self.lockout);
         loaded.env = std::mem::take(&mut self.env);
         loaded.saves_held = self.saves_held;
         *self = loaded;
@@ -681,6 +681,6 @@ pub use password::{
 pub use policy::{NamedPolicy, Policy};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{AdminEnt, AdminFields, KadmData, Principal, TlData, strip_db_args};
-pub(crate) use principal::{AsFailState, db_args_put_error, refresh_kadm_tl};
+pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};
 pub use rid::{RID_FIRST_USER, RID_KRBTGT};
 pub(crate) use transit::walk_realm_instances;

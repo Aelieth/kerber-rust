@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **kdc.** Count AS outcomes for lockout as MIT's KDB audit does, once per exchange by its final code
+  (a skew or refused PKINIT is no failure; an anonymous reply stamps the anonymous principal); the
+  failure count interval no longer ends a lock; `[dbmodules]` `disable_*` are read. Live; unit; gate.
 - **kdc/log.** A root tool never writes through a symlink in the KDC or log directory: lock files,
   the age's retime, `.dump_ok`, `destroy`, the pid file, `FILE:` logs and temp files open
   `O_NOFOLLOW`; a planted link fails the operation, its target untouched (MIT follows it). Unit.

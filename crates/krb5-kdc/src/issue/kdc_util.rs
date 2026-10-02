@@ -19,7 +19,6 @@ use super::as_req::is_anonymous_principal;
 use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
-use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
 use crate::preauth::{proto, proto_d};
 use crate::status;
 use crate::store::{
@@ -543,20 +542,6 @@ pub(super) fn attr(p: &Principal, bit: u32) -> bool {
     p.attributes & bit != 0
 }
 
-fn last_admin_unlock(p: &Principal) -> u32 {
-    // KRB5_TL_LAST_ADMIN_UNLOCK (0x0700): 4-byte LE unix timestamp.
-    // MIT `krb5_dbe_lookup_last_admin_unlock` (`kdb5.c:1539-1545`): absent or short TL → stamp 0.
-    // MIT `krb5_dbe_lookup_tl_data` (`kdb5.c:1574-1576`): an absent TL comes back empty, not
-    // as an error.
-    // locked_check_p then !ts_after(last_failed, 0).
-    p.tl_data
-        .iter()
-        .find(|t| t.ty == TL_LAST_ADMIN_UNLOCK)
-        .and_then(|t| t.contents.get(..4))
-        .and_then(|b| <[u8; 4]>::try_from(b).ok())
-        .map_or(0, u32::from_le_bytes)
-}
-
 /// MIT `validate_as_request` (`kdc_util.c:716-800`): the AS policy checks in MIT's order, run
 /// after the client/server lookups and before preauth, so a preauth-required client that trips
 /// a check gets that status, not NEEDED_PREAUTH. The `krb5_db_check_policy_as` failcount lockout
@@ -568,6 +553,7 @@ pub(super) fn validate_as_request(
     client: &Principal,
     server: &Principal,
     body: &krb5_types::KdcReqBody,
+    now: u32,
 ) -> Result<(), Error> {
     // MIT `validate_as_request` (`kdc_util.c:727-727`): tests only AS_INVALID_OPTIONS here, the
     // TGS-only options FORWARDED/PROXY/RENEW/VALIDATE/ENC-TKT-IN-SKEY/CNAME-IN-ADDL-TKT.
@@ -577,7 +563,6 @@ pub(super) fn validate_as_request(
     if body.kdc_options.as_invalid_bits() != 0 {
         return Err(proto(err::BADOPTION, status::INVALID_AS_OPTIONS));
     }
-    let now = crate::store::unix_now_u32();
     let pwchange_svc = attr(server, KDB_PWCHANGE_SERVICE);
     if client.expiration != 0 && now > client.expiration {
         return Err(proto(err::NAME_EXP, status::CLIENT_EXPIRED));
@@ -612,26 +597,8 @@ pub(super) fn validate_as_request(
         .clone()
         .unwrap_or_else(|| PrincipalName::krbtgt(store.realm()));
     check_anon(store, &client.name, &req_server)?;
-    let mut fails = store.fail_auth_of(client);
-    let max_fail = store.max_fail_for(client);
-    let last_failed = store.last_failed_of(client);
-    let (interval, duration) = store
-        .named_policy_for(client)
-        .map_or((0, 0), |p| (p.pw_failcnt_interval, p.pw_lockout_duration));
-    if interval > 0 && last_failed > 0 && now >= last_failed.saturating_add(interval) {
-        store.clear_as_fail_count(&client.name);
-        fails = 0;
-    }
-    let count_locked = max_fail > 0 && fails >= max_fail;
-    let in_lockout_window =
-        duration == 0 || (last_failed > 0 && now < last_failed.saturating_add(duration));
-    if last_failed <= last_admin_unlock(client) {
-        return Ok(());
-    }
-    if count_locked && in_lockout_window {
-        return Err(proto(err::CLIENT_REVOKED, status::LOCKED_OUT));
-    }
-    Ok(())
+    // MIT `validate_as_request` (`kdc/kdc_util.c:800-803`): the KDB module's policy check is last, at the request's time.
+    crate::lockout::lockout_check_policy(store, client, now)
 }
 
 /// MIT `get_ticket_flags` (`kdc_util.c:849-850`): a header ticket that is not forwardable does

@@ -178,7 +178,7 @@ impl KdcPreauth for PkinitMod {
             body_der,
             cname,
         } = *rock;
-        match process_pkinit(
+        let done = process_pkinit(
             store,
             padata,
             etype,
@@ -186,17 +186,8 @@ impl KdcPreauth for PkinitMod {
             body_der,
             cname,
             store.realm(),
-        ) {
-            Ok(Some((key, pa, signed))) => {
-                store.record_as_outcome(cname, true);
-                Ok(Some(PreauthAction::Pkinit { key, pa, signed }))
-            }
-            Ok(None) => Ok(None),
-            Err(e) => {
-                store.record_as_outcome(cname, false);
-                Err(e)
-            }
-        }
+        )?;
+        Ok(done.map(|(key, pa, signed)| PreauthAction::Pkinit { key, pa, signed }))
     }
 }
 
@@ -239,20 +230,14 @@ impl KdcPreauth for SpakeMod {
             etype: _etype,
             as_req_der: _as_req_der,
             body_der,
-            cname,
+            cname: _cname,
         } = *rock;
-        match process_spake(store, client, padata, ikey, body_der) {
-            Ok(Some(SpakeStep::Challenge(e_data))) => Ok(Some(PreauthAction::Challenge(e_data))),
-            Ok(Some(SpakeStep::Done(k))) => {
-                store.record_as_outcome(cname, true);
-                Ok(Some(PreauthAction::SpakeDone(k)))
-            }
-            Ok(None) => Ok(None),
-            Err(e) => {
-                store.record_as_outcome(cname, false);
-                Err(e)
-            }
-        }
+        Ok(
+            process_spake(store, client, padata, ikey, body_der)?.map(|step| match step {
+                SpakeStep::Challenge(e_data) => PreauthAction::Challenge(e_data),
+                SpakeStep::Done(k) => PreauthAction::SpakeDone(k),
+            }),
+        )
     }
 }
 
@@ -294,7 +279,7 @@ impl KdcPreauth for EncTsMod {
             etype: _etype,
             as_req_der: _as_req_der,
             body_der: _body_der,
-            cname,
+            cname: _cname,
         } = *rock;
         let Some(blob) = crate::issue::extract_enc_timestamp(padata) else {
             return Ok(None);
@@ -330,14 +315,10 @@ impl KdcPreauth for EncTsMod {
         let mut last_err = None;
         for k in keys {
             match crate::issue::verify_enc_timestamp(store, client, &k.key, blob.as_ref()) {
-                Ok(()) => {
-                    store.record_as_outcome(cname, true);
-                    return Ok(Some(PreauthAction::EncTsOk));
-                }
+                Ok(()) => return Ok(Some(PreauthAction::EncTsOk)),
                 Err(e) => last_err = Some(e),
             }
         }
-        store.record_as_outcome(cname, false);
         Err(last_err.unwrap_or_else(|| {
             crate::preauth::proto(
                 krb5_types::err::PREAUTH_FAILED,

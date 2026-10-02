@@ -17,11 +17,11 @@ fn unix_now() -> u32 {
 }
 
 fn wait_unix_past(target: u32) {
-    let cap = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(3);
     while unix_now() <= target {
         assert!(
             std::time::Instant::now() < cap,
-            "unix seconds did not pass {target} within 2s"
+            "unix seconds did not pass {target} within 3s"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -551,8 +551,11 @@ fn lockout_duration_only_unlocks_after_sleep() {
         .expect("elapsed lockout duration with interval=0 must unlock");
 }
 
+/// MIT 1.22.2's KDC, settled live: past the failure count interval a failure counts from one
+/// again (`maxfailure 2`: fail, wait, fail is one failure, not a lock), but the interval never
+/// ends a lock (`maxfailure 1`, no lockout duration: the first failure locks for good).
 #[test]
-fn lockout_interval_only_resets_fail_count() {
+fn lockout_interval_resets_the_count_but_never_a_lock() {
     use krb5_protocol::{as_req, pa_enc_timestamp_at};
     use krb5_types::KerberosTime;
 
@@ -561,21 +564,37 @@ fn lockout_interval_only_resets_fail_count() {
         PrincipalName::NT_PRINCIPAL,
         [krb5_kdc::testrealm::TEST_USER],
     );
-    store.put_policy(NamedPolicy {
-        name: "intv".into(),
+    let policy = |name: &str, max_fail: u32| NamedPolicy {
+        name: name.into(),
         min_length: 0,
         min_classes: 0,
         history: 0,
-        max_fail: 1,
+        max_fail,
         pw_failcnt_interval: 1,
         pw_lockout_duration: 0,
         pw_min_life: 0,
         pw_max_life: 0,
         allowed_keysalts: None,
-    });
+    };
+    store.put_policy(policy("intv2", 2));
+    store.put_policy(policy("intv1", 1));
     store
-        .set_principal_policy(&user, Some("intv".into()))
+        .set_principal_policy(&user, Some("intv2".into()))
         .unwrap();
+    let key = store
+        .get_name(&user)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let good = as_req(
+        user.clone(),
+        krb5_kdc::testrealm::TEST_REALM,
+        1,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap();
     let zeros = krb5_crypto::ProtocolKey::from_bytes(
         krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
         &[0u8; 32],
@@ -595,12 +614,23 @@ fn lockout_interval_only_resets_fail_count() {
     };
     let revoked = |e: &Error| matches!(e, Error::Protocol { code, .. } if *code == krb5_types::err::CLIENT_REVOKED);
     assert!(krb5_kdc::issue_as(&store, &bad_as()).is_err());
-    wait_unix_past(unix_now());
+    wait_unix_past(unix_now() + 1);
     let second = krb5_kdc::issue_as(&store, &bad_as()).unwrap_err();
+    assert!(!revoked(&second), "past the interval: {second:?}");
+    assert_eq!(store.fail_auth_of(store.get_name(&user).unwrap()), 1);
+    krb5_kdc::issue_as(&store, &good).expect("one failure of two allowed");
+
+    store
+        .set_principal_policy(&user, Some("intv1".into()))
+        .unwrap();
+    assert!(krb5_kdc::issue_as(&store, &bad_as()).is_err());
+    wait_unix_past(unix_now() + 1);
+    let locked = krb5_kdc::issue_as(&store, &bad_as()).unwrap_err();
     assert!(
-        !revoked(&second),
-        "elapsed failcnt interval with duration=0 must not lock: {second:?}"
+        revoked(&locked),
+        "the interval does not end a lock: {locked:?}"
     );
+    assert!(revoked(&krb5_kdc::issue_as(&store, &good).unwrap_err()));
 }
 
 #[test]
@@ -828,7 +858,17 @@ fn admin_unlock_clears_failcount_lockout() {
     store
         .set_principal_policy(&user, Some("lock".into()))
         .unwrap();
-    store.record_as_outcome(&user, false);
+    let wrong =
+        krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32])
+            .unwrap();
+    let bad = as_req(
+        user.clone(),
+        krb5_kdc::testrealm::TEST_REALM,
+        501,
+        Some(vec![pa_enc_timestamp(&wrong).unwrap()]),
+    )
+    .unwrap();
+    assert!(krb5_kdc::issue_as(&store, &bad).is_err());
     let key = store
         .get_name(&user)
         .unwrap()

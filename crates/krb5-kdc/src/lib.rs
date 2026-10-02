@@ -31,6 +31,7 @@ mod issue;
 mod kdb;
 mod kdb_dump;
 mod listen;
+mod lockout;
 mod lookaside;
 mod mkey;
 mod osa;
@@ -88,6 +89,7 @@ pub use listen::{
     bind_udp_listeners, drop_privileges, recv_from_to, send_udp_reply, serve, serve_all,
     serve_all_until, serve_until, shared_dump, shared_store, wait_for_connection,
 };
+pub use lockout::{Lockout, LockoutUpdate};
 pub use mkey::{default_master_etype, master_etype, master_key_from_password, string_to_enctype};
 pub use osa::{
     KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt, decrypt_entry as decrypt_history_entry,

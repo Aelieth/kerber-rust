@@ -241,6 +241,15 @@ pub struct KdcConf {
     pub master_key_type: Option<String>,
     /// `database_module` / `db_library`. Default dump-v7; unknown names error.
     pub db_library: Option<String>,
+    /// `disable_last_success` in the realm's `[dbmodules]` section: the KDC records no last
+    /// successful authentication.
+    /// MIT `get_conf_section` (`lib/kdb/kdb5.c:219-227`): the section is the realm stanza's `database_module`, else the realm name.
+    /// MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:267-271`): `disable_last_success` from that `[dbmodules]` section, default false.
+    pub disable_last_success: bool,
+    /// `disable_lockout` in the realm's `[dbmodules]` section: the KDC neither counts failed
+    /// authentications nor checks the lockout policy.
+    /// MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:273-277`): `disable_lockout` from that `[dbmodules]` section, default false.
+    pub disable_lockout: bool,
     /// Optional NT domain SID (`S-1-5-21-…`) for PAC issuance.
     pub domain_sid: Option<String>,
     /// `reject_bad_transit` (default true). When false, a failed transited

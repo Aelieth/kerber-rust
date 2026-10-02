@@ -172,7 +172,9 @@ pub(super) fn check_tgs_s4u2self(
                 pw_expire: 0,
             },
         );
-        validate_as_request(store, client, &empty, body)?;
+        let mut client = client.clone();
+        store.merge_lockout(&mut client);
+        validate_as_request(store, &client, &empty, body, crate::store::unix_now_u32())?;
     } else if !pac_client_info_eq(
         &parsed,
         authtime,

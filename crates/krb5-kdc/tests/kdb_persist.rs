@@ -189,8 +189,19 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
     let mut reader = load_store(&db, &stash).unwrap();
     let before = reader.get_name(&user).unwrap();
     assert_eq!(reader.max_fail_for(before), 3);
-    reader.record_as_outcome(&user, false);
-    reader.record_as_outcome(&user, false);
+    let wrong =
+        krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32])
+            .unwrap();
+    for nonce in [31, 32] {
+        let req = as_req(
+            user.clone(),
+            TEST_REALM,
+            nonce,
+            Some(vec![pa_enc_timestamp(&wrong).unwrap()]),
+        )
+        .unwrap();
+        assert!(krb5_kdc::issue_as(&reader, &req).is_err());
+    }
     let after_fail = reader.get_name(&user).unwrap();
     assert_eq!(reader.fail_auth_of(after_fail), 2);
     let rk = ReplayKey {

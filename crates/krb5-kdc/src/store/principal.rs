@@ -1,7 +1,7 @@
 //! Realm principal records (`kdb5.c` `krb5_db_entry`) and the kadm5
 //! create / modify / rename / delete / unlock path (`svr_principal.c`,
-//! `server_stubs.c`), including `KRB5_TL_*` stamps and the AS-fail
-//! overlay (`db2/lockout.c`).
+//! `server_stubs.c`), including `KRB5_TL_*` stamps and the lockout attributes
+//! the KDC records (`db2/lockout.c`).
 
 use krb5_crypto::EncryptionType;
 use krb5_types::PrincipalName;
@@ -18,6 +18,7 @@ use crate::kdb_dump::{
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY,
     TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
 };
+use crate::lockout::{Lockout, LockoutUpdate};
 use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
 fn qualify_s4u_from(from: &str, local_realm: &str) -> String {
@@ -234,14 +235,6 @@ impl Principal {
             string_attrs: Vec::new(),
         }
     }
-}
-
-/// Process-local AS fail overlay (count + timestamps). Dump rows stay stale.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct AsFailState {
-    pub(crate) count: u32,
-    pub(crate) last_failed: u32,
-    pub(crate) last_success: u32,
 }
 
 /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3` and
@@ -1389,57 +1382,49 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// Overlay AS-fail count for lockout (absolute; success stores 0).
+    /// `p`'s lockout attributes as they are now: the counts this process keeps for it, else what
+    /// the store read.
+    #[must_use]
+    pub fn lockout_of(&self, p: &Principal) -> Lockout {
+        self.lockout
+            .overlay_get(&p.id())
+            .unwrap_or_else(|| Lockout::of(p))
+    }
+
+    /// `p`'s failed authentication count now ([`Self::lockout_of`]).
     #[must_use]
     pub fn fail_auth_of(&self, p: &Principal) -> u32 {
-        self.as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&p.id())
-            .map_or(p.fail_auth_count, |s| s.count)
+        self.lockout_of(p).fail_auth_count
     }
 
-    /// Overlay last-failed unix seconds (dump field if the overlay is empty).
+    /// `p`'s last failed authentication now, Unix seconds ([`Self::lockout_of`]).
     #[must_use]
     pub fn last_failed_of(&self, p: &Principal) -> u32 {
-        self.as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&p.id())
-            .map_or(p.last_failed, |s| s.last_failed)
+        self.lockout_of(p).last_failed
     }
 
-    /// Overlay last-success unix seconds.
+    /// `p`'s last successful authentication now, Unix seconds ([`Self::lockout_of`]).
     #[must_use]
     pub fn last_success_of(&self, p: &Principal) -> u32 {
-        self.as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&p.id())
-            .map_or(p.last_success, |s| s.last_success)
+        self.lockout_of(p).last_success
     }
 
-    /// Zero the overlay fail count without stamping last_success (interval reset).
+    /// Give `p` its lockout attributes as they are now.
+    pub fn merge_lockout(&self, p: &mut Principal) {
+        self.lockout_of(p).set_on(p);
+    }
+
+    /// Record one AS outcome's lockout update for `p` at `stamp`, starting from the attributes
+    /// as they are now. The database, its update log and `p`'s flags are not touched.
+    pub fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
+        let id = p.id();
+        let base = self.lockout_of(p);
+        self.lockout.overlay_put(id, update.apply(base, stamp));
+    }
+
+    /// Zero the failed authentication count this process keeps for `name`, when it keeps one.
     pub(crate) fn clear_as_fail_count(&self, name: &PrincipalName) {
-        let id = self.lockout_id(name);
-        let fallback = self
-            .map
-            .get(&id)
-            .map_or(AsFailState::default(), |p| AsFailState {
-                count: 0,
-                last_failed: p.last_failed,
-                last_success: p.last_success,
-            });
-        let mut g = self
-            .as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match g.get_mut(&id) {
-            Some(s) => s.count = 0,
-            None => {
-                g.insert(id, fallback);
-            }
-        }
+        self.lockout.overlay_zero(&self.lockout_id(name));
     }
 
     fn lockout_id(&self, name: &PrincipalName) -> String {
@@ -1447,50 +1432,21 @@ impl PrincipalStore {
         self.resolve_id(&id).unwrap_or(id)
     }
 
-    /// Record AS password outcome (interior-mutable; dump writes the overlay).
+    /// Audit one AS outcome of `name` now as the KDC does: a success (`ok`) or a failed
+    /// preauthentication ([`crate::lockout::lockout_audit`]). A test hook: the KDC audits from
+    /// its AS exchange.
+    #[cfg(feature = "test-hooks")]
     pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let id = self.lockout_id(name);
-        let fallback = self
-            .map
-            .get(&id)
-            .map_or(AsFailState::default(), |p| AsFailState {
-                count: p.fail_auth_count,
-                last_failed: p.last_failed,
-                last_success: p.last_success,
-            });
-        let now = unix_now_u32();
-        let mut g = self
-            .as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cur = g.get(&id).copied().unwrap_or(fallback);
-        if ok {
-            let requires_preauth = self
-                .map
-                .get(&id)
-                .is_some_and(|p| p.attributes & KDB_REQUIRES_PRE_AUTH != 0);
-            g.insert(
-                id,
-                AsFailState {
-                    count: if requires_preauth { 0 } else { cur.count },
-                    last_failed: cur.last_failed,
-                    last_success: if requires_preauth {
-                        now
-                    } else {
-                        cur.last_success
-                    },
-                },
-            );
+        let Some(mut p) = self.map.get(&self.lockout_id(name)).cloned() else {
+            return;
+        };
+        self.merge_lockout(&mut p);
+        let status = if ok {
+            0
         } else {
-            g.insert(
-                id,
-                AsFailState {
-                    count: cur.count.saturating_add(1),
-                    last_failed: now,
-                    last_success: cur.last_success,
-                },
-            );
-        }
+            krb5_types::err::PREAUTH_FAILED
+        };
+        crate::lockout::lockout_audit(self, &p, unix_now_u32(), status);
     }
 
     pub(crate) fn put_principal(&mut self, mut p: Principal) {
