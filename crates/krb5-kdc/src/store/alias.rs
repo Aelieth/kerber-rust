@@ -44,7 +44,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AliasRealm`] when `alias_realm` and `target_realm` differ;
     /// [`Error::AlreadyExists`] when the alias name already resolves to an entry;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_alias_in(
         &mut self,
         alias: &PrincipalName,

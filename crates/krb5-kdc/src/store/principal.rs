@@ -510,7 +510,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Crypto`] when saving the
+    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn create_password(
         &mut self,
@@ -528,7 +528,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Crypto`] when saving the
+    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn create_password_etypes(
         &mut self,
@@ -548,7 +548,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Crypto`] when saving the
+    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn create_password_etypes_in(
         &mut self,
@@ -574,7 +574,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AlreadyExists`] when `name@princ_realm` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when `password` is empty; [`Error::Crypto`] when saving the
+    /// [`Error::PasswordPolicy`] when `password` is empty; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn insert_new_password(
         &mut self,
@@ -603,7 +603,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AlreadyExists`] when `name@princ_realm` already resolves to an entry;
-    /// [`Error::Rng`] when the CSPRNG fails; [`Error::Crypto`] when saving the store to
+    /// [`Error::Rng`] when the CSPRNG fails; [`Error::Db`] when saving the store to
     /// `persist_paths` fails.
     pub fn insert_new_randkey(
         &mut self,
@@ -659,7 +659,7 @@ impl PrincipalStore {
     /// [`Error::PasswordPolicy`] when `password` is empty or fails the `ent` policy's checks;
     /// [`Error::BadKeysalts`] when `etypes` names an enctype outside that policy's
     /// `allowed_keysalts`; [`Error::Rng`] when `password` is `None` and the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_principal_3_in(
         &mut self,
         name: &PrincipalName,
@@ -760,7 +760,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry; [`Error::Rng`] when
-    /// the CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// the CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_host(
         &mut self,
         acl: &Acl,
@@ -777,7 +777,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry; [`Error::Rng`] when
-    /// the CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// the CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_host_etypes(
         &mut self,
         acl: &Acl,
@@ -820,7 +820,7 @@ impl PrincipalStore {
     /// [`Error::PasswordPolicy`] when `password` is empty or fails `policy`'s checks;
     /// [`Error::BadKeysalts`] when `etypes` names an enctype outside `policy`'s
     /// `allowed_keysalts`; [`Error::Rng`] when `password` is `None` and the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_etypes_pol(
         &mut self,
         acl: &Acl,
@@ -857,7 +857,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_status(
         &mut self,
@@ -883,7 +883,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
         let realm = self.realm.clone();
@@ -901,7 +901,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn admin_unlock_in(
         &mut self,
@@ -931,7 +931,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn clear_fail_auth_count_in(
         &mut self,
@@ -954,7 +954,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::InvalidArgument`] when the
-    /// merged `tl_data` carries a `KRB5_TL_DB_ARGS` entry; [`Error::Crypto`] when saving the
+    /// merged `tl_data` carries a `KRB5_TL_DB_ARGS` entry; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn merge_tl_data_in(
         &mut self,
@@ -980,7 +980,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `name`;
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn delete(&mut self, acl: &Acl, actor: &str, name: &PrincipalName) -> Result<(), Error> {
         let realm = self.realm.clone();
@@ -992,7 +992,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `name`;
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn delete_in(
         &mut self,
@@ -1010,7 +1010,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn remove_in(&mut self, name: &PrincipalName, princ_realm: &str) -> Result<(), Error> {
         self.remove_id_inner(&crate::kdb::lookup_principal_id(name, princ_realm))
@@ -1027,7 +1027,7 @@ impl PrincipalStore {
     /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `old` and an
     /// unrestricted add on `new`; [`Error::AlreadyExists`] when `new` already resolves to an
     /// entry; [`Error::NotFound`] when `old` is missing; [`Error::AliasUnsupported`] when `old`
-    /// is an alias; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// is an alias; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn rename(
         &mut self,
         acl: &Acl,
@@ -1046,7 +1046,7 @@ impl PrincipalStore {
     /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `old` and an
     /// unrestricted add on `new`; [`Error::AlreadyExists`] when `new` already resolves to an
     /// entry; [`Error::NotFound`] when `old` is missing; [`Error::AliasUnsupported`] when `old`
-    /// is an alias; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// is an alias; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub(crate) fn rename_in(
         &mut self,
         acl: &Acl,
@@ -1070,7 +1070,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AlreadyExists`] when `new` already resolves to an entry; [`Error::NotFound`]
     /// when `old` is missing; [`Error::AliasUnsupported`] when `old` is an alias;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn rename_unchecked(
         &mut self,
         old: &PrincipalName,
@@ -1116,7 +1116,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn apply_admin_fields(
         &mut self,
@@ -1154,7 +1154,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn apply_admin_fields_in(
         &mut self,
@@ -1215,7 +1215,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn impose_acl_restrictions(
         &mut self,
@@ -1230,7 +1230,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn impose_acl_restrictions_in(
         &mut self,
@@ -1308,7 +1308,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_string(
         &mut self,
@@ -1328,7 +1328,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_string_in(
         &mut self,

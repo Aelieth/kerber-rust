@@ -1277,6 +1277,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc.** A database, `.ulog` or stash that cannot be read or written is a database error
+  with the system's text, not `crypto: persist io: …`. Unit.
 - **protocol/kdc.** A rewritten database, `.ulog`, stash or keytab keeps the old file's
   owner, group and mode as MIT's in-place writes do, so root `kadmind` and KLLDAP's
   `kadmin.local` user share a database. Ccaches and dumps stay new 0600 files. Unit.

@@ -154,7 +154,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.set_password_keepold(name, password, false)
     }
@@ -211,7 +211,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub(crate) fn set_password_keepold(
         &mut self,
         name: &PrincipalName,
@@ -228,7 +228,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub(crate) fn set_password_keepold_n(
         &mut self,
         name: &PrincipalName,
@@ -247,7 +247,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_password_keepold_n_in(
         &mut self,
         name: &PrincipalName,
@@ -269,7 +269,7 @@ impl PrincipalStore {
     /// password fails the quality or history checks; [`Error::BadKeysalts`] when `etypes` names
     /// an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the CSPRNG
     /// fails creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into
-    /// the history or saving the store to `persist_paths` fails.
+    /// the history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_password_etypes_keepold_n_in(
         &mut self,
         name: &PrincipalName,
@@ -381,7 +381,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn change_password(
         &mut self,
         acl: &Acl,

@@ -218,7 +218,7 @@ pub trait PrincipalWrite: PrincipalRead {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when no principal is stored under `id`, and [`Error::Crypto`] when
+    /// [`Error::NotFound`] when no principal is stored under `id`, and [`Error::Db`] when
     /// [`PrincipalStore`] then cannot write its configured store file.
     fn remove_id(&mut self, id: &str) -> Result<(), Error>;
     /// Provision a PKINIT CA on the process-local env.
@@ -235,14 +235,14 @@ pub trait StoreLifecycle {
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when [`PrincipalStore`] finds its store file changed and cannot load it;
-    /// [`MemoryStore`] never fails.
+    /// [`Error::Db`] when [`PrincipalStore`] finds its store file changed and cannot read it,
+    /// [`Error::Crypto`] when its stash key does not decrypt it; [`MemoryStore`] never fails.
     fn reload_if_stale(&mut self) -> Result<(), Error>;
     /// Write through when persist paths are set.
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when [`PrincipalStore`] cannot write its configured store file;
+    /// [`Error::Db`] when [`PrincipalStore`] cannot write its configured store file;
     /// [`MemoryStore`] never fails.
     fn save_if_configured(&self) -> Result<(), Error>;
 }

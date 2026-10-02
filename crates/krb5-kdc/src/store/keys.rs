@@ -151,8 +151,9 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing or has no keys; [`Error::Rng`] when
-    /// the rotation's CSPRNG fails; [`Error::Crypto`] when saving the rotation or its rollback
-    /// fails, or the realm is not a GeneralString; and any error `write` returns.
+    /// the rotation's CSPRNG fails; [`Error::Db`] when saving the rotation or its rollback
+    /// fails; [`Error::Crypto`] when the realm is not a GeneralString; and any error `write`
+    /// returns.
     pub fn ktadd_local_atomic(
         &mut self,
         name: &PrincipalName,
@@ -183,6 +184,10 @@ impl PrincipalStore {
         self.map.insert(id, snap);
         match self.save_if_configured() {
             Ok(()) => e,
+            Err(Error::Db { kind, text }) => Error::Db {
+                kind,
+                text: format!("{e}; rollback failed: {text}"),
+            },
             Err(re) => Error::Crypto(format!("{e}; rollback failed: {re}")),
         }
     }
@@ -221,7 +226,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<Vec<KeyEntry>, Error> {
         self.chrand_keepold_n(name, 0)
     }
@@ -231,7 +236,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_keepold_n(
         &mut self,
         name: &PrincipalName,
@@ -252,7 +257,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
     /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_etypes_keepold_in(
         &mut self,
         name: &PrincipalName,
@@ -310,7 +315,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
     /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
@@ -327,7 +332,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
         let realm = self.realm.clone();
@@ -342,7 +347,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn purgekeys_in(
         &mut self,
@@ -373,8 +378,8 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is
-    /// empty, its entries carry different kvnos, `keepold` collides with an existing kvno, or
-    /// saving the store to `persist_paths` fails.
+    /// empty, its entries carry different kvnos or `keepold` collides with an existing kvno;
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_keys(
         &mut self,
         name: &PrincipalName,
@@ -391,8 +396,8 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is
-    /// empty, its entries carry different kvnos, `keepold` collides with an existing kvno, or
-    /// saving the store to `persist_paths` fails.
+    /// empty, its entries carry different kvnos or `keepold` collides with an existing kvno;
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_keys_in(
         &mut self,
         name: &PrincipalName,

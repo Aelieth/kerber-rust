@@ -143,8 +143,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when the changed db, its stash, or its update log cannot be read,
-    /// parsed, or decrypted.
+    /// [`Error::Db`] when the changed db, its stash, or its update log cannot be read or parsed;
+    /// [`Error::Crypto`] when the stash key does not decrypt it.
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
         let Some((db, stash)) = self.persist_paths.clone() else {
             return Ok(());
@@ -164,8 +164,7 @@ impl PrincipalStore {
             detail = "reload store",
             db_len = stamp.1,
         );
-        let mut loaded =
-            crate::persist::load_store(&db, &stash).map_err(|e| Error::Crypto(e.to_string()))?;
+        let mut loaded = crate::persist::load_store(&db, &stash).map_err(Error::from)?;
         loaded.db_stamp = Some(stamp);
         // Dump rows/named-policies/serial come from disk; kdc.conf ticket
         // policy, lockout overlay, replay caches, and PKINIT CA are process-local.
@@ -216,7 +215,7 @@ impl PrincipalStore {
         let Some((db, stash)) = &self.persist_paths else {
             return Ok(());
         };
-        crate::persist::save_store(self, db, stash).map_err(|e| Error::Crypto(e.to_string()))?;
+        crate::persist::save_store(self, db, stash).map_err(Error::from)?;
         tracing::info!(
             event = krb5_log::events::ADMIN,
             component = "krb5-kdc",

@@ -239,7 +239,7 @@ const KADM5_CHANGEPW_LIFETIME: u64 = 60 * 5;
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] when `kadmin/admin` or `kadmin/changepw` is missing, and [`Error::Crypto`]
+/// [`Error::NotFound`] when `kadmin/admin` or `kadmin/changepw` is missing, and [`Error::Db`]
 /// when the store's configured file cannot be written after an update.
 pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<(), Error> {
     let realm = store.realm().to_owned();

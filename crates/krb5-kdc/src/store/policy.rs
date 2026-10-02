@@ -392,7 +392,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when the store cannot be saved, a writer that may not write the database
+    /// [`Error::Db`] when the store cannot be saved, a writer that may not write the database
     /// included; the policy stays in memory and nothing on disk changes.
     pub fn put_policy_and_save(&mut self, pol: NamedPolicy) -> Result<(), Error> {
         self.note_ulog(format!("policy:{}", pol.name), false, None);
@@ -409,7 +409,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         self.policies.remove(name).ok_or(Error::NotFound)?;
@@ -421,7 +421,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_principal_policy(
         &mut self,
@@ -436,7 +436,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn set_principal_policy_in(
         &mut self,
