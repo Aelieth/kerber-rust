@@ -89,6 +89,7 @@ mod ops;
 mod prf;
 mod spake;
 pub(crate) mod weak;
+mod wipe;
 
 pub(crate) mod cts;
 

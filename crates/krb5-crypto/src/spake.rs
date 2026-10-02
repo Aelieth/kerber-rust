@@ -4,11 +4,11 @@
 //! the wrong length is `Error::Integrity`. The only group is P-256.
 
 use sha2::{Digest as Sha2Digest, Sha256};
-use zeroize::Zeroize;
 
 use crate::error::Error;
 use crate::key::ProtocolKey;
 use crate::prf::prf_plus;
+use crate::wipe::wipe;
 use crate::{krb_fx_cf2, p256_generate};
 
 /// SPAKE group P-256 (IANA / MIT).
@@ -203,6 +203,9 @@ pub fn spake_thash_update(thash: &[u8], data1: &[u8], data2: &[u8]) -> [u8; 32] 
 
 /// MIT `derive_key`: `K'[n] = CF2(ikey, "SPAKE", random-to-key(H), "keyderiv")`.
 ///
+/// The seed's own allocation, the whole hashed block, is wiped on every return; each SHA-256
+/// output it is copied from, a stack value, is not.
+///
 /// # Errors
 ///
 /// None: the hash seed is cut to `ikey`'s key length, and [`krb_fx_cf2`] cannot fail.
@@ -235,9 +238,9 @@ pub fn spake_derive_key(
         seed[i * hashlen..i * hashlen + hashlen].copy_from_slice(&out);
     }
     seed.truncate(seedlen);
-    let hkey = ProtocolKey::from_bytes(ikey.etype(), &seed)?;
-    seed.zeroize();
-    krb_fx_cf2(ikey, &hkey, b"SPAKE", b"keyderiv")
+    let hkey = ProtocolKey::from_bytes(ikey.etype(), &seed);
+    wipe(&mut seed);
+    krb_fx_cf2(ikey, &hkey?, b"SPAKE", b"keyderiv")
 }
 
 /// Generate a KDC SPAKE keypair (compressed public, 32-byte secret).

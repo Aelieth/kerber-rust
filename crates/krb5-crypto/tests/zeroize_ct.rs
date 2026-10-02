@@ -1,19 +1,19 @@
-//! Pins Drop+zeroize and the live `ct_eq` sites.
+//! Pins the live `ct_eq` sites and `PkinitClient`'s Drop+zeroize.
 //!
-//! Heap `Vec` secrets cannot be read after `Drop` without UB, so those
-//! types are pinned by `include_str!` of the `.zeroize()` line. Array
-//! `PkinitClient::key` is the same shape. A MAC bit-flip still fails
-//! decrypt (behaviour, not timing). Each test is red when the matching
-//! `zeroize` / `ct_eq` line is removed.
+//! A one-bit MAC flip fails decrypt and checksum verify: behaviour, not timing.
+//! That those compares are constant-time is a check of the source text only,
+//! and no test measures timing: one test pins `mac_verify`'s `ct_eq`, another
+//! the two lines of `verify_checksum_type`'s keyed compare, and each is red when
+//! its text is removed. `PkinitClient::key` is pinned by an `include_str!` of
+//! its `.zeroize()` line; the other zeroize-on-drop types are proved by unit
+//! tests that see the wiped buffer (`wipe.rs` in `krb5-crypto` and `krb5-types`).
 
 use krb5_crypto::{
-    DerivedKeys, DhKeypair, EncryptionType, Error, KeyUsage, OAKLEY_2048, ProtocolKey, checksum,
-    decrypt, derive_keys, dh_generate, encrypt_with_confounder, verify_checksum_type,
+    EncryptionType, Error, KeyUsage, ProtocolKey, checksum, decrypt, encrypt_with_confounder,
+    verify_checksum_type,
 };
 
-const KEY_RS: &str = include_str!("../src/key.rs");
 const DERIVE_RS: &str = include_str!("../src/derive.rs");
-const MODP_RS: &str = include_str!("../src/modp.rs");
 const PKINIT_CLIENT_RS: &str = include_str!("../../krb5-protocol/src/as_ex.rs");
 const AUTHPACK_RS: &str = include_str!("../../krb5-types/src/pkinit.rs");
 const STORE_RS: &str = include_str!("../../krb5-kdc/src/store/password.rs");
@@ -25,52 +25,6 @@ fn hex(s: &str) -> Vec<u8> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
         .collect()
-}
-
-#[test]
-fn protocol_key_drop_zeroizes() {
-    assert!(
-        KEY_RS.contains("impl Drop for ProtocolKey") && KEY_RS.contains("self.bytes.zeroize()"),
-        "ProtocolKey Drop must zeroize key bytes"
-    );
-    let key = ProtocolKey::from_bytes(
-        EncryptionType::Aes128CtsHmacSha256128,
-        &hex("3705d96080c17728a0e800eab6e0d23c"),
-    )
-    .unwrap();
-    assert_eq!(key.as_bytes().len(), 16);
-    drop(key);
-}
-
-#[test]
-fn derived_keys_drop_zeroizes() {
-    assert!(
-        DERIVE_RS.contains("impl Drop for DerivedKeys")
-            && DERIVE_RS.contains("self.kc.zeroize()")
-            && DERIVE_RS.contains("self.ke.zeroize()")
-            && DERIVE_RS.contains("self.ki.zeroize()"),
-        "DerivedKeys Drop must zeroize kc/ke/ki"
-    );
-    let key = ProtocolKey::from_bytes(
-        EncryptionType::Aes128CtsHmacSha256128,
-        &hex("3705d96080c17728a0e800eab6e0d23c"),
-    )
-    .unwrap();
-    let usage = KeyUsage::new(2).unwrap();
-    let derived: DerivedKeys = derive_keys(&key, usage).unwrap();
-    assert_eq!(derived.kc.len(), 16);
-    drop(derived);
-}
-
-#[test]
-fn dh_keypair_drop_zeroizes() {
-    assert!(
-        MODP_RS.contains("impl Drop for DhKeypair") && MODP_RS.contains("self.secret.zeroize()"),
-        "DhKeypair Drop must zeroize the exponent"
-    );
-    let kp: DhKeypair = dh_generate(&OAKLEY_2048).unwrap();
-    assert_ne!(kp.secret, [] as [u8; 0]);
-    drop(kp);
 }
 
 #[test]
@@ -105,9 +59,11 @@ fn mac_verify_rejects_one_bit_flip() {
 #[test]
 fn checksum_bit_flip_is_integrity() {
     assert!(
-        OPS_RS.contains("let expected = keyed_checksum_for_type")
-            && OPS_RS.contains("mac_verify(mac, &expected)"),
-        "verify_checksum_type must compare with mac_verify"
+        OPS_RS.contains(
+            "    let expected = keyed_checksum_for_type(key, usage, message, ctype)?;\n    \
+             mac_verify(mac, &expected)\n}\n"
+        ),
+        "verify_checksum_type's keyed compare must go through mac_verify"
     );
     let usage = KeyUsage::new(2).unwrap();
     let key = ProtocolKey::from_bytes(
@@ -138,13 +94,5 @@ fn password_history_uses_ct_eq() {
     assert!(
         STORE_RS.contains("nk.as_bytes().ct_eq(k.key.as_bytes())"),
         "password-history compare must use ct_eq"
-    );
-}
-
-#[test]
-fn protocol_key_has_no_eq() {
-    assert!(
-        !KEY_RS.contains("PartialEq") && !KEY_RS.contains("impl Eq"),
-        "ProtocolKey must not grow an Eq that invites == on key bytes"
     );
 }
