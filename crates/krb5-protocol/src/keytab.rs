@@ -35,8 +35,9 @@ pub struct KeytabEntry {
     pub key: ProtocolKey,
 }
 
-/// MIT keytab (v1 or v2).
-#[derive(Debug, Default)]
+/// MIT keytab (v1 or v2). `Debug` shows an unparsed record's length, never its octets, which
+/// hold its key.
+#[derive(Default)]
 pub struct Keytab {
     /// File version (`0x0501` or `0x0502`).
     pub version: u16,
@@ -46,6 +47,28 @@ pub struct Keytab {
     pub skipped_unknown_etype: usize,
     /// Unknown-etype records (parsed-entry count before each raw blob).
     pub unparsed: Vec<(usize, Vec<u8>)>,
+}
+
+impl std::fmt::Debug for Keytab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct Redacted(usize);
+        impl std::fmt::Debug for Redacted {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "<redacted, {} octets>", self.0)
+            }
+        }
+        let unparsed: Vec<_> = self
+            .unparsed
+            .iter()
+            .map(|(at, raw)| (at, Redacted(raw.len())))
+            .collect();
+        f.debug_struct("Keytab")
+            .field("version", &self.version)
+            .field("entries", &self.entries)
+            .field("skipped_unknown_etype", &self.skipped_unknown_etype)
+            .field("unparsed", &unparsed)
+            .finish()
+    }
 }
 
 impl Keytab {
@@ -572,5 +595,20 @@ mod tests {
     fn truncated_entry_is_not_unparsed() {
         let err = Keytab::parse(&[0x05, 0x02, 0, 0, 0, 20, 1]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn a_keytabs_debug_shows_an_unparsed_records_length_not_its_octets() {
+        let kt = Keytab {
+            version: 0x0502,
+            entries: Vec::new(),
+            skipped_unknown_etype: 1,
+            unparsed: vec![(0, vec![0x13, 0x37, 0xc0, 0xde])],
+        };
+        assert_eq!(
+            format!("{kt:?}"),
+            "Keytab { version: 1282, entries: [], skipped_unknown_etype: 1, \
+             unparsed: [(0, <redacted, 4 octets>)] }"
+        );
     }
 }

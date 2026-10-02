@@ -480,7 +480,9 @@ pub struct EncryptedData {
 /// buffer, so the key that drops last wipes it. Left unwiped: a buffer whose last handle is a bare
 /// `OctetString` clone, one whose last two handles drop at the same moment on two threads, and a
 /// static buffer.
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+///
+/// `Debug` shows the keytype and the key's length, never its octets.
+#[derive(AsnType, Clone, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct EncryptionKey {
     /// IANA etype of [`Self::keyvalue`].
     #[rasn(tag(explicit(0)))]
@@ -493,6 +495,18 @@ pub struct EncryptionKey {
 impl Drop for EncryptionKey {
     fn drop(&mut self) {
         wipe::wipe_octets(std::mem::take(&mut self.keyvalue));
+    }
+}
+
+impl std::fmt::Debug for EncryptionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptionKey")
+            .field("keytype", &self.keytype)
+            .field(
+                "keyvalue",
+                &format_args!("<redacted, {} octets>", self.keyvalue.len()),
+            )
+            .finish()
     }
 }
 

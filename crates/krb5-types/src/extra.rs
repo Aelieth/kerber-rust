@@ -228,8 +228,8 @@ pub struct KrbCredInfo {
     pub caddr: Option<crate::HostAddresses>,
 }
 
-/// RFC 3244 `ChangePasswdData`.
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+/// RFC 3244 `ChangePasswdData`. `Debug` never shows the new password, nor its length.
+#[derive(AsnType, Clone, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct ChangePasswdData {
     /// New password octets.
     #[rasn(tag(explicit(0)))]
@@ -240,4 +240,14 @@ pub struct ChangePasswdData {
     /// Optional target realm.
     #[rasn(tag(explicit(2)))]
     pub targrealm: Option<Realm>,
+}
+
+impl std::fmt::Debug for ChangePasswdData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChangePasswdData")
+            .field("newpasswd", &format_args!("<redacted>"))
+            .field("targname", &self.targname)
+            .field("targrealm", &self.targrealm)
+            .finish()
+    }
 }

@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **types/protocol.** `Debug` printed secrets: an `EncryptionKey` and every type holding one
+  (ticket and reply parts, authenticators, credentials), a kpasswd new password, a PAC session key,
+  the PKINIT CA's scalar, a ccache keyblock, a keytab's raw records. Each prints `<redacted>` now.
 - **kdc/admin.** A lockout survives a KDC restart: the KDC and tools change checksummed records in
   place in `principal.lockout` (only a whole rewrite renames; no link followed), which `getprinc`,
   `dump` and the KDC's check merge; an iprop load keeps a replica's. Live; unit.
