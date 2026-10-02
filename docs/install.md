@@ -529,8 +529,9 @@ sudo systemctl start krb5kdc kadmin
 - logrotate (one of the [prerequisites](#prerequisites)) rotates both monthly. Its
   `systemctl reload` sends SIGHUP, and the daemon reopens its log.
 - `journalctl -u krb5kdc -u kadmin` holds only the start and stop lines, as it does for MIT.
-- In the foreground (`sudo krb5kdc -n`, `sudo kadmind -nofork`) the daemons also write the
-  structured JSON log on standard output ([logging.md](logging.md)).
+- In the foreground (`sudo krb5kdc -n`, `sudo kadmind -nofork`) the daemons print what MIT
+  prints. `json = STDOUT` (or `STDERR`, `FILE:path`) in kdc.conf's `[logging]`, a relation MIT
+  does not read, adds the structured JSON log ([logging.md](logging.md)).
 - `sudo ausearch -m AVC -ts recent` shows any SELinux denial.
 
 ## Uninstall

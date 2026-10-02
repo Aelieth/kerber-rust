@@ -770,6 +770,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **kdc/admin.** In the foreground (`krb5kdc -n`, `kadmind -nofork`) the daemons print what MIT
+  prints; the JSON log goes only where kdc.conf's `[logging] json` (`STDOUT`, `STDERR`, `FILE:`),
+  a relation MIT ignores, names a destination, kprop's and kpropd's too. Units; settled live.
 - **kdc/admin.** An MIT db2 database (btree or hash) where the database should be is named and left
   as it is: `… This is an MIT db2 database; dump it with the old installation's kdb5_util, then
   kdb5_util load here (docs/install.md, Upgrading an MIT realm)`. Units on MIT's own headers.

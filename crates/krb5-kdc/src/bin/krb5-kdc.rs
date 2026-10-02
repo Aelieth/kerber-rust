@@ -46,7 +46,7 @@ use krb5_kdc::{
     ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners, bind_udp_listeners,
     detach, names_relative_database, open_database, serve_all_until, shared_store, write_pid_file,
 };
-use krb5_log::klog::{self, Severity, os_error_text};
+use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 
 /// MIT `initialize_realms` (`kdc/main.c:669-669`): krb5kdc's option letters.
 const OPTSTRING: &str = "x:r:d:mM:k:R:P:p:nw:4:T:X3";
@@ -193,10 +193,17 @@ fn main() {
     let foreground = opts.nofork || opts.hooks.foreground(&opts.operands);
     #[cfg(not(feature = "test-hooks"))]
     let foreground = opts.nofork;
-    // The JSON log is on standard output, which a detached KDC no longer has.
-    if foreground {
+    // The JSON log only where `[logging] json` names a destination (MIT has none), standard
+    // output or error only in the foreground: a detached KDC has neither.
+    if let Some(json) = specs
+        .json
+        .as_deref()
+        .and_then(|s| JsonLog::open(&progname, s))
+        && (foreground || json.is_file())
+    {
         let _ = tracing_subscriber::fmt()
             .json()
+            .with_writer(json.make_writer())
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
                     "krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn".into()

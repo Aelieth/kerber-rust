@@ -1,7 +1,31 @@
 # Structured logging schema
 
 Library crates emit [`tracing`](https://docs.rs/tracing) events. They
-never install a subscriber. Tests and the harness do.
+never install a subscriber. The programs do, where `[logging] json`
+asks for the stream (below), and tests install their own.
+
+## Where the stream goes
+
+The daemons write the JSON stream only where `[logging] json` names a
+destination: `STDOUT`, `STDERR` or `FILE:path` (appended to, created
+0640, opened once at the start and not reopened on SIGHUP). It is read
+from the profile of the daemon log below, kdc.conf first: `krb5kdc`
+and `kadmind` with their `[logging]` destinations, `kprop` and
+`kpropd` from the same KDC profile. Without it there is no stream.
+MIT's daemons print none, and in the foreground (`krb5kdc -n`,
+`kadmind -nofork`) ours print what MIT prints: `krb5kdc: starting...`
+or `kadmind: starting...` on standard error. `STDOUT` and `STDERR`
+apply in the foreground only, since a detached daemon has neither;
+`FILE:` applies in both. MIT does not read the relation, so a kdc.conf
+shared with MIT may carry it (settled live beside MIT 1.22.2's
+`krb5kdc` and `kadmind`). `RUST_LOG` filters the stream; each program
+has a default filter.
+
+The gates read the stream from the daemons' standard output:
+`json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
+the stock kdc.conf and krb5.conf of each container they start before
+any copy of them is kept, and `harness/prod/env-up.sh` and
+`scripts/prod-gate.sh` do the same for their KDCs.
 
 ## Fields
 
@@ -135,7 +159,7 @@ the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
 
 ## The daemon log (`[logging]`)
 
-Besides the JSON stream on standard output, `krb5-kdc` and
+Besides the JSON stream, `krb5-kdc` and
 `krb5-kadmind` write MIT's text log (`krb5_log::klog`, MIT
 `lib/kadm5/logger.c`). The destinations are the `[logging]` relations
 of the daemon's profile, kdc.conf first, then krb5.conf with its

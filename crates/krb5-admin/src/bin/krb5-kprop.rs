@@ -19,18 +19,25 @@ use std::path::{Path, PathBuf};
 use krb5_admin::{KPROP_PORT, kprop_send_store, kprop_send_store_iprop};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{PrincipalStore, issue_as, issue_tgs, load_store};
+use krb5_log::klog::JsonLog;
 use krb5_protocol::Keytab;
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::PrincipalName;
 
 fn main() {
-    let _ = tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "krb5_admin=info,krb5_kdc=info".into()),
-        )
-        .try_init();
+    // The JSON log only where the KDC profile's `[logging] json` names a destination (MIT has
+    // none).
+    if let Some(json) = krb5_config::LogSpecs::load_json().and_then(|s| JsonLog::open("kprop", &s))
+    {
+        let _ = tracing_subscriber::fmt()
+            .json()
+            .with_writer(json.make_writer())
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "krb5_admin=info,krb5_kdc=info".into()),
+            )
+            .try_init();
+    }
 
     let mut port = KPROP_PORT;
     let mut keytab: Option<PathBuf> = std::env::var("KRB5_KPROP_KEYTAB").ok().map(PathBuf::from);

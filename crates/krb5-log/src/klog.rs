@@ -5,7 +5,8 @@
 //! [`init`] opens the destinations as MIT `krb5_klog_init` does, [`syslog`] writes one line to
 //! each, [`reopen`] reopens the files after a SIGHUP (logrotate's `systemctl reload`), and
 //! [`close`] closes them. Before [`init`], and after [`close`], nothing is written, so a library
-//! caller or a test that never sets the log up writes nothing.
+//! caller or a test that never sets the log up writes nothing. [`JsonLog`] is where `[logging]
+//! json`, a relation MIT does not read, sends the JSON structured log.
 //!
 //! # Examples
 //!
@@ -20,7 +21,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use nix::fcntl::OFlag;
 
@@ -523,6 +524,83 @@ pub fn close() {
     *LOG.lock().unwrap_or_else(PoisonError::into_inner) = None;
 }
 
+/// Where the JSON structured log goes: `[logging] json` (`krb5_config::LogSpecs::json`), a
+/// relation MIT does not read. MIT's programs print no such stream, so without the relation there
+/// is none.
+#[derive(Clone, Debug)]
+pub enum JsonLog {
+    /// `STDOUT`.
+    Stdout,
+    /// `STDERR`.
+    Stderr,
+    /// `FILE:<path>`, opened once and appended to as a `FILE:` destination is.
+    File(Arc<File>),
+}
+
+impl JsonLog {
+    /// The destination `spec` names: `STDOUT`, `STDERR` or `FILE:<path>`, the words in any case.
+    /// A spec that names none, or a file that does not open, leaves the stream off and is
+    /// reported on standard error as an MIT-format destination is.
+    #[must_use]
+    pub fn open(whoami: &str, spec: &str) -> Option<Self> {
+        Self::open_reporting(whoami, spec, &mut io::stderr())
+    }
+
+    fn open_reporting(whoami: &str, spec: &str, err: &mut dyn Write) -> Option<Self> {
+        let cp = spec.trim_matches(|c: char| c.is_ascii_whitespace());
+        if cp.eq_ignore_ascii_case("STDOUT") {
+            return Some(Self::Stdout);
+        }
+        if cp.eq_ignore_ascii_case("STDERR") {
+            return Some(Self::Stderr);
+        }
+        if let Some(path) = strip_prefix_ci(cp, "FILE:") {
+            let mut opts = OpenOptions::new();
+            opts.append(true).create(true).mode(0o640);
+            return match open_log_file(path, &mut opts) {
+                Ok(file) => Some(Self::File(Arc::new(file))),
+                Err(e) => {
+                    let _ = writeln!(err, "Couldn't open log file {path}: {}", os_error_text(&e));
+                    None
+                }
+            };
+        }
+        let _ = writeln!(err, "{whoami}: cannot parse <{cp}>");
+        let _ = writeln!(err, "{whoami}: warning - logging entry syntax error");
+        None
+    }
+
+    /// Whether the stream goes to a file, which a detached daemon still has.
+    #[must_use]
+    pub fn is_file(&self) -> bool {
+        matches!(self, Self::File(_))
+    }
+
+    /// One writer per event, for a `tracing` subscriber's `with_writer`.
+    pub fn make_writer(self) -> impl Fn() -> Box<dyn Write> + Send + Sync + 'static {
+        move || -> Box<dyn Write> {
+            match &self {
+                Self::Stdout => Box::new(io::stdout()),
+                Self::Stderr => Box::new(io::stderr()),
+                Self::File(file) => Box::new(SharedFile(Arc::clone(file))),
+            }
+        }
+    }
+}
+
+/// A [`JsonLog::File`] writer: every event writes through the one open file.
+struct SharedFile(Arc<File>);
+
+impl Write for SharedFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        (&*self.0).write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        (&*self.0).flush()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +628,37 @@ mod tests {
         let mut err = Vec::new();
         let l = Logger::open("krb5kdc", &specs, false, sock, &mut err);
         (l, String::from_utf8(err).unwrap())
+    }
+
+    #[test]
+    fn json_goes_to_stdout_stderr_or_an_appended_file_and_nowhere_else() {
+        let s = Scratch::new("json");
+        let p = s.path("json.log");
+        std::fs::write(&p, "old\n").unwrap();
+        let mut err = Vec::new();
+        let mut json = |spec: &str| JsonLog::open_reporting("krb5kdc", spec, &mut err);
+        assert!(matches!(json(" stdout "), Some(JsonLog::Stdout)));
+        assert!(matches!(json("STDERR"), Some(JsonLog::Stderr)));
+        let file = json(&format!("file:{}", p.display())).unwrap();
+        assert!(file.is_file());
+        assert!(json("SYSLOG").is_none());
+        assert!(json(&format!("FILE:{}", s.path("no/dir.log").display())).is_none());
+        let w = file.make_writer();
+        w().write_all(b"{\"a\":1}\n").unwrap();
+        w().write_all(b"{\"b\":2}\n").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&p).unwrap(),
+            "old\n{\"a\":1}\n{\"b\":2}\n"
+        );
+        let err = String::from_utf8(err).unwrap();
+        assert!(
+            err.starts_with(
+                "krb5kdc: cannot parse <SYSLOG>\n\
+                 krb5kdc: warning - logging entry syntax error\n\
+                 Couldn't open log file "
+            ),
+            "{err}"
+        );
     }
 
     #[test]

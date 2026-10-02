@@ -1347,6 +1347,21 @@ fn debug_is_the_first_value_as_a_profile_boolean() {
 }
 
 #[test]
+fn json_is_the_first_value_kdc_conf_first_and_no_log_destination() {
+    let (k, c) = logging_conf(
+        "[logging]\n    json = FILE:/j.log\n",
+        "[logging]\n    kdc = STDERR\n\n[libdefaults]\n    rdns = false\n\n[logging]\n    json = STDOUT\n",
+    );
+    let kdc = LogSpecs::for_program(Some(&k), Some(&c), "kdc");
+    assert_eq!(kdc.json.as_deref(), Some("FILE:/j.log"));
+    assert_eq!(kdc.specs, ["STDERR"]);
+    let admin = LogSpecs::for_program(None, Some(&c), "admin_server");
+    assert_eq!(admin.json.as_deref(), Some("STDOUT"));
+    assert_eq!(admin.specs, Vec::<String>::new());
+    assert_eq!(LogSpecs::for_program(None, None, "kdc").json, None);
+}
+
+#[test]
 fn relation_names_are_case_sensitive_as_in_the_profile_library() {
     let k = KdcConf::parse("[logging]\n    KDC = FILE:/upper.log\n").unwrap();
     assert_eq!(

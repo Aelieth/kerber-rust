@@ -49,7 +49,7 @@ use krb5_kdc::{
     bind_tcp_listeners, bind_udp_listeners, detach, names_relative_database, open_database,
     shared_dump as shared_store, write_pid_file,
 };
-use krb5_log::klog::{self, Severity, os_error_text};
+use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 use krb5_protocol::ReplayCache;
 
 /// MIT `main` (`kadmin/server/ovsec_kadmd.c:362-432`): kadmind's options, each matched by
@@ -149,21 +149,28 @@ fn main() {
         _ => usage(),
     };
     let nofork = args.flag("-nofork") || test_realm || pinned.is_some();
-    // The JSON log is on standard output, which a detached kadmind no longer has.
-    if nofork {
+
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:444-444`): the daemon log, once the options are
+    // read.
+    let specs = krb5_config::LogSpecs::load("admin_server");
+    klog::init(&progname, &specs.specs, specs.debug);
+    // The JSON log only where `[logging] json` names a destination (MIT has none), standard
+    // output or error only in the foreground: a detached kadmind has neither.
+    if let Some(json) = specs
+        .json
+        .as_deref()
+        .and_then(|s| JsonLog::open(&progname, s))
+        && (nofork || json.is_file())
+    {
         let _ = tracing_subscriber::fmt()
             .json()
+            .with_writer(json.make_writer())
             .with_env_filter(
                 tracing_subscriber::EnvFilter::try_from_default_env()
                     .unwrap_or_else(|_| "krb5_admin=info,krb5_kdc=info,krb5_protocol=warn".into()),
             )
             .try_init();
     }
-
-    // MIT `main` (`kadmin/server/ovsec_kadmd.c:444-444`): the daemon log, once the options are
-    // read.
-    let specs = krb5_config::LogSpecs::load("admin_server");
-    klog::init(&progname, &specs.specs, specs.debug);
     if args.flag("-m") {
         fail_to_start(
             &progname,

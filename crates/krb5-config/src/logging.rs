@@ -13,6 +13,9 @@ pub struct LogSpecs {
     pub specs: Vec<String>,
     /// `[logging] debug`: debug lines also go to the destinations that are not syslog.
     pub debug: bool,
+    /// `[logging] json`, a relation MIT does not read: the destination of the JSON structured log
+    /// (`krb5_log::klog::JsonLog`), the first value in the profile; `None` leaves it off.
+    pub json: Option<String>,
 }
 
 impl LogSpecs {
@@ -23,12 +26,7 @@ impl LogSpecs {
     /// boolean; a value that is not one leaves it off.
     #[must_use]
     pub fn for_program(kdc: Option<&KdcConf>, krb5: Option<&Krb5Conf>, ename: &str) -> Self {
-        let relations: Vec<&(String, String)> = kdc
-            .map(|c| c.logging.iter())
-            .into_iter()
-            .flatten()
-            .chain(krb5.map(|c| c.logging.iter()).into_iter().flatten())
-            .collect();
+        let relations = relations(kdc, krb5);
         let values = |name: &str| -> Vec<String> {
             relations
                 .iter()
@@ -45,7 +43,11 @@ impl LogSpecs {
             .find(|(k, _)| k == "debug")
             .and_then(|(_, v)| profile_boolean(v))
             .unwrap_or(false);
-        Self { specs, debug }
+        Self {
+            specs,
+            debug,
+            json: json_value(&relations),
+        }
     }
 
     /// [`Self::for_program`] on the daemon's own profile: [`kdc_conf_path`] (a missing or
@@ -56,6 +58,35 @@ impl LogSpecs {
         let krb5 = load_krb5_conf();
         Self::for_program(kdc.as_ref(), krb5.as_ref(), ename)
     }
+
+    /// The [`Self::json`] relation of that profile alone, for a program that keeps no
+    /// MIT-format log (kprop, kpropd).
+    #[must_use]
+    pub fn load_json() -> Option<String> {
+        let kdc = KdcConf::load_file(kdc_conf_path()).ok();
+        let krb5 = load_krb5_conf();
+        json_value(&relations(kdc.as_ref(), krb5.as_ref()))
+    }
+}
+
+/// Every `[logging]` relation of the profile, kdc.conf's first.
+fn relations<'a>(
+    kdc: Option<&'a KdcConf>,
+    krb5: Option<&'a Krb5Conf>,
+) -> Vec<&'a (String, String)> {
+    kdc.map(|c| c.logging.iter())
+        .into_iter()
+        .flatten()
+        .chain(krb5.map(|c| c.logging.iter()).into_iter().flatten())
+        .collect()
+}
+
+/// The first `json` value.
+fn json_value(relations: &[&(String, String)]) -> Option<String> {
+    relations
+        .iter()
+        .find(|(k, _)| k == "json")
+        .map(|(_, v)| v.clone())
 }
 
 /// MIT `profile_parse_boolean` (`util/profile/prof_get.c:347-369`): the yes and no words, any

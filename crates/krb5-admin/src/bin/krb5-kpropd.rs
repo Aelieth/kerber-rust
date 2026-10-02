@@ -38,7 +38,7 @@ use std::time::Duration;
 
 use krb5_admin::{KPROP_PORT, KpropdConfig, kpropd_handle_conn};
 use krb5_crypto::ProtocolKey;
-use krb5_log::klog::os_error_text;
+use krb5_log::klog::{JsonLog, os_error_text};
 use nix::sys::socket::{
     AddressFamily, Backlog, SockFlag, SockType, SockaddrStorage, bind, listen, setsockopt, socket,
     sockopt,
@@ -47,19 +47,25 @@ use nix::sys::socket::{
 use krb5_protocol::{Keytab, ReplayCache};
 
 fn main() {
-    let _ = tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "krb5_admin=info,krb5_kdc=info".into()),
-        )
-        .try_init();
-
     let argv: Vec<String> = std::env::args().collect();
     let progname = argv
         .first()
         .map_or("krb5-kpropd", |a| a.rsplit('/').next().unwrap_or(a))
         .to_owned();
+    // The JSON log only where the KDC profile's `[logging] json` names a destination (MIT has
+    // none).
+    if let Some(json) =
+        krb5_config::LogSpecs::load_json().and_then(|s| JsonLog::open(&progname, &s))
+    {
+        let _ = tracing_subscriber::fmt()
+            .json()
+            .with_writer(json.make_writer())
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| "krb5_admin=info,krb5_kdc=info".into()),
+            )
+            .try_init();
+    }
     // MIT `parse_args` (`kprop/kpropd.c:1065-1126`): glibc getopt over the options, a value attached or apart; a bad option is the usage.
     let (opts, operands) = match krb5_cli::getopt(argv.get(1..).unwrap_or_default(), "r:", &[]) {
         Ok(parsed) => parsed,
