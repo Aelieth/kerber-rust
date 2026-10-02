@@ -115,15 +115,22 @@ pub fn detach() -> io::Result<()> {
     nix::unistd::daemon(false, false).map_err(io::Error::from)
 }
 
-/// Write the process id and a newline to `path`, replacing what was there.
+/// Write the process id and a newline to `path`, replacing what was there, never through a
+/// symlink (`O_NOFOLLOW`): MIT's `fopen(path, "w")` empties a link's target.
 /// MIT `write_pid_file` (`kdc/main.c:834-847`): `fopen(path, "w")`, `"%ld\n"`, the open, write
 /// or close error returned.
 ///
 /// # Errors
 ///
-/// The OS error of creating, writing or closing `path`.
+/// The OS error of creating, writing or closing `path`; `ELOOP` for a symlink there.
 pub fn write_pid_file(path: &Path) -> io::Result<()> {
-    let mut f = File::create(path)?;
+    use std::os::unix::fs::OpenOptionsExt as _;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .open(path)?;
     writeln!(f, "{}", std::process::id())?;
     f.flush()
 }
@@ -195,6 +202,37 @@ impl Signals {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    /// MIT's `fopen(path, "w")` empties a symlink's target; the pid file is never written through
+    /// one, which stays, its target as it was.
+    #[test]
+    fn a_pid_file_is_never_written_through_a_symlink() {
+        let dir = krb5_testkit::scratch_dir("krb5-pid-link");
+        let (link, victim) = (dir.join("krb5kdc.pid"), dir.join("victim"));
+        std::fs::write(&victim, b"keep\n").unwrap();
+        let old = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+        std::fs::File::options()
+            .write(true)
+            .open(&victim)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(old)
+                    .set_accessed(old),
+            )
+            .unwrap();
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+        let err = write_pid_file(&link).unwrap_err();
+        assert_eq!(err.raw_os_error(), Some(nix::libc::ELOOP), "{err}");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep\n");
+        assert_eq!(std::fs::metadata(&victim).unwrap().modified().unwrap(), old);
+    }
 
     #[test]
     fn a_relative_database_or_stash_is_opened_again_after_detaching() {

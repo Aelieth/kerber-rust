@@ -858,7 +858,9 @@ fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
-        opts.mode(0o600);
+        // Never through a symlink a non-root owner of the dump's directory planted: MIT's
+        // `O_CREAT | O_TRUNC` empties its target.
+        opts.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
     }
     let ok = match krb5_protocol::create_labeled(&ok_path, || opts.open(&ok_path)) {
         Ok(f) => f,
@@ -1337,6 +1339,9 @@ fn destroy(util: &mut Util, args: &[String]) -> u8 {
 /// MIT `krb5_db2_destroy` (`plugins/kdb/db2/kdb_db2.c:1227-1271`): `destroy_file` on the database, then the lock file and the policy database and its lock are unlinked.
 /// MIT `kdb5_destroy` (`kadmin/dbutil/kdb5_destroy.c:85-87`): the update log is unlinked, its error ignored.
 fn destroy_database(file: &Path) -> io::Result<()> {
+    if fs::symlink_metadata(file).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err(link_refused(file));
+    }
     destroy_file(file)?;
     for suffix in [".ok", ".kadm5", ".kadm5.lock"] {
         match fs::remove_file(with_suffix(file, suffix)) {
@@ -1348,12 +1353,31 @@ fn destroy_database(file: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// `path`'s refusal of a symlink a destroy would zero through: `ELOOP`, the path named.
+fn link_refused(path: &Path) -> io::Error {
+    let e = io::Error::from_raw_os_error(nix::libc::ELOOP);
+    io::Error::new(e.kind(), format!("{}: {}", path.display(), strerror(&e)))
+}
+
 /// Zero `path` and unlink it: each block that is not all zeros already is overwritten with
-/// zeros, and the file is synced before it is removed.
+/// zeros, and the file is synced before it is removed. The open never follows a symlink
+/// (`O_NOFOLLOW`), where MIT's zeroes the link's target.
 /// MIT `destroy_file` (`plugins/kdb/db2/kdb_db2.c:619-682`): `BUFSIZ` blocks are read, those with a nonzero byte written over with zeros, then `fsync` and `unlink`.
 fn destroy_file(path: &Path) -> io::Result<()> {
+    use std::os::unix::fs::OpenOptionsExt as _;
     const BUFSIZ: usize = 8192;
-    let mut f = fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let mut f = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+        .open(path)
+        .map_err(|e| {
+            if e.raw_os_error() == Some(nix::libc::ELOOP) {
+                link_refused(path)
+            } else {
+                e
+            }
+        })?;
     let mut buf = [0u8; BUFSIZ];
     loop {
         let pos = f.stream_position()?;

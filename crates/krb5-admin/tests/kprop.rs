@@ -577,6 +577,46 @@ fn kprop_exact_acl(
     Ok(loaded)
 }
 
+/// MIT's kpropd runs `kdb5_util load`, whose create of the replica's `principal.ok` is
+/// `O_CREAT | O_TRUNC` and empties a symlink's target; this full load refuses a link planted
+/// there by a non-root owner of the replica's directory, and loads nothing.
+#[test]
+fn kpropd_refuses_a_symlink_planted_as_the_replicas_lock_file() {
+    let dir = krb5_testkit::scratch_dir("kprop-link");
+    let _ = std::fs::create_dir_all(&dir);
+    let (db, stash) = (dir.join("replica"), dir.join("replica.stash"));
+    let (store, _) = bootstrap_documented().unwrap();
+    let ok = krb5_kdc::suffixed(&db, krb5_kdc::SUFFIX_LOCK);
+    let victim = dir.join("victim");
+    std::fs::write(&victim, b"not the realm's\n").unwrap();
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&victim)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(old)
+                .set_accessed(old),
+        )
+        .unwrap();
+    std::os::unix::fs::symlink(&victim, &ok).unwrap();
+    let err = kprop_exact_acl(&store, &db, &stash).unwrap_err();
+    assert!(
+        err.contains("replica.ok: Too many levels of symbolic links"),
+        "{err}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&ok)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read(&victim).unwrap(), b"not the realm's\n");
+    assert_eq!(std::fs::metadata(&victim).unwrap().modified().unwrap(), old);
+    assert!(!db.exists(), "nothing loaded");
+}
+
 /// prop-acl-gate's C2 `acl-exact`: a kpropd whose ACL names the sender exactly loads a full dump
 /// into an empty replica directory, and again once the replica's database file alone is removed
 /// (its lock files stay), as MIT's load opens and locks the lock files it finds.

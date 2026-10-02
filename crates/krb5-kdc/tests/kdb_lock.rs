@@ -34,6 +34,55 @@ fn lock_text(db: &Path, stash: &Path) -> String {
     }
 }
 
+/// A symlink planted at `link` (as a non-root owner of the KDC directory may plant one) to a file
+/// with known bytes and an old modification time; the target, its bytes and its time.
+fn plant_link(link: &Path) -> (PathBuf, Vec<u8>, std::time::SystemTime) {
+    let victim = link.with_file_name(format!(
+        "{}.victim",
+        link.file_name().unwrap().to_string_lossy()
+    ));
+    let bytes = b"not the realm's\n".to_vec();
+    std::fs::write(&victim, &bytes).unwrap();
+    let old = std::time::UNIX_EPOCH + Duration::from_secs(1_000_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&victim)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(old)
+                .set_accessed(old),
+        )
+        .unwrap();
+    let _ = std::fs::remove_file(link);
+    std::os::unix::fs::symlink(&victim, link).unwrap();
+    (victim, bytes, old)
+}
+
+/// The link is still at `link`, and its target `victim` keeps its bytes and modification time.
+fn assert_untouched(link: &Path, victim: &Path, bytes: &[u8], mtime: std::time::SystemTime) {
+    assert!(
+        std::fs::symlink_metadata(link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "{}",
+        link.display()
+    );
+    assert_eq!(
+        std::fs::read(victim).unwrap(),
+        bytes,
+        "{}",
+        victim.display()
+    );
+    assert_eq!(
+        std::fs::metadata(victim).unwrap().modified().unwrap(),
+        mtime,
+        "{}",
+        victim.display()
+    );
+}
+
 fn age(db: &Path) -> i64 {
     std::fs::metadata(suffixed(db, SUFFIX_LOCK))
         .unwrap()
@@ -394,4 +443,54 @@ fn a_permanent_lock_never_let_go_leaves_the_database_unusable() {
     );
     std::fs::File::create(suffixed(&db, SUFFIX_POLICY_LOCK)).unwrap();
     assert!(load_store(&db, &stash).is_ok());
+}
+
+/// MIT's create opens `principal.ok` `O_CREAT | O_TRUNC`, emptying a symlink's target; this
+/// create refuses the link and makes nothing.
+#[test]
+fn create_refuses_a_symlink_planted_as_principal_ok() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let master = krb5_kdc::random_key(krb5_crypto::EncryptionType::Aes256CtsHmacSha196).unwrap();
+    let dir = scratch_dir("krb5-lock-link-create");
+    let db = dir.join("principal");
+    let ok = suffixed(&db, SUFFIX_LOCK);
+    let (victim, bytes, mtime) = plant_link(&ok);
+    let err = create_store(&store, &db, &master).unwrap_err().to_string();
+    assert!(
+        err.contains("principal.ok: Too many levels of symbolic links"),
+        "{err}"
+    );
+    assert_untouched(&ok, &victim, &bytes, mtime);
+    assert!(!db.exists(), "nothing else made");
+}
+
+/// MIT opens a symlinked lock file and locks its target; this open refuses the link and names
+/// it, rather than reporting the policy lock file missing.
+#[test]
+fn opening_the_database_refuses_a_symlink_planted_as_either_lock_file() {
+    for (tag, suffix) in [("ok", SUFFIX_LOCK), ("pol", SUFFIX_POLICY_LOCK)] {
+        let (db, stash) = saved(&format!("krb5-lock-link-open-{tag}"));
+        let lock = suffixed(&db, suffix);
+        let (victim, bytes, mtime) = plant_link(&lock);
+        let err = lock_text(&db, &stash);
+        assert!(
+            err.contains(&format!("{suffix}: Too many levels of symbolic links")),
+            "{suffix}: {err}"
+        );
+        assert_untouched(&lock, &victim, &bytes, mtime);
+    }
+}
+
+/// MIT retimes `principal.ok` by name with `utime`, so a symlink planted there has its target
+/// retimed; this write leaves the link and its target as they are.
+#[test]
+fn moving_the_age_never_retimes_a_symlink_planted_as_principal_ok() {
+    let (db, _) = saved("krb5-lock-link-age");
+    let lock = DbLock::open(&db).unwrap();
+    let ok = suffixed(&db, SUFFIX_LOCK);
+    let (victim, bytes, mtime) = plant_link(&ok);
+    lock.lock(DbLockMode::Exclusive).unwrap();
+    lock.update_age();
+    lock.unlock().unwrap();
+    assert_untouched(&ok, &victim, &bytes, mtime);
 }

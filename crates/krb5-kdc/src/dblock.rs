@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nix::errno::Errno;
 use nix::fcntl::{FcntlArg, Flock, FlockArg, fcntl};
 use nix::libc;
-use nix::sys::stat::{UtimensatFlags, utimensat};
+use nix::sys::stat::futimens;
 use nix::sys::time::TimeSpec;
 
 /// The principal lock's suffix, `principal.ok`.
@@ -205,14 +205,46 @@ impl Drop for FileLockGuard<'_> {
     }
 }
 
-/// Open a lock file read-write, else read-only.
+/// Whether an open failed on a symlink it would not follow (`O_NOFOLLOW`).
+fn refused_link(e: &io::Error) -> bool {
+    e.raw_os_error() == Some(libc::ELOOP)
+}
+
+/// `e`, an open's error at `path`, with the path named when the open refused a symlink, so the
+/// tool's message says which link it would not follow.
+fn named_if_link(path: &Path, e: io::Error) -> io::Error {
+    if refused_link(&e) {
+        io::Error::new(e.kind(), format!("{}: {}", path.display(), strerror(&e)))
+    } else {
+        e
+    }
+}
+
+/// Open a lock file read-write, else read-only, never through a symlink: a link at the path, as
+/// a non-root owner of the directory may plant, is refused (`ELOOP`) rather than its target
+/// locked, which MIT does.
 /// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:492-501`): the lock file is opened `O_RDWR` so that write locking can work, else `O_RDONLY`.
 fn open_lock_file(path: &Path) -> io::Result<File> {
-    OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-        .or_else(|_| File::open(path))
+    let open = |write: bool| {
+        OpenOptions::new()
+            .read(true)
+            .write(write)
+            .custom_flags(libc::O_NOFOLLOW)
+            .open(path)
+    };
+    open(true).or_else(|_| open(false))
+}
+
+/// The policy lock file at `path`, opened: a missing one is `OSA_ADB_NOLOCKFILE`'s text, a
+/// symlink there `ELOOP` with the path named.
+fn open_policy_lock_file(path: &Path) -> Result<File, DbLockError> {
+    open_lock_file(path).map_err(|e| {
+        if refused_link(&e) {
+            DbLockError::Io(named_if_link(path, e))
+        } else {
+            DbLockError::NoLockFile
+        }
+    })
 }
 
 /// Which lock file a create makes, for its SELinux context.
@@ -224,13 +256,17 @@ enum LockFileKind {
 
 /// Create the lock file at `path`, 0600, labeled as a new file at that path is
 /// ([`krb5_protocol::create_labeled`]): `principal.ok` `O_CREAT | O_RDWR | O_TRUNC` (an existing
-/// one is kept and emptied), `principal.kadm5.lock` `O_CREAT | O_EXCL`.
+/// one is kept and emptied), `principal.kadm5.lock` `O_CREAT | O_EXCL`. Neither open follows a
+/// symlink (`O_NOFOLLOW`): MIT's truncates a link's target.
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:697-702`): `principal.ok` is opened `O_CREAT | O_RDWR | O_TRUNC`, mode 0600.
 /// MIT `osa_adb_create_db` (`plugins/kdb/db2/adb_openclose.c:42-46`): the policy lock file is created `O_RDWR | O_CREAT | O_EXCL`, mode 0600.
 fn create_lock_file(path: &Path, kind: LockFileKind) -> io::Result<File> {
     krb5_protocol::create_labeled(path, || {
         let mut opts = OpenOptions::new();
-        opts.read(true).write(true).mode(0o600);
+        opts.read(true)
+            .write(true)
+            .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW);
         match kind {
             LockFileKind::Principal => opts.create(true).truncate(true),
             LockFileKind::Policy => opts.create_new(true),
@@ -297,12 +333,14 @@ impl DbLock {
     /// # Errors
     ///
     /// [`DbLockError::Io`] when `principal.ok` opens neither read-write nor read-only (`NotFound`
-    /// when it is missing); [`DbLockError::NoLockFile`] when `principal.kadm5.lock` does not open.
+    /// when it is missing) or either lock file is a symlink, which is never followed (`ELOOP`,
+    /// the path named); [`DbLockError::NoLockFile`] when `principal.kadm5.lock` does not open.
     pub fn open(db: &Path) -> Result<Self, DbLockError> {
         let ok_name = suffixed(db, SUFFIX_LOCK);
-        let ok = open_lock_file(&ok_name).map_err(DbLockError::Io)?;
+        let ok =
+            open_lock_file(&ok_name).map_err(|e| DbLockError::Io(named_if_link(&ok_name, e)))?;
         let pol_name = suffixed(db, SUFFIX_POLICY_LOCK);
-        let pol = open_lock_file(&pol_name).map_err(|_| DbLockError::NoLockFile)?;
+        let pol = open_policy_lock_file(&pol_name)?;
         Ok(Self::from_files(ok_name, ok, pol_name, Some(pol)))
     }
 
@@ -317,7 +355,8 @@ impl DbLock {
     /// directory), or locked.
     pub fn create(db: &Path) -> Result<Self, DbLockError> {
         let ok_name = suffixed(db, SUFFIX_LOCK);
-        let ok = create_lock_file(&ok_name, LockFileKind::Principal).map_err(DbLockError::Io)?;
+        let ok = create_lock_file(&ok_name, LockFileKind::Principal)
+            .map_err(|e| DbLockError::Io(named_if_link(&ok_name, e)))?;
         let me = Self::from_files(ok_name, ok, suffixed(db, SUFFIX_POLICY_LOCK), None);
         {
             let mut st = me.state();
@@ -342,7 +381,7 @@ impl DbLock {
         let file =
             create_lock_file(&self.pol_name, LockFileKind::Policy).map_err(DbLockError::Io)?;
         drop(file);
-        let reopened = open_lock_file(&self.pol_name).map_err(|_| DbLockError::NoLockFile)?;
+        let reopened = open_policy_lock_file(&self.pol_name)?;
         let mut st = self.state();
         st.pol = Some(reopened);
         st.pol_flock = None;
@@ -543,16 +582,28 @@ impl DbLock {
 
     /// Move the database's age strictly forward: `principal.ok`'s times become now, or one second
     /// past the old age when that is not before now. Call it holding the lock exclusively, once
-    /// the change is written. A failure is ignored, as MIT ignores it.
+    /// the change is written. A failure is ignored, as MIT ignores it, but for a symlink at
+    /// `principal.ok`, which is not retimed (MIT retimes its target) and is logged.
     /// MIT `ctx_update_age` (`plugins/kdb/db2/kdb_db2.c:590-598`): `utime` to the old `st_mtime` + 1 when it is not in the past, else to now.
     pub fn update_age(&self) {
-        let old = {
-            let st = self.state();
-            match st.ok.metadata() {
-                Ok(m) => m.mtime(),
-                Err(_) => return,
-            }
-        };
+        if let Err(e) = self.move_age()
+            && refused_link(&e)
+        {
+            tracing::warn!(
+                event = krb5_log::events::ADMIN,
+                correlation_id = krb5_log::current_correlation_id(),
+                component = "krb5-kdc",
+                outcome = "error",
+                detail = "the database's age is not moved",
+                error = %named_if_link(&self.ok_name, e),
+            );
+        }
+    }
+
+    /// [`Self::update_age`]'s retime: `principal.ok` opened by its name without following a
+    /// symlink (`O_NOFOLLOW`), then its times set through that descriptor.
+    fn move_age(&self) -> io::Result<()> {
+        let old = self.state().ok.metadata()?.mtime();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -564,13 +615,11 @@ impl DbLock {
         } else {
             (TimeSpec::UTIME_NOW, TimeSpec::UTIME_NOW)
         };
-        let _ = utimensat(
-            nix::fcntl::AT_FDCWD,
-            &self.ok_name,
-            &times.0,
-            &times.1,
-            UtimensatFlags::FollowSymlink,
-        );
+        let file = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+            .open(&self.ok_name)?;
+        futimens(&file, &times.0, &times.1).map_err(io::Error::from)
     }
 }
 
@@ -603,6 +652,24 @@ impl Drop for DbLockHold {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_age_is_not_moved_through_a_symlink_and_the_refusal_says_so() {
+        let db = scratch("age-link").join("principal");
+        let lock = DbLock::create(&db).unwrap();
+        lock.create_policy_lock().unwrap();
+        let ok = suffixed(&db, SUFFIX_LOCK);
+        let victim = ok.with_file_name("victim");
+        std::fs::write(&victim, b"").unwrap();
+        std::fs::remove_file(&ok).unwrap();
+        std::os::unix::fs::symlink(&victim, &ok).unwrap();
+        let err = lock.move_age().unwrap_err();
+        assert!(refused_link(&err), "{err}");
+        assert_eq!(
+            named_if_link(&ok, err).to_string(),
+            format!("{}: Too many levels of symbolic links", ok.display())
+        );
+    }
 
     fn scratch(tag: &str) -> PathBuf {
         krb5_testkit::scratch_dir(&format!("krb5-dblock-{tag}"))

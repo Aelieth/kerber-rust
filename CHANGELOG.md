@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **kdc/log.** A root tool never writes through a symlink in the KDC or log directory: lock files,
+  the age's retime, `.dump_ok`, `destroy`, the pid file, `FILE:` logs and temp files open
+  `O_NOFOLLOW`; a planted link fails the operation, its target untouched (MIT follows it). Unit.
 - **types/crypto/kdc.** An `EncryptionKey` drop zeroed a copy (now its last handle zeroes the key's
   buffer); a `P256Keypair` and the KDC's PKINIT shared secret were never wiped; HMAC tails were
   zeroed as copies; a SPAKE seed missed its wipe on `?`. Unit tests see each wipe; red at the parent.

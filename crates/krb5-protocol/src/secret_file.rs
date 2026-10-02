@@ -169,16 +169,23 @@ fn temp_path(path: &Path) -> PathBuf {
     ))
 }
 
-/// Create the temp file a write renames onto `path`: `O_EXCL`, mode 0600.
+/// Create the temp file a write renames onto `path`: `O_EXCL | O_NOFOLLOW`, mode 0600, so a
+/// link planted at its name is never written through.
 pub(crate) fn new_temp(path: &Path) -> io::Result<(fs::File, PathBuf)> {
     let tmp = temp_path(path);
+    Ok((create_temp_at(&tmp)?, tmp))
+}
+
+/// The temp file at `tmp`: made here (`O_CREAT | O_EXCL | O_NOFOLLOW`), mode 0600.
+fn create_temp_at(tmp: &Path) -> io::Result<fs::File> {
     let mut opts = OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(unix)]
     {
-        opts.mode(0o600);
+        opts.mode(0o600)
+            .custom_flags(nix::fcntl::OFlag::O_NOFOLLOW.bits());
     }
-    Ok((opts.open(&tmp)?, tmp))
+    opts.open(tmp)
 }
 
 /// [`new_temp`], labelled for `path` when `labeled` and SELinux is on: with the context of the
@@ -652,6 +659,28 @@ mod tests {
         SKIP_LSTAT_TYPE.with(|c| c.set(true));
         let _g = SkipType;
         f()
+    }
+
+    /// A link planted at a temp file's name is never written through: the create fails
+    /// (`O_CREAT | O_EXCL | O_NOFOLLOW`), the link stays and its target is as it was.
+    #[test]
+    fn a_temp_file_is_never_made_through_a_symlink() {
+        let dir = krb5_testkit::scratch_dir("krb5-temp-link");
+        let (tmp, victim) = (dir.join(".principal.tmp-planted"), dir.join("victim"));
+        fs::write(&victim, b"keep").unwrap();
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&victim)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(old).set_accessed(old))
+            .unwrap();
+        symlink(&victim, &tmp).unwrap();
+        let err = create_temp_at(&tmp).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
+        assert!(fs::symlink_metadata(&tmp).unwrap().file_type().is_symlink());
+        assert_eq!(fs::read(&victim).unwrap(), b"keep");
+        assert_eq!(fs::metadata(&victim).unwrap().modified().unwrap(), old);
     }
 
     #[test]

@@ -102,6 +102,104 @@ fn err(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
+/// A symlink planted at `link` (as a non-root owner of the KDC directory may plant one) to a file
+/// with known bytes and an old modification time; the target, its bytes and its time.
+fn plant_link(link: &Path) -> (PathBuf, Vec<u8>, std::time::SystemTime) {
+    let victim = link.with_file_name(format!(
+        "{}.victim",
+        link.file_name().unwrap().to_string_lossy()
+    ));
+    std::fs::write(&victim, b"not the realm's\n").unwrap();
+    let (bytes, old) = plant_link_to(link, &victim);
+    (victim, bytes, old)
+}
+
+/// A symlink planted at `link` to the existing file `victim`, given an old modification time;
+/// the target's bytes and its time.
+fn plant_link_to(link: &Path, victim: &Path) -> (Vec<u8>, std::time::SystemTime) {
+    let bytes = std::fs::read(victim).unwrap();
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(victim)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(old)
+                .set_accessed(old),
+        )
+        .unwrap();
+    let _ = std::fs::remove_file(link);
+    std::os::unix::fs::symlink(victim, link).unwrap();
+    (bytes, old)
+}
+
+/// The link is still at `link`, and its target `victim` keeps its bytes and modification time.
+fn assert_untouched(link: &Path, victim: &Path, bytes: &[u8], mtime: std::time::SystemTime) {
+    assert!(
+        std::fs::symlink_metadata(link)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "{}",
+        link.display()
+    );
+    assert_eq!(
+        std::fs::read(victim).unwrap(),
+        bytes,
+        "{}",
+        victim.display()
+    );
+    assert_eq!(
+        std::fs::metadata(victim).unwrap().modified().unwrap(),
+        mtime,
+        "{}",
+        victim.display()
+    );
+}
+
+/// MIT's dump opens its `.dump_ok` mark `O_CREAT | O_TRUNC`, emptying a symlink's target; this
+/// dump refuses the link before it writes anything.
+#[test]
+fn dump_refuses_a_symlink_planted_as_its_mark() {
+    let realm = Realm::new("kdb5-util-link-mark");
+    realm.create();
+    let dump = realm.dir.join("realm.dump");
+    let mark = realm.dir.join("realm.dump.dump_ok");
+    let (victim, bytes, mtime) = plant_link(&mark);
+    let out = realm.run(&["dump", dump.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{}", err(&out));
+    assert!(
+        err(&out).contains("Too many levels of symbolic links while creating 'ok' file"),
+        "{}",
+        err(&out)
+    );
+    assert_untouched(&mark, &victim, &bytes, mtime);
+    assert!(!dump.exists());
+}
+
+/// MIT's destroy zeroes the database file through a symlink (here to a copy of the realm's
+/// database, which opens); this destroy refuses the link and changes nothing.
+#[test]
+fn destroy_refuses_a_symlink_planted_as_the_database() {
+    let realm = Realm::new("kdb5-util-link-destroy");
+    realm.create();
+    let victim = realm.dir.join("principal.saved");
+    std::fs::rename(&realm.db, &victim).unwrap();
+    let (bytes, mtime) = plant_link_to(&realm.db, &victim);
+    let out = realm.run(&["destroy", "-f"]);
+    assert_eq!(out.status.code(), Some(1), "{}", err(&out));
+    assert!(
+        err(&out).contains("principal: Too many levels of symbolic links"),
+        "{}",
+        err(&out)
+    );
+    assert_untouched(&realm.db, &victim, &bytes, mtime);
+    for lock in [realm.ok(), realm.pol()] {
+        assert!(lock.exists(), "{}: nothing destroyed", lock.display());
+    }
+}
+
 fn ino(p: &Path) -> u64 {
     std::fs::metadata(p).unwrap().ino()
 }

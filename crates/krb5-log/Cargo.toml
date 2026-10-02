@@ -11,6 +11,7 @@ publish.workspace = true
 [dependencies]
 chrono.workspace = true
 getrandom.workspace = true
+nix = { workspace = true, features = ["fs"] }
 
 [dev-dependencies]
 krb5-testkit.workspace = true

@@ -761,9 +761,13 @@ fn destroy_temporary(tmp: &Path) {
 /// unlinked or left as it is without an error.
 /// MIT `destroy_file` (`plugins/kdb/db2/kdb_db2.c:626-676`): the file is overwritten with zeros, synced and unlinked.
 fn destroy_file(path: &Path) {
+    use std::os::unix::fs::OpenOptionsExt as _;
     if let Ok(meta) = fs::symlink_metadata(path)
         && meta.is_file()
-        && let Ok(mut f) = fs::OpenOptions::new().write(true).open(path)
+        && let Ok(mut f) = fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(nix::libc::O_NOFOLLOW | nix::libc::O_NONBLOCK)
+            .open(path)
     {
         let zeros = vec![0u8; usize::try_from(meta.len()).unwrap_or(0)];
         let _ = std::io::Write::write_all(&mut f, &zeros);

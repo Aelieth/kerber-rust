@@ -22,6 +22,8 @@ use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
+use nix::fcntl::OFlag;
+
 /// A syslog severity: the level of one log line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
@@ -336,18 +338,33 @@ impl Logger {
         for dest in &mut self.dests {
             if let Dest::File { path, file } = dest {
                 *file = None;
-                match OpenOptions::new()
-                    .read(true)
-                    .append(true)
-                    .create(true)
-                    .open(&*path)
-                {
+                match open_log_file(
+                    path,
+                    OpenOptions::new().read(true).append(true).create(true),
+                ) {
                     Ok(f) => *file = Some(f),
                     Err(e) => eprintln!("Couldn't open log file {path}: {}", os_error_text(&e)),
                 }
             }
         }
     }
+}
+
+/// Open the `FILE` destination at `path` as `opts` asks, never through a symlink
+/// (`O_NOFOLLOW`) and only as a regular file (`O_NONBLOCK`, so a FIFO is not waited on): a link
+/// planted in a log directory a non-root user owns would have root write a file of that user's
+/// choosing, which MIT's open of the name does.
+fn open_log_file(path: &str, opts: &mut OpenOptions) -> io::Result<File> {
+    let file = opts
+        .custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits())
+        .open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not a regular file",
+        ));
+    }
+    Ok(file)
 }
 
 /// Write `line` and `end` with one `write(2)`, so that daemons appending to one file never mix
@@ -375,7 +392,7 @@ fn open_spec(cp: &str, err: &mut dyn Write) -> Result<(Dest, Option<u8>), Refuse
         let path = &rest[1..];
         let mut opts = OpenOptions::new();
         opts.write(true).create(true).append(append).mode(0o640);
-        return match opts.open(path) {
+        return match open_log_file(path, &mut opts) {
             Ok(file) => Ok((
                 Dest::File {
                     path: path.to_owned(),
@@ -561,6 +578,77 @@ mod tests {
         l.write(Severity::Info, "x");
         let mode = std::fs::metadata(&fresh).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode & !0o640, 0, "{mode:o}");
+    }
+
+    /// A target with known bytes and an old modification time, and a symlink to it at `link`,
+    /// as a non-root owner of the log directory may plant one.
+    fn plant_link(s: &Scratch, link: &Path) -> (PathBuf, std::time::SystemTime) {
+        let victim = s.path("victim");
+        std::fs::write(&victim, b"not a log\n").unwrap();
+        let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+        File::options()
+            .write(true)
+            .open(&victim)
+            .unwrap()
+            .set_times(
+                std::fs::FileTimes::new()
+                    .set_modified(old)
+                    .set_accessed(old),
+            )
+            .unwrap();
+        let _ = std::fs::remove_file(link);
+        std::os::unix::fs::symlink(&victim, link).unwrap();
+        (victim, old)
+    }
+
+    fn assert_untouched(link: &Path, victim: &Path, old: std::time::SystemTime) {
+        assert!(
+            std::fs::symlink_metadata(link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read(victim).unwrap(), b"not a log\n");
+        assert_eq!(std::fs::metadata(victim).unwrap().modified().unwrap(), old);
+    }
+
+    /// MIT opens a `FILE` destination by name, so a symlink planted there has root create,
+    /// append to or overwrite its target; this open refuses the link with MIT's message.
+    #[test]
+    fn a_log_file_is_never_opened_through_a_symlink() {
+        let s = Scratch::new("link");
+        let link = s.path("kdc.log");
+        for spec in ["FILE:", "FILE="] {
+            let (victim, old) = plant_link(&s, &link);
+            let (mut l, err) = open(&[&format!("{spec}{}", link.display())], &s.path("nosock"));
+            assert_eq!(
+                err,
+                format!(
+                    "Couldn't open log file {}: Too many levels of symbolic links\n",
+                    link.display()
+                ),
+                "{spec}"
+            );
+            l.write(Severity::Info, "commencing operation");
+            assert_untouched(&link, &victim, old);
+        }
+    }
+
+    /// A log file swapped for a symlink before a reopen (logrotate's) is not reopened through it.
+    #[test]
+    fn a_reopen_never_follows_a_symlink() {
+        let s = Scratch::new("relink");
+        let path = s.path("kdc.log");
+        let (mut l, err) = open(&[&format!("FILE:{}", path.display())], &s.path("nosock"));
+        assert_eq!(err, "");
+        let (victim, old) = plant_link(&s, &path);
+        l.reopen();
+        assert!(
+            matches!(l.dests.first(), Some(Dest::File { file: None, .. })),
+            "the destination is not reopened"
+        );
+        l.write(Severity::Info, "after the reopen");
+        assert_untouched(&path, &victim, old);
     }
 
     #[test]
