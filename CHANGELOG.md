@@ -739,6 +739,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** `krb5-kpasswd` is MIT's `kpasswd [principal]` (argument, ccache, login name): it
+  prompts for the old password and the new one twice, finds its server as `locate_kpasswd`
+  does (`kpasswd_server`, else `admin_server` on 464), prints `Password changed.`. Unit; live.
 - **kdc.** `krb5-kdc` takes MIT's options, detaches unless `-n`, writes a `-P` pid file
   and reopens its log on SIGHUP.
 - **admin.** `krb5-kadmind` likewise, with `-nofork`; it now ends on SIGTERM.

@@ -46,7 +46,7 @@ docker exec "$NAME" chmod +x /tmp/krb5-kpasswd /tmp/krb5-kinit
 
 echo "==== Rust kpasswd vs MIT kadmind ===="
 docker exec -e KRB5_PASSWORD=userpassword -e KRB5_NEW_PASSWORD=mit-rust-pw \
-    "$NAME" /tmp/krb5-kpasswd 127.0.0.1 user@KERBER.TEST
+    "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST
 docker exec "$NAME" sh -c 'printf "mit-rust-pw\n" | kinit user@KERBER.TEST'
 KLIST="$(docker exec "$NAME" klist)"
 echo "$KLIST"

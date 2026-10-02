@@ -173,7 +173,7 @@ echo "$KLIST2" | grep -q 'user@KERBER.TEST'
 
 echo "==== Rust kpasswd vs Rust kadmind ===="
 docker exec -e KRB5_PASSWORD=kpasswd-two -e KRB5_NEW_PASSWORD=rust-kpw \
-    "$NAME" /tmp/krb5-kpasswd 127.0.0.1 user@KERBER.TEST
+    "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
 KLIST3="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" klist)"
