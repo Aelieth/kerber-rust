@@ -139,6 +139,8 @@ EOF
 cat >/tmp/kdc-rust-referral.conf <<EOF
 [kdcdefaults]
     host_based_services = *
+[logging]
+    json = STDOUT
 EOF
 cat >/tmp/client-garbage.conf <<EOF
 [libdefaults]

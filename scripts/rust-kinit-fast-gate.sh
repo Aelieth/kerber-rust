@@ -180,6 +180,8 @@ Path("/tmp/rust-kdc.conf").write_text("""[libdefaults]
     KERBER.TEST = {
         encrypted_challenge_indicator = encrypted_challenge
     }
+[logging]
+    json = STDOUT
 """)
 '
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth user'

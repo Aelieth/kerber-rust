@@ -25,7 +25,10 @@ The gates read the stream from the daemons' standard output:
 `json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
 the stock kdc.conf and krb5.conf of each container they start before
 any copy of them is kept, and `harness/prod/env-up.sh` and
-`scripts/prod-gate.sh` do the same for their KDCs.
+`scripts/prod-gate.sh` do the same for their KDCs. A profile a gate
+writes for our KDC alone, whose log it reads for a status word,
+carries the relation itself: a daemon whose kdc.conf and krb5.conf are
+both the gate's own reads neither stock file.
 
 ## Fields
 

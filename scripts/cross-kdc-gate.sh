@@ -408,6 +408,8 @@ Path("/tmp/rust-kdc.conf").write_text("""[realms]
     KERBER.TEST = {
         spake_preauth_indicator = spake
     }
+[logging]
+    json = STDOUT
 """)
 '
 docker exec "$NAME" sh -c 'kill $(pidof krb5kdc) 2>/dev/null || true'
