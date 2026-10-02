@@ -29,18 +29,32 @@ pub struct LongOpt {
 ///
 /// # Errors
 ///
-/// An error message when an option is not in `optstring` or `longs`, an option that takes an
-/// argument has none, or a long option that takes none is given one (`--name=value`).
+/// The first of [`getopt_each`]'s complaints: an option not in `optstring` or `longs`, an option
+/// that takes an argument with none, or a long option that takes none given one
+/// (`--name=value`).
 pub fn getopt(
     args: &[String],
     optstring: &str,
     longs: &[LongOpt],
 ) -> Result<(Vec<Opt>, Vec<String>), String> {
+    let (each, rest) = getopt_each(args, optstring, longs);
+    let opts = each.into_iter().collect::<Result<Vec<_>, _>>()?;
+    Ok((opts, rest))
+}
+
+/// [`getopt`] that goes on past a bad option, as glibc's does: each option or glibc's complaint
+/// about it (`Err`), in argv order, and the operands.
+#[must_use]
+pub fn getopt_each(
+    args: &[String],
+    optstring: &str,
+    longs: &[LongOpt],
+) -> (Vec<Result<Opt, String>>, Vec<String>) {
     let (stop_at_operand, optstring) = match optstring.strip_prefix('+') {
         Some(rest) => (true, rest),
         None => (false, optstring),
     };
-    let mut opts = Vec::new();
+    let mut each = Vec::new();
     let mut rest = Vec::new();
     let mut i = 0;
     while i < args.len() {
@@ -49,73 +63,81 @@ pub fn getopt(
             rest.extend(args[i + 1..].iter().cloned());
             break;
         }
-        if let Some(name) = a.strip_prefix("--") {
-            let (name, inline) = match name.split_once('=') {
+        if let Some(whole) = a.strip_prefix("--") {
+            let (name, inline) = match whole.split_once('=') {
                 Some((n, v)) => (n, Some(v.to_owned())),
-                None => (name, None),
+                None => (whole, None),
             };
-            let spec = longs
-                .iter()
-                .find(|l| l.name == name)
-                .ok_or_else(|| format!("unrecognized option '--{name}'"))?;
-            let arg = if spec.takes_arg {
-                if let Some(v) = inline {
-                    Some(v)
-                } else {
+            i += 1;
+            let spec = match long_named(longs, name) {
+                Ok(spec) => spec,
+                Err(None) => {
+                    each.push(Err(format!("unrecognized option '--{whole}'")));
+                    continue;
+                }
+                Err(Some(names)) => {
+                    each.push(Err(format!(
+                        "option '--{whole}' is ambiguous; possibilities:{names}"
+                    )));
+                    continue;
+                }
+            };
+            let arg = match (spec.takes_arg, inline) {
+                (true, Some(v)) => Some(v),
+                (true, None) => {
+                    let Some(v) = args.get(i) else {
+                        each.push(Err(format!("option '--{name}' requires an argument")));
+                        break;
+                    };
                     i += 1;
-                    Some(
-                        args.get(i)
-                            .cloned()
-                            .ok_or_else(|| format!("option '{name}' requires an argument"))?,
-                    )
+                    Some(v.clone())
                 }
-            } else {
-                if inline.is_some() {
-                    return Err(format!("option '--{name}' doesn't allow an argument"));
+                (false, Some(_)) => {
+                    each.push(Err(format!("option '--{name}' doesn't allow an argument")));
+                    continue;
                 }
-                None
+                (false, None) => None,
             };
-            opts.push(Opt {
+            each.push(Ok(Opt {
                 flag: spec.short.unwrap_or('\0'),
                 long: Some(spec.name),
                 arg,
-            });
-            i += 1;
+            }));
             continue;
         }
         if a.starts_with('-') && a.len() > 1 {
             let chars: Vec<char> = a[1..].chars().collect();
+            i += 1;
             let mut ci = 0;
             while ci < chars.len() {
                 let c = chars[ci];
-                let wants = opt_wants_arg(optstring, c)?;
-                let arg = if wants {
-                    let inline: String = chars[ci + 1..].iter().collect();
-                    if inline.is_empty() {
-                        i += 1;
-                        Some(
-                            args.get(i)
-                                .cloned()
-                                .ok_or_else(|| format!("option requires an argument -- '{c}'"))?,
-                        )
-                    } else {
-                        ci = chars.len();
-                        Some(inline)
+                ci += 1;
+                let wants = match opt_wants_arg(optstring, c) {
+                    Ok(w) => w,
+                    Err(e) => {
+                        each.push(Err(e));
+                        continue;
                     }
-                } else {
-                    None
                 };
-                opts.push(Opt {
+                let arg = if !wants {
+                    None
+                } else if ci < chars.len() {
+                    let inline: String = chars[ci..].iter().collect();
+                    ci = chars.len();
+                    Some(inline)
+                } else if let Some(v) = args.get(i) {
+                    i += 1;
+                    Some(v.clone())
+                } else {
+                    each.push(Err(format!("option requires an argument -- '{c}'")));
+                    break;
+                };
+                each.push(Ok(Opt {
                     flag: c,
                     long: None,
                     arg,
-                });
-                if wants {
-                    break;
-                }
-                ci += 1;
+                }));
             }
-            i += 1;
             continue;
         }
         if stop_at_operand {
@@ -125,7 +147,37 @@ pub fn getopt(
         rest.push(a.clone());
         i += 1;
     }
-    Ok((opts, rest))
+    (each, rest)
+}
+
+/// The long option `name` names: its exact match, else the one option it is a prefix of. `Err`
+/// carries, for a prefix of several, the possibilities as glibc lists them (` '--a' '--b'`).
+/// As glibc's `getopt_long`: an exact name wins, a prefix of one option is that option, and a
+/// prefix of options that differ is ambiguous (live MIT 1.22.2 `kvno --cached`, `--no-st`).
+fn long_named<'a>(longs: &'a [LongOpt], name: &str) -> Result<&'a LongOpt, Option<String>> {
+    if let Some(exact) = longs.iter().find(|l| l.name == name) {
+        return Ok(exact);
+    }
+    let found: Vec<&LongOpt> = longs
+        .iter()
+        .filter(|l| !name.is_empty() && l.name.starts_with(name))
+        .collect();
+    match found.as_slice() {
+        [] => Err(None),
+        [first, rest @ ..]
+            if rest.iter().all(|l| {
+                l.takes_arg == first.takes_arg && l.short.is_some() && l.short == first.short
+            }) =>
+        {
+            Ok(first)
+        }
+        all => Err(Some(all.iter().fold(String::new(), |mut names, l| {
+            names.push_str(" '--");
+            names.push_str(l.name);
+            names.push('\'');
+            names
+        }))),
+    }
 }
 
 fn opt_wants_arg(optstring: &str, c: char) -> Result<bool, String> {
@@ -244,5 +296,66 @@ mod tests {
             getopt(&s(&["--spake=1"]), "", &longs).unwrap_err(),
             "option '--spake' doesn't allow an argument"
         );
+        assert_eq!(
+            getopt(&s(&["--armor-ccache"]), "T:", &longs).unwrap_err(),
+            "option '--armor-ccache' requires an argument"
+        );
+        assert_eq!(
+            getopt(&s(&["--nope=1"]), "", &longs).unwrap_err(),
+            "unrecognized option '--nope=1'"
+        );
+    }
+
+    #[test]
+    fn long_names_take_a_unique_prefix() {
+        let longs = [
+            LongOpt {
+                name: "cached-only",
+                takes_arg: false,
+                short: None,
+            },
+            LongOpt {
+                name: "renew",
+                takes_arg: false,
+                short: None,
+            },
+            LongOpt {
+                name: "renew-ticket",
+                takes_arg: false,
+                short: None,
+            },
+        ];
+        let (opts, _) = getopt(&s(&["--cached", "--renew"]), "", &longs).unwrap();
+        assert_eq!(opts[0].long, Some("cached-only"));
+        assert_eq!(opts[1].long, Some("renew"));
+        assert_eq!(
+            getopt(&s(&["--ren"]), "", &longs).unwrap_err(),
+            "option '--ren' is ambiguous; possibilities: '--renew' '--renew-ticket'"
+        );
+    }
+
+    /// glibc's `getopt` reports a bad option and goes on with the rest of argv (live MIT 1.22.2
+    /// `kinit --pkinit /x alice`: the complaint, then `Extra arguments (starting with "alice").`).
+    #[test]
+    fn each_goes_on_past_a_bad_option() {
+        let (each, rest) = getopt_each(&s(&["-Zn", "--x", "a", "-r", "R", "b"]), KRB5KDC, &[]);
+        assert_eq!(
+            each,
+            [
+                Err("invalid option -- 'Z'".to_owned()),
+                Ok(Opt {
+                    flag: 'n',
+                    long: None,
+                    arg: None
+                }),
+                Err("unrecognized option '--x'".to_owned()),
+                Ok(Opt {
+                    flag: 'r',
+                    long: None,
+                    arg: Some("R".to_owned())
+                }),
+            ]
+        );
+        assert_eq!(rest, ["a", "b"]);
     }
 }

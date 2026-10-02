@@ -770,14 +770,16 @@ fn kinit_inner(
     };
     let id_path = params.pkinit_identity.map(Path::to_path_buf).or(conf_id);
     let an_path = params.pkinit_anchors.map(Path::to_path_buf).or(conf_an);
+    // Live MIT 1.22.2 `kinit -X X509_anchors=… alice`: anchors
+    // without an identity leave the password AS as it was.
     let pkinit = match (id_path.as_deref(), an_path.as_deref(), params.anonymous) {
         (Some(i), Some(a), _) => Some(load_pkinit(i, a)?),
         (None, Some(a), true) => Some(load_pkinit_anchors(a)?),
-        (Some(_), None, _) | (None, Some(_), false) => {
+        (Some(_), None, _) => {
             return Err("pkinit requires identity and anchors".into());
         }
         (None, None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
-        (None, None, false) => None,
+        (None, _, false) => None,
     };
     let mut etypes = krb5_protocol::conf_etypes(false);
     let mut ticket = params.ticket;

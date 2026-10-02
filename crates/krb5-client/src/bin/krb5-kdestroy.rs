@@ -7,7 +7,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use krb5_client::ccol::{cache_match, collection, resolve};
-use krb5_client::cli::{UsageError, getopt, progname};
+use krb5_client::cli::{UsageError, UsageLine, getopt_each, own, progname};
 use krb5_client::creds::parse_name;
 use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_config::{CcSpec, parse_ccspec, resolve_ccspec};
@@ -69,22 +69,29 @@ fn usage(prog: &str) -> String {
 /// MIT `main` (`kdestroy.c:100-146`): the options `54Aqc:p:`, `-c` and `-p` once each, `-A`
 /// without `-p`, and no other argument.
 fn parse(args: &[String]) -> Result<Args, Parsed> {
-    let (opts, rest) =
-        getopt(args, "54Aqc:p:", &[]).map_err(|e| Parsed::Usage(UsageError::Getopt(e)))?;
+    let (each, rest) = getopt_each(args, "54Aqc:p:", &[]);
     let mut out = Args::default();
     let mut lines = Vec::new();
     let mut errflg = false;
-    for o in opts {
+    for o in each {
+        let o = match o {
+            Ok(o) => o,
+            Err(e) => {
+                lines.push(UsageLine::Getopt(e));
+                errflg = true;
+                continue;
+            }
+        };
         match o.flag {
             'A' => out.all = true,
             'q' => out.quiet = true,
             'c' if out.cache.is_some() => {
-                lines.push("Only one -c option allowed".to_owned());
+                lines.push(own("Only one -c option allowed"));
                 errflg = true;
             }
             'c' => out.cache = o.arg,
             'p' if out.princ.is_some() => {
-                lines.push("Only one -p option allowed".to_owned());
+                lines.push(own("Only one -p option allowed"));
                 errflg = true;
             }
             'p' => out.princ = o.arg,
@@ -93,14 +100,14 @@ fn parse(args: &[String]) -> Result<Args, Parsed> {
         }
     }
     if out.all && out.princ.is_some() {
-        lines.push("-A option is exclusive with -p option".to_owned());
+        lines.push(own("-A option is exclusive with -p option"));
         errflg = true;
     }
     if !rest.is_empty() {
         errflg = true;
     }
     if errflg {
-        return Err(Parsed::Usage(UsageError::Lines(lines)));
+        return Err(Parsed::Usage(UsageError::Each(lines)));
     }
     Ok(out)
 }
@@ -227,22 +234,27 @@ mod tests {
                 princ: None,
             }
         );
+        let lines = |v: &[&str]| match parse(&s(v)) {
+            Err(Parsed::Usage(u)) => u.lines("kdestroy"),
+            other => panic!("{other:?}"),
+        };
         assert_eq!(
-            parse(&s(&["-A", "-p", "alice"])),
-            Err(Parsed::Usage(UsageError::Lines(vec![
-                "-A option is exclusive with -p option".into()
-            ])))
+            lines(&["-A", "-p", "alice"]),
+            ["-A option is exclusive with -p option"]
         );
         assert_eq!(
-            parse(&s(&["-c", "a", "-c", "b"])),
-            Err(Parsed::Usage(UsageError::Lines(vec![
-                "Only one -c option allowed".into()
-            ])))
+            lines(&["-c", "a", "-c", "b"]),
+            ["Only one -c option allowed"]
         );
         assert_eq!(parse(&s(&["-4"])), Err(Parsed::Krb4));
+        assert_eq!(lines(&["extra"]), Vec::<String>::new());
+        // glibc's getopt goes on past a bad option, as MIT's `kdestroy` loop does.
         assert_eq!(
-            parse(&s(&["extra"])),
-            Err(Parsed::Usage(UsageError::Lines(Vec::new())))
+            lines(&["-Z", "-c"]),
+            [
+                "kdestroy: invalid option -- 'Z'",
+                "kdestroy: option requires an argument -- 'c'"
+            ]
         );
         assert!(usage("kdestroy").starts_with("Usage: kdestroy [-A] [-q] [-c cache_name]"));
     }

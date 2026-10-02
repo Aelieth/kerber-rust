@@ -7,7 +7,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use krb5_client::ccol::{Cache, cache_match, resolve};
-use krb5_client::cli::{UsageError, getopt, progname};
+use krb5_client::cli::{UsageError, UsageLine, getopt_each, own, progname};
 use krb5_client::creds::parse_name;
 use krb5_client::errmsg::Krb5Error;
 use krb5_config::{parse_ccspec, resolve_ccspec};
@@ -50,14 +50,22 @@ fn usage(prog: &str) -> String {
 
 /// MIT `main` (`kswitch.c:61-90`): one of `-c` or `-p`, once, and nothing else.
 fn parse(args: &[String]) -> Result<Which, UsageError> {
-    let (opts, rest) = getopt(args, "c:p:", &[]).map_err(UsageError::Getopt)?;
+    let (each, rest) = getopt_each(args, "c:p:", &[]);
     let mut lines = Vec::new();
     let mut which = None;
     let mut errflag = false;
-    for o in opts {
+    for o in each {
+        let o = match o {
+            Ok(o) => o,
+            Err(e) => {
+                lines.push(UsageLine::Getopt(e));
+                errflag = true;
+                continue;
+            }
+        };
         let arg = o.arg.unwrap_or_default();
         if which.is_some() {
-            lines.push("Only one -c or -p option allowed".to_owned());
+            lines.push(own("Only one -c or -p option allowed"));
             errflag = true;
         } else if o.flag == 'c' {
             which = Some(Which::Cache(arg));
@@ -69,12 +77,12 @@ fn parse(args: &[String]) -> Result<Which, UsageError> {
         errflag = true;
     }
     if which.is_none() {
-        lines.push("One of -c or -p must be specified".to_owned());
+        lines.push(own("One of -c or -p must be specified"));
         errflag = true;
     }
     match which {
         Some(w) if !errflag => Ok(w),
-        _ => Err(UsageError::Lines(lines)),
+        _ => Err(UsageError::Each(lines)),
     }
 }
 
@@ -109,9 +117,17 @@ mod tests {
         v.iter().map(|x| (*x).to_owned()).collect()
     }
 
-    /// Live MIT 1.22.2 `kswitch`: its refusals, then the usage text.
+    /// Live MIT 1.22.2 `kswitch`: its refusals, then the
+    /// usage text; a bad option does not end the parse.
     #[test]
     fn kswitch_refuses_as_mit() {
+        assert_eq!(
+            parse(&s(&["-Z"])).unwrap_err().lines("kswitch"),
+            [
+                "kswitch: invalid option -- 'Z'",
+                "One of -c or -p must be specified"
+            ]
+        );
         assert_eq!(
             parse(&s(&[])).unwrap_err().lines("kswitch"),
             ["One of -c or -p must be specified"]
@@ -123,7 +139,9 @@ mod tests {
             ["Only one -c or -p option allowed"]
         );
         assert_eq!(
-            parse(&s(&["-x"])).unwrap_err().lines("kswitch"),
+            parse(&s(&["-x", "-p", "alice"]))
+                .unwrap_err()
+                .lines("kswitch"),
             ["kswitch: invalid option -- 'x'"]
         );
         assert_eq!(

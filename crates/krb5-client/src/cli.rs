@@ -1,6 +1,6 @@
 //! getopt-compatible CLI parsing for kinit/klist/kvno/kdestroy.
 
-pub use krb5_cli::{LongOpt, Opt, getopt};
+pub use krb5_cli::{LongOpt, Opt, getopt, getopt_each};
 use krb5_protocol::{CcacheCred, FileCcache};
 
 /// What `kinit` does.
@@ -201,13 +201,19 @@ fn kinit_longs() -> Vec<LongOpt> {
 /// [`KinitParseError::Krb4`] for `-4`; [`KinitParseError::Usage`] with MIT's lines for every
 /// refusal above.
 pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
-    let (opts, rest) = getopt(args, KINIT_OPTSTRING, &kinit_longs())
-        .map_err(|e| KinitParseError::Usage(UsageError::Getopt(e)))?;
+    let (each, rest) = getopt_each(args, KINIT_OPTSTRING, &kinit_longs());
     let mut out = KinitArgs::default();
     let mut lines = Vec::new();
     let mut not = (false, false, false);
     let mut yes = (false, false, false);
-    for o in opts {
+    for o in each {
+        let o = match o {
+            Ok(o) => o,
+            Err(e) => {
+                lines.push(UsageLine::Getopt(e));
+                continue;
+            }
+        };
         let arg = o.arg.clone().unwrap_or_default();
         #[cfg(feature = "test-hooks")]
         if gate_long(&mut out, &o) {
@@ -217,11 +223,11 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
             'V' => out.verbose = true,
             'l' => match krb5_config::parse_deltat(&arg).filter(|&s| s != 0) {
                 Some(s) => out.lifetime = Some(s),
-                None => lines.push(format!("Bad lifetime value {arg}")),
+                None => lines.push(own(format!("Bad lifetime value {arg}"))),
             },
             'r' => match krb5_config::parse_deltat(&arg).filter(|&s| s != 0) {
                 Some(s) => out.rlife = Some(s),
-                None => lines.push(format!("Bad lifetime value {arg}")),
+                None => lines.push(own(format!("Bad lifetime value {arg}"))),
             },
             'f' => yes.0 = true,
             'F' => not.0 = true,
@@ -232,18 +238,18 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
             'A' => not.2 = true,
             's' => match krb5_config::parse_deltat(&arg).filter(|&s| s != 0) {
                 Some(s) => out.starttime = Some(s),
-                None => lines.push(format!("Bad start time value {arg}")),
+                None => lines.push(own(format!("Bad start time value {arg}"))),
             },
             'S' => out.service = Some(arg),
             'k' => out.action = KinitAction::InitKt,
             'i' => out.client_keytab = true,
-            't' if out.keytab_path.is_some() => lines.push("Only one -t option allowed.".into()),
+            't' if out.keytab_path.is_some() => lines.push(own("Only one -t option allowed.")),
             't' => out.keytab_path = Some(arg),
-            'T' if out.armor_ccache.is_some() => lines.push("Only one armor_ccache".into()),
+            'T' if out.armor_ccache.is_some() => lines.push(own("Only one armor_ccache")),
             'T' => out.armor_ccache = Some(arg),
             'R' => out.action = KinitAction::Renew,
             'v' => out.action = KinitAction::Validate,
-            'c' if out.ccache.is_some() => lines.push("Only one -c option allowed".into()),
+            'c' if out.ccache.is_some() => lines.push(own("Only one -c option allowed")),
             'c' => out.ccache = Some(arg),
             'X' => {
                 apply_x_attr(&mut out, &arg);
@@ -256,19 +262,19 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
         }
     }
     if yes.0 && not.0 {
-        lines.push("Only one of -f and -F allowed".into());
+        lines.push(own("Only one of -f and -F allowed"));
     }
     if yes.1 && not.1 {
-        lines.push("Only one of -p and -P allowed".into());
+        lines.push(own("Only one of -p and -P allowed"));
     }
     if yes.2 && not.2 {
-        lines.push("Only one of -a and -A allowed".into());
+        lines.push(own("Only one of -a and -A allowed"));
     }
     out.forwardable = (yes.0 || not.0).then_some(yes.0);
     out.proxiable = (yes.1 || not.1).then_some(yes.1);
     out.addresses = (yes.2 || not.2).then_some(yes.2);
     if out.keytab_path.is_some() && out.client_keytab {
-        lines.push("Only one of -t and -i allowed".into());
+        lines.push(own("Only one of -t and -i allowed"));
     }
     if (out.keytab_path.is_some() || out.client_keytab) && out.action != KinitAction::InitKt {
         out.action = KinitAction::InitKt;
@@ -276,10 +282,10 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
     }
     let rest = kinit_positionals(&mut out, rest);
     if let Some(extra) = rest.get(1) {
-        lines.push(format!("Extra arguments (starting with \"{extra}\")."));
+        lines.push(own(format!("Extra arguments (starting with \"{extra}\").")));
     }
     if !lines.is_empty() {
-        return Err(KinitParseError::Usage(UsageError::Lines(lines)));
+        return Err(KinitParseError::Usage(UsageError::Each(lines)));
     }
     out.principal = rest.into_iter().next();
     out.keytab = out.action == KinitAction::InitKt;
@@ -478,6 +484,22 @@ pub enum UsageError {
     Getopt(String),
     /// The tool's own lines, each printed as is.
     Lines(Vec<String>),
+    /// glibc's complaints and the tool's own lines, in the order they are printed.
+    Each(Vec<UsageLine>),
+}
+
+/// One line printed before a usage text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UsageLine {
+    /// glibc `getopt`'s complaint, printed as `<argv0>: <text>`.
+    Getopt(String),
+    /// The tool's own line, printed as is.
+    Own(String),
+}
+
+/// The tool's own line `text`.
+pub fn own(text: impl Into<String>) -> UsageLine {
+    UsageLine::Own(text.into())
 }
 
 impl UsageError {
@@ -487,6 +509,13 @@ impl UsageError {
         match self {
             Self::Getopt(text) => vec![format!("{argv0}: {text}")],
             Self::Lines(lines) => lines.clone(),
+            Self::Each(lines) => lines
+                .iter()
+                .map(|line| match line {
+                    UsageLine::Getopt(text) => format!("{argv0}: {text}"),
+                    UsageLine::Own(text) => text.clone(),
+                })
+                .collect(),
         }
     }
 }
@@ -813,7 +842,9 @@ mod tests {
         let e = parse_kinit(&s(&["-fe"])).unwrap_err();
         assert_eq!(
             e,
-            KinitParseError::Usage(UsageError::Getopt("invalid option -- 'e'".into()))
+            KinitParseError::Usage(UsageError::Each(vec![UsageLine::Getopt(
+                "invalid option -- 'e'".into()
+            )]))
         );
     }
 
@@ -864,13 +895,23 @@ mod tests {
         for opt in ["--spake", "--fast"] {
             assert_eq!(
                 parse_kinit(&s(&[opt, "alice"])).unwrap_err(),
-                KinitParseError::Usage(UsageError::Getopt(format!("unrecognized option '{opt}'")))
+                KinitParseError::Usage(UsageError::Each(vec![UsageLine::Getopt(format!(
+                    "unrecognized option '{opt}'"
+                ))]))
             );
         }
+        // Live MIT 1.22.2 `kinit --pkinit /x alice`: the complaint,
+        // then the operands left are too many.
         for opt in ["--pkinit", "--pkinit-anchors", "--armor-ccache"] {
-            assert!(
-                parse_kinit(&s(&[opt, "FILE:/x", "alice"])).is_err(),
-                "{opt}"
+            let Err(KinitParseError::Usage(u)) = parse_kinit(&s(&[opt, "FILE:/x", "alice"])) else {
+                panic!("{opt} accepted");
+            };
+            assert_eq!(
+                u.lines("kinit"),
+                [
+                    format!("kinit: unrecognized option '{opt}'"),
+                    "Extra arguments (starting with \"alice\").".to_owned()
+                ]
             );
         }
     }
