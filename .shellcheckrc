@@ -1,4 +1,4 @@
-# shellcheck -S style over scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh,
+# shellcheck -S style over scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh,
 # run from the repo root (the CI shellcheck job, make shellcheck, the hygiene inventory).
 # Sourced files are followed, so `. "$ROOT/scripts/lib/gate-common.sh"` needs no
 # per-site directive; SCRIPTDIR/.. is the root for `$ROOT/...` paths.
