@@ -1281,6 +1281,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** A SPAKE kinit keeps the PREAUTH_REQUIRED etype-info when the challenge
+  has none, as MIT does: a client asking sha384 first of a user keyed sha1 got
+  PREAUTH_FAILED (slo/soak). Unit; live repro, stress and soak gates.
 - **kdc.** A database, `.ulog` or stash that cannot be read or written is a database error
   with the system's text, not `crypto: persist io: …`. Unit.
 - **protocol/kdc.** A rewritten database, `.ulog`, stash or keytab keeps the old file's

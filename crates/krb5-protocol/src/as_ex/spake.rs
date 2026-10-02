@@ -2,8 +2,9 @@
 //! `contains_sf_none` / the P-256 response).
 
 use super::{
-    AsOutcome, AsReqTimes, AsRequest, KdcMsg, build_as_req_from, classify, classify_kdc_error,
-    find_pa, finish_as_rep, method_from_error, pick_key, req_sname, salt_cname, select_s2k,
+    AsOutcome, AsReqTimes, AsRequest, KdcMsg, S2kMaterial, build_as_req_from, classify,
+    classify_kdc_error, find_pa, finish_as_rep, method_from_error, pick_key, req_sname, salt_cname,
+    select_s2k, select_s2k_after,
 };
 use crate::error::Error;
 use crate::preauth::{pa_spake_response, pa_spake_support};
@@ -22,8 +23,10 @@ pub(super) fn continue_spake(
 ) -> Result<AsOutcome, Error> {
     let support = pa_spake_support();
     let method = method_from_error(err)?;
+    // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:987-990`): each error's etype-info is read as it arrives; the challenge that answers a request carrying the cookie names none, so the hint's stands.
+    let hint = select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?;
     if spake_challenge(&method)?.is_some() {
-        return send_spake_response(req, keys, nonce, bound, etypes, err, &support);
+        return send_spake_response(req, keys, nonce, bound, etypes, err, &support, hint);
     }
     let mut padata = Vec::new();
     if let Some(c) = find_pa(&method, pa::FX_COOKIE) {
@@ -39,7 +42,7 @@ pub(super) fn continue_spake(
             if e.error_code == err::PREAUTH_REQUIRED
                 || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED =>
         {
-            send_spake_response(req, keys, nonce, bound, etypes, &e, &support)
+            send_spake_response(req, keys, nonce, bound, etypes, &e, &support, hint)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -48,7 +51,12 @@ pub(super) fn continue_spake(
 
 /// MIT `process_challenge` (`spake_client.c:221-222`): a challenge that does not offer SF-NONE is
 /// preauth-failed. The cookie is placed ahead of the SPAKE response so the freshness and
-/// enc-pa-rep advertisements stay on the request.
+/// enc-pa-rep advertisements stay on the request. `hint` is the string-to-key input the error
+/// that asked for preauth set; the challenge's own etype-info, when it has any, replaces it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the AS round's state, no value type"
+)]
 fn send_spake_response(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -57,6 +65,7 @@ fn send_spake_response(
     etypes: &[i32],
     err: &KrbError,
     support: &PaData,
+    hint: S2kMaterial,
 ) -> Result<AsOutcome, Error> {
     let method = method_from_error(err)?;
     let (spa, chal) = spake_challenge(&method)?
@@ -79,7 +88,8 @@ fn send_spake_response(
     let cookie = find_pa(&method, pa::FX_COOKIE)
         .cloned()
         .ok_or_else(|| Error::ReplyMismatch("SPAKE FX_COOKIE missing".into()))?;
-    let (etype, salt, params) = select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?;
+    let (etype, salt, params) =
+        select_s2k_after(err, &salt_cname(&req.cname), req.realm, etypes, hint)?;
     let ikey = pick_key(keys, Some(etype)).map_or_else(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,

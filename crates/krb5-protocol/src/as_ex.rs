@@ -1271,7 +1271,8 @@ fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, 
     })
 }
 
-type S2kMaterial = (EncryptionType, Vec<u8>, Option<Vec<u8>>);
+/// The string-to-key inputs for the password: enctype, salt and s2kparams.
+pub(super) type S2kMaterial = (EncryptionType, Vec<u8>, Option<Vec<u8>>);
 
 fn first_etype(etypes: &[i32]) -> EncryptionType {
     etypes
@@ -1280,38 +1281,89 @@ fn first_etype(etypes: &[i32]) -> EncryptionType {
         .unwrap_or(EncryptionType::Aes256CtsHmacSha196)
 }
 
+/// The string-to-key inputs after the first error that asks for preauth: what it names, else
+/// the first requested enctype and the default salt.
 fn select_s2k(
     error: &KrbError,
     cname: &PrincipalName,
     realm: &str,
     etypes: &[i32],
 ) -> Result<S2kMaterial, Error> {
-    let default_salt = cname.default_salt(realm);
-    let fallback = first_etype(etypes);
+    let start = (first_etype(etypes), cname.default_salt(realm), None);
+    select_s2k_after(error, cname, realm, etypes, start)
+}
+
+/// The string-to-key inputs after `error`: its ETYPE-INFO2, else its ETYPE-INFO (the entry for
+/// the first requested enctype it lists), else its PA-PW-SALT, else its PA-AFS3-SALT. An
+/// element that does not decode counts as absent. An error that names none, as a SPAKE
+/// challenge answering a request that carried the cookie, leaves `prev`, what an earlier error
+/// set.
+/// MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:790-854`): etype-info2, else etype-info, sets the enctype, salt and s2kparams; with neither, `get_salt`.
+/// MIT `get_salt` (`lib/krb5/krb/preauth2.c:743-786`): a pw-salt sets the salt alone, an afs3-salt the salt and AFS string-to-key, and with no salt element nothing changes.
+///
+/// # Errors
+///
+/// [`Error::ConfigEtypeNosupp`] or [`Error::ProgEtypeNosupp`] when etype-info names none of the
+/// requested enctypes; [`Error::Asn1`] when the e-data is not METHOD-DATA.
+pub(super) fn select_s2k_after(
+    error: &KrbError,
+    cname: &PrincipalName,
+    realm: &str,
+    etypes: &[i32],
+    prev: S2kMaterial,
+) -> Result<S2kMaterial, Error> {
     let Some(edata) = &error.e_data else {
-        return Ok((fallback, default_salt, None));
+        return Ok(prev);
     };
     let method: MethodData = decode(edata.as_ref())?;
-    for p in &method {
-        if p.padata_type == pa::ETYPE_INFO2 {
-            let info: EtypeInfo2 = decode(p.padata_value.as_ref())?;
-            if let Some(found) = pick_info2(&info, &default_salt, etypes) {
-                return Ok(found);
-            }
-        }
+    let default_salt = cname.default_salt(realm);
+    let picked = if let Some(p) = find_pa(&method, pa::ETYPE_INFO2) {
+        decode::<EtypeInfo2>(p.padata_value.as_ref())
+            .ok()
+            .map(|info| {
+                pick_info2(&info, &default_salt, etypes)
+                    .ok_or_else(|| no_requested_etype(info.iter().map(|e| e.etype)))
+            })
+    } else if let Some(p) = find_pa(&method, pa::ETYPE_INFO) {
+        decode::<EtypeInfo>(p.padata_value.as_ref())
+            .ok()
+            .map(|info| {
+                pick_info(&info, &default_salt, etypes)
+                    .ok_or_else(|| no_requested_etype(info.iter().map(|e| e.etype)))
+            })
+    } else {
+        None
+    };
+    if let Some(found) = picked {
+        return found;
     }
-    for p in &method {
-        if p.padata_type == pa::ETYPE_INFO {
-            let info: EtypeInfo = decode(p.padata_value.as_ref())?;
-            if let Some(found) = pick_info(&info, &default_salt, etypes) {
-                return Ok(found);
-            }
-        }
-        if p.padata_type == pa::PW_SALT {
-            return Ok((fallback, p.padata_value.as_ref().to_vec(), None));
-        }
+    let (etype, salt, params) = prev;
+    if let Some(p) = find_pa(&method, pa::PW_SALT) {
+        return Ok((etype, p.padata_value.as_ref().to_vec(), params));
     }
-    Ok((fallback, default_salt, None))
+    if let Some(p) = find_pa(&method, pa::AFS3_SALT) {
+        // An old Heimdal KDC may end the salt at '@', and an MIT KDC may add a NUL; s2kparams
+        // `\1` selects AFS string-to-key.
+        let mut afs = p.padata_value.as_ref().to_vec();
+        if let Some(at) = afs.iter().position(|&b| b == b'@') {
+            afs.truncate(at);
+        }
+        if afs.last() == Some(&0) {
+            afs.pop();
+        }
+        return Ok((etype, afs, Some(vec![1])));
+    }
+    Ok((etype, salt, params))
+}
+
+/// Etype-info that names none of the requested enctypes: it names one this client has, or none.
+/// MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:829-832`): `KRB5_CONFIG_ETYPE_NOSUPP` when a listed enctype is valid, else `KRB5_PROG_ETYPE_NOSUPP`.
+fn no_requested_etype(listed: impl IntoIterator<Item = i32>) -> Error {
+    if listed.into_iter().any(|n| EncryptionType::known(n).is_ok()) {
+        Error::ConfigEtypeNosupp
+    } else {
+        Error::ProgEtypeNosupp
+    }
 }
 
 fn pick_info2(info: &EtypeInfo2, default_salt: &[u8], etypes: &[i32]) -> Option<S2kMaterial> {
@@ -1395,3 +1447,6 @@ mod spake_factor_tests;
 
 #[cfg(test)]
 mod as_kdc_options_tests;
+
+#[cfg(test)]
+mod etype_info_tests;

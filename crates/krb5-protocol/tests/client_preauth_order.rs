@@ -347,3 +347,63 @@ fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
         "cookie precedes PA-SPAKE like k5_preauth copy_cookie; sent {last:?}"
     );
 }
+
+/// The SPAKE challenge that answers a request carrying the cookie names no etype-info, so the
+/// key comes from the PREAUTH_REQUIRED hint: here aes256-cts-hmac-sha1-96, the only key type
+/// the user has, though the request asks for aes256-cts-hmac-sha384-192 first (the harness
+/// image's krb5.conf order). Taking the first requested type there instead made every SPAKE
+/// response PREAUTH_FAILED (slo/soak, CI run 751).
+/// MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:790-854`): an error without etype-info leaves the enctype and salt an earlier error set.
+#[test]
+fn spake_keeps_the_hints_etype_info_when_the_challenge_has_none() {
+    isolate_host_krb5();
+    let kdc = krb5_config::KdcConf::parse(
+        "[realms]\n    KERBER.TEST = {\n        supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal\n    }\n",
+    )
+    .unwrap();
+    let store = krb5_kdc::PrincipalStore::bootstrap_with_kdc_conf(
+        TEST_REALM,
+        TEST_USER,
+        TEST_USER_PASSWORD,
+        "admin",
+        b"adminpassword",
+        Some(&kdc),
+    )
+    .unwrap();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok((n, src)) = udp.recv_from(&mut buf) {
+            if let Ok(reply) = krb5_kdc::handle_request(&store, &buf[..n]) {
+                let _ = udp.send_to(&reply, src);
+            }
+        }
+    });
+    let sha384_first = [20, 19, 18, 17];
+    for want_spake in [false, true] {
+        let out = as_exchange(&AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+            realm: TEST_REALM,
+            password: TEST_USER_PASSWORD,
+            kdc: &KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: Some(&sha384_first),
+            ticket: AsTicketOpts::default(),
+        })
+        .unwrap_or_else(|e| panic!("want_spake={want_spake}: {e}"));
+        assert_eq!(out.pa_type, Some(pa::SPAKE), "want_spake={want_spake}");
+        assert_eq!(
+            out.client_key.etype().to_iana(),
+            18,
+            "want_spake={want_spake}"
+        );
+    }
+}
