@@ -52,6 +52,17 @@ prod_loadgen() {
         "$CLIENT" /usr/local/bin/loadgen "$kdc_ip" "user@$REALM" "$HOST_SMOKE" "$@"
 }
 
+# prod_loadgen_failed LOG WHY: print loadgen's log, keep the primary KDC's log as
+# $OUT/kdc-at-failure.log and print its last non-ok lines, then die WHY.
+prod_loadgen_failed() {
+    echo "==== loadgen log ($1) ===="
+    sed 's/^/    /' "$1" 2>/dev/null || true
+    docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc-at-failure.log" >/dev/null 2>&1 || true
+    echo "==== primary KDC log, last non-ok lines ($OUT/kdc-at-failure.log) ===="
+    grep -v '"outcome":"ok"' "$OUT/kdc-at-failure.log" 2>/dev/null | tail -40 | sed 's/^/    /' || true
+    die "$2"
+}
+
 prod_mit_sample() {
     local tag="$1"
     prod_client kdestroy -A >/dev/null 2>&1 || true

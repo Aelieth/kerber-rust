@@ -68,14 +68,15 @@ while kill -0 "$LG_PID" 2>/dev/null; do
     fi
     sleep 5
 done
-wait "$LG_PID" || die "loadgen failed during soak"
+wait "$LG_PID" || prod_loadgen_failed "$OUT/loadgen.log" "loadgen failed during soak"
 [ "$SAMPLED" = 1 ] || die "MIT mid-soak sample did not run"
 ELAPSED=$(( $(date +%s) - START ))
 [ "$ELAPSED" -lt 1 ] && ELAPSED=1
 
 prod_mit_sample soak-end || die "MIT kinit/kvno failed after soak"
 grep -q '"event":"loadgen"' "$OUT/loadgen.log" || die "loadgen missing JSON summary"
-grep -q '"err":0' "$OUT/loadgen.log" || die "loadgen reported errors during soak"
+grep -q '"err":0' "$OUT/loadgen.log" \
+    || prod_loadgen_failed "$OUT/loadgen.log" "loadgen reported errors during soak"
 
 if [ "$CAP" = 1 ]; then
     docker exec "$CLIENT" sh -c 'kill -INT "$(cat /tmp/tcpdump.pid 2>/dev/null)" 2>/dev/null; sleep 0.3 # proto: pcap flush' || true

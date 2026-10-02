@@ -180,11 +180,13 @@ if docker exec "$PRIMARY" sh -c 'command -v tcpdump >/dev/null'; then
 fi
 
 docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" kdestroy -A >/dev/null 2>&1 || true
+# The smoke's client output, on this host in env-up's scratch dir (gate-common SCRATCH).
+SMOKE_LOG="$SCRATCH/prod-smoke.log"
 smoke_rc=0
 docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" \
-    sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" >/tmp/prod-smoke.log 2>&1 || smoke_rc=1
+    sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" >"$SMOKE_LOG" 2>&1 || smoke_rc=1
 docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" \
-    kvno "host/testhost.${DNS_DOMAIN}@$REALM" >>/tmp/prod-smoke.log 2>&1 || smoke_rc=1
+    kvno "host/testhost.${DNS_DOMAIN}@$REALM" >>"$SMOKE_LOG" 2>&1 || smoke_rc=1
 KL="$(docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" klist 2>&1)"
 while IFS= read -r line; do printf '    %s\n' "$line"; done <<<"$KL"
 echo "$KL" | grep -q "krbtgt/$REALM" || smoke_rc=1
@@ -199,7 +201,7 @@ if [ "$CAP" = 1 ]; then
 fi
 
 if [ "$smoke_rc" != 0 ]; then
-    docker exec "$CLIENT" cat /tmp/prod-smoke.log 2>&1 | tail -40 | sed 's/^/    /'
+    tail -40 "$SMOKE_LOG" 2>&1 | sed 's/^/    /'
     die "smoke failed (MIT kinit/kvno against $REALM)"
 fi
 say "SMOKE OK — cross-container AS+TGS proven (MIT client -> Rust KDC over $NET)"
