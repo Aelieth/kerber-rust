@@ -42,7 +42,8 @@ krb5-gss = { path = "crates/krb5-gss" }
 krb5-admin = { path = "crates/krb5-admin" }
 krb5-testkit = { path = "crates/krb5-testkit" }
 aes = "0.8"
-# rasn's `OctetString` buffer; `try_into_mut` lets the last handle on a key wipe it in place.
+# rasn's `OctetString` buffer; `try_into_mut` lets the last handle on a key, or on a secret copy
+# made to be encoded (`safe_priv::wipe_octets`), wipe it in place.
 bytes = "1.12"
 camellia = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }

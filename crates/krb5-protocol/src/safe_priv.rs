@@ -10,6 +10,8 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use zeroize::{Zeroize, Zeroizing};
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     CipherState, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_keyed,
@@ -492,7 +494,9 @@ pub fn build_krb_priv_chained(
         s_address: local_addr(),
         r_address: None,
     };
-    let der = encode(&part)?;
+    let der = encode(&part);
+    wipe_octets(part.user_data);
+    let der = Zeroizing::new(der?);
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
     let cipher = encrypt_with_state(session, usage, state, &der)?;
     Ok(KrbPriv {
@@ -504,6 +508,14 @@ pub fn build_krb_priv_chained(
             cipher: cipher.into(),
         },
     })
+}
+
+/// Wipes an octet string's bytes when it holds the only reference to them, as a copy of a secret
+/// made only to be encoded does.
+pub(crate) fn wipe_octets(octets: OctetString) {
+    if let Ok(mut buf) = bytes::Bytes::from(octets).try_into_mut() {
+        buf[..].zeroize();
+    }
 }
 
 /// Decrypt a KRB-PRIV and return the user data.
