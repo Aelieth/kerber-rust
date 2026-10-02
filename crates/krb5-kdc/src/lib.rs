@@ -24,6 +24,7 @@ mod ad;
 mod audit;
 mod create;
 mod daemon;
+mod dblock;
 mod der;
 mod error;
 mod issue;
@@ -37,6 +38,7 @@ mod persist;
 mod plugins;
 mod preauth;
 pub mod principals;
+mod selabel;
 mod status;
 mod store;
 pub mod testrealm;
@@ -57,6 +59,9 @@ pub use create::{create_realm, kdc_conf_for_realm};
 pub use daemon::{
     OpenFailure, Signals, database_path, detach, names_relative_database, open_database,
     write_pid_file,
+};
+pub use dblock::{
+    DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, SUFFIX_LOCK, SUFFIX_POLICY_LOCK, suffixed,
 };
 pub use error::Error;
 pub(crate) use issue::kdc_error_bytes;
