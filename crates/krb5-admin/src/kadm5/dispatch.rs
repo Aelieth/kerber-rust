@@ -260,7 +260,9 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, EINVAL));
             }
             let mut ids = g.ids();
-            if glob != "*" && !glob.is_empty() {
+            // MIT `glob_to_regexp` (`lib/kadm5/srv/svr_iters.c:55-108`): an empty expression
+            // becomes `^@.*$` for principals and `^$` for policies, so it lists nothing.
+            if glob != "*" {
                 let pat = glob_expand(glob, true);
                 ids.retain(|id| glob_is_match(pat.as_bytes(), id.as_bytes()));
             }
@@ -724,7 +726,7 @@ pub(super) fn dispatch_kadm5_ticket(
             if !glob_pattern_ok(glob) {
                 return Ok(generic_ret(api, EINVAL));
             }
-            if glob != "*" && !glob.is_empty() {
+            if glob != "*" {
                 let pat = glob_expand(glob, false);
                 names.retain(|n| glob_is_match(pat.as_bytes(), n.as_bytes()));
             }

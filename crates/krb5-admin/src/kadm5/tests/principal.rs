@@ -432,3 +432,33 @@ fn modprinc_kvno_sets_every_keys_version() {
     modify(5, KADM5_KVNO);
     assert_eq!(kvnos(), [5]);
 }
+
+/// An empty list expression lists nothing, as MIT's `^@.*$` / `^$` regexps match no name, while
+/// no expression and `*` list everything.
+#[test]
+fn empty_list_expression_lists_nothing() {
+    let (store, acl, actor) = setup();
+    AdminSession::local(&mut store.write().unwrap(), &acl, actor.clone()).add_policy("pol1");
+    let count = |proc: u32, expr: Option<&str>| {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(expr);
+        let out = dispatch_kadm5(&store, &acl, &actor, proc, &w.b).unwrap();
+        let mut r = XdrR::new(&out);
+        let _ = r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), 0);
+        r.u32().unwrap()
+    };
+    for proc in [GET_PRINCS, GET_POLS] {
+        assert_eq!(count(proc, Some("")), 0, "proc {proc}");
+        assert!(count(proc, Some("*")) > 0, "proc {proc}");
+        assert_eq!(count(proc, None), count(proc, Some("*")), "proc {proc}");
+    }
+    // kadmin.local's lists go through the same MIT filter.
+    let mut g = store.write().unwrap();
+    let sess = AdminSession::local(&mut g, &acl, actor.clone());
+    assert_eq!(sess.list_ids_glob(Some("")), Vec::<String>::new());
+    assert_eq!(sess.list_policies_glob(Some("")), Vec::<String>::new());
+    assert_eq!(sess.list_ids_glob(None), sess.list_ids_glob(Some("*")));
+    assert_eq!(sess.list_policies_glob(None), ["pol1"]);
+}

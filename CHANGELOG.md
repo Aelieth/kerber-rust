@@ -1290,6 +1290,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** kadmind and `kadmin.local` list nothing for an empty list expression, as
+  MIT's. Unit.
 - **admin.** kadmind rereads a database another process changed before every call. Unit.
 - **admin.** kadmind's `modprinc -kvno` sets every key's kvno, as MIT's. Unit.
 - **admin.** A kadmind change the database refuses (`KRB5_KDB_CANTLOCK_DB`) no longer
