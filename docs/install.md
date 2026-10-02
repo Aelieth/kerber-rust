@@ -41,7 +41,18 @@ paths filled in. Fedora's third unit, `kprop.service`, is not installed (see
 
 `make install-clients` installs the client tools `kinit`, `klist`, `kdestroy`, `kswitch`,
 `kvno`, `kpasswd` and `ktutil` into `BINDIR`, for hosts without MIT's `krb5-workstation`. It is
-never part of `make install`; on Fedora keep the package's tools.
+never part of `make install`; on Fedora keep the package's tools. The tools are **not yet a
+drop-in** for MIT's:
+- `klist -k` (listing a keytab), `klist -l`, `klist -A` and `kdestroy -A` are missing.
+- On a `KCM:` collection a second principal's `kinit` replaces the first principal's cache,
+  where MIT's adds a cache beside it.
+- `kswitch -p` does not find another principal's cache in a `KCM:` collection.
+- The outputs and error texts differ from MIT's.
+
+Scripts written for MIT's tools, such as the satomlin kit's keytab checks, need MIT's
+`krb5-workstation` until that is fixed. With the default `PREFIX`, `BINDIR` is
+`/usr/local/bin`, which comes before `/usr/bin` in `PATH` and in sudo's `secure_path`, so these
+tools shadow MIT's for every user.
 
 ## Prerequisites
 
@@ -67,8 +78,9 @@ make build
 ```
 
 `make build` is `cargo build --release --locked` of the KDC, admin and client crates with no
-cargo features, so none of the test hooks the gates use is compiled in: the programs read no
-password, and no database or stash path, from the environment. Run it as yourself.
+cargo features: the programs read no password, and no database or stash path, from the
+environment. The release `kvno` still accepts four options the gates use and MIT's does not
+(`--disable-transited-check`, `--body-realm`, `--renew`, `--renew-ticket`). Run it as yourself.
 `sudo make install` installs that build and never compiles (sudo would not find your toolchain),
 and no install goal compiles as root: it stops if the build is missing or the sources are newer.
 Build on the distribution you install on: the programs link against its C library.
@@ -488,7 +500,7 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
   (`kdb5_util add_mkey` and the other `*_mkey` commands), `kproplog`, `sclient` / `sserver`, and
   plugin modules (plugins are Rust traits: [plugins.md](plugins.md)).
 - `KEYRING:` credential caches in the tools `make install-clients` installs. `KCM:` (Fedora's
-  default) and `FILE:` work.
+  default) and `FILE:` work for one cache; a `KCM:` collection does not yet (see above).
 
 ## Make variables
 
