@@ -678,6 +678,7 @@ dependencies = [
 name = "krb5-types"
 version = "1.0.0"
 dependencies = [
+ "bytes",
  "chrono",
  "getrandom 0.2.17",
  "p256",

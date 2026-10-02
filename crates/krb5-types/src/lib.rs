@@ -67,7 +67,6 @@
 
 use chrono::{FixedOffset, NaiveDateTime, TimeZone, Timelike, Utc};
 use rasn::prelude::*;
-use zeroize::Zeroize;
 
 pub use rasn::types::{BitString, GeneralizedTime, OctetString};
 
@@ -84,6 +83,7 @@ pub mod s4u;
 pub mod spake;
 pub mod timestamp;
 pub mod transited;
+mod wipe;
 
 pub use constants::{ap_bit, err, flag_bit, ku, pa};
 pub use extra::{
@@ -474,21 +474,25 @@ pub struct EncryptedData {
 }
 
 /// EncryptionKey ::= SEQUENCE { keytype, keyvalue }
+///
+/// Dropping a key zeroizes the whole allocation of [`Self::keyvalue`] in place when the key holds
+/// the last handle on it, as a key decoded from DER or built from a `Vec` does. A clone shares the
+/// buffer, so the key that drops last wipes it. Left unwiped: a buffer whose last handle is a bare
+/// `OctetString` clone, one whose last two handles drop at the same moment on two threads, and a
+/// static buffer.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct EncryptionKey {
     /// IANA etype of [`Self::keyvalue`].
     #[rasn(tag(explicit(0)))]
     pub keytype: i32,
-    /// Protocol key octets. Wiped on drop when the buffer is uniquely owned.
+    /// Protocol key octets, wiped on drop as the type says.
     #[rasn(tag(explicit(1)))]
     pub keyvalue: OctetString,
 }
 
 impl Drop for EncryptionKey {
     fn drop(&mut self) {
-        let mut v = self.keyvalue.to_vec();
-        v.zeroize();
-        self.keyvalue = OctetString::from(Vec::<u8>::new());
+        wipe::wipe_octets(std::mem::take(&mut self.keyvalue));
     }
 }
 

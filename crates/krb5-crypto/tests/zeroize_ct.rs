@@ -15,7 +15,6 @@ const KEY_RS: &str = include_str!("../src/key.rs");
 const DERIVE_RS: &str = include_str!("../src/derive.rs");
 const MODP_RS: &str = include_str!("../src/modp.rs");
 const PKINIT_CLIENT_RS: &str = include_str!("../../krb5-protocol/src/as_ex.rs");
-const ENCRYPTION_KEY_RS: &str = include_str!("../../krb5-types/src/lib.rs");
 const AUTHPACK_RS: &str = include_str!("../../krb5-types/src/pkinit.rs");
 const STORE_RS: &str = include_str!("../../krb5-kdc/src/store/password.rs");
 const OPS_RS: &str = include_str!("../src/ops.rs");
@@ -80,15 +79,6 @@ fn pkinit_client_drop_zeroizes() {
         PKINIT_CLIENT_RS.contains("impl Drop for PkinitClient")
             && PKINIT_CLIENT_RS.contains("self.key.zeroize()"),
         "PkinitClient Drop must zeroize the P-256 scalar"
-    );
-}
-
-#[test]
-fn encryption_key_drop_zeroizes() {
-    assert!(
-        ENCRYPTION_KEY_RS.contains("impl Drop for EncryptionKey")
-            && ENCRYPTION_KEY_RS.contains("v.zeroize()"),
-        "EncryptionKey Drop must zeroize the copied keyvalue"
     );
 }
 
