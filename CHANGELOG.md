@@ -51,6 +51,11 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **client.** The gates' `kvno` `--disable-transited-check`, `--body-realm`, `--renew` and
+  `--renew-ticket`, and `kinit` `--spake`, `--fast`, `--armor-ccache` and `--pkinit*`, are
+  `krb5-client/test-hooks` only: a release build refuses them as MIT's. `strings` finds none.
+- **protocol.** kpasswd wipes its own copies of the new password, the request plaintext and the
+  KRB-PRIV part, once they are encrypted; the copies rasn's encoder makes inside are not wiped.
 - **types/protocol.** `Debug` printed secrets: an `EncryptionKey` and every type holding one
   (ticket and reply parts, authenticators, credentials), a kpasswd new password, a PAC session key,
   the PKINIT CA's scalar, a ccache keyblock, a keytab's raw records. Each prints `<redacted>` now.
@@ -770,6 +775,25 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **client.** `kinit`, `klist`, `kvno`, `kdestroy` and `kswitch` are ports of MIT 1.22.2's: its
+  option tables and usage, com_err texts and exit codes, `klist -k`, and no log lines. Settled
+  beside MIT's tools in a container realm (`working/logs/f-P6/`); units.
+- **client.** Caches are picked as MIT's in `DIR:` and `KCM:` collections: `kinit` for another
+  principal makes a new cache and switches to it; `klist -l` / `-A`, `kdestroy -A` and
+  `kswitch -p` walk the collection. Settled beside MIT's tools and sssd-kcm; units.
+- **client.** `kinit -R` and `-v` act on the cache's principal and leave the cache holding only
+  the new TGT, as MIT's re-initializes it. Settled; units.
+- **protocol.** TGS requests carry MIT's kdc-options: the TGT's forwardable, proxiable, renewable
+  and allow-postdate bits, with CANONICALIZE on a referral request (`kvno` with a forwardable,
+  renewable TGT sends 0x40810000; with a renewable-only one, 0x00810000). Settled; unit.
+- **client.** `kinit` reads the password only when a KDC reply needs the key, so an unknown client
+  is reported unprompted: `Client '…' not found in Kerberos database`. Settled; unit.
+- **protocol.** kpasswd keeps MIT's transport schedule: TCP first, 15 s to connect and no
+  deadline once connected, then UDP sent at 0, 3 and 8 s. A blackholed server fails after 32 s
+  as MIT's (it waited out the OS connect timeout). Settled; units.
+- **cli/client.** Options are read as glibc's `getopt_long` reads them: a long option by a unique
+  prefix (`--cached`), and past a bad option, so `kinit`, `kswitch` and `kdestroy` print MIT's
+  further lines. Settled; units.
 - **kdc.** A replay the lookaside no longer holds is answered as MIT answers it: a TGS-REQ, and an
   enc-ts, encrypted-challenge or PKINIT AS-REQ, inside the skew issues a ticket (was 34 / 24). The
   two replay caches MIT has not are gone; the lookaside holds a request's bytes once. Live; units.
@@ -1364,6 +1388,13 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** The AS-REQ answering PREAUTH_REQUIRED sends the KDC's PA-FX-COOKIE back first,
+  as MIT's: padata `[133, 2, 150, 149]` (it sent none). Settled; unit red at the parent.
+- **client.** `kinit -X X509_anchors=…` without an identity gets a ticket with the password, as
+  MIT's (it refused: `pkinit requires identity and anchors`). Settled.
+- **client.** A release `kinit -S service` asks the AS for that service in the client's realm, as
+  MIT's; it got a TGT and then a service ticket, as a `test-hooks` build still does for the gates.
+  Settled; unit.
 - **kdc.** `cpw -randkey` clears `REQUIRES_PWCHANGE` and zeroes the failed password count, as MIT's
   `kadm5_randkey_principal_3` does; both were kept. Settled live; unit.
 - **kdc/admin.** `dict_file` is read once, by kadmind, kadmin.local and `kdb5_util create` as MIT's,

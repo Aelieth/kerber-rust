@@ -144,8 +144,8 @@ not check (a unit test, or "not asserted").
   for a local user (`--claim-crealm`) is `INVALID LINEAGE` on both sides. A
   seeded C TGT plus `krb5-kvno -U victim@A.TEST user@C.TEST` is refused with
   `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` on both MIT C and Rust C (name
-  collision across realms; `kvno` prints `kvno: INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` and the new
-  KDC log lines carry it). A seeded C TGT plus inbound `krbtgt`
+  collision across realms; `krb5-kvno` prints MIT's line for 36, `Ticket/authenticator don't
+  match`, and the new KDC log lines carry the status). A seeded C TGT plus inbound `krbtgt`
   `DISALLOW_ALL_TIX` (MIT C `modprinc -allow_tix`) is refused on both MIT C
   and Rust C: `kvno` reports
   `kvno: Server host/svc.c.test@C.TEST not found in Kerberos database`, and the
@@ -203,7 +203,8 @@ not check (a unit test, or "not asserted").
 - `scripts/config-include-gate.sh` — MIT vs Rust on the same
   `include`/`includedir` + colon-split `KRB5_CONFIG` tree: dotted `10.conf`
   is read; two-file scalar first-wins; missing include fails (does not
-  hang).
+  hang); a missing include, an indented one and an unexpandable default cache name print MIT's
+  exact line from both `kinit`s.
 - `scripts/cross-realm-gate.sh` — starts two Rust KDCs (KERBER.TEST:88,
   OTHER.TEST:89) sharing `KRB5_TEST_INTERREALM_KEY`, then MIT `kinit` +
   `kvno host/svc.other.test@OTHER.TEST`. It fails unless `klist` contains

@@ -801,9 +801,10 @@ not `dlopen` ([docs/plugins.md](plugins.md)).
 The gates, CI, `make safety` and `scripts/checkpoint.sh` build with
 `--features krb5-kdc/test-hooks,krb5-admin/test-hooks` (the gates through
 `scripts/lib/build-bins.sh`, whose one cargo invocation also carries the client
-tools); `krb5-kdc/test-hooks` turns on `krb5-config/test-hooks` and
-`krb5-protocol/test-hooks` for every binary of that build. Only such a build
-reads these inputs; a release build ignores them, as MIT's tools do:
+tools and adds `krb5-client/test-hooks`); `krb5-kdc/test-hooks` turns on
+`krb5-config/test-hooks` and `krb5-protocol/test-hooks` for every binary of that
+build. Only such a build reads these inputs; a release build ignores them, as
+MIT's tools do:
 
 | Input | Read by | A release build instead |
 | --- | --- | --- |
@@ -811,6 +812,9 @@ reads these inputs; a release build ignores them, as MIT's tools do:
 | `KRB5_KDC_CONF` | every KDC-side tool, after `KRB5_KDC_PROFILE` | `KRB5_KDC_PROFILE`, else `/var/kerberos/krb5kdc/kdc.conf` |
 | `KRB5_KDC_DB`, `KRB5_KDC_STASH`, `KRB5_ACL_FILE`, `KRB5_MASTER_ETYPE` | `KdcPaths` (`crates/krb5-config/src/kdcconf.rs`) | the realm's kdc.conf relations, else MIT's defaults |
 | `KERBER_CAPTURE_DIR` | `capture_pdu` (KDC and client sockets) | no capture |
+| `kvno`'s `--disable-transited-check`, `--body-realm`, `--renew`, `--renew-ticket`, and a KDC host before the services | `krb5-kvno` (`krb5-client/test-hooks`): request shapes MIT's `kvno` cannot send | refuses them as MIT's `kvno` does, with its usage |
+| `kinit`'s `--spake`, `--fast`, `--armor-ccache`, `--pkinit`, `--pkinit-anchors`, and `[kdc-host] principal [ccache [service]]` | `krb5-kinit` (`krb5-client/test-hooks`), which also prints `ok tgt=…` and log lines for the gates | refuses them as MIT's `kinit` does; `-T` and `-X X509_user_identity=` / `X509_anchors=` are MIT's options and stay |
+| `kinit -S service` as the gates use it: a TGS-REQ for the service after the TGT, both stored | `krb5-kinit` (`krb5-client/test-hooks`) | MIT's `-S`: the AS-REQ asks for that service, in the client's realm, and the cache holds that ticket |
 
 `KRB5_KPASSWD_TARGET` is not test-only: `krb5-kpasswd` sets that principal's
 password (`krb5_set_password`), a kerber-rust extension MIT's `kpasswd` lacks.

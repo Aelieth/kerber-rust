@@ -41,18 +41,29 @@ paths filled in. Fedora's third unit, `kprop.service`, is not installed (see
 
 `make install-clients` installs the client tools `kinit`, `klist`, `kdestroy`, `kswitch`,
 `kvno`, `kpasswd` and `ktutil` into `BINDIR`, for hosts without MIT's `krb5-workstation`. It is
-never part of `make install`; on Fedora keep the package's tools. The tools are **not yet a
-drop-in** for MIT's:
-- `klist -k` (listing a keytab), `klist -l`, `klist -A` and `kdestroy -A` are missing.
-- On a `KCM:` collection a second principal's `kinit` replaces the first principal's cache,
-  where MIT's adds a cache beside it.
-- `kswitch -p` does not find another principal's cache in a `KCM:` collection.
-- The outputs and error texts differ from MIT's.
+never part of `make install`; on Fedora keep the package's tools. `kinit`, `klist`, `kvno`,
+`kdestroy` and `kswitch` take MIT 1.22.2's options, print its texts and exit codes, and pick
+caches as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` and `-A`,
+`kdestroy -A`, `kswitch -p`, a new cache for a second principal); the satomlin kit's keytab
+checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in these:
+- `kinit -I`, `--request-pac` and `--no-request-pac`, `klist -V` and `kvno -F` are missing, and
+  `kvno -U` does not first ask the KDC for the user's realm.
+- `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
+  compared with MIT's tools may read differently from MIT's text.
+- `KRB5_TRACE` and `[libdefaults] request_timeout` are ignored.
+- `ktutil` has no `?` request, does not echo requests, and lists entries in its own format.
+- `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
+  for the host's canonical name.
+- `kinit` sends an expired password's change to the KDC's host on port 464, where MIT's sends it
+  to `kpasswd_server`, else `admin_server`; `kpasswd` ignores a port given in `kpasswd_server`.
+- With no enctypes in `krb5.conf` the default list is the four AES types; MIT's also has DES3, RC4
+  and Camellia, so the two agree only where `krb5.conf` or Fedora's crypto-policies sets the list.
+- Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file);
+  the rest, `disable_freshness` among them, are accepted and ignored.
 
-Scripts written for MIT's tools, such as the satomlin kit's keytab checks, need MIT's
-`krb5-workstation` until that is fixed. With the default `PREFIX`, `BINDIR` is
-`/usr/local/bin`, which comes before `/usr/bin` in `PATH` and in sudo's `secure_path`, so these
-tools shadow MIT's for every user.
+Scripts that need one of these need MIT's `krb5-workstation`. With the default `PREFIX`,
+`BINDIR` is `/usr/local/bin`, which comes before `/usr/bin` in `PATH` and in sudo's
+`secure_path`, so these tools shadow MIT's for every user.
 
 ## Prerequisites
 
@@ -564,7 +575,8 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
   (`kdb5_util add_mkey` and the other `*_mkey` commands), `kproplog`, `sclient` / `sserver`, and
   plugin modules (plugins are Rust traits: [plugins.md](plugins.md)).
 - `KEYRING:` credential caches in the tools `make install-clients` installs. `KCM:` (Fedora's
-  default) and `FILE:` work for one cache; a `KCM:` collection does not yet (see above).
+  default), `DIR:` and `FILE:` work, with their collections; the tools' other gaps are listed
+  above.
 
 ## Make variables
 
