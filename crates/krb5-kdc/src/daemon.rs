@@ -233,7 +233,8 @@ mod tests {
     }
 
     /// A database file that is no database stops the daemon with MIT's open text (settled live
-    /// on MIT 1.22.2), before the stash is looked at; a missing one with the system's text.
+    /// on MIT 1.22.2), before the stash is looked at; a missing one with the system's text, and
+    /// an MIT db2 one with the way over.
     #[test]
     fn a_database_file_that_is_no_database_stops_the_daemon_with_mit_s_text() {
         let dir = krb5_testkit::scratch_dir("daemon-open-db");
@@ -257,6 +258,17 @@ mod tests {
         assert_eq!(open(), refused("No such file or directory"));
         std::fs::write(&db, "not a database\n").unwrap();
         assert_eq!(open(), refused("Invalid argument"));
+        // MIT 1.22.2's btree header (settled live): named with the way over.
+        let mut db2 = vec![0x62, 0x31, 0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10];
+        db2.resize(8192, 0);
+        std::fs::write(&db, &db2).unwrap();
+        assert_eq!(
+            open(),
+            refused(
+                "This is an MIT db2 database; dump it with the old installation's kdb5_util, \
+                 then kdb5_util load here (docs/install.md, Upgrading an MIT realm)"
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -75,3 +75,36 @@ fn a_database_file_that_is_no_database_is_refused_before_the_master_key() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// MIT 1.22.2's own db2 headers (settled live): a btree `principal` from `kdb5_util create`, a
+/// hash one from `-x hash=true`. Either is named with the way over and left as it was.
+#[test]
+fn an_mit_db2_database_is_named_with_the_way_over_before_the_master_key() {
+    let dir = realm("kadmin-local-mit-db2");
+    let db = dir.join("principal");
+    let refused = format!(
+        "kadmin.local: Cannot open DB2 database '{}': This is an MIT db2 database; dump it with \
+         the old installation's kdb5_util, then kdb5_util load here (docs/install.md, Upgrading \
+         an MIT realm) while initializing kadmin.local interface\n",
+        db.display()
+    );
+    let btree = [0x62, 0x31, 0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10];
+    let hash = [
+        0x00, 0x06, 0x15, 0x61, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x04, 0xd2,
+    ];
+    for head in [&btree[..], &hash[..]] {
+        let mut db2 = head.to_vec();
+        db2.resize(8192, 0);
+        std::fs::write(&db, &db2).unwrap();
+        for args in [
+            &["-r", "KERBER.TEST", "-q", "listprincs"][..],
+            &["-r", "KERBER.TEST", "-m", "-q", "listprincs"][..],
+        ] {
+            let out = kadmin_local(&dir, args, "master\n");
+            assert_eq!(out.status.code(), Some(1), "{args:?}");
+            assert_eq!(text(&out.stderr), refused, "{args:?}");
+        }
+        assert_eq!(std::fs::read(&db).unwrap(), db2, "left as it was");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

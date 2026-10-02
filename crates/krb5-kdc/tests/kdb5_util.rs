@@ -969,6 +969,54 @@ fn a_database_file_that_is_no_database_is_refused_with_mit_s_text() {
     assert!(realm.dir.join("principal.kadm5.lock").exists());
 }
 
+/// An MIT db2 database where the database should be (MIT 1.22.2's own btree and hash headers,
+/// settled live) is named with the way over by every command that opens it, and left as it was.
+#[test]
+fn an_mit_db2_database_is_named_with_the_dump_and_load_way_over() {
+    let realm = Realm::new("kdb5-mit-db2", Realm::sha1());
+    realm.create();
+    let dump = realm.dir.join("realm.dump");
+    let dump = dump.to_str().unwrap();
+    let out = realm.run(&["dump", dump], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let refused = format!(
+        "kdb5_util: Cannot open DB2 database '{}': This is an MIT db2 database; dump it with the \
+         old installation's kdb5_util, then kdb5_util load here (docs/install.md, Upgrading an \
+         MIT realm)",
+        realm.db.display()
+    );
+    let btree = [0x62, 0x31, 0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10];
+    let hash = [
+        0x00, 0x06, 0x15, 0x61, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x04, 0xd2,
+    ];
+    for head in [&btree[..], &hash[..]] {
+        let mut db2 = head.to_vec();
+        db2.resize(8192, 0);
+        std::fs::write(&realm.db, &db2).unwrap();
+        for cmd in [
+            &["dump", "out.dump"][..],
+            &["stash"][..],
+            &["destroy", "-f"][..],
+        ] {
+            let out = realm.run(cmd, "");
+            assert_eq!(status(&out), 1, "{cmd:?}");
+            assert_eq!(
+                text(&out.stderr),
+                format!("{refused} while initializing database\n"),
+                "{cmd:?}"
+            );
+        }
+        let out = realm.run(&["load", "-update", dump], "");
+        assert_eq!(status(&out), 1);
+        assert_eq!(
+            text(&out.stderr),
+            format!("{refused} while opening database\n")
+        );
+        assert_eq!(std::fs::read(&realm.db).unwrap(), db2, "left as it was");
+        assert!(realm.dir.join("principal.kadm5.lock").exists());
+    }
+}
+
 #[cfg(feature = "test-hooks")]
 #[test]
 fn test_hooks_seed_the_gates_principals_and_stand_in_for_the_password() {

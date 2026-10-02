@@ -2,7 +2,9 @@
 //!
 //! New writes are dump text (`kdb5_util load_dump version 7`). SID/RID live
 //! in dump `tl_data` (`TL_KERBER_SID`). Legacy `KDB1`/`KDB2`/`KDB3`
-//! ciphertext still loads for one release. The stash is a keytab-format
+//! ciphertext still loads for one release. An MIT db2 database is not read: it
+//! is refused with a text that names MIT's `kdb5_util dump` and this
+//! `kdb5_util load`, MIT's own way between back ends. The stash is a keytab-format
 //! `.k5.REALM` (a single `K/M@REALM` entry, MIT `krb5_def_store_mkey_list`);
 //! a legacy raw-key stash still loads (`krb5_db_def_fetch_mkey`) and is
 //! rewritten in keytab format on the next save the writer may make to it.
@@ -67,12 +69,19 @@ pub enum Unopenable {
     /// Neither dump text nor a legacy KDB blob: `EINVAL`, the errno MIT's Berkeley DB gives a
     /// file of another format where the platform has no `EFTYPE`.
     NotDatabase,
+    /// An MIT db2 database, which only MIT's tools read: it moves over by MIT's `kdb5_util dump`
+    /// and this `kdb5_util load`, and is never converted where it lies.
+    MitDb2,
 }
 
 impl std::fmt::Display for Unopenable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NotDatabase => f.write_str("Invalid argument"),
+            Self::MitDb2 => f.write_str(
+                "This is an MIT db2 database; dump it with the old installation's kdb5_util, \
+                 then kdb5_util load here (docs/install.md, Upgrading an MIT realm)",
+            ),
         }
     }
 }
@@ -127,6 +136,8 @@ enum DbFormat {
     Dump,
     /// A legacy `KDB1` / `KDB2` / `KDB3` ciphertext.
     Kdb,
+    /// An MIT db2 database ([`is_mit_db2`]).
+    MitDb2,
     /// None of these.
     Unknown,
 }
@@ -141,15 +152,54 @@ fn db_format(head: &[u8]) -> DbFormat {
         .is_some_and(|m| matches!(m, b"KDB1" | b"KDB2" | b"KDB3"))
     {
         DbFormat::Kdb
+    } else if is_mit_db2(head) {
+        DbFormat::MitDb2
     } else {
         DbFormat::Unknown
     }
+}
+
+/// MIT `BTREEMAGIC` (`plugins/kdb/db2/libdb2/include/db.hin:131-131`): the magic a btree's metadata page starts with.
+const BTREEMAGIC: u32 = 0x0005_3162;
+/// MIT `BTREEVERSION` (`plugins/kdb/db2/libdb2/include/db.hin:132-132`): the one btree version MIT opens.
+const BTREEVERSION: u32 = 3;
+/// MIT `HASHMAGIC` (`plugins/kdb/db2/libdb2/include/db.hin:149-149`): the magic a hash file's header starts with.
+const HASHMAGIC: u32 = 0x0006_1561;
+/// MIT `HASHVERSION` (`plugins/kdb/db2/libdb2/include/db.hin:150-150`): the hash version MIT writes.
+const HASHVERSION: u32 = 3;
+/// MIT `OLDHASHVERSION` (`plugins/kdb/db2/libdb2/hash/hash.c:155-155`): the older hash version MIT still opens.
+const OLDHASHVERSION: u32 = 1;
+
+/// Whether `head`, a file's first bytes, begins an MIT db2 database (`principal`, or the policy
+/// database `principal.kadm5`): a Berkeley DB btree, whose metadata page starts with its magic
+/// and version in the byte order it was made in, or a hash file, whose header holds them
+/// big-endian. Settled live on MIT 1.22.2: `kdb5_util create` makes both files btrees
+/// (`62 31 05 00 03 00 00 00` on x86-64), and `-x hash=true` makes `principal` a hash file
+/// (`00 06 15 61 00 00 00 03`).
+/// MIT `__bt_open` (`plugins/kdb/db2/libdb2/btree/bt_open.c:234-246`): a btree's magic and version are read in either byte order.
+/// MIT `hget_header` (`plugins/kdb/db2/libdb2/hash/hash.c:397-420`): a hash file's header is read big-endian.
+/// MIT `__kdb2_hash_open` (`plugins/kdb/db2/libdb2/hash/hash.c:152-158`): a hash file has its magic and version 3 or 1.
+fn is_mit_db2(head: &[u8]) -> bool {
+    let word = |at: usize| {
+        head.get(at..at + 4)
+            .and_then(|b| <[u8; 4]>::try_from(b).ok())
+    };
+    let (Some(magic), Some(version)) = (word(0), word(4)) else {
+        return false;
+    };
+    let btree =
+        |order: fn([u8; 4]) -> u32| order(magic) == BTREEMAGIC && order(version) == BTREEVERSION;
+    btree(u32::from_le_bytes)
+        || btree(u32::from_be_bytes)
+        || (u32::from_be_bytes(magic) == HASHMAGIC
+            && matches!(u32::from_be_bytes(version), HASHVERSION | OLDHASHVERSION))
 }
 
 /// The refusal of a database file of `format`; `None` for a database the store reads.
 fn refusal(db: &Path, format: DbFormat) -> Option<PersistError> {
     let why = match format {
         DbFormat::Dump | DbFormat::Kdb => return None,
+        DbFormat::MitDb2 => Unopenable::MitDb2,
         DbFormat::Empty | DbFormat::Unknown => Unopenable::NotDatabase,
     };
     Some(PersistError::Unopenable {
@@ -160,9 +210,9 @@ fn refusal(db: &Path, format: DbFormat) -> Option<PersistError> {
 
 /// Open the database file at `db` as MIT's db2 module first opens it, before its lock files and
 /// the master key: a file that does not open or read is the system's error, and one whose first
-/// bytes are no database this store reads is refused with MIT's text. An empty file passes here,
-/// as a database being created or loaded is empty until it is written; the read under the lock
-/// judges it.
+/// bytes are no database this store reads is refused with MIT's text; an MIT db2 database is
+/// named as one, with the way over, and left as it is. An empty file passes here, as a database
+/// being created or loaded is empty until it is written; the read under the lock judges it.
 /// MIT `check_openable` (`plugins/kdb/db2/kdb_db2.c:545-557`): the database is opened before its lock files.
 /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:384-389`): a database that does not open is named, with its errno.
 ///
@@ -1298,11 +1348,98 @@ fn take_str(b: &[u8], i: &mut usize) -> Result<String, PersistError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DbFormat, PersistError, check_openable, db_format, load_store, load_store_with_master,
-        make_lock_files,
+        DbFormat, PersistError, check_openable, db_format, is_mit_db2, load_store,
+        load_store_with_master, make_lock_files, save_store,
     };
+    use crate::error::Error;
     use crate::mkey::{default_master_etype, master_etype};
     use krb5_crypto::{EncryptionType, ProtocolKey};
+
+    /// The first 16 bytes of MIT 1.22.2's own db2 files, as `od` printed them (settled live):
+    /// `principal` and `principal.kadm5` from `kdb5_util create -s` (btrees), and `principal`
+    /// from `kdb5_util -x hash=true create -s` (a hash file).
+    const MIT_BTREE: [u8; 16] = [
+        0x62, 0x31, 0x05, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00,
+    ];
+    const MIT_HASH: [u8; 16] = [
+        0x00, 0x06, 0x15, 0x61, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00, 0x04, 0xd2, 0x00, 0x00, 0x10,
+        0x00,
+    ];
+
+    #[test]
+    fn an_mit_db2_header_is_known_in_both_layouts_and_byte_orders() {
+        assert!(is_mit_db2(&MIT_BTREE));
+        assert!(is_mit_db2(&MIT_HASH));
+        // A btree made on a big-endian host; a hash file of the older version.
+        assert!(is_mit_db2(&[
+            0x00, 0x05, 0x31, 0x62, 0x00, 0x00, 0x00, 0x03
+        ]));
+        assert!(is_mit_db2(&[
+            0x00, 0x06, 0x15, 0x61, 0x00, 0x00, 0x00, 0x01
+        ]));
+        // MIT opens neither another btree version nor a hash header in little-endian order.
+        assert!(!is_mit_db2(&[
+            0x62, 0x31, 0x05, 0x00, 0x02, 0x00, 0x00, 0x00
+        ]));
+        assert!(!is_mit_db2(&[
+            0x61, 0x15, 0x06, 0x00, 0x03, 0x00, 0x00, 0x00
+        ]));
+        assert!(!is_mit_db2(&MIT_BTREE[..7]));
+        assert!(!is_mit_db2(b"kdb5_util load_dump version 7\n"));
+        assert_eq!(db_format(&MIT_BTREE), DbFormat::MitDb2);
+        assert_eq!(db_format(&MIT_HASH), DbFormat::MitDb2);
+    }
+
+    /// An MIT db2 database where the database should be is refused naming it and the way over,
+    /// before its lock files and the stash are opened (here there are none), and is left as it
+    /// was; a served store whose database turns into one names it once when it reads it again.
+    #[test]
+    fn an_mit_db2_database_is_named_with_the_way_over_and_left_as_it_is() {
+        let dir = krb5_testkit::scratch_dir("persist-mit-db2");
+        let (db, stash) = (dir.join("principal"), dir.join("stash"));
+        let master =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7; 32]).unwrap();
+        let refused = |db: &std::path::Path| {
+            format!(
+                "Cannot open DB2 database '{}': This is an MIT db2 database; dump it with the old \
+                 installation's kdb5_util, then kdb5_util load here (docs/install.md, Upgrading \
+                 an MIT realm)",
+                db.display()
+            )
+        };
+        for head in [MIT_BTREE, MIT_HASH] {
+            let mut file = head.to_vec();
+            file.resize(8192, 0);
+            std::fs::write(&db, &file).unwrap();
+            assert_eq!(check_openable(&db).unwrap_err().to_string(), refused(&db));
+            assert_eq!(
+                load_store(&db, &stash).unwrap_err().to_string(),
+                refused(&db)
+            );
+            assert_eq!(
+                load_store_with_master(&db, &master)
+                    .unwrap_err()
+                    .to_string(),
+                refused(&db)
+            );
+            assert_eq!(std::fs::read(&db).unwrap(), file, "left as it was");
+        }
+        let served = dir.join("served");
+        std::fs::create_dir(&served).unwrap();
+        let (db, stash) = (served.join("principal"), served.join("stash"));
+        let (store, _) = crate::testrealm::bootstrap_documented().unwrap();
+        save_store(&store, &db, &stash).unwrap();
+        let mut store = load_store(&db, &stash).unwrap();
+        let mut file = MIT_BTREE.to_vec();
+        file.resize(8192, 0);
+        std::fs::write(&db, &file).unwrap();
+        match store.reload() {
+            Err(Error::Db { text, .. }) => assert_eq!(text, refused(&db)),
+            other => panic!("{other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn a_database_file_is_judged_by_its_first_bytes() {

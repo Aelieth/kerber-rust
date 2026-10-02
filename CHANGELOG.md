@@ -752,6 +752,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **kdc/admin.** An MIT db2 database (btree or hash) where the database should be is named and left
+  as it is: `… This is an MIT db2 database; dump it with the old installation's kdb5_util, then
+  kdb5_util load here (docs/install.md, Upgrading an MIT realm)`. Units on MIT's own headers.
 - **docs.** `kadmin.local`'s known divergences from MIT are graded in the A4 ledger and listed
   in `docs/security.md`; its own doc names the environment overrides `test-hooks` only.
 - **admin.** `kadmin.local` refuses a request line or an argument that is not UTF-8 instead of
