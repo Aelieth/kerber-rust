@@ -101,7 +101,9 @@ def parse_logs(paths: list[pathlib.Path]) -> dict:
             issues.append(f"missing_log:{log_path}")
             continue
         for line in log_path.read_text(errors="replace").splitlines():
-            if "panic" in line.lower():
+            # A Rust panic is the runtime's own stderr line, never a JSON log record:
+            # random ids in a record can spell "panic", so the records are not searched.
+            if not line.startswith("{") and "panicked at" in line:
                 panics += 1
                 issues.append("panic")
             if not line.startswith("{"):
@@ -357,6 +359,19 @@ def self_test() -> int:
         rep = evaluate(ns, parsed, None)
         if rep["outcome"] != "ok":
             print("self-test ok-log failed", json.dumps(rep), file=sys.stderr)
+            return 1
+        record = {"fields": {"event": "kdc.audit", "record": "req_id L6Y0QUPPaNICb081"}}
+        p_id = pathlib.Path(td) / "panic-in-id.log"
+        p_id.write_text("\n".join([*ok_lines, json.dumps(record)]) + "\n")
+        if parse_logs([p_id])["panics"] != 0:
+            print("self-test: a record whose id spells panic counted as a panic", file=sys.stderr)
+            return 1
+        p_real = pathlib.Path(td) / "panic.log"
+        p_real.write_text(
+            "\n".join([*ok_lines, "thread 'main' panicked at crates/krb5-kdc/src/listen.rs:1:1:"]) + "\n"
+        )
+        if parse_logs([p_real])["panics"] != 1:
+            print("self-test: a runtime panic line was not counted", file=sys.stderr)
             return 1
         breach = list(ok_lines)
         breach.append(
