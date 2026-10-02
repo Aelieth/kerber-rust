@@ -29,7 +29,7 @@ LOCK=$LAB_HOME/state/lab.lock
 KEEP=30
 # The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
 # under test), and the other scenarios use the kdc it left.
-declare -A PROFILES=([nightly]="upgrade" [weekly]="upgrade")
+declare -A PROFILES=([nightly]="upgrade services" [weekly]="upgrade services")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '4p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }

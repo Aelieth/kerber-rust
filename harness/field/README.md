@@ -213,13 +213,17 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `install-check.sh` | On a VM after `make install`: every program the install manifest lists is byte-identical to the checkout's build (`cmp`, the names paired by its `dist/install.sh`) |
 | `docblocks.py` | A doc section's shell blocks, by heading, run one top-level command at a time in one session, each with its exit status (a here-document stays whole) |
 | `ktrace.sh` | An MIT client command with its `KRB5_TRACE`, and an `answers:` line naming the transports the replies came over |
-| `leg.sh` | A scenario's leg from `baseline.env`'s `MIT_*` or `RUST_*` set: `resetvm`, `kdcis` (kdc runs the leg's KDC: MIT's packaged binaries, or the install manifest and the ref's build) |
+| `leg.sh` | A scenario's leg from `baseline.env`'s `MIT_*` or `RUST_*` set: `legset` (secret file names), `resetvm`, `kdcis` (kdc runs the leg's KDC: MIT's packaged binaries, or the install manifest and the ref's build), `servicesready`, `ktcheck` (a keytab against the KDC's keys), `countlast` |
+| `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
+| `nfs-probe.sh`, `spnego-probe.sh`, `check_spnego.lab.sh` | S2's probes, run in throwaway containers on services (image `localhost/s2-nfs-probe:f43`, own network namespace): the kit's NFS client set-up and alice's, root's and bob's NFS access; the kit's `check_spnego` (its helper block and function verbatim from kit commit `e9f3325`, only the four SSO constants set to the lab's) and the two requests by hand |
+| `kc-events.sh` | Keycloak's events since a time, read-only through the admin API from the host (the admin password on stdin, the token through a pipe) |
 
 ## Scenarios
 
 | Scenario | Profiles | Legs | VMs: baseline snapshot (MIT / rust) | Reference hand records (MIT; rust) | Duration (MIT / rust) |
 | --- | --- | --- | --- | --- | --- |
 | `upgrade` | nightly, weekly | mit, rust | kdc: `f4-mit` / `rust-field-p12` (reset; the rust leg leaves it on the ref's install); client2: `rust-ssh` (rust leg, reset) | f-UP1 | under 1 / about 3.5 min (the build about 2) |
+| `services` | nightly, weekly | mit, rust | services: `f4-mit` / `services-rust` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 
 **The MIT baseline `f4-mit`** (kdc, client1, client2, services) was set up once by
 hand on 2026-10-02 (record `~/kerber-lab/runs/hand-f4-mit-20261002T143502Z/`):
@@ -276,6 +280,25 @@ are where those expectations come from), the package versions recorded.
   they are known to differ from MIT's, with the record that shows each.
 - It leaves client2 as it found it, and kdc on the ref's install with its
   checkout.
+
+The scenarios after `upgrade` never reset kdc. Each resets its own client and
+services, then checks that kdc runs the leg's KDC (`kdc.leg`; on the rust leg
+also `kdc.ref`: the installed programs are the ref's build). Every check is a
+"reproduced" row of its hand records with no clock window, no GUI and no
+Windows. What differs between the legs and is already known is recorded as an
+INFO line and listed in `scenarios/<name>.expect`, with its record and what
+would remove it.
+
+- **`services.sh`** (S2): from throwaway probe containers on services, (A) NFS:
+  alice mounts `/users` `sec=krb5p`, `/media` and `/data` `sec=krb5i`, writes and
+  reads, her files 10001:10001 on the client and on the server's disk; root (the
+  `host/services` machine credential) reads `/data/fleet` and is squashed;
+  ticketless bob is refused. (B) Keycloak: the kit's `check_spnego` gives `401`
+  with `Negotiate`, then `302` with `code=` and a mutual token; Keycloak logs the
+  `LOGIN` events. Also: services' three keytabs equal the KDC's keys, and the
+  KDC's `ISSUE` lines for `nfs/` and `HTTP/`. Recorded: the probes' TGS
+  transport and the `PREAUTH_REQUIRED` padata (from the kept capture). Not here:
+  S2's decode of the RPCSEC_GSS replies and call counts.
 
 ## What `up` builds
 
