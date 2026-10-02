@@ -425,9 +425,11 @@ fn handle_kpasswd_from(
     let ap_req = &raw[6..6 + ap_len];
     let priv_raw = &raw[6 + ap_len..];
     let (store_realm, keys, kvnos) = {
-        let g = store
-            .read()
+        let mut g = store
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The kadmin/changepw keys as the database holds them now, whoever changed them.
+        g.reload_if_stale()?;
         let (keys, kvnos) = changepw_verify_keys(&g, service_key);
         (g.realm().to_owned(), keys, kvnos)
     };

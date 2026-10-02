@@ -54,9 +54,13 @@ pub(super) fn dispatch_iprop(
         IPROP_GET_UPDATES => {
             let mut r = XdrR::new(args);
             let last_sno = r.u32().unwrap_or(0);
-            let g = store
-                .read()
+            let mut g = store
+                .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // The update log another process (kadmin.local) appended to is read before answering.
+            if g.reload_if_stale().is_err() {
+                return encode_incr_result(krb5_kdc::IPROP_ERROR, 0, &[], None);
+            }
             let (status, last, entries) = g.iprop_get(last_sno);
             let mkey = g.iprop_master_key();
             // MIT ships each key as the master-key ciphertext already stored in
@@ -76,9 +80,12 @@ pub(super) fn dispatch_iprop(
             encode_incr_result(status, last, &entries, mkey.as_ref())
         }
         IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => {
-            let g = store
-                .read()
+            let mut g = store
+                .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if g.reload_if_stale().is_err() {
+                return encode_fullresync_status(0, krb5_kdc::IPROP_ERROR);
+            }
             encode_fullresync(g.serial())
         }
         _ => encode_incr_result(krb5_kdc::IPROP_FULL_RESYNC, 0, &[], None),

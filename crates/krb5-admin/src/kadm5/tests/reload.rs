@@ -278,3 +278,46 @@ fn failed_change_is_undone_from_the_database() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// What another process (kadmin.local) saved after kadmind loaded the database is what kadmind
+/// lists and answers, and a change kadmind makes afterwards keeps it.
+#[test]
+fn reads_see_another_process_and_writes_keep_its_change() {
+    use krb5_kdc::{load_store, save_store};
+    let dir = krb5_testkit::scratch_dir("stale-reads");
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let kadmind = krb5_kdc::shared_dump(load_store(&db, &stash).unwrap());
+    let actor = krb5_kdc::testrealm::documented_admin_id();
+    let call = |proc: u32, args: &[u8]| dispatch_kadm5(&kadmind, &acl, &actor, proc, args).unwrap();
+    let has = |out: &[u8], name: &str| out.windows(name.len()).any(|w| w == name.as_bytes());
+    assert!(!has(&call(GET_PRINCS, &list_args()), "fresh@KERBER.TEST"));
+    let fresh = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["fresh"]);
+    {
+        let mut local = load_store(&db, &stash).unwrap();
+        let mut sess = AdminSession::local(&mut local, &acl, actor.clone());
+        sess.create_password(&fresh, b"fresh-secret").unwrap();
+        sess.add_policy("freshpol");
+    }
+    assert!(has(&call(GET_PRINCS, &list_args()), "fresh@KERBER.TEST"));
+    assert!(has(&call(GET_POLS, &list_args()), "freshpol"));
+    assert_eq!(ret_code(&call(GET_POLICY, &encode_named("freshpol"))), 0);
+    assert_eq!(
+        ret_code(&call(
+            CREATE_PRINCIPAL,
+            &create_rec("froma", "froma-secret")
+        )),
+        0
+    );
+    let on_disk = load_store(&db, &stash).unwrap();
+    assert!(on_disk.get_name(&fresh).is_some());
+    assert!(on_disk.policies().contains_key("freshpol"));
+    assert!(
+        on_disk
+            .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["froma"]))
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

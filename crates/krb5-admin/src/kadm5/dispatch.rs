@@ -1,5 +1,5 @@
 //! The kadm5 procedure switch (`kadmin/server/server_stubs.c`): one arm per
-//! procedure, the store write path (`reload_if_stale` before every
+//! procedure, the store path (`reload_if_stale` before every read and
 //! mutation), the `KADM5_AUTH_*` code each procedure denies with, and the
 //! `Error` -> `kadm_err.et` mapping behind `generic_ret`.
 
@@ -65,6 +65,9 @@ pub(super) fn kadm5_or_iprop(
     dispatch_kadm5_ticket(store, acl, actor, proc, args, initial, changepw)
 }
 
+/// The store, reread first when another process (kadmin.local, kdb5_util) changed the database
+/// since kadmind loaded it; every kadm5 read and change goes through it, so a list sees new
+/// principals and a change never saves over another process's.
 fn write_store(
     store: &SharedStore,
     proc: u32,
@@ -248,9 +251,10 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(API_V2, KADM5_AUTH_LIST));
             }
             let expr = parse_gprincs(args)?;
-            let g = store
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let g = match write_store(store, proc, API_V2) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let glob = expr.as_deref().unwrap_or("*");
             if !glob_pattern_ok(glob) {
                 return Ok(generic_ret(API_V2, EINVAL));
@@ -690,9 +694,10 @@ pub(super) fn dispatch_kadm5_ticket(
         }
         GET_POLICY => {
             let (api, name) = parse_policy_name(args)?;
-            let g = store
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let g = match write_store(store, proc, api) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let own_pol = parse_actor(actor)
                 .and_then(|(n, _)| g.get_name(&n).and_then(|p| p.pw_policy.clone()));
             if (changepw || acl.check(actor, krb5_kdc::AdminOp::Inquire, None).is_err())
@@ -710,9 +715,10 @@ pub(super) fn dispatch_kadm5_ticket(
             if changepw || acl.check(actor, krb5_kdc::AdminOp::List, None).is_err() {
                 return Ok(generic_ret(api, KADM5_AUTH_LIST));
             }
-            let g = store
-                .read()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let g = match write_store(store, proc, api) {
+                Ok(g) => g,
+                Err(rep) => return Ok(rep),
+            };
             let mut names: Vec<_> = g.policies().keys().cloned().collect();
             let glob = expr.as_deref().unwrap_or("*");
             if !glob_pattern_ok(glob) {

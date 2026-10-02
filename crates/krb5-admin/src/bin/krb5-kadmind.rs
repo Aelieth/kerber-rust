@@ -402,10 +402,15 @@ fn serve(
                     let seq = registry.register(&stream);
                     let registry_g = Arc::clone(&registry);
                     let store = Arc::clone(shared);
+                    // The acceptor keys as the database holds them now, as MIT's KDB keytab
+                    // reads them for each context.
                     let keys = {
-                        let g = store
-                            .read()
+                        let mut g = store
+                            .write()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Err(e) = g.reload_if_stale() {
+                            klog::syslog(Severity::Err, &format!("{e} while reloading database"));
+                        }
                         acceptor_keys(&g)
                     };
                     let acl = acl.clone();
