@@ -9,6 +9,7 @@ mod alias;
 mod flags;
 mod history;
 mod iprop_ulog;
+mod kdb_convert;
 mod keys;
 mod password;
 mod policy;
@@ -658,6 +659,12 @@ pub use flags::{
 pub(crate) use flags::{KDB_DISALLOW_PROXIABLE, KDB_NEW_PRINC, KDB_SUPPORT_DESMD5};
 pub use iprop_ulog::{
     IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, UlogEntry,
+};
+pub use kdb_convert::{
+    AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
+    AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_MOD_WHERE, AT_PRINC, AT_PW_EXP,
+    AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
+    IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, attr_bit, conv_2dbentry, conv_2logentry,
 };
 pub use keys::{KeyEntry, KeyLookup, random_key};
 pub use password::{

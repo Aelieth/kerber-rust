@@ -356,7 +356,6 @@ impl DumpPrincipal {
     fn into_principal(self, mkey: &ProtocolKey) -> Result<(Principal, Option<RpcSid>), DumpError> {
         let (name, realm) = parse_unparsed(&self.name)?;
         let mut keys = Vec::new();
-        let mut princ_salt: Option<Vec<u8>> = None;
         for kd in &self.keys {
             if kd.slots.is_empty() {
                 return Err(DumpError::Format(format!(
@@ -372,12 +371,6 @@ impl DumpPrincipal {
                 .map_err(|e| DumpError::Crypto(e.to_string()))?;
             let (salt_type, kdb_salt) = if kd.ver >= 2 && kd.slots.len() >= 2 {
                 let s = &kd.slots[1];
-                if princ_salt.is_none()
-                    && (s.ty == SALTTYPE_NORMAL || s.ty == SALTTYPE_SPECIAL)
-                    && !s.contents.is_empty()
-                {
-                    princ_salt = Some(s.contents.clone());
-                }
                 (Some(s.ty), Some(s.contents.clone()))
             } else {
                 (None, None)
@@ -398,7 +391,7 @@ impl DumpPrincipal {
                 "K/M key_data does not match derived master key".into(),
             ));
         }
-        let salt = princ_salt.unwrap_or_else(|| name.default_salt(&realm));
+        let salt = salt_of_keys(&keys, &name, &realm);
         let mkvno = mkvno_from_tl(&self.tl_data);
         let requires_preauth = self.attributes & KDB_REQUIRES_PRE_AUTH != 0;
         let locked = self.attributes & KDB_DISALLOW_ALL_TIX != 0;
@@ -976,7 +969,20 @@ fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), DumpError> {
     Ok((name, realm))
 }
 
-fn mkvno_from_tl(tl: &[TlData]) -> u16 {
+/// The salt a principal's keys were made with, which the KDC offers in `ETYPE-INFO2`: the first
+/// key's stored normal or special salt, else the name's default salt.
+pub(crate) fn salt_of_keys(keys: &[KeyEntry], name: &PrincipalName, realm: &str) -> Vec<u8> {
+    keys.iter()
+        .find_map(|k| match (k.salt_type, k.kdb_salt.as_ref()) {
+            (Some(SALTTYPE_NORMAL | SALTTYPE_SPECIAL), Some(salt)) if !salt.is_empty() => {
+                Some(salt.clone())
+            }
+            _ => None,
+        })
+        .unwrap_or_else(|| name.default_salt(realm))
+}
+
+pub(crate) fn mkvno_from_tl(tl: &[TlData]) -> u16 {
     tl.iter()
         .find(|t| t.ty == TL_MKVNO && t.contents.len() == 2)
         .map_or(1, |t| u16::from_le_bytes([t.contents[0], t.contents[1]]))
@@ -991,7 +997,7 @@ fn unix_now() -> u32 {
     .unwrap_or(u32::MAX)
 }
 
-fn dump_attributes(p: &Principal) -> u32 {
+pub(crate) fn dump_attributes(p: &Principal) -> u32 {
     let mut a = p.attributes;
     if p.requires_preauth {
         a |= KDB_REQUIRES_PRE_AUTH;
@@ -1143,7 +1149,7 @@ fn merge_string_attrs_tl(tl: &mut Vec<TlData>, attrs: &[(String, String)]) {
     });
 }
 
-fn attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
+pub(crate) fn attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for t in tl {
         if t.ty != TL_STRING_ATTRS {
@@ -1165,7 +1171,7 @@ fn attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
 
 /// A principal with a policy or a history record carries `KRB5_TL_KADM_DATA`
 /// (`kdb_put_entry`); one that never had either keeps whatever it loaded with.
-fn merge_kadm_tl(tl: &mut Vec<TlData>, p: &Principal) {
+pub(crate) fn merge_kadm_tl(tl: &mut Vec<TlData>, p: &Principal) {
     let has_kadm = tl.iter().any(|t| t.ty == TL_KADM_DATA);
     if has_kadm || p.pw_policy.is_none() && p.kadm.old_keys.is_empty() {
         return;

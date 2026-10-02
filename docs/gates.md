@@ -48,7 +48,7 @@ peer, or **none** (Rust against Rust: it proves behaviour, not parity).
 | `scripts/gssproxy-gate.sh` | MIT | `ci:harness-2` | skip2 | `X-GSSPROXY` FILE entry: **exit 2** until a Fedora/gssproxy oracle is vendored |
 | `scripts/heimdal-gate.sh` | Heimdal | `peers:peers` | nightly | Heimdal `kinit`/`kgetcred` vs Rust; Rust `krb5-kinit` vs Heimdal: `klist` names `user@KERBER.TEST` and `host/testhost.kerber.test` in both directions (the only content asserts; `aes256-cts-hmac-sha1-96` is the configured `default_etypes`, not asserted); missing image `exit 2` |
 | `scripts/history-mit-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kadmin.local` history-window on a MIT KDB: history=1 allows A→B→A; history=2 rejects B after A→B→C |
-| `scripts/iprop-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind: MIT `kinit extra` after master restart + serial-delta (no extra FULL_RESYNC); MIT `kinit extra2` on Rust replica whose dump holds the `setstr` value; extra2 PAC RID ≠ 1000 |
+| `scripts/iprop-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind: MIT `kinit extra` after master restart + serial-delta (no extra FULL_RESYNC); MIT `kinit extra2` on Rust replica whose dump holds the `setstr` value and whose `extra2` keeps the flags, lifetimes and expirations the setstr update did not carry; extra2 PAC RID ≠ 1000 |
 | `scripts/kadmin-gate.sh` | MIT | wrapper | — | local wrapper: `kadmin-rust-gate.sh`, `kadmin-rust-acl-gate.sh`, `kadmin-mit-gate.sh`, `kadmin-both-gate.sh` |
 | `scripts/kadmin-both-gate.sh` | MIT | `ci:harness` | fail-red | both kadminds side by side: `listprincs`/`listpols` glob lists and `getprinc` records (keys, lifetimes) equal between the Rust kadmind and MIT kadmind |
 | `scripts/kadmin-local-gate.sh` | MIT | `ci:mit-extra` | fail-red | Rust `krb5-kadmin-local` then MIT `kadmin`: `addprinc -pw extra-local extra2` and `addprinc host/slashhost`; MIT `getprinc` both names, `listprincs extra2*`; a `KRB5_ACL_FILE` naming a missing file is ignored (`listprincs` rc 0, lists `user@KERBER.TEST`); `-randkey` + MIT `getprinc` `vno 1` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; dump `getprinc` after mutating `setstr` keeps a concurrent kadmind create (`m5k: m5v`); local `addprinc -pw n7-pw n7local` then remote `cpw -pw extra-n7 extra2` keeps both; MIT `kadmin.local` `ktadd -k` of `krbtgt/KERBER.TEST` rotates (`Key: vno` 2) and writes the keytab, Rust local `ktadd -k` of `krbtgt/KERBER.TEST` writes it (`klist -k`); `passwd_check` modules vs MIT `kadmin.local` (`pwq_lines` identical): `addprinc -pw ""` is `Empty passwords are not allowed`, a principal-name password under a policy is `Password may not match principal name`, a realm or `dict_file` word under a policy is `Password is in the password dictionary`, no policy accepts the name and the dict word, the rejected `pqname` create leaves nothing |
@@ -282,7 +282,9 @@ not check (a unit test, or "not asserted").
   restart the Rust master (`krb5-kdc` and `krb5-kadmind`), and require serial-delta with no extra
   FULL_RESYNC: MIT `kinit extra` on the MIT replica; `krb5-iprop-pull` vs
   MIT kadmind then MIT `kinit extra2` (the replica dump holds the `setstr`
-  value); extra2's replica PAC RID is not 1000 (same RID as the master is
+  value, and Rust `krb5-kadmin-local` on the replica shows the flags, lifetimes
+  and expirations `extra2` had before that setstr, whose update carries none of
+  them); extra2's replica PAC RID is not 1000 (same RID as the master is
   deferred: MIT kdbe has no SID and incremental encode omits vendor `0x4B0x`
   TL); MIT `delprinc extra2` then the name is gone on the Rust replica.
 - `scripts/kadmin-local-gate.sh` — Rust `krb5-kadmin-local` `addprinc`

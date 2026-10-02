@@ -4,6 +4,7 @@
 
 use std::sync::atomic::Ordering;
 
+use super::kdb_convert::{IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, conv_2dbentry, conv_2logentry};
 use super::principal::{Principal, strip_db_args};
 use super::{PrincipalStore, unix_now_u32};
 
@@ -18,8 +19,37 @@ pub struct UlogEntry {
     pub name: String,
     /// Deletion marker.
     pub deleted: bool,
-    /// Snapshot for in-process apply (absent on dump-only markers).
+    /// The record after the change: the values the update sends.
     pub princ: Option<Principal>,
+}
+
+impl UlogEntry {
+    /// The update this entry sends: the whole record, as MIT's primary converts a new principal.
+    #[must_use]
+    pub fn kdbe_vals(&self) -> Vec<KdbeVal> {
+        match (&self.princ, self.deleted) {
+            (Some(p), false) => conv_2logentry(p, ULOG_ADD_ATTRS),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The update as a replica receives it.
+    #[must_use]
+    pub fn to_update(&self) -> IpropUpdate {
+        IpropUpdate {
+            sno: self.sno,
+            time: self.time,
+            name: self.name.clone(),
+            deleted: self.deleted,
+            vals: self.kdbe_vals(),
+        }
+    }
+}
+
+/// A local `policy:<name>` marker, which only advances the serial: a policy name cannot contain
+/// `@` (`svr_policy`) and a principal id always ends in `@REALM`.
+fn is_policy_marker(name: &str) -> bool {
+    name.starts_with("policy:") && !name.contains('@')
 }
 
 const ULOG_CAP: usize = 1024;
@@ -160,65 +190,43 @@ impl PrincipalStore {
         // literally named `policy:...@REALM` (which must NOT be filtered).
         let entries = entries
             .into_iter()
-            .filter(|e| !e.name.starts_with("policy:") || e.name.contains('@'))
+            .filter(|e| !is_policy_marker(&e.name))
             .collect();
         (IPROP_OK, cur, entries)
     }
 
     /// Apply serial-delta (does not re-log).
     ///
-    /// MIT incremental kdbe is a field mask: a later `setstr` update may
-    /// omit `AT_KEYDATA`. Empty incoming keys/history keep the existing
-    /// principal's.
-    pub fn apply_updates(&mut self, entries: &[UlogEntry]) {
-        for e in entries {
-            if e.deleted {
-                self.map.remove(&e.name);
-            } else if let Some(p) = &e.princ {
-                let merged = if let Some(old) = self.map.get(&p.id()) {
-                    Self::merge_iprop_princ(old, p)
-                } else {
-                    p.clone()
-                };
-                let mut merged = self.assign_iprop_rid(merged);
-                if strip_db_args(&mut merged.tl_data).is_ok() {
-                    self.map.insert(merged.id(), merged);
+    /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:423-454`): each update in turn deletes its principal or puts the replica's record with the update applied.
+    /// An update that carries nothing changes nothing, and one whose tagged data holds database
+    /// arguments is skipped.
+    ///
+    /// # Errors
+    ///
+    /// As [`conv_2dbentry`], for the update that fails; the caller's change then reads the
+    /// database back.
+    pub fn apply_updates(&mut self, updates: &[IpropUpdate]) -> Result<(), crate::Error> {
+        for u in updates {
+            let id = krb5_types::principal_from_unparsed(&u.name, "").map_or_else(
+                |_| u.name.clone(),
+                |(name, realm)| crate::kdb::lookup_principal_id(&name, &realm),
+            );
+            if u.deleted {
+                self.map.remove(&id);
+            } else if !u.vals.is_empty() {
+                let entry = conv_2dbentry(self.map.get(&id), &u.name, &u.vals, true)?;
+                let mut entry = self.assign_iprop_rid(entry);
+                if strip_db_args(&mut entry.tl_data).is_ok() {
+                    self.map.insert(entry.id(), entry);
                 }
             }
             let cur = self.serial();
-            if e.sno > cur {
-                self.serial.store(e.sno, Ordering::SeqCst);
+            if u.sno > cur {
+                self.serial.store(u.sno, Ordering::SeqCst);
             }
         }
         self.resolve_history_all();
-        let _ = self.save_if_configured();
-    }
-
-    fn merge_iprop_princ(old: &Principal, new: &Principal) -> Principal {
-        let mut m = new.clone();
-        if m.keys.is_empty() {
-            m.keys.clone_from(&old.keys);
-        }
-        if m.key_history.is_empty() {
-            m.key_history.clone_from(&old.key_history);
-        }
-        if m.string_attrs.is_empty() {
-            m.string_attrs.clone_from(&old.string_attrs);
-        }
-        if m.tl_data.is_empty() {
-            m.tl_data.clone_from(&old.tl_data);
-            m.kadm = old.kadm.clone();
-        }
-        if m.pw_policy.is_none() {
-            m.pw_policy.clone_from(&old.pw_policy);
-        }
-        if m.salt.is_empty() {
-            m.salt.clone_from(&old.salt);
-        }
-        if m.rid == 0 {
-            m.rid = old.rid;
-        }
-        m
+        self.save_if_configured()
     }
 
     /// Incremental kdbe has no SID (vendor `0x4B0x` is stripped). A new

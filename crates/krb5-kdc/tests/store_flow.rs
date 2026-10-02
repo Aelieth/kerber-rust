@@ -640,7 +640,8 @@ fn serial_ulog_delta_then_issue_as() {
         "ulog must record the create: {entries:?}"
     );
 
-    slave.apply_updates(&entries);
+    let updates: Vec<IpropUpdate> = entries.iter().map(UlogEntry::to_update).collect();
+    slave.apply_updates(&updates).unwrap();
     assert!(slave.get_name(&extra).is_some());
     assert_eq!(slave.serial(), sno1);
     let key = slave
@@ -684,13 +685,15 @@ fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
     let mut incr = master.get_name(&extra).unwrap().clone();
     incr.rid = 0;
     incr.tl_data.retain(|t| t.ty != krb5_kdc::TL_KERBER_SID);
-    slave.apply_updates(&[UlogEntry {
-        sno: slave.serial().saturating_add(1),
-        time: 1,
-        name: incr.id(),
-        deleted: false,
-        princ: Some(incr),
-    }]);
+    slave
+        .apply_updates(&[IpropUpdate {
+            sno: slave.serial().saturating_add(1),
+            time: 1,
+            name: incr.id(),
+            deleted: false,
+            vals: conv_2logentry(&incr, ULOG_ADD_ATTRS),
+        }])
+        .unwrap();
 
     let got = slave.get_name(&extra).unwrap().clone();
     assert_ne!(got.rid, 0, "incremental apply must allocate a RID");
@@ -717,7 +720,7 @@ fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
 }
 
 #[test]
-fn apply_updates_keeps_keys_on_keyless_incremental() {
+fn apply_updates_keeps_what_an_update_does_not_carry() {
     let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     let actor = krb5_kdc::testrealm::documented_admin_id();
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["keyless"]);
@@ -727,25 +730,26 @@ fn apply_updates_keeps_keys_on_keyless_incremental() {
     store.set_string(&extra, "note", Some("keep-me")).unwrap();
     let before = store.get_name(&extra).unwrap().clone();
     assert!(!before.keys.is_empty());
-    let mut incr = before.clone();
-    incr.keys.clear();
-    incr.key_history.clear();
-    incr.string_attrs.clear();
-    incr.tl_data.clear();
-    incr.pw_policy = None;
+    let mut changed = before.clone();
+    changed.max_life = 4 * 3600;
     let sno = store.serial().saturating_add(1);
-    store.apply_updates(&[UlogEntry {
-        sno,
-        time: 1,
-        name: before.id(),
-        deleted: false,
-        princ: Some(incr),
-    }]);
+    store
+        .apply_updates(&[IpropUpdate {
+            sno,
+            time: 1,
+            name: before.id(),
+            deleted: false,
+            vals: conv_2logentry(&changed, attr_bit(AT_MAX_LIFE) | attr_bit(AT_PRINC)),
+        }])
+        .unwrap();
     let after = store.get_name(&extra).unwrap();
+    assert_eq!(after.max_life, 4 * 3600);
     assert_eq!(after.keys.len(), before.keys.len());
     assert_eq!(after.keys[0].key.as_bytes(), before.keys[0].key.as_bytes());
     assert_eq!(after.string_attrs, before.string_attrs);
     assert_eq!(after.key_history.len(), before.key_history.len());
+    assert_eq!(after.tl_data, before.tl_data);
+    assert_eq!(after.attributes, before.attributes);
 }
 
 #[test]

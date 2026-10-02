@@ -705,6 +705,7 @@ pub enum IpropPoll {
 }
 
 /// Pull `master` ulog into `slave`. `last_sno == 0` is full resync (MIT).
+/// MIT `ulog_replay` (`lib/kdb/kdb_log.c:474-476`): an update that does not apply leaves the replica to resynchronize in full.
 pub fn iprop_poll_once(master: &PrincipalStore, slave: &mut PrincipalStore) -> IpropPoll {
     let last = slave.serial();
     let (st, _, entries) = master.iprop_get(last);
@@ -714,9 +715,11 @@ pub fn iprop_poll_once(master: &PrincipalStore, slave: &mut PrincipalStore) -> I
     if st == krb5_kdc::IPROP_NIL || entries.is_empty() {
         return IpropPoll::Nil;
     }
-    let n = entries.len();
-    slave.apply_updates(&entries);
-    IpropPoll::Applied(n)
+    let updates: Vec<_> = entries.iter().map(krb5_kdc::UlogEntry::to_update).collect();
+    match slave.apply_updates(&updates) {
+        Ok(()) => IpropPoll::Applied(updates.len()),
+        Err(_) => IpropPoll::FullResync(master.serial()),
+    }
 }
 
 /// Primary: `sendauth` then dump bytes.

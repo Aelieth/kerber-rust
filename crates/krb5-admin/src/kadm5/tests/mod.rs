@@ -684,6 +684,7 @@ mod framing;
 mod getprinc;
 mod glob;
 mod iprop;
+mod iprop_mit;
 mod keysalt;
 mod lockdown;
 mod policy;
