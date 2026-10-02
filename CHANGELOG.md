@@ -1290,6 +1290,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **log.** Each daemon-log line is one write, so daemons sharing a log file never mix
+  lines. Unit.
 - **kdc/admin.** A listen entry that does not resolve, or whose address family the host
   lacks, logs MIT's lines before the daemon stops. Unit; settled live.
 - **admin.** kadmind finishes the change in hand before it exits, and a failed accept or

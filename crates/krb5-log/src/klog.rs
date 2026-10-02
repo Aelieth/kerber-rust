@@ -306,22 +306,18 @@ impl Logger {
                 Dest::File { path, file } => {
                     let ok = file
                         .as_mut()
-                        .is_some_and(|f| writeln!(f, "{line}").and_then(|()| f.flush()).is_ok());
+                        .is_some_and(|f| write_line(f, &line, "\n").is_ok());
                     if !ok {
                         eprintln!("{}: error writing to {path}", self.whoami);
                     }
                 }
                 Dest::Stderr => {
-                    let mut e = io::stderr().lock();
-                    if writeln!(e, "{line}").and_then(|()| e.flush()).is_err() {
+                    if write_line(&mut io::stderr().lock(), &line, "\n").is_err() {
                         eprintln!("{}: error writing to standard error", self.whoami);
                     }
                 }
                 Dest::Device { name, file } => {
-                    if write!(file, "{line}\r\n")
-                        .and_then(|()| file.flush())
-                        .is_err()
-                    {
+                    if write_line(file, &line, "\r\n").is_err() {
                         eprintln!("{}: error writing to {name} device", self.whoami);
                     }
                 }
@@ -352,6 +348,18 @@ impl Logger {
             }
         }
     }
+}
+
+/// Write `line` and `end` with one `write(2)`, so that daemons appending to one file never mix
+/// their lines.
+/// MIT `klog_vsyslog` (`lib/kadm5/logger.c:707-714`): the line and its newline are formatted into
+/// the stream's buffer and flushed together.
+fn write_line(w: &mut impl Write, line: &str, end: &str) -> io::Result<()> {
+    let mut buf = Vec::with_capacity(line.len() + end.len());
+    buf.extend_from_slice(line.as_bytes());
+    buf.extend_from_slice(end.as_bytes());
+    w.write_all(&buf)?;
+    w.flush()
 }
 
 /// Open one trimmed spec; the facility is `Some` for a `SYSLOG` destination.
@@ -663,6 +671,26 @@ mod tests {
                 .ends_with("before\n")
         );
         assert!(std::fs::read_to_string(&file).unwrap().ends_with("after\n"));
+    }
+
+    #[test]
+    fn a_line_and_its_end_are_one_write() {
+        struct Calls(Vec<Vec<u8>>);
+        impl Write for Calls {
+            fn write(&mut self, b: &[u8]) -> io::Result<usize> {
+                self.0.push(b.to_vec());
+                Ok(b.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut calls = Calls(Vec::new());
+        write_line(&mut calls, "Oct 01 21:59:14 h krb5kdc[7](info): m", "\r\n").unwrap();
+        assert_eq!(
+            calls.0,
+            [b"Oct 01 21:59:14 h krb5kdc[7](info): m\r\n".to_vec()]
+        );
     }
 
     #[test]
