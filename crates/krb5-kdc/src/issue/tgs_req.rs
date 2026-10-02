@@ -516,17 +516,32 @@ fn check_tgs_req<'a>(
             .append_realm(prev_hop, tkt_client_realm, req_realm.as_str())
             .map_err(|_| proto(err::ILL_CR_TKT, status::ADD_TO_TRANSITED_LIST))?;
     }
-    let transit_checked = if tkt_client_realm == "WELLKNOWN:ANONYMOUS" {
+    // MIT `check_tgs_req` (`kdc/do_tgs_req.c:924-939`): the path is checked unless the client
+    // disabled the check, and a refused path is logged with the header client and the server.
+    let cprinc = enc_tkt.cname.unparse_with_realm(header_crealm);
+    let sprinc = sname.unparse_with_realm(req_realm.as_str());
+    let transit_checked = if skip_transited {
+        krb5_log::klog::syslog(krb5_log::klog::Severity::Info, "not checking transit path");
+        false
+    } else if tkt_client_realm == "WELLKNOWN:ANONYMOUS" {
         true
     } else {
         match transited.realms_for(tkt_client_realm, req_realm.as_str()) {
-            Ok(h) => store
-                .policy()
-                .transit_allowed(tkt_client_realm, &req_realm, &h),
+            Ok(h) => {
+                let allowed = store
+                    .policy()
+                    .transit_allowed(tkt_client_realm, &req_realm, &h);
+                if !allowed {
+                    crate::audit::log_bad_transit(&cprinc, &sprinc, &transited);
+                }
+                allowed
+            }
             Err(e) => crate::audit::unexpected_transit_false(
                 e,
                 tkt_client_realm,
                 req_realm.as_str(),
+                &cprinc,
+                &sprinc,
                 &transited,
             ),
         }

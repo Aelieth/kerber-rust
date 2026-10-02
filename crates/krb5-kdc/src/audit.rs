@@ -113,6 +113,237 @@ pub fn rep_etypes2str(rep: i32, tkt: Option<i32>, ses: Option<i32>) -> String {
     out
 }
 
+/// A name for a log line: 128 bytes or more keep their first 124 and end in `...`.
+/// MIT `limit_string` (`kdc/kdc_util.c:1120-1135`): long names are cut so they do not crowd out
+/// the rest of the entry.
+fn limit_string(name: &str) -> String {
+    if name.len() < 128 {
+        return name.to_owned();
+    }
+    let mut end = 124;
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &name[..end])
+}
+
+/// The message of a KDC error code: the texts of MIT's `lib/krb5/error_tables/krb5_err.et`, whose
+/// unnamed slots read `KRB5 error code N`.
+#[must_use]
+pub fn kdc_error_message(code: i32) -> String {
+    let text = match code {
+        0 => "No error",
+        1 => "Client's entry in database has expired",
+        2 => "Server's entry in database has expired",
+        3 => "Requested protocol version not supported",
+        4 => "Client's key is encrypted in an old master key",
+        5 => "Server's key is encrypted in an old master key",
+        6 => "Client not found in Kerberos database",
+        7 => "Server not found in Kerberos database",
+        8 => "Principal has multiple entries in Kerberos database",
+        9 => "Client or server has a null key",
+        10 => "Ticket is ineligible for postdating",
+        11 => "Requested effective lifetime is negative or too short",
+        12 => "KDC policy rejects request",
+        13 => "KDC can't fulfill requested option",
+        14 => "KDC has no support for encryption type",
+        15 => "KDC has no support for checksum type",
+        16 => "KDC has no support for padata type",
+        17 => "KDC has no support for transited type",
+        18 => "Client's credentials have been revoked",
+        19 => "Credentials for server have been revoked",
+        20 => "TGT has been revoked",
+        21 => "Client not yet valid - try again later",
+        22 => "Server not yet valid - try again later",
+        23 => "Password has expired",
+        24 => "Preauthentication failed",
+        25 => "Additional pre-authentication required",
+        26 => "Requested server and ticket don't match",
+        27 => "Server principal valid for user2user only",
+        28 => "KDC policy rejects transited path",
+        29 => "A service is not available that is required to process the request",
+        31 => "Decrypt integrity check failed",
+        32 => "Ticket expired",
+        33 => "Ticket not yet valid",
+        34 => "Request is a replay",
+        35 => "The ticket isn't for us",
+        36 => "Ticket/authenticator don't match",
+        37 => "Clock skew too great",
+        38 => "Incorrect net address",
+        39 => "Protocol version mismatch",
+        40 => "Invalid message type",
+        41 => "Message stream modified",
+        42 => "Message out of order",
+        43 => "Illegal cross-realm ticket",
+        44 => "Key version is not available",
+        45 => "Service key not available",
+        46 => "Mutual authentication failed",
+        47 => "Incorrect message direction",
+        48 => "Alternative authentication method required",
+        49 => "Incorrect sequence number in message",
+        50 => "Inappropriate type of checksum in message",
+        51 => "Policy rejects transited path",
+        52 => "Response too big for UDP, retry with TCP",
+        60 => "Generic error (see e-text)",
+        61 => "Field is too long for this implementation",
+        62 => "Client not trusted",
+        63 => "KDC not trusted",
+        64 => "Invalid signature",
+        65 => "Key parameters not accepted",
+        66 => "Certificate mismatch",
+        67 => "No ticket granting ticket",
+        68 => "Realm not local to KDC",
+        69 => "User to user required",
+        70 => "Can't verify certificate",
+        71 => "Invalid certificate",
+        72 => "Revoked certificate",
+        73 => "Revocation status unknown",
+        74 => "Revocation status unavailable",
+        75 => "Client name mismatch",
+        76 => "KDC name mismatch",
+        77 => "Inconsistent key purpose",
+        78 => "Digest in certificate not accepted",
+        79 => "Checksum must be included",
+        80 => "Digest in signed-data not accepted",
+        81 => "Public key encryption not supported",
+        85 => "The IAKERB proxy could not find a KDC",
+        86 => "The KDC did not respond to the IAKERB proxy",
+        90 => "Preauthentication expired",
+        91 => "More preauthentication data is required",
+        93 => "An unsupported critical FAST option was requested",
+        100 => "No acceptable KDF offered",
+        _ => return format!("KRB5 error code {code}"),
+    };
+    text.to_owned()
+}
+
+/// Whether a TGS failure with `status` happened before the subject ticket was known.
+/// MIT `gather_tgs_req_info` (`kdc/do_tgs_req.c:727-754`): the logged authtime is set from the
+/// subject ticket only here, so an earlier failure logs authtime 0.
+fn tgs_failed_before_authtime(status: &str) -> bool {
+    matches!(
+        status,
+        status::PROCESS_TGS
+            | status::FIND_FAST
+            | status::NULL_SERVER
+            | status::GET_LOCAL_TGT
+            | status::HEADER_PAC
+            | status::LOOKING_UP_SERVER
+            | status::UNKNOWN_SERVER
+            | status::DECODE_PA_FOR_USER
+            | status::DECODE_PA_S4U_X509_USER
+            | status::INVALID_S4U2SELF_CHECKSUM
+            | status::INVALID_S4U2SELF_REQUEST
+            | status::LOOKING_UP_S4U2SELF_PRINCIPAL
+            | status::UNKNOWN_S4U2SELF_PRINCIPAL
+            | status::SECOND_TKT_SERVER
+            | status::SECOND_TKT_DECRYPT
+            | status::SECOND_TKT_PAC
+            | status::RBCD_PAC_PRINC
+    )
+}
+
+/// How a request ended, for its MIT log line.
+enum MitOutcome<'a> {
+    /// A ticket was issued.
+    Issue { authtime: u32, etypes: &'a str },
+    /// A KRB-ERROR was sent.
+    Fail {
+        status: &'a str,
+        code: i32,
+        authtime: u32,
+    },
+}
+
+/// The AS line for the `[logging]` destinations.
+/// MIT `log_as_req` (`kdc/kdc_log.c:57-97`): `AS_REQ (etypes) from: ISSUE: authtime, reply etypes,
+/// client for server`, or the status, the names and the error's message.
+fn as_req_line(
+    req_etypes: &str,
+    from: &str,
+    outcome: &MitOutcome<'_>,
+    client: &str,
+    server: &str,
+) -> String {
+    let (client, server) = (limit_string(client), limit_string(server));
+    match outcome {
+        MitOutcome::Issue { authtime, etypes } => format!(
+            "AS_REQ ({req_etypes}) {from}: ISSUE: authtime {authtime}, {etypes}, {client} for {server}"
+        ),
+        MitOutcome::Fail { status, code, .. } => format!(
+            "AS_REQ ({req_etypes}) {from}: {status}: {client} for {server}, {}",
+            kdc_error_message(*code)
+        ),
+    }
+}
+
+/// The TGS line, and the S4U line after it, for the `[logging]` destinations.
+/// MIT `log_tgs_req` (`kdc/kdc_log.c:117-173`): a server mismatch logs the second ticket's client
+/// instead of the etypes; otherwise the line has the reply etypes on success and the error's
+/// message on a failure, followed by `... PROTOCOL-TRANSITION` or `... CONSTRAINED-DELEGATION`
+/// with the S4U client.
+fn tgs_req_lines(
+    req_etypes: &str,
+    from: &str,
+    outcome: &MitOutcome<'_>,
+    client: &str,
+    server: &str,
+    s4u: Option<(&str, &str)>,
+) -> Vec<String> {
+    let (client, server) = (limit_string(client), limit_string(server));
+    let line = match outcome {
+        MitOutcome::Fail {
+            status,
+            code,
+            authtime,
+        } if *code == err::SERVER_NOMATCH => {
+            let alt = limit_string(s4u.map_or("<unknown>", |(_, c)| c));
+            return vec![format!(
+                "TGS_REQ {from}: {status}: authtime {authtime}, {client} for {server}, 2nd tkt client {alt}"
+            )];
+        }
+        MitOutcome::Issue { authtime, etypes } => format!(
+            "TGS_REQ ({req_etypes}) {from}: ISSUE: authtime {authtime}, {etypes}, {client} for {server}"
+        ),
+        MitOutcome::Fail {
+            status,
+            code,
+            authtime,
+        } => format!(
+            "TGS_REQ ({req_etypes}) {from}: {status}: authtime {authtime},  {client} for {server}, {}",
+            kdc_error_message(*code)
+        ),
+    };
+    let mut lines = vec![line];
+    if let Some((kind, s4u_client)) = s4u {
+        lines.push(format!(
+            "... {kind} s4u-client={}",
+            limit_string(s4u_client)
+        ));
+    }
+    lines
+}
+
+fn klog_as_req(req_etypes: &str, from: &str, outcome: &MitOutcome<'_>, client: &str, server: &str) {
+    krb5_log::klog::syslog(
+        krb5_log::klog::Severity::Info,
+        &as_req_line(req_etypes, from, outcome, client, server),
+    );
+}
+
+fn klog_tgs_req(
+    req_etypes: &str,
+    from: &str,
+    outcome: &MitOutcome<'_>,
+    client: &str,
+    server: &str,
+    s4u: Option<(&str, &str)>,
+) {
+    for line in tgs_req_lines(req_etypes, from, outcome, client, server, s4u) {
+        krb5_log::klog::syslog(krb5_log::klog::Severity::Info, &line);
+    }
+}
+
 /// KDC audit plugin (`kdc_audit.c` `kau_*`).
 pub trait KdcAudit: Send + Sync {
     /// KDC process start.
@@ -313,21 +544,32 @@ fn tgs_fail_emsg(code: i32) -> &'static str {
     }
 }
 
-/// MIT `log_tgs_badtrans` unexpected path: `LOG_ERR`, then treat as unchecked.
-#[must_use]
-pub fn unexpected_transit_false(
-    err: TransitError,
-    crealm: &str,
-    srealm: &str,
-    transited: &TransitedEncoding,
-) -> bool {
+/// The transited contents as MIT logs them: the first 125 bytes, then `...` when cut.
+fn transit_via(transited: &TransitedEncoding) -> (String, &'static str) {
     let raw = transited.contents.as_ref();
     let (shown, dots) = if raw.len() > 125 {
         (&raw[..125], "...")
     } else {
         (raw, "")
     };
-    let via = String::from_utf8_lossy(shown);
+    (String::from_utf8_lossy(shown).into_owned(), dots)
+}
+
+/// An error other than a refused path while checking the transited realms: logged, then the
+/// path counts as unchecked. `crealm` / `srealm` are the realms checked, `cname` / `sname` the
+/// request's client and server.
+/// MIT `log_tgs_badtrans` (`kdc/kdc_log.c:176-212`): an unexpected error is logged at error
+/// severity with the client and server names and the path.
+#[must_use]
+pub fn unexpected_transit_false(
+    err: TransitError,
+    crealm: &str,
+    srealm: &str,
+    cname: &str,
+    sname: &str,
+    transited: &TransitedEncoding,
+) -> bool {
+    let (via, dots) = transit_via(transited);
     tracing::error!(
         event = krb5_log::events::KDC_ISSUE,
         correlation_id = krb5_log::current_correlation_id(),
@@ -340,7 +582,30 @@ pub fn unexpected_transit_false(
         error = %err,
         "unexpected error checking transit from '{crealm}' to '{srealm}' via '{via}{dots}': {err}"
     );
+    krb5_log::klog::syslog(
+        krb5_log::klog::Severity::Err,
+        &format!(
+            "unexpected error checking transit from '{}' to '{}' via '{via}{dots}': {err}",
+            limit_string(cname),
+            limit_string(sname)
+        ),
+    );
     false
+}
+
+/// A transited path the realms do not allow: logged, and the ticket is not marked checked.
+/// MIT `log_tgs_badtrans` (`kdc/kdc_log.c:176-212`): a refused path is logged at info with the
+/// client and server names and the path.
+pub fn log_bad_transit(cname: &str, sname: &str, transited: &TransitedEncoding) {
+    let (via, dots) = transit_via(transited);
+    krb5_log::klog::syslog(
+        krb5_log::klog::Severity::Info,
+        &format!(
+            "bad realm transit path from '{}' to '{}' via '{via}{dots}'",
+            limit_string(cname),
+            limit_string(sname)
+        ),
+    );
 }
 
 /// AS/TGS success: MIT ISSUE tuple on `kdc.issue` plus the audit plugin.
@@ -421,6 +686,16 @@ fn as_success(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddres
         false,
         "",
     );
+    klog_as_req(
+        &req_etypes,
+        &from,
+        &MitOutcome::Issue {
+            authtime,
+            etypes: &etypes,
+        },
+        &client,
+        &server,
+    );
     let mut state = base_state("AS_REQ", body, sender);
     state.stage = ENCR_REP;
     state.tkt_out_id = Some(make_tkt_id(ticket.enc_part.cipher.as_ref()));
@@ -453,6 +728,17 @@ fn as_failure(req: &AsReq, sender: Option<&HostAddress>, code: i32, e_text: &str
         None,
         false,
         "",
+    );
+    klog_as_req(
+        &req_etypes,
+        &from,
+        &MitOutcome::Fail {
+            status,
+            code,
+            authtime: 0,
+        },
+        &client,
+        &server,
     );
     let mut state = base_state("AS_REQ", body, sender);
     state.stage = AUTHN_REQ_CL;
@@ -498,6 +784,17 @@ fn tgs_success(
         s4u.as_ref().map(|(k, c)| (*k, c.as_str())),
         false,
         "",
+    );
+    klog_tgs_req(
+        &req_etypes,
+        &from,
+        &MitOutcome::Issue {
+            authtime,
+            etypes: &etypes,
+        },
+        &client,
+        &server,
+        s4u.as_ref().map(|(k, c)| (*k, c.as_str())),
     );
     let mut state = base_state("TGS_REQ", body, sender);
     state.stage = ENCR_REP;
@@ -573,6 +870,22 @@ fn tgs_failure(
         None,
         nomatch,
         tgs_fail_emsg(code),
+    );
+    let early = tgs_failed_before_authtime(status);
+    let s4u = (!early || status == status::RBCD_PAC_PRINC)
+        .then(|| tgs_s4u_kind(req))
+        .flatten();
+    klog_tgs_req(
+        &req_etypes,
+        &from,
+        &MitOutcome::Fail {
+            status,
+            code,
+            authtime: if early { 0 } else { authtime },
+        },
+        &client,
+        &server,
+        s4u.as_ref().map(|(k, c)| (*k, c.as_str())),
     );
     let mut state = base_state("TGS_REQ", body, sender);
     state.stage = tgs_fail_stage(status);
@@ -1064,6 +1377,147 @@ mod tests {
         assert!(enctype_name(1).starts_with("UNSUPPORTED:"));
         assert_eq!(enctype_name(6), "DEPRECATED:des3-cbc-raw");
         assert_eq!(enctype_name(24), "DEPRECATED:arcfour-hmac-exp");
+    }
+
+    /// The etype list MIT 1.22.2 `kinit` sent in the live settle.
+    const KINIT_ETYPES: [i32; 8] = [18, 17, 20, 19, 16, 23, 25, 26];
+
+    #[test]
+    fn as_lines_match_mit_live() {
+        let req = ktypes2str(&KINIT_ETYPES);
+        let etypes = rep_etypes2str(18, Some(18), Some(18));
+        assert_eq!(
+            as_req_line(
+                &req,
+                "127.0.0.1",
+                &MitOutcome::Issue {
+                    authtime: 1_790_891_954,
+                    etypes: &etypes
+                },
+                "alice@SETTLE.TEST",
+                "krbtgt/SETTLE.TEST@SETTLE.TEST"
+            ),
+            "AS_REQ (8 etypes {aes256-cts-hmac-sha1-96(18), aes128-cts-hmac-sha1-96(17), \
+             aes256-cts-hmac-sha384-192(20), aes128-cts-hmac-sha256-128(19), \
+             DEPRECATED:des3-cbc-sha1(16), DEPRECATED:arcfour-hmac(23), camellia128-cts-cmac(25), \
+             camellia256-cts-cmac(26)}) 127.0.0.1: ISSUE: authtime 1790891954, \
+             etypes {rep=aes256-cts-hmac-sha1-96(18), tkt=aes256-cts-hmac-sha1-96(18), \
+             ses=aes256-cts-hmac-sha1-96(18)}, alice@SETTLE.TEST for krbtgt/SETTLE.TEST@SETTLE.TEST"
+        );
+        assert_eq!(
+            as_req_line(
+                "6 etypes {aes256-cts-hmac-sha384-192(20)}",
+                "192.168.177.22",
+                &MitOutcome::Fail {
+                    status: "NEEDED_PREAUTH",
+                    code: err::PREAUTH_REQUIRED,
+                    authtime: 0
+                },
+                "alice@KERBER.TEST",
+                "krbtgt/KERBER.TEST@KERBER.TEST"
+            ),
+            "AS_REQ (6 etypes {aes256-cts-hmac-sha384-192(20)}) 192.168.177.22: NEEDED_PREAUTH: \
+             alice@KERBER.TEST for krbtgt/KERBER.TEST@KERBER.TEST, Additional pre-authentication required"
+        );
+        assert!(
+            as_req_line(
+                "",
+                "127.0.0.1",
+                &MitOutcome::Fail {
+                    status: "CLIENT_NOT_FOUND",
+                    code: 6,
+                    authtime: 0
+                },
+                "nosuch@SETTLE.TEST",
+                "krbtgt/SETTLE.TEST@SETTLE.TEST"
+            )
+            .ends_with(": CLIENT_NOT_FOUND: nosuch@SETTLE.TEST for krbtgt/SETTLE.TEST@SETTLE.TEST, Client not found in Kerberos database")
+        );
+    }
+
+    #[test]
+    fn tgs_lines_match_mit_live() {
+        let req = "1 etypes {aes256-cts-hmac-sha1-96(18)}";
+        let etypes = rep_etypes2str(18, Some(18), Some(18));
+        assert_eq!(
+            tgs_req_lines(
+                req,
+                "127.0.0.1",
+                &MitOutcome::Issue {
+                    authtime: 1_790_891_954,
+                    etypes: &etypes
+                },
+                "alice@SETTLE.TEST",
+                "host/kdc.settle.test@SETTLE.TEST",
+                None
+            ),
+            [format!(
+                "TGS_REQ ({req}) 127.0.0.1: ISSUE: authtime 1790891954, {etypes}, \
+                 alice@SETTLE.TEST for host/kdc.settle.test@SETTLE.TEST"
+            )]
+        );
+        assert_eq!(
+            tgs_req_lines(
+                req,
+                "127.0.0.1",
+                &MitOutcome::Fail {
+                    status: status::LOOKING_UP_SERVER,
+                    code: err::S_PRINCIPAL_UNKNOWN,
+                    authtime: 0
+                },
+                "alice@SETTLE.TEST",
+                "nosuch/kdc.settle.test@SETTLE.TEST",
+                None
+            ),
+            [format!(
+                "TGS_REQ ({req}) 127.0.0.1: LOOKING_UP_SERVER: authtime 0,  alice@SETTLE.TEST \
+                 for nosuch/kdc.settle.test@SETTLE.TEST, Server not found in Kerberos database"
+            )]
+        );
+        assert!(tgs_failed_before_authtime(status::LOOKING_UP_SERVER));
+        assert!(!tgs_failed_before_authtime(status::TKT_EXPIRED));
+        let lines = tgs_req_lines(
+            req,
+            "::1",
+            &MitOutcome::Issue {
+                authtime: 1,
+                etypes: &etypes,
+            },
+            "svc@R",
+            "svc@R",
+            Some(("PROTOCOL-TRANSITION", "user@R")),
+        );
+        assert_eq!(lines[1], "... PROTOCOL-TRANSITION s4u-client=user@R");
+        assert_eq!(
+            tgs_req_lines(
+                req,
+                "::1",
+                &MitOutcome::Fail {
+                    status: "2ND_TKT_MISMATCH",
+                    code: err::SERVER_NOMATCH,
+                    authtime: 5
+                },
+                "a@R",
+                "b@R",
+                None
+            ),
+            ["TGS_REQ ::1: 2ND_TKT_MISMATCH: authtime 5, a@R for b@R, 2nd tkt client <unknown>"]
+        );
+    }
+
+    #[test]
+    fn long_names_and_error_texts_are_mits() {
+        let long = "a".repeat(200);
+        let cut = limit_string(&long);
+        assert_eq!(cut.len(), 127);
+        assert!(cut.ends_with("aaa..."));
+        assert_eq!(limit_string("short@R"), "short@R");
+        assert_eq!(kdc_error_message(24), "Preauthentication failed");
+        assert_eq!(kdc_error_message(30), "KRB5 error code 30");
+        assert_eq!(
+            kdc_error_message(93),
+            "An unsupported critical FAST option was requested"
+        );
     }
 
     #[test]
