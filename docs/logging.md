@@ -133,7 +133,7 @@ every `default` value, else syslog with facility AUTH. Fedora's
 `/etc/krb5.conf` routes them to `/var/log/krb5kdc.log` and
 `/var/log/kadmind.log` this way. `krb5-kadmin-local` opens the
 `admin_server` destinations the same way, as MIT's `kadmin.local`
-does, and writes nothing to them.
+does, and writes only the dictionary notice to them.
 
 | Destination | Meaning |
 | --- | --- |
@@ -152,6 +152,9 @@ so logrotate's `systemctl reload` moves the daemon to a new one.
 What is logged is what MIT logs: `setting up network...`, `set up N
 sockets` and MIT's bind-failure lines; `commencing operation` /
 `shutting down` (KDC) and `starting` / `finished, exiting` (kadmind);
+at kadmind's and kadmin.local's start, `No dictionary file specified,
+continuing without one.` without a `dict_file`, or `WARNING!  Cannot
+find dictionary file …, continuing without one.` for a missing one;
 one `AS_REQ` / `TGS_REQ` line per answered request (`ISSUE` with the
 reply etypes, or the status word and the error's message) with the
 `... PROTOCOL-TRANSITION` / `... CONSTRAINED-DELEGATION` line after an

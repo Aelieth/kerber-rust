@@ -7,6 +7,8 @@ use std::io::{self, Read as _};
 use std::path::Path;
 use std::sync::Arc;
 
+use krb5_log::klog::{self, Severity};
+
 use super::PrincipalStore;
 
 /// The words of a dictionary file, kept as MIT keeps them: the file in one block and an index
@@ -29,20 +31,37 @@ impl std::fmt::Debug for PwqualDict {
 }
 
 impl PwqualDict {
-    /// The dictionary `dict_file` names, `None` when there is none to read.
+    /// The dictionary `dict_file` names, `None` when there is none to read; either case gets
+    /// MIT's notice, which `note` takes ([`PrincipalStore::init_pwqual`] logs it with klog).
     /// MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:104-118`): no `dict_file` and a missing file leave the server without a dictionary; any other open error is returned.
     ///
     /// # Errors
     ///
     /// The open, `fstat` or read error of a `dict_file` that exists but cannot be read (a
     /// directory's `EISDIR`), and `FileTooLarge` for a dictionary of 4 GiB or more.
-    pub(crate) fn open(dict_file: Option<&Path>) -> io::Result<Option<Self>> {
+    pub(crate) fn open(
+        dict_file: Option<&Path>,
+        note: &mut dyn FnMut(Severity, &str),
+    ) -> io::Result<Option<Self>> {
         let Some(path) = dict_file else {
+            note(
+                Severity::Info,
+                "No dictionary file specified, continuing without one.",
+            );
             return Ok(None);
         };
         let mut file = match std::fs::File::open(path) {
             Ok(file) => file,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                note(
+                    Severity::Err,
+                    &format!(
+                        "WARNING!  Cannot find dictionary file {}, continuing without one.",
+                        path.display()
+                    ),
+                );
+                return Ok(None);
+            }
             Err(e) => return Err(e),
         };
         Self::from_bytes(read_fstat_size(&mut file)?).map(Some)
@@ -143,8 +162,21 @@ impl PrincipalStore {
     /// The open or read error of a `dict_file` that exists but cannot be read (MIT's
     /// `kadm5_init` fails with it); the store keeps the dictionary it had.
     pub fn init_pwqual(&mut self, conf: Option<&krb5_config::KdcConf>) -> io::Result<()> {
+        self.init_pwqual_noting(conf, &mut |severity, text| klog::syslog(severity, text))
+    }
+
+    /// [`Self::init_pwqual`], with MIT's notice given to `note` instead of the log.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::init_pwqual`].
+    pub(crate) fn init_pwqual_noting(
+        &mut self,
+        conf: Option<&krb5_config::KdcConf>,
+        note: &mut dyn FnMut(Severity, &str),
+    ) -> io::Result<()> {
         let dict_file = conf.and_then(|c| c.dict_file.as_deref());
-        self.pwqual_dict = PwqualDict::open(dict_file)?.map(Arc::new);
+        self.pwqual_dict = PwqualDict::open(dict_file, note)?.map(Arc::new);
         Ok(())
     }
 }

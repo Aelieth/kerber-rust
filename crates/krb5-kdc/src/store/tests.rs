@@ -547,14 +547,19 @@ fn pwqual_dict_words_are_init_dict_lines_matched_as_strcasecmp() {
         assert!(!dict.contains(w), "{w:?}");
     }
     let dir = krb5_testkit::scratch_dir("krb5-pwqual-open");
-    assert!(pwqual_dict::PwqualDict::open(None).unwrap().is_none());
+    let quiet = &mut |_: krb5_log::klog::Severity, _: &str| {};
     assert!(
-        pwqual_dict::PwqualDict::open(Some(&dir.join("missing")))
+        pwqual_dict::PwqualDict::open(None, quiet)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        pwqual_dict::PwqualDict::open(Some(&dir.join("missing")), quiet)
             .unwrap()
             .is_none()
     );
     std::fs::write(dir.join("one"), "no newline").unwrap();
-    let one = pwqual_dict::PwqualDict::open(Some(&dir.join("one")))
+    let one = pwqual_dict::PwqualDict::open(Some(&dir.join("one")), quiet)
         .unwrap()
         .unwrap();
     assert_eq!(one.word_count(), 0);
@@ -564,17 +569,61 @@ fn pwqual_dict_words_are_init_dict_lines_matched_as_strcasecmp() {
 #[test]
 fn pwqual_dict_reads_the_fstat_size_so_dev_zero_is_empty() {
     // A character device says 0 bytes and never ends: read as MIT reads it, it is an empty
-    // dictionary at once (live: MIT's kadmind starts and accepts any word).
+    // dictionary at once, with no notice, as MIT says nothing for a file it opened (live: MIT's
+    // kadmind starts and accepts any word).
+    use krb5_log::klog::Severity;
     let zero = std::path::Path::new("/dev/zero");
+    let mut notes: Vec<(Severity, String)> = Vec::new();
+    let mut note = |severity: Severity, text: &str| notes.push((severity, text.to_owned()));
     let started = std::time::Instant::now();
-    let dict = pwqual_dict::PwqualDict::open(Some(zero)).unwrap().unwrap();
+    let dict = pwqual_dict::PwqualDict::open(Some(zero), &mut note)
+        .unwrap()
+        .unwrap();
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
     assert_eq!(dict.word_count(), 0);
     let mut store = PrincipalStore::new(TEST_REALM_STR);
-    store.init_pwqual(Some(&dict_conf(zero))).unwrap();
+    store
+        .init_pwqual_noting(Some(&dict_conf(zero)), &mut note)
+        .unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
     store.put_policy(NamedPolicy::new("pq"));
     let u = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dictu"]);
     store.check_new_password(&u, Some("pq"), b"zebra").unwrap();
+}
+
+#[test]
+fn pwqual_dict_gives_mits_notices_when_there_is_no_dictionary() {
+    // The notices go to a collector, not the process-wide log other tests write to.
+    use krb5_log::klog::Severity;
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-notices");
+    let (missing, words) = (dir.join("nosuch"), dir.join("w"));
+    std::fs::write(&words, "zebra\n").unwrap();
+    let mut notes: Vec<(Severity, String)> = Vec::new();
+    let mut note = |severity: Severity, text: &str| notes.push((severity, text.to_owned()));
+    let mut store = PrincipalStore::new(TEST_REALM_STR);
+    store.init_pwqual_noting(None, &mut note).unwrap();
+    store
+        .init_pwqual_noting(Some(&dict_conf(&missing)), &mut note)
+        .unwrap();
+    store
+        .init_pwqual_noting(Some(&dict_conf(&words)), &mut note)
+        .unwrap();
+    let warning = format!(
+        "WARNING!  Cannot find dictionary file {}, continuing without one.",
+        missing.display()
+    );
+    assert_eq!(
+        notes,
+        [
+            (
+                Severity::Info,
+                "No dictionary file specified, continuing without one.".to_owned()
+            ),
+            (Severity::Err, warning),
+        ]
+    );
+    assert!(store.pwqual_dict.is_some());
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

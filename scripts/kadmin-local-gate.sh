@@ -236,7 +236,8 @@ TWSBAD="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     "$NAME" -- -q 'addpol -maxlife "42 " tws2' 2>&1 \
-    | sed -z -e 's/Authenticating as principal [^\n]*with password\.\n//g')"
+    | sed -z -e 's/Authenticating as principal [^\n]*with password\.\n//g' \
+             -e 's/[^\n]*No dictionary file specified[^\n]*\n//g')"
 echo "$TWSBAD"
 # MIT prints the date error and continues (exit 0); the first line is identical.
 echo "$TWSBAD" | grep -Fx 'Invalid date specification "42 ".'
@@ -282,7 +283,7 @@ echo "$PDELP"
 diff <(echo "$PDELP" | prompt_lines | grep -F 'not deleted') <(mit_local 'delprinc delme' | prompt_lines | grep -F 'not deleted')
 echo "$PDELP" | grep -F 'Principal "delme@KERBER.TEST" not deleted'
 YDEL="$(printf 'yes\n' | rust_kadmin_local -i -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" -- -q 'delprinc delme' 2>&1 | { grep -v -e '^Authenticating' || true; })"
+    "$NAME" -- -q 'delprinc delme' 2>&1 | { grep -v -e '^Authenticating' -e 'No dictionary file' || true; })"
 echo "$YDEL"
 MIT_YDEL="$(printf 'yes\n' | mit_kadmin_local -i "$NAME" -- -q 'delprinc delme' 2>&1 \
     | { grep -v -e '^Authenticating' -e 'No dictionary file' || true; })"

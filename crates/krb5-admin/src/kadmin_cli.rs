@@ -520,8 +520,7 @@ fn krb5_conf_paths_with_kdc() -> Vec<PathBuf> {
 
 /// MIT `krb5_klog_init` (`lib/kadm5/logger.c:232-522`): for `admin_server`, the `[logging]`
 /// destinations of kdc.conf and the krb5.conf files open as kadmind's do, and one that cannot
-/// is reported; `kadmin.local` itself writes nothing to them, so MIT's own notices there (the
-/// password-quality dictionary's) are not written.
+/// is reported; the password-quality dictionary's notice goes there as MIT's does.
 fn klog_init() {
     let specs = krb5_config::LogSpecs::load("admin_server");
     krb5_log::klog::init(WHOAMI, &specs.specs, specs.debug);
