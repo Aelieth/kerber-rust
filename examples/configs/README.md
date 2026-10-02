@@ -20,7 +20,7 @@ export KRB5_CONFIG=/etc/kerber-rust/krb5.conf   # default_realm EXAMPLE.COM: the
 # key_stash_file; it asks for the master password twice (or takes -P):
 krb5-kdb -r EXAMPLE.COM create -s    # K/M, krbtgt, kadmin/admin and kadmin/changepw, as MIT's
 krb5-kadmin-local -q 'addprinc -pw … admin'   # the admin kadm5.acl names
-krb5-kdc                             # UDP and TCP on every kdc_listen address
+krb5-kdc -n                          # UDP and TCP on every kdc_listen address
 krb5-kadmind                         # kadm5 on 749 and kpasswd on 464, all local addresses
 ```
 
@@ -63,16 +63,17 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
 - `KRB5_ACL_FILE`: overrides `acl_file`.
 - `KRB5_KPROP_ACL`: `krb5-kpropd`'s allowlist (`kpropd.acl` form); unset or empty
   refuses every propagation (`crates/krb5-admin/src/bin/krb5-kpropd.rs`).
-- `KRB5_KDC_BIND`: the one address the KDC binds, instead of `kdc_listen`.
+- `KRB5_KDC_BIND` (builds with the `test-hooks` feature): the one address the KDC
+  binds, instead of `kdc_listen`.
 - `KRB5_KPASSWD_BIND`: the one address `krb5-kadmind` serves kpasswd on, instead
   of `kpasswd_listen` / `kpasswd_port`.
-- `KRB5_KDC_USER`: the user the KDC drops to after binding as root (default
-  `nobody`, `crates/krb5-kdc/src/listen.rs`). A KDC that serves a database
-  file, as with this `kdc.conf`, keeps its user so it can re-read what
-  `krb5-kadmind` writes. MIT's `krb5kdc` and `kadmind` never change user
-  either; to run without root, start both daemons as one unprivileged user
-  that owns the database directory, with `CAP_NET_BIND_SERVICE` for ports
-  88, 464 and 749.
+- `KRB5_KDC_USER` (builds with the `test-hooks` feature): the user a KDC that
+  serves no database file drops to after binding as root (default `nobody`,
+  `crates/krb5-kdc/src/listen.rs`). A KDC that serves a database file, as with
+  this `kdc.conf`, keeps its user so it can re-read what `krb5-kadmind` writes.
+  MIT's `krb5kdc` and `kadmind` never change user either; to run without root,
+  start both daemons as one unprivileged user that owns the database
+  directory, with `CAP_NET_BIND_SERVICE` for ports 88, 464 and 749.
 
 ## What MIT reads that this port ignores
 

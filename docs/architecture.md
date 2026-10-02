@@ -53,10 +53,17 @@ is MIT dump version 7 (stash still holds the master key; SID/RID in
 `krb5-kdb` is MIT's `kdb5_util` (create, stash, dump, load, destroy). `key_data` uses KDB usage 0
 with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
 stays rejected. The serving store is `Arc<RwLock<PrincipalStore>>` so
-kadmind/kpasswd mutations reach `save_store`. Default bind is
-`127.0.0.1` (not `0.0.0.0`). After a privileged bind the daemon drops
-to `KRB5_KDC_USER` (default `nobody`). TCP workers are capped
-(`MAX_TCP_WORKERS`); SIGTERM/SIGINT stop `serve`. `--test-realm`
+kadmind/kpasswd mutations reach `save_store`. The `krb5-kdc` daemon
+takes MIT `krb5kdc`'s options, listens where kdc.conf says (every local
+address by default), detaches unless `-n`, and writes MIT's text log
+where `[logging]` says ([logging.md](logging.md)). It always serves a
+database file and, as MIT's, keeps its user; only a `test-hooks` build
+serving the test realm without one drops to `KRB5_KDC_USER` (default
+`nobody`) after a privileged bind. TCP workers are capped
+(`MAX_TCP_WORKERS`).
+As MIT's does, the daemon stops on SIGINT, SIGTERM or SIGQUIT and
+reopens its log files on SIGHUP. In a `test-hooks` build,
+`--test-realm`
 bootstraps documented principals (including `kadmin/admin` and
 `kadmin/changepw`); with `KRB5_KDC_DB` + stash the test realm is saved
 so a separate kadmind process can reload it. `--export-keytab` /

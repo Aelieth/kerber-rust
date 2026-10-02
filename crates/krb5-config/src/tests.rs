@@ -1205,3 +1205,27 @@ fn relation_names_are_case_sensitive_as_in_the_profile_library() {
         Vec::<String>::new()
     );
 }
+
+#[test]
+fn port_option_replaces_the_default_list_but_not_the_realms() {
+    let ports = |conf: &KdcConf| -> (Vec<u16>, Vec<u16>) {
+        let udp = conf.kdc_udp_listeners().unwrap();
+        let tcp = conf.kdc_tcp_listeners().unwrap();
+        (
+            udp.iter().map(|a| a.port).collect(),
+            tcp.iter().map(|a| a.port).collect(),
+        )
+    };
+    let stanza = "[realms]\n    SETTLE.TEST = {\n        database_name = /s/db/principal\n    }\n";
+    let mut plain = KdcConf::parse(stanza).unwrap();
+    plain.apply_port_option("7088");
+    assert_eq!(ports(&plain), (vec![7088], vec![7088]));
+    let mut tcp_default =
+        KdcConf::parse(&format!("[kdcdefaults]\n    kdc_tcp_ports = 88\n{stanza}")).unwrap();
+    tcp_default.apply_port_option("7088");
+    assert_eq!(ports(&tcp_default), (vec![7088], vec![88]));
+    let mut realm_ports =
+        KdcConf::parse("[realms]\n    SETTLE.TEST = {\n        kdc_ports = 89\n    }\n").unwrap();
+    realm_ports.apply_port_option("7088");
+    assert_eq!(ports(&realm_ports), (vec![89], vec![89]));
+}

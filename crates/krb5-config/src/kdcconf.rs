@@ -55,6 +55,7 @@ impl Default for KdcConf {
     fn default() -> Self {
         Self {
             kdc_listen: listen::DEFAULT_KDC_PORTLIST.into(),
+            kdc_listen_in_realm: false,
             kdc_tcp_listen: None,
             admin_server: None,
             kadmind_listen: None,
@@ -166,8 +167,19 @@ impl KdcConf {
         if let Some(v) = realm_listen.udp().or(default_listen.udp()) {
             conf.kdc_listen.clone_from(v);
         }
+        conf.kdc_listen_in_realm = realm_listen.udp().is_some();
         conf.kdc_tcp_listen = realm_listen.tcp().or(default_listen.tcp()).cloned();
         Ok(conf)
+    }
+
+    /// Apply `krb5kdc -p`: it replaces the default listener list (`[kdcdefaults]`, else 88) but
+    /// not a realm stanza's own, and TCP follows it when no TCP list is written.
+    /// MIT `initialize_realms` (`kdc/main.c:766-773`): `-p` replaces the default list.
+    /// MIT `init_realm` (`kdc/main.c:257-263`): the realm stanza's list wins over that default.
+    pub fn apply_port_option(&mut self, ports: &str) {
+        if !self.kdc_listen_in_realm {
+            ports.clone_into(&mut self.kdc_listen);
+        }
     }
 
     /// The KDC's UDP listeners.

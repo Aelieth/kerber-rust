@@ -419,7 +419,7 @@ docker exec -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/k
     "$NAME" /tmp/krb5-kdb -r EXAMPLE.COM -P example-master create -s \
     || die "example: krb5-kdb -r EXAMPLE.COM create -s failed"
 docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    "$NAME" sh -c '/tmp/krb5-kdc >/tmp/example-kdc.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kdc -n >/tmp/example-kdc.log 2>&1'
 require_listen "$NAME" /tmp/example-kdc.log "the example KDC (kdc.conf kdc_listen)"
 docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/example-kadmind.log 2>&1'
@@ -464,7 +464,7 @@ docker exec "$NAME" grep -q '^    kdc_ports = 750,88$' /etc/kerber-rust/kdc.conf
 LIP="$(docker exec "$NAME" hostname -i | tr ' ' '\n' | grep -v '^127\.' | grep -v ':' | head -1)"
 [ -n "$LIP" ] || die "listen: the container has no non-loopback IPv4 address"
 docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    "$NAME" sh -c '/tmp/krb5-kdc >/tmp/listen-kdc.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kdc -n >/tmp/listen-kdc.log 2>&1'
 require_listen "$NAME" /tmp/listen-kdc.log "the KDC on kdc_ports = 750,88"
 docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/listen-kadmind.log 2>&1'

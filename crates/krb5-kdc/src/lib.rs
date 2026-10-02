@@ -23,6 +23,7 @@ mod acl;
 mod ad;
 mod audit;
 mod create;
+mod daemon;
 mod der;
 mod error;
 mod issue;
@@ -53,6 +54,7 @@ pub use audit::{
 #[cfg(feature = "test-hooks")]
 pub use create::seed_test_principals;
 pub use create::{create_realm, kdc_conf_for_realm};
+pub use daemon::{OpenFailure, Signals, database_path, detach, open_database, write_pid_file};
 pub use error::Error;
 pub(crate) use issue::kdc_error_bytes;
 pub use issue::{
@@ -72,10 +74,10 @@ pub use kdb_dump::{
     write_dump_path_etype,
 };
 pub use listen::{
-    BIND_CANDIDATES, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST,
-    MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
-    bind_preferred, bind_tcp_listeners, bind_udp_listeners, drop_privileges, serve, serve_all,
-    serve_all_until, serve_until, shared_dump, shared_store,
+    BIND_CANDIDATES, ClosingFd, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY,
+    MAX_TCP_REQUEST, MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP,
+    WHILE_DISPATCHING_UDP, bind_preferred, bind_tcp_listeners, bind_udp_listeners, drop_privileges,
+    serve, serve_all, serve_all_until, serve_until, shared_dump, shared_store,
 };
 pub use mkey::{default_master_etype, master_etype, master_key_from_password, string_to_enctype};
 pub use osa::{

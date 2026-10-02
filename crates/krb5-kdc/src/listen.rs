@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::os::fd::{AsRawFd as _, RawFd};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -332,7 +333,10 @@ fn bind_listeners<S>(
                     bound_any = true;
                 }
                 Err(e) if no_family(&e) => skipped = Some(named(a, e)),
-                Err(e) => return Err(named(a, e)),
+                Err(e) => {
+                    log_bind_failure(a, proto, &e);
+                    return Err(named(a, e));
+                }
             }
         }
         if !bound_any {
@@ -345,6 +349,30 @@ fn bind_listeners<S>(
         }
     }
     Ok(out)
+}
+
+/// The daemon log lines for a listener that does not bind; the daemon then stops.
+/// MIT `create_server_socket` (`lib/apputils/net-server.c:660-665`): the error and the address
+/// with its port.
+/// MIT `setup_addresses` (`lib/apputils/net-server.c:1024-1030`): the socket type and the address.
+/// MIT `loop_setup_network` (`lib/apputils/net-server.c:1068-1073`): the error once more, and
+/// the daemon exits.
+fn log_bind_failure(a: SocketAddr, proto: &str, e: &io::Error) {
+    use krb5_log::klog::{Severity, os_error_text, syslog};
+    let text = os_error_text(e);
+    syslog(
+        Severity::Err,
+        &format!("{text} - Cannot bind server socket on {a}"),
+    );
+    syslog(
+        Severity::Err,
+        &format!(
+            "Failed setting up a {} socket (for {})",
+            proto.to_ascii_uppercase(),
+            a.ip()
+        ),
+    );
+    syslog(Severity::Err, &format!("{text} - Error setting up network"));
 }
 
 /// Drop root after a privileged bind (port 88).
@@ -592,8 +620,10 @@ fn tcp_loop(
                 let cache = Arc::clone(cache);
                 let max_body = limits.max_tcp_request;
                 let timeout = limits.io_timeout;
+                let fd = stream.as_raw_fd();
                 thread::spawn(move || {
                     let _guard = ConnGuard(registry_g, seq);
+                    let _closed = ClosingFd(fd);
                     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                         handle_tcp(&store, stream, max_body, timeout, &cache)
                     }));
@@ -798,6 +828,20 @@ pub struct ConnGuard(pub Arc<ConnRegistry>, pub u64);
 impl Drop for ConnGuard {
     fn drop(&mut self) {
         self.0.deregister(self.1);
+    }
+}
+
+/// Logs `closing down fd N` to the daemon log when a stream connection's worker ends.
+/// MIT `free_socket` (`lib/apputils/net-server.c:505-547`): each connection's descriptor is
+/// logged as it is closed.
+pub struct ClosingFd(pub RawFd);
+
+impl Drop for ClosingFd {
+    fn drop(&mut self) {
+        krb5_log::klog::syslog(
+            krb5_log::klog::Severity::Info,
+            &format!("closing down fd {}", self.0),
+        );
     }
 }
 

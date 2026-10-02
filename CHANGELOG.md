@@ -737,6 +737,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **kdc.** `krb5-kdc` takes MIT's options, detaches unless `-n`, writes a `-P` pid file
+  and reopens its log on SIGHUP.
 - **admin.** Release kprop, kpropd, iprop-pull take the master key from the stash and
   kpropd's realm from `-r` or `default_realm`, as MIT's; `KRB5_MASTER_PASSWORD` and the test
   realm need `test-hooks`. Unit; a live release-build kprop and iprop-pull run (no gate).

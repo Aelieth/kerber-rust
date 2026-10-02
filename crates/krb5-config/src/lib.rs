@@ -178,6 +178,9 @@ pub struct KdcConf {
     /// [`listen::DEFAULT_KDC_PORTLIST`].
     /// MIT `init_realm` (`kdc/main.c:257-263`): `kdc_listen`, then `kdc_ports`, then the default.
     pub kdc_listen: String,
+    /// Whether the realm stanza wrote `kdc_listen` / `kdc_ports`, so `krb5kdc -p` does not
+    /// replace [`Self::kdc_listen`].
+    pub kdc_listen_in_realm: bool,
     /// The KDC's TCP listener list (`kdc_tcp_listen` / `kdc_tcp_ports`, realm then
     /// `[kdcdefaults]`); `None` listens on [`Self::kdc_listen`].
     /// MIT `init_realm` (`kdc/main.c:267-282`): `kdc_tcp_listen`, then `kdc_tcp_ports`.
