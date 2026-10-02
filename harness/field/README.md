@@ -4,7 +4,7 @@ Section F proves kerber-rust against real systems: Fedora clients (SSSD,
 gssproxy, NFS, sshd, Firefox), Keycloak, Windows/AD and KLLDAP. Every scenario
 runs first against a stock Fedora MIT `krb5-server` realm (the oracle), then
 against kerber-rust. This directory builds the lab those scenarios run in:
-four libvirt VMs on this host, on a private NAT network with its own DNS.
+five libvirt VMs on this host, on a private NAT network with its own DNS.
 
 `lab.sh` is a harness. It drives libvirt, cloud-init and Anaconda, and it
 asserts nothing about Kerberos. The VMs carry no Kerberos server software and
@@ -21,7 +21,7 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 | `services.kerber.test` | `.11` | `kerber-services` | Fedora 43 Cloud | 4 / 6 GiB / 40 GB | rootful podman: Ganesha NFS, Keycloak, lldap |
 | `client1.kerber.test` | `.21` | `kerber-client1` | Fedora Kinoite 43 | 4 / 6 GiB / 40 GB | the fleet's client type (satomlin-kit twin), SPICE desktop |
 | `client2.kerber.test` | `.22` | `kerber-client2` | Fedora 43 Cloud | 2 / 3 GiB / 20 GB | sshd target, second NFS client, headless checks |
-| `klldap.kerber.test` | `.30` | not built yet | | | reserved for F3 |
+| `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
 
 - **DHCP:** static leases by MAC (`network-kerber-lab.xml`, the table in
   `lab.sh`). Other machines get `.100`–`.199`.
@@ -33,8 +33,8 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 - **Own name:** a VM's own name resolves locally (systemd-resolved /
   nss-myhostname), not through DNS. In `getaddrinfo` order the answer is the
   IPv6 link-local address, then the lab address, and on kdc then the LAN
-  address. This is stock Fedora. A client running on kdc itself tries
-  `fe80::…%2` first.
+  address (on klldap, Docker's `172.17.0.1`). This is stock Fedora. A client
+  running on kdc itself tries `fe80::…%2` first.
 
 ### kdc's LAN NIC (macvtap)
 
@@ -118,16 +118,18 @@ harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and netw
 
 ## What `up` builds
 
-- **Cloud VMs (`kdc`, `services`, `client2`):**
+- **Cloud VMs (`kdc`, `services`, `client2`, `klldap`):**
   - Disk: a qcow2 overlay on the Fedora 43 Cloud Base image (`43-1.6`).
   - Seed: a NoCloud ISO (`cidata`) rendered from `cloud-init/<vm>.user-data`
     and `cloud-init/network-config.*`.
   - cloud-init sets the FQDN hostname and timezone UTC. It creates user `lab`
     (wheel, NOPASSWD sudo, the lab key, a console password; no SSH password
     login), upgrades all packages, and installs `chrony qemu-guest-agent
-    tcpdump jq bind-utils tar rsync`. `services` also gets `podman`, and
-    `kdc` gets `nftables` plus its LAN NIC confinement.
-  - chronyd and the guest agent are enabled.
+    tcpdump jq bind-utils tar rsync`. `services` also gets `podman`,
+    `klldap` gets `moby-engine` (KLLDAP is Docker-only), and `kdc` gets
+    `nftables` plus its LAN NIC confinement.
+  - chronyd and the guest agent are enabled, and on `klldap` also
+    `docker.service`.
 - **`client1`:**
   - Installed unattended from the Fedora Kinoite 43 ISO with
     `kickstart/client1-kinoite.ks`. Its payload is the ISO's embedded ostree
@@ -162,6 +164,11 @@ harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and netw
 | Firewall | none (Fedora Cloud has no firewalld) | firewalld, zone `FedoraWorkstation` |
 | SELinux | enforcing | enforcing |
 | Time | UTC, chronyd on `2.fedora.pool.ntp.org` (through the NAT) | same |
+
+`klldap` (built 2026-10-02, about 6 minutes) is the cloud column plus
+`moby-engine` 29.6.2 (containerd 2.2.8, runc 1.5.2) with `docker.service`
+enabled. Fedora's unit starts dockerd with `--selinux-enabled`, so containers
+run as `container_t`. The image's `podman` stays installed.
 
 ## Where things live
 

@@ -1,0 +1,37 @@
+#cloud-config
+# klldap.kerber.test: rootful Docker host (moby-engine) for KLLDAP, which is
+# Docker-only and runs its own KDC in its container (F3). The scenarios load
+# the images and start the container later.
+#
+# lab.sh renders this template into ~/kerber-lab/seeds (outside git):
+#   @SSH_PUBKEY@        the lab public key, ~/kerber-lab/ssh/lab_ed25519.pub
+#   @LAB_PASSWD_HASH@   SHA-512 crypt of the console password, ~/kerber-lab/secrets
+hostname: klldap
+fqdn: klldap.kerber.test
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: false
+timezone: UTC
+users:
+  - name: lab
+    gecos: kerber-lab operator
+    groups: [wheel]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: "@LAB_PASSWD_HASH@"
+    ssh_authorized_keys:
+      - "@SSH_PUBKEY@"
+disable_root: true
+ssh_pwauth: false
+package_upgrade: true
+packages:
+  - chrony
+  - qemu-guest-agent
+  - tcpdump
+  - jq
+  - bind-utils
+  - tar
+  - rsync
+  - moby-engine
+runcmd:
+  - [systemctl, enable, --now, chronyd.service, qemu-guest-agent.service, docker.service]

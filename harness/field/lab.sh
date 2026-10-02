@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 # harness/field/lab.sh: the kerber-rust KVM field lab (section F0).
 #
-# Builds, runs and resets four VMs on libvirt qemu:///system: kdc, services,
-# client1 (Fedora Kinoite 43) and client2. They sit on the NAT network
-# kerber-lab (192.168.177.0/24, DNS domain kerber.test). kdc also has a LAN
-# NIC (macvtap) so the AD test DC can reach it. See harness/field/README.md.
+# Builds, runs and resets five VMs on libvirt qemu:///system: kdc, services,
+# client1 (Fedora Kinoite 43), client2 and klldap (the Docker host for
+# KLLDAP). They sit on the NAT network kerber-lab (192.168.177.0/24, DNS
+# domain kerber.test). kdc also has a LAN NIC (macvtap) so the AD test DC can
+# reach it. See harness/field/README.md.
 #
 # Runs on the host, or in a distrobox where virsh is not on PATH. In that
 # case every host command (virsh, virt-install, xorriso, ip) goes through
@@ -60,15 +61,16 @@ BASE_VOL=fedora-43-cloud-base-1.6.qcow2
 ISO_VOL=fedora-kinoite-43-1.6.iso
 
 # The VM table. The MACs must match network-kerber-lab.xml.
-ALL_VMS=(kdc services client1 client2)
-declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud)
-declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2)
-declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072)
-declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20)
+ALL_VMS=(kdc services client1 client2 klldap)
+declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud)
+declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2)
+declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072)
+declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30)
 declare -A IP=([kdc]=192.168.177.10 [services]=192.168.177.11 [client1]=192.168.177.21
                [client2]=192.168.177.22 [klldap]=192.168.177.30)
 declare -A MAC=([kdc]=52:54:00:4b:52:0a [services]=52:54:00:4b:52:0b
-                [client1]=52:54:00:4b:52:15 [client2]=52:54:00:4b:52:16)
+                [client1]=52:54:00:4b:52:15 [client2]=52:54:00:4b:52:16
+                [klldap]=52:54:00:4b:52:1e)
 KDC_LAN_MAC=52:54:00:4b:4c:0a
 
 say()  { printf '[lab] %s\n' "$*"; }
@@ -619,7 +621,6 @@ cmd_status() {
         snaps=$(vsh snapshot-list "$d" --name 2>/dev/null | sed '/^$/d' | paste -sd, - || true)
         printf '%-9s %-16s %-16s %-10s %s\n' "$vm" "${IP[$vm]}" "$d" "$(dom_state "$vm")" "${snaps:--}"
     done
-    printf '%-9s %-16s %s\n' klldap "${IP[klldap]}" "(reserved for F3)"
     if is_state kdc running; then
         printf 'kdc LAN address (macvtap, DHCP from the LAN): %s\n' "$(kdc_lan_ip || true)"
     fi
