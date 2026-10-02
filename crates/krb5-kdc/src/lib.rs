@@ -95,10 +95,11 @@ pub use osa::{
     history_entry as encrypt_history_entry,
 };
 pub use persist::{
-    CreateError, DbWrite, LoadError, PersistError, create_store, load_dump_with_stash, load_store,
-    load_store_full, load_store_with_master, load_text_full, read_db_locked, read_stash,
-    save_dump_text, save_dump_text_locked, save_store, save_store_fresh, save_store_legacy_kdb3,
-    save_store_locked, save_store_with_master, stash_keys, write_stash,
+    CreateError, DbWrite, LoadError, PersistError, Unopenable, check_openable, create_store,
+    load_dump_with_stash, load_store, load_store_full, load_store_with_master, load_text_full,
+    read_db_locked, read_stash, save_dump_text, save_dump_text_locked, save_store,
+    save_store_fresh, save_store_legacy_kdb3, save_store_locked, save_store_with_master,
+    stash_keys, write_stash,
 };
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,

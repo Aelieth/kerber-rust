@@ -1,0 +1,77 @@
+//! `kadmin.local` on a database file it does not read: the open fails with MIT's text before the
+//! master key is asked for, with the stash as with `-m` (settled live on MIT 1.22.2).
+//! MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:234-256`): the database is opened before the caller's name is parsed and the master key fetched.
+
+use std::io::Write as _;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
+
+use krb5_testkit::scratch_dir;
+
+/// The documented test realm saved as a database a kdc.conf names, as `kadmin.local` finds it.
+fn realm(tag: &str) -> PathBuf {
+    let dir = scratch_dir(tag);
+    let (store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    krb5_kdc::save_store(&store, &dir.join("principal"), &dir.join("stash")).unwrap();
+    std::fs::write(
+        dir.join("krb5.conf"),
+        "[libdefaults]\n default_realm = KERBER.TEST\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("kdc.conf"),
+        format!(
+            "[realms]\n KERBER.TEST = {{\n  database_name = {}\n  key_stash_file = {}\n }}\n",
+            dir.join("principal").display(),
+            dir.join("stash").display()
+        ),
+    )
+    .unwrap();
+    dir
+}
+
+fn kadmin_local(dir: &Path, args: &[&str], input: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_krb5-kadmin-local"))
+        .args(args)
+        .env("KRB5_CONFIG", dir.join("krb5.conf"))
+        .env("KRB5_KDC_PROFILE", dir.join("kdc.conf"))
+        .env(
+            "KRB5CCNAME",
+            format!("FILE:{}", dir.join("no-cc").display()),
+        )
+        .env("USER", "tester")
+        .env_remove("KRB5_KDC_DB")
+        .env_remove("KRB5_KDC_STASH")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let _ = child.stdin.take().unwrap().write_all(input.as_bytes());
+    child.wait_with_output().unwrap()
+}
+
+fn text(b: &[u8]) -> String {
+    String::from_utf8_lossy(b).into_owned()
+}
+
+#[test]
+fn a_database_file_that_is_no_database_is_refused_before_the_master_key() {
+    let dir = realm("kadmin-local-not-a-database");
+    let db = dir.join("principal");
+    std::fs::write(&db, "not a database\n").unwrap();
+    let refused = format!(
+        "kadmin.local: Cannot open DB2 database '{}': Invalid argument while initializing \
+         kadmin.local interface\n",
+        db.display()
+    );
+    for args in [
+        &["-r", "KERBER.TEST", "-q", "listprincs"][..],
+        &["-r", "KERBER.TEST", "-m", "-q", "listprincs"][..],
+    ] {
+        let out = kadmin_local(&dir, args, "master\n");
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert_eq!(text(&out.stderr), refused, "{args:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -238,12 +238,15 @@ impl PrincipalStore {
             (None, Some((db, stash))) => (db, crate::persist::read_store(db, stash, lock)),
             (None, None) => return Ok(()),
         };
-        let mut loaded = loaded.map_err(|e| match Error::from(e) {
-            Error::Db { kind, text } => Error::Db {
-                kind,
-                text: format!("Cannot open DB2 database '{}': {text}", db.display()),
+        let mut loaded = loaded.map_err(|e| match e {
+            e @ PersistError::Unopenable { .. } => Error::from(e),
+            e => match Error::from(e) {
+                Error::Db { kind, text } => Error::Db {
+                    kind,
+                    text: format!("Cannot open DB2 database '{}': {text}", db.display()),
+                },
+                other => other,
             },
-            other => other,
         })?;
         loaded.policy.clone_from(&self.policy);
         loaded.domain_sid.clone_from(&self.domain_sid);

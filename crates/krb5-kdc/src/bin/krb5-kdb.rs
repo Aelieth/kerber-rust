@@ -618,18 +618,32 @@ fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
 /// MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1194-1198`): a database that does not open is named; then a missing lock file is the system's or the policy lock's own text.
 fn read_db_text(util: &Util, db: &Path) -> Result<String, String> {
     let cannot_open = |why: &str| format!("Cannot open DB2 database '{}': {why}", db.display());
-    fs::File::open(db).map_err(|e| cannot_open(&strerror(&e)))?;
+    krb5_kdc::check_openable(db).map_err(|e| open_text(db, &e))?;
     let bytes = krb5_kdc::read_db_locked(db).map_err(|e| match e {
         PersistError::Lock(lock) => lock.to_string(),
-        other => cannot_open(&persist_text(&other)),
+        other => open_text(db, &other),
     })?;
     if bytes.starts_with(b"kdb5_util load_dump version ") {
         return String::from_utf8(bytes).map_err(|_| cannot_open("dump is not UTF-8"));
     }
     let stash = &util.paths.key_stash_file;
-    let store = krb5_kdc::load_store(db, stash).map_err(|e| cannot_open(&persist_text(&e)))?;
+    let store = krb5_kdc::load_store(db, stash).map_err(|e| open_text(db, &e))?;
     let mkey = krb5_kdc::read_stash(stash, db).map_err(|e| cannot_open(&persist_text(&e)))?;
     krb5_kdc::dump_store_with_key(&store, &mkey).map_err(|e| cannot_open(&e.to_string()))
+}
+
+/// The text of a database `db` that does not open: one that is no database this store reads is
+/// MIT's own text, which names the file; any other failure is named with its reason.
+/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:384-389`): a database that does not open is named, with why.
+fn open_text(db: &Path, e: &PersistError) -> String {
+    match e {
+        PersistError::Unopenable { .. } => e.to_string(),
+        other => format!(
+            "Cannot open DB2 database '{}': {}",
+            db.display(),
+            persist_text(other)
+        ),
+    }
 }
 
 fn fetch_mkey(util: &mut Util, realm: &str, km: &DumpPrincipal) -> Result<Option<ProtocolKey>, u8> {
@@ -1053,13 +1067,11 @@ fn load_policies_only(util: &mut Util, dump: &DumpFile, update: bool, verbose: b
         let current = match fs::read(&db).map(String::from_utf8) {
             Ok(Ok(t)) if t.starts_with("kdb5_util load_dump version ") => t,
             _ => {
-                util.com_err(
-                    &format!(
-                        "Cannot open DB2 database '{}': Inappropriate file type or format",
-                        db.display()
-                    ),
-                    "while opening database",
-                );
+                let refused = PersistError::Unopenable {
+                    path: db.clone(),
+                    why: krb5_kdc::Unopenable::NotDatabase,
+                };
+                util.com_err(&refused.to_string(), "while opening database");
                 return 1;
             }
         };
@@ -1098,15 +1110,8 @@ fn load_policies_only(util: &mut Util, dump: &DumpFile, update: bool, verbose: b
 /// opens the database meanwhile, and a load that stops before it ends leaves it unusable.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1509-1527`): the database is opened, then locked permanently; a refused lock is reported.
 fn update_lock(util: &Util, db: &Path) -> Option<DbLock> {
-    if let Err(e) = fs::File::open(db) {
-        util.com_err(
-            &format!(
-                "Cannot open DB2 database '{}': {}",
-                db.display(),
-                strerror(&e)
-            ),
-            "while opening database",
-        );
+    if let Err(e) = krb5_kdc::check_openable(db) {
+        util.com_err(&open_text(db, &e), "while opening database");
         return None;
     }
     let lock = match DbLock::open(db) {

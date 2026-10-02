@@ -1337,6 +1337,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** A database file that is no database fails every tool and daemon with MIT's text,
+  `Cannot open DB2 database '…': Invalid argument`, before its lock files and master key (was
+  `persist format: …` or `Inappropriate file type or format`). Units; settled live.
 - **docs.** The install doc's `kdc.conf` edit renames only the realm's stanza and indents
   `max_renewable_life` as the stanza's other lines; it rewrote the file's opening comment too.
   Run on the shipped files.

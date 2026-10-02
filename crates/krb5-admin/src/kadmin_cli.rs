@@ -169,16 +169,19 @@ impl Open {
     }
 
     /// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:496-500`): a lock file that does not open is the system's text, or the policy lock's own.
+    /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:384-389`): a database file of another format is named, with `EINVAL`'s text.
     fn load_text(&self, e: krb5_kdc::PersistError) -> String {
         match e {
             krb5_kdc::PersistError::Lock(e) => e.to_string(),
             krb5_kdc::PersistError::Io(e) => self.cannot_open(&e),
             krb5_kdc::PersistError::Crypto(_) => texts::BAD_MASTER_KEY.to_owned(),
+            e @ krb5_kdc::PersistError::Unopenable { .. } => e.to_string(),
             krb5_kdc::PersistError::Format(_) | krb5_kdc::PersistError::UnknownDbLibrary(_) => {
-                format!(
-                    "Cannot open DB2 database '{}': Inappropriate file type or format",
-                    self.db.display()
-                )
+                krb5_kdc::PersistError::Unopenable {
+                    path: self.db.clone(),
+                    why: krb5_kdc::Unopenable::NotDatabase,
+                }
+                .to_string()
             }
         }
     }
@@ -558,8 +561,8 @@ fn kadm5_init(
         keysalts: o.keysalts.clone(),
         typed: None,
     };
-    if let Err(e) = std::fs::File::open(&open.db) {
-        return Err((open.cannot_open(&e), false));
+    if let Err(e) = krb5_kdc::check_openable(&open.db) {
+        return Err((open.load_text(e), false));
     }
     let caller = krb5_types::principal_from_unparsed(princstr, realm)
         .map(|(n, r)| n.unparse_with_realm(&r))

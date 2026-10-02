@@ -934,6 +934,41 @@ fn destroy_asks_for_yes() {
     );
 }
 
+/// A database file that is no database is refused with MIT's open text, settled live on MIT
+/// 1.22.2 with a dump file put where its db2 database was: `dump` and `stash` while initializing
+/// the database, `load -update` while opening it, before its permanent lock would remove
+/// `principal.kadm5.lock`.
+#[test]
+fn a_database_file_that_is_no_database_is_refused_with_mit_s_text() {
+    let realm = Realm::new("kdb5-not-a-database", Realm::sha1());
+    realm.create();
+    let dump = realm.dir.join("realm.dump");
+    let dump = dump.to_str().unwrap();
+    let out = realm.run(&["dump", dump], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    std::fs::write(&realm.db, "not a database\n").unwrap();
+    let refused = format!(
+        "kdb5_util: Cannot open DB2 database '{}': Invalid argument",
+        realm.db.display()
+    );
+    for cmd in [&["dump", "out.dump"][..], &["stash"][..]] {
+        let out = realm.run(cmd, "");
+        assert_eq!(status(&out), 1, "{cmd:?}");
+        assert_eq!(
+            text(&out.stderr),
+            format!("{refused} while initializing database\n"),
+            "{cmd:?}"
+        );
+    }
+    let out = realm.run(&["load", "-update", dump], "");
+    assert_eq!(status(&out), 1);
+    assert_eq!(
+        text(&out.stderr),
+        format!("{refused} while opening database\n")
+    );
+    assert!(realm.dir.join("principal.kadm5.lock").exists());
+}
+
 #[cfg(feature = "test-hooks")]
 #[test]
 fn test_hooks_seed_the_gates_principals_and_stand_in_for_the_password() {

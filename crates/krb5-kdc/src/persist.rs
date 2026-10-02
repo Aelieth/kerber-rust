@@ -12,6 +12,7 @@
 
 use std::fmt::Write as _;
 use std::fs;
+use std::io::Read as _;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -50,6 +51,30 @@ pub enum PersistError {
     /// The database's lock files are missing, or its lock may not be taken; the text is MIT's.
     #[error(transparent)]
     Lock(#[from] DbLockError),
+    /// The database file is no database this store reads: MIT's text, naming the file.
+    #[error("Cannot open DB2 database '{}': {why}", path.display())]
+    Unopenable {
+        /// The database file.
+        path: PathBuf,
+        /// What the file is.
+        why: Unopenable,
+    },
+}
+
+/// Why a database file does not open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unopenable {
+    /// Neither dump text nor a legacy KDB blob: `EINVAL`, the errno MIT's Berkeley DB gives a
+    /// file of another format where the platform has no `EFTYPE`.
+    NotDatabase,
+}
+
+impl std::fmt::Display for Unopenable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotDatabase => f.write_str("Invalid argument"),
+        }
+    }
 }
 
 impl From<Error> for PersistError {
@@ -93,6 +118,69 @@ impl DbStamp {
     }
 }
 
+/// What a database file holds, by its first bytes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DbFormat {
+    /// Nothing: a database being created or loaded is empty until it is written.
+    Empty,
+    /// MIT dump text, the store's format.
+    Dump,
+    /// A legacy `KDB1` / `KDB2` / `KDB3` ciphertext.
+    Kdb,
+    /// None of these.
+    Unknown,
+}
+
+fn db_format(head: &[u8]) -> DbFormat {
+    if head.is_empty() {
+        DbFormat::Empty
+    } else if head.starts_with(DUMP_PREFIX) {
+        DbFormat::Dump
+    } else if head
+        .get(..4)
+        .is_some_and(|m| matches!(m, b"KDB1" | b"KDB2" | b"KDB3"))
+    {
+        DbFormat::Kdb
+    } else {
+        DbFormat::Unknown
+    }
+}
+
+/// The refusal of a database file of `format`; `None` for a database the store reads.
+fn refusal(db: &Path, format: DbFormat) -> Option<PersistError> {
+    let why = match format {
+        DbFormat::Dump | DbFormat::Kdb => return None,
+        DbFormat::Empty | DbFormat::Unknown => Unopenable::NotDatabase,
+    };
+    Some(PersistError::Unopenable {
+        path: db.to_path_buf(),
+        why,
+    })
+}
+
+/// Open the database file at `db` as MIT's db2 module first opens it, before its lock files and
+/// the master key: a file that does not open or read is the system's error, and one whose first
+/// bytes are no database this store reads is refused with MIT's text. An empty file passes here,
+/// as a database being created or loaded is empty until it is written; the read under the lock
+/// judges it.
+/// MIT `check_openable` (`plugins/kdb/db2/kdb_db2.c:545-557`): the database is opened before its lock files.
+/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:384-389`): a database that does not open is named, with its errno.
+///
+/// # Errors
+///
+/// [`PersistError::Io`] when the file does not open or read; [`PersistError::Unopenable`] when it
+/// is no database this store reads.
+pub fn check_openable(db: &Path) -> Result<(), PersistError> {
+    let mut head = Vec::with_capacity(DUMP_PREFIX.len());
+    fs::File::open(db)?
+        .take(DUMP_PREFIX.len() as u64)
+        .read_to_end(&mut head)?;
+    match db_format(&head) {
+        DbFormat::Empty => Ok(()),
+        format => refusal(db, format).map_or(Ok(()), Err),
+    }
+}
+
 /// Load a store from `db_path` using the master key in `stash_path`, holding the database's lock
 /// shared while it is read; the store keeps the lock files open for its later reads and changes.
 ///
@@ -103,27 +191,34 @@ impl DbStamp {
 /// # Errors
 ///
 /// [`PersistError::Io`] when the database or the stash cannot be read (a missing file included);
+/// [`PersistError::Unopenable`] when the database is no database this store reads, before its
+/// lock files and the stash are opened ([`check_openable`]);
 /// [`PersistError::Lock`] when `principal.ok` or `principal.kadm5.lock` does not open or the
 /// lock may not be taken; [`PersistError::Format`] when a dump is not UTF-8, a legacy database
-/// has no KDB magic or a malformed record, or the `.ulog` file beside it is malformed;
+/// has a malformed record, or the `.ulog` file beside it is malformed;
 /// [`PersistError::Crypto`] when no key from the stash loads the dump (a malformed dump
 /// included) or decrypts a legacy database, or a legacy key is unusable.
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
-    fs::File::open(db_path)?;
+    check_openable(db_path)?;
     let lock = Arc::new(DbLock::open(db_path)?);
     let _held = lock.hold(DbLockMode::Shared)?;
     read_store(db_path, stash_path, &lock)
 }
 
-/// The store the database at `db_path` holds now, read while the caller holds `lock`.
+/// The store the database at `db_path` holds now, read while the caller holds `lock`: the
+/// database is judged before the stash is read, as MIT opens it before the master key.
 pub(crate) fn read_store(
     db_path: &Path,
     stash_path: &Path,
     lock: &Arc<DbLock>,
 ) -> Result<PrincipalStore, PersistError> {
-    let stash = fs::read(stash_path)?;
     let blob = fs::read(db_path)?;
-    let mut store = if blob.starts_with(DUMP_PREFIX) {
+    let format = db_format(&blob);
+    if let Some(e) = refusal(db_path, format) {
+        return Err(e);
+    }
+    let stash = fs::read(stash_path)?;
+    let mut store = if format == DbFormat::Dump {
         let text = std::str::from_utf8(&blob)
             .map_err(|_| PersistError::Format("dump is not utf-8".into()))?;
         load_dump_with_stash(text, &stash)?
@@ -145,16 +240,17 @@ pub(crate) fn read_store(
 ///
 /// # Errors
 ///
-/// [`PersistError::Io`] when the database cannot be read; [`PersistError::Lock`] when
+/// [`PersistError::Io`] when the database cannot be read; [`PersistError::Unopenable`] when it
+/// is no database this store reads ([`check_openable`]); [`PersistError::Lock`] when
 /// `principal.ok` or `principal.kadm5.lock` does not open or the lock may not be taken;
-/// [`PersistError::Format`] when it is not dump text (a legacy database needs its stash) or the
+/// [`PersistError::Format`] when it is a legacy database (which needs its stash) or the
 /// `.ulog` beside it is malformed; [`PersistError::Crypto`] when a key does not decrypt under
 /// `master`, a wrong master key included.
 pub fn load_store_with_master(
     db_path: &Path,
     master: &ProtocolKey,
 ) -> Result<PrincipalStore, PersistError> {
-    fs::File::open(db_path)?;
+    check_openable(db_path)?;
     let lock = Arc::new(DbLock::open(db_path)?);
     let _held = lock.hold(DbLockMode::Shared)?;
     read_store_with_master(db_path, master, &lock)
@@ -168,7 +264,11 @@ pub(crate) fn read_store_with_master(
     lock: &Arc<DbLock>,
 ) -> Result<PrincipalStore, PersistError> {
     let blob = fs::read(db_path)?;
-    if !blob.starts_with(DUMP_PREFIX) {
+    let format = db_format(&blob);
+    if let Some(e) = refusal(db_path, format) {
+        return Err(e);
+    }
+    if format != DbFormat::Dump {
         return Err(PersistError::Format("not dump text".into()));
     }
     let text =
@@ -1197,8 +1297,58 @@ fn take_str(b: &[u8], i: &mut usize) -> Result<String, PersistError> {
 
 #[cfg(test)]
 mod tests {
+    use super::{
+        DbFormat, PersistError, check_openable, db_format, load_store, load_store_with_master,
+        make_lock_files,
+    };
     use crate::mkey::{default_master_etype, master_etype};
-    use krb5_crypto::EncryptionType;
+    use krb5_crypto::{EncryptionType, ProtocolKey};
+
+    #[test]
+    fn a_database_file_is_judged_by_its_first_bytes() {
+        assert_eq!(db_format(b""), DbFormat::Empty);
+        assert_eq!(
+            db_format(b"kdb5_util load_dump version 7\n"),
+            DbFormat::Dump
+        );
+        assert_eq!(db_format(b"KDB3\x00\x01\x02"), DbFormat::Kdb);
+        assert_eq!(db_format(b"not a database\n"), DbFormat::Unknown);
+        // A dump header cut short is no dump.
+        assert_eq!(db_format(b"kdb5_util load_dump"), DbFormat::Unknown);
+    }
+
+    /// A file that is no database is refused with MIT's text (settled live: MIT 1.22.2's db2
+    /// module says `Invalid argument`) before its lock files and the stash are opened, here
+    /// missing; an empty file passes the open and is refused by the read under the lock.
+    #[test]
+    fn a_file_that_is_no_database_is_refused_with_mit_s_open_text() {
+        let dir = krb5_testkit::scratch_dir("persist-unopenable");
+        let (db, stash) = (dir.join("principal"), dir.join("stash"));
+        let master =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7; 32]).unwrap();
+        match check_openable(&db) {
+            Err(PersistError::Io(e)) => assert_eq!(e.kind(), std::io::ErrorKind::NotFound),
+            other => panic!("{other:?}"),
+        }
+        std::fs::write(&db, "not a database\n").unwrap();
+        let refused = format!(
+            "Cannot open DB2 database '{}': Invalid argument",
+            db.display()
+        );
+        assert_eq!(check_openable(&db).unwrap_err().to_string(), refused);
+        assert_eq!(load_store(&db, &stash).unwrap_err().to_string(), refused);
+        assert_eq!(
+            load_store_with_master(&db, &master)
+                .unwrap_err()
+                .to_string(),
+            refused
+        );
+        std::fs::write(&db, "").unwrap();
+        check_openable(&db).unwrap();
+        make_lock_files(&db).unwrap();
+        assert_eq!(load_store(&db, &stash).unwrap_err().to_string(), refused);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn master_key_type_is_honored_and_defaults_to_mits() {

@@ -51,8 +51,9 @@ pub fn database_path(default: &Path, db_args: &[String]) -> Result<PathBuf, Stri
     Ok(db)
 }
 
-/// Open the realm's database as MIT's daemons do: the database arguments, the database file,
-/// then the master key from the stash; `mkey_name` is the master key principal (`-M`).
+/// Open the realm's database as MIT's daemons do: the database arguments, the database file
+/// (one that is no database this store reads is refused, as [`crate::check_openable`] judges
+/// it), then the master key from the stash; `mkey_name` is the master key principal (`-M`).
 /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that will not open is named
 /// in the error.
 /// MIT `krb5_db_def_fetch_mkey` (`lib/kdb/kdb_default.c:384-390`): a stash that cannot be read
@@ -67,12 +68,16 @@ pub fn open_database(
     mkey_name: &str,
 ) -> Result<PrincipalStore, OpenFailure> {
     let db = database_path(&paths.database_name, db_args).map_err(OpenFailure::Database)?;
-    if let Err(e) = File::open(&db) {
-        return Err(OpenFailure::Database(format!(
-            "Cannot open DB2 database '{}': {}",
-            db.display(),
-            os_error_text(&e)
-        )));
+    match crate::check_openable(&db) {
+        Ok(()) => {}
+        Err(crate::PersistError::Io(e)) => {
+            return Err(OpenFailure::Database(format!(
+                "Cannot open DB2 database '{}': {}",
+                db.display(),
+                os_error_text(&e)
+            )));
+        }
+        Err(e) => return Err(OpenFailure::Database(e.to_string())),
     }
     if mkey_name != "K/M" {
         return Err(OpenFailure::MasterKey(
@@ -225,6 +230,34 @@ mod tests {
             &paths("db/principal", "/s/stash"),
             &absolute
         ));
+    }
+
+    /// A database file that is no database stops the daemon with MIT's open text (settled live
+    /// on MIT 1.22.2), before the stash is looked at; a missing one with the system's text.
+    #[test]
+    fn a_database_file_that_is_no_database_stops_the_daemon_with_mit_s_text() {
+        let dir = krb5_testkit::scratch_dir("daemon-open-db");
+        let db = dir.join("principal");
+        let paths = krb5_config::KdcPaths {
+            profile: dir.join("kdc.conf"),
+            conf: None,
+            realm: Some("R".into()),
+            database_name: db.clone(),
+            key_stash_file: dir.join("no-stash"),
+            acl_file: None,
+            master_key_type: None,
+        };
+        let open = || open_database(&paths, &[], "K/M").map(|_| ());
+        let refused = |why: &str| {
+            Err(OpenFailure::Database(format!(
+                "Cannot open DB2 database '{}': {why}",
+                db.display()
+            )))
+        };
+        assert_eq!(open(), refused("No such file or directory"));
+        std::fs::write(&db, "not a database\n").unwrap();
+        assert_eq!(open(), refused("Invalid argument"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -123,6 +123,10 @@ impl From<crate::persist::PersistError> for Error {
                 kind: e.kind(),
                 text: e.to_string(),
             },
+            e @ PersistError::Unopenable { .. } => Self::Db {
+                kind: std::io::ErrorKind::InvalidData,
+                text: e.to_string(),
+            },
         }
     }
 }
