@@ -39,6 +39,84 @@ pub mod keytab {
 }
 
 pub mod cli;
+pub mod creds;
+pub mod errmsg;
+
+use errmsg::{Code, Krb5Error};
+
+/// The file a FILE or DIR cache keeps its credentials in.
+#[must_use]
+pub fn cache_file_path(spec: &CcSpec) -> Option<std::path::PathBuf> {
+    match spec {
+        CcSpec::File(p) => Some(p.clone()),
+        CcSpec::Dir(r) => dir_cache_path(r).ok(),
+        CcSpec::Memory(_) | CcSpec::Kcm(_) => None,
+    }
+}
+
+/// MIT's message for a cache that cannot be read.
+/// MIT `set_errmsg_filename` (`cc_file.c:117-124`): a FILE cache's error names its file.
+/// MIT `kcm_get_princ` (`cc_kcm.c:933-953`): a KCM cache with no principal is
+/// "Credentials cache 'KCM:<name>' not found".
+#[must_use]
+pub fn cache_read_error(
+    spec: &CcSpec,
+    e: &(dyn std::error::Error + Send + Sync + 'static),
+) -> Krb5Error {
+    let io = e.downcast_ref::<std::io::Error>();
+    let missing = io.is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound);
+    match spec {
+        CcSpec::Kcm(n) if missing => {
+            let name = if n.is_empty() {
+                krb5_protocol::kcm_primary_name().unwrap_or_default()
+            } else {
+                n.clone()
+            };
+            Krb5Error::new(
+                Code::FccNofile,
+                format!("Credentials cache 'KCM:{name}' not found"),
+            )
+        }
+        CcSpec::Memory(_) if missing => Krb5Error::of(Code::FccNofile),
+        _ => match (io, cache_file_path(spec)) {
+            (Some(io), Some(path)) => Krb5Error::from_file_cache(io, &path),
+            (Some(io), None) if missing => Krb5Error::new(Code::FccNofile, io.to_string()),
+            _ if e.to_string() == "No credentials cache found" => Krb5Error::of(Code::FccNofile),
+            _ => Krb5Error::new(Code::Other, e.to_string()),
+        },
+    }
+}
+
+/// MIT `krb5_init_context`'s profile: the files `KRB5_CONFIG` names (else `/etc/krb5.conf`), a
+/// missing one skipped.
+/// MIT `os_init_paths` (`init_os_ctx.c:389-391`): no file that opens is an empty profile.
+///
+/// # Errors
+///
+/// [`Krb5Error`] with MIT's text when the profile does not load: an include that cannot be read,
+/// an `includedir` that does not list, a syntax error, or a file that cannot be read (its
+/// `strerror`).
+pub fn init_context() -> Result<(), Krb5Error> {
+    match krb5_config::load_krb5_conf_paths(krb5_config::krb5_conf_paths()) {
+        Ok(_) => Ok(()),
+        Err(krb5_config::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(krb5_config::Error::Io(e)) => Err(Krb5Error::from_os(&e)),
+        Err(krb5_config::Error::Profile(p, _)) => Err(Krb5Error::of(Code::Profile(p))),
+        Err(e) => Err(Krb5Error::new(Code::Other, e.to_string())),
+    }
+}
+
+/// MIT's message for a keytab file that cannot be read.
+/// MIT `krb5_ktfileint_open` (`kt_file.c:745-765`): a missing file is "Key table file '<path>' not
+/// found".
+#[must_use]
+pub fn keytab_read_error(e: &std::io::Error, path: &str) -> Krb5Error {
+    if e.kind() == std::io::ErrorKind::NotFound {
+        Krb5Error::new(Code::Enoent, format!("Key table file '{path}' not found"))
+    } else {
+        Krb5Error::new(Code::Other, e.to_string())
+    }
+}
 
 /// Flags for [`kinit_with`].
 #[derive(Clone, Debug, Default)]
@@ -605,7 +683,13 @@ fn kinit_inner(
     if let Some(svc) = params.service {
         let (sname, svc_realm) =
             krb5_types::principal_from_unparsed(svc, &realm_s).map_err(|e| e.to_string())?;
-        match tgs_exchange_path(&resolved, &as_out, sname, &svc_realm, false) {
+        match tgs_exchange_path(
+            &resolved,
+            &as_out,
+            sname,
+            &svc_realm,
+            &krb5_protocol::TgsCredsOptions::default(),
+        ) {
             Ok((tgs, path)) => {
                 for p in path {
                     creds.push(tgt_cred(
@@ -850,5 +934,44 @@ mod tests {
         assert_eq!(resolved.port, 8888);
         assert_eq!(argv.port, 88);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Live MIT 1.22.2: the tools fail in `krb5_init_context` on a missing include and on one
+    /// indented inside a section, and not on a missing file.
+    #[test]
+    fn init_context_reports_the_profile_as_mit() {
+        let dir = krb5_testkit::scratch_dir("kerber-client-init-context");
+        let nope = dir.join("nope.conf");
+        let missing = dir.join("missing-include.conf");
+        let indent = dir.join("indent.conf");
+        std::fs::write(
+            &missing,
+            format!(
+                "include {}\n[libdefaults]\n    default_realm = X.TEST\n",
+                nope.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            &indent,
+            format!(
+                "[libdefaults]\n    default_realm = X.TEST\n    include {}\n",
+                nope.display()
+            ),
+        )
+        .unwrap();
+        krb5_config::set_test_krb5_paths(Some(vec![missing]));
+        assert_eq!(
+            init_context().unwrap_err().message,
+            "Included profile file could not be read"
+        );
+        krb5_config::set_test_krb5_paths(Some(vec![indent]));
+        assert_eq!(
+            init_context().unwrap_err().message,
+            "Improper format of Kerberos configuration file"
+        );
+        krb5_config::set_test_krb5_paths(Some(vec![dir.join("absent.conf")]));
+        assert!(init_context().is_ok());
+        krb5_config::set_test_krb5_paths(None);
     }
 }

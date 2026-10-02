@@ -131,8 +131,9 @@ expect_s4u_host_mismatch() {
     set -e
     echo "$out"
     echo "${label}_mismatch_rc=$rc"
-    # MIT sets this status with KRB5KRB_AP_ERR_BADMATCH (36) alone (tgs_policy.c:275-276).
-    echo "$out" | grep -qxF 'kvno: INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'
+    # MIT sets this status with KRB5KRB_AP_ERR_BADMATCH (36) alone (tgs_policy.c:275-276). The
+    # kvno port names itself as MIT's does, argv[0]'s base name (kvno.c:87-88): krb5-kvno here.
+    echo "$out" | grep -qxF "krb5-kvno: Ticket/authenticator don't match while getting credentials for host/testhost.kerber.test@KERBER.TEST"
     echo "$rc" | grep -qx 1
     local new
     new="$(docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}")"

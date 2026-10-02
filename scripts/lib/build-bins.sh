@@ -7,4 +7,4 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
-cargo build -p krb5-kdc -p krb5-admin -p krb5-client -p krb5-gss -p krb5-tools --bins --features krb5-kdc/test-hooks,krb5-admin/test-hooks
+cargo build -p krb5-kdc -p krb5-admin -p krb5-client -p krb5-gss -p krb5-tools --bins --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks

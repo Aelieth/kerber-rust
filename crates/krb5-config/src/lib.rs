@@ -54,6 +54,9 @@ pub enum Error {
     /// Parse error with context.
     #[error("config parse: {0}")]
     Parse(String),
+    /// A `krb5.conf` MIT's profile library refuses: the code it refuses it with, and what failed.
+    #[error("config parse: {1}")]
+    Profile(ProfileError, String),
     /// DNS SRV lookup failed.
     #[error("dns srv: {0}")]
     Dns(String),
@@ -67,6 +70,38 @@ pub enum Error {
     /// MIT `KRB5_CONFIG_NODEFREALM` (`krb5_err.et:310-310`): the text.
     #[error("Configuration file does not specify default realm")]
     NoDefaultRealm,
+}
+
+/// Why MIT's profile library refuses a `krb5.conf`, which `krb5_init_context` reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileError {
+    /// An `include` target that cannot be read. An include cycle or 32-deep nesting, which MIT
+    /// does not look for, is this too: MIT recurses until a file does not open.
+    /// MIT `parse_include_file` (`prof_parse.c:229-231`): a file that does not open fails with
+    /// `PROF_FAIL_INCLUDE_FILE`.
+    IncludeFile,
+    /// An `includedir` that cannot be listed.
+    /// MIT `parse_include_dir` (`prof_parse.c:271-272`): a directory that does not list fails
+    /// with `PROF_FAIL_INCLUDE_DIR`.
+    IncludeDir,
+    /// A syntax error: an `include` indented inside a section is a relation with no `=`.
+    /// MIT `os_init_paths` (`init_os_ctx.c:403-408`): a syntax error is `KRB5_CONFIG_BADFORMAT`.
+    Syntax,
+}
+
+impl ProfileError {
+    /// The text `krb5_init_context`'s callers print for it.
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            // MIT `PROF_FAIL_INCLUDE_FILE` (`prof_err.et:67-67`): the code whose text this is.
+            Self::IncludeFile => "Included profile file could not be read",
+            // MIT `PROF_FAIL_INCLUDE_DIR` (`prof_err.et:69-69`): the code whose text this is.
+            Self::IncludeDir => "Included profile directory could not be read",
+            // MIT `KRB5_CONFIG_BADFORMAT` (`krb5_err.et:184-184`): the text.
+            Self::Syntax => "Improper format of Kerberos configuration file",
+        }
+    }
 }
 
 /// One KDC (or kpasswd / admin) endpoint.

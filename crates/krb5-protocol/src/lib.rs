@@ -80,8 +80,8 @@ pub use diff::{
 pub use error::Error;
 pub use framing::write_messages;
 pub use kcm::{
-    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_load, kcm_socket_path, kcm_store,
-    kcm_store_keep_default, kcm_switch, kcm_switch_principal,
+    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_load, kcm_primary_name, kcm_socket_path,
+    kcm_store, kcm_store_creds, kcm_store_keep_default, kcm_switch, kcm_switch_principal,
 };
 pub use keytab::{
     Keytab, KeytabEntry, KeytabSlot, keytab_init_creds_keys, sort_etypes_keytab_first,
@@ -107,12 +107,13 @@ pub use secret_file::{
 };
 #[cfg(target_os = "linux")]
 pub use selabel::create_labeled;
+#[cfg(feature = "test-hooks")]
+pub use tgs::tgs_exchange_once;
 pub use tgs::{
-    TgsFallback, TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_ex, tgs_exchange_once,
-    tgs_exchange_path, tgs_forward, tgs_forward_options, tgs_non_referral_options, tgs_renew,
-    tgs_renew_options, tgs_reply_client_ok, tgs_reply_req_times, tgs_reply_server_consistent,
-    tgs_s4u, tgs_s4u2proxy, tgs_strip_ok_as_delegate, tgs_try_fallback, tgs_u2u, tgs_validate,
-    tgs_validate_options,
+    TgsCredsOptions, TgsFallback, TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_path,
+    tgs_forward, tgs_forward_options, tgs_non_referral_options, tgs_renew, tgs_renew_options,
+    tgs_reply_client_ok, tgs_reply_req_times, tgs_reply_server_consistent, tgs_s4u, tgs_s4u2proxy,
+    tgs_strip_ok_as_delegate, tgs_try_fallback, tgs_u2u, tgs_validate, tgs_validate_options,
 };
 pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
 pub use vfy_increds::{

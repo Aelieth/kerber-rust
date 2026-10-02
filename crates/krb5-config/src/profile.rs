@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::srv::lookup_srv_kdc;
 use super::testenv::TEST_KRB5_PATHS;
-use super::{Endpoint, Error, Krb5Conf};
+use super::{Endpoint, Error, Krb5Conf, ProfileError};
 
 impl Krb5Conf {
     /// Empty defaults: 300s skew, no weak crypto, DNS lookup off.
@@ -32,7 +32,7 @@ impl Krb5Conf {
     ///
     /// # Errors
     ///
-    /// [`Error::Parse`] when an indented `include` / `includedir` directive (no `=`) sits inside
+    /// [`Error::Profile`] when an indented `include` / `includedir` directive (no `=`) sits inside
     /// a section (MIT's improper format); no other line fails.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::new();
@@ -45,9 +45,9 @@ impl Krb5Conf {
     ///
     /// # Errors
     ///
-    /// [`Error::Io`] when `path` or an included file or directory cannot be read;
-    /// [`Error::Parse`] when an `include` target is missing, an `includedir` is not a directory,
-    /// includes form a cycle or nest 32 deep, or an indented include sits inside a section.
+    /// [`Error::Io`] when `path` cannot be read; [`Error::Profile`] when an `include` target is
+    /// missing or cannot be read, an `includedir` is not a directory or cannot be listed, includes
+    /// form a cycle or nest 32 deep, or an indented include sits inside a section.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
@@ -226,7 +226,10 @@ fn parse_into(
             && include_directive(line).is_some()
             && include_directive(raw).is_none()
         {
-            return Err(Error::Parse("improper format: indented include".into()));
+            return Err(Error::Profile(
+                ProfileError::Syntax,
+                "improper format: indented include".into(),
+            ));
         }
         if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             section = s.trim().to_ascii_lowercase();
@@ -307,23 +310,26 @@ fn load_file_into(
     stack: &mut Vec<PathBuf>,
     path: &Path,
 ) -> Result<(), Error> {
-    if stack.len() >= MAX_INCLUDE_DEPTH {
-        return Err(Error::Parse("include nesting too deep".into()));
-    }
-    let canon = match std::fs::canonicalize(path) {
-        Ok(p) => p,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !stack.is_empty() => {
-            return Err(Error::Parse(format!(
-                "include target not found: {}",
-                path.display()
-            )));
+    // MIT `parse_include_file` (`prof_parse.c:229-231`): an included file that does not open
+    // fails the whole profile.
+    let include = |what: String| Error::Profile(ProfileError::IncludeFile, what);
+    let unread = |e: std::io::Error| {
+        if stack.is_empty() {
+            Error::Io(e)
+        } else if e.kind() == std::io::ErrorKind::NotFound {
+            include(format!("include target not found: {}", path.display()))
+        } else {
+            include(format!("include target {}: {e}", path.display()))
         }
-        Err(e) => return Err(e.into()),
     };
-    if stack.iter().any(|p| p == &canon) {
-        return Err(Error::Parse("include cycle".into()));
+    if stack.len() >= MAX_INCLUDE_DEPTH {
+        return Err(include("include nesting too deep".into()));
     }
-    let text = std::fs::read_to_string(&canon)?;
+    let canon = std::fs::canonicalize(path).map_err(unread)?;
+    if stack.iter().any(|p| p == &canon) {
+        return Err(include("include cycle".into()));
+    }
+    let text = std::fs::read_to_string(&canon).map_err(unread)?;
     stack.push(canon);
     let result = parse_into(conf, seen, &text, Some(stack));
     stack.pop();
@@ -336,15 +342,19 @@ fn load_dir_into(
     stack: &mut Vec<PathBuf>,
     dir: &Path,
 ) -> Result<(), Error> {
+    // MIT `parse_include_dir` (`prof_parse.c:271-272`): an includedir that does not list fails
+    // the whole profile.
+    let unlisted = |what: String| Error::Profile(ProfileError::IncludeDir, what);
     if !dir.is_dir() {
-        return Err(Error::Parse(format!(
+        return Err(unlisted(format!(
             "includedir not a directory: {}",
             dir.display()
         )));
     }
+    let list = |e: std::io::Error| unlisted(format!("includedir {}: {e}", dir.display()));
     let mut names = Vec::new();
-    for ent in std::fs::read_dir(dir)? {
-        let ent = ent?;
+    for ent in std::fs::read_dir(dir).map_err(list)? {
+        let ent = ent.map_err(list)?;
         let name = ent.file_name();
         let Some(s) = name.to_str() else {
             continue;
@@ -605,8 +615,9 @@ pub fn krb5_conf_paths() -> Vec<PathBuf> {
 ///
 /// [`Error::Io`] with `ErrorKind::NotFound` when none of `paths` exists (each missing path is
 /// skipped), or the `io::Error` of a present file or directory that cannot be read;
-/// [`Error::Parse`] as [`Krb5Conf::load_file`] reports it (a missing include target, a
-/// non-directory `includedir`, an include cycle or 32-deep nesting, an indented include).
+/// [`Error::Profile`] as [`Krb5Conf::load_file`] reports it (an include target missing or
+/// unreadable, an `includedir` that is no directory or does not list, an include cycle or 32-deep
+/// nesting, an indented include).
 pub fn load_krb5_conf_paths<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
 ) -> Result<Krb5Conf, Error> {

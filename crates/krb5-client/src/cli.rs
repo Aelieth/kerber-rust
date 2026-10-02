@@ -219,54 +219,111 @@ pub fn parse_klist(args: &[String]) -> Result<KlistArgs, String> {
     Ok(out)
 }
 
+/// Why an argv is refused: the lines a tool prints before its usage text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UsageError {
+    /// glibc `getopt`'s own complaint, printed as `<argv0>: <text>`.
+    Getopt(String),
+    /// The tool's own lines, each printed as is.
+    Lines(Vec<String>),
+}
+
+impl UsageError {
+    /// The lines to print on stderr before the usage text, `argv0` naming the program as invoked.
+    #[must_use]
+    pub fn lines(&self, argv0: &str) -> Vec<String> {
+        match self {
+            Self::Getopt(text) => vec![format!("{argv0}: {text}")],
+            Self::Lines(lines) => lines.clone(),
+        }
+    }
+}
+
+/// `progname` as MIT's tools take it from `argv[0]`: the part after the last `/`.
+#[must_use]
+pub fn progname(argv0: &str) -> &str {
+    argv0.rsplit('/').next().unwrap_or(argv0)
+}
+
 /// Parsed `kvno` argv.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KvnoArgs {
-    /// `-c`.
+    /// `-c ccache`.
     pub ccache: Option<String>,
-    /// Compat KDC host.
-    pub kdc_host: Option<String>,
-    /// Service principals.
-    pub services: Vec<String>,
-    /// `--disable-transited-check` (gate-only; MIT `kvno` cannot set bit 26).
-    pub disable_transited_check: bool,
-    /// `--body-realm` (gate-only): TGS-REQ realm with no chase. MIT clients
-    /// never send a foreign `body.realm`.
-    pub body_realm: Option<String>,
-    /// `--renew` (gate-only): set KDC option RENEW (dest-RENEW cells).
-    pub renew: bool,
-    /// `--renew-ticket` (gate-only): RENEW the matching service cred.
-    pub renew_ticket: bool,
-    /// `--u2u FILE:cc` (gate-only): ENC_TKT_IN_SKEY with that TGT.
-    pub u2u: Option<String>,
-    /// `-U` impersonated user (S4U2Self). Unlike MIT `kvno`, the ccache
-    /// principal need not equal the service; the KDC enforces that.
+    /// `-e etype`.
+    pub etype: Option<String>,
+    /// `-k keytab`.
+    pub keytab: Option<String>,
+    /// `-q`.
+    pub quiet: bool,
+    /// `-u`: the service names are NT-UNKNOWN.
+    pub unknown: bool,
+    /// `-S sname`: each argument is a host for `sname`.
+    pub sname: Option<String>,
+    /// `-C`.
+    pub canonicalize: bool,
+    /// `-I` / `-U for_user` (S4U2Self).
     pub for_user: Option<String>,
-    /// `-P` S4U2Proxy after `-U`.
-    /// MIT `main` (`kvno.c:163-168`): `-P` without `-I`, `-U` or `-F` is a usage error.
+    /// `-U`: `for_user` is an enterprise name.
+    pub for_user_enterprise: bool,
+    /// `-P` (S4U2Proxy after S4U2Self).
     pub proxy: bool,
+    /// `--cached-only`.
+    pub cached_only: bool,
+    /// `--no-store`.
+    pub no_store: bool,
+    /// `--out-cache ccache`.
+    pub out_cache: Option<String>,
+    /// `--u2u ccache`.
+    pub u2u: Option<String>,
+    /// The service names.
+    pub services: Vec<String>,
+    /// The gates' options, in a `test-hooks` build only.
+    #[cfg(feature = "test-hooks")]
+    pub gate: KvnoGateArgs,
 }
 
-fn kvno_longs() -> &'static [LongOpt] {
-    &[
+/// The gates' `kvno` options: request shapes MIT's `kvno` cannot send. A `test-hooks` build only.
+#[cfg(feature = "test-hooks")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KvnoGateArgs {
+    /// A first argument with no `/` or `@` before a service: the KDC host (`host[:port]`).
+    pub kdc_host: Option<String>,
+    /// `--disable-transited-check`: KDC option bit 26.
+    pub disable_transited_check: bool,
+    /// `--body-realm REALM`: one TGS-REQ with that `body.realm`, no referral chase.
+    pub body_realm: Option<String>,
+    /// `--renew`: KDC option RENEW on that request.
+    pub renew: bool,
+    /// `--renew-ticket`: RENEW the cached service ticket.
+    pub renew_ticket: bool,
+}
+
+/// MIT `xusage` (`kvno.c:41-52`): the usage text, `prog` naming the program.
+#[must_use]
+pub fn kvno_usage(prog: &str) -> String {
+    format!(
+        "usage: {prog} [-c ccache] [-e etype] [-k keytab] [-q] [-u | -S sname]\n\
+         \t[[{{-F cert_file | {{-I | -U}} for_user}} [-P]] | --u2u ccache]\n\
+         \t[--cached-only] [--no-store] [--out-cache] service1 service2 ..."
+    )
+}
+
+fn kvno_longs() -> Vec<LongOpt> {
+    let longs = vec![
         LongOpt {
-            name: "disable-transited-check",
+            name: "cached-only",
             takes_arg: false,
             short: None,
         },
         LongOpt {
-            name: "body-realm",
+            name: "no-store",
+            takes_arg: false,
+            short: None,
+        },
+        LongOpt {
+            name: "out-cache",
             takes_arg: true,
-            short: None,
-        },
-        LongOpt {
-            name: "renew",
-            takes_arg: false,
-            short: None,
-        },
-        LongOpt {
-            name: "renew-ticket",
-            takes_arg: false,
             short: None,
         },
         LongOpt {
@@ -274,61 +331,127 @@ fn kvno_longs() -> &'static [LongOpt] {
             takes_arg: true,
             short: None,
         },
-    ]
+    ];
+    #[cfg(feature = "test-hooks")]
+    let longs = {
+        let mut longs = longs;
+        longs.extend([
+            LongOpt {
+                name: "disable-transited-check",
+                takes_arg: false,
+                short: None,
+            },
+            LongOpt {
+                name: "body-realm",
+                takes_arg: true,
+                short: None,
+            },
+            LongOpt {
+                name: "renew",
+                takes_arg: false,
+                short: None,
+            },
+            LongOpt {
+                name: "renew-ticket",
+                takes_arg: false,
+                short: None,
+            },
+        ]);
+        longs
+    };
+    longs
 }
 
 /// Parse `kvno` arguments after argv0.
+/// MIT `main` (`kvno.c:65-179`): the option table `uCc:e:hk:qPS:I:U:F:` and `--cached-only`,
+/// `--no-store`, `--out-cache`, `--u2u`, and the exclusions checked before any work.
 ///
 /// # Errors
 ///
-/// An error message when an option is not a `kvno` option, an option that takes an argument
-/// has none, or a flag-only long option is given `=value`; when `--renew`, `--renew-ticket` or
-/// `--u2u` comes without `--body-realm`; or when `-P` comes without `-U`.
-pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, String> {
-    let (opts, rest) = getopt(args, "c:U:P", kvno_longs())?;
+/// [`UsageError`] for an option MIT's `kvno` does not take or that lacks its argument, `-h`,
+/// `-u` with `-S`, `--u2u` with `-I` / `-U`, `-P` without `-I` / `-U`, or no service; a
+/// `test-hooks` build also refuses `--renew` or `--renew-ticket` without `--body-realm`.
+pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, UsageError> {
+    let (opts, rest) =
+        getopt(args, "uCc:e:hk:qPS:I:U:", &kvno_longs()).map_err(UsageError::Getopt)?;
     let mut out = KvnoArgs::default();
+    let mut lines = Vec::new();
     for o in opts {
-        if o.long == Some("disable-transited-check") {
-            out.disable_transited_check = true;
-            continue;
-        }
-        if o.long == Some("body-realm") {
-            out.body_realm = o.arg;
-            continue;
-        }
-        if o.long == Some("renew") {
-            out.renew = true;
-            continue;
-        }
-        if o.long == Some("renew-ticket") {
-            out.renew_ticket = true;
-            continue;
-        }
-        if o.long == Some("u2u") {
-            out.u2u = o.arg;
-            continue;
-        }
-        match o.flag {
-            'c' => out.ccache = o.arg,
-            'U' => out.for_user = o.arg,
-            'P' => out.proxy = true,
-            _ => return Err(format!("invalid option -- '{}'", o.flag)),
+        match (o.long, o.flag) {
+            (Some("cached-only"), _) => out.cached_only = true,
+            (Some("no-store"), _) => out.no_store = true,
+            (Some("out-cache"), _) => out.out_cache = o.arg,
+            (Some("u2u"), _) => out.u2u = o.arg,
+            #[cfg(feature = "test-hooks")]
+            (Some("disable-transited-check"), _) => out.gate.disable_transited_check = true,
+            #[cfg(feature = "test-hooks")]
+            (Some("body-realm"), _) => out.gate.body_realm = o.arg,
+            #[cfg(feature = "test-hooks")]
+            (Some("renew"), _) => out.gate.renew = true,
+            #[cfg(feature = "test-hooks")]
+            (Some("renew-ticket"), _) => out.gate.renew_ticket = true,
+            (Some(name), _) => {
+                return Err(UsageError::Getopt(format!(
+                    "unrecognized option '--{name}'"
+                )));
+            }
+            (None, 'C') => out.canonicalize = true,
+            (None, 'c') => out.ccache = o.arg,
+            (None, 'e') => out.etype = o.arg,
+            (None, 'k') => out.keytab = o.arg,
+            (None, 'q') => out.quiet = true,
+            (None, 'P') => out.proxy = true,
+            (None, 'S') => {
+                out.sname = o.arg;
+                if out.unknown {
+                    lines.push("Options -u and -S are mutually exclusive".to_owned());
+                    return Err(UsageError::Lines(lines));
+                }
+            }
+            (None, 'u') => {
+                out.unknown = true;
+                if out.sname.is_some() {
+                    lines.push("Options -u and -S are mutually exclusive".to_owned());
+                    return Err(UsageError::Lines(lines));
+                }
+            }
+            (None, 'I') => {
+                out.for_user = o.arg;
+                out.for_user_enterprise = false;
+            }
+            (None, 'U') => {
+                out.for_user = o.arg;
+                out.for_user_enterprise = true;
+            }
+            (None, _) => return Err(UsageError::Lines(lines)),
         }
     }
-    let mut pos = rest;
-    if pos.len() >= 2 && !pos[0].contains('/') && !pos[0].contains('@') {
-        out.kdc_host = Some(pos.remove(0));
-    }
-    out.services = pos;
-    if (out.renew || out.renew_ticket || out.u2u.is_some()) && out.body_realm.is_none() {
-        return Err(
-            "requires --body-realm (gate-only; MIT kvno has no renew — `kinit -R` is `renew-gate.sh`)"
-                .into(),
-        );
+    if out.u2u.is_some() && out.for_user.is_some() {
+        lines.push("Options --u2u and -I|-U|-F are mutually exclusive".to_owned());
+        return Err(UsageError::Lines(lines));
     }
     if out.proxy && out.for_user.is_none() {
-        return Err("Option -P (constrained delegation) requires option -U".into());
+        lines.push(
+            "Option -P (constrained delegation) requires option -I|-U|-F (protocol transition)"
+                .to_owned(),
+        );
+        return Err(UsageError::Lines(lines));
     }
+    let mut pos = rest;
+    #[cfg(feature = "test-hooks")]
+    {
+        if pos.len() >= 2 && !pos[0].contains('/') && !pos[0].contains('@') {
+            out.gate.kdc_host = Some(pos.remove(0));
+        }
+        if (out.gate.renew || out.gate.renew_ticket) && out.gate.body_realm.is_none() {
+            lines.push("kvno: --renew and --renew-ticket require --body-realm".to_owned());
+            return Err(UsageError::Lines(lines));
+        }
+    }
+    if pos.is_empty() {
+        return Err(UsageError::Lines(lines));
+    }
+    out.services = std::mem::take(&mut pos);
     Ok(out)
 }
 
@@ -454,8 +577,90 @@ mod tests {
         assert_eq!(a.ccache.as_deref(), Some("/tmp/cc"));
     }
 
+    /// Live MIT 1.22.2 `kvno`: its option table, every service named.
     #[test]
-    fn kvno_disable_transited_check_long_opt() {
+    fn kvno_takes_mit_option_table() {
+        let a = parse_kvno(&s(&[
+            "-c",
+            "FILE:/tmp/cc",
+            "-e",
+            "aes128-cts",
+            "-k",
+            "/etc/krb5.keytab",
+            "-q",
+            "-C",
+            "--cached-only",
+            "--no-store",
+            "--out-cache",
+            "FILE:/tmp/out",
+            "host/x",
+            "bob",
+        ]))
+        .unwrap();
+        assert_eq!(a.ccache.as_deref(), Some("FILE:/tmp/cc"));
+        assert_eq!(a.etype.as_deref(), Some("aes128-cts"));
+        assert_eq!(a.keytab.as_deref(), Some("/etc/krb5.keytab"));
+        assert!(a.quiet && a.canonicalize && a.cached_only && a.no_store);
+        assert_eq!(a.out_cache.as_deref(), Some("FILE:/tmp/out"));
+        assert_eq!(a.services, s(&["host/x", "bob"]));
+        let u = parse_kvno(&s(&["-u", "host/x"])).unwrap();
+        assert!(u.unknown);
+        let sn = parse_kvno(&s(&["-S", "host", "client2.kerber.test"])).unwrap();
+        assert_eq!(sn.sname.as_deref(), Some("host"));
+        let i = parse_kvno(&s(&["-I", "alice", "-P", "host/x"])).unwrap();
+        assert_eq!(i.for_user.as_deref(), Some("alice"));
+        assert!(i.proxy && !i.for_user_enterprise);
+        let e = parse_kvno(&s(&["-U", "victim@A.TEST", "user@C.TEST"])).unwrap();
+        assert!(e.for_user_enterprise);
+        let w = parse_kvno(&s(&["--u2u", "FILE:/tmp/host", "host/x"])).unwrap();
+        assert_eq!(w.u2u.as_deref(), Some("FILE:/tmp/host"));
+    }
+
+    /// Live MIT 1.22.2 `kvno`: the refusals before any work, each followed by the usage text.
+    #[test]
+    fn kvno_refuses_as_mit() {
+        let lines = |v: &[&str]| parse_kvno(&s(v)).unwrap_err().lines("kvno");
+        assert_eq!(
+            lines(&["-u", "-S", "host", "x"]),
+            ["Options -u and -S are mutually exclusive"]
+        );
+        assert_eq!(
+            lines(&["--u2u", "FILE:/tmp/h", "-U", "alice", "x"]),
+            ["Options --u2u and -I|-U|-F are mutually exclusive"]
+        );
+        assert_eq!(
+            lines(&["-P", "host/x"]),
+            ["Option -P (constrained delegation) requires option -I|-U|-F (protocol transition)"]
+        );
+        assert_eq!(lines(&[]), Vec::<String>::new());
+        assert_eq!(lines(&["-h"]), Vec::<String>::new());
+        assert_eq!(lines(&["-Z", "host/x"]), ["kvno: invalid option -- 'Z'"]);
+        assert!(kvno_usage("kvno").starts_with("usage: kvno [-c ccache] [-e etype] [-k keytab]"));
+    }
+
+    /// The gates' kvno options are not MIT's: a release build refuses them, and a first argument
+    /// without `/` or `@` is a service like any other.
+    #[cfg(not(feature = "test-hooks"))]
+    #[test]
+    fn kvno_release_has_no_gate_options() {
+        for opt in ["--disable-transited-check", "--renew", "--renew-ticket"] {
+            assert_eq!(
+                parse_kvno(&s(&[opt, "host/x@R"])).unwrap_err(),
+                UsageError::Getopt(format!("unrecognized option '{opt}'"))
+            );
+        }
+        assert_eq!(
+            parse_kvno(&s(&["--body-realm", "R", "host/x@R"])).unwrap_err(),
+            UsageError::Getopt("unrecognized option '--body-realm'".into())
+        );
+        let a = parse_kvno(&s(&["127.0.0.1", "host/x@R"])).unwrap();
+        assert_eq!(a.services, s(&["127.0.0.1", "host/x@R"]));
+    }
+
+    /// A `test-hooks` build takes the gates' options.
+    #[cfg(feature = "test-hooks")]
+    #[test]
+    fn kvno_gate_options_in_a_test_hooks_build() {
         let a = parse_kvno(&s(&[
             "--disable-transited-check",
             "-c",
@@ -463,61 +668,26 @@ mod tests {
             "host/x@R",
         ]))
         .unwrap();
-        assert!(a.disable_transited_check);
-        assert_eq!(a.ccache.as_deref(), Some("/tmp/cc"));
-        assert_eq!(a.services, vec!["host/x@R".to_string()]);
-        let b = parse_kvno(&s(&["-c", "/tmp/cc", "host/x@R"])).unwrap();
-        assert!(!b.disable_transited_check);
-        let u = parse_kvno(&s(&["-U", "admin", "host/x@R"])).unwrap();
-        assert_eq!(u.for_user.as_deref(), Some("admin"));
-        let r = parse_kvno(&s(&["--body-realm", "GARBAGE.EXAMPLE", "host/x@R"])).unwrap();
-        assert_eq!(r.body_realm.as_deref(), Some("GARBAGE.EXAMPLE"));
+        assert!(a.gate.disable_transited_check);
         let n = parse_kvno(&s(&[
             "--renew",
             "--body-realm",
             "B.TEST",
+            "127.0.0.1:90",
             "krbtgt/C.TEST@C.TEST",
         ]))
         .unwrap();
-        assert!(n.renew);
-        assert_eq!(n.body_realm.as_deref(), Some("B.TEST"));
-        let t = parse_kvno(&s(&[
-            "--renew-ticket",
-            "--body-realm",
-            "KERBER.TEST",
-            "host/testhost.kerber.test@KERBER.TEST",
-        ]))
-        .unwrap();
-        assert!(t.renew_ticket);
-        assert_eq!(t.body_realm.as_deref(), Some("KERBER.TEST"));
-        let u2 = parse_kvno(&s(&[
-            "--u2u",
-            "FILE:/tmp/host",
-            "--body-realm",
-            "C.TEST",
-            "host/svc.c.test@C.TEST",
-        ]))
-        .unwrap();
-        assert_eq!(u2.u2u.as_deref(), Some("FILE:/tmp/host"));
-        assert_eq!(u2.body_realm.as_deref(), Some("C.TEST"));
-    }
-
-    #[test]
-    fn kvno_renew_requires_body_realm() {
-        let e = parse_kvno(&s(&["--renew", "host/x@R"])).unwrap_err();
-        assert!(e.contains("requires --body-realm"), "{e}");
-    }
-
-    #[test]
-    fn kvno_for_user_with_realm_parses() {
-        let u = parse_kvno(&s(&["-U", "victim@A.TEST", "user@C.TEST"])).unwrap();
-        assert_eq!(u.for_user.as_deref(), Some("victim@A.TEST"));
-        assert_eq!(u.services, vec!["user@C.TEST".to_string()]);
-        let p = parse_kvno(&s(&["-U", "user", "-P", "host/x@R"])).unwrap();
-        assert!(p.proxy);
-        assert_eq!(p.for_user.as_deref(), Some("user"));
-        let e = parse_kvno(&s(&["-P", "host/x@R"])).unwrap_err();
-        assert!(e.contains("requires option -U"), "{e}");
+        assert!(n.gate.renew);
+        assert_eq!(n.gate.body_realm.as_deref(), Some("B.TEST"));
+        assert_eq!(n.gate.kdc_host.as_deref(), Some("127.0.0.1:90"));
+        assert_eq!(n.services, s(&["krbtgt/C.TEST@C.TEST"]));
+        let t = parse_kvno(&s(&["--renew-ticket", "--body-realm", "K", "host/x@K"])).unwrap();
+        assert!(t.gate.renew_ticket);
+        let missing = parse_kvno(&s(&["--renew", "host/x@R"])).unwrap_err();
+        assert_eq!(
+            missing.lines("kvno"),
+            ["kvno: --renew and --renew-ticket require --body-realm"]
+        );
     }
 
     #[test]
