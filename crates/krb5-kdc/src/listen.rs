@@ -1458,6 +1458,74 @@ mod tests {
     use krb5_asn1::{decode, encode};
     use krb5_types::{PrincipalName, err};
 
+    /// A replay the lookaside no longer holds is processed again: the AS-REQ with the same
+    /// PA-ENC-TIMESTAMP and the TGS-REQ with the same authenticator each get a new ticket, where
+    /// the lookaside resent the first reply while it held it. Before, both were error 34.
+    /// MIT `dispatch` (`dispatch.c:114-140`): only the lookaside answers a repeated request, so one it no longer holds is processed again.
+    #[test]
+    fn a_replay_the_lookaside_no_longer_holds_is_issued_again() {
+        use crate::testrealm::{TEST_REALM, TEST_USER, documented_host};
+        let (store, _) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let as_req = |nonce, padata| krb5_protocol::as_req(user.clone(), TEST_REALM, nonce, padata);
+        let enc_ts = || Some(vec![krb5_protocol::pa_enc_timestamp(&key).unwrap()]);
+        let as_bytes = encode(&as_req(71, enc_ts()).unwrap()).unwrap();
+        let tgt = crate::issue_as(&store, &as_req(72, enc_ts()).unwrap()).unwrap();
+        let tgs = krb5_protocol::tgs_req(
+            tgt.rep.0.ticket.clone(),
+            &tgt.session_key,
+            TEST_REALM,
+            &user,
+            documented_host(),
+            TEST_REALM,
+            73,
+        );
+        let tgs_bytes = encode(&tgs.unwrap()).unwrap();
+        let store = shared_store(store);
+        let stale = Duration::from_millis(500);
+        let cache = Mutex::new(Lookaside::with_limits(crate::lookaside::MAX_SIZE, stale));
+        let send = |req: &[u8]| match dispatch_via_cache(&store, &cache, req, None) {
+            Dispatch::Send(reply) => reply,
+            _ => panic!("no reply"),
+        };
+        let as_first = send(&as_bytes);
+        assert_eq!(
+            send(&as_bytes),
+            as_first,
+            "the lookaside resends the AS-REP"
+        );
+        let tgs_first = send(&tgs_bytes);
+        assert_eq!(
+            send(&tgs_bytes),
+            tgs_first,
+            "the lookaside resends the TGS-REP"
+        );
+        thread::sleep(stale + Duration::from_millis(100));
+        // A later request's insert purges the stale entries, as MIT's does.
+        send(&encode(&as_req(74, None).unwrap()).unwrap());
+        let as_again = send(&as_bytes);
+        assert_eq!(
+            as_again.first(),
+            Some(&0x6b),
+            "the replayed AS-REQ issues an AS-REP"
+        );
+        assert_ne!(as_again, as_first, "a new AS-REP, not the cached one");
+        let tgs_again = send(&tgs_bytes);
+        assert_eq!(
+            tgs_again.first(),
+            Some(&0x6d),
+            "the replayed TGS-REQ issues a TGS-REP"
+        );
+        assert_ne!(tgs_again, tgs_first, "a new TGS-REP, not the cached one");
+    }
+
     #[test]
     fn drop_privileges_is_noop_when_unprivileged() {
         assert!(!drop_privileges().expect("unprivileged drop"));

@@ -7,7 +7,9 @@ matrix names the shipped site and the test that drives it.
 Replay is one implementation (`krb5-protocol` `ReplayCache`: 50_000
 entries, 5-minute window, fail-closed on mutex poison). GSS acceptors
 share one AP-REQ cache across `accept_sec_context` calls. GSS wrap/MIC
-uses a per-context sequence window in addition to that cache.
+uses a per-context sequence window in addition to that cache. The KDC
+keeps no replay cache, as MIT: its lookaside answers a retransmit, and a
+replay the lookaside no longer holds is processed again.
 
 ## Matrix
 
@@ -16,8 +18,6 @@ uses a per-context sequence window in addition to that cache.
 | Constant-time MAC / checksum | `krb5-crypto` `mac_verify` (`derive.rs`): a length check, then `subtle` `ct_eq`. The seven verify sites compare through it: `ops.rs` decrypt (two) and `verify_checksum_type` (two), `weak.rs` RC4, DES3 and Camellia | A wrong MAC is refused (behaviour, not timing): `crates/krb5-crypto/tests/known_answer.rs` `decrypt_bad_mac_is_error`; `crates/krb5-crypto/tests/constant_time.rs` `mac_verify_rejects_one_bit_flip` / `checksum_bit_flip_is_integrity`. That the compare is constant-time is a check of the source text only: the first searches `derive.rs` for `got.ct_eq(expected)`, the second `ops.rs` for the two lines of `verify_checksum_type`'s keyed compare. No test measures timing |
 | Constant-time PAC signature | `verify_checksum_type` over PAC `SignatureType` (`ad.rs` `verify_pac_sig`; `pac.c:478-514`) | `crates/krb5-kdc/tests/pac_ad_capture.rs` `verify_pac_signatures` / `pac_sha1_server_checksum_is_sumtype_nosupp` |
 | Replay — AP-REQ authenticator | `verify_ap_req` (`krb5-protocol` `ap_req.rs`) | `ap_req_valid_truncated_wrong_key_replay` |
-| Replay — TGS authenticator | `issue_tgs` (`krb5-kdc` `tgs_req.rs`) `tgs_replay` | `tgs_authenticator_replay_is_repeat` |
-| Replay — PA-ENC-TIMESTAMP | `verify_enc_timestamp` (`as_req.rs`) `pa_replay` | `pa_enc_timestamp_replay_is_repeat` |
 | Replay — KRB-SAFE / PRIV / CRED | `safe_priv.rs` `check_and_store` on unwrap | `messages.rs` unwrap path; `ReplayCache` unit tests |
 | Replay — GSS wrap/MIC sequence | `krb5-gss` `accept_seq` (`recv_window`) | `wrap_mic_replay_inside_window_is_rejected` |
 | Replay — GSS acceptor AP-REQ | `accept_sec_context` shared `ReplayCache`. kadm5 RPC holds one in-memory cache (300 s). MIT `dfl` file persists across restarts (`rc_file2.c:165-195`). kpasswd uses a fresh `ReplayCache` per datagram like MIT `schpw.c:110-111` (a UDP retransmit is answered). | `accept_same_token_twice_is_repeat`; `gss-gate.sh` replay cell (MIT KRB-ERROR 34 `Request is a replay`); `kpasswd-gate.sh` retransmit |
@@ -91,8 +91,7 @@ row below is mixed on absurd inputs.
 These invariants are recorded in full in the [parity ledger](parity/README.md):
 the row named by its MIT cite holds MIT's behaviour, the Rust behaviour and the
 proof, and the grade is the ledger's. The stricter and deviation rows fail
-closed like the rows above: the encrypted-challenge replay is also a different
-code (34 where MIT answers 24). The exact rows are MIT behaviour this table used
+closed like the rows above. The exact rows are MIT behaviour this table used
 to restate.
 
 | Invariant | Grade | Ledger row |
@@ -101,11 +100,8 @@ to restate.
 | Append escaping; add-path bounds; encode-side X.500 RDN compression | stricter-documented | `kdc_transit.c:143` ([A1](parity/a1-tgs.md)) |
 | TGS realm octets that are not UTF-8 | stricter-documented | `asn1_k_encode.c:103-106` ([A1](parity/a1-tgs.md)) |
 | Unknown TGS KDCOptions bit | stricter-documented | `kdc_util.c:813-824` ([A1](parity/a1-tgs.md)); `do_tgs_req.c`, recognised options only ([A2](parity/a2-as.md)) |
-| TGS AP-REQ authenticator replay | stricter-documented | `kdc_util.c:190` ([A1](parity/a1-tgs.md)); `kdc_util.c:144-191` ([A2](parity/a2-as.md)) |
 | Acceptor ticket addresses (`rd_req_dec.c:536-540`) | stricter-documented | `rd_req_dec.c:536-540` ([A2](parity/a2-as.md)) |
 | kadmind connection caps | stricter-documented | `net-server.c:85,1571-1572,683,1278` ([A2](parity/a2-as.md)) |
-| PA-ENC-TIMESTAMP replay | stricter-documented | `kdc_preauth_encts.c:47-118` ([A3](parity/a3-preauth.md)) |
-| Encrypted-challenge replay | deviation | `kdc_preauth.c:1092-1133` ([A3](parity/a3-preauth.md)) |
 | CAMMAC KDC verifier keyed checksum (`cammac.c:168`) | stricter-documented | `cammac.c:168` ([A3](parity/a3-preauth.md)) |
 | FAST armor ticket server realm | stricter-documented | `fast_util.c:62-67` ([A3](parity/a3-preauth.md)) |
 | Unset `master_key_type` | exact | `osconf.hin:90` ([A4](parity/a4-kadmin.md)) |

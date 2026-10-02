@@ -31,7 +31,7 @@ pub enum PreauthAction {
     Challenge(Vec<u8>),
     /// SPAKE finished; key encrypts AS-REP.
     SpakeDone(ProtocolKey),
-    /// PA-ENC-TIMESTAMP verified (replay recorded); caller must not re-verify.
+    /// PA-ENC-TIMESTAMP verified; caller must not re-verify.
     EncTsOk,
 }
 
@@ -87,7 +87,7 @@ pub trait KdcPreauth: Send + Sync {
     /// # Errors
     ///
     /// The [`Error`] with which a module refuses its padata. The built-in modules return
-    /// [`Error::Protocol`] for a failed check (`PREAUTH_FAILED`, `SKEW`, `REPEAT`, ...),
+    /// [`Error::Protocol`] for a failed check (`PREAUTH_FAILED`, `SKEW`, ...),
     /// [`Error::Crypto`] when a timestamp does not decrypt or a PKINIT or SPAKE derivation fails,
     /// and [`Error::Asn1`] when padata does not decode or a reply does not encode; `run_as_preauth`
     /// then applies MIT's `filter_preauth_error`.
@@ -314,7 +314,7 @@ impl KdcPreauth for EncTsMod {
         };
         let mut last_err = None;
         for k in keys {
-            match crate::issue::verify_enc_timestamp(store, client, &k.key, blob.as_ref()) {
+            match crate::issue::verify_enc_timestamp(store, &k.key, blob.as_ref()) {
                 Ok(()) => return Ok(Some(PreauthAction::EncTsOk)),
                 Err(e) => last_err = Some(e),
             }
@@ -500,7 +500,7 @@ fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[
 ///
 /// [`Error::Protocol`] with status `PREAUTH_FAILED` when the first module to fail refuses its
 /// padata: the module's code when MIT's pass-through list keeps it (`SKEW`, `BAD_INTEGRITY`,
-/// `ETYPE_NOSUPP`, `MORE_PREAUTH_DATA_REQUIRED`, `REPEAT`, the PKINIT codes, ...), else
+/// `ETYPE_NOSUPP`, `MORE_PREAUTH_DATA_REQUIRED`, the PKINIT codes, ...), else
 /// `PREAUTH_FAILED` for any other code or variant. A module's [`Error::PreauthRequired`] passes
 /// through unchanged.
 pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
@@ -541,9 +541,8 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
 /// along (`:1194-1196`), and the original failure stays in the log detail.
 /// MIT `finish_preauth` (`do_as_req.c:442-442`): whatever the code, the status word
 /// is the `PREAUTH_FAILED` it sets for every module failure, so the e_text is too.
-/// 34 `REPEAT` is the documented exception (the replay cache answers before the
-/// filter would run); FAST errors never pass here (`FastMod::process_as` is a
-/// no-op, `kdc_find_fast` is not a module in MIT either).
+/// FAST errors never pass here (`FastMod::process_as` is a no-op, `kdc_find_fast` is not a
+/// module in MIT either).
 pub(crate) fn filter_preauth_error(e: Error) -> Error {
     use krb5_types::err;
     const PASS_THROUGH: &[i32] = &[
@@ -578,8 +577,6 @@ pub(crate) fn filter_preauth_error(e: Error) -> Error {
         // passes through.
         // MIT `finish_process_as_req` (`do_as_req.c:372-372`): suppresses the reply.
         err::DISCARD,
-        // Not in MIT's list (docs/security.md replay row).
-        err::REPEAT,
     ];
     match e {
         Error::PreauthRequired { .. } => e,
@@ -959,7 +956,7 @@ mod tests {
     }
 
     #[test]
-    fn enc_timestamp_registry_success_does_not_double_verify() {
+    fn enc_timestamp_registry_replay_is_issued_again() {
         let (store, _) = bootstrap_documented().unwrap();
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
         let key = store
@@ -971,12 +968,9 @@ mod tests {
             .clone();
         let padata = vec![pa_enc_timestamp(&key).unwrap()];
         let req = as_req(cname, TEST_REALM, 9, Some(padata)).unwrap();
-        crate::issue_as(&store, &req).expect("registry EncTsOk must not re-verify (replay)");
-        let replay = crate::issue_as(&store, &req).unwrap_err();
-        match replay {
-            Error::Protocol { code, .. } if code == krb5_types::err::REPEAT => {}
-            other => panic!("second AS must REPEAT, got {other:?}"),
-        }
+        crate::issue_as(&store, &req).expect("registry EncTsOk issues");
+        // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-101`): no replay cache, so the same timestamp verifies again.
+        crate::issue_as(&store, &req).expect("the replayed timestamp issues again");
     }
 
     #[test]

@@ -1,15 +1,14 @@
 //! Public KDB extension surface (MIT kdb capabilities as Rust traits).
 //!
 //! Dump-v7 [`crate::PrincipalStore`] is the default at-rest backend.
-//! `db_library` selects the factory; unknown names error. Process-local
-//! replay caches and the PKINIT CA live on [`KdcEnv`], not dump rows.
+//! `db_library` selects the factory; unknown names error. The process-local
+//! PKINIT CA lives on [`KdcEnv`], not in dump rows.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
 use krb5_types::pkinit::PkinitCa;
@@ -68,13 +67,14 @@ pub fn resolve_alias_id<'a>(
     Some(id)
 }
 
-/// Process-local KDC state (replay + PKINIT CA). Not dump/persist rows.
+/// Process-local KDC state (the PKINIT CA). Not dump/persist rows.
+///
+/// The KDC keeps no replay cache of its own: a retransmit is answered by the lookaside, and a
+/// replay it no longer holds is processed again.
+/// MIT `kdc_process_tgs_req` (`kdc/kdc_util.c:189-191`): the TGS AP-REQ is read without a replay cache.
+/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:47-118`): a timestamp inside the skew verifies again.
 #[derive(Clone, Debug)]
 pub struct KdcEnv {
-    /// TGS authenticator replay cache.
-    pub tgs_replay: ReplayCache,
-    /// PA-ENC-TIMESTAMP replay cache.
-    pub pa_replay: ReplayCache,
     /// PKINIT test CA.
     pub pkinit_ca: Option<PkinitCa>,
 }
@@ -86,14 +86,10 @@ impl Default for KdcEnv {
 }
 
 impl KdcEnv {
-    /// Empty CA, default replay windows.
+    /// No PKINIT CA.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            tgs_replay: ReplayCache::with_limits(50_000, std::time::Duration::from_secs(300)),
-            pa_replay: ReplayCache::with_limits(50_000, std::time::Duration::from_secs(300)),
-            pkinit_ca: None,
-        }
+        Self { pkinit_ca: None }
     }
 }
 
@@ -151,14 +147,6 @@ pub trait PrincipalRead: Send + Sync {
     /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
     /// fail.
     fn list_principals(&self) -> Result<Vec<Principal>, Error>;
-    /// TGS replay cache.
-    fn tgs_replay(&self) -> &ReplayCache {
-        &self.env().tgs_replay
-    }
-    /// PA-ENC-TIMESTAMP replay cache.
-    fn pa_replay(&self) -> &ReplayCache {
-        &self.env().pa_replay
-    }
     /// PKINIT CA if provisioned.
     fn pkinit_ca(&self) -> Option<&PkinitCa> {
         self.env().pkinit_ca.as_ref()

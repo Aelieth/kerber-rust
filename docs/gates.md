@@ -542,9 +542,9 @@ not check (a unit test, or "not asserted").
 - `scripts/soak-gate.sh` — sustained moderate load (~120 s in CI, 480 s
   scheduled in `.github/workflows/soak.yml`). RSS last ≤ first×1.5 + 33 MiB
   (the 33 MiB is sized, not asserted, as 8 MiB slack + the bounded working
-  set: the 10 MiB lookaside of `kdc/replay.c`, ~17 MiB real with its map/FIFO
-  overhead, plus the two replay caches over their 5-minute window, ~8 MiB at
-  soak load — 25 MiB measured at 300 s) and slope ≤ 0.05 MiB/s over the steady window, which
+  set: the 10 MiB lookaside of `kdc/replay.c` with its map/FIFO overhead;
+  25 MiB was measured at 300 s while the KDC also kept two replay caches,
+  since dropped) and slope ≤ 0.05 MiB/s over the steady window, which
   starts at the later of the KDC's `kdc.lookaside.full` event (when logged)
   and 300 s into the run (before that the working set is spread over the
   run: a run with fewer than 5 samples in a steady window is judged by the

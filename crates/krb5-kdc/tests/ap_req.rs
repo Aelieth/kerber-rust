@@ -82,8 +82,9 @@ fn ap_req_valid_truncated_wrong_key_replay() {
     }
 }
 
+/// MIT `kdc_process_tgs_req` (`kdc_util.c:189-191`): no replay cache, so a replayed TGS-REQ is processed again and issues a new ticket.
 #[test]
-fn tgs_authenticator_replay_is_repeat() {
+fn tgs_authenticator_replay_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = client_key();
@@ -105,35 +106,30 @@ fn tgs_authenticator_replay_is_repeat() {
         32,
     )
     .expect("TGS-REQ");
-    krb5_kdc::issue_tgs(&store, &tgs).expect("first TGS");
-    let replay_err = krb5_kdc::issue_tgs(&store, &tgs).unwrap_err();
-    match replay_err {
-        Error::Protocol { code, .. } => {
-            assert_eq!(
-                code,
-                err::REPEAT,
-                "TGS authenticator replay must set REPEAT"
-            );
-        }
-        other => panic!("expected REPEAT, got {other}"),
-    }
+    let first = krb5_kdc::issue_tgs(&store, &tgs).expect("first TGS");
+    let again = krb5_kdc::issue_tgs(&store, &tgs).expect("the replay issues again");
+    assert_ne!(
+        first.session_key.as_bytes(),
+        again.session_key.as_bytes(),
+        "the replay is processed again, not answered from a cache"
+    );
 }
 
+/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-101`): no replay cache, so a replayed timestamp inside the skew verifies again and issues a new ticket.
 #[test]
-fn pa_enc_timestamp_replay_is_repeat() {
+fn pa_enc_timestamp_replay_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = client_key();
     let padata = vec![pa_enc_timestamp(&key).expect("pa-ts")];
     let req = as_req(cname, TEST_REALM, 33, Some(padata)).unwrap();
-    krb5_kdc::issue_as(&store, &req).expect("first AS");
-    let replay_err = krb5_kdc::issue_as(&store, &req).unwrap_err();
-    match replay_err {
-        Error::Protocol { code, .. } => {
-            assert_eq!(code, err::REPEAT, "same PA-ENC-TIMESTAMP must set REPEAT");
-        }
-        other => panic!("expected REPEAT, got {other}"),
-    }
+    let first = krb5_kdc::issue_as(&store, &req).expect("first AS");
+    let again = krb5_kdc::issue_as(&store, &req).expect("the replay issues again");
+    assert_ne!(
+        first.session_key.as_bytes(),
+        again.session_key.as_bytes(),
+        "the replay is processed again, not answered from a cache"
+    );
 }
 
 fn map_tgs_authenticator_cksum(

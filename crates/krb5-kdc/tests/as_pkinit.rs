@@ -820,8 +820,9 @@ fn pkinit_two_authpacks_same_second_both_issue() {
     krb5_kdc::issue_as(&store, &req2).expect("second AuthPack same second");
 }
 
+/// MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:528-532`): no replay cache, so a replayed AuthPack inside the skew verifies again and issues a new ticket.
 #[test]
-fn pkinit_replayed_authpack_is_refused() {
+fn pkinit_replayed_authpack_is_issued_again() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     let ca = store.pkinit_ca().expect("CA").clone();
@@ -830,12 +831,13 @@ fn pkinit_replayed_authpack_is_refused() {
     let req = pkinit_as_req(cname, 440, |ck| {
         pa_pk_as_req(&kp.public, &ca, Some(ck)).expect("PA-PK-AS-REQ")
     });
-    krb5_kdc::issue_as(&store, &req).expect("first PKINIT");
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("replay");
-    match err {
-        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
-        other => panic!("expected PREAUTH_FAILED, got {other}"),
-    }
+    let first = krb5_kdc::issue_as(&store, &req).expect("first PKINIT");
+    let again = krb5_kdc::issue_as(&store, &req).expect("the replay issues again");
+    assert_ne!(
+        first.session_key.as_bytes(),
+        again.session_key.as_bytes(),
+        "the replay is processed again, not answered from a cache"
+    );
 }
 
 #[test]

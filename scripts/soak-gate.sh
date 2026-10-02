@@ -94,11 +94,11 @@ fi
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc1.log"
 
 # RSS allowance = 8 MiB slack + the bounded working set: the 10 MiB lookaside of
-# kdc/replay.c LOOKASIDE_MAX_SIZE (~17 MiB real with its map/FIFO overhead) plus
-# the two replay caches over their 5-minute window (~8 MiB at soak load),
-# measured 25 MiB at 300 s. The slope is judged over the steady window, which
-# starts once the KDC has logged kdc.lookaside.full AND the replay window has
-# elapsed; a shorter run is judged by the cap alone (rss_slope_unsettled).
+# kdc/replay.c LOOKASIDE_MAX_SIZE with its map/FIFO overhead (25 MiB was measured
+# at 300 s while the KDC also kept two replay caches, since dropped). The slope is
+# judged over the steady window, which starts once the KDC has logged
+# kdc.lookaside.full AND 300 s have elapsed; a shorter run is judged by the cap
+# alone (rss_slope_unsettled).
 python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --log "$OUT/kdc1.log" \
     --out "$OUT/slo.json" \

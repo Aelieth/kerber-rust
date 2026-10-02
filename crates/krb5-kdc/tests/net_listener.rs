@@ -69,8 +69,7 @@ fn udp_listener_answers_wrong_password() {
 fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
     // MIT `dispatch` (`dispatch.c:114-140`): with the kdc/replay.c lookaside, an identical
     // request resent to the listener is answered from the cache, so the second reply is
-    // byte-for-byte the first, not a freshly minted AS-REP (new session key) or a
-    // PA-ENC-TIMESTAMP replay error.
+    // byte-for-byte the first, not a freshly minted AS-REP (new session key).
     use std::io::{Read, Write};
     use std::net::TcpStream;
     let (store, _) = bootstrap_documented().unwrap();

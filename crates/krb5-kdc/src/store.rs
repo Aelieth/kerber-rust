@@ -26,7 +26,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
 use krb5_types::pkinit::PkinitCa;
@@ -194,8 +193,8 @@ impl PrincipalStore {
     /// and the database is read again when they differ; the dump rows with the lockout attributes
     /// of `principal.lockout`, named policies, serial and update log come from disk, and the
     /// kdc.conf ticket policy, the password dictionary, the lockout state this process keeps (its
-    /// open `principal.lockout` and any counts kept in memory), the replay caches and the PKINIT
-    /// CA stay process-local, carried over and never copied. The KDC's lockout writes move neither
+    /// open `principal.lockout` and any counts kept in memory) and the PKINIT CA stay
+    /// process-local, carried over and never copied. The KDC's lockout writes move neither
     /// the age nor the file, so a reader that needs them now merges them per entry
     /// ([`Self::merge_lockout`]).
     /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): each read takes the shared lock and reopens the database under it.
@@ -322,22 +321,10 @@ impl PrincipalStore {
         &self.policy
     }
 
-    /// Process-local KDC env (replay / PKINIT CA).
+    /// Process-local KDC env (the PKINIT CA).
     #[must_use]
     pub fn env(&self) -> &crate::kdb::KdcEnv {
         &self.env
-    }
-
-    /// TGS replay cache.
-    #[must_use]
-    pub fn tgs_replay(&self) -> &ReplayCache {
-        &self.env.tgs_replay
-    }
-
-    /// PA-ENC-TIMESTAMP replay cache.
-    #[must_use]
-    pub fn pa_replay(&self) -> &ReplayCache {
-        &self.env.pa_replay
     }
 
     /// PKINIT CA if provisioned.

@@ -4,11 +4,10 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2};
-use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
     AsRep, AsReq, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2, EtypeInfo2Entry,
-    EtypeInfoEntry, KdcReqBody, KerberosString, KerberosTime, MethodData, Microseconds,
-    OctetString, PaData, PaEncTsEnc, PrincipalName, TransitedEncoding, err, flag_bit, ku, pa,
+    EtypeInfoEntry, KdcReqBody, KerberosString, KerberosTime, MethodData, OctetString, PaData,
+    PaEncTsEnc, PrincipalName, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
 use super::fast_util::{check_fast_options, fast_hides_client, wrap_as_fast};
@@ -445,7 +444,7 @@ fn finish_preauth(
         && let Some(blob) = find_pa(Some(&f.inner_padata), pa::ENCRYPTED_CHALLENGE)
         && !blob.is_empty()
     {
-        match verify_encrypted_challenge(store, &client, &ckey.key, &f.armor_key, blob) {
+        match verify_encrypted_challenge(store, &ckey.key, &f.armor_key, blob) {
             Ok(()) => {
                 skip_timestamp = true;
                 extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
@@ -823,9 +822,9 @@ pub(crate) fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetS
     })
 }
 
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:121-128`): a timestamp inside the clock skew verifies, and a replayed one verifies again.
 fn verify_encrypted_challenge(
     store: &dyn PrincipalRead,
-    client: &Principal,
     long_term: &ProtocolKey,
     armor_key: &ProtocolKey,
     blob: &[u8],
@@ -850,16 +849,6 @@ fn verify_encrypted_challenge(
     let then = i64::from(ts.patimestamp.unix_seconds());
     if (now - then).abs() > store.policy().skew {
         return Err(proto(err::SKEW, status::PREAUTH_FAILED));
-    }
-    let rkey = ReplayKey {
-        client: client.id(),
-        server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
-        ctime: ts.patimestamp.unix_seconds(),
-        cusec: ts.pausec.map_or(0, Microseconds::get),
-        auth_hash: ReplayCache::hash_authenticator(blob),
-    };
-    if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::REPEAT, status::PREAUTH_FAILED));
     }
     Ok(())
 }
@@ -892,9 +881,9 @@ fn kdc_encrypted_challenge(
     })
 }
 
+/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-101`): a timestamp inside the clock skew verifies, and a replayed one verifies again.
 pub(crate) fn verify_enc_timestamp(
     store: &dyn PrincipalRead,
-    client: &Principal,
     key: &ProtocolKey,
     blob: &[u8],
 ) -> Result<(), Error> {
@@ -910,16 +899,6 @@ pub(crate) fn verify_enc_timestamp(
     let then = i64::from(ts.patimestamp.unix_seconds());
     if (now - then).abs() > store.policy().skew {
         return Err(proto(err::SKEW, status::PREAUTH_FAILED));
-    }
-    let rkey = ReplayKey {
-        client: client.id(),
-        server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
-        ctime: ts.patimestamp.unix_seconds(),
-        cusec: ts.pausec.map_or(0, Microseconds::get),
-        auth_hash: ReplayCache::hash_authenticator(blob),
-    };
-    if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::REPEAT, status::PREAUTH_FAILED));
     }
     Ok(())
 }

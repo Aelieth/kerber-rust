@@ -770,6 +770,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **kdc.** A replay the lookaside no longer holds is answered as MIT answers it: a TGS-REQ, and an
+  enc-ts, encrypted-challenge or PKINIT AS-REQ, inside the skew issues a ticket (was 34 / 24). The
+  two replay caches MIT has not are gone. Live; units.
 - **kdc/admin.** In the foreground (`krb5kdc -n`, `kadmind -nofork`) the daemons print what MIT
   prints; the JSON log goes only where kdc.conf's `[logging] json` (`STDOUT`, `STDERR`, `FILE:`),
   a relation MIT ignores, names a destination, kprop's and kpropd's too. Units; settled live.

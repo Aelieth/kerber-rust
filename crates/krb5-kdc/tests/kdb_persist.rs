@@ -159,11 +159,9 @@ fn reload_if_stale_sees_kadmin_create() {
 }
 
 #[test]
-fn reload_if_stale_keeps_lockout_and_pa_replay() {
+fn reload_if_stale_keeps_lockout() {
     use krb5_kdc::NamedPolicy;
     use krb5_kdc::testrealm::TEST_USER;
-
-    use krb5_protocol::ReplayKey;
 
     let dir = scratch_dir("krb5-reload-overlay");
     let db = dir.join("principal");
@@ -204,17 +202,6 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
     }
     let after_fail = reader.get_name(&user).unwrap();
     assert_eq!(reader.fail_auth_of(after_fail), 2);
-    let rk = ReplayKey {
-        client: format!("{TEST_USER}@{TEST_REALM}"),
-        server: format!("krbtgt/{TEST_REALM}@{TEST_REALM}"),
-        ctime: 1,
-        cusec: 2,
-        auth_hash: [7u8; 20],
-    };
-    assert!(
-        !reader.pa_replay().check_and_store(rk.clone()),
-        "first PA must insert"
-    );
     writer.persist_paths = Some((db.clone(), stash.clone()));
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["unrelated"]);
     writer
@@ -228,10 +215,6 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
         reader.fail_auth_of(after),
         2,
         "lockout overlay must survive reload_if_stale"
-    );
-    assert!(
-        reader.pa_replay().check_and_store(rk),
-        "PA replay cache must survive reload_if_stale"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

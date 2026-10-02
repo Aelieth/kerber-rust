@@ -40,6 +40,7 @@ pub(super) struct HeaderTgt {
 /// MIT `kdc_process_tgs_req` (`kdc_util.c:217-229`): a ticket that is valid only as FAST armor
 /// is refused after the request is authenticated. An address or time failure is reported before
 /// that armor check, and an unknown or non-collision-proof checksum is not accepted.
+/// MIT `kdc_process_tgs_req` (`kdc_util.c:189-191`): the AP-REQ is read without a replay cache, so a replayed request is processed again.
 pub(super) fn process_tgs_header(
     store: &dyn PrincipalRead,
     ap_raw: &[u8],

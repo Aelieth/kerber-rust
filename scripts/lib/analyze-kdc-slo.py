@@ -21,9 +21,9 @@ Soak additionally:
   RSS last <= first * 1.5 + 33 MiB   (8 MiB slack + the bounded working set)
   RSS slope <= 0.05 MiB/s over the steady window, which starts at the later of
   the KDC's `kdc.lookaside.full` event and --rss-steady-after-s into the run
-  (the replay caches' 5-minute window; a bounded working set fills then
-  flattens, a leak keeps climbing). Before the steady window the slope may
-  spend the working set (--rss-fill-allowance-mib / elapsed); too few steady
+  (a bounded working set fills then flattens, a leak keeps climbing). Before
+  the steady window the slope may spend the working set
+  (--rss-fill-allowance-mib / elapsed); too few steady
   samples is the warning `rss_slope_unsettled`, so a run shorter than the
   window is judged by the growth cap alone.
 """

@@ -1550,6 +1550,12 @@ impl krb5_kdc::KdcPreauth for FailingModule {
                 e_data: None,
                 detail: None,
             },
+            [5] => Error::Protocol {
+                code: err::REPEAT,
+                text: Some("MODULE_REPEAT".into()),
+                e_data: None,
+                detail: None,
+            },
             _ => Error::Protocol {
                 code: err::PREAUTH_EXPIRED,
                 text: Some("PREAUTH_FAILED".into()),
@@ -1622,6 +1628,11 @@ fn module_failures_pass_through_the_filter_like_kdc_preauth() {
         module_wire_error(4),
         (err::PREAUTH_FAILED, Some("PREAUTH_FAILED".into())),
         "90 PREAUTH_EXPIRED is not on the list"
+    );
+    assert_eq!(
+        module_wire_error(5),
+        (err::PREAUTH_FAILED, Some("PREAUTH_FAILED".into())),
+        "34 REPEAT is not on the list"
     );
 }
 
