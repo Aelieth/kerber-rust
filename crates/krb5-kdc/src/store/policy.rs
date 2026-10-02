@@ -124,11 +124,6 @@ pub struct Policy {
     /// Empty = MIT KDC default — SPAKE is not advertised.
     /// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
     pub spake_preauth_groups: Vec<i32>,
-    /// `[realms] dict_file` words, ASCII-lowercased and sorted, for the MIT
-    /// `dict` password-quality module.
-    /// MIT `word_compare` (`pwqual_dict.c:66-68`): dictionary words sort and match in
-    /// `strcasecmp` order. Empty = no dictionary.
-    pub(crate) dict_words: Vec<String>,
 }
 
 impl Default for Policy {
@@ -158,25 +153,8 @@ impl Default for Policy {
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: Vec::new(),
-            dict_words: Vec::new(),
         }
     }
-}
-
-/// MIT `init_dict` (`pwqual_dict.c:136-150`): every `\n`-terminated line is
-/// a word (an unterminated last line is not; a blank line is the empty
-/// word), sorted with `strcasecmp`. Lowercased here so a `binary_search` is
-/// that comparison.
-#[must_use]
-pub fn parse_dict_words(text: &str) -> Vec<String> {
-    let mut words: Vec<String> = text
-        .split_inclusive('\n')
-        .filter_map(|l| l.strip_suffix('\n'))
-        .map(str::to_ascii_lowercase)
-        .collect();
-    words.sort_unstable();
-    words.dedup();
-    words
 }
 
 /// MIT `parse_groups` (`groups.c:175-210`): unknown names skipped.
@@ -262,12 +240,12 @@ impl Policy {
 }
 
 impl PrincipalStore {
-    /// Apply `kdc.conf` ticket policy.
+    /// Apply `kdc.conf` ticket policy. `dict_file` is not read here: the password dictionary is
+    /// the admin side's ([`Self::init_pwqual`]), and the KDC never reads it.
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when `domain_sid` is not valid SDDL; [`Error::InvalidArgument`] when
-    /// reading `dict_file` fails for any reason but a missing file.
+    /// [`Error::Crypto`] when `domain_sid` is not valid SDDL.
     pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
@@ -330,25 +308,6 @@ impl PrincipalStore {
                 )));
             };
             self.domain_sid = sid;
-        }
-        if let Some(path) = &conf.dict_file {
-            // MIT `init_dict` (`pwqual_dict.c:96-111`): a missing file is logged
-            // and the server continues without a dictionary; any other open
-            // or read failure is returned and kadm5_init fails.
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    self.policy.dict_words = parse_dict_words(&String::from_utf8_lossy(&bytes));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    self.policy.dict_words = Vec::new();
-                }
-                Err(e) => {
-                    return Err(Error::InvalidArgument(format!(
-                        "kdc.conf dict_file {}: {e}",
-                        path.display()
-                    )));
-                }
-            }
         }
         Ok(())
     }

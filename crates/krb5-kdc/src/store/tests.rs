@@ -473,6 +473,156 @@ fn apply_kdc_conf_rejects_bad_domain_sid() {
     assert!(store.apply_kdc_conf(&conf).is_err());
 }
 
+fn dict_conf(dict_file: &std::path::Path) -> krb5_config::KdcConf {
+    krb5_config::KdcConf {
+        dict_file: Some(dict_file.to_path_buf()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_kdc_config_never_reads_the_dictionary() {
+    // A directory opens but does not read (EISDIR): a path that read dict_file would fail.
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-kdc");
+    let conf = dict_conf(&dir);
+    let mut store = PrincipalStore::new(TEST_REALM_STR);
+    store.apply_kdc_conf(&conf).unwrap();
+    assert!(store.pwqual_dict.is_none());
+    let boot = PrincipalStore::bootstrap_with_kdc_conf(
+        TEST_REALM_STR,
+        "u",
+        b"u-secret",
+        "a",
+        b"a-secret",
+        Some(&conf),
+    )
+    .unwrap();
+    assert!(boot.pwqual_dict.is_none());
+    // The admin side reads it, and fails as MIT's kadm5_init does.
+    let e = store.init_pwqual(Some(&conf)).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::IsADirectory);
+    // kdb5_util create starts the admin side too, and fails before writing anything.
+    let master = random_key(A256).unwrap();
+    let created = crate::create::create_realm(TEST_REALM_STR, Some(&conf), &master, 1);
+    assert!(
+        matches!(&created, Err(Error::InvalidArgument(t)) if t.starts_with("kdc.conf dict_file ")),
+        "{created:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn pwqual_dict_words_are_init_dict_lines_matched_as_strcasecmp() {
+    let dict = pwqual_dict::PwqualDict::from_bytes(
+        b"zebra\nApple\npear\r\nspace \n\ncaf\xc3\xa9\nlat\xe9n\napple\nunterminated".to_vec(),
+    )
+    .unwrap();
+    // `Apple` and `apple` are one word; the unterminated last line is none.
+    assert_eq!(dict.word_count(), 7);
+    let hits: [&[u8]; 8] = [
+        b"zebra",
+        b"ZEBRA",
+        b"aPPLE",
+        b"pear\r",
+        b"space ",
+        b"",
+        b"CAF\xc3\xa9",
+        b"LAT\xe9N",
+    ];
+    for w in hits {
+        assert!(dict.contains(w), "{w:?}");
+    }
+    // ASCII folding only, as glibc's strcasecmp in the C and UTF-8 locales (live: MIT accepts
+    // `CAFÉ` against `café`); bytes as they are, no trimming, no prefixes.
+    let misses: [&[u8]; 7] = [
+        b"unterminated",
+        b"pear",
+        b"space",
+        b"zebr",
+        b"zebras",
+        b"CAF\xc3\x89",
+        b"lat\xe8n",
+    ];
+    for w in misses {
+        assert!(!dict.contains(w), "{w:?}");
+    }
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-open");
+    assert!(pwqual_dict::PwqualDict::open(None).unwrap().is_none());
+    assert!(
+        pwqual_dict::PwqualDict::open(Some(&dir.join("missing")))
+            .unwrap()
+            .is_none()
+    );
+    std::fs::write(dir.join("one"), "no newline").unwrap();
+    let one = pwqual_dict::PwqualDict::open(Some(&dir.join("one")))
+        .unwrap()
+        .unwrap();
+    assert_eq!(one.word_count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn pwqual_dict_reads_the_fstat_size_so_dev_zero_is_empty() {
+    // A character device says 0 bytes and never ends: read as MIT reads it, it is an empty
+    // dictionary at once (live: MIT's kadmind starts and accepts any word).
+    let zero = std::path::Path::new("/dev/zero");
+    let started = std::time::Instant::now();
+    let dict = pwqual_dict::PwqualDict::open(Some(zero)).unwrap().unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(dict.word_count(), 0);
+    let mut store = PrincipalStore::new(TEST_REALM_STR);
+    store.init_pwqual(Some(&dict_conf(zero))).unwrap();
+    store.put_policy(NamedPolicy::new("pq"));
+    let u = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dictu"]);
+    store.check_new_password(&u, Some("pq"), b"zebra").unwrap();
+}
+
+#[test]
+fn a_reread_moves_the_dictionary_and_ticket_policy_never_copies_them() {
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-reread");
+    let (db, stash, words) = (dir.join("principal"), dir.join("stash"), dir.join("words"));
+    std::fs::write(&words, "zebra\ncorrecthorse\n").unwrap();
+    let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
+    store.put_policy(NamedPolicy::new("pq"));
+    crate::persist::save_store(&store, &db, &stash).unwrap();
+    store.persist_paths = Some((db.clone(), stash.clone()));
+    store.init_pwqual(Some(&dict_conf(&words))).unwrap();
+    store.policy.host_based_services = "host-based-services ".repeat(4);
+    let dict = Arc::as_ptr(store.pwqual_dict.as_ref().unwrap());
+    let services = store.policy.host_based_services.as_ptr();
+    let admin = crate::testrealm::documented_admin_id();
+    let u = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dictu"]);
+    // Each change reads the database again first; a refused one reads it back after.
+    store
+        .change(|s| {
+            s.create_password(&acl, &admin, &u, b"first-secret")?;
+            s.set_principal_policy(&u, Some("pq".into()))
+        })
+        .unwrap()
+        .unwrap();
+    store.reload().unwrap();
+    let refused = store
+        .change(|s| s.set_password(&u, b"CorrectHorse"))
+        .unwrap();
+    assert!(
+        matches!(&refused, Err(Error::PasswordPolicy(t)) if t == PWQUAL_DICT),
+        "{refused:?}"
+    );
+    store
+        .change(|s| s.set_password(&u, b"correcthorse-1"))
+        .unwrap()
+        .unwrap();
+    let kept = store.pwqual_dict.as_ref().unwrap();
+    assert_eq!(Arc::as_ptr(kept), dict, "the dictionary was rebuilt");
+    assert_eq!(Arc::strong_count(kept), 1);
+    assert_eq!(
+        store.policy.host_based_services.as_ptr(),
+        services,
+        "the ticket policy was copied"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn random_sid_rejects_all_zero() {
     assert!(sid_from_random_bytes(&[0; 12]).is_err());

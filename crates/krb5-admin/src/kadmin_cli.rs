@@ -582,7 +582,11 @@ fn kadm5_init(
             false,
         ));
     }
-    let store = open.load().map_err(|e| (e, false))?;
+    let mut store = open.load().map_err(|e| (e, false))?;
+    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:266-268`): the password-quality modules come last, their dictionary read once for the session.
+    store
+        .init_pwqual(open.conf.as_ref())
+        .map_err(|e| (texts::strerror(&e), false))?;
     Ok(Handle {
         store,
         realm: realm.to_owned(),

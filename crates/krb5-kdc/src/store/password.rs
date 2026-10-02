@@ -450,12 +450,10 @@ impl PrincipalStore {
         password: &[u8],
     ) -> Result<(), Error> {
         if has_policy
-            && !self.policy.dict_words.is_empty()
             && self
-                .policy
-                .dict_words
-                .binary_search(&String::from_utf8_lossy(password).to_ascii_lowercase())
-                .is_ok()
+                .pwqual_dict
+                .as_ref()
+                .is_some_and(|dict| dict.contains(password))
         {
             return Err(Error::PasswordPolicy(PWQUAL_DICT.into()));
         }

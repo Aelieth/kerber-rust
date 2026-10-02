@@ -50,6 +50,11 @@ pub fn create_realm(
     let mut store = PrincipalStore::new(realm);
     if let Some(c) = kdc {
         store.apply_kdc_conf(c)?;
+        // MIT `kadm5_create_magic_princs` (`kadmin/dbutil/kadm5_create.c:100-107`): the create starts the admin side, which reads the dictionary or fails.
+        store.init_pwqual(Some(c)).map_err(|e| {
+            let path = c.dict_file.as_deref().unwrap_or(std::path::Path::new(""));
+            Error::InvalidArgument(format!("kdc.conf dict_file {}: {e}", path.display()))
+        })?;
     }
     let now = crate::store::unix_now_u32();
     let flags = store.default_create_attributes(false);

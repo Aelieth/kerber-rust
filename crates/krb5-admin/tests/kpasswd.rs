@@ -774,6 +774,94 @@ fn kpasswd_policy_rejection_is_softerror() {
 }
 
 #[test]
+fn kpasswd_refuses_a_dictionary_word_after_the_database_is_read_again() {
+    use krb5_protocol::unwrap_krb_priv_ex;
+    krb5_config::isolate_test_krb5();
+    let dir = scratch_dir("krb5-kpw-dict");
+    let (db, stash, words) = (dir.join("principal"), dir.join("stash"), dir.join("words"));
+    std::fs::write(&words, "zebra\ncorrecthorse\n").expect("words");
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    store.put_policy(krb5_kdc::NamedPolicy::new("pq"));
+    store
+        .set_principal_policy(&user, Some("pq".into()))
+        .expect("bind pq");
+    save_store(&store, &db, &stash).expect("save");
+    // kadmind's store: the database, and the dictionary read once.
+    let mut store = load_store(&db, &stash).expect("load");
+    let conf = krb5_config::KdcConf {
+        dict_file: Some(words),
+        ..Default::default()
+    };
+    store.init_pwqual(Some(&conf)).expect("dictionary");
+    let key_of = |store: &krb5_kdc::PrincipalStore, name: &PrincipalName| {
+        let p = store.get_name(name).expect("principal");
+        p.best_key().expect("key").key.clone()
+    };
+    let user_key = key_of(&store, &user);
+    let cpw_key = key_of(&store, &kadmin_changepw());
+    let as_out = krb5_kdc::issue_as(
+        &store,
+        &as_req_sname(
+            user.clone(),
+            TEST_REALM,
+            0x2400_0002,
+            Some(vec![pa_enc_timestamp(&user_key).expect("pa")]),
+            kadmin_changepw(),
+            krb5_crypto::EncryptionType::preferred()
+                .iter()
+                .map(|e| e.to_iana())
+                .collect(),
+        )
+        .expect("as-req"),
+    )
+    .expect("AS for kadmin/changepw");
+    let shared = shared_dump(store);
+    // Another process changes the database, so the change reads it again first.
+    let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kpwdictx"]);
+    load_store(&db, &stash)
+        .expect("load writer")
+        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"x-secret"))
+        .expect("lock")
+        .expect("out-of-process addprinc");
+    let chpw = |newpw: &[u8]| {
+        let ap = build_ap_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .expect("AP-REQ");
+        let cpw = ChangePasswdData {
+            newpasswd: newpw.to_vec().into(),
+            targname: None,
+            targrealm: None,
+        };
+        let priv_msg =
+            build_krb_priv(&as_out.session_key, &encode(&cpw).expect("cpw")).expect("priv");
+        let req = encode_setpw(&encode(&ap).expect("ap"), &encode(&priv_msg).expect("priv"));
+        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect("reply");
+        let (_, priv_rep) = parse_kpasswd_rep(&rep).expect("parse");
+        let data = unwrap_krb_priv_ex(
+            &as_out.session_key,
+            &priv_rep,
+            &ReplayCache::new(),
+            false,
+            false,
+        )
+        .expect("unwrap");
+        let text = String::from_utf8_lossy(&data[2..]).into_owned();
+        (u16::from_be_bytes([data[0], data[1]]), text)
+    };
+    let (code, text) = chpw(b"CorrectHorse");
+    assert_eq!(code, 4, "SOFTERROR for a dictionary word: {text}");
+    assert!(text.contains("dictionary"), "{text}");
+    assert_eq!(chpw(b"correcthorse-9").0, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn kpasswd_unknown_version_is_bad_version() {
     use krb5_kdc::principals::kadmin_changepw;
     use krb5_kdc::shared_dump as shared_store;

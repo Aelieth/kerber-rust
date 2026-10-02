@@ -14,6 +14,7 @@ mod keys;
 mod password;
 mod policy;
 mod principal;
+mod pwqual_dict;
 mod rid;
 mod transit;
 
@@ -87,6 +88,9 @@ pub struct PrincipalStore {
     /// Ticket policy.
     pub policy: Policy,
     env: crate::kdb::KdcEnv,
+    /// The `dict` password-quality module's words, the admin side's only (kadmind, kadmin.local,
+    /// `kdb5_util create`), read once ([`Self::init_pwqual`]) and shared.
+    pwqual_dict: Option<Arc<pwqual_dict::PwqualDict>>,
     /// Optional `(db, stash)` paths; mutations write through when set.
     pub persist_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
     /// `kadmin.local -m`: the database and the master key typed for it, which a save writes
@@ -163,6 +167,7 @@ impl PrincipalStore {
             map: PrincipalMap::default(),
             policy: Policy::default(),
             env: crate::kdb::KdcEnv::new(),
+            pwqual_dict: None,
             persist_paths: None,
             persist_master: None,
             db_stamp: None,
@@ -187,8 +192,9 @@ impl PrincipalStore {
     /// Kadmind and the KDC are separate processes sharing the database. Holding the database's
     /// lock shared, its age and its file's identity are compared with what this store last read,
     /// and the database is read again when they differ; the dump rows, named policies, serial and
-    /// update log come from disk, and the kdc.conf ticket policy, the lockout overlay, the replay
-    /// caches and the PKINIT CA stay process-local.
+    /// update log come from disk, and the kdc.conf ticket policy, the password dictionary, the
+    /// lockout overlay, the replay caches and the PKINIT CA stay process-local, carried over and
+    /// never copied.
     /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): each read takes the shared lock and reopens the database under it.
     ///
     /// # Errors
@@ -250,7 +256,8 @@ impl PrincipalStore {
                 other => other,
             },
         })?;
-        loaded.policy.clone_from(&self.policy);
+        loaded.policy = std::mem::take(&mut self.policy);
+        loaded.pwqual_dict = self.pwqual_dict.take();
         loaded.domain_sid.clone_from(&self.domain_sid);
         loaded.as_fail = Arc::clone(&self.as_fail);
         loaded.env = std::mem::take(&mut self.env);
@@ -520,8 +527,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL;
-    /// [`Error::InvalidArgument`] when reading its `dict_file` fails for any reason but a
-    /// missing file; [`Error::Rng`] when the CSPRNG fails generating the krbtgt key;
+    /// [`Error::Rng`] when the CSPRNG fails generating the krbtgt key;
     /// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty;
     /// [`Error::AlreadyExists`] when `user` and `admin` are the same name.
     pub fn bootstrap_with_kdc_conf(
@@ -672,7 +678,7 @@ pub use keys::{KeyEntry, KeyLookup, random_key};
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy, s2k_params,
 };
-pub use policy::{NamedPolicy, Policy, parse_dict_words};
+pub use policy::{NamedPolicy, Policy};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{AdminEnt, AdminFields, KadmData, Principal, TlData, strip_db_args};
 pub(crate) use principal::{AsFailState, db_args_put_error, refresh_kadm_tl};

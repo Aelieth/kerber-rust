@@ -96,7 +96,10 @@ kerber-rust point release:
   after kadmind writes), which is the two-process model inside one process.
 - **kadmind as a library.** `serve_kadm5_conn` and `serve_kpasswd_udp` /
   `serve_kpasswd_tcp` take a `SharedDump`; the accept loop and its listener
-  setup live in the `krb5-kadmind` binary. Remote MIT `kadmin` on 749 (which
+  setup live in the `krb5-kadmind` binary. An embedder serving kadm5 or
+  kpasswd from a `SharedDump` calls `PrincipalStore::init_pwqual` on the store
+  itself, as `krb5-kadmind` does at start; without it the realm's `dict_file`
+  is not applied. Remote MIT `kadmin` on 749 (which
   the satomlin fleet uses for `addprinc -randkey` + `ktadd`) needs either that
   loop in the library or `krb5-kadmind` run beside KLLDAP.
 - **Bootstrap.** `PrincipalStore::bootstrap` creates a test user and admin with

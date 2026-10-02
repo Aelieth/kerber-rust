@@ -175,6 +175,12 @@ fn main() {
     let (mut store, paths) = open_realm(&progname, &args, test_realm);
     let realm = store.realm().to_owned();
     let kdc_conf = paths.conf.as_ref();
+    // The dictionary is read here once; kpasswd, every kadm5 connection and every reread of the
+    // database share it.
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:446-450`): `kadm5_init` sets up the password-quality modules, and a dictionary that cannot be read stops kadmind "while initializing".
+    if let Err(e) = store.init_pwqual(kdc_conf) {
+        fail_to_start(&progname, Some(&os_error_text(&e)), "initializing");
+    }
     if let Some(conf) = kdc_conf
         && let Err(e) = store.apply_kdc_conf(conf)
     {

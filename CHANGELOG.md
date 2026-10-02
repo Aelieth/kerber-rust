@@ -1343,6 +1343,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** `dict_file` is read once, by kadmind, kadmin.local and `kdb5_util create` as MIT's,
+  into one block and a sorted index; krb5kdc read it too and each change copied it, 14.5 MiB a
+  daemon. That is gone; the KDC still creeps slowly under load, as with no dictionary. Units; runs.
 - **protocol/kdc.** With SELinux on, a save keeps the replaced file's context (a `sudo kadmin.local`
   save left `principal` `krb5kdc_conf_t`), and new database, lock, stash, dump and keytab files
   take the policy's, as Fedora's MIT sets them (xattrs read with `rustix`). Units; lookup live.
