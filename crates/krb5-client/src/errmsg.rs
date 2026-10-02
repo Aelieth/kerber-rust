@@ -5,6 +5,17 @@ use std::fmt;
 use std::io;
 use std::path::Path;
 
+/// `com_err` with its default hook, as `kdestroy` and `kswitch` keep it: `prog: `, the error's
+/// table text, a space, the context, then `\r\n`.
+/// MIT `default_com_err_proc` (`com_err.c:47-96`): `error_message(code)`, not the extended
+/// message, and a carriage return before the newline.
+#[macro_export]
+macro_rules! com_err {
+    ($prog:expr, $err:expr, $($ctx:tt)*) => {{
+        eprint!("{}: {} {}\r\n", $prog, $err.table_text(), format_args!($($ctx)*));
+    }};
+}
+
 /// A failure carrying the MIT error code the tools branch on and MIT's whole message for it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Krb5Error {
@@ -77,6 +88,17 @@ impl Krb5Error {
     #[must_use]
     pub fn of(code: Code) -> Self {
         Self::new(code, code_text(code))
+    }
+
+    /// MIT `error_message`: the code's table text, without the message the library set in its
+    /// place; what `com_err`'s default hook prints.
+    #[must_use]
+    pub fn table_text(&self) -> String {
+        match self.code {
+            Code::Kdc(n) => kdc_error_text(n),
+            Code::Other => self.message.clone(),
+            code => code_text(code).to_owned(),
+        }
     }
 
     /// MIT `krb5_get_error_message` of a protocol failure; `realm` names the realm whose KDC was

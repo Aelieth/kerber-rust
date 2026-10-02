@@ -12,8 +12,8 @@
 use krb5_asn1::decode;
 use krb5_client::cli::{KvnoArgs, kvno_usage, parse_kvno, progname};
 use krb5_client::creds::{
-    GetCredsOptions, OpenCache, Princ, get_credentials, get_credentials_for_proxy,
-    get_credentials_for_user, get_u2u_ticket, princ_eq, server_decrypt_ticket_keytab,
+    GetCredsOptions, OpenCache, Princ, default_realm, get_credentials, get_credentials_for_proxy,
+    get_credentials_for_user, get_u2u_ticket, parse_name, princ_eq, server_decrypt_ticket_keytab,
     string_to_enctype, unparse,
 };
 use krb5_client::errmsg::{Code, Krb5Error};
@@ -80,12 +80,10 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
             &format!("resolving keytab {kt}"),
         );
     }
-    let default_realm = krb5_config::load_krb5_conf()
-        .and_then(|c| c.default_realm)
-        .unwrap_or_default();
+    let default_realm = default_realm().unwrap_or_default();
     let for_user = match &args.for_user {
         None => None,
-        Some(name) => match parse_name(name, &default_realm, args.for_user_enterprise) {
+        Some(name) => match parse_name(name, args.for_user_enterprise) {
             Ok(p) => Some(p),
             Err(e) => return fail(&e, &format!("while parsing principal name {name}")),
         },
@@ -257,20 +255,12 @@ fn identify_user(user: Princ, me: &Princ) -> Princ {
     (realm, user.1)
 }
 
-/// MIT `krb5_parse_name_flags`: `name` in `realm` unless it names one, as an enterprise name for
-/// `-U`.
-fn parse_name(name: &str, realm: &str, enterprise: bool) -> Result<Princ, Krb5Error> {
-    let (p, r) = krb5_types::principal_from_unparsed_ex(name, realm, enterprise)
-        .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
-    Ok((krb5_protocol::realm(&r), p))
-}
-
 /// The server of one argument: MIT `krb5_parse_name`, or for `-S` MIT `krb5_sname_to_principal`
 /// with the argument as the host: `sname/<host lowercased>`, NT-SRV-HST, in the host's realm
 /// (`[domain_realm]`) else the default realm.
 fn server_principal(name: &str, sname: Option<&str>, realm: &str) -> Result<Princ, Krb5Error> {
     let Some(sname) = sname else {
-        return parse_name(name, realm, false);
+        return parse_name(name, false);
     };
     let host = name.to_ascii_lowercase();
     let host_realm = krb5_config::load_krb5_conf()

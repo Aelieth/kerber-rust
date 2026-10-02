@@ -35,6 +35,32 @@ fn realm_str(r: &Realm) -> String {
     String::from_utf8_lossy(r.as_bytes()).into_owned()
 }
 
+/// `[libdefaults] default_realm`.
+#[must_use]
+pub fn default_realm() -> Option<String> {
+    krb5_config::load_krb5_conf().and_then(|c| c.default_realm)
+}
+
+/// MIT `krb5_parse_name_flags`: `name` in the default realm unless it names one, as one
+/// NT-ENTERPRISE component for `enterprise`.
+///
+/// # Errors
+///
+/// [`Krb5Error`] `KRB5_PARSE_MALFORMED` for a malformed name, `KRB5_CONFIG_NODEFREALM` for a name
+/// with no realm when the profile names no default realm.
+pub fn parse_name(name: &str, enterprise: bool) -> Result<Princ, Krb5Error> {
+    let p = krb5_types::parse_name_ex(name, "", enterprise)
+        .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
+    let realm = if p.has_realm {
+        p.realm
+    } else {
+        default_realm().ok_or_else(|| Krb5Error::of(Code::NoDefRealm))?
+    };
+    let (n, _) = krb5_types::principal_from_unparsed_ex(name, &realm, enterprise)
+        .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
+    Ok((krb5_protocol::realm(&realm), n))
+}
+
 /// What a cached credential must match.
 /// MIT `construct_matching_creds` (`get_creds.c:52-108`): the client and server, still valid,
 /// the session-key enctype when one was asked for, and for user-to-user the same second ticket.

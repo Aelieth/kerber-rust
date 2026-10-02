@@ -38,6 +38,7 @@ pub mod keytab {
     pub use krb5_protocol::{Keytab, KeytabEntry};
 }
 
+pub mod ccol;
 pub mod cli;
 pub mod creds;
 pub mod errmsg;
@@ -49,9 +50,27 @@ use errmsg::{Code, Krb5Error};
 pub fn cache_file_path(spec: &CcSpec) -> Option<std::path::PathBuf> {
     match spec {
         CcSpec::File(p) => Some(p.clone()),
-        CcSpec::Dir(r) => dir_cache_path(r).ok(),
+        CcSpec::Dir(r) => dir_read_path(r).ok(),
         CcSpec::Memory(_) | CcSpec::Kcm(_) => None,
     }
+}
+
+/// The file a DIR cache name stands for, with nothing made.
+/// MIT `dcc_resolve` (`cc_dir.c:331-385`): a collection name stands for its primary, `tkt` when
+/// there is no `primary` file. MIT makes a missing collection's directory and `primary` file
+/// there; a read in this port leaves a missing collection missing, and only a store makes it.
+///
+/// # Errors
+///
+/// As [`dir_cache_path`], except for a collection directory that does not exist.
+pub fn dir_read_path(residual: &str) -> std::io::Result<std::path::PathBuf> {
+    let dir = Path::new(residual);
+    if !residual.starts_with(':')
+        && std::fs::symlink_metadata(dir).is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound)
+    {
+        return Ok(dir.join("tkt"));
+    }
+    dir_cache_path(residual)
 }
 
 /// MIT's message for a cache that cannot be read.
@@ -387,14 +406,14 @@ pub fn mit_error_code(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Op
 /// # Errors
 ///
 /// A boxed `std::io::Error` when a FILE or DIR cache cannot be read (`NotFound` if missing) or
-/// parsed (`InvalidData`, `UnexpectedEof`), or when [`dir_cache_path`] or [`kcm_load`] fails;
+/// parsed (`InvalidData`, `UnexpectedEof`), or when [`dir_read_path`] or [`kcm_load`] fails;
 /// the message `No credentials cache found` when no MEMORY cache has that name.
 pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Error + Send + Sync>> {
     match spec {
         CcSpec::File(p) => Ok(FileCcache::parse(&std::fs::read(p)?)?),
         CcSpec::Memory(n) => memory_retrieve(n).ok_or_else(|| "No credentials cache found".into()),
         CcSpec::Dir(r) => {
-            let p = dir_cache_path(r)?;
+            let p = dir_read_path(r)?;
             Ok(FileCcache::parse(&std::fs::read(p)?)?)
         }
         CcSpec::Kcm(n) => kcm_load(n).map_err(Into::into),
@@ -448,7 +467,7 @@ pub fn store_ccache_keep_default(
 /// # Errors
 ///
 /// A boxed `std::io::Error` when the FILE or DIR cache cannot be zeroed and removed (`NotFound`
-/// if missing, `InvalidInput` if not a regular file), or when [`dir_cache_path`] or
+/// if missing, `InvalidInput` if not a regular file), or when [`dir_read_path`] or
 /// [`kcm_destroy`] fails; the message `No credentials cache found` when no MEMORY cache has
 /// that name.
 pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -462,7 +481,7 @@ pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + S
             }
         }
         CcSpec::Dir(r) => {
-            let p = dir_cache_path(r)?;
+            let p = dir_read_path(r)?;
             krb5_protocol::destroy_secret_file(&p).map_err(Into::into)
         }
         CcSpec::Kcm(n) => kcm_destroy(n).map_err(Into::into),

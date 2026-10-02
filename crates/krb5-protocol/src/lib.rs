@@ -61,7 +61,8 @@ pub use ccache::{
     CcacheCred, CcacheKeyblock, FileCcache, parse_principal, parse_principal_ex, realm, tgt_cred,
 };
 pub use ccache_dir::{
-    dir_cache_path, dir_cache_path_for_store, dir_display_name, dir_subsidiaries, dir_switch,
+    dir_cache_path, dir_cache_path_for_store, dir_display_name, dir_gen_new, dir_primary,
+    dir_subsidiaries, dir_switch,
 };
 pub use ccache_mem::{memory_destroy, memory_retrieve, memory_store};
 pub use ccmarshal::FCC_TAG_DELTATIME;
@@ -80,8 +81,8 @@ pub use diff::{
 pub use error::Error;
 pub use framing::write_messages;
 pub use kcm::{
-    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_load, kcm_primary_name, kcm_socket_path,
-    kcm_store, kcm_store_creds, kcm_store_keep_default, kcm_switch, kcm_switch_principal,
+    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_gen_new, kcm_load, kcm_primary_name,
+    kcm_principal, kcm_socket_path, kcm_store, kcm_store_creds, kcm_store_keep_default, kcm_switch,
 };
 pub use keytab::{
     Keytab, KeytabEntry, KeytabSlot, keytab_init_creds_keys, sort_etypes_keytab_first,
