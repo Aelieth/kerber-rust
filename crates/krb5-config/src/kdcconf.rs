@@ -90,6 +90,7 @@ impl Default for KdcConf {
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: None,
             dict_file: None,
+            logging: Vec::new(),
         }
     }
 }
@@ -148,6 +149,11 @@ impl KdcConf {
             }
             if section == "libdefaults" {
                 parse_kdc_libdefaults(&mut conf, line);
+            }
+            if section == "logging"
+                && let Some((k, v)) = split_kv(line)
+            {
+                conf.logging.push((k.to_owned(), v));
             }
         }
         // MIT `init_realm` (`kdc/main.c:286-345`): realm stanza, then `[kdcdefaults]` fallback.

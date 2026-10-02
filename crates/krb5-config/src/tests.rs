@@ -1124,3 +1124,84 @@ fn kadmind_port_follows_admin_server_then_kadmind_port() {
     assert_eq!(c.kadmind_port(Some("other:8749")), 6749);
     assert_eq!(KdcConf::default().kadmind_port(None), 749);
 }
+
+// `[logging]` (logging.rs).
+
+fn logging_conf(kdc: &str, krb5: &str) -> (KdcConf, Krb5Conf) {
+    (KdcConf::parse(kdc).unwrap(), Krb5Conf::parse(krb5).unwrap())
+}
+
+#[test]
+fn the_program_key_wins_over_default_across_both_files() {
+    let (k, c) = logging_conf(
+        "[logging]\n    kdc = FILE:/a.log\n    default = FILE:/d.log\n",
+        "[logging]\n    kdc = FILE:/b.log\n    admin_server = FILE=/k.log\n",
+    );
+    let kdc = LogSpecs::for_program(Some(&k), Some(&c), "kdc");
+    assert_eq!(kdc.specs, ["FILE:/a.log", "FILE:/b.log"]);
+    let admin = LogSpecs::for_program(Some(&k), Some(&c), "admin_server");
+    assert_eq!(admin.specs, ["FILE=/k.log"]);
+    assert!(!kdc.debug);
+}
+
+#[test]
+fn default_only_when_the_program_has_no_relation_anywhere() {
+    let (k, c) = logging_conf(
+        "[logging]\n    kdc = STDERR\n",
+        "[logging]\n    default = FILE:/var/log/krb5libs.log\n",
+    );
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), Some(&c), "admin_server").specs,
+        ["FILE:/var/log/krb5libs.log"]
+    );
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), Some(&c), "kdc").specs,
+        ["STDERR"]
+    );
+    assert_eq!(
+        LogSpecs::for_program(None, None, "kdc"),
+        LogSpecs::default()
+    );
+}
+
+#[test]
+fn fedora_krb5_conf_routes_both_daemons_to_files() {
+    let fedora = "includedir /nonexistent-not-read-by-parse/\n\n[logging]\n    default = FILE:/var/log/krb5libs.log\n    kdc = FILE:/var/log/krb5kdc.log\n    admin_server = FILE:/var/log/kadmind.log\n\n[libdefaults]\n    dns_lookup_realm = false\n";
+    let c = Krb5Conf::parse(fedora).unwrap();
+    let k = KdcConf::parse("[kdcdefaults]\n    kdc_ports = 88\n").unwrap();
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), Some(&c), "kdc").specs,
+        ["FILE:/var/log/krb5kdc.log"]
+    );
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), Some(&c), "admin_server").specs,
+        ["FILE:/var/log/kadmind.log"]
+    );
+}
+
+#[test]
+fn debug_is_the_first_value_as_a_profile_boolean() {
+    for (v, want) in [
+        ("T", true),
+        ("y", true),
+        ("on", true),
+        ("nil", false),
+        ("maybe", false),
+    ] {
+        let k = KdcConf::parse(&format!("[logging]\n    debug = {v}\n    debug = true\n")).unwrap();
+        assert_eq!(
+            LogSpecs::for_program(Some(&k), None, "kdc").debug,
+            want,
+            "{v}"
+        );
+    }
+}
+
+#[test]
+fn relation_names_are_case_sensitive_as_in_the_profile_library() {
+    let k = KdcConf::parse("[logging]\n    KDC = FILE:/upper.log\n").unwrap();
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), None, "kdc").specs,
+        Vec::<String>::new()
+    );
+}

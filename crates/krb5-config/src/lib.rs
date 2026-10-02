@@ -32,6 +32,7 @@
 mod ccname;
 mod kdcconf;
 pub mod listen;
+mod logging;
 mod profile;
 mod srv;
 mod testenv;
@@ -164,6 +165,9 @@ pub struct Krb5Conf {
     pub pkinit_anchors: BTreeMap<String, Vec<String>>,
     /// `[capaths]` client-realm → server-realm → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// `[logging]` relations, name and value, in file order (includes followed); read by
+    /// [`LogSpecs`].
+    pub logging: Vec<(String, String)>,
 }
 
 /// KDC policy from `kdc.conf`.
@@ -259,6 +263,8 @@ pub struct KdcConf {
     /// MIT `kadm5_get_config_params` (`alt_prof.c:486-513`): reads it from the realm stanza
     /// only, never from `[kdcdefaults]`.
     pub dict_file: Option<PathBuf>,
+    /// `[logging]` relations, name and value, in file order; read by [`LogSpecs`].
+    pub logging: Vec<(String, String)>,
 }
 
 /// Resolved ccache name (`krb5_cc_resolve`).
@@ -282,6 +288,7 @@ pub use kdcconf::{
     KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_stash_file,
     env_kdc_config, kdc_conf_path,
 };
+pub use logging::LogSpecs;
 pub use profile::{
     client_realm_path, discover_kdc, discover_kdc_in, env_ktname, env_new_password, env_password,
     host_to_realm, is_numeric_address, krb5_conf_paths, load_krb5_conf, load_krb5_conf_paths,

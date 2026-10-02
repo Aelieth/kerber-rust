@@ -621,7 +621,9 @@ dependencies = [
 name = "krb5-log"
 version = "1.0.0"
 dependencies = [
+ "chrono",
  "getrandom 0.2.17",
+ "krb5-testkit",
 ]
 
 [[package]]

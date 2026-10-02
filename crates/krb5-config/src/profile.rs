@@ -256,6 +256,11 @@ fn parse_into(
         {
             conf.domain_realm.entry(d.to_ascii_lowercase()).or_insert(r);
         }
+        if section == "logging"
+            && let Some((k, v)) = split_kv(line)
+        {
+            conf.logging.push((k.to_owned(), v));
+        }
         if section == "capaths" {
             if let Some(name) = line.strip_suffix('{') {
                 capaths_client = Some(name.trim().trim_end_matches('=').trim().to_string());

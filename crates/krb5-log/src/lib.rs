@@ -2,6 +2,7 @@
 //!
 //! Library crates emit `tracing` events using the field names in this
 //! module. Applications and tests install a subscriber; this crate does not.
+//! The daemons' MIT-format text log (`[logging]`) is [`klog`].
 //!
 //! # Event fields
 //!
@@ -24,6 +25,9 @@
 
 use std::cell::RefCell;
 use std::fmt::Write as _;
+
+#[cfg(unix)]
+pub mod klog;
 
 /// Canonical `event` field values.
 pub mod events {
