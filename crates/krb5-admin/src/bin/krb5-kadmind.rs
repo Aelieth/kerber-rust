@@ -295,7 +295,13 @@ fn main() {
     if nofork {
         eprintln!("{progname}: starting...");
     }
-    serve(&progname, &listeners, &shared, &acl, &realm, &signals);
+    serve(&listeners, &shared, &acl, &realm, &signals);
+    // MIT's loop ends after the request in hand. A change in flight holds the store until its
+    // database and update log are saved, so taking the store here waits for it; it stays taken
+    // until the process exits, so no change starts after it.
+    let _finished = shared
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:543-555`): "finished, exiting" when the loop ends,
     // then each socket is logged as the loop is freed, before the log closes.
     klog::syslog(Severity::Debug, "Got signal to request exit");
@@ -304,6 +310,10 @@ fn main() {
         klog::syslog(Severity::Info, &format!("closing down fd {fd}"));
     }
     klog::close();
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:557-557`): kadmind exits 0 once the log is closed.
+    // `exit` runs no destructors, so the store is still taken as the process ends: returning
+    // from main would release it first, and a change waiting on it could start saving.
+    std::process::exit(0);
 }
 
 /// The realm's store: the test realm in a test-hooks build, else the database
@@ -373,7 +383,6 @@ fn announce(
 /// Serve kadm5 connections until SIGINT, SIGTERM or SIGQUIT; each connection on its own
 /// thread, the oldest dropped past the connection cap.
 fn serve(
-    progname: &str,
     listeners: &[TcpListener],
     shared: &krb5_kdc::SharedDump,
     acl: &Acl,
@@ -430,11 +439,22 @@ fn serve(
                         }
                     });
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {}
-                Err(e) => {
-                    eprintln!("{progname}: accept: {e}");
-                    return;
-                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                // MIT `accept_rpc_connection` (`lib/apputils/net-server.c:1527-1539`): the woken
+                // kadm5 listener is served by the RPC library's `rendezvous_request`.
+                // MIT `rendezvous_request` (`lib/rpc/svc_tcp.c:284-291`): an accept that fails
+                // other than with EINTR is dropped, and the loop goes on.
+                Err(e) => tracing::error!(
+                    event = krb5_log::events::ADMIN,
+                    component = "krb5-admin",
+                    outcome = "error",
+                    error = %e,
+                    detail = "kadm5 accept",
+                ),
             }
         }
         if idle {

@@ -632,8 +632,8 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
 ///
 /// # Errors
 ///
-/// The `io::Error` when setting the read timeout fails or `recv_from` fails with a kind other
-/// than `WouldBlock`, `TimedOut`, or `Interrupted`; request failures are logged, not returned.
+/// The `io::Error` when setting the read timeout fails; a failed receive and a failed request
+/// are logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_udp(
     store: SharedStore,
@@ -671,8 +671,17 @@ pub fn serve_kpasswd_udp(
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock
                     || e.kind() == io::ErrorKind::TimedOut
-                    || e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
+                    || e.kind() == io::ErrorKind::Interrupted
+                    || e.kind() == io::ErrorKind::ConnectionRefused => {}
+            // MIT `process_packet` (`lib/apputils/net-server.c:1155-1167`): a failed receive is
+            // logged and the socket goes on serving.
+            Err(e) => {
+                krb5_log::klog::com_err(
+                    Some(&krb5_log::klog::os_error_text(&e)),
+                    "while receiving from network",
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
         }
     }
     Ok(())
@@ -684,8 +693,8 @@ pub fn serve_kpasswd_udp(
 ///
 /// # Errors
 ///
-/// The `io::Error` when `set_nonblocking` fails or `accept` fails with a kind other than
-/// `WouldBlock` or `Interrupted`; per-connection failures are logged, not returned.
+/// The `io::Error` when `set_nonblocking` fails; a failed accept and per-connection failures
+/// are logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_tcp(
     store: SharedStore,
@@ -736,7 +745,18 @@ pub fn serve_kpasswd_tcp(
                 thread::sleep(Duration::from_millis(20));
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
+            // MIT `accept_stream_connection` (`lib/apputils/net-server.c:1238-1241`): a failed
+            // accept is dropped and the listener goes on.
+            Err(e) => {
+                tracing::error!(
+                    event = krb5_log::events::ADMIN,
+                    component = "krb5-admin",
+                    outcome = "error",
+                    error = %e,
+                    detail = "kpasswd accept",
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
         }
     }
     Ok(())

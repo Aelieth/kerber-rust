@@ -1290,6 +1290,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** kadmind finishes the change in hand before it exits, and a failed accept or
+  receive no longer stops it or its kpasswd listeners.
 - **admin.** kadmind and `kadmin.local` list nothing for an empty list expression, as
   MIT's. Unit.
 - **admin.** kadmind rereads a database another process changed before every call. Unit.
