@@ -5,7 +5,7 @@
 //! listener evicts the oldest live stream and keeps the new connection.
 
 use std::collections::BTreeMap;
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsRawFd as _, RawFd};
 use std::panic::AssertUnwindSafe;
@@ -867,10 +867,7 @@ fn handle_tcp(
         let reply = plain_store(store, |s| {
             crate::kdc_error_bytes(s, krb5_types::err::FIELD_TOOLONG)
         });
-        let len = u32::try_from(reply.len()).unwrap_or(0);
-        let _ = stream.write_all(&len.to_be_bytes());
-        let _ = stream.write_all(&reply);
-        let _ = stream.flush();
+        let _ = krb5_protocol::write_messages(&mut stream, &[reply.as_slice()]);
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("error constructing KRB_ERR_FIELD_TOOLONG error! length {n}"),
@@ -920,12 +917,11 @@ fn handle_tcp(
         log_dispatch_drop(false);
         return Ok(());
     }
-    let len = u32::try_from(reply.len())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "reply too large"))?;
-    stream.write_all(&len.to_be_bytes())?;
-    stream.write_all(&reply)?;
-    stream.flush()?;
-    Ok(())
+    // MIT `process_stream_response` (`lib/apputils/net-server.c:1319-1323`): the reply's length
+    // and the reply are queued as the two pieces of one writev.
+    // MIT `process_stream_connection_write` (`lib/apputils/net-server.c:1467-1468`): that writev
+    // sends them together.
+    krb5_protocol::write_messages(&mut stream, &[reply.as_slice()])
 }
 
 /// Decrements the TCP worker counter on drop, including unwind.
@@ -1019,6 +1015,8 @@ impl Drop for ClosingFd {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write;
+
     use super::*;
     use crate::testrealm::bootstrap_documented;
 

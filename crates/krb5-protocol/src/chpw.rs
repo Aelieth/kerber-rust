@@ -6,7 +6,7 @@
 //! once the key is built; the subkey copy in the authenticator and the
 //! authenticator DER are not wiped.
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::{TcpStream, UdpSocket};
 use std::time::Duration;
 
@@ -386,10 +386,9 @@ fn send_kpasswd(host: &str, body: &[u8]) -> Result<Vec<u8>, Error> {
     let tcp = format!("{host}:{KPASSWD_PORT}");
     if let Ok(mut s) = TcpStream::connect(&tcp) {
         let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
-        let n = u32::try_from(body.len()).unwrap_or(0);
-        s.write_all(&n.to_be_bytes()).map_err(Error::from_io)?;
-        s.write_all(body).map_err(Error::from_io)?;
-        s.flush().map_err(Error::from_io)?;
+        // MIT `service_tcp_write` (`lib/krb5/os/sendto_kdc.c:1124-1125`): the length and the
+        // request go out in one writev.
+        crate::framing::write_messages(&mut s, &[body]).map_err(Error::from_io)?;
         let mut hdr = [0u8; 4];
         s.read_exact(&mut hdr).map_err(Error::from_io)?;
         let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(0);

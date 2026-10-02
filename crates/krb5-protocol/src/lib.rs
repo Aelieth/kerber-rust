@@ -29,6 +29,7 @@ mod chpw;
 #[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
 mod error;
+mod framing;
 mod kcm;
 mod keytab;
 mod preauth;
@@ -75,6 +76,7 @@ pub use diff::{
     compare_stable_rep, decode_enc_kdc_rep, stable_krb_error, stable_rep,
 };
 pub use error::Error;
+pub use framing::write_messages;
 pub use kcm::{
     KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_load, kcm_socket_path, kcm_store,
     kcm_store_keep_default, kcm_switch, kcm_switch_principal,

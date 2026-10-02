@@ -1331,6 +1331,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** A length-prefixed TCP message (KDC, kpasswd and kadm5 replies, kprop)
+  goes out in one write, as MIT's: a kadmin reply no longer waits ~40 ms for a delayed
+  ACK. Units; pcap.
 - **admin.** `kadmin.local`'s `listprincs ""` and `listpols ""` list nothing, as MIT;
   `kadmin.local`, kadmind and `AdminSession` share one list filter. Units.
 - **admin.** `kadmin.local -m` reads and writes the database under the typed master key and

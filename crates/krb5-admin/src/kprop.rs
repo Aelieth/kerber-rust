@@ -111,11 +111,10 @@ fn kprop_body_text(bytes: &[u8]) -> Result<&str, Error> {
     Ok(text)
 }
 
+/// MIT `krb5_write_message` (`lib/krb5/os/write_msg.c:73-76`): one message, its length and
+/// body in one write (`k5_write_messages`).
 fn write_message(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
-    let len = u32::try_from(data.len()).unwrap_or(0);
-    stream.write_all(&len.to_be_bytes())?;
-    stream.write_all(data)?;
-    stream.flush()
+    krb5_protocol::write_messages(stream, &[data])
 }
 
 fn read_message(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
@@ -735,8 +734,10 @@ pub fn kprop_sendauth(
     cname: &PrincipalName,
     seq: u32,
 ) -> Result<KpropAuth, Error> {
-    write_message(stream, SENDAUTH_VERSION).map_err(|e| Error::Inner(e.to_string()))?;
-    write_message(stream, KPROP_PROT_VERSION).map_err(|e| Error::Inner(e.to_string()))?;
+    // MIT `krb5_sendauth` (`lib/krb5/krb/sendauth.c:63-67`): the two version strings go out in
+    // one write.
+    krb5_protocol::write_messages(stream, &[SENDAUTH_VERSION, KPROP_PROT_VERSION])
+        .map_err(|e| Error::Inner(e.to_string()))?;
     let mut resp = [0u8; 1];
     stream
         .read_exact(&mut resp)

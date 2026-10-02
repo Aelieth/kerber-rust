@@ -4,7 +4,7 @@
 //! is not answered. A failed AP-REQ is a framed chpwfail with result 3.
 //! The ticket must be for `kadmin/changepw`.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -121,11 +121,11 @@ fn kpasswd_udp_recv_until(
     }
 }
 
+/// One kpasswd reply over TCP, its length and the reply in one write.
+/// MIT `process_stream_response` (`lib/apputils/net-server.c:1319-1323`): kadmind's kpasswd TCP
+/// replies go out as the KDC's do, the length and the reply in one writev.
 fn write_len_pref(stream: &mut TcpStream, body: &[u8]) -> io::Result<()> {
-    let len = u32::try_from(body.len()).unwrap_or(0);
-    stream.write_all(&len.to_be_bytes())?;
-    stream.write_all(body)?;
-    stream.flush()
+    krb5_protocol::write_messages(stream, &[body])
 }
 
 fn read_len_pref(stream: &mut TcpStream, max: usize) -> io::Result<Vec<u8>> {
@@ -774,10 +774,7 @@ pub fn kprop_send(
 ) -> io::Result<()> {
     let blob = crate::kprop::kprop_dump_bytes(store, master_password)
         .map_err(|e| io::Error::other(e.to_string()))?;
-    let len = u32::try_from(blob.len()).unwrap_or(0);
-    stream.write_all(&len.to_be_bytes())?;
-    stream.write_all(&blob)?;
-    stream.flush()
+    krb5_protocol::write_messages(stream, &[blob.as_slice()])
 }
 
 /// Receive a length-prefixed dump v7 body and load it.

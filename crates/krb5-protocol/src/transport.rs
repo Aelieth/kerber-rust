@@ -1,6 +1,6 @@
 //! UDP and TCP exchanges with a KDC (RFC 4120 §7.2).
 
-use std::io::{Read, Write};
+use std::io::Read;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::Duration;
 
@@ -237,17 +237,10 @@ fn exchange_tcp(addr: &KdcAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     stream
         .set_write_timeout(Some(TIMEOUT))
         .map_err(|e| Error::transport_msg(e.to_string()))?;
-    let len =
-        u32::try_from(request.len()).map_err(|_| Error::transport_msg("request too large"))?;
-    let mut out = Vec::with_capacity(4 + request.len());
-    out.extend_from_slice(&len.to_be_bytes());
-    out.extend_from_slice(request);
-    stream
-        .write_all(&out)
+    // MIT `service_tcp_write` (`lib/krb5/os/sendto_kdc.c:1124-1125`): the length and the request
+    // go out in one writev.
+    crate::framing::write_messages(&mut stream, &[request])
         .map_err(|e| Error::transport_msg(format!("tcp write: {e}")))?;
-    stream
-        .flush()
-        .map_err(|e| Error::transport_msg(e.to_string()))?;
     let mut hdr = [0u8; 4];
     stream
         .read_exact(&mut hdr)
