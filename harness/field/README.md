@@ -228,6 +228,7 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `services` | nightly, weekly | mit, rust | services: `f4-mit` / `services-rust` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 | `nfs-client` | nightly, weekly | mit, rust | client2: `f4-mit` / `rust-ssh`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 | `sssd-login` | nightly, weekly | mit, rust | client1: `f4-mit` / `rust-nfs-sso`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
+| `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 
 With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).
 
@@ -324,6 +325,84 @@ would remove it.
   (the TGT is issued, the account is denied); the kit's own `--validate`. Every
   realm and directory change is undone, also when the scenario stops early.
   Recorded: the cache's size.
+
+`scenarios/klldap-swap.sh` runs KLLDAP on this host's docker, never on a lab VM
+(run.sh still holds the lab lock while it runs). It needs, from `field.env`:
+the KLLDAP checkout and its pin (`FIELD_KLLDAP_REPO`, `FIELD_KLLDAP_PIN`), the
+phase-80 fixture (`FIELD_KLLDAP_FIXTURE`) and Zepmann/lldap-cli
+(`FIELD_LLDAP_CLI`). All three are only read; the source is `git archive` of the
+pin (`--no-optional-locks`), never a copy of the checkout's working tree.
+
+- **`--leg mit`** (f-F3-mit): KLLDAP's image as its `make test` recipe builds
+  it, with MIT `krb5-server` inside.
+- **`--leg rust`** (f-F3), first:
+  - the ref built in AlmaLinux 10, KLLDAP's base: the doc's Prerequisites
+    mapped to AlmaLinux (gcc, make, lld; rustup from its installer), Build's
+    block from the archive's docs/install.md without `git clone` and
+    `cd kerber-rust`, then `make install DESTDIR=<staging> PREFIX=/usr`;
+  - the strings check `none` on the staged programs and red on a planted file;
+    their glibc floor no higher than the image's glibc;
+  - KLLDAP's image built again (the MIT one, for the dump), and F3's one
+    Dockerfile hunk: `krb5-server` out, `krb5-workstation` and `libkadm5`
+    kept, the staging copied in, `/usr/sbin` and `/usr/lib` back to 0555. The
+    swapped image is checked: no `krb5-server`, the modes and owners of its
+    directories as in the MIT image, `sha256sum -c` of the install manifest;
+  - the fixture's KDC migrated as docs/install.md "In a container" says, its
+    three blocks taken from the archive by heading and run in one session
+    (block 2's `docker stop` is not run: no container runs the copy). Every
+    command must exit 0, and the loaded realm lists the dump's principals.
+- **Both legs:**
+  - KLLDAP's live-KDC FFI lane, `gate/kdc-sandbox.sh` with
+    `cargo test -p lldap-kerberos -- --ignored`, as uid 1000 on the two MIT
+    client libraries F3-MIT used: AlmaLinux 10's 1.21.3 (the image's) and
+    Fedora 43's 1.22.2. The rust leg's environments have `krb5-server` removed
+    and the staging in its place; the lane must run our `kdb5_util`,
+    `kadmin.local`, `krb5kdc` and `kadmind`, `/usr/sbin/kadmin.local` too.
+  - the image booted once with fresh volumes, for the observations;
+  - `gate/run-gate.sh`, all phases, unchanged. Phase 80 takes the fixture's
+    data as it is, so its pinned `key_seed` fails the same two lines on both
+    legs; the check is that those two are the only lines not PASS. Its KDC is
+    the fixture's (mit) or the migrated copy (rust);
+  - phase 80 again on a copy of the data with a fresh `key_seed`: 4 of 4.
+- **Against the MIT leg** (rust leg): this run's MIT leg, else
+  `runs/mit-latest/klldap-swap/mit/`. The gate table line by line, the lanes'
+  pass counts, and `/app/lldap` and `kerberos_manager` byte for byte. The table
+  comparison masks the docker bridge address and LLDAP's two audit-log row
+  counts, which the gate reads from a copy of the live database (one rerun on
+  the same image gave 4 `policy_change` rows where F3-MIT's had 3). With no MIT
+  leg to compare with, each comparison is NOT-RUN, and fails: a run is
+  `--leg rust` unless told otherwise, so until a weekly MIT leg writes
+  `runs/mit-latest/`, give `--leg both`.
+- **Records**, besides `record.txt` and `checks.tsv`: `logs/` (each build, lane
+  and gate run, redacted), `gate-table.txt`, `ffi.counts` and `app.sha256`, the
+  files the comparison reads.
+- **Observations**, not graded: the image's MIT packages, its listening
+  sockets, its log files' modes, its KDC directory, the JSON lines in
+  `docker logs`, and the lane sandbox's admin/admin attributes.
+  `scenarios/klldap-swap.expect` lists the known differences, each with its
+  record and the package or decision that owns it.
+- **Where things run:** docker from wherever run.sh runs. The gate runs where
+  `jq` is (lldap-cli needs it): here, or on the host through
+  `distrobox-host-exec` from the `rust-dev` distrobox, which has none. Every
+  path a container or the host writes is under the run's directory, and the
+  fixture is read in place, so it must be on a path the host sees too
+  (anything under `$HOME` is).
+- **Resources:** images, containers, volumes and networks are named
+  `kerber-field-<run id>-<leg>…` and removed at the end; BuildKit's cache stays,
+  and makes a run after the first one fast. The ref's build and the lanes run
+  under `nice` and `--cpus 8`; BuildKit's image builds take no CPU cap. Each leg
+  downloads rustup, the toolchains and the crates again into its tmp, and
+  deletes its scratch when it ends (several GB, with a container for what root
+  wrote), so run.sh's secret scan reads the records, not the scratch.
+  With a cold cache, or after `quay.io/almalinuxorg/10-minimal` moves (KLLDAP's
+  Dockerfile does not pin it), KLLDAP's image build compiles everything again:
+  F3-MIT's took 9 min with its first stage cached, so set `FIELD_CMD_TIMEOUT`
+  and `FIELD_SCENARIO_TIMEOUT` higher for that run.
+- **Secrets:** each leg makes its own (the fixture's admin password, the fresh
+  `key_seed`, the boot's LLDAP secrets) in its tmp, never printed. KLLDAP's
+  gate passes the fixture admin password on `docker run`'s command line, as
+  it is written. A last check scans the leg's record for those values, the
+  fixture's `key_seed` and its admin keytab's keys, with its planted control.
 
 ## What `up` builds
 
