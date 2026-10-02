@@ -189,33 +189,127 @@ fn split_kinit_positionals(out: &mut KinitArgs, rest: &[String]) {
 /// Parsed `klist` argv.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KlistArgs {
-    /// `-c`.
+    /// The name argument: the cache (`-c`, the default mode) or keytab (`-k`) to list.
     pub ccache: Option<String>,
+    /// `-k`: list a keytab.
+    pub keytab: bool,
     /// `-f`.
     pub flags: bool,
     /// `-e`.
     pub etype: bool,
     /// `-s`.
     pub silent: bool,
+    /// `-d`.
+    pub adtype: bool,
+    /// `-t`.
+    pub times: bool,
+    /// `-K`.
+    pub keys: bool,
+    /// `-a`.
+    pub addresses: bool,
+    /// `-n`.
+    pub no_resolve: bool,
+    /// `-i`.
+    pub client_keytab: bool,
+    /// `-l`.
+    pub list_all: bool,
+    /// `-A`.
+    pub show_all: bool,
+    /// `-C`.
+    pub config: bool,
+}
+
+/// Why a `klist` argv is not run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KlistParseError {
+    /// `-4`: "Kerberos 4 is no longer supported", exit 3.
+    Krb4,
+    /// The usage text, after these lines.
+    Usage(UsageError),
+}
+
+/// MIT `usage` (`klist.c:81-108`): the usage text, `prog` naming the program.
+#[must_use]
+pub fn klist_usage(prog: &str) -> String {
+    format!(
+        "Usage: {prog} [-e] [-V] [[-c] [-l] [-A] [-d] [-f] [-s] [-a [-n]]] [-k [-i] [-t] [-K]] [-C] [name]\n\
+         \t-c specifies credentials cache\n\
+         \t-k specifies keytab\n\
+         \t   (Default is credentials cache)\n\
+         \t-i uses default client keytab if no name given\n\
+         \t-l lists credential caches in collection\n\
+         \t-A shows content of all credential caches\n\
+         \t-e shows the encryption type\n\
+         \t-V shows the Kerberos version and exits\n\
+         \toptions for credential caches:\n\
+         \t\t-d shows the submitted authorization data types\n\
+         \t\t-f shows credentials flags\n\
+         \t\t-s sets exit status based on valid tgt existence\n\
+         \t\t-a displays the address list\n\
+         \t\t\t-n do not reverse-resolve\n\
+         \toptions for keytabs:\n\
+         \t\t-t shows keytab entry timestamps\n\
+         \t\t-K shows keytab entry keys\n\
+         \t\t-C includes configuration data entries\n"
+    )
 }
 
 /// Parse `klist` arguments after argv0.
+/// MIT `main` (`klist.c:137-218`): the options `dfetKsnacki45lAC` (`-V` is not taken), `-c` and
+/// `-k` choosing the mode once, the options each mode refuses, and one name at most.
 ///
 /// # Errors
 ///
-/// Unknown option or missing argument.
-pub fn parse_klist(args: &[String]) -> Result<KlistArgs, String> {
-    let (opts, _rest) = getopt(args, "c:fes", &[])?;
+/// [`KlistParseError::Krb4`] for `-4`; [`KlistParseError::Usage`] for an option `klist` does not
+/// take, a second mode, an option the mode refuses, `-n` without `-a`, `-l` with `-A` or `-s`, or a
+/// second name.
+pub fn parse_klist(args: &[String]) -> Result<KlistArgs, KlistParseError> {
+    let usage = |lines: Vec<String>| KlistParseError::Usage(UsageError::Lines(lines));
+    let (opts, rest) = getopt(args, "dfetKsnacki45lAC", &[])
+        .map_err(|e| KlistParseError::Usage(UsageError::Getopt(e)))?;
     let mut out = KlistArgs::default();
+    let mut mode_set = false;
     for o in opts {
         match o.flag {
-            'c' => out.ccache = o.arg,
+            'd' => out.adtype = true,
             'f' => out.flags = true,
             'e' => out.etype = true,
+            't' => out.times = true,
+            'K' => out.keys = true,
             's' => out.silent = true,
-            _ => return Err(format!("invalid option -- '{}'", o.flag)),
+            'n' => out.no_resolve = true,
+            'a' => out.addresses = true,
+            'c' | 'k' if mode_set => return Err(usage(Vec::new())),
+            'c' => mode_set = true,
+            'k' => {
+                mode_set = true;
+                out.keytab = true;
+            }
+            'i' => out.client_keytab = true,
+            '4' => return Err(KlistParseError::Krb4),
+            'l' => out.list_all = true,
+            'A' => out.show_all = true,
+            'C' => out.config = true,
+            _ => {}
         }
     }
+    if out.no_resolve && !out.addresses {
+        return Err(usage(Vec::new()));
+    }
+    let refused = if out.keytab {
+        out.flags || out.silent || out.addresses || out.show_all || out.list_all
+    } else {
+        out.times || out.keys || (out.show_all && out.list_all) || (out.silent && out.list_all)
+    };
+    if refused {
+        return Err(usage(Vec::new()));
+    }
+    if let Some(extra) = rest.get(1) {
+        return Err(usage(vec![format!(
+            "Extra arguments (starting with \"{extra}\")."
+        )]));
+    }
+    out.ccache = rest.into_iter().next();
     Ok(out)
 }
 

@@ -17,7 +17,7 @@ use krb5_client::creds::{
     string_to_enctype, unparse,
 };
 use krb5_client::errmsg::{Code, Krb5Error};
-use krb5_client::{CcacheCred, FileCcache, store_ccache_keep_default};
+use krb5_client::{CcacheCred, FileCcache, kt_resolve, store_ccache_keep_default};
 use krb5_config::resolve_ccspec;
 use krb5_types::{PrincipalName, Ticket};
 
@@ -73,12 +73,9 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
         }
     };
     if let Some(kt) = &args.keytab
-        && keytab_type_unknown(kt)
+        && let Err(e) = kt_resolve(kt)
     {
-        return fail(
-            &Krb5Error::of(Code::KtUnknownType),
-            &format!("resolving keytab {kt}"),
-        );
+        return fail(&e, &format!("resolving keytab {kt}"));
     }
     let default_realm = default_realm().unwrap_or_default();
     let for_user = match &args.for_user {
@@ -269,15 +266,6 @@ fn server_principal(name: &str, sname: Option<&str>, realm: &str) -> Result<Prin
     let p = PrincipalName::try_new(PrincipalName::NT_SRV_HST, [sname, host.as_str()])
         .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
     Ok((krb5_protocol::realm(&host_realm), p))
-}
-
-/// MIT `krb5_kt_resolve`: a `TYPE:` prefix other than `FILE` or `WRFILE` is
-/// `KRB5_KT_UNKNOWN_TYPE`; no prefix is a file.
-fn keytab_type_unknown(name: &str) -> bool {
-    match name.split_once(':') {
-        Some((ty, _)) if !ty.is_empty() && !ty.contains('/') => ty != "FILE" && ty != "WRFILE",
-        _ => false,
-    }
 }
 
 /// The gates send S4U2Self for a service other than the cache's principal, for the KDC to

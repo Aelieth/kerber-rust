@@ -125,6 +125,77 @@ pub fn init_context() -> Result<(), Krb5Error> {
     }
 }
 
+/// The compiled-in default keytab (MIT's `DEFKTNAME`).
+pub const DEFKTNAME: &str = "FILE:/etc/krb5.keytab";
+/// The compiled-in default client keytab (MIT's `DEFCKTNAME` as Fedora builds it).
+pub const DEFCKTNAME: &str = "FILE:/var/kerberos/krb5/user/%{euid}/client.keytab";
+
+/// MIT `kt_default_name` (`ktdefname.c:35-57`): `KRB5_KTNAME`, else
+/// `[libdefaults] default_keytab_name` with its tokens expanded, else [`DEFKTNAME`].
+#[must_use]
+pub fn kt_default_name() -> String {
+    if let Some(v) = std::env::var_os("KRB5_KTNAME") {
+        return v.to_string_lossy().into_owned();
+    }
+    let conf = krb5_config::load_krb5_conf().and_then(|c| c.default_keytab_name);
+    expand_name(conf.as_deref().unwrap_or(DEFKTNAME))
+}
+
+/// MIT `k5_kt_client_default_name` (`ktdefname.c:59-78`): `KRB5_CLIENT_KTNAME`, else
+/// `[libdefaults] default_client_keytab_name` with its tokens expanded, else [`DEFCKTNAME`].
+#[must_use]
+pub fn kt_client_default_name() -> String {
+    if let Some(v) = std::env::var_os("KRB5_CLIENT_KTNAME") {
+        return v.to_string_lossy().into_owned();
+    }
+    let conf = krb5_config::load_krb5_conf().and_then(|c| c.default_client_keytab_name);
+    expand_name(conf.as_deref().unwrap_or(DEFCKTNAME))
+}
+
+fn expand_name(name: &str) -> String {
+    krb5_config::expand_ccache_params(name).unwrap_or_else(|_| name.to_owned())
+}
+
+/// A keytab name resolved to its type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KeytabName {
+    /// A FILE (or WRFILE) keytab.
+    File(std::path::PathBuf),
+    /// A MEMORY keytab, which a new process holds empty.
+    Memory(String),
+}
+
+impl KeytabName {
+    /// MIT `krb5_kt_get_name`: `FILE:<path>` (a `WRFILE:` name too) or `MEMORY:<name>`.
+    #[must_use]
+    pub fn full_name(&self) -> String {
+        match self {
+            Self::File(p) => format!("FILE:{}", p.display()),
+            Self::Memory(n) => format!("MEMORY:{n}"),
+        }
+    }
+}
+
+/// MIT `krb5_kt_resolve` (`ktbase.c:151-209`): a name with no `TYPE:` prefix, or one starting with
+/// `/`, is a FILE keytab; `FILE`, `WRFILE` and `MEMORY` are the types.
+///
+/// # Errors
+///
+/// [`Krb5Error`] `KRB5_KT_UNKNOWN_TYPE` for any other prefix.
+pub fn kt_resolve(name: &str) -> Result<KeytabName, Krb5Error> {
+    let Some((pfx, resid)) = name.split_once(':') else {
+        return Ok(KeytabName::File(name.into()));
+    };
+    if name.starts_with('/') || (pfx.len() == 1 && pfx.bytes().all(|b| b.is_ascii_alphabetic())) {
+        return Ok(KeytabName::File(name.into()));
+    }
+    match pfx {
+        "FILE" | "WRFILE" => Ok(KeytabName::File(resid.into())),
+        "MEMORY" => Ok(KeytabName::Memory(resid.to_owned())),
+        _ => Err(Krb5Error::of(Code::KtUnknownType)),
+    }
+}
+
 /// MIT's message for a keytab file that cannot be read.
 /// MIT `krb5_ktfileint_open` (`kt_file.c:745-765`): a missing file is "Key table file '<path>' not
 /// found".

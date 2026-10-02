@@ -512,11 +512,11 @@ pub fn get_u2u_ticket(spec: CcSpec) -> Result<Ticket, Krb5Error> {
 /// `KRB5KRB_AP_WRONG_PRINC` when no entry decrypts the ticket, `KRB5KRB_AP_ERR_TKT_INVALID` for a
 /// postdated ticket not yet validated, or the read error of an unreadable keytab.
 pub fn server_decrypt_ticket_keytab(keytab: &str, ticket: &Ticket) -> Result<(), Krb5Error> {
-    let path = keytab
-        .strip_prefix("FILE:")
-        .or_else(|| keytab.strip_prefix("WRFILE:"))
-        .unwrap_or(keytab);
-    let bytes = std::fs::read(path).map_err(|e| crate::keytab_read_error(&e, path))?;
+    let crate::KeytabName::File(path) = crate::kt_resolve(keytab)? else {
+        return Err(Krb5Error::of(Code::WrongPrinc));
+    };
+    let bytes = std::fs::read(&path)
+        .map_err(|e| crate::keytab_read_error(&e, &path.display().to_string()))?;
     let kt = Keytab::parse(&bytes).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
     let usage =
         KeyUsage::new(ku::TICKET).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;

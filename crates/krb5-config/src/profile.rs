@@ -438,6 +438,9 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         "default_keytab_name" if take_first(seen, "default_keytab_name") => {
             conf.default_keytab_name = Some(v);
         }
+        "default_client_keytab_name" if take_first(seen, "default_client_keytab_name") => {
+            conf.default_client_keytab_name = Some(v);
+        }
         "spake_preauth_groups" if take_first(seen, "spake_preauth_groups") => {
             conf.spake_preauth_groups = Some(split_ws(&v));
         }

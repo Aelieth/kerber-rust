@@ -136,7 +136,16 @@ impl Keytab {
     #[must_use]
     pub fn unparsed_meta(raw: &[u8], version: u16) -> Option<(u32, String, u32, i32)> {
         let body = raw.get(4..)?;
-        parse_unparsed_meta(body, version).ok()
+        parse_unparsed_meta(body, version)
+            .ok()
+            .map(|(kvno, princ, ts, etype, _)| (kvno, princ, ts, etype))
+    }
+
+    /// The key bytes of an unknown-etype record (length prefix included).
+    #[must_use]
+    pub fn unparsed_key(raw: &[u8], version: u16) -> Option<Vec<u8>> {
+        let body = raw.get(4..)?;
+        parse_unparsed_meta(body, version).ok().map(|m| m.4)
     }
 
     /// File-order slots: parsed entries interleaved with unknown-etype blobs.
@@ -304,7 +313,9 @@ impl From<io::Error> for EntryErr {
     }
 }
 
-fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32), io::Error> {
+type UnparsedMeta = (u32, String, u32, i32, Vec<u8>);
+
+fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<UnparsedMeta, io::Error> {
     let mut i = 0;
     let ncomp = take_u16(body, &mut i)?;
     let realm = take_counted16(body, &mut i)?;
@@ -320,7 +331,7 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32),
     let kvno8 = body[i];
     i += 1;
     let enctype = i32::from(take_u16(body, &mut i)?);
-    let _keybytes = take_counted16(body, &mut i)?;
+    let keybytes = take_counted16(body, &mut i)?;
     let kvno = if ver == 0x0502 && i + 4 <= body.len() {
         take_u32(body, &mut i)?
     } else {
@@ -339,6 +350,7 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32),
         ),
         timestamp,
         enctype,
+        keybytes,
     ))
 }
 

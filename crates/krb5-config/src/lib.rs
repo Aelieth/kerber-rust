@@ -180,6 +180,9 @@ pub struct Krb5Conf {
     pub default_ccache_name: Option<String>,
     /// `[libdefaults] default_keytab_name`, as written (the caller expands its parameters).
     pub default_keytab_name: Option<String>,
+    /// `[libdefaults] default_client_keytab_name`, as written (the caller expands its
+    /// parameters).
+    pub default_client_keytab_name: Option<String>,
     /// `[libdefaults] spake_preauth_groups`. `None` = omitted (KDC default none).
     pub spake_preauth_groups: Option<Vec<String>>,
     /// `[libdefaults] preferred_preauth_types`. Empty = MIT default `17, 16, 15, 14`.
