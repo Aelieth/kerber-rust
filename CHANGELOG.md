@@ -1301,6 +1301,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** Ctrl-C at the `kadmin.local:  ` prompt prints a newline and prompts again, and at
+  a `yes/no` question it drops the request quietly, as MIT's `ss` does; it ended the session.
+  Units, `cli_stdin`.
 - **cli.** Ctrl-C at a password prompt is `Password read interrupted` with the terminal's echo
   back, as MIT's prompter has it (it ended the tool with echo off); stdin is read a byte at a
   time, so a reply leaves the rest of the input. Units.

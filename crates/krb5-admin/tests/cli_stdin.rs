@@ -2,7 +2,7 @@
 
 use krb5_testkit::scratch_dir;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use std::process::{Command, Stdio};
 
 fn pipe_stdin(bin: &str, input: &[u8]) -> std::process::Output {
@@ -281,6 +281,102 @@ fn kadmin_local_explicit_principal_takes_the_realm() {
     );
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
     assert_eq!(modified(&realm).as_deref(), Some("joe/admin@OTHER.TEST"));
+}
+
+/// Reads `from` until `marker` has been seen in all it read (or the stream ends).
+fn read_through(from: &mut impl Read, seen: &mut Vec<u8>, marker: &[u8]) {
+    let mut buf = [0u8; 256];
+    let mut start = seen.len();
+    while !seen[start.saturating_sub(marker.len())..]
+        .windows(marker.len())
+        .any(|w| w == marker)
+    {
+        start = seen.len();
+        let Ok(n) = from.read(&mut buf) else {
+            return;
+        };
+        if n == 0 {
+            return;
+        }
+        seen.extend_from_slice(&buf[..n]);
+    }
+}
+
+fn sigint(child: &std::process::Child) {
+    let pid = nix::unistd::Pid::from_raw(i32::try_from(child.id()).unwrap());
+    nix::sys::signal::kill(pid, nix::sys::signal::Signal::SIGINT).unwrap();
+}
+
+/// MIT `ss_listen`: Ctrl-C at the prompt prints a newline and prompts again; the session goes
+/// on and ends with 0.
+#[test]
+fn kadmin_local_sigint_at_the_prompt_prompts_again() {
+    let realm = Realm::new("kadmin-sigint");
+    let mut child = realm
+        .cmd()
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut seen = Vec::new();
+    read_through(&mut stdout, &mut seen, b"kadmin.local:  ");
+    sigint(&child);
+    read_through(&mut stdout, &mut seen, b"\nkadmin.local:  ");
+    stdin.write_all(b"listprincs us*\nq\n").unwrap();
+    drop(stdin);
+    stdout.read_to_end(&mut seen).unwrap();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(0));
+    assert_eq!(
+        text(&seen),
+        "Authenticating as principal tester/admin@KERBER.TEST with password.\nkadmin.local:  \n\
+         kadmin.local:  user@KERBER.TEST\nkadmin.local:  "
+    );
+}
+
+/// MIT `krb5_prompter_posix`: Ctrl-C at a password prompt is `Password read interrupted`, and
+/// `-q` still exits 0.
+#[test]
+fn kadmin_local_sigint_at_a_password_prompt_is_password_read_interrupted() {
+    let realm = Realm::new("kadmin-sigint-pw");
+    let mut child = realm
+        .cmd()
+        .args(["-q", "addprinc pz1"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut seen = Vec::new();
+    read_through(
+        &mut stdout,
+        &mut seen,
+        b"Enter password for principal \"pz1@KERBER.TEST\": ",
+    );
+    sigint(&child);
+    stdout.read_to_end(&mut seen).unwrap();
+    drop(stdin);
+    let mut err = Vec::new();
+    child.stderr.take().unwrap().read_to_end(&mut err).unwrap();
+    assert_eq!(child.wait().unwrap().code(), Some(0));
+    assert!(
+        text(&seen).ends_with("\"pz1@KERBER.TEST\": \n"),
+        "{}",
+        text(&seen)
+    );
+    assert!(
+        text(&err).ends_with(
+            "add_principal: Password read interrupted while reading password for \
+             \"pz1@KERBER.TEST\".\n"
+        ),
+        "{}",
+        text(&err)
+    );
 }
 
 /// MIT's prompt loop reads a directory stdin as the end of input (`fgets` fails): no spin, exit 0.

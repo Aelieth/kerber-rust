@@ -73,6 +73,22 @@ pub(crate) struct Io {
     /// MIT `script_mode`: the command came after the options on the command line.
     pub(crate) script_mode: bool,
     pub(crate) exit_status: i32,
+    /// A signal the prompt loop catches cut a reply short: MIT's handler prints a newline and
+    /// goes back to the prompt, so the request says nothing more.
+    pub(crate) interrupted: bool,
+}
+
+/// glibc's `BUFSIZ`: the most MIT's prompt loop reads of one line (`fgets(input, BUFSIZ, …)`).
+const BUFSIZ: usize = 8192;
+
+/// What a read of the next command line got.
+pub(crate) enum LineRead {
+    /// Up to `BUFSIZ - 1` bytes, the newline kept.
+    Line(Vec<u8>),
+    /// The input ended or failed.
+    End,
+    /// A caught signal came first.
+    Caught,
 }
 
 impl Io {
@@ -111,32 +127,31 @@ impl Io {
         self.error("\n");
     }
 
-    /// One line from stdin, as `fgets` reads it: the newline kept, `None` at the end of input.
-    pub(crate) fn read_line(&mut self) -> Option<Vec<u8>> {
+    /// The next command line, as MIT's prompt loop reads it with `fgets(input, BUFSIZ, stdin)`.
+    pub(crate) fn read_line(&mut self) -> LineRead {
         self.out.flush_for_input();
         let mut line = Vec::new();
-        match self.input.read_until(b'\n', &mut line) {
-            Ok(0) | Err(_) => None,
-            Ok(_) => Some(line),
+        match krb5_cli::fgets(&mut *self.input, BUFSIZ, &mut line) {
+            krb5_cli::LineEnd::Read => LineRead::Line(line),
+            krb5_cli::LineEnd::Caught(_) => LineRead::Caught,
+            krb5_cli::LineEnd::End | krb5_cli::LineEnd::Failed => LineRead::End,
         }
     }
 
     /// A reply as `fgets(buf, size, stdin)` reads it: at most `size - 1` bytes, up to and
-    /// including a newline; the rest of a longer line stays for the next read.
+    /// including a newline; the rest of a longer line stays for the next read. `None` at the end
+    /// of input, or when a caught signal cuts it short ([`Self::interrupted`] is then set).
     pub(crate) fn fgets(&mut self, size: usize) -> Option<Vec<u8>> {
         self.out.flush_for_input();
         let mut line = Vec::new();
-        while line.len() + 1 < size {
-            let Some(&b) = self.input.fill_buf().ok().and_then(|buf| buf.first()) else {
-                break;
-            };
-            self.input.consume(1);
-            line.push(b);
-            if b == b'\n' {
-                break;
+        match krb5_cli::fgets(&mut *self.input, size, &mut line) {
+            krb5_cli::LineEnd::Read => Some(line),
+            krb5_cli::LineEnd::Caught(_) => {
+                self.interrupted = true;
+                None
             }
+            krb5_cli::LineEnd::End | krb5_cli::LineEnd::Failed => None,
         }
-        (!line.is_empty()).then_some(line)
     }
 
     /// MIT `krb5_read_password` (`read_pwd.c:41-77`): `prompt`, then `verify` when given, echo

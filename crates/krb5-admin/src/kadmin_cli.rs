@@ -21,7 +21,7 @@ use krb5_kdc::{Error, PrincipalStore};
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
 
-pub(crate) use stdio::{Io, Stdout};
+pub(crate) use stdio::{Io, LineRead, Stdout};
 
 /// The name every message is prefixed with: MIT's `whoami`, the program's base name, which an
 /// installed `kadmin.local` is.
@@ -45,10 +45,11 @@ pub fn kadmin_local_main() -> i32 {
     let mut io = Io {
         out: Stdout::new(Box::new(stdout), line),
         err: Box::new(io::stderr()),
-        input: Box::new(io::stdin().lock()),
+        input: Box::new(krb5_cli::Stdin::unbuffered()),
         tty_in: io::stdin().is_terminal(),
         script_mode: false,
         exit_status: 0,
+        interrupted: false,
     };
     let rc = run(&argv, &mut io);
     let _ = io.out.flush();

@@ -30,6 +30,86 @@ impl Capture {
     }
 }
 
+/// Input that hands out its parts in turn: bytes, or a caught `SIGINT` where MIT's handler
+/// would run.
+struct Script(std::collections::VecDeque<Option<Vec<u8>>>);
+
+impl Script {
+    fn new(parts: &[Option<&[u8]>]) -> Self {
+        Self(parts.iter().map(|p| p.map(<[u8]>::to_vec)).collect())
+    }
+}
+
+impl io::Read for Script {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let n = {
+            let have = io::BufRead::fill_buf(self)?;
+            let n = have.len().min(out.len());
+            out[..n].copy_from_slice(&have[..n]);
+            n
+        };
+        io::BufRead::consume(self, n);
+        Ok(n)
+    }
+}
+
+impl io::BufRead for Script {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        while self
+            .0
+            .front()
+            .is_some_and(|p| p.as_ref().is_some_and(Vec::is_empty))
+        {
+            self.0.pop_front();
+        }
+        if matches!(self.0.front(), Some(None)) {
+            self.0.pop_front();
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                krb5_cli::Caught(krb5_cli::Signal::SIGINT),
+            ));
+        }
+        Ok(self.0.front().and_then(Option::as_deref).unwrap_or(&[]))
+    }
+
+    fn consume(&mut self, n: usize) {
+        if let Some(Some(bytes)) = self.0.front_mut() {
+            bytes.drain(..n.min(bytes.len()));
+        }
+    }
+}
+
+/// Input whose first line, once read, is followed by a real `SIGINT`: Ctrl-C while that line's
+/// request runs.
+struct SigintAfterLine {
+    bytes: &'static [u8],
+    raised: bool,
+}
+
+impl io::Read for SigintAfterLine {
+    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+        let n = self.bytes.len().min(out.len());
+        out[..n].copy_from_slice(&self.bytes[..n]);
+        io::BufRead::consume(self, n);
+        Ok(n)
+    }
+}
+
+impl io::BufRead for SigintAfterLine {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        Ok(self.bytes)
+    }
+
+    fn consume(&mut self, n: usize) {
+        let (taken, rest) = self.bytes.split_at(n.min(self.bytes.len()));
+        self.bytes = rest;
+        if !self.raised && taken.contains(&b'\n') {
+            self.raised = true;
+            nix::sys::signal::raise(krb5_cli::Signal::SIGINT).unwrap();
+        }
+    }
+}
+
 struct Rig {
     out: Capture,
     err: Capture,
@@ -53,6 +133,7 @@ impl Rig {
             tty_in: false,
             script_mode: false,
             exit_status: 0,
+            interrupted: false,
         };
         let h = Handle {
             store,
@@ -721,6 +802,78 @@ fn listen_reads_a_line_that_is_not_utf8() {
     assert!(err.starts_with("kadmin.local: Unknown request \""), "{err}");
     assert_eq!(err.lines().count(), 1, "{err}");
     assert_eq!(r.io.exit_status, 0);
+}
+
+#[test]
+fn sigint_at_the_prompt_prints_a_newline_and_prompts_again() {
+    let mut r = Rig::new("");
+    r.io.input = Box::new(Script::new(&[
+        None,
+        None,
+        Some(b"listprincs us*\n"),
+        Some(b"q\n"),
+    ]));
+    let (out, err) = r.listen();
+    assert_eq!(
+        out,
+        "kadmin.local:  \nkadmin.local:  \nkadmin.local:  user@KERBER.TEST\nkadmin.local:  "
+    );
+    assert_eq!(err, "");
+    assert_eq!(r.io.exit_status, 0);
+}
+
+#[test]
+fn sigint_while_a_request_runs_is_a_newline_before_the_next_prompt() {
+    let mut r = Rig::new("");
+    r.io.input = Box::new(SigintAfterLine {
+        bytes: b"listprincs us*\nq\n",
+        raised: false,
+    });
+    let (out, err) = r.listen();
+    assert_eq!(out, "kadmin.local:  user@KERBER.TEST\n\nkadmin.local:  ");
+    assert_eq!(err, "");
+}
+
+#[test]
+fn sigint_at_a_confirmation_drops_the_request_quietly() {
+    let mut r = Rig::new("");
+    r.io.input = Box::new(Script::new(&[
+        Some(b"delprinc user\n"),
+        None,
+        Some(b"listprincs us*\n"),
+        Some(b"q\n"),
+    ]));
+    let (out, err) = r.listen();
+    assert_eq!(
+        out,
+        "kadmin.local:  Are you sure you want to delete the principal \"user@KERBER.TEST\"? \
+         (yes/no): \nkadmin.local:  user@KERBER.TEST\nkadmin.local:  "
+    );
+    assert_eq!(err, "");
+}
+
+#[test]
+fn sigint_at_a_password_prompt_is_an_interrupted_read() {
+    let mut r = Rig::new("");
+    r.io.input = Box::new(Script::new(&[
+        Some(b"addprinc pz1\n"),
+        None,
+        Some(b"listprincs pz*\n"),
+        Some(b"q\n"),
+    ]));
+    let (out, err) = r.listen();
+    assert_eq!(
+        out,
+        "kadmin.local:  Enter password for principal \"pz1@KERBER.TEST\": \nkadmin.local:  \
+         kadmin.local:  "
+    );
+    assert!(
+        err.ends_with(
+            "add_principal: Password read interrupted while reading password for \
+             \"pz1@KERBER.TEST\".\n"
+        ),
+        "{err}"
+    );
 }
 
 #[test]

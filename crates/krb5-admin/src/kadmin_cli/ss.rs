@@ -4,7 +4,7 @@
 use std::fmt::Write as _;
 use std::io::Write as _;
 
-use super::{Io, Session, WHOAMI, kt_cmds, pol_cmds, princ_cmds};
+use super::{Io, LineRead, Session, WHOAMI, kt_cmds, pol_cmds, princ_cmds};
 
 type Verb = fn(&mut Session<'_>, &[String]);
 
@@ -273,15 +273,36 @@ pub(crate) fn parse(line: &str) -> Result<Vec<String>, &'static str> {
 }
 
 /// MIT `ss_listen` (`listen.c:67-169`): an unknown request is reported; until `quit` or the end
-/// of input.
-/// MIT `readline` (`listen.c:32-50`): the prompt, flushed, and one line up to its `\r` or `\n`.
+/// of input. `SIGINT` is caught through the loop and `SIGCONT` while the prompt waits: either
+/// prints a newline and prompts again. A request one comes during runs to its end first, as this
+/// port never stops one halfway, and the newline comes before the next prompt; one reading a reply
+/// ends there, quietly.
+/// MIT `listen_int_handler` (`listen.c:59-64`): a newline, then back to the prompt.
+/// MIT `readline` (`listen.c:32-50`): a terminal back in line mode, the prompt, flushed, and one
+/// line of at most `BUFSIZ - 1` bytes, up to its `\r` or `\n`.
 pub(crate) fn listen(s: &mut Session<'_>) {
+    let _sigint = krb5_cli::SignalCatch::new(&[krb5_cli::Signal::SIGINT]);
     s.abort = false;
     while !s.abort {
-        s.io.print(&format!("{WHOAMI}:  "));
-        let _ = s.io.out.flush();
-        let Some(raw) = s.io.read_line() else {
-            break;
+        if krb5_cli::take_caught().is_some() {
+            s.io.print("\n");
+        }
+        let read = {
+            let _sigcont = krb5_cli::SignalCatch::new(&[krb5_cli::Signal::SIGCONT]);
+            if s.io.tty_in {
+                krb5_cli::line_mode();
+            }
+            s.io.print(&format!("{WHOAMI}:  "));
+            let _ = s.io.out.flush();
+            s.io.read_line()
+        };
+        let raw = match read {
+            LineRead::Line(raw) => raw,
+            LineRead::Caught => {
+                s.io.print("\n");
+                continue;
+            }
+            LineRead::End => break,
         };
         let line = String::from_utf8_lossy(&raw);
         let line = match line.find(['\r', '\n']) {
@@ -294,6 +315,9 @@ pub(crate) fn listen(s: &mut Session<'_>) {
                 None,
                 &format!("Unknown request \"{word}\".  Type \"?\" for a request list."),
             );
+        }
+        if std::mem::take(&mut s.io.interrupted) {
+            s.io.print("\n");
         }
     }
 }

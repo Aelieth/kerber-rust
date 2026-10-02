@@ -142,7 +142,11 @@ pub(crate) fn delpol(s: &mut Session<'_>, argv: &[String]) {
             "Are you sure you want to delete the policy \"{}\"? (yes/no): ",
             argv[1]
         ));
-        if s.io.fgets(5).as_deref() != Some(b"yes\n".as_slice()) {
+        let reply = s.io.fgets(5);
+        if s.io.interrupted {
+            return;
+        }
+        if reply.as_deref() != Some(b"yes\n".as_slice()) {
             s.io.eprint(&format!("Policy \"{}\" not deleted.\n", argv[1]));
             return;
         }

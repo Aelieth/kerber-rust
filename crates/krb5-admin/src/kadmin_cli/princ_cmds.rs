@@ -427,7 +427,11 @@ pub(crate) fn delprinc(s: &mut Session<'_>, argv: &[String]) {
         s.io.print(&format!(
             "Are you sure you want to delete the principal \"{canon}\"? (yes/no): "
         ));
-        if s.io.fgets(5).as_deref() != Some(b"yes\n".as_slice()) {
+        let reply = s.io.fgets(5);
+        if s.io.interrupted {
+            return;
+        }
+        if reply.as_deref() != Some(b"yes\n".as_slice()) {
             s.io.eprint(&format!("Principal \"{canon}\" not deleted\n"));
             return;
         }
@@ -486,7 +490,11 @@ pub(crate) fn renprinc(s: &mut Session<'_>, argv: &[String]) {
             "Are you sure you want to rename the principal \"{ocanon}\" to \"{ncanon}\"? \
              (yes/no): "
         ));
-        if s.io.fgets(5).as_deref() != Some(b"yes\n".as_slice()) {
+        let reply = s.io.fgets(5);
+        if s.io.interrupted {
+            return;
+        }
+        if reply.as_deref() != Some(b"yes\n".as_slice()) {
             s.io.eprint(&format!("Principal \"{ocanon}\" not renamed\n"));
             return;
         }
