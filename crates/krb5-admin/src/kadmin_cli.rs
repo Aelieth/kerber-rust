@@ -369,7 +369,7 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
             })?
         }
     };
-    klog_init(io, &krb5_conf_paths_with_kdc());
+    klog_init();
     if o.ccache_name.is_some() {
         io.info(&format!(
             "Authenticating as principal {princstr} with existing credentials.\n"
@@ -526,80 +526,13 @@ fn krb5_conf_paths_with_kdc() -> Vec<PathBuf> {
     paths
 }
 
-/// Every value of `[section] key` in `files`, in order, as MIT's `profile_get_values` collects
-/// them (subsections skipped).
-fn profile_values(files: &[PathBuf], section: &str, key: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    for file in files {
-        let Ok(text) = std::fs::read_to_string(file) else {
-            continue;
-        };
-        let mut current = String::new();
-        let mut depth = 0usize;
-        for raw in text.lines() {
-            let line = raw.trim();
-            if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
-                continue;
-            }
-            if depth == 0
-                && let Some(name) = line.strip_prefix('[').and_then(|l| l.split(']').next())
-            {
-                name.trim().clone_into(&mut current);
-                continue;
-            }
-            if line.starts_with('}') {
-                depth = depth.saturating_sub(1);
-                continue;
-            }
-            let Some((k, v)) = line.split_once('=') else {
-                continue;
-            };
-            let v = v.trim();
-            if v.starts_with('{') {
-                depth += 1;
-                continue;
-            }
-            if depth == 0 && current == section && k.trim() == key {
-                out.push(v.to_owned());
-            }
-        }
-    }
-    out
-}
-
-/// MIT `krb5_klog_init` (`logger.c:232-336`): the `admin_server` log files are opened (created
-/// 0640), and one that cannot be is reported; `kadmin.local` itself writes nothing to them.
-fn klog_init(io: &mut Io, files: &[PathBuf]) {
-    let mut specs = profile_values(files, "logging", "admin_server");
-    if specs.is_empty() {
-        specs = profile_values(files, "logging", "default");
-    }
-    for spec in specs {
-        let spec = spec.trim();
-        let (Some(head), Some(path)) = (spec.get(..4), spec.get(5..)) else {
-            continue;
-        };
-        if !head.eq_ignore_ascii_case("FILE") {
-            continue;
-        }
-        let append = spec.as_bytes().get(4) == Some(&b':');
-        if !append && spec.as_bytes().get(4) != Some(&b'=') {
-            continue;
-        }
-        let mut opts = std::fs::OpenOptions::new();
-        opts.write(true).create(true).append(append);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt as _;
-            opts.mode(0o640);
-        }
-        if let Err(e) = opts.open(path) {
-            io.eprint(&format!(
-                "Couldn't open log file {path}: {}\n",
-                texts::strerror(&e)
-            ));
-        }
-    }
+/// MIT `krb5_klog_init` (`lib/kadm5/logger.c:232-522`): for `admin_server`, the `[logging]`
+/// destinations of kdc.conf and the krb5.conf files open as kadmind's do, and one that cannot
+/// is reported; `kadmin.local` itself writes nothing to them, so MIT's own notices there (the
+/// password-quality dictionary's) are not written.
+fn klog_init() {
+    let specs = krb5_config::LogSpecs::load("admin_server");
+    krb5_log::klog::init(WHOAMI, &specs.specs, specs.debug);
 }
 
 /// MIT `kadm5_init` (`server_init.c:158-275`): for `kadmin.local`, the realm's parameters, the
@@ -697,14 +630,16 @@ fn db2_arg(arg: &str) -> Db2Arg<'_> {
 
 /// MIT `krb5_string_to_keysalts` (`kadm5/str_conv.c:319-366`): the enctypes of a keysalt list;
 /// a tuple naming an unknown enctype or salt type is skipped, a repeat is dropped.
+/// MIT `krb5_string_to_salttype` (`krb/str_conv.c:72-86`): a salt name in any case.
 pub(crate) fn string_to_keysalts(s: &str, seps: &[char]) -> Vec<krb5_crypto::EncryptionType> {
+    const SALTS: [&str; 4] = ["normal", "norealm", "onlyrealm", "special"];
     let mut out = Vec::new();
     for tuple in s.split(|c| seps.contains(&c)).filter(|t| !t.is_empty()) {
         let (etype, salt) = match tuple.split_once(':') {
             Some((e, s)) => (e, Some(s)),
             None => (tuple, None),
         };
-        if salt.is_some_and(|s| !matches!(s, "normal" | "norealm" | "onlyrealm" | "special")) {
+        if salt.is_some_and(|s| !SALTS.iter().any(|name| name.eq_ignore_ascii_case(s))) {
             continue;
         }
         if let Ok(e) = krb5_crypto::EncryptionType::from_mit_name(etype)

@@ -400,6 +400,73 @@ fn kadmin_local_refuses_an_argument_that_is_not_utf8() {
     );
 }
 
+/// MIT `krb5_klog_init`: `kadmin.local` opens `[logging] admin_server` as kadmind does, an
+/// included file's too, and reports a destination that does not open.
+#[test]
+fn kadmin_local_opens_its_log_as_kadmind_does() {
+    let realm = Realm::new("kadmin-log");
+    let missing = realm.dir.join("no-such-dir").join("kadmin.log");
+    let inc = realm.dir.join("log.conf");
+    std::fs::write(
+        &inc,
+        format!("[logging]\n admin_server = FILE:{}\n", missing.display()),
+    )
+    .unwrap();
+    std::fs::write(
+        realm.dir.join("krb5.conf"),
+        format!(
+            "[libdefaults]\n default_realm = KERBER.TEST\ninclude {}\n",
+            inc.display()
+        ),
+    )
+    .unwrap();
+    let out = realm.run(&["-q", "listprincs us*"], b"");
+    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        text(&out.stderr),
+        format!(
+            "Couldn't open log file {}: No such file or directory\n",
+            missing.display()
+        )
+    );
+    assert!(
+        text(&out.stdout).ends_with("user@KERBER.TEST\n"),
+        "{}",
+        text(&out.stdout)
+    );
+}
+
+/// MIT `kt_default_name`: with no `-k`, the keytab is the profile's `default_keytab_name`, an
+/// `includedir` file's included.
+#[test]
+fn kadmin_local_default_keytab_follows_includedir() {
+    let realm = Realm::new("kadmin-ktname");
+    let inc = realm.dir.join("conf.d");
+    std::fs::create_dir_all(&inc).unwrap();
+    let kt = realm.dir.join("default.keytab");
+    std::fs::write(
+        inc.join("kt.conf"),
+        format!(
+            "[libdefaults]\n default_keytab_name = FILE:{}\n",
+            kt.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        realm.dir.join("krb5.conf"),
+        format!(
+            "[libdefaults]\n default_realm = KERBER.TEST\nincludedir {}\n",
+            inc.display()
+        ),
+    )
+    .unwrap();
+    let out = realm.run(&["-q", "ktadd -norandkey user"], b"");
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    let shown = format!("added to keytab FILE:{}.", kt.display());
+    assert!(text(&out.stdout).contains(&shown), "{}", text(&out.stdout));
+    assert!(kt.exists());
+}
+
 /// MIT's prompt loop reads a directory stdin as the end of input (`fgets` fails): no spin, exit 0.
 #[test]
 fn kadmin_local_directory_stdin_terminates() {

@@ -129,7 +129,9 @@ of the daemon's profile, kdc.conf first, then krb5.conf with its
 includes: every `kdc` (KDC) or `admin_server` (kadmind) value, else
 every `default` value, else syslog with facility AUTH. Fedora's
 `/etc/krb5.conf` routes them to `/var/log/krb5kdc.log` and
-`/var/log/kadmind.log` this way.
+`/var/log/kadmind.log` this way. `krb5-kadmin-local` opens the
+`admin_server` destinations the same way, as MIT's `kadmin.local`
+does, and writes nothing to them.
 
 | Destination | Meaning |
 | --- | --- |

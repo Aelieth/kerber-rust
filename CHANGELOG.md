@@ -1303,6 +1303,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** `kadmin.local`'s default keytab comes from the profile loader (kdc.conf first,
+  includes, quoting) and its `[logging]` from kadmind's reader; a keytab name with a `/` or a
+  one-letter prefix is a file and salt names match in any case, as MIT. Units, `cli_stdin`.
 - **config.** A quoted profile value is read as MIT's parser reads it (`\t`, `\n`, `\b` and
   `\x` unescaped, nothing after the closing quote); an unquoted one keeps its quotes.
   `[libdefaults] default_keytab_name` is read. Units.

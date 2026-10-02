@@ -17,56 +17,104 @@ struct Kt {
     path: Option<PathBuf>,
 }
 
-/// `krb5_kt_default_name`: `KRB5_KTNAME`, else `[libdefaults] default_keytab_name`, else
-/// `FILE:/etc/krb5.keytab`.
-fn default_keytab_name() -> String {
-    if let Some(n) = std::env::var("KRB5_KTNAME").ok().filter(|s| !s.is_empty()) {
-        return n;
+/// MIT `kt_default_name` (`lib/krb5/os/ktdefname.c:35-57`): `KRB5_KTNAME`, else
+/// `[libdefaults] default_keytab_name` from the KDC profile (kdc.conf, then the krb5.conf files,
+/// with their includes and quoting), else `FILE:/etc/krb5.keytab`, the profile's value and the
+/// default with their `%{…}` parameters expanded. `None` for a name that is not UTF-8 or whose
+/// parameters do not expand.
+fn default_keytab_name() -> Option<String> {
+    match std::env::var("KRB5_KTNAME") {
+        Ok(name) => return Some(name),
+        Err(std::env::VarError::NotUnicode(_)) => return None,
+        Err(std::env::VarError::NotPresent) => {}
     }
-    let files = super::krb5_conf_paths_with_kdc();
-    super::profile_values(&files, "libdefaults", "default_keytab_name")
-        .into_iter()
-        .next()
-        .and_then(|n| krb5_config::expand_ccache_params(&n).ok())
-        .unwrap_or_else(|| "FILE:/etc/krb5.keytab".to_owned())
+    let name = krb5_config::load_krb5_conf_paths(super::krb5_conf_paths_with_kdc())
+        .ok()
+        .and_then(|conf| conf.default_keytab_name)
+        .unwrap_or_else(|| "FILE:/etc/krb5.keytab".to_owned());
+    krb5_config::expand_ccache_params(&name).ok()
 }
 
-/// `krb5_kt_resolve` and `krb5_kt_get_name`: `FILE` and `WRFILE` keytabs are files, `MEMORY`
-/// is kept in the process; a name with no type is a `FILE`.
-fn resolve(name: &str) -> Result<Kt, &'static str> {
-    match name.split_once(':') {
-        Some((ty @ ("FILE" | "WRFILE"), path)) => Ok(Kt {
-            name: format!("{ty}:{path}"),
-            path: Some(PathBuf::from(path)),
-        }),
-        Some(("MEMORY", _)) => Ok(Kt {
-            name: name.to_owned(),
-            path: None,
-        }),
-        Some(_) => Err("Unknown Key table type"),
-        None => Ok(Kt {
-            name: format!("FILE:{name}"),
-            path: Some(PathBuf::from(name)),
-        }),
-    }
+/// The keytab types `kadmin.local` reaches.
+#[derive(Clone, Copy)]
+pub(super) enum KtType {
+    File,
+    WrFile,
+    Memory,
 }
 
-/// MIT `process_keytab` (`kadmin/cli/keytab.c:67-111`): `-k NAME` (a name without a type is a
-/// `WRFILE`), else the default keytab.
-fn process_keytab(s: &mut Session<'_>, keytab_str: Option<&str>) -> Option<Kt> {
-    let name = keytab_str.map_or_else(default_keytab_name, |n| {
-        if n.contains(':') {
-            n.to_owned()
-        } else {
-            format!("WRFILE:{n}")
+impl KtType {
+    pub(super) fn prefix(self) -> &'static str {
+        match self {
+            Self::File => "FILE",
+            Self::WrFile => "WRFILE",
+            Self::Memory => "MEMORY",
         }
-    });
+    }
+}
+
+/// MIT `krb5_kt_resolve` (`lib/krb5/keytab/ktbase.c:152-209`): a name with no `:` is a `FILE`
+/// keytab, and so is one whose prefix is a single letter (a drive) or that starts with `/`, the
+/// whole name being the file; any other prefix names the type. The type and the name it keeps.
+pub(super) fn resolve(name: &str) -> Result<(KtType, &str), &'static str> {
+    let Some(colon) = name.find(':') else {
+        return Ok((KtType::File, name));
+    };
+    let drive = colon == 1 && name.as_bytes()[0].is_ascii_alphabetic();
+    let (prefix, residual) = if drive || name.starts_with('/') {
+        ("FILE", name)
+    } else {
+        (&name[..colon], &name[colon + 1..])
+    };
+    match prefix {
+        "FILE" => Ok((KtType::File, residual)),
+        "WRFILE" => Ok((KtType::WrFile, residual)),
+        "MEMORY" => Ok((KtType::Memory, residual)),
+        _ => Err("Unknown Key table type"),
+    }
+}
+
+/// MIT `process_keytab` (`kadmin/cli/keytab.c:67-111`): `-k NAME` (a name without a `:` is a
+/// `WRFILE`), printed as given; else the default keytab, printed as `krb5_kt_get_name` names it.
+fn process_keytab(s: &mut Session<'_>, keytab_str: Option<&str>) -> Option<Kt> {
+    let Some(given) = keytab_str else {
+        let resolved = default_keytab_name()
+            .ok_or("Invalid argument")
+            .and_then(|name| {
+                resolve(&name).map(|(ty, residual)| Kt {
+                    name: format!("{}:{residual}", ty.prefix()),
+                    path: file_of(ty, residual),
+                })
+            });
+        return match resolved {
+            Ok(kt) => Some(kt),
+            Err(msg) => {
+                s.io.com_err(WHOAMI, Some(msg), "while opening default keytab");
+                None
+            }
+        };
+    };
+    let name = if given.contains(':') {
+        given.to_owned()
+    } else {
+        format!("WRFILE:{given}")
+    };
     match resolve(&name) {
-        Ok(kt) => Some(kt),
+        Ok((ty, residual)) => Some(Kt {
+            path: file_of(ty, residual),
+            name,
+        }),
         Err(msg) => {
             s.io.com_err(WHOAMI, Some(msg), &format!("while resolving keytab {name}"));
             None
         }
+    }
+}
+
+fn file_of(ty: KtType, residual: &str) -> Option<PathBuf> {
+    match ty {
+        KtType::File | KtType::WrFile => Some(PathBuf::from(residual)),
+        KtType::Memory => None,
     }
 }
 

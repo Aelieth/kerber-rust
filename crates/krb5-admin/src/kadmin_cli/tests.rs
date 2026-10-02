@@ -902,6 +902,27 @@ fn sigint_at_a_password_prompt_is_an_interrupted_read() {
 }
 
 #[test]
+fn keytab_names_resolve_as_krb5_kt_resolve_reads_them() {
+    use kt_cmds::{KtType, resolve};
+    fn kind(name: &str) -> Result<(&'static str, &str), &'static str> {
+        resolve(name).map(|(ty, residual)| (ty.prefix(), residual))
+    }
+    assert_eq!(kind("/s/kt/a:b"), Ok(("FILE", "/s/kt/a:b")));
+    assert_eq!(kind("X:y"), Ok(("FILE", "X:y")));
+    assert_eq!(kind("kt/plain"), Ok(("FILE", "kt/plain")));
+    assert_eq!(kind("WRFILE:kt/w"), Ok(("WRFILE", "kt/w")));
+    assert_eq!(kind("MEMORY:m1"), Ok(("MEMORY", "m1")));
+    assert_eq!(kind("kt/a:b"), Err("Unknown Key table type"));
+    assert_eq!(kind("BOGUS:/x"), Err("Unknown Key table type"));
+    assert!(matches!(resolve("FILE:x"), Ok((KtType::File, "x"))));
+    let (_, err) = Rig::new("").q("ktadd -k BOGUS:/x user");
+    assert_eq!(
+        err,
+        "kadmin.local: Unknown Key table type while resolving keytab BOGUS:/x\n"
+    );
+}
+
+#[test]
 fn query_escape_and_unknown_command() {
     let mut r = Rig::new("");
     let (_, err) = r.q("nosuchcmd arg");
@@ -978,6 +999,10 @@ fn keysalt_lists_skip_what_mit_skips() {
     );
     assert_eq!(string_to_keysalts("nosuch:normal", &sep), []);
     assert_eq!(string_to_keysalts("aes256-cts:bogus", &sep), []);
+    assert_eq!(
+        string_to_keysalts("AES256-CTS-HMAC-SHA1-96:NORMAL,aes128-cts:NoRealm", &sep),
+        [E::Aes256CtsHmacSha196, E::Aes128CtsHmacSha196]
+    );
     assert_eq!(atoi(" -12x"), -12);
     assert_eq!(atoi("abc"), 0);
 }
@@ -1047,27 +1072,4 @@ fn startup_refuses_conflicting_options_like_mit() {
         )
     );
     assert_eq!(out.take(), "");
-}
-
-#[test]
-fn profile_values_read_every_file_s_section() {
-    let dir = krb5_testkit::scratch_dir("kadmin-cli-profile");
-    let _ = std::fs::create_dir_all(&dir);
-    let a = dir.join("kdc.conf");
-    let b = dir.join("krb5.conf");
-    std::fs::write(
-        &a,
-        "[realms]\n R = {\n  admin_server = x\n }\n[logging]\n admin_server = FILE:/a\n",
-    )
-    .unwrap();
-    std::fs::write(
-        &b,
-        "[logging]\n default = STDERR\n admin_server = FILE=/b\n",
-    )
-    .unwrap();
-    assert_eq!(
-        profile_values(&[a, b], "logging", "admin_server"),
-        ["FILE:/a", "FILE=/b"]
-    );
-    let _ = std::fs::remove_dir_all(&dir);
 }
