@@ -1334,6 +1334,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** TCP listeners take a connection when it arrives, as MIT's do, instead of
+  trying every 20 ms. Unit; timed live.
 - **kdc.** A principal's `max_life` of 0 stays 0 in the database, as in MIT (the realm's
   maximum still caps its tickets). Unit; settled live.
 - **kdc/admin.** A length-prefixed TCP message (KDC, kpasswd and kadm5 replies, kprop)

@@ -768,6 +768,30 @@ fn udp_loop(
     }
 }
 
+/// Wait until one of `listeners` has a connection waiting or `timeout` passes, so an accept
+/// loop takes a connection as it arrives and still looks at its stop flag between connections.
+/// MIT `setup_socket` (`lib/apputils/net-server.c:877-880`): a listener is in the event loop for
+/// read events, so a connection is accepted as soon as it arrives.
+pub fn wait_for_connection(listeners: &[&TcpListener], timeout: Duration) {
+    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+    use std::os::fd::AsFd as _;
+    let mut fds: Vec<PollFd<'_>> = listeners
+        .iter()
+        .map(|l| PollFd::new(l.as_fd(), PollFlags::POLLIN))
+        .collect();
+    // At least 1 ms: `ListenLimits::shutdown_poll` is the caller's, and a poll of 0 ms would return
+    // at once and spin the loop.
+    let ms = u16::try_from(timeout.as_millis())
+        .unwrap_or(u16::MAX)
+        .max(1);
+    let wait = PollTimeout::from(ms);
+    // A wait a signal cuts short only means the accept is tried sooner; a failing poll must not
+    // turn the loop into a spin.
+    if poll(&mut fds, wait).is_err() {
+        thread::sleep(timeout.min(Duration::from_millis(20)));
+    }
+}
+
 /// MIT `accept_stream_connection` (`net-server.c:1282-1283`): past the connection cap the
 /// oldest stream is dropped and the new connection is kept.
 /// A read error on an existing stream does not refuse the newcomer.
@@ -817,7 +841,7 @@ fn tcp_loop(
                 });
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(20));
+                wait_for_connection(&[&listener], limits.shutdown_poll);
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             Err(e) => {
@@ -1127,6 +1151,41 @@ mod tests {
         std::fs::rename(&away, &db).unwrap();
         lock.update_age();
         assert!(read_store(&store, |s| s.fetch(&id)).unwrap().is_some());
+    }
+
+    /// An idle accept loop waits out its stop-poll interval, and wakes when a connection arrives.
+    #[test]
+    fn wait_for_connection_wakes_on_a_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let addr = listener.local_addr().unwrap();
+        let start = std::time::Instant::now();
+        wait_for_connection(&[&listener], Duration::from_millis(30));
+        assert!(
+            start.elapsed() >= Duration::from_millis(25),
+            "no connection: the timeout"
+        );
+        // Below a millisecond the wait is still one, not a poll that returns at once.
+        let start = std::time::Instant::now();
+        for _ in 0..5 {
+            wait_for_connection(&[&listener], Duration::from_micros(100));
+        }
+        assert!(
+            start.elapsed() >= Duration::from_millis(5),
+            "a floor of 1 ms"
+        );
+        let client = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(50));
+            TcpStream::connect(addr).unwrap()
+        });
+        let start = std::time::Instant::now();
+        wait_for_connection(&[&listener], Duration::from_secs(10));
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "woke for the connection"
+        );
+        assert!(listener.accept().is_ok());
+        drop(client.join());
     }
 
     #[test]

@@ -87,7 +87,7 @@ pub use listen::{
     MAX_TCP_REQUEST, MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP,
     WHILE_DISPATCHING_UDP, bind_preferred, bind_rpc_listeners, bind_tcp_listeners,
     bind_udp_listeners, drop_privileges, serve, serve_all, serve_all_until, serve_until,
-    shared_dump, shared_store,
+    shared_dump, shared_store, wait_for_connection,
 };
 pub use mkey::{default_master_etype, master_etype, master_key_from_password, string_to_enctype};
 pub use osa::{

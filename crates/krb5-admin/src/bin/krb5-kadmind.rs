@@ -33,7 +33,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::net::{TcpListener, UdpSocket};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::os::fd::AsRawFd as _;
 use std::path::Path;
 use std::sync::Arc;
@@ -413,81 +413,104 @@ fn serve(
     // rather than spawning unbounded threads.
     let registry = krb5_kdc::ConnRegistry::new(krb5_kdc::MAX_TCP_WORKERS);
     while !signals.stop_requested() {
-        let mut idle = true;
-        for listener in listeners {
-            match listener.accept() {
-                Ok((stream, _)) => {
-                    idle = false;
-                    // A write timeout bounds a slow-reading client that would
-                    // otherwise pin a worker in write_all. No short read
-                    // timeout: MIT's net-server sets none on established kadmind
-                    // connections (SO_KEEPALIVE only) and defends slow-loris with
-                    // the connection cap + LRU eviction above; a 5 s read timeout
-                    // would break a legitimate interactive session that pauses
-                    // between commands.
-                    let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-                    let seq = registry.register(&stream);
-                    let registry_g = Arc::clone(&registry);
-                    let store = Arc::clone(shared);
-                    // The acceptor keys as the database holds them now, as MIT's KDB keytab
-                    // reads them for each context, under the database's lock: a lock that may
-                    // not be taken leaves the context no key, so it is not accepted.
-                    // MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:769-773`): the KDB keytab's lookup takes the shared lock, and fails when it cannot.
-                    let keys = {
-                        let mut g = store
-                            .write()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        match g.reload_if_stale() {
-                            Ok(()) => acceptor_keys(&g),
-                            Err(e) => {
-                                klog::syslog(
-                                    Severity::Err,
-                                    &format!("{e} while reloading database"),
-                                );
-                                Vec::new()
-                            }
-                        }
-                    };
-                    let acl = acl.clone();
-                    let realm = realm.to_owned();
-                    let rcache = rcache.clone();
-                    let fd = stream.as_raw_fd();
-                    thread::spawn(move || {
-                        let _guard = krb5_kdc::ConnGuard(registry_g, seq);
-                        let _closed = ClosingFd(fd);
-                        // Only an RPC that could not be handled is printed; a record or socket
-                        // error ends the connection silently.
-                        if let Err(e) = serve_kadm5_conn(store, acl, keys, realm, rcache, stream)
-                            && let Some(rpc) =
-                                e.get_ref().and_then(|x| x.downcast_ref::<Kadm5RpcError>())
-                        {
-                            eprintln!("kadm5: {rpc}");
-                        }
-                    });
+        accept_pass(listeners, |stream| {
+            // A write timeout bounds a slow-reading client that would
+            // otherwise pin a worker in write_all. No short read
+            // timeout: MIT's net-server sets none on established kadmind
+            // connections (SO_KEEPALIVE only) and defends slow-loris with
+            // the connection cap + LRU eviction above; a 5 s read timeout
+            // would break a legitimate interactive session that pauses
+            // between commands.
+            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
+            let seq = registry.register(&stream);
+            let registry_g = Arc::clone(&registry);
+            let store = Arc::clone(shared);
+            // The acceptor keys as the database holds them now, as MIT's KDB keytab
+            // reads them for each context, under the database's lock: a lock that may
+            // not be taken leaves the context no key, so it is not accepted.
+            // MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:769-773`): the KDB keytab's lookup takes the shared lock, and fails when it cannot.
+            let keys = {
+                let mut g = store
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                match g.reload_if_stale() {
+                    Ok(()) => acceptor_keys(&g),
+                    Err(e) => {
+                        klog::syslog(Severity::Err, &format!("{e} while reloading database"));
+                        Vec::new()
+                    }
                 }
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                    ) => {}
-                // MIT `accept_rpc_connection` (`lib/apputils/net-server.c:1527-1539`): the woken
-                // kadm5 listener is served by the RPC library's `rendezvous_request`.
-                // MIT `rendezvous_request` (`lib/rpc/svc_tcp.c:284-291`): an accept that fails
-                // other than with EINTR is dropped, and the loop goes on.
-                Err(e) => tracing::error!(
+            };
+            let acl = acl.clone();
+            let realm = realm.to_owned();
+            let rcache = rcache.clone();
+            let fd = stream.as_raw_fd();
+            thread::spawn(move || {
+                let _guard = krb5_kdc::ConnGuard(registry_g, seq);
+                let _closed = ClosingFd(fd);
+                // Only an RPC that could not be handled is printed; a record or socket
+                // error ends the connection silently.
+                if let Err(e) = serve_kadm5_conn(store, acl, keys, realm, rcache, stream)
+                    && let Some(rpc) = e.get_ref().and_then(|x| x.downcast_ref::<Kadm5RpcError>())
+                {
+                    eprintln!("kadm5: {rpc}");
+                }
+            });
+        });
+    }
+}
+
+/// One pass over kadmind's listeners: each connection taken goes to `take`, and an accept that
+/// fails is logged. A pass that took nothing waits for the next connection, or, after a failed
+/// accept, pauses instead: the connection that could not be taken (EMFILE, ENFILE, ENOBUFS,
+/// ENOMEM) keeps the listener readable, so the wait would return at once and the loop would spin.
+fn accept_pass(listeners: &[TcpListener], mut take: impl FnMut(TcpStream)) {
+    let mut idle = true;
+    let mut failed = false;
+    for listener in listeners {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                idle = false;
+                take(stream);
+            }
+            Err(e)
+                if matches!(
+                    e.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) => {}
+            // MIT `accept_rpc_connection` (`lib/apputils/net-server.c:1527-1539`): the woken
+            // kadm5 listener is served by the RPC library's `rendezvous_request`.
+            // MIT `rendezvous_request` (`lib/rpc/svc_tcp.c:284-291`): an accept that fails
+            // other than with EINTR is dropped, and the loop goes on.
+            Err(e) => {
+                failed = true;
+                tracing::error!(
                     event = krb5_log::events::ADMIN,
                     component = "krb5-admin",
                     outcome = "error",
                     error = %e,
                     detail = "kadm5 accept",
-                ),
+                );
             }
         }
-        if idle {
-            thread::sleep(Duration::from_millis(20));
-        }
+    }
+    if !idle {
+        return;
+    }
+    if failed {
+        thread::sleep(ACCEPT_FAILURE_PAUSE);
+    } else {
+        // The next connection is taken as it arrives; the stop flag is looked at between.
+        let waiting: Vec<&TcpListener> = listeners.iter().collect();
+        krb5_kdc::wait_for_connection(&waiting, STOP_POLL);
     }
 }
+
+/// How long an idle accept loop waits for a connection before it looks at its stop flag again.
+const STOP_POLL: Duration = Duration::from_millis(100);
+
+/// The pause after an accept that failed, as kpasswd's TCP listener pauses.
+const ACCEPT_FAILURE_PAUSE: Duration = Duration::from_millis(20);
 
 /// kadmind's RPC listeners and kpasswd's UDP / TCP sockets; a bind failure is logged and fatal.
 ///
@@ -620,6 +643,27 @@ fn load_acl(progname: &str, acl_file: Option<&Path>, realm: &str) -> Acl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An accept that keeps failing pauses each pass: the listener stays readable, so a wait for
+    /// the next connection would return at once and the loop would spin. A connected socket whose
+    /// peer has closed stands for such a listener: its accept fails (EINVAL) and poll finds it
+    /// readable at once.
+    #[test]
+    fn a_failing_accept_does_not_spin() {
+        let real = TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = TcpStream::connect(real.local_addr().unwrap()).unwrap();
+        drop(real.accept().unwrap());
+        let listener = TcpListener::from(std::os::fd::OwnedFd::from(client));
+        listener.set_nonblocking(true).unwrap();
+        let listeners = [listener];
+        let start = std::time::Instant::now();
+        let mut passes = 0;
+        while start.elapsed() < Duration::from_millis(200) {
+            accept_pass(&listeners, |_| panic!("no connection to take"));
+            passes += 1;
+        }
+        assert!(passes <= 20, "{passes} passes in 200 ms");
+    }
 
     #[test]
     fn progname_and_atoi() {

@@ -737,7 +737,7 @@ pub fn serve_kpasswd_tcp(
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(20));
+                krb5_kdc::wait_for_connection(&[&listener], Duration::from_millis(100));
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
             // MIT `accept_stream_connection` (`lib/apputils/net-server.c:1238-1241`): a failed

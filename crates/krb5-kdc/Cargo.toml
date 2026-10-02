@@ -25,7 +25,7 @@ krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
-nix = { workspace = true, features = ["fs", "process"] }
+nix = { workspace = true, features = ["fs", "poll", "process"] }
 regex-automata.workspace = true
 sha2.workspace = true
 signal-hook.workspace = true
