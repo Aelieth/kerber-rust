@@ -117,6 +117,11 @@ impl Io {
         let _ = self.err.write_all(text.as_bytes());
     }
 
+    /// stderr, the bytes as they are: what MIT echoes of input that is not UTF-8.
+    pub(crate) fn eprint_bytes(&mut self, bytes: &[u8]) {
+        let _ = self.err.write_all(bytes);
+    }
+
     /// MIT `extended_com_err_fn` (`kadmin.c:228-242`): `prog: message text` through `error`.
     pub(crate) fn com_err(&mut self, prog: &str, message: Option<&str>, text: &str) {
         match message {

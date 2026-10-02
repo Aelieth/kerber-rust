@@ -304,20 +304,61 @@ pub(crate) fn listen(s: &mut Session<'_>) {
             }
             LineRead::End => break,
         };
-        let line = String::from_utf8_lossy(&raw);
-        let line = match line.find(['\r', '\n']) {
-            Some(end) => &line[..end],
-            None => &line[..],
-        };
-        if let Some(Unrun::NotFound { word, .. }) = execute_line(s, line) {
-            s.io.com_err(
-                WHOAMI,
-                None,
-                &format!("Unknown request \"{word}\".  Type \"?\" for a request list."),
-            );
+        let end = raw
+            .iter()
+            .position(|&b| b == b'\r' || b == b'\n')
+            .unwrap_or(raw.len());
+        match std::str::from_utf8(&raw[..end]) {
+            Ok(line) => {
+                if let Some(Unrun::NotFound { word, .. }) = execute_line(s, line) {
+                    unknown_request(s.io, word.as_bytes());
+                }
+            }
+            Err(_) => not_utf8(s, &raw[..end]),
         }
         if std::mem::take(&mut s.io.interrupted) {
             s.io.print("\n");
         }
     }
+}
+
+/// MIT `ss_listen` (`listen.c:141-152`): `Unknown request "<word>".  Type "?" for a request
+/// list.`, the word byte for byte.
+fn unknown_request(io: &mut Io, word: &[u8]) {
+    let mut text = format!("{WHOAMI}: Unknown request \"").into_bytes();
+    text.extend_from_slice(word);
+    text.extend_from_slice(b"\".  Type \"?\" for a request list.\n");
+    io.eprint_bytes(&text);
+}
+
+/// A prompt line that is not UTF-8. MIT takes its bytes as they are, so `addprinc caf\xe9` makes
+/// a principal of them; this store keeps names as UTF-8, so a line naming a request is refused
+/// whole, and an unknown request is reported with its word byte for byte, as MIT reports it.
+fn not_utf8(s: &mut Session<'_>, raw: &[u8]) {
+    let bytes: String = raw.iter().copied().map(char::from).collect();
+    let trimmed = bytes.trim_start_matches([' ', '\t']);
+    if trimmed.starts_with('!') {
+        return;
+    }
+    let argv = match parse(trimmed) {
+        Ok(argv) => argv,
+        Err(msg) => {
+            s.io.com_err(WHOAMI, None, msg);
+            return;
+        }
+    };
+    let Some(first) = argv.first() else {
+        return;
+    };
+    if REQUESTS.iter().any(|r| r.names.contains(&first.as_str())) {
+        s.io.error(&format!(
+            "{WHOAMI}: Request line is not valid UTF-8; it was not run.\n"
+        ));
+        return;
+    }
+    let word: Vec<u8> = first
+        .chars()
+        .map(|c| u8::try_from(u32::from(c)).unwrap_or(b'?'))
+        .collect();
+    unknown_request(s.io, &word);
 }

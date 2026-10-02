@@ -37,9 +37,6 @@ const OPTSTRING: &str = "+x:r:p:knq:w:d:s:mc:t:e:ON";
 /// (a `-q` query that fails still exits 0, as MIT's does).
 #[must_use]
 pub fn kadmin_local_main() -> i32 {
-    let argv: Vec<String> = std::env::args_os()
-        .map(|a| a.to_string_lossy().into_owned())
-        .collect();
     let stdout = io::stdout();
     let line = stdout.is_terminal();
     let mut io = Io {
@@ -51,9 +48,33 @@ pub fn kadmin_local_main() -> i32 {
         exit_status: 0,
         interrupted: false,
     };
+    let Some(argv) = utf8_args(std::env::args_os(), &mut io) else {
+        return 1;
+    };
     let rc = run(&argv, &mut io);
     let _ = io.out.flush();
     rc
+}
+
+/// The arguments as UTF-8. MIT passes them on as bytes, so `-p caf\xe9/admin` stamps those bytes
+/// and `addprinc caf\xe9` makes a principal of them; this store keeps names as UTF-8, so an
+/// argument that is not stops `kadmin.local` before anything runs. The program name is only
+/// ever printed as the installed name, so it is taken as it comes.
+fn utf8_args(args: impl Iterator<Item = std::ffi::OsString>, io: &mut Io) -> Option<Vec<String>> {
+    let mut argv = Vec::new();
+    for (i, arg) in args.enumerate() {
+        match arg.into_string() {
+            Ok(a) => argv.push(a),
+            Err(a) if i == 0 => argv.push(a.to_string_lossy().into_owned()),
+            Err(_) => {
+                io.error(&format!(
+                    "{WHOAMI}: argument {i} is not valid UTF-8; nothing was run\n"
+                ));
+                return None;
+            }
+        }
+    }
+    Some(argv)
 }
 
 /// An open database and the identity changes are recorded under.

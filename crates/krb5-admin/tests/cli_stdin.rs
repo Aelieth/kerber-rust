@@ -379,6 +379,27 @@ fn kadmin_local_sigint_at_a_password_prompt_is_password_read_interrupted() {
     );
 }
 
+/// An argument that is not UTF-8 stops `kadmin.local` before it opens the database: this store
+/// keeps names as UTF-8.
+#[test]
+fn kadmin_local_refuses_an_argument_that_is_not_utf8() {
+    use std::os::unix::ffi::OsStrExt as _;
+    let realm = Realm::new("kadmin-not-utf8");
+    let out = realm
+        .cmd()
+        .arg("-q")
+        .arg(std::ffi::OsStr::from_bytes(b"addprinc -randkey caf\xe9"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(text(&out.stdout), "");
+    assert_eq!(
+        text(&out.stderr),
+        "kadmin.local: argument 2 is not valid UTF-8; nothing was run\n"
+    );
+}
+
 /// MIT's prompt loop reads a directory stdin as the end of input (`fgets` fails): no spin, exit 0.
 #[test]
 fn kadmin_local_directory_stdin_terminates() {

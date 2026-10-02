@@ -26,7 +26,11 @@ impl Write for Capture {
 
 impl Capture {
     fn take(&self) -> String {
-        String::from_utf8_lossy(&std::mem::take(&mut *self.0.borrow_mut())).into_owned()
+        String::from_utf8_lossy(&self.take_bytes()).into_owned()
+    }
+
+    fn take_bytes(&self) -> Vec<u8> {
+        std::mem::take(&mut *self.0.borrow_mut())
     }
 }
 
@@ -174,6 +178,12 @@ impl Rig {
 
     /// The interactive loop over the rig's input; (stdout, stderr).
     fn listen(&mut self) -> (String, String) {
+        let (out, err) = self.listen_bytes();
+        (out, String::from_utf8_lossy(&err).into_owned())
+    }
+
+    /// [`Self::listen`] with stderr as the bytes written.
+    fn listen_bytes(&mut self) -> (String, Vec<u8>) {
         let mut s = Session {
             io: &mut self.io,
             h: self.h.take().unwrap(),
@@ -183,7 +193,7 @@ impl Rig {
         ss::listen(&mut s);
         self.h = Some(s.h);
         let _ = self.io.out.flush();
-        (self.out.take(), self.err.take())
+        (self.out.take(), self.err.take_bytes())
     }
 
     fn store(&self) -> &PrincipalStore {
@@ -794,14 +804,29 @@ fn listen_prompts_and_reports_unknown_requests() {
 fn listen_reads_a_line_that_is_not_utf8() {
     let (store, _) = bootstrap_documented().unwrap();
     let mut r = Rig::with_store(store, b"\xff\nlistprincs us*\nq\n");
-    let (out, err) = r.listen();
+    let (out, err) = r.listen_bytes();
     assert_eq!(
         out,
         "kadmin.local:  kadmin.local:  user@KERBER.TEST\nkadmin.local:  "
     );
-    assert!(err.starts_with("kadmin.local: Unknown request \""), "{err}");
-    assert_eq!(err.lines().count(), 1, "{err}");
+    assert_eq!(
+        err,
+        b"kadmin.local: Unknown request \"\xff\".  Type \"?\" for a request list.\n"
+    );
     assert_eq!(r.io.exit_status, 0);
+}
+
+#[test]
+fn a_request_line_that_is_not_utf8_is_refused_whole() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let mut r = Rig::with_store(store, b"addprinc -randkey caf\xe9\nq\n");
+    let (out, err) = r.listen();
+    assert_eq!(out, "kadmin.local:  kadmin.local:  ");
+    assert_eq!(
+        err,
+        "kadmin.local: Request line is not valid UTF-8; it was not run.\n"
+    );
+    assert!(r.store().ids().iter().all(|id| !id.starts_with("caf")));
 }
 
 #[test]

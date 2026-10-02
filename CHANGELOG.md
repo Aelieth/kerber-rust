@@ -742,6 +742,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** `kadmin.local` refuses a request line or an argument that is not UTF-8 instead of
+  turning bytes into U+FFFD; an unknown request is echoed byte for byte, as MIT. Units.
 - **admin.** `krb5-ktutil` prints a failed command as MIT's does (`rkt: must specify keytab to
   read`, `ktutil: Unknown request …`), reads `addent`'s options as `ktutil_add_entry` does, and
   its command loop exits 0 whatever it ran, as MIT's. Unit; live.
