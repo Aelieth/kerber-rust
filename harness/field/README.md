@@ -213,7 +213,7 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `install-check.sh` | On a VM after `make install`: every program the install manifest lists is byte-identical to the checkout's build (`cmp`, the names paired by its `dist/install.sh`) |
 | `docblocks.py` | A doc section's shell blocks, by heading, run one top-level command at a time in one session, each with its exit status (a here-document stays whole) |
 | `ktrace.sh` | An MIT client command with its `KRB5_TRACE`, and an `answers:` line naming the transports the replies came over |
-| `leg.sh` | A scenario's leg from `baseline.env`'s `MIT_*` or `RUST_*` set: `legset` (secret file names), `resetvm`, `kdcis` (kdc runs the leg's KDC: MIT's packaged binaries, or the install manifest and the ref's build), `servicesready`, `ktcheck` (a keytab against the KDC's keys), `countlast` |
+| `leg.sh` | A scenario's leg from `baseline.env`'s `MIT_*` or `RUST_*` set: `legset` (secret file names), `resetvm`, `kdcis` (kdc runs the leg's KDC: MIT's packaged binaries, or the install manifest and the ref's build), `servicesready`, `ktcheck` (a keytab against the KDC's keys), `tgtline` / `tktcheck` (a ticket's life, renewable span and flags from `klist -f`), `countlast` |
 | `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
 | `nfs-probe.sh`, `spnego-probe.sh`, `check_spnego.lab.sh` | S2's probes, run in throwaway containers on services (image `localhost/s2-nfs-probe:f43`, own network namespace): the kit's NFS client set-up and alice's, root's and bob's NFS access; the kit's `check_spnego` (its helper block and function verbatim from kit commit `e9f3325`, only the four SSO constants set to the lab's) and the two requests by hand |
 | `kc-events.sh` | Keycloak's events since a time, read-only through the admin API from the host (the admin password on stdin, the token through a pipe) |
@@ -224,6 +224,7 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | --- | --- | --- | --- | --- | --- |
 | `upgrade` | nightly, weekly | mit, rust | kdc: `f4-mit` / `rust-field-p12` (reset; the rust leg leaves it on the ref's install); client2: `rust-ssh` (rust leg, reset) | f-UP1 | under 1 / about 3.5 min (the build about 2) |
 | `services` | nightly, weekly | mit, rust | services: `f4-mit` / `services-rust` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
+| `nfs-client` | nightly, weekly | mit, rust | client2: `f4-mit` / `rust-ssh`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 
 **The MIT baseline `f4-mit`** (kdc, client1, client2, services) was set up once by
 hand on 2026-10-02 (record `~/kerber-lab/runs/hand-f4-mit-20261002T143502Z/`):
@@ -299,6 +300,15 @@ would remove it.
   KDC's `ISSUE` lines for `nfs/` and `HTTP/`. Recorded: the probes' TGS
   transport and the `PREAUTH_REQUIRED` padata (from the kept capture). Not here:
   S2's decode of the RPCSEC_GSS replies and call counts.
+- **`nfs-client.sh`** (R4 + R5, client2's legs): root's first touch mounts the
+  three shares by the machine credential, and root is squashed with R4's error
+  texts; alice's `kinit` into the kit's `FILE:/tmp/krb5cc_10001` (owner, label,
+  FRIA, 24 h, renewable 7 d), her krb5p home and krb5i shares, 10001 on both
+  sides; bob refused with R4's texts; R5's `check_spnego` without and with a
+  ticket, the two requests by hand, Keycloak's `LOGIN` events from client2; the
+  KDC's lines for client2; no SELinux denial on client2 but the kit's known
+  `nfsidmap-client` one. Recorded: alice's AS preauth types and AS-REP size. Not
+  here: R4's PROOF 3 (ticket expiry, a clock window) and client1's legs (GUI).
 
 ## What `up` builds
 

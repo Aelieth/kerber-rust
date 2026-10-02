@@ -1,0 +1,7 @@
+# harness/field/scenarios/nfs-client.expect: where nfs-client.sh's rust leg is known to differ from its MIT leg, by
+# check name (the INFO observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN;
+# anything else that differs is a finding. Each line names the hand record that shows the difference (in the archive
+# of field records) and what would remove it.
+# check	known difference (rust leg vs MIT)	record	removed by
+obs.as.preauth	alice's kinit: PREAUTH_REQUIRED e-data {136,19,2,133}, the client falls back to encrypted timestamp; MIT offers SPAKE first, {136,19,151,2,133} (edwards25519), one extra round trip	f-R4 README, the AS row (K); f-R5; f-R4-mit	open item "SPAKE edwards25519" (no package yet)
+obs.as.rep.bytes	alice's AS-REP about 1.5 kB where MIT's is about 0.8 kB: the TGT carries the MS-PAC set {1,10,12,16,17,18,19,6,7} (LOGON_INFO 436 B); MIT db2 issues {10,16,6,7,19}	f-R2 README, the AS-REP sizes row (1511 B vs 833 B); f-R4 README, the INIT token row; f-L2-rust F2	the user's PAC decision at the 1.1 cut (open item "PAC size")

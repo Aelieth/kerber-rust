@@ -13,6 +13,9 @@
 #   ktcheck <vm> <keytab> <name>   the keytab's newest kvno and enctypes = the KDC's getprinc (check keytab.<name>);
 #                          services has no klist, so there it runs in the S2 probe image (label separation off,
 #                          the file bind-mounted read-only, no relabel)
+#   tgtline <ERE>          from the last klist -f output, the first ticket whose principal matches:
+#                          "<principal>: <n> s life, <n> s renewable, flags <F>" (renewable = renew-until - start)
+#   tktcheck <name> <ERE> <want ERE>   that tgtline graded: PASS when it matches <want ERE> (and the command exited 0)
 #   countlast <name> <ERE> <n>     graded like checklast, but exactly n lines of the last output must match
 case ${LEG:-} in
     mit) LEGP=MIT ;;
@@ -79,9 +82,26 @@ ktcheck() {
         "python3 -B $(printf '%q' "$FIELD_LIB/kt-vs-kdc.py") $(printf '%q' "$STATE/kt.$name") $(printf '%q' "$STATE/gp.$name")"
 }
 
+tktcheck() {
+    local l res=FAIL
+    l=$(tgtline "$2")
+    if [ "$LAST_RC" = 0 ] && [[ $l =~ $3 ]]; then res=PASS; fi
+    _checkrow "$1" "$res" "$3" "$LAST_RC" "$l"
+}
+
 countlast() {
     local n res=FAIL
     n=$(grep -cE -- "$2" "$LAST_OUT" || true)
     if [ "$LAST_RC" = 0 ] && [ "$n" = "$3" ]; then res=PASS; fi
     _checkrow "$1" "$res" "$3 lines: $2" "$LAST_RC" "$n lines match"
+}
+
+tgtline() {
+    TZ=UTC gawk -v rx="$1" '
+        function t(d, h) { sub(/,$/, "", h); split(d, a, "/"); split(h, b, ":"); return mktime(a[3] " " a[1] " " a[2] " " b[1] " " b[2] " " b[3]) }
+        !p && $5 ~ rx && $1 ~ /^[0-9][0-9]\// { s = t($1, $2); e = t($3, $4); r = s; p = $5; next }
+        p && !done && /renew until/ { r = t($3, $4) }
+        p && !done && /Flags:/ { f = $NF; done = 1 }
+        END { if (p) printf "%s: %d s life, %d s renewable, flags %s\n", p, e - s, r - s, f; else print "no ticket matches " rx }
+    ' "$LAST_OUT"
 }
