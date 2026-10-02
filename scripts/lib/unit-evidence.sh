@@ -54,7 +54,7 @@ unit_green() {
     echo "==== unit_green $name filter=$filter ===="
     local out rc
     set +e
-    out="$(cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks -E "test($filter)" 2>&1)"
+    out="$(cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks -E "test($filter)" 2>&1)"
     rc=$?
     set -e
     printf '%s\n' "$out"

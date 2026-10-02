@@ -2728,6 +2728,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **ci.** CI's test job, `full-test`, `make test`, the checkpoint and the unit-evidence tools also
+  turn on `krb5-client/test-hooks`, so the client's gate-option units run there; CI's test job and
+  `make test` then run every test once more without features, so the release-only units run too.
 - **crypto/protocol/types.** The zeroize-on-drop rows of `docs/security.md` are proved by unit tests
   that see the wiped buffer through a `cfg(test)` seam, not by source searches; `zeroize_ct.rs` keeps
   its `ct_eq` searches as `constant_time.rs`; `ProtocolKey`'s missing `==` is a compile-time check.

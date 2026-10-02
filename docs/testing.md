@@ -799,12 +799,16 @@ not `dlopen` ([docs/plugins.md](plugins.md)).
 ### Test-only inputs (`test-hooks`)
 
 The gates, CI, `make safety` and `scripts/checkpoint.sh` build with
-`--features krb5-kdc/test-hooks,krb5-admin/test-hooks` (the gates through
-`scripts/lib/build-bins.sh`, whose one cargo invocation also carries the client
-tools and adds `krb5-client/test-hooks`); `krb5-kdc/test-hooks` turns on
-`krb5-config/test-hooks` and `krb5-protocol/test-hooks` for every binary of that
-build. Only such a build reads these inputs; a release build ignores them, as
-MIT's tools do:
+`--features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks`
+(the gates through `scripts/lib/build-bins.sh`, whose one cargo invocation also
+carries the client tools); `krb5-kdc/test-hooks` turns on `krb5-config/test-hooks`
+and `krb5-protocol/test-hooks` for every binary of that build. Only such a build
+reads these inputs; a release build ignores them, as MIT's tools do. CI's test
+job and `make test` then run the workspace's tests once more without features
+(`cargo nextest run --workspace --profile ci --locked`), so the release-only units
+run too: a release `kvno` and `kinit` refusing the gates' options, `kinit -S`
+asking the AS, `a_release_build_reads_no_path_override`, and every test's release
+branch.
 
 | Input | Read by | A release build instead |
 | --- | --- | --- |

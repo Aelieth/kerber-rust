@@ -60,7 +60,7 @@ run_nextest() {
         bash -c "$KERBER_CHECKPOINT_NEXTEST"
     else
         KRB5_CONFIG="$ROOT/harness/nextest-krb5.conf" cargo nextest run --workspace --profile ci \
-            --features krb5-kdc/test-hooks,krb5-admin/test-hooks
+            --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
     fi
 }
 run_policy() {

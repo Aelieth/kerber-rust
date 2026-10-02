@@ -62,7 +62,7 @@ def test_hooks_features(root: pathlib.Path) -> list[str]:
     """`--features krb5-kdc/test-hooks,…` for the crates whose manifest under `root` defines the
     feature; nothing for a tree from before it (a snapshot of an older root)."""
     crates = []
-    for crate in ("krb5-kdc", "krb5-admin"):
+    for crate in ("krb5-kdc", "krb5-admin", "krb5-client"):
         manifest = root / "crates" / crate / "Cargo.toml"
         text = manifest.read_text(encoding="utf-8") if manifest.is_file() else ""
         if re.search(r"(?m)^test-hooks\s*=", text):

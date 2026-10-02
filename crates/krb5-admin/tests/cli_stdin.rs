@@ -114,15 +114,23 @@ impl Realm {
             "[libdefaults]\n default_realm = KERBER.TEST\n",
         )
         .unwrap();
+        // The database and stash as a release build finds them: named in the realm's stanza.
+        std::fs::write(
+            dir.join("kdc.conf"),
+            format!(
+                "[realms]\n KERBER.TEST = {{\n  database_name = {}\n  key_stash_file = {}\n }}\n",
+                dir.join("principal").display(),
+                dir.join("stash").display()
+            ),
+        )
+        .unwrap();
         Self { dir }
     }
 
     fn cmd(&self) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_krb5-kadmin-local"));
-        cmd.env("KRB5_KDC_DB", self.dir.join("principal"))
-            .env("KRB5_KDC_STASH", self.dir.join("stash"))
-            .env("KRB5_CONFIG", self.dir.join("krb5.conf"))
-            .env("KRB5_KDC_PROFILE", self.dir.join("no-kdc.conf"))
+        cmd.env("KRB5_CONFIG", self.dir.join("krb5.conf"))
+            .env("KRB5_KDC_PROFILE", self.dir.join("kdc.conf"))
             .env(
                 "KRB5CCNAME",
                 format!("FILE:{}", self.dir.join("no-cc").display()),
@@ -560,10 +568,8 @@ fn kadmin_local_directory_stdin_terminates() {
     let out = dir_stdin(
         bin,
         &[
-            ("KRB5_KDC_DB", realm.dir.join("principal")),
-            ("KRB5_KDC_STASH", realm.dir.join("stash")),
             ("KRB5_CONFIG", realm.dir.join("krb5.conf")),
-            ("KRB5_KDC_PROFILE", realm.dir.join("no-kdc.conf")),
+            ("KRB5_KDC_PROFILE", realm.dir.join("kdc.conf")),
         ],
     );
     assert_ne!(

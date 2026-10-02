@@ -43,15 +43,21 @@ jobs:
         with:
           tool: nextest
       - name: build tests
-        run: cargo nextest run --workspace --profile ci --no-run --features krb5-kdc/test-hooks,krb5-admin/test-hooks
+        run: cargo nextest run --workspace --profile ci --no-run --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
       - name: test
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
-        run: cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks
+        run: cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
+      - name: test (release build, no features)
+        # The release-only units: a build without the test-hooks features, as `make build` makes.
+        timeout-minutes: 10
+        env:
+          KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
+        run: cargo nextest run --workspace --profile ci --locked
       - name: doctests
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
-        run: cargo test --workspace --doc --features krb5-kdc/test-hooks,krb5-admin/test-hooks
+        run: cargo test --workspace --doc --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
       - name: Annotate nextest failures
         # Job logs are private; the annotations are public and are what
         # scripts/ci-status.py reads. One ::error per failed testcase.
@@ -113,7 +119,7 @@ jobs:
         with:
           toolchain: "1.95"
       - name: MSRV 1.95 build (locked)
-        run: cargo build --workspace --all-targets --locked --features krb5-kdc/test-hooks,krb5-admin/test-hooks
+        run: cargo build --workspace --all-targets --locked --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
 
   audit:
     runs-on: ubuntu-latest
