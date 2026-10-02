@@ -409,6 +409,8 @@ fn kdc_listen_list_is_served_on_every_address_like_mit() {
     let udp = bind_udp_listeners(&conf.kdc_udp_listeners().unwrap()).unwrap();
     let tcp = bind_tcp_listeners(&conf.kdc_tcp_listeners().unwrap()).unwrap();
     assert_eq!((udp.len(), tcp.len()), (2, 2));
+    // MIT `setup_socket` (`lib/apputils/net-server.c:861-875`): only a wildcard socket asks for pktinfo.
+    assert!(!udp.iter().any(asks_pktinfo));
     let udp_addrs: Vec<_> = udp.iter().map(|s| s.local_addr().unwrap()).collect();
     let tcp_addrs: Vec<_> = tcp.iter().map(|s| s.local_addr().unwrap()).collect();
     let (store, _) = bootstrap_documented().unwrap();
@@ -463,6 +465,16 @@ fn assert_mit_socket(sock: &impl std::os::fd::AsFd, local: std::net::SocketAddr)
     }
 }
 
+/// A UDP socket asks for each datagram's destination (`IP_PKTINFO` / `IPV6_RECVPKTINFO`).
+fn asks_pktinfo(sock: &UdpSocket) -> bool {
+    use nix::sys::socket::{getsockopt, sockopt};
+    if sock.local_addr().unwrap().is_ipv4() {
+        getsockopt(sock, sockopt::Ipv4PacketInfo).unwrap()
+    } else {
+        getsockopt(sock, sockopt::Ipv6RecvPacketInfo).unwrap()
+    }
+}
+
 #[test]
 fn the_wildcard_is_an_ipv4_and_an_ipv6_only_socket_on_one_port_like_mit() {
     // MIT `setup_addresses` (`lib/apputils/net-server.c:1011-1036`): both addresses of the wildcard are set up.
@@ -476,6 +488,7 @@ fn the_wildcard_is_an_ipv4_and_an_ipv6_only_socket_on_one_port_like_mit() {
     for (s, a) in udp.iter().zip(&addrs) {
         assert!(a.ip().is_unspecified() && a.port() == port, "{a}");
         assert_mit_socket(s, *a);
+        assert!(asks_pktinfo(s), "{a}: pktinfo");
     }
     for bind in [bind_tcp_listeners, bind_rpc_listeners] {
         let (port, tcp) = bind_wildcard(bind);
@@ -554,6 +567,13 @@ fn listener_setup_logs_mits_lines() {
         let line = format!("(debug): Setting up {kind} socket for address 0.0.0.0:{port}\n");
         assert!(text.contains(&line), "{line}in\n{text}");
     }
+    for a in udp.iter().map(|s| s.local_addr().unwrap()) {
+        let line = format!("(debug): Setting pktinfo on socket {a}\n");
+        assert!(text.contains(&line), "{line}in\n{text}");
+    }
+    for port in [tcp_port, rpc_port] {
+        assert!(!text.contains(&format!("pktinfo on socket 0.0.0.0:{port}\n")));
+    }
     let v6_fds: Vec<i32> = udp
         .iter()
         .map(|s| (s.local_addr().unwrap(), s.as_raw_fd()))
@@ -577,4 +597,63 @@ fn listener_setup_logs_mits_lines() {
     }
     drop(held);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One AS-REQ without preauth over `sock`, sent to `to` or (`None`) to the address `sock` is
+/// connected to; the reply and the address it came from.
+fn udp_exchange(
+    sock: &UdpSocket,
+    to: Option<std::net::SocketAddr>,
+    nonce: u32,
+) -> Option<(krb5_types::KrbError, std::net::SocketAddr)> {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let bytes = encode(&as_req(cname, TEST_REALM, nonce, None).unwrap()).unwrap();
+    sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    match to {
+        Some(a) => sock.send_to(&bytes, a).unwrap(),
+        None => sock.send(&bytes).unwrap(),
+    };
+    let mut buf = [0u8; 4096];
+    let (n, src) = sock.recv_from(&mut buf).ok()?;
+    Some((decode(&buf[..n]).unwrap(), src))
+}
+
+#[test]
+fn a_udp_reply_leaves_from_the_address_the_request_was_sent_to_like_mit() {
+    // MIT `send_to_from` (`lib/apputils/udppktinfo.c:443-474`): a wildcard socket's reply leaves from the request's destination.
+    // A client whose UDP socket is connected to that address, as MIT's is, takes no reply from any other.
+    use krb5_kdc::{bind_udp_listeners, serve_all};
+    let mut entries = vec![ListenAddr {
+        host: Some("0.0.0.0".into()),
+        port: 0,
+    }];
+    if ipv6_host() {
+        entries.push(ListenAddr {
+            host: Some("::".into()),
+            port: 0,
+        });
+    }
+    let udp = bind_udp_listeners(&entries).unwrap();
+    let addrs: Vec<_> = udp.iter().map(|s| s.local_addr().unwrap()).collect();
+    let (store, _) = bootstrap_documented().unwrap();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve_all(store, udp, Vec::new());
+    });
+    let v4 = std::net::SocketAddr::from(([127, 0, 0, 2], addrs[0].port()));
+    let plain = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let (e, src) = udp_exchange(&plain, Some(v4), 11).expect("a reply");
+    assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
+    assert_eq!(src, v4, "the reply's source");
+    let connected = UdpSocket::bind("127.0.0.1:0").unwrap();
+    connected.connect(v4).unwrap();
+    let (e, _) = udp_exchange(&connected, None, 12).expect("the connected client's reply");
+    assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
+    if let Some(a) = addrs.get(1) {
+        let v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, a.port()));
+        let connected = UdpSocket::bind("[::1]:0").unwrap();
+        connected.connect(v6).unwrap();
+        let (e, src) = udp_exchange(&connected, None, 13).expect("the IPv6 client's reply");
+        assert_eq!((e.error_code, src), (err::PREAUTH_REQUIRED, v6));
+    }
 }

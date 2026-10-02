@@ -623,12 +623,13 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Serve kpasswd (RFC 3244) on UDP until shutdown.
+/// Serve kpasswd (RFC 3244) on UDP until shutdown. A reply leaves from the address its request
+/// was sent to, as the KDC's do ([`krb5_kdc::recv_from_to`]).
 ///
 /// # Errors
 ///
-/// The `io::Error` when setting the read timeout fails; a failed receive and a failed request
-/// are logged, not returned.
+/// The `io::Error` when setting the read timeout fails; a failed receive, send or request is
+/// logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_udp(
     store: SharedStore,
@@ -640,19 +641,21 @@ pub fn serve_kpasswd_udp(
     sock.set_read_timeout(Some(Duration::from_millis(200)))?;
     let mut buf = vec![0u8; 65_535];
     while !shutdown.load(Ordering::Relaxed) {
-        match sock.recv_from(&mut buf) {
-            Ok((n, peer)) => {
+        match krb5_kdc::recv_from_to(&sock, &mut buf) {
+            // MIT `process_packet` (`lib/apputils/net-server.c:1169-1172`): an empty datagram is dropped before kpasswd sees it.
+            Ok(d) if d.len == 0 => {}
+            Ok(d) => {
                 let replay = ReplayCache::new();
                 match handle_kpasswd_from(
                     &store,
                     &acl,
                     &service_key,
                     &replay,
-                    &buf[..n],
-                    &client_addr(peer.ip()),
+                    &buf[..d.len],
+                    &client_addr(d.from.ip()),
                 ) {
                     Ok(rep) => {
-                        let _ = sock.send_to(&rep, peer);
+                        let _ = krb5_kdc::send_udp_reply(&sock, &rep, &d);
                     }
                     Err(e) => tracing::error!(
                         event = krb5_log::events::ADMIN,
@@ -798,4 +801,71 @@ pub fn kprop_recv(
         .read_exact(&mut blob)
         .map_err(|e| Error::Inner(e.to_string()))?;
     crate::kprop::kprop_load_bytes(&blob, master_password)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{SocketAddr, UdpSocket};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    use krb5_config::listen::ListenAddr;
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::testrealm::bootstrap_documented;
+
+    use super::{encode_kpasswd_req, serve_kpasswd_udp};
+
+    /// A request whose AP-REQ does not decode: kpasswd answers it with a framed KRB-ERROR.
+    fn exchange(sock: &UdpSocket, to: Option<SocketAddr>) -> Option<(Vec<u8>, SocketAddr)> {
+        let req = encode_kpasswd_req(&[0, 1, 2, 3], b"x");
+        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        match to {
+            Some(a) => sock.send_to(&req, a).unwrap(),
+            None => sock.send(&req).unwrap(),
+        };
+        let mut buf = vec![0u8; 4096];
+        let (n, src) = sock.recv_from(&mut buf).ok()?;
+        buf.truncate(n);
+        Some((buf, src))
+    }
+
+    #[test]
+    fn a_kpasswd_reply_leaves_from_the_address_the_request_was_sent_to() {
+        // MIT `send_to_from` (`lib/apputils/udppktinfo.c:443-474`): kpasswd's reply on a wildcard socket leaves from the request's destination.
+        let (store, acl) = bootstrap_documented().unwrap();
+        let key = store
+            .get_name(&kadmin_changepw())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let any = ListenAddr {
+            host: Some("0.0.0.0".into()),
+            port: 0,
+        };
+        let sock = krb5_kdc::bind_udp_listeners(&[any])
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let to = SocketAddr::from(([127, 0, 0, 2], sock.local_addr().unwrap().port()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (shared, flag) = (krb5_kdc::shared_dump(store), Arc::clone(&stop));
+        let server = thread::spawn(move || serve_kpasswd_udp(shared, acl, key, sock, flag));
+        let plain = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (rep, src) = exchange(&plain, Some(to)).expect("a reply");
+        assert_eq!(src, to, "the reply's source");
+        assert!(rep.len() > 6 && rep[4..6] == [0, 0], "a framed KRB-ERROR");
+        let connected = UdpSocket::bind("127.0.0.1:0").unwrap();
+        connected.connect(to).unwrap();
+        assert!(
+            exchange(&connected, None).is_some(),
+            "the connected client's reply"
+        );
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap().unwrap();
+    }
 }

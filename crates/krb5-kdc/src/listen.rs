@@ -5,8 +5,10 @@
 //! listener evicts the oldest live stream and keeps the new connection.
 
 use std::collections::BTreeMap;
-use std::io::{self, Read};
-use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::io::{self, IoSlice, IoSliceMut, Read};
+use std::net::{
+    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket,
+};
 use std::os::fd::{AsRawFd as _, OwnedFd, RawFd};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -23,8 +25,8 @@ use krb5_config::listen::ListenAddr;
 use krb5_log::klog::{self, Severity, os_error_text};
 use krb5_types::HostAddress;
 use nix::sys::socket::{
-    AddressFamily, Backlog, SockFlag, SockType, SockaddrStorage, bind, listen, setsockopt, socket,
-    sockopt,
+    AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag, SockType,
+    SockaddrStorage, bind, listen, recvmsg, sendmsg, setsockopt, socket, sockopt,
 };
 
 /// MIT `process_packet_response` (`net-server.c:1101-1105`): a dispatch error is logged
@@ -474,8 +476,10 @@ fn bind_listeners(addrs: &[ListenAddr], kind: BindType) -> io::Result<Vec<OwnedF
 
 /// One listener on `addr`, made as MIT's net-server makes it: created and bound by
 /// [`create_server_socket`], then a TCP listener listens with MIT's backlog and does not linger,
-/// and an RPC listener listens with the RPC library's backlog.
+/// an RPC listener listens with the RPC library's backlog, and a UDP socket on a wildcard address
+/// asks for each datagram's destination, which its reply leaves from ([`send_to_from`]).
 /// MIT `setup_socket` (`lib/apputils/net-server.c:813-859`): the setup is logged at debug, then the socket is created and a stream one listens, each failure logged and fatal.
+/// MIT `setup_socket` (`lib/apputils/net-server.c:861-875`): a UDP socket on a wildcard address asks for pktinfo; without it the socket is kept and the reason logged.
 /// MIT `svctcp_create` (`lib/rpc/svc_tcp.c:178-178`): an RPC listener that cannot listen is no RPC service.
 fn setup_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd> {
     klog::syslog(
@@ -484,6 +488,26 @@ fn setup_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd> {
     );
     let fd = create_server_socket(addr, kind)?;
     match kind {
+        BindType::Udp if addr.ip().is_unspecified() => {
+            klog::syslog(
+                Severity::Debug,
+                &format!("Setting pktinfo on socket {addr}"),
+            );
+            if let Err(e) = set_pktinfo(&fd, addr) {
+                com_err(
+                    &e.into(),
+                    &format!(
+                        "Cannot request packet info for UDP socket address {addr} port {}",
+                        addr.port()
+                    ),
+                );
+                klog::syslog(
+                    Severity::Info,
+                    "System does not support pktinfo yet binding to a wildcard address.  \
+                     Packets are not guaranteed to return on the received address.",
+                );
+            }
+        }
         BindType::Udp => {}
         BindType::Tcp => {
             listen(&fd, Backlog::new(TCP_LISTEN_BACKLOG)?)
@@ -535,6 +559,168 @@ fn create_server_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd>
     bind(n, &SockaddrStorage::from(addr))
         .map_err(|e| failed(e, &format!("Cannot bind server socket on {addr}")))?;
     Ok(fd)
+}
+
+/// MIT `set_pktinfo` (`lib/apputils/udppktinfo.c:123-133`): `IP_PKTINFO` on an IPv4 socket, `IPV6_RECVPKTINFO` on an IPv6 one.
+fn set_pktinfo(fd: &OwnedFd, addr: SocketAddr) -> nix::Result<()> {
+    if addr.is_ipv4() {
+        setsockopt(fd, sockopt::Ipv4PacketInfo, &true)
+    } else {
+        setsockopt(fd, sockopt::Ipv6RecvPacketInfo, &true)
+    }
+}
+
+/// Where a datagram was sent: the local address, and for IPv6 the interface it came in on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PktInfo {
+    /// The address the datagram was sent to.
+    pub addr: IpAddr,
+    /// The interface an IPv6 datagram came in on; 0 for IPv4.
+    pub ifindex: u32,
+}
+
+/// One datagram as [`recv_from_to`] read it.
+#[derive(Clone, Copy, Debug)]
+pub struct Datagram {
+    /// Its length, at the start of the buffer.
+    pub len: usize,
+    /// The sender.
+    pub from: SocketAddr,
+    /// Where it was sent, when the socket is bound to a wildcard address and the system says.
+    pub to: Option<PktInfo>,
+}
+
+/// Read one datagram from `sock` into `buf`, with the address it was sent to when `sock` is
+/// bound to a wildcard address, so the reply can leave from it ([`send_udp_reply`]).
+/// MIT `recv_from_to` (`lib/apputils/udppktinfo.c:283-325`): a socket bound to a wildcard address is read with its pktinfo; any other socket, or a datagram without pktinfo, has no destination.
+///
+/// # Errors
+///
+/// The receive's `io::Error` (`WouldBlock` when the socket's read timeout passes), and
+/// `io::ErrorKind::InvalidData` for a datagram whose sender is not an IP address.
+pub fn recv_from_to(sock: &UdpSocket, buf: &mut [u8]) -> io::Result<Datagram> {
+    if !sock.local_addr()?.ip().is_unspecified() {
+        let (len, from) = sock.recv_from(buf)?;
+        return Ok(Datagram {
+            len,
+            from,
+            to: None,
+        });
+    }
+    let mut iov = [IoSliceMut::new(buf)];
+    let mut cmsg = nix::cmsg_space!(nix::libc::in6_pktinfo);
+    let msg = recvmsg::<SockaddrStorage>(
+        sock.as_raw_fd(),
+        &mut iov,
+        Some(&mut cmsg),
+        MsgFlags::empty(),
+    )?;
+    let from =
+        msg.address.as_ref().and_then(inet_addr).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidData, "datagram from no IP address")
+        })?;
+    let to = msg
+        .cmsgs()
+        .ok()
+        .into_iter()
+        .flatten()
+        .find_map(|c| match c {
+            ControlMessageOwned::Ipv4PacketInfo(info) => Some(PktInfo {
+                addr: Ipv4Addr::from(info.ipi_addr.s_addr.to_ne_bytes()).into(),
+                ifindex: 0,
+            }),
+            ControlMessageOwned::Ipv6PacketInfo(info) => Some(PktInfo {
+                addr: Ipv6Addr::from(info.ipi6_addr.s6_addr).into(),
+                ifindex: info.ipi6_ifindex,
+            }),
+            _ => None,
+        });
+    Ok(Datagram {
+        len: msg.bytes,
+        from,
+        to,
+    })
+}
+
+fn inet_addr(a: &SockaddrStorage) -> Option<SocketAddr> {
+    a.as_sockaddr_in()
+        .map(|v4| SocketAddr::V4((*v4).into()))
+        .or_else(|| a.as_sockaddr_in6().map(|v6| SocketAddr::V6((*v6).into())))
+}
+
+/// Send `buf` to `to` on `sock`, from `from` when it is where the request was sent and `sock` is
+/// bound to a wildcard address, so a client whose socket is connected to that address takes it.
+/// MIT `send_to_from` (`lib/apputils/udppktinfo.c:443-474`): pktinfo names the source only on a wildcard socket and for a source of the destination's family; otherwise the datagram goes out with `sendto`.
+/// MIT `set_msg_from_ipv6_pktinfo` (`lib/apputils/udppktinfo.c:383-394`): the interface is named only for a link-local source.
+fn send_to_from(
+    sock: &UdpSocket,
+    buf: &[u8],
+    to: SocketAddr,
+    from: Option<PktInfo>,
+) -> io::Result<usize> {
+    let wildcard = sock.local_addr()?.ip().is_unspecified();
+    let Some(from) = from.filter(|f| wildcard && f.addr.is_ipv4() == to.is_ipv4()) else {
+        return sock.send_to(buf, to);
+    };
+    let iov = [IoSlice::new(buf)];
+    let dest = SockaddrStorage::from(to);
+    let fd = sock.as_raw_fd();
+    let sent = match from.addr {
+        IpAddr::V4(ip) => {
+            let info = nix::libc::in_pktinfo {
+                ipi_ifindex: 0,
+                ipi_spec_dst: nix::libc::in_addr {
+                    s_addr: u32::from_ne_bytes(ip.octets()),
+                },
+                ipi_addr: nix::libc::in_addr { s_addr: 0 },
+            };
+            let cmsg = [ControlMessage::Ipv4PacketInfo(&info)];
+            sendmsg(fd, &iov, &cmsg, MsgFlags::empty(), Some(&dest))
+        }
+        IpAddr::V6(ip) => {
+            let info = nix::libc::in6_pktinfo {
+                ipi6_addr: nix::libc::in6_addr {
+                    s6_addr: ip.octets(),
+                },
+                ipi6_ifindex: if ip.is_unicast_link_local() {
+                    from.ifindex
+                } else {
+                    0
+                },
+            };
+            let cmsg = [ControlMessage::Ipv6PacketInfo(&info)];
+            sendmsg(fd, &iov, &cmsg, MsgFlags::empty(), Some(&dest))
+        }
+    };
+    Ok(sent?)
+}
+
+/// Answer the datagram `d` with `reply` from the address it was sent to ([`recv_from_to`]); a
+/// failed send is logged with both addresses, a short one with both lengths.
+/// MIT `process_packet_response` (`lib/apputils/net-server.c:1107-1125`): the reply goes out with `send_to_from`; a failed send is logged with the client's address and the local one, a short send with the lengths.
+///
+/// # Errors
+///
+/// The send's `io::Error`, once it is logged.
+pub fn send_udp_reply(sock: &UdpSocket, reply: &[u8], d: &Datagram) -> io::Result<()> {
+    match send_to_from(sock, reply, d.from, d.to) {
+        Ok(n) if n == reply.len() => Ok(()),
+        Ok(n) => {
+            klog::com_err(None, &format!("short reply write {} vs {n}\n", reply.len()));
+            Ok(())
+        }
+        Err(e) => {
+            let local =
+                d.to.map(|p| p.addr)
+                    .or_else(|| sock.local_addr().ok().map(|a| a.ip()))
+                    .map_or_else(|| "<unknown>".to_owned(), |ip| ip.to_string());
+            com_err(
+                &e,
+                &format!("while sending reply to {} from {local}", d.from),
+            );
+            Err(e)
+        }
+    }
 }
 
 /// Log a failed call as MIT's `com_err` does: the error's text, ` - `, then `what`.
@@ -739,6 +925,7 @@ pub fn serve_all_until(
 /// MIT `make_too_big_error` (`dispatch.c:191-191`): a reply larger than a datagram is
 /// replaced by a response-too-big error.
 /// An empty dispatch result is not sent, so a discarded request produces no datagram.
+/// MIT `process_packet` (`lib/apputils/net-server.c:1153-1172`): a datagram is read with the address it was sent to, an empty one is dropped, and a failed read other than an interruption or a refused earlier reply is logged.
 #[allow(clippy::needless_pass_by_value)] // UDP socket is owned by the worker thread
 fn udp_loop(
     store: &SharedStore,
@@ -749,11 +936,12 @@ fn udp_loop(
 ) {
     let mut buf = vec![0u8; 65_535];
     while !shutdown.load(Ordering::Relaxed) {
-        match sock.recv_from(&mut buf) {
-            Ok((n, peer)) => {
-                let payload = buf[..n].to_vec();
-                let sender = HostAddress::from_socket(peer);
-                crate::audit::set_client_port(u32::from(peer.port()));
+        match recv_from_to(&sock, &mut buf) {
+            Ok(d) if d.len == 0 => {}
+            Ok(d) => {
+                let payload = buf[..d.len].to_vec();
+                let sender = HostAddress::from_socket(d.from);
+                crate::audit::set_client_port(u32::from(d.from.port()));
                 match dispatch_via_cache(store, cache, &payload, Some(&sender)) {
                     Dispatch::Send(mut reply) => {
                         if reply.is_empty() {
@@ -765,7 +953,7 @@ fn udp_loop(
                                 crate::kdc_error_bytes(s, krb5_types::err::RESPONSE_TOO_BIG)
                             });
                         }
-                        if let Err(e) = sock.send_to(&reply, peer) {
+                        if let Err(e) = send_udp_reply(&sock, &reply, &d) {
                             tracing::error!(
                                 event = krb5_log::events::KDC_TRANSPORT,
                                 correlation_id = krb5_log::current_correlation_id(),
@@ -796,8 +984,10 @@ fn udp_loop(
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock
                     || e.kind() == io::ErrorKind::TimedOut
-                    || e.kind() == io::ErrorKind::Interrupted => {}
+                    || e.kind() == io::ErrorKind::Interrupted
+                    || e.kind() == io::ErrorKind::ConnectionRefused => {}
             Err(e) => {
+                com_err(&e, "while receiving from network");
                 tracing::error!(
                     event = krb5_log::events::KDC_ISSUE,
                     component = "krb5-kdc",

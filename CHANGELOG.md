@@ -1337,6 +1337,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** A KDC or kpasswd UDP reply on a wildcard socket leaves from the address its
+  request was sent to (pktinfo), as MIT's: a client connected to one of a host's addresses
+  dropped a reply sent from another. Units (`127.0.0.2`); settled live.
 - **kdc/admin.** The daemons set up their sockets as MIT's: `0.0.0.0` and an IPv6-only `[::]`
   for a wildcard, `SO_REUSEADDR`, MIT's backlogs and log lines, and no `/proc` read, so the
   units start under enforcing SELinux (they failed: `Address already in use`). Units; live.
