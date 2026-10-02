@@ -67,7 +67,8 @@ pub(super) fn kadm5_or_iprop(
 
 /// The store, reread first when another process (kadmin.local, kdb5_util) changed the database
 /// since kadmind loaded it; every kadm5 read and change goes through it, so a list sees new
-/// principals and a change never saves over another process's.
+/// principals and a change starts from the other process's last save. Nothing keeps that
+/// process out until kadmind's save: one that saves in between is overwritten.
 fn write_store(
     store: &SharedStore,
     proc: u32,
@@ -84,9 +85,10 @@ fn write_store(
     Ok(g)
 }
 
-/// Whether this process may write the store's database, checked before a change as MIT takes the
-/// database's exclusive lock before a put: the database and its `.ulog` must open for writing and
-/// their directory must take the replacement file.
+/// Whether this process may write the store's database, checked before a change where MIT takes
+/// the database's exclusive lock: the database and its `.ulog` must open for writing and their
+/// directory must take the replacement file. It is an access check, not a lock: no other
+/// process is kept out.
 /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:438-447`): an exclusive lock on a database the
 /// server may not write fails with KRB5_KDB_CANTLOCK_DB before anything changes.
 ///
@@ -126,7 +128,8 @@ fn lock_code(e: &std::io::Error) -> u32 {
     }
 }
 
-/// Lock the database for a change, or the reply refusing it with nothing changed.
+/// Check before a change that the database may be written ([`lock_database`]; no lock is
+/// taken), or the reply refusing the change with nothing changed.
 fn lock_for_update(g: &krb5_kdc::PrincipalStore, api: u32) -> Result<(), Vec<u8>> {
     lock_database(g).map_err(|e| generic_ret(api, lock_code(&e)))
 }

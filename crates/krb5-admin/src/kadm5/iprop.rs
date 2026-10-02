@@ -68,8 +68,9 @@ pub(super) fn dispatch_iprop(
             // store holds plaintext keys, so it wraps them under the master key
             // at ship time; with no master key available it must refuse the
             // update rather than send keys in the clear. (`iprop_master_key`
-            // falls back to the stash, `KRB5_MASTER_PASSWORD`, then the `K/M`
-            // principal, so this is reached only when none of those exist.)
+            // falls back to the stash, then `KRB5_MASTER_PASSWORD` in a `test-hooks`
+            // build only, then the `K/M` principal, so this is reached only when
+            // none of those exist.)
             if mkey.is_none()
                 && entries
                     .iter()
