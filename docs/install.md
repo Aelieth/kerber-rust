@@ -345,6 +345,28 @@ which stays where MIT left it (`-P`, or `-m` and the typed password, if there is
 MIT's `load` copies the keys unread). Keys, key versions, policies and passwords carry over, so
 the clients' keytabs and the users' passwords keep working.
 
+A loaded principal also keeps its attributes. Each principal kerber-rust creates gets
+`REQUIRES_PRE_AUTH`, but neither `load` nor a later password change adds it, and MIT gives it
+only when kdc.conf sets `default_principal_flags = +preauth` (Fedora's shipped kdc.conf does;
+KLLDAP's does not). For a principal without it, the KDC answers a request that proves nothing
+with a ticket, in a reply encrypted in the principal's key, which whoever asked can then try to
+guess offline. Add it once to each principal that logs in with a password: the users and their
+`/admin` principals (a principal with a random key, such as `host/` or `HTTP/`, gains nothing
+from it):
+
+```sh
+sudo kadmin.local -q listprincs | grep -e '^[^/ ]*@' -e '^[^/ ]*/admin@' | grep -v '^kadmin/' |
+    while read -r p; do sudo kadmin.local -q "modprinc +requires_preauth $p" </dev/null; done
+```
+
+Once the realm has served from kerber-rust, remove the dump and MIT's database. The dump holds
+every key, encrypted in the master key that the stash beside it opens:
+
+```sh
+sudo rm -r /var/kerberos/krb5kdc/mit-realm.dump /var/kerberos/krb5kdc/mit-realm.dump.dump_ok \
+    /var/kerberos/krb5kdc/mit-db2
+```
+
 ### In a container
 
 An image that runs the realm with its KDC directory on a volume, as KLLDAP's does, is upgraded
@@ -376,11 +398,17 @@ docker run --rm --network none --entrypoint sh -v "$VOLUME:/var/kerberos/krb5kdc
 Each command names the realm with `-r`: a one-off container has its image's own
 `/etc/krb5.conf`, and an image that writes the realm's when it boots, as KLLDAP's does, has none
 yet. `kdc.conf` and the stash are on the volume, where both images' `kdb5_util` find them. Then
-load the dump with the new image, give the KDC directory back to `OWNER`, and check:
+load the dump with the new image, add `REQUIRES_PRE_AUTH` to the principals that log in with a
+password (as in [Upgrading an MIT realm](#upgrading-an-mit-realm)), give the KDC directory back
+to `OWNER`, and check:
 
 ```sh
 docker run --rm --network none --entrypoint /usr/sbin/kdb5_util -v "$VOLUME:/var/kerberos/krb5kdc" \
     "$NEW_IMAGE" -r "$REALM" load /var/kerberos/krb5kdc/mit-realm.dump
+docker run --rm --network none --entrypoint sh -v "$VOLUME:/var/kerberos/krb5kdc" "$NEW_IMAGE" -c '
+    /usr/sbin/kadmin.local -r "$1" -q listprincs | grep -e "^[^/ ]*@" -e "^[^/ ]*/admin@" | grep -v "^kadmin/" |
+        while read -r p; do /usr/sbin/kadmin.local -r "$1" -q "modprinc +requires_preauth $p" </dev/null; done' \
+    sh "$REALM"
 docker run --rm --network none --entrypoint chown -v "$VOLUME:/var/kerberos/krb5kdc" \
     "$NEW_IMAGE" -R "$OWNER" /var/kerberos/krb5kdc
 docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v "$VOLUME:/var/kerberos/krb5kdc" \
@@ -399,6 +427,14 @@ docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v "$VOLUME:/
 - To go back, run the same steps the other way, as in [Going back to MIT](#going-back-to-mit):
   dump with the new image, move `principal` and `principal.ulog` aside, load with the old one,
   and give the directory back to `OWNER`.
+
+Once the realm has served from the new image, remove the dump and MIT's database from the
+volume, as on a host:
+
+```sh
+docker run --rm --network none --entrypoint sh -v "$VOLUME:/var/kerberos/krb5kdc" "$NEW_IMAGE" \
+    -c 'cd /var/kerberos/krb5kdc && rm -r mit-realm.dump mit-realm.dump.dump_ok mit-db2'
+```
 
 ### Going back to MIT
 
