@@ -1290,6 +1290,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** A listen entry that does not resolve, or whose address family the host
+  lacks, logs MIT's lines before the daemon stops. Unit; settled live.
 - **admin.** kadmind finishes the change in hand before it exits, and a failed accept or
   receive no longer stops it or its kpasswd listeners.
 - **admin.** kadmind and `kadmin.local` list nothing for an empty list expression, as

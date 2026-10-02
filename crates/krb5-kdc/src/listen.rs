@@ -271,16 +271,55 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
 /// `io::ErrorKind::InvalidInput` when an entry does not resolve, and the bind error, named
 /// with its address, for an address that does not bind.
 pub fn bind_udp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<UdpSocket>> {
-    bind_listeners(addrs, UdpSocket::bind, "udp")
+    bind_listeners(addrs, UdpSocket::bind, BindType::Udp)
 }
 
-/// [`bind_udp_listeners`] for the TCP list (`kdc_tcp_listen`, kadmind, kpasswd).
+/// [`bind_udp_listeners`] for a TCP list (`kdc_tcp_listen`, `kpasswd_listen`).
 ///
 /// # Errors
 ///
 /// As [`bind_udp_listeners`].
 pub fn bind_tcp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
-    bind_listeners(addrs, TcpListener::bind, "tcp")
+    bind_listeners(addrs, TcpListener::bind, BindType::Tcp)
+}
+
+/// [`bind_tcp_listeners`] for an RPC service's list (kadmind's `kadmind_listen`), whose sockets
+/// the daemon log names RPC.
+///
+/// # Errors
+///
+/// As [`bind_udp_listeners`].
+pub fn bind_rpc_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
+    bind_listeners(addrs, TcpListener::bind, BindType::Rpc)
+}
+
+/// A listener's kind, as a failed setup names it in the daemon log.
+/// MIT `enum bind_type` (`lib/apputils/net-server.c:130-132`): a UDP, TCP or RPC listener.
+#[derive(Clone, Copy)]
+enum BindType {
+    Udp,
+    Tcp,
+    /// An RPC service's TCP listener (kadmind's kadm5).
+    Rpc,
+}
+
+impl BindType {
+    /// MIT `bind_type_names` (`lib/apputils/net-server.c:134-139`): the name a failed setup logs.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Udp => "UDP",
+            Self::Tcp => "TCP",
+            Self::Rpc => "RPC",
+        }
+    }
+
+    /// The transport, as the JSON log and a bind error name it.
+    fn proto(self) -> &'static str {
+        match self {
+            Self::Udp => "udp",
+            Self::Tcp | Self::Rpc => "tcp",
+        }
+    }
 }
 
 /// The kernel default for a socket that does not set `IPV6_V6ONLY` (Linux
@@ -292,16 +331,18 @@ fn v6_wildcard_is_dual_stack() -> bool {
 fn bind_listeners<S>(
     addrs: &[ListenAddr],
     bind: impl Fn(SocketAddr) -> io::Result<S>,
-    proto: &str,
+    kind: BindType,
 ) -> io::Result<Vec<S>> {
+    let proto = kind.proto();
     let named = |a: SocketAddr, e: io::Error| io::Error::new(e.kind(), format!("{proto} {a}: {e}"));
     let no_family =
         |e: &io::Error| e.raw_os_error() == Some(nix::errno::Errno::EAFNOSUPPORT as i32);
     let mut out = Vec::new();
     for entry in addrs {
-        let resolved = entry
-            .resolve()
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+        let resolved = entry.resolve().map_err(|e| {
+            log_lines(&resolve_failure_lines(entry, &e.to_string()));
+            io::Error::new(io::ErrorKind::InvalidInput, e.to_string())
+        })?;
         let mut bound_any = false;
         let mut skipped = None;
         let mut dual_stack = false;
@@ -332,14 +373,23 @@ fn bind_listeners<S>(
                     out.push(sock);
                     bound_any = true;
                 }
-                Err(e) if no_family(&e) => skipped = Some(named(a, e)),
+                Err(e) if no_family(&e) => {
+                    log_lines(&no_family_lines(a, kind, &e));
+                    skipped = Some(named(a, e));
+                }
                 Err(e) => {
-                    log_bind_failure(a, proto, &e);
+                    log_bind_failure(a, kind, &e);
                     return Err(named(a, e));
                 }
             }
         }
         if !bound_any {
+            if let Some(e) = &skipped {
+                log_lines(&[format!(
+                    "{} - Error setting up network",
+                    krb5_log::klog::os_error_text(e)
+                )]);
+            }
             return Err(skipped.unwrap_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::AddrNotAvailable,
@@ -357,7 +407,7 @@ fn bind_listeners<S>(
 /// MIT `setup_addresses` (`lib/apputils/net-server.c:1024-1030`): the socket type and the address.
 /// MIT `loop_setup_network` (`lib/apputils/net-server.c:1068-1073`): the error once more, and
 /// the daemon exits.
-fn log_bind_failure(a: SocketAddr, proto: &str, e: &io::Error) {
+fn log_bind_failure(a: SocketAddr, kind: BindType, e: &io::Error) {
     use krb5_log::klog::{Severity, os_error_text, syslog};
     let text = os_error_text(e);
     syslog(
@@ -368,11 +418,56 @@ fn log_bind_failure(a: SocketAddr, proto: &str, e: &io::Error) {
         Severity::Err,
         &format!(
             "Failed setting up a {} socket (for {})",
-            proto.to_ascii_uppercase(),
+            kind.name(),
             a.ip()
         ),
     );
     syslog(Severity::Err, &format!("{text} - Error setting up network"));
+}
+
+fn log_lines(lines: &[String]) {
+    for line in lines {
+        krb5_log::klog::syslog(krb5_log::klog::Severity::Err, line);
+    }
+}
+
+/// The daemon log lines for a listen entry whose host does not resolve; the daemon then stops.
+/// `error` is the resolver's text, which ends with `getaddrinfo`'s message.
+/// MIT `setup_addresses` (`lib/apputils/net-server.c:993-1000`): the host (`<wildcard>` for
+/// none) and `gai_strerror`, and the setup fails with EIO.
+/// MIT `loop_setup_network` (`lib/apputils/net-server.c:1068-1073`): that error once more.
+fn resolve_failure_lines(entry: &ListenAddr, error: &str) -> [String; 2] {
+    let host = entry.host.as_deref().unwrap_or("<wildcard>");
+    let gai = error
+        .rsplit_once("failed to lookup address information: ")
+        .map_or(error, |(_, text)| text);
+    let eio = io::Error::from_raw_os_error(nix::errno::Errno::EIO as i32);
+    [
+        format!("Failed getting address info (for {host}): {gai}"),
+        format!(
+            "{} - Error setting up network",
+            krb5_log::klog::os_error_text(&eio)
+        ),
+    ]
+}
+
+/// The daemon log lines for an address whose family the host lacks; the next address is tried.
+/// MIT `create_server_socket` (`lib/apputils/net-server.c:624-631`): the error and the address
+/// with its port, worded for TCP whatever the socket type.
+/// MIT `setup_addresses` (`lib/apputils/net-server.c:1024-1030`): the socket type and the
+/// address, then EAFNOSUPPORT is let pass.
+fn no_family_lines(a: SocketAddr, kind: BindType, e: &io::Error) -> [String; 2] {
+    [
+        format!(
+            "{} - Cannot create TCP server socket on {a}",
+            krb5_log::klog::os_error_text(e)
+        ),
+        format!(
+            "Failed setting up a {} socket (for {})",
+            kind.name(),
+            a.ip()
+        ),
+    ]
 }
 
 /// Drop root after a privileged bind (port 88).
@@ -849,6 +944,47 @@ impl Drop for ClosingFd {
 mod tests {
     use super::*;
     use crate::testrealm::bootstrap_documented;
+
+    #[test]
+    fn listen_entry_failures_log_mits_lines() {
+        let entry = ListenAddr {
+            host: Some("nosuch.invalid".into()),
+            port: 88,
+        };
+        let error = "listen address nosuch.invalid: failed to lookup address information: \
+                     Temporary failure in name resolution";
+        assert_eq!(
+            resolve_failure_lines(&entry, error),
+            [
+                "Failed getting address info (for nosuch.invalid): Temporary failure in name \
+                 resolution"
+                    .to_owned(),
+                "Input/output error - Error setting up network".to_owned(),
+            ]
+        );
+        let wildcard = ListenAddr {
+            host: None,
+            port: 88,
+        };
+        assert!(resolve_failure_lines(&wildcard, "x")[0].contains("(for <wildcard>): x"));
+        let e = io::Error::from_raw_os_error(nix::errno::Errno::EAFNOSUPPORT as i32);
+        assert_eq!(
+            no_family_lines("[::]:88".parse().unwrap(), BindType::Udp, &e),
+            [
+                "Address family not supported by protocol - Cannot create TCP server socket on \
+                 [::]:88"
+                    .to_owned(),
+                "Failed setting up a UDP socket (for ::)".to_owned(),
+            ]
+        );
+        // kadmind's kadm5 listener is an RPC one, as MIT names it.
+        assert_eq!(
+            no_family_lines("[::]:749".parse().unwrap(), BindType::Rpc, &e)[1],
+            "Failed setting up a RPC socket (for ::)"
+        );
+        assert_eq!(BindType::Tcp.name(), "TCP");
+        assert_eq!(BindType::Rpc.proto(), "tcp");
+    }
 
     use krb5_asn1::{decode, encode};
     use krb5_types::{PrincipalName, err};

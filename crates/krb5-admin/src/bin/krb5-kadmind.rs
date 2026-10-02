@@ -45,8 +45,9 @@ use krb5_cli::{MitArgs, MitOpt, Placement};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::{
-    Acl, ClosingFd, Error, OpenFailure, PrincipalStore, Signals, acl_for_store, bind_tcp_listeners,
-    bind_udp_listeners, detach, open_database, shared_dump as shared_store, write_pid_file,
+    Acl, ClosingFd, Error, OpenFailure, PrincipalStore, Signals, acl_for_store, bind_rpc_listeners,
+    bind_tcp_listeners, bind_udp_listeners, detach, open_database, shared_dump as shared_store,
+    write_pid_file,
 };
 use krb5_log::klog::{self, Severity, os_error_text};
 use krb5_protocol::ReplayCache;
@@ -489,17 +490,19 @@ fn bind_sockets(
         return legacy_sockets(progname, pinned);
     }
     let _ = (test_realm, pinned);
-    let addrs = match kadmind_port {
-        Some(port) => krb5_config::listen::listen_addrs(conf.kadmind_listen.as_deref(), port),
-        None => conf.kadmind_listeners(krb5_admin_server),
-    }
-    .unwrap_or_else(|e| fatal("kdc.conf", &e));
-    let listeners = bind_tcp_listeners(&addrs).unwrap_or_else(|_| std::process::exit(1));
+    // MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:146-156`): kpasswd on UDP, then on TCP,
+    // then the kadm5 RPC service; a listener that fails is logged as it fails.
     let addrs = conf
         .kpasswd_listeners()
         .unwrap_or_else(|e| fatal("kdc.conf", &e));
     let udp = bind_udp_listeners(&addrs).unwrap_or_else(|_| std::process::exit(1));
     let tcp = bind_tcp_listeners(&addrs).unwrap_or_else(|_| std::process::exit(1));
+    let addrs = match kadmind_port {
+        Some(port) => krb5_config::listen::listen_addrs(conf.kadmind_listen.as_deref(), port),
+        None => conf.kadmind_listeners(krb5_admin_server),
+    }
+    .unwrap_or_else(|e| fatal("kdc.conf", &e));
+    let listeners = bind_rpc_listeners(&addrs).unwrap_or_else(|_| std::process::exit(1));
     (listeners, udp, tcp)
 }
 
