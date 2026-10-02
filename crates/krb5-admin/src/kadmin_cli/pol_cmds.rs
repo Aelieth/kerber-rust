@@ -248,6 +248,7 @@ pub(crate) fn getpol(s: &mut Session<'_>, argv: &[String]) {
 }
 
 /// MIT `kadmin_getpols` (`kadmin.c:1825-1844`): the policy names, sorted, matching the glob.
+/// MIT `glob_to_regexp` (`svr_iters.c:55-109`): an empty glob is `^$`, which no name matches.
 pub(crate) fn getpols(s: &mut Session<'_>, argv: &[String]) {
     let expr = match argv {
         [_] => None,
@@ -273,23 +274,9 @@ pub(crate) fn getpols(s: &mut Session<'_>, argv: &[String]) {
         );
         return;
     }
-    let pattern = expr
-        .filter(|g| *g != "*" && !g.is_empty())
-        .map(|g| crate::kadm5::glob_expand(g, false));
-    let mut names: Vec<&String> =
-        s.h.store
-            .policies()
-            .keys()
-            .filter(|n| {
-                pattern
-                    .as_deref()
-                    .is_none_or(|pat| crate::kadm5::glob_is_match(pat.as_bytes(), n.as_bytes()))
-            })
-            .collect();
-    names.sort();
     let mut out = String::new();
-    for n in names {
-        out.push_str(n);
+    for n in crate::kadm5::policies_matching(&s.h.store, expr) {
+        out.push_str(&n);
         out.push('\n');
     }
     s.io.print(&out);

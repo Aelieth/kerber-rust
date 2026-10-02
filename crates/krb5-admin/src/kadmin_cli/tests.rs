@@ -902,6 +902,16 @@ fn sigint_at_a_password_prompt_is_an_interrupted_read() {
 }
 
 #[test]
+fn an_empty_list_pattern_matches_no_name() {
+    let mut r = Rig::new("");
+    assert_eq!(r.q("listprincs \"\""), (String::new(), String::new()));
+    assert_eq!(r.q("get_principals \"\""), (String::new(), String::new()));
+    r.q("addpol p1");
+    assert_eq!(r.q("listpols \"\""), (String::new(), String::new()));
+    assert_eq!(r.q("listpols \"*\""), ("p1\n".to_owned(), String::new()));
+}
+
+#[test]
 fn keytab_names_resolve_as_krb5_kt_resolve_reads_them() {
     use kt_cmds::{KtType, resolve};
     fn kind(name: &str) -> Result<(&'static str, &str), &'static str> {

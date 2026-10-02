@@ -22,7 +22,7 @@ use super::codes::{
     KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS,
     RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
-use super::glob::{glob_expand, glob_is_match, glob_pattern_ok};
+use super::glob::{glob_pattern_ok, policies_matching, principals_matching};
 use super::iprop::dispatch_iprop;
 use super::policy::{
     apply_policy_floors, encode_policy, encode_pols, merge_policy, parse_gpols, parse_policy_arg,
@@ -262,14 +262,7 @@ pub(super) fn dispatch_kadm5_ticket(
             if !glob_pattern_ok(glob) {
                 return Ok(generic_ret(API_V2, EINVAL));
             }
-            let mut ids = g.ids();
-            // MIT `glob_to_regexp` (`lib/kadm5/srv/svr_iters.c:55-108`): an empty expression
-            // becomes `^@.*$` for principals and `^$` for policies, so it lists nothing.
-            if glob != "*" {
-                let pat = glob_expand(glob, true);
-                ids.retain(|id| glob_is_match(pat.as_bytes(), id.as_bytes()));
-            }
-            Ok(encode_gprincs(&ids))
+            Ok(encode_gprincs(&principals_matching(&g, Some(glob))))
         }
         DELETE_PRINCIPAL => {
             let (name, prealm) = parse_one_princ(args)?;
@@ -724,17 +717,11 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
-            let mut names: Vec<_> = g.policies().keys().cloned().collect();
             let glob = expr.as_deref().unwrap_or("*");
             if !glob_pattern_ok(glob) {
                 return Ok(generic_ret(api, EINVAL));
             }
-            if glob != "*" {
-                let pat = glob_expand(glob, false);
-                names.retain(|n| glob_is_match(pat.as_bytes(), n.as_bytes()));
-            }
-            names.sort();
-            Ok(encode_pols(api, &names))
+            Ok(encode_pols(api, &policies_matching(&g, Some(glob))))
         }
         CHRAND_PRINCIPAL | CHRAND_PRINCIPAL3 => {
             let (name, prealm, keepold, ks) =

@@ -725,6 +725,7 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
 
 /// MIT `kadmin_getprincs` (`kadmin.c:1574-1593`): the names, sorted, that match the glob (the
 /// realm free when the glob names none).
+/// MIT `glob_to_regexp` (`svr_iters.c:55-109`): an empty glob is `^@.*$`, which no name matches.
 pub(crate) fn getprincs(s: &mut Session<'_>, argv: &[String]) {
     let expr = match argv {
         [_] => None,
@@ -750,18 +751,10 @@ pub(crate) fn getprincs(s: &mut Session<'_>, argv: &[String]) {
         );
         return;
     }
-    let pattern = expr
-        .filter(|g| *g != "*" && !g.is_empty())
-        .map(|g| crate::kadm5::glob_expand(g, true));
     let mut out = String::new();
-    for id in s.h.store.ids() {
-        if pattern
-            .as_deref()
-            .is_none_or(|pat| crate::kadm5::glob_is_match(pat.as_bytes(), id.as_bytes()))
-        {
-            out.push_str(&id);
-            out.push('\n');
-        }
+    for id in crate::kadm5::principals_matching(&s.h.store, expr) {
+        out.push_str(&id);
+        out.push('\n');
     }
     s.io.print(&out);
 }

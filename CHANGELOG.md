@@ -1303,6 +1303,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** `kadmin.local`'s `listprincs ""` and `listpols ""` list nothing, as MIT;
+  `kadmin.local`, kadmind and `AdminSession` share one list filter. Units.
 - **admin.** `kadmin.local -m` reads and writes the database under the typed master key and
   never opens the stash, as MIT; a missing or unreadable stash no longer stops it. Units.
 - **admin.** `kadmin.local`'s default keytab comes from the profile loader (kdc.conf first,

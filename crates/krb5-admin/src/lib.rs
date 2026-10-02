@@ -607,16 +607,7 @@ impl<'a> AdminSession<'a> {
     /// expression lists nothing, as `^@.*$` matches no principal name.
     #[must_use]
     pub fn list_ids_glob(&self, glob: Option<&str>) -> Vec<String> {
-        let ids = self.store.ids();
-        match glob {
-            Some(g) if g != "*" => {
-                let pat = crate::kadm5::glob_expand(g, true);
-                ids.into_iter()
-                    .filter(|id| crate::kadm5::glob_is_match(pat.as_bytes(), id.as_bytes()))
-                    .collect()
-            }
-            _ => ids,
-        }
+        crate::kadm5::principals_matching(self.store, glob)
     }
 
     /// `getprinc` display id.
@@ -897,20 +888,7 @@ impl<'a> AdminSession<'a> {
     /// expression lists nothing, as `^$` matches no policy name.
     #[must_use]
     pub fn list_policies_glob(&self, glob: Option<&str>) -> Vec<String> {
-        let mut n: Vec<String> = match glob {
-            Some(g) if g != "*" => {
-                let pat = crate::kadm5::glob_expand(g, false);
-                self.store
-                    .policies()
-                    .keys()
-                    .filter(|k| crate::kadm5::glob_is_match(pat.as_bytes(), k.as_bytes()))
-                    .cloned()
-                    .collect()
-            }
-            _ => self.store.policies().keys().cloned().collect(),
-        };
-        n.sort();
-        n
+        crate::kadm5::policies_matching(self.store, glob)
     }
 
     /// `getpol`, durations via `strdur`.

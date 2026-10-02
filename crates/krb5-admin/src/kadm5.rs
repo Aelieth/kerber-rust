@@ -29,7 +29,7 @@ pub use auth::{
 };
 pub(crate) use dispatch::{lock_database, undo_failed_update};
 pub use glob::glob_pattern_ok;
-pub(crate) use glob::{glob_expand, glob_is_match};
+pub(crate) use glob::{glob_expand, glob_is_match, policies_matching, principals_matching};
 pub use iprop::{IpropLast, IpropPull, iprop_fullresync, iprop_pull};
 pub(crate) use policy::{create_policy_local, modify_policy_local};
 pub use rpc::{Kadm5RpcError, Kadm5RpcSession, RpcCtx, kadm5_handle_rpc, serve_kadm5_conn};
