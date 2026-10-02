@@ -97,9 +97,10 @@ impl Handle {
         self.store.reload_if_stale()
     }
 
-    /// One kadm5 change, applied whole: the steps run on the store in memory and the database
-    /// is written once at the end; when a step or the write fails, the store is read back from
-    /// the database, so nothing of the change remains.
+    /// One kadm5 change, applied whole: the steps run on the store in memory with its saves
+    /// held, and the database is written once at the end; when a step or the write fails, the
+    /// store is read back from the database, so nothing of the change remains but what MIT
+    /// commits with its own put (the `kadmin/history` a password change under a policy creates).
     pub(crate) fn mutate<T>(
         &mut self,
         f: impl FnOnce(&mut PrincipalStore, &str) -> Result<T, Error>,
@@ -111,11 +112,11 @@ impl Handle {
                 text: "No stash file: the database was opened with -m and is read-only".to_owned(),
             });
         }
-        let paths = self.store.persist_paths.take();
         let caller = self.caller.clone();
+        self.store.hold_saves(true);
         let done = f(&mut self.store, &caller);
-        self.store.persist_paths.clone_from(&paths);
-        let saved = match (&done, &paths) {
+        self.store.hold_saves(false);
+        let saved = match (&done, &self.store.persist_paths) {
             (Ok(_), Some((db, stash))) => {
                 krb5_kdc::save_store(&self.store, db, stash).map_err(Error::from)
             }

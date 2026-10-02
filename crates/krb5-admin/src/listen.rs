@@ -522,14 +522,22 @@ fn handle_kpasswd_from(
         // MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses the global handle,
         // so `current_caller` is `kadmind@REALM`, not the ticket client.
         let stamp = format!("kadmind@{store_realm}");
-        let changed = (|| {
+        // MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:438-447`): the change locks the database
+        // first, and a database the server may not write changes nothing.
+        let changed = (|| -> Result<(), Error> {
             g.reload_if_stale()?;
             if self_change {
                 g.check_min_life_in(&targ, &targ_realm)?;
             }
+            crate::kadm5::lock_database(&g)
+                .map_err(|_| Error::Inner("Insufficient access to lock database".into()))?;
             g.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp)
+                .map_err(|e| {
+                    crate::kadm5::undo_failed_update(&mut g);
+                    Error::from(e)
+                })
         })();
-        match changed.map_err(Error::from) {
+        match changed {
             Ok(()) => (0u16, String::new(), "success".to_owned()),
             Err(Error::PasswordPolicy(msg)) => {
                 let text = crate::kadm5::chpass_error_text(&Error::PasswordPolicy(msg.clone()));

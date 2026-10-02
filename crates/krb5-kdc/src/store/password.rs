@@ -280,19 +280,23 @@ impl PrincipalStore {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
-        // MIT `kadm5_chpass_principal_3`: a bound policy (`have_pol`) fetches
-        // the history key — creating `kadmin/history` on first use — and
-        // records the old keys BEFORE `passwd_check`, so a chpass rejected for
-        // quality still leaves `kadmin/history` created; `pw_history_num` counts
-        // the current password inside N, so history=1 keeps no old keys.
-        let nhist = self
+        let pol = self
             .map
             .get(&id)
             .ok_or(Error::NotFound)?
             .pw_policy
             .as_ref()
-            .and_then(|n| self.policies.get(n))
-            .map(|pol| pol.history);
+            .and_then(|n| self.policies.get(n));
+        let nhist = pol.map(|pol| pol.history);
+        let allowed = pol.and_then(|p| p.allowed_keysalts.clone());
+        // MIT `kadm5_chpass_principal_3`: the keysalt list is checked first, so a refused one
+        // creates nothing; then a bound policy (`have_pol`) fetches the history key — creating
+        // `kadmin/history` on first use, saved on its own — and records the old keys BEFORE
+        // `passwd_check`, so a chpass rejected for quality still leaves `kadmin/history` in the
+        // database; `pw_history_num` counts the current password inside N, so history=1 keeps
+        // no old keys.
+        let use_etypes =
+            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
         let hist = match nhist {
             Some(_) => Some(self.ensure_history_principal(actor)?),
             None => None,
@@ -310,13 +314,6 @@ impl PrincipalStore {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
-        let allowed = existing
-            .pw_policy
-            .as_ref()
-            .and_then(|n| self.policies.get(n))
-            .and_then(|p| p.allowed_keysalts.clone());
-        let use_etypes =
-            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
         let new_keys = keys_from_password(&use_etypes, password, &salt, next_kvno)?;
         self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold, actor)?;
         self.apply_pw_max_life_in(name, princ_realm)?;

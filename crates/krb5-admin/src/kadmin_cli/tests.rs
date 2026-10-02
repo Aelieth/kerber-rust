@@ -108,6 +108,21 @@ impl Rig {
     fn store(&self) -> &PrincipalStore {
         &self.h.as_ref().unwrap().store
     }
+
+    /// A rig on the documented realm saved in a scratch directory, opened as `kadmin.local`
+    /// opens a database: a change is written there, and a failed one read back from it.
+    fn on_disk(tag: &str) -> (Self, PathBuf) {
+        let dir = krb5_testkit::scratch_dir(tag);
+        let _ = std::fs::create_dir_all(&dir);
+        let (db, stash) = (dir.join("principal"), dir.join("stash"));
+        let (store, _) = bootstrap_documented().unwrap();
+        krb5_kdc::save_store(&store, &db, &stash).unwrap();
+        let mut rig = Self::with_store(krb5_kdc::load_store(&db, &stash).unwrap(), b"");
+        let open = &mut rig.h.as_mut().unwrap().open;
+        open.db = db;
+        open.stash = stash;
+        (rig, dir)
+    }
 }
 
 fn n(s: &str) -> PrincipalName {
@@ -356,6 +371,33 @@ fn cpw_texts() {
         p.keys.iter().any(|k| k.kvno < top),
         "-keepold keeps the old keys"
     );
+}
+
+/// MIT `kdb_get_hist_key` creates `kadmin/history` with its own committed puts before
+/// `passwd_check`, settled live: a `cpw` refused for its length still leaves it in the database.
+#[test]
+fn cpw_refused_for_quality_keeps_kadmin_history() {
+    let (mut r, dir) = Rig::on_disk("kadmin-local-hist");
+    r.q("addpol -minlength 8 -history 2 hpol");
+    r.q("addprinc -pw hist-initial-secret -policy hpol hu");
+    let (_, err) = r.q("cpw -pw sh hu");
+    assert_eq!(
+        err,
+        "change_password: Password is too short while changing password for \
+         \"hu@KERBER.TEST\".\n"
+    );
+    let (out, _) = r.q("getprinc kadmin/history");
+    assert!(
+        out.contains("Principal: kadmin/history@KERBER.TEST\n"),
+        "{out}"
+    );
+    let on_disk = krb5_kdc::load_store(&dir.join("principal"), &dir.join("stash")).unwrap();
+    assert!(
+        on_disk
+            .get_name(&krb5_kdc::principals::kadmin_history())
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

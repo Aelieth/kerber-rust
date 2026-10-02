@@ -1290,6 +1290,10 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** A kadmind change the database refuses (`KRB5_KDB_CANTLOCK_DB`) no longer
+  stays in memory, while the `kadmin/history` a password change under a policy creates
+  is saved on its own first, as MIT commits it (kadm5, kpasswd and `kadmin.local`); a
+  keysalt the policy refuses is answered before it. Unit; settled live.
 - **protocol.** A SPAKE kinit keeps the PREAUTH_REQUIRED etype-info when the challenge
   has none, as MIT does: a client asking sha384 first of a user keyed sha1 got
   PREAUTH_FAILED (slo/soak). Unit; live repro, stress and soak gates.

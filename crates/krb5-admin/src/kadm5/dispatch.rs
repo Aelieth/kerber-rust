@@ -19,8 +19,8 @@ use super::codes::{
     KADM5_PASS_REUSE, KADM5_PASS_TOOSOON, KADM5_POLICY, KADM5_POLICY_ALLOWED_KEYSALTS,
     KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PW_EXPIRATION, KADM5_PW_MAX_LIFE,
     KADM5_PW_MIN_LIFE, KADM5_SETKEY_BAD_KVNO, KADM5_TL_DATA, KADM5_UNK_POLICY, KADM5_UNK_PRINC,
-    KRB5_KDB_ALIAS_UNSUPPORTED, MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL,
-    SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS,
+    RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
 };
 use super::glob::{glob_expand, glob_is_match, glob_pattern_ok};
 use super::iprop::dispatch_iprop;
@@ -79,6 +79,69 @@ fn write_store(
         return Err(generic_ret(api, kadm5_code(proc, &Error::from(e))));
     }
     Ok(g)
+}
+
+/// Whether this process may write the store's database, checked before a change as MIT takes the
+/// database's exclusive lock before a put: the database and its `.ulog` must open for writing and
+/// their directory must take the replacement file.
+/// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:438-447`): an exclusive lock on a database the
+/// server may not write fails with KRB5_KDB_CANTLOCK_DB before anything changes.
+///
+/// # Errors
+///
+/// The OS error of the first check that fails.
+pub(crate) fn lock_database(g: &krb5_kdc::PrincipalStore) -> std::io::Result<()> {
+    let Some((db, _)) = &g.persist_paths else {
+        return Ok(());
+    };
+    let mut ulog = db.clone().into_os_string();
+    ulog.push(".ulog");
+    krb5_protocol::check_secret_file_writable(db)?;
+    krb5_protocol::check_secret_file_writable(std::path::Path::new(&ulog))?;
+    let dir = db
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
+    nix::unistd::access(
+        dir,
+        nix::unistd::AccessFlags::W_OK | nix::unistd::AccessFlags::X_OK,
+    )
+    .map_err(std::io::Error::from)
+}
+
+/// The kadm5 code of a database [`lock_database`] refused: KRB5_KDB_CANTLOCK_DB when it may not be
+/// written, else the errno.
+fn lock_code(e: &std::io::Error) -> u32 {
+    match e.kind() {
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem => {
+            KRB5_KDB_CANTLOCK_DB
+        }
+        _ => e
+            .raw_os_error()
+            .and_then(|c| u32::try_from(c).ok())
+            .unwrap_or(KADM5_FAILURE),
+    }
+}
+
+/// Lock the database for a change, or the reply refusing it with nothing changed.
+fn lock_for_update(g: &krb5_kdc::PrincipalStore, api: u32) -> Result<(), Vec<u8>> {
+    lock_database(g).map_err(|e| generic_ret(api, lock_code(&e)))
+}
+
+/// Put the store back to what its database holds after a change failed, so that a save that did
+/// not happen leaves no change in memory, as a failed put leaves MIT's database unchanged.
+pub(crate) fn undo_failed_update(g: &mut krb5_kdc::PrincipalStore) {
+    if g.persist_paths.is_some()
+        && let Err(e) = g.reload()
+    {
+        tracing::error!(
+            event = krb5_log::events::ADMIN,
+            component = "krb5-admin",
+            outcome = "error",
+            error = %e,
+            detail = "reload after a failed change",
+        );
+    }
 }
 
 fn acl_id(name: &PrincipalName, realm: &str) -> String {
@@ -218,9 +281,20 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
+            // MIT `delete_principal_2_svc` (`kadmin/server/server_stubs.c:586-595`): a missing
+            // principal fails the lockdown lookup before the delete locks the database.
+            if g.get_in_realm(&name, &req).is_none() {
+                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            }
+            if let Err(rep) = lock_for_update(&g, API_V2) {
+                return Ok(rep);
+            }
             match g.remove_in(&name, &req) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         MODIFY_PRINCIPAL => {
@@ -287,6 +361,9 @@ pub(super) fn dispatch_kadm5_ticket(
             } else {
                 None
             };
+            if let Err(rep) = lock_for_update(&g, API_V2) {
+                return Ok(rep);
+            }
             match g.apply_admin_fields_in(
                 &name,
                 &req,
@@ -305,16 +382,21 @@ pub(super) fn dispatch_kadm5_ticket(
                     if mask & KADM5_TL_DATA != 0
                         && let Err(e) = g.merge_tl_data_in(&name, &req, &fields.tl_data)
                     {
+                        undo_failed_update(&mut g);
                         return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
                     }
                     if mask & KADM5_FAIL_AUTH_COUNT != 0
                         && let Err(e) = g.clear_fail_auth_count_in(&name, &req)
                     {
+                        undo_failed_update(&mut g);
                         return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
                     }
                     Ok(generic_ret(API_V2, 0))
                 }
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 => {
@@ -361,6 +443,14 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            // MIT `kadm5_create_principal_3` (`lib/kadm5/srv/svr_principal.c:338-345`): an
+            // existing principal is KADM5_DUP before the put locks the database.
+            if g.get_in_realm(&c.name, &req).is_some() {
+                return Ok(generic_ret(API_V2, KADM5_DUP));
+            }
+            if let Err(rep) = lock_for_update(&g, API_V2) {
+                return Ok(rep);
+            }
             // NULL password: random key (`krb5_dbe_crk`), no quality check.
             // `-nokey` (KADM5_KEY_DATA) also lands here — MIT would create a
             // keyless entry (ledger deviation).
@@ -377,11 +467,15 @@ pub(super) fn dispatch_kadm5_ticket(
                     if c.ent.mask & KADM5_TL_DATA != 0
                         && let Err(e) = g.merge_tl_data_in(&c.name, &req, &c.tl_data)
                     {
+                        undo_failed_update(&mut g);
                         return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
                     }
                     Ok(generic_ret(API_V2, 0))
                 }
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         RENAME_PRINCIPAL => {
@@ -408,9 +502,24 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(API_V2, KADM5_AUTH_DELETE));
             }
+            // MIT `kadm5_rename_principal` (`lib/kadm5/srv/svr_principal.c:715-719`): an existing
+            // target is KADM5_DUP, as a missing source fails the stub's lockdown lookup, before
+            // the rename locks the database.
+            if g.get_in_realm(&old, &old_req).is_none() {
+                return Ok(generic_ret(API_V2, KADM5_UNK_PRINC));
+            }
+            if g.get_in_realm(&new, &new_req).is_some() {
+                return Ok(generic_ret(API_V2, KADM5_DUP));
+            }
+            if let Err(rep) = lock_for_update(&g, API_V2) {
+                return Ok(rep);
+            }
             match g.rename_unchecked(&old, &old_req, &new, &new_req, actor) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 => {
@@ -450,10 +559,16 @@ pub(super) fn dispatch_kadm5_ticket(
             if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
                 return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
             }
+            if let Err(rep) = lock_for_update(&g, API_V2) {
+                return Ok(rep);
+            }
             let n = clamp_self_keepold(self_change, keepold);
             match g.set_password_etypes_keepold_n_in(&name, &req, pass.as_bytes(), n, actor, &ks) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         CREATE_POLICY => {
@@ -492,9 +607,15 @@ pub(super) fn dispatch_kadm5_ticket(
                 return Ok(generic_ret(api, code));
             }
             apply_policy_floors(&mut pol, mask);
+            if let Err(rep) = lock_for_update(&g, api) {
+                return Ok(rep);
+            }
             match g.put_policy_and_save(pol) {
                 Ok(()) => Ok(generic_ret(api, 0)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(api, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         DELETE_POLICY => {
@@ -506,10 +627,21 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            // MIT `kadm5_delete_policy` (`lib/kadm5/srv/svr_policy.c:197-199`): a missing policy
+            // is KADM5_UNK_POLICY before the delete locks the database.
+            if !g.policies().contains_key(&name) {
+                return Ok(generic_ret(api, KADM5_UNK_POLICY));
+            }
+            if let Err(rep) = lock_for_update(&g, api) {
+                return Ok(rep);
+            }
             match g.delete_policy(&name) {
                 Ok(()) => Ok(generic_ret(api, 0)),
                 Err(krb5_kdc::Error::NotFound) => Ok(generic_ret(api, KADM5_UNK_POLICY)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(api, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         MODIFY_POLICY => {
@@ -539,9 +671,15 @@ pub(super) fn dispatch_kadm5_ticket(
             if let Some(code) = policy_floor_err(&merged, mask) {
                 return Ok(generic_ret(api, code));
             }
+            if let Err(rep) = lock_for_update(&g, api) {
+                return Ok(rep);
+            }
             match g.put_policy_and_save(merged) {
                 Ok(()) => Ok(generic_ret(api, 0)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(api, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         GET_POLICY => {
@@ -614,6 +752,9 @@ pub(super) fn dispatch_kadm5_ticket(
             if self_change && let Err(e) = g.check_min_life_in(&name, &req) {
                 return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
             }
+            if let Err(rep) = lock_for_update(&g, API_V2) {
+                return Ok(rep);
+            }
             let n = clamp_self_keepold(self_change, keepold);
             match g.chrand_etypes_keepold_in(&name, &req, &ks, n, actor) {
                 Ok(keys) => {
@@ -622,7 +763,10 @@ pub(super) fn dispatch_kadm5_ticket(
                         .is_some_and(|p| p.attributes & KDB_LOCKDOWN_KEYS != 0);
                     Ok(encode_chrand(if hide { &[] } else { &keys }))
                 }
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         EXTRACT_KEYS => {
@@ -676,6 +820,9 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, KADM5_AUTH_MODIFY));
             }
+            if let Err(rep) = lock_for_update(&g, api) {
+                return Ok(rep);
+            }
             match g.purgekeys_in(&name, &req, keepkvno, actor) {
                 Ok(()) => {
                     tracing::info!(
@@ -686,7 +833,10 @@ pub(super) fn dispatch_kadm5_ticket(
                     );
                     Ok(generic_ret(api, 0))
                 }
-                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(api, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         SETKEY_PRINCIPAL | SETKEY_PRINCIPAL3 | SETKEY_PRINCIPAL4 => {
@@ -712,10 +862,16 @@ pub(super) fn dispatch_kadm5_ticket(
             {
                 return Ok(generic_ret(api, KADM5_AUTH_SETKEY));
             }
+            if let Err(rep) = lock_for_update(&g, api) {
+                return Ok(rep);
+            }
             let n = clamp_self_keepold(is_self(actor, &name, &req), keepold);
             match g.set_keys_in(&name, &req, keys, n, actor) {
                 Ok(()) => Ok(generic_ret(api, 0)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(api, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         GET_STRINGS => {
@@ -765,9 +921,15 @@ pub(super) fn dispatch_kadm5_ticket(
             if key.is_empty() {
                 return Ok(generic_ret(api, KADM5_FAILURE));
             }
+            if let Err(rep) = lock_for_update(&g, api) {
+                return Ok(rep);
+            }
             match g.set_string_in(&name, &req, &key, value.as_deref(), actor) {
                 Ok(()) => Ok(generic_ret(api, 0)),
-                Err(e) => Ok(generic_ret(api, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(api, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         CREATE_ALIAS => {
@@ -791,9 +953,15 @@ pub(super) fn dispatch_kadm5_ticket(
                 Ok(g) => g,
                 Err(rep) => return Ok(rep),
             };
+            if let Err(rep) = lock_for_update(&g, API_V2) {
+                return Ok(rep);
+            }
             match g.create_alias_in(&alias, &alias_req, &target, &target_req, actor) {
                 Ok(()) => Ok(generic_ret(API_V2, 0)),
-                Err(e) => Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e)))),
+                Err(e) => {
+                    undo_failed_update(&mut g);
+                    Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))))
+                }
             }
         }
         _ => Err(Error::ProcUnavail),

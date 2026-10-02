@@ -96,6 +96,9 @@ pub struct PrincipalStore {
     serial: Arc<AtomicU32>,
     ulog: Arc<Mutex<VecDeque<UlogEntry>>>,
     pending: Arc<Mutex<Vec<UlogEntry>>>,
+    /// Set by `hold_saves`: a change's own save only commits its update-log entries, and the
+    /// holder writes the database once at the end.
+    saves_held: bool,
 }
 
 pub(crate) fn unix_now_u32() -> u32 {
@@ -131,6 +134,7 @@ impl PrincipalStore {
             serial: Arc::new(AtomicU32::new(0)),
             ulog: Arc::new(Mutex::new(VecDeque::new())),
             pending: Arc::new(Mutex::new(Vec::new())),
+            saves_held: false,
         }
     }
 
@@ -172,8 +176,20 @@ impl PrincipalStore {
         loaded.domain_sid.clone_from(&self.domain_sid);
         loaded.as_fail = Arc::clone(&self.as_fail);
         loaded.env = std::mem::take(&mut self.env);
+        loaded.saves_held = self.saves_held;
         *self = loaded;
         Ok(())
+    }
+
+    /// Read the database back whatever its stamp says, so a change whose save failed does not
+    /// stay in memory: the store is then what the file holds.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::reload_if_stale`].
+    pub fn reload(&mut self) -> Result<(), Error> {
+        self.db_stamp = None;
+        self.reload_if_stale()
     }
 
     /// Ticket policy.
@@ -210,7 +226,25 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// Hold the save each change makes at its end, or release it. While held, a change only
+    /// commits its update-log entries and the holder writes the database once, so a command
+    /// is applied whole (`kadmin.local`); a write MIT commits with its own put, the
+    /// `kadmin/history` a password change creates, is saved at once all the same.
+    pub fn hold_saves(&mut self, hold: bool) {
+        self.saves_held = hold;
+    }
+
     fn save_if_configured(&self) -> Result<(), Error> {
+        if self.saves_held {
+            self.commit_ulog();
+            return Ok(());
+        }
+        self.save_through()
+    }
+
+    /// Save the store now, held or not, for a write a later failure in the same call must not
+    /// take back.
+    fn save_through(&self) -> Result<(), Error> {
         self.commit_ulog();
         let Some((db, stash)) = &self.persist_paths else {
             return Ok(());
