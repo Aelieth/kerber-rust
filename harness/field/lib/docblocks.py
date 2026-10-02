@@ -120,19 +120,31 @@ def depth_change(code):
     return d
 
 
+def continues(line):
+    """How a line carries its command on to the next one, as bash reads it: "\\" (a trailing backslash), "op" (a
+    trailing &&, ||, | or |&, outside quotes and comments: bash reads on, past blank and comment lines), or ""."""
+    if line.rstrip().endswith("\\"):
+        return "\\"
+    return "op" if code_of(line).rstrip().endswith(("&&", "||", "|", "|&")) else ""
+
+
 def units(block):
     """The block's top-level commands, each a list of lines (comments and blank lines between them dropped).
-    A here-document's body and its delimiter line belong to the command that opens it."""
-    out, cur, depth, pending = [], [], 0, []
+    A here-document's body and its delimiter line belong to the command that opens it. A command goes on past a
+    line that ends in a backslash or in &&, ||, | or |& (after a here-document too, when its opening line does)."""
+    out, cur, depth, pending, cont = [], [], 0, [], ""
     for ln in block:
         if pending:
             cur.append(ln)
             strip_tabs, word = pending[0]
             if (ln.lstrip("\t") if strip_tabs else ln) == word:
                 pending.pop(0)
-                if not pending and depth == 0:
+                if not pending and depth == 0 and not cont:
                     out.append(cur)
                     cur = []
+            continue
+        if cont == "op" and (not ln.strip() or ln.lstrip().startswith("#")):
+            cur.append(ln)
             continue
         if not cur and (not ln.strip() or ln.lstrip().startswith("#")):
             continue
@@ -141,7 +153,8 @@ def units(block):
         if depth < 0:
             die("unbalanced block near %r" % ln)
         pending.extend(heredocs(ln))
-        if pending or ln.rstrip().endswith("\\"):
+        cont = continues(ln)
+        if pending or cont:
             continue
         if depth == 0:
             out.append(cur)

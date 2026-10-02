@@ -211,7 +211,7 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `pcap-keep.sh` | A capture's copy without any AS exchange (IP fragments of other messages kept), checked to hold no AS message |
 | `strings-check.sh` | R1's strings check of the test-only names on a VM, by file or by install manifest (every program it lists, none skipped); `--control` must go red |
 | `install-check.sh` | On a VM after `make install`: every program the install manifest lists is byte-identical to the checkout's build (`cmp`, the names paired by its `dist/install.sh`) |
-| `docblocks.py` | A doc section's shell blocks, by heading, run one top-level command at a time in one session, each with its exit status (a here-document stays whole) |
+| `docblocks.py` | A doc section's shell blocks, by heading, run one top-level command at a time in one session, each with its exit status (a here-document stays whole, and so does a command a trailing `\`, `&&`, `\|\|` or `\|` carries on to the next line) |
 | `ktrace.sh` | An MIT client command with its `KRB5_TRACE`, and an `answers:` line naming the transports the replies came over |
 | `leg.sh` | A scenario's leg from `baseline.env`'s `MIT_*` or `RUST_*` set: `legset` (secret file names), `resetvm`, `kdcis` (kdc runs the leg's KDC: MIT's packaged binaries, or the install manifest and the ref's build), `servicesready`, `ktcheck` (a keytab against the KDC's keys), `tgtline` / `tktcheck` (a ticket's life, renewable span and flags from `klist -f`), `countlast` |
 | `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
