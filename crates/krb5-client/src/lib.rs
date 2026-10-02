@@ -15,7 +15,7 @@ use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
     as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store, kcm_destroy, kcm_load,
     kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store,
-    parse_principal_ex, tgs_exchange_path, tgs_renew, tgs_validate,
+    parse_principal_ex, tgs_exchange_path,
 };
 use krb5_types::Ticket;
 use zeroize::Zeroize;
@@ -227,10 +227,6 @@ pub struct KinitParams<'a> {
     pub keytab: Option<&'a Path>,
     /// AS ticket options.
     pub ticket: AsTicketOpts,
-    /// `kinit -R`.
-    pub renew: bool,
-    /// `kinit -v`: TGS-REQ with KDC option `validate`.
-    pub validate: bool,
     /// `kinit -n` (anonymous PKINIT).
     pub anonymous: bool,
     /// `kinit -C` / `[libdefaults] canonicalize`.
@@ -427,19 +423,22 @@ pub fn kinit_to_spec(
     )
 }
 
-/// [`kinit_to_spec`] with keytab, renewal, and ticket flags.
+/// [`kinit_to_spec`] with keytab and ticket flags. The cache is written without making it its
+/// collection's primary.
+/// MIT `write_out_ccache` (`get_in_tkt.c:1617-1640`): the new credentials replace the cache's
+/// contents; switching the primary is the caller's (`kinit`'s `k5_begin`).
 ///
 /// # Errors
 ///
 /// A boxed [`ProtocolError`] from a KDC or kpasswd exchange: the AS (for example
 /// [`ProtocolError::KrbError`] with the KDC's code, [`ProtocolError::ReplyIntegrity`] for a
-/// wrong password), the `renew` / `validate` TGS-REQ, or the key-expired password change; a
-/// boxed `std::io::Error` when a keytab, armor ccache, PKINIT PEM, or cache cannot be read,
-/// parsed, or stored; a boxed `krb5_asn1::Error` when a ticket does not decode or encode; a
-/// message when an input is missing or malformed (principal, service, realm, keytab entry,
-/// MEMORY cache, TGT, PKINIT pair or PEM), the prompter fails or its tries end with the new
-/// password refused, mismatched, or empty, or the service TGS-REQ fails (then nothing is
-/// stored). The password buffer is zeroized before return.
+/// wrong password) or the key-expired password change; a boxed `std::io::Error` when a keytab,
+/// armor ccache, PKINIT PEM, or cache cannot be read, parsed, or stored; a boxed
+/// `krb5_asn1::Error` when a ticket does not decode or encode; a message when an input is
+/// missing or malformed (principal, service, realm, keytab entry, MEMORY cache, PKINIT pair or
+/// PEM), the prompter fails or its tries end with the new password refused, mismatched, or empty,
+/// or the service TGS-REQ fails (then nothing is stored). The password buffer is zeroized before
+/// return.
 pub fn kinit_with(
     kdc: &KdcAddr,
     principal: &str,
@@ -447,13 +446,52 @@ pub fn kinit_with(
     spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    let built = kinit_inner(kdc, principal, password, spec, params);
+    let built = kinit_inner(kdc, principal, password, params);
     let result = match built {
-        Ok((r, cc)) => store_ccache(spec, cc).map(|()| r),
+        Ok((r, cc)) => write_out_ccache(spec, cc).map(|()| r),
         Err(e) => Err(e),
     };
     password.zeroize();
     result
+}
+
+/// The output cache written.
+/// MIT `init_creds_step_reply` (`get_in_tkt.c:1846-1848`): a failed write is "Failed to store
+/// credentials: <message>".
+fn write_out_ccache(
+    spec: &CcSpec,
+    cc: FileCcache,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    store_ccache_keep_default(spec, cc).map_err(|e| {
+        let e = store_error(e.as_ref());
+        Krb5Error::new(
+            e.code,
+            format!("Failed to store credentials: {}", e.message),
+        )
+        .into()
+    })
+}
+
+/// MIT's message for a cache that cannot be written: an OS error as its cache code, which names no
+/// file ([`Krb5Error::from_cache_write`]); any other error under its own text.
+#[must_use]
+pub fn store_error(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Krb5Error {
+    match e.downcast_ref::<std::io::Error>() {
+        Some(io) => Krb5Error::from_cache_write(io),
+        None => Krb5Error::new(Code::Other, e.to_string()),
+    }
+}
+
+/// A kpasswd exchange's failure as MIT's `krb5_change_password` returns it.
+/// MIT `change_set_password` (`changepw.c:258-266`): a server that answers over neither TCP nor
+/// UDP is `k5_sendto`'s `KRB5_KDC_UNREACH`.
+/// MIT `k5_sendto` (`sendto_kdc.c:1602-1604`): that code carries no message of its own, so it
+/// prints as its table text, not as `k5_sendto_kdc`'s "Cannot contact any KDC for realm".
+fn chpw_error(e: ProtocolError) -> Box<dyn std::error::Error + Send + Sync> {
+    match e {
+        ProtocolError::Io { .. } => Box::new(Krb5Error::of(Code::KdcUnreach)),
+        other => Box::new(other),
+    }
 }
 
 /// The MIT `krb5_error_code` of a `kinit_with` failure, typed (never by
@@ -634,7 +672,6 @@ fn kinit_inner(
     kdc: &KdcAddr,
     principal: &str,
     password: &[u8],
-    spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
     let (cname, mut realm_s) = parse_principal_ex(principal, params.enterprise)?;
@@ -642,12 +679,6 @@ fn kinit_inner(
         realm_s = conf_default_realm().ok_or("Cannot find KDC for requested realm")?;
     }
     let resolved = resolve_kdc(&realm_s, kdc);
-    if params.renew {
-        return renew_inner(&resolved, spec);
-    }
-    if params.validate {
-        return validate_inner(&resolved, spec);
-    }
     let armor = match params.armor_ccache {
         Some(p) => Some(load_fast_armor(p)?),
         None => None,
@@ -673,9 +704,21 @@ fn kinit_inner(
     let mut ticket = params.ticket;
     ticket.anonymous |= params.anonymous;
     let keytab_keys = if let Some(ktpath) = params.keytab {
-        let kt = Keytab::parse(&std::fs::read(ktpath)?)?;
+        let bytes = std::fs::read(ktpath)
+            .map_err(|e| keytab_read_error(&e, &ktpath.display().to_string()))?;
+        let kt = Keytab::parse(&bytes)?;
+        // MIT `krb5_init_creds_set_keytab` (`gic_keytab.c:176-232`): no key for the client is
+        // `KRB5_KT_NOTFOUND` "Keytab contains no suitable keys for <client>".
         let (keys, kt_etypes) = krb5_protocol::keytab_init_creds_keys(&kt, &cname, &realm_s)
-            .ok_or("keytab has no matching principal")?;
+            .ok_or_else(|| {
+                Krb5Error::new(
+                    Code::Other,
+                    format!(
+                        "Keytab contains no suitable keys for {}",
+                        cname.unparse_with_realm(&realm_s)
+                    ),
+                )
+            })?;
         krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
         Some(keys)
     } else {
@@ -745,7 +788,7 @@ fn kinit_inner(
                     if let Some(n) = params.key_exp_notice {
                         (n.0)(KEY_EXP_BANNER);
                     }
-                    krb5_protocol::change_password(&resolved, &chpw_as, p)?;
+                    krb5_protocol::change_password(&resolved, &chpw_as, p).map_err(chpw_error)?;
                     p.to_vec()
                 }
                 (None, Some(prompter)) => prompt_and_change(&resolved, &chpw_as, prompter)?,
@@ -855,7 +898,8 @@ fn prompt_and_change(
             ret = "New password cannot be zero length";
             banner = format!("{ret}.  Please try again.");
         } else {
-            let (code, data) = krb5_protocol::change_password_result(kdc, chpw_as, &pw0)?;
+            let (code, data) =
+                krb5_protocol::change_password_result(kdc, chpw_as, &pw0).map_err(chpw_error)?;
             if code == krb5_protocol::KPASSWD_SUCCESS {
                 pw1.zeroize();
                 return Ok(pw0);
@@ -877,96 +921,6 @@ fn prompt_and_change(
         pw1.zeroize();
     }
     Err(ret.into())
-}
-
-fn renew_inner(
-    kdc: &KdcAddr,
-    spec: &CcSpec,
-) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    valrenew_inner(kdc, spec, false)
-}
-
-fn validate_inner(
-    kdc: &KdcAddr,
-    spec: &CcSpec,
-) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    valrenew_inner(kdc, spec, true)
-}
-
-fn valrenew_inner(
-    kdc: &KdcAddr,
-    spec: &CcSpec,
-    validate: bool,
-) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
-    let mut cc = load_ccache(spec)?;
-    let cred = cc
-        .list()
-        .into_iter()
-        .find(|c| c.server.1.components_joined().starts_with("krbtgt/"))
-        .ok_or("ccache has no TGT")?
-        .clone();
-    let tgt = outcome_from_cred(&cred)?;
-    let tgs = if validate {
-        tgs_validate(kdc, &tgt)?
-    } else {
-        tgs_renew(kdc, &tgt)?
-    };
-    let new_cred = tgt_cred(
-        &tgt.crealm,
-        &tgt.cname,
-        &tgs.ticket,
-        &tgs.session_key,
-        &tgs.enc_part,
-    )?;
-    for c in &mut cc.creds {
-        if c.server.1.components_joined().starts_with("krbtgt/") && !c.is_config() {
-            *c = new_cred.clone();
-            break;
-        }
-    }
-    Ok((
-        KinitResult {
-            as_out: tgt,
-            tgs_out: Some(tgs),
-        },
-        cc,
-    ))
-}
-
-fn outcome_from_cred(
-    cred: &CcacheCred,
-) -> Result<AsOutcome, Box<dyn std::error::Error + Send + Sync>> {
-    let session = cred.session_key()?;
-    let ticket: Ticket = decode(&cred.ticket)?;
-    Ok(AsOutcome {
-        ticket,
-        enc_part: krb5_types::EncKdcRepPart {
-            key: krb5_types::EncryptionKey {
-                keytype: session.etype().to_iana(),
-                keyvalue: session.as_bytes().to_vec().into(),
-            },
-            last_req: Vec::new(),
-            nonce: 0,
-            key_expiration: None,
-            flags: krb5_types::TicketFlags::from_u32(cred.ticket_flags),
-            authtime: krb5_types::KerberosTime::from_unix_seconds(cred.authtime),
-            starttime: Some(krb5_types::KerberosTime::from_unix_seconds(cred.starttime)),
-            endtime: krb5_types::KerberosTime::from_unix_seconds(cred.endtime),
-            renew_till: (cred.renew_till > 0)
-                .then(|| krb5_types::KerberosTime::from_unix_seconds(cred.renew_till)),
-            srealm: cred.server.0.clone(),
-            sname: cred.server.1.clone(),
-            caddr: None,
-            encrypted_pa_data: None,
-        },
-        client_key: session.clone(),
-        session_key: session,
-        cname: cred.client.1.clone(),
-        crealm: cred.client.0.clone(),
-        fast_avail: false,
-        used_fast: false,
-        pa_type: None,
-    })
 }
 
 /// Local IPv4 address for `kinit -a` (MIT ADDRTYPE_INET = 2).

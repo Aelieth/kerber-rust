@@ -3,30 +3,52 @@
 pub use krb5_cli::{LongOpt, Opt, getopt};
 use krb5_protocol::{CcacheCred, FileCcache};
 
-/// Parsed `kinit` argv (MIT shopts plus `--spake`/`--pkinit` aliases).
+/// What `kinit` does.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KinitAction {
+    /// Initial credentials with a password.
+    #[default]
+    InitPw,
+    /// Initial credentials with a keytab (`-k`).
+    InitKt,
+    /// Renew the cache's TGT (`-R`).
+    Renew,
+    /// Validate the cache's TGT (`-v`).
+    Validate,
+}
+
+/// Parsed `kinit` argv.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KinitArgs {
-    /// `-k`.
+    /// `-V`.
+    pub verbose: bool,
+    /// What to do: the last of `-k`, `-R` and `-v`, else a password.
+    pub action: KinitAction,
+    /// `-k` (also forced by `-t` / `-i`).
     pub keytab: bool,
-    /// `-t`.
-    pub keytab_path: Option<String>,
-    /// `-c`.
-    pub ccache: Option<String>,
-    /// `-r`.
-    pub rlife: Option<String>,
-    /// `-l`.
-    pub lifetime: Option<String>,
     /// `-R`.
     pub renew: bool,
-    /// `-v` (`krb5_get_validated_creds`).
+    /// `-v`.
     pub validate: bool,
+    /// `-i`.
+    pub client_keytab: bool,
+    /// `-t keytab`.
+    pub keytab_path: Option<String>,
+    /// `-c cache`.
+    pub ccache: Option<String>,
+    /// `-r`, in seconds.
+    pub rlife: Option<u64>,
+    /// `-l`, in seconds.
+    pub lifetime: Option<u64>,
+    /// `-s`, in seconds from now.
+    pub starttime: Option<u64>,
     /// `-f` / `-F`.
     pub forwardable: Option<bool>,
     /// `-p` / `-P`.
     pub proxiable: Option<bool>,
     /// `-a` / `-A`.
     pub addresses: Option<bool>,
-    /// `-S`.
+    /// `-S service`.
     pub service: Option<String>,
     /// `-E`.
     pub enterprise: bool,
@@ -34,118 +56,273 @@ pub struct KinitArgs {
     pub anonymous: bool,
     /// `-C`.
     pub canonicalize: bool,
-    /// `-s`.
-    pub starttime: Option<String>,
     /// `-X` values.
     pub pa_attrs: Vec<String>,
+    /// `-T armor_ccache`.
+    pub armor_ccache: Option<String>,
+    /// `-X X509_user_identity=`.
+    pub pkinit_identity: Option<String>,
+    /// `-X X509_anchors=`.
+    pub pkinit_anchors: Option<String>,
+    /// The client principal.
+    pub principal: Option<String>,
+    /// MIT's notices printed before any work ("keytab specified, forcing -k").
+    pub notices: Vec<String>,
+    /// The gates' options, in a `test-hooks` build only.
+    #[cfg(feature = "test-hooks")]
+    pub gate: KinitGateArgs,
+}
+
+/// The gates' `kinit` options, in a `test-hooks` build only: `--spake` (send PA-SPAKE first),
+/// `--fast` (no effect), `--armor-ccache` (`-T`), `--pkinit` / `--pkinit-anchors`
+/// (`-X X509_user_identity=` / `-X X509_anchors=`), and the positional form
+/// `[kdc-host] principal [ccache [service]]`.
+#[cfg(feature = "test-hooks")]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct KinitGateArgs {
     /// `--spake`.
     pub want_spake: bool,
-    /// `-T` / `--armor-ccache`.
-    pub armor_ccache: Option<String>,
-    /// `--pkinit` or `-X X509_user_identity=`.
-    pub pkinit_identity: Option<String>,
-    /// `--pkinit-anchors` or `-X X509_anchors=`.
-    pub pkinit_anchors: Option<String>,
-    /// Compat: first positional host when it has no `@`.
+    /// A first argument with no `@` before a principal: the KDC host (`host[:port]`).
     pub kdc_host: Option<String>,
-    /// Client principal.
-    pub principal: Option<String>,
-    /// Compat positional ccache.
+    /// The ccache after the principal.
     pub pos_ccache: Option<String>,
-    /// Compat positional service.
+    /// The service after the ccache.
     pub pos_service: Option<String>,
 }
 
-const KINIT_OPTSTRING: &str = "r:l:c:t:T:S:X:s:kfpFPnaAERCv";
+/// Why a `kinit` argv is not run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KinitParseError {
+    /// `-4`: "Kerberos 4 is no longer supported", exit 3.
+    Krb4,
+    /// The usage text, after these lines.
+    Usage(UsageError),
+}
 
-fn kinit_longs() -> &'static [LongOpt] {
-    &[
-        LongOpt {
-            name: "spake",
-            takes_arg: false,
-            short: None,
-        },
-        LongOpt {
-            name: "fast",
-            takes_arg: false,
-            short: None,
-        },
-        LongOpt {
-            name: "armor-ccache",
-            takes_arg: true,
-            short: Some('T'),
-        },
-        LongOpt {
-            name: "pkinit",
-            takes_arg: true,
-            short: None,
-        },
-        LongOpt {
-            name: "pkinit-anchors",
-            takes_arg: true,
-            short: None,
-        },
-        LongOpt {
-            name: "enterprise",
-            takes_arg: false,
-            short: Some('E'),
-        },
-    ]
+/// MIT `usage` (`kinit.c:139-179`): the usage text, `prog` naming the program.
+#[must_use]
+pub fn kinit_usage(prog: &str) -> String {
+    format!(
+        "Usage: {prog} [-V] [-l lifetime] [-s start_time] [-r renewable_life]\n\
+         \t[-f | -F] [-p | -P] [-n] [-a | -A] [-C] [-E]\n\
+         \t[--request-pac | --no-request-pac]\n\
+         \t[-v] [-R] [-k [-i|-t keytab_file]] [-c cachename]\n\
+         \t[-S service_name] [-I input_ccache] [-T ticket_armor_cache]\n\
+         \t[-X <attribute>[=<value>]] [principal]\n\
+         \n    options:\n\
+         \t-V verbose\n\
+         \t-l lifetime\n\
+         \t-s start time\n\
+         \t-r renewable lifetime\n\
+         \t-f forwardable\n\
+         \t-F not forwardable\n\
+         \t-p proxiable\n\
+         \t-P not proxiable\n\
+         \t-n anonymous\n\
+         \t-a include addresses\n\
+         \t-A do not include addresses\n\
+         \t-v validate\n\
+         \t-R renew\n\
+         \t-C canonicalize\n\
+         \t-E client is enterprise principal name\n\
+         \t-k use keytab\n\
+         \t-i use default client keytab (with -k)\n\
+         \t-t filename of keytab to use\n\
+         \t-c Kerberos 5 cache name\n\
+         \t-S service\n\
+         \t-I input credential cache\n\
+         \t-T armor credential cache\n\
+         \t-X <attribute>[=<value>]\n\
+         \t--{{,no}}-request-pac request KDC include/exclude a PAC\n"
+    )
+}
+
+/// MIT `kinit`'s options without an argument value, as `getopt_long` takes them.
+const KINIT_OPTSTRING: &str = "r:fpFPn54aAVl:s:c:kit:T:RS:vX:CE";
+
+fn kinit_longs() -> Vec<LongOpt> {
+    let long = |name, short| LongOpt {
+        name,
+        takes_arg: false,
+        short: Some(short),
+    };
+    let longs = vec![
+        long("noforwardable", 'F'),
+        long("noproxiable", 'P'),
+        long("addresses", 'a'),
+        long("forwardable", 'f'),
+        long("proxiable", 'p'),
+        long("noaddresses", 'A'),
+        long("canonicalize", 'C'),
+        long("enterprise", 'E'),
+    ];
+    #[cfg(feature = "test-hooks")]
+    let longs = {
+        let mut longs = longs;
+        longs.extend([
+            LongOpt {
+                name: "spake",
+                takes_arg: false,
+                short: None,
+            },
+            LongOpt {
+                name: "fast",
+                takes_arg: false,
+                short: None,
+            },
+            LongOpt {
+                name: "armor-ccache",
+                takes_arg: true,
+                short: Some('T'),
+            },
+            LongOpt {
+                name: "pkinit",
+                takes_arg: true,
+                short: None,
+            },
+            LongOpt {
+                name: "pkinit-anchors",
+                takes_arg: true,
+                short: None,
+            },
+        ]);
+        longs
+    };
+    longs
 }
 
 /// Parse `kinit` arguments after argv0.
+/// MIT `parse_options` (`kinit.c:221-411`): the option table, a bad lifetime or start time, an
+/// option given twice, `-f` with `-F` and the other pairs, `-t` or `-i` forcing `-k` with a
+/// notice, and one principal at most.
 ///
 /// # Errors
 ///
-/// An error message when an option is not a `kinit` option, an option that takes an argument
-/// has none, or `--spake`, `--fast` or `--enterprise` is given `=value`.
-pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, String> {
-    let (opts, rest) = getopt(args, KINIT_OPTSTRING, kinit_longs())?;
+/// [`KinitParseError::Krb4`] for `-4`; [`KinitParseError::Usage`] with MIT's lines for every
+/// refusal above.
+pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
+    let (opts, rest) = getopt(args, KINIT_OPTSTRING, &kinit_longs())
+        .map_err(|e| KinitParseError::Usage(UsageError::Getopt(e)))?;
     let mut out = KinitArgs::default();
+    let mut lines = Vec::new();
+    let mut not = (false, false, false);
+    let mut yes = (false, false, false);
     for o in opts {
-        if let Some(name) = o.long {
-            match name {
-                "spake" => out.want_spake = true,
-                "fast" => {}
-                "armor-ccache" => out.armor_ccache = o.arg,
-                "pkinit" => out.pkinit_identity = o.arg.as_deref().map(strip_file_spec),
-                "pkinit-anchors" => out.pkinit_anchors = o.arg.as_deref().map(strip_file_spec),
-                "enterprise" => out.enterprise = true,
-                _ => return Err(format!("unrecognized option '--{name}'")),
-            }
+        let arg = o.arg.clone().unwrap_or_default();
+        #[cfg(feature = "test-hooks")]
+        if gate_long(&mut out, &o) {
             continue;
         }
         match o.flag {
-            'k' => out.keytab = true,
-            't' => out.keytab_path = o.arg,
-            'c' => out.ccache = o.arg,
-            'r' => out.rlife = o.arg,
-            'l' => out.lifetime = o.arg,
-            'R' => out.renew = true,
-            'v' => out.validate = true,
-            'f' => out.forwardable = Some(true),
-            'F' => out.forwardable = Some(false),
-            'p' => out.proxiable = Some(true),
-            'P' => out.proxiable = Some(false),
-            'a' => out.addresses = Some(true),
-            'A' => out.addresses = Some(false),
-            'S' => out.service = o.arg,
-            'E' => out.enterprise = true,
+            'V' => out.verbose = true,
+            'l' => match krb5_config::parse_deltat(&arg).filter(|&s| s != 0) {
+                Some(s) => out.lifetime = Some(s),
+                None => lines.push(format!("Bad lifetime value {arg}")),
+            },
+            'r' => match krb5_config::parse_deltat(&arg).filter(|&s| s != 0) {
+                Some(s) => out.rlife = Some(s),
+                None => lines.push(format!("Bad lifetime value {arg}")),
+            },
+            'f' => yes.0 = true,
+            'F' => not.0 = true,
+            'p' => yes.1 = true,
+            'P' => not.1 = true,
             'n' => out.anonymous = true,
-            'C' => out.canonicalize = true,
-            's' => out.starttime = o.arg,
+            'a' => yes.2 = true,
+            'A' => not.2 = true,
+            's' => match krb5_config::parse_deltat(&arg).filter(|&s| s != 0) {
+                Some(s) => out.starttime = Some(s),
+                None => lines.push(format!("Bad start time value {arg}")),
+            },
+            'S' => out.service = Some(arg),
+            'k' => out.action = KinitAction::InitKt,
+            'i' => out.client_keytab = true,
+            't' if out.keytab_path.is_some() => lines.push("Only one -t option allowed.".into()),
+            't' => out.keytab_path = Some(arg),
+            'T' if out.armor_ccache.is_some() => lines.push("Only one armor_ccache".into()),
+            'T' => out.armor_ccache = Some(arg),
+            'R' => out.action = KinitAction::Renew,
+            'v' => out.action = KinitAction::Validate,
+            'c' if out.ccache.is_some() => lines.push("Only one -c option allowed".into()),
+            'c' => out.ccache = Some(arg),
             'X' => {
-                if let Some(v) = o.arg {
-                    apply_x_attr(&mut out, &v);
-                    out.pa_attrs.push(v);
-                }
+                apply_x_attr(&mut out, &arg);
+                out.pa_attrs.push(arg);
             }
-            'T' => out.armor_ccache = o.arg,
-            _ => return Err(format!("invalid option -- '{}'", o.flag)),
+            'C' => out.canonicalize = true,
+            'E' => out.enterprise = true,
+            '4' => return Err(KinitParseError::Krb4),
+            _ => {}
         }
     }
-    split_kinit_positionals(&mut out, &rest);
+    if yes.0 && not.0 {
+        lines.push("Only one of -f and -F allowed".into());
+    }
+    if yes.1 && not.1 {
+        lines.push("Only one of -p and -P allowed".into());
+    }
+    if yes.2 && not.2 {
+        lines.push("Only one of -a and -A allowed".into());
+    }
+    out.forwardable = (yes.0 || not.0).then_some(yes.0);
+    out.proxiable = (yes.1 || not.1).then_some(yes.1);
+    out.addresses = (yes.2 || not.2).then_some(yes.2);
+    if out.keytab_path.is_some() && out.client_keytab {
+        lines.push("Only one of -t and -i allowed".into());
+    }
+    if (out.keytab_path.is_some() || out.client_keytab) && out.action != KinitAction::InitKt {
+        out.action = KinitAction::InitKt;
+        out.notices.push("keytab specified, forcing -k".into());
+    }
+    let rest = kinit_positionals(&mut out, rest);
+    if let Some(extra) = rest.get(1) {
+        lines.push(format!("Extra arguments (starting with \"{extra}\")."));
+    }
+    if !lines.is_empty() {
+        return Err(KinitParseError::Usage(UsageError::Lines(lines)));
+    }
+    out.principal = rest.into_iter().next();
+    out.keytab = out.action == KinitAction::InitKt;
+    out.renew = out.action == KinitAction::Renew;
+    out.validate = out.action == KinitAction::Validate;
     Ok(out)
+}
+
+/// The gates' long options, in a `test-hooks` build.
+#[cfg(feature = "test-hooks")]
+fn gate_long(out: &mut KinitArgs, o: &Opt) -> bool {
+    match o.long {
+        Some("spake") => out.gate.want_spake = true,
+        Some("fast") => {}
+        Some("pkinit") => out.pkinit_identity = o.arg.as_deref().map(strip_file_spec),
+        Some("pkinit-anchors") => out.pkinit_anchors = o.arg.as_deref().map(strip_file_spec),
+        _ => return false,
+    }
+    true
+}
+
+/// The gates' positional form `[kdc-host] principal [ccache [service]]`, in a `test-hooks` build;
+/// a release build takes one principal.
+fn kinit_positionals(out: &mut KinitArgs, rest: Vec<String>) -> Vec<String> {
+    #[cfg(feature = "test-hooks")]
+    {
+        let mut rest = rest;
+        if rest.len() >= 2 && !rest[0].contains('@') && rest[1].contains('@') {
+            out.gate.kdc_host = Some(rest.remove(0));
+        }
+        if rest.len() >= 3 {
+            out.gate.pos_service = Some(rest.remove(2));
+        }
+        if rest.len() >= 2 {
+            out.gate.pos_ccache = Some(rest.remove(1));
+        }
+        rest
+    }
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        let _ = out;
+        rest
+    }
 }
 
 fn apply_x_attr(out: &mut KinitArgs, v: &str) {
@@ -165,25 +342,6 @@ fn apply_x_attr(out: &mut KinitArgs, v: &str) {
 
 fn strip_file_spec(s: &str) -> String {
     s.strip_prefix("FILE:").unwrap_or(s).to_owned()
-}
-
-fn split_kinit_positionals(out: &mut KinitArgs, rest: &[String]) {
-    if rest.len() >= 2 && !rest[0].contains('@') && rest[1].contains('@') {
-        out.kdc_host = Some(rest[0].clone());
-        out.principal = Some(rest[1].clone());
-        out.pos_ccache = rest.get(2).cloned();
-        out.pos_service = rest.get(3).cloned();
-        return;
-    }
-    if let Some(p) = rest.first() {
-        out.principal = Some(p.clone());
-    }
-    if rest.len() >= 2 {
-        out.pos_ccache = Some(rest[1].clone());
-    }
-    if rest.len() >= 3 {
-        out.pos_service = Some(rest[2].clone());
-    }
 }
 
 /// Parsed `klist` argv.
@@ -647,13 +805,74 @@ mod tests {
         assert!(a.keytab);
         assert_eq!(a.keytab_path.as_deref(), Some("/tmp/user.keytab"));
         assert_eq!(a.principal.as_deref(), Some("user@KERBER.TEST"));
-        assert!(a.kdc_host.is_none());
+        assert_eq!(a.notices, Vec::<String>::new());
     }
 
     #[test]
     fn kinit_clustered_fe_is_not_kinit() {
         let e = parse_kinit(&s(&["-fe"])).unwrap_err();
-        assert!(e.contains("invalid option"), "{e}");
+        assert_eq!(
+            e,
+            KinitParseError::Usage(UsageError::Getopt("invalid option -- 'e'".into()))
+        );
+    }
+
+    /// Live MIT 1.22.2 `kinit`: the refusals, with the usage text
+    /// and exit 2; `-t` without `-k` forces it with a notice.
+    #[test]
+    fn kinit_refuses_as_mit() {
+        let lines = |v: &[&str]| match parse_kinit(&s(v)) {
+            Err(KinitParseError::Usage(u)) => u.lines("kinit"),
+            other => panic!("{other:?}"),
+        };
+        #[cfg(not(feature = "test-hooks"))]
+        assert_eq!(
+            lines(&["alice", "bob"]),
+            ["Extra arguments (starting with \"bob\")."]
+        );
+        assert_eq!(
+            lines(&["-f", "-F", "alice"]),
+            ["Only one of -f and -F allowed"]
+        );
+        assert_eq!(
+            lines(&["-l", "bogus", "alice"]),
+            ["Bad lifetime value bogus"]
+        );
+        assert_eq!(
+            lines(&["-c", "a", "-c", "b", "alice"]),
+            ["Only one -c option allowed"]
+        );
+        assert_eq!(
+            lines(&["-t", "a", "-i", "alice"]),
+            ["Only one of -t and -i allowed"]
+        );
+        let forced = parse_kinit(&s(&["-t", "/etc/krb5.keytab", "host/x"])).unwrap();
+        assert!(forced.keytab);
+        assert_eq!(forced.notices, ["keytab specified, forcing -k"]);
+        assert_eq!(parse_kinit(&s(&["-4"])), Err(KinitParseError::Krb4));
+        let r = parse_kinit(&s(&["-R"])).unwrap();
+        assert!(r.renew && r.principal.is_none());
+        let last = parse_kinit(&s(&["-R", "-k", "-v"])).unwrap();
+        assert_eq!(last.action, KinitAction::Validate);
+        assert!(kinit_usage("kinit").starts_with("Usage: kinit [-V] [-l lifetime]"));
+    }
+
+    /// The gates' kinit options are not MIT's: a release build refuses them.
+    #[cfg(not(feature = "test-hooks"))]
+    #[test]
+    fn kinit_release_has_no_gate_options() {
+        for opt in ["--spake", "--fast"] {
+            assert_eq!(
+                parse_kinit(&s(&[opt, "alice"])).unwrap_err(),
+                KinitParseError::Usage(UsageError::Getopt(format!("unrecognized option '{opt}'")))
+            );
+        }
+        for opt in ["--pkinit", "--pkinit-anchors", "--armor-ccache"] {
+            assert!(
+                parse_kinit(&s(&[opt, "FILE:/x", "alice"])).is_err(),
+                "{opt}"
+            );
+        }
     }
 
     #[test]
@@ -784,8 +1003,10 @@ mod tests {
         );
     }
 
+    /// A `test-hooks` build takes the gates' positional form and long options.
+    #[cfg(feature = "test-hooks")]
     #[test]
-    fn kinit_host_first_compat() {
+    fn kinit_gate_options_in_a_test_hooks_build() {
         let a = parse_kinit(&s(&[
             "127.0.0.1",
             "user@KERBER.TEST",
@@ -793,10 +1014,25 @@ mod tests {
             "host/svc",
         ]))
         .unwrap();
-        assert_eq!(a.kdc_host.as_deref(), Some("127.0.0.1"));
+        assert_eq!(a.gate.kdc_host.as_deref(), Some("127.0.0.1"));
         assert_eq!(a.principal.as_deref(), Some("user@KERBER.TEST"));
-        assert_eq!(a.pos_ccache.as_deref(), Some("/tmp/cc"));
-        assert_eq!(a.pos_service.as_deref(), Some("host/svc"));
+        assert_eq!(a.gate.pos_ccache.as_deref(), Some("/tmp/cc"));
+        assert_eq!(a.gate.pos_service.as_deref(), Some("host/svc"));
+        let p = parse_kinit(&s(&[
+            "--spake",
+            "--pkinit",
+            "FILE:/u.pem",
+            "--pkinit-anchors",
+            "FILE:/ca.pem",
+            "--armor-ccache",
+            "/a",
+            "user@R",
+        ]))
+        .unwrap();
+        assert!(p.gate.want_spake);
+        assert_eq!(p.pkinit_identity.as_deref(), Some("/u.pem"));
+        assert_eq!(p.pkinit_anchors.as_deref(), Some("/ca.pem"));
+        assert_eq!(p.armor_ccache.as_deref(), Some("/a"));
     }
 
     #[test]
@@ -805,20 +1041,25 @@ mod tests {
             "-r", "7d", "-l", "5m", "-f", "-p", "-a", "-S", "host/x", "-E", "user@R",
         ]))
         .unwrap();
-        assert_eq!(a.rlife.as_deref(), Some("7d"));
-        assert_eq!(a.lifetime.as_deref(), Some("5m"));
+        assert_eq!(a.rlife, Some(7 * 86_400));
+        assert_eq!(a.lifetime, Some(300));
         assert_eq!(a.forwardable, Some(true));
         assert_eq!(a.proxiable, Some(true));
         assert_eq!(a.addresses, Some(true));
         assert_eq!(a.service.as_deref(), Some("host/x"));
         assert!(a.enterprise);
         assert_eq!(a.principal.as_deref(), Some("user@R"));
-        let b = parse_kinit(&s(&["-C", "-s", "1h", "user@R"])).unwrap();
+        let b = parse_kinit(&s(&["-C", "-s", "1h", "--noforwardable", "user@R"])).unwrap();
         assert!(b.canonicalize);
-        assert_eq!(b.starttime.as_deref(), Some("1h"));
+        assert_eq!(b.starttime, Some(3600));
+        assert_eq!(b.forwardable, Some(false));
         let v = parse_kinit(&s(&["-v", "user@R"])).unwrap();
         assert!(v.validate);
         assert!(!v.renew);
+        let t = parse_kinit(&s(&["-T", "FILE:/a", "-X", "X509_anchors=FILE:/ca", "-V"])).unwrap();
+        assert_eq!(t.armor_ccache.as_deref(), Some("FILE:/a"));
+        assert_eq!(t.pkinit_anchors.as_deref(), Some("/ca"));
+        assert!(t.verbose);
     }
 
     fn sample(end: u32, server: PrincipalName) -> CcacheCred {

@@ -479,6 +479,57 @@ pub fn get_credentials_for_proxy(
     Ok(cred)
 }
 
+/// The renewed (or validated) credential for `client` in `cache`: `kinit -R` / `kinit -v`.
+/// MIT `get_valrenewed_creds` (`val_renew.c:136-179`): the server is `in_tkt_service` in the
+/// client's realm, else `krbtgt/<client realm>`.
+/// MIT `get_new_creds` (`val_renew.c:47-74`): the cache's credential for that client and server,
+/// whatever its times, is presented to the KDC of its server's realm.
+///
+/// # Errors
+///
+/// [`Krb5Error`] when the cache cannot be read, holds no credential for that client and server
+/// (`KRB5_CC_NOTFOUND`, with the file name for a file cache), or the KDC refuses or cannot be
+/// reached.
+pub fn get_valrenewed_creds(
+    spec: &CcSpec,
+    client: &Princ,
+    service: Option<&str>,
+    validate: bool,
+) -> Result<CcacheCred, Krb5Error> {
+    let server = match service {
+        Some(s) => {
+            let (_, name) = parse_name(s, false)?;
+            (client.0.clone(), name)
+        }
+        None => (
+            client.0.clone(),
+            PrincipalName::krbtgt(&realm_str(&client.0)),
+        ),
+    };
+    let cache = OpenCache::open(spec.clone())?;
+    let old = cache
+        .cc
+        .creds
+        .iter()
+        .find(|c| {
+            !c.is_config()
+                && !c.is_removed()
+                && princ_eq(&c.client, client)
+                && princ_eq(&c.server, &server)
+        })
+        .ok_or_else(|| cache.not_found())?;
+    let realm = realm_str(&old.server.0);
+    let kdc = kdc_for_realm(&realm)?;
+    let tgt = outcome_from_cred(old)?;
+    let out = if validate {
+        krb5_protocol::tgs_validate(&kdc, &tgt)
+    } else {
+        krb5_protocol::tgs_renew(&kdc, &tgt)
+    }
+    .map_err(|e| Krb5Error::from_tgs(&e, &unparse(&server), &realm))?;
+    cred_from_tgs(client, &out)
+}
+
 /// MIT `get_u2u_ticket` (`kvno.c:414-450`): the local TGT of the cache `spec`'s principal, its
 /// ticket taken from the cache only.
 ///

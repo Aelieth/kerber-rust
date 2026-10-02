@@ -88,8 +88,10 @@ echo "RUST_kinit_keyexp_banner_success"
 echo "==== K2 Rust krb5-kinit KEY_EXP change, then the ccache write fails: banner, then the error ===="
 keyexp_run s4kx2 s4kx2 /tmp/nonexistent-dir/cc
 [ "$(docker exec "$NAME" cat /tmp/s4kx2.rc)" = 1 ] || die "K2 krb5-kinit did not fail on the ccache write"
-keyexp_stderr_is s4kx2 "${BANNER}kinit failed: No such file or directory (os error 2)\n" \
-    || die "K2 stderr differs from 0d5fa7f4 (banner, then kinit failed: No such file or directory)"
+# MIT's line for a cache that cannot be written (get_in_tkt.c:1846-1848, no file name), under
+# the port's name.
+keyexp_stderr_is s4kx2 "${BANNER}krb5-kinit: Failed to store credentials: No credentials cache found while getting initial credentials\n" \
+    || die "K2 stderr differs from MIT's (banner, then Failed to store credentials: No credentials cache found)"
 docker exec "$NAME" sh -c 'printf "exp-new\n" | kinit -c /tmp/cc_s4kx2_mit s4kx2@KERBER.TEST' \
     || die "K2 MIT kinit with the new password failed (the change did not land)"
 echo "RUST_kinit_keyexp_banner_store_fail"

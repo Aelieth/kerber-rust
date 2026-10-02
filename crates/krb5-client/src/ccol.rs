@@ -155,6 +155,17 @@ pub fn resolve(spec: &CcSpec) -> Result<Cache, Krb5Error> {
     })
 }
 
+/// The name kinit writes a cache it resolved from `name` under: a DIR collection's own name, so
+/// that the store makes a missing collection, the directory and a `primary` naming `tkt`, as MIT
+/// makes it on the resolve; any other cache under its own name.
+#[must_use]
+pub fn store_spec(name: &CcSpec, cache: &Cache) -> CcSpec {
+    match name {
+        CcSpec::Dir(r) if !r.starts_with(':') => name.clone(),
+        _ => cache.spec(),
+    }
+}
+
 /// MIT `krb5_cccol_cursor_next` (`cccursor.c:83-124`): the caches of the collection the default
 /// name `default` belongs to, its primary first.
 /// MIT `fcc_ptcursor_next` (`cc_file.c:1205-1241`): a FILE default is a collection of itself,

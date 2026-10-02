@@ -197,7 +197,9 @@ pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> 
     tgs_once(kdc, tgt, TgsRequest::new(sname, &realm, opts))
 }
 
-/// TGS-REQ with KDC option `renew` for `kinit -R`.
+/// TGS-REQ with KDC option `renew` for `kinit -R`: the presented ticket's own server, at its realm.
+/// MIT `get_new_creds` (`val_renew.c:47-74`): the cached credential is presented to ask for its
+/// server again, with its common flags.
 ///
 /// # Errors
 ///
@@ -211,8 +213,8 @@ pub fn tgs_forward(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> 
 /// decode; [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or
 /// a key in the reply is unusable.
 pub fn tgs_renew(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
-    let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
-    let sname = PrincipalName::krbtgt(&realm);
+    let realm = String::from_utf8_lossy(tgt.ticket.realm.as_bytes()).into_owned();
+    let sname = tgt.ticket.sname.clone();
     let opts = tgs_renew_options(&tgt.enc_part.flags);
     tgs_once(kdc, tgt, TgsRequest::new(sname, &realm, opts))
 }
@@ -901,7 +903,8 @@ pub fn tgs_s4u2proxy(
     tgs_once(kdc, tgt, req)
 }
 
-/// TGS-REQ with KDC option `validate` for `kinit -v`.
+/// TGS-REQ with KDC option `validate` for `kinit -v`: the presented ticket's own server, at its
+/// realm.
 ///
 /// # Errors
 ///
@@ -915,8 +918,8 @@ pub fn tgs_s4u2proxy(
 /// decode; [`Error::Crypto`] when a checksum, encryption, decryption, or key derivation fails, or
 /// a key in the reply is unusable.
 pub fn tgs_validate(kdc: &KdcAddr, tgt: &AsOutcome) -> Result<TgsOutcome, Error> {
-    let realm = String::from_utf8_lossy(tgt.crealm.as_bytes()).into_owned();
-    let sname = PrincipalName::krbtgt(&realm);
+    let realm = String::from_utf8_lossy(tgt.ticket.realm.as_bytes()).into_owned();
+    let sname = tgt.ticket.sname.clone();
     let opts = tgs_validate_options(&tgt.enc_part.flags);
     tgs_once(kdc, tgt, TgsRequest::new(sname, &realm, opts))
 }

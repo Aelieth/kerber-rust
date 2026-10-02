@@ -85,25 +85,28 @@ fn expired_user_store() -> PrincipalStore {
     store
 }
 
-/// Run `krb5-kinit KDC user@KERBER.TEST` with `password` from the
-/// environment and `stdin` on hand for any new-password prompt; returns
-/// (exit code, stdout + stderr — prompts and banners go to stdout like
+/// Run `krb5-kinit -c cc user@KERBER.TEST` with the realm's KDC at `kdc` in its krb5.conf,
+/// `password` on the first line of stdin and `stdin` after it for any new-password prompt;
+/// returns (exit code, stdout + stderr — prompts and banners go to stdout like
 /// `krb5_prompter_posix`, errors to stderr).
 fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
     let dir = scratch_dir("z1b-kinit");
     let conf = dir.join("krb5.conf");
     std::fs::write(
         &conf,
-        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n",
+        format!(
+            "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    \
+             dns_lookup_realm = false\n[realms]\n    KERBER.TEST = {{\n        kdc = {kdc}\n    }}\n"
+        ),
     )
     .unwrap();
     let cc = dir.join("cc");
     let mut child = Command::new(env!("CARGO_BIN_EXE_krb5-kinit"))
-        .args([kdc, &format!("{TEST_USER}@{TEST_REALM}")])
         .arg("-c")
         .arg(&cc)
+        .arg(format!("{TEST_USER}@{TEST_REALM}"))
         .env("KRB5_CONFIG", &conf)
-        .env("KRB5_PASSWORD", password)
+        .env_remove("KRB5_PASSWORD")
         .env_remove("KRB5_NEW_PASSWORD")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -114,7 +117,7 @@ fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
         .stdin
         .take()
         .unwrap()
-        .write_all(stdin.as_bytes())
+        .write_all(format!("{password}\n{stdin}").as_bytes())
         .unwrap();
     let out = child.wait_with_output().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -153,7 +156,9 @@ fn changepw_as_failure_is_reported_before_any_prompt() {
         "prompted before the changepw AS: {err}"
     );
     assert!(
-        err.contains("KRB-ERROR 7"),
+        err.contains(
+            "kinit: Server not found in Kerberos database while getting initial credentials"
+        ),
         "changepw AS error missing: {err}"
     );
 }

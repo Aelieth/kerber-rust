@@ -6,14 +6,14 @@
 #   --manifest <file>  every program a kerber-rust install manifest lists (`<sha256>  <path>` lines; an entry
 #                      in a bin or sbin directory), each of which must be an ELF file: none is skipped
 #   --control          the planted control: a file carrying planted names must go red; exits 0 when it does
-P='KRB5_TEST_[A-Z0-9_]*|--test-realm|testrealm|KRB5_MASTER_PASSWORD|KRB5_NEW_PASSWORD|KRB5_PASSWORD|KERBER_CAPTURE_DIR|KRB5_KDC_DB_LIBRARY|KRB5_KDC_DB|KRB5_KDC_STASH|KRB5_MASTER_ETYPE|KRB5_ACL_FILE|KRB5_KDC_CONF|KRB5_EXPORT_[A-Z_]*|KRB5_ENABLE_PKINIT|KRB5_KDC_BIND|KRB5_KDC_USER|KRB5_KDC_AUDIT[A-Z_]*|KRB5_KDCPOLICY|KERBER_KDC_GREET|KRB5_KPASSWD_BIND|disable-transited-check|body-realm|renew-ticket'
+P='KRB5_TEST_[A-Z0-9_]*|--test-realm|testrealm|KRB5_MASTER_PASSWORD|KRB5_NEW_PASSWORD|KRB5_PASSWORD|KERBER_CAPTURE_DIR|KRB5_KDC_DB_LIBRARY|KRB5_KDC_DB|KRB5_KDC_STASH|KRB5_MASTER_ETYPE|KRB5_ACL_FILE|KRB5_KDC_CONF|KRB5_EXPORT_[A-Z_]*|KRB5_ENABLE_PKINIT|KRB5_KDC_BIND|KRB5_KDC_USER|KRB5_KDC_AUDIT[A-Z_]*|KRB5_KDCPOLICY|KERBER_KDC_GREET|KRB5_KPASSWD_BIND|disable-transited-check|body-realm|renew-ticket|armor-ccache|pkinit-anchors|ok tgt='
 
 # check_files <file>...: the check proper.
 check_files() {
     status=0
     for f in "$@"; do
         hits=$( { strings -n 4 "$f" | grep -oE -- "$P"; strings -n 4 "$f" | grep -oiE -- 'userpassword'; } \
-            | sort | uniq -c | awk '{ printf " %s x%s", $2, $1 }')
+            | sort | uniq -c | awk '{ n = $1; sub(/^ *[0-9]+ /, ""); printf " %s x%s", $0, n }')
         [ -n "$hits" ] && status=1
         printf '%s (%s bytes):%s\n' "$f" "$(stat -c %s "$f")" "${hits:- none}"
     done
@@ -26,13 +26,13 @@ command -v strings >/dev/null 2>&1 || { echo "strings-check.sh: strings (binutil
 case ${1:-} in
 --control)
     d=$(mktemp -d /var/tmp/strings-control.XXXXXX) || exit 1
-    printf 'x\0KRB5_TEST_PLANTED\0ab--test-realmcd\0UserPassword\0KRB5_EXPORT_KRBTGT_KEYTAB\0KRB5_KDC_DB_LIBRARY\0xxbody-realmyy\0' \
+    printf 'x\0KRB5_TEST_PLANTED\0ab--test-realmcd\0UserPassword\0KRB5_EXPORT_KRBTGT_KEYTAB\0KRB5_KDC_DB_LIBRARY\0xxbody-realmyy\0ok tgt=2\0' \
         > "$d/planted.bin"
     out=$(check_files "$d/planted.bin")
     rc=$?
     rm -rf "$d"
     printf '%s\n' "$out"
-    for name in KRB5_TEST_PLANTED --test-realm UserPassword KRB5_EXPORT_KRBTGT_KEYTAB KRB5_KDC_DB_LIBRARY body-realm; do
+    for name in KRB5_TEST_PLANTED --test-realm UserPassword KRB5_EXPORT_KRBTGT_KEYTAB KRB5_KDC_DB_LIBRARY body-realm 'ok tgt='; do
         case $out in
             *" $name x1"*) ;;
             *) echo "control: $name not found: the check is broken"; exit 1 ;;

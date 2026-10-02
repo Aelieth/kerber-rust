@@ -34,6 +34,8 @@ pub enum Code {
     BadIntegrity,
     /// `KRB5_FCC_NOFILE`.
     FccNofile,
+    /// `KRB5_FCC_PERM`.
+    FccPerm,
     /// `KRB5_CC_NOTFOUND`.
     CcNotfound,
     /// `KRB5_CC_UNKNOWN_TYPE`.
@@ -58,6 +60,8 @@ pub enum Code {
     FccInternal,
     /// `KRB5_KDCREP_MODIFIED`.
     KdcrepModified,
+    /// `KRB5_CC_IO`.
+    CcIo,
     /// errno `ENOENT`.
     Enoent,
     /// errno `EINVAL`.
@@ -192,17 +196,46 @@ impl Krb5Error {
     /// MIT `set_errmsg_filename` (`cc_file.c:117-124`): "<message> (filename: <path>)".
     #[must_use]
     pub fn from_file_cache(e: &io::Error, path: &Path) -> Self {
-        let code = if e.kind() == io::ErrorKind::NotFound {
-            Code::FccNofile
-        } else {
-            Code::Other
-        };
+        let code = interpret_errno(e);
         let text = if code == Code::Other {
             e.to_string()
         } else {
             code_text(code).to_owned()
         };
         Self::new(code, format!("{text} (filename: {})", path.display()))
+    }
+
+    /// A cache file's write failure.
+    /// MIT `fcc_replace` (`cc_file.c:1286-1337`): the error of the write that replaces a cache
+    /// names no file.
+    #[must_use]
+    pub fn from_cache_write(e: &io::Error) -> Self {
+        match interpret_errno(e) {
+            Code::Other => Self::new(Code::Other, e.to_string()),
+            code => Self::of(code),
+        }
+    }
+}
+
+/// The cache code of an I/O error: an OS error by its errno, any other by its kind, or none.
+/// MIT `interpret_errno` (`cc_file.c:1346-1389`): a missing path is `KRB5_FCC_NOFILE`, a refused
+/// one `KRB5_FCC_PERM`, a bad argument or descriptor `KRB5_FCC_INTERNAL`, the rest `KRB5_CC_IO`.
+fn interpret_errno(e: &io::Error) -> Code {
+    use nix::errno::Errno;
+    let Some(n) = e.raw_os_error() else {
+        return match e.kind() {
+            io::ErrorKind::NotFound => Code::FccNofile,
+            io::ErrorKind::PermissionDenied => Code::FccPerm,
+            _ => Code::Other,
+        };
+    };
+    match Errno::from_raw(n) {
+        Errno::ENOENT | Errno::ENOTDIR | Errno::ELOOP | Errno::ENAMETOOLONG => Code::FccNofile,
+        Errno::EPERM | Errno::EACCES | Errno::EISDIR | Errno::EROFS => Code::FccPerm,
+        Errno::EINVAL | Errno::EEXIST | Errno::EFAULT | Errno::EBADF | Errno::EWOULDBLOCK => {
+            Code::FccInternal
+        }
+        _ => Code::CcIo,
     }
 }
 
@@ -214,6 +247,8 @@ fn code_text(code: Code) -> &'static str {
         Code::BadIntegrity => "Decrypt integrity check failed",
         // MIT `KRB5_FCC_NOFILE` (`krb5_err.et:263-263`): the text.
         Code::FccNofile => "No credentials cache found",
+        // MIT `KRB5_FCC_PERM` (`krb5_err.et:262-262`): the text.
+        Code::FccPerm => "Credentials cache permissions incorrect",
         // MIT `KRB5_CC_NOTFOUND` (`krb5_err.et:191-191`): the text.
         Code::CcNotfound => "Matching credential not found",
         // MIT `KRB5_CC_UNKNOWN_TYPE` (`krb5_err.et:190-190`): the text.
@@ -237,6 +272,8 @@ fn code_text(code: Code) -> &'static str {
         Code::FccInternal => "Internal credentials cache error",
         // MIT `KRB5_KDCREP_MODIFIED` (`krb5_err.et:200-200`): the text.
         Code::KdcrepModified => "KDC reply did not match expectations",
+        // MIT `KRB5_CC_IO` (`krb5_err.et:261-261`): the text.
+        Code::CcIo => "Credentials cache I/O operation failed",
         Code::Enoent => "No such file or directory",
         Code::Einval => "Invalid argument",
     }
@@ -406,6 +443,23 @@ mod tests {
         assert_eq!(
             Krb5Error::of(Code::KdcrepModified).message,
             "KDC reply did not match expectations"
+        );
+    }
+
+    /// Live MIT 1.22.2 `kinit -c /tmp/nonexistent-dir/cc`: "Failed to store credentials: No
+    /// credentials cache found", no file name; MIT's errno table for the rest.
+    #[test]
+    fn a_cache_write_error_is_its_errno_code_without_the_file() {
+        let write = |n| Krb5Error::from_cache_write(&io::Error::from_raw_os_error(n)).message;
+        assert_eq!(write(2), "No credentials cache found");
+        assert_eq!(write(20), "No credentials cache found");
+        assert_eq!(write(13), "Credentials cache permissions incorrect");
+        assert_eq!(write(30), "Credentials cache permissions incorrect");
+        assert_eq!(write(17), "Internal credentials cache error");
+        assert_eq!(write(28), "Credentials cache I/O operation failed");
+        assert_eq!(
+            Krb5Error::from_file_cache(&io::Error::from_raw_os_error(21), Path::new("/x")).message,
+            "Credentials cache permissions incorrect (filename: /x)"
         );
     }
 }
