@@ -46,8 +46,8 @@ use krb5_crypto::ProtocolKey;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::{
     Acl, ClosingFd, Error, OpenFailure, PrincipalStore, Signals, acl_for_store, bind_rpc_listeners,
-    bind_tcp_listeners, bind_udp_listeners, detach, open_database, shared_dump as shared_store,
-    write_pid_file,
+    bind_tcp_listeners, bind_udp_listeners, detach, names_relative_database, open_database,
+    shared_dump as shared_store, write_pid_file,
 };
 use krb5_log::klog::{self, Severity, os_error_text};
 use krb5_protocol::ReplayCache;
@@ -250,6 +250,23 @@ fn main() {
         && let Err(e) = write_pid_file(Path::new(pid_file))
     {
         fail_to_start(&progname, Some(&os_error_text(&e)), "creating PID file");
+    }
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:515-519`): the database is opened again after
+    // daemon(), so a relative database or stash name now opens from `/`, or kadmind stops as at
+    // its start.
+    let db_args: Vec<String> = args.values("-x").into_iter().map(str::to_owned).collect();
+    if !nofork && names_relative_database(&paths, &db_args) {
+        if let Err(e) = open_database(&paths, &db_args, "K/M") {
+            let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
+            fail_to_start(&progname, Some(&msg), "initializing");
+        }
+        let reloaded = shared
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .reload();
+        if let Err(e) = reloaded {
+            fail_to_start(&progname, Some(&e.to_string()), "initializing");
+        }
     }
     for l in &listeners {
         l.set_nonblocking(true).ok();

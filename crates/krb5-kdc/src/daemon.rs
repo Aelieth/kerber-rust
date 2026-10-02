@@ -89,6 +89,16 @@ pub fn open_database(
     open_store(lib, &db, &paths.key_stash_file).map_err(|e| OpenFailure::Database(e.to_string()))
 }
 
+/// Whether the realm's database or stash is named relative to the current directory, so that a
+/// daemon must open it again once [`detach`] has moved it to `/`: the name then means what it
+/// means to MIT's daemons, which open the realm after `daemon()`.
+/// MIT `main` (`kdc/main.c:1016-1016`): the realms are initialized again after `daemon(0, 0)`.
+#[must_use]
+pub fn names_relative_database(paths: &krb5_config::KdcPaths, db_args: &[String]) -> bool {
+    database_path(&paths.database_name, db_args).is_ok_and(|db| db.is_relative())
+        || paths.key_stash_file.is_relative()
+}
+
 /// Leave the terminal: fork, the parent exits 0, the child starts a new session in `/` with its
 /// standard streams on `/dev/null`. Call it before any thread is started.
 /// MIT `main` (`kdc/main.c:996-999`): `daemon(0, 0)` unless `-n`, after the sockets are bound.
@@ -180,6 +190,42 @@ impl Signals {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    #[test]
+    fn a_relative_database_or_stash_is_opened_again_after_detaching() {
+        let paths = |db: &str, stash: &str| krb5_config::KdcPaths {
+            profile: PathBuf::from("/nonexistent/kdc.conf"),
+            conf: None,
+            realm: Some("R".into()),
+            database_name: PathBuf::from(db),
+            key_stash_file: PathBuf::from(stash),
+            acl_file: None,
+            master_key_type: None,
+        };
+        let none: &[String] = &[];
+        assert!(!names_relative_database(
+            &paths("/s/principal", "/s/stash"),
+            none
+        ));
+        assert!(names_relative_database(
+            &paths("db/principal", "/s/stash"),
+            none
+        ));
+        assert!(names_relative_database(
+            &paths("/s/principal", "db/stash"),
+            none
+        ));
+        let dbname = ["dbname=db/other".to_owned()];
+        assert!(names_relative_database(
+            &paths("/s/principal", "/s/stash"),
+            &dbname
+        ));
+        let absolute = ["dbname=/s/other".to_owned()];
+        assert!(!names_relative_database(
+            &paths("db/principal", "/s/stash"),
+            &absolute
+        ));
+    }
 
     #[test]
     fn sighup_reopens_the_log_and_leaves_the_daemon_running() {

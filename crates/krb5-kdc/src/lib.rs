@@ -54,7 +54,10 @@ pub use audit::{
 #[cfg(feature = "test-hooks")]
 pub use create::seed_test_principals;
 pub use create::{create_realm, kdc_conf_for_realm};
-pub use daemon::{OpenFailure, Signals, database_path, detach, open_database, write_pid_file};
+pub use daemon::{
+    OpenFailure, Signals, database_path, detach, names_relative_database, open_database,
+    write_pid_file,
+};
 pub use error::Error;
 pub(crate) use issue::kdc_error_bytes;
 pub use issue::{

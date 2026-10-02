@@ -44,7 +44,7 @@ use std::path::PathBuf;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners, bind_udp_listeners,
-    detach, open_database, serve_all_until, shared_store, write_pid_file,
+    detach, names_relative_database, open_database, serve_all_until, shared_store, write_pid_file,
 };
 use krb5_log::klog::{self, Severity, os_error_text};
 
@@ -317,6 +317,22 @@ fn main() {
     {
         klog::com_err(Some(&os_error_text(&e)), "while creating PID file");
         std::process::exit(1);
+    }
+    // MIT `main` (`kdc/main.c:1016-1016`): the realm is opened again after daemon(), so a
+    // relative database or stash name now opens from `/`, or the KDC stops as at its start.
+    if !foreground && names_relative_database(&paths, &opts.args.db_args) {
+        let _ = init_realm(&progname, &realm, &paths, &opts.args);
+        let mut s = store
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Err(e) = krb5_kdc::StoreLifecycle::reload_if_stale(&mut **s) {
+            cannot_initialize(
+                &progname,
+                &realm,
+                &e.to_string(),
+                &format!("while initializing database for realm {realm}"),
+            );
+        }
     }
     #[cfg(feature = "test-hooks")]
     hooks::announce(&progname, persist.as_ref(), memory, &udp, &tcp);

@@ -1290,6 +1290,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** After detaching, the daemons open a relative `database_name` or
+  `key_stash_file` again from `/` and stop if it is not there, as MIT's. Unit; live.
 - **log.** Each daemon-log line is one write, so daemons sharing a log file never mix
   lines. Unit.
 - **kdc/admin.** A listen entry that does not resolve, or whose address family the host
