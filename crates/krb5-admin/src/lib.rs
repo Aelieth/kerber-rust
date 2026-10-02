@@ -285,6 +285,18 @@ impl<'a> AdminSession<'a> {
         self.store.reload_if_stale().map_err(Error::from)
     }
 
+    /// `f` as one change to the database under its exclusive lock, from a fresh read to one
+    /// write ([`PrincipalStore::change`]), with the session's ACL and actor.
+    fn change<T>(
+        &mut self,
+        f: impl FnOnce(&mut PrincipalStore, &Acl, &str) -> Result<T, krb5_kdc::Error>,
+    ) -> Result<T, krb5_kdc::Error> {
+        let (acl, actor) = (self.acl, self.actor.as_str());
+        self.store
+            .change(|s| f(s, acl, actor))
+            .and_then(|done| done)
+    }
+
     fn target_id(&self, name: &PrincipalName) -> String {
         name.unparse_with_realm(self.store.realm())
     }
@@ -337,8 +349,7 @@ impl<'a> AdminSession<'a> {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .create_password_etypes(self.acl, &self.actor, name, password, etypes)
+        self.change(|s, acl, actor| s.create_password_etypes(acl, actor, name, password, etypes))
             .map_err(Error::from)
     }
 
@@ -364,8 +375,7 @@ impl<'a> AdminSession<'a> {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .create_host_etypes(self.acl, &self.actor, name, etypes)
+        self.change(|s, acl, actor| s.create_host_etypes(acl, actor, name, etypes))
             .map_err(Error::from)
     }
 
@@ -389,8 +399,7 @@ impl<'a> AdminSession<'a> {
         policy: Option<&str>,
     ) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .create_etypes_pol(self.acl, &self.actor, name, password, etypes, policy)
+        self.change(|s, acl, actor| s.create_etypes_pol(acl, actor, name, password, etypes, policy))
             .map_err(Error::from)
     }
 
@@ -424,8 +433,7 @@ impl<'a> AdminSession<'a> {
         self.acl
             .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
             .map_err(Error::from)?;
-        self.store
-            .chrand_etypes_keepold(name, etypes, u32::from(keepold), &self.actor)
+        self.change(|s, _, actor| s.chrand_etypes_keepold(name, etypes, u32::from(keepold), actor))
             .map(|_| ())
             .map_err(Error::from)
     }
@@ -447,8 +455,7 @@ impl<'a> AdminSession<'a> {
     /// `name` is not in the store; [`Error::Inner`] when the store cannot be reloaded or saved.
     pub fn delete(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .delete(self.acl, &self.actor, name)
+        self.change(|s, acl, actor| s.delete(acl, actor, name))
             .map_err(Error::from)
     }
 
@@ -461,8 +468,7 @@ impl<'a> AdminSession<'a> {
     /// `old` is an alias stub, or the store cannot be reloaded or saved.
     pub fn rename(&mut self, old: &PrincipalName, new: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .rename(self.acl, &self.actor, old, new)
+        self.change(|s, acl, actor| s.rename(acl, actor, old, new))
             .map_err(Error::from)
     }
 
@@ -481,15 +487,16 @@ impl<'a> AdminSession<'a> {
         target_realm: &str,
     ) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .create_alias_in(alias, alias_realm, target, target_realm, &self.actor)
-            .map_err(|e| match e {
-                // MIT KADM5_DUP text (kadm5_create_alias / kdb_get_entry).
-                krb5_kdc::Error::AlreadyExists => {
-                    Error::Inner("Principal or policy already exists".into())
-                }
-                other => Error::from(other),
-            })
+        self.change(|s, _, actor| {
+            s.create_alias_in(alias, alias_realm, target, target_realm, actor)
+        })
+        .map_err(|e| match e {
+            // MIT KADM5_DUP text (kadm5_create_alias / kdb_get_entry).
+            krb5_kdc::Error::AlreadyExists => {
+                Error::Inner("Principal or policy already exists".into())
+            }
+            other => Error::from(other),
+        })
     }
 
     /// Over-the-wire ktadd (ACL `e` / extract).
@@ -586,9 +593,10 @@ impl<'a> AdminSession<'a> {
                 .map_err(Error::from)?;
         }
         let realm = self.store.realm().to_owned();
-        self.store
-            .set_password_etypes_keepold_n_in(name, &realm, password, 0, &self.actor, etypes)
-            .map_err(Error::from)
+        self.change(|s, _, actor| {
+            s.set_password_etypes_keepold_n_in(name, &realm, password, 0, actor, etypes)
+        })
+        .map_err(Error::from)
     }
 
     /// Realm of the bound store.
@@ -662,8 +670,11 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .apply_admin_fields_in(
+        let acl = self.acl;
+        let restrictions = acl.restrictions(&self.actor, Some(&tid));
+        // MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
+        self.change(|s, _, actor| {
+            s.apply_admin_fields_in(
                 name,
                 &realm,
                 krb5_kdc::AdminFields {
@@ -675,15 +686,14 @@ impl<'a> AdminSession<'a> {
                     clear_policy: false,
                     max_renewable_life: None,
                 },
-                &self.actor,
-            )
-            .map_err(Error::from)?;
-        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
-            self.store
-                .impose_acl_restrictions(name, rs)
-                .map_err(Error::from)?;
-        }
-        Ok(())
+                actor,
+            )?;
+            if let Some(rs) = restrictions {
+                s.impose_acl_restrictions(name, rs)?;
+            }
+            Ok(())
+        })
+        .map_err(Error::from)
     }
 
     /// `modprinc -expire`.
@@ -703,8 +713,8 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .apply_admin_fields_in(
+        self.change(|s, _, actor| {
+            s.apply_admin_fields_in(
                 name,
                 &realm,
                 krb5_kdc::AdminFields {
@@ -716,9 +726,10 @@ impl<'a> AdminSession<'a> {
                     clear_policy: false,
                     max_renewable_life: None,
                 },
-                &self.actor,
+                actor,
             )
-            .map_err(Error::from)
+        })
+        .map_err(Error::from)
     }
 
     /// `modprinc -unlock`.
@@ -734,8 +745,7 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .admin_unlock_in(name, &realm, &self.actor)
+        self.change(|s, _, actor| s.admin_unlock_in(name, &realm, actor))
             .map_err(Error::from)
     }
 
@@ -757,8 +767,11 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .apply_admin_fields_in(
+        let acl = self.acl;
+        let restrictions = acl.restrictions(&self.actor, Some(&tid));
+        // MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
+        self.change(|s, _, actor| {
+            s.apply_admin_fields_in(
                 name,
                 &realm,
                 krb5_kdc::AdminFields {
@@ -770,15 +783,14 @@ impl<'a> AdminSession<'a> {
                     clear_policy: false,
                     max_renewable_life,
                 },
-                &self.actor,
-            )
-            .map_err(Error::from)?;
-        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
-            self.store
-                .impose_acl_restrictions(name, rs)
-                .map_err(Error::from)?;
-        }
-        Ok(())
+                actor,
+            )?;
+            if let Some(rs) = restrictions {
+                s.impose_acl_restrictions(name, rs)?;
+            }
+            Ok(())
+        })
+        .map_err(Error::from)
     }
 
     /// `modprinc -policy`.
@@ -794,8 +806,11 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .apply_admin_fields_in(
+        let acl = self.acl;
+        let restrictions = acl.restrictions(&self.actor, Some(&tid));
+        // MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
+        self.change(|s, _, actor| {
+            s.apply_admin_fields_in(
                 name,
                 &realm,
                 krb5_kdc::AdminFields {
@@ -807,15 +822,14 @@ impl<'a> AdminSession<'a> {
                     clear_policy: false,
                     max_renewable_life: None,
                 },
-                &self.actor,
-            )
-            .map_err(Error::from)?;
-        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
-            self.store
-                .impose_acl_restrictions(name, rs)
-                .map_err(Error::from)?;
-        }
-        Ok(())
+                actor,
+            )?;
+            if let Some(rs) = restrictions {
+                s.impose_acl_restrictions(name, rs)?;
+            }
+            Ok(())
+        })
+        .map_err(Error::from)
     }
 
     /// `addpol`.
@@ -839,7 +853,8 @@ impl<'a> AdminSession<'a> {
         let exists = self.store.policies().contains_key(&a.name);
         let pol =
             crate::kadm5::create_policy_local(exists, a).map_err(|t| Error::Inner(t.to_owned()))?;
-        self.store.put_policy_and_save(pol).map_err(Error::from)
+        self.change(|s, _, _| s.put_policy_and_save(pol))
+            .map_err(Error::from)
     }
 
     /// `modpol` on the merged record.
@@ -862,7 +877,8 @@ impl<'a> AdminSession<'a> {
             .ok_or_else(|| Error::Inner("Policy does not exist".into()))?;
         let pol = crate::kadm5::modify_policy_local(&existing, a)
             .map_err(|t| Error::Inner(t.to_owned()))?;
-        self.store.put_policy_and_save(pol).map_err(Error::from)
+        self.change(|s, _, _| s.put_policy_and_save(pol))
+            .map_err(Error::from)
     }
 
     /// `delpol`.
@@ -873,7 +889,8 @@ impl<'a> AdminSession<'a> {
     /// be saved.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         let _ = self.reload();
-        self.store.delete_policy(name).map_err(Error::from)
+        self.change(|s, _, _| s.delete_policy(name))
+            .map_err(Error::from)
     }
 
     /// `listpols`.
@@ -933,8 +950,7 @@ impl<'a> AdminSession<'a> {
     ) -> Result<(), Error> {
         self.reload()?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .set_string_in(name, &realm, key, Some(val), &self.actor)
+        self.change(|s, _, actor| s.set_string_in(name, &realm, key, Some(val), actor))
             .map_err(Error::from)
     }
 

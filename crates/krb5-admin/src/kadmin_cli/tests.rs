@@ -143,13 +143,6 @@ impl Rig {
             store,
             realm: TEST_REALM.to_owned(),
             caller: format!("root/admin@{TEST_REALM}"),
-            open: Open {
-                db: PathBuf::from("/nonexistent/principal"),
-                stash: PathBuf::from("/nonexistent/stash"),
-                conf: None,
-                keysalts: Vec::new(),
-                typed: None,
-            },
         };
         Self {
             out,
@@ -207,10 +200,7 @@ impl Rig {
         let (db, stash) = (dir.join("principal"), dir.join("stash"));
         let (store, _) = bootstrap_documented().unwrap();
         krb5_kdc::save_store(&store, &db, &stash).unwrap();
-        let mut rig = Self::with_store(krb5_kdc::load_store(&db, &stash).unwrap(), b"");
-        let open = &mut rig.h.as_mut().unwrap().open;
-        open.db = db;
-        open.stash = stash;
+        let rig = Self::with_store(krb5_kdc::load_store(&db, &stash).unwrap(), b"");
         (rig, dir)
     }
 }

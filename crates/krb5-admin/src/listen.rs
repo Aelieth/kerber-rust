@@ -516,10 +516,9 @@ fn handle_kpasswd_from(
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // House rule (`kadm5/dispatch.rs` `write_store`): reload, then mutate, then
-        // save, as `AdminSession::change_password` does, so the change starts from the
-        // database's last save. Nothing keeps another process out until this save: a
-        // `kadmin.local` write saved in between is overwritten.
+        // House rule (`kadm5/dispatch.rs` `write_store`): kadmind's store lock first, then the
+        // database's: the key change is one change under the exclusive lock, from a fresh read
+        // of the database to its write, as `AdminSession::change_password` makes it.
         // MIT `main` (`ovsec_kadmd.c:446-446`): the global handle comes from
         // `kadm5_init(…, "kadmind", …)`.
         // MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses the global handle,
@@ -532,13 +531,9 @@ fn handle_kpasswd_from(
             if self_change {
                 g.check_min_life_in(&targ, &targ_realm)?;
             }
-            crate::kadm5::lock_database(&g)
-                .map_err(|_| Error::Inner("Insufficient access to lock database".into()))?;
-            g.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp)
-                .map_err(|e| {
-                    crate::kadm5::undo_failed_update(&mut g);
-                    Error::from(e)
-                })
+            g.change(|s| s.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp))
+                .map_err(Error::from)?
+                .map_err(Error::from)
         })();
         match changed {
             Ok(()) => (0u16, String::new(), "success".to_owned()),

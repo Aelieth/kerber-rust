@@ -1571,7 +1571,8 @@ fn kpasswd_keeps_an_out_of_process_principal() {
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["z8x"]);
     let mut other = load_store(&db, &stash).expect("load writer");
     other
-        .create_password(&acl, &documented_admin_id(), &extra, b"z8x-secret")
+        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"z8x-secret"))
+        .expect("lock")
         .expect("out-of-process addprinc");
     assert!(
         other.get_name(&extra).is_some(),

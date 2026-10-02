@@ -96,6 +96,10 @@ pub(super) const KADM5_BAD_HISTORY: u32 = 43_787_540;
 pub(super) const KADM5_BAD_MIN_PASS_LIFE: u32 = 43_787_541;
 /// MIT `KADM5_DUP`.
 pub(super) const KADM5_DUP: u32 = 43_787_527;
+/// MIT `OSA_ADB_DUP` (`lib/kdb/adb_err.et`): a policy the locked create finds there already.
+pub(super) const OSA_ADB_DUP: u32 = 28_810_241;
+/// MIT `OSA_ADB_NOENT` (`lib/kdb/adb_err.et`): a policy the locked write or delete finds gone.
+pub(super) const OSA_ADB_NOENT: u32 = 28_810_242;
 /// MIT `KADM5_FAILURE`.
 pub(super) const KADM5_FAILURE: u32 = 43_787_520;
 /// MIT `ovk` 22 (`kadm_err.et`; base `43787520`).

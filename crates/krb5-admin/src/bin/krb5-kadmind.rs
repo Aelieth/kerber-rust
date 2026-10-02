@@ -430,15 +430,23 @@ fn serve(
                     let registry_g = Arc::clone(&registry);
                     let store = Arc::clone(shared);
                     // The acceptor keys as the database holds them now, as MIT's KDB keytab
-                    // reads them for each context.
+                    // reads them for each context, under the database's lock: a lock that may
+                    // not be taken leaves the context no key, so it is not accepted.
+                    // MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:769-773`): the KDB keytab's lookup takes the shared lock, and fails when it cannot.
                     let keys = {
                         let mut g = store
                             .write()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if let Err(e) = g.reload_if_stale() {
-                            klog::syslog(Severity::Err, &format!("{e} while reloading database"));
+                        match g.reload_if_stale() {
+                            Ok(()) => acceptor_keys(&g),
+                            Err(e) => {
+                                klog::syslog(
+                                    Severity::Err,
+                                    &format!("{e} while reloading database"),
+                                );
+                                Vec::new()
+                            }
                         }
-                        acceptor_keys(&g)
                     };
                     let acl = acl.clone();
                     let realm = realm.to_owned();

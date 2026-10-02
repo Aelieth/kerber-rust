@@ -117,7 +117,8 @@ fn a_reader_sees_another_writers_save_whatever_the_files_size() {
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["stamped"]);
     let realm = writer.realm().to_owned();
     writer
-        .insert_new_randkey(&name, &realm, &[], "test@KERBER.TEST")
+        .change(|s| s.insert_new_randkey(&name, &realm, &[], "test@KERBER.TEST"))
+        .unwrap()
         .unwrap();
     save_store(&writer, &db, &stash).unwrap();
     reader.reload_if_stale().unwrap();
@@ -141,7 +142,8 @@ fn a_reader_sees_a_write_that_kept_the_age_and_the_inode() {
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["in-place"]);
     let realm = writer.realm().to_owned();
     writer
-        .insert_new_randkey(&name, &realm, &[], "test@KERBER.TEST")
+        .change(|s| s.insert_new_randkey(&name, &realm, &[], "test@KERBER.TEST"))
+        .unwrap()
         .unwrap();
     std::fs::write(&kept, std::fs::read(&db).unwrap()).unwrap();
     std::fs::rename(&kept, &db).unwrap();
@@ -190,4 +192,189 @@ fn the_lock_texts_are_mits() {
         DbLockError::NoLockFile.to_string(),
         "KADM5 administration database lock file missing"
     );
+}
+
+/// Two handles on one database (two open file descriptions, as two processes have) changing it
+/// at once: each change waits for the other's lock, starts from what the other saved, and
+/// nothing is lost.
+#[test]
+fn two_handles_changing_at_once_lose_nothing() {
+    let (db, stash) = saved("krb5-lock-two");
+    let n = 25;
+    let side = |tag: &'static str, db: PathBuf, stash: PathBuf| {
+        std::thread::spawn(move || {
+            let mut store = load_store(&db, &stash).unwrap();
+            let realm = store.realm().to_owned();
+            for i in 0..n {
+                let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [format!("{tag}{i}")]);
+                store
+                    .change(|s| s.insert_new_randkey(&name, &realm, &[], "test@KERBER.TEST"))
+                    .unwrap()
+                    .unwrap();
+            }
+        })
+    };
+    let a = side("a", db.clone(), stash.clone());
+    let b = side("b", db.clone(), stash.clone());
+    a.join().unwrap();
+    b.join().unwrap();
+    let all = load_store(&db, &stash).unwrap();
+    for tag in ["a", "b"] {
+        for i in 0..n {
+            let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [format!("{tag}{i}")]);
+            assert!(all.get_name(&name).is_some(), "{tag}{i} lost");
+        }
+    }
+}
+
+/// The lost update P9 closes: a store read before another writer saved changes the database, and
+/// its change keeps the other writer's, because it reads the database again under the lock.
+#[test]
+fn a_stale_stores_change_keeps_another_writers_save() {
+    let (db, stash) = saved("krb5-lock-stale-write");
+    let mut stale = load_store(&db, &stash).unwrap();
+    let mut other = load_store(&db, &stash).unwrap();
+    let realm = other.realm().to_owned();
+    let x = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["x"]);
+    let y = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["y"]);
+    other
+        .change(|s| s.insert_new_randkey(&x, &realm, &[], "test@KERBER.TEST"))
+        .unwrap()
+        .unwrap();
+    assert!(stale.get_name(&x).is_none());
+    stale
+        .change(|s| s.insert_new_randkey(&y, &realm, &[], "test@KERBER.TEST"))
+        .unwrap()
+        .unwrap();
+    let all = load_store(&db, &stash).unwrap();
+    assert!(all.get_name(&x).is_some() && all.get_name(&y).is_some());
+}
+
+/// A change that makes no mutation writes nothing: the database file and its age stay.
+#[test]
+fn a_change_with_no_mutation_writes_nothing() {
+    let (db, stash) = saved("krb5-lock-noop");
+    let mut store = load_store(&db, &stash).unwrap();
+    let (ino, before) = (std::fs::metadata(&db).unwrap().ino(), age(&db));
+    store.change(|_| Ok::<(), ()>(())).unwrap().unwrap();
+    assert_eq!(std::fs::metadata(&db).unwrap().ino(), ino);
+    assert_eq!(age(&db), before);
+}
+
+/// A mutation of a store with a database outside a change is refused, so nothing can be saved
+/// without reading the database again under the exclusive lock first.
+#[test]
+fn a_mutation_outside_a_change_is_refused() {
+    let (db, stash) = saved("krb5-lock-guard");
+    let mut store = load_store(&db, &stash).unwrap();
+    let realm = store.realm().to_owned();
+    let z = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["z"]);
+    let err = store
+        .insert_new_randkey(&z, &realm, &[], "test@KERBER.TEST")
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("outside the database's exclusive lock"),
+        "{err}"
+    );
+    assert!(load_store(&db, &stash).unwrap().get_name(&z).is_none());
+}
+
+/// A change that panics leaves the store as a change found it: a later mutation outside a change
+/// is still refused, the half-made change is read away, and the next change saves.
+#[test]
+fn a_change_that_panics_leaves_the_store_guarded() {
+    let (db, stash) = saved("krb5-lock-panic");
+    let mut store = load_store(&db, &stash).unwrap();
+    let realm = store.realm().to_owned();
+    let half = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["half"]);
+    let whole = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["whole"]);
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        store.change(|s| -> Result<(), krb5_kdc::Error> {
+            s.insert_new_randkey(&half, &realm, &[], "test@KERBER.TEST")?;
+            panic!("inside the change");
+        })
+    }));
+    assert!(panicked.is_err());
+    assert!(
+        store
+            .insert_new_randkey(&whole, &realm, &[], "test@KERBER.TEST")
+            .is_err()
+    );
+    store.reload_if_stale().unwrap();
+    assert!(store.get_name(&half).is_none());
+    store
+        .change(|s| s.insert_new_randkey(&whole, &realm, &[], "test@KERBER.TEST"))
+        .unwrap()
+        .unwrap();
+    let on_disk = load_store(&db, &stash).unwrap();
+    assert!(on_disk.get_name(&whole).is_some() && on_disk.get_name(&half).is_none());
+}
+
+/// A test hook writes through the locked change as every writer does (kadmin-rust-gate's
+/// `krb5-kdb setlastpwd`): a store that already has the database open, as a running kadmind
+/// has, reads the hook's write on its next look.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_hook_write_is_read_by_a_store_already_open() {
+    let (db, stash) = saved("krb5-lock-hook");
+    let mut running = load_store(&db, &stash).unwrap();
+    let conf = db.with_extension("conf");
+    std::fs::write(&conf, "[libdefaults]\n default_realm = KERBER.TEST\n").unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_krb5-kdb"))
+        .args(["setlastpwd", "user", "1000000000"])
+        .env("KRB5_KDC_DB", &db)
+        .env("KRB5_KDC_STASH", &stash)
+        .env("KRB5_CONFIG", &conf)
+        .env("KRB5_KDC_PROFILE", db.with_extension("none"))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    running.reload_if_stale().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    let p = running.get_name(&user).unwrap();
+    let last = p
+        .tl_data
+        .iter()
+        .find(|t| t.ty == krb5_kdc::TL_LAST_PWD_CHANGE)
+        .unwrap();
+    assert_eq!(last.contents, 1_000_000_000_u32.to_le_bytes());
+}
+
+/// kadmin.local's `lock`: the exclusive lock is held across changes until `unlock`, and another
+/// process's change waits for it.
+#[test]
+fn the_session_lock_holds_another_writer_off_until_unlock() {
+    let (db, stash) = saved("krb5-lock-session");
+    let mut session = load_store(&db, &stash).unwrap();
+    session.lock_database().unwrap();
+    let realm = session.realm().to_owned();
+    let mine = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["mine"]);
+    session
+        .change(|s| s.insert_new_randkey(&mine, &realm, &[], "test@KERBER.TEST"))
+        .unwrap()
+        .unwrap();
+    let (tx, rx) = mpsc::channel();
+    let (db2, stash2) = (db.clone(), stash.clone());
+    let t = std::thread::spawn(move || {
+        let mut other = load_store(&db2, &stash2).unwrap();
+        let realm = other.realm().to_owned();
+        let theirs = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["theirs"]);
+        other
+            .change(|s| s.insert_new_randkey(&theirs, &realm, &[], "test@KERBER.TEST"))
+            .unwrap()
+            .unwrap();
+        tx.send(()).unwrap();
+    });
+    assert!(rx.recv_timeout(Duration::from_millis(400)).is_err());
+    session.unlock_database().unwrap();
+    rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    t.join().unwrap();
+    let all = load_store(&db, &stash).unwrap();
+    let theirs = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["theirs"]);
+    assert!(all.get_name(&mine).is_some() && all.get_name(&theirs).is_some());
 }

@@ -141,18 +141,16 @@ impl PrincipalStore {
         Self::keytab_from(p)
     }
 
-    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`.
-    ///
-    /// On export, write, or chrand-save failure a rotation is rolled back
-    /// so the dump kvno is unchanged. Standalone `chrand` does not roll
-    /// back. A rollback save error is returned with the original failure
-    /// (not swallowed).
+    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`, as one change to
+    /// the database under its exclusive lock ([`Self::change`]): the rotation is written only
+    /// once `write` succeeded, so a failed export or `write` leaves the database's kvno as it was
+    /// (a store with no database puts the old keys back). Standalone `chrand` does not roll back.
     ///
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing or has no keys; [`Error::Rng`] when
-    /// the rotation's CSPRNG fails; [`Error::Db`] when saving the rotation or its rollback
-    /// fails; [`Error::Crypto`] when the realm is not a GeneralString; and any error `write`
+    /// the rotation's CSPRNG fails; [`Error::Db`] when the database cannot be locked, read again
+    /// or written; [`Error::Crypto`] when the realm is not a GeneralString; and any error `write`
     /// returns.
     pub fn ktadd_local_atomic(
         &mut self,
@@ -162,34 +160,24 @@ impl PrincipalStore {
         write: impl FnOnce(&Keytab) -> Result<(), Error>,
     ) -> Result<Keytab, Error> {
         let snap = self.get_name(name).cloned().ok_or(Error::NotFound)?;
-        if rotate && let Err(e) = self.chrand_etypes_keepold(name, &[], 0, actor) {
-            return Err(self.rollback_rotate(true, snap, e));
-        }
-        let kt = match self.export_keytab_local(name) {
-            Ok(kt) => kt,
-            Err(e) => return Err(self.rollback_rotate(rotate, snap, e)),
-        };
-        match write(&kt) {
-            Ok(()) => Ok(kt),
-            Err(e) => Err(self.rollback_rotate(rotate, snap, e)),
-        }
-    }
-
-    fn rollback_rotate(&mut self, rotate: bool, snap: Principal, e: Error) -> Error {
-        if !rotate {
-            return e;
-        }
-        let id = snap.id();
-        self.note_ulog(id.clone(), false, Some(snap.clone()));
-        self.map.insert(id, snap);
-        match self.save_if_configured() {
-            Ok(()) => e,
-            Err(Error::Db { kind, text }) => Error::Db {
-                kind,
-                text: format!("{e}; rollback failed: {text}"),
-            },
-            Err(re) => Error::Crypto(format!("{e}; rollback failed: {re}")),
-        }
+        let persisted = self.persist_paths.is_some();
+        self.change(|s| {
+            let done = (|| {
+                if rotate {
+                    s.chrand_etypes_keepold(name, &[], 0, actor)?;
+                }
+                let kt = s.export_keytab_local(name)?;
+                write(&kt)?;
+                Ok(kt)
+            })();
+            if done.is_err() && rotate && !persisted {
+                let id = snap.id();
+                s.note_ulog(id.clone(), false, Some(snap.clone()));
+                s.map.insert(id, snap);
+                s.commit_ulog();
+            }
+            done
+        })?
     }
 
     fn keytab_from(p: &Principal) -> Result<Keytab, Error> {

@@ -892,20 +892,27 @@ fn set_or_del(s: &mut Session<'_>, pname: &str, key: &str, value: Option<&str>, 
     }
 }
 
-/// MIT `kadmin_lock` (`kadmin.c:636-648`): the store has no database lock to hold, but a writer
-/// that could not take one is refused as MIT's `krb5_db_lock` refuses it.
+/// MIT `kadmin_lock` (`kadmin.c:636-648`): the database's exclusive lock, taken (waiting for
+/// any other holder) and held across commands until `unlock`; every other process waits.
 pub(crate) fn lock(s: &mut Session<'_>, _argv: &[String]) {
     if s.locked {
         return;
     }
-    if krb5_protocol::check_secret_file_writable(s.h.db_path()).is_err() {
-        s.io.com_err("lock", Some(texts::CANTLOCK), "");
+    if let Err(e) = s.h.store.lock_database() {
+        s.io.com_err("lock", Some(&texts::princ_text(&e)), "");
         return;
     }
     s.locked = true;
 }
 
-/// MIT `kadmin_unlock` (`kadmin.c:651-663`): the lock `lock` noted is let go.
+/// MIT `kadmin_unlock` (`kadmin.c:651-663`): the lock `lock` took is let go.
 pub(crate) fn unlock(s: &mut Session<'_>, _argv: &[String]) {
+    if !s.locked {
+        return;
+    }
+    if let Err(e) = s.h.store.unlock_database() {
+        s.io.com_err("unlock", Some(&texts::princ_text(&e)), "");
+        return;
+    }
     s.locked = false;
 }

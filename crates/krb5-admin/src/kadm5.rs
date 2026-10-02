@@ -27,7 +27,6 @@ mod tests;
 pub use auth::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
 };
-pub(crate) use dispatch::{lock_database, undo_failed_update};
 pub use glob::glob_pattern_ok;
 pub(crate) use glob::{glob_expand, glob_is_match, policies_matching, principals_matching};
 pub use iprop::{IpropLast, IpropPull, iprop_fullresync, iprop_pull};

@@ -1296,7 +1296,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 #[cfg(feature = "test-hooks")]
 mod hooks {
     use krb5_kdc::testrealm::TEST_USER;
-    use krb5_kdc::{NamedPolicy, PrincipalStore, load_store, save_store};
+    use krb5_kdc::{NamedPolicy, PrincipalStore, load_store};
     use krb5_types::PrincipalName;
     use zeroize::Zeroizing;
 
@@ -1352,8 +1352,9 @@ mod hooks {
     ) -> Result<(), (u8, String)> {
         let (db, stash) = (util.db_args.open_file(), &util.paths.key_stash_file);
         let mut store = load_store(&db, stash).map_err(|e| (1, format!("load store: {e}")))?;
-        f(&mut store)?;
-        save_store(&store, &db, stash).map_err(|e| (1, format!("save store: {e}")))
+        store
+            .change(f)
+            .map_err(|e| (1, format!("save store: {e}")))?
     }
 
     /// A named policy, bound to `user` when that principal exists.
@@ -1424,8 +1425,9 @@ mod hooks {
         let (name, _) =
             krb5_types::principal_from_unparsed(princ, "").map_err(|e| (2, e.to_string()))?;
         with_store(util, |store| {
-            store.set_last_pwd_unix(&name, ts);
-            Ok(())
+            store
+                .set_last_pwd_unix(&name, ts)
+                .map_err(|e| (1, format!("setlastpwd: {e}")))
         })?;
         Ok(format!("ok setlastpwd {princ} {ts}"))
     }

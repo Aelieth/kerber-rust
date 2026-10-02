@@ -37,7 +37,7 @@ fn pw_expiration_on_modify_is_last_pwd_change_plus_max_life() {
     let mut pol = NamedPolicy::new("life");
     pol.pw_max_life = 3600;
     store.put_policy(pol);
-    store.set_last_pwd_unix(&user, 1_000_000);
+    store.set_last_pwd_unix(&user, 1_000_000).unwrap();
     store
         .apply_admin_fields(
             &user,

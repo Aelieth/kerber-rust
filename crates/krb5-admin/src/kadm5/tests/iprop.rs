@@ -37,7 +37,8 @@ fn iprop_get_updates_full_resync_then_delta() {
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["iproprpc"]);
     {
         let mut g = store.write().unwrap();
-        g.create_password(&acl, &actor, &extra, b"iprop-rpc-secret")
+        g.change(|s| s.create_password(&acl, &actor, &extra, b"iprop-rpc-secret"))
+            .unwrap()
             .unwrap();
     }
     let mut delta = XdrW::default();

@@ -391,18 +391,22 @@ impl PrincipalStore {
         self.set_password_keepold_n_in(name, &self.realm.clone(), password, 0, actor)
     }
 
-    /// Set `TL_LAST_PWD_CHANGE` (tests / min_life).
-    pub fn set_last_pwd_unix(&mut self, name: &PrincipalName, ts: u32) {
-        let Ok(id) = self.canonical_id(name, &self.realm) else {
-            return;
-        };
-        if let Some(p) = self.map.get_mut(&id) {
-            p.tl_data.retain(|t| t.ty != TL_LAST_PWD_CHANGE);
-            p.tl_data.push(TlData {
-                ty: TL_LAST_PWD_CHANGE,
-                contents: ts.to_le_bytes().to_vec(),
-            });
-        }
+    /// Set `TL_LAST_PWD_CHANGE` (tests / min_life), saved as every mutation is: inside
+    /// [`Self::change`] the change writes it, and a store with a database refuses it elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when the store has a
+    /// database and this is not inside a change.
+    pub fn set_last_pwd_unix(&mut self, name: &PrincipalName, ts: u32) -> Result<(), Error> {
+        let id = self.canonical_id(name, &self.realm)?;
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        p.tl_data.retain(|t| t.ty != TL_LAST_PWD_CHANGE);
+        p.tl_data.push(TlData {
+            ty: TL_LAST_PWD_CHANGE,
+            contents: ts.to_le_bytes().to_vec(),
+        });
+        self.save_if_configured()
     }
 
     /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): the `passwd_check` for a

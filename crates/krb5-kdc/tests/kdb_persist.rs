@@ -88,7 +88,8 @@ fn persist_ulog_survives_reload() {
     save_store(&store, &db, &stash).unwrap();
     let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "ulog.kerber.test"]);
     store
-        .create_host(&acl, &documented_admin_id(), &extra)
+        .change(|s| s.create_host(&acl, &documented_admin_id(), &extra))
+        .unwrap()
         .unwrap();
     let sno = store.serial();
     assert!(sno > 0);
@@ -142,7 +143,8 @@ fn reload_if_stale_sees_kadmin_create() {
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["extra"]);
     writer.persist_paths = Some((db.clone(), stash.clone()));
     writer
-        .create_password(&acl, &documented_admin_id(), &extra, b"extra-secret")
+        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"extra-secret"))
+        .unwrap()
         .unwrap();
     reader.reload_if_stale().unwrap();
     assert!(
@@ -205,7 +207,8 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
     writer.persist_paths = Some((db.clone(), stash.clone()));
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["unrelated"]);
     writer
-        .create_password(&acl, &documented_admin_id(), &extra, b"unrelated-secret")
+        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"unrelated-secret"))
+        .unwrap()
         .unwrap();
     reader.reload_if_stale().unwrap();
     assert!(reader.get_name(&extra).is_some(), "reload must see extra");
@@ -244,9 +247,12 @@ fn persist_paths_saves_password_lock_and_expiry() {
         .max()
         .unwrap();
     store
-        .change_password(&acl, &documented_admin_id(), &user, b"rotated-secret")
+        .change(|s| {
+            s.change_password(&acl, &documented_admin_id(), &user, b"rotated-secret")?;
+            s.set_status(&user, true, 1_700_000_123)
+        })
+        .unwrap()
         .unwrap();
-    store.set_status(&user, true, 1_700_000_123).unwrap();
     let loaded = load_store(&db, &stash).unwrap();
     let p = loaded.get_name(&user).unwrap();
     let kvno_after = p.keys.iter().map(|k| k.kvno).max().unwrap();

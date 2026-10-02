@@ -489,12 +489,15 @@ fn persist_round_trip_keeps_serial_not_mtime() {
     store.persist_paths = Some((db.clone(), stash.clone()));
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["serialed"]);
     store
-        .create_password(
-            &acl,
-            &crate::testrealm::documented_admin_id(),
-            &extra,
-            b"serial-secret",
-        )
+        .change(|s| {
+            s.create_password(
+                &acl,
+                &crate::testrealm::documented_admin_id(),
+                &extra,
+                b"serial-secret",
+            )
+        })
+        .unwrap()
         .unwrap();
     let sno = store.serial();
     assert!(sno > 0);
@@ -522,7 +525,8 @@ fn create_host_changepw_flag_survives_save() {
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     store
-        .create_host(&acl, &crate::testrealm::documented_admin_id(), &cpw)
+        .change(|s| s.create_host(&acl, &crate::testrealm::documented_admin_id(), &cpw))
+        .unwrap()
         .unwrap();
     let loaded = crate::persist::load_store(&db, &stash).unwrap();
     let p = loaded.get_name(&cpw).expect("changepw");
@@ -610,8 +614,11 @@ fn ktadd_export_fail_rolls_back_rotation() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The rotation is written only once the keytab was: a keytab write that fails leaves the
+/// database as it was, with nothing to roll back on disk, even when the database's directory has
+/// meanwhile become read-only.
 #[test]
-fn ktadd_rollback_save_fail_surfaces_both() {
+fn ktadd_write_failure_leaves_the_database_unwritten() {
     let dir = krb5_testkit::scratch_dir("krb5-ktadd-rbsave");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
@@ -623,6 +630,7 @@ fn ktadd_rollback_save_fail_surfaces_both() {
         .unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
+    let before = max_kvno(&store, &extra);
     let err = store
         .ktadd_local_atomic(
             &extra,
@@ -640,12 +648,14 @@ fn ktadd_rollback_save_fail_surfaces_both() {
         .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("disk full"), "{msg}");
-    assert!(msg.contains("rollback failed"), "{msg}");
+    assert_eq!(max_kvno(&store, &extra), before);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
     }
+    let reloaded = crate::persist::load_store(&db, &stash).unwrap();
+    assert_eq!(max_kvno(&reloaded, &extra), before);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

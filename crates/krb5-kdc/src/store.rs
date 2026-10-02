@@ -20,7 +20,7 @@ mod transit;
 mod tests;
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -94,6 +94,8 @@ pub struct PrincipalStore {
     pub(crate) db_stamp: Option<DbStamp>,
     /// The database's lock files, opened once with the database.
     pub(crate) dblock: Option<Arc<DbLock>>,
+    /// Whether a mutation asked for a save during the current [`Self::change`].
+    changed: ChangeMark,
     /// Per-realm NT domain SID (never the dummy `S-1-5-21-1-2-3`).
     domain_sid: RpcSid,
     /// Next RID to allocate (`RID_FIRST_USER` and up).
@@ -103,9 +105,39 @@ pub struct PrincipalStore {
     serial: Arc<AtomicU32>,
     ulog: Arc<Mutex<VecDeque<UlogEntry>>>,
     pending: Arc<Mutex<Vec<UlogEntry>>>,
-    /// Set by `hold_saves`: a change's own save only commits its update-log entries, and the
-    /// holder writes the database once at the end.
+    /// Set while [`Self::change`] runs `f`: a mutation's own save is only noted, and the change
+    /// writes the database once at its end.
     saves_held: bool,
+}
+
+/// Whether a mutation asked for a save; cloned with the store as a fresh flag of the same value.
+#[derive(Debug, Default)]
+struct ChangeMark(AtomicBool);
+
+impl Clone for ChangeMark {
+    fn clone(&self) -> Self {
+        Self(AtomicBool::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
+/// [`PrincipalStore::change`]'s hold on the store's saves while `f` runs, let go however `f`
+/// ends; a panic leaves the store to be read again before its next use.
+struct HeldSaves<'a>(&'a mut PrincipalStore);
+
+impl<'a> HeldSaves<'a> {
+    fn new(store: &'a mut PrincipalStore) -> Self {
+        store.saves_held = true;
+        Self(store)
+    }
+}
+
+impl Drop for HeldSaves<'_> {
+    fn drop(&mut self) {
+        self.0.saves_held = false;
+        if std::thread::panicking() {
+            self.0.db_stamp = None;
+        }
+    }
 }
 
 pub(crate) fn unix_now_u32() -> u32 {
@@ -133,6 +165,7 @@ impl PrincipalStore {
             persist_master: None,
             db_stamp: None,
             dblock: None,
+            changed: ChangeMark::default(),
             domain_sid: generate_domain_sid().unwrap_or_else(|_| {
                 eprintln!("krb5-kdc: getrandom failed generating domain SID");
                 std::process::exit(1);
@@ -302,47 +335,138 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// Hold the save each change makes at its end, or release it. While held, a change only
-    /// commits its update-log entries and the holder writes the database once, so a command
-    /// is applied whole (`kadmin.local`); a write MIT commits with its own put, the
-    /// `kadmin/history` a password change creates, is saved at once all the same.
-    pub fn hold_saves(&mut self, hold: bool) {
-        self.saves_held = hold;
-    }
-
+    /// A mutation's save: inside [`Self::change`] it is noted and made once when the change
+    /// ends; a store with a database refuses it anywhere else, since a write that did not read
+    /// the database again under the exclusive lock would undo another process's change.
     fn save_if_configured(&self) -> Result<(), Error> {
-        if self.saves_held {
-            self.commit_ulog();
-            return Ok(());
-        }
-        self.save_through()
+        self.commit_ulog();
+        self.changed.0.store(true, Ordering::Relaxed);
+        self.inside_change()
     }
 
-    /// Save the store now, held or not, for a write a later failure in the same call must not
-    /// take back.
+    /// Save the store now, inside [`Self::change`], for a write a later failure in the same
+    /// change must not take back: what MIT commits with its own put.
     fn save_through(&self) -> Result<(), Error> {
         self.commit_ulog();
-        if let Some((db, master)) = &self.persist_master {
-            return crate::persist::save_store_with_master(
+        self.inside_change()?;
+        self.write_database().map_err(Error::from)
+    }
+
+    /// Refuse a save outside [`Self::change`] for a store with a database.
+    fn inside_change(&self) -> Result<(), Error> {
+        match self.db_path() {
+            Some(db) if !self.saves_held => Err(Error::Db {
+                kind: std::io::ErrorKind::Other,
+                text: format!(
+                    "{}: a change outside the database's exclusive lock",
+                    db.display()
+                ),
+            }),
+            _ => Ok(()),
+        }
+    }
+
+    /// Write the store to its database: under the typed master key with `kadmin.local -m`, else
+    /// under the stash's.
+    fn write_database(&self) -> Result<(), PersistError> {
+        match (&self.persist_master, &self.persist_paths) {
+            (Some((db, master)), _) => crate::persist::save_store_with_master(
                 self,
                 db,
                 master,
                 crate::persist::DbWrite::InPlace,
-            )
-            .map_err(Error::from);
+            ),
+            (None, Some((db, stash))) => crate::persist::save_store(self, db, stash),
+            (None, None) => Ok(()),
         }
-        let Some((db, stash)) = &self.persist_paths else {
-            return Ok(());
+    }
+
+    /// One change to the database, whole, under its exclusive lock: the lock is taken (waiting
+    /// for any other holder), the database is read again, `f` runs on the store, and when `f`
+    /// returns `Ok` after a mutation the database is written once and its age moves forward;
+    /// when `f` returns `Err`, the store is read back, so nothing of it stays in memory or on
+    /// disk. A store with no database runs `f` alone, and so does a change inside a change.
+    /// MIT `krb5_db2_put_principal` (`plugins/kdb/db2/kdb_db2.c:828-854`): a put takes the exclusive lock, writes, moves the age and unlocks.
+    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): the exclusive lock reopens the database, so the put starts from what is on disk.
+    ///
+    /// # Errors
+    ///
+    /// The outer [`Error::Db`] when the lock may not be taken (MIT's `KRB5_KDB_CANTLOCK_DB` text,
+    /// or a missing lock file), the database cannot be read again, or the write fails (a writer
+    /// that may not write the database is refused with MIT's text, and the store is read back);
+    /// the inner result is `f`'s.
+    pub fn change<T, E>(
+        &mut self,
+        f: impl FnOnce(&mut Self) -> Result<T, E>,
+    ) -> Result<Result<T, E>, Error> {
+        if self.saves_held {
+            return Ok(f(self));
+        }
+        let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
+            return Ok(f(self));
         };
-        crate::persist::save_store(self, db, stash).map_err(Error::from)?;
-        tracing::info!(
-            event = krb5_log::events::ADMIN,
-            component = "krb5-kdc",
-            outcome = "ok",
-            detail = "saved store",
-            db = %db.display(),
-        );
-        Ok(())
+        let lock = self.db_lock()?;
+        let held = lock
+            .hold(DbLockMode::Exclusive)
+            .map_err(|e| Error::from(PersistError::from(e)))?;
+        self.reread(&lock)?;
+        self.changed.0.store(false, Ordering::Relaxed);
+        let done = {
+            let inside = HeldSaves::new(self);
+            f(&mut *inside.0)
+        };
+        let out = match done {
+            Ok(v) if self.changed.0.load(Ordering::Relaxed) => match self.write_database() {
+                Ok(()) => {
+                    self.db_stamp = DbStamp::now(&lock, &db);
+                    tracing::info!(
+                        event = krb5_log::events::ADMIN,
+                        component = "krb5-kdc",
+                        outcome = "ok",
+                        detail = "saved store",
+                        db = %db.display(),
+                    );
+                    Ok(Ok(v))
+                }
+                Err(e) => {
+                    let _ = self.reread(&lock);
+                    Err(Error::from(e))
+                }
+            },
+            Ok(v) => Ok(Ok(v)),
+            Err(e) => {
+                let _ = self.reread(&lock);
+                Ok(Err(e))
+            }
+        };
+        drop(held);
+        out
+    }
+
+    /// Hold the database's lock exclusively until [`Self::unlock_database`], across changes:
+    /// kadmin.local's `lock`. Every other process waits meanwhile.
+    /// MIT `kadm5_lock` (`lib/kadm5/srv/server_init.c:285-296`): `krb5_db_lock` in exclusive mode.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] when the store has no database or the lock may not be taken (MIT's
+    /// `KRB5_KDB_CANTLOCK_DB` text).
+    pub fn lock_database(&mut self) -> Result<(), Error> {
+        let lock = self.db_lock()?;
+        lock.lock(DbLockMode::Exclusive)
+            .map_err(|e| Error::from(PersistError::from(e)))
+    }
+
+    /// Let go of the lock [`Self::lock_database`] took: kadmin.local's `unlock`.
+    /// MIT `kadm5_unlock` (`lib/kadm5/srv/server_init.c:298-309`): `krb5_db_unlock`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] when no lock is held or the unlock fails.
+    pub fn unlock_database(&mut self) -> Result<(), Error> {
+        let lock = self.db_lock()?;
+        lock.unlock()
+            .map_err(|e| Error::from(PersistError::from(e)))
     }
 
     /// Provision a PKINIT test CA. Off by default so a KDC without an

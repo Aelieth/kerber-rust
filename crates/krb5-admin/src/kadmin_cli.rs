@@ -83,10 +83,9 @@ pub(crate) struct Handle {
     pub(crate) realm: String,
     /// `current_caller`: the principal name the session runs as, with its realm.
     pub(crate) caller: String,
-    open: Open,
 }
 
-/// How the database was opened, to open it again after a failed change.
+/// How the database is opened.
 struct Open {
     db: PathBuf,
     stash: PathBuf,
@@ -118,52 +117,22 @@ impl Handle {
         self.store.reload_if_stale()
     }
 
-    /// The store written back: under the typed master key with `-m`, else under the stash's.
-    fn save(&mut self) -> Result<(), Error> {
-        if let Some(key) = &self.open.typed {
-            krb5_kdc::save_store_with_master(
-                &self.store,
-                &self.open.db,
-                key,
-                krb5_kdc::DbWrite::InPlace,
-            )
-            .map_err(Error::from)?;
-        } else if let Some((db, stash)) = &self.store.persist_paths {
-            krb5_kdc::save_store(&self.store, db, stash).map_err(Error::from)?;
-        }
-        Ok(())
-    }
-
-    /// One kadm5 change, applied whole: the steps run on the store in memory with its saves
-    /// held, and the database is written once at the end; when a step or the write fails, the
-    /// store is read back from the database, so nothing of the change remains but what MIT
-    /// commits with its own put (the `kadmin/history` a password change under a policy creates).
+    /// One kadm5 change, applied whole under the database's exclusive lock: the database is
+    /// read again, the steps run on the store, and the database is written once at the end
+    /// (under the typed master key with `-m`); when a step or the write fails, the store is read
+    /// back from the database, so nothing of the change remains but what MIT commits with its
+    /// own put (the `kadmin/history` a password change under a policy creates).
     pub(crate) fn mutate<T>(
         &mut self,
         f: impl FnOnce(&mut PrincipalStore, &str) -> Result<T, Error>,
     ) -> Result<T, Error> {
-        self.refresh()?;
         let caller = self.caller.clone();
-        self.store.hold_saves(true);
-        let done = f(&mut self.store, &caller);
-        self.store.hold_saves(false);
-        let saved = if done.is_ok() { self.save() } else { Ok(()) };
-        if (done.is_err() || saved.is_err())
-            && let Ok(store) = self.open.load()
-        {
-            self.store = store;
-        }
-        saved?;
-        done
+        self.store.change(|st| f(st, &caller))?
     }
 
     /// `K/M@params.realm`, which `kadm5_delete_principal` refuses to delete.
     pub(crate) fn is_master(&self, name: &PrincipalName, realm: &str) -> bool {
         realm == self.realm && name.components_joined() == "K/M"
-    }
-
-    pub(crate) fn db_path(&self) -> &Path {
-        &self.open.db
     }
 }
 
@@ -260,16 +229,30 @@ pub(crate) fn run(argv: &[String], io: &mut Io) -> i32 {
     } else {
         ss::listen(&mut s);
     }
-    quit(&mut s, ccache_name.is_some());
+    if !quit(&mut s, ccache_name.is_some()) {
+        return 1;
+    }
     s.io.exit_status
 }
 
 /// MIT `quit` (`kadmin.c:610-633`): give up a held lock, and warn that `-c` credentials stay.
-fn quit(s: &mut Session<'_>, ccache: bool) {
-    s.locked = false;
+/// MIT `main` (`kadmin/cli/ss_wrapper.c:76-76`): a lock that cannot be let go makes the exit status 1.
+fn quit(s: &mut Session<'_>, ccache: bool) -> bool {
+    if s.locked {
+        if let Err(e) = s.h.store.unlock_database() {
+            s.io.com_err(
+                "quit",
+                Some(&texts::princ_text(&e)),
+                "while unlocking locked database",
+            );
+            return false;
+        }
+        s.locked = false;
+    }
     if ccache && !s.io.script_mode {
         s.io.eprint("\n\x07\x07\x07Administration credentials NOT DESTROYED.\n");
     }
+    true
 }
 
 /// The options MIT's `kadmin_startup` collects.
@@ -601,7 +584,6 @@ fn kadm5_init(
         store,
         realm: realm.to_owned(),
         caller,
-        open,
     })
 }
 

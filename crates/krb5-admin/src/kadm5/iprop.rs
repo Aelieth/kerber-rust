@@ -471,7 +471,13 @@ pub fn iprop_pull(
         decode_incr_result(&body, store.iprop_master_key().as_ref())?;
     let n = entries.len();
     if status == krb5_kdc::IPROP_OK && n > 0 {
-        store.apply_updates(&entries);
+        // MIT `ulog_replay` (`lib/kdb/kdb_log.c:430-467`): each update is put into the database, which locks it.
+        store
+            .change(|s| {
+                s.apply_updates(&entries);
+                Ok::<(), Error>(())
+            })
+            .map_err(Error::from)??;
     }
     Ok(IpropPull {
         status,

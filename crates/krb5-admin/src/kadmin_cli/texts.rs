@@ -74,8 +74,6 @@ pub(crate) const UNK_PRINC: &str = "Principal does not exist";
 pub(crate) const UNK_POLICY: &str = "Policy does not exist";
 /// `KRB5_KDB_NOENTRY`.
 pub(crate) const NOENTRY: &str = "No such entry in the database";
-/// `KRB5_KDB_CANTLOCK_DB`.
-pub(crate) const CANTLOCK: &str = "Insufficient access to lock database";
 /// `KADM5_PROTECT_PRINCIPAL`.
 pub(crate) const PROTECT_PRINCIPAL: &str = "Cannot change protected principal";
 /// `KRB5_PARSE_MALFORMED`.
@@ -84,17 +82,14 @@ pub(crate) const MALFORMED: &str = "Malformed representation of principal";
 pub(crate) const BAD_MASTER_KEY: &str =
     "Unable to decrypt latest master key with the provided master key\n";
 
-/// The text MIT's library gives for a store error on a principal operation.
-/// MIT `ctx_lock` (`kdb_db2.c:426-478`): a writer that may not write the database cannot take
-/// the lock, `KRB5_KDB_CANTLOCK_DB`.
+/// The text MIT's library gives for a store error on a principal operation; a database error
+/// carries MIT's own: `KRB5_KDB_CANTLOCK_DB`'s for a lock that may not be taken, the database's
+/// name for a database file that may not be written.
+/// MIT `ctx_lock` (`kdb_db2.c:441-463`): a lock that may not be taken is `KRB5_KDB_CANTLOCK_DB`; a database file that does not reopen read-write is named.
 pub(crate) fn princ_text(e: &Error) -> String {
     match e {
         Error::AlreadyExists => DUP.to_owned(),
         Error::NotFound => UNK_PRINC.to_owned(),
-        Error::Db {
-            kind: std::io::ErrorKind::PermissionDenied,
-            ..
-        } => CANTLOCK.to_owned(),
         other => common_text(other),
     }
 }
