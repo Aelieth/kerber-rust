@@ -67,8 +67,9 @@ pub struct KinitParams<'a> {
     pub anonymous: bool,
     /// `kinit -C` / `[libdefaults] canonicalize`.
     pub canonicalize: bool,
-    /// New password for `gic_pwd.c` KEY_EXP → changepw (`KRB5_NEW_PASSWORD`),
-    /// the non-interactive stand-in for [`KinitParams::prompter`].
+    /// New password for `gic_pwd.c` KEY_EXP → changepw, the non-interactive stand-in for
+    /// [`KinitParams::prompter`]; `krb5-kinit` fills it from `KRB5_NEW_PASSWORD` in a
+    /// `test-hooks` build only.
     pub new_password: Option<&'a [u8]>,
     /// MIT `krb5_prompter_fct` for the KEY_EXP new-password prompts.
     /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): the new-password prompts

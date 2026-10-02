@@ -140,7 +140,7 @@ impl PrincipalStore {
 
     /// Reload from stash/db when the file mtime or length changed.
     ///
-    /// Kadmind and the KDC are separate processes sharing `KRB5_KDC_DB`.
+    /// Kadmind and the KDC are separate processes sharing one database file.
     /// Length is part of the stamp because some filesystems have 1s mtime.
     /// There is no dump file lock: reload→mutate→save can still lose a
     /// concurrent writer's last save (dirty-flag/lock is with db2/LMDB).
