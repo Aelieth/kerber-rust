@@ -1293,6 +1293,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** `krb5-ktutil addent -password` asks `Password for <principal>` and reads the next
+  line of its command stream, as MIT's; it hung there before (stdin locked twice). Unit; live.
 - **kdc/admin.** After detaching, the daemons open a relative `database_name` or
   `key_stash_file` again from `/` and stop if it is not there, as MIT's. Unit; live.
 - **log.** Each daemon-log line is one write, so daemons sharing a log file never mix
