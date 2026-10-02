@@ -378,3 +378,20 @@ fn the_session_lock_holds_another_writer_off_until_unlock() {
     let theirs = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["theirs"]);
     assert!(all.get_name(&mine).is_some() && all.get_name(&theirs).is_some());
 }
+
+/// A `load -update` that stops while it holds the permanent lock leaves `principal.kadm5.lock`
+/// gone, so the database does not open again until an administrator makes the file (MIT 3g).
+#[test]
+fn a_permanent_lock_never_let_go_leaves_the_database_unusable() {
+    let (db, stash) = saved("krb5-lock-perm-kill");
+    {
+        let lock = DbLock::open(&db).unwrap();
+        lock.lock(DbLockMode::Permanent).unwrap();
+    }
+    assert_eq!(
+        lock_text(&db, &stash),
+        "KADM5 administration database lock file missing"
+    );
+    std::fs::File::create(suffixed(&db, SUFFIX_POLICY_LOCK)).unwrap();
+    assert!(load_store(&db, &stash).is_ok());
+}

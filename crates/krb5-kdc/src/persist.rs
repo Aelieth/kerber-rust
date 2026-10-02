@@ -16,7 +16,9 @@ use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::dblock::{DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, SUFFIX_POLICY_LOCK};
+use crate::dblock::{
+    DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, SUFFIX_LOCK, SUFFIX_POLICY_LOCK, suffixed,
+};
 use crate::error::Error;
 use crate::kdb_dump::{load_dump_mkey, write_dump};
 use crate::mkey::master_key_from_password;
@@ -226,24 +228,22 @@ pub fn save_store(
     Ok(())
 }
 
-/// Save `store` as a full load leaves it: the database is a new 0600 file owned by the writer,
-/// whatever it replaces; the `.ulog` and the stash are handled as [`save_store`] handles them,
-/// and so is the lock.
+/// Save `store` as a full load leaves it ([`load_store_full`]): the database is a new 0600 file
+/// owned by the writer, whatever it replaces, made live under the database's exclusive lock; the
+/// stash is handled as [`save_store`] handles it.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1490-1508`): a full load is written to a temporary database.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1551-1569`): the temporary database is then made live.
 ///
 /// # Errors
 ///
-/// As [`save_store`], except that the database itself need not be writable: only its directory.
+/// As [`load_store_full`], and the stash's errors as for [`save_store`].
 pub fn save_store_fresh(
     store: &PrincipalStore,
     db_path: &Path,
     stash_path: &Path,
 ) -> Result<(), PersistError> {
-    let lock = WriteLock::take(store, db_path)?;
-    save_store_as(store, db_path, stash_path, DbWrite::Fresh)?;
-    lock.update_age();
-    Ok(())
+    let master = master_for_save(store, db_path, stash_path)?;
+    Ok(load_store_full(store, db_path, &master)?)
 }
 
 fn save_store_as(
@@ -347,7 +347,8 @@ fn strerror(e: &std::io::Error) -> String {
 }
 
 /// Save `store` with every key wrapped under `master`; the stash is not read or written. The
-/// database's lock is held exclusively for the write, as [`save_store`] holds it.
+/// database's lock is held exclusively for the write, as [`save_store`] holds it; a
+/// [`DbWrite::Fresh`] write is a full load ([`load_store_full`]).
 ///
 /// The `.ulog` beside the database is always updated in place.
 ///
@@ -363,6 +364,9 @@ pub fn save_store_with_master(
     master: &ProtocolKey,
     how: DbWrite,
 ) -> Result<(), PersistError> {
+    if how == DbWrite::Fresh {
+        return Ok(load_store_full(store, db_path, master)?);
+    }
     let lock = WriteLock::take(store, db_path)?;
     check_writable(db_path, how)?;
     write_store_files(store, db_path, master, how)?;
@@ -396,17 +400,226 @@ fn write_store_files(
 /// `.ulog` cannot be written (for [`DbWrite::InPlace`], an existing database the writer may not
 /// open read-write is refused before any file changes).
 pub fn save_dump_text(db_path: &Path, text: &str, how: DbWrite) -> Result<(), PersistError> {
+    if how == DbWrite::Fresh {
+        return Ok(load_text_full(db_path, text, "ulog 1\n")?);
+    }
     let lock = WriteLock::take(&PrincipalStore::new(""), db_path)?;
     check_writable(db_path, how)?;
-    match how {
-        DbWrite::InPlace => write_secret_file(db_path, text.as_bytes())?,
-        DbWrite::Fresh => {
-            write_fresh_secret_file(db_path, text.as_bytes())?;
-            write_secret_file(&ulog_path(db_path), b"ulog 1\n")?;
-        }
-    }
+    write_secret_file(db_path, text.as_bytes())?;
     lock.update_age();
     Ok(())
+}
+
+/// [`save_store_with_master`] in place while the caller holds `lock` on the database at
+/// `db_path`, exclusively or permanently (`load -update`); the age moves.
+///
+/// # Errors
+///
+/// [`PersistError::Lock`] when `lock` is not held exclusively; otherwise as
+/// [`save_store_with_master`].
+pub fn save_store_locked(
+    store: &PrincipalStore,
+    db_path: &Path,
+    master: &ProtocolKey,
+    lock: &DbLock,
+) -> Result<(), PersistError> {
+    if !lock.held_exclusive() {
+        return Err(DbLockError::NotLocked.into());
+    }
+    check_writable(db_path, DbWrite::InPlace)?;
+    write_store_files(store, db_path, master, DbWrite::InPlace)?;
+    lock.update_age();
+    Ok(())
+}
+
+/// [`save_dump_text`] in place while the caller holds `lock` on the database at `db_path`,
+/// exclusively or permanently (`load -update`); the age moves.
+///
+/// # Errors
+///
+/// [`PersistError::Lock`] when `lock` is not held exclusively; otherwise as [`save_dump_text`].
+pub fn save_dump_text_locked(
+    db_path: &Path,
+    text: &str,
+    lock: &DbLock,
+) -> Result<(), PersistError> {
+    if !lock.held_exclusive() {
+        return Err(DbLockError::NotLocked.into());
+    }
+    check_writable(db_path, DbWrite::InPlace)?;
+    write_secret_file(db_path, text.as_bytes())?;
+    lock.update_age();
+    Ok(())
+}
+
+/// Why a full load did not make its dump the database.
+#[derive(Debug, thiserror::Error)]
+pub enum LoadError {
+    /// The temporary database could not be made or written; MIT reports it while creating the
+    /// database.
+    #[error(transparent)]
+    Create(PersistError),
+    /// The temporary database could not be made live; MIT reports it while making the newly
+    /// loaded database live.
+    #[error(transparent)]
+    Promote(PersistError),
+}
+
+impl From<LoadError> for PersistError {
+    fn from(e: LoadError) -> Self {
+        match e {
+            LoadError::Create(e) | LoadError::Promote(e) => e,
+        }
+    }
+}
+
+/// Make `store`, its keys wrapped under `master`, the database at `db_path` as a full load does
+/// ([`load_text_full`]), with its update log.
+///
+/// # Errors
+///
+/// [`LoadError::Create`] when a key cannot be wrapped; otherwise as [`load_text_full`].
+pub fn load_store_full(
+    store: &PrincipalStore,
+    db_path: &Path,
+    master: &ProtocolKey,
+) -> Result<(), LoadError> {
+    let text = write_dump(store, master).map_err(|e| LoadError::Create(e.into()))?;
+    load_text_full(db_path, &text, &ulog_text(store))
+}
+
+/// Make the dump `text` the database at `db_path` as MIT's full load does, with `ulog` as its
+/// update log. The dump is written to a temporary database, `principal~`, made with its own two
+/// lock files and held under its exclusive lock, so readers keep reading the old database
+/// meanwhile; then the real database's exclusive lock is taken (waiting for any holder) and the
+/// temporary database renamed over it, the age moved, and the temporary lock files removed. When
+/// there is no database yet, it and its two lock files are created first; an existing
+/// `principal.ok` is kept, and made again only when it is missing. The new database is a 0600
+/// file owned by the writer.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1490-1508`): a full load creates a temporary database.
+/// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:710-716`): a temporary database's remnants are destroyed under its lock.
+/// MIT `krb5_db2_promote_db` (`plugins/kdb/db2/kdb_db2.c:1497-1513`): the real database is created when there is none, else opened and locked exclusively.
+/// MIT `ctx_promote` (`plugins/kdb/db2/kdb_db2.c:1434-1448`): the temporary database is renamed over the real one, the age moves, and the temporary lock files are removed.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1590-1600`): a failed load destroys the temporary database.
+///
+/// # Errors
+///
+/// [`LoadError::Create`] when the temporary database or its lock files cannot be made or
+/// written (nothing of it is left); [`LoadError::Promote`] when the real database's lock files
+/// do not open (`principal.kadm5.lock` missing: MIT's text), its lock may not be taken, or the
+/// update log or the rename fails (the temporary database is removed).
+pub fn load_text_full(db_path: &Path, text: &str, ulog: &str) -> Result<(), LoadError> {
+    let tmp = suffixed(db_path, "~");
+    let temp = create_temporary(&tmp, text).map_err(LoadError::Create)?;
+    let real = match promote(db_path, &tmp, ulog) {
+        Ok(real) => real,
+        Err(e) => {
+            destroy_temporary(&tmp);
+            let _ = temp.unlock();
+            return Err(LoadError::Promote(e));
+        }
+    };
+    let _ = temp.unlock();
+    drop(temp);
+    real.unlock().map_err(|e| LoadError::Promote(e.into()))
+}
+
+/// The temporary database at `tmp` with `text` written to it, under its own lock files, which
+/// stay locked exclusively.
+fn create_temporary(tmp: &Path, text: &str) -> Result<DbLock, PersistError> {
+    let lock = DbLock::create(tmp)?;
+    destroy_file(tmp);
+    let _ = fs::remove_file(suffixed(tmp, SUFFIX_POLICY_LOCK));
+    let made = (|| -> Result<(), PersistError> {
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut file = opts.open(tmp)?;
+        lock.create_policy_lock()?;
+        std::io::Write::write_all(&mut file, text.as_bytes())?;
+        file.sync_all()?;
+        Ok(())
+    })();
+    if let Err(e) = made {
+        destroy_temporary(tmp);
+        let _ = lock.unlock();
+        return Err(e);
+    }
+    Ok(lock)
+}
+
+/// Make the temporary database at `tmp` the database at `db`, holding `db`'s exclusive lock;
+/// the lock is returned still held. A database, or a policy lock file, already there is opened
+/// and locked instead of made: a replica whose database file alone is gone loads as MIT's does.
+/// MIT `krb5_db2_promote_db` (`plugins/kdb/db2/kdb_db2.c:1498-1510`): `EEXIST` from `ctx_create_db`, for the database or its policy files, opens and locks the real database.
+fn promote(db: &Path, tmp: &Path, ulog: &str) -> Result<DbLock, PersistError> {
+    let created = DbLock::create(db)?;
+    let mut opts = fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let made = match opts.open(db) {
+        Ok(_) => created.create_policy_lock().map_err(PersistError::from),
+        Err(e) => Err(PersistError::Io(e)),
+    };
+    let real = match made {
+        Ok(()) => created,
+        Err(PersistError::Io(e) | PersistError::Lock(DbLockError::Io(e)))
+            if e.kind() == std::io::ErrorKind::AlreadyExists =>
+        {
+            let _ = created.unlock();
+            drop(created);
+            let real = DbLock::open(db)?;
+            real.lock(DbLockMode::Exclusive)?;
+            real
+        }
+        Err(e) => {
+            let _ = created.unlock();
+            return Err(e);
+        }
+    };
+    let moved = (|| -> Result<(), PersistError> {
+        write_secret_file(&ulog_path(db), ulog.as_bytes())?;
+        fs::rename(tmp, db)?;
+        real.update_age();
+        let _ = fs::remove_file(suffixed(tmp, SUFFIX_LOCK));
+        let _ = fs::remove_file(suffixed(tmp, SUFFIX_POLICY_LOCK));
+        Ok(())
+    })();
+    if let Err(e) = moved {
+        let _ = real.unlock();
+        return Err(e);
+    }
+    Ok(real)
+}
+
+/// Remove the temporary database at `tmp` and its lock files, as a failed load does.
+fn destroy_temporary(tmp: &Path) {
+    destroy_file(tmp);
+    let _ = fs::remove_file(suffixed(tmp, SUFFIX_LOCK));
+    let _ = fs::remove_file(suffixed(tmp, SUFFIX_POLICY_LOCK));
+}
+
+/// Zero the file at `path` and unlink it; a file that is not there, or that cannot be zeroed, is
+/// unlinked or left as it is without an error.
+/// MIT `destroy_file` (`plugins/kdb/db2/kdb_db2.c:626-676`): the file is overwritten with zeros, synced and unlinked.
+fn destroy_file(path: &Path) {
+    if let Ok(meta) = fs::symlink_metadata(path)
+        && meta.is_file()
+        && let Ok(mut f) = fs::OpenOptions::new().write(true).open(path)
+    {
+        let zeros = vec![0u8; usize::try_from(meta.len()).unwrap_or(0)];
+        let _ = std::io::Write::write_all(&mut f, &zeros);
+        let _ = f.sync_all();
+    }
+    let _ = fs::remove_file(path);
 }
 
 /// Why [`create_store`] wrote nothing.

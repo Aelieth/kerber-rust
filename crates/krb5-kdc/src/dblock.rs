@@ -177,6 +177,34 @@ fn errno_of(e: &io::Error) -> Errno {
     e.raw_os_error().map_or(Errno::EIO, Errno::from_raw)
 }
 
+/// An exclusive lock on the whole of a file of the caller's own (`krb5-kdb dump`'s
+/// `.dump_ok`), let go when dropped.
+#[derive(Debug)]
+pub struct FileLockGuard<'a> {
+    file: &'a File,
+    flocked: Option<Flock<File>>,
+}
+
+/// Lock the whole of `file` exclusively, waiting for any other holder, as `krb5_lock_file`
+/// does; the lock is let go when the guard is dropped.
+/// MIT `prep_ok_file` (`kadmin/dbutil/dump.c:191-195`): the dump's `.dump_ok` file is locked exclusively while the dump is written.
+///
+/// # Errors
+///
+/// The system's error of the lock call.
+pub fn lock_file_exclusive(file: &File) -> io::Result<FileLockGuard<'_>> {
+    let mut flocked = None;
+    lock_file(file, FileLock::Exclusive, &mut flocked)?;
+    Ok(FileLockGuard { file, flocked })
+}
+
+impl Drop for FileLockGuard<'_> {
+    /// MIT `update_ok_file` (`kadmin/dbutil/dump.c:214-219`): the `.dump_ok` lock is let go once its byte is written.
+    fn drop(&mut self) {
+        let _ = lock_file(self.file, FileLock::Unlock, &mut self.flocked);
+    }
+}
+
 /// Open a lock file read-write, else read-only.
 /// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:492-501`): the lock file is opened `O_RDWR` so that write locking can work, else `O_RDONLY`.
 fn open_lock_file(path: &Path) -> io::Result<File> {

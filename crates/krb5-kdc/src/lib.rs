@@ -61,7 +61,8 @@ pub use daemon::{
     write_pid_file,
 };
 pub use dblock::{
-    DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, SUFFIX_LOCK, SUFFIX_POLICY_LOCK, suffixed,
+    DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, FileLockGuard, SUFFIX_LOCK,
+    SUFFIX_POLICY_LOCK, lock_file_exclusive, suffixed,
 };
 pub use error::Error;
 pub(crate) use issue::kdc_error_bytes;
@@ -94,9 +95,10 @@ pub use osa::{
     history_entry as encrypt_history_entry,
 };
 pub use persist::{
-    CreateError, DbWrite, PersistError, create_store, load_dump_with_stash, load_store,
-    load_store_with_master, read_db_locked, read_stash, save_dump_text, save_store,
-    save_store_fresh, save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
+    CreateError, DbWrite, LoadError, PersistError, create_store, load_dump_with_stash, load_store,
+    load_store_full, load_store_with_master, load_text_full, read_db_locked, read_stash,
+    save_dump_text, save_dump_text_locked, save_store, save_store_fresh, save_store_legacy_kdb3,
+    save_store_locked, save_store_with_master, stash_keys, write_stash,
 };
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,
