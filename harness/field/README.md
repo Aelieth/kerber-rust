@@ -128,7 +128,8 @@ not a gate: no ci-policy judge, ledger row or CI job runs it.
 
 ```sh
 make field PROFILE=nightly REF=f-functional               # every scenario of the profile
-harness/field/run.sh --profile nightly --ref f-functional  # the same, without make
+make field PROFILE=nightly REF=f-functional ONLY=upgrade  # one of them
+harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the same, without make
 ```
 
 - **Options:**
@@ -210,9 +211,52 @@ harness/field/run.sh --profile nightly --ref f-functional  # the same, without m
 
 ## Scenarios
 
-None yet. Each scenario joins the profiles in `run.sh` with its row here: the
-VMs it uses and their baseline snapshots, the hand record it scripts, and its
-duration.
+| Scenario | Profiles | Legs | VMs: baseline snapshot | Reference hand record | Duration |
+| --- | --- | --- | --- | --- | --- |
+| `upgrade` | nightly, weekly | rust | kdc: `rust-field-p12` (reset, then left on the ref's install); client2: `rust-ssh` (reset) | f-UP1 | about 4 min (the build about 2) |
+
+`scenarios/upgrade.sh` puts the ref under test on kdc, so it runs first:
+
+- It resets kdc and client2 to their baselines and waits for chrony. Then it
+  records the realm as the baseline serves it (`listprincs`, `getprinc alice`).
+- It copies the ref's archive to kdc as `~/kerber-rust-<sha12>`; the archive
+  stands in for the doc's `git pull`.
+- It runs docs/install.md as written. The blocks come from the archive's own
+  copy, by heading, so a doc change is what runs:
+  - Build's block, without `git clone` and `cd kerber-rust`;
+  - "Upgrading kerber-rust" block 1, with `REALM` set to the realm, `PREFIX=/usr`
+    and `OLD` empty;
+  - the listen-entry edit the doc asks for, when its listing prints an all-IPv6
+    entry;
+  - block 2.
+  - Every command must exit 0. The listing may exit 1, when there is no entry.
+- Then it checks, as the hand record did:
+  - kdc runs the ref's build: each program the install manifest lists is
+    byte-identical to `target/release/<its build name>` (`lib/install-check.sh`),
+    and `sha256sum -c` of the manifest passes;
+  - `ss` shows exactly `0.0.0.0` and `[::]` on 88 udp/tcp, 464 udp/tcp and 749
+    tcp, with listen queues 5 / 5 / 2;
+  - MIT's `set up 4 sockets` / `set up 6 sockets` lines;
+  - no AVC since the window start, with a `USER_CMD` control in the same window,
+    once after the start and once at the end (`selinux.avc.end`, after
+    kadmind's writes for bob's kpasswd); the daemons in `krb5kdc_t` /
+    `kadmind_t`. `ausearch -ts` reads local time, so the window start is read
+    from kdc's own clock in its local time (kdc runs UTC);
+  - `listprincs` and `getprinc alice` identical before and after;
+  - the strings check `none` on the manifest's programs, and red on a planted
+    file;
+  - from client2, MIT `kinit`, `kvno` and remote `kadmin` over UDP and over TCP,
+    with the KDC's and kadmind's log lines;
+  - bob's kpasswd there over UDP 464 (kdc refuses client2's TCP 464 for that one
+    exchange) and back over TCP, with kadmind's two `chpw request from
+    192.168.177.22 for bob@KERBER.TEST: success` lines;
+  - `kinit` on kdc against `::1` over UDP and TCP, and against `127.0.0.2` (a
+    UDP reply leaves from the address its request was sent to).
+- It records, not grades: the AS and TGS sizes, the preauth types offered, the
+  AP-REP subkeys and the daemons' RSS. `scenarios/upgrade.expect` lists where
+  they are known to differ from MIT's, with the record that shows each.
+- It leaves client2 as it found it, and kdc on the ref's install with its
+  checkout.
 
 ## What `up` builds
 

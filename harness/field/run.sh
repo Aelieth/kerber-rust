@@ -26,8 +26,8 @@ LAB_HOME=${KERBER_LAB_HOME:-$HOME/kerber-lab}
 RUNS=$LAB_HOME/runs
 LOCK=$LAB_HOME/state/lab.lock
 KEEP=30
-# The scenarios of each profile, in order (none yet: a run selects nothing and fails).
-declare -A PROFILES=([nightly]="" [weekly]="")
+# The scenarios of each profile, in order; upgrade is first: it puts the ref under test on kdc.
+declare -A PROFILES=([nightly]="upgrade" [weekly]="upgrade")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
 usage() { sed -n '4p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
