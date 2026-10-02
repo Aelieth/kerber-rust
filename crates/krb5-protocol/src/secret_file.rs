@@ -5,11 +5,14 @@
 //! caller named. [`write_secret_file`] gives the new file the owner, group
 //! and permission bits of the file it replaces, as an update in place
 //! leaves them; [`write_fresh_secret_file`] always leaves a new 0600 file
-//! owned by the writer.
+//! owned by the writer. With SELinux on, the temp file is created with the
+//! SELinux context of the file a [`write_secret_file`] replaces, and any
+//! other with the context a new file at the destination takes
+//! ([`crate::create_labeled`]); ccaches are not labelled, as MIT's are not.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -60,7 +63,7 @@ enum Replace {
 /// created (`O_EXCL`, mode 0600), written, or synced, or cannot be renamed onto `path`. An owner
 /// or group that cannot be kept is a warning, not an error.
 pub fn write_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    write_atomic(path, bytes, Replace::Keep)
+    write_atomic(path, bytes, Replace::Keep, true)
 }
 
 /// Fail as MIT's in-place update would when the writer may not write the regular file at `path`.
@@ -101,32 +104,21 @@ pub fn check_secret_file_writable(path: &Path) -> io::Result<()> {
 /// The OS error when the temp file beside `path` cannot be created (`O_EXCL`, mode 0600),
 /// written, or synced, or cannot be renamed onto `path`.
 pub fn write_fresh_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    write_atomic(path, bytes, Replace::Fresh)
+    write_atomic(path, bytes, Replace::Fresh, true)
 }
 
-fn write_atomic(path: &Path, bytes: &[u8], replace: Replace) -> io::Result<()> {
+/// [`write_fresh_secret_file`] for a ccache, whose new file is not given an SELinux context.
+/// MIT `fcc_initialize` (`lib/krb5/ccache/cc_file.c:481-492`): a FILE ccache is created with a plain `open`, not one that sets a context.
+pub(crate) fn write_fresh_cache_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomic(path, bytes, Replace::Fresh, false)
+}
+
+fn write_atomic(path: &Path, bytes: &[u8], replace: Replace, labeled: bool) -> io::Result<()> {
     if matches!(replace, Replace::Keep) {
         check_secret_file_writable(path)?;
     }
-    let dir = path
-        .parent()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    let mut nonce = [0u8; 8];
-    let _ = getrandom::getrandom(&mut nonce);
-    let tmp = dir.join(format!(
-        ".{}.tmp-{:x}{:x}",
-        path.file_name().and_then(|s| s.to_str()).unwrap_or("krb5"),
-        u32::from_be_bytes(nonce[0..4].try_into().unwrap_or([0; 4])),
-        u32::from_be_bytes(nonce[4..8].try_into().unwrap_or([0; 4]))
-    ));
-    let mut opts = OpenOptions::new();
-    opts.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        opts.mode(0o600);
-    }
-    let mut f = opts.open(&tmp)?;
+    let dir = parent_dir(path);
+    let (mut f, tmp) = create_temp(path, replace, labeled)?;
     let write = (|| {
         f.write_all(bytes)?;
         #[cfg(unix)]
@@ -156,6 +148,50 @@ fn write_atomic(path: &Path, bytes: &[u8], replace: Replace) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// The directory a write's temp file is made in: `path`'s own.
+fn parent_dir(path: &Path) -> &Path {
+    path.parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+}
+
+/// A new temp file name beside `path`, `.<name>.tmp-<random>`.
+fn temp_path(path: &Path) -> PathBuf {
+    let mut nonce = [0u8; 8];
+    let _ = getrandom::getrandom(&mut nonce);
+    parent_dir(path).join(format!(
+        ".{}.tmp-{:x}{:x}",
+        path.file_name().and_then(|s| s.to_str()).unwrap_or("krb5"),
+        u32::from_be_bytes(nonce[0..4].try_into().unwrap_or([0; 4])),
+        u32::from_be_bytes(nonce[4..8].try_into().unwrap_or([0; 4]))
+    ))
+}
+
+/// Create the temp file a write renames onto `path`: `O_EXCL`, mode 0600.
+pub(crate) fn new_temp(path: &Path) -> io::Result<(fs::File, PathBuf)> {
+    let tmp = temp_path(path);
+    let mut opts = OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        opts.mode(0o600);
+    }
+    Ok((opts.open(&tmp)?, tmp))
+}
+
+/// [`new_temp`], labelled for `path` when `labeled` and SELinux is on: with the context of the
+/// regular file a [`Replace::Keep`] write replaces, else with the context the policy gives a new
+/// file at `path`.
+fn create_temp(path: &Path, replace: Replace, labeled: bool) -> io::Result<(fs::File, PathBuf)> {
+    #[cfg(target_os = "linux")]
+    if labeled && let Some(se) = crate::selabel::SeLinux::system() {
+        return se.create_temp(path, matches!(replace, Replace::Keep), || new_temp(path));
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = (replace, labeled);
+    new_temp(path)
 }
 
 /// Set the temp file `f`'s mode, and for [`Replace::Keep`] its owner and group, from the file at

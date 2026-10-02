@@ -38,7 +38,6 @@ mod persist;
 mod plugins;
 mod preauth;
 pub mod principals;
-mod selabel;
 mod status;
 mod store;
 pub mod testrealm;

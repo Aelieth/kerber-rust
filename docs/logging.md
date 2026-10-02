@@ -108,9 +108,11 @@ the new file the replaced file's owner or group (an unprivileged
 writer) logs `event=protocol.secret_file` at **warn** with
 `correlation_id`, `component`, `outcome=ok`, `path`, the old `uid` and
 `gid`, `detail` (`owner not kept`, `group not kept`, or `owner and
-group not kept`), and `error`; the save completes. The daemons' default
-filter includes `krb5_protocol=warn`, so the line shows without
-`RUST_LOG`.
+group not kept`), and `error`; the save completes. With SELinux
+permissive, a new file whose SELinux context cannot be set logs the same
+event with `detail` `SELinux context not set` and is created without it
+(enforcing, the save fails). The daemons' default filter includes
+`krb5_protocol=warn`, so the line shows without `RUST_LOG`.
 
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 with MIT `j_dict.h` field names (`event_name`, `event_success`,

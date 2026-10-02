@@ -36,6 +36,8 @@ mod preauth;
 mod replay;
 mod safe_priv;
 mod secret_file;
+#[cfg(target_os = "linux")]
+mod selabel;
 mod tgs;
 mod transport;
 mod vfy_increds;
@@ -102,6 +104,8 @@ pub use safe_priv::{
 pub use secret_file::{
     check_secret_file_writable, destroy_secret_file, write_fresh_secret_file, write_secret_file,
 };
+#[cfg(target_os = "linux")]
+pub use selabel::create_labeled;
 pub use tgs::{
     TgsFallback, TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_ex, tgs_exchange_once,
     tgs_exchange_path, tgs_forward, tgs_forward_options, tgs_non_referral_options, tgs_renew,

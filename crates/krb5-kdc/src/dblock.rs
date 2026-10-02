@@ -222,13 +222,13 @@ enum LockFileKind {
     Policy,
 }
 
-/// Create the lock file at `path`, 0600, labeled as the policy labels that path: `principal.ok`
-/// `O_CREAT | O_RDWR | O_TRUNC` (an existing one is kept and emptied), `principal.kadm5.lock`
-/// `O_CREAT | O_EXCL`.
+/// Create the lock file at `path`, 0600, labeled as a new file at that path is
+/// ([`krb5_protocol::create_labeled`]): `principal.ok` `O_CREAT | O_RDWR | O_TRUNC` (an existing
+/// one is kept and emptied), `principal.kadm5.lock` `O_CREAT | O_EXCL`.
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:697-702`): `principal.ok` is opened `O_CREAT | O_RDWR | O_TRUNC`, mode 0600.
 /// MIT `osa_adb_create_db` (`plugins/kdb/db2/adb_openclose.c:42-46`): the policy lock file is created `O_RDWR | O_CREAT | O_EXCL`, mode 0600.
 fn create_lock_file(path: &Path, kind: LockFileKind) -> io::Result<File> {
-    crate::selabel::create_labeled(path, || {
+    krb5_protocol::create_labeled(path, || {
         let mut opts = OpenOptions::new();
         opts.read(true).write(true).mode(0o600);
         match kind {
