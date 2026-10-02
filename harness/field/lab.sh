@@ -27,9 +27,12 @@
 #   ssh <vm> [--] [cmd...]  ssh to the VM as 'lab' with the lab key
 #   ip <vm> [lan]           print the VM's lab address, or kdc's LAN address
 #   status                  network, pool, VMs, addresses, snapshots
-#   check [vm...]           ssh, DNS + reverse DNS, time sync, internet; kdc's LAN
+#   check [--lab-only] [vm...]
+#                           ssh, DNS + reverse DNS, time sync, internet; kdc's LAN
 #                           NIC, its inbound filter, routes and the AD DC's port 88;
-#                           client1's SDDM
+#                           client1's SDDM. --lab-only leaves out what reaches past
+#                           the lab: the internet fetch, kdc's LAN address (the LAN's
+#                           DHCP) and the AD DC's port
 #   collect <vm> <dir> [file...]
 #                           copy journald (last $COLLECT_MINUTES minutes, default
 #                           60) and the listed files into <dir>/<vm>/
@@ -654,15 +657,19 @@ check_vm() {
     # A VM that just booted gets up to a minute to sync before this counts as a failure.
     out=$(lssh "$vm" "chronyc -n waitsync 12 0 0 5 >/dev/null 2>&1; timedatectl show -p NTPSynchronized --value; chronyc -n tracking | sed -n 's/^Leap status *: //p; s/^System time *: //p'" 2>/dev/null | paste -sd' ' -)
     case $out in yes*Normal*) pass "time synced (chrony): $out" ;; *) fail "time sync: $out" ;; esac
-    out=$(lssh "$vm" "curl -sSI -m 20 -o /dev/null -w '%{http_code}' https://fedoraproject.org/" 2>/dev/null || true)
-    case $out in 2??|3??) pass "internet: https://fedoraproject.org/ -> HTTP $out" ;; *) fail "internet: '$out'" ;; esac
+    if [ "$LAB_ONLY" = 0 ]; then
+        out=$(lssh "$vm" "curl -sSI -m 20 -o /dev/null -w '%{http_code}' https://fedoraproject.org/" 2>/dev/null || true)
+        case $out in 2??|3??) pass "internet: https://fedoraproject.org/ -> HTTP $out" ;; *) fail "internet: '$out'" ;; esac
+    fi
     if [ "${KIND[$vm]}" = kinoite ]; then
         out=$(lssh "$vm" "systemctl get-default; systemctl is-active display-manager" 2>/dev/null | paste -sd' ' -)
         case $out in "graphical.target active") pass "desktop: $out (SDDM)" ;; *) fail "desktop: $out" ;; esac
     fi
     if [ "$vm" = kdc ]; then
-        out=$(kdc_lan_ip)
-        if [ -n "$out" ]; then pass "LAN NIC address $out"; else fail "LAN NIC has no address"; fi
+        if [ "$LAB_ONLY" = 0 ]; then
+            out=$(kdc_lan_ip)
+            if [ -n "$out" ]; then pass "LAN NIC address $out"; else fail "LAN NIC has no address"; fi
+        fi
         # The inbound filter on the LAN NIC (kerber-lab-lan-nic, kdc.user-data).
         out=$(lssh kdc "systemctl is-enabled kerber-lab-lan-filter.service; sudo nft list table inet kerber_lab_lan" 2>/dev/null || true)
         case $out in
@@ -672,17 +679,25 @@ check_vm() {
         esac
         out=$(lssh kdc "ip -4 route show default" 2>/dev/null | paste -sd';' -)
         case $out in *192.168.177.1*) pass "default route on the lab NIC: $out" ;; *) fail "default route: $out" ;; esac
-        if lssh kdc "timeout 3 bash -c '</dev/tcp/$AD_DC/88'" 2>/dev/null; then
-            pass "AD DC $AD_DC:88 reachable (route: $(lssh kdc "ip -4 route get $AD_DC" 2>/dev/null | awk 'NR == 1'))"
-        else
-            fail "AD DC $AD_DC:88 not reachable"
+        if [ "$LAB_ONLY" = 0 ]; then
+            if lssh kdc "timeout 3 bash -c '</dev/tcp/$AD_DC/88'" 2>/dev/null; then
+                pass "AD DC $AD_DC:88 reachable (route: $(lssh kdc "ip -4 route get $AD_DC" 2>/dev/null | awk 'NR == 1'))"
+            else
+                fail "AD DC $AD_DC:88 not reachable"
+            fi
         fi
     fi
     return $((fails > 0))
 }
 
+LAB_ONLY=0
 cmd_check() {
     local vms vm rc=0
+    if [ "${1:-}" = --lab-only ]; then
+        LAB_ONLY=1
+        shift
+        say "check --lab-only: no internet fetch, no LAN address, no AD DC probe"
+    fi
     select_vms "$@"
     vms=("${SEL[@]}")
     for vm in "${vms[@]}"; do check_vm "$vm" || rc=1; done

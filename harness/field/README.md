@@ -8,7 +8,9 @@ five libvirt VMs on this host, on a private NAT network with its own DNS.
 
 `lab.sh` is a harness. It drives libvirt, cloud-init and Anaconda, and it
 asserts nothing about Kerberos. The VMs carry no Kerberos server software and
-no realm. The field scenarios install those (`working/logs/f-<scenario>/`).
+no realm. The field scenarios install those: by hand first (the hand records
+`f-<scenario>`), then repeatably through `run.sh`
+([Field runs](#field-runs-runsh)).
 
 ## Address plan
 
@@ -84,6 +86,7 @@ needs membership in the `libvirt` group and no sudo.
 harness/field/lab.sh up                 # build or start everything; idempotent
 harness/field/lab.sh status             # VMs, addresses, snapshots, kdc's LAN address
 harness/field/lab.sh check              # ssh, DNS + reverse, time sync, internet; kdc LAN + filter + AD DC :88; client1 SDDM
+harness/field/lab.sh check --lab-only kdc   # the same without what reaches past the lab: internet, LAN address, AD DC
 harness/field/lab.sh ssh kdc            # shell as 'lab' (passwordless sudo)
 harness/field/lab.sh ssh client2 -- sudo dnf -y install krb5-workstation
 harness/field/lab.sh ip kdc             # 192.168.177.10   (ip kdc lan: the LAN address)
@@ -115,6 +118,101 @@ harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and netw
 - **`destroy`:** touches only lab objects: the `kerber-*` domains, every volume
   in pool `kerber-lab`, the pool and the network. It keeps the downloaded
   images, the SSH key and the console password.
+
+## Field runs: `run.sh`
+
+`run.sh` makes the hand-run field records repeatable. It drives the real
+products on the lab (the doc's own blocks on kdc, the installed daemons, MIT's
+clients on client2) and keeps their logs, one line per check. It is a harness,
+not a gate: no ci-policy judge, ledger row or CI job runs it.
+
+```sh
+make field PROFILE=nightly REF=f-functional               # every scenario of the profile
+harness/field/run.sh --profile nightly --ref f-functional  # the same, without make
+```
+
+- **Options:**
+  - `--profile nightly|weekly` picks the scenarios, in the order of the table
+    under [Scenarios](#scenarios);
+  - `--only a,b` runs some of them;
+  - `--leg mit|rust|both` picks the realm (default `rust`).
+- **The tree under test** is `git archive <ref>` of this repository, read-only
+  (`GIT_OPTIONAL_LOCKS=0`; `FIELD_REPO` in `field.env` names another). A dirty
+  checkout runs the harness, never the product.
+- **Preflight:**
+  - it takes `~/kerber-lab/state/lab.lock` (flock). When that is held, the run
+    exits 1 before it makes a run directory; it only makes `~/kerber-lab/runs`
+    and the lock file when they are missing.
+  - every snapshot `baseline.env` names must exist;
+  - `lab.sh check --lab-only` of the VMs the selected scenarios use: ssh, DNS
+    and reverse DNS, time sync, kdc's LAN filter. It never fetches from the
+    internet, needs no LAN address and never probes the AD DC, so an outage
+    there does not fail a run.
+  - the sha256 of `/etc/krb5.conf`, and in the `rust-dev` distrobox also of the
+    host's own, `/run/host/etc/krb5.conf`.
+- **Postflight**, after a stop or an error too:
+  - those sha256s unchanged;
+  - nothing new in the host's `/tmp` owned by the user;
+  - `lib/scan-secrets.py` over the whole run, its planted control first.
+  - A run driven from a Claude Code session (`CLAUDECODE=1`) leaves that
+    session's own `/tmp/claude-<uid>` out of the `/tmp` check, because the
+    session writes there on every tool call. The `post.host.tmp` line says how
+    many entries it left out.
+- **Limits:** a scenario has `FIELD_SCENARIO_TIMEOUT` seconds (default 1800),
+  and each of its commands `FIELD_CMD_TIMEOUT` (default 900), cut to what is
+  left of the scenario's time. A command over its limit is stopped and fails
+  its check, so a hung command cannot hold the lab lock.
+- **A stop** (SIGINT, SIGTERM or SIGHUP) ends the running scenario once its
+  current command returns; the scenario's cleanup runs and the rest are NOT-RUN.
+- **The result:**
+  - any failed check or guard fails the run;
+  - a scenario or leg that could not run is NOT-RUN, which is never a pass;
+  - the exit status is 0 only when every selected scenario passed;
+  - when `upgrade` fails, the scenarios after it are NOT-RUN (kdc does not run
+    the ref under test).
+- **Records:** `~/kerber-lab/runs/<UTC>-<sha12>-<profile>/` holds:
+  - `summary.txt` and `run.log`;
+  - `guards/`: the preflight and postflight checks, the krb5.conf sums and the
+    `/tmp` list;
+  - one `<scenario>/<leg>/` per leg:
+    - `record.txt`: every command, its output through `lib/redact.py`, its exit
+      status;
+    - `checks.tsv`: one line per check (name, PASS / FAIL / INFO, expectation,
+      exit status, what was seen, its line in `record.txt`);
+    - `result`, `collect/` (journald and the non-secret files) and `pcap/` (a
+      capture without the AS exchanges).
+  - `runs/index.tsv` has one line per run. The last 30 runs and every failed one
+    are kept.
+  - The run's `TMPDIR` is its own `tmp/`, with the ref's archive and any raw
+    capture copied from a VM. It is removed when the run ends, after a stop or
+    an error too (not after a SIGKILL). A raw capture on a VM is deleted as soon
+    as it is copied, and by the scenario's cleanup.
+- **Secrets** come from `~/kerber-lab/secrets` (`baseline.env` names the files)
+  and reach a VM only on ssh stdin.
+- **Inputs not in git** go in `~/kerber-lab/field.env` (0600, the shape of
+  `field.env.example`).
+- **A hand runner** takes the same lock, so no field run starts under it:
+  `flock -n ~/kerber-lab/state/lab.lock bash` (held while that shell runs).
+- **Never:** a snapshot created or deleted, a git ref written, the AD DC touched.
+
+`lib/`, shared by `run.sh` and the scenarios:
+
+| File | What |
+| --- | --- |
+| `rec.sh` | The recorder: `run` / `runin` (a VM command, stdin for secrets), `host` / `hostin`, `limited` (any other command, under the same time limit), `once` / `twice` / `chpw` (secrets for stdin), `check` / `checklast` (graded lines of `checks.tsv`), `observe` / `observelast` (INFO lines), `kdcmark` / `kdcsince` (kdc's daemon logs; the mark is a check, and no line is read without one), `capstart` / `capstop` (captures), `waitsync`, `finish` |
+| `redact.py` | The record filter: every value under `~/kerber-lab/secrets` and in `~/adlab/env`, trace key prefixes, `encrypted <hex>`, the encrypted-timestamp and SPAKE trace values, OIDC codes, SPNEGO tokens, cookies, PEM keys |
+| `scan-secrets.py` | Every one of those values in every file of a run, in UTF-8 and UTF-16-LE (keytab keys raw and as hex); a planted control first; a hit fails the run |
+| `pcap-keep.sh` | A capture's copy without any AS exchange (IP fragments of other messages kept), checked to hold no AS message |
+| `strings-check.sh` | R1's strings check of the test-only names on a VM, by file or by install manifest (every program it lists, none skipped); `--control` must go red |
+| `install-check.sh` | On a VM after `make install`: every program the install manifest lists is byte-identical to the checkout's build (`cmp`, the names paired by its `dist/install.sh`) |
+| `docblocks.py` | A doc section's shell blocks, by heading, run one top-level command at a time in one session, each with its exit status (a here-document stays whole) |
+| `ktrace.sh` | An MIT client command with its `KRB5_TRACE`, and an `answers:` line naming the transports the replies came over |
+
+## Scenarios
+
+None yet. Each scenario joins the profiles in `run.sh` with its row here: the
+VMs it uses and their baseline snapshots, the hand record it scripts, and its
+duration.
 
 ## What `up` builds
 
@@ -175,9 +273,12 @@ run as `container_t`. The image's `podman` stays installed.
 | What | Where | In git |
 | --- | --- | --- |
 | Network XML, cloud-init and kickstart templates, `lab.sh` | `harness/field/` | yes |
+| The field runs: `run.sh`, `lib/`, `scenarios/`, `baseline.env`, `field.env.example` | `harness/field/` | yes |
 | Verified Fedora images, signed CHECKSUM files | `~/kerber-lab/images/` | no |
 | Lab SSH key (`lab_ed25519`, 0600) and `known_hosts` | `~/kerber-lab/ssh/` | no |
-| Console password and its SHA-512 crypt | `~/kerber-lab/secrets/` | no |
+| Console password and its SHA-512 crypt; the realms' passwords and keytabs | `~/kerber-lab/secrets/` | no |
+| The field runs' records and `index.tsv` | `~/kerber-lab/runs/` | no |
+| The field runs' inputs (`field.env`, 0600) and the lab lock (`state/lab.lock`) | `~/kerber-lab/` | no |
 | Rendered seeds and kickstart (they hold the key and the hash) | `~/kerber-lab/seeds/` | no |
 | VM disks, seed ISOs, the base image, the Kinoite ISO | pool `kerber-lab`, `/var/lib/libvirt/images/kerber-lab/` (root) | no |
 

@@ -63,6 +63,16 @@ budget:
 	python3 scripts/ci-status.py --budget-report -n 15 --jobs
 	python3 scripts/ci-status.py --check-budget -n 5 --workflow ci
 
+# One field run on the lab: the ref's `git archive`, never this working tree, driven through the real
+# products on the lab VMs; records under ~/kerber-lab/runs (harness/field/README.md, "Scenarios").
+PROFILE ?= nightly
+REF ?= f-functional
+ONLY ?=
+
+.PHONY: field
+field:
+	$(ROOT)/harness/field/run.sh --profile $(PROFILE) --ref $(REF) $(if $(ONLY),--only $(ONLY))
+
 # The product as Fedora's krb5-server and krb5-workstation lay out MIT's (docs/install.md;
 # dist/install.sh does the copying and keeps the manifest uninstall reads). `make build` is the
 # release build with no features, so no test hooks: run it as yourself, then `sudo make install`,
