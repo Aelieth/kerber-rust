@@ -280,6 +280,16 @@ klist
 
 ## Upgrading an MIT realm
 
+kerber-rust does not read MIT's db2 database. A realm moves over the way MIT moves one between
+its own database types: MIT's `kdb5_util dump`, then kerber-rust's `kdb5_util load`. Until then
+every kerber-rust program refuses MIT's database, leaves it as it is, and points here
+(`krb5kdc` writes the line to its log and prints `cannot initialize realm … - see log file for
+details`, as MIT's does):
+
+```text
+kdb5_util: Cannot open DB2 database '/var/kerberos/krb5kdc/principal': This is an MIT db2 database; dump it with the old installation's kdb5_util, then kdb5_util load here (docs/install.md, Upgrading an MIT realm) while initializing database
+```
+
 On the host where `krb5-server` runs the realm, in the kerber-rust checkout built as in
 [Build](#build). First, while MIT's tools are still installed, stop the daemons and dump the
 realm:
@@ -321,6 +331,61 @@ kerber-rust's `kdb5_util load` opens the dump's keys with the master key from th
 which stays where MIT left it (`-P`, or `-m` and the typed password, if there is no stash;
 MIT's `load` copies the keys unread). Keys, key versions, policies and passwords carry over, so
 the clients' keytabs and the users' passwords keep working.
+
+### In a container
+
+An image that runs the realm with its KDC directory on a volume, as KLLDAP's does, is upgraded
+the same way by one-off containers on that volume: the old image dumps, the new one loads. Set
+the names first:
+
+```sh
+REALM=EXAMPLE.COM
+VOLUME=/srv/kdc/krb5kdc          # the host directory or volume mounted at /var/kerberos/krb5kdc
+OLD_IMAGE=example/kdc:mit        # the image with MIT's krb5-server
+NEW_IMAGE=example/kdc:kerber     # the same image with kerber-rust in its place
+CONTAINER=kdc                    # the container that runs the realm
+```
+
+Stop the container (its daemons stop with it), note who owns MIT's database, dump the realm
+with the old image's `kdb5_util`, and once the dump is written, move MIT's db2 files aside with
+the new image (and `principal.ulog` too, if iprop was enabled):
+
+```sh
+docker stop "$CONTAINER"
+OWNER=$(docker run --rm --network none --entrypoint stat -v "$VOLUME:/var/kerberos/krb5kdc" \
+    "$OLD_IMAGE" -c %u:%g /var/kerberos/krb5kdc/principal)
+docker run --rm --network none --entrypoint /usr/sbin/kdb5_util -v "$VOLUME:/var/kerberos/krb5kdc" \
+    "$OLD_IMAGE" -r "$REALM" dump /var/kerberos/krb5kdc/mit-realm.dump &&
+docker run --rm --network none --entrypoint sh -v "$VOLUME:/var/kerberos/krb5kdc" "$NEW_IMAGE" \
+    -c 'cd /var/kerberos/krb5kdc && mkdir mit-db2 && mv principal principal.kadm5 mit-db2/'
+```
+
+Each command names the realm with `-r`: a one-off container has its image's own
+`/etc/krb5.conf`, and an image that writes the realm's when it boots, as KLLDAP's does, has none
+yet. `kdc.conf` and the stash are on the volume, where both images' `kdb5_util` find them. Then
+load the dump with the new image, give the KDC directory back to `OWNER`, and check:
+
+```sh
+docker run --rm --network none --entrypoint /usr/sbin/kdb5_util -v "$VOLUME:/var/kerberos/krb5kdc" \
+    "$NEW_IMAGE" -r "$REALM" load /var/kerberos/krb5kdc/mit-realm.dump
+docker run --rm --network none --entrypoint chown -v "$VOLUME:/var/kerberos/krb5kdc" \
+    "$NEW_IMAGE" -R "$OWNER" /var/kerberos/krb5kdc
+docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v "$VOLUME:/var/kerberos/krb5kdc" \
+    "$NEW_IMAGE" -r "$REALM" -q listprincs
+```
+
+- The one-off containers run as root, so the load leaves root's 0600 files. An image whose
+  programs run as another user needs them back: KLLDAP runs `kadmin.local` as `LLDAP_UID`, and
+  its manager sets the owner only when it creates a database, so there `OWNER` is
+  `LLDAP_UID:LLDAP_GID`, as MIT's files were.
+- `listprincs` lists the old realm's principals. Then run the container again from the new
+  image with the options it ran with: `docker rm "$CONTAINER"` and the same `docker run` with
+  `$NEW_IMAGE` (with Compose, change the image and run `docker compose up -d`).
+- Give the one-off containers the volume options the container uses (`:Z` under SELinux with
+  podman, for one). podman takes the same commands.
+- To go back, run the same steps the other way, as in [Going back to MIT](#going-back-to-mit):
+  dump with the new image, move `principal` and `principal.ulog` aside, load with the old one,
+  and give the directory back to `OWNER`.
 
 ### Going back to MIT
 

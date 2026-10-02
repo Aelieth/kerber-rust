@@ -473,6 +473,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **docs.** [docs/install.md](docs/install.md) upgrades an MIT realm kept on a container volume
+  (KLLDAP's shape): the old image dumps with `-r`, MIT's db2 files move aside only after it, the
+  new image loads, the files go back to their owner. KLLDAP's phase 80 passes on the result.
 - **install.** `make install` puts the KDC programs under MIT's names with Fedora `krb5-server`'s
   units, sysconfig, tmpfiles.d, logrotate and `kdc.conf` (`dist/`), keeps existing config, refuses
   package-owned paths and lists what it wrote for `uninstall`; [docs/install.md](docs/install.md). Fedora 43 runs.
