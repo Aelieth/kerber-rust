@@ -22,9 +22,9 @@ use krb5_client::creds::{
 };
 use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_client::{
-    FileCcache, KeyExpNotice, KeytabName, KinitParams, NewPasswordPrompter, kinit_with,
-    kt_client_default_name, kt_default_name, kt_resolve, local_host_addresses, mit_error_code,
-    store_ccache_keep_default,
+    FileCcache, KeyExpNotice, KeytabName, KinitParams, NewPasswordPrompter, kinit_prompted,
+    kinit_with, kt_client_default_name, kt_default_name, kt_resolve, local_host_addresses,
+    mit_error_code, store_ccache_keep_default,
 };
 use krb5_config::{CcSpec, env_new_password, env_password, parse_ccspec, resolve_ccspec};
 use krb5_protocol::{AsTicketOpts, KdcAddr, Keytab};
@@ -418,21 +418,14 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         None
     };
     let pw_auth = !(opts.keytab || opts.anonymous || opts.pkinit_identity.is_some());
-    let mut password = if pw_auth {
-        match env_password() {
-            Some(p) => p,
-            None => match read_password_line(&k5.name) {
-                Ok(p) => p,
-                Err(_) => {
-                    return Err(Failure::Error(Krb5Error::new(
-                        Code::Other,
-                        "Cannot read password",
-                    )));
-                }
-            },
-        }
-    } else {
-        Vec::new()
+    let given = if pw_auth { env_password() } else { None };
+    // MIT `kinit_prompter` (`kinit.c:629-633`): a password prompt is noted; the gates' password
+    // stands for one.
+    let prompted = std::cell::Cell::new(given.is_some());
+    let mut read_password = || {
+        prompted.set(true);
+        read_password_line(&k5.name)
+            .map_err(|_| Krb5Error::new(Code::Other, "Cannot read password"))
     };
     let new_password = env_new_password();
     // MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): the banner, then
@@ -465,7 +458,12 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         prompter: (!opts.keytab).then_some(NewPasswordPrompter(&prompter)),
         key_exp_notice: Some(KeyExpNotice(&key_exp_notice)),
     };
-    let result = kinit_with(&addr, &k5.name, &mut password, &k5.out_spec, params);
+    let spec = &k5.out_spec;
+    let result = match given {
+        Some(mut p) => kinit_with(&addr, &k5.name, &mut p, spec, params),
+        None if pw_auth => kinit_prompted(&addr, &k5.name, &mut read_password, spec, params),
+        None => kinit_with(&addr, &k5.name, &mut [], spec, params),
+    };
     if let Some(mut n) = new_password {
         n.zeroize();
     }
@@ -486,7 +484,9 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
             // password prompt, is "Password incorrect".
             match mit_error_code(e.as_ref()) {
                 Some(krb5_types::err::BAD_INTEGRITY) => Err(Failure::PasswordIncorrect),
-                Some(krb5_types::err::PREAUTH_FAILED) if pw_auth => Err(Failure::PasswordIncorrect),
+                Some(krb5_types::err::PREAUTH_FAILED) if prompted.get() => {
+                    Err(Failure::PasswordIncorrect)
+                }
                 _ => Err(Failure::Error(init_error(e.as_ref(), k5, &realm))),
             }
         }

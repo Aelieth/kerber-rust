@@ -8,6 +8,8 @@
 //! getting initial credentials".
 //! Drives the shipped `krb5-kinit` against an in-process KDC: no new-password prompt comes
 //! before the changepw AS, and the KDC error is matched by its code, not its text.
+//! The password prompt itself comes only once a KDC reply needs the key, so an unknown client is
+//! reported unprompted.
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -90,6 +92,11 @@ fn expired_user_store() -> PrincipalStore {
 /// returns (exit code, stdout + stderr — prompts and banners go to stdout like
 /// `krb5_prompter_posix`, errors to stderr).
 fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
+    kinit_as(kdc, &format!("{TEST_USER}@{TEST_REALM}"), password, stdin)
+}
+
+/// [`kinit`] for `principal`.
+fn kinit_as(kdc: &str, principal: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
     let dir = scratch_dir("z1b-kinit");
     let conf = dir.join("krb5.conf");
     std::fs::write(
@@ -104,7 +111,7 @@ fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
     let mut child = Command::new(env!("CARGO_BIN_EXE_krb5-kinit"))
         .arg("-c")
         .arg(&cc)
-        .arg(format!("{TEST_USER}@{TEST_REALM}"))
+        .arg(principal)
         .env("KRB5_CONFIG", &conf)
         .env_remove("KRB5_PASSWORD")
         .env_remove("KRB5_NEW_PASSWORD")
@@ -202,4 +209,37 @@ fn wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
             .any(|l| l.starts_with("kinit:") && l.contains("integrity check failed")),
         "raw crypto text leaked to the user: {err}"
     );
+}
+
+/// Live MIT 1.22.2 `kinit nosuch`: the KDC's error to the first
+/// AS-REQ, and no password prompt.
+/// MIT `encts_process` (`preauth_encts.c:75-75`): the password is read only to answer the KDC's
+/// preauth hint.
+#[test]
+fn unknown_client_is_reported_without_a_password_prompt() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let kdc = serve(store);
+    let (code, out) = kinit_as(&kdc, &format!("nosuch@{TEST_REALM}"), "x", "");
+    assert_eq!(code, Some(1), "output: {out}");
+    assert!(
+        !out.contains("Password for"),
+        "prompted for an unknown client: {out}"
+    );
+    assert!(
+        out.contains(
+            "kinit: Client 'nosuch@KERBER.TEST' not found in Kerberos database while getting \
+             initial credentials"
+        ),
+        "output: {out}"
+    );
+}
+
+#[test]
+fn the_password_is_read_once_when_preauth_needs_it() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let kdc = serve(store);
+    let (code, out) = kinit(&kdc, "userpassword", "");
+    assert_eq!(code, Some(0), "output: {out}");
+    let prompt = format!("Password for {TEST_USER}@{TEST_REALM}: ");
+    assert_eq!(out.matches(&prompt).count(), 1, "output: {out}");
 }

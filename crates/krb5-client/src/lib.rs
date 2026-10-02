@@ -13,12 +13,12 @@ use krb5_asn1::decode;
 use krb5_config::CcSpec;
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
-    as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store, kcm_destroy, kcm_load,
-    kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve, memory_store,
-    parse_principal_ex, tgs_exchange_path,
+    as_exchange_prompted, as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store,
+    kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve,
+    memory_store, parse_principal_ex, tgs_exchange_path,
 };
 use krb5_types::Ticket;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 pub use krb5_protocol::{
     CcacheCred, CcacheKeyblock, FileCcache, Keytab, KeytabEntry, parse_principal, realm, tgt_cred,
@@ -446,7 +446,13 @@ pub fn kinit_with(
     spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
-    let built = kinit_inner(kdc, principal, password, params);
+    let mut lazy = LazyPassword {
+        given: password,
+        prompt: None,
+        read: None,
+        failed: None,
+    };
+    let built = kinit_inner(kdc, principal, &mut lazy, params);
     let result = match built {
         Ok((r, cc)) => write_out_ccache(spec, cc).map(|()| r),
         Err(e) => Err(e),
@@ -491,6 +497,78 @@ fn chpw_error(e: ProtocolError) -> Box<dyn std::error::Error + Send + Sync> {
     match e {
         ProtocolError::Io { .. } => Box::new(Krb5Error::of(Code::KdcUnreach)),
         other => Box::new(other),
+    }
+}
+
+/// [`kinit_with`] reading the password through `prompt` when an AS exchange first needs the
+/// key, once, and keeping it for a key-expired change.
+/// MIT `k5_kinit` (`kinit.c:750-752`): `krb5_get_init_creds_password` gets no password, only
+/// kinit's prompter.
+///
+/// # Errors
+///
+/// As [`kinit_with`], and the error `prompt` returns.
+pub fn kinit_prompted(
+    kdc: &KdcAddr,
+    principal: &str,
+    prompt: &mut dyn FnMut() -> Result<Vec<u8>, Krb5Error>,
+    spec: &CcSpec,
+    params: KinitParams<'_>,
+) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
+    let mut lazy = LazyPassword {
+        given: b"",
+        prompt: Some(prompt),
+        read: None,
+        failed: None,
+    };
+    match kinit_inner(kdc, principal, &mut lazy, params) {
+        Ok((r, cc)) => write_out_ccache(spec, cc).map(|()| r),
+        Err(e) => Err(e),
+    }
+}
+
+/// The AS password: given, or read through the prompt when an exchange first needs it.
+/// MIT `krb5_get_as_key_password` (`gic_pwd.c:8-115`): a password read once is kept in the
+/// `gak_data` every later AS of the same `krb5_get_init_creds_password` shares.
+struct LazyPassword<'p> {
+    given: &'p [u8],
+    prompt: Option<&'p mut dyn FnMut() -> Result<Vec<u8>, Krb5Error>>,
+    read: Option<Zeroizing<Vec<u8>>>,
+    failed: Option<Krb5Error>,
+}
+
+impl LazyPassword<'_> {
+    /// The password, read now if this is its first need. A failed read is kept in `failed` and
+    /// ends the exchange.
+    fn get(&mut self) -> Result<Zeroizing<Vec<u8>>, ProtocolError> {
+        if let Some(p) = &self.read {
+            return Ok(p.clone());
+        }
+        let Some(prompt) = self.prompt.as_mut() else {
+            return Ok(Zeroizing::new(self.given.to_vec()));
+        };
+        match prompt() {
+            Ok(p) => {
+                let p = Zeroizing::new(p);
+                self.read = Some(p.clone());
+                Ok(p)
+            }
+            Err(e) => {
+                let io = std::io::Error::other(e.to_string());
+                self.failed = Some(e);
+                Err(ProtocolError::File(io))
+            }
+        }
+    }
+
+    /// An AS exchange for `req` with the password [`LazyPassword::get`] gives; a failed read is
+    /// the outer error.
+    fn as_exchange(
+        &mut self,
+        req: &AsRequest<'_>,
+    ) -> Result<Result<AsOutcome, ProtocolError>, Krb5Error> {
+        let out = as_exchange_prompted(req, &mut || self.get());
+        self.failed.take().map_or(Ok(out), Err)
     }
 }
 
@@ -666,12 +744,13 @@ fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::pat
 /// key-expired unchanged, and key-expired too when there is no prompter; this port changes the
 /// password on key-expired from a password AS when a prompter or a `new_password` source is
 /// given, and never for a keytab request.
-/// With `new_password`, `key_exp_notice` gets the banner before the change is sent. This function
+/// With `new_password`, `key_exp_notice` gets the banner before the change is sent. Each
+/// password AS takes the password from `password` when it first needs the key. This function
 /// builds the credentials; `kinit_with` writes the cache only when they come back.
 fn kinit_inner(
     kdc: &KdcAddr,
     principal: &str,
-    password: &[u8],
+    password: &mut LazyPassword<'_>,
     params: KinitParams<'_>,
 ) -> Result<(KinitResult, FileCcache), Box<dyn std::error::Error + Send + Sync>> {
     let (cname, mut realm_s) = parse_principal_ex(principal, params.enterprise)?;
@@ -727,7 +806,7 @@ fn kinit_inner(
     let req = AsRequest {
         cname: cname.clone(),
         realm: &realm_s,
-        password,
+        password: b"",
         kdc: &resolved,
         want_spake: params.want_spake,
         fast_armor: armor.as_ref(),
@@ -740,7 +819,7 @@ fn kinit_inner(
     let as_out = match if let Some(keys) = keytab_keys.as_deref() {
         as_exchange_with_keys(&req, keys)
     } else {
-        as_exchange(&req)
+        password.as_exchange(&req)?
     } {
         Ok(o) => o,
         // MIT `krb5_get_init_creds_password` (`gic_pwd.c:205-240`): a typed KDC_ERR_KEY_EXP
@@ -772,7 +851,7 @@ fn kinit_inner(
             let chpw_req = AsRequest {
                 cname: cname.clone(),
                 realm: &realm_s,
-                password,
+                password: b"",
                 kdc: &resolved,
                 want_spake: false,
                 fast_armor: armor.as_ref(),
@@ -782,7 +861,7 @@ fn kinit_inner(
                 etypes: Some(&etypes),
                 ticket: chpw_ticket,
             };
-            let chpw_as = as_exchange(&chpw_req)?;
+            let chpw_as = password.as_exchange(&chpw_req)??;
             let mut new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
                     if let Some(n) = params.key_exp_notice {

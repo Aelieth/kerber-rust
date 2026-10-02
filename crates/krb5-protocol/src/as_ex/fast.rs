@@ -2,9 +2,9 @@
 //! `krb5int_fast_process_response` / `krb5int_fast_process_error`).
 
 use super::{
-    AsOutcome, AsReqTimes, AsRequest, KdcMsg, build_as_req_from, classify, classify_kdc_error,
-    find_pa, finish_as_rep, first_etype, pa_enc_timestamp, pick_info2, pick_key, req_sname,
-    salt_cname, select_s2k,
+    AsOutcome, AsReqTimes, AsRequest, KdcMsg, PasswordPrompt, build_as_req_from, classify,
+    classify_kdc_error, find_pa, finish_as_rep, first_etype, pa_enc_timestamp, pick_info2,
+    pick_key, req_sname, salt_cname, select_s2k, with_prompted,
 };
 use crate::error::Error;
 use crate::preauth::{
@@ -37,6 +37,7 @@ pub(super) fn continue_fast(
     nonce: u32,
     bound: &AsReqTimes,
     etypes: &[i32],
+    prompt: Option<&mut PasswordPrompt<'_>>,
 ) -> Result<AsOutcome, Error> {
     let armor = req
         .fast_armor
@@ -52,9 +53,9 @@ pub(super) fn continue_fast(
     let wire = encode(&probe)?;
     let reply = exchange(req.kdc, &wire)?;
     match classify(&reply)? {
-        KdcMsg::AsRep(rep) => {
+        KdcMsg::AsRep(rep) => with_prompted(req, prompt, |req| {
             finish_fast_as(req, keys, nonce, etypes, &akey, None, rep, &wire, bound)
-        }
+        }),
         KdcMsg::Error(e) => {
             let FastErrorMaterial {
                 err: inner,
@@ -67,39 +68,43 @@ pub(super) fn continue_fast(
             if !retry || inner.error_code != err::PREAUTH_REQUIRED {
                 return classify_kdc_error(&inner);
             }
-            let (etype, salt, params) =
-                select_s2k(&inner, &salt_cname(&req.cname), req.realm, etypes)?;
-            let client_key = pick_key(keys, Some(etype)).map_or_else(
-                || string_to_key(etype, req.password, &salt, params.as_deref()),
-                Ok,
-            )?;
-            // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
-            // preauth module's PA data, so the cookie leads the inner padata.
-            let mut inner_pa = Vec::new();
-            if let Some(c) = cookie {
-                inner_pa.push(c);
-            }
-            inner_pa.push(pa_enc_timestamp(&client_key)?);
-            let ap = fast_armor_ap(armor, &sub)?;
-            let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
-            attach_fast(&mut req2, &ap, &akey, inner_pa)?;
-            let wire = encode(&req2)?;
-            let reply = exchange(req.kdc, &wire)?;
-            match classify(&reply)? {
-                KdcMsg::AsRep(rep) => finish_fast_as(
-                    req,
-                    keys,
-                    nonce,
-                    etypes,
-                    &akey,
-                    Some(client_key),
-                    rep,
-                    &wire,
-                    bound,
-                ),
-                KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(&akey, &e, nonce)?.err),
-                KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-            }
+            with_prompted(req, prompt, |req| {
+                let (etype, salt, params) =
+                    select_s2k(&inner, &salt_cname(&req.cname), req.realm, etypes)?;
+                let client_key = pick_key(keys, Some(etype)).map_or_else(
+                    || string_to_key(etype, req.password, &salt, params.as_deref()),
+                    Ok,
+                )?;
+                // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
+                // preauth module's PA data, so the cookie leads the inner padata.
+                let mut inner_pa = Vec::new();
+                if let Some(c) = cookie {
+                    inner_pa.push(c);
+                }
+                inner_pa.push(pa_enc_timestamp(&client_key)?);
+                let ap = fast_armor_ap(armor, &sub)?;
+                let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+                attach_fast(&mut req2, &ap, &akey, inner_pa)?;
+                let wire = encode(&req2)?;
+                let reply = exchange(req.kdc, &wire)?;
+                match classify(&reply)? {
+                    KdcMsg::AsRep(rep) => finish_fast_as(
+                        req,
+                        keys,
+                        nonce,
+                        etypes,
+                        &akey,
+                        Some(client_key),
+                        rep,
+                        &wire,
+                        bound,
+                    ),
+                    KdcMsg::Error(e) => {
+                        classify_kdc_error(&fast_error_material(&akey, &e, nonce)?.err)
+                    }
+                    KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+                }
+            })
         }
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }

@@ -18,7 +18,7 @@ use krb5_types::{
 };
 use sha1::{Digest, Sha1};
 use std::time::Instant;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 mod fast;
 mod spake;
@@ -163,7 +163,7 @@ mod pkinit_client_drop_tests;
 /// neither AS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
 /// [`Error::Crypto`] when a key cannot be derived or another crypto step fails.
 pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[])
+    wrap_as(req, &[], None)
 }
 
 /// [`as_exchange`] using long-term keys (keytab).
@@ -185,7 +185,7 @@ pub fn as_exchange_with_keys(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, keys)
+    wrap_as(req, keys, None)
 }
 
 /// AS-REQ using long-term keys (keytab), not a password.
@@ -222,14 +222,40 @@ pub fn as_exchange_key(
             ticket: AsTicketOpts::default(),
         },
         keys,
+        None,
     )
 }
 
-fn wrap_as(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
+/// [`as_exchange`] reading the password through `prompt` only when the KDC's reply to the first
+/// request shows the reply key is needed; `req.password` is not used.
+/// MIT `encts_process` (`preauth_encts.c:75-75`): a preauth module reads the password when it
+/// answers the KDC's hint.
+/// MIT `decrypt_as_reply` (`get_in_tkt.c:115-121`): an AS-REP that no preauth answered reads it
+/// to decrypt the reply.
+/// So a KDC error to the first request, an unknown client among them, comes back unprompted.
+///
+/// # Errors
+///
+/// As [`as_exchange`], and the error `prompt` returns.
+pub fn as_exchange_prompted(
+    req: &AsRequest<'_>,
+    prompt: &mut PasswordPrompt<'_>,
+) -> Result<AsOutcome, Error> {
+    wrap_as(req, &[], Some(prompt))
+}
+
+/// Reads the AS password when the exchange first needs it.
+pub type PasswordPrompt<'p> = dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Error> + 'p;
+
+fn wrap_as(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    prompt: Option<&mut PasswordPrompt<'_>>,
+) -> Result<AsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
-    let result = as_exchange_inner(req, keys);
+    let result = as_exchange_inner(req, keys, prompt);
     emit(
         krb5_log::events::PROTOCOL_AS,
         &correlation_id,
@@ -245,10 +271,40 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
         .unwrap_or_else(|| PrincipalName::krbtgt(req.realm))
 }
 
+/// Runs `then` with `req` carrying the password `prompt` reads, or with `req` itself when there
+/// is no prompt.
+fn with_prompted<T>(
+    req: &AsRequest<'_>,
+    prompt: Option<&mut PasswordPrompt<'_>>,
+    then: impl FnOnce(&AsRequest<'_>) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let Some(prompt) = prompt else {
+        return then(req);
+    };
+    let password = prompt()?;
+    then(&AsRequest {
+        cname: req.cname.clone(),
+        realm: req.realm,
+        password: &password,
+        kdc: req.kdc,
+        want_spake: req.want_spake,
+        fast_armor: req.fast_armor,
+        pkinit: req.pkinit,
+        canonicalize: req.canonicalize,
+        sname: req.sname,
+        etypes: req.etypes,
+        ticket: req.ticket.clone(),
+    })
+}
+
 /// MIT `restart_init_creds_loop` (`get_in_tkt.c:807-813`): optimistic preauth is sent only when
 /// the caller supplied a preauth list. The default first request therefore carries no module
 /// padata, and a preauth-required hint is what selects the real mechanism.
-fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutcome, Error> {
+fn as_exchange_inner(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    prompt: Option<&mut PasswordPrompt<'_>>,
+) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     refuse_spake_combo(req)?;
     let etypes: Vec<i32> = match req.etypes {
@@ -262,7 +318,7 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     let (bound, _) = ticket_body(req);
 
     if req.fast_armor.is_some() {
-        return continue_fast(req, keys, nonce, &bound, &etypes);
+        return continue_fast(req, keys, nonce, &bound, &etypes, prompt);
     }
     if req.pkinit.is_some() || req.ticket.anonymous {
         return continue_pkinit(req, nonce, &bound, &etypes);
@@ -274,63 +330,49 @@ fn as_exchange_inner(req: &AsRequest<'_>, keys: &[ProtocolKey]) -> Result<AsOutc
     // `sort_krb5_padata_sequence` picks the first runnable real type (`continue_from_hint`).
     // `--spake` still forces SPAKE.
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
-    let wire = encode(&first)?;
-    let reply = exchange(req.kdc, &wire)?;
-
-    match classify(&reply)? {
-        KdcMsg::AsRep(rep) => {
+    let mut wire = encode(&first)?;
+    let mut msg = classify(&exchange(req.kdc, &wire)?)?;
+    let mut skew_time = None;
+    if let KdcMsg::Error(e) = &msg
+        && e.error_code == err::SKEW
+    {
+        // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
+        skew_time = Some(e.stime.clone());
+        let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
+        wire = encode(&first)?;
+        msg = classify(&exchange(req.kdc, &wire)?)?;
+    }
+    let spake_more = |e: &KrbError| {
+        skew_time.is_none() && req.want_spake && e.error_code == err::MORE_PREAUTH_DATA_REQUIRED
+    };
+    let needs_key = match &msg {
+        KdcMsg::AsRep(_) => {
             refuse_spake_skip(req.want_spake)?;
-            finish_as_rep_keys(
-                rep,
-                nonce,
-                keys,
-                req.password,
-                &req.cname,
-                req.realm,
-                req.canonicalize,
-                &req_sname(req),
-                &bound,
-                Some(&wire),
-            )
+            true
         }
-        KdcMsg::Error(e) if e.error_code == err::SKEW => {
-            // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
-            let skew_time = e.stime.clone();
-            let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
-            let wire = encode(&first)?;
-            let reply = exchange(req.kdc, &wire)?;
-            match classify(&reply)? {
-                KdcMsg::AsRep(rep) => {
-                    refuse_spake_skip(req.want_spake)?;
-                    finish_as_rep_keys(
-                        rep,
-                        nonce,
-                        keys,
-                        req.password,
-                        &req.cname,
-                        req.realm,
-                        req.canonicalize,
-                        &req_sname(req),
-                        &bound,
-                        Some(&wire),
-                    )
-                }
-                KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-                    continue_from_hint(req, keys, nonce, &bound, &etypes, &e, Some(&skew_time))
-                }
-                KdcMsg::Error(e) => classify_kdc_error(&e),
-                KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-            }
-        }
-        KdcMsg::Error(e) if req.want_spake && e.error_code == err::MORE_PREAUTH_DATA_REQUIRED => {
-            continue_spake(req, keys, nonce, &bound, &etypes, &e)
-        }
+        KdcMsg::Error(e) => e.error_code == err::PREAUTH_REQUIRED || spake_more(e),
+        KdcMsg::TgsRep => false,
+    };
+    with_prompted(req, prompt.filter(|_| needs_key), |req| match msg {
+        KdcMsg::AsRep(rep) => finish_as_rep_keys(
+            rep,
+            nonce,
+            keys,
+            req.password,
+            &req.cname,
+            req.realm,
+            req.canonicalize,
+            &req_sname(req),
+            &bound,
+            Some(&wire),
+        ),
+        KdcMsg::Error(e) if spake_more(&e) => continue_spake(req, keys, nonce, &bound, &etypes, &e),
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-            continue_from_hint(req, keys, nonce, &bound, &etypes, &e, None)
+            continue_from_hint(req, keys, nonce, &bound, &etypes, &e, skew_time.as_ref())
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-    }
+    })
 }
 
 /// MIT `get_as_key_keytab` (`gic_keytab.c:68-71`): the reply etype selects the keytab key, and a
