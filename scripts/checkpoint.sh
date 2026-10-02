@@ -400,7 +400,7 @@ rungate() {
     esac
 }
 
-SKIP_ALWAYS="chaos-gate soak-gate stress-gate prod-gate prod-realm-gate nfs-krb5p-gate sssd-renew-gate ad-mit-trust-gate"
+SKIP_ALWAYS="chaos-gate soak-gate stress-gate prod-gate prod-realm-gate ad-mit-trust-gate"
 PEERS_GATES="samba-ad-gate ad-windows-gate ad-s4u-gate samba-pac-verify-gate samba-pac-l2-gate samba-crossrealm-gate samba-realtrust-gate heimdal-gate"
 # CI runs these KEEP-attached; local checkpoint runs them in that order
 # with KERBER_KADMIN_KEEP=1 so each wall_s is a CI leg, not the wrapper.

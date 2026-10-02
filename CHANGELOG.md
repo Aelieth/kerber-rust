@@ -742,8 +742,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   2.12/2.11 returns `KRB5_FCC_INTERNAL` for `RETRIEVE`/`REPLACE`).
   `scripts/kcm-gate.sh` asserts MIT 1.22.2 `klist` principal names,
   `kswitch`, restart persist, re-prime, `kdestroy`. `KEYRING:` stays
-  unknown. NFS/gssproxy/kit cells honest exit 2; fleet default stays
-  FILE (`docs/kcm-nfs-verdict.md`).
+  unknown. NFS/gssproxy cells not driven over KCM; fleet default stays
+  FILE (`docs/labs/kcm-nfs-verdict.md`).
 - **client.** `krb5-klist` (`-c`/`-f`/`-e`) reads a FILE ccache; `krb5-kdestroy`
   zeros then unlinks. Bidirectional MIT oracle in
   `scripts/client-gate.sh`: Rust klist of a MIT-`kinit` ccache and MIT
@@ -2591,10 +2591,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   `max_retries` are stored and ignored. Ticket renew time is the min
   of request, krbtgt entry, client entry, and kdc.conf realm
   `max_renewable_life` when set. New principals copy the 7d policy
-  onto `max_renewable_life`. `kit-conformance-gate` /
-  `gssproxy-gate` / `nfs-krb5p-gate` / `sssd-renew-gate` honest
-  **exit 2** until those oracles are vendored. FILE write stays
-  temp+rename.
+  onto `max_renewable_life`. FILE write stays temp+rename.
 - **client.** (MIT-gated) `kinit --fast` derives
   the FAST reply-key base from PA-ETYPE-INFO2 (RFC 6113 / RFC 8009
   etype 20), not `preferred()[0]` (aes256-sha1).
@@ -2664,6 +2661,10 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   with `getrandom 0.4` and `syn 3` as the only skips, `wildcards = "deny"`
   (`allow-wildcard-paths` for the version-less path deps), licence list
   trimmed to the four the lock uses.
+- **ci.** The five exit-2 stub gates and CI's `skip2` step are gone: `gssproxy-gate.sh`, `gss-sspi-gate.sh`,
+  `kit-conformance-gate.sh`, `sssd-renew-gate.sh` and `nfs-krb5p-gate.sh` exited 2 on every path and asserted nothing.
+  Field runs on real SSSD, NFS-Ganesha, the satomlin kit and Windows carry what a field record covers
+  (`harness/field/README.md`); `docs/gates.md` lists what none covers.
 
 ### Tests and CI
 

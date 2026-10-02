@@ -30,9 +30,8 @@ plus packet captures outrank unit tests.
 | **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI. `publish = false` (not on crates.io). |
 | **v1.1** *(in progress)* | **General-purpose MIT completeness**: the KDC behaves like MIT across the board and the client tools stand alone. The nine 1.1 phases and the MIT 1.22.2 parity sweep have landed ([docs/stages.md](docs/stages.md)); the swept MIT functions are graded one row per check in the [parity ledger](docs/parity/README.md). |
 
-Every push runs 59 gates in `ci.yml`: 52 fail-red, 4 that pass on exit 2
-while their oracle is not vendored, and 3 soft (`continue-on-error`). Nine
-more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
+Every push runs 55 gates in `ci.yml`: 52 fail-red and 3 soft (`continue-on-error`).
+Nine more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
 pin); soak also runs longer nightly. [docs/gates.md](docs/gates.md) has one row per gate.
 
 ## Architecture
@@ -81,8 +80,10 @@ leaves the realm cap at 7 d and new principals at 0, as in MIT
 **Honest caveats, stated plainly:**
 
 - `bidirectional-gate` is **Rust↔Rust**, not an external oracle.
-- Windows **SSPI** has no live oracle yet — `gss-sspi` is an honest
-  `exit 2` placeholder.
+- Windows **SSPI** has no gate. Over the AD trust it accepted a user of
+  the realm (SMB, LDAP) and reached Apache as a SPNEGO client, both in the
+  KVM field lab ([harness/field/README.md](harness/field/README.md));
+  `krb5-gss` has not been run against SSPI.
 - The Samba **L2** PAC-crypto oracle is a *vendored Python reference*, not
   Samba's C library (L1/L3 are live Samba).
 - The product is `forbid(unsafe_code)`; some dependencies (RustCrypto,

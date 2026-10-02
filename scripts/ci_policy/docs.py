@@ -193,8 +193,7 @@ def gate_placements(workflows: list[Workflow] | None = None) -> dict[str, list[t
     """scripts/*-gate.sh -> [(`workflow:job`, lane)] read from .github/workflows.
 
     The lane is `nightly` for a workflow that only runs on a schedule, `soft` for a
-    continue-on-error job, `skip2` for a step that runs the gate through `skip2` (exit 2 is
-    green), and `fail-red` otherwise.
+    continue-on-error job, and `fail-red` otherwise.
     """
     if workflows is None:
         workflows = [Workflow(p, p.read_text()) for p in sorted(WORKFLOWS.glob("*.yml"))]
@@ -208,8 +207,6 @@ def gate_placements(workflows: list[Workflow] | None = None) -> dict[str, list[t
                     lane = "nightly"
                 elif job.continue_on_error:
                     lane = "soft"
-                elif re.search(rf"skip2 \./scripts/{re.escape(script)}\b", job.body):
-                    lane = "skip2"
                 else:
                     lane = "fail-red"
                 place = (f"{w.path.stem}:{job.name}", lane)

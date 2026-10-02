@@ -569,7 +569,7 @@ one per change; a `tool:` commit at the start of a swath that adds bullets
 re-bases it, never the commit that adds them). `check_gate_documented` holds `docs/gates.md`
 to one row per `scripts/*-gate.sh`, with the workflow and lane columns
 equal to the gates' placements in `.github/workflows` (`fail-red`,
-`skip2`, `soft`, `nightly`; `stub` or `wrapper` for the documented
+`soft`, `nightly`; `stub` or `wrapper` for the documented
 stubs), a known oracle, and a non-empty assertion; `check_gate_doc_tokens`
 requires every backticked token of an asserts cell in its gate or a
 `scripts/lib`, `scripts/oracle` or `harness/` file the gate names.
@@ -632,7 +632,9 @@ Primary oracle: MIT Kerberos **1.22.2** in `harness/`. Secondary:
 Heimdal **7.8** in `harness/heimdal/` (`scripts/heimdal-gate.sh`). A
 Windows Server 2022 Evaluation DC (`AD.KERBER.TEST`) is captured for
 the AD round; see [`labs/ad-lab.md`](labs/ad-lab.md). Live AD commands use
-`~/adlab` only — never `/etc/krb5.conf` or SSSD. SSPI remains later.
+`~/adlab` only — never `/etc/krb5.conf` or SSSD. Windows SSPI has no
+gate; it ran only in the KVM field lab
+([`harness/field/README.md`](../harness/field/README.md)).
 
 ## Production-gate
 
@@ -704,7 +706,7 @@ all of the above).
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
 | `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `history-mit-gate` |
-| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `policy-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` |
+| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `policy-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate` |
 | `mit-extra` | One shared shell + one stock MIT KDC, then `cross-realm-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `rc4-session-gate` |
 | `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-flows-gate`, `client-differential-cli-gate` (local wrapper `client-differential-gate.sh`), `s4u-mit-gate`, `kcm-gate`, `capaths-transit-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |
@@ -721,8 +723,7 @@ Scheduled (a red is a red, but a push does not wait for it):
 | `kcm-opcode.yml` | nightly 07:18 UTC + manual | Restores the MIT tar (same cache key); installs `lld`; `kcm-opcode-gate` via `run-peer-step.sh` (exit 2 → green `peer-step unavailable`) |
 | `full-test.yml` | nightly 05:27 UTC, `v*` tags, manual | `test-release` (release-profile tests) and `msrv-test` (`cargo test --workspace --locked` on 1.95) |
 
-Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
-2 without it), `ad-mit-trust-gate.sh` (the retired MIT↔AD trust lab), and the local wrappers `kadmin-gate.sh`, `kpasswd-gate.sh` and `client-differential-gate.sh` (CI runs their legs directly).
+Not in any workflow: `ad-mit-trust-gate.sh` (the retired MIT↔AD trust lab) and the local wrappers `kadmin-gate.sh`, `kpasswd-gate.sh` and `client-differential-gate.sh` (CI runs their legs directly).
 `ad-*` are live Samba (`samba-ad-dc`), not the torn-down Windows DC.
 `heimdal-gate` is live Heimdal 7.8 both directions. Per-gate detail is in
 [gates.md](gates.md).

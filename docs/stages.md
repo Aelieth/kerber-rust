@@ -63,7 +63,9 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
   matrix: [`docs/security.md`](security.md). Export: [`NOTICE`](../NOTICE),
   [`docs/export-control.md`](export-control.md). Logs-as-metrics:
   [`docs/logging.md`](logging.md) (in-process counters deferred).
-  SSPI oracle captured unavailable (`gss-sspi-gate` `exit 2`).
+  Windows SSPI has no gate; over the AD trust it accepted a user of the
+  realm (SMB, LDAP) and reached Apache as a SPNEGO client in the KVM field
+  lab ([`harness/field/README.md`](../harness/field/README.md)).
 
 **Audit caveats (2026-08-25).** PAC **NDR codec** and **RFC 8636 KDF** are
 done. Samba L1 decodes the full buffer set of a Rust PAC

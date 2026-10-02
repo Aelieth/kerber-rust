@@ -28,7 +28,7 @@ FILE `delete_cred` is a same-length tombstone (`endtime = 0`,
 `authtime = -1`, config realm `X-CACHECONF:` → `X-RMED-CONF:`);
 deletion is not guaranteed if marshal length would change. FILE
 stores still append/rewrite via temp+rename (MIT opens `O_APPEND`
-in place); G8b gssproxy/SSSD oracles were unavailable (honest exit 2),
+in place); no run has driven the Rust tools on a cache gssproxy writes,
 so the in-place vs temp+rename decision stays **open**. Unknown ccache
 prefixes are `KRB5_CC_UNKNOWN_TYPE` with no FILE fallback. `KCM:` is a
 real type (sssd-kcm); `KEYRING:` stays unknown. Fleet default stays FILE
@@ -57,8 +57,8 @@ default, `alt_prof.c:573-578`); a written value sets both (ledger rows
 ## Not external oracles
 
 These run in CI (or scheduled) but **do not** count as an external
-implementation oracle. The Rust-only gates (Oracle `none`) and the SSPI stub
-are in [gates.md](gates.md).
+implementation oracle. The Rust-only gates (Oracle `none`) are in
+[gates.md](gates.md).
 
 | Item | Why not an oracle | CI |
 | --- | --- | --- |

@@ -32,8 +32,8 @@ unsupported).
 | Client reboot | same as restart in this environment (container stop/start, not hardware) | **green** (same cell) |
 | Resume / re-prime | `kdestroy` then Rust `kinit -c KCM:` again | **green** |
 | Two-principal + `kswitch` | `GEN_NEW` second cache (`uid:random`); `kswitch -c KCM:0` then `kswitch -p extra@KERBER.TEST` | **green**. Arbitrary residuals (`KCM:user`) are `FCC_INTERNAL` on sssd-kcm — MIT `kinit -c KCM:user` fails the same way |
-| Quota + gssproxy `X-GSSPROXY` + PAC-fat tickets | gssproxy oracle and nfs-klldap-host **not vendored** | **not driven** (`gssproxy-gate` / `nfs-krb5p-gate` exit 2) |
-| NFS `sec=krb5i` from KCM (requesting uid and root) | nfs-klldap-host absent | **exit 2** |
+| Quota + gssproxy `X-GSSPROXY` + PAC-fat tickets | gssproxy oracle and nfs-klldap-host **not vendored** | **not driven** |
+| NFS `sec=krb5i` from KCM (requesting uid and root) | nfs-klldap-host absent | **not driven** |
 
 ## Verdict
 
@@ -60,5 +60,8 @@ To abandon KCM later: leave kit on FILE; Rust `KCM:` resolve can stay
 `scripts/kcm-opcode-gate.sh` (F43/F42 NVRs; `GET_CRED_LIST=ok`,
 `RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL`).
 `scripts/kcm-gate.sh` (MIT `klist` principal names, kswitch, restart,
-re-prime, kdestroy). `scripts/nfs-krb5p-gate.sh` /
-`gssproxy-gate.sh` / `kit-conformance-gate.sh` exit 2.
+re-prime, kdestroy). NFS `krb5i` / `krb5p` to NFS-Ganesha through
+rpc.gssd (the kit's gssproxy, in the path, served no credential) later ran in the KVM field lab
+([`harness/field/README.md`](../../harness/field/README.md)), from the
+kit's `FILE:` caches, not from `KCM:`, so the test matrix's last two rows
+stay not driven.
