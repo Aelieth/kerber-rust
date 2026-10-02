@@ -387,3 +387,48 @@ fn modprinc_sets_max_rlife() {
     let g = store.read().unwrap();
     assert_eq!(g.get_name(&extra).unwrap().max_renewable_life, 86_400);
 }
+
+/// `modprinc -kvno 5` on a principal holding kvno 1 and 2 keys leaves every key at kvno 5, and
+/// a modify without `KADM5_KVNO` leaves the kvnos alone.
+#[test]
+fn modprinc_kvno_sets_every_keys_version() {
+    let (store, acl, actor) = setup();
+    let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kvnome"]);
+    {
+        let mut g = store.write().unwrap();
+        g.create_password(&acl, &actor, &extra, b"kvno-secret-1")
+            .unwrap();
+        g.set_password_keepold_n_in(&extra, "KERBER.TEST", b"kvno-secret-2", 1, &actor)
+            .unwrap();
+    }
+    let kvnos = || -> Vec<u32> {
+        let g = store.read().unwrap();
+        let mut v: Vec<u32> = g
+            .get_name(&extra)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    assert_eq!(kvnos(), [1, 2]);
+    let modify = |kvno: u32, mask: u32| {
+        let mut w = XdrW::default();
+        w.u32(API_V2);
+        w.nullstring(Some("kvnome@KERBER.TEST"));
+        for v in [
+            0, 0, 0, 7200, 1, 0, 0, kvno, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, mask,
+        ] {
+            w.u32(v);
+        }
+        let out = dispatch_kadm5(&store, &acl, &actor, MODIFY_PRINCIPAL, &w.b).unwrap();
+        assert_eq!(ret_code(&out), 0);
+    };
+    modify(9, KADM5_MAX_LIFE);
+    assert_eq!(kvnos(), [1, 2]);
+    modify(5, KADM5_KVNO);
+    assert_eq!(kvnos(), [5]);
+}

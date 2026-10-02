@@ -949,6 +949,33 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// Give every key of `name@princ_realm` the version number `kvno` (`kadm5_modify_principal`
+    /// `KADM5_KVNO`); the password history is not touched.
+    /// MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:645-648`): with KADM5_KVNO
+    /// each key_data's kvno becomes the entry's.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
+    /// store to `persist_paths` fails.
+    pub fn set_kvno_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        kvno: u32,
+    ) -> Result<(), Error> {
+        let id = self.canonical_id(name, princ_realm)?;
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            for k in &mut p.keys {
+                k.kvno = kvno;
+            }
+        }
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
+        self.save_if_configured()
+    }
+
     /// Merge client-supplied `tl_data` (`kadm5_modify_principal` `KADM5_TL_DATA`).
     ///
     /// # Errors

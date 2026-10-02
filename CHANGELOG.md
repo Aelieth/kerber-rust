@@ -1290,6 +1290,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** kadmind's `modprinc -kvno` sets every key's kvno, as MIT's. Unit.
 - **admin.** A kadmind change the database refuses (`KRB5_KDB_CANTLOCK_DB`) no longer
   stays in memory, while the `kadmin/history` a password change under a policy creates
   is saved on its own first, as MIT commits it (kadm5, kpasswd and `kadmin.local`); a

@@ -14,7 +14,7 @@ use super::codes::{
     KADM5_ATTRIBUTES, KADM5_AUTH_ADD, KADM5_AUTH_CHANGEPW, KADM5_AUTH_DELETE, KADM5_AUTH_EXTRACT,
     KADM5_AUTH_GET, KADM5_AUTH_INITIAL, KADM5_AUTH_INSUFFICIENT, KADM5_AUTH_LIST,
     KADM5_AUTH_MODIFY, KADM5_AUTH_SETKEY, KADM5_BAD_KEYSALTS, KADM5_BAD_SERVER_PARAMS,
-    KADM5_BAD_TL_TYPE, KADM5_DUP, KADM5_FAIL_AUTH_COUNT, KADM5_FAILURE, KADM5_MAX_LIFE,
+    KADM5_BAD_TL_TYPE, KADM5_DUP, KADM5_FAIL_AUTH_COUNT, KADM5_FAILURE, KADM5_KVNO, KADM5_MAX_LIFE,
     KADM5_MAX_RLIFE, KADM5_PASS_Q_CLASS, KADM5_PASS_Q_DICT, KADM5_PASS_Q_TOOSHORT,
     KADM5_PASS_REUSE, KADM5_PASS_TOOSOON, KADM5_POLICY, KADM5_POLICY_ALLOWED_KEYSALTS,
     KADM5_POLICY_CLR, KADM5_PRINC_EXPIRE_TIME, KADM5_PW_EXPIRATION, KADM5_PW_MAX_LIFE,
@@ -379,6 +379,12 @@ pub(super) fn dispatch_kadm5_ticket(
                 actor,
             ) {
                 Ok(()) => {
+                    if mask & KADM5_KVNO != 0
+                        && let Err(e) = g.set_kvno_in(&name, &req, fields.kvno)
+                    {
+                        undo_failed_update(&mut g);
+                        return Ok(generic_ret(API_V2, kadm5_code(proc, &Error::from(e))));
+                    }
                     if mask & KADM5_TL_DATA != 0
                         && let Err(e) = g.merge_tl_data_in(&name, &req, &fields.tl_data)
                     {
