@@ -2,7 +2,8 @@
 //! `spake_derive_key` on its seed.
 //!
 //! A test build keeps each wiped allocation instead of freeing it, so a test can see that the
-//! buffer a value owned is the one zeroed, whole.
+//! buffer a value owned is the one zeroed, whole. `P256Keypair` zeroizes its inline scalar
+//! itself, and a test build records that array as the drop left it.
 
 use zeroize::Zeroize;
 
@@ -16,17 +17,20 @@ pub(crate) fn wipe(buf: &mut Vec<u8>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::cell::RefCell;
 
     use crate::{
         EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, SPAKE_GROUP_P256, derive_keys,
-        dh_generate, spake_derive_key,
+        dh_generate, p256_generate, spake_derive_key,
     };
 
     thread_local! {
         /// The allocations `wipe` zeroed on this thread, kept alive.
         pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+        /// The scalar of each `P256Keypair` dropped on this thread, as its drop left it.
+        pub(crate) static DROPPED_SCALARS: RefCell<Vec<[u8; 32]>> =
+            const { RefCell::new(Vec::new()) };
     }
 
     fn take_wiped() -> Vec<Vec<u8>> {
@@ -100,5 +104,14 @@ mod tests {
         // allocation is wiped whole, then the hash key copied from it.
         assert_eq!(take_wiped(), [vec![0; 32], vec![0; 16]]);
         drop(key);
+    }
+
+    #[test]
+    fn a_dropped_p256_keypair_wipes_its_scalar_in_place() {
+        let kp = p256_generate().unwrap();
+        assert_ne!(kp.secret, [0; 32]);
+        DROPPED_SCALARS.with(|d| d.borrow_mut().clear());
+        drop(kp);
+        assert_eq!(DROPPED_SCALARS.with(|d| d.borrow().clone()), [[0; 32]]);
     }
 }

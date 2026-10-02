@@ -59,11 +59,22 @@ pub fn key_from_shared(etype: EncryptionType, bytes: &[u8]) -> Result<ProtocolKe
 }
 
 /// P-256 ECDH: 32-byte scalar and 65-byte uncompressed public key.
+///
+/// The scalar is zeroized where the value lies when it drops. It is an inline array, so a copy
+/// that a move of the value leaves, or that is taken out of it, is not wiped.
 pub struct P256Keypair {
     /// Scalar (secret).
     pub secret: [u8; 32],
     /// Uncompressed SEC1 public key.
     pub public: Vec<u8>,
+}
+
+impl Drop for P256Keypair {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+        #[cfg(test)]
+        let _ = crate::wipe::tests::DROPPED_SCALARS.try_with(|d| d.borrow_mut().push(self.secret));
+    }
 }
 
 /// Generate a P-256 keypair.

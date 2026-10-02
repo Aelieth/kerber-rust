@@ -16,6 +16,7 @@ use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
 };
+use zeroize::Zeroizing;
 
 use crate::der::take_der;
 use crate::error::Error;
@@ -794,9 +795,9 @@ pub(crate) fn process_pkinit(
     let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
     let (z, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
         let kp = p256_generate()?;
-        let shared = p256_shared(&kp.secret, &peer)?;
+        let shared = Zeroizing::new(p256_shared(&kp.secret, &peer)?);
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
-        (shared.to_vec(), info)
+        (Zeroizing::new(shared.to_vec()), info)
     } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
         let group = dh_group_for_prime(&p).ok_or_else(|| {
             tracing::info!(
@@ -816,9 +817,11 @@ pub(crate) fn process_pkinit(
             bits = group.bits
         );
         let kp = dh_generate(group)?;
-        let shared = dh_shared(group, &kp.secret, &y)
-            .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?;
-        let z = pad_z(&shared, p.len());
+        let shared = Zeroizing::new(
+            dh_shared(group, &kp.secret, &y)
+                .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?,
+        );
+        let z = Zeroizing::new(pad_z(&shared, p.len()));
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
         (z, info)
     } else {

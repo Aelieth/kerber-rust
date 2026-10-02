@@ -51,9 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
-- **types/crypto.** An `EncryptionKey` drop zeroed a copy (now its last handle zeroes the key's
-  buffer); HMAC tails were zeroed as copies; a SPAKE seed missed its wipe on `?`. Unit tests see
-  each wipe; red at the parent.
+- **types/crypto/kdc.** An `EncryptionKey` drop zeroed a copy (now its last handle zeroes the key's
+  buffer); a `P256Keypair` and the KDC's PKINIT shared secret were never wiped; HMAC tails were
+  zeroed as copies; a SPAKE seed missed its wipe on `?`. Unit tests see each wipe; red at the parent.
 - **admin/kdc.** iprop as MIT's `kdb_convert.c`: a replica applies only what an update carries,
   so an MIT `setstr` or `cpw` no longer re-enables a disabled account or drops pre-auth, expiry or
   lifetimes; a primary sends only what a change touched, never a key unwrapped. Live; unit; gate.
