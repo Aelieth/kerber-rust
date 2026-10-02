@@ -27,6 +27,7 @@ need_image
 if [ -z "${KERBER_SHELL:-}" ] && [ "${KERBER_KPASSWD_KEEP:-}" = 1 ]; then
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker run -d --name "$NAME" --hostname testhost.kerber.test --entrypoint sleep "$IMAGE" 3600 >/dev/null
+    json_log_on "$NAME"
     KERBER_SHELL="$NAME"
     export KERBER_SHELL
 fi

@@ -35,6 +35,7 @@ if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; th
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
     docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
+    json_log_on "$NAME"
     if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; then
         log "kdc.gate" "error" ',"error":"k5audit_test.so missing after rebuild"'
         exit 1

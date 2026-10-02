@@ -84,6 +84,8 @@ for n in "$PRIMARY" "$REPLICA"; do
     docker cp target/debug/krb5-kdb     "$n":/usr/local/bin/krb5-kdb
     docker exec "$n" chmod +x /usr/local/bin/krb5-kdc /usr/local/bin/krb5-kadmind \
         /usr/local/bin/krb5-kpropd /usr/local/bin/krb5-kprop /usr/local/bin/krb5-kdb
+    # The JSON log the gates read (kdc.issue) goes out only where `[logging] json` asks for it.
+    docker exec "$n" sh -c 'printf "\n[logging]\n    json = STDOUT\n" >>/etc/krb5kdc/kdc.conf'
 done
 say "staged Rust binaries on kdc1 + kdc2"
 

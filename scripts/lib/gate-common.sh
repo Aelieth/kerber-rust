@@ -3,7 +3,7 @@
 # Provides: log, die, unavailable, register_cleanup, wait_listen, wait_log,
 # require_listen, require_log, require_port_in, retry_until, wait_port_in,
 # wait_udp_in, wait_tcp_bound_in, wait_gone_in, wait_pid_gone, need_image,
-# need_bins, shell_container, stock_mit_kdc. One EXIT trap writes gate_wall_s=
+# need_bins, shell_container, json_log_on, stock_mit_kdc. One EXIT trap writes gate_wall_s=
 # and runs registered cleanups. Does not replace provenance's ERR. The port
 # waits probe inside $NAME (wait_port_in, wait_gone_in).
 
@@ -519,6 +519,20 @@ EOS
         docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" "$keep" >/dev/null
     fi
     register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
+    json_log_on "$NAME"
+}
+
+# json_log_on [CONTAINER]: the daemons write their JSON log only where `[logging] json` names a
+# destination (MIT prints none and does not read the relation). The gates read it from the
+# daemons' standard output, so each container they start carries `json = STDOUT` in its stock
+# kdc.conf and krb5.conf, before any copy of them is kept.
+json_log_on() {
+    docker exec "${1:-$NAME}" sh -c '
+        for f in /etc/krb5kdc/kdc.conf /etc/krb5.conf; do
+            [ -f "$f" ] || continue
+            grep -qs "^[[:space:]]*json[[:space:]]*=" "$f" \
+                || printf "\n[logging]\n    json = STDOUT\n" >>"$f"
+        done'
 }
 
 # Shared-job attach (KERBER_LIVE=1): the boot-stock-mit.sh step may
@@ -578,6 +592,7 @@ stock_mit_kdc() {
     docker run -d --name "$n" \
         -e "CORRELATION_ID=${CORRELATION_ID}" \
         "$IMAGE" >/dev/null
+    json_log_on "$n" || true
     NAME="$n"
     if [ "${KERBER_STOCK_KEEP:-}" != 1 ]; then
         register_cleanup "docker rm -f '$n' >/dev/null 2>&1 || true"
