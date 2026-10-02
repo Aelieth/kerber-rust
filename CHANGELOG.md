@@ -1337,6 +1337,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** `kpropd` without an address listens as MIT's: port 754 on an IPv6 socket that takes
+  IPv4 too (`IPV6_V6ONLY` off) when the host has IPv6, else on IPv4, with `SO_REUSEADDR`; it
+  listened on `127.0.0.1` only. Units; settled live.
 - **kdc/admin.** A KDC or kpasswd UDP reply on a wildcard socket leaves from the address its
   request was sent to (pktinfo), as MIT's: a client connected to one of a host's addresses
   dropped a reply sent from another. Units (`127.0.0.2`); settled live.

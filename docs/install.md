@@ -404,8 +404,9 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 - MIT's database files (db2, LMDB) and the LDAP backend. The database is MIT's dump format, so an
   MIT realm moves over with dump and load.
 - Replica KDCs: Fedora's `kprop.service` and MIT's `kpropd` daemon. `kprop` and `kpropd` are
-  installed and open the dump with the stash, but `kpropd` takes only `-r` and an address, not
-  MIT's other options (`-s`, `-a`, `-f`, `-P`, `--pid-file`, `-D`): its keytab and ACL come from
+  installed and open the dump with the stash, but `kpropd` takes only `-r` and an address
+  (without one it listens on port 754 of every address, as MIT's does), not MIT's other options
+  (`-s`, `-a`, `-f`, `-P`, `--pid-file`, `-D`): its keytab and ACL come from
   `KRB5_KPROP_KEYTAB` and `KRB5_KPROP_ACL`, and it does not detach. So `make install` installs
   no `kprop.service`.
 - SPAKE with `edwards25519`, the group Fedora's `krb5.conf` names. The KDC implements P-256

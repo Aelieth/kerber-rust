@@ -2,6 +2,11 @@
 //!
 //! Usage: `krb5-kpropd [-r realm] [host:port]`
 //!
+//! Without an address kpropd listens as MIT's standalone kpropd: on port 754 of every address,
+//! through one IPv6 socket that also takes IPv4 when the host has an IPv6 address other than
+//! `::1`, else through an IPv4 one when it has an IPv4 address other than `127.0.0.1`; with
+//! neither, kpropd stops as MIT's does.
+//!
 //! The realm is `-r`, else `KRB5_KDC_REALM`, else krb5.conf's `default_realm`, as MIT's kpropd
 //! takes `-r` or the default realm. The dump body is opened with the replica's stash, as MIT's
 //! kpropd loads it with `kdb5_util load` beside that stash, and saved to the replica db.
@@ -21,8 +26,10 @@
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::net::TcpListener;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, ToSocketAddrs};
+use std::os::fd::AsRawFd as _;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,6 +38,11 @@ use std::time::Duration;
 
 use krb5_admin::{KPROP_PORT, KpropdConfig, kpropd_handle_conn};
 use krb5_crypto::ProtocolKey;
+use krb5_log::klog::os_error_text;
+use nix::sys::socket::{
+    AddressFamily, Backlog, SockFlag, SockType, SockaddrStorage, bind, listen, setsockopt, socket,
+    sockopt,
+};
 
 use krb5_protocol::{Keytab, ReplayCache};
 
@@ -65,10 +77,6 @@ fn main() {
     if operands.len() > 1 {
         usage(&progname);
     }
-    let bind = operands
-        .first()
-        .cloned()
-        .unwrap_or_else(|| format!("127.0.0.1:{KPROP_PORT}"));
     #[cfg(feature = "test-hooks")]
     let master = std::env::var("KRB5_MASTER_PASSWORD")
         .ok()
@@ -91,12 +99,10 @@ fn main() {
         eprintln!("krb5-kpropd: no host keys (set KRB5_KPROP_KEYTAB)");
         std::process::exit(1);
     }
-    let listener = TcpListener::bind(&bind).unwrap_or_else(|e| {
-        eprintln!("krb5-kpropd: bind {bind}: {e}");
-        std::process::exit(1);
-    });
+    let addr = listen_addr(&progname, operands.first().map(String::as_str));
+    let listener = standalone_listener(&progname, addr);
     listener.set_nonblocking(true).ok();
-    println!("listening {bind}");
+    println!("listening {}", listener.local_addr().unwrap_or(addr));
     let stop = Arc::new(AtomicBool::new(false));
     let replay = ReplayCache::new();
     loop {
@@ -141,6 +147,95 @@ fn main() {
             }
         }
     }
+}
+
+/// The address to listen on: the operand, else the wildcard of [`wildcard_addr`]; one that cannot
+/// be had ends kpropd.
+/// MIT `do_standalone` (`kprop/kpropd.c:389-393`): with no wildcard address `getaddrinfo` fails (`EAI_NONAME`), and kpropd exits.
+fn listen_addr(progname: &str, operand: Option<&str>) -> SocketAddr {
+    if let Some(op) = operand {
+        match op.to_socket_addrs().map(|mut a| a.next()) {
+            Ok(Some(a)) => return a,
+            Ok(None) => eprintln!("{progname}: {op}: no address"),
+            Err(e) => eprintln!("{progname}: {op}: {e}"),
+        }
+        std::process::exit(1);
+    }
+    let (v4, v6) = configured_families();
+    wildcard_addr(v4, v6, KPROP_PORT).unwrap_or_else(|| {
+        eprintln!("getaddrinfo: Name or service not known");
+        std::process::exit(1);
+    })
+}
+
+/// The wildcard kpropd listens on: IPv6's when the host has an IPv6 address, else IPv4's when it
+/// has an IPv4 one; with neither there is none.
+/// MIT `get_wildcard_addr` (`kprop/kpropd.c:362-377`): a passive `AI_ADDRCONFIG` lookup for IPv6, then for IPv4.
+fn wildcard_addr(v4: bool, v6: bool, port: u16) -> Option<SocketAddr> {
+    if v6 {
+        Some(SocketAddr::from((Ipv6Addr::UNSPECIFIED, port)))
+    } else if v4 {
+        Some(SocketAddr::from((Ipv4Addr::UNSPECIFIED, port)))
+    } else {
+        None
+    }
+}
+
+/// Whether the host has an IPv4 address and an IPv6 address, as glibc's `AI_ADDRCONFIG` counts
+/// them: `127.0.0.1` and `::1` do not count, and when the addresses cannot be listed both are
+/// taken as present.
+fn configured_families() -> (bool, bool) {
+    let Ok(addrs) = nix::ifaddrs::getifaddrs() else {
+        return (true, true);
+    };
+    let (mut v4, mut v6) = (false, false);
+    for a in addrs.filter_map(|i| i.address) {
+        if let Some(sin) = a.as_sockaddr_in() {
+            v4 |= sin.ip() != Ipv4Addr::LOCALHOST;
+        } else if let Some(sin6) = a.as_sockaddr_in6() {
+            v6 |= sin6.ip() != Ipv6Addr::LOCALHOST;
+        }
+    }
+    (v4, v6)
+}
+
+/// kpropd's listening socket on `addr`, as MIT's standalone kpropd makes it: `SO_REUSEADDR`, an
+/// IPv6 socket that takes IPv4 too whatever the host's default (`IPV6_V6ONLY` off), and a backlog
+/// of 5. A failure is reported as MIT's reports it; one other than an option's ends kpropd.
+/// MIT `do_standalone` (`kprop/kpropd.c:395-422`): the socket, `SO_REUSEADDR` and `IPV6_V6ONLY` off (their failures reported and let pass), then bind and listen.
+fn standalone_listener(progname: &str, addr: SocketAddr) -> TcpListener {
+    let report = |e: nix::Error, what: &str| {
+        eprintln!(
+            "{progname}: {} {what}",
+            os_error_text(&std::io::Error::from(e))
+        );
+    };
+    let fatal = |e: nix::Error, what: &str| -> ! {
+        report(e, what);
+        std::process::exit(1);
+    };
+    let family = if addr.is_ipv6() {
+        AddressFamily::Inet6
+    } else {
+        AddressFamily::Inet
+    };
+    let fd = socket(family, SockType::Stream, SockFlag::SOCK_CLOEXEC, None)
+        .unwrap_or_else(|e| fatal(e, "while obtaining socket"));
+    if let Err(e) = setsockopt(&fd, sockopt::ReuseAddr, &true) {
+        report(e, "while setting SO_REUSEADDR option");
+    }
+    if addr.is_ipv6()
+        && let Err(e) = setsockopt(&fd, sockopt::Ipv6V6Only, &false)
+    {
+        report(e, "while unsetting IPV6_V6ONLY option");
+    }
+    if let Err(e) = bind(fd.as_raw_fd(), &SockaddrStorage::from(addr)) {
+        fatal(e, "while binding listener socket");
+    }
+    if let Err(e) = listen(&fd, Backlog::new(5).unwrap_or(Backlog::MAXCONN)) {
+        fatal(e, "in listen call");
+    }
+    TcpListener::from(fd)
 }
 
 /// The usage text on stderr, exit status 1.
@@ -198,4 +293,39 @@ fn load_host_keys(db: &Path, stash: &Path) -> Vec<ProtocolKey> {
     #[cfg(not(feature = "test-hooks"))]
     let _ = (db, stash);
     Vec::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wildcard_prefers_ipv6_as_mits_get_wildcard_addr() {
+        let v6 = SocketAddr::from((Ipv6Addr::UNSPECIFIED, 754));
+        let v4 = SocketAddr::from((Ipv4Addr::UNSPECIFIED, 754));
+        assert_eq!(wildcard_addr(true, true, 754), Some(v6));
+        assert_eq!(wildcard_addr(false, true, 754), Some(v6));
+        assert_eq!(wildcard_addr(true, false, 754), Some(v4));
+        assert_eq!(wildcard_addr(false, false, 754), None);
+    }
+
+    /// MIT `do_standalone` (`kprop/kpropd.c:401-412`): the IPv6 listener takes IPv4 too, whatever `net.ipv6.bindv6only` says.
+    #[test]
+    fn the_ipv6_listener_takes_ipv4_too() {
+        use nix::sys::socket::{getsockopt, sockopt};
+        if std::net::UdpSocket::bind("[::1]:0").is_err() {
+            return;
+        }
+        let l = standalone_listener("kpropd", SocketAddr::from((Ipv6Addr::UNSPECIFIED, 0)));
+        assert!(!getsockopt(&l, sockopt::Ipv6V6Only).unwrap());
+        assert!(getsockopt(&l, sockopt::ReuseAddr).unwrap());
+        let port = l.local_addr().unwrap().port();
+        for a in [
+            SocketAddr::from((Ipv4Addr::LOCALHOST, port)),
+            SocketAddr::from((Ipv6Addr::LOCALHOST, port)),
+        ] {
+            let _client = std::net::TcpStream::connect(a).unwrap();
+            assert!(l.accept().is_ok(), "{a}");
+        }
+    }
 }
