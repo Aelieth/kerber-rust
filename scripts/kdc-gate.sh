@@ -422,7 +422,7 @@ docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/et
     "$NAME" sh -c '/tmp/krb5-kdc -n >/tmp/example-kdc.log 2>&1'
 require_listen "$NAME" /tmp/example-kdc.log "the example KDC (kdc.conf kdc_listen)"
 docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/example-kadmind.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kadmind -nofork >/tmp/example-kadmind.log 2>&1'
 require_listen "$NAME" /tmp/example-kadmind.log "the example kadmind (kdc.conf acl_file)"
 echo "RUST_example_kdc_kadmind"
 # ex: a MIT client in the container on the example krb5.conf and its own cache.
@@ -467,7 +467,7 @@ docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/et
     "$NAME" sh -c '/tmp/krb5-kdc -n >/tmp/listen-kdc.log 2>&1'
 require_listen "$NAME" /tmp/listen-kdc.log "the KDC on kdc_ports = 750,88"
 docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/listen-kadmind.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kadmind -nofork >/tmp/listen-kadmind.log 2>&1'
 require_listen "$NAME" /tmp/listen-kadmind.log "kadmind on its default listeners"
 docker exec "$NAME" cat /tmp/listen-kdc.log /tmp/listen-kadmind.log | grep -E '^(listening|kpasswd) '
 # lconf PORT UDP_LIMIT: a client krb5.conf naming the KDC and kadmind by address.

@@ -108,9 +108,9 @@ the new file the replaced file's owner or group (an unprivileged
 writer) logs `event=protocol.secret_file` at **warn** with
 `correlation_id`, `component`, `outcome=ok`, `path`, the old `uid` and
 `gid`, `detail` (`owner not kept`, `group not kept`, or `owner and
-group not kept`), and `error`; the save completes. No daemon's
-default filter includes `krb5_protocol`, so `RUST_LOG` must name it to
-show the line.
+group not kept`), and `error`; the save completes. The daemons' default
+filter includes `krb5_protocol=warn`, so the line shows without
+`RUST_LOG`.
 
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 with MIT `j_dict.h` field names (`event_name`, `event_success`,
@@ -119,6 +119,42 @@ with MIT `j_dict.h` field names (`event_name`, `event_success`,
 uppercase hex digits. `req_id` is 31 alphanumeric characters
 (MIT `REQID_LEN` including NUL). `KRB5_KDC_AUDIT=test` appends
 the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
+
+## The daemon log (`[logging]`)
+
+Besides the JSON stream on standard output, `krb5-kdc` and
+`krb5-kadmind` write MIT's text log (`krb5_log::klog`, MIT
+`lib/kadm5/logger.c`). The destinations are the `[logging]` relations
+of the daemon's profile, kdc.conf first, then krb5.conf with its
+includes: every `kdc` (KDC) or `admin_server` (kadmind) value, else
+every `default` value, else syslog with facility AUTH. Fedora's
+`/etc/krb5.conf` routes them to `/var/log/krb5kdc.log` and
+`/var/log/kadmind.log` this way.
+
+| Destination | Meaning |
+| --- | --- |
+| `FILE:path` | append; a new file is created 0640 |
+| `FILE=path` | write from the start without truncating, as MIT does |
+| `STDERR` | standard error |
+| `CONSOLE`, `DEVICE=path` | `/dev/console` or the path, lines ending CR LF |
+| `SYSLOG[:severity[:facility]]` | `/dev/log`; the severity is ignored, the facility defaults to AUTH |
+
+A spec that does not open is reported on standard error as MIT reports
+it (`Couldn't open log file …`, `… cannot parse <…>`). Each line is
+`Mmm dd hh:mm:ss host prog[pid](Severity): message`; debug lines go to
+syslog only unless `[logging] debug = true`. SIGHUP reopens the files,
+so logrotate's `systemctl reload` moves the daemon to a new one.
+
+What is logged is what MIT logs: `setting up network...`, `set up N
+sockets` and MIT's bind-failure lines; `commencing operation` /
+`shutting down` (KDC) and `starting` / `finished, exiting` (kadmind);
+one `AS_REQ` / `TGS_REQ` line per answered request (`ISSUE` with the
+reply etypes, or the status word and the error's message) with the
+`... PROTOCOL-TRANSITION` / `... CONSTRAINED-DELEGATION` line after an
+S4U request; the transited-path lines; `closing down fd N` when a TCP
+connection ends; and per kadm5 request one `Request:` or `Unauthorized
+request:` line with client, service and address, plus the `chpw` /
+`setpw` lines of kpasswd.
 
 ## Logs as metrics
 

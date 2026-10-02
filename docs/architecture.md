@@ -61,9 +61,9 @@ database file and, as MIT's, keeps its user; only a `test-hooks` build
 serving the test realm without one drops to `KRB5_KDC_USER` (default
 `nobody`) after a privileged bind. TCP workers are capped
 (`MAX_TCP_WORKERS`).
-As MIT's does, the daemon stops on SIGINT, SIGTERM or SIGQUIT and
-reopens its log files on SIGHUP. In a `test-hooks` build,
-`--test-realm`
+As MIT's daemons, `krb5-kdc` and `krb5-kadmind` stop on SIGINT,
+SIGTERM or SIGQUIT and reopen their log files on SIGHUP. In a
+`test-hooks` build, `--test-realm`
 bootstraps documented principals (including `kadmin/admin` and
 `kadmin/changepw`); with `KRB5_KDC_DB` + stash the test realm is saved
 so a separate kadmind process can reload it. `--export-keytab` /

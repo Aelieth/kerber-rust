@@ -21,8 +21,12 @@ export KRB5_CONFIG=/etc/kerber-rust/krb5.conf   # default_realm EXAMPLE.COM: the
 krb5-kdb -r EXAMPLE.COM create -s    # K/M, krbtgt, kadmin/admin and kadmin/changepw, as MIT's
 krb5-kadmin-local -q 'addprinc -pw … admin'   # the admin kadm5.acl names
 krb5-kdc -n                          # UDP and TCP on every kdc_listen address
-krb5-kadmind                         # kadm5 on 749 and kpasswd on 464, all local addresses
+krb5-kadmind -nofork                 # kadm5 on 749 and kpasswd on 464, all local addresses
 ```
+
+`-n` and `-nofork` keep the daemons in the foreground. Without them each one
+binds its sockets and detaches, as MIT's `krb5kdc` and `kadmind` do, and `-P
+file` writes its pid file.
 
 ## Each key and its reader
 
@@ -36,6 +40,7 @@ krb5-kadmind                         # kadm5 on 749 and kpasswd on 464, all loca
 | `acl_file` | `krb5-kadmind.rs` (`load_acl`) through `KdcPaths`, when `KRB5_ACL_FILE` is unset; unset in both, `/var/kerberos/krb5kdc/kadm5.acl` (beside the stash when `KRB5_KDC_STASH` moves it); a missing file refuses to start |
 | `master_key_type` | `crates/krb5-kdc/src/mkey.rs` (`master_etype`) through `KdcPaths`, for `krb5-kdb` and every new stash (`crates/krb5-kdc/src/persist.rs`); `KRB5_MASTER_ETYPE` overrides it, and a name that is no enctype refuses. Unset, the master key is aes256-cts-hmac-sha1-96, MIT's default; an existing stash keeps the type it was made with |
 | `supported_enctypes`, `max_life`, `max_renewable_life` | `crates/krb5-kdc/src/store/policy.rs` (`Policy::apply_kdc_conf`): the key types and salts new principals get (unset, MIT's aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96), and the realm ticket caps |
+| `[logging]` `kdc`, `admin_server`, `default`, `debug` | `LogSpecs` in `crates/krb5-config/src/logging.rs` (kdc.conf, then krb5.conf), opened by `krb5_log::klog`: where `krb5-kdc` and `krb5-kadmind` write MIT's text log; see `docs/logging.md` |
 | `default_principal_flags` | `crates/krb5-kdc/src/store/policy.rs` (`Policy::apply_kdc_conf`, parsed by `default_principal_flags` in `crates/krb5-kdc/src/acl.rs`): the attributes a kadm5 create without an attribute mask gets |
 
 `krb5.conf`, parsed by `crates/krb5-config/src/profile.rs`: every
@@ -65,8 +70,8 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
   refuses every propagation (`crates/krb5-admin/src/bin/krb5-kpropd.rs`).
 - `KRB5_KDC_BIND` (builds with the `test-hooks` feature): the one address the KDC
   binds, instead of `kdc_listen`.
-- `KRB5_KPASSWD_BIND`: the one address `krb5-kadmind` serves kpasswd on, instead
-  of `kpasswd_listen` / `kpasswd_port`.
+- `KRB5_KPASSWD_BIND` (builds with the `test-hooks` feature): the one address a
+  pinned `krb5-kadmind` serves kpasswd on.
 - `KRB5_KDC_USER` (builds with the `test-hooks` feature): the user a KDC that
   serves no database file drops to after binding as root (default `nobody`,
   `crates/krb5-kdc/src/listen.rs`). A KDC that serves a database file, as with
@@ -80,7 +85,6 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
 - `/path` entries in a listen list: MIT binds a UNIX-domain socket there; this
   port binds none.
 - `kdc_tcp_listen_backlog`: the TCP listen queue is the Rust runtime's default.
-- `[logging]`: no reader; `docs/logging.md` says what the daemons log.
 - `iprop_enable` and `iprop_port`: iprop (program 100423) always answers on the
   kadmind port; there is no separate listener.
 - `kdc_timeout` and `max_retries` in `krb5.conf`: parsed, but they do not change
