@@ -128,9 +128,10 @@ ls -Z /usr/sbin/krb5kdc /usr/sbin/kadmind
 ```
 
 The types are `krb5kdc_exec_t` and `kadmind_exec_t`, so systemd starts the daemons in
-`krb5kdc_t` and `kadmind_t`, Fedora's policy for MIT's daemons. The KDC only reads the database
-(it keeps lockout counts in memory); kadmind replaces the database file inside the directory,
-which that policy allows `kadmind_t`.
+`krb5kdc_t` and `kadmind_t`, Fedora's policy for MIT's daemons. The KDC reads the database and
+writes only the lockout counts beside it, in place in the existing `principal.lockout`, which
+that policy allows `krb5kdc_t`; kadmind replaces the database file (and `principal.lockout` when
+it rewrites it whole) inside the directory, which it allows `kadmind_t`.
 
 ### Firewall
 
@@ -228,8 +229,10 @@ sudo ls -la /var/kerberos/krb5kdc
 
 The directory holds the database `principal` (MIT's dump format, not db2) and its update log
 `principal.ulog`, MIT's lock files `principal.ok` and `principal.kadm5.lock` (empty, 0600: the
-tools and daemons lock the database through them, as MIT's do), the stash, `kdc.conf` and
-`kadm5.acl`. Fedora builds MIT's tools with a patch that sets each new file's SELinux label from
+tools and daemons lock the database through them, as MIT's do), `principal.lockout` (0600: each
+principal's failed password attempts and last successful and failed authentication, which the
+KDC records there in place, as MIT's KDC records them in its database), the stash, `kdc.conf`
+and `kadm5.acl`. Fedora builds MIT's tools with a patch that sets each new file's SELinux label from
 the policy, and kerber-rust's tools do the same (MIT's `krb5kdc_principal_t` for the database);
 a save keeps the label of the file it replaces. `restorecon` changes nothing the tools made: it
 is there for the directory, for files made by hand, and for a realm an earlier release saved
@@ -425,8 +428,8 @@ docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v "$VOLUME:/
 - Give the one-off containers the volume options the container uses (`:Z` under SELinux with
   podman, for one). podman takes the same commands.
 - To go back, run the same steps the other way, as in [Going back to MIT](#going-back-to-mit):
-  dump with the new image, move `principal` and `principal.ulog` aside, load with the old one,
-  and give the directory back to `OWNER`.
+  dump with the new image, move `principal`, `principal.ulog` and `principal.lockout` aside,
+  load with the old one, and give the directory back to `OWNER`.
 
 Once the realm has served from the new image, remove the dump and MIT's database from the
 volume, as on a host:
@@ -446,7 +449,7 @@ sudo kdb5_util dump /var/kerberos/krb5kdc/kerber-realm.dump
 sudo make uninstall PREFIX=/usr
 sudo dnf install -y krb5-server
 sudo mkdir /var/kerberos/krb5kdc/kerber-db
-sudo mv /var/kerberos/krb5kdc/principal /var/kerberos/krb5kdc/principal.ulog /var/kerberos/krb5kdc/kerber-db/
+sudo mv /var/kerberos/krb5kdc/principal /var/kerberos/krb5kdc/principal.ulog /var/kerberos/krb5kdc/principal.lockout /var/kerberos/krb5kdc/kerber-db/
 sudo kdb5_util load /var/kerberos/krb5kdc/kerber-realm.dump
 sudo restorecon -Rv /var/kerberos/krb5kdc
 sudo systemctl enable --now krb5kdc kadmin
@@ -458,7 +461,7 @@ In the checkout: fetch the new release (`git pull`, or `git checkout <tag>` for 
 and run `make build` as in [Build](#build). `make install` replaces the programs and units an
 earlier install wrote and keeps every config file; give it the `PREFIX` you installed with
 (`/usr` when kerber-rust replaced krb5-server, `/usr/local` beside it). For a realm an earlier
-release made, three things changed:
+release made, four things changed:
 
 - Release builds find the database, the stash and the ACL only where `kdc.conf` names them
   (`database_name`, `key_stash_file` and `acl_file` in the realm's stanza), else in
@@ -476,6 +479,11 @@ release made, three things changed:
   `<database_name>.kadm5.lock`, and the tools and daemons refuse one without them with MIT's
   texts (`kadmin.local: No such file or directory while initializing kadmin.local interface`).
   Make them once, owned as the database is and labelled, while the daemons are stopped.
+- The KDC records lockout counts and last logins in `<database_name>.lockout`, which
+  `kdb5_util create` and `load` make; the KDC may not create files in its directory. Without it
+  the KDC keeps them in memory, loses them on a restart and says so once in its log. Make it
+  once, empty, owned as the database is and labelled, as the lock files below: the KDC fills it,
+  and nothing else changes.
 
 Stop the daemons and install, and move the realm into the KDC directory only if it was kept
 elsewhere (leave `OLD` empty when it is already in `/var/kerberos/krb5kdc`):
@@ -497,12 +505,13 @@ sudo grep -nE '^[[:space:]]*(kdc_listen|kdc_tcp_listen|kadmind_listen|kpasswd_li
 
 If that prints an entry whose addresses are all IPv6 (such as `[::]:88`), edit it now, before
 the daemons start (the second item above): delete it, which leaves MIT's wildcards, or add
-`0.0.0.0:<port>` beside it. Then label the directory, make the lock files and start:
+`0.0.0.0:<port>` beside it. Then label the directory, make the lock files and `principal.lockout`
+where they are missing, and start:
 
 ```sh
 DB=/var/kerberos/krb5kdc/principal  # kdc.conf's database_name, if the stanza names one
 sudo restorecon -Rv /var/kerberos/krb5kdc
-for f in "$DB.ok" "$DB.kadm5.lock"; do
+for f in "$DB.ok" "$DB.kadm5.lock" "$DB.lockout"; do
     if sudo test ! -e "$f"; then
         sudo install -m 0600 -o "$(sudo stat -c %u "$DB")" -g "$(sudo stat -c %g "$DB")" /dev/null "$f"
         sudo restorecon "$f"

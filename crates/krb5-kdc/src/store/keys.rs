@@ -283,6 +283,9 @@ impl PrincipalStore {
                     cap_key_versions(&mut p.keys, keepold);
                 }
             }
+            // MIT `kadm5_randkey_principal_3` (`lib/kadm5/srv/svr_principal.c:1452-1475`): new keys clear REQUIRES_PWCHANGE and unlock the principal on this KDC.
+            p.attributes &= !KDB_REQUIRES_PWCHANGE;
+            p.fail_auth_count = 0;
             stamp_admin_tl(p, true, actor);
         }
         self.apply_pw_max_life_in(name, princ_realm)?;

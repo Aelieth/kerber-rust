@@ -103,6 +103,7 @@ pub use safe_priv::{
 };
 pub use secret_file::{
     check_secret_file_writable, destroy_secret_file, write_fresh_secret_file, write_secret_file,
+    write_secret_file_like,
 };
 #[cfg(target_os = "linux")]
 pub use selabel::create_labeled;

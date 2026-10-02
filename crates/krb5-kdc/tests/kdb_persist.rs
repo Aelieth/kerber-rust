@@ -461,7 +461,7 @@ fn a_full_load_save_leaves_a_new_database_file() {
         std::fs::metadata(&ulog).unwrap().ino(),
     );
     let loaded = load_store(&db, &stash).unwrap();
-    krb5_kdc::save_store_fresh(&loaded, &db, &stash).unwrap();
+    krb5_kdc::save_store_fresh(&loaded, &db, &stash, false).unwrap();
     let meta = std::fs::metadata(&db).unwrap();
     assert_eq!(meta.permissions().mode() & 0o777, 0o600);
     assert_ne!(meta.ino(), db_ino);

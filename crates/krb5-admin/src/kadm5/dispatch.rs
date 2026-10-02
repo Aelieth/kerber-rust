@@ -241,7 +241,10 @@ pub(super) fn dispatch_kadm5_ticket(
                         detail = "getprinc",
                         principal = p.id(),
                     );
-                    Ok(encode_gprinc(p))
+                    // MIT `kadm5_get_principal` (`lib/kadm5/srv/svr_principal.c:773-774`): the entry comes from the KDB, which gives it the lockout attributes the KDC recorded.
+                    let mut p = p.clone();
+                    g.merge_lockout(&mut p);
+                    Ok(encode_gprinc(&p))
                 }
             }
         }

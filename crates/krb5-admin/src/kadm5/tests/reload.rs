@@ -43,6 +43,57 @@ fn chpass_reload_keeps_concurrent_local_create() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A get-principal reply's `last_success`, `last_failed` and `fail_auth_count`.
+#[cfg(feature = "test-hooks")]
+fn gprinc_lockout(out: &[u8]) -> (u32, u32, u32) {
+    let mut r = XdrR::new(out);
+    assert_eq!(r.u32().unwrap(), API_V2);
+    assert_eq!(r.u32().unwrap(), 0);
+    let _ = r.nullstring().unwrap();
+    for _ in 0..4 {
+        r.u32().unwrap();
+    }
+    assert_eq!(r.u32().unwrap(), 0);
+    let _ = r.nullstring().unwrap();
+    for _ in 0..4 {
+        r.u32().unwrap();
+    }
+    let _ = r.nullstring().unwrap();
+    for _ in 0..2 {
+        r.u32().unwrap();
+    }
+    (r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap())
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn getprinc_shows_the_lockout_attributes_the_kdc_recorded_since_kadmind_read() {
+    use krb5_kdc::{load_store, save_store};
+    let dir = krb5_testkit::scratch_dir("kadmind-lockout");
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let shared = krb5_kdc::shared_dump(load_store(&db, &stash).unwrap());
+    let kdc = load_store(&db, &stash).unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    kdc.record_as_outcome(&user, false);
+    kdc.record_as_outcome(&user, false);
+    let actor = krb5_kdc::testrealm::documented_admin_id();
+    let out = dispatch_kadm5(
+        &shared,
+        &acl,
+        &actor,
+        GET_PRINCIPAL,
+        &getprinc_args("user@KERBER.TEST"),
+    )
+    .unwrap();
+    let (last_success, last_failed, fail_auth_count) = gprinc_lockout(&out);
+    assert_eq!((last_success, fail_auth_count), (0, 2));
+    assert!(last_failed > 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn extract_reload_sees_local_cpw() {
     use krb5_kdc::{load_store, save_store};

@@ -191,10 +191,13 @@ impl PrincipalStore {
     ///
     /// Kadmind and the KDC are separate processes sharing the database. Holding the database's
     /// lock shared, its age and its file's identity are compared with what this store last read,
-    /// and the database is read again when they differ; the dump rows, named policies, serial and
-    /// update log come from disk, and the kdc.conf ticket policy, the password dictionary, the
-    /// lockout overlay, the replay caches and the PKINIT CA stay process-local, carried over and
-    /// never copied.
+    /// and the database is read again when they differ; the dump rows with the lockout attributes
+    /// of `principal.lockout`, named policies, serial and update log come from disk, and the
+    /// kdc.conf ticket policy, the password dictionary, the lockout state this process keeps (its
+    /// open `principal.lockout` and any counts kept in memory), the replay caches and the PKINIT
+    /// CA stay process-local, carried over and never copied. The KDC's lockout writes move neither
+    /// the age nor the file, so a reader that needs them now merges them per entry
+    /// ([`Self::merge_lockout`]).
     /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): each read takes the shared lock and reopens the database under it.
     ///
     /// # Errors

@@ -279,7 +279,15 @@ fn a_database_without_its_lock_files_does_not_open() {
         err(&out),
         format!("kdb5_util: {missing} while making newly loaded database live\n")
     );
-    assert_eq!(realm.ls(), ["principal", "principal.ok", "principal.ulog"]);
+    assert_eq!(
+        realm.ls(),
+        [
+            "principal",
+            "principal.lockout",
+            "principal.ok",
+            "principal.ulog"
+        ]
+    );
 }
 
 #[test]
@@ -303,6 +311,7 @@ fn a_full_load_promotes_a_temporary_database_and_keeps_the_lock_files() {
         [
             "principal",
             "principal.kadm5.lock",
+            "principal.lockout",
             "principal.ok",
             "principal.ulog"
         ]
@@ -326,6 +335,7 @@ fn a_full_load_promotes_a_temporary_database_and_keeps_the_lock_files() {
         [
             "principal",
             "principal.kadm5.lock",
+            "principal.lockout",
             "principal.ok",
             "principal.ulog"
         ]

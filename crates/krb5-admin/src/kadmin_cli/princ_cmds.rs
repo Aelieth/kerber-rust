@@ -700,7 +700,7 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
                     .cloned()
                     .ok_or_else(|| texts::UNK_PRINC.to_owned())
             });
-    let p = match found {
+    let mut p = match found {
         Ok(p) => p,
         Err(msg) => {
             s.io.com_err(
@@ -711,6 +711,7 @@ pub(crate) fn getprinc(s: &mut Session<'_>, argv: &[String]) {
             return;
         }
     };
+    s.h.store.merge_lockout(&mut p);
     let policy_missing = p
         .pw_policy
         .as_deref()

@@ -617,6 +617,17 @@ pub(crate) fn dump_store_etype(
 ///
 /// [`DumpError::Crypto`] when a principal or history key cannot be wrapped under `mkey`.
 pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<String, DumpError> {
+    write_dump_nra(store, mkey, false)
+}
+
+/// [`write_dump`], the three lockout attributes written as 0 with `omit_nra`, as an iprop dump
+/// writes them: they are not replicated.
+/// MIT `k5beta7_common` (`kadmin/dbutil/dump.c:342-344`): with `omit_nra` the last success, last failure and failure count are written as 0.
+fn write_dump_nra(
+    store: &PrincipalStore,
+    mkey: &ProtocolKey,
+    omit_nra: bool,
+) -> Result<String, DumpError> {
     let now = unix_now();
     let mut princs: Vec<&Principal> = store.debug_principals().collect();
     princs.sort_by_key(|p| {
@@ -635,10 +646,10 @@ pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<S
             store.policy.max_life,
             store.policy.max_renewable_life,
         );
-        write_princ_record(&mut out, &km, mkey, store)?;
+        write_princ_record(&mut out, &km, mkey, store, omit_nra)?;
     }
     for p in princs {
-        write_princ_record(&mut out, p, mkey, store)?;
+        write_princ_record(&mut out, p, mkey, store, omit_nra)?;
     }
     let mut names: Vec<_> = store.policies().keys().cloned().collect();
     names.sort();
@@ -729,7 +740,8 @@ fn parse_header(line: &str) -> Result<u32, DumpError> {
     Ok(version)
 }
 
-/// MIT `kdb5_util dump -i1` (`ipropx 1 <sno> <sec> <usec>`).
+/// MIT `kdb5_util dump -i1` (`ipropx 1 <sno> <sec> <usec>`), its lockout attributes 0.
+/// MIT `dump_db` (`kadmin/dbutil/dump.c:1176-1188`): an iprop dump omits the non-replicated attributes.
 ///
 /// # Errors
 ///
@@ -739,7 +751,12 @@ pub fn dump_store_iprop(
     store: &PrincipalStore,
     master_password: &[u8],
 ) -> Result<String, DumpError> {
-    Ok(iprop_header(store, &dump_store(store, master_password)?))
+    let etype = store
+        .get(&format!("K/M@{}", store.realm()))
+        .and_then(|km| km.keys.first())
+        .map_or_else(default_master_etype, |k| k.etype);
+    let mkey = master_key_from_password(store.realm(), master_password, etype)?;
+    Ok(iprop_header(store, &write_dump_nra(store, &mkey, true)?))
 }
 
 /// [`dump_store_iprop`] with every key wrapped under `mkey`.
@@ -751,7 +768,7 @@ pub fn dump_store_iprop_with_key(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
 ) -> Result<String, DumpError> {
-    Ok(iprop_header(store, &write_dump(store, mkey)?))
+    Ok(iprop_header(store, &write_dump_nra(store, mkey, true)?))
 }
 
 /// `text` with the version 7 header replaced by `ipropx 1 <sno> <sec> <usec>`.
@@ -1025,6 +1042,7 @@ fn write_princ_record(
     p: &Principal,
     mkey: &ProtocolKey,
     store: &PrincipalStore,
+    omit_nra: bool,
 ) -> Result<(), DumpError> {
     let name = p.id();
     let (max_life, max_rlife) = if p.alias_target().is_some() {
@@ -1087,15 +1105,20 @@ fn write_princ_record(
         p.e_data.len(),
         name
     );
+    let lockout = if omit_nra {
+        crate::Lockout::default()
+    } else {
+        store.lockout_kept(p)
+    };
     let _ = write!(
         out,
         "{}\t{max_life}\t{max_rlife}\t{}\t{}\t{}\t{}\t{}",
         dump_attributes(p),
         p.expiration,
         p.pw_expire,
-        store.last_success_of(p),
-        store.last_failed_of(p),
-        store.fail_auth_of(p)
+        lockout.last_success,
+        lockout.last_failed,
+        lockout.fail_auth_count
     );
     for t in &tl {
         let _ = write!(

@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **kdc/admin.** A lockout survives a KDC restart: the KDC and tools change checksummed records in
+  place in `principal.lockout` (only a whole rewrite renames; no link followed), which `getprinc`,
+  `dump` and the KDC's check merge; an iprop load keeps a replica's. Live; unit.
 - **kdc.** Count AS outcomes for lockout as MIT's KDB audit does, once per exchange by its final code
   (a skew or refused PKINIT is no failure; an anonymous reply stamps the anonymous principal); the
   failure count interval no longer ends a lock; `[dbmodules]` `disable_*` are read. Live; unit; gate.
@@ -1352,6 +1355,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc.** `cpw -randkey` clears `REQUIRES_PWCHANGE` and zeroes the failed password count, as MIT's
+  `kadm5_randkey_principal_3` does; both were kept. Settled live; unit.
 - **kdc/admin.** `dict_file` is read once, by kadmind, kadmin.local and `kdb5_util create` as MIT's,
   into one block and a sorted index; krb5kdc read it too and each change copied it, 14.5 MiB a
   daemon. That is gone; the KDC still creeps slowly under load, as with no dictionary. Units; runs.

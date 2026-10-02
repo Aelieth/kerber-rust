@@ -5,10 +5,10 @@
 //! The audit decides from the client entry as the request looked it up; the store applies the
 //! decision to the attributes as they are when it writes ([`PrincipalRead::update_lockout`]), so
 //! two outcomes recorded at once both count. The audit never changes the entry's attributes: a
-//! locked-out client is refused by the check, not disabled.
+//! locked-out client is refused by the check, not disabled. Where the attributes live is
+//! `file`'s: the database's `principal.lockout`.
 
-use std::collections::HashMap;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+mod file;
 
 use krb5_types::err;
 
@@ -17,6 +17,11 @@ use crate::kdb::PrincipalRead;
 use crate::kdb_dump::TL_LAST_ADMIN_UNLOCK;
 use crate::status;
 use crate::store::{KDB_REQUIRES_PRE_AUTH, Principal};
+
+pub(crate) use file::{
+    LockoutState, check_writable, ensure, reconcile, store_records, write_loaded,
+};
+pub use file::{SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file};
 
 /// A principal's three lockout attributes, which MIT does not replicate: the last successful
 /// and the last failed authentication, and the failed attempts since the count was reset.
@@ -84,36 +89,6 @@ impl LockoutUpdate {
             out.fail_auth_count = out.fail_auth_count.wrapping_add(1);
         }
         out
-    }
-}
-
-/// The lockout attributes a process keeps in memory for the principals whose AS outcomes it
-/// recorded, shared by every copy of its store and kept across its reads of the database.
-#[derive(Debug, Default)]
-pub(crate) struct LockoutState {
-    overlay: Mutex<HashMap<String, Lockout>>,
-}
-
-impl LockoutState {
-    fn overlay(&self) -> MutexGuard<'_, HashMap<String, Lockout>> {
-        self.overlay.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// The attributes kept for `id`, if any.
-    pub(crate) fn overlay_get(&self, id: &str) -> Option<Lockout> {
-        self.overlay().get(id).copied()
-    }
-
-    /// Keep `lockout` for `id`.
-    pub(crate) fn overlay_put(&self, id: String, lockout: Lockout) {
-        self.overlay().insert(id, lockout);
-    }
-
-    /// Zero the failed authentication count kept for `id`, when one is kept.
-    pub(crate) fn overlay_zero(&self, id: &str) {
-        if let Some(l) = self.overlay().get_mut(id) {
-            l.fail_auth_count = 0;
-        }
     }
 }
 

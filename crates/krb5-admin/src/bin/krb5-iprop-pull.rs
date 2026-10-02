@@ -3,7 +3,8 @@
 //! Usage: `krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
 //!
 //! `--load-dump` writes the database ([`krb5_config::KdcPaths`]; a new 0600 file, as a full load
-//! leaves it) from a MIT dump (version 7 or `ipropx`) the replica's stash opens; with the
+//! leaves it) from a MIT dump (version 7 or `ipropx`) the replica's stash opens, an `ipropx`
+//! dump keeping the replica's own lockout attributes as MIT's `load -i` does; with the
 //! `test-hooks` feature, `KRB5_MASTER_PASSWORD` opens it instead when set, and a missing stash is
 //! then written. A host argument then pulls serial-delta.
 //!
@@ -93,7 +94,13 @@ fn main() {
             eprintln!("krb5-iprop-pull: load dump: {e}");
             std::process::exit(1);
         });
-        save_store_fresh(&store, &db, &stash).unwrap_or_else(|e| {
+        save_store_fresh(
+            &store,
+            &db,
+            &stash,
+            krb5_admin::is_iprop_dump(text.as_bytes()),
+        )
+        .unwrap_or_else(|e| {
             eprintln!("krb5-iprop-pull: save: {e}");
             std::process::exit(1);
         });

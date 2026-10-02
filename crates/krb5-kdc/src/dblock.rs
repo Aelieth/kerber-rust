@@ -111,10 +111,22 @@ enum FileLock {
 }
 
 /// MIT `ofdlock` (`lib/krb5/os/lock_file.c:90-103`): an OFD lock, else on `EINVAL` (a kernel without OFD locks) a classic POSIX lock.
-fn ofdlock(file: &File, arg: &libc::flock) -> Result<(), Errno> {
-    match fcntl(file, FcntlArg::F_OFD_SETLKW(arg)) {
+fn ofdlock(file: &File, arg: &libc::flock, wait: bool) -> Result<(), Errno> {
+    let ofd = if wait {
+        FcntlArg::F_OFD_SETLKW(arg)
+    } else {
+        FcntlArg::F_OFD_SETLK(arg)
+    };
+    match fcntl(file, ofd) {
         Ok(_) => Ok(()),
-        Err(Errno::EINVAL) => fcntl(file, FcntlArg::F_SETLKW(arg)).map(drop),
+        Err(Errno::EINVAL) => {
+            let posix = if wait {
+                FcntlArg::F_SETLKW(arg)
+            } else {
+                FcntlArg::F_SETLK(arg)
+            };
+            fcntl(file, posix).map(drop)
+        }
         Err(e) => Err(e),
     }
 }
@@ -124,6 +136,16 @@ fn ofdlock(file: &File, arg: &libc::flock) -> Result<(), Errno> {
 /// MIT `krb5_lock_file` (`lib/krb5/os/lock_file.c:117-162`): whole file, `F_RDLCK` / `F_WRLCK` / `F_UNLCK`, blocking; `EACCES` / `EAGAIN` are `EAGAIN`.
 /// MIT `krb5_lock_file` (`lib/krb5/os/lock_file.c:154-170`): only `EINVAL` falls back to `flock`, and the `EINVAL` is still returned when `flock` succeeds.
 fn lock_file(file: &File, how: FileLock, flocked: &mut Option<Flock<File>>) -> Result<(), Errno> {
+    lock_file_how(file, how, flocked, true)
+}
+
+/// [`lock_file`], or without `wait` an attempt that fails with `EAGAIN` where it would wait.
+fn lock_file_how(
+    file: &File,
+    how: FileLock,
+    flocked: &mut Option<Flock<File>>,
+    wait: bool,
+) -> Result<(), Errno> {
     let l_type = match how {
         FileLock::Shared => libc::F_RDLCK,
         FileLock::Exclusive => libc::F_WRLCK,
@@ -136,13 +158,13 @@ fn lock_file(file: &File, how: FileLock, flocked: &mut Option<Flock<File>>) -> R
         l_len: 0,
         l_pid: 0,
     };
-    let retval = match ofdlock(file, &arg) {
+    let retval = match ofdlock(file, &arg, wait) {
         Ok(()) => return Ok(()),
         Err(Errno::EACCES | Errno::EAGAIN) => return Err(Errno::EAGAIN),
         Err(Errno::EINVAL) => Errno::EINVAL,
         Err(e) => return Err(e),
     };
-    match flock_fallback(file, how, flocked) {
+    match flock_fallback(file, how, flocked, wait) {
         Ok(()) => Err(retval),
         Err(e) => Err(e),
     }
@@ -153,11 +175,14 @@ fn flock_fallback(
     file: &File,
     how: FileLock,
     flocked: &mut Option<Flock<File>>,
+    wait: bool,
 ) -> Result<(), Errno> {
-    let arg = match how {
-        FileLock::Shared => FlockArg::LockShared,
-        FileLock::Exclusive => FlockArg::LockExclusive,
-        FileLock::Unlock => {
+    let arg = match (how, wait) {
+        (FileLock::Shared, true) => FlockArg::LockShared,
+        (FileLock::Shared, false) => FlockArg::LockSharedNonblock,
+        (FileLock::Exclusive, true) => FlockArg::LockExclusive,
+        (FileLock::Exclusive, false) => FlockArg::LockExclusiveNonblock,
+        (FileLock::Unlock, _) => {
             return match flocked.take() {
                 Some(held) => held.unlock().map(drop).map_err(|(_, e)| e),
                 None => Ok(()),
@@ -311,6 +336,8 @@ enum PolicyLockError {
     CantLock,
     NoLockFile,
     NotLocked,
+    /// An upgrade of the policy lock this process holds would wait ([`DbLock::lock`] retries).
+    WouldBlock,
     Io(io::Error),
 }
 
@@ -318,7 +345,9 @@ impl PolicyLockError {
     /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:469-476`): a policy lock that may not be taken, or whose file is missing, is `KRB5_KDB_CANTLOCK_DB`.
     fn into_db(self) -> DbLockError {
         match self {
-            Self::NoExclPerm | Self::CantLock | Self::NoLockFile => DbLockError::CantLock,
+            Self::NoExclPerm | Self::CantLock | Self::NoLockFile | Self::WouldBlock => {
+                DbLockError::CantLock
+            }
             Self::NotLocked => DbLockError::NotLocked,
             Self::Io(e) => DbLockError::Io(e),
         }
@@ -425,6 +454,13 @@ impl DbLock {
     /// Take the database lock in `mode`, waiting for any conflicting holder: `principal.ok`, then
     /// the policy lock. A lock this process already holds at least as strongly is counted, not
     /// taken again, and a shared one asked for exclusively is upgraded.
+    ///
+    /// The holds of a process's threads share one lock, so an upgrade is asked for while other
+    /// threads may hold it shared. Such an upgrade is tried without waiting and, when another
+    /// process's lock is in the way, tried again after a pause outside the lock's state, so the
+    /// other threads can let go meanwhile: two processes upgrading at once (two KDCs on one
+    /// database) do not each wait for a hold the other's waiting upgrade keeps from being let
+    /// go. Open-file-description locks have no deadlock detection to break that wait.
     /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:431-447`): `principal.ok` is locked (or upgraded), an exclusive lock on a read-only descriptor and a refused lock are `KRB5_KDB_CANTLOCK_DB`.
     /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:467-477`): the hold is counted, then the policy lock is taken in the same mode; when that fails, `principal.ok` is let go.
     ///
@@ -434,16 +470,35 @@ impl DbLock {
     /// or `principal.kadm5.lock` is gone; [`DbLockError::Io`] for any other lock or unlink
     /// failure.
     pub fn lock(&self, mode: DbLockMode) -> Result<(), DbLockError> {
+        let mut pause = std::time::Duration::from_millis(1);
+        while !self.try_lock(mode)? {
+            std::thread::sleep(pause);
+            pause = (pause * 2).min(std::time::Duration::from_millis(64));
+        }
+        Ok(())
+    }
+
+    /// One try of [`Self::lock`]: `false`, with nothing taken, when an upgrade of a lock this
+    /// process holds would have to wait.
+    ///
+    /// It waits in the kernel only when this process holds nothing, and it waits holding the
+    /// lock's state, so the process's other requests for the lock wait behind it until the other
+    /// process lets go: an AS audit waiting so holds up the KDC's lookups, as MIT's
+    /// single-threaded KDC waits. An upgrade never waits there; and the KDC's audit takes the
+    /// lock before its lockout state's mutex, so a waiting upgrade holds up no lookup.
+    fn try_lock(&self, mode: DbLockMode) -> Result<bool, DbLockError> {
         let mut st = self.state();
         let kmode = if mode == DbLockMode::Shared {
             FileLock::Shared
         } else {
             FileLock::Exclusive
         };
-        if st.held == 0 || st.mode < Some(kmode) {
+        let upgrade = st.held > 0 && st.mode < Some(kmode);
+        if st.held == 0 || upgrade {
             let st = &mut *st;
-            match lock_file(&st.ok, kmode, &mut st.ok_flock) {
+            match lock_file_how(&st.ok, kmode, &mut st.ok_flock, !upgrade) {
                 Ok(()) => {}
+                Err(Errno::EAGAIN) if upgrade => return Ok(false),
                 Err(Errno::EBADF) if kmode == FileLock::Exclusive => {
                     return Err(DbLockError::CantLock);
                 }
@@ -453,16 +508,28 @@ impl DbLock {
             st.mode = Some(kmode);
         }
         st.held += 1;
-        if let Err(e) = self.get_policy_lock(&mut st, mode) {
-            drop(st);
-            let _ = self.unlock();
-            return Err(e.into_db());
+        match self.get_policy_lock(&mut st, mode) {
+            Ok(()) => Ok(true),
+            Err(PolicyLockError::WouldBlock) => {
+                st.held -= 1;
+                if st.held == 0 {
+                    st.mode = None;
+                    let st = &mut *st;
+                    let _ = lock_file(&st.ok, FileLock::Unlock, &mut st.ok_flock);
+                }
+                Ok(false)
+            }
+            Err(e) => {
+                drop(st);
+                let _ = self.unlock();
+                Err(e.into_db())
+            }
         }
-        Ok(())
     }
 
     /// The policy lock in `mode`: counted when held at least as strongly, else taken; then the
-    /// file must still exist, and a permanent lock removes it and closes it.
+    /// file must still exist, and a permanent lock removes it and closes it. An upgrade of a
+    /// policy lock this process holds is tried without waiting ([`PolicyLockError::WouldBlock`]).
     /// MIT `osa_adb_get_lock` (`plugins/kdb/db2/adb_openclose.c:220-247`): a held lock is counted; a read-only descriptor refuses an exclusive lock.
     /// MIT `osa_adb_get_lock` (`plugins/kdb/db2/adb_openclose.c:249-261`): a lock file that no longer exists is `OSA_ADB_NOLOCKFILE`, since a permanent lock removed it.
     /// MIT `osa_adb_get_lock` (`plugins/kdb/db2/adb_openclose.c:265-283`): the permanent lock unlinks the file, then closes it, which lets its lock go.
@@ -476,11 +543,13 @@ impl DbLock {
         } else {
             FileLock::Exclusive
         };
+        let upgrade = st.pol_cnt > 0;
         let Some(pol) = st.pol.as_ref() else {
             return Err(PolicyLockError::NoLockFile);
         };
-        match lock_file(pol, kmode, &mut st.pol_flock) {
+        match lock_file_how(pol, kmode, &mut st.pol_flock, !upgrade) {
             Ok(()) => {}
+            Err(Errno::EAGAIN) if upgrade => return Err(PolicyLockError::WouldBlock),
             Err(Errno::EBADF) if mode == DbLockMode::Exclusive => {
                 return Err(PolicyLockError::NoExclPerm);
             }

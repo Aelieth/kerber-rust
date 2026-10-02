@@ -494,3 +494,40 @@ fn moving_the_age_never_retimes_a_symlink_planted_as_principal_ok() {
     lock.unlock().unwrap();
     assert_untouched(&ok, &victim, &bytes, mtime);
 }
+
+/// Two processes that each hold the database shared while another of their threads upgrades
+/// the lock (two KDCs on one database recording AS outcomes) do not deadlock: an upgrade that
+/// would wait waits outside its process's lock state, so the shared holds can be let go.
+#[test]
+fn two_processes_upgrading_while_holding_the_lock_shared_do_not_deadlock() {
+    let (db, _) = saved("krb5-lock-upgrade");
+    // Two `DbLock`s are two open file descriptions, as two processes' are.
+    let locks = [
+        Arc::new(DbLock::open(&db).unwrap()),
+        Arc::new(DbLock::open(&db).unwrap()),
+    ];
+    for lock in &locks {
+        lock.lock(DbLockMode::Shared).unwrap();
+    }
+    let (tx, rx) = mpsc::channel();
+    for lock in &locks {
+        let (lock, tx) = (Arc::clone(lock), tx.clone());
+        std::thread::spawn(move || {
+            lock.lock(DbLockMode::Exclusive).unwrap();
+            lock.unlock().unwrap();
+            tx.send(()).unwrap();
+        });
+    }
+    assert!(
+        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "no upgrade while the other process holds the lock shared"
+    );
+    for lock in &locks {
+        let lock = Arc::clone(lock);
+        std::thread::spawn(move || lock.unlock().unwrap());
+    }
+    for _ in &locks {
+        rx.recv_timeout(Duration::from_secs(10))
+            .expect("each upgrade waited for a shared hold the other's upgrade kept");
+    }
+}

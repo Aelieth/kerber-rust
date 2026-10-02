@@ -31,6 +31,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead as _, Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
@@ -41,9 +42,9 @@ use krb5_config::KdcPaths;
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{
     CreateError, DbLock, DbLockMode, DumpError, DumpFile, DumpPrincipal, KDB_DUMP_VERSION,
-    LoadError, PersistError, create_realm, create_store, kdc_conf_for_realm, load_dump_with_key,
-    master_key_from_password, parse_dump, save_dump_text_locked, save_store_locked, stash_keys,
-    string_to_enctype, update_store, write_stash,
+    LoadError, Lockout, PersistError, create_realm, create_store, kdc_conf_for_realm,
+    load_dump_with_key, master_key_from_password, parse_dump, save_dump_text_locked,
+    save_store_locked, stash_keys, string_to_enctype, update_store, write_stash,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -584,7 +585,7 @@ fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
     }
     let cannot_open = |why: &str| format!("Cannot open DB2 database '{}': {why}", db.display());
     let text = match read_db_text(util, &db) {
-        Ok(t) => t,
+        Ok((t, _)) => t,
         Err(why) => {
             util.com_err(&why, "while initializing database");
             return Err(util.failed());
@@ -613,23 +614,27 @@ fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
     Ok(OpenDb { realm, km, mkey })
 }
 
-/// The database file as dump text, read holding the database's lock shared; a legacy ciphertext
-/// database is opened with the stash and written out as dump text. The error is the whole text.
+/// The database file as dump text, and each principal's record in `principal.lockout`, read
+/// holding the database's lock shared; a legacy ciphertext database is opened with the stash and
+/// written out as dump text, its lockout attributes already in it. The error is the whole text.
 /// MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1194-1198`): a database that does not open is named; then a missing lock file is the system's or the policy lock's own text.
-fn read_db_text(util: &Util, db: &Path) -> Result<String, String> {
+fn read_db_text(util: &Util, db: &Path) -> Result<(String, HashMap<String, Lockout>), String> {
     let cannot_open = |why: &str| format!("Cannot open DB2 database '{}': {why}", db.display());
     krb5_kdc::check_openable(db).map_err(|e| open_text(db, &e))?;
-    let bytes = krb5_kdc::read_db_locked(db).map_err(|e| match e {
+    let (bytes, lockout) = krb5_kdc::read_db_and_lockout_locked(db).map_err(|e| match e {
         PersistError::Lock(lock) => lock.to_string(),
         other => open_text(db, &other),
     })?;
     if bytes.starts_with(b"kdb5_util load_dump version ") {
-        return String::from_utf8(bytes).map_err(|_| cannot_open("dump is not UTF-8"));
+        let text = String::from_utf8(bytes).map_err(|_| cannot_open("dump is not UTF-8"))?;
+        return Ok((text, lockout));
     }
     let stash = &util.paths.key_stash_file;
     let store = krb5_kdc::load_store(db, stash).map_err(|e| open_text(db, &e))?;
     let mkey = krb5_kdc::read_stash(stash, db).map_err(|e| cannot_open(&persist_text(&e)))?;
-    krb5_kdc::dump_store_with_key(&store, &mkey).map_err(|e| cannot_open(&e.to_string()))
+    let text =
+        krb5_kdc::dump_store_with_key(&store, &mkey).map_err(|e| cannot_open(&e.to_string()))?;
+    Ok((text, HashMap::new()))
 }
 
 /// The text of a database `db` that does not open: one that is no database this store reads is
@@ -796,9 +801,18 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
         return usage();
     }
     // MIT `dump_db` (`kadmin/dbutil/dump.c:1334-1347`): the records are read holding the database's lock shared, taken once the master key is in hand, so no writer waits on a typed key.
-    let current = match read_db_text(util, &util.db_args.open_file())
-        .and_then(|text| parse_dump(&text).map_err(|e| e.to_string()))
-    {
+    let current = match read_db_text(util, &util.db_args.open_file()).and_then(|(text, lockout)| {
+        let mut dump = parse_dump(&text).map_err(|e| e.to_string())?;
+        // MIT `klmdb_iterate` (`plugins/kdb/lmdb/kdb_lmdb.c:841-888`): each dumped entry carries its lockout record.
+        for p in &mut dump.princs {
+            if let Some(l) = lockout.get(&p.name) {
+                p.last_success = l.last_success;
+                p.last_failed = l.last_failed;
+                p.fail_auth_count = l.fail_auth_count;
+            }
+        }
+        Ok(dump)
+    }) {
         Ok(d) => d,
         Err(why) => {
             util.com_err(&why, &format!("performing {} dump", version_name(version)));
@@ -1020,6 +1034,8 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
                     return 1;
                 }
             };
+        // MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:691-694`): a loaded record carries its lockout attributes, which the update writes; the others keep theirs.
+        krb5_kdc::merge_lockout_file(&mut store, &db);
         update_store(&mut store, &loaded);
         if let Err(e) = save_store_locked(&store, &db, &key, &lock) {
             util.com_err(&persist_text(&e), &format!("while storing {first}"));
@@ -1028,7 +1044,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         if !update_unlock(util, &lock) {
             return 1;
         }
-    } else if let Err(e) = krb5_kdc::load_store_full(&loaded, &util.db_args.file, &key) {
+    } else if let Err(e) = krb5_kdc::load_store_full(&loaded, &util.db_args.file, &key, false) {
         load_failed(util, &e);
         return 1;
     }
@@ -1093,7 +1109,8 @@ fn load_policies_only(util: &mut Util, dump: &DumpFile, update: bool, verbose: b
             text.push_str(r);
             text.push('\n');
         }
-        if let Err(e) = krb5_kdc::load_text_full(&util.db_args.file, &text, "ulog 1\n") {
+        if let Err(e) = krb5_kdc::load_text_full(&util.db_args.file, &text, "ulog 1\n", &[], false)
+        {
             load_failed(util, &e);
             return 1;
         }
@@ -1334,13 +1351,18 @@ fn destroy(util: &mut Util, args: &[String]) -> u8 {
 }
 
 /// Remove the database: the file itself zeroed and unlinked, then the lock and policy files
-/// db2 keeps beside it should any be there (this store keeps neither), then the update log,
-/// which this store always keeps and MIT's only with iprop.
+/// db2 keeps beside it should any be there (this store keeps neither), then `principal.lockout`
+/// zeroed and unlinked when it is there, then the update log, which this store always keeps and
+/// MIT's only with iprop.
 /// MIT `krb5_db2_destroy` (`plugins/kdb/db2/kdb_db2.c:1227-1271`): `destroy_file` on the database, then the lock file and the policy database and its lock are unlinked.
+/// MIT `klmdb_destroy` (`plugins/kdb/lmdb/kdb_lmdb.c:683-709`): the lockout environment is destroyed with the database.
 /// MIT `kdb5_destroy` (`kadmin/dbutil/kdb5_destroy.c:85-87`): the update log is unlinked, its error ignored.
 fn destroy_database(file: &Path) -> io::Result<()> {
-    if fs::symlink_metadata(file).is_ok_and(|m| m.file_type().is_symlink()) {
-        return Err(link_refused(file));
+    let lockout = krb5_kdc::lockout_path(file);
+    for zeroed in [file, lockout.as_path()] {
+        if fs::symlink_metadata(zeroed).is_ok_and(|m| m.file_type().is_symlink()) {
+            return Err(link_refused(zeroed));
+        }
     }
     destroy_file(file)?;
     for suffix in [".ok", ".kadm5", ".kadm5.lock"] {
@@ -1348,6 +1370,10 @@ fn destroy_database(file: &Path) -> io::Result<()> {
             Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
             _ => {}
         }
+    }
+    match destroy_file(&krb5_kdc::lockout_path(file)) {
+        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+        _ => {}
     }
     let _ = fs::remove_file(with_suffix(file, ".ulog"));
     Ok(())

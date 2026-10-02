@@ -103,10 +103,13 @@ MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 relaunch (`scripts/restart-gate.sh`). The database is locked between
 processes as MIT's db2 module locks it (`dblock.rs`): `principal.ok` and
 `principal.kadm5.lock` beside it, whole-file OFD locks, shared for every read
-(the KDC only while it sees whether the database changed and reads it again)
-and exclusive for every change from a fresh read of the dump to its one write
-and the age bump (`PrincipalStore::change`), so a concurrent local `addprinc`
-survives a remote `cpw` and no writer saves over another.
+(the KDC only while it sees whether the database changed and reads it again,
+or reads a client's lockout record) and exclusive for every change from a
+fresh read of the dump to its one write and the age bump
+(`PrincipalStore::change`), so a concurrent local `addprinc` survives a remote
+`cpw` and no writer saves over another. The KDC takes it exclusively only to
+update a client's record in `principal.lockout` in place (`lockout/file.rs`), which
+leaves the database and its age alone.
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. Every
 KDC-side tool finds kdc.conf and the database through `KdcPaths`, as MIT's

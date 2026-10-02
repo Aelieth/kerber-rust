@@ -10,7 +10,9 @@
 //! rewritten in keytab format on the next save the writer may make to it.
 //!
 //! The database is read holding its lock shared and written holding it exclusively
-//! ([`crate::DbLock`]); every write moves the database's age forward.
+//! ([`crate::DbLock`]); every write moves the database's age forward. The lockout attributes
+//! the KDC records live beside it in `principal.lockout`, which a read merges and a write keeps
+//! in line with the store; `kdb5_util create` and `load` make it.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -275,6 +277,7 @@ pub(crate) fn read_store(
     } else {
         load_kdb_blob(&blob, &stash)?
     };
+    crate::lockout::merge_lockout_file(&mut store, db_path);
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
     store.db_stamp = DbStamp::now(lock, db_path);
     store.dblock = Some(Arc::clone(lock));
@@ -324,6 +327,7 @@ pub(crate) fn read_store_with_master(
     let text =
         std::str::from_utf8(&blob).map_err(|_| PersistError::Format("dump is not utf-8".into()))?;
     let mut store = crate::kdb_dump::load_dump_with_key(text, master)?;
+    crate::lockout::merge_lockout_file(&mut store, db_path);
     store.db_stamp = DbStamp::now(lock, db_path);
     store.dblock = Some(Arc::clone(lock));
     load_ulog(&mut store, db_path)?;
@@ -339,9 +343,21 @@ pub(crate) fn read_store_with_master(
 /// [`PersistError::Lock`] when a lock file does not open or the lock may not be taken;
 /// [`PersistError::Io`] when the database cannot be read.
 pub fn read_db_locked(db: &Path) -> Result<Vec<u8>, PersistError> {
+    Ok(read_db_and_lockout_locked(db)?.0)
+}
+
+/// [`read_db_locked`], with each principal's record in `principal.lockout` read under the same
+/// lock: what a dump of the database writes for the lockout attributes.
+///
+/// # Errors
+///
+/// As [`read_db_locked`].
+pub fn read_db_and_lockout_locked(
+    db: &Path,
+) -> Result<(Vec<u8>, std::collections::HashMap<String, crate::Lockout>), PersistError> {
     let lock = Arc::new(DbLock::open(db)?);
     let _held = lock.hold(DbLockMode::Shared)?;
-    Ok(fs::read(db)?)
+    Ok((fs::read(db)?, crate::lockout::lockout_records(db)))
 }
 
 /// Save `store` as MIT dump version 7, holding the database's lock exclusively (taking it unless
@@ -372,15 +388,16 @@ pub fn save_store(
     db_path: &Path,
     stash_path: &Path,
 ) -> Result<(), PersistError> {
-    let lock = WriteLock::take(store, db_path)?;
-    save_store_as(store, db_path, stash_path, DbWrite::InPlace)?;
+    let (lock, made) = WriteLock::take(store, db_path)?;
+    save_store_as(store, db_path, stash_path, made)?;
     lock.update_age();
     Ok(())
 }
 
 /// Save `store` as a full load leaves it ([`load_store_full`]): the database is a new 0600 file
 /// owned by the writer, whatever it replaces, made live under the database's exclusive lock; the
-/// stash is handled as [`save_store`] handles it.
+/// stash is handled as [`save_store`] handles it. With `merge_lockout` (an iprop dump) each
+/// principal keeps its record in `principal.lockout`.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1490-1508`): a full load is written to a temporary database.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1551-1569`): the temporary database is then made live.
 ///
@@ -391,22 +408,23 @@ pub fn save_store_fresh(
     store: &PrincipalStore,
     db_path: &Path,
     stash_path: &Path,
+    merge_lockout: bool,
 ) -> Result<(), PersistError> {
     let master = master_for_save(store, db_path, stash_path)?;
-    Ok(load_store_full(store, db_path, &master)?)
+    Ok(load_store_full(store, db_path, &master, merge_lockout)?)
 }
 
 fn save_store_as(
     store: &PrincipalStore,
     db_path: &Path,
     stash_path: &Path,
-    how: DbWrite,
+    made: bool,
 ) -> Result<(), PersistError> {
     // MIT `ulog_map` (`lib/kdb/kdb_log.c:525-526`): an existing update log is reopened `O_RDWR` as the database is.
     // Both are checked before either changes, so a refused writer leaves no half-saved store.
-    check_writable(db_path, how)?;
+    check_writable(db_path, DbWrite::InPlace)?;
     let master = master_for_save(store, db_path, stash_path)?;
-    write_store_files(store, db_path, &master, how)
+    write_store_files(store, db_path, &master, DbWrite::InPlace, made)
 }
 
 /// The database's exclusive lock for one write: the store's own when it holds it already, else
@@ -417,24 +435,28 @@ enum WriteLock {
 }
 
 impl WriteLock {
-    fn take(store: &PrincipalStore, db: &Path) -> Result<Self, PersistError> {
+    /// The lock, and whether the database is being made by this write (its lock files were).
+    fn take(store: &PrincipalStore, db: &Path) -> Result<(Self, bool), PersistError> {
         if let Some(lock) = store.dblock.as_ref()
             && store.db_path() == Some(db)
         {
             if lock.held_exclusive() {
-                return Ok(Self::Held(Arc::clone(lock)));
+                return Ok((Self::Held(Arc::clone(lock)), false));
             }
-            return Ok(Self::Taken(lock.hold(DbLockMode::Exclusive)?));
+            return Ok((Self::Taken(lock.hold(DbLockMode::Exclusive)?), false));
         }
-        let lock = match DbLock::open(db) {
-            Ok(lock) => lock,
+        let (lock, made) = match DbLock::open(db) {
+            Ok(lock) => (lock, false),
             Err(_) if !db.exists() => {
                 make_lock_files(db)?;
-                DbLock::open(db)?
+                (DbLock::open(db)?, true)
             }
             Err(e) => return Err(e.into()),
         };
-        Ok(Self::Taken(Arc::new(lock).hold(DbLockMode::Exclusive)?))
+        Ok((
+            Self::Taken(Arc::new(lock).hold(DbLockMode::Exclusive)?),
+            made,
+        ))
     }
 
     fn update_age(&self) {
@@ -482,6 +504,7 @@ fn check_writable(db_path: &Path, how: DbWrite) -> Result<(), PersistError> {
         )));
     }
     check_secret_file_writable(&ulog_path(db_path))?;
+    crate::lockout::check_writable(db_path)?;
     Ok(())
 }
 
@@ -515,20 +538,23 @@ pub fn save_store_with_master(
     how: DbWrite,
 ) -> Result<(), PersistError> {
     if how == DbWrite::Fresh {
-        return Ok(load_store_full(store, db_path, master)?);
+        return Ok(load_store_full(store, db_path, master, false)?);
     }
-    let lock = WriteLock::take(store, db_path)?;
+    let (lock, made) = WriteLock::take(store, db_path)?;
     check_writable(db_path, how)?;
-    write_store_files(store, db_path, master, how)?;
+    write_store_files(store, db_path, master, how, made)?;
     lock.update_age();
     Ok(())
 }
 
+/// Write the store's database and update log, then bring `principal.lockout` in line with the
+/// store, made first when `make_lockout` (a database this write makes, a `load -update`).
 fn write_store_files(
     store: &PrincipalStore,
     db_path: &Path,
     master: &ProtocolKey,
     how: DbWrite,
+    make_lockout: bool,
 ) -> Result<(), PersistError> {
     let text = write_dump(store, master)?;
     match how {
@@ -536,6 +562,7 @@ fn write_store_files(
         DbWrite::Fresh => write_fresh_secret_file(db_path, text.as_bytes())?,
     }
     save_ulog(store, db_path)?;
+    crate::lockout::reconcile(store, db_path, make_lockout)?;
     Ok(())
 }
 
@@ -551,9 +578,9 @@ fn write_store_files(
 /// open read-write is refused before any file changes).
 pub fn save_dump_text(db_path: &Path, text: &str, how: DbWrite) -> Result<(), PersistError> {
     if how == DbWrite::Fresh {
-        return Ok(load_text_full(db_path, text, "ulog 1\n")?);
+        return Ok(load_text_full(db_path, text, "ulog 1\n", &[], false)?);
     }
-    let lock = WriteLock::take(&PrincipalStore::new(""), db_path)?;
+    let (lock, _) = WriteLock::take(&PrincipalStore::new(""), db_path)?;
     check_writable(db_path, how)?;
     write_secret_file(db_path, text.as_bytes())?;
     lock.update_age();
@@ -577,7 +604,7 @@ pub fn save_store_locked(
         return Err(DbLockError::NotLocked.into());
     }
     check_writable(db_path, DbWrite::InPlace)?;
-    write_store_files(store, db_path, master, DbWrite::InPlace)?;
+    write_store_files(store, db_path, master, DbWrite::InPlace, true)?;
     lock.update_age();
     Ok(())
 }
@@ -598,6 +625,7 @@ pub fn save_dump_text_locked(
     }
     check_writable(db_path, DbWrite::InPlace)?;
     write_secret_file(db_path, text.as_bytes())?;
+    crate::lockout::ensure(db_path)?;
     lock.update_age();
     Ok(())
 }
@@ -624,7 +652,8 @@ impl From<LoadError> for PersistError {
 }
 
 /// Make `store`, its keys wrapped under `master`, the database at `db_path` as a full load does
-/// ([`load_text_full`]), with its update log.
+/// ([`load_text_full`]), with its update log and its principals' lockout attributes;
+/// `merge_lockout` keeps the records `principal.lockout` already has, as an iprop load does.
 ///
 /// # Errors
 ///
@@ -633,9 +662,11 @@ pub fn load_store_full(
     store: &PrincipalStore,
     db_path: &Path,
     master: &ProtocolKey,
+    merge_lockout: bool,
 ) -> Result<(), LoadError> {
     let text = write_dump(store, master).map_err(|e| LoadError::Create(e.into()))?;
-    load_text_full(db_path, &text, &ulog_text(store))
+    let lockout = crate::lockout::store_records(store);
+    load_text_full(db_path, &text, &ulog_text(store), &lockout, merge_lockout)
 }
 
 /// Make the dump `text` the database at `db_path` as MIT's full load does, with `ulog` as its
@@ -645,8 +676,13 @@ pub fn load_store_full(
 /// temporary database renamed over it, the age moved, and the temporary lock files removed. When
 /// there is no database yet, it and its two lock files are created first; an existing
 /// `principal.ok` is kept, and made again only when it is missing. The new database is a 0600
-/// file owned by the writer.
+/// file owned by the writer. Under the real database's lock, before the rename, `lockout` (each
+/// loaded principal's attributes) becomes `principal.lockout`, a new file renamed over any old
+/// one; with `merge` a principal it has a record of keeps it. A `principal.lockout` that is no
+/// regular file the writer may write (a symlink is never followed) fails the load before the
+/// update log changes.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1490-1508`): a full load creates a temporary database.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1497-1501`): an iprop load merges the non-replicated attributes the database already has.
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:710-716`): a temporary database's remnants are destroyed under its lock.
 /// MIT `krb5_db2_promote_db` (`plugins/kdb/db2/kdb_db2.c:1497-1513`): the real database is created when there is none, else opened and locked exclusively.
 /// MIT `ctx_promote` (`plugins/kdb/db2/kdb_db2.c:1434-1448`): the temporary database is renamed over the real one, the age moves, and the temporary lock files are removed.
@@ -657,11 +693,17 @@ pub fn load_store_full(
 /// [`LoadError::Create`] when the temporary database or its lock files cannot be made or
 /// written (nothing of it is left); [`LoadError::Promote`] when the real database's lock files
 /// do not open (`principal.kadm5.lock` missing: MIT's text), its lock may not be taken, or the
-/// update log or the rename fails (the temporary database is removed).
-pub fn load_text_full(db_path: &Path, text: &str, ulog: &str) -> Result<(), LoadError> {
+/// update log, `principal.lockout` or the rename fails (the temporary database is removed).
+pub fn load_text_full(
+    db_path: &Path,
+    text: &str,
+    ulog: &str,
+    lockout: &[(String, crate::Lockout)],
+    merge: bool,
+) -> Result<(), LoadError> {
     let tmp = suffixed(db_path, "~");
     let temp = create_temporary(&tmp, text).map_err(LoadError::Create)?;
-    let real = match promote(db_path, &tmp, ulog) {
+    let real = match promote(db_path, &tmp, ulog, lockout, merge) {
         Ok(real) => real,
         Err(e) => {
             destroy_temporary(&tmp);
@@ -706,7 +748,13 @@ fn create_temporary(tmp: &Path, text: &str) -> Result<DbLock, PersistError> {
 /// the lock is returned still held. A database, or a policy lock file, already there is opened
 /// and locked instead of made: a replica whose database file alone is gone loads as MIT's does.
 /// MIT `krb5_db2_promote_db` (`plugins/kdb/db2/kdb_db2.c:1498-1510`): `EEXIST` from `ctx_create_db`, for the database or its policy files, opens and locks the real database.
-fn promote(db: &Path, tmp: &Path, ulog: &str) -> Result<DbLock, PersistError> {
+fn promote(
+    db: &Path,
+    tmp: &Path,
+    ulog: &str,
+    lockout: &[(String, crate::Lockout)],
+    merge: bool,
+) -> Result<DbLock, PersistError> {
     let created = DbLock::create(db)?;
     let mut opts = fs::OpenOptions::new();
     opts.write(true).create_new(true);
@@ -736,7 +784,9 @@ fn promote(db: &Path, tmp: &Path, ulog: &str) -> Result<DbLock, PersistError> {
         }
     };
     let moved = (|| -> Result<(), PersistError> {
+        crate::lockout::check_writable(db)?;
         write_secret_file(&ulog_path(db), ulog.as_bytes())?;
+        crate::lockout::write_loaded(db, lockout, merge)?;
         fs::rename(tmp, db)?;
         real.update_age();
         let _ = fs::remove_file(suffixed(tmp, SUFFIX_LOCK));
@@ -798,10 +848,11 @@ pub enum CreateError {
 /// `principal.ok` is made (kept and emptied when it is there) and locked exclusively; the
 /// database path is then reserved with an exclusive create, so an existing database (or any file
 /// there) is never replaced; then `principal.kadm5.lock` is made, which must not exist, and
-/// locked; then the dump and its `.ulog` are written as new 0600 files owned by the writer, the
-/// age moves and both locks are let go. The lock files are 0600 and owned by the writer, and with
-/// SELinux on each file made takes the context a new file at its path takes. The stash is the
-/// caller's ([`write_stash`]).
+/// locked; then the dump, `principal.lockout` with a record of each principal, and the `.ulog`
+/// are written, each a new file renamed into place, 0600 and the writer's (a `principal.lockout`
+/// left there keeps its owner and mode), the age moves and both locks are let go. The lock
+/// files are 0600 and owned by the writer, and with SELinux on each file made takes the context
+/// a new file at its path takes. The stash is the caller's ([`write_stash`]).
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:697-708`): `principal.ok` is opened `O_CREAT | O_RDWR | O_TRUNC`, 0600, and locked exclusively first.
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:718-720`): the database is opened `O_RDWR | O_CREAT | O_EXCL`, mode 0600.
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:722-732`): the policy lock file is created `O_EXCL` and locked; a failure leaves the database file.
@@ -811,8 +862,8 @@ pub enum CreateError {
 /// [`CreateError::Lock`] when `principal.ok` cannot be made or locked (nothing else is written),
 /// or `principal.kadm5.lock` cannot be made (the reserved database stays, as MIT's does);
 /// [`CreateError::Create`] when the database path cannot be created exclusively;
-/// [`CreateError::Persist`] when the dump or `.ulog` cannot be written or a key cannot be
-/// wrapped (the reservation is removed again).
+/// [`CreateError::Persist`] when the dump, `.ulog` or `principal.lockout` cannot be written or a
+/// key cannot be wrapped (the reservation is removed again).
 pub fn create_store(
     store: &PrincipalStore,
     db_path: &Path,
@@ -831,6 +882,10 @@ pub fn create_store(
     let written = write_dump(store, master)
         .map_err(PersistError::from)
         .and_then(|text| Ok(write_fresh_secret_file(db_path, text.as_bytes())?))
+        .and_then(|()| {
+            let lockout = crate::lockout::store_records(store);
+            Ok(crate::lockout::write_loaded(db_path, &lockout, false)?)
+        })
         .and_then(|()| {
             let ulog = ulog_text(store);
             Ok(write_fresh_secret_file(
@@ -1010,7 +1065,7 @@ pub fn save_store_legacy_kdb3(
         encrypt(&master, usage, &plain).map_err(|e| PersistError::Crypto(e.to_string()))?;
     let mut out = b"KDB3".to_vec();
     out.extend_from_slice(&cipher);
-    let lock = WriteLock::take(store, db_path)?;
+    let (lock, _) = WriteLock::take(store, db_path)?;
     write_secret_file(db_path, &out)?;
     lock.update_age();
     Ok(())

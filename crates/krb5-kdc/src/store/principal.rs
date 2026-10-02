@@ -1382,13 +1382,35 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
-    /// `p`'s lockout attributes as they are now: the counts this process keeps for it, else what
-    /// the store read.
+    /// `p`'s lockout attributes as they are now: what this process records for it in memory,
+    /// else its record in the database's `principal.lockout` (read holding the database's lock
+    /// shared), else what the store read.
+    /// MIT `klmdb_get_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:713-744`): an entry fetched takes its lockout record.
     #[must_use]
     pub fn lockout_of(&self, p: &Principal) -> Lockout {
+        self.lockout.lookup(self.db_path(), self.dblock.as_ref(), p)
+    }
+
+    /// `p`'s lockout attributes as this store holds them: those it recorded in memory, else
+    /// those it read with the database. A dump of the store writes these.
+    #[must_use]
+    pub(crate) fn lockout_kept(&self, p: &Principal) -> Lockout {
         self.lockout
             .overlay_get(&p.id())
             .unwrap_or_else(|| Lockout::of(p))
+    }
+
+    /// Give each principal its record from `records`, a read of `principal.lockout`, when it
+    /// has one; no change is logged.
+    pub(crate) fn merge_lockout_records(
+        &mut self,
+        records: &std::collections::HashMap<String, Lockout>,
+    ) {
+        for p in self.map.values_mut() {
+            if let Some(l) = records.get(&p.id()) {
+                l.set_on(p);
+            }
+        }
     }
 
     /// `p`'s failed authentication count now ([`Self::lockout_of`]).
@@ -1414,12 +1436,14 @@ impl PrincipalStore {
         self.lockout_of(p).set_on(p);
     }
 
-    /// Record one AS outcome's lockout update for `p` at `stamp`, starting from the attributes
-    /// as they are now. The database, its update log and `p`'s flags are not touched.
+    /// Record one AS outcome's lockout update for `p` at `stamp`: in its record in the
+    /// database's `principal.lockout`, in place and holding the database's lock exclusively,
+    /// starting from the record as it is then; without a side file this process may write, in
+    /// memory. The database, its update log and `p`'s flags are never touched.
+    /// MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): the lockout record alone is written, from its stored value.
     pub fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
-        let id = p.id();
-        let base = self.lockout_of(p);
-        self.lockout.overlay_put(id, update.apply(base, stamp));
+        self.lockout
+            .update(self.db_path(), self.dblock.as_ref(), p, stamp, update);
     }
 
     /// Zero the failed authentication count this process keeps for `name`, when it keeps one.

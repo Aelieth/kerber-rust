@@ -94,6 +94,14 @@ fn kprop_load_stash_bytes(bytes: &[u8], stash: &[u8]) -> Result<PrincipalStore, 
     load_dump_with_stash(text, stash).map_err(|e| Error::Inner(e.to_string()))
 }
 
+/// Whether `dump` is an iprop dump (`iprop` / `ipropx` header, MIT `kdb5_util dump -i`), which
+/// a replica loads keeping its own lockout attributes.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1497-1501`): an iprop load merges the non-replicated attributes the database already has.
+#[must_use]
+pub fn is_iprop_dump(dump: &[u8]) -> bool {
+    dump.starts_with(b"ipropx ") || dump.starts_with(b"iprop ")
+}
+
 /// The kprop body as dump text: MIT dump or iprop text, never a private KDB blob.
 fn kprop_body_text(bytes: &[u8]) -> Result<&str, Error> {
     if bytes.starts_with(b"KDB1") || bytes.starts_with(b"KDB2") || bytes.starts_with(b"KDB3") {
@@ -640,7 +648,11 @@ pub struct KpropdConfig<'a> {
 /// Full replica handler: recvauth, dump v7 body, `load_dump`, persist, ack. The database is
 /// written as a full load leaves it, a new 0600 file owned by kpropd ([`save_store_fresh`]).
 /// Without `cfg.master_password` the replica's stash is read once the peer is authenticated and
-/// before the dump is received, so a missing one is named before any transfer.
+/// before the dump is received, so a missing one is named before any transfer. The lockout
+/// attributes are not replicated by an iprop dump: a replica's principal keeps its record in
+/// `principal.lockout` ([`is_iprop_dump`]); a plain dump's attributes replace them, as a plain
+/// `kdb5_util load` does.
+/// MIT `load_database` (`kprop/kpropd.c:1541-1609`): an iprop replica loads with `-i`, any other with a plain `kdb5_util load`.
 ///
 /// # Errors
 ///
@@ -681,7 +693,8 @@ pub fn kpropd_handle_conn(
         (None, Some(stash_bytes)) => kprop_load_stash_bytes(&dump, stash_bytes)?,
         (None, None) => return Err(Error::Inner("no master key".into())),
     };
-    save_store_fresh(&store, db, stash).map_err(|e| Error::Inner(e.to_string()))?;
+    save_store_fresh(&store, db, stash, is_iprop_dump(&dump))
+        .map_err(|e| Error::Inner(e.to_string()))?;
     kpropd_send_ack(stream, &mut auth, dump.len() as u64)?;
     tracing::info!(
         event = krb5_log::events::ADMIN,

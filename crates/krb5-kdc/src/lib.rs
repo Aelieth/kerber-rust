@@ -89,7 +89,9 @@ pub use listen::{
     bind_udp_listeners, drop_privileges, recv_from_to, send_udp_reply, serve, serve_all,
     serve_all_until, serve_until, shared_dump, shared_store, wait_for_connection,
 };
-pub use lockout::{Lockout, LockoutUpdate};
+pub use lockout::{
+    Lockout, LockoutUpdate, SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file,
+};
 pub use mkey::{default_master_etype, master_etype, master_key_from_password, string_to_enctype};
 pub use osa::{
     KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt, decrypt_entry as decrypt_history_entry,
@@ -98,9 +100,9 @@ pub use osa::{
 pub use persist::{
     CreateError, DbWrite, LoadError, PersistError, Unopenable, check_openable, create_store,
     load_dump_with_stash, load_store, load_store_full, load_store_with_master, load_text_full,
-    read_db_locked, read_stash, save_dump_text, save_dump_text_locked, save_store,
-    save_store_fresh, save_store_legacy_kdb3, save_store_locked, save_store_with_master,
-    stash_keys, write_stash,
+    read_db_and_lockout_locked, read_db_locked, read_stash, save_dump_text, save_dump_text_locked,
+    save_store, save_store_fresh, save_store_legacy_kdb3, save_store_locked,
+    save_store_with_master, stash_keys, write_stash,
 };
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,

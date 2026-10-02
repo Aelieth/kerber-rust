@@ -27,11 +27,14 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 
 /// What a new file takes from the file it replaces.
 #[derive(Clone, Copy)]
-enum Replace {
+enum Replace<'a> {
     /// The replaced regular file's owner, group and permission bits.
     Keep,
     /// Nothing: mode 0600, owned by the writer.
     Fresh,
+    /// The owner, group and permission bits of the regular file at this other path, the file
+    /// the new one belongs beside.
+    Like(&'a Path),
 }
 
 /// Write `bytes` to `path` through a temp file + rename, keeping a replaced file's owner, group
@@ -105,6 +108,21 @@ pub fn check_secret_file_writable(path: &Path) -> io::Result<()> {
 /// written, or synced, or cannot be renamed onto `path`.
 pub fn write_fresh_secret_file(path: &Path, bytes: &[u8]) -> io::Result<()> {
     write_atomic(path, bytes, Replace::Fresh, true)
+}
+
+/// Write `bytes` to `path` as a new file, through a temp file + rename, with the owner, group
+/// and permission bits of the regular file at `like`, the file it belongs beside (a database's
+/// side file made while the database stays in place), as [`write_secret_file`] takes them from
+/// the file it replaces; with SELinux on it takes the context a new file at `path` takes. With
+/// no regular file at `like` it is a new 0600 file of the writer's, as from
+/// [`write_fresh_secret_file`].
+///
+/// # Errors
+///
+/// As [`write_fresh_secret_file`]. An owner or group that cannot be kept is a warning, as for
+/// [`write_secret_file`].
+pub fn write_secret_file_like(path: &Path, like: &Path, bytes: &[u8]) -> io::Result<()> {
+    write_atomic(path, bytes, Replace::Like(like), true)
 }
 
 /// [`write_fresh_secret_file`] for a ccache, whose new file is not given an SELinux context.
@@ -201,23 +219,25 @@ fn create_temp(path: &Path, replace: Replace, labeled: bool) -> io::Result<(fs::
     new_temp(path)
 }
 
-/// Set the temp file `f`'s mode, and for [`Replace::Keep`] its owner and group, from the file at
-/// `path`. `fchmod` is not masked by the umask the `O_EXCL` create was; when it fails the file
-/// keeps that create mode, 0600 or narrower.
+/// Set the temp file `f`'s mode, and for [`Replace::Keep`] and [`Replace::Like`] its owner and
+/// group, from the file at `path` or the one it is like. `fchmod` is not masked by the umask the
+/// `O_EXCL` create was; when it fails the file keeps that create mode, 0600 or narrower.
 #[cfg(unix)]
 fn set_owner_and_mode(f: &fs::File, path: &Path, dir: &Path, replace: Replace) {
     let mode = match replace {
-        Replace::Keep => take_owner(f, path, dir).unwrap_or(0o600),
+        Replace::Keep => take_owner(f, path, path, dir).unwrap_or(0o600),
+        Replace::Like(like) => take_owner(f, like, path, dir).unwrap_or(0o600),
         Replace::Fresh => 0o600,
     };
     let _ = f.set_permissions(fs::Permissions::from_mode(mode));
 }
 
-/// Give `f` the owner and group of the regular file at `path` and return the permission bits it
-/// keeps; `None` when there is no such file, or another user's file may have been planted there.
+/// Give `f`, to be the file at `path`, the owner and group of the regular file at `from` and
+/// return the permission bits it keeps; `None` when there is no such file, or another user's
+/// file may have been planted there.
 #[cfg(unix)]
-fn take_owner(f: &fs::File, path: &Path, dir: &Path) -> Option<u32> {
-    let old = fs::symlink_metadata(path)
+fn take_owner(f: &fs::File, from: &Path, path: &Path, dir: &Path) -> Option<u32> {
+    let old = fs::symlink_metadata(from)
         .ok()
         .filter(|m| m.file_type().is_file())?;
     let new = f.metadata().ok()?;
@@ -547,6 +567,32 @@ mod tests {
         write_secret_file(&path, b"new").unwrap();
         let (_, new_gid, mode) = meta(&path);
         assert_eq!((new_gid, mode), (gid, 0o640));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A file made beside another takes that file's permission bits, and its group when the
+    /// writer may give it (the owner too, for root): a database's side file made while the
+    /// database stays in place is owned and moded as the database.
+    #[test]
+    fn a_file_made_like_another_takes_its_owner_group_and_mode() {
+        let dir = krb5_testkit::scratch_dir("krb5-secret-like");
+        let (db, side) = (dir.join("principal"), dir.join("principal.lockout"));
+        fs::write(&db, b"db").unwrap();
+        set_mode(&db, 0o640);
+        let gid = chgrp_to_another_group(&db);
+        write_secret_file_like(&side, &db, b"records").unwrap();
+        let (uid, new_gid, mode) = meta(&side);
+        assert_eq!((uid, mode), (meta(&db).0, 0o640));
+        if let Some(gid) = gid {
+            assert_eq!(new_gid, gid);
+        } else {
+            eprintln!("group not checked: no supplementary group of this user (`id -G`) to give");
+        }
+        assert_eq!(fs::read(&side).unwrap(), b"records");
+        fs::remove_file(&db).unwrap();
+        fs::remove_file(&side).unwrap();
+        write_secret_file_like(&side, &db, b"records").unwrap();
+        assert_eq!(meta(&side).2, 0o600, "with nothing beside it, a fresh file");
         let _ = fs::remove_dir_all(&dir);
     }
 

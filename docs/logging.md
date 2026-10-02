@@ -114,6 +114,17 @@ event with `detail` `SELinux context not set` and is created without it
 (enforcing, the save fails). The daemons' default filter includes
 `krb5_protocol=warn`, so the line shows without `RUST_LOG`.
 
+A KDC that cannot record a client's lockout attributes in
+`principal.lockout` (the file is missing, as in a realm an earlier
+release made, is no lockout file, or cannot be opened read-write or
+written) logs `event=kdc.issue` at **warn**, once for each of the two
+causes (no file it may open; one it may not write), with
+`correlation_id`, `component`, `outcome=error` and the reason as
+`detail`, writes the same text to its daemon log, and keeps the
+attributes in memory until it can write the file; from then on the
+file's are the only ones. A KDC that opened the file read-only keeps
+them in memory until it is restarted, even once the file is writable.
+
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 with MIT `j_dict.h` field names (`event_name`, `event_success`,
 `stage`, `tkt_out_id`, `req_id`, `fromport`, `fromaddr`, …).
