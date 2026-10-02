@@ -11,13 +11,13 @@ use krb5_types::PrincipalName;
 
 use super::codes::{
     AUTH_BADCRED, AUTH_FAILED, AUTH_GSSAPI_CONTINUE_INIT, AUTH_GSSAPI_CREDS_VERS,
-    AUTH_GSSAPI_DESTROY, AUTH_GSSAPI_INIT, AUTH_REJECTEDCRED, GARBAGE_ARGS, GSS_INTEGRITY,
-    GSS_NONE, GSS_PRIVACY, IPROP_VERS, KADM_VERS, MAXSEQ, PROC_UNAVAIL, PROG_UNAVAIL,
-    RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM, RPCSEC_GSS_VERS, RPCSEC_SEQ_WINDOW,
-    RPG_CONTINUE, RPG_DATA, RPG_DESTROY, RPG_INIT, SYSTEM_ERR,
+    AUTH_GSSAPI_DESTROY, AUTH_GSSAPI_INIT, AUTH_REJECTEDCRED, FLAVOR_AUTH_GSSAPI, FLAVOR_GSS,
+    GARBAGE_ARGS, GSS_INTEGRITY, GSS_NONE, GSS_PRIVACY, IPROP_VERS, KADM_VERS, MAXSEQ,
+    PROC_UNAVAIL, PROG_UNAVAIL, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM, RPCSEC_GSS_VERS,
+    RPCSEC_SEQ_WINDOW, RPG_CONTINUE, RPG_DATA, RPG_DESTROY, RPG_INIT, SYSTEM_ERR,
 };
 use super::dispatch::kadm5_or_iprop;
-use super::log::kadm5_log_op;
+use super::log::{Caller, kadm5_log_op, kadm5_service_name};
 use super::rpc::{
     RpcCtx, parse_gcred, rpc_reply_accepted, rpc_reply_accepted_verf, rpc_reply_agss,
     rpc_reply_auth_error, rpc_reply_clear, rpc_reply_gss, rpc_reply_gss_verf,
@@ -305,7 +305,14 @@ fn rpcsec_dispatch(
         Err(_) => return rpc_reply_accepted_verf(xid, Some(mic), SYSTEM_ERR),
     };
     if !iprop {
-        kadm5_log_op(proc, kadm_args, &actor, &gd.ctx, addr, &result);
+        let service = kadm5_service_name(&gd.ctx);
+        let who = Caller {
+            client: &actor,
+            service: &service,
+            addr,
+            flavor: FLAVOR_GSS,
+        };
+        kadm5_log_op(proc, kadm_args, &who, &result);
     }
     match gd.svc {
         GSS_NONE => rpc_reply_gss_verf(xid, mic, &result),
@@ -350,6 +357,7 @@ pub(super) fn handle_auth_gssapi(
     verf: &[u8],
     args: &[u8],
     rcache: &ReplayCache,
+    addr: &str,
 ) -> Result<Vec<u8>, Error> {
     let RpcCtx {
         store,
@@ -549,6 +557,14 @@ pub(super) fn handle_auth_gssapi(
         Err(Error::ProcUnavail) => return Ok(rpc_reply_accepted(xid, PROC_UNAVAIL)),
         Err(e) => return Err(e),
     };
+    let service = kadm5_service_name(&st.ctx);
+    let who = Caller {
+        client: &actor,
+        service: &service,
+        addr,
+        flavor: FLAVOR_AUTH_GSSAPI,
+    };
+    kadm5_log_op(proc, kadm_args, &who, &result);
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&st.seq.to_be_bytes());
     inner.extend_from_slice(&result);

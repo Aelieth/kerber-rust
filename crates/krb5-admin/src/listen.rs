@@ -34,6 +34,19 @@ pub const KPROP_PORT: u16 = 754;
 
 const WIRE_VERSION: u8 = 1;
 
+/// A client's address as kadmind logs it; an IPv4 client of a dual-stack socket reads as IPv4.
+/// MIT `client_addr` (`kadmin/server/server_stubs.c:152-162`): `k5_print_addr` of the peer,
+/// without the port.
+#[must_use]
+pub fn client_addr(ip: std::net::IpAddr) -> String {
+    match ip {
+        std::net::IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map_or_else(|| v6.to_string(), |v4| v4.to_string()),
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+    }
+}
+
 /// UDP kpasswd: send `body` to `dest` and accept only that peer's reply.
 ///
 /// # Errors
@@ -518,7 +531,10 @@ fn handle_kpasswd_from(
         })();
         match changed.map_err(Error::from) {
             Ok(()) => (0u16, String::new(), "success".to_owned()),
-            Err(Error::PasswordPolicy(msg)) => (4, msg, "password policy".to_owned()),
+            Err(Error::PasswordPolicy(msg)) => {
+                let text = crate::kadm5::chpass_error_text(&Error::PasswordPolicy(msg.clone()));
+                (4, msg, text)
+            }
             Err(Error::PassTooSoon { until }) => (
                 4,
                 too_soon_text(until),
@@ -558,6 +574,7 @@ fn handle_kpasswd_from(
         client = client.as_str(),
         "{log_line}"
     );
+    krb5_log::klog::syslog(krb5_log::klog::Severity::Notice, &log_line);
     let mut body = Vec::with_capacity(2 + text.len());
     body.extend_from_slice(&code.to_be_bytes());
     body.extend_from_slice(text.as_bytes());
@@ -626,7 +643,7 @@ pub fn serve_kpasswd_udp(
                     &service_key,
                     &replay,
                     &buf[..n],
-                    &peer.ip().to_string(),
+                    &client_addr(peer.ip()),
                 ) {
                     Ok(rep) => {
                         let _ = sock.send_to(&rep, peer);
@@ -670,6 +687,7 @@ pub fn serve_kpasswd_tcp(
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((mut stream, peer)) => {
+                let _closed = krb5_kdc::ClosingFd(std::os::fd::AsRawFd::as_raw_fd(&stream));
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
                 match read_len_pref(&mut stream, 64 * 1024) {
@@ -681,7 +699,7 @@ pub fn serve_kpasswd_tcp(
                             &service_key,
                             &replay,
                             &body,
-                            &peer.ip().to_string(),
+                            &client_addr(peer.ip()),
                         ) {
                             Ok(rep) => {
                                 let _ = write_len_pref(&mut stream, &rep);

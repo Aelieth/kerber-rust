@@ -808,7 +808,7 @@ pub(super) fn dispatch_kadm5_ticket(
 /// (`:772,1400,1553`), LIST for the lists (`:816,1445`), CHANGEPW for
 /// chpass/chrand (`:860,915,1150,1210`), SETKEY for setkey (`:971,1023,1077`),
 /// EXTRACT for get_principal_keys (`:1691`).
-fn auth_code_for(proc: u32) -> u32 {
+pub(super) fn auth_code_for(proc: u32) -> u32 {
     match proc {
         CREATE_PRINCIPAL | CREATE_PRINCIPAL3 | CREATE_POLICY => KADM5_AUTH_ADD,
         DELETE_PRINCIPAL | DELETE_POLICY => KADM5_AUTH_DELETE,

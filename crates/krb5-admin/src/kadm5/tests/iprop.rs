@@ -342,16 +342,14 @@ fn iprop_kdbe_omits_internal_kerber_tl() {
 
 #[test]
 fn kadm5_log_op_fields_match_mit_stubs() {
-    // MIT server_stubs.c op strings and the ACL-denial classification.
+    // MIT server_stubs.c op strings and prime_arg: the unparsed principal for a create, the
+    // name for a policy.
     assert_eq!(
         kadm5_op_name(CREATE_PRINCIPAL),
         Some("kadm5_create_principal")
     );
     assert_eq!(kadm5_op_name(GET_POLICY), Some("kadm5_get_policy"));
     assert_eq!(kadm5_op_name(INIT), None);
-    assert!(kadm5_auth_denied(KADM5_AUTH_ADD));
-    assert!(!kadm5_auth_denied(0));
-    // prime_arg is the unparsed principal for a create, the name for a policy.
     let create = create_rec("newp1@KERBER.TEST", "pw");
     assert_eq!(
         kadm5_prime_arg(CREATE_PRINCIPAL, &create, "admin@KERBER.TEST"),
@@ -364,4 +362,153 @@ fn kadm5_log_op_fields_match_mit_stubs() {
         kadm5_prime_arg(GET_POLICY, &pol.b, "admin@KERBER.TEST"),
         "gpol"
     );
+    let mut nopol = XdrW::default();
+    nopol.u32(API_V2);
+    nopol.nullstring(None);
+    assert_eq!(kadm5_prime_arg(GET_POLICY, &nopol.b, "a@R"), "(null)");
+    assert_eq!(kadm5_prime_arg(GET_POLS, &nopol.b, "a@R"), "*");
+}
+
+/// The lines MIT 1.22.2 kadmind wrote in the live settle, for the same requests.
+#[test]
+fn kadm5_log_lines_match_mit_live() {
+    let admin = Caller {
+        client: "admin/admin@SETTLE.TEST",
+        service: "kadmin/admin@SETTLE.TEST",
+        addr: "127.0.0.1",
+        flavor: FLAVOR_GSS,
+    };
+    let alice = Caller {
+        client: "alice@SETTLE.TEST",
+        ..admin
+    };
+    let tail = "service=kadmin/admin@SETTLE.TEST, addr=127.0.0.1";
+    let ret = |code: u32| generic_ret(API_V2, code);
+    let mut init = XdrW::default();
+    init.u32(API_V4);
+    assert_eq!(
+        kadm5_log_lines(INIT, &init.b, &admin, &ret(0)),
+        [format!(
+            "Request: kadm5_init, admin/admin@SETTLE.TEST, success, \
+             client=admin/admin@SETTLE.TEST, {tail}, vers=4, flavor=6"
+        )]
+    );
+    let bob = create_rec("bob@SETTLE.TEST", "pw");
+    assert_eq!(
+        kadm5_log_lines(CREATE_PRINCIPAL, &bob, &admin, &ret(0)),
+        [format!(
+            "Request: kadm5_create_principal, bob@SETTLE.TEST, success, \
+             client=admin/admin@SETTLE.TEST, {tail}"
+        )]
+    );
+    assert_eq!(
+        kadm5_log_lines(CREATE_PRINCIPAL, &bob, &admin, &ret(KADM5_DUP)),
+        [format!(
+            "Request: kadm5_create_principal, bob@SETTLE.TEST, Principal or policy already \
+             exists, client=admin/admin@SETTLE.TEST, {tail}"
+        )]
+    );
+    assert_eq!(
+        kadm5_log_lines(CREATE_PRINCIPAL, &bob, &admin, &ret(KRB5_KDB_CANTLOCK_DB)),
+        [format!(
+            "Request: kadm5_create_principal, bob@SETTLE.TEST, Insufficient access to lock \
+             database, client=admin/admin@SETTLE.TEST, {tail}"
+        )]
+    );
+    let dave = create_rec("dave@SETTLE.TEST", "pw");
+    assert_eq!(
+        kadm5_log_lines(CREATE_PRINCIPAL, &dave, &alice, &ret(KADM5_AUTH_ADD)),
+        [format!(
+            "Unauthorized request: kadm5_create_principal, dave@SETTLE.TEST, \
+             client=alice@SETTLE.TEST, {tail}"
+        )]
+    );
+    let mut default_pol = XdrW::default();
+    default_pol.u32(API_V2);
+    default_pol.nullstring(Some("default"));
+    assert_eq!(
+        kadm5_log_lines(GET_POLICY, &default_pol.b, &alice, &ret(KADM5_AUTH_GET)),
+        [format!(
+            "Unauthorized request: kadm5_get_policy, default, client=alice@SETTLE.TEST, {tail}"
+        )]
+    );
+    assert_eq!(
+        kadm5_log_lines(GET_POLICY, &default_pol.b, &admin, &ret(KADM5_UNK_POLICY)),
+        [format!(
+            "Request: kadm5_get_policy, default, Policy does not exist, \
+             client=admin/admin@SETTLE.TEST, {tail}"
+        )]
+    );
+    // A get of a missing principal fails in stub_setup and logs nothing.
+    assert_eq!(
+        kadm5_log_lines(
+            GET_PRINCIPAL,
+            &getprinc_args("nosuch@SETTLE.TEST"),
+            &admin,
+            &ret(KADM5_UNK_PRINC)
+        ),
+        Vec::<String>::new()
+    );
+    let mut list = XdrW::default();
+    list.u32(API_V2);
+    list.nullstring(Some("b*"));
+    assert_eq!(
+        kadm5_log_lines(GET_PRINCS, &list.b, &admin, &ret(0)),
+        [format!(
+            "Request: kadm5_get_principals, b*, success, client=admin/admin@SETTLE.TEST, {tail}"
+        )]
+    );
+    let mut privs = XdrW::default();
+    privs.u32(API_V2);
+    assert_eq!(
+        kadm5_log_lines(GET_PRIVS, &privs.b, &admin, &ret(0)),
+        [format!(
+            "Request: kadm5_get_privs, admin/admin@SETTLE.TEST, success, \
+             client=admin/admin@SETTLE.TEST, {tail}"
+        )]
+    );
+    let mut rename = XdrW::default();
+    rename.u32(API_V2);
+    rename.nullstring(Some("bob@SETTLE.TEST"));
+    rename.nullstring(Some("carol@SETTLE.TEST"));
+    assert_eq!(
+        kadm5_log_lines(RENAME_PRINCIPAL, &rename.b, &admin, &ret(0)),
+        [format!(
+            "Request: kadm5_rename_principal, bob@SETTLE.TEST to carol@SETTLE.TEST, success, \
+             client=admin/admin@SETTLE.TEST, {tail}"
+        )]
+    );
+    assert_eq!(
+        kadm5_log_lines(
+            RENAME_PRINCIPAL,
+            &rename.b,
+            &alice,
+            &ret(KADM5_AUTH_INSUFFICIENT)
+        ),
+        [
+            format!(
+                "Unauthorized request: kadm5_rename_principal, bob@SETTLE.TEST, \
+                 client=alice@SETTLE.TEST, {tail}"
+            ),
+            format!(
+                "Unauthorized request: kadm5_rename_principal, bob@SETTLE.TEST to \
+                 carol@SETTLE.TEST, client=alice@SETTLE.TEST, {tail}"
+            ),
+        ]
+    );
+    // A self password change without an initial ticket is a Request line, not Unauthorized.
+    assert_eq!(
+        kadm5_log_lines(
+            CHPASS_PRINCIPAL,
+            &chpass_args("alice@SETTLE.TEST", "x"),
+            &alice,
+            &ret(KADM5_AUTH_INITIAL)
+        ),
+        [format!(
+            "Request: kadm5_chpass_principal, alice@SETTLE.TEST, Operation requires initial \
+             ticket, client=alice@SETTLE.TEST, {tail}"
+        )]
+    );
+    assert_eq!(kadm5_error_text(13), "Permission denied");
+    assert_eq!(kadm5_error_text(EINVAL), "Invalid argument");
 }

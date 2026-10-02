@@ -59,7 +59,7 @@ pub fn serve_kadm5_conn(
     let handle = random_handle();
     let addr = stream
         .peer_addr()
-        .map(|a| a.ip().to_string())
+        .map(|a| crate::listen::client_addr(a.ip()))
         .unwrap_or_default();
     let ctx = RpcCtx {
         store: &store,
@@ -301,6 +301,7 @@ pub(super) fn handle_rpc(
             &verf,
             r.rest(),
             rcache,
+            addr,
         );
     }
 

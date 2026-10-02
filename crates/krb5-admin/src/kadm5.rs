@@ -32,3 +32,9 @@ pub(crate) use glob::{glob_expand, glob_is_match};
 pub use iprop::{IpropLast, IpropPull, iprop_fullresync, iprop_pull};
 pub(crate) use policy::{create_policy_local, modify_policy_local};
 pub use rpc::{Kadm5RpcError, Kadm5RpcSession, RpcCtx, kadm5_handle_rpc, serve_kadm5_conn};
+
+/// The daemon log text of a password change that failed with `e`: the message of the kadm5
+/// code a `kadm5_chpass_principal` stub would return.
+pub(crate) fn chpass_error_text(e: &crate::Error) -> String {
+    log::kadm5_error_text(dispatch::kadm5_code(codes::CHPASS_PRINCIPAL, e))
+}

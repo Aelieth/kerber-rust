@@ -121,6 +121,10 @@ pub(super) const KADM5_ALIAS_REALM: u32 = 43_787_583;
 /// MIT `KRB5_KDB_ALIAS_UNSUPPORTED` (`kdb5_err.et`, -1780008402) as the
 /// `kadm5_ret_t` the client decodes.
 pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
+/// The `kadm5_ret_t` of a database the server may not lock for writing (-1780008424).
+/// MIT `KRB5_KDB_CANTLOCK_DB` (`lib/krb5/error_tables/kdb5_err.et:64-64`): "Insufficient access
+/// to lock database".
+pub(super) const KRB5_KDB_CANTLOCK_DB: u32 = 2_514_958_872;
 /// MIT `ovk` 1 (`KADM5_AUTH_GET`).
 pub(super) const KADM5_AUTH_GET: u32 = 43_787_521;
 /// MIT `ovk` 44 (`KADM5_AUTH_LIST`).
