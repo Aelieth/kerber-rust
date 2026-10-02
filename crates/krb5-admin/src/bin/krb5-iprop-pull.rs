@@ -6,6 +6,14 @@
 //! leaves it) from a MIT dump (version 7 or `ipropx`) the replica's stash opens; with the
 //! `test-hooks` feature, `KRB5_MASTER_PASSWORD` opens it instead when set, and a missing stash is
 //! then written. A host argument then pulls serial-delta.
+//!
+//! kerber-rust's own environment, where this client has none of MIT's kpropd options yet (it is
+//! not installed as a service):
+//! - `KRB5_KPROP_KEYTAB`: the keytab whose first principal authenticates the pull (required).
+//! - `KRB5_KDC`: the KDC asked for its tickets (default `127.0.0.1`).
+//! - `KRB5_IPROP_HOST`: the host of the `kiprop/<host>` service pulled from, MIT's admin server;
+//!   required, except that with the `test-hooks` feature it defaults to the documented test
+//!   realm's host.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -155,7 +163,17 @@ fn main() {
         eprintln!("krb5-iprop-pull: AS: {e}");
         std::process::exit(1);
     });
-    let host = std::env::var("KRB5_IPROP_HOST").unwrap_or_else(|_| "testhost.kerber.test".into());
+    #[cfg(feature = "test-hooks")]
+    let default_host = Some(krb5_kdc::testrealm::TEST_HOST.to_owned());
+    #[cfg(not(feature = "test-hooks"))]
+    let default_host: Option<String> = None;
+    let host = std::env::var("KRB5_IPROP_HOST")
+        .ok()
+        .or(default_host)
+        .unwrap_or_else(|| {
+            eprintln!("krb5-iprop-pull: set KRB5_IPROP_HOST");
+            std::process::exit(2);
+        });
     let sname = PrincipalName::new(PrincipalName::NT_SRV_HST, ["kiprop", host.as_str()]);
     let tgs = tgs_exchange(&kdc, &as_out, sname, &realm).unwrap_or_else(|e| {
         eprintln!("krb5-iprop-pull: TGS: {e}");

@@ -736,6 +736,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** Release kprop, kpropd, iprop-pull take the master key from the stash and
+  kpropd's realm from `-r` or `default_realm`, as MIT's; `KRB5_MASTER_PASSWORD` and the test
+  realm need `test-hooks`. Unit; a live release-build kprop and iprop-pull run (no gate).
 - **admin.** `kadmin.local` is MIT's: options, script form, prompt, verbs, texts and exit
   status; `KRB5_PASSWORD` is not read (`-pw` or the prompt). Units; the gates pass `-pw`.
 - **admin.** `kadmin.local` reads dates and intervals with MIT's getdate grammar (`"7 days"`,

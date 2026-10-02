@@ -1,12 +1,23 @@
 //! MIT-wire kpropd (TCP 754) wrapping dump version 7.
 //!
-//! Usage: `krb5-kpropd [host:port]`
+//! Usage: `krb5-kpropd [-r realm] [host:port]`
 //!
-//! `KRB5_KPROP_KEYTAB` or host keys from the database and stash
-//! ([`krb5_config::KdcPaths`]) authenticate `sendauth`. `KRB5_KPROP_ACL` is
-//! fail-closed (unset or empty denies every peer). The dump body is opened with the replica's
-//! stash, as MIT's kpropd loads it with `kdb5_util load` beside that stash, and saved to the
-//! replica db; with the `test-hooks` feature, `KRB5_MASTER_PASSWORD` opens it instead when set.
+//! The realm is `-r`, else `KRB5_KDC_REALM`, else krb5.conf's `default_realm`, as MIT's kpropd
+//! takes `-r` or the default realm. The dump body is opened with the replica's stash, as MIT's
+//! kpropd loads it with `kdb5_util load` beside that stash, and saved to the replica db.
+//!
+//! kerber-rust's own environment, where this kpropd has none of MIT's options yet (it is not
+//! installed as a service):
+//! - `KRB5_KDC_REALM`: the realm, beside `-r`.
+//! - `KRB5_KPROP_KEYTAB`: the keys that accept `sendauth` (MIT's `-s`, else the default
+//!   keytab); unset, there are none and kpropd stops.
+//! - `KRB5_KPROP_ACL`: the `kpropd.acl` file (MIT's `-a`, else `kpropd.acl` in the KDC
+//!   directory); unset or empty, every peer is refused.
+//!
+//! With the `test-hooks` feature, the realm falls back to `KRB5_TEST_REALM`, else the documented
+//! test realm, before the default realm; the documented test realm's host keys in the database
+//! stand in for a keytab; and `KRB5_MASTER_PASSWORD` opens the dump instead of the stash when
+//! set.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -20,8 +31,6 @@ use std::time::Duration;
 
 use krb5_admin::{KPROP_PORT, KpropdConfig, kpropd_handle_conn};
 use krb5_crypto::ProtocolKey;
-use krb5_kdc::load_store;
-use krb5_kdc::testrealm::documented_host;
 
 use krb5_protocol::{Keytab, ReplayCache};
 
@@ -34,8 +43,29 @@ fn main() {
         )
         .try_init();
 
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let bind = args
+    let argv: Vec<String> = std::env::args().collect();
+    let progname = argv
+        .first()
+        .map_or("krb5-kpropd", |a| a.rsplit('/').next().unwrap_or(a))
+        .to_owned();
+    // MIT `parse_args` (`kprop/kpropd.c:1065-1126`): glibc getopt over the options, a value attached or apart; a bad option is the usage.
+    let (opts, operands) = match krb5_cli::getopt(argv.get(1..).unwrap_or_default(), "r:", &[]) {
+        Ok(parsed) => parsed,
+        Err(e) => {
+            eprintln!("{progname}: {e}");
+            usage(&progname);
+        }
+    };
+    let realm_opt = opts
+        .iter()
+        .rev()
+        .find(|o| o.flag == 'r')
+        .and_then(|o| o.arg.clone());
+    // The one operand, `host:port`, is this kpropd's own; MIT's takes none.
+    if operands.len() > 1 {
+        usage(&progname);
+    }
+    let bind = operands
         .first()
         .cloned()
         .unwrap_or_else(|| format!("127.0.0.1:{KPROP_PORT}"));
@@ -45,15 +75,20 @@ fn main() {
         .map(zeroize::Zeroizing::new);
     #[cfg(not(feature = "test-hooks"))]
     let master: Option<zeroize::Zeroizing<String>> = None;
-    let realm = kpropd_realm();
-    let paths = krb5_config::KdcPaths::resolve(Some(&realm)).unwrap_or_else(|e| {
-        eprintln!("krb5-kpropd: {e}");
+    let paths = kpropd_paths(realm_opt).unwrap_or_else(|e| {
+        // MIT `parse_args` (`kprop/kpropd.c:1132-1138`): no realm is this line, exit 1.
+        if matches!(e, krb5_config::Error::NoDefaultRealm) {
+            eprintln!("krb5-kpropd: {e} Unable to get default realm");
+        } else {
+            eprintln!("krb5-kpropd: {e}");
+        }
         std::process::exit(1);
     });
+    let realm = paths.realm.clone().unwrap_or_default();
     let (db, stash) = (paths.database_name, paths.key_stash_file);
     let host_keys = load_host_keys(&db, &stash);
     if host_keys.is_empty() {
-        eprintln!("krb5-kpropd: no host keys (set KRB5_KPROP_KEYTAB or persist a host principal)");
+        eprintln!("krb5-kpropd: no host keys (set KRB5_KPROP_KEYTAB)");
         std::process::exit(1);
     }
     let listener = TcpListener::bind(&bind).unwrap_or_else(|e| {
@@ -108,10 +143,28 @@ fn main() {
     }
 }
 
-fn kpropd_realm() -> String {
-    std::env::var("KRB5_KDC_REALM")
-        .or_else(|_| std::env::var("KRB5_TEST_REALM"))
-        .unwrap_or_else(|_| krb5_kdc::testrealm::TEST_REALM.to_owned())
+/// The usage text on stderr, exit status 1.
+/// MIT `usage` (`kprop/kpropd.c:168-177`): the text, then `exit(1)`.
+fn usage(progname: &str) -> ! {
+    eprintln!("\nUsage: {progname} [-r realm] [host:port]");
+    std::process::exit(1);
+}
+
+/// The realm's paths: `-r`, else `KRB5_KDC_REALM`, else (with the `test-hooks` feature)
+/// `KRB5_TEST_REALM` or the documented test realm, else krb5.conf's `default_realm`.
+/// MIT `parse_args` (`kprop/kpropd.c:1132-1145`): `-r`, else the default realm.
+fn kpropd_paths(realm: Option<String>) -> Result<krb5_config::KdcPaths, krb5_config::Error> {
+    #[cfg(feature = "test-hooks")]
+    let test_realm = Some(
+        std::env::var("KRB5_TEST_REALM")
+            .unwrap_or_else(|_| krb5_kdc::testrealm::TEST_REALM.to_owned()),
+    );
+    #[cfg(not(feature = "test-hooks"))]
+    let test_realm: Option<String> = None;
+    let realm = realm
+        .or_else(|| std::env::var("KRB5_KDC_REALM").ok())
+        .or(test_realm);
+    krb5_config::KdcPaths::resolve(realm.as_deref())
 }
 
 /// Raw `kpropd.acl` lines for `kpropd_authorized_principal`, read per
@@ -135,13 +188,14 @@ fn load_host_keys(db: &Path, stash: &Path) -> Vec<ProtocolKey> {
             Err(e) => eprintln!("krb5-kpropd: keytab {path}: {e}"),
         }
     }
-    if let Ok(store) = load_store(db, stash)
+    #[cfg(feature = "test-hooks")]
+    if let Ok(store) = krb5_kdc::load_store(db, stash)
         && store.realm() == krb5_kdc::testrealm::TEST_REALM
+        && let Some(p) = store.get_name(&krb5_kdc::testrealm::documented_host())
     {
-        let host = documented_host();
-        if let Some(p) = store.get_name(&host) {
-            return p.keys.iter().map(|k| k.key.clone()).collect();
-        }
+        return p.keys.iter().map(|k| k.key.clone()).collect();
     }
+    #[cfg(not(feature = "test-hooks"))]
+    let _ = (db, stash);
     Vec::new()
 }
