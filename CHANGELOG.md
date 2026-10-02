@@ -742,6 +742,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** `krb5-ktutil` prints a failed command as MIT's does (`rkt: must specify keytab to
+  read`, `ktutil: Unknown request …`), reads `addent`'s options as `ktutil_add_entry` does, and
+  its command loop exits 0 whatever it ran, as MIT's. Unit; live.
 - **admin.** `krb5-kpasswd` names a KDC that does not answer, a failed preauth and an unknown,
   revoked or expired client with MIT's `krb5_err.et` texts. Unit; live.
 - **admin.** `krb5-kpasswd` is MIT's `kpasswd [principal]` (argument, ccache, login name): it

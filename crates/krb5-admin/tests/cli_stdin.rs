@@ -21,15 +21,20 @@ fn pipe_stdin(bin: &str, input: &[u8]) -> std::process::Output {
     child.wait_with_output().expect("wait")
 }
 
+/// MIT `main` (`ktutil.c:60-62`): the command loop exits 0 whatever it ran (settled live).
 #[test]
-fn ktutil_nope_then_q_exits_1() {
+fn ktutil_nope_then_q_exits_0() {
     let bin = env!("CARGO_BIN_EXE_krb5-ktutil");
     let out = pipe_stdin(bin, b"nope\nq\n");
     assert_eq!(
         out.status.code(),
-        Some(1),
+        Some(0),
         "stderr={}",
         String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr),
+        "ktutil: Unknown request \"nope\".  Type \"?\" for a request list.\n"
     );
     let out = pipe_stdin(bin, b"q\n");
     assert_eq!(out.status.code(), Some(0));
@@ -38,25 +43,22 @@ fn ktutil_nope_then_q_exits_1() {
     let out = pipe_stdin(bin, b"\xff\nq\n");
     assert_eq!(
         out.status.code(),
-        Some(1),
+        Some(0),
         "stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
     let out = pipe_stdin(bin, b"\xff\nnope\nq\n");
     assert_eq!(
         out.status.code(),
-        Some(1),
+        Some(0),
         "stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("invalid utf-8") || err.contains("stream did not contain valid UTF-8"),
-        "decode must continue: {err}"
-    );
-    assert!(
-        err.contains("nope"),
-        "continue after decode must run nope: {err}"
+    // Live MIT 1.22.2: a line that is no request, bytes as read, then the next line runs.
+    assert_eq!(
+        out.stderr,
+        b"ktutil: Unknown request \"\xff\".  Type \"?\" for a request list.\n\
+          ktutil: Unknown request \"nope\".  Type \"?\" for a request list.\n"
     );
 }
 
@@ -86,7 +88,8 @@ fn ktutil_directory_stdin_terminates() {
         "directory stdin spun: stderr={}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_ne!(out.status.code(), Some(0));
+    // Live MIT 1.22.2: ktutil with a directory as stdin ends its loop and exits 0.
+    assert_eq!(out.status.code(), Some(0));
     assert!(
         out.stderr.len() < 64 * 1024,
         "stderr {} bytes",
