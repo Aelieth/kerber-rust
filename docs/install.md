@@ -418,8 +418,10 @@ sudo systemctl enable --now krb5kdc kadmin
 
 ## Upgrading kerber-rust
 
-In the checkout, with the new release built as in [Build](#build). `make install` replaces the
-programs and units an earlier install wrote and keeps every config file. For a realm an earlier
+In the checkout: fetch the new release (`git pull`, or `git checkout <tag>` for a release tag)
+and run `make build` as in [Build](#build). `make install` replaces the programs and units an
+earlier install wrote and keeps every config file; give it the `PREFIX` you installed with
+(`/usr` when kerber-rust replaced krb5-server, `/usr/local` beside it). For a realm an earlier
 release made, three things changed:
 
 - Release builds find the database, the stash and the ACL only where `kdc.conf` names them
@@ -439,15 +441,30 @@ release made, three things changed:
   texts (`kadmin.local: No such file or directory while initializing kadmin.local interface`).
   Make them once, owned as the database is and labelled, while the daemons are stopped.
 
+Stop the daemons and install, and move the realm into the KDC directory only if it was kept
+elsewhere (leave `OLD` empty when it is already in `/var/kerberos/krb5kdc`):
+
 ```sh
 REALM=EXAMPLE.COM
-OLD=/var/lib/kerber-rust            # where the realm was kept, if not in /var/kerberos/krb5kdc
-DB=/var/kerberos/krb5kdc/principal  # kdc.conf's database_name, if the stanza names one
+PREFIX=/usr                         # the PREFIX you installed with
+OLD=                                # where the realm was kept, if not /var/kerberos/krb5kdc (1.0: /var/lib/kerber-rust)
 sudo systemctl stop krb5kdc kadmin
-sudo make install PREFIX=/usr
-for f in principal principal.ulog .k5.$REALM; do
-    if sudo test -e "$OLD/$f"; then sudo mv "$OLD/$f" /var/kerberos/krb5kdc/; fi
-done
+sudo make install PREFIX="$PREFIX"
+if [ -n "$OLD" ]; then
+    for f in principal principal.ulog .k5.$REALM; do
+        if sudo test -e "$OLD/$f"; then sudo mv "$OLD/$f" /var/kerberos/krb5kdc/; fi
+    done
+fi
+sudo grep -nE '^[[:space:]]*(kdc_listen|kdc_tcp_listen|kadmind_listen|kpasswd_listen)[[:space:]]*=' \
+    /var/kerberos/krb5kdc/kdc.conf
+```
+
+If that prints an entry whose addresses are all IPv6 (such as `[::]:88`), edit it now, before
+the daemons start (the second item above): delete it, which leaves MIT's wildcards, or add
+`0.0.0.0:<port>` beside it. Then label the directory, make the lock files and start:
+
+```sh
+DB=/var/kerberos/krb5kdc/principal  # kdc.conf's database_name, if the stanza names one
 sudo restorecon -Rv /var/kerberos/krb5kdc
 for f in "$DB.ok" "$DB.kadm5.lock"; do
     if sudo test ! -e "$f"; then
