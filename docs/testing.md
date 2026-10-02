@@ -563,8 +563,8 @@ reads the same files except the CHANGELOG. `check_changelog_headings`
 allows only the Keep-a-Changelog group names, each the whole heading, plus
 `Tests and CI` and `How to …` headings, as `###` headings; `check_docs_size` holds every
 `docs/**/*.md` to 60 KiB and `CHANGELOG.md` to its ceiling
-(`CHANGELOG_MAX_BYTES`: its size when last re-based, 243,846 bytes, plus
-a stated 9,000-byte allowance for the MIT-command and install work's bullets,
+(`CHANGELOG_MAX_BYTES`: its size when last re-based, 252,761 bytes, plus
+a stated 20,000-byte allowance for the rest of the functional work's bullets,
 one per change; a `tool:` commit at the start of a swath that adds bullets
 re-bases it, never the commit that adds them). `check_gate_documented` holds `docs/gates.md`
 to one row per `scripts/*-gate.sh`, with the workflow and lane columns

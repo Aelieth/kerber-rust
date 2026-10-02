@@ -449,9 +449,10 @@ DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
 GATE_DOC_TOKEN_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
-# The CHANGELOG's size (243,846 bytes when it was set) plus 9,000 bytes for the next 25 bullets at 360
-# bytes (the median bullet is 330); re-based only by a tool: commit ahead of the bullets it allows.
-CHANGELOG_MAX_BYTES = 252846
+# The CHANGELOG's size (252,761 bytes when it was set) plus 20,000 bytes for the next 55 bullets at 360
+# bytes (the median bullet is 306), sized for the rest of the functional work; re-based only by a tool:
+# commit ahead of the bullets it allows.
+CHANGELOG_MAX_BYTES = 272761
 
 
 def check_testing_doc_budgets(
