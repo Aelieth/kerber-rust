@@ -438,3 +438,45 @@ fn merge_tl_db_args_leaves_entry_and_file_unchanged() {
     assert_eq!(std::fs::read(&db).unwrap(), file_before);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// MIT `k5beta7_common` writes a principal's own lifetimes: a `max_life` of 0 (no limit of the
+/// principal's own; the realm's applies when a ticket is issued) and a `max_renewable_life` of 0
+/// stay 0 through a dump and a load, where the realm's `max_life` used to be written.
+#[test]
+fn dump_keeps_a_principals_own_zero_lifetimes() {
+    let mut store = load_dump(&golden_v7(), b"masterpassword").unwrap();
+    assert_ne!(
+        store.policy().max_life,
+        0,
+        "the realm has a max_life to stand in"
+    );
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    let pauser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pauser"]);
+    for (name, life, rlife) in [(&user, 0, 0), (&pauser, 3600, 7200)] {
+        store
+            .apply_admin_fields(
+                name,
+                krb5_kdc::AdminFields {
+                    max_life: Some(life),
+                    max_renewable_life: Some(rlife),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let text = dump_store(&store, b"masterpassword").unwrap();
+    let parsed = parse_dump(&text).unwrap();
+    let written = |n: &str| {
+        let p = parsed.princ(n).unwrap();
+        (p.max_life, p.max_renewable_life)
+    };
+    assert_eq!(written("user@KERBER.TEST"), (0, 0));
+    assert_eq!(written("pauser@KERBER.TEST"), (3600, 7200));
+    let again = load_dump(&text, b"masterpassword").unwrap();
+    let held = |n: &str| {
+        let p = again.get(n).unwrap();
+        (p.max_life, p.max_renewable_life)
+    };
+    assert_eq!(held("user@KERBER.TEST"), (0, 0));
+    assert_eq!(held("pauser@KERBER.TEST"), (3600, 7200));
+}

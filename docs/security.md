@@ -167,6 +167,14 @@ Known behaviour laxer than MIT 1.22.2. Each is a fix to make after a MIT settle,
 | --- | --- | --- | --- |
 | CMS ContentInfo type not checked | `cms_signeddata_verify` refuses a type other than id-signedData ("wrong oid") | `cms_parts` (`crates/krb5-types/src/pkinit/cms.rs`) reads the contentType and discards it, so a SignedData body under any OID is parsed | `pkinit_crypto_openssl.c:2022-2028` ([B1](parity/b1-client.md)) |
 
+**Known issue, not fixed yet (iprop replicas).** An iprop replica fed by an MIT primary zeroes the
+attributes an update did not carry (`DISALLOW_ALL_TIX`, `REQUIRES_PRE_AUTH`, expiration, password
+expiration, ticket lifetimes): the replica's update decode (`decode_kdbe` in
+`crates/krb5-admin/src/kadm5/iprop.rs`) leaves an attribute MIT did not send at 0, and its merge
+(`merge_iprop_princ` in `crates/krb5-kdc/src/store/iprop_ulog.rs`) keeps only the keys, key
+history, string attributes, tagged data, policy, salt and RID of the record it updates. Do not
+run `krb5-iprop-pull` replicas until this is fixed.
+
 ## Not in this matrix
 
 In-process metrics counters are deferred (logs already carry

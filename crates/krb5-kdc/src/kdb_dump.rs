@@ -1011,6 +1011,9 @@ fn dump_attributes(p: &Principal) -> u32 {
 /// The count written here is the length of the list that follows it, so it always matches.
 /// An alias is written with zero lifetimes, and the database-arguments tag is stripped
 /// before the record is emitted.
+/// MIT `k5beta7_common` (`kadmin/dbutil/dump.c:338-339`): the entry's own `max_life` and
+/// `max_renewable_life` are written; a `max_life` of 0 is no limit of the principal's own (the
+/// realm's still applies when a ticket is issued), so it stays 0.
 fn write_princ_record(
     out: &mut String,
     p: &Principal,
@@ -1018,20 +1021,13 @@ fn write_princ_record(
     store: &PrincipalStore,
 ) -> Result<(), DumpError> {
     let name = p.id();
-    let lifetime = |own: u64, policy: u64| {
-        if p.alias_target().is_some() {
-            0
-        } else if own == 0 {
-            u32::try_from(policy).unwrap_or(u32::MAX)
-        } else {
-            u32::try_from(own).unwrap_or(u32::MAX)
-        }
-    };
-    let max_life = lifetime(p.max_life, store.policy.max_life);
-    let max_rlife = if p.alias_target().is_some() {
-        0
+    let (max_life, max_rlife) = if p.alias_target().is_some() {
+        (0, 0)
     } else {
-        u32::try_from(p.max_renewable_life).unwrap_or(u32::MAX)
+        (
+            u32::try_from(p.max_life).unwrap_or(u32::MAX),
+            u32::try_from(p.max_renewable_life).unwrap_or(u32::MAX),
+        )
     };
     let mut tl = if p.tl_data.is_empty() {
         synthesize_tl(

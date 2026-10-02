@@ -140,9 +140,11 @@ impl PrincipalStore {
             self.realm.clone(),
             vec![KeyEntry::new(key.etype(), key, 1)],
             salt,
+            // MIT `kadm5_create_principal_3` (`lib/kadm5/srv/svr_principal.c:391-394`): a principal
+            // created without a `max_life` takes the realm's.
             crate::store::PrincipalFields {
                 requires_preauth: false,
-                max_life: 0,
+                max_life: self.policy.max_life,
                 locked: false,
                 pw_expire: 0,
             },
@@ -228,7 +230,7 @@ impl PrincipalStore {
             salt,
             crate::store::PrincipalFields {
                 requires_preauth: false,
-                max_life: 0,
+                max_life: self.policy.max_life,
                 locked: false,
                 pw_expire: 0,
             },

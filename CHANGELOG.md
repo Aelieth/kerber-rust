@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **admin.** Known issue: an iprop replica fed by an MIT primary zeroes the attributes an
+  update did not carry (`DISALLOW_ALL_TIX`, `REQUIRES_PRE_AUTH`, expiration, password
+  expiration, ticket lifetimes); do not run `krb5-iprop-pull` replicas until it is fixed.
 - **config/protocol.** A release build reads no password, kdc.conf path or capture directory
   from the environment (`KRB5_PASSWORD`, `KRB5_KDC_DB`, `KERBER_CAPTURE_DIR`, …): only a
   `test-hooks` build does, as the gates' are. `strings` over the release binaries; unit.
@@ -1331,6 +1334,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc.** A principal's `max_life` of 0 stays 0 in the database, as in MIT (the realm's
+  maximum still caps its tickets). Unit; settled live.
 - **kdc/admin.** A length-prefixed TCP message (KDC, kpasswd and kadm5 replies, kprop)
   goes out in one write, as MIT's: a kadmin reply no longer waits ~40 ms for a delayed
   ACK. Units; pcap.
