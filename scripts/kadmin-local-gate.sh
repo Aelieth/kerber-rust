@@ -53,8 +53,7 @@ echo "==== Rust kadmin.local addprinc/listprincs/getprinc ===="
 kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    -e KRB5_PASSWORD=extra-local \
-    "$NAME" -- -q 'addprinc extra2'
+    "$NAME" -- -q 'addprinc -pw extra-local extra2'
 LIST="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -72,8 +71,7 @@ echo "==== Rust kadmin.local addprinc host/slashhost ===="
 kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    -e KRB5_PASSWORD=slash-local \
-    "$NAME" -- -q 'addprinc host/slashhost'
+    "$NAME" -- -q 'addprinc -pw slash-local host/slashhost'
 SLASH="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -106,8 +104,9 @@ UNK="$(rust_kadmin_local \
 unkrc=$?
 set -e
 echo "$UNK"
-test "$unkrc" -ne 0
-echo "$UNK" | grep -qi 'unknown flag'
+# MIT kadmin_addprinc prints the usage and -q still exits 0 (kadmin.c error()).
+test "$unkrc" -eq 0
+echo "$UNK" | grep -qF 'usage: add_principal [options] principal'
 
 echo "==== kadmin.local addpol flags + getpol layout ===="
 kadmin_q_ok --next-asserts rust_kadmin_local \
@@ -236,7 +235,8 @@ diff <(echo "$TWS" | grep -v '^Authenticating') <(mit_local 'getpol tws')
 TWSBAD="$(rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" -- -q 'addpol -maxlife "42 " tws2' 2>&1)"
+    "$NAME" -- -q 'addpol -maxlife "42 " tws2' 2>&1 \
+    | sed -z -e 's/Authenticating as principal [^\n]*with password\.\n//g')"
 echo "$TWSBAD"
 # MIT prints the date error and continues (exit 0); the first line is identical.
 echo "$TWSBAD" | grep -Fx 'Invalid date specification "42 ".'
@@ -254,8 +254,11 @@ fi
 
 echo "==== delpol/delprinc prompt: EOF reply keeps the object, yes deletes, on both legs ===="
 rust_local() {
+    # krb5-kadmin-local prints MIT's banner too; strip it as mit_local does.
     rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
-        "$NAME" -- -q "$1" 2>&1
+        "$NAME" -- -q "$1" 2>&1 \
+        | sed -z -e 's/Authenticating as principal [^\n]*with password\.\n//g' \
+                 -e 's/[^\n]*No dictionary file specified[^\n]*\n//g'
 }
 prompt_lines() { sed 's/(yes\/no): /(yes\/no): \n/' | sed '/^$/d' | sort; }
 # Diff two already-captured strings; on any mismatch print BOTH legs (cat -A,
@@ -279,7 +282,7 @@ echo "$PDELP"
 diff <(echo "$PDELP" | prompt_lines | grep -F 'not deleted') <(mit_local 'delprinc delme' | prompt_lines | grep -F 'not deleted')
 echo "$PDELP" | grep -F 'Principal "delme@KERBER.TEST" not deleted'
 YDEL="$(printf 'yes\n' | rust_kadmin_local -i -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" -- -q 'delprinc delme' 2>&1)"
+    "$NAME" -- -q 'delprinc delme' 2>&1 | { grep -v -e '^Authenticating' || true; })"
 echo "$YDEL"
 MIT_YDEL="$(printf 'yes\n' | mit_kadmin_local -i "$NAME" -- -q 'delprinc delme' 2>&1 \
     | { grep -v -e '^Authenticating' -e 'No dictionary file' || true; })"
@@ -681,8 +684,7 @@ echo "==== local addprinc then remote cpw keeps both ===="
 kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    -e KRB5_PASSWORD=n7-pw \
-    "$NAME" -- -q 'addprinc n7local'
+    "$NAME" -- -q 'addprinc -pw n7-pw n7local'
 kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'cpw -pw extra-n7 extra2'
 N7L="$(rust_kadmin_local \
@@ -699,6 +701,9 @@ echo "$N7E"
 echo "$N7E" | grep -q 'extra2@KERBER.TEST'
 
 echo "==== addprinc -randkey kadmin/changepw keeps PWCHANGE_SERVICE ===="
+# MIT kadmin_addprinc gives a re-made kadmin/changepw no flag of its own (settled live on
+# 1.22.2: empty Attributes); the flag the admin asks for must survive the save and a kadmind
+# restart.
 kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
@@ -706,7 +711,7 @@ kadmin_q_ok rust_kadmin_local \
 kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" -- -q 'addprinc -randkey kadmin/changepw'
+    "$NAME" -- -q 'addprinc -randkey +password_changing_service kadmin/changepw'
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kadmind) 2>/dev/null || true; for _ in $(seq 1 40); do pidof krb5-kadmind >/dev/null || break; sleep 0.25; done; rm -f /tmp/kadmind.log'
 docker exec "$NAME" sh -c '! pidof krb5-kadmind >/dev/null'
 docker exec -d \

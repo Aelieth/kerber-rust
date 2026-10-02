@@ -13,11 +13,12 @@
 
 mod getdate;
 mod kadm5;
+mod kadmin_cli;
 mod kprop;
 mod listen;
 
 use krb5_crypto::EncryptionType;
-use krb5_kdc::{Acl, AdminOp, PrincipalStore, kadmin_flagspec};
+use krb5_kdc::{Acl, AdminOp, PrincipalStore};
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
@@ -28,6 +29,7 @@ pub use kadm5::{
     check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok,
     iprop_fullresync, iprop_pull, kadm5_handle_rpc, serve_kadm5_conn,
 };
+pub use kadmin_cli::kadmin_local_main;
 pub use kprop::{
     IpropPoll, KpropAuth, KpropdConfig, iprop_poll_once, kprop_dump_bytes, kprop_dump_iprop,
     kprop_expired_ap_req, kprop_load_bytes, kprop_send_dump, kprop_send_store,
@@ -40,48 +42,10 @@ pub use listen::{
     parse_kpasswd_rep, serve_kpasswd_tcp, serve_kpasswd_udp,
 };
 
-/// MIT `kadmin_startup` (`kadmin.c:455-536`): the `princstr` for `kadm5_init` is `-p` /
-/// explicit name, else `$USER/admin@REALM`, else the euid's passwd name `/admin@REALM`.
-#[must_use]
-pub fn kadmin_local_princstr(realm: &str, explicit: Option<&str>) -> String {
-    if let Some(p) = explicit.filter(|s| !s.is_empty()) {
-        return if p.contains('@') {
-            p.to_owned()
-        } else {
-            format!("{p}@{realm}")
-        };
-    }
-    let user = std::env::var("USER")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(euid_passwd_name)
-        .unwrap_or_else(|| "root".into());
-    format!("{user}/admin@{realm}")
-}
-
-fn euid_passwd_name() -> Option<String> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let uid = status
-        .lines()
-        .find(|l| l.starts_with("Uid:"))?
-        .split_whitespace()
-        .nth(1)?;
-    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
-    for line in passwd.lines() {
-        let mut parts = line.split(':');
-        let name = parts.next()?;
-        let _pw = parts.next()?;
-        if parts.next()? == uid {
-            return Some(name.to_owned());
-        }
-    }
-    None
-}
-
 /// Load a kadm5 ACL file. `None` is MIT `kadmin.local` full privs for `actor`.
 ///
 /// The ACL is not a security boundary here: the actor is self-chosen via
-/// `-p` / `KRB5_KADMIN_PRINCIPAL`. A set-but-unreadable path is a hard error.
+/// `-p`. A set-but-unreadable path is a hard error.
 ///
 /// # Errors
 ///
@@ -97,39 +61,6 @@ pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl,
         }
         None => Acl::allow_admin(actor).map_err(|e| e.to_string()),
     }
-}
-
-/// Parsed `kadmin.local` verb operands (`-randkey` / `-pw` / `+attr`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct KadminArgs {
-    /// Principal spec (no flags).
-    pub name: String,
-    /// `-randkey`.
-    pub randkey: bool,
-    /// `-norandkey` (ktadd).
-    pub norandkey: bool,
-    /// `-pw`.
-    pub pw: Option<String>,
-    /// `-policy`.
-    pub policy: Option<String>,
-    /// `ktadd -k`.
-    pub ktpath: Option<String>,
-    /// `+attr` bits.
-    pub attr_set: u32,
-    /// `-attr` bits.
-    pub attr_clear: u32,
-    /// `addprinc -e` keysalt list.
-    pub etypes: Vec<EncryptionType>,
-    /// `modprinc -unlock`.
-    pub unlock: bool,
-    /// `cpw -keepold`.
-    pub keepold: bool,
-    /// `modprinc -maxlife` seconds.
-    pub max_life: Option<u64>,
-    /// `modprinc -maxrenewlife` seconds.
-    pub max_renewable_life: Option<u64>,
-    /// `modprinc -expire` unix timestamp.
-    pub expire: Option<u32>,
 }
 
 /// Parsed `kadmin.local addpol` operands.
@@ -180,95 +111,6 @@ pub fn strdur(duration: i64) -> String {
         if neg { "-" } else { "" },
         if days == 1 { "day" } else { "days" },
     )
-}
-
-/// Parse flags after the verb. Unknown `-foo` / `+foo` is an error.
-///
-/// # Errors
-///
-/// A message when `-pw`, `-policy`, `-k`, `-e`, `-maxlife`, `-maxrenewlife`, or `-expire` has
-/// no value, `-e` names no known keysalt, a duration or `-expire` timestamp does not parse
-/// (`Invalid date specification`), a `-`/`+` flag is unknown, or there is no principal or more
-/// than one (`missing principal`, `extra argument`).
-pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
-    let mut out = KadminArgs::default();
-    let mut rest = Vec::new();
-    let mut i = 0;
-    while i < parts.len() {
-        let p = parts[i];
-        match p {
-            "-randkey" => out.randkey = true,
-            "-keepold" => out.keepold = true,
-            "-norandkey" => out.norandkey = true,
-            "-unlock" => out.unlock = true,
-            "-pw" => {
-                i += 1;
-                out.pw = Some(
-                    parts
-                        .get(i)
-                        .copied()
-                        .ok_or("-pw needs a password")?
-                        .to_owned(),
-                );
-            }
-            "-policy" => {
-                i += 1;
-                out.policy = Some(
-                    parts
-                        .get(i)
-                        .copied()
-                        .ok_or("-policy needs a name")?
-                        .to_owned(),
-                );
-            }
-            "-k" => {
-                i += 1;
-                out.ktpath = Some(parts.get(i).copied().ok_or("-k needs a path")?.to_owned());
-            }
-            "-e" => {
-                i += 1;
-                let spec = parts.get(i).copied().ok_or("-e needs a keysalt list")?;
-                out.etypes = krb5_crypto::parse_keysalt_list(spec);
-                if out.etypes.is_empty() {
-                    return Err(format!("-e unknown keysalt {spec}"));
-                }
-            }
-            "-maxlife" => {
-                i += 1;
-                let spec = parts.get(i).copied().ok_or("-maxlife needs a duration")?;
-                out.max_life = Some(u64::from(parse_pol_interval(spec)?));
-            }
-            "-maxrenewlife" => {
-                i += 1;
-                let spec = parts
-                    .get(i)
-                    .copied()
-                    .ok_or("-maxrenewlife needs a duration")?;
-                out.max_renewable_life = Some(u64::from(parse_pol_interval(spec)?));
-            }
-            "-expire" => {
-                i += 1;
-                let spec = parts.get(i).copied().ok_or("-expire needs a date")?;
-                let date = getdate::parse_date(spec, getdate::now()).map_err(|e| e.to_string())?;
-                out.expire = Some(getdate::low32(date));
-            }
-            s if let Some((set, clear)) = kadmin_flagspec(s) => {
-                out.attr_set |= set;
-                out.attr_clear |= clear;
-            }
-            s if s.starts_with('-') || s.starts_with('+') => {
-                return Err(format!("unknown flag {s}"));
-            }
-            other => rest.push(other),
-        }
-        i += 1;
-    }
-    match rest.len() {
-        0 => return Err("missing principal".into()),
-        1 => rest[0].clone_into(&mut out.name),
-        _ => return Err("extra argument".into()),
-    }
-    Ok(out)
 }
 
 /// Parse `addpol` flags. Last token is the policy name.
@@ -1163,61 +1005,6 @@ mod tests {
     use super::*;
 
     use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
-    use krb5_kdc::{KDB_LOCKDOWN_KEYS, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_REQUIRES_PRE_AUTH};
-
-    #[test]
-    fn parse_kadmin_args_flags() {
-        let a = parse_kadmin_args(&["-randkey", "svc"]).unwrap();
-        assert!(a.randkey);
-        assert_eq!(a.name, "svc");
-        let a = parse_kadmin_args(&["+requires_preauth", "user"]).unwrap();
-        assert_eq!(a.attr_set, KDB_REQUIRES_PRE_AUTH);
-        assert_eq!(a.name, "user");
-        assert!(parse_kadmin_args(&["-bogus", "user"]).is_err());
-        assert!(parse_kadmin_args(&["-randkey"]).is_err());
-        let a = parse_kadmin_args(&["-k", "/tmp/x.keytab", "-norandkey", "host/x"]).unwrap();
-        assert_eq!(a.ktpath.as_deref(), Some("/tmp/x.keytab"));
-        assert!(a.norandkey);
-        assert_eq!(a.name, "host/x");
-        let a = parse_kadmin_args(&["+lockdown_keys", "lockee"]).unwrap();
-        assert_eq!(a.attr_set, KDB_LOCKDOWN_KEYS);
-        let a = parse_kadmin_args(&["+ok_to_auth_as_delegate", "host/x"]).unwrap();
-        assert_eq!(a.attr_set, KDB_OK_TO_AUTH_AS_DELEGATE);
-        let a = parse_kadmin_args(&["-e", "rc4-hmac:normal", "-pw", "x", "rc4user"]).unwrap();
-        assert_eq!(a.etypes, vec![EncryptionType::Rc4Hmac]);
-        assert_eq!(a.name, "rc4user");
-        let a = parse_kadmin_args(&["-unlock", "locked"]).unwrap();
-        assert!(a.unlock);
-        let a = parse_kadmin_args(&["-maxrenewlife", "1d", "user"]).unwrap();
-        assert_eq!(a.max_renewable_life, Some(86_400));
-        let a = parse_kadmin_args(&["-maxlife", "2h", "user"]).unwrap();
-        assert_eq!(a.max_life, Some(7_200));
-        let a = parse_kadmin_args(&[
-            "-randkey",
-            "-keepold",
-            "-e",
-            "aes128-cts-hmac-sha1-96:normal",
-            "krbtgt/KERBER.TEST",
-        ])
-        .unwrap();
-        assert!(a.randkey && a.keepold);
-        assert_eq!(a.etypes, vec![EncryptionType::Aes128CtsHmacSha196]);
-        let a = parse_kadmin_args(&["+0x1ffffffff", "wide"]).unwrap();
-        assert_eq!(a.attr_set, 0xffff_ffff);
-        assert_eq!(a.name, "wide");
-        let a = parse_kadmin_args(&["-allow_renewable", "user"]).unwrap();
-        assert_eq!(a.attr_set, krb5_kdc::KDB_DISALLOW_RENEWABLE);
-        let a = parse_kadmin_args(&["+allow_renewable", "user"]).unwrap();
-        assert_eq!(a.attr_clear, krb5_kdc::KDB_DISALLOW_RENEWABLE);
-        let a = parse_kadmin_args(&["-expire", "1970-01-01 00:00:01 UTC", "expiredsvc"]).unwrap();
-        assert_eq!(a.expire, Some(1));
-        assert_eq!(
-            parse_kadmin_args(&["-expire", "1", "expiredsvc"]).unwrap_err(),
-            "Invalid date specification \"1\"."
-        );
-        let a = parse_kadmin_args(&["-maxrenewlife", "7 days", "user"]).unwrap();
-        assert_eq!(a.max_renewable_life, Some(7 * 86_400));
-    }
 
     #[test]
     fn parse_policy_args_and_strdur() {
@@ -1271,18 +1058,6 @@ mod tests {
         assert!(
             ks.contains("Allowed key/salt types: aes256-cts:normal"),
             "{ks}"
-        );
-    }
-
-    #[test]
-    fn kadmin_local_princstr_canonicalizes_explicit_like_parse_name() {
-        assert_eq!(
-            kadmin_local_princstr("KERBER.TEST", Some("admin/admin")),
-            "admin/admin@KERBER.TEST"
-        );
-        assert_eq!(
-            kadmin_local_princstr("KERBER.TEST", Some("joe/admin@OTHER.TEST")),
-            "joe/admin@OTHER.TEST"
         );
     }
 }

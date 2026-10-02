@@ -736,6 +736,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** `kadmin.local` is MIT's: options, script form, prompt, verbs, texts and exit
+  status; `KRB5_PASSWORD` is not read (`-pw` or the prompt). Units; the gates pass `-pw`.
 - **admin.** `kadmin.local` reads dates and intervals with MIT's getdate grammar (`"7 days"`,
   `2030-01-01`, `never`); `-expire 1` is no date, as in MIT. Units.
 - **kdc.** With no `supported_enctypes`, new keys are MIT's aes256 + aes128 sha1 pair (was

@@ -327,14 +327,13 @@ _kadmin_keytab() {
 }
 
 # kadmin_q_ok [--then QUERY ERE]... CMD ARGS...: run a query command (a runner or a query wrapper) with exit status 0
-# and require its effect: the verb's MIT success line naming the query's principal; or, for a verb silent on
-# success (the policy verbs on every leg; modprinc / setstr / ktadd on the Rust krb5-kadmin-local), no output but
-# the authentication and dictionary notices and delpol's confirmation prompt (kadmin.c:1763), and the effect read
-# back by read-only follow-ups derived from the query (_kadmin_effects). --then adds a follow-up by hand (ERE, or
-# !ERE for absence) for what the query alone does not say; each distinct follow-up query runs once. --next-asserts
-# skips the derived read-back, and only it, where the cell's very next command reads the same object back and
-# asserts every field the query set. The output goes to stdout; a failure prints it with the reason on the gate's
-# stderr and dies.
+# and require its effect: the verb's MIT success line naming the query's principal; or, for a verb silent on success
+# (the policy verbs), no output but the authentication and dictionary notices and delpol's confirmation prompt
+# (kadmin.c:1763), and the effect read back by read-only follow-ups derived from the query (_kadmin_effects). --then
+# adds a follow-up by hand (ERE, or !ERE for absence) for what the query alone does not say; each distinct follow-up
+# query runs once. --next-asserts skips the derived read-back, and only it, where the cell's very next command reads
+# the same object back and asserts every field the query set. The output goes to stdout; a failure prints it with the
+# reason on the gate's stderr and dies.
 kadmin_q_ok() {
     local thens=() out rc=0 ere effects line q e f next=0 queries=() eres=()
     while [ "${1:-}" = --then ] || [ "${1:-}" = --next-asserts ]; do

@@ -330,7 +330,7 @@ C programs the gates build in their containers are in `scripts/oracle/` (the clo
 `docker exec` options and the container before `--` and the kadmin arguments after, and pass streams and exit
 status through. MIT's kadmin exits 0 on a refused query, so a query whose output the cell does not check
 itself goes through `kadmin_q_ok` (unless it is best-effort, below), which requires the verb's success line naming the principal. For a verb that prints nothing on
-success (the policy verbs; `modprinc` / `setstr` / `ktadd` on the Rust `krb5-kadmin-local`) it reads the
+success (the policy verbs) it reads the
 effect back with read-only follow-ups derived from the query; `--then QUERY ERE` adds one by hand for what the
 query does not say, and `--next-asserts` skips the derived read-back where the cell's very next command reads
 the same object back and asserts every field. `kadmin_q_try` marks a best-effort query (a setup
