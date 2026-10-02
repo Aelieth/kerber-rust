@@ -51,9 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
-- **admin.** Known issue: an iprop replica fed by an MIT primary zeroes the attributes an
-  update did not carry (`DISALLOW_ALL_TIX`, `REQUIRES_PRE_AUTH`, expiration, password
-  expiration, ticket lifetimes); do not run `krb5-iprop-pull` replicas until it is fixed.
+- **admin/kdc.** iprop as MIT's `kdb_convert.c`: a replica applies only what an update carries,
+  so an MIT `setstr` or `cpw` no longer re-enables a disabled account or drops pre-auth, expiry or
+  lifetimes; a primary sends only what a change touched, never a key unwrapped. Live; unit; gate.
 - **config/protocol.** A release build reads no password, kdc.conf path or capture directory
   from the environment (`KRB5_PASSWORD`, `KRB5_KDC_DB`, `KERBER_CAPTURE_DIR`, …): only a
   `test-hooks` build does, as the gates' are. `strings` over the release binaries; unit.

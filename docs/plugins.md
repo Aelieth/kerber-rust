@@ -29,9 +29,11 @@ circular update log. kadmind serves MIT program **100423**
 `ipropx` dump (`kprop -i` / `kdb5_util dump -i1`). Serial-delta is
 MIT `kdb_incr_update_t` over RPCSEC_GSS (`krb5-iprop-pull` or
 `iprop_poll_once`). `kdb_last_t` must echo the dump-header
-timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`. Incremental
-kdbe carries the password history as MIT's `AT_PW_HIST` entries plus
-the `osa_princ_ent_rec` record inside `AT_TL_DATA` (`KRB5_TL_KADM_DATA`),
+timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`. As MIT's
+`kdb_convert.c`, an update carries only the attributes its change
+touched, and a replica applies only those to its own record; the
+policy and the password history ride in the `osa_princ_ent_rec`
+record inside `AT_TL_DATA` (`KRB5_TL_KADM_DATA`), the history
 decrypted under the `kadmin/history` key on apply (`scripts/iprop-gate.sh`
 history cell); policies themselves reach a replica only by full resync,
 as with MIT (`kdb5.c` logs principals only).
