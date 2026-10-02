@@ -157,7 +157,7 @@ pub struct IpropUpdate {
     pub vals: Vec<KdbeVal>,
 }
 
-/// The record's `tl_data` as MIT's database holds it, which an update carries: the
+/// The record's `tl_data` as MIT's database holds it, which an update compares and carries: the
 /// database arguments and kerber-rust's own `0x4B00`–`0x4BFF` types stay out, the kadm5 record is
 /// there whenever a policy or a history is, and the string attributes are the current ones,
 /// kept, once present, where they are and even when empty, as MIT's `krb5_dbe_set_string` does.
@@ -213,6 +213,75 @@ fn mit_lifetimes(p: &Principal) -> (u64, u64) {
     } else {
         (p.max_life, p.max_renewable_life)
     }
+}
+
+/// MIT `find_changed_attrs` (`lib/kdb/kdb_convert.c:46-144`): the attributes in which `new` differs from `current`, as a list in MIT's order.
+/// MIT `find_changed_attrs` (`lib/kdb/kdb_convert.c:69-78`): with `exclude_nra` the three lockout attributes are never listed.
+#[must_use]
+pub(crate) fn find_changed_attrs(current: &Principal, new: &Principal, exclude_nra: bool) -> u32 {
+    let mut attrs = 0;
+    let (cur_life, new_life) = (mit_lifetimes(current), mit_lifetimes(new));
+    if dump_attributes(current) != dump_attributes(new) {
+        attrs |= attr_bit(AT_ATTRFLAGS);
+    }
+    if cur_life.0 != new_life.0 {
+        attrs |= attr_bit(AT_MAX_LIFE);
+    }
+    if cur_life.1 != new_life.1 {
+        attrs |= attr_bit(AT_MAX_RENEW_LIFE);
+    }
+    if current.expiration != new.expiration {
+        attrs |= attr_bit(AT_EXP);
+    }
+    if current.pw_expire != new.pw_expire {
+        attrs |= attr_bit(AT_PW_EXP);
+    }
+    if !exclude_nra {
+        if current.last_success != new.last_success {
+            attrs |= attr_bit(AT_LAST_SUCCESS);
+        }
+        if current.last_failed != new.last_failed {
+            attrs |= attr_bit(AT_LAST_FAILED);
+        }
+        if current.fail_auth_count != new.fail_auth_count {
+            attrs |= attr_bit(AT_FAIL_AUTH_COUNT);
+        }
+    }
+    if princ_listed(current, new) {
+        attrs |= attr_bit(AT_PRINC);
+    }
+    if current.keys.len() != new.keys.len()
+        || current
+            .keys
+            .iter()
+            .zip(&new.keys)
+            .any(|(c, n)| c.kvno != n.kvno)
+    {
+        attrs |= attr_bit(AT_KEYDATA);
+    }
+    if mit_tl(current) != mit_tl(new) {
+        attrs |= attr_bit(AT_TL_DATA);
+    }
+    if current.db_entry_len != new.db_entry_len {
+        attrs |= attr_bit(AT_LEN);
+    }
+    attrs
+}
+
+/// MIT `find_changed_attrs` (`lib/kdb/kdb_convert.c:80-101`): the realm test is inverted, so a principal whose realm is the same is always listed.
+/// Only a realm of the same length that differs has its components compared, each by its
+/// current length.
+fn princ_listed(current: &Principal, new: &Principal) -> bool {
+    let (c, n) = (&current.name.name_string, &new.name.name_string);
+    if current.name.name_type != new.name.name_type || c.len() != n.len() {
+        return true;
+    }
+    if current.realm.len() != new.realm.len() || current.realm == new.realm {
+        return true;
+    }
+    c.iter()
+        .zip(n.iter())
+        .any(|(a, b)| !b.as_bytes().starts_with(a.as_bytes()))
 }
 
 /// MIT `krb5_dbe_lookup_last_pwd_change` (`lib/kdb/kdb5.c:1505-1527`): a missing record, or one not four bytes long, reads as 0.

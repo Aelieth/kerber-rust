@@ -16,7 +16,7 @@ use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
 use crate::kdb_dump::{
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY,
-    TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
+    TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
 };
 use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
@@ -792,20 +792,27 @@ impl PrincipalStore {
         }
         let realm = self.realm.clone();
         self.create_principal_3_in(name, &realm, None, etypes, &AdminEnt::default(), actor)?;
-        let self_name = name.components_joined();
-        if self_name == "kadmin/changepw"
-            && let Some(p) = self.map.get_mut(&id)
-        {
-            p.attributes |= KDB_PWCHANGE_SERVICE;
-        }
+        self.mark_pwchange_service(name, &id)?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
-        if let Some(p) = self.map.get(&id) {
-            self.note_ulog(id.clone(), false, Some(p.clone()));
-        }
         self.save_if_configured()?;
         Ok(())
+    }
+
+    /// A created `kadmin/changepw` gets `PWCHANGE_SERVICE` by its name (`docs/security.md`,
+    /// "Create-time name special-casing"), a change the update log records.
+    fn mark_pwchange_service(&mut self, name: &PrincipalName, id: &str) -> Result<(), Error> {
+        if name.components_joined() != "kadmin/changepw" {
+            return Ok(());
+        }
+        let Some(p) = self.map.get_mut(id) else {
+            return Ok(());
+        };
+        p.attributes |= KDB_PWCHANGE_SERVICE;
+        let snap = p.clone();
+        self.note_ulog(id.to_owned(), false, Some(snap));
+        self.save_if_configured()
     }
 
     /// ACL-gated create with an optional bound policy so
@@ -840,12 +847,7 @@ impl PrincipalStore {
         }
         self.create_principal_3_in(name, &realm, password, etypes, &ent, actor)?;
         if password.is_none() {
-            let self_name = name.components_joined();
-            if self_name == "kadmin/changepw"
-                && let Some(p) = self.map.get_mut(&id)
-            {
-                p.attributes |= KDB_PWCHANGE_SERVICE;
-            }
+            self.mark_pwchange_service(name, &id)?;
         }
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
@@ -1303,7 +1305,9 @@ impl PrincipalStore {
             p.pw_policy.clone_from(&ent.policy);
             refresh_kadm_tl(p);
         }
-        Ok(())
+        let snap = p.clone();
+        self.note_ulog(id.to_owned(), false, Some(snap));
+        self.save_if_configured()
     }
 
     /// MIT `kadm5_get_strings`.
@@ -1371,6 +1375,14 @@ impl PrincipalStore {
         if let Some(v) = value {
             p.string_attrs.push((key.to_owned(), v.to_owned()));
         }
+        // MIT `krb5_dbe_set_string` (`lib/kdb/kdb5.c:2236-2240`): the strings are one record, kept even when the last is deleted.
+        super::update_tl_data(
+            &mut p.tl_data,
+            TlData {
+                ty: TL_STRING_ATTRS,
+                contents: super::encode_string_attrs(&p.string_attrs),
+            },
+        );
         stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
@@ -1481,7 +1493,7 @@ impl PrincipalStore {
         }
     }
 
-    pub(super) fn put_principal(&mut self, mut p: Principal) {
+    pub(crate) fn put_principal(&mut self, mut p: Principal) {
         if strip_db_args(&mut p.tl_data).is_err() {
             return;
         }

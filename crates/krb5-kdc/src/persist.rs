@@ -895,17 +895,17 @@ fn ulog_path(db_path: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Each entry's serial, time, kind and name; the kind is `1` for a delete, else `0:` and the
+/// attribute list its update sends, which a reader from before the list takes as `0`.
 fn ulog_text(store: &PrincipalStore) -> String {
     let mut text = String::from("ulog 1\n");
     for e in store.ulog() {
-        let _ = writeln!(
-            text,
-            "{}\t{}\t{}\t{}",
-            e.sno,
-            e.time,
-            u32::from(e.deleted),
-            e.name
-        );
+        let kind = if e.deleted {
+            "1".to_owned()
+        } else {
+            format!("0:{}", e.attrs)
+        };
+        let _ = writeln!(text, "{}\t{}\t{kind}\t{}", e.sno, e.time, e.name);
     }
     text
 }
@@ -917,7 +917,8 @@ fn save_ulog(store: &PrincipalStore, db_path: &Path) -> Result<(), PersistError>
 
 /// MIT `ulog_map` (`kdb_log.c:514-518`): a missing update log is not a corrupt log.
 /// A file whose first line is not the ulog header is not loaded, and a missing file leaves the
-/// store's log empty.
+/// store's log empty. An entry written before the attribute list was kept (kind `0`) sends every
+/// attribute of a new principal; each entry sends the record as it is now.
 fn load_ulog(store: &mut PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
     let path = ulog_path(db_path);
     let Ok(text) = fs::read_to_string(&path) else {
@@ -944,7 +945,15 @@ fn load_ulog(store: &mut PrincipalStore, db_path: &Path) -> Result<(), PersistEr
             .next()
             .and_then(|s| s.parse().ok())
             .ok_or_else(|| PersistError::Format("ulog time".into()))?;
-        let deleted = f.next() == Some("1");
+        let kind = f.next().unwrap_or_default();
+        let deleted = kind == "1";
+        let attrs = match kind.split_once(':') {
+            Some(("0", list)) => list
+                .parse()
+                .map_err(|_| PersistError::Format("ulog attrs".into()))?,
+            _ if deleted => 0,
+            _ => crate::ULOG_ADD_ATTRS,
+        };
         let name = f
             .next()
             .ok_or_else(|| PersistError::Format("ulog name".into()))?
@@ -960,6 +969,7 @@ fn load_ulog(store: &mut PrincipalStore, db_path: &Path) -> Result<(), PersistEr
             name,
             deleted,
             princ,
+            attrs,
         });
     }
     store.restore_ulog(entries);

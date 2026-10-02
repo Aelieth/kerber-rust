@@ -2,9 +2,12 @@
 //! the ring, `GET_UPDATES` status, replica apply, and the
 //! principal-only ship rule (policy changes never enter the ulog).
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use super::kdb_convert::{IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, conv_2dbentry, conv_2logentry};
+use super::kdb_convert::{
+    IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, conv_2dbentry, conv_2logentry, find_changed_attrs,
+};
 use super::principal::{Principal, strip_db_args};
 use super::{PrincipalStore, unix_now_u32};
 
@@ -21,14 +24,17 @@ pub struct UlogEntry {
     pub deleted: bool,
     /// The record after the change: the values the update sends.
     pub princ: Option<Principal>,
+    /// The attributes the change touched, as MIT lists them (bit `n` is `kdbe_attr_type_t` `n`).
+    pub attrs: u32,
 }
 
 impl UlogEntry {
-    /// The update this entry sends: the whole record, as MIT's primary converts a new principal.
+    /// The update this entry sends: its listed attributes of the record, as MIT's primary
+    /// converts them.
     #[must_use]
     pub fn kdbe_vals(&self) -> Vec<KdbeVal> {
         match (&self.princ, self.deleted) {
-            (Some(p), false) => conv_2logentry(p, ULOG_ADD_ATTRS),
+            (Some(p), false) => conv_2logentry(p, self.attrs),
             _ => Vec::new(),
         }
     }
@@ -50,6 +56,83 @@ impl UlogEntry {
 /// `@` (`svr_policy`) and a principal id always ends in `@REALM`.
 fn is_policy_marker(name: &str) -> bool {
     name.starts_with("policy:") && !name.contains('@')
+}
+
+/// The principals by `name@REALM`, and for each one changed since the update log last recorded
+/// it, that recorded record: the one read from the database, or none for a new principal.
+/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:332-360`): a change is compared with the record the database holds before the put.
+/// A change goes through `get_mut`, `insert` or `remove`, which keep the record they find first.
+/// The journal holds one whole record, keys included, per principal touched: a store with a
+/// database starts it again at every change, and one without grows it to every principal touched.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PrincipalMap {
+    map: HashMap<String, Principal>,
+    logged: HashMap<String, Option<Principal>>,
+}
+
+impl PrincipalMap {
+    pub(crate) fn get(&self, id: &str) -> Option<&Principal> {
+        self.map.get(id)
+    }
+
+    pub(crate) fn contains_key(&self, id: &str) -> bool {
+        self.map.contains_key(id)
+    }
+
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &String> {
+        self.map.keys()
+    }
+
+    pub(crate) fn values(&self) -> impl Iterator<Item = &Principal> {
+        self.map.values()
+    }
+
+    pub(crate) fn get_mut(&mut self, id: &str) -> Option<&mut Principal> {
+        self.keep(id);
+        self.map.get_mut(id)
+    }
+
+    pub(crate) fn insert(&mut self, id: String, p: Principal) -> Option<Principal> {
+        self.keep(&id);
+        self.map.insert(id, p)
+    }
+
+    pub(crate) fn remove(&mut self, id: &str) -> Option<Principal> {
+        self.keep(id);
+        self.map.remove(id)
+    }
+
+    /// The records' derived views only (the decrypted key history), which no update carries.
+    pub(crate) fn values_mut(&mut self) -> impl Iterator<Item = &mut Principal> {
+        self.map.values_mut()
+    }
+
+    /// A record read from the database, or put by a replica's apply: no change of this store's.
+    pub(crate) fn insert_unlogged(&mut self, id: String, p: Principal) {
+        self.map.insert(id, p);
+    }
+
+    /// A replica's delete: no change of this store's.
+    fn remove_unlogged(&mut self, id: &str) {
+        self.map.remove(id);
+    }
+
+    fn keep(&mut self, id: &str) {
+        if !self.logged.contains_key(id) {
+            let before = self.map.get(id).cloned();
+            self.logged.insert(id.to_owned(), before);
+        }
+    }
+
+    /// The record the update log compares a change of `id` with, which `now` replaces.
+    fn log(&mut self, id: &str, now: Option<&Principal>) -> Option<Principal> {
+        let before = self
+            .logged
+            .remove(id)
+            .unwrap_or_else(|| self.map.get(id).cloned());
+        self.logged.insert(id.to_owned(), now.cloned());
+        before
+    }
 }
 
 const ULOG_CAP: usize = 1024;
@@ -212,12 +295,12 @@ impl PrincipalStore {
                 |(name, realm)| crate::kdb::lookup_principal_id(&name, &realm),
             );
             if u.deleted {
-                self.map.remove(&id);
+                self.map.remove_unlogged(&id);
             } else if !u.vals.is_empty() {
                 let entry = conv_2dbentry(self.map.get(&id), &u.name, &u.vals, true)?;
                 let mut entry = self.assign_iprop_rid(entry);
                 if strip_db_args(&mut entry.tl_data).is_ok() {
-                    self.map.insert(entry.id(), entry);
+                    self.map.insert_unlogged(entry.id(), entry);
                 }
             }
             let cur = self.serial();
@@ -236,7 +319,19 @@ impl PrincipalStore {
         p
     }
 
-    pub(super) fn note_ulog(&self, name: String, deleted: bool, princ: Option<Principal>) {
+    /// Record a change of `name` for the update log, with the attributes MIT's primary lists.
+    /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:338-360`): a new principal lists every attribute up to `AT_LEN`, a change what `find_changed_attrs` finds but the lockout ones.
+    pub(super) fn note_ulog(&mut self, name: String, deleted: bool, princ: Option<Principal>) {
+        let attrs = if is_policy_marker(&name) {
+            0
+        } else {
+            let now = princ.as_ref().filter(|_| !deleted);
+            match (self.map.log(&name, now), now) {
+                (Some(before), Some(after)) => find_changed_attrs(&before, after, true),
+                (None, Some(_)) => ULOG_ADD_ATTRS,
+                (_, None) => 0,
+            }
+        };
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -246,6 +341,7 @@ impl PrincipalStore {
                 name,
                 deleted,
                 princ,
+                attrs,
             });
     }
 

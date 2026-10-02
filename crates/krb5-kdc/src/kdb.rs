@@ -213,7 +213,8 @@ pub trait PrincipalWrite: PrincipalRead {
     /// # Errors
     ///
     /// [`Error::InvalidArgument`] when `p.tl_data` holds a `KRB5_TL_DB_ARGS` entry, which neither
-    /// [`PrincipalStore`] nor [`MemoryStore`] accepts; other backends may add their own [`Error`].
+    /// [`PrincipalStore`] nor [`MemoryStore`] accepts; [`Error::Db`] when a [`PrincipalStore`]
+    /// with a database is not inside a change; other backends may add their own [`Error`].
     fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
     /// Delete by `name@REALM`.
     ///
@@ -592,10 +593,11 @@ impl PrincipalRead for PrincipalStore {
 }
 
 impl PrincipalWrite for PrincipalStore {
+    /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-1007`): every put is recorded in the update log.
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
-        self.debug_insert(p);
-        Ok(())
+        PrincipalStore::put_principal(self, p);
+        self.save_configured()
     }
     fn remove_id(&mut self, id: &str) -> Result<(), Error> {
         self.remove_id_inner(id)

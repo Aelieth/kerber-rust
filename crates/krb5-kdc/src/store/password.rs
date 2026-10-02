@@ -406,6 +406,8 @@ impl PrincipalStore {
             ty: TL_LAST_PWD_CHANGE,
             contents: ts.to_le_bytes().to_vec(),
         });
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
     }
 

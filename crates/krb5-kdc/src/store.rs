@@ -33,6 +33,7 @@ use krb5_types::pkinit::PkinitCa;
 use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
 use crate::persist::{DbStamp, PersistError};
+use iprop_ulog::PrincipalMap;
 use principal::default_mod_actor;
 use rid::generate_domain_sid;
 
@@ -82,7 +83,7 @@ pub mod kadm5_mask {
 #[derive(Clone, Debug)]
 pub struct PrincipalStore {
     realm: String,
-    map: HashMap<String, Principal>,
+    map: PrincipalMap,
     /// Ticket policy.
     pub policy: Policy,
     env: crate::kdb::KdcEnv,
@@ -159,7 +160,7 @@ impl PrincipalStore {
     pub fn new(realm: impl Into<String>) -> Self {
         Self {
             realm: realm.into(),
-            map: HashMap::new(),
+            map: PrincipalMap::default(),
             policy: Policy::default(),
             env: crate::kdb::KdcEnv::new(),
             persist_paths: None,
@@ -644,7 +645,7 @@ impl PrincipalStore {
     /// Insert a fully-formed principal (persistence / dump load; no ulog).
     pub(crate) fn debug_insert(&mut self, mut p: Principal) {
         self.settle_rid(&mut p);
-        self.map.insert(p.id(), p);
+        self.map.insert_unlogged(p.id(), p);
     }
 }
 
@@ -666,6 +667,7 @@ pub use kdb_convert::{
     AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
     IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, attr_bit, conv_2dbentry, conv_2logentry,
 };
+pub(crate) use kdb_convert::{encode_string_attrs, update_tl_data};
 pub use keys::{KeyEntry, KeyLookup, random_key};
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy, s2k_params,
