@@ -85,6 +85,9 @@ pub struct PrincipalStore {
     env: crate::kdb::KdcEnv,
     /// Optional `(db, stash)` paths; mutations write through when set.
     pub persist_paths: Option<(std::path::PathBuf, std::path::PathBuf)>,
+    /// `kadmin.local -m`: the database and the master key typed for it, which a save writes
+    /// under in place of the stash's; the stash is not read.
+    pub(crate) persist_master: Option<(std::path::PathBuf, krb5_crypto::ProtocolKey)>,
     /// Last observed (mtime, len) of the db file; kadmind mutations bump it.
     pub(crate) db_stamp: Option<(Option<std::time::SystemTime>, u64)>,
     /// Per-realm NT domain SID (never the dummy `S-1-5-21-1-2-3`).
@@ -123,6 +126,7 @@ impl PrincipalStore {
             policy: Policy::default(),
             env: crate::kdb::KdcEnv::new(),
             persist_paths: None,
+            persist_master: None,
             db_stamp: None,
             domain_sid: generate_domain_sid().unwrap_or_else(|_| {
                 eprintln!("krb5-kdc: getrandom failed generating domain SID");
@@ -246,6 +250,15 @@ impl PrincipalStore {
     /// take back.
     fn save_through(&self) -> Result<(), Error> {
         self.commit_ulog();
+        if let Some((db, master)) = &self.persist_master {
+            return crate::persist::save_store_with_master(
+                self,
+                db,
+                master,
+                crate::persist::DbWrite::InPlace,
+            )
+            .map_err(Error::from);
+        }
         let Some((db, stash)) = &self.persist_paths else {
             return Ok(());
         };

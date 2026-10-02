@@ -19,7 +19,6 @@ use std::path::{Path, PathBuf};
 
 use krb5_kdc::{Error, PrincipalStore};
 use krb5_types::PrincipalName;
-use zeroize::Zeroizing;
 
 pub(crate) use stdio::{Io, LineRead, Stdout};
 
@@ -93,9 +92,12 @@ struct Open {
     stash: PathBuf,
     conf: Option<krb5_config::KdcConf>,
     keysalts: Vec<krb5_crypto::EncryptionType>,
-    /// `-m`: the master key typed at startup; without a stash file the database is read-only.
-    typed: Option<(Zeroizing<Vec<u8>>, krb5_crypto::EncryptionType)>,
-    read_only: bool,
+    /// `-m`: the master key derived from the password typed at startup. The database is read
+    /// and written under it, and the stash is never opened.
+    typed: Option<krb5_crypto::ProtocolKey>,
+    /// With `-m`, the database file as this session last read or wrote it (modified time and
+    /// length), so another process's change is picked up as the stash-keyed store picks it up.
+    stamp: Option<(Option<std::time::SystemTime>, u64)>,
 }
 
 /// The session: the streams, the database, and the `ss` loop's state.
@@ -116,7 +118,35 @@ impl Handle {
 
     /// Pick up another process's change (kadmind), as each MIT call reads the database.
     pub(crate) fn refresh(&mut self) -> Result<(), Error> {
-        self.store.reload_if_stale()
+        if self.open.typed.is_none() {
+            return self.store.reload_if_stale();
+        }
+        if db_stamp(&self.open.db) == self.open.stamp {
+            return Ok(());
+        }
+        self.store = self.open.load().map_err(|text| Error::Db {
+            kind: io::ErrorKind::InvalidData,
+            text,
+        })?;
+        self.open.stamp = db_stamp(&self.open.db);
+        Ok(())
+    }
+
+    /// The store written back: under the typed master key with `-m`, else under the stash's.
+    fn save(&mut self) -> Result<(), Error> {
+        if let Some(key) = &self.open.typed {
+            krb5_kdc::save_store_with_master(
+                &self.store,
+                &self.open.db,
+                key,
+                krb5_kdc::DbWrite::InPlace,
+            )
+            .map_err(Error::from)?;
+            self.open.stamp = db_stamp(&self.open.db);
+        } else if let Some((db, stash)) = &self.store.persist_paths {
+            krb5_kdc::save_store(&self.store, db, stash).map_err(Error::from)?;
+        }
+        Ok(())
     }
 
     /// One kadm5 change, applied whole: the steps run on the store in memory with its saves
@@ -128,22 +158,11 @@ impl Handle {
         f: impl FnOnce(&mut PrincipalStore, &str) -> Result<T, Error>,
     ) -> Result<T, Error> {
         self.refresh()?;
-        if self.open.read_only {
-            return Err(Error::Db {
-                kind: io::ErrorKind::ReadOnlyFilesystem,
-                text: "No stash file: the database was opened with -m and is read-only".to_owned(),
-            });
-        }
         let caller = self.caller.clone();
         self.store.hold_saves(true);
         let done = f(&mut self.store, &caller);
         self.store.hold_saves(false);
-        let saved = match (&done, &self.store.persist_paths) {
-            (Ok(_), Some((db, stash))) => {
-                krb5_kdc::save_store(&self.store, db, stash).map_err(Error::from)
-            }
-            _ => Ok(()),
-        };
+        let saved = if done.is_ok() { self.save() } else { Ok(()) };
         if (done.is_err() || saved.is_err())
             && let Ok(store) = self.open.load()
         {
@@ -163,16 +182,22 @@ impl Handle {
     }
 }
 
+/// A database file's modified time and length, `None` when it cannot be read.
+fn db_stamp(db: &Path) -> Option<(Option<std::time::SystemTime>, u64)> {
+    let meta = std::fs::metadata(db).ok()?;
+    Some((meta.modified().ok(), meta.len()))
+}
+
 impl Open {
     /// The store as the database holds it, with the realm's kdc.conf and krb5.conf applied.
+    /// MIT `kdb_init_master` (`lib/kadm5/srv/server_kdb.c:26-80`): a master key typed at the
+    /// keyboard opens the database without the stash.
     fn load(&self) -> Result<PrincipalStore, String> {
         let mut store = match &self.typed {
-            Some((pw, etype)) if !self.stash.exists() => {
-                let text = std::fs::read_to_string(&self.db).map_err(|e| self.cannot_open(&e))?;
-                krb5_kdc::load_dump_etype(&text, pw, *etype)
-                    .map_err(|_| texts::BAD_MASTER_KEY.to_owned())?
+            Some(key) => {
+                krb5_kdc::load_store_with_master(&self.db, key).map_err(|e| self.load_text(e))?
             }
-            _ => krb5_kdc::load_store(&self.db, &self.stash).map_err(|e| self.load_text(e))?,
+            None => krb5_kdc::load_store(&self.db, &self.stash).map_err(|e| self.load_text(e))?,
         };
         if let Some(conf) = &self.conf {
             store.apply_kdc_conf(conf).map_err(|e| e.to_string())?;
@@ -568,7 +593,7 @@ fn kadm5_init(
         conf: paths.conf.clone(),
         keysalts: o.keysalts.clone(),
         typed: None,
-        read_only: false,
+        stamp: None,
     };
     if let Err(e) = std::fs::File::open(&open.db) {
         return Err((open.cannot_open(&e), false));
@@ -582,24 +607,17 @@ fn kadm5_init(
             .map_err(|e| (e.to_string(), false))?;
         let etype =
             krb5_kdc::master_etype(paths.master_key_type.as_deref()).map_err(|e| (e, false))?;
-        open.read_only = !open.stash.exists();
-        open.typed = Some((pw, etype));
-        let text = std::fs::read_to_string(&open.db).map_err(|e| (open.cannot_open(&e), false))?;
-        if let Some((pw, etype)) = &open.typed
-            && krb5_kdc::load_dump_etype(&text, pw, *etype).is_err()
-        {
-            return Err((texts::BAD_MASTER_KEY.to_owned(), false));
-        }
-    } else if let Err(e) = std::fs::read(&open.stash) {
+        let key = krb5_kdc::master_key_from_password(realm, &pw, etype)
+            .map_err(|_| (texts::BAD_MASTER_KEY.to_owned(), false))?;
+        open.typed = Some(key);
+    } else if let Err(e) = std::fs::File::open(&open.stash) {
         return Err((
             format!("Can not fetch master key (error: {}).", texts::strerror(&e)),
             false,
         ));
     }
-    let mut store = open.load().map_err(|e| (e, false))?;
-    if open.read_only {
-        store.persist_paths = None;
-    }
+    let store = open.load().map_err(|e| (e, false))?;
+    open.stamp = db_stamp(&open.db);
     Ok(Handle {
         store,
         realm: realm.to_owned(),

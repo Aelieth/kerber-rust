@@ -467,6 +467,89 @@ fn kadmin_local_default_keytab_follows_includedir() {
     assert!(kt.exists());
 }
 
+/// MIT `kdb_init_master`: with `-m` the typed master key opens and writes the database, and the
+/// stash is never read: here there is none.
+#[test]
+fn kadmin_local_m_needs_no_stash() {
+    use krb5_crypto::EncryptionType;
+    let realm = Realm::new("kadmin-m-nostash");
+    let master = krb5_kdc::master_key_from_password(
+        "KERBER.TEST",
+        b"m-pw",
+        EncryptionType::Aes256CtsHmacSha196,
+    )
+    .unwrap();
+    let store = krb5_kdc::create_realm("KERBER.TEST", None, &master, 1).unwrap();
+    let db = realm.dir.join("principal");
+    let stash = realm.dir.join("stash");
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_file(&stash);
+    krb5_kdc::create_store(&store, &db, &master).unwrap();
+    let out = realm.run(&["-m", "-q", "addprinc -randkey m1"], b"m-pw\n");
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert!(
+        text(&out.stdout)
+            .ends_with("Enter KDC database master key: \nPrincipal \"m1@KERBER.TEST\" created.\n"),
+        "{}",
+        text(&out.stdout)
+    );
+    let out = realm.run(&["-m", "-q", "listprincs m*"], b"m-pw\n");
+    assert!(
+        text(&out.stdout).ends_with("m1@KERBER.TEST\n"),
+        "{}",
+        text(&out.stdout)
+    );
+    assert!(!stash.exists());
+    let out = realm.run(&["-m", "-q", "listprincs m*"], b"wrong\n");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        "kadmin.local: Unable to decrypt latest master key with the provided master key\n while \
+         initializing kadmin.local interface\n"
+    );
+}
+
+/// MIT `kdb_get_hist_key` under `-m`: the `kadmin/history` a `cpw` creates is committed under the
+/// typed master key before `passwd_check`, so a password refused for its length still leaves it.
+#[test]
+fn kadmin_local_m_keeps_kadmin_history_after_a_refused_cpw() {
+    use krb5_crypto::EncryptionType;
+    let realm = Realm::new("kadmin-m-hist");
+    let master = krb5_kdc::master_key_from_password(
+        "KERBER.TEST",
+        b"m-pw",
+        EncryptionType::Aes256CtsHmacSha196,
+    )
+    .unwrap();
+    let store = krb5_kdc::create_realm("KERBER.TEST", None, &master, 1).unwrap();
+    let db = realm.dir.join("principal");
+    let _ = std::fs::remove_file(&db);
+    let _ = std::fs::remove_file(realm.dir.join("stash"));
+    krb5_kdc::create_store(&store, &db, &master).unwrap();
+    let addpol = "addpol -minlength 8 -history 2 hpol";
+    let out = realm.run(&["-m", "-q", addpol], b"m-pw\n");
+    assert_eq!(text(&out.stderr), "");
+    let addprinc = "addprinc -pw hist-initial-secret -policy hpol hu";
+    let out = realm.run(&["-m", "-q", addprinc], b"m-pw\n");
+    assert!(
+        text(&out.stdout).ends_with("Principal \"hu@KERBER.TEST\" created.\n"),
+        "{}",
+        text(&out.stderr)
+    );
+    let out = realm.run(&["-m", "-q", "cpw -pw sh hu"], b"m-pw\n");
+    assert_eq!(
+        text(&out.stderr),
+        "change_password: Password is too short while changing password for \
+         \"hu@KERBER.TEST\".\n"
+    );
+    let out = realm.run(&["-m", "-q", "getprinc kadmin/history"], b"m-pw\n");
+    assert!(
+        text(&out.stdout).contains("Principal: kadmin/history@KERBER.TEST\n"),
+        "{}",
+        text(&out.stderr)
+    );
+}
+
 /// MIT's prompt loop reads a directory stdin as the end of input (`fgets` fails): no spin, exit 0.
 #[test]
 fn kadmin_local_directory_stdin_terminates() {

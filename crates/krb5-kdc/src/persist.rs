@@ -87,6 +87,36 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
     Ok(store)
 }
 
+/// Load a store from `db_path` with every key unwrapped under `master`; the stash is not read,
+/// and a save the store makes itself writes under `master` too.
+/// MIT `kdb_init_master` (`lib/kadm5/srv/server_kdb.c:26-80`): a master key typed at the
+/// keyboard opens the database, and the stash is never read.
+///
+/// # Errors
+///
+/// [`PersistError::Io`] when the database cannot be read; [`PersistError::Format`] when it is not
+/// dump text (a legacy database needs its stash) or the `.ulog` beside it is malformed;
+/// [`PersistError::Crypto`] when a key does not decrypt under `master`, a wrong master key
+/// included.
+pub fn load_store_with_master(
+    db_path: &Path,
+    master: &ProtocolKey,
+) -> Result<PrincipalStore, PersistError> {
+    let blob = fs::read(db_path)?;
+    if !blob.starts_with(DUMP_PREFIX) {
+        return Err(PersistError::Format("not dump text".into()));
+    }
+    let text =
+        std::str::from_utf8(&blob).map_err(|_| PersistError::Format("dump is not utf-8".into()))?;
+    let mut store = crate::kdb_dump::load_dump_with_key(text, master)?;
+    if let Ok(meta) = std::fs::metadata(db_path) {
+        store.db_stamp = Some((meta.modified().ok(), meta.len()));
+    }
+    load_ulog(&mut store, db_path)?;
+    store.persist_master = Some((db_path.to_path_buf(), master.clone()));
+    Ok(store)
+}
+
 /// Save `store` as MIT dump version 7. Creates `stash_path` if needed.
 ///
 /// The database, its `.ulog` and a rewritten stash keep the owner, group and mode of the files
