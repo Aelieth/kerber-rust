@@ -39,8 +39,7 @@ client-gate config-key equality; kpasswd subkey zeroize; `delprinc
 -force`; klist `for client` / `starttime==0`; keytab v1 endian;
 `take_der` dup; replay window vs skew; `pa_replay` cap; PKINIT
 `cusec` range; enterprise error code 6; `cms_wrap_signed(None)` pub;
-N4 `create_host` double dump write; N7 reload→save has no dump file
-lock (with db2/LMDB); FAST armor AP-REQ not stored in the TGS replay
+N4 `create_host` double dump write; FAST armor AP-REQ not stored in the TGS replay
 cache (MIT `kinit -T` reuses it); G8a-1 FILE ccache tagged header;
 G8b-1 kinit `-k/-t` unknown-flag parse. Nits: N1 raceprinc-leg
 stderr; N3 `Error::Crypto` flattening + root-fragile `0555` test; N5
@@ -55,6 +54,11 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **config/protocol.** A release build reads no password, kdc.conf path or capture directory
   from the environment (`KRB5_PASSWORD`, `KRB5_KDC_DB`, `KERBER_CAPTURE_DIR`, …): only a
   `test-hooks` build does, as the gates' are. `strings` over the release binaries; unit.
+- **kdc/admin.** Lock the database between processes as MIT does (`principal.ok`,
+  `principal.kadm5.lock`, OFD locks): a kadmind and a kadmin.local change no longer save over
+  each other. Lost writes were answered as successes, 25/300 principals and 11 `-allow_tix`
+  changes in the KLLDAP-shaped interleave, so a disabled account kept getting tickets; now 0/0,
+  as MIT. Interleave and frozen-commit runs beside the MIT oracle; unit and two-process tests.
 - **protocol/kdc.** Refuse to replace a database, `.ulog`, stash or keytab the writer may not
   write, as MIT's in-place `O_RDWR` open does: a group that may only read the database could
   rewrite it through a writable directory. `addpol` / `modpol` report a failed save. Unit.
@@ -754,6 +758,28 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **admin.** `krb5-kpasswd` is MIT's `kpasswd [principal]` (argument, ccache, login name): it
   prompts for the old password and the new one twice, finds its server as `locate_kpasswd`
   does (`kpasswd_server`, else `admin_server` on 464), prints `Password changed.`. Unit; live.
+- **kdc/admin.** A database has MIT's two lock files beside it: `krb5-kdb create` and a full
+  `load` into an empty directory make them (0600; with SELinux on, labelled at create as
+  `matchpathcon` says), a full `load` makes `principal.ok` again when it is missing, and a
+  database without them is refused with MIT's texts (`No such file or directory`, `KADM5
+  administration database lock file missing`). A database from an earlier release needs both
+  made by hand, owned as the database file `DB` (kdc.conf's `database_name`) is:
+  `install -m 0600 -o OWNER -g GROUP /dev/null DB.ok`, then the same for `DB.kadm5.lock`, then
+  on an SELinux host `restorecon DB.ok DB.kadm5.lock`. Unit and `kdb5_util` tests; the commands
+  run as written beside MIT.
+- **kdc/admin.** Every read holds the database's lock shared and reads the dump again when its
+  age, file or file change time moved; every change (kadm5, kpasswd, kadmin.local with or
+  without `-m`, `krb5-kdb`, kprop / iprop loads) holds it exclusively from a fresh read to one
+  write and the age bump, so a kadm5 modify is one write, and a kadm5 policy create, modify or
+  delete looks at the policy again under it (MIT's `OSA_ADB_DUP` / `OSA_ADB_NOENT` when another
+  writer got there first). The KDC holds it only to see whether the database changed and to
+  read it again, as each MIT lookup takes and lets go of it, so a waiting writer gets it however
+  many requests overlap; a lock it may not take answers `SVC_UNAVAILABLE`, and a database it
+  cannot read again answers with that error, as MIT's lookups do, never with what it read
+  before. `load` writes `principal~` and promotes it under the lock (opening the lock files a
+  removed database left), `load -update` takes the permanent lock, kadmin.local `lock` /
+  `unlock` hold it, `dump` holds it shared while it reads, once any master key was typed.
+  Settled live against MIT 1.22.2.
 - **kdc.** `krb5-kdc` takes MIT's options, detaches unless `-n`, writes a `-P` pid file
   and reopens its log on SIGHUP.
 - **admin.** `krb5-kadmind` likewise, with `-nofork`; it now ends on SIGTERM.

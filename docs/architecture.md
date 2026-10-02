@@ -100,11 +100,13 @@ MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 `scripts/policy-gate.sh`. Iprop serial/ulog and `kpropd -A`:
 `scripts/iprop-gate.sh`. Extension points: [`plugins.md`](plugins.md)
 (traits, not dlopen). A kadmind mutation survives KDC process
-relaunch (`scripts/restart-gate.sh`). Mutating kadm5 verbs and
-`kadmin.local` reload the dump before they write so a concurrent
-local `addprinc` survives a remote `cpw`. There is still no dump
-file lock: the reload→mutate→save window can lose the last writer
-(dirty-flag/lock deferred with db2/LMDB).
+relaunch (`scripts/restart-gate.sh`). The database is locked between
+processes as MIT's db2 module locks it (`dblock.rs`): `principal.ok` and
+`principal.kadm5.lock` beside it, whole-file OFD locks, shared for every read
+(the KDC only while it sees whether the database changed and reads it again)
+and exclusive for every change from a fresh read of the dump to its one write
+and the age bump (`PrincipalStore::change`), so a concurrent local `addprinc`
+survives a remote `cpw` and no writer saves over another.
 
 **`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. Every
 KDC-side tool finds kdc.conf and the database through `KdcPaths`, as MIT's

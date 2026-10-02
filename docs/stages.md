@@ -36,7 +36,9 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
   `kinit`/`kvno` (`ad-windows-gate.sh`) and AD S4U (`ad-s4u-gate.sh`)
   drive live Samba (`samba-ad-dc`), not the torn-down Windows DC.
 - **Operational parity:** serving store is `RwLock` so kadmind
-  mutations persist; KDC reloads the db on mtime/length change.
+  mutations persist; KDC reads the db again, under its shared lock,
+  when its age (`principal.ok`'s mtime), the file or its change time
+  moves.
   `krb5-kadmind` AUTH_GSSAPI 300001: MIT `kadmin` add/cpw/get/list/mod/
   chrand/ktadd/`ktadd -norandkey`/purgekeys/setstr/`renprinc`/del then
   `kinit extra@KERBER.TEST` (`scripts/kadmin-gate.sh`). RFC 3244
