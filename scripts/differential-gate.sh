@@ -101,7 +101,7 @@ kadmin_q_ok --then 'getprinc expiredsvc' '^Expiration date: Thu Jan 01 00:00:01 
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" -- -q 'modprinc -expire 1 expiredsvc'
+    "$NAME" -- -q 'modprinc -expire "1970-01-01 00:00:01 UTC" expiredsvc'
 kadmin_q_ok rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \

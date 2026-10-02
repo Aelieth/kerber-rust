@@ -11,6 +11,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod getdate;
 mod kadm5;
 mod kprop;
 mod listen;
@@ -21,6 +22,7 @@ use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
 
+pub use getdate::{DateError, get_date_rel, parse_date, parse_interval};
 pub use kadm5::{
     IpropLast, IpropPull, Kadm5RpcError, Kadm5RpcSession, RpcCtx, changepw_acceptor,
     check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok,
@@ -246,11 +248,9 @@ pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
             }
             "-expire" => {
                 i += 1;
-                let spec = parts.get(i).copied().ok_or("-expire needs a timestamp")?;
-                out.expire = Some(
-                    spec.parse()
-                        .map_err(|_| format!("Invalid date specification \"{spec}\"."))?,
-                );
+                let spec = parts.get(i).copied().ok_or("-expire needs a date")?;
+                let date = getdate::parse_date(spec, getdate::now()).map_err(|e| e.to_string())?;
+                out.expire = Some(getdate::low32(date));
             }
             s if let Some((set, clear)) = kadmin_flagspec(s) => {
                 out.attr_set |= set;
@@ -336,13 +336,9 @@ pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
 }
 
 fn parse_pol_interval(s: &str) -> Result<u32, String> {
-    // MIT `parse_interval` (`kadmin.c:170-195`): krb5_string_to_deltat, else getdate.y
-    // (natural-language dates are the deferred getdate.y gap). The error text is
-    // parse_date's `Invalid date specification "%s".`.
-    krb5_types::deltat::parse(s)
-        .ok()
-        .and_then(|v| u32::try_from(v).ok())
-        .ok_or_else(|| format!("Invalid date specification \"{s}\"."))
+    getdate::parse_interval(s, getdate::now())
+        .map(getdate::low32)
+        .map_err(|e| e.to_string())
 }
 
 /// Admin error.
@@ -1213,8 +1209,14 @@ mod tests {
         assert_eq!(a.attr_set, krb5_kdc::KDB_DISALLOW_RENEWABLE);
         let a = parse_kadmin_args(&["+allow_renewable", "user"]).unwrap();
         assert_eq!(a.attr_clear, krb5_kdc::KDB_DISALLOW_RENEWABLE);
-        let a = parse_kadmin_args(&["-expire", "1", "expiredsvc"]).unwrap();
+        let a = parse_kadmin_args(&["-expire", "1970-01-01 00:00:01 UTC", "expiredsvc"]).unwrap();
         assert_eq!(a.expire, Some(1));
+        assert_eq!(
+            parse_kadmin_args(&["-expire", "1", "expiredsvc"]).unwrap_err(),
+            "Invalid date specification \"1\"."
+        );
+        let a = parse_kadmin_args(&["-maxrenewlife", "7 days", "user"]).unwrap();
+        assert_eq!(a.max_renewable_life, Some(7 * 86_400));
     }
 
     #[test]

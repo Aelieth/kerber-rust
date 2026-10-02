@@ -736,6 +736,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** `kadmin.local` reads dates and intervals with MIT's getdate grammar (`"7 days"`,
+  `2030-01-01`, `never`); `-expire 1` is no date, as in MIT. Units.
 - **kdc.** With no `supported_enctypes`, new keys are MIT's aes256 + aes128 sha1 pair (was
   all four AES types); `-e` and a profile list still rule. Unit; settled live.
 - **kdc.** `krb5-kdb` is MIT's `kdb5_util`: `create` makes only `K/M`, `krbtgt`, `kadmin/*`
