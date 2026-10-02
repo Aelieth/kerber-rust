@@ -131,7 +131,7 @@ fn run<R: BufRead, W: Write>(
             return 1;
         }
         Err(e) => {
-            eprintln!("{prog}: {e} getting initial ticket");
+            eprintln!("{prog}: {} getting initial ticket", initial_ticket_text(&e));
             return 1;
         }
     };
@@ -178,6 +178,28 @@ fn run<R: BufRead, W: Write>(
     }
     eprintln!("{prog}: Cannot contact any KDC for requested realm changing password");
     1
+}
+
+/// What MIT's kpasswd prints for a failed initial ticket: `error_message()` of the code, the
+/// `krb5_err.et` text, for the failures settled against MIT; the error itself for the rest.
+fn initial_ticket_text(e: &Error) -> String {
+    let mit = match e {
+        // MIT `KRB5_KDC_UNREACH` (`krb5_err.et:211-211`): no KDC answered.
+        Error::Io { .. } => "Cannot contact any KDC for requested realm",
+        Error::KrbError { code, .. } => match *code {
+            // MIT `KRB5KDC_ERR_NAME_EXP` (`krb5_err.et:42-42`): the text.
+            krb5_types::err::NAME_EXP => "Client's entry in database has expired",
+            // MIT `KRB5KDC_ERR_C_PRINCIPAL_UNKNOWN` (`krb5_err.et:47-47`): the text.
+            krb5_types::err::C_PRINCIPAL_UNKNOWN => "Client not found in Kerberos database",
+            // MIT `KRB5KDC_ERR_CLIENT_REVOKED` (`krb5_err.et:59-59`): the text.
+            krb5_types::err::CLIENT_REVOKED => "Client's credentials have been revoked",
+            // MIT `KRB5KDC_ERR_PREAUTH_FAILED` (`krb5_err.et:65-65`): the text.
+            krb5_types::err::PREAUTH_FAILED => "Preauthentication failed",
+            _ => return e.to_string(),
+        },
+        _ => return e.to_string(),
+    };
+    mit.to_owned()
 }
 
 /// The principal whose password changes, with the message MIT prints when there is none.
@@ -343,6 +365,40 @@ mod tests {
             with_default_realm("user", &none).unwrap_err(),
             "Configuration file does not specify default realm"
         );
+    }
+
+    #[test]
+    fn initial_ticket_failures_read_as_mit_s_error_table() {
+        // Live MIT 1.22.2 kpasswd: "kpasswd: <text> getting initial ticket" for a KDC that does
+        // not answer, a wrong password under preauth, an unknown, revoked or expired client.
+        let krb = |code| Error::KrbError { code, text: None };
+        let unreachable = Error::Io {
+            message: "no reply".into(),
+            kind: io::ErrorKind::WouldBlock,
+            retryable: true,
+        };
+        assert_eq!(
+            initial_ticket_text(&unreachable),
+            "Cannot contact any KDC for requested realm"
+        );
+        assert_eq!(
+            initial_ticket_text(&krb(krb5_types::err::PREAUTH_FAILED)),
+            "Preauthentication failed"
+        );
+        assert_eq!(
+            initial_ticket_text(&krb(krb5_types::err::C_PRINCIPAL_UNKNOWN)),
+            "Client not found in Kerberos database"
+        );
+        assert_eq!(
+            initial_ticket_text(&krb(krb5_types::err::CLIENT_REVOKED)),
+            "Client's credentials have been revoked"
+        );
+        assert_eq!(
+            initial_ticket_text(&krb(krb5_types::err::NAME_EXP)),
+            "Client's entry in database has expired"
+        );
+        let policy = krb(krb5_types::err::POLICY);
+        assert_eq!(initial_ticket_text(&policy), policy.to_string());
     }
 
     #[test]

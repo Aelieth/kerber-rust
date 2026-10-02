@@ -742,6 +742,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** `krb5-kpasswd` names a KDC that does not answer, a failed preauth and an unknown,
+  revoked or expired client with MIT's `krb5_err.et` texts. Unit; live.
 - **admin.** `krb5-kpasswd` is MIT's `kpasswd [principal]` (argument, ccache, login name): it
   prompts for the old password and the new one twice, finds its server as `locate_kpasswd`
   does (`kpasswd_server`, else `admin_server` on 464), prints `Password changed.`. Unit; live.
