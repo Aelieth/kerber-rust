@@ -742,6 +742,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **docs.** `kadmin.local`'s known divergences from MIT are graded in the A4 ledger and listed
+  in `docs/security.md`; its own doc names the environment overrides `test-hooks` only.
 - **admin.** `kadmin.local` refuses a request line or an argument that is not UTF-8 instead of
   turning bytes into U+FFFD; an unknown request is echoed byte for byte, as MIT. Units.
 - **admin.** `krb5-ktutil` prints a failed command as MIT's does (`rkt: must specify keytab to
