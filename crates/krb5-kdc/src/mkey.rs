@@ -35,8 +35,8 @@ pub fn default_master_etype() -> EncryptionType {
 }
 
 /// The master key type `master_key_type` names, else [`default_master_etype`]. Every tool takes
-/// the name from [`krb5_config::KdcPaths::master_key_type`]: `KRB5_MASTER_ETYPE`, else the
-/// realm's kdc.conf `master_key_type`.
+/// the name from [`krb5_config::KdcPaths::master_key_type`]: the realm's kdc.conf
+/// `master_key_type`, or what overrides that resolver takes.
 /// MIT `kadm5_get_config_params` (`alt_prof.c:541-555`): the profile's `master_key_type`, else
 /// `DEFAULT_KDC_ENCTYPE`; a name that is no enctype leaves none, and no master key is made.
 ///

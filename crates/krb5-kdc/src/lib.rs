@@ -67,8 +67,9 @@ pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_SERIAL, TL_KERBER_SID,
     TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS, dump_store,
-    dump_store_iprop, dump_store_with_key, load_dump, load_dump_etype, load_dump_path,
-    load_dump_with_key, parse_dump, tl_mod_princ_name, update_store, write_dump_path_etype,
+    dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key, load_dump, load_dump_etype,
+    load_dump_path, load_dump_with_key, parse_dump, tl_mod_princ_name, update_store,
+    write_dump_path_etype,
 };
 pub use listen::{
     BIND_CANDIDATES, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST,
@@ -82,9 +83,9 @@ pub use osa::{
     history_entry as encrypt_history_entry,
 };
 pub use persist::{
-    CreateError, DbWrite, PersistError, create_store, load_store, read_stash, save_dump_text,
-    save_store, save_store_fresh, save_store_legacy_kdb3, save_store_with_master, stash_keys,
-    write_stash,
+    CreateError, DbWrite, PersistError, create_store, load_dump_with_stash, load_store, read_stash,
+    save_dump_text, save_store, save_store_fresh, save_store_legacy_kdb3, save_store_with_master,
+    stash_keys, write_stash,
 };
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,

@@ -94,8 +94,9 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
 /// can share them. A writer that may not write the database or its `.ulog` changes nothing.
 ///
 /// A new stash holds the store's `K/M` key when the store has one (the master key its dump
-/// was loaded with); otherwise a key of the realm's `master_key_type`
-/// ([`crate::master_etype`]), derived from `KRB5_MASTER_PASSWORD` when that is set.
+/// was loaded with); otherwise a random key of the realm's `master_key_type`
+/// ([`crate::master_etype`]), or with the `test-hooks` feature one derived from
+/// `KRB5_MASTER_PASSWORD` when that is set.
 ///
 /// # Errors
 ///
@@ -434,7 +435,14 @@ fn stash_keytab_bytes(realm: &str, master: &ProtocolKey) -> Result<Vec<u8>, Pers
     Ok(Keytab::single(realm_a, name, 1, master.clone()).to_bytes())
 }
 
-fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, PersistError> {
+/// Load dump text whose keys the master key in `stash` (stash file bytes) opens: the keytab
+/// form's `K/M` entry, else each enctype a legacy raw stash may be.
+///
+/// # Errors
+///
+/// [`PersistError::Crypto`] when no key the stash holds loads the dump (a malformed dump
+/// included).
+pub fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, PersistError> {
     // krb5_db_def_fetch_mkey: keytab format first (etype known, one decrypt),
     // then the legacy raw stash (trial over the two harness etypes).
     if let Some(mkey) = stash_keytab_key(stash)
@@ -501,10 +509,16 @@ fn master_for_save(
         key
     } else {
         let etype = persist_master_etype(realm)?;
-        if let Ok(pw) = std::env::var("KRB5_MASTER_PASSWORD") {
-            master_key_from_password(realm, pw.as_bytes(), etype)?
-        } else {
-            crate::store::random_key(etype)?
+        // MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:200-220`): the master password is `-P` or typed, never the environment; the gates' variable is a test hook.
+        #[cfg(feature = "test-hooks")]
+        let hooked = std::env::var("KRB5_MASTER_PASSWORD")
+            .ok()
+            .map(zeroize::Zeroizing::new);
+        #[cfg(not(feature = "test-hooks"))]
+        let hooked: Option<zeroize::Zeroizing<String>> = None;
+        match hooked {
+            Some(pw) => master_key_from_password(realm, pw.as_bytes(), etype)?,
+            None => crate::store::random_key(etype)?,
         }
     };
     write_secret_file(stash_path, &stash_keytab_bytes(realm, &master)?)?;
@@ -539,8 +553,10 @@ fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, 
     ))
 }
 
-/// The master key type of a new stash for `realm`: `KRB5_MASTER_ETYPE`, else the realm's kdc.conf
-/// `master_key_type`, else [`crate::default_master_etype`], as `krb5-kdb` resolves it.
+/// The master key type of a new stash for `realm`: the name
+/// [`krb5_config::KdcPaths::master_key_type`] resolves for it (the realm's kdc.conf
+/// `master_key_type`, or what overrides that resolver takes), else
+/// [`crate::default_master_etype`], as `krb5-kdb` resolves it.
 fn persist_master_etype(realm: &str) -> Result<EncryptionType, PersistError> {
     let paths = krb5_config::KdcPaths::resolve(Some(realm))
         .map_err(|e| PersistError::Format(format!("kdc.conf: {e}")))?;

@@ -3,8 +3,9 @@
 //! Usage: `krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
 //!
 //! `--load-dump` writes the database ([`krb5_config::KdcPaths`]; a new 0600 file, as a full load
-//! leaves it) and, when there is none, the stash from a MIT dump
-//! (version 7 or `ipropx`). A host argument then pulls serial-delta.
+//! leaves it) from a MIT dump (version 7 or `ipropx`) the replica's stash opens; with the
+//! `test-hooks` feature, `KRB5_MASTER_PASSWORD` opens it instead when set, and a missing stash is
+//! then written. A host argument then pulls serial-delta.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -13,7 +14,7 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 
 use krb5_admin::{iprop_fullresync, iprop_pull};
-use krb5_kdc::{load_dump_path, load_store, save_store_fresh};
+use krb5_kdc::{load_dump_with_stash, load_store, save_store_fresh};
 use krb5_protocol::{Keytab, as_exchange_key, tgs_exchange};
 use krb5_types::PrincipalName;
 
@@ -68,10 +69,6 @@ fn main() {
         }
     }
 
-    let master = std::env::var("KRB5_MASTER_PASSWORD").unwrap_or_else(|_| {
-        eprintln!("krb5-iprop-pull: set KRB5_MASTER_PASSWORD");
-        std::process::exit(2);
-    });
     let paths = krb5_config::KdcPaths::resolve(None).unwrap_or_else(|e| {
         eprintln!("krb5-iprop-pull: {e}");
         std::process::exit(1);
@@ -84,7 +81,7 @@ fn main() {
             std::process::exit(1);
         });
         let header_last = parse_iprop_last(text.lines().next().unwrap_or(""));
-        let store = load_dump_path(&path, master.as_bytes()).unwrap_or_else(|e| {
+        let store = load_dump(&text, &stash).unwrap_or_else(|e| {
             eprintln!("krb5-iprop-pull: load dump: {e}");
             std::process::exit(1);
         });
@@ -212,6 +209,22 @@ fn main() {
         "iprop pull ok last_sno={} last_time={} {} applied={}",
         pulled.last_sno, pulled.last_sec, pulled.last_usec, pulled.applied
     );
+}
+
+/// The dump opened with the replica's stash, or with the `test-hooks` feature with
+/// `KRB5_MASTER_PASSWORD` when that is set.
+fn load_dump(text: &str, stash: &std::path::Path) -> Result<krb5_kdc::PrincipalStore, String> {
+    #[cfg(feature = "test-hooks")]
+    let hooked = std::env::var("KRB5_MASTER_PASSWORD")
+        .ok()
+        .map(zeroize::Zeroizing::new);
+    #[cfg(not(feature = "test-hooks"))]
+    let hooked: Option<zeroize::Zeroizing<String>> = None;
+    if let Some(pw) = hooked {
+        return krb5_kdc::load_dump(text, pw.as_bytes()).map_err(|e| e.to_string());
+    }
+    let bytes = std::fs::read(stash).map_err(|e| format!("stash {}: {e}", stash.display()))?;
+    load_dump_with_stash(text, &bytes).map_err(|e| e.to_string())
 }
 
 fn parse_iprop_last(header: &str) -> Option<(u32, u32, u32)> {

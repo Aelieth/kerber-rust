@@ -12,7 +12,10 @@ use std::path::Path;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{CipherState, EncryptionType, KeyUsage, ProtocolKey, encrypt};
-use krb5_kdc::{PrincipalStore, dump_store, dump_store_iprop, load_dump, save_store_fresh};
+use krb5_kdc::{
+    PrincipalStore, dump_store, dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key,
+    load_dump, load_dump_with_stash, save_store_fresh,
+};
 use krb5_protocol::{
     ApVerifyParams, ReplayCache, build_ap_rep, build_ap_req_mutual_seq, build_krb_priv_chained,
     build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
@@ -65,6 +68,34 @@ pub fn kprop_dump_iprop(store: &PrincipalStore, master_password: &[u8]) -> Resul
 /// header, does not parse as a dump, or holds keys that do not decrypt under the master key
 /// string-to-key derives from `master_password`.
 pub fn kprop_load_bytes(bytes: &[u8], master_password: &[u8]) -> Result<PrincipalStore, Error> {
+    load_dump(kprop_body_text(bytes)?, master_password).map_err(|e| Error::Inner(e.to_string()))
+}
+
+/// Load a kprop body with the master key in the stash at `stash`: the replica's, as MIT's
+/// kpropd hands the body to `kdb5_util load` beside the replica's own stash.
+/// MIT `load_database` (`kprop/kpropd.c:1541-1609`): the received dump is loaded by running `kdb5_util load`, no master password given.
+///
+/// # Errors
+///
+/// [`Error::Inner`] when `bytes` is a KDB1/KDB2/KDB3 blob, is not UTF-8 or lacks a dump or
+/// iprop header, the stash cannot be read, or no key it holds loads the dump.
+pub fn kprop_load_with_stash(bytes: &[u8], stash: &Path) -> Result<PrincipalStore, Error> {
+    kprop_load_stash_bytes(bytes, &read_stash_file(stash)?)
+}
+
+/// The stash file's bytes; a stash that cannot be read is named.
+fn read_stash_file(stash: &Path) -> Result<Vec<u8>, Error> {
+    std::fs::read(stash).map_err(|e| Error::Inner(format!("stash {}: {e}", stash.display())))
+}
+
+/// [`kprop_load_with_stash`] with the stash file already read.
+fn kprop_load_stash_bytes(bytes: &[u8], stash: &[u8]) -> Result<PrincipalStore, Error> {
+    let text = kprop_body_text(bytes)?;
+    load_dump_with_stash(text, stash).map_err(|e| Error::Inner(e.to_string()))
+}
+
+/// The kprop body as dump text: MIT dump or iprop text, never a private KDB blob.
+fn kprop_body_text(bytes: &[u8]) -> Result<&str, Error> {
     if bytes.starts_with(b"KDB1") || bytes.starts_with(b"KDB2") || bytes.starts_with(b"KDB3") {
         return Err(Error::Inner(
             "kprop body is a private KDB blob, not a MIT dump".into(),
@@ -77,7 +108,7 @@ pub fn kprop_load_bytes(bytes: &[u8], master_password: &[u8]) -> Result<Principa
     {
         return Err(Error::Inner("kprop body missing dump header".into()));
     }
-    load_dump(text, master_password).map_err(|e| Error::Inner(e.to_string()))
+    Ok(text)
 }
 
 fn write_message(stream: &mut TcpStream, data: &[u8]) -> io::Result<()> {
@@ -596,8 +627,9 @@ pub struct KpropdConfig<'a> {
     pub expected_server: Option<&'a PrincipalName>,
     /// AP-REQ server realm kpropd checks (`ApVerifyParams.expected_realm`).
     pub expected_realm: Option<&'a str>,
-    /// Master password that decrypts the dump.
-    pub master_password: &'a [u8],
+    /// The master password that opens the dump (the gates' `KRB5_MASTER_PASSWORD`); `None`,
+    /// the replica's stash opens it ([`kprop_load_with_stash`]).
+    pub master_password: Option<&'a [u8]>,
     /// Replica database path.
     pub db: &'a Path,
     /// Replica stash path.
@@ -608,12 +640,15 @@ pub struct KpropdConfig<'a> {
 
 /// Full replica handler: recvauth, dump v7 body, `load_dump`, persist, ack. The database is
 /// written as a full load leaves it, a new 0600 file owned by kpropd ([`save_store_fresh`]).
+/// Without `cfg.master_password` the replica's stash is read once the peer is authenticated and
+/// before the dump is received, so a missing one is named before any transfer.
 ///
 /// # Errors
 ///
 /// [`Error::KpropUnauthorized`] when `cfg.allowed_clients` does not authorize the client;
 /// [`Error::Inner`] when [`kpropd_recvauth`], [`kpropd_recv_dump`], or [`kpropd_send_ack`]
-/// fails, the dump does not load under `cfg.master_password`, or the store cannot be saved to
+/// fails, the dump does not load under `cfg.master_password` (or the stash's key when that is
+/// `None`), or the store cannot be saved to
 /// `cfg.db` / `cfg.stash`.
 pub fn kpropd_handle_conn(
     stream: &mut TcpStream,
@@ -637,8 +672,16 @@ pub fn kpropd_handle_conn(
         allowed_clients,
         replay,
     )?;
+    let stash_bytes = match master_password {
+        Some(_) => None,
+        None => Some(read_stash_file(stash)?),
+    };
     let dump = kpropd_recv_dump(stream, &mut auth)?;
-    let store = kprop_load_bytes(&dump, master_password)?;
+    let store = match (master_password, &stash_bytes) {
+        (Some(pw), _) => kprop_load_bytes(&dump, pw)?,
+        (None, Some(stash_bytes)) => kprop_load_stash_bytes(&dump, stash_bytes)?,
+        (None, None) => return Err(Error::Inner("no master key".into())),
+    };
     save_store_fresh(&store, db, stash).map_err(|e| Error::Inner(e.to_string()))?;
     kpropd_send_ack(stream, &mut auth, dump.len() as u64)?;
     tracing::info!(
@@ -764,65 +807,48 @@ pub fn kprop_send_dump(
     Ok(())
 }
 
-/// Primary helper: dump v7 + sendauth + PRIV chunks.
+/// Primary helper: dump v7 + sendauth + PRIV chunks. The dump's keys are wrapped under
+/// `master`, the key the primary's stash holds.
 ///
 /// # Errors
 ///
-/// [`Error::Inner`] when the dump cannot be made (string-to-key or key wrap under
-/// `master_password`), or when [`kprop_sendauth`] or [`kprop_send_dump`] fails.
+/// [`Error::Inner`] when a key cannot be wrapped under `master`, or when [`kprop_sendauth`] or
+/// [`kprop_send_dump`] fails.
 pub fn kprop_send_store(
     stream: &mut TcpStream,
     store: &PrincipalStore,
-    master_password: &[u8],
+    master: &ProtocolKey,
     ticket: Ticket,
     session: &ProtocolKey,
     crealm: &krb5_types::Realm,
     cname: &PrincipalName,
 ) -> Result<(), Error> {
-    kprop_send_store_ex(
-        stream,
-        store,
-        master_password,
-        ticket,
-        session,
-        crealm,
-        cname,
-        false,
-    )
+    kprop_send_store_ex(stream, store, master, ticket, session, crealm, cname, false)
 }
 
 /// [`kprop_send_store`] with an ipropx dump header (`kpropd -A` `load -i`).
 ///
 /// # Errors
 ///
-/// [`Error::Inner`] when the dump cannot be made (string-to-key or key wrap under
-/// `master_password`), or when [`kprop_sendauth`] or [`kprop_send_dump`] fails.
+/// [`Error::Inner`] when a key cannot be wrapped under `master`, or when [`kprop_sendauth`] or
+/// [`kprop_send_dump`] fails.
 pub fn kprop_send_store_iprop(
     stream: &mut TcpStream,
     store: &PrincipalStore,
-    master_password: &[u8],
+    master: &ProtocolKey,
     ticket: Ticket,
     session: &ProtocolKey,
     crealm: &krb5_types::Realm,
     cname: &PrincipalName,
 ) -> Result<(), Error> {
-    kprop_send_store_ex(
-        stream,
-        store,
-        master_password,
-        ticket,
-        session,
-        crealm,
-        cname,
-        true,
-    )
+    kprop_send_store_ex(stream, store, master, ticket, session, crealm, cname, true)
 }
 
 #[expect(clippy::too_many_arguments, reason = "krb5_creds args, no value type")]
 fn kprop_send_store_ex(
     stream: &mut TcpStream,
     store: &PrincipalStore,
-    master_password: &[u8],
+    master: &ProtocolKey,
     ticket: Ticket,
     session: &ProtocolKey,
     crealm: &krb5_types::Realm,
@@ -830,10 +856,12 @@ fn kprop_send_store_ex(
     iprop: bool,
 ) -> Result<(), Error> {
     let dump = if iprop {
-        kprop_dump_iprop(store, master_password)?
+        dump_store_iprop_with_key(store, master)
     } else {
-        kprop_dump_bytes(store, master_password)?
-    };
+        dump_store_with_key(store, master)
+    }
+    .map(String::into_bytes)
+    .map_err(|e| Error::Inner(e.to_string()))?;
     let mut auth = kprop_sendauth(stream, ticket, session, crealm, cname, 1)?;
     kprop_send_dump(stream, &mut auth, &dump)
 }

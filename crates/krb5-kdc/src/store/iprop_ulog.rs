@@ -42,7 +42,8 @@ pub const IPROP_NIL: u32 = 4;
 pub const IPROP_PERM_DENIED: u32 = 5;
 
 impl PrincipalStore {
-    /// Master key for iprop `AT_KEYDATA` (stash, `K/M`, or `KRB5_MASTER_PASSWORD`).
+    /// Master key for iprop `AT_KEYDATA`: the stash's, else (with the `test-hooks` feature)
+    /// one derived from `KRB5_MASTER_PASSWORD`, else the `K/M` principal's.
     #[must_use]
     pub fn iprop_master_key(&self) -> Option<krb5_crypto::ProtocolKey> {
         if let Some((_, stash)) = &self.persist_paths
@@ -60,7 +61,13 @@ impl PrincipalStore {
                 }
             }
         }
-        if let Ok(pw) = std::env::var("KRB5_MASTER_PASSWORD")
+        #[cfg(feature = "test-hooks")]
+        let hooked = std::env::var("KRB5_MASTER_PASSWORD")
+            .ok()
+            .map(zeroize::Zeroizing::new);
+        #[cfg(not(feature = "test-hooks"))]
+        let hooked: Option<zeroize::Zeroizing<String>> = None;
+        if let Some(pw) = hooked
             && let Ok(k) = crate::master_key_from_password(
                 &self.realm,
                 pw.as_bytes(),

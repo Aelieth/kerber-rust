@@ -4,8 +4,9 @@
 //!
 //! `KRB5_KPROP_KEYTAB` or host keys from the database and stash
 //! ([`krb5_config::KdcPaths`]) authenticate `sendauth`. `KRB5_KPROP_ACL` is
-//! fail-closed (unset or empty denies every peer). The dump body is loaded with
-//! `KRB5_MASTER_PASSWORD` and saved to the replica db.
+//! fail-closed (unset or empty denies every peer). The dump body is opened with the replica's
+//! stash, as MIT's kpropd loads it with `kdb5_util load` beside that stash, and saved to the
+//! replica db; with the `test-hooks` feature, `KRB5_MASTER_PASSWORD` opens it instead when set.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -38,10 +39,12 @@ fn main() {
         .first()
         .cloned()
         .unwrap_or_else(|| format!("127.0.0.1:{KPROP_PORT}"));
-    let master = std::env::var("KRB5_MASTER_PASSWORD").unwrap_or_else(|_| {
-        eprintln!("krb5-kpropd: set KRB5_MASTER_PASSWORD");
-        std::process::exit(2);
-    });
+    #[cfg(feature = "test-hooks")]
+    let master = std::env::var("KRB5_MASTER_PASSWORD")
+        .ok()
+        .map(zeroize::Zeroizing::new);
+    #[cfg(not(feature = "test-hooks"))]
+    let master: Option<zeroize::Zeroizing<String>> = None;
     let realm = kpropd_realm();
     let paths = krb5_config::KdcPaths::resolve(Some(&realm)).unwrap_or_else(|e| {
         eprintln!("krb5-kpropd: {e}");
@@ -82,7 +85,7 @@ fn main() {
                             host_keys: &keys,
                             expected_server: None,
                             expected_realm: Some(realm.as_str()),
-                            master_password: master.as_bytes(),
+                            master_password: master.as_deref().map(String::as_bytes),
                             db: &db,
                             stash: &stash,
                             allowed_clients: allowed.as_deref(),

@@ -746,13 +746,29 @@ pub fn dump_store_iprop(
     store: &PrincipalStore,
     master_password: &[u8],
 ) -> Result<String, DumpError> {
-    let text = dump_store(store, master_password)?;
+    Ok(iprop_header(store, &dump_store(store, master_password)?))
+}
+
+/// [`dump_store_iprop`] with every key wrapped under `mkey`.
+///
+/// # Errors
+///
+/// [`DumpError::Crypto`] when a principal or history key cannot be wrapped under `mkey`.
+pub fn dump_store_iprop_with_key(
+    store: &PrincipalStore,
+    mkey: &ProtocolKey,
+) -> Result<String, DumpError> {
+    Ok(iprop_header(store, &write_dump(store, mkey)?))
+}
+
+/// `text` with the version 7 header replaced by `ipropx 1 <sno> <sec> <usec>`.
+fn iprop_header(store: &PrincipalStore, text: &str) -> String {
     let header = format!("ipropx 1 {} {} 0\n", store.serial(), unix_now());
-    Ok(text.replacen(
+    text.replacen(
         &format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n"),
         &header,
         1,
-    ))
+    )
 }
 
 /// One `princ` record, with MIT's message for the part that does not read.

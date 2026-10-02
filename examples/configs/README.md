@@ -56,7 +56,9 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
   for every KDC-side tool.
 - `KRB5_MASTER_PASSWORD`: only in a `test-hooks` build (the gates'), `krb5-kdb`
   takes it for `create` instead of `-P` or the prompts, and for `load` when there
-  is no stash (and then writes the stash).
+  is no stash (and then writes the stash); `krb5-kprop`, `krb5-kpropd` and
+  `krb5-iprop-pull` take it for the propagated dump's master key, which a release
+  build takes from the stash.
 - `KRB5_MASTER_ETYPE`: overrides `master_key_type`.
 - `KRB5_ACL_FILE`: overrides `acl_file`.
 - `KRB5_KPROP_ACL`: `krb5-kpropd`'s allowlist (`kpropd.acl` form); unset or empty

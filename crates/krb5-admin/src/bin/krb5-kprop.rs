@@ -3,17 +3,22 @@
 //! Usage: `krb5-kprop [-P port] [-s keytab] [-n host-instance] replica`
 //!
 //! Loads the database and stash [`krb5_config::KdcPaths`] resolves, issues a `host/<instance>`
-//! ticket from that store, and calls [`krb5_admin::kprop_send_store`].
-//! Dump keys are wrapped with `KRB5_MASTER_PASSWORD`.
+//! ticket from that store, and calls [`krb5_admin::kprop_send_store`]. The dump's keys are
+//! wrapped under the stash's master key, as MIT's kprop sends a dump of the database that stash
+//! opens; with the `test-hooks` feature, `KRB5_MASTER_PASSWORD` names it instead when set.
+//!
+//! `KRB5_KPROP_KEYTAB` names the client keytab when `-s` does not: a kerber-rust extension
+//! (MIT's kprop takes `-s` alone).
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use krb5_admin::{KPROP_PORT, kprop_send_store, kprop_send_store_iprop};
-use krb5_kdc::{issue_as, issue_tgs, load_store};
+use krb5_crypto::ProtocolKey;
+use krb5_kdc::{PrincipalStore, issue_as, issue_tgs, load_store};
 use krb5_protocol::Keytab;
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::PrincipalName;
@@ -59,10 +64,6 @@ fn main() {
     let Some(replica) = replica else {
         usage();
     };
-    let master = std::env::var("KRB5_MASTER_PASSWORD").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_MASTER_PASSWORD");
-        std::process::exit(2);
-    });
     let paths = krb5_config::KdcPaths::resolve(None).unwrap_or_else(|e| {
         // MIT `parse_args` (`kprop/kprop.c:154-159`): no realm prints only this context (MIT
         // passes errno, 0, to com_err), exit 1.
@@ -73,10 +74,21 @@ fn main() {
         }
         std::process::exit(1);
     });
+    // The stash opens the database and wraps the dump: one that cannot be read is named before
+    // anything is sent.
+    if let Err(e) = std::fs::File::open(&paths.key_stash_file) {
+        eprintln!("krb5-kprop: stash {}: {e}", paths.key_stash_file.display());
+        std::process::exit(1);
+    }
     let store = load_store(&paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
         eprintln!("krb5-kprop: load store: {e}");
         std::process::exit(1);
     });
+    let master =
+        master_key(&store, &paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
+            eprintln!("krb5-kprop: {e}");
+            std::process::exit(1);
+        });
     let realm = store.realm().to_owned();
     let host_inst = instance.unwrap_or_else(|| replica.clone());
     let server = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host_inst.as_str()]);
@@ -135,7 +147,7 @@ fn main() {
     send(
         &mut stream,
         &store,
-        master.as_bytes(),
+        &master,
         tgs_out.rep.0.ticket,
         &tgs_out.session_key,
         &krb5_types::ascii(&realm),
@@ -146,6 +158,31 @@ fn main() {
         std::process::exit(1);
     });
     println!("kprop ok {addr}");
+}
+
+/// The key the dump's keys are wrapped under: the stash's (it opened `store`), or with the
+/// `test-hooks` feature one derived from `KRB5_MASTER_PASSWORD` with the type of the store's
+/// `K/M` key.
+fn master_key(store: &PrincipalStore, db: &Path, stash: &Path) -> Result<ProtocolKey, String> {
+    #[cfg(feature = "test-hooks")]
+    let hooked = std::env::var("KRB5_MASTER_PASSWORD")
+        .ok()
+        .map(zeroize::Zeroizing::new);
+    #[cfg(not(feature = "test-hooks"))]
+    let hooked: Option<zeroize::Zeroizing<String>> = None;
+    match hooked {
+        Some(pw) => {
+            let etype = store
+                .get(&format!("K/M@{}", store.realm()))
+                .and_then(|km| km.keys.first())
+                .map_or_else(krb5_kdc::default_master_etype, |k| k.etype);
+            krb5_kdc::master_key_from_password(store.realm(), pw.as_bytes(), etype)
+                .map_err(|e| e.to_string())
+        }
+        None => {
+            krb5_kdc::read_stash(stash, db).map_err(|e| format!("stash {}: {e}", stash.display()))
+        }
+    }
 }
 
 fn client_name(keytab: Option<&std::path::Path>, server: &PrincipalName) -> PrincipalName {
