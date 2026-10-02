@@ -135,6 +135,71 @@ fn optimistic_hint_picks_spake_before_enc_ts() {
     );
 }
 
+/// The encrypted-timestamp request that answers PREAUTH_REQUIRED sends the error's cookie back
+/// first and verbatim, as MIT's kinit does against MIT's KDC (live MIT 1.22.2:
+/// `[133, 2, 150, 149]`).
+/// MIT `k5_preauth` (`preauth2.c:992-993`): `copy_cookie` runs before any module adds padata.
+#[test]
+fn enc_timestamp_request_returns_the_cookie_first() {
+    isolate_host_krb5();
+    let seen: Arc<Mutex<Vec<Vec<PaData>>>> = Arc::new(Mutex::new(Vec::new()));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let record = Arc::clone(&seen);
+    thread::spawn(move || {
+        let hint: MethodData = vec![
+            pa_of(pa::ENC_TIMESTAMP),
+            PaData {
+                padata_type: pa::FX_COOKIE,
+                padata_value: b"MIT-cookie".to_vec().into(),
+            },
+        ];
+        let mut buf = [0u8; 4096];
+        while let Ok((n, src)) = udp.recv_from(&mut buf) {
+            let Ok(req) = decode::<AsReq>(&buf[..n]) else {
+                continue;
+            };
+            let mut seen = record.lock().unwrap();
+            seen.push(req.0.padata.unwrap_or_default());
+            let reply = if seen.len() == 1 {
+                encode_preauth_required(&hint)
+            } else {
+                encode_preauth_failed()
+            };
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let _ = as_exchange(&AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"userpassword",
+        kdc: &KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts::default(),
+    });
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "one PREAUTH_REQUIRED, one answer: {seen:?}");
+    assert_eq!(
+        types(&seen[1]),
+        vec![
+            pa::FX_COOKIE,
+            pa::ENC_TIMESTAMP,
+            pa::AS_FRESHNESS,
+            pa::REQ_ENC_PA_REP
+        ],
+        "MIT kinit's second AS-REQ"
+    );
+    assert_eq!(seen[1][0].padata_value.as_ref(), b"MIT-cookie");
+}
+
 fn encode_preauth_required(method: &MethodData) -> Vec<u8> {
     encode(&KrbError {
         pvno: KrbError::PVNO,

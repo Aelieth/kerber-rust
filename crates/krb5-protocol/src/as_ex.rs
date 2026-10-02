@@ -499,10 +499,12 @@ fn continue_preauth(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
     )?;
-    let padata = vec![match skew_hint {
+    // MIT `k5_preauth` (`preauth2.c:992-993`): the KDC's cookie leads the next request's padata.
+    let mut padata = error_cookie(preauth_err);
+    padata.push(match skew_hint {
         Some(t) => pa_enc_timestamp_at(&client_key, t)?,
         None => pa_enc_timestamp(&client_key)?,
-    }];
+    });
     let second = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
     let reply = exchange(req.kdc, &wire)?;
@@ -523,7 +525,10 @@ fn continue_preauth(
         ),
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             let skew_time = e.stime.clone();
-            let padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
+            // MIT `k5_preauth_tryagain` (`preauth2.c:926-927`): the error's cookie follows the
+            // module's retried padata.
+            let mut padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
+            padata.extend(error_cookie(&e));
             let third = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
             let wire = encode(&third)?;
             let reply = exchange(req.kdc, &wire)?;
@@ -548,7 +553,8 @@ fn continue_preauth(
         }
         KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
             let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
-            let padata = vec![pa_enc_timestamp(&client_key)?];
+            let mut padata = vec![pa_enc_timestamp(&client_key)?];
+            padata.extend(error_cookie(&e));
             let retry = build_as_req_from(req, nonce, bound, Some(padata), &etypes)?;
             let wire = encode(&retry)?;
             let reply = exchange(req.kdc, &wire)?;
@@ -696,6 +702,18 @@ fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {
 
 fn find_pa(method: &[PaData], ty: i32) -> Option<&PaData> {
     method.iter().find(|p| p.padata_type == ty)
+}
+
+/// MIT `copy_cookie` (`preauth2.c:857-884`): the PA-FX-COOKIE an error's e-data carries, to be
+/// sent back as it came.
+/// MIT `krb5int_fast_process_error` (`fast.c:494-507`): e-data that is no padata sequence
+/// carries no cookie and fails nothing.
+fn error_cookie(e: &KrbError) -> Vec<PaData> {
+    method_from_error(e)
+        .ok()
+        .and_then(|m| find_pa(&m, pa::FX_COOKIE).cloned())
+        .into_iter()
+        .collect()
 }
 
 fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
