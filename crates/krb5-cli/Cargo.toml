@@ -9,7 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-nix = { workspace = true, features = ["term"] }
+nix = { workspace = true, features = ["poll", "signal", "term"] }
 thiserror.workspace = true
 zeroize.workspace = true
 

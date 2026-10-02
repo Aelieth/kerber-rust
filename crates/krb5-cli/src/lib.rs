@@ -6,7 +6,9 @@
 //!   instead (`kdb5_util`'s global options, `kadmind`), with options such as `-nofork`,
 //!   `-port N` and `-sf FILE`.
 //! - [`Prompter`]: MIT `krb5_prompter_posix` and `krb5_read_password`, one line per prompt
-//!   from a pipe, echo off on a terminal.
+//!   from a pipe, echo off on a terminal, Ctrl-C reported as an interrupted read.
+//! - [`Stdin`] and [`SignalCatch`]: stdin read a byte at a time, as MIT's tools set it, and the
+//!   signals a read catches instead of ending the process.
 //!
 //! # Examples
 //!
@@ -43,7 +45,10 @@
 mod args;
 mod getopt;
 mod prompt;
+mod stdin;
 
 pub use args::{ArgError, MitArgs, MitOpt, Placement};
 pub use getopt::{LongOpt, Opt, getopt};
+pub use nix::sys::signal::Signal;
 pub use prompt::{PromptError, Prompter, prompt_hidden, read_password};
+pub use stdin::{Caught, LineEnd, SignalCatch, Stdin, caught, fgets, line_mode, take_caught};

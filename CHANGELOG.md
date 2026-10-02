@@ -1301,6 +1301,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **cli.** Ctrl-C at a password prompt is `Password read interrupted` with the terminal's echo
+  back, as MIT's prompter has it (it ended the tool with echo off); stdin is read a byte at a
+  time, so a reply leaves the rest of the input. Units.
 - **admin.** `krb5-ktutil addent -password` asks `Password for <principal>` and reads the next
   line of its command stream, as MIT's; it hung there before (stdin locked twice). Unit; live.
 - **kdc/admin.** After detaching, the daemons open a relative `database_name` or

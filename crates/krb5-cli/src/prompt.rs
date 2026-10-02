@@ -3,8 +3,11 @@
 
 use std::io::{self, BufRead, IsTerminal as _, Write};
 
+use nix::sys::signal::Signal;
 use nix::sys::termios::{LocalFlags, SetArg, Termios, tcgetattr, tcsetattr};
 use zeroize::Zeroizing;
+
+use crate::stdin::{LineEnd, SignalCatch, Stdin, fgets};
 
 /// Why a prompt got no password.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -17,6 +20,10 @@ pub enum PromptError {
     /// MIT `KRB5_LIBOS_BADPWDMATCH` (`krb5_err.et:177-177`): the text.
     #[error("Password mismatch")]
     Mismatch,
+    /// `SIGINT` (Ctrl-C) came while the reply was read.
+    /// MIT `KRB5_LIBOS_PWDINTR` (`krb5_err.et:178-178`): the text.
+    #[error("Password read interrupted")]
+    Interrupted,
 }
 
 /// Prompts written to `output`, replies read from `input` one line each, so the rest of
@@ -27,11 +34,12 @@ pub struct Prompter<R, W> {
     terminal: bool,
 }
 
-impl Prompter<io::StdinLock<'static>, io::Stdout> {
-    /// Prompts on stdout, replies from stdin, echo off while a reply is typed on a terminal.
+impl Prompter<Stdin, io::Stdout> {
+    /// Prompts on stdout, replies from stdin read a byte at a time, echo off while a reply is
+    /// typed on a terminal.
     #[must_use]
     pub fn stdio() -> Self {
-        Self::terminal(io::stdin().lock(), io::stdout())
+        Self::terminal(Stdin::unbuffered(), io::stdout())
     }
 }
 
@@ -46,8 +54,8 @@ impl<R: BufRead, W: Write> Prompter<R, W> {
         }
     }
 
-    /// As [`Self::new`] for an `input` that reads stdin (a held [`io::StdinLock`]): when stdin
-    /// is a terminal, its echo is off while each reply is typed.
+    /// As [`Self::new`] for an `input` that reads stdin (a [`Stdin`]): when stdin is a
+    /// terminal, its echo is off while each reply is typed.
     #[must_use]
     pub const fn terminal(input: R, output: W) -> Self {
         Self {
@@ -57,18 +65,21 @@ impl<R: BufRead, W: Write> Prompter<R, W> {
         }
     }
 
-    /// One hidden prompt: `prompt` and `: `, a line read with the terminal's echo off, then a
-    /// newline. The reply is the line without its `\n`.
+    /// One hidden prompt: `prompt` and `: `, a line read with the terminal's echo off and
+    /// `SIGINT` caught, then a newline. The reply is the line without its `\n`.
     /// MIT `krb5_prompter_posix` (`prompter.c:78-92`): the prompt and `: ` on stdout, flushed,
     /// the reply read with `fgets`, and `\n` printed after a hidden reply, tty or not.
     /// MIT `krb5_prompter_posix` (`prompter.c:93-104`): end of input is
-    /// `KRB5_LIBOS_CANTREADPWD`; only the `\n` is cut, so a `\r` stays in the reply.
+    /// `KRB5_LIBOS_CANTREADPWD`, a read `SIGINT` cut short `KRB5_LIBOS_PWDINTR`, and the
+    /// terminal's mode comes back either way; only the `\n` is cut, so a `\r` stays in the reply.
     ///
     /// # Errors
     ///
     /// [`PromptError::CantRead`] when input ends or fails before a line, or the terminal's
-    /// echo cannot be turned off.
+    /// echo cannot be turned off; [`PromptError::Interrupted`] when `SIGINT` comes while the
+    /// reply is read from a [`Stdin`].
     pub fn hidden(&mut self, prompt: &str) -> Result<Zeroizing<Vec<u8>>, PromptError> {
+        let sigint = SignalCatch::new(&[Signal::SIGINT]);
         let echo = if self.terminal {
             EchoOff::on_stdin()?
         } else {
@@ -77,18 +88,20 @@ impl<R: BufRead, W: Write> Prompter<R, W> {
         let _ = write!(self.output, "{prompt}: ");
         let _ = self.output.flush();
         let mut line = Zeroizing::new(Vec::with_capacity(1024));
-        let read = self.input.read_until(b'\n', &mut line);
+        let read = fgets(&mut self.input, usize::MAX, &mut line);
         let _ = writeln!(self.output);
         let _ = self.output.flush();
         drop(echo);
+        drop(sigint);
         match read {
-            Ok(0) | Err(_) => Err(PromptError::CantRead),
-            Ok(_) => {
+            LineEnd::Read => {
                 if line.last() == Some(&b'\n') {
                     line.pop();
                 }
                 Ok(line)
             }
+            LineEnd::Caught(Signal::SIGINT) => Err(PromptError::Interrupted),
+            LineEnd::Caught(_) | LineEnd::End | LineEnd::Failed => Err(PromptError::CantRead),
         }
     }
 
@@ -237,5 +250,18 @@ mod tests {
         }
         assert_eq!(input, b"listprincs\n");
         assert_eq!(out, b"Password for a: \nPassword for b: \n");
+    }
+
+    #[test]
+    fn sigint_while_the_reply_is_read_is_an_interrupted_read() {
+        let session = crate::SignalCatch::new(&[Signal::SIGINT]);
+        nix::sys::signal::raise(Signal::SIGINT).unwrap();
+        let mut out = Vec::new();
+        let got = Prompter::new(Stdin::unbuffered(), &mut out).password(KDB5_PROMPT, None);
+        drop(session);
+        let e = got.unwrap_err();
+        assert_eq!(e, PromptError::Interrupted);
+        assert_eq!(e.to_string(), "Password read interrupted");
+        assert_eq!(out, b"Enter KDC database master key: \n");
     }
 }
