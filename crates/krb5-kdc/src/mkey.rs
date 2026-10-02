@@ -44,9 +44,21 @@ pub fn default_master_etype() -> EncryptionType {
 ///
 /// `<name>: <why>` when `master_key_type` names no enctype this port supports.
 pub fn master_etype(master_key_type: Option<&str>) -> Result<EncryptionType, String> {
-    master_key_type.map_or(Ok(default_master_etype()), |name| {
-        EncryptionType::from_mit_name(name).map_err(|e| format!("{name}: {e}"))
-    })
+    master_key_type.map_or(Ok(default_master_etype()), string_to_enctype)
+}
+
+/// The enctype `name` names, as the KDB tools read `master_key_type` and `kdb5_util -k`.
+/// MIT `krb5_string_to_enctype` (`lib/crypto/krb/enctype_util.c:89-114`): an enctype's name or alias, compared without case; a number is no name.
+///
+/// # Errors
+///
+/// `<name>: <why>` when `name` is a number, has blanks around it, or names no enctype this port
+/// supports.
+pub fn string_to_enctype(name: &str) -> Result<EncryptionType, String> {
+    if name.trim() != name || name.parse::<i64>().is_ok() {
+        return Err(format!("{name}: not an enctype name"));
+    }
+    EncryptionType::from_mit_name(name).map_err(|e| format!("{name}: {e}"))
 }
 
 #[cfg(test)]

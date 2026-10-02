@@ -76,14 +76,15 @@ pub use listen::{
     bind_preferred, bind_tcp_listeners, bind_udp_listeners, drop_privileges, serve, serve_all,
     serve_all_until, serve_until, shared_dump, shared_store,
 };
-pub use mkey::{default_master_etype, master_etype, master_key_from_password};
+pub use mkey::{default_master_etype, master_etype, master_key_from_password, string_to_enctype};
 pub use osa::{
     KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt, decrypt_entry as decrypt_history_entry,
     history_entry as encrypt_history_entry,
 };
 pub use persist::{
-    CreateError, DbWrite, PersistError, create_store, load_store, read_stash, save_store,
-    save_store_fresh, save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
+    CreateError, DbWrite, PersistError, create_store, load_store, read_stash, save_dump_text,
+    save_store, save_store_fresh, save_store_legacy_kdb3, save_store_with_master, stash_keys,
+    write_stash,
 };
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,

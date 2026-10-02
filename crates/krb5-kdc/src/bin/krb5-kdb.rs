@@ -14,12 +14,14 @@
 //! - `dump [-r18] [-verbose] [-rev] [-recurse] [filename [principals...]]`: the database as
 //!   stored, keys still wrapped; principals are whole-name regular expressions.
 //! - `load [-r18] [-hash] [-verbose] [-update] filename`: a full load replaces the database
-//!   with a new file; `-update` merges the records into it. The dump's keys are opened with the
-//!   stash, else `-P`, else (`-m`) a typed master password.
+//!   with a new file; `-update` merges the records into it. The dump's keys are opened with
+//!   `-P`, else (`-m`) a typed master password, else the stash.
 //! - `destroy [-f]`.
 //!
-//! MIT's other commands, `-b7` / `-r13` / iprop dumps, master key conversion, `-M` other than
-//! `K/M`, `-kv` outside `create` and `-x` database arguments are refused.
+//! Of db2's `-x` arguments, `dbname=` and `temporary` name the database file, and `hash=`,
+//! `merge_nra`, `lockiter` and `unlockiter` change nothing this store keeps. MIT's other
+//! commands, `-b7` / `-r13` / iprop dumps, master key conversion, `-M` other than `K/M` and `-kv`
+//! outside `create` are refused.
 //!
 //! With the `test-hooks` feature the gates' commands `addpol`, `setstr`, `alias` and
 //! `setlastpwd` are added, `KRB5_MASTER_PASSWORD` stands in for `-P` on `create` and for a
@@ -30,7 +32,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
-use std::io::{self, BufRead as _, Write as _};
+use std::io::{self, BufRead as _, Read as _, Seek as _, SeekFrom, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -40,7 +42,8 @@ use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{
     CreateError, DbWrite, DumpError, DumpFile, DumpPrincipal, KDB_DUMP_VERSION, PersistError,
     create_realm, create_store, kdc_conf_for_realm, load_dump_with_key, master_key_from_password,
-    parse_dump, save_store_with_master, stash_keys, update_store, write_stash,
+    parse_dump, save_dump_text, save_store_with_master, stash_keys, string_to_enctype,
+    update_store, write_stash,
 };
 
 /// MIT `usage` (`kadmin/dbutil/kdb5_util.c:77-107`): the text, on stderr, then exit status 1.
@@ -128,14 +131,66 @@ impl Command {
 struct Util {
     progname: String,
     realm: Option<String>,
+    /// The realm's paths; `database_name` is MIT's `global_params.dbname` (`-d`, else kdc.conf),
+    /// the name the messages give.
     paths: KdcPaths,
+    db_args: DbArgs,
     /// The master key type; `None` when kdc.conf's `master_key_type` names no enctype.
     etype: Option<EncryptionType>,
     password: Option<String>,
     manual: bool,
     kvno: Option<u32>,
-    db_args: Vec<String>,
     exit_status: u8,
+}
+
+/// db2's database arguments: every `-x`, and the `dbname=` each `-d` adds, in command-line order.
+/// MIT `main` (`kadmin/dbutil/kdb5_util.c:233-249`): `-d` names the database and adds `dbname=` to the arguments.
+struct DbArgs {
+    /// The last `dbname=`: the database file db2 opens, else kdc.conf's.
+    file: PathBuf,
+    /// `temporary`: db2 opens the temporary database beside it, `<file>~`.
+    temporary: bool,
+    /// The first argument db2 does not take, by the name MIT gives it.
+    unsupported: Option<String>,
+}
+
+impl DbArgs {
+    /// MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:221-246`): `dbname=` and `temporary` name the file; `hash=`, `merge_nra`, `lockiter` and `unlockiter` set what db2 alone keeps; any other is refused by its option name.
+    fn parse(opts: &[(&str, Option<String>)], configured: &Path) -> Self {
+        let mut args = Self {
+            file: configured.to_path_buf(),
+            temporary: false,
+            unsupported: None,
+        };
+        for (name, value) in opts {
+            let v = value.as_deref().unwrap_or_default();
+            match *name {
+                "-d" => args.file = PathBuf::from(v),
+                "-x" => match v.split_once('=') {
+                    Some(("dbname", path)) => args.file = PathBuf::from(path),
+                    None if v == "temporary" => args.temporary = true,
+                    Some(("hash", _)) => {}
+                    None if matches!(v, "merge_nra" | "lockiter" | "unlockiter") => {}
+                    other => {
+                        let opt = other.map_or(v, |(opt, _)| opt);
+                        args.unsupported.get_or_insert_with(|| opt.to_owned());
+                    }
+                },
+                _ => {}
+            }
+        }
+        args
+    }
+
+    /// The file db2 opens: the temporary one when `temporary` was given.
+    /// MIT `ctx_dbsuffix` (`plugins/kdb/db2/kdb_db2.c:292-303`): a temporary database's files carry a `~`.
+    fn open_file(&self) -> PathBuf {
+        if self.temporary {
+            with_suffix(&self.file, "~")
+        } else {
+            self.file.clone()
+        }
+    }
 }
 
 impl Util {
@@ -231,7 +286,7 @@ fn run(progname: String, args: &[String]) -> u8 {
     for (name, value) in &parsed.opts {
         let v = value.as_deref().unwrap_or_default();
         let bad = match *name {
-            "-k" if EncryptionType::from_mit_name(v).is_err() => "is an invalid enctype",
+            "-k" if string_to_enctype(v).is_err() => "is an invalid enctype",
             "-kv" if c_atoi(v) == 0 => "is an invalid mkeyVNO",
             _ => continue,
         };
@@ -258,6 +313,7 @@ fn run(progname: String, args: &[String]) -> u8 {
             return 1;
         }
     };
+    let db_args = DbArgs::parse(&parsed.opts, &paths.database_name);
     if let Some(d) = parsed.value("-d") {
         paths.database_name = PathBuf::from(d);
     }
@@ -275,9 +331,10 @@ fn run(progname: String, args: &[String]) -> u8 {
     if kvno.is_some_and(|k| k != 1) && command != Command::Create {
         return usage();
     }
-    // MIT `main` (`kadmin/dbutil/kdb5_util.c:330-335`): a master key type that names no enctype is reported, then left unset.
+    // MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:546-551`): a `master_key_type` that names no enctype leaves the type 0.
+    // MIT `main` (`kadmin/dbutil/kdb5_util.c:330-335`): a type other than `ENCTYPE_UNKNOWN` that is no valid enctype is reported, so 0 is, and stays the type.
     let etype = if let Some(k) = parsed.value("-k") {
-        EncryptionType::from_mit_name(k).ok()
+        string_to_enctype(k).ok()
     } else {
         let configured = krb5_kdc::master_etype(paths.master_key_type.as_deref()).ok();
         if configured.is_none() {
@@ -291,11 +348,11 @@ fn run(progname: String, args: &[String]) -> u8 {
         progname,
         realm,
         paths,
+        db_args,
         etype,
         password: parsed.value("-P").map(str::to_owned),
         manual: parsed.flag("-m"),
         kvno,
-        db_args: parsed.values("-x").into_iter().map(str::to_owned).collect(),
         exit_status: 0,
     };
     let cmd_args = &parsed.operands;
@@ -376,13 +433,14 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
         return util.failed();
     };
     let creating = format!("while creating database '{}'", db.display());
-    if let Some(arg) = util.db_args.first() {
+    if let Some(arg) = &util.db_args.unsupported {
         util.com_err(
             &format!("Unsupported argument \"{arg}\" for db2"),
             &creating,
         );
         return util.failed();
     }
+    let file = util.db_args.open_file();
     let kdc = match realm_kdc_conf(util, &realm) {
         Ok(k) => k,
         Err(e) => {
@@ -404,13 +462,20 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
             return util.failed();
         }
     };
-    match create_store(&store, &db, &master) {
+    // MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:710-716`): a temporary database's leftover files are destroyed before it is created.
+    if util.db_args.temporary {
+        let _ = destroy_file(&file);
+        for suffix in [".kadm5", ".kadm5.lock"] {
+            let _ = fs::remove_file(with_suffix(&file, suffix));
+        }
+    }
+    match create_store(&store, &file, &master) {
         Ok(()) => {}
         Err(CreateError::Create(e)) => {
             let why = if e.kind() == io::ErrorKind::AlreadyExists {
                 format!(
                     "Cannot open DB2 database '{}': {}",
-                    db.display(),
+                    file.display(),
                     strerror(&e)
                 )
             } else {
@@ -470,8 +535,8 @@ struct OpenDb {
 /// it against that entry. A key that cannot be fetched or does not match is a warning: the
 /// command still runs, without it, and the exit status is raised.
 fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
-    let db = util.db().to_path_buf();
-    if let Some(arg) = util.db_args.first() {
+    let db = util.db_args.open_file();
+    if let Some(arg) = &util.db_args.unsupported {
         util.com_err(
             &format!("Unsupported argument \"{arg}\" for db2"),
             "while initializing database",
@@ -682,7 +747,7 @@ fn dump(util: &mut Util, args: &[String], db: &OpenDb) -> u8 {
         .iter()
         .filter(|p| name_matches(util, &p.name, names))
         .collect();
-    // MIT `krb5_db_iterate` over db2 walks the btree in key order: the unparsed names' bytes.
+    // MIT `ctx_iterate` (`plugins/kdb/db2/kdb_db2.c:1109-1137`): the db2 cursor walks the btree in key order, the unparsed names' bytes; `-rev` walks it back.
     princs.sort_by(|a, b| a.name.as_bytes().cmp(b.name.as_bytes()));
     if rev {
         princs.reverse();
@@ -789,7 +854,8 @@ fn version_name(version: u32) -> &'static str {
 /// replaces the live one, or (`-update`) into the live one.
 ///
 /// MIT copies the records with their keys still wrapped; this port opens them, so it needs the
-/// master key: the stash's, else `-P`'s, else (`-m`) a typed one. The stash must open the dump.
+/// master key that opens the dump: `-P`'s, else (`-m`) a typed one, else the stash's. A dump
+/// with no principal record has no key to open.
 fn load(util: &mut Util, args: &[String]) -> u8 {
     let mut want: Option<u32> = None;
     let (mut verbose, mut update) = (false, false);
@@ -824,7 +890,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         return 1;
     };
     // MIT `load_db` (`kadmin/dbutil/dump.c:1492-1516`): the database is created (or opened with `-update`) with the `-x` arguments before any record is read.
-    if let Some(arg) = util.db_args.first() {
+    if let Some(arg) = &util.db_args.unsupported {
         let context = if update {
             "while opening database"
         } else {
@@ -844,6 +910,9 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             return 1;
         }
     };
+    if dump.princs.is_empty() {
+        return load_policies_only(util, &dump, update, verbose);
+    }
     let Some((key, from_hook)) = load_master_key(util, &dump) else {
         return 1;
     };
@@ -854,8 +923,8 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             return 1;
         }
     };
-    let db = util.db().to_path_buf();
     if update {
+        let db = util.db_args.open_file();
         let first = dump.princs.first().map_or("", |p| p.name.as_str());
         let current = fs::read_to_string(&db).map_err(|e| {
             format!(
@@ -877,7 +946,8 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             util.com_err(&persist_text(&e), &format!("while storing {first}"));
             return 1;
         }
-    } else if let Err(e) = save_store_with_master(&loaded, &db, &key, DbWrite::Fresh) {
+    } else if let Err(e) = save_store_with_master(&loaded, &util.db_args.file, &key, DbWrite::Fresh)
+    {
         util.com_err(&persist_text(&e), "while creating database");
         return 1;
     }
@@ -902,6 +972,75 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         }
     }
     0
+}
+
+/// A dump with no principal record: a full load leaves a database that holds only the dump's
+/// policies (none for a header alone), and `-update` creates or replaces each of them in the
+/// live database. No key is opened, so no master key is fetched.
+/// MIT `restore_dump` (`kadmin/dbutil/dump.c:1364-1379`): the records are read to the end of the file, however few.
+fn load_policies_only(util: &mut Util, dump: &DumpFile, update: bool, verbose: bool) -> u8 {
+    let records = dump.policy_records();
+    if update {
+        let db = util.db_args.open_file();
+        let current = match read_db_text(util, &db) {
+            Ok(t) => t,
+            Err(why) => {
+                util.com_err(
+                    &format!("Cannot open DB2 database '{}': {why}", db.display()),
+                    "while opening database",
+                );
+                return 1;
+            }
+        };
+        if !records.is_empty()
+            && let Err(e) = save_dump_text(
+                &db,
+                &merge_policy_records(&current, &records),
+                DbWrite::InPlace,
+            )
+        {
+            util.com_err(&persist_text(&e), "while creating policy");
+            return 1;
+        }
+    } else {
+        let mut text = format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n");
+        for r in &records {
+            text.push_str(r);
+            text.push('\n');
+        }
+        if let Err(e) = save_dump_text(&util.db_args.file, &text, DbWrite::Fresh) {
+            util.com_err(&persist_text(&e), "while creating database");
+            return 1;
+        }
+    }
+    if verbose {
+        for pol in &dump.policies {
+            let name = pol.split('\t').next().unwrap_or_default();
+            err_line(&format!("created policy {name}"));
+        }
+    }
+    0
+}
+
+/// `current` dump text with each of `records` in place of the policy of its name, else added.
+/// MIT `process_k5beta7_policy` (`kadmin/dbutil/dump.c:820-822`): a policy is created, else replaced.
+fn merge_policy_records(current: &str, records: &[String]) -> String {
+    let name = |line: &str| {
+        line.strip_prefix("policy\t")
+            .and_then(|rest| rest.split('\t').next())
+            .map(str::to_owned)
+    };
+    let mut lines: Vec<String> = current.lines().map(str::to_owned).collect();
+    for rec in records {
+        let want = name(rec);
+        match lines.iter().position(|l| want.is_some() && name(l) == want) {
+            Some(i) => lines[i].clone_from(rec),
+            None => lines.push(rec.clone()),
+        }
+    }
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1447-1475`): the header names the dump's format, or must
@@ -966,33 +1105,13 @@ fn restore_failed(util: &Util, file: &str, version: u32, why: &str) {
 
 /// The master key that opens the dump being loaded, and whether it came from the test hook
 /// (which also writes the missing stash). `None` after the failure is reported.
+/// MIT `open_db_and_mkey` (`kadmin/dbutil/kdb5_util.c:411-452`): a `-P` password, else one typed for `-m`, else the stash.
 fn load_master_key(util: &mut Util, dump: &DumpFile) -> Option<(ProtocolKey, bool)> {
     let realm = dump.realm().map(str::to_owned).unwrap_or_default();
     let km = dump.princ(&format!("K/M@{realm}"));
     let opens = |k: &ProtocolKey| km.is_none_or(|km| km.opens_with(k));
-    match fs::read(&util.paths.key_stash_file) {
-        Ok(bytes) => {
-            let found = stash_keys(&bytes).into_iter().find(|k| opens(k));
-            if found.is_none() {
-                util.com_err(BAD_MASTER_KEY, "while getting master key list");
-            }
-            return found.map(|k| (k, false));
-        }
-        Err(e) if e.kind() != io::ErrorKind::NotFound => {
-            util.com_err(
-                &format!("Can not fetch master key (error: {}).", strerror(&e)),
-                "while reading master key",
-            );
-            return None;
-        }
-        Err(_) => {}
-    }
     let etype = dump.master_etype().or(util.etype);
     let derive = |pw: &[u8]| etype.and_then(|e| master_key_from_password(&realm, pw, e).ok());
-    #[cfg(feature = "test-hooks")]
-    let hooked = hooks::master_password();
-    #[cfg(not(feature = "test-hooks"))]
-    let hooked: Option<String> = None;
     let (key, from_hook) = if let Some(pw) = util.password.clone() {
         (derive(pw.as_bytes()), false)
     } else if util.manual {
@@ -1003,14 +1122,36 @@ fn load_master_key(util: &mut Util, dump: &DumpFile) -> Option<(ProtocolKey, boo
                 return None;
             }
         }
-    } else if let Some(pw) = hooked {
-        (derive(pw.as_bytes()), true)
     } else {
-        util.com_err(
-            "Can not fetch master key (error: No such file or directory).",
-            "while reading master key",
-        );
-        return None;
+        match fs::read(&util.paths.key_stash_file) {
+            Ok(bytes) => {
+                let found = stash_keys(&bytes).into_iter().find(|k| opens(k));
+                if found.is_none() {
+                    util.com_err(BAD_MASTER_KEY, "while getting master key list");
+                }
+                return found.map(|k| (k, false));
+            }
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                util.com_err(
+                    &format!("Can not fetch master key (error: {}).", strerror(&e)),
+                    "while reading master key",
+                );
+                return None;
+            }
+            Err(_) => {}
+        }
+        #[cfg(feature = "test-hooks")]
+        let hooked = hooks::master_password();
+        #[cfg(not(feature = "test-hooks"))]
+        let hooked: Option<String> = None;
+        let Some(pw) = hooked else {
+            util.com_err(
+                "Can not fetch master key (error: No such file or directory).",
+                "while reading master key",
+            );
+            return None;
+        };
+        (derive(pw.as_bytes()), true)
     };
     let Some(key) = key else {
         util.com_err(
@@ -1049,18 +1190,47 @@ fn destroy(util: &mut Util, args: &[String]) -> u8 {
         }
         out_line(&format!("OK, deleting database '{}'...", db.display()));
     }
-    if let Err(e) = fs::remove_file(&db) {
+    let file = util.db_args.open_file();
+    if let Err(e) = fs::remove_file(&file) {
         util.com_err(
             &strerror(&e),
             &format!("deleting database '{}'", db.display()),
         );
         return util.failed();
     }
-    let mut ulog = db.as_os_str().to_os_string();
-    ulog.push(".ulog");
-    let _ = fs::remove_file(ulog);
+    let _ = fs::remove_file(with_suffix(&file, ".ulog"));
     out_line(&format!("** Database '{}' destroyed.", db.display()));
     util.exit_status
+}
+
+/// Zero `path` and unlink it: each block that is not all zeros already is overwritten with
+/// zeros, and the file is synced before it is removed.
+/// MIT `destroy_file` (`plugins/kdb/db2/kdb_db2.c:619-682`): `BUFSIZ` blocks are read, those with a nonzero byte written over with zeros, then `fsync` and `unlink`.
+fn destroy_file(path: &Path) -> io::Result<()> {
+    const BUFSIZ: usize = 8192;
+    let mut f = fs::OpenOptions::new().read(true).write(true).open(path)?;
+    let mut buf = [0u8; BUFSIZ];
+    loop {
+        let pos = f.stream_position()?;
+        let n = f.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        if buf[..n].iter().any(|&b| b != 0) {
+            f.seek(SeekFrom::Start(pos))?;
+            f.write_all(&[0u8; BUFSIZ][..n])?;
+        }
+    }
+    f.sync_all()?;
+    drop(f);
+    fs::remove_file(path)
+}
+
+/// `path` with `suffix` appended to its last component.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(suffix);
+    PathBuf::from(name)
 }
 
 /// The gates' own commands and environment, outside MIT's `kdb5_util`.
@@ -1118,10 +1288,10 @@ mod hooks {
         util: &Util,
         f: impl FnOnce(&mut krb5_kdc::PrincipalStore) -> Result<(), (u8, String)>,
     ) -> Result<(), (u8, String)> {
-        let (db, stash) = (&util.paths.database_name, &util.paths.key_stash_file);
-        let mut store = load_store(db, stash).map_err(|e| (1, format!("load store: {e}")))?;
+        let (db, stash) = (util.db_args.open_file(), &util.paths.key_stash_file);
+        let mut store = load_store(&db, stash).map_err(|e| (1, format!("load store: {e}")))?;
         f(&mut store)?;
-        save_store(&store, db, stash).map_err(|e| (1, format!("save store: {e}")))
+        save_store(&store, &db, stash).map_err(|e| (1, format!("save store: {e}")))
     }
 
     /// A named policy, bound to `user` when that principal exists.

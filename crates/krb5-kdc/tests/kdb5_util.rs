@@ -365,6 +365,19 @@ fn usage_and_option_errors_are_mits() {
             &["-k", "no-such-enctype", "create", "-s"][..],
             "kdb5_util: Invalid argument : no-such-enctype is an invalid enctype\n",
         ),
+        // MIT `krb5_string_to_enctype` takes names only, as given: no number, no blanks.
+        (
+            &["-k", "18", "dump", "-"],
+            "kdb5_util: Invalid argument : 18 is an invalid enctype\n",
+        ),
+        (
+            &["-k", " aes256-cts", "dump", "-"],
+            "kdb5_util: Invalid argument :  aes256-cts is an invalid enctype\n",
+        ),
+        (
+            &["-k", "aes256-cts-hmac-sha1-96", "-k", "17", "dump", "-"],
+            "kdb5_util: Invalid argument : 17 is an invalid enctype\n",
+        ),
         (
             &["-kv", "0", "create"],
             "kdb5_util: Invalid argument : 0 is an invalid mkeyVNO\n",
@@ -540,9 +553,246 @@ fn a_wrong_master_password_warns_and_dump_still_writes() {
          kdb5_util: Warning: proceeding without master key list\n"
     );
     assert!(realm.dir.join("d2").exists());
-    // MIT's load reads no master key: with the stash present, a wrong -P changes nothing.
+    // MIT's load reads no master key; this one opens the dump with -P's key before the stash's.
     let out = realm.run(&["-P", "wrong", "load", "d2"], "");
+    assert_eq!(status(&out), 1);
+    assert_eq!(
+        text(&out.stderr),
+        "kdb5_util: Unable to decrypt latest master key with the provided master key\n while getting master key list\n"
+    );
+}
+
+#[test]
+fn load_takes_p_before_the_stash() {
+    let realm = Realm::new("kdb5-load-p-first", Realm::sha1());
+    realm.create();
+    let other = Realm::new("kdb5-load-p-other", Realm::sha1());
+    let out = other.run(&["-P", "other-master", "create", "-s"], "");
     assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let out = other.run(&["dump", "other.dump"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let dumped = other.dir.join("other.dump");
+    // The stash does not open the other realm's dump; its own master password does.
+    let out = realm.run(&["load", dumped.to_str().unwrap()], "");
+    assert_eq!(status(&out), 1);
+    let out = realm.run(
+        &["-P", "other-master", "load", dumped.to_str().unwrap()],
+        "",
+    );
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let out = realm.run(&["-m", "load", dumped.to_str().unwrap()], "other-master\n");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(text(&out.stdout), "Enter KDC database master key: \n");
+}
+
+#[test]
+fn a_dump_with_no_principal_loads_a_database_with_none() {
+    let realm = Realm::new("kdb5-load-empty", Realm::sha1());
+    std::fs::write(realm.dir.join("h7"), "kdb5_util load_dump version 7\n").unwrap();
+    std::fs::write(realm.dir.join("h6"), "kdb5_util load_dump version 6\n").unwrap();
+    let policy = "policy\tp1\t0\t0\t8\t1\t1\t0\t0\t0\t0\t0\t0\t0\t-\t0";
+    std::fs::write(
+        realm.dir.join("p1"),
+        format!("kdb5_util load_dump version 7\n{policy}\n"),
+    )
+    .unwrap();
+    // No stash and no -P: there is no key to open, as MIT reads none.
+    let out = realm.run(&["load", "h7"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(
+        std::fs::read_to_string(&realm.db).unwrap(),
+        "kdb5_util load_dump version 7\n"
+    );
+    assert_eq!(mode(&realm.db), 0o600);
+    for args in [&["dump", "-"][..], &["destroy", "-f"]] {
+        let out = realm.run(args, "");
+        assert_eq!(status(&out), 1, "{args:?}");
+        assert_eq!(
+            text(&out.stderr),
+            "kdb5_util: No such entry in the database while retrieving master entry\n"
+        );
+    }
+    let out = realm.run(&["load", "-r18", "h6"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let out = realm.run(&["load", "-verbose", "p1"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "created policy p1\n");
+    assert_eq!(
+        std::fs::read_to_string(&realm.db).unwrap(),
+        format!("kdb5_util load_dump version 7\n{policy}\n")
+    );
+    // -update with no principal: the live database keeps its records and gains the policies.
+    let live = Realm::new("kdb5-load-empty-update", Realm::sha1());
+    live.create();
+    let before = std::fs::read_to_string(&live.db).unwrap();
+    let out = live.run(
+        &["load", "-update", realm.dir.join("h7").to_str().unwrap()],
+        "",
+    );
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(std::fs::read_to_string(&live.db).unwrap(), before);
+    let out = live.run(
+        &["load", "-update", realm.dir.join("p1").to_str().unwrap()],
+        "",
+    );
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(
+        std::fs::read_to_string(&live.db).unwrap(),
+        format!("{before}{policy}\n")
+    );
+    assert_eq!(live.store().ids().len(), 4);
+}
+
+/// MIT `ctx_create_db` (`kdb_db2.c:710-716`): `-x temporary` destroys a leftover temporary
+/// database before creating it, where a plain create refuses an existing one; settled live
+/// (`mit-temporary.txt`).
+#[test]
+fn temporary_create_destroys_a_leftover_first() {
+    let realm = Realm::new("kdb5-temporary-leftover", Realm::sha1());
+    let temp = realm.dir.join("principal~");
+    let temp_policy = realm.dir.join("principal~.kadm5");
+    std::fs::write(&temp, "junk").unwrap();
+    std::fs::write(&temp_policy, "junk").unwrap();
+    let out = realm.run(&["-x", "temporary", "-P", "kl-master", "create", "-s"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        std::fs::read_to_string(&temp)
+            .unwrap()
+            .starts_with("kdb5_util load_dump version 7\n")
+    );
+    assert!(!temp_policy.exists());
+    assert!(!realm.db.exists(), "a temporary database is not made live");
+    std::fs::write(&realm.db, "junk").unwrap();
+    let out = realm.run(&["-P", "kl-master", "create", "-s"], "");
+    assert_eq!(status(&out), 1);
+}
+
+#[test]
+fn db_arguments_are_db2s() {
+    let realm = Realm::new("kdb5-db-args", Realm::sha1());
+    realm.create();
+    let db = realm.db.display().to_string();
+    for (args, context) in [
+        (
+            &["-x", "foo=bar", "dump", "-"][..],
+            "while initializing database",
+        ),
+        (
+            &["-x", "hash", "stash", "-f", "s2"],
+            "while initializing database",
+        ),
+        (
+            &["-x", "foo=bar", "load", "x.dump"],
+            "while creating database",
+        ),
+        (
+            &["-x", "temporary=1", "destroy", "-f"],
+            "while initializing database",
+        ),
+    ] {
+        std::fs::write(realm.dir.join("x.dump"), "kdb5_util load_dump version 7\n").unwrap();
+        let out = realm.run(args, "");
+        assert_eq!(status(&out), 1, "{args:?}");
+        let name = args[1].split('=').next().unwrap();
+        assert_eq!(
+            text(&out.stderr),
+            format!("kdb5_util: Unsupported argument \"{name}\" for db2 {context}\n"),
+            "{args:?}"
+        );
+    }
+    let plain = realm.run(&["dump", "-"], "");
+    let out = realm.run(
+        &[
+            "-x",
+            "hash=1",
+            "-x",
+            "lockiter",
+            "-x",
+            "unlockiter",
+            "-x",
+            "merge_nra",
+            "dump",
+            "-",
+        ],
+        "",
+    );
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(out.stdout, plain.stdout);
+    let out = realm.run(&["-x", "temporary", "dump", "-"], "");
+    assert_eq!(status(&out), 1);
+    assert_eq!(
+        text(&out.stderr),
+        format!(
+            "kdb5_util: Cannot open DB2 database '{db}~': No such file or directory while initializing database\n"
+        )
+    );
+    // dbname= names the file; the messages keep kdc.conf's (or -d's) name, as MIT's do.
+    let alt = realm.dir.join("alt");
+    let alt_stash = realm.dir.join("alt.stash");
+    let x_alt = format!("dbname={}", alt.display());
+    let out = realm.run(
+        &[
+            "-x",
+            &x_alt,
+            "-sf",
+            alt_stash.to_str().unwrap(),
+            "-P",
+            "alt-master",
+            "create",
+            "-s",
+        ],
+        "",
+    );
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert!(text(&out.stdout).starts_with(&format!("Initializing database '{db}' for realm")));
+    assert!(alt.exists() && alt_stash.exists());
+    let alt_dump = realm.run(
+        &[
+            "-x",
+            &x_alt,
+            "-sf",
+            alt_stash.to_str().unwrap(),
+            "dump",
+            "-",
+        ],
+        "",
+    );
+    assert_eq!(status(&alt_dump), 0, "{}", text(&alt_dump.stderr));
+    assert_ne!(alt_dump.stdout, plain.stdout);
+    let last_wins = realm.run(
+        &[
+            "-d",
+            &db,
+            "-x",
+            &x_alt,
+            "-sf",
+            alt_stash.to_str().unwrap(),
+            "dump",
+            "-",
+        ],
+        "",
+    );
+    assert_eq!(last_wins.stdout, alt_dump.stdout);
+    let last_wins = realm.run(&["-x", &x_alt, "-d", &db, "dump", "-"], "");
+    assert_eq!(last_wins.stdout, plain.stdout);
+    let out = realm.run(
+        &[
+            "-x",
+            &x_alt,
+            "-sf",
+            alt_stash.to_str().unwrap(),
+            "destroy",
+            "-f",
+        ],
+        "",
+    );
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stdout),
+        format!("** Database '{db}' destroyed.\n")
+    );
+    assert!(!alt.exists());
+    assert!(realm.db.exists());
 }
 
 #[test]

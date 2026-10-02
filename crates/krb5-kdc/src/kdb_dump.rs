@@ -177,6 +177,15 @@ pub struct DumpKeySlot {
 }
 
 impl DumpFile {
+    /// The dump's policies as the version 7 records a load stores, in dump order.
+    #[must_use]
+    pub fn policy_records(&self) -> Vec<String> {
+        self.policies
+            .iter()
+            .map(|rest| policy_line(&parse_policy_rest(rest)))
+            .collect()
+    }
+
     /// Realm taken from the first principal name.
     ///
     /// # Errors
@@ -438,12 +447,14 @@ impl DumpPrincipal {
 }
 
 /// Parse a MIT dump (header + `princ` / `policy` records).
+/// MIT `restore_dump` (`kadmin/dbutil/dump.c:1364-1379`): records are read until the end of the
+/// file, so a dump with none (the header alone) is a dump.
 ///
 /// # Errors
 ///
-/// [`DumpError::Format`] when the text is empty or holds no `princ` record, the header is not a
-/// version 6 or 7 (or iprop) dump header, a line is neither `princ` nor `policy`, or a `princ`
-/// record has a missing, extra or malformed field.
+/// [`DumpError::Format`] when the text is empty, the header is not a version 6 or 7 (or iprop)
+/// dump header, a line is neither `princ` nor `policy`, or a `princ` record has a missing, extra
+/// or malformed field.
 pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
     let mut lines = text.lines();
     let header = lines
@@ -468,9 +479,6 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
         return Err(DumpError::Format(format!(
             "line {lineno}: unknown record type"
         )));
-    }
-    if princs.is_empty() {
-        return Err(DumpError::Format("dump has no princ records".into()));
     }
     Ok(DumpFile {
         version,
@@ -643,25 +651,29 @@ pub(crate) fn write_dump(store: &PrincipalStore, mkey: &ProtocolKey) -> Result<S
     names.sort();
     for n in names {
         if let Some(pol) = store.policies().get(&n) {
-            // MIT dump version 7 is r1.11: r1.8 nine counters, then
-            // attributes/max_life/max_renewable/allowed_keysalts/n_tl_data.
-            let ks = pol.allowed_keysalts.as_deref().unwrap_or("-");
-            let _ = writeln!(
-                out,
-                "policy\t{}\t{}\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t0\t0\t0\t{ks}\t0",
-                pol.name,
-                pol.pw_min_life,
-                pol.pw_max_life,
-                pol.min_length,
-                pol.min_classes,
-                pol.history,
-                pol.max_fail,
-                pol.pw_failcnt_interval,
-                pol.pw_lockout_duration
-            );
+            out.push_str(&policy_line(pol));
+            out.push('\n');
         }
     }
     Ok(out)
+}
+
+/// One version 7 `policy` record: MIT dump version 7 is r1.11, the r1.8 nine counters, then
+/// attributes, max_life, max_renewable, allowed_keysalts and n_tl_data.
+fn policy_line(pol: &NamedPolicy) -> String {
+    let ks = pol.allowed_keysalts.as_deref().unwrap_or("-");
+    format!(
+        "policy\t{}\t{}\t{}\t{}\t{}\t{}\t0\t{}\t{}\t{}\t0\t0\t0\t{ks}\t0",
+        pol.name,
+        pol.pw_min_life,
+        pol.pw_max_life,
+        pol.min_length,
+        pol.min_classes,
+        pol.history,
+        pol.max_fail,
+        pol.pw_failcnt_interval,
+        pol.pw_lockout_duration
+    )
 }
 
 /// Write a dump file with an explicit master-key etype: a new 0600 file owned by the writer,

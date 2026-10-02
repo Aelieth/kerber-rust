@@ -185,6 +185,28 @@ pub fn save_store_with_master(
     Ok(())
 }
 
+/// Write `text`, dump text with no principal record, as the database: a full load
+/// ([`DbWrite::Fresh`]) leaves it as a new file beside an empty `.ulog`, an update
+/// ([`DbWrite::InPlace`]) rewrites the database alone. No key is wrapped, so no master key is
+/// needed.
+///
+/// # Errors
+///
+/// [`PersistError::Io`] when the database or `.ulog` cannot be written (for
+/// [`DbWrite::InPlace`], an existing database the writer may not open read-write is refused
+/// before any file changes).
+pub fn save_dump_text(db_path: &Path, text: &str, how: DbWrite) -> Result<(), PersistError> {
+    check_writable(db_path, how)?;
+    match how {
+        DbWrite::InPlace => write_secret_file(db_path, text.as_bytes())?,
+        DbWrite::Fresh => {
+            write_fresh_secret_file(db_path, text.as_bytes())?;
+            write_secret_file(&ulog_path(db_path), b"ulog 1\n")?;
+        }
+    }
+    Ok(())
+}
+
 /// Why [`create_store`] wrote nothing.
 #[derive(Debug, thiserror::Error)]
 pub enum CreateError {
