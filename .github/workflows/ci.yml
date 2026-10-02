@@ -43,15 +43,21 @@ jobs:
         with:
           tool: nextest
       - name: build tests
-        run: cargo nextest run --workspace --profile ci --no-run
+        run: cargo nextest run --workspace --profile ci --no-run --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
       - name: test
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
-        run: cargo nextest run --workspace --profile ci
+        run: cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
+      - name: test (release build, no features)
+        # The release-only units: a build without the test-hooks features, as `make build` makes.
+        timeout-minutes: 10
+        env:
+          KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
+        run: cargo nextest run --workspace --profile ci --locked
       - name: doctests
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
-        run: cargo test --workspace --doc
+        run: cargo test --workspace --doc --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
       - name: Annotate nextest failures
         # Job logs are private; the annotations are public and are what
         # scripts/ci-status.py reads. One ::error per failed testcase.
@@ -99,7 +105,7 @@ jobs:
       - name: shellcheck -S style (zero inline disables; .shellcheckrc follows sources)
         run: |
           shellcheck --version
-          shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh
+          shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh
 
   msrv:
     runs-on: ubuntu-latest
@@ -113,7 +119,7 @@ jobs:
         with:
           toolchain: "1.95"
       - name: MSRV 1.95 build (locked)
-        run: cargo build --workspace --all-targets --locked
+        run: cargo build --workspace --all-targets --locked --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
 
   audit:
     runs-on: ubuntu-latest
@@ -329,23 +335,6 @@ jobs:
         run: ./scripts/flags-gate.sh
       - name: renew-gate (MIT kinit -R / kinit -p vs Rust KDC)
         run: ./scripts/renew-gate.sh
-      - name: sssd-renew / kit / gssproxy / nfs (exit 2 until vendored)
-        run: |
-          skip2() {
-            set +e
-            "$@"
-            rc=$?
-            set -e
-            if [ "$rc" -eq 2 ]; then
-              echo "$1 skipped (exit 2)"
-              return 0
-            fi
-            return "$rc"
-          }
-          skip2 ./scripts/sssd-renew-gate.sh
-          skip2 ./scripts/kit-conformance-gate.sh
-          skip2 ./scripts/gssproxy-gate.sh
-          skip2 ./scripts/nfs-krb5p-gate.sh
       - name: postdate-gate (MIT kinit -s / kinit -v vs Rust KDC)
         run: ./scripts/postdate-gate.sh
       - name: getprivs-gate (MIT kadmin getprivs limited ACL actor)

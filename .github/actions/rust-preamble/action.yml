@@ -10,9 +10,9 @@ description: Install the Rust toolchain and lld, then restore the shared cargo c
 
 inputs:
   toolchain:
-    description: rustup toolchain (stable, nightly, or a version such as 1.95)
+    description: rustup toolchain (the pinned release, nightly, or a version such as 1.95)
     required: false
-    default: stable
+    default: "1.99.0"
   components:
     description: comma-separated rustup components (rustfmt, clippy)
     required: false

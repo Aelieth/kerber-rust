@@ -170,8 +170,21 @@ fn modify_cpw_and_lockout_through_alias_act_on_target_and_delete_removes_stub_on
         .unwrap();
     let user = store.get_name(&name(TEST_USER)).unwrap();
     assert_eq!(user.keys.iter().map(|k| k.kvno).max().unwrap(), kvno + 1);
-    store.record_as_outcome(&name("a1"), false);
-    store.record_as_outcome(&name("a1"), false);
+    let wrong = krb5_crypto::ProtocolKey::from_bytes(
+        krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+        &[0u8; 32],
+    )
+    .unwrap();
+    for nonce in [21, 22] {
+        let req = as_req(
+            name("a1"),
+            TEST_REALM,
+            nonce,
+            Some(vec![pa_enc_timestamp(&wrong).unwrap()]),
+        )
+        .unwrap();
+        assert!(issue_as(&store, &req).is_err());
+    }
     assert_eq!(
         store.fail_auth_of(store.get_name(&name(TEST_USER)).unwrap()),
         2

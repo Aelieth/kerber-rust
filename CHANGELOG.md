@@ -39,8 +39,7 @@ client-gate config-key equality; kpasswd subkey zeroize; `delprinc
 -force`; klist `for client` / `starttime==0`; keytab v1 endian;
 `take_der` dup; replay window vs skew; `pa_replay` cap; PKINIT
 `cusec` range; enterprise error code 6; `cms_wrap_signed(None)` pub;
-N4 `create_host` double dump write; N7 reload→save has no dump file
-lock (with db2/LMDB); FAST armor AP-REQ not stored in the TGS replay
+N4 `create_host` double dump write; FAST armor AP-REQ not stored in the TGS replay
 cache (MIT `kinit -T` reuses it); G8a-1 FILE ccache tagged header;
 G8b-1 kinit `-k/-t` unknown-flag parse. Nits: N1 raceprinc-leg
 stderr; N3 `Error::Crypto` flattening + root-fragile `0555` test; N5
@@ -52,6 +51,45 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **client.** The gates' `kvno` `--disable-transited-check`, `--body-realm`, `--renew` and
+  `--renew-ticket`, and `kinit` `--spake`, `--fast`, `--armor-ccache` and `--pkinit*`, are
+  `krb5-client/test-hooks` only: a release build refuses them as MIT's. `strings` finds none.
+- **protocol.** kpasswd wipes its own copies of the new password, the request plaintext and the
+  KRB-PRIV part, once they are encrypted; the copies rasn's encoder makes inside are not wiped.
+- **types/protocol.** `Debug` printed secrets: an `EncryptionKey` and every type holding one
+  (ticket and reply parts, authenticators, credentials), a kpasswd new password, a PAC session key,
+  the PKINIT CA's scalar, a ccache keyblock, a keytab's raw records. Each prints `<redacted>` now.
+- **kdc/admin.** A lockout survives a KDC restart: the KDC and tools change checksummed records in
+  place in `principal.lockout` (only a whole rewrite renames; no link followed), which `getprinc`,
+  `dump` and the KDC's check merge; an iprop load keeps a replica's. Live; unit.
+- **kdc.** Count AS outcomes for lockout as MIT's KDB audit does, once per exchange by its final code
+  (a skew or refused PKINIT is no failure; an anonymous reply stamps the anonymous principal); the
+  failure count interval no longer ends a lock; `[dbmodules]` `disable_*` are read. Live; unit; gate.
+- **kdc/log.** A root tool never writes through a symlink in the KDC or log directory: lock files,
+  the age's retime, `.dump_ok`, `destroy`, the pid file, `FILE:` logs and temp files open
+  `O_NOFOLLOW`; a planted link fails the operation, its target untouched (MIT follows it). Unit.
+- **types/crypto/kdc.** An `EncryptionKey` drop zeroed a copy (now its last handle zeroes the key's
+  buffer); a `P256Keypair` and the KDC's PKINIT shared secret were never wiped; HMAC tails were
+  zeroed as copies; a SPAKE seed missed its wipe on `?`. Unit tests see each wipe; red at the parent.
+- **admin/kdc.** iprop as MIT's `kdb_convert.c`: a replica applies only what an update carries,
+  so an MIT `setstr` or `cpw` no longer re-enables a disabled account or drops pre-auth, expiry or
+  lifetimes; a primary sends only what a change touched, never a key unwrapped. Live; unit; gate.
+- **config/protocol.** A release build reads no password, kdc.conf path or capture directory
+  from the environment (`KRB5_PASSWORD`, `KRB5_KDC_DB`, `KERBER_CAPTURE_DIR`, …): only a
+  `test-hooks` build does, as the gates' are. `strings` over the release binaries; unit.
+- **kdc/admin.** Lock the database between processes as MIT does (`principal.ok`,
+  `principal.kadm5.lock`, OFD locks): a kadmind and a kadmin.local change no longer save over
+  each other. Lost writes were answered as successes, 25/300 principals and 11 `-allow_tix`
+  changes in the KLLDAP-shaped interleave, so a disabled account kept getting tickets; now 0/0,
+  as MIT. Interleave and frozen-commit runs beside the MIT oracle; unit and two-process tests.
+- **protocol/kdc.** Refuse to replace a database, `.ulog`, stash or keytab the writer may not
+  write, as MIT's in-place `O_RDWR` open does: a group that may only read the database could
+  rewrite it through a writable directory. `addpol` / `modpol` report a failed save. Unit.
+- **admin.** Compare an RPCSEC_GSS privacy body's sequence number with the
+  credential's, as for integrity (MIT `xdr_rpc_gss_unwrap_data`), so a sealed
+  body cannot be spliced under another call. Unit, red at the parent.
+- **admin.** Drop `dispatch_kadmind`'s dump op (op 5): no ACL, a `temp_dir()`
+  file, and no MIT counterpart.
 - **docs.** `docs/security.md` has an Open gaps table for behaviour laxer
   than MIT 1.22.2: the CMS ContentInfo type is not checked (`cms_parts`), a
   ledger `deviation` row until the fix.
@@ -455,6 +493,18 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **docs.** [docs/install.md](docs/install.md) upgrades an MIT realm kept on a container volume
+  (KLLDAP's shape): the old image dumps with `-r`, MIT's db2 files move aside only after it, the
+  new image loads, the files go back to their owner. KLLDAP's phase 80 passes on the result.
+- **install.** `make install` puts the KDC programs under MIT's names with Fedora `krb5-server`'s
+  units, sysconfig, tmpfiles.d, logrotate and `kdc.conf` (`dist/`), keeps existing config, refuses
+  package-owned paths and lists what it wrote for `uninstall`; [docs/install.md](docs/install.md). Fedora 43 runs.
+- **log/config.** `krb5_log::klog` writes MIT's daemon log where `[logging]` says. Units.
+- **kdc.** MIT's `AS_REQ` / `TGS_REQ` log lines. Units.
+- **admin.** MIT's kadmind `Request:` and kpasswd `chpw` log lines. Units.
+- **cli.** `krb5-cli`: glibc `getopt` (moved from `krb5-client`; a leading `+` stops at
+  the first operand), exact-spelling option tables for `kdb5_util` / `kadmind`, and the
+  MIT prompter (`krb5_read_password`: one line per prompt from a pipe). Unit-tested.
 - **examples.** `examples/configs/` is a working one-realm `kdc.conf`,
   `krb5.conf` and `kadm5.acl`; its README names each key's reader, what is
   set through the environment, and what MIT reads that this port ignores.
@@ -712,8 +762,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   2.12/2.11 returns `KRB5_FCC_INTERNAL` for `RETRIEVE`/`REPLACE`).
   `scripts/kcm-gate.sh` asserts MIT 1.22.2 `klist` principal names,
   `kswitch`, restart persist, re-prime, `kdestroy`. `KEYRING:` stays
-  unknown. NFS/gssproxy/kit cells honest exit 2; fleet default stays
-  FILE (`docs/kcm-nfs-verdict.md`).
+  unknown. NFS/gssproxy cells not driven over KCM; fleet default stays
+  FILE (`docs/labs/kcm-nfs-verdict.md`).
 - **client.** `krb5-klist` (`-c`/`-f`/`-e`) reads a FILE ccache; `krb5-kdestroy`
   zeros then unlinks. Bidirectional MIT oracle in
   `scripts/client-gate.sh`: Rust klist of a MIT-`kinit` ccache and MIT
@@ -725,6 +775,86 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **client.** `kinit`, `klist`, `kvno`, `kdestroy` and `kswitch` are ports of MIT 1.22.2's: its
+  option tables and usage, com_err texts and exit codes, `klist -k`, and no log lines. Settled
+  beside MIT's tools in a container realm (`working/logs/f-P6/`); units.
+- **client.** Caches are picked as MIT's in `DIR:` and `KCM:` collections: `kinit` for another
+  principal makes a new cache and switches to it; `klist -l` / `-A`, `kdestroy -A` and
+  `kswitch -p` walk the collection. Settled beside MIT's tools and sssd-kcm; units.
+- **client.** `kinit -R` and `-v` act on the cache's principal and leave the cache holding only
+  the new TGT, as MIT's re-initializes it. Settled; units.
+- **protocol.** TGS requests carry MIT's kdc-options: the TGT's forwardable, proxiable, renewable
+  and allow-postdate bits, with CANONICALIZE on a referral request (`kvno` with a forwardable,
+  renewable TGT sends 0x40810000; with a renewable-only one, 0x00810000). Settled; unit.
+- **client.** `kinit` reads the password only when a KDC reply needs the key, so an unknown client
+  is reported unprompted: `Client '…' not found in Kerberos database`. Settled; unit.
+- **protocol.** kpasswd keeps MIT's transport schedule: TCP first, 15 s to connect and no
+  deadline once connected, then UDP sent at 0, 3 and 8 s. A blackholed server fails after 32 s
+  as MIT's (it waited out the OS connect timeout). Settled; units.
+- **cli/client.** Options are read as glibc's `getopt_long` reads them: a long option by a unique
+  prefix (`--cached`), and past a bad option, so `kinit`, `kswitch` and `kdestroy` print MIT's
+  further lines. Settled; units.
+- **kdc.** A replay the lookaside no longer holds is answered as MIT answers it: a TGS-REQ, and an
+  enc-ts, encrypted-challenge or PKINIT AS-REQ, inside the skew issues a ticket (was 34 / 24). The
+  two replay caches MIT has not are gone; the lookaside holds a request's bytes once. Live; units.
+- **kdc/admin.** In the foreground (`krb5kdc -n`, `kadmind -nofork`) the daemons print what MIT
+  prints; the JSON log goes only where kdc.conf's `[logging] json` (`STDOUT`, `STDERR`, `FILE:`),
+  a relation MIT ignores, names a destination, kprop's and kpropd's too. Units; settled live.
+- **kdc/admin.** An MIT db2 database (btree or hash) where the database should be is named and left
+  as it is: `… This is an MIT db2 database; dump it with the old installation's kdb5_util, then
+  kdb5_util load here (docs/install.md, Upgrading an MIT realm)`. Units on MIT's own headers.
+- **docs.** `kadmin.local`'s known divergences from MIT are graded in the A4 ledger and listed
+  in `docs/security.md`; its own doc names the environment overrides `test-hooks` only.
+- **admin.** `kadmin.local` refuses a request line or an argument that is not UTF-8 instead of
+  turning bytes into U+FFFD; an unknown request is echoed byte for byte, as MIT. Units.
+- **admin.** `krb5-ktutil` prints a failed command as MIT's does (`rkt: must specify keytab to
+  read`, `ktutil: Unknown request …`), reads `addent`'s options as `ktutil_add_entry` does, and
+  its command loop exits 0 whatever it ran, as MIT's. Unit; live.
+- **admin.** `krb5-kpasswd` names a KDC that does not answer, a failed preauth and an unknown,
+  revoked or expired client with MIT's `krb5_err.et` texts. Unit; live.
+- **admin.** `krb5-kpasswd` is MIT's `kpasswd [principal]` (argument, ccache, login name): it
+  prompts for the old password and the new one twice, finds its server as `locate_kpasswd`
+  does (`kpasswd_server`, else `admin_server` on 464), prints `Password changed.`. Unit; live.
+- **kdc/admin.** A database has MIT's two lock files beside it: `krb5-kdb create` and a full
+  `load` into an empty directory make them (0600; with SELinux on, labelled at create as
+  `matchpathcon` says), a full `load` makes `principal.ok` again when it is missing, and a
+  database without them is refused with MIT's texts (`No such file or directory`, `KADM5
+  administration database lock file missing`). A database from an earlier release needs both
+  made by hand, owned as the database file `DB` (kdc.conf's `database_name`) is:
+  `install -m 0600 -o OWNER -g GROUP /dev/null DB.ok`, then the same for `DB.kadm5.lock`, then
+  on an SELinux host `restorecon DB.ok DB.kadm5.lock`. Unit and `kdb5_util` tests; the commands
+  run as written beside MIT.
+- **kdc/admin.** Every read holds the database's lock shared and reads the dump again when its
+  age, file or file change time moved; every change (kadm5, kpasswd, kadmin.local with or
+  without `-m`, `krb5-kdb`, kprop / iprop loads) holds it exclusively from a fresh read to one
+  write and the age bump, so a kadm5 modify is one write, and a kadm5 policy create, modify or
+  delete looks at the policy again under it (MIT's `OSA_ADB_DUP` / `OSA_ADB_NOENT` when another
+  writer got there first). The KDC holds it only to see whether the database changed and to
+  read it again, as each MIT lookup takes and lets go of it, so a waiting writer gets it however
+  many requests overlap; a lock it may not take answers `SVC_UNAVAILABLE`, and a database it
+  cannot read again answers with that error, as MIT's lookups do, never with what it read
+  before. `load` writes `principal~` and promotes it under the lock (opening the lock files a
+  removed database left), `load -update` takes the permanent lock, kadmin.local `lock` /
+  `unlock` hold it, `dump` holds it shared while it reads, once any master key was typed.
+  Settled live against MIT 1.22.2.
+- **kdc.** `krb5-kdc` takes MIT's options, detaches unless `-n`, writes a `-P` pid file
+  and reopens its log on SIGHUP.
+- **admin.** `krb5-kadmind` likewise, with `-nofork`; it now ends on SIGTERM.
+- **admin.** Release kprop, kpropd, iprop-pull take the master key from the stash and
+  kpropd's realm from `-r` or `default_realm`, as MIT's; `KRB5_MASTER_PASSWORD` and the test
+  realm need `test-hooks`. Unit; a live release-build kprop and iprop-pull run (no gate).
+- **admin.** `kadmin.local` is MIT's: options, script form, prompt, verbs, texts and exit
+  status; `KRB5_PASSWORD` is not read (`-pw` or the prompt). Units; the gates pass `-pw`.
+- **admin.** `kadmin.local` reads dates and intervals with MIT's getdate grammar (`"7 days"`,
+  `2030-01-01`, `never`); `-expire 1` is no date, as in MIT. Units.
+- **kdc.** With no `supported_enctypes`, new keys are MIT's aes256 + aes128 sha1 pair (was
+  all four AES types); `-e` and a profile list still rule. Unit; settled live.
+- **kdc.** `krb5-kdb` is MIT's `kdb5_util`: `create` makes only `K/M`, `krbtgt`, `kadmin/*`
+  (test principals need `test-hooks`); `master_key_type` defaults to aes256-sha1; `stash`,
+  `dump`, `load`, `destroy` print and write as MIT's. Unit; side by side with MIT.
+- **config/kdc/admin.** One kdc.conf and database resolver (`KdcPaths`) for every KDC-side
+  tool, as MIT's `kadm5_get_config_params`: `KDC_DIR/kdc.conf` (`/var/kerberos/krb5kdc`), a
+  missing one empty, the realm's paths, env on top. Units; `kdc-gate` creates from kdc.conf.
 - **docs.** The parity ledger is split by section under `docs/parity/` (a
   README with the rules and counts, one file per section); all 462 rows
   moved byte for byte, the old A4 re-cut into A4, A5 and B1.
@@ -1258,6 +1388,95 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** The AS-REQ answering PREAUTH_REQUIRED sends the KDC's PA-FX-COOKIE back first,
+  as MIT's: padata `[133, 2, 150, 149]` (it sent none). Settled; unit red at the parent.
+- **client.** `kinit -X X509_anchors=…` without an identity gets a ticket with the password, as
+  MIT's (it refused: `pkinit requires identity and anchors`). Settled.
+- **client.** A release `kinit -S service` asks the AS for that service in the client's realm, as
+  MIT's; it got a TGT and then a service ticket, as a `test-hooks` build still does for the gates.
+  Settled; unit.
+- **kdc.** `cpw -randkey` clears `REQUIRES_PWCHANGE` and zeroes the failed password count, as MIT's
+  `kadm5_randkey_principal_3` does; both were kept. Settled live; unit.
+- **kdc/admin.** `dict_file` is read once, by kadmind, kadmin.local and `kdb5_util create` as MIT's,
+  into one block and a sorted index; krb5kdc read it too and each change copied it, 14.5 MiB a
+  daemon. That is gone; the KDC still creeps slowly under load, as with no dictionary. Units; runs.
+- **admin.** kadmind and kadmin.local log MIT's dictionary notices: `No dictionary file specified,
+  continuing without one.` without `dict_file`, and `WARNING!  Cannot find dictionary file …` for a
+  missing one, which was skipped silently. Units; settled live.
+- **protocol/kdc.** With SELinux on, a save keeps the replaced file's context (a `sudo kadmin.local`
+  save left `principal` `krb5kdc_conf_t`), and new database, lock, stash, dump and keytab files
+  take the policy's, as Fedora's MIT sets them (xattrs read with `rustix`). Units; lookup live.
+- **kdc/admin.** A database file that is no database fails every tool and daemon with MIT's text,
+  `Cannot open DB2 database '…': Invalid argument`, before its lock files and master key (was
+  `persist format: …` or `Inappropriate file type or format`). Units; settled live.
+- **docs.** The install doc's `kdc.conf` edit renames only the realm's stanza and indents
+  `max_renewable_life` as the stanza's other lines; it rewrote the file's opening comment too.
+  Run on the shipped files.
+- **admin.** `kpropd` without an address listens as MIT's: port 754 on an IPv6 socket that takes
+  IPv4 too (`IPV6_V6ONLY` off) when the host has IPv6, else on IPv4, with `SO_REUSEADDR`; it
+  listened on `127.0.0.1` only. Units; settled live.
+- **kdc/admin.** A KDC or kpasswd UDP reply on a wildcard socket leaves from the address its
+  request was sent to (pktinfo), as MIT's: a client connected to one of a host's addresses
+  dropped a reply sent from another. Units (`127.0.0.2`); settled live.
+- **kdc/admin.** The daemons set up their sockets as MIT's: `0.0.0.0` and an IPv6-only `[::]`
+  for a wildcard, `SO_REUSEADDR`, MIT's backlogs and log lines, and no `/proc` read, so the
+  units start under enforcing SELinux (they failed: `Address already in use`). An explicit `[::]`
+  listen entry is IPv6-only now, as in MIT: drop it, or list `0.0.0.0` beside it. Units; live.
+- **kdc/admin.** TCP listeners take a connection when it arrives, as MIT's do, instead of
+  trying every 20 ms. Unit; timed live.
+- **kdc.** A principal's `max_life` of 0 stays 0 in the database, as in MIT (the realm's
+  maximum still caps its tickets). Unit; settled live.
+- **kdc/admin.** A length-prefixed TCP message (KDC, kpasswd and kadm5 replies, kprop)
+  goes out in one write, as MIT's: a kadmin reply no longer waits ~40 ms for a delayed
+  ACK. Units; pcap.
+- **admin.** `kadmin.local`'s `listprincs ""` and `listpols ""` list nothing, as MIT;
+  `kadmin.local`, kadmind and `AdminSession` share one list filter. Units.
+- **admin.** `kadmin.local -m` reads and writes the database under the typed master key and
+  never opens the stash, as MIT; a missing or unreadable stash no longer stops it. Units.
+- **admin.** `kadmin.local`'s default keytab comes from the profile loader (kdc.conf first,
+  includes, quoting) and its `[logging]` from kadmind's reader; a keytab name with a `/` or a
+  one-letter prefix is a file and salt names match in any case, as MIT. Units, `cli_stdin`.
+- **config.** A quoted profile value is read as MIT's parser reads it (`\t`, `\n`, `\b` and
+  `\x` unescaped, nothing after the closing quote); an unquoted one keeps its quotes.
+  `[libdefaults] default_keytab_name` is read. Units.
+- **admin.** Ctrl-C at the `kadmin.local:  ` prompt prints a newline and prompts again, and at
+  a `yes/no` question it drops the request quietly, as MIT's `ss` does; it ended the session.
+  Units, `cli_stdin`.
+- **cli.** Ctrl-C at a password prompt is `Password read interrupted` with the terminal's echo
+  back, as MIT's prompter has it (it ended the tool with echo off); stdin is read a byte at a
+  time, so a reply leaves the rest of the input. Units.
+- **admin.** `krb5-ktutil addent -password` asks `Password for <principal>` and reads the next
+  line of its command stream, as MIT's; it hung there before (stdin locked twice). Unit; live.
+- **kdc/admin.** After detaching, the daemons open a relative `database_name` or
+  `key_stash_file` again from `/` and stop if it is not there, as MIT's. Unit; live.
+- **log.** Each daemon-log line is one write, so daemons sharing a log file never mix
+  lines. Unit.
+- **kdc/admin.** A listen entry that does not resolve, or whose address family the host
+  lacks, logs MIT's lines before the daemon stops. Unit; settled live.
+- **admin.** kadmind finishes the change in hand before it exits, and a failed accept or
+  receive no longer stops it or its kpasswd listeners.
+- **admin.** kadmind and `kadmin.local` list nothing for an empty list expression, as
+  MIT's. Unit.
+- **admin.** kadmind rereads a database another process changed before every call. Unit.
+- **admin.** kadmind's `modprinc -kvno` sets every key's kvno, as MIT's. Unit.
+- **admin.** A kadmind change the database refuses (`KRB5_KDB_CANTLOCK_DB`) no longer
+  stays in memory, while the `kadmin/history` a password change under a policy creates
+  is saved on its own first, as MIT commits it (kadm5, kpasswd and `kadmin.local`); a
+  keysalt the policy refuses is answered before it. Unit; settled live.
+- **protocol.** A SPAKE kinit keeps the PREAUTH_REQUIRED etype-info when the challenge
+  has none, as MIT does: a client asking sha384 first of a user keyed sha1 got
+  PREAUTH_FAILED (slo/soak). Unit; live repro, stress and soak gates.
+- **kdc.** A database, `.ulog` or stash that cannot be read or written is a database error
+  with the system's text, not `crypto: persist io: …`. Unit.
+- **protocol/kdc.** A rewritten database, `.ulog`, stash or keytab keeps the old file's
+  owner, group and mode as MIT's in-place writes do, so root `kadmind` and KLLDAP's
+  `kadmin.local` user share a database. Ccaches and dumps stay new 0600 files. Unit.
+- **kdc.** Send the failcount lockout's status as MIT's DB module does,
+  `LOCKED_OUT` (`CLIENT LOCKED OUT` stays the DISALLOW_ALL_TIX text). diffsend
+  `as-locked-out` against MIT on a locked golden-dump principal.
+- **config/kdc/admin.** Listen like MIT: every `kdc_listen` / `kdc_ports` entry,
+  a bare port on all local addresses, realm stanza first, `kdc_tcp_*`, and
+  kadmind / kpasswd listen relations (KLLDAP's `750,88` made the KDC exit). `kdc-gate`.
 - **protocol.** Restore `capture.rs` product semantics: unset or empty
   `KERBER_CAPTURE_DIR` writes nothing. Golden-home protection lives in
   `gate-common.sh` `refuse_golden_capture_dir` and `ci-policy`
@@ -2432,10 +2651,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   `max_retries` are stored and ignored. Ticket renew time is the min
   of request, krbtgt entry, client entry, and kdc.conf realm
   `max_renewable_life` when set. New principals copy the 7d policy
-  onto `max_renewable_life`. `kit-conformance-gate` /
-  `gssproxy-gate` / `nfs-krb5p-gate` / `sssd-renew-gate` honest
-  **exit 2** until those oracles are vendored. FILE write stays
-  temp+rename.
+  onto `max_renewable_life`. FILE write stays temp+rename.
 - **client.** (MIT-gated) `kinit --fast` derives
   the FAST reply-key base from PA-ETYPE-INFO2 (RFC 6113 / RFC 8009
   etype 20), not `preferred()[0]` (aes256-sha1).
@@ -2505,9 +2721,24 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   with `getrandom 0.4` and `syn 3` as the only skips, `wildcards = "deny"`
   (`allow-wildcard-paths` for the version-less path deps), licence list
   trimmed to the four the lock uses.
+- **ci.** The five exit-2 stub gates and CI's `skip2` step are gone: `gssproxy-gate.sh`, `gss-sspi-gate.sh`,
+  `kit-conformance-gate.sh`, `sssd-renew-gate.sh` and `nfs-krb5p-gate.sh` exited 2 on every path and asserted nothing.
+  Field runs on real SSSD, NFS-Ganesha, the satomlin kit and Windows carry what a field record covers
+  (`harness/field/README.md`); `docs/gates.md` lists what none covers.
 
 ### Tests and CI
 
+- **ci.** CI's test job, `full-test`, `make test`, the checkpoint and the unit-evidence tools also
+  turn on `krb5-client/test-hooks`, so the client's gate-option units run there; CI's test job and
+  `make test` then run every test once more without features, so the release-only units run too.
+- **crypto/protocol/types.** The zeroize-on-drop rows of `docs/security.md` are proved by unit tests
+  that see the wiped buffer through a `cfg(test)` seam, not by source searches; `zeroize_ct.rs` keeps
+  its `ct_eq` searches as `constant_time.rs`; `ProtocolKey`'s missing `==` is a compile-time check.
+- **tool.** A `test-hooks` cargo feature on `krb5-kdc` / `krb5-admin`, off by default;
+  `build-bins.sh`, CI, `full-test`, the Makefile and the checkpoint build with it.
+- **tool.** Pin the toolchain to stable 1.99.0 in `rust-toolchain.toml` and the
+  rust-preamble default; `check_msrv_pinned` requires an exact `X.Y.Z` pin both
+  places agree on, so a Rust release cannot redden `main`.
 - **scripts.** Every kadmin query a gate or a `scripts/lib` helper runs goes through `scripts/lib/kadmin-q.sh`,
   but for three keyed container sites; a query whose output the cell does not check must print MIT's success
   line or show its effect on read-back, unless `kadmin_q_try` marks it best-effort (26 sites: 18 setups that

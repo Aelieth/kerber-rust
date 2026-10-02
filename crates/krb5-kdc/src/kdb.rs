@@ -1,20 +1,21 @@
 //! Public KDB extension surface (MIT kdb capabilities as Rust traits).
 //!
 //! Dump-v7 [`crate::PrincipalStore`] is the default at-rest backend.
-//! `db_library` selects the factory; unknown names error. Process-local
-//! replay caches and the PKINIT CA live on [`KdcEnv`], not dump rows.
+//! `db_library` selects the factory; unknown names error. The process-local
+//! PKINIT CA lives on [`KdcEnv`], not in dump rows.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
-use krb5_protocol::ReplayCache;
 use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
 use krb5_types::pkinit::PkinitCa;
 
+use crate::dblock::DbLockHold;
 use crate::error::Error;
+use crate::lockout::{Lockout, LockoutUpdate};
 use crate::persist::{PersistError, load_store};
 use crate::store::{
     MAX_ALIAS_DEPTH, NamedPolicy, Policy, Principal, PrincipalStore, RID_FIRST_USER, strip_db_args,
@@ -66,13 +67,14 @@ pub fn resolve_alias_id<'a>(
     Some(id)
 }
 
-/// Process-local KDC state (replay + PKINIT CA). Not dump/persist rows.
+/// Process-local KDC state (the PKINIT CA). Not dump/persist rows.
+///
+/// The KDC keeps no replay cache of its own: a retransmit is answered by the lookaside, and a
+/// replay it no longer holds is processed again.
+/// MIT `kdc_process_tgs_req` (`kdc/kdc_util.c:189-191`): the TGS AP-REQ is read without a replay cache.
+/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:47-118`): a timestamp inside the skew verifies again.
 #[derive(Clone, Debug)]
 pub struct KdcEnv {
-    /// TGS authenticator replay cache.
-    pub tgs_replay: ReplayCache,
-    /// PA-ENC-TIMESTAMP replay cache.
-    pub pa_replay: ReplayCache,
     /// PKINIT test CA.
     pub pkinit_ca: Option<PkinitCa>,
 }
@@ -84,14 +86,10 @@ impl Default for KdcEnv {
 }
 
 impl KdcEnv {
-    /// Empty CA, default replay windows.
+    /// No PKINIT CA.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            tgs_replay: ReplayCache::with_limits(50_000, std::time::Duration::from_secs(300)),
-            pa_replay: ReplayCache::with_limits(50_000, std::time::Duration::from_secs(300)),
-            pkinit_ca: None,
-        }
+        Self { pkinit_ca: None }
     }
 }
 
@@ -149,44 +147,68 @@ pub trait PrincipalRead: Send + Sync {
     /// locked database (MIT `KRB5_KDB_CANTLOCK_DB`). [`PrincipalStore`] and [`MemoryStore`] never
     /// fail.
     fn list_principals(&self) -> Result<Vec<Principal>, Error>;
-    /// TGS replay cache.
-    fn tgs_replay(&self) -> &ReplayCache {
-        &self.env().tgs_replay
-    }
-    /// PA-ENC-TIMESTAMP replay cache.
-    fn pa_replay(&self) -> &ReplayCache {
-        &self.env().pa_replay
-    }
     /// PKINIT CA if provisioned.
     fn pkinit_ca(&self) -> Option<&PkinitCa> {
         self.env().pkinit_ca.as_ref()
     }
-    /// Fail-count used for lockout (principal row plus overlay).
+    /// Give `p`, an entry this store returned, its lockout attributes as they are now: the KDC
+    /// records them after the entry was read. A backend that keeps them in the entry has
+    /// nothing to add.
+    /// MIT `klmdb_get_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:713-744`): a fetched entry takes its lockout record.
+    fn merge_lockout(&self, p: &mut Principal) {
+        let _ = p;
+    }
+    /// Record one AS outcome's lockout update for `p` at `stamp`, the request's time, applied
+    /// to `p`'s attributes as they are when it is written; nothing else of the entry changes and
+    /// no update is logged. A backend that keeps no lockout attributes ignores it.
+    /// MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): the lockout record alone is written.
+    fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
+        let _ = (p, stamp, update);
+    }
+    /// `p`'s failed authentication count now ([`Self::merge_lockout`]).
     fn fail_auth_of(&self, p: &Principal) -> u32 {
-        p.fail_auth_count
+        let mut q = p.clone();
+        self.merge_lockout(&mut q);
+        q.fail_auth_count
     }
-    /// Last failed AS unix seconds (overlay or dump field).
+    /// `p`'s last failed authentication now, Unix seconds ([`Self::merge_lockout`]).
     fn last_failed_of(&self, p: &Principal) -> u32 {
-        p.last_failed
+        let mut q = p.clone();
+        self.merge_lockout(&mut q);
+        q.last_failed
     }
-    /// Last successful AS unix seconds (overlay or dump field).
+    /// `p`'s last successful authentication now, Unix seconds ([`Self::merge_lockout`]).
     fn last_success_of(&self, p: &Principal) -> u32 {
-        p.last_success
+        let mut q = p.clone();
+        self.merge_lockout(&mut q);
+        q.last_success
     }
     /// Max failures before CLIENT_REVOKED (0 = none).
     fn max_fail_for(&self, p: &Principal) -> u32 {
         let _ = p;
         0
     }
-    /// Record AS password success/failure.
-    fn record_as_outcome(&self, _name: &PrincipalName, _ok: bool) {}
+    /// Audit one AS outcome of `name` now as the KDC does: a success (`ok`) or a failed
+    /// preauthentication ([`crate::lockout::lockout_audit`]); an unknown name records nothing.
+    /// A test hook: the KDC audits from its AS exchange.
+    #[cfg(feature = "test-hooks")]
+    fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
+        let Ok(Some(mut p)) = self.fetch_name(name) else {
+            return;
+        };
+        self.merge_lockout(&mut p);
+        let status = if ok {
+            0
+        } else {
+            krb5_types::err::PREAUTH_FAILED
+        };
+        crate::lockout::lockout_audit(self, &p, crate::store::unix_now_u32(), status);
+    }
     /// Bound named policy, if any.
     fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         let _ = p;
         None
     }
-    /// Zero fail count without stamping last_success (interval window).
-    fn clear_as_fail_count(&self, _name: &PrincipalName) {}
     /// PAC identity for `name` in `crealm`.
     fn pac_identity(&self, name: &PrincipalName, crealm: &str) -> PacIdentity {
         let rid = self
@@ -212,13 +234,14 @@ pub trait PrincipalWrite: PrincipalRead {
     /// # Errors
     ///
     /// [`Error::InvalidArgument`] when `p.tl_data` holds a `KRB5_TL_DB_ARGS` entry, which neither
-    /// [`PrincipalStore`] nor [`MemoryStore`] accepts; other backends may add their own [`Error`].
+    /// [`PrincipalStore`] nor [`MemoryStore`] accepts; [`Error::Db`] when a [`PrincipalStore`]
+    /// with a database is not inside a change; other backends may add their own [`Error`].
     fn put_principal(&mut self, p: Principal) -> Result<(), Error>;
     /// Delete by `name@REALM`.
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when no principal is stored under `id`, and [`Error::Crypto`] when
+    /// [`Error::NotFound`] when no principal is stored under `id`, and [`Error::Db`] when
     /// [`PrincipalStore`] then cannot write its configured store file.
     fn remove_id(&mut self, id: &str) -> Result<(), Error>;
     /// Provision a PKINIT CA on the process-local env.
@@ -235,16 +258,26 @@ pub trait StoreLifecycle {
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when [`PrincipalStore`] finds its store file changed and cannot load it;
-    /// [`MemoryStore`] never fails.
+    /// [`Error::Db`] when [`PrincipalStore`] finds its store file changed and cannot read it,
+    /// [`Error::Crypto`] when its stash key does not decrypt it; [`MemoryStore`] never fails.
     fn reload_if_stale(&mut self) -> Result<(), Error>;
     /// Write through when persist paths are set.
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when [`PrincipalStore`] cannot write its configured store file;
+    /// [`Error::Db`] when [`PrincipalStore`] cannot write its configured store file;
     /// [`MemoryStore`] never fails.
     fn save_if_configured(&self) -> Result<(), Error>;
+    /// The database's shared lock for one request, and whether the database changed since this
+    /// store read it; `None` for a store with no database file.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] when [`PrincipalStore`] may not take the lock (MIT `KRB5_KDB_CANTLOCK_DB`);
+    /// [`MemoryStore`] never fails.
+    fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
+        Ok(None)
+    }
 }
 
 /// Combined kdb extension surface. Kadmind still locks
@@ -275,26 +308,17 @@ impl<T: PrincipalRead + ?Sized> PrincipalRead for std::sync::Arc<T> {
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
         (**self).list_principals()
     }
-    fn fail_auth_of(&self, p: &Principal) -> u32 {
-        (**self).fail_auth_of(p)
+    fn merge_lockout(&self, p: &mut Principal) {
+        (**self).merge_lockout(p);
     }
-    fn last_failed_of(&self, p: &Principal) -> u32 {
-        (**self).last_failed_of(p)
-    }
-    fn last_success_of(&self, p: &Principal) -> u32 {
-        (**self).last_success_of(p)
+    fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
+        (**self).update_lockout(p, stamp, update);
     }
     fn max_fail_for(&self, p: &Principal) -> u32 {
         (**self).max_fail_for(p)
     }
-    fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        (**self).record_as_outcome(name, ok);
-    }
     fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         (**self).named_policy_for(p)
-    }
-    fn clear_as_fail_count(&self, name: &PrincipalName) {
-        (**self).clear_as_fail_count(name);
     }
 }
 
@@ -328,7 +352,7 @@ pub struct MemoryStore {
     env: KdcEnv,
     lookups: AtomicU64,
     policies: HashMap<String, NamedPolicy>,
-    as_fail: Arc<Mutex<HashMap<String, crate::store::AsFailState>>>,
+    lockout: Mutex<HashMap<String, Lockout>>,
 }
 
 impl MemoryStore {
@@ -344,7 +368,7 @@ impl MemoryStore {
             env: KdcEnv::new(),
             lookups: AtomicU64::new(0),
             policies: HashMap::new(),
-            as_fail: Arc::new(Mutex::new(HashMap::new())),
+            lockout: Mutex::new(HashMap::new()),
         }
     }
 
@@ -393,26 +417,23 @@ impl PrincipalRead for MemoryStore {
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
         Ok(self.map.values().cloned().collect())
     }
-    fn fail_auth_of(&self, p: &Principal) -> u32 {
-        self.as_fail
+    fn merge_lockout(&self, p: &mut Principal) {
+        if let Some(l) = self
+            .lockout
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&p.id())
-            .map_or(p.fail_auth_count, |s| s.count)
+        {
+            l.set_on(p);
+        }
     }
-    fn last_failed_of(&self, p: &Principal) -> u32 {
-        self.as_fail
+    fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
+        let mut g = self
+            .lockout
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&p.id())
-            .map_or(p.last_failed, |s| s.last_failed)
-    }
-    fn last_success_of(&self, p: &Principal) -> u32 {
-        self.as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&p.id())
-            .map_or(p.last_success, |s| s.last_success)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let base = g.get(&p.id()).copied().unwrap_or_else(|| Lockout::of(p));
+        g.insert(p.id(), update.apply(base, stamp));
     }
     fn max_fail_for(&self, p: &Principal) -> u32 {
         p.pw_policy
@@ -420,83 +441,10 @@ impl PrincipalRead for MemoryStore {
             .and_then(|n| self.policies.get(n))
             .map_or(0, |pol| pol.max_fail)
     }
-    /// MIT `krb5_db2_lockout_audit` (`db2/lockout.c:183-189`): a success clears the fail
-    /// count only when the principal requires preauth.
-    /// A failure increments the count and stamps last-failed, and a success that did not
-    /// require preauth leaves the previous count in place.
-    fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let id = lookup_principal_id(name, &self.realm);
-        let fallback = self
-            .map
-            .get(&id)
-            .map_or(crate::store::AsFailState::default(), |p| {
-                crate::store::AsFailState {
-                    count: p.fail_auth_count,
-                    last_failed: p.last_failed,
-                    last_success: p.last_success,
-                }
-            });
-        let now = crate::store::unix_now_u32();
-        let mut g = self
-            .as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cur = g.get(&id).copied().unwrap_or(fallback);
-        if ok {
-            let requires_preauth = self
-                .map
-                .get(&id)
-                .is_some_and(|p| p.attributes & crate::KDB_REQUIRES_PRE_AUTH != 0);
-            g.insert(
-                id,
-                crate::store::AsFailState {
-                    count: if requires_preauth { 0 } else { cur.count },
-                    last_failed: cur.last_failed,
-                    last_success: if requires_preauth {
-                        now
-                    } else {
-                        cur.last_success
-                    },
-                },
-            );
-        } else {
-            g.insert(
-                id,
-                crate::store::AsFailState {
-                    count: cur.count.saturating_add(1),
-                    last_failed: now,
-                    last_success: cur.last_success,
-                },
-            );
-        }
-    }
     fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         p.pw_policy
             .as_ref()
             .and_then(|n| self.policies.get(n).cloned())
-    }
-    fn clear_as_fail_count(&self, name: &PrincipalName) {
-        let id = lookup_principal_id(name, &self.realm);
-        let fallback = self
-            .map
-            .get(&id)
-            .map_or(crate::store::AsFailState::default(), |p| {
-                crate::store::AsFailState {
-                    count: 0,
-                    last_failed: p.last_failed,
-                    last_success: p.last_success,
-                }
-            });
-        let mut g = self
-            .as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match g.get_mut(&id) {
-            Some(s) => s.count = 0,
-            None => {
-                g.insert(id, fallback);
-            }
-        }
     }
 }
 
@@ -557,6 +505,12 @@ impl PrincipalRead for PrincipalStore {
     fn list_principals(&self) -> Result<Vec<Principal>, Error> {
         Ok(self.debug_principals().cloned().collect())
     }
+    fn merge_lockout(&self, p: &mut Principal) {
+        PrincipalStore::merge_lockout(self, p);
+    }
+    fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
+        PrincipalStore::update_lockout(self, p, stamp, update);
+    }
     fn fail_auth_of(&self, p: &Principal) -> u32 {
         PrincipalStore::fail_auth_of(self, p)
     }
@@ -569,22 +523,21 @@ impl PrincipalRead for PrincipalStore {
     fn max_fail_for(&self, p: &Principal) -> u32 {
         PrincipalStore::max_fail_for(self, p)
     }
+    #[cfg(feature = "test-hooks")]
     fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
         PrincipalStore::record_as_outcome(self, name, ok);
     }
     fn named_policy_for(&self, p: &Principal) -> Option<NamedPolicy> {
         PrincipalStore::named_policy_for(self, p)
     }
-    fn clear_as_fail_count(&self, name: &PrincipalName) {
-        PrincipalStore::clear_as_fail_count(self, name);
-    }
 }
 
 impl PrincipalWrite for PrincipalStore {
+    /// MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-1007`): every put is recorded in the update log.
     fn put_principal(&mut self, mut p: Principal) -> Result<(), Error> {
         strip_db_args(&mut p.tl_data)?;
-        self.debug_insert(p);
-        Ok(())
+        PrincipalStore::put_principal(self, p);
+        self.save_configured()
     }
     fn remove_id(&mut self, id: &str) -> Result<(), Error> {
         self.remove_id_inner(id)
@@ -600,6 +553,9 @@ impl StoreLifecycle for PrincipalStore {
     }
     fn save_if_configured(&self) -> Result<(), Error> {
         self.save_configured()
+    }
+    fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
+        PrincipalStore::read_hold(self)
     }
 }
 

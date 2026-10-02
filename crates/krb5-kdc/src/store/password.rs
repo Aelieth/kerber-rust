@@ -154,7 +154,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_password(&mut self, name: &PrincipalName, password: &[u8]) -> Result<(), Error> {
         self.set_password_keepold(name, password, false)
     }
@@ -211,7 +211,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub(crate) fn set_password_keepold(
         &mut self,
         name: &PrincipalName,
@@ -228,7 +228,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub(crate) fn set_password_keepold_n(
         &mut self,
         name: &PrincipalName,
@@ -247,7 +247,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_password_keepold_n_in(
         &mut self,
         name: &PrincipalName,
@@ -269,7 +269,7 @@ impl PrincipalStore {
     /// password fails the quality or history checks; [`Error::BadKeysalts`] when `etypes` names
     /// an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the CSPRNG
     /// fails creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into
-    /// the history or saving the store to `persist_paths` fails.
+    /// the history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_password_etypes_keepold_n_in(
         &mut self,
         name: &PrincipalName,
@@ -280,19 +280,23 @@ impl PrincipalStore {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         let id = self.canonical_id(name, princ_realm)?;
-        // MIT `kadm5_chpass_principal_3`: a bound policy (`have_pol`) fetches
-        // the history key — creating `kadmin/history` on first use — and
-        // records the old keys BEFORE `passwd_check`, so a chpass rejected for
-        // quality still leaves `kadmin/history` created; `pw_history_num` counts
-        // the current password inside N, so history=1 keeps no old keys.
-        let nhist = self
+        let pol = self
             .map
             .get(&id)
             .ok_or(Error::NotFound)?
             .pw_policy
             .as_ref()
-            .and_then(|n| self.policies.get(n))
-            .map(|pol| pol.history);
+            .and_then(|n| self.policies.get(n));
+        let nhist = pol.map(|pol| pol.history);
+        let allowed = pol.and_then(|p| p.allowed_keysalts.clone());
+        // MIT `kadm5_chpass_principal_3`: the keysalt list is checked first, so a refused one
+        // creates nothing; then a bound policy (`have_pol`) fetches the history key — creating
+        // `kadmin/history` on first use, saved on its own — and records the old keys BEFORE
+        // `passwd_check`, so a chpass rejected for quality still leaves `kadmin/history` in the
+        // database; `pw_history_num` counts the current password inside N, so history=1 keeps
+        // no old keys.
+        let use_etypes =
+            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
         let hist = match nhist {
             Some(_) => Some(self.ensure_history_principal(actor)?),
             None => None,
@@ -310,13 +314,6 @@ impl PrincipalStore {
             .max()
             .unwrap_or(0)
             .saturating_add(1);
-        let allowed = existing
-            .pw_policy
-            .as_ref()
-            .and_then(|n| self.policies.get(n))
-            .and_then(|p| p.allowed_keysalts.clone());
-        let use_etypes =
-            apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
         let new_keys = keys_from_password(&use_etypes, password, &salt, next_kvno)?;
         self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold, actor)?;
         self.apply_pw_max_life_in(name, princ_realm)?;
@@ -381,7 +378,7 @@ impl PrincipalStore {
     /// [`Error::NotFound`] when the principal is missing; [`Error::PasswordPolicy`] when the
     /// password fails the quality or history checks; [`Error::Rng`] when the CSPRNG fails
     /// creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into the
-    /// history or saving the store to `persist_paths` fails.
+    /// history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn change_password(
         &mut self,
         acl: &Acl,
@@ -394,18 +391,24 @@ impl PrincipalStore {
         self.set_password_keepold_n_in(name, &self.realm.clone(), password, 0, actor)
     }
 
-    /// Set `TL_LAST_PWD_CHANGE` (tests / min_life).
-    pub fn set_last_pwd_unix(&mut self, name: &PrincipalName, ts: u32) {
-        let Ok(id) = self.canonical_id(name, &self.realm) else {
-            return;
-        };
-        if let Some(p) = self.map.get_mut(&id) {
-            p.tl_data.retain(|t| t.ty != TL_LAST_PWD_CHANGE);
-            p.tl_data.push(TlData {
-                ty: TL_LAST_PWD_CHANGE,
-                contents: ts.to_le_bytes().to_vec(),
-            });
-        }
+    /// Set `TL_LAST_PWD_CHANGE` (tests / min_life), saved as every mutation is: inside
+    /// [`Self::change`] the change writes it, and a store with a database refuses it elsewhere.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when the store has a
+    /// database and this is not inside a change.
+    pub fn set_last_pwd_unix(&mut self, name: &PrincipalName, ts: u32) -> Result<(), Error> {
+        let id = self.canonical_id(name, &self.realm)?;
+        let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+        p.tl_data.retain(|t| t.ty != TL_LAST_PWD_CHANGE);
+        p.tl_data.push(TlData {
+            ty: TL_LAST_PWD_CHANGE,
+            contents: ts.to_le_bytes().to_vec(),
+        });
+        let snap = p.clone();
+        self.note_ulog(id, false, Some(snap));
+        self.save_if_configured()
     }
 
     /// MIT `kadm5_create_principal_3` (`svr_principal.c:364-373`): the `passwd_check` for a
@@ -447,12 +450,10 @@ impl PrincipalStore {
         password: &[u8],
     ) -> Result<(), Error> {
         if has_policy
-            && !self.policy.dict_words.is_empty()
             && self
-                .policy
-                .dict_words
-                .binary_search(&String::from_utf8_lossy(password).to_ascii_lowercase())
-                .is_ok()
+                .pwqual_dict
+                .as_ref()
+                .is_some_and(|dict| dict.contains(password))
         {
             return Err(Error::PasswordPolicy(PWQUAL_DICT.into()));
         }

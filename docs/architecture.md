@@ -9,13 +9,14 @@ daemons   krb5-admin
 roles     krb5-kdc     krb5-client     krb5-gss     (krb5-testkit: test helpers)
 wire      krb5-protocol
 codecs    krb5-asn1    krb5-crypto     krb5-config
-base      krb5-types   krb5-log
+base      krb5-types   krb5-log        krb5-cli
 ```
 
 `krb5-admin` uses `krb5-kdc` and `krb5-gss`; `krb5-kdc`, `krb5-client` and
 `krb5-gss` sit on `krb5-protocol`, which uses the three codec crates;
 `krb5-asn1` uses `krb5-types` and `krb5-log`, `krb5-crypto` uses `krb5-log`,
-and `krb5-config` uses `krb5-types`.
+and `krb5-config` uses `krb5-types`. The tools' command lines and password
+prompts come from `krb5-cli`, which depends on no other crate here.
 
 ## Crate responsibilities
 
@@ -49,13 +50,20 @@ keytab v2 (the password comes from env or stdin, never argv).
 **`krb5-kdc`** issues AS/TGS from an in-memory store. The at-rest file
 is MIT dump version 7 (stash still holds the master key; SID/RID in
 `TL_KERBER_SID`). Legacy KDB3 ciphertext still loads for one release.
-`krb5-kdb` is the dump/load CLI. `key_data` uses KDB usage 0
+`krb5-kdb` is MIT's `kdb5_util` (create, stash, dump, load, destroy). `key_data` uses KDB usage 0
 with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
 stays rejected. The serving store is `Arc<RwLock<PrincipalStore>>` so
-kadmind/kpasswd mutations reach `save_store`. Default bind is
-`127.0.0.1` (not `0.0.0.0`). After a privileged bind the daemon drops
-to `KRB5_KDC_USER` (default `nobody`). TCP workers are capped
-(`MAX_TCP_WORKERS`); SIGTERM/SIGINT stop `serve`. `--test-realm`
+kadmind/kpasswd mutations reach `save_store`. The `krb5-kdc` daemon
+takes MIT `krb5kdc`'s options, listens where kdc.conf says (every local
+address by default), detaches unless `-n`, and writes MIT's text log
+where `[logging]` says ([logging.md](logging.md)). It always serves a
+database file and, as MIT's, keeps its user; only a `test-hooks` build
+serving the test realm without one drops to `KRB5_KDC_USER` (default
+`nobody`) after a privileged bind. TCP workers are capped
+(`MAX_TCP_WORKERS`).
+As MIT's daemons, `krb5-kdc` and `krb5-kadmind` stop on SIGINT,
+SIGTERM or SIGQUIT and reopen their log files on SIGHUP. In a
+`test-hooks` build, `--test-realm`
 bootstraps documented principals (including `kadmin/admin` and
 `kadmin/changepw`); with `KRB5_KDC_DB` + stash the test realm is saved
 so a separate kadmind process can reload it. `--export-keytab` /
@@ -92,18 +100,37 @@ MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
 `scripts/policy-gate.sh`. Iprop serial/ulog and `kpropd -A`:
 `scripts/iprop-gate.sh`. Extension points: [`plugins.md`](plugins.md)
 (traits, not dlopen). A kadmind mutation survives KDC process
-relaunch (`scripts/restart-gate.sh`). Mutating kadm5 verbs and
-`kadmin.local` reload the dump before they write so a concurrent
-local `addprinc` survives a remote `cpw`. There is still no dump
-file lock: the reload→mutate→save window can lose the last writer
-(dirty-flag/lock deferred with db2/LMDB).
+relaunch (`scripts/restart-gate.sh`). The database is locked between
+processes as MIT's db2 module locks it (`dblock.rs`): `principal.ok` and
+`principal.kadm5.lock` beside it, whole-file OFD locks, shared for every read
+(the KDC only while it sees whether the database changed and reads it again,
+or reads a client's lockout record) and exclusive for every change from a
+fresh read of the dump to its one write and the age bump
+(`PrincipalStore::change`), so a concurrent local `addprinc` survives a remote
+`cpw` and no writer saves over another. The KDC takes it exclusively only to
+update a client's record in `principal.lockout` in place (`lockout/file.rs`), which
+leaves the database and its age alone.
 
-**`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. The KDC
-applies `kdc.conf` ticket policy from `KRB5_KDC_PROFILE` /
-`KRB5_KDC_CONF` / `/etc/krb5kdc/kdc.conf`; without `--test-realm` it
-also takes `database_name` / `key_stash_file` / `master_key_type` /
-`db_library` / listen ports from that file. `kinit` and TGS referral chase call `discover_kdc` (`KRB5_CONFIG`
-then `/etc/krb5.conf`); argv remains the fallback.
+**`krb5-config`** parses `krb5.conf` / `kdc.conf` and DNS SRV. Every
+KDC-side tool finds kdc.conf and the database through `KdcPaths`, as MIT's
+`kadm5_get_config_params` does: the profile is `KRB5_KDC_PROFILE`, else
+`KDC_DIR/kdc.conf`, and a missing one reads as empty;
+`database_name` / `key_stash_file` / `acl_file` / `master_key_type` come from
+the realm's own stanza (the named realm, else `default_realm`; with neither
+the tool stops as MIT's does), else MIT's defaults under `KDC_DIR`
+(`/var/kerberos/krb5kdc`, set at build time by `KERBER_KDC_DIR`); only a
+`test-hooks` build puts the gates' `KRB5_KDC_CONF` / `KRB5_KDC_DB` /
+`KRB5_KDC_STASH` / `KRB5_ACL_FILE` / `KRB5_MASTER_ETYPE` on top. The KDC also
+takes ticket policy, `db_library` and listen ports from that file. `kinit` and
+TGS referral chase call `discover_kdc` (`KRB5_CONFIG` then `/etc/krb5.conf`);
+argv remains the fallback.
+
+**`krb5-cli`** is MIT's command-line shapes and password prompts for the
+tools: glibc `getopt` (with the leading `+` that stops at the first operand),
+option tables matched by exact spelling for the tools MIT parses by hand
+(`kdb5_util`'s globals anywhere on the line, `kadmind`'s `-nofork` / `-port`),
+and `krb5_prompter_posix` / `krb5_read_password` (one line per prompt from a
+pipe, echo off on a terminal, `Password mismatch`).
 
 **`krb5-tools`** holds the harness-only gate tools (`diffsend`, `loadgen`,
 `krb5-forge-tgt`, …; `publish = false`). It is not a product surface.

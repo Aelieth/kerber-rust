@@ -210,7 +210,7 @@ fn dict_file_from_the_realm_stanza_rejects_words_case_insensitively() {
     ))
     .unwrap();
     let (mut store, acl) = bootstrap_documented().unwrap();
-    store.apply_kdc_conf(&conf).unwrap();
+    store.init_pwqual(Some(&conf)).unwrap();
     let mut sess = AdminSession::local(&mut store, &acl, documented_admin_id());
     // No policy: the dictionary does not apply.
     sess.change_password(&user(), b"correcthorse").unwrap();

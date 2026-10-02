@@ -4,7 +4,7 @@
 //! is not answered. A failed AP-REQ is a framed chpwfail with result 3.
 //! The ticket must be for `kadmin/changepw`.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_kdc::{SharedDump as SharedStore, save_store};
+use krb5_kdc::SharedDump as SharedStore;
 use krb5_protocol::{
     ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_rep, build_krb_priv_with_seq,
     unwrap_krb_priv_ex, verify_ap_req_ex,
@@ -33,6 +33,19 @@ pub const KPASSWD_PORT: u16 = 464;
 pub const KPROP_PORT: u16 = 754;
 
 const WIRE_VERSION: u8 = 1;
+
+/// A client's address as kadmind logs it; an IPv4 client of a dual-stack socket reads as IPv4.
+/// MIT `client_addr` (`kadmin/server/server_stubs.c:152-162`): `k5_print_addr` of the peer,
+/// without the port.
+#[must_use]
+pub fn client_addr(ip: std::net::IpAddr) -> String {
+    match ip {
+        std::net::IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map_or_else(|| v6.to_string(), |v4| v4.to_string()),
+        std::net::IpAddr::V4(v4) => v4.to_string(),
+    }
+}
 
 /// UDP kpasswd: send `body` to `dest` and accept only that peer's reply.
 ///
@@ -108,11 +121,11 @@ fn kpasswd_udp_recv_until(
     }
 }
 
+/// One kpasswd reply over TCP, its length and the reply in one write.
+/// MIT `process_stream_response` (`lib/apputils/net-server.c:1319-1323`): kadmind's kpasswd TCP
+/// replies go out as the KDC's do, the length and the reply in one writev.
 fn write_len_pref(stream: &mut TcpStream, body: &[u8]) -> io::Result<()> {
-    let len = u32::try_from(body.len()).unwrap_or(0);
-    stream.write_all(&len.to_be_bytes())?;
-    stream.write_all(body)?;
-    stream.flush()
+    krb5_protocol::write_messages(stream, &[body])
 }
 
 fn read_len_pref(stream: &mut TcpStream, max: usize) -> io::Result<Vec<u8>> {
@@ -137,8 +150,8 @@ fn status_bytes(status: u32) -> Vec<u8> {
 ///
 /// [`Error::Inner`] when `body` is under 10 bytes, not version 1, an unknown op, or its AP-REQ
 /// or payload overruns it; when the AP-REQ does not verify or the payload is not a usable name
-/// (or `name\0password`); or when the Dump op cannot save or read back its dump. The create,
-/// cpw, delete, and ktadd ops also return their [`AdminSession`] call's [`Error::AclDenied`],
+/// (or `name\0password`). The create, cpw, delete, and ktadd ops (1-4; there is no dump op:
+/// MIT kadmind serves none) also return their [`AdminSession`] call's [`Error::AclDenied`],
 /// [`Error::NotFound`], [`Error::PasswordPolicy`], [`Error::PassTooSoon`], or [`Error::Inner`].
 pub fn dispatch_kadmind(
     store: &SharedStore,
@@ -155,7 +168,6 @@ pub fn dispatch_kadmind(
         2 => Op::Delete,
         3 => Op::Ktadd,
         4 => Op::Cpw,
-        5 => Op::Dump,
         _ => return Err(Error::Inner("kadmind op".into())),
     };
     let ap_len = u32::from_be_bytes(
@@ -211,23 +223,6 @@ pub fn dispatch_kadmind(
             let kt = sess.ktadd(&name)?;
             let mut out = status_bytes(0);
             out.extend_from_slice(&kt.to_bytes());
-            Ok(out)
-        }
-        Op::Dump => {
-            drop(sess);
-            let tmp = std::env::temp_dir().join(format!("kprop-{}-{}", std::process::id(), {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map_or(0, |d| d.as_nanos())
-            }));
-            let db = tmp.with_extension("db");
-            let stash = tmp.with_extension("stash");
-            save_store(&g, &db, &stash).map_err(|e| Error::Inner(e.to_string()))?;
-            let blob = std::fs::read(&db).map_err(|e| Error::Inner(e.to_string()))?;
-            let _ = std::fs::remove_file(&db);
-            let _ = std::fs::remove_file(&stash);
-            let mut out = status_bytes(0);
-            out.extend_from_slice(&blob);
             Ok(out)
         }
     }
@@ -430,9 +425,11 @@ fn handle_kpasswd_from(
     let ap_req = &raw[6..6 + ap_len];
     let priv_raw = &raw[6 + ap_len..];
     let (store_realm, keys, kvnos) = {
-        let g = store
-            .read()
+        let mut g = store
+            .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The kadmin/changepw keys as the database holds them now, whoever changed them.
+        g.reload_if_stale()?;
         let (keys, kvnos) = changepw_verify_keys(&g, service_key);
         (g.realm().to_owned(), keys, kvnos)
     };
@@ -519,24 +516,31 @@ fn handle_kpasswd_from(
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // House rule (`kadm5/dispatch.rs` `write_store`): reload, then mutate, then
-        // save, as `AdminSession::change_password` does, so this path cannot save
-        // over a `kadmin.local` write.
+        // House rule (`kadm5/dispatch.rs` `write_store`): kadmind's store lock first, then the
+        // database's: the key change is one change under the exclusive lock, from a fresh read
+        // of the database to its write, as `AdminSession::change_password` makes it.
         // MIT `main` (`ovsec_kadmd.c:446-446`): the global handle comes from
         // `kadm5_init(…, "kadmind", …)`.
         // MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses the global handle,
         // so `current_caller` is `kadmind@REALM`, not the ticket client.
         let stamp = format!("kadmind@{store_realm}");
-        let changed = (|| {
+        // MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:438-447`): the change locks the database
+        // first, and a database the server may not write changes nothing.
+        let changed = (|| -> Result<(), Error> {
             g.reload_if_stale()?;
             if self_change {
                 g.check_min_life_in(&targ, &targ_realm)?;
             }
-            g.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp)
+            g.change(|s| s.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp))
+                .map_err(Error::from)?
+                .map_err(Error::from)
         })();
-        match changed.map_err(Error::from) {
+        match changed {
             Ok(()) => (0u16, String::new(), "success".to_owned()),
-            Err(Error::PasswordPolicy(msg)) => (4, msg, "password policy".to_owned()),
+            Err(Error::PasswordPolicy(msg)) => {
+                let text = crate::kadm5::chpass_error_text(&Error::PasswordPolicy(msg.clone()));
+                (4, msg, text)
+            }
             Err(Error::PassTooSoon { until }) => (
                 4,
                 too_soon_text(until),
@@ -576,6 +580,7 @@ fn handle_kpasswd_from(
         client = client.as_str(),
         "{log_line}"
     );
+    krb5_log::klog::syslog(krb5_log::klog::Severity::Notice, &log_line);
     let mut body = Vec::with_capacity(2 + text.len());
     body.extend_from_slice(&code.to_be_bytes());
     body.extend_from_slice(text.as_bytes());
@@ -618,12 +623,13 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Serve kpasswd (RFC 3244) on UDP until shutdown.
+/// Serve kpasswd (RFC 3244) on UDP until shutdown. A reply leaves from the address its request
+/// was sent to, as the KDC's do ([`krb5_kdc::recv_from_to`]).
 ///
 /// # Errors
 ///
-/// The `io::Error` when setting the read timeout fails or `recv_from` fails with a kind other
-/// than `WouldBlock`, `TimedOut`, or `Interrupted`; request failures are logged, not returned.
+/// The `io::Error` when setting the read timeout fails; a failed receive, send or request is
+/// logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_udp(
     store: SharedStore,
@@ -635,19 +641,21 @@ pub fn serve_kpasswd_udp(
     sock.set_read_timeout(Some(Duration::from_millis(200)))?;
     let mut buf = vec![0u8; 65_535];
     while !shutdown.load(Ordering::Relaxed) {
-        match sock.recv_from(&mut buf) {
-            Ok((n, peer)) => {
+        match krb5_kdc::recv_from_to(&sock, &mut buf) {
+            // MIT `process_packet` (`lib/apputils/net-server.c:1169-1172`): an empty datagram is dropped before kpasswd sees it.
+            Ok(d) if d.len == 0 => {}
+            Ok(d) => {
                 let replay = ReplayCache::new();
                 match handle_kpasswd_from(
                     &store,
                     &acl,
                     &service_key,
                     &replay,
-                    &buf[..n],
-                    &peer.ip().to_string(),
+                    &buf[..d.len],
+                    &client_addr(d.from.ip()),
                 ) {
                     Ok(rep) => {
-                        let _ = sock.send_to(&rep, peer);
+                        let _ = krb5_kdc::send_udp_reply(&sock, &rep, &d);
                     }
                     Err(e) => tracing::error!(
                         event = krb5_log::events::ADMIN,
@@ -661,8 +669,17 @@ pub fn serve_kpasswd_udp(
             Err(e)
                 if e.kind() == io::ErrorKind::WouldBlock
                     || e.kind() == io::ErrorKind::TimedOut
-                    || e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
+                    || e.kind() == io::ErrorKind::Interrupted
+                    || e.kind() == io::ErrorKind::ConnectionRefused => {}
+            // MIT `process_packet` (`lib/apputils/net-server.c:1155-1167`): a failed receive is
+            // logged and the socket goes on serving.
+            Err(e) => {
+                krb5_log::klog::com_err(
+                    Some(&krb5_log::klog::os_error_text(&e)),
+                    "while receiving from network",
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
         }
     }
     Ok(())
@@ -674,8 +691,8 @@ pub fn serve_kpasswd_udp(
 ///
 /// # Errors
 ///
-/// The `io::Error` when `set_nonblocking` fails or `accept` fails with a kind other than
-/// `WouldBlock` or `Interrupted`; per-connection failures are logged, not returned.
+/// The `io::Error` when `set_nonblocking` fails; a failed accept and per-connection failures
+/// are logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_tcp(
     store: SharedStore,
@@ -688,6 +705,7 @@ pub fn serve_kpasswd_tcp(
     while !shutdown.load(Ordering::Relaxed) {
         match listener.accept() {
             Ok((mut stream, peer)) => {
+                let _closed = krb5_kdc::ClosingFd(std::os::fd::AsRawFd::as_raw_fd(&stream));
                 let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
                 let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
                 match read_len_pref(&mut stream, 64 * 1024) {
@@ -699,7 +717,7 @@ pub fn serve_kpasswd_tcp(
                             &service_key,
                             &replay,
                             &body,
-                            &peer.ip().to_string(),
+                            &client_addr(peer.ip()),
                         ) {
                             Ok(rep) => {
                                 let _ = write_len_pref(&mut stream, &rep);
@@ -722,10 +740,21 @@ pub fn serve_kpasswd_tcp(
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(20));
+                krb5_kdc::wait_for_connection(&[&listener], Duration::from_millis(100));
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => return Err(e),
+            // MIT `accept_stream_connection` (`lib/apputils/net-server.c:1238-1241`): a failed
+            // accept is dropped and the listener goes on.
+            Err(e) => {
+                tracing::error!(
+                    event = krb5_log::events::ADMIN,
+                    component = "krb5-admin",
+                    outcome = "error",
+                    error = %e,
+                    detail = "kpasswd accept",
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
         }
     }
     Ok(())
@@ -748,10 +777,7 @@ pub fn kprop_send(
 ) -> io::Result<()> {
     let blob = crate::kprop::kprop_dump_bytes(store, master_password)
         .map_err(|e| io::Error::other(e.to_string()))?;
-    let len = u32::try_from(blob.len()).unwrap_or(0);
-    stream.write_all(&len.to_be_bytes())?;
-    stream.write_all(&blob)?;
-    stream.flush()
+    krb5_protocol::write_messages(stream, &[blob.as_slice()])
 }
 
 /// Receive a length-prefixed dump v7 body and load it.
@@ -775,4 +801,71 @@ pub fn kprop_recv(
         .read_exact(&mut blob)
         .map_err(|e| Error::Inner(e.to_string()))?;
     crate::kprop::kprop_load_bytes(&blob, master_password)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::{SocketAddr, UdpSocket};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
+    use std::time::Duration;
+
+    use krb5_config::listen::ListenAddr;
+    use krb5_kdc::principals::kadmin_changepw;
+    use krb5_kdc::testrealm::bootstrap_documented;
+
+    use super::{encode_kpasswd_req, serve_kpasswd_udp};
+
+    /// A request whose AP-REQ does not decode: kpasswd answers it with a framed KRB-ERROR.
+    fn exchange(sock: &UdpSocket, to: Option<SocketAddr>) -> Option<(Vec<u8>, SocketAddr)> {
+        let req = encode_kpasswd_req(&[0, 1, 2, 3], b"x");
+        sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        match to {
+            Some(a) => sock.send_to(&req, a).unwrap(),
+            None => sock.send(&req).unwrap(),
+        };
+        let mut buf = vec![0u8; 4096];
+        let (n, src) = sock.recv_from(&mut buf).ok()?;
+        buf.truncate(n);
+        Some((buf, src))
+    }
+
+    #[test]
+    fn a_kpasswd_reply_leaves_from_the_address_the_request_was_sent_to() {
+        // MIT `send_to_from` (`lib/apputils/udppktinfo.c:443-474`): kpasswd's reply on a wildcard socket leaves from the request's destination.
+        let (store, acl) = bootstrap_documented().unwrap();
+        let key = store
+            .get_name(&kadmin_changepw())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let any = ListenAddr {
+            host: Some("0.0.0.0".into()),
+            port: 0,
+        };
+        let sock = krb5_kdc::bind_udp_listeners(&[any])
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap();
+        let to = SocketAddr::from(([127, 0, 0, 2], sock.local_addr().unwrap().port()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let (shared, flag) = (krb5_kdc::shared_dump(store), Arc::clone(&stop));
+        let server = thread::spawn(move || serve_kpasswd_udp(shared, acl, key, sock, flag));
+        let plain = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let (rep, src) = exchange(&plain, Some(to)).expect("a reply");
+        assert_eq!(src, to, "the reply's source");
+        assert!(rep.len() > 6 && rep[4..6] == [0, 0], "a framed KRB-ERROR");
+        let connected = UdpSocket::bind("127.0.0.1:0").unwrap();
+        connected.connect(to).unwrap();
+        assert!(
+            exchange(&connected, None).is_some(),
+            "the connected client's reply"
+        );
+        stop.store(true, Ordering::Relaxed);
+        server.join().unwrap().unwrap();
+    }
 }

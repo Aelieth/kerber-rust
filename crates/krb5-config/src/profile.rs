@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::srv::lookup_srv_kdc;
 use super::testenv::TEST_KRB5_PATHS;
-use super::{Endpoint, Error, Krb5Conf};
+use super::{Endpoint, Error, Krb5Conf, ProfileError};
 
 impl Krb5Conf {
     /// Empty defaults: 300s skew, no weak crypto, DNS lookup off.
@@ -32,7 +32,7 @@ impl Krb5Conf {
     ///
     /// # Errors
     ///
-    /// [`Error::Parse`] when an indented `include` / `includedir` directive (no `=`) sits inside
+    /// [`Error::Profile`] when an indented `include` / `includedir` directive (no `=`) sits inside
     /// a section (MIT's improper format); no other line fails.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::new();
@@ -45,9 +45,9 @@ impl Krb5Conf {
     ///
     /// # Errors
     ///
-    /// [`Error::Io`] when `path` or an included file or directory cannot be read;
-    /// [`Error::Parse`] when an `include` target is missing, an `includedir` is not a directory,
-    /// includes form a cycle or nest 32 deep, or an indented include sits inside a section.
+    /// [`Error::Io`] when `path` cannot be read; [`Error::Profile`] when an `include` target is
+    /// missing or cannot be read, an `includedir` is not a directory or cannot be listed, includes
+    /// form a cycle or nest 32 deep, or an indented include sits inside a section.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
@@ -226,7 +226,10 @@ fn parse_into(
             && include_directive(line).is_some()
             && include_directive(raw).is_none()
         {
-            return Err(Error::Parse("improper format: indented include".into()));
+            return Err(Error::Profile(
+                ProfileError::Syntax,
+                "improper format: indented include".into(),
+            ));
         }
         if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             section = s.trim().to_ascii_lowercase();
@@ -255,6 +258,11 @@ fn parse_into(
             && let Some((d, r)) = split_kv(line)
         {
             conf.domain_realm.entry(d.to_ascii_lowercase()).or_insert(r);
+        }
+        if section == "logging"
+            && let Some((k, v)) = split_kv(line)
+        {
+            conf.logging.push((k.to_owned(), v));
         }
         if section == "capaths" {
             if let Some(name) = line.strip_suffix('{') {
@@ -302,23 +310,26 @@ fn load_file_into(
     stack: &mut Vec<PathBuf>,
     path: &Path,
 ) -> Result<(), Error> {
-    if stack.len() >= MAX_INCLUDE_DEPTH {
-        return Err(Error::Parse("include nesting too deep".into()));
-    }
-    let canon = match std::fs::canonicalize(path) {
-        Ok(p) => p,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !stack.is_empty() => {
-            return Err(Error::Parse(format!(
-                "include target not found: {}",
-                path.display()
-            )));
+    // MIT `parse_include_file` (`prof_parse.c:229-231`): an included file that does not open
+    // fails the whole profile.
+    let include = |what: String| Error::Profile(ProfileError::IncludeFile, what);
+    let unread = |e: std::io::Error| {
+        if stack.is_empty() {
+            Error::Io(e)
+        } else if e.kind() == std::io::ErrorKind::NotFound {
+            include(format!("include target not found: {}", path.display()))
+        } else {
+            include(format!("include target {}: {e}", path.display()))
         }
-        Err(e) => return Err(e.into()),
     };
-    if stack.iter().any(|p| p == &canon) {
-        return Err(Error::Parse("include cycle".into()));
+    if stack.len() >= MAX_INCLUDE_DEPTH {
+        return Err(include("include nesting too deep".into()));
     }
-    let text = std::fs::read_to_string(&canon)?;
+    let canon = std::fs::canonicalize(path).map_err(unread)?;
+    if stack.iter().any(|p| p == &canon) {
+        return Err(include("include cycle".into()));
+    }
+    let text = std::fs::read_to_string(&canon).map_err(unread)?;
     stack.push(canon);
     let result = parse_into(conf, seen, &text, Some(stack));
     stack.pop();
@@ -331,15 +342,19 @@ fn load_dir_into(
     stack: &mut Vec<PathBuf>,
     dir: &Path,
 ) -> Result<(), Error> {
+    // MIT `parse_include_dir` (`prof_parse.c:271-272`): an includedir that does not list fails
+    // the whole profile.
+    let unlisted = |what: String| Error::Profile(ProfileError::IncludeDir, what);
     if !dir.is_dir() {
-        return Err(Error::Parse(format!(
+        return Err(unlisted(format!(
             "includedir not a directory: {}",
             dir.display()
         )));
     }
+    let list = |e: std::io::Error| unlisted(format!("includedir {}: {e}", dir.display()));
     let mut names = Vec::new();
-    for ent in std::fs::read_dir(dir)? {
-        let ent = ent?;
+    for ent in std::fs::read_dir(dir).map_err(list)? {
+        let ent = ent.map_err(list)?;
         let name = ent.file_name();
         let Some(s) = name.to_str() else {
             continue;
@@ -420,6 +435,12 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         "default_ccache_name" if take_first(seen, "default_ccache_name") => {
             conf.default_ccache_name = Some(v);
         }
+        "default_keytab_name" if take_first(seen, "default_keytab_name") => {
+            conf.default_keytab_name = Some(v);
+        }
+        "default_client_keytab_name" if take_first(seen, "default_client_keytab_name") => {
+            conf.default_client_keytab_name = Some(v);
+        }
         "spake_preauth_groups" if take_first(seen, "spake_preauth_groups") => {
             conf.spake_preauth_groups = Some(split_ws(&v));
         }
@@ -497,7 +518,39 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
 pub(super) fn split_kv(line: &str) -> Option<(&str, String)> {
     let line = line.trim().trim_end_matches(',');
     let (k, v) = line.split_once('=')?;
-    Some((k.trim(), v.trim().trim_matches('"').to_owned()))
+    Some((k.trim(), relation_value(v)))
+}
+
+/// A relation's value: one that opens with `"` is the quoted string, else the text with its
+/// trailing blanks cut.
+/// MIT `parse_std_line` (`prof_parse.c:169-183`): a value that starts with a quote goes through
+/// `parse_quoted_string`; any other loses its trailing whitespace.
+fn relation_value(v: &str) -> String {
+    let v = v.trim_start();
+    v.strip_prefix('"')
+        .map_or_else(|| v.trim_end().to_owned(), parse_quoted_string)
+}
+
+/// MIT `parse_quoted_string` (`prof_parse.c:47-72`): up to the closing quote; `\n`, `\t` and `\b`
+/// are those characters, a backslash before any other character is that character, and a
+/// backslash that ends the value stays.
+fn parse_quoted_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => break,
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('b') => out.push('\u{8}'),
+                Some(other) => out.push(other),
+                None => out.push('\\'),
+            },
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 pub(super) fn truthy(v: &str) -> bool {
@@ -565,8 +618,9 @@ pub fn krb5_conf_paths() -> Vec<PathBuf> {
 ///
 /// [`Error::Io`] with `ErrorKind::NotFound` when none of `paths` exists (each missing path is
 /// skipped), or the `io::Error` of a present file or directory that cannot be read;
-/// [`Error::Parse`] as [`Krb5Conf::load_file`] reports it (a missing include target, a
-/// non-directory `includedir`, an include cycle or 32-deep nesting, an indented include).
+/// [`Error::Profile`] as [`Krb5Conf::load_file`] reports it (an include target missing or
+/// unreadable, an `includedir` that is no directory or does not list, an include cycle or 32-deep
+/// nesting, an indented include).
 pub fn load_krb5_conf_paths<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
 ) -> Result<Krb5Conf, Error> {
@@ -619,16 +673,33 @@ pub fn udp_preference_limit() -> usize {
         .map_or(1465, |n| usize::try_from(n).unwrap_or(1465))
 }
 
-/// `KRB5_PASSWORD` (never from argv).
+/// The gates' password, `KRB5_PASSWORD`, in a `test-hooks` build. A release build reads no
+/// password from the environment (MIT's tools take one from the terminal or stdin only), so this
+/// is `None` there and the tools prompt.
 #[must_use]
 pub fn env_password() -> Option<Vec<u8>> {
-    std::env::var("KRB5_PASSWORD").ok().map(String::into_bytes)
+    #[cfg(feature = "test-hooks")]
+    {
+        std::env::var("KRB5_PASSWORD").ok().map(String::into_bytes)
+    }
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        None
+    }
 }
 
-/// `KRB5_NEW_PASSWORD` for `gic_pwd.c` KEY_EXP → changepw (never from argv).
+/// The gates' new password for a `gic_pwd.c` KEY_EXP change, `KRB5_NEW_PASSWORD`, in a
+/// `test-hooks` build; `None` in a release build, as [`env_password`].
 #[must_use]
 pub fn env_new_password() -> Option<Vec<u8>> {
-    std::env::var("KRB5_NEW_PASSWORD")
-        .ok()
-        .map(String::into_bytes)
+    #[cfg(feature = "test-hooks")]
+    {
+        std::env::var("KRB5_NEW_PASSWORD")
+            .ok()
+            .map(String::into_bytes)
+    }
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        None
+    }
 }

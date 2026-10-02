@@ -7,7 +7,7 @@ is no `dlopen`.
 
 | Surface | MIT analogue | In tree |
 | --- | --- | --- |
-| KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the default. `db_library=memory` serves [`MemoryStore`](../crates/krb5-kdc/src/kdb.rs) from a dump seed (`scripts/store-gate.sh`). Kadmind still mutates `PrincipalStore` only. Replay caches, PKINIT CA, and the AS-fail overlay live on `KdcEnv` / process state and survive dump reload, not a full KDC restart. |
+| KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the default. `db_library=memory` serves [`MemoryStore`](../crates/krb5-kdc/src/kdb.rs) from a dump seed (`scripts/store-gate.sh`). Kadmind still mutates `PrincipalStore` only. The PKINIT CA lives on `KdcEnv` / process state and survives dump reload, not a full KDC restart. The lockout attributes the KDC records (`PrincipalRead::update_lockout`) live in `principal.lockout` beside a dump-v7 database and survive both; `MemoryStore` keeps them in memory. |
 | kdcpreauth | `kdcpreauth` | [`KdcPreauth`](../crates/krb5-kdc/src/plugins.rs) registry. `process_as` takes `&PreauthRock` (store, client, padata, reply key, etype, AS-REQ, body, cname). PKINIT, SPAKE, and enc-timestamp process AS (`EncTsOk`; caller must not re-verify). First `process_as` that returns an action wins; EXTRA is not consulted after EncTsOk on a normal login. Observe-every-AS is a future kadm5_hook. |
 | kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) `check_as` / `check_tgs` return `Result` and can deny. [`set_policy`](../crates/krb5-kdc/src/plugins.rs) is process-wide (KDC serve/worker threads see it); tests isolate with `set_thread_policy`. AS lockout stays inline, not in the swappable slot. |
 | pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store/policy.rs): five classes; history depth N (current password counts inside N; store N-1 old kvnos); `pw_failcnt_interval` / `pw_lockout_duration`. kadm5 addpol/modpol/getpol/delpol/listpols. |
@@ -29,9 +29,11 @@ circular update log. kadmind serves MIT program **100423**
 `ipropx` dump (`kprop -i` / `kdb5_util dump -i1`). Serial-delta is
 MIT `kdb_incr_update_t` over RPCSEC_GSS (`krb5-iprop-pull` or
 `iprop_poll_once`). `kdb_last_t` must echo the dump-header
-timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`. Incremental
-kdbe carries the password history as MIT's `AT_PW_HIST` entries plus
-the `osa_princ_ent_rec` record inside `AT_TL_DATA` (`KRB5_TL_KADM_DATA`),
+timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`. As MIT's
+`kdb_convert.c`, an update carries only the attributes its change
+touched, and a replica applies only those to its own record; the
+policy and the password history ride in the `osa_princ_ent_rec`
+record inside `AT_TL_DATA` (`KRB5_TL_KADM_DATA`), the history
 decrypted under the `kadmin/history` key on apply (`scripts/iprop-gate.sh`
 history cell); policies themselves reach a replica only by full resync,
 as with MIT (`kdb5.c` logs principals only).

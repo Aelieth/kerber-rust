@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/krb5-log",
+    "crates/krb5-cli",
     "crates/krb5-crypto",
     "crates/krb5-types",
     "crates/krb5-asn1",
@@ -29,6 +30,7 @@ publish = false
 
 [workspace.dependencies]
 krb5-log = { path = "crates/krb5-log" }
+krb5-cli = { path = "crates/krb5-cli" }
 krb5-crypto = { path = "crates/krb5-crypto" }
 krb5-types = { path = "crates/krb5-types" }
 krb5-asn1 = { path = "crates/krb5-asn1" }
@@ -40,6 +42,9 @@ krb5-gss = { path = "crates/krb5-gss" }
 krb5-admin = { path = "crates/krb5-admin" }
 krb5-testkit = { path = "crates/krb5-testkit" }
 aes = "0.8"
+# rasn's `OctetString` buffer; `try_into_mut` lets the last handle on a key, or on a secret copy
+# made to be encoded (`safe_priv::wipe_octets`), wipe it in place.
+bytes = "1.12"
 camellia = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 cmac = "0.7"
@@ -48,7 +53,7 @@ getrandom = "0.2"
 hmac = "0.12"
 md-5 = "0.10"
 md4 = "0.10"
-nix = { version = "0.31", default-features = false, features = ["user"] }
+nix = { version = "0.31", default-features = false, features = ["net", "uio", "user"] }
 num-bigint = { version = "0.4", default-features = false, features = ["std"] }
 signal-hook = { version = "0.3", default-features = false }
 p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa"] }
@@ -56,6 +61,9 @@ pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 # Unpinned; take the newest 0.28 that still byte-matches MIT goldens.
 rasn = "0.28"
 rc4 = "0.1"
+regex-automata = { version = "0.4", default-features = false, features = ["std", "meta", "unicode"] }
+# The xattr reads of the SELinux labeler (`security.selinux`), behind a safe API.
+rustix = { version = "1.1", default-features = false, features = ["fs", "std"] }
 sha1 = "0.10"
 sha2 = "0.10"
 subtle = "2.6"

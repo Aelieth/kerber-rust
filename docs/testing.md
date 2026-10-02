@@ -330,7 +330,7 @@ C programs the gates build in their containers are in `scripts/oracle/` (the clo
 `docker exec` options and the container before `--` and the kadmin arguments after, and pass streams and exit
 status through. MIT's kadmin exits 0 on a refused query, so a query whose output the cell does not check
 itself goes through `kadmin_q_ok` (unless it is best-effort, below), which requires the verb's success line naming the principal. For a verb that prints nothing on
-success (the policy verbs; `modprinc` / `setstr` / `ktadd` on the Rust `krb5-kadmin-local`) it reads the
+success (the policy verbs) it reads the
 effect back with read-only follow-ups derived from the query; `--then QUERY ERE` adds one by hand for what the
 query does not say, and `--next-asserts` skips the derived read-back where the cell's very next command reads
 the same object back and asserts every field. `kadmin_q_try` marks a best-effort query (a setup
@@ -563,13 +563,13 @@ reads the same files except the CHANGELOG. `check_changelog_headings`
 allows only the Keep-a-Changelog group names, each the whole heading, plus
 `Tests and CI` and `How to …` headings, as `###` headings; `check_docs_size` holds every
 `docs/**/*.md` to 60 KiB and `CHANGELOG.md` to its ceiling
-(`CHANGELOG_MAX_BYTES`: its size when last re-based, 235,552 bytes, plus
-a stated 9,000-byte allowance for the scripts and tooling work's bullets,
+(`CHANGELOG_MAX_BYTES`: its size when last re-based, 252,761 bytes, plus
+a stated 20,000-byte allowance for the rest of the functional work's bullets,
 one per change; a `tool:` commit at the start of a swath that adds bullets
 re-bases it, never the commit that adds them). `check_gate_documented` holds `docs/gates.md`
 to one row per `scripts/*-gate.sh`, with the workflow and lane columns
 equal to the gates' placements in `.github/workflows` (`fail-red`,
-`skip2`, `soft`, `nightly`; `stub` or `wrapper` for the documented
+`soft`, `nightly`; `stub` or `wrapper` for the documented
 stubs), a known oracle, and a non-empty assertion; `check_gate_doc_tokens`
 requires every backticked token of an asserts cell in its gate or a
 `scripts/lib`, `scripts/oracle` or `harness/` file the gate names.
@@ -632,7 +632,9 @@ Primary oracle: MIT Kerberos **1.22.2** in `harness/`. Secondary:
 Heimdal **7.8** in `harness/heimdal/` (`scripts/heimdal-gate.sh`). A
 Windows Server 2022 Evaluation DC (`AD.KERBER.TEST`) is captured for
 the AD round; see [`labs/ad-lab.md`](labs/ad-lab.md). Live AD commands use
-`~/adlab` only — never `/etc/krb5.conf` or SSSD. SSPI remains later.
+`~/adlab` only — never `/etc/krb5.conf` or SSSD. Windows SSPI has no
+gate; it ran only in the KVM field lab
+([`harness/field/README.md`](../harness/field/README.md)).
 
 ## Production-gate
 
@@ -698,13 +700,13 @@ all of the above).
 | --- | --- |
 | `test` | `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, `cargo nextest run --workspace --profile ci` |
 | `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings` (sibling of `test`) |
-| `shellcheck` | `shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh` with `.shellcheckrc` (`external-sources=true`, `SC2329` off); zero inline disables (`make shellcheck`). ShellCheck is installed by version and sha256 (`SHELLCHECK_VERSION`, v0.11.0 — the runner's package is 0.9.0 and reports hundreds of SC2317/SC2119 notes 0.11.0 does not); the Makefile fallback image and the hygiene inventory name the same version, and `ci-policy.py` keeps the three in step |
+| `shellcheck` | `shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh` with `.shellcheckrc` (`external-sources=true`, `SC2329` off); zero inline disables (`make shellcheck`). ShellCheck is installed by version and sha256 (`SHELLCHECK_VERSION`, v0.11.0 — the runner's package is 0.9.0 and reports hundreds of SC2317/SC2119 notes 0.11.0 does not); the Makefile fallback image and the hygiene inventory name the same version, and `ci-policy.py` keeps the three in step |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95 |
 | `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` (CI pins cargo-vet **0.10.0**; local 0.10.2 is not an oracle) |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
 | `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `history-mit-gate` |
-| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `policy-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate`; `sssd-renew-gate`, `kit-conformance-gate`, `gssproxy-gate`, `nfs-krb5p-gate` run under `skip2` |
+| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `policy-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate` |
 | `mit-extra` | One shared shell + one stock MIT KDC, then `cross-realm-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `rc4-session-gate` |
 | `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-flows-gate`, `client-differential-cli-gate` (local wrapper `client-differential-gate.sh`), `s4u-mit-gate`, `kcm-gate`, `capaths-transit-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |
@@ -721,8 +723,7 @@ Scheduled (a red is a red, but a push does not wait for it):
 | `kcm-opcode.yml` | nightly 07:18 UTC + manual | Restores the MIT tar (same cache key); installs `lld`; `kcm-opcode-gate` via `run-peer-step.sh` (exit 2 → green `peer-step unavailable`) |
 | `full-test.yml` | nightly 05:27 UTC, `v*` tags, manual | `test-release` (release-profile tests) and `msrv-test` (`cargo test --workspace --locked` on 1.95) |
 
-Not in any workflow: `gss-sspi-gate.sh` (needs a Windows SSPI peer; exits
-2 without it), `ad-mit-trust-gate.sh` (the retired MIT↔AD trust lab), and the local wrappers `kadmin-gate.sh`, `kpasswd-gate.sh` and `client-differential-gate.sh` (CI runs their legs directly).
+Not in any workflow: `ad-mit-trust-gate.sh` (the retired MIT↔AD trust lab) and the local wrappers `kadmin-gate.sh`, `kpasswd-gate.sh` and `client-differential-gate.sh` (CI runs their legs directly).
 `ad-*` are live Samba (`samba-ad-dc`), not the torn-down Windows DC.
 `heimdal-gate` is live Heimdal 7.8 both directions. Per-gate detail is in
 [gates.md](gates.md).
@@ -794,6 +795,33 @@ UDP/TCP 464, and `kprop`/`kpropd` (TCP 754) both directions. Named password
 policies, lockout with time-based auto-unlock, and incremental propagation
 (iprop / ulog, program 100423) are in tree; the plugin surface is Rust traits,
 not `dlopen` ([docs/plugins.md](plugins.md)).
+
+### Test-only inputs (`test-hooks`)
+
+The gates, CI, `make safety` and `scripts/checkpoint.sh` build with
+`--features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks`
+(the gates through `scripts/lib/build-bins.sh`, whose one cargo invocation also
+carries the client tools); `krb5-kdc/test-hooks` turns on `krb5-config/test-hooks`
+and `krb5-protocol/test-hooks` for every binary of that build. Only such a build
+reads these inputs; a release build ignores them, as MIT's tools do. CI's test
+job and `make test` then run the workspace's tests once more without features
+(`cargo nextest run --workspace --profile ci --locked`), so the release-only units
+run too: a release `kvno` and `kinit` refusing the gates' options, `kinit -S`
+asking the AS, `a_release_build_reads_no_path_override`, and every test's release
+branch.
+
+| Input | Read by | A release build instead |
+| --- | --- | --- |
+| `KRB5_PASSWORD`, `KRB5_NEW_PASSWORD` | `krb5-kinit`, `krb5-kpasswd`, `krb5-ktutil` (`krb5_config::env_password`) | prompts: `Password for <principal>`, `Enter new password` / `Enter it again`, one line each from a pipe |
+| `KRB5_KDC_CONF` | every KDC-side tool, after `KRB5_KDC_PROFILE` | `KRB5_KDC_PROFILE`, else `/var/kerberos/krb5kdc/kdc.conf` |
+| `KRB5_KDC_DB`, `KRB5_KDC_STASH`, `KRB5_ACL_FILE`, `KRB5_MASTER_ETYPE` | `KdcPaths` (`crates/krb5-config/src/kdcconf.rs`) | the realm's kdc.conf relations, else MIT's defaults |
+| `KERBER_CAPTURE_DIR` | `capture_pdu` (KDC and client sockets) | no capture |
+| `kvno`'s `--disable-transited-check`, `--body-realm`, `--renew`, `--renew-ticket`, and a KDC host before the services | `krb5-kvno` (`krb5-client/test-hooks`): request shapes MIT's `kvno` cannot send | refuses them as MIT's `kvno` does, with its usage |
+| `kinit`'s `--spake`, `--fast`, `--armor-ccache`, `--pkinit`, `--pkinit-anchors`, and `[kdc-host] principal [ccache [service]]` | `krb5-kinit` (`krb5-client/test-hooks`), which also prints `ok tgt=…` and log lines for the gates | refuses them as MIT's `kinit` does; `-T` and `-X X509_user_identity=` / `X509_anchors=` are MIT's options and stay |
+| `kinit -S service` as the gates use it: a TGS-REQ for the service after the TGT, both stored | `krb5-kinit` (`krb5-client/test-hooks`) | MIT's `-S`: the AS-REQ asks for that service, in the client's realm, and the cache holds that ticket |
+
+`KRB5_KPASSWD_TARGET` is not test-only: `krb5-kpasswd` sets that principal's
+password (`krb5_set_password`), a kerber-rust extension MIT's `kpasswd` lacks.
 
 ## In-repo consumers
 

@@ -632,15 +632,20 @@ fn encrypted_challenge_stale_ts_is_skew() {
     assert_eq!(issue_code(err), err::SKEW);
 }
 
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:121-128`): no replay cache, so a replayed challenge inside the skew verifies again and issues a new ticket.
 #[test]
-fn encrypted_challenge_replayed_blob_is_repeat() {
+fn encrypted_challenge_replayed_blob_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let key = user_key();
     let now = KerberosTime::now();
     let req = fast_challenge_req(&store, &key, &now, 821, 820);
-    krb5_kdc::issue_as(&store, &req).expect("first challenge");
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("replay");
-    assert_eq!(issue_code(err), err::REPEAT);
+    let first = krb5_kdc::issue_as(&store, &req).expect("first challenge");
+    let again = krb5_kdc::issue_as(&store, &req).expect("the replay issues again");
+    assert_ne!(
+        first.session_key.as_bytes(),
+        again.session_key.as_bytes(),
+        "the replay is processed again, not answered from a cache"
+    );
 }
 
 #[test]

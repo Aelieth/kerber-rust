@@ -233,8 +233,9 @@ fn pem_ec_key(secret: &[u8; 32], public: &[u8]) -> String {
     pem("EC PRIVATE KEY", &tlv(0x30, &body))
 }
 
-/// Test CA used as a MIT `pkinit_anchors` FILE trust anchor.
-#[derive(Clone, Debug)]
+/// Test CA used as a MIT `pkinit_anchors` FILE trust anchor. `Debug` never shows the private
+/// scalar.
+#[derive(Clone)]
 pub struct PkinitCa {
     /// CA private scalar.
     pub ca_secret: [u8; 32],
@@ -242,6 +243,16 @@ pub struct PkinitCa {
     pub ca_cert: Vec<u8>,
     /// Uncompressed P-256 public key.
     pub ca_public: Vec<u8>,
+}
+
+impl std::fmt::Debug for PkinitCa {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PkinitCa")
+            .field("ca_secret", &format_args!("<redacted>"))
+            .field("ca_cert", &self.ca_cert)
+            .field("ca_public", &self.ca_public)
+            .finish()
+    }
 }
 
 impl PkinitCa {

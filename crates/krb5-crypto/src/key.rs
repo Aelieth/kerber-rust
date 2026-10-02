@@ -1,17 +1,17 @@
 //! Long-term protocol keys. Bytes are zeroized on drop.
 //!
 //! `from_bytes` refuses a buffer that is not the etype's key length.
-//! Drop wipes the secret. Cloning copies it.
-
-use zeroize::Zeroize;
+//! Drop wipes the key's own allocation, whole. Cloning copies it.
 
 use crate::error::Error;
 use crate::etype::EncryptionType;
+use crate::wipe::wipe;
 
 /// Protocol-format AES key for one etype.
 ///
-/// The key bytes are wiped when the value is dropped. Cloning copies the
-/// secret; avoid cloning unless a second owner is required.
+/// The key's own allocation is wiped, whole, when the value is dropped. Cloning
+/// copies the secret into a buffer the clone wipes when it drops; avoid cloning
+/// unless a second owner is required.
 pub struct ProtocolKey {
     etype: EncryptionType,
     bytes: Vec<u8>,
@@ -49,7 +49,7 @@ impl ProtocolKey {
 
 impl Drop for ProtocolKey {
     fn drop(&mut self) {
-        self.bytes.zeroize();
+        wipe(&mut self.bytes);
     }
 }
 
@@ -70,3 +70,18 @@ impl std::fmt::Debug for ProtocolKey {
             .finish()
     }
 }
+
+// No `==` on keys, which would compare key bytes in variable time. `ProtocolKey` implementing
+// `PartialEq` against itself (so also `Eq`, `PartialOrd` or `Ord`), against `[u8]` or against
+// `Vec<u8>` makes the path below ambiguous, and the crate stops compiling; other right-hand
+// types are not caught.
+const _: fn() = || {
+    trait AmbiguousIfComparable<A> {
+        fn check() {}
+    }
+    impl<T: ?Sized> AmbiguousIfComparable<()> for T {}
+    impl<T: ?Sized + PartialEq> AmbiguousIfComparable<u8> for T {}
+    impl<T: ?Sized + PartialEq<[u8]>> AmbiguousIfComparable<u16> for T {}
+    impl<T: ?Sized + PartialEq<Vec<u8>>> AmbiguousIfComparable<u32> for T {}
+    let _ = <ProtocolKey as AmbiguousIfComparable<_>>::check;
+};

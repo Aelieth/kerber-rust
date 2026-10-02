@@ -10,17 +10,28 @@ are in [testing.md § CI lanes](testing.md#ci-lanes-which-job-runs-which-gates)
 and its Tier contract; the gate rules are in
 [testing.md § Gate discipline](testing.md#gate-discipline).
 
-Lanes: **fail-red**, a red blocks the push; **skip2**, the step runs the
-gate through `skip2`, so exit 2 (oracle unavailable) is green; **soft**, a
-`continue-on-error` job; **nightly**, a scheduled workflow (a red is a red,
-but a push does not wait for it). **stub** and **wrapper** (lane —) are in
-no workflow: a stub needs an absent peer, a wrapper runs other gates
-locally.
+Lanes: **fail-red**, a red blocks the push; **soft**, a `continue-on-error`
+job; **nightly**, a scheduled workflow (a red is a red, but a push does not
+wait for it). **stub** and **wrapper** (lane —) are in no workflow: a stub
+needs an absent peer, a wrapper runs other gates locally.
 
-Oracles: **MIT** 1.22.2 (the equality bar; the SSSD, gssproxy and NFS
-peers are Fedora builds on MIT krb5, spoken to over MIT's wire and error
-table), **Samba** 4 AD, **Heimdal** 7.8 (secondary), a **Windows** SSPI
-peer, or **none** (Rust against Rust: it proves behaviour, not parity).
+Oracles: **MIT** 1.22.2 (the equality bar), **Samba** 4 AD, **Heimdal** 7.8
+(secondary), or **none** (Rust against Rust: it proves behaviour, not
+parity).
+
+No gate drives SSSD's `krb5_child`, gssproxy, NFS, the satomlin kit or
+Windows SSPI. They ran in the KVM field lab
+([`harness/field/README.md`](../harness/field/README.md)), against MIT's
+KDC first and then against ours: `krb5_child` logged in, renewed a TGT
+and changed a password; NFS 4.2 `krb5i` and `krb5p` (AES-SHA1) mounted
+from NFS-Ganesha through rpc.gssd (the kit's gssproxy, in the path, served no
+credential under either KDC); the kit joined Fedora
+clients with MIT's client tools; over the AD trust, Windows SSPI accepted a
+user of the realm (SMB, LDAP) and, as a SPNEGO client, reached Apache
+`mod_auth_gssapi`. Not run: the Rust tools on a cache gssproxy writes,
+`krb5-gss` against SSPI, the kit with the Rust client tools against MIT's
+KDC, and SHA-2 enctypes over NFS. Against our KDC the Rust client tools ran beside MIT's and
+fail the kit's keytab check (no `klist -k`; [install.md](install.md) lists what is missing).
 
 | Gate | Oracle | Workflow | Lane | Asserts |
 | --- | --- | --- | --- | --- |
@@ -39,28 +50,25 @@ peer, or **none** (Rust against Rust: it proves behaviour, not parity).
 | `scripts/config-include-gate.sh` | MIT | `ci:harness` | fail-red | MIT vs Rust `kinit`/`kvno` on `include`/`includedir` + `KRB5_CONFIG`: dotted `10.conf` drop-in; A:B first-wins `default_realm`; missing include fails both sides |
 | `scripts/cross-kdc-gate.sh` | MIT | `ci:harness-2` | fail-red | one identical dump; MIT `krb5kdc` :88 and Rust KDC :8888: a TGT issued by either KDC is accepted by the other's TGS (`kvno` both ways); the TGT enc-part etype (`klist -e`) is the same on both KDCs |
 | `scripts/cross-realm-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit` + `kvno host/svc.other.test@OTHER.TEST`: `klist` has `krbtgt/OTHER.TEST` and the host ticket |
-| `scripts/differential-gate.sh` | MIT | `ci:harness-2` | fail-red | same AS/TGS bytes to Rust and MIT on one dump (diffsend encodes each case once): stable-rep / error-code compare; diffsend rc 0 and all 111 cases `"outcome":"ok"` (`DIFFSEND_RATCHET=111`; any mismatch is red); a `"whitelist"` key is red |
+| `scripts/differential-gate.sh` | MIT | `ci:harness-2` | fail-red | same AS/TGS bytes to Rust and MIT on one dump (diffsend encodes each case once): stable-rep / error-code compare; diffsend rc 0 and all 112 cases `"outcome":"ok"` (`DIFFSEND_RATCHET=112`; any mismatch is red); a `"whitelist"` key is red |
 | `scripts/expire-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kinit` vs Rust KDC after `modprinc -expire`/`-pwexpire`/`+needchange`: NAME_EXP vs KEY_EXPIRED; TGS `kvno` after client expiry; `kinit -S kadmin/changepw`; `+needchange` KEY_EXPIRED |
 | `scripts/flags-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `modprinc` +flag then `kinit`/`kvno`/`klist -f`: ALL_TIX revoked; no `F` when DISALLOW_FORWARDABLE; `O` when OK_AS_DELEGATE; DISALLOW_SVR `kvno` error matches `user2user`, `MUST_USE_USER2USER`, `KDC policy` or `cannot accommodate`; TGT_BASED POLICY; REQUIRES_HW_AUTH `kinit` trace has `Received error from KDC:.*Additional pre-authentication required` |
 | `scripts/getprivs-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kadmin getprivs` vs Rust kadmind ACL: the admin (`*`) and an actor whose ACL is `i` alone both print `INQUIRE` (or `GET`), `ADD` and `MODIFY`; the `i` actor's `cpw -randkey` is refused as AUTH_CHANGEPW (`change-password`), not AUTH_GET |
 | `scripts/gss-gate.sh` | MIT | `ci:harness` | fail-red | MIT `libgssapi_krb5` initiator vs `krb5-gss-accept`: unwrap of `hello-from-mit-gss`; `GSS_C_DELEG_FLAG` both directions names `user@KERBER.TEST`; MIT SPNEGO handshake (`gss-accept spnego mic ok`, `gss-accept spnego peer mic ok`); MIT `gss_wrap_iov` unwraps on the Rust acceptor (with `SIGN_ONLY` through Rust `unwrap_iov`); Rust `wrap_iov` / MIT `gss_unwrap_iov`; MIT DCE `wrap_iov` → Rust and → MIT unwrap; inquire lifetime > 0; replayed AP-REQ is 34 on both (MIT KRB-ERROR 34 `Request is a replay`; Rust `accept_sec_context: KRB-ERROR 34: authenticator replay`); direction/filler/EC mutations rejected on both acceptors |
-| `scripts/gss-sspi-gate.sh` | Windows | stub | — | no SSPI acceptor or Windows GSS server in the tree: unconditional exit 2 plus `gss-sspi-gate-unavailable.log` (not a green claim) |
-| `scripts/gssproxy-gate.sh` | MIT | `ci:harness-2` | skip2 | `X-GSSPROXY` FILE entry: **exit 2** until a Fedora/gssproxy oracle is vendored |
 | `scripts/heimdal-gate.sh` | Heimdal | `peers:peers` | nightly | Heimdal `kinit`/`kgetcred` vs Rust; Rust `krb5-kinit` vs Heimdal: `klist` names `user@KERBER.TEST` and `host/testhost.kerber.test` in both directions (the only content asserts; `aes256-cts-hmac-sha1-96` is the configured `default_etypes`, not asserted); missing image `exit 2` |
 | `scripts/history-mit-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kadmin.local` history-window on a MIT KDB: history=1 allows A→B→A; history=2 rejects B after A→B→C |
-| `scripts/iprop-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind: MIT `kinit extra` after master restart + serial-delta (no extra FULL_RESYNC); MIT `kinit extra2` on Rust replica whose dump holds the `setstr` value; extra2 PAC RID ≠ 1000 |
+| `scripts/iprop-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kpropd -A` GET_UPDATES + `krb5-iprop-pull` vs MIT kadmind: MIT `kinit extra` after master restart + serial-delta (no extra FULL_RESYNC); MIT `kinit extra2` on Rust replica whose dump holds the `setstr` value and whose `extra2` keeps the flags, lifetimes and expirations the setstr update did not carry; extra2 PAC RID ≠ 1000 |
 | `scripts/kadmin-gate.sh` | MIT | wrapper | — | local wrapper: `kadmin-rust-gate.sh`, `kadmin-rust-acl-gate.sh`, `kadmin-mit-gate.sh`, `kadmin-both-gate.sh` |
 | `scripts/kadmin-both-gate.sh` | MIT | `ci:harness` | fail-red | both kadminds side by side: `listprincs`/`listpols` glob lists and `getprinc` records (keys, lifetimes) equal between the Rust kadmind and MIT kadmind |
-| `scripts/kadmin-local-gate.sh` | MIT | `ci:mit-extra` | fail-red | Rust `krb5-kadmin-local` then MIT `kadmin`: `addprinc extra2` and `addprinc host/slashhost`; MIT `getprinc` both names, `listprincs extra2*`; a `KRB5_ACL_FILE` naming a missing file is ignored (`listprincs` rc 0, lists `user@KERBER.TEST`); `-randkey` + MIT `getprinc` `vno 1` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; dump `getprinc` after mutating `setstr` keeps a concurrent kadmind create (`m5k: m5v`); local `addprinc n7local` then remote `cpw -pw extra-n7 extra2` keeps both; MIT `kadmin.local` `ktadd -k` of `krbtgt/KERBER.TEST` rotates (`Key: vno` 2) and writes the keytab, Rust local `ktadd -k` of `krbtgt/KERBER.TEST` writes it (`klist -k`); `passwd_check` modules vs MIT `kadmin.local` (`pwq_lines` identical): `addprinc -pw ""` is `Empty passwords are not allowed`, a principal-name password under a policy is `Password may not match principal name`, a realm or `dict_file` word under a policy is `Password is in the password dictionary`, no policy accepts the name and the dict word, the rejected `pqname` create leaves nothing |
+| `scripts/kadmin-local-gate.sh` | MIT | `ci:mit-extra` | fail-red | Rust `krb5-kadmin-local` then MIT `kadmin`: `addprinc -pw extra-local extra2` and `addprinc host/slashhost`; MIT `getprinc` both names, `listprincs extra2*`; a `KRB5_ACL_FILE` naming a missing file is ignored (`listprincs` rc 0, lists `user@KERBER.TEST`); `-randkey` + MIT `getprinc` `vno 1` + `kinit -k`; `+requires_preauth`; two `ktadd -k` both names; dump `getprinc` after mutating `setstr` keeps a concurrent kadmind create (`m5k: m5v`); local `addprinc -pw n7-pw n7local` then remote `cpw -pw extra-n7 extra2` keeps both; MIT `kadmin.local` `ktadd -k` of `krbtgt/KERBER.TEST` rotates (`Key: vno` 2) and writes the keytab, Rust local `ktadd -k` of `krbtgt/KERBER.TEST` writes it (`klist -k`); `passwd_check` modules vs MIT `kadmin.local` (`pwq_lines` identical): `addprinc -pw ""` is `Empty passwords are not allowed`, a principal-name password under a policy is `Password may not match principal name`, a realm or `dict_file` word under a policy is `Password is in the password dictionary`, no policy accepts the name and the dict word, the rejected `pqname` create leaves nothing |
 | `scripts/kadmin-mit-gate.sh` | MIT | `ci:harness` | fail-red | MIT kadmind 749 in its own `kerber-rust-kadmin-mit` container (the oracle leg; needs the Rust leg's container and the `load_rust_snap` snapshots that `kadmin-rust-gate.sh` and `kadmin-rust-acl-gate.sh` save): the MIT side of the RPC cells (`AUTH_TOOWEAK`, RPCSEC_GSS reject, integrity tamper, changepw `listprincs` `list_code=43787564`), the lockdown cells (`extract-keys`, `delete'' privilege`, `modify'' privilege`), the alias/glob, ACL and policy cells; `kadmin/history` shape, `getprivs`, `getpol` and expiry equal to the Rust snapshots; `modprinc -unlock` against both kadminds (TL `1792`) |
 | `scripts/kadmin-rust-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kadmin` vs `krb5-kadmind` 749 (the Rust leg): add/cpw/mod then `kinit extra`; get/list; chrand (dates move)/ktadd/`ktadd -norandkey` then `kinit -k`; `+lockdown_keys`/purgekeys/`cpw -keepold`/setstr/`renprinc`; del then `getprinc` fails |
 | `scripts/kadmin-rust-acl-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kadmin` vs `krb5-kadmind` 749: the `alias_cells` / `glob_cells`, ACL-restart and policy cells (attached to the Rust leg's container) |
 | `scripts/kcm-gate.sh` | MIT | `ci:mit-extra-2` | fail-red | Rust `KCM:` vs Fedora `sssd-kcm` + Fedora's MIT `klist`: Rust `kinit -c KCM:` then MIT `klist` names `user@KERBER.TEST`; MIT `kinit -c KCM:` then Rust `klist` names the principal; `kswitch` two-principal (GEN_NEW residual); restart persist; re-prime; `kdestroy`; `KEYRING:` still unknown |
 | `scripts/kcm-opcode-gate.sh` | MIT | `kcm-opcode:kcm-opcode` | nightly | F43 and F42 `sssd-kcm` (KCM socket up, `GET_DEFAULT_CACHE` code 0): `GET_CRED_LIST=ok`; `RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL` |
 | `scripts/kdb-dump-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kdb5_util` dump/load both ways: MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` |
-| `scripts/kdc-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs Rust KDC: MIT TGT + host ticket; TGS audit seed stage 1 / no `tkt_out_id` / same `req_id` as `ENCR_REP`; `examples/configs` as written: `krb5-kdb create`, `krb5-kdc` + `krb5-kadmind` on `kdc.conf` alone, MIT `kadmin` `addprinc`, MIT `kinit` + `kvno` on `krb5.conf` |
+| `scripts/kdc-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs Rust KDC: MIT TGT + host ticket; TGS audit seed stage 1 / no `tkt_out_id` / same `req_id` as `ENCR_REP`; `examples/configs` as written: `krb5-kdb create`, `krb5-kdc` + `krb5-kadmind` on `kdc.conf` alone, MIT `kadmin` `addprinc`, MIT `kinit` + `kvno` on `krb5.conf`; the same realm on KLLDAP's `kdc_ports = 750,88` with no listener pins: MIT `kinit` over TCP 88 and UDP 750 to the container's non-loopback address, MIT `kadmin` `addprinc -randkey` + `ktadd` on 749, `kinit -k` |
 | `scripts/kdcpolicy-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kdcpolicy_test.so` vs Rust `TestPolicy` (`KRB5_KDCPOLICY=test`): AS/TGS deny on a `fail` first component is `KDC policy rejects request` on both legs (Rust AS also `LOCAL_POLICY` in `/tmp/kdc.log`); SPAKE `spake_preauth_indicator = ONE_HOUR` rewrites AS life to 3600 s and TGS life to 1800 s on both; a foreign indicator (`OTHER`) is `KDC policy rejects request` on both |
-| `scripts/kit-conformance-gate.sh` | MIT | `ci:harness-2` | skip2 | no check yet: **exit 2** whether `KIT_TWIN` is absent or present (the 2×2 is not vendored; a present twin prints `kit_twin_digest=`) |
 | `scripts/knobs-gate.sh` | MIT | `ci:harness` | fail-red | kit-like `krb5.conf` vs MIT 1.22.2 and Rust `kinit`: `kdc_timeout`/`max_retries` do not change MIT (or Rust) kinit success; `forwardable` + `default_tkt_enctypes` show `F` and `aes256-cts-hmac-sha1-96` on `klist -f -e`; `default_ccache_name` env>conf>builtin path parity; conf `proxiable`: MIT and Rust `kvno` host tickets show `P` |
 | `scripts/kpasswd-gate.sh` | MIT | wrapper | — | local wrapper: `kpasswd-rust-gate.sh` then `kpasswd-mit-gate.sh` |
 | `scripts/kpasswd-mit-gate.sh` | MIT | `ci:harness-2` | fail-red | the oracle leg of `kpasswd-rust-gate.sh`, against MIT kadmind 464: `-minlength 8` is `SOFTERROR` (`kpasswd` rc 2, `Password change rejected`, `result_code=4`); TGT `kvno kadmin/changepw` / `kadmin/admin` refused (`KDC policy rejects request`), MIT KDC log `TGT BASED NOT ALLOWED` |
@@ -69,7 +77,6 @@ peer, or **none** (Rust against Rust: it proves behaviour, not parity).
 | `scripts/kprop-reverse-gate.sh` | MIT | `ci:harness-2` | fail-red | Rust `krb5-kprop` vs MIT `kpropd`: MIT `krb5kdc` + MIT `kinit user@KERBER.TEST` |
 | `scripts/ktutil-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k`: Rust list of MIT keytab; Rust-written keytab `kinit -k` |
 | `scripts/mit-fast-kdc-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit -T` + `kvno` vs Rust KDC; forged-realm armor vs MIT + Rust; forged-realm FAST TGS: plain `kinit` TRACE `FAST negotiation: available` (RFC 6806 `enc-pa-rep`); `kinit -T` TRACE `Upgrading to FAST due to presence of PA_FX_FAST` or `Using FAST due to armor ccache negotiation result`; ≥2 `fast::KrbFastResponse` in the KDC log; forged `kinit -T` is 35 / `The ticket isn't for us` both sides (both KDC logs `FIND_FAST`); forged FAST TGS is 7 `PROCESS_TGS` + MIT `UNKNOWN SERVER: server='krbtgt/KERBER.TEST@FORGED.EXAMPLE'`; client `Server host/testhost.kerber.test@KERBER.TEST not found in Kerberos database` verbatim; MIT default-client `edwards25519` SPAKE vs a P-256-only KDC is 24 on both |
-| `scripts/nfs-krb5p-gate.sh` | MIT | `ci:harness-2` | skip2 | NFS `sec=krb5i`/`krb5p`: **exit 2** / manual until nfs-klldap-host is vendored |
 | `scripts/pkinit-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit -X X509_user_identity=FILE:` vs Rust KDC: `pkinit.so` present; log `rfc8636 sha256 kdf`; SAN≠cname log `pkinit client san`; anonymous `kinit -n` → `klist` `WELLKNOWN/ANONYMOUS` / `WELLKNOWN:ANONYMOUS`, `restrict_anon` `kvno` prints `KDC policy rejects request` and the Rust KDC log has `ANONYMOUS NOT ALLOWED`; RFC 8070 `pkinit_require_freshness = true`: MIT `kinit -X` succeeds and the Rust KDC log has `freshness token received`, `disable_freshness=yes` is `Preauthentication failed` + `no freshness token, rejecting` |
 | `scripts/policy-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kadmin` addpol/modpol/getpol/`cpw`/delpol + `kinit`: too-short + reuse; minclasses 5; history-N (current inside N); maxfailure-2; lockout duration/interval |
 | `scripts/postdate-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kinit -s` / `kinit -v` vs Rust KDC: INVALID `i` then `kvno` output contains `kvno: Ticket not yet valid while getting credentials for host/testhost.kerber.test@KERBER.TEST` and no `kvno =`; validate then `kvno`; `-allow_postdated` `kinit -s` output matches `cannot postdate`, `CANNOT_POSTDATE` or `ineligible for postdat` (case-insensitive) |
@@ -94,7 +101,6 @@ peer, or **none** (Rust against Rust: it proves behaviour, not parity).
 | `scripts/sha2-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit`/`kvno` etype 20 vs Rust KDC: `klist -e` names `aes256-cts-hmac-sha384-192` |
 | `scripts/soak-gate.sh` | none | `ci:soak`, `soak:soak` | soft, nightly | self RSS / latency on the prod realm under sustained load (MIT sampling is not the leak proof): fails on the RSS cap or the steady-window slope, an error rate above 0 or a panic; a window-over-window p99 rise over 2.5× is a warning |
 | `scripts/spake-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC: TRACE `Preauth module spake (151) (real) returned: 0/Success` + group 2; `klist` `user@KERBER.TEST` |
-| `scripts/sssd-renew-gate.sh` | MIT | `ci:harness-2` | skip2 | SSSD `krb5_child` renew: **exit 2** (no `SSSD_FEDORA_IMAGE`, image pull failure, or `sssd-kcm oracle not wired`; SSSD-side renewal still ungated) |
 | `scripts/store-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs MemoryStore KDC: `backend memory`; `user@KERBER.TEST` + host kvno |
 | `scripts/stress-gate.sh` | MIT | `ci:slo` | soft | wire AS+TGS + MIT `kinit`/`kvno` under load: fails on an error rate above 0, a panic or fewer than 16 issue-ok; p99 `duration_us` over 50 ms or under 8 issue-ok/s is a warning |
 
@@ -138,8 +144,8 @@ not check (a unit test, or "not asserted").
   for a local user (`--claim-crealm`) is `INVALID LINEAGE` on both sides. A
   seeded C TGT plus `krb5-kvno -U victim@A.TEST user@C.TEST` is refused with
   `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` on both MIT C and Rust C (name
-  collision across realms; `kvno` prints `kvno: INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` and the new
-  KDC log lines carry it). A seeded C TGT plus inbound `krbtgt`
+  collision across realms; `krb5-kvno` prints MIT's line for 36, `Ticket/authenticator don't
+  match`, and the new KDC log lines carry the status). A seeded C TGT plus inbound `krbtgt`
   `DISALLOW_ALL_TIX` (MIT C `modprinc -allow_tix`) is refused on both MIT C
   and Rust C: `kvno` reports
   `kvno: Server host/svc.c.test@C.TEST not found in Kerberos database`, and the
@@ -160,7 +166,7 @@ not check (a unit test, or "not asserted").
   (`scripts/kcm-gate.sh`). Rust `klist -c DIR:` of a missing path fails and
   creates nothing. Committed `tests/traces/ccache-mit-addr-u2u.bin` (`kinit -a` +
   u2u) identity-checks addresses/authdata/`second_ticket`. FILE write
-  (temp+rename) is not gated here: the gssproxy/SSSD oracles exit 2.
+  (temp+rename) is not gated here.
 - `scripts/chaos-gate.sh` — `tc netem` delay/loss/reorder (MIT must
   complete), low `--memory` under load (no OOM-panic), `docker kill` of the
   primary mid-load then MIT `kinit`/`kvno` on the kprop replica (including a
@@ -197,7 +203,8 @@ not check (a unit test, or "not asserted").
 - `scripts/config-include-gate.sh` — MIT vs Rust on the same
   `include`/`includedir` + colon-split `KRB5_CONFIG` tree: dotted `10.conf`
   is read; two-file scalar first-wins; missing include fails (does not
-  hang).
+  hang); a missing include, an indented one and an unexpandable default cache name print MIT's
+  exact line from both `kinit`s.
 - `scripts/cross-realm-gate.sh` — starts two Rust KDCs (KERBER.TEST:88,
   OTHER.TEST:89) sharing `KRB5_TEST_INTERREALM_KEY`, then MIT `kinit` +
   `kvno host/svc.other.test@OTHER.TEST`. It fails unless `klist` contains
@@ -266,8 +273,6 @@ not check (a unit test, or "not asserted").
   `GSS_C_DCE_STYLE` wrap_iov must unwrap to the sent bytes on both legs;
   Rust-initiator direction/filler/EC mutations are rejected on both
   acceptors.
-- `scripts/gss-sspi-gate.sh` — always exit 2 + `gss-sspi-gate-unavailable.log`:
-  no SSPI acceptor or Windows GSS server is in the tree to drive.
 - `scripts/heimdal-gate.sh` — Heimdal 7.8 secondary oracle
   (`harness/heimdal/`, Debian bookworm apt, no `krb5-user`). It exits 0 only
   after both directions pass `assert_klist`: Heimdal `kinit` + `kgetcred`
@@ -282,7 +287,9 @@ not check (a unit test, or "not asserted").
   restart the Rust master (`krb5-kdc` and `krb5-kadmind`), and require serial-delta with no extra
   FULL_RESYNC: MIT `kinit extra` on the MIT replica; `krb5-iprop-pull` vs
   MIT kadmind then MIT `kinit extra2` (the replica dump holds the `setstr`
-  value); extra2's replica PAC RID is not 1000 (same RID as the master is
+  value, and Rust `krb5-kadmin-local` on the replica shows the flags, lifetimes
+  and expirations `extra2` had before that setstr, whose update carries none of
+  them); extra2's replica PAC RID is not 1000 (same RID as the master is
   deferred: MIT kdbe has no SID and incremental encode omits vendor `0x4B0x`
   TL); MIT `delprinc extra2` then the name is gone on the Rust replica.
 - `scripts/kadmin-local-gate.sh` — Rust `krb5-kadmin-local` `addprinc`
@@ -368,9 +375,12 @@ not check (a unit test, or "not asserted").
   1.22.2 container (`shell_container`; its audit cell later runs MIT
   `krb5kdc` there), binds 127.0.0.1:88 (fallback 8888), and runs MIT
   `kinit user@KERBER.TEST` plus `kvno host/testhost.kerber.test`. Its last
-  cell runs `examples/configs` as written: `krb5-kdb create EXAMPLE.COM`,
+  cell runs `examples/configs` as written: `krb5-kdb -r EXAMPLE.COM create -s`,
   `krb5-kdc` and `krb5-kadmind` on `kdc.conf` alone, then MIT `kadmin`,
-  `kinit` and `kvno` through `kadm5.acl` and `krb5.conf`.
+  `kinit` and `kvno` through `kadm5.acl` and `krb5.conf`. The same realm then
+  restarts on KLLDAP's listener shape (`kdc_ports = 750,88`, no `kdc_listen`,
+  no kadmind or kpasswd relation) and MIT `kinit`, `kadmin` and `kinit -k`
+  reach it on the container's non-loopback address: TCP 88, UDP 750, 749.
 - `scripts/knobs-gate.sh` — `kdc_timeout = 1`/`max_retries = 1` leave MIT
   and Rust kinit succeeding; `forwardable` + `default_tkt_enctypes` show `F`
   and `aes256-cts-hmac-sha1-96` on `klist -f -e`; `default_ccache_name`
@@ -533,9 +543,9 @@ not check (a unit test, or "not asserted").
 - `scripts/soak-gate.sh` — sustained moderate load (~120 s in CI, 480 s
   scheduled in `.github/workflows/soak.yml`). RSS last ≤ first×1.5 + 33 MiB
   (the 33 MiB is sized, not asserted, as 8 MiB slack + the bounded working
-  set: the 10 MiB lookaside of `kdc/replay.c`, ~17 MiB real with its map/FIFO
-  overhead, plus the two replay caches over their 5-minute window, ~8 MiB at
-  soak load — 25 MiB measured at 300 s) and slope ≤ 0.05 MiB/s over the steady window, which
+  set: the 10 MiB lookaside of `kdc/replay.c` with its map/FIFO overhead;
+  25 MiB was measured at 300 s while the KDC also kept two replay caches,
+  since dropped) and slope ≤ 0.05 MiB/s over the steady window, which
   starts at the later of the KDC's `kdc.lookaside.full` event (when logged)
   and 300 s into the run (before that the working set is spread over the
   run: a run with fewer than 5 samples in a steady window is judged by the
@@ -553,10 +563,6 @@ not check (a unit test, or "not asserted").
   `user@KERBER.TEST`. First-round KRB-ERROR **91** `e_text` is
   `PREAUTH_FAILED` (`do_as_req.c:439-442,809`) in the
   `scripts/lib/kdc-error-proxy.py` capture and the Rust KDC log.
-- `scripts/sssd-renew-gate.sh` / `kit-conformance-gate.sh` /
-  `gssproxy-gate.sh` / `nfs-krb5p-gate.sh` — honest **exit 2** until the
-  Fedora/kit/NFS oracles are vendored (CI treats 2 as skip). SSSD-side
-  `krb5_child` renewal is still ungated.
 - `scripts/store-gate.sh` — `db_library=memory` KDC seeded from
   `--test-realm`; MIT `kinit` + `kvno`.
 - `scripts/stress-gate.sh` — concurrent wire AS+TGS via

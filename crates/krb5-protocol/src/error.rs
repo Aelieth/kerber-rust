@@ -52,6 +52,14 @@ pub enum Error {
     /// No overlapping etype with the KDC.
     #[error("no mutually supported etype")]
     NoEtype,
+    /// The KDC's etype-info names an enctype this client has, but none the request asked for.
+    /// MIT `KRB5_CONFIG_ETYPE_NOSUPP` (`krb5_err.et:326-326`): the code and text.
+    #[error("No supported encryption types (config file error?)")]
+    ConfigEtypeNosupp,
+    /// The KDC's etype-info names no enctype this client has.
+    /// MIT `KRB5_PROG_ETYPE_NOSUPP` (`krb5_err.et:204-204`): the code and text.
+    #[error("Program lacks support for encryption type")]
+    ProgEtypeNosupp,
     /// Reply too short to classify.
     #[error("KDC reply truncated")]
     TruncatedReply,
@@ -84,6 +92,8 @@ impl Clone for Error {
             Self::ReplyMismatch(s) => Self::ReplyMismatch(s.clone()),
             Self::Referral => Self::Referral,
             Self::NoEtype => Self::NoEtype,
+            Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
+            Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
             Self::TruncatedReply => Self::TruncatedReply,
             Self::File(e) => Self::Io {
                 message: e.to_string(),

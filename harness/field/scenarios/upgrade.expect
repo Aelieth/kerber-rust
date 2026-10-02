@@ -1,0 +1,14 @@
+# harness/field/scenarios/upgrade.expect: where upgrade.sh's rust leg is known to differ from MIT's, by check name
+# (the INFO observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN; anything else
+# that differs is a finding. Each line names the hand record that shows the difference (in the archive of field
+# records) and what would remove it.
+# check	known difference (rust leg vs MIT)	record	removed by
+obs.as.preauth	PREAUTH_REQUIRED e-data {136,19,2,133}: the client falls back to encrypted timestamp; MIT offers SPAKE first, {136,19,151,2,133} (edwards25519)	f-UP1 README, MIT facts (the AS row); f-R4-mit README	open item "SPAKE edwards25519" (no package yet)
+obs.as.rep.bytes	AS-REP about 1.5 kB (UP1: 1511 B), IP-fragmented on UDP: the PAC is the MS-PAC set {1,10,12,16,17,18,19,6,7} (LOGON_INFO 436 B); MIT db2 issues {10,16,6,7,19} and fits one datagram	f-UP1 README, MIT facts (sizes row); f-L2-rust F2	the user's PAC decision at the 1.1 cut (open item "PAC size")
+obs.tgs.req.bytes	TGS-REQ about 1.7 kB (UP1: 1683 B; it carries the 1018 B TGT): over MIT's default udp_preference_limit (1465), so a stock client sends it by TCP	f-UP1 §5f; f-L2-rust F2	as obs.as.rep.bytes
+obs.tgs.rep.bytes	TGS-REP about 1.7 kB (UP1: 1708 B), IP-fragmented on UDP (the PAC)	f-UP1 §5f	as obs.as.rep.bytes
+obs.kadmin.aprep	kadmind's AP-REP: subkey (null), seqnum 0; MIT's carries an acceptor subkey and a random seqnum	f-UP1 README, MIT facts (kadmin AP-REP row); docs/parity/b1-client.md	open item "kadmind's GSS acceptor AP-REP" (P15 family)
+obs.kpasswd.aprep	kpasswd's AP-REP: subkey (null), seqnum 1; MIT's carries an acceptor subkey and a random seqnum	f-UP1 README, MIT facts (kpasswd AP-REP row)	the AP-REP family (P15)
+obs.log.loaded	no "(info): Loaded" line, nor MIT's pkinit-init (Error) line, at start	f-UP1 README, MIT facts; f-L2-rust F4	P15
+obs.rss.start	daemon RSS at start: krb5kdc about 27 MiB where MIT's is about 5 MiB; it grows with use (recorded, not graded)	f-UP1 README, observation O1	P16 (investigation)
+obs.rss.end	as obs.rss.start, after the scenario's client traffic	f-UP1 README, observation O1	P16 (investigation)

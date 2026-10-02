@@ -280,6 +280,55 @@ fn parse_ccspec_unknown_type_display_is_exact() {
 }
 
 #[test]
+fn dbmodules_lockout_flags_come_from_the_realms_module_section() {
+    let realm_named = KdcConf::parse(
+        r"
+[realms]
+    P8.TEST = {
+        database_name = /w/db/principal
+    }
+[dbmodules]
+    OTHER = {
+        disable_lockout = true
+    }
+    P8.TEST = {
+        disable_last_success = true
+        disable_last_success = false
+    }
+",
+    )
+    .unwrap();
+    assert!(realm_named.disable_last_success, "the first value counts");
+    assert!(
+        !realm_named.disable_lockout,
+        "another module's section is not read"
+    );
+    let pointed = KdcConf::parse(
+        r"
+[realms]
+    P8.TEST = {
+        database_module = mod1
+    }
+[dbmodules]
+    P8.TEST = {
+        disable_last_success = true
+    }
+    mod1 = {
+        disable_lockout = yes
+    }
+",
+    )
+    .unwrap();
+    assert!(pointed.disable_lockout);
+    assert!(!pointed.disable_last_success);
+    assert!(
+        !KdcConf::parse("[realms]\n  P8.TEST = {\n  }\n")
+            .unwrap()
+            .disable_lockout
+    );
+}
+
+#[test]
 fn parse_kdc_conf_policy() {
     let text = r"
 [kdcdefaults]
@@ -312,7 +361,8 @@ fn parse_kdc_conf_policy() {
         c.domain_sid.as_deref(),
         Some("S-1-5-21-891046300-1937985867-1481223175")
     );
-    assert_eq!(c.kdc_listen[0], "127.0.0.1:88");
+    assert_eq!(c.kdc_listen, "88");
+    assert_eq!(c.kdc_tcp_listen.as_deref(), Some("88"));
     assert!(c.reject_bad_transit);
     let rc4 = KdcConf::parse(
         r"
@@ -396,6 +446,299 @@ fn parse_kdc_conf_policy() {
     );
 }
 
+/// A fake environment for [`KdcPaths::resolve_in`]: tests cannot set process variables.
+fn fake_env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<std::ffi::OsString> {
+    let vars: Vec<(String, String)> = vars
+        .iter()
+        .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+        .collect();
+    move |name: &str| {
+        vars.iter()
+            .find(|(k, _)| k == name)
+            .map(|(_, v)| std::ffi::OsString::from(v))
+    }
+}
+
+fn resolve_paths(
+    vars: &[(&str, &str)],
+    realm: Option<&str>,
+    default_realm: Option<&str>,
+) -> Result<KdcPaths, Error> {
+    KdcPaths::resolve_in(&fake_env(vars), realm, || default_realm.map(str::to_owned))
+}
+
+fn kdc_dir_path(name: &str) -> std::path::PathBuf {
+    std::path::Path::new(KDC_DIR).join(name)
+}
+
+#[test]
+fn kdc_profile_is_the_variable_else_kdc_dir() {
+    // MIT `add_kdc_config_file` (`init_os_ctx.c:340-366`): KRB5_KDC_PROFILE, else DEFAULT_KDC_PROFILE.
+    assert_eq!(
+        kdcconf::kdc_conf_path_in(&fake_env(&[])),
+        kdc_dir_path("kdc.conf")
+    );
+    assert_eq!(default_kdc_profile(), kdc_dir_path("kdc.conf"));
+    // The gates' KRB5_KDC_CONF alias is read only in a test-hooks build; MIT reads
+    // KRB5_KDC_PROFILE alone.
+    let alias = fake_env(&[("KRB5_KDC_CONF", "/b/kdc.conf")]);
+    let want = if cfg!(feature = "test-hooks") {
+        std::path::PathBuf::from("/b/kdc.conf")
+    } else {
+        kdc_dir_path("kdc.conf")
+    };
+    assert_eq!(kdcconf::kdc_conf_path_in(&alias), want);
+    let both = fake_env(&[
+        ("KRB5_KDC_PROFILE", "/a/kdc.conf"),
+        ("KRB5_KDC_CONF", "/b/kdc.conf"),
+    ]);
+    assert_eq!(
+        kdcconf::kdc_conf_path_in(&both),
+        std::path::Path::new("/a/kdc.conf")
+    );
+}
+
+#[test]
+fn a_missing_profile_leaves_mit_defaults_under_kdc_dir() {
+    // Live MIT 1.22.2: `KRB5_KDC_PROFILE=/nonexistent/kdc.conf kdb5_util -P pw create -s -r R`
+    // creates KDC_DIR/principal and KDC_DIR/.k5.R, exit 0.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-missing");
+    let missing = dir.join("no-such-kdc.conf");
+    let missing = missing.to_str().unwrap();
+    let p = resolve_paths(&[("KRB5_KDC_PROFILE", missing)], None, Some("KERBER.TEST")).unwrap();
+    assert_eq!(p.profile, std::path::Path::new(missing));
+    assert_eq!(p.conf, None);
+    assert_eq!(p.realm.as_deref(), Some("KERBER.TEST"));
+    assert_eq!(p.database_name, kdc_dir_path("principal"));
+    assert_eq!(p.key_stash_file, kdc_dir_path(".k5.KERBER.TEST"));
+    assert_eq!(p.acl_file, Some(kdc_dir_path("kadm5.acl")));
+    assert_eq!(p.master_key_type, None);
+    // A directory reads as an empty profile too; text that is not UTF-8 is refused.
+    let as_dir = resolve_paths(
+        &[("KRB5_KDC_PROFILE", dir.to_str().unwrap())],
+        Some("R"),
+        None,
+    );
+    assert_eq!(as_dir.unwrap().conf, None);
+    let bad = dir.join("bad-kdc.conf");
+    std::fs::write(&bad, b"[realms]\n\xff\n").unwrap();
+    let err = resolve_paths(
+        &[("KRB5_KDC_PROFILE", bad.to_str().unwrap())],
+        Some("R"),
+        None,
+    );
+    assert!(err.unwrap_err().to_string().contains("bad-kdc.conf"));
+}
+
+#[test]
+fn paths_come_from_the_realms_own_stanza() {
+    // MIT `get_string_param` (`alt_prof.c:310-336`): the realm's stanza, last value.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-stanza");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]\n    A.TEST = {\n        database_name = /a/principal\n        \
+         key_stash_file = /a/stash\n        acl_file = /a/kadm5.acl\n        \
+         master_key_type = aes256-cts-hmac-sha1-96\n    }\n    B.TEST = {\n        \
+         database_name = /b/old\n        database_name = /b/principal\n    }\n",
+    )
+    .unwrap();
+    let vars = [("KRB5_KDC_PROFILE", conf.to_str().unwrap())];
+    let a = resolve_paths(&vars, None, Some("A.TEST")).unwrap();
+    assert_eq!(a.database_name, std::path::Path::new("/a/principal"));
+    assert_eq!(a.key_stash_file, std::path::Path::new("/a/stash"));
+    assert_eq!(
+        a.acl_file.as_deref(),
+        Some(std::path::Path::new("/a/kadm5.acl"))
+    );
+    assert_eq!(
+        a.master_key_type.as_deref(),
+        Some("aes256-cts-hmac-sha1-96")
+    );
+    assert!(a.conf.is_some());
+    // B.TEST's stanza has no stash, ACL or master key type: MIT's defaults, not A.TEST's.
+    let b = resolve_paths(&vars, Some("B.TEST"), Some("A.TEST")).unwrap();
+    assert_eq!(b.realm.as_deref(), Some("B.TEST"));
+    assert_eq!(b.database_name, std::path::Path::new("/b/principal"));
+    assert_eq!(b.key_stash_file, kdc_dir_path(".k5.B.TEST"));
+    assert_eq!(b.acl_file, Some(kdc_dir_path("kadm5.acl")));
+    assert_eq!(b.master_key_type, None);
+}
+
+#[test]
+fn a_realm_with_no_stanza_gets_mit_defaults() {
+    // Live MIT 1.22.2: when kdc.conf holds a stanza only for another realm, `kdb5_util create -s`
+    // for the default realm writes KDC_DIR/principal and KDC_DIR/.k5.<default realm>.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-other");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]\n    EXAMPLE.COM = {\n        database_name = /x/principal\n        \
+         key_stash_file = /x/.k5.EXAMPLE.COM\n    }\n",
+    )
+    .unwrap();
+    let vars = [("KRB5_KDC_PROFILE", conf.to_str().unwrap())];
+    let p = resolve_paths(&vars, None, Some("KERBER.TEST")).unwrap();
+    assert_eq!(p.database_name, kdc_dir_path("principal"));
+    assert_eq!(p.key_stash_file, kdc_dir_path(".k5.KERBER.TEST"));
+    let named = resolve_paths(&vars, Some("EXAMPLE.COM"), Some("KERBER.TEST")).unwrap();
+    assert_eq!(named.database_name, std::path::Path::new("/x/principal"));
+    assert_eq!(
+        named.key_stash_file,
+        std::path::Path::new("/x/.k5.EXAMPLE.COM")
+    );
+}
+
+#[cfg(feature = "test-hooks")]
+#[test]
+fn environment_overrides_sit_on_top() {
+    let dir = krb5_testkit::scratch_dir("kdcpaths-env");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]\n    KERBER.TEST = {\n        database_name = /c/principal\n        \
+         key_stash_file = /c/stash\n        acl_file = /c/kadm5.acl\n        \
+         master_key_type = aes256-cts-hmac-sha1-96\n    }\n",
+    )
+    .unwrap();
+    let p = resolve_paths(
+        &[
+            ("KRB5_KDC_CONF", conf.to_str().unwrap()),
+            ("KRB5_KDC_DB", "/e/principal"),
+            ("KRB5_KDC_STASH", "/e/stash"),
+            ("KRB5_ACL_FILE", "/e/acl"),
+            ("KRB5_MASTER_ETYPE", "aes128-cts-hmac-sha256-128"),
+        ],
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(p.realm, None);
+    assert!(p.conf.is_some());
+    assert_eq!(p.database_name, std::path::Path::new("/e/principal"));
+    assert_eq!(p.key_stash_file, std::path::Path::new("/e/stash"));
+    assert_eq!(p.acl_file.as_deref(), Some(std::path::Path::new("/e/acl")));
+    assert_eq!(
+        p.master_key_type.as_deref(),
+        Some("aes128-cts-hmac-sha256-128")
+    );
+}
+
+#[test]
+fn the_acl_default_follows_a_relocated_stash_and_empty_means_none() {
+    if cfg!(feature = "test-hooks") {
+        let both = [
+            ("KRB5_KDC_DB", "/tmp/principal"),
+            ("KRB5_KDC_STASH", "/tmp/stash"),
+        ];
+        let p = resolve_paths(&both, None, None).unwrap();
+        assert_eq!(
+            p.acl_file.as_deref(),
+            Some(std::path::Path::new("/tmp/kadm5.acl"))
+        );
+        let p = resolve_paths(&both[1..], None, Some("R")).unwrap();
+        assert_eq!(p.database_name, kdc_dir_path("principal"));
+        assert_eq!(
+            p.acl_file.as_deref(),
+            Some(std::path::Path::new("/tmp/kadm5.acl"))
+        );
+        let none = resolve_paths(&[both[0], both[1], ("KRB5_ACL_FILE", "")], None, None);
+        assert_eq!(none.unwrap().acl_file, None);
+    }
+    let dir = krb5_testkit::scratch_dir("kdcpaths-acl");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(&conf, "[realms]\n    R = {\n        acl_file =\n    }\n").unwrap();
+    let empty = resolve_paths(
+        &[("KRB5_KDC_PROFILE", conf.to_str().unwrap())],
+        Some("R"),
+        None,
+    );
+    assert_eq!(empty.unwrap().acl_file, None);
+}
+
+#[test]
+fn no_realm_fails_unless_both_files_are_named() {
+    // Live MIT 1.22.2: with no -r and no default_realm, kdb5_util refuses before any path,
+    // even with -d and -sf: "Configuration file does not specify default realm while getting
+    // default realm", exit 1.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-norealm");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]
+    R = {
+        database_name = /r/principal
+                 key_stash_file = /r/stash
+    }
+",
+    )
+    .unwrap();
+    let vars = [("KRB5_KDC_PROFILE", conf.to_str().unwrap())];
+    let e = resolve_paths(&vars, None, None).unwrap_err();
+    assert!(matches!(e, Error::NoDefaultRealm));
+    assert_eq!(
+        e.to_string(),
+        "Configuration file does not specify default realm"
+    );
+    let stash_only = [vars[0], ("KRB5_KDC_STASH", "/s/stash")];
+    assert!(matches!(
+        resolve_paths(&stash_only, None, None),
+        Err(Error::NoDefaultRealm)
+    ));
+    let both = [
+        stash_only[0],
+        stash_only[1],
+        ("KRB5_KDC_DB", "/s/principal"),
+    ];
+    if cfg!(feature = "test-hooks") {
+        let p = resolve_paths(&both, None, None).unwrap();
+        assert_eq!(p.realm, None);
+        assert_eq!(p.database_name, std::path::Path::new("/s/principal"));
+    } else {
+        assert!(matches!(
+            resolve_paths(&both, None, None),
+            Err(Error::NoDefaultRealm)
+        ));
+    }
+}
+
+#[cfg(not(feature = "test-hooks"))]
+#[test]
+fn a_release_build_reads_no_path_override() {
+    // Live MIT 1.22.2: kadmin.local with KRB5_KDC_DB, KRB5_KDC_STASH, KRB5_ACL_FILE,
+    // KRB5_MASTER_ETYPE and KRB5_KDC_CONF all set uses the KRB5_KDC_PROFILE realm's database.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-release");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]\n    KERBER.TEST = {\n        database_name = /c/principal\n        \
+         key_stash_file = /c/stash\n        acl_file = /c/kadm5.acl\n    }\n",
+    )
+    .unwrap();
+    let p = resolve_paths(
+        &[
+            ("KRB5_KDC_PROFILE", conf.to_str().unwrap()),
+            ("KRB5_KDC_CONF", "/e/kdc.conf"),
+            ("KRB5_KDC_DB", "/e/principal"),
+            ("KRB5_KDC_STASH", "/e/stash"),
+            ("KRB5_ACL_FILE", "/e/acl"),
+            ("KRB5_MASTER_ETYPE", "aes128-cts-hmac-sha256-128"),
+        ],
+        None,
+        Some("KERBER.TEST"),
+    )
+    .unwrap();
+    assert_eq!(p.profile, conf);
+    assert_eq!(p.database_name, std::path::Path::new("/c/principal"));
+    assert_eq!(p.key_stash_file, std::path::Path::new("/c/stash"));
+    assert_eq!(
+        p.acl_file.as_deref(),
+        Some(std::path::Path::new("/c/kadm5.acl"))
+    );
+    assert_eq!(p.master_key_type, None);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn dict_file_is_a_realm_relation_only() {
     // MIT `kadm5_get_config_params` (`alt_prof.c:486-513`): reads dict_file under
@@ -445,8 +788,8 @@ fn libdefaults_does_not_honour_kdcdefaults_knobs() {
     )
     .unwrap();
     // The kdcdefaults knobs under [libdefaults] are ignored: defaults kept.
-    assert_eq!(lib.kdc_listen, vec!["127.0.0.1:88".to_string()]);
-    assert_eq!(lib.kdc_tcp_listen, vec!["127.0.0.1:88".to_string()]);
+    assert_eq!(lib.kdc_listen, "88");
+    assert_eq!(lib.kdc_tcp_listen, None);
     assert!(lib.reject_bad_transit, "reject_bad_transit default kept");
     // The four enctype knobs under [libdefaults] are still honoured.
     assert_eq!(lib.allow_rc4, Some(true));
@@ -459,7 +802,7 @@ fn libdefaults_does_not_honour_kdcdefaults_knobs() {
 ",
     )
     .unwrap();
-    assert_eq!(kdc.kdc_listen, vec!["127.0.0.1:12345".to_string()]);
+    assert_eq!(kdc.kdc_listen, "12345");
     assert!(!kdc.reject_bad_transit);
 }
 
@@ -743,9 +1086,310 @@ fn parse_text_does_not_follow_include() {
 }
 
 #[test]
+fn quoted_values_unescape_as_mit_s_profile_parser() {
+    let c = Krb5Conf::parse(concat!(
+        "[libdefaults]\n",
+        "    default_keytab_name = \"FILE:/k/a b\\tc\\\\d\\\"e\" after\n",
+        "    default_ccache_name = FILE:/c/x\"y\"  \n",
+    ))
+    .unwrap();
+    assert_eq!(
+        c.default_keytab_name.as_deref(),
+        Some("FILE:/k/a b\tc\\d\"e")
+    );
+    assert_eq!(c.default_ccache_name.as_deref(), Some("FILE:/c/x\"y\""));
+    let open =
+        Krb5Conf::parse("[libdefaults]\n    default_keytab_name = \"FILE:/k/open\\\n").unwrap();
+    assert_eq!(open.default_keytab_name.as_deref(), Some("FILE:/k/open\\"));
+}
+
+#[test]
+fn default_keytab_name_follows_includedir_and_the_first_file_wins() {
+    let dir = krb5_testkit::scratch_dir("profile-ktname");
+    let inc = dir.join("conf.d");
+    let _ = std::fs::create_dir_all(&inc);
+    std::fs::write(
+        inc.join("kt.conf"),
+        "[libdefaults]\n    default_keytab_name = FILE:/k/included\n",
+    )
+    .unwrap();
+    let main = dir.join("krb5.conf");
+    std::fs::write(&main, format!("includedir {}\n", inc.display())).unwrap();
+    let kdc = dir.join("kdc.conf");
+    std::fs::write(
+        &kdc,
+        "[libdefaults]\n    default_keytab_name = FILE:/k/kdc\n",
+    )
+    .unwrap();
+    let from_main = crate::load_krb5_conf_paths([&main]).unwrap();
+    assert_eq!(
+        from_main.default_keytab_name.as_deref(),
+        Some("FILE:/k/included")
+    );
+    let kdc_first = crate::load_krb5_conf_paths([&kdc, &main]).unwrap();
+    assert_eq!(
+        kdc_first.default_keytab_name.as_deref(),
+        Some("FILE:/k/kdc")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn ignore_acceptor_hostname_defaults_false() {
     let c = Krb5Conf::parse("[libdefaults]\n    default_realm = KERBER.TEST\n").unwrap();
     assert!(!c.ignore_acceptor_hostname);
     let on = Krb5Conf::parse("[libdefaults]\n    ignore_acceptor_hostname = true\n").unwrap();
     assert!(on.ignore_acceptor_hostname);
+}
+
+fn wild(port: u16) -> crate::listen::ListenAddr {
+    crate::listen::ListenAddr { host: None, port }
+}
+
+fn at(host: &str, port: u16) -> crate::listen::ListenAddr {
+    crate::listen::ListenAddr {
+        host: Some(host.to_owned()),
+        port,
+    }
+}
+
+#[test]
+fn kdc_ports_list_binds_every_port_on_the_wildcard_like_mit() {
+    // The three cases MIT krb5kdc / kadmind 1.22.2 bind, read from their sockets.
+    // Case 1, KLLDAP's kdc.template.conf: `kdc_ports = 750,88` and nothing else.
+    let c = KdcConf::parse("[kdcdefaults]\n    kdc_ports = 750,88\n").unwrap();
+    assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(750), wild(88)]);
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(750), wild(88)]);
+    assert_eq!(c.kadmind_listeners(None).unwrap(), vec![wild(749)]);
+    assert_eq!(c.kpasswd_listeners().unwrap(), vec![wild(464)]);
+    // Case 2: the realm stanza's lists beat [kdcdefaults], UDP and TCP apart.
+    let c = KdcConf::parse(
+        "[kdcdefaults]\n    kdc_ports = 750,88\n[realms]\n    R = {\n        kdc_listen = 127.0.0.2:8888 3333\n        kdc_tcp_listen = 9999\n    }\n",
+    )
+    .unwrap();
+    assert_eq!(
+        c.kdc_udp_listeners().unwrap(),
+        vec![at("127.0.0.2", 8888), wild(3333)]
+    );
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(9999)]);
+    // Case 3: a TCP-only list leaves UDP on the default; kadmind and kpasswd lists.
+    let c = KdcConf::parse(
+        "[kdcdefaults]\n    kdc_tcp_ports = 7777\n[realms]\n    R = {\n        kadmind_listen = 127.0.0.3:7749\n        kpasswd_port = 7464\n    }\n",
+    )
+    .unwrap();
+    assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(88)]);
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(7777)]);
+    assert_eq!(
+        c.kadmind_listeners(None).unwrap(),
+        vec![at("127.0.0.3", 7749)]
+    );
+    assert_eq!(c.kpasswd_listeners().unwrap(), vec![wild(7464)]);
+    // No kdc.conf listener relation at all: MIT DEFAULT_KDC_PORTLIST on the wildcard.
+    let c = KdcConf::default();
+    assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(88)]);
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(88)]);
+}
+
+#[test]
+fn kdc_listen_beats_kdc_ports_in_the_same_section() {
+    // MIT `init_realm` tries kdc_listen first and reads kdc_ports only when it is absent,
+    // whatever the order in the file.
+    let c = KdcConf::parse(
+        "[kdcdefaults]\n    kdc_ports = 88\n    kdc_listen = 127.0.0.1:1088\n    kdc_tcp_ports = 2088\n    kdc_tcp_listen = 3088\n",
+    )
+    .unwrap();
+    assert_eq!(c.kdc_udp_listeners().unwrap(), vec![at("127.0.0.1", 1088)]);
+    assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(3088)]);
+}
+
+#[test]
+fn listen_entries_parse_like_k5_parse_host_string() {
+    use crate::listen::{listen_addrs, parse_host_string};
+    assert_eq!(parse_host_string("88", 88).unwrap(), wild(88));
+    assert_eq!(
+        parse_host_string("kdc.example.com", 88).unwrap(),
+        at("kdc.example.com", 88)
+    );
+    assert_eq!(
+        parse_host_string("10.0.0.1:750", 88).unwrap(),
+        at("10.0.0.1", 750)
+    );
+    assert_eq!(parse_host_string("[::1]:750", 88).unwrap(), at("::1", 750));
+    assert_eq!(parse_host_string("[::]", 88).unwrap(), at("::", 88));
+    for bad in ["", ":88", "10.0.0.1:", "10.0.0.1:x", "70000", "[::1]:99999"] {
+        assert!(
+            parse_host_string(bad, 88).is_err(),
+            "{bad:?} must be refused"
+        );
+    }
+    // `,`, `;` and space all separate; a /path entry (a UNIX socket in MIT) is skipped.
+    assert_eq!(
+        listen_addrs(Some("750, 88;127.0.0.1:89 /run/kdc.sock"), 88).unwrap(),
+        vec![wild(750), wild(88), at("127.0.0.1", 89)]
+    );
+    // MIT `loop_add_address`: a wildcard removes the direct addresses on its port, and a
+    // direct address on a wildcard's port (or a repeat) is dropped.
+    assert_eq!(
+        listen_addrs(
+            Some("127.0.0.1:88 88 10.0.0.1:88 88 127.0.0.1:89 127.0.0.1:89"),
+            88
+        )
+        .unwrap(),
+        vec![wild(88), at("127.0.0.1", 89)]
+    );
+    assert_eq!(listen_addrs(None, 749).unwrap(), vec![wild(749)]);
+    assert!(listen_addrs(Some("88,99999"), 88).is_err());
+}
+
+#[test]
+fn wildcard_resolves_to_both_families() {
+    let addrs = wild(88).resolve().unwrap();
+    assert_eq!(
+        addrs,
+        vec![
+            "0.0.0.0:88".parse::<std::net::SocketAddr>().unwrap(),
+            "[::]:88".parse().unwrap()
+        ]
+    );
+    assert_eq!(
+        at("127.0.0.1", 750).resolve().unwrap(),
+        vec!["127.0.0.1:750".parse::<std::net::SocketAddr>().unwrap()]
+    );
+}
+
+#[test]
+fn kadmind_port_follows_admin_server_then_kadmind_port() {
+    // MIT `kadm5_get_config_params`: a port written in admin_server sets kadmind's port
+    // before kadmind_port is read.
+    let c = KdcConf::parse("[realms]\n    R = {\n        kadmind_port = 7749\n    }\n").unwrap();
+    assert_eq!(c.kadmind_port(None), 7749);
+    assert_eq!(c.kadmind_port(Some("kdc.example.com")), 7749);
+    assert_eq!(c.kadmind_port(Some("kdc.example.com:8749")), 8749);
+    assert_eq!(c.kadmind_port(Some("[::1]:9749")), 9749);
+    let c = KdcConf::parse(
+        "[realms]\n    R = {\n        admin_server = kdc.example.com:6749\n        kadmind_port = 7749\n    }\n",
+    )
+    .unwrap();
+    assert_eq!(c.kadmind_port(Some("other:8749")), 6749);
+    assert_eq!(KdcConf::default().kadmind_port(None), 749);
+}
+
+// `[logging]` (logging.rs).
+
+fn logging_conf(kdc: &str, krb5: &str) -> (KdcConf, Krb5Conf) {
+    (KdcConf::parse(kdc).unwrap(), Krb5Conf::parse(krb5).unwrap())
+}
+
+#[test]
+fn the_program_key_wins_over_default_across_both_files() {
+    let (k, c) = logging_conf(
+        "[logging]\n    kdc = FILE:/a.log\n    default = FILE:/d.log\n",
+        "[logging]\n    kdc = FILE:/b.log\n    admin_server = FILE=/k.log\n",
+    );
+    let kdc = LogSpecs::for_program(Some(&k), Some(&c), "kdc");
+    assert_eq!(kdc.specs, ["FILE:/a.log", "FILE:/b.log"]);
+    let admin = LogSpecs::for_program(Some(&k), Some(&c), "admin_server");
+    assert_eq!(admin.specs, ["FILE=/k.log"]);
+    assert!(!kdc.debug);
+}
+
+#[test]
+fn default_only_when_the_program_has_no_relation_anywhere() {
+    let (k, c) = logging_conf(
+        "[logging]\n    kdc = STDERR\n",
+        "[logging]\n    default = FILE:/var/log/krb5libs.log\n",
+    );
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), Some(&c), "admin_server").specs,
+        ["FILE:/var/log/krb5libs.log"]
+    );
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), Some(&c), "kdc").specs,
+        ["STDERR"]
+    );
+    assert_eq!(
+        LogSpecs::for_program(None, None, "kdc"),
+        LogSpecs::default()
+    );
+}
+
+#[test]
+fn fedora_krb5_conf_routes_both_daemons_to_files() {
+    let fedora = "includedir /nonexistent-not-read-by-parse/\n\n[logging]\n    default = FILE:/var/log/krb5libs.log\n    kdc = FILE:/var/log/krb5kdc.log\n    admin_server = FILE:/var/log/kadmind.log\n\n[libdefaults]\n    dns_lookup_realm = false\n";
+    let c = Krb5Conf::parse(fedora).unwrap();
+    let k = KdcConf::parse("[kdcdefaults]\n    kdc_ports = 88\n").unwrap();
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), Some(&c), "kdc").specs,
+        ["FILE:/var/log/krb5kdc.log"]
+    );
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), Some(&c), "admin_server").specs,
+        ["FILE:/var/log/kadmind.log"]
+    );
+}
+
+#[test]
+fn debug_is_the_first_value_as_a_profile_boolean() {
+    for (v, want) in [
+        ("T", true),
+        ("y", true),
+        ("on", true),
+        ("nil", false),
+        ("maybe", false),
+    ] {
+        let k = KdcConf::parse(&format!("[logging]\n    debug = {v}\n    debug = true\n")).unwrap();
+        assert_eq!(
+            LogSpecs::for_program(Some(&k), None, "kdc").debug,
+            want,
+            "{v}"
+        );
+    }
+}
+
+#[test]
+fn json_is_the_first_value_kdc_conf_first_and_no_log_destination() {
+    let (k, c) = logging_conf(
+        "[logging]\n    json = FILE:/j.log\n",
+        "[logging]\n    kdc = STDERR\n\n[libdefaults]\n    rdns = false\n\n[logging]\n    json = STDOUT\n",
+    );
+    let kdc = LogSpecs::for_program(Some(&k), Some(&c), "kdc");
+    assert_eq!(kdc.json.as_deref(), Some("FILE:/j.log"));
+    assert_eq!(kdc.specs, ["STDERR"]);
+    let admin = LogSpecs::for_program(None, Some(&c), "admin_server");
+    assert_eq!(admin.json.as_deref(), Some("STDOUT"));
+    assert_eq!(admin.specs, Vec::<String>::new());
+    assert_eq!(LogSpecs::for_program(None, None, "kdc").json, None);
+}
+
+#[test]
+fn relation_names_are_case_sensitive_as_in_the_profile_library() {
+    let k = KdcConf::parse("[logging]\n    KDC = FILE:/upper.log\n").unwrap();
+    assert_eq!(
+        LogSpecs::for_program(Some(&k), None, "kdc").specs,
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn port_option_replaces_the_default_list_but_not_the_realms() {
+    let ports = |conf: &KdcConf| -> (Vec<u16>, Vec<u16>) {
+        let udp = conf.kdc_udp_listeners().unwrap();
+        let tcp = conf.kdc_tcp_listeners().unwrap();
+        (
+            udp.iter().map(|a| a.port).collect(),
+            tcp.iter().map(|a| a.port).collect(),
+        )
+    };
+    let stanza = "[realms]\n    SETTLE.TEST = {\n        database_name = /s/db/principal\n    }\n";
+    let mut plain = KdcConf::parse(stanza).unwrap();
+    plain.apply_port_option("7088");
+    assert_eq!(ports(&plain), (vec![7088], vec![7088]));
+    let mut tcp_default =
+        KdcConf::parse(&format!("[kdcdefaults]\n    kdc_tcp_ports = 88\n{stanza}")).unwrap();
+    tcp_default.apply_port_option("7088");
+    assert_eq!(ports(&tcp_default), (vec![7088], vec![88]));
+    let mut realm_ports =
+        KdcConf::parse("[realms]\n    SETTLE.TEST = {\n        kdc_ports = 89\n    }\n").unwrap();
+    realm_ports.apply_port_option("7088");
+    assert_eq!(ports(&realm_ports), (vec![89], vec![89]));
 }

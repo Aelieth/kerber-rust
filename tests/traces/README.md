@@ -6,11 +6,12 @@ to equal the captured bytes (plus named fields). A divergence fails the
 unit `test` CI job. `mit-krb-error-preauth.der` is the KRB-ERROR we emit
 (PREAUTH_REQUIRED), not a MIT-KDC reply.
 
-Set `KERBER_CAPTURE_DIR` when running the KDC or client: each raw PDU is
+Set `KERBER_CAPTURE_DIR` when running the KDC or client of a `test-hooks`
+build (the gates', `scripts/lib/build-bins.sh`): each raw PDU is
 written as `{kdc,client}-{req,rep}-<nonce>.der` at the Rust socket
 boundary (no packet sniffer required). Unset or empty
 `KERBER_CAPTURE_DIR` writes nothing — the product has no default
-directory. Gate scripts set the variable (container `/tmp/traces`) and
+directory — and a release build has no capture at all. Gate scripts set the variable (container `/tmp/traces`) and
 copy out to `${KERBER_TRACE_DST:-${KERBER_SCRATCH:-target}/traces}`;
 `refuse_golden_capture_dir` refuses a path under `tests/traces/`. This
 directory keeps only the 13 tracked files (README + 12 goldens);

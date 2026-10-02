@@ -38,10 +38,10 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The 111 live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The 112 live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `as-needpreauth-hints-unpermitted`,
-`skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`,
+`skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`, `as-locked-out`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
 `as-request-anonymous`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`,
 `fast-armor-no-subkey`, `armor-ap-req-as-pa-tgs-req`, `tgs-ad-fx-armor-authenticator`,
@@ -86,9 +86,9 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**462** = A1 128 + A2 93 + A3 79 + A4 58 + A5 25 + B1 79.
-exact 362 · stricter-documented 16 · deviation 33 ·
-absent 2 · deferred 49.
+**464** = A1 128 + A2 94 + A3 79 + A4 59 + A5 25 + B1 79.
+exact 369 · stricter-documented 13 · deviation 35 ·
+absent 2 · deferred 45.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and

@@ -23,7 +23,8 @@ struct Entry {
     /// `None` marks a request that is still being processed (MIT inserts a
     /// NULL reply); `Some` is a completed reply to resend.
     reply: Option<Vec<u8>>,
-    generation: u64,
+    /// The entry's place in the queue: slot `seq - head` of `order`.
+    seq: u64,
     size: usize,
 }
 
@@ -44,12 +45,13 @@ pub enum Check {
 /// tracks MIT's accounting (`req_packet + reply_packet + sizeof(entry)`).
 pub(crate) struct Lookaside {
     map: HashMap<Arc<[u8]>, Entry>,
-    /// `(key, generation)` in insertion order; the FIFO MIT keeps in `expiration_queue`.
-    /// Superseded pairs (whose generation no longer matches the map) are skipped
-    /// lazily during eviction rather than removed eagerly.
-    order: VecDeque<(Arc<[u8]>, u64)>,
+    /// The FIFO MIT keeps in `expiration_queue`, oldest first; slot `i` holds the entry whose
+    /// `seq` is `head + i`. A discarded entry's slot is emptied at once, so it keeps none of the
+    /// request's bytes, and is dropped when it reaches the front.
+    order: VecDeque<Option<Arc<[u8]>>>,
+    /// The `seq` of `order`'s first slot.
+    head: u64,
     total: usize,
-    next_gen: u64,
     max_size: usize,
     stale: Duration,
     /// Set once the size cap first forces an eviction; the KDC log line lets a
@@ -76,8 +78,8 @@ impl Lookaside {
         Self {
             map: HashMap::new(),
             order: VecDeque::new(),
+            head: 0,
             total: 0,
-            next_gen: 0,
             max_size,
             stale,
             full_logged: false,
@@ -95,38 +97,52 @@ impl Lookaside {
                 None => Check::InProgress,
             };
         }
-        self.insert(req, None);
+        self.insert(Arc::from(req), None);
         Check::Fresh
     }
 
     /// MIT `finish_dispatch_cache`: drop the in-progress marker and cache the
     /// produced reply. A reply of `None` (a drop, or an internal error) caches
     /// nothing, like MIT removing the marker without inserting a response.
+    /// MIT `finish_dispatch_cache` (`dispatch.c:78-83`): the marker is removed whole, then a reply is inserted as a new entry at the queue's tail.
     pub fn finish(&mut self, req: &[u8], reply: Option<&[u8]>) {
-        if let Some(e) = self.map.remove(req) {
-            self.total -= e.size;
-        }
+        let key = self.discard(req);
         if let Some(bytes) = reply
             && !bytes.is_empty()
         {
-            self.insert(req, Some(bytes));
+            self.insert(key.unwrap_or_else(|| Arc::from(req)), Some(bytes));
         }
     }
 
-    fn insert(&mut self, req: &[u8], reply: Option<&[u8]>) {
-        let size = ENTRY_OVERHEAD + req.len() + reply.map_or(0, <[u8]>::len);
+    /// Remove `req`'s entry from the map and empty its queue slot, returning the request's bytes
+    /// for reuse.
+    /// MIT `discard_entry` (`kdc/replay.c:118-125`): an entry leaves the hash table and the expiration queue together, and its bytes go with it.
+    fn discard(&mut self, req: &[u8]) -> Option<Arc<[u8]>> {
+        let (key, e) = self.map.remove_entry(req)?;
+        self.total -= e.size;
+        let slot = e
+            .seq
+            .checked_sub(self.head)
+            .and_then(|i| usize::try_from(i).ok())
+            .and_then(|i| self.order.get_mut(i));
+        if let Some(slot) = slot {
+            *slot = None;
+        }
+        Some(key)
+    }
+
+    fn insert(&mut self, key: Arc<[u8]>, reply: Option<&[u8]>) {
+        let size = ENTRY_OVERHEAD + key.len() + reply.map_or(0, <[u8]>::len);
         self.evict(size);
-        let generation = self.next_gen;
-        self.next_gen += 1;
-        let key: Arc<[u8]> = Arc::from(req);
-        self.order.push_back((Arc::clone(&key), generation));
+        let seq = self.head + u64::try_from(self.order.len()).unwrap_or(u64::MAX);
+        self.order.push_back(Some(Arc::clone(&key)));
         self.total += size;
         self.map.insert(
             key,
             Entry {
                 timein: Instant::now(),
                 reply: reply.map(<[u8]>::to_vec),
-                generation,
+                seq,
                 size,
             },
         );
@@ -151,28 +167,27 @@ impl Lookaside {
     /// entries and keep dropping until `incoming` fits under `max_size`.
     fn evict(&mut self, incoming: usize) {
         let now = Instant::now();
-        while let Some((key, generation)) = self.order.front().cloned() {
-            match self.map.get(&*key) {
-                None => {
-                    self.order.pop_front();
+        while let Some(front) = self.order.front() {
+            let live = front
+                .as_ref()
+                .and_then(|key| self.map.get(&**key))
+                .filter(|e| e.seq == self.head)
+                .map(|e| (now.duration_since(e.timein) > self.stale, e.size));
+            if let Some((stale, size)) = live {
+                if !stale && self.total + incoming <= self.max_size {
+                    break;
                 }
-                Some(e) if e.generation != generation => {
-                    self.order.pop_front();
-                }
-                Some(e) => {
-                    let stale = now.duration_since(e.timein) > self.stale;
-                    if !stale && self.total + incoming <= self.max_size {
-                        break;
-                    }
-                    let size = e.size;
+                if let Some(Some(key)) = self.order.pop_front() {
                     self.map.remove(&*key);
-                    self.order.pop_front();
-                    self.total -= size;
-                    if !stale {
-                        self.note_full();
-                    }
                 }
+                self.total -= size;
+                if !stale {
+                    self.note_full();
+                }
+            } else {
+                self.order.pop_front();
             }
+            self.head += 1;
         }
     }
 }
@@ -225,16 +240,47 @@ mod tests {
         }
     }
 
+    /// Each request's bytes are held once: by the map's key and the queue slot that share them.
+    /// Before, the marker's queue slot kept a second copy of every request until it reached the
+    /// front, and a dropped request's copy too, none of it counted in `total`.
     #[test]
-    fn the_request_bytes_are_held_once_for_the_map_and_the_fifo() {
+    fn the_request_bytes_are_held_once() {
         let mut c = Lookaside::new();
-        c.check_or_mark(b"req");
-        c.finish(b"req", Some(b"reply"));
-        let (key, _) = c.order.back().expect("queued");
-        // One allocation: the FIFO entry and the map key (the marker's key was
-        // dropped by finish).
+        assert!(matches!(c.check_or_mark(b"answered"), Check::Fresh));
+        c.finish(b"answered", Some(b"reply"));
+        assert!(matches!(c.check_or_mark(b"dropped"), Check::Fresh));
+        c.finish(b"dropped", None);
+        let held: Vec<&Arc<[u8]>> = c.order.iter().flatten().collect();
+        assert_eq!(
+            held.len(),
+            1,
+            "one slot holds bytes: the answered request's"
+        );
+        let (key, _) = c.map.get_key_value(&b"answered"[..]).expect("cached");
+        assert!(
+            Arc::ptr_eq(key, held[0]),
+            "the map and the slot share one allocation"
+        );
         assert_eq!(Arc::strong_count(key), 2);
-        assert!(c.map.contains_key(&**key));
+        assert_eq!(c.map.len(), 1);
+        assert_eq!(c.total, ENTRY_OVERHEAD + b"answered".len() + b"reply".len());
+    }
+
+    /// An emptied slot is dropped when it reaches the front, so the queue does not grow with
+    /// the requests the cache no longer holds.
+    #[test]
+    fn emptied_slots_leave_the_queue_from_the_front() {
+        let mut c = Lookaside::with_limits(MAX_SIZE, Duration::from_millis(1));
+        for req in [&b"one"[..], b"two", b"three"] {
+            c.check_or_mark(req);
+            c.finish(req, Some(b"r"));
+        }
+        std::thread::sleep(Duration::from_millis(5));
+        c.check_or_mark(b"four");
+        // The three stale entries are purged; the queue holds only "four"'s marker.
+        assert_eq!(c.order.len(), 1);
+        assert_eq!(c.map.len(), 1);
+        assert!(matches!(c.check_or_mark(b"four"), Check::InProgress));
     }
 
     #[test]

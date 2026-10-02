@@ -4,7 +4,6 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2};
-use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
     EncTicketPart, EncryptedData, HostAddress, HostAddresses, KdcReqBody, KerberosTime,
     OctetString, PaData, PrincipalName, TgsRep, TgsReq, TicketFlags, TransitedEncoding, err,
@@ -237,20 +236,6 @@ fn gather_tgs_req_info<'a>(
     let validate = body.kdc_options.bit(flag_bit::VALIDATE);
     if renew && validate {
         return Err(proto(err::BADOPTION, status::TICKET_NOT_RENEWABLE));
-    }
-    let rkey = ReplayKey {
-        client: format!(
-            "{}@{}",
-            authenticator.cname.components_joined(),
-            utf8_realm(&enc_tkt.crealm)?
-        ),
-        server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
-        ctime: authenticator.ctime.unix_seconds(),
-        cusec: authenticator.cusec.get(),
-        auth_hash: ReplayCache::hash_authenticator(ap.authenticator.cipher.as_ref()),
-    };
-    if store.tgs_replay().check_and_store(rkey) {
-        return Err(proto(err::REPEAT, status::PROCESS_TGS));
     }
     let sname = body
         .sname
@@ -516,17 +501,32 @@ fn check_tgs_req<'a>(
             .append_realm(prev_hop, tkt_client_realm, req_realm.as_str())
             .map_err(|_| proto(err::ILL_CR_TKT, status::ADD_TO_TRANSITED_LIST))?;
     }
-    let transit_checked = if tkt_client_realm == "WELLKNOWN:ANONYMOUS" {
+    // MIT `check_tgs_req` (`kdc/do_tgs_req.c:924-939`): the path is checked unless the client
+    // disabled the check, and a refused path is logged with the header client and the server.
+    let cprinc = enc_tkt.cname.unparse_with_realm(header_crealm);
+    let sprinc = sname.unparse_with_realm(req_realm.as_str());
+    let transit_checked = if skip_transited {
+        krb5_log::klog::syslog(krb5_log::klog::Severity::Info, "not checking transit path");
+        false
+    } else if tkt_client_realm == "WELLKNOWN:ANONYMOUS" {
         true
     } else {
         match transited.realms_for(tkt_client_realm, req_realm.as_str()) {
-            Ok(h) => store
-                .policy()
-                .transit_allowed(tkt_client_realm, &req_realm, &h),
+            Ok(h) => {
+                let allowed = store
+                    .policy()
+                    .transit_allowed(tkt_client_realm, &req_realm, &h);
+                if !allowed {
+                    crate::audit::log_bad_transit(&cprinc, &sprinc, &transited);
+                }
+                allowed
+            }
             Err(e) => crate::audit::unexpected_transit_false(
                 e,
                 tkt_client_realm,
                 req_realm.as_str(),
+                &cprinc,
+                &sprinc,
                 &transited,
             ),
         }

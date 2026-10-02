@@ -80,12 +80,12 @@ pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
     ProtocolKey::from_bytes(etype, &buf).map_err(Error::from)
 }
 
-pub(super) fn randkey_etypes() -> [EncryptionType; 4] {
+/// The key types a new key set takes when kdc.conf names no `supported_enctypes`.
+/// MIT `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (`include/osconf.hin:109-111`): aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96, normal salt.
+pub(super) fn default_supported_enctypes() -> [EncryptionType; 2] {
     [
         EncryptionType::Aes256CtsHmacSha196,
         EncryptionType::Aes128CtsHmacSha196,
-        EncryptionType::Aes256CtsHmacSha384192,
-        EncryptionType::Aes128CtsHmacSha256128,
     ]
 }
 
@@ -141,18 +141,17 @@ impl PrincipalStore {
         Self::keytab_from(p)
     }
 
-    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`.
-    ///
-    /// On export, write, or chrand-save failure a rotation is rolled back
-    /// so the dump kvno is unchanged. Standalone `chrand` does not roll
-    /// back. A rollback save error is returned with the original failure
-    /// (not swallowed).
+    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`, as one change to
+    /// the database under its exclusive lock ([`Self::change`]): the rotation is written only
+    /// once `write` succeeded, so a failed export or `write` leaves the database's kvno as it was
+    /// (a store with no database puts the old keys back). Standalone `chrand` does not roll back.
     ///
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing or has no keys; [`Error::Rng`] when
-    /// the rotation's CSPRNG fails; [`Error::Crypto`] when saving the rotation or its rollback
-    /// fails, or the realm is not a GeneralString; and any error `write` returns.
+    /// the rotation's CSPRNG fails; [`Error::Db`] when the database cannot be locked, read again
+    /// or written; [`Error::Crypto`] when the realm is not a GeneralString; and any error `write`
+    /// returns.
     pub fn ktadd_local_atomic(
         &mut self,
         name: &PrincipalName,
@@ -161,30 +160,24 @@ impl PrincipalStore {
         write: impl FnOnce(&Keytab) -> Result<(), Error>,
     ) -> Result<Keytab, Error> {
         let snap = self.get_name(name).cloned().ok_or(Error::NotFound)?;
-        if rotate && let Err(e) = self.chrand_etypes_keepold(name, &[], 0, actor) {
-            return Err(self.rollback_rotate(true, snap, e));
-        }
-        let kt = match self.export_keytab_local(name) {
-            Ok(kt) => kt,
-            Err(e) => return Err(self.rollback_rotate(rotate, snap, e)),
-        };
-        match write(&kt) {
-            Ok(()) => Ok(kt),
-            Err(e) => Err(self.rollback_rotate(rotate, snap, e)),
-        }
-    }
-
-    fn rollback_rotate(&mut self, rotate: bool, snap: Principal, e: Error) -> Error {
-        if !rotate {
-            return e;
-        }
-        let id = snap.id();
-        self.note_ulog(id.clone(), false, Some(snap.clone()));
-        self.map.insert(id, snap);
-        match self.save_if_configured() {
-            Ok(()) => e,
-            Err(re) => Error::Crypto(format!("{e}; rollback failed: {re}")),
-        }
+        let persisted = self.persist_paths.is_some();
+        self.change(|s| {
+            let done = (|| {
+                if rotate {
+                    s.chrand_etypes_keepold(name, &[], 0, actor)?;
+                }
+                let kt = s.export_keytab_local(name)?;
+                write(&kt)?;
+                Ok(kt)
+            })();
+            if done.is_err() && rotate && !persisted {
+                let id = snap.id();
+                s.note_ulog(id.clone(), false, Some(snap.clone()));
+                s.map.insert(id, snap);
+                s.commit_ulog();
+            }
+            done
+        })?
     }
 
     fn keytab_from(p: &Principal) -> Result<Keytab, Error> {
@@ -221,7 +214,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<Vec<KeyEntry>, Error> {
         self.chrand_keepold_n(name, 0)
     }
@@ -231,7 +224,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_keepold_n(
         &mut self,
         name: &PrincipalName,
@@ -252,7 +245,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
     /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_etypes_keepold_in(
         &mut self,
         name: &PrincipalName,
@@ -290,6 +283,9 @@ impl PrincipalStore {
                     cap_key_versions(&mut p.keys, keepold);
                 }
             }
+            // MIT `kadm5_randkey_principal_3` (`lib/kadm5/srv/svr_principal.c:1452-1475`): new keys clear REQUIRES_PWCHANGE and unlock the principal on this KDC.
+            p.attributes &= !KDB_REQUIRES_PWCHANGE;
+            p.fail_auth_count = 0;
             stamp_admin_tl(p, true, actor);
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
@@ -310,7 +306,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
     /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
@@ -327,7 +323,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
         let realm = self.realm.clone();
@@ -342,7 +338,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn purgekeys_in(
         &mut self,
@@ -373,8 +369,8 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is
-    /// empty, its entries carry different kvnos, `keepold` collides with an existing kvno, or
-    /// saving the store to `persist_paths` fails.
+    /// empty, its entries carry different kvnos or `keepold` collides with an existing kvno;
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_keys(
         &mut self,
         name: &PrincipalName,
@@ -391,8 +387,8 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is
-    /// empty, its entries carry different kvnos, `keepold` collides with an existing kvno, or
-    /// saving the store to `persist_paths` fails.
+    /// empty, its entries carry different kvnos or `keepold` collides with an existing kvno;
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_keys_in(
         &mut self,
         name: &PrincipalName,

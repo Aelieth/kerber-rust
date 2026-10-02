@@ -11,15 +11,15 @@ use krb5_crypto::{
     octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
     spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
 };
-use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
 };
+use zeroize::Zeroizing;
 
 use crate::der::take_der;
 use crate::error::Error;
-use crate::kdb::{PrincipalRead, lookup_principal_id};
+use crate::kdb::PrincipalRead;
 use crate::status;
 use crate::store::{KeyLookup, Principal};
 
@@ -625,7 +625,7 @@ fn send_spake_challenge(
 /// the clock skew; `DH_KEY_PARAMETERS_NOT_ACCEPTED` when a signed request has no DH public value,
 /// or its group or value is not accepted; `PREAUTH_FAILED` for every other check that fails (the
 /// request encoding, a KDC with no PKINIT CA, the CMS signature, the client certificate, the
-/// eContentType, the paChecksum, a required freshness token, the ctime, a replay, an unsigned
+/// eContentType, the paChecksum, a required freshness token, the ctime, an unsigned
 /// request from a client that is not anonymous, the reply signature). [`Error::Crypto`] when the
 /// key agreement or the reply-key derivation fails, and [`Error::Asn1`] when the reply does not
 /// encode. A request without PA-PK-AS-REQ is `Ok(None)`.
@@ -746,7 +746,7 @@ pub(crate) fn process_pkinit(
             );
         }
     }
-    let (ctime, cusec) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
+    let (ctime, _) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
         tracing::info!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
@@ -755,19 +755,10 @@ pub(crate) fn process_pkinit(
         );
         proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
     })?;
+    // MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:528-532`): the ctime need only lie inside the clock skew, so a replayed AuthPack verifies again.
     let now = i64::from(KerberosTime::now().unix_seconds());
     if (now - i64::from(ctime)).abs() > store.policy().skew {
         return Err(proto(err::SKEW, status::PREAUTH_FAILED));
-    }
-    let rkey = ReplayKey {
-        client: lookup_principal_id(cname, realm),
-        server: format!("krbtgt/{realm}@{realm}"),
-        ctime,
-        cusec,
-        auth_hash: ReplayCache::hash_authenticator(&cms),
-    };
-    if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
         tracing::info!(
@@ -794,9 +785,9 @@ pub(crate) fn process_pkinit(
     let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
     let (z, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
         let kp = p256_generate()?;
-        let shared = p256_shared(&kp.secret, &peer)?;
+        let shared = Zeroizing::new(p256_shared(&kp.secret, &peer)?);
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
-        (shared.to_vec(), info)
+        (Zeroizing::new(shared.to_vec()), info)
     } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
         let group = dh_group_for_prime(&p).ok_or_else(|| {
             tracing::info!(
@@ -816,9 +807,11 @@ pub(crate) fn process_pkinit(
             bits = group.bits
         );
         let kp = dh_generate(group)?;
-        let shared = dh_shared(group, &kp.secret, &y)
-            .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?;
-        let z = pad_z(&shared, p.len());
+        let shared = Zeroizing::new(
+            dh_shared(group, &kp.secret, &y)
+                .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?,
+        );
+        let z = Zeroizing::new(pad_z(&shared, p.len()));
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
         (z, info)
     } else {

@@ -35,8 +35,9 @@ pub struct KeytabEntry {
     pub key: ProtocolKey,
 }
 
-/// MIT keytab (v1 or v2).
-#[derive(Debug, Default)]
+/// MIT keytab (v1 or v2). `Debug` shows an unparsed record's length, never its octets, which
+/// hold its key.
+#[derive(Default)]
 pub struct Keytab {
     /// File version (`0x0501` or `0x0502`).
     pub version: u16,
@@ -46,6 +47,28 @@ pub struct Keytab {
     pub skipped_unknown_etype: usize,
     /// Unknown-etype records (parsed-entry count before each raw blob).
     pub unparsed: Vec<(usize, Vec<u8>)>,
+}
+
+impl std::fmt::Debug for Keytab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct Redacted(usize);
+        impl std::fmt::Debug for Redacted {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "<redacted, {} octets>", self.0)
+            }
+        }
+        let unparsed: Vec<_> = self
+            .unparsed
+            .iter()
+            .map(|(at, raw)| (at, Redacted(raw.len())))
+            .collect();
+        f.debug_struct("Keytab")
+            .field("version", &self.version)
+            .field("entries", &self.entries)
+            .field("skipped_unknown_etype", &self.skipped_unknown_etype)
+            .field("unparsed", &unparsed)
+            .finish()
+    }
 }
 
 impl Keytab {
@@ -98,7 +121,9 @@ impl Keytab {
         out
     }
 
-    /// Atomic 0600 write.
+    /// Atomic write: a new keytab is 0600; one it replaces keeps its owner, group and mode, and
+    /// one the writer may not write is refused, as MIT's in-place keytab writes are
+    /// (`write_secret_file`).
     ///
     /// # Errors
     ///
@@ -111,7 +136,16 @@ impl Keytab {
     #[must_use]
     pub fn unparsed_meta(raw: &[u8], version: u16) -> Option<(u32, String, u32, i32)> {
         let body = raw.get(4..)?;
-        parse_unparsed_meta(body, version).ok()
+        parse_unparsed_meta(body, version)
+            .ok()
+            .map(|(kvno, princ, ts, etype, _)| (kvno, princ, ts, etype))
+    }
+
+    /// The key bytes of an unknown-etype record (length prefix included).
+    #[must_use]
+    pub fn unparsed_key(raw: &[u8], version: u16) -> Option<Vec<u8>> {
+        let body = raw.get(4..)?;
+        parse_unparsed_meta(body, version).ok().map(|m| m.4)
     }
 
     /// File-order slots: parsed entries interleaved with unknown-etype blobs.
@@ -279,7 +313,9 @@ impl From<io::Error> for EntryErr {
     }
 }
 
-fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32), io::Error> {
+type UnparsedMeta = (u32, String, u32, i32, Vec<u8>);
+
+fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<UnparsedMeta, io::Error> {
     let mut i = 0;
     let ncomp = take_u16(body, &mut i)?;
     let realm = take_counted16(body, &mut i)?;
@@ -295,7 +331,7 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32),
     let kvno8 = body[i];
     i += 1;
     let enctype = i32::from(take_u16(body, &mut i)?);
-    let _keybytes = take_counted16(body, &mut i)?;
+    let keybytes = take_counted16(body, &mut i)?;
     let kvno = if ver == 0x0502 && i + 4 <= body.len() {
         take_u32(body, &mut i)?
     } else {
@@ -314,6 +350,7 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<(u32, String, u32, i32),
         ),
         timestamp,
         enctype,
+        keybytes,
     ))
 }
 
@@ -570,5 +607,20 @@ mod tests {
     fn truncated_entry_is_not_unparsed() {
         let err = Keytab::parse(&[0x05, 0x02, 0, 0, 0, 20, 1]).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn a_keytabs_debug_shows_an_unparsed_records_length_not_its_octets() {
+        let kt = Keytab {
+            version: 0x0502,
+            entries: Vec::new(),
+            skipped_unknown_etype: 1,
+            unparsed: vec![(0, vec![0x13, 0x37, 0xc0, 0xde])],
+        };
+        assert_eq!(
+            format!("{kt:?}"),
+            "Keytab { version: 1282, entries: [], skipped_unknown_etype: 1, \
+             unparsed: [(0, <redacted, 4 octets>)] }"
+        );
     }
 }

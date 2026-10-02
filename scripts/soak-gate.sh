@@ -68,14 +68,15 @@ while kill -0 "$LG_PID" 2>/dev/null; do
     fi
     sleep 5
 done
-wait "$LG_PID" || die "loadgen failed during soak"
+wait "$LG_PID" || prod_loadgen_failed "$OUT/loadgen.log" "loadgen failed during soak"
 [ "$SAMPLED" = 1 ] || die "MIT mid-soak sample did not run"
 ELAPSED=$(( $(date +%s) - START ))
 [ "$ELAPSED" -lt 1 ] && ELAPSED=1
 
 prod_mit_sample soak-end || die "MIT kinit/kvno failed after soak"
 grep -q '"event":"loadgen"' "$OUT/loadgen.log" || die "loadgen missing JSON summary"
-grep -q '"err":0' "$OUT/loadgen.log" || die "loadgen reported errors during soak"
+grep -q '"err":0' "$OUT/loadgen.log" \
+    || prod_loadgen_failed "$OUT/loadgen.log" "loadgen reported errors during soak"
 
 if [ "$CAP" = 1 ]; then
     docker exec "$CLIENT" sh -c 'kill -INT "$(cat /tmp/tcpdump.pid 2>/dev/null)" 2>/dev/null; sleep 0.3 # proto: pcap flush' || true
@@ -93,11 +94,11 @@ fi
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc1.log"
 
 # RSS allowance = 8 MiB slack + the bounded working set: the 10 MiB lookaside of
-# kdc/replay.c LOOKASIDE_MAX_SIZE (~17 MiB real with its map/FIFO overhead) plus
-# the two replay caches over their 5-minute window (~8 MiB at soak load),
-# measured 25 MiB at 300 s. The slope is judged over the steady window, which
-# starts once the KDC has logged kdc.lookaside.full AND the replay window has
-# elapsed; a shorter run is judged by the cap alone (rss_slope_unsettled).
+# kdc/replay.c LOOKASIDE_MAX_SIZE with its map/FIFO overhead (25 MiB was measured
+# at 300 s while the KDC also kept two replay caches, since dropped). The slope is
+# judged over the steady window, which starts once the KDC has logged
+# kdc.lookaside.full AND 300 s have elapsed; a shorter run is judged by the cap
+# alone (rss_slope_unsettled).
 python3 "$ROOT/scripts/lib/analyze-kdc-slo.py" \
     --log "$OUT/kdc1.log" \
     --out "$OUT/slo.json" \

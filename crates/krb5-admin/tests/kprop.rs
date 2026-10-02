@@ -228,7 +228,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
                 host_keys: &host_keys2,
                 expected_server: Some(&host_for_server),
                 expected_realm: Some(TEST_REALM),
-                master_password: MASTER,
+                master_password: Some(MASTER),
                 db: &db,
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
@@ -244,7 +244,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
     kprop_send_store(
         &mut client,
         &store,
-        MASTER,
+        &master_key(TEST_REALM, MASTER),
         tgs_out.rep.0.ticket.clone(),
         &tgs_out.session_key,
         &krb5_types::ascii(TEST_REALM),
@@ -335,7 +335,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
                 host_keys: &host_keys2,
                 expected_server: Some(&host_for_server),
                 expected_realm: Some(TEST_REALM),
-                master_password: MASTER,
+                master_password: Some(MASTER),
                 db: &db,
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
@@ -351,7 +351,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
     let _ = kprop_send_store(
         &mut client,
         &store,
-        MASTER,
+        &master_key(TEST_REALM, MASTER),
         tgs_out.rep.0.ticket.clone(),
         &tgs_out.session_key,
         &krb5_types::ascii(TEST_REALM),
@@ -427,7 +427,7 @@ fn kpropd_rejects_when_acl_unset() {
                 host_keys: &host_keys2,
                 expected_server: Some(&host_for_server),
                 expected_realm: Some(TEST_REALM),
-                master_password: MASTER,
+                master_password: Some(MASTER),
                 db: &db,
                 stash: &stash,
                 allowed_clients: None,
@@ -443,7 +443,7 @@ fn kpropd_rejects_when_acl_unset() {
     let _ = kprop_send_store(
         &mut client,
         &store,
-        MASTER,
+        &master_key(TEST_REALM, MASTER),
         tgs_out.rep.0.ticket.clone(),
         &tgs_out.session_key,
         &krb5_types::ascii(TEST_REALM),
@@ -455,4 +455,188 @@ fn kpropd_rejects_when_acl_unset() {
         Error::KpropUnauthorized(format!("host/testhost.kerber.test@{TEST_REALM}")),
         "no ACL file: nobody is authorized"
     );
+}
+
+/// The master key a primary's stash would hold for `password`: the default master key type.
+fn master_key(realm: &str, password: &[u8]) -> krb5_crypto::ProtocolKey {
+    krb5_kdc::master_key_from_password(realm, password, krb5_kdc::default_master_etype()).unwrap()
+}
+
+/// MIT's kpropd loads a received dump with `kdb5_util load` beside the replica's stash; a
+/// release kpropd opens it with that stash's key, and one that does not open it is refused.
+#[test]
+fn kpropd_without_a_password_opens_the_dump_with_the_replicas_stash() {
+    let dir = krb5_testkit::scratch_dir("kprop-stash");
+    let _ = std::fs::create_dir_all(&dir);
+    let (store, _) = bootstrap_documented().unwrap();
+    let realm = store.realm().to_owned();
+    let mkey = master_key(&realm, b"replica-master");
+    let dump = krb5_kdc::dump_store_with_key(&store, &mkey).unwrap();
+    let stash = dir.join("stash");
+    krb5_kdc::write_stash(&stash, &realm, &mkey, 1).unwrap();
+    let replica = kprop_load_with_stash(dump.as_bytes(), &stash).unwrap();
+    // The dump carries the K/M entry it is wrapped under, beside the store's principals.
+    let mut ids = store.ids();
+    ids.push(format!("K/M@{realm}"));
+    ids.sort();
+    let mut got = replica.ids();
+    got.sort();
+    assert_eq!(got, ids);
+    let other = dir.join("other.stash");
+    krb5_kdc::write_stash(&other, &realm, &master_key(&realm, b"other-master"), 1).unwrap();
+    assert!(kprop_load_with_stash(dump.as_bytes(), &other).is_err());
+    let missing = dir.join("missing");
+    let err = kprop_load_with_stash(dump.as_bytes(), &missing).unwrap_err();
+    assert!(
+        err.to_string()
+            .contains(&format!("stash {}:", missing.display())),
+        "{err}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One MIT-wire kprop of `store` as `admin` to a kpropd whose ACL names exactly
+/// `admin@KERBER.TEST`, loading into `db` beside `stash`; kpropd's error, else kprop's.
+fn kprop_exact_acl(
+    store: &krb5_kdc::PrincipalStore,
+    db: &std::path::Path,
+    stash: &std::path::Path,
+) -> Result<krb5_kdc::PrincipalStore, String> {
+    use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+    use krb5_protocol::{pa_enc_timestamp, tgs_req};
+
+    const MASTER: &[u8] = b"masterpassword";
+    let host = documented_host();
+    let host_keys: Vec<_> = store
+        .get_name(&host)
+        .unwrap()
+        .keys
+        .iter()
+        .map(|k| k.key.clone())
+        .collect();
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+    let admin_key = store
+        .get_name(&admin)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let as_req = krb5_protocol::as_req(
+        admin.clone(),
+        TEST_REALM,
+        71,
+        Some(vec![pa_enc_timestamp(&admin_key).unwrap()]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(store, &as_req).unwrap();
+    let tgs = tgs_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &admin,
+        host.clone(),
+        TEST_REALM,
+        72,
+    )
+    .unwrap();
+    let tgs_out = krb5_kdc::issue_tgs(store, &tgs).unwrap();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let allowed = vec![format!("admin@{TEST_REALM}")];
+    let (db, stash) = (db.to_path_buf(), stash.to_path_buf());
+    let kpropd = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        kpropd_handle_conn(
+            &mut stream,
+            &KpropdConfig {
+                host_keys: &host_keys,
+                expected_server: Some(&host),
+                expected_realm: Some(TEST_REALM),
+                master_password: Some(MASTER),
+                db: &db,
+                stash: &stash,
+                allowed_clients: Some(allowed.as_slice()),
+            },
+            ReplayCache::new(),
+        )
+        .map_err(|e| format!("kpropd: {e}"))
+    });
+    let mut client = std::net::TcpStream::connect(addr).unwrap();
+    let sent = kprop_send_store(
+        &mut client,
+        store,
+        &master_key(TEST_REALM, MASTER),
+        tgs_out.rep.0.ticket.clone(),
+        &tgs_out.session_key,
+        &krb5_types::ascii(TEST_REALM),
+        &admin,
+    );
+    let loaded = kpropd.join().unwrap()?;
+    sent.map_err(|e| format!("kprop: {e}"))?;
+    Ok(loaded)
+}
+
+/// MIT's kpropd runs `kdb5_util load`, whose create of the replica's `principal.ok` is
+/// `O_CREAT | O_TRUNC` and empties a symlink's target; this full load refuses a link planted
+/// there by a non-root owner of the replica's directory, and loads nothing.
+#[test]
+fn kpropd_refuses_a_symlink_planted_as_the_replicas_lock_file() {
+    let dir = krb5_testkit::scratch_dir("kprop-link");
+    let _ = std::fs::create_dir_all(&dir);
+    let (db, stash) = (dir.join("replica"), dir.join("replica.stash"));
+    let (store, _) = bootstrap_documented().unwrap();
+    let ok = krb5_kdc::suffixed(&db, krb5_kdc::SUFFIX_LOCK);
+    let victim = dir.join("victim");
+    std::fs::write(&victim, b"not the realm's\n").unwrap();
+    let old = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000_000);
+    std::fs::File::options()
+        .write(true)
+        .open(&victim)
+        .unwrap()
+        .set_times(
+            std::fs::FileTimes::new()
+                .set_modified(old)
+                .set_accessed(old),
+        )
+        .unwrap();
+    std::os::unix::fs::symlink(&victim, &ok).unwrap();
+    let err = kprop_exact_acl(&store, &db, &stash).unwrap_err();
+    assert!(
+        err.contains("replica.ok: Too many levels of symbolic links"),
+        "{err}"
+    );
+    assert!(
+        std::fs::symlink_metadata(&ok)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(std::fs::read(&victim).unwrap(), b"not the realm's\n");
+    assert_eq!(std::fs::metadata(&victim).unwrap().modified().unwrap(), old);
+    assert!(!db.exists(), "nothing loaded");
+}
+
+/// prop-acl-gate's C2 `acl-exact`: a kpropd whose ACL names the sender exactly loads a full dump
+/// into an empty replica directory, and again once the replica's database file alone is removed
+/// (its lock files stay), as MIT's load opens and locks the lock files it finds.
+#[test]
+fn kpropd_with_an_exact_acl_loads_into_an_empty_replica_and_beside_its_lock_files() {
+    let dir = krb5_testkit::scratch_dir("kprop-exact-acl");
+    let _ = std::fs::create_dir_all(&dir);
+    let (db, stash) = (dir.join("replica"), dir.join("replica.stash"));
+    let (store, _) = bootstrap_documented().unwrap();
+    kprop_exact_acl(&store, &db, &stash).unwrap();
+    for lock in [krb5_kdc::SUFFIX_LOCK, krb5_kdc::SUFFIX_POLICY_LOCK] {
+        assert!(krb5_kdc::suffixed(&db, lock).exists(), "{lock}");
+    }
+    std::fs::remove_file(&db).unwrap();
+    kprop_exact_acl(&store, &db, &stash).unwrap();
+    let replica = krb5_kdc::load_store(&db, &stash).unwrap();
+    assert!(
+        replica
+            .get_name(&krb5_kdc::testrealm::documented_host())
+            .is_some()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }

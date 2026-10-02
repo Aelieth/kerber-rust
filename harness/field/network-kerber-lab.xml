@@ -1,0 +1,54 @@
+<!--
+  kerber-lab: the F0 field-lab network (harness/field/README.md).
+
+  NAT to the internet on 192.168.177.0/24. libvirt's dnsmasq serves DHCP
+  with static leases and the DNS domain kerber.test. The domain is local
+  only (never forwarded upstream) and has forward and reverse records.
+  The klldap address is reserved for the F3 VM.
+
+  ad.kerber.test is forwarded to the AD test DC on the LAN (F2-AD), so lab
+  VMs can resolve test-server.ad.kerber.test. The more specific forwarder
+  wins over the local kerber.test domain in dnsmasq.
+
+  The MACs here must match the VM table in lab.sh.
+  lab.sh up defines this network. By hand: virsh -c qemu:///system net-define <this file>
+-->
+<network>
+  <name>kerber-lab</name>
+  <forward mode='nat'>
+    <nat>
+      <port start='1024' end='65535'/>
+    </nat>
+  </forward>
+  <bridge name='virbr-kerber' stp='on' delay='0'/>
+  <mac address='52:54:00:4b:52:01'/>
+  <domain name='kerber.test' localOnly='yes'/>
+  <dns>
+    <forwarder domain='ad.kerber.test' addr='10.10.38.38'/>
+    <host ip='192.168.177.10'>
+      <hostname>kdc.kerber.test</hostname>
+    </host>
+    <host ip='192.168.177.11'>
+      <hostname>services.kerber.test</hostname>
+    </host>
+    <host ip='192.168.177.21'>
+      <hostname>client1.kerber.test</hostname>
+    </host>
+    <host ip='192.168.177.22'>
+      <hostname>client2.kerber.test</hostname>
+    </host>
+    <host ip='192.168.177.30'>
+      <hostname>klldap.kerber.test</hostname>
+    </host>
+  </dns>
+  <ip address='192.168.177.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.177.100' end='192.168.177.199'/>
+      <host mac='52:54:00:4b:52:0a' name='kdc' ip='192.168.177.10'/>
+      <host mac='52:54:00:4b:52:0b' name='services' ip='192.168.177.11'/>
+      <host mac='52:54:00:4b:52:15' name='client1' ip='192.168.177.21'/>
+      <host mac='52:54:00:4b:52:16' name='client2' ip='192.168.177.22'/>
+      <host mac='52:54:00:4b:52:1e' name='klldap' ip='192.168.177.30'/>
+    </dhcp>
+  </ip>
+</network>

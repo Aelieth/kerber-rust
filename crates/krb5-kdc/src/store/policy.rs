@@ -11,7 +11,7 @@ use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
 
 use super::PrincipalStore;
-use super::keys::{KeyEntry, KeyLookup, randkey_etypes};
+use super::keys::{KeyEntry, KeyLookup, default_supported_enctypes};
 use super::principal::{Principal, refresh_kadm_tl};
 use super::transit::permitted_transited;
 use crate::error::Error;
@@ -81,7 +81,8 @@ pub struct Policy {
     pub allow_des3: bool,
     /// MIT `permitted_enctypes`. `None` = DEFAULT (every implemented type).
     pub permitted_enctypes: Option<Vec<EncryptionType>>,
-    /// MIT `supported_enctypes`. Empty = AES 17–20.
+    /// MIT `supported_enctypes`. Empty = MIT's default, aes256-cts-hmac-sha1-96 and
+    /// aes128-cts-hmac-sha1-96.
     pub supported_enctypes: Vec<EncryptionType>,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
@@ -123,11 +124,11 @@ pub struct Policy {
     /// Empty = MIT KDC default — SPAKE is not advertised.
     /// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
     pub spake_preauth_groups: Vec<i32>,
-    /// `[realms] dict_file` words, ASCII-lowercased and sorted, for the MIT
-    /// `dict` password-quality module.
-    /// MIT `word_compare` (`pwqual_dict.c:66-68`): dictionary words sort and match in
-    /// `strcasecmp` order. Empty = no dictionary.
-    pub(crate) dict_words: Vec<String>,
+    /// `[dbmodules] disable_last_success`: the KDC records no successful authentication.
+    pub disable_last_success: bool,
+    /// `[dbmodules] disable_lockout`: the KDC neither counts failed authentications nor
+    /// checks the lockout policy.
+    pub disable_lockout: bool,
 }
 
 impl Default for Policy {
@@ -157,25 +158,10 @@ impl Default for Policy {
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: Vec::new(),
-            dict_words: Vec::new(),
+            disable_last_success: false,
+            disable_lockout: false,
         }
     }
-}
-
-/// MIT `init_dict` (`pwqual_dict.c:136-150`): every `\n`-terminated line is
-/// a word (an unterminated last line is not; a blank line is the empty
-/// word), sorted with `strcasecmp`. Lowercased here so a `binary_search` is
-/// that comparison.
-#[must_use]
-pub fn parse_dict_words(text: &str) -> Vec<String> {
-    let mut words: Vec<String> = text
-        .split_inclusive('\n')
-        .filter_map(|l| l.strip_suffix('\n'))
-        .map(str::to_ascii_lowercase)
-        .collect();
-    words.sort_unstable();
-    words.dedup();
-    words
 }
 
 /// MIT `parse_groups` (`groups.c:175-210`): unknown names skipped.
@@ -249,10 +235,11 @@ impl Policy {
     }
 
     /// Long-term keys minted by addprinc/cpw when `-e` is omitted.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:650-654`): the realm's `supported_enctypes`, else `KRB5_DEFAULT_SUPPORTED_ENCTYPES`.
     #[must_use]
     pub fn password_etypes(&self) -> Vec<EncryptionType> {
         if self.supported_enctypes.is_empty() {
-            randkey_etypes().to_vec()
+            default_supported_enctypes().to_vec()
         } else {
             self.supported_enctypes.clone()
         }
@@ -260,12 +247,12 @@ impl Policy {
 }
 
 impl PrincipalStore {
-    /// Apply `kdc.conf` ticket policy.
+    /// Apply `kdc.conf` ticket policy. `dict_file` is not read here: the password dictionary is
+    /// the admin side's ([`Self::init_pwqual`]), and the KDC never reads it.
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when `domain_sid` is not valid SDDL; [`Error::InvalidArgument`] when
-    /// reading `dict_file` fails for any reason but a missing file.
+    /// [`Error::Crypto`] when `domain_sid` is not valid SDDL.
     pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
@@ -300,6 +287,8 @@ impl PrincipalStore {
             .and_then(krb5_types::timestamp::string_to_timestamp)
             .unwrap_or(0);
         self.policy.reject_bad_transit = conf.reject_bad_transit;
+        self.policy.disable_last_success = conf.disable_last_success;
+        self.policy.disable_lockout = conf.disable_lockout;
         self.policy.disable_pac = conf.disable_pac;
         self.policy.restrict_anon = conf.restrict_anon;
         self.policy.pkinit_require_freshness = conf.pkinit_require_freshness;
@@ -328,25 +317,6 @@ impl PrincipalStore {
                 )));
             };
             self.domain_sid = sid;
-        }
-        if let Some(path) = &conf.dict_file {
-            // MIT `init_dict` (`pwqual_dict.c:96-111`): a missing file is logged
-            // and the server continues without a dictionary; any other open
-            // or read failure is returned and kadm5_init fails.
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    self.policy.dict_words = parse_dict_words(&String::from_utf8_lossy(&bytes));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    self.policy.dict_words = Vec::new();
-                }
-                Err(e) => {
-                    return Err(Error::InvalidArgument(format!(
-                        "kdc.conf dict_file {}: {e}",
-                        path.display()
-                    )));
-                }
-            }
         }
         Ok(())
     }
@@ -380,11 +350,22 @@ impl PrincipalStore {
         &self.policies
     }
 
-    /// Insert or replace a named policy.
+    /// Insert or replace a named policy; a failed save is not reported (see
+    /// [`Self::put_policy_and_save`]).
     pub fn put_policy(&mut self, pol: NamedPolicy) {
+        let _ = self.put_policy_and_save(pol);
+    }
+
+    /// Insert or replace a named policy and save the store when it persists.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] when the store cannot be saved, a writer that may not write the database
+    /// included; the policy stays in memory and nothing on disk changes.
+    pub fn put_policy_and_save(&mut self, pol: NamedPolicy) -> Result<(), Error> {
         self.note_ulog(format!("policy:{}", pol.name), false, None);
         self.policies.insert(pol.name.clone(), pol);
-        let _ = self.save_if_configured();
+        self.save_if_configured()
     }
 
     /// Load a dump policy without logging (dump/iprop apply).
@@ -396,7 +377,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         self.policies.remove(name).ok_or(Error::NotFound)?;
@@ -408,7 +389,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_principal_policy(
         &mut self,
@@ -423,7 +404,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn set_principal_policy_in(
         &mut self,

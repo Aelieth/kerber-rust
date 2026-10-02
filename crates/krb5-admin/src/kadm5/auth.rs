@@ -11,13 +11,13 @@ use krb5_types::PrincipalName;
 
 use super::codes::{
     AUTH_BADCRED, AUTH_FAILED, AUTH_GSSAPI_CONTINUE_INIT, AUTH_GSSAPI_CREDS_VERS,
-    AUTH_GSSAPI_DESTROY, AUTH_GSSAPI_INIT, AUTH_REJECTEDCRED, GARBAGE_ARGS, GSS_INTEGRITY,
-    GSS_NONE, GSS_PRIVACY, IPROP_VERS, KADM_VERS, MAXSEQ, PROC_UNAVAIL, PROG_UNAVAIL,
-    RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM, RPCSEC_GSS_VERS, RPCSEC_SEQ_WINDOW,
-    RPG_CONTINUE, RPG_DATA, RPG_DESTROY, RPG_INIT, SYSTEM_ERR,
+    AUTH_GSSAPI_DESTROY, AUTH_GSSAPI_INIT, AUTH_REJECTEDCRED, FLAVOR_AUTH_GSSAPI, FLAVOR_GSS,
+    GARBAGE_ARGS, GSS_INTEGRITY, GSS_NONE, GSS_PRIVACY, IPROP_VERS, KADM_VERS, MAXSEQ,
+    PROC_UNAVAIL, PROG_UNAVAIL, RPCSEC_GSS_CREDPROBLEM, RPCSEC_GSS_CTXPROBLEM, RPCSEC_GSS_VERS,
+    RPCSEC_SEQ_WINDOW, RPG_CONTINUE, RPG_DATA, RPG_DESTROY, RPG_INIT, SYSTEM_ERR,
 };
 use super::dispatch::kadm5_or_iprop;
-use super::log::kadm5_log_op;
+use super::log::{Caller, kadm5_log_op, kadm5_service_name};
 use super::rpc::{
     RpcCtx, parse_gcred, rpc_reply_accepted, rpc_reply_accepted_verf, rpc_reply_agss,
     rpc_reply_auth_error, rpc_reply_clear, rpc_reply_gss, rpc_reply_gss_verf,
@@ -154,18 +154,16 @@ pub(super) fn handle_rpcsec_gss(
             if !kadm && !iprop {
                 return Ok(rpc_reply_accepted_verf(xid, Some(&mic), PROG_UNAVAIL));
             }
-            let kadm_args = match gd.svc {
-                GSS_NONE => r.rest().to_vec(),
+            let databody = match gd.svc {
+                GSS_NONE => None,
                 GSS_INTEGRITY => {
                     let (Ok(databody), Ok(checksum)) = (r.opaque(), r.opaque()) else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
-                    if gd.ctx.verify_mic(&databody, &checksum).is_err()
-                        || databody.get(..4) != Some(gcred.seq_num.to_be_bytes().as_slice())
-                    {
+                    if gd.ctx.verify_mic(&databody, &checksum).is_err() {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     }
-                    databody[4..].to_vec()
+                    Some(databody)
                 }
                 _ => {
                     let Ok(wrapped) = r.opaque() else {
@@ -177,10 +175,22 @@ pub(super) fn handle_rpcsec_gss(
                     let Ok((plain, conf)) = gd.ctx.unwrap_conf(&wrapped) else {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     };
-                    if !conf || plain.len() < 4 {
+                    if !conf {
                         return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
                     }
-                    plain[4..].to_vec()
+                    Some(plain)
+                }
+            };
+            // MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:246-256`): a protected body opens
+            // with a sequence number that must be the credential's, for integrity and privacy
+            // alike, so a body cannot be spliced under another request's header.
+            let kadm_args = match databody {
+                None => r.rest().to_vec(),
+                Some(body) => {
+                    if body.get(..4) != Some(gcred.seq_num.to_be_bytes().as_slice()) {
+                        return Ok(rpc_reply_accepted_verf(xid, Some(&mic), GARBAGE_ARGS));
+                    }
+                    body[4..].to_vec()
                 }
             };
             Ok(rpcsec_dispatch(
@@ -295,7 +305,14 @@ fn rpcsec_dispatch(
         Err(_) => return rpc_reply_accepted_verf(xid, Some(mic), SYSTEM_ERR),
     };
     if !iprop {
-        kadm5_log_op(proc, kadm_args, &actor, &gd.ctx, addr, &result);
+        let service = kadm5_service_name(&gd.ctx);
+        let who = Caller {
+            client: &actor,
+            service: &service,
+            addr,
+            flavor: FLAVOR_GSS,
+        };
+        kadm5_log_op(proc, kadm_args, &who, &result);
     }
     match gd.svc {
         GSS_NONE => rpc_reply_gss_verf(xid, mic, &result),
@@ -340,6 +357,7 @@ pub(super) fn handle_auth_gssapi(
     verf: &[u8],
     args: &[u8],
     rcache: &ReplayCache,
+    addr: &str,
 ) -> Result<Vec<u8>, Error> {
     let RpcCtx {
         store,
@@ -539,6 +557,14 @@ pub(super) fn handle_auth_gssapi(
         Err(Error::ProcUnavail) => return Ok(rpc_reply_accepted(xid, PROC_UNAVAIL)),
         Err(e) => return Err(e),
     };
+    let service = kadm5_service_name(&st.ctx);
+    let who = Caller {
+        client: &actor,
+        service: &service,
+        addr,
+        flavor: FLAVOR_AUTH_GSSAPI,
+    };
+    kadm5_log_op(proc, kadm_args, &who, &result);
     let mut inner = Vec::with_capacity(4 + result.len());
     inner.extend_from_slice(&st.seq.to_be_bytes());
     inner.extend_from_slice(&result);

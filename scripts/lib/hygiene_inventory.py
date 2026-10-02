@@ -58,13 +58,25 @@ def write_lines(path: pathlib.Path, header: str, lines: list[str]) -> None:
     path.write_text(body, encoding="utf-8")
 
 
+def test_hooks_features(root: pathlib.Path) -> list[str]:
+    """`--features krb5-kdc/test-hooks,…` for the crates whose manifest under `root` defines the
+    feature; nothing for a tree from before it (a snapshot of an older root)."""
+    crates = []
+    for crate in ("krb5-kdc", "krb5-admin", "krb5-client"):
+        manifest = root / "crates" / crate / "Cargo.toml"
+        text = manifest.read_text(encoding="utf-8") if manifest.is_file() else ""
+        if re.search(r"(?m)^test-hooks\s*=", text):
+            crates.append(f"{crate}/test-hooks")
+    return ["--features", ",".join(crates)] if crates else []
+
+
 def list_tests(root: pathlib.Path) -> list[str]:
     env = os.environ.copy()
     conf = root / "harness" / "nextest-krb5.conf"
     if conf.is_file():
         env["KRB5_CONFIG"] = str(conf)
     proc = _run(
-        ["cargo", "nextest", "list", "--workspace", "--message-format", "json"],
+        ["cargo", "nextest", "list", "--workspace", *test_hooks_features(root), "--message-format", "json"],
         root,
         timeout=600,
     )
@@ -631,7 +643,7 @@ GREP_Q_RE = re.compile(r"\bgrep\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*q[A-Za-z]*\b")
 DIFF_SUB_RE = re.compile(r"\bdiff\s+<\(")
 # The version the ci.yml shellcheck job installs and make shellcheck falls back to.
 SHELLCHECK_IMAGE = "koalaman/shellcheck:v0.11.0"
-SHELL_GLOBS = ("scripts/*.sh", "scripts/lib/*.sh", "harness/*.sh", "harness/prod/*.sh")
+SHELL_GLOBS = ("scripts/*.sh", "scripts/lib/*.sh", "harness/*.sh", "harness/prod/*.sh", "dist/*.sh")
 WARN_LINE_RE = re.compile(r"^(?:warning|error)(?:\[[^\]]+\])?: ")
 WARN_SUMMARY_RE = re.compile(
     r"^(?:warning|error): (?:aborting|could not|build failed|\d+ warnings? emitted|`[^`]+` \([^)]*\) generated)"
@@ -1818,7 +1830,7 @@ def quality_compiler(root: pathlib.Path, out: pathlib.Path, members: list[dict])
     (out / "doc-strict.log").write_text(doc_strict.stderr[-20000:], encoding="utf-8")
 
     doctest = subprocess.run(
-        ["cargo", "test", "--workspace", "--doc"],
+        ["cargo", "test", "--workspace", "--doc", *test_hooks_features(root)],
         cwd=root,
         env=env,
         capture_output=True,

@@ -12,6 +12,8 @@ autotests = false
 [features]
 default = ["diff"]
 diff = []
+# The gates' raw PDU capture (`KERBER_CAPTURE_DIR`); off by default.
+test-hooks = []
 
 [[test]]
 name = "golden_traces"
@@ -62,6 +64,7 @@ name = "acceptor_sname"
 path = "tests/acceptor_sname.rs"
 
 [dependencies]
+bytes.workspace = true
 getrandom.workspace = true
 krb5-asn1.workspace = true
 krb5-config.workspace = true
@@ -73,6 +76,10 @@ sha1.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+regex-automata.workspace = true
+rustix.workspace = true
 
 [dev-dependencies]
 krb5-kdc.workspace = true

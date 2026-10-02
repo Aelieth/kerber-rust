@@ -9,19 +9,17 @@ use std::net::TcpStream;
 use krb5_crypto::{EncryptionType, ProtocolKey, kdb_decrypt_key};
 use krb5_gss::GssContext;
 use krb5_kdc::{
-    Acl, KDB_DISALLOW_ALL_TIX, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH, KadmData, KeyEntry,
-    OsaKeyData, OsaPrincEnt, Principal, SharedDump as SharedStore, TL_LAST_PWD_CHANGE,
-    TL_MOD_PRINC, TL_STRING_ATTRS, TlData,
+    Acl, IpropUpdate, KdbeVal, KeyEntry, OsaKeyData, SharedDump as SharedStore, TlData,
 };
 use krb5_types::{PrincipalName, Ticket};
 
 use super::codes::{
     AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
-    AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_PRINC, AT_PW_EXP, AT_PW_HIST,
-    AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA, FLAVOR_GSS,
-    FLAVOR_NONE, GSS_PRIVACY, IPROP_FULL_RESYNC, IPROP_FULL_RESYNC_EXT, IPROP_GET_UPDATES,
-    IPROP_NULL, IPROP_PROG, IPROP_VERS, MSG_ACCEPTED, MSG_CALL, MSG_REPLY, RPC_VERSION,
-    RPCSEC_GSS_VERS, RPG_DATA, RPG_INIT, SUCCESS,
+    AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_MOD_WHERE, AT_PRINC, AT_PW_EXP,
+    AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
+    FLAVOR_GSS, FLAVOR_NONE, GSS_PRIVACY, IPROP_FULL_RESYNC, IPROP_FULL_RESYNC_EXT,
+    IPROP_GET_UPDATES, IPROP_NULL, IPROP_PROG, IPROP_VERS, MSG_ACCEPTED, MSG_CALL, MSG_REPLY,
+    RPC_VERSION, RPCSEC_GSS_VERS, RPG_DATA, RPG_INIT, SUCCESS,
 };
 use super::rpc::{read_record, rpc_call_bytes, write_record};
 use super::xdr::{XdrR, XdrW};
@@ -29,8 +27,8 @@ use crate::Error;
 
 /// MIT `iprop_get_updates_1_svc` (`ipropd_svc.c:191-200`): a caller who fails the iprop ACL gets
 /// permission denied and no entries.
-/// The null procedure skips that check, and an incremental update that carries keys is refused when
-/// no master key exists rather than sending those keys in the clear.
+/// The null procedure skips that check, and an incremental update whose keys do not wrap under
+/// the master key is refused rather than sending those keys in the clear.
 pub(super) fn dispatch_iprop(
     store: &SharedStore,
     acl: &Acl,
@@ -46,7 +44,7 @@ pub(super) fn dispatch_iprop(
         return if proc == IPROP_FULL_RESYNC || proc == IPROP_FULL_RESYNC_EXT {
             encode_fullresync_status(0, krb5_kdc::IPROP_PERM_DENIED)
         } else {
-            encode_incr_result(krb5_kdc::IPROP_PERM_DENIED, 0, &[], None)
+            encode_incr_status(krb5_kdc::IPROP_PERM_DENIED, 0)
         };
     }
     match proc {
@@ -54,35 +52,57 @@ pub(super) fn dispatch_iprop(
         IPROP_GET_UPDATES => {
             let mut r = XdrR::new(args);
             let last_sno = r.u32().unwrap_or(0);
-            let g = store
-                .read()
+            let mut g = store
+                .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // The update log another process (kadmin.local) appended to is read before answering.
+            if g.reload_if_stale().is_err() {
+                return encode_incr_status(krb5_kdc::IPROP_ERROR, 0);
+            }
             let (status, last, entries) = g.iprop_get(last_sno);
             let mkey = g.iprop_master_key();
-            // MIT ships each key as the master-key ciphertext already stored in
-            // the KDB (`kdb_convert.c` copies `key_data_contents`). The Rust
-            // store holds plaintext keys, so it wraps them under the master key
-            // at ship time; with no master key available it must refuse the
-            // update rather than send keys in the clear. (`iprop_master_key`
-            // falls back to the stash, `KRB5_MASTER_PASSWORD`, then the `K/M`
-            // principal, so this is reached only when none of those exist.)
-            if mkey.is_none()
-                && entries
-                    .iter()
-                    .any(|e| e.princ.as_ref().is_some_and(|p| !p.keys.is_empty()))
-            {
-                return encode_incr_result(krb5_kdc::IPROP_ERROR, 0, &[], None);
-            }
-            encode_incr_result(status, last, &entries, mkey.as_ref())
+            incr_reply(status, last, &entries, &master_key_wrap(mkey.as_ref()))
         }
         IPROP_FULL_RESYNC | IPROP_FULL_RESYNC_EXT => {
-            let g = store
-                .read()
+            let mut g = store
+                .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if g.reload_if_stale().is_err() {
+                return encode_fullresync_status(0, krb5_kdc::IPROP_ERROR);
+            }
             encode_fullresync(g.serial())
         }
-        _ => encode_incr_result(krb5_kdc::IPROP_FULL_RESYNC, 0, &[], None),
+        _ => encode_incr_status(krb5_kdc::IPROP_FULL_RESYNC, 0),
     }
+}
+
+/// How a key leaves the store in an update: wrapped, or not at all.
+pub(super) type KeyWrap<'a> = dyn Fn(&[u8]) -> Result<Vec<u8>, Error> + 'a;
+
+/// MIT ships each key as the master-key ciphertext its database stores (`kdb_convert.c` copies
+/// `key_data_contents`). The store holds plaintext keys, so they are wrapped under the master key
+/// as they leave; with no master key (`iprop_master_key`: the stash, the `K/M` principal, and
+/// `KRB5_MASTER_PASSWORD` only in a `test-hooks` build), or a wrap that fails, no key leaves.
+pub(super) fn master_key_wrap(
+    mkey: Option<&ProtocolKey>,
+) -> impl Fn(&[u8]) -> Result<Vec<u8>, Error> + '_ {
+    move |raw| match mkey {
+        Some(m) => krb5_crypto::kdb_encrypt_key(m, raw)
+            .map_err(|e| Error::Inner(format!("iprop key: {e}"))),
+        None => Err(Error::Inner("iprop key: no master key".into())),
+    }
+}
+
+/// The GET_UPDATES reply: `UPDATE_ERROR` and no entries when a key of one does not wrap, never a
+/// key in the clear.
+pub(super) fn incr_reply(
+    status: u32,
+    last: u32,
+    entries: &[krb5_kdc::UlogEntry],
+    wrap: &KeyWrap<'_>,
+) -> Vec<u8> {
+    encode_incr_result(status, last, entries, wrap)
+        .unwrap_or_else(|_| encode_incr_status(krb5_kdc::IPROP_ERROR, 0))
 }
 
 fn encode_kdb_last(w: &mut XdrW, sno: u32) {
@@ -102,28 +122,33 @@ fn encode_utf8str(w: &mut XdrW, s: &str) {
     w.opaque(s.as_bytes());
 }
 
-fn encode_keydata(
-    w: &mut XdrW,
-    keys: &[KeyEntry],
-    mkey: Option<&krb5_crypto::ProtocolKey>,
-    fallback_salt: &[u8],
-) {
+/// MIT `xdr_kdbe_key_t` (`lib/kdb/iprop_xdr.c:75-90`): each key's version, kvno, then as many types and contents as its version.
+/// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:415-462`): each key goes as stored, its version deciding how many types and contents follow.
+/// A key is stored at version 2 when it has a salt type and salt, as the dump writes it.
+fn encode_keydata(w: &mut XdrW, keys: &[KeyEntry], wrap: &KeyWrap<'_>) -> Result<(), Error> {
     w.u32(u32::try_from(keys.len()).unwrap_or(0));
     for k in keys {
-        let salt = k.kdb_salt.clone().unwrap_or_else(|| fallback_salt.to_vec());
-        let salt_ty = k.salt_type.unwrap_or(0);
-        w.u32(2);
-        w.u32(k.kvno);
-        w.u32(2);
-        w.u32(u32::try_from(k.etype.to_iana()).unwrap_or(0));
-        w.u32(u32::try_from(salt_ty).unwrap_or(0));
-        w.u32(2);
-        let enc = mkey
-            .and_then(|m| krb5_crypto::kdb_encrypt_key(m, k.key.as_bytes()).ok())
-            .unwrap_or_else(|| k.key.as_bytes().to_vec());
-        w.opaque(&enc);
-        w.opaque(&salt);
+        let enc = wrap(k.key.as_bytes())?;
+        let etype = u32::try_from(k.etype.to_iana()).unwrap_or(0);
+        if let (Some(salt_type), Some(salt)) = (k.salt_type, k.kdb_salt.as_ref()) {
+            w.u32(2);
+            w.u32(k.kvno);
+            w.u32(2);
+            w.u32(etype);
+            w.u32(salt_type.cast_unsigned());
+            w.u32(2);
+            w.opaque(&enc);
+            w.opaque(salt);
+        } else {
+            w.u32(1);
+            w.u32(k.kvno);
+            w.u32(1);
+            w.u32(etype);
+            w.u32(1);
+            w.opaque(&enc);
+        }
     }
+    Ok(())
 }
 
 /// `kdbe_key_t` of stored key data (history entries stay under the history
@@ -179,201 +204,118 @@ fn decode_keydata_raw(r: &mut XdrR<'_>) -> Result<Vec<OsaKeyData>, Error> {
     Ok(keys)
 }
 
-fn kdbe_tl(p: &krb5_kdc::Principal) -> Vec<TlData> {
-    let mut tl = p.tl_data.clone();
-    tl.retain(|t| t.ty != TL_STRING_ATTRS && !(0x4B00..=0x4BFF).contains(&t.ty));
-    if !p.string_attrs.is_empty() {
-        let mut contents = Vec::new();
-        for (k, v) in &p.string_attrs {
-            contents.extend_from_slice(k.as_bytes());
-            contents.push(0);
-            contents.extend_from_slice(v.as_bytes());
-            contents.push(0);
-        }
-        tl.push(TlData {
-            ty: TL_STRING_ATTRS,
-            contents,
-        });
-    }
-    tl
-}
-
-fn string_attrs_from_tl(tl: &[TlData]) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for t in tl {
-        if t.ty != TL_STRING_ATTRS {
-            continue;
-        }
-        let mut parts = t.contents.split(|b| *b == 0);
-        while let (Some(k), Some(v)) = (parts.next(), parts.next()) {
-            if k.is_empty() {
-                continue;
-            }
-            out.push((
-                String::from_utf8_lossy(k).into_owned(),
-                String::from_utf8_lossy(v).into_owned(),
-            ));
-        }
-    }
-    out
-}
-
 pub(super) fn tl_u32(tl: &[TlData], ty: i32) -> Option<u32> {
     let t = tl.iter().find(|t| t.ty == ty)?;
     let b: [u8; 4] = t.contents.get(..4)?.try_into().ok()?;
     Some(u32::from_le_bytes(b))
 }
 
+/// MIT `xdr_kdb_incr_update_t` (`lib/kdb/iprop_xdr.c:263-285`): the name, serial, time, the update, the deleted and committed flags, no KDCs seen, no futures.
 fn encode_incr_update(
     w: &mut XdrW,
     e: &krb5_kdc::UlogEntry,
-    mkey: Option<&krb5_crypto::ProtocolKey>,
-) {
+    wrap: &KeyWrap<'_>,
+) -> Result<(), Error> {
     encode_utf8str(w, &e.name);
     w.u32(e.sno);
     w.u32(e.time);
     w.u32(0);
-    if e.deleted {
-        w.u32(0);
-    } else if let Some(p) = e.princ.as_ref() {
-        encode_kdbe(w, p, mkey);
-    } else {
-        w.u32(0);
-    }
+    encode_kdbe(w, &e.kdbe_vals(), wrap)?;
     w.u32(u32::from(e.deleted));
     w.u32(1);
     w.u32(0);
     w.u32(0);
+    Ok(())
 }
 
-/// MIT `ulog_conv_2logentry` (`kdb_convert.c:472-486`): MIT ships the stored mod-principal and its
-/// time as `AT_MOD_PRINC` and `AT_MOD_TIME`; this encoder always writes `kadmin/admin@REALM` as
-/// `AT_MOD_PRINC`, whatever the record holds, and takes only the time from the record, because an
-/// entry without the attribute corrupts the replica.
-/// MIT `ulog_conv_2logentry` (`kdb_convert.c:490-493`): the raw `KRB5_TL_LAST_PWD_CHANGE` and
-/// `KRB5_TL_MOD_PRINC` records stay out of `AT_TL_DATA`; this encoder still sends them there.
-pub(super) fn encode_kdbe(
-    w: &mut XdrW,
-    p: &krb5_kdc::Principal,
-    mkey: Option<&krb5_crypto::ProtocolKey>,
-) {
-    let mut body = XdrW::default();
-    let mut n = 0u32;
-    body.u32(AT_ATTRFLAGS);
-    body.u32(p.attributes);
-    n += 1;
-    body.u32(AT_MAX_LIFE);
-    body.u32(u32::try_from(p.max_life).unwrap_or(0));
-    n += 1;
-    body.u32(AT_MAX_RENEW_LIFE);
-    body.u32(u32::try_from(p.max_renewable_life).unwrap_or(0));
-    n += 1;
-    body.u32(AT_EXP);
-    body.u32(p.expiration);
-    n += 1;
-    body.u32(AT_PW_EXP);
-    body.u32(p.pw_expire);
-    n += 1;
-    body.u32(AT_LAST_SUCCESS);
-    body.u32(p.last_success);
-    n += 1;
-    body.u32(AT_LAST_FAILED);
-    body.u32(p.last_failed);
-    n += 1;
-    body.u32(AT_FAIL_AUTH_COUNT);
-    body.u32(p.fail_auth_count);
-    n += 1;
-    body.u32(AT_PRINC);
-    encode_utf8str(&mut body, &p.realm);
-    let comps: Vec<String> = p
-        .name
-        .name_string
-        .iter()
-        .map(|s| String::from_utf8_lossy(s.as_bytes()).into_owned())
-        .collect();
-    body.u32(u32::try_from(comps.len()).unwrap_or(0));
-    for c in &comps {
+/// `kdbe_princ_t`: the realm, each component with MIT's `KV5M_DATA` magic, the name type.
+fn encode_princ(w: &mut XdrW, name: &PrincipalName, realm: &str) {
+    encode_utf8str(w, realm);
+    w.u32(u32::try_from(name.name_string.len()).unwrap_or(0));
+    for c in &name.name_string {
         // MIT `KV5M_DATA` (`krb5_data.magic`).
-        body.u32((-1_760_647_422i32).cast_unsigned());
-        encode_utf8str(&mut body, c);
+        w.u32((-1_760_647_422i32).cast_unsigned());
+        w.opaque(c.as_bytes());
     }
-    body.u32(u32::try_from(p.name.name_type).unwrap_or(0));
-    n += 1;
-    body.u32(AT_KEYDATA);
-    encode_keydata(&mut body, &p.keys, mkey, &p.salt);
-    n += 1;
-    let tl = kdbe_tl(p);
-    if !tl.is_empty() {
-        body.u32(AT_TL_DATA);
-        body.u32(u32::try_from(tl.len()).unwrap_or(0));
-        for t in &tl {
-            body.u32(u32::try_from(t.ty).unwrap_or(0));
-            body.opaque(&t.contents);
-        }
-        n += 1;
-    }
-    body.u32(AT_LEN);
-    body.u32(p.db_entry_len);
-    n += 1;
-    if let Some(pol) = p.pw_policy.as_deref().filter(|s| !s.is_empty()) {
-        body.u32(AT_PW_POLICY);
-        encode_utf8str(&mut body, pol);
-        n += 1;
-    }
-    if !p.kadm.old_keys.is_empty() {
-        body.u32(AT_PW_HIST_KVNO);
-        body.u32(p.kadm.admin_history_kvno);
-        n += 1;
-        body.u32(AT_PW_HIST);
-        body.u32(u32::try_from(p.kadm.old_keys.len()).unwrap_or(0));
-        for entry in &p.kadm.old_keys {
-            encode_keydata_raw(&mut body, entry);
-        }
-        n += 1;
-    }
-    let now = u32::try_from(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |d| d.as_secs()),
-    )
-    .unwrap_or(0);
-    let pw_last = tl_u32(&p.tl_data, TL_LAST_PWD_CHANGE).unwrap_or(now);
-    let mod_time = tl_u32(&p.tl_data, TL_MOD_PRINC).unwrap_or(now);
-    body.u32(AT_PW_LAST_CHANGE);
-    body.u32(pw_last);
-    n += 1;
-    // MIT kadmin unparses mod_name; omitting AT_MOD_PRINC corrupts the replica.
-    body.u32(AT_MOD_PRINC);
-    encode_utf8str(&mut body, &p.realm);
-    body.u32(2);
-    body.u32((-1_760_647_422i32).cast_unsigned());
-    encode_utf8str(&mut body, "kadmin");
-    body.u32((-1_760_647_422i32).cast_unsigned());
-    encode_utf8str(&mut body, "admin");
-    body.u32(u32::try_from(krb5_types::PrincipalName::NT_SRV_INST).unwrap_or(2));
-    n += 1;
-    body.u32(AT_MOD_TIME);
-    body.u32(mod_time);
-    n += 1;
-    w.u32(n);
-    w.b.extend_from_slice(&body.b);
+    w.u32(name.name_type.cast_unsigned());
 }
 
+/// MIT `xdr_kdbe_val_t` (`lib/kdb/iprop_xdr.c:153-249`): each attribute's type, then its value in that type's shape.
+/// The attributes are the ones the update carries, in its order; keys are wrapped by `wrap`.
+///
+/// # Errors
+///
+/// A key `wrap` refuses.
+pub(super) fn encode_kdbe(w: &mut XdrW, vals: &[KdbeVal], wrap: &KeyWrap<'_>) -> Result<(), Error> {
+    w.u32(u32::try_from(vals.len()).unwrap_or(0));
+    for v in vals {
+        w.u32(v.attr());
+        match v {
+            KdbeVal::AttrFlags(n)
+            | KdbeVal::MaxLife(n)
+            | KdbeVal::MaxRenewLife(n)
+            | KdbeVal::Exp(n)
+            | KdbeVal::PwExp(n)
+            | KdbeVal::LastSuccess(n)
+            | KdbeVal::LastFailed(n)
+            | KdbeVal::FailAuthCount(n)
+            | KdbeVal::Len(n)
+            | KdbeVal::ModTime(n)
+            | KdbeVal::PwLastChange(n)
+            | KdbeVal::PwHistKvno(n) => w.u32(*n),
+            KdbeVal::Princ(name, realm) | KdbeVal::ModPrinc(name, realm) => {
+                encode_princ(w, name, realm);
+            }
+            KdbeVal::KeyData(keys) => encode_keydata(w, keys, wrap)?,
+            KdbeVal::TlData(tl) => {
+                w.u32(u32::try_from(tl.len()).unwrap_or(0));
+                for t in tl {
+                    w.u32(t.ty.cast_unsigned());
+                    w.opaque(&t.contents);
+                }
+            }
+            KdbeVal::ModWhere(b) | KdbeVal::PwPolicy(b) | KdbeVal::Extension(_, b) => w.opaque(b),
+            KdbeVal::PwPolicySwitch(on) => w.u32(u32::from(*on)),
+            KdbeVal::PwHist(hist) => {
+                w.u32(u32::try_from(hist.len()).unwrap_or(0));
+                for entry in hist {
+                    encode_keydata_raw(w, entry);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A `kdb_incr_result_t` with no updates.
+pub(super) fn encode_incr_status(status: u32, last: u32) -> Vec<u8> {
+    let mut w = XdrW::default();
+    encode_kdb_last(&mut w, last);
+    w.u32(0);
+    w.u32(status);
+    w.b
+}
+
+/// A `kdb_incr_result_t` with `entries`, their keys wrapped by `wrap`.
+///
+/// # Errors
+///
+/// A key `wrap` refuses.
 pub(super) fn encode_incr_result(
     status: u32,
     last: u32,
     entries: &[krb5_kdc::UlogEntry],
-    mkey: Option<&krb5_crypto::ProtocolKey>,
-) -> Vec<u8> {
+    wrap: &KeyWrap<'_>,
+) -> Result<Vec<u8>, Error> {
     let mut w = XdrW::default();
     encode_kdb_last(&mut w, last);
     let n = u32::try_from(entries.len()).unwrap_or(0);
     w.u32(n);
     for e in entries {
-        encode_incr_update(&mut w, e, mkey);
+        encode_incr_update(&mut w, e, wrap)?;
     }
     w.u32(status);
-    w.b
+    Ok(w.b)
 }
 
 pub(super) fn encode_fullresync_status(last: u32, status: u32) -> Vec<u8> {
@@ -463,7 +405,10 @@ pub fn iprop_pull(
         decode_incr_result(&body, store.iprop_master_key().as_ref())?;
     let n = entries.len();
     if status == krb5_kdc::IPROP_OK && n > 0 {
-        store.apply_updates(&entries);
+        // MIT `ulog_replay` (`lib/kdb/kdb_log.c:430-467`): each update is put into the database, which locks it.
+        store
+            .change(|s| s.apply_updates(&entries).map_err(Error::from))
+            .map_err(Error::from)??;
     }
     Ok(IpropPull {
         status,
@@ -683,7 +628,7 @@ fn rpcsec_data(
 pub(super) fn decode_incr_result(
     b: &[u8],
     mkey: Option<&ProtocolKey>,
-) -> Result<(u32, u32, u32, u32, Vec<krb5_kdc::UlogEntry>), Error> {
+) -> Result<(u32, u32, u32, u32, Vec<IpropUpdate>), Error> {
     let mut r = XdrR::new(b);
     let last = r.u32()?;
     let sec = r.u32()?;
@@ -697,16 +642,13 @@ pub(super) fn decode_incr_result(
     Ok((status, last, sec, usec, entries))
 }
 
-fn decode_incr_update(
-    r: &mut XdrR<'_>,
-    mkey: Option<&ProtocolKey>,
-) -> Result<krb5_kdc::UlogEntry, Error> {
+fn decode_incr_update(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<IpropUpdate, Error> {
     let name_raw = r.opaque()?;
     let name = String::from_utf8_lossy(&name_raw).into_owned();
     let sno = r.u32()?;
     let time = r.u32()?;
     let _usec = r.u32()?;
-    let princ = decode_kdbe(r, mkey, &name)?;
+    let vals = decode_kdbe(r, mkey)?;
     let deleted = r.bool()?;
     let _commit = r.bool()?;
     let seen = r.u32()?;
@@ -714,148 +656,72 @@ fn decode_incr_update(
         let _ = r.opaque()?;
     }
     let _futures = r.opaque()?;
-    Ok(krb5_kdc::UlogEntry {
+    Ok(IpropUpdate {
         sno,
         time,
         name,
         deleted,
-        princ: if deleted { None } else { princ },
+        vals,
     })
 }
 
-/// MIT `ulog_conv_2dbentry` (`kdb_convert.c:725-731`): the mod-principal attribute is a principal,
-/// not an opaque blob.
-/// An unrecognized attribute is consumed as one opaque value so later attributes stay aligned, and
-/// a zero-length update is not a principal.
+/// MIT `xdr_kdbe_val_t` (`lib/kdb/iprop_xdr.c:153-249`): each attribute's value is read in its type's shape, and a type MIT does not name is one opaque value.
+/// The update keeps which attributes it carried; none stands in for one it did not.
 pub(super) fn decode_kdbe(
     r: &mut XdrR<'_>,
     mkey: Option<&ProtocolKey>,
-    fallback: &str,
-) -> Result<Option<Principal>, Error> {
+) -> Result<Vec<KdbeVal>, Error> {
     let n = r.u32()? as usize;
-    if n == 0 {
-        return Ok(None);
-    }
-    let mut attributes = 0u32;
-    let mut max_life = 0u64;
-    let mut max_renewable_life = 0u64;
-    let mut expiration = 0u32;
-    let mut pw_expire = 0u32;
-    let mut last_success = 0u32;
-    let mut last_failed = 0u32;
-    let mut fail_auth_count = 0u32;
-    let mut db_entry_len = KDB_V1_BASE_LENGTH;
-    let mut pw_policy = None;
-    let mut parsed_name: Option<(PrincipalName, String)> = None;
-    let mut keys = Vec::new();
-    let mut tl_data = Vec::new();
-    let mut old_keys: Vec<Vec<OsaKeyData>> = Vec::new();
-    let mut hist_kvno = None;
-    let mut pw_last_change = None;
+    let mut vals = Vec::with_capacity(n.min(32));
     for _ in 0..n {
         let tag = r.u32()?;
-        match tag {
-            AT_ATTRFLAGS => attributes = r.u32()?,
-            AT_MAX_LIFE => max_life = u64::from(r.u32()?),
-            AT_MAX_RENEW_LIFE => max_renewable_life = u64::from(r.u32()?),
-            AT_EXP => expiration = r.u32()?,
-            AT_PW_EXP => pw_expire = r.u32()?,
-            AT_LAST_SUCCESS => last_success = r.u32()?,
-            AT_LAST_FAILED => last_failed = r.u32()?,
-            AT_FAIL_AUTH_COUNT => fail_auth_count = r.u32()?,
-            AT_PRINC => parsed_name = Some(decode_princ(r)?),
-            AT_KEYDATA => keys = decode_keydata(r, mkey)?,
+        vals.push(match tag {
+            AT_ATTRFLAGS => KdbeVal::AttrFlags(r.u32()?),
+            AT_MAX_LIFE => KdbeVal::MaxLife(r.u32()?),
+            AT_MAX_RENEW_LIFE => KdbeVal::MaxRenewLife(r.u32()?),
+            AT_EXP => KdbeVal::Exp(r.u32()?),
+            AT_PW_EXP => KdbeVal::PwExp(r.u32()?),
+            AT_LAST_SUCCESS => KdbeVal::LastSuccess(r.u32()?),
+            AT_LAST_FAILED => KdbeVal::LastFailed(r.u32()?),
+            AT_FAIL_AUTH_COUNT => KdbeVal::FailAuthCount(r.u32()?),
+            AT_PRINC => {
+                let (name, realm) = decode_princ(r)?;
+                KdbeVal::Princ(name, realm)
+            }
+            AT_KEYDATA => KdbeVal::KeyData(decode_keydata(r, mkey)?),
             AT_TL_DATA => {
                 let nt = r.u32()? as usize;
+                let mut tl = Vec::with_capacity(nt.min(64));
                 for _ in 0..nt {
                     let ty = r.u32()?.cast_signed();
                     let contents = r.opaque()?;
-                    tl_data.push(TlData { ty, contents });
+                    tl.push(TlData { ty, contents });
                 }
+                KdbeVal::TlData(tl)
             }
-            AT_LEN => db_entry_len = r.u32()?,
-            AT_PW_LAST_CHANGE => pw_last_change = Some(r.u32()?),
-            AT_MOD_TIME => {
-                let _ = r.u32()?;
-            }
-            AT_PW_HIST_KVNO => hist_kvno = Some(r.u32()?),
-            AT_PW_POLICY => {
-                let s = r.opaque()?;
-                pw_policy = Some(String::from_utf8_lossy(&s).into_owned());
-            }
-            AT_PW_POLICY_SWITCH => {
-                let _ = r.bool()?;
-            }
+            AT_LEN => KdbeVal::Len(r.u32()?),
             AT_MOD_PRINC => {
-                let _ = decode_princ(r)?;
+                let (name, realm) = decode_princ(r)?;
+                KdbeVal::ModPrinc(name, realm)
             }
+            AT_MOD_TIME => KdbeVal::ModTime(r.u32()?),
+            AT_MOD_WHERE => KdbeVal::ModWhere(r.opaque()?),
+            AT_PW_LAST_CHANGE => KdbeVal::PwLastChange(r.u32()?),
+            AT_PW_POLICY => KdbeVal::PwPolicy(r.opaque()?),
+            AT_PW_POLICY_SWITCH => KdbeVal::PwPolicySwitch(r.bool()?),
+            AT_PW_HIST_KVNO => KdbeVal::PwHistKvno(r.u32()?),
             AT_PW_HIST => {
                 let nh = r.u32()? as usize;
+                let mut hist = Vec::with_capacity(nh.min(16));
                 for _ in 0..nh {
-                    old_keys.push(decode_keydata_raw(r)?);
+                    hist.push(decode_keydata_raw(r)?);
                 }
+                KdbeVal::PwHist(hist)
             }
-            _ => {
-                let _ = r.opaque()?;
-            }
-        }
-    }
-    let (name, realm) = if let Some(v) = parsed_name {
-        v
-    } else {
-        parse_unparsed(fallback)?
-    };
-    let string_attrs = string_attrs_from_tl(&tl_data);
-    if let Some(ts) = pw_last_change
-        && !tl_data.iter().any(|t| t.ty == TL_LAST_PWD_CHANGE)
-    {
-        tl_data.push(TlData {
-            ty: TL_LAST_PWD_CHANGE,
-            contents: ts.to_le_bytes().to_vec(),
+            other => KdbeVal::Extension(other, r.opaque()?),
         });
     }
-    let requires_preauth = attributes & KDB_REQUIRES_PRE_AUTH != 0;
-    let locked = attributes & KDB_DISALLOW_ALL_TIX != 0;
-    let salt = name.default_salt(&realm);
-    // MIT carries the admin record inside AT_TL_DATA (`KRB5_TL_KADM_DATA`) and,
-    // for a changed entry, the history as AT_PW_HIST / AT_PW_HIST_KVNO.
-    let osa = OsaPrincEnt::from_tl(&tl_data).map_err(|e| Error::Inner(e.to_string()))?;
-    let mut kadm = osa.as_ref().map(KadmData::from_osa).unwrap_or_default();
-    if !old_keys.is_empty() {
-        kadm.old_keys = old_keys;
-        kadm.old_key_next = 0;
-    }
-    if let Some(k) = hist_kvno {
-        kadm.admin_history_kvno = k;
-    }
-    let pw_policy = pw_policy.or_else(|| osa.and_then(|o| o.bound_policy().map(str::to_owned)));
-    Ok(Some(Principal {
-        name,
-        realm,
-        keys,
-        key_history: Vec::new(),
-        salt,
-        requires_preauth,
-        max_life,
-        locked,
-        pw_expire,
-        attributes,
-        max_renewable_life,
-        expiration,
-        last_success,
-        last_failed,
-        fail_auth_count,
-        mkvno: 1,
-        db_entry_len,
-        tl_data,
-        e_data: Vec::new(),
-        rid: 0,
-        s4u_allowed_from: Vec::new(),
-        s4u_allowed_to: Vec::new(),
-        pw_policy,
-        kadm,
-        string_attrs,
-    }))
+    Ok(vals)
 }
 
 fn decode_princ(r: &mut XdrR<'_>) -> Result<(PrincipalName, String), Error> {
@@ -874,12 +740,9 @@ fn decode_princ(r: &mut XdrR<'_>) -> Result<(PrincipalName, String), Error> {
     Ok((name, realm))
 }
 
-fn parse_unparsed(s: &str) -> Result<(PrincipalName, String), Error> {
-    krb5_types::principal_from_unparsed(s, "").map_err(|e| Error::Inner(e.to_string()))
-}
-
 /// MIT `krb5_dbe_def_decrypt_key_data` (`decrypt_key.c:91-93`): a master-key decrypt failure is not
 /// a usable key.
+/// MIT `ulog_conv_2dbentry` (`lib/kdb/kdb_convert.c:678-683`): a key of a version past 2 is not a key, and the update does not apply.
 /// An etype this build does not know, or a plaintext of the wrong length, is omitted and the other
 /// keys in the entry are kept.
 fn decode_keydata(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<Vec<KeyEntry>, Error> {
@@ -897,6 +760,9 @@ fn decode_keydata(r: &mut XdrR<'_>, mkey: Option<&ProtocolKey>) -> Result<Vec<Ke
         let mut contents = Vec::with_capacity(n_cont.min(16));
         for _ in 0..n_cont {
             contents.push(r.opaque()?);
+        }
+        if ver > 2 {
+            return Err(Error::Inner(format!("iprop key data version {ver}")));
         }
         let Some(et) = enctypes.first().copied() else {
             continue;

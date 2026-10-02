@@ -1,5 +1,9 @@
 # Documentation
 
+To install kerber-rust and run a realm with it, read
+[install.md](install.md): the Fedora install under MIT's command names and
+units, a new realm, and upgrading an MIT realm.
+
 The design, test and parity record of kerber-rust, in reading order. Each
 entry says what the file holds.
 

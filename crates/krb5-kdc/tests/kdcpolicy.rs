@@ -149,6 +149,51 @@ fn bootstrap_honours_supported_enctypes_order() {
     assert_eq!(keys, vec![20, 19, 18, 17]);
 }
 
+/// With no `supported_enctypes`, a new key set is MIT's default pair; an explicit list (`-e`)
+/// is taken as given, even outside it; the documented test realm keeps its four AES types.
+/// MIT `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (`osconf.hin:109-111`): aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96.
+#[test]
+fn unset_supported_enctypes_keys_mits_default_pair() {
+    let etypes = |store: &krb5_kdc::PrincipalStore, who: &str| -> Vec<i32> {
+        store
+            .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, [who]))
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.etype.to_iana())
+            .collect()
+    };
+    let kdc =
+        krb5_config::KdcConf::parse("[realms]\n    SE.TEST = {\n        max_life = 10h\n    }\n")
+            .unwrap();
+    let mut store = krb5_kdc::PrincipalStore::new("SE.TEST");
+    store.apply_kdc_conf(&kdc).unwrap();
+    assert_eq!(store.policy.password_etypes().len(), 2);
+    let creator = "kadmin/admin@SE.TEST";
+    let pw = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user1"]);
+    store
+        .insert_new_password(&pw, "SE.TEST", b"se-user1", &[], creator)
+        .unwrap();
+    assert_eq!(etypes(&store, "user1"), [18, 17]);
+    let svc = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["svc1"]);
+    store
+        .insert_new_randkey(&svc, "SE.TEST", &[], creator)
+        .unwrap();
+    assert_eq!(etypes(&store, "svc1"), [18, 17]);
+    let explicit = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["svc2"]);
+    store
+        .insert_new_randkey(
+            &explicit,
+            "SE.TEST",
+            &[krb5_crypto::EncryptionType::Aes256CtsHmacSha384192],
+            creator,
+        )
+        .unwrap();
+    assert_eq!(etypes(&store, "svc2"), [20]);
+    let (documented, _) = bootstrap_documented().unwrap();
+    assert_eq!(etypes(&documented, TEST_USER), [18, 17, 20, 19]);
+}
+
 #[test]
 fn tgs_key_exp_is_omitted() {
     let (store, _) = bootstrap_documented().unwrap();

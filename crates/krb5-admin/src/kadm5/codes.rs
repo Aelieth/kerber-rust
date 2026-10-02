@@ -96,6 +96,10 @@ pub(super) const KADM5_BAD_HISTORY: u32 = 43_787_540;
 pub(super) const KADM5_BAD_MIN_PASS_LIFE: u32 = 43_787_541;
 /// MIT `KADM5_DUP`.
 pub(super) const KADM5_DUP: u32 = 43_787_527;
+/// MIT `OSA_ADB_DUP` (`lib/kdb/adb_err.et`): a policy the locked create finds there already.
+pub(super) const OSA_ADB_DUP: u32 = 28_810_241;
+/// MIT `OSA_ADB_NOENT` (`lib/kdb/adb_err.et`): a policy the locked write or delete finds gone.
+pub(super) const OSA_ADB_NOENT: u32 = 28_810_242;
 /// MIT `KADM5_FAILURE`.
 pub(super) const KADM5_FAILURE: u32 = 43_787_520;
 /// MIT `ovk` 22 (`kadm_err.et`; base `43787520`).
@@ -121,6 +125,10 @@ pub(super) const KADM5_ALIAS_REALM: u32 = 43_787_583;
 /// MIT `KRB5_KDB_ALIAS_UNSUPPORTED` (`kdb5_err.et`, -1780008402) as the
 /// `kadm5_ret_t` the client decodes.
 pub(super) const KRB5_KDB_ALIAS_UNSUPPORTED: u32 = 2_514_958_894;
+/// The `kadm5_ret_t` of a database the server may not lock for writing (-1780008424).
+/// MIT `KRB5_KDB_CANTLOCK_DB` (`lib/krb5/error_tables/kdb5_err.et:64-64`): "Insufficient access
+/// to lock database".
+pub(super) const KRB5_KDB_CANTLOCK_DB: u32 = 2_514_958_872;
 /// MIT `ovk` 1 (`KADM5_AUTH_GET`).
 pub(super) const KADM5_AUTH_GET: u32 = 43_787_521;
 /// MIT `ovk` 44 (`KADM5_AUTH_LIST`).
@@ -152,7 +160,7 @@ pub(super) const KADM5_PW_EXPIRATION: u32 = 0x0000_0004;
 pub(super) const KADM5_LAST_PWD_CHANGE: u32 = 0x0000_0008;
 pub(super) const KADM5_MOD_TIME: u32 = 0x0000_0040;
 pub(super) const KADM5_MOD_NAME: u32 = 0x0000_0080;
-const KADM5_KVNO: u32 = 0x0000_0100;
+pub(super) const KADM5_KVNO: u32 = 0x0000_0100;
 pub(super) const KADM5_MKVNO: u32 = 0x0000_0200;
 pub(super) const KADM5_AUX_ATTRIBUTES: u32 = 0x0000_0400;
 pub(super) const KADM5_MAX_RLIFE: u32 = 0x0000_2000;
@@ -214,25 +222,11 @@ pub(super) const API_V2: u32 = 0x1234_5702;
 pub(super) const API_V3: u32 = 0x1234_5703;
 pub(super) const API_V4: u32 = 0x1234_5704;
 
-pub(super) const AT_ATTRFLAGS: u32 = 0;
-pub(super) const AT_MAX_LIFE: u32 = 1;
-pub(super) const AT_MAX_RENEW_LIFE: u32 = 2;
-pub(super) const AT_EXP: u32 = 3;
-pub(super) const AT_PW_EXP: u32 = 4;
-pub(super) const AT_LAST_SUCCESS: u32 = 5;
-pub(super) const AT_LAST_FAILED: u32 = 6;
-pub(super) const AT_FAIL_AUTH_COUNT: u32 = 7;
-pub(super) const AT_PRINC: u32 = 8;
-pub(super) const AT_KEYDATA: u32 = 9;
-pub(super) const AT_TL_DATA: u32 = 10;
-pub(super) const AT_LEN: u32 = 11;
-pub(super) const AT_MOD_PRINC: u32 = 12;
-pub(super) const AT_MOD_TIME: u32 = 13;
-pub(super) const AT_PW_LAST_CHANGE: u32 = 15;
-pub(super) const AT_PW_POLICY: u32 = 16;
-pub(super) const AT_PW_POLICY_SWITCH: u32 = 17;
-pub(super) const AT_PW_HIST_KVNO: u32 = 18;
-pub(super) const AT_PW_HIST: u32 = 19;
+pub(super) use krb5_kdc::{
+    AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
+    AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_MOD_WHERE, AT_PRINC, AT_PW_EXP,
+    AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
+};
 
 /// MIT `glob_to_regexp` (`svr_iters.c:61-62`): a glob that ends in a backslash is EINVAL.
 pub(super) const EINVAL: u32 = 22;

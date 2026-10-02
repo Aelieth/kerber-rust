@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use krb5_config::{Error, Krb5Conf, discover_kdc_in, load_krb5_conf_paths};
+use krb5_config::{Error, Krb5Conf, ProfileError, discover_kdc_in, load_krb5_conf_paths};
 use krb5_testkit::scratch_dir;
 
 fn g9a_tree(tag: &str) -> PathBuf {
@@ -163,7 +163,7 @@ fn include_cycle_is_error() {
     .unwrap();
     let err = Krb5Conf::load_file(&a).unwrap_err();
     assert!(
-        matches!(err, Error::Parse(ref s) if s.contains("cycle")),
+        matches!(err, Error::Profile(ProfileError::IncludeFile, ref s) if s.contains("cycle")),
         "{err}"
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -202,12 +202,12 @@ fn missing_include_on_multi_path_is_error() {
     std::fs::write(&other, "[libdefaults]\n    default_realm = OTHER.TEST\n").unwrap();
     let err = load_krb5_conf_paths([&bad, &other]).unwrap_err();
     assert!(
-        matches!(err, Error::Parse(ref s) if s.contains("include target not found")),
+        matches!(err, Error::Profile(ProfileError::IncludeFile, ref s) if s.contains("include target not found")),
         "{err}"
     );
     let err2 = load_krb5_conf_paths([&other, &bad]).unwrap_err();
     assert!(
-        matches!(err2, Error::Parse(ref s) if s.contains("include target not found")),
+        matches!(err2, Error::Profile(ProfileError::IncludeFile, ref s) if s.contains("include target not found")),
         "{err2}"
     );
     let skipped = load_krb5_conf_paths([&absent, &other]).unwrap();
@@ -246,7 +246,7 @@ fn indented_include_inside_section_is_error() {
     .unwrap();
     let err = Krb5Conf::load_file(&main).unwrap_err();
     assert!(
-        matches!(err, Error::Parse(ref s) if s.contains("improper format")),
+        matches!(err, Error::Profile(ProfileError::Syntax, ref s) if s.contains("improper format")),
         "{err}"
     );
     let _ = std::fs::remove_dir_all(&root);

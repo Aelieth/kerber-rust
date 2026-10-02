@@ -688,3 +688,99 @@ fn parse_dh_spki_round_trips_p_and_y() {
     assert_eq!(got_y, y);
     assert!(pkinit::decode_ec_spki(&spki).is_none());
 }
+
+/// Key octets with a quote, a backslash, a newline and a NUL, so each rendering differs.
+const SECRET: [u8; 16] = [
+    0x13, 0x37, 0xc0, 0xde, 0x22, 0x5c, 0x0a, 0xa5, 0x9e, 0x41, 0x42, 0x43, 0x7f, 0x00, 0xfe, 0x5a,
+];
+
+/// Whether `debug` shows `secret` as hex, as a list of numbers, as an escaped byte string (an
+/// `OctetString`'s derived `Debug`), or as text.
+fn shows(debug: &str, secret: &[u8]) -> bool {
+    use std::fmt::Write as _;
+    let hex = secret.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    let numbers = format!("{secret:?}");
+    let escaped = format!("{:?}", bytes::Bytes::copy_from_slice(secret));
+    debug.to_lowercase().contains(&hex)
+        || debug.contains(&numbers[1..numbers.len() - 1])
+        || debug.contains(&escaped[2..escaped.len() - 1])
+        || std::str::from_utf8(secret).is_ok_and(|text| debug.contains(text))
+}
+
+fn secret_key() -> EncryptionKey {
+    EncryptionKey {
+        keytype: 18,
+        keyvalue: OctetString::from(SECRET.to_vec()),
+    }
+}
+
+#[test]
+fn an_encryption_keys_debug_shows_its_type_and_length_not_its_octets() {
+    let debug = format!("{:?}", secret_key());
+    assert!(!shows(&debug, &SECRET), "{debug}");
+    assert_eq!(
+        debug,
+        "EncryptionKey { keytype: 18, keyvalue: <redacted, 16 octets> }"
+    );
+}
+
+#[test]
+fn a_key_holders_debug_shows_no_key_octets() {
+    let info = KrbCredInfo {
+        key: secret_key(),
+        prealm: None,
+        pname: None,
+        flags: None,
+        authtime: None,
+        starttime: None,
+        endtime: None,
+        renew_till: None,
+        srealm: None,
+        sname: None,
+        caddr: None,
+    };
+    for debug in [format!("{info:?}"), format!("{info:#?}")] {
+        assert!(!shows(&debug, &SECRET), "{debug}");
+        assert!(debug.contains("<redacted, 16 octets>"), "{debug}");
+    }
+}
+
+#[test]
+fn a_password_changes_debug_shows_no_password() {
+    let password = b"correct horse battery staple";
+    let data = ChangePasswdData {
+        newpasswd: OctetString::from_static(password),
+        targname: None,
+        targrealm: None,
+    };
+    let debug = format!("{data:?}");
+    assert!(!shows(&debug, password), "{debug}");
+    assert_eq!(
+        debug,
+        "ChangePasswdData { newpasswd: <redacted>, targname: None, targrealm: None }"
+    );
+}
+
+#[test]
+fn a_pac_logon_infos_debug_shows_no_session_key() {
+    let sid = pac::RpcSid::dummy_domain();
+    let mut info = pac::KerbValidationInfo::for_client("user", "KERBER.TEST", &sid, 1104);
+    info.session_key = SECRET;
+    let debug = format!("{info:?}");
+    assert!(!shows(&debug, &SECRET), "{debug}");
+    assert!(debug.contains("session_key: <redacted>"), "{debug}");
+}
+
+#[test]
+fn a_pkinit_cas_debug_shows_no_private_scalar() {
+    let ca = pkinit::PkinitCa::generate().unwrap();
+    let debug = format!("{ca:?}");
+    assert!(
+        !shows(&debug, &ca.ca_secret),
+        "the CA scalar is in its Debug"
+    );
+    assert!(debug.contains("ca_secret: <redacted>"), "{debug}");
+}

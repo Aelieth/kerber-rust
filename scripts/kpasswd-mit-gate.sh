@@ -319,8 +319,7 @@ mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword \
 rust_kadmin_local \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    -e KRB5_PASSWORD=z8x-secret \
-    "$NAME" -- -q 'addprinc z8x' \
+    "$NAME" -- -q 'addprinc -pw z8x-secret z8x' \
     | grep -F 'Principal "z8x@KERBER.TEST" created.'
 mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw z8x-secret z8x' \
     | grep -F 'Principal "z8x@KERBER.TEST" created.'

@@ -23,6 +23,7 @@ MIT 1.22.2, Heimdal and Samba peers; [`docs/gates.md`](../docs/gates.md) lists w
 | `lib/lab-realm.sh` | Refuses a host whose `/etc/krb5.conf` names a real realm (the local evidence runners). |
 | `lib/settle.sh` | Captures a live settle: provenance, the command, its verbatim output. |
 | `lib/unit-evidence.sh` | Stamped unit-test greens and parent reds. |
+| `lib/test-hooks.sh` | `test_hooks_features`: the `test-hooks` cargo features a SHA defines, for `red-at-sha.sh` and `unit_red_at`. |
 | `lib/unit-red-check.py` | Exits 0 only when every expected test failed. |
 | `lib/run-peer-step.sh` | The peers workflow's wrapper: exit 2 (oracle unavailable) is not a job failure. |
 | `lib/hygiene_inventory.py` | Writes a hygiene snapshot (counts, gate cells by reachability, shellcheck). |

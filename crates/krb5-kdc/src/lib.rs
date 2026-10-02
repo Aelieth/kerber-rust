@@ -22,12 +22,16 @@
 mod acl;
 mod ad;
 mod audit;
+mod create;
+mod daemon;
+mod dblock;
 mod der;
 mod error;
 mod issue;
 mod kdb;
 mod kdb_dump;
 mod listen;
+mod lockout;
 mod lookaside;
 mod mkey;
 mod osa;
@@ -49,6 +53,17 @@ pub use audit::{
     clear_thread_audit, current_audit, enctype_name, ktypes2str, make_tkt_id, new_req_id,
     rep_etypes2str, set_audit, set_thread_audit,
 };
+#[cfg(feature = "test-hooks")]
+pub use create::seed_test_principals;
+pub use create::{create_realm, kdc_conf_for_realm};
+pub use daemon::{
+    OpenFailure, Signals, database_path, detach, names_relative_database, open_database,
+    write_pid_file,
+};
+pub use dblock::{
+    DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, FileLockGuard, SUFFIX_LOCK,
+    SUFFIX_POLICY_LOCK, lock_file_exclusive, suffixed,
+};
 pub use error::Error;
 pub(crate) use issue::kdc_error_bytes;
 pub use issue::{
@@ -63,24 +78,42 @@ pub use kdb_dump::{
     DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_SERIAL, TL_KERBER_SID,
     TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS, dump_store,
-    dump_store_iprop, load_dump, load_dump_etype, load_dump_path, parse_dump, tl_mod_princ_name,
+    dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key, load_dump, load_dump_etype,
+    load_dump_path, load_dump_with_key, parse_dump, tl_mod_princ_name, update_store,
     write_dump_path_etype,
 };
 pub use listen::{
-    BIND_CANDIDATES, ConnGuard, ConnRegistry, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST,
-    MAX_TCP_WORKERS, SharedDump, SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
-    bind_preferred, drop_privileges, serve, serve_until, shared_dump, shared_store,
+    BIND_CANDIDATES, ClosingFd, ConnGuard, ConnRegistry, Datagram, ListenLimits, MAX_DGRAM_REPLY,
+    MAX_TCP_REQUEST, MAX_TCP_WORKERS, PktInfo, SharedDump, SharedStore, WHILE_DISPATCHING_TCP,
+    WHILE_DISPATCHING_UDP, bind_preferred, bind_rpc_listeners, bind_tcp_listeners,
+    bind_udp_listeners, drop_privileges, recv_from_to, send_udp_reply, serve, serve_all,
+    serve_all_until, serve_until, shared_dump, shared_store, wait_for_connection,
 };
-pub use mkey::{default_master_etype, master_key_from_password};
+pub use lockout::{
+    Lockout, LockoutUpdate, SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file,
+};
+pub use mkey::{default_master_etype, master_etype, master_key_from_password, string_to_enctype};
 pub use osa::{
     KADM5_POLICY, OsaError, OsaKeyData, OsaPrincEnt, decrypt_entry as decrypt_history_entry,
     history_entry as encrypt_history_entry,
 };
-pub use persist::{PersistError, load_store, save_store, save_store_legacy_kdb3};
+pub use persist::{
+    CreateError, DbWrite, LoadError, PersistError, Unopenable, check_openable, create_store,
+    load_dump_with_stash, load_store, load_store_full, load_store_with_master, load_text_full,
+    read_db_and_lockout_locked, read_db_locked, read_stash, save_dump_text, save_dump_text_locked,
+    save_store, save_store_fresh, save_store_legacy_kdb3, save_store_locked,
+    save_store_with_master, stash_keys, write_stash,
+};
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,
     apply_policy_times, clear_thread_policy, current_policy, register_authdata, register_preauth,
     set_policy, set_thread_policy,
+};
+pub use store::{
+    AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
+    AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_MOD_WHERE, AT_PRINC, AT_PW_EXP,
+    AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
+    IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, attr_bit, conv_2dbentry, conv_2logentry,
 };
 pub use store::{
     AdminEnt, AdminFields, IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED,
@@ -90,8 +123,8 @@ pub use store::{
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
     KDB_V1_BASE_LENGTH, KadmData, KeyEntry, KeyLookup, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT,
     PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, RID_FIRST_USER, RID_KRBTGT,
-    S2K_ITERS, TlData, UlogEntry, apply_keysalt_policy, kadm5_mask, parse_dict_words, random_key,
-    s2k_params, strip_db_args,
+    S2K_ITERS, TlData, UlogEntry, apply_keysalt_policy, kadm5_mask, random_key, s2k_params,
+    strip_db_args,
 };
 
 use krb5_types::PrincipalName;
@@ -190,8 +223,7 @@ pub(crate) fn bootstrap_realm(
 ///
 /// # Errors
 ///
-/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL, and
-/// [`Error::InvalidArgument`] when its `dict_file` cannot be read for any reason but being missing.
+/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL,
 /// [`Error::PasswordPolicy`] when `user_password` or `admin_password` is empty,
 /// [`Error::AlreadyExists`] when `user` and `admin` are the same name, [`Error::AclParse`] when
 /// `admin@<realm>` is not a principal name (a realm with `/` or `@`), and [`Error::Rng`] when the
@@ -231,7 +263,7 @@ const KADM5_CHANGEPW_LIFETIME: u64 = 60 * 5;
 ///
 /// # Errors
 ///
-/// [`Error::NotFound`] when `kadmin/admin` or `kadmin/changepw` is missing, and [`Error::Crypto`]
+/// [`Error::NotFound`] when `kadmin/admin` or `kadmin/changepw` is missing, and [`Error::Db`]
 /// when the store's configured file cannot be written after an update.
 pub fn apply_kadm5_create_service_attrs(store: &mut PrincipalStore) -> Result<(), Error> {
     let realm = store.realm().to_owned();

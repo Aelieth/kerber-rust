@@ -16,5 +16,9 @@ thiserror.workspace = true
 [dev-dependencies]
 krb5-testkit.workspace = true
 
+[features]
+# The gates' environment inputs (passwords, kdc.conf path overrides); off by default.
+test-hooks = []
+
 [lints]
 workspace = true

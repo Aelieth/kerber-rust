@@ -18,6 +18,14 @@ pub const TEST_ADMIN: &str = "admin";
 pub const TEST_ADMIN_PASSWORD: &[u8] = b"adminpassword";
 /// Host name component of the documented POSIX host principal.
 pub const TEST_HOST: &str = "testhost.kerber.test";
+/// The key types the documented realm gives a principal when its profile names no
+/// `supported_enctypes`: all four AES types, where a production realm takes MIT's two.
+pub const TEST_SUPPORTED_ENCTYPES: [krb5_crypto::EncryptionType; 4] = [
+    krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+    krb5_crypto::EncryptionType::Aes128CtsHmacSha196,
+    krb5_crypto::EncryptionType::Aes256CtsHmacSha384192,
+    krb5_crypto::EncryptionType::Aes128CtsHmacSha256128,
+];
 
 /// `host/testhost.kerber.test` as NT-SRV-HST.
 #[must_use]

@@ -2,8 +2,19 @@
 //!
 //! Usage: `krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
 //!
-//! `--load-dump` writes `KRB5_KDC_DB` / `KRB5_KDC_STASH` from a MIT dump
-//! (version 7 or `ipropx`). A host argument then pulls serial-delta.
+//! `--load-dump` writes the database ([`krb5_config::KdcPaths`]; a new 0600 file, as a full load
+//! leaves it) from a MIT dump (version 7 or `ipropx`) the replica's stash opens, an `ipropx`
+//! dump keeping the replica's own lockout attributes as MIT's `load -i` does; with the
+//! `test-hooks` feature, `KRB5_MASTER_PASSWORD` opens it instead when set, and a missing stash is
+//! then written. A host argument then pulls serial-delta.
+//!
+//! kerber-rust's own environment, where this client has none of MIT's kpropd options yet (it is
+//! not installed as a service):
+//! - `KRB5_KPROP_KEYTAB`: the keytab whose first principal authenticates the pull (required).
+//! - `KRB5_KDC`: the KDC asked for its tickets (default `127.0.0.1`).
+//! - `KRB5_IPROP_HOST`: the host of the `kiprop/<host>` service pulled from, MIT's admin server;
+//!   required, except that with the `test-hooks` feature it defaults to the documented test
+//!   realm's host.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -12,7 +23,7 @@ use std::net::TcpStream;
 use std::path::PathBuf;
 
 use krb5_admin::{iprop_fullresync, iprop_pull};
-use krb5_kdc::{load_dump_path, load_store, save_store};
+use krb5_kdc::{load_dump_with_stash, load_store, save_store_fresh};
 use krb5_protocol::{Keytab, as_exchange_key, tgs_exchange};
 use krb5_types::PrincipalName;
 
@@ -67,18 +78,11 @@ fn main() {
         }
     }
 
-    let master = std::env::var("KRB5_MASTER_PASSWORD").unwrap_or_else(|_| {
-        eprintln!("krb5-iprop-pull: set KRB5_MASTER_PASSWORD");
-        std::process::exit(2);
+    let paths = krb5_config::KdcPaths::resolve(None).unwrap_or_else(|e| {
+        eprintln!("krb5-iprop-pull: {e}");
+        std::process::exit(1);
     });
-    let db = PathBuf::from(std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| {
-        eprintln!("krb5-iprop-pull: set KRB5_KDC_DB");
-        std::process::exit(2);
-    }));
-    let stash = PathBuf::from(std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| {
-        eprintln!("krb5-iprop-pull: set KRB5_KDC_STASH");
-        std::process::exit(2);
-    }));
+    let (db, stash) = (paths.database_name, paths.key_stash_file);
 
     if let Some(path) = dump {
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
@@ -86,11 +90,17 @@ fn main() {
             std::process::exit(1);
         });
         let header_last = parse_iprop_last(text.lines().next().unwrap_or(""));
-        let store = load_dump_path(&path, master.as_bytes()).unwrap_or_else(|e| {
+        let store = load_dump(&text, &stash).unwrap_or_else(|e| {
             eprintln!("krb5-iprop-pull: load dump: {e}");
             std::process::exit(1);
         });
-        save_store(&store, &db, &stash).unwrap_or_else(|e| {
+        save_store_fresh(
+            &store,
+            &db,
+            &stash,
+            krb5_admin::is_iprop_dump(text.as_bytes()),
+        )
+        .unwrap_or_else(|e| {
             eprintln!("krb5-iprop-pull: save: {e}");
             std::process::exit(1);
         });
@@ -160,7 +170,17 @@ fn main() {
         eprintln!("krb5-iprop-pull: AS: {e}");
         std::process::exit(1);
     });
-    let host = std::env::var("KRB5_IPROP_HOST").unwrap_or_else(|_| "testhost.kerber.test".into());
+    #[cfg(feature = "test-hooks")]
+    let default_host = Some(krb5_kdc::testrealm::TEST_HOST.to_owned());
+    #[cfg(not(feature = "test-hooks"))]
+    let default_host: Option<String> = None;
+    let host = std::env::var("KRB5_IPROP_HOST")
+        .ok()
+        .or(default_host)
+        .unwrap_or_else(|| {
+            eprintln!("krb5-iprop-pull: set KRB5_IPROP_HOST");
+            std::process::exit(2);
+        });
     let sname = PrincipalName::new(PrincipalName::NT_SRV_HST, ["kiprop", host.as_str()]);
     let tgs = tgs_exchange(&kdc, &as_out, sname, &realm).unwrap_or_else(|e| {
         eprintln!("krb5-iprop-pull: TGS: {e}");
@@ -214,6 +234,22 @@ fn main() {
         "iprop pull ok last_sno={} last_time={} {} applied={}",
         pulled.last_sno, pulled.last_sec, pulled.last_usec, pulled.applied
     );
+}
+
+/// The dump opened with the replica's stash, or with the `test-hooks` feature with
+/// `KRB5_MASTER_PASSWORD` when that is set.
+fn load_dump(text: &str, stash: &std::path::Path) -> Result<krb5_kdc::PrincipalStore, String> {
+    #[cfg(feature = "test-hooks")]
+    let hooked = std::env::var("KRB5_MASTER_PASSWORD")
+        .ok()
+        .map(zeroize::Zeroizing::new);
+    #[cfg(not(feature = "test-hooks"))]
+    let hooked: Option<zeroize::Zeroizing<String>> = None;
+    if let Some(pw) = hooked {
+        return krb5_kdc::load_dump(text, pw.as_bytes()).map_err(|e| e.to_string());
+    }
+    let bytes = std::fs::read(stash).map_err(|e| format!("stash {}: {e}", stash.display()))?;
+    load_dump_with_stash(text, &bytes).map_err(|e| e.to_string())
 }
 
 fn parse_iprop_last(header: &str) -> Option<(u32, u32, u32)> {

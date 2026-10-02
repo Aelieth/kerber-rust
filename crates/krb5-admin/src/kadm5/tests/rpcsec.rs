@@ -959,3 +959,57 @@ fn rpcsec_none_service_data_is_plain_body() {
     assert_eq!(r.u32().unwrap(), API_V2);
     assert_eq!(r.u32().unwrap(), 0);
 }
+
+#[test]
+fn rpcsec_privacy_body_sequence_must_match_the_credential() {
+    // MIT `xdr_rpc_gss_unwrap_data` (`authgss_prot.c:246-256`): the sequence number inside
+    // a sealed body is compared with the credential's, as for an integrity body; a body
+    // sealed for sequence 1 under a header for sequence 2 is GARBAGE_ARGS, not dispatched.
+    use krb5_kdc::testrealm::TEST_REALM;
+
+    let (store, acl, mut ctx, handle, mut gss) = admin_rpcsec_init();
+    let call = |ctx: &mut GssContext, xid: u32, seq: u32, body_seq: u32| {
+        rpcsec_priv_rec(
+            ctx,
+            RpcCallId {
+                xid,
+                prog: KADM_PROG,
+                vers: KADM_VERS,
+                proc: GET_PRINCS,
+            },
+            seq,
+            body_seq,
+            &handle,
+            &list_args(),
+        )
+    };
+    let mut accepted = |rec: &[u8]| -> u32 {
+        let mut agss = None;
+        let out = handle_rpc(
+            RpcCtx {
+                store: &store,
+                acl: &acl,
+                service_keys: &[],
+                expected_realm: TEST_REALM,
+            },
+            b"hdl",
+            &mut gss,
+            &mut agss,
+            &krb5_protocol::ReplayCache::new(),
+            rec,
+            "127.0.0.1",
+        )
+        .unwrap();
+        let mut r = XdrR::new(&out);
+        r.u32().unwrap();
+        assert_eq!(r.u32().unwrap(), MSG_REPLY);
+        assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+        assert_eq!(r.u32().unwrap(), FLAVOR_GSS);
+        let _verf = r.opaque().unwrap();
+        r.u32().unwrap()
+    };
+    let spliced = call(&mut ctx, 50, 2, 1);
+    assert_eq!(accepted(&spliced), GARBAGE_ARGS);
+    let matching = call(&mut ctx, 51, 3, 3);
+    assert_eq!(accepted(&matching), SUCCESS);
+}

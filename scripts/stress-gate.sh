@@ -42,8 +42,10 @@ prod_mit_sample before || die "MIT kinit/kvno failed before load"
 # Cold PAC-sized AS-REP and first worker burst are bring-up, not the load
 # p99 (GHA first-window ~100 ms). Snapshot after a discarded warmup run.
 echo "==== warmup loadgen ===="
-prod_loadgen "$PIP" >"$OUT/loadgen-warmup.log" 2>&1 || die "warmup loadgen failed"
-grep -q '"err":0' "$OUT/loadgen-warmup.log" || die "warmup loadgen reported errors"
+prod_loadgen "$PIP" >"$OUT/loadgen-warmup.log" 2>&1 \
+    || prod_loadgen_failed "$OUT/loadgen-warmup.log" "warmup loadgen failed"
+grep -q '"err":0' "$OUT/loadgen-warmup.log" \
+    || prod_loadgen_failed "$OUT/loadgen-warmup.log" "warmup loadgen reported errors"
 docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc-warmup.log"
 
 echo "==== wire loadgen workers=${KERBER_LOAD_WORKERS} iters=${KERBER_LOAD_ITERS} ===="
@@ -65,10 +67,10 @@ LG_RC=${PIPESTATUS[0]}
 END=$(date +%s)
 set -e
 wait "$MID_PID" || true
-[ "$LG_RC" = 0 ] || die "loadgen failed (see $OUT/loadgen.log)"
+[ "$LG_RC" = 0 ] || prod_loadgen_failed "$OUT/loadgen.log" "loadgen failed"
 [ "$(cat "$MID_RC_FILE")" = 0 ] || die "MIT kinit/kvno failed mid-load"
 grep -q '"event":"loadgen"' "$OUT/loadgen.log" || die "loadgen missing JSON summary"
-grep -q '"err":0' "$OUT/loadgen.log" || die "loadgen reported errors"
+grep -q '"err":0' "$OUT/loadgen.log" || prod_loadgen_failed "$OUT/loadgen.log" "loadgen reported errors"
 
 echo "==== MIT sample after load ===="
 prod_mit_sample after || die "MIT kinit/kvno failed after load"

@@ -27,6 +27,7 @@ need_image
 if [ -z "${KERBER_SHELL:-}" ] && [ "${KERBER_KPASSWD_KEEP:-}" = 1 ]; then
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker run -d --name "$NAME" --hostname testhost.kerber.test --entrypoint sleep "$IMAGE" 3600 >/dev/null
+    json_log_on "$NAME"
     KERBER_SHELL="$NAME"
     export KERBER_SHELL
 fi
@@ -173,7 +174,7 @@ echo "$KLIST2" | grep -q 'user@KERBER.TEST'
 
 echo "==== Rust kpasswd vs Rust kadmind ===="
 docker exec -e KRB5_PASSWORD=kpasswd-two -e KRB5_NEW_PASSWORD=rust-kpw \
-    "$NAME" /tmp/krb5-kpasswd 127.0.0.1 user@KERBER.TEST
+    "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'
 KLIST3="$(docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf "$NAME" klist)"

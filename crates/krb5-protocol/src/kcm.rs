@@ -360,6 +360,37 @@ pub fn kcm_store_keep_default(residual: &str, cc: &FileCcache) -> io::Result<()>
     kcm_put(residual, cc, false)
 }
 
+/// The collection's primary cache name.
+/// MIT `k5_kcm_primary_name` (`cc_kcm.c:770-793`): the GET_DEFAULT_CACHE answer.
+///
+/// # Errors
+///
+/// The OS error when the KCM socket cannot be connected or a read or write on it fails or
+/// times out; `ErrorKind::NotFound` or `ErrorKind::Other` for a nonzero status;
+/// `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 name.
+pub fn kcm_primary_name() -> io::Result<String> {
+    let mut io = KcmIo::connect()?;
+    cstring(&io.call(OP_GET_DEFAULT_CACHE, &[])?)
+}
+
+/// Add `creds` to `KCM:residual` (empty is the primary), leaving its other credentials.
+/// MIT `kcm_store` (`cc_kcm.c:865-875`): one STORE request per credential.
+///
+/// # Errors
+///
+/// The OS error when the KCM socket cannot be connected or a read or write on it fails or
+/// times out; `ErrorKind::NotFound` (`KRB5_FCC_NOFILE`) or `ErrorKind::Other` for a nonzero
+/// status on the default-cache lookup or a STORE; `ErrorKind::InvalidData` for a reply over
+/// 10 MiB or a non-UTF-8 cache name.
+pub fn kcm_store_creds(residual: &str, creds: &[CcacheCred]) -> io::Result<()> {
+    let mut io = KcmIo::connect()?;
+    let name = default_or(&mut io, residual)?;
+    for c in creds {
+        store_one(&mut io, &name, c)?;
+    }
+    Ok(())
+}
+
 fn kcm_put(residual: &str, cc: &FileCcache, set_default: bool) -> io::Result<()> {
     let mut io = KcmIo::connect()?;
     let name = default_or_create(&mut io, residual)?;
@@ -438,29 +469,37 @@ pub fn kcm_cache_names() -> io::Result<Vec<String>> {
     Ok(names)
 }
 
-/// `kswitch -p` over the KCM collection.
+/// The default principal of the cache `name`.
+/// MIT `kcm_get_princ` (`cc_kcm.c:932-954`): a GET_PRINCIPAL request; a cache that is not
+/// initialized is `KRB5_FCC_NOFILE`.
 ///
 /// # Errors
 ///
-/// `ErrorKind::NotFound` when no cache's principal is `princ`; the OS error when the KCM
-/// socket cannot be connected or a read or write on it fails or times out; `ErrorKind::Other`
-/// for a nonzero status on the cache listing other than `KRB5_FCC_NOFILE`, and
-/// `ErrorKind::NotFound` or `ErrorKind::Other` for one on the switch; `ErrorKind::InvalidData`
-/// for a reply over 10 MiB, a bad cache UUID list, or a non-UTF-8 cache name.
-pub fn kcm_switch_principal(princ: &str) -> io::Result<()> {
+/// The OS error when the KCM socket cannot be connected or a read or write on it fails or
+/// times out; `ErrorKind::NotFound` (`KRB5_FCC_NOFILE`, also for an empty answer) or
+/// `ErrorKind::Other` for a nonzero status; `ErrorKind::InvalidData` or `UnexpectedEof` for a
+/// malformed principal.
+pub fn kcm_principal(name: &str) -> io::Result<(Realm, PrincipalName)> {
     let mut io = KcmIo::connect()?;
-    for name in kcm_cache_names()? {
-        let Ok(primary) = get_principal(&mut io, &name) else {
-            continue;
-        };
-        if FileCcache::format_principal(&primary.0, &primary.1) == princ {
-            return io.call(OP_SET_DEFAULT_CACHE, &zname(&name)).map(|_| ());
-        }
+    let raw = io.call(OP_GET_PRINCIPAL, &zname(name))?;
+    if raw.is_empty() {
+        return Err(kcm_status(KRB5_FCC_NOFILE));
     }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        format!("no cache for {princ}"),
-    ))
+    let mut i = 0;
+    unmarshal_princ(&raw, &mut i)
+}
+
+/// A new cache in the collection, not yet initialized.
+/// MIT `kcm_gen_new` (`cc_kcm.c:795-822`): the GEN_NEW answer names it.
+///
+/// # Errors
+///
+/// The OS error when the KCM socket cannot be connected or a read or write on it fails or
+/// times out; `ErrorKind::NotFound` or `ErrorKind::Other` for a nonzero status;
+/// `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 name.
+pub fn kcm_gen_new() -> io::Result<String> {
+    let mut io = KcmIo::connect()?;
+    cstring(&io.call(OP_GEN_NEW, &[])?)
 }
 
 #[cfg(test)]

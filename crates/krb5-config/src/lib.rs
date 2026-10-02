@@ -31,6 +31,8 @@
 
 mod ccname;
 mod kdcconf;
+pub mod listen;
+mod logging;
 mod profile;
 mod srv;
 mod testenv;
@@ -52,6 +54,9 @@ pub enum Error {
     /// Parse error with context.
     #[error("config parse: {0}")]
     Parse(String),
+    /// A `krb5.conf` MIT's profile library refuses: the code it refuses it with, and what failed.
+    #[error("config parse: {1}")]
+    Profile(ProfileError, String),
     /// DNS SRV lookup failed.
     #[error("dns srv: {0}")]
     Dns(String),
@@ -61,6 +66,42 @@ pub enum Error {
     /// `Unknown credential cache type`.
     #[error("{0}")]
     Ccache(String),
+    /// No realm was given and krb5.conf names no `default_realm`.
+    /// MIT `KRB5_CONFIG_NODEFREALM` (`krb5_err.et:310-310`): the text.
+    #[error("Configuration file does not specify default realm")]
+    NoDefaultRealm,
+}
+
+/// Why MIT's profile library refuses a `krb5.conf`, which `krb5_init_context` reports.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProfileError {
+    /// An `include` target that cannot be read. An include cycle or 32-deep nesting, which MIT
+    /// does not look for, is this too: MIT recurses until a file does not open.
+    /// MIT `parse_include_file` (`prof_parse.c:229-231`): a file that does not open fails with
+    /// `PROF_FAIL_INCLUDE_FILE`.
+    IncludeFile,
+    /// An `includedir` that cannot be listed.
+    /// MIT `parse_include_dir` (`prof_parse.c:271-272`): a directory that does not list fails
+    /// with `PROF_FAIL_INCLUDE_DIR`.
+    IncludeDir,
+    /// A syntax error: an `include` indented inside a section is a relation with no `=`.
+    /// MIT `os_init_paths` (`init_os_ctx.c:403-408`): a syntax error is `KRB5_CONFIG_BADFORMAT`.
+    Syntax,
+}
+
+impl ProfileError {
+    /// The text `krb5_init_context`'s callers print for it.
+    #[must_use]
+    pub const fn text(self) -> &'static str {
+        match self {
+            // MIT `PROF_FAIL_INCLUDE_FILE` (`prof_err.et:67-67`): the code whose text this is.
+            Self::IncludeFile => "Included profile file could not be read",
+            // MIT `PROF_FAIL_INCLUDE_DIR` (`prof_err.et:69-69`): the code whose text this is.
+            Self::IncludeDir => "Included profile directory could not be read",
+            // MIT `KRB5_CONFIG_BADFORMAT` (`krb5_err.et:184-184`): the text.
+            Self::Syntax => "Improper format of Kerberos configuration file",
+        }
+    }
 }
 
 /// One KDC (or kpasswd / admin) endpoint.
@@ -137,6 +178,11 @@ pub struct Krb5Conf {
     pub kcm_socket: Option<String>,
     /// `[libdefaults] default_ccache_name` (MIT parameter expansion).
     pub default_ccache_name: Option<String>,
+    /// `[libdefaults] default_keytab_name`, as written (the caller expands its parameters).
+    pub default_keytab_name: Option<String>,
+    /// `[libdefaults] default_client_keytab_name`, as written (the caller expands its
+    /// parameters).
+    pub default_client_keytab_name: Option<String>,
     /// `[libdefaults] spake_preauth_groups`. `None` = omitted (KDC default none).
     pub spake_preauth_groups: Option<Vec<String>>,
     /// `[libdefaults] preferred_preauth_types`. Empty = MIT default `17, 16, 15, 14`.
@@ -159,15 +205,36 @@ pub struct Krb5Conf {
     pub pkinit_anchors: BTreeMap<String, Vec<String>>,
     /// `[capaths]` client-realm → server-realm → intermediates (`.` = direct).
     pub capaths: BTreeMap<String, BTreeMap<String, Vec<String>>>,
+    /// `[logging]` relations, name and value, in file order (includes followed); read by
+    /// [`LogSpecs`].
+    pub logging: Vec<(String, String)>,
 }
 
 /// KDC policy from `kdc.conf`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KdcConf {
-    /// Bind addresses (host:port). Empty means `127.0.0.1:88`.
-    pub kdc_listen: Vec<String>,
-    /// TCP listen addresses.
-    pub kdc_tcp_listen: Vec<String>,
+    /// The KDC's UDP listener list as written (MIT syntax, see [`listen`]): the realm
+    /// stanza's `kdc_listen` / `kdc_ports`, else `[kdcdefaults]`'s, else
+    /// [`listen::DEFAULT_KDC_PORTLIST`].
+    /// MIT `init_realm` (`kdc/main.c:257-263`): `kdc_listen`, then `kdc_ports`, then the default.
+    pub kdc_listen: String,
+    /// Whether the realm stanza wrote `kdc_listen` / `kdc_ports`, so `krb5kdc -p` does not
+    /// replace [`Self::kdc_listen`].
+    pub kdc_listen_in_realm: bool,
+    /// The KDC's TCP listener list (`kdc_tcp_listen` / `kdc_tcp_ports`, realm then
+    /// `[kdcdefaults]`); `None` listens on [`Self::kdc_listen`].
+    /// MIT `init_realm` (`kdc/main.c:267-282`): `kdc_tcp_listen`, then `kdc_tcp_ports`.
+    pub kdc_tcp_listen: Option<String>,
+    /// The realm stanza's `admin_server`, whose port (if written) is kadmind's port.
+    pub admin_server: Option<String>,
+    /// The realm stanza's `kadmind_listen` list.
+    pub kadmind_listen: Option<String>,
+    /// The realm stanza's `kadmind_port`.
+    pub kadmind_port: Option<u16>,
+    /// The realm stanza's `kpasswd_listen` list.
+    pub kpasswd_listen: Option<String>,
+    /// The realm stanza's `kpasswd_port`.
+    pub kpasswd_port: Option<u16>,
     /// Realm name.
     pub realm: String,
     /// Maximum ticket lifetime in seconds (default 1 day, `alt_prof.c`).
@@ -212,6 +279,15 @@ pub struct KdcConf {
     pub master_key_type: Option<String>,
     /// `database_module` / `db_library`. Default dump-v7; unknown names error.
     pub db_library: Option<String>,
+    /// `disable_last_success` in the realm's `[dbmodules]` section: the KDC records no last
+    /// successful authentication.
+    /// MIT `get_conf_section` (`lib/kdb/kdb5.c:219-227`): the section is the realm stanza's `database_module`, else the realm name.
+    /// MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:267-271`): `disable_last_success` from that `[dbmodules]` section, default false.
+    pub disable_last_success: bool,
+    /// `disable_lockout` in the realm's `[dbmodules]` section: the KDC neither counts failed
+    /// authentications nor checks the lockout policy.
+    /// MIT `configure_context` (`plugins/kdb/db2/kdb_db2.c:273-277`): `disable_lockout` from that `[dbmodules]` section, default false.
+    pub disable_lockout: bool,
     /// Optional NT domain SID (`S-1-5-21-…`) for PAC issuance.
     pub domain_sid: Option<String>,
     /// `reject_bad_transit` (default true). When false, a failed transited
@@ -239,6 +315,8 @@ pub struct KdcConf {
     /// MIT `kadm5_get_config_params` (`alt_prof.c:486-513`): reads it from the realm stanza
     /// only, never from `[kdcdefaults]`.
     pub dict_file: Option<PathBuf>,
+    /// `[logging]` relations, name and value, in file order; read by [`LogSpecs`].
+    pub logging: Vec<(String, String)>,
 }
 
 /// Resolved ccache name (`krb5_cc_resolve`).
@@ -258,7 +336,11 @@ pub use ccname::{
     KRB5_CC_UNKNOWN_TYPE, default_ccache_name, default_ccspec, expand_ccache_params, parse_ccname,
     parse_ccspec, resolve_ccspec,
 };
-pub use kdcconf::{env_kdc_config, kdc_conf_path};
+pub use kdcconf::{
+    KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_stash_file,
+    env_kdc_config, kdc_conf_path,
+};
+pub use logging::LogSpecs;
 pub use profile::{
     client_realm_path, discover_kdc, discover_kdc_in, env_ktname, env_new_password, env_password,
     host_to_realm, is_numeric_address, krb5_conf_paths, load_krb5_conf, load_krb5_conf_paths,

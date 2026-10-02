@@ -30,9 +30,8 @@ plus packet captures outrank unit tests.
 | **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI. `publish = false` (not on crates.io). |
 | **v1.1** *(in progress)* | **General-purpose MIT completeness**: the KDC behaves like MIT across the board and the client tools stand alone. The nine 1.1 phases and the MIT 1.22.2 parity sweep have landed ([docs/stages.md](docs/stages.md)); the swept MIT functions are graded one row per check in the [parity ledger](docs/parity/README.md). |
 
-Every push runs 59 gates in `ci.yml`: 52 fail-red, 4 that pass on exit 2
-while their oracle is not vendored, and 3 soft (`continue-on-error`). Nine
-more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
+Every push runs 55 gates in `ci.yml`: 52 fail-red and 3 soft (`continue-on-error`).
+Nine more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
 pin); soak also runs longer nightly. [docs/gates.md](docs/gates.md) has one row per gate.
 
 ## Architecture
@@ -42,6 +41,7 @@ Focused crates under `crates/`:
 | Crate | Responsibility |
 | --- | --- |
 | `krb5-log` | Structured log field names and correlation IDs |
+| `krb5-cli` | MIT-style command lines (getopt, `kdb5_util` / `kadmind` option tables) and password prompts |
 | `krb5-crypto` | RFC 3961/3962/8009 etypes 17–20 (plus legacy behind `allow_weak_crypto`) |
 | `krb5-types` | RFC 4120 owned protocol values |
 | `krb5-asn1` | DER encode/decode of those values |
@@ -80,8 +80,10 @@ leaves the realm cap at 7 d and new principals at 0, as in MIT
 **Honest caveats, stated plainly:**
 
 - `bidirectional-gate` is **Rust↔Rust**, not an external oracle.
-- Windows **SSPI** has no live oracle yet — `gss-sspi` is an honest
-  `exit 2` placeholder.
+- Windows **SSPI** has no gate. Over the AD trust it accepted a user of
+  the realm (SMB, LDAP) and reached Apache as a SPNEGO client, both in the
+  KVM field lab ([harness/field/README.md](harness/field/README.md));
+  `krb5-gss` has not been run against SSPI.
 - The Samba **L2** PAC-crypto oracle is a *vendored Python reference*, not
   Samba's C library (L1/L3 are live Samba).
 - The product is `forbid(unsafe_code)`; some dependencies (RustCrypto,
@@ -99,8 +101,26 @@ entries of this list.
 
 ## Quick start
 
+kerber-rust installs the way Fedora's `krb5-server` does: MIT's command names, its systemd
+units and the `/var/kerberos/krb5kdc` layout. On Fedora, with the Rust toolchain from
+[docs/install.md](docs/install.md#prerequisites):
+
 ```bash
-make safety               # fmt --check, clippy -D warnings, nextest (CI profile), ci-policy
+make build                                      # as yourself: the release build, no test hooks
+sudo dnf remove -y --no-autoremove krb5-server  # when it is installed; krb5-workstation stays
+sudo make install PREFIX=/usr                   # krb5kdc, kadmind, kadmin.local, kdb5_util, units
+sudo kdb5_util create -s                        # once the realm is named in krb5.conf and kdc.conf
+sudo systemctl enable --now krb5kdc kadmin
+```
+
+[docs/install.md](docs/install.md) is the whole procedure: the realm's files, SELinux, the
+firewall, the first administrator, keying clients, upgrading an MIT realm, and what is not
+supported yet.
+
+To work on the code, `make safety` runs fmt, clippy, nextest (CI profile) and ci-policy; it
+needs `cargo-nextest`. The gates drive real MIT 1.22.2 in Docker (Compose optional):
+
+```bash
 ./scripts/run-harness.sh  # MIT 1.22.2 KDC for KERBER.TEST on port 88 (Docker)
 ./scripts/client-gate.sh  # Rust kinit + MIT klist of the ccache
 ./scripts/stop-harness.sh
@@ -108,10 +128,9 @@ make safety               # fmt --check, clippy -D warnings, nextest (CI profile
 ./scripts/kdc-gate.sh     # MIT 1.22.2 kinit + kvno vs the Rust krb5-kdc in the gate's MIT container
 ```
 
-`make safety` needs `cargo-nextest`; the harness needs Docker (Compose
-optional). The realms, principals and ports are in
-[docs/testing.md](docs/testing.md). [examples/](examples/README.md) has two
-downstream-consumer crates and a working one-realm config `kdc-gate.sh` runs.
+The realms, principals and ports are in [docs/testing.md](docs/testing.md).
+[examples/](examples/README.md) has two downstream-consumer crates and a working one-realm
+config `kdc-gate.sh` runs.
 
 ## Documentation
 
@@ -136,7 +155,7 @@ option. See [NOTICE](NOTICE) and [docs/export-control.md](docs/export-control.md
 Supply chain, all in the CI `audit` job: `cargo audit`, `cargo deny`,
 per-crate `cargo geiger` (`scripts/geiger.sh`, 0-unsafe product), and
 `cargo vet --locked`. MSRV is **1.95** (`package.rust-version`, asserted by
-`ci-policy.py` against the `msrv` jobs), `rust-toolchain.toml` tracks stable
+`ci-policy.py` against the `msrv` jobs), `rust-toolchain.toml` pins stable **1.99.0**
 with rustfmt and clippy, edition **2024**, matching KLLDAP (checkout 0.7.4, upstream 0.7.6); `rasn` is unpinned (`0.28`, lock 0.28.14)
 with MIT golden DER as the byte-level net. See
 [docs/security.md](docs/security.md).

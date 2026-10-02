@@ -22,16 +22,17 @@ clippy:
 	cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 test:
-	KRB5_CONFIG=$(KRB5_CONFIG) cargo nextest run --workspace --profile ci
+	KRB5_CONFIG=$(KRB5_CONFIG) cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
+	KRB5_CONFIG=$(KRB5_CONFIG) cargo nextest run --workspace --profile ci --locked
 
 doc:
 	RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
 
 shellcheck:
 	@if command -v shellcheck >/dev/null 2>&1; then \
-	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh; \
+	  shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh; \
 	else \
-	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh; \
+	  docker run --rm -v "$(ROOT):/mnt:ro" koalaman/shellcheck:v0.11.0 -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh; \
 	fi
 
 policy:
@@ -62,3 +63,67 @@ checkpoint:
 budget:
 	python3 scripts/ci-status.py --budget-report -n 15 --jobs
 	python3 scripts/ci-status.py --check-budget -n 5 --workflow ci
+
+# One field run on the lab: the ref's `git archive`, never this working tree, driven through the real
+# products on the lab VMs; records under ~/kerber-lab/runs (harness/field/README.md, "Scenarios").
+PROFILE ?= nightly
+REF ?= f-functional
+ONLY ?=
+
+.PHONY: field
+field:
+	$(ROOT)/harness/field/run.sh --profile $(PROFILE) --ref $(REF) $(if $(ONLY),--only $(ONLY))
+
+# The product as Fedora's krb5-server and krb5-workstation lay out MIT's (docs/install.md;
+# dist/install.sh does the copying and keeps the manifest uninstall reads). `make build` is the
+# release build with no features, so no test hooks: run it as yourself, then `sudo make install`,
+# which never compiles, nor does any install goal run as root. KDCDIR is the programs'
+# compiled-in KDC directory (KERBER_KDC_DIR at build time); it does not follow PREFIX.
+PREFIX ?= /usr/local
+DESTDIR ?=
+BINDIR ?= $(PREFIX)/bin
+SBINDIR ?= $(PREFIX)/sbin
+DATADIR ?= $(PREFIX)/share
+SYSCONFDIR ?= /etc
+SYSCONFIGDIR ?= $(SYSCONFDIR)/sysconfig
+LOGROTATEDIR ?= $(SYSCONFDIR)/logrotate.d
+UNITDIR ?= $(PREFIX)/lib/systemd/system
+TMPFILESDIR ?= $(PREFIX)/lib/tmpfiles.d
+KDCDIR ?= $(or $(KERBER_KDC_DIR),/var/kerberos/krb5kdc)
+CARGO ?= cargo
+CARGO_TARGET_DIR ?= $(ROOT)/target
+# One stamp per KDC directory, so a build for another directory is a new build.
+BUILD_STAMP := $(CARGO_TARGET_DIR)/release/.make-build$(subst /,-,$(KDCDIR))
+BUILD_INPUTS := $(ROOT)/Cargo.toml $(ROOT)/Cargo.lock $(ROOT)/rust-toolchain.toml \
+	$(ROOT)/.cargo/config.toml $(shell find '$(ROOT)/crates' -name '*.rs' -o -name Cargo.toml)
+INSTALLER = RELEASE='$(CARGO_TARGET_DIR)/release' DIST='$(ROOT)/dist' DESTDIR='$(DESTDIR)' \
+	BINDIR='$(BINDIR)' SBINDIR='$(SBINDIR)' SYSCONFIGDIR='$(SYSCONFIGDIR)' \
+	LOGROTATEDIR='$(LOGROTATEDIR)' UNITDIR='$(UNITDIR)' TMPFILESDIR='$(TMPFILESDIR)' \
+	KDCDIR='$(KDCDIR)' MANIFEST='$(DATADIR)/kerber-rust/install-manifest' sh '$(ROOT)/dist/install.sh'
+
+.PHONY: build install install-clients uninstall
+
+build: $(BUILD_STAMP)
+
+$(BUILD_STAMP): $(BUILD_INPUTS)
+	@if [ -n "$${SUDO_USER-}" ]; then \
+	  echo "make: the release build is missing or older than the sources: run 'make build' as $$SUDO_USER first (sudo does not compile)" >&2; \
+	  exit 1; \
+	fi
+	@if [ "$$(id -u)" = 0 ] && [ -n "$(filter install install-clients,$(MAKECMDGOALS))" ]; then \
+	  echo "make: the release build is missing or older than the sources: run 'make build' first (an install goal does not compile as root)" >&2; \
+	  exit 1; \
+	fi
+	$(if $(filter-out /var/kerberos/krb5kdc,$(KDCDIR)),KERBER_KDC_DIR='$(KDCDIR)') $(CARGO) build --release --locked \
+	  --target-dir '$(CARGO_TARGET_DIR)' -p krb5-kdc -p krb5-admin -p krb5-client
+	@rm -f '$(CARGO_TARGET_DIR)'/release/.make-build-*
+	@touch '$@'
+
+install: $(BUILD_STAMP)
+	@$(INSTALLER) install
+
+install-clients: $(BUILD_STAMP)
+	@$(INSTALLER) install-clients
+
+uninstall:
+	@$(INSTALLER) uninstall

@@ -473,6 +473,205 @@ fn apply_kdc_conf_rejects_bad_domain_sid() {
     assert!(store.apply_kdc_conf(&conf).is_err());
 }
 
+fn dict_conf(dict_file: &std::path::Path) -> krb5_config::KdcConf {
+    krb5_config::KdcConf {
+        dict_file: Some(dict_file.to_path_buf()),
+        ..Default::default()
+    }
+}
+
+#[test]
+fn the_kdc_config_never_reads_the_dictionary() {
+    // A directory opens but does not read (EISDIR): a path that read dict_file would fail.
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-kdc");
+    let conf = dict_conf(&dir);
+    let mut store = PrincipalStore::new(TEST_REALM_STR);
+    store.apply_kdc_conf(&conf).unwrap();
+    assert!(store.pwqual_dict.is_none());
+    let boot = PrincipalStore::bootstrap_with_kdc_conf(
+        TEST_REALM_STR,
+        "u",
+        b"u-secret",
+        "a",
+        b"a-secret",
+        Some(&conf),
+    )
+    .unwrap();
+    assert!(boot.pwqual_dict.is_none());
+    // The admin side reads it, and fails as MIT's kadm5_init does.
+    let e = store.init_pwqual(Some(&conf)).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::IsADirectory);
+    // kdb5_util create starts the admin side too, and fails before writing anything.
+    let master = random_key(A256).unwrap();
+    let created = crate::create::create_realm(TEST_REALM_STR, Some(&conf), &master, 1);
+    assert!(
+        matches!(&created, Err(Error::InvalidArgument(t)) if t.starts_with("kdc.conf dict_file ")),
+        "{created:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn pwqual_dict_words_are_init_dict_lines_matched_as_strcasecmp() {
+    let dict = pwqual_dict::PwqualDict::from_bytes(
+        b"zebra\nApple\npear\r\nspace \n\ncaf\xc3\xa9\nlat\xe9n\napple\nunterminated".to_vec(),
+    )
+    .unwrap();
+    // `Apple` and `apple` are one word; the unterminated last line is none.
+    assert_eq!(dict.word_count(), 7);
+    let hits: [&[u8]; 8] = [
+        b"zebra",
+        b"ZEBRA",
+        b"aPPLE",
+        b"pear\r",
+        b"space ",
+        b"",
+        b"CAF\xc3\xa9",
+        b"LAT\xe9N",
+    ];
+    for w in hits {
+        assert!(dict.contains(w), "{w:?}");
+    }
+    // ASCII folding only, as glibc's strcasecmp in the C and UTF-8 locales (live: MIT accepts
+    // `CAFÉ` against `café`); bytes as they are, no trimming, no prefixes.
+    let misses: [&[u8]; 7] = [
+        b"unterminated",
+        b"pear",
+        b"space",
+        b"zebr",
+        b"zebras",
+        b"CAF\xc3\x89",
+        b"lat\xe8n",
+    ];
+    for w in misses {
+        assert!(!dict.contains(w), "{w:?}");
+    }
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-open");
+    let quiet = &mut |_: krb5_log::klog::Severity, _: &str| {};
+    assert!(
+        pwqual_dict::PwqualDict::open(None, quiet)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        pwqual_dict::PwqualDict::open(Some(&dir.join("missing")), quiet)
+            .unwrap()
+            .is_none()
+    );
+    std::fs::write(dir.join("one"), "no newline").unwrap();
+    let one = pwqual_dict::PwqualDict::open(Some(&dir.join("one")), quiet)
+        .unwrap()
+        .unwrap();
+    assert_eq!(one.word_count(), 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn pwqual_dict_reads_the_fstat_size_so_dev_zero_is_empty() {
+    // A character device says 0 bytes and never ends: read as MIT reads it, it is an empty
+    // dictionary at once, with no notice, as MIT says nothing for a file it opened (live: MIT's
+    // kadmind starts and accepts any word).
+    use krb5_log::klog::Severity;
+    let zero = std::path::Path::new("/dev/zero");
+    let mut notes: Vec<(Severity, String)> = Vec::new();
+    let mut note = |severity: Severity, text: &str| notes.push((severity, text.to_owned()));
+    let started = std::time::Instant::now();
+    let dict = pwqual_dict::PwqualDict::open(Some(zero), &mut note)
+        .unwrap()
+        .unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(dict.word_count(), 0);
+    let mut store = PrincipalStore::new(TEST_REALM_STR);
+    store
+        .init_pwqual_noting(Some(&dict_conf(zero)), &mut note)
+        .unwrap();
+    assert!(notes.is_empty(), "{notes:?}");
+    store.put_policy(NamedPolicy::new("pq"));
+    let u = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dictu"]);
+    store.check_new_password(&u, Some("pq"), b"zebra").unwrap();
+}
+
+#[test]
+fn pwqual_dict_gives_mits_notices_when_there_is_no_dictionary() {
+    // The notices go to a collector, not the process-wide log other tests write to.
+    use krb5_log::klog::Severity;
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-notices");
+    let (missing, words) = (dir.join("nosuch"), dir.join("w"));
+    std::fs::write(&words, "zebra\n").unwrap();
+    let mut notes: Vec<(Severity, String)> = Vec::new();
+    let mut note = |severity: Severity, text: &str| notes.push((severity, text.to_owned()));
+    let mut store = PrincipalStore::new(TEST_REALM_STR);
+    store.init_pwqual_noting(None, &mut note).unwrap();
+    store
+        .init_pwqual_noting(Some(&dict_conf(&missing)), &mut note)
+        .unwrap();
+    store
+        .init_pwqual_noting(Some(&dict_conf(&words)), &mut note)
+        .unwrap();
+    let warning = format!(
+        "WARNING!  Cannot find dictionary file {}, continuing without one.",
+        missing.display()
+    );
+    assert_eq!(
+        notes,
+        [
+            (
+                Severity::Info,
+                "No dictionary file specified, continuing without one.".to_owned()
+            ),
+            (Severity::Err, warning),
+        ]
+    );
+    assert!(store.pwqual_dict.is_some());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_reread_moves_the_dictionary_and_ticket_policy_never_copies_them() {
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-reread");
+    let (db, stash, words) = (dir.join("principal"), dir.join("stash"), dir.join("words"));
+    std::fs::write(&words, "zebra\ncorrecthorse\n").unwrap();
+    let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
+    store.put_policy(NamedPolicy::new("pq"));
+    crate::persist::save_store(&store, &db, &stash).unwrap();
+    store.persist_paths = Some((db.clone(), stash.clone()));
+    store.init_pwqual(Some(&dict_conf(&words))).unwrap();
+    store.policy.host_based_services = "host-based-services ".repeat(4);
+    let dict = Arc::as_ptr(store.pwqual_dict.as_ref().unwrap());
+    let services = store.policy.host_based_services.as_ptr();
+    let admin = crate::testrealm::documented_admin_id();
+    let u = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["dictu"]);
+    // Each change reads the database again first; a refused one reads it back after.
+    store
+        .change(|s| {
+            s.create_password(&acl, &admin, &u, b"first-secret")?;
+            s.set_principal_policy(&u, Some("pq".into()))
+        })
+        .unwrap()
+        .unwrap();
+    store.reload().unwrap();
+    let refused = store
+        .change(|s| s.set_password(&u, b"CorrectHorse"))
+        .unwrap();
+    assert!(
+        matches!(&refused, Err(Error::PasswordPolicy(t)) if t == PWQUAL_DICT),
+        "{refused:?}"
+    );
+    store
+        .change(|s| s.set_password(&u, b"correcthorse-1"))
+        .unwrap()
+        .unwrap();
+    let kept = store.pwqual_dict.as_ref().unwrap();
+    assert_eq!(Arc::as_ptr(kept), dict, "the dictionary was rebuilt");
+    assert_eq!(Arc::strong_count(kept), 1);
+    assert_eq!(
+        store.policy.host_based_services.as_ptr(),
+        services,
+        "the ticket policy was copied"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn random_sid_rejects_all_zero() {
     assert!(sid_from_random_bytes(&[0; 12]).is_err());
@@ -489,12 +688,15 @@ fn persist_round_trip_keeps_serial_not_mtime() {
     store.persist_paths = Some((db.clone(), stash.clone()));
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["serialed"]);
     store
-        .create_password(
-            &acl,
-            &crate::testrealm::documented_admin_id(),
-            &extra,
-            b"serial-secret",
-        )
+        .change(|s| {
+            s.create_password(
+                &acl,
+                &crate::testrealm::documented_admin_id(),
+                &extra,
+                b"serial-secret",
+            )
+        })
+        .unwrap()
         .unwrap();
     let sno = store.serial();
     assert!(sno > 0);
@@ -522,7 +724,8 @@ fn create_host_changepw_flag_survives_save() {
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     store
-        .create_host(&acl, &crate::testrealm::documented_admin_id(), &cpw)
+        .change(|s| s.create_host(&acl, &crate::testrealm::documented_admin_id(), &cpw))
+        .unwrap()
         .unwrap();
     let loaded = crate::persist::load_store(&db, &stash).unwrap();
     let p = loaded.get_name(&cpw).expect("changepw");
@@ -610,8 +813,11 @@ fn ktadd_export_fail_rolls_back_rotation() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The rotation is written only once the keytab was: a keytab write that fails leaves the
+/// database as it was, with nothing to roll back on disk, even when the database's directory has
+/// meanwhile become read-only.
 #[test]
-fn ktadd_rollback_save_fail_surfaces_both() {
+fn ktadd_write_failure_leaves_the_database_unwritten() {
     let dir = krb5_testkit::scratch_dir("krb5-ktadd-rbsave");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
@@ -623,6 +829,7 @@ fn ktadd_rollback_save_fail_surfaces_both() {
         .unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
+    let before = max_kvno(&store, &extra);
     let err = store
         .ktadd_local_atomic(
             &extra,
@@ -640,12 +847,14 @@ fn ktadd_rollback_save_fail_surfaces_both() {
         .unwrap_err();
     let msg = err.to_string();
     assert!(msg.contains("disk full"), "{msg}");
-    assert!(msg.contains("rollback failed"), "{msg}");
+    assert_eq!(max_kvno(&store, &extra), before);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755));
     }
+    let reloaded = crate::persist::load_store(&db, &stash).unwrap();
+    assert_eq!(max_kvno(&reloaded, &extra), before);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

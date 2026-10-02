@@ -429,7 +429,7 @@ echo "$MIT_CHPW_POL"
 echo "$MIT_CHPW_POL" | grep -q 'Password change rejected'
 RUST_CHPW_POL="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf \
     -e KRB5_PASSWORD=LongPass1 -e KRB5_NEW_PASSWORD=short "$NAME" \
-    /tmp/krb5-kpasswd 127.0.0.1 chpwpol@KERBER.TEST 2>&1)" || true
+    /tmp/krb5-kpasswd chpwpol@KERBER.TEST 2>&1)" || true
 echo "$RUST_CHPW_POL"
 echo "$RUST_CHPW_POL" | grep -q 'Password change rejected'
 echo "MIT_kpasswd_soft_rejected"
@@ -447,7 +447,7 @@ echo "$MIT_SETPW" | grep -q 'Access denied'
 RUST_SETPW="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf \
     -e KRB5_PASSWORD=setold -e KRB5_NEW_PASSWORD=shouldfail \
     -e KRB5_KPASSWD_TARGET=chpwother@KERBER.TEST "$NAME" \
-    /tmp/krb5-kpasswd 127.0.0.1 chpwset@KERBER.TEST 2>&1)" || true
+    /tmp/krb5-kpasswd chpwset@KERBER.TEST 2>&1)" || true
 echo "$RUST_SETPW"
 echo "$RUST_SETPW" | grep -q 'Access denied'
 echo "MIT_kpasswd_setpw_denied"

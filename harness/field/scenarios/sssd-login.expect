@@ -1,0 +1,6 @@
+# harness/field/scenarios/sssd-login.expect: where sssd-login.sh's rust leg is known to differ from its MIT leg, by
+# check name (the INFO observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN;
+# anything else that differs is a finding. Each line names the hand record that shows the difference (in the archive
+# of field records) and what would remove it.
+# check	known difference (rust leg vs MIT)	record	removed by
+obs.ccache.bytes	alice's FILE:/tmp/krb5cc_10001 after the login is about 1.3 kB where MIT's is about 0.6 kB: the TGT carries the MS-PAC set (LOGON_INFO 436 B)	f-R2 README, the SDDM row (1297 B vs 619 B); f-L2-rust F2	the user's PAC decision at the 1.1 cut (open item "PAC size")

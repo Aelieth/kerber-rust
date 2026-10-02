@@ -31,15 +31,21 @@ path = "src/bin/krb5-kswitch.rs"
 [dependencies]
 chrono.workspace = true
 krb5-asn1.workspace = true
+krb5-cli.workspace = true
 krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
-nix = { workspace = true, features = ["term"] }
+nix = { workspace = true, features = ["hostname"] }
 tracing.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 zeroize.workspace = true
+
+[features]
+# The gates' client options and request shapes (kvno's --body-realm, --renew, --renew-ticket,
+# --disable-transited-check), with the gates' environment inputs; off by default.
+test-hooks = ["dep:tracing-subscriber", "krb5-config/test-hooks", "krb5-protocol/test-hooks"]
 
 [lints]
 workspace = true

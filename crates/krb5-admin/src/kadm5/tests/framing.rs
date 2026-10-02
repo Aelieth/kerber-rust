@@ -34,6 +34,26 @@ fn read_record_bounds_the_total_accumulated_size() {
     let _ = writer.join();
 }
 
+/// A kadm5 RPC reply is one write: the record mark (length | LAST_FRAG) and the body together,
+/// as MIT's `xdrrec` flushes a record.
+#[test]
+fn rpc_record_is_one_write() {
+    #[derive(Default)]
+    struct Writes(Vec<Vec<u8>>);
+    impl std::io::Write for Writes {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.push(buf.to_vec());
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut w = Writes::default();
+    super::write_record(&mut w, b"reply").unwrap();
+    assert_eq!(w.0, [b"\x80\0\0\x05reply".to_vec()]);
+}
+
 #[test]
 fn xdr_nullstring_round_trip_shape() {
     let mut w = XdrW::default();

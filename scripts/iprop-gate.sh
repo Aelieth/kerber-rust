@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
-need_bins krb5-kdc krb5-pac-extract krb5-kadmind krb5-kprop krb5-kpropd krb5-iprop-pull
+need_bins krb5-kdc krb5-pac-extract krb5-kadmind krb5-kprop krb5-kpropd krb5-iprop-pull krb5-kadmin-local
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-iprop-gate"
@@ -33,7 +33,8 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kad
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kprop" "$NAME":/tmp/krb5-kprop
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpropd" "$NAME":/tmp/krb5-kpropd
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-iprop-pull" "$NAME":/tmp/krb5-iprop-pull
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-kadmind /tmp/krb5-kprop /tmp/krb5-kpropd /tmp/krb5-iprop-pull
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-kadmind /tmp/krb5-kprop /tmp/krb5-kpropd /tmp/krb5-iprop-pull /tmp/krb5-kadmin-local
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *
 kiprop/*@KERBER.TEST p
@@ -371,9 +372,9 @@ if [ "$ok" != 1 ]; then
 fi
 
 echo "==== password history propagates: MIT kpropd applies the KADM_DATA record under kadmin/history ===="
-# kdb_convert.c: the admin record travels inside AT_TL_DATA and a changed
-# history as AT_PW_HIST/AT_PW_HIST_KVNO; a policy created meanwhile never
-# travels (kdb5.c), and the replica refuses the remembered password itself.
+# kdb_convert.c: the admin record, with the policy and the history, travels
+# inside AT_TL_DATA; a policy created meanwhile never travels (kdb5.c), and
+# the replica refuses the remembered password itself.
 for q in 'addpol -history 2 ihp2' 'addprinc -pw i3cret1 -policy ihp ihist' 'cpw -pw i3cret2 ihist'; do
     kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
         "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q "$q"
@@ -522,8 +523,10 @@ if echo "$MIT_DENY" | grep -q 'fullresync_status=0'; then
 fi
 
 echo "==== mutate MIT master: extra2 + setstr ===="
+# extra2's flags, lifetimes and expirations are set before the setstr, whose MIT update
+# carries none of them (kdb_convert.c find_changed_attrs).
 kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
-    "$NAME" -- -q 'addprinc -pw extra2-secret extra2'
+    "$NAME" -- -q 'addprinc -pw extra2-secret +requires_preauth -allow_postdated -maxlife "5 hours" -maxrenewlife "3 days" -expire "2031-01-01 00:00:00 UTC" -pwexpire "2030-06-01 00:00:00 UTC" extra2'
 kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/kdc.conf \
     "$NAME" -- -q 'setstr extra2 note hello-g4a'
 
@@ -555,6 +558,15 @@ echo "replica last_sno=$SNO2 last_time=$SEC2 $USEC2"
 REPLICA="$(docker exec "$NAME" cat /tmp/rust-replica 2>/dev/null || true)"
 echo "$REPLICA" | grep extra2 || true
 echo "$REPLICA" | grep -q '6e6f74650068656c6c6f2d67346100'
+# kdb_convert.c ulog_conv_2dbentry: the replica applies only what an update carries.
+kadmin_q_ok \
+    --then 'getprinc extra2' '^Attributes: DISALLOW_POSTDATED REQUIRES_PRE_AUTH$' \
+    --then 'getprinc extra2' '^Maximum ticket life: 0 days 05:00:00$' \
+    --then 'getprinc extra2' '^Maximum renewable life: 3 days 00:00:00$' \
+    --then 'getprinc extra2' '^Expiration date: Wed Jan 01 00:00:00 UTC 2031$' \
+    --then 'getprinc extra2' '^Password expiration date: Sat Jun 01 00:00:00 UTC 2030$' \
+    rust_kadmin_local -e KRB5_CONFIG=/tmp/iprop-krb5.conf -e KRB5_KDC_DB=/tmp/rust-replica \
+    -e KRB5_KDC_STASH=/tmp/rust-replica.stash "$NAME" -- -q 'getprinc extra2'
 kill_comm krb5kdc
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust-replica \

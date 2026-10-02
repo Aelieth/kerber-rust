@@ -59,7 +59,7 @@ pub fn serve_kadm5_conn(
     let handle = random_handle();
     let addr = stream
         .peer_addr()
-        .map(|a| a.ip().to_string())
+        .map(|a| crate::listen::client_addr(a.ip()))
         .unwrap_or_default();
     let ctx = RpcCtx {
         store: &store,
@@ -140,10 +140,20 @@ pub(super) fn read_record(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     }
 }
 
-pub(super) fn write_record(stream: &mut TcpStream, body: &[u8]) -> io::Result<()> {
+/// One ONC RPC record: the record mark (the length with the last-fragment bit) and the body in one
+/// write, so a reply leaves in one segment rather than waiting on the client's delayed ACK. The
+/// record is one fragment whatever its length.
+/// MIT `flush_out` (`lib/rpc/xdr_rec.c:475-489`): the record mark is set ahead of the body in
+/// xdrrec's buffer, and the buffer goes out in one write.
+/// MIT `fix_buf_size` (`lib/rpc/xdr_rec.c:566-571`): kadmind's listener asks for no size
+/// (`svctcp_create(sock, 0, 0)`), so that buffer is 4000 bytes and a longer record leaves as
+/// several fragments.
+pub(super) fn write_record(stream: &mut impl Write, body: &[u8]) -> io::Result<()> {
     let n = u32::try_from(body.len()).unwrap_or(0) | LAST_FRAG;
-    stream.write_all(&n.to_be_bytes())?;
-    stream.write_all(body)?;
+    let mut rec = Vec::with_capacity(4 + body.len());
+    rec.extend_from_slice(&n.to_be_bytes());
+    rec.extend_from_slice(body);
+    stream.write_all(&rec)?;
     stream.flush()
 }
 
@@ -301,6 +311,7 @@ pub(super) fn handle_rpc(
             &verf,
             r.rest(),
             rcache,
+            addr,
         );
     }
 

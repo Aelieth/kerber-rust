@@ -1,7 +1,34 @@
 # Structured logging schema
 
 Library crates emit [`tracing`](https://docs.rs/tracing) events. They
-never install a subscriber. Tests and the harness do.
+never install a subscriber. The programs do, where `[logging] json`
+asks for the stream (below), and tests install their own.
+
+## Where the stream goes
+
+The daemons write the JSON stream only where `[logging] json` names a
+destination: `STDOUT`, `STDERR` or `FILE:path` (appended to, created
+0640, opened once at the start and not reopened on SIGHUP). It is read
+from the profile of the daemon log below, kdc.conf first: `krb5kdc`
+and `kadmind` with their `[logging]` destinations, `kprop` and
+`kpropd` from the same KDC profile. Without it there is no stream.
+MIT's daemons print none, and in the foreground (`krb5kdc -n`,
+`kadmind -nofork`) ours print what MIT prints: `krb5kdc: starting...`
+or `kadmind: starting...` on standard error. `STDOUT` and `STDERR`
+apply in the foreground only, since a detached daemon has neither;
+`FILE:` applies in both. MIT does not read the relation, so a kdc.conf
+shared with MIT may carry it (settled live beside MIT 1.22.2's
+`krb5kdc` and `kadmind`). `RUST_LOG` filters the stream; each program
+has a default filter.
+
+The gates read the stream from the daemons' standard output:
+`json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
+the stock kdc.conf and krb5.conf of each container they start before
+any copy of them is kept, and `harness/prod/env-up.sh` and
+`scripts/prod-gate.sh` do the same for their KDCs. A profile a gate
+writes for our KDC alone, whose log it reads for a status word,
+carries the relation itself: a daemon whose kdc.conf and krb5.conf are
+both the gate's own reads neither stock file.
 
 ## Fields
 
@@ -31,13 +58,14 @@ never install a subscriber. Tests and the harness do.
 | `s4u` / `s4u_client` | kdc.issue | `PROTOCOL-TRANSITION` or `CONSTRAINED-DELEGATION` |
 | `record` | kdc.audit | One JSON object using MIT `j_dict.h` keys |
 | `module` | kdc.authdata.module | Name of the kdcauthdata module that returned the error |
+| `path` / `uid` / `gid` | protocol.secret_file | The file saved, and the owner and group of the file it replaced |
 
 Canonical Rust `event` strings live in `krb5_log::events`; the field
 names above are written literally at each `tracing` call site (there
 are no `FIELD_*` constants). `client.tgs`, `client.pkinit`,
-`client.fast`, `kdc.lookaside.full`, `kdc.pkinit`, and
-`kdc.authdata.module` are constants there too, so no library call site
-writes an `event` string literal.
+`client.fast`, `kdc.lookaside.full`, `kdc.pkinit`,
+`kdc.authdata.module`, and `protocol.secret_file` are constants there
+too, so no library call site writes an `event` string literal.
 
 `target` is the Rust module path (`tracing`'s default). It is not part
 of the log contract. Gates and tests match `event` and the fields in
@@ -102,6 +130,28 @@ the next module (`kdc_authdata.c` `handle_authdata`). It is not a
 `kdc.issue` line, so a request still logs only the `kdc.issue` lines
 above.
 
+A database, `.ulog`, stash or keytab save whose writer may not give
+the new file the replaced file's owner or group (an unprivileged
+writer) logs `event=protocol.secret_file` at **warn** with
+`correlation_id`, `component`, `outcome=ok`, `path`, the old `uid` and
+`gid`, `detail` (`owner not kept`, `group not kept`, or `owner and
+group not kept`), and `error`; the save completes. With SELinux
+permissive, a new file whose SELinux context cannot be set logs the same
+event with `detail` `SELinux context not set` and is created without it
+(enforcing, the save fails). The daemons' default filter includes
+`krb5_protocol=warn`, so the line shows without `RUST_LOG`.
+
+A KDC that cannot record a client's lockout attributes in
+`principal.lockout` (the file is missing, as in a realm an earlier
+release made, is no lockout file, or cannot be opened read-write or
+written) logs `event=kdc.issue` at **warn**, once for each of the two
+causes (no file it may open; one it may not write), with
+`correlation_id`, `component`, `outcome=error` and the reason as
+`detail`, writes the same text to its daemon log, and keeps the
+attributes in memory until it can write the file; from then on the
+file's are the only ones. A KDC that opened the file read-only keeps
+them in memory until it is restarted, even once the file is writable.
+
 The `KdcAudit` registry (`kdc_audit.c`) writes `event=kdc.audit`
 with MIT `j_dict.h` field names (`event_name`, `event_success`,
 `stage`, `tkt_out_id`, `req_id`, `fromport`, `fromaddr`, …).
@@ -109,6 +159,47 @@ with MIT `j_dict.h` field names (`event_name`, `event_success`,
 uppercase hex digits. `req_id` is 31 alphanumeric characters
 (MIT `REQID_LEN` including NUL). `KRB5_KDC_AUDIT=test` appends
 the same JSON to `KRB5_KDC_AUDIT_LOG` (default `au.log`).
+
+## The daemon log (`[logging]`)
+
+Besides the JSON stream, `krb5-kdc` and
+`krb5-kadmind` write MIT's text log (`krb5_log::klog`, MIT
+`lib/kadm5/logger.c`). The destinations are the `[logging]` relations
+of the daemon's profile, kdc.conf first, then krb5.conf with its
+includes: every `kdc` (KDC) or `admin_server` (kadmind) value, else
+every `default` value, else syslog with facility AUTH. Fedora's
+`/etc/krb5.conf` routes them to `/var/log/krb5kdc.log` and
+`/var/log/kadmind.log` this way. `krb5-kadmin-local` opens the
+`admin_server` destinations the same way, as MIT's `kadmin.local`
+does, and writes only the dictionary notice to them.
+
+| Destination | Meaning |
+| --- | --- |
+| `FILE:path` | append; a new file is created 0640 |
+| `FILE=path` | write from the start without truncating, as MIT does |
+| `STDERR` | standard error |
+| `CONSOLE`, `DEVICE=path` | `/dev/console` or the path, lines ending CR LF |
+| `SYSLOG[:severity[:facility]]` | `/dev/log`; the severity is ignored, the facility defaults to AUTH |
+
+A spec that does not open is reported on standard error as MIT reports
+it (`Couldn't open log file …`, `… cannot parse <…>`). Each line is
+`Mmm dd hh:mm:ss host prog[pid](Severity): message`; debug lines go to
+syslog only unless `[logging] debug = true`. SIGHUP reopens the files,
+so logrotate's `systemctl reload` moves the daemon to a new one.
+
+What is logged is what MIT logs: `setting up network...`, `set up N
+sockets` and MIT's bind-failure lines; `commencing operation` /
+`shutting down` (KDC) and `starting` / `finished, exiting` (kadmind);
+at kadmind's and kadmin.local's start, `No dictionary file specified,
+continuing without one.` without a `dict_file`, or `WARNING!  Cannot
+find dictionary file …, continuing without one.` for a missing one;
+one `AS_REQ` / `TGS_REQ` line per answered request (`ISSUE` with the
+reply etypes, or the status word and the error's message) with the
+`... PROTOCOL-TRANSITION` / `... CONSTRAINED-DELEGATION` line after an
+S4U request; the transited-path lines; `closing down fd N` when a TCP
+connection ends; and per kadm5 request one `Request:` or `Unauthorized
+request:` line with client, service and address, plus the `chpw` /
+`setpw` lines of kpasswd.
 
 ## Logs as metrics
 
