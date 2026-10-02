@@ -100,8 +100,26 @@ entries of this list.
 
 ## Quick start
 
+kerber-rust installs the way Fedora's `krb5-server` does: MIT's command names, its systemd
+units and the `/var/kerberos/krb5kdc` layout. On Fedora, with the Rust toolchain from
+[docs/install.md](docs/install.md#prerequisites):
+
 ```bash
-make safety               # fmt --check, clippy -D warnings, nextest (CI profile), ci-policy
+make build                                      # as yourself: the release build, no test hooks
+sudo dnf remove -y --no-autoremove krb5-server  # when it is installed; krb5-workstation stays
+sudo make install PREFIX=/usr                   # krb5kdc, kadmind, kadmin.local, kdb5_util, units
+sudo kdb5_util create -s                        # once the realm is named in krb5.conf and kdc.conf
+sudo systemctl enable --now krb5kdc kadmin
+```
+
+[docs/install.md](docs/install.md) is the whole procedure: the realm's files, SELinux, the
+firewall, the first administrator, keying clients, upgrading an MIT realm, and what is not
+supported yet.
+
+To work on the code, `make safety` runs fmt, clippy, nextest (CI profile) and ci-policy; it
+needs `cargo-nextest`. The gates drive real MIT 1.22.2 in Docker (Compose optional):
+
+```bash
 ./scripts/run-harness.sh  # MIT 1.22.2 KDC for KERBER.TEST on port 88 (Docker)
 ./scripts/client-gate.sh  # Rust kinit + MIT klist of the ccache
 ./scripts/stop-harness.sh
@@ -109,10 +127,9 @@ make safety               # fmt --check, clippy -D warnings, nextest (CI profile
 ./scripts/kdc-gate.sh     # MIT 1.22.2 kinit + kvno vs the Rust krb5-kdc in the gate's MIT container
 ```
 
-`make safety` needs `cargo-nextest`; the harness needs Docker (Compose
-optional). The realms, principals and ports are in
-[docs/testing.md](docs/testing.md). [examples/](examples/README.md) has two
-downstream-consumer crates and a working one-realm config `kdc-gate.sh` runs.
+The realms, principals and ports are in [docs/testing.md](docs/testing.md).
+[examples/](examples/README.md) has two downstream-consumer crates and a working one-realm
+config `kdc-gate.sh` runs.
 
 ## Documentation
 

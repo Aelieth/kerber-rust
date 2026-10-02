@@ -473,6 +473,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **install.** `make install` puts the KDC programs under MIT's names with Fedora `krb5-server`'s
+  units, sysconfig, tmpfiles.d, logrotate and `kdc.conf` (`dist/`), keeps existing config, refuses
+  package-owned paths and lists what it wrote for `uninstall`; [docs/install.md](docs/install.md). Fedora 43 runs.
 - **log/config.** `krb5_log::klog` writes MIT's daemon log where `[logging]` says. Units.
 - **kdc.** MIT's `AS_REQ` / `TGS_REQ` log lines. Units.
 - **admin.** MIT's kadmind `Request:` and kpasswd `chpw` log lines. Units.
