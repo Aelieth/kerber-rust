@@ -45,6 +45,7 @@ use krb5_kdc::{
     parse_dump, save_dump_text, save_store_with_master, stash_keys, string_to_enctype,
     update_store, write_stash,
 };
+use zeroize::{Zeroize as _, Zeroizing};
 
 /// MIT `usage` (`kadmin/dbutil/kdb5_util.c:77-107`): the text, on stderr, then exit status 1.
 const USAGE: &str = "Usage: kdb5_util [-r realm] [-d dbname] [-k mkeytype] [-kv mkeyVNO]
@@ -137,7 +138,8 @@ struct Util {
     db_args: DbArgs,
     /// The master key type; `None` when kdc.conf's `master_key_type` names no enctype.
     etype: Option<EncryptionType>,
-    password: Option<String>,
+    /// `-P`, wiped when dropped.
+    password: Option<Zeroizing<String>>,
     manual: bool,
     kvno: Option<u32>,
     exit_status: u8,
@@ -215,12 +217,15 @@ impl Util {
 }
 
 fn main() -> ExitCode {
-    let argv: Vec<String> = std::env::args().collect();
+    let mut argv: Vec<String> = std::env::args().collect();
     let progname = argv
         .first()
         .map_or("kdb5_util", |a| a.rsplit('/').next().unwrap_or(a))
         .to_owned();
-    ExitCode::from(run(progname, argv.get(1..).unwrap_or_default()))
+    let code = run(progname, argv.get(1..).unwrap_or_default());
+    // The arguments may hold `-P`'s password.
+    argv.zeroize();
+    ExitCode::from(code)
 }
 
 fn err_line(line: &str) {
@@ -278,8 +283,39 @@ fn c_atoi(s: &str) -> u32 {
     if neg { n.wrapping_neg() } else { n }
 }
 
+/// `-P`'s password, taken before the option table reads the line: it is held so that it is
+/// wiped when dropped, and the table is handed the line with an empty value in its place, so
+/// no other copy of it is made. The scan is the table's own: an option the table names takes
+/// the next argument as its value, wherever it stands. With several `-P`, the last one counts
+/// and the others are wiped.
+fn take_password(args: &[String]) -> (Option<Zeroizing<String>>, Vec<String>) {
+    let mut password = None;
+    let mut line = Vec::with_capacity(args.len());
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        line.push(arg.clone());
+        let Some(opt) = GLOBALS.iter().find(|o| o.name == arg) else {
+            continue;
+        };
+        if !opt.takes_value {
+            continue;
+        }
+        let Some(value) = it.next() else {
+            break;
+        };
+        if opt.name == "-P" {
+            password = Some(Zeroizing::new(value.clone()));
+            line.push(String::new());
+        } else {
+            line.push(value.clone());
+        }
+    }
+    (password, line)
+}
+
 fn run(progname: String, args: &[String]) -> u8 {
-    let Ok(parsed) = MitArgs::parse(args, GLOBALS, Placement::Anywhere) else {
+    let (password, args) = take_password(args);
+    let Ok(parsed) = MitArgs::parse(&args, GLOBALS, Placement::Anywhere) else {
         return usage();
     };
     // MIT `main` (`kadmin/dbutil/kdb5_util.c:267-281`): `-k` and `-kv` are checked as they are read.
@@ -350,7 +386,7 @@ fn run(progname: String, args: &[String]) -> u8 {
         paths,
         db_args,
         etype,
-        password: parsed.value("-P").map(str::to_owned),
+        password,
         manual: parsed.flag("-m"),
         kvno,
         exit_status: 0,
@@ -411,7 +447,7 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
     #[cfg(feature = "test-hooks")]
     let hooked = hooks::master_password();
     #[cfg(not(feature = "test-hooks"))]
-    let hooked: Option<String> = None;
+    let hooked: Option<Zeroizing<String>> = None;
     let master = if let Some(pw) = util.password.clone().or(hooked) {
         derive_master(util, &realm, pw.as_bytes())
     } else {
@@ -1143,7 +1179,7 @@ fn load_master_key(util: &mut Util, dump: &DumpFile) -> Option<(ProtocolKey, boo
         #[cfg(feature = "test-hooks")]
         let hooked = hooks::master_password();
         #[cfg(not(feature = "test-hooks"))]
-        let hooked: Option<String> = None;
+        let hooked: Option<Zeroizing<String>> = None;
         let Some(pw) = hooked else {
             util.com_err(
                 "Can not fetch master key (error: No such file or directory).",
@@ -1190,17 +1226,32 @@ fn destroy(util: &mut Util, args: &[String]) -> u8 {
         }
         out_line(&format!("OK, deleting database '{}'...", db.display()));
     }
-    let file = util.db_args.open_file();
-    if let Err(e) = fs::remove_file(&file) {
+    if let Err(e) = destroy_database(&util.db_args.open_file()) {
         util.com_err(
             &strerror(&e),
             &format!("deleting database '{}'", db.display()),
         );
         return util.failed();
     }
-    let _ = fs::remove_file(with_suffix(&file, ".ulog"));
     out_line(&format!("** Database '{}' destroyed.", db.display()));
     util.exit_status
+}
+
+/// Remove the database: the file itself zeroed and unlinked, then the lock and policy files
+/// db2 keeps beside it should any be there (this store keeps neither), then the update log,
+/// which this store always keeps and MIT's only with iprop.
+/// MIT `krb5_db2_destroy` (`plugins/kdb/db2/kdb_db2.c:1227-1271`): `destroy_file` on the database, then the lock file and the policy database and its lock are unlinked.
+/// MIT `kdb5_destroy` (`kadmin/dbutil/kdb5_destroy.c:85-87`): the update log is unlinked, its error ignored.
+fn destroy_database(file: &Path) -> io::Result<()> {
+    destroy_file(file)?;
+    for suffix in [".ok", ".kadm5", ".kadm5.lock"] {
+        match fs::remove_file(with_suffix(file, suffix)) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
+            _ => {}
+        }
+    }
+    let _ = fs::remove_file(with_suffix(file, ".ulog"));
+    Ok(())
 }
 
 /// Zero `path` and unlink it: each block that is not all zeros already is overwritten with
@@ -1221,6 +1272,7 @@ fn destroy_file(path: &Path) -> io::Result<()> {
             f.write_all(&[0u8; BUFSIZ][..n])?;
         }
     }
+    buf.zeroize();
     f.sync_all()?;
     drop(f);
     fs::remove_file(path)
@@ -1239,13 +1291,16 @@ mod hooks {
     use krb5_kdc::testrealm::TEST_USER;
     use krb5_kdc::{NamedPolicy, PrincipalStore, load_store, save_store};
     use krb5_types::PrincipalName;
+    use zeroize::Zeroizing;
 
     use super::{Util, err_line, out_line, usage};
 
     /// `KRB5_MASTER_PASSWORD`: the master password `create` takes instead of a `-P` or the
     /// prompts, and `load` takes when there is no stash.
-    pub(super) fn master_password() -> Option<String> {
-        std::env::var("KRB5_MASTER_PASSWORD").ok()
+    pub(super) fn master_password() -> Option<Zeroizing<String>> {
+        std::env::var("KRB5_MASTER_PASSWORD")
+            .ok()
+            .map(Zeroizing::new)
     }
 
     /// The gates' principals beside a new realm, when `KRB5_TEST_USER_PASSWORD` and

@@ -553,6 +553,10 @@ fn a_wrong_master_password_warns_and_dump_still_writes() {
          kdb5_util: Warning: proceeding without master key list\n"
     );
     assert!(realm.dir.join("d2").exists());
+    // MIT `main` (`kdb5_util.c:230-232`): a later -P replaces an earlier one.
+    let out = realm.run(&["-P", "wrong", "-P", "kl-master", "dump", "d3"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(text(&out.stderr), "");
     // MIT's load reads no master key; this one opens the dump with -P's key before the stash's.
     let out = realm.run(&["-P", "wrong", "load", "d2"], "");
     assert_eq!(status(&out), 1);
@@ -865,6 +869,38 @@ fn load_without_a_stash_needs_a_master_password() {
         text(&out.stderr),
         "kdb5_util: Unable to decrypt latest master key with the provided master key\n while getting master key list\n"
     );
+}
+
+/// MIT `destroy_file` (`kdb_db2.c:619-682`): the database is zeroed before it is unlinked, so
+/// another link to the file (or its freed blocks) keeps no key; settled live with a hard link.
+#[test]
+fn destroy_zeroes_the_database_before_unlinking_it() {
+    let realm = Realm::new("kdb5-destroy-zero", Realm::sha1());
+    realm.create();
+    let link = realm.dir.join("principal.link");
+    std::fs::hard_link(&realm.db, &link).unwrap();
+    let size = std::fs::metadata(&link).unwrap().len();
+    assert!(size > 0);
+    let side: Vec<PathBuf> = [".ok", ".kadm5", ".kadm5.lock"]
+        .iter()
+        .map(|s| realm.dir.join(format!("principal{s}")))
+        .collect();
+    for p in &side {
+        std::fs::write(p, "db2").unwrap();
+    }
+    let ulog = realm.dir.join("principal.ulog");
+    assert!(ulog.exists());
+    let out = realm.run(&["destroy", "-f"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert!(!realm.db.exists() && !ulog.exists());
+    assert!(side.iter().all(|p| !p.exists()));
+    let left = std::fs::read(&link).unwrap();
+    assert_eq!(left.len() as u64, size);
+    assert!(
+        left.iter().all(|&b| b == 0),
+        "the other link still holds the database"
+    );
+    assert!(realm.stash.exists(), "destroy leaves the stash");
 }
 
 #[test]
