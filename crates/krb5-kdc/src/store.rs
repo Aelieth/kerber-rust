@@ -29,7 +29,9 @@ use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
 use krb5_types::pkinit::PkinitCa;
 
+use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
+use crate::persist::{DbStamp, PersistError};
 use principal::default_mod_actor;
 use rid::generate_domain_sid;
 
@@ -88,8 +90,10 @@ pub struct PrincipalStore {
     /// `kadmin.local -m`: the database and the master key typed for it, which a save writes
     /// under in place of the stash's; the stash is not read.
     pub(crate) persist_master: Option<(std::path::PathBuf, krb5_crypto::ProtocolKey)>,
-    /// Last observed (mtime, len) of the db file; kadmind mutations bump it.
-    pub(crate) db_stamp: Option<(Option<std::time::SystemTime>, u64)>,
+    /// The database's age and identity as this store last read it.
+    pub(crate) db_stamp: Option<DbStamp>,
+    /// The database's lock files, opened once with the database.
+    pub(crate) dblock: Option<Arc<DbLock>>,
     /// Per-realm NT domain SID (never the dummy `S-1-5-21-1-2-3`).
     domain_sid: RpcSid,
     /// Next RID to allocate (`RID_FIRST_USER` and up).
@@ -128,6 +132,7 @@ impl PrincipalStore {
             persist_paths: None,
             persist_master: None,
             db_stamp: None,
+            dblock: None,
             domain_sid: generate_domain_sid().unwrap_or_else(|_| {
                 eprintln!("krb5-kdc: getrandom failed generating domain SID");
                 std::process::exit(1);
@@ -142,40 +147,71 @@ impl PrincipalStore {
         }
     }
 
-    /// Reload from stash/db when the file mtime or length changed.
+    /// Read the database again when another process changed it since this store read it.
     ///
-    /// Kadmind and the KDC are separate processes sharing one database file.
-    /// Length is part of the stamp because some filesystems have 1s mtime.
-    /// There is no dump file lock: reload→mutate→save can still lose a
-    /// concurrent writer's last save (dirty-flag/lock is with db2/LMDB).
+    /// Kadmind and the KDC are separate processes sharing the database. Holding the database's
+    /// lock shared, its age and its file's identity are compared with what this store last read,
+    /// and the database is read again when they differ; the dump rows, named policies, serial and
+    /// update log come from disk, and the kdc.conf ticket policy, the lockout overlay, the replay
+    /// caches and the PKINIT CA stay process-local.
+    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): each read takes the shared lock and reopens the database under it.
     ///
     /// # Errors
     ///
-    /// [`Error::Db`] when the changed db, its stash, or its update log cannot be read or parsed;
+    /// [`Error::Db`] when the database's lock files do not open or the lock may not be taken
+    /// (MIT's text), or the changed db, its stash, or its update log cannot be read or parsed;
     /// [`Error::Crypto`] when the stash key does not decrypt it.
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
-        let Some((db, stash)) = self.persist_paths.clone() else {
+        let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(());
         };
-        let Ok(meta) = std::fs::metadata(&db) else {
-            return Ok(());
-        };
-        let stamp = (meta.modified().ok(), meta.len());
-        if Some(stamp) == self.db_stamp {
+        let lock = self.db_lock()?;
+        let _held = lock
+            .hold(DbLockMode::Shared)
+            .map_err(|e| Error::from(PersistError::from(e)))?;
+        if self.db_stamp.is_some() && self.db_stamp == DbStamp::now(&lock, &db) {
             return Ok(());
         }
+        self.reread(&lock)
+    }
+
+    /// Read the database again, whatever its stamp says, so a change whose save failed does not
+    /// stay in memory: the store is then what the file holds.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::reload_if_stale`].
+    pub fn reload(&mut self) -> Result<(), Error> {
+        self.db_stamp = None;
+        self.reload_if_stale()
+    }
+
+    /// The store as the database holds it now, read while the caller holds `lock`, with the
+    /// process-local state kept. A database that does not read again is named in the error, and
+    /// the store stays as it was.
+    /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that does not open again is named in the error.
+    pub(crate) fn reread(&mut self, lock: &Arc<DbLock>) -> Result<(), Error> {
         tracing::info!(
             event = krb5_log::events::KDC_LISTEN,
             correlation_id = krb5_log::current_correlation_id(),
             component = "krb5-kdc",
             outcome = "ok",
             detail = "reload store",
-            db_len = stamp.1,
         );
-        let mut loaded = crate::persist::load_store(&db, &stash).map_err(Error::from)?;
-        loaded.db_stamp = Some(stamp);
-        // Dump rows/named-policies/serial come from disk; kdc.conf ticket
-        // policy, lockout overlay, replay caches, and PKINIT CA are process-local.
+        let (db, loaded) = match (&self.persist_master, &self.persist_paths) {
+            (Some((db, master)), _) => {
+                (db, crate::persist::read_store_with_master(db, master, lock))
+            }
+            (None, Some((db, stash))) => (db, crate::persist::read_store(db, stash, lock)),
+            (None, None) => return Ok(()),
+        };
+        let mut loaded = loaded.map_err(|e| match Error::from(e) {
+            Error::Db { kind, text } => Error::Db {
+                kind,
+                text: format!("Cannot open DB2 database '{}': {text}", db.display()),
+            },
+            other => other,
+        })?;
         loaded.policy.clone_from(&self.policy);
         loaded.domain_sid.clone_from(&self.domain_sid);
         loaded.as_fail = Arc::clone(&self.as_fail);
@@ -185,15 +221,51 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// Read the database back whatever its stamp says, so a change whose save failed does not
-    /// stay in memory: the store is then what the file holds.
+    /// The database this store reads and writes: `kadmin.local -m`'s, else the stash-keyed one.
+    pub(crate) fn db_path(&self) -> Option<&std::path::Path> {
+        match (&self.persist_master, &self.persist_paths) {
+            (Some((db, _)), _) | (None, Some((db, _))) => Some(db.as_path()),
+            (None, None) => None,
+        }
+    }
+
+    /// The database's lock files, opened once and kept; a store given its database's paths
+    /// without them opens them now.
     ///
     /// # Errors
     ///
-    /// As [`Self::reload_if_stale`].
-    pub fn reload(&mut self) -> Result<(), Error> {
-        self.db_stamp = None;
-        self.reload_if_stale()
+    /// [`Error::Db`] when the store has no database, or `principal.ok` or `principal.kadm5.lock`
+    /// does not open (MIT's text).
+    pub(crate) fn db_lock(&mut self) -> Result<Arc<DbLock>, Error> {
+        if let Some(lock) = &self.dblock {
+            return Ok(Arc::clone(lock));
+        }
+        let Some(db) = self.db_path() else {
+            return Err(Error::Db {
+                kind: std::io::ErrorKind::NotFound,
+                text: "no database".to_owned(),
+            });
+        };
+        let lock = Arc::new(DbLock::open(db).map_err(|e| Error::from(PersistError::from(e)))?);
+        self.dblock = Some(Arc::clone(&lock));
+        Ok(lock)
+    }
+
+    /// The database's shared lock for one request, and whether the database changed since this
+    /// store read it; `None` for a store with no database file.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] when the lock may not be taken, MIT's `KRB5_KDB_CANTLOCK_DB`.
+    pub fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
+        let (Some(db), Some(lock)) = (self.db_path(), &self.dblock) else {
+            return Ok(None);
+        };
+        let held = lock
+            .hold(DbLockMode::Shared)
+            .map_err(|e| Error::from(PersistError::from(e)))?;
+        let stale = self.db_stamp.is_none() || self.db_stamp != DbStamp::now(lock, db);
+        Ok(Some((held, stale)))
     }
 
     /// Ticket policy.

@@ -149,7 +149,6 @@ impl Rig {
                 conf: None,
                 keysalts: Vec::new(),
                 typed: None,
-                stamp: None,
             },
         };
         Self {

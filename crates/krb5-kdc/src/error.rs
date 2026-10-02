@@ -119,6 +119,10 @@ impl From<crate::persist::PersistError> for Error {
                 kind: std::io::ErrorKind::Unsupported,
                 text: format!("unknown db_library: {name}"),
             },
+            PersistError::Lock(e) => Self::Db {
+                kind: e.kind(),
+                text: e.to_string(),
+            },
         }
     }
 }

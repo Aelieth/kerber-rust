@@ -484,6 +484,7 @@ fn kadmin_local_m_needs_no_stash() {
     let stash = realm.dir.join("stash");
     let _ = std::fs::remove_file(&db);
     let _ = std::fs::remove_file(&stash);
+    let _ = std::fs::remove_file(realm.dir.join("principal.kadm5.lock"));
     krb5_kdc::create_store(&store, &db, &master).unwrap();
     let out = realm.run(&["-m", "-q", "addprinc -randkey m1"], b"m-pw\n");
     assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
@@ -525,6 +526,7 @@ fn kadmin_local_m_keeps_kadmin_history_after_a_refused_cpw() {
     let db = realm.dir.join("principal");
     let _ = std::fs::remove_file(&db);
     let _ = std::fs::remove_file(realm.dir.join("stash"));
+    let _ = std::fs::remove_file(realm.dir.join("principal.kadm5.lock"));
     krb5_kdc::create_store(&store, &db, &master).unwrap();
     let addpol = "addpol -minlength 8 -history 2 hpol";
     let out = realm.run(&["-m", "-q", addpol], b"m-pw\n");

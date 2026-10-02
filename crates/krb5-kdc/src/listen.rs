@@ -16,8 +16,9 @@ use std::time::Duration;
 
 use crate::Error;
 use crate::issue::handle_request_from;
-use crate::kdb::Store;
+use crate::kdb::{KdcEnv, PrincipalRead, Store};
 use crate::lookaside::{Check, Lookaside};
+use crate::store::{Policy, Principal};
 use krb5_config::listen::ListenAddr;
 use krb5_types::HostAddress;
 
@@ -140,25 +141,101 @@ pub fn shared_dump(store: crate::store::PrincipalStore) -> SharedDump {
     Arc::new(RwLock::new(store))
 }
 
-fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn Store) -> R) -> R {
+/// Answer one request from the store, after reading the database again when another process
+/// changed it. The database's lock is held shared only while its age and file are compared and
+/// the database is read again, and let go before the request is answered from the store: a
+/// write holder makes the request wait, a read holder does not, and a writer waiting for the
+/// lock gets it between lookups however many requests run. A lock that may not be taken answers
+/// every lookup with `SVC_UNAVAILABLE`, and a database that cannot be read again answers with
+/// its error, never with what the store read before.
+/// MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:771-801`): a lookup takes the shared lock, reads, and lets it go.
+fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
     {
-        let mut w = store
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Err(e) = w.reload_if_stale() {
-            tracing::error!(
-                event = krb5_log::events::KDC_LISTEN,
-                component = "krb5-kdc",
-                outcome = "error",
-                error = %e,
-                detail = "reload store",
-            );
+        let g = store.read().unwrap_or_else(PoisonError::into_inner);
+        let stale = match g.read_hold() {
+            Ok(None) => false,
+            Ok(Some((held, stale))) => {
+                drop(held);
+                stale
+            }
+            Err(e) => return f(&Unreadable::new(&**g, &e)),
+        };
+        if !stale {
+            return f(&**g);
         }
     }
-    let g = store
-        .read()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    {
+        let mut w = store.write().unwrap_or_else(PoisonError::into_inner);
+        if let Err(e) = w.reload_if_stale() {
+            return f(&Unreadable::new(&**w, &e));
+        }
+    }
+    let g = store.read().unwrap_or_else(PoisonError::into_inner);
     f(&**g)
+}
+
+/// The store, without its database lock, for a reply that needs no lookup (an error built from
+/// the realm alone).
+fn plain_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
+    let g = store.read().unwrap_or_else(PoisonError::into_inner);
+    f(&**g)
+}
+
+/// A store whose database may not be locked or read again: every lookup fails as MIT's do when
+/// the database does not lock or reopen, `SVC_UNAVAILABLE` for `KRB5_KDB_CANTLOCK_DB` and the
+/// database's own error otherwise.
+/// MIT `process_as_req` (`kdc/do_as_req.c:577-580`): a lookup that cannot lock the database is `KDC_ERR_SVC_UNAVAILABLE`.
+struct Unreadable<'a> {
+    inner: &'a dyn PrincipalRead,
+    error: Error,
+}
+
+impl<'a> Unreadable<'a> {
+    fn new(inner: &'a dyn PrincipalRead, why: &Error) -> Self {
+        tracing::error!(
+            event = krb5_log::events::KDC_LISTEN,
+            component = "krb5-kdc",
+            outcome = "error",
+            error = %why,
+            detail = "read database",
+        );
+        let error = match why {
+            Error::Db { text, .. } if *text == crate::DbLockError::CantLock.to_string() => {
+                Error::Protocol {
+                    code: krb5_types::err::SVC_UNAVAILABLE,
+                    text: None,
+                    e_data: None,
+                    detail: None,
+                }
+            }
+            other => other.clone(),
+        };
+        Self { inner, error }
+    }
+}
+
+impl PrincipalRead for Unreadable<'_> {
+    fn realm(&self) -> &str {
+        self.inner.realm()
+    }
+    fn policy(&self) -> &Policy {
+        self.inner.policy()
+    }
+    fn domain_sid(&self) -> &krb5_types::pac::RpcSid {
+        self.inner.domain_sid()
+    }
+    fn env(&self) -> &KdcEnv {
+        self.inner.env()
+    }
+    fn fetch(&self, _id: &str) -> Result<Option<Principal>, Error> {
+        Err(self.error.clone())
+    }
+    fn list_ids(&self) -> Result<Vec<String>, Error> {
+        Err(self.error.clone())
+    }
+    fn list_principals(&self) -> Result<Vec<Principal>, Error> {
+        Err(self.error.clone())
+    }
 }
 
 /// Addresses tried when the caller does not pin a bind address.
@@ -642,7 +719,7 @@ fn udp_loop(
                             continue;
                         }
                         if reply.len() > limits.max_dgram_reply_size {
-                            reply = read_store(store, |s| {
+                            reply = plain_store(store, |s| {
                                 crate::kdc_error_bytes(s, krb5_types::err::RESPONSE_TOO_BIG)
                             });
                         }
@@ -787,7 +864,7 @@ fn handle_tcp(
         return Ok(());
     }
     if n > max_body {
-        let reply = read_store(store, |s| {
+        let reply = plain_store(store, |s| {
             crate::kdc_error_bytes(s, krb5_types::err::FIELD_TOOLONG)
         });
         let len = u32::try_from(reply.len()).unwrap_or(0);
@@ -944,6 +1021,115 @@ impl Drop for ClosingFd {
 mod tests {
     use super::*;
     use crate::testrealm::bootstrap_documented;
+
+    /// The documented realm saved to a scratch database, served from a [`SharedStore`].
+    fn persisted(tag: &str) -> (SharedStore, std::path::PathBuf) {
+        let dir = krb5_testkit::scratch_dir(&format!("krb5-listen-{tag}"));
+        let (db, stash) = (dir.join("principal"), dir.join("stash"));
+        let (store, _) = bootstrap_documented().unwrap();
+        crate::save_store(&store, &db, &stash).unwrap();
+        (shared_store(crate::load_store(&db, &stash).unwrap()), db)
+    }
+
+    #[test]
+    fn a_lookup_without_the_policy_lock_file_is_svc_unavailable() {
+        let (store, db) = persisted("svc");
+        let id = format!("krbtgt/{0}@{0}", crate::testrealm::TEST_REALM);
+        assert!(read_store(&store, |s| s.fetch(&id)).unwrap().is_some());
+        std::fs::remove_file(crate::suffixed(&db, crate::SUFFIX_POLICY_LOCK)).unwrap();
+        match read_store(&store, |s| s.fetch(&id)) {
+            Err(Error::Protocol { code, .. }) => {
+                assert_eq!(code, krb5_types::err::SVC_UNAVAILABLE);
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_lookup_waits_for_a_write_holder_not_for_a_read_holder() {
+        let (store, db) = persisted("wait");
+        let other = Arc::new(crate::DbLock::open(&db).unwrap());
+        let id = format!("krbtgt/{0}@{0}", crate::testrealm::TEST_REALM);
+        let lookup = |store: &SharedStore| {
+            let (store, id) = (Arc::clone(store), id.clone());
+            let (tx, rx) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                let found = read_store(&store, |s| s.fetch(&id).ok().flatten().is_some());
+                tx.send(found).unwrap();
+            });
+            rx
+        };
+        let held = other.hold(crate::DbLockMode::Shared).unwrap();
+        assert_eq!(
+            lookup(&store).recv_timeout(Duration::from_secs(5)),
+            Ok(true)
+        );
+        drop(held);
+        let held = other.hold(crate::DbLockMode::Exclusive).unwrap();
+        let rx = lookup(&store);
+        assert!(rx.recv_timeout(Duration::from_millis(400)).is_err());
+        drop(held);
+        assert_eq!(rx.recv_timeout(Duration::from_secs(5)), Ok(true));
+    }
+
+    /// Requests that keep overlapping never hold the lock across their own work, so another
+    /// process's writer gets it within a bounded wait.
+    #[test]
+    fn a_writer_gets_the_lock_under_continuous_lookups() {
+        let (store, db) = persisted("busy");
+        let id = format!("krbtgt/{0}@{0}", crate::testrealm::TEST_REALM);
+        let stop = Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = (0..8)
+            .map(|_| {
+                let (store, id, stop) = (Arc::clone(&store), id.clone(), Arc::clone(&stop));
+                thread::spawn(move || {
+                    while !stop.load(Ordering::Relaxed) {
+                        read_store(&store, |s| {
+                            let _ = s.fetch(&id);
+                            thread::sleep(Duration::from_millis(2));
+                        });
+                    }
+                })
+            })
+            .collect();
+        thread::sleep(Duration::from_millis(100));
+        let writer = Arc::new(crate::DbLock::open(&db).unwrap());
+        let (tx, rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let held = writer.hold(crate::DbLockMode::Exclusive);
+            tx.send(held.is_ok()).unwrap();
+        });
+        let got = rx.recv_timeout(Duration::from_secs(5));
+        stop.store(true, Ordering::Relaxed);
+        for reader in readers {
+            reader.join().unwrap();
+        }
+        assert_eq!(got, Ok(true));
+    }
+
+    /// A database changed into one that does not load answers every lookup with its error, never
+    /// with the principals read before; put back, it serves again.
+    #[test]
+    fn a_database_that_does_not_read_again_answers_with_its_error() {
+        let (store, db) = persisted("unreadable");
+        let id = format!("krbtgt/{0}@{0}", crate::testrealm::TEST_REALM);
+        assert!(read_store(&store, |s| s.fetch(&id)).unwrap().is_some());
+        let lock = crate::DbLock::open(&db).unwrap();
+        let away = db.with_extension("away");
+        std::fs::rename(&db, &away).unwrap();
+        std::fs::write(&db, "not a database\n").unwrap();
+        lock.update_age();
+        match read_store(&store, |s| s.fetch(&id)) {
+            Err(Error::Db { text, .. }) => assert!(
+                text.starts_with(&format!("Cannot open DB2 database '{}': ", db.display())),
+                "{text}"
+            ),
+            other => panic!("{other:?}"),
+        }
+        std::fs::rename(&away, &db).unwrap();
+        lock.update_age();
+        assert!(read_store(&store, |s| s.fetch(&id)).unwrap().is_some());
+    }
 
     #[test]
     fn listen_entry_failures_log_mits_lines() {

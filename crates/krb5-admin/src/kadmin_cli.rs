@@ -95,9 +95,6 @@ struct Open {
     /// `-m`: the master key derived from the password typed at startup. The database is read
     /// and written under it, and the stash is never opened.
     typed: Option<krb5_crypto::ProtocolKey>,
-    /// With `-m`, the database file as this session last read or wrote it (modified time and
-    /// length), so another process's change is picked up as the stash-keyed store picks it up.
-    stamp: Option<(Option<std::time::SystemTime>, u64)>,
 }
 
 /// The session: the streams, the database, and the `ss` loop's state.
@@ -118,18 +115,7 @@ impl Handle {
 
     /// Pick up another process's change (kadmind), as each MIT call reads the database.
     pub(crate) fn refresh(&mut self) -> Result<(), Error> {
-        if self.open.typed.is_none() {
-            return self.store.reload_if_stale();
-        }
-        if db_stamp(&self.open.db) == self.open.stamp {
-            return Ok(());
-        }
-        self.store = self.open.load().map_err(|text| Error::Db {
-            kind: io::ErrorKind::InvalidData,
-            text,
-        })?;
-        self.open.stamp = db_stamp(&self.open.db);
-        Ok(())
+        self.store.reload_if_stale()
     }
 
     /// The store written back: under the typed master key with `-m`, else under the stash's.
@@ -142,7 +128,6 @@ impl Handle {
                 krb5_kdc::DbWrite::InPlace,
             )
             .map_err(Error::from)?;
-            self.open.stamp = db_stamp(&self.open.db);
         } else if let Some((db, stash)) = &self.store.persist_paths {
             krb5_kdc::save_store(&self.store, db, stash).map_err(Error::from)?;
         }
@@ -182,12 +167,6 @@ impl Handle {
     }
 }
 
-/// A database file's modified time and length, `None` when it cannot be read.
-fn db_stamp(db: &Path) -> Option<(Option<std::time::SystemTime>, u64)> {
-    let meta = std::fs::metadata(db).ok()?;
-    Some((meta.modified().ok(), meta.len()))
-}
-
 impl Open {
     /// The store as the database holds it, with the realm's kdc.conf and krb5.conf applied.
     /// MIT `kdb_init_master` (`lib/kadm5/srv/server_kdb.c:26-80`): a master key typed at the
@@ -220,8 +199,10 @@ impl Open {
         )
     }
 
+    /// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:496-500`): a lock file that does not open is the system's text, or the policy lock's own.
     fn load_text(&self, e: krb5_kdc::PersistError) -> String {
         match e {
+            krb5_kdc::PersistError::Lock(e) => e.to_string(),
             krb5_kdc::PersistError::Io(e) => self.cannot_open(&e),
             krb5_kdc::PersistError::Crypto(_) => texts::BAD_MASTER_KEY.to_owned(),
             krb5_kdc::PersistError::Format(_) | krb5_kdc::PersistError::UnknownDbLibrary(_) => {
@@ -593,7 +574,6 @@ fn kadm5_init(
         conf: paths.conf.clone(),
         keysalts: o.keysalts.clone(),
         typed: None,
-        stamp: None,
     };
     if let Err(e) = std::fs::File::open(&open.db) {
         return Err((open.cannot_open(&e), false));
@@ -617,7 +597,6 @@ fn kadm5_init(
         ));
     }
     let store = open.load().map_err(|e| (e, false))?;
-    open.stamp = db_stamp(&open.db);
     Ok(Handle {
         store,
         realm: realm.to_owned(),

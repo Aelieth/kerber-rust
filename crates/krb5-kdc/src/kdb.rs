@@ -14,6 +14,7 @@ use krb5_types::PrincipalName;
 use krb5_types::pac::{PacIdentity, RpcSid};
 use krb5_types::pkinit::PkinitCa;
 
+use crate::dblock::DbLockHold;
 use crate::error::Error;
 use crate::persist::{PersistError, load_store};
 use crate::store::{
@@ -245,6 +246,16 @@ pub trait StoreLifecycle {
     /// [`Error::Db`] when [`PrincipalStore`] cannot write its configured store file;
     /// [`MemoryStore`] never fails.
     fn save_if_configured(&self) -> Result<(), Error>;
+    /// The database's shared lock for one request, and whether the database changed since this
+    /// store read it; `None` for a store with no database file.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] when [`PrincipalStore`] may not take the lock (MIT `KRB5_KDB_CANTLOCK_DB`);
+    /// [`MemoryStore`] never fails.
+    fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
+        Ok(None)
+    }
 }
 
 /// Combined kdb extension surface. Kadmind still locks
@@ -600,6 +611,9 @@ impl StoreLifecycle for PrincipalStore {
     }
     fn save_if_configured(&self) -> Result<(), Error> {
         self.save_configured()
+    }
+    fn read_hold(&self) -> Result<Option<(DbLockHold, bool)>, Error> {
+        PrincipalStore::read_hold(self)
     }
 }
 

@@ -524,6 +524,10 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
             util.com_err(&persist_text(&e), &creating);
             return util.failed();
         }
+        Err(CreateError::Lock(e)) => {
+            util.com_err(&e.to_string(), &creating);
+            return util.failed();
+        }
     }
     let stash = util.paths.key_stash_file.clone();
     if do_stash {
@@ -583,7 +587,7 @@ fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
     let text = match read_db_text(util, &db) {
         Ok(t) => t,
         Err(why) => {
-            util.com_err(&cannot_open(&why), "while initializing database");
+            util.com_err(&why, "while initializing database");
             return Err(util.failed());
         }
     };
@@ -615,17 +619,23 @@ fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
     })
 }
 
-/// The database file as dump text; a legacy ciphertext database is opened with the stash and
-/// written out as dump text.
+/// The database file as dump text, read holding the database's lock shared; a legacy ciphertext
+/// database is opened with the stash and written out as dump text. The error is the whole text.
+/// MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1194-1198`): a database that does not open is named; then a missing lock file is the system's or the policy lock's own text.
 fn read_db_text(util: &Util, db: &Path) -> Result<String, String> {
-    let bytes = fs::read(db).map_err(|e| strerror(&e))?;
+    let cannot_open = |why: &str| format!("Cannot open DB2 database '{}': {why}", db.display());
+    fs::File::open(db).map_err(|e| cannot_open(&strerror(&e)))?;
+    let bytes = krb5_kdc::read_db_locked(db).map_err(|e| match e {
+        PersistError::Lock(lock) => lock.to_string(),
+        other => cannot_open(&persist_text(&other)),
+    })?;
     if bytes.starts_with(b"kdb5_util load_dump version ") {
-        return String::from_utf8(bytes).map_err(|_| "dump is not UTF-8".to_owned());
+        return String::from_utf8(bytes).map_err(|_| cannot_open("dump is not UTF-8"));
     }
     let stash = &util.paths.key_stash_file;
-    let store = krb5_kdc::load_store(db, stash).map_err(|e| persist_text(&e))?;
-    let mkey = krb5_kdc::read_stash(stash, db).map_err(|e| persist_text(&e))?;
-    krb5_kdc::dump_store_with_key(&store, &mkey).map_err(|e| e.to_string())
+    let store = krb5_kdc::load_store(db, stash).map_err(|e| cannot_open(&persist_text(&e)))?;
+    let mkey = krb5_kdc::read_stash(stash, db).map_err(|e| cannot_open(&persist_text(&e)))?;
+    krb5_kdc::dump_store_with_key(&store, &mkey).map_err(|e| cannot_open(&e.to_string()))
 }
 
 fn fetch_mkey(util: &mut Util, realm: &str, km: &DumpPrincipal) -> Result<Option<ProtocolKey>, u8> {
@@ -1021,10 +1031,7 @@ fn load_policies_only(util: &mut Util, dump: &DumpFile, update: bool, verbose: b
         let current = match read_db_text(util, &db) {
             Ok(t) => t,
             Err(why) => {
-                util.com_err(
-                    &format!("Cannot open DB2 database '{}': {why}", db.display()),
-                    "while opening database",
-                );
+                util.com_err(&why, "while opening database");
                 return 1;
             }
         };
