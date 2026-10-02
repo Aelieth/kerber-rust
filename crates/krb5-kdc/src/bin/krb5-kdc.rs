@@ -10,9 +10,9 @@
 //! apply to a next realm, so here it applies to none.
 //!
 //! - `-r` names the realm, else krb5.conf's `default_realm`; one realm per process.
-//! - The database and stash are where [`krb5_config::KdcPaths`] finds them: `KRB5_KDC_DB` /
-//!   `KRB5_KDC_STASH` when set (in every build), else the realm's `database_name` /
-//!   `key_stash_file` in kdc.conf, else MIT's defaults.
+//! - The database and stash are where [`krb5_config::KdcPaths`] finds them: the realm's
+//!   `database_name` / `key_stash_file` in kdc.conf, else MIT's defaults; a `test-hooks` build
+//!   (the gates') takes `KRB5_KDC_DB` / `KRB5_KDC_STASH` first when they are set.
 //! - `-d PATH` and `-x dbname=PATH` name the database instead of kdc.conf's `database_name`;
 //!   `-x temporary` opens `PATH~`; `-x merge_nra` and `-x hash=…` are accepted; any other `-x`
 //!   stops the KDC as MIT's database module does.

@@ -430,11 +430,15 @@ fn kdc_profile_is_the_variable_else_kdc_dir() {
         kdc_dir_path("kdc.conf")
     );
     assert_eq!(default_kdc_profile(), kdc_dir_path("kdc.conf"));
+    // The gates' KRB5_KDC_CONF alias is read only in a test-hooks build; MIT reads
+    // KRB5_KDC_PROFILE alone.
     let alias = fake_env(&[("KRB5_KDC_CONF", "/b/kdc.conf")]);
-    assert_eq!(
-        kdcconf::kdc_conf_path_in(&alias),
-        std::path::Path::new("/b/kdc.conf")
-    );
+    let want = if cfg!(feature = "test-hooks") {
+        std::path::PathBuf::from("/b/kdc.conf")
+    } else {
+        kdc_dir_path("kdc.conf")
+    };
+    assert_eq!(kdcconf::kdc_conf_path_in(&alias), want);
     let both = fake_env(&[
         ("KRB5_KDC_PROFILE", "/a/kdc.conf"),
         ("KRB5_KDC_CONF", "/b/kdc.conf"),
@@ -536,6 +540,7 @@ fn a_realm_with_no_stanza_gets_mit_defaults() {
     );
 }
 
+#[cfg(feature = "test-hooks")]
 #[test]
 fn environment_overrides_sit_on_top() {
     let dir = krb5_testkit::scratch_dir("kdcpaths-env");
@@ -572,23 +577,25 @@ fn environment_overrides_sit_on_top() {
 
 #[test]
 fn the_acl_default_follows_a_relocated_stash_and_empty_means_none() {
-    let both = [
-        ("KRB5_KDC_DB", "/tmp/principal"),
-        ("KRB5_KDC_STASH", "/tmp/stash"),
-    ];
-    let p = resolve_paths(&both, None, None).unwrap();
-    assert_eq!(
-        p.acl_file.as_deref(),
-        Some(std::path::Path::new("/tmp/kadm5.acl"))
-    );
-    let p = resolve_paths(&both[1..], None, Some("R")).unwrap();
-    assert_eq!(p.database_name, kdc_dir_path("principal"));
-    assert_eq!(
-        p.acl_file.as_deref(),
-        Some(std::path::Path::new("/tmp/kadm5.acl"))
-    );
-    let none = resolve_paths(&[both[0], both[1], ("KRB5_ACL_FILE", "")], None, None);
-    assert_eq!(none.unwrap().acl_file, None);
+    if cfg!(feature = "test-hooks") {
+        let both = [
+            ("KRB5_KDC_DB", "/tmp/principal"),
+            ("KRB5_KDC_STASH", "/tmp/stash"),
+        ];
+        let p = resolve_paths(&both, None, None).unwrap();
+        assert_eq!(
+            p.acl_file.as_deref(),
+            Some(std::path::Path::new("/tmp/kadm5.acl"))
+        );
+        let p = resolve_paths(&both[1..], None, Some("R")).unwrap();
+        assert_eq!(p.database_name, kdc_dir_path("principal"));
+        assert_eq!(
+            p.acl_file.as_deref(),
+            Some(std::path::Path::new("/tmp/kadm5.acl"))
+        );
+        let none = resolve_paths(&[both[0], both[1], ("KRB5_ACL_FILE", "")], None, None);
+        assert_eq!(none.unwrap().acl_file, None);
+    }
     let dir = krb5_testkit::scratch_dir("kdcpaths-acl");
     let conf = dir.join("kdc.conf");
     std::fs::write(&conf, "[realms]\n    R = {\n        acl_file =\n    }\n").unwrap();
@@ -634,9 +641,53 @@ fn no_realm_fails_unless_both_files_are_named() {
         stash_only[1],
         ("KRB5_KDC_DB", "/s/principal"),
     ];
-    let p = resolve_paths(&both, None, None).unwrap();
-    assert_eq!(p.realm, None);
-    assert_eq!(p.database_name, std::path::Path::new("/s/principal"));
+    if cfg!(feature = "test-hooks") {
+        let p = resolve_paths(&both, None, None).unwrap();
+        assert_eq!(p.realm, None);
+        assert_eq!(p.database_name, std::path::Path::new("/s/principal"));
+    } else {
+        assert!(matches!(
+            resolve_paths(&both, None, None),
+            Err(Error::NoDefaultRealm)
+        ));
+    }
+}
+
+#[cfg(not(feature = "test-hooks"))]
+#[test]
+fn a_release_build_reads_no_path_override() {
+    // Live MIT 1.22.2: kadmin.local with KRB5_KDC_DB, KRB5_KDC_STASH, KRB5_ACL_FILE,
+    // KRB5_MASTER_ETYPE and KRB5_KDC_CONF all set uses the KRB5_KDC_PROFILE realm's database.
+    let dir = krb5_testkit::scratch_dir("kdcpaths-release");
+    let conf = dir.join("kdc.conf");
+    std::fs::write(
+        &conf,
+        "[realms]\n    KERBER.TEST = {\n        database_name = /c/principal\n        \
+         key_stash_file = /c/stash\n        acl_file = /c/kadm5.acl\n    }\n",
+    )
+    .unwrap();
+    let p = resolve_paths(
+        &[
+            ("KRB5_KDC_PROFILE", conf.to_str().unwrap()),
+            ("KRB5_KDC_CONF", "/e/kdc.conf"),
+            ("KRB5_KDC_DB", "/e/principal"),
+            ("KRB5_KDC_STASH", "/e/stash"),
+            ("KRB5_ACL_FILE", "/e/acl"),
+            ("KRB5_MASTER_ETYPE", "aes128-cts-hmac-sha256-128"),
+        ],
+        None,
+        Some("KERBER.TEST"),
+    )
+    .unwrap();
+    assert_eq!(p.profile, conf);
+    assert_eq!(p.database_name, std::path::Path::new("/c/principal"));
+    assert_eq!(p.key_stash_file, std::path::Path::new("/c/stash"));
+    assert_eq!(
+        p.acl_file.as_deref(),
+        Some(std::path::Path::new("/c/kadm5.acl"))
+    );
+    assert_eq!(p.master_key_type, None);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

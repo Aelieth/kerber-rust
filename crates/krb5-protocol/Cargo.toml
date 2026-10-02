@@ -12,6 +12,8 @@ autotests = false
 [features]
 default = ["diff"]
 diff = []
+# The gates' raw PDU capture (`KERBER_CAPTURE_DIR`); off by default.
+test-hooks = []
 
 [[test]]
 name = "golden_traces"

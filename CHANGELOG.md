@@ -52,6 +52,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **config/protocol.** A release build reads no password, kdc.conf path or capture directory
+  from the environment (`KRB5_PASSWORD`, `KRB5_KDC_DB`, `KERBER_CAPTURE_DIR`, …): only a
+  `test-hooks` build does, as the gates' are. `strings` over the release binaries; unit.
 - **protocol/kdc.** Refuse to replace a database, `.ulog`, stash or keytab the writer may not
   write, as MIT's in-place `O_RDWR` open does: a group that may only read the database could
   rewrite it through a writable directory. `addpol` / `modpol` report a failed save. Unit.

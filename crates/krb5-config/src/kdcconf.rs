@@ -397,16 +397,17 @@ pub fn default_stash_file(realm: &str) -> PathBuf {
     Path::new(KDC_DIR).join(format!(".k5.{realm}"))
 }
 
-/// `KRB5_KDC_PROFILE`, else this port's `KRB5_KDC_CONF` alias.
+/// `KRB5_KDC_PROFILE`; in a `test-hooks` build, else the gates' `KRB5_KDC_CONF` alias.
 #[must_use]
 pub fn env_kdc_config() -> Option<PathBuf> {
     env_kdc_config_in(&|name| std::env::var_os(name))
 }
 
 fn env_kdc_config_in(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> {
-    env("KRB5_KDC_PROFILE")
-        .or_else(|| env("KRB5_KDC_CONF"))
-        .map(PathBuf::from)
+    let profile = env("KRB5_KDC_PROFILE");
+    #[cfg(feature = "test-hooks")]
+    let profile = profile.or_else(|| env("KRB5_KDC_CONF"));
+    profile.map(PathBuf::from)
 }
 
 /// The KDC profile path: [`env_kdc_config`], else [`default_kdc_profile`], whether or not the
@@ -500,12 +501,42 @@ impl RealmPaths {
     }
 }
 
+/// The gates' overrides of a realm's paths and master key type, read from the environment only
+/// in a `test-hooks` build: MIT's tools take these from kdc.conf and argv alone.
+#[derive(Default)]
+struct EnvOverrides {
+    database_name: Option<PathBuf>,
+    key_stash_file: Option<PathBuf>,
+    acl_file: Option<PathBuf>,
+    master_key_type: Option<String>,
+}
+
+impl EnvOverrides {
+    fn read(env: &dyn Fn(&str) -> Option<OsString>) -> Self {
+        #[cfg(feature = "test-hooks")]
+        {
+            Self {
+                database_name: env("KRB5_KDC_DB").map(PathBuf::from),
+                key_stash_file: env("KRB5_KDC_STASH").map(PathBuf::from),
+                acl_file: env("KRB5_ACL_FILE").map(PathBuf::from),
+                master_key_type: env("KRB5_MASTER_ETYPE").map(|v| v.to_string_lossy().into_owned()),
+            }
+        }
+        #[cfg(not(feature = "test-hooks"))]
+        {
+            let _ = env;
+            Self::default()
+        }
+    }
+}
+
 /// Where a KDC-side tool finds its profile, database, master-key stash and ACL, and which master
 /// key type it uses.
 ///
-/// Each path is the environment override the gates use, else the relation in the realm's own
-/// kdc.conf stanza, else MIT's default under [`KDC_DIR`]. With no realm known the resolver
-/// fails, as MIT's tools do, unless `KRB5_KDC_DB` and `KRB5_KDC_STASH` name both files.
+/// Each path is the relation in the realm's own kdc.conf stanza, else MIT's default under
+/// [`KDC_DIR`]; a `test-hooks` build puts the gates' environment overrides on top. With no realm
+/// known the resolver fails, as MIT's tools do, unless (in a `test-hooks` build) `KRB5_KDC_DB`
+/// and `KRB5_KDC_STASH` name both files.
 /// MIT `kadm5_get_config_params` (`alt_prof.c:447-560`): the realm is the caller's, else
 /// `krb5_get_default_realm`; `database_name` / `acl_file` / `master_key_type` /
 /// `key_stash_file` come from that realm's stanza, with `DEFAULT_KDB_FILE` /
@@ -518,16 +549,18 @@ pub struct KdcPaths {
     pub conf: Option<KdcConf>,
     /// The realm the paths are for: the caller's, else krb5.conf's `default_realm`.
     pub realm: Option<String>,
-    /// `KRB5_KDC_DB`, else `database_name`, else [`default_kdb_file`].
+    /// `database_name`, else [`default_kdb_file`]; a `test-hooks` build's `KRB5_KDC_DB` first.
     pub database_name: PathBuf,
-    /// `KRB5_KDC_STASH`, else `key_stash_file`, else [`default_stash_file`].
+    /// `key_stash_file`, else [`default_stash_file`]; a `test-hooks` build's `KRB5_KDC_STASH`
+    /// first.
     pub key_stash_file: PathBuf,
-    /// `KRB5_ACL_FILE`, else `acl_file`, else [`default_acl_file`] (beside the stash when
-    /// `KRB5_KDC_STASH` moved it, as before). `None` when the value chosen is empty: no ACL file,
-    /// self-service only.
+    /// `acl_file`, else [`default_acl_file`]; a `test-hooks` build's `KRB5_ACL_FILE` first, and
+    /// its default beside the stash when `KRB5_KDC_STASH` moved it. `None` when the value chosen
+    /// is empty: no ACL file, self-service only.
     /// MIT `main` (`ovsec_kadmd.c:497-497`): an empty `acl_file` becomes NULL.
     pub acl_file: Option<PathBuf>,
-    /// `KRB5_MASTER_ETYPE`, else `master_key_type`, as written; `None` leaves the tool's default.
+    /// `master_key_type`, as written; a `test-hooks` build's `KRB5_MASTER_ETYPE` first. `None`
+    /// leaves the tool's default.
     pub master_key_type: Option<String>,
 }
 
@@ -538,7 +571,7 @@ impl KdcPaths {
     ///
     /// [`Error::Io`] when the KDC profile exists but cannot be read as UTF-8 text (a missing or
     /// unreadable one is skipped, as MIT skips it); [`Error::NoDefaultRealm`] when neither
-    /// `realm` nor krb5.conf's `default_realm` names a realm and the environment does not name
+    /// `realm` nor krb5.conf's `default_realm` names a realm and the gates' overrides do not name
     /// both the database and the stash.
     pub fn resolve(realm: Option<&str>) -> Result<Self, Error> {
         Self::resolve_in(&|name| std::env::var_os(name), realm, || {
@@ -554,35 +587,32 @@ impl KdcPaths {
         let profile = kdc_conf_path_in(env);
         let text = read_kdc_profile(&profile)?;
         let conf = text.as_deref().map(KdcConf::parse).transpose()?;
-        let db_env = env("KRB5_KDC_DB").map(PathBuf::from);
-        let stash_env = env("KRB5_KDC_STASH").map(PathBuf::from);
+        let over = EnvOverrides::read(env);
         let realm = realm.map(str::to_owned).or_else(default_realm);
         // MIT `main` (`kdb5_util.c:304-312`): no realm is fatal before any path is read. Only the
         // gates' KRB5_KDC_DB and KRB5_KDC_STASH, naming both files, stand in for one.
         let relations = match realm.as_deref() {
             Some(realm) => RealmPaths::stanza(text.as_deref().unwrap_or_default(), realm),
-            None if db_env.is_some() && stash_env.is_some() => RealmPaths::default(),
+            None if over.database_name.is_some() && over.key_stash_file.is_some() => {
+                RealmPaths::default()
+            }
             None => return Err(Error::NoDefaultRealm),
         };
-        let database_name = db_env
+        let database_name = over
+            .database_name
             .or(relations.database_name)
             .unwrap_or_else(default_kdb_file);
-        let key_stash_file = match stash_env.clone().or(relations.key_stash_file) {
+        let key_stash_file = match over.key_stash_file.clone().or(relations.key_stash_file) {
             Some(path) => path,
             None => default_stash_file(realm.as_deref().ok_or(Error::NoDefaultRealm)?),
         };
-        let acl_file = env("KRB5_ACL_FILE")
-            .map(PathBuf::from)
-            .or(relations.acl_file)
-            .unwrap_or_else(|| {
-                stash_env
-                    .as_deref()
-                    .and_then(Path::parent)
-                    .map_or_else(default_acl_file, |dir| dir.join("kadm5.acl"))
-            });
-        let master_key_type = env("KRB5_MASTER_ETYPE")
-            .map(|v| v.to_string_lossy().into_owned())
-            .or(relations.master_key_type);
+        let acl_file = over.acl_file.or(relations.acl_file).unwrap_or_else(|| {
+            over.key_stash_file
+                .as_deref()
+                .and_then(Path::parent)
+                .map_or_else(default_acl_file, |dir| dir.join("kadm5.acl"))
+        });
+        let master_key_type = over.master_key_type.or(relations.master_key_type);
         Ok(Self {
             profile,
             conf,

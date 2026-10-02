@@ -624,16 +624,33 @@ pub fn udp_preference_limit() -> usize {
         .map_or(1465, |n| usize::try_from(n).unwrap_or(1465))
 }
 
-/// `KRB5_PASSWORD` (never from argv).
+/// The gates' password, `KRB5_PASSWORD`, in a `test-hooks` build. A release build reads no
+/// password from the environment (MIT's tools take one from the terminal or stdin only), so this
+/// is `None` there and the tools prompt.
 #[must_use]
 pub fn env_password() -> Option<Vec<u8>> {
-    std::env::var("KRB5_PASSWORD").ok().map(String::into_bytes)
+    #[cfg(feature = "test-hooks")]
+    {
+        std::env::var("KRB5_PASSWORD").ok().map(String::into_bytes)
+    }
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        None
+    }
 }
 
-/// `KRB5_NEW_PASSWORD` for `gic_pwd.c` KEY_EXP → changepw (never from argv).
+/// The gates' new password for a `gic_pwd.c` KEY_EXP change, `KRB5_NEW_PASSWORD`, in a
+/// `test-hooks` build; `None` in a release build, as [`env_password`].
 #[must_use]
 pub fn env_new_password() -> Option<Vec<u8>> {
-    std::env::var("KRB5_NEW_PASSWORD")
-        .ok()
-        .map(String::into_bytes)
+    #[cfg(feature = "test-hooks")]
+    {
+        std::env::var("KRB5_NEW_PASSWORD")
+            .ok()
+            .map(String::into_bytes)
+    }
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        None
+    }
 }
