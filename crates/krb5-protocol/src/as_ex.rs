@@ -136,8 +136,13 @@ pub struct PkinitClient {
 impl Drop for PkinitClient {
     fn drop(&mut self) {
         self.key.zeroize();
+        #[cfg(test)]
+        let _ = pkinit_client_drop_tests::DROPPED.try_with(|d| d.borrow_mut().push(self.key));
     }
 }
+
+#[cfg(test)]
+mod pkinit_client_drop_tests;
 
 /// Obtain a TGT. Sends a bare AS-REQ first; if the KDC requires preauth,
 /// walks the hint list in MIT `sort_krb5_padata_sequence` order and runs

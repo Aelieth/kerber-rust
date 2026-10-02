@@ -1,12 +1,12 @@
-//! Pins the live `ct_eq` sites and `PkinitClient`'s Drop+zeroize.
+//! Pins the live `ct_eq` sites.
 //!
 //! A one-bit MAC flip fails decrypt and checksum verify: behaviour, not timing.
 //! That those compares are constant-time is a check of the source text only,
 //! and no test measures timing: one test pins `mac_verify`'s `ct_eq`, another
 //! the two lines of `verify_checksum_type`'s keyed compare, and each is red when
-//! its text is removed. `PkinitClient::key` is pinned by an `include_str!` of
-//! its `.zeroize()` line; the other zeroize-on-drop types are proved by unit
-//! tests that see the wiped buffer (`wipe.rs` in `krb5-crypto` and `krb5-types`).
+//! its text is removed. The zeroize-on-drop types are proved by unit tests
+//! that see the wiped buffer: `wipe.rs` in `krb5-crypto` and `krb5-types`,
+//! `as_ex/pkinit_client_drop_tests.rs` in `krb5-protocol`.
 
 use krb5_crypto::{
     EncryptionType, Error, KeyUsage, ProtocolKey, checksum, decrypt, encrypt_with_confounder,
@@ -14,7 +14,6 @@ use krb5_crypto::{
 };
 
 const DERIVE_RS: &str = include_str!("../src/derive.rs");
-const PKINIT_CLIENT_RS: &str = include_str!("../../krb5-protocol/src/as_ex.rs");
 const AUTHPACK_RS: &str = include_str!("../../krb5-types/src/pkinit.rs");
 const STORE_RS: &str = include_str!("../../krb5-kdc/src/store/password.rs");
 const OPS_RS: &str = include_str!("../src/ops.rs");
@@ -25,15 +24,6 @@ fn hex(s: &str) -> Vec<u8> {
         .step_by(2)
         .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
         .collect()
-}
-
-#[test]
-fn pkinit_client_drop_zeroizes() {
-    assert!(
-        PKINIT_CLIENT_RS.contains("impl Drop for PkinitClient")
-            && PKINIT_CLIENT_RS.contains("self.key.zeroize()"),
-        "PkinitClient Drop must zeroize the P-256 scalar"
-    );
 }
 
 #[test]

@@ -2677,6 +2677,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **crypto/protocol/types.** The zeroize-on-drop rows of `docs/security.md` are proved by unit tests
+  that see the wiped buffer through a `cfg(test)` seam, not by source searches; `zeroize_ct.rs` keeps
+  its `ct_eq` searches as `constant_time.rs`; `ProtocolKey`'s missing `==` is a compile-time check.
 - **tool.** A `test-hooks` cargo feature on `krb5-kdc` / `krb5-admin`, off by default;
   `build-bins.sh`, CI, `full-test`, the Makefile and the checkpoint build with it.
 - **tool.** Pin the toolchain to stable 1.99.0 in `rust-toolchain.toml` and the
