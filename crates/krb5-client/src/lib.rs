@@ -211,8 +211,11 @@ pub fn keytab_read_error(e: &std::io::Error, path: &str) -> Krb5Error {
 /// Flags for [`kinit_with`].
 #[derive(Clone, Debug, Default)]
 pub struct KinitParams<'a> {
-    /// Optional TGS service (`-S` or positional).
+    /// A service fetched with a TGS-REQ after the TGT and stored beside it (the gates' form).
     pub service: Option<&'a str>,
+    /// The initial ticket's service instead of the realm's TGS, `kinit -S` (MIT's
+    /// `in_tkt_service`); its realm is the client's.
+    pub in_tkt_service: Option<&'a str>,
     /// PA-SPAKE.
     pub want_spake: bool,
     /// FAST armor ccache.
@@ -805,6 +808,16 @@ fn kinit_inner(
     } else {
         None
     };
+    // MIT `build_in_tkt_name` (`get_in_tkt.c:473-512`): an initial-ticket service takes the
+    // client's realm, whatever realm its name gives.
+    let in_tkt_sname = match params.in_tkt_service {
+        Some(s) => Some(
+            krb5_types::principal_from_unparsed(s, &realm_s)
+                .map_err(|_| Krb5Error::of(Code::ParseMalformed))?
+                .0,
+        ),
+        None => None,
+    };
     let req = AsRequest {
         cname: cname.clone(),
         realm: &realm_s,
@@ -814,7 +827,7 @@ fn kinit_inner(
         fast_armor: armor.as_ref(),
         pkinit: pkinit.as_ref(),
         canonicalize: params.canonicalize || params.enterprise,
-        sname: None,
+        sname: in_tkt_sname.as_ref(),
         etypes: Some(&etypes),
         ticket,
     };

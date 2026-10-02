@@ -440,9 +440,10 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         Ok((a, b))
     };
     let key_exp_notice = |banner: &str| eprintln!("{banner}");
-    let service = service(opts);
+    let service = gate_service(opts);
     let params = KinitParams {
         service: service.as_deref(),
+        in_tkt_service: in_tkt_service(opts),
         want_spake: want_spake(opts),
         armor_ccache: opts.armor_ccache.as_deref().map(Path::new),
         pkinit_identity: opts.pkinit_identity.as_deref().map(Path::new),
@@ -518,13 +519,29 @@ fn kdc(opts: &KinitArgs, realm: &str) -> Result<KdcAddr, Krb5Error> {
     kdc_for_realm(realm)
 }
 
-/// `-S`, or in a `test-hooks` build the gates' positional service.
-fn service(opts: &KinitArgs) -> Option<String> {
-    #[cfg(feature = "test-hooks")]
-    if opts.service.is_none() {
-        return opts.gate.pos_service.clone();
+/// `-S`: the initial ticket's service, MIT's `in_tkt_service`. A `test-hooks` build keeps the
+/// gates' meaning instead, [`gate_service`].
+fn in_tkt_service(opts: &KinitArgs) -> Option<&str> {
+    if cfg!(feature = "test-hooks") {
+        None
+    } else {
+        opts.service.as_deref()
     }
-    opts.service.clone()
+}
+
+/// In a `test-hooks` build, the service the gates fetch with a TGS-REQ after the TGT: `-S`, else
+/// the positional one.
+fn gate_service(opts: &KinitArgs) -> Option<String> {
+    #[cfg(feature = "test-hooks")]
+    return opts
+        .service
+        .clone()
+        .or_else(|| opts.gate.pos_service.clone());
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        let _ = opts;
+        None
+    }
 }
 
 /// The gates' `--spake`, in a `test-hooks` build.

@@ -9,7 +9,7 @@
 //! Drives the shipped `krb5-kinit` against an in-process KDC: no new-password prompt comes
 //! before the changepw AS, and the KDC error is matched by its code, not its text.
 //! The password prompt itself comes only once a KDC reply needs the key, so an unknown client is
-//! reported unprompted.
+//! reported unprompted, and `-S` asks the AS for that service.
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -97,6 +97,18 @@ fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
 
 /// [`kinit`] for `principal`.
 fn kinit_as(kdc: &str, principal: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
+    let (code, out, _) = kinit_full(kdc, &[], principal, password, stdin);
+    (code, out)
+}
+
+/// [`kinit_as`] with `extra` options before the principal; also returns the cache it wrote.
+fn kinit_full(
+    kdc: &str,
+    extra: &[&str],
+    principal: &str,
+    password: &str,
+    stdin: &str,
+) -> (Option<i32>, String, Option<krb5_protocol::FileCcache>) {
     let dir = scratch_dir("z1b-kinit");
     let conf = dir.join("krb5.conf");
     std::fs::write(
@@ -111,6 +123,7 @@ fn kinit_as(kdc: &str, principal: &str, password: &str, stdin: &str) -> (Option<
     let mut child = Command::new(env!("CARGO_BIN_EXE_krb5-kinit"))
         .arg("-c")
         .arg(&cc)
+        .args(extra)
         .arg(principal)
         .env("KRB5_CONFIG", &conf)
         .env_remove("KRB5_PASSWORD")
@@ -127,11 +140,14 @@ fn kinit_as(kdc: &str, principal: &str, password: &str, stdin: &str) -> (Option<
         .write_all(format!("{password}\n{stdin}").as_bytes())
         .unwrap();
     let out = child.wait_with_output().unwrap();
+    let cache = std::fs::read(&cc)
+        .ok()
+        .and_then(|b| krb5_protocol::FileCcache::parse(&b).ok());
     let _ = std::fs::remove_dir_all(&dir);
     let mut err = String::from_utf8_lossy(&out.stdout).into_owned();
     err.push_str(&String::from_utf8_lossy(&out.stderr));
     eprintln!("krb5-kinit rc={:?} output:\n{err}", out.status.code());
-    (out.status.code(), err)
+    (out.status.code(), err, cache)
 }
 
 #[test]
@@ -242,4 +258,33 @@ fn the_password_is_read_once_when_preauth_needs_it() {
     assert_eq!(code, Some(0), "output: {out}");
     let prompt = format!("Password for {TEST_USER}@{TEST_REALM}: ");
     assert_eq!(out.matches(&prompt).count(), 1, "output: {out}");
+}
+
+/// Live MIT 1.22.2 `kinit -S host/…@OTHER.TEST alice`: one AS-REQ for that service in the client's
+/// realm, and the cache holds that ticket alone. (A `test-hooks` build keeps the gates' `-S`, a
+/// TGS-REQ after the TGT.)
+/// MIT `build_in_tkt_name` (`get_in_tkt.c:473-512`): the service's own realm is not used.
+#[cfg(not(feature = "test-hooks"))]
+#[test]
+fn dash_s_asks_the_as_for_that_service() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let kdc = serve(store);
+    let (code, out, cache) = kinit_full(
+        &kdc,
+        &["-S", "host/testhost.kerber.test@OTHER.TEST"],
+        &format!("{TEST_USER}@{TEST_REALM}"),
+        "userpassword",
+        "",
+    );
+    assert_eq!(code, Some(0), "output: {out}");
+    let cache = cache.expect("kinit -S wrote no cache");
+    let servers: Vec<String> = cache
+        .list()
+        .iter()
+        .map(|c| {
+            let realm = String::from_utf8_lossy(c.server.0.as_bytes()).into_owned();
+            c.server.1.unparse_with_realm(&realm)
+        })
+        .collect();
+    assert_eq!(servers, ["host/testhost.kerber.test@KERBER.TEST"]);
 }
