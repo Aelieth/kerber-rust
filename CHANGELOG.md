@@ -1303,6 +1303,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **config.** A quoted profile value is read as MIT's parser reads it (`\t`, `\n`, `\b` and
+  `\x` unescaped, nothing after the closing quote); an unquoted one keeps its quotes.
+  `[libdefaults] default_keytab_name` is read. Units.
 - **admin.** Ctrl-C at the `kadmin.local:  ` prompt prints a newline and prompts again, and at
   a `yes/no` question it drops the request quietly, as MIT's `ss` does; it ended the session.
   Units, `cli_stdin`.

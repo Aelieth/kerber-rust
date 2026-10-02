@@ -1037,6 +1037,55 @@ fn parse_text_does_not_follow_include() {
 }
 
 #[test]
+fn quoted_values_unescape_as_mit_s_profile_parser() {
+    let c = Krb5Conf::parse(concat!(
+        "[libdefaults]\n",
+        "    default_keytab_name = \"FILE:/k/a b\\tc\\\\d\\\"e\" after\n",
+        "    default_ccache_name = FILE:/c/x\"y\"  \n",
+    ))
+    .unwrap();
+    assert_eq!(
+        c.default_keytab_name.as_deref(),
+        Some("FILE:/k/a b\tc\\d\"e")
+    );
+    assert_eq!(c.default_ccache_name.as_deref(), Some("FILE:/c/x\"y\""));
+    let open =
+        Krb5Conf::parse("[libdefaults]\n    default_keytab_name = \"FILE:/k/open\\\n").unwrap();
+    assert_eq!(open.default_keytab_name.as_deref(), Some("FILE:/k/open\\"));
+}
+
+#[test]
+fn default_keytab_name_follows_includedir_and_the_first_file_wins() {
+    let dir = krb5_testkit::scratch_dir("profile-ktname");
+    let inc = dir.join("conf.d");
+    let _ = std::fs::create_dir_all(&inc);
+    std::fs::write(
+        inc.join("kt.conf"),
+        "[libdefaults]\n    default_keytab_name = FILE:/k/included\n",
+    )
+    .unwrap();
+    let main = dir.join("krb5.conf");
+    std::fs::write(&main, format!("includedir {}\n", inc.display())).unwrap();
+    let kdc = dir.join("kdc.conf");
+    std::fs::write(
+        &kdc,
+        "[libdefaults]\n    default_keytab_name = FILE:/k/kdc\n",
+    )
+    .unwrap();
+    let from_main = crate::load_krb5_conf_paths([&main]).unwrap();
+    assert_eq!(
+        from_main.default_keytab_name.as_deref(),
+        Some("FILE:/k/included")
+    );
+    let kdc_first = crate::load_krb5_conf_paths([&kdc, &main]).unwrap();
+    assert_eq!(
+        kdc_first.default_keytab_name.as_deref(),
+        Some("FILE:/k/kdc")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn ignore_acceptor_hostname_defaults_false() {
     let c = Krb5Conf::parse("[libdefaults]\n    default_realm = KERBER.TEST\n").unwrap();
     assert!(!c.ignore_acceptor_hostname);

@@ -425,6 +425,9 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         "default_ccache_name" if take_first(seen, "default_ccache_name") => {
             conf.default_ccache_name = Some(v);
         }
+        "default_keytab_name" if take_first(seen, "default_keytab_name") => {
+            conf.default_keytab_name = Some(v);
+        }
         "spake_preauth_groups" if take_first(seen, "spake_preauth_groups") => {
             conf.spake_preauth_groups = Some(split_ws(&v));
         }
@@ -502,7 +505,39 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
 pub(super) fn split_kv(line: &str) -> Option<(&str, String)> {
     let line = line.trim().trim_end_matches(',');
     let (k, v) = line.split_once('=')?;
-    Some((k.trim(), v.trim().trim_matches('"').to_owned()))
+    Some((k.trim(), relation_value(v)))
+}
+
+/// A relation's value: one that opens with `"` is the quoted string, else the text with its
+/// trailing blanks cut.
+/// MIT `parse_std_line` (`prof_parse.c:169-183`): a value that starts with a quote goes through
+/// `parse_quoted_string`; any other loses its trailing whitespace.
+fn relation_value(v: &str) -> String {
+    let v = v.trim_start();
+    v.strip_prefix('"')
+        .map_or_else(|| v.trim_end().to_owned(), parse_quoted_string)
+}
+
+/// MIT `parse_quoted_string` (`prof_parse.c:47-72`): up to the closing quote; `\n`, `\t` and `\b`
+/// are those characters, a backslash before any other character is that character, and a
+/// backslash that ends the value stays.
+fn parse_quoted_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => break,
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('b') => out.push('\u{8}'),
+                Some(other) => out.push(other),
+                None => out.push('\\'),
+            },
+            other => out.push(other),
+        }
+    }
+    out
 }
 
 pub(super) fn truthy(v: &str) -> bool {
