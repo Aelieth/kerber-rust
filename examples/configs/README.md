@@ -85,7 +85,8 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
 
 - `/path` entries in a listen list: MIT binds a UNIX-domain socket there; this
   port binds none.
-- `kdc_tcp_listen_backlog`: the TCP listen queue is the Rust runtime's default.
+- `kdc_tcp_listen_backlog`: the TCP listen queue is MIT's default of 5
+  (`DEFAULT_TCP_LISTEN_BACKLOG`) whatever the relation says.
 - `iprop_enable` and `iprop_port`: iprop (program 100423) always answers on the
   kadmind port; there is no separate listener.
 - `kdc_timeout` and `max_retries` in `krb5.conf`: parsed, but they do not change

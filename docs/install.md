@@ -407,7 +407,7 @@ sudo systemctl enable --now krb5kdc kadmin
 
 In the checkout, with the new release built as in [Build](#build). `make install` replaces the
 programs and units an earlier install wrote and keeps every config file. For a realm an earlier
-release made, two things changed:
+release made, three things changed:
 
 - Release builds find the database, the stash and the ACL only where `kdc.conf` names them
   (`database_name`, `key_stash_file` and `acl_file` in the realm's stanza), else in
@@ -416,6 +416,11 @@ release made, two things changed:
   stash still loads), or name its files in the stanza; under SELinux only the KDC directory
   gives them a type the confined daemons may use. Carry the realm's `kdc.conf` stanza and
   `kadm5.acl` over as in [A realm](#a-realm).
+- Each listen entry is a socket of its own, as in MIT: an explicit IPv6 address in `kdc_listen`,
+  `kdc_tcp_listen`, `kadmind_listen` or `kpasswd_listen` (such as `[::]:88`) no longer takes IPv4
+  clients too. A stanza that lists only `[::]` addresses must drop them, which leaves MIT's
+  wildcards (`0.0.0.0` and `[::]`), or list `0.0.0.0:<port>` beside each, in the same step as
+  `make install`.
 - A database needs MIT's two lock files beside it, `<database_name>.ok` and
   `<database_name>.kadm5.lock`, and the tools and daemons refuse one without them with MIT's
   texts (`kadmin.local: No such file or directory while initializing kadmin.local interface`).
