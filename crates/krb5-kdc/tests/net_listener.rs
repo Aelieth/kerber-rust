@@ -17,6 +17,7 @@ use krb5_kdc::{
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
+use krb5_config::listen::ListenAddr;
 use krb5_types::{AsRep, PrincipalName, err, ku};
 use std::net::UdpSocket;
 use std::sync::Arc;
@@ -423,40 +424,91 @@ fn kdc_listen_list_is_served_on_every_address_like_mit() {
     }
 }
 
+/// The wildcard on a port no socket of either family holds: `bind` on `{ host: None, port }`,
+/// with another port tried when one is taken between the pick and the bind.
+fn bind_wildcard<T>(bind: impl Fn(&[ListenAddr]) -> std::io::Result<Vec<T>>) -> (u16, Vec<T>) {
+    for _ in 0..20 {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        match bind(&[ListenAddr { host: None, port }]) {
+            Ok(socks) => return (port, socks),
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {}
+            Err(e) => panic!("wildcard on {port}: {e}"),
+        }
+    }
+    panic!("no port free on both families");
+}
+
+/// The host has IPv6 (a `[::1]` socket binds).
+fn ipv6_host() -> bool {
+    UdpSocket::bind("[::1]:0").is_ok()
+}
+
+/// One socket's options as MIT's net-server sets them: `SO_REUSEADDR` on every server socket and
+/// `IPV6_V6ONLY` on every IPv6 one.
+fn assert_mit_socket(sock: &impl std::os::fd::AsFd, local: std::net::SocketAddr) {
+    use nix::sys::socket::{getsockopt, sockopt};
+    assert!(
+        getsockopt(sock, sockopt::ReuseAddr).unwrap(),
+        "{local}: SO_REUSEADDR"
+    );
+    if local.is_ipv6() {
+        assert!(
+            getsockopt(sock, sockopt::Ipv6V6Only).unwrap(),
+            "{local}: IPV6_V6ONLY"
+        );
+    }
+}
+
+#[test]
+fn the_wildcard_is_an_ipv4_and_an_ipv6_only_socket_on_one_port_like_mit() {
+    // MIT `setup_addresses` (`lib/apputils/net-server.c:1011-1036`): both addresses of the wildcard are set up.
+    // MIT `create_server_socket` (`lib/apputils/net-server.c:647-658`): the IPv6 one is `IPV6_V6ONLY`.
+    // So `0.0.0.0` and `[::]` bind on one port whatever `net.ipv6.bindv6only` says.
+    use krb5_kdc::{bind_rpc_listeners, bind_tcp_listeners, bind_udp_listeners};
+    let want = if ipv6_host() { 2 } else { 1 };
+    let (port, udp) = bind_wildcard(bind_udp_listeners);
+    let addrs: Vec<_> = udp.iter().map(|s| s.local_addr().unwrap()).collect();
+    assert_eq!(addrs.len(), want, "{addrs:?}");
+    for (s, a) in udp.iter().zip(&addrs) {
+        assert!(a.ip().is_unspecified() && a.port() == port, "{a}");
+        assert_mit_socket(s, *a);
+    }
+    for bind in [bind_tcp_listeners, bind_rpc_listeners] {
+        let (port, tcp) = bind_wildcard(bind);
+        let addrs: Vec<_> = tcp.iter().map(|s| s.local_addr().unwrap()).collect();
+        assert_eq!(addrs.len(), want, "{addrs:?}");
+        assert!(addrs[0].is_ipv4(), "{addrs:?}");
+        for (s, a) in tcp.iter().zip(&addrs) {
+            assert!(a.ip().is_unspecified() && a.port() == port, "{a}");
+            assert_mit_socket(s, *a);
+        }
+    }
+}
+
 #[test]
 fn bare_port_listens_on_ipv4_and_ipv6_like_mit() {
-    // A bare port is MIT's wildcard (`loop_add_addresses` with no host): IPv4 peers and,
-    // where the host has IPv6, IPv6 peers both reach it. Port 0 lets the OS pick a port
-    // per socket, so each socket is probed on its own port.
+    // A bare port is MIT's wildcard (`loop_add_addresses` with no host): IPv4 peers reach the
+    // `0.0.0.0` socket and, where the host has IPv6, IPv6 peers the `[::]` one.
     use krb5_kdc::{bind_tcp_listeners, bind_udp_listeners, serve_all};
-    let conf = krb5_config::KdcConf::parse("[kdcdefaults]\n    kdc_ports = 0\n").unwrap();
-    let udp = bind_udp_listeners(&conf.kdc_udp_listeners().unwrap()).unwrap();
-    let tcp = bind_tcp_listeners(&conf.kdc_tcp_listeners().unwrap()).unwrap();
-    let dual_stack =
-        std::fs::read_to_string("/proc/sys/net/ipv6/bindv6only").is_ok_and(|v| v.trim() == "0");
-    let ipv6_host = UdpSocket::bind("[::1]:0").is_ok();
-    let mut probes: Vec<(bool, std::net::SocketAddr)> = Vec::new();
-    for (is_udp, a) in udp
+    let (_, udp) = bind_wildcard(bind_udp_listeners);
+    let (_, tcp) = bind_wildcard(bind_tcp_listeners);
+    let probes: Vec<(bool, std::net::SocketAddr)> = udp
         .iter()
         .map(|s| (true, s.local_addr().unwrap()))
         .chain(tcp.iter().map(|s| (false, s.local_addr().unwrap())))
-    {
-        assert!(a.ip().is_unspecified(), "{a} is not a wildcard bind");
-        let v4 = std::net::SocketAddr::from(([127, 0, 0, 1], a.port()));
-        let v6 = std::net::SocketAddr::from((std::net::Ipv6Addr::LOCALHOST, a.port()));
-        if a.is_ipv4() || dual_stack {
-            probes.push((is_udp, v4));
-        }
-        if a.is_ipv6() && ipv6_host {
-            probes.push((is_udp, v6));
-        }
-    }
-    for want_udp in [true, false] {
-        assert!(
-            probes.iter().any(|(u, a)| *u == want_udp && a.is_ipv4()),
-            "no IPv4 listener (udp={want_udp})"
-        );
-    }
+        .map(|(is_udp, a)| {
+            let ip: std::net::IpAddr = if a.is_ipv4() {
+                std::net::Ipv4Addr::LOCALHOST.into()
+            } else {
+                std::net::Ipv6Addr::LOCALHOST.into()
+            };
+            (is_udp, std::net::SocketAddr::new(ip, a.port()))
+        })
+        .collect();
     let (store, _) = bootstrap_documented().unwrap();
     let store = shared_store(store);
     thread::spawn(move || {
@@ -474,4 +526,55 @@ fn bare_port_listens_on_ipv4_and_ipv6_like_mit() {
             if is_udp { "udp" } else { "tcp" }
         );
     }
+}
+
+#[test]
+fn listener_setup_logs_mits_lines() {
+    // MIT `setup_socket` (`lib/apputils/net-server.c:813-815`): each setup is logged at debug.
+    // MIT `create_server_socket` (`lib/apputils/net-server.c:647-658`): each IPv6 socket's `IPV6_V6ONLY` is logged with its descriptor.
+    // MIT `create_server_socket` (`lib/apputils/net-server.c:660-666`): a bind that fails is logged with the address, then as a failed setup and a failed network.
+    use krb5_kdc::{bind_rpc_listeners, bind_tcp_listeners, bind_udp_listeners};
+    use krb5_log::klog;
+    use std::os::fd::AsRawFd;
+    let dir = krb5_testkit::scratch_dir("krb5-kdc-listen-lines");
+    let log = dir.join("kdc.log");
+    klog::init("krb5kdc", &[format!("FILE:{}", log.display())], true);
+    let (udp_port, udp) = bind_wildcard(bind_udp_listeners);
+    let (tcp_port, tcp) = bind_wildcard(bind_tcp_listeners);
+    let (rpc_port, rpc) = bind_wildcard(bind_rpc_listeners);
+    let held = std::net::TcpListener::bind("0.0.0.0:0").unwrap();
+    let busy = held.local_addr().unwrap().port();
+    let refused = bind_tcp_listeners(&[ListenAddr {
+        host: None,
+        port: busy,
+    }]);
+    klog::close();
+    let text = std::fs::read_to_string(&log).unwrap();
+    for (kind, port) in [("UDP", udp_port), ("TCP", tcp_port), ("RPC", rpc_port)] {
+        let line = format!("(debug): Setting up {kind} socket for address 0.0.0.0:{port}\n");
+        assert!(text.contains(&line), "{line}in\n{text}");
+    }
+    let v6_fds: Vec<i32> = udp
+        .iter()
+        .map(|s| (s.local_addr().unwrap(), s.as_raw_fd()))
+        .chain(tcp.iter().map(|s| (s.local_addr().unwrap(), s.as_raw_fd())))
+        .chain(rpc.iter().map(|s| (s.local_addr().unwrap(), s.as_raw_fd())))
+        .filter(|(a, _)| a.is_ipv6())
+        .map(|(_, fd)| fd)
+        .collect();
+    assert_eq!(v6_fds.len(), if ipv6_host() { 3 } else { 0 });
+    for fd in v6_fds {
+        let line = format!("(info): setsockopt({fd},IPV6_V6ONLY,1) worked\n");
+        assert!(text.contains(&line), "{line}in\n{text}");
+    }
+    assert_eq!(refused.unwrap_err().kind(), std::io::ErrorKind::AddrInUse);
+    for line in [
+        format!("(Error): Address already in use - Cannot bind server socket on 0.0.0.0:{busy}\n"),
+        "(Error): Failed setting up a TCP socket (for 0.0.0.0)\n".to_owned(),
+        "(Error): Address already in use - Error setting up network\n".to_owned(),
+    ] {
+        assert!(text.contains(&line), "{line}in\n{text}");
+    }
+    drop(held);
+    let _ = std::fs::remove_dir_all(&dir);
 }

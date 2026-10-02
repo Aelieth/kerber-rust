@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::io::{self, Read};
 use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::os::fd::{AsRawFd as _, RawFd};
+use std::os::fd::{AsRawFd as _, OwnedFd, RawFd};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
@@ -20,7 +20,12 @@ use crate::kdb::{KdcEnv, PrincipalRead, Store};
 use crate::lookaside::{Check, Lookaside};
 use crate::store::{Policy, Principal};
 use krb5_config::listen::ListenAddr;
+use krb5_log::klog::{self, Severity, os_error_text};
 use krb5_types::HostAddress;
+use nix::sys::socket::{
+    AddressFamily, Backlog, SockFlag, SockType, SockaddrStorage, bind, listen, setsockopt, socket,
+    sockopt,
+};
 
 /// MIT `process_packet_response` (`net-server.c:1101-1105`): a dispatch error is logged
 /// with this text and no reply is sent.
@@ -285,15 +290,26 @@ impl Default for ListenLimits {
     }
 }
 
-/// Bind UDP and TCP on the same `addr`.
+/// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): a TCP listener's backlog is 5.
+const TCP_LISTEN_BACKLOG: i32 = 5;
+/// MIT `svctcp_create` (`lib/rpc/svc_tcp.c:178-178`): an RPC listener's backlog is 2.
+const RPC_LISTEN_BACKLOG: i32 = 2;
+/// MIT `setnolinger` (`lib/apputils/net-server.c:686-691`): a TCP listener does not linger.
+const NO_LINGER: nix::libc::linger = nix::libc::linger {
+    l_onoff: 0,
+    l_linger: 0,
+};
+
+/// Bind UDP and TCP on the same `addr`, each socket made as a configured listener's is
+/// ([`bind_udp_listeners`]).
 ///
 /// # Errors
 ///
-/// The `io::Error` from binding the UDP socket to `addr`, or from binding the TCP listener when
-/// the UDP bind succeeded.
+/// The `io::Error` from setting up the UDP socket on `addr`, or from setting up the TCP listener
+/// when the UDP socket was set up.
 pub(crate) fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListener)> {
-    let udp = UdpSocket::bind(addr)?;
-    let tcp = TcpListener::bind(addr)?;
+    let udp = UdpSocket::from(setup_socket(addr, BindType::Udp)?);
+    let tcp = TcpListener::from(setup_socket(addr, BindType::Tcp)?);
     Ok((udp, tcp))
 }
 
@@ -332,23 +348,23 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
     Err(last)
 }
 
-/// Bind a UDP socket on every listener in `addrs` (the `kdc_listen` list).
+/// Bind a UDP socket on every listener in `addrs` (the `kdc_listen` list): one socket for each
+/// address an entry resolves to, so the wildcard is two sockets, `0.0.0.0` and an IPv6-only
+/// `[::]`, whatever the host's default for IPv6 sockets (`net.ipv6.bindv6only`).
 ///
-/// MIT `setup_addresses` (`lib/apputils/net-server.c:1012-1036`): an address family the host
-/// lacks (`EAFNOSUPPORT`) is skipped when another address of the entry binds; any other
-/// bind failure is fatal.
-/// The wildcard is `[::]` and `0.0.0.0`: std leaves `IPV6_V6ONLY` at the kernel default, so
-/// when `net.ipv6.bindv6only` is 0 the `[::]` socket is dual-stack and already serves IPv4;
-/// otherwise `0.0.0.0` is bound too. MIT binds the two with `IPV6_V6ONLY` set; the
-/// dual-stack socket serves the same peers (an IPv4-mapped peer reads as IPv4 through
-/// [`HostAddress::from_socket`]).
+/// MIT `setup_addresses` (`lib/apputils/net-server.c:1011-1036`): every address of an entry is
+/// set up; an address family the host lacks (`EAFNOSUPPORT`) is skipped when another address of
+/// the entry binds, and any other failure stops the daemon.
 ///
 /// # Errors
 ///
-/// `io::ErrorKind::InvalidInput` when an entry does not resolve, and the bind error, named
-/// with its address, for an address that does not bind.
+/// `io::ErrorKind::InvalidInput` when an entry does not resolve, and the setup error, named with
+/// its address, for an address that does not bind.
 pub fn bind_udp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<UdpSocket>> {
-    bind_listeners(addrs, UdpSocket::bind, BindType::Udp)
+    Ok(bind_listeners(addrs, BindType::Udp)?
+        .into_iter()
+        .map(UdpSocket::from)
+        .collect())
 }
 
 /// [`bind_udp_listeners`] for a TCP list (`kdc_tcp_listen`, `kpasswd_listen`).
@@ -357,7 +373,10 @@ pub fn bind_udp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<UdpSocket>> {
 ///
 /// As [`bind_udp_listeners`].
 pub fn bind_tcp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
-    bind_listeners(addrs, TcpListener::bind, BindType::Tcp)
+    Ok(bind_listeners(addrs, BindType::Tcp)?
+        .into_iter()
+        .map(TcpListener::from)
+        .collect())
 }
 
 /// [`bind_tcp_listeners`] for an RPC service's list (kadmind's `kadmind_listen`), whose sockets
@@ -367,7 +386,10 @@ pub fn bind_tcp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> 
 ///
 /// As [`bind_udp_listeners`].
 pub fn bind_rpc_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
-    bind_listeners(addrs, TcpListener::bind, BindType::Rpc)
+    Ok(bind_listeners(addrs, BindType::Rpc)?
+        .into_iter()
+        .map(TcpListener::from)
+        .collect())
 }
 
 /// A listener's kind, as a failed setup names it in the daemon log.
@@ -399,21 +421,9 @@ impl BindType {
     }
 }
 
-/// The kernel default for a socket that does not set `IPV6_V6ONLY` (Linux
-/// `net.ipv6.bindv6only`); unreadable reads as v6-only, so `0.0.0.0` is bound as well.
-fn v6_wildcard_is_dual_stack() -> bool {
-    std::fs::read_to_string("/proc/sys/net/ipv6/bindv6only").is_ok_and(|v| v.trim() == "0")
-}
-
-fn bind_listeners<S>(
-    addrs: &[ListenAddr],
-    bind: impl Fn(SocketAddr) -> io::Result<S>,
-    kind: BindType,
-) -> io::Result<Vec<S>> {
+fn bind_listeners(addrs: &[ListenAddr], kind: BindType) -> io::Result<Vec<OwnedFd>> {
     let proto = kind.proto();
     let named = |a: SocketAddr, e: io::Error| io::Error::new(e.kind(), format!("{proto} {a}: {e}"));
-    let no_family =
-        |e: &io::Error| e.raw_os_error() == Some(nix::errno::Errno::EAFNOSUPPORT as i32);
     let mut out = Vec::new();
     for entry in addrs {
         let resolved = entry.resolve().map_err(|e| {
@@ -422,22 +432,9 @@ fn bind_listeners<S>(
         })?;
         let mut bound_any = false;
         let mut skipped = None;
-        let mut dual_stack = false;
-        // The wildcard tries `[::]` first so a dual-stack socket can stand for both.
-        let order: Vec<SocketAddr> = if entry.host.is_none() {
-            resolved.iter().rev().copied().collect()
-        } else {
-            resolved
-        };
-        for a in order {
-            if dual_stack && a.is_ipv4() && a.ip().is_unspecified() {
-                continue;
-            }
-            match bind(a) {
-                Ok(sock) => {
-                    if entry.host.is_none() && a.is_ipv6() {
-                        dual_stack = v6_wildcard_is_dual_stack();
-                    }
+        for a in resolved {
+            match setup_socket(a, kind) {
+                Ok(fd) => {
                     tracing::info!(
                         event = krb5_log::events::KDC_LISTEN,
                         correlation_id = krb5_log::current_correlation_id(),
@@ -445,66 +442,133 @@ fn bind_listeners<S>(
                         outcome = "ok",
                         bind = %a,
                         proto,
-                        dual_stack,
                     );
-                    out.push(sock);
+                    out.push(fd);
                     bound_any = true;
                 }
-                Err(e) if no_family(&e) => {
-                    log_lines(&no_family_lines(a, kind, &e));
-                    skipped = Some(named(a, e));
-                }
                 Err(e) => {
-                    log_bind_failure(a, kind, &e);
-                    return Err(named(a, e));
+                    klog::syslog(Severity::Err, &setup_failure_line(a, kind));
+                    if e.raw_os_error() != Some(nix::errno::Errno::EAFNOSUPPORT as i32) {
+                        log_network_failure(&e);
+                        return Err(named(a, e));
+                    }
+                    skipped = Some((a, e));
                 }
             }
         }
         if !bound_any {
-            if let Some(e) = &skipped {
-                log_lines(&[format!(
-                    "{} - Error setting up network",
-                    krb5_log::klog::os_error_text(e)
-                )]);
-            }
-            return Err(skipped.unwrap_or_else(|| {
-                io::Error::new(
+            return Err(match skipped {
+                Some((a, e)) => {
+                    log_network_failure(&e);
+                    named(a, e)
+                }
+                None => io::Error::new(
                     io::ErrorKind::AddrNotAvailable,
                     format!("{proto} {entry}: no address"),
-                )
-            }));
+                ),
+            });
         }
     }
     Ok(out)
 }
 
-/// The daemon log lines for a listener that does not bind; the daemon then stops.
-/// MIT `create_server_socket` (`lib/apputils/net-server.c:660-665`): the error and the address
-/// with its port.
-/// MIT `setup_addresses` (`lib/apputils/net-server.c:1024-1030`): the socket type and the address.
-/// MIT `loop_setup_network` (`lib/apputils/net-server.c:1068-1073`): the error once more, and
-/// the daemon exits.
-fn log_bind_failure(a: SocketAddr, kind: BindType, e: &io::Error) {
-    use krb5_log::klog::{Severity, os_error_text, syslog};
-    let text = os_error_text(e);
-    syslog(
-        Severity::Err,
-        &format!("{text} - Cannot bind server socket on {a}"),
+/// One listener on `addr`, made as MIT's net-server makes it: created and bound by
+/// [`create_server_socket`], then a TCP listener listens with MIT's backlog and does not linger,
+/// and an RPC listener listens with the RPC library's backlog.
+/// MIT `setup_socket` (`lib/apputils/net-server.c:813-859`): the setup is logged at debug, then the socket is created and a stream one listens, each failure logged and fatal.
+/// MIT `svctcp_create` (`lib/rpc/svc_tcp.c:178-178`): an RPC listener that cannot listen is no RPC service.
+fn setup_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd> {
+    klog::syslog(
+        Severity::Debug,
+        &format!("Setting up {} socket for address {addr}", kind.name()),
     );
-    syslog(
+    let fd = create_server_socket(addr, kind)?;
+    match kind {
+        BindType::Udp => {}
+        BindType::Tcp => {
+            listen(&fd, Backlog::new(TCP_LISTEN_BACKLOG)?)
+                .map_err(|e| failed(e, &format!("Cannot listen on TCP server socket on {addr}")))?;
+            setsockopt(&fd, sockopt::Linger, &NO_LINGER)
+                .map_err(|e| failed(e, &format!("cannot set SO_LINGER on TCP socket on {addr}")))?;
+        }
+        BindType::Rpc => {
+            listen(&fd, Backlog::new(RPC_LISTEN_BACKLOG)?).map_err(|e| {
+                let e = io::Error::from(e);
+                klog::syslog(
+                    Severity::Err,
+                    &format!("Cannot create RPC service: {}", os_error_text(&e)),
+                );
+                e
+            })?;
+        }
+    }
+    Ok(fd)
+}
+
+/// A socket for `addr`, close-on-exec, with `SO_REUSEADDR` and, on IPv6, `IPV6_V6ONLY`, bound;
+/// a failure is logged with the address.
+/// MIT `create_server_socket` (`lib/apputils/net-server.c:625-631`): a socket that is not made is logged as a TCP one, whatever its type.
+/// MIT `create_server_socket` (`lib/apputils/net-server.c:644-658`): `SO_REUSEADDR`, then `IPV6_V6ONLY` on an IPv6 socket, each logged and neither fatal.
+/// MIT `create_server_socket` (`lib/apputils/net-server.c:660-666`): a bind that fails is logged with the address and the socket closed.
+fn create_server_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd> {
+    let family = if addr.is_ipv4() {
+        AddressFamily::Inet
+    } else {
+        AddressFamily::Inet6
+    };
+    let ty = match kind {
+        BindType::Udp => SockType::Datagram,
+        BindType::Tcp | BindType::Rpc => SockType::Stream,
+    };
+    let fd = socket(family, ty, SockFlag::SOCK_CLOEXEC, None)
+        .map_err(|e| failed(e, &format!("Cannot create TCP server socket on {addr}")))?;
+    let n = fd.as_raw_fd();
+    if let Err(e) = setsockopt(&fd, sockopt::ReuseAddr, &true) {
+        com_err(&e.into(), &format!("Cannot enable SO_REUSEADDR on fd {n}"));
+    }
+    if addr.is_ipv6() {
+        match setsockopt(&fd, sockopt::Ipv6V6Only, &true) {
+            Ok(()) => klog::com_err(None, &format!("setsockopt({n},IPV6_V6ONLY,1) worked")),
+            Err(e) => com_err(&e.into(), &format!("setsockopt({n},IPV6_V6ONLY,1) failed")),
+        }
+    }
+    bind(n, &SockaddrStorage::from(addr))
+        .map_err(|e| failed(e, &format!("Cannot bind server socket on {addr}")))?;
+    Ok(fd)
+}
+
+/// Log a failed call as MIT's `com_err` does: the error's text, ` - `, then `what`.
+fn com_err(e: &io::Error, what: &str) {
+    klog::com_err(Some(&os_error_text(e)), what);
+}
+
+/// [`com_err`] for a call whose failure ends the setup: `e`, logged, as an `io::Error`.
+fn failed(e: nix::Error, what: &str) -> io::Error {
+    let e = io::Error::from(e);
+    com_err(&e, what);
+    e
+}
+
+/// MIT `setup_addresses` (`lib/apputils/net-server.c:1024-1030`): a failed setup is logged with its socket type and address.
+fn setup_failure_line(a: SocketAddr, kind: BindType) -> String {
+    format!(
+        "Failed setting up a {} socket (for {})",
+        kind.name(),
+        a.ip()
+    )
+}
+
+/// MIT `loop_setup_network` (`lib/apputils/net-server.c:1068-1073`): the error the setup stopped on is logged once more, and the daemon exits.
+fn log_network_failure(e: &io::Error) {
+    klog::syslog(
         Severity::Err,
-        &format!(
-            "Failed setting up a {} socket (for {})",
-            kind.name(),
-            a.ip()
-        ),
+        &format!("{} - Error setting up network", os_error_text(e)),
     );
-    syslog(Severity::Err, &format!("{text} - Error setting up network"));
 }
 
 fn log_lines(lines: &[String]) {
     for line in lines {
-        krb5_log::klog::syslog(krb5_log::klog::Severity::Err, line);
+        klog::syslog(Severity::Err, line);
     }
 }
 
@@ -521,29 +585,7 @@ fn resolve_failure_lines(entry: &ListenAddr, error: &str) -> [String; 2] {
     let eio = io::Error::from_raw_os_error(nix::errno::Errno::EIO as i32);
     [
         format!("Failed getting address info (for {host}): {gai}"),
-        format!(
-            "{} - Error setting up network",
-            krb5_log::klog::os_error_text(&eio)
-        ),
-    ]
-}
-
-/// The daemon log lines for an address whose family the host lacks; the next address is tried.
-/// MIT `create_server_socket` (`lib/apputils/net-server.c:624-631`): the error and the address
-/// with its port, worded for TCP whatever the socket type.
-/// MIT `setup_addresses` (`lib/apputils/net-server.c:1024-1030`): the socket type and the
-/// address, then EAFNOSUPPORT is let pass.
-fn no_family_lines(a: SocketAddr, kind: BindType, e: &io::Error) -> [String; 2] {
-    [
-        format!(
-            "{} - Cannot create TCP server socket on {a}",
-            krb5_log::klog::os_error_text(e)
-        ),
-        format!(
-            "Failed setting up a {} socket (for {})",
-            kind.name(),
-            a.ip()
-        ),
+        format!("{} - Error setting up network", os_error_text(&eio)),
     ]
 }
 
@@ -1210,19 +1252,13 @@ mod tests {
             port: 88,
         };
         assert!(resolve_failure_lines(&wildcard, "x")[0].contains("(for <wildcard>): x"));
-        let e = io::Error::from_raw_os_error(nix::errno::Errno::EAFNOSUPPORT as i32);
         assert_eq!(
-            no_family_lines("[::]:88".parse().unwrap(), BindType::Udp, &e),
-            [
-                "Address family not supported by protocol - Cannot create TCP server socket on \
-                 [::]:88"
-                    .to_owned(),
-                "Failed setting up a UDP socket (for ::)".to_owned(),
-            ]
+            setup_failure_line("[::]:88".parse().unwrap(), BindType::Udp),
+            "Failed setting up a UDP socket (for ::)"
         );
         // kadmind's kadm5 listener is an RPC one, as MIT names it.
         assert_eq!(
-            no_family_lines("[::]:749".parse().unwrap(), BindType::Rpc, &e)[1],
+            setup_failure_line("[::]:749".parse().unwrap(), BindType::Rpc),
             "Failed setting up a RPC socket (for ::)"
         );
         assert_eq!(BindType::Tcp.name(), "TCP");

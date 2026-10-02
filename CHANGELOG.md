@@ -1337,6 +1337,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** The daemons set up their sockets as MIT's: `0.0.0.0` and an IPv6-only `[::]`
+  for a wildcard, `SO_REUSEADDR`, MIT's backlogs and log lines, and no `/proc` read, so the
+  units start under enforcing SELinux (they failed: `Address already in use`). Units; live.
 - **kdc/admin.** TCP listeners take a connection when it arrives, as MIT's do, instead of
   trying every 20 ms. Unit; timed live.
 - **kdc.** A principal's `max_life` of 0 stays 0 in the database, as in MIT (the realm's

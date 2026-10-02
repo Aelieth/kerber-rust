@@ -228,7 +228,8 @@ sudo ss -lntup | grep -E 'krb5kdc|kadmind'
 ```
 
 As MIT's do, `krb5kdc` listens on 88 (UDP and TCP), and `kadmind` on 464 (kpasswd, UDP and
-TCP) and 749 (kadmin, TCP), on every address.
+TCP) and 749 (kadmin, TCP), on every address: `ss` shows each port twice, on `0.0.0.0` and on
+`[::]`.
 
 ### The first administrator and a user
 
