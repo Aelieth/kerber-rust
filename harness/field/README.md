@@ -217,6 +217,8 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `kt-vs-kdc.py` | A keytab's newest kvno and enctypes (`klist -k -e`) against the KDC's `getprinc` |
 | `nfs-probe.sh`, `spnego-probe.sh`, `check_spnego.lab.sh` | S2's probes, run in throwaway containers on services (image `localhost/s2-nfs-probe:f43`, own network namespace): the kit's NFS client set-up and alice's, root's and bob's NFS access; the kit's `check_spnego` (its helper block and function verbatim from kit commit `e9f3325`, only the four SSO constants set to the lab's) and the two requests by hand |
 | `kc-events.sh` | Keycloak's events since a time, read-only through the admin API from the host (the admin password on stdin, the token through a pipe) |
+| `lldap-membership.sh` | S1's: one lldap group membership added or removed on services (lldap's admin password on stdin) |
+| `ptydrive.py` | R2's pty driver: `su`, `passwd` and `pamtester` on a pseudo-terminal, their prompts answered from stdin |
 
 ## Scenarios
 
@@ -225,6 +227,9 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `upgrade` | nightly, weekly | mit, rust | kdc: `f4-mit` / `rust-field-p12` (reset; the rust leg leaves it on the ref's install); client2: `rust-ssh` (rust leg, reset) | f-UP1 | under 1 / about 3.5 min (the build about 2) |
 | `services` | nightly, weekly | mit, rust | services: `f4-mit` / `services-rust` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 | `nfs-client` | nightly, weekly | mit, rust | client2: `f4-mit` / `rust-ssh`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
+| `sssd-login` | nightly, weekly | mit, rust | client1: `f4-mit` / `rust-nfs-sso`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
+
+With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).
 
 **The MIT baseline `f4-mit`** (kdc, client1, client2, services) was set up once by
 hand on 2026-10-02 (record `~/kerber-lab/runs/hand-f4-mit-20261002T143502Z/`):
@@ -309,6 +314,16 @@ would remove it.
   KDC's lines for client2; no SELinux denial on client2 but the kit's known
   `nfsidmap-client` one. Recorded: alice's AS preauth types and AS-REP size. Not
   here: R4's PROOF 3 (ticket expiry, a clock window) and client1's legs (GUI).
+- **`sssd-login.sh`** (R2, headless on client1; never SDDM, never the kit's
+  join): `pamtester` login through SSSD (`FILE:/tmp/krb5cc_10001` alice's,
+  `user_tmp_t`, FRIA, 24 h, renewable 7 d); the renewal's shape at an sssd
+  restart with alice's maxlife lowered to 15 min (renewed at once: FRIAT, 24 h
+  again, renew-until and authtime kept); `passwd` through SSSD and kpasswd (the
+  new password logs in, the old one is refused, then restored); `-allow_tix`
+  (`CLIENT LOCKED OUT`, kinit's "credentials have been revoked"); `lldap_disabled`
+  (the TGT is issued, the account is denied); the kit's own `--validate`. Every
+  realm and directory change is undone, also when the scenario stops early.
+  Recorded: the cache's size.
 
 ## What `up` builds
 
