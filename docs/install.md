@@ -230,9 +230,10 @@ The directory holds the database `principal` (MIT's dump format, not db2) and it
 `principal.ulog`, MIT's lock files `principal.ok` and `principal.kadm5.lock` (empty, 0600: the
 tools and daemons lock the database through them, as MIT's do), the stash, `kdc.conf` and
 `kadm5.acl`. Fedora builds MIT's tools with a patch that sets each new file's SELinux label from
-the policy. kerber-rust's tools do that for the two lock files; `restorecon` gives the database
-and the stash theirs (MIT's `krb5kdc_principal_t` for the database). Run it again after every
-`kdb5_util create` or `load`.
+the policy, and kerber-rust's tools do the same (MIT's `krb5kdc_principal_t` for the database);
+a save keeps the label of the file it replaces. `restorecon` changes nothing the tools made: it
+is there for the directory, for files made by hand, and for a realm an earlier release saved
+([Upgrading kerber-rust](#upgrading-kerber-rust)).
 
 ### Start
 

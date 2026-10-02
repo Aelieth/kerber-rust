@@ -688,7 +688,7 @@ fn create_temporary(tmp: &Path, text: &str) -> Result<DbLock, PersistError> {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let mut file = opts.open(tmp)?;
+        let mut file = krb5_protocol::create_labeled(tmp, || opts.open(tmp))?;
         lock.create_policy_lock()?;
         std::io::Write::write_all(&mut file, text.as_bytes())?;
         file.sync_all()?;
@@ -715,7 +715,7 @@ fn promote(db: &Path, tmp: &Path, ulog: &str) -> Result<DbLock, PersistError> {
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let made = match opts.open(db) {
+    let made = match krb5_protocol::create_labeled(db, || opts.open(db)) {
         Ok(_) => created.create_policy_lock().map_err(PersistError::from),
         Err(e) => Err(PersistError::Io(e)),
     };
@@ -796,8 +796,8 @@ pub enum CreateError {
 /// there) is never replaced; then `principal.kadm5.lock` is made, which must not exist, and
 /// locked; then the dump and its `.ulog` are written as new 0600 files owned by the writer, the
 /// age moves and both locks are let go. The lock files are 0600 and owned by the writer, and with
-/// SELinux on they take the context the policy gives their paths. The stash is the caller's
-/// ([`write_stash`]).
+/// SELinux on each file made takes the context a new file at its path takes. The stash is the
+/// caller's ([`write_stash`]).
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:697-708`): `principal.ok` is opened `O_CREAT | O_RDWR | O_TRUNC`, 0600, and locked exclusively first.
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:718-720`): the database is opened `O_RDWR | O_CREAT | O_EXCL`, mode 0600.
 /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:722-732`): the policy lock file is created `O_EXCL` and locked; a failure leaves the database file.
@@ -822,7 +822,7 @@ pub fn create_store(
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    opts.open(db_path).map_err(CreateError::Create)?;
+    krb5_protocol::create_labeled(db_path, || opts.open(db_path)).map_err(CreateError::Create)?;
     lock.create_policy_lock()?;
     let written = write_dump(store, master)
         .map_err(PersistError::from)

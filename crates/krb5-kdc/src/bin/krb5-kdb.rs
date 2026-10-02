@@ -860,7 +860,7 @@ fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
         use std::os::unix::fs::OpenOptionsExt as _;
         opts.mode(0o600);
     }
-    let ok = match opts.open(&ok_path) {
+    let ok = match krb5_protocol::create_labeled(&ok_path, || opts.open(&ok_path)) {
         Ok(f) => f,
         Err(e) => {
             util.com_err(
