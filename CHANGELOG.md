@@ -1337,6 +1337,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **docs.** The install doc's `kdc.conf` edit renames only the realm's stanza and indents
+  `max_renewable_life` as the stanza's other lines; it rewrote the file's opening comment too.
+  Run on the shipped files.
 - **admin.** `kpropd` without an address listens as MIT's: port 754 on an IPv6 socket that takes
   IPv4 too (`IPV6_V6ONLY` off) when the host has IPv6, else on IPv4, with `SO_REUSEADDR`; it
   listened on `127.0.0.1` only. Units; settled live.

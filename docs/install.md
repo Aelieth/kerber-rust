@@ -172,18 +172,21 @@ Fedora's `[logging]` stays in `/etc/krb5.conf`. It sends the daemons' logs to
 ### kdc.conf and kadm5.acl
 
 ```sh
-sudo sed -i "s/EXAMPLE\.COM/$REALM/" /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl
-sudo sed -i '/default_principal_flags = +preauth/a max_renewable_life = 7d' /var/kerberos/krb5kdc/kdc.conf
+sudo sed -i "s/^EXAMPLE\.COM = {/$REALM = {/" /var/kerberos/krb5kdc/kdc.conf
+sudo sed -i "s/@EXAMPLE\.COM/@$REALM/" /var/kerberos/krb5kdc/kadm5.acl
+sudo sed -i '/default_principal_flags = +preauth/a\     max_renewable_life = 7d' /var/kerberos/krb5kdc/kdc.conf
 sudo cat /var/kerberos/krb5kdc/kadm5.acl
 ```
 
-The ACL is now `*/admin@EXAMPLE.COM *` with your realm: every principal with the instance
-`admin` (`admin/admin`, `alice/admin`) may do everything (kadm5.acl(5)). The realm's stanza in
-`kdc.conf` is Fedora's: an `aes256-cts-hmac-sha384-192` master key, the keys every principal
-gets (`supported_enctypes`), and `+preauth` on new principals. It sets no `max_renewable_life`,
-so, as with MIT, principals get none and a ticket's `renew until` is its start time. SSSD and
-other clients renew their tickets, so the second line gives the realm seven days. It must come
-before `kdb5_util create`, which gives `krbtgt` the realm's values; new principals get them too.
+The first line renames the realm's stanza in `kdc.conf` (the file's opening comment still names
+`EXAMPLE.COM`, the placeholder it tells you to replace). The ACL is now `*/admin@EXAMPLE.COM *`
+with your realm: every principal with the instance `admin` (`admin/admin`, `alice/admin`) may do
+everything (kadm5.acl(5)). The realm's stanza in `kdc.conf` is Fedora's: an
+`aes256-cts-hmac-sha384-192` master key, the keys every principal gets (`supported_enctypes`),
+and `+preauth` on new principals. It sets no `max_renewable_life`, so, as with MIT, principals
+get none and a ticket's `renew until` is its start time. SSSD and other clients renew their
+tickets, so the third line gives the realm seven days. It must come before `kdb5_util create`,
+which gives `krbtgt` the realm's values; new principals get them too.
 
 ### The database
 
