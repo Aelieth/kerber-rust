@@ -136,7 +136,12 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
   - `--profile nightly|weekly` picks the scenarios, in the order of the table
     under [Scenarios](#scenarios);
   - `--only a,b` runs some of them;
-  - `--leg mit|rust|both` picks the realm (default `rust`).
+  - `--leg mit|rust|both` picks the realm (default `rust`). `both` runs one
+    leg at a time, MIT's first (the oracle): every selected scenario on the
+    MIT baseline, then every one on the ref under test. Each scenario of a leg
+    uses the kdc that leg's `upgrade` left, so a leg without `upgrade` runs
+    against whatever kdc holds, and its `kdc.leg` check fails when that is not
+    the leg's KDC.
 - **The tree under test** is `git archive <ref>` of this repository, read-only
   (`GIT_OPTIONAL_LOCKS=0`; `FIELD_REPO` in `field.env` names another). A dirty
   checkout runs the harness, never the product.
@@ -169,8 +174,8 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
   - any failed check or guard fails the run;
   - a scenario or leg that could not run is NOT-RUN, which is never a pass;
   - the exit status is 0 only when every selected scenario passed;
-  - when `upgrade` fails, the scenarios after it are NOT-RUN (kdc does not run
-    the ref under test).
+  - when `upgrade` fails, the scenarios after it in that leg are NOT-RUN (kdc
+    does not run that leg's KDC).
 - **Records:** `~/kerber-lab/runs/<UTC>-<sha12>-<profile>/` holds:
   - `summary.txt` and `run.log`;
   - `guards/`: the preflight and postflight checks, the krb5.conf sums and the
@@ -208,14 +213,28 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `install-check.sh` | On a VM after `make install`: every program the install manifest lists is byte-identical to the checkout's build (`cmp`, the names paired by its `dist/install.sh`) |
 | `docblocks.py` | A doc section's shell blocks, by heading, run one top-level command at a time in one session, each with its exit status (a here-document stays whole) |
 | `ktrace.sh` | An MIT client command with its `KRB5_TRACE`, and an `answers:` line naming the transports the replies came over |
+| `leg.sh` | A scenario's leg from `baseline.env`'s `MIT_*` or `RUST_*` set: `resetvm`, `kdcis` (kdc runs the leg's KDC: MIT's packaged binaries, or the install manifest and the ref's build) |
 
 ## Scenarios
 
-| Scenario | Profiles | Legs | VMs: baseline snapshot | Reference hand record | Duration |
+| Scenario | Profiles | Legs | VMs: baseline snapshot (MIT / rust) | Reference hand records (MIT; rust) | Duration (MIT / rust) |
 | --- | --- | --- | --- | --- | --- |
-| `upgrade` | nightly, weekly | rust | kdc: `rust-field-p12` (reset, then left on the ref's install); client2: `rust-ssh` (reset) | f-UP1 | about 4 min (the build about 2) |
+| `upgrade` | nightly, weekly | mit, rust | kdc: `f4-mit` / `rust-field-p12` (reset; the rust leg leaves it on the ref's install); client2: `rust-ssh` (rust leg, reset) | f-UP1 | under 1 / about 3.5 min (the build about 2) |
 
-`scenarios/upgrade.sh` puts the ref under test on kdc, so it runs first:
+**The MIT baseline `f4-mit`** (kdc, client1, client2, services) was set up once by
+hand on 2026-10-02 (record `~/kerber-lab/runs/hand-f4-mit-20261002T143502Z/`):
+kdc's `mit-trust-ra` and client2's `mit-nfs` disagreed on `host/client2`'s
+keys, so R4-MIT's join step was re-run on client2; every keytab on the four VMs
+then equalled the KDC's (kvno and enctypes), and NFS, SPNEGO and ssh from
+client2 worked before the snapshots. Every scenario's `kdc.leg` check makes sure
+its leg ran against the right KDC.
+
+`scenarios/upgrade.sh --leg mit` is minimal: kdc back to `f4-mit`, Fedora's
+`krb5-server` binaries as packaged, `krb5kdc` and `kadmin` active, the same
+`listen.sockets` and `listen.backlog` checks as the rust leg (MIT's own sockets
+are where those expectations come from), the package versions recorded.
+
+`scenarios/upgrade.sh --leg rust` puts the ref under test on kdc, so it runs first:
 
 - It resets kdc and client2 to their baselines and waits for chrony. Then it
   records the realm as the baseline serves it (`listprincs`, `getprinc alice`).

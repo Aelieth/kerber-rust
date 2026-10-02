@@ -4,19 +4,46 @@
 # doc change is what runs), then the deterministic checks of the hand record f-UP1. First in every run: it
 # leaves kdc on the ref's install. Run by run.sh (REC_DIR, TMPDIR, FIELD_TREE_TAR, FIELD_SHA, FIELD_REF,
 # FIELD_DEADLINE).
+# --leg mit (minimal; the fuller MIT comparison is F4d's): kdc reset to the MIT baseline, the stock Fedora
+# krb5-server realm the other scenarios' MIT legs run against: its binaries as packaged, krb5kdc and kadmin active
+# and listening, the package versions recorded.
 # vms: kdc client2
-# legs: rust
+# legs: mit rust
 set -uo pipefail
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-if [ "${1:-}" != --leg ] || [ "${2:-}" != rust ]; then
-    echo "usage: upgrade.sh --leg rust (no MIT leg yet)" >&2
-    exit 1
-fi
+case "${1:-} ${2:-}" in
+    "--leg mit" | "--leg rust") LEG=$2 ;;
+    *) echo "usage: upgrade.sh --leg mit|rust" >&2; exit 1 ;;
+esac
 : "${FIELD_TREE_TAR:?run by run.sh}" "${FIELD_SHA:?run by run.sh}" "${FIELD_REF:?run by run.sh}"
 # shellcheck source=../lib/rec.sh
 . "$HERE/../lib/rec.sh"
 # shellcheck source=../baseline.env
 . "$HERE/../baseline.env"
+# shellcheck source=../lib/leg.sh
+. "$FIELD_LIB/leg.sh"
+T0=$(date +%s)
+SS="'( sport = :88 or sport = :464 or sport = :749 )'"
+# listencheck: kdc's listeners, the set MIT's own daemons open (its leg grades the same two checks): exactly the
+# wildcard 0.0.0.0 and [::] sockets on 88 udp/tcp, 464 udp/tcp and 749 tcp, with listen queues 5 / 5 / 2.
+listencheck() {
+    check listen.sockets 'line:sockets: tcp 0.0.0.0:464 tcp 0.0.0.0:749 tcp 0.0.0.0:88 tcp [::]:464 tcp [::]:749 tcp [::]:88 udp 0.0.0.0:464 udp 0.0.0.0:88 udp [::]:464 udp [::]:88' \
+        run kdc "sudo ss -H -lntup $SS; printf 'sockets: %s\n' \"\$(sudo ss -H -lntu $SS | awk '{ print \$1, \$5 }' | LC_ALL=C sort | paste -sd' ' -)\"; printf 'backlog: %s\n' \"\$(sudo ss -H -lntu $SS | awk '\$1 == \"tcp\" { n = split(\$5, a, \":\"); print a[n] \"=\" \$4 }' | LC_ALL=C sort -u | paste -sd' ' -)\""
+    checklast listen.backlog 'line:backlog: 464=5 749=2 88=5'
+}
+if [ "$LEG" = mit ]; then
+    section "upgrade --leg mit: kdc reset to $MIT_SNAPSHOT_KDC, the stock MIT realm $REALM (the oracle); the ref under test is not installed"
+    resetvm kdc
+    kdcis
+    check mit.active '^active active$' run kdc "systemctl is-active krb5kdc kadmin | paste -sd' ' -"
+    listencheck
+    observe obs.mit.packages 'krb5-server-[^ ]+' run kdc "rpm -q krb5-server krb5-libs krb5-workstation | paste -sd' ' -; uname -r"
+    MIN=$(( ($(date +%s) - T0) / 60 + 2 ))
+    host "COLLECT_MINUTES=$MIN $LABQ collect kdc $(printf '%q' "$REC_DIR/collect") /etc/krb5.conf /var/kerberos/krb5kdc/kdc.conf /var/kerberos/krb5kdc/kadm5.acl"
+    if [ -f "$REC_DIR/collect/kdc/journal.txt" ]; then _redact < "$REC_DIR/collect/kdc/journal.txt" > "$STATE/j" && mv "$STATE/j" "$REC_DIR/collect/kdc/journal.txt"; fi
+    finish
+    exit
+fi
 DOCB=$FIELD_LIB/docblocks.py
 CO=kerber-rust-${FIELD_SHA:0:12}
 R=$RUST_REALM
@@ -34,7 +61,6 @@ all6() {
         for (i = 1; i <= n; i++) if (a[i] != "") { if (a[i] ~ /^\[/) six++; else four++ }
         if (six > 0 && four == 0) print $1 }' "$@"
 }
-T0=$(date +%s)
 # On any exit: no refused TCP 464, no capture left running, no raw capture left on kdc, no scratch on client2.
 cleanup() {
     timeout -k 5 60 "$LAB" ssh kdc -- 'sudo nft delete table inet field_tmp 2>/dev/null; sudo systemctl stop "field-pcap-*" 2>/dev/null; sudo rm -f /var/tmp/field-*.pcap; true' < /dev/null > /dev/null 2>&1
@@ -125,10 +151,7 @@ check install.programs '^programs: [1-9][0-9]* in the manifest, each identical t
     runin kdc "lib/install-check.sh" "sh -s -- ~/$CO" < "$FIELD_LIB/install-check.sh"
 check install.manifest '^manifest: [1-9][0-9]* files as installed$' \
     run kdc "sudo sha256sum -c /usr/share/kerber-rust/install-manifest && echo \"manifest: \$(wc -l < /usr/share/kerber-rust/install-manifest) files as installed\""
-SS="'( sport = :88 or sport = :464 or sport = :749 )'"
-check listen.sockets 'line:sockets: tcp 0.0.0.0:464 tcp 0.0.0.0:749 tcp 0.0.0.0:88 tcp [::]:464 tcp [::]:749 tcp [::]:88 udp 0.0.0.0:464 udp 0.0.0.0:88 udp [::]:464 udp [::]:88' \
-    run kdc "sudo ss -H -lntup $SS; printf 'sockets: %s\n' \"\$(sudo ss -H -lntu $SS | awk '{ print \$1, \$5 }' | LC_ALL=C sort | paste -sd' ' -)\"; printf 'backlog: %s\n' \"\$(sudo ss -H -lntu $SS | awk '\$1 == \"tcp\" { n = split(\$5, a, \":\"); print a[n] \"=\" \$4 }' | LC_ALL=C sort -u | paste -sd' ' -)\""
-checklast listen.backlog 'line:backlog: 464=5 749=2 88=5'
+listencheck
 kdcsince up 'setting up network|V6ONLY|set up [0-9]+ sockets|commencing operation|starting|Loaded|\((Error|error|err|warning)\)'
 checklast log.kdc.sockets 'krb5kdc\[[0-9]+\]\(info\): set up 4 sockets$'
 checklast log.kdc.commencing 'krb5kdc\[[0-9]+\]\(info\): commencing operation$'

@@ -6,6 +6,7 @@
 # The tree under test is `git archive <ref>` of the repository run.sh lives in (read-only, GIT_OPTIONAL_LOCKS=0;
 # FIELD_REPO in field.env names another), never a working tree. Each selected scenario's leg drives the real
 # products on the lab and leaves its record in ~/kerber-lab/runs/<UTC>-<sha12>-<profile>/<scenario>/<leg>/.
+# --leg both runs one leg at a time, MIT's first (the oracle), each against the kdc its upgrade leg left.
 #
 # Preflight: ~/kerber-lab/state/lab.lock taken (when it is held, run.sh exits 1 before it makes a run
 # directory); every snapshot baseline.env names exists; `lab.sh check --lab-only` of the VMs the selected
@@ -26,7 +27,8 @@ LAB_HOME=${KERBER_LAB_HOME:-$HOME/kerber-lab}
 RUNS=$LAB_HOME/runs
 LOCK=$LAB_HOME/state/lab.lock
 KEEP=30
-# The scenarios of each profile, in order; upgrade is first: it puts the ref under test on kdc.
+# The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
+# under test), and the other scenarios use the kdc it left.
 declare -A PROFILES=([nightly]="upgrade" [weekly]="upgrade")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
@@ -247,9 +249,10 @@ if awk -F'\t' '$2 == "FAIL"' "$CHECKS" | grep -q .; then PRE_OK=0; fi
 say "preflight: $([ "$PRE_OK" = 1 ] && echo PASS || echo FAIL)"
 
 # ---------------------------------------------------------------- scenarios
-UPGRADE_FAILED=0
-for sc in "${SEL[@]}"; do
-    for leg in "${LEGS[@]}"; do
+# One leg at a time, MIT's first (the oracle): every scenario of a leg runs against the kdc that leg's upgrade left.
+for leg in "${LEGS[@]}"; do
+    UPGRADE_FAILED=0
+    for sc in "${SEL[@]}"; do
         dir=$RUN/$sc/$leg
         mkdir -p "$dir" "$RUN/tmp/$sc-$leg"
         reason=''
@@ -260,7 +263,7 @@ for sc in "${SEL[@]}"; do
         elif ! grep -Eq "^# legs: .*\b$leg\b" "$HERE/scenarios/$sc.sh"; then
             reason="scenarios/$sc.sh has no $leg leg"
         elif [ "$UPGRADE_FAILED" = 1 ]; then
-            reason="upgrade failed, so kdc does not run the ref under test"
+            reason="upgrade --leg $leg failed, so kdc does not run that leg's KDC"
         fi
         if [ -n "$reason" ]; then
             printf 'NOT-RUN %s\n' "$reason" > "$dir/result"
@@ -292,7 +295,7 @@ for sc in "${SEL[@]}"; do
         else
             res=FAIL
             ALL_PASS=0
-            if [ "$sc" = upgrade ] && [ "$leg" = rust ]; then UPGRADE_FAILED=1; fi
+            if [ "$sc" = upgrade ]; then UPGRADE_FAILED=1; fi
         fi
         ROWS+=("$(printf '%-12s %-5s %-8s %s pass / %s fail / %s info, %s min, exit %s%s: %s/%s/record.txt' \
             "$sc" "$leg" "$res" "$npass" "$nfail" "$ninfo" "$(( ($(date +%s) - t) / 60 ))" "$rc" \
