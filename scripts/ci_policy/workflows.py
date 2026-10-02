@@ -511,7 +511,10 @@ def check_rust_cache_shared_key(
 
 CONCURRENCY_WORKFLOWS = ("ci.yml", "fuzz.yml")
 _USES_PINNED = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$")
-SHELLCHECK_CMD = "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh"
+SHELLCHECK_CMD = (
+    "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh"
+    " harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh"
+)
 
 
 def check_workflow_hardening(
@@ -525,8 +528,9 @@ def check_workflow_hardening(
     `concurrency` + `cancel-in-progress` on ci.yml and fuzz.yml only; every
     third-party `uses:` (workflows and composite actions) is a 40-hex SHA with
     the tag in a trailing comment; dependabot covers github-actions and cargo;
-    ci.yml runs the fail-red shellcheck job over the four script globs with a
-    `.shellcheckrc` that follows sources, on a ShellCheck it installs itself by
+    ci.yml runs the fail-red shellcheck job over SHELLCHECK_CMD's script globs
+    (the field harness's included) with a `.shellcheckrc` that follows sources,
+    on a ShellCheck it installs itself by
     version and sha256 (the runner's package differs by two minor versions and
     hundreds of notes), and the Makefile fallback image and the hygiene
     inventory's image name that same version."""
