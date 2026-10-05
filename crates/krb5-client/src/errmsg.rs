@@ -108,9 +108,9 @@ impl Krb5Error {
     /// MIT `krb5_get_error_message` of a protocol failure; `realm` names the realm whose KDC was
     /// asked.
     /// MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:194-201`): a generic KDC error with an
-    /// e-text is "KDC returned error string: <text>"; every other KDC error is its table text.
+    /// e-text is "KDC returned error string: \<text\>"; every other KDC error is its table text.
     /// MIT `k5_sendto_kdc` (`sendto_kdc.c:523-529`): no answer is "Cannot contact any KDC for
-    /// realm '<realm>'".
+    /// realm '\<realm\>'".
     #[must_use]
     pub fn from_protocol(e: &krb5_protocol::Error, realm: &str) -> Self {
         match e {
@@ -133,7 +133,7 @@ impl Krb5Error {
 
     /// [`Self::from_protocol`] for an AS exchange.
     /// MIT `krb5_init_creds_step` (`get_in_tkt.c:1936-1946`): an unknown client is "Client
-    /// '<client>' not found in Kerberos database".
+    /// '\<client\>' not found in Kerberos database".
     #[must_use]
     pub fn from_as(e: &krb5_protocol::Error, client: &str, realm: &str) -> Self {
         if let krb5_protocol::Error::KrbError {
@@ -151,7 +151,7 @@ impl Krb5Error {
 
     /// [`Self::from_protocol`] for a TGS exchange for `server`.
     /// MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:202-210`): an unknown server is "Server
-    /// <server> not found in Kerberos database".
+    /// \<server\> not found in Kerberos database".
     #[must_use]
     pub fn from_tgs(e: &krb5_protocol::Error, server: &str, realm: &str) -> Self {
         if let krb5_protocol::Error::KrbError {
@@ -193,7 +193,7 @@ impl Krb5Error {
     }
 
     /// A FILE cache's read failure, with the file name as MIT adds it.
-    /// MIT `set_errmsg_filename` (`cc_file.c:117-124`): "<message> (filename: <path>)".
+    /// MIT `set_errmsg_filename` (`cc_file.c:117-124`): "\<message\> (filename: \<path\>)".
     #[must_use]
     pub fn from_file_cache(e: &io::Error, path: &Path) -> Self {
         let code = interpret_errno(e);

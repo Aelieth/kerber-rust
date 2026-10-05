@@ -76,7 +76,7 @@ pub fn dir_read_path(residual: &str) -> std::io::Result<std::path::PathBuf> {
 /// MIT's message for a cache that cannot be read.
 /// MIT `set_errmsg_filename` (`cc_file.c:117-124`): a FILE cache's error names its file.
 /// MIT `kcm_get_princ` (`cc_kcm.c:933-953`): a KCM cache with no principal is
-/// "Credentials cache 'KCM:<name>' not found".
+/// "Credentials cache 'KCM:\<name\>' not found".
 #[must_use]
 pub fn cache_read_error(
     spec: &CcSpec,
@@ -197,7 +197,7 @@ pub fn kt_resolve(name: &str) -> Result<KeytabName, Krb5Error> {
 }
 
 /// MIT's message for a keytab file that cannot be read.
-/// MIT `krb5_ktfileint_open` (`kt_file.c:745-765`): a missing file is "Key table file '<path>' not
+/// MIT `krb5_ktfileint_open` (`kt_file.c:745-765`): a missing file is "Key table file '\<path\>' not
 /// found".
 #[must_use]
 pub fn keytab_read_error(e: &std::io::Error, path: &str) -> Krb5Error {
@@ -466,7 +466,7 @@ pub fn kinit_with(
 
 /// The output cache written.
 /// MIT `init_creds_step_reply` (`get_in_tkt.c:1846-1848`): a failed write is "Failed to store
-/// credentials: <message>".
+/// credentials: \<message\>".
 fn write_out_ccache(
     spec: &CcSpec,
     cc: FileCcache,

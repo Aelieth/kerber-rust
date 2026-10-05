@@ -208,7 +208,7 @@ impl OpenCache {
 
 /// The KDC of `realm`.
 /// MIT `k5_locate_server` (`locate_kdc.c:853-878`): a realm with no KDC is
-/// `KRB5_REALM_UNKNOWN` "Cannot find KDC for realm "<realm>"".
+/// `KRB5_REALM_UNKNOWN` "Cannot find KDC for realm "\<realm\>"".
 ///
 /// # Errors
 ///
@@ -559,7 +559,7 @@ pub fn get_u2u_ticket(spec: CcSpec) -> Result<Ticket, Krb5Error> {
 ///
 /// # Errors
 ///
-/// [`Krb5Error`] `ENOENT` "Key table file '<path>' not found" for a missing keytab,
+/// [`Krb5Error`] `ENOENT` "Key table file '\<path\>' not found" for a missing keytab,
 /// `KRB5KRB_AP_WRONG_PRINC` when no entry decrypts the ticket, `KRB5KRB_AP_ERR_TKT_INVALID` for a
 /// postdated ticket not yet validated, or the read error of an unreadable keytab.
 pub fn server_decrypt_ticket_keytab(keytab: &str, ticket: &Ticket) -> Result<(), Krb5Error> {

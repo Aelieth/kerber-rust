@@ -293,7 +293,7 @@ fn os_user_name() -> Option<String> {
 
 /// MIT `k5_kinit` (`kinit.c:638-852`): initial credentials with a password or keytab, written to
 /// the output cache; or the cache's TGT renewed or validated, the cache then holding it alone.
-/// A wrong password is "Password incorrect while <doing>". The output cache becomes the primary
+/// A wrong password is "Password incorrect while \<doing\>". The output cache becomes the primary
 /// when `k5_begin` chose so.
 fn k5_kinit(prog: &str, opts: &KinitArgs, k5: &K5) -> bool {
     let doing = match opts.action {
