@@ -4,4 +4,3 @@
 # records) and what would remove it.
 # check	known difference (rust leg vs MIT)	record	removed by
 obs.preauth.padata	PREAUTH_REQUIRED e-data {136,19,2,133}: the probes' clients fall back to encrypted timestamp; MIT offers SPAKE first, {136,19,151,2,133} (edwards25519)	f-S2-rust README, the probe AS row; f-S2-services	open item "SPAKE edwards25519" (no package yet)
-obs.tgs.transport	the probes' TGS-REQs go over TCP: our tickets carry the MS-PAC set (TGT 1018 B, host/services' TGT 1199 B), so a TGS-REQ is over MIT's default udp_preference_limit (1465); MIT's tickets (340 / 406 B) keep them on UDP	f-S2-rust README, the transport row and finding F2; f-L2-rust F2	the user's PAC decision at the 1.1 cut (open item "PAC size")

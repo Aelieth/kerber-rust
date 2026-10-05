@@ -21,7 +21,7 @@ use krb5_testkit::{
     pref_etypes, reseal_mut,
 };
 use krb5_types::pac::{
-    PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
+    PAC_CLIENT_INFO, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM, Pac, RpcSid,
     parse_kerb_validation_info,
 };
 use krb5_types::{
@@ -1376,6 +1376,8 @@ fn user_key() -> ProtocolKey {
 fn two_realm_pac_stores() -> (PrincipalStore, PrincipalStore, ProtocolKey, PrincipalName) {
     let (mut local, acl_a) = bootstrap_documented().expect("local");
     local.set_domain_sid(RpcSid::nt_domain(9, 8, 7));
+    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
+    local.policy.ad_identity = true;
     let mut foreign = PrincipalStore::bootstrap(
         "OTHER.TEST",
         TEST_USER,
@@ -1526,15 +1528,71 @@ fn interrealm_issue_key_is_not_the_peer_accept_key() {
     let part = decrypt_ticket_part(&issue_key, &out.rep.0.ticket).unwrap();
     let pac = pac_from_ticket_part(&part).expect("referral TGT must carry a PAC");
     let parsed = krb5_types::pac::Pac::parse(&pac).expect("PAC");
-    let logon =
-        parse_kerb_validation_info(parsed.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
-    assert_ne!(
-        logon.logon_domain_id.to_sddl(),
-        krb5_types::pac::RpcSid::dummy_domain().to_sddl()
+    // No AD data: MIT's referral TGT PAC, CLIENT_INFO and the two signatures.
+    let kinds: Vec<u32> = parsed.buffers.iter().map(|b| b.kind).collect();
+    assert_eq!(
+        kinds,
+        [PAC_CLIENT_INFO, PAC_SERVER_CHECKSUM, PAC_PRIVSVR_CHECKSUM]
     );
     let der = ticket_checksum_der(&part).expect("der");
+    // MIT: the server checksum is under the inter-realm key and the KDC checksum under the
+    // local krbtgt key.
+    let local_tgt = store.krbtgt().unwrap().best_key().unwrap();
+    verify_pac_signatures(&pac, &issue_key, Some(&local_tgt.key), Some(&der), false)
+        .expect("referral PAC: inter-realm server checksum, local krbtgt KDC checksum");
+    assert!(
+        verify_pac_signatures(&pac, &issue_key, Some(&issue_key), Some(&der), false).is_err(),
+        "the KDC checksum of a referral PAC without AD data is not under the inter-realm key"
+    );
+}
+
+#[test]
+fn interrealm_referral_with_ad_data_keeps_the_inter_realm_kdc_checksum() {
+    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so the referral TGT's PAC is
+    // AD-shaped and its KDC checksum is under the inter-realm key an AD or Samba trust verifies,
+    // where MIT signs it with the local krbtgt key (the deviation kept).
+    let issue_key =
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x11; 32]).expect("key");
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store.policy.ad_identity = true;
+    store
+        .create_interrealm_key(
+            &acl,
+            &documented_admin_id(),
+            "AD.KERBER.TEST",
+            issue_key.clone(),
+        )
+        .expect("issue");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 83);
+    let tgs = TgsReqBuilder::new(
+        tgt.rep.0.ticket.clone(),
+        &tgt.session_key,
+        TEST_REALM,
+        &cname,
+        PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "AD.KERBER.TEST"]),
+        TEST_REALM,
+        84,
+    )
+    .options(KdcOptions::forwardable().with_bit(flag_bit::CANONICALIZE, true))
+    .additional_tickets(None)
+    .padata(Vec::new())
+    .etypes(pref_etypes())
+    .build()
+    .expect("AD referral TGS-REQ");
+    let out = krb5_kdc::issue_tgs(&store, &tgs).expect("AD referral TGS");
+    let part = decrypt_ticket_part(&issue_key, &out.rep.0.ticket).expect("referral");
+    let pac = pac_from_ticket_part(&part).expect("referral TGT must carry a PAC");
+    let parsed = krb5_types::pac::Pac::parse(&pac).expect("PAC");
+    assert_eq!(parsed.buffers[0].kind, PAC_LOGON_INFO);
+    let der = ticket_checksum_der(&part).expect("der");
     verify_pac_signatures(&pac, &issue_key, Some(&issue_key), Some(&der), false)
-        .expect("referral PAC signed with inter-realm key");
+        .expect("AD-shaped referral PAC: KDC checksum under the inter-realm key");
+    let local_tgt = store.krbtgt().unwrap().best_key().unwrap();
+    assert!(
+        verify_pac_signatures(&pac, &issue_key, Some(&local_tgt.key), Some(&der), false).is_err(),
+        "the KDC checksum of an AD-shaped referral PAC is not under the local krbtgt key"
+    );
 }
 
 #[test]

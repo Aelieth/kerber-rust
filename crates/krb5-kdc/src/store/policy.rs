@@ -104,6 +104,10 @@ pub struct Policy {
     pub reject_bad_transit: bool,
     /// MIT `disable_pac` (default false): issue no PAC.
     pub disable_pac: bool,
+    /// kdc.conf `domain_sid` is set: the realm has an AD identity, so a PAC minted for one of its
+    /// principals has AD data and takes the AD shape (`ad.rs` `pac_has_ad_data`). Unset (the
+    /// default), the KDC issues MIT's PAC.
+    pub ad_identity: bool,
     /// MIT `restrict_anonymous_to_tgt` (default false).
     pub restrict_anon: bool,
     /// MIT `pkinit_require_freshness` (default false).
@@ -149,6 +153,7 @@ impl Default for Policy {
             capaths: BTreeMap::new(),
             reject_bad_transit: true,
             disable_pac: false,
+            ad_identity: false,
             restrict_anon: false,
             pkinit_require_freshness: false,
             host_based_services: String::new(),
@@ -318,6 +323,7 @@ impl PrincipalStore {
             };
             self.domain_sid = sid;
         }
+        self.policy.ad_identity = conf.domain_sid.is_some();
         Ok(())
     }
 

@@ -700,6 +700,8 @@ fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
 
     let (mut master, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     let (mut slave, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
+    slave.policy.ad_identity = true;
     let actor = krb5_kdc::testrealm::documented_admin_id();
     let user = PrincipalName::new(
         PrincipalName::NT_PRINCIPAL,

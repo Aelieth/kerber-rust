@@ -222,6 +222,178 @@ echo "mit_pac_types=$MIT_PAC_TYPES rust_pac_types=$RUST_PAC_TYPES"
 [ -n "$MIT_PAC_TYPES" ] || die "MIT TGS PAC types empty"
 [ "$MIT_PAC_TYPES" = "$RUST_PAC_TYPES" ] || die "PAC types differ: mit=$MIT_PAC_TYPES rust=$RUST_PAC_TYPES"
 
+echo "==== no AD data: MIT's PAC from both KDCs (buffers in order, PAC and ticket sizes) ===="
+# The Rust KDC's kdc.conf sets no domain_sid and these PACs carry no LOGON_INFO, so it must issue
+# MIT's PAC: the same buffers in MIT's order, of the same sizes. An AS ticket is MIT's size too.
+# A TGS ticket keeps its TGT's authtime and gets a starttime only when it is issued in a later
+# second (both KDCs omit one equal to the authtime), so its length is not compared.
+pac_layout() {
+    docker exec "$NAME" /tmp/krb5-pac-extract --keytab "$2" --ccache "$1" --server "$3" \
+        --print-layout | grep -E "^($4)=" | tr '\n' ' '
+}
+pac_cases() {
+    local conf="/tmp/$1-krb5.conf" cc
+    cc="/tmp/pac-$1-as.cc"
+    docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        sh -c "printf 'userpassword\n' | kinit -c $cc user@KERBER.TEST" >/dev/null
+    echo "as_tgt $(pac_layout "$cc" /tmp/krbtgt.kt krbtgt/KERBER.TEST@KERBER.TEST \
+        'pac_layout|pac_len|ticket_len')"
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME="FILE:$cc" "$NAME" \
+        kvno host/testhost.kerber.test >/dev/null
+    echo "tgs_svc $(pac_layout "$cc" /tmp/host.kt host/testhost.kerber.test@KERBER.TEST \
+        'pac_layout|pac_len')"
+    cc="/tmp/pac-$1-assvc.cc"
+    docker exec -e KRB5_CONFIG="$conf" "$NAME" sh -c \
+        "printf 'userpassword\n' | kinit -S host/testhost.kerber.test -c $cc user@KERBER.TEST" \
+        >/dev/null
+    echo "as_svc $(pac_layout "$cc" /tmp/host.kt host/testhost.kerber.test@KERBER.TEST \
+        'pac_layout|pac_len|ticket_len')"
+    cc="/tmp/pac-$1-s4u.cc"
+    docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        kinit -k -t /tmp/host.kt -c "$cc" host/testhost.kerber.test@KERBER.TEST
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME="FILE:$cc" "$NAME" \
+        kvno -U user host/testhost.kerber.test >/dev/null
+    echo "s4u2self $(pac_layout "$cc" /tmp/host.kt host/testhost.kerber.test@KERBER.TEST \
+        'pac_layout|pac_len')"
+}
+MIT_PACS="$(pac_cases mit)"
+RUST_PACS="$(pac_cases rust)"
+printf 'mit:\n%s\nrust:\n%s\n' "$MIT_PACS" "$RUST_PACS"
+echo "$MIT_PACS" | grep -q '^as_tgt pac_layout=10:[0-9]*,6:[0-9]*,7:[0-9]* ' \
+    || die "MIT's AS TGT PAC is not {10, 6, 7}: $MIT_PACS"
+echo "$MIT_PACS" | grep -q '^tgs_svc pac_layout=10:[0-9]*,16:[0-9]*,6:[0-9]*,7:[0-9]*,19:[0-9]* ' \
+    || die "MIT's TGS service ticket PAC is not {10, 16, 6, 7, 19}: $MIT_PACS"
+[ "$MIT_PACS" = "$RUST_PACS" ] || die "no-AD PACs differ from MIT's"
+
+echo "==== no AD data: one TGT renewed by each KDC gives MIT's PAC bytes back ===="
+docker exec -e KRB5_CONFIG=/tmp/mit-krb5.conf "$NAME" \
+    sh -c "printf 'userpassword\n' | kinit -r 1d -c /tmp/pac-renew-src.cc user@KERBER.TEST" >/dev/null
+for side in mit rust; do
+    docker exec "$NAME" cp /tmp/pac-renew-src.cc "/tmp/pac-renew-$side.cc"
+    docker exec -e KRB5_CONFIG="/tmp/$side-krb5.conf" "$NAME" kinit -R -c "/tmp/pac-renew-$side.cc"
+done
+for cc in src mit rust; do
+    docker exec "$NAME" /tmp/krb5-pac-extract --keytab /tmp/krbtgt.kt \
+        --ccache "/tmp/pac-renew-$cc.cc" --server krbtgt/KERBER.TEST@KERBER.TEST \
+        --out "/tmp/pac-renew-$cc.pac" >/dev/null 2>&1 || die "no PAC in the $cc renewal TGT"
+done
+RENEW_SUMS="$(docker exec "$NAME" sha256sum /tmp/pac-renew-src.pac /tmp/pac-renew-mit.pac \
+    /tmp/pac-renew-rust.pac)"
+echo "$RENEW_SUMS"
+[ "$(echo "$RENEW_SUMS" | awk '{print $1}' | sort -u | wc -l)" = 1 ] \
+    || die "a renewed TGT's PAC differs from the TGT's (MIT keeps it byte for byte)"
+
+echo "==== no AD data: a cross-realm S4U2Self through each KDC, both ways ===="
+# OTHER.TEST is an MIT db2 realm on :8810. Each realm refers an S4U2Self for the other's service
+# back by a db2 alias, as MIT's realms do; KERBER.TEST is MIT's or the Rust KDC. For OTHER.TEST's
+# user, KERBER.TEST takes the last hop: its PAC must be MIT's {16,10,6,7,19}, the user named without
+# its realm. For KERBER.TEST's user, KERBER.TEST issues the referral and OTHER.TEST takes the last
+# hop, which MIT `check_tgs_s4u2self` (`tgs_policy.c:347-353`) allows only when the referral's PAC
+# names the user with the realm.
+docker exec "$NAME" sh -c 'mkdir -p /tmp/other && : >/tmp/other/kadm5.acl && cat >/tmp/other-kdc.conf <<EOF
+[kdcdefaults]
+    kdc_ports = 8810
+    kdc_tcp_ports = 8810
+[realms]
+    OTHER.TEST = {
+        database_name = /tmp/other/principal
+        key_stash_file = /tmp/other/stash
+        acl_file = /tmp/other/kadm5.acl
+    }
+[logging]
+    kdc = FILE:/tmp/other-kdc.log
+EOF'
+docker exec -e KRB5_KDC_PROFILE=/tmp/other-kdc.conf "$NAME" \
+    kdb5_util create -s -r OTHER.TEST -P masterpassword >/dev/null
+other_q() {
+    kadmin_q_ok mit_kadmin_local -e KRB5_KDC_PROFILE=/tmp/other-kdc.conf "$NAME" -- \
+        -r OTHER.TEST -q "$1" >/dev/null
+}
+XR_E="-e aes256-cts-hmac-sha1-96:normal"
+other_q "addprinc -pw userpassword user"
+other_q "addprinc $XR_E -pw xr-ko-password krbtgt/OTHER.TEST@KERBER.TEST"
+other_q "addprinc $XR_E -pw xr-ok-password krbtgt/KERBER.TEST@OTHER.TEST"
+other_q 'alias s4usvc\@KERBER.TEST@OTHER.TEST krbtgt/KERBER.TEST@OTHER.TEST'
+other_q 'addprinc -randkey s4uback'
+other_q 'ktadd -norandkey -k /tmp/s4uback.kt s4uback'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q \
+    "addprinc $XR_E -pw xr-ko-password krbtgt/OTHER.TEST@KERBER.TEST" >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q \
+    "addprinc $XR_E -pw xr-ok-password krbtgt/KERBER.TEST@OTHER.TEST" >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey s4usvc' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -norandkey -k /tmp/s4usvc.kt s4usvc' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q \
+    'alias s4uback\@OTHER.TEST@KERBER.TEST krbtgt/OTHER.TEST@KERBER.TEST' >/dev/null
+docker exec -d -e KRB5_KDC_PROFILE=/tmp/other-kdc.conf "$NAME" \
+    sh -c 'krb5kdc -n -r OTHER.TEST -P /tmp/other-kdc.pid >/tmp/other-kdc.stdout 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8810),0.3)" 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "OTHER.TEST krb5kdc did not listen on 8810"
+docker exec "$NAME" kdb5_util dump /tmp/xr.dump
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) 2>/dev/null || true; : >/tmp/rust-kdc.log'
+wait_pid_gone "$NAME" krb5-kdc || true
+docker exec \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    "$NAME" /tmp/krb5-kdb load /tmp/xr.dump || die "rust kdb reload with OTHER.TEST's trust failed"
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/rust.db \
+    -e KRB5_KDC_STASH=/tmp/rust.stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
+ok=0
+for _ in $(seq 1 80); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/rust-kdc.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+[ "$ok" = 1 ] || die "rust kdc did not listen after the OTHER.TEST reload"
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+for side in ("mit", "rust"):
+    t = Path(f"/tmp/{side}-krb5.conf").read_text()
+    t = t.replace("[realms]", "[realms]\n    OTHER.TEST = {\n        kdc = 127.0.0.1:8810\n    }", 1)
+    Path(f"/tmp/xr-{side}-krb5.conf").write_text(t)
+'
+# xr_case SIDE SERVICE KEYTAB USER: the service's TGT, then `kvno -I USER SERVICE`, with KERBER.TEST
+# at SIDE's KDC; prints the last ticket's PAC layout.
+xr_case() {
+    local conf="/tmp/xr-$1-krb5.conf" cc="/tmp/xr-$1-${2%%@*}.cc" out
+    docker exec -e KRB5_CONFIG="$conf" "$NAME" \
+        kinit -k -t "$3" -c "$cc" "$2" || die "$1: $2 kinit failed"
+    if ! out="$(docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME="FILE:$cc" "$NAME" \
+        kvno -I "$4" "$2" 2>&1)"; then
+        kdc_logs >&2
+        docker exec "$NAME" tail -n 5 /tmp/other-kdc.log >&2 || true
+        die "$1: cross-realm S4U2Self for $4 to $2 failed: $out"
+    fi
+    echo "$1 $(pac_layout "$cc" "$3" "$2" 'pac_layout|pac_len')"
+}
+MIT_S4U_PAC='pac_layout=16:[0-9]*,10:[0-9]*,6:[0-9]*,7:[0-9]*,19:[0-9]* '
+XR_MIT="$(xr_case mit s4usvc@KERBER.TEST /tmp/s4usvc.kt user@OTHER.TEST)"
+XR_RUST="$(xr_case rust s4usvc@KERBER.TEST /tmp/s4usvc.kt user@OTHER.TEST)"
+printf '%s\n%s\n' "$XR_MIT" "$XR_RUST"
+echo "$XR_MIT" | grep -q "^mit $MIT_S4U_PAC" \
+    || die "MIT's cross-realm S4U2Self PAC is not {16, 10, 6, 7, 19}: $XR_MIT"
+[ "${XR_MIT#mit }" = "${XR_RUST#rust }" ] || die "cross-realm S4U2Self PACs differ from MIT's"
+XB_MIT="$(xr_case mit s4uback@OTHER.TEST /tmp/s4uback.kt user@KERBER.TEST)"
+XB_RUST="$(xr_case rust s4uback@OTHER.TEST /tmp/s4uback.kt user@KERBER.TEST)"
+printf '%s\n%s\n' "$XB_MIT" "$XB_RUST"
+echo "$XB_MIT" | grep -q "^mit $MIT_S4U_PAC" \
+    || die "OTHER.TEST's S4U2Self PAC is not {16, 10, 6, 7, 19}: $XB_MIT"
+[ "${XB_MIT#mit }" = "${XB_RUST#rust }" ] \
+    || die "OTHER.TEST's S4U2Self PAC differs after the Rust KDC's referral"
+docker exec "$NAME" sh -c 'kill $(cat /tmp/other-kdc.pid) 2>/dev/null || true'
+
 echo "==== setstr pac_privsvr_enctype + MIT kvno both legs ===="
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q \
     'setstr host/testhost.kerber.test pac_privsvr_enctype aes128-cts-hmac-sha1-96'

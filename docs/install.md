@@ -212,6 +212,14 @@ get none and a ticket's `renew until` is its start time. SSSD and other clients 
 tickets, so the third line gives the realm seven days. It must come before `kdb5_util create`,
 which gives `krbtgt` the realm's values; new principals get them too.
 
+Tickets carry MIT's PAC: the client's name and the KDC's checksums, the bytes MIT's KDC issues.
+A realm whose principals must carry an AD identity (a Samba or AD peer reads the PAC) adds
+`domain_sid = S-1-5-21-…` to its stanza in the kdc.conf of every KDC of the realm, replicas
+included, since each KDC reads its own. That is AD data, and the KDC then issues the AD-shaped
+PAC (LOGON_INFO with the domain SID and each principal's RID, UPN_DNS_INFO, ATTRIBUTES_INFO,
+REQUESTER_SID). A presented PAC that carries LOGON_INFO, such as an AD user's over a trust, keeps
+that shape in any realm.
+
 ### The database
 
 ```sh

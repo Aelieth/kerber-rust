@@ -817,6 +817,153 @@ fn s4u2self_cross_tgt_local_server_foreign_user_issues() {
     );
 }
 
+/// The header PAC the user's realm puts on its referral back: LOGON_INFO for the user from that
+/// realm's domain, and CLIENT_INFO naming the user with its realm.
+fn attach_foreign_logon_pac(
+    key: &ProtocolKey,
+    part: &mut EncTicketPart,
+    info_name: &str,
+    domain: &RpcSid,
+    rid: u32,
+) {
+    use krb5_kdc::{PacTicket, sign_reply_pac, ticket_checksum_der, wrap_win2k_pac};
+    let logon =
+        krb5_types::pac::KerbValidationInfo::for_client(TEST_ADMIN, "A.TEST", domain, rid).to_ndr();
+    let stub = Pac::built(
+        0,
+        vec![
+            PacBuffer::new(PAC_LOGON_INFO, logon),
+            PacBuffer::new(
+                PAC_CLIENT_INFO,
+                client_info_buffer(part.authtime.unix_seconds(), info_name),
+            ),
+        ],
+    )
+    .to_bytes();
+    part.authorization_data = Some(wrap_win2k_pac(&[0]).expect("ph"));
+    let der = ticket_checksum_der(part).expect("der");
+    let ident = PacIdentity {
+        sam: part.cname.components_joined(),
+        realm: String::new(),
+        domain_sid: domain.clone(),
+        rid,
+    };
+    let pac = sign_reply_pac(
+        &part.cname,
+        part.authtime.unix_seconds(),
+        &PacTicket {
+            server: key,
+            kdc: key,
+            enc_tkt_der: &der,
+            is_service_tkt: false,
+        },
+        &ident,
+        None,
+        Some(&stub),
+    )
+    .expect("sign");
+    part.authorization_data = Some(wrap_win2k_pac(&pac).expect("wrap"));
+}
+
+/// The LOGON_INFO in the header PAC of a cross-realm S4U2Self's last hop.
+enum HeaderLogon {
+    /// None: the user's realm has no AD data.
+    Absent,
+    /// The user's realm's domain and the user's RID there.
+    Foreign(RpcSid, u32),
+    /// A LOGON_INFO that claims the domain of the realm the hop is in.
+    ThisDomain(u32),
+}
+
+/// The last hop of a cross-realm S4U2Self at C: the service's request with the user's realm's
+/// referral as header. Returns the PAC of the ticket C issues.
+fn final_hop(ad_identity: bool, logon: HeaderLogon) -> Result<Pac, Error> {
+    let (_a, _b, mut c, ir, host_c, bc) = three_realm();
+    c.policy.reject_bad_transit = false;
+    c.policy.ad_identity = ad_identity;
+    let mut t = bc.rep.0.ticket.clone();
+    let mut part = decrypt_ticket_part(&ir, &t).expect("bc");
+    part.cname = host_c.clone();
+    part.crealm = krb5_types::try_ascii("C.TEST").expect("realm");
+    let info = format!("{TEST_ADMIN}@A.TEST");
+    match logon {
+        HeaderLogon::Absent => attach_client_info_pac_capaths(&ir, &mut part, &info),
+        HeaderLogon::Foreign(domain, rid) => {
+            attach_foreign_logon_pac(&ir, &mut part, &info, &domain, rid);
+        }
+        HeaderLogon::ThisDomain(rid) => {
+            let local = c.domain_sid().clone();
+            attach_foreign_logon_pac(&ir, &mut part, &info, &local, rid);
+        }
+    }
+    reseal_mut(&mut t, &part, &ir);
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
+    let pa = pa_for_user(&bc.session_key, admin, "A.TEST").expect("PA-FOR-USER");
+    let req = TgsReqBuilder::new(
+        t,
+        &bc.session_key,
+        "C.TEST",
+        &host_c,
+        host_c.clone(),
+        "C.TEST",
+        989,
+    )
+    .options(KdcOptions::forwardable())
+    .additional_tickets(None)
+    .padata(vec![pa])
+    .etypes(vec![EncryptionType::Aes256CtsHmacSha196.to_iana()])
+    .build()
+    .expect("s4u");
+    let issued = krb5_kdc::issue_tgs(&c, &req)?;
+    let host_key = c.get_name(&host_c).unwrap().best_key().unwrap().key.clone();
+    let part = decrypt_ticket_part(&host_key, &issued.rep.0.ticket).expect("enc");
+    assert_eq!(part.cname.components_joined(), TEST_ADMIN);
+    Ok(Pac::parse(&pac_from_ticket_part(&part).expect("PAC")).expect("parse"))
+}
+
+#[test]
+fn s4u2self_final_hop_carries_the_foreign_logon_info() {
+    // MIT: on this hop `issue_pac` has no client entry (the user is not in C), so a KDB with AD
+    // data can only carry the user's realm's identity; it never mints one from C's store.
+    let foreign = RpcSid::nt_domain(11, 12, 13);
+    let pac = final_hop(true, HeaderLogon::Foreign(foreign.clone(), 1234)).expect("final hop");
+    let logon =
+        parse_kerb_validation_info(pac.buffer(PAC_LOGON_INFO).expect("logon")).expect("NDR");
+    assert_eq!(logon.logon_domain_id.to_sddl(), foreign.to_sddl());
+    assert_eq!(logon.user_id, 1234);
+    let (_, name) =
+        krb5_types::pac::parse_client_info(pac.buffer(PAC_CLIENT_INFO).expect("client")).unwrap();
+    assert_eq!(
+        name, TEST_ADMIN,
+        "the final hop names the user without its realm"
+    );
+}
+
+#[test]
+fn s4u2self_final_hop_without_ad_data_is_mits_pac() {
+    // MIT's db2 KDC issues {16, 10, 6, 7, 19} on this hop, the user named without its realm.
+    let pac = final_hop(true, HeaderLogon::Absent).expect("final hop");
+    let kinds: Vec<u32> = pac.buffers.iter().map(|b| b.kind).collect();
+    assert_eq!(kinds, [16, 10, 6, 7, 19]);
+    let (_, name) =
+        krb5_types::pac::parse_client_info(pac.buffer(PAC_CLIENT_INFO).expect("client")).unwrap();
+    assert_eq!(name, TEST_ADMIN);
+}
+
+#[test]
+fn s4u2self_final_hop_refuses_a_foreign_logon_info_claiming_this_domain() {
+    match final_hop(true, HeaderLogon::ThisDomain(1234)) {
+        Err(Error::Protocol { code, text, .. }) => {
+            assert_eq!(code, err::POLICY);
+            assert_eq!(text.as_deref(), Some("INVALID LINEAGE"));
+        }
+        other => panic!(
+            "expected POLICY INVALID_LINEAGE, got {:?}",
+            other.map(|p| p.buffers.len())
+        ),
+    }
+}
+
 #[test]
 fn s4u2self_cross_tgt_cert_only_empty_name_is_invalid_xrealm() {
     let (_a, _b, mut c, ir, host_c, bc) = three_realm();
@@ -918,6 +1065,8 @@ fn s4u_code(e: Error) -> i32 {
 #[test]
 fn s4u2self_impersonates_user() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
+    store.policy.ad_identity = true;
     or_host_attr(&mut store, KDB_OK_TO_AUTH_AS_DELEGATE);
     let host = documented_host();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);

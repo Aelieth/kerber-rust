@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **kdc.** With `domain_sid`, S4U2Self no longer mints a local identity for another realm's
+  user: foreign alice@B got local alice@A's RID (or 1000) under the local SID, a referral hop the
+  service's. Its realm's LOGON_INFO is carried.
 - **types/client.** `kinit`'s PKINIT identity is wiped once read: the file's bytes, and the
   key's base64 text and DER. A unit test sees the key's text and DER wiped (red at the parent);
   no test sees the file text's wipe.
@@ -785,6 +788,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **kdc.** A principal with no AD data gets MIT's PAC byte for byte (TGT {10,6,7}, service ticket
+  {10,16,6,7,19}); AD data (kdc.conf `domain_sid`, a carried LOGON_INFO) keeps the AD shape.
+  Settled live; golden units.
 - **docs.** The deviations from MIT 1.22.2 moved byte for byte from `docs/security.md` into
   `docs/mit-deviations.md`, where new rows go; each pointer to a moved row follows it.
 - **docs.** Parity-ledger sections A4 and B1 are two files each: `kdb5_util` and the KDB move to

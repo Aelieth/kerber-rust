@@ -27,7 +27,8 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
 
 - **AD/Windows interop:** NDR32 `KERB_VALIDATION_INFO` decodes the
   captured `kbruser` PAC (`tests/traces/pac-kbruser.ndr`) byte-identically.
-  Issued PACs include buffers 12/17/18 and store SID/RID. Samba L1/L3
+  With AD data (kdc.conf `domain_sid`) issued PACs include buffers 12/17/18
+  and store SID/RID; without it they are MIT's. Samba L1/L3
   gates: `samba-pac-verify-gate.sh`, `samba-pac-l2-gate.sh` (vendored kcrypto 6/7/16/19),
   `samba-crossrealm-gate.sh`. Production
   GSS wrap emits RRC=0, as MIT does. S4U2Self/Proxy against the Rust KDC:

@@ -94,10 +94,11 @@ claim a Windows DC.
 Windows TDO inbound/outbound AES keys differ by salt. The Rust KDC
 issues `krbtgt/AD.KERBER.TEST` with the inbound key and decrypts
 AD-issued referrals with the outbound key (`KRB5_TEST_INTERREALM_KEY`
-/ `KRB5_TEST_INTERREALM_KEY_ACCEPT`). Referral TGTs carry a PAC with
-store SID/RID (`scripts/samba-crossrealm-gate.sh`). The accepting TGS
-verifies that PAC and copies LOGON_INFO; `kvno` is not that copy
-proof. Secrets stay in `~/adlab/` (0600).
+/ `KRB5_TEST_INTERREALM_KEY_ACCEPT`). With kdc.conf `domain_sid` (AD
+data) referral TGTs carry the AD-shaped PAC with store SID/RID
+(`scripts/samba-crossrealm-gate.sh`); without it, MIT's 10,6,7. The
+accepting TGS verifies that PAC and copies LOGON_INFO; `kvno` is not
+that copy proof. Secrets stay in `~/adlab/` (0600).
 
 Against the Windows DC itself, the trust is made the admin way and needs
 one flag. Create `krbtgt/AD.KERBER.TEST@KERBER.TEST` and

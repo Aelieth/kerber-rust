@@ -68,11 +68,13 @@ bootstraps documented principals (including `kadmin/admin` and
 `kadmin/changepw`); with `KRB5_KDC_DB` + stash the test realm is saved
 so a separate kadmind process can reload it. `--export-keytab` /
 `KRB5_EXPORT_KEYTAB` writes the documented host principal. Issued PACs
-include buffers 12/17/18 and store SID/RID. S4U2Proxy copies the
-evidence PAC, requires a forwardable evidence ticket, and denies RBCD
-unless allowed. Referral TGTs carry a PAC. TGS verifies a presented
-TGT PAC with the ticket key and copies LOGON_INFO; a TGT without a PAC
-still synthesizes identity from the store.
+are MIT's (CLIENT_INFO, DELEGATION_INFO and the checksums) unless there
+is AD data — kdc.conf `domain_sid`, or a subject PAC carrying
+LOGON_INFO — which keeps the AD shape (buffers 1/12/17/18, store
+SID/RID). S4U2Proxy requires a forwardable evidence ticket and denies
+RBCD unless allowed. Referral TGTs carry a PAC. TGS verifies a presented
+TGT PAC with the ticket key and carries its client info (and, with AD
+data, its LOGON_INFO); a TGT without a PAC gets a ticket without one.
 
 **`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
 out-of-process; `scripts/gss-gate.sh`). The acceptor binds

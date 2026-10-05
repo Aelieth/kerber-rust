@@ -17,7 +17,7 @@ use super::kdc_util::{
     utf8_realm, validate_as_request,
 };
 use super::reply::{
-    MintTicket, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
+    MintTicket, TicketPac, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
 };
 use crate::ad::{authind_add, check_indicators, handle_authdata};
 use crate::error::Error;
@@ -636,12 +636,21 @@ fn finish_process_as_req(
         transited: TransitedEncoding::empty(),
         renew_till: ticket_renew_till.clone(),
         store,
-        include_pac,
-        logon_override: None,
+        // MIT `handle_pac` (`kdc_authdata.c:540-544`): a new PAC names the ticket client without the realm.
+        pac: include_pac.then(|| {
+            if crate::ad::pac_has_ad_data(store.policy(), None, true) {
+                TicketPac::Ad {
+                    logon_override: None,
+                    subject_pac: None,
+                    s4u_client_info: None,
+                    identity: None,
+                }
+            } else {
+                TicketPac::Mit(crate::ad::HandlePac::default())
+            }
+        }),
         starttime: &starttime,
-        subject_pac: None,
         caddr: body.addresses.clone(),
-        s4u_client_info: None,
         extra_ad,
         indicators: &auth_indicators,
         krbtgt: &krbtgt_p,

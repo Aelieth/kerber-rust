@@ -18,7 +18,7 @@ use super::kdc_util::{
     process_tgs_header, s4u2self_forwardable, select_session_keytype, utf8_realm,
 };
 use super::reply::{
-    MintTicket, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
+    MintTicket, TicketPac, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
 };
 use super::tgs_policy::{
     check_tgs_constraints_skeleton, check_tgs_policy_flags, check_tgs_s4u2self, check_tgs_u2u,
@@ -167,6 +167,8 @@ struct TgsTimes<'a> {
     server: Principal,
     auth_indicators: Vec<String>,
     s4u2self: bool,
+    /// The S4U2Self user has an entry in this realm (MIT's `client` for `issue_pac`).
+    s4u_user_local: bool,
     stkt: Option<SecondTicket>,
     s4u2proxy: bool,
     is_crossrealm: bool,
@@ -414,20 +416,10 @@ fn check_tgs_req<'a>(
         s4u2proxy = true;
     } else if !s4u2self {
         crate::ad::check_normal_tgs_pac(&enc_tkt, header_pac.as_deref(), &server, is_crossrealm)?;
-        if let Some(logon) = header_pac.as_ref().and_then(|p| {
-            let parsed = krb5_types::pac::Pac::parse(p).ok()?;
-            parsed
-                .unique_buffer(krb5_types::pac::PAC_LOGON_INFO)
-                .ok()
-                .flatten()
-                .map(<[u8]>::to_vec)
-        }) {
-            evidence_logon = Some(if utf8_realm(&ap.ticket.realm)? == store.realm() {
-                logon
-            } else {
-                crate::ad::filter_cross_realm_logon(&logon, store.domain_sid())?
-            });
-        }
+        evidence_logon = carried_logon(store, &ap, header_pac.as_deref())?;
+    } else if s4u_local.is_none() {
+        // An S4U2Self user this realm does not hold: the header PAC is carried, not minted.
+        evidence_logon = carried_logon(store, &ap, header_pac.as_deref())?;
     }
     // MIT `check_tgs_req` (`do_tgs_req.c:872-882`): check_tgs_policy after constraints.
     check_tgs_policy_flags(&server, body, ap.ticket.sname.is_krbtgt(), &enc_tkt)?;
@@ -627,6 +619,7 @@ fn tgs_flags_times_policy<'a>(
     } else {
         utf8_realm(&enc_tkt.crealm)?
     };
+    let s4u_user_local = s4u_local.is_some();
     let tgs_client = if s4u2self {
         s4u_local
     } else if attr(&server, KDB_NO_AUTH_DATA_REQUIRED) {
@@ -761,6 +754,7 @@ fn tgs_flags_times_policy<'a>(
         server,
         auth_indicators,
         s4u2self,
+        s4u_user_local,
         stkt,
         s4u2proxy,
         is_crossrealm,
@@ -807,6 +801,7 @@ fn tgs_issue_ticket(
         server,
         auth_indicators,
         s4u2self,
+        s4u_user_local,
         stkt,
         s4u2proxy,
         is_crossrealm,
@@ -814,7 +809,7 @@ fn tgs_issue_ticket(
         s4u_subject,
         s4u_x509,
         evidence_logon,
-        mut subject_pac,
+        subject_pac,
         ticket_cname,
         ticket_crealm,
         tkt_key,
@@ -835,16 +830,6 @@ fn tgs_issue_ticket(
         .policy()
         .first_current_key(&krbtgt_p)
         .map_err(|_| proto(err::GENERIC, status::GET_LOCAL_TGT))?;
-    // Referral TGT PAC 16/19/7 must be keyed with the inter-realm key
-    // the foreign KDC holds (Windows TDO inbound), not the local krbtgt.
-    let pac_kdc = crate::ad::pac_privsvr_key(
-        &server,
-        if server.name.is_krbtgt() && !server.name.is_krbtgt_for(store.realm()) {
-            &tkt_key
-        } else {
-            &krbtgt_key.key
-        },
-    )?;
     let include_pac = include_pac_for_reply(
         store,
         &server,
@@ -853,15 +838,30 @@ fn tgs_issue_ticket(
         subject_pac.is_some(),
         flags.bit(flag_bit::ANONYMOUS),
     );
-    if s4u2proxy
-        && !is_crossrealm
-        && let (Some(raw), Some(st)) = (subject_pac.as_deref(), stkt.as_ref())
-    {
-        let hop = st.server.name.unparse_with_realm(&st.server.realm);
-        // MIT `update_delegation_info` (`kdc_authdata.c:410-414`): proxy_target is
-        // `req->server`, not the referral TGT.
-        subject_pac = Some(update_delegation_info(raw, &sname, &hop)?);
-    }
+    // An S4U2Self for a user of this realm mints the user's PAC; any other request carries its
+    // subject ticket's.
+    // MIT `gather_tgs_req_info` (`do_tgs_req.c:692-695`): the S4U2Self user is looked up only in its own realm, and that entry is `issue_pac`'s client.
+    let initial = s4u2self && s4u_user_local;
+    let ad_data =
+        include_pac && crate::ad::pac_has_ad_data(store.policy(), subject_pac.as_deref(), initial);
+    // MIT `handle_pac` (`kdc_authdata.c:559-564`): the KDC checksum key is the local TGT key, a referral TGT's too.
+    // An AD-shaped referral TGT's is the inter-realm key the foreign KDC holds (Windows TDO
+    // inbound), which an AD or Samba trust verifies.
+    let pac_kdc = crate::ad::pac_privsvr_key(
+        &server,
+        if ad_data && server.name.is_krbtgt() && !server.name.is_krbtgt_for(store.realm()) {
+            &tkt_key
+        } else {
+            &krbtgt_key.key
+        },
+    )?;
+    // MIT `update_delegation_info` (`kdc_authdata.c:410-422`): the proxy target is `req->server`, not the referral TGT, and the transited service is the evidence ticket's server.
+    let delegation_hop = if s4u2proxy && !is_crossrealm {
+        stkt.as_ref()
+            .map(|st| st.server.name.unparse_with_realm(&st.server.realm))
+    } else {
+        None
+    };
     let client_key = if let Some(sub) = authenticator.subkey.as_ref() {
         let st = EncryptionType::from_iana(sub.keytype)
             .or_else(|_| EncryptionType::known(sub.keytype))?;
@@ -900,6 +900,36 @@ fn tgs_issue_ticket(
     } else {
         sname.clone()
     };
+    let updated_pac = match (ad_data, delegation_hop.as_deref(), subject_pac.as_deref()) {
+        (true, Some(hop), Some(raw)) => Some(update_delegation_info(raw, &sname, hop)?),
+        _ => None,
+    };
+    let pac = if !include_pac {
+        None
+    } else if ad_data {
+        Some(TicketPac::Ad {
+            logon_override: evidence_logon.as_deref(),
+            subject_pac: if initial {
+                None
+            } else {
+                updated_pac.as_deref().or(subject_pac.as_deref())
+            },
+            s4u_client_info: s4u_client_info.as_deref(),
+            identity: if initial {
+                s4u_subject.as_ref().map(|(n, r)| (n, r.as_str()))
+            } else {
+                None
+            },
+        })
+    } else {
+        Some(TicketPac::Mit(crate::ad::HandlePac {
+            subject: subject_pac.as_deref(),
+            s4u: s4u2self || s4u2proxy,
+            issuing_referral: is_referral,
+            delegation: delegation_hop.as_deref().map(|hop| (&sname, hop)),
+            altcprinc: s4u_subject.as_ref().map(|(n, r)| (n, r.as_str())),
+        }))
+    };
     let ticket = mint_ticket(MintTicket {
         service_key: &tkt_key,
         kvno: tkt_kvno,
@@ -916,16 +946,9 @@ fn tgs_issue_ticket(
         transited,
         renew_till: ticket_renew_till.clone(),
         store,
-        include_pac,
-        logon_override: evidence_logon.as_deref(),
+        pac,
         starttime: &starttime,
-        subject_pac: if s4u2self {
-            None
-        } else {
-            subject_pac.as_deref()
-        },
         caddr: tgs_ticket_caddr(body, renew, validate, &enc_tkt),
-        s4u_client_info: s4u_client_info.as_deref(),
         extra_ad,
         indicators: &auth_indicators,
         krbtgt: &krbtgt_p,
@@ -1223,6 +1246,29 @@ fn tgs_issuing_referral(
 ) -> bool {
     resolved.name.is_cross_tgs_principal(&resolved.realm)
         && !krb5_types::principal_compare(&resolved.name, &resolved.realm, requested, req_realm)
+}
+
+/// The subject PAC's LOGON_INFO that an AD-shaped PAC carries: as it is from a ticket this realm
+/// issued, SID-filtered (`ad.rs` `filter_cross_realm_logon`) from a ticket another realm issued.
+fn carried_logon(
+    store: &dyn PrincipalRead,
+    ap: &krb5_types::ApReq,
+    subject_pac: Option<&[u8]>,
+) -> Result<Option<Vec<u8>>, Error> {
+    let Some(logon) = subject_pac.and_then(|p| {
+        let parsed = krb5_types::pac::Pac::parse(p).ok()?;
+        parsed
+            .unique_buffer(krb5_types::pac::PAC_LOGON_INFO)
+            .ok()
+            .flatten()
+            .map(<[u8]>::to_vec)
+    }) else {
+        return Ok(None);
+    };
+    if utf8_realm(&ap.ticket.realm)? == store.realm() {
+        return Ok(Some(logon));
+    }
+    crate::ad::filter_cross_realm_logon(&logon, store.domain_sid()).map(Some)
 }
 
 /// MIT `tgs_issue_ticket` (`do_tgs_req.c:1012-1027`): renew and validate keep the header
