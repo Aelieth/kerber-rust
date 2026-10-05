@@ -897,7 +897,6 @@ mod tests {
         let pol = suffixed(&db, SUFFIX_POLICY_LOCK);
         let lock = Arc::new(DbLock::open(&db).unwrap());
         let other = DbLock::open(&db).unwrap();
-        let before = std::fs::metadata(&pol).unwrap().ino();
         lock.lock(DbLockMode::Permanent).unwrap();
         assert!(!pol.exists());
         assert!(matches!(DbLock::open(&db), Err(DbLockError::NoLockFile)));
@@ -907,11 +906,6 @@ mod tests {
         assert!(!pol.exists());
         lock.unlock().unwrap();
         let after = std::fs::metadata(&pol).unwrap();
-        assert_ne!(
-            after.ino(),
-            before,
-            "a permanent lock makes a new policy lock file"
-        );
         assert_eq!(after.mode() & 0o777, 0o600);
         // A handle opened before keeps the old file: its lock succeeds on the old inode, but
         // the access check sees the new file, so it works again (MIT's daemons after a

@@ -223,6 +223,13 @@ fn ino(p: &Path) -> u64 {
     std::fs::metadata(p).unwrap().ino()
 }
 
+/// The inode with its ctime, as `DbStamp` compares them: a file removed and made again may be
+/// given the freed inode, but not the old ctime.
+fn stamp(p: &Path) -> (u64, i64, i64) {
+    let m = std::fs::metadata(p).unwrap();
+    (m.ino(), m.ctime(), m.ctime_nsec())
+}
+
 #[test]
 fn create_makes_both_lock_files_and_a_stale_policy_lock_file_fails_it() {
     let realm = Realm::new("kdb-lock-create");
@@ -372,11 +379,15 @@ fn load_update_takes_the_permanent_lock_and_makes_the_policy_lock_file_anew() {
             .status
             .success()
     );
-    let (ok, pol) = (ino(&realm.ok()), ino(&realm.pol()));
+    let (ok, pol) = (ino(&realm.ok()), stamp(&realm.pol()));
     let out = realm.run(&["load", "-update", dump.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(0), "{}", err(&out));
     assert_eq!(ino(&realm.ok()), ok);
-    assert_ne!(ino(&realm.pol()), pol, "MIT 2j: a new principal.kadm5.lock");
+    assert_ne!(
+        stamp(&realm.pol()),
+        pol,
+        "MIT 2j: a new principal.kadm5.lock"
+    );
     assert_eq!(
         std::fs::metadata(realm.pol()).unwrap().mode() & 0o777,
         0o600
@@ -473,10 +484,10 @@ fn load_update_fills_an_empty_database_and_makes_the_policy_lock_file_anew() {
     let stash = realm.dir.join("stash");
     let ids = krb5_kdc::load_store(&realm.db, &stash).unwrap().ids();
     std::fs::write(&realm.db, b"").unwrap();
-    let pol = ino(&realm.pol());
+    let pol = stamp(&realm.pol());
     let out = realm.run(&["load", "-update", dump.to_str().unwrap()]);
     assert!(realm.pol().exists(), "principal.kadm5.lock: {}", err(&out));
-    assert_ne!(ino(&realm.pol()), pol, "a new principal.kadm5.lock");
+    assert_ne!(stamp(&realm.pol()), pol, "a new principal.kadm5.lock");
     assert_eq!(out.status.code(), Some(0), "{}", err(&out));
     assert_eq!(krb5_kdc::load_store(&realm.db, &stash).unwrap().ids(), ids);
     let policy = "policy\tp1\t0\t0\t8\t1\t1\t0\t0\t0\t0\t0\t0\t0\t-\t0";
@@ -518,7 +529,7 @@ fn load_update_lets_the_permanent_lock_go_on_every_failure() {
     assert_eq!(out.status.code(), Some(0), "{}", err(&out));
     let foreign = other.dump("other.dump");
     let before = std::fs::read(&realm.db).unwrap();
-    let pol = ino(&realm.pol());
+    let pol = stamp(&realm.pol());
     let out = realm.run(&[
         "-P",
         "other-master",
@@ -531,7 +542,7 @@ fn load_update_lets_the_permanent_lock_go_on_every_failure() {
         realm.pol().exists(),
         "principal.kadm5.lock made again: {text}"
     );
-    assert_ne!(ino(&realm.pol()), pol);
+    assert_ne!(stamp(&realm.pol()), pol);
     assert_eq!(out.status.code(), Some(1));
     let head = format!(
         "kdb5_util: Cannot open DB2 database '{}': ",
@@ -677,10 +688,10 @@ fn load_update_into_a_legacy_database_writes_it_out_as_dump_text() {
     krb5_kdc::save_store_legacy_kdb3(&store, &realm.db, &stash).unwrap();
     drop(store);
     assert!(std::fs::read(&realm.db).unwrap().starts_with(b"KDB3"));
-    let pol = ino(&realm.pol());
+    let pol = stamp(&realm.pol());
     let out = realm.run(&["load", "-update", dump.to_str().unwrap()]);
     assert!(realm.pol().exists(), "principal.kadm5.lock: {}", err(&out));
-    assert_ne!(ino(&realm.pol()), pol, "a new principal.kadm5.lock");
+    assert_ne!(stamp(&realm.pol()), pol, "a new principal.kadm5.lock");
     assert_eq!(out.status.code(), Some(0), "{}", err(&out));
     assert!(
         std::fs::read(&realm.db)
