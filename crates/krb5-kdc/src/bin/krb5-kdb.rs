@@ -41,10 +41,10 @@ use krb5_cli::{MitArgs, MitOpt, Placement, Prompter, getopt};
 use krb5_config::KdcPaths;
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{
-    CreateError, DbLock, DbLockMode, DumpError, DumpFile, DumpPrincipal, KDB_DUMP_VERSION,
+    CreateError, DbUpdate, DumpError, DumpFile, DumpPrincipal, FullLoad, KDB_DUMP_VERSION,
     LoadError, Lockout, PersistError, create_realm, create_store, kdc_conf_for_realm,
-    load_dump_with_key, master_key_from_password, parse_dump, save_dump_text_locked,
-    save_store_locked, stash_keys, string_to_enctype, update_store, write_stash,
+    load_dump_with_key, master_key_from_password, parse_dump, stash_keys, string_to_enctype,
+    update_store, write_stash,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -945,7 +945,10 @@ fn version_name(version: u32) -> &'static str {
 ///
 /// MIT copies the records with their keys still wrapped; this port opens them, so it needs the
 /// master key that opens the dump: `-P`'s, else (`-m`) a typed one, else the stash's. A dump
-/// with no principal record has no key to open.
+/// with no principal record has no key to open. No lock is held while the key is read: `-update`
+/// opens the database first, so a database that does not open is reported before any prompt, as
+/// MIT reports it, and takes its permanent lock after; a full load makes its temporary database
+/// after, where MIT, which reads no key, makes it first.
 fn load(util: &mut Util, args: &[String]) -> u8 {
     let mut want: Option<u32> = None;
     let (mut verbose, mut update) = (false, false);
@@ -979,7 +982,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
     let Some(version) = dump_version(util, &bytes, want, file) else {
         return 1;
     };
-    // MIT `load_db` (`kadmin/dbutil/dump.c:1492-1516`): the database is created (or opened with `-update`) with the `-x` arguments before any record is read.
+    // MIT `load_db` (`kadmin/dbutil/dump.c:1490-1516`): the database is created (or opened with `-update`) with the `-x` arguments before any record is read.
     if let Some(arg) = &util.db_args.unsupported {
         let context = if update {
             "while opening database"
@@ -989,6 +992,14 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         util.com_err(&format!("Unsupported argument \"{arg}\" for db2"), context);
         return 1;
     }
+    let target = if update {
+        let Some(update) = open_update(util) else {
+            return 1;
+        };
+        Some(update)
+    } else {
+        None
+    };
     let Ok(text) = String::from_utf8(bytes) else {
         restore_failed(util, file, version, "line 1: dump is not UTF-8");
         return 1;
@@ -1001,7 +1012,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         }
     };
     if dump.princs.is_empty() {
-        return load_policies_only(util, &dump, update, verbose);
+        return load_policies_only(util, target, &dump, verbose);
     }
     let Some((key, from_hook)) = load_master_key(util, &dump) else {
         return 1;
@@ -1013,48 +1024,52 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             return 1;
         }
     };
-    if update {
-        let db = util.db_args.open_file();
-        let first = dump.princs.first().map_or("", |p| p.name.as_str());
-        let Some(lock) = update_lock(util, &db) else {
-            return 1;
+    let realm = loaded.realm().to_owned();
+    if let Some(mut update) = target {
+        let legacy = match legacy_stash(util, &update) {
+            Ok(legacy) => legacy,
+            Err(code) => return code,
         };
-        let current = fs::read_to_string(&db).map_err(|e| {
-            format!(
-                "Cannot open DB2 database '{}': {}",
-                db.display(),
-                strerror(&e)
-            )
-        });
-        let mut store =
-            match current.and_then(|t| load_dump_with_key(&t, &key).map_err(|e| e.to_string())) {
-                Ok(s) => s,
-                Err(why) => {
-                    util.com_err(&why, "while opening database");
-                    return 1;
-                }
-            };
-        // MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:691-694`): a loaded record carries its lockout attributes, which the update writes; the others keep theirs.
-        krb5_kdc::merge_lockout_file(&mut store, &db);
-        update_store(&mut store, &loaded);
-        if let Err(e) = save_store_locked(&store, &db, &key, &lock) {
+        if !lock_permanently(util, &mut update) {
+            return 1;
+        }
+        let store = match update.store(&key, legacy.as_deref().map(Vec::as_slice)) {
+            // MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:691-694`): a loaded record carries its lockout attributes, which the update writes; the others keep theirs.
+            Ok(Some(mut current)) => {
+                update_store(&mut current, &loaded);
+                current
+            }
+            // An empty database file is an empty database: the dump's records fill it.
+            Ok(None) => loaded,
+            Err(e) => {
+                util.com_err(&open_text(update.db(), &e), "while opening database");
+                return 1;
+            }
+        };
+        if let Err(e) = update.write_store(&store, &key) {
+            let first = dump.princs.first().map_or("", |p| p.name.as_str());
             util.com_err(&persist_text(&e), &format!("while storing {first}"));
             return 1;
         }
-        if !update_unlock(util, &lock) {
+        if !update_unlock(util, update) {
             return 1;
         }
-    } else if let Err(e) = krb5_kdc::load_store_full(&loaded, &util.db_args.file, &key, false) {
-        load_failed(util, &e);
-        return 1;
+    } else {
+        let Some(full) = create_temporary(util) else {
+            return 1;
+        };
+        if let Err(e) = full.finish_store(&loaded, &key, false) {
+            load_failed(util, &e);
+            return 1;
+        }
     }
     if from_hook {
         let kvno = dump
-            .princ(&format!("K/M@{}", loaded.realm()))
+            .princ(&format!("K/M@{realm}"))
             .and_then(|km| km.keys.first())
             .map_or(1, |k| k.kvno);
         let stash = util.paths.key_stash_file.clone();
-        if let Err(e) = write_stash(&stash, loaded.realm(), &key, kvno) {
+        if let Err(e) = write_stash(&stash, &realm, &key, kvno) {
             util.com_err(&stash_write_text(&stash, &e), "while storing key");
             return 1;
         }
@@ -1073,44 +1088,52 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
 
 /// A dump with no principal record: a full load leaves a database that holds only the dump's
 /// policies (none for a header alone), and `-update` creates or replaces each of them in the
-/// live database. No key is opened, so no master key is fetched.
+/// live database (an empty database file gets a database of those policies, as MIT's empty file
+/// becomes an empty database). No key is opened, so no master key is fetched.
 /// MIT `restore_dump` (`kadmin/dbutil/dump.c:1364-1379`): the records are read to the end of the file, however few.
-fn load_policies_only(util: &mut Util, dump: &DumpFile, update: bool, verbose: bool) -> u8 {
+fn load_policies_only(
+    util: &mut Util,
+    target: Option<DbUpdate>,
+    dump: &DumpFile,
+    verbose: bool,
+) -> u8 {
     let records = dump.policy_records();
-    if update {
-        let db = util.db_args.open_file();
-        let Some(lock) = update_lock(util, &db) else {
-            return 1;
+    let header = format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n");
+    if let Some(mut update) = target {
+        let legacy = match legacy_stash(util, &update) {
+            Ok(legacy) => legacy,
+            Err(code) => return code,
         };
-        let current = match fs::read(&db).map(String::from_utf8) {
-            Ok(Ok(t)) if t.starts_with("kdb5_util load_dump version ") => t,
-            _ => {
-                let refused = PersistError::Unopenable {
-                    path: db.clone(),
-                    why: krb5_kdc::Unopenable::NotDatabase,
-                };
-                util.com_err(&refused.to_string(), "while opening database");
+        if !lock_permanently(util, &mut update) {
+            return 1;
+        }
+        let (current, empty) = match update.text(legacy.as_deref().map(Vec::as_slice)) {
+            Ok(Some(text)) => (text, false),
+            Ok(None) => (header, true),
+            Err(e) => {
+                util.com_err(&open_text(update.db(), &e), "while opening database");
                 return 1;
             }
         };
-        if !records.is_empty()
-            && let Err(e) =
-                save_dump_text_locked(&db, &merge_policy_records(&current, &records), &lock)
+        if (empty || !records.is_empty())
+            && let Err(e) = update.write_text(&merge_policy_records(&current, &records))
         {
             util.com_err(&persist_text(&e), "while creating policy");
             return 1;
         }
-        if !update_unlock(util, &lock) {
+        if !update_unlock(util, update) {
             return 1;
         }
     } else {
-        let mut text = format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n");
+        let Some(full) = create_temporary(util) else {
+            return 1;
+        };
+        let mut text = header;
         for r in &records {
             text.push_str(r);
             text.push('\n');
         }
-        if let Err(e) = krb5_kdc::load_text_full(&util.db_args.file, &text, "ulog 1\n", &[], false)
-        {
+        if let Err(e) = full.finish(&text, "ulog 1\n", &[], false) {
             load_failed(util, &e);
             return 1;
         }
@@ -1124,36 +1147,80 @@ fn load_policies_only(util: &mut Util, dump: &DumpFile, update: bool, verbose: b
     0
 }
 
-/// The database's permanent lock for `load -update`: the database must open, then its lock
-/// files, then `principal.kadm5.lock` is removed until the lock is let go, so no other process
-/// opens the database meanwhile, and a load that stops before it ends leaves it unusable.
-/// MIT `load_db` (`kadmin/dbutil/dump.c:1509-1527`): the database is opened, then locked permanently; a refused lock is reported.
-fn update_lock(util: &Util, db: &Path) -> Option<DbLock> {
-    if let Err(e) = krb5_kdc::check_openable(db) {
-        util.com_err(&open_text(db, &e), "while opening database");
-        return None;
-    }
-    let lock = match DbLock::open(db) {
-        Ok(lock) => lock,
-        Err(e) => {
+/// The database `-update` merges into, opened (its lock files and what it holds judged, nothing
+/// locked yet) before any record is read or any key fetched; `None` once the failure is
+/// reported.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1509-1516`): an update opens the database, and a failure is reported while opening it.
+fn open_update(util: &Util) -> Option<DbUpdate> {
+    let db = util.db_args.open_file();
+    match DbUpdate::open(&db) {
+        Ok(update) => Some(update),
+        Err(e @ PersistError::Lock(_)) => {
             util.com_err(&e.to_string(), "while opening database");
-            return None;
+            None
         }
-    };
-    if let Err(e) = lock.lock(DbLockMode::Permanent) {
-        util.com_err(&e.to_string(), "while permanently locking database");
-        return None;
+        Err(e) => {
+            util.com_err(&open_text(&db, &e), "while opening database");
+            None
+        }
     }
-    Some(lock)
+}
+
+/// A full load's temporary database, made once the dump and its master key are read, so that no
+/// lock is held while a typed key is waited for (MIT's load reads no key, and makes it first);
+/// `None` once the failure is reported.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1492-1508`): a full load creates its temporary database, and a failure is reported while creating the database.
+fn create_temporary(util: &Util) -> Option<FullLoad> {
+    match FullLoad::create(&util.db_args.file) {
+        Ok(full) => Some(full),
+        Err(e) => {
+            load_failed(util, &e);
+            None
+        }
+    }
+}
+
+/// The stash's bytes when the database `-update` opened is a legacy KDB blob, which opens with
+/// them as every reader opens one, read before the permanent lock; the exit status once a stash
+/// that cannot be read is reported with MIT's text for a master key it cannot fetch.
+/// MIT `krb5_db_def_fetch_mkey` (`lib/kdb/kdb_default.c:384-390`): a stash that cannot be read is "Can not fetch master key (error: …)."
+fn legacy_stash(util: &Util, update: &DbUpdate) -> Result<Option<Zeroizing<Vec<u8>>>, u8> {
+    if !update.legacy() {
+        return Ok(None);
+    }
+    match fs::read(&util.paths.key_stash_file) {
+        Ok(bytes) => Ok(Some(Zeroizing::new(bytes))),
+        Err(e) => {
+            util.com_err(
+                &format!("Can not fetch master key (error: {}).", strerror(&e)),
+                "while reading master key",
+            );
+            Err(1)
+        }
+    }
+}
+
+/// Lock the database `-update` opened permanently: `principal.kadm5.lock` is removed until the
+/// lock is let go, so no other program opens the database meanwhile. A refused lock is reported
+/// and changes nothing; once held, every way out of the update lets it go ([`DbUpdate`]).
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1518-1526`): the opened database is locked permanently, and a refused lock is reported.
+fn lock_permanently(util: &Util, update: &mut DbUpdate) -> bool {
+    match update.lock_permanently() {
+        Ok(()) => true,
+        Err(e) => {
+            util.com_err(&persist_text(&e), "while permanently locking database");
+            false
+        }
+    }
 }
 
 /// Let go of `load -update`'s permanent lock: `principal.kadm5.lock` is made again.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1546-1549`): the permanent lock is let go once the records are in.
-fn update_unlock(util: &Util, lock: &DbLock) -> bool {
-    match lock.unlock() {
+fn update_unlock(util: &Util, update: DbUpdate) -> bool {
+    match update.unlock() {
         Ok(()) => true,
         Err(e) => {
-            util.com_err(&e.to_string(), "while unlocking database");
+            util.com_err(&persist_text(&e), "while unlocking database");
             false
         }
     }

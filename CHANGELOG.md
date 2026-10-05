@@ -1400,6 +1400,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc.** `kdb5_util load -update` opens the database before the master key, takes the permanent
+  lock in MIT's order and lets it go on every failure (`principal.kadm5.lock` was left removed);
+  it fills an empty `principal`. Settled; units.
 - **protocol.** The AS-REQ answering PREAUTH_REQUIRED sends the KDC's PA-FX-COOKIE back first,
   as MIT's: padata `[133, 2, 150, 149]` (it sent none). Settled; unit red at the parent.
 - **client.** `kinit -X X509_anchors=…` without an identity gets a ticket with the password, as

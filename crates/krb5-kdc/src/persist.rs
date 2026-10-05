@@ -10,9 +10,10 @@
 //! rewritten in keytab format on the next save the writer may make to it.
 //!
 //! The database is read holding its lock shared and written holding it exclusively
-//! ([`crate::DbLock`]); every write moves the database's age forward. The lockout attributes
-//! the KDC records live beside it in `principal.lockout`, which a read merges and a write keeps
-//! in line with the store; `kdb5_util create` and `load` make it.
+//! ([`crate::DbLock`]), or by `load -update` permanently ([`DbUpdate`]); a full load goes
+//! through a temporary database ([`FullLoad`]). Every write moves the database's age forward.
+//! The lockout attributes the KDC records live beside it in `principal.lockout`, which a read
+//! merges and a write keeps in line with the store; `kdb5_util create` and `load` make it.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -136,12 +137,23 @@ enum DbFormat {
     Empty,
     /// MIT dump text, the store's format.
     Dump,
-    /// A legacy `KDB1` / `KDB2` / `KDB3` ciphertext.
-    Kdb,
+    /// A legacy `KDB1` / `KDB2` / `KDB3` ciphertext, by its magic.
+    Kdb(KdbVersion),
     /// An MIT db2 database ([`is_mit_db2`]).
     MitDb2,
     /// None of these.
     Unknown,
+}
+
+/// A legacy ciphertext database's version: what its record layout carries after the keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum KdbVersion {
+    /// `KDB1`: no lock flag, no password expiry.
+    V1,
+    /// `KDB2`: a SPAKE blob, then the lock flag and the password expiry.
+    V2,
+    /// `KDB3`: the lock flag and the password expiry.
+    V3,
 }
 
 fn db_format(head: &[u8]) -> DbFormat {
@@ -149,11 +161,13 @@ fn db_format(head: &[u8]) -> DbFormat {
         DbFormat::Empty
     } else if head.starts_with(DUMP_PREFIX) {
         DbFormat::Dump
-    } else if head
-        .get(..4)
-        .is_some_and(|m| matches!(m, b"KDB1" | b"KDB2" | b"KDB3"))
-    {
-        DbFormat::Kdb
+    } else if let Some(version) = head.get(..4).and_then(|magic| match magic {
+        b"KDB1" => Some(KdbVersion::V1),
+        b"KDB2" => Some(KdbVersion::V2),
+        b"KDB3" => Some(KdbVersion::V3),
+        _ => None,
+    }) {
+        DbFormat::Kdb(version)
     } else if is_mit_db2(head) {
         DbFormat::MitDb2
     } else {
@@ -197,10 +211,15 @@ fn is_mit_db2(head: &[u8]) -> bool {
             && matches!(u32::from_be_bytes(version), HASHVERSION | OLDHASHVERSION))
 }
 
+/// A database file's bytes as dump text.
+fn dump_text(blob: &[u8]) -> Result<&str, PersistError> {
+    std::str::from_utf8(blob).map_err(|_| PersistError::Format("dump is not utf-8".into()))
+}
+
 /// The refusal of a database file of `format`; `None` for a database the store reads.
 fn refusal(db: &Path, format: DbFormat) -> Option<PersistError> {
     let why = match format {
-        DbFormat::Dump | DbFormat::Kdb => return None,
+        DbFormat::Dump | DbFormat::Kdb(_) => return None,
         DbFormat::MitDb2 => Unopenable::MitDb2,
         DbFormat::Empty | DbFormat::Unknown => Unopenable::NotDatabase,
     };
@@ -210,13 +229,24 @@ fn refusal(db: &Path, format: DbFormat) -> Option<PersistError> {
     })
 }
 
+/// The refusal of a database file of `format`, which the caller has found to be no database it
+/// reads.
+fn refused(db: &Path, format: DbFormat) -> PersistError {
+    refusal(db, format).unwrap_or_else(|| PersistError::Unopenable {
+        path: db.to_path_buf(),
+        why: Unopenable::NotDatabase,
+    })
+}
+
 /// Open the database file at `db` as MIT's db2 module first opens it, before its lock files and
 /// the master key: a file that does not open or read is the system's error, and one whose first
 /// bytes are no database this store reads is refused with MIT's text; an MIT db2 database is
-/// named as one, with the way over, and left as it is. An empty file passes here, as a database
-/// being created or loaded is empty until it is written; the read under the lock judges it.
+/// named as one, with the way over, and left as it is. An empty file passes here, as MIT's
+/// Berkeley DB opens one as an empty database; a read under the lock refuses it, an update
+/// fills it and a full load replaces it.
 /// MIT `check_openable` (`plugins/kdb/db2/kdb_db2.c:545-557`): the database is opened before its lock files.
 /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:384-389`): a database that does not open is named, with its errno.
+/// MIT `__bt_open` (`plugins/kdb/db2/libdb2/btree/bt_open.c:256-276`): an empty file opens as a new, empty btree.
 ///
 /// # Errors
 ///
@@ -270,12 +300,9 @@ pub(crate) fn read_store(
         return Err(e);
     }
     let stash = fs::read(stash_path)?;
-    let mut store = if format == DbFormat::Dump {
-        let text = std::str::from_utf8(&blob)
-            .map_err(|_| PersistError::Format("dump is not utf-8".into()))?;
-        load_dump_with_stash(text, &stash)?
-    } else {
-        load_kdb_blob(&blob, &stash)?
+    let mut store = match format {
+        DbFormat::Kdb(version) => load_kdb_blob(&blob, version, &stash)?,
+        _ => load_dump_with_stash(dump_text(&blob)?, &stash)?,
     };
     crate::lockout::merge_lockout_file(&mut store, db_path);
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
@@ -324,9 +351,7 @@ pub(crate) fn read_store_with_master(
     if format != DbFormat::Dump {
         return Err(PersistError::Format("not dump text".into()));
     }
-    let text =
-        std::str::from_utf8(&blob).map_err(|_| PersistError::Format("dump is not utf-8".into()))?;
-    let mut store = crate::kdb_dump::load_dump_with_key(text, master)?;
+    let mut store = crate::kdb_dump::load_dump_with_key(dump_text(&blob)?, master)?;
     crate::lockout::merge_lockout_file(&mut store, db_path);
     store.db_stamp = DbStamp::now(lock, db_path);
     store.dblock = Some(Arc::clone(lock));
@@ -489,23 +514,32 @@ pub enum DbWrite {
     Fresh,
 }
 
-/// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:450-463`): the locked database is reopened `O_RDWR`, so a writer that may not write it is refused with the database's name.
+/// The database, its update log and `principal.lockout`, each opened read-write before a write
+/// changes any of them; an update in place reopens the database too ([`reopen_writable`]).
 fn check_writable(db_path: &Path, how: DbWrite) -> Result<(), PersistError> {
-    if how == DbWrite::InPlace
-        && let Err(e) = check_secret_file_writable(db_path)
-    {
-        return Err(PersistError::Io(std::io::Error::new(
+    if how == DbWrite::InPlace {
+        reopen_writable(db_path)?;
+    }
+    check_secret_file_writable(&ulog_path(db_path))?;
+    crate::lockout::check_writable(db_path)?;
+    Ok(())
+}
+
+/// The database at `db_path` opened read-write, as MIT's lock reopens it for a writer: a writer
+/// that may not write it is refused with the database's name and the system's text. A file not
+/// there (or not a regular file) passes: the read or the write that follows says so.
+/// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:450-463`): the locked database is reopened `O_RDWR`, so a writer that may not write it is refused with the database's name.
+fn reopen_writable(db_path: &Path) -> std::io::Result<()> {
+    check_secret_file_writable(db_path).map_err(|e| {
+        std::io::Error::new(
             e.kind(),
             format!(
                 "Cannot open DB2 database '{}': {}",
                 db_path.display(),
                 strerror(&e)
             ),
-        )));
-    }
-    check_secret_file_writable(&ulog_path(db_path))?;
-    crate::lockout::check_writable(db_path)?;
-    Ok(())
+        )
+    })
 }
 
 /// The system's text for `e`, without Rust's `(os error N)`.
@@ -587,47 +621,218 @@ pub fn save_dump_text(db_path: &Path, text: &str, how: DbWrite) -> Result<(), Pe
     Ok(())
 }
 
-/// [`save_store_with_master`] in place while the caller holds `lock` on the database at
-/// `db_path`, exclusively or permanently (`load -update`); the age moves.
+/// The database `kdb5_util load -update` merges a dump into, through MIT's `load_db` update
+/// lifecycle: [`Self::open`] opens it as MIT's `krb5_db_open` does and judges what it holds
+/// under the shared lock, before any record is read or any key fetched;
+/// [`Self::lock_permanently`] takes MIT's permanent lock, which removes `principal.kadm5.lock`
+/// so that no other program opens the database meanwhile; the update is one write of the whole
+/// database ([`Self::write_store`], [`Self::write_text`]); [`Self::unlock`] makes
+/// `principal.kadm5.lock` again.
 ///
-/// # Errors
-///
-/// [`PersistError::Lock`] when `lock` is not held exclusively; otherwise as
-/// [`save_store_with_master`].
-pub fn save_store_locked(
-    store: &PrincipalStore,
-    db_path: &Path,
-    master: &ProtocolKey,
-    lock: &DbLock,
-) -> Result<(), PersistError> {
-    if !lock.held_exclusive() {
-        return Err(DbLockError::NotLocked.into());
-    }
-    check_writable(db_path, DbWrite::InPlace)?;
-    write_store_files(store, db_path, master, DbWrite::InPlace, true)?;
-    lock.update_age();
-    Ok(())
+/// Every failure from the permanent lock on lets it go as well: a `DbUpdate` dropped while it
+/// holds the lock unlocks it, since the one write either did not happen or put every record in.
+/// MIT leaves the lock held, and so the database unusable, once a restore that went permanent
+/// fails; only a process killed meanwhile leaves it so here.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1509-1516`): an update opens the database before any record is read.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1518-1526`): the database is then locked permanently, and a refused lock is reported.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1540-1549`): once the records are in, the permanent lock is let go.
+#[derive(Debug)]
+pub struct DbUpdate {
+    db: PathBuf,
+    lock: Arc<DbLock>,
+    /// Whether [`Self::open`] found a legacy KDB blob.
+    legacy: bool,
+    /// Whether this process holds the permanent lock.
+    permanent: bool,
 }
 
-/// [`save_dump_text`] in place while the caller holds `lock` on the database at `db_path`,
-/// exclusively or permanently (`load -update`); the age moves.
-///
-/// # Errors
-///
-/// [`PersistError::Lock`] when `lock` is not held exclusively; otherwise as [`save_dump_text`].
-pub fn save_dump_text_locked(
-    db_path: &Path,
-    text: &str,
-    lock: &DbLock,
-) -> Result<(), PersistError> {
-    if !lock.held_exclusive() {
-        return Err(DbLockError::NotLocked.into());
+impl DbUpdate {
+    /// Open the database at `db` for an update: the file must open as a database
+    /// ([`check_openable`]), then its lock files; then, under the shared lock, it must hold dump
+    /// text, a legacy KDB blob, or nothing, which is an empty database the update writes its
+    /// records into (MIT 1.22.2, settled live: its Berkeley DB opens an empty file as an empty
+    /// database, and `load -update` fills it). Nothing is held when this returns.
+    /// MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1181-1199`): the database file must open, then its lock files.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistError::Io`] when the file does not open or read; [`PersistError::Unopenable`]
+    /// when it is no database this store reads; [`PersistError::Lock`] when a lock file does not
+    /// open or the shared lock may not be taken; [`PersistError::Format`] when its dump text is
+    /// not UTF-8.
+    pub fn open(db: &Path) -> Result<Self, PersistError> {
+        check_openable(db)?;
+        let lock = Arc::new(DbLock::open(db)?);
+        let legacy = {
+            let _held = lock.hold(DbLockMode::Shared)?;
+            let blob = fs::read(db)?;
+            match db_format(&blob) {
+                DbFormat::Empty => false,
+                DbFormat::Kdb(_) => true,
+                DbFormat::Dump => {
+                    dump_text(&blob)?;
+                    false
+                }
+                format => return Err(refused(db, format)),
+            }
+        };
+        Ok(Self {
+            db: db.to_path_buf(),
+            lock,
+            legacy,
+            permanent: false,
+        })
     }
-    check_writable(db_path, DbWrite::InPlace)?;
-    write_secret_file(db_path, text.as_bytes())?;
-    crate::lockout::ensure(db_path)?;
-    lock.update_age();
-    Ok(())
+
+    /// The database file.
+    #[must_use]
+    pub fn db(&self) -> &Path {
+        &self.db
+    }
+
+    /// Whether the database is a legacy KDB blob, which opens with its stash's bytes
+    /// ([`Self::store`], [`Self::text`]).
+    #[must_use]
+    pub fn legacy(&self) -> bool {
+        self.legacy
+    }
+
+    /// Take the permanent lock as MIT's `ctx_lock` takes it: `principal.ok` exclusively, then
+    /// the database reopened read-write (a writer that may not write it is refused with the
+    /// database's name), then `principal.kadm5.lock` permanently, which removes it. A refusal at
+    /// any step holds nothing and leaves `principal.kadm5.lock` where it was. The lock is taken
+    /// once: a second call while it is held changes nothing.
+    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-477`): `principal.ok` is locked, the database reopened, then the policy lock taken in the same mode.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistError::Lock`]: [`DbLockError::CantLock`] when `principal.ok` is open read-only;
+    /// [`DbLockError::Io`] when the database does not reopen read-write, or
+    /// `principal.kadm5.lock` may not be locked (`Bad file descriptor` when it is open
+    /// read-only, as MIT's permanent lock says) or removed.
+    pub fn lock_permanently(&mut self) -> Result<(), PersistError> {
+        if self.permanent {
+            return Ok(());
+        }
+        let db = &self.db;
+        self.lock
+            .lock_reopening(DbLockMode::Permanent, &mut || reopen_writable(db))?;
+        self.permanent = true;
+        Ok(())
+    }
+
+    /// What the database holds now, read under the permanent lock: its store, with every key
+    /// opened with `master` (a legacy database with `legacy_stash`, its stash's bytes, as every
+    /// reader opens one) and each principal's lockout record; `None` for an empty file.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistError::Lock`] when the permanent lock is not held; [`PersistError::Io`] when the
+    /// database cannot be read; [`PersistError::Unopenable`] when it is no longer a database this
+    /// store reads; [`PersistError::Format`] and [`PersistError::Crypto`] when its records do not
+    /// load under `master` (a legacy database: under its stash, or with no stash given).
+    pub fn store(
+        &self,
+        master: &ProtocolKey,
+        legacy_stash: Option<&[u8]>,
+    ) -> Result<Option<PrincipalStore>, PersistError> {
+        if !self.permanent {
+            return Err(DbLockError::NotLocked.into());
+        }
+        let blob = fs::read(&self.db)?;
+        let mut store = match db_format(&blob) {
+            DbFormat::Empty => return Ok(None),
+            DbFormat::Kdb(version) => load_kdb_blob(&blob, version, legacy_key(legacy_stash)?)?,
+            DbFormat::Dump => crate::kdb_dump::load_dump_with_key(dump_text(&blob)?, master)?,
+            format => return Err(refused(&self.db, format)),
+        };
+        crate::lockout::merge_lockout_file(&mut store, &self.db);
+        Ok(Some(store))
+    }
+
+    /// The database's dump text now, read under the permanent lock, for an update that opens no
+    /// key (a dump of policies alone); `None` for an empty file. A legacy database is opened with
+    /// `legacy_stash`, its stash's bytes, and written out under the stash's master key, as any
+    /// save of one is.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::store`].
+    pub fn text(&self, legacy_stash: Option<&[u8]>) -> Result<Option<String>, PersistError> {
+        if !self.permanent {
+            return Err(DbLockError::NotLocked.into());
+        }
+        let blob = fs::read(&self.db)?;
+        match db_format(&blob) {
+            DbFormat::Empty => Ok(None),
+            DbFormat::Kdb(version) => {
+                let stash = legacy_key(legacy_stash)?;
+                let store = load_kdb_blob(&blob, version, stash)?;
+                Ok(Some(write_dump(&store, &stash_master(stash)?)?))
+            }
+            DbFormat::Dump => Ok(Some(dump_text(&blob)?.to_owned())),
+            format => Err(refused(&self.db, format)),
+        }
+    }
+
+    /// Write `store`, every key wrapped under `master`, as the database, in place, with its
+    /// update log and `principal.lockout` (made when missing); the age moves.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistError::Lock`] when the permanent lock is not held; otherwise as
+    /// [`save_store_with_master`] in place.
+    pub fn write_store(
+        &self,
+        store: &PrincipalStore,
+        master: &ProtocolKey,
+    ) -> Result<(), PersistError> {
+        if !self.permanent {
+            return Err(DbLockError::NotLocked.into());
+        }
+        check_writable(&self.db, DbWrite::InPlace)?;
+        write_store_files(store, &self.db, master, DbWrite::InPlace, true)?;
+        self.lock.update_age();
+        Ok(())
+    }
+
+    /// Write `text`, dump text that wraps no key this update opened, as the database, in place,
+    /// with `principal.lockout` made when missing; the age moves.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::write_store`].
+    pub fn write_text(&self, text: &str) -> Result<(), PersistError> {
+        if !self.permanent {
+            return Err(DbLockError::NotLocked.into());
+        }
+        check_writable(&self.db, DbWrite::InPlace)?;
+        write_secret_file(&self.db, text.as_bytes())?;
+        crate::lockout::ensure(&self.db)?;
+        self.lock.update_age();
+        Ok(())
+    }
+
+    /// Let the permanent lock go: `principal.kadm5.lock` is made again.
+    /// MIT `osa_adb_release_lock` (`plugins/kdb/db2/adb_openclose.c:298-307`): the permanent lock's release creates the policy lock file again.
+    ///
+    /// # Errors
+    ///
+    /// [`PersistError::Lock`] when no lock is held, an unlock fails, or `principal.kadm5.lock`
+    /// cannot be made again.
+    pub fn unlock(mut self) -> Result<(), PersistError> {
+        self.permanent = false;
+        Ok(self.lock.unlock()?)
+    }
+}
+
+impl Drop for DbUpdate {
+    /// An update that stops while it holds the permanent lock lets it go.
+    fn drop(&mut self) {
+        if self.permanent {
+            let _ = self.lock.unlock();
+        }
+    }
 }
 
 /// Why a full load did not make its dump the database.
@@ -652,48 +857,27 @@ impl From<LoadError> for PersistError {
 }
 
 /// Make `store`, its keys wrapped under `master`, the database at `db_path` as a full load does
-/// ([`load_text_full`]), with its update log and its principals' lockout attributes;
-/// `merge_lockout` keeps the records `principal.lockout` already has, as an iprop load does.
+/// ([`FullLoad::finish_store`]); `merge_lockout` keeps the records `principal.lockout` already
+/// has, as an iprop load does.
 ///
 /// # Errors
 ///
-/// [`LoadError::Create`] when a key cannot be wrapped; otherwise as [`load_text_full`].
+/// As [`FullLoad::create`] and [`FullLoad::finish_store`].
 pub fn load_store_full(
     store: &PrincipalStore,
     db_path: &Path,
     master: &ProtocolKey,
     merge_lockout: bool,
 ) -> Result<(), LoadError> {
-    let text = write_dump(store, master).map_err(|e| LoadError::Create(e.into()))?;
-    let lockout = crate::lockout::store_records(store);
-    load_text_full(db_path, &text, &ulog_text(store), &lockout, merge_lockout)
+    FullLoad::create(db_path)?.finish_store(store, master, merge_lockout)
 }
 
 /// Make the dump `text` the database at `db_path` as MIT's full load does, with `ulog` as its
-/// update log. The dump is written to a temporary database, `principal~`, made with its own two
-/// lock files and held under its exclusive lock, so readers keep reading the old database
-/// meanwhile; then the real database's exclusive lock is taken (waiting for any holder) and the
-/// temporary database renamed over it, the age moved, and the temporary lock files removed. When
-/// there is no database yet, it and its two lock files are created first; an existing
-/// `principal.ok` is kept, and made again only when it is missing. The new database is a 0600
-/// file owned by the writer. Under the real database's lock, before the rename, `lockout` (each
-/// loaded principal's attributes) becomes `principal.lockout`, a new file renamed over any old
-/// one; with `merge` a principal it has a record of keeps it. A `principal.lockout` that is no
-/// regular file the writer may write (a symlink is never followed) fails the load before the
-/// update log changes.
-/// MIT `load_db` (`kadmin/dbutil/dump.c:1490-1508`): a full load creates a temporary database.
-/// MIT `load_db` (`kadmin/dbutil/dump.c:1497-1501`): an iprop load merges the non-replicated attributes the database already has.
-/// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:710-716`): a temporary database's remnants are destroyed under its lock.
-/// MIT `krb5_db2_promote_db` (`plugins/kdb/db2/kdb_db2.c:1497-1513`): the real database is created when there is none, else opened and locked exclusively.
-/// MIT `ctx_promote` (`plugins/kdb/db2/kdb_db2.c:1434-1448`): the temporary database is renamed over the real one, the age moves, and the temporary lock files are removed.
-/// MIT `load_db` (`kadmin/dbutil/dump.c:1590-1600`): a failed load destroys the temporary database.
+/// update log ([`FullLoad::finish`]).
 ///
 /// # Errors
 ///
-/// [`LoadError::Create`] when the temporary database or its lock files cannot be made or
-/// written (nothing of it is left); [`LoadError::Promote`] when the real database's lock files
-/// do not open (`principal.kadm5.lock` missing: MIT's text), its lock may not be taken, or the
-/// update log, `principal.lockout` or the rename fails (the temporary database is removed).
+/// As [`FullLoad::create`] and [`FullLoad::finish`].
 pub fn load_text_full(
     db_path: &Path,
     text: &str,
@@ -701,28 +885,131 @@ pub fn load_text_full(
     lockout: &[(String, crate::Lockout)],
     merge: bool,
 ) -> Result<(), LoadError> {
-    let tmp = suffixed(db_path, "~");
-    let temp = create_temporary(&tmp, text).map_err(LoadError::Create)?;
-    let real = match promote(db_path, &tmp, ulog, lockout, merge) {
-        Ok(real) => real,
-        Err(e) => {
-            destroy_temporary(&tmp);
-            let _ = temp.unlock();
-            return Err(LoadError::Promote(e));
-        }
-    };
-    let _ = temp.unlock();
-    drop(temp);
-    real.unlock().map_err(|e| LoadError::Promote(e.into()))
+    FullLoad::create(db_path)?.finish(text, ulog, lockout, merge)
 }
 
-/// The temporary database at `tmp` with `text` written to it, under its own lock files, which
+/// A full load's temporary database, `principal~` beside the database, made with its own two
+/// lock files and held under its exclusive lock from before any record is written until it is
+/// made live, so readers keep reading the old database meanwhile. Dropped before it is made
+/// live, it is destroyed, as a failed load destroys it.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1490-1508`): a full load creates its temporary database, holding its lock, and only then restores the records.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1590-1600`): a failed load destroys the temporary database.
+#[derive(Debug)]
+pub struct FullLoad {
+    db: PathBuf,
+    tmp: PathBuf,
+    /// The temporary database's lock and file, until it is made live or destroyed.
+    temp: Option<(DbLock, fs::File)>,
+}
+
+impl FullLoad {
+    /// Create the temporary database of a full load into the database at `db`, empty, with its
+    /// lock files, locked exclusively; the remnants of an earlier one are destroyed under its
+    /// lock first.
+    /// MIT `ctx_create_db` (`plugins/kdb/db2/kdb_db2.c:710-716`): a temporary database's remnants are destroyed under its lock.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError::Create`] when the temporary database or its lock files cannot be made
+    /// (nothing of it is left).
+    pub fn create(db: &Path) -> Result<Self, LoadError> {
+        let tmp = suffixed(db, "~");
+        let temp = create_temporary(&tmp).map_err(LoadError::Create)?;
+        Ok(Self {
+            db: db.to_path_buf(),
+            tmp,
+            temp: Some(temp),
+        })
+    }
+
+    /// [`Self::finish`] with `store` as dump text, its keys wrapped under `master`, its update
+    /// log and its principals' lockout attributes.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError::Create`] when a key cannot be wrapped; otherwise as [`Self::finish`].
+    pub fn finish_store(
+        self,
+        store: &PrincipalStore,
+        master: &ProtocolKey,
+        merge_lockout: bool,
+    ) -> Result<(), LoadError> {
+        let text = write_dump(store, master).map_err(|e| LoadError::Create(e.into()))?;
+        let lockout = crate::lockout::store_records(store);
+        self.finish(&text, &ulog_text(store), &lockout, merge_lockout)
+    }
+
+    /// Write the dump `text` to the temporary database and make it the database, with `ulog` as
+    /// its update log: the real database's exclusive lock is taken (waiting for any holder) and
+    /// the temporary database renamed over it, the age moved, and the temporary lock files
+    /// removed. When there is no database yet, it and its two lock files are created first; an
+    /// existing `principal.ok` is kept, and made again only when it is missing. The new database
+    /// is a 0600 file owned by the writer. Under the real database's lock, before the rename,
+    /// `lockout` (each loaded principal's attributes) becomes `principal.lockout`, a new file
+    /// renamed over any old one; with `merge` a principal it has a record of keeps it. A
+    /// `principal.lockout` that is no regular file the writer may write (a symlink is never
+    /// followed) fails the load before the update log changes.
+    /// MIT `load_db` (`kadmin/dbutil/dump.c:1497-1501`): an iprop load merges the non-replicated attributes the database already has.
+    /// MIT `krb5_db2_promote_db` (`plugins/kdb/db2/kdb_db2.c:1497-1513`): the real database is created when there is none, else opened and locked exclusively.
+    /// MIT `ctx_promote` (`plugins/kdb/db2/kdb_db2.c:1434-1448`): the temporary database is renamed over the real one, the age moves, and the temporary lock files are removed.
+    ///
+    /// # Errors
+    ///
+    /// [`LoadError::Create`] when the temporary database cannot be written; [`LoadError::Promote`]
+    /// when the real database's lock files do not open (`principal.kadm5.lock` missing: MIT's
+    /// text), its lock may not be taken, or the update log, `principal.lockout` or the rename
+    /// fails. Either way the temporary database is removed.
+    pub fn finish(
+        mut self,
+        text: &str,
+        ulog: &str,
+        lockout: &[(String, crate::Lockout)],
+        merge: bool,
+    ) -> Result<(), LoadError> {
+        let Some((temp, mut file)) = self.temp.take() else {
+            return Err(LoadError::Create(DbLockError::NotLocked.into()));
+        };
+        let written =
+            std::io::Write::write_all(&mut file, text.as_bytes()).and_then(|()| file.sync_all());
+        drop(file);
+        let real = match written {
+            Ok(()) => {
+                promote(&self.db, &self.tmp, ulog, lockout, merge).map_err(LoadError::Promote)
+            }
+            Err(e) => Err(LoadError::Create(e.into())),
+        };
+        let real = match real {
+            Ok(real) => real,
+            Err(e) => {
+                destroy_temporary(&self.tmp);
+                let _ = temp.unlock();
+                return Err(e);
+            }
+        };
+        let _ = temp.unlock();
+        drop(temp);
+        real.unlock().map_err(|e| LoadError::Promote(e.into()))
+    }
+}
+
+impl Drop for FullLoad {
+    /// A load that stops before its temporary database is made live destroys it.
+    fn drop(&mut self) {
+        if let Some((temp, file)) = self.temp.take() {
+            drop(file);
+            destroy_temporary(&self.tmp);
+            let _ = temp.unlock();
+        }
+    }
+}
+
+/// The temporary database at `tmp`, empty and open for writing, under its own lock files, which
 /// stay locked exclusively.
-fn create_temporary(tmp: &Path, text: &str) -> Result<DbLock, PersistError> {
+fn create_temporary(tmp: &Path) -> Result<(DbLock, fs::File), PersistError> {
     let lock = DbLock::create(tmp)?;
     destroy_file(tmp);
     let _ = fs::remove_file(suffixed(tmp, SUFFIX_POLICY_LOCK));
-    let made = (|| -> Result<(), PersistError> {
+    let made = (|| -> Result<fs::File, PersistError> {
         let mut opts = fs::OpenOptions::new();
         opts.write(true).create_new(true);
         #[cfg(unix)]
@@ -730,18 +1017,18 @@ fn create_temporary(tmp: &Path, text: &str) -> Result<DbLock, PersistError> {
             use std::os::unix::fs::OpenOptionsExt;
             opts.mode(0o600);
         }
-        let mut file = krb5_protocol::create_labeled(tmp, || opts.open(tmp))?;
+        let file = krb5_protocol::create_labeled(tmp, || opts.open(tmp))?;
         lock.create_policy_lock()?;
-        std::io::Write::write_all(&mut file, text.as_bytes())?;
-        file.sync_all()?;
-        Ok(())
+        Ok(file)
     })();
-    if let Err(e) = made {
-        destroy_temporary(tmp);
-        let _ = lock.unlock();
-        return Err(e);
+    match made {
+        Ok(file) => Ok((lock, file)),
+        Err(e) => {
+            destroy_temporary(tmp);
+            let _ = lock.unlock();
+            Err(e)
+        }
     }
-    Ok(lock)
 }
 
 /// Make the temporary database at `tmp` the database at `db`, holding `db`'s exclusive lock;
@@ -1115,24 +1402,19 @@ pub fn load_dump_with_stash(text: &str, stash: &[u8]) -> Result<PrincipalStore, 
     ))
 }
 
-fn load_kdb_blob(blob: &[u8], stash: &[u8]) -> Result<PrincipalStore, PersistError> {
-    if blob.len() < 4 {
-        return Err(PersistError::Format("missing KDB magic".into()));
-    }
-    let magic = &blob[..4];
-    let v2 = magic == b"KDB2";
-    let v3 = magic == b"KDB3";
-    if !v2 && !v3 && magic != b"KDB1" {
-        return Err(PersistError::Format(
-            "missing dump header or KDB1/KDB2/KDB3 magic".into(),
-        ));
-    }
+/// A legacy ciphertext database, `blob`, whose magic [`db_format`] read as `version`, opened
+/// with the raw key `stash` holds.
+fn load_kdb_blob(
+    blob: &[u8],
+    version: KdbVersion,
+    stash: &[u8],
+) -> Result<PrincipalStore, PersistError> {
     let master = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, stash)
         .map_err(|e| PersistError::Crypto(e.to_string()))?;
     let usage = KeyUsage::new(2).map_err(|e| PersistError::Crypto(e.to_string()))?;
-    let plain =
-        decrypt(&master, usage, &blob[4..]).map_err(|e| PersistError::Crypto(e.to_string()))?;
-    parse_plain(&plain, v2, v3)
+    let body = blob.get(4..).unwrap_or_default();
+    let plain = decrypt(&master, usage, body).map_err(|e| PersistError::Crypto(e.to_string()))?;
+    parse_plain(&plain, version == KdbVersion::V2, version == KdbVersion::V3)
 }
 
 fn master_for_save(
@@ -1195,14 +1477,25 @@ fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, 
             }
         }
     }
-    for etype in stash_etypes() {
-        if let Ok(mkey) = ProtocolKey::from_bytes(etype, &bytes) {
-            return Ok(mkey);
-        }
+    stash_master(&bytes)
+}
+
+/// The master key stash bytes hold for a database that is not dump text: the keytab form's
+/// `K/M` entry, else the raw key of the first stash enctype it makes.
+fn stash_master(bytes: &[u8]) -> Result<ProtocolKey, PersistError> {
+    if let Some(mkey) = stash_keytab_key(bytes) {
+        return Ok(mkey);
     }
-    Err(PersistError::Crypto(
-        "stash is not a usable master key".into(),
-    ))
+    stash_etypes()
+        .into_iter()
+        .find_map(|etype| ProtocolKey::from_bytes(etype, bytes).ok())
+        .ok_or_else(|| PersistError::Crypto("stash is not a usable master key".into()))
+}
+
+/// The stash bytes a legacy database opens with; a caller that read none gets an error, as no
+/// key opens a legacy database but its stash.
+fn legacy_key(stash: Option<&[u8]>) -> Result<&[u8], PersistError> {
+    stash.ok_or_else(|| PersistError::Crypto("a legacy database opens with its stash".into()))
 }
 
 /// The master key type of a new stash for `realm`: the name
@@ -1417,8 +1710,8 @@ fn take_str(b: &[u8], i: &mut usize) -> Result<String, PersistError> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DbFormat, PersistError, check_openable, db_format, is_mit_db2, load_store,
-        load_store_with_master, make_lock_files, save_store,
+        DbFormat, DbUpdate, FullLoad, KdbVersion, PersistError, check_openable, db_format,
+        is_mit_db2, load_store, load_store_with_master, make_lock_files, save_store,
     };
     use crate::error::Error;
     use crate::mkey::{default_master_etype, master_etype};
@@ -1517,7 +1810,20 @@ mod tests {
             db_format(b"kdb5_util load_dump version 7\n"),
             DbFormat::Dump
         );
-        assert_eq!(db_format(b"KDB3\x00\x01\x02"), DbFormat::Kdb);
+        assert_eq!(
+            db_format(b"KDB1\x00\x01\x02"),
+            DbFormat::Kdb(KdbVersion::V1)
+        );
+        assert_eq!(
+            db_format(b"KDB2\x00\x01\x02"),
+            DbFormat::Kdb(KdbVersion::V2)
+        );
+        assert_eq!(
+            db_format(b"KDB3\x00\x01\x02"),
+            DbFormat::Kdb(KdbVersion::V3)
+        );
+        assert_eq!(db_format(b"KDB4\x00\x01\x02"), DbFormat::Unknown);
+        assert_eq!(db_format(b"KDB"), DbFormat::Unknown);
         assert_eq!(db_format(b"not a database\n"), DbFormat::Unknown);
         // A dump header cut short is no dump.
         assert_eq!(db_format(b"kdb5_util load_dump"), DbFormat::Unknown);
@@ -1553,6 +1859,67 @@ mod tests {
         check_openable(&db).unwrap();
         make_lock_files(&db).unwrap();
         assert_eq!(load_store(&db, &stash).unwrap_err().to_string(), refused);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A full load's temporary database is there, locked, from before any record is written; a load
+    /// dropped before it is made live destroys it and leaves the directory as it was.
+    #[test]
+    fn a_full_load_dropped_before_it_is_made_live_leaves_nothing() {
+        let dir = krb5_testkit::scratch_dir("persist-full-load-drop");
+        let load = FullLoad::create(&dir.join("principal")).unwrap();
+        for f in ["principal~", "principal~.ok", "principal~.kadm5.lock"] {
+            assert!(dir.join(f).exists(), "{f}");
+        }
+        drop(load);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An update dropped while it holds the permanent lock lets it go, so `principal.kadm5.lock`
+    /// is made again; one that never took it changes nothing. An empty database file is an empty
+    /// database to it, as to MIT's.
+    #[test]
+    fn an_update_dropped_under_the_permanent_lock_lets_it_go() {
+        use std::os::unix::fs::MetadataExt as _;
+        let dir = krb5_testkit::scratch_dir("persist-update-drop");
+        let (db, stash) = (dir.join("principal"), dir.join("stash"));
+        let (store, _) = crate::testrealm::bootstrap_documented().unwrap();
+        save_store(&store, &db, &stash).unwrap();
+        let pol = dir.join("principal.kadm5.lock");
+        let ino = |p: &std::path::Path| std::fs::metadata(p).unwrap().ino();
+        let before = ino(&pol);
+        drop(DbUpdate::open(&db).unwrap());
+        assert_eq!(ino(&pol), before);
+        let mut update = DbUpdate::open(&db).unwrap();
+        update.lock_permanently().unwrap();
+        assert!(!pol.exists());
+        drop(update);
+        assert_ne!(ino(&pol), before, "made again");
+        let master = super::read_stash(&stash, &db).unwrap();
+        std::fs::write(&db, b"").unwrap();
+        let mut update = DbUpdate::open(&db).unwrap();
+        assert!(!update.legacy());
+        assert!(matches!(
+            update.store(&master, None),
+            Err(PersistError::Lock(crate::DbLockError::NotLocked))
+        ));
+        update.lock_permanently().unwrap();
+        assert!(update.store(&master, None).unwrap().is_none());
+        assert!(update.text(None).unwrap().is_none());
+        // A second permanent lock changes nothing: one unlock makes the lock file again.
+        update.lock_permanently().unwrap();
+        assert!(!pol.exists());
+        update.unlock().unwrap();
+        assert!(pol.exists());
+        std::fs::write(&db, b"not a database\n").unwrap();
+        assert_eq!(
+            DbUpdate::open(&db).unwrap_err().to_string(),
+            format!(
+                "Cannot open DB2 database '{}': Invalid argument",
+                db.display()
+            )
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

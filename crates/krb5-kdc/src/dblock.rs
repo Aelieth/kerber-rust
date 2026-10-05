@@ -470,23 +470,46 @@ impl DbLock {
     /// or `principal.kadm5.lock` is gone; [`DbLockError::Io`] for any other lock or unlink
     /// failure.
     pub fn lock(&self, mode: DbLockMode) -> Result<(), DbLockError> {
+        self.lock_reopening(mode, &mut || Ok(()))
+    }
+
+    /// [`Self::lock`] with the database reopened for the lock: `reopen` runs once `principal.ok`
+    /// is newly taken or upgraded, before the policy lock, and when it fails `principal.ok` goes
+    /// back to how this process held it (unlocked, or shared under an upgrade, where MIT's
+    /// single-threaded module lets every hold go), the policy lock is never touched and its
+    /// error is the lock's. `load -update` passes the database's read-write open, so a writer
+    /// that may not write the database is refused while `principal.kadm5.lock` is still there.
+    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:450-463`): once `principal.ok` is locked the database is reopened in the lock's mode, and a reopen that fails lets the lock go.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::lock`], and [`DbLockError::Io`] with `reopen`'s error.
+    pub fn lock_reopening(
+        &self,
+        mode: DbLockMode,
+        reopen: &mut dyn FnMut() -> io::Result<()>,
+    ) -> Result<(), DbLockError> {
         let mut pause = std::time::Duration::from_millis(1);
-        while !self.try_lock(mode)? {
+        while !self.try_lock(mode, reopen)? {
             std::thread::sleep(pause);
             pause = (pause * 2).min(std::time::Duration::from_millis(64));
         }
         Ok(())
     }
 
-    /// One try of [`Self::lock`]: `false`, with nothing taken, when an upgrade of a lock this
-    /// process holds would have to wait.
+    /// One try of [`Self::lock_reopening`]: `false`, with nothing taken, when an upgrade of a
+    /// lock this process holds would have to wait.
     ///
     /// It waits in the kernel only when this process holds nothing, and it waits holding the
     /// lock's state, so the process's other requests for the lock wait behind it until the other
     /// process lets go: an AS audit waiting so holds up the KDC's lookups, as MIT's
     /// single-threaded KDC waits. An upgrade never waits there; and the KDC's audit takes the
     /// lock before its lockout state's mutex, so a waiting upgrade holds up no lookup.
-    fn try_lock(&self, mode: DbLockMode) -> Result<bool, DbLockError> {
+    fn try_lock(
+        &self,
+        mode: DbLockMode,
+        reopen: &mut dyn FnMut() -> io::Result<()>,
+    ) -> Result<bool, DbLockError> {
         let mut st = self.state();
         let kmode = if mode == DbLockMode::Shared {
             FileLock::Shared
@@ -504,6 +527,15 @@ impl DbLock {
                 }
                 Err(Errno::EACCES | Errno::EAGAIN) => return Err(DbLockError::CantLock),
                 Err(e) => return Err(DbLockError::Io(e.into())),
+            }
+            if let Err(e) = reopen() {
+                let back = if upgrade {
+                    st.mode.unwrap_or(FileLock::Unlock)
+                } else {
+                    FileLock::Unlock
+                };
+                let _ = lock_file(&st.ok, back, &mut st.ok_flock);
+                return Err(DbLockError::Io(e));
             }
             st.mode = Some(kmode);
         }
@@ -596,13 +628,15 @@ impl DbLock {
     }
 
     /// Give back one count of the lock: the policy lock, then `principal.ok`, which the last
-    /// count lets go.
-    /// MIT `ctx_unlock` (`plugins/kdb/db2/kdb_db2.c:402-422`): the policy lock is released, then the hold count drops and the last one unlocks `principal.ok`.
+    /// count lets go. A policy lock that fails is the unlock's error once `principal.ok` is let
+    /// go, as MIT passes it through: a permanent lock's policy lock file that cannot be made again
+    /// is `OSA_ADB_NOLOCKFILE`'s text, which only a lock maps to `KRB5_KDB_CANTLOCK_DB`.
+    /// MIT `ctx_unlock` (`plugins/kdb/db2/kdb_db2.c:402-422`): the policy lock is released, then the hold count drops and the last one unlocks `principal.ok`; the release's error is returned.
     ///
     /// # Errors
     ///
     /// [`DbLockError::NotLocked`] when no lock is held; [`DbLockError::Io`] when an unlock
-    /// fails; [`DbLockError::CantLock`] when a permanent lock's policy lock file cannot be made
+    /// fails; [`DbLockError::NoLockFile`] when a permanent lock's policy lock file cannot be made
     /// again.
     pub fn unlock(&self) -> Result<(), DbLockError> {
         let mut st = self.state();
@@ -619,6 +653,7 @@ impl DbLock {
         }
         match pol {
             Ok(()) | Err(PolicyLockError::NotLocked) => Ok(()),
+            Err(PolicyLockError::NoLockFile) => Err(DbLockError::NoLockFile),
             Err(e) => Err(e.into_db()),
         }
     }
@@ -883,6 +918,80 @@ mod tests {
         // `load -update`).
         other.lock(DbLockMode::Shared).unwrap();
         other.unlock().unwrap();
+    }
+
+    /// MIT's `ctx_lock` reopens the database once `principal.ok` is locked, before the policy
+    /// lock: a reopen that fails is the lock's error, lets `principal.ok` go (back to shared under
+    /// an upgrade) and leaves the policy lock file where it was, so a permanent lock that fails
+    /// there has removed nothing.
+    #[test]
+    fn a_failed_reopen_lets_principal_ok_go_before_the_policy_lock_is_touched() {
+        let db = created("reopen");
+        let ok = suffixed(&db, SUFFIX_LOCK);
+        let pol = suffixed(&db, SUFFIX_POLICY_LOCK);
+        let before = std::fs::metadata(&pol).unwrap().ino();
+        let lock = DbLock::open(&db).unwrap();
+        let mut refused = || -> io::Result<()> {
+            Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "Cannot open DB2 database 'principal': Permission denied",
+            ))
+        };
+        match lock.lock_reopening(DbLockMode::Permanent, &mut refused) {
+            Err(e @ DbLockError::Io(_)) => assert_eq!(
+                e.to_string(),
+                "Cannot open DB2 database 'principal': Permission denied"
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(probe(&ok, libc::F_WRLCK), libc::F_UNLCK);
+        assert_eq!(std::fs::metadata(&pol).unwrap().ino(), before);
+        assert!(matches!(lock.unlock(), Err(DbLockError::NotLocked)));
+        // Under an upgrade the shared hold stays, the policy lock with it.
+        lock.lock(DbLockMode::Shared).unwrap();
+        assert!(matches!(
+            lock.lock_reopening(DbLockMode::Exclusive, &mut refused),
+            Err(DbLockError::Io(_))
+        ));
+        assert_eq!(probe(&ok, libc::F_WRLCK), libc::F_RDLCK);
+        assert_eq!(probe(&pol, libc::F_WRLCK), libc::F_RDLCK);
+        lock.unlock().unwrap();
+        assert_eq!(probe(&ok, libc::F_WRLCK), libc::F_UNLCK);
+        // A reopen that succeeds runs once, as `principal.ok` is taken.
+        let mut runs = 0;
+        lock.lock_reopening(DbLockMode::Permanent, &mut || {
+            runs += 1;
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(runs, 1);
+        assert!(!pol.exists());
+        lock.unlock().unwrap();
+        assert!(pol.exists());
+    }
+
+    /// MIT's `ctx_unlock` passes the policy lock's release error through: a permanent lock whose
+    /// `principal.kadm5.lock` cannot be made again (another file is there now) is
+    /// `OSA_ADB_NOLOCKFILE`'s text, not the `KRB5_KDB_CANTLOCK_DB` a lock maps it to, and
+    /// `principal.ok` is let go all the same.
+    #[test]
+    fn an_unlock_whose_policy_lock_file_cannot_be_made_again_says_it_is_missing() {
+        let db = created("unlock-nolockfile");
+        let ok = suffixed(&db, SUFFIX_LOCK);
+        let pol = suffixed(&db, SUFFIX_POLICY_LOCK);
+        let lock = DbLock::open(&db).unwrap();
+        lock.lock(DbLockMode::Permanent).unwrap();
+        assert!(!pol.exists());
+        std::fs::write(&pol, b"").unwrap();
+        match lock.unlock() {
+            Err(e @ DbLockError::NoLockFile) => assert_eq!(
+                e.to_string(),
+                "KADM5 administration database lock file missing"
+            ),
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(probe(&ok, libc::F_WRLCK), libc::F_UNLCK);
+        assert!(matches!(lock.unlock(), Err(DbLockError::NotLocked)));
     }
 
     #[test]
