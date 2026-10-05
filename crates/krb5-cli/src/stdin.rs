@@ -12,6 +12,7 @@ use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::signal::{SigSet, SigmaskHow, Signal, pthread_sigmask};
 use nix::sys::signalfd::{SfdFlags, SignalFd};
 use nix::sys::termios::{LocalFlags, SetArg, tcgetattr, tcsetattr};
+use zeroize::Zeroize;
 
 /// A terminal stdin back in line mode, echoing, with its signal keys on; stdin that is not a
 /// terminal is left alone.
@@ -333,7 +334,9 @@ pub enum LineEnd {
 }
 
 /// C `fgets(buf, size, stream)` on `input`, into `line`: at most `size - 1` bytes, up to and
-/// including a newline; the rest of a longer line stays for the next read.
+/// including a newline; the rest of a longer line stays for the next read. A line can be a
+/// password, so one that outgrows `line`'s buffer moves to a larger one and the old buffer is
+/// wiped before it is freed.
 pub fn fgets(input: &mut (impl BufRead + ?Sized), size: usize, line: &mut Vec<u8>) -> LineEnd {
     line.clear();
     while line.len() + 1 < size {
@@ -356,6 +359,7 @@ pub fn fgets(input: &mut (impl BufRead + ?Sized), size: usize, line: &mut Vec<u8
             .take(room)
             .position(|&b| b == b'\n')
             .map_or_else(|| have.len().min(room), |at| at + 1);
+        reserve_wiped(line, take);
         line.extend_from_slice(&have[..take]);
         input.consume(take);
         if line.last() == Some(&b'\n') {
@@ -369,10 +373,52 @@ pub fn fgets(input: &mut (impl BufRead + ?Sized), size: usize, line: &mut Vec<u8
     }
 }
 
+/// Makes room for `more` bytes in `line`. A buffer too small is not reallocated in place, which
+/// would free it unwiped: its bytes move to a buffer at least twice as large, and the old one is
+/// zeroed whole before it is freed.
+fn reserve_wiped(line: &mut Vec<u8>, more: usize) {
+    if line.capacity() - line.len() >= more {
+        return;
+    }
+    let need = line.len().saturating_add(more);
+    let mut grown = Vec::with_capacity(need.max(line.capacity().saturating_mul(2)));
+    grown.extend_from_slice(line);
+    let mut old = std::mem::replace(line, grown);
+    old.resize(old.capacity(), 0);
+    old.as_mut_slice().zeroize();
+    #[cfg(test)]
+    let _ = tests::OUTGROWN.try_with(|o| o.borrow_mut().push(old));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use nix::sys::signal::raise;
+
+    thread_local! {
+        /// The buffers `reserve_wiped` replaced on this thread, kept alive as it left them.
+        pub(super) static OUTGROWN: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    #[test]
+    fn a_line_that_outgrows_its_buffer_wipes_the_old_one() {
+        let mut typed = vec![b'p'; 3000];
+        typed.push(b'\n');
+        let mut input = io::BufReader::with_capacity(512, &typed[..]);
+        let mut line = Vec::with_capacity(1024);
+        let first = line.as_ptr();
+        OUTGROWN.with(|o| o.borrow_mut().clear());
+        assert_eq!(fgets(&mut input, usize::MAX, &mut line), LineEnd::Read);
+        assert_eq!(line, typed);
+        let old = OUTGROWN.with(|o| std::mem::take(&mut *o.borrow_mut()));
+        // The 1024-octet buffer the prompt starts with, then the 2048-octet one it grew into.
+        assert_eq!(old, [vec![0; 1024], vec![0; 2048]]);
+        assert_eq!(
+            old[0].as_ptr(),
+            first,
+            "a copy was wiped, not the line's own buffer"
+        );
+    }
 
     fn read(input: &[u8], size: usize) -> (LineEnd, Vec<u8>, Vec<u8>) {
         let mut input = input;

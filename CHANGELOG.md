@@ -51,6 +51,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **cli.** A prompted line that outgrows its 1024-octet buffer (a long password) left that buffer
+  in freed memory unwiped; it now moves to a larger one and wipes the old. Unit; red at the parent.
 - **crypto.** Every buffer a key is cut from is wiped on every return: CF2's PRF+ outputs (one
   never was, the other not after an error) and the PKINIT KDFs', PRF+'s, string-to-key's and
   DK's buffers. Unit tests see every `Wiped` intermediate zeroed; red at the parent.
