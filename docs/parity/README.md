@@ -16,17 +16,21 @@ A2 owns AS/`kdc_util`, A3 owns FAST residue.
 
 ## Files
 
-One file per section. Each holds its heading, a short scope note and one
-table in the schema below; a row lives in exactly one file.
+One or more files per section, each named `<key>-<subject>.md`; A4 and B1
+have two. Each holds a heading that names its section, a short scope note
+and one table in the schema below; a row lives in exactly one file, and a
+section's count is the sum over its files.
 
 | File | Section |
 | --- | --- |
 | [a1-tgs.md](a1-tgs.md) | A1 — TGS: `tgs_policy.c`, `do_tgs_req.c`, `kdc_transit.c` |
 | [a2-as.md](a2-as.md) | A2 — AS and the KDC core: `do_as_req.c`, `kdc_util.c`, `policy.c`, `replay.c`, `dispatch.c` |
 | [a3-preauth.md](a3-preauth.md) | A3 — preauth, FAST, authdata, CAMMAC, KDC logging |
-| [a4-kadmin.md](a4-kadmin.md) | A4 — kadmind and kadm5, the KDB, `kdb5_util`, `kadmin.local`, kpasswd |
+| [a4-kadmin.md](a4-kadmin.md) | A4 — kadmind and kadm5, `kadmin.local`, kpasswd |
+| [a4-kdb.md](a4-kdb.md) | A4 — `kdb5_util` (dump and load), the KDB library and plugins, the KDB lock |
 | [a5-prop.md](a5-prop.md) | A5 — kprop, kpropd, iprop and the gssrpc layer |
-| [b1-client.md](b1-client.md) | B1 — the client library, crypto, GSS, the acceptor and the client tools |
+| [b1-client.md](b1-client.md) | B1 — the client library, crypto, GSS, the acceptor, ccache and keytab |
+| [b1-tools.md](b1-tools.md) | B1 — the client tools: `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd`, `ktutil` |
 
 FAST unwrap failures put the MIT status word
 `FIND_FAST` on the wire `e_text` (`do_as_req.c:808`,
@@ -93,7 +97,9 @@ absent 2 · deferred 45.
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and
 69 of B1's 79; A4's `session_enctypes` row moved to A2. No row's text
-changed.
+changed. Later A4 and B1 each became two files by subject (A4: 51 in
+`a4-kadmin.md`, 8 in `a4-kdb.md`; B1: 73 in `b1-client.md`, 6 in
+`b1-tools.md`), each row moved byte for byte.
 
 Counting rule: a row with two verdicts (`exact (unit)`,
 `deviation (decision)`, `absent (otp)`) counts under its **first**

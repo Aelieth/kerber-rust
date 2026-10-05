@@ -591,7 +591,7 @@ Wire `e_text` is MIT's status word (`do_as_req.c:806`,
 `do_tgs_req.c:205-206`). MIT `k5_setmsg` texts are KDC-log messages
 and land in the `kdc.issue` `detail` field, not on the wire. A cell
 that pins MIT text must say whether it is wire or log. The KDC MIT
-1.22.2 parity ledger is [`parity/`](parity/README.md), one file per section;
+1.22.2 parity ledger is [`parity/`](parity/README.md), one or more files per section;
 a `proof` cell may name an existing gate script or `diffsend` case,
 or mark that clause `proposed` / `propose`. `proposed` scopes only
 the clause it is in (semicolon-separated).

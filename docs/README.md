@@ -17,10 +17,11 @@ entry says what the file holds.
    assertions.
 5. [security.md](security.md): timing, replay and secret handling, and the
    deliberate deviations from MIT.
-6. [parity/README.md](parity/README.md): the MIT 1.22.2 parity ledger, one file
-   per section: [A1](parity/a1-tgs.md), [A2](parity/a2-as.md),
-   [A3](parity/a3-preauth.md), [A4](parity/a4-kadmin.md),
-   [A5](parity/a5-prop.md), [B1](parity/b1-client.md).
+6. [parity/README.md](parity/README.md): the MIT 1.22.2 parity ledger, one or
+   more files per section: [A1](parity/a1-tgs.md), [A2](parity/a2-as.md),
+   [A3](parity/a3-preauth.md), A4 ([kadmin](parity/a4-kadmin.md),
+   [kdb](parity/a4-kdb.md)), [A5](parity/a5-prop.md), B1
+   ([client](parity/b1-client.md), [tools](parity/b1-tools.md)).
    [mit-parity-ledger.md](mit-parity-ledger.md) is a pointer to it.
 7. [logging.md](logging.md): the structured log schema.
 8. [interop-matrix.md](interop-matrix.md): the external implementations this

@@ -783,6 +783,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **docs.** Parity-ledger sections A4 and B1 are two files each: `kdb5_util` and the KDB move to
+  `a4-kdb.md`, the client tools' rows to `b1-tools.md`, byte for byte; pointers follow them.
 - **client.** `kinit`, `klist`, `kvno`, `kdestroy` and `kswitch` are ports of MIT 1.22.2's: its
   option tables and usage, com_err texts and exit codes, `klist -k`, and no log lines. Settled
   beside MIT's tools in a container realm (`working/logs/f-P6/`); units.
