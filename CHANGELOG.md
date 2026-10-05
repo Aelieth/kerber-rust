@@ -2736,6 +2736,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** A parity-ledger section may span files, each `<key>-<subject>.md` headed by its key,
+  the count summed over them; a row held twice, in one file or two, stays red. hygiene-diff
+  re-keys a row that also moved file. Self-tests.
 - **ci.** CI's test job, `full-test`, `make test`, the checkpoint and the unit-evidence tools also
   turn on `krb5-client/test-hooks`, so the client's gate-option units run there; CI's test job and
   `make test` then run every test once more without features, so the release-only units run too.

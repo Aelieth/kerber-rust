@@ -47,7 +47,8 @@ fails if a test, cell tag, diffsend case, flow or ledger row
 disappeared, a gate went red, or a quality count rose; shape deltas are
 informational. Ledger rows are keyed by MIT cite and check, with the
 file as a separate column, so a row that changes file (the single-file
-ledger split into `docs/parity/`) is counted as moved and a row that
+ledger split into `docs/parity/`, or a move between a section's files)
+is counted as moved and a row that
 disappears fails; a snapshot from before that key is compared by MIT
 cite alone, the verdicts under each cite as a multiset, so a cite the
 ledger holds twice stays two rows. A regrade is a change of grade, the verdict cell's first
@@ -57,7 +58,8 @@ reworded`. A reworded check cell is a re-key, listed with `--ledger-rekey
 FILE` (`path<TAB>cite<TAB>old check = new check<TAB>blob=<the doc at the
 old tree>`, and optionally `<TAB>proof: <old span> = <new span>` for one
 excused span of the proof cell): with the verdict and proof cells
-unchanged it reads `ledger row reworded (check cell)`; unlisted it stays
+unchanged it reads `ledger row reworded (check cell)`, the new row read
+in the file the new snapshot names for it; unlisted it stays
 removed and added, and an unused entry fails. A swath that renames or de-duplicates tests passes its
 map (`--renames`, `--duplicates`). `--duplicates` and `--renames` are
 keyed `old_binary<TAB>old_name` to `new_binary<TAB>new_name`; a RHS
@@ -405,13 +407,16 @@ Words in echo arguments and filenames never count; `/bin/echo` and
 skip` is accepted only when the arm names a `KERBER_REQUIRE_`
 requirement that a `die` in the same script enforces. `{ … }`, `( … )`,
 and heredoc arms are inspected. The ledger is split:
-`docs/parity/README.md` (the header) plus one file per section named
-`a1-…` to `a5-…` or `b1-…` whose first heading names that section; the
+`docs/parity/README.md` (the header) plus one or more files per section,
+each named `<key>-<subject>.md` (`a1-…` to `a5-…`, `b1-…`) with a first
+heading that names that section; the
 one-file layout (`docs/mit-parity-ledger.md`, now a pointer) is read
 too. A split without its README, a file whose name or heading gives no
-section or the wrong one, rows left in the single file beside the split,
-and a row (MIT cite and check) present twice fail. The header tally must match a
-recount of the verdict cells and the A1–A5 / B1 section split; a missing
+section or the wrong one, rows in the README, rows left in the single
+file beside the split, and a row (MIT cite and check) present twice, in
+one file or in two, fail. The header tally must match a
+recount of the verdict cells and the A1–A5 / B1 section split, each
+section summed over its files; a missing
 total line fails. Rust-site cells that use
 `file.rs symbol` (optional crate prefix `krb5-kdc/reply.rs mint_ticket`,
 optional `:N` after the symbol) must resolve to an item (`fn`,
