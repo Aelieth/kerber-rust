@@ -169,7 +169,7 @@ impl Open {
     }
 
     /// MIT `ctx_init` (`plugins/kdb/db2/kdb_db2.c:496-500`): a lock file that does not open is the system's text, or the policy lock's own.
-    /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:384-389`): a database file of another format is named, with `EINVAL`'s text.
+    /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database file of another format is named, with `EINVAL`'s text.
     fn load_text(&self, e: krb5_kdc::PersistError) -> String {
         match e {
             krb5_kdc::PersistError::Lock(e) => e.to_string(),

@@ -1400,6 +1400,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **docs.** The install doc says every program that opens MIT's database refuses it (a full
+  `load` replaces it); the `Unopenable` docs say where an empty file is refused.
 - **kdc/admin.** kprop, kadmin.local, krb5kdc and kadmind open the database and its lock files
   before the master key, as MIT's: a missing lock file is named, not the stash, and no `-m`
   prompt comes first. Settled; units.

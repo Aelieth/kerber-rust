@@ -56,7 +56,8 @@ pub enum PersistError {
     /// The database's lock files are missing, or its lock may not be taken; the text is MIT's.
     #[error(transparent)]
     Lock(#[from] DbLockError),
-    /// The database file is no database this store reads: MIT's text, naming the file.
+    /// The database file is no database this store reads, or is empty where a store is read, in
+    /// the form of MIT's db2 module, `Cannot open DB2 database '<file>': <why>`.
     #[error("Cannot open DB2 database '{}': {why}", path.display())]
     Unopenable {
         /// The database file.
@@ -69,11 +70,17 @@ pub enum PersistError {
 /// Why a database file does not open.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unopenable {
-    /// Neither dump text nor a legacy KDB blob: `EINVAL`, the errno MIT's Berkeley DB gives a
-    /// file of another format where the platform has no `EFTYPE`.
+    /// `Invalid argument`, MIT's text for a file of another format (`EINVAL`, which MIT's
+    /// Berkeley DB gives where the platform has no `EFTYPE`): a file that is neither dump text
+    /// nor a legacy KDB blob, refused at the open ([`check_openable`]) before the lock files and
+    /// the stash. An empty file passes the open and gets this text from the read under the lock,
+    /// before the stash ([`load_store`], [`load_store_with_master`], [`check_database`]), where
+    /// MIT opens an empty database and finds no master key in it; `load -update` fills one, as
+    /// MIT's does ([`DbUpdate`]), and a full load replaces it ([`FullLoad`]).
     NotDatabase,
-    /// An MIT db2 database, which only MIT's tools read: it moves over by MIT's `kdb5_util dump`
-    /// and this `kdb5_util load`, and is never converted where it lies.
+    /// An MIT db2 database, which only MIT's tools read, refused at the open: it moves over by
+    /// MIT's `kdb5_util dump` and this `kdb5_util load`, and is never converted where it lies.
+    /// The reason is ours, in MIT's form, so that it names the way over.
     MitDb2,
 }
 
@@ -245,7 +252,7 @@ fn refused(db: &Path, format: DbFormat) -> PersistError {
 /// Berkeley DB opens one as an empty database; a read under the lock refuses it, an update
 /// fills it and a full load replaces it.
 /// MIT `check_openable` (`plugins/kdb/db2/kdb_db2.c:545-557`): the database is opened before its lock files.
-/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:384-389`): a database that does not open is named, with its errno.
+/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that does not open is named, with its errno's text.
 /// MIT `__bt_open` (`plugins/kdb/db2/libdb2/btree/bt_open.c:256-276`): an empty file opens as a new, empty btree.
 ///
 /// # Errors
@@ -274,10 +281,10 @@ pub fn check_openable(db: &Path) -> Result<(), PersistError> {
 ///
 /// [`PersistError::Io`] when the database or the stash cannot be read (a missing file included);
 /// [`PersistError::Unopenable`] when the database is no database this store reads, before its
-/// lock files and the stash are opened ([`check_openable`]);
-/// [`PersistError::Lock`] when `principal.ok` or `principal.kadm5.lock` does not open or the
-/// lock may not be taken; [`PersistError::Format`] when a dump is not UTF-8, a legacy database
-/// has a malformed record, or the `.ulog` file beside it is malformed;
+/// lock files and the stash are opened ([`check_openable`]), or is empty, before the stash is
+/// read; [`PersistError::Lock`] when `principal.ok` or `principal.kadm5.lock` does not open or
+/// the lock may not be taken; [`PersistError::Format`] when a dump is not UTF-8, a legacy
+/// database has a malformed record, or the `.ulog` file beside it is malformed;
 /// [`PersistError::Crypto`] when no key from the stash loads the dump (a malformed dump
 /// included) or decrypts a legacy database, or a legacy key is unusable.
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
@@ -339,11 +346,11 @@ pub(crate) fn read_store(
 /// # Errors
 ///
 /// [`PersistError::Io`] when the database cannot be read; [`PersistError::Unopenable`] when it
-/// is no database this store reads ([`check_openable`]); [`PersistError::Lock`] when
-/// `principal.ok` or `principal.kadm5.lock` does not open or the lock may not be taken;
-/// [`PersistError::Format`] when it is a legacy database (which needs its stash) or the
-/// `.ulog` beside it is malformed; [`PersistError::Crypto`] when a key does not decrypt under
-/// `master`, a wrong master key included.
+/// is no database this store reads ([`check_openable`]) or is empty; [`PersistError::Lock`]
+/// when `principal.ok` or `principal.kadm5.lock` does not open or the lock may not be taken;
+/// [`PersistError::Format`] when it is a legacy database (which needs its stash), a dump that
+/// is not UTF-8, or the `.ulog` beside it is malformed; [`PersistError::Crypto`] when a key does
+/// not decrypt under `master`, a wrong master key included.
 pub fn load_store_with_master(
     db_path: &Path,
     master: &ProtocolKey,

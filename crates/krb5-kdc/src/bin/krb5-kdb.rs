@@ -639,7 +639,7 @@ fn read_db_text(util: &Util, db: &Path) -> Result<(String, HashMap<String, Locko
 
 /// The text of a database `db` that does not open: one that is no database this store reads is
 /// MIT's own text, which names the file; any other failure is named with its reason.
-/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:384-389`): a database that does not open is named, with why.
+/// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that does not open is named, with why.
 fn open_text(db: &Path, e: &PersistError) -> String {
     match e {
         PersistError::Unopenable { .. } => e.to_string(),

@@ -309,9 +309,9 @@ klist
 
 kerber-rust does not read MIT's db2 database. A realm moves over the way MIT moves one between
 its own database types: MIT's `kdb5_util dump`, then kerber-rust's `kdb5_util load`. Until then
-every kerber-rust program refuses MIT's database, leaves it as it is, and points here
-(`krb5kdc` writes the line to its log and prints `cannot initialize realm … - see log file for
-details`, as MIT's does):
+every kerber-rust program that opens MIT's database refuses it, leaves it as it is, and points
+here (`krb5kdc` writes the line to its log and prints `cannot initialize realm … - see log file
+for details`, as MIT's does):
 
 ```text
 kdb5_util: Cannot open DB2 database '/var/kerberos/krb5kdc/principal': This is an MIT db2 database; dump it with the old installation's kdb5_util, then kdb5_util load here (docs/install.md, Upgrading an MIT realm) while initializing database
