@@ -56,11 +56,7 @@ wait_log "$NAME" /tmp/gss-accept.log listening || {
 echo "==== MIT libgssapi_krb5 initiator ===="
 MSG="hello-from-mit-gss"
 docker cp "$ROOT/scripts/oracle/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
-if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssapi_krb5 -lkrb5; then
-    log "gss.gate" "error" ',"error":"cc gss-mit-client failed"'
-    docker exec "$NAME" cat /tmp/gss-cc.log 2>/dev/null || true
-    exit 1
-fi
+mit_oracle_cc "$NAME" /tmp/gss-mit-client /tmp/gss-mit-client.c gssapi
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness -e GSS_DUMP_TOKEN=/tmp/gss-apreq "$NAME" \
     /tmp/gss-mit-client testhost.kerber.test host "$MSG" 127.0.0.1 4444
 
@@ -129,10 +125,7 @@ echo "rust_acceptor_deleg_flags=$RUST_DELEG_FLAGS"
 echo "==== compile MIT acceptor helper ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'
 docker cp "$ROOT/scripts/oracle/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
-if ! docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5; then
-    log "gss.gate" "error" ',"error":"cc gss-mit-server failed"'
-    exit 1
-fi
+mit_oracle_cc "$NAME" /tmp/gss-mit-server /tmp/gss-mit-server.c gssapi
 docker exec -e KRB5CCNAME=/tmp/krb5cc_harness "$NAME" \
     kvno host/testhost.kerber.test@KERBER.TEST
 
@@ -364,15 +357,9 @@ echo "$MIT2"
 }
 
 docker cp "$ROOT/scripts/oracle/gss-mit-client.c" "$NAME":/tmp/gss-mit-client.c
-if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssapi_krb5 -lkrb5; then
-    log "gss.gate" "error" ',"error":"cc gss-mit-client dce rebuild failed"'
-    exit 1
-fi
+mit_oracle_cc "$NAME" /tmp/gss-mit-client /tmp/gss-mit-client.c gssapi
 docker cp "$ROOT/scripts/oracle/gss-mit-server.c" "$NAME":/tmp/gss-mit-server.c
-if ! docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5; then
-    log "gss.gate" "error" ',"error":"cc gss-mit-server dce rebuild failed"'
-    exit 1
-fi
+mit_oracle_cc "$NAME" /tmp/gss-mit-server /tmp/gss-mit-server.c gssapi
 
 echo "==== MIT DCE wrap_iov vs Rust unwrap ===="
 docker exec "$NAME" sh -c 'kill $(pidof krb5-gss-accept) 2>/dev/null || true'

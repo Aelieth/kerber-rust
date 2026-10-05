@@ -23,17 +23,7 @@ _kadmin_cleanup() {
 compile_kadm5_changepw() {
     local ctn=$1
     docker cp "$ROOT/scripts/oracle/kadm5-changepw-rpc.c" "$ctn":/tmp/kadm5-changepw-rpc.c
-    if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
-        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-cc.err"
-    then
-        if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
-            -lkadm5clnt -lgssrpc -lgssapi_krb5 -lkrb5 -lcom_err 2>>"$SCRATCH/kadm5-cc.err"
-        then
-            cat "$SCRATCH/kadm5-cc.err" >&2 || true
-            log "kadmin.gate" "error" ',"error":"kadm5-changepw-rpc compile failed"'
-            exit 1
-        fi
-    fi
+    mit_oracle_cc "$ctn" /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c kadm-client
 }
 
 kadm5_changepw_list() {
@@ -45,13 +35,7 @@ kadm5_changepw_list() {
 compile_kadm5_integrity() {
     local ctn=$1
     docker cp "$ROOT/scripts/oracle/kadm5-integrity-rpc.c" "$ctn":/tmp/kadm5-integrity-rpc.c
-    if ! docker exec "$ctn" cc -o /tmp/kadm5-integrity-rpc /tmp/kadm5-integrity-rpc.c \
-        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-int-cc.err"
-    then
-        cat "$SCRATCH/kadm5-int-cc.err" >&2 || true
-        log "kadmin.gate" "error" ',"error":"kadm5-integrity-rpc compile failed"'
-        exit 1
-    fi
+    mit_oracle_cc "$ctn" /tmp/kadm5-integrity-rpc /tmp/kadm5-integrity-rpc.c kadm-client
 }
 
 # kadmin/admin is DISALLOW_TGT_BASED, so kinit -S takes an initial service
@@ -67,13 +51,7 @@ kadm5_integrity_list() {
 compile_kadm5_probe() {
     local ctn=$1
     docker cp "$ROOT/scripts/oracle/kadm5-rpc-probe.c" "$ctn":/tmp/kadm5-rpc-probe.c
-    if ! docker exec "$ctn" cc -o /tmp/kadm5-rpc-probe /tmp/kadm5-rpc-probe.c \
-        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-probe-cc.err"
-    then
-        cat "$SCRATCH/kadm5-probe-cc.err" >&2 || true
-        log "kadmin.gate" "error" ',"error":"kadm5-rpc-probe compile failed"'
-        exit 1
-    fi
+    mit_oracle_cc "$ctn" /tmp/kadm5-rpc-probe /tmp/kadm5-rpc-probe.c kadm-client
 }
 
 kadm5_probe() {

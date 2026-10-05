@@ -116,10 +116,7 @@ echo "$MITKT" | grep -F 'extract-keys'
 echo "==== TGS kpasswd self-change is INITIAL_FLAG_NEEDED (MIT) ===="
 kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'modprinc +allow_tgs_req kadmin/changepw'
 docker cp "$ROOT/scripts/oracle/kpasswd-tgs-client.c" "$NAME_MIT":/tmp/kpasswd-tgs-client.c
-if ! docker exec "$NAME_MIT" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
-    log "kpasswd.gate" "error" ',"error":"cc MIT kpasswd-tgs-client failed"'
-    exit 1
-fi
+mit_oracle_cc "$NAME_MIT" /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c krb5
 docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; printf "userpassword\n" | kinit user@KERBER.TEST'
 set +e
 D2M="$(docker exec "$NAME_MIT" sh -c 'export KRB5CCNAME=FILE:/tmp/krb5cc_d2; /tmp/kpasswd-tgs-client FILE:/tmp/krb5cc_d2 KERBER.TEST d2-should-fail')"

@@ -2756,6 +2756,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **gate.** Every in-image MIT oracle is built with `krb5-config` (`mit_oracle_cc`); a plain `-lkrb5`
+  loaded Debian's 1.20.1 libkrb5. Before its first use the gate prints the loaded brand, red unless
+  `krb5-1.22.2-final`.
 - **gate.** The Samba PAC gates' realm and the iprop gate's replica set kdc.conf `domain_sid`: the
   AD identity their AD-shaped PAC cells read.
 - **tool.** `krb5-pac-extract --server` picks the ticket of one server, and `--print-layout` prints

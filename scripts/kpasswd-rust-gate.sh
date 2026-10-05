@@ -45,10 +45,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpa
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
 docker cp "$ROOT/scripts/oracle/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kadmind /tmp/krb5-kpasswd /tmp/krb5-kadmin-local
-if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
-    log "kpasswd.gate" "error" ',"error":"cc kpasswd-tgs-client failed"'
-    exit 1
-fi
+mit_oracle_cc "$NAME" /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c krb5
 
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \

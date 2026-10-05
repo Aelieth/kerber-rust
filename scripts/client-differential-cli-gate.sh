@@ -213,9 +213,7 @@ fi
 echo "$RUST_P" | grep -q 'requires'
 
 echo "==== gss-mit-client → Rust acceptor majors ===="
-if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssapi_krb5 -lkrb5; then
-    die "cc gss-mit-client failed"
-fi
+mit_oracle_cc "$NAME" /tmp/gss-mit-client /tmp/gss-mit-client.c gssapi
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /tmp/host.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -335,9 +333,7 @@ echo "RUST_kinit_keyexp_changepw"
 
 echo "==== vfy_increds (vfy_increds.c) ===="
 docker cp "$ROOT/scripts/oracle/t_vfy_increds.c" "$NAME":/tmp/t_vfy_increds.c
-if ! docker exec "$NAME" cc -o /tmp/t_vfy_increds /tmp/t_vfy_increds.c -lkrb5 -lcom_err; then
-    die "MIT t_vfy_increds compile failed"
-fi
+mit_oracle_cc "$NAME" /tmp/t_vfy_increds /tmp/t_vfy_increds.c krb5
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-vfy-increds" "$NAME":/tmp/krb5-vfy-increds
 docker exec "$NAME" chmod +x /tmp/krb5-vfy-increds
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/vfy.kerber.test' >/dev/null
@@ -415,9 +411,7 @@ echo "RUST_vfy_increds_nofail"
 echo "==== chpw texts + setpw (chpw.c) ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
 docker cp "$ROOT/scripts/oracle/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
-if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
-    die "MIT kpasswd-tgs-client compile failed"
-fi
+mit_oracle_cc "$NAME" /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c krb5
 docker exec "$NAME" chmod +x /tmp/krb5-kpasswd
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addpol -minlength 8 chpwmin' >/dev/null
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -policy chpwmin -pw LongPass1 chpwpol' >/dev/null
@@ -970,8 +964,7 @@ echo "==== Z1.3 acceptor validate_times + key pinning (forged) ===="
 # replay it via the Rust initiator (which uses the cached ticket bytes as-is)
 # to both the Rust acceptor and MIT's gss-server. Both must refuse; the
 # untouched ticket must be accepted by both (the control).
-docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5 \
-    || die "cc gss-mit-server failed"
+mit_oracle_cc "$NAME" /tmp/gss-mit-server /tmp/gss-mit-server.c gssapi
 
 # Source ccache: a real TGT + host/testhost service ticket to forge from
 # (Rust tools so the initiator parses the ccache format).

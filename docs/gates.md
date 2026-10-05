@@ -17,7 +17,9 @@ needs an absent peer, a wrapper runs other gates locally.
 
 Oracles: **MIT** 1.22.2 (the equality bar), **Samba** 4 AD, **Heimdal** 7.8
 (secondary), or **none** (Rust against Rust: it proves behaviour, not
-parity).
+parity). An MIT program a gate compiles in the MIT image is linked by `krb5-config`
+(`mit_oracle_cc`) and prints the `libkrb5` it loads, `krb5-1.22.2-final`, before
+its first use; any other brand is red.
 
 No gate drives SSSD's `krb5_child`, gssproxy, NFS, the satomlin kit or
 Windows SSPI. They ran in the KVM field lab

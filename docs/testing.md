@@ -327,7 +327,10 @@ green again.
 
 Gate helpers live in `scripts/lib/`, one line each in [`scripts/README.md`](../scripts/README.md); the MIT
 C programs the gates build in their containers are in `scripts/oracle/` (the clock-skew preload is
-`scripts/lib/skew-preload.c`). Every kadmin query a gate or a `scripts/lib` helper runs goes through
+`scripts/lib/skew-preload.c`). `mit_oracle_cc` builds each with `krb5-config`'s flags, so it loads the
+image's MIT 1.22.2 libraries, not Debian's 1.20.1 `libkrb5`, and the gate prints the loaded library's
+`KRB5_BRAND` before the oracle's first use, red unless it is `krb5-1.22.2-final`. Every kadmin query a
+gate or a `scripts/lib` helper runs goes through
 `scripts/lib/kadmin-q.sh`, but for the keyed container sites below: the runners `mit_kadmin_local` / `mit_kadmin` / `rust_kadmin_local` take the
 `docker exec` options and the container before `--` and the kadmin arguments after, and pass streams and exit
 status through. MIT's kadmin exits 0 on a refused query, so a query whose output the cell does not check

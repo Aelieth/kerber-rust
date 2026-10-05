@@ -21,6 +21,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 1
 fi
 docker inspect "$NAME" >/dev/null 2>&1 || die "kadmin-rust-acl-gate needs rust container (run kadmin-rust-gate.sh with KERBER_KADMIN_KEEP=1 first)"
+mit_oracle_brand "$NAME" /tmp/kadm5-changepw-rpc
 
 alias_cells "$NAME" /tmp/kadmin-krb5.conf admin@KERBER.TEST rust
 glob_cells "$NAME" /tmp/kadmin-krb5.conf admin@KERBER.TEST rust "$SCRATCH/glob-rust.txt"
