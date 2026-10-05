@@ -1920,7 +1920,7 @@ mod tests {
         update.lock_permanently().unwrap();
         assert!(!pol.exists());
         drop(update);
-        assert_ne!(ino(&pol), before, "made again");
+        assert!(pol.exists(), "made again");
         let master = super::read_stash(&stash, &db).unwrap();
         std::fs::write(&db, b"").unwrap();
         let mut update = DbUpdate::open(&db).unwrap();
