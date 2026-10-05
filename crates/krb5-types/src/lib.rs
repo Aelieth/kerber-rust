@@ -92,7 +92,8 @@ pub use extra::{
 };
 pub use name::{
     ParsedName, infer_name_type, parse_name, parse_name_ex, principal_from_unparsed,
-    principal_from_unparsed_ex, quote_component, unparse_components, unparse_name,
+    principal_from_unparsed_ex, quote_component, unparse_components, unparse_components_no_realm,
+    unparse_name,
 };
 pub use name_error::{NameError, TimeError};
 
@@ -324,6 +325,13 @@ impl PrincipalName {
     #[must_use]
     pub fn unparse_with_realm(&self, realm: &str) -> String {
         crate::unparse_name(&self.component_strings(), realm)
+    }
+
+    /// MIT `krb5_unparse_name_flags` with `KRB5_PRINCIPAL_UNPARSE_NO_REALM`: quoted components,
+    /// an `@` unquoted.
+    #[must_use]
+    pub fn unparse_no_realm(&self) -> String {
+        crate::unparse_components_no_realm(&self.component_strings())
     }
 
     fn component_strings(&self) -> Vec<String> {

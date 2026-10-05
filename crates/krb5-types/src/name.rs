@@ -176,9 +176,33 @@ pub fn unparse_name(comps: &[String], realm: &str) -> String {
     format!("{}@{}", unparse_components(comps), quote_component(realm))
 }
 
+/// MIT `krb5_unparse_name_flags` with `KRB5_PRINCIPAL_UNPARSE_NO_REALM`: the components quoted as
+/// [`unparse_components`] quotes them, except that an `@` is copied unquoted.
+/// MIT `copy_component_quoting` (`lib/krb5/krb/unparse.c:103-107`): with no realm, `REALM_SEP` is copied as is.
+#[must_use]
+pub fn unparse_components_no_realm(comps: &[String]) -> String {
+    comps
+        .iter()
+        .map(|c| {
+            c.split('@')
+                .map(quote_component)
+                .collect::<Vec<_>>()
+                .join("@")
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unparse_no_realm_keeps_at_sign_and_quotes_the_rest() {
+        let comps = vec!["a@b".to_string(), "x/y\\z\t".to_string()];
+        assert_eq!(unparse_components_no_realm(&comps), r"a@b/x\/y\\z\t");
+        assert_eq!(unparse_components(&comps), r"a\@b/x\/y\\z\t");
+    }
 
     #[test]
     fn parse_unparse_escapes() {
