@@ -106,8 +106,9 @@ pub use persist::{
 };
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,
-    apply_policy_times, clear_thread_policy, current_policy, register_authdata, register_preauth,
-    set_policy, set_thread_policy,
+    apply_policy_times, clear_thread_authdata, clear_thread_policy, clear_thread_preauth,
+    current_policy, register_authdata, register_preauth, set_policy, set_thread_authdata,
+    set_thread_policy, set_thread_preauth,
 };
 pub use store::{
     AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,

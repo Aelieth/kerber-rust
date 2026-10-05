@@ -374,6 +374,11 @@ impl KdcPreauth for EncChallengeMod {
 static EXTRA: Mutex<Vec<Arc<dyn KdcPreauth>>> = Mutex::new(Vec::new());
 static BUILTIN: OnceLock<Vec<Arc<dyn KdcPreauth>>> = OnceLock::new();
 
+thread_local! {
+    static THREAD_EXTRA: std::cell::RefCell<Option<Vec<Arc<dyn KdcPreauth>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
 fn builtins() -> &'static [Arc<dyn KdcPreauth>] {
     BUILTIN.get_or_init(|| {
         vec![
@@ -386,7 +391,7 @@ fn builtins() -> &'static [Arc<dyn KdcPreauth>] {
     })
 }
 
-/// Extra modules after the built-ins (tests / deploy).
+/// Extra modules after the built-ins, for every thread that has not set its own list (KDC serve workers).
 pub fn register_preauth(m: Arc<dyn KdcPreauth>) {
     EXTRA
         .lock()
@@ -394,10 +399,25 @@ pub fn register_preauth(m: Arc<dyn KdcPreauth>) {
         .push(m);
 }
 
-/// All modules, built-ins first.
+/// Install this thread's extra modules, used in place of the process-wide ones (tests).
+pub fn set_thread_preauth(modules: Vec<Arc<dyn KdcPreauth>>) {
+    THREAD_EXTRA.with(|t| *t.borrow_mut() = Some(modules));
+}
+
+/// Drop this thread's extra modules so it uses the process-wide ones.
+pub fn clear_thread_preauth() {
+    THREAD_EXTRA.with(|t| *t.borrow_mut() = None);
+}
+
+/// All modules, built-ins first, then this thread's extras when it has set them, else the
+/// process-wide ones.
 #[must_use]
 pub(crate) fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
     let mut v: Vec<Arc<dyn KdcPreauth>> = builtins().to_vec();
+    if let Some(extra) = THREAD_EXTRA.with(|t| t.borrow().clone()) {
+        v.extend(extra);
+        return v;
+    }
     v.extend(
         EXTRA
             .lock()
@@ -437,7 +457,12 @@ pub trait KdcAuthdata: Send + Sync {
 
 static EXTRA_AD: Mutex<Vec<Arc<dyn KdcAuthdata>>> = Mutex::new(Vec::new());
 
-/// Extra kdcauthdata modules (tests / deploy). None are built in.
+thread_local! {
+    static THREAD_EXTRA_AD: std::cell::RefCell<Option<Vec<Arc<dyn KdcAuthdata>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Extra kdcauthdata modules for every thread that has not set its own list. None are built in.
 pub fn register_authdata(m: Arc<dyn KdcAuthdata>) {
     EXTRA_AD
         .lock()
@@ -445,9 +470,23 @@ pub fn register_authdata(m: Arc<dyn KdcAuthdata>) {
         .push(m);
 }
 
-/// Loaded kdcauthdata modules (empty unless [`register_authdata`] was called).
+/// Install this thread's kdcauthdata modules, used in place of the process-wide ones (tests).
+pub fn set_thread_authdata(modules: Vec<Arc<dyn KdcAuthdata>>) {
+    THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = Some(modules));
+}
+
+/// Drop this thread's kdcauthdata modules so it uses the process-wide ones.
+pub fn clear_thread_authdata() {
+    THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = None);
+}
+
+/// Loaded kdcauthdata modules: this thread's when it has set them, else the process-wide ones
+/// (empty unless [`register_authdata`] was called).
 #[must_use]
 pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
+    if let Some(modules) = THREAD_EXTRA_AD.with(|t| t.borrow().clone()) {
+        return modules;
+    }
     EXTRA_AD
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -710,7 +749,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Install the policy hook for every thread (KDC serve workers).
+/// Install the policy hook for every thread that has not set its own (KDC serve workers).
 pub fn set_policy(p: Arc<dyn KdcPolicy>) {
     *POLICY
         .lock()
@@ -760,7 +799,7 @@ mod tests {
     #[test]
     fn demo_preauth_and_policy_are_consulted() {
         let demo = DemoPreauth::new();
-        register_preauth(Arc::clone(&demo) as Arc<dyn KdcPreauth>);
+        set_thread_preauth(vec![Arc::clone(&demo) as Arc<dyn KdcPreauth>]);
         let pol = Arc::new(DemoPolicy::default());
         set_thread_policy(Arc::clone(&pol) as Arc<dyn KdcPolicy>);
         let (store, _) = bootstrap_documented().unwrap();
@@ -799,11 +838,82 @@ mod tests {
             pol.as_checks.load(Ordering::SeqCst) >= 1,
             "demo policy check_as must run"
         );
-        EXTRA
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+        clear_thread_preauth();
         clear_thread_policy();
+    }
+
+    /// A module counting its `handle` calls.
+    struct CountingAuthdata(std::sync::atomic::AtomicU64);
+
+    impl KdcAuthdata for CountingAuthdata {
+        fn name(&self) -> &'static str {
+            "counting"
+        }
+        fn handle(
+            &self,
+            _is_tgs: bool,
+            _reply: &mut AuthorizationData,
+            _session: Option<&ProtocolKey>,
+            _issuer: Option<(&PrincipalName, &str)>,
+        ) -> Result<(), Error> {
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn thread_preauth_and_authdata_stay_on_their_thread() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let no_padata = |nonce| as_req(cname.clone(), TEST_REALM, nonce, None).unwrap();
+        let demo = DemoPreauth::new();
+        set_thread_preauth(vec![Arc::clone(&demo) as Arc<dyn KdcPreauth>]);
+        let counting = Arc::new(CountingAuthdata(std::sync::atomic::AtomicU64::new(0)));
+        set_thread_authdata(vec![Arc::clone(&counting) as Arc<dyn KdcAuthdata>]);
+        let other = std::thread::spawn({
+            let store = store.clone();
+            let req = no_padata(21);
+            move || {
+                let as_err = crate::issue_as(&store, &req).unwrap_err();
+                crate::ad::handle_authdata(true, false, None, None, None, None, None, None)
+                    .expect("handle_authdata");
+                as_err
+            }
+        })
+        .join()
+        .expect("join");
+        assert!(matches!(other, Error::PreauthRequired { .. }), "{other:?}");
+        assert_eq!(
+            (
+                demo.ads.load(Ordering::SeqCst),
+                demo.procs.load(Ordering::SeqCst)
+            ),
+            (0, 0),
+            "another thread's AS must not run this thread's preauth module"
+        );
+        assert_eq!(
+            counting.0.load(Ordering::SeqCst),
+            0,
+            "another thread must not run this thread's authdata module"
+        );
+        let _ = crate::issue_as(&store, &no_padata(22)).unwrap_err();
+        crate::ad::handle_authdata(true, false, None, None, None, None, None, None)
+            .expect("handle_authdata");
+        assert_eq!(demo.procs.load(Ordering::SeqCst), 1, "this thread's AS");
+        assert_eq!(counting.0.load(Ordering::SeqCst), 1, "this thread's TGS");
+        clear_thread_preauth();
+        clear_thread_authdata();
+        let _ = crate::issue_as(&store, &no_padata(23)).unwrap_err();
+        crate::ad::handle_authdata(true, false, None, None, None, None, None, None)
+            .expect("handle_authdata");
+        assert_eq!(
+            (
+                demo.procs.load(Ordering::SeqCst),
+                counting.0.load(Ordering::SeqCst)
+            ),
+            (1, 1),
+            "cleared: the thread is back on the process-wide modules"
+        );
     }
 
     #[test]

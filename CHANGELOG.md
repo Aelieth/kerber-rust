@@ -2740,6 +2740,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **kdc.** Tests isolate extra preauth and kdcauthdata modules per thread (`set_thread_preauth`,
+  `set_thread_authdata`), so the demo-preauth unit no longer flakes; proved by
+  `thread_preauth_and_authdata_stay_on_their_thread`.
 - **tool.** A parity-ledger section may span files, each `<key>-<subject>.md` headed by its key,
   the count summed over them; a row held twice, in one file or two, stays red. hygiene-diff
   re-keys a row that also moved file. Self-tests.
