@@ -568,10 +568,15 @@ kadmin_q_ok \
     rust_kadmin_local -e KRB5_CONFIG=/tmp/iprop-krb5.conf -e KRB5_KDC_DB=/tmp/rust-replica \
     -e KRB5_KDC_STASH=/tmp/rust-replica.stash "$NAME" -- -q 'getprinc extra2'
 kill_comm krb5kdc
+# A PAC carries the RID only as AD data: the replica's kdc.conf gives the realm an AD identity.
+docker exec "$NAME" sh -c "sed 's/^\( *\)KERBER.TEST = {\$/&\n\1    domain_sid = S-1-5-21-4242424242-4242424242-4242424245/' \
+    /etc/krb5kdc/kdc.conf > /tmp/rust-replica-kdc.conf"
+docker exec "$NAME" grep -q 'domain_sid = S-1-5-21-' /tmp/rust-replica-kdc.conf
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/rust-replica \
     -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
     -e KRB5_EXPORT_KEYTAB=/tmp/replica-host.keytab \
+    -e KRB5_KDC_PROFILE=/tmp/rust-replica-kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kdc 127.0.0.1:88 >/tmp/rust-replica.log 2>&1'
 ok=0
 for _ in $(seq 1 80); do

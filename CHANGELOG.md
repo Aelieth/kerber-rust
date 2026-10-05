@@ -2750,6 +2750,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **gate.** The Samba PAC gates' realm and the iprop gate's replica set kdc.conf `domain_sid`: the
+  AD identity their AD-shaped PAC cells read.
 - **tool.** `krb5-pac-extract --server` picks the ticket of one server, and `--print-layout` prints
   a PAC's buffers in order with the PAC's and the ticket's length.
 - **tool.** ci-policy and `hygiene-diff.py` drop inherited `GIT_*` (naming location and config ones), so an
