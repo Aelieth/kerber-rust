@@ -16,6 +16,7 @@ use crate::derive::{self, derive_usage_keys, hmac_truncated, mac_verify};
 use crate::error::Error;
 use crate::etype::{EncryptionType, KeyUsage};
 use crate::key::ProtocolKey;
+use crate::wipe::Wiped;
 
 /// Reject iteration counts above this. RFC 3962 test vectors use at most 1200;
 /// RFC 8009 defaults to 32768. Zero (RFC 3962 = 2^32) is refused.
@@ -79,7 +80,7 @@ fn string_to_key_inner(
 ) -> Result<ProtocolKey, Error> {
     let iter = parse_iterations(etype, params)?;
     let key_len = etype.key_len();
-    let mut tkey = vec![0u8; key_len];
+    let mut tkey = Wiped(vec![0u8; key_len]);
 
     if etype.is_rfc8009() {
         let mut saltp = Vec::new();
@@ -107,17 +108,17 @@ fn string_to_key_inner(
                 return Err(Error::UnsupportedEtype(etype.to_iana()));
             }
         }
-        let mut base =
-            derive::kdf_hmac_sha2(etype, &tkey, b"kerberos", None, derive::bits_u32(key_len))?;
-        tkey.zeroize();
-        let key = ProtocolKey::from_bytes(etype, &base);
-        base.zeroize();
-        key
+        let base = Wiped(derive::kdf_hmac_sha2(
+            etype,
+            &tkey,
+            b"kerberos",
+            None,
+            derive::bits_u32(key_len),
+        )?);
+        ProtocolKey::from_bytes(etype, &base)
     } else if etype == EncryptionType::Rc4Hmac {
-        tkey.zeroize();
         crate::weak::rc4_string_to_key(password)
     } else if etype == EncryptionType::Des3CbcSha1 {
-        tkey.zeroize();
         crate::weak::des3_string_to_key(password, salt)
     } else if etype.is_camellia() {
         let mut saltp = Vec::new();
@@ -130,18 +131,12 @@ fn string_to_key_inner(
         saltp.push(0x00);
         saltp.extend_from_slice(salt);
         pbkdf2_hmac::<Sha1>(password, &saltp, iter, &mut tkey);
-        let mut base = crate::weak::dk_camellia(&tkey, b"kerberos")?;
-        tkey.zeroize();
-        let key = ProtocolKey::from_bytes(etype, &base);
-        base.zeroize();
-        key
+        let base = Wiped(crate::weak::dk_camellia(&tkey, b"kerberos")?);
+        ProtocolKey::from_bytes(etype, &base)
     } else {
         pbkdf2_hmac::<Sha1>(password, salt, iter, &mut tkey);
-        let mut base = derive::dk_rfc3961(&tkey, b"kerberos")?;
-        tkey.zeroize();
-        let key = ProtocolKey::from_bytes(etype, &base);
-        base.zeroize();
-        key
+        let base = Wiped(derive::dk_rfc3961(&tkey, b"kerberos")?);
+        ProtocolKey::from_bytes(etype, &base)
     }
 }
 

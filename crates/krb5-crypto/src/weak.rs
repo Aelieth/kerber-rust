@@ -13,23 +13,25 @@ use md4::{Digest, Md4};
 use md5::Md5;
 use rc4::{KeyInit as Rc4KeyInit, StreamCipher};
 use sha1::Sha1;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::Error;
 use crate::etype::{EncryptionType, KeyUsage};
 use crate::key::ProtocolKey;
+use crate::wipe::Wiped;
 
 const DES_BLOCK: usize = 8;
 
-/// RC4-HMAC string-to-key: MD4(UTF-16LE password). RFC 4757.
+/// RC4-HMAC string-to-key: MD4(UTF-16LE password). RFC 4757. The UTF-16 copy of the password
+/// is sized up front, so it never moves, and is wiped on return.
 pub(crate) fn rc4_string_to_key(password: &[u8]) -> Result<ProtocolKey, Error> {
-    let utf16: Vec<u8> = std::str::from_utf8(password)
-        .unwrap_or("")
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect();
+    let text = std::str::from_utf8(password).unwrap_or("");
+    let mut utf16 = Wiped(Vec::with_capacity(text.len() * 2));
+    for unit in text.encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
     let mut h = Md4::new();
-    h.update(&utf16);
+    h.update(utf16.as_slice());
     let out = h.finalize();
     ProtocolKey::from_bytes(EncryptionType::Rc4Hmac, &out)
 }
@@ -217,17 +219,15 @@ fn hmac_sha1_trunc(key: &[u8], data: &[u8], n: usize) -> Result<Vec<u8>, Error> 
 
 /// RFC 3961 §6.3 3DES string-to-key: n-fold to 168 bits, random-to-key, DK("kerberos").
 pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<ProtocolKey, Error> {
-    let mut seed = Vec::with_capacity(password.len() + salt.len());
+    let mut seed = Wiped(Vec::with_capacity((password.len() + salt.len()).max(1)));
     seed.extend_from_slice(password);
     seed.extend_from_slice(salt);
     if seed.is_empty() {
         seed.push(0);
     }
-    let mut raw21 = crate::nfold::nfold(&seed, 21)?;
-    let mut raw = des3_random_to_key(&raw21);
-    raw21.zeroize();
-    let dk = dk_des3(&raw, b"kerberos")?;
-    raw.zeroize();
+    let raw21 = Wiped(crate::nfold::nfold(&seed, 21)?);
+    let raw = Zeroizing::new(des3_random_to_key(&raw21));
+    let dk = Wiped(dk_des3(&*raw, b"kerberos")?);
     ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &dk)
 }
 
@@ -304,9 +304,9 @@ pub(crate) fn dk_des3(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
     let folded = crate::nfold::nfold(constant, DES_BLOCK)?;
     let mut block = [0u8; DES_BLOCK];
     block.copy_from_slice(&folded);
-    let mut dr = Vec::with_capacity(24);
+    let mut dr = Wiped(Vec::with_capacity(24));
     while dr.len() < 21 {
-        let c = des3_cbc_encrypt(key, [0u8; DES_BLOCK], &block)?;
+        let c = Wiped(des3_cbc_encrypt(key, [0u8; DES_BLOCK], &block)?);
         if c.len() != DES_BLOCK {
             return Err(Error::InvalidKeyLength);
         }
@@ -314,7 +314,8 @@ pub(crate) fn dk_des3(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
         dr.extend_from_slice(&c);
     }
     dr.truncate(21);
-    Ok(des3_random_to_key(&dr).to_vec())
+    let k = Zeroizing::new(des3_random_to_key(&dr));
+    Ok(k.to_vec())
 }
 
 pub(crate) fn camellia_encrypt_with_conf(
@@ -373,22 +374,22 @@ pub(crate) fn kdf_feedback_cmac(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, 
     }
     let k_bits = u32::try_from(out_len.saturating_mul(8)).unwrap_or(u32::MAX);
     let n = out_len.div_ceil(16);
-    let mut k_prev = vec![0u8; 16];
-    let mut out = Vec::with_capacity(n * 16);
+    let mut k_prev = Wiped(vec![0u8; 16]);
+    let mut out = Wiped(Vec::with_capacity(n * 16));
     for i in 1..=n {
         let i32 = u32::try_from(i).unwrap_or(u32::MAX);
-        let mut input = Vec::with_capacity(16 + 4 + constant.len() + 1 + 4);
+        let mut input = Wiped(Vec::with_capacity(16 + 4 + constant.len() + 1 + 4));
         input.extend_from_slice(&k_prev);
         input.extend_from_slice(&i32.to_be_bytes());
         input.extend_from_slice(constant);
         input.push(0x00);
         input.extend_from_slice(&k_bits.to_be_bytes());
-        let ki = cmac_camellia(key, &input)?;
-        k_prev.clone_from(&ki);
+        let ki = Wiped(cmac_camellia(key, &input)?);
+        k_prev.clone_from(&ki.0);
         out.extend_from_slice(&ki);
     }
     out.truncate(out_len);
-    Ok(out)
+    Ok(std::mem::take(&mut out.0))
 }
 
 pub(crate) fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {

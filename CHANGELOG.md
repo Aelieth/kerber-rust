@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **crypto.** Every buffer a key is cut from is wiped on every return: CF2's PRF+ outputs (one
+  never was, the other not after an error) and the PKINIT KDFs', PRF+'s, string-to-key's and
+  DK's buffers. Unit tests see every `Wiped` intermediate zeroed; red at the parent.
 - **client.** The gates' `kvno` `--disable-transited-check`, `--body-realm`, `--renew` and
   `--renew-ticket`, and `kinit` `--spake`, `--fast`, `--armor-ccache` and `--pkinit*`, are
   `krb5-client/test-hooks` only: a release build refuses them as MIT's. `strings` finds none.
