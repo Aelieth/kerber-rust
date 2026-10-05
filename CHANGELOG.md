@@ -1408,6 +1408,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **docs.** The ledger's `gss_display_status` row says what the 1.22.2 oracles print: the mechglue's
+  major texts, `Unknown code 0` for the mechanism's 0 minor (1.20.1: `Success`); both writers of
+  the u2u ccache golden append the same bytes.
 - **docs.** The install doc says every program that opens MIT's database refuses it (a full
   `load` replaces it); the `Unopenable` docs say where an empty file is refused.
 - **kdc/admin.** kprop, kadmin.local, krb5kdc and kadmind open the database and its lock files
