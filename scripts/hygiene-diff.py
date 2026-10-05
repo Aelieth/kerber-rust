@@ -1424,6 +1424,10 @@ def _compare(args) -> int:
 
 
 def main() -> int:
+    # The self-test builds scratch repositories and the compare reads the old tree with `git -C`: an inherited
+    # GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or any other GIT_* would point git at another repository.
+    for name in [k for k in os.environ if k.startswith("GIT_")]:
+        del os.environ[name]
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         n = _self_test()
         print(f"hygiene-diff: self-test ok ({n} cases)")

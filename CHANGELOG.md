@@ -2740,6 +2740,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** ci-policy and `hygiene-diff.py` drop inherited `GIT_*` (naming location and config ones), so an
+  exported `GIT_DIR` cannot re-initialise the checkout, and an unreadable checkout fails loudly; decoy self-test.
 - **kdc.** Postdated-ticket units start their too-early TGS-REQ / VALIDATE two minutes ahead, inside the
   skew, not 1 or 2 s, and pin MIT's `TICKET NOT VALID` / `NOT_YET_VALID` (settled live).
 - **kdc.** Tests isolate extra preauth and kdcauthdata modules per thread (`set_thread_preauth`,

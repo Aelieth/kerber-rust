@@ -10,7 +10,7 @@ import subprocess
 import sys
 import tempfile
 
-from .common import ROOT, SCRIPTS, _die, _scratch_root
+from .common import ROOT, SCRIPTS, _die, _scratch_root, git_head
 
 
 def check_red_at_sha_target_trap(text: str | None = None) -> None:
@@ -531,7 +531,8 @@ def check_red_at_sha_build(text: str | None = None) -> None:
         return
     env = os.environ.copy()
     env["KERBER_NO_IMAGE"] = "1"
-    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=False)
+    # A checkout git cannot read dies here with git's error; only a readable one missing the base is a skip.
+    head = git_head()
     old = subprocess.run(["git", "rev-parse", "--verify", "672e8e3b^^{commit}"], cwd=ROOT, capture_output=True,
                          text=True, check=False)
     scratch = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
@@ -544,10 +545,9 @@ def check_red_at_sha_build(text: str | None = None) -> None:
                 _die(f"red-at-sha --print-build {base} failed: {(r.stdout + r.stderr)[-400:]}")
             return next((line for line in r.stdout.splitlines() if line.startswith("build=")), "")
 
-        if head.returncode == 0:
-            line = build_line(head.stdout.strip())
-            if line != f"build=scripts/lib/build-bins.sh at {head.stdout.strip()[:12]}":
-                _die(f"red-at-sha at HEAD must build through HEAD's build-bins.sh, got {line!r}")
+        line = build_line(head)
+        if line != f"build=scripts/lib/build-bins.sh at {head[:12]}":
+            _die(f"red-at-sha at HEAD must build through HEAD's build-bins.sh, got {line!r}")
         if old.returncode != 0:
             print("ci-policy: SKIP red-at-sha five-bin probe: base 672e8e3b^ not fetched (shallow clone?) "
                   "— set fetch-depth: 0", file=sys.stderr)
@@ -584,6 +584,8 @@ def check_red_at_sha_inject(text: str | None = None) -> None:
         _die("red-at-sha.sh must copy --inject files before write-tree")
     env = os.environ.copy()
     env["KERBER_NO_IMAGE"] = "1"
+    # A checkout git cannot read dies here with git's error; only a readable one missing the base is a skip.
+    git_head()
     probe = subprocess.run(
         ["git", "rev-parse", "--verify", "0d58023^{commit}"],
         cwd=ROOT,
