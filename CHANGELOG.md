@@ -2750,6 +2750,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** `krb5-pac-extract --server` picks the ticket of one server, and `--print-layout` prints
+  a PAC's buffers in order with the PAC's and the ticket's length.
 - **tool.** ci-policy and `hygiene-diff.py` drop inherited `GIT_*` (naming location and config ones), so an
   exported `GIT_DIR` cannot re-initialise the checkout, and an unreadable checkout fails loudly; decoy self-test.
 - **kdc.** Postdated-ticket units start their too-early TGS-REQ / VALIDATE two minutes ahead, inside the
