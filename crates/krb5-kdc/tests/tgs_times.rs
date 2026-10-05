@@ -270,11 +270,11 @@ fn host_part_a3_r27(store: &PrincipalStore, issued: &krb5_kdc::IssuedTgs) -> Enc
 }
 
 fn wait_unix_past(target: u32) {
-    let cap = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while KerberosTime::now().unix_seconds() <= target {
         assert!(
             std::time::Instant::now() < cap,
-            "unix seconds did not pass {target} within 2s"
+            "unix seconds did not pass {target} within 10s"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -823,7 +823,8 @@ fn tgs_renew_non_renewable_is_badoption() {
 // oracle: differential-gate.sh tgs-nyv-inside-skew
 fn tgs_validate_future_starttime_is_not_yet_valid() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
-    let from = KerberosTime::now().add_seconds(2).unwrap();
+    // Two minutes ahead, inside the 300 s skew: the VALIDATE check decides, with no window to race.
+    let from = KerberosTime::now().add_seconds(120).unwrap();
     let issued = krb5_kdc::issue_as(&store, &postdated_as_req(124, from)).expect("postdated AS");
     let err = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 125)).unwrap_err();
     match err {

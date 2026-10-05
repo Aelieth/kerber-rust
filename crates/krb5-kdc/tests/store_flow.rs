@@ -17,11 +17,11 @@ fn unix_now() -> u32 {
 }
 
 fn wait_unix_past(target: u32) {
-    let cap = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while unix_now() <= target {
         assert!(
             std::time::Instant::now() < cap,
-            "unix seconds did not pass {target} within 3s"
+            "unix seconds did not pass {target} within 10s"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }

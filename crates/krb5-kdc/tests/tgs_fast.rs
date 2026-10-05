@@ -555,7 +555,8 @@ fn tgs_fast_validate_future_starttime_is_not_yet_valid() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = user_key();
-    let from = KerberosTime::now().add_seconds(2).unwrap();
+    // Two minutes ahead, inside the 300 s skew: the VALIDATE check decides, with no window to race.
+    let from = KerberosTime::now().add_seconds(120).unwrap();
     let mut req = as_req(
         cname.clone(),
         TEST_REALM,

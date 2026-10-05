@@ -293,11 +293,11 @@ fn host_tgs(
 }
 
 fn wait_unix_past(target: u32) {
-    let cap = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(10);
     while KerberosTime::now().unix_seconds() <= target {
         assert!(
             std::time::Instant::now() < cap,
-            "unix seconds did not pass {target} within 2s"
+            "unix seconds did not pass {target} within 10s"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -460,27 +460,39 @@ fn as_disallow_all_tix_still_client_revoked() {
     assert_eq!(status(&err).0, err::CLIENT_REVOKED);
 }
 
+/// No assertion races the clock: the too-early checks use a ticket that starts two minutes ahead,
+/// inside the realm's 300 s skew (so the header ticket's time check passes and the TGS checks
+/// decide), and the VALIDATE that succeeds waits until its own ticket's starttime has passed.
 #[test]
 fn as_postdated_is_invalid_until_validate() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.policy.skew = 0;
-    let from = KerberosTime::now().add_seconds(1).unwrap();
-    let issued =
-        krb5_kdc::issue_as(&store, &postdated_as_req(110, from.clone())).expect("postdated AS");
-    let part = tgt_part_issue_acl_ap(&store, &issued);
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let ahead = KerberosTime::now().add_seconds(120).unwrap();
+    let early =
+        krb5_kdc::issue_as(&store, &postdated_as_req(110, ahead.clone())).expect("postdated AS");
+    let part = tgt_part_issue_acl_ap(&store, &early);
     assert!(part.flags.invalid());
     assert!(part.flags.bit(flag_bit::POSTDATED));
-    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 111)).unwrap_err();
-    assert_eq!(status(&err).0, err::TKT_NYV);
-    let too_soon = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 112)).unwrap_err();
-    assert_eq!(status(&too_soon).0, err::TKT_NYV);
-    // starttime is now+1 s; wait until that integer second has passed.
+    // MIT `process_as_req` (`kdc/do_as_req.c:692-693`): a POSTDATED request's starttime is its from.
+    assert_eq!(
+        part.starttime.as_ref().map(KerberosTime::unix_seconds),
+        Some(ahead.unix_seconds())
+    );
+    // MIT `check_tgs_opts` (`kdc/tgs_policy.c:98-101`): an INVALID ticket without VALIDATE is TKT_NYV.
+    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &early, 111)).unwrap_err();
+    assert_eq!(status(&err), (err::TKT_NYV, Some("TICKET NOT VALID")));
+    // MIT `check_tgs_times` (`kdc/tgs_policy.c:228-232`): VALIDATE before the starttime is TKT_NYV.
+    let too_soon = krb5_kdc::issue_tgs(&store, &validate_tgs(&early, 112)).unwrap_err();
+    assert_eq!(status(&too_soon), (err::TKT_NYV, Some("NOT_YET_VALID")));
+    let from = KerberosTime::now().add_seconds(1).unwrap();
+    let issued =
+        krb5_kdc::issue_as(&store, &postdated_as_req(113, from.clone())).expect("postdated AS");
+    assert!(tgt_part_issue_acl_ap(&store, &issued).flags.invalid());
     wait_unix_past(from.unix_seconds());
-    let out = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 113)).expect("VALIDATE");
+    let out = krb5_kdc::issue_tgs(&store, &validate_tgs(&issued, 114)).expect("VALIDATE");
     let after = tgs_tgt_part(&store, &out);
     assert!(!after.flags.invalid());
-    krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 114))
-        .expect_err("unvalidated TGT still NYV");
+    let stale = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 115)).unwrap_err();
+    assert_eq!(status(&stale), (err::TKT_NYV, Some("TICKET NOT VALID")));
 }
 
 #[test]

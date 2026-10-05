@@ -2740,6 +2740,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **kdc.** Postdated-ticket units start their too-early TGS-REQ / VALIDATE two minutes ahead, inside the
+  skew, not 1 or 2 s, and pin MIT's `TICKET NOT VALID` / `NOT_YET_VALID` (settled live).
 - **kdc.** Tests isolate extra preauth and kdcauthdata modules per thread (`set_thread_preauth`,
   `set_thread_authdata`), so the demo-preauth unit no longer flakes; proved by
   `thread_preauth_and_authdata_stay_on_their_thread`.
