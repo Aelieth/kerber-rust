@@ -7,6 +7,7 @@ use super::{
     OID_SAN, oid_der, take_tlv, tlv,
 };
 use crate::OctetString;
+use crate::wipe::Wiped;
 use rasn::prelude::*;
 
 const OID_CONTENT_TYPE: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x03];
@@ -269,11 +270,13 @@ pub fn parse_pem(kind: &str, text: &str) -> Option<Vec<u8>> {
     unbase64(rest.get(..stop)?.trim())
 }
 
-/// Certificate DER plus P-256 scalar from a MIT `FILE:` identity PEM.
+/// Certificate DER plus P-256 scalar from a MIT `FILE:` identity PEM. The key's base64 text and
+/// DER are wiped on every return.
 #[must_use]
 pub fn parse_identity_pem(text: &str) -> Option<(Vec<u8>, [u8; 32])> {
     let cert = parse_pem("CERTIFICATE", text)?;
-    let key_der = parse_pem("EC PRIVATE KEY", text).or_else(|| parse_pem("PRIVATE KEY", text))?;
+    let key_der =
+        Wiped(parse_pem("EC PRIVATE KEY", text).or_else(|| parse_pem("PRIVATE KEY", text))?);
     let key = parse_ec_scalar(&key_der)?;
     Some((cert, key))
 }
@@ -312,11 +315,9 @@ fn parse_ec_scalar(der: &[u8]) -> Option<[u8; 32]> {
 
 fn unbase64(s: &str) -> Option<Vec<u8>> {
     const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let bytes: Vec<u8> = s
-        .bytes()
-        .filter(|b| *b != b'=' && !b.is_ascii_whitespace())
-        .collect();
-    let mut out = Vec::with_capacity(bytes.len() * 3 / 4 + 1);
+    let mut bytes = Wiped(Vec::with_capacity(s.len()));
+    bytes.extend(s.bytes().filter(|b| *b != b'=' && !b.is_ascii_whitespace()));
+    let mut out = Wiped(Vec::with_capacity(bytes.len() * 3 / 4 + 1));
     for chunk in bytes.chunks(4) {
         let mut v = [0u8; 4];
         for (i, b) in chunk.iter().enumerate() {
@@ -330,7 +331,7 @@ fn unbase64(s: &str) -> Option<Vec<u8>> {
             out.push((v[2] << 6) | v[3]);
         }
     }
-    Some(out)
+    Some(std::mem::take(&mut out.0))
 }
 
 pub(super) fn signed_attrs_set(econtent_oid: &[u8], e_content: &[u8]) -> Vec<u8> {

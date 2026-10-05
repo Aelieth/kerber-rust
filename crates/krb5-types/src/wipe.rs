@@ -1,8 +1,11 @@
-//! The wipe an [`EncryptionKey`](crate::EncryptionKey) runs on its octets when it drops.
+//! The wipe an [`EncryptionKey`](crate::EncryptionKey) runs on its octets when it drops, and
+//! [`Wiped`] on a temporary buffer of key material.
 //!
 //! rasn's `OctetString` is a newtype over a reference-counted `bytes::Bytes`, so a key can wipe
 //! its buffer only while it holds the last handle on it. A test build keeps each wiped allocation
 //! instead of freeing it, so a test can see that the buffer the key held is the one zeroed, whole.
+
+use std::ops::{Deref, DerefMut};
 
 use rasn::types::OctetString;
 use zeroize::Zeroize;
@@ -16,11 +19,45 @@ pub(crate) fn wipe_octets(octets: OctetString) {
     let Ok(last) = bytes::Bytes::from(octets).try_into_mut() else {
         return;
     };
-    let mut buf = Vec::<u8>::from(last);
-    buf.resize(buf.capacity(), 0);
-    buf.as_mut_slice().zeroize();
+    wipe_vec(&mut Vec::<u8>::from(last));
+}
+
+/// Zeroizes every byte of `buf`'s allocation in place, then frees it and leaves `buf` empty.
+pub(crate) fn wipe_vec(buf: &mut Vec<u8>) {
+    let mut owned = std::mem::take(buf);
+    if owned.capacity() == 0 {
+        return;
+    }
+    owned.resize(owned.capacity(), 0);
+    owned.as_mut_slice().zeroize();
     #[cfg(test)]
-    let _ = tests::WIPED.try_with(|w| w.borrow_mut().push(buf));
+    let _ = tests::WIPED.try_with(|w| w.borrow_mut().push(owned));
+}
+
+/// A temporary buffer of key material that [`wipe_vec`] zeroes, whole, when it drops, so every
+/// return wipes it, the `?` ones included. `DerefMut` hands out the `&mut Vec<u8>`, so a push
+/// past its capacity, a `.clone()` or a `.to_vec()` leaves a copy nothing wipes; every site
+/// sizes its buffer up front.
+pub(crate) struct Wiped(pub(crate) Vec<u8>);
+
+impl Drop for Wiped {
+    fn drop(&mut self) {
+        wipe_vec(&mut self.0);
+    }
+}
+
+impl Deref for Wiped {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Vec<u8> {
+        &self.0
+    }
+}
+
+impl DerefMut for Wiped {
+    fn deref_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.0
+    }
 }
 
 #[cfg(test)]
@@ -32,7 +69,7 @@ mod tests {
     use crate::EncryptionKey;
 
     thread_local! {
-        /// The allocations `wipe_octets` zeroed on this thread, kept alive.
+        /// The allocations `wipe_vec` zeroed on this thread, kept alive.
         pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
     }
 
@@ -121,5 +158,42 @@ mod tests {
         drop(key(OctetString::from_static(&OCTETS)));
         assert_eq!(take_wiped(), [] as [Vec<u8>; 0]);
         assert_eq!(OCTETS, [0x5a; 16]);
+    }
+
+    /// The base64 text between `kind`'s PEM markers, as `parse_pem` takes it.
+    fn pem_body<'a>(pem: &'a str, kind: &str) -> &'a str {
+        let begin = format!("-----BEGIN {kind}-----");
+        let rest = &pem[pem.find(&begin).unwrap() + begin.len()..];
+        rest[..rest.find(&format!("-----END {kind}-----")).unwrap()].trim()
+    }
+
+    #[test]
+    fn parsing_an_identity_wipes_its_key_text_and_der() {
+        let ca = crate::pkinit::PkinitCa::generate().unwrap();
+        let pem = ca.user_identity_pem("user").unwrap();
+        let kind = if pem.contains("BEGIN EC PRIVATE KEY") {
+            "EC PRIVATE KEY"
+        } else {
+            "PRIVATE KEY"
+        };
+        let cert_text = pem_body(&pem, "CERTIFICATE").len();
+        let key_text = pem_body(&pem, kind);
+        let key_chars = key_text
+            .bytes()
+            .filter(|b| *b != b'=' && !b.is_ascii_whitespace())
+            .count();
+        take_wiped();
+        let (_cert, scalar) = crate::pkinit::parse_identity_pem(&pem).unwrap();
+        assert_ne!(scalar, [0; 32]);
+        // Each block's base64 text, wiped once decoded; then the key's DER, wiped once the
+        // scalar is read out of it.
+        assert_eq!(
+            take_wiped(),
+            [
+                vec![0; cert_text],
+                vec![0; key_text.len()],
+                vec![0; key_chars * 3 / 4 + 1]
+            ]
+        );
     }
 }

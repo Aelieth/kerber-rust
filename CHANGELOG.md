@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **types/client.** `kinit`'s PKINIT identity is wiped once read: the file's bytes, and the
+  key's base64 text and DER. A unit test sees the key's text and DER wiped (red at the parent);
+  no test sees the file text's wipe.
 - **cli.** A prompted line that outgrows its 1024-octet buffer (a long password) left that buffer
   in freed memory unwiped; it now moves to a larger one and wipes the old. Unit; red at the parent.
 - **crypto.** Every buffer a key is cut from is wiped on every return: CF2's PRF+ outputs (one

@@ -707,11 +707,23 @@ fn load_pkinit(
     identity: &Path,
     anchors: &Path,
 ) -> Result<PkinitClient, Box<dyn std::error::Error + Send + Sync>> {
-    let id = std::fs::read_to_string(identity)?;
-    let (cert, key) = krb5_types::pkinit::parse_identity_pem(&id).ok_or("pkinit identity PEM")?;
+    let id = read_secret_file(identity)?;
+    let text = std::str::from_utf8(&id).map_err(|_| "pkinit identity PEM")?;
+    let (cert, key) = krb5_types::pkinit::parse_identity_pem(text).ok_or("pkinit identity PEM")?;
     let anc = std::fs::read_to_string(anchors)?;
     let ca_cert = krb5_types::pkinit::parse_pem("CERTIFICATE", &anc).ok_or("pkinit anchors PEM")?;
     Ok(PkinitClient { cert, key, ca_cert })
+}
+
+/// The bytes of a file that holds a key, in a buffer sized to the file up front and wiped on
+/// every return, a read that fails partway included.
+fn read_secret_file(path: &Path) -> std::io::Result<Zeroizing<Vec<u8>>> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(path)?;
+    let len = usize::try_from(file.metadata()?.len()).unwrap_or(0);
+    let mut bytes = Zeroizing::new(Vec::with_capacity(len.saturating_add(1)));
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 fn load_pkinit_anchors(
@@ -1045,6 +1057,20 @@ fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn load_pkinit_reads_the_identity_and_its_anchor() {
+        let ca = krb5_types::pkinit::PkinitCa::generate().unwrap();
+        let pem = ca.user_identity_pem("user").unwrap();
+        let dir = krb5_testkit::scratch_dir("kerber-client-load-pkinit");
+        let (id, anchors) = (dir.join("user.pem"), dir.join("ca.pem"));
+        std::fs::write(&id, &pem).unwrap();
+        std::fs::write(&anchors, ca.cert_pem()).unwrap();
+        let pk = load_pkinit(&id, &anchors).unwrap();
+        let (cert, key) = krb5_types::pkinit::parse_identity_pem(&pem).unwrap();
+        assert_eq!((pk.cert.as_slice(), pk.key), (cert.as_slice(), key));
+        assert_eq!(pk.ca_cert, ca.ca_cert);
+    }
 
     #[test]
     fn discover_kdc_prefers_krb5_conf_over_argv() {
