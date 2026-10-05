@@ -53,9 +53,11 @@ pub fn database_path(default: &Path, db_args: &[String]) -> Result<PathBuf, Stri
 
 /// Open the realm's database as MIT's daemons do: the database arguments, the database file
 /// (one that is no database this store reads is refused, as [`crate::check_openable`] judges
-/// it), then the master key from the stash; `mkey_name` is the master key principal (`-M`).
+/// it) and its lock files, then the master key from the stash; `mkey_name` is the master key
+/// principal (`-M`).
 /// MIT `open_db` (`plugins/kdb/db2/kdb_db2.c:386-389`): a database that will not open is named
 /// in the error.
+/// MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1181-1199`): the lock files open with the database, before any master key is fetched.
 /// MIT `krb5_db_def_fetch_mkey` (`lib/kdb/kdb_default.c:384-390`): a stash that cannot be read
 /// is "Can not fetch master key (error: …)."
 ///
@@ -78,6 +80,9 @@ pub fn open_database(
             )));
         }
         Err(e) => return Err(OpenFailure::Database(e.to_string())),
+    }
+    if let Err(e) = crate::DbLock::open(&db) {
+        return Err(OpenFailure::Database(e.to_string()));
     }
     if mkey_name != "K/M" {
         return Err(OpenFailure::MasterKey(
@@ -306,6 +311,42 @@ mod tests {
                 "This is an MIT db2 database; dump it with the old installation's kdb5_util, \
                  then kdb5_util load here (docs/install.md, Upgrading an MIT realm)"
             )
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The database's lock files open with it, before the stash is looked at, as MIT's daemons
+    /// open them (settled live on MIT 1.22.2 with no stash either: `No such file or directory`,
+    /// `KADM5 administration database lock file missing`, while initializing the database).
+    #[test]
+    fn a_database_without_its_lock_files_stops_the_daemon_before_the_stash() {
+        let dir = krb5_testkit::scratch_dir("daemon-open-locks");
+        let db = dir.join("principal");
+        let paths = krb5_config::KdcPaths {
+            profile: dir.join("kdc.conf"),
+            conf: None,
+            realm: Some("R".into()),
+            database_name: db.clone(),
+            key_stash_file: dir.join("no-stash"),
+            acl_file: None,
+            master_key_type: None,
+        };
+        let (store, _) = crate::testrealm::bootstrap_documented().unwrap();
+        crate::save_store(&store, &db, &dir.join("stash")).unwrap();
+        let open = || open_database(&paths, &[], "K/M").map(|_| ());
+        let ok = crate::suffixed(&db, crate::SUFFIX_LOCK);
+        std::fs::rename(&ok, dir.join("ok.away")).unwrap();
+        assert_eq!(
+            open(),
+            Err(OpenFailure::Database("No such file or directory".into()))
+        );
+        std::fs::rename(dir.join("ok.away"), &ok).unwrap();
+        std::fs::remove_file(crate::suffixed(&db, crate::SUFFIX_POLICY_LOCK)).unwrap();
+        assert_eq!(
+            open(),
+            Err(OpenFailure::Database(
+                "KADM5 administration database lock file missing".into()
+            ))
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

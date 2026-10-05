@@ -81,8 +81,13 @@ fn main() {
         }
         std::process::exit(1);
     });
-    // The stash opens the database and wraps the dump: one that cannot be read is named before
-    // anything is sent.
+    // The database is judged first, then the stash, which opens it and wraps the dump: one that
+    // cannot be read is named before anything is sent.
+    // MIT `open_db_and_mkey` (`kadmin/dbutil/kdb5_util.c:378-401`): the dump kprop sends opens the database, and reads its master entry, before the master key is fetched.
+    if let Err(e) = krb5_kdc::check_database(&paths.database_name) {
+        eprintln!("krb5-kprop: load store: {e}");
+        std::process::exit(1);
+    }
     if let Err(e) = std::fs::File::open(&paths.key_stash_file) {
         eprintln!("krb5-kprop: stash {}: {e}", paths.key_stash_file.display());
         std::process::exit(1);

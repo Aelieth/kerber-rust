@@ -1400,6 +1400,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** kprop, kadmin.local, krb5kdc and kadmind open the database and its lock files
+  before the master key, as MIT's: a missing lock file is named, not the stash, and no `-m`
+  prompt comes first. Settled; units.
 - **kdc.** `kdb5_util load -update` opens the database before the master key, takes the permanent
   lock in MIT's order and lets it go on every failure (`principal.kadm5.lock` was left removed);
   it fills an empty `principal`. Settled; units.

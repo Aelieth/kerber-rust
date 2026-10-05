@@ -563,6 +563,10 @@ fn kadm5_init(
     if let Err(e) = krb5_kdc::check_openable(&open.db) {
         return Err((open.load_text(e), false));
     }
+    // MIT `krb5_db2_open` (`plugins/kdb/db2/kdb_db2.c:1181-1199`): the lock files open with the database, before the master key is typed or read.
+    if let Err(e) = krb5_kdc::DbLock::open(&open.db) {
+        return Err((open.load_text(krb5_kdc::PersistError::Lock(e)), false));
+    }
     let caller = krb5_types::principal_from_unparsed(princstr, realm)
         .map(|(n, r)| n.unparse_with_realm(&r))
         .map_err(|_| (texts::MALFORMED.to_owned(), false))?;

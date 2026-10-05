@@ -108,3 +108,84 @@ fn an_mit_db2_database_is_named_with_the_way_over_before_the_master_key() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The database's lock files open with it, before the master key is typed or read, as MIT's
+/// `kadm5_init` opens them (settled live on MIT 1.22.2): with `-m` no prompt is printed, and with
+/// no stash the missing lock file is named, not the stash.
+#[test]
+fn a_database_without_its_lock_files_is_refused_before_the_master_key() {
+    let dir = realm("kadmin-local-no-lock-files");
+    let db = dir.join("principal");
+    let pol = dir.join("principal.kadm5.lock");
+    let ok = dir.join("principal.ok");
+    std::fs::remove_file(dir.join("stash")).unwrap();
+    let authenticating = "Authenticating as principal tester/admin@KERBER.TEST with password.\n";
+    for (gone, refused) in [
+        (&pol, "KADM5 administration database lock file missing"),
+        (&ok, "No such file or directory"),
+    ] {
+        let kept = std::fs::read(gone).unwrap();
+        std::fs::remove_file(gone).unwrap();
+        for args in [
+            &["-r", "KERBER.TEST", "-q", "listprincs"][..],
+            &["-r", "KERBER.TEST", "-m", "-q", "listprincs"][..],
+        ] {
+            let out = kadmin_local(&dir, args, "master\n");
+            assert_eq!(out.status.code(), Some(1), "{args:?}");
+            assert_eq!(text(&out.stdout), authenticating, "{args:?}: no prompt");
+            assert_eq!(
+                text(&out.stderr),
+                format!("kadmin.local: {refused} while initializing kadmin.local interface\n"),
+                "{args:?}"
+            );
+        }
+        std::fs::write(gone, kept).unwrap();
+    }
+    assert!(db.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// kprop judges the database before it reads the stash, as the dump MIT's kprop sends opens the
+/// database before it fetches the master key (settled live: MIT's `kdb5_util dump` names a
+/// database file that is no database, not the missing stash). With the realm's database, the
+/// missing stash is named, before anything is sent.
+#[test]
+fn kprop_judges_the_database_before_it_reads_the_stash() {
+    let dir = realm("kprop-database-first");
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    std::fs::remove_file(&stash).unwrap();
+    let kprop = || {
+        Command::new(env!("CARGO_BIN_EXE_krb5-kprop"))
+            .arg("127.0.0.1")
+            .env("KRB5_CONFIG", dir.join("krb5.conf"))
+            .env("KRB5_KDC_PROFILE", dir.join("kdc.conf"))
+            .env_remove("KRB5_KDC_DB")
+            .env_remove("KRB5_KDC_STASH")
+            .env_remove("KRB5_MASTER_PASSWORD")
+            .env_remove("KRB5_KPROP_KEYTAB")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
+    };
+    let kept = std::fs::read(&db).unwrap();
+    std::fs::write(&db, "not a database\n").unwrap();
+    let out = kprop();
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        format!(
+            "krb5-kprop: load store: Cannot open DB2 database '{}': Invalid argument\n",
+            db.display()
+        )
+    );
+    std::fs::write(&db, kept).unwrap();
+    let out = kprop();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        text(&out.stderr).starts_with(&format!("krb5-kprop: stash {}: ", stash.display())),
+        "{}",
+        text(&out.stderr)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

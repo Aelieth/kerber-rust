@@ -287,6 +287,24 @@ pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, P
     read_store(db_path, stash_path, &lock)
 }
 
+/// Open the database at `db` as [`load_store`] opens it, short of the stash: the file must open
+/// as a database ([`check_openable`]), then its lock files, then what it holds is judged under
+/// the shared lock (an empty file is refused, as [`load_store`] refuses it). A program that
+/// names the stash in its own error opens the database first with this, as MIT opens the
+/// database before it fetches the master key.
+/// MIT `open_db_and_mkey` (`kadmin/dbutil/kdb5_util.c:378-401`): the database is opened, and its master entry read, before the master key is fetched.
+///
+/// # Errors
+///
+/// As [`load_store`], short of the stash's and the keys' errors.
+pub fn check_database(db: &Path) -> Result<(), PersistError> {
+    check_openable(db)?;
+    let lock = Arc::new(DbLock::open(db)?);
+    let _held = lock.hold(DbLockMode::Shared)?;
+    let blob = fs::read(db)?;
+    refusal(db, db_format(&blob)).map_or(Ok(()), Err)
+}
+
 /// The store the database at `db_path` holds now, read while the caller holds `lock`: the
 /// database is judged before the stash is read, as MIT opens it before the master key.
 pub(crate) fn read_store(
