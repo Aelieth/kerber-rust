@@ -137,7 +137,8 @@ config `kdc-gate.sh` runs.
 [docs/README.md](docs/README.md) lists every document. Reading order:
 [architecture](docs/architecture.md) → [stages](docs/stages.md) →
 [testing](docs/testing.md) → [gates](docs/gates.md) →
-[security](docs/security.md) → [parity ledger](docs/parity/README.md) →
+[security](docs/security.md) → [MIT deviations](docs/mit-deviations.md) →
+[parity ledger](docs/parity/README.md) →
 [logging](docs/logging.md) → [interop](docs/interop-matrix.md) →
 [plugins](docs/plugins.md) → [RFC mapping](docs/rfc-mapping.md) →
 [gate-unit index](docs/gate-unit-index.md) → the labs

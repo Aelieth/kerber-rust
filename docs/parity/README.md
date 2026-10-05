@@ -39,7 +39,7 @@ FAST unwrap failures put the MIT status word
 mismatch are `exact` here.
 
 Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_text + code | verdict | proof`.
-Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
+Verdict ∈ {exact, stricter-documented (`docs/mit-deviations.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
 is `proposed`. The 112 live `diffsend` cases are `garbage-pdu`,

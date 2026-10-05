@@ -307,7 +307,7 @@ fn mod_princ_data(tl: &[TlData]) -> Option<(u32, PrincipalName, String)> {
 /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:364-387`): the flags and both lifetimes go only when they are not negative as 32-bit values.
 /// MIT `ulog_conv_2logentry` (`lib/kdb/kdb_convert.c:389-402`): an expiration or password expiration past 2038 is negative as a 32-bit value and is not sent.
 /// Here both go whenever listed: settled live, MIT's own replica otherwise keeps the expiration
-/// it had while its primary expires the principal (`docs/security.md`).
+/// it had while its primary expires the principal (`docs/mit-deviations.md`).
 /// The three non-replicated attributes have no case in MIT's switch and are never sent.
 #[must_use]
 pub fn conv_2logentry(p: &Principal, attrs: u32) -> Vec<KdbeVal> {

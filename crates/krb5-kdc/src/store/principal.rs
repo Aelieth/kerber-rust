@@ -616,7 +616,7 @@ impl PrincipalStore {
     /// on) adds `REQUIRES_PRE_AUTH` to *password-keyed* creates only — its
     /// scope is those creates, so random-key (service) creates are MIT's 0
     /// and U2U to a fresh `-randkey` service keeps working
-    /// (`docs/security.md`). A written stanza overrides the knob for both.
+    /// (`docs/mit-deviations.md`). A written stanza overrides the knob for both.
     #[must_use]
     pub fn default_create_attributes(&self, password_keyed: bool) -> u32 {
         self.policy.default_principal_flags.unwrap_or(
@@ -793,7 +793,7 @@ impl PrincipalStore {
         Ok(())
     }
 
-    /// A created `kadmin/changepw` gets `PWCHANGE_SERVICE` by its name (`docs/security.md`,
+    /// A created `kadmin/changepw` gets `PWCHANGE_SERVICE` by its name (`docs/mit-deviations.md`,
     /// "Create-time name special-casing"), a change the update log records.
     fn mark_pwchange_service(&mut self, name: &PrincipalName, id: &str) -> Result<(), Error> {
         if name.components_joined() != "kadmin/changepw" {

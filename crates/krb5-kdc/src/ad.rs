@@ -1511,7 +1511,7 @@ fn cammac_check_kdcver(
         return false;
     };
     // MIT `cammac_check_kdcver` (`cammac.c:168-168`): calls `krb5_c_verify_checksum` with
-    // no keyed gate. Refuse unkeyed types on the KDC verifier (security.md).
+    // no keyed gate. Refuse unkeyed types on the KDC verifier (mit-deviations.md).
     verify_checksum_keyed(
         key,
         usage,

@@ -117,7 +117,7 @@ before it counts as done:
 | **G7** | **Standalone user CLIs — landed.** `klist`, `kvno`, `kdestroy`, `kpasswd`, `kadmin.local` (`krb5-kadmin-local`), `ktutil`. The remote `kadmin` client is deferred (see CHANGELOG); `kadmin-gate` drives MIT `kadmin` against the Rust kadmind. Gates: `client-gate`, `kpasswd-gate`, `kadmin-gate`, `ktutil-gate`. Harness still uses MIT `kinit`/`kvno` as the oracle (retiring that is not this cut) |
 | **G8** | **ccache breadth — landed.** FILE/DIR/MEMORY/KCM; `KEYRING:` is rejected (`Unknown credential cache type`). Gates: `ccache-gate`, `kcm-gate` |
 | **G9** | **Config breadth — landed.** `[capaths]`, key `[libdefaults]` knobs, `include`/`includedir`. Gates: `capaths-transit-gate`, `knobs-gate`, `config-include-gate` |
-| **Parity sweep** | **MIT 1.22.2 parity sweep — closed.** KDC (`do_as_req`/`do_tgs_req`/`kdc_util`/`tgs_policy`/FAST/PAC), client library, acceptor and kadm5 graded function by function against MIT source in [docs/parity/](parity/README.md); every row is `exact`, `stricter-documented` ([docs/security.md](security.md)), `deviation`, `deferred` with a named promotion oracle, or one of the two `absent` non-goals. Also landed on the way: anonymous PKINIT + `restrict_anonymous_to_tgt`, RFC 8070 PKINIT freshness, FAST hide-client-names, client-side S4U2Self/S4U2Proxy, `krb5-vfy-increds`, `krb5-kswitch`. Gates: `differential-gate` (111 same-bytes cases), `client-differential-gate`, `kadmin-gate`, `mit-fast-kdc-gate`, `kdcpolicy-gate`, `cross-kdc-gate` |
+| **Parity sweep** | **MIT 1.22.2 parity sweep — closed.** KDC (`do_as_req`/`do_tgs_req`/`kdc_util`/`tgs_policy`/FAST/PAC), client library, acceptor and kadm5 graded function by function against MIT source in [docs/parity/](parity/README.md); every row is `exact`, `stricter-documented` ([docs/mit-deviations.md](mit-deviations.md)), `deviation`, `deferred` with a named promotion oracle, or one of the two `absent` non-goals. Also landed on the way: anonymous PKINIT + `restrict_anonymous_to_tgt`, RFC 8070 PKINIT freshness, FAST hide-client-names, client-side S4U2Self/S4U2Proxy, `krb5-vfy-increds`, `krb5-kswitch`. Gates: `differential-gate` (111 same-bytes cases), `client-differential-gate`, `kadmin-gate`, `mit-fast-kdc-gate`, `kdcpolicy-gate`, `cross-kdc-gate` |
 
 G5 (GSS) is a hard requirement: kerber-rust is meant to host real client
 networks that already use SSH GSSAPI delegation, HTTP `Negotiate`, and NFSv4
@@ -142,7 +142,7 @@ names the oracle that would promote it. 77 of the 364 `exact` rows have a
 proof cell that names no gate, `diffsend` case, forge or live cell, and the
 per-row sweep that marks a unit-only row forge-only has not been done ([parity README](parity/README.md)).
 Deviations are in
-[`security.md`](security.md) § Documented deviations.
+[`mit-deviations.md`](mit-deviations.md) § Documented deviations.
 
 ## Era III — KLLDAP integration
 

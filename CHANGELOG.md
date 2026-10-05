@@ -783,6 +783,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **docs.** The deviations from MIT 1.22.2 moved byte for byte from `docs/security.md` into
+  `docs/mit-deviations.md`, where new rows go; each pointer to a moved row follows it.
 - **docs.** Parity-ledger sections A4 and B1 are two files each: `kdb5_util` and the KDB move to
   `a4-kdb.md`, the client tools' rows to `b1-tools.md`, byte for byte; pointers follow them.
 - **client.** `kinit`, `klist`, `kvno`, `kdestroy` and `kswitch` are ports of MIT 1.22.2's: its
