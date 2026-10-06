@@ -775,7 +775,8 @@ fn resolve_failure_lines(entry: &ListenAddr, error: &str) -> [String; 2] {
     ]
 }
 
-/// Drop root after a privileged bind (port 88).
+/// Drop root after a privileged bind (port 88): the gates' test realm, in a `test-hooks` build only.
+/// MIT's `krb5kdc` never changes user and reads no `KRB5_KDC_USER`, so a release build has neither.
 ///
 /// When effective uid is 0, setgid/setuid to `KRB5_KDC_USER` (default
 /// `nobody`). Unprivileged processes return `Ok(false)` without changing
@@ -785,6 +786,7 @@ fn resolve_failure_lines(entry: &ListenAddr, error: &str) -> [String; 2] {
 ///
 /// Only as root: `io::ErrorKind::NotFound` when the target user does not exist, and
 /// `io::ErrorKind::Other` when the user lookup, `setgid` or `setuid` fails.
+#[cfg(feature = "test-hooks")]
 pub fn drop_privileges() -> io::Result<bool> {
     drop_privileges_to(
         std::env::var("KRB5_KDC_USER")
@@ -801,6 +803,7 @@ pub fn drop_privileges() -> io::Result<bool> {
 ///
 /// Only as root: `io::ErrorKind::NotFound` when `username` does not exist, and
 /// `io::ErrorKind::Other` when the user lookup, `setgid` or `setuid` fails.
+#[cfg(any(test, feature = "test-hooks"))]
 pub(crate) fn drop_privileges_to(username: &str) -> io::Result<bool> {
     if !nix::unistd::Uid::effective().is_root() {
         tracing::info!(
@@ -1528,7 +1531,7 @@ mod tests {
 
     #[test]
     fn drop_privileges_is_noop_when_unprivileged() {
-        assert!(!drop_privileges().expect("unprivileged drop"));
+        assert!(!drop_privileges_to("nobody").expect("unprivileged drop"));
     }
 
     #[test]

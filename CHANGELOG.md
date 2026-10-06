@@ -51,6 +51,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **kdc/gss.** The acceptor's `GSS_DELEG_CCACHE` copy (kadmind read it) and the KDC's
+  `KRB5_KDC_USER` drop are `test-hooks` only: MIT reads neither. Strings check.
 - **client/protocol/admin/kdc.** Every keytab and stash read (kinit, kvno, klist, ktutil,
   kadmin.local, kprop, kpropd, iprop-pull, krb5kdc, kadmind, kdb5_util) is a wiped buffer sized from
   the file, as is `Keytab::to_bytes`'s output. Units.

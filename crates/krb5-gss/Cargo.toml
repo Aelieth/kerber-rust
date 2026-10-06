@@ -31,5 +31,10 @@ krb5-config.workspace = true
 krb5-kdc.workspace = true
 krb5-testkit.workspace = true
 
+[features]
+# The gates' hook, the delegated credential's copy in `GSS_DELEG_CCACHE`; off by default.
+# krb5-admin's test-hooks turns it on.
+test-hooks = []
+
 [lints]
 workspace = true

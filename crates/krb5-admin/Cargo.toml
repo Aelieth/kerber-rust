@@ -60,8 +60,8 @@ krb5-testkit.workspace = true
 nix = { workspace = true, features = ["signal"] }
 
 [features]
-# krb5-kdc's test-hooks, plus this crate's own gate and test hooks; off by default.
-test-hooks = ["krb5-kdc/test-hooks"]
+# krb5-kdc's and krb5-gss's test-hooks, plus this crate's own gate and test hooks; off by default.
+test-hooks = ["krb5-kdc/test-hooks", "krb5-gss/test-hooks"]
 
 [lints]
 workspace = true

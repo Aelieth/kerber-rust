@@ -8,6 +8,9 @@
 #   --control          the planted control: a file carrying planted names must go red; exits 0 when it does
 P='KRB5_TEST_[A-Z0-9_]*|--test-realm|testrealm|KRB5_MASTER_PASSWORD|KRB5_NEW_PASSWORD|KRB5_PASSWORD|KERBER_CAPTURE_DIR|KRB5_KDC_DB_LIBRARY|KRB5_KDC_DB|KRB5_KDC_STASH|KRB5_MASTER_ETYPE|KRB5_ACL_FILE|KRB5_KDC_CONF|KRB5_EXPORT_[A-Z_]*|KRB5_ENABLE_PKINIT|KRB5_KDC_BIND|KRB5_KDC_USER|KRB5_KDC_AUDIT[A-Z_]*|KRB5_KDCPOLICY|KERBER_KDC_GREET|KRB5_KPASSWD_BIND|KRB5_KPASSWD_TARGET|KCM_SOCKET|disable-transited-check|body-realm|renew-ticket|armor-ccache|pkinit-anchors|ok tgt='
 
+# Names a release build no longer reads, where MIT's program reads none; one line per change.
+P="$P|GSS_DELEG_CCACHE" # the gss acceptor's copy of a delegated credential (kadmind)
+
 # check_files <file>...: the check proper.
 check_files() {
     status=0
@@ -26,13 +29,13 @@ command -v strings >/dev/null 2>&1 || { echo "strings-check.sh: strings (binutil
 case ${1:-} in
 --control)
     d=$(mktemp -d /var/tmp/strings-control.XXXXXX) || exit 1
-    printf 'x\0KRB5_TEST_PLANTED\0ab--test-realmcd\0UserPassword\0KRB5_EXPORT_KRBTGT_KEYTAB\0KRB5_KDC_DB_LIBRARY\0xxbody-realmyy\0ok tgt=2\0' \
+    printf 'x\0KRB5_TEST_PLANTED\0ab--test-realmcd\0UserPassword\0KRB5_EXPORT_KRBTGT_KEYTAB\0KRB5_KDC_DB_LIBRARY\0xxbody-realmyy\0ok tgt=2\0yGSS_DELEG_CCACHEz\0' \
         > "$d/planted.bin"
     out=$(check_files "$d/planted.bin")
     rc=$?
     rm -rf "$d"
     printf '%s\n' "$out"
-    for name in KRB5_TEST_PLANTED --test-realm UserPassword KRB5_EXPORT_KRBTGT_KEYTAB KRB5_KDC_DB_LIBRARY body-realm 'ok tgt='; do
+    for name in KRB5_TEST_PLANTED --test-realm UserPassword KRB5_EXPORT_KRBTGT_KEYTAB KRB5_KDC_DB_LIBRARY body-realm 'ok tgt=' GSS_DELEG_CCACHE; do
         case $out in
             *" $name x1"*) ;;
             *) echo "control: $name not found: the check is broken"; exit 1 ;;
