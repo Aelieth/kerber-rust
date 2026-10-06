@@ -10,6 +10,7 @@
 mod common;
 use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
+use krb5_crypto::SpakeGroup;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 
 use krb5_protocol::{
@@ -354,7 +355,9 @@ fn pkinit_padata_module_before_info_without_cookie() {
 #[test]
 fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
     isolate_host_krb5();
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // The client's default group is edwards25519 (MIT `DEFAULT_GROUPS_CLIENT`).
+    store.policy.spake_preauth_groups = vec![SpakeGroup::Edwards25519, SpakeGroup::P256];
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let seen: Arc<Mutex<Vec<Vec<i32>>>> = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -422,8 +425,9 @@ fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
 #[test]
 fn spake_keeps_the_hints_etype_info_when_the_challenge_has_none() {
     isolate_host_krb5();
+    // The client's default group is edwards25519 (MIT `DEFAULT_GROUPS_CLIENT`).
     let kdc = krb5_config::KdcConf::parse(
-        "[realms]\n    KERBER.TEST = {\n        supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal\n    }\n",
+        "[libdefaults]\n    spake_preauth_groups = edwards25519 P-256\n[realms]\n    KERBER.TEST = {\n        supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal\n    }\n",
     )
     .unwrap();
     let store = krb5_kdc::PrincipalStore::bootstrap_with_kdc_conf(

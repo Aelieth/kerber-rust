@@ -347,11 +347,13 @@ pub fn apply_strengthen(
     krb_fx_cf2(&sk, base, b"strengthenkey", b"replykey").map_err(Into::into)
 }
 
-/// PA-SPAKE support advertisement (P-256).
+/// PA-SPAKE support message naming `groups` in order.
+///
+/// MIT `send_support` (`spake_client.c:155-167`): the client's permitted groups, in configuration order.
 #[must_use]
-pub fn pa_spake_support() -> PaData {
+pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
     let msg = krb5_types::spake::PaSpake::Support(krb5_types::spake::SpakeSupport {
-        groups: vec![krb5_types::spake::GROUP_P256],
+        groups: groups.iter().map(|g| g.number()).collect(),
     });
     PaData {
         padata_type: pa::SPAKE,

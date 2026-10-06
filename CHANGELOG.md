@@ -519,6 +519,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **client.** SPAKE as MIT's `spake_client.c`: `spake_preauth_groups` (default edwards25519), one support
+  message for a group it lacks, encrypted timestamp after a 24. Units; wire as Fedora's kinit.
 - **kdc.** SPAKE as MIT's `spake_kdc.c`: edwards25519, Fedora's optimistic challenge, MIT's cookie,
   the client's group order, ETYPE-INFO2 kept, MIT's init log line. Units; a Fedora 43 kinit flows as with MIT.
 - **crypto.** SPAKE edwards25519 as MIT's, on curve25519-dalek 4.1.3 (vetted, deny-pinned); `krb_fx_cf2`
@@ -1441,6 +1443,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **client.** `kinit` falls back to encrypted timestamp when SPAKE fails before its response,
+  as MIT's; it gave up. Units; settled.
 - **kdc.** The AS-REP after SPAKE keeps ETYPE-INFO2, as MIT's; it dropped it. Unit; settled.
 - **crypto.** des3 random-to-key only sets parity, as MIT's `k5_rand2key_des3` (it XORed a weak
   key with 0xF0), and `krb_fx_cf2` takes des3's 21 octets as MIT's: des3 FAST armor keys

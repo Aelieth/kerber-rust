@@ -1173,7 +1173,7 @@ fn cookie_survives_krbtgt_kvno_rollover() {
         .expect("aes256-sha1 key")
         .key
         .clone();
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let req1 = as_req(cname.clone(), TEST_REALM, 701, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {

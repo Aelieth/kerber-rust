@@ -353,7 +353,7 @@ pub struct InitCredsOpt<'a> {
     pub enterprise: bool,
 }
 
-/// [`kinit`] with a preauth mode (`want_spake` = PA-SPAKE P-256).
+/// [`kinit`] with a preauth mode (`want_spake` = PA-SPAKE in the configured groups, no fallback).
 ///
 /// # Errors
 ///

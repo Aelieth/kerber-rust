@@ -1866,7 +1866,7 @@ fn run() -> Result<(), String> {
                 user.clone(),
                 realm,
                 0x1000_002a,
-                Some(vec![pa_spake_support()]),
+                Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
             )
             .map_err(|e| e.to_string())?,
         )

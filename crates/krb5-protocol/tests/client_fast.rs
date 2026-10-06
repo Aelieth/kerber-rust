@@ -238,7 +238,12 @@ fn request<'a>(
 #[test]
 fn fast_exchange_negotiates_through_the_armor_like_mit() {
     isolate_host_krb5();
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // The client's default group is edwards25519 (MIT `DEFAULT_GROUPS_CLIENT`).
+    store.policy.spake_preauth_groups = vec![
+        krb5_crypto::SpakeGroup::Edwards25519,
+        krb5_crypto::SpakeGroup::P256,
+    ];
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();

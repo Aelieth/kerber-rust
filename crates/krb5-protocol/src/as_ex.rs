@@ -26,7 +26,9 @@ mod spake;
 pub use fast::FastArmor;
 use fast::continue_fast;
 pub(crate) use fast::fast_error_material;
-use spake::{continue_spake, refuse_spake_combo, refuse_spake_skip};
+use spake::{
+    SpakeEnd, client_groups, continue_spake, refuse_spake_combo, refuse_spake_skip, spake_forced,
+};
 
 /// Successful AS exchange: TGT plus session key.
 #[derive(Clone, Debug)]
@@ -63,7 +65,7 @@ pub struct AsRequest<'a> {
     pub password: &'a [u8],
     /// KDC address.
     pub kdc: &'a KdcAddr,
-    /// Use PA-SPAKE (151, P-256) instead of PA-ENC-TIMESTAMP.
+    /// Use PA-SPAKE (151) in the configured groups, never another mechanism.
     pub want_spake: bool,
     /// FAST armor (PA-FX-FAST). Inner preauth is still enc-timestamp.
     pub fast_armor: Option<&'a FastArmor>,
@@ -366,7 +368,7 @@ fn as_exchange_inner(
             &bound,
             Some(&wire),
         ),
-        KdcMsg::Error(e) if spake_more(&e) => continue_spake(req, keys, nonce, &bound, &etypes, &e),
+        KdcMsg::Error(e) if spake_more(&e) => spake_forced(req, keys, nonce, &bound, &etypes, &e),
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
             continue_from_hint(req, keys, nonce, &bound, &etypes, &e, skew_time.as_ref())
         }
@@ -504,21 +506,33 @@ fn continue_from_hint(
     skew_hint: Option<&KerberosTime>,
 ) -> Result<AsOutcome, Error> {
     if req.want_spake {
-        return continue_spake(req, keys, nonce, bound, etypes, err);
+        return spake_forced(req, keys, nonce, bound, etypes, err);
     }
-    let method = method_from_error(err)?;
     let preferred = conf_preferred_preauth_types();
-    let sorted = sort_krb5_padata_sequence(&method, &preferred);
-    for p in &sorted {
-        match p.padata_type {
-            pa::SPAKE => return continue_spake(req, keys, nonce, bound, etypes, err),
-            pa::ENC_TIMESTAMP => {
-                return continue_preauth(req, keys, nonce, bound, etypes, err, skew_hint);
+    // MIT `spake_init` (`spake_client.c:62-73`): with no permitted group there is no SPAKE module.
+    let groups = client_groups();
+    let mut spake_failed = groups.is_empty();
+    let mut hint = err.clone();
+    loop {
+        let method = method_from_error(&hint)?;
+        let sorted = sort_krb5_padata_sequence(&method, &preferred);
+        // MIT `process_pa_data` (`preauth2.c:648-728`): the first real mechanism that works, one that failed not tried again.
+        let spake_next = sorted
+            .iter()
+            .map(|p| p.padata_type)
+            .find(|&t| t == pa::ENC_TIMESTAMP || (t == pa::SPAKE && !spake_failed))
+            == Some(pa::SPAKE);
+        if !spake_next {
+            return continue_preauth(req, keys, nonce, bound, etypes, &hint, skew_hint);
+        }
+        match continue_spake(req, keys, nonce, bound, etypes, &hint, &groups)? {
+            SpakeEnd::Done(out) => return Ok(*out),
+            SpakeEnd::Fallback(next) => {
+                spake_failed = true;
+                hint = *next;
             }
-            _ => {}
         }
     }
-    continue_preauth(req, keys, nonce, bound, etypes, err, skew_hint)
 }
 
 /// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1729`): MIT builds the next encrypted
