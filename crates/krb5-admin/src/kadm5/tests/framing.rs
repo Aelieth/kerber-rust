@@ -34,6 +34,26 @@ fn read_record_bounds_the_total_accumulated_size() {
     let _ = writer.join();
 }
 
+/// A record of empty fragments, 300,000 marks with no last one, ends once its marks pass 1 MiB:
+/// the blocking reader holds no memory for them and stops reading at the cap.
+#[test]
+fn empty_fragments_end_the_record_at_the_cap() {
+    use std::io::Write as _;
+    use std::net::{TcpListener, TcpStream};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let writer = std::thread::spawn(move || {
+        if let Ok(mut c) = TcpStream::connect(addr) {
+            let _ = c.write_all(&vec![0u8; 4 * 300_000]);
+        }
+    });
+    let (mut server, _) = listener.accept().unwrap();
+    let err = super::read_record(&mut server).unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::InvalidData, "{err}");
+    drop(server);
+    let _ = writer.join();
+}
+
 /// A kadm5 RPC reply is one write: the record mark (length | LAST_FRAG) and the body together,
 /// as MIT's `xdrrec` flushes a record.
 #[test]
@@ -52,6 +72,31 @@ fn rpc_record_is_one_write() {
     let mut w = Writes::default();
     super::write_record(&mut w, b"reply").unwrap();
     assert_eq!(w.0, [b"\x80\0\0\x05reply".to_vec()]);
+}
+
+/// The replies that carry keys, `chrand`'s and `get_principal_keys`'s, are built in one buffer of
+/// their size, and so is the RPCSEC_GSS reply that carries one in the clear: no copy of a key is
+/// left in a buffer they outgrew. Their callers wipe them.
+#[test]
+fn the_key_replies_are_built_in_one_buffer() {
+    let (store, _, _) = setup();
+    let g = store.read().unwrap();
+    let p = g.get_name(&krb5_kdc::principals::kadmin_admin()).unwrap();
+    assert!(!p.keys.is_empty());
+    let chrand = encode_chrand(&p.keys);
+    assert_eq!(chrand.capacity(), chrand.len());
+    let mut r = XdrR::new(&chrand);
+    assert_eq!(
+        (r.u32().unwrap(), r.u32().unwrap(), r.u32().unwrap()),
+        (API_V2, 0, u32::try_from(p.keys.len()).unwrap())
+    );
+    for kvno in [0, p.keys[0].kvno] {
+        let keys = encode_extract_keys(API_V2, p, kvno);
+        assert_eq!(keys.capacity(), keys.len());
+    }
+    let reply = rpc_reply_gss_verf(7, b"a mic", &chrand);
+    assert_eq!(reply.capacity(), reply.len());
+    assert!(reply.ends_with(&chrand));
 }
 
 #[test]
@@ -131,7 +176,7 @@ fn auth_none_is_auth_too_weak() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -160,7 +205,7 @@ fn bad_program_is_prog_unavail() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -190,7 +235,7 @@ fn kadm_vers_99_is_prog_mismatch_2_2() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -232,7 +277,7 @@ fn reply_typed_rpc_is_no_reply() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &w.b,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     assert_eq!(out, [] as [u8; 0]);

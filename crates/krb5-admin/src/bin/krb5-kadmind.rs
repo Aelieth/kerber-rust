@@ -27,9 +27,12 @@
 //!
 //! The database, stash and ACL are where [`krb5_config::KdcPaths`] finds them. kadm5 and kpasswd
 //! listen where kdc.conf's `kadmind_listen` / `kadmind_port` and `kpasswd_listen` /
-//! `kpasswd_port` say, all local addresses by default. The daemon log goes where
-//! `[logging] admin_server` (else `default`) says, in MIT's line format; SIGHUP reopens its files
-//! and SIGTERM or SIGINT ends kadmind. The JSON structured log stays on standard output.
+//! `kpasswd_port` say, all local addresses by default, and all are served from MIT's one
+//! net-server loop on the main thread. The daemon log goes where `[logging] admin_server` (else
+//! `default`) says, in MIT's line format; SIGHUP reopens its files, and SIGTERM, SIGINT or
+//! SIGQUIT ends kadmind. The JSON structured log goes only where `[logging] json` names a
+//! destination. A kadm5 call that cannot be handled gets no reply and prints `kadm5: <message>`
+//! on standard error.
 //!
 //! Builds with the `test-hooks` feature also take `--test-realm` (the documented realm) and a
 //! `host:port` operand (kadm5 there, kpasswd on `KRB5_KPASSWD_BIND`, else 127.0.0.1:464), both
@@ -39,24 +42,21 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
-use std::net::{TcpListener, TcpStream, UdpSocket};
-use std::os::fd::AsRawFd as _;
+use std::io::Write as _;
+use std::net::{TcpListener, UdpSocket};
 use std::path::Path;
 use std::sync::Arc;
-use std::thread;
-use std::time::Duration;
 
-use krb5_admin::{Kadm5RpcError, serve_kadm5_conn, serve_kpasswd_tcp, serve_kpasswd_udp};
+use krb5_admin::{Kadmind, acceptor_keys, serve_kadmind};
 use krb5_cli::{MitArgs, MitOpt, Placement};
-use krb5_crypto::ProtocolKey;
-use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
+use krb5_kdc::net_server::Sockets;
+use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
-    Acl, ClosingFd, Error, IpropRole, OpenFailure, PrincipalStore, Signals, acl_for_store,
-    bind_rpc_listeners, bind_tcp_listeners, bind_udp_listeners, detach, names_relative_database,
-    open_database, shared_dump as shared_store, write_pid_file,
+    Acl, Error, IpropRole, OpenFailure, PrincipalStore, Signals, acl_for_store, bind_rpc_listeners,
+    bind_tcp_listeners, bind_udp_listeners, detach, names_relative_database, open_database,
+    shared_dump as shared_store, write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
-use krb5_protocol::ReplayCache;
 
 /// MIT `main` (`kadmin/server/ovsec_kadmd.c:362-432`): kadmind's options, each matched by
 /// spelling; a test-hooks build adds the gates' `--test-realm`.
@@ -321,9 +321,6 @@ fn main() {
             eprintln!("{progname}: create IPROP svc (PROG=100423, VERS=1)");
         }
     }
-    for l in &listeners {
-        l.set_nonblocking(true).ok();
-    }
     #[cfg(feature = "test-hooks")]
     announce(
         &progname,
@@ -333,57 +330,41 @@ fn main() {
             .is_some()
             .then_some((kpasswd_udp.as_slice(), kpasswd_tcp.as_slice())),
     );
-    signals.spawn_log_reopener();
-    if let Some(cpw_key) = cpw_key {
-        for sock in kpasswd_udp {
-            let (store, acl, key, stop) = (
-                Arc::clone(&shared),
-                acl.clone(),
-                cpw_key.clone(),
-                signals.stop_flag(),
-            );
-            thread::spawn(move || {
-                let _ = serve_kpasswd_udp(store, acl, key, sock, stop);
-            });
-        }
-        for listener in kpasswd_tcp {
-            let (store, acl, key, stop) = (
-                Arc::clone(&shared),
-                acl.clone(),
-                cpw_key.clone(),
-                signals.stop_flag(),
-            );
-            thread::spawn(move || {
-                let _ = serve_kpasswd_tcp(store, acl, key, listener, stop);
-            });
-        }
+    // Without kadmin/changepw's keys kpasswd's sockets stay bound and unserved.
+    let (udp, tcp): (&[UdpSocket], &[TcpListener]) = if cpw_key.is_some() {
+        (&kpasswd_udp, &kpasswd_tcp)
     } else {
         eprintln!("{progname}: no kadmin/changepw keys (RFC 3244 not listening)");
-    }
+        (&[], &[])
+    };
+    let sockets = Sockets {
+        udp,
+        tcp,
+        rpc: &listeners,
+    };
+    let mut kadmind = Kadmind::new(shared, acl, cpw_key).report_unhandled(Arc::new(|message| {
+        let _ = writeln!(std::io::stderr(), "kadm5: {message}");
+    }));
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:538-540`): "starting", and in the foreground
     // "<prog>: starting..." on standard error.
     klog::syslog(Severity::Info, "starting");
     if nofork {
         eprintln!("{progname}: starting...");
     }
-    serve(&listeners, &shared, &acl, &realm, &signals);
-    // MIT's loop ends after the request in hand. A change in flight holds the store until its
-    // database and update log are saved, so taking the store here waits for it; it stays taken
-    // until the process exits, so no change starts after it.
-    let _finished = shared
-        .write()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let open = serve_kadmind(&mut kadmind, &sockets, &signals).unwrap_or_else(|e| {
+        klog::com_err(Some(&e.to_string()), "while serving");
+        eprintln!("{progname}: serve: {e}");
+        std::process::exit(1);
+    });
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:543-555`): "finished, exiting" when the loop ends,
-    // then each socket is logged as the loop is freed, before the log closes.
-    klog::syslog(Severity::Debug, "Got signal to request exit");
+    // then each event left is freed, the newest first, every connection and socket with
+    // "closing down fd", before the log closes.
     klog::syslog(Severity::Info, "finished, exiting");
-    for fd in socket_fds {
+    for fd in open.into_iter().chain(socket_fds) {
         klog::syslog(Severity::Info, &format!("closing down fd {fd}"));
     }
     klog::close();
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:557-557`): kadmind exits 0 once the log is closed.
-    // `exit` runs no destructors, so the store is still taken as the process ends: returning
-    // from main would release it first, and a change waiting on it could start saving.
     std::process::exit(0);
 }
 
@@ -450,120 +431,6 @@ fn announce(
         }
     }
 }
-
-/// Serve kadm5 connections until SIGINT, SIGTERM or SIGQUIT; each connection on its own
-/// thread, the oldest dropped past the connection cap.
-fn serve(
-    listeners: &[TcpListener],
-    shared: &krb5_kdc::SharedDump,
-    acl: &Acl,
-    realm: &str,
-    signals: &Signals,
-) {
-    let rcache = ReplayCache::new();
-    // MIT drives kadmind through the same net-server as the KDC: cap concurrent
-    // connections and evict the oldest over the cap (kill_lru_stream_connection)
-    // rather than spawning unbounded threads.
-    let registry = krb5_kdc::ConnRegistry::new(krb5_kdc::MAX_TCP_WORKERS);
-    while !signals.stop_requested() {
-        accept_pass(listeners, |stream| {
-            // A write timeout bounds a slow-reading client that would
-            // otherwise pin a worker in write_all. No short read
-            // timeout: MIT's net-server sets none on established kadmind
-            // connections (SO_KEEPALIVE only) and defends slow-loris with
-            // the connection cap + LRU eviction above; a 5 s read timeout
-            // would break a legitimate interactive session that pauses
-            // between commands.
-            let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-            let seq = registry.register(&stream);
-            let registry_g = Arc::clone(&registry);
-            let store = Arc::clone(shared);
-            // The acceptor keys as the database holds them now, as MIT's KDB keytab
-            // reads them for each context, under the database's lock: a lock that may
-            // not be taken leaves the context no key, so it is not accepted.
-            // MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:769-773`): the KDB keytab's lookup takes the shared lock, and fails when it cannot.
-            let keys = {
-                let mut g = store
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                match g.reload_if_stale() {
-                    Ok(()) => acceptor_keys(&g),
-                    Err(e) => {
-                        klog::syslog(Severity::Err, &format!("{e} while reloading database"));
-                        Vec::new()
-                    }
-                }
-            };
-            let acl = acl.clone();
-            let realm = realm.to_owned();
-            let rcache = rcache.clone();
-            let fd = stream.as_raw_fd();
-            thread::spawn(move || {
-                let _guard = krb5_kdc::ConnGuard(registry_g, seq);
-                let _closed = ClosingFd(fd);
-                // Only an RPC that could not be handled is printed; a record or socket
-                // error ends the connection silently.
-                if let Err(e) = serve_kadm5_conn(store, acl, keys, realm, rcache, stream)
-                    && let Some(rpc) = e.get_ref().and_then(|x| x.downcast_ref::<Kadm5RpcError>())
-                {
-                    eprintln!("kadm5: {rpc}");
-                }
-            });
-        });
-    }
-}
-
-/// One pass over kadmind's listeners: each connection taken goes to `take`, and an accept that
-/// fails is logged. A pass that took nothing waits for the next connection, or, after a failed
-/// accept, pauses instead: the connection that could not be taken (EMFILE, ENFILE, ENOBUFS,
-/// ENOMEM) keeps the listener readable, so the wait would return at once and the loop would spin.
-fn accept_pass(listeners: &[TcpListener], mut take: impl FnMut(TcpStream)) {
-    let mut idle = true;
-    let mut failed = false;
-    for listener in listeners {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                idle = false;
-                take(stream);
-            }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
-                ) => {}
-            // MIT `accept_rpc_connection` (`lib/apputils/net-server.c:1527-1539`): the woken
-            // kadm5 listener is served by the RPC library's `rendezvous_request`.
-            // MIT `rendezvous_request` (`lib/rpc/svc_tcp.c:284-291`): an accept that fails
-            // other than with EINTR is dropped, and the loop goes on.
-            Err(e) => {
-                failed = true;
-                tracing::error!(
-                    event = krb5_log::events::ADMIN,
-                    component = "krb5-admin",
-                    outcome = "error",
-                    error = %e,
-                    detail = "kadm5 accept",
-                );
-            }
-        }
-    }
-    if !idle {
-        return;
-    }
-    if failed {
-        thread::sleep(ACCEPT_FAILURE_PAUSE);
-    } else {
-        // The next connection is taken as it arrives; the stop flag is looked at between.
-        let waiting: Vec<&TcpListener> = listeners.iter().collect();
-        krb5_kdc::wait_for_connection(&waiting, STOP_POLL);
-    }
-}
-
-/// How long an idle accept loop waits for a connection before it looks at its stop flag again.
-const STOP_POLL: Duration = Duration::from_millis(100);
-
-/// The pause after an accept that failed, as kpasswd's TCP listener pauses.
-const ACCEPT_FAILURE_PAUSE: Duration = Duration::from_millis(20);
 
 /// kadmind's RPC listeners and kpasswd's UDP / TCP sockets; a bind failure is logged and fatal.
 ///
@@ -645,34 +512,6 @@ fn krb5_admin_server(conf: Option<&krb5_config::Krb5Conf>, realm: &str) -> Optio
     (ep.port != krb5_config::listen::KADMIND_PORT).then(|| format!("{}:{}", ep.host, ep.port))
 }
 
-/// The keys a kadm5 or iprop client may authenticate to: the realm's `kadmin/admin`,
-/// `kadmin/changepw` and `kadmin/history`, and every `kiprop/<host>` (a replica's iprop service).
-/// The RPC layer then admits only the acceptor names each program allows.
-/// MIT `setup_kdb_keytab` (`kadmin/server/ovsec_kadmd.c:178-190`): the acceptor keytab is the
-/// whole database, and `check_rpcsec_auth` decides which names may call.
-fn acceptor_keys(store: &PrincipalStore) -> Vec<ProtocolKey> {
-    let mut keys = Vec::new();
-    for name in [kadmin_admin(), kadmin_changepw(), kadmin_history()] {
-        if let Some(p) = store.get_name(&name) {
-            keys.extend(p.keys.iter().map(|k| k.key.clone()));
-        }
-    }
-    let realm_suffix = format!("@{}", store.realm());
-    for id in store.ids() {
-        let Some(name) = id.strip_suffix(&realm_suffix) else {
-            continue;
-        };
-        if let Some(host) = name.strip_prefix("kiprop/")
-            && !host.is_empty()
-            && !host.contains('/')
-            && let Some(p) = store.get(&id)
-        {
-            keys.extend(p.keys.iter().map(|k| k.key.clone()));
-        }
-    }
-    keys
-}
-
 /// kadmind's ACL, `acl_file` as [`krb5_config::KdcPaths`] resolved it; `None` is self-service
 /// only. A file that cannot be read or parsed stops kadmind: what MIT's ACL module logs goes to
 /// the log alone, and the last line, `fail_to_start`'s, to standard error and the log.
@@ -702,27 +541,6 @@ fn load_acl(progname: &str, acl_file: Option<&Path>, realm: &str) -> Acl {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// An accept that keeps failing pauses each pass: the listener stays readable, so a wait for
-    /// the next connection would return at once and the loop would spin. A connected socket whose
-    /// peer has closed stands for such a listener: its accept fails (EINVAL) and poll finds it
-    /// readable at once.
-    #[test]
-    fn a_failing_accept_does_not_spin() {
-        let real = TcpListener::bind("127.0.0.1:0").unwrap();
-        let client = TcpStream::connect(real.local_addr().unwrap()).unwrap();
-        drop(real.accept().unwrap());
-        let listener = TcpListener::from(std::os::fd::OwnedFd::from(client));
-        listener.set_nonblocking(true).unwrap();
-        let listeners = [listener];
-        let start = std::time::Instant::now();
-        let mut passes = 0;
-        while start.elapsed() < Duration::from_millis(200) {
-            accept_pass(&listeners, |_| panic!("no connection to take"));
-            passes += 1;
-        }
-        assert!(passes <= 20, "{passes} passes in 200 ms");
-    }
 
     #[test]
     fn progname_and_atoi() {

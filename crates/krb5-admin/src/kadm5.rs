@@ -31,7 +31,8 @@ pub use glob::glob_pattern_ok;
 pub(crate) use glob::{glob_expand, glob_is_match, policies_matching, principals_matching};
 pub use iprop::{IpropLast, IpropPull, iprop_fullresync, iprop_pull};
 pub(crate) use policy::{create_policy_local, modify_policy_local};
-pub use rpc::{Kadm5RpcError, Kadm5RpcSession, RpcCtx, kadm5_handle_rpc, serve_kadm5_conn};
+pub(crate) use rpc::Kadm5Conn;
+pub use rpc::{Kadm5RpcSession, RpcCtx, RpcPeer, UnhandledRpc, kadm5_handle_rpc, serve_kadm5_conn};
 
 /// The daemon log text of a password change that failed with `e`: the message of the kadm5
 /// code a `kadm5_chpass_principal` stub would return.

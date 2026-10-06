@@ -23,7 +23,10 @@ filter: `krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn`
 for `krb5kdc`, and `krb5_admin=info,krb5_kdc=info,krb5_protocol=warn` for
 `kadmind`, `kprop` and `kpropd`. Only a `test-hooks` build (the gates')
 takes `RUST_LOG` instead; a release build reads no `RUST_LOG`, as MIT's
-programs read none.
+programs read none. The daemons write the stream from the one loop
+that serves every client, so a destination that blocks, a pipe its
+reader stops draining (`STDOUT` into a pipe, or a `FILE:` that is a
+FIFO), holds every client until it takes the line.
 
 The gates read the stream from the daemons' standard output:
 `json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
@@ -200,14 +203,22 @@ one `AS_REQ` / `TGS_REQ` line per answered request (`ISSUE` with the
 reply etypes, or the status word and the error's message) with the
 `... PROTOCOL-TRANSITION` / `... CONSTRAINED-DELEGATION` line after an
 S4U request; the transited-path lines; MIT's net-server lines: `closing
-down fd N` when a TCP connection ends, `too many connections` and
-`dropping TCP fd N from ADDR` past the 45-stream cap, `TCP client ADDR
-wants N bytes, cap is M`, the two `DISPATCH: repeated (retransmitted?)
-request …` lines, `TEXT - while dispatching (udp)` / `(tcp)` for a
-request the KDC refuses or discards, and `Got signal to reset` / `Got
-signal to request exit` at debug; and per kadm5 request one `Request:` or `Unauthorized
+down fd N` when a TCP or kadm5 connection ends, `too many connections`
+and `dropping TCP fd N from ADDR` (`RPC` for kadm5) past the cap of 45
+connections, `TCP client ADDR wants N bytes, cap is M`, the two
+`DISPATCH: repeated (retransmitted?) request …` lines, `TEXT - while
+dispatching (udp)` / `(tcp)` for a request the KDC or kpasswd refuses or
+discards, `Got signal to reset` / `Got signal to request exit` at debug,
+and after kadmind's `finished, exiting` a `closing down fd N` for each
+connection and socket left; and per kadm5 request one `Request:` or `Unauthorized
 request:` line with client, service and address, plus the `chpw` /
-`setpw` lines of kpasswd. The `fd N` in the net-server lines can be
+`setpw` lines of kpasswd; for a kadm5 call the RPC layer refuses, MIT's
+`Miscellaneous RPC error: ADDR, …`, `WARNING! Forged/garbled request: …`,
+`Authentication attempt failed: ADDR, RPC authentication flavor N`,
+`Invalid KADM5 procedure number: ADDR, N`, and for a context that does
+not establish `Authentication attempt failed: ADDR, GSS-API error
+strings are:` with the major status's text, then this side's error
+where MIT's names the mechanism's minor status. The `fd N` in the net-server lines can be
 higher than MIT's for the same socket: the signals' wake pipe holds five
 descriptors where MIT's loop holds one eventfd.
 

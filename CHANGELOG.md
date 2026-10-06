@@ -856,6 +856,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **kdc.** krb5kdc serves every client from MIT's net-server loop on one thread: no stream timeout,
   MIT's eviction, lookaside and `while dispatching` lines, `kdc_max_dgram_reply_size`,
   `kdc_tcp_listen_backlog`. Settled live.
+- **admin.** kadmind serves kpasswd and kadm5 from MIT's one loop: a cap of 45, `dropping RPC fd`, 35 s
+  per kadm5 read, an undecodable call unanswered, no kpasswd timeout, MIT's exit lines; ktadd's key
+  reply sized and wiped. Settled live.
 - **client.** `kinit`, `klist`, `kvno`, `kdestroy` and `kswitch` are ports of MIT 1.22.2's: its
   option tables and usage, com_err texts and exit codes, `klist -k`, and no log lines. Settled
   beside MIT's tools in a container realm (`working/logs/f-P6/`); units.
@@ -1039,9 +1042,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   `rust-kpasswd-mit-gate.sh` K1 (the change and the kinit succeed) and
   K2 (the ccache write fails after the change), and `client-gate.sh`
   C1 (nothing listens on 464).
-- **admin.** `krb5-admin` no longer prints. An RPC `serve_kadm5_conn`
-  cannot handle ends the connection with an `io::Error` carrying a
-  `Kadm5RpcError`, and `krb5-kadmind` prints `kadm5: <message>` only for
+- **admin.** `krb5-admin` no longer prints. A call `krb5-kadmind`'s
+  connections cannot decode goes to the reporter it sets with
+  `Kadmind::report_unhandled`, which prints `kadm5: <message>` only for
   that; record and socket errors stay silent, as before.
   `kadmin-rust-gate.sh` D1 pins the garbage-args line, and D2 pins that
   an oversize record prints nothing.

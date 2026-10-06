@@ -62,7 +62,9 @@ serving the test realm without one drops to `KRB5_KDC_USER` (default
 `nobody`) after a privileged bind. It serves every client from MIT's
 net-server loop on its main thread, one thread: at most 45 TCP streams
 (`MAX_TCP_WORKERS`), the one that started first evicted past that, and
-no stream timeout, as MIT's.
+no stream timeout, as MIT's. `krb5-kadmind` serves kpasswd and kadm5
+from the same loop: one cap of 45 over its streams and RPC connections,
+and each read of a kadm5 record waits at most 35 s, as MIT's.
 As MIT's daemons, `krb5-kdc` and `krb5-kadmind` stop on SIGINT,
 SIGTERM or SIGQUIT and reopen their log files on SIGHUP. In a
 `test-hooks` build, `--test-realm`

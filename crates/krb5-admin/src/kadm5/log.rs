@@ -1,6 +1,8 @@
 //! kadmind request logging (`kadmin/server/server_stubs.c` `log_done` / `log_unauth`, `prime_arg`,
 //! `init_2_svc`): the `Request:` / `Unauthorized request:` lines with client, service and address,
-//! one per procedure MIT logs, to the daemon log and the structured log.
+//! one per procedure MIT logs, to the daemon log and the structured log; and the RPC layer's own
+//! daemon log lines (`ovsec_kadmd.c` `log_miscerr` and `log_badverf`, the programs' refusal of a
+//! flavor).
 
 use krb5_gss::GssContext;
 use krb5_log::klog::{self, Severity};
@@ -8,10 +10,11 @@ use krb5_log::klog::{self, Severity};
 use super::codes::{
     CHPASS_PRINCIPAL, CHPASS_PRINCIPAL3, CHRAND_PRINCIPAL, CHRAND_PRINCIPAL3, CREATE_ALIAS,
     CREATE_POLICY, CREATE_PRINCIPAL, CREATE_PRINCIPAL3, DELETE_POLICY, DELETE_PRINCIPAL, EINVAL,
-    EXTRACT_KEYS, GET_POLICY, GET_POLS, GET_PRINCIPAL, GET_PRINCS, GET_PRIVS, GET_STRINGS, INIT,
-    KADM5_AUTH_DELETE, KADM5_FAILURE, KADM5_UNK_PRINC, KRB5_KDB_ALIAS_UNSUPPORTED,
-    KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY, MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING,
-    SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3, SETKEY_PRINCIPAL4,
+    EXTRACT_KEYS, GET_POLICY, GET_POLS, GET_PRINCIPAL, GET_PRINCS, GET_PRIVS, GET_STRINGS,
+    GSS_S_BAD_BINDINGS, GSS_S_DEFECTIVE_TOKEN, INIT, KADM5_AUTH_DELETE, KADM5_FAILURE,
+    KADM5_UNK_PRINC, KRB5_KDB_ALIAS_UNSUPPORTED, KRB5_KDB_CANTLOCK_DB, MODIFY_POLICY,
+    MODIFY_PRINCIPAL, PURGEKEYS, RENAME_PRINCIPAL, SET_STRING, SETKEY_PRINCIPAL, SETKEY_PRINCIPAL3,
+    SETKEY_PRINCIPAL4,
 };
 use super::dispatch::auth_code_for;
 use super::xdr::XdrR;
@@ -313,4 +316,120 @@ pub(super) fn kadm5_log_op(proc: u32, args: &[u8], who: &Caller<'_>, reply: &[u8
             "{line}"
         );
     }
+}
+
+/// One line of the RPC layer's own log, which the AUTH_GSSAPI flavor writes as `LOG_MISCERR`.
+/// MIT `log_miscerr` (`kadmin/server/ovsec_kadmd.c:291-295`): the address and the error, at
+/// notice.
+pub(super) fn rpc_log_miscerr(addr: &str, error: &str) {
+    klog::syslog(
+        Severity::Notice,
+        &format!("Miscellaneous RPC error: {addr}, {error}"),
+    );
+}
+
+/// A call whose verifier did not check out, named by its procedure.
+/// MIT `log_badverf` (`kadmin/server/ovsec_kadmd.c:206-287`): the kadm5 procedure's name from its
+/// table (1 to 24 but 17), else its number; the client and server names cut by `trunc_name`,
+/// `(null)` for a name the context does not have.
+pub(super) fn rpc_log_badverf(proc: u32, client: Option<&str>, server: Option<&str>, addr: &str) {
+    const NAMES: [&str; 24] = [
+        "CREATE_PRINCIPAL",
+        "DELETE_PRINCIPAL",
+        "MODIFY_PRINCIPAL",
+        "RENAME_PRINCIPAL",
+        "GET_PRINCIPAL",
+        "CHPASS_PRINCIPAL",
+        "CHRAND_PRINCIPAL",
+        "CREATE_POLICY",
+        "DELETE_POLICY",
+        "MODIFY_POLICY",
+        "GET_POLICY",
+        "GET_PRIVS",
+        "INIT",
+        "GET_PRINCS",
+        "GET_POLS",
+        "SETKEY_PRINCIPAL",
+        "",
+        "CREATE_PRINCIPAL3",
+        "CHPASS_PRINCIPAL3",
+        "CHRAND_PRINCIPAL3",
+        "SETKEY_PRINCIPAL3",
+        "PURGEKEYS",
+        "GET_STRINGS",
+        "SET_STRING",
+    ];
+    let procname = usize::try_from(proc)
+        .ok()
+        .and_then(|p| p.checked_sub(1))
+        .and_then(|i| NAMES.get(i))
+        .filter(|n| !n.is_empty())
+        .map_or_else(|| proc.to_string(), |n| (*n).to_owned());
+    let client = trunc_name(client.unwrap_or("(null)"));
+    let server = trunc_name(server.unwrap_or("(null)"));
+    klog::syslog(
+        Severity::Notice,
+        &format!(
+            "WARNING! Forged/garbled request: {procname}, claimed client = {client}, server = \
+             {server}, addr = {addr}"
+        ),
+    );
+}
+
+/// A program's refusal of a flavor it does not take, before `svcerr_weakauth`.
+/// MIT `kadm_1` (`kadmin/server/kadm_rpc_svc.c:80-88`): kadm5's line, at error.
+/// MIT `krb5_iprop_prog_1` (`kadmin/server/ipropd_svc.c:542-548`): iprop's, in lower case.
+pub(super) fn rpc_log_flavor_refused(iprop: bool, addr: &str, flavor: u32) {
+    let lead = if iprop {
+        "authentication"
+    } else {
+        "Authentication"
+    };
+    klog::syslog(
+        Severity::Err,
+        &format!("{lead} attempt failed: {addr}, RPC authentication flavor {flavor}"),
+    );
+}
+
+/// A context that did not establish: the minor status's text is MIT's for a minor status of 0
+/// (a channel binding that does not match, as MIT's mechanism leaves it), else this side's error.
+/// MIT `log_badauth` (`kadmin/server/ovsec_kadmd.c:325-333`): the header, the major's and the
+/// minor's texts, the footer.
+/// MIT `displayMajor` (`lib/gssapi/mechglue/g_dsp_status.c:192-231`): the major's text.
+pub(super) fn rpc_log_badauth(addr: &str, major: u32, minor: &str) {
+    let major = match major {
+        GSS_S_BAD_BINDINGS => "Incorrect channel bindings were supplied",
+        GSS_S_DEFECTIVE_TOKEN => "Invalid token was supplied",
+        _ => "Unspecified GSS failure.  Minor code may provide more information",
+    };
+    for line in [
+        format!("Authentication attempt failed: {addr}, GSS-API error strings are:"),
+        format!("    {major}"),
+        format!("    {minor}"),
+        "   GSS-API error strings complete.".to_owned(),
+    ] {
+        klog::syslog(Severity::Notice, &line);
+    }
+}
+
+/// An RPCSEC_GSS context for a service its program does not take, cut by `trunc_name`.
+/// MIT `check_rpcsec_auth` (`kadmin/server/kadm_rpc_svc.c:333-337`): `bad service principal`, at
+/// error, as `check_iprop_rpcsec_auth` writes it for iprop.
+pub(super) fn rpc_log_bad_service(service: &str) {
+    klog::syslog(
+        Severity::Err,
+        &format!("bad service principal {}", trunc_name(service)),
+    );
+}
+
+/// A procedure a program does not serve, before `svcerr_noproc`.
+/// MIT `kadm_1` (`kadmin/server/kadm_rpc_svc.c:251-255`): kadm5's line.
+/// MIT `krb5_iprop_prog_1` (`kadmin/server/ipropd_svc.c:575-580`): iprop's.
+pub(super) fn rpc_log_bad_proc(iprop: bool, addr: &str, proc: u32) {
+    let line = if iprop {
+        format!("RPC unknown request: {proc} (krb5_iprop_prog_1)")
+    } else {
+        format!("Invalid KADM5 procedure number: {addr}, {proc}")
+    };
+    klog::syslog(Severity::Err, &line);
 }

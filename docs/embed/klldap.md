@@ -94,14 +94,15 @@ kerber-rust point release:
   methods of the concrete `PrincipalStore` and are not on `dyn Store`. Today
   the two meet through the dump file (the KDC's `reload_if_stale` re-reads it
   after kadmind writes), which is the two-process model inside one process.
-- **kadmind as a library.** `serve_kadm5_conn` and `serve_kpasswd_udp` /
-  `serve_kpasswd_tcp` take a `SharedDump`; the accept loop and its listener
-  setup live in the `krb5-kadmind` binary. An embedder serving kadm5 or
+- **kadmind as a library.** `Kadmind` and `serve_kadmind_until` run
+  kadmind's loop (kpasswd over UDP and TCP, kadm5 on its RPC listeners) on
+  the caller's thread over a `SharedDump`, as `krb5-kadmind` does; the
+  listener setup lives in the binary. An embedder serving kadm5 or
   kpasswd from a `SharedDump` calls `PrincipalStore::init_pwqual` on the store
   itself, as `krb5-kadmind` does at start; without it the realm's `dict_file`
   is not applied. Remote MIT `kadmin` on 749 (which
-  the satomlin fleet uses for `addprinc -randkey` + `ktadd`) needs either that
-  loop in the library or `krb5-kadmind` run beside KLLDAP.
+  the satomlin fleet uses for `addprinc -randkey` + `ktadd`) is that loop on
+  a thread beside the KDC's, or `krb5-kadmind` run beside KLLDAP.
 - **Bootstrap.** `PrincipalStore::bootstrap` creates a test user and admin with
   passwords; KLLDAP wants krbtgt, `kadmin/*` and a random-key admin with no
   password. Build it from `PrincipalStore::new` and `create_principal_3_in`.

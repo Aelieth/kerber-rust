@@ -7,30 +7,36 @@
 //! holds up another connection; a complete request is dispatched, the reply goes out by `writev`
 //! as the socket takes it, and the connection closes. There is no timeout: a stream keeps its
 //! place until it finishes, fails, or is evicted when a connection past the cap of 45 arrives.
-//! [`Streams`] is that set of streams and their handlers, over any [`Stream`] so the units can
-//! drive them with scripted sockets; [`run`] is the loop, which polls the listeners, the streams
-//! and the daemon's signals.
+//!
+//! kadmind's RPC connections share that set and that cap. When one is readable, MIT's RPC
+//! library reads a whole record with blocking reads that wait at most 35 s each, answers the
+//! call and writes the reply before the loop goes on; between records the connection waits in
+//! the set with no timer.
+//!
+//! The streams' table works over any socket type, so the units can drive it with scripted
+//! sockets; [`run`] is the loop, which polls the listeners, the streams and the daemon's signals.
 
 use std::io::{self, IoSlice, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd, RawFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 use krb5_log::klog::{self, Severity, os_error_text};
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{setsockopt, sockopt};
+use zeroize::Zeroizing;
 
 use crate::daemon::Signals;
 use crate::listen::{WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, recv_from_to, send_udp_reply};
 
 /// MIT `max_stream_data_connections` (`lib/apputils/net-server.c:85-85`): at most 45 stream connections.
-pub(crate) const MAX_STREAM_DATA_CONNECTIONS: usize = 45;
+pub const MAX_STREAM_DATA_CONNECTIONS: usize = 45;
 /// MIT `accept_stream_connection` (`lib/apputils/net-server.c:1278-1278`): a stream's buffer is 1 MiB, its length word included.
 pub(crate) const BUFSIZ: usize = 1024 * 1024;
-/// The longest request a stream takes: the buffer less its length word.
-pub(crate) const MAX_REQUEST: usize = BUFSIZ - 4;
+/// The longest request a stream takes: the 1 MiB buffer less its length word.
+pub const MAX_REQUEST: usize = BUFSIZ - 4;
 /// MIT `MAX_DGRAM_SIZE` (`include/osconf.hin:113-113`): a datagram is read into 64 KiB.
 const MAX_DGRAM_SIZE: usize = 65_536;
 /// The most one read takes. It is not a second cap: a request is read in pieces of at most this
@@ -41,6 +47,14 @@ const NO_LINGER: nix::libc::linger = nix::libc::linger {
     l_onoff: 0,
     l_linger: 0,
 };
+/// MIT `wait_per_try` (`lib/rpc/svc_tcp.c:344-344`): each read of an RPC record waits at most 35 s.
+pub(crate) const RPC_READ_WAIT: Duration = Duration::from_secs(35);
+/// The longest RPC record taken: its fragments and their marks together.
+pub const MAX_RPC_RECORD: usize = 1024 * 1024;
+/// MIT `LAST_FRAG` (`lib/rpc/xdr_rec.c:94-94`): the record mark's top bit ends a record.
+const LAST_FRAG: u32 = 0x8000_0000;
+/// How long a listener whose accept failed sits out of the poll set.
+const ACCEPT_FAILURE_PAUSE: Duration = Duration::from_millis(20);
 
 /// A stream connection's socket as the handlers use it: [`TcpStream`] in the daemons.
 pub(crate) trait Stream: Read + Write {
@@ -50,17 +64,31 @@ pub(crate) trait Stream: Read + Write {
     ///
     /// The `getsockname` error.
     fn local_addr(&self) -> io::Result<SocketAddr>;
+
+    /// Wait at most `timeout` for input (or end of file, or an error) to read: `false` when the
+    /// time ran out.
+    ///
+    /// # Errors
+    ///
+    /// The `poll` error; an interruption is `ErrorKind::Interrupted`.
+    fn wait_readable(&self, timeout: Duration) -> io::Result<bool>;
 }
 
 impl Stream for TcpStream {
     fn local_addr(&self) -> io::Result<SocketAddr> {
         TcpStream::local_addr(self)
     }
+
+    fn wait_readable(&self, timeout: Duration) -> io::Result<bool> {
+        let mut fds = [PollFd::new(self.as_fd(), PollFlags::POLLIN)];
+        let wait = PollTimeout::try_from(timeout).unwrap_or(PollTimeout::MAX);
+        Ok(poll(&mut fds, wait)? > 0)
+    }
 }
 
 /// What a dispatch produced: MIT `loop_respond_fn`'s `code` and `response`.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Reply {
+pub enum Reply {
     /// A zero `code` with a response: send it.
     Send(Vec<u8>),
     /// A zero `code` and no response: close the connection unanswered.
@@ -69,9 +97,9 @@ pub(crate) enum Reply {
     Failed(String),
 }
 
-/// What the daemon supplies to the loop.
+/// What a daemon supplies to the loop.
 /// MIT `dispatch` (`include/net-server.h:84-86`): one request in and, through the respond callback, one reply out.
-pub(crate) trait Dispatch {
+pub trait Dispatch {
     /// Answer one request that came to `local` from `remote`, logging to `log`.
     fn dispatch(
         &mut self,
@@ -92,10 +120,41 @@ pub(crate) trait Dispatch {
     /// SIGHUP's hook, after the log is reopened; nothing by default.
     /// MIT `do_reset` (`lib/apputils/net-server.c:246-253`): the daemon's reset function, when it gave one.
     fn reset(&mut self) {}
+
+    /// The session of an RPC connection accepted from `remote` on its own address `local`, which
+    /// answers its calls; `None` closes the connection. The KDC has no RPC listener and keeps
+    /// this default.
+    /// MIT `rendezvous_request` (`lib/rpc/svc_tcp.c:296-307`): the RPC library makes each accepted connection a transport of its own, which keeps both addresses.
+    fn rpc_session(
+        &mut self,
+        remote: SocketAddr,
+        local: SocketAddr,
+    ) -> Option<Box<dyn RpcSession>> {
+        let _ = (remote, local);
+        None
+    }
+}
+
+/// One RPC connection's calls, answered as MIT's RPC library dispatches them: kadmind's kadm5
+/// and iprop programs.
+pub trait RpcSession {
+    /// Answer one record of the connection.
+    fn call(&mut self, record: &[u8]) -> RpcReply;
+}
+
+/// What one RPC call produced.
+#[derive(Debug, PartialEq, Eq)]
+pub enum RpcReply {
+    /// A reply record to write; the connection then waits for its next record.
+    Send(Vec<u8>),
+    /// No reply; the connection waits for its next record.
+    Nothing,
+    /// The connection is done, and closes.
+    Close,
 }
 
 /// Where the loop's log lines go: `klog::syslog` in the daemons, a list in the units.
-pub(crate) trait Log {
+pub trait Log {
     /// One line at `severity`.
     fn syslog(&mut self, severity: Severity, msg: &str);
 
@@ -109,7 +168,7 @@ pub(crate) trait Log {
 }
 
 /// The daemon log, [`klog`].
-pub(crate) struct Klog;
+pub struct Klog;
 
 impl Log for Klog {
     fn syslog(&mut self, severity: Severity, msg: &str) {
@@ -126,18 +185,21 @@ impl Log for Klog {
 pub(crate) enum ConnType {
     /// A KDC or kpasswd TCP stream.
     Tcp,
+    /// A kadmind RPC connection.
+    Rpc,
 }
 
 impl ConnType {
-    /// MIT `conn_type_names` (`lib/apputils/net-server.c:120-128`): a TCP stream is `TCP` in the log.
+    /// MIT `conn_type_names` (`lib/apputils/net-server.c:120-128`): a TCP stream is `TCP` in the log, an RPC connection `RPC`.
     fn name(self) -> &'static str {
         match self {
             Self::Tcp => "TCP",
+            Self::Rpc => "RPC",
         }
     }
 }
 
-/// Where a stream is in its one exchange.
+/// Where a stream is in its exchange.
 enum Io {
     /// Reading the length word, then the body: `offset` counts both.
     Read {
@@ -152,12 +214,16 @@ enum Io {
         reply: Vec<u8>,
         sent: usize,
     },
+    /// An RPC connection, with the session that answers its calls.
+    Rpc(Box<dyn RpcSession>),
 }
 
 /// One stream connection.
 /// MIT `struct connection` (`lib/apputils/net-server.c:142-171`): the peer and its printed form, the read and write state, and `start_time`, the second the connection was accepted.
 pub(crate) struct Conn<S> {
     id: u64,
+    /// When its current event was made, for the order the loop frees events in at exit.
+    event: u64,
     stream: S,
     fd: RawFd,
     ctype: ConnType,
@@ -194,6 +260,7 @@ pub(crate) struct Streams<S> {
     max: usize,
     cap: usize,
     next_id: u64,
+    next_event: u64,
     scratch: Vec<u8>,
 }
 
@@ -206,6 +273,7 @@ impl<S: Stream> Streams<S> {
             max,
             cap,
             next_id: 0,
+            next_event: 0,
             scratch: vec![0; READ_SIZE],
         }
     }
@@ -231,7 +299,13 @@ impl<S: Stream> Streams<S> {
         self.conns.iter().position(|c| c.id == id)
     }
 
-    /// Take a new connection from `remote` on descriptor `fd`, started in second `now`, and
+    fn new_event(&mut self) -> u64 {
+        let event = self.next_event;
+        self.next_event += 1;
+        event
+    }
+
+    /// Take a new TCP connection from `remote` on descriptor `fd`, started in second `now`, and
     /// evict the connection that started first when it is one past the cap. Returns its id.
     /// MIT `accept_stream_connection` (`lib/apputils/net-server.c:1274-1283`): the peer is printed, `start_time` is the current second, and one past the cap evicts.
     pub(crate) fn add(
@@ -242,10 +316,9 @@ impl<S: Stream> Streams<S> {
         now: u64,
         log: &mut dyn Log,
     ) -> u64 {
-        let id = self.next_id;
-        self.next_id += 1;
-        self.conns.push(Conn {
-            id,
+        let conn = Conn {
+            id: 0,
+            event: 0,
             stream,
             fd,
             ctype: ConnType::Tcp,
@@ -258,7 +331,42 @@ impl<S: Stream> Streams<S> {
                 msglen: 0,
                 body: Vec::new(),
             },
-        });
+        };
+        self.insert(conn, log)
+    }
+
+    /// Take a new RPC connection printed as `addrbuf`, answered by `session`, as [`Self::add`]
+    /// takes a TCP one.
+    /// MIT `accept_rpc_connection` (`lib/apputils/net-server.c:1560-1572`): the peer is printed, `start_time` is the current second, and one past the cap evicts.
+    pub(crate) fn add_rpc(
+        &mut self,
+        stream: S,
+        fd: RawFd,
+        (remote, addrbuf): (SocketAddr, String),
+        session: Box<dyn RpcSession>,
+        now: u64,
+        log: &mut dyn Log,
+    ) -> u64 {
+        let conn = Conn {
+            id: 0,
+            event: 0,
+            stream,
+            fd,
+            ctype: ConnType::Rpc,
+            remote,
+            addrbuf,
+            start_time: now,
+            io: Io::Rpc(session),
+        };
+        self.insert(conn, log)
+    }
+
+    fn insert(&mut self, mut conn: Conn<S>, log: &mut dyn Log) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        conn.id = id;
+        conn.event = self.new_event();
+        self.conns.push(conn);
         if self.conns.len() > self.max {
             self.kill_lru(id, log);
         }
@@ -296,8 +404,18 @@ impl<S: Stream> Streams<S> {
         log.syslog(Severity::Info, &format!("closing down fd {}", conn.fd));
     }
 
-    /// One readable event on connection `id`: one read of the length word or of the body; a
-    /// complete request is dispatched to `app`, whose reply the connection then writes.
+    /// The descriptors still open, the newest event first: the order the loop frees its events
+    /// in when it ends, each with "closing down fd".
+    /// MIT `verto_free` (`util/verto/verto.c:593-595`): every event left is deleted, the newest first.
+    pub(crate) fn open_fds(&self) -> Vec<RawFd> {
+        let mut open: Vec<(u64, RawFd)> = self.conns.iter().map(|c| (c.event, c.fd)).collect();
+        open.sort_unstable_by_key(|c| std::cmp::Reverse(c.0));
+        open.into_iter().map(|(_, fd)| fd).collect()
+    }
+
+    /// One readable event on connection `id`: on a TCP stream one read of the length word or of
+    /// the body, a complete request dispatched to `app`, whose reply the connection then writes;
+    /// on an RPC connection one record, answered by its session.
     /// MIT `process_stream_connection_read` (`lib/apputils/net-server.c:1375-1453`): a read error or end of file closes the stream, a length past the buffer is logged and answered with `make_toolong_error`, and exactly one complete message is dispatched.
     ///
     /// Deviations: a read that would block, or that a signal cut short, waits for the next event
@@ -308,7 +426,12 @@ impl<S: Stream> Streams<S> {
         let Some(i) = self.position(id) else {
             return;
         };
-        match self.read_step(i, app, log) {
+        let step = if matches!(self.conns[i].io, Io::Rpc(_)) {
+            self.rpc_step(i)
+        } else {
+            self.read_step(i, app, log)
+        };
+        match step {
             Step::Wait => {}
             Step::Close => self.free_socket(i, log),
             Step::Respond(reply) => self.respond(i, reply, log),
@@ -398,6 +521,41 @@ impl<S: Stream> Streams<S> {
         Step::Respond(dispatch_contained(app, local, remote, &request, true, log))
     }
 
+    /// One readable event on the RPC connection at `i`: one record read, its call answered and
+    /// the reply written, all before the loop goes on; a record that cannot be read, a reply that
+    /// cannot be written, or a session that ends the connection closes it.
+    /// MIT `process_rpc_connection` (`lib/apputils/net-server.c:1577-1587`): the RPC library serves the woken descriptor, and one whose transport it destroyed leaves the loop.
+    /// MIT `svc_do_xprt` (`lib/rpc/svc.c:469-531`): the record is received and dispatched, and a transport that died is destroyed.
+    ///
+    /// Deviation: a call that panics closes its connection, and the loop goes on; MIT's daemon
+    /// would end with the process.
+    fn rpc_step(&mut self, i: usize) -> Step {
+        let conn = &mut self.conns[i];
+        let Io::Rpc(session) = &mut conn.io else {
+            return Step::Wait;
+        };
+        let Ok(record) = read_rpc_record(&mut conn.stream) else {
+            return Step::Close;
+        };
+        let called = catch_unwind(AssertUnwindSafe(|| session.call(&record)));
+        drop(record);
+        match called {
+            Ok(RpcReply::Send(reply)) => {
+                let reply = Zeroizing::new(reply);
+                match write_rpc_record(&mut conn.stream, &reply) {
+                    Ok(()) => Step::Wait,
+                    Err(_) => Step::Close,
+                }
+            }
+            Ok(RpcReply::Nothing) => Step::Wait,
+            Ok(RpcReply::Close) => Step::Close,
+            Err(_) => {
+                panic_isolated();
+                Step::Close
+            }
+        }
+    }
+
     /// Queue `reply` on connection `i`, which turns to writing, or close it unanswered.
     /// MIT `process_stream_response` (`lib/apputils/net-server.c:1314-1336`): a nonzero code is logged "while dispatching (tcp)"; it or no response closes the stream without "closing down fd", and a response is queued behind its length.
     /// MIT `prepare_for_dispatch` (`lib/apputils/net-server.c:1350-1355`): the read event leaves the set before the dispatch, so the write event is added at its end.
@@ -412,6 +570,7 @@ impl<S: Stream> Streams<S> {
                         reply,
                         sent: 0,
                     };
+                    conn.event = self.new_event();
                     self.conns.push(conn);
                 }
             }
@@ -467,13 +626,26 @@ impl Streams<TcpStream> {
     ///
     /// Deviation: a stream that cannot be made non-blocking is closed, where MIT ignores the
     /// result; a blocking one would stall every other connection on its first read.
-    pub(crate) fn accept(&mut self, listener: &TcpListener, now: u64, log: &mut dyn Log) {
+    ///
+    /// # Errors
+    ///
+    /// The accept's error, unless it only found nothing to take, was cut short by a signal, or
+    /// lost a connection its peer aborted: the loop pauses the listener on it.
+    pub(crate) fn accept(
+        &mut self,
+        listener: &TcpListener,
+        now: u64,
+        log: &mut dyn Log,
+    ) -> io::Result<()> {
         // std's accept sets close-on-exec (accept4 with SOCK_CLOEXEC), as `set_cloexec_fd` does.
-        let Ok((stream, remote)) = listener.accept() else {
-            return;
+        let (stream, remote) = match listener.accept() {
+            Ok(taken) => taken,
+            Err(e) if passing_accept_failure(&e) => return Ok(()),
+            Err(e) => return Err(e),
         };
         let fd = stream.as_raw_fd();
         self.admit(stream, fd, remote, now, log);
+        Ok(())
     }
 
     fn admit(
@@ -484,7 +656,7 @@ impl Streams<TcpStream> {
         now: u64,
         log: &mut dyn Log,
     ) {
-        if !usize::try_from(fd).is_ok_and(|n| n < nix::libc::FD_SETSIZE) {
+        if !below_fd_setsize(fd) {
             return;
         }
         if stream.set_nonblocking(true).is_err() {
@@ -494,6 +666,181 @@ impl Streams<TcpStream> {
         let _ = setsockopt(&stream, sockopt::KeepAlive, &true);
         self.add(stream, fd, remote, now, log);
     }
+
+    /// Accept one RPC connection from `listener` as MIT's RPC library does, and add it to the
+    /// table with the session `app` makes for it. The connection keeps blocking reads and writes
+    /// and no socket option is set.
+    /// MIT `rendezvous_request` (`lib/rpc/svc_tcp.c:284-294`): an accept a signal cut short is tried again, any other failure is dropped, and so is a connection whose own address cannot be read.
+    ///
+    /// Deviation: MIT leaves a connection whose own address cannot be read open and unserved;
+    /// it is closed here.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::accept`].
+    pub(crate) fn accept_rpc(
+        &mut self,
+        listener: &TcpListener,
+        now: u64,
+        app: &mut dyn Dispatch,
+        log: &mut dyn Log,
+    ) -> io::Result<()> {
+        let (stream, remote) = match listener.accept() {
+            Ok(taken) => taken,
+            Err(e) if passing_accept_failure(&e) => return Ok(()),
+            Err(e) => return Err(e),
+        };
+        let Ok(local) = stream.local_addr() else {
+            return Ok(());
+        };
+        let fd = stream.as_raw_fd();
+        self.admit_rpc(stream, fd, (remote, local), now, app, log);
+        Ok(())
+    }
+
+    /// MIT `makefd_xprt` (`lib/rpc/svc_tcp.c:231-236`): a descriptor at `FD_SETSIZE` or past it prints "svc_tcp: makefd_xprt: fd too high" on standard error and is closed.
+    /// MIT `accept_rpc_connection` (`lib/apputils/net-server.c:1560-1565`): the peer as `getpeername` gives it, else `<unknown>`.
+    fn admit_rpc(
+        &mut self,
+        stream: TcpStream,
+        fd: RawFd,
+        (remote, local): (SocketAddr, SocketAddr),
+        now: u64,
+        app: &mut dyn Dispatch,
+        log: &mut dyn Log,
+    ) {
+        if !below_fd_setsize(fd) {
+            let _ = writeln!(io::stderr(), "svc_tcp: makefd_xprt: fd too high");
+            return;
+        }
+        let addrbuf = stream
+            .peer_addr()
+            .map_or_else(|_| "<unknown>".to_owned(), |a| print_addr_port(&a));
+        let made = catch_unwind(AssertUnwindSafe(|| app.rpc_session(remote, local)));
+        let session = made.unwrap_or_else(|_| {
+            panic_isolated();
+            None
+        });
+        if let Some(session) = session {
+            self.add_rpc(stream, fd, (remote, addrbuf), session, now, log);
+        }
+    }
+}
+
+/// Whether `fd` fits MIT's descriptor sets.
+fn below_fd_setsize(fd: RawFd) -> bool {
+    usize::try_from(fd).is_ok_and(|n| n < nix::libc::FD_SETSIZE)
+}
+
+/// An accept failure the loop goes on from at once: nothing was waiting, a signal cut the call
+/// short, or the peer aborted the connection before it was taken.
+fn passing_accept_failure(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted | io::ErrorKind::ConnectionAborted
+    )
+}
+
+/// One read of an RPC connection, once its input is there: the wait for it lasts at most 35 s.
+/// MIT `readtcp` (`lib/rpc/svc_tcp.c:352-392`): `select` waits up to 35 s, again after an interruption, then one `read`; a wait that runs out, a failed read and end of file are fatal for the connection.
+fn readtcp<S: Stream>(stream: &mut S, buf: &mut [u8]) -> io::Result<usize> {
+    loop {
+        match stream.wait_readable(RPC_READ_WAIT) {
+            Ok(true) => break,
+            Ok(false) => return Err(io::ErrorKind::TimedOut.into()),
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    match stream.read(buf)? {
+        0 => Err(io::ErrorKind::UnexpectedEof.into()),
+        n => Ok(n),
+    }
+}
+
+/// `buf` filled by [`readtcp`]s.
+fn readtcp_exact<S: Stream>(stream: &mut S, buf: &mut [u8]) -> io::Result<()> {
+    let mut at = 0;
+    while at < buf.len() {
+        at += readtcp(stream, &mut buf[at..])?;
+    }
+    Ok(())
+}
+
+/// One RPC record from a connection: [`read_rpc_record_with`] over [`readtcp`].
+fn read_rpc_record<S: Stream>(stream: &mut S) -> io::Result<Zeroizing<Vec<u8>>> {
+    read_rpc_record_with(|buf| readtcp_exact(stream, buf))
+}
+
+/// One RPC record, read with `read_exact`: each fragment behind its four-byte mark, until the one
+/// whose mark has the top bit, appended into one buffer that is wiped when dropped and leaves no
+/// copy behind as it grows.
+/// MIT `xdrrec_getbytes` (`lib/rpc/xdr_rec.c:245-266`): a record is read fragment by fragment, the next mark read once a fragment is used up, until the last fragment ends.
+///
+/// Deviation: MIT's RPC library reads a record of any length as its call decodes it, with no
+/// buffer for the record; here a record whose marks and bytes pass 1 MiB in all ends before the
+/// fragment that crosses is read, so a client chaining fragments, empty ones included, cannot
+/// exhaust memory or hold the reader past 1 MiB of input.
+///
+/// # Errors
+///
+/// `ErrorKind::InvalidData` past 1 MiB; otherwise `read_exact`'s.
+pub fn read_rpc_record_with<F>(mut read_exact: F) -> io::Result<Zeroizing<Vec<u8>>>
+where
+    F: FnMut(&mut [u8]) -> io::Result<()>,
+{
+    let mut record = Zeroizing::new(Vec::new());
+    let mut taken = 0usize;
+    loop {
+        let mut mark = [0u8; 4];
+        read_exact(&mut mark)?;
+        let mark = u32::from_be_bytes(mark);
+        let len = usize::try_from(mark & !LAST_FRAG).unwrap_or(usize::MAX);
+        taken = taken.saturating_add(4).saturating_add(len);
+        if taken > MAX_RPC_RECORD {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "rpc record"));
+        }
+        let start = record.len();
+        reserve_wiped(&mut record, len);
+        record.resize(start + len, 0);
+        read_exact(&mut record[start..])?;
+        if mark & LAST_FRAG != 0 {
+            return Ok(record);
+        }
+    }
+}
+
+/// Room for `more` bytes past `buf`'s end with no copy of its bytes left behind: a buffer that
+/// must grow moves into one at least twice its size, and the old one is wiped as it drops.
+fn reserve_wiped(buf: &mut Zeroizing<Vec<u8>>, more: usize) {
+    let need = buf.len().saturating_add(more);
+    if need <= buf.capacity() {
+        return;
+    }
+    let mut grown = Zeroizing::new(Vec::with_capacity(
+        need.max(buf.capacity().saturating_mul(2)),
+    ));
+    grown.extend_from_slice(buf);
+    *buf = grown;
+}
+
+/// One reply record: its mark (the length with the top bit) and the body in one buffer,
+/// written whole before the loop goes on; the buffer is wiped once written.
+/// MIT `writetcp` (`lib/rpc/svc_tcp.c:399-414`): blocking writes until the whole of it is written; a failed write is fatal for the connection.
+/// MIT `flush_out` (`lib/rpc/xdr_rec.c:475-489`): the mark is set ahead of the body in xdrrec's buffer, and the buffer goes out in one write.
+///
+/// Deviation: MIT's buffer is 4000 bytes, so a longer reply leaves as several fragments; here
+/// it is one fragment whatever its length.
+fn write_rpc_record<S: Stream>(stream: &mut S, body: &[u8]) -> io::Result<()> {
+    let len = u32::try_from(body.len())
+        .ok()
+        .filter(|n| n & LAST_FRAG == 0)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "rpc reply"))?;
+    let mut record = Zeroizing::new(Vec::with_capacity(4 + body.len()));
+    record.extend_from_slice(&(len | LAST_FRAG).to_be_bytes());
+    record.extend_from_slice(body);
+    stream.write_all(&record)?;
+    stream.flush()
 }
 
 /// Run `app`'s dispatch, containing a panic: the request is answered with nothing and the loop
@@ -511,19 +858,24 @@ fn dispatch_contained(
         app.dispatch(local, remote, request, is_tcp, log)
     }));
     run.unwrap_or_else(|_| {
-        tracing::error!(
-            event = krb5_log::events::KDC_TRANSPORT,
-            correlation_id = krb5_log::current_correlation_id(),
-            component = "krb5-kdc",
-            outcome = "error",
-            error = "request panic isolated",
-        );
+        panic_isolated();
         Reply::Nothing
     })
 }
 
+/// The JSON log's line for a request whose handling panicked and was contained.
+fn panic_isolated() {
+    tracing::error!(
+        event = krb5_log::events::KDC_TRANSPORT,
+        correlation_id = krb5_log::current_correlation_id(),
+        component = "krb5-kdc",
+        outcome = "error",
+        error = "request panic isolated",
+    );
+}
+
 /// How the loop learns it is to stop.
-pub(crate) enum Wake<'a> {
+pub enum Wake<'a> {
     /// The daemon's signals: SIGINT, SIGTERM and SIGQUIT end the loop, SIGHUP reopens the log
     /// and runs the application's reset; each writes a byte to the signals' wake pipe.
     Signals(&'a Signals),
@@ -534,6 +886,18 @@ pub(crate) enum Wake<'a> {
         /// The longest wait between two looks at it.
         every: Duration,
     },
+}
+
+/// The sockets one loop serves.
+#[derive(Clone, Copy, Default)]
+pub struct Sockets<'a> {
+    /// Datagram sockets: the KDC's, kpasswd's.
+    pub udp: &'a [UdpSocket],
+    /// Stream listeners whose connections each carry one request behind its length: the KDC's,
+    /// kpasswd's.
+    pub tcp: &'a [TcpListener],
+    /// RPC listeners: kadmind's, for the kadm5 and iprop programs.
+    pub rpc: &'a [TcpListener],
 }
 
 /// The second it is now, as MIT's `time(0)`.
@@ -548,37 +912,84 @@ enum Ready {
     Wake,
     Udp(usize),
     Listener(usize),
+    Rpc(usize),
     Stream { id: u64, writing: bool },
 }
 
-/// Serve `udp` and `tcp` to `app` from one loop on this thread until `wake` says to stop: each
-/// datagram, accepted stream and stream event in turn, at most `max_streams` streams of at most
-/// `cap` bytes each.
+/// When each stream or RPC listener whose accept failed may be polled again, the TCP listeners
+/// first.
+///
+/// Deviation: MIT polls such a listener again at once, and a failure that leaves the
+/// connection queued (EMFILE, ENFILE, ENOBUFS, ENOMEM) keeps it readable, so the loop spins;
+/// here that listener sits out 20 ms while the rest are served.
+struct Paused(Vec<Option<Instant>>);
+
+impl Paused {
+    fn new(n: usize) -> Self {
+        Self(vec![None; n])
+    }
+
+    /// Whether listener `i` is in the poll set at `now`.
+    fn ready(&self, i: usize, now: Instant) -> bool {
+        self.0
+            .get(i)
+            .copied()
+            .flatten()
+            .is_none_or(|until| until <= now)
+    }
+
+    fn pause(&mut self, i: usize, now: Instant) {
+        if let Some(p) = self.0.get_mut(i) {
+            *p = now.checked_add(ACCEPT_FAILURE_PAUSE);
+        }
+    }
+
+    /// The poll's wait: `base`, cut short to the end of the first pause still running.
+    fn timeout(&self, base: PollTimeout, now: Instant) -> PollTimeout {
+        let Some(until) = self.0.iter().flatten().filter(|u| **u > now).min() else {
+            return base;
+        };
+        let left = until.saturating_duration_since(now).as_millis();
+        let cut = PollTimeout::from(u16::try_from(left).unwrap_or(u16::MAX).max(1));
+        // No `as_millis` here: nix's panics on an endless wait.
+        if base.is_some() && base <= cut {
+            base
+        } else {
+            cut
+        }
+    }
+}
+
+/// Serve `sockets` to `app` from one loop on this thread until `wake` says to stop: each
+/// datagram, accepted stream, RPC connection and stream event in turn, at most `max_streams`
+/// streams and RPC connections together, each stream's request of at most `cap` bytes. Returns
+/// the descriptors of the connections still open when it stopped, the newest event first: the
+/// order MIT's loop frees them in, each with "closing down fd", when kadmind ends.
 /// MIT `loop_setup_signals` (`lib/apputils/net-server.c:265-284`): SIGINT, SIGTERM and SIGQUIT end the loop, SIGHUP resets, and SIGPIPE is ignored, as the Rust runtime leaves it.
-/// MIT `setup_socket` (`lib/apputils/net-server.c:849-856`): a UDP or TCP listener is non-blocking.
+/// MIT `setup_socket` (`lib/apputils/net-server.c:844-851`): a UDP or TCP listener is non-blocking, an RPC one is left blocking.
 ///
 /// A wake pipe that could not be made leaves the signal flags looked at every second.
 ///
 /// # Errors
 ///
-/// The OS error of making a listener non-blocking, or of a poll that fails other than by a
-/// signal.
-pub(crate) fn run(
+/// The OS error of making a UDP socket or a TCP listener non-blocking, or of a poll that fails
+/// other than by a signal.
+pub fn run(
     app: &mut dyn Dispatch,
-    udp: &[UdpSocket],
-    tcp: &[TcpListener],
+    sockets: &Sockets<'_>,
     max_streams: usize,
     cap: usize,
     wake: &Wake<'_>,
     log: &mut dyn Log,
-) -> io::Result<()> {
-    for u in udp {
+) -> io::Result<Vec<RawFd>> {
+    for u in sockets.udp {
         u.set_nonblocking(true)?;
     }
-    for t in tcp {
+    for t in sockets.tcp {
         t.set_nonblocking(true)?;
     }
     let mut streams: Streams<TcpStream> = Streams::new(max_streams, cap);
+    let mut paused = Paused::new(sockets.tcp.len() + sockets.rpc.len());
     let mut pkt = vec![0u8; MAX_DGRAM_SIZE];
     let (pipe, timeout) = match wake {
         Wake::Signals(s) => match s.wake_fd() {
@@ -591,12 +1002,24 @@ pub(crate) fn run(
         }
     };
     loop {
-        let ready = wait(pipe, udp, tcp, &streams, timeout)?;
+        let ready = wait(pipe, sockets, &streams, &paused, timeout)?;
         for r in ready {
             match r {
                 Ready::Wake => drain(pipe),
-                Ready::Udp(i) => process_packet(&udp[i], &mut pkt, app, log),
-                Ready::Listener(i) => streams.accept(&tcp[i], now_secs(), log),
+                Ready::Udp(i) => process_packet(&sockets.udp[i], &mut pkt, app, log),
+                Ready::Listener(i) => {
+                    if streams.accept(&sockets.tcp[i], now_secs(), log).is_err() {
+                        paused.pause(i, Instant::now());
+                    }
+                }
+                Ready::Rpc(i) => {
+                    if streams
+                        .accept_rpc(&sockets.rpc[i], now_secs(), app, log)
+                        .is_err()
+                    {
+                        paused.pause(sockets.tcp.len() + i, Instant::now());
+                    }
+                }
                 Ready::Stream { id, writing: false } => streams.readable(id, app, log),
                 Ready::Stream { id, writing: true } => streams.writable(id, log),
             }
@@ -612,41 +1035,51 @@ pub(crate) fn run(
                 if s.stop_requested() {
                     // MIT `do_break` (`lib/apputils/net-server.c:235-238`): the debug line, then the loop ends.
                     log.syslog(Severity::Debug, "Got signal to request exit");
-                    return Ok(());
+                    return Ok(streams.open_fds());
                 }
             }
             Wake::Flag { stop, .. } => {
                 if stop.load(Ordering::Relaxed) {
-                    return Ok(());
+                    return Ok(streams.open_fds());
                 }
             }
         }
     }
 }
 
-/// One poll over the wake pipe, the UDP sockets, the listeners and the streams (a reading stream
-/// for input, a writing one for output); what is ready, in that order.
+/// One poll over the wake pipe, the UDP sockets, the listeners not paused and the connections (a
+/// reading stream or an RPC connection for input, a writing stream for output); what is ready,
+/// in that order.
 fn wait(
     pipe: Option<&OwnedFd>,
-    udp: &[UdpSocket],
-    tcp: &[TcpListener],
+    sockets: &Sockets<'_>,
     streams: &Streams<TcpStream>,
+    paused: &Paused,
     timeout: PollTimeout,
 ) -> io::Result<Vec<Ready>> {
     let input = PollFlags::POLLIN;
+    let now = Instant::now();
     let mut what = Vec::new();
     let mut fds = Vec::new();
     if let Some(p) = pipe {
         what.push(Ready::Wake);
         fds.push(PollFd::new(p.as_fd(), input));
     }
-    for (i, u) in udp.iter().enumerate() {
+    for (i, u) in sockets.udp.iter().enumerate() {
         what.push(Ready::Udp(i));
         fds.push(PollFd::new(u.as_fd(), input));
     }
-    for (i, t) in tcp.iter().enumerate() {
-        what.push(Ready::Listener(i));
-        fds.push(PollFd::new(t.as_fd(), input));
+    for (i, t) in sockets.tcp.iter().enumerate() {
+        if paused.ready(i, now) {
+            what.push(Ready::Listener(i));
+            fds.push(PollFd::new(t.as_fd(), input));
+        }
+    }
+    for (i, r) in sockets.rpc.iter().enumerate() {
+        if paused.ready(sockets.tcp.len() + i, now) {
+            what.push(Ready::Rpc(i));
+            fds.push(PollFd::new(r.as_fd(), input));
+        }
     }
     for c in streams.conns() {
         let writing = c.writing();
@@ -654,7 +1087,7 @@ fn wait(
         let flags = if writing { PollFlags::POLLOUT } else { input };
         fds.push(PollFd::new(c.stream.as_fd(), flags));
     }
-    match poll(&mut fds, timeout) {
+    match poll(&mut fds, paused.timeout(timeout, now)) {
         Ok(_) => {}
         Err(nix::errno::Errno::EINTR) => return Ok(Vec::new()),
         Err(e) => return Err(e.into()),
@@ -763,6 +1196,8 @@ mod tests {
         Bytes(Vec<u8>),
         Eof,
         Fail(io::ErrorKind),
+        /// Nothing more comes for as long as a reader waits.
+        Stall,
     }
 
     /// How one write call goes.
@@ -777,11 +1212,13 @@ mod tests {
         out: Vec<u8>,
         writes: VecDeque<Take>,
         reads: usize,
+        waits: Vec<Duration>,
         closed: bool,
     }
 
     /// A scripted socket: each read takes from the front arrival (nothing waiting is
-    /// `WouldBlock`), each write takes what its script says (no script takes everything).
+    /// `WouldBlock`), each write takes what its script says (no script takes everything), and a
+    /// wait for input finds the front arrival, or runs out on a stall or on nothing.
     struct Fake(Rc<RefCell<Wire>>);
 
     impl Read for Fake {
@@ -789,7 +1226,7 @@ mod tests {
             let mut w = self.0.borrow_mut();
             w.reads += 1;
             match w.incoming.pop_front() {
-                None => Err(io::ErrorKind::WouldBlock.into()),
+                None | Some(Arrival::Stall) => Err(io::ErrorKind::WouldBlock.into()),
                 Some(Arrival::Bytes(b)) => {
                     let n = b.len().min(buf.len());
                     buf[..n].copy_from_slice(&b[..n]);
@@ -844,6 +1281,19 @@ mod tests {
         fn local_addr(&self) -> io::Result<SocketAddr> {
             Ok("192.0.2.88:88".parse().unwrap())
         }
+
+        fn wait_readable(&self, timeout: Duration) -> io::Result<bool> {
+            let mut w = self.0.borrow_mut();
+            w.waits.push(timeout);
+            match w.incoming.front() {
+                None => Ok(false),
+                Some(Arrival::Stall) => {
+                    w.incoming.pop_front();
+                    Ok(false)
+                }
+                Some(_) => Ok(true),
+            }
+        }
     }
 
     #[derive(Default)]
@@ -861,12 +1311,33 @@ mod tests {
         }
     }
 
-    /// The application side: records each request and answers with `reply`.
+    type Calls = Rc<RefCell<Vec<Vec<u8>>>>;
+
+    /// An RPC session that records each record and answers as its script says, then `answer`.
+    struct Session {
+        calls: Calls,
+        replies: VecDeque<RpcReply>,
+        panic: bool,
+    }
+
+    impl RpcSession for Session {
+        fn call(&mut self, record: &[u8]) -> RpcReply {
+            self.calls.borrow_mut().push(record.to_vec());
+            assert!(!self.panic, "call panicked");
+            self.replies
+                .pop_front()
+                .unwrap_or_else(|| RpcReply::Send(b"answer".to_vec()))
+        }
+    }
+
+    /// The application side: records each request and answers with `reply`; with `rpc`, each
+    /// RPC connection gets a session recording its calls there.
     struct App {
         requests: Vec<(SocketAddr, SocketAddr, Vec<u8>, bool)>,
         reply: Reply,
         toolong: Result<Vec<u8>, String>,
         panic: bool,
+        rpc: Option<Calls>,
     }
 
     impl Default for App {
@@ -876,6 +1347,7 @@ mod tests {
                 reply: Reply::Send(b"the reply".to_vec()),
                 toolong: Ok(b"too long".to_vec()),
                 panic: false,
+                rpc: None,
             }
         }
     }
@@ -902,6 +1374,19 @@ mod tests {
         fn make_toolong_error(&mut self) -> Result<Vec<u8>, String> {
             self.toolong.clone()
         }
+
+        fn rpc_session(
+            &mut self,
+            _remote: SocketAddr,
+            _local: SocketAddr,
+        ) -> Option<Box<dyn RpcSession>> {
+            let calls = Rc::clone(self.rpc.as_ref()?);
+            Some(Box::new(Session {
+                calls,
+                replies: VecDeque::new(),
+                panic: false,
+            }))
+        }
     }
 
     const NO_BYTES: [u8; 0] = [];
@@ -921,6 +1406,16 @@ mod tests {
         v
     }
 
+    /// One RPC fragment behind its mark, the last of its record when `last`.
+    fn fragment(body: &[u8], last: bool) -> Vec<u8> {
+        let bit = if last { LAST_FRAG } else { 0 };
+        let mut v = (u32::try_from(body.len()).unwrap() | bit)
+            .to_be_bytes()
+            .to_vec();
+        v.extend_from_slice(body);
+        v
+    }
+
     fn peer(n: u16) -> SocketAddr {
         SocketAddr::from(([192, 0, 2, 1], n))
     }
@@ -932,6 +1427,42 @@ mod tests {
         let mut log = Lines::default();
         let id = t.add(Fake(Rc::clone(&wire)), 7, peer(4242), now, &mut log);
         (t, id, wire, log)
+    }
+
+    /// An RPC connection on `fd` from 192.0.2.1:`port`, started at second 100, whose session
+    /// answers as `replies` say (panicking when `panic`).
+    fn rpc_add(
+        t: &mut Streams<Fake>,
+        fd: RawFd,
+        port: u16,
+        (replies, panic): (Vec<RpcReply>, bool),
+        log: &mut Lines,
+    ) -> (u64, Rc<RefCell<Wire>>, Calls) {
+        let wire = Rc::new(RefCell::new(Wire::default()));
+        let calls = Calls::default();
+        let session = Box::new(Session {
+            calls: Rc::clone(&calls),
+            replies: replies.into(),
+            panic,
+        });
+        let addrbuf = print_addr_port(&peer(port));
+        let id = t.add_rpc(
+            Fake(Rc::clone(&wire)),
+            fd,
+            (peer(port), addrbuf),
+            session,
+            100,
+            log,
+        );
+        (id, wire, calls)
+    }
+
+    /// A table with one RPC connection on fd 7.
+    fn rpc_one(replies: Vec<RpcReply>) -> (Streams<Fake>, u64, Rc<RefCell<Wire>>, Calls, Lines) {
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
+        let mut log = Lines::default();
+        let (id, wire, calls) = rpc_add(&mut t, 7, 4242, (replies, false), &mut log);
+        (t, id, wire, calls, log)
     }
 
     fn arrive(wire: &Rc<RefCell<Wire>>, a: Arrival) {
@@ -1325,7 +1856,7 @@ mod tests {
         let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
         let mut log = Lines::default();
         let client = TcpStream::connect(addr).unwrap();
-        t.accept(&listener, 100, &mut log);
+        t.accept(&listener, 100, &mut log).unwrap();
         assert_eq!(t.len(), 1);
         let conn = t.conns().next().unwrap();
         let flags = OFlag::from_bits_truncate(fcntl(&conn.stream, FcntlArg::F_GETFL).unwrap());
@@ -1347,6 +1878,327 @@ mod tests {
             .unwrap();
         assert_eq!((&other).read(&mut buf).unwrap(), 0, "closed");
         assert_eq!(log.take(), NO_LINES);
+    }
+
+    /// An RPC record sent in two fragments is one call, answered by one reply record, and the
+    /// connection then waits for its next record; each read waited at most 35 s. End of file
+    /// between records closes it with "closing down fd".
+    #[test]
+    fn an_rpc_record_in_fragments_is_answered_and_the_connection_stays() {
+        let (mut t, id, wire, calls, mut log) = rpc_one(vec![]);
+        let mut app = App::default();
+        arrive(&wire, Arrival::Bytes(fragment(b"ab", false)));
+        arrive(&wire, Arrival::Bytes(fragment(b"cd", true)));
+        t.readable(id, &mut app, &mut log);
+        assert_eq!(*calls.borrow(), [b"abcd".to_vec()]);
+        assert_eq!(wire.borrow().out, fragment(b"answer", true));
+        assert_eq!(t.len(), 1, "waiting for the next record");
+        assert!(!t.conns().next().unwrap().writing());
+        assert!(
+            wire.borrow()
+                .waits
+                .iter()
+                .all(|w| *w == Duration::from_secs(35))
+        );
+        arrive(&wire, Arrival::Bytes(fragment(b"second", true)));
+        t.readable(id, &mut app, &mut log);
+        assert_eq!(calls.borrow().len(), 2);
+        assert_eq!(log.take(), NO_LINES);
+        arrive(&wire, Arrival::Eof);
+        t.readable(id, &mut app, &mut log);
+        assert!(t.is_empty());
+        assert!(wire.borrow().closed);
+        assert_eq!(log.take(), [info("closing down fd 7")]);
+        assert_eq!(app.requests.len(), 0, "no dispatch of the stream kind");
+    }
+
+    /// A record whose fragments and marks pass 1 MiB in all closes the connection when the mark
+    /// that crosses is read, before its bytes; a record of 1 MiB with its mark is taken.
+    #[test]
+    fn an_rpc_record_past_1_mib_closes_before_its_bytes_are_read() {
+        let (mut t, id, wire, calls, mut log) = rpc_one(vec![]);
+        let past = u32::try_from(MAX_RPC_RECORD + 1).unwrap() | LAST_FRAG;
+        arrive(&wire, Arrival::Bytes(past.to_be_bytes().to_vec()));
+        arrive(&wire, Arrival::Bytes(vec![0; 16]));
+        t.readable(id, &mut App::default(), &mut log);
+        assert!(t.is_empty());
+        assert_eq!(calls.borrow().len(), 0);
+        assert_eq!(wire.borrow().reads, 1, "the mark alone");
+        assert_eq!(log.take(), [info("closing down fd 7")]);
+
+        let (mut t, id, wire, calls, mut log) = rpc_one(vec![]);
+        let frag = vec![7u8; 600 * 1024];
+        arrive(&wire, Arrival::Bytes(fragment(&frag, false)));
+        let second = u32::try_from(frag.len()).unwrap().to_be_bytes().to_vec();
+        arrive(&wire, Arrival::Bytes(second));
+        arrive(&wire, Arrival::Bytes(frag.clone()));
+        t.readable(id, &mut App::default(), &mut log);
+        assert!(t.is_empty());
+        assert_eq!(calls.borrow().len(), 0);
+        assert!(
+            matches!(wire.borrow().incoming.front(), Some(Arrival::Bytes(b)) if b.len() == frag.len()),
+            "the crossing fragment is not read"
+        );
+
+        let (mut t, id, wire, calls, mut log) = rpc_one(vec![]);
+        arrive(
+            &wire,
+            Arrival::Bytes(fragment(&vec![1u8; MAX_RPC_RECORD - 4], true)),
+        );
+        t.readable(id, &mut App::default(), &mut log);
+        assert_eq!(calls.borrow().len(), 1);
+        assert_eq!(calls.borrow()[0].len(), MAX_RPC_RECORD - 4);
+        assert_eq!(t.len(), 1);
+        assert_eq!(log.take(), NO_LINES);
+    }
+
+    /// A record of empty fragments, 300,000 marks with no last one, holds no memory for them
+    /// and closes the connection once its marks pass 1 MiB: the mark that crosses is the last
+    /// read, and the call is never made.
+    #[test]
+    fn empty_fragments_close_the_connection_at_the_cap() {
+        let (mut t, id, wire, calls, mut log) = rpc_one(vec![]);
+        for _ in 0..300_000 {
+            arrive(&wire, Arrival::Bytes(vec![0; 4]));
+        }
+        t.readable(id, &mut App::default(), &mut log);
+        assert!(t.is_empty(), "closed");
+        assert!(wire.borrow().closed);
+        assert_eq!(calls.borrow().len(), 0);
+        let marks = MAX_RPC_RECORD / 4 + 1;
+        assert_eq!(
+            wire.borrow().reads,
+            marks,
+            "the crossing mark is the last read"
+        );
+        assert_eq!(wire.borrow().incoming.len(), 300_000 - marks);
+        assert_eq!(log.take(), [info("closing down fd 7")]);
+        let mut grown = Zeroizing::new(Vec::new());
+        for _ in 0..300_000 {
+            reserve_wiped(&mut grown, 0);
+        }
+        assert_eq!(grown.capacity(), 0, "an empty fragment takes no room");
+    }
+
+    /// A read inside a record that waits 35 s for its bytes closes the connection, whether the
+    /// record stalled in its mark, between the mark and the body, or in the body.
+    #[test]
+    fn an_rpc_read_that_waits_35_s_closes_the_connection() {
+        let rec = fragment(b"0123456789", true);
+        for cut in [2, 4, 6] {
+            let (mut t, id, wire, calls, mut log) = rpc_one(vec![]);
+            arrive(&wire, Arrival::Bytes(rec[..cut].to_vec()));
+            arrive(&wire, Arrival::Stall);
+            arrive(&wire, Arrival::Bytes(rec[cut..].to_vec()));
+            t.readable(id, &mut App::default(), &mut log);
+            assert!(t.is_empty(), "cut {cut}");
+            assert_eq!(calls.borrow().len(), 0);
+            assert_eq!(wire.borrow().out, NO_BYTES);
+            assert_eq!(wire.borrow().waits.last(), Some(&Duration::from_secs(35)));
+            assert_eq!(log.take(), [info("closing down fd 7")]);
+        }
+    }
+
+    /// A call with no reply leaves the connection waiting; a session that ends the connection,
+    /// a call that panics, or a reply that cannot be written closes that connection alone.
+    #[test]
+    fn an_rpc_session_that_ends_or_panics_closes_its_connection_only() {
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
+        let mut log = Lines::default();
+        let mut app = App::default();
+        let script = vec![RpcReply::Nothing, RpcReply::Close];
+        let (a, wa, ca) = rpc_add(&mut t, 7, 1, (script, false), &mut log);
+        let (b, wb, cb) = rpc_add(&mut t, 8, 2, (vec![], true), &mut log);
+        let (c, wc, _) = rpc_add(&mut t, 9, 3, (vec![], false), &mut log);
+        let (d, wd, cd) = rpc_add(&mut t, 10, 4, (vec![], false), &mut log);
+        arrive(&wa, Arrival::Bytes(fragment(b"quiet", true)));
+        t.readable(a, &mut app, &mut log);
+        assert_eq!((t.len(), wa.borrow().out.len()), (4, 0));
+        arrive(&wa, Arrival::Bytes(fragment(b"bye", true)));
+        t.readable(a, &mut app, &mut log);
+        assert_eq!((ca.borrow().len(), t.len()), (2, 3));
+        arrive(&wb, Arrival::Bytes(fragment(b"boom", true)));
+        t.readable(b, &mut app, &mut log);
+        assert_eq!((cb.borrow().len(), t.len()), (1, 2));
+        assert_eq!(wb.borrow().out, NO_BYTES);
+        arrive(&wc, Arrival::Bytes(fragment(b"x", true)));
+        wc.borrow_mut()
+            .writes
+            .push_back(Take::Fail(io::ErrorKind::BrokenPipe));
+        t.readable(c, &mut app, &mut log);
+        assert_eq!(t.len(), 1);
+        arrive(&wd, Arrival::Bytes(fragment(b"fine", true)));
+        t.readable(d, &mut app, &mut log);
+        assert_eq!(cd.borrow().len(), 1);
+        assert_eq!(wd.borrow().out, fragment(b"answer", true));
+        assert_eq!(
+            log.take(),
+            [
+                info("closing down fd 7"),
+                info("closing down fd 8"),
+                info("closing down fd 9"),
+            ]
+        );
+    }
+
+    /// RPC connections and TCP streams share the cap of 45: a TCP stream that arrives 46th in
+    /// the same second evicts the RPC connection that came 45th, with MIT's lines naming it RPC.
+    #[test]
+    fn rpc_and_tcp_connections_share_the_cap() {
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
+        let mut log = Lines::default();
+        let tcp = fill(&mut t, &mut log, 44, |_| 100);
+        let (_, rpc, _) = rpc_add(&mut t, 54, 45, (vec![], false), &mut log);
+        assert_eq!((t.len(), log.take()), (45, vec![]));
+        let w = Rc::new(RefCell::new(Wire::default()));
+        t.add(Fake(Rc::clone(&w)), 55, peer(46), 100, &mut log);
+        assert!(rpc.borrow().closed);
+        assert_eq!(evicted(&tcp), Vec::<usize>::new());
+        assert_eq!(
+            log.take(),
+            [
+                info("too many connections"),
+                info("dropping RPC fd 54 from 192.0.2.1:45"),
+                info("closing down fd 54"),
+            ]
+        );
+        assert_eq!(t.len(), 45);
+    }
+
+    /// The descriptors left when the loop ends come newest event first: a stream that turned to
+    /// writing has the newest event, then the connections from the last accepted down.
+    #[test]
+    fn the_open_descriptors_come_newest_event_first() {
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
+        let mut log = Lines::default();
+        let conns = fill(&mut t, &mut log, 3, |_| 100);
+        rpc_add(&mut t, 13, 4, (vec![], false), &mut log);
+        let (id1, w1) = &conns[0];
+        arrive(w1, Arrival::Bytes(framed(b"req")));
+        let mut app = App::default();
+        t.readable(*id1, &mut app, &mut log);
+        t.readable(*id1, &mut app, &mut log);
+        assert_eq!(t.open_fds(), [10, 13, 12, 11]);
+    }
+
+    /// An accepted RPC connection is left as MIT's RPC library leaves it — blocking, no
+    /// keepalive — named by its peer and answered by the session the application makes; an
+    /// application with no session closes it, and so is a descriptor at `FD_SETSIZE` or past it.
+    #[test]
+    fn accept_rpc_takes_the_connection_as_mits() {
+        use nix::fcntl::{FcntlArg, OFlag, fcntl};
+        use nix::sys::socket::getsockopt;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
+        let mut log = Lines::default();
+        let mut app = App {
+            rpc: Some(Calls::default()),
+            ..App::default()
+        };
+        let client = TcpStream::connect(addr).unwrap();
+        t.accept_rpc(&listener, 100, &mut app, &mut log).unwrap();
+        assert_eq!(t.len(), 1);
+        let conn = t.conns().next().unwrap();
+        assert_eq!(conn.ctype, ConnType::Rpc);
+        let flags = OFlag::from_bits_truncate(fcntl(&conn.stream, FcntlArg::F_GETFL).unwrap());
+        assert!(!flags.contains(OFlag::O_NONBLOCK), "blocking");
+        assert!(!getsockopt(&conn.stream, sockopt::KeepAlive).unwrap());
+        assert_eq!(conn.addrbuf, client.local_addr().unwrap().to_string());
+        assert_eq!(conn.start_time, 100);
+
+        let closed = |c: &TcpStream| {
+            c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+            matches!((&*c).read(&mut [0u8; 1]), Ok(0))
+        };
+        let other = TcpStream::connect(addr).unwrap();
+        t.accept_rpc(&listener, 100, &mut App::default(), &mut log)
+            .unwrap();
+        assert_eq!(t.len(), 1, "no session");
+        assert!(closed(&other));
+        let third = TcpStream::connect(addr).unwrap();
+        let (stream, remote) = listener.accept().unwrap();
+        let local = stream.local_addr().unwrap();
+        t.admit_rpc(stream, 1024, (remote, local), 100, &mut app, &mut log);
+        assert_eq!(t.len(), 1, "fd 1024 is not taken");
+        assert!(closed(&third));
+        assert_eq!(log.take(), NO_LINES);
+        drop(client);
+    }
+
+    /// A listener whose accept failed is left out of the poll set for 20 ms while the others
+    /// stay in, and the poll's wait is cut to the end of that pause.
+    #[test]
+    fn a_listener_whose_accept_failed_sits_out_twenty_milliseconds() {
+        let now = Instant::now();
+        let mut p = Paused::new(3);
+        assert!((0..3).all(|i| p.ready(i, now)));
+        assert_eq!(p.timeout(PollTimeout::NONE, now), PollTimeout::NONE);
+        p.pause(1, now);
+        assert!(p.ready(0, now) && p.ready(2, now));
+        assert!(!p.ready(1, now + Duration::from_millis(19)));
+        assert!(p.ready(1, now + ACCEPT_FAILURE_PAUSE));
+        assert_eq!(p.timeout(PollTimeout::NONE, now), PollTimeout::from(20u16));
+        assert_eq!(
+            p.timeout(PollTimeout::from(5u16), now),
+            PollTimeout::from(5u16)
+        );
+        let later = now + Duration::from_millis(30);
+        assert_eq!(p.timeout(PollTimeout::NONE, later), PollTimeout::NONE);
+    }
+
+    /// This thread's user and system CPU time so far, in clock ticks.
+    fn thread_cpu_ticks() -> u64 {
+        let stat = std::fs::read_to_string("/proc/thread-self/stat").unwrap();
+        let fields: Vec<&str> = stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace()
+            .collect();
+        fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap()
+    }
+
+    /// Listeners whose accept keeps failing do not spin the loop. A connected socket whose peer
+    /// has closed stands for each, a TCP one and an RPC one: poll finds it readable at once and
+    /// its accept fails (EINVAL). Over 300 ms the loop's thread uses next to no CPU, where a spin
+    /// would use all of it.
+    #[test]
+    fn a_failing_accept_does_not_spin_the_loop() {
+        let bad = || {
+            let real = TcpListener::bind("127.0.0.1:0").unwrap();
+            let client = TcpStream::connect(real.local_addr().unwrap()).unwrap();
+            drop(real.accept().unwrap());
+            TcpListener::from(OwnedFd::from(client))
+        };
+        let (tcp, rpc) = ([bad()], [bad()]);
+        let stop = AtomicBool::new(false);
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                std::thread::sleep(Duration::from_millis(300));
+                stop.store(true, Ordering::SeqCst);
+            });
+            let sockets = Sockets {
+                tcp: &tcp,
+                rpc: &rpc,
+                ..Sockets::default()
+            };
+            let wake = Wake::Flag {
+                stop: &stop,
+                every: Duration::from_millis(50),
+            };
+            let before = thread_cpu_ticks();
+            let open = run(
+                &mut App::default(),
+                &sockets,
+                MAX_STREAM_DATA_CONNECTIONS,
+                MAX_REQUEST,
+                &wake,
+                &mut Lines::default(),
+            )
+            .unwrap();
+            let used = thread_cpu_ticks() - before;
+            assert!(used < 10, "{used} ticks of CPU in 300 ms");
+            assert_eq!(open, Vec::<RawFd>::new());
+        });
     }
 
     /// One datagram: dispatched with the addresses it came from and to, its reply sent back; a
@@ -1409,16 +2261,21 @@ mod tests {
         assert_eq!(log.take(), NO_LINES, "nothing to read is not logged");
     }
 
-    /// The loop serves a datagram and a stream on the calling thread, and returns once its stop
-    /// flag is set.
+    /// The loop serves a datagram, a stream and two calls on one RPC connection on the calling
+    /// thread, and returns once its stop flag is set.
     #[test]
-    fn the_loop_serves_udp_and_tcp_until_its_flag() {
+    fn the_loop_serves_udp_tcp_and_rpc_until_its_flag() {
         use std::io::Read as _;
         use std::sync::Arc;
 
         let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
         let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
-        let (uaddr, taddr) = (udp.local_addr().unwrap(), tcp.local_addr().unwrap());
+        let rpc = TcpListener::bind("127.0.0.1:0").unwrap();
+        let (uaddr, taddr, raddr) = (
+            udp.local_addr().unwrap(),
+            tcp.local_addr().unwrap(),
+            rpc.local_addr().unwrap(),
+        );
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let client = std::thread::spawn(move || {
@@ -1432,28 +2289,53 @@ mod tests {
             s.write_all(&framed(b"over tcp")).unwrap();
             let mut reply = Vec::new();
             s.read_to_end(&mut reply).unwrap();
+            let mut r = TcpStream::connect(raddr).unwrap();
+            let mut answers = Vec::new();
+            for call in [&b"call one"[..], b"call two"] {
+                r.write_all(&fragment(call, true)).unwrap();
+                let mut answer = vec![0u8; fragment(b"answer", true).len()];
+                r.read_exact(&mut answer).unwrap();
+                answers.push(answer);
+            }
             flag.store(true, Ordering::SeqCst);
-            (got[..n].to_vec(), reply)
+            (got[..n].to_vec(), reply, answers)
         });
-        let mut app = App::default();
+        let calls = Calls::default();
+        let mut app = App {
+            rpc: Some(Rc::clone(&calls)),
+            ..App::default()
+        };
         let mut log = Lines::default();
         let wake = Wake::Flag {
             stop: &stop,
             every: std::time::Duration::from_millis(20),
         };
+        let (udp, tcp, rpc) = ([udp], [tcp], [rpc]);
+        let sockets = Sockets {
+            udp: &udp,
+            tcp: &tcp,
+            rpc: &rpc,
+        };
         run(
             &mut app,
-            &[udp],
-            &[tcp],
+            &sockets,
             MAX_STREAM_DATA_CONNECTIONS,
             MAX_REQUEST,
             &wake,
             &mut log,
         )
         .unwrap();
-        let (dgram, stream) = client.join().unwrap();
+        let (dgram, stream, answers) = client.join().unwrap();
         assert_eq!(dgram, b"the reply");
         assert_eq!(stream, framed(b"the reply"));
+        assert_eq!(
+            answers,
+            [fragment(b"answer", true), fragment(b"answer", true)]
+        );
+        assert_eq!(
+            *calls.borrow(),
+            [b"call one".to_vec(), b"call two".to_vec()]
+        );
         let requests: Vec<_> = app.requests.iter().map(|r| (r.2.clone(), r.3)).collect();
         assert_eq!(
             requests,

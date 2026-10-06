@@ -119,7 +119,20 @@ pub(super) struct XdrW {
     pub(super) b: Vec<u8>,
 }
 
+/// The bytes `XdrW::opaque` writes for `n` bytes: the length, the bytes and their padding.
+pub(super) fn opaque_len(n: usize) -> usize {
+    4 + n + (4 - n % 4) % 4
+}
+
 impl XdrW {
+    /// A writer whose buffer holds `n` bytes before it grows: a reply that carries keys is built
+    /// in one buffer, so no copy of them is left behind in a buffer it outgrew.
+    pub(super) fn with_capacity(n: usize) -> Self {
+        Self {
+            b: Vec::with_capacity(n),
+        }
+    }
+
     pub(super) fn u32(&mut self, v: u32) {
         self.b.extend_from_slice(&v.to_be_bytes());
     }

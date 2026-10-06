@@ -29,7 +29,8 @@ section's count is the sum over its files.
 | [a4-kadmin.md](a4-kadmin.md) | A4 — kadmind and kadm5, `kadmin.local`, kpasswd |
 | [a4-kdb.md](a4-kdb.md) | A4 — `kdb5_util` (dump and load), the KDB library and plugins, the KDB lock |
 | [a5-prop.md](a5-prop.md) | A5 — kprop, kpropd, iprop and the gssrpc layer |
-| [b1-client.md](b1-client.md) | B1 — the client library, crypto, GSS, the acceptor, ccache and keytab |
+| [b1-client.md](b1-client.md) | B1 — the client library, crypto, the AP-REQ acceptor, ccache and keytab |
+| [b1-gss.md](b1-gss.md) | B1 — the GSS-API krb5 mechanism and SPNEGO: context, wrap / unwrap, sequence window, status, credentials |
 | [b1-tools.md](b1-tools.md) | B1 — the client tools: `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd`, `ktutil` |
 
 FAST unwrap failures put the MIT status word
@@ -90,8 +91,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**475** = A1 129 + A2 94 + A3 80 + A4 61 + A5 29 + B1 82.
-exact 378 · stricter-documented 15 · deviation 35 ·
+**478** = A1 129 + A2 94 + A3 80 + A4 61 + A5 32 + B1 82.
+exact 383 · stricter-documented 14 · deviation 34 ·
 absent 2 · deferred 45.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
@@ -99,7 +100,8 @@ kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and
 69 of B1's 79; A4's `session_enctypes` row moved to A2. No row's text
 changed. Later A4 and B1 each became two files by subject (A4: 51 in
 `a4-kadmin.md`, 8 in `a4-kdb.md`; B1: 73 in `b1-client.md`, 6 in
-`b1-tools.md`), each row moved byte for byte.
+`b1-tools.md`), each row moved byte for byte. B1's 11 GSS-API rows
+later moved byte for byte from `b1-client.md` to `b1-gss.md`.
 
 Counting rule: a row with two verdicts (`exact (unit)`,
 `deviation (decision)`, `absent (otp)`) counts under its **first**

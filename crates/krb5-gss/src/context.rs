@@ -13,7 +13,8 @@ use krb5_protocol::{
 };
 use krb5_types::{
     ApOptions, ApRep, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum,
-    EncApRepPart, EncryptionKey, KerberosTime, Microseconds, PrincipalName, Realm, Ticket, ku, pa,
+    EncApRepPart, EncryptionKey, HostAddress, KerberosTime, Microseconds, PrincipalName, Realm,
+    Ticket, ku, pa,
 };
 
 use super::deleg::{DelegCred, extract_delegated, krb_cred_for_deleg};
@@ -496,6 +497,14 @@ impl GssContext {
             dce_style,
             ap_req_time: None,
         };
+        // MIT `kg_accept_krb5` (`accept_sec_context.c:781-790`): an INET initiator address in the
+        // channel bindings is the sender's, which an address list in the ticket must hold.
+        let sender = channel_bindings
+            .filter(|cb| cb.initiator_addrtype == crate::oid::GSS_C_AF_INET)
+            .map(|cb| HostAddress {
+                addr_type: HostAddress::ADDRTYPE_INET,
+                address: cb.initiator_address.clone().into(),
+            });
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
             expected_realm,
@@ -505,7 +514,7 @@ impl GssContext {
             key_kvnos: expected_server.and(service_kvnos),
             kvno: None,
             skew: krb5_protocol::DEFAULT_SKEW,
-            addresses: None,
+            remote_addr: sender.as_ref(),
             now: None,
         };
         let ok = match krb5_protocol::verify_ap_req_ex(&inner[2..], &params, rcache, Some(b"")) {
@@ -720,6 +729,12 @@ impl GssContext {
             lifetime: self.lifetime(),
             client: self.client.clone(),
         }
+    }
+
+    /// The ticket's end time, for an accepted context; `None` when it is not known.
+    #[must_use]
+    pub fn endtime(&self) -> Option<u32> {
+        (self.lifetime_end != 0).then_some(self.lifetime_end)
     }
 
     /// Remaining ticket lifetime in seconds (`0` if unknown or expired).

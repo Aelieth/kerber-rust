@@ -102,9 +102,9 @@ pub use context::{ChannelBindings, InquireOk, use_kdc_context};
 pub use deleg::DelegCred;
 pub use iov::{IovBuf, IovType};
 pub use oid::{
-    GSS_C_CHANNEL_BOUND, GSS_C_CONF, GSS_C_DCE, GSS_C_DELEG, GSS_C_EXTENDED_ERROR, GSS_C_IDENTIFY,
-    GSS_C_INTEG, GSS_C_MUTUAL, GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE, GSS_C_TRANS,
-    GSS_CHECKSUM_TYPE, KRB5_OID, SPNEGO_OID,
+    GSS_C_AF_INET, GSS_C_CHANNEL_BOUND, GSS_C_CONF, GSS_C_DCE, GSS_C_DELEG, GSS_C_EXTENDED_ERROR,
+    GSS_C_IDENTIFY, GSS_C_INTEG, GSS_C_MUTUAL, GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE,
+    GSS_C_TRANS, GSS_CHECKSUM_TYPE, KRB5_OID, SPNEGO_OID,
 };
 pub use spnego::{is_spnego, spnego_accept, spnego_accept_kt, spnego_init, spnego_inner};
 pub use wrap::mit_shaped_wrap;

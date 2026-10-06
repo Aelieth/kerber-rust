@@ -2,22 +2,18 @@
 //! and the serve functions that run [`crate::net_server`]'s one loop over them on the calling
 //! thread, with [`crate::issue::KdcDispatch`] answering each request.
 
-use std::collections::BTreeMap;
 use std::io::{self, IoSlice, IoSliceMut};
-use std::net::{
-    IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket,
-};
-use std::os::fd::{AsRawFd as _, OwnedFd, RawFd};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, UdpSocket};
+use std::os::fd::{AsRawFd as _, OwnedFd};
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
-use std::thread;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::time::Duration;
 
 use crate::Error;
 use crate::daemon::Signals;
 use crate::issue::{KdcDispatch, ThreadSlots};
 use crate::kdb::{KdcEnv, PrincipalRead, Store};
-use crate::net_server::{Klog, Wake};
+use crate::net_server::{Klog, Sockets, Wake};
 use crate::store::{Policy, Principal};
 use krb5_config::listen::ListenAddr;
 use krb5_log::klog::{self, Severity, os_error_text};
@@ -848,133 +844,30 @@ fn serve_loop(
 ) -> io::Result<()> {
     let _slots = ThreadSlots::take();
     let mut app = KdcDispatch::new(store, limits.max_dgram_reply_size);
-    crate::net_server::run(
-        &mut app,
+    let sockets = Sockets {
         udp,
         tcp,
+        ..Sockets::default()
+    };
+    // krb5kdc closes its log before it frees the loop, so the connections left open are not
+    // logged.
+    // MIT `main` (`kdc/main.c:1032-1044`): "shutting down", the log closed, then the loop freed.
+    crate::net_server::run(
+        &mut app,
+        &sockets,
         limits.max_tcp_workers,
         limits.max_tcp_request,
         wake,
         &mut Klog,
     )
-}
-
-/// Wait until one of `listeners` has a connection waiting or `timeout` passes, so an accept
-/// loop takes a connection as it arrives and still looks at its stop flag between connections.
-/// MIT `setup_socket` (`lib/apputils/net-server.c:877-880`): a listener is in the event loop for
-/// read events, so a connection is accepted as soon as it arrives.
-pub fn wait_for_connection(listeners: &[&TcpListener], timeout: Duration) {
-    use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
-    use std::os::fd::AsFd as _;
-    let mut fds: Vec<PollFd<'_>> = listeners
-        .iter()
-        .map(|l| PollFd::new(l.as_fd(), PollFlags::POLLIN))
-        .collect();
-    // At least 1 ms: `ListenLimits::shutdown_poll` is the caller's, and a poll of 0 ms would return
-    // at once and spin the loop.
-    let ms = u16::try_from(timeout.as_millis())
-        .unwrap_or(u16::MAX)
-        .max(1);
-    let wait = PollTimeout::from(ms);
-    // A wait a signal cuts short only means the accept is tried sooner; a failing poll must not
-    // turn the loop into a spin.
-    if poll(&mut fds, wait).is_err() {
-        thread::sleep(timeout.min(Duration::from_millis(20)));
-    }
-}
-
-/// Decrements the TCP worker counter on drop, including unwind.
-/// Live TCP connections, so the accept loop can evict the oldest when the cap
-/// is reached rather than refusing the newcomer.
-/// MIT `kill_lru_stream_connection` (`net-server.c:1192-1225`): the oldest stream
-/// connection other than the new one is dropped.
-/// MIT `accept_stream_connection` (`net-server.c:1227-1282`): the newcomer is accepted
-/// and registered before the count is checked against the cap.
-/// Each entry keeps a `try_clone` of the stream purely to `shutdown` it from the
-/// accept thread, which unblocks the victim worker's `read` so it exits and
-/// deregisters itself.
-pub struct ConnRegistry {
-    cap: usize,
-    inner: Mutex<ConnInner>,
-}
-
-struct ConnInner {
-    next_seq: u64,
-    live: BTreeMap<u64, Option<TcpStream>>,
-}
-
-impl ConnRegistry {
-    /// New registry capped at `cap` concurrent connections (min 1).
-    #[must_use]
-    pub fn new(cap: usize) -> Arc<Self> {
-        Arc::new(Self {
-            cap: cap.max(1),
-            inner: Mutex::new(ConnInner {
-                next_seq: 0,
-                live: BTreeMap::new(),
-            }),
-        })
-    }
-
-    /// Register `stream`, evicting the oldest live connection(s) while over the
-    /// cap. Returns the sequence number the worker deregisters on exit (via
-    /// [`ConnGuard`]).
-    pub fn register(&self, stream: &TcpStream) -> u64 {
-        let clone = stream.try_clone().ok();
-        let mut g = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        let seq = g.next_seq;
-        g.next_seq = g.next_seq.wrapping_add(1);
-        g.live.insert(seq, clone);
-        // MIT increments by one per accept and kills one LRU; loop defensively
-        // in case the cap was crossed by more than one. Never evict the
-        // newcomer (its seq is the largest).
-        while g.live.len() > self.cap {
-            let Some(oldest) = g.live.keys().next().copied() else {
-                break;
-            };
-            if oldest == seq {
-                break;
-            }
-            if let Some(victim) = g.live.remove(&oldest).flatten() {
-                let _ = victim.shutdown(Shutdown::Both);
-            }
-        }
-        seq
-    }
-
-    fn deregister(&self, seq: u64) {
-        let mut g = self.inner.lock().unwrap_or_else(PoisonError::into_inner);
-        g.live.remove(&seq);
-    }
-}
-
-/// Deregisters a connection's registry slot when the worker thread ends,
-/// including on panic. Construct one per accepted connection.
-pub struct ConnGuard(pub Arc<ConnRegistry>, pub u64);
-
-impl Drop for ConnGuard {
-    fn drop(&mut self) {
-        self.0.deregister(self.1);
-    }
-}
-
-/// Logs `closing down fd N` to the daemon log when a stream connection's worker ends.
-/// MIT `free_socket` (`lib/apputils/net-server.c:505-547`): each connection's descriptor is
-/// logged as it is closed.
-pub struct ClosingFd(pub RawFd);
-
-impl Drop for ClosingFd {
-    fn drop(&mut self) {
-        krb5_log::klog::syslog(
-            krb5_log::klog::Severity::Info,
-            &format!("closing down fd {}", self.0),
-        );
-    }
+    .map(drop)
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::Write;
+    use std::net::{Shutdown, TcpStream};
+    use std::thread;
 
     use super::*;
     use crate::testrealm::bootstrap_documented;
@@ -1086,41 +979,6 @@ mod tests {
         std::fs::rename(&away, &db).unwrap();
         lock.update_age();
         assert!(read_store(&store, |s| s.fetch(&id)).unwrap().is_some());
-    }
-
-    /// An idle accept loop waits out its stop-poll interval, and wakes when a connection arrives.
-    #[test]
-    fn wait_for_connection_wakes_on_a_connection() {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        listener.set_nonblocking(true).unwrap();
-        let addr = listener.local_addr().unwrap();
-        let start = std::time::Instant::now();
-        wait_for_connection(&[&listener], Duration::from_millis(30));
-        assert!(
-            start.elapsed() >= Duration::from_millis(25),
-            "no connection: the timeout"
-        );
-        // Below a millisecond the wait is still one, not a poll that returns at once.
-        let start = std::time::Instant::now();
-        for _ in 0..5 {
-            wait_for_connection(&[&listener], Duration::from_micros(100));
-        }
-        assert!(
-            start.elapsed() >= Duration::from_millis(5),
-            "a floor of 1 ms"
-        );
-        let client = thread::spawn(move || {
-            thread::sleep(Duration::from_millis(50));
-            TcpStream::connect(addr).unwrap()
-        });
-        let start = std::time::Instant::now();
-        wait_for_connection(&[&listener], Duration::from_secs(10));
-        assert!(
-            start.elapsed() < Duration::from_secs(5),
-            "woke for the connection"
-        );
-        assert!(listener.accept().is_ok());
-        drop(client.join());
     }
 
     #[test]
@@ -1329,30 +1187,6 @@ mod tests {
         };
         let e = serve_until(shared_store(store), udp, tcp, flag, zero).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
-    }
-
-    #[test]
-    fn tcp_conn_guard_deregisters_on_panic() {
-        let reg = ConnRegistry::new(2);
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let client = TcpStream::connect(addr).unwrap();
-        let (server, _) = listener.accept().unwrap();
-        let seq = reg.register(&server);
-        assert_eq!(reg.inner.lock().unwrap().live.len(), 1);
-        let reg2 = Arc::clone(&reg);
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let _guard = ConnGuard(reg2, seq);
-            panic!("isolated");
-        }));
-        assert!(r.is_err());
-        assert_eq!(
-            reg.inner.lock().unwrap().live.len(),
-            0,
-            "guard deregistered the slot on panic"
-        );
-        drop(client);
-        drop(server);
     }
 
     /// Past the cap a new connection evicts the one that started first, and among connections

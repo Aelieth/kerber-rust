@@ -226,7 +226,7 @@ fn ap_req_checksum_uses_declared_type() {
         expected_server: None,
         expected_realm: None,
         skew: krb5_protocol::DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     verify_ap_req_ex(&raw, &params, &ReplayCache::new(), Some(app)).expect("declared RSA-MD5");

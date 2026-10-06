@@ -111,6 +111,19 @@ fn kadmind_wire_create_is_visible_after_reload() {
         loaded.get_name(&created).is_some(),
         "kadmind create must persist to stash/db"
     );
+
+    // A ktadd's reply holds the keytab behind the status, in one buffer of its size.
+    let ap = build_ap_req(
+        tgs_out.rep.0.ticket.clone(),
+        &tgs_out.session_key,
+        &krb5_types::ascii(TEST_REALM),
+        &admin,
+    )
+    .unwrap();
+    let body = encode_kadmind_req(Op::Ktadd, &encode(&ap).unwrap(), b"wireuser");
+    let reply = dispatch_kadmind(&shared, &acl, &host_key, &replay, &body).expect("ktadd");
+    assert_eq!(&reply[..6], &[0, 0, 0, 0, 0x05, 0x02]);
+    assert_eq!(reply.capacity(), reply.len());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

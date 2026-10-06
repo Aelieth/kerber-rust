@@ -3,8 +3,8 @@
 The client tools' own rows: MIT's `clients/` programs `kinit`, `klist`,
 `kvno`, `kdestroy`, `kswitch` and `kpasswd`, and `ktutil`: their options,
 usage, prompts, com_err texts and exit statuses. The client library they call
-is in B1's other file, [b1-client.md](b1-client.md), with any row that cites a
-library function and a tool together.
+is in [b1-client.md](b1-client.md), with any row that cites a library function
+and a tool together, and in [b1-gss.md](b1-gss.md) for GSS-API.
 
 | MIT file:line | check (condition) | MIT status + wire code | Rust site | Rust e_text + code | verdict | proof |
 | --- | --- | --- | --- | --- | --- | --- |

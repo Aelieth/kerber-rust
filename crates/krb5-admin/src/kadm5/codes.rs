@@ -22,6 +22,7 @@ pub(super) const FLAVOR_NONE: u32 = 0;
 pub(super) const FLAVOR_AUTH_GSSAPI: u32 = 300_001;
 pub(super) const AUTH_GSSAPI_INIT: u32 = 1;
 pub(super) const AUTH_GSSAPI_CONTINUE_INIT: u32 = 2;
+pub(super) const AUTH_GSSAPI_MSG: u32 = 3;
 pub(super) const AUTH_GSSAPI_DESTROY: u32 = 4;
 pub(super) const AUTH_GSSAPI_CREDS_VERS: u32 = 2;
 pub(super) const RPCSEC_GSS_VERS: u32 = 1;
@@ -48,7 +49,25 @@ pub(super) const GARBAGE_ARGS: u32 = 4;
 pub(super) const REJECT_AUTH_ERROR: u32 = 1;
 pub(super) const AUTH_TOOWEAK: u32 = 5;
 pub(super) const AUTH_BADCRED: u32 = 1;
+pub(super) const AUTH_BADVERF: u32 = 3;
+pub(super) const AUTH_REJECTEDVERF: u32 = 4;
 pub(super) const AUTH_FAILED: u32 = 7;
+/// MIT `gssrpc/auth.h` `MAX_AUTH_BYTES`: a call whose credential or verifier is longer does not
+/// decode.
+pub(super) const MAX_AUTH_BYTES: usize = 400;
+/// MIT `gssrpc/auth.h` `AUTH_UNIX`, and `gssrpc/auth_unix.h` `MAX_MACHINE_NAME` and `NGRPS`.
+pub(super) const FLAVOR_UNIX: u32 = 1;
+pub(super) const MAX_MACHINE_NAME: usize = 255;
+pub(super) const NGRPS: u32 = 16;
+/// GSS-API major statuses (RFC 2744) an AUTH_GSSAPI init_res carries for a failed context.
+pub(super) const GSS_S_BAD_BINDINGS: u32 = 0x0004_0000;
+pub(super) const GSS_S_DEFECTIVE_TOKEN: u32 = 0x0009_0000;
+pub(super) const GSS_S_FAILURE: u32 = 0x000d_0000;
+/// MIT `svc_auth_gssapi.c` `INITIATION_TIMEOUT` and `INDEF_EXPIRE`: an AUTH_GSSAPI record whose
+/// context is not established is dropped after 15 minutes, one whose context has no end after a
+/// day.
+pub(super) const AGSS_INITIATION_TIMEOUT: u32 = 60 * 15;
+pub(super) const AGSS_INDEF_EXPIRE: u32 = 60 * 60 * 24;
 /// MIT `gssrpc/auth.h` `RPCSEC_GSS_CREDPROBLEM`.
 pub(super) const RPCSEC_GSS_CREDPROBLEM: u32 = 13;
 /// MIT `gssrpc/auth.h` `RPCSEC_GSS_CTXPROBLEM`.
@@ -76,6 +95,8 @@ pub(super) const CREATE_PRINCIPAL3: u32 = 18;
 pub(super) const CHPASS_PRINCIPAL3: u32 = 19;
 pub(super) const CHRAND_PRINCIPAL3: u32 = 20;
 pub(super) const SETKEY_PRINCIPAL: u32 = 16;
+/// Retired: MIT `kadm_1` serves no procedure 17 (`kadm_rpc_svc.c`).
+pub(super) const SETV4KEY_PRINCIPAL: u32 = 17;
 pub(super) const SETKEY_PRINCIPAL3: u32 = 21;
 pub(super) const SETKEY_PRINCIPAL4: u32 = 25;
 pub(super) const PURGEKEYS: u32 = 22;

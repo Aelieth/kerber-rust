@@ -22,7 +22,7 @@ entry says what the file holds.
    more files per section: [A1](parity/a1-tgs.md), [A2](parity/a2-as.md),
    [A3](parity/a3-preauth.md), A4 ([kadmin](parity/a4-kadmin.md),
    [kdb](parity/a4-kdb.md)), [A5](parity/a5-prop.md), B1
-   ([client](parity/b1-client.md), [tools](parity/b1-tools.md)).
+   ([client](parity/b1-client.md), [gss](parity/b1-gss.md), [tools](parity/b1-tools.md)).
    [mit-parity-ledger.md](mit-parity-ledger.md) is a pointer to it.
 8. [logging.md](logging.md): the structured log schema.
 9. [interop-matrix.md](interop-matrix.md): the external implementations this

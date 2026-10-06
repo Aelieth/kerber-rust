@@ -36,7 +36,7 @@ fn rpcsec_bad_version_is_auth_badcred() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &w.b,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -81,7 +81,7 @@ fn rpcsec_unknown_program_bad_version_is_auth_badcred() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &w.b,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -126,7 +126,7 @@ fn rpcsec_init_non_nullproc_is_auth_failed() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &w.b,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -171,7 +171,7 @@ fn rpcsec_data_without_context_is_credproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &w.b,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -216,7 +216,7 @@ fn rpcsec_unknown_program_data_without_context_is_credproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &w.b,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -322,7 +322,7 @@ fn rpcsec_init_reply_mic_is_window() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &w.b,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -404,7 +404,7 @@ fn rpcsec_unknown_gc_proc_is_rejectedcred() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let (xid, why) = decode_denied(&out);
@@ -444,7 +444,7 @@ fn rpcsec_init_garbage_token_is_rejectedcred() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let (xid, why) = decode_denied(&out);
@@ -483,7 +483,7 @@ fn rpcsec_destroy_without_context_is_credproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let (xid, why) = decode_denied(&out);
@@ -522,7 +522,7 @@ fn rpcsec_bad_mic_is_credproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let (xid, why) = decode_denied(&out);
@@ -561,7 +561,7 @@ fn rpcsec_wrong_handle_data_is_dispatched() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -604,7 +604,7 @@ fn rpcsec_seq_over_maxseq_is_ctxproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let (xid, why) = decode_denied(&out);
@@ -643,7 +643,7 @@ fn rpcsec_seq_replay_is_ctxproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec1,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out1);
@@ -675,7 +675,7 @@ fn rpcsec_seq_replay_is_ctxproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec2,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let (xid, why) = decode_denied(&out2);
@@ -724,7 +724,7 @@ fn rpcsec_destroy_then_data_is_credproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -757,7 +757,7 @@ fn rpcsec_destroy_then_data_is_credproblem() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec2,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let (xid, why) = decode_denied(&out2);
@@ -796,7 +796,7 @@ fn rpcsec_unknown_program_data_carries_xp_verf() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -854,7 +854,7 @@ fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -886,7 +886,7 @@ fn rpcsec_integrity_data_round_trips() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -925,7 +925,7 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -978,7 +978,7 @@ fn rpcsec_none_service_data_is_plain_body() {
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -1030,7 +1030,7 @@ fn rpcsec_privacy_body_sequence_must_match_the_credential() {
             &mut agss,
             &krb5_protocol::ReplayCache::new(),
             rec,
-            "127.0.0.1",
+            &peer(),
         )
         .unwrap();
         let mut r = XdrR::new(&out);

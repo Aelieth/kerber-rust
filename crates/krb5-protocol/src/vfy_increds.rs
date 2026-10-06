@@ -160,7 +160,7 @@ fn get_vfy_cred(
         expected_server: Some(name),
         expected_realm: Some(realm_s.as_str()),
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None)?;

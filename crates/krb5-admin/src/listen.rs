@@ -7,8 +7,7 @@
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
@@ -22,8 +21,9 @@ use krb5_types::{
     ChangePasswdData, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, err,
     principal_compare,
 };
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
+use crate::kadmind::{Kadmind, serve_kadmind_until};
 use crate::{AdminSession, Error, Op};
 
 /// Ports from the Kerberos assigned set.
@@ -122,30 +122,12 @@ fn kpasswd_udp_recv_until(
     }
 }
 
-/// One kpasswd reply over TCP, its length and the reply in one write.
-/// MIT `process_stream_response` (`lib/apputils/net-server.c:1319-1323`): kadmind's kpasswd TCP
-/// replies go out as the KDC's do, the length and the reply in one writev.
-fn write_len_pref(stream: &mut TcpStream, body: &[u8]) -> io::Result<()> {
-    krb5_protocol::write_messages(stream, &[body])
+fn status_bytes(status: u32) -> Zeroizing<Vec<u8>> {
+    Zeroizing::new(status.to_be_bytes().to_vec())
 }
 
-fn read_len_pref(stream: &mut TcpStream, max: usize) -> io::Result<Vec<u8>> {
-    let mut hdr = [0u8; 4];
-    stream.read_exact(&mut hdr)?;
-    let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(usize::MAX);
-    if n == 0 || n > max {
-        return Err(io::Error::new(io::ErrorKind::InvalidData, "kadmind length"));
-    }
-    let mut body = vec![0u8; n];
-    stream.read_exact(&mut body)?;
-    Ok(body)
-}
-
-fn status_bytes(status: u32) -> Vec<u8> {
-    status.to_be_bytes().to_vec()
-}
-
-/// Version-1 kadmind body: `version, op, ap_len, ap-req, pay_len, payload`.
+/// Version-1 kadmind body: `version, op, ap_len, ap-req, pay_len, payload`. The reply is wiped
+/// when dropped: a ktadd's holds the keytab, in one buffer of its size.
 ///
 /// # Errors
 ///
@@ -160,7 +142,7 @@ pub fn dispatch_kadmind(
     service_key: &ProtocolKey,
     replay: &ReplayCache,
     body: &[u8],
-) -> Result<Vec<u8>, Error> {
+) -> Result<Zeroizing<Vec<u8>>, Error> {
     if body.len() < 10 || body[0] != WIRE_VERSION {
         return Err(Error::Inner("kadmind version".into()));
     }
@@ -222,8 +204,10 @@ pub fn dispatch_kadmind(
             )
             .map_err(|e| Error::Inner(e.to_string()))?;
             let kt = sess.ktadd(&name)?;
-            let mut out = status_bytes(0);
-            out.extend_from_slice(&kt.to_bytes());
+            let keytab = Zeroizing::new(kt.to_bytes());
+            let mut out = Zeroizing::new(Vec::with_capacity(4 + keytab.len()));
+            out.extend_from_slice(&status_bytes(0));
+            out.extend_from_slice(&keytab);
             Ok(out)
         }
     }
@@ -270,15 +254,9 @@ fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
-fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8>, Error> {
-    let mut e_data = Vec::from(result.to_be_bytes());
-    e_data.extend_from_slice(text.as_bytes());
-    kpasswd_krb_error(realm, e_data)
-}
-
-fn kpasswd_krb_error(realm: &str, e_data: Vec<u8>) -> Result<Vec<u8>, Error> {
-    // MIT `process_chpw_request` (`schpw.c:273-345`): alloc_data overwrites `ret` with 0,
-    // so `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
+/// A KRB-ERROR from `kadmin/changepw` in `realm` with `code` and, when given, `e_data`; no
+/// client, no text.
+fn changepw_krb_error(realm: &str, code: i32, e_data: Option<Vec<u8>>) -> Result<Vec<u8>, Error> {
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::Inner(e.to_string()))?;
     let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "changepw"]);
     let pdu = KrbError {
@@ -288,16 +266,35 @@ fn kpasswd_krb_error(realm: &str, e_data: Vec<u8>) -> Result<Vec<u8>, Error> {
         cusec: None,
         stime: KerberosTime::now(),
         susec: Microseconds::ZERO,
-        error_code: err::GENERIC,
+        error_code: code,
         crealm: None,
         cname: None,
         realm: realm_s,
         sname,
         e_text: None,
-        e_data: Some(e_data.into()),
+        e_data: e_data.map(Into::into),
     };
-    let der = encode(&pdu).map_err(|e| Error::Inner(e.to_string()))?;
+    encode(&pdu).map_err(|e| Error::Inner(e.to_string()))
+}
+
+fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8>, Error> {
+    let mut e_data = Vec::from(result.to_be_bytes());
+    e_data.extend_from_slice(text.as_bytes());
+    kpasswd_krb_error(realm, e_data)
+}
+
+fn kpasswd_krb_error(realm: &str, e_data: Vec<u8>) -> Result<Vec<u8>, Error> {
+    // MIT `process_chpw_request` (`schpw.c:273-345`): alloc_data overwrites `ret` with 0,
+    // so `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
+    let der = changepw_krb_error(realm, err::GENERIC, Some(e_data))?;
     Ok(frame_kpasswd_rep(&[], &der))
+}
+
+/// The reply to a kpasswd TCP request whose length is past the buffer: `KRB_ERR_FIELD_TOOLONG`
+/// from `kadmin/changepw`, not framed as a kpasswd reply.
+/// MIT `make_toolong_error` (`kadmin/server/misc.c:139-161`): the time, `KRB_ERR_FIELD_TOOLONG` and `kadmin/changepw` in the realm, with no client, text or data.
+pub(crate) fn kpasswd_toolong_error(realm: &str) -> Result<Vec<u8>, Error> {
+    changepw_krb_error(realm, err::FIELD_TOOLONG, None)
 }
 
 /// The AP-REP and the auth context a kpasswd reply's KRB-PRIV is made in.
@@ -400,7 +397,7 @@ security administrator."
 /// That mismatch returns an error and no datagram is sent. The AP-REQ is verified only as a
 /// ticket for `kadmin/changepw` in this realm; any failure, a ticket for another service
 /// included, is answered with a framed KRB-ERROR (code 60) whose e-data carries result code 3.
-fn handle_kpasswd_from(
+pub(crate) fn handle_kpasswd_from(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
     service_key: &ProtocolKey,
@@ -456,7 +453,7 @@ fn handle_kpasswd_from(
         expected_server: Some(&changepw),
         expected_realm: Some(store_realm.as_str()),
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     // MIT `process_chpw_request` (`schpw.c:102-161`): the auth context does sequence numbers only, `krb5_rd_req` also refuses an enctype the server (on kadmind's KDC profile) does not permit, and the AP-REP is made before the request is decrypted.
@@ -687,13 +684,17 @@ pub fn encode_kpasswd_req(ap_req: &[u8], krb_priv_der: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Serve kpasswd (RFC 3244) on UDP until shutdown. A reply leaves from the address its request
-/// was sent to, as the KDC's do ([`krb5_kdc::recv_from_to`]).
+/// How long kpasswd's loop waits at most before it looks at its stop flag again.
+const STOP_POLL: Duration = Duration::from_millis(100);
+
+/// Serve kpasswd (RFC 3244) on UDP until `shutdown`, from kadmind's one loop on this thread
+/// ([`crate::serve_kadmind_until`]). A reply leaves from the address its request was sent to,
+/// as the KDC's do ([`krb5_kdc::recv_from_to`]).
 ///
 /// # Errors
 ///
-/// The `io::Error` when setting the read timeout fails; a failed receive, send or request is
-/// logged, not returned.
+/// The `io::Error` when the socket cannot be made non-blocking or the loop's poll fails; a failed
+/// receive, send or request is logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_udp(
     store: SharedStore,
@@ -702,66 +703,25 @@ pub fn serve_kpasswd_udp(
     sock: UdpSocket,
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<()> {
-    sock.set_read_timeout(Some(Duration::from_millis(200)))?;
-    let mut buf = vec![0u8; 65_535];
-    while !shutdown.load(Ordering::Relaxed) {
-        match krb5_kdc::recv_from_to(&sock, &mut buf) {
-            // MIT `process_packet` (`lib/apputils/net-server.c:1169-1172`): an empty datagram is dropped before kpasswd sees it.
-            Ok(d) if d.len == 0 => {}
-            Ok(d) => {
-                let replay = ReplayCache::new();
-                // MIT `process_packet` (`lib/apputils/net-server.c:1174-1187`): the request's local address is its pktinfo destination, else the socket's own.
-                let local =
-                    d.to.map(|p| p.addr)
-                        .or_else(|| sock.local_addr().ok().map(|a| a.ip()));
-                match handle_kpasswd_from(
-                    &store,
-                    &acl,
-                    &service_key,
-                    &replay,
-                    &buf[..d.len],
-                    &client_addr(d.from.ip()),
-                    local,
-                ) {
-                    Ok(rep) => {
-                        let _ = krb5_kdc::send_udp_reply(&sock, &rep, &d);
-                    }
-                    Err(e) => tracing::error!(
-                        event = krb5_log::events::ADMIN,
-                        component = "krb5-admin",
-                        outcome = "error",
-                        error = %e,
-                        "{e} - while dispatching (udp)"
-                    ),
-                }
-            }
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut
-                    || e.kind() == io::ErrorKind::Interrupted
-                    || e.kind() == io::ErrorKind::ConnectionRefused => {}
-            // MIT `process_packet` (`lib/apputils/net-server.c:1155-1167`): a failed receive is
-            // logged and the socket goes on serving.
-            Err(e) => {
-                krb5_log::klog::com_err(
-                    Some(&krb5_log::klog::os_error_text(&e)),
-                    "while receiving from network",
-                );
-                thread::sleep(Duration::from_millis(20));
-            }
-        }
-    }
-    Ok(())
+    let mut kadmind = Kadmind::new(store, acl, Some(service_key));
+    let udp = [sock];
+    let sockets = krb5_kdc::net_server::Sockets {
+        udp: &udp,
+        ..krb5_kdc::net_server::Sockets::default()
+    };
+    serve_kadmind_until(&mut kadmind, &sockets, &shutdown, STOP_POLL)
 }
 
-/// Serve kpasswd on TCP 464 (MIT 4-byte length prefix, then RFC 3244 body).
+/// Serve kpasswd on TCP (MIT's 4-byte length, then the RFC 3244 body) until `shutdown`, from
+/// kadmind's one loop on this thread: no timeout, at most 45 connections, a request of at most
+/// 1 MiB less its length.
 ///
 /// MIT 1.22.2 `kpasswd` tries TCP first.
 ///
 /// # Errors
 ///
-/// The `io::Error` when `set_nonblocking` fails; a failed accept and per-connection failures
-/// are logged, not returned.
+/// The `io::Error` when the listener cannot be made non-blocking or the loop's poll fails; a
+/// failed accept and per-connection failures are logged, not returned.
 #[allow(clippy::needless_pass_by_value)]
 pub fn serve_kpasswd_tcp(
     store: SharedStore,
@@ -770,64 +730,13 @@ pub fn serve_kpasswd_tcp(
     listener: TcpListener,
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<()> {
-    listener.set_nonblocking(true)?;
-    while !shutdown.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((mut stream, peer)) => {
-                let _closed = krb5_kdc::ClosingFd(std::os::fd::AsRawFd::as_raw_fd(&stream));
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
-                let _ = stream.set_write_timeout(Some(Duration::from_secs(5)));
-                match read_len_pref(&mut stream, 64 * 1024) {
-                    Ok(body) => {
-                        let replay = ReplayCache::new();
-                        match handle_kpasswd_from(
-                            &store,
-                            &acl,
-                            &service_key,
-                            &replay,
-                            &body,
-                            &client_addr(peer.ip()),
-                            stream.local_addr().ok().map(|a| a.ip()),
-                        ) {
-                            Ok(rep) => {
-                                let _ = write_len_pref(&mut stream, &rep);
-                            }
-                            Err(e) => tracing::error!(
-                                event = krb5_log::events::ADMIN,
-                                component = "krb5-admin",
-                                outcome = "error",
-                                error = %e,
-                                error_suffix = "while dispatching (tcp)",
-                            ),
-                        }
-                    }
-                    Err(e) => tracing::error!(
-                        event = krb5_log::events::ADMIN,
-                        component = "krb5-admin",
-                        outcome = "error",
-                        error = %e,
-                    ),
-                }
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                krb5_kdc::wait_for_connection(&[&listener], Duration::from_millis(100));
-            }
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            // MIT `accept_stream_connection` (`lib/apputils/net-server.c:1238-1241`): a failed
-            // accept is dropped and the listener goes on.
-            Err(e) => {
-                tracing::error!(
-                    event = krb5_log::events::ADMIN,
-                    component = "krb5-admin",
-                    outcome = "error",
-                    error = %e,
-                    detail = "kpasswd accept",
-                );
-                thread::sleep(Duration::from_millis(20));
-            }
-        }
-    }
-    Ok(())
+    let mut kadmind = Kadmind::new(store, acl, Some(service_key));
+    let tcp = [listener];
+    let sockets = krb5_kdc::net_server::Sockets {
+        tcp: &tcp,
+        ..krb5_kdc::net_server::Sockets::default()
+    };
+    serve_kadmind_until(&mut kadmind, &sockets, &shutdown, STOP_POLL)
 }
 
 /// kprop dump over TCP: send MIT dump version-7 text (4-byte length prefix).

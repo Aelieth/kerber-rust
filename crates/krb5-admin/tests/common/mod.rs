@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use krb5_admin::{Kadm5RpcSession, encode_kpasswd_req, kadm5_handle_rpc};
+use krb5_admin::{Kadm5RpcSession, RpcPeer, encode_kpasswd_req, kadm5_handle_rpc};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::GssContext;
 use krb5_kdc::testrealm::TEST_REALM;
@@ -32,6 +32,12 @@ pub const API_V2: u32 = 0x1234_5702;
 pub const SUCCESS: u32 = 0;
 pub const PROC_UNAVAIL: u32 = 3;
 pub const GARBAGE_ARGS: u32 = 4;
+
+/// A connection from 127.0.0.1 to kadmind's port on 127.0.0.1.
+pub fn peer() -> RpcPeer {
+    let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 749));
+    RpcPeer::new(Some(loopback), Some(loopback))
+}
 
 pub fn push_u32(b: &mut Vec<u8>, v: u32) {
     b.extend_from_slice(&v.to_be_bytes());
@@ -168,7 +174,7 @@ pub fn init_client(
         &mut sess,
         &ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut i = 0;
@@ -250,7 +256,7 @@ pub fn data_call(
         &mut c.sess,
         &ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut i = 0;

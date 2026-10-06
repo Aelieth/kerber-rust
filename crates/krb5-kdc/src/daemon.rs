@@ -7,10 +7,8 @@ use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread;
-use std::time::Duration;
 
-use krb5_log::klog::{self, Severity, os_error_text};
+use krb5_log::klog::os_error_text;
 
 use crate::{PrincipalStore, open_store};
 
@@ -222,34 +220,13 @@ impl Signals {
     pub fn stop_requested(&self) -> bool {
         self.stop.load(Ordering::Relaxed)
     }
-
-    /// Start the thread that answers each SIGHUP, after [`detach`]: a debug line, then the log
-    /// files reopened, so logrotate's `systemctl reload` moves the daemon to a new file.
-    /// MIT `do_reset` (`lib/apputils/net-server.c:246-254`): the debug line, `krb5_klog_reopen`,
-    /// then the daemon's reset hook.
-    /// MIT `reset_for_hangup` (`kdc/kdc_util.c:1915-1922`): the KDC's hook refreshes each realm's
-    /// database module configuration; kadmind has none.
-    /// MIT `krb5_db_refresh_config` (`lib/kdb/kdb5.c:2714-2723`): a module without
-    /// `refresh_config`, as every module MIT ships, does nothing.
-    pub fn spawn_log_reopener(&self) {
-        let hup = Arc::clone(&self.hup);
-        let stop = Arc::clone(&self.stop);
-        thread::spawn(move || {
-            while !stop.load(Ordering::Relaxed) {
-                if hup.swap(false, Ordering::Relaxed) {
-                    klog::syslog(Severity::Debug, "Got signal to reset");
-                    klog::reopen();
-                }
-                thread::sleep(Duration::from_millis(100));
-            }
-        });
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Instant;
+    use krb5_log::klog::{self, Severity};
+    use std::time::{Duration, Instant};
 
     /// The JSON log's filter, printed by a child of this test that runs with `RUST_LOG` set.
     #[test]
@@ -425,29 +402,69 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The loop on a daemon's signals: SIGHUP reopens the log and leaves it serving, SIGTERM ends
+    /// it with MIT's line.
     #[test]
     fn sighup_reopens_the_log_and_leaves_the_daemon_running() {
+        use crate::net_server::{Dispatch, Klog, Log, Reply, Sockets, Wake, run};
+
+        struct NoApp;
+        impl Dispatch for NoApp {
+            fn dispatch(
+                &mut self,
+                _local: std::net::SocketAddr,
+                _remote: std::net::SocketAddr,
+                _request: &[u8],
+                _is_tcp: bool,
+                _log: &mut dyn Log,
+            ) -> Reply {
+                Reply::Nothing
+            }
+
+            fn make_toolong_error(&mut self) -> Result<Vec<u8>, String> {
+                Err(String::new())
+            }
+        }
+
         let dir = krb5_testkit::scratch_dir("krb5-kdc-sighup");
         let log = dir.join("kdc.log");
         let rotated = dir.join("kdc.log.1");
         klog::init("krb5kdc", &[format!("FILE:{}", log.display())], true);
         let signals = Signals::install();
-        signals.spawn_log_reopener();
+        assert!(signals.wake_fd().is_some(), "the wake pipe");
         klog::syslog(Severity::Info, "before the rotation");
         std::fs::rename(&log, &rotated).unwrap();
-        signal_hook::low_level::raise(signal_hook::consts::SIGHUP).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !log.exists() && Instant::now() < deadline {
-            thread::sleep(Duration::from_millis(20));
-        }
-        klog::syslog(Severity::Info, "after the rotation");
+        std::thread::scope(|s| {
+            let served = s.spawn(|| {
+                run(
+                    &mut NoApp,
+                    &Sockets::default(),
+                    crate::net_server::MAX_STREAM_DATA_CONNECTIONS,
+                    crate::net_server::MAX_REQUEST,
+                    &Wake::Signals(&signals),
+                    &mut Klog,
+                )
+            });
+            signal_hook::low_level::raise(signal_hook::consts::SIGHUP).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !log.exists() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            assert!(!served.is_finished(), "still serving after SIGHUP");
+            klog::syslog(Severity::Info, "after the rotation");
+            signal_hook::low_level::raise(signal_hook::consts::SIGTERM).unwrap();
+            assert_eq!(served.join().unwrap().unwrap(), Vec::<i32>::new());
+        });
         klog::close();
         let old = std::fs::read_to_string(&rotated).unwrap();
         let new = std::fs::read_to_string(&log).unwrap();
         assert!(old.contains("(info): before the rotation\n"), "{old}");
         assert!(old.contains("(debug): Got signal to reset\n"), "{old}");
         assert!(new.contains("(info): after the rotation\n"), "{new}");
-        assert!(!signals.stop_requested());
+        assert!(
+            new.contains("(debug): Got signal to request exit\n"),
+            "{new}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

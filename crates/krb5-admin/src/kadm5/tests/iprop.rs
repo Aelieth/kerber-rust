@@ -644,7 +644,7 @@ fn the_iprop_program_is_served_only_with_the_update_log_mapped() {
             &mut None,
             &krb5_protocol::ReplayCache::new(),
             &rec,
-            "127.0.0.1",
+            &peer(),
         )
         .unwrap()
     };
