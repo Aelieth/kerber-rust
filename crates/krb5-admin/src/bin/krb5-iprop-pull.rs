@@ -1,26 +1,26 @@
-//! IPROP_GET_UPDATES client (ONC RPC program 100423, RPCSEC_GSS).
+//! IPROP_GET_UPDATES client (ONC RPC program 100423, RPCSEC_GSS): the iprop gate's test tool.
 //!
 //! Usage: `krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
+//!
+//! It is built only with the `test-hooks` feature (`required-features`), so a release build has
+//! no such program and none of its environment; `make install` never installed it.
 //!
 //! `--load-dump` writes the database ([`krb5_config::KdcPaths`]; a new 0600 file, as a full load
 //! leaves it) from a MIT dump the replica's stash opens, as kpropd loads one: with `iprop_enable`
 //! set for the realm it must be an iprop dump (`ipropx` / `iprop`), the replica keeps its own
 //! lockout attributes and its update log takes the dump's serial and time (MIT's `load -i`);
-//! without it, a version 7 dump. With the `test-hooks` feature, `KRB5_MASTER_PASSWORD` opens it
-//! instead when set, and a missing stash is then written. A host argument then pulls
-//! serial-delta.
+//! without it, a version 7 dump. `KRB5_MASTER_PASSWORD` opens it instead when set, and a missing
+//! stash is then written. A host argument then pulls serial-delta.
 //!
 //! The pull is kpropd's iprop half and needs `iprop_enable`: the replica's update log (mapped as a
 //! replica's) gives the serial and time asked from, unless `--last-sno` gives them, and keeps each
 //! update applied, as MIT's `ulog_replay` keeps it.
 //!
-//! kerber-rust's own environment, where this client has none of MIT's kpropd options yet (it is
-//! not installed as a service):
+//! The gate's environment:
 //! - `KRB5_KPROP_KEYTAB`: the keytab whose first principal authenticates the pull (required).
 //! - `KRB5_KDC`: the KDC asked for its tickets (default `127.0.0.1`).
-//! - `KRB5_IPROP_HOST`: the host of the `kiprop/<host>` service pulled from, MIT's admin server;
-//!   required, except that with the `test-hooks` feature it defaults to the documented test
-//!   realm's host.
+//! - `KRB5_IPROP_HOST`: the host of the `kiprop/<host>` service pulled from, MIT's admin server
+//!   (default the documented test realm's host).
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -201,17 +201,8 @@ fn main() {
         eprintln!("krb5-iprop-pull: AS: {e}");
         std::process::exit(1);
     });
-    #[cfg(feature = "test-hooks")]
-    let default_host = Some(krb5_kdc::testrealm::TEST_HOST.to_owned());
-    #[cfg(not(feature = "test-hooks"))]
-    let default_host: Option<String> = None;
     let host = std::env::var("KRB5_IPROP_HOST")
-        .ok()
-        .or(default_host)
-        .unwrap_or_else(|| {
-            eprintln!("krb5-iprop-pull: set KRB5_IPROP_HOST");
-            std::process::exit(2);
-        });
+        .unwrap_or_else(|_| krb5_kdc::testrealm::TEST_HOST.to_owned());
     let sname = PrincipalName::new(PrincipalName::NT_SRV_HST, ["kiprop", host.as_str()]);
     let tgs = tgs_exchange(&kdc, &as_out, sname, &realm).unwrap_or_else(|e| {
         eprintln!("krb5-iprop-pull: TGS: {e}");
@@ -267,15 +258,11 @@ fn main() {
     );
 }
 
-/// The dump opened with the replica's stash, or with the `test-hooks` feature with
-/// `KRB5_MASTER_PASSWORD` when that is set.
+/// The dump opened with `KRB5_MASTER_PASSWORD` when that is set, else with the replica's stash.
 fn load_dump(text: &str, stash: &std::path::Path) -> Result<krb5_kdc::PrincipalStore, String> {
-    #[cfg(feature = "test-hooks")]
     let hooked = std::env::var("KRB5_MASTER_PASSWORD")
         .ok()
         .map(zeroize::Zeroizing::new);
-    #[cfg(not(feature = "test-hooks"))]
-    let hooked: Option<zeroize::Zeroizing<String>> = None;
     if let Some(pw) = hooked {
         return krb5_kdc::load_dump(text, pw.as_bytes()).map_err(|e| e.to_string());
     }

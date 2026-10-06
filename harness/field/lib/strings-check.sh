@@ -10,6 +10,7 @@ P='KRB5_TEST_[A-Z0-9_]*|--test-realm|testrealm|KRB5_MASTER_PASSWORD|KRB5_NEW_PAS
 
 # Names a release build no longer reads, where MIT's program reads none; one line per change.
 P="$P|GSS_DELEG_CCACHE" # the gss acceptor's copy of a delegated credential (kadmind)
+P="$P|KRB5_IPROP_HOST|KERBER_[A-Z0-9_]*" # the gates' test programs, which a release build lacks
 
 # check_files <file>...: the check proper.
 check_files() {

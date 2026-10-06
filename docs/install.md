@@ -32,7 +32,8 @@ paths filled in. Fedora's third unit, `kprop.service`, is not installed (see
   `$(PREFIX)/share/kerber-rust/install-manifest`, renamed into place whole. `make uninstall`
   removes only the manifest's files that are still as install wrote them.
 - `make install` never writes `/etc/krb5.conf` (krb5-libs owns it), the database or the stash,
-  and never installs the test tools (`krb5-tools`, the `krb5-gss` programs, `krb5-iprop-pull`).
+  and never installs the test tools (`krb5-tools`, the `krb5-gss` programs, `krb5-iprop-pull`),
+  which only a build with the test-hooks features builds.
 - On the live system it then does what the package's scriptlets do: `systemd-tmpfiles --create`,
   `restorecon` on each file it wrote when SELinux is enabled, and `systemctl daemon-reload`. It
   does not restart a running daemon; it says when one still runs the old programs. With

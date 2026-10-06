@@ -813,9 +813,11 @@ The gates, CI, `make safety` and `scripts/checkpoint.sh` build with
 `--features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks`
 (the gates through `scripts/lib/build-bins.sh`, whose one cargo invocation also
 carries the client tools); `krb5-kdc/test-hooks` turns on `krb5-config/test-hooks`
-and `krb5-protocol/test-hooks` for every binary of that build. Only such a build
-reads these inputs; a release build ignores them, as MIT's tools do. CI's test
-job and `make test` then run the workspace's tests once more without features
+and `krb5-protocol/test-hooks` for every binary of that build, and `krb5-admin/test-hooks`
+turns on `krb5-gss/test-hooks`. Only such a build reads these inputs or builds the test
+programs (`krb5-tools`', `krb5-gss`'s, `krb5-iprop-pull`): a release build has neither, as
+MIT's tools read none of these inputs. CI's test job and `make test` then run the
+workspace's tests once more without features
 (`cargo nextest run --workspace --profile ci --locked`), so the release-only units
 run too: a release `kvno` and `kinit` refusing the gates' options, `kinit -S`
 asking the AS, `a_release_build_reads_no_path_override`, and every test's release

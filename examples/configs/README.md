@@ -7,7 +7,7 @@ gets tickets with MIT `kinit` and `kvno`.
 
 | File | Read by | Install at |
 | --- | --- | --- |
-| `kdc.conf` | `krb5-kdc`, `krb5-kadmind`, `krb5-kdb`, `krb5-kadmin-local`, `krb5-kprop`, `krb5-kpropd`, `krb5-iprop-pull` | `KRB5_KDC_PROFILE`, else `/var/kerberos/krb5kdc/kdc.conf`; a missing file reads as empty, as MIT's does |
+| `kdc.conf` | `krb5-kdc`, `krb5-kadmind`, `krb5-kdb`, `krb5-kadmin-local`, `krb5-kprop`, `krb5-kpropd` (and the test build's `krb5-iprop-pull`) | `KRB5_KDC_PROFILE`, else `/var/kerberos/krb5kdc/kdc.conf`; a missing file reads as empty, as MIT's does |
 | `krb5.conf` | the Rust client tools; the KDC-side tools for `default_realm`, their realm unless one is named; MIT clients | `KRB5_CONFIG`, else `/etc/krb5.conf` |
 | `kadm5.acl` | `krb5-kadmind` | the `acl_file` path in `kdc.conf` |
 

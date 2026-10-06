@@ -51,6 +51,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **tool.** `krb5-iprop-pull`, the gss programs and `krb5-tools` build only with the test hooks:
+  a release build has no test program. Strings check.
 - **kdc/gss.** The acceptor's `GSS_DELEG_CCACHE` copy (kadmind read it) and the KDC's
   `KRB5_KDC_USER` drop are `test-hooks` only: MIT reads neither. Strings check.
 - **client/protocol/admin/kdc.** Every keytab and stash read (kinit, kvno, klist, ktutil,

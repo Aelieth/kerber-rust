@@ -39,9 +39,11 @@ path = "src/bin/krb5-kpropd.rs"
 name = "krb5-kprop"
 path = "src/bin/krb5-kprop.rs"
 
+# The iprop gate's client, a test tool: a release build does not build it.
 [[bin]]
 name = "krb5-iprop-pull"
 path = "src/bin/krb5-iprop-pull.rs"
+required-features = ["test-hooks"]
 
 [[bin]]
 name = "krb5-ktutil"

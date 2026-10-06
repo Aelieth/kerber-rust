@@ -135,7 +135,8 @@ and `krb5_prompter_posix` / `krb5_read_password` (one line per prompt from a
 pipe, echo off on a terminal, `Password mismatch`).
 
 **`krb5-tools`** holds the harness-only gate tools (`diffsend`, `loadgen`,
-`krb5-forge-tgt`, …; `publish = false`). It is not a product surface.
+`krb5-forge-tgt`, …; `publish = false`), built only beside `krb5-kdc/test-hooks`.
+It is not a product surface.
 
 **`krb5-testkit`** holds shared test helpers (`publish = false`, a
 dev-dependency only).
