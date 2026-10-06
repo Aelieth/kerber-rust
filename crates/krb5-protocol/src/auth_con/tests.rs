@@ -9,8 +9,8 @@ use krb5_types::{
 };
 
 use super::{
-    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, generate_seq_number,
-    local_host_address,
+    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, check_ticket_etype,
+    generate_seq_number, local_host_address,
 };
 use crate::ap_req::ApVerifyOk;
 use crate::error::Error;
@@ -176,7 +176,8 @@ fn rfc4537_list_negotiates_the_first_permitted_enctype() {
 #[test]
 fn a_session_key_the_acceptor_does_not_permit_is_noperm_etype() {
     let session = ProtocolKey::random(AES256).unwrap();
-    let ok = accepted(&session, None, None, true, None);
+    let mut ok = accepted(&session, None, None, true, None);
+    ok.ticket_etype = EncryptionType::Aes128CtsHmacSha196.to_iana();
     let only_aes128 = [EncryptionType::Aes128CtsHmacSha196];
     let err = AcceptorAuthContext::from_ap_req(&ok, &only_aes128).unwrap_err();
     assert_eq!(
@@ -184,6 +185,41 @@ fn a_session_key_the_acceptor_does_not_permit_is_noperm_etype() {
         "Encryption type aes256-cts-hmac-sha1-96 not permitted"
     );
     assert!(matches!(err, Error::NopermEtype(_)));
+}
+
+/// MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-50`): the ticket's own enctype is refused before `negotiate_etype` sees the session key's, with the error table's text alone.
+#[test]
+fn a_ticket_enctype_the_acceptor_does_not_permit_is_noperm_etype_first() {
+    let aes128 = EncryptionType::Aes128CtsHmacSha196;
+    let session = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, None, None, true, None);
+    let err = AcceptorAuthContext::from_ap_req(&ok, &[aes128]).unwrap_err();
+    assert!(matches!(err, Error::NopermEtype(_)));
+    assert_eq!(err.to_string(), "Encryption type not permitted");
+    let permitted_session = ProtocolKey::random(aes128).unwrap();
+    let ok = accepted(&permitted_session, None, None, true, None);
+    let err = AcceptorAuthContext::from_ap_req(&ok, &[aes128]).unwrap_err();
+    assert_eq!(err.to_string(), "Encryption type not permitted");
+    assert!(AcceptorAuthContext::from_ap_req(&ok, &[AES256, aes128]).is_ok());
+}
+
+/// MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-47`): an enctype the library does not
+/// implement is `KRB5_PROG_ETYPE_NOSUPP`, before the permitted list is read.
+#[test]
+fn check_ticket_etype_is_nosupp_for_an_enctype_not_implemented() {
+    assert!(matches!(
+        check_ticket_etype(EncryptionType::Rc4Hmac.to_iana(), &DEFAULT_LIST),
+        Err(Error::NopermEtype(_))
+    ));
+    assert!(matches!(
+        check_ticket_etype(1, &DEFAULT_LIST),
+        Err(Error::ProgEtypeNosupp)
+    ));
+    assert!(matches!(
+        check_ticket_etype(-128, &[]),
+        Err(Error::ProgEtypeNosupp)
+    ));
+    assert!(check_ticket_etype(AES256.to_iana(), &DEFAULT_LIST).is_ok());
 }
 
 #[test]

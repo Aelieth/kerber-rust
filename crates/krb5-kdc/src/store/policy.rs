@@ -205,6 +205,15 @@ impl Policy {
             .is_none_or(|v| v.contains(&e))
     }
 
+    /// The KDC context's `permitted_enctypes` as a list, MIT's `DEFAULT` one when none is set.
+    /// MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:573-595`): with no `permitted_enctypes`, the `DEFAULT` list, filtered by `allow_weak_crypto`.
+    #[must_use]
+    pub fn permitted_list(&self) -> Vec<EncryptionType> {
+        self.permitted_enctypes.clone().unwrap_or_else(|| {
+            krb5_crypto::parse_enctype_list("DEFAULT", self.allow_weak_crypto).unwrap_or_default()
+        })
+    }
+
     /// MIT `krb5_dbe_find_enctype` under this policy's `permitted_enctypes`
     /// ([`Principal::find_enctype`] with [`Policy::etype_permitted`]).
     ///

@@ -924,13 +924,25 @@ fn mutual_pair() -> (GssContext, GssContext, Vec<u8>, ProtocolKey) {
     (init, acc, rep.unwrap(), tgs_out.session_key)
 }
 
+/// MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-50`): the ticket's own enctype is refused first, with the error table's text alone; once the ticket's is permitted, `negotiate_etype` names the session key's or the subkey's.
 #[test]
-fn the_acceptor_refuses_a_session_enctype_it_does_not_permit() {
+fn the_acceptor_refuses_ticket_and_session_enctypes_it_does_not_permit() {
     let (_as_out, tgs_out, skey, cname) = user_host();
     assert_eq!(
         tgs_out.session_key.etype(),
         EncryptionType::Aes256CtsHmacSha196
     );
+    assert_eq!(
+        tgs_out.rep.0.ticket.enc_part.etype,
+        EncryptionType::Aes256CtsHmacSha196.to_iana()
+    );
+    // The same ticket sealed under an aes128-cts service key.
+    let aes128 = ProtocolKey::random(EncryptionType::Aes128CtsHmacSha196).unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let mut resealed = tgs_out.rep.0.ticket.clone();
+    let plain = decrypt(&skey, usage, resealed.enc_part.cipher.as_ref()).unwrap();
+    resealed.enc_part.cipher = encrypt(&aes128, usage, &plain).unwrap().into();
+    resealed.enc_part.etype = aes128.etype().to_iana();
     let dir = krb5_testkit::scratch_dir("p15a-gss-permitted");
     let conf = dir.join("krb5.conf");
     std::fs::write(
@@ -939,32 +951,43 @@ fn the_acceptor_refuses_a_session_enctype_it_does_not_permit() {
     )
     .unwrap();
     krb5_config::set_test_krb5_paths(Some(vec![conf]));
-    let (_init, token) = GssContext::init_sec_context(
-        tgs_out.rep.0.ticket.clone(),
-        &tgs_out.session_key,
-        &ascii(TEST_REALM),
-        &cname,
-        true,
-        None,
-        None,
-    )
-    .unwrap();
-    let accepted = GssContext::accept_sec_context(
-        &token,
-        std::slice::from_ref(&skey),
-        None,
-        Some(&documented_host()),
-        Some(TEST_REALM),
-        &ReplayCache::new(),
-    );
+    let accept = |ticket: &krb5_types::Ticket, key: &ProtocolKey| {
+        let (_init, token) = GssContext::init_sec_context(
+            ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(key),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+            &ReplayCache::new(),
+        )
+        .map(|_| ())
+    };
+    let ticket_first = accept(&tgs_out.rep.0.ticket, &skey);
+    let session_next = accept(&resealed, &aes128);
     krb5_config::set_test_krb5_paths(None);
     let _ = std::fs::remove_dir_all(&dir);
-    match accepted {
-        Err(Error::Inner(m)) => {
-            assert_eq!(m, "Encryption type aes256-cts-hmac-sha1-96 not permitted");
+    for (got, want) in [
+        (ticket_first, "Encryption type not permitted"),
+        (
+            session_next,
+            "Encryption type aes256-cts-hmac-sha1-96 not permitted",
+        ),
+    ] {
+        match got {
+            Err(Error::Inner(m)) => assert_eq!(m, want),
+            Err(e) => panic!("want {want:?}, got {e}"),
+            Ok(()) => panic!("an aes256 enctype outside permitted_enctypes was accepted"),
         }
-        Err(e) => panic!("want the permitted_enctypes refusal, got {e}"),
-        Ok(_) => panic!("an aes256 session outside permitted_enctypes was accepted"),
     }
 }
 

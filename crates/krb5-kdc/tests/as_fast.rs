@@ -1405,3 +1405,17 @@ fn armor_tgt_labelled_n_sealed_under_n_plus_1_is_bad_integrity() {
         .expect_err("mislabelled kvno");
     assert_find_fast_z6_armor_enctype(err, err::BAD_INTEGRITY);
 }
+
+/// MIT `armor_ap_request` → `krb5_rd_req`'s `negotiate_etype` on the KDC's context (settled live
+/// beside MIT 1.22.2's krb5kdc): armor whose TGT is an aes256 ticket with an aes128 session key
+/// (and an aes128 subkey) is 60 `FIND_FAST` once the KDC permits aes256 only, though the ticket
+/// itself still decrypts.
+#[test]
+fn armor_whose_session_enctype_the_kdc_does_not_permit_is_find_fast() {
+    krb5_config::isolate_test_krb5();
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let (req, _) = fast_as_prepared_etype(&store, 0x2600_0070, AES128);
+    store.policy.permitted_enctypes = Some(vec![AES256]);
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("armor enctypes");
+    assert_find_fast(err, err::GENERIC, "FAST armor enctype not permitted");
+}

@@ -457,3 +457,75 @@ fn tgs_header_kvno_zero_issues() {
     .unwrap();
     krb5_kdc::issue_tgs(&store, &tgs).expect("kvno 0 retries");
 }
+
+/// MIT `krb5_decrypt_tkt_part` and `negotiate_etype`, both on the KDC's own context (settled
+/// live beside MIT 1.22.2's krb5kdc): a TGS-REQ whose header ticket's enctype, or whose session
+/// key's, the KDC no longer permits is 60 `PROCESS_TGS`.
+#[test]
+fn tgs_header_enctypes_the_kdc_does_not_permit_are_process_tgs() {
+    use krb5_crypto::{EncryptionType, string_to_key};
+    use krb5_protocol::as_req_sname;
+
+    const AES128: EncryptionType = EncryptionType::Aes128CtsHmacSha196;
+    const AES256: EncryptionType = EncryptionType::Aes256CtsHmacSha196;
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+
+    // The ticket's own enctype: an aes256 TGT, then the KDC permits aes128 only.
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 950);
+    assert_eq!(issued.rep.0.ticket.enc_part.etype, AES256.to_iana());
+    let tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        951,
+    )
+    .unwrap();
+    store.policy.permitted_enctypes = Some(vec![AES128]);
+    assert_process_tgs(
+        krb5_kdc::issue_tgs(&store, &tgs).expect_err("the ticket's enctype"),
+        err::GENERIC,
+    );
+    assert_krb_error(&tgs_wire_reply(&store, &tgs), err::GENERIC, "PROCESS_TGS");
+
+    // The session key's: an aes256 TGT with an aes128 session key, then the KDC permits aes256
+    // only.
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let key128 = string_to_key(
+        AES128,
+        TEST_USER_PASSWORD,
+        cname.default_salt(TEST_REALM),
+        Some(&krb5_kdc::S2K_ITERS.to_be_bytes()),
+    )
+    .unwrap();
+    let req = as_req_sname(
+        cname.clone(),
+        TEST_REALM,
+        952,
+        Some(vec![pa_enc_timestamp(&key128).unwrap()]),
+        PrincipalName::krbtgt(TEST_REALM),
+        vec![AES128.to_iana()],
+    )
+    .unwrap();
+    let issued = krb5_kdc::issue_as(&store, &req).expect("AS");
+    assert_eq!(issued.session_key.etype(), AES128);
+    assert_eq!(issued.rep.0.ticket.enc_part.etype, AES256.to_iana());
+    let tgs = tgs_req(
+        issued.rep.0.ticket.clone(),
+        &issued.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        953,
+    )
+    .unwrap();
+    store.policy.permitted_enctypes = Some(vec![AES256]);
+    assert_process_tgs(
+        krb5_kdc::issue_tgs(&store, &tgs).expect_err("the session key's enctype"),
+        err::GENERIC,
+    );
+}

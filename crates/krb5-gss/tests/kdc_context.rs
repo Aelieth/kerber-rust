@@ -12,7 +12,7 @@ use krb5_protocol::{ReplayCache, as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::{PrincipalName, ascii};
 
 /// A fresh initial token from the documented user to the documented host (an aes256-cts
-/// session key), and the host's key.
+/// ticket and session key), and the host's key.
 fn host_token() -> (Vec<u8>, ProtocolKey) {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -92,5 +92,6 @@ fn a_kdc_context_reads_permitted_enctypes_from_the_kdc_profile_first() {
     let Err(Error::Inner(msg)) = accept(&token, &skey) else {
         panic!("a KDC context reads the KDC profile's aes128-only list first");
     };
-    assert_eq!(msg, "Encryption type aes256-cts-hmac-sha1-96 not permitted");
+    // MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-50`): the aes256 ticket is refused first.
+    assert_eq!(msg, "Encryption type not permitted");
 }

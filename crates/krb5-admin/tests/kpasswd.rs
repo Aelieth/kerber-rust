@@ -1995,8 +1995,7 @@ fn kpasswd_session_enctype_outside_permitted_is_autherror() {
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
     krb5_config::set_test_krb5_paths(None);
     let _ = std::fs::remove_dir_all(&dir);
-    // MIT `negotiate_etype` fails `krb5_rd_req`, so `process_chpw_request` answers with the
-    // framed KRB-ERROR whose e-data is AUTHERROR "Failed reading application request".
+    // MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:60-61`): the KDB keytab offers no key of a non-permitted enctype, so `krb5_rd_req` fails and `process_chpw_request` answers with the framed KRB-ERROR whose e-data is AUTHERROR "Failed reading application request".
     assert_eq!(u16::from_be_bytes([rep[4], rep[5]]), 0, "no AP-REP");
     let err: krb5_types::KrbError = krb5_asn1::decode(&rep[6..]).unwrap();
     let e_data = err.e_data.unwrap();

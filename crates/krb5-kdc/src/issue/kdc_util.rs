@@ -78,6 +78,13 @@ pub(super) fn process_tgs_header(
     }
     // MIT `rd_req_decoded_opt` (`rd_req_dec.c:627-627`): times after BADMATCH/BADADDR.
     check_header_times_rd_req(store, &enc_tkt)?;
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:652-723`): then the authenticator's RFC 4537 list, its subkey's and the session key's enctypes are negotiated against the KDC's `permitted_enctypes`; one it leaves out is `KRB5_NOPERM_ETYPE`, 60 `PROCESS_TGS`.
+    krb5_protocol::negotiate_ap_req_etypes(
+        &authenticator,
+        enc_tkt.key.keytype,
+        &store.policy().permitted_list(),
+    )
+    .map_err(|_| proto(err::GENERIC, status::PROCESS_TGS))?;
     // MIT `kdc_process_tgs_req` (`kdc_util.c:217-229`): FX-ARMOR after rd_req, before the
     // authenticator checksum.
     match fx_armor_present(
@@ -261,12 +268,16 @@ pub(super) fn decrypt_presented_tgt(
         let last = match find_server_key(store.policy(), &p, search_enctype, kvno) {
             Ok((key, found)) => {
                 kvno = found;
-                if let Ok(plain) = decrypt(&key, usage, cipher)
+                // MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): a ticket in an enctype the KDC does not permit is `KRB5_NOPERM_ETYPE`, 60 here, before the key is tried on it.
+                if !store.policy().etype_permitted(tkt_etype) {
+                    proto(err::GENERIC, status::PROCESS_TGS)
+                } else if let Ok(plain) = decrypt(&key, usage, cipher)
                     && let Ok(part) = decode::<EncTicketPart>(&plain)
                 {
                     return Ok((part, key, plain, p.clone()));
+                } else {
+                    proto(err::BAD_INTEGRITY, status::PROCESS_TGS)
                 }
-                proto(err::BAD_INTEGRITY, status::PROCESS_TGS)
             }
             Err(e) => e,
         };

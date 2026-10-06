@@ -794,6 +794,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **kdc/gss/admin.** As MIT's `krb5_rd_req`, the KDC refuses a TGS-REQ or FAST armor whose
+  ticket, session key or subkey enctype it does not permit (60), and every acceptor checks
+  the ticket's enctype first. Live; units.
 - **gss/admin.** Every krb5-gss acceptor, kpasswd and kpropd refuse an AP-REQ whose session
   key or subkey enctype `permitted_enctypes` leaves out, as MIT's `krb5_rd_req`; kadmind and
   kpropd read kdc.conf's `[libdefaults]` first. Live; units.

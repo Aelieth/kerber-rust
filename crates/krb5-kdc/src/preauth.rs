@@ -252,10 +252,6 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     if i64::from(enc_tkt.endtime.unix_seconds()) < now {
         return Err(proto_fast(err::TKT_EXPIRED, "FAST armor expired"));
     }
-    // MIT `armor_ap_request` (`fast_util.c:51-68`): 26 only after rd_req decrypts.
-    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
-    }
     let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
@@ -265,6 +261,17 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     let then = i64::from(authenticator.ctime.unix_seconds());
     if (now - then).abs() > store.policy().skew {
         return Err(proto_fast(err::SKEW, "FAST armor authenticator"));
+    }
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:652-723`): the `krb5_rd_req` of `armor_ap_request` negotiates the armor authenticator's subkey and the armor TGT's session key against the KDC's `permitted_enctypes`, and one it leaves out is `KRB5_NOPERM_ETYPE`, 60 `FIND_FAST`.
+    krb5_protocol::negotiate_ap_req_etypes(
+        &authenticator,
+        enc_tkt.key.keytype,
+        &store.policy().permitted_list(),
+    )
+    .map_err(|_| proto_fast(err::GENERIC, "FAST armor enctype not permitted"))?;
+    // MIT `armor_ap_request` (`fast_util.c:51-68`): 26 only once `krb5_rd_req` has accepted it.
+    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
+        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
     }
     let Some(sub) = authenticator.subkey else {
         return Err(proto_fast(err::POLICY, "ap-request armor without subkey"));

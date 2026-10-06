@@ -152,25 +152,61 @@ fn krb_error(code: i32, text: &str) -> Error {
     }
 }
 
+/// Whether a ticket encrypted in `ticket_etype` may be read where `permitted` holds.
+/// MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): an enctype the library does not implement is `KRB5_PROG_ETYPE_NOSUPP`, one it does but `permitted_enctypes` leaves out is `KRB5_NOPERM_ETYPE`, before any decryption.
+///
+/// # Errors
+///
+/// [`Error::ProgEtypeNosupp`] for an enctype not implemented; [`Error::NopermEtype`] for one not
+/// permitted.
+pub fn check_ticket_etype(ticket_etype: i32, permitted: &[EncryptionType]) -> Result<(), Error> {
+    let etype = EncryptionType::known(ticket_etype).map_err(|_| Error::ProgEtypeNosupp)?;
+    if permitted.contains(&etype) {
+        Ok(())
+    } else {
+        Err(Error::NopermEtype(NOPERM_ETYPE.into()))
+    }
+}
+
+/// The enctype an AP-REQ's authenticator negotiates against `permitted`, as `krb5_rd_req` does
+/// on every acceptor, the KDC's own included.
+/// MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:652-723`): the RFC 4537 list, then the subkey's and the session key's enctypes, go to `negotiate_etype`; every enctype after the RFC 4537 list must be permitted.
+///
+/// # Errors
+///
+/// [`Error::NopermEtype`] when `permitted` lacks the session key's or the subkey's enctype;
+/// [`Error::Asn1`] when the authenticator's AD-ETYPE-NEGOTIATION list does not decode.
+pub fn negotiate_ap_req_etypes(
+    authenticator: &Authenticator,
+    session_etype: i32,
+    permitted: &[EncryptionType],
+) -> Result<EncryptionType, Error> {
+    let mut desired = decode_etype_list(authenticator)?.unwrap_or_default();
+    let rfc4537_len = desired.len();
+    if let Some(sk) = &authenticator.subkey {
+        desired.push(sk.keytype);
+    }
+    desired.push(session_etype);
+    negotiate_etype(&desired, rfc4537_len, permitted)
+}
+
 impl AcceptorAuthContext {
     /// The auth context an accepted AP-REQ leaves, checked against the `permitted` enctypes.
     /// MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:652-773`): the RFC 4537 list, then the subkey's and the session key's enctypes, are negotiated, the peer's sequence number and subkey are kept, and without mutual authentication the local sequence number starts from the peer's.
+    /// MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): the ticket's own enctype must be permitted too.
     ///
     /// # Errors
     ///
-    /// [`Error::NopermEtype`] when `permitted` lacks the session key's or the subkey's enctype;
+    /// [`Error::NopermEtype`] when `permitted` lacks the ticket's, the session key's or the
+    /// subkey's enctype; [`Error::ProgEtypeNosupp`] for a ticket enctype not implemented;
     /// [`Error::Asn1`] when the authenticator's AD-ETYPE-NEGOTIATION list does not decode;
     /// [`Error::Crypto`] when the session key or the subkey is not a usable key.
     pub fn from_ap_req(ok: &ApVerifyOk, permitted: &[EncryptionType]) -> Result<Self, Error> {
+        check_ticket_etype(ok.ticket_etype, permitted)?;
         let key = protocol_key(&ok.ticket_part.key)?;
         let authenticator = ok.authenticator.clone();
-        let mut desired = decode_etype_list(&authenticator)?.unwrap_or_default();
-        let rfc4537_len = desired.len();
-        if let Some(sk) = &authenticator.subkey {
-            desired.push(sk.keytype);
-        }
-        desired.push(ok.ticket_part.key.keytype);
-        let negotiated_etype = negotiate_etype(&desired, rfc4537_len, permitted)?;
+        let negotiated_etype =
+            negotiate_ap_req_etypes(&authenticator, ok.ticket_part.key.keytype, permitted)?;
         let remote_seq = authenticator.seq_number.unwrap_or(0);
         let recv_subkey = authenticator
             .subkey
