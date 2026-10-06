@@ -12,14 +12,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_crypto::ProtocolKey;
 use krb5_kdc::SharedDump as SharedStore;
 use krb5_protocol::{
-    ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_rep, build_krb_priv_with_seq,
-    unwrap_krb_priv_ex, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, DEFAULT_SKEW, ReplayCache,
+    local_host_address, permitted_enctypes_kdc, unwrap_krb_priv_ex, verify_ap_req_ex,
 };
 use krb5_types::{
-    ChangePasswdData, EncryptionKey, KerberosTime, KrbError, Microseconds, PrincipalName, err,
+    ChangePasswdData, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, err,
     principal_compare,
 };
 
@@ -250,13 +250,6 @@ pub fn encode_kadmind_req(op: Op, ap_req: &[u8], payload: &[u8]) -> Vec<u8> {
     v
 }
 
-fn protocol_key_from_enc(kt: &EncryptionKey) -> Result<ProtocolKey, Error> {
-    let etype = EncryptionType::from_iana(kt.keytype)
-        .or_else(|_| EncryptionType::known(kt.keytype))
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    ProtocolKey::from_bytes(etype, kt.keyvalue.as_ref()).map_err(|e| Error::Inner(e.to_string()))
-}
-
 /// Frame a kpasswd reply: `len, version=1, AP-REP-len, AP-REP, KRB-PRIV`.
 ///
 /// MIT `krb5int_rd_chpw_rep` treats AP-REP length 0 as a framed KRB-ERROR
@@ -277,10 +270,14 @@ fn frame_kpasswd_rep(ap_rep: &[u8], priv_der: &[u8]) -> Vec<u8> {
 }
 
 fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8>, Error> {
-    // MIT `process_chpw_request` (`schpw.c:273-345`): alloc_data overwrites `ret` with 0,
-    // so `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
     let mut e_data = Vec::from(result.to_be_bytes());
     e_data.extend_from_slice(text.as_bytes());
+    kpasswd_krb_error(realm, e_data)
+}
+
+fn kpasswd_krb_error(realm: &str, e_data: Vec<u8>) -> Result<Vec<u8>, Error> {
+    // MIT `process_chpw_request` (`schpw.c:273-345`): alloc_data overwrites `ret` with 0,
+    // so `error -= ERROR_TABLE_BASE_krb5` wraps past KRB_ERR_MAX → 60.
     let realm_s = krb5_types::try_ascii(realm).map_err(|e| Error::Inner(e.to_string()))?;
     let sname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "changepw"]);
     let pdu = KrbError {
@@ -302,21 +299,25 @@ fn kpasswd_chpwfail_error(realm: &str, result: u16, text: &str) -> Result<Vec<u8
     Ok(frame_kpasswd_rep(&[], &der))
 }
 
-fn kpasswd_success_rep(
-    session: &ProtocolKey,
-    priv_key: &ProtocolKey,
-    authenticator: &krb5_types::Authenticator,
-    result: &[u8],
-) -> Result<Vec<u8>, Error> {
-    // Match AP-REP seq to KRB-PRIV seq (MIT rd_rep then rd_priv).
-    let seq = authenticator.seq_number.or(Some(1));
-    let ap_rep =
-        build_ap_rep(session, authenticator, None, seq).map_err(|e| Error::Inner(e.to_string()))?;
-    let ap_der = encode(&ap_rep).map_err(|e| Error::Inner(e.to_string()))?;
-    let priv_rep =
-        build_krb_priv_with_seq(priv_key, result, seq).map_err(|e| Error::Inner(e.to_string()))?;
-    let priv_der = encode(&priv_rep).map_err(|e| Error::Inner(e.to_string()))?;
-    Ok(frame_kpasswd_rep(&ap_der, &priv_der))
+/// The AP-REP and the auth context a kpasswd reply's KRB-PRIV is made in.
+struct KpasswdReply {
+    ac: AcceptorAuthContext,
+    ap_rep: Vec<u8>,
+    local: HostAddress,
+}
+
+impl KpasswdReply {
+    /// MIT `process_chpw_request` (`schpw.c:286-311`): the result is a KRB-PRIV from the address the request came in on and to no address, behind the AP-REP; one that cannot be made leaves the result in a KRB-ERROR.
+    fn result(&mut self, realm: &str, result: &[u8]) -> Result<Vec<u8>, Error> {
+        let made = self
+            .ac
+            .mk_priv(result, &self.local, None)
+            .and_then(|p| Ok(encode(&p)?));
+        match made {
+            Ok(priv_der) => Ok(frame_kpasswd_rep(&self.ap_rep, &priv_der)),
+            Err(_) => kpasswd_krb_error(realm, result.to_vec()),
+        }
+    }
 }
 
 /// RFC 3244 / MIT changepw request: `len, version, ap-req-len, AP-REQ, KRB-PRIV`.
@@ -338,7 +339,16 @@ pub fn handle_kpasswd_rfc3244(
     replay: &ReplayCache,
     raw: &[u8],
 ) -> Result<Vec<u8>, Error> {
-    handle_kpasswd_from(store, acl, service_key, replay, raw, "127.0.0.1")
+    let loopback = std::net::IpAddr::from([127, 0, 0, 1]);
+    handle_kpasswd_from(
+        store,
+        acl,
+        service_key,
+        replay,
+        raw,
+        "127.0.0.1",
+        Some(loopback),
+    )
 }
 
 const RFC3244_VERSION: u16 = 0xff80;
@@ -348,7 +358,7 @@ const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
 
 /// MIT `krb5_rd_req` walks the changepw keytab. Ticket etype is
 /// `first_current_key` (profile order); `best_key` follows
-/// [`EncryptionType::preferred`] (sha1-first) and is not enough alone.
+/// [`krb5_crypto::EncryptionType::preferred`] (sha1-first) and is not enough alone.
 fn changepw_verify_keys(
     store: &krb5_kdc::PrincipalStore,
     extra: &ProtocolKey,
@@ -396,6 +406,7 @@ fn handle_kpasswd_from(
     replay: &ReplayCache,
     raw: &[u8],
     from: &str,
+    local: Option<std::net::IpAddr>,
 ) -> Result<Vec<u8>, Error> {
     // MIT `process_chpw_request` (`schpw.c:47-82`): length then version before AP-REQ;
     // ChangePasswdData only for 0xff80.
@@ -447,18 +458,29 @@ fn handle_kpasswd_from(
         addresses: None,
         now: None,
     };
+    // MIT `process_chpw_request` (`schpw.c:102-161`): the auth context does sequence numbers only, `krb5_rd_req` also refuses an enctype the server (on kadmind's KDC profile) does not permit, and the AP-REP is made before the request is decrypted.
     let Ok(ok) = verify_ap_req_ex(ap_req, &params, replay, None) else {
         return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
     };
-    let session = protocol_key_from_enc(&ok.ticket_part.key)?;
-    let priv_key = match &ok.authenticator.subkey {
-        Some(sk) => protocol_key_from_enc(sk)?,
-        None => session.clone(),
+    let Ok(mut ac) =
+        permitted_enctypes_kdc().and_then(|p| AcceptorAuthContext::from_ap_req(&ok, &p))
+    else {
+        return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
+    };
+    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+    let Ok(ap_rep) = ac.mk_rep().and_then(|r| Ok(encode(&r)?)) else {
+        return kpasswd_chpwfail_error(&store_realm, 3, "Failed replying to application request");
+    };
+    let priv_key = ac.recv_subkey().unwrap_or_else(|| ac.key()).clone();
+    let mut reply = KpasswdReply {
+        ac,
+        ap_rep,
+        local: local_host_address(local),
     };
     let Ok(user_data) = unwrap_krb_priv_ex(&priv_key, priv_raw, replay, false, false) else {
         let mut body = Vec::from(2u16.to_be_bytes());
         body.extend_from_slice(b"Failed decrypting request");
-        return kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &body);
+        return reply.result(&store_realm, &body);
     };
     let ticket_crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
     let (targ, targ_realm, newpass) = if ver == RFC3244_VERSION {
@@ -473,7 +495,7 @@ fn handle_kpasswd_from(
             let mut body = Vec::with_capacity(2 + DECODE_FAIL.len());
             body.extend_from_slice(&1u16.to_be_bytes());
             body.extend_from_slice(DECODE_FAIL.as_bytes());
-            return kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &body);
+            return reply.result(&store_realm, &body);
         }
     } else {
         (
@@ -584,7 +606,7 @@ fn handle_kpasswd_from(
     let mut body = Vec::with_capacity(2 + text.len());
     body.extend_from_slice(&code.to_be_bytes());
     body.extend_from_slice(text.as_bytes());
-    kpasswd_success_rep(&session, &priv_key, &ok.authenticator, &body)
+    reply.result(&store_realm, &body)
 }
 
 /// Parse a kpasswd reply (`len,ver,AP-REP-len,AP-REP,KRB-PRIV`).
@@ -646,6 +668,10 @@ pub fn serve_kpasswd_udp(
             Ok(d) if d.len == 0 => {}
             Ok(d) => {
                 let replay = ReplayCache::new();
+                // MIT `process_packet` (`lib/apputils/net-server.c:1174-1187`): the request's local address is its pktinfo destination, else the socket's own.
+                let local =
+                    d.to.map(|p| p.addr)
+                        .or_else(|| sock.local_addr().ok().map(|a| a.ip()));
                 match handle_kpasswd_from(
                     &store,
                     &acl,
@@ -653,6 +679,7 @@ pub fn serve_kpasswd_udp(
                     &replay,
                     &buf[..d.len],
                     &client_addr(d.from.ip()),
+                    local,
                 ) {
                     Ok(rep) => {
                         let _ = krb5_kdc::send_udp_reply(&sock, &rep, &d);
@@ -718,6 +745,7 @@ pub fn serve_kpasswd_tcp(
                             &replay,
                             &body,
                             &client_addr(peer.ip()),
+                            stream.local_addr().ok().map(|a| a.ip()),
                         ) {
                             Ok(rep) => {
                                 let _ = write_len_pref(&mut stream, &rep);

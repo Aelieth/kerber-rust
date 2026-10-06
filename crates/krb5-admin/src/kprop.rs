@@ -17,13 +17,14 @@ use krb5_kdc::{
     load_dump, load_dump_with_stash, save_store_fresh,
 };
 use krb5_protocol::{
-    ApVerifyParams, ReplayCache, build_ap_rep, build_ap_req_mutual_seq, build_krb_priv_chained,
-    build_krb_safe_ex, unwrap_krb_priv_chained, verify_ap_rep, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, ReplayCache,
+    build_ap_req_mutual_seq, build_krb_priv_chained, build_krb_safe_ex, permitted_enctypes_kdc,
+    unwrap_krb_priv_chained, us_timeofday, verify_ap_rep, verify_ap_req_ex,
     verify_krb_safe_checksum,
 };
 use krb5_types::{
-    EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, Microseconds,
-    PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, ku,
+    EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, PrincipalName, Ticket,
+    TicketFlags, TransitedEncoding, err, ku,
 };
 
 use crate::Error;
@@ -298,7 +299,13 @@ pub fn kpropd_recvauth(
         addresses: None,
         now: None,
     };
-    let ok = match verify_ap_req_ex(&ap_raw, &params, &replay, None) {
+    // MIT `recvauth_common` (`recvauth.c:139-205`): an AP-REQ `krb5_rd_req` refuses, an enctype the server does not permit among them, is answered with a KRB-ERROR, and a mutual one with `krb5_mk_rep`.
+    // MIT `parse_args` (`kprop/kpropd.c:1056-1058`): kpropd's context reads the KDC profile, so kdc.conf's `permitted_enctypes` comes first.
+    let checked = verify_ap_req_ex(&ap_raw, &params, &replay, None).and_then(|ok| {
+        let ac = AcceptorAuthContext::from_ap_req(&ok, &permitted_enctypes_kdc()?)?;
+        Ok((ok, ac))
+    });
+    let (ok, mut ac) = match checked {
         Ok(v) => v,
         Err(e) => {
             let der = kprop_rd_req_error(&ap_raw, &e, expected_realm, expected_server);
@@ -306,23 +313,20 @@ pub fn kpropd_recvauth(
             return Err(Error::Inner(e.to_string()));
         }
     };
+    // MIT `kerberos_authenticate` (`kpropd.c:1221-1229`): the auth context does sequence numbers only.
+    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     write_message(stream, &[]).map_err(|e| Error::Inner(e.to_string()))?;
     let session = session_from_ticket(&ok)?;
-    let mut local_seq = 1u32;
+    // MIT kprop's authenticator carries no subkey, so the AP-REP echoes none: it carries the
+    // fresh 30-bit seq-number only. Without mutual authentication there is no AP-REP and the
+    // seq-number is the peer's (`rd_req`), as MIT's.
     if ok.mutual_required {
-        let mut buf = [0u8; 4];
-        let _ = getrandom::getrandom(&mut buf);
-        local_seq = u32::from_be_bytes(buf);
-        if local_seq == 0 {
-            local_seq = 1;
-        }
-        let ap_rep = build_ap_rep(&session, &ok.authenticator, None, Some(local_seq))
-            .map_err(|e| Error::Inner(e.to_string()))?;
+        let ap_rep = ac.mk_rep().map_err(|e| Error::Inner(e.to_string()))?;
         let der = encode(&ap_rep).map_err(|e| Error::Inner(e.to_string()))?;
         write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
-        // MIT `rd_rep` stores this seq as remote_seq; the size-ack SAFE
-        // must use the same value (then increment).
     }
+    // The AP-REP's seq is the one kprop's `rd_rep` stores; the size-ack SAFE carries it.
+    let local_seq = ac.local_seq();
     // MIT `doit` (`kpropd.c:526-546`): `authorized_principal` runs after
     // `kerberos_authenticate` (recvauth complete, AP-REP sent) and a rejected
     // peer gets `exit(1)` — no KRB-ERROR, the socket just closes, so MIT
@@ -408,6 +412,10 @@ fn recvauth_error_fields(raw: &[u8], e: &krb5_protocol::Error) -> (i32, String) 
         return (err::MSG_TYPE, "Invalid message type".into());
     }
     match e {
+        // MIT `recvauth_common` (`recvauth.c:165-168`): the e-text is the error table's text, not the message `negotiate_etype` set.
+        krb5_protocol::Error::NopermEtype(_) => {
+            (err::GENERIC, "Encryption type not permitted".into())
+        }
         krb5_protocol::Error::KrbError { code, .. } if *code > 127 => {
             (err::GENERIC, recvauth_protocol_text(*code))
         }
@@ -525,7 +533,21 @@ fn e_text_with_nul(text: &str) -> Option<krb5_types::KerberosString> {
     krb5_types::kerberos_string_from_bytes(&bytes).ok()
 }
 
+/// The principal kpropd answers as: `host/` and this host's name, lowercased. MIT's kpropd takes
+/// the name through DNS first, so the two agree when the hostname is the canonical FQDN that DNS
+/// gives back for it.
+/// MIT `sn2princ_realm` (`kprop/kprop_util.c:33-55`): `krb5_sname_to_principal` for the local host and the `host` service, put in kpropd's realm.
+/// MIT `krb5_sname_to_principal` (`lib/krb5/os/sn2princ.c:372-375`): with `dns_canonicalize_hostname` true the hostname is canonicalized through DNS (forward, then reverse unless `rdns` is false) and lowercased.
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:244-245`): `dns_canonicalize_hostname` is true unless the profile sets it.
+fn kpropd_server_name() -> PrincipalName {
+    let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|h| h.trim().to_ascii_lowercase())
+        .unwrap_or_default();
+    PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host.as_str()])
+}
+
 /// MIT `recvauth_common` (`recvauth.c:150-188`): AP-REQ failure is a length-prefixed KRB-ERROR.
+/// MIT `recvauth_common` (`recvauth.c:154-157`): it is stamped with `krb5_us_timeofday` and names the server kpropd gave recvauth, its own host principal when no other is set.
 fn kprop_rd_req_error(
     raw: &[u8],
     e: &krb5_protocol::Error,
@@ -541,16 +563,15 @@ fn kprop_rd_req_error(
             Err(_) => return Vec::new(),
         },
     };
-    let sname = server
-        .cloned()
-        .unwrap_or_else(|| PrincipalName::new(PrincipalName::NT_UNKNOWN, ["????"]));
+    let sname = server.cloned().unwrap_or_else(kpropd_server_name);
+    let (stime, susec) = us_timeofday();
     let pdu = KrbError {
         pvno: KrbError::PVNO,
         msg_type: KrbError::MSG_TYPE,
         ctime: None,
         cusec: None,
-        stime: KerberosTime::now(),
-        susec: Microseconds::ZERO,
+        stime,
+        susec,
         error_code: code,
         crealm: None,
         cname: None,
@@ -951,6 +972,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let host_for_server = host.clone();
         let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
             let (mut stream, _) = listener.accept().unwrap();
             kpropd_recvauth(
                 &mut stream,
@@ -1021,6 +1043,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let host_for_server = host.clone();
         let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
             let (mut stream, _) = listener.accept().unwrap();
             kpropd_recvauth(
                 &mut stream,
@@ -1078,6 +1101,7 @@ mod tests {
         let addr = listener.local_addr().unwrap();
         let host_for_server = host.clone();
         let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
             let (mut stream, _) = listener.accept().unwrap();
             kpropd_recvauth(
                 &mut stream,
@@ -1108,5 +1132,213 @@ mod tests {
             join.join().expect("thread").is_err(),
             "recvauth must fail after APPLICATION-14 ASN.1 fail"
         );
+    }
+
+    /// The documented host's keys and a TGS ticket to it for `admin`, as MIT kprop holds one.
+    fn kprop_ticket() -> (Vec<ProtocolKey>, PrincipalName, krb5_kdc::IssuedTgs) {
+        use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+        use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
+
+        let (store, _) = bootstrap_documented().unwrap();
+        let host = documented_host();
+        let host_ent = store.get_name(&host).unwrap();
+        let host_keys = host_ent.keys.iter().map(|k| k.key.clone()).collect();
+        let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+        let admin_key = store
+            .get_name(&admin)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let pa = vec![pa_enc_timestamp(&admin_key).unwrap()];
+        let as_out = krb5_kdc::issue_as(
+            &store,
+            &as_req(admin.clone(), TEST_REALM, 91, Some(pa)).unwrap(),
+        )
+        .unwrap();
+        let tgs = tgs_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            TEST_REALM,
+            &admin,
+            host.clone(),
+            TEST_REALM,
+            92,
+        )
+        .unwrap();
+        (host_keys, admin, krb5_kdc::issue_tgs(&store, &tgs).unwrap())
+    }
+
+    /// MIT kprop's `sendauth` up to its mutual AP-REQ (no subkey, seq-number 4242).
+    fn kprop_sends_ap_req(
+        addr: std::net::SocketAddr,
+        tgs: &krb5_kdc::IssuedTgs,
+        admin: &PrincipalName,
+    ) -> TcpStream {
+        use std::io::Read;
+
+        let mut client = TcpStream::connect(addr).unwrap();
+        write_message(&mut client, SENDAUTH_VERSION).unwrap();
+        write_message(&mut client, KPROP_PROT_VERSION).unwrap();
+        let mut ack = [0u8; 1];
+        client.read_exact(&mut ack).unwrap();
+        assert_eq!(ack[0], 0);
+        let realm = krb5_types::ascii(krb5_kdc::testrealm::TEST_REALM);
+        let ap = build_ap_req_mutual_seq(
+            tgs.rep.0.ticket.clone(),
+            &tgs.session_key,
+            &realm,
+            admin,
+            4242,
+        )
+        .unwrap();
+        write_message(&mut client, &encode(&ap).unwrap()).unwrap();
+        client
+    }
+
+    #[test]
+    fn kpropd_ap_rep_echoes_no_subkey_and_takes_a_fresh_thirty_bit_seq() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        use krb5_asn1::decode;
+        use krb5_crypto::{KeyUsage, decrypt};
+        use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+        use krb5_types::{ApRep, EncApRepPart, ku};
+
+        let (host_keys, admin, tgs) = kprop_ticket();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
+            #[cfg(feature = "test-hooks")]
+            krb5_protocol::set_test_seq_random(Some(0xc123_4567));
+            let allowed = [format!("admin@{TEST_REALM}")];
+            let (mut stream, _) = listener.accept().unwrap();
+            kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+                Some(allowed.as_slice()),
+                ReplayCache::new(),
+            )
+        });
+        let mut client = kprop_sends_ap_req(addr, &tgs, &admin);
+        assert!(read_message(&mut client).unwrap().is_empty(), "accepted");
+        let rep: ApRep = decode(&read_message(&mut client).unwrap()).unwrap();
+        let usage = KeyUsage::new(ku::AP_REP_ENC_PART).unwrap();
+        let plain = decrypt(&tgs.session_key, usage, rep.enc_part.cipher.as_ref()).unwrap();
+        let part: EncApRepPart = decode(&plain).unwrap();
+        assert_eq!(
+            part.subkey, None,
+            "kprop sends no subkey, so none is echoed"
+        );
+        let seq = part.seq_number.unwrap();
+        #[cfg(feature = "test-hooks")]
+        assert_eq!(
+            seq, 0x0123_4567,
+            "krb5_generate_seq_number: 30 bits of the random octets"
+        );
+        assert!(
+            seq != 0 && seq < 1 << 30 && seq != 4242,
+            "fresh 30-bit seq, got {seq}"
+        );
+        let auth = join.join().expect("thread").unwrap();
+        assert_eq!(
+            auth.local_seq, seq,
+            "the size SAFE carries the AP-REP's seq"
+        );
+    }
+
+    #[test]
+    fn kpropd_refuses_an_enctype_it_does_not_permit() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        use krb5_asn1::decode;
+        use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+
+        let (host_keys, admin, tgs) = kprop_ticket();
+        assert_eq!(
+            tgs.session_key.etype(),
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196
+        );
+        let dir = krb5_testkit::scratch_dir("p15a-kpropd-permitted");
+        let conf = dir.join("krb5.conf");
+        std::fs::write(
+            &conf,
+            "[libdefaults]\n    permitted_enctypes = aes128-cts-hmac-sha1-96\n",
+        )
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
+            krb5_config::set_test_krb5_paths(Some(vec![conf]));
+            let (mut stream, _) = listener.accept().unwrap();
+            kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+                None,
+                ReplayCache::new(),
+            )
+        });
+        let mut client = kprop_sends_ap_req(addr, &tgs, &admin);
+        let e: KrbError = decode(&read_message(&mut client).unwrap()).expect("KRB-ERROR");
+        assert_eq!(e.error_code, err::GENERIC);
+        assert_eq!(
+            e.e_text.as_ref().map(krb5_types::KerberosString::as_bytes),
+            Some(b"Encryption type not permitted\0".as_slice())
+        );
+        assert!(join.join().expect("thread").is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn kpropd_names_its_host_principal_in_a_refusal() {
+        use std::io::Read;
+        use std::net::{TcpListener, TcpStream};
+        use std::thread;
+
+        use krb5_asn1::decode;
+        use krb5_kdc::testrealm::TEST_REALM;
+
+        let (host_keys, _, _) = kprop_ticket();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
+            let (mut stream, _) = listener.accept().unwrap();
+            kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                None,
+                Some(TEST_REALM),
+                None,
+                ReplayCache::new(),
+            )
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        write_message(&mut client, SENDAUTH_VERSION).unwrap();
+        write_message(&mut client, KPROP_PROT_VERSION).unwrap();
+        let mut ack = [0u8; 1];
+        client.read_exact(&mut ack).unwrap();
+        write_message(&mut client, &[0xff, 0x00, 0x01]).unwrap();
+        let e: KrbError = decode(&read_message(&mut client).unwrap()).expect("KRB-ERROR");
+        let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+        assert_eq!(
+            e.sname,
+            PrincipalName::new(
+                PrincipalName::NT_SRV_HST,
+                ["host", host.trim().to_ascii_lowercase().as_str()]
+            ),
+            "sn2princ_realm's host/<this host>, not ????"
+        );
+        assert_eq!(e.realm.as_bytes(), TEST_REALM.as_bytes());
+        assert!(join.join().expect("thread").is_err());
     }
 }

@@ -82,6 +82,7 @@ fn kprop_tcp_replica_issues_as_with_shared_stash() {
         .unwrap();
     let addr = listener.local_addr().unwrap();
     let join = thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (mut stream, _) = listener.accept().unwrap();
         kprop_recv(&mut stream, MASTER).expect("kprop_recv")
     });
@@ -217,6 +218,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
     let host_for_server = host.clone();
     let allowed = vec![format!("admin@{TEST_REALM}")];
     let join = thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (mut stream, _) = listener.accept().unwrap();
         let dir = krb5_testkit::scratch_dir("kprop-mit");
         let _ = std::fs::create_dir_all(&dir);
@@ -324,6 +326,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
     let host_for_server = host.clone();
     let allowed = vec![format!("host/testhost.kerber.test@{TEST_REALM}")];
     let join = thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (mut stream, _) = listener.accept().unwrap();
         let dir = krb5_testkit::scratch_dir("kprop-deny");
         let _ = std::fs::create_dir_all(&dir);
@@ -416,6 +419,7 @@ fn kpropd_rejects_when_acl_unset() {
     let host_keys2 = host_keys.clone();
     let host_for_server = host.clone();
     let join = thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (mut stream, _) = listener.accept().unwrap();
         let dir = krb5_testkit::scratch_dir("kprop-unset");
         let _ = std::fs::create_dir_all(&dir);
@@ -546,6 +550,7 @@ fn kprop_exact_acl(
     let allowed = vec![format!("admin@{TEST_REALM}")];
     let (db, stash) = (db.to_path_buf(), stash.to_path_buf());
     let kpropd = std::thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (mut stream, _) = listener.accept().unwrap();
         kpropd_handle_conn(
             &mut stream,

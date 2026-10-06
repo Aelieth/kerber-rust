@@ -791,6 +791,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **gss/admin.** Every krb5-gss acceptor, kpasswd and kpropd refuse an AP-REQ whose session
+  key or subkey enctype `permitted_enctypes` leaves out, as MIT's `krb5_rd_req`; kadmind and
+  kpropd read kdc.conf's `[libdefaults]` first. Live; units.
 - **kdc.** A principal with no AD data gets MIT's PAC byte for byte (TGT {10,6,7}, service ticket
   {10,16,6,7,19}); AD data (kdc.conf `domain_sid`, a carried LOGON_INFO) keeps the AD shape.
   Settled live; golden units.
@@ -1411,6 +1414,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** kpasswd and kpropd answer as MIT's: the AP-REP echoes the client's subkey (kprop
+  sends none) with a random 30-bit seq, the kpasswd KRB-PRIV has it and the receiving
+  address, and a kpropd refusal names host/<this host>. Live; units.
 - **gss/admin.** Every krb5-gss acceptor answers a mutual AP-REQ as MIT's: a fresh subkey
   and a random seq-number in the AP-REP key every later token, and every initiator checks
   the echo; kadmind's RPCSEC verifier is one token on. Live; units.
