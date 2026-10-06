@@ -231,66 +231,40 @@ pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<Protoco
     ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &dk)
 }
 
-/// RFC 3961 §6.3.1 DES3random-to-key: three 56-bit groups, last output
-/// byte collects input LSBs in reverse order, then odd parity (+ weak-key
-/// correction as in §6.2).
+/// des3 random-to-key: 21 octets spread over the three 8-octet DES keys.
+///
+/// MIT `k5_rand2key_des3` (`lib/crypto/krb/random_to_key.c:83-101`): seven octets fill a key, its eighth octet takes their low bits, then odd parity is set; a weak or semi-weak key stays as it is.
 pub(crate) fn des3_random_to_key(raw21: &[u8]) -> [u8; 24] {
+    debug_assert_eq!(raw21.len(), 21);
     let mut out = [0u8; 24];
-    for i in 0..3 {
-        let p = &raw21[i * 7..i * 7 + 7];
-        let k = &mut out[i * 8..i * 8 + 8];
-        for (j, b) in p.iter().enumerate() {
-            k[j] = b & 0xfe;
-        }
-        k[7] = (p[6] & 1) << 7
-            | (p[5] & 1) << 6
-            | (p[4] & 1) << 5
-            | (p[3] & 1) << 4
-            | (p[2] & 1) << 3
-            | (p[1] & 1) << 2
-            | (p[0] & 1) << 1;
-        des_key_correction(k);
+    let (keys, _) = out.as_chunks_mut::<8>();
+    let (sevens, _) = raw21.as_chunks::<7>();
+    for (key, seven) in keys.iter_mut().zip(sevens) {
+        key[..7].copy_from_slice(seven);
+        eighth_byte(key);
+        fixup_key_parity(key);
     }
     out
 }
 
-fn des_key_correction(key: &mut [u8]) {
-    odd_parity(key);
-    if des_is_weak(key) {
-        key[7] ^= 0xf0;
-        odd_parity(key);
-    }
+/// A DES key's eighth octet from the low bits of the first seven.
+///
+/// MIT `eighth_byte` (`lib/crypto/krb/random_to_key.c:75-81`): bit 0 of octet i goes to bit i + 1.
+fn eighth_byte(b: &mut [u8; 8]) {
+    b[7] = ((b[0] & 1) << 1)
+        | ((b[1] & 1) << 2)
+        | ((b[2] & 1) << 3)
+        | ((b[3] & 1) << 4)
+        | ((b[4] & 1) << 5)
+        | ((b[5] & 1) << 6)
+        | ((b[6] & 1) << 7);
 }
 
-fn des_is_weak(key: &[u8]) -> bool {
-    // DES weak and semi-weak keys (NIST), compared after parity is set.
-    const WEAK: [[u8; 8]; 16] = [
-        [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
-        [0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe],
-        [0xe0, 0xe0, 0xe0, 0xe0, 0xf1, 0xf1, 0xf1, 0xf1],
-        [0x1f, 0x1f, 0x1f, 0x1f, 0x0e, 0x0e, 0x0e, 0x0e],
-        [0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe],
-        [0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01],
-        [0x1f, 0xe0, 0x1f, 0xe0, 0x0e, 0xf1, 0x0e, 0xf1],
-        [0xe0, 0x1f, 0xe0, 0x1f, 0xf1, 0x0e, 0xf1, 0x0e],
-        [0x01, 0xe0, 0x01, 0xe0, 0x01, 0xf1, 0x01, 0xf1],
-        [0xe0, 0x01, 0xe0, 0x01, 0xf1, 0x01, 0xf1, 0x01],
-        [0x1f, 0xfe, 0x1f, 0xfe, 0x0e, 0xfe, 0x0e, 0xfe],
-        [0xfe, 0x1f, 0xfe, 0x1f, 0xfe, 0x0e, 0xfe, 0x0e],
-        [0x01, 0x1f, 0x01, 0x1f, 0x01, 0x0e, 0x01, 0x0e],
-        [0x1f, 0x01, 0x1f, 0x01, 0x0e, 0x01, 0x0e, 0x01],
-        [0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1, 0xfe],
-        [0xfe, 0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1],
-    ];
-    WEAK.iter().any(|w| {
-        w.iter()
-            .zip(key.iter())
-            .all(|(a, b)| (*a & 0xfe) == (*b & 0xfe))
-    })
-}
-
-fn odd_parity(block: &mut [u8]) {
-    for b in block {
+/// Odd parity in each octet's low bit.
+///
+/// MIT `k5_des_fixup_key_parity` (`lib/crypto/openssl/des/des_keys.c:33-37`): OpenSSL's `DES_set_odd_parity`.
+fn fixup_key_parity(key: &mut [u8; 8]) {
+    for b in key {
         let mut x = *b & 0xfe;
         if x.count_ones().is_multiple_of(2) {
             x |= 1;
@@ -409,5 +383,29 @@ pub(crate) fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
             Ok(mac.finalize().into_bytes().to_vec())
         }
         _ => Err(Error::InvalidKeyLength),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn des3_random_to_key_keeps_weak_keys_like_mit() {
+        // MIT 1.22.2's krb5_c_random_to_key (k5_rand2key_des3) gives these, settled live: parity
+        // only. 21 zero octets make the weak key 0x0101010101010101 three times.
+        assert_eq!(des3_random_to_key(&[0u8; 21]), [0x01u8; 24]);
+        let key = ProtocolKey::from_random(EncryptionType::Des3CbcSha1, &[0u8; 21]).unwrap();
+        assert_eq!(key.as_bytes(), &[0x01u8; 24]);
+        // The semi-weak key 0x01FE01FE01FE01FE stays too.
+        let semi = [0x01, 0xff, 0x01, 0xff, 0x01, 0xff, 0x01];
+        let mut random = [0u8; 21];
+        random[..7].copy_from_slice(&semi);
+        random[14..].copy_from_slice(&semi);
+        let mut want = [0x01u8; 24];
+        for at in [0, 16] {
+            want[at..at + 8].copy_from_slice(&[0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe]);
+        }
+        assert_eq!(des3_random_to_key(&random), want);
     }
 }

@@ -87,7 +87,7 @@ leaves the realm cap at 7 d and new principals at 0, as in MIT
 - The Samba **L2** PAC-crypto oracle is a *vendored Python reference*, not
   Samba's C library (L1/L3 are live Samba).
 - The product is `forbid(unsafe_code)`; some dependencies (RustCrypto,
-  getrandom, nix) contain `unsafe`.
+  curve25519-dalek, getrandom, nix) contain `unsafe`.
 
 ## Non-goals
 

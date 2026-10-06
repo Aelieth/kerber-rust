@@ -48,6 +48,9 @@ bytes = "1.12"
 camellia = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 cmac = "0.7"
+# SPAKE edwards25519 (MIT `edwards25519.c`). 4.1 shares cpufeatures 0.2 with the RustCrypto
+# crates; 5.0 would add cpufeatures 0.3. No `alloc`: no multiscalar API is used.
+curve25519-dalek = { version = "4.1.3", default-features = false, features = ["precomputed-tables", "zeroize"] }
 des = "0.8"
 getrandom = "0.2"
 hmac = "0.12"
@@ -127,6 +130,8 @@ opt-level = 3
 [profile.dev.package.aes]
 opt-level = 3
 [profile.dev.package.p256]
+opt-level = 3
+[profile.dev.package.curve25519-dalek]
 opt-level = 3
 [profile.dev.package.crypto-bigint]
 opt-level = 3

@@ -16,23 +16,25 @@ use crate::wipe::Wiped;
 
 /// KRB-FX-CF2(k1, k2, pepper1, pepper2) = random-to-key(PRF+(k1,p1) XOR PRF+(k2,p2)).
 ///
+/// MIT `krb5_c_fx_cf2_simple` (`cf2.c:123-176`): each PRF+ is `k1`'s random-to-key input length, so des3 takes 21 octets.
+///
 /// # Errors
 ///
-/// None: both [`prf_plus`] calls ask for `k1`'s key length, which is never 0 (the only length it
-/// refuses), and [`ProtocolKey::from_bytes`] gets exactly that many octets.
+/// None: both [`prf_plus`] calls ask for `k1`'s random-to-key input length, which is never 0
+/// (the only length it refuses), and the key is made from exactly that many octets.
 pub fn krb_fx_cf2(
     k1: &ProtocolKey,
     k2: &ProtocolKey,
     pepper1: &[u8],
     pepper2: &[u8],
 ) -> Result<ProtocolKey, Error> {
-    let n = k1.etype().key_len();
+    let n = k1.etype().keybytes();
     let mut a = Wiped(prf_plus(k1, pepper1, n)?);
     let b = Wiped(prf_plus(k2, pepper2, n)?);
     for (x, y) in a.iter_mut().zip(b.iter()) {
         *x ^= *y;
     }
-    ProtocolKey::from_bytes(k1.etype(), &a)
+    ProtocolKey::from_random(k1.etype(), &a)
 }
 
 /// Truncate or hash `bytes` to an etype-sized protocol key.

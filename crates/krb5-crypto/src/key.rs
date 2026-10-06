@@ -56,6 +56,25 @@ impl ProtocolKey {
         key
     }
 
+    /// The etype's random-to-key: `random` is `etype.keybytes()` octets.
+    ///
+    /// MIT `k5_rand2key_direct` (`random_to_key.c:63-73`): every etype but des3 takes the octets as the key.
+    /// MIT `k5_rand2key_des3` (`random_to_key.c:83-101`): des3 spreads 21 octets over 24 with parity bits.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidKeyLength`] when `random` is not `etype.keybytes()` octets.
+    pub(crate) fn from_random(etype: EncryptionType, random: &[u8]) -> Result<Self, Error> {
+        if random.len() != etype.keybytes() {
+            return Err(Error::InvalidKeyLength);
+        }
+        if etype != EncryptionType::Des3CbcSha1 {
+            return Self::from_bytes(etype, random);
+        }
+        let raw = zeroize::Zeroizing::new(crate::weak::des3_random_to_key(random));
+        Self::from_bytes(etype, &*raw)
+    }
+
     /// Encryption type of this key.
     #[must_use]
     pub const fn etype(&self) -> EncryptionType {

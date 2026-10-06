@@ -519,6 +519,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **crypto.** SPAKE edwards25519 as MIT's, on curve25519-dalek 4.1.3 (vetted, deny-pinned); `krb_fx_cf2`
+  takes des3's 21 random-to-key octets like MIT. MIT's `t_vectors.c` from both sides.
 - **protocol.** `AcceptorAuthContext` ports MIT's acceptor auth context: `krb5_rd_req`'s
   RFC 4537 enctype check (the KDC profile first on a KDC), `krb5_mk_rep` (echoed or fresh
   subkey, random 30-bit seq-number) and `krb5_mk_priv`. Units.
@@ -1437,6 +1439,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **crypto.** des3 random-to-key only sets parity, as MIT's `k5_rand2key_des3` (it XORed a weak
+  key with 0xF0), and `krb_fx_cf2` takes des3's 21 octets as MIT's: des3 FAST armor keys
+  change. Units; settled.
 - **kdc/admin.** kadmind reads kadm5.acl as MIT's `get_line`: bytes (a Latin-1 comment loads),
   NUL and `\` as `fgets` meets them, a directory as no line; only the abort line goes to
   stderr, the rest to the log. Settled; units.

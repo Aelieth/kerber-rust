@@ -115,7 +115,7 @@ pub use ops::{
 };
 pub use prf::{derive_prfplus, derive_prfplus_enctype, prf, prf_plus};
 pub use spake::{
-    SPAKE_GROUP_P256, spake_decode_point, spake_derive_key, spake_finish, spake_kdc_keygen,
-    spake_m_bytes, spake_n_bytes, spake_public, spake_public_wbytes, spake_result_wbytes,
+    SPAKE_DEFAULT_GROUPS_CLIENT, SPAKE_DEFAULT_GROUPS_KDC, SpakeGroup, spake_decode_point,
+    spake_derive_key, spake_keygen, spake_parse_groups, spake_public, spake_result,
     spake_thash_update, spake_wbytes,
 };

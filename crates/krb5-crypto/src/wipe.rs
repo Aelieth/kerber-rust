@@ -52,7 +52,7 @@ pub(crate) mod tests {
     use std::cell::RefCell;
 
     use crate::{
-        EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, SPAKE_GROUP_P256, derive_keys,
+        EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, SpakeGroup, derive_keys,
         derive_prfplus, dh_generate, key_from_shared, krb_fx_cf2, octetstring2key, p256_generate,
         pkinit_kdf_agile, prf, spake_derive_key, string_to_key,
     };
@@ -124,7 +124,7 @@ pub(crate) mod tests {
         take_wiped();
         let key = spake_derive_key(
             &ikey,
-            SPAKE_GROUP_P256,
+            SpakeGroup::P256,
             &[1; 32],
             &[2; 33],
             &[3; 32],

@@ -6,10 +6,10 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
+    EncryptionType, KeyUsage, ProtocolKey, SpakeGroup, checksum, cksumtype_is_keyed, decrypt,
     derive_prfplus, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
-    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
-    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
+    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key, spake_keygen,
+    spake_result, spake_thash_update, spake_wbytes, verify_checksum_type,
 };
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
@@ -526,12 +526,12 @@ pub(crate) fn process_spake(
         sec.copy_from_slice(&secret[..32]);
         let mut thash = [0u8; 32];
         thash.copy_from_slice(&secret[32..]);
-        let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
-        let result = spake_result_wbytes(&wbytes, &sec, resp.pubkey.as_ref(), true)?;
-        let thash = spake_thash_update(&thash, resp.pubkey.as_ref(), &[]);
+        let wbytes = spake_wbytes(ikey, SpakeGroup::P256)?;
+        let result = spake_result(SpakeGroup::P256, &wbytes, &sec, resp.pubkey.as_ref(), true)?;
+        let thash = spake_thash_update(SpakeGroup::P256, &thash, resp.pubkey.as_ref(), &[]);
         let k1 = spake_derive_key(
             ikey,
-            SPAKE_GROUP_P256,
+            SpakeGroup::P256,
             &wbytes,
             &result,
             &thash,
@@ -548,7 +548,7 @@ pub(crate) fn process_spake(
         }
         let k0 = spake_derive_key(
             ikey,
-            SPAKE_GROUP_P256,
+            SpakeGroup::P256,
             &wbytes,
             &result,
             &thash,
@@ -580,8 +580,8 @@ fn send_spake_challenge(
     ikey: &ProtocolKey,
     support_der: &[u8],
 ) -> Result<Option<SpakeStep>, Error> {
-    let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
-    let (secret, pub_y) = spake_kdc_keygen(&wbytes)?;
+    let wbytes = spake_wbytes(ikey, SpakeGroup::P256)?;
+    let (secret, pub_y) = spake_keygen(SpakeGroup::P256, &wbytes, true)?;
     let challenge = krb5_types::spake::PaSpake::Challenge(krb5_types::spake::SpakeChallenge {
         group: krb5_types::spake::GROUP_P256,
         pubkey: pub_y.into(),
@@ -591,8 +591,7 @@ fn send_spake_challenge(
         }],
     });
     let chal_der = encode(&challenge)?;
-    let z = [0u8; 32];
-    let thash = spake_thash_update(&z, support_der, &chal_der);
+    let thash = spake_thash_update(SpakeGroup::P256, &[], support_der, &chal_der);
     let mut cookie_pt = Vec::with_capacity(64);
     cookie_pt.extend_from_slice(&secret);
     cookie_pt.extend_from_slice(&thash);

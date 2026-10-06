@@ -11,10 +11,9 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
-    encrypt, krb_fx_cf2, octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile,
-    spake_derive_key, spake_public_wbytes, spake_result_wbytes, spake_thash_update, spake_wbytes,
-    verify_checksum_type,
+    EncryptionType, KeyUsage, ProtocolKey, SpakeGroup, checksum, cksumtype_is_keyed, decrypt,
+    encrypt, krb_fx_cf2, octetstring2key, p256_shared, pkinit_kdf_agile, spake_derive_key,
+    spake_keygen, spake_result, spake_thash_update, spake_wbytes, verify_checksum_type,
 };
 use krb5_types::{
     ApOptions, ApReq, AsReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey,
@@ -378,31 +377,14 @@ pub fn pa_spake_response(
     challenge_pubkey: &[u8],
     body_der: &[u8],
 ) -> Result<(PaData, ProtocolKey), Error> {
-    let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
-    let kp = p256_generate()?;
-    let pub_x = spake_public_wbytes(&wbytes, &kp.secret, false)?;
-    let result = spake_result_wbytes(&wbytes, &kp.secret, challenge_pubkey, false)?;
-    let z = [0u8; 32];
-    let thash = spake_thash_update(&z, support_der, challenge_der);
-    let thash = spake_thash_update(&thash, &pub_x, &[]);
-    let k0 = spake_derive_key(
-        ikey,
-        SPAKE_GROUP_P256,
-        &wbytes,
-        &result,
-        &thash,
-        body_der,
-        0,
-    )?;
-    let k1 = spake_derive_key(
-        ikey,
-        SPAKE_GROUP_P256,
-        &wbytes,
-        &result,
-        &thash,
-        body_der,
-        1,
-    )?;
+    let group = SpakeGroup::P256;
+    let wbytes = spake_wbytes(ikey, group)?;
+    let (secret, pub_x) = spake_keygen(group, &wbytes, false)?;
+    let result = spake_result(group, &wbytes, &secret, challenge_pubkey, false)?;
+    let thash = spake_thash_update(group, &[], support_der, challenge_der);
+    let thash = spake_thash_update(group, &thash, &pub_x, &[]);
+    let k0 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 0)?;
+    let k1 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 1)?;
     let factor = krb5_types::spake::SpakeSecondFactor {
         factor_type: 1,
         data: None,
