@@ -118,6 +118,7 @@ pub fn init_client(
     service: &PrincipalName,
     svc: u32,
 ) -> Client {
+    krb5_config::isolate_test_krb5();
     let (client_key, service_key): (ProtocolKey, ProtocolKey) = {
         let g = store.read().unwrap();
         (
@@ -181,7 +182,9 @@ pub fn init_client(
     let _maj = take_u32(&out, &mut i);
     let _min = take_u32(&out, &mut i);
     let win = take_u32(&out, &mut i);
-    let _tok = take_opaque(&out, &mut i);
+    let tok = take_opaque(&out, &mut i);
+    ctx.process_ap_rep(tok, &as_out.session_key).unwrap();
+    ctx.allow_rpcsec_init_window();
     ctx.verify_mic(&win.to_be_bytes(), verf).unwrap();
     Client {
         ctx,

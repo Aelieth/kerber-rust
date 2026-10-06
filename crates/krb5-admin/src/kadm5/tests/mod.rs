@@ -86,6 +86,7 @@ fn admin_gss_token() -> AdminGssToken {
     use krb5_protocol::{as_req_sname, pa_enc_timestamp};
     use krb5_types::ascii;
 
+    krb5_config::isolate_test_krb5();
     let (store, acl, _) = setup();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
     let kadm = kadmin_admin();

@@ -53,6 +53,7 @@ fn rpcsec_data_without_context_is_credproblem() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
         let _ = serve_kadm5_conn(
             store,
@@ -109,6 +110,7 @@ fn rpcsec_bad_version_is_auth_badcred() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
         let _ = serve_kadm5_conn(
             store,
@@ -358,6 +360,7 @@ fn unknown_program_auth_none_is_prog_unavail() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
         let _ = serve_kadm5_conn(
             store,
@@ -406,6 +409,7 @@ fn auth_gssapi_on_iprop_init_is_success() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
         let _ = serve_kadm5_conn(
             store,
@@ -544,6 +548,7 @@ fn unhandled_rpc_reaches_the_server_as_a_kadm5_rpc_error() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     let server = thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
         serve_kadm5_conn(
             store,

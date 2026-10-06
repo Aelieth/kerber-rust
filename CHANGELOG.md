@@ -1411,6 +1411,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **gss/admin.** Every krb5-gss acceptor answers a mutual AP-REQ as MIT's: a fresh subkey
+  and a random seq-number in the AP-REP key every later token, and every initiator checks
+  the echo; kadmind's RPCSEC verifier is one token on. Live; units.
 - **docs.** The ledger's `gss_display_status` row says what the 1.22.2 oracles print: the mechglue's
   major texts, `Unknown code 0` for the mechanism's 0 minor (1.20.1: `Success`); both writers of
   the u2u ccache golden append the same bytes.

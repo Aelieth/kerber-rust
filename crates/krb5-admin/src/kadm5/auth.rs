@@ -112,6 +112,10 @@ pub(super) fn handle_rpcsec_gss(
             body.u32(0);
             body.u32(RPCSEC_SEQ_WINDOW);
             body.opaque(out_tok.as_deref().unwrap_or(&[]));
+            // MIT `svcauth_gss_accept_sec_context` (`svc_auth_gss.c:271-286`): the window is signed once as the context is accepted and again by `svcauth_gss_nextverf` for the reply, so the verifier is this side's second token.
+            if ctx.get_mic(&RPCSEC_SEQ_WINDOW.to_be_bytes()).is_err() {
+                return Ok(rpc_reply_auth_error(xid, AUTH_REJECTEDCRED));
+            }
             let Ok(mic) = ctx.get_mic(&RPCSEC_SEQ_WINDOW.to_be_bytes()) else {
                 return Ok(rpc_reply_auth_error(xid, AUTH_FAILED));
             };

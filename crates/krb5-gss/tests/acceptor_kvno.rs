@@ -17,6 +17,7 @@ use krb5_types::{PrincipalName, ascii};
 /// Build a real host/… GSS AP-REQ token and return it with the ticket-enc key
 /// and its kvno.
 fn host_token() -> (Vec<u8>, krb5_crypto::ProtocolKey, u32) {
+    krb5_config::isolate_test_krb5();
     let (store, acl) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = krb5_crypto::string_to_key(

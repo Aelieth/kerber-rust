@@ -179,6 +179,8 @@ fn main() {
         );
     }
 
+    // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf.
+    krb5_gss::use_kdc_context();
     let (mut store, paths) = open_realm(&progname, &args, test_realm);
     let realm = store.realm().to_owned();
     let kdc_conf = paths.conf.as_ref();

@@ -94,9 +94,11 @@ pub struct GssContext {
     /// Ticket session for DCE third-leg `krb5_rd_rep_dce`.
     ap_rep_key: Option<ProtocolKey>,
     dce_style: bool,
+    /// The initiator's authenticator `ctime` / `cusec`, which its AP-REP must echo.
+    ap_req_time: Option<(krb5_types::KerberosTime, krb5_types::Microseconds)>,
 }
 
-pub use context::{ChannelBindings, InquireOk};
+pub use context::{ChannelBindings, InquireOk, use_kdc_context};
 pub use deleg::DelegCred;
 pub use iov::{IovBuf, IovType};
 pub use oid::{

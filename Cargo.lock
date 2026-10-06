@@ -571,6 +571,7 @@ version = "1.0.0"
 dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
+ "krb5-config",
  "krb5-crypto",
  "krb5-kdc",
  "krb5-protocol",

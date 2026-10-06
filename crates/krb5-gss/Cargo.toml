@@ -27,6 +27,7 @@ thiserror.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+krb5-config.workspace = true
 krb5-kdc.workspace = true
 krb5-testkit.workspace = true
 
