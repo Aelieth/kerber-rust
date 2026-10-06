@@ -50,7 +50,7 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   `kvno -U` does not first ask the KDC for the user's realm.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
   compared with MIT's tools may read differently from MIT's text.
-- `KRB5_TRACE` and `[libdefaults] request_timeout` are ignored.
+- `[libdefaults] request_timeout` is ignored.
 - `ktutil` has no `?` request, does not echo requests, and lists entries in its own format.
 - `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
   for the host's canonical name.

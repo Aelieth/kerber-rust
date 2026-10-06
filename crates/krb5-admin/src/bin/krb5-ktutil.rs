@@ -28,6 +28,9 @@ fn main() {
         eprintln!("{prog}: {} while initializing krb5", e.init_text());
         std::process::exit(1);
     }
+    // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): the context's
+    // `KRB5_TRACE` opens with it; no ktutil request traces.
+    krb5_protocol::trace::init();
     let args: Vec<String> = argv.into_iter().skip(1).collect();
     let mut kt = Keytab {
         version: 0x0502,

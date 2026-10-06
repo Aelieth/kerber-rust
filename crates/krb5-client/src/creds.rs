@@ -150,6 +150,7 @@ impl OpenCache {
 
     /// MIT `krb5_cc_store_cred`: `cred` joins the cache.
     pub fn store(&mut self, cred: CcacheCred) {
+        crate::trace::store(&self.spec, &cred);
         self.cc.creds.push(cred.clone());
         self.added.push(cred);
     }
@@ -348,13 +349,15 @@ pub fn get_credentials(
         second_ticket: second.as_deref(),
         now,
     };
-    if let Some(c) = cache.retrieve(&m) {
+    crate::trace::tkt_creds_begin(cache, me, server);
+    if let Some(c) = crate::trace::retrieved(cache, me, server, cache.retrieve(&m)) {
         return Ok(c.clone());
     }
     if opts.cached_only {
         return Err(cache.not_found());
     }
     let srealm = realm_str(&server.0);
+    crate::trace::tgt_for(cache, &srealm);
     let (presented, hop) = cache.tgt_for(&srealm)?;
     let kdc = opts.kdc(&hop)?;
     let tgt = outcome_from_cred(&presented)?;
@@ -398,13 +401,15 @@ pub fn get_credentials_for_user(
         second_ticket: None,
         now: unix_now(),
     };
-    if let Some(c) = cache.retrieve(&m) {
+    crate::trace::tkt_creds_begin(cache, for_user, self_sname);
+    if let Some(c) = crate::trace::retrieved(cache, for_user, self_sname, cache.retrieve(&m)) {
         return Ok(c.clone());
     }
     if opts.cached_only {
         return Err(cache.not_found());
     }
     let srealm = realm_str(&self_sname.0);
+    crate::trace::tgt_creds(cache, &srealm);
     let (presented, hop) = cache.tgt_for(&srealm)?;
     let kdc = opts.kdc(&hop)?;
     let tgt = outcome_from_cred(&presented)?;
@@ -454,6 +459,14 @@ pub fn get_credentials_for_proxy(
         second_ticket: Some(&evidence.ticket),
         now: unix_now(),
     };
+    if krb5_protocol::trace::enabled() {
+        crate::trace::proxy_lookup(
+            cache,
+            server,
+            cache.retrieve(&m).is_some(),
+            &realm_str(&server.0),
+        );
+    }
     let cred = if let Some(c) = cache.retrieve(&m) {
         c.clone()
     } else {
@@ -507,17 +520,15 @@ pub fn get_valrenewed_creds(
         ),
     };
     let cache = OpenCache::open(spec.clone())?;
-    let old = cache
-        .cc
-        .creds
-        .iter()
-        .find(|c| {
-            !c.is_config()
-                && !c.is_removed()
-                && princ_eq(&c.client, client)
-                && princ_eq(&c.server, &server)
-        })
-        .ok_or_else(|| cache.not_found())?;
+    let old = cache.cc.creds.iter().find(|c| {
+        !c.is_config()
+            && !c.is_removed()
+            && princ_eq(&c.client, client)
+            && princ_eq(&c.server, &server)
+    });
+    // MIT `get_new_creds` (`val_renew.c:47-74`): the cache lookup is traced with its result.
+    let old =
+        crate::trace::retrieved(&cache, client, &server, old).ok_or_else(|| cache.not_found())?;
     let realm = realm_str(&old.server.0);
     let kdc = kdc_for_realm(&realm)?;
     let tgt = outcome_from_cred(old)?;

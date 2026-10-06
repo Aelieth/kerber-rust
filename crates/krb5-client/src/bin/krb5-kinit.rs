@@ -354,7 +354,13 @@ fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     if opts.verbose {
         eprintln!("Initialized cache");
     }
-    if let Err(e) = store_ccache_keep_default(&k5.out_spec, FileCcache::new(cprinc, vec![cred])) {
+    let cc = FileCcache::new(cprinc, vec![cred]);
+    // MIT `k5_kinit` (`kinit.c:797-823`): the credential goes through a MEMORY cache moved into
+    // the output cache, traced as `write_out_ccache` traces it.
+    if krb5_protocol::trace::enabled() {
+        krb5_protocol::trace::write_out_ccache(&k5.out.full_name(), &cc);
+    }
+    if let Err(e) = store_ccache_keep_default(&k5.out_spec, cc) {
         let name = opts.ccache.as_deref().unwrap_or("");
         let e = krb5_client::store_error(e.as_ref());
         eprintln!("{prog}: {e} while saving to cache {name}");

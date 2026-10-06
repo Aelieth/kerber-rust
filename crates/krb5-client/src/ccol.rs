@@ -94,6 +94,10 @@ impl Cache {
     /// [`Krb5Error`] `KRB5_FCC_NOFILE` "No credentials cache found" when there is no such cache,
     /// or the error of the removal.
     pub fn destroy(&self) -> Result<(), Krb5Error> {
+        // MIT `krb5_cc_destroy` (`lib/krb5/ccache/ccfns.c:66-71`): traced before the destroy.
+        if krb5_protocol::trace::enabled() {
+            krb5_protocol::trace::cc_destroy(&self.full_name());
+        }
         crate::destroy_ccache(&self.spec()).map_err(|e| {
             let missing = e
                 .downcast_ref::<std::io::Error>()
@@ -250,10 +254,11 @@ pub fn collection(default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
 /// [`Krb5Error`] `KRB5_CC_NOTFOUND` "Matching credential not found" when no cache is for `princ`,
 /// or the collection's error.
 pub fn cache_match(default: &CcSpec, princ: &Princ) -> Result<Cache, Krb5Error> {
-    collection(default)?
+    let found = collection(default)?
         .into_iter()
-        .find(|c| c.principal().is_ok_and(|p| princ_eq(&p, princ)))
-        .ok_or_else(|| Krb5Error::of(Code::CcNotfound))
+        .find(|c| c.principal().is_ok_and(|p| princ_eq(&p, princ)));
+    crate::trace::cache_match(princ, found.is_some());
+    found.ok_or_else(|| Krb5Error::of(Code::CcNotfound))
 }
 
 /// MIT `krb5_cc_new_unique` (`ccbase.c:289-307`): a new cache in the collection of `default`.
@@ -267,6 +272,13 @@ pub fn cache_match(default: &CcSpec, princ: &Princ) -> Result<Cache, Krb5Error> 
 /// of the file creation or the KCM request.
 pub fn new_unique(default: &CcSpec) -> Result<Cache, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
+    // MIT `krb5_cc_new_unique` (`lib/krb5/ccache/ccbase.c:289-307`): traced with the type.
+    krb5_protocol::trace::cc_new_unique(match default {
+        CcSpec::File(_) => "FILE",
+        CcSpec::Dir(_) => "DIR",
+        CcSpec::Kcm(_) => "KCM",
+        CcSpec::Memory(_) => "MEMORY",
+    });
     match default {
         CcSpec::Dir(r) if !r.starts_with(':') => krb5_protocol::dir_gen_new(Path::new(r))
             .map(Cache::Dir)

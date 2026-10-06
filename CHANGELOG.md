@@ -519,6 +519,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **client.** `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd` and `ktutil` write MIT's
+  `KRB5_TRACE` lines in a release build too, compared live with MIT 1.22.2's tools
+  ([docs/logging.md](docs/logging.md)).
 - **protocol.** `KRB5_TRACE` (`krb5_protocol::trace`): MIT's formatter, file and trace points on
   the KDC sends, AS preauth, FAST, SPAKE, TGS and kpasswd; a key prints as MIT's 4-digit hash, and
   so does the SPAKE result.

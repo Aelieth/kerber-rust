@@ -59,6 +59,9 @@ fn run<R: BufRead, W: Write>(
             return 1;
         }
     };
+    // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): `KRB5_TRACE` opens
+    // once the profile has loaded.
+    krb5_protocol::trace::init();
     let client = match client(prog, pname, &conf) {
         Ok(client) => client,
         Err(line) => {
@@ -97,6 +100,13 @@ fn run<R: BufRead, W: Write>(
         host: kdc.host,
         port: kdc.port,
     };
+    // MIT `main` (`kpasswd.c:124-131`): `krb5_get_init_creds_password` for `kadmin/changepw`,
+    // traced with its client and that service.
+    krb5_protocol::trace::init_creds(krb5_protocol::trace::Princ::new(
+        &client.name,
+        client.realm.as_bytes(),
+    ));
+    krb5_protocol::trace::init_creds_service("kadmin/changepw");
     let as_out = match as_exchange(&AsRequest {
         cname: client.name,
         realm: &client.realm,

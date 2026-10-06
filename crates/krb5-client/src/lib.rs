@@ -42,6 +42,7 @@ pub mod ccol;
 pub mod cli;
 pub mod creds;
 pub mod errmsg;
+pub mod trace;
 
 use errmsg::{Code, Krb5Error};
 
@@ -125,13 +126,16 @@ pub fn cache_read_error(
 /// an `includedir` that does not list, a syntax error, or a file that cannot be read (its
 /// `strerror`).
 pub fn init_context() -> Result<(), Krb5Error> {
-    match krb5_config::load_krb5_conf_paths(krb5_config::krb5_conf_paths()) {
+    let profile = match krb5_config::load_krb5_conf_paths(krb5_config::krb5_conf_paths()) {
         Ok(_) => Ok(()),
         Err(krb5_config::Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(krb5_config::Error::Io(e)) => Err(Krb5Error::from_os(&e)),
         Err(krb5_config::Error::Profile(p, _)) => Err(Krb5Error::of(Code::Profile(p))),
         Err(e) => Err(Krb5Error::new(Code::Other, e.to_string())),
-    }
+    };
+    // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:209-217`): `KRB5_TRACE` opens
+    // once the profile has loaded.
+    profile.map(|()| krb5_protocol::trace::init())
 }
 
 /// The compiled-in default keytab (MIT's `DEFKTNAME`).
@@ -480,6 +484,9 @@ fn write_out_ccache(
     spec: &CcSpec,
     cc: FileCcache,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if krb5_protocol::trace::enabled() {
+        krb5_protocol::trace::write_out_ccache(&trace::ccname(spec), &cc);
+    }
     store_ccache_keep_default(spec, cc).map_err(|e| {
         let e = store_error(e.as_ref());
         Krb5Error::new(
@@ -781,11 +788,15 @@ fn kinit_inner(
     if realm_s.is_empty() {
         realm_s = conf_default_realm().ok_or("Cannot find KDC for requested realm")?;
     }
+    trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     let resolved = resolve_kdc(&realm_s, kdc);
     let armor = match params.armor_ccache {
         Some(p) => Some(load_fast_armor(p)?),
         None => None,
     };
+    if let (Some(path), Some(a)) = (params.armor_ccache, &armor) {
+        trace::fast_armor(path, &realm_s, a);
+    }
     let (conf_id, conf_an) = if params.pkinit_identity.is_none() || params.pkinit_anchors.is_none()
     {
         pkinit_from_conf(&realm_s)
@@ -809,8 +820,10 @@ fn kinit_inner(
     let mut ticket = params.ticket;
     ticket.anonymous |= params.anonymous;
     let keytab_keys = if let Some(ktpath) = params.keytab {
-        let bytes = krb5_protocol::read_secret_file(ktpath)
-            .map_err(|e| keytab_read_error(&e, &ktpath.display().to_string()))?;
+        let bytes = krb5_protocol::read_secret_file(ktpath).map_err(|e| {
+            trace::keytab_lookup_failed(&e, ktpath);
+            keytab_read_error(&e, &ktpath.display().to_string())
+        })?;
         let kt = Keytab::parse(&bytes)?;
         // MIT `krb5_init_creds_set_keytab` (`gic_keytab.c:176-232`): no key for the client is
         // `KRB5_KT_NOTFOUND` "Keytab contains no suitable keys for <client>".
@@ -824,6 +837,10 @@ fn kinit_inner(
                     ),
                 )
             })?;
+        krb5_protocol::trace::init_creds_keytab_lookup(
+            krb5_protocol::trace::Princ::new(&cname, realm_s.as_bytes()),
+            &kt_etypes,
+        );
         krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
         Some(keys)
     } else {
@@ -852,8 +869,11 @@ fn kinit_inner(
         etypes: Some(&etypes),
         ticket,
     };
-    let as_out = match if let Some(keys) = keytab_keys.as_deref() {
-        as_exchange_with_keys(&req, keys)
+    let as_out = match if let (Some(keys), Some(kt)) = (keytab_keys.as_deref(), params.keytab) {
+        krb5_protocol::trace::with_gak_keytab(
+            || format!("FILE:{}", kt.display()),
+            || as_exchange_with_keys(&req, keys),
+        )
     } else {
         password.as_exchange(&req)?
     } {
@@ -875,6 +895,10 @@ fn kinit_inner(
                 krb5_types::PrincipalName::NT_SRV_INST,
                 ["kadmin", "changepw"],
             );
+            // MIT `krb5_get_init_creds_password` (`gic_pwd.c:223-233`): the expiry, then the
+            // change ticket's request, are traced.
+            krb5_protocol::trace::gic_pwd_expired();
+            trace::init_creds(&cname, &realm_s, Some("kadmin/changepw"));
             let chpw_ticket = AsTicketOpts {
                 lifetime: Some(5 * 60),
                 rlife: None,
@@ -900,6 +924,7 @@ fn kinit_inner(
             let chpw_as = password.as_exchange(&chpw_req)??;
             let mut new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
+                    krb5_protocol::trace::gic_pwd_changepw(3);
                     if let Some(n) = params.key_exp_notice {
                         (n.0)(KEY_EXP_BANNER);
                     }
@@ -909,6 +934,10 @@ fn kinit_inner(
                 (None, Some(prompter)) => prompt_and_change(&resolved, &chpw_as, prompter)?,
                 (None, None) => return Err(e.into()),
             };
+            // MIT `krb5_get_init_creds_password` (`gic_pwd.c:328-336`): the last request, with
+            // the new password, is traced as a request of its own.
+            krb5_protocol::trace::gic_pwd_changed();
+            trace::init_creds(&cname, &realm_s, params.in_tkt_service);
             let retry = AsRequest {
                 password: &new_pw,
                 ..req
@@ -1002,7 +1031,10 @@ fn prompt_and_change(
     let mut banner = KEY_EXP_BANNER.to_owned();
     // `KRB5_CHPW_FAIL` "set in case the retry loop falls through" (`:299`).
     let mut ret = "Password change failed";
-    for _tries in 0..3 {
+    for tries in (1..=3).rev() {
+        // MIT `krb5_get_init_creds_password` (`gic_pwd.c:256-258`): each try is traced with the
+        // tries left.
+        krb5_protocol::trace::gic_pwd_changepw(tries);
         let (mut pw0, mut pw1) = (prompter.0)(&banner)?;
         if pw0 != pw1 {
             // KRB5_LIBOS_BADPWDMATCH (`:268-271`)

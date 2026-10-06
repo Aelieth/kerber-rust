@@ -206,6 +206,44 @@ As MIT's, kadmind prints only its one `fail_to_start` line on stderr when kadm5.
 syntax line go to the `admin_server` log. With no such log (the syslog default, and no syslogd in a container), set
 `admin_server = STDERR` or `FILE:` to see them.
 
+## `KRB5_TRACE`
+
+The client tools write MIT's trace log, a stream apart from the JSON
+one, to the file `KRB5_TRACE` names: `kinit`, `klist`, `kvno`,
+`kdestroy`, `kswitch`, `kpasswd` and `ktutil`, in a release build too,
+as MIT's do. The file is opened once the tool has read its profile,
+appended to, and created 0600, so `klist` and `ktutil`, which trace
+nothing, still create it, as MIT's do. `KRB5_TRACE=/dev/stderr` puts
+the lines on standard error; nothing else goes there or to standard
+output. A program the kernel marks secure (setuid, setgid or file
+capabilities) ignores the variable, as MIT's `secure_getenv` does.
+`krb5kdc` and `kadmind` do not read `KRB5_TRACE`, where MIT's do
+through `krb5_init_context`. `kprop` and `krb5-iprop-pull` trace their
+client halves (the AP-REP `kpropd` sends; the AS and TGS requests for
+the iprop service), and open the file at their first line rather than
+at start-up.
+
+Each line is `[pid] seconds.microseconds: message`. The messages are
+MIT 1.22.2's (`include/k5-trace.h` and SPAKE's `trace.h`), written
+where our exchanges do what MIT's do: the request to the KDCs and each
+send and answer, the AS exchange and its preauth (encrypted timestamp,
+SPAKE, FAST, and PKINIT's generic lines), the TGS requests with their
+referrals and S4U, the cache and keytab lookups and stores, and the
+kpasswd exchange. Where our flow differs from MIT's, the lines show
+ours: under FAST our `kinit` answers with an encrypted timestamp where
+MIT's sends an encrypted challenge. PKINIT's own lines
+(`pkinit_trace.h`) and the DNS lookups are not traced.
+
+A key prints as its enctype and the first two bytes of its SHA-1
+(`aes256-sha2/4149`), as MIT prints it. No line carries key, password
+or seed bytes: the SPAKE algorithm result, which MIT prints whole,
+prints as the same four-digit hash (`docs/mit-deviations.md`). The
+encrypted timestamp's plaintext and ciphertext print as hex, as MIT's
+do, where both travel on the wire in the clear. Inside FAST armor,
+which hides them, the ciphertext is under the long-term key and prints
+as the same four-digit hash, so the trace gives no offline password
+check that the wire does not (`docs/mit-deviations.md`).
+
 ## Logs as metrics
 
 Every issue and crypto/ASN.1 event already carries `duration_us` and
