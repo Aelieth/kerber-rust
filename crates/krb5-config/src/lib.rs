@@ -2,7 +2,7 @@
 //!
 //! There is no C FFI. DNS SRV is a minimal RFC 2782 UDP client.
 //!
-//! One module per MIT source family: `profile` (krb5.conf), `kdcconf`,
+//! One module per MIT source family: `profile` (krb5.conf), `kdcconf`, `iprop_params`,
 //! `ccname`, `srv`, `testenv`. In-src tests stay under `tests`.
 //!
 //! # Examples
@@ -30,6 +30,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod ccname;
+mod iprop_params;
 mod kdcconf;
 pub mod listen;
 mod logging;
@@ -231,6 +232,9 @@ pub struct Krb5Conf {
     /// `[logging]` relations, name and value, in file order (includes followed); read by
     /// [`LogSpecs`].
     pub logging: Vec<(String, String)>,
+    /// Realm → its stanza's `iprop_*` relations, name and value, in file order (includes
+    /// followed); read by [`IpropParams`].
+    pub iprop: BTreeMap<String, Vec<(String, String)>>,
 }
 
 /// KDC policy from `kdc.conf`.
@@ -363,6 +367,7 @@ pub use ccname::{
     KRB5_CC_UNKNOWN_TYPE, default_ccache_name, default_ccspec, expand_ccache_params, parse_ccname,
     parse_ccspec, resolve_ccspec,
 };
+pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, MISSING_CONF_PARAMS};
 pub use kdcconf::{
     KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_stash_file,
     env_kdc_config, kdc_conf_path,

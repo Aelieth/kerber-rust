@@ -582,6 +582,11 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
             .entry(realm.to_owned())
             .or_default()
             .push(v),
+        name if name.starts_with("iprop_") => conf
+            .iprop
+            .entry(realm.to_owned())
+            .or_default()
+            .push((name.to_owned(), v)),
         _ => {}
     }
 }

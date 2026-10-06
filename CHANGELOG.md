@@ -530,6 +530,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
   subkey, random 30-bit seq-number) and `krb5_mk_priv`. Units.
 - **types.** `PrincipalName::unparse_no_realm` unparses a name as MIT's
   `KRB5_PRINCIPAL_UNPARSE_NO_REALM`: components quoted, an `@` kept; unit.
+- **config.** Read a realm's `iprop_enable`, `iprop_port`, `iprop_logfile` and `iprop_ulogsize`
+  from kdc.conf, then krb5.conf, with MIT's defaults (`kadm5_get_config_params`). Units.
 - **docs.** [docs/install.md](docs/install.md) upgrades an MIT realm kept on a container volume
   (KLLDAP's shape): the old image dumps with `-r`, MIT's db2 files move aside only after it, the
   new image loads, the files go back to their owner. KLLDAP's phase 80 passes on the result.
