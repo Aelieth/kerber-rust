@@ -696,15 +696,16 @@ mod tests {
     /// found"; a path that is no socket, or none, is its errno.
     #[test]
     fn no_socket_is_no_kcm_server() {
-        let dir = krb5_testkit::scratch_dir("kcm-no-server");
-        for path in ["-".into(), dir.join("none.sock")] {
+        // A socket that is not there: a short path under /proc/self, which never holds this file. A
+        // scratch path can pass sun_path's 107 bytes and be cut, as MIT cuts it, onto its directory,
+        // which connects as "Connection refused".
+        for path in ["-".into(), PathBuf::from("/proc/self/kerber-no-kcm.sock")] {
             SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(path));
             let e = kcm_primary_name().unwrap_err();
             assert!(kcm_no_server(&e), "{e}");
             assert_eq!(e.to_string(), "No KCM server found");
         }
-        // A path that is no socket. /dev/null is short on every host; a scratch file's path can pass
-        // sun_path's 107 bytes and be cut, as MIT cuts it, to a path that is not there.
+        // A path that is no socket, short on every host for the same reason.
         SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(PathBuf::from("/dev/null")));
         let e = kcm_primary_name().unwrap_err();
         assert!(!kcm_no_server(&e), "{e}");
