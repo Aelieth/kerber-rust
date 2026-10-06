@@ -211,11 +211,9 @@ fn main() {
         let _ = tracing_subscriber::fmt()
             .json()
             .with_writer(json.make_writer())
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                    "krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn".into()
-                }),
-            )
+            .with_env_filter(krb5_kdc::json_log_filter(
+                "krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn",
+            ))
             .try_init();
     }
     if opts.time_offset != 0 {

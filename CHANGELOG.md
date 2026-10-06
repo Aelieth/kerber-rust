@@ -51,6 +51,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **kdc/admin.** A release daemon's JSON log reads no `RUST_LOG` (`test-hooks` only) and no
+  `NO_COLOR` (no `ansi`), as MIT's. Unit; strings check.
 - **tool.** `krb5-iprop-pull`, the gss programs and `krb5-tools` build only with the test hooks:
   a release build has no test program. Strings check.
 - **kdc/gss.** The acceptor's `GSS_DELEG_CCACHE` copy (kadmind read it) and the KDC's

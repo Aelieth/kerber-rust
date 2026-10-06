@@ -72,7 +72,11 @@ sha2 = "0.10"
 subtle = "2.6"
 thiserror = "2"
 tracing = { version = "0.1", default-features = false, features = ["std", "attributes"] }
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# The defaults without `ansi`: the JSON log writes no colour, so a release daemon reads no `NO_COLOR`
+# (MIT's read no such variable).
+tracing-subscriber = { version = "0.3", default-features = false, features = [
+    "env-filter", "fmt", "json", "smallvec", "std", "tracing-log",
+] }
 zeroize = { version = "1.8", features = ["derive", "alloc"] }
 
 [workspace.lints.rust]

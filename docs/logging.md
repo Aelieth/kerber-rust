@@ -18,8 +18,12 @@ or `kadmind: starting...` on standard error. `STDOUT` and `STDERR`
 apply in the foreground only, since a detached daemon has neither;
 `FILE:` applies in both. MIT does not read the relation, so a kdc.conf
 shared with MIT may carry it (settled live beside MIT 1.22.2's
-`krb5kdc` and `kadmind`). `RUST_LOG` filters the stream; each program
-has a default filter.
+`krb5kdc` and `kadmind`). Each program filters the stream with its own
+filter: `krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn`
+for `krb5kdc`, and `krb5_admin=info,krb5_kdc=info,krb5_protocol=warn` for
+`kadmind`, `kprop` and `kpropd`. Only a `test-hooks` build (the gates')
+takes `RUST_LOG` instead; a release build reads no `RUST_LOG`, as MIT's
+programs read none.
 
 The gates read the stream from the daemons' standard output:
 `json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
@@ -117,7 +121,8 @@ the status word and `outcome=krb-error`. Unexpected transit-path errors
 are `tracing` **error** (`kdc_log.c:201-206` `LOG_ERR`).
 
 The listener logs its own `kdc.issue` lines: an empty reply at
-**debug**, a reply resent from the lookaside cache at `info` with
+**debug** (a `test-hooks` build only, where `RUST_LOG` asks for it), a
+reply resent from the lookaside cache at `info` with
 `outcome=retransmit`, a duplicate that arrives while the first copy is
 being processed at `info` with `outcome=discard`, and a handler error
 at **error** with `error_suffix` `while dispatching (udp)` or
@@ -138,8 +143,8 @@ writer) logs `event=protocol.secret_file` at **warn** with
 group not kept`), and `error`; the save completes. With SELinux
 permissive, a new file whose SELinux context cannot be set logs the same
 event with `detail` `SELinux context not set` and is created without it
-(enforcing, the save fails). The daemons' default filter includes
-`krb5_protocol=warn`, so the line shows without `RUST_LOG`.
+(enforcing, the save fails). The daemons' filters include
+`krb5_protocol=warn`, so the line shows.
 
 A KDC that cannot record a client's lockout attributes in
 `principal.lockout` (the file is missing, as in a realm an earlier

@@ -140,6 +140,18 @@ pub fn write_pid_file(path: &Path) -> io::Result<()> {
     f.flush()
 }
 
+/// The filter of a program's JSON log (`[logging] json`, a stream MIT's programs do not have):
+/// `default`, the program's own. A `test-hooks` build (the gates') takes `RUST_LOG` first; a release
+/// build reads no such variable, as MIT's `krb5kdc`, `kadmind`, `kprop` and `kpropd` read none.
+#[must_use]
+pub fn json_log_filter(default: &str) -> tracing_subscriber::EnvFilter {
+    #[cfg(feature = "test-hooks")]
+    if let Ok(filter) = tracing_subscriber::EnvFilter::try_from_default_env() {
+        return filter;
+    }
+    tracing_subscriber::EnvFilter::new(default)
+}
+
 /// The signals a daemon answers: SIGINT, SIGTERM and SIGQUIT end its loop, SIGHUP reopens its
 /// log files, and SIGPIPE stays ignored, as the Rust runtime sets it.
 /// MIT `loop_setup_signals` (`lib/apputils/net-server.c:263-286`): the three end the loop, SIGPIPE
@@ -207,6 +219,37 @@ impl Signals {
 mod tests {
     use super::*;
     use std::time::Instant;
+
+    /// The JSON log's filter, printed by a child of this test that runs with `RUST_LOG` set.
+    #[test]
+    fn json_log_filter_child() {
+        if std::env::var_os("KERBER_JSON_FILTER_CHILD").is_some() {
+            println!("filter=[{}]", json_log_filter("krb5_kdc=info"));
+        }
+    }
+
+    /// `RUST_LOG` filters the JSON log only in a `test-hooks` build; a release build keeps the
+    /// program's own filter whatever the environment says.
+    #[test]
+    fn json_log_filter_reads_rust_log_only_in_a_test_hooks_build() {
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "daemon::tests::json_log_filter_child",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("KERBER_JSON_FILTER_CHILD", "1")
+            .env("RUST_LOG", "krb5_kdc=trace")
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        let want = if cfg!(feature = "test-hooks") {
+            "filter=[krb5_kdc=trace]"
+        } else {
+            "filter=[krb5_kdc=info]"
+        };
+        assert!(text.contains(want), "{want} not in {text}");
+    }
 
     /// MIT's `fopen(path, "w")` empties a symlink's target; the pid file is never written through
     /// one, which stays, its target as it was.

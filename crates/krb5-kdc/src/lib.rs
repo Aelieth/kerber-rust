@@ -58,8 +58,8 @@ pub use audit::{
 pub use create::seed_test_principals;
 pub use create::{create_realm, kdc_conf_for_realm};
 pub use daemon::{
-    OpenFailure, Signals, database_path, detach, names_relative_database, open_database,
-    write_pid_file,
+    OpenFailure, Signals, database_path, detach, json_log_filter, names_relative_database,
+    open_database, write_pid_file,
 };
 pub use dblock::{
     DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, FileLockGuard, SUFFIX_LOCK,
