@@ -104,7 +104,7 @@ pub fn suffixed(path: &Path, suffix: &str) -> PathBuf {
 
 /// What one [`lock_file`] call asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-enum FileLock {
+pub(crate) enum FileLock {
     Shared,
     Exclusive,
     Unlock,
@@ -221,6 +221,23 @@ pub fn lock_file_exclusive(file: &File) -> io::Result<FileLockGuard<'_>> {
     let mut flocked = None;
     lock_file(file, FileLock::Exclusive, &mut flocked)?;
     Ok(FileLockGuard { file, flocked })
+}
+
+/// Take `how` (or let go of) the whole-file lock on `file`'s open file description, waiting for
+/// another holder, as `krb5_lock_file` does; `flocked` keeps `flock(2)`'s hold where the file
+/// system has no open-file-description locks, and must be the same at the lock and the unlock.
+/// Every thread of a process shares the description's one lock: the caller counts its holds.
+/// MIT `lock_ulog` (`lib/kdb/kdb_log.c:288-296`): the update log is locked with `krb5_lock_file` on its own descriptor.
+///
+/// # Errors
+///
+/// The system's error of the lock call.
+pub(crate) fn set_file_lock(
+    file: &File,
+    how: FileLock,
+    flocked: &mut Option<Flock<File>>,
+) -> io::Result<()> {
+    lock_file(file, how, flocked).map_err(io::Error::from)
 }
 
 impl Drop for FileLockGuard<'_> {

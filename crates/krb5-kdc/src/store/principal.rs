@@ -417,23 +417,32 @@ fn canonical_mod_actor(actor: &str, realm: &str) -> String {
     }
 }
 
+/// Stamp a change of `p` by `actor` now: the password-change time when `pwd_change`, then the
+/// modifier record, each replacing its record where it is (a new one goes first), so a change
+/// that leaves their bytes as they were leaves the tagged data as it was.
+/// MIT `krb5_dbe_update_last_pwd_change` (`lib/kdb/kdb5.c:2055-2067`): the time is updated in the entry's tagged data.
+/// MIT `krb5_dbe_update_mod_princ_data` (`lib/kdb/kdb5.c:1596-1632`): the modification time and modifier are updated in the entry's tagged data.
 pub(super) fn stamp_admin_tl(p: &mut Principal, pwd_change: bool, actor: &str) {
     let now = unix_now_u32();
-    p.tl_data
-        .retain(|t| t.ty != TL_MOD_PRINC && !(pwd_change && t.ty == TL_LAST_PWD_CHANGE));
+    if pwd_change {
+        super::update_tl_data(
+            &mut p.tl_data,
+            TlData {
+                ty: TL_LAST_PWD_CHANGE,
+                contents: now.to_le_bytes().to_vec(),
+            },
+        );
+    }
     let mut modp = now.to_le_bytes().to_vec();
     modp.extend_from_slice(canonical_mod_actor(actor, &p.realm).as_bytes());
     modp.push(0);
-    p.tl_data.push(TlData {
-        ty: TL_MOD_PRINC,
-        contents: modp,
-    });
-    if pwd_change {
-        p.tl_data.push(TlData {
-            ty: TL_LAST_PWD_CHANGE,
-            contents: now.to_le_bytes().to_vec(),
-        });
-    }
+    super::update_tl_data(
+        &mut p.tl_data,
+        TlData {
+            ty: TL_MOD_PRINC,
+            contents: modp,
+        },
+    );
 }
 
 /// kadm5 modify-principal fields.
@@ -1118,8 +1127,11 @@ impl PrincipalStore {
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
         new_realm.clone_into(&mut p.realm);
-        stamp_admin_tl(&mut p, false, actor);
+        // MIT `krb5_db_def_rename_principal` (`lib/kdb/kdb_default.c:537-545`): the entry is put under the new name, then the old one deleted.
+        self.note_ulog(p.id(), false, Some(p.clone()));
         self.note_ulog(old_id, true, None);
+        // MIT `kadm5_rename_principal` (`lib/kadm5/srv/svr_principal.c:730-737`): then the entry is put again with its modification data.
+        stamp_admin_tl(&mut p, false, actor);
         self.note_ulog(p.id(), false, Some(p.clone()));
         self.map.insert(p.id(), p);
         self.save_if_configured()

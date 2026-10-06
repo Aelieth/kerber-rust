@@ -72,11 +72,15 @@ impl PrincipalStore {
                 pw_expire: 0,
             },
         );
-        p.tl_data.push(TlData {
-            ty: TL_KADM_DATA,
-            contents: empty_kadm_data(),
-        });
+        // MIT `kdb_put_entry` (`lib/kadm5/srv/server_kdb.c:376-395`): the modifier is updated, then the kadm5 record, each new one put first.
         stamp_admin_tl(&mut p, false, actor);
+        super::update_tl_data(
+            &mut p.tl_data,
+            TlData {
+                ty: TL_KADM_DATA,
+                contents: empty_kadm_data(),
+            },
+        );
         let mut contents = target.unparse_with_realm(target_realm).into_bytes();
         contents.push(0);
         p.tl_data.push(TlData {

@@ -323,7 +323,7 @@ body += xdr_u32(300001) + xdr_opaque(cred)
 body += xdr_u32(0) + xdr_opaque(b"")
 emit("data", exchange(body))
 
-# AUTH_NONE IPROP: MIT kadmind 749 is PROG_UNAVAIL; Rust serves 100423 as AUTH_TOOWEAK.
+# AUTH_NONE IPROP: PROG_UNAVAIL without iprop_enable (the program is not registered), AUTH_TOOWEAK with it.
 xid = 0x11111111
 body = struct.pack(">10I", xid, 0, 2, 100423, 1, 0, 0, 0, 0, 0)
 emit("auth_none", exchange(body))

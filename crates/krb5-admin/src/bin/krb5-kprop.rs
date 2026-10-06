@@ -9,6 +9,11 @@
 //!
 //! `KRB5_KPROP_KEYTAB` names the client keytab when `-s` does not: a kerber-rust extension
 //! (MIT's kprop takes `-s` alone).
+//!
+//! `-i` sends an iprop dump (`ipropx 1`), what MIT's kadmind sends a replica that asked for a
+//! full resync after `kdb5_util dump -i`: it needs `iprop_enable` for the realm, and the dump's
+//! header carries the update log's last serial and time, read before the database is, as MIT's
+//! dump reads them.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -16,7 +21,7 @@
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 
-use krb5_admin::{KPROP_PORT, kprop_send_store, kprop_send_store_iprop};
+use krb5_admin::{KPROP_PORT, iprop_snapshot, kprop_send_store, kprop_send_store_iprop};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::{PrincipalStore, issue_as, issue_tgs, load_store};
 use krb5_log::klog::JsonLog;
@@ -101,10 +106,28 @@ fn main() {
         eprintln!("krb5-kprop: stash {}: {e}", paths.key_stash_file.display());
         std::process::exit(1);
     }
-    let store = load_store(&paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: load store: {e}");
-        std::process::exit(1);
-    });
+    // MIT `dump_db` (`kadmin/dbutil/dump.c:1173-1192`): an iprop dump needs iprop enabled; its header is the update log's last serial and time.
+    // MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1333`): that serial and time are read before the database, so the dump holds at least what they say.
+    let (store, iprop_last) = if iprop {
+        let realm = paths.realm.clone().unwrap_or_default();
+        let params = krb5_config::IpropParams::load(&realm, &paths.database_name);
+        if !params.enabled {
+            eprintln!("Iprop not enabled");
+            std::process::exit(1);
+        }
+        let (store, last) = iprop_snapshot(&paths.database_name, &paths.key_stash_file, &params)
+            .unwrap_or_else(|e| {
+                eprintln!("krb5-kprop: {e}");
+                std::process::exit(1);
+            });
+        (store, Some(last))
+    } else {
+        let store = load_store(&paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
+            eprintln!("krb5-kprop: load store: {e}");
+            std::process::exit(1);
+        });
+        (store, None)
+    };
     let master =
         master_key(&store, &paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
             eprintln!("krb5-kprop: {e}");
@@ -160,20 +183,29 @@ fn main() {
         eprintln!("krb5-kprop: connect {addr}: {e}");
         std::process::exit(1);
     });
-    let send = if iprop {
-        kprop_send_store_iprop
-    } else {
-        kprop_send_store
-    };
-    send(
-        &mut stream,
-        &store,
-        &master,
-        tgs_out.rep.0.ticket,
-        &tgs_out.session_key,
-        &krb5_types::ascii(&realm),
-        &client,
-    )
+    let crealm = krb5_types::ascii(&realm);
+    let (ticket, session) = (tgs_out.rep.0.ticket, &tgs_out.session_key);
+    match iprop_last {
+        Some(last) => kprop_send_store_iprop(
+            &mut stream,
+            &store,
+            &master,
+            last,
+            ticket,
+            session,
+            &crealm,
+            &client,
+        ),
+        None => kprop_send_store(
+            &mut stream,
+            &store,
+            &master,
+            ticket,
+            session,
+            &crealm,
+            &client,
+        ),
+    }
     .unwrap_or_else(|e| {
         eprintln!("krb5-kprop: send: {e}");
         std::process::exit(1);

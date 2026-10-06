@@ -15,9 +15,15 @@
 //! - `-port N` is the kadm5 port, over `admin_server`'s port and `kadmind_port`.
 //! - `-nofork` keeps kadmind in the foreground; without it kadmind binds its sockets, detaches
 //!   (`daemon(3)`) and then writes the `-P` pid file.
-//! - `-W`, `-p`, `-F`, `-K` and `-k` are accepted and unused: an iprop full resync needs no
-//!   `kdb5_util` or `kprop` here. `-proponly` stops kadmind as MIT's does when `iprop_enable` is
-//!   not set (this port reads none), and `-m` stops it: the master key comes from the stash.
+//! - `-W`, `-p`, `-F`, `-K` and `-k` are accepted and unused: this kadmind starts no
+//!   `kdb5_util` or `kprop` for an iprop full resync, whose dump is sent with `kprop -i`.
+//!   `-proponly` stops kadmind as MIT's does when `iprop_enable` is not set, and also when it is:
+//!   there is no separate iprop listener. `-m` stops it: the master key comes from the stash.
+//!
+//! With `iprop_enable` set for the realm ([`krb5_config::IpropParams`], which also needs
+//! `iprop_port`), kadmind maps the update log as the primary's, logs every principal put and
+//! delete there, and serves the iprop program (100423) on its kadm5 listeners; without it the log
+//! is never touched and the program is not served.
 //!
 //! The database, stash and ACL are where [`krb5_config::KdcPaths`] finds them. kadm5 and kpasswd
 //! listen where kdc.conf's `kadmind_listen` / `kadmind_port` and `kpasswd_listen` /
@@ -45,9 +51,9 @@ use krb5_cli::{MitArgs, MitOpt, Placement};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::{
-    Acl, ClosingFd, Error, OpenFailure, PrincipalStore, Signals, acl_for_store, bind_rpc_listeners,
-    bind_tcp_listeners, bind_udp_listeners, detach, names_relative_database, open_database,
-    shared_dump as shared_store, write_pid_file,
+    Acl, ClosingFd, Error, IpropRole, OpenFailure, PrincipalStore, Signals, acl_for_store,
+    bind_rpc_listeners, bind_tcp_listeners, bind_udp_listeners, detach, names_relative_database,
+    open_database, shared_dump as shared_store, write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 use krb5_protocol::ReplayCache;
@@ -194,6 +200,15 @@ fn main() {
     let (mut store, paths) = open_realm(&progname, &args, test_realm);
     let realm = store.realm().to_owned();
     let kdc_conf = paths.conf.as_ref();
+    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled and no `iprop_port`, kadmind does not start.
+    let iprop = krb5_config::IpropParams::load(&realm, &paths.database_name);
+    if iprop.missing_required() {
+        fail_to_start(
+            &progname,
+            Some(krb5_config::MISSING_CONF_PARAMS),
+            "initializing",
+        );
+    }
     // The dictionary is read here once; kpasswd, every kadm5 connection and every reread of the
     // database share it.
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:446-450`): `kadm5_init` sets up the password-quality modules, and a dictionary that cannot be read stops kadmind "while initializing".
@@ -211,13 +226,14 @@ fn main() {
         store.apply_libdefaults(c);
     }
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:459-462`): the propagation-only mode needs
-    // iprop_enable, which this port does not read.
+    // iprop_enable; with it, this port has no separate iprop listener to run alone.
     if args.flag("-proponly") {
-        fail_to_start(
-            &progname,
-            None,
-            "-proponly can only be used when iprop_enable is true",
-        );
+        let why = if iprop.enabled {
+            "-proponly is not supported: iprop is served on the kadm5 port"
+        } else {
+            "-proponly can only be used when iprop_enable is true"
+        };
+        fail_to_start(&progname, None, why);
     }
     if acceptor_keys(&store).is_empty() {
         fail_to_start(&progname, None, "Cannot set up KDB keytab");
@@ -291,6 +307,19 @@ fn main() {
             .reload();
         if let Err(e) = reloaded {
             fail_to_start(&progname, Some(&e.to_string()), "initializing");
+        }
+    }
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:521-531`): with iprop enabled the update log is mapped as the primary's, and in the foreground the iprop service is announced.
+    if iprop.enabled {
+        let mapped = shared
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .map_ulog(&iprop.logfile, iprop.ulogsize, IpropRole::Primary);
+        if let Err(e) = mapped {
+            fail_to_start(&progname, Some(&e.to_string()), "mapping update log");
+        }
+        if nofork {
+            eprintln!("{progname}: create IPROP svc (PROG=100423, VERS=1)");
         }
     }
     for l in &listeners {

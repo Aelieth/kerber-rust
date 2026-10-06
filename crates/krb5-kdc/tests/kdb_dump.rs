@@ -10,10 +10,9 @@
 use krb5_crypto::{EncryptionType, KeyUsage, kdb_decrypt_key, string_to_key};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
 use krb5_kdc::{
-    IpropUpdate, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_DUMP_VERSION, KDB_LOCKDOWN_KEYS,
-    KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KdbeVal, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TlData,
-    ULOG_ADD_ATTRS, conv_2logentry, dump_store, dump_store_iprop, load_dump,
-    master_key_from_password, parse_dump, save_store,
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_DUMP_VERSION, KDB_LOCKDOWN_KEYS,
+    KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TlData,
+    dump_store, dump_store_iprop, load_dump, master_key_from_password, parse_dump, save_store,
 };
 
 use krb5_testkit::scratch_dir;
@@ -245,7 +244,8 @@ fn dump_write_header_grammar_and_tl_data() {
         "writer must emit version 7, got {:?}",
         text.lines().next()
     );
-    let iprop = dump_store_iprop(&store, b"masterpassword").expect("iprop dump");
+    let iprop = dump_store_iprop(&store, b"masterpassword", krb5_kdc::UlogLast::default())
+        .expect("iprop dump");
     assert!(
         iprop.starts_with("ipropx 1 "),
         "iprop dump must start ipropx 1 <sno> <sec> 0, got {:?}",
@@ -383,28 +383,50 @@ fn load_dump_with_tl_32767_names_princ_and_arg() {
     assert!(msg.contains("user@KERBER.TEST"), "{msg}");
 }
 
+/// MIT `ulog_replay` puts each update with `krb5int_put_principal_no_log`, which db2 refuses
+/// for one carrying `KRB5_TL_DB_ARGS`: the replay fails and the replica's log starts over, so
+/// its next request is a full resync.
+#[cfg(feature = "test-hooks")]
 #[test]
-fn iprop_db_args_entry_is_absent_after_apply() {
+fn iprop_db_args_entry_fails_the_apply_and_starts_the_log_over() {
+    use krb5_kdc::{
+        IpropRole, IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, Ulog, UlogLast, UlogTime, conv_2logentry,
+    };
     let (mut store, _) = bootstrap_documented().unwrap();
+    store.set_ulog(Ulog::memory(8).unwrap(), IpropRole::Replica);
+    let behind = UlogLast {
+        sno: 5,
+        time: UlogTime {
+            seconds: 1,
+            useconds: 0,
+        },
+    };
+    store.ulog().unwrap().set_last(behind).unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let mut p = store.get_name(&user).unwrap().clone();
     p.name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["r12iprop"]);
     let id = p.id();
     let mut vals = conv_2logentry(&p, ULOG_ADD_ATTRS);
     vals.push(KdbeVal::TlData(vec![db_arg(true)]));
-    store
-        .apply_updates(&[IpropUpdate {
-            sno: store.serial().saturating_add(1),
-            time: 1,
-            name: id.clone(),
-            deleted: false,
-            vals,
-        }])
-        .unwrap();
+    let refused = store.apply_updates(&[IpropUpdate {
+        sno: 6,
+        time: 1,
+        name: id.clone(),
+        deleted: false,
+        commit: true,
+        vals,
+        raw: Vec::new(),
+    }]);
+    assert!(
+        matches!(refused, Err(krb5_kdc::Error::InvalidArgument(_))),
+        "{refused:?}"
+    );
     assert!(
         store.get(&id).is_none(),
         "iprop put with 0x7fff must not insert"
     );
+    let hdr = store.ulog().unwrap().header_now().unwrap();
+    assert_eq!((hdr.num, hdr.first_sno, hdr.last_sno), (1, 1, 1));
 }
 
 #[test]

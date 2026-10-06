@@ -585,3 +585,55 @@ fn kadmin_local_directory_stdin_terminates() {
         out.stderr.len()
     );
 }
+
+/// Settled live on MIT 1.22.2: without `iprop_enable` kadmin.local writes no update log; with it
+/// but no `iprop_port` it stops at its start; with both it maps the log (made with one dummy
+/// entry) and each change adds one entry, a rename three.
+#[test]
+fn kadmin_local_keeps_the_update_log_only_with_iprop() {
+    let realm = Realm::new("kadmin-iprop");
+    let ulog = realm.dir.join("principal.ulog");
+    let kdc_conf = realm.dir.join("kdc.conf");
+    let stanza = std::fs::read_to_string(&kdc_conf).unwrap();
+    let out = realm.run(&["addprinc", "-randkey", "off1"], b"");
+    assert_eq!(out.status.code(), Some(0), "{}", text(&out.stderr));
+    assert!(!ulog.exists(), "no update log without iprop");
+    std::fs::write(
+        &kdc_conf,
+        stanza.replace(" }\n", "  iprop_enable = true\n }\n"),
+    )
+    .unwrap();
+    let out = realm.run(&["-q", "getprinc off1"], b"");
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(
+        text(&out.stderr),
+        "kadmin.local: Required parameters in kdc.conf missing while initializing kadmin.local interface\n"
+    );
+    assert!(!ulog.exists());
+    std::fs::write(
+        &kdc_conf,
+        stanza.replace(
+            " }\n",
+            "  iprop_enable = true\n  iprop_port = 2121\n  iprop_ulogsize = 10\n }\n",
+        ),
+    )
+    .unwrap();
+    for (args, last) in [
+        (&["getprinc", "off1"][..], 1),
+        (&["addprinc", "-randkey", "on1"][..], 2),
+        (&["modprinc", "-maxlife", "1h", "on1"][..], 3),
+        (&["renprinc", "-force", "on1", "on2"][..], 6),
+        (&["delprinc", "-force", "on2"][..], 7),
+    ] {
+        let out = realm.run(args, b"");
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            text(&out.stderr)
+        );
+        let log = krb5_kdc::Ulog::map(&ulog, 10).unwrap();
+        assert_eq!(log.get_last().unwrap().sno, last, "{args:?}");
+    }
+    assert_eq!(std::fs::metadata(&ulog).unwrap().len(), 40 + 10 * 2048);
+}

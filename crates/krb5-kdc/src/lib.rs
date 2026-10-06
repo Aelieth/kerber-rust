@@ -42,6 +42,7 @@ pub mod principals;
 mod status;
 mod store;
 pub mod testrealm;
+mod ulog;
 
 pub use acl::{Acl, AdminOp, Restrictions, kadmin_flagspec};
 pub use ad::{
@@ -75,12 +76,12 @@ pub use kdb::{
     open_store,
 };
 pub use kdb_dump::{
-    DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, KDB_DUMP_VERSION,
-    TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_SERIAL, TL_KERBER_SID,
-    TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS, dump_store,
-    dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key, load_dump, load_dump_etype,
-    load_dump_path, load_dump_with_key, parse_dump, tl_mod_princ_name, update_store,
-    write_dump_path_etype,
+    DumpError, DumpFile, DumpKeyData, DumpKeySlot, DumpPrincipal, IpropHeaderError,
+    KDB_DUMP_VERSION, TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_SERIAL,
+    TL_KERBER_SID, TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
+    dump_store, dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key, load_dump,
+    load_dump_etype, load_dump_path, load_dump_with_key, parse_dump, parse_iprop_header,
+    tl_mod_princ_name, update_store, write_dump_path_etype,
 };
 pub use listen::{
     BIND_CANDIDATES, ClosingFd, ConnGuard, ConnRegistry, Datagram, ListenLimits, MAX_DGRAM_REPLY,
@@ -98,11 +99,11 @@ pub use osa::{
     history_entry as encrypt_history_entry,
 };
 pub use persist::{
-    CreateError, DbUpdate, DbWrite, FullLoad, LoadError, PersistError, Unopenable, check_database,
-    check_openable, create_store, load_dump_with_stash, load_store, load_store_full,
-    load_store_with_master, load_text_full, read_db_and_lockout_locked, read_db_locked, read_stash,
-    save_dump_text, save_store, save_store_fresh, save_store_legacy_kdb3, save_store_with_master,
-    stash_keys, write_stash,
+    CreateError, DbUpdate, DbWrite, FullLoad, LoadError, LoadLog, PersistError, Unopenable,
+    check_database, check_openable, create_store, load_dump_with_stash, load_store,
+    load_store_full, load_store_with_master, load_text_full, read_db_and_lockout_locked,
+    read_db_locked, read_stash, save_dump_text, save_store, save_store_fresh,
+    save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
 };
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock,
@@ -114,7 +115,9 @@ pub use store::{
     AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
     AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_MOD_WHERE, AT_PRINC, AT_PW_EXP,
     AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
-    IpropUpdate, KdbeVal, ULOG_ADD_ATTRS, attr_bit, conv_2dbentry, conv_2logentry,
+    IncrLayout, IpropRole, IpropUpdate, KdbeVal, KeyWrap, LoggedWrite, PreparedLog, ULOG_ADD_ATTRS,
+    UlogTime, XdrError, attr_bit, conv_2dbentry, conv_2logentry, decode_incr_update,
+    decode_kdbe_bytes, encode_incr_update, encode_kdbe, walk_incr_update,
 };
 pub use store::{
     AdminEnt, AdminFields, IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED,
@@ -124,8 +127,14 @@ pub use store::{
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
     KDB_V1_BASE_LENGTH, KadmData, KeyEntry, KeyLookup, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT,
     PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, RID_FIRST_USER, RID_KRBTGT,
-    S2K_ITERS, SpakeKdc, TlData, UlogEntry, apply_keysalt_policy, kadm5_mask, random_key,
-    s2k_params, strip_db_args,
+    S2K_ITERS, SpakeKdc, TlData, apply_keysalt_policy, kadm5_mask, random_key, s2k_params,
+    strip_db_args,
+};
+#[cfg(any(test, feature = "test-hooks"))]
+pub use ulog::UlogEntry;
+pub use ulog::{
+    KDB_STABLE, KDB_ULOG_HDR_MAGIC, KDB_ULOG_MAGIC, KDB_UNSTABLE, KDB_VERSION, MAXLOGLEN,
+    ULOG_BLOCK, Ulog, UlogBatch, UlogError, UlogHeader, UlogLast, UlogUpdates,
 };
 
 use krb5_types::PrincipalName;

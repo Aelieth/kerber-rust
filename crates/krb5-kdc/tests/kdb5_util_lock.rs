@@ -307,12 +307,7 @@ fn a_database_without_its_lock_files_does_not_open() {
     );
     assert_eq!(
         realm.ls(),
-        [
-            "principal",
-            "principal.lockout",
-            "principal.ok",
-            "principal.ulog"
-        ]
+        ["principal", "principal.lockout", "principal.ok"]
     );
 }
 
@@ -338,8 +333,7 @@ fn a_full_load_promotes_a_temporary_database_and_keeps_the_lock_files() {
             "principal",
             "principal.kadm5.lock",
             "principal.lockout",
-            "principal.ok",
-            "principal.ulog"
+            "principal.ok"
         ]
     );
     // MIT D: a load makes a missing principal.ok again.
@@ -362,8 +356,7 @@ fn a_full_load_promotes_a_temporary_database_and_keeps_the_lock_files() {
             "principal",
             "principal.kadm5.lock",
             "principal.lockout",
-            "principal.ok",
-            "principal.ulog"
+            "principal.ok"
         ]
     );
 }
@@ -516,7 +509,7 @@ fn load_update_fills_an_empty_database_and_makes_the_policy_lock_file_anew() {
 /// Once `load -update` holds the permanent lock, every failure lets it go: the update is one
 /// write of the whole database, so the database is as it was and `principal.kadm5.lock` is made
 /// again, where MIT leaves it removed once a restore under the lock fails. Here the dump's master
-/// key does not open the database, and the database's update log may not be written. This update
+/// key does not open the database, and `principal.lockout` may not be written. This update
 /// returned from both with `principal.kadm5.lock` removed.
 #[test]
 fn load_update_lets_the_permanent_lock_go_on_every_failure() {
@@ -554,16 +547,16 @@ fn load_update_lets_the_permanent_lock_go_on_every_failure() {
     if nix::unistd::geteuid().is_root() {
         return;
     }
-    let ulog = suffixed(&realm.db, ".ulog");
-    std::fs::set_permissions(&ulog, std::fs::Permissions::from_mode(0o444)).unwrap();
+    let lockout = suffixed(&realm.db, ".lockout");
+    std::fs::set_permissions(&lockout, std::fs::Permissions::from_mode(0o444)).unwrap();
     let out = realm.run(&["load", "-update", own.to_str().unwrap()]);
     assert!(realm.pol().exists(), "principal.kadm5.lock made again");
     assert_eq!(out.status.code(), Some(1));
-    assert!(
-        err(&out).starts_with("kdb5_util: Permission denied while storing "),
-        "{}",
-        err(&out)
+    let head = format!(
+        "kdb5_util: {}: Permission denied while storing ",
+        lockout.display()
     );
+    assert!(err(&out).starts_with(&head), "{}", err(&out));
     assert_eq!(std::fs::read(&realm.db).unwrap(), before);
 }
 
@@ -779,7 +772,7 @@ fn a_load_waiting_for_a_typed_master_key_holds_no_lock() {
                     store.change(|s| s.insert_new_randkey(&name, &realm, &[], "test@KL.TEST"));
                 matches!(made, Ok(Ok(())))
             } else {
-                krb5_kdc::load_store_full(&store, &db, &master, false).is_ok()
+                krb5_kdc::load_store_full(&store, &db, &master, false, None).is_ok()
             };
             let _ = tx.send(done);
         });

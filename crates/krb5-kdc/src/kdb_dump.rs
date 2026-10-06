@@ -27,6 +27,7 @@ use crate::store::{
     KDB_DISALLOW_ALL_TIX, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PRE_AUTH, KadmData, KeyEntry,
     NamedPolicy, Principal, PrincipalStore, TlData,
 };
+use crate::ulog::UlogLast;
 
 /// MIT 1.22.2 default (`kdb5_util load_dump version 7`).
 pub const KDB_DUMP_VERSION: u32 = 7;
@@ -79,7 +80,8 @@ pub(crate) const TL_ACTKVNO: i32 = 9;
 pub const TL_KERBER_SID: i32 = 0x4B01;
 /// Private `tl_data` type: bound named-policy name (UTF-8).
 pub(crate) const TL_KERBER_POLICY: i32 = 0x4B02;
-/// Private `tl_data` type: iprop serial (4-byte BE).
+/// Private `tl_data` type: the iprop serial kerber-rust 1.0 kept on `K/M` (4-byte BE). The
+/// serial is the update log's now; a record that still carries this type loses it when written.
 pub const TL_KERBER_SERIAL: i32 = 0x4B03;
 /// Private `tl_data` type: password history keys (MIT preserves unknown types).
 pub const TL_KERBER_HIST: i32 = 0x4B04;
@@ -232,12 +234,18 @@ impl DumpFile {
     }
 
     /// One policy record as the dump `version` writes it: version 7 (`-r18` is version 6)
-    /// carries the r1.11 fields; version 6 keeps the first ten (the r1.8 record).
+    /// carries the r1.11 fields; version 6 keeps the first ten (the r1.8 record); version 5 and
+    /// below, an `iprop` dump's, the name, five counters and a zero.
     /// MIT `dump_r1_8_policy` (`kadmin/dbutil/dump.c:404-413`): the r1.8 record is the name and nine counters.
+    /// MIT `dump_k5beta7_policy` (`kadmin/dbutil/dump.c:394-401`): the oldest record is the name, five counters and a zero reference count.
     #[must_use]
     pub fn policy_record(rest: &str, version: u32) -> String {
         if version == KDB_DUMP_VERSION {
             return format!("policy\t{rest}");
+        }
+        if version <= 5 {
+            let fields: Vec<&str> = rest.split('\t').take(6).collect();
+            return format!("policy\t{}\t0", fields.join("\t"));
         }
         let fields: Vec<&str> = rest.split('\t').take(10).collect();
         format!("policy\t{}", fields.join("\t"))
@@ -278,11 +286,6 @@ impl DumpFile {
         store.resolve_history_all();
         if let Some(sid) = domain {
             store.set_domain_sid(sid);
-        }
-        if let Some(km) = store.get(&format!("K/M@{realm}"))
-            && let Some(sno) = serial_from_tl(&km.tl_data)
-        {
-            store.set_serial(sno);
         }
         Ok(store)
     }
@@ -501,12 +504,25 @@ pub fn load_dump(text: &str, master_password: &[u8]) -> Result<PrincipalStore, D
 
 /// Merge the entries of `loaded` into `store`, as `kdb5_util load -update` puts each record of
 /// a dump into the live database: a principal replaces the entry of the same name, and a
-/// policy is created or replaced.
+/// policy is created or replaced. The principals go in `order` (the dump's), any not named there
+/// after them; a primary's update log records each put and then starts over for the policies.
 /// MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:775-779`): each record is put into the open database.
 /// MIT `process_k5beta7_policy` (`kadmin/dbutil/dump.c:820-822`): a policy is created, else replaced.
-pub fn update_store(store: &mut PrincipalStore, loaded: &PrincipalStore) {
-    for p in loaded.debug_principals() {
-        store.debug_insert(p.clone());
+pub fn update_store(store: &mut PrincipalStore, loaded: &PrincipalStore, order: &[&str]) {
+    let mut put = std::collections::HashSet::new();
+    for name in order {
+        if let Some(p) = loaded.get_raw(name)
+            && put.insert(p.id())
+        {
+            store.put_principal(p.clone());
+        }
+    }
+    for id in loaded.ids() {
+        if let Some(p) = loaded.get_raw(&id)
+            && put.insert(id)
+        {
+            store.put_principal(p.clone());
+        }
     }
     for pol in loaded.policies().values() {
         store.put_policy(pol.clone());
@@ -740,8 +756,57 @@ fn parse_header(line: &str) -> Result<u32, DumpError> {
     Ok(version)
 }
 
-/// MIT `kdb5_util dump -i1` (`ipropx 1 <sno> <sec> <usec>`), its lockout attributes 0.
+/// Why a dump's first line is no iprop header ([`parse_iprop_header`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IpropHeaderError {
+    /// Neither `ipropx` nor `iprop`: MIT prints "Invalid iprop header".
+    NotIprop,
+    /// An `ipropx` header of a version past 1: MIT prints "Unknown iprop dump version".
+    UnknownVersion(u32),
+    /// Too few numbers after the word.
+    Short,
+}
+
+/// An iprop dump's first line: `ipropx <version> <sno> <sec> <usec>` (version 0 or 1) or
+/// `iprop <sno> <sec> <usec>`. Returns whether it is an `ipropx 1` dump, and the serial and time
+/// the update log takes when it is loaded.
+/// MIT `parse_iprop_header` (`kadmin/dbutil/dump.c:1069-1107`): the header's word, the version an ipropx header carries, then the serial and the time.
+///
+/// # Errors
+///
+/// [`IpropHeaderError`] for any other line.
+pub fn parse_iprop_header(line: &str) -> Result<(bool, UlogLast), IpropHeaderError> {
+    let mut words = line.split_whitespace();
+    let head = words.next().ok_or(IpropHeaderError::NotIprop)?;
+    let nums: Vec<u32> = words.map_while(|w| w.parse().ok()).take(4).collect();
+    let (x1, rest) = match head {
+        "ipropx" if nums.len() == 4 => match nums[0] {
+            0 => (false, &nums[1..]),
+            1 => (true, &nums[1..]),
+            v => return Err(IpropHeaderError::UnknownVersion(v)),
+        },
+        "iprop" if nums.len() == 3 => (false, &nums[..]),
+        "ipropx" | "iprop" => return Err(IpropHeaderError::Short),
+        _ => return Err(IpropHeaderError::NotIprop),
+    };
+    Ok((
+        x1,
+        UlogLast {
+            sno: rest[0],
+            time: crate::store::UlogTime {
+                seconds: rest[1],
+                useconds: rest[2],
+            },
+        },
+    ))
+}
+
+/// MIT `kdb5_util dump -i1` (`ipropx 1 <sno> <sec> <usec>`), its lockout attributes 0, its
+/// serial and time `last`: the update log's last entry as it was read before `store` was, so the
+/// dump holds at least what its header says and a change made in between reaches a replica as an
+/// update.
 /// MIT `dump_db` (`kadmin/dbutil/dump.c:1176-1188`): an iprop dump omits the non-replicated attributes.
+/// MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1333`): the update log's last serial and time are read before the database is iterated.
 ///
 /// # Errors
 ///
@@ -750,13 +815,14 @@ fn parse_header(line: &str) -> Result<u32, DumpError> {
 pub fn dump_store_iprop(
     store: &PrincipalStore,
     master_password: &[u8],
+    last: UlogLast,
 ) -> Result<String, DumpError> {
     let etype = store
         .get(&format!("K/M@{}", store.realm()))
         .and_then(|km| km.keys.first())
         .map_or_else(default_master_etype, |k| k.etype);
     let mkey = master_key_from_password(store.realm(), master_password, etype)?;
-    Ok(iprop_header(store, &write_dump_nra(store, &mkey, true)?))
+    Ok(iprop_header(last, &write_dump_nra(store, &mkey, true)?))
 }
 
 /// [`dump_store_iprop`] with every key wrapped under `mkey`.
@@ -767,13 +833,19 @@ pub fn dump_store_iprop(
 pub fn dump_store_iprop_with_key(
     store: &PrincipalStore,
     mkey: &ProtocolKey,
+    last: UlogLast,
 ) -> Result<String, DumpError> {
-    Ok(iprop_header(store, &write_dump_nra(store, mkey, true)?))
+    Ok(iprop_header(last, &write_dump_nra(store, mkey, true)?))
 }
 
-/// `text` with the version 7 header replaced by `ipropx 1 <sno> <sec> <usec>`.
-fn iprop_header(store: &PrincipalStore, text: &str) -> String {
-    let header = format!("ipropx 1 {} {} 0\n", store.serial(), unix_now());
+/// `text` with the version 7 header replaced by `ipropx 1 <sno> <sec> <usec>`, `last`'s serial
+/// and time.
+/// MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1329`): the header takes the update log's last serial and time.
+fn iprop_header(last: UlogLast, text: &str) -> String {
+    let header = format!(
+        "ipropx 1 {} {} {}\n",
+        last.sno, last.time.seconds, last.time.useconds
+    );
     text.replacen(
         &format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n"),
         &header,
@@ -1063,15 +1135,12 @@ fn write_princ_record(
     } else {
         p.tl_data.clone()
     };
-    tl.retain(|t| t.ty != TL_DB_ARGS);
+    tl.retain(|t| t.ty != TL_DB_ARGS && t.ty != TL_KERBER_SERIAL);
     merge_sid_tl(&mut tl, store.domain_sid(), p.rid);
     merge_kadm_tl(&mut tl, p);
     merge_string_attrs_tl(&mut tl, &p.string_attrs);
     if p.kadm.old_keys.is_empty() {
         merge_hist_tl(&mut tl, &p.key_history, mkey)?;
-    }
-    if p.name.components_joined() == "K/M" {
-        merge_serial_tl(&mut tl, store.serial());
     }
     let mut keys = Vec::new();
     for k in &p.keys {
@@ -1284,20 +1353,6 @@ fn decode_hist(b: &[u8], mkey: &ProtocolKey) -> Result<Vec<KeyEntry>, DumpError>
     Ok(out)
 }
 
-fn merge_serial_tl(tl: &mut Vec<TlData>, sno: u32) {
-    tl.retain(|t| t.ty != TL_KERBER_SERIAL);
-    tl.push(TlData {
-        ty: TL_KERBER_SERIAL,
-        contents: sno.to_be_bytes().to_vec(),
-    });
-}
-
-fn serial_from_tl(tl: &[TlData]) -> Option<u32> {
-    tl.iter()
-        .find(|t| t.ty == TL_KERBER_SERIAL && t.contents.len() == 4)
-        .map(|t| u32::from_be_bytes([t.contents[0], t.contents[1], t.contents[2], t.contents[3]]))
-}
-
 fn policy_from_tl(tl: &[TlData]) -> Option<String> {
     tl.iter()
         .find(|t| t.ty == TL_KERBER_POLICY)
@@ -1468,7 +1523,6 @@ mod tests {
             again.get_name(&user).unwrap().pw_policy.as_deref(),
             Some("strict")
         );
-        assert_eq!(again.serial(), store.serial());
     }
 
     #[test]

@@ -130,7 +130,7 @@ the next module (`kdc_authdata.c` `handle_authdata`). It is not a
 `kdc.issue` line, so a request still logs only the `kdc.issue` lines
 above.
 
-A database, `.ulog`, stash or keytab save whose writer may not give
+A database, stash or keytab save whose writer may not give
 the new file the replaced file's owner or group (an unprivileged
 writer) logs `event=protocol.secret_file` at **warn** with
 `correlation_id`, `component`, `outcome=ok`, `path`, the old `uid` and

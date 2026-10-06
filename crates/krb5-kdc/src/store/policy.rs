@@ -415,7 +415,7 @@ impl PrincipalStore {
     /// [`Error::Db`] when the store cannot be saved, a writer that may not write the database
     /// included; the policy stays in memory and nothing on disk changes.
     pub fn put_policy_and_save(&mut self, pol: NamedPolicy) -> Result<(), Error> {
-        self.note_ulog(format!("policy:{}", pol.name), false, None);
+        self.note_ulog_reset();
         self.policies.insert(pol.name.clone(), pol);
         self.save_if_configured()
     }
@@ -433,7 +433,7 @@ impl PrincipalStore {
     /// store to `persist_paths` fails.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         self.policies.remove(name).ok_or(Error::NotFound)?;
-        self.note_ulog(format!("policy:{name}"), true, None);
+        self.note_ulog_reset();
         self.save_if_configured()
     }
 

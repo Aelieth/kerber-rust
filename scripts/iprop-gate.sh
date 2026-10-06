@@ -56,6 +56,12 @@ docker exec "$NAME" sh -c 'cat >/tmp/iprop-krb5.conf <<EOF
         iprop_slave_poll = 10
     }
 EOF'
+# The Rust kadmind serves the iprop program only with iprop_enable, as MIT's registers it only
+# then (ovsec_kadmd.c setup_loop): its profile is the container's kdc.conf with iprop on, and
+# its update log /tmp/principal.ulog, which MIT's kproplog reads with the same profile.
+docker exec "$NAME" sh -c '{ sed -n "1,/^    KERBER.TEST = {/p" /etc/krb5kdc/kdc.conf; printf "        iprop_enable = true\n        iprop_port = 749\n        iprop_logfile = /tmp/principal.ulog\n"; sed "1,/^    KERBER.TEST = {/d" /etc/krb5kdc/kdc.conf; } >/tmp/rust-iprop-kdc.conf'
+docker exec "$NAME" cat /tmp/rust-iprop-kdc.conf
+docker exec "$NAME" grep -q '^        iprop_enable = true$' /tmp/rust-iprop-kdc.conf
 
 echo "==== A: Rust master → MIT kpropd -A serial-delta ===="
 docker exec -d \
@@ -84,6 +90,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -141,6 +148,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind-nop.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -172,6 +180,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -239,8 +248,8 @@ echo "kpropd FULL_RESYNC wait ok=$ok"
 echo "==== kpropd-iprop.log (pre-kprop) ===="
 docker exec "$NAME" cat /tmp/kpropd-iprop.log 2>/dev/null || true
 
-# Policies never travel in the ulog (kdb5.c logs principals only), so the
-# history policy must be in the full dump the replica loads first.
+# A policy change starts the update log over (kdb5.c ulog_init_header), so the
+# history policy is made before the first-contact dump the replica loads.
 kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 3 ihp'
 mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
@@ -317,6 +326,7 @@ docker exec -d \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind 0.0.0.0:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -332,11 +342,11 @@ done
     exit 1
 }
 
-echo "==== persisted ulog after restart ===="
-require_log "$NAME" /tmp/principal.ulog extra "extra in /tmp/principal.ulog"
-ULOG="$(docker exec "$NAME" cat /tmp/principal.ulog 2>/dev/null || true)"
-echo "$ULOG"
-echo "$ULOG" | grep -q extra
+echo "==== persisted ulog after restart: MIT kproplog reads the Rust master's update log ===="
+KPL="$(docker exec -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf "$NAME" kproplog -v 2>&1 || true)"
+echo "$KPL"
+echo "$KPL" | grep -F 'Kerberos update log (/tmp/principal.ulog)'
+echo "$KPL" | grep -F 'Update principal : extra@KERBER.TEST'
 
 echo "==== wait MIT kpropd -A GET_UPDATES serial-delta ===="
 ok=0
@@ -371,11 +381,51 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
+echo "==== a policy change restarts the log: MIT kpropd asks for a full resync, and the dump carries the policy ===="
+# kdb5.c krb5_db_create_policy: a logging primary reinitializes its update log
+# after a policy change (one dummy entry at serial 1), so the replica, past it,
+# needs the full dump. This kadmind sends none itself (ipropx_resync's kprop
+# child), so it is pushed with krb5-kprop -i, as an operator would.
+FR_BEFORE="$(docker exec "$NAME" grep -c 'Full resync needed' /tmp/kpropd-iprop.log || true)"
+kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 2 ihp2'
+KPL_RESET="$(docker exec -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf "$NAME" kproplog -h 2>&1 || true)"
+echo "$KPL_RESET"
+echo "$KPL_RESET" | grep -F 'Number of entries : 1'
+echo "$KPL_RESET" | grep -F 'Last serial # : 1'
+_full_resync_again() {
+    [ "$(docker exec "$NAME" grep -c 'Full resync needed' /tmp/kpropd-iprop.log || true)" -gt "$FR_BEFORE" ]
+}
+retry_until --log "$NAME" /tmp/kpropd-iprop.log -- 400 'a second Full resync needed in /tmp/kpropd-iprop.log' _full_resync_again
+echo "MIT kpropd Full resync needed: $FR_BEFORE before the policy, $(docker exec "$NAME" grep -c 'Full resync needed' /tmp/kpropd-iprop.log || true) after"
+KPROP2="$(docker exec \
+    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KPROP_KEYTAB=/tmp/iprop.keytab \
+    "$NAME" /tmp/krb5-kprop -i -P 754 -s /tmp/iprop.keytab -n testhost.kerber.test testhost.kerber.test 2>&1 || true)"
+echo "$KPROP2"
+echo "$KPROP2" | grep -q 'kprop ok'
+ok=0
+for _ in $(seq 1 40); do
+    if mit_kadmin_local "$NAME" -- -q 'getpol ihp2' 2>/dev/null | grep -q 'Policy: ihp2'; then
+        ok=1
+        break
+    fi
+    sleep 0.5
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kpropd-iprop.log >&2 || true
+    log "iprop.gate" "error" ',"error":"MIT replica missing ihp2 after the full resync"'
+    exit 1
+fi
+mit_kadmin_local "$NAME" -- -q 'getpol ihp2' 2>&1 | grep -F 'Number of old keys kept: 2'
+
 echo "==== password history propagates: MIT kpropd applies the KADM_DATA record under kadmin/history ===="
 # kdb_convert.c: the admin record, with the policy and the history, travels
-# inside AT_TL_DATA; a policy created meanwhile never travels (kdb5.c), and
-# the replica refuses the remembered password itself.
-for q in 'addpol -history 2 ihp2' 'addprinc -pw i3cret1 -policy ihp ihist' 'cpw -pw i3cret2 ihist'; do
+# inside AT_TL_DATA, and the replica refuses the remembered password itself.
+for q in 'addprinc -pw i3cret1 -policy ihp ihist' 'cpw -pw i3cret2 ihist'; do
     kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
         "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q "$q"
 done
@@ -496,6 +546,7 @@ SEC="$(echo "$HEAD" | awk '{print $4}')"
 USEC="$(echo "$HEAD" | awk '{print $5}')"
 echo "dump last_sno=$SNO last_time=$SEC $USEC"
 LOAD="$(docker exec \
+    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust-replica \
     -e KRB5_KDC_STASH=/tmp/rust-replica.stash \

@@ -153,8 +153,13 @@ pub struct IpropUpdate {
     pub name: String,
     /// `kdb_deleted`.
     pub deleted: bool,
+    /// `kdb_commit`: the primary's entry was written whole.
+    pub commit: bool,
     /// `kdb_update`: the attributes it carries, in its order.
     pub vals: Vec<KdbeVal>,
+    /// The update as the primary encoded it, which a replica's update log keeps as it came;
+    /// empty for one built in memory, which applies without being logged.
+    pub raw: Vec<u8>,
 }
 
 /// The record's `tl_data` as MIT's database holds it, which an update compares and carries: the

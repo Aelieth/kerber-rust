@@ -9,6 +9,7 @@ mod alias;
 mod flags;
 mod history;
 mod iprop_ulog;
+pub(crate) mod iprop_xdr;
 mod kdb_convert;
 mod keys;
 mod password;
@@ -21,8 +22,8 @@ mod transit;
 #[cfg(test)]
 mod tests;
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,7 +34,7 @@ use krb5_types::pkinit::PkinitCa;
 use crate::dblock::{DbLock, DbLockHold, DbLockMode};
 use crate::error::Error;
 use crate::persist::{DbStamp, PersistError};
-use iprop_ulog::PrincipalMap;
+use iprop_ulog::{LogContext, LogNote, PrincipalMap};
 use principal::default_mod_actor;
 use rid::generate_domain_sid;
 
@@ -107,9 +108,11 @@ pub struct PrincipalStore {
     next_rid: u32,
     policies: HashMap<String, NamedPolicy>,
     lockout: Arc<crate::lockout::LockoutState>,
-    serial: Arc<AtomicU32>,
-    ulog: Arc<Mutex<VecDeque<UlogEntry>>>,
-    pending: Arc<Mutex<Vec<UlogEntry>>>,
+    /// The update log this process mapped and its role, process-local and kept across rereads;
+    /// `None` when iprop is off, so nothing is logged.
+    log: Option<Arc<LogContext>>,
+    /// The changes made since the database was last written, for the update log.
+    pending: Arc<Mutex<Vec<LogNote>>>,
     /// Set while [`Self::change`] runs `f`: a mutation's own save is only noted, and the change
     /// writes the database once at its end.
     saves_held: bool,
@@ -179,8 +182,7 @@ impl PrincipalStore {
             next_rid: RID_FIRST_USER,
             policies: HashMap::new(),
             lockout: Arc::default(),
-            serial: Arc::new(AtomicU32::new(0)),
-            ulog: Arc::new(Mutex::new(VecDeque::new())),
+            log: None,
             pending: Arc::new(Mutex::new(Vec::new())),
             saves_held: false,
         }
@@ -191,19 +193,19 @@ impl PrincipalStore {
     /// Kadmind and the KDC are separate processes sharing the database. Holding the database's
     /// lock shared, its age and its file's identity are compared with what this store last read,
     /// and the database is read again when they differ; the dump rows with the lockout attributes
-    /// of `principal.lockout`, named policies, serial and update log come from disk, and the
-    /// kdc.conf ticket policy, the password dictionary, the lockout state this process keeps (its
-    /// open `principal.lockout` and any counts kept in memory) and the PKINIT CA stay
-    /// process-local, carried over and never copied. The KDC's lockout writes move neither
-    /// the age nor the file, so a reader that needs them now merges them per entry
+    /// of `principal.lockout` and the named policies come from disk, and the kdc.conf ticket
+    /// policy, the password dictionary, the lockout state this process keeps (its open
+    /// `principal.lockout` and any counts kept in memory), the update log it mapped and the
+    /// PKINIT CA stay process-local, carried over and never copied. The KDC's lockout writes move
+    /// neither the age nor the file, so a reader that needs them now merges them per entry
     /// ([`Self::merge_lockout`]).
     /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): each read takes the shared lock and reopens the database under it.
     ///
     /// # Errors
     ///
     /// [`Error::Db`] when the database's lock files do not open or the lock may not be taken
-    /// (MIT's text), or the changed db, its stash, or its update log cannot be read or parsed;
-    /// [`Error::Crypto`] when the stash key does not decrypt it.
+    /// (MIT's text), or the changed db or its stash cannot be read or parsed; [`Error::Crypto`]
+    /// when the stash key does not decrypt it.
     pub fn reload_if_stale(&mut self) -> Result<(), Error> {
         let Some(db) = self.db_path().map(std::path::Path::to_path_buf) else {
             return Ok(());
@@ -263,6 +265,7 @@ impl PrincipalStore {
         loaded.domain_sid.clone_from(&self.domain_sid);
         loaded.lockout = Arc::clone(&self.lockout);
         loaded.env = std::mem::take(&mut self.env);
+        loaded.log = self.log.take();
         loaded.saves_held = self.saves_held;
         *self = loaded;
         Ok(())
@@ -339,19 +342,22 @@ impl PrincipalStore {
 
     /// A mutation's save: inside [`Self::change`] it is noted and made once when the change
     /// ends; a store with a database refuses it anywhere else, since a write that did not read
-    /// the database again under the exclusive lock would undo another process's change.
+    /// the database again under the exclusive lock would undo another process's change. A store
+    /// with no database has made its change already, so its update log (when it has one) takes
+    /// it now.
     fn save_if_configured(&self) -> Result<(), Error> {
-        self.commit_ulog();
         self.changed.0.store(true, Ordering::Relaxed);
+        if self.db_path().is_none() {
+            return self.log_pending();
+        }
         self.inside_change()
     }
 
     /// Save the store now, inside [`Self::change`], for a write a later failure in the same
-    /// change must not take back: what MIT commits with its own put.
+    /// change must not take back: what MIT commits with its own put, logged as that put is.
     fn save_through(&self) -> Result<(), Error> {
-        self.commit_ulog();
         self.inside_change()?;
-        self.write_database().map_err(Error::from)
+        self.logged_write(|| self.write_database())
     }
 
     /// Refuse a save outside [`Self::change`] for a store with a database.
@@ -388,15 +394,18 @@ impl PrincipalStore {
     /// returns `Ok` after a mutation the database is written once and its age moves forward;
     /// when `f` returns `Err`, the store is read back, so nothing of it stays in memory or on
     /// disk. A store with no database runs `f` alone, and so does a change inside a change.
+    /// With an update log mapped as a primary's, each put and delete the change made is encoded
+    /// before the write and appended to the log after it, one entry each, in order.
     /// MIT `krb5_db2_put_principal` (`plugins/kdb/db2/kdb_db2.c:828-854`): a put takes the exclusive lock, writes, moves the age and unlocks.
     /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): the exclusive lock reopens the database, so the put starts from what is on disk.
     ///
     /// # Errors
     ///
     /// The outer [`Error::Db`] when the lock may not be taken (MIT's `KRB5_KDB_CANTLOCK_DB` text,
-    /// or a missing lock file), the database cannot be read again, or the write fails (a writer
-    /// that may not write the database is refused with MIT's text, and the store is read back);
-    /// the inner result is `f`'s.
+    /// or a missing lock file), the database cannot be read again, an update cannot be encoded
+    /// for the log, or the write fails (a writer that may not write the database is refused with
+    /// MIT's text, and the store is read back), or the log cannot be written after the database
+    /// was (the change stays, as MIT's put does); the inner result is `f`'s.
     pub fn change<T, E>(
         &mut self,
         f: impl FnOnce(&mut Self) -> Result<T, E>,
@@ -418,23 +427,31 @@ impl PrincipalStore {
             f(&mut *inside.0)
         };
         let out = match done {
-            Ok(v) if self.changed.0.load(Ordering::Relaxed) => match self.write_database() {
-                Ok(()) => {
-                    self.db_stamp = DbStamp::now(&lock, &db);
-                    tracing::info!(
-                        event = krb5_log::events::ADMIN,
-                        component = "krb5-kdc",
-                        outcome = "ok",
-                        detail = "saved store",
-                        db = %db.display(),
-                    );
-                    Ok(Ok(v))
+            Ok(v) if self.changed.0.load(Ordering::Relaxed) => {
+                let written = self
+                    .prepare_log()
+                    .map_err(LoggedWrite::Before)
+                    .and_then(|p| {
+                        self.write_logged(p, || self.write_database().map_err(Error::from))
+                    });
+                match written {
+                    Ok(()) | Err(LoggedWrite::After(_)) => {
+                        self.db_stamp = DbStamp::now(&lock, &db);
+                        tracing::info!(
+                            event = krb5_log::events::ADMIN,
+                            component = "krb5-kdc",
+                            outcome = "ok",
+                            detail = "saved store",
+                            db = %db.display(),
+                        );
+                        written.map(|()| Ok(v)).map_err(LoggedWrite::into_error)
+                    }
+                    Err(e) => {
+                        let _ = self.reread(&lock);
+                        Err(e.into_error())
+                    }
                 }
-                Err(e) => {
-                    let _ = self.reread(&lock);
-                    Err(Error::from(e))
-                }
-            },
+            }
             Ok(v) => Ok(Ok(v)),
             Err(e) => {
                 let _ = self.reread(&lock);
@@ -655,7 +672,12 @@ pub use flags::{
 };
 pub(crate) use flags::{KDB_DISALLOW_PROXIABLE, KDB_NEW_PRINC, KDB_SUPPORT_DESMD5};
 pub use iprop_ulog::{
-    IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, UlogEntry,
+    IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED, IpropRole, LoggedWrite,
+    PreparedLog,
+};
+pub use iprop_xdr::{
+    IncrLayout, KeyWrap, UlogTime, XdrError, decode_incr_update, decode_kdbe_bytes,
+    encode_incr_update, encode_kdbe, walk_incr_update,
 };
 pub use kdb_convert::{
     AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,

@@ -45,6 +45,46 @@ pub fn documented_admin_id() -> String {
     admin_id_for_realm(TEST_REALM)
 }
 
+/// The master password the gates' realms are made with.
+#[cfg(any(test, feature = "test-hooks"))]
+pub const TEST_MASTER_PASSWORD: &[u8] = b"masterpassword";
+
+/// Give a store with no database an update log in memory of `entries` entries, in `role`, and
+/// a `K/M` entry holding the master key [`TEST_MASTER_PASSWORD`] makes for its realm, which the
+/// keys of its logged updates are wrapped under (as a database's are under its stash's). Returns
+/// that key.
+///
+/// # Errors
+///
+/// [`Error::Crypto`] when the master key cannot be derived; [`Error::Db`] when the log cannot be
+/// made.
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn map_memory_ulog(
+    store: &mut PrincipalStore,
+    entries: u32,
+    role: crate::IpropRole,
+) -> Result<krb5_crypto::ProtocolKey, Error> {
+    let realm = store.realm().to_owned();
+    let master = crate::master_key_from_password(
+        &realm,
+        TEST_MASTER_PASSWORD,
+        crate::default_master_etype(),
+    )?;
+    if store.get(&format!("K/M@{realm}")).is_none() {
+        let km = crate::create_realm(&realm, None, &master, 1)?
+            .get_raw(&format!("K/M@{realm}"))
+            .cloned()
+            .ok_or(Error::NotFound)?;
+        store.debug_insert(km);
+    }
+    let ulog = crate::Ulog::memory(entries).map_err(|e| Error::Db {
+        kind: std::io::ErrorKind::Other,
+        text: e.to_string(),
+    })?;
+    store.set_ulog(ulog, role);
+    Ok(master)
+}
+
 /// Bootstrap the documented realm: krbtgt, user, admin, host.
 ///
 /// # Errors

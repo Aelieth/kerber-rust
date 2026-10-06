@@ -246,8 +246,8 @@ sudo restorecon -Rv /var/kerberos/krb5kdc
 sudo ls -la /var/kerberos/krb5kdc
 ```
 
-The directory holds the database `principal` (MIT's dump format, not db2) and its update log
-`principal.ulog`, MIT's lock files `principal.ok` and `principal.kadm5.lock` (empty, 0600: the
+The directory holds the database `principal` (MIT's dump format, not db2), with `iprop_enable`
+its update log `principal.ulog` (MIT's), MIT's lock files `principal.ok` and `principal.kadm5.lock` (empty, 0600: the
 tools and daemons lock the database through them, as MIT's do), `principal.lockout` (0600: each
 principal's failed password attempts and last successful and failed authentication, which the
 KDC records there in place, as MIT's KDC records them in its database), the stash, `kdc.conf`
@@ -480,7 +480,7 @@ In the checkout: fetch the new release (`git pull`, or `git checkout <tag>` for 
 and run `make build` as in [Build](#build). `make install` replaces the programs and units an
 earlier install wrote and keeps every config file; give it the `PREFIX` you installed with
 (`/usr` when kerber-rust replaced krb5-server, `/usr/local` beside it). For a realm an earlier
-release made, four things changed:
+release made, five things changed:
 
 - Release builds find the database, the stash and the ACL only where `kdc.conf` names them
   (`database_name`, `key_stash_file` and `acl_file` in the realm's stanza), else in
@@ -503,6 +503,13 @@ release made, four things changed:
   the KDC keeps them in memory, loses them on a restart and says so once in its log. Make it
   once, empty, owned as the database is and labelled, as the lock files below: the KDC fills it,
   and nothing else changes.
+- The update log is MIT's: kept only with `iprop_enable` (which, as MIT's, needs `iprop_port`),
+  one entry appended per change. Without iprop an earlier release's `principal.ulog` is no
+  longer read or written and may be removed; with iprop the first program that maps it starts
+  it over, so each replica takes one full dump (`krb5-kprop -i`). kadmind serves iprop on its
+  own port and nothing listens on `iprop_port`, so an MIT replica's `iprop_port` names kadmind's
+  port. kadmind grants a full resync but sends no dump: each one (after a policy change, or a
+  replica the log has run past) needs `krb5-kprop -i` run by hand.
 
 Stop the daemons and install, and move the realm into the KDC directory only if it was kept
 elsewhere (leave `OLD` empty when it is already in `/var/kerberos/krb5kdc`):

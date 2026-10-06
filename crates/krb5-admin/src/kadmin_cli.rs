@@ -394,7 +394,7 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
             "Authenticating as principal {princstr} with password.\n"
         ));
     }
-    let handle = match kadm5_init(io, &o, &realm, &princstr) {
+    let (mut handle, iprop) = match kadm5_init(io, &o, &realm, &princstr) {
         Ok(h) => h,
         Err((msg, bad_params)) => {
             io.com_err(
@@ -408,6 +408,17 @@ fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
             return None;
         }
     };
+    // MIT `kadmin_startup` (`kadmin/cli/kadmin.c:599-603`): with iprop enabled the update log is mapped as the primary's, and one that cannot be stops kadmin.local.
+    // MIT `kadm5_init_iprop` (`lib/kadm5/srv/server_init.c:347-361`): only with `iprop_enable` is the log mapped.
+    if iprop.enabled
+        && let Err(e) =
+            handle
+                .store
+                .map_ulog(&iprop.logfile, iprop.ulogsize, krb5_kdc::IpropRole::Primary)
+    {
+        io.com_err(WHOAMI, Some(&e.to_string()), "while mapping update log");
+        return None;
+    }
     Some(Startup {
         handle,
         request: o.query,
@@ -537,14 +548,16 @@ fn klog_init() {
 }
 
 /// MIT `kadm5_init` (`server_init.c:158-275`): for `kadmin.local`, the realm's parameters, the
-/// db2 module's arguments, the database, the caller's name and the master key. The error is
-/// the `com_err` text, and whether MIT also prints the usage (`KADM5_BAD_SERVER_PARAMS`).
+/// db2 module's arguments, the database, the caller's name and the master key; with the handle,
+/// the realm's iprop parameters, which `iprop_port` must complete when iprop is enabled. The
+/// error is the `com_err` text, and whether MIT also prints the usage
+/// (`KADM5_BAD_SERVER_PARAMS`).
 fn kadm5_init(
     io: &mut Io,
     o: &Opts,
     realm: &str,
     princstr: &str,
-) -> Result<Handle, (String, bool)> {
+) -> Result<(Handle, krb5_config::IpropParams), (String, bool)> {
     if o.mkey_from_kbd && (o.ccache_name.is_some() || o.use_keytab) {
         return Err((
             "Illegal configuration parameter for local KADM5 client".to_owned(),
@@ -552,6 +565,11 @@ fn kadm5_init(
         ));
     }
     let paths = krb5_config::KdcPaths::resolve(Some(realm)).map_err(|e| (e.to_string(), false))?;
+    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled, a missing `iprop_port` is a missing required parameter.
+    let iprop = krb5_config::IpropParams::load(realm, &paths.database_name);
+    if iprop.missing_required() {
+        return Err((krb5_config::MISSING_CONF_PARAMS.to_owned(), false));
+    }
     let mut db = paths.database_name.clone();
     for arg in &o.db_args {
         match db2_arg(arg) {
@@ -600,11 +618,14 @@ fn kadm5_init(
     store
         .init_pwqual(open.conf.as_ref())
         .map_err(|e| (texts::strerror(&e), false))?;
-    Ok(Handle {
-        store,
-        realm: realm.to_owned(),
-        caller,
-    })
+    Ok((
+        Handle {
+            store,
+            realm: realm.to_owned(),
+            caller,
+        },
+        iprop,
+    ))
 }
 
 /// What a `-x` argument is to the db2 module.

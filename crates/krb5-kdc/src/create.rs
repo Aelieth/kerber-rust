@@ -27,7 +27,8 @@ const CHANGEPW_LIFETIME: u32 = 60 * 5;
 /// type; both are stamped `db_creation@realm` and take the realm's `default_principal_flags`,
 /// `max_life`, `max_renewable_life` and `default_principal_expiration`. Then `kadmin/admin` and
 /// `kadmin/changepw` are created the way `kadm5_create_principal` creates them for a caller
-/// named `kdb5_util`, with MIT's attributes and lifetimes. The update log is empty.
+/// named `kdb5_util`, with MIT's attributes and lifetimes. None of them is logged: with iprop
+/// enabled, `kdb5_util create` maps the update log afterwards and starts it over.
 /// MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:170-175`): `K/M` and `krbtgt` take the realm's flags, lifetimes, expiration and key/salt list.
 /// MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:392-406`): each entry is stamped `db_creation` with those defaults.
 /// MIT `add_principal` (`kadmin/dbutil/kdb5_create.c:409-440`): `K/M` gets `DISALLOW_ALL_TIX`, the master key, and the active and master key versions.
@@ -110,8 +111,6 @@ pub fn create_realm(
         store.create_principal_3_in(&name, realm, None, &[], &ent, &caller)?;
         stamp_kadm5_create_tl(&mut store, &name, mkvno);
     }
-    store.restore_ulog(Vec::new());
-    store.set_serial(0);
     Ok(store)
 }
 
@@ -256,7 +255,5 @@ pub fn seed_test_principals(
     let acl = crate::Acl::allow_admin(&actor)?;
     store.create_host(&acl, &actor, &crate::host_for_realm(&realm))?;
     store.create_host(&acl, &actor, &documented_kiprop())?;
-    store.restore_ulog(Vec::new());
-    store.set_serial(0);
     Ok(())
 }

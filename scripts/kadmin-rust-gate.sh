@@ -74,10 +74,16 @@ EOF'
 echo "==== backdate user last_pwd_change to 1000000000 before kadmind loads the store ===="
 docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
     "$NAME" /tmp/krb5-kdb setlastpwd user 1000000000
+# This kadmind runs with iprop on, as the MIT leg's does: the container's kdc.conf with
+# iprop_enable, its update log /tmp/principal.ulog. Without iprop the program is not registered
+# (the second kadmind below).
+docker exec "$NAME" sh -c '{ sed -n "1,/^    KERBER.TEST = {/p" /etc/krb5kdc/kdc.conf; printf "        iprop_enable = true\n        iprop_port = 749\n        iprop_logfile = /tmp/principal.ulog\n"; sed "1,/^    KERBER.TEST = {/d" /etc/krb5kdc/kdc.conf; } >/tmp/rust-iprop-kdc.conf'
+docker exec "$NAME" grep -q '^        iprop_enable = true$' /tmp/rust-iprop-kdc.conf
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -251,6 +257,27 @@ echo "$IPROP_ADM" | grep -F 'iprop-valid label=AUTH_TOOWEAK'
 IPROP_AG="$(kadm5_probe "$NAME" admin@KERBER.TEST iprop-auth-gssapi /tmp/kadmin-krb5.conf kadmin/admin@KERBER.TEST "$KADMIND_PORT" 2>&1 || true)"
 echo "$IPROP_AG"
 echo "$IPROP_AG" | grep -F 'iprop-auth-gssapi label=AUTH_TOOWEAK'
+echo "==== iprop program on a Rust kadmind without iprop_enable is not registered: AUTH_GSSAPI INIT SUCCESS, DATA no-context AUTH_FAILED, AUTH_NONE, kiprop RPCSEC_GSS and established AUTH_GSSAPI PROG_UNAVAIL (as the MIT leg's) ===="
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KPASSWD_BIND=127.0.0.1:7464 \
+    "$NAME" sh -c '/tmp/krb5-kadmind -P /tmp/kadmind-noiprop.pid 127.0.0.1:7749 >/tmp/kadmind-noiprop.log 2>&1'
+require_log "$NAME" /tmp/kadmind-noiprop.log '^listening ' "the kadmind without iprop listening"
+NOIPROP="$(kadmind_iprop_auth_gssapi "$NAME" 7749 2>&1 || true)"
+echo "$NOIPROP"
+echo "$NOIPROP" | grep -F 'kadmin_on_iprop kind=init label=SUCCESS'
+echo "$NOIPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_FAILED'
+echo "$NOIPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=PROG_UNAVAIL'
+NOIPROP_OK="$(kadm5_probe "$NAME" admin@KERBER.TEST iprop-valid /tmp/kadmin-krb5.conf kiprop/testhost.kerber.test@KERBER.TEST 7749 2>&1 || true)"
+echo "$NOIPROP_OK"
+echo "$NOIPROP_OK" | grep -F 'iprop-valid label=ACCEPT code=1 '
+NOIPROP_AG="$(kadm5_probe "$NAME" admin@KERBER.TEST iprop-auth-gssapi /tmp/kadmin-krb5.conf kadmin/admin@KERBER.TEST 7749 2>&1 || true)"
+echo "$NOIPROP_AG"
+echo "$NOIPROP_AG" | grep -F 'iprop-auth-gssapi label=RPC_ERROR clnt_stat=8 '
+docker exec "$NAME" sh -c 'kill "$(cat /tmp/kadmind-noiprop.pid)"'
+wait_gone_in "$NAME" 7749 || die "the kadmind without iprop still bound :7749 after kill"
 echo "==== RPCSEC_GSS integrity service listprincs vs Rust kadmind ===="
 compile_kadm5_integrity "$NAME"
 INT_LIST="$(kadm5_integrity_list "$NAME" admin@KERBER.TEST adminpassword integrity /tmp/kadmin-krb5.conf 2>&1 || true)"

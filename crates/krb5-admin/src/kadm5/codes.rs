@@ -222,11 +222,5 @@ pub(super) const API_V2: u32 = 0x1234_5702;
 pub(super) const API_V3: u32 = 0x1234_5703;
 pub(super) const API_V4: u32 = 0x1234_5704;
 
-pub(super) use krb5_kdc::{
-    AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
-    AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_MOD_WHERE, AT_PRINC, AT_PW_EXP,
-    AT_PW_HIST, AT_PW_HIST_KVNO, AT_PW_LAST_CHANGE, AT_PW_POLICY, AT_PW_POLICY_SWITCH, AT_TL_DATA,
-};
-
 /// MIT `glob_to_regexp` (`svr_iters.c:61-62`): a glob that ends in a backslash is EINVAL.
 pub(super) const EINVAL: u32 = 22;

@@ -20,8 +20,8 @@ use super::dispatch::kadm5_or_iprop;
 use super::log::{Caller, kadm5_log_op, kadm5_service_name};
 use super::rpc::{
     RpcCtx, parse_gcred, rpc_reply_accepted, rpc_reply_accepted_verf, rpc_reply_agss,
-    rpc_reply_auth_error, rpc_reply_clear, rpc_reply_gss, rpc_reply_gss_verf,
-    rpc_reply_mismatch_verf, rpc_reply_weakauth,
+    rpc_reply_agss_status, rpc_reply_auth_error, rpc_reply_clear, rpc_reply_gss,
+    rpc_reply_gss_verf, rpc_reply_mismatch_verf, rpc_reply_weakauth,
 };
 use super::xdr::{XdrR, XdrW};
 use crate::Error;
@@ -483,7 +483,13 @@ pub(super) fn handle_auth_gssapi(
         *agss = None;
         return Ok(rpc_reply_clear(xid, &[]));
     }
-    if iprop {
+    // MIT `krb5_iprop_prog_1` (`kadmin/server/ipropd_svc.c:542-548`): the iprop program, once registered, refuses every flavor but RPCSEC_GSS.
+    let served = iprop
+        && store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .logging();
+    if served {
         return Ok(rpc_reply_weakauth(xid));
     }
 
@@ -520,6 +526,10 @@ pub(super) fn handle_auth_gssapi(
 
     if auth_msg {
         return Ok(rpc_reply_agss(xid, &reply_verf, &[]));
+    }
+    // MIT `svc_do_xprt` (`lib/rpc/svc.c:496-521`): without iprop the program is not registered, so the authenticated call is PROG_UNAVAIL under its verifier.
+    if iprop {
+        return Ok(rpc_reply_agss_status(xid, &reply_verf, PROG_UNAVAIL));
     }
 
     let mut wr = XdrR::new(args);

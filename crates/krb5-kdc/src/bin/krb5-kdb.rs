@@ -11,16 +11,24 @@
 //!   ([`krb5_kdc::create_realm`]); the master password is `-P`, else asked twice on the
 //!   terminal (one line each from a pipe). `-s` keeps the stash; without it no stash is left.
 //! - `stash [-f keyfile]`: a new stash file from the stashed (or typed) master key.
-//! - `dump [-r18] [-verbose] [-rev] [-recurse] [filename [principals...]]`: the database as
-//!   stored, keys still wrapped; principals are whole-name regular expressions.
-//! - `load [-r18] [-hash] [-verbose] [-update] filename`: a full load replaces the database
+//! - `dump [-r18] [-i[N] [-c]] [-verbose] [-rev] [-recurse] [filename [principals...]]`: the
+//!   database as stored, keys still wrapped; principals are whole-name regular expressions. With
+//!   iprop enabled, `-i` / `-i1` write an iprop dump headed by the update log's last serial and
+//!   time, and `-c` keeps an iprop dump whose serial the log still holds.
+//! - `load [-r18] [-i] [-hash] [-verbose] [-update] filename`: a full load replaces the database
 //!   with a new file; `-update` merges the records into it. The dump's keys are opened with
-//!   `-P`, else (`-m`) a typed master password, else the stash.
+//!   `-P`, else (`-m`) a typed master password, else the stash. With iprop enabled a full load
+//!   starts the update log over (`-i`: at the iprop dump's serial and time), and `-update` logs
+//!   each record it puts.
 //! - `destroy [-f]`.
+//!
+//! With `iprop_enable` set for the realm ([`krb5_config::IpropParams`]), `create` makes the update
+//! log, the commands that open the database map it, and `destroy` removes it; without it no
+//! command touches an update log.
 //!
 //! Of db2's `-x` arguments, `dbname=` and `temporary` name the database file, and `hash=`,
 //! `merge_nra`, `lockiter` and `unlockiter` change nothing this store keeps. MIT's other
-//! commands, `-b7` / `-r13` / iprop dumps, master key conversion, `-M` other than `K/M` and `-kv`
+//! commands, `-b7` / `-r13` dumps, master key conversion, `-M` other than `K/M` and `-kv`
 //! outside `create` are refused.
 //!
 //! With the `test-hooks` feature the gates' commands `addpol`, `setstr`, `alias` and
@@ -38,11 +46,12 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use krb5_cli::{MitArgs, MitOpt, Placement, Prompter, getopt};
-use krb5_config::KdcPaths;
+use krb5_config::{IpropParams, KdcPaths};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{
-    CreateError, DbUpdate, DumpError, DumpFile, DumpPrincipal, FullLoad, KDB_DUMP_VERSION,
-    LoadError, Lockout, PersistError, create_realm, create_store, kdc_conf_for_realm,
+    CreateError, DbUpdate, DumpError, DumpFile, DumpPrincipal, FullLoad, IPROP_NIL, IPROP_OK,
+    IpropHeaderError, IpropRole, KDB_DUMP_VERSION, LoadError, Lockout, LoggedWrite, PersistError,
+    PrincipalStore, Ulog, UlogLast, create_realm, create_store, kdc_conf_for_realm,
     load_dump_with_key, master_key_from_password, parse_dump, stash_keys, string_to_enctype,
     update_store, write_stash,
 };
@@ -144,6 +153,10 @@ struct Util {
     manual: bool,
     kvno: Option<u32>,
     exit_status: u8,
+    /// The realm's iprop parameters, for the database `-d` names (MIT's `global_params`).
+    iprop: IpropParams,
+    /// The update log, once a command that opens the database has mapped it.
+    ulog: Option<Ulog>,
 }
 
 /// db2's database arguments: every `-x`, and the `dbname=` each `-d` adds, in command-line order.
@@ -374,6 +387,8 @@ fn run(progname: String, args: &[String]) -> u8 {
         return usage();
     }
     let kvno = parsed.value("-kv").map(c_atoi);
+    // MIT `main` (`kadmin/dbutil/kdb5_util.c:340-343`): the primary role when iprop is enabled, which every command's logging follows.
+    let iprop = IpropParams::load(realm.as_deref().unwrap_or_default(), &paths.database_name);
     if kvno.is_some_and(|k| k != 1) && command != Command::Create {
         return usage();
     }
@@ -400,6 +415,8 @@ fn run(progname: String, args: &[String]) -> u8 {
         manual: parsed.flag("-m"),
         kvno,
         exit_status: 0,
+        iprop,
+        ulog: None,
     };
     let cmd_args = &parsed.operands;
     match command {
@@ -454,6 +471,15 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
         "Initializing database '{}' for realm '{realm}',\nmaster key name 'K/M@{realm}'",
         db.display()
     ));
+    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled and no `iprop_port`, the admin interface does not start.
+    // MIT goes on to create the database and its log first; this port stops before writing anything.
+    if util.iprop.missing_required() {
+        util.com_err(
+            krb5_config::MISSING_CONF_PARAMS,
+            "while initializing the Kerberos admin interface",
+        );
+        return util.failed();
+    }
     #[cfg(feature = "test-hooks")]
     let hooked = hooks::master_password();
     #[cfg(not(feature = "test-hooks"))]
@@ -539,6 +565,21 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
             return util.failed();
         }
     }
+    // MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:263-289`): with iprop enabled the update log is made and started over; the realm's first principals are not logged.
+    if util.iprop.enabled {
+        match Ulog::map(&util.iprop.logfile, util.iprop.ulogsize) {
+            Ok(log) => {
+                if let Err(e) = log.init_header() {
+                    err_line(&format!("create: {e} while initializing update log"));
+                    return util.failed();
+                }
+            }
+            Err(e) => {
+                err_line(&format!("create: {e} while creating update log"));
+                return util.failed();
+            }
+        }
+    }
     let stash = util.paths.key_stash_file.clone();
     if do_stash {
         if let Err(e) = write_stash(&stash, &realm, &master, u32::from(mkvno)) {
@@ -620,6 +661,14 @@ fn open_db_and_mkey(util: &mut Util) -> Result<OpenDb, u8> {
         return Err(util.failed());
     };
     let mkey = fetch_mkey(util, &realm, &km)?;
+    // MIT `open_db_and_mkey` (`kadmin/dbutil/kdb5_util.c:473-480`): with iprop enabled, the update log is mapped once the master key opens the database.
+    if mkey.is_some() && util.iprop.enabled {
+        let Ok(log) = Ulog::map(&util.iprop.logfile, util.iprop.ulogsize) else {
+            err_line(&format!("{}: Could not map log", util.progname));
+            return Err(util.failed());
+        };
+        util.ulog = Some(log);
+    }
     Ok(OpenDb { realm, km, mkey })
 }
 
@@ -781,6 +830,7 @@ fn stash(util: &mut Util, args: &[String], db: OpenDb) -> u8 {
 fn dump(util: &mut Util, args: &[String]) -> u8 {
     let mut version = KDB_DUMP_VERSION;
     let (mut verbose, mut rev, mut conditional) = (false, false, false);
+    let mut iprop: Option<Iprop> = None;
     let mut i = 1;
     while let Some(a) = args.get(i) {
         match a.as_str() {
@@ -794,27 +844,72 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
             "-verbose" => verbose = true,
             "-rev" => rev = true,
             "-recurse" => {}
-            s if s.starts_with("-i") => return usage(),
+            // MIT `dump_db` (`kadmin/dbutil/dump.c:1173-1192`): `-i` with iprop enabled is an iprop dump, `-iN` past 0 an ipropx one; without iprop it is refused.
+            s if s.starts_with("-i") => {
+                if !util.iprop.enabled {
+                    err_line("Iprop not enabled");
+                    return util.failed();
+                }
+                iprop = Some(if c_atoi(&s[2..]) == 0 {
+                    Iprop::V0
+                } else {
+                    Iprop::X1
+                });
+            }
             _ => break,
         }
         i += 1;
     }
     let ofile = args.get(i);
     let names = args.get(i + 1..).unwrap_or_default();
-    if ofile.is_some() && conditional {
-        util.com_err0("Conditional dump is an undocumented option for use only for iprop dumps");
-        return util.failed();
+    // MIT `dump_db` (`kadmin/dbutil/dump.c:1221-1232`): `-c` is for iprop dumps only, and keeps a dump whose serial and time the update log still holds.
+    if let Some(f) = ofile
+        && conditional
+    {
+        if iprop.is_none() {
+            util.com_err0(
+                "Conditional dump is an undocumented option for use only for iprop dumps",
+            );
+            return util.failed();
+        }
+        if current_dump_sno_in_ulog(util, Path::new(f)) {
+            return util.exit_status;
+        }
     }
     let to_file = ofile.filter(|f| f.as_str() != "-");
     if to_file.is_some_and(|f| f.starts_with('-')) {
         return usage();
     }
+    // MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1323`): the header's serial and time are the update log's last.
+    let last = match iprop {
+        Some(_) => match util.ulog.as_ref().map(Ulog::get_last) {
+            Some(Ok(last)) => Some(last),
+            Some(Err(e)) => {
+                util.com_err(&e.to_string(), "while reading update log header");
+                return util.failed();
+            }
+            // No master key opened the database, so no log was mapped (MIT asserts here).
+            None => {
+                util.com_err(
+                    "Generic update log error",
+                    "while reading update log header",
+                );
+                return util.failed();
+            }
+        },
+        None => None,
+    };
     // MIT `dump_db` (`kadmin/dbutil/dump.c:1334-1347`): the records are read holding the database's lock shared, taken once the master key is in hand, so no writer waits on a typed key.
     let current = match read_db_text(util, &util.db_args.open_file()).and_then(|(text, lockout)| {
         let mut dump = parse_dump(&text).map_err(|e| e.to_string())?;
         // MIT `klmdb_iterate` (`plugins/kdb/lmdb/kdb_lmdb.c:841-888`): each dumped entry carries its lockout record.
+        // MIT `k5beta7_common` (`kadmin/dbutil/dump.c:340-344`): an iprop dump omits the non-replicated attributes.
         for p in &mut dump.princs {
-            if let Some(l) = lockout.get(&p.name) {
+            if iprop.is_some() {
+                p.last_success = 0;
+                p.last_failed = 0;
+                p.fail_auth_count = 0;
+            } else if let Some(l) = lockout.get(&p.name) {
                 p.last_success = l.last_success;
                 p.last_failed = l.last_failed;
                 p.fail_auth_count = l.fail_auth_count;
@@ -838,15 +933,26 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
     if rev {
         princs.reverse();
     }
-    let mut text = format!("kdb5_util load_dump version {version}\n");
+    let mut text = match (iprop, last) {
+        (Some(Iprop::V0), Some(l)) => {
+            format!("iprop {} {} {}\n", l.sno, l.time.seconds, l.time.useconds)
+        }
+        (Some(Iprop::X1), Some(l)) => format!(
+            "ipropx 1 {} {} {}\n",
+            l.sno, l.time.seconds, l.time.useconds
+        ),
+        _ => format!("kdb5_util load_dump version {version}\n"),
+    };
     for p in &princs {
         text.push_str(&p.record());
         text.push('\n');
     }
+    // MIT `iprop_version` (`kadmin/dbutil/dump.c:1046-1055`): an iprop dump's policies are in the oldest format.
+    let policy_version = if iprop == Some(Iprop::V0) { 5 } else { version };
     // MIT `dump_db` (`kadmin/dbutil/dump.c:1340-1347`): no policies when principals were named.
     if names.is_empty() {
         for pol in &current.policies {
-            text.push_str(&DumpFile::policy_record(pol, version));
+            text.push_str(&DumpFile::policy_record(pol, policy_version));
             text.push('\n');
         }
     }
@@ -865,6 +971,52 @@ fn dump(util: &mut Util, args: &[String]) -> u8 {
         }
     }
     util.exit_status
+}
+
+/// The kind of iprop dump `-i` asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Iprop {
+    /// `-i` / `-i0`: the `iprop` header.
+    V0,
+    /// `-iN`, N past 0: the `ipropx 1` header.
+    X1,
+}
+
+/// Whether the iprop dump already at `file` is one a replica can catch up from: its header's
+/// serial and time are in the update log (or are its last).
+/// MIT `current_dump_sno_in_ulog` (`kadmin/dbutil/dump.c:1111-1134`): a dump that does not open, or whose header is no iprop one, is not current.
+fn current_dump_sno_in_ulog(util: &Util, file: &Path) -> bool {
+    let Ok(text) = fs::read(file) else {
+        return false;
+    };
+    let line = text.split(|&b| b == b'\n').next().unwrap_or_default();
+    let Some(last) = iprop_header_last(util, &String::from_utf8_lossy(line)) else {
+        return false;
+    };
+    util.ulog
+        .as_ref()
+        .is_some_and(|log| matches!(log.sno_status_of(last), IPROP_OK | IPROP_NIL))
+}
+
+/// An iprop dump's header ([`krb5_kdc::parse_iprop_header`]): the serial and time it carries,
+/// or `None` with MIT's message printed.
+/// MIT `parse_iprop_header` (`kadmin/dbutil/dump.c:1089-1101`): an unknown version and a line that is no iprop header are reported on standard error.
+fn iprop_header_last(util: &Util, line: &str) -> Option<UlogLast> {
+    match krb5_kdc::parse_iprop_header(line) {
+        Ok((_, last)) => Some(last),
+        Err(IpropHeaderError::UnknownVersion(v)) => {
+            err_line(&format!(
+                "{}: Unknown iprop dump version {v}",
+                util.progname
+            ));
+            None
+        }
+        Err(IpropHeaderError::NotIprop) => {
+            err_line("Invalid iprop header");
+            None
+        }
+        Err(IpropHeaderError::Short) => None,
+    }
 }
 
 /// The dump to a named file.
@@ -960,11 +1112,19 @@ fn version_name(version: u32) -> &'static str {
 /// after, where MIT, which reads no key, makes it first.
 fn load(util: &mut Util, args: &[String]) -> u8 {
     let mut want: Option<u32> = None;
-    let (mut verbose, mut update) = (false, false);
+    let (mut verbose, mut update, mut iprop_load) = (false, false, false);
     let mut i = 1;
     while let Some(a) = args.get(i) {
         match a.as_str() {
-            "-b7" | "-r13" | "-i" => return usage(),
+            "-b7" | "-r13" => return usage(),
+            // MIT `load_db` (`kadmin/dbutil/dump.c:1409-1418`): `-i` loads an iprop dump, and only with iprop enabled.
+            "-i" => {
+                if !util.iprop.enabled {
+                    err_line("Iprop not enabled");
+                    return 1;
+                }
+                iprop_load = true;
+            }
             "-ov" => {
                 err_line("OV dump format not supported");
                 return 1;
@@ -988,8 +1148,26 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
             return 1;
         }
     };
-    let Some(version) = dump_version(util, &bytes, want, file) else {
+    let Some(version) = dump_version(util, &bytes, want, iprop_load, file) else {
         return 1;
+    };
+    // MIT `load_db` (`kadmin/dbutil/dump.c:1477-1482`): with iprop enabled the update log is mapped (made when missing) before the load.
+    if util.iprop.enabled {
+        let Ok(log) = Ulog::map(&util.iprop.logfile, util.iprop.ulogsize) else {
+            err_line("Could not open iprop ulog");
+            return 1;
+        };
+        util.ulog = Some(log);
+    }
+    // MIT `load_db` (`kadmin/dbutil/dump.c:1531-1538`): a full iprop load reads the serial and time its header carries.
+    let iprop_last = if iprop_load && !update {
+        let line = bytes.split(|&b| b == b'\n').next().unwrap_or_default();
+        match iprop_header_last(util, &String::from_utf8_lossy(line)) {
+            Some(last) => Some(last),
+            None => return 1,
+        }
+    } else {
+        None
     };
     // MIT `load_db` (`kadmin/dbutil/dump.c:1490-1516`): the database is created (or opened with `-update`) with the `-x` arguments before any record is read.
     if let Some(arg) = &util.db_args.unsupported {
@@ -1021,7 +1199,7 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         }
     };
     if dump.princs.is_empty() {
-        return load_policies_only(util, target, &dump, verbose);
+        return load_policies_only(util, target, &dump, verbose, iprop_last);
     }
     let Some((key, from_hook)) = load_master_key(util, &dump) else {
         return 1;
@@ -1042,23 +1220,48 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         if !lock_permanently(util, &mut update) {
             return 1;
         }
-        let store = match update.store(&key, legacy.as_deref().map(Vec::as_slice)) {
-            // MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:691-694`): a loaded record carries its lockout attributes, which the update writes; the others keep theirs.
-            Ok(Some(mut current)) => {
-                update_store(&mut current, &loaded);
-                current
+        let mut store = match update.store(&key, legacy.as_deref().map(Vec::as_slice)) {
+            Ok(Some(current)) => current,
+            // An empty database file is an empty database: the dump's records fill it, each a new
+            // principal to a primary's log, under the dump's domain SID.
+            Ok(None) => {
+                let mut empty = PrincipalStore::new(loaded.realm());
+                empty.set_domain_sid(loaded.domain_sid().clone());
+                empty
             }
-            // An empty database file is an empty database: the dump's records fill it.
-            Ok(None) => loaded,
             Err(e) => {
                 util.com_err(&open_text(update.db(), &e), "while opening database");
                 return 1;
             }
         };
-        if let Err(e) = update.write_store(&store, &key) {
-            let first = dump.princs.first().map_or("", |p| p.name.as_str());
-            util.com_err(&persist_text(&e), &format!("while storing {first}"));
-            return 1;
+        // MIT `load_db` (`kadmin/dbutil/dump.c:1521-1529`): an update keeps the primary role, so each record put is logged.
+        if let Some(log) = util.ulog.take() {
+            store.set_ulog(log, IpropRole::Primary);
+        }
+        // MIT `process_k5beta7_princ` (`kadmin/dbutil/dump.c:691-694`): a loaded record carries its lockout attributes, which the update writes; the others keep theirs.
+        let order: Vec<&str> = dump.princs.iter().map(|p| p.name.as_str()).collect();
+        update_store(&mut store, &loaded, &order);
+        let first = dump.princs.first().map_or("", |p| p.name.as_str());
+        // MIT `krb5_db_put_principal` (`lib/kdb/kdb5.c:987-999`): each update is converted, its keys wrapped, before its put; one that cannot be fails the load before the database is written.
+        let prepared = match store.prepare_log() {
+            Ok(p) => p,
+            Err(e) => {
+                util.com_err(&e.to_string(), &format!("while storing {first}"));
+                return 1;
+            }
+        };
+        // The log is marked unstable before the write and stable after the last update is
+        // appended, so a load stopped in between sends the replicas to a full resync.
+        match store.write_logged(prepared, || update.write_store(&store, &key)) {
+            Ok(()) => {}
+            Err(LoggedWrite::Write(e)) => {
+                util.com_err(&persist_text(&e), &format!("while storing {first}"));
+                return 1;
+            }
+            Err(LoggedWrite::Before(e) | LoggedWrite::After(e)) => {
+                util.com_err(&e.to_string(), &format!("while storing {first}"));
+                return 1;
+            }
         }
         if !update_unlock(util, update) {
             return 1;
@@ -1067,7 +1270,8 @@ fn load(util: &mut Util, args: &[String]) -> u8 {
         let Some(full) = create_temporary(util) else {
             return 1;
         };
-        if let Err(e) = full.finish_store(&loaded, &key, false) {
+        // MIT `load_db` (`kadmin/dbutil/dump.c:1483-1499`): an iprop load merges the replica's own non-replicated attributes.
+        if let Err(e) = full.finish_store(&loaded, &key, iprop_load, load_log(util, iprop_last)) {
             load_failed(util, &e);
             return 1;
         }
@@ -1105,6 +1309,7 @@ fn load_policies_only(
     target: Option<DbUpdate>,
     dump: &DumpFile,
     verbose: bool,
+    iprop_last: Option<UlogLast>,
 ) -> u8 {
     let records = dump.policy_records();
     let header = format!("kdb5_util load_dump version {KDB_DUMP_VERSION}\n");
@@ -1130,6 +1335,14 @@ fn load_policies_only(
             util.com_err(&persist_text(&e), "while creating policy");
             return 1;
         }
+        // MIT `krb5_db_create_policy` (`lib/kdb/kdb5.c:2440-2457`): a primary's log starts over after a policy is created.
+        if !records.is_empty()
+            && let Some(log) = &util.ulog
+            && let Err(e) = log.init_header()
+        {
+            util.com_err(&e.to_string(), "while creating policy");
+            return 1;
+        }
         if !update_unlock(util, update) {
             return 1;
         }
@@ -1142,7 +1355,7 @@ fn load_policies_only(
             text.push_str(r);
             text.push('\n');
         }
-        if let Err(e) = full.finish(&text, "ulog 1\n", &[], false) {
+        if let Err(e) = full.finish(&text, &[], false, load_log(util, iprop_last)) {
             load_failed(util, &e);
             return 1;
         }
@@ -1154,6 +1367,15 @@ fn load_policies_only(
         }
     }
     0
+}
+
+/// The update log a full load keeps when iprop is enabled (the load maps it first), and the
+/// serial and time an iprop dump's header gave.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1529-1532`): a full load's own puts are not logged; the log is reinitialized around the promotion instead.
+fn load_log(util: &Util, last: Option<UlogLast>) -> Option<krb5_kdc::LoadLog<'_>> {
+    util.ulog
+        .as_ref()
+        .map(|ulog| krb5_kdc::LoadLog { ulog, last })
 }
 
 /// The database `-update` merges into, opened (its lock files and what it holds judged, nothing
@@ -1235,15 +1457,20 @@ fn update_unlock(util: &Util, update: DbUpdate) -> bool {
     }
 }
 
-/// A full load that failed: making its temporary database, or making that database live.
+/// A full load that failed: making its temporary database, making that database live, or
+/// starting the update log over around it.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1503-1507`): a temporary database that cannot be made is reported while creating the database.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1562-1568`): one that cannot be made live is reported while making the newly loaded database live.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1554-1559`): a log that cannot start over is reported while reinitializing the update log.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1579-1585`): one that cannot take the iprop dump's serial and time is reported while writing the update log header.
 fn load_failed(util: &Util, e: &LoadError) {
     match e {
         LoadError::Create(e) => util.com_err(&persist_text(e), "while creating database"),
         LoadError::Promote(e) => {
             util.com_err(&persist_text(e), "while making newly loaded database live");
         }
+        LoadError::Reinit(e) => util.com_err(&e.to_string(), "while reinitializing update log"),
+        LoadError::SetLast(e) => util.com_err(&e.to_string(), "while writing update log header"),
     }
 }
 
@@ -1269,8 +1496,15 @@ fn merge_policy_records(current: &str, records: &[String]) -> String {
 }
 
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1447-1475`): the header names the dump's format, or must
-/// be the one `-r18` asks for. Only the r1.8 and r1.11 formats load here.
-fn dump_version(util: &Util, bytes: &[u8], want: Option<u32>, file: &str) -> Option<u32> {
+/// be the one `-r18` asks for, or (`-i`) begin with `iprop`. Only the r1.8 and r1.11 formats and
+/// the iprop ones load here.
+fn dump_version(
+    util: &Util,
+    bytes: &[u8],
+    want: Option<u32>,
+    iprop: bool,
+    file: &str,
+) -> Option<u32> {
     if bytes.is_empty() {
         err_line(&format!(
             "{}: can't read dump header in {file}",
@@ -1284,6 +1518,7 @@ fn dump_version(util: &Util, bytes: &[u8], want: Option<u32>, file: &str) -> Opt
         .map_or(bytes.len(), |p| p + 1);
     let header = &bytes[..end];
     let version = match want {
+        _ if iprop => header.starts_with(b"iprop").then_some(KDB_DUMP_VERSION),
         Some(v) => {
             let expect = format!("kdb5_util load_dump version {v}\n");
             header.starts_with(expect.as_bytes()).then_some(v)
@@ -1422,17 +1657,20 @@ fn destroy(util: &mut Util, args: &[String]) -> u8 {
         );
         return util.failed();
     }
+    // MIT `kdb5_destroy` (`kadmin/dbutil/kdb5_destroy.c:85-87`): with iprop enabled the update log is unlinked, its error ignored.
+    if util.iprop.enabled {
+        util.ulog = None;
+        let _ = fs::remove_file(&util.iprop.logfile);
+    }
     out_line(&format!("** Database '{}' destroyed.", db.display()));
     util.exit_status
 }
 
 /// Remove the database: the file itself zeroed and unlinked, then the lock and policy files
 /// db2 keeps beside it should any be there (this store keeps neither), then `principal.lockout`
-/// zeroed and unlinked when it is there, then the update log, which this store always keeps and
-/// MIT's only with iprop.
+/// zeroed and unlinked when it is there.
 /// MIT `krb5_db2_destroy` (`plugins/kdb/db2/kdb_db2.c:1227-1271`): `destroy_file` on the database, then the lock file and the policy database and its lock are unlinked.
 /// MIT `klmdb_destroy` (`plugins/kdb/lmdb/kdb_lmdb.c:683-709`): the lockout environment is destroyed with the database.
-/// MIT `kdb5_destroy` (`kadmin/dbutil/kdb5_destroy.c:85-87`): the update log is unlinked, its error ignored.
 fn destroy_database(file: &Path) -> io::Result<()> {
     let lockout = krb5_kdc::lockout_path(file);
     for zeroed in [file, lockout.as_path()] {
@@ -1451,7 +1689,6 @@ fn destroy_database(file: &Path) -> io::Result<()> {
         Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
         _ => {}
     }
-    let _ = fs::remove_file(with_suffix(file, ".ulog"));
     Ok(())
 }
 
@@ -1509,7 +1746,7 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 #[cfg(feature = "test-hooks")]
 mod hooks {
     use krb5_kdc::testrealm::TEST_USER;
-    use krb5_kdc::{NamedPolicy, PrincipalStore, load_store};
+    use krb5_kdc::{IpropRole, NamedPolicy, PrincipalStore, load_store};
     use krb5_types::PrincipalName;
     use zeroize::Zeroizing;
 
@@ -1565,6 +1802,11 @@ mod hooks {
     ) -> Result<(), (u8, String)> {
         let (db, stash) = (util.db_args.open_file(), &util.paths.key_stash_file);
         let mut store = load_store(&db, stash).map_err(|e| (1, format!("load store: {e}")))?;
+        if util.iprop.enabled {
+            store
+                .map_ulog(&util.iprop.logfile, util.iprop.ulogsize, IpropRole::Primary)
+                .map_err(|e| (1, format!("{e} while mapping update log")))?;
+        }
         store
             .change(f)
             .map_err(|e| (1, format!("save store: {e}")))?

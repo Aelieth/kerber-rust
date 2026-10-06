@@ -282,7 +282,7 @@ fn another_realms_stanza_is_not_read_for_this_one() {
     let master =
         master_key_from_password("KL.TEST", b"pw", EncryptionType::Aes256CtsHmacSha196).unwrap();
     let store = create_realm("KL.TEST", Some(&kl), &master, 1).unwrap();
-    assert!(store.ulog().is_empty());
+    assert!(store.ulog().is_none());
     assert_eq!(store.serial(), 0);
     assert!(store.get("kadmin/history@KL.TEST").is_none());
 }
@@ -889,10 +889,10 @@ fn destroy_zeroes_the_database_before_unlinking_it() {
         std::fs::write(p, "db2").unwrap();
     }
     let ulog = realm.dir.join("principal.ulog");
-    assert!(ulog.exists());
+    assert!(!ulog.exists(), "no update log without iprop");
     let out = realm.run(&["destroy", "-f"], "");
     assert_eq!(status(&out), 0, "{}", text(&out.stderr));
-    assert!(!realm.db.exists() && !ulog.exists());
+    assert!(!realm.db.exists());
     assert!(side.iter().all(|p| !p.exists()));
     let left = std::fs::read(&link).unwrap();
     assert_eq!(left.len() as u64, size);
@@ -1061,4 +1061,240 @@ fn test_hooks_seed_the_gates_principals_and_stand_in_for_the_password() {
     assert_eq!(status(&out), 0, "{}", text(&out.stderr));
     assert_eq!(mode(&realm.stash), 0o600);
     assert_eq!(realm.store().realm(), "KERBER.TEST");
+}
+
+fn iprop_stanza() -> String {
+    format!(
+        "{}        iprop_enable = true\n        iprop_port = 2121\n        iprop_ulogsize = 4\n",
+        Realm::sha1()
+    )
+}
+
+/// Settled live on MIT 1.22.2: without iprop, `create`, `dump` and `load` touch no update log,
+/// and `dump -i` / `load -i` say "Iprop not enabled".
+#[test]
+fn without_iprop_no_command_touches_an_update_log() {
+    let realm = Realm::new("kdb5-iprop-off", Realm::sha1());
+    realm.create();
+    let ulog = realm.dir.join("principal.ulog");
+    let plain = realm.dir.join("plain.dump");
+    let out = realm.run(&["dump", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let out = realm.run(&["dump", "-i1", "x.dump"], "");
+    assert_eq!(
+        (status(&out), text(&out.stderr)),
+        (1, "Iprop not enabled\n".into())
+    );
+    let out = realm.run(&["load", "-i", plain.to_str().unwrap()], "");
+    assert_eq!(
+        (status(&out), text(&out.stderr)),
+        (1, "Iprop not enabled\n".into())
+    );
+    for load in [&["load"][..], &["load", "-update"]] {
+        let out = realm.run(&[load, &[plain.to_str().unwrap()]].concat(), "");
+        assert_eq!(status(&out), 0, "{load:?}: {}", text(&out.stderr));
+    }
+    assert!(!ulog.exists());
+}
+
+/// Settled live on MIT 1.22.2 with iprop on: `create` makes the log (one dummy entry at serial
+/// 1), `dump -i1` heads the dump with its last serial and time, a full `load` starts it over,
+/// `load -i` sets it to the dump's serial and time, and `destroy` removes it.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn with_iprop_create_dump_load_and_destroy_keep_the_update_log() {
+    let realm = Realm::new("kdb5-iprop-on", &iprop_stanza());
+    realm.create();
+    let ulog = realm.dir.join("principal.ulog");
+    assert_eq!(std::fs::metadata(&ulog).unwrap().len(), 40 + 4 * 2048);
+    let log = krb5_kdc::Ulog::map(&ulog, 4).unwrap();
+    let created = log.get_last().unwrap();
+    assert_eq!(created.sno, 1);
+    let ipropx = realm.dir.join("i1.dump");
+    let out = realm.run(&["dump", "-i1", ipropx.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let dumped = std::fs::read_to_string(&ipropx).unwrap();
+    let head = dumped.lines().next().unwrap().to_owned();
+    assert_eq!(
+        head,
+        format!(
+            "ipropx 1 1 {} {}",
+            created.time.seconds, created.time.useconds
+        )
+    );
+    let out = realm.run(&["dump", "-i", "i0.dump"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let i0 = std::fs::read_to_string(realm.dir.join("i0.dump")).unwrap();
+    assert!(i0.starts_with(&format!("iprop 1 {} ", created.time.seconds)));
+    // -c keeps a dump whose serial and time the log still holds: only its first line is read,
+    // so a marked tail survives when the dump is not written again.
+    let marked = format!("{dumped}kept\n");
+    std::fs::write(&ipropx, &marked).unwrap();
+    let out = realm.run(&["dump", "-i1", "-c", ipropx.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(std::fs::read_to_string(&ipropx).unwrap(), marked);
+    let out = realm.run(&["dump", "-c", "plain.dump"], "");
+    assert_eq!(
+        (status(&out), text(&out.stderr)),
+        (
+            1,
+            "kdb5_util: Conditional dump is an undocumented option for use only for iprop dumps\n"
+                .into()
+        )
+    );
+    // A full load starts the log over; load -i then takes the dump's serial and time.
+    let plain = realm.dir.join("plain.dump");
+    let out = realm.run(&["dump", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let out = realm.run(&["load", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(log.get_last().unwrap().sno, 1);
+    std::fs::write(
+        &ipropx,
+        dumped.replacen(&head, "ipropx 1 7 1791208296 779547", 1),
+    )
+    .unwrap();
+    let out = realm.run(&["load", "-i", ipropx.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let hdr = log.header_now().unwrap();
+    assert_eq!((hdr.num, hdr.first_sno, hdr.last_sno), (1, 7, 7));
+    assert_eq!(
+        (hdr.last_time.seconds, hdr.last_time.useconds),
+        (1_791_208_296, 779_547)
+    );
+    let out = realm.run(&["load", "-i", plain.to_str().unwrap()], "");
+    assert_eq!(
+        (status(&out), text(&out.stderr)),
+        (
+            1,
+            format!("kdb5_util: dump header bad in {}\n", plain.display())
+        )
+    );
+    drop(log);
+    let out = realm.run(&["destroy", "-f"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert!(
+        !ulog.exists(),
+        "destroy removes the update log with iprop on"
+    );
+}
+
+/// Settled live on MIT 1.22.2 with iprop on (`settle-s7-load-update.txt`): `load -update` logs
+/// every principal it puts, one entry each in the dump's order (a record the database already
+/// holds unchanged carries only its name), and a policy record then starts the log over.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn with_iprop_load_update_logs_each_principal_and_a_policy_starts_the_log_over() {
+    let stanza = format!(
+        "{}        iprop_enable = true\n        iprop_port = 2121\n        iprop_ulogsize = 64\n",
+        Realm::sha1()
+    );
+    let realm = Realm::new("kdb5-iprop-update", &stanza);
+    realm.create();
+    let plain = realm.dir.join("plain.dump");
+    let out = realm.run(&["dump", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let dumped = std::fs::read_to_string(&plain).unwrap();
+    let names: Vec<&str> = dumped
+        .lines()
+        .filter_map(|l| l.strip_prefix("princ\t"))
+        .map(|l| l.split('\t').nth(5).unwrap())
+        .collect();
+    assert!(names.len() >= 4, "{names:?}");
+    let log = krb5_kdc::Ulog::map(&realm.dir.join("principal.ulog"), 64).unwrap();
+    let out = realm.run(&["load", "-update", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let entries = log.entries().unwrap();
+    assert_eq!(entries.len(), names.len() + 1, "{entries:?}");
+    assert_eq!(
+        (entries[0].sno, entries[0].size),
+        (1, 0),
+        "create's dummy entry"
+    );
+    for (n, (e, name)) in (2..).zip(entries[1..].iter().zip(&names)) {
+        assert_eq!(
+            (e.sno, e.name.as_str(), e.deleted, e.attrs),
+            (n, *name, false, 1 << krb5_kdc::AT_PRINC)
+        );
+    }
+    let policy = "policy\tp1\t0\t0\t8\t1\t1\t0\t0\t0\t0\t0\t0\t0\t-\t0";
+    let withpol = realm.dir.join("withpol.dump");
+    std::fs::write(&withpol, format!("{dumped}{policy}\n")).unwrap();
+    let out = realm.run(&["load", "-update", withpol.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let hdr = log.header_now().unwrap();
+    assert_eq!((hdr.num, hdr.first_sno, hdr.last_sno), (1, 1, 1));
+    // An empty database file is an empty database: each record the update puts is a new
+    // principal, which the log sends whole, and the database takes the dump's domain SID.
+    let sid = realm.store().domain_sid().clone();
+    std::fs::write(&realm.db, b"").unwrap();
+    let out = realm.run(&["load", "-update", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let entries = log.entries().unwrap();
+    assert_eq!(entries.len(), names.len() + 1, "{entries:?}");
+    for (n, (e, name)) in (2..).zip(entries[1..].iter().zip(&names)) {
+        assert_eq!((e.sno, e.name.as_str()), (n, *name));
+        assert_ne!(
+            e.attrs & (1 << krb5_kdc::AT_KEYDATA),
+            0,
+            "{name}: keys sent"
+        );
+    }
+    let store = realm.store();
+    assert_eq!(store.domain_sid(), &sid);
+    assert!(
+        names.iter().all(|n| store.get_raw(n).is_some()),
+        "{names:?}"
+    );
+}
+
+/// Settled live on MIT 1.22.2 (`settle-s10-load-fails-early.txt`): a full load starts the log
+/// over only once the dump is in the temporary database, so a load whose temporary database
+/// cannot be made leaves the log as it was.
+#[test]
+fn a_full_load_that_fails_before_the_promotion_leaves_the_update_log() {
+    let realm = Realm::new("kdb5-iprop-load-early", &iprop_stanza());
+    realm.create();
+    let plain = realm.dir.join("plain.dump");
+    let out = realm.run(&["dump", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let log = krb5_kdc::Ulog::map(&realm.dir.join("principal.ulog"), 4).unwrap();
+    let kept = krb5_kdc::UlogLast {
+        sno: 7,
+        time: krb5_kdc::UlogTime {
+            seconds: 1_791_208_296,
+            useconds: 779_547,
+        },
+    };
+    log.set_last(kept).unwrap();
+    let plant = realm.dir.join("principal~");
+    std::fs::create_dir(&plant).unwrap();
+    std::fs::write(plant.join("keep"), b"").unwrap();
+    let out = realm.run(&["load", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 1);
+    assert!(
+        text(&out.stderr).ends_with(" while creating database\n"),
+        "{}",
+        text(&out.stderr)
+    );
+    assert_eq!(log.get_last().unwrap(), kept);
+    std::fs::remove_dir_all(&plant).unwrap();
+    let out = realm.run(&["load", plain.to_str().unwrap()], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    assert_eq!(log.get_last().unwrap().sno, 1);
+}
+
+/// Settled live: MIT's admin interface refuses iprop without `iprop_port` ("Required parameters
+/// in kdc.conf missing"); this create stops before writing anything.
+#[test]
+fn create_with_iprop_and_no_port_is_refused() {
+    let stanza = format!("{}        iprop_enable = true\n", Realm::sha1());
+    let realm = Realm::new("kdb5-iprop-noport", &stanza);
+    let out = realm.run(&["-P", "kl-master", "create", "-s"], "");
+    assert_eq!(status(&out), 1);
+    assert_eq!(
+        text(&out.stderr),
+        "kdb5_util: Required parameters in kdc.conf missing while initializing the Kerberos admin interface\n"
+    );
+    assert!(!realm.db.exists());
 }

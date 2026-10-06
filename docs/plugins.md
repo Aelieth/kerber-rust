@@ -22,11 +22,15 @@ login. Counting every AS (kadm5_hook) is not this cascade.
 LDAP, db2, and LMDB are not required implementations. None is
 privileged: each backend implements the same KDB traits.
 
-Iprop is not a plugin. The store keeps a monotonic serial and a
-circular update log. kadmind serves MIT program **100423**
-(`IPROP_GET_UPDATES`, `IPROP_FULL_RESYNC`). First contact
-(`last_sno == 0`) returns full-resync; a slave then takes an
-`ipropx` dump (`kprop -i` / `kdb5_util dump -i1`). Serial-delta is
+Iprop is not a plugin. With `iprop_enable` the primary's kadmind,
+kadmin.local and kdb5_util keep MIT's update log (`kdb_log.c`: one
+entry appended per principal put or delete, `iprop_ulogsize` of them
+in a ring; a policy change starts it over), and kadmind serves MIT
+program **100423** (`IPROP_GET_UPDATES`, `IPROP_FULL_RESYNC`);
+without it nothing is logged and the program is not registered. First
+contact (`last_sno == 0`) returns full-resync; a slave then takes an
+`ipropx` dump (`kprop -i` / `kdb5_util dump -i1`), which this kadmind
+does not push itself. Serial-delta is
 MIT `kdb_incr_update_t` over RPCSEC_GSS (`krb5-iprop-pull` or
 `iprop_poll_once`). `kdb_last_t` must echo the dump-header
 timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`. As MIT's
@@ -36,7 +40,7 @@ policy and the password history ride in the `osa_princ_ent_rec`
 record inside `AT_TL_DATA` (`KRB5_TL_KADM_DATA`), the history
 decrypted under the `kadmin/history` key on apply (`scripts/iprop-gate.sh`
 history cell); policies themselves reach a replica only by full resync,
-as with MIT (`kdb5.c` logs principals only).
+as with MIT (`kdb5.c` starts the log over on a policy change).
 
 Gates: `scripts/policy-gate.sh` (MIT `kadmin` policies + `kinit`
 `CLIENT_REVOKED`, minclasses 5, lockout time, history-N);

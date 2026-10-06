@@ -174,7 +174,7 @@ impl PrincipalStore {
                 let id = snap.id();
                 s.note_ulog(id.clone(), false, Some(snap.clone()));
                 s.map.insert(id, snap);
-                s.commit_ulog();
+                let _ = s.log_pending();
             }
             done
         })?

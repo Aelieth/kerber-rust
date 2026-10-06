@@ -103,6 +103,8 @@ fn the_kdc_writes_only_its_records_in_place_and_a_restart_keeps_the_lock() {
     let side = lockout_path(&db);
     let ulog = suffixed(&db, ".ulog");
     let ok = suffixed(&db, SUFFIX_LOCK);
+    // The realm's update log, as a primary with iprop would keep it; the KDC never maps it.
+    drop(krb5_kdc::Ulog::map(&ulog, 100).unwrap());
     let kdc = load_store(&db, &stash).unwrap();
     let serial = kdc.serial();
     let (db_bytes, ulog_bytes) = (std::fs::read(&db).unwrap(), std::fs::read(&ulog).unwrap());
@@ -210,7 +212,7 @@ fn a_full_load_writes_a_new_side_file_and_renames_it_over_the_old() {
     let before = std::fs::metadata(&side).unwrap();
     let master = read_stash(&stash, &db).unwrap();
     let store = load_store(&db, &stash).unwrap();
-    load_store_full(&store, &db, &master, false).unwrap();
+    load_store_full(&store, &db, &master, false, None).unwrap();
     let after = std::fs::metadata(&side).unwrap();
     assert_ne!(
         after.ino(),
@@ -247,7 +249,7 @@ fn a_symlink_planted_as_the_side_file_is_never_followed() {
         "{refused}"
     );
     let master = read_stash(&stash, &db).unwrap();
-    assert!(load_store_full(&admin, &db, &master, false).is_err());
+    assert!(load_store_full(&admin, &db, &master, false, None).is_err());
     assert_eq!(
         std::fs::read(&victim).unwrap(),
         content,
@@ -430,11 +432,11 @@ fn a_full_load_replaces_the_counts_and_an_iprop_load_keeps_them() {
     let snapshot = load_store(&db, &stash).unwrap();
     assert!(issue_as(&kdc, &bad(TEST_USER, 2)).is_err());
     assert_eq!(record(&db, TEST_USER).unwrap().fail_auth_count, 2);
-    load_store_full(&snapshot, &db, &master, false).unwrap();
+    load_store_full(&snapshot, &db, &master, false, None).unwrap();
     assert_eq!(record(&db, TEST_USER).unwrap().fail_auth_count, 1);
     let kdc = load_store(&db, &stash).unwrap();
     assert!(issue_as(&kdc, &bad(TEST_USER, 3)).is_err());
-    load_store_full(&snapshot, &db, &master, true).unwrap();
+    load_store_full(&snapshot, &db, &master, true, None).unwrap();
     assert_eq!(record(&db, TEST_USER).unwrap().fail_auth_count, 2);
 }
 
@@ -460,7 +462,8 @@ fn a_dump_writes_the_recorded_counts_and_an_iprop_dump_omits_them() {
         count(&krb5_kdc::dump_store_with_key(&store, &master).unwrap()),
         (2, true)
     );
-    let iprop = krb5_kdc::dump_store_iprop_with_key(&store, &master).unwrap();
+    let iprop = krb5_kdc::dump_store_iprop_with_key(&store, &master, krb5_kdc::UlogLast::default())
+        .unwrap();
     assert!(iprop.starts_with("ipropx 1 "));
     assert_eq!(count(&iprop), (0, false));
 }

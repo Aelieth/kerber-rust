@@ -257,22 +257,60 @@ fn pwqual_counts_five_mit_classes() {
     );
 }
 
+/// MIT `krb5_db_put_principal` converts each update, its keys wrapped under the master key,
+/// before the put: `kdb5_util load -update` prepares the log before its database write, so with
+/// no master key nothing is written and nothing is logged, and with one the prepared updates are
+/// appended only once the write is made.
+#[cfg(feature = "test-hooks")]
 #[test]
-fn iprop_get_ships_principals_only_like_ulog_get_entries() {
-    let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
-    let before = store.serial();
-    store.put_policy(NamedPolicy::new("ipol"));
+fn load_update_prepares_the_log_before_the_database_is_written() {
+    let (loaded, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let (mut keyless, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    assert!(keyless.iprop_master_key().is_none());
+    keyless.set_ulog(Ulog::memory(64).unwrap(), IpropRole::Primary);
+    let before = keyless.ulog_last().unwrap();
+    update_store(&mut keyless, &loaded, &[]);
+    assert!(keyless.prepare_log().is_err());
+    assert_eq!(keyless.ulog_last(), Some(before));
+    let (mut keyed, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    krb5_kdc::testrealm::map_memory_ulog(&mut keyed, 64, IpropRole::Primary).unwrap();
+    let start = keyed.ulog_last().unwrap();
+    update_store(&mut keyed, &loaded, &[]);
+    let prepared = keyed.prepare_log().unwrap();
+    assert_eq!(
+        keyed.ulog_last(),
+        Some(start),
+        "nothing is logged before the write"
+    );
+    keyed
+        .write_logged(prepared, || Ok::<(), Error>(()))
+        .unwrap();
+    let puts = u32::try_from(loaded.ids().len()).unwrap();
+    assert_eq!(keyed.ulog_last().unwrap().sno, start.sno + puts);
+}
+
+/// MIT `krb5_db_create_policy` starts a primary's update log over (settled live): a replica at
+/// a serial from before the policy needs a full resync, and the principals changed after it are
+/// each logged, one named like a policy included.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn a_policy_change_starts_the_update_log_over() {
+    let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    krb5_kdc::testrealm::map_memory_ulog(&mut store, 100, IpropRole::Primary).unwrap();
     let user = PrincipalName::new(
         PrincipalName::NT_PRINCIPAL,
         [krb5_kdc::testrealm::TEST_USER],
     );
+    store.set_password(&user, b"Before-pw1").unwrap();
+    let before = store.ulog_last().unwrap();
+    assert_eq!(before.sno, 2);
+    store.put_policy(NamedPolicy::new("ipol"));
+    let reset = store.ulog_last().unwrap();
+    assert_eq!(reset.sno, 1, "the policy started the log over");
+    assert_eq!(store.ulog_get_entries(before).status, IPROP_FULL_RESYNC);
     store
         .set_principal_policy(&user, Some("ipol".into()))
         .unwrap();
-    store.set_password(&user, b"Ipol-pw1").unwrap();
-    // A principal literally named `policy:svc` must still ship (its id
-    // carries @REALM; only the marker `policy:ipol` is filtered).
-    let acl = Acl::allow_admin(krb5_kdc::testrealm::documented_admin_id()).unwrap();
     let colliding = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["policy:svc"]);
     store
         .create_password(
@@ -282,31 +320,14 @@ fn iprop_get_ships_principals_only_like_ulog_get_entries() {
             b"collide-pw",
         )
         .unwrap();
-    let (status, last, entries) = store.iprop_get(before);
-    assert_eq!(status, IPROP_OK);
-    assert_eq!(
-        last,
-        store.serial(),
-        "the policy marker still advances the serial"
-    );
-    assert!(!entries.is_empty());
-    // The bare marker `policy:ipol` (no @) is filtered; the principal
-    // `policy:svc@REALM` is not.
-    assert!(
-        entries
-            .iter()
-            .all(|e| !e.name.starts_with("policy:") || e.name.contains('@'))
-    );
-    assert!(
-        entries.iter().any(|e| e.name.starts_with("policy:svc@")),
-        "a principal named policy:svc must not be filtered: {entries:?}"
-    );
-    assert!(
-        entries
-            .iter()
-            .any(|e| e.name.starts_with("kadmin/history@"))
-    );
-    assert!(entries.iter().any(|e| e.name.starts_with("user@")));
+    let got = store.ulog_get_entries(reset);
+    assert_eq!(got.status, IPROP_OK);
+    let names: Vec<String> = got
+        .updates
+        .iter()
+        .map(|u| walk_incr_update(u).unwrap().name)
+        .collect();
+    assert_eq!(names, ["user@KERBER.TEST", "policy:svc@KERBER.TEST"]);
 }
 
 #[test]
@@ -633,23 +654,30 @@ fn lockout_interval_resets_the_count_but_never_a_lock() {
     assert!(revoked(&krb5_kdc::issue_as(&store, &good).unwrap_err()));
 }
 
+#[cfg(feature = "test-hooks")]
 #[test]
 fn serial_ulog_delta_then_issue_as() {
     use krb5_protocol::as_req;
 
     let (mut master, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
     let (mut slave, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    krb5_kdc::testrealm::map_memory_ulog(&mut master, 1000, IpropRole::Primary).unwrap();
+    let mkey = krb5_kdc::testrealm::map_memory_ulog(&mut slave, 1000, IpropRole::Replica).unwrap();
     let actor = krb5_kdc::testrealm::documented_admin_id();
-    let sno0 = master.serial();
-    assert!(
-        sno0 > 0,
-        "bootstrap mutations must advance serial (not mtime-only)"
-    );
-    assert_eq!(master.iprop_get(0).0, IPROP_FULL_RESYNC);
-    assert_eq!(master.iprop_get(sno0).0, IPROP_NIL);
-    // A replica ahead of the master (rollback) must full-resync, not NIL.
+    let sno0 = master.ulog_last().unwrap();
+    assert_eq!(sno0.sno, 1, "a new log holds the dummy entry at serial 1");
     assert_eq!(
-        master.iprop_get(sno0 + 100).0,
+        master.ulog_get_entries(UlogLast::default()).status,
+        IPROP_FULL_RESYNC
+    );
+    assert_eq!(master.ulog_get_entries(sno0).status, IPROP_NIL);
+    // A replica ahead of the master (rollback) must full-resync, not NIL.
+    let ahead = UlogLast {
+        sno: sno0.sno + 100,
+        ..sno0
+    };
+    assert_eq!(
+        master.ulog_get_entries(ahead).status,
         IPROP_FULL_RESYNC,
         "a replica serial past the master's must resync"
     );
@@ -658,22 +686,24 @@ fn serial_ulog_delta_then_issue_as() {
     master
         .create_password(&acl, &actor, &extra, b"iprop-secret")
         .unwrap();
-    let sno1 = master.serial();
-    assert!(sno1 > sno0);
-    let (st, last, entries) = master.iprop_get(sno0);
-    assert_eq!(st, IPROP_OK);
-    assert_eq!(last, sno1);
-    assert!(
-        entries
-            .iter()
-            .any(|e| e.name.contains("iproped") && !e.deleted),
-        "ulog must record the create: {entries:?}"
-    );
+    let sno1 = master.ulog_last().unwrap();
+    assert_eq!(sno1.sno, sno0.sno + 1, "one create is one entry");
+    let got = master.ulog_get_entries(sno0);
+    assert_eq!(got.status, IPROP_OK);
+    assert_eq!(got.last, sno1);
+    let updates: Vec<IpropUpdate> = got
+        .updates
+        .iter()
+        .map(|u| decode_incr_update(u, Some(&mkey)).unwrap().0)
+        .collect();
+    assert_eq!(updates.len(), 1);
+    assert!(updates[0].name.contains("iproped") && !updates[0].deleted);
 
-    let updates: Vec<IpropUpdate> = entries.iter().map(UlogEntry::to_update).collect();
+    // The replica stands where a full resync left it, then applies and keeps the update.
+    slave.ulog().unwrap().set_last(sno0).unwrap();
     slave.apply_updates(&updates).unwrap();
     assert!(slave.get_name(&extra).is_some());
-    assert_eq!(slave.serial(), sno1);
+    assert_eq!(slave.ulog_last(), Some(sno1));
     let key = slave
         .get_name(&extra)
         .unwrap()
@@ -689,6 +719,46 @@ fn serial_ulog_delta_then_issue_as() {
     )
     .unwrap();
     krb5_kdc::issue_as(&slave, &req).expect("slave must issue after serial-delta");
+}
+
+/// MIT `ulog_replay` skips an update that is not committed without moving to the next, so the
+/// batch ends there: the updates before it apply and are kept, none after it.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn an_update_not_committed_ends_the_replay() {
+    let (mut master, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let (mut slave, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    krb5_kdc::testrealm::map_memory_ulog(&mut master, 1000, IpropRole::Primary).unwrap();
+    let mkey = krb5_kdc::testrealm::map_memory_ulog(&mut slave, 1000, IpropRole::Replica).unwrap();
+    let actor = krb5_kdc::testrealm::documented_admin_id();
+    let sno0 = master.ulog_last().unwrap();
+    let names = ["first", "uncommitted", "after"];
+    for n in names {
+        let p = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [n]);
+        master
+            .create_password(&acl, &actor, &p, b"replay-secret")
+            .unwrap();
+    }
+    let mut updates: Vec<IpropUpdate> = master
+        .ulog_get_entries(sno0)
+        .updates
+        .iter()
+        .map(|u| decode_incr_update(u, Some(&mkey)).unwrap().0)
+        .collect();
+    assert!(
+        updates.iter().all(|u| u.commit),
+        "a primary's entries are committed"
+    );
+    updates[1].commit = false;
+    slave.ulog().unwrap().set_last(sno0).unwrap();
+    slave.apply_updates(&updates).unwrap();
+    let has = |n: &str| {
+        slave
+            .get_name(&PrincipalName::new(PrincipalName::NT_PRINCIPAL, [n]))
+            .is_some()
+    };
+    assert_eq!(names.map(has), [true, false, false]);
+    assert_eq!(slave.ulog_last().unwrap().sno, sno0.sno + 1);
 }
 
 #[test]
@@ -723,7 +793,9 @@ fn apply_updates_assigns_rid_so_replica_pac_is_not_first_user() {
             time: 1,
             name: incr.id(),
             deleted: false,
+            commit: true,
             vals: conv_2logentry(&incr, ULOG_ADD_ATTRS),
+            raw: Vec::new(),
         }])
         .unwrap();
 
@@ -771,7 +843,9 @@ fn apply_updates_keeps_what_an_update_does_not_carry() {
             time: 1,
             name: before.id(),
             deleted: false,
+            commit: true,
             vals: conv_2logentry(&changed, attr_bit(AT_MAX_LIFE) | attr_bit(AT_PRINC)),
+            raw: Vec::new(),
         }])
         .unwrap();
     let after = store.get_name(&extra).unwrap();
@@ -784,55 +858,82 @@ fn apply_updates_keeps_what_an_update_does_not_carry() {
     assert_eq!(after.attributes, before.attributes);
 }
 
+/// Each change is one entry, a rename MIT's three (settled live): the put of the new name with
+/// every attribute, the delete of the old one, then the put that records the modification.
+#[cfg(feature = "test-hooks")]
 #[test]
 fn ulog_records_delete_rename_chrand() {
     let (mut store, acl) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+    let mkey = krb5_kdc::testrealm::map_memory_ulog(&mut store, 100, IpropRole::Primary).unwrap();
     let actor = krb5_kdc::testrealm::documented_admin_id();
     let a = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["ulogdel"]);
     let b = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["ulogren"]);
+    let since = |store: &PrincipalStore, last: UlogLast| -> Vec<IncrLayout> {
+        store
+            .ulog_get_entries(last)
+            .updates
+            .iter()
+            .map(|u| walk_incr_update(u).unwrap())
+            .collect()
+    };
     store
         .create_password(&acl, &actor, &a, b"ulog-secret")
         .unwrap();
-    let after_create = store.serial();
+    let after_create = store.ulog_last().unwrap();
     store.delete(&acl, &actor, &a).unwrap();
-    let del = store.updates_after(after_create);
-    assert!(
-        del.iter().any(|e| e.name.contains("ulogdel") && e.deleted),
-        "delete must be ulogged: {del:?}"
+    let del = since(&store, after_create);
+    assert_eq!(
+        del.iter()
+            .map(|l| (l.name.as_str(), l.deleted))
+            .collect::<Vec<_>>(),
+        [("ulogdel@KERBER.TEST", true)]
     );
+    assert_eq!(del[0].nvals, 0, "a delete carries no values");
     store
         .create_password(&acl, &actor, &a, b"ulog-secret")
         .unwrap();
-    let after_recreate = store.serial();
+    let after_recreate = store.ulog_last().unwrap();
     store.rename(&acl, &actor, &a, &b).unwrap();
-    let ren = store.updates_after(after_recreate);
-    assert!(
-        ren.iter().any(|e| e.name.contains("ulogdel") && e.deleted)
-            && ren
-                .iter()
-                .any(|e| e.name.contains("ulogren") && !e.deleted && e.princ.is_some()),
-        "rename must ulog delete+add: {ren:?}"
+    let ren = since(&store, after_recreate);
+    assert_eq!(
+        ren.iter()
+            .map(|l| (l.name.as_str(), l.deleted))
+            .collect::<Vec<_>>(),
+        [
+            ("ulogren@KERBER.TEST", false),
+            ("ulogdel@KERBER.TEST", true),
+            ("ulogren@KERBER.TEST", false),
+        ]
     );
+    // The first put is a new principal's, every attribute; the last records the modification.
+    let every = attr_bit(AT_ATTRFLAGS) | attr_bit(AT_KEYDATA) | attr_bit(AT_LEN);
+    assert_eq!(ren[0].attrs & every, every, "{:#x}", ren[0].attrs);
+    assert_eq!(ren[1].attrs, 0);
+    assert_ne!(ren[2].attrs & attr_bit(AT_PRINC), 0);
+    assert_eq!(ren[2].attrs & attr_bit(AT_KEYDATA), 0);
     let user = PrincipalName::new(
         PrincipalName::NT_PRINCIPAL,
         [krb5_kdc::testrealm::TEST_USER],
     );
-    let after_ren = store.serial();
+    let after_ren = store.ulog_last().unwrap();
     store.chrand(&user).unwrap();
-    let ch = store.updates_after(after_ren);
-    assert!(
-        ch.iter()
-            .any(|e| e.name.contains(krb5_kdc::testrealm::TEST_USER) && e.princ.is_some()),
-        "chrand must be ulogged: {ch:?}"
+    let ch = since(&store, after_ren);
+    assert_eq!(ch.len(), 1);
+    assert_ne!(
+        ch[0].attrs & attr_bit(AT_KEYDATA),
+        0,
+        "chrand carries the keys"
     );
+    let after_ch = store.ulog_last().unwrap();
     store.set_status(&user, true, 0).unwrap();
+    let got = store.ulog_get_entries(after_ch);
+    let (status, _) = decode_incr_update(&got.updates[0], Some(&mkey)).unwrap();
     assert!(
-        store
-            .ulog()
+        status
+            .vals
             .iter()
-            .any(|e| e.name.contains(krb5_kdc::testrealm::TEST_USER)
-                && e.princ.as_ref().is_some_and(|p| p.locked)),
-        "set_status must be ulogged"
+            .any(|v| matches!(v, KdbeVal::AttrFlags(f) if f & KDB_DISALLOW_ALL_TIX != 0)),
+        "set_status must be logged with its flags: {status:?}"
     );
 }
 

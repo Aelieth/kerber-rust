@@ -3,6 +3,11 @@
 
 use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
+use krb5_kdc::{
+    AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
+    AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_PRINC, AT_PW_EXP,
+    AT_PW_LAST_CHANGE, AT_TL_DATA,
+};
 use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TlData};
 use krb5_types::PrincipalName;
 
@@ -662,6 +667,7 @@ fn modify_policy_floor_code(mask: u32, set: impl Fn(&mut krb5_kdc::NamedPolicy))
 // with: `save_store` writes a keytab stash for the fresh bootstrap, then
 // `persist_paths` points `iprop_master_key` at it. Without this a store has
 // no master key and the encoder refuses to ship keys (see the negative test).
+#[cfg(feature = "test-hooks")]
 fn seed_master_key(store: &krb5_kdc::SharedDump) {
     let dir = krb5_testkit::scratch_dir("krb5-iprop-mk");
     let _ = std::fs::create_dir_all(&dir);

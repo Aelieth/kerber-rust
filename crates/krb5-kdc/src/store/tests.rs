@@ -704,15 +704,19 @@ fn random_sid_rejects_all_zero() {
     assert!(sid_from_random_bytes(&[0; 12]).is_err());
 }
 
+/// The serial is the update log's: a new process that maps the log sees the serial the change
+/// left, and the dump carries none (kerber-rust 1.0 kept one on `K/M`).
 #[test]
 fn persist_round_trip_keeps_serial_not_mtime() {
     let dir = krb5_testkit::scratch_dir("krb5-iprop-serial");
     let _ = std::fs::create_dir_all(&dir);
     let db = dir.join("principal");
     let stash = dir.join("stash");
+    let ulog = dir.join("principal.ulog");
     let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
+    store.map_ulog(&ulog, 100, IpropRole::Primary).unwrap();
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["serialed"]);
     store
         .change(|s| {
@@ -726,14 +730,21 @@ fn persist_round_trip_keeps_serial_not_mtime() {
         .unwrap()
         .unwrap();
     let sno = store.serial();
-    assert!(sno > 0);
-    let loaded = crate::persist::load_store(&db, &stash).unwrap();
+    assert_eq!(sno, 2, "the dummy entry, then the create");
+    let mut loaded = crate::persist::load_store(&db, &stash).unwrap();
+    assert_eq!(loaded.serial(), 0, "no log is mapped by a load");
+    loaded.map_ulog(&ulog, 100, IpropRole::Primary).unwrap();
     assert_eq!(
         loaded.serial(),
         sno,
-        "serial must survive dump persist, not db_stamp mtime"
+        "serial must survive in the update log, not db_stamp mtime"
     );
     assert!(loaded.get_name(&extra).is_some());
+    let text = std::fs::read_to_string(&db).unwrap();
+    assert!(
+        !text.contains(&format!("\t{}\t", crate::kdb_dump::TL_KERBER_SERIAL)),
+        "the dump keeps no serial"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -751,22 +762,34 @@ fn create_host_changepw_flag_survives_save() {
     crate::persist::save_store(&store, &db, &stash).unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     store
+        .map_ulog(&dir.join("principal.ulog"), 100, IpropRole::Primary)
+        .unwrap();
+    store
         .change(|s| s.create_host(&acl, &crate::testrealm::documented_admin_id(), &cpw))
         .unwrap()
         .unwrap();
     let loaded = crate::persist::load_store(&db, &stash).unwrap();
     let p = loaded.get_name(&cpw).expect("changepw");
     assert_ne!(p.attributes & KDB_PWCHANGE_SERVICE, 0);
+    let mkey = store.iprop_master_key().unwrap();
     let flagged = store
         .ulog()
+        .unwrap()
+        .entries()
+        .unwrap()
         .into_iter()
         .rev()
-        .find(|e| e.name.contains("kadmin/changepw") && e.princ.is_some())
+        .find(|e| e.name.contains("kadmin/changepw") && !e.deleted)
         .expect("ulog kdbe for kadmin/changepw");
-    assert_ne!(
-        flagged.princ.as_ref().unwrap().attributes & KDB_PWCHANGE_SERVICE,
-        0,
-        "ulog snapshot must carry PWCHANGE_SERVICE"
+    let vals = crate::store::iprop_xdr::decode_incr_update(&flagged.update, Some(&mkey))
+        .unwrap()
+        .0
+        .vals;
+    assert!(
+        vals.iter().any(
+            |v| matches!(v, crate::store::KdbeVal::AttrFlags(f) if f & KDB_PWCHANGE_SERVICE != 0)
+        ),
+        "ulog update must carry PWCHANGE_SERVICE"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }

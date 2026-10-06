@@ -263,6 +263,7 @@ fn readonly_database_refuses_changes_before_making_them() {
 /// it on its own, as MIT's `create_hist` commits it (two update-log entries): a change refused for
 /// quality leaves it in the database, and one naming a keysalt the policy refuses is refused
 /// first and creates nothing.
+#[cfg(feature = "test-hooks")]
 #[test]
 fn failed_chpass_keeps_the_history_principal() {
     use krb5_kdc::{load_store, save_store};
@@ -288,7 +289,13 @@ fn failed_chpass_keeps_the_history_principal() {
         store.set_principal_policy(&name, Some(pol.into())).unwrap();
     }
     save_store(&store, &db, &stash).unwrap();
+    let ulog = dir.join("principal.ulog");
     let kadmind = krb5_kdc::shared_dump(load_store(&db, &stash).unwrap());
+    kadmind
+        .write()
+        .unwrap()
+        .map_ulog(&ulog, 100, krb5_kdc::IpropRole::Primary)
+        .unwrap();
     let call = |proc: u32, args: &[u8]| {
         ret_code(&dispatch_kadm5(&kadmind, &acl, &actor, proc, args).unwrap())
     };
@@ -320,8 +327,10 @@ fn failed_chpass_keeps_the_history_principal() {
         .map(|k| k.kvno)
         .collect();
     assert_eq!(kvnos, [2]);
-    let logged = on_disk
-        .ulog()
+    let logged = krb5_kdc::Ulog::map(&ulog, 100)
+        .unwrap()
+        .entries()
+        .unwrap()
         .iter()
         .filter(|e| e.name == "kadmin/history@KERBER.TEST")
         .count();

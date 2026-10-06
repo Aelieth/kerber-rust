@@ -13,8 +13,9 @@ use std::path::Path;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{CipherState, EncryptionType, KeyUsage, ProtocolKey, encrypt};
 use krb5_kdc::{
-    PrincipalStore, dump_store, dump_store_iprop, dump_store_iprop_with_key, dump_store_with_key,
-    load_dump, load_dump_with_stash, save_store_fresh,
+    LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, dump_store_iprop,
+    dump_store_iprop_with_key, dump_store_with_key, load_dump, load_dump_with_stash,
+    save_store_fresh,
 };
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, RemoteSeq, ReplayCache,
@@ -48,16 +49,44 @@ pub fn kprop_dump_bytes(store: &PrincipalStore, master_password: &[u8]) -> Resul
         .map_err(|e| Error::Inner(e.to_string()))
 }
 
-/// MIT `kdb5_util dump -i1` body so `kpropd -A` `load -i` sets replica last_sno.
+/// MIT `kdb5_util dump -i1` body so `kpropd -A` `load -i` sets replica last_sno: `last` is the
+/// update log's last entry, read before `store` was ([`iprop_snapshot`]).
 ///
 /// # Errors
 ///
 /// [`Error::Inner`] when string-to-key of `master_password` fails or a key cannot be wrapped
 /// under the derived master key.
-pub fn kprop_dump_iprop(store: &PrincipalStore, master_password: &[u8]) -> Result<Vec<u8>, Error> {
-    dump_store_iprop(store, master_password)
+pub fn kprop_dump_iprop(
+    store: &PrincipalStore,
+    master_password: &[u8],
+    last: UlogLast,
+) -> Result<Vec<u8>, Error> {
+    dump_store_iprop(store, master_password, last)
         .map(String::into_bytes)
         .map_err(|e| Error::Inner(e.to_string()))
+}
+
+/// What `kprop -i` sends, read in MIT's order: the update log's last serial and time, then the
+/// database. The dump then holds at least what its header says, and a change made after the read
+/// reaches the replica as an update, never past it.
+/// MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1333`): the update log's last serial and time are read before the database is iterated.
+///
+/// # Errors
+///
+/// [`Error::Inner`] when the update log cannot be mapped or read, or the database does not load.
+pub fn iprop_snapshot(
+    db: &Path,
+    stash: &Path,
+    params: &krb5_config::IpropParams,
+) -> Result<(PrincipalStore, UlogLast), Error> {
+    let log = Ulog::map(&params.logfile, params.ulogsize)
+        .map_err(|_| Error::Inner("Could not map log".into()))?;
+    let last = log
+        .get_last()
+        .map_err(|e| Error::Inner(format!("{e} while reading update log header")))?;
+    let store =
+        krb5_kdc::load_store(db, stash).map_err(|e| Error::Inner(format!("load store: {e}")))?;
+    Ok((store, last))
 }
 
 /// Load a kprop body as dump version 6/7. Rejects KDB3 magic and truncated
@@ -748,16 +777,59 @@ pub struct KpropdConfig<'a> {
     pub stash: &'a Path,
     /// Client principals allowed to propagate.
     pub allowed_clients: Option<&'a [String]>,
+    /// The replica realm's iprop parameters when `iprop_enable` is set: the dump must then be an
+    /// iprop one, and the update log takes its serial and time.
+    pub iprop: Option<&'a krb5_config::IpropParams>,
+}
+
+/// The serial and time an iprop dump's header carries; `None` for a dump without one.
+#[must_use]
+pub fn iprop_dump_last(dump: &[u8]) -> Option<UlogLast> {
+    let line = dump.split(|&b| b == b'\n').next()?;
+    krb5_kdc::parse_iprop_header(std::str::from_utf8(line).ok()?)
+        .ok()
+        .map(|(_, last)| last)
+}
+
+/// Make `store` the replica's database as a full load does, and, for an iprop replica, keep its
+/// update log as `kdb5_util load -i` keeps it: started over before the new database is live and
+/// again after, then set to the dump's serial and time. A plain load keeps every principal's
+/// lockout attributes from the dump; an iprop load keeps the replica's own.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1551-1559`): the log starts over before the promotion, so a kill just after it leaves no stale state.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1570-1586`): after the promotion the log starts over again and takes the iprop dump's serial and time.
+///
+/// # Errors
+///
+/// [`Error::Inner`] when the update log cannot be opened, reset or written, or the store cannot
+/// be saved.
+pub fn load_replica(
+    store: &PrincipalStore,
+    db: &Path,
+    stash: &Path,
+    iprop: Option<(&krb5_config::IpropParams, UlogLast)>,
+) -> Result<(), Error> {
+    let Some((params, last)) = iprop else {
+        return save_store_fresh(store, db, stash, false, None)
+            .map_err(|e| Error::Inner(e.to_string()));
+    };
+    let log = Ulog::map(&params.logfile, params.ulogsize)
+        .map_err(|_| Error::Inner("Could not open iprop ulog".into()))?;
+    let log = LoadLog {
+        ulog: &log,
+        last: Some(last),
+    };
+    save_store_fresh(store, db, stash, true, Some(log)).map_err(|e| Error::Inner(e.to_string()))
 }
 
 /// Full replica handler: recvauth, dump v7 body, `load_dump`, persist, ack. The database is
-/// written as a full load leaves it, a new 0600 file owned by kpropd ([`save_store_fresh`]).
+/// written as a full load leaves it, a new 0600 file owned by kpropd ([`load_replica`]).
 /// Without `cfg.master_password` the replica's stash is read once the peer is authenticated and
-/// before the dump is received, so a missing one is named before any transfer. The lockout
-/// attributes are not replicated by an iprop dump: a replica's principal keeps its record in
-/// `principal.lockout` ([`is_iprop_dump`]); a plain dump's attributes replace them, as a plain
-/// `kdb5_util load` does.
+/// before the dump is received, so a missing one is named before any transfer. A replica with
+/// iprop enabled (`cfg.iprop`) loads only an iprop dump, keeps its own lockout attributes and
+/// sets its update log to the dump's serial and time; any other loads only a plain dump, whose
+/// lockout attributes replace its own.
 /// MIT `load_database` (`kprop/kpropd.c:1541-1609`): an iprop replica loads with `-i`, any other with a plain `kdb5_util load`.
+/// MIT `load_db` (`kadmin/dbutil/dump.c:1447-1475`): `load -i` refuses a dump without an iprop header, and a plain load one with it.
 ///
 /// # Errors
 ///
@@ -779,6 +851,7 @@ pub fn kpropd_handle_conn(
         db,
         stash,
         allowed_clients,
+        iprop,
     } = *cfg;
     let mut auth = kpropd_recvauth(
         stream,
@@ -793,13 +866,17 @@ pub fn kpropd_handle_conn(
         None => Some(read_stash_file(stash)?),
     };
     let dump = kpropd_recv_dump(stream, &mut auth)?;
+    let iprop_last = match (iprop, iprop_dump_last(&dump)) {
+        (Some(params), Some(last)) => Some((params, last)),
+        (None, None) if !is_iprop_dump(&dump) => None,
+        _ => return Err(Error::Inner("dump header bad".into())),
+    };
     let store = match (master_password, &stash_bytes) {
         (Some(pw), _) => kprop_load_bytes(&dump, pw)?,
         (None, Some(stash_bytes)) => kprop_load_stash_bytes(&dump, stash_bytes)?,
         (None, None) => return Err(Error::Inner("no master key".into())),
     };
-    save_store_fresh(&store, db, stash, is_iprop_dump(&dump))
-        .map_err(|e| Error::Inner(e.to_string()))?;
+    load_replica(&store, db, stash, iprop_last)?;
     kpropd_send_ack(stream, &mut auth, dump.len() as u64)?;
     tracing::info!(
         event = krb5_log::events::ADMIN,
@@ -822,18 +899,26 @@ pub enum IpropPoll {
     FullResync(u32),
 }
 
-/// Pull `master` ulog into `slave`. `last_sno == 0` is full resync (MIT).
+/// One poll of `master`'s update log by `slave`, in process: `slave`'s update log's last entry
+/// (none mapped is serial 0) is what it asks from, and each update it gets is applied and kept
+/// in its log, as kpropd's loop does with `IPROP_GET_UPDATES`.
 /// MIT `ulog_replay` (`lib/kdb/kdb_log.c:474-476`): an update that does not apply leaves the replica to resynchronize in full.
 pub fn iprop_poll_once(master: &PrincipalStore, slave: &mut PrincipalStore) -> IpropPoll {
-    let last = slave.serial();
-    let (st, _, entries) = master.iprop_get(last);
-    if st == krb5_kdc::IPROP_FULL_RESYNC {
-        return IpropPoll::FullResync(master.serial());
+    let last = slave.ulog_last().unwrap_or_default();
+    let got = master.ulog_get_entries(last);
+    match got.status {
+        krb5_kdc::IPROP_NIL => return IpropPoll::Nil,
+        krb5_kdc::IPROP_OK => {}
+        _ => return IpropPoll::FullResync(master.serial()),
     }
-    if st == krb5_kdc::IPROP_NIL || entries.is_empty() {
-        return IpropPoll::Nil;
+    let mkey = slave.iprop_master_key();
+    let mut updates = Vec::with_capacity(got.updates.len());
+    for u in &got.updates {
+        match krb5_kdc::decode_incr_update(u, mkey.as_ref()) {
+            Ok((update, _)) => updates.push(update),
+            Err(_) => return IpropPoll::FullResync(master.serial()),
+        }
     }
-    let updates: Vec<_> = entries.iter().map(krb5_kdc::UlogEntry::to_update).collect();
     match slave.apply_updates(&updates) {
         Ok(()) => IpropPoll::Applied(updates.len()),
         Err(_) => IpropPoll::FullResync(master.serial()),
@@ -954,25 +1039,37 @@ pub fn kprop_send_store(
     crealm: &krb5_types::Realm,
     cname: &PrincipalName,
 ) -> Result<(), Error> {
-    kprop_send_store_ex(stream, store, master, ticket, session, crealm, cname, false)
+    kprop_send_store_ex(stream, store, master, ticket, session, crealm, cname, None)
 }
 
-/// [`kprop_send_store`] with an ipropx dump header (`kpropd -A` `load -i`).
+/// [`kprop_send_store`] with an ipropx dump header (`kpropd -A` `load -i`) carrying `last`, the
+/// update log's last entry read before `store` ([`iprop_snapshot`]).
 ///
 /// # Errors
 ///
 /// [`Error::Inner`] when a key cannot be wrapped under `master`, or when [`kprop_sendauth`] or
 /// [`kprop_send_dump`] fails.
+#[expect(clippy::too_many_arguments, reason = "krb5_creds args, no value type")]
 pub fn kprop_send_store_iprop(
     stream: &mut TcpStream,
     store: &PrincipalStore,
     master: &ProtocolKey,
+    last: UlogLast,
     ticket: Ticket,
     session: &ProtocolKey,
     crealm: &krb5_types::Realm,
     cname: &PrincipalName,
 ) -> Result<(), Error> {
-    kprop_send_store_ex(stream, store, master, ticket, session, crealm, cname, true)
+    kprop_send_store_ex(
+        stream,
+        store,
+        master,
+        ticket,
+        session,
+        crealm,
+        cname,
+        Some(last),
+    )
 }
 
 #[expect(clippy::too_many_arguments, reason = "krb5_creds args, no value type")]
@@ -984,12 +1081,11 @@ fn kprop_send_store_ex(
     session: &ProtocolKey,
     crealm: &krb5_types::Realm,
     cname: &PrincipalName,
-    iprop: bool,
+    iprop: Option<UlogLast>,
 ) -> Result<(), Error> {
-    let dump = if iprop {
-        dump_store_iprop_with_key(store, master)
-    } else {
-        dump_store_with_key(store, master)
+    let dump = match iprop {
+        Some(last) => dump_store_iprop_with_key(store, master, last),
+        None => dump_store_with_key(store, master),
     }
     .map(String::into_bytes)
     .map_err(|e| Error::Inner(e.to_string()))?;
@@ -1004,10 +1100,75 @@ mod tests {
 
     use krb5_types::PrincipalName;
 
+    /// MIT `dump_db` reads the update log's last serial before the database: a change committed
+    /// after `kprop -i` read the database is not in the dump, and the header is the serial from
+    /// before it, so the replica asks for that change as an update instead of skipping it.
+    #[test]
+    fn an_iprop_dump_header_is_the_serial_read_before_the_database() {
+        let dir = krb5_testkit::scratch_dir("kprop-iprop-snapshot");
+        let (db, stash) = (dir.join("principal"), dir.join("stash"));
+        let log = dir.join("principal.ulog");
+        let (store, acl) = bootstrap_documented().unwrap();
+        krb5_kdc::save_store(&store, &db, &stash).unwrap();
+        let mut primary = krb5_kdc::load_store(&db, &stash).unwrap();
+        primary
+            .map_ulog(&log, 100, krb5_kdc::IpropRole::Primary)
+            .unwrap();
+        let actor = documented_admin_id();
+        let host = |h: &str| PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", h]);
+        primary
+            .change(|s| s.create_host(&acl, &actor, &host("before.kerber.test")))
+            .unwrap()
+            .unwrap();
+        let params = krb5_config::IpropParams {
+            enabled: true,
+            port: Some(2121),
+            logfile: log.clone(),
+            ulogsize: 100,
+        };
+        let (snapshot, last) = iprop_snapshot(&db, &stash, &params).unwrap();
+        // Committed between kprop's read of the database and its dump.
+        primary
+            .change(|s| s.create_host(&acl, &actor, &host("after.kerber.test")))
+            .unwrap()
+            .unwrap();
+        assert_eq!(primary.ulog_last().unwrap().sno, last.sno + 1);
+        let mkey = snapshot.iprop_master_key().unwrap();
+        let dump = dump_store_iprop_with_key(&snapshot, &mkey, last).unwrap();
+        assert_eq!(
+            dump.lines().next().unwrap(),
+            format!(
+                "ipropx 1 {} {} {}",
+                last.sno, last.time.seconds, last.time.useconds
+            )
+        );
+        assert!(dump.contains("host/before.kerber.test@KERBER.TEST"));
+        assert!(!dump.contains("host/after.kerber.test@KERBER.TEST"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(feature = "test-hooks")]
     #[test]
     fn iprop_poll_applies_delta_or_signals_resync() {
+        use krb5_kdc::IpropRole;
+        use krb5_kdc::testrealm::map_memory_ulog;
         let (mut master, acl) = bootstrap_documented().unwrap();
         let (mut slave, _) = bootstrap_documented().unwrap();
+        map_memory_ulog(&mut master, 100, IpropRole::Primary).unwrap();
+        map_memory_ulog(&mut slave, 100, IpropRole::Replica).unwrap();
+        assert!(
+            matches!(
+                iprop_poll_once(&master, &mut slave),
+                IpropPoll::FullResync(_)
+            ),
+            "a replica's own new log is not the primary's: a full resync"
+        );
+        // Where a full resync leaves the replica: the primary's last entry.
+        slave
+            .ulog()
+            .unwrap()
+            .set_last(master.ulog_last().unwrap())
+            .unwrap();
         assert_eq!(
             iprop_poll_once(&master, &mut slave),
             IpropPoll::Nil,
@@ -1017,11 +1178,9 @@ mod tests {
         master
             .create_password(&acl, &documented_admin_id(), &extra, b"pulled-secret")
             .unwrap();
-        match iprop_poll_once(&master, &mut slave) {
-            IpropPoll::Applied(n) => assert!(n >= 1),
-            other => panic!("expected Applied, got {other:?}"),
-        }
+        assert_eq!(iprop_poll_once(&master, &mut slave), IpropPoll::Applied(1));
         assert!(slave.get_name(&extra).is_some());
+        assert_eq!(slave.ulog_last(), master.ulog_last());
         let mut empty = krb5_kdc::PrincipalStore::new(krb5_kdc::testrealm::TEST_REALM);
         assert!(matches!(
             iprop_poll_once(&master, &mut empty),

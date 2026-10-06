@@ -217,3 +217,143 @@ fn kadm5_auth_gssapi_ok_requires_store_realm() {
         kadm5_auth_gssapi_ok
     ));
 }
+
+/// An established AUTH_GSSAPI call on the iprop program is authenticated first: without iprop
+/// the program is not registered, so the call is PROG_UNAVAIL under its verifier (MIT
+/// `svc_do_xprt`); once the update log is mapped the iprop dispatcher refuses the flavor.
+#[cfg(feature = "test-hooks")]
+#[test]
+fn an_established_auth_gssapi_call_on_iprop_is_prog_unavail_until_iprop_is_on() {
+    use krb5_kdc::testrealm::TEST_REALM;
+
+    let (store, acl, mut ctx, token, kadm_key, session) = admin_gss_token();
+    let keys = [kadm_key];
+    let rc = krb5_protocol::ReplayCache::new();
+    let mut gss = None;
+    let mut agss = None;
+    let call = |xid: u32, proc: u32, cred: &[u8], verf: (u32, &[u8]), args: &[u8]| {
+        let mut w = XdrW::default();
+        w.u32(xid);
+        w.u32(MSG_CALL);
+        w.u32(RPC_VERSION);
+        w.u32(IPROP_PROG);
+        w.u32(IPROP_VERS);
+        w.u32(proc);
+        w.u32(FLAVOR_AUTH_GSSAPI);
+        w.opaque(cred);
+        w.u32(verf.0);
+        w.opaque(verf.1);
+        w.b.extend_from_slice(args);
+        w.b
+    };
+    let mut init_cred = XdrW::default();
+    init_cred.u32(AUTH_GSSAPI_CREDS_VERS);
+    init_cred.u32(1);
+    init_cred.opaque(&[]);
+    let mut init_args = XdrW::default();
+    init_args.u32(2);
+    init_args.opaque(&token);
+    let rec = call(
+        21,
+        AUTH_GSSAPI_INIT,
+        &init_cred.b,
+        (FLAVOR_NONE, &[]),
+        &init_args.b,
+    );
+    let ctx_for = |store| RpcCtx {
+        store,
+        acl: &acl,
+        service_keys: &keys,
+        expected_realm: TEST_REALM,
+    };
+    let out = handle_rpc(
+        ctx_for(&store),
+        b"hdl",
+        &mut gss,
+        &mut agss,
+        &rc,
+        &rec,
+        "127.0.0.1",
+    )
+    .unwrap();
+    let mut r = XdrR::new(&out);
+    assert_eq!(r.u32().unwrap(), 21);
+    assert_eq!(r.u32().unwrap(), MSG_REPLY);
+    assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+    assert_eq!(r.u32().unwrap(), FLAVOR_NONE);
+    let _ = r.opaque().unwrap();
+    assert_eq!(r.u32().unwrap(), SUCCESS);
+    let _version = r.u32().unwrap();
+    let handle = r.opaque().unwrap();
+    assert_eq!((r.u32().unwrap(), r.u32().unwrap()), (0, 0));
+    let out_tok = r.opaque().unwrap();
+    let signed_isn = r.opaque().unwrap();
+    if !out_tok.is_empty() {
+        ctx.process_ap_rep(&out_tok, &session).unwrap();
+    }
+    let isn = ctx.unwrap(&signed_isn).unwrap();
+    let seq = u32::from_be_bytes(isn[..4].try_into().unwrap());
+    let mut data_cred = XdrW::default();
+    data_cred.u32(AUTH_GSSAPI_CREDS_VERS);
+    data_cred.u32(0);
+    data_cred.opaque(&handle);
+    let mut data_args = XdrW::default();
+    data_args.opaque(b"not read");
+    let verf = ctx.wrap_integ(&seq.wrapping_add(1).to_be_bytes()).unwrap();
+    let rec = call(
+        22,
+        IPROP_GET_UPDATES,
+        &data_cred.b,
+        (FLAVOR_AUTH_GSSAPI, &verf),
+        &data_args.b,
+    );
+    let out = handle_rpc(
+        ctx_for(&store),
+        b"hdl",
+        &mut gss,
+        &mut agss,
+        &rc,
+        &rec,
+        "127.0.0.1",
+    )
+    .unwrap();
+    let mut r = XdrR::new(&out);
+    assert_eq!(r.u32().unwrap(), 22);
+    assert_eq!(r.u32().unwrap(), MSG_REPLY);
+    assert_eq!(r.u32().unwrap(), MSG_ACCEPTED);
+    assert_eq!(r.u32().unwrap(), FLAVOR_AUTH_GSSAPI);
+    let reply_verf = r.opaque().unwrap();
+    assert_eq!(
+        ctx.unwrap(&reply_verf).unwrap(),
+        seq.wrapping_add(2).to_be_bytes()
+    );
+    assert_eq!(r.u32().unwrap(), PROG_UNAVAIL, "not served with iprop off");
+    store.write().unwrap().set_ulog(
+        krb5_kdc::Ulog::memory(10).unwrap(),
+        krb5_kdc::IpropRole::Primary,
+    );
+    let verf = ctx.wrap_integ(&seq.wrapping_add(3).to_be_bytes()).unwrap();
+    let rec = call(
+        23,
+        IPROP_GET_UPDATES,
+        &data_cred.b,
+        (FLAVOR_AUTH_GSSAPI, &verf),
+        &data_args.b,
+    );
+    let out = handle_rpc(
+        ctx_for(&store),
+        b"hdl",
+        &mut gss,
+        &mut agss,
+        &rc,
+        &rec,
+        "127.0.0.1",
+    )
+    .unwrap();
+    let mut r = XdrR::new(&out);
+    assert_eq!(r.u32().unwrap(), 23);
+    assert_eq!(r.u32().unwrap(), MSG_REPLY);
+    assert_eq!(r.u32().unwrap(), MSG_DENIED);
+    assert_eq!(r.u32().unwrap(), REJECT_AUTH_ERROR);
+    assert_eq!(r.u32().unwrap(), AUTH_TOOWEAK, "dispatched with iprop on");
+}

@@ -257,7 +257,13 @@ pub(super) fn handle_rpc(
     );
 
     let kadm = prog == KADM_PROG;
-    let iprop = prog == IPROP_PROG;
+    let iprop_prog = prog == IPROP_PROG;
+    // MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:164-171`): the iprop program is registered only with `iprop_enable`, which maps the update log.
+    let iprop = iprop_prog
+        && store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .logging();
     if cred_flavor == FLAVOR_GSS {
         return handle_rpcsec_gss(
             RpcCtx {
@@ -291,10 +297,12 @@ pub(super) fn handle_rpc(
     if iprop && vers != IPROP_VERS {
         return Ok(rpc_reply_mismatch(xid, IPROP_VERS, IPROP_VERS));
     }
-    if !kadm && !iprop {
+    if !kadm && !iprop_prog {
         return Ok(rpc_reply_accepted(xid, PROG_UNAVAIL));
     }
 
+    // AUTH_GSSAPI's own messages are the auth layer's, answered on the iprop program whether or
+    // not it is registered.
     if cred_flavor == FLAVOR_AUTH_GSSAPI {
         return handle_auth_gssapi(
             RpcCtx {
@@ -306,13 +314,18 @@ pub(super) fn handle_rpc(
             agss,
             xid,
             proc,
-            iprop,
+            iprop_prog,
             &cred,
             &verf,
             r.rest(),
             rcache,
             addr,
         );
+    }
+
+    // MIT `svc_do_xprt` (`lib/rpc/svc.c:496-521`): a program that is not registered is PROG_UNAVAIL once the call is authenticated.
+    if iprop_prog && !iprop {
+        return Ok(rpc_reply_accepted(xid, PROG_UNAVAIL));
     }
 
     // MIT `kadm_1` (`kadm_rpc_svc.c:80-87`): only AUTH_GSSAPI / RPCSEC_GSS.
@@ -415,14 +428,20 @@ pub(super) fn rpc_reply_gss(xid: u32, mic: &[u8], wrap: &[u8]) -> Vec<u8> {
 }
 
 pub(super) fn rpc_reply_agss(xid: u32, verf: &[u8], body: &[u8]) -> Vec<u8> {
+    let mut w = rpc_reply_agss_status(xid, verf, SUCCESS);
+    w.extend_from_slice(body);
+    w
+}
+
+/// An accepted reply under the AUTH_GSSAPI verifier `verf` whose status is `stat`.
+pub(super) fn rpc_reply_agss_status(xid: u32, verf: &[u8], stat: u32) -> Vec<u8> {
     let mut w = XdrW::default();
     w.u32(xid);
     w.u32(MSG_REPLY);
     w.u32(MSG_ACCEPTED);
     w.u32(FLAVOR_AUTH_GSSAPI);
     w.opaque(verf);
-    w.u32(SUCCESS);
-    w.b.extend_from_slice(body);
+    w.u32(stat);
     w.b
 }
 

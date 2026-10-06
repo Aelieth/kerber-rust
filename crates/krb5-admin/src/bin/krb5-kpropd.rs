@@ -9,7 +9,10 @@
 //!
 //! The realm is `-r`, else `KRB5_KDC_REALM`, else krb5.conf's `default_realm`, as MIT's kpropd
 //! takes `-r` or the default realm. The dump body is opened with the replica's stash, as MIT's
-//! kpropd loads it with `kdb5_util load` beside that stash, and saved to the replica db.
+//! kpropd loads it with `kdb5_util load` beside that stash, and saved to the replica db. With
+//! `iprop_enable` set for the realm, kpropd maps the replica's update log at the start, and a
+//! dump must be an iprop one, whose serial and time the log then keeps (MIT's `load -i`); without
+//! it, an iprop dump is refused as a plain `load` refuses it.
 //!
 //! kerber-rust's own environment, where this kpropd has none of MIT's options yet (it is not
 //! installed as a service):
@@ -107,6 +110,15 @@ fn main() {
     });
     let realm = paths.realm.clone().unwrap_or_default();
     let (db, stash) = (paths.database_name, paths.key_stash_file);
+    // MIT `parse_args` (`kprop/kpropd.c:1170-1177`): with iprop enabled the replica's update log is mapped at the start, and one that cannot be is fatal.
+    let iprop = krb5_config::IpropParams::load(&realm, &db);
+    if iprop.enabled
+        && let Err(e) = krb5_kdc::Ulog::map(&iprop.logfile, iprop.ulogsize)
+    {
+        eprintln!("{progname}: {e} Unable to map log!");
+        std::process::exit(1);
+    }
+    let iprop = iprop.enabled.then_some(iprop);
     let host_keys = load_host_keys(&db, &stash);
     if host_keys.is_empty() {
         eprintln!("krb5-kpropd: no host keys (set KRB5_KPROP_KEYTAB)");
@@ -132,6 +144,7 @@ fn main() {
                 let stash = stash.clone();
                 let allowed = kpropd_acl();
                 let replay = replay.clone();
+                let iprop = iprop.clone();
                 thread::spawn(move || {
                     match kpropd_handle_conn(
                         &mut stream,
@@ -143,6 +156,7 @@ fn main() {
                             db: &db,
                             stash: &stash,
                             allowed_clients: allowed.as_deref(),
+                            iprop: iprop.as_ref(),
                         },
                         &replay,
                     ) {

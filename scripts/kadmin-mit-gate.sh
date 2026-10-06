@@ -89,6 +89,22 @@ PY
 docker exec "$NAME_MIT" sh -c 'kdb5_util load /tmp/bd.dump >/dev/null 2>&1'
 MIT_BD="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_BD" | grep -F 'Last password change: Sun Sep 09 01:46:40 UTC 2001'
+echo "==== MIT iprop program without iprop_enable is not registered (ovsec_kadmd.c setup_loop, svc.c svc_do_xprt): AUTH_GSSAPI INIT SUCCESS, DATA no-context AUTH_FAILED, AUTH_NONE, kiprop RPCSEC_GSS and established AUTH_GSSAPI PROG_UNAVAIL ===="
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -randkey kiprop/testhost.kerber.test'
+docker exec -d "$NAME_MIT" kadmind
+require_port_in "$NAME_MIT" "$KADMIND_PORT" "MIT kadmind without iprop on :$KADMIND_PORT"
+MIT_NOIPROP="$(kadmind_iprop_auth_gssapi "$NAME_MIT" "$KADMIND_PORT" 2>&1 || true)"
+echo "$MIT_NOIPROP"
+echo "$MIT_NOIPROP" | grep -F 'kadmin_on_iprop kind=init label=SUCCESS'
+echo "$MIT_NOIPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_FAILED'
+echo "$MIT_NOIPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=PROG_UNAVAIL'
+compile_kadm5_probe "$NAME_MIT"
+MIT_NOIPROP_OK="$(kadm5_probe "$NAME_MIT" admin/admin iprop-valid /etc/krb5.conf kiprop/testhost.kerber.test@KERBER.TEST "$KADMIND_PORT" 2>&1 || true)"
+echo "$MIT_NOIPROP_OK"
+echo "$MIT_NOIPROP_OK" | grep -F 'iprop-valid label=ACCEPT code=1 '
+MIT_NOIPROP_AG="$(kadm5_probe "$NAME_MIT" admin/admin iprop-auth-gssapi /etc/krb5.conf kadmin/admin@KERBER.TEST "$KADMIND_PORT" 2>&1 || true)"
+echo "$MIT_NOIPROP_AG"
+echo "$MIT_NOIPROP_AG" | grep -F 'iprop-auth-gssapi label=RPC_ERROR clnt_stat=8 '
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue

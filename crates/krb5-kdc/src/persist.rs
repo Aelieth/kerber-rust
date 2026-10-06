@@ -15,7 +15,6 @@
 //! The lockout attributes the KDC records live beside it in `principal.lockout`, which a read
 //! merges and a write keeps in line with the store; `kdb5_util create` and `load` make it.
 
-use std::fmt::Write as _;
 use std::fs;
 use std::io::Read as _;
 use std::os::unix::fs::MetadataExt as _;
@@ -28,7 +27,8 @@ use crate::dblock::{
 use crate::error::Error;
 use crate::kdb_dump::{load_dump_mkey, write_dump};
 use crate::mkey::master_key_from_password;
-use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS, UlogEntry};
+use crate::store::{KeyEntry, Principal, PrincipalStore, S2K_ITERS};
+use crate::ulog::{Ulog, UlogError, UlogLast};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_protocol::{
     Keytab, check_secret_file_writable, write_fresh_secret_file, write_secret_file,
@@ -283,8 +283,8 @@ pub fn check_openable(db: &Path) -> Result<(), PersistError> {
 /// [`PersistError::Unopenable`] when the database is no database this store reads, before its
 /// lock files and the stash are opened ([`check_openable`]), or is empty, before the stash is
 /// read; [`PersistError::Lock`] when `principal.ok` or `principal.kadm5.lock` does not open or
-/// the lock may not be taken; [`PersistError::Format`] when a dump is not UTF-8, a legacy
-/// database has a malformed record, or the `.ulog` file beside it is malformed;
+/// the lock may not be taken; [`PersistError::Format`] when a dump is not UTF-8 or a legacy
+/// database has a malformed record;
 /// [`PersistError::Crypto`] when no key from the stash loads the dump (a malformed dump
 /// included) or decrypts a legacy database, or a legacy key is unusable.
 pub fn load_store(db_path: &Path, stash_path: &Path) -> Result<PrincipalStore, PersistError> {
@@ -333,7 +333,6 @@ pub(crate) fn read_store(
     store.persist_paths = Some((db_path.to_path_buf(), stash_path.to_path_buf()));
     store.db_stamp = DbStamp::now(lock, db_path);
     store.dblock = Some(Arc::clone(lock));
-    load_ulog(&mut store, db_path)?;
     Ok(store)
 }
 
@@ -348,9 +347,9 @@ pub(crate) fn read_store(
 /// [`PersistError::Io`] when the database cannot be read; [`PersistError::Unopenable`] when it
 /// is no database this store reads ([`check_openable`]) or is empty; [`PersistError::Lock`]
 /// when `principal.ok` or `principal.kadm5.lock` does not open or the lock may not be taken;
-/// [`PersistError::Format`] when it is a legacy database (which needs its stash), a dump that
-/// is not UTF-8, or the `.ulog` beside it is malformed; [`PersistError::Crypto`] when a key does
-/// not decrypt under `master`, a wrong master key included.
+/// [`PersistError::Format`] when it is a legacy database (which needs its stash) or a dump that
+/// is not UTF-8; [`PersistError::Crypto`] when a key does not decrypt under `master`, a wrong
+/// master key included.
 pub fn load_store_with_master(
     db_path: &Path,
     master: &ProtocolKey,
@@ -380,7 +379,6 @@ pub(crate) fn read_store_with_master(
     crate::lockout::merge_lockout_file(&mut store, db_path);
     store.db_stamp = DbStamp::now(lock, db_path);
     store.dblock = Some(Arc::clone(lock));
-    load_ulog(&mut store, db_path)?;
     store.persist_master = Some((db_path.to_path_buf(), master.clone()));
     Ok(store)
 }
@@ -414,9 +412,10 @@ pub fn read_db_and_lockout_locked(
 /// the store already holds it) and moving its age forward. Creates `stash_path` if needed.
 ///
 /// A database not there yet is created, as `krb5-kdb create` creates one: its lock files too.
-/// The database, its `.ulog` and a rewritten stash keep the owner, group and mode of the files
-/// they replace (`write_secret_file`), so `kadmind` as root and `kadmin.local` as another user
-/// can share them. A writer that may not write the database or its `.ulog` changes nothing.
+/// The database and a rewritten stash keep the owner, group and mode of the files they replace
+/// (`write_secret_file`), so `kadmind` as root and `kadmin.local` as another user can share them.
+/// A writer that may not write the database changes nothing. The update log is the store's own
+/// ([`PrincipalStore::map_ulog`]), written only where iprop maps it.
 ///
 /// A new stash holds the store's `K/M` key when the store has one (the master key its dump
 /// was loaded with); otherwise a random key of the realm's `master_key_type`
@@ -427,8 +426,8 @@ pub fn read_db_and_lockout_locked(
 ///
 /// [`PersistError::Lock`] when the database's lock files do not open (or cannot be made for a
 /// new database) or the lock may not be taken; [`PersistError::Io`] when the stash cannot be
-/// read or the stash, database or `.ulog` file cannot be written (an existing one the writer
-/// may not open read-write is refused before any file changes); [`PersistError::Crypto`] when
+/// read or the stash or database cannot be written (an existing one the writer may not open
+/// read-write is refused before any file changes); [`PersistError::Crypto`] when
 /// an existing stash is not a usable master key, `master_key_type` names no supported enctype, a
 /// new master key cannot be derived or generated, or a key cannot be wrapped;
 /// [`PersistError::Format`] when a new stash is needed and the KDC profile cannot be read or the
@@ -450,6 +449,7 @@ pub fn save_store(
 /// principal keeps its record in `principal.lockout`.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1490-1508`): a full load is written to a temporary database.
 /// MIT `load_db` (`kadmin/dbutil/dump.c:1551-1569`): the temporary database is then made live.
+/// With `log`, the update log is started over around the promotion ([`FullLoad::finish`]).
 ///
 /// # Errors
 ///
@@ -459,9 +459,16 @@ pub fn save_store_fresh(
     db_path: &Path,
     stash_path: &Path,
     merge_lockout: bool,
+    log: Option<LoadLog<'_>>,
 ) -> Result<(), PersistError> {
     let master = master_for_save(store, db_path, stash_path)?;
-    Ok(load_store_full(store, db_path, &master, merge_lockout)?)
+    Ok(load_store_full(
+        store,
+        db_path,
+        &master,
+        merge_lockout,
+        log,
+    )?)
 }
 
 fn save_store_as(
@@ -470,8 +477,7 @@ fn save_store_as(
     stash_path: &Path,
     made: bool,
 ) -> Result<(), PersistError> {
-    // MIT `ulog_map` (`lib/kdb/kdb_log.c:525-526`): an existing update log is reopened `O_RDWR` as the database is.
-    // Both are checked before either changes, so a refused writer leaves no half-saved store.
+    // A refused writer leaves no half-saved store: the files are checked before any changes.
     check_writable(db_path, DbWrite::InPlace)?;
     let master = master_for_save(store, db_path, stash_path)?;
     write_store_files(store, db_path, &master, DbWrite::InPlace, made)
@@ -539,13 +545,12 @@ pub enum DbWrite {
     Fresh,
 }
 
-/// The database, its update log and `principal.lockout`, each opened read-write before a write
-/// changes any of them; an update in place reopens the database too ([`reopen_writable`]).
+/// The database and `principal.lockout`, each opened read-write before a write changes either
+/// of them; an update in place reopens the database too ([`reopen_writable`]).
 fn check_writable(db_path: &Path, how: DbWrite) -> Result<(), PersistError> {
     if how == DbWrite::InPlace {
         reopen_writable(db_path)?;
     }
-    check_secret_file_writable(&ulog_path(db_path))?;
     crate::lockout::check_writable(db_path)?;
     Ok(())
 }
@@ -582,14 +587,11 @@ fn strerror(e: &std::io::Error) -> String {
 /// database's lock is held exclusively for the write, as [`save_store`] holds it; a
 /// [`DbWrite::Fresh`] write is a full load ([`load_store_full`]).
 ///
-/// The `.ulog` beside the database is always updated in place.
-///
 /// # Errors
 ///
-/// [`PersistError::Lock`] as for [`save_store`]; [`PersistError::Io`] when the database or
-/// `.ulog` cannot be written (for [`DbWrite::InPlace`], an existing database the writer may not
-/// open read-write is refused before any file changes); [`PersistError::Crypto`] when a key
-/// cannot be wrapped.
+/// [`PersistError::Lock`] as for [`save_store`]; [`PersistError::Io`] when the database cannot
+/// be written (for [`DbWrite::InPlace`], an existing database the writer may not open read-write
+/// is refused before any file changes); [`PersistError::Crypto`] when a key cannot be wrapped.
 pub fn save_store_with_master(
     store: &PrincipalStore,
     db_path: &Path,
@@ -597,7 +599,7 @@ pub fn save_store_with_master(
     how: DbWrite,
 ) -> Result<(), PersistError> {
     if how == DbWrite::Fresh {
-        return Ok(load_store_full(store, db_path, master, false)?);
+        return Ok(load_store_full(store, db_path, master, false, None)?);
     }
     let (lock, made) = WriteLock::take(store, db_path)?;
     check_writable(db_path, how)?;
@@ -606,8 +608,8 @@ pub fn save_store_with_master(
     Ok(())
 }
 
-/// Write the store's database and update log, then bring `principal.lockout` in line with the
-/// store, made first when `make_lockout` (a database this write makes, a `load -update`).
+/// Write the store's database, then bring `principal.lockout` in line with the store, made first
+/// when `make_lockout` (a database this write makes, a `load -update`).
 fn write_store_files(
     store: &PrincipalStore,
     db_path: &Path,
@@ -620,24 +622,23 @@ fn write_store_files(
         DbWrite::InPlace => write_secret_file(db_path, text.as_bytes())?,
         DbWrite::Fresh => write_fresh_secret_file(db_path, text.as_bytes())?,
     }
-    save_ulog(store, db_path)?;
     crate::lockout::reconcile(store, db_path, make_lockout)?;
     Ok(())
 }
 
 /// Write `text`, dump text with no principal record, as the database: a full load
-/// ([`DbWrite::Fresh`]) leaves it as a new file beside an empty `.ulog`, an update
-/// ([`DbWrite::InPlace`]) rewrites the database alone. No key is wrapped, so no master key is
-/// needed. The database's lock is held exclusively for the write.
+/// ([`DbWrite::Fresh`]) leaves it as a new file, an update ([`DbWrite::InPlace`]) rewrites the
+/// database. No key is wrapped, so no master key is needed. The database's lock is held
+/// exclusively for the write.
 ///
 /// # Errors
 ///
-/// [`PersistError::Lock`] as for [`save_store`]; [`PersistError::Io`] when the database or
-/// `.ulog` cannot be written (for [`DbWrite::InPlace`], an existing database the writer may not
-/// open read-write is refused before any file changes).
+/// [`PersistError::Lock`] as for [`save_store`]; [`PersistError::Io`] when the database cannot
+/// be written (for [`DbWrite::InPlace`], an existing database the writer may not open read-write
+/// is refused before any file changes).
 pub fn save_dump_text(db_path: &Path, text: &str, how: DbWrite) -> Result<(), PersistError> {
     if how == DbWrite::Fresh {
-        return Ok(load_text_full(db_path, text, "ulog 1\n", &[], false)?);
+        return Ok(load_text_full(db_path, text, &[], false, None)?);
     }
     let (lock, _) = WriteLock::take(&PrincipalStore::new(""), db_path)?;
     check_writable(db_path, how)?;
@@ -800,8 +801,9 @@ impl DbUpdate {
         }
     }
 
-    /// Write `store`, every key wrapped under `master`, as the database, in place, with its
-    /// update log and `principal.lockout` (made when missing); the age moves.
+    /// Write `store`, every key wrapped under `master`, as the database, in place, with
+    /// `principal.lockout` (made when missing); the age moves. A primary's update log takes the
+    /// store's puts around this write ([`PrincipalStore::write_logged`]).
     ///
     /// # Errors
     ///
@@ -871,19 +873,47 @@ pub enum LoadError {
     /// loaded database live.
     #[error(transparent)]
     Promote(PersistError),
+    /// The update log could not be started over; MIT reports it while reinitializing the update
+    /// log.
+    #[error(transparent)]
+    Reinit(UlogError),
+    /// The update log could not take an iprop dump's serial and time; MIT reports it while
+    /// writing the update log header.
+    #[error(transparent)]
+    SetLast(UlogError),
 }
 
 impl From<LoadError> for PersistError {
     fn from(e: LoadError) -> Self {
+        let logged = |e: UlogError, context: &str| {
+            let kind = match &e {
+                UlogError::Io(io) => io.kind(),
+                _ => std::io::ErrorKind::Other,
+            };
+            Self::Io(std::io::Error::new(kind, format!("{e} {context}")))
+        };
         match e {
             LoadError::Create(e) | LoadError::Promote(e) => e,
+            LoadError::Reinit(e) => logged(e, "while reinitializing update log"),
+            LoadError::SetLast(e) => logged(e, "while writing update log header"),
         }
     }
 }
 
+/// The update log a full load keeps when iprop is enabled: started over once the dump is in the
+/// temporary database, before that is made live, and again after; an iprop dump's serial and time
+/// are then its last entry's.
+#[derive(Clone, Copy, Debug)]
+pub struct LoadLog<'a> {
+    /// The mapped update log.
+    pub ulog: &'a Ulog,
+    /// An iprop dump's last serial and time (`load -i`), which the log takes after the load.
+    pub last: Option<UlogLast>,
+}
+
 /// Make `store`, its keys wrapped under `master`, the database at `db_path` as a full load does
 /// ([`FullLoad::finish_store`]); `merge_lockout` keeps the records `principal.lockout` already
-/// has, as an iprop load does.
+/// has, as an iprop load does, and `log` is started over around the promotion.
 ///
 /// # Errors
 ///
@@ -893,12 +923,13 @@ pub fn load_store_full(
     db_path: &Path,
     master: &ProtocolKey,
     merge_lockout: bool,
+    log: Option<LoadLog<'_>>,
 ) -> Result<(), LoadError> {
-    FullLoad::create(db_path)?.finish_store(store, master, merge_lockout)
+    FullLoad::create(db_path)?.finish_store(store, master, merge_lockout, log)
 }
 
-/// Make the dump `text` the database at `db_path` as MIT's full load does, with `ulog` as its
-/// update log ([`FullLoad::finish`]).
+/// Make the dump `text` the database at `db_path` as MIT's full load does, `log` started over
+/// around the promotion ([`FullLoad::finish`]).
 ///
 /// # Errors
 ///
@@ -906,11 +937,11 @@ pub fn load_store_full(
 pub fn load_text_full(
     db_path: &Path,
     text: &str,
-    ulog: &str,
     lockout: &[(String, crate::Lockout)],
     merge: bool,
+    log: Option<LoadLog<'_>>,
 ) -> Result<(), LoadError> {
-    FullLoad::create(db_path)?.finish(text, ulog, lockout, merge)
+    FullLoad::create(db_path)?.finish(text, lockout, merge, log)
 }
 
 /// A full load's temporary database, `principal~` beside the database, made with its own two
@@ -947,8 +978,8 @@ impl FullLoad {
         })
     }
 
-    /// [`Self::finish`] with `store` as dump text, its keys wrapped under `master`, its update
-    /// log and its principals' lockout attributes.
+    /// [`Self::finish`] with `store` as dump text, its keys wrapped under `master`, and its
+    /// principals' lockout attributes.
     ///
     /// # Errors
     ///
@@ -958,38 +989,45 @@ impl FullLoad {
         store: &PrincipalStore,
         master: &ProtocolKey,
         merge_lockout: bool,
+        log: Option<LoadLog<'_>>,
     ) -> Result<(), LoadError> {
         let text = write_dump(store, master).map_err(|e| LoadError::Create(e.into()))?;
         let lockout = crate::lockout::store_records(store);
-        self.finish(&text, &ulog_text(store), &lockout, merge_lockout)
+        self.finish(&text, &lockout, merge_lockout, log)
     }
 
-    /// Write the dump `text` to the temporary database and make it the database, with `ulog` as
-    /// its update log: the real database's exclusive lock is taken (waiting for any holder) and
-    /// the temporary database renamed over it, the age moved, and the temporary lock files
-    /// removed. When there is no database yet, it and its two lock files are created first; an
-    /// existing `principal.ok` is kept, and made again only when it is missing. The new database
-    /// is a 0600 file owned by the writer. Under the real database's lock, before the rename,
-    /// `lockout` (each loaded principal's attributes) becomes `principal.lockout`, a new file
-    /// renamed over any old one; with `merge` a principal it has a record of keeps it. A
-    /// `principal.lockout` that is no regular file the writer may write (a symlink is never
-    /// followed) fails the load before the update log changes.
+    /// Write the dump `text` to the temporary database and make it the database: the real
+    /// database's exclusive lock is taken (waiting for any holder) and the temporary database
+    /// renamed over it, the age moved, and the temporary lock files removed. When there is no
+    /// database yet, it and its two lock files are created first; an existing `principal.ok` is
+    /// kept, and made again only when it is missing. The new database is a 0600 file owned by the
+    /// writer. Under the real database's lock, before the rename, `lockout` (each loaded
+    /// principal's attributes) becomes `principal.lockout`, a new file renamed over any old one;
+    /// with `merge` a principal it has a record of keeps it. A `principal.lockout` that is no
+    /// regular file the writer may write (a symlink is never followed) fails the load before the
+    /// database changes. With `log` (iprop enabled), the update log starts over once the temporary
+    /// database is written and again once it is live, then takes `log.last` when an iprop dump gave
+    /// one.
     /// MIT `load_db` (`kadmin/dbutil/dump.c:1497-1501`): an iprop load merges the non-replicated attributes the database already has.
     /// MIT `krb5_db2_promote_db` (`plugins/kdb/db2/kdb_db2.c:1497-1513`): the real database is created when there is none, else opened and locked exclusively.
     /// MIT `ctx_promote` (`plugins/kdb/db2/kdb_db2.c:1434-1448`): the temporary database is renamed over the real one, the age moves, and the temporary lock files are removed.
+    /// MIT `load_db` (`kadmin/dbutil/dump.c:1551-1559`): the log starts over before the promotion, so a kill just after it leaves no stale state.
+    /// MIT `load_db` (`kadmin/dbutil/dump.c:1570-1586`): after the promotion the log starts over again and takes the iprop dump's serial and time.
     ///
     /// # Errors
     ///
-    /// [`LoadError::Create`] when the temporary database cannot be written; [`LoadError::Promote`]
-    /// when the real database's lock files do not open (`principal.kadm5.lock` missing: MIT's
-    /// text), its lock may not be taken, or the update log, `principal.lockout` or the rename
-    /// fails. Either way the temporary database is removed.
+    /// [`LoadError::Create`] when the temporary database cannot be written; [`LoadError::Reinit`]
+    /// when the update log cannot start over before the promotion; [`LoadError::Promote`] when
+    /// the real database's lock files do not open (`principal.kadm5.lock` missing: MIT's text),
+    /// its lock may not be taken, or `principal.lockout` or the rename fails. Each of these
+    /// removes the temporary database. Once it is live: [`LoadError::Reinit`] when the log cannot
+    /// start over again, [`LoadError::SetLast`] when it cannot take `log.last`.
     pub fn finish(
         mut self,
         text: &str,
-        ulog: &str,
         lockout: &[(String, crate::Lockout)],
         merge: bool,
+        log: Option<LoadLog<'_>>,
     ) -> Result<(), LoadError> {
         let Some((temp, mut file)) = self.temp.take() else {
             return Err(LoadError::Create(DbLockError::NotLocked.into()));
@@ -998,9 +1036,11 @@ impl FullLoad {
             std::io::Write::write_all(&mut file, text.as_bytes()).and_then(|()| file.sync_all());
         drop(file);
         let real = match written {
-            Ok(()) => {
-                promote(&self.db, &self.tmp, ulog, lockout, merge).map_err(LoadError::Promote)
-            }
+            Ok(()) => log
+                .map_or(Ok(()), |l| l.ulog.init_header().map_err(LoadError::Reinit))
+                .and_then(|()| {
+                    promote(&self.db, &self.tmp, lockout, merge).map_err(LoadError::Promote)
+                }),
             Err(e) => Err(LoadError::Create(e.into())),
         };
         let real = match real {
@@ -1013,7 +1053,14 @@ impl FullLoad {
         };
         let _ = temp.unlock();
         drop(temp);
-        real.unlock().map_err(|e| LoadError::Promote(e.into()))
+        real.unlock().map_err(|e| LoadError::Promote(e.into()))?;
+        if let Some(l) = log {
+            l.ulog.init_header().map_err(LoadError::Reinit)?;
+            if let Some(last) = l.last {
+                l.ulog.set_last(last).map_err(LoadError::SetLast)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1063,7 +1110,6 @@ fn create_temporary(tmp: &Path) -> Result<(DbLock, fs::File), PersistError> {
 fn promote(
     db: &Path,
     tmp: &Path,
-    ulog: &str,
     lockout: &[(String, crate::Lockout)],
     merge: bool,
 ) -> Result<DbLock, PersistError> {
@@ -1097,7 +1143,6 @@ fn promote(
     };
     let moved = (|| -> Result<(), PersistError> {
         crate::lockout::check_writable(db)?;
-        write_secret_file(&ulog_path(db), ulog.as_bytes())?;
         crate::lockout::write_loaded(db, lockout, merge)?;
         fs::rename(tmp, db)?;
         real.update_age();
@@ -1160,8 +1205,8 @@ pub enum CreateError {
 /// `principal.ok` is made (kept and emptied when it is there) and locked exclusively; the
 /// database path is then reserved with an exclusive create, so an existing database (or any file
 /// there) is never replaced; then `principal.kadm5.lock` is made, which must not exist, and
-/// locked; then the dump, `principal.lockout` with a record of each principal, and the `.ulog`
-/// are written, each a new file renamed into place, 0600 and the writer's (a `principal.lockout`
+/// locked; then the dump and `principal.lockout` with a record of each principal are written,
+/// each a new file renamed into place, 0600 and the writer's (a `principal.lockout`
 /// left there keeps its owner and mode), the age moves and both locks are let go. The lock
 /// files are 0600 and owned by the writer, and with SELinux on each file made takes the context
 /// a new file at its path takes. The stash is the caller's ([`write_stash`]).
@@ -1174,8 +1219,8 @@ pub enum CreateError {
 /// [`CreateError::Lock`] when `principal.ok` cannot be made or locked (nothing else is written),
 /// or `principal.kadm5.lock` cannot be made (the reserved database stays, as MIT's does);
 /// [`CreateError::Create`] when the database path cannot be created exclusively;
-/// [`CreateError::Persist`] when the dump, `.ulog` or `principal.lockout` cannot be written or a
-/// key cannot be wrapped (the reservation is removed again).
+/// [`CreateError::Persist`] when the dump or `principal.lockout` cannot be written or a key
+/// cannot be wrapped (the reservation is removed again).
 pub fn create_store(
     store: &PrincipalStore,
     db_path: &Path,
@@ -1197,13 +1242,6 @@ pub fn create_store(
         .and_then(|()| {
             let lockout = crate::lockout::store_records(store);
             Ok(crate::lockout::write_loaded(db_path, &lockout, false)?)
-        })
-        .and_then(|()| {
-            let ulog = ulog_text(store);
-            Ok(write_fresh_secret_file(
-                &ulog_path(db_path),
-                ulog.as_bytes(),
-            )?)
         });
     if let Err(e) = written {
         let _ = fs::remove_file(db_path);
@@ -1258,93 +1296,6 @@ pub fn stash_keys(bytes: &[u8]) -> Vec<ProtocolKey> {
         .into_iter()
         .filter_map(|etype| ProtocolKey::from_bytes(etype, bytes).ok())
         .collect()
-}
-
-fn ulog_path(db_path: &Path) -> PathBuf {
-    let mut s = db_path.as_os_str().to_os_string();
-    s.push(".ulog");
-    PathBuf::from(s)
-}
-
-/// Each entry's serial, time, kind and name; the kind is `1` for a delete, else `0:` and the
-/// attribute list its update sends, which a reader from before the list takes as `0`.
-fn ulog_text(store: &PrincipalStore) -> String {
-    let mut text = String::from("ulog 1\n");
-    for e in store.ulog() {
-        let kind = if e.deleted {
-            "1".to_owned()
-        } else {
-            format!("0:{}", e.attrs)
-        };
-        let _ = writeln!(text, "{}\t{}\t{kind}\t{}", e.sno, e.time, e.name);
-    }
-    text
-}
-
-fn save_ulog(store: &PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
-    write_secret_file(&ulog_path(db_path), ulog_text(store).as_bytes())?;
-    Ok(())
-}
-
-/// MIT `ulog_map` (`kdb_log.c:514-518`): a missing update log is not a corrupt log.
-/// A file whose first line is not the ulog header is not loaded, and a missing file leaves the
-/// store's log empty. An entry written before the attribute list was kept (kind `0`) sends every
-/// attribute of a new principal; each entry sends the record as it is now.
-fn load_ulog(store: &mut PrincipalStore, db_path: &Path) -> Result<(), PersistError> {
-    let path = ulog_path(db_path);
-    let Ok(text) = fs::read_to_string(&path) else {
-        return Ok(());
-    };
-    let mut lines = text.lines();
-    let Some(hdr) = lines.next() else {
-        return Ok(());
-    };
-    if !hdr.starts_with("ulog ") {
-        return Err(PersistError::Format("ulog header".into()));
-    }
-    let mut entries = Vec::new();
-    for line in lines {
-        if line.is_empty() {
-            continue;
-        }
-        let mut f = line.splitn(4, '\t');
-        let sno: u32 = f
-            .next()
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| PersistError::Format("ulog sno".into()))?;
-        let time: u32 = f
-            .next()
-            .and_then(|s| s.parse().ok())
-            .ok_or_else(|| PersistError::Format("ulog time".into()))?;
-        let kind = f.next().unwrap_or_default();
-        let deleted = kind == "1";
-        let attrs = match kind.split_once(':') {
-            Some(("0", list)) => list
-                .parse()
-                .map_err(|_| PersistError::Format("ulog attrs".into()))?,
-            _ if deleted => 0,
-            _ => crate::ULOG_ADD_ATTRS,
-        };
-        let name = f
-            .next()
-            .ok_or_else(|| PersistError::Format("ulog name".into()))?
-            .to_owned();
-        let princ = if deleted {
-            None
-        } else {
-            store.get(&name).cloned()
-        };
-        entries.push(UlogEntry {
-            sno,
-            time,
-            name,
-            deleted,
-            princ,
-            attrs,
-        });
-    }
-    store.restore_ulog(entries);
-    Ok(())
 }
 
 /// Write a KDB3 ciphertext (one-release load tests / migration helper).

@@ -186,7 +186,7 @@ fn incoming_trust_iprop_names_foreign_id() {
     store
         .create_interrealm_key(&acl, &documented_admin_id(), FOREIGN, aes_key(0x55))
         .unwrap();
-    let text = dump_store_iprop(&store, b"masterpassword").unwrap();
+    let text = dump_store_iprop(&store, b"masterpassword", krb5_kdc::UlogLast::default()).unwrap();
     assert!(text.starts_with("ipropx "));
     assert!(
         text.contains("krbtgt/KERBER.TEST@AD.KERBER.TEST"),

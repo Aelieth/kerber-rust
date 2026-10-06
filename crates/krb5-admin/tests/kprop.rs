@@ -234,6 +234,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
                 db: &db,
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
+                iprop: None,
             },
             &ReplayCache::new(),
         )
@@ -342,6 +343,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
                 db: &db,
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
+                iprop: None,
             },
             &ReplayCache::new(),
         )
@@ -435,6 +437,7 @@ fn kpropd_rejects_when_acl_unset() {
                 db: &db,
                 stash: &stash,
                 allowed_clients: None,
+                iprop: None,
             },
             &ReplayCache::new(),
         )
@@ -562,6 +565,7 @@ fn kprop_exact_acl(
                 db: &db,
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
+                iprop: None,
             },
             &ReplayCache::new(),
         )
