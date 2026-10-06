@@ -411,8 +411,7 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
     let keytab = match &kt {
         KeytabName::Memory(_) => Keytab::default(),
         KeytabName::File(path) => {
-            let read = std::fs::read(path)
-                .map(Zeroizing::new)
+            let read = krb5_protocol::read_secret_file(path)
                 .map_err(|e| keytab_read_error(&e, &path.display().to_string()))
                 .and_then(|b| {
                     Keytab::parse(&b).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))

@@ -130,7 +130,7 @@ fn run_line(kt: &mut Keytab, line: &str, input: &mut dyn BufRead) -> Result<Line
             let [path] = args else {
                 return Err(format!("{cmd}: must specify keytab to read"));
             };
-            let other = std::fs::read(path)
+            let other = krb5_protocol::read_secret_file(Path::new(path))
                 .and_then(|bytes| Keytab::parse(&bytes))
                 .map_err(|e| format!("{cmd}: {} while reading keytab \"{path}\"", strerror(&e)))?;
             kt.version = other.version;

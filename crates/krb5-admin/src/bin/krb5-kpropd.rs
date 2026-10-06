@@ -289,7 +289,7 @@ fn kpropd_acl() -> Option<Vec<String>> {
 
 fn load_host_keys(db: &Path, stash: &Path) -> Vec<ProtocolKey> {
     if let Ok(path) = std::env::var("KRB5_KPROP_KEYTAB") {
-        match std::fs::read(&path).and_then(|b| Keytab::parse(&b)) {
+        match krb5_protocol::read_secret_file(Path::new(&path)).and_then(|b| Keytab::parse(&b)) {
             Ok(kt) => {
                 return kt.entries.into_iter().map(|e| e.key).collect();
             }

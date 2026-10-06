@@ -297,7 +297,7 @@ fn add_entries(
     let Some(path) = &kt.path else {
         return Ok(());
     };
-    let mut tab = match std::fs::read(path) {
+    let mut tab = match krb5_protocol::read_secret_file(path) {
         Ok(bytes) => Keytab::parse(&bytes).map_err(|e| texts::strerror(&e))?,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Keytab::default(),
         Err(e) => return Err(texts::strerror(&e)),
@@ -399,7 +399,7 @@ fn remove_principal(
         ));
         return;
     };
-    let mut tab = match std::fs::read(path) {
+    let mut tab = match krb5_protocol::read_secret_file(path) {
         Ok(bytes) => match Keytab::parse(&bytes) {
             Ok(t) => t,
             Err(e) => {

@@ -324,7 +324,7 @@ pub(crate) fn read_store(
     if let Some(e) = refusal(db_path, format) {
         return Err(e);
     }
-    let stash = fs::read(stash_path)?;
+    let stash = krb5_protocol::read_secret_file(stash_path)?;
     let mut store = match format {
         DbFormat::Kdb(version) => load_kdb_blob(&blob, version, &stash)?,
         _ => load_dump_with_stash(dump_text(&blob)?, &stash)?,
@@ -1393,7 +1393,10 @@ pub(crate) fn stash_keytab_key(bytes: &[u8]) -> Option<ProtocolKey> {
 
 /// Keytab-format stash bytes for `master` (`krb5_def_store_mkey_list`): one
 /// `K/M@REALM` entry at kvno 1.
-fn stash_keytab_bytes(realm: &str, master: &ProtocolKey) -> Result<Vec<u8>, PersistError> {
+fn stash_keytab_bytes(
+    realm: &str,
+    master: &ProtocolKey,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, PersistError> {
     let realm_a = krb5_types::try_ascii(realm).map_err(|e| PersistError::Format(e.to_string()))?;
     let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, crate::mkey::MASTER_NAME);
     Ok(Keytab::single(realm_a, name, 1, master.clone()).to_bytes())
@@ -1451,7 +1454,7 @@ fn master_for_save(
         let master = existing_stash_key(db_path, stash_path)?;
         // A legacy raw-key stash is rewritten in keytab format when the writer may write it. The
         // rewrite is optional: a stash the writer may only read still serves this save.
-        if stash_keytab_key(&fs::read(stash_path)?).is_none()
+        if stash_keytab_key(&krb5_protocol::read_secret_file(stash_path)?).is_none()
             && check_secret_file_writable(stash_path).is_ok()
         {
             write_secret_file(stash_path, &stash_keytab_bytes(store.realm(), &master)?)?;
@@ -1485,7 +1488,7 @@ fn master_for_save(
 }
 
 fn existing_stash_key(db_path: &Path, stash_path: &Path) -> Result<ProtocolKey, PersistError> {
-    let bytes = fs::read(stash_path)?;
+    let bytes = krb5_protocol::read_secret_file(stash_path)?;
     if let Some(mkey) = stash_keytab_key(&bytes) {
         return Ok(mkey);
     }
@@ -1542,7 +1545,7 @@ fn stash_etypes() -> [EncryptionType; 2] {
 }
 
 fn load_stash_etype(path: &Path, etype: EncryptionType) -> Result<ProtocolKey, PersistError> {
-    let bytes = fs::read(path)?;
+    let bytes = krb5_protocol::read_secret_file(path)?;
     ProtocolKey::from_bytes(etype, &bytes).map_err(|e| PersistError::Crypto(e.to_string()))
 }
 

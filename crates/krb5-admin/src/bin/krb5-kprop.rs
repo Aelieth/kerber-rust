@@ -208,7 +208,7 @@ fn master_key(store: &PrincipalStore, db: &Path, stash: &Path) -> Result<Protoco
 
 fn client_name(keytab: Option<&std::path::Path>, server: &PrincipalName) -> PrincipalName {
     if let Some(path) = keytab {
-        match std::fs::read(path)
+        match krb5_protocol::read_secret_file(path)
             .and_then(|b| Keytab::parse(&b).map_err(|e| std::io::Error::other(e.to_string())))
         {
             Ok(kt) => {

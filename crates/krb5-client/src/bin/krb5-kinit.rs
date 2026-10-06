@@ -248,7 +248,7 @@ fn client_keytab_principal() -> Result<Princ, (Krb5Error, &'static str)> {
     let KeytabName::File(path) = kt_resolve(&name).map_err(|e| (e, resolving))? else {
         return Err((Krb5Error::of(Code::Other), determining));
     };
-    let bytes = std::fs::read(&path).map_err(|e| {
+    let bytes = krb5_protocol::read_secret_file(&path).map_err(|e| {
         (
             krb5_client::keytab_read_error(&e, &path.display().to_string()),
             determining,

@@ -13,6 +13,7 @@
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use zeroize::Zeroizing;
 
 #[cfg(test)]
 use std::cell::Cell;
@@ -185,6 +186,24 @@ fn temp_path(path: &Path) -> PathBuf {
         u32::from_be_bytes(nonce[0..4].try_into().unwrap_or([0; 4])),
         u32::from_be_bytes(nonce[4..8].try_into().unwrap_or([0; 4]))
     ))
+}
+
+/// The whole of the secret file at `path` (a keytab, a master-key stash), read into a buffer
+/// sized from the file's length before the first byte, so that no reallocation leaves a copy of a
+/// key behind, and wiped when it drops.
+///
+/// # Errors
+///
+/// The open's or the read's system error (`NotFound` for a missing file).
+pub fn read_secret_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
+    use std::io::Read as _;
+    let mut file = fs::File::open(path)?;
+    let len = file
+        .metadata()
+        .map_or(0, |m| usize::try_from(m.len()).unwrap_or(0));
+    let mut bytes = Zeroizing::new(Vec::with_capacity(len.saturating_add(1)));
+    file.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 /// Create the temp file a write renames onto `path`: `O_EXCL | O_NOFOLLOW`, mode 0600, so a

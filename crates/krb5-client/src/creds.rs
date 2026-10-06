@@ -566,7 +566,7 @@ pub fn server_decrypt_ticket_keytab(keytab: &str, ticket: &Ticket) -> Result<(),
     let crate::KeytabName::File(path) = crate::kt_resolve(keytab)? else {
         return Err(Krb5Error::of(Code::WrongPrinc));
     };
-    let bytes = std::fs::read(&path)
+    let bytes = krb5_protocol::read_secret_file(&path)
         .map_err(|e| crate::keytab_read_error(&e, &path.display().to_string()))?;
     let kt = Keytab::parse(&bytes).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
     let usage =

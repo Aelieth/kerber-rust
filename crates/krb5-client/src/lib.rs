@@ -809,7 +809,7 @@ fn kinit_inner(
     let mut ticket = params.ticket;
     ticket.anonymous |= params.anonymous;
     let keytab_keys = if let Some(ktpath) = params.keytab {
-        let bytes = std::fs::read(ktpath)
+        let bytes = krb5_protocol::read_secret_file(ktpath)
             .map_err(|e| keytab_read_error(&e, &ktpath.display().to_string()))?;
         let kt = Keytab::parse(&bytes)?;
         // MIT `krb5_init_creds_set_keytab` (`gic_keytab.c:176-232`): no key for the client is

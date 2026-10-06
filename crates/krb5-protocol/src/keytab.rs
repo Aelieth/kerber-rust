@@ -96,15 +96,29 @@ impl Keytab {
         }
     }
 
-    /// Serialize as MIT keytab v2 (`0x0502`) unless [`Self::version`] is v1.
+    /// Serialize as MIT keytab v2 (`0x0502`) unless [`Self::version`] is v1, into a buffer sized
+    /// for the whole keytab before the first byte (no reallocation leaves a copy of a key behind)
+    /// and wiped when it drops.
     #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Zeroizing<Vec<u8>> {
         let ver = if self.version == 0x0501 {
             0x0501u16
         } else {
             0x0502
         };
-        let mut out = ver.to_be_bytes().to_vec();
+        let size = 2
+            + self
+                .unparsed
+                .iter()
+                .map(|(_, raw)| raw.len())
+                .sum::<usize>()
+            + self
+                .entries
+                .iter()
+                .map(|e| 4 + entry_len(e, ver))
+                .sum::<usize>();
+        let mut out = Zeroizing::new(Vec::with_capacity(size));
+        out.extend_from_slice(&ver.to_be_bytes());
         let mut ei = 0;
         let mut ui = 0;
         loop {
@@ -116,10 +130,9 @@ impl Keytab {
             let Some(e) = self.entries.get(ei) else {
                 break;
             };
-            let body = marshal_entry(e, ver);
-            let len = i32::try_from(body.len()).unwrap_or(0);
+            let len = i32::try_from(entry_len(e, ver)).unwrap_or(0);
             out.extend_from_slice(&len.to_be_bytes());
-            out.extend_from_slice(&body);
+            marshal_entry(&mut out, e, ver);
             ei += 1;
         }
         out
@@ -286,13 +299,34 @@ impl Keytab {
     }
 }
 
-fn marshal_entry(e: &KeytabEntry, ver: u16) -> Vec<u8> {
-    let mut b = Vec::new();
+/// The length of the record [`marshal_entry`] writes for `e`.
+/// MIT `krb5_ktfileint_size_entry` (`kt_file.c:1276-1299`): every counted field, the fixed ones,
+/// and the version-2 kvno.
+fn entry_len(e: &KeytabEntry, ver: u16) -> usize {
+    let counted = |d: &[u8]| 2 + d.len().min(usize::from(u16::MAX));
+    2 + counted(e.realm.as_bytes())
+        + e.name
+            .name_string
+            .iter()
+            .map(|c| counted(c.as_bytes()))
+            .sum::<usize>()
+        + 4
+        + 4
+        + 1
+        + 2
+        + counted(e.key.as_bytes())
+        + if ver == 0x0502 { 4 } else { 0 }
+}
+
+/// One entry's record, appended to `b` (sized by the caller, [`entry_len`]).
+/// MIT `krb5_ktfileint_write_entry` (`kt_file.c:1127-1269`): the record a keytab file entry is,
+/// the version-2 kvno after the key.
+fn marshal_entry(b: &mut Vec<u8>, e: &KeytabEntry, ver: u16) {
     let ncomp = u16::try_from(e.name.name_string.len()).unwrap_or(0);
     b.extend_from_slice(&ncomp.to_be_bytes());
-    put16(&mut b, e.realm.as_bytes());
+    put16(b, e.realm.as_bytes());
     for c in &e.name.name_string {
-        put16(&mut b, c.as_bytes());
+        put16(b, c.as_bytes());
     }
     b.extend_from_slice(&e.name.name_type.to_be_bytes());
     b.extend_from_slice(&e.timestamp.to_be_bytes());
@@ -300,11 +334,10 @@ fn marshal_entry(e: &KeytabEntry, ver: u16) -> Vec<u8> {
     b.push((e.kvno & 0xff) as u8);
     let enctype = u16::try_from(e.key.etype().to_iana()).unwrap_or(0);
     b.extend_from_slice(&enctype.to_be_bytes());
-    put16(&mut b, e.key.as_bytes());
+    put16(b, e.key.as_bytes());
     if ver == 0x0502 {
         b.extend_from_slice(&e.kvno.to_be_bytes());
     }
-    b
 }
 
 enum EntryErr {
@@ -563,11 +596,12 @@ mod tests {
             1,
             ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[9u8; 16]).unwrap(),
         );
-        let mut body = marshal_entry(&sample_entry(), 0x0502);
+        let mut body = Vec::new();
+        marshal_entry(&mut body, &sample_entry(), 0x0502);
         patch_etype(&mut body, 99);
         let mut rec = i32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
         rec.extend_from_slice(&body);
-        let mut bytes = known.to_bytes();
+        let mut bytes = known.to_bytes().to_vec();
         bytes.extend_from_slice(&rec);
         let parsed = Keytab::parse(&bytes).unwrap();
         assert_eq!(parsed.entries.len(), 1);
@@ -597,11 +631,12 @@ mod tests {
             1,
             ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[9u8; 16]).unwrap(),
         );
-        let mut body = marshal_entry(&sample_entry(), 0x0502);
+        let mut body = Vec::new();
+        marshal_entry(&mut body, &sample_entry(), 0x0502);
         patch_etype(&mut body, 99);
         let mut rec = i32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
         rec.extend_from_slice(&body);
-        let mut bytes = known.to_bytes();
+        let mut bytes = known.to_bytes().to_vec();
         bytes.extend_from_slice(&rec);
         let extra = Keytab::single(
             ascii("KERBER.TEST"),
@@ -625,7 +660,8 @@ mod tests {
     #[test]
     fn an_unparsed_records_key_is_a_slice_of_the_record() {
         use zeroize::Zeroize as _;
-        let mut body = marshal_entry(&sample_entry(), 0x0502);
+        let mut body = Vec::new();
+        marshal_entry(&mut body, &sample_entry(), 0x0502);
         patch_etype(&mut body, 99);
         let mut bytes = 0x0502u16.to_be_bytes().to_vec();
         bytes.extend_from_slice(&i32::try_from(body.len()).unwrap().to_be_bytes());
@@ -642,6 +678,31 @@ mod tests {
         let (off, n) = (at - start, key.len());
         kt.unparsed[0].1.as_mut_slice().zeroize();
         assert!(kt.unparsed[0].1[off..off + n].iter().all(|&b| b == 0));
+    }
+
+    /// The buffer `to_bytes` writes a keytab into is sized for the whole keytab before the first
+    /// byte, so no reallocation copied a key into a block left unwiped.
+    #[test]
+    fn to_bytes_sizes_its_buffer_before_the_first_key() {
+        let mut kt = Keytab::single(
+            ascii("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            1,
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32]).unwrap(),
+        );
+        for (kvno, name) in [(2, "host"), (3, "nfs")] {
+            kt.entries.push(KeytabEntry {
+                realm: ascii("KERBER.TEST"),
+                name: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]),
+                timestamp: 1,
+                kvno,
+                key: ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[8u8; 32])
+                    .unwrap(),
+            });
+        }
+        let bytes = kt.to_bytes();
+        assert_eq!(bytes.capacity(), bytes.len());
+        assert_eq!(Keytab::parse(&bytes).unwrap().entries.len(), 3);
     }
 
     #[test]

@@ -84,9 +84,11 @@ pub fn kprop_load_with_stash(bytes: &[u8], stash: &Path) -> Result<PrincipalStor
     kprop_load_stash_bytes(bytes, &read_stash_file(stash)?)
 }
 
-/// The stash file's bytes; a stash that cannot be read is named.
-fn read_stash_file(stash: &Path) -> Result<Vec<u8>, Error> {
-    std::fs::read(stash).map_err(|e| Error::Inner(format!("stash {}: {e}", stash.display())))
+/// The stash file's bytes, in a wiped buffer sized from the file; a stash that cannot be read is
+/// named.
+fn read_stash_file(stash: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>, Error> {
+    krb5_protocol::read_secret_file(stash)
+        .map_err(|e| Error::Inner(format!("stash {}: {e}", stash.display())))
 }
 
 /// [`kprop_load_with_stash`] with the stash file already read.

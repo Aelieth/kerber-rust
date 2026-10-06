@@ -134,7 +134,7 @@ fn main() {
         eprintln!("krb5-iprop-pull: set KRB5_KPROP_KEYTAB");
         std::process::exit(2);
     });
-    let kt = std::fs::read(&kt_path)
+    let kt = krb5_protocol::read_secret_file(std::path::Path::new(&kt_path))
         .map_err(|e| e.to_string())
         .and_then(|b| Keytab::parse(&b).map_err(|e| e.to_string()))
         .unwrap_or_else(|e| {
@@ -248,7 +248,8 @@ fn load_dump(text: &str, stash: &std::path::Path) -> Result<krb5_kdc::PrincipalS
     if let Some(pw) = hooked {
         return krb5_kdc::load_dump(text, pw.as_bytes()).map_err(|e| e.to_string());
     }
-    let bytes = std::fs::read(stash).map_err(|e| format!("stash {}: {e}", stash.display()))?;
+    let bytes = krb5_protocol::read_secret_file(stash)
+        .map_err(|e| format!("stash {}: {e}", stash.display()))?;
     load_dump_with_stash(text, &bytes).map_err(|e| e.to_string())
 }
 

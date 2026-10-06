@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **client/protocol/admin/kdc.** Every keytab and stash read (kinit, kvno, klist, ktutil,
+  kadmin.local, kprop, kpropd, iprop-pull, krb5kdc, kadmind, kdb5_util) is a wiped buffer sized from
+  the file, as is `Keytab::to_bytes`'s output. Units.
 - **client/protocol.** `klist -k` formats a key only under `-K`, from the keytab's own bytes. The
   reader wipes its key copies and raw records; `klist` its file bytes and listing (not stdout's
   buffer). Settled (output unchanged); units.

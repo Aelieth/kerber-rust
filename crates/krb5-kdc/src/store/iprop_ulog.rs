@@ -160,7 +160,7 @@ impl PrincipalStore {
     #[must_use]
     pub fn iprop_master_key(&self) -> Option<krb5_crypto::ProtocolKey> {
         if let Some((_, stash)) = &self.persist_paths
-            && let Ok(bytes) = std::fs::read(stash)
+            && let Ok(bytes) = krb5_protocol::read_secret_file(stash)
         {
             if let Some(k) = crate::persist::stash_keytab_key(&bytes) {
                 return Some(k);
