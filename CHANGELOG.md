@@ -2815,6 +2815,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **test.** `spake-gate` and `rust-kinit-spake-gate` add an edwards25519 leg with Fedora's settings,
+  MIT's wire flow asserted; the field `.expect` files drop the SPAKE difference.
 - **gate.** Every in-image MIT oracle is built with `krb5-config` (`mit_oracle_cc`); a plain `-lkrb5`
   loaded Debian's 1.20.1 libkrb5. Before its first use the gate prints the loaded brand, red unless
   `krb5-1.22.2-final`.

@@ -92,7 +92,7 @@ fail the kit's keytab check (no `klist -k`; [install.md](install.md) lists what 
 | `scripts/rust-kinit-enterprise-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit -E` vs Rust KDC; Rust `kinit -E` vs MIT (must match MIT client): MIT db2: MIT and Rust `kinit -E` of `user@KERBER.TEST` exit non-zero with `not found`; Rust KDC: klist `Default principal: user@KERBER.TEST` (not `user@KERBER.TEST@KERBER.TEST`) |
 | `scripts/rust-kinit-fast-gate.sh` | MIT | `ci:mit-extra` | fail-red | Rust `kinit --fast` vs MIT KDC: MIT `klist` `user@KERBER.TEST`; TRACE `Decrypted AP-REQ`; no-`+requires_preauth` `nopreauth@KERBER.TEST` FAST: TRACE `Decrypted AP-REQ` `aes256-sha2`, `klist -e` `aes256-cts-hmac-sha384-192` |
 | `scripts/rust-kinit-pkinit-gate.sh` | MIT | `ci:mit-extra` | fail-red | Rust `kinit --pkinit FILE:` vs MIT KDC: MIT `klist` `user@KERBER.TEST`; `pkinit.so`; Rust `kinit --pkinit` exits 0 with an empty `KRB5_PASSWORD`, and the MIT KDC trace plus the Rust `kinit` output match a five-arm case-insensitive regex led by `PKINIT`; rogue KDC is `pkinit kdc eku` (MIT not listening is red); anonymous `kinit -n` + `restrict_anon` (`WELLKNOWN/ANONYMOUS`, `WELLKNOWN:ANONYMOUS`); `require_freshness` leg: MIT KDC logs `freshness token received` for the Rust client |
-| `scripts/rust-kinit-spake-gate.sh` | MIT | `ci:mit-extra` | fail-red | Rust `kinit --spake` vs MIT KDC P-256: MIT `klist` `user@KERBER.TEST`; TRACE `SPAKE response received` or `SPAKE derived K`; `klist -C` shows `config: fast_avail(krbtgt/KERBER.TEST@KERBER.TEST) = yes` and `config: pa_type(krbtgt/KERBER.TEST@KERBER.TEST) = 151`; proxy log `error_code=91` + `e_text=PREAUTH_FAILED` |
+| `scripts/rust-kinit-spake-gate.sh` | MIT | `ci:mit-extra` | fail-red | Rust `kinit --spake` vs MIT KDC P-256: MIT `klist` `user@KERBER.TEST`; TRACE `SPAKE response received` or `SPAKE derived K`; `klist -C` shows `config: fast_avail(krbtgt/KERBER.TEST@KERBER.TEST) = yes` and `config: pa_type(krbtgt/KERBER.TEST@KERBER.TEST) = 151`; proxy log `error_code=91` + `e_text=PREAUTH_FAILED`; then Rust `kinit` with its default group vs MIT KDC with Fedora's SPAKE settings: TRACE `Sending SPAKE challenge with group 1` + `SPAKE response received`, wire `[150, 149]` then `[133, 151, 150, 149]`, `pa_type` 151 |
 | `scripts/rust-kpasswd-mit-gate.sh` | MIT | `ci:mit-extra` | fail-red | Rust `krb5-kpasswd` vs MIT `kadmind` 464: new password `kinit`; old fails |
 | `scripts/s4u-mit-gate.sh` | MIT | `ci:mit-extra-2` | fail-red | MIT `kvno -U` / `-U -P` vs Rust KDC: `klist` `for client user@KERBER.TEST`; user-TGT → host S4U2Self (Rust `krb5-kvno -U admin`) exits 1 and both KDCs (MIT :88, Rust :8888) log `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH`; `kvno -U nosuch` not found; `kvno -U locked` revoked; S4U2Proxy without a delegation grant is `KDC can't fulfill requested option` on MIT db2 and the Rust KDC; RBCD: MIT `kvno -U user -P host/rbcd.kerber.test` gets a ticket whose PAC has delegation info (type 11) from MIT's KDC (test KDB) and from the Rust KDC |
 | `scripts/samba-ad-gate.sh` | Samba | `peers:peers` | nightly | live Samba DC `kinit` and `kvno` of `krbtgt/${REALM}@${REALM}` exit 0; `klist` has `${USER}@${REALM}` and `krbtgt/${REALM}@${REALM}`; missing image `exit 2` |
@@ -102,7 +102,7 @@ fail the kit's keytab check (no `klist -k`; [install.md](install.md) lists what 
 | `scripts/samba-realtrust-gate.sh` | Samba | `peers:peers` | nightly | `samba-tool domain trust create` + reverse PAC: reverse LOGON_INFO SID/RID = live Samba-A `kbruser` `objectSid` |
 | `scripts/sha2-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit`/`kvno` etype 20 vs Rust KDC: `klist -e` names `aes256-cts-hmac-sha384-192` |
 | `scripts/soak-gate.sh` | none | `ci:soak`, `soak:soak` | soft, nightly | self RSS / latency on the prod realm under sustained load (MIT sampling is not the leak proof): fails on the RSS cap or the steady-window slope, an error rate above 0 or a panic; a window-over-window p99 rise over 2.5× is a warning |
-| `scripts/spake-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC: TRACE `Preauth module spake (151) (real) returned: 0/Success` + group 2; `klist` `user@KERBER.TEST` |
+| `scripts/spake-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit` `pa_type` 151 / group 2 vs Rust KDC: TRACE `Preauth module spake (151) (real) returned: 0/Success` + group 2; `klist` `user@KERBER.TEST`; then MIT `kinit` with its default group vs Rust KDC with Fedora's SPAKE settings: challenge group 1 in the 25, e-data `[136, 19, 151, 2, 133]`, `[133, 151, 150, 149]`, AS-REP `[19]` |
 | `scripts/store-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs MemoryStore KDC: `backend memory`; `user@KERBER.TEST` + host kvno |
 | `scripts/stress-gate.sh` | MIT | `ci:slo` | soft | wire AS+TGS + MIT `kinit`/`kvno` under load: fails on an error rate above 0, a panic or fewer than 16 issue-ok; p99 `duration_us` over 50 ms or under 8 issue-ok/s is a warning |
 
@@ -494,7 +494,10 @@ not check (a unit test, or "not asserted").
   the same 91 `PREAUTH_FAILED` pin as `spake-gate.sh`. It sets
   `+requires_preauth user` and asserts a SPAKE *completion* line
   (`SPAKE response received` or `SPAKE derived K`) from the MIT KDC TRACE,
-  not a PREAUTH_REQUIRED offer.
+  not a PREAUTH_REQUIRED offer. A second leg gives MIT's KDC Fedora's settings
+  (`spake_preauth_groups = edwards25519`, `spake_preauth_kdc_challenge = edwards25519`):
+  the Rust `kinit` with its default group answers the optimistic challenge in its
+  second request.
 - `scripts/rust-kpasswd-mit-gate.sh` — Rust `krb5-kpasswd` against MIT
   `kadmind`.
 - `scripts/s4u-mit-gate.sh` — MIT `kvno -U user` and `kvno -U user -P`
@@ -566,7 +569,11 @@ not check (a unit test, or "not asserted").
   and group 2, and `klist` shows
   `user@KERBER.TEST`. First-round KRB-ERROR **91** `e_text` is
   `PREAUTH_FAILED` (`do_as_req.c:439-442,809`) in the
-  `scripts/lib/kdc-error-proxy.py` capture and the Rust KDC log.
+  `scripts/lib/kdc-error-proxy.py` capture and the Rust KDC log. A second leg
+  gives the Rust KDC Fedora's settings and runs MIT `kinit` with its default
+  group: the `kdc-padata-proxy.py` wire must be MIT's (25 with
+  `[136, 19, 151, 2, 133]`, then `[133, 151, 150, 149]`, then an AS-REP with
+  `[19]`), with a group-1 challenge and `pa_type` 151.
 - `scripts/store-gate.sh` — `db_library=memory` KDC seeded from
   `--test-realm`; MIT `kinit` + `kvno`.
 - `scripts/stress-gate.sh` — concurrent wire AS+TGS via
