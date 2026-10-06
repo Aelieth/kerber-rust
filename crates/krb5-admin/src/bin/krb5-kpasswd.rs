@@ -5,9 +5,10 @@
 //! from a pipe. The server is the realm's `kpasswd_server`, else its `admin_server` on port 464;
 //! TCP first, then UDP.
 //!
-//! `KRB5_KPASSWD_TARGET=name@REALM` sets that principal's password instead (`krb5_set_password`,
-//! protocol `0xff80`): a kerber-rust extension that MIT's `kpasswd` does not have. A `test-hooks`
-//! build (the gates') takes the passwords from `KRB5_PASSWORD` and `KRB5_NEW_PASSWORD` when set.
+//! A `test-hooks` build (the gates') takes the passwords from `KRB5_PASSWORD` and
+//! `KRB5_NEW_PASSWORD` when set, and with `KRB5_KPASSWD_TARGET=name@REALM` sets that principal's
+//! password instead (`krb5_set_password`, protocol `0xff80`). A release `kpasswd` reads none of
+//! them and changes the client's own password, as MIT's does.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -65,15 +66,12 @@ fn run<R: BufRead, W: Write>(
             return 1;
         }
     };
-    let target = match std::env::var("KRB5_KPASSWD_TARGET") {
-        Ok(raw) => match parse_principal(&raw) {
-            Ok(target) => Some(target),
-            Err(e) => {
-                eprintln!("{prog}: {e} parsing KRB5_KPASSWD_TARGET");
-                return 1;
-            }
-        },
-        Err(_) => None,
+    let target = match set_password_target() {
+        Ok(target) => target,
+        Err(e) => {
+            eprintln!("{prog}: {e}");
+            return 1;
+        }
     };
     // MIT `k5_locate_server` (`locate_kdc.c:871-877`): a realm with no KDC is `KRB5_REALM_UNKNOWN`.
     let Some(kdc) = conf
@@ -370,6 +368,36 @@ fn kpasswd_servers(conf: &Krb5Conf, realm: &str) -> Vec<Endpoint> {
             port: KPASSWD_PORT,
         })
         .collect()
+}
+
+/// The gates' set-password target, `KRB5_KPASSWD_TARGET=name@REALM`, in a `test-hooks` build.
+/// MIT `main` (`kpasswd.c:152-153`): `krb5_change_password` changes the client's own password,
+/// so a release build reads no target.
+///
+/// # Errors
+///
+/// The parse error of a target that is not a principal name, with what was parsed.
+#[cfg_attr(
+    not(feature = "test-hooks"),
+    expect(
+        clippy::unnecessary_wraps,
+        reason = "a test-hooks build reads the target, which may not parse"
+    )
+)]
+fn set_password_target() -> Result<Option<(PrincipalName, String)>, String> {
+    #[cfg(feature = "test-hooks")]
+    {
+        std::env::var("KRB5_KPASSWD_TARGET")
+            .ok()
+            .map(|raw| {
+                parse_principal(&raw).map_err(|e| format!("{e} parsing KRB5_KPASSWD_TARGET"))
+            })
+            .transpose()
+    }
+    #[cfg(not(feature = "test-hooks"))]
+    {
+        Ok(None)
+    }
 }
 
 /// One kpasswd exchange: `Ok(None)` when the password was changed, `Ok(Some(line))` when the

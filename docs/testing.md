@@ -827,9 +827,9 @@ branch.
 | `kvno`'s `--disable-transited-check`, `--body-realm`, `--renew`, `--renew-ticket`, and a KDC host before the services | `krb5-kvno` (`krb5-client/test-hooks`): request shapes MIT's `kvno` cannot send | refuses them as MIT's `kvno` does, with its usage |
 | `kinit`'s `--spake`, `--fast`, `--armor-ccache`, `--pkinit`, `--pkinit-anchors`, and `[kdc-host] principal [ccache [service]]` | `krb5-kinit` (`krb5-client/test-hooks`), which also prints `ok tgt=…` and log lines for the gates | refuses them as MIT's `kinit` does; `-T` and `-X X509_user_identity=` / `X509_anchors=` are MIT's options and stay |
 | `kinit -S service` as the gates use it: a TGS-REQ for the service after the TGT, both stored | `krb5-kinit` (`krb5-client/test-hooks`) | MIT's `-S`: the AS-REQ asks for that service, in the client's realm, and the cache holds that ticket |
+| `KRB5_KPASSWD_TARGET=name@REALM` (`client-differential-cli-gate.sh`) | `krb5-kpasswd` (`krb5-admin/test-hooks`): sets that principal's password (`krb5_set_password`, `0xff80`) | changes the client's own password, as MIT's `kpasswd` |
 
-`KRB5_KPASSWD_TARGET` is not test-only: `krb5-kpasswd` sets that principal's
-password (`krb5_set_password`), a kerber-rust extension MIT's `kpasswd` lacks.
+The KCM socket is `[libdefaults] kcm_socket` in every build; no build reads `KCM_SOCKET`.
 
 ## In-repo consumers
 

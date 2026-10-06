@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **admin.** `kpasswd` reads `KRB5_KPASSWD_TARGET`, the gates' set-password target, only in a
+  `krb5-admin/test-hooks` build (the field strings check looks for it); a release `kpasswd` changes
+  the client's own password, as MIT's. Settled; units.
 - **client/protocol/admin.** The KCM socket is `kcm_socket`, else MIT's default; `KCM_SOCKET` is not
   read. `-` or no socket is "No KCM server found", other failures their errno; `kpasswd` opens the
   default ccache first. Settled; units; gate.
