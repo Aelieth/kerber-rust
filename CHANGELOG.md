@@ -504,6 +504,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **protocol.** `AcceptorAuthContext` ports MIT's acceptor auth context: `krb5_rd_req`'s
+  RFC 4537 enctype check (the KDC profile first on a KDC), `krb5_mk_rep` (echoed or fresh
+  subkey, random 30-bit seq-number) and `krb5_mk_priv`. Units.
 - **types.** `PrincipalName::unparse_no_realm` unparses a name as MIT's
   `KRB5_PRINCIPAL_UNPARSE_NO_REALM`: components quoted, an `@` kept; unit.
 - **docs.** [docs/install.md](docs/install.md) upgrades an MIT realm kept on a container volume

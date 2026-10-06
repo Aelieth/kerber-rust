@@ -60,6 +60,11 @@ pub enum Error {
     /// MIT `KRB5_PROG_ETYPE_NOSUPP` (`krb5_err.et:204-204`): the code and text.
     #[error("Program lacks support for encryption type")]
     ProgEtypeNosupp,
+    /// An AP-REQ's session key or subkey is of an enctype the acceptor does not permit; the
+    /// text names it.
+    /// MIT `negotiate_etype` (`lib/krb5/krb/rd_req_dec.c:878-886`): `KRB5_NOPERM_ETYPE` with the enctype's name.
+    #[error("{0}")]
+    NopermEtype(String),
     /// Reply too short to classify.
     #[error("KDC reply truncated")]
     TruncatedReply,
@@ -94,6 +99,7 @@ impl Clone for Error {
             Self::NoEtype => Self::NoEtype,
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
+            Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
             Self::TruncatedReply => Self::TruncatedReply,
             Self::File(e) => Self::Io {
                 message: e.to_string(),

@@ -443,11 +443,14 @@ fn env_kdc_config_in(env: &dyn Fn(&str) -> Option<OsString>) -> Option<PathBuf> 
 }
 
 /// The KDC profile path: [`env_kdc_config`], else [`default_kdc_profile`], whether or not the
-/// file exists.
+/// file exists; on a thread a test pinned with [`crate::set_test_kdc_profile`], that path.
 /// MIT `add_kdc_config_file` (`init_os_ctx.c:340-366`): `KRB5_KDC_PROFILE`, else
 /// `DEFAULT_KDC_PROFILE`, put ahead of the krb5.conf files.
 #[must_use]
 pub fn kdc_conf_path() -> PathBuf {
+    if let Some(path) = super::testenv::TEST_KDC_PROFILE.with(|c| c.borrow().clone()) {
+        return path;
+    }
     kdc_conf_path_in(&|name| std::env::var_os(name))
 }
 

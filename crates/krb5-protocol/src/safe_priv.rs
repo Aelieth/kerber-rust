@@ -513,8 +513,34 @@ pub fn build_krb_priv_chained(
 /// Wipes an octet string's bytes when it holds the only reference to them, as a copy of a secret
 /// made only to be encoded does.
 pub(crate) fn wipe_octets(octets: OctetString) {
-    if let Ok(mut buf) = bytes::Bytes::from(octets).try_into_mut() {
-        buf[..].zeroize();
+    if let Ok(buf) = bytes::Bytes::from(octets).try_into_mut() {
+        wipe_vec(Vec::<u8>::from(buf));
+    }
+}
+
+/// Zeroizes every byte of `buf`'s allocation, then frees it: a plaintext that was encoded only
+/// to be encrypted. A test build keeps each wiped allocation ([`wiped::take`]) instead of freeing
+/// it, so a test can see the buffer zeroed, whole.
+pub(crate) fn wipe_vec(mut buf: Vec<u8>) {
+    buf.resize(buf.capacity(), 0);
+    buf.as_mut_slice().zeroize();
+    #[cfg(test)]
+    let _ = wiped::WIPED.try_with(|w| w.borrow_mut().push(buf));
+}
+
+/// The allocations this crate's wipes zeroed on the current thread, kept for the tests.
+#[cfg(test)]
+pub(crate) mod wiped {
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// What [`super::wipe_vec`] zeroed on this thread, kept alive.
+        pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The allocations wiped on this thread since the last call.
+    pub(crate) fn take() -> Vec<Vec<u8>> {
+        WIPED.with(|w| std::mem::take(&mut *w.borrow_mut()))
     }
 }
 

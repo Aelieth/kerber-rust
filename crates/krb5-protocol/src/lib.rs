@@ -18,6 +18,7 @@
 mod ap_rep;
 mod ap_req;
 mod as_ex;
+mod auth_con;
 mod builders;
 mod capture;
 mod ccache;
@@ -44,8 +45,9 @@ mod vfy_increds;
 
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
-    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, build_ap_req, build_ap_req_mutual_seq,
-    build_ap_req_opts, build_ap_req_with_cksum, sname_match, verify_ap_req, verify_ap_req_ex,
+    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, build_ap_req, build_ap_req_from_authenticator,
+    build_ap_req_mutual_seq, build_ap_req_opts, build_ap_req_with_cksum, sname_match,
+    verify_ap_req, verify_ap_req_ex,
 };
 pub use as_ex::{
     AsOutcome, AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, FastArmor, PasswordPrompt,
@@ -53,6 +55,13 @@ pub use as_ex::{
     as_init_creds_options, check_as_rep_times, conf_etypes, conf_preferred_preauth_types,
     insert_module_padata_before_info_pa, sort_krb5_padata_sequence, verify_as_reply_req_times,
     verify_as_reply_server,
+};
+#[cfg(feature = "test-hooks")]
+pub use auth_con::set_test_seq_random;
+pub use auth_con::{
+    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_DO_TIME, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext,
+    generate_seq_number, local_host_address, permitted_enctypes, permitted_enctypes_kdc,
+    us_timeofday,
 };
 pub use builders::{
     TgsReqParams, as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,

@@ -177,7 +177,23 @@ pub fn build_ap_req_with_cksum(
         seq_number: Some(0),
         authorization_data: None,
     };
-    let der = encode(&authenticator)?;
+    build_ap_req_from_authenticator(ticket, session_key, ap_options, &authenticator)
+}
+
+/// Build an AP-REQ around a caller-made authenticator, which the caller keeps to check the
+/// AP-REP's `ctime` / `cusec` against.
+///
+/// # Errors
+///
+/// [`Error::Asn1`] when the authenticator does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session_key` fails.
+pub fn build_ap_req_from_authenticator(
+    ticket: Ticket,
+    session_key: &ProtocolKey,
+    ap_options: ApOptions,
+    authenticator: &Authenticator,
+) -> Result<ApReq, Error> {
+    let der = encode(authenticator)?;
     let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let cipher = encrypt(session_key, usage, &der)?;
     Ok(ApReq {

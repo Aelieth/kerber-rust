@@ -3,6 +3,8 @@
 //! `from_bytes` refuses a buffer that is not the etype's key length.
 //! Drop wipes the key's own allocation, whole. Cloning copies it.
 
+use zeroize::Zeroize;
+
 use crate::error::Error;
 use crate::etype::EncryptionType;
 use crate::wipe::wipe;
@@ -31,6 +33,27 @@ impl ProtocolKey {
             etype,
             bytes: bytes.to_vec(),
         })
+    }
+
+    /// A fresh random key of `etype`.
+    /// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:30-76`): `keybytes` random octets through the enctype's random-to-key, so a DES3 key gets its parity bits.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Rng`] when the OS random source fails.
+    pub fn random(etype: EncryptionType) -> Result<Self, Error> {
+        let mut raw = vec![0u8; etype.keybytes()];
+        getrandom::getrandom(&mut raw).map_err(|_| Error::Rng)?;
+        let key = if etype == EncryptionType::Des3CbcSha1 {
+            let mut k = crate::weak::des3_random_to_key(&raw);
+            let out = Self::from_bytes(etype, &k);
+            k.zeroize();
+            out
+        } else {
+            Self::from_bytes(etype, &raw)
+        };
+        raw.zeroize();
+        key
     }
 
     /// Encryption type of this key.

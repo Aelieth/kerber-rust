@@ -316,6 +316,8 @@ pub mod pa {
     pub const AD_CAMMAC: i32 = 96;
     /// AD-AUTHENTICATION-INDICATOR.
     pub const AD_AUTH_INDICATOR: i32 = 97;
+    /// AD-ETYPE-NEGOTIATION (RFC 4537): the enctypes an AP-REQ's sender would take a subkey in.
+    pub const AD_ETYPE_NEGOTIATION: i32 = 129;
     /// AD-SIGNTICKET (deprecated; PAC).
     pub const AD_SIGNTICKET: i32 = 512;
     /// PA-PAC-OPTIONS.

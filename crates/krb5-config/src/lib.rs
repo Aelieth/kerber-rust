@@ -347,4 +347,4 @@ pub use profile::{
     parse_deltat, split_krb5_config_paths, udp_preference_limit,
 };
 pub use srv::lookup_srv_kdc;
-pub use testenv::{isolate_test_krb5, set_test_krb5_paths};
+pub use testenv::{isolate_test_krb5, set_test_kdc_profile, set_test_krb5_paths};
