@@ -11,7 +11,7 @@ use krb5_types::{AuthorizationData, KerberosTime, PaData, PrincipalName, pa};
 
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::preauth::{SpakeStep, process_pkinit, process_spake};
+use crate::preauth::{SpakeStep, process_pkinit, process_spake, spake_edata};
 use crate::status;
 use crate::store::{KDB_REQUIRES_HW_AUTH, Principal};
 
@@ -33,6 +33,55 @@ pub enum PreauthAction {
     SpakeDone(ProtocolKey),
     /// PA-ENC-TIMESTAMP verified; caller must not re-verify.
     EncTsOk,
+}
+
+/// What one kdcpreauth module adds to a PREAUTH_REQUIRED (or PREAUTH_FAILED) hint list.
+///
+/// `Debug` prints a cookie entry's type and length, not its octets, as [`ProtocolKey`]'s prints
+/// no key octets: a module's cookie state is secret.
+/// MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:261-277`): SPAKE's stage-0 cookie holds the group, the KDC's private scalar and the transcript hash, and is zapped once set.
+#[derive(Default)]
+pub struct PreauthHint {
+    /// The module's METHOD-DATA offers, in its order.
+    pub padata: Vec<PaData>,
+    /// Padata the KDC keeps for the module in its secure cookie (MIT's `set_cookie`).
+    pub cookie: Vec<PaData>,
+}
+
+impl std::fmt::Debug for PreauthHint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreauthHint")
+            .field("padata", &self.padata)
+            .field("cookie", &RedactedPadata(&self.cookie))
+            .finish()
+    }
+}
+
+/// Padata shown as type and length only.
+struct RedactedPadata<'a>(&'a [PaData]);
+
+impl std::fmt::Debug for RedactedPadata<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(
+                self.0
+                    .iter()
+                    .map(|p| RedactedEntry(p.padata_type, p.padata_value.len())),
+            )
+            .finish()
+    }
+}
+
+/// One redacted padata: its type and its value's length.
+struct RedactedEntry(i32, usize);
+
+impl std::fmt::Debug for RedactedEntry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PaData")
+            .field("padata_type", &self.0)
+            .field("len", &self.1)
+            .finish()
+    }
 }
 
 /// Rock passed to a kdcpreauth module's AS handler.
@@ -75,6 +124,24 @@ pub trait KdcPreauth: Send + Sync {
         armor: bool,
         requested: &[i32],
     ) -> Vec<PaData>;
+    /// The module's hint with the client's reply key, and the state it keeps in the KDC cookie.
+    /// The default is [`Self::advertise`] and no state.
+    ///
+    /// MIT `krb5_kdcpreauth_edata_fn` (`kdcpreauth_plugin.h:311-328`): a module sees the request and the rock, whose `client_keyblock` and `set_cookie` callbacks SPAKE's optimistic challenge uses.
+    fn edata(
+        &self,
+        store: &dyn PrincipalRead,
+        client: &Principal,
+        armor: bool,
+        requested: &[i32],
+        ikey: Option<&ProtocolKey>,
+    ) -> PreauthHint {
+        let _ = ikey;
+        PreauthHint {
+            padata: self.advertise(store, client, armor, requested),
+            cookie: Vec::new(),
+        }
+    }
     /// MIT `PA_HARDWARE` (`kdcpreauth_plugin.h`). FAST is still advertised
     /// under `hw_only`.
     /// MIT `get_preauth_hint_list` (`kdc_preauth.c:999-1001`): the empty PA-FX-FAST is
@@ -205,21 +272,27 @@ impl KdcPreauth for SpakeMod {
         _armor: bool,
         requested: &[i32],
     ) -> Vec<PaData> {
-        // MIT `spake_edata` (`spake_kdc.c:309-314`): omit when client_keyblock is
-        // NULL — `select_client_key` left ENCTYPE_NULL, the same condition
-        // as `have_client_keys` being false. Groups still required.
-        // MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
-        // MIT `group_init_state` (`groups.c:235-238`): no permitted group is
-        // `KRB5_PLUGIN_OP_NOTSUPP` ("No SPAKE preauth groups configured").
-        if store.policy().spake_preauth_groups.is_empty()
-            || !have_client_keys(store, client, requested)
-        {
+        // Without the reply key there is no optimistic challenge: the empty PA-SPAKE MIT sends
+        // when none is configured. The KDC itself uses `edata`.
+        // MIT `spake_edata` (`spake_kdc.c:309-314`): omitted when client_keyblock is NULL, the same condition as `have_client_keys` being false.
+        // MIT `group_init_state` (`groups.c:235-238`): no permitted group is `KRB5_PLUGIN_OP_NOTSUPP` ("No SPAKE preauth groups configured").
+        if store.policy().spake_kdc().is_err() || !have_client_keys(store, client, requested) {
             return Vec::new();
         }
         vec![PaData {
             padata_type: pa::SPAKE,
             padata_value: Vec::<u8>::new().into(),
         }]
+    }
+    fn edata(
+        &self,
+        store: &dyn PrincipalRead,
+        _client: &Principal,
+        _armor: bool,
+        _requested: &[i32],
+        ikey: Option<&ProtocolKey>,
+    ) -> PreauthHint {
+        spake_edata(store, ikey)
     }
     fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
         let PreauthRock {
@@ -493,20 +566,26 @@ pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
         .clone()
 }
 
-/// METHOD-DATA modules after the leading empty PA-FX-FAST.
+/// METHOD-DATA modules after the leading empty PA-FX-FAST, and the cookie state they keep.
+/// `ikey` is the client's reply key, when one was selected.
 /// MIT `get_preauth_hint_list` (`kdc_preauth.c:999-1006`): the empty PA-FX-FAST and the
 /// etype info come first, then the module hints.
+/// MIT `kdc_fast_set_cookie` (`fast_util.c:631-651`): the first state set for a padata type is the one kept.
 pub fn advertise_preauth(
     store: &dyn PrincipalRead,
     client: &Principal,
     armor: bool,
     requested: &[i32],
-) -> Vec<PaData> {
+    ikey: Option<&ProtocolKey>,
+) -> PreauthHint {
     let hw_only = client.attributes & KDB_REQUIRES_HW_AUTH != 0;
-    let mut out = vec![PaData {
-        padata_type: pa::FX_FAST,
-        padata_value: Vec::<u8>::new().into(),
-    }];
+    let mut out = PreauthHint {
+        padata: vec![PaData {
+            padata_type: pa::FX_FAST,
+            padata_value: Vec::<u8>::new().into(),
+        }],
+        cookie: Vec::new(),
+    };
     for m in preauth_modules() {
         if m.name() == "fast" {
             continue;
@@ -514,7 +593,13 @@ pub fn advertise_preauth(
         if hw_only && !m.hardware() {
             continue;
         }
-        out.extend(m.advertise(store, client, armor, requested));
+        let hint = m.edata(store, client, armor, requested, ikey);
+        out.padata.extend(hint.padata);
+        for c in hint.cookie {
+            if !out.cookie.iter().any(|p| p.padata_type == c.padata_type) {
+                out.cookie.push(c);
+            }
+        }
     }
     out
 }
@@ -795,6 +880,29 @@ mod tests {
 
     use krb5_protocol::{as_req, pa_enc_timestamp};
     use krb5_types::PrincipalName;
+
+    #[test]
+    fn a_hints_cookie_shows_no_octets() {
+        // SPAKE's stage-0 cookie holds the KDC's private scalar, which MIT zaps: Debug shows the
+        // entry's type and length, as ProtocolKey's shows no key octets.
+        let hint = PreauthHint {
+            padata: vec![PaData {
+                padata_type: pa::SPAKE,
+                padata_value: b"challenge".to_vec().into(),
+            }],
+            cookie: vec![PaData {
+                padata_type: pa::SPAKE,
+                padata_value: b"private scalar".to_vec().into(),
+            }],
+        };
+        let shown = format!("{hint:?}");
+        assert!(!shown.contains("private scalar"), "{shown}");
+        assert!(
+            shown.contains("cookie: [PaData { padata_type: 151, len: 14 }]"),
+            "{shown}"
+        );
+        assert!(shown.contains("challenge"), "{shown}");
+    }
 
     #[test]
     fn demo_preauth_and_policy_are_consulted() {

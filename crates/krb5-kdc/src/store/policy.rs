@@ -6,7 +6,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use krb5_crypto::EncryptionType;
+use krb5_crypto::{EncryptionType, SpakeGroup, spake_parse_groups};
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
 
@@ -124,10 +124,13 @@ pub struct Policy {
     pub pkinit_indicators: Vec<String>,
     /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
-    /// `[libdefaults] spake_preauth_groups` as implemented group numbers.
-    /// Empty = MIT KDC default — SPAKE is not advertised.
+    /// `[libdefaults] spake_preauth_groups`: the groups the KDC permits, in configuration order.
+    /// Empty, MIT's KDC default, leaves the SPAKE module unloaded.
     /// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
-    pub spake_preauth_groups: Vec<i32>,
+    pub spake_preauth_groups: Vec<SpakeGroup>,
+    /// `[kdcdefaults] spake_preauth_kdc_challenge`, as written: the group of the optimistic
+    /// challenge the KDC sends with PREAUTH_REQUIRED. `None` = none.
+    pub spake_preauth_kdc_challenge: Option<String>,
     /// `[dbmodules] disable_last_success`: the KDC records no successful authentication.
     pub disable_last_success: bool,
     /// `[dbmodules] disable_lockout`: the KDC neither counts failed authentications nor
@@ -163,26 +166,57 @@ impl Default for Policy {
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: Vec::new(),
+            spake_preauth_kdc_challenge: None,
             disable_last_success: false,
             disable_lockout: false,
         }
     }
 }
 
-/// MIT `parse_groups` (`groups.c:175-210`): unknown names skipped.
-/// Rust implements P-256 only; other IANA names are skipped.
-#[must_use]
-pub(crate) fn parse_spake_preauth_groups(names: &[String]) -> Vec<i32> {
-    let mut out = Vec::new();
-    for n in names {
-        if n.eq_ignore_ascii_case("P-256") && !out.contains(&krb5_types::spake::GROUP_P256) {
-            out.push(krb5_types::spake::GROUP_P256);
-        }
-    }
-    out
+/// The KDC's SPAKE module as MIT loads it: the permitted groups and the optimistic challenge group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpakeKdc<'a> {
+    /// The permitted groups, in configuration order.
+    pub groups: &'a [SpakeGroup],
+    /// The group of the challenge sent with PREAUTH_REQUIRED, if one is configured.
+    pub challenge: Option<SpakeGroup>,
+}
+
+/// The permitted groups of a `spake_preauth_groups` value split into words by the profile parser.
+fn parse_spake_preauth_groups(words: &[String]) -> Vec<SpakeGroup> {
+    spake_parse_groups(&words.join(" "))
 }
 
 impl Policy {
+    /// The SPAKE module's configuration, or the message MIT logs when the module does not load.
+    ///
+    /// MIT `group_init_state` (`groups.c:213-281`): no permitted group, or a challenge group that is unknown or not permitted, fails the module's init.
+    ///
+    /// # Errors
+    ///
+    /// MIT's message when the module would not load: "No SPAKE preauth groups configured", or
+    /// "SPAKE challenge group not a permitted group: " and the configured value.
+    pub fn spake_kdc(&self) -> Result<SpakeKdc<'_>, String> {
+        if self.spake_preauth_groups.is_empty() {
+            return Err("No SPAKE preauth groups configured".to_owned());
+        }
+        let challenge = match self.spake_preauth_kdc_challenge.as_deref() {
+            None => None,
+            Some(name) => match SpakeGroup::from_name(name) {
+                Some(group) if self.spake_preauth_groups.contains(&group) => Some(group),
+                _ => {
+                    return Err(format!(
+                        "SPAKE challenge group not a permitted group: {name}"
+                    ));
+                }
+            },
+        };
+        Ok(SpakeKdc {
+            groups: &self.spake_preauth_groups,
+            challenge,
+        })
+    }
+
     /// MIT `krb5_check_transited_list`: anonymous crealm passes; then capaths if present, else hierarchical.
     #[must_use]
     pub(crate) fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
@@ -323,6 +357,9 @@ impl PrincipalStore {
             .clone_from(&conf.spake_preauth_indicators);
         if let Some(names) = &conf.spake_preauth_groups {
             self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);
+        }
+        if let Some(group) = &conf.spake_preauth_kdc_challenge {
+            self.policy.spake_preauth_kdc_challenge = Some(group.clone());
         }
         if let Some(s) = conf.domain_sid.as_deref() {
             let Some(sid) = RpcSid::from_sddl(s) else {

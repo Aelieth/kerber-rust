@@ -98,6 +98,7 @@ fn send_spake_response(
     let body_der = encode(&req2.0.req_body)?;
     let (resp, k0) = pa_spake_response(
         &ikey,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),

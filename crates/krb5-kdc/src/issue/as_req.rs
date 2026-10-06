@@ -427,9 +427,10 @@ fn finish_preauth(
             });
         }
         Some(PreauthAction::SpakeDone(k)) => {
+            // MIT `verify_response` (`spake_kdc.c:464-464`): K'[0] replaces the reply key as a strengthened one.
+            // MIT `replace_reply_key` (`kdc_preauth.c:567-580`): a strengthened key does not mark the reply key replaced, so the AS-REP keeps its etype-info.
             as_rep_key = k;
             skip_timestamp = true;
-            reply_key_replaced = true;
             for ind in &store.policy().spake_preauth_indicators {
                 authind_add(&mut auth_indicators, ind);
             }
@@ -932,7 +933,9 @@ fn preauth_hint_edata(
     armor: bool,
     request_padata: Option<&[PaData]>,
 ) -> Vec<u8> {
-    let mut method: MethodData = crate::plugins::advertise_preauth(store, client, armor, requested);
+    let hint =
+        crate::plugins::advertise_preauth(store, client, armor, requested, ckey.map(|k| &k.key));
+    let mut method: MethodData = hint.padata;
     // MIT `add_etype_info` (`kdc_preauth.c:776-778`): skip when no client key.
     if let Some(ckey) = ckey {
         let info = etype_info_padata(client, ckey, requested);
@@ -957,7 +960,8 @@ fn preauth_hint_edata(
             padata_value: tok.into(),
         });
     }
-    if let Ok(c) = make_cookie(store, &client.name, &[]) {
+    // MIT `kdc_fast_make_cookie` (`fast_util.c:655-721`): the state the modules set, or `MIT`.
+    if let Ok(c) = make_cookie(store, &client.name, &hint.cookie) {
         method.push(PaData {
             padata_type: pa::FX_COOKIE,
             padata_value: c.into(),

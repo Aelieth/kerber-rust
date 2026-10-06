@@ -577,8 +577,8 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
   (`-s`, `-a`, `-f`, `-P`, `--pid-file`, `-D`): its keytab and ACL come from
   `KRB5_KPROP_KEYTAB` and `KRB5_KPROP_ACL`, and it does not detach. So `make install` installs
   no `kprop.service`.
-- SPAKE with `edwards25519`, the group Fedora's `krb5.conf` names. The KDC implements P-256
-  only, so with Fedora's settings it offers no SPAKE and clients use encrypted timestamps.
+- SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
+  `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
 - OTP and RADIUS preauthentication, PKINIT configured in `kdc.conf`, master key rollover
   (`kdb5_util add_mkey` and the other `*_mkey` commands), `kproplog`, `sclient` / `sserver`, and
   plugin modules (plugins are Rust traits: [plugins.md](plugins.md)).

@@ -534,7 +534,7 @@ impl PrincipalStore {
         // kdc.conf with the key omitted then sets create = 0 and the realm
         // cap = 7 d (`kdc/main.c` vs `alt_prof.c`).
         store.policy.max_renewable_life = 7 * 24 * 3600;
-        store.policy.spake_preauth_groups = vec![krb5_types::spake::GROUP_P256];
+        store.policy.spake_preauth_groups = vec![krb5_crypto::SpakeGroup::P256];
         // The test realm's keys: a profile's `supported_enctypes` replaces these.
         store.policy.supported_enctypes = crate::testrealm::TEST_SUPPORTED_ENCTYPES.to_vec();
         if let Some(c) = kdc {
@@ -668,7 +668,7 @@ pub use keys::{KeyEntry, KeyLookup, random_key};
 pub use password::{
     PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, S2K_ITERS, apply_keysalt_policy, s2k_params,
 };
-pub use policy::{NamedPolicy, Policy};
+pub use policy::{NamedPolicy, Policy, SpakeKdc};
 pub(crate) use principal::PrincipalFields;
 pub use principal::{AdminEnt, AdminFields, KadmData, Principal, TlData, strip_db_args};
 pub(crate) use principal::{db_args_put_error, refresh_kadm_tl};

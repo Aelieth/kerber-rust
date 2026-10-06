@@ -220,6 +220,33 @@ fn kdc_conf_wins_over_krb5_conf_for_enctype_knobs() {
     );
 }
 
+/// MIT's KDC profile is kdc.conf before krb5.conf: its `spake_preauth_groups` wins, and the words
+/// split at commas too; `spake_preauth_kdc_challenge` comes from kdc.conf's `[kdcdefaults]`.
+#[test]
+fn spake_groups_and_challenge_reach_the_policy_like_mit() {
+    use krb5_crypto::SpakeGroup;
+    let mut store = PrincipalStore::new("KERBER.TEST");
+    let krb5 =
+        krb5_config::Krb5Conf::parse("[libdefaults]\n    spake_preauth_groups = P-256\n").unwrap();
+    store.apply_libdefaults(&krb5);
+    assert_eq!(store.policy.spake_preauth_groups, [SpakeGroup::P256]);
+    assert_eq!(store.policy.spake_kdc().unwrap().challenge, None);
+    let kdc = krb5_config::KdcConf::parse(
+        "[libdefaults]\n    spake_preauth_groups = P-384, edwards25519,P-256 edwards25519\n\
+         [kdcdefaults]\n    spake_preauth_kdc_challenge = edwards25519\n",
+    )
+    .unwrap();
+    store.apply_kdc_conf(&kdc).unwrap();
+    assert_eq!(
+        store.policy.spake_preauth_groups,
+        [SpakeGroup::Edwards25519, SpakeGroup::P256]
+    );
+    assert_eq!(
+        store.policy.spake_kdc().unwrap().challenge,
+        Some(SpakeGroup::Edwards25519)
+    );
+}
+
 #[test]
 fn apply_kdc_conf_sets_ticket_policy() {
     let mut store = PrincipalStore::new("KERBER.TEST");
@@ -268,7 +295,7 @@ fn apply_kdc_conf_sets_ticket_policy() {
     assert!(store.policy.reject_bad_transit);
     assert_eq!(
         store.policy.spake_preauth_groups,
-        vec![krb5_types::spake::GROUP_P256]
+        vec![krb5_crypto::SpakeGroup::P256]
     );
     let rc4 = krb5_config::KdcConf::parse(
         r"

@@ -359,25 +359,27 @@ pub fn pa_spake_support() -> PaData {
     }
 }
 
-/// Build a PA-SPAKE response matching MIT 1.22.2 (`K'[0]` reply key).
+/// A PA-SPAKE response to a challenge in `group`, and the reply key `K'[0]`.
 ///
 /// `support_der` is the client's PA-SPAKE support encoding (empty if none).
 /// `challenge_der` is the KDC PA-SPAKE challenge encoding. `body_der` is
 /// the KDC-REQ-BODY of the response AS-REQ.
 ///
+/// MIT `process_challenge` (`spake_client.c:210-282`): the transcript is the support message, the challenge and the client's element; the SF-NONE factor is encrypted in `K'[1]`.
+///
 /// # Errors
 ///
-/// [`Error::Crypto`] when `challenge_pubkey` is not a P-256 point, or the key generation, a
-/// SPAKE derivation, or the factor encryption fails; [`Error::Asn1`] when the second factor or
-/// the response does not encode.
+/// [`Error::Crypto`] when `challenge_pubkey` is not an element of `group`, or the key
+/// generation, a SPAKE derivation, or the factor encryption fails; [`Error::Asn1`] when the
+/// second factor or the response does not encode.
 pub fn pa_spake_response(
     ikey: &ProtocolKey,
+    group: SpakeGroup,
     support_der: &[u8],
     challenge_der: &[u8],
     challenge_pubkey: &[u8],
     body_der: &[u8],
 ) -> Result<(PaData, ProtocolKey), Error> {
-    let group = SpakeGroup::P256;
     let wbytes = spake_wbytes(ikey, group)?;
     let (secret, pub_x) = spake_keygen(group, &wbytes, false)?;
     let result = spake_result(group, &wbytes, &secret, challenge_pubkey, false)?;

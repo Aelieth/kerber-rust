@@ -6,16 +6,19 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SpakeGroup, checksum, cksumtype_is_keyed, decrypt,
-    derive_prfplus, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
-    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key, spake_keygen,
-    spake_result, spake_thash_update, spake_wbytes, verify_checksum_type,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_keyed, decrypt, derive_prfplus,
+    dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key,
+    p256_generate, p256_shared, pkinit_kdf_agile, verify_checksum_type,
 };
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
 };
 use zeroize::Zeroizing;
+
+mod spake;
+
+pub(crate) use spake::{SpakeStep, process_spake, spake_edata};
 
 use crate::der::take_der;
 use crate::error::Error;
@@ -383,10 +386,11 @@ pub(crate) fn make_cookie_at(
         return Ok(b"MIT".to_vec());
     };
     let key = derive_cookie_key(&krbtgt.key, client, store.realm())?;
-    let der = encode(&krb5_types::fast::SecureCookie {
+    // MIT `kdc_fast_make_cookie` (`fast_util.c:714-717`): the encoded plaintext, which may hold SPAKE's private scalar, is zapped.
+    let der = Zeroizing::new(encode(&krb5_types::fast::SecureCookie {
         time,
         data: contents.to_vec(),
-    })?;
+    })?);
     let usage = KeyUsage::new(ku::PA_FX_COOKIE)?;
     let cipher = encrypt(&key, usage, &der)?;
     let mut out = Vec::with_capacity(8 + cipher.len());
@@ -424,6 +428,8 @@ pub(crate) fn open_cookie(
     let Ok(plain) = decrypt(&key, usage, &blob[8..]) else {
         return Vec::new();
     };
+    // MIT `kdc_fast_read_cookie` (`fast_util.c:604-610`): the decrypted plaintext is zapped.
+    let plain = Zeroizing::new(plain);
     let Ok(cookie) = decode::<krb5_types::fast::SecureCookie>(&plain) else {
         return Vec::new();
     };
@@ -466,154 +472,6 @@ pub(crate) fn wrap_fast_rep(
         padata_type: pa::FX_FAST,
         padata_value: encode(&krb5_types::fast::PaFxFastRep::ArmoredData(armored))?.into(),
     })
-}
-
-/// SPAKE: support → challenge; response → shared key.
-pub(crate) enum SpakeStep {
-    /// Need a challenge (PREAUTH_REQUIRED).
-    Challenge(Vec<u8>),
-    /// Finished; key encrypts AS-REP.
-    Done(ProtocolKey),
-}
-
-/// MIT `next_padata` (`kdc_preauth.c:1306-1307`): a padata type that is not a module is
-/// skipped rather than failed.
-/// With no SPAKE groups configured a PA-SPAKE is skipped, and an empty token when groups
-/// are configured is preauth-failed.
-///
-/// # Errors
-///
-/// [`Error::Protocol`] `PREAUTH_FAILED` when SPAKE groups are configured and the PA-SPAKE token is
-/// empty, a Support shares no configured group or the first one it shares is not P-256, or a
-/// Response has no readable FX-COOKIE secret or a factor that does not decrypt, does not decode,
-/// or is not factor type 1.
-/// [`Error::Asn1`] when the PA-SPAKE does not decode or the challenge does not encode, and
-/// [`Error::Crypto`] when a SPAKE derivation or the cookie encryption fails. No PA-SPAKE, no
-/// configured groups, and a Challenge or EncData message from the client are `Ok(None)`.
-pub(crate) fn process_spake(
-    store: &dyn PrincipalRead,
-    client: &Principal,
-    padata: Option<&[PaData]>,
-    ikey: &ProtocolKey,
-    body_der: &[u8],
-) -> Result<Option<SpakeStep>, Error> {
-    let Some(raw) = find_pa(padata, pa::SPAKE) else {
-        return Ok(None);
-    };
-    // MIT `next_padata` (`kdc_preauth.c:1306-1307`): empty groups → SPAKE not a pa_system;
-    // a stray PA-SPAKE is skipped, not 24.
-    // MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's groups are empty by default.
-    if store.policy().spake_preauth_groups.is_empty() {
-        return Ok(None);
-    }
-    if raw.is_empty() {
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-    }
-    let msg: krb5_types::spake::PaSpake = decode(raw)?;
-    if let krb5_types::spake::PaSpake::Response(resp) = &msg {
-        let cookie = find_pa(padata, pa::FX_COOKIE)
-            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        let inner = open_cookie(store, &client.name, cookie);
-        let secret = inner
-            .iter()
-            .find(|p| p.padata_type == pa::SPAKE)
-            .map(|p| p.padata_value.as_ref())
-            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        if secret.len() != 64 {
-            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-        }
-        let mut sec = [0u8; 32];
-        sec.copy_from_slice(&secret[..32]);
-        let mut thash = [0u8; 32];
-        thash.copy_from_slice(&secret[32..]);
-        let wbytes = spake_wbytes(ikey, SpakeGroup::P256)?;
-        let result = spake_result(SpakeGroup::P256, &wbytes, &sec, resp.pubkey.as_ref(), true)?;
-        let thash = spake_thash_update(SpakeGroup::P256, &thash, resp.pubkey.as_ref(), &[]);
-        let k1 = spake_derive_key(
-            ikey,
-            SpakeGroup::P256,
-            &wbytes,
-            &result,
-            &thash,
-            body_der,
-            1,
-        )?;
-        let usage = KeyUsage::new(ku::SPAKE)?;
-        let factor_der = decrypt(&k1, usage, resp.factor.cipher.as_ref())
-            .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        let factor = decode::<krb5_types::spake::SpakeSecondFactor>(&factor_der)
-            .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        if factor.factor_type != 1 {
-            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-        }
-        let k0 = spake_derive_key(
-            ikey,
-            SpakeGroup::P256,
-            &wbytes,
-            &result,
-            &thash,
-            body_der,
-            0,
-        )?;
-        return Ok(Some(SpakeStep::Done(k0)));
-    }
-    if let krb5_types::spake::PaSpake::Support(sup) = &msg {
-        let group = sup
-            .groups
-            .iter()
-            .copied()
-            .find(|g| store.policy().spake_preauth_groups.contains(g));
-        if group != Some(krb5_types::spake::GROUP_P256) {
-            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-        }
-        return send_spake_challenge(store, &client.name, ikey, raw);
-    }
-    Ok(None)
-}
-
-/// MIT `send_challenge` (`spake_kdc.c:241-246`): the challenge offers only the factor type none.
-/// The private scalar is stored in the cookie, and a key-generation failure is not sent as a
-/// challenge.
-fn send_spake_challenge(
-    store: &dyn PrincipalRead,
-    client: &PrincipalName,
-    ikey: &ProtocolKey,
-    support_der: &[u8],
-) -> Result<Option<SpakeStep>, Error> {
-    let wbytes = spake_wbytes(ikey, SpakeGroup::P256)?;
-    let (secret, pub_y) = spake_keygen(SpakeGroup::P256, &wbytes, true)?;
-    let challenge = krb5_types::spake::PaSpake::Challenge(krb5_types::spake::SpakeChallenge {
-        group: krb5_types::spake::GROUP_P256,
-        pubkey: pub_y.into(),
-        factors: vec![krb5_types::spake::SpakeSecondFactor {
-            factor_type: 1,
-            data: None,
-        }],
-    });
-    let chal_der = encode(&challenge)?;
-    let thash = spake_thash_update(SpakeGroup::P256, &[], support_der, &chal_der);
-    let mut cookie_pt = Vec::with_capacity(64);
-    cookie_pt.extend_from_slice(&secret);
-    cookie_pt.extend_from_slice(&thash);
-    let cookie = make_cookie(
-        store,
-        client,
-        &[PaData {
-            padata_type: pa::SPAKE,
-            padata_value: cookie_pt.into(),
-        }],
-    )?;
-    let method: MethodData = vec![
-        PaData {
-            padata_type: pa::SPAKE,
-            padata_value: chal_der.into(),
-        },
-        PaData {
-            padata_type: pa::FX_COOKIE,
-            padata_value: cookie.into(),
-        },
-    ];
-    Ok(Some(SpakeStep::Challenge(encode(&method)?)))
 }
 
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.

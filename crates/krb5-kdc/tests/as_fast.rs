@@ -1231,6 +1231,7 @@ fn cookie_survives_krbtgt_kvno_rollover() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, spake_key) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),

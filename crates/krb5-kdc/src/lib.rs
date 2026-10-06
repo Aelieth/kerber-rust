@@ -105,7 +105,7 @@ pub use persist::{
     stash_keys, write_stash,
 };
 pub use plugins::{
-    KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthRock,
+    KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock,
     apply_policy_times, clear_thread_authdata, clear_thread_policy, clear_thread_preauth,
     current_policy, register_authdata, register_preauth, set_policy, set_thread_authdata,
     set_thread_policy, set_thread_preauth,
@@ -124,8 +124,8 @@ pub use store::{
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
     KDB_V1_BASE_LENGTH, KadmData, KeyEntry, KeyLookup, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT,
     PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, RID_FIRST_USER, RID_KRBTGT,
-    S2K_ITERS, TlData, UlogEntry, apply_keysalt_policy, kadm5_mask, random_key, s2k_params,
-    strip_db_args,
+    S2K_ITERS, SpakeKdc, TlData, UlogEntry, apply_keysalt_policy, kadm5_mask, random_key,
+    s2k_params, strip_db_args,
 };
 
 use krb5_types::PrincipalName;

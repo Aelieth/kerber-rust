@@ -1015,6 +1015,39 @@ fn realm_auth_indicator_knobs() {
     assert_eq!(kdc.spake_preauth_indicators, vec!["spake"]);
 }
 
+/// MIT `group_init_state` reads both SPAKE relations with `profile_get_string`: the first value
+/// counts, and the challenge group only from `[kdcdefaults]`.
+#[test]
+fn kdc_spake_relations_take_the_first_value() {
+    let kdc = KdcConf::parse(
+        r"
+[libdefaults]
+    spake_preauth_groups = edwards25519,P-256
+    spake_preauth_groups = P-256
+    spake_preauth_kdc_challenge = P-256
+[kdcdefaults]
+    spake_preauth_kdc_challenge = edwards25519
+    spake_preauth_kdc_challenge = P-256
+[realms]
+    KERBER.TEST = {
+        spake_preauth_kdc_challenge = P-256
+    }
+",
+    )
+    .unwrap();
+    assert_eq!(
+        kdc.spake_preauth_groups.as_deref(),
+        Some(["edwards25519,P-256".to_string()].as_slice())
+    );
+    assert_eq!(
+        kdc.spake_preauth_kdc_challenge.as_deref(),
+        Some("edwards25519")
+    );
+    let none = KdcConf::parse("[kdcdefaults]\n    kdc_ports = 88\n").unwrap();
+    assert!(none.spake_preauth_groups.is_none());
+    assert!(none.spake_preauth_kdc_challenge.is_none());
+}
+
 #[test]
 fn parse_pkinit_identities_and_anchors() {
     let c = Krb5Conf::parse(

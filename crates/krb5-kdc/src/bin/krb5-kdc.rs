@@ -281,6 +281,13 @@ fn main() {
     }
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
+    // MIT `load_preauth_plugins` (`kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
+    if let Err(msg) = store.policy.spake_kdc() {
+        klog::syslog(
+            Severity::Err,
+            &format!("preauth spake failed to initialize: {msg}"),
+        );
+    }
     #[cfg(feature = "test-hooks")]
     let persist = store.persist_paths.clone();
     #[cfg(feature = "test-hooks")]

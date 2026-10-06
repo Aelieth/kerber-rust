@@ -94,6 +94,7 @@ impl Default for KdcConf {
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: None,
+            spake_preauth_kdc_challenge: None,
             dict_file: None,
             logging: Vec::new(),
         }
@@ -306,6 +307,10 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
         "host_based_services" => combine_ws(&mut conf.host_based_services, &v),
         "no_host_referral" => combine_ws(&mut conf.no_host_referral, &v),
+        // MIT `group_init_state` (`groups.c:247-249`): `profile_get_string`, so the first value.
+        "spake_preauth_kdc_challenge" if conf.spake_preauth_kdc_challenge.is_none() => {
+            conf.spake_preauth_kdc_challenge = Some(v);
+        }
         _ => {}
     }
 }
@@ -323,7 +328,10 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
         "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
         "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
-        "spake_preauth_groups" => conf.spake_preauth_groups = Some(split_ws(&v)),
+        // MIT `group_init_state` (`groups.c:227-229`): `profile_get_string`, so the first value.
+        "spake_preauth_groups" if conf.spake_preauth_groups.is_none() => {
+            conf.spake_preauth_groups = Some(split_ws(&v));
+        }
         // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
         // [kdcdefaults] or a realm stanza, never [libdefaults]; no fallthrough,
         // so a kdcdefaults knob placed under [libdefaults] is ignored like MIT.

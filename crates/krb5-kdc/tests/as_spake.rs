@@ -237,7 +237,7 @@ fn golden_dump_store() -> PrincipalStore {
     let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/traces/kdb/mit-dump-v7.txt");
     let mut store = load_dump_path(&p, b"masterpassword").expect("golden dump");
-    store.policy.spake_preauth_groups = vec![krb5_types::spake::GROUP_P256];
+    store.policy.spake_preauth_groups = vec![krb5_crypto::SpakeGroup::P256];
     store
 }
 
@@ -336,6 +336,7 @@ fn spake_challenge_then_as_rep() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, spake_key) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -380,6 +381,7 @@ fn spake_cookie_round_trips_on_golden_dump() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, spake_key) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -409,6 +411,7 @@ fn spake_unknown_cookie_kvno_is_preauth_failed() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, _) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -478,6 +481,7 @@ fn spake_garbage_cookie_is_preauth_failed() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, _) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -540,6 +544,7 @@ fn spake_cookie_for_user_ignored_for_admin() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, _) = pa_spake_response(
         &user_key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -616,6 +621,7 @@ fn spake_expired_cookie_is_preauth_failed() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, _) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),

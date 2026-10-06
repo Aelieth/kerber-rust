@@ -332,8 +332,12 @@ pub struct KdcConf {
     pub pkinit_indicators: Vec<String>,
     /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
-    /// `[libdefaults] spake_preauth_groups`. `None` = omitted.
+    /// `[libdefaults] spake_preauth_groups`, the first one. `None` = omitted.
     pub spake_preauth_groups: Option<Vec<String>>,
+    /// `[kdcdefaults] spake_preauth_kdc_challenge`, the first one: the group of an optimistic
+    /// SPAKE challenge. `None` = omitted.
+    /// MIT `group_init_state` (`groups.c:241-262`): read from `[kdcdefaults]` only, by the KDC.
+    pub spake_preauth_kdc_challenge: Option<String>,
     /// `[realms] dict_file` for the `dict` password-quality module.
     /// MIT `kadm5_get_config_params` (`alt_prof.c:486-513`): reads it from the realm stanza
     /// only, never from `[kdcdefaults]`.
