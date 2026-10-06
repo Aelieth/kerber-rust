@@ -20,7 +20,15 @@ use krb5_protocol::{Keytab, KeytabEntry, KeytabSlot, parse_principal};
 use zeroize::Zeroizing;
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let argv: Vec<String> = std::env::args().collect();
+    // MIT `main` (`ktutil.c:49-53`): the library context before the first request; a profile it
+    // refuses ends ktutil.
+    if let Err(e) = krb5_config::init_profile() {
+        let prog = argv.first().map_or("ktutil", String::as_str);
+        eprintln!("{prog}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    }
+    let args: Vec<String> = argv.into_iter().skip(1).collect();
     let mut kt = Keytab {
         version: 0x0502,
         entries: Vec::new(),

@@ -10,6 +10,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use krb5_asn1::decode;
+use krb5_client::ccol::{resolve, store_spec};
 use krb5_client::cli::{KvnoArgs, kvno_usage, parse_kvno, progname};
 use krb5_client::creds::{
     GetCredsOptions, OpenCache, Princ, default_realm, get_credentials, get_credentials_for_proxy,
@@ -61,16 +62,23 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
             Err(e) => return fail(&e, "while converting etype"),
         }
     }
-    let spec = match resolve_ccspec(args.ccache.as_deref()) {
-        Ok(s) => s,
-        Err(e) => return fail(&Krb5Error::from_ccname(&e), "while opening ccache"),
+    // MIT `do_v5_kvno` (`kvno.c:493-507`): both caches are resolved before any request, a KCM one
+    // with its daemon asked.
+    let spec = match resolve_ccspec(args.ccache.as_deref())
+        .map_err(|e| Krb5Error::from_ccname(&e))
+        .and_then(|s| resolve(&s))
+    {
+        Ok(c) => c.spec(),
+        Err(e) => return fail(&e, "while opening ccache"),
     };
-    let out_spec = match args.out_cache.as_deref().map(|n| resolve_ccspec(Some(n))) {
+    let out_spec = match args.out_cache.as_deref().map(|n| {
+        resolve_ccspec(Some(n))
+            .map_err(|e| Krb5Error::from_ccname(&e))
+            .and_then(|s| resolve(&s).map(|c| store_spec(&s, &c)))
+    }) {
         None => None,
         Some(Ok(s)) => Some(s),
-        Some(Err(e)) => {
-            return fail(&Krb5Error::from_ccname(&e), "while resolving output ccache");
-        }
+        Some(Err(e)) => return fail(&e, "while resolving output ccache"),
     };
     if let Some(kt) = &args.keytab
         && let Err(e) = kt_resolve(kt)

@@ -286,6 +286,16 @@ fn getopt_prog(argv0: &str) -> &str {
 /// `Authenticating as principal …` line and the database. `None` after printing why the
 /// program exits 1.
 fn startup(argv: &[String], io: &mut Io) -> Option<Startup> {
+    // MIT `kadmin_startup` (`kadmin.c:309-313`): the KDC context before the options; a profile
+    // it refuses ends kadmin.local.
+    if let Err(e) = krb5_config::init_kdc_profile() {
+        io.com_err(
+            WHOAMI,
+            Some(&e.init_text()),
+            "while initializing krb5 library",
+        );
+        return None;
+    }
     let usage = |io: &mut Io| io.error(&texts::startup_usage(WHOAMI));
     let prog = getopt_prog(argv.first().map_or("", String::as_str));
     let (opts, args) = match krb5_cli::getopt(argv.get(1..).unwrap_or_default(), OPTSTRING, &[]) {

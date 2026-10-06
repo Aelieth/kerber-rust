@@ -50,11 +50,11 @@ fn run<R: BufRead, W: Write>(
     pname: Option<&str>,
     prompter: &mut Prompter<R, W>,
 ) -> i32 {
-    let conf = match krb5_config::load_krb5_conf_paths(krb5_config::krb5_conf_paths()) {
+    // MIT `main` (`kpasswd.c:70-74`): `com_err` of `krb5_init_context`'s code, then exit 1.
+    let conf = match krb5_config::init_profile() {
         Ok(conf) => conf,
-        Err(krb5_config::Error::Io(e)) if e.kind() == io::ErrorKind::NotFound => Krb5Conf::new(),
         Err(e) => {
-            eprintln!("{prog}: {e} initializing kerberos library");
+            eprintln!("{prog}: {} initializing kerberos library", e.init_text());
             return 1;
         }
     };
@@ -203,16 +203,21 @@ fn initial_ticket_text(e: &Error) -> String {
 }
 
 /// The principal whose password changes, with the message MIT prints when there is none.
-/// MIT `main` (`kpasswd.c:91-122`): the argument, else the default ccache's principal, else the login name.
+/// MIT `main` (`kpasswd.c:91-122`): the default ccache is opened and its principal read whether
+/// or not a name is given, either failure (other than no cache or no principal) ending kpasswd;
+/// then the argument, else that principal, else the login name.
 fn client(prog: &str, pname: Option<&str>, conf: &Krb5Conf) -> Result<Client, String> {
+    let spec = open_default_ccache().map_err(|e| format!("{prog}: {e} opening default ccache"))?;
+    let cached = ccache_principal(&spec).map_err(|e| {
+        format!(
+            "{prog}: {} getting principal from ccache",
+            cache_text(&spec, &e)
+        )
+    })?;
     if let Some(name) = pname {
         return parse_client(name, conf).map_err(|e| format!("{prog}: {e} parsing client name"));
     }
-    let spec = krb5_config::resolve_ccspec(None)
-        .map_err(|e| format!("{prog}: {e} opening default ccache"))?;
-    if let Some((realm, name)) =
-        ccache_principal(&spec).map_err(|e| format!("{prog}: {e} getting principal from ccache"))?
-    {
+    if let Some((realm, name)) = cached {
         let realm = String::from_utf8_lossy(realm.as_bytes()).into_owned();
         let display = name.unparse_with_realm(&realm);
         return Ok(Client {
@@ -254,19 +259,97 @@ fn with_default_realm(name: &str, conf: &Krb5Conf) -> Result<String, String> {
     Ok(format!("{name}@{realm}"))
 }
 
+/// The default ccache, resolved as MIT's `krb5_cc_default` resolves it: a KCM name asks its
+/// daemon, and `KCM:` asks for the name of the default cache.
+/// MIT `kcm_resolve` (`cc_kcm.c:750-759`): the connection first, then for `KCM:` the primary
+/// name; either failure fails the resolve.
+fn open_default_ccache() -> Result<CcSpec, String> {
+    let spec = krb5_config::resolve_ccspec(None).map_err(|e| e.to_string())?;
+    let kcm_text = |e: io::Error| strerror(&e);
+    match spec {
+        CcSpec::Kcm(n) if n.is_empty() => krb5_protocol::kcm_primary_name()
+            .map(CcSpec::Kcm)
+            .map_err(kcm_text),
+        CcSpec::Kcm(n) => krb5_protocol::kcm_reachable()
+            .map(|()| CcSpec::Kcm(n))
+            .map_err(kcm_text),
+        spec => Ok(spec),
+    }
+}
+
+/// `e`'s text as `com_err` prints an errno, without Rust's `(os error N)`.
+fn strerror(e: &io::Error) -> String {
+    let text = e.to_string();
+    text.rsplit_once(" (os error ")
+        .map_or(text.as_str(), |(t, _)| t)
+        .to_owned()
+}
+
+/// The text of a failure to read the default ccache's principal, as MIT's default `com_err`
+/// prints its code: for a FILE or DIR cache, the cache code its errno maps to, or a header that
+/// does not read; for KCM, the daemon's error.
+/// MIT `interpret_errno` (`cc_file.c:1346-1389`): a refused path is `KRB5_FCC_PERM`, a bad
+/// argument or descriptor `KRB5_FCC_INTERNAL`, any other errno `KRB5_CC_IO`.
+fn cache_text(spec: &CcSpec, e: &io::Error) -> String {
+    use nix::errno::Errno;
+    if matches!(spec, CcSpec::Kcm(_)) {
+        return strerror(e);
+    }
+    let Some(n) = e.raw_os_error() else {
+        return e.to_string();
+    };
+    match Errno::from_raw(n) {
+        Errno::EPERM | Errno::EACCES | Errno::EISDIR | Errno::EROFS => {
+            "Credentials cache permissions incorrect"
+        }
+        Errno::EINVAL | Errno::EEXIST | Errno::EFAULT | Errno::EBADF | Errno::EWOULDBLOCK => {
+            "Internal credentials cache error"
+        }
+        _ => "Credentials cache I/O operation failed",
+    }
+    .to_owned()
+}
+
+/// A cache file's bytes parsed, or MIT's text for a header that does not read.
+/// MIT `read_header` (`cc_file.c:396-401`): too short is `KRB5_CC_FORMAT`, a version other than
+/// 1–4 `KRB5_CCACHE_BADVNO`.
+fn parse_cache_file(b: &[u8]) -> io::Result<FileCcache> {
+    let bad = |text: &str| io::Error::new(io::ErrorKind::InvalidData, text);
+    let Some(v) = b.get(..2) else {
+        return Err(bad("Bad format in credentials cache"));
+    };
+    if !(1..=4).contains(&u16::from_be_bytes([v[0], v[1]]).wrapping_sub(0x0500)) {
+        return Err(bad("Unsupported credentials cache format version number"));
+    }
+    FileCcache::parse(b).map_err(|_| bad("Bad format in credentials cache"))
+}
+
 /// The default ccache's principal; `None` when that cache does not exist.
+/// MIT `main` (`kpasswd.c:96-97`): a missing cache (`KRB5_FCC_NOFILE`, also `ENOTDIR`, `ELOOP` and
+/// `ENAMETOOLONG`) or principal (`KRB5_CC_NOTFOUND`) is no error.
 fn ccache_principal(spec: &CcSpec) -> io::Result<Option<(krb5_types::Realm, PrincipalName)>> {
     let loaded = match spec {
-        CcSpec::File(path) => std::fs::read(path).and_then(|b| FileCcache::parse(&b)),
+        CcSpec::File(path) => std::fs::read(path).and_then(|b| parse_cache_file(&b)),
         CcSpec::Dir(residual) => krb5_protocol::dir_cache_path(residual)
             .and_then(std::fs::read)
-            .and_then(|b| FileCcache::parse(&b)),
+            .and_then(|b| parse_cache_file(&b)),
         CcSpec::Kcm(residual) => krb5_protocol::kcm_load(residual),
         CcSpec::Memory(_) => return Ok(None),
     };
+    let nofile = |e: &io::Error| {
+        e.kind() == io::ErrorKind::NotFound
+            || matches!(
+                e.raw_os_error().map(nix::errno::Errno::from_raw),
+                Some(
+                    nix::errno::Errno::ENOTDIR
+                        | nix::errno::Errno::ELOOP
+                        | nix::errno::Errno::ENAMETOOLONG
+                )
+            )
+    };
     match loaded {
         Ok(cc) => Ok(Some(cc.primary)),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(e) if nofile(&e) => Ok(None),
         Err(e) => Err(e),
     }
 }

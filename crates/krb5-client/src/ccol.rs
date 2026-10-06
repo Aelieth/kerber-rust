@@ -77,7 +77,7 @@ impl Cache {
                         format!("Credentials cache 'KCM:{n}' not found"),
                     )
                 } else {
-                    Krb5Error::new(Code::Other, e.to_string())
+                    Krb5Error::from_kcm(&e)
                 }
             });
         }
@@ -126,7 +126,7 @@ impl Cache {
         let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
         match self {
             Self::Dir(p) => krb5_protocol::dir_switch(&format!(":{}", p.display())).map_err(other),
-            Self::Kcm(n) => krb5_protocol::kcm_switch(n).map_err(other),
+            Self::Kcm(n) => krb5_protocol::kcm_switch(n).map_err(|e| Krb5Error::from_kcm(&e)),
             Self::File(_) | Self::Memory(_) => Ok(()),
         }
     }
@@ -136,22 +136,27 @@ impl Cache {
 /// MIT `dcc_resolve` (`cc_dir.c:331-385`): a DIR collection name stands for its primary, `tkt`
 /// when there is no `primary` file. MIT makes a missing collection there; a resolve here is a
 /// read, which leaves it missing ([`crate::dir_read_path`]), and the store makes it.
-/// MIT `kcm_resolve` (`cc_kcm.c:740-768`): the empty KCM name stands for the collection's
-/// primary.
+/// MIT `kcm_resolve` (`cc_kcm.c:740-768`): a KCM name resolves only with a KCM daemon to ask,
+/// and the empty name stands for the collection's primary.
 ///
 /// # Errors
 ///
-/// [`Krb5Error`] when a DIR collection cannot be read, or the KCM daemon cannot be asked.
+/// [`Krb5Error`] when a DIR collection cannot be read, or the KCM daemon cannot be asked
+/// (`KRB5_KCM_NO_SERVER` "No KCM server found" when there is none).
 pub fn resolve(spec: &CcSpec) -> Result<Cache, Krb5Error> {
     let other = |e: std::io::Error| Krb5Error::new(Code::Other, e.to_string());
+    let kcm = |e: std::io::Error| Krb5Error::from_kcm(&e);
     Ok(match spec {
         CcSpec::File(p) => Cache::File(p.clone()),
         CcSpec::Memory(n) => Cache::Memory(n.clone()),
         CcSpec::Dir(r) => Cache::Dir(crate::dir_read_path(r).map_err(other)?),
         CcSpec::Kcm(n) if n.is_empty() => {
-            Cache::Kcm(krb5_protocol::kcm_primary_name().map_err(other)?)
+            Cache::Kcm(krb5_protocol::kcm_primary_name().map_err(kcm)?)
         }
-        CcSpec::Kcm(n) => Cache::Kcm(n.clone()),
+        CcSpec::Kcm(n) => {
+            krb5_protocol::kcm_reachable().map_err(kcm)?;
+            Cache::Kcm(n.clone())
+        }
     })
 }
 
@@ -209,17 +214,23 @@ pub fn collection(default: &CcSpec) -> Result<Vec<Cache>, Krb5Error> {
             }
             Ok(out)
         }
-        CcSpec::Kcm(n) if !n.is_empty() => Ok(if krb5_protocol::kcm_principal(n).is_ok() {
-            vec![Cache::Kcm(n.clone())]
-        } else {
-            Vec::new()
-        }),
+        CcSpec::Kcm(n) if !n.is_empty() => {
+            // MIT `kcm_ptcursor_new` (`cc_kcm.c:1155-1157`): the cursor connects first, for a
+            // named default too.
+            krb5_protocol::kcm_reachable().map_err(|e| Krb5Error::from_kcm(&e))?;
+            Ok(if krb5_protocol::kcm_principal(n).is_ok() {
+                vec![Cache::Kcm(n.clone())]
+            } else {
+                Vec::new()
+            })
+        }
         CcSpec::Kcm(_) => {
-            let names = krb5_protocol::kcm_cache_names().map_err(other)?;
+            let kcm = |e: std::io::Error| Krb5Error::from_kcm(&e);
+            let names = krb5_protocol::kcm_cache_names().map_err(kcm)?;
             if names.is_empty() {
                 return Ok(Vec::new());
             }
-            let primary = krb5_protocol::kcm_primary_name().map_err(other)?;
+            let primary = krb5_protocol::kcm_primary_name().map_err(kcm)?;
             let mut out = Vec::new();
             if krb5_protocol::kcm_principal(&primary).is_ok() {
                 out.push(Cache::Kcm(primary.clone()));
@@ -260,7 +271,9 @@ pub fn new_unique(default: &CcSpec) -> Result<Cache, Krb5Error> {
         CcSpec::Dir(r) if !r.starts_with(':') => krb5_protocol::dir_gen_new(Path::new(r))
             .map(Cache::Dir)
             .map_err(other),
-        CcSpec::Kcm(_) => krb5_protocol::kcm_gen_new().map(Cache::Kcm).map_err(other),
+        CcSpec::Kcm(_) => krb5_protocol::kcm_gen_new()
+            .map(Cache::Kcm)
+            .map_err(|e| Krb5Error::from_kcm(&e)),
         _ => Err(Krb5Error::new(
             Code::Other,
             "Can't create new subsidiary cache because default cache is not a directory collection",

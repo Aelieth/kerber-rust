@@ -69,6 +69,12 @@ die() {
     exit 1
 }
 
+# lf_lines: stdin with each line's `\r\n` end made `\n`. MIT built with its own com_err (the
+# gates' MIT image) ends a com_err line `\r\n`; Fedora's MIT, built with the system com_err, ends
+# it `\n`, as the Rust tools do. A gate that compares MIT's stderr with a line reads it through
+# this, so the line end of the MIT build at hand does not decide the cell.
+lf_lines() { sed 's/\r$//'; }
+
 # Product capture has no path policy (S2-R R1). Gates must not point
 # KERBER_CAPTURE_DIR or TRACE_DST at the golden home.
 refuse_golden_capture_dir() {

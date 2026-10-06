@@ -91,8 +91,9 @@ pub use diff::{
 pub use error::Error;
 pub use framing::write_messages;
 pub use kcm::{
-    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_gen_new, kcm_load, kcm_primary_name,
-    kcm_principal, kcm_socket_path, kcm_store, kcm_store_creds, kcm_store_keep_default, kcm_switch,
+    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_gen_new, kcm_load, kcm_no_server,
+    kcm_primary_name, kcm_principal, kcm_reachable, kcm_socket_path, kcm_store, kcm_store_creds,
+    kcm_store_keep_default, kcm_switch,
 };
 pub use keytab::{
     Keytab, KeytabEntry, KeytabSlot, keytab_init_creds_keys, sort_etypes_keytab_first,

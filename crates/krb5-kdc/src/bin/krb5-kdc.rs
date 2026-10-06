@@ -184,6 +184,13 @@ fn progname(argv0: Option<&String>) -> String {
 fn main() {
     let argv: Vec<String> = std::env::args().collect();
     let progname = progname(argv.first());
+    // MIT `main` (`kdc/main.c:917-921`): the KDC context first, its profile kdc.conf ahead of
+    // krb5.conf; a profile it refuses ends krb5kdc, named as invoked.
+    if let Err(e) = krb5_config::init_kdc_profile() {
+        let argv0 = argv.first().map_or("krb5kdc", String::as_str);
+        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    }
     // MIT `main` (`kdc/main.c:917-922`): the daemon log is set up from the profile before the
     // options are read.
     let specs = krb5_config::LogSpecs::load("kdc");

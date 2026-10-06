@@ -84,9 +84,32 @@ pub enum ProfileError {
     /// MIT `parse_include_dir` (`prof_parse.c:271-272`): a directory that does not list fails
     /// with `PROF_FAIL_INCLUDE_DIR`.
     IncludeDir,
-    /// A syntax error: an `include` indented inside a section is a relation with no `=`.
+    /// A syntax error: an `include` indented inside a section is a relation with no `=`; a
+    /// relation with no value is a subsection whose `{` must start the next line
+    /// (`PROF_MISSING_OBRACE`).
     /// MIT `os_init_paths` (`init_os_ctx.c:403-408`): a syntax error is `KRB5_CONFIG_BADFORMAT`.
     Syntax,
+}
+
+impl Error {
+    /// MIT `error_message` of the code a failed context init returns for this error, as a
+    /// tool's `com_err` prints it: a system error's `strerror`, a profile code's text, else this
+    /// error's own text.
+    /// MIT `os_init_paths` (`init_os_ctx.c:403-408`): a profile syntax error is
+    /// `KRB5_CONFIG_BADFORMAT`, any other failure its own code.
+    #[must_use]
+    pub fn init_text(&self) -> String {
+        match self {
+            Self::Io(e) => {
+                let text = e.to_string();
+                text.rsplit_once(" (os error ")
+                    .map_or(text.as_str(), |(t, _)| t)
+                    .to_owned()
+            }
+            Self::Profile(p, _) => p.text().to_owned(),
+            other => other.to_string(),
+        }
+    }
 }
 
 impl ProfileError {
@@ -174,7 +197,7 @@ pub struct Krb5Conf {
     pub kdc_timeout: Option<String>,
     /// Heimdal `max_retries` — no MIT parse site; stored and unused.
     pub max_retries: Option<String>,
-    /// `[libdefaults] kcm_socket` (MIT; `KCM_SOCKET` env overrides).
+    /// `[libdefaults] kcm_socket`: the KCM daemon's socket, `-` for none (MIT).
     pub kcm_socket: Option<String>,
     /// `[libdefaults] default_ccache_name` (MIT parameter expansion).
     pub default_ccache_name: Option<String>,
@@ -343,8 +366,9 @@ pub use kdcconf::{
 pub use logging::LogSpecs;
 pub use profile::{
     client_realm_path, discover_kdc, discover_kdc_in, env_ktname, env_new_password, env_password,
-    host_to_realm, is_numeric_address, krb5_conf_paths, load_krb5_conf, load_krb5_conf_paths,
-    parse_deltat, split_krb5_config_paths, udp_preference_limit,
+    host_to_realm, init_kdc_profile, init_profile, is_numeric_address, krb5_conf_paths,
+    load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
+    udp_preference_limit,
 };
 pub use srv::lookup_srv_kdc;
 pub use testenv::{isolate_test_krb5, set_test_kdc_profile, set_test_krb5_paths};

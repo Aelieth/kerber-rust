@@ -10,7 +10,9 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use super::listen::{self, ListenAddr};
-use super::profile::{combine_ws, parse_duration_secs, split_kv, split_ws, truthy};
+use super::profile::{
+    combine_ws, join_subsection_braces, parse_duration_secs, split_kv, split_ws, truthy,
+};
 use super::{Error, KdcConf};
 
 /// The four KDC listener relations of one profile section, as written.
@@ -99,13 +101,16 @@ impl Default for KdcConf {
 }
 
 impl KdcConf {
-    /// Parse `kdc.conf` text.
+    /// Parse `kdc.conf` text, read by MIT's one profile parser as krb5.conf is
+    /// (`join_subsection_braces`).
     ///
     /// # Errors
     ///
-    /// None: a malformed or unknown line is skipped, so this is `Ok` even when `text` is not
-    /// valid kdc.conf.
+    /// [`Error::Profile`] with [`crate::ProfileError::Syntax`] when a relation with no value is
+    /// not followed by a line that starts with `{` (MIT's `PROF_MISSING_OBRACE`); every other
+    /// malformed or unknown line is skipped.
     pub fn parse(text: &str) -> Result<Self, Error> {
+        let text = join_subsection_braces(text)?;
         let mut conf = Self::default();
         let mut section = String::new();
         let mut in_realm = false;
@@ -282,10 +287,11 @@ impl KdcConf {
     ///
     /// # Errors
     ///
-    /// [`Error::Io`] when `path` cannot be read as UTF-8 text; the parse itself cannot fail.
+    /// [`Error::Io`] when `path` cannot be read (its bytes need not be UTF-8, as MIT's need not
+    /// be); [`Error::Profile`] as [`KdcConf::parse`].
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let text = std::fs::read_to_string(path)?;
-        Self::parse(&text)
+        let bytes = std::fs::read(path)?;
+        Self::parse(&String::from_utf8_lossy(&bytes))
     }
 }
 
@@ -458,12 +464,13 @@ pub(super) fn kdc_conf_path_in(env: &dyn Fn(&str) -> Option<OsString>) -> PathBu
     env_kdc_config_in(env).unwrap_or_else(default_kdc_profile)
 }
 
-/// The KDC profile's text; `None` when the file is missing, unreadable or a directory.
+/// The KDC profile's text, its bytes taken as lossy UTF-8 since MIT's need not be UTF-8; `None`
+/// when the file is missing, unreadable or a directory.
 /// MIT `profile_init_flags` (`prof_init.c:198-206`): a missing (`ENOENT`) or unreadable
 /// (`EACCES` / `EPERM`) file is skipped, so its defaults apply; any other failure is fatal.
 fn read_kdc_profile(path: &Path) -> Result<Option<String>, Error> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
         Err(e)
             if matches!(
                 e.kind(),
@@ -489,8 +496,9 @@ struct RealmPaths {
 }
 
 impl RealmPaths {
-    /// `realm`'s stanza in `text`, empty when the profile has none, so that MIT's defaults
-    /// apply; no other realm's stanza is read. A relation written twice takes its last value.
+    /// `realm`'s stanza in `text` (its subsection braces joined, `join_subsection_braces`),
+    /// empty when the profile has none, so that MIT's defaults apply; no other realm's stanza is
+    /// read. A relation written twice takes its last value.
     /// MIT `get_string_param` (`alt_prof.c:310-336`): `krb5_aprof_get_string(…, TRUE, …)`, the
     /// last value under `[realms]` → realm, else the default.
     fn stanza(text: &str, realm: &str) -> Self {
@@ -604,8 +612,9 @@ impl KdcPaths {
     ///
     /// # Errors
     ///
-    /// [`Error::Io`] when the KDC profile exists but cannot be read as UTF-8 text (a missing or
-    /// unreadable one is skipped, as MIT skips it); [`Error::NoDefaultRealm`] when neither
+    /// [`Error::Io`] when the KDC profile exists but cannot be read (a missing or unreadable one
+    /// is skipped, as MIT skips it); [`Error::Profile`] when it has a relation with
+    /// no value not followed by a line that starts with `{`; [`Error::NoDefaultRealm`] when neither
     /// `realm` nor krb5.conf's `default_realm` names a realm and the gates' overrides do not name
     /// both the database and the stash.
     pub fn resolve(realm: Option<&str>) -> Result<Self, Error> {
@@ -620,7 +629,10 @@ impl KdcPaths {
         default_realm: impl FnOnce() -> Option<String>,
     ) -> Result<Self, Error> {
         let profile = kdc_conf_path_in(env);
-        let text = read_kdc_profile(&profile)?;
+        let text = read_kdc_profile(&profile)?
+            .as_deref()
+            .map(join_subsection_braces)
+            .transpose()?;
         let conf = text.as_deref().map(KdcConf::parse).transpose()?;
         let over = EnvOverrides::read(env);
         let realm = realm.map(str::to_owned).or_else(default_realm);

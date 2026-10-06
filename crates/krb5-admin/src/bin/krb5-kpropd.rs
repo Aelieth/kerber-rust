@@ -52,6 +52,13 @@ fn main() {
         .first()
         .map_or("krb5-kpropd", |a| a.rsplit('/').next().unwrap_or(a))
         .to_owned();
+    // MIT `parse_args` (`kprop/kpropd.c:1056-1062`): the KDC context before the options; a
+    // profile it refuses ends kpropd, named as invoked.
+    if let Err(e) = krb5_config::init_kdc_profile() {
+        let argv0 = argv.first().map_or("kpropd", String::as_str);
+        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    }
     // The JSON log only where the KDC profile's `[logging] json` names a destination (MIT has
     // none).
     if let Some(json) =

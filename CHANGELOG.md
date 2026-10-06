@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **client/protocol/admin.** The KCM socket is `kcm_socket`, else MIT's default; `KCM_SOCKET` is not
+  read. `-` or no socket is "No KCM server found", other failures their errno; `kpasswd` opens the
+  default ccache first. Settled; units; gate.
 - **admin.** kpasswd's server zeroes every copy of the new password it reads (the decrypted
   request, its decoded `ChangePasswdData` field, the copy it changes to), as MIT's kadmind
   zaps them. Unit.
@@ -794,6 +797,11 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **client.** `kdestroy` and `kswitch` end an error line with `\n` alone, as Fedora's MIT does
+  (the system com_err), not `\r\n`. Units.
+- **config/kdc/admin.** Profiles load as MIT's: a relation with no value needs its `{` on the next
+  line, else every tool stops with MIT's line; CRLF and non-UTF-8 files load; an unreadable file
+  is skipped if another loads. Settled; units.
 - **kdc/gss/admin.** As MIT's `krb5_rd_req`, the KDC refuses a TGS-REQ or FAST armor whose
   ticket, session key or subkey enctype it does not permit (60), and every acceptor checks
   the ticket's enctype first. Live; units.

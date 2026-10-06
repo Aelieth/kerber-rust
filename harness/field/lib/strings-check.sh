@@ -6,7 +6,7 @@
 #   --manifest <file>  every program a kerber-rust install manifest lists (`<sha256>  <path>` lines; an entry
 #                      in a bin or sbin directory), each of which must be an ELF file: none is skipped
 #   --control          the planted control: a file carrying planted names must go red; exits 0 when it does
-P='KRB5_TEST_[A-Z0-9_]*|--test-realm|testrealm|KRB5_MASTER_PASSWORD|KRB5_NEW_PASSWORD|KRB5_PASSWORD|KERBER_CAPTURE_DIR|KRB5_KDC_DB_LIBRARY|KRB5_KDC_DB|KRB5_KDC_STASH|KRB5_MASTER_ETYPE|KRB5_ACL_FILE|KRB5_KDC_CONF|KRB5_EXPORT_[A-Z_]*|KRB5_ENABLE_PKINIT|KRB5_KDC_BIND|KRB5_KDC_USER|KRB5_KDC_AUDIT[A-Z_]*|KRB5_KDCPOLICY|KERBER_KDC_GREET|KRB5_KPASSWD_BIND|disable-transited-check|body-realm|renew-ticket|armor-ccache|pkinit-anchors|ok tgt='
+P='KRB5_TEST_[A-Z0-9_]*|--test-realm|testrealm|KRB5_MASTER_PASSWORD|KRB5_NEW_PASSWORD|KRB5_PASSWORD|KERBER_CAPTURE_DIR|KRB5_KDC_DB_LIBRARY|KRB5_KDC_DB|KRB5_KDC_STASH|KRB5_MASTER_ETYPE|KRB5_ACL_FILE|KRB5_KDC_CONF|KRB5_EXPORT_[A-Z_]*|KRB5_ENABLE_PKINIT|KRB5_KDC_BIND|KRB5_KDC_USER|KRB5_KDC_AUDIT[A-Z_]*|KRB5_KDCPOLICY|KERBER_KDC_GREET|KRB5_KPASSWD_BIND|KCM_SOCKET|disable-transited-check|body-realm|renew-ticket|armor-ccache|pkinit-anchors|ok tgt='
 
 # check_files <file>...: the check proper.
 check_files() {

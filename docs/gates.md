@@ -66,7 +66,7 @@ fail the kit's keytab check (no `klist -k`; [install.md](install.md) lists what 
 | `scripts/kadmin-mit-gate.sh` | MIT | `ci:harness` | fail-red | MIT kadmind 749 in its own `kerber-rust-kadmin-mit` container (the oracle leg; needs the Rust leg's container and the `load_rust_snap` snapshots that `kadmin-rust-gate.sh` and `kadmin-rust-acl-gate.sh` save): the MIT side of the RPC cells (`AUTH_TOOWEAK`, RPCSEC_GSS reject, integrity tamper, changepw `listprincs` `list_code=43787564`), the lockdown cells (`extract-keys`, `delete'' privilege`, `modify'' privilege`), the alias/glob, ACL and policy cells; `kadmin/history` shape, `getprivs`, `getpol` and expiry equal to the Rust snapshots; `modprinc -unlock` against both kadminds (TL `1792`) |
 | `scripts/kadmin-rust-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kadmin` vs `krb5-kadmind` 749 (the Rust leg): add/cpw/mod then `kinit extra`; get/list; chrand (dates move)/ktadd/`ktadd -norandkey` then `kinit -k`; `+lockdown_keys`/purgekeys/`cpw -keepold`/setstr/`renprinc`; del then `getprinc` fails |
 | `scripts/kadmin-rust-acl-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kadmin` vs `krb5-kadmind` 749: the `alias_cells` / `glob_cells`, ACL-restart and policy cells (attached to the Rust leg's container) |
-| `scripts/kcm-gate.sh` | MIT | `ci:mit-extra-2` | fail-red | Rust `KCM:` vs Fedora `sssd-kcm` + Fedora's MIT `klist`: Rust `kinit -c KCM:` then MIT `klist` names `user@KERBER.TEST`; MIT `kinit -c KCM:` then Rust `klist` names the principal; `kswitch` two-principal (GEN_NEW residual); restart persist; re-prime; `kdestroy`; `KEYRING:` still unknown |
+| `scripts/kcm-gate.sh` | MIT | `ci:mit-extra-2` | fail-red | Rust `KCM:` vs Fedora `sssd-kcm` + Fedora's MIT `klist`: Rust `kinit -c KCM:` then MIT `klist` names `user@KERBER.TEST`; MIT `kinit -c KCM:` then Rust `klist` names the principal; `kswitch` two-principal (GEN_NEW residual); restart persist; re-prime; `kdestroy`; `KEYRING:` still unknown; `kcm_socket`: a missing socket and `-` are both klists' "No KCM server found", a link works, `KCM_SOCKET` changes nothing |
 | `scripts/kcm-opcode-gate.sh` | MIT | `kcm-opcode:kcm-opcode` | nightly | F43 and F42 `sssd-kcm` (KCM socket up, `GET_DEFAULT_CACHE` code 0): `GET_CRED_LIST=ok`; `RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL` |
 | `scripts/kdb-dump-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kdb5_util` dump/load both ways: MIT `kinit` vs Rust; MIT load of policy-bearing dump + `getpol lockme` |
 | `scripts/kdc-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit`/`kvno` vs Rust KDC: MIT TGT + host ticket; TGS audit seed stage 1 / no `tkt_out_id` / same `req_id` as `ENCR_REP`; `examples/configs` as written: `krb5-kdb create`, `krb5-kdc` + `krb5-kadmind` on `kdc.conf` alone, MIT `kadmin` `addprinc`, MIT `kinit` + `kvno` on `krb5.conf`; the same realm on KLLDAP's `kdc_ports = 750,88` with no listener pins: MIT `kinit` over TCP 88 and UDP 750 to the container's non-loopback address, MIT `kadmin` `addprinc -randkey` + `ktadd` on 749, `kinit -k` |
@@ -350,9 +350,10 @@ not check (a unit test, or "not asserted").
   (`z1u`, `Key:` lines, `Maximum ticket life`).
 - `scripts/kcm-gate.sh` — the live sssd-kcm oracle (MIT `klist` names
   `user@KERBER.TEST`); MIT `kinit`/`klist` are Fedora `krb5-workstation`
-  in the sssd-kcm container. The gate does not vary the socket source; the
-  Rust order (`KCM_SOCKET`, else `[libdefaults] kcm_socket`, else the
-  default) is the unit test `kcm_socket_env_overrides_conf_then_default`.
+  in the sssd-kcm container. Its `kcm_socket` cell: a missing socket and
+  `-` are `No KCM server found while resolving ccache` from both `klist`s, a
+  link to the socket works, and `KCM_SOCKET` (MIT reads no such variable)
+  changes nothing.
   The oracle container runs `sssd_kcm` as in-container root (needs
   `/var/lib/sss/secrets`); host isolation is the throwaway container, not
   `useradd 4242`. Empty-residual `kinit -c KCM:` re-INITIALIZEs the collection

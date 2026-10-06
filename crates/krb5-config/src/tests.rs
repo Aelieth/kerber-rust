@@ -513,21 +513,35 @@ fn a_missing_profile_leaves_mit_defaults_under_kdc_dir() {
     assert_eq!(p.key_stash_file, kdc_dir_path(".k5.KERBER.TEST"));
     assert_eq!(p.acl_file, Some(kdc_dir_path("kadm5.acl")));
     assert_eq!(p.master_key_type, None);
-    // A directory reads as an empty profile too; text that is not UTF-8 is refused.
+    // A directory reads as an empty profile too, and a file that is not UTF-8 loads, as MIT reads
+    // its bytes; a path that is no file's (ENOTDIR) is the error, named.
     let as_dir = resolve_paths(
         &[("KRB5_KDC_PROFILE", dir.to_str().unwrap())],
         Some("R"),
         None,
     );
     assert_eq!(as_dir.unwrap().conf, None);
-    let bad = dir.join("bad-kdc.conf");
-    std::fs::write(&bad, b"[realms]\n\xff\n").unwrap();
+    let latin1 = dir.join("latin1-kdc.conf");
+    std::fs::write(&latin1, b"# caf\xe9\n[realms]\n").unwrap();
+    let loaded = resolve_paths(
+        &[("KRB5_KDC_PROFILE", latin1.to_str().unwrap())],
+        Some("R"),
+        None,
+    )
+    .unwrap();
+    assert!(loaded.conf.is_some());
+    assert_eq!(loaded.database_name, kdc_dir_path("principal"));
+    let notdir = latin1.join("kdc.conf");
     let err = resolve_paths(
-        &[("KRB5_KDC_PROFILE", bad.to_str().unwrap())],
+        &[("KRB5_KDC_PROFILE", notdir.to_str().unwrap())],
         Some("R"),
         None,
     );
-    assert!(err.unwrap_err().to_string().contains("bad-kdc.conf"));
+    assert!(
+        err.unwrap_err()
+            .to_string()
+            .contains("latin1-kdc.conf/kdc.conf")
+    );
 }
 
 #[test]
@@ -647,13 +661,33 @@ fn the_acl_default_follows_a_relocated_stash_and_empty_means_none() {
     }
     let dir = krb5_testkit::scratch_dir("kdcpaths-acl");
     let conf = dir.join("kdc.conf");
-    std::fs::write(&conf, "[realms]\n    R = {\n        acl_file =\n    }\n").unwrap();
+    std::fs::write(
+        &conf,
+        "[realms]\n    R = {\n        acl_file = \"\"\n    }\n",
+    )
+    .unwrap();
     let empty = resolve_paths(
         &[("KRB5_KDC_PROFILE", conf.to_str().unwrap())],
         Some("R"),
         None,
     );
     assert_eq!(empty.unwrap().acl_file, None);
+    // Live MIT 1.22.2: `acl_file =` with nothing after it opens a subsection, so the `}` on the
+    // next line is PROF_MISSING_OBRACE and every KDC-side tool stops with "Improper format of
+    // Kerberos configuration file".
+    std::fs::write(&conf, "[realms]\n    R = {\n        acl_file =\n    }\n").unwrap();
+    let bare = resolve_paths(
+        &[("KRB5_KDC_PROFILE", conf.to_str().unwrap())],
+        Some("R"),
+        None,
+    );
+    assert!(
+        matches!(
+            bare,
+            Err(crate::Error::Profile(crate::ProfileError::Syntax, _))
+        ),
+        "a relation with no value before a closing brace resolved"
+    );
 }
 
 #[test]
@@ -1392,4 +1426,138 @@ fn port_option_replaces_the_default_list_but_not_the_realms() {
         KdcConf::parse("[realms]\n    SETTLE.TEST = {\n        kdc_ports = 89\n    }\n").unwrap();
     realm_ports.apply_port_option("7088");
     assert_eq!(ports(&realm_ports), (vec![89], vec![89]));
+}
+
+/// MIT `parse_std_line` / `parse_line` (`prof_parse.c`), live MIT 1.22.2: a relation with no
+/// value (`kcm_socket =`) opens a subsection whose `{` must start the next line, else every tool
+/// fails with "Improper format of Kerberos configuration file"; a quoted empty value is a value;
+/// a CRLF file has an empty line between the two, so its brace never comes next.
+#[test]
+fn a_relation_with_no_value_needs_its_brace_on_the_next_line() {
+    let bad = Krb5Conf::parse("[libdefaults]\n    kcm_socket =\n    default_realm = X.TEST\n");
+    assert!(
+        matches!(
+            bad,
+            Err(crate::Error::Profile(crate::ProfileError::Syntax, _))
+        ),
+        "a relation with no value parsed"
+    );
+    let realms = "[realms]\n    X.TEST =\n    {\n        kdc = k.x.test\n    }\n";
+    let c = Krb5Conf::parse(realms).unwrap();
+    assert_eq!(c.kdcs_for("X.TEST").unwrap()[0].host, "k.x.test");
+    // Off Apple MIT reads a CRLF file's lines whole, their `\r\n` stripped: the `{` comes next.
+    let crlf = Krb5Conf::parse(&realms.replace('\n', "\r\n")).unwrap();
+    assert_eq!(crlf.kdcs_for("X.TEST").unwrap()[0].host, "k.x.test");
+    let bare_crlf = "[libdefaults]\r\n    kcm_socket =\r\n    default_realm = X.TEST\r\n";
+    assert!(
+        matches!(
+            Krb5Conf::parse(bare_crlf),
+            Err(crate::Error::Profile(crate::ProfileError::Syntax, _))
+        ),
+        "a CRLF relation with no value parsed"
+    );
+    let quoted = Krb5Conf::parse("[libdefaults]\n    kcm_socket = \"\"\n").unwrap();
+    assert_eq!(quoted.kcm_socket.as_deref(), Some(""));
+    let before = Krb5Conf::parse("stray =\n[libdefaults]\n    default_realm = X.TEST\n").unwrap();
+    assert_eq!(before.default_realm.as_deref(), Some("X.TEST"));
+}
+
+/// MIT's one profile parser reads kdc.conf too: a realm stanza whose `{` starts the next line is a
+/// stanza, and one whose next line is no `{` refuses the file.
+#[test]
+fn kdc_conf_takes_the_subsection_brace_rule() {
+    let two_line = "[realms]\n    R =\n    {\n        max_life = 2h\n    }\n";
+    let conf = crate::KdcConf::parse(two_line).unwrap();
+    assert_eq!(conf.realm, "R");
+    assert_eq!(conf.max_life, 7200);
+    let crlf = crate::KdcConf::parse(&two_line.replace('\n', "\r\n")).unwrap();
+    assert_eq!(crlf.max_life, 7200);
+    assert!(matches!(
+        crate::KdcConf::parse("[realms]\n    R =\n    max_life = 2h\n"),
+        Err(crate::Error::Profile(crate::ProfileError::Syntax, _))
+    ));
+}
+
+/// MIT reads a profile's bytes, so a file that is not UTF-8 loads: a Latin-1 comment in
+/// krb5.conf, in an included file, and in kdc.conf read whole or for the KDC's paths.
+#[test]
+fn a_profile_that_is_not_utf8_loads() {
+    let dir = krb5_testkit::scratch_dir("profile-latin1");
+    let latin1 = |body: &str| [&b"# caf\xe9 \xff\n"[..], body.as_bytes()].concat();
+    let main = dir.join("krb5.conf");
+    std::fs::write(&main, latin1("[libdefaults]\n    default_realm = X.TEST\n")).unwrap();
+    let conf = Krb5Conf::load_file(&main).unwrap();
+    assert_eq!(conf.default_realm.as_deref(), Some("X.TEST"));
+    let inc = dir.join("inc.conf");
+    std::fs::write(&inc, format!("include {}\n", main.display())).unwrap();
+    let included = crate::load_krb5_conf_paths([&inc]).unwrap();
+    assert_eq!(included.default_realm.as_deref(), Some("X.TEST"));
+    let kdc = dir.join("kdc.conf");
+    std::fs::write(
+        &kdc,
+        latin1("[realms]\n    X.TEST = {\n        max_life = 2h\n        database_name = /x/db\n    }\n"),
+    )
+    .unwrap();
+    assert_eq!(crate::KdcConf::load_file(&kdc).unwrap().max_life, 7200);
+    let vars = [("KRB5_KDC_PROFILE", kdc.to_str().unwrap())];
+    let paths = resolve_paths(&vars, Some("X.TEST"), None).unwrap();
+    assert_eq!(paths.database_name, std::path::Path::new("/x/db"));
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// MIT `profile_init_flags`, live MIT 1.22.2 as uid 1000: a `KRB5_CONFIG` file that cannot be
+/// read is skipped when another loads, and is the error when none does, even beside a missing one.
+#[test]
+fn an_unreadable_file_is_skipped_unless_no_file_loads() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if nix::unistd::geteuid().is_root() {
+        eprintln!("skipped: root reads a mode 000 file");
+        return;
+    }
+    let dir = krb5_testkit::scratch_dir("profile-unreadable");
+    let unread = dir.join("unread.conf");
+    std::fs::write(&unread, "[libdefaults]\n    default_realm = HIDDEN.TEST\n").unwrap();
+    std::fs::set_permissions(&unread, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let main = dir.join("krb5.conf");
+    std::fs::write(&main, "[libdefaults]\n    default_realm = KERBER.TEST\n").unwrap();
+    let missing = dir.join("missing.conf");
+    let skipped = crate::load_krb5_conf_paths([&unread, &main]).unwrap();
+    assert_eq!(skipped.default_realm.as_deref(), Some("KERBER.TEST"));
+    for paths in [
+        vec![&unread],
+        vec![&missing, &unread],
+        vec![&unread, &missing],
+    ] {
+        let Err(e) = crate::load_krb5_conf_paths(paths) else {
+            panic!("an unreadable file loaded");
+        };
+        assert!(
+            matches!(&e, crate::Error::Io(io) if io.kind() == std::io::ErrorKind::PermissionDenied),
+            "{e}"
+        );
+        assert_eq!(e.init_text(), "Permission denied");
+    }
+    let Err(crate::Error::Io(e)) = crate::load_krb5_conf_paths([&missing]) else {
+        panic!("a missing file loaded");
+    };
+    assert_eq!(e.kind(), std::io::ErrorKind::NotFound);
+    let _ = std::fs::set_permissions(&unread, std::fs::Permissions::from_mode(0o600));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The text a tool prints for a context init its profile fails: MIT's code texts.
+#[test]
+fn init_text_is_the_failed_init_s_code_text() {
+    let syntax = crate::Error::Profile(crate::ProfileError::Syntax, "x".into());
+    assert_eq!(
+        syntax.init_text(),
+        "Improper format of Kerberos configuration file"
+    );
+    let include = crate::Error::Profile(crate::ProfileError::IncludeFile, "x".into());
+    assert_eq!(
+        include.init_text(),
+        "Included profile file could not be read"
+    );
+    let denied = crate::Error::Io(std::io::Error::from_raw_os_error(13));
+    assert_eq!(denied.init_text(), "Permission denied");
 }

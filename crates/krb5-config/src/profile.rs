@@ -32,8 +32,9 @@ impl Krb5Conf {
     ///
     /// # Errors
     ///
-    /// [`Error::Profile`] when an indented `include` / `includedir` directive (no `=`) sits inside
-    /// a section (MIT's improper format); no other line fails.
+    /// [`Error::Profile`] with [`ProfileError::Syntax`] when an indented `include` /
+    /// `includedir` directive (no `=`) sits inside a section, or a relation with no value is not
+    /// followed by a line that starts with `{` (MIT's improper format); no other line fails.
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
@@ -47,7 +48,8 @@ impl Krb5Conf {
     ///
     /// [`Error::Io`] when `path` cannot be read; [`Error::Profile`] when an `include` target is
     /// missing or cannot be read, an `includedir` is not a directory or cannot be listed, includes
-    /// form a cycle or nest 32 deep, or an indented include sits inside a section.
+    /// form a cycle or nest 32 deep, an indented include sits inside a section, or a relation
+    /// with no value is not followed by a line that starts with `{`.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
@@ -141,6 +143,72 @@ fn include_directive(raw: &str) -> Option<IncludeKind<'_>> {
     None
 }
 
+/// The text's lines as MIT's profile parser meets them off Apple, where
+/// `PROFILE_SUPPORTS_FOREIGN_NEWLINES` is not defined: each `\n`-ended line, its trailing `\r` and
+/// `\n` characters dropped, so a CRLF file reads as an LF one. A line is not cut at MIT's
+/// 2047-byte `fgets` buffer.
+/// MIT `parse_file` (`prof_parse.c:351-359`): each `fgets` line goes to `parse_line` whole.
+/// MIT `strip_line` (`prof_parse.c:40-45`): a line's trailing `\n` and `\r` characters go.
+fn profile_lines(text: &str) -> impl Iterator<Item = &str> {
+    text.split_terminator('\n')
+        .map(|line| line.trim_end_matches(['\r', '\n']))
+}
+
+/// `text` with each relation that has no value joined to the `{` that must start the next line,
+/// as `tag = {`, so that the section parsers meet one form. Before the first section such a line
+/// is not a relation; a column-0 `include` or `includedir` between the two is left where it is.
+/// MIT `parse_std_line` (`prof_parse.c:174-176`): a relation with no value opens a subsection,
+/// its `{` due on the next line.
+/// MIT `parse_line` (`prof_parse.c:331-335`): that line must start with `{`, its rest unread,
+/// else `PROF_MISSING_OBRACE`.
+///
+/// # Errors
+///
+/// [`Error::Profile`] with [`ProfileError::Syntax`] when the line after a relation with no value
+/// does not start with `{`.
+pub(crate) fn join_subsection_braces(text: &str) -> Result<String, Error> {
+    let mut out = String::with_capacity(text.len());
+    let mut in_section = false;
+    let mut pending: Option<&str> = None;
+    for raw in profile_lines(text) {
+        if include_directive(raw).is_some() {
+            out.push_str(raw);
+            out.push('\n');
+            continue;
+        }
+        if let Some(tag) = pending.take() {
+            if !raw.trim_start().starts_with('{') {
+                return Err(Error::Profile(
+                    ProfileError::Syntax,
+                    format!("improper format: no {{ after {tag} ="),
+                ));
+            }
+            out.push_str(tag);
+            out.push_str(" = {\n");
+            continue;
+        }
+        let line = raw.trim();
+        if line.starts_with('[') {
+            in_section = true;
+        } else if in_section
+            && !line.starts_with(['#', ';'])
+            && let Some((tag, value)) = line.split_once('=')
+            && value.trim().is_empty()
+            && !tag.trim().is_empty()
+        {
+            pending = Some(tag.trim());
+            continue;
+        }
+        out.push_str(raw);
+        out.push('\n');
+    }
+    if let Some(tag) = pending {
+        out.push_str(tag);
+        out.push_str(" = {\n");
+    }
+    Ok(out)
+}
+
 fn valid_include_name(name: &str) -> bool {
     if name.starts_with('.') {
         return false;
@@ -204,6 +272,7 @@ fn parse_into(
     let mut section = String::new();
     let mut realm: Option<String> = None;
     let mut capaths_client: Option<String> = None;
+    let text = join_subsection_braces(text)?;
     for raw in text.lines() {
         if let Some(kind) = include_directive(raw)
             && let Some(st) = stack.as_deref_mut()
@@ -329,7 +398,9 @@ fn load_file_into(
     if stack.iter().any(|p| p == &canon) {
         return Err(include("include cycle".into()));
     }
-    let text = std::fs::read_to_string(&canon).map_err(unread)?;
+    // MIT `parse_file` reads the file's bytes: a profile need not be UTF-8.
+    let bytes = std::fs::read(&canon).map_err(unread)?;
+    let text = String::from_utf8_lossy(&bytes);
     stack.push(canon);
     let result = parse_into(conf, seen, &text, Some(stack));
     stack.pop();
@@ -613,14 +684,20 @@ pub fn krb5_conf_paths() -> Vec<PathBuf> {
 }
 
 /// Merge `krb5.conf` paths (includes, first-wins scalars, appended `kdc=`).
+/// MIT `profile_init_flags` (`prof_init.c:198-206`): a missing file (`ENOENT`) is skipped; one
+/// that cannot be read (`EACCES` / `EPERM`) is remembered and skipped; any other failure ends the
+/// load.
+/// MIT `profile_init_flags` (`prof_init.c:217-224`): with no file loaded, the error is the
+/// remembered access error, else `ENOENT`.
 ///
 /// # Errors
 ///
-/// [`Error::Io`] with `ErrorKind::NotFound` when none of `paths` exists (each missing path is
-/// skipped), or the `io::Error` of a present file or directory that cannot be read;
-/// [`Error::Profile`] as [`Krb5Conf::load_file`] reports it (an include target missing or
-/// unreadable, an `includedir` that is no directory or does not list, an include cycle or 32-deep
-/// nesting, an indented include).
+/// [`Error::Io`] when no path loads: the access error (`PermissionDenied`) of one that could not
+/// be read, else `ErrorKind::NotFound`; the `io::Error` of a present file or directory that
+/// cannot be read for another reason; [`Error::Profile`] as [`Krb5Conf::load_file`] reports it
+/// (an include target missing or unreadable, an `includedir` that is no directory or does not
+/// list, an include cycle or 32-deep nesting, an indented include, a relation with no value not
+/// followed by a line that starts with `{`).
 pub fn load_krb5_conf_paths<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
 ) -> Result<Krb5Conf, Error> {
@@ -628,18 +705,55 @@ pub fn load_krb5_conf_paths<P: AsRef<Path>>(
     let mut seen = BTreeSet::new();
     let mut stack = Vec::new();
     let mut any = false;
+    let mut access = None;
     for path in paths {
         let path = path.as_ref();
         match load_path_into(&mut conf, &mut seen, &mut stack, path) {
             Ok(()) => any = true,
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                access = Some(e);
+            }
             Err(e) => return Err(e),
         }
     }
     if any {
         Ok(conf)
     } else {
-        Err(std::io::Error::from(std::io::ErrorKind::NotFound).into())
+        Err(access
+            .unwrap_or_else(|| std::io::Error::from(std::io::ErrorKind::NotFound))
+            .into())
+    }
+}
+
+/// MIT `krb5_init_context`'s profile: [`load_krb5_conf_paths`] of [`krb5_conf_paths`], an empty
+/// profile when no file is found.
+/// MIT `os_init_paths` (`init_os_ctx.c:388-391`): no file that opens is an empty profile.
+///
+/// # Errors
+///
+/// As [`load_krb5_conf_paths`], except that no file found is no error.
+pub fn init_profile() -> Result<Krb5Conf, Error> {
+    match load_krb5_conf_paths(krb5_conf_paths()) {
+        Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(Krb5Conf::new()),
+        loaded => loaded,
+    }
+}
+
+/// MIT `krb5int_init_context_kdc`'s profile: the KDC profile ([`crate::kdc_conf_path`]) ahead of
+/// the krb5.conf files, loaded as [`init_profile`] loads them. A KDC-side tool checks it before
+/// anything else and stops on its error, as MIT's do.
+/// MIT `add_kdc_config_file` (`init_os_ctx.c:340-366`): the KDC profile goes first in the list.
+///
+/// # Errors
+///
+/// As [`load_krb5_conf_paths`], except that no file found is no error.
+pub fn init_kdc_profile() -> Result<(), Error> {
+    let mut paths = vec![crate::kdc_conf_path()];
+    paths.extend(krb5_conf_paths());
+    match load_krb5_conf_paths(paths) {
+        Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        loaded => loaded.map(drop),
     }
 }
 

@@ -25,6 +25,15 @@ use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::PrincipalName;
 
 fn main() {
+    // MIT `main` (`kprop/kprop.c:101-105`): the library context first, its profile krb5.conf; a
+    // profile it refuses ends kprop.
+    if let Err(e) = krb5_config::init_profile() {
+        let argv0 = std::env::args()
+            .next()
+            .unwrap_or_else(|| "kprop".to_owned());
+        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    }
     // The JSON log only where the KDC profile's `[logging] json` names a destination (MIT has
     // none).
     if let Some(json) = krb5_config::LogSpecs::load_json().and_then(|s| JsonLog::open("kprop", &s))

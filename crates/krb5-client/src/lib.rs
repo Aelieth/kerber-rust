@@ -77,6 +77,8 @@ pub fn dir_read_path(residual: &str) -> std::io::Result<std::path::PathBuf> {
 /// MIT `set_errmsg_filename` (`cc_file.c:117-124`): a FILE cache's error names its file.
 /// MIT `kcm_get_princ` (`cc_kcm.c:933-953`): a KCM cache with no principal is
 /// "Credentials cache 'KCM:\<name\>' not found".
+/// MIT `kcmio_unix_socket_connect` (`cc_kcm.c:327-328`): any other failure to reach the KCM
+/// daemon is its errno, printed as `strerror` ([`Krb5Error::from_kcm`]).
 #[must_use]
 pub fn cache_read_error(
     spec: &CcSpec,
@@ -85,6 +87,9 @@ pub fn cache_read_error(
     let io = e.downcast_ref::<std::io::Error>();
     let missing = io.is_some_and(|e| e.kind() == std::io::ErrorKind::NotFound);
     match spec {
+        CcSpec::Kcm(_) if io.is_some_and(krb5_protocol::kcm_no_server) => {
+            Krb5Error::of(Code::KcmNoServer)
+        }
         CcSpec::Kcm(n) if missing => {
             let name = if n.is_empty() {
                 krb5_protocol::kcm_primary_name().unwrap_or_default()
@@ -96,6 +101,10 @@ pub fn cache_read_error(
                 format!("Credentials cache 'KCM:{name}' not found"),
             )
         }
+        CcSpec::Kcm(_) => io.map_or_else(
+            || Krb5Error::new(Code::Other, e.to_string()),
+            Krb5Error::from_kcm,
+        ),
         CcSpec::Memory(_) if missing => Krb5Error::of(Code::FccNofile),
         _ => match (io, cache_file_path(spec)) {
             (Some(io), Some(path)) => Krb5Error::from_file_cache(io, &path),
@@ -1137,5 +1146,15 @@ mod tests {
         krb5_config::set_test_krb5_paths(Some(vec![dir.join("absent.conf")]));
         assert!(init_context().is_ok());
         krb5_config::set_test_krb5_paths(None);
+    }
+
+    /// MIT `kcmio_unix_socket_connect`, live MIT 1.22.2 (`kvno --u2u KCM:x` with `kcm_socket`
+    /// naming a file that is no socket): a KCM cache that cannot be reached is the connect's
+    /// errno, as `strerror` prints it.
+    #[test]
+    fn a_kcm_cache_that_cannot_be_reached_is_the_errno() {
+        let e = std::io::Error::from(nix::errno::Errno::ECONNREFUSED);
+        let got = cache_read_error(&CcSpec::Kcm("x".into()), &e);
+        assert_eq!(got.message, "Connection refused");
     }
 }

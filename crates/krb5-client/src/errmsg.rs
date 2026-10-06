@@ -6,13 +6,14 @@ use std::io;
 use std::path::Path;
 
 /// `com_err` with its default hook, as `kdestroy` and `kswitch` keep it: `prog: `, the error's
-/// table text, a space, the context, then `\r\n`.
+/// table text, a space, the context, then `\n`, as Fedora's MIT prints it (built with the system
+/// com_err). MIT's own com_err, which the gates' MIT image is built with, ends the line `\r\n`.
 /// MIT `default_com_err_proc` (`com_err.c:47-96`): `error_message(code)`, not the extended
-/// message, and a carriage return before the newline.
+/// message.
 #[macro_export]
 macro_rules! com_err {
     ($prog:expr, $err:expr, $($ctx:tt)*) => {{
-        eprint!("{}: {} {}\r\n", $prog, $err.table_text(), format_args!($($ctx)*));
+        eprintln!("{}: {} {}", $prog, $err.table_text(), format_args!($($ctx)*));
     }};
 }
 
@@ -62,6 +63,8 @@ pub enum Code {
     KdcrepModified,
     /// `KRB5_CC_IO`.
     CcIo,
+    /// `KRB5_KCM_NO_SERVER`.
+    KcmNoServer,
     /// errno `ENOENT`.
     Enoent,
     /// errno `EINVAL`.
@@ -192,6 +195,20 @@ impl Krb5Error {
         Self::new(Code::Other, text)
     }
 
+    /// A KCM request's failure: no KCM daemon is `KRB5_KCM_NO_SERVER`, an OS error its errno.
+    /// MIT `kcmio_unix_socket_connect` (`cc_kcm.c:313-330`): a socket that is not there, or a
+    /// `kcm_socket` of `-`, is `KRB5_KCM_NO_SERVER`; any other failure to connect is its errno.
+    #[must_use]
+    pub fn from_kcm(e: &io::Error) -> Self {
+        if krb5_protocol::kcm_no_server(e) {
+            Self::of(Code::KcmNoServer)
+        } else if e.raw_os_error().is_some() {
+            Self::from_os(e)
+        } else {
+            Self::new(Code::Other, e.to_string())
+        }
+    }
+
     /// A FILE cache's read failure, with the file name as MIT adds it.
     /// MIT `set_errmsg_filename` (`cc_file.c:117-124`): "\<message\> (filename: \<path\>)".
     #[must_use]
@@ -274,6 +291,8 @@ fn code_text(code: Code) -> &'static str {
         Code::KdcrepModified => "KDC reply did not match expectations",
         // MIT `KRB5_CC_IO` (`krb5_err.et:261-261`): the text.
         Code::CcIo => "Credentials cache I/O operation failed",
+        // MIT `KRB5_KCM_NO_SERVER` (`k5e1_err.et:44-44`): the text.
+        Code::KcmNoServer => "No KCM server found",
         Code::Enoent => "No such file or directory",
         Code::Einval => "Invalid argument",
     }

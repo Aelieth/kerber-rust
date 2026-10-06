@@ -315,6 +315,15 @@ fn take_password(args: &[String]) -> (Option<Zeroizing<String>>, Vec<String>) {
 }
 
 fn run(progname: String, args: &[String]) -> u8 {
+    // MIT `main` (`kadmin/dbutil/kdb5_util.c:214-218`): the KDC context before the options; a
+    // profile it refuses ends kdb5_util.
+    if let Err(e) = krb5_config::init_kdc_profile() {
+        err_line(&format!(
+            "{progname}: {} while initializing Kerberos code",
+            e.init_text()
+        ));
+        return 1;
+    }
     let (password, args) = take_password(args);
     let Ok(parsed) = MitArgs::parse(&args, GLOBALS, Placement::Anywhere) else {
         return usage();
@@ -556,8 +565,8 @@ fn realm_kdc_conf(util: &Util, realm: &str) -> Result<Option<krb5_config::KdcCon
     if util.paths.conf.is_none() {
         return Ok(None);
     }
-    let text = fs::read_to_string(&util.paths.profile).map_err(|e| strerror(&e))?;
-    kdc_conf_for_realm(&text, realm)
+    let bytes = fs::read(&util.paths.profile).map_err(|e| strerror(&e))?;
+    kdc_conf_for_realm(&String::from_utf8_lossy(&bytes), realm)
         .map(Some)
         .map_err(|e| e.to_string())
 }

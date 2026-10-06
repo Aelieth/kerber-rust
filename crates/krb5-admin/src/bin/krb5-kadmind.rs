@@ -150,6 +150,16 @@ fn main() {
     };
     let nofork = args.flag("-nofork") || test_realm || pinned.is_some();
 
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:437-442`): the KDC context once the options are
+    // read; a profile it refuses ends kadmind.
+    if let Err(e) = krb5_config::init_kdc_profile() {
+        eprintln!(
+            "{progname}: {} while initializing context, aborting",
+            e.init_text()
+        );
+        std::process::exit(1);
+    }
+
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:444-444`): the daemon log, once the options are
     // read.
     let specs = krb5_config::LogSpecs::load("admin_server");
