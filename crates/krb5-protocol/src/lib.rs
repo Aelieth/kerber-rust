@@ -98,7 +98,8 @@ pub use kcm::{
     kcm_store_keep_default, kcm_switch,
 };
 pub use keytab::{
-    Keytab, KeytabEntry, KeytabSlot, keytab_init_creds_keys, sort_etypes_keytab_first,
+    Keytab, KeytabEntry, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
+    sort_etypes_keytab_first,
 };
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,

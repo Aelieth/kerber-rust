@@ -228,6 +228,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
             &mut stream,
             &KpropdConfig {
                 host_keys: &host_keys2,
+                keytab: None,
                 expected_server: Some(&host_for_server),
                 expected_realm: Some(TEST_REALM),
                 master_password: Some(MASTER),
@@ -337,6 +338,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
             &mut stream,
             &KpropdConfig {
                 host_keys: &host_keys2,
+                keytab: None,
                 expected_server: Some(&host_for_server),
                 expected_realm: Some(TEST_REALM),
                 master_password: Some(MASTER),
@@ -431,6 +433,7 @@ fn kpropd_rejects_when_acl_unset() {
             &mut stream,
             &KpropdConfig {
                 host_keys: &host_keys2,
+                keytab: None,
                 expected_server: Some(&host_for_server),
                 expected_realm: Some(TEST_REALM),
                 master_password: Some(MASTER),
@@ -559,6 +562,7 @@ fn kprop_exact_acl(
             &mut stream,
             &KpropdConfig {
                 host_keys: &host_keys,
+                keytab: None,
                 expected_server: Some(&host),
                 expected_realm: Some(TEST_REALM),
                 master_password: Some(MASTER),

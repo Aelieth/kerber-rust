@@ -31,11 +31,12 @@ pub use kadm5::{
 };
 pub use kadmin_cli::kadmin_local_main;
 pub use kprop::{
-    IpropPoll, KpropAuth, KpropdConfig, iprop_dump_last, iprop_poll_once, iprop_snapshot,
-    is_iprop_dump, kprop_dump_bytes, kprop_dump_iprop, kprop_expired_ap_req, kprop_load_bytes,
+    IpropPoll, KpropAuth, KpropdConfig, KpropdKeys, KpropdKeytabError, KpropdLookup,
+    iprop_dump_last, iprop_poll_once, iprop_snapshot, is_iprop_dump, kprop_dump_bytes,
+    kprop_dump_iprop, kprop_expired_ap_req, kprop_keytab_file, kprop_load_bytes,
     kprop_load_with_stash, kprop_send_dump, kprop_send_store, kprop_send_store_iprop,
-    kprop_sendauth, kpropd_handle_conn, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack,
-    load_replica,
+    kprop_sendauth, kpropd_handle_conn, kpropd_keytab_keys, kpropd_recv_dump, kpropd_recvauth,
+    kpropd_send_ack, kpropd_server_name, kpropd_server_name_for, load_replica,
 };
 pub use listen::{
     KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, dispatch_kadmind, encode_kadmind_req,

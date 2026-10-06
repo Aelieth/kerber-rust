@@ -10,7 +10,7 @@ publish.workspace = true
 
 [dependencies]
 krb5-types.workspace = true
-nix.workspace = true
+nix = { workspace = true, features = ["hostname"] }
 thiserror.workspace = true
 
 [dev-dependencies]

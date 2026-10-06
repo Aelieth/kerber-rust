@@ -30,6 +30,7 @@
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod ccname;
+mod hostname;
 mod iprop_params;
 mod kdcconf;
 pub mod listen;
@@ -90,6 +91,18 @@ pub enum ProfileError {
     /// (`PROF_MISSING_OBRACE`).
     /// MIT `os_init_paths` (`init_os_ctx.c:403-408`): a syntax error is `KRB5_CONFIG_BADFORMAT`.
     Syntax,
+    /// A boolean the library context reads that is none.
+    /// MIT `get_boolean` (`lib/krb5/krb/init_ctx.c:92-94`): `profile_get_boolean`'s `PROF_BAD_BOOLEAN` is the context's error.
+    BadBoolean,
+    /// A `dns_canonicalize_hostname` that is neither a boolean nor `fallback`.
+    /// MIT `get_tristate` (`lib/krb5/krb/init_ctx.c:115-118`): any other value is `EINVAL`.
+    BadTristate,
+    /// A `request_timeout` that is no time interval.
+    /// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:259-262`): `krb5_string_to_deltat`'s error is the context's.
+    BadDeltat,
+    /// A `plugin_base_dir` whose `%{...}` tokens do not expand.
+    /// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:275-281`): `k5_expand_path_tokens`'s error is the context's.
+    BadPathToken,
 }
 
 impl Error {
@@ -114,6 +127,19 @@ impl Error {
 }
 
 impl ProfileError {
+    /// Where `krb5_init_context` makes the check that refuses a profile with this error, the
+    /// earlier first; a load error is before them all.
+    #[must_use]
+    pub const fn context_rank(self) -> u8 {
+        match self {
+            Self::IncludeFile | Self::IncludeDir | Self::Syntax => 0,
+            Self::BadBoolean => 1,
+            Self::BadTristate => 2,
+            Self::BadDeltat => 3,
+            Self::BadPathToken => 4,
+        }
+    }
+
     /// The text `krb5_init_context`'s callers print for it.
     #[must_use]
     pub const fn text(self) -> &'static str {
@@ -124,6 +150,12 @@ impl ProfileError {
             Self::IncludeDir => "Included profile directory could not be read",
             // MIT `KRB5_CONFIG_BADFORMAT` (`krb5_err.et:184-184`): the text.
             Self::Syntax => "Improper format of Kerberos configuration file",
+            // MIT `PROF_BAD_BOOLEAN` (`prof_err.et:60-60`): the code whose text this is.
+            Self::BadBoolean => "Invalid boolean value",
+            // `EINVAL`'s `strerror`.
+            Self::BadTristate | Self::BadPathToken => "Invalid argument",
+            // MIT `KRB5_DELTAT_BADFORMAT` (`krb5_err.et:344-344`): the code whose text this is.
+            Self::BadDeltat => "Invalid format of Kerberos lifetime or clock skew string",
         }
     }
 }
@@ -215,6 +247,21 @@ pub struct Krb5Conf {
     /// MIT `krb5_sname_match` (`sname_match.c:51-53`): a hostname in the matching principal is
     /// checked unless this is set.
     pub ignore_acceptor_hostname: bool,
+    /// `[libdefaults] qualify_shortname`: the domain a hostname without a dot gains when it is
+    /// not looked up in DNS; `Some("")` adds none, and unset (`None`) takes the resolver's first
+    /// search domain ([`local_host_name`]).
+    /// MIT `qualify_shortname` (`lib/krb5/os/sn2princ.c:66-80`): the profile's value when it is set, else the resolver's.
+    pub qualify_shortname: Option<String>,
+    /// `[libdefaults] dns_canonicalize_hostname`: when a host-based service name is
+    /// canonicalized, and whether through DNS.
+    pub dns_canonicalize_hostname: CanonHost,
+    /// Why `krb5_init_context` refuses this profile, the first of its checks that fails: a
+    /// boolean it reads that is none ([`ProfileError::BadBoolean`]), a `dns_canonicalize_hostname`
+    /// that is neither a boolean nor `fallback` ([`ProfileError::BadTristate`]), a
+    /// `request_timeout` that is no interval ([`ProfileError::BadDeltat`]), a `plugin_base_dir`
+    /// whose tokens do not expand ([`ProfileError::BadPathToken`]). [`load_krb5_conf_paths`]
+    /// fails with it.
+    pub context_refusal: Option<ProfileError>,
     /// Realm → KDC list.
     pub kdcs: BTreeMap<String, Vec<Endpoint>>,
     /// Realm → admin_server.
@@ -235,6 +282,20 @@ pub struct Krb5Conf {
     /// Realm → its stanza's `iprop_*` relations, name and value, in file order (includes
     /// followed); read by [`IpropParams`].
     pub iprop: BTreeMap<String, Vec<(String, String)>>,
+}
+
+/// `[libdefaults] dns_canonicalize_hostname`, MIT's tristate.
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:244-248`): a boolean, else `fallback`, and `true` when unset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CanonHost {
+    /// `true`, MIT's default: the name is canonicalized through DNS when it is made.
+    #[default]
+    True,
+    /// `false`: the name is expanded without DNS when it is made.
+    False,
+    /// `fallback`: the name is kept as given and canonicalized when it is used, first without
+    /// DNS, then with it.
+    Fallback,
 }
 
 /// KDC policy from `kdc.conf`.
@@ -367,10 +428,11 @@ pub use ccname::{
     KRB5_CC_UNKNOWN_TYPE, default_ccache_name, default_ccspec, expand_ccache_params, parse_ccname,
     parse_ccspec, resolve_ccspec,
 };
+pub use hostname::{expand_hostname, expand_hostname_no_dns, local_host_name, this_host};
 pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, MISSING_CONF_PARAMS};
 pub use kdcconf::{
-    KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_stash_file,
-    env_kdc_config, kdc_conf_path,
+    KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_kpropd_acl,
+    default_stash_file, env_kdc_config, kdc_conf_path,
 };
 pub use logging::LogSpecs;
 pub use profile::{

@@ -824,6 +824,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** `kpropd` takes MIT's `-r`, `-s`, `-a` and is `host/<this host>`; `kprop`, `-s` or the
+  default keytab. `KRB5_KPROP_*`, `KRB5_KDC_REALM` are gone. Profile booleans, context
+  refusals, keytabs, `wkt` as MIT's. Settled; units; gates.
 - **client.** `kdestroy` and `kswitch` end an error line with `\n` alone, as Fedora's MIT does
   (the system com_err), not `\r\n`. Units.
 - **config/kdc/admin.** Profiles load as MIT's: a relation with no value needs its `{` on the next

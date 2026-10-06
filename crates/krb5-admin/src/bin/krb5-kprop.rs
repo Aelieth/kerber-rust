@@ -7,8 +7,11 @@
 //! wrapped under the stash's master key, as MIT's kprop sends a dump of the database that stash
 //! opens; with the `test-hooks` feature, `KRB5_MASTER_PASSWORD` names it instead when set.
 //!
-//! `KRB5_KPROP_KEYTAB` names the client keytab when `-s` does not: a kerber-rust extension
-//! (MIT's kprop takes `-s` alone).
+//! The keytab is `-s`'s, else the default keytab (`KRB5_KTNAME`, else krb5.conf's
+//! `default_keytab_name`, else `/etc/krb5.keytab`), as MIT's kprop finds it; one that cannot be
+//! read stops kprop with MIT's error "while getting initial credentials". Its first principal is
+//! the client, where MIT's is `host/<this host>` with that keytab's key. kprop reads no
+//! environment of its own: MIT's reads none.
 //!
 //! `-i` sends an iprop dump (`ipropx 1`), what MIT's kadmind sends a replica that asked for a
 //! full resync after `kdb5_util dump -i`: it needs `iprop_enable` for the realm, and the dump's
@@ -19,7 +22,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::TcpStream;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use krb5_admin::{KPROP_PORT, iprop_snapshot, kprop_send_store, kprop_send_store_iprop};
 use krb5_crypto::ProtocolKey;
@@ -54,7 +57,11 @@ fn main() {
     }
 
     let mut port = KPROP_PORT;
-    let mut keytab: Option<PathBuf> = std::env::var("KRB5_KPROP_KEYTAB").ok().map(PathBuf::from);
+    let argv0 = std::env::args()
+        .next()
+        .unwrap_or_else(|| "kprop".to_owned());
+    // MIT `parse_args` (`kprop/kprop.c:143-145`): `-s` names the keytab.
+    let mut keytab: Option<String> = None;
     let mut instance: Option<String> = None;
     let mut replica: Option<String> = None;
     let mut iprop = false;
@@ -70,7 +77,7 @@ fn main() {
                 });
             }
             "-s" => {
-                keytab = Some(PathBuf::from(args.next().unwrap_or_else(|| need_arg("-s"))));
+                keytab = Some(args.next().unwrap_or_else(|| need_arg("-s")));
             }
             "-n" => {
                 instance = Some(args.next().unwrap_or_else(|| need_arg("-n")));
@@ -136,7 +143,7 @@ fn main() {
     let realm = store.realm().to_owned();
     let host_inst = instance.unwrap_or_else(|| replica.clone());
     let server = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host_inst.as_str()]);
-    let client = client_name(keytab.as_deref(), &server);
+    let client = client_name(&argv0, keytab.as_deref(), &realm);
     let Some(princ) = store.get_name(&client) else {
         eprintln!("krb5-kprop: missing client {}", client.components_joined());
         std::process::exit(1);
@@ -238,20 +245,40 @@ fn master_key(store: &PrincipalStore, db: &Path, stash: &Path) -> Result<Protoco
     }
 }
 
-fn client_name(keytab: Option<&std::path::Path>, server: &PrincipalName) -> PrincipalName {
-    if let Some(path) = keytab {
-        match krb5_protocol::read_secret_file(path)
-            .and_then(|b| Keytab::parse(&b).map_err(|e| std::io::Error::other(e.to_string())))
-        {
-            Ok(kt) => {
-                if let Some(e) = kt.entries.first() {
-                    return e.name.clone();
-                }
-            }
-            Err(e) => eprintln!("krb5-kprop: keytab {}: {e}", path.display()),
-        }
+/// The client: the first principal of kprop's keytab (`-s`, else the default keytab). A keytab
+/// that cannot be read stops kprop with MIT's error.
+/// MIT `get_tickets` (`kprop/kprop.c:195-208`): a name that does not resolve fails "while resolving keytab", and a keytab `krb5_get_init_creds_keytab` cannot use fails "while getting initial credentials", each ending kprop.
+fn client_name(argv0: &str, keytab: Option<&str>, realm: &str) -> PrincipalName {
+    let fail = |text: &str, during: &str| -> ! {
+        eprintln!("{argv0}: {text} {during}");
+        std::process::exit(1);
+    };
+    let file =
+        krb5_admin::kprop_keytab_file(keytab).unwrap_or_else(|e| fail(e, "while resolving keytab"));
+    let creds = "while getting initial credentials\n";
+    let bytes = match file.as_deref().map(krb5_protocol::read_secret_file) {
+        Some(Ok(bytes)) => Some(bytes),
+        Some(Err(e)) => fail(&krb5_log::klog::os_error_text(&e), creds),
+        None => None,
+    };
+    if let Some(bytes) = &bytes
+        && (bytes.len() < 2 || bytes[0] != 0x05 || !matches!(bytes[1], 0x01 | 0x02))
+    {
+        fail("Unsupported key table format version number", creds);
     }
-    server.clone()
+    let first = bytes
+        .and_then(|b| Keytab::parse(&b).ok())
+        .and_then(|kt| kt.entries.into_iter().next());
+    if let Some(entry) = first {
+        return entry.name;
+    }
+    // MIT `get_tickets` (`kprop/kprop.c:173-174`): kprop's own name is `host` and this host, made by its krb5.conf context.
+    let conf = krb5_config::load_krb5_conf().unwrap_or_default();
+    let host = krb5_config::local_host_name(&conf);
+    fail(
+        &format!("Keytab contains no suitable keys for host/{host}@{realm}"),
+        creds,
+    )
 }
 
 fn need_arg(flag: &str) -> String {

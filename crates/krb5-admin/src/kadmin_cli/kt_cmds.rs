@@ -23,12 +23,18 @@ struct Kt {
 /// default with their `%{…}` parameters expanded. `None` for a name that is not UTF-8 or whose
 /// parameters do not expand.
 fn default_keytab_name() -> Option<String> {
+    default_keytab_name_in(super::krb5_conf_paths_with_kdc())
+}
+
+/// [`default_keytab_name`] over the profile files `paths`: the KDC profile's for the KDC-side
+/// programs, krb5.conf's for kprop, whose context opens no KDC profile.
+fn default_keytab_name_in(paths: Vec<PathBuf>) -> Option<String> {
     match std::env::var("KRB5_KTNAME") {
         Ok(name) => return Some(name),
         Err(std::env::VarError::NotUnicode(_)) => return None,
         Err(std::env::VarError::NotPresent) => {}
     }
-    let name = krb5_config::load_krb5_conf_paths(super::krb5_conf_paths_with_kdc())
+    let name = krb5_config::load_krb5_conf_paths(paths)
         .ok()
         .and_then(|conf| conf.default_keytab_name)
         .unwrap_or_else(|| "FILE:/etc/krb5.keytab".to_owned());
@@ -72,6 +78,26 @@ pub(super) fn resolve(name: &str) -> Result<(KtType, &str), &'static str> {
         "MEMORY" => Ok((KtType::Memory, residual)),
         _ => Err("Unknown Key table type"),
     }
+}
+
+/// The file of the keytab `name` names, else of the default keytab ([`default_keytab_name`]),
+/// as `krb5_kt_resolve` resolves it; `Ok(None)` for a `MEMORY:` keytab, which a new process
+/// holds empty. kpropd's `-s` and its default keytab.
+pub(crate) fn keytab_file(name: Option<&str>) -> Result<Option<PathBuf>, &'static str> {
+    keytab_file_in(name, super::krb5_conf_paths_with_kdc())
+}
+
+/// [`keytab_file`] with the default keytab named in the profile files `paths`.
+pub(crate) fn keytab_file_in(
+    name: Option<&str>,
+    paths: Vec<PathBuf>,
+) -> Result<Option<PathBuf>, &'static str> {
+    let name = match name {
+        Some(n) => n.to_owned(),
+        None => default_keytab_name_in(paths).ok_or("Invalid argument")?,
+    };
+    let (ty, residual) = resolve(&name)?;
+    Ok(file_of(ty, residual))
 }
 
 /// MIT `process_keytab` (`kadmin/cli/keytab.c:67-111`): `-k NAME` (a name without a `:` is a

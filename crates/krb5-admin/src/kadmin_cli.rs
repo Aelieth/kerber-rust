@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use krb5_kdc::{Error, PrincipalStore};
 use krb5_types::PrincipalName;
 
+pub(crate) use kt_cmds::{keytab_file, keytab_file_in};
 pub(crate) use stdio::{Io, LineRead, Stdout};
 
 /// The name every message is prefixed with: MIT's `whoami`, the program's base name, which an
@@ -533,7 +534,7 @@ fn host_princstr(conf: Option<&krb5_config::Krb5Conf>) -> String {
 }
 
 /// kdc.conf, then the krb5.conf files: the profile a KDC-side context reads.
-fn krb5_conf_paths_with_kdc() -> Vec<PathBuf> {
+pub(crate) fn krb5_conf_paths_with_kdc() -> Vec<PathBuf> {
     let mut paths = vec![krb5_config::kdc_conf_path()];
     paths.extend(krb5_config::krb5_conf_paths());
     paths

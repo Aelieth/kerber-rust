@@ -136,16 +136,16 @@ fn run_line(kt: &mut Keytab, line: &str, input: &mut dyn BufRead) -> Result<Line
             let other = krb5_protocol::read_secret_file(Path::new(path))
                 .and_then(|bytes| Keytab::parse(&bytes))
                 .map_err(|e| format!("{cmd}: {} while reading keytab \"{path}\"", strerror(&e)))?;
-            kt.version = other.version;
             kt.merge(other);
             Ok(LineOutcome::Next)
         }
         "wkt" => {
             // MIT `ktutil_write_v5` (`ktutil.c:106-112`): one argument, and a failure names the keytab.
+            // MIT `ktutil_write_keytab` (`kadmin/ktutil/ktutil_funcs.c:336-358`): each entry is added to the keytab, which is made at version 2 or keeps its own.
             let [path] = args else {
                 return Err(format!("{cmd}: must specify keytab to write"));
             };
-            kt.write_file(Path::new(path))
+            kt.add_to_file(Path::new(path))
                 .map_err(|e| format!("{cmd}: {} while writing keytab \"{path}\"", strerror(&e)))?;
             Ok(LineOutcome::Next)
         }
@@ -558,6 +558,56 @@ mod tests {
             }),
         );
         assert!(failed);
+    }
+
+    /// MIT `ktutil_write_keytab` (`kadmin/ktutil/ktutil_funcs.c:336-358`): `wkt` adds each entry to the keytab: a missing file is made at version 2 (live MIT 1.22.2: `rkt` of a version-1 keytab then `wkt` to a new name writes `05 02`), an existing one keeps its version, one that is no keytab is MIT's line, and an empty list opens no file.
+    #[test]
+    fn wkt_adds_to_the_file_as_mit_s_does() {
+        let dir = krb5_testkit::scratch_dir("ktutil-wkt");
+        let user = |name: &str, kvno: u32| KeytabEntry {
+            realm: ascii("KERBER.TEST"),
+            name: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]),
+            timestamp: 1_700_000_000,
+            kvno,
+            key: ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap(),
+        };
+        let run = |kt: &mut Keytab, line: String| run_line(kt, &line, &mut io::empty()).err();
+        let mut kt = empty_kt();
+        let none = dir.join("none.kt");
+        assert_eq!(run(&mut kt, format!("wkt {}", none.display())), None);
+        assert!(!none.exists(), "an empty list opens no file");
+        let v1 = dir.join("v1.kt");
+        let mut old = empty_kt();
+        old.version = 0x0501;
+        old.entries.push(user("a", 300));
+        std::fs::write(&v1, old.to_bytes()).unwrap();
+        let new = dir.join("new.kt");
+        assert_eq!(run(&mut kt, format!("rkt {}", v1.display())), None);
+        assert_eq!(run(&mut kt, format!("wkt {}", new.display())), None);
+        assert_eq!(std::fs::read(&new).unwrap()[..2], [5, 2]);
+        let mut more = empty_kt();
+        more.entries.push(user("b", 2));
+        assert_eq!(run(&mut more, format!("wkt {}", v1.display())), None);
+        let back = std::fs::read(&v1).unwrap();
+        assert_eq!(back[..2], [5, 1]);
+        assert_eq!(Keytab::parse(&back).unwrap().entries.len(), 2);
+        let junk = dir.join("junk.kt");
+        std::fs::write(&junk, b"hello").unwrap();
+        assert_eq!(
+            run(&mut more, format!("wkt {}", junk.display())),
+            Some(format!(
+                "wkt: Unsupported key table format version number while writing keytab \"{}\"",
+                junk.display()
+            ))
+        );
+        assert_eq!(
+            run(&mut more, format!("rkt {}", junk.display())),
+            Some(format!(
+                "rkt: Unsupported key table format version number while reading keytab \"{}\"",
+                junk.display()
+            ))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# MIT ktadd keytab listed by Rust ktutil; Rust-written keytab kinit -k on MIT.
+# MIT ktadd keytab listed by Rust ktutil; Rust-written keytab kinit -k on MIT; MIT's version-1
+# keytab read, and added to as MIT ktutil's wkt adds to it, record for record.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -79,5 +80,77 @@ docker exec "$NAME" kinit -k -t /tmp/rust.keytab user@KERBER.TEST
 KLIST="$(docker exec "$NAME" klist)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
+
+echo "==== MIT version-1 keytab: Rust ktutil reads it and adds to it as MIT ktutil does ===="
+# MIT keeps an existing keytab's version (krb5_ktfileint_open): ktadd onto a file holding only the
+# version-1 header writes version-1 records in host byte order, a kvno past 255 in the 32-bit
+# field, the last record four bytes short of its size (kt_file.c:1127-1269,1314-1382). wkt adds
+# each entry the same way (ktutil_write_keytab): onto a copy of that file in version 1, and to a
+# new file at version 2.
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc -kvno 300 user'
+docker exec "$NAME" sh -c 'printf "\005\001" >/tmp/v1.keytab'
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/v1.keytab -norandkey user'
+docker exec "$NAME" od -A d -t x1 -N 10 /tmp/v1.keytab
+MITV1="$(docker exec "$NAME" klist -k -e /tmp/v1.keytab | awk '/user@KERBER.TEST/{split($0, a, /[()]/); print $1, a[2]}')"
+RUSTV1="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/v1.keytab\nlist -e\n" | /tmp/krb5-ktutil' |
+    awk '/user@KERBER.TEST/{print $2, $NF}')"
+echo "mit_v1: $(echo "$MITV1" | paste -sd,)"
+echo "rust_v1: $(echo "$RUSTV1" | paste -sd,)"
+echo "$MITV1" | grep -q '^300 '
+test "$MITV1" = "$RUSTV1"
+docker exec "$NAME" sh -c 'cp /tmp/v1.keytab /tmp/v1-mit.keytab && cp /tmp/v1.keytab /tmp/v1-rust.keytab'
+T0="$(docker exec "$NAME" date +%s)"
+for k in mit rust; do
+    if [ "$k" = mit ]; then util=ktutil; else util=/tmp/krb5-ktutil; fi
+    docker exec "$NAME" sh -c "printf 'rkt /tmp/mit.keytab\nwkt /tmp/v1-$k.keytab\n' | $util >/dev/null"
+    docker exec "$NAME" sh -c "printf 'rkt /tmp/v1.keytab\nwkt /tmp/new-$k.keytab\n' | $util >/dev/null"
+done
+T1="$(docker exec "$NAME" date +%s)"
+HEADS="$(docker exec "$NAME" sh -c 'for f in v1-mit v1-rust new-mit new-rust; do printf "%s %s\n" $f "$(od -A n -t x1 -N 2 /tmp/$f.keytab | tr -d " ")"; done')"
+echo "$HEADS"
+test "$(echo "$HEADS" | awk '{print $2}' | paste -sd,)" = "0501,0501,0502,0502"
+# Each entry wkt writes gets the time of day (krb5_ktfileint_write_entry), so the two files are
+# compared record by record with each timestamp aside: equal, or in both the time of the writes.
+ktsame() {
+    docker exec -i "$NAME" python3 - "$@" <<'PY'
+import struct, sys
+a, b, t0, t1 = sys.argv[1], sys.argv[2], int(sys.argv[3]), int(sys.argv[4])
+def stamps(path):
+    d = bytearray(open(path, "rb").read())
+    v1 = d[1] == 1
+    o = "<" if v1 else ">"
+    i, out = 2, []
+    while i + 4 <= len(d):
+        (size,) = struct.unpack_from(o + "i", d, i)
+        i += 4
+        if size == 0:
+            break
+        if size < 0:
+            i -= size
+            continue
+        j = i
+        (n,) = struct.unpack_from(o + "H", d, j)
+        j += 2
+        for _ in range(n if v1 else n + 1):
+            (ln,) = struct.unpack_from(o + "H", d, j)
+            j += 2 + ln
+        j += 0 if v1 else 4
+        out.append(struct.unpack_from(o + "I", d, j)[0])
+        d[j:j + 4] = bytes(4)
+        i += size
+    return bytes(d), out
+(da, sa), (db, sb) = stamps(a), stamps(b)
+assert da == db, "the keytabs differ beyond their timestamps"
+assert len(sa) == len(sb) and sa, (sa, sb)
+for x, y in zip(sa, sb):
+    assert x == y or (t0 <= x <= t1 and t0 <= y <= t1), (x, y, t0, t1)
+new = sum(t0 <= x <= t1 for x in sa)
+print(f"{a} = {b} but for timestamps; {new} of {len(sa)} records stamped at the write")
+PY
+}
+ktsame /tmp/v1-mit.keytab /tmp/v1-rust.keytab "$T0" "$T1"
+ktsame /tmp/new-mit.keytab /tmp/new-rust.keytab "$T0" "$T1"
+docker exec "$NAME" klist -k /tmp/v1-rust.keytab | grep -c 'user@KERBER.TEST'
+echo "v1_append=same new_file_v2=same"
 log "ktutil.gate" "ok" ',"principal":"user@KERBER.TEST"'
 exit 0

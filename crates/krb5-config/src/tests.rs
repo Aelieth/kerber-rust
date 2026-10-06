@@ -479,6 +479,8 @@ fn kdc_profile_is_the_variable_else_kdc_dir() {
         kdc_dir_path("kdc.conf")
     );
     assert_eq!(default_kdc_profile(), kdc_dir_path("kdc.conf"));
+    // MIT `KPROPD_ACL_FILE` (`osconf.hin:132-132`): kpropd's ACL beside the profile.
+    assert_eq!(default_kpropd_acl(), kdc_dir_path("kpropd.acl"));
     // The gates' KRB5_KDC_CONF alias is read only in a test-hooks build; MIT reads
     // KRB5_KDC_PROFILE alone.
     let alias = fake_env(&[("KRB5_KDC_CONF", "/b/kdc.conf")]);
@@ -1207,6 +1209,192 @@ fn ignore_acceptor_hostname_defaults_false() {
     assert!(!c.ignore_acceptor_hostname);
     let on = Krb5Conf::parse("[libdefaults]\n    ignore_acceptor_hostname = true\n").unwrap();
     assert!(on.ignore_acceptor_hostname);
+}
+
+/// MIT `qualify_shortname` (`lib/krb5/os/sn2princ.c:66-80`): an unset `qualify_shortname` leaves the domain to the resolver, and an empty one (Fedora's `""`) is still set.
+#[test]
+fn qualify_shortname_is_read_as_written() {
+    let unset = Krb5Conf::parse("[libdefaults]\n    default_realm = KERBER.TEST\n").unwrap();
+    assert_eq!(unset.qualify_shortname, None);
+    let set = |v: &str| {
+        Krb5Conf::parse(&format!("[libdefaults]\n    qualify_shortname = {v}\n"))
+            .unwrap()
+            .qualify_shortname
+    };
+    assert_eq!(set("\"\"").as_deref(), Some(""));
+    assert_eq!(set("example.com").as_deref(), Some("example.com"));
+    assert_eq!(
+        crate::expand_hostname_no_dns("KDC2", set("\"\"").as_deref(), || Some("os.test".into())),
+        "kdc2"
+    );
+}
+
+/// MIT `get_tristate` (`lib/krb5/krb/init_ctx.c:107-120`): `dns_canonicalize_hostname` is a profile boolean or `fallback` (case aside), `true` when unset.
+#[test]
+fn dns_canonicalize_hostname_is_mits_tristate() {
+    use crate::CanonHost;
+    let unset = Krb5Conf::parse("[libdefaults]\n    default_realm = KERBER.TEST\n").unwrap();
+    assert_eq!(unset.dns_canonicalize_hostname, CanonHost::True);
+    let set = |v: &str| {
+        Krb5Conf::parse(&format!(
+            "[libdefaults]\n    dns_canonicalize_hostname = {v}\n"
+        ))
+        .unwrap()
+        .dns_canonicalize_hostname
+    };
+    for v in ["fallback", "Fallback", "FALLBACK"] {
+        assert_eq!(set(v), CanonHost::Fallback, "{v}");
+    }
+    for v in ["true", "T", "yes", "y", "1", "on"] {
+        assert_eq!(set(v), CanonHost::True, "{v}");
+    }
+    for v in ["false", "nil", "no", "n", "0", "off"] {
+        assert_eq!(set(v), CanonHost::False, "{v}");
+    }
+    // `f` is no MIT boolean and not `fallback`: the profile is refused, the mode left the default.
+    assert_eq!(set("f"), CanonHost::True);
+    let bad = Krb5Conf::parse("[libdefaults]\n    dns_canonicalize_hostname = f\n").unwrap();
+    assert_eq!(bad.context_refusal, Some(crate::ProfileError::BadTristate));
+}
+
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:219-248`): a boolean the context reads that is none refuses the profile with `PROF_BAD_BOOLEAN`, ahead of a `dns_canonicalize_hostname` that is neither a boolean nor `fallback` (`EINVAL`); `y` and `t` are true.
+#[test]
+fn the_context_refuses_a_profile_as_mits_does() {
+    use crate::ProfileError;
+    let parse = |s: &str| Krb5Conf::parse(s).unwrap();
+    for rel in [
+        "allow_weak_crypto",
+        "allow_des3",
+        "allow_rc4",
+        "ignore_acceptor_hostname",
+        "enforce_ok_as_delegate",
+    ] {
+        let c = parse(&format!("[libdefaults]\n    {rel} = maybe\n"));
+        assert_eq!(c.context_refusal, Some(ProfileError::BadBoolean), "{rel}");
+    }
+    let both =
+        parse("[libdefaults]\n    dns_canonicalize_hostname = sometimes\n    allow_rc4 = maybe\n");
+    assert_eq!(both.context_refusal, Some(ProfileError::BadBoolean));
+    let ok = parse(
+        "[libdefaults]\n    allow_weak_crypto = t\n    ignore_acceptor_hostname = Y\n    rdns = maybe\n",
+    );
+    assert_eq!(ok.context_refusal, None, "rdns is no context boolean");
+    assert!(ok.allow_weak_crypto && ok.ignore_acceptor_hostname);
+    let dir = krb5_testkit::scratch_dir("context-refusal");
+    let f = dir.join("krb5.conf");
+    std::fs::write(
+        &f,
+        "[libdefaults]\n    dns_canonicalize_hostname = sometimes\n",
+    )
+    .unwrap();
+    let err = crate::load_krb5_conf_paths([&f]).unwrap_err();
+    assert_eq!(err.init_text(), "Invalid argument");
+    std::fs::write(&f, "[libdefaults]\n    allow_weak_crypto = maybe\n").unwrap();
+    let err = crate::load_krb5_conf_paths([&f]).unwrap_err();
+    assert_eq!(err.init_text(), "Invalid boolean value");
+    std::fs::write(&f, "[libdefaults]\n    request_timeout = bogus\n").unwrap();
+    let err = crate::load_krb5_conf_paths([&f]).unwrap_err();
+    assert_eq!(
+        err.init_text(),
+        "Invalid format of Kerberos lifetime or clock skew string"
+    );
+    std::fs::write(&f, "[libdefaults]\n    plugin_base_dir = %{bogus}/x\n").unwrap();
+    let err = crate::load_krb5_conf_paths([&f]).unwrap_err();
+    assert_eq!(err.init_text(), "Invalid argument");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:219-281`): the first check that fails is the context's error: the booleans, then `dns_canonicalize_hostname`, then `request_timeout`, then `plugin_base_dir`.
+#[test]
+fn the_contexts_first_failing_check_names_the_refusal() {
+    use crate::ProfileError;
+    let refusal = |s: &str| {
+        Krb5Conf::parse(&format!("[libdefaults]\n{s}"))
+            .unwrap()
+            .context_refusal
+    };
+    let all = "    plugin_base_dir = %{x}\n    request_timeout = x\n    dns_canonicalize_hostname = x\n    allow_rc4 = x\n";
+    assert_eq!(refusal(all), Some(ProfileError::BadBoolean));
+    let no_bool =
+        "    plugin_base_dir = %{x}\n    request_timeout = x\n    dns_canonicalize_hostname = x\n";
+    assert_eq!(refusal(no_bool), Some(ProfileError::BadTristate));
+    let no_tri = "    plugin_base_dir = %{x}\n    request_timeout = x\n";
+    assert_eq!(refusal(no_tri), Some(ProfileError::BadDeltat));
+    assert_eq!(
+        refusal("    plugin_base_dir = %{x}\n"),
+        Some(ProfileError::BadPathToken)
+    );
+    for good in [
+        "    request_timeout = 30s\n",
+        "    request_timeout = 1:00\n",
+        "    plugin_base_dir = %{LIBDIR}/krb5/plugins\n",
+        "    plugin_base_dir = %{LIB}/x\n",
+        "    plugin_base_dir = /usr/lib/krb5/plugins\n",
+    ] {
+        assert_eq!(refusal(good), None, "{good}");
+    }
+    for bad in [
+        "    plugin_base_dir = %{}/x\n",
+        "    plugin_base_dir = %{TEMP\n",
+        "    plugin_base_dir = %{LIBDIRX}/x\n",
+    ] {
+        assert_eq!(refusal(bad), Some(ProfileError::BadPathToken), "{bad}");
+    }
+}
+
+/// MIT `profile_node_iterator` (`util/profile/prof_tree.c:586-616`): the context reads `[libdefaults]` relations at the section's top and by their exact names, so one inside a realm's subsection, one spelled otherwise, or one in `[LibDefaults]` is not read and refuses nothing.
+#[test]
+fn the_context_reads_only_top_level_relations_by_name() {
+    let parse = |s: &str| Krb5Conf::parse(s).unwrap();
+    for text in [
+        "[libdefaults]\n    KERBER.TEST = {\n        allow_weak_crypto = maybe\n    }\n",
+        "[libdefaults]\n    KERBER.TEST =\n    {\n        dns_canonicalize_hostname = sometimes\n    }\n",
+        "[libdefaults]\n    Allow_Weak_Crypto = maybe\n",
+        "[libdefaults]\n    Request_Timeout = bogus\n",
+        "[LibDefaults]\n    allow_weak_crypto = maybe\n",
+    ] {
+        let c = parse(text);
+        assert_eq!(c.context_refusal, None, "{text}");
+        assert!(!c.allow_weak_crypto, "{text}");
+    }
+    let after = parse(
+        "[libdefaults]\n    R = {\n        allow_weak_crypto = maybe\n        qualify_shortname = sub.test\n    }\n    allow_weak_crypto = true\n",
+    );
+    assert_eq!(after.context_refusal, None);
+    assert!(
+        after.allow_weak_crypto,
+        "the top-level relation after the subsection"
+    );
+    assert_eq!(after.qualify_shortname, None);
+}
+
+/// MIT `parse_std_line` (`util/profile/prof_parse.c:75-212`): only a lone, unquoted `{` (blanks after it aside) opens a subsection, so a context relation after `= {aes}`, `= "{"` or `= { # c` is at the section's top and refuses the profile; a `*` ends a tag, so `allow_weak_crypto*` is that relation.
+#[test]
+fn only_a_lone_brace_opens_a_subsection_and_a_star_ends_a_name() {
+    let parse = |s: &str| Krb5Conf::parse(s).unwrap();
+    for text in [
+        "[libdefaults]\n    default_tkt_enctypes = {aes}\n    allow_weak_crypto = maybe\n",
+        "[libdefaults]\n    default_tkt_enctypes = \"{\"\n    allow_weak_crypto = maybe\n",
+        "[libdefaults]\n    KERBER.TEST = { # c\n    allow_weak_crypto = maybe\n",
+        "[libdefaults]\n    allow_weak_crypto* = maybe\n",
+        "[libdefaults]\n    allow_weak_crypto*x = maybe\n",
+    ] {
+        assert_eq!(
+            parse(text).context_refusal,
+            Some(crate::ProfileError::BadBoolean),
+            "{text}"
+        );
+    }
+    let blanks =
+        parse("[libdefaults]\n    KERBER.TEST = {  \t\n        allow_weak_crypto = maybe\n    }\n");
+    assert_eq!(
+        blanks.context_refusal, None,
+        "a `{{` with blanks after it opens one"
+    );
+    assert_eq!(
+        parse("[libdefaults]\n    default_tkt_enctypes = {aes}\n").default_tkt_enctypes,
+        parse("[libdefaults]\n    default_tkt_enctypes = \"{aes}\"\n").default_tkt_enctypes,
+    );
 }
 
 fn wild(port: u16) -> crate::listen::ListenAddr {

@@ -261,7 +261,6 @@ KPROP="$(docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/iprop.keytab \
     "$NAME" /tmp/krb5-kprop -i -P 754 -s /tmp/iprop.keytab -n testhost.kerber.test testhost.kerber.test 2>&1 || true)"
 echo "$KPROP"
 echo "$KPROP" | grep -q 'kprop ok'
@@ -403,7 +402,6 @@ KPROP2="$(docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/iprop.keytab \
     "$NAME" /tmp/krb5-kprop -i -P 754 -s /tmp/iprop.keytab -n testhost.kerber.test testhost.kerber.test 2>&1 || true)"
 echo "$KPROP2"
 echo "$KPROP2" | grep -q 'kprop ok'

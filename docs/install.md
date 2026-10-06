@@ -51,7 +51,8 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   `kvno -U` does not first ask the KDC for the user's realm.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
   compared with MIT's tools may read differently from MIT's text.
-- `[libdefaults] request_timeout` is ignored.
+- `[libdefaults] request_timeout` is only checked (a malformed one stops a program, as MIT's
+  context does); its value is ignored.
 - `ktutil` has no `?` request, does not echo requests, and lists entries in its own format.
 - `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
   for the host's canonical name.
@@ -580,11 +581,15 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 - MIT's database files (db2, LMDB) and the LDAP backend. The database is MIT's dump format, so an
   MIT realm moves over with dump and load.
 - Replica KDCs: Fedora's `kprop.service` and MIT's `kpropd` daemon. `kprop` and `kpropd` are
-  installed and open the dump with the stash, but `kpropd` takes only `-r` and an address
-  (without one it listens on port 754 of every address, as MIT's does), not MIT's other options
-  (`-s`, `-a`, `-f`, `-P`, `--pid-file`, `-D`): its keytab and ACL come from
-  `KRB5_KPROP_KEYTAB` and `KRB5_KPROP_ACL`, and it does not detach. So `make install` installs
-  no `kprop.service`.
+  installed and open the dump with the stash. `kpropd` takes MIT's `-r`, `-s` (else the default
+  keytab) and `-a` (else `kpropd.acl` in the KDC directory) and an address (without one it
+  listens on port 754 of every address, as MIT's does), not MIT's other options (`-f`, `-P`,
+  `--pid-file`, `-D`), and it does not detach. As MIT's, it accepts a ticket for its own
+  `host/<this host>` only, its name as MIT makes it without DNS: a hostname without a dot gains
+  `qualify_shortname`, else the resolver's first search domain, and is lowercased. MIT's DNS
+  canonicalization (`dns_canonicalize_hostname = true`, its default, and the second step of
+  `fallback`) is not ported, so the replica's keytab entry and `kprop`'s target must be that name.
+  `kprop` takes `-s`, else the default keytab. So `make install` installs no `kprop.service`.
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
 - OTP and RADIUS preauthentication, PKINIT configured in `kdc.conf`, master key rollover

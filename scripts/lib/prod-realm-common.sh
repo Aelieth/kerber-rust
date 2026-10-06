@@ -93,20 +93,16 @@ prod_kprop_replica() {
     docker exec "$REPLICA" sh -c "printf '%s@%s\\n' '$HOST_REPLICA' '$REALM' >/tmp/kpropd.acl"
     docker exec -d \
         -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
-        -e KRB5_KPROP_KEYTAB=/tmp/kdc2.keytab \
-        -e KRB5_KPROP_ACL=/tmp/kpropd.acl \
         -e KRB5_KDC_DB=/tmp/replica.db \
         -e KRB5_KDC_STASH=/tmp/replica.stash \
-        -e KRB5_KDC_REALM="$REALM" \
         -e RUST_LOG=info \
-        "$REPLICA" sh -c '/usr/local/bin/krb5-kpropd 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+        "$REPLICA" sh -c "/usr/local/bin/krb5-kpropd -r '$REALM' -s /tmp/kdc2.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1"
     prod_wait_log "$REPLICA" /tmp/kpropd.log '^listening' 40 || return 1
 
     docker exec \
         -e KRB5_KDC_DB=/tmp/prod.db \
         -e KRB5_KDC_STASH=/tmp/prod.stash \
         -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
-        -e KRB5_KPROP_KEYTAB=/tmp/kdc2.keytab \
         "$PRIMARY" /usr/local/bin/krb5-kprop -P 754 -s /tmp/kdc2.keytab -n "$REPLICA_FQDN" "$REPLICA_FQDN" \
         | tee "$OUT/kprop.log" | grep -q 'kprop ok' || return 1
 

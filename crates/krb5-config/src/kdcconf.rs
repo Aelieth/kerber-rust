@@ -435,6 +435,13 @@ pub fn default_acl_file() -> PathBuf {
     Path::new(KDC_DIR).join("kadm5.acl")
 }
 
+/// `KDC_DIR/kpropd.acl`.
+/// MIT `KPROPD_ACL_FILE` (`osconf.hin:132-132`): kpropd's ACL file when `-a` names none.
+#[must_use]
+pub fn default_kpropd_acl() -> PathBuf {
+    Path::new(KDC_DIR).join("kpropd.acl")
+}
+
 /// `KDC_DIR/.k5.<realm>`.
 /// MIT `krb5_def_store_mkey_list` (`kdb_default.c:126-129`): `DEFAULT_KEYFILE_STUB` plus the
 /// realm when no `key_stash_file` is set.

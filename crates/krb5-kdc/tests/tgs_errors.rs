@@ -211,15 +211,32 @@ fn hostile_keytab_does_not_panic() {
     assert!(r.is_ok());
     assert!(r.unwrap().is_err());
     let non_ascii = {
+        // One whole aes128-cts-hmac-sha1-96 record whose realm is the byte 0x80.
+        let mut body = vec![0x00, 0x01, 0x00, 0x01, 0x80, 0x00, 0x01, b'a'];
+        body.extend_from_slice(&1i32.to_be_bytes());
+        body.extend_from_slice(&0u32.to_be_bytes());
+        body.push(1);
+        body.extend_from_slice(&17u16.to_be_bytes());
+        body.extend_from_slice(&16u16.to_be_bytes());
+        body.extend_from_slice(&[0u8; 16]);
         let mut v = vec![0x05, 0x02];
-        // size 8, then garbage including 0x80
-        v.extend_from_slice(&8i32.to_be_bytes());
-        v.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00]);
+        v.extend_from_slice(&i32::try_from(body.len()).unwrap().to_be_bytes());
+        v.extend_from_slice(&body);
         v
     };
     let r = catch_unwind(|| krb5_protocol::Keytab::parse(&non_ascii));
     assert!(r.is_ok());
     assert!(r.unwrap().is_err());
+    // MIT `krb5_ktfileint_internal_read_entry` (`kt_file.c:1003-1006`): a component length of 0
+    // ends the keytab before its realm is looked at.
+    let zero_component = {
+        let mut v = vec![0x05, 0x02];
+        v.extend_from_slice(&8i32.to_be_bytes());
+        v.extend_from_slice(&[0x00, 0x01, 0x00, 0x01, 0x80, 0x00, 0x00, 0x00]);
+        v
+    };
+    let r = catch_unwind(|| krb5_protocol::Keytab::parse(&zero_component));
+    assert!(r.unwrap().unwrap().entries.is_empty());
 }
 
 #[test]

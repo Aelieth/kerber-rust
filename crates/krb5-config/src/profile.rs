@@ -270,6 +270,10 @@ fn parse_into(
     mut stack: Option<&mut Vec<PathBuf>>,
 ) -> Result<(), Error> {
     let mut section = String::new();
+    // Whether the section header is `[libdefaults]` exactly, and how deep in a subsection of it
+    // a line is: the relations `krb5_init_context` reads are only those at its top, by name.
+    let mut libdefaults_exact = false;
+    let mut libdefaults_depth = 0usize;
     let mut realm: Option<String> = None;
     let mut capaths_client: Option<String> = None;
     let text = join_subsection_braces(text)?;
@@ -302,6 +306,8 @@ fn parse_into(
         }
         if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             section = s.trim().to_ascii_lowercase();
+            libdefaults_exact = s == "libdefaults";
+            libdefaults_depth = 0;
             realm = None;
             capaths_client = None;
             continue;
@@ -321,7 +327,13 @@ fn parse_into(
             continue;
         }
         if section == "libdefaults" {
-            parse_libdefaults(conf, seen, line);
+            if line.starts_with('}') {
+                libdefaults_depth = libdefaults_depth.saturating_sub(1);
+            } else if opens_subsection(line) {
+                libdefaults_depth += 1;
+            }
+            let top = libdefaults_exact && libdefaults_depth == 0;
+            parse_libdefaults(conf, seen, line, top);
         }
         if section == "domain_realm"
             && let Some((d, r)) = split_kv(line)
@@ -444,24 +456,64 @@ fn load_dir_into(
     Ok(())
 }
 
+/// Whether a relation line opens a subsection: its value is a `{` alone, unquoted (a relation with
+/// no value has been joined to the `{` of the next line by [`join_subsection_braces`]).
+/// MIT `parse_std_line` (`util/profile/prof_parse.c:75-212`): a value that starts with a quote is a string, and a `{` opens a subsection only when nothing but blanks follows it.
+fn opens_subsection(line: &str) -> bool {
+    line.split_once('=')
+        .is_some_and(|(_, v)| v.trim_matches(c_isspace) == "{")
+}
+
+/// C `isspace` in the C locale: space, tab, newline, vertical tab, form feed, carriage return.
+const fn c_isspace(c: char) -> bool {
+    matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r')
+}
+
+/// A relation's name as MIT's profile stores it: the tag up to its first `*`, which marks the
+/// relation final.
+/// MIT `parse_std_line` (`util/profile/prof_parse.c:75-212`): a `*` in the tag ends the name, the relation being final.
+fn relation_name(tag: &str) -> &str {
+    tag.split_once('*').map_or(tag, |(name, _)| name)
+}
+
 /// MIT `profile_get_string` (`prof_get.c:265-270`): a missing relation keeps the default, and
 /// a found value is what is returned.
-/// The first occurrence of a key wins, and a line with no equals sign is not a setting.
-fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &str) {
-    let Some((k, v)) = split_kv(line) else {
+/// The first occurrence of a key wins, and a line with no equals sign is not a setting. The
+/// relations `krb5_init_context` reads (and `qualify_shortname`) count only when `top` (a line at
+/// the top of an exactly named `[libdefaults]`) and spelled exactly.
+/// MIT `profile_node_iterator` (`util/profile/prof_tree.c:586-616`): a lookup by section and name matches each by `strcmp`, a relation inside a subsection being under another name.
+fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &str, top: bool) {
+    let Some((tag, v)) = split_kv(line) else {
         return;
     };
+    let k = relation_name(tag);
     let key = k.to_ascii_lowercase();
+    let exact = top && k == key;
     match key.as_str() {
         "default_realm" if take_first(seen, "default_realm") => conf.default_realm = Some(v),
-        "allow_weak_crypto" if take_first(seen, "allow_weak_crypto") => {
-            conf.allow_weak_crypto = truthy(&v);
+        "allow_weak_crypto" if exact && take_first(seen, "allow_weak_crypto") => {
+            conf.allow_weak_crypto = context_boolean(conf, &v);
         }
-        "allow_rc4" if take_first(seen, "allow_rc4") => {
-            conf.allow_rc4 = Some(truthy(&v));
+        "allow_rc4" if exact && take_first(seen, "allow_rc4") => {
+            conf.allow_rc4 = Some(context_boolean(conf, &v));
         }
-        "allow_des3" if take_first(seen, "allow_des3") => {
-            conf.allow_des3 = Some(truthy(&v));
+        "allow_des3" if exact && take_first(seen, "allow_des3") => {
+            conf.allow_des3 = Some(context_boolean(conf, &v));
+        }
+        "enforce_ok_as_delegate" if exact && take_first(seen, "enforce_ok_as_delegate") => {
+            context_boolean(conf, &v);
+        }
+        "request_timeout" if exact && take_first(seen, "request_timeout") => {
+            // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:254-263`): a `request_timeout` `krb5_string_to_deltat` refuses fails the context.
+            if krb5_types::deltat::parse(&v).is_err() {
+                refuse(conf, ProfileError::BadDeltat);
+            }
+        }
+        "plugin_base_dir" if exact && take_first(seen, "plugin_base_dir") => {
+            // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:272-281`): a `plugin_base_dir` whose tokens do not expand fails the context.
+            if !path_tokens_expand(&v) {
+                refuse(conf, ProfileError::BadPathToken);
+            }
         }
         "clockskew" if take_first(seen, "clockskew") => {
             conf.clockskew = parse_duration_secs(&v)
@@ -518,8 +570,17 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
         "preferred_preauth_types" if take_first(seen, "preferred_preauth_types") => {
             conf.preferred_preauth_types = parse_i32_list(&v);
         }
-        "ignore_acceptor_hostname" if take_first(seen, "ignore_acceptor_hostname") => {
-            conf.ignore_acceptor_hostname = truthy(&v);
+        "ignore_acceptor_hostname" if exact && take_first(seen, "ignore_acceptor_hostname") => {
+            conf.ignore_acceptor_hostname = context_boolean(conf, &v);
+        }
+        "qualify_shortname" if exact && take_first(seen, "qualify_shortname") => {
+            conf.qualify_shortname = Some(v);
+        }
+        "dns_canonicalize_hostname" if exact && take_first(seen, "dns_canonicalize_hostname") => {
+            match canon_host(&v) {
+                Some(mode) => conf.dns_canonicalize_hostname = mode,
+                None => refuse(conf, ProfileError::BadTristate),
+            }
         }
         _ => {}
     }
@@ -629,8 +690,76 @@ fn parse_quoted_string(s: &str) -> String {
     out
 }
 
+/// A profile boolean as MIT reads one; `None` for a value that is none.
+/// MIT `profile_parse_boolean` (`util/profile/prof_get.c:354-368`): `y yes true t 1 on` and `n no false nil 0 off`, without case; anything else is `PROF_BAD_BOOLEAN`.
+pub(super) fn mit_boolean(v: &str) -> Option<bool> {
+    match v.to_ascii_lowercase().as_str() {
+        "y" | "yes" | "true" | "t" | "1" | "on" => Some(true),
+        "n" | "no" | "false" | "nil" | "0" | "off" => Some(false),
+        _ => None,
+    }
+}
+
+/// A profile boolean, a value that is none being false.
 pub(super) fn truthy(v: &str) -> bool {
-    matches!(v.to_ascii_lowercase().as_str(), "true" | "yes" | "1" | "on")
+    mit_boolean(v).unwrap_or(false)
+}
+
+/// A boolean `krb5_init_context` reads; a value that is none marks the profile refused.
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:219-242`): a bad `allow_weak_crypto`, `allow_des3`, `allow_rc4`, `ignore_acceptor_hostname` or `enforce_ok_as_delegate` fails the context.
+fn context_boolean(conf: &mut Krb5Conf, v: &str) -> bool {
+    mit_boolean(v).unwrap_or_else(|| {
+        refuse(conf, ProfileError::BadBoolean);
+        false
+    })
+}
+
+/// Mark the profile refused with `why`, unless a check `krb5_init_context` makes first already
+/// refused it.
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:219-281`): the booleans, then `dns_canonicalize_hostname`, then `request_timeout`, then `plugin_base_dir`; the first that fails is the context's error.
+fn refuse(conf: &mut Krb5Conf, why: ProfileError) {
+    if conf
+        .context_refusal
+        .is_none_or(|first| first.context_rank() > why.context_rank())
+    {
+        conf.context_refusal = Some(why);
+    }
+}
+
+/// Whether MIT's `k5_expand_path_tokens` expands `path`: each `%{` needs its `}`, and the text
+/// between must be one of MIT's token names or, as `strncmp` over its own length compares it,
+/// the start of one.
+/// MIT `expand_token` (`lib/krb5/os/expand_path.c:403-422`): an empty token, or one no table name starts with, is `EINVAL`.
+/// MIT `k5_expand_path_tokens_extra` (`lib/krb5/os/expand_path.c:500-506`): a `%{` with no `}` is `EINVAL`.
+fn path_tokens_expand(path: &str) -> bool {
+    const TOKENS: [&str; 9] = [
+        "LIBDIR", "BINDIR", "SBINDIR", "euid", "username", "TEMP", "USERID", "uid", "null",
+    ];
+    let mut rest = path;
+    while let Some(start) = rest.find("%{") {
+        let after = &rest[start + 2..];
+        let Some(end) = after.find('}') else {
+            return false;
+        };
+        let token = &after[..end];
+        if token.is_empty() || !TOKENS.iter().any(|t| t.starts_with(token)) {
+            return false;
+        }
+        rest = &after[end + 1..];
+    }
+    true
+}
+
+/// A `dns_canonicalize_hostname` value: MIT's booleans, else `fallback` (case aside); `None` for
+/// a value that is neither, which makes MIT's context fail (`EINVAL`).
+/// MIT `get_tristate` (`lib/krb5/krb/init_ctx.c:107-120`): `profile_get_boolean`, else the third option's name compared without case.
+fn canon_host(v: &str) -> Option<super::CanonHost> {
+    match mit_boolean(v) {
+        Some(true) => Some(super::CanonHost::True),
+        Some(false) => Some(super::CanonHost::False),
+        None if v.eq_ignore_ascii_case("fallback") => Some(super::CanonHost::Fallback),
+        None => None,
+    }
 }
 
 fn parse_endpoint(v: &str) -> Endpoint {
@@ -723,6 +852,10 @@ pub fn load_krb5_conf_paths<P: AsRef<Path>>(
         }
     }
     if any {
+        // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:219-248`): a context boolean that is none, or a `dns_canonicalize_hostname` that is neither one nor `fallback`, fails the context.
+        if let Some(p) = conf.context_refusal {
+            return Err(Error::Profile(p, p.text().to_owned()));
+        }
         Ok(conf)
     } else {
         Err(access

@@ -12,13 +12,16 @@ need_bins krb5-kdc krb5-kpropd krb5-kadmind
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-prop-acl-gate"
+# The Rust kpropd's ACL without -a: kpropd.acl in the KDC directory the build compiled in.
+DEFAULT_ACL="${KERBER_KDC_DIR:-/var/kerberos/krb5kdc}/kpropd.acl"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 mkdir -p "$SCRATCH"
 
 need_image
 
-shell_container
+# A host name with a dot, as the shared shell's: kpropd's own name is then the hostname as it is.
+shell_container 3600 testhost.kerber.test
 
 if ! docker exec "$NAME" sh -c 'command -v kprop >/dev/null'; then
     log "propacl.gate" "error" ',"error":"kprop binary missing"'
@@ -73,15 +76,17 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-echo "==== Rust kpropd unset ACL (deny even host/ peers) ===="
+echo "==== Rust kpropd without -a and no kpropd.acl in the KDC directory (deny even host/ peers) ===="
+# MIT `acl_file_name` (kpropd.c:137): without -a the ACL is KPROPD_ACL_FILE, KDC_DIR/kpropd.acl,
+# here the debug build's /var/kerberos/krb5kdc/kpropd.acl. None is there, so nobody is authorized.
+docker exec "$NAME" rm -f "$DEFAULT_ACL"
 kill_comm krb5-kpropd
 docker exec -d \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd 127.0.0.1:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -96,9 +101,9 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-echo "==== unauthorized MIT kprop (ACL unset) ===="
+echo "==== unauthorized MIT kprop (no -a, no default kpropd.acl) ===="
 UNSET="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf \
-    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
+    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true)"
 echo "$UNSET"
 require_log "$NAME" /tmp/kpropd.log 'Rejected connection from unauthorized principal' "unauthorized reject in /tmp/kpropd.log"
 UNSET_LOG="$(docker exec "$NAME" cat /tmp/kpropd.log 2>/dev/null || true)"
@@ -118,12 +123,10 @@ echo "==== Rust kpropd empty ACL (deny all MIT GSS peers) ===="
 kill_comm krb5-kpropd
 docker exec -d \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
-    -e KRB5_KPROP_ACL=/tmp/kpropd.acl.empty \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd 127.0.0.1:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl.empty 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -140,7 +143,7 @@ fi
 
 echo "==== unauthorized MIT kprop (empty allowlist) ===="
 BAD="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf \
-    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
+    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true)"
 echo "$BAD"
 require_log "$NAME" /tmp/kpropd.log 'Rejected connection from unauthorized principal' "unauthorized reject in /tmp/kpropd.log"
 KPD="$(docker exec "$NAME" cat /tmp/kpropd.log 2>/dev/null || true)"
@@ -159,12 +162,10 @@ echo "==== Rust kpropd with host allowlist ===="
 kill_comm krb5-kpropd
 docker exec -d \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
-    -e KRB5_KPROP_ACL=/tmp/kpropd.acl \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd 127.0.0.1:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -181,10 +182,39 @@ fi
 
 echo "==== authorized MIT kprop as host ===="
 GOOD="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf \
-    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
+    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true)"
 echo "$GOOD"
 echo "$GOOD" | grep -q 'SUCCEEDED'
 docker exec "$NAME" test -f /tmp/replica
+
+echo "==== Rust kpropd without -a, the host allowlist in the KDC directory's kpropd.acl ===="
+docker exec "$NAME" sh -c "cp /tmp/kpropd.acl '$DEFAULT_ACL'; rm -f /tmp/replica"
+kill_comm krb5-kpropd
+docker exec -d \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/replica \
+    -e KRB5_KDC_STASH=/tmp/replica.stash \
+    -e KRB5_TEST_REALM=KERBER.TEST \
+    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+ok=0
+for _ in $(seq 1 40); do
+    if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kpropd.log >&2 || true
+    log "propacl.gate" "error" ',"error":"kpropd (default ACL) did not listen"'
+    exit 1
+fi
+DEF="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf \
+    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true)"
+echo "$DEF"
+echo "$DEF" | grep -q 'SUCCEEDED'
+docker exec "$NAME" test -f /tmp/replica
+docker exec "$NAME" rm -f "$DEFAULT_ACL"
 
 echo "==== C2 kpropd.acl semantics, MIT kpropd vs Rust kpropd (kpropd.c:1298-1348 authorized_principal) ===="
 # authorized_principal: fopen per connection; a line matches when it starts
@@ -214,12 +244,10 @@ fi
 kill_comm krb5-kpropd
 docker exec -d \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
-    -e KRB5_KPROP_ACL=/tmp/kpropd.acl.case \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl.case 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -301,8 +329,131 @@ retry_until --log "$NAME" /tmp/kpropd-mit.log -- 200 "MIT kpropd etype line" \
 MIT_ETYPE="$(docker exec "$NAME" grep -a 'authenticated client' /tmp/kpropd-mit.log | head -1 || true)"
 echo "$MIT_ETYPE"
 echo "$MIT_ETYPE" | grep -F "authenticated client: host/${HN}@KERBER.TEST (etype == aes256-cts-hmac-sha384-192)"
+
+echo "==== a ticket for host/localhost, whose key the keytab holds, is refused by both kpropds ===="
+# kpropd.c:1258: recvauth takes kpropd's own principal, host/${HN}, as the server, so a ticket for
+# another principal of the keytab is KRB5KRB_AP_ERR_NOT_US; nothing is received.
+# The replica the MIT kinit leg below serves is set aside, so a written one would show.
+docker exec "$NAME" sh -c 'rm -f /tmp/mit-rep.dump; mv /tmp/replica /tmp/replica.kept'
+for port in 1754 754; do
+    other="$( (docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P "$port" -d localhost 2>&1 || true) | tr -d '\r')"
+    echo "kprop to localhost:$port: $other"
+    echo "$other" | grep -qF "The ticket isn't for us signalled from server" \
+        || die "kpropd on $port did not refuse a ticket for host/localhost as MIT's"
+done
+if docker exec "$NAME" test -f /tmp/mit-rep.dump || docker exec "$NAME" test -f /tmp/replica; then
+    die "a refused ticket wrote a dump"
+fi
+docker exec "$NAME" mv /tmp/replica.kept /tmp/replica
 kill_comm kpropd
 echo "c2_kpropd_acl_semantics=identical"
+
+echo "==== a short hostname: both kpropds answer as its qualified name ===="
+# MIT `sn2princ_realm` (kprop_util.c:33-55) through `expand_hostname` (sn2princ.c:121-144): without
+# DNS (the image's krb5.conf sets dns_canonicalize_hostname = false) a hostname without a dot gains
+# qualify_shortname, else the resolver's first search domain, and is lowercased. A replica named
+# kdc2 whose resolv.conf searches kerber.test answers as host/kdc2.kerber.test, and with kdc.conf's
+# qualify_shortname = "" as host/kdc2, which its keytab lacks. MIT kprop runs on the replica as
+# host/kdc2.kerber.test, its tickets from the MIT KDC above.
+SHORT="${NAME}-short"
+docker rm -f "$SHORT" >/dev/null 2>&1 || true
+docker run -d --name "$SHORT" --hostname kdc2 --dns-search kerber.test \
+    --add-host kdc2.kerber.test:127.0.0.1 --entrypoint sleep "$IMAGE" 900 >/dev/null
+register_cleanup "docker rm -f '$SHORT' >/dev/null 2>&1 || true"
+MAIN_IP="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NAME")"
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "addprinc -randkey host/kdc2.kerber.test"
+docker exec "$NAME" rm -f /tmp/kdc2.keytab
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q "ktadd -k /tmp/kdc2.keytab host/kdc2.kerber.test"
+for f in kdc2.keytab dump; do
+    docker exec "$NAME" cat "/tmp/$f" | docker exec -i "$SHORT" sh -c "cat >/tmp/$f"
+done
+# MIT kprop sends a dump only beside a dump_ok file no older than it (kprop.c:369-382).
+docker exec "$SHORT" touch /tmp/dump.dump_ok
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpropd" "$SHORT":/tmp/krb5-kpropd
+docker exec "$SHORT" sh -c "chmod +x /tmp/krb5-kpropd
+    printf 'host/kdc2.kerber.test@KERBER.TEST\\n' >/tmp/kpropd.acl
+    sed 's/127.0.0.1/$MAIN_IP/' /etc/krb5.conf >/tmp/kprop-krb5.conf
+    cp /etc/krb5kdc/kdc.conf /tmp/kdc-noq.conf"
+docker exec -i "$SHORT" sh -c 'cat >>/tmp/kdc-noq.conf' <<'KDCEOF'
+
+[libdefaults]
+    qualify_shortname = ""
+KDCEOF
+docker exec "$SHORT" sh -c 'hostname; grep -E "^(search|domain)" /etc/resolv.conf; grep dns_canonicalize_hostname /etc/krb5.conf; tail -2 /tmp/kdc-noq.conf'
+# short_kpropds <kdc profile> <MIT port> <Rust port>: MIT kpropd and the Rust kpropd on the replica.
+short_kpropds() {
+    local prof=$1 mport=$2 rport=$3
+    docker exec -d -e KRB5_KDC_PROFILE="$prof" "$SHORT" sh -c "kpropd -S -d -s /tmp/kdc2.keytab -a /tmp/kpropd.acl -P $mport -f /tmp/mit-rep-$mport.dump -p /bin/true >/tmp/kpropd-mit-$mport.log 2>&1"
+    docker exec -d -e KRB5_KDC_PROFILE="$prof" \
+        -e KRB5_MASTER_PASSWORD=masterpassword \
+        -e KRB5_KDC_DB="/tmp/replica-$rport" \
+        -e KRB5_KDC_STASH="/tmp/replica-$rport.stash" \
+        -e KRB5_TEST_REALM=KERBER.TEST \
+        "$SHORT" sh -c "/tmp/krb5-kpropd -s /tmp/kdc2.keytab -a /tmp/kpropd.acl 0.0.0.0:$rport >/tmp/kpropd-$rport.log 2>&1"
+    require_log "$SHORT" "/tmp/kpropd-mit-$mport.log" 'ready|waiting for a kprop' "MIT kpropd on $mport"
+    require_log "$SHORT" "/tmp/kpropd-$rport.log" '^listening ' "Rust kpropd on $rport"
+}
+short_kprop() {
+    (docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf "$SHORT" kprop -f /tmp/dump -s /tmp/kdc2.keytab -P "$1" -d kdc2.kerber.test 2>&1 || true) | tr -d '\r'
+}
+short_kpropds /etc/krb5kdc/kdc.conf 1754 754
+short_kpropds /tmp/kdc-noq.conf 1755 755
+for port in 1754 754; do
+    out="$(short_kprop "$port")"
+    echo "kprop to kdc2.kerber.test:$port (resolv.conf's search domain): $out"
+    echo "$out" | grep -q 'SUCCEEDED' || die "kpropd on $port did not answer as host/kdc2.kerber.test"
+done
+docker exec "$SHORT" test -f /tmp/mit-rep-1754.dump
+docker exec "$SHORT" test -f /tmp/replica-754
+docker exec "$SHORT" grep -aF 'krb5_recvauth(4, kprop5_01, host/kdc2.kerber.test@KERBER.TEST' /tmp/kpropd-mit-1754.log
+for port in 1755 755; do
+    out="$(short_kprop "$port")"
+    echo "kprop to kdc2.kerber.test:$port (qualify_shortname = \"\"): $out"
+    echo "$out" | grep -qF 'Service key not available signalled from server' \
+        || die "kpropd on $port did not refuse as host/kdc2"
+done
+if docker exec "$SHORT" test -f /tmp/mit-rep-1755.dump || docker exec "$SHORT" test -f /tmp/replica-755; then
+    die "a kpropd that is host/kdc2 took a ticket for host/kdc2.kerber.test"
+fi
+docker exec "$SHORT" grep -aF 'krb5_recvauth(4, kprop5_01, host/kdc2@KERBER.TEST' /tmp/kpropd-mit-1755.log
+
+echo "==== a profile MIT's context refuses stops both kpropds; one it reads past starts both ===="
+# MIT `krb5_init_context_profile` (init_ctx.c:219-281): in order, a boolean the context reads that
+# is none (PROF_BAD_BOOLEAN), a dns_canonicalize_hostname neither a boolean nor fallback (EINVAL), a
+# request_timeout that is no interval (KRB5_DELTAT_BADFORMAT) or a plugin_base_dir whose tokens do
+# not expand (EINVAL) fails it, and kpropd prints the error `while initializing krb5` and exits 1.
+# It reads only top-level [libdefaults] relations by their exact names (prof_tree.c:586-616), so one
+# in a realm's subsection, or spelled otherwise, refuses nothing: both kpropds start.
+docker exec "$SHORT" sh -c 'for v in tri:"dns_canonicalize_hostname = sometimes" bool:"allow_weak_crypto = maybe" \
+        timeout:"request_timeout = bogus" plugin:"plugin_base_dir = %{bogus}/x" case:"Allow_Weak_Crypto = maybe" \
+        sub:"KERBER.TEST = {
+        allow_weak_crypto = maybe
+    }"; do
+        cp /etc/krb5kdc/kdc.conf "/tmp/kdc-${v%%:*}.conf"
+        printf "\n[libdefaults]\n    %s\n" "${v#*:}" >>"/tmp/kdc-${v%%:*}.conf"
+    done'
+for c in "tri:Invalid argument" "bool:Invalid boolean value" \
+    "timeout:Invalid format of Kerberos lifetime or clock skew string" "plugin:Invalid argument" \
+    "sub:" "case:"; do
+    prof="/tmp/kdc-${c%%:*}.conf"
+    text="${c#*:}"
+    mit="$(docker exec -e KRB5_KDC_PROFILE="$prof" "$SHORT" sh -c \
+        'timeout 3 kpropd -S -d -s /tmp/kdc2.keytab -P 1756 2>&1; echo "rc=$?"' | tr -d '\r')"
+    rust="$(docker exec -e KRB5_KDC_PROFILE="$prof" "$SHORT" sh -c \
+        'timeout 3 /tmp/krb5-kpropd -s /tmp/kdc2.keytab 0.0.0.0:756 2>&1; echo "rc=$?"')"
+    echo "$prof: MIT [$mit] Rust [$rust]"
+    if [ -n "$text" ]; then
+        want="$text while initializing krb5"
+        { echo "$mit" | grep -qxF "kpropd: $want" && echo "$mit" | grep -qx 'rc=1'; } \
+            || die "MIT kpropd did not stop on $prof"
+        { echo "$rust" | grep -qxF "/tmp/krb5-kpropd: $want" && echo "$rust" | grep -qx 'rc=1'; } \
+            || die "Rust kpropd did not stop on $prof"
+    else
+        echo "$mit" | grep -qx 'rc=124' || die "MIT kpropd did not start on $prof"
+        echo "$rust" | grep -qx 'rc=124' || die "Rust kpropd did not start on $prof"
+    fi
+done
+docker rm -f "$SHORT" >/dev/null 2>&1 || true
 
 echo "==== MIT kinit user against replica ===="
 kill_comm krb5kdc
@@ -337,5 +488,5 @@ KLIST="$(docker exec -e KRB5_CONFIG=/tmp/prop-krb5.conf "$NAME" klist)"
 echo "$KLIST"
 echo "$KLIST" | grep -q 'user@KERBER.TEST'
 
-log "propacl.gate" "ok" ',"unauthorized_refused":true,"unset_acl_refused":true,"authorized_kprop":true'
+log "propacl.gate" "ok" ',"unauthorized_refused":true,"unset_acl_refused":true,"authorized_kprop":true,"default_acl_authorized":true,"other_principal_refused":true,"short_hostname_qualified":true,"bad_context_refused":true'
 exit 0

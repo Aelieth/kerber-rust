@@ -11,21 +11,21 @@ use std::net::TcpStream;
 use std::path::Path;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{CipherState, EncryptionType, KeyUsage, ProtocolKey, encrypt};
+use krb5_crypto::{CipherState, EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::{
     LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, dump_store_iprop,
     dump_store_iprop_with_key, dump_store_with_key, load_dump, load_dump_with_stash,
     save_store_fresh,
 };
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, RemoteSeq, ReplayCache,
-    build_ap_req_mutual_seq, build_krb_priv_chained, build_krb_safe_ex, local_host_address,
-    permitted_enctypes_kdc, us_timeofday, verify_ap_rep, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, KeytabEntry, RemoteSeq,
+    ReplayCache, build_ap_req_mutual_seq, build_krb_priv_chained, build_krb_safe_ex,
+    local_host_address, permitted_enctypes_kdc, us_timeofday, verify_ap_rep, verify_ap_req_ex,
     verify_krb_safe_checksum,
 };
 use krb5_types::{
-    EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, PrincipalName, Ticket,
-    TicketFlags, TransitedEncoding, err, ku,
+    ApReq, EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, NameError,
+    PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, ku,
 };
 
 use crate::Error;
@@ -346,6 +346,36 @@ pub fn kpropd_recvauth(
     acl_lines: Option<&[String]>,
     replay: &ReplayCache,
 ) -> Result<KpropAuth, Error> {
+    let keys = RecvauthKeys {
+        keys: host_keys,
+        keytab: None,
+    };
+    recvauth_with(
+        stream,
+        &keys,
+        expected_server,
+        expected_realm,
+        acl_lines,
+        replay,
+    )
+}
+
+/// What recvauth decrypts kprop's ticket with: kpropd's keytab when there is one, else `keys`.
+struct RecvauthKeys<'a> {
+    keys: &'a [ProtocolKey],
+    keytab: Option<&'a KpropdKeys>,
+}
+
+/// [`kpropd_recvauth`] with kpropd's keytab, whose key for the ticket is chosen as MIT's
+/// `krb5_rd_req` chooses it ([`kpropd_ticket_key`]).
+fn recvauth_with(
+    stream: &mut TcpStream,
+    keys: &RecvauthKeys<'_>,
+    expected_server: Option<&PrincipalName>,
+    expected_realm: Option<&str>,
+    acl_lines: Option<&[String]>,
+    replay: &ReplayCache,
+) -> Result<KpropAuth, Error> {
     let ver = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     if ver.as_slice() != SENDAUTH_VERSION {
         let _ = stream.write_all(&[1u8]);
@@ -360,12 +390,28 @@ pub fn kpropd_recvauth(
         .write_all(&[0u8])
         .map_err(|e| Error::Inner(e.to_string()))?;
     let ap_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
+    // The ticket's key comes from kpropd's keytab as MIT's chooses it; once chosen, it alone
+    // decrypts the ticket, whatever server the ticket names.
+    let chosen: [ProtocolKey; 1];
+    let (verify_keys, verify_server, verify_realm) = match keys.keytab {
+        Some(kt) => match kpropd_ticket_key(&ap_raw, kt, expected_server, expected_realm) {
+            Ok(key) => {
+                chosen = [key];
+                (&chosen[..], None, None)
+            }
+            Err((der, text)) => {
+                let _ = write_message(stream, &der);
+                return Err(Error::Inner(text));
+            }
+        },
+        None => (keys.keys, expected_server, expected_realm),
+    };
     let params = ApVerifyParams {
-        keys: host_keys,
+        keys: verify_keys,
         key_kvnos: None,
         kvno: None,
-        expected_server,
-        expected_realm,
+        expected_server: verify_server,
+        expected_realm: verify_realm,
         skew: 300,
         addresses: None,
         now: None,
@@ -419,7 +465,7 @@ pub fn kpropd_recvauth(
         remote: RemoteSeq::new(ac.remote_seq()),
         acceptor: Some(ac),
         names: Some(KpropdNames {
-            server: expected_server.cloned().unwrap_or_else(kpropd_server_name),
+            server: expected_server.cloned().unwrap_or_else(kpropd_error_server),
             realm: expected_realm.unwrap_or("????").to_owned(),
             client: ok.authenticator.cname.clone(),
             crealm: ok.authenticator.crealm.clone(),
@@ -616,17 +662,85 @@ fn e_text_with_nul(text: &str) -> Option<krb5_types::KerberosString> {
     krb5_types::kerberos_string_from_bytes(&bytes).ok()
 }
 
-/// The principal kpropd answers as: `host/` and this host's name, lowercased. MIT's kpropd takes
-/// the name through DNS first, so the two agree when the hostname is the canonical FQDN that DNS
-/// gives back for it.
+/// The principal kpropd answers as, its realm aside: `host/` and this host's name
+/// ([`kpropd_server_name_for`] of `gethostname`'s).
+///
+/// # Errors
+///
+/// As [`kpropd_server_name_for`].
+pub fn kpropd_server_name() -> Result<PrincipalName, NameError> {
+    kpropd_server_name_for(&krb5_config::this_host())
+}
+
+/// `host/` and `host`, as MIT's kpropd makes its own name with the profile its context reads
+/// (kdc.conf, then krb5.conf). Under `dns_canonicalize_hostname = fallback` (Fedora's) the name
+/// is kept as it is, and kpropd's keytab entry is looked up under the name expanded when the
+/// ticket comes ([`KpropdKeys::lookup`]); otherwise it is the expanded name. The name is expanded
+/// without DNS ([`krb5_config::expand_hostname`]): a name without a dot gains
+/// `qualify_shortname`, else the resolver's first search domain, and it is lowercased and loses a
+/// trailing dot. MIT's `true`, its built-in default, and the second step of `fallback`
+/// canonicalize the name through DNS, which this port does not: a name DNS would change is not
+/// followed.
 /// MIT `sn2princ_realm` (`kprop/kprop_util.c:33-55`): `krb5_sname_to_principal` for the local host and the `host` service, put in kpropd's realm.
-/// MIT `krb5_sname_to_principal` (`lib/krb5/os/sn2princ.c:372-375`): with `dns_canonicalize_hostname` true the hostname is canonicalized through DNS (forward, then reverse unless `rdns` is false) and lowercased.
-/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:244-245`): `dns_canonicalize_hostname` is true unless the profile sets it.
-fn kpropd_server_name() -> PrincipalName {
-    let host = std::fs::read_to_string("/proc/sys/kernel/hostname")
-        .map(|h| h.trim().to_ascii_lowercase())
+/// MIT `krb5_sname_to_principal` (`lib/krb5/os/sn2princ.c:365-376`): with `fallback` the name is kept until it is used, else canonicalized now, through DNS only with `true`.
+///
+/// # Errors
+///
+/// [`NameError::NotGeneralString`] for a name that is not ASCII, which this port's principal
+/// names cannot hold (MIT's can): kpropd then stops, as MIT's does when it cannot make the name.
+pub fn kpropd_server_name_for(host: &str) -> Result<PrincipalName, NameError> {
+    let conf = krb5_config::load_krb5_conf_paths(crate::kadmin_cli::krb5_conf_paths_with_kdc())
         .unwrap_or_default();
-    PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host.as_str()])
+    let host = if conf.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback {
+        host.to_owned()
+    } else {
+        krb5_config::expand_hostname(host, &conf)
+    };
+    PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", host.as_str()])
+}
+
+/// The name kpropd's keytab entry is looked up under, for its principal `server`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum KpropdLookup {
+    /// kpropd's principal itself.
+    #[default]
+    Server,
+    /// Under `dns_canonicalize_hostname = fallback`, the principal with its hostname expanded.
+    Name(PrincipalName),
+    /// An expanded name this port cannot hold (not ASCII): no entry has it.
+    Unnamed,
+}
+
+/// The name kpropd's keytab is searched under for its principal `server`: under `fallback` a
+/// host-based name's host expanded by `expand` (without DNS), else `server` itself.
+/// MIT `k5_canonprinc` (`lib/krb5/os/sn2princ.c:281-307`): only a two-part host-based name with a hostname is canonicalized, and only under `fallback`, first without DNS.
+fn kpropd_lookup_name(
+    server: &PrincipalName,
+    fallback: bool,
+    expand: impl FnOnce(&str) -> String,
+) -> KpropdLookup {
+    match server.name_string.as_slice() {
+        [service, host]
+            if fallback
+                && server.name_type == PrincipalName::NT_SRV_HST
+                && !host.as_bytes().is_empty() =>
+        {
+            let host = expand(&String::from_utf8_lossy(host.as_bytes()));
+            let service = String::from_utf8_lossy(service.as_bytes()).into_owned();
+            match PrincipalName::try_new(PrincipalName::NT_SRV_HST, [service, host]) {
+                Ok(name) if name == *server => KpropdLookup::Server,
+                Ok(name) => KpropdLookup::Name(name),
+                Err(_) => KpropdLookup::Unnamed,
+            }
+        }
+        _ => KpropdLookup::Server,
+    }
+}
+
+/// kpropd's own name for a KRB-ERROR that has no server given: [`kpropd_server_name`], else, for
+/// a name this port cannot hold, `????` as MIT's recvauth names a server it was not given.
+fn kpropd_error_server() -> PrincipalName {
+    kpropd_server_name().unwrap_or_else(|_| PrincipalName::new(PrincipalName::NT_UNKNOWN, ["????"]))
 }
 
 /// MIT `recvauth_common` (`recvauth.c:150-188`): AP-REQ failure is a length-prefixed KRB-ERROR.
@@ -638,6 +752,16 @@ fn kprop_rd_req_error(
     server: Option<&PrincipalName>,
 ) -> Vec<u8> {
     let (code, text) = recvauth_error_fields(raw, e);
+    kprop_krb_error(code, &text, realm, server)
+}
+
+/// recvauth's KRB-ERROR with `code` and `text`, for kpropd's `server` in `realm`.
+fn kprop_krb_error(
+    code: i32,
+    text: &str,
+    realm: Option<&str>,
+    server: Option<&PrincipalName>,
+) -> Vec<u8> {
     let realm_s = realm.unwrap_or("????");
     let realm_ks = match krb5_types::try_ascii(realm_s) {
         Ok(r) => r,
@@ -646,7 +770,7 @@ fn kprop_rd_req_error(
             Err(_) => return Vec::new(),
         },
     };
-    let sname = server.cloned().unwrap_or_else(kpropd_server_name);
+    let sname = server.cloned().unwrap_or_else(kpropd_error_server);
     let (stime, susec) = us_timeofday();
     let pdu = KrbError {
         pvno: KrbError::PVNO,
@@ -660,10 +784,236 @@ fn kprop_rd_req_error(
         cname: None,
         realm: realm_ks,
         sname,
-        e_text: e_text_with_nul(&text),
+        e_text: e_text_with_nul(text),
         e_data: None,
     };
     encode(&pdu).unwrap_or_default()
+}
+
+/// The key MIT's `krb5_rd_req` decrypts kprop's ticket with, from kpropd's keytab `kt`, for
+/// `server` in `realm`; else recvauth's KRB-ERROR and its text. An AP-REQ that does not decode
+/// is answered first, as MIT decodes it before it opens the keytab.
+///
+/// For kpropd's own principal the keytab gives one entry, as MIT's file keytab gives it
+/// ([`kt_get_entry`]), and that key alone decrypts the ticket, whatever server the ticket names:
+/// no entry for the ticket's enctype is "Service key not available", a ticket of another kvno
+/// or one the key cannot decrypt is "The ticket isn't for us" unless it names kpropd itself
+/// ("Key version is not available", "Decrypt integrity check failed"), and a keytab that cannot
+/// be read sends its own error. With `ignore_acceptor_hostname` set, or no server, every entry
+/// that matches the server with any hostname ([`sname_match`](krb5_protocol::sname_match)) and
+/// has the ticket's enctype is tried in keytab order, whatever its kvno, and the first that
+/// decrypts the ticket serves; MIT's "similar" enctypes are one enctype each here.
+/// MIT `krb5_rd_req` (`lib/krb5/krb/rd_req.c:56-84`): the message is checked and decoded before the keytab is opened.
+/// MIT `decrypt_ticket` (`lib/krb5/krb/rd_req_dec.c:454-456`): a server whose hostname is ignored is matched against every entry, uncanonicalized.
+/// MIT `decrypt_try_server` (`lib/krb5/krb/rd_req_dec.c:373-377`): any other server is explicit and takes `try_one_princ`.
+/// MIT `try_one_princ` (`lib/krb5/krb/rd_req_dec.c:335-346`): the entry for the principal, kvno and enctype is fetched, then its key decrypts the ticket.
+/// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:126-148`): no entry is `NOKEY`, no kvno `BADKEYVER` for the ticket's own server else `NOT_US`, and an unreadable keytab its own code.
+/// MIT `integrity_error` (`lib/krb5/krb/rd_req_dec.c:173-174`): a key that cannot decrypt is `BAD_INTEGRITY` for the ticket's own server, else `NOT_US`.
+fn kpropd_ticket_key(
+    raw: &[u8],
+    kt: &KpropdKeys,
+    server: Option<&PrincipalName>,
+    realm: Option<&str>,
+) -> Result<ProtocolKey, (Vec<u8>, String)> {
+    let refuse = |code: i32| {
+        let text = recvauth_protocol_text(code);
+        (kprop_krb_error(code, &text, realm, server), text)
+    };
+    let ap: ApReq = decode(raw).map_err(|e| {
+        let e = krb5_protocol::Error::from(e);
+        (kprop_rd_req_error(raw, &e, realm, server), e.to_string())
+    })?;
+    let generic = |text: &str| {
+        (
+            kprop_krb_error(err::GENERIC, text, realm, server),
+            text.to_owned(),
+        )
+    };
+    if let Some(KpropdKeytabError::Resolve(text)) = &kt.error {
+        return Err(generic(text));
+    }
+    // MIT `krb5_is_permitted_enctype` (`lib/krb5/krb/init_ctx.c:603-605`): a permitted list that cannot be had permits nothing.
+    let permitted = permitted_enctypes_kdc().unwrap_or_default();
+    let ticket = &ap.ticket;
+    let realm_b = realm.unwrap_or_default().as_bytes();
+    let (tkt_kvno, tkt_etype) = (ticket.enc_part.kvno.unwrap_or(0), ticket.enc_part.etype);
+    let is_tkt_server = |name: &PrincipalName, name_realm: &[u8]| {
+        name.name_string == ticket.sname.name_string && name_realm == ticket.realm.as_bytes()
+    };
+    let explicit = server.filter(|s| {
+        // MIT `is_matching` (`lib/krb5/krb/rd_req_dec.c:283-285`): a host-based server matches many entries when its realm or hostname is empty, or hostnames are ignored.
+        !(s.name_type == PrincipalName::NT_SRV_HST
+            && s.name_string.len() == 2
+            && (realm_b.is_empty()
+                || s.name_string[1].as_bytes().is_empty()
+                || kt.ignore_acceptor_hostname))
+    });
+    if let Some(KpropdKeytabError::Read(text)) = &kt.error {
+        // MIT `decrypt_try_server` (`lib/krb5/krb/rd_req_dec.c:390-394`): a keytab that cannot be iterated is `NOKEY`.
+        if explicit.is_none() {
+            return Err(refuse(err::NOKEY));
+        }
+        return Err(generic(text));
+    }
+    if let Some(name) = explicit {
+        // MIT `decrypt_ticket` (`lib/krb5/krb/rd_req_dec.c:460-466`): the server's canonical name is what the keytab is searched under.
+        let name = match &kt.lookup {
+            KpropdLookup::Server => name,
+            KpropdLookup::Name(canonical) => canonical,
+            KpropdLookup::Unnamed => return Err(refuse(err::NOKEY)),
+        };
+        let own = is_tkt_server(name, realm_b);
+        let entry = match kt_get_entry(&kt.entries, name, realm_b, tkt_kvno, tkt_etype) {
+            KtGet::Found(e) => e,
+            KtGet::KvnoNotFound if own => return Err(refuse(err::BADKEYVER)),
+            KtGet::KvnoNotFound => return Err(refuse(err::NOT_US)),
+            KtGet::NotFound => return Err(refuse(err::NOKEY)),
+        };
+        return match decrypt_ticket_part(&entry.key, ticket, &permitted) {
+            Ok(()) => Ok(entry.key.clone()),
+            Err(TicketPart::Integrity) if own => Err(refuse(err::BAD_INTEGRITY)),
+            Err(TicketPart::Integrity) => Err(refuse(err::NOT_US)),
+            Err(TicketPart::Size) => {
+                Err(generic("Message size is incompatible with encryption type"))
+            }
+            Err(TicketPart::Other(e)) => {
+                Err((kprop_rd_req_error(raw, &e, realm, server), e.to_string()))
+            }
+        };
+    }
+    // MIT `decrypt_try_server` (`lib/krb5/krb/rd_req_dec.c:395-432`): every entry that matches the server is a candidate; one of the ticket's enctype that decrypts it serves.
+    let (mut mismatch, mut matched, mut tkt_server, mut kvno, mut enctype) =
+        (false, false, false, false, false);
+    for e in &kt.entries {
+        let named = is_tkt_server(&e.name, e.realm.as_bytes());
+        let wanted = krb5_protocol::sname_match(
+            server,
+            realm,
+            &e.name,
+            e.realm.as_bytes(),
+            kt.ignore_acceptor_hostname,
+        );
+        if !wanted {
+            mismatch |= named;
+            continue;
+        }
+        matched = true;
+        let similar = e.key.etype().to_iana() == tkt_etype;
+        if named {
+            tkt_server = true;
+            kvno |= e.kvno == tkt_kvno;
+            enctype |= e.kvno == tkt_kvno && similar;
+        }
+        if similar && decrypt_ticket_part(&e.key, ticket, &permitted).is_ok() {
+            return Ok(e.key.clone());
+        }
+    }
+    // MIT `iteration_error` (`lib/krb5/krb/rd_req_dec.c:222-270`): no matching entry is `NOKEY`, the ticket's server unmatched or absent `NOT_US`, its kvno or enctype absent `BADKEYVER`, else `BAD_INTEGRITY`.
+    Err(refuse(if !matched {
+        err::NOKEY
+    } else if mismatch || !tkt_server {
+        err::NOT_US
+    } else if !kvno || !enctype {
+        err::BADKEYVER
+    } else {
+        err::BAD_INTEGRITY
+    }))
+}
+
+/// Why a key does not decrypt a ticket ([`decrypt_ticket_part`]).
+enum TicketPart {
+    /// `KRB5KRB_AP_ERR_BAD_INTEGRITY`: the key is not the ticket's.
+    Integrity,
+    /// `KRB5_BAD_MSIZE`: the ciphertext is shorter than the enctype's header and trailer.
+    Size,
+    /// Any other failure, a part that does not decode among them.
+    Other(krb5_protocol::Error),
+}
+
+/// Whether `key` decrypts `ticket`'s encrypted part to an `EncTicketPart`: first the ticket's
+/// enctype must be one this port implements and one `permitted` holds.
+/// MIT `try_one_entry` (`lib/krb5/krb/rd_req_dec.c:297-299`): the key serves when `krb5_decrypt_tkt_part` decrypts and decodes the ticket with it.
+/// MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): an enctype not implemented, then one not permitted, fails before any decryption.
+/// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:48-52`): a ciphertext shorter than the header and trailer is `KRB5_BAD_MSIZE` before any key is tried.
+fn decrypt_ticket_part(
+    key: &ProtocolKey,
+    ticket: &Ticket,
+    permitted: &[EncryptionType],
+) -> Result<(), TicketPart> {
+    krb5_protocol::check_ticket_etype(ticket.enc_part.etype, permitted)
+        .map_err(TicketPart::Other)?;
+    let usage = KeyUsage::new(ku::TICKET).map_err(|e| TicketPart::Other(e.into()))?;
+    let plain = decrypt(key, usage, ticket.enc_part.cipher.as_ref()).map_err(|e| match e {
+        krb5_crypto::Error::Integrity => TicketPart::Integrity,
+        krb5_crypto::Error::CiphertextTooShort => TicketPart::Size,
+        other => TicketPart::Other(other.into()),
+    })?;
+    decode::<EncTicketPart>(&plain).map_err(|e| TicketPart::Other(e.into()))?;
+    Ok(())
+}
+
+/// What MIT's `krb5_kt_get_entry` finds in a file keytab for a principal, kvno and enctype.
+enum KtGet<'a> {
+    /// The entry it gives.
+    Found(&'a KeytabEntry),
+    /// `KRB5_KT_KVNONOTFOUND`: entries for the principal and enctype, none of the kvno.
+    KvnoNotFound,
+    /// `KRB5_KT_NOTFOUND`: no entry for the principal and enctype.
+    NotFound,
+}
+
+/// The entry MIT's file keytab gives for `name`@`realm` (name type aside), `kvno` and
+/// `enctype`, in keytab order: the first of that kvno; else the first whose kvno is `kvno`'s
+/// low eight bits (a kvno an old keytab or kadmin cut to 8 bits); with `kvno` 0, which ignores
+/// it, the most recent ([`more_recent`]), an entry of kvno 0 being weighed that way too.
+/// MIT `krb5_ktfile_get_entry` (`lib/krb5/keytab/kt_file.c:333-391`): the principal and enctype filter the entries; a kvno that matches ends the scan, a low-8-bit match is kept if first, kvno 0 keeps the most recent, and only another kvno makes `KRB5_KT_KVNONOTFOUND`.
+fn kt_get_entry<'a>(
+    entries: &'a [KeytabEntry],
+    name: &PrincipalName,
+    realm: &[u8],
+    kvno: u32,
+    enctype: i32,
+) -> KtGet<'a> {
+    let mut cur: Option<&KeytabEntry> = None;
+    let mut wrong_kvno = false;
+    for e in entries {
+        if e.name.name_string != name.name_string || e.realm.as_bytes() != realm {
+            continue;
+        }
+        if enctype != 0 && e.key.etype().to_iana() != enctype {
+            continue;
+        }
+        if kvno == 0 || e.kvno == 0 {
+            if cur.is_none_or(|c| more_recent(e, c)) {
+                cur = Some(e);
+            }
+        } else if e.kvno == kvno {
+            cur = Some(e);
+            break;
+        } else if e.kvno == kvno & 0xff && cur.is_none() {
+            cur = Some(e);
+        } else {
+            wrong_kvno = true;
+        }
+    }
+    match cur {
+        Some(e) => KtGet::Found(e),
+        None if wrong_kvno => KtGet::KvnoNotFound,
+        None => KtGet::NotFound,
+    }
+}
+
+/// Whether `k1` is more recent than `k2`: the higher kvno, unless a kvno under 128 was written
+/// no earlier than one over 240, which is then taken to have wrapped past it.
+/// MIT `more_recent` (`lib/krb5/keytab/kt_file.c:267-275`): the wraparound guesses first, then the higher kvno.
+fn more_recent(k1: &KeytabEntry, k2: &KeytabEntry) -> bool {
+    if k2.timestamp <= k1.timestamp && k1.kvno < 128 && k2.kvno > 240 {
+        return true;
+    }
+    if k1.timestamp <= k2.timestamp && k1.kvno > 240 && k2.kvno < 128 {
+        return false;
+    }
+    k1.kvno > k2.kvno
 }
 
 /// Receive dump bytes after [`kpropd_recvauth`].
@@ -753,6 +1103,123 @@ pub fn kpropd_send_ack(
     Ok(())
 }
 
+/// kprop's keytab file: the keytab `keytab` names (`-s`), else the default keytab (`KRB5_KTNAME`,
+/// else krb5.conf's `default_keytab_name`, else `FILE:/etc/krb5.keytab`); `None` for a `MEMORY:`
+/// keytab, which a new process holds empty.
+/// MIT `get_tickets` (`kprop/kprop.c:195-208`): `-s` is resolved, else a NULL keytab makes `krb5_get_init_creds_keytab` read the default one through kprop's context, whose profile is krb5.conf alone.
+///
+/// # Errors
+///
+/// `krb5_kt_resolve`'s text for a name of a type it does not know ("Unknown Key table type"), or
+/// "Invalid argument" for a default name that is not UTF-8 or whose parameters do not expand.
+pub fn kprop_keytab_file(keytab: Option<&str>) -> Result<Option<std::path::PathBuf>, &'static str> {
+    crate::kadmin_cli::keytab_file_in(keytab, krb5_config::krb5_conf_paths())
+}
+
+/// kpropd's keytab for one connection, from which kprop's ticket's key is chosen as MIT's
+/// `krb5_rd_req` chooses it.
+#[derive(Debug, Default)]
+pub struct KpropdKeys {
+    /// The keytab's entries, in file order.
+    pub entries: Vec<KeytabEntry>,
+    /// Why the keytab gives no entries when MIT's would fail with its own error; `None` when it
+    /// was read, or does not exist or may not be read (no entries).
+    pub error: Option<KpropdKeytabError>,
+    /// `[libdefaults] ignore_acceptor_hostname` of kpropd's profile: any `host` entry of the
+    /// realm then serves, whatever its hostname.
+    pub ignore_acceptor_hostname: bool,
+    /// The name kpropd's own entry is looked up under.
+    pub lookup: KpropdLookup,
+}
+
+/// A keytab error recvauth answers with MIT's text in a generic KRB-ERROR.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum KpropdKeytabError {
+    /// The default keytab's name does not resolve ("Unknown Key table type"): `krb5_rd_req` fails
+    /// before it looks at the server.
+    /// MIT `krb5_rd_req` (`lib/krb5/krb/rd_req.c:80-84`): with no keytab given, `krb5_kt_default`'s error ends it.
+    Resolve(String),
+    /// The keytab cannot be read (no keytab of version 1 or 2, a read error): sent for kpropd's
+    /// own principal; a scan of every entry finds none, "Service key not available".
+    Read(String),
+}
+
+/// kpropd's keytab for one connection: the keytab `keytab` names (`-s`), else the default keytab
+/// (`KRB5_KTNAME`, else the KDC profile's `default_keytab_name`, else `FILE:/etc/krb5.keytab`),
+/// read with [`read_secret_file`](krb5_protocol::read_secret_file), the KDC profile's
+/// `ignore_acceptor_hostname`, and the name `server`'s entry is looked up under
+/// ([`KpropdKeys::lookup`]), expanded now as MIT expands it for each ticket. A keytab that does
+/// not exist or may not be read, or a `MEMORY:` one, has no entries; one that is no keytab gives
+/// MIT's error for it, and a default name that does not resolve MIT's error for that. A keytab
+/// damaged after its version has no entries either: MIT stops at the damaged entry
+/// (`KRB5_KT_END`), so an entry before it would still serve there.
+/// MIT `kerberos_authenticate` (`kprop/kpropd.c:1249-1263`): each connection resolves `-s` with `krb5_kt_resolve` (a failure ends the connection), else `krb5_recvauth` reads the default keytab.
+/// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:118-136`): a keytab that does not exist or may not be read, and no entry for an explicit server, are `KRB5KRB_AP_ERR_NOKEY`; any other keytab error stays itself.
+/// MIT `krb5_ktfileint_open` (`lib/krb5/keytab/kt_file.c:785-804`): a file shorter than its version, or of a version other than 0x0501 and 0x0502, is `KRB5_KEYTAB_BADVNO`.
+///
+/// # Errors
+///
+/// `krb5_kt_resolve`'s text for a `-s` name of a type it does not know ("Unknown Key table
+/// type"): the connection then ends.
+pub fn kpropd_keytab_keys(
+    keytab: Option<&str>,
+    server: Option<&PrincipalName>,
+) -> Result<KpropdKeys, &'static str> {
+    let conf = krb5_config::load_krb5_conf_paths(crate::kadmin_cli::krb5_conf_paths_with_kdc())
+        .unwrap_or_default();
+    let fallback = conf.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback;
+    let lookup = server.map_or(KpropdLookup::Server, |s| {
+        kpropd_lookup_name(s, fallback, |h| krb5_config::expand_hostname(h, &conf))
+    });
+    let empty = KpropdKeys {
+        ignore_acceptor_hostname: conf.ignore_acceptor_hostname,
+        lookup,
+        ..KpropdKeys::default()
+    };
+    let path = match crate::kadmin_cli::keytab_file(keytab) {
+        Ok(Some(path)) => path,
+        Ok(None) => return Ok(empty),
+        Err(e) if keytab.is_none() => {
+            return Ok(KpropdKeys {
+                error: Some(KpropdKeytabError::Resolve(e.to_owned())),
+                ..empty
+            });
+        }
+        Err(e) => return Err(e),
+    };
+    let bytes = match krb5_protocol::read_secret_file(&path) {
+        Ok(bytes) => bytes,
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::PermissionDenied
+            ) =>
+        {
+            return Ok(empty);
+        }
+        Err(e) => {
+            return Ok(KpropdKeys {
+                error: Some(KpropdKeytabError::Read(krb5_log::klog::os_error_text(&e))),
+                ..empty
+            });
+        }
+    };
+    if bytes.len() < 2 || bytes[0] != 0x05 || !matches!(bytes[1], 0x01 | 0x02) {
+        return Ok(KpropdKeys {
+            error: Some(KpropdKeytabError::Read(
+                "Unsupported key table format version number".to_owned(),
+            )),
+            ..empty
+        });
+    }
+    Ok(KpropdKeys {
+        entries: krb5_protocol::Keytab::parse(&bytes)
+            .map(|kt| kt.entries)
+            .unwrap_or_default(),
+        ..empty
+    })
+}
+
 /// kpropd's parsed configuration.
 ///
 /// The realm, database path, stash, and ACL the daemon was started with.
@@ -762,11 +1229,16 @@ pub fn kpropd_send_ack(
 /// names another.
 #[derive(Clone, Copy)]
 pub struct KpropdConfig<'a> {
-    /// Host keys that accept the kprop `sendauth`.
+    /// Host keys that accept the kprop `sendauth` when there is no `keytab`.
     pub host_keys: &'a [ProtocolKey],
-    /// AP-REQ server principal kpropd checks (`ApVerifyParams.expected_server`).
+    /// kpropd's keytab ([`kpropd_keytab_keys`]): when set, the ticket's key comes from it as
+    /// MIT's `krb5_rd_req` chooses it, and `host_keys` is not used.
+    pub keytab: Option<&'a KpropdKeys>,
+    /// kpropd's own principal ([`kpropd_server_name`]), which its KRB-ERRORs name: with a
+    /// `keytab`, its entry there takes kprop's ticket; else the ticket must name it
+    /// (`ApVerifyParams.expected_server`).
     pub expected_server: Option<&'a PrincipalName>,
-    /// AP-REQ server realm kpropd checks (`ApVerifyParams.expected_realm`).
+    /// kpropd's realm, `expected_server`'s.
     pub expected_realm: Option<&'a str>,
     /// The master password that opens the dump (the gates' `KRB5_MASTER_PASSWORD`); `None`,
     /// the replica's stash opens it ([`kprop_load_with_stash`]).
@@ -845,6 +1317,7 @@ pub fn kpropd_handle_conn(
 ) -> Result<PrincipalStore, Error> {
     let KpropdConfig {
         host_keys,
+        keytab,
         expected_server,
         expected_realm,
         master_password,
@@ -853,9 +1326,13 @@ pub fn kpropd_handle_conn(
         allowed_clients,
         iprop,
     } = *cfg;
-    let mut auth = kpropd_recvauth(
+    let keys = RecvauthKeys {
+        keys: host_keys,
+        keytab,
+    };
+    let mut auth = recvauth_with(
         stream,
-        host_keys,
+        &keys,
         expected_server,
         expected_realm,
         allowed_clients,
@@ -1188,6 +1665,293 @@ mod tests {
         ));
     }
 
+    /// A keytab at `path` with one entry for each of `principals` in `R.TEST`, their keys `[n; 32]`.
+    fn write_keytab(path: &std::path::Path, principals: &[(&str, u32)]) {
+        let mut kt = krb5_protocol::Keytab::single(
+            krb5_types::ascii("R.TEST"),
+            PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", principals[0].0]),
+            principals[0].1,
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[1u8; 32]).unwrap(),
+        );
+        for (n, (host, kvno)) in principals.iter().enumerate().skip(1) {
+            let mut more = krb5_protocol::Keytab::single(
+                krb5_types::ascii("R.TEST"),
+                PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host]),
+                *kvno,
+                ProtocolKey::from_bytes(
+                    EncryptionType::Aes256CtsHmacSha196,
+                    &[u8::try_from(n + 1).unwrap(); 32],
+                )
+                .unwrap(),
+            );
+            kt.entries.append(&mut more.entries);
+        }
+        kt.write_file(path).unwrap();
+    }
+
+    /// MIT `kerberos_authenticate` (`kprop/kpropd.c:1249-1263`): `-s` names the keytab as `krb5_kt_resolve` reads a name, and each connection reads it whole; a missing keytab has no entries, one that is no keytab is `KRB5_KEYTAB_BADVNO`, and a type MIT does not know ends the connection.
+    #[test]
+    fn kpropd_keytab_gives_its_entries_or_mits_error() {
+        let dir = krb5_testkit::scratch_dir("kpropd-keytab");
+        let path = dir.join("host.keytab");
+        write_keytab(
+            &path,
+            &[("alias.r.test", 2), ("kdc2.r.test", 3), ("kdc2.r.test", 4)],
+        );
+        let p = path.display().to_string();
+        for name in [p.clone(), format!("FILE:{p}"), format!("WRFILE:{p}")] {
+            let k = kpropd_keytab_keys(Some(&name), None).unwrap();
+            let kvnos: Vec<_> = k.entries.iter().map(|e| e.kvno).collect();
+            assert_eq!(kvnos, [2, 3, 4], "{name}");
+            assert_eq!(k.entries[1].key.as_bytes(), [2u8; 32], "{name}");
+            assert_eq!(k.error, None, "{name}");
+        }
+        let missing = dir.join("absent.keytab").display().to_string();
+        let k = kpropd_keytab_keys(Some(&missing), None).unwrap();
+        assert!(k.entries.is_empty() && k.error.is_none());
+        for (file, bytes) in [
+            ("junk.keytab", b"not a keytab".as_slice()),
+            ("short.keytab", b"\x05".as_slice()),
+        ] {
+            std::fs::write(dir.join(file), bytes).unwrap();
+            let junk = dir.join(file).display().to_string();
+            let k = kpropd_keytab_keys(Some(&junk), None).unwrap();
+            assert!(k.entries.is_empty());
+            assert_eq!(
+                k.error,
+                Some(KpropdKeytabError::Read(
+                    "Unsupported key table format version number".into()
+                )),
+                "{file}"
+            );
+        }
+        let k = kpropd_keytab_keys(Some("MEMORY:kpropd"), None).unwrap();
+        assert!(k.entries.is_empty() && k.error.is_none());
+        assert_eq!(
+            kpropd_keytab_keys(Some("KDB:"), None).unwrap_err(),
+            "Unknown Key table type"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `name` in the documented realm as a keytab entry.
+    fn kt_entry(name: &PrincipalName, kvno: u32, timestamp: u32, key: ProtocolKey) -> KeytabEntry {
+        KeytabEntry {
+            realm: krb5_types::ascii(krb5_kdc::testrealm::TEST_REALM),
+            name: name.clone(),
+            timestamp,
+            kvno,
+            key,
+        }
+    }
+
+    fn aes(byte: u8) -> ProtocolKey {
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[byte; 32]).unwrap()
+    }
+
+    /// MIT `krb5_ktfile_get_entry` (`lib/krb5/keytab/kt_file.c:333-391`): a matching kvno wins, else the first entry of its low eight bits; kvno 0 takes the most recent; another kvno is `KRB5_KT_KVNONOTFOUND` and another enctype no entry.
+    #[test]
+    fn a_keytab_entry_is_chosen_as_mits_file_keytab_chooses_it() {
+        let realm = krb5_kdc::testrealm::TEST_REALM.as_bytes();
+        let kdc = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "kdc.kerber.test"]);
+        let other = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.kerber.test"]);
+        let entries = [
+            kt_entry(&other, 7, 10, aes(7)),
+            kt_entry(&kdc, 1, 10, aes(1)),
+            kt_entry(&kdc, 3, 20, aes(3)),
+            kt_entry(&kdc, 2, 30, aes(2)),
+            kt_entry(&kdc, 257, 40, aes(9)),
+        ];
+        let got = |kvno: u32, etype: i32| match kt_get_entry(&entries, &kdc, realm, kvno, etype) {
+            KtGet::Found(e) => Some(e.key.as_bytes()[0]),
+            KtGet::KvnoNotFound => Some(0),
+            KtGet::NotFound => None,
+        };
+        assert_eq!(got(3, 18), Some(3), "the matching kvno");
+        assert_eq!(
+            got(257, 18),
+            Some(9),
+            "a matching kvno beats a low-8-bit one"
+        );
+        assert_eq!(
+            got(513, 18),
+            Some(1),
+            "the first entry of the low eight bits"
+        );
+        assert_eq!(got(0, 18), Some(9), "kvno 0: the most recent");
+        assert_eq!(got(7, 18), Some(0), "another kvno: KVNONOTFOUND");
+        assert_eq!(got(3, 17), None, "another enctype: no entry");
+        assert_eq!(got(3, 0), Some(3), "enctype 0 is any");
+        let wrapped = [
+            kt_entry(&kdc, 250, 10, aes(250)),
+            kt_entry(&kdc, 3, 20, aes(3)),
+        ];
+        let pick = |e: &[KeytabEntry], kvno| match kt_get_entry(e, &kdc, realm, kvno, 18) {
+            KtGet::Found(e) => e.key.as_bytes()[0],
+            _ => 0,
+        };
+        assert_eq!(
+            pick(&wrapped, 0),
+            3,
+            "a small kvno written after a large one has wrapped"
+        );
+        let older = [
+            kt_entry(&kdc, 250, 30, aes(250)),
+            kt_entry(&kdc, 3, 20, aes(3)),
+        ];
+        assert_eq!(
+            pick(&older, 0),
+            250,
+            "a small kvno written before a large one has not"
+        );
+        let zero = [kt_entry(&kdc, 0, 10, aes(5)), kt_entry(&kdc, 4, 10, aes(4))];
+        assert_eq!(pick(&zero, 6), 5, "an entry of kvno 0 serves any kvno");
+        assert_eq!(pick(&zero, 4), 4, "but a matching kvno ends the scan");
+    }
+
+    /// The keytab `kpropd_keytab_keys(None, ..)` reads, printed by a child of the next test.
+    #[test]
+    fn kpropd_default_keytab_child() {
+        if std::env::var_os("KERBER_KPROPD_KT_CHILD").is_some() {
+            let file = crate::kadmin_cli::keytab_file(None).ok().flatten();
+            let keys = kpropd_keytab_keys(None, None).unwrap();
+            let kvnos: Vec<_> = keys.entries.iter().map(|e| e.kvno).collect();
+            let file = file.map(|f| f.display().to_string()).unwrap_or_default();
+            println!("keytab=[{file}] kvnos={kvnos:?} error={:?}", keys.error);
+        }
+    }
+
+    /// MIT `kt_default_name` (`lib/krb5/os/ktdefname.c:35-57`): without `-s` kpropd reads `KRB5_KTNAME`, else the KDC profile's `default_keytab_name`, else `/etc/krb5.keytab`.
+    /// MIT `krb5_rd_req` (`lib/krb5/krb/rd_req.c:80-84`): a default name of a type `krb5_kt_resolve` does not know is `krb5_rd_req`'s error, not the connection's end.
+    #[test]
+    fn kpropd_default_keytab_is_ktname_then_the_kdc_profile_then_etc() {
+        let dir = krb5_testkit::scratch_dir("kpropd-default-kt");
+        let (env_kt, prof_kt) = (dir.join("env.keytab"), dir.join("prof.keytab"));
+        write_keytab(&env_kt, &[("kdc2.r.test", 5)]);
+        write_keytab(&prof_kt, &[("kdc2.r.test", 6)]);
+        let (kdc_conf, plain_kdc, krb5_conf) = (
+            dir.join("kdc.conf"),
+            dir.join("plain-kdc.conf"),
+            dir.join("krb5.conf"),
+        );
+        std::fs::write(
+            &kdc_conf,
+            format!(
+                "[libdefaults]\n    default_keytab_name = FILE:{}\n",
+                prof_kt.display()
+            ),
+        )
+        .unwrap();
+        std::fs::write(&plain_kdc, "[kdcdefaults]\n").unwrap();
+        std::fs::write(&krb5_conf, "[libdefaults]\n    default_realm = R.TEST\n").unwrap();
+        let run = |ktname: Option<String>, profile: &std::path::Path| {
+            let mut cmd = std::process::Command::new(std::env::current_exe().unwrap());
+            cmd.args([
+                "kprop::tests::kpropd_default_keytab_child",
+                "--exact",
+                "--nocapture",
+            ])
+            .env("KERBER_KPROPD_KT_CHILD", "1")
+            .env("KRB5_KDC_PROFILE", profile)
+            .env("KRB5_CONFIG", &krb5_conf)
+            .env_remove("KRB5_KTNAME")
+            .env_remove("KRB5_KDC_CONF");
+            if let Some(kt) = ktname {
+                cmd.env("KRB5_KTNAME", kt);
+            }
+            String::from_utf8_lossy(&cmd.output().unwrap().stdout).into_owned()
+        };
+        let out = run(Some(format!("FILE:{}", env_kt.display())), &kdc_conf);
+        assert!(
+            out.contains(&format!("keytab=[{}] kvnos=[5]", env_kt.display())),
+            "{out}"
+        );
+        let out = run(None, &kdc_conf);
+        assert!(
+            out.contains(&format!("keytab=[{}] kvnos=[6]", prof_kt.display())),
+            "{out}"
+        );
+        let out = run(None, &plain_kdc);
+        assert!(out.contains("keytab=[/etc/krb5.keytab]"), "{out}");
+        let out = run(Some("BOGUS:/x".into()), &plain_kdc);
+        assert!(
+            out.contains(r#"error=Some(Resolve("Unknown Key table type"))"#),
+            "{out}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// kpropd's own name for the hostname `kdc2` (and `KDC2`), printed by a child of the next test.
+    #[test]
+    fn kpropd_server_name_child() {
+        if std::env::var_os("KERBER_KPROPD_NAME_CHILD").is_some() {
+            for host in ["kdc2", "KDC2"] {
+                match kpropd_server_name_for(host) {
+                    Ok(name) => println!("{host}=[{}]", name.components_joined()),
+                    Err(e) => println!("{host}=error {e}"),
+                }
+            }
+        }
+    }
+
+    /// MIT `qualify_shortname` (`lib/krb5/os/sn2princ.c:66-80`): kpropd's context reads kdc.conf before krb5.conf, so kdc.conf's `qualify_shortname` qualifies a hostname without a dot, then krb5.conf's, then `LOCALDOMAIN`'s; under `fallback` the name stays as given, and a name this port cannot hold is an error.
+    #[test]
+    fn kpropd_names_itself_with_its_profiles_qualify_shortname() {
+        let dir = krb5_testkit::scratch_dir("kpropd-own-name");
+        let (kdc_q, kdc_plain, krb5_q, krb5_plain) = (
+            dir.join("kdc-q.conf"),
+            dir.join("kdc.conf"),
+            dir.join("krb5-q.conf"),
+            dir.join("krb5.conf"),
+        );
+        std::fs::write(&kdc_q, "[libdefaults]\n    qualify_shortname = kdc.test\n").unwrap();
+        std::fs::write(&kdc_plain, "[kdcdefaults]\n").unwrap();
+        std::fs::write(
+            &krb5_q,
+            "[libdefaults]\n    qualify_shortname = KRB5.test\n",
+        )
+        .unwrap();
+        std::fs::write(&krb5_plain, "[libdefaults]\n    default_realm = R.TEST\n").unwrap();
+        let krb5_fallback = dir.join("krb5-fallback.conf");
+        std::fs::write(
+            &krb5_fallback,
+            "[libdefaults]\n    dns_canonicalize_hostname = fallback\n",
+        )
+        .unwrap();
+        let run = |kdc: &std::path::Path, krb5: &std::path::Path, localdomain: &str| {
+            let out = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "kprop::tests::kpropd_server_name_child",
+                    "--exact",
+                    "--nocapture",
+                ])
+                .env("KERBER_KPROPD_NAME_CHILD", "1")
+                .env("KRB5_KDC_PROFILE", kdc)
+                .env("KRB5_CONFIG", krb5)
+                .env("LOCALDOMAIN", localdomain)
+                .env_remove("KRB5_KDC_CONF")
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        for (kdc, krb5, localdomain, want) in [
+            (&kdc_q, &krb5_q, "env.test", "host/kdc2.kdc.test"),
+            (&kdc_plain, &krb5_q, "env.test", "host/kdc2.krb5.test"),
+            (&kdc_plain, &krb5_plain, "env.test", "host/kdc2.env.test"),
+            (&kdc_q, &krb5_fallback, "env.test", "host/kdc2"),
+        ] {
+            let out = run(kdc, krb5, localdomain);
+            assert!(out.contains(&format!("kdc2=[{want}]")), "{want}: {out}");
+        }
+        let out = run(&kdc_plain, &krb5_plain, "env.test");
+        assert!(out.contains("KDC2=[host/kdc2.env.test]"), "{out}");
+        let out = run(&kdc_plain, &krb5_fallback, "env.test");
+        assert!(out.contains("KDC2=[host/KDC2]"), "{out}");
+        let out = run(&kdc_plain, &krb5_plain, "\u{e9}.test");
+        assert!(out.contains("kdc2=error "), "{out}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn recvauth_tkt_expired_is_mit_error_message() {
         assert_eq!(recvauth_protocol_text(err::TKT_EXPIRED), "Ticket expired");
@@ -1388,13 +2152,23 @@ mod tests {
 
     /// The documented host's keys and a TGS ticket to it for `admin`, as MIT kprop holds one.
     fn kprop_ticket() -> (Vec<ProtocolKey>, PrincipalName, krb5_kdc::IssuedTgs) {
+        let (host_keys, admin, tgs) = kprop_ticket_kvnos();
+        (host_keys.into_iter().map(|(k, _)| k).collect(), admin, tgs)
+    }
+
+    /// [`kprop_ticket`] with each host key's kvno.
+    fn kprop_ticket_kvnos() -> (Vec<(ProtocolKey, u32)>, PrincipalName, krb5_kdc::IssuedTgs) {
         use krb5_kdc::testrealm::{TEST_REALM, documented_host};
         use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
         let (store, _) = bootstrap_documented().unwrap();
         let host = documented_host();
         let host_ent = store.get_name(&host).unwrap();
-        let host_keys = host_ent.keys.iter().map(|k| k.key.clone()).collect();
+        let host_keys = host_ent
+            .keys
+            .iter()
+            .map(|k| (k.key.clone(), k.kvno))
+            .collect();
         let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
         let admin_key = store
             .get_name(&admin)
@@ -1447,6 +2221,382 @@ mod tests {
         .unwrap();
         write_message(&mut client, &encode(&ap).unwrap()).unwrap();
         client
+    }
+
+    /// kpropd's recvauth of kprop's AP-REQ for the documented host, as `server`, with the keytab
+    /// `keytab` makes from the host's keys (each with its kvno) and the ticket: `None` when it
+    /// takes the AP-REQ, else the KRB-ERROR it answers.
+    fn kpropd_with_keytab(
+        keytab: impl FnOnce(&[(ProtocolKey, u32)], &Ticket) -> KpropdKeys,
+        server: &PrincipalName,
+    ) -> Option<KrbError> {
+        kpropd_with_profile(None, keytab, server)
+    }
+
+    /// [`kpropd_with_keytab`] with `kdc_conf` as kpropd's KDC profile.
+    fn kpropd_with_profile(
+        kdc_conf: Option<&'static str>,
+        keytab: impl FnOnce(&[(ProtocolKey, u32)], &Ticket) -> KpropdKeys,
+        server: &PrincipalName,
+    ) -> Option<KrbError> {
+        use std::net::TcpListener;
+        use std::thread;
+
+        use krb5_asn1::decode;
+        use krb5_kdc::testrealm::TEST_REALM;
+
+        let (host_keys, admin, tgs) = kprop_ticket_kvnos();
+        let kt = keytab(&host_keys, &tgs.rep.0.ticket);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = server.clone();
+        let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
+            let dir = krb5_testkit::scratch_dir("kpropd-profile");
+            if let Some(text) = kdc_conf {
+                let path = dir.join("kdc.conf");
+                std::fs::write(&path, text).unwrap();
+                krb5_config::set_test_kdc_profile(Some(path));
+            }
+            let (mut stream, _) = listener.accept().unwrap();
+            let keys = RecvauthKeys {
+                keys: &[],
+                keytab: Some(&kt),
+            };
+            recvauth_with(
+                &mut stream,
+                &keys,
+                Some(&server),
+                Some(TEST_REALM),
+                None,
+                &ReplayCache::new(),
+            )
+            .map(|_| ())
+        });
+        let mut client = kprop_sends_ap_req(addr, &tgs, &admin);
+        let msg = read_message(&mut client).unwrap();
+        drop(client);
+        let _ = join.join().unwrap();
+        (!msg.is_empty()).then(|| decode(&msg).expect("KRB-ERROR"))
+    }
+
+    fn e_text(e: &KrbError) -> &[u8] {
+        e.e_text
+            .as_ref()
+            .map_or(b"", krb5_types::KerberosString::as_bytes)
+    }
+
+    /// The documented host's keys as keytab entries.
+    fn host_entries(keys: &[(ProtocolKey, u32)]) -> Vec<KeytabEntry> {
+        let host = krb5_kdc::testrealm::documented_host();
+        keys.iter()
+            .map(|(k, kvno)| kt_entry(&host, *kvno, 1, k.clone()))
+            .collect()
+    }
+
+    /// A key of the ticket's enctype that is not the ticket's key.
+    fn wrong_key(ticket: &Ticket) -> ProtocolKey {
+        let etype = EncryptionType::from_iana(ticket.enc_part.etype).unwrap();
+        ProtocolKey::from_bytes(etype, &vec![9u8; etype.key_len()]).unwrap()
+    }
+
+    fn keytab(entries: Vec<KeytabEntry>, ignore_acceptor_hostname: bool) -> KpropdKeys {
+        KpropdKeys {
+            entries,
+            error: None,
+            ignore_acceptor_hostname,
+            lookup: KpropdLookup::Server,
+        }
+    }
+
+    /// MIT `try_one_princ` (`lib/krb5/krb/rd_req_dec.c:335-346`): kpropd's own entry for the ticket's kvno and enctype is the one key tried, whatever server the ticket names; without one the answer is `NOKEY`, with another kvno `NOT_US`, and a key that cannot decrypt the ticket `NOT_US`, each naming kpropd itself.
+    #[test]
+    fn kpropd_answers_only_as_its_own_host_principal() {
+        let own = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "kdc9.kerber.test"]);
+        let ticket_kvno = |t: &Ticket| t.enc_part.kvno.unwrap_or(0);
+        let e = kpropd_with_keytab(
+            |keys, t| {
+                let mut entries = host_entries(keys);
+                entries.push(kt_entry(&own, ticket_kvno(t), 1, wrong_key(t)));
+                keytab(entries, false)
+            },
+            &own,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::NOT_US);
+        assert_eq!(e_text(&e), b"The ticket isn't for us\0");
+        assert_eq!(e.sname, own, "the KRB-ERROR names kpropd's own principal");
+        let e = kpropd_with_keytab(
+            |keys, t| {
+                let mut entries = host_entries(keys);
+                entries.push(kt_entry(&own, ticket_kvno(t) + 1, 1, wrong_key(t)));
+                keytab(entries, false)
+            },
+            &own,
+        )
+        .unwrap();
+        assert_eq!(
+            e.error_code,
+            err::NOT_US,
+            "another kvno of kpropd's own key"
+        );
+        let e = kpropd_with_keytab(
+            |keys, t| {
+                let mut entries = host_entries(keys);
+                let other = if t.enc_part.etype == 17 { 18 } else { 17 };
+                let etype = EncryptionType::from_iana(other).unwrap();
+                let key = ProtocolKey::from_bytes(etype, &vec![9u8; etype.key_len()]).unwrap();
+                entries.push(kt_entry(&own, ticket_kvno(t), 1, key));
+                keytab(entries, false)
+            },
+            &own,
+        )
+        .unwrap();
+        assert_eq!(
+            e.error_code,
+            err::NOKEY,
+            "no own entry of the ticket's enctype"
+        );
+        assert_eq!(e_text(&e), b"Service key not available\0");
+        let host = krb5_kdc::testrealm::documented_host();
+        for server in [&own, &host] {
+            let e = kpropd_with_keytab(|_, _| keytab(Vec::new(), false), server).unwrap();
+            assert_eq!(e.error_code, err::NOKEY, "{server:?}");
+        }
+    }
+
+    /// MIT `k5_canonprinc` (`lib/krb5/os/sn2princ.c:281-307`): under `fallback` a host-based name's hostname is expanded when it is used; otherwise, or for another name, it is used as it is.
+    #[test]
+    fn kpropd_looks_its_entry_up_under_the_name_fallback_expands() {
+        let raw = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "KDC2"]);
+        let expand = |h: &str| format!("{}.kerber.test", h.to_ascii_lowercase());
+        let want = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "kdc2.kerber.test"]);
+        assert_eq!(
+            kpropd_lookup_name(&raw, true, expand),
+            KpropdLookup::Name(want)
+        );
+        assert_eq!(
+            kpropd_lookup_name(&raw, false, expand),
+            KpropdLookup::Server
+        );
+        let plain = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host", "KDC2"]);
+        assert_eq!(
+            kpropd_lookup_name(&plain, true, expand),
+            KpropdLookup::Server
+        );
+        let empty = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", ""]);
+        assert_eq!(
+            kpropd_lookup_name(&empty, true, expand),
+            KpropdLookup::Server
+        );
+        let accented = |h: &str| format!("{h}.\u{e9}.test");
+        assert_eq!(
+            kpropd_lookup_name(&raw, true, accented),
+            KpropdLookup::Unnamed,
+            "a name this port cannot hold"
+        );
+        let host = krb5_kdc::testrealm::documented_host();
+        let e = kpropd_with_keytab(
+            |_, _| KpropdKeys {
+                lookup: KpropdLookup::Name(host.clone()),
+                ..keytab(Vec::new(), false)
+            },
+            &raw,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::NOKEY);
+        assert_eq!(
+            e.sname, raw,
+            "the KRB-ERROR names the principal as kpropd made it"
+        );
+        assert_eq!(
+            kpropd_with_keytab(
+                |keys, _| KpropdKeys {
+                    lookup: KpropdLookup::Name(host.clone()),
+                    ..keytab(host_entries(keys), false)
+                },
+                &raw,
+            ),
+            None,
+            "the entry of the expanded name takes the ticket"
+        );
+        let e = kpropd_with_keytab(
+            |keys, _| KpropdKeys {
+                lookup: KpropdLookup::Unnamed,
+                ..keytab(host_entries(keys), false)
+            },
+            &raw,
+        )
+        .unwrap();
+        assert_eq!(
+            e.error_code,
+            err::NOKEY,
+            "an expanded name no entry can have"
+        );
+    }
+
+    /// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:126-148`): for a ticket that names kpropd itself, another kvno is `BADKEYVER` and a key that cannot decrypt it `BAD_INTEGRITY`; its own entries take it.
+    #[test]
+    fn kpropd_answers_a_ticket_for_itself_as_mit() {
+        let host = krb5_kdc::testrealm::documented_host();
+        assert_eq!(
+            kpropd_with_keytab(|keys, _| keytab(host_entries(keys), false), &host),
+            None
+        );
+        let e = kpropd_with_keytab(
+            |keys, _| {
+                let mut entries = host_entries(keys);
+                for e in &mut entries {
+                    e.kvno += 1;
+                }
+                keytab(entries, false)
+            },
+            &host,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::BADKEYVER);
+        assert_eq!(e_text(&e), b"Key version is not available\0");
+        let e = kpropd_with_keytab(
+            |_, t| {
+                let kvno = t.enc_part.kvno.unwrap_or(0);
+                keytab(vec![kt_entry(&host, kvno, 1, wrong_key(t))], false)
+            },
+            &host,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::BAD_INTEGRITY);
+        assert_eq!(e_text(&e), b"Decrypt integrity check failed\0");
+    }
+
+    /// MIT `decrypt_try_server` (`lib/krb5/krb/rd_req_dec.c:395-432`): with `ignore_acceptor_hostname` any `host` entry of the realm whose key decrypts the ticket serves, whatever its hostname; with none of the ticket's server the answer is `NOT_US`, with no `host` entry `NOKEY`.
+    #[test]
+    fn kpropd_with_ignore_acceptor_hostname_takes_any_host_key() {
+        let own = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "kdc9.kerber.test"]);
+        assert_eq!(
+            kpropd_with_keytab(|keys, _| keytab(host_entries(keys), true), &own),
+            None
+        );
+        let e = kpropd_with_keytab(
+            |_, t| {
+                let kvno = t.enc_part.kvno.unwrap_or(0);
+                keytab(vec![kt_entry(&own, kvno, 1, wrong_key(t))], true)
+            },
+            &own,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::NOT_US);
+        let kiprop = PrincipalName::new(PrincipalName::NT_SRV_HST, ["kiprop", "kdc9.kerber.test"]);
+        let e = kpropd_with_keytab(
+            |_, t| {
+                let kvno = t.enc_part.kvno.unwrap_or(0);
+                keytab(vec![kt_entry(&kiprop, kvno, 1, wrong_key(t))], true)
+            },
+            &own,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::NOKEY);
+        let e = kpropd_with_keytab(
+            |_, _| KpropdKeys {
+                error: Some(KpropdKeytabError::Read(
+                    "Unsupported key table format version number".into(),
+                )),
+                ..keytab(Vec::new(), true)
+            },
+            &own,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::NOKEY, "a keytab that cannot be iterated");
+    }
+
+    /// MIT `recvauth_common` (`lib/krb5/krb/recvauth.c:150-168`): a keytab that is no keytab (`KRB5_KEYTAB_BADVNO`) is sent as a generic error with MIT's message.
+    #[test]
+    fn kpropd_answers_a_keytab_that_is_no_keytab_as_mit() {
+        let e = kpropd_with_keytab(
+            |_, _| KpropdKeys {
+                error: Some(KpropdKeytabError::Read(
+                    "Unsupported key table format version number".into(),
+                )),
+                ..keytab(Vec::new(), false)
+            },
+            &krb5_kdc::testrealm::documented_host(),
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::GENERIC);
+        assert_eq!(e_text(&e), b"Unsupported key table format version number\0");
+    }
+
+    /// MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): a ticket enctype the profile does not permit fails before the key is tried, so kpropd's own entry answers "Encryption type not permitted" whatever its key, and a scan of every entry skips the one that would decrypt it.
+    #[test]
+    fn kpropd_checks_the_ticket_enctype_before_it_decrypts() {
+        const AES128_ONLY: &str =
+            "[libdefaults]\n    permitted_enctypes = aes128-cts-hmac-sha1-96\n";
+        let host = krb5_kdc::testrealm::documented_host();
+        let e = kpropd_with_profile(
+            Some(AES128_ONLY),
+            |_, t| {
+                assert_ne!(t.enc_part.etype, 17, "the ticket's enctype must be another");
+                let kvno = t.enc_part.kvno.unwrap_or(0);
+                keytab(vec![kt_entry(&host, kvno, 1, wrong_key(t))], false)
+            },
+            &host,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::GENERIC);
+        assert_eq!(e_text(&e), b"Encryption type not permitted\0");
+        let e = kpropd_with_profile(
+            Some(AES128_ONLY),
+            |keys, _| keytab(host_entries(keys), true),
+            &host,
+        )
+        .unwrap();
+        assert_eq!(e.error_code, err::BAD_INTEGRITY, "the scan skips the entry");
+    }
+
+    /// MIT `krb5_rd_req` (`lib/krb5/krb/rd_req.c:80-84`): a default keytab name that does not resolve is the AP-REQ's answer as a generic error with MIT's text, whatever the server.
+    #[test]
+    fn kpropd_answers_a_default_keytab_that_does_not_resolve_as_mit() {
+        let host = krb5_kdc::testrealm::documented_host();
+        for ignore in [false, true] {
+            let e = kpropd_with_keytab(
+                |_, _| KpropdKeys {
+                    error: Some(KpropdKeytabError::Resolve("Unknown Key table type".into())),
+                    ..keytab(Vec::new(), ignore)
+                },
+                &host,
+            )
+            .unwrap();
+            assert_eq!(
+                e.error_code,
+                err::GENERIC,
+                "ignore_acceptor_hostname {ignore}"
+            );
+            assert_eq!(e_text(&e), b"Unknown Key table type\0");
+        }
+    }
+
+    /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:48-52`): a ticket shorter than its enctype's header and trailer is `KRB5_BAD_MSIZE`, sent as a generic error.
+    #[test]
+    fn a_ticket_too_short_to_decrypt_is_mits_bad_msize() {
+        let host = krb5_kdc::testrealm::documented_host();
+        let (keys, _, tgs) = kprop_ticket_kvnos();
+        let mut ticket = tgs.rep.0.ticket.clone();
+        ticket.enc_part.cipher = vec![0u8; 8].into();
+        let kt = keytab(host_entries(&keys), false);
+        let ap = krb5_types::ApReq {
+            pvno: 5,
+            msg_type: 14,
+            ap_options: krb5_types::ApOptions::none(),
+            ticket,
+            authenticator: tgs.rep.0.ticket.enc_part.clone(),
+        };
+        let raw = encode(&ap).unwrap();
+        let realm = Some(krb5_kdc::testrealm::TEST_REALM);
+        let Err((der, text)) = kpropd_ticket_key(&raw, &kt, Some(&host), realm) else {
+            panic!("a short ticket must be refused");
+        };
+        assert_eq!(text, "Message size is incompatible with encryption type");
+        let e: KrbError = decode(&der).unwrap();
+        assert_eq!(e.error_code, err::GENERIC);
     }
 
     #[test]
@@ -1581,17 +2731,22 @@ mod tests {
         client.read_exact(&mut ack).unwrap();
         write_message(&mut client, &[0xff, 0x00, 0x01]).unwrap();
         let e: KrbError = decode(&read_message(&mut client).unwrap()).expect("KRB-ERROR");
-        let host = std::fs::read_to_string("/proc/sys/kernel/hostname").unwrap();
+        assert!(join.join().expect("thread").is_err());
+        let parts: Vec<_> = e
+            .sname
+            .name_string
+            .iter()
+            .map(krb5_types::KerberosString::as_bytes)
+            .collect();
         assert_eq!(
-            e.sname,
-            PrincipalName::new(
-                PrincipalName::NT_SRV_HST,
-                ["host", host.trim().to_ascii_lowercase().as_str()]
-            ),
+            parts.len(),
+            2,
             "sn2princ_realm's host/<this host>, not ????"
         );
+        assert_eq!(parts[0], b"host");
+        assert_ne!(parts[1], b"", "a host name");
+        assert_eq!(e.sname.name_type, PrincipalName::NT_SRV_HST);
         assert_eq!(e.realm.as_bytes(), TEST_REALM.as_bytes());
-        assert!(join.join().expect("thread").is_err());
     }
 
     /// kpropd's answer when kprop's size KRB-SAFE (`size_seq`) or first block KRB-PRIV
