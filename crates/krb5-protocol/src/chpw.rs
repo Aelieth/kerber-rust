@@ -24,7 +24,8 @@ use crate::as_ex::AsOutcome;
 use crate::auth_con::RemoteSeq;
 use crate::error::Error;
 use crate::safe_priv::{build_krb_priv_with_seq, read_krb_priv, wipe_octets};
-use crate::transport::KdcAddr;
+use crate::trace::{self, RemoteAddr, Transport};
+use crate::transport::{KdcAddr, errno, is_timeout, read_errno};
 
 /// MIT `KRB5_KPASSWD_SUCCESS`.
 pub const KPASSWD_SUCCESS: u16 = 0;
@@ -283,6 +284,15 @@ fn change_or_set(
     let der = encode(&authenticator)?;
     let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let cipher = encrypt(&as_out.session_key, usage, &der)?;
+    // MIT `krb5_mk_req_extended` (`lib/krb5/krb/mk_req_ext.c:85-254`): the authenticator is traced
+    // with its sequence number and both keys as hashes.
+    trace::mk_req(
+        trace::Princ::new(&as_out.cname, as_out.crealm.as_bytes()),
+        trace::Princ::new(&as_out.ticket.sname, as_out.ticket.realm.as_bytes()),
+        0,
+        Some((&sub).into()),
+        (&as_out.session_key).into(),
+    );
     let ap = ApReq {
         pvno: ApReq::PVNO,
         msg_type: ApReq::MSG_TYPE,
@@ -433,6 +443,7 @@ const PASS_DELAYS: [Duration; 3] = [
 /// MIT `change_set_password` (`changepw.c:256-265`): TCP alone first; UDP only when no TCP
 /// connection answered, as UDP resends may be taken for replays.
 fn send_kpasswd(host: &str, body: &[u8]) -> Result<Vec<u8>, Error> {
+    trace::sendto_kdc_resolving(host);
     let addrs: Vec<SocketAddr> = (host, KPASSWD_PORT)
         .to_socket_addrs()
         .map_err(Error::from_io)?
@@ -466,10 +477,29 @@ fn kpasswd_tcp(addrs: &[SocketAddr], body: &[u8]) -> Option<Vec<u8>> {
         if slot.is_zero() {
             break;
         }
-        let Ok(mut stream) = TcpStream::connect_timeout(addr, slot) else {
-            continue;
+        // MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:884-990`): a connection is traced as
+        // it starts, and `kill_conn` or the cleanup of `k5_sendto` as it ends.
+        let ra = RemoteAddr {
+            transport: Transport::Tcp,
+            addr: *addr,
         };
-        if let Ok(reply) = tcp_round_trip(&mut stream, body) {
+        trace::sendto_kdc_tcp_connect(&ra);
+        let mut stream = match TcpStream::connect_timeout(addr, slot) {
+            Ok(stream) => stream,
+            Err(e) => {
+                if !is_timeout(&e) {
+                    trace::sendto_kdc_tcp_error_connect(&ra, errno(&e));
+                }
+                trace::sendto_kdc_tcp_disconnect(&ra);
+                continue;
+            }
+        };
+        let reply = tcp_round_trip(&mut stream, body, &ra);
+        if let Ok(reply) = &reply {
+            trace::sendto_kdc_response(reply.len(), &ra);
+        }
+        trace::sendto_kdc_tcp_disconnect(&ra);
+        if let Ok(reply) = reply {
             return Some(reply);
         }
     }
@@ -478,46 +508,80 @@ fn kpasswd_tcp(addrs: &[SocketAddr], body: &[u8]) -> Option<Vec<u8>> {
 
 /// MIT `service_tcp_read` (`sendto_kdc.c:1151-1200`): a reply shorter than its length, or a length
 /// of 0 or over 1 MiB, ends the connection.
-fn tcp_round_trip(stream: &mut TcpStream, body: &[u8]) -> io::Result<Vec<u8>> {
+/// MIT `service_tcp_write` (`lib/krb5/os/sendto_kdc.c:1115-1146`): the write and a failed one are
+/// traced, and so is a failed read.
+fn tcp_round_trip(stream: &mut TcpStream, body: &[u8], ra: &RemoteAddr) -> io::Result<Vec<u8>> {
     // MIT `service_tcp_write` (`lib/krb5/os/sendto_kdc.c:1124-1125`): the length and the request
     // go out in one writev.
-    crate::framing::write_messages(stream, &[body])?;
+    trace::sendto_kdc_tcp_send(ra);
+    crate::framing::write_messages(stream, &[body]).inspect_err(|e| {
+        trace::sendto_kdc_tcp_error_send(ra, errno(e));
+    })?;
     let mut hdr = [0u8; 4];
-    stream.read_exact(&mut hdr)?;
+    stream.read_exact(&mut hdr).inspect_err(|e| {
+        if !is_timeout(e) {
+            trace::sendto_kdc_tcp_error_recv_len(ra, read_errno(e));
+        }
+    })?;
     let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(usize::MAX);
     if n == 0 || n > 1024 * 1024 {
         return Err(io::Error::other("kpasswd tcp length"));
     }
     let mut out = vec![0u8; n];
-    stream.read_exact(&mut out)?;
+    stream.read_exact(&mut out).inspect_err(|e| {
+        if !is_timeout(e) {
+            trace::sendto_kdc_tcp_error_recv(ra, read_errno(e));
+        }
+    })?;
     Ok(out)
 }
-
 /// The exchange over UDP, or `None` when no server answered.
 /// MIT `k5_sendto` (`sendto_kdc.c:1537-1600`): each pass sends to every server with 1 s for an
 /// answer, then waits 2, 4 or 8 s: sends at 0, 3 and 8 s for one server, given up at 17 s.
 /// MIT `maybe_send` (`sendto_kdc.c:1021-1035`): a failed resend keeps the server for the next
 /// pass.
+/// MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:884-990`): the first send to a server is
+/// traced as the initial request, each later one by `maybe_send` as a retry.
 fn kpasswd_udp(addrs: &[SocketAddr], body: &[u8]) -> Option<Vec<u8>> {
     let mut socks: Vec<Option<UdpSocket>> = addrs.iter().map(|a| udp_connect(a).ok()).collect();
-    for delay in PASS_DELAYS {
+    for (pass, delay) in PASS_DELAYS.into_iter().enumerate() {
         for i in 0..socks.len() {
             let Some(sock) = &socks[i] else {
                 continue;
             };
-            let _ = sock.send(body);
-            if let Some(reply) = udp_wait(&mut socks, PASS_SLOT) {
+            let ra = udp_ra(addrs[i]);
+            if pass == 0 {
+                trace::sendto_kdc_udp_send_initial(&ra);
+            } else {
+                trace::sendto_kdc_udp_send_retry(&ra);
+            }
+            if let Err(e) = sock.send(body) {
+                if pass == 0 {
+                    trace::sendto_kdc_udp_error_send_initial(&ra, errno(&e));
+                } else {
+                    trace::sendto_kdc_udp_error_send_retry(&ra, errno(&e));
+                }
+            }
+            if let Some(reply) = udp_wait(&mut socks, addrs, PASS_SLOT) {
                 return Some(reply);
             }
         }
         if socks.iter().all(Option::is_none) {
             return None;
         }
-        if let Some(reply) = udp_wait(&mut socks, delay) {
+        if let Some(reply) = udp_wait(&mut socks, addrs, delay) {
             return Some(reply);
         }
     }
     None
+}
+
+/// A kpasswd server's UDP address as the trace prints it.
+const fn udp_ra(addr: SocketAddr) -> RemoteAddr {
+    RemoteAddr {
+        transport: Transport::Udp,
+        addr,
+    }
 }
 
 fn udp_connect(addr: &SocketAddr) -> io::Result<UdpSocket> {
@@ -533,8 +597,12 @@ fn udp_connect(addr: &SocketAddr) -> io::Result<UdpSocket> {
 
 /// The first datagram any of `socks` receives within `wait`.
 /// MIT `service_udp_read` (`sendto_kdc.c:1203-1217`): a receive error, such as a refused port,
-/// drops that server.
-fn udp_wait(socks: &mut [Option<UdpSocket>], wait: Duration) -> Option<Vec<u8>> {
+/// drops that server, and is traced.
+fn udp_wait(
+    socks: &mut [Option<UdpSocket>],
+    addrs: &[SocketAddr],
+    wait: Duration,
+) -> Option<Vec<u8>> {
     let deadline = Instant::now() + wait;
     let turn = if socks.iter().flatten().count() > 1 {
         Duration::from_millis(50)
@@ -544,7 +612,7 @@ fn udp_wait(socks: &mut [Option<UdpSocket>], wait: Duration) -> Option<Vec<u8>> 
     let mut buf = vec![0u8; 65_535];
     loop {
         let mut live = false;
-        for slot in socks.iter_mut() {
+        for (slot, addr) in socks.iter_mut().zip(addrs) {
             let Some(sock) = slot else {
                 continue;
             };
@@ -560,6 +628,7 @@ fn udp_wait(socks: &mut [Option<UdpSocket>], wait: Duration) -> Option<Vec<u8>> 
             match sock.recv(&mut buf) {
                 Ok(n) => {
                     buf.truncate(n);
+                    trace::sendto_kdc_response(n, &udp_ra(*addr));
                     return Some(buf);
                 }
                 Err(e)
@@ -569,7 +638,10 @@ fn udp_wait(socks: &mut [Option<UdpSocket>], wait: Duration) -> Option<Vec<u8>> 
                             | io::ErrorKind::TimedOut
                             | io::ErrorKind::Interrupted
                     ) => {}
-                Err(_) => *slot = None,
+                Err(e) => {
+                    trace::sendto_kdc_udp_error_recv(&udp_ra(*addr), errno(&e));
+                    *slot = None;
+                }
             }
         }
         if !live {

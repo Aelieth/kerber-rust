@@ -384,9 +384,17 @@ pub fn pa_spake_response(
 ) -> Result<(PaData, ProtocolKey), Error> {
     let wbytes = spake_wbytes(ikey, group)?;
     let (secret, pub_x) = spake_keygen(group, &wbytes, false)?;
+    // MIT `group_keygen` (`plugins/preauth/spake/groups.c:333-371`): the public value is traced.
+    crate::trace::spake_keygen(&pub_x);
     let result = spake_result(group, &wbytes, &secret, challenge_pubkey, false)?;
+    // MIT `group_result` (`plugins/preauth/spake/groups.c:374-412`): the result is traced, which
+    // `trace::spake_result` prints as a hash only.
+    crate::trace::spake_result(&result);
     let thash = spake_thash_update(group, &[], support_der, challenge_der);
     let thash = spake_thash_update(group, &thash, &pub_x, &[]);
+    // MIT `process_challenge` (`plugins/preauth/spake/spake_client.c:181-298`): the transcript
+    // hash, a hash of the public values, is traced before the keys are derived from it.
+    crate::trace::spake_client_thash(&thash);
     let k0 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 0)?;
     let k1 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 1)?;
     let factor = krb5_types::spake::SpakeSecondFactor {
@@ -404,6 +412,7 @@ pub fn pa_spake_response(
             cipher: factor_ct.into(),
         },
     });
+    crate::trace::spake_send_response();
     Ok((
         PaData {
             padata_type: pa::SPAKE,

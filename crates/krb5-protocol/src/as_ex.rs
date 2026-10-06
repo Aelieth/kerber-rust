@@ -5,7 +5,8 @@
 
 use crate::error::Error;
 use crate::preauth::{pa_pk_as_req_signed, pkinit_reply_key_agile};
-use crate::transport::{KdcAddr, exchange};
+use crate::trace;
+use crate::transport::{KdcAddr, SendKind, sendto_kdc};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2, p256_generate,
@@ -333,7 +334,9 @@ fn as_exchange_inner(
     // `--spake` still forces SPAKE.
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
     let mut wire = encode(&first)?;
-    let mut msg = classify(&exchange(req.kdc, &wire)?)?;
+    // MIT `init_creds_step_request` (`get_in_tkt.c:1355-1356`): a request with no preauth.
+    trace::init_creds_preauth_none();
+    let mut msg = send_as(req, &wire)?;
     let mut skew_time = None;
     if let KdcMsg::Error(e) = &msg
         && e.error_code == err::SKEW
@@ -342,7 +345,8 @@ fn as_exchange_inner(
         skew_time = Some(e.stime.clone());
         let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
         wire = encode(&first)?;
-        msg = classify(&exchange(req.kdc, &wire)?)?;
+        trace::init_creds_preauth_none();
+        msg = send_as(req, &wire)?;
     }
     let spake_more = |e: &KrbError| {
         skew_time.is_none() && req.want_spake && e.error_code == err::MORE_PREAUTH_DATA_REQUIRED
@@ -356,19 +360,17 @@ fn as_exchange_inner(
         KdcMsg::TgsRep => false,
     };
     with_prompted(req, prompt.filter(|_| needs_key), |req| match msg {
-        KdcMsg::AsRep(rep) => finish_as_rep_keys(
-            rep,
-            nonce,
-            keys,
-            req.password,
-            &req.cname,
-            req.realm,
-            req.canonicalize,
-            &req_sname(req),
-            &bound,
-            Some(&wire),
-        ),
-        KdcMsg::Error(e) if spake_more(&e) => spake_forced(req, keys, nonce, &bound, &etypes, &e),
+        KdcMsg::AsRep(rep) => {
+            trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
+            finish_as_rep_keys(req, rep, nonce, keys, &etypes, &bound, Some(&wire))
+        }
+        KdcMsg::Error(e) if spake_more(&e) => {
+            if trace::enabled() {
+                trace::init_creds_preauth();
+                trace_preauth_input(&method_from_error(&e).unwrap_or_default(), &etypes);
+            }
+            spake_forced(req, keys, nonce, &bound, &etypes, &e)
+        }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
             continue_from_hint(req, keys, nonce, &bound, &etypes, &e, skew_time.as_ref())
         }
@@ -380,24 +382,29 @@ fn as_exchange_inner(
 /// MIT `get_as_key_keytab` (`gic_keytab.c:68-71`): the reply etype selects the keytab key, and a
 /// wrong etype is not reused. A checksum failure on that key is not final: every other supplied
 /// key is tried before the reply is rejected.
-#[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
+/// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:47-136`): with no key from preauth, the
+/// reply key is got from the password, with the client's own salt, or from the keytab.
 fn finish_as_rep_keys(
+    req: &AsRequest<'_>,
     rep: AsRep,
     nonce: u32,
     keys: &[ProtocolKey],
-    password: &[u8],
-    cname: &PrincipalName,
-    realm: &str,
-    canonicalize: bool,
-    expected_sname: &PrincipalName,
+    etypes: &[i32],
     bound: &AsReqTimes,
     req_der: Option<&[u8]>,
 ) -> Result<AsOutcome, Error> {
+    let (password, cname, realm) = (req.password, &req.cname, req.realm);
+    let (canonicalize, expected_sname) = (req.canonicalize, &req_sname(req));
+    let etype = EncryptionType::known(rep.0.enc_part.etype)?;
     if keys.is_empty() {
+        trace_gak_salt(req, rep.0.padata.as_deref(), etypes, false);
+        let salt = salt_cname(cname).default_salt(realm);
+        let key = string_to_key(etype, password, &salt, None)?;
+        trace::init_creds_as_key_gak((&key).into());
         return finish_as_rep(
             rep,
             nonce,
-            None,
+            Some(key),
             password,
             cname,
             realm,
@@ -409,9 +416,13 @@ fn finish_as_rep_keys(
             false,
         );
     }
-    let want = EncryptionType::known(rep.0.enc_part.etype).ok();
-    if let Some(k) = pick_key(keys, want)
-        && let Ok(out) = finish_as_rep(
+    trace_gak_salt(req, rep.0.padata.as_deref(), etypes, true);
+    trace_keytab_gak(req, keys, etype);
+    if let Some(k) = pick_key(keys, Some(etype)) {
+        if gak_found(keys, &k, etype) {
+            trace::init_creds_as_key_gak((&k).into());
+        }
+        if let Ok(out) = finish_as_rep(
             rep.clone(),
             nonce,
             Some(k),
@@ -424,9 +435,9 @@ fn finish_as_rep_keys(
             bound,
             req_der,
             false,
-        )
-    {
-        return Ok(out);
+        ) {
+            return Ok(out);
+        }
     }
     let mut last = Error::ReplyMismatch("no keytab key decrypted AS-REP".into());
     for k in keys {
@@ -449,6 +460,13 @@ fn finish_as_rep_keys(
         }
     }
     Err(last)
+}
+
+/// Whether `key` is the one MIT's `get_as_key_keytab` hands back for `etype`: made from the
+/// password, or a keytab key of that enctype. A keytab without it fails the lookup there, and no
+/// key is traced.
+fn gak_found(keys: &[ProtocolKey], key: &ProtocolKey, etype: EncryptionType) -> bool {
+    keys.is_empty() || key.etype() == etype
 }
 
 fn pick_key(keys: &[ProtocolKey], etype: Option<EncryptionType>) -> Option<ProtocolKey> {
@@ -506,6 +524,18 @@ fn continue_from_hint(
     skew_hint: Option<&KerberosTime>,
 ) -> Result<AsOutcome, Error> {
     if req.want_spake {
+        // MIT `init_creds_step_request` (`get_in_tkt.c:1342-1352`): the next request is
+        // preauthenticated from the KDC's method data, which `k5_preauth` reads first.
+        if trace::enabled() {
+            trace::init_creds_preauth();
+            trace_preauth_input(
+                &sort_krb5_padata_sequence(
+                    &method_from_error(err).unwrap_or_default(),
+                    &conf_preferred_preauth_types(),
+                ),
+                etypes,
+            );
+        }
         return spake_forced(req, keys, nonce, bound, etypes, err);
     }
     let preferred = conf_preferred_preauth_types();
@@ -516,6 +546,10 @@ fn continue_from_hint(
     loop {
         let method = method_from_error(&hint)?;
         let sorted = sort_krb5_padata_sequence(&method, &preferred);
+        // MIT `init_creds_step_request` (`get_in_tkt.c:1342-1352`): each request after a hint is
+        // preauthenticated from the KDC's method data, which `k5_preauth` reads first.
+        trace::init_creds_preauth();
+        trace_preauth_input(&sorted, etypes);
         // MIT `process_pa_data` (`preauth2.c:648-728`): the first real mechanism that works, one that failed not tried again.
         let spake_next = sorted
             .iter()
@@ -551,21 +585,30 @@ fn continue_preauth(
 ) -> Result<AsOutcome, Error> {
     let (etype, salt, params) =
         select_s2k(preauth_err, &salt_cname(&req.cname), req.realm, etypes)?;
+    trace_keytab_gak(req, keys, etype);
     let client_key = pick_key(keys, Some(etype)).map_or_else(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
     )?;
+    // MIT `encts_process` (`preauth_encts.c:49-129`): the key, then the timestamp, are traced, and
+    // `process_pa_data` traces what the module returned.
+    if gak_found(keys, &client_key, etype) {
+        trace::preauth_enc_ts_key_gak((&client_key).into());
+    }
     // MIT `k5_preauth` (`preauth2.c:992-993`): the KDC's cookie leads the next request's padata.
     let mut padata = error_cookie(preauth_err);
     padata.push(match skew_hint {
-        Some(t) => pa_enc_timestamp_at(&client_key, t)?,
-        None => pa_enc_timestamp(&client_key)?,
+        Some(t) => pa_enc_timestamp_at(&client_key, t, false)?,
+        None => pa_enc_timestamp(&client_key, false)?,
     });
+    trace::preauth_process(ENCTS_MODULE, pa::ENC_TIMESTAMP, true, 0, None);
+    trace::preauth_output(&padata);
     let second = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
-    let reply = exchange(req.kdc, &wire)?;
-    match classify(&reply)? {
-        KdcMsg::AsRep(rep) => finish_as_rep(
+    let finish = |rep: AsRep, wire: &[u8], etypes: &[i32], client_key: ProtocolKey| {
+        trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+        trace::init_creds_as_key_preauth((&client_key).into());
+        finish_as_rep(
             rep,
             nonce,
             Some(client_key),
@@ -576,59 +619,36 @@ fn continue_preauth(
             req.canonicalize,
             &req_sname(req),
             bound,
-            Some(&wire),
+            Some(wire),
             false,
-        ),
+        )
+    };
+    match send_as(req, &wire)? {
+        KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key),
         KdcMsg::Error(e) if e.error_code == err::SKEW => {
             let skew_time = e.stime.clone();
             // MIT `k5_preauth_tryagain` (`preauth2.c:926-927`): the error's cookie follows the
             // module's retried padata.
-            let mut padata = vec![pa_enc_timestamp_at(&client_key, &skew_time)?];
-            padata.extend(error_cookie(&e));
+            trace_tryagain_input(&e);
+            let mut padata = vec![pa_enc_timestamp_at(&client_key, &skew_time, false)?];
+            tryagain_padata(error_cookie(&e), &mut padata);
             let third = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
             let wire = encode(&third)?;
-            let reply = exchange(req.kdc, &wire)?;
-            match classify(&reply)? {
-                KdcMsg::AsRep(rep) => finish_as_rep(
-                    rep,
-                    nonce,
-                    Some(client_key),
-                    req.password,
-                    &req.cname,
-                    req.realm,
-                    Some(pa::ENC_TIMESTAMP),
-                    req.canonicalize,
-                    &req_sname(req),
-                    bound,
-                    Some(&wire),
-                    false,
-                ),
+            match send_as(req, &wire)? {
+                KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
         }
         KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
             let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
-            let mut padata = vec![pa_enc_timestamp(&client_key)?];
-            padata.extend(error_cookie(&e));
+            trace_tryagain_input(&e);
+            let mut padata = vec![pa_enc_timestamp(&client_key, false)?];
+            tryagain_padata(error_cookie(&e), &mut padata);
             let retry = build_as_req_from(req, nonce, bound, Some(padata), &etypes)?;
             let wire = encode(&retry)?;
-            let reply = exchange(req.kdc, &wire)?;
-            match classify(&reply)? {
-                KdcMsg::AsRep(rep) => finish_as_rep(
-                    rep,
-                    nonce,
-                    Some(client_key),
-                    req.password,
-                    &req.cname,
-                    req.realm,
-                    Some(pa::ENC_TIMESTAMP),
-                    req.canonicalize,
-                    &req_sname(req),
-                    bound,
-                    Some(&wire),
-                    false,
-                ),
+            match send_as(req, &wire)? {
+                KdcMsg::AsRep(rep) => finish(rep, &wire, &etypes, client_key),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
@@ -636,6 +656,38 @@ fn continue_preauth(
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
+}
+
+/// MIT's name of the encrypted timestamp module (`preauth_encts.c`).
+const ENCTS_MODULE: &str = "encrypted_timestamp";
+
+/// MIT's name of the PKINIT module (`pkinit_clnt.c`).
+const PKINIT_MODULE: &str = "pkinit";
+
+/// MIT `init_creds_step_request` (`get_in_tkt.c:1316-1328`): an error other than preauth-required
+/// is retried through the selected mechanism.
+/// MIT `k5_preauth_tryagain` (`lib/krb5/krb/preauth2.c:887-935`): the error's padata is traced as
+/// the retry's input.
+fn trace_tryagain_input(e: &KrbError) {
+    if !trace::enabled() {
+        return;
+    }
+    trace::init_creds_preauth_tryagain(e.error_code, pa::ENC_TIMESTAMP);
+    trace::preauth_tryagain_input(pa::ENC_TIMESTAMP, &method_from_error(e).unwrap_or_default());
+}
+
+/// MIT `k5_preauth_tryagain` (`lib/krb5/krb/preauth2.c:887-935`): the error's cookie is appended
+/// to the module's padata; what the module returned, the cookie and the padata of the retried
+/// request are traced.
+fn tryagain_padata(cookie: Vec<PaData>, padata: &mut Vec<PaData>) {
+    if trace::enabled() {
+        trace::preauth_tryagain(ENCTS_MODULE, pa::ENC_TIMESTAMP, 0, None);
+        for c in &cookie {
+            trace::preauth_cookie(c.padata_value.as_ref());
+        }
+    }
+    padata.extend(cookie);
+    trace::preauth_tryagain_output(padata);
 }
 
 /// Place a selected preauth module's PA-DATA after any FX-COOKIE and
@@ -668,12 +720,19 @@ fn continue_pkinit(
     // MIT get_in_tkt: empty 150 first, then copy the hint token into AuthPack.
     let first = build_as_req_from(req, nonce, bound, None, etypes)?;
     let first_wire = encode(&first)?;
-    let first_reply = exchange(req.kdc, &first_wire)?;
-    let (token, cookie) = match classify(&first_reply)? {
+    trace::init_creds_preauth_none();
+    let (token, cookie) = match send_as(req, &first_wire)? {
         KdcMsg::Error(e)
             if e.error_code == err::PREAUTH_REQUIRED || e.error_code == err::PREAUTH_FAILED =>
         {
             let method = method_from_error(&e)?;
+            if trace::enabled() {
+                trace::init_creds_preauth();
+                trace_preauth_input(
+                    &sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types()),
+                    etypes,
+                );
+            }
             let token = find_pa(&method, pa::AS_FRESHNESS)
                 .map(|p| p.padata_value.as_ref())
                 .filter(|v| !v.is_empty())
@@ -708,6 +767,19 @@ fn continue_pkinit(
         )?
     };
     insert_module_padata_before_info_pa(req2.0.padata.get_or_insert_with(Vec::new), pa);
+    // MIT `process_pa_data` (`preauth2.c:668-686`): what the pkinit module returned, then the
+    // cookie and its padata.
+    if trace::enabled() {
+        trace::preauth_process(PKINIT_MODULE, pa::PK_AS_REQ, true, 0, None);
+        if let Some(list) = &req2.0.padata {
+            let produced: Vec<PaData> = list
+                .iter()
+                .filter(|p| p.padata_type == pa::FX_COOKIE || p.padata_type == pa::PK_AS_REQ)
+                .cloned()
+                .collect();
+            trace::preauth_output(&produced);
+        }
+    }
     let wire = encode(&req2)?;
     tracing::info!(
         event = krb5_log::events::CLIENT_PKINIT,
@@ -716,8 +788,7 @@ fn continue_pkinit(
         pa_type = pa::PK_AS_REQ,
         freshness = token.is_some(),
     );
-    let reply = exchange(req.kdc, &wire)?;
-    match classify(&reply)? {
+    match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => {
             let etype = EncryptionType::known(rep.0.enc_part.etype)?;
             let reply_key = pkinit_reply_key_agile(
@@ -729,6 +800,12 @@ fn continue_pkinit(
                 &req.cname,
                 req.realm,
             )?;
+            trace_reply_padata(
+                rep.0.padata.as_deref(),
+                etypes,
+                Some((PKINIT_MODULE, pa::PK_AS_REP)),
+            );
+            trace::init_creds_as_key_preauth((&reply_key).into());
             finish_as_rep(
                 rep,
                 nonce,
@@ -869,14 +946,23 @@ fn finish_as_rep(
         other => other.into(),
     })?;
     let enc_part = decode_enc_as(&plain)?;
+    // MIT `init_creds_step_reply` (`get_in_tkt.c:1824-1827`): the decrypted reply's session key is
+    // traced before the reply is checked.
+    trace::init_creds_decrypted_reply((&enc_part.key).into());
     if enc_part.nonce != nonce {
         return Err(Error::NonceMismatch);
     }
     // MIT `krb5int_fast_verify_nego` (`fast.c:635-675`): a ticket with enc-pa-rep must carry a
     // PA-REQ-ENC-PA-REP checksum over the AS-REQ (the outer request under FAST) under the reply
-    // key, else KRB5_KDCREP_MODIFIED.
+    // key, else KRB5_KDCREP_MODIFIED. Whether the KDC has FAST is traced either way.
     if let Some(rd) = req_der {
-        crate::preauth::verify_req_enc_pa_rep(&enc_part, &key, rd)?;
+        let verified = crate::preauth::verify_req_enc_pa_rep(&enc_part, &key, rd);
+        if trace::enabled() {
+            trace::fast_nego(verified.is_ok() && fast_avail_in(&enc_part));
+        }
+        verified?;
+    } else if trace::enabled() {
+        trace::fast_nego(fast_avail_in(&enc_part));
     }
     let expect_anon = krb5_types::pkinit::is_anonymous_principal(cname);
     if inner.cname != *cname {
@@ -930,11 +1016,7 @@ fn finish_as_rep(
     }
     let session_etype = EncryptionType::known(enc_part.key.keytype)?;
     let session_key = ProtocolKey::from_bytes(session_etype, enc_part.key.keyvalue.as_ref())?;
-    let fast_avail = enc_part.flags.enc_pa_rep()
-        && enc_part
-            .encrypted_pa_data
-            .as_ref()
-            .is_some_and(|v| v.iter().any(|p| p.padata_type == pa::FX_FAST));
+    let fast_avail = fast_avail_in(&enc_part);
     Ok(AsOutcome {
         ticket: inner.ticket,
         enc_part,
@@ -946,6 +1028,16 @@ fn finish_as_rep(
         used_fast,
         pa_type,
     })
+}
+
+/// MIT `krb5int_fast_verify_nego` (`lib/krb5/krb/fast.c:635-675`): the KDC has FAST when the
+/// reply sets enc-pa-rep and its encrypted padata carries PA-FX-FAST.
+fn fast_avail_in(enc_part: &EncKdcRepPart) -> bool {
+    enc_part.flags.enc_pa_rep()
+        && enc_part
+            .encrypted_pa_data
+            .as_ref()
+            .is_some_and(|v| v.iter().any(|p| p.padata_type == pa::FX_FAST))
 }
 
 fn verify_anonymous(
@@ -1326,11 +1418,17 @@ pub fn as_init_creds_options(req: &AsRequest<'_>) -> (KdcOptions, Option<Kerbero
     (t.opts, t.from)
 }
 
-fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
-    pa_enc_timestamp_at(key, &KerberosTime::now())
+/// An encrypted timestamp of now; `armored` when it goes inside FAST armor.
+fn pa_enc_timestamp(key: &ProtocolKey, armored: bool) -> Result<PaData, Error> {
+    pa_enc_timestamp_at(key, &KerberosTime::now(), armored)
 }
 
-fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
+/// An encrypted timestamp of `now`; `armored` when it goes inside FAST armor.
+fn pa_enc_timestamp_at(
+    key: &ProtocolKey,
+    now: &KerberosTime,
+    armored: bool,
+) -> Result<PaData, Error> {
     let usec = now.0.timestamp_subsec_micros() % 1_000_000;
     let ts = PaEncTsEnc {
         patimestamp: now.clone(),
@@ -1339,6 +1437,17 @@ fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, 
     let der = encode(&ts)?;
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
     let cipher = encrypt(key, usage, &der)?;
+    // MIT `encts_process` (`preauth_encts.c:96-101`): the timestamp and its ciphertext are traced
+    // as the request carries them; inside FAST armor the ciphertext prints only as its hash.
+    let (sec, usec) = (
+        i64::from(now.unix_seconds()),
+        i32::try_from(usec).unwrap_or_default(),
+    );
+    if armored {
+        trace::preauth_enc_ts_armored(sec, usec, &der, &cipher);
+    } else {
+        trace::preauth_enc_ts(sec, usec, &der, &cipher);
+    }
     let enc = EncryptedData {
         etype: key.etype().to_iana(),
         kvno: None,
@@ -1491,6 +1600,171 @@ fn random_nonce() -> Result<u32, Error> {
     getrandom::getrandom(&mut b).map_err(|e| Error::transport_msg(e.to_string()))?;
     let n = u32::from_be_bytes(b) & 0x7fff_ffff;
     Ok(if n == 0 { 1 } else { n })
+}
+
+/// One AS round trip to the realm's KDC.
+/// MIT `k5_init_creds_get` (`lib/krb5/krb/get_in_tkt.c:546-588`): each request goes to the KDCs
+/// of the request's realm.
+/// MIT `init_creds_validate_reply` (`lib/krb5/krb/get_in_tkt.c:1081-1115`): a KRB-ERROR answer is
+/// traced as it arrives.
+fn send_as(req: &AsRequest<'_>, wire: &[u8]) -> Result<KdcMsg, Error> {
+    let msg = classify(&sendto_kdc(req.kdc, req.realm, wire, SendKind::As)?)?;
+    if let KdcMsg::Error(e) = &msg {
+        trace::init_creds_error_reply(trace::kdc_code(e.error_code));
+    }
+    Ok(msg)
+}
+
+/// The request's client as the trace prints it.
+fn client_princ<'a>(req: &'a AsRequest<'_>) -> trace::Princ<'a> {
+    trace::Princ::new(&req.cname, req.realm.as_bytes())
+}
+
+/// MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:965-1030`): a padata list's types, then the
+/// etype-info entry or the salt it selects and the cookie it carries, before any module runs.
+fn trace_preauth_input(padata: &[PaData], etypes: &[i32]) {
+    if !trace::enabled() {
+        return;
+    }
+    trace::preauth_input(padata);
+    trace_etype_info(padata, etypes);
+    if let Some(c) = find_pa(padata, pa::FX_COOKIE) {
+        trace::preauth_cookie(c.padata_value.as_ref());
+    }
+}
+
+/// MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:790-854`): the etype-info2, else etype-info,
+/// entry for the first requested enctype it lists; an element that does not decode counts as
+/// absent.
+/// MIT `get_salt` (`lib/krb5/krb/preauth2.c:743-786`): with neither, a pw-salt or afs3-salt.
+fn trace_etype_info(padata: &[PaData], etypes: &[i32]) {
+    /// An etype-info entry: enctype, salt (`None` for none), s2kparams.
+    type Entry = (i32, Option<Vec<u8>>, Vec<u8>);
+    let entries: Option<Vec<Entry>> = if let Some(p) = find_pa(padata, pa::ETYPE_INFO2) {
+        decode::<EtypeInfo2>(p.padata_value.as_ref())
+            .ok()
+            .map(|info| {
+                info.iter()
+                    .map(|e| {
+                        (
+                            e.etype,
+                            e.salt.as_ref().map(|s| s.as_bytes().to_vec()),
+                            e.s2kparams
+                                .as_ref()
+                                .map(|p| p.as_ref().to_vec())
+                                .unwrap_or_default(),
+                        )
+                    })
+                    .collect()
+            })
+    } else if let Some(p) = find_pa(padata, pa::ETYPE_INFO) {
+        decode::<EtypeInfo>(p.padata_value.as_ref())
+            .ok()
+            .map(|info| {
+                info.iter()
+                    .map(|e| {
+                        (
+                            e.etype,
+                            e.salt.as_ref().map(|s| s.as_ref().to_vec()),
+                            Vec::new(),
+                        )
+                    })
+                    .collect()
+            })
+    } else {
+        None
+    };
+    if let Some(list) = entries {
+        if let Some((etype, salt, params)) = etypes
+            .iter()
+            .find_map(|want| list.iter().find(|e| e.0 == *want))
+        {
+            trace::preauth_etype_info(*etype, salt.as_deref().unwrap_or_default(), params);
+        }
+        return;
+    }
+    let Some(p) = find_pa(padata, pa::PW_SALT).or_else(|| find_pa(padata, pa::AFS3_SALT)) else {
+        return;
+    };
+    let mut salt = p.padata_value.as_ref().to_vec();
+    if p.padata_type == pa::AFS3_SALT {
+        if let Some(at) = salt.iter().position(|&b| b == b'@') {
+            salt.truncate(at);
+        }
+        if salt.last() == Some(&0) {
+            salt.pop();
+        }
+    }
+    trace::preauth_salt(&salt, p.padata_type);
+}
+
+/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1756-1789`): the AS-REP's padata goes
+/// through the preauth modules once more, with nothing produced for a next request. `module` is
+/// the real mechanism that consumes a reply padata type here.
+fn trace_reply_padata(padata: Option<&[PaData]>, etypes: &[i32], module: Option<(&str, i32)>) {
+    let Some(padata) = padata else {
+        return;
+    };
+    trace_preauth_input(padata, etypes);
+    if let Some((name, patype)) = module
+        && padata.iter().any(|p| p.padata_type == patype)
+    {
+        trace::preauth_process(name, patype, true, 0, None);
+    }
+    trace::preauth_output(&[]);
+}
+
+/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1813-1822`): with no salt from the KDC,
+/// the client's own is traced first.
+/// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:47-136`): then the salt the reply key is got
+/// for: the client's own for the password, as before this trace; the KDC's, if any, for a keytab.
+fn trace_gak_salt(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32], keytab: bool) {
+    if !trace::enabled() {
+        return;
+    }
+    let default_salt = salt_cname(&req.cname).default_salt(req.realm);
+    let kdc_salt = reply_salt(padata, etypes);
+    if kdc_salt.is_none() {
+        trace::init_creds_salt_princ(&default_salt);
+    }
+    let salt = kdc_salt.as_deref().filter(|_| keytab);
+    trace::init_creds_gak(salt.unwrap_or(&default_salt), &[]);
+}
+
+/// The salt MIT's context holds after the reply padata: the selected etype-info entry's, or `None`
+/// when the entry has none or there is no etype-info (`default_salt`).
+fn reply_salt(padata: Option<&[PaData]>, etypes: &[i32]) -> Option<Vec<u8>> {
+    let p = find_pa(padata?, pa::ETYPE_INFO2)?;
+    let info = decode::<EtypeInfo2>(p.padata_value.as_ref()).ok()?;
+    let entry = etypes
+        .iter()
+        .find_map(|want| info.iter().find(|e| e.etype == *want))?;
+    entry.salt.as_ref().map(|s| s.as_bytes().to_vec())
+}
+
+/// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:33-80`): a keytab key is the client's
+/// entry of the wanted enctype, at whatever version.
+/// MIT `krb5_kt_get_entry` (`lib/krb5/keytab/ktfns.c:57-80`): the lookup is traced with its
+/// result. Only a request [`trace::with_gak_keytab`] names a keytab for is traced.
+fn trace_keytab_gak(req: &AsRequest<'_>, keys: &[ProtocolKey], etype: EncryptionType) {
+    if keys.is_empty() || !trace::enabled() {
+        return;
+    }
+    let Some(name) = trace::gak_keytab() else {
+        return;
+    };
+    let client = client_princ(req);
+    // MIT `krb5_ktfile_get_entry` (`lib/krb5/keytab/kt_file.c:379-391`): no entry is
+    // KRB5_KT_NOTFOUND with a message naming the principal.
+    let (code, msg) = if keys.iter().any(|k| k.etype() == etype) {
+        (0, None)
+    } else {
+        (
+            trace::KRB5_KT_NOTFOUND,
+            Some(format!("No key table entry found for {}", client.unparse())),
+        )
+    };
+    trace::kt_get_entry(&name, client, 0, etype.to_iana(), code, msg.as_deref());
 }
 
 fn emit(event: &'static str, correlation_id: &str, started: Instant, err: Option<&Error>) {

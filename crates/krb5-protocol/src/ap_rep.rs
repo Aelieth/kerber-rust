@@ -7,6 +7,7 @@ use krb5_types::{
 };
 
 use crate::error::Error;
+use crate::trace;
 
 /// Build an AP-REP echoing `ctime`/`cusec` from the AP-REQ authenticator.
 ///
@@ -60,5 +61,13 @@ pub fn verify_ap_rep(
         return Err(Error::ReplyMismatch("AP-REP ctime/cusec mismatch".into()));
     }
     let _ = Microseconds::validate(part.cusec);
+    // MIT `krb5_rd_rep` (`lib/krb5/krb/rd_rep.c:69-145`): a reply that matched is traced with its
+    // time, its subkey as a hash and its sequence number, a C `int`.
+    trace::rd_rep(
+        i64::from(part.ctime.unix_seconds()),
+        i32::try_from(part.cusec.get()).unwrap_or_default(),
+        part.subkey.as_ref().map(Into::into),
+        i32::from_ne_bytes(part.seq_number.unwrap_or_default().to_ne_bytes()),
+    );
     Ok(part)
 }

@@ -14,13 +14,17 @@ use krb5_types::spake::{PaSpake, SF_NONE, SpakeChallenge};
 use krb5_types::{KrbError, PaData, err, pa};
 
 use super::{
-    AsOutcome, AsReqTimes, AsRequest, KdcMsg, S2kMaterial, build_as_req_from, classify,
-    classify_kdc_error, find_pa, finish_as_rep, method_from_error, pick_key, req_sname, salt_cname,
-    select_s2k, select_s2k_after,
+    AsOutcome, AsReqTimes, AsRequest, KdcMsg, S2kMaterial, build_as_req_from, classify_kdc_error,
+    conf_preferred_preauth_types, find_pa, finish_as_rep, method_from_error, pick_key, req_sname,
+    salt_cname, select_s2k, select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
+    trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
 use crate::preauth::{pa_spake_response, pa_spake_support};
-use crate::transport::exchange;
+use crate::trace;
+
+/// MIT's name of the SPAKE module (`spake_client.c`).
+const SPAKE_MODULE: &str = "spake";
 
 /// The groups the client permits, in configuration order; none means no SPAKE module.
 ///
@@ -64,6 +68,7 @@ enum Round {
 fn send_support(st: &mut SpakeState) -> PaData {
     let support = pa_spake_support(&st.groups);
     st.support = Some(support.padata_value.as_ref().to_vec());
+    trace::spake_send_support();
     support
 }
 
@@ -89,11 +94,13 @@ fn process_challenge(
         return Ok(Round::Failed);
     }
     let Some(group) = SpakeGroup::from_number(ch.group).filter(|g| st.groups.contains(g)) else {
+        trace::spake_reject_challenge(ch.group);
         if st.support.is_some() {
             return Ok(Round::Failed);
         }
         return Ok(Round::Send(send_support(st), None));
     };
+    trace::spake_receive_challenge(ch.group, ch.pubkey.as_ref());
     if !spake_contains_sf_none(ch) {
         return Ok(Round::Failed);
     }
@@ -106,6 +113,7 @@ fn process_challenge(
         hint.clone(),
     )?;
     let (etype, salt, params) = hint.clone();
+    trace_keytab_gak(req, keys, etype);
     let ikey = pick_key(keys, Some(etype)).map_or_else(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
@@ -191,8 +199,26 @@ pub(super) fn continue_spake(
     let mut current = err.clone();
     // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:987-990`): each error's etype-info is read as it arrives; a challenge that answers a request carrying the cookie names none, so the hint's stands.
     let mut hint = select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?;
+    // The error that started this round, past the first, whose padata the trace shows first.
+    let mut again: Option<i32> = None;
     loop {
         let method = method_from_error(&current)?;
+        // MIT `init_creds_step_request` (`get_in_tkt.c:1308-1352`): more padata continues the
+        // chosen mechanism; a new hint is preauthentication from the KDC's method data.
+        match again {
+            Some(err::MORE_PREAUTH_DATA_REQUIRED) => {
+                trace::init_creds_preauth_more(pa::SPAKE);
+                trace_preauth_input(&method, etypes);
+            }
+            Some(_) if trace::enabled() => {
+                trace::init_creds_preauth();
+                trace_preauth_input(
+                    &sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types()),
+                    etypes,
+                );
+            }
+            _ => {}
+        }
         let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
         let body_der = encode(&req2.0.req_body)?;
         let round = match find_pa(&method, pa::SPAKE) {
@@ -209,6 +235,14 @@ pub(super) fn continue_spake(
             None => Round::Failed,
         };
         let Round::Send(module_pa, k0) = round else {
+            // MIT `process_pa_data` (`preauth2.c:648-728`): the module's failure is traced.
+            trace::preauth_process(
+                SPAKE_MODULE,
+                pa::SPAKE,
+                true,
+                trace::kdc_code(err::PREAUTH_FAILED),
+                None,
+            );
             if st.responded {
                 return Err(Error::KrbError {
                     code: err::PREAUTH_FAILED,
@@ -223,15 +257,20 @@ pub(super) fn continue_spake(
             .into_iter()
             .collect();
         padata.push(module_pa);
+        trace::preauth_process(SPAKE_MODULE, pa::SPAKE, true, 0, None);
+        trace::preauth_output(&padata);
         padata.extend(req2.0.padata.take().unwrap_or_default());
         req2.0.padata = Some(padata);
         let wire = encode(&req2)?;
-        let reply = exchange(req.kdc, &wire)?;
-        match classify(&reply)? {
+        match send_as(req, &wire)? {
             KdcMsg::AsRep(rep) => {
+                trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
                 // A reply to support alone is in the long-term key, as MIT's `gak_fct` gives it.
                 let key = match k0 {
-                    Some(k) => Some(k),
+                    Some(k) => {
+                        trace::init_creds_as_key_preauth((&k).into());
+                        Some(k)
+                    }
                     None => pick_key(keys, Some(hint.0)),
                 };
                 return finish_as_rep(
@@ -250,7 +289,10 @@ pub(super) fn continue_spake(
                 )
                 .map(|out| SpakeEnd::Done(Box::new(out)));
             }
-            KdcMsg::Error(e) if e.error_code == err::MORE_PREAUTH_DATA_REQUIRED => current = e,
+            KdcMsg::Error(e) if e.error_code == err::MORE_PREAUTH_DATA_REQUIRED => {
+                again = Some(e.error_code);
+                current = e;
+            }
             KdcMsg::Error(e) if e.error_code == err::PREAUTH_FAILED && !st.responded => {
                 return Ok(SpakeEnd::Fallback(Box::new(if e.e_data.is_some() {
                     e
@@ -259,6 +301,7 @@ pub(super) fn continue_spake(
                 })));
             }
             KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED && !st.responded => {
+                again = Some(e.error_code);
                 method_err = e.clone();
                 current = e;
             }

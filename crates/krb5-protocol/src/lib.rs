@@ -9,7 +9,8 @@
 //! differential tooling (`capture`, `diff`). There is no C FFI.
 //!
 //! The public surface is the names this root re-exports. Child modules
-//! stay private.
+//! stay private, but for `trace`, MIT's `KRB5_TRACE` log and its trace
+//! points, which the tools call where MIT's library does.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -40,6 +41,7 @@ mod secret_file;
 #[cfg(target_os = "linux")]
 mod selabel;
 mod tgs;
+pub mod trace;
 mod transport;
 mod vfy_increds;
 

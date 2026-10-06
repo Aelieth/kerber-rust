@@ -2,16 +2,18 @@
 //! `krb5int_fast_process_response` / `krb5int_fast_process_error`).
 
 use super::{
-    AsOutcome, AsReqTimes, AsRequest, KdcMsg, PasswordPrompt, build_as_req_from, classify,
-    classify_kdc_error, find_pa, finish_as_rep, first_etype, pa_enc_timestamp, pick_info2,
-    pick_key, req_sname, salt_cname, select_s2k, with_prompted,
+    AsOutcome, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, PasswordPrompt, build_as_req_from,
+    classify_kdc_error, find_pa, finish_as_rep, first_etype, gak_found, method_from_error,
+    pa_enc_timestamp, pick_info2, pick_key, req_sname, salt_cname, select_s2k, send_as,
+    sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
+    with_prompted,
 };
 use crate::error::Error;
 use crate::preauth::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, unwrap_fast_rep_checked,
     verify_fast_finished,
 };
-use crate::transport::exchange;
+use crate::trace;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_types::{AsRep, EtypeInfo2, KrbError, MethodData, PaData, PrincipalName, err, pa};
@@ -31,6 +33,8 @@ pub struct FastArmor {
 /// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1728`): only a preauth-required error that is
 /// marked retry continues. An outer error that did not unwrap is returned as itself, and the
 /// cookie leads the inner padata on the retry.
+/// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor ticket's session key, the
+/// armor authenticator and the armor key are traced as they are made.
 pub(super) fn continue_fast(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -48,11 +52,21 @@ pub(super) fn continue_fast(
     let akey = armor_key(&armor.session, Some(&sub))?;
     // RFC 6113 reply-key base is the PA-ETYPE-INFO2 long-term key, not preferred()[0].
     let ap = fast_armor_ap(armor, &sub)?;
+    trace::fast_armor_ccache_key((&armor.session).into());
+    trace::mk_req(
+        trace::Princ::new(&armor.cname, armor.crealm.as_bytes()),
+        trace::Princ::new(&armor.ticket.sname, armor.ticket.realm.as_bytes()),
+        0,
+        Some((&sub).into()),
+        (&armor.session).into(),
+    );
+    trace::fast_armor_key((&akey).into());
     let mut probe = build_as_req_from(req, nonce, bound, None, etypes)?;
+    trace::init_creds_preauth_none();
     attach_fast(&mut probe, &ap, &akey, Vec::new())?;
+    trace::fast_encode();
     let wire = encode(&probe)?;
-    let reply = exchange(req.kdc, &wire)?;
-    match classify(&reply)? {
+    match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => with_prompted(req, prompt, |req| {
             finish_fast_as(req, keys, nonce, etypes, &akey, None, rep, &wire, bound)
         }),
@@ -69,25 +83,41 @@ pub(super) fn continue_fast(
                 return classify_kdc_error(&inner);
             }
             with_prompted(req, prompt, |req| {
+                if trace::enabled() {
+                    trace::init_creds_preauth();
+                    trace_preauth_input(
+                        &sort_krb5_padata_sequence(
+                            &method_from_error(&inner).unwrap_or_default(),
+                            &super::conf_preferred_preauth_types(),
+                        ),
+                        etypes,
+                    );
+                }
                 let (etype, salt, params) =
                     select_s2k(&inner, &salt_cname(&req.cname), req.realm, etypes)?;
+                trace_keytab_gak(req, keys, etype);
                 let client_key = pick_key(keys, Some(etype)).map_or_else(
                     || string_to_key(etype, req.password, &salt, params.as_deref()),
                     Ok,
                 )?;
+                if gak_found(keys, &client_key, etype) {
+                    trace::preauth_enc_ts_key_gak((&client_key).into());
+                }
                 // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
                 // preauth module's PA data, so the cookie leads the inner padata.
                 let mut inner_pa = Vec::new();
                 if let Some(c) = cookie {
                     inner_pa.push(c);
                 }
-                inner_pa.push(pa_enc_timestamp(&client_key)?);
+                inner_pa.push(pa_enc_timestamp(&client_key, true)?);
+                trace::preauth_process(ENCTS_MODULE, pa::ENC_TIMESTAMP, true, 0, None);
+                trace::preauth_output(&inner_pa);
                 let ap = fast_armor_ap(armor, &sub)?;
                 let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
                 attach_fast(&mut req2, &ap, &akey, inner_pa)?;
+                trace::fast_encode();
                 let wire = encode(&req2)?;
-                let reply = exchange(req.kdc, &wire)?;
-                match classify(&reply)? {
+                match send_as(req, &wire)? {
                     KdcMsg::AsRep(rep) => finish_fast_as(
                         req,
                         keys,
@@ -113,6 +143,8 @@ pub(super) fn continue_fast(
 /// MIT `krb5int_fast_process_response` (`fast.c:548-556`): once the finished checksum holds, the
 /// reply client is the finished client. The outer client name and padata are unauthenticated and
 /// are not consulted again after that replacement.
+/// MIT `krb5int_fast_reply_key` (`lib/krb5/krb/fast.c:570-592`): the strengthened reply key is
+/// traced after the key it strengthens.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_fast_as(
     req: &AsRequest<'_>,
@@ -125,22 +157,23 @@ fn finish_fast_as(
     wire: &[u8],
     bound: &AsReqTimes,
 ) -> Result<AsOutcome, Error> {
+    trace::fast_decode();
     let fast = unwrap_fast_rep_checked(akey, &rep.0.padata, nonce)?;
+    trace_reply_padata(Some(&fast.padata), etypes, None);
     let sent_preauth = client_key.is_some();
     let client_key = match client_key {
-        Some(k) => k,
-        None => fast_base_key(
-            keys,
-            req.password,
-            &req.cname,
-            req.realm,
-            etypes,
-            &fast,
-            rep.0.enc_part.etype,
-        )?,
+        Some(k) => {
+            trace::init_creds_as_key_preauth((&k).into());
+            k
+        }
+        None => fast_base_key(req, keys, etypes, &fast, rep.0.enc_part.etype)?,
     };
     let reply_key = match &fast.strengthen_key {
-        Some(sk) => apply_strengthen(sk, &client_key)?,
+        Some(sk) => {
+            let k = apply_strengthen(sk, &client_key)?;
+            trace::fast_reply_key((&k).into());
+            k
+        }
         None => client_key,
     };
     let finished = fast.finished.as_ref().ok_or_else(|| {
@@ -173,16 +206,16 @@ fn finish_fast_as(
     )
 }
 
+/// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:47-136`): with no key from preauth, the
+/// reply key is got for the FAST reply's etype-info, and traced with its salt.
 fn fast_base_key(
+    req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    password: &[u8],
-    cname: &PrincipalName,
-    realm: &str,
     etypes: &[i32],
     fast: &krb5_types::fast::KrbFastResponse,
     enc_etype: i32,
 ) -> Result<ProtocolKey, Error> {
-    let default_salt = salt_cname(cname).default_salt(realm);
+    let default_salt = salt_cname(&req.cname).default_salt(req.realm);
     let material = fast.padata.iter().find_map(|p| {
         if p.padata_type != pa::ETYPE_INFO2 {
             return None;
@@ -190,20 +223,26 @@ fn fast_base_key(
         let info: EtypeInfo2 = decode(p.padata_value.as_ref()).ok()?;
         pick_info2(&info, &default_salt, etypes)
     });
-    let (etype, salt, params) = match material {
-        Some(m) => m,
-        None => (
+    let (etype, salt, params) = if let Some(m) = material {
+        m
+    } else {
+        trace::init_creds_salt_princ(&default_salt);
+        (
             EncryptionType::known(enc_etype).unwrap_or_else(|_| first_etype(etypes)),
             default_salt,
             None,
-        ),
-    };
-    pick_key(keys, Some(etype))
-        .map_or_else(
-            || string_to_key(etype, password, &salt, params.as_deref()),
-            Ok,
         )
-        .map_err(Into::into)
+    };
+    trace::init_creds_gak(&salt, params.as_deref().unwrap_or_default());
+    trace_keytab_gak(req, keys, etype);
+    let key = pick_key(keys, Some(etype)).map_or_else(
+        || string_to_key(etype, req.password, &salt, params.as_deref()),
+        Ok,
+    )?;
+    if gak_found(keys, &key, etype) {
+        trace::init_creds_as_key_gak((&key).into());
+    }
+    Ok(key)
 }
 
 fn fast_armor_ap(armor: &FastArmor, sub: &ProtocolKey) -> Result<krb5_types::ApReq, Error> {
@@ -264,6 +303,9 @@ pub(crate) fn fast_error_material(
     let Ok(method) = decode::<MethodData>(ed.as_ref()) else {
         return outer_fatal();
     };
+    // MIT `decrypt_fast_reply` (`lib/krb5/krb/fast.c:359-415`): traced once the e-data is a padata
+    // sequence, before PA-FX-FAST is looked for.
+    trace::fast_decode();
     let Some(fx) = find_pa(&method, pa::FX_FAST) else {
         return outer_fatal();
     };

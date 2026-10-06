@@ -519,6 +519,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **protocol.** `KRB5_TRACE` (`krb5_protocol::trace`): MIT's formatter, file and trace points on
+  the KDC sends, AS preauth, FAST, SPAKE, TGS and kpasswd; a key prints as MIT's 4-digit hash, and
+  so does the SPAKE result.
 - **client.** SPAKE as MIT's `spake_client.c`: `spake_preauth_groups` (default edwards25519), one support
   message for a group it lacks, encrypted timestamp after a 24. Units; wire as Fedora's kinit.
 - **kdc.** SPAKE as MIT's `spake_kdc.c`: edwards25519, Fedora's optimistic challenge, MIT's cookie,
