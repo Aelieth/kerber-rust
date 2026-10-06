@@ -34,6 +34,7 @@ mod listen;
 mod lockout;
 mod lookaside;
 mod mkey;
+mod net_server;
 mod osa;
 mod persist;
 mod plugins;
