@@ -137,7 +137,7 @@ fn main() {
                             stash: &stash,
                             allowed_clients: allowed.as_deref(),
                         },
-                        replay,
+                        &replay,
                     ) {
                         Ok(_) => println!("kprop ok"),
                         Err(e) => eprintln!("krb5-kpropd: {e}"),

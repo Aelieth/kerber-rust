@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **admin.** kpasswd's server zeroes every copy of the new password it reads (the decrypted
+  request, its decoded `ChangePasswdData` field, the copy it changes to), as MIT's kadmind
+  zaps them. Unit.
 - **kdc.** With `domain_sid`, S4U2Self no longer mints a local identity for another realm's
   user: foreign alice@B got local alice@A's RID (or 1000) under the local SID, a referral hop the
   service's. Its realm's LOGON_INFO is carried.
@@ -1414,6 +1417,12 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **types.** A seq-number sent as a negative INTEGER, as old Heimdal does, decodes as MIT's
+  `decode_seqno` reads it, the same 32 bits unsigned, in authenticators, AP-REPs, KRB-SAFEs
+  and KRB-PRIVs. Units.
+- **admin.** kpasswd (server and client), kpropd and kprop check each KRB-PRIV's and
+  KRB-SAFE's seq-number as MIT's `krb5_rd_priv` and `krb5_rd_safe`: a wrong or missing one
+  is refused, and kpropd answers 42. Live; units.
 - **admin.** kpasswd and kpropd answer as MIT's: the AP-REP echoes the client's subkey (kprop
   sends none) with a random 30-bit seq, the kpasswd KRB-PRIV has it and the receiving
   address, and a kpropd refusal names host/<this host>. Live; units.

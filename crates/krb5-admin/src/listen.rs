@@ -16,12 +16,13 @@ use krb5_crypto::ProtocolKey;
 use krb5_kdc::SharedDump as SharedStore;
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, DEFAULT_SKEW, ReplayCache,
-    local_host_address, permitted_enctypes_kdc, unwrap_krb_priv_ex, verify_ap_req_ex,
+    local_host_address, permitted_enctypes_kdc, verify_ap_req_ex,
 };
 use krb5_types::{
     ChangePasswdData, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, err,
     principal_compare,
 };
+use zeroize::Zeroize;
 
 use crate::{AdminSession, Error, Op};
 
@@ -471,26 +472,31 @@ fn handle_kpasswd_from(
     let Ok(ap_rep) = ac.mk_rep().and_then(|r| Ok(encode(&r)?)) else {
         return kpasswd_chpwfail_error(&store_realm, 3, "Failed replying to application request");
     };
-    let priv_key = ac.recv_subkey().unwrap_or_else(|| ac.key()).clone();
     let mut reply = KpasswdReply {
         ac,
         ap_rep,
         local: local_host_address(local),
     };
-    let Ok(user_data) = unwrap_krb_priv_ex(&priv_key, priv_raw, replay, false, false) else {
+    // MIT `process_chpw_request` (`schpw.c:153-166`): `krb5_rd_priv` on that context, with no address set, takes the request's KRB-PRIV only with the authenticator's sequence number (none when it had none); any failure is HARDERROR "Failed decrypting request".
+    let Ok(user_data) = reply.ac.rd_priv(priv_raw) else {
         let mut body = Vec::from(2u16.to_be_bytes());
         body.extend_from_slice(b"Failed decrypting request");
         return reply.result(&store_realm, &body);
     };
     let ticket_crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
     let (targ, targ_realm, newpass) = if ver == RFC3244_VERSION {
-        if let Ok(cpw) = decode::<ChangePasswdData>(&user_data) {
+        let decoded = decode::<ChangePasswdData>(&user_data);
+        // MIT `process_chpw_request` (`kadmin/server/schpw.c:174-185`): the decrypted request is zapped once ChangePasswdData is decoded from it.
+        wipe_secret(user_data);
+        if let Ok(cpw) = decoded {
             let name = cpw.targname.unwrap_or_else(|| ok.ticket_part.cname.clone());
             let realm = cpw.targrealm.as_ref().map_or_else(
                 || ticket_crealm.clone(),
                 |r| String::from_utf8_lossy(r.as_bytes()).into_owned(),
             );
-            (name, realm, cpw.newpasswd.to_vec())
+            let newpass = cpw.newpasswd.to_vec();
+            wipe_octets(cpw.newpasswd);
+            (name, realm, newpass)
         } else {
             let mut body = Vec::with_capacity(2 + DECODE_FAIL.len());
             body.extend_from_slice(&1u16.to_be_bytes());
@@ -588,6 +594,8 @@ fn handle_kpasswd_from(
             }
         }
     };
+    // MIT `process_chpw_request` (`kadmin/server/schpw.c:215-218`): both copies of the new password are zapped once the change is made or refused.
+    wipe_secret(newpass);
     let log_outcome = if code == 0 { "ok" } else { "error" };
     let log_line = if ver == RFC3244_VERSION {
         format!("setpw request from {from} by {client} for {target_unparsed}: {log_err}")
@@ -607,6 +615,40 @@ fn handle_kpasswd_from(
     body.extend_from_slice(&code.to_be_bytes());
     body.extend_from_slice(text.as_bytes());
     reply.result(&store_realm, &body)
+}
+
+/// Zeroizes every byte of `buf`'s allocation, then frees it: a new password a kpasswd request
+/// carried, or the request plaintext holding one. A test build keeps each wiped allocation
+/// ([`wiped::take`]) instead of freeing it, so a test can see it zeroed, whole.
+fn wipe_secret(mut buf: Vec<u8>) {
+    buf.resize(buf.capacity(), 0);
+    buf.as_mut_slice().zeroize();
+    #[cfg(test)]
+    let _ = wiped::WIPED.try_with(|w| w.borrow_mut().push(buf));
+}
+
+/// Wipes an octet string's bytes when it holds the only reference to them, as a field decoded
+/// from a request does.
+fn wipe_octets(octets: krb5_types::OctetString) {
+    if let Ok(buf) = bytes::Bytes::from(octets).try_into_mut() {
+        wipe_secret(Vec::<u8>::from(buf));
+    }
+}
+
+/// The allocations this module's wipes zeroed on the current thread, kept for the tests.
+#[cfg(test)]
+mod wiped {
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// What [`super::wipe_secret`] zeroed on this thread, kept alive.
+        pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The allocations wiped on this thread since the last call.
+    pub(super) fn take() -> Vec<Vec<u8>> {
+        WIPED.with(|w| std::mem::take(&mut *w.borrow_mut()))
+    }
 }
 
 /// Parse a kpasswd reply (`len,ver,AP-REP-len,AP-REP,KRB-PRIV`).
@@ -843,7 +885,7 @@ mod tests {
     use krb5_kdc::principals::kadmin_changepw;
     use krb5_kdc::testrealm::bootstrap_documented;
 
-    use super::{encode_kpasswd_req, serve_kpasswd_udp};
+    use super::{encode_kpasswd_req, serve_kpasswd_udp, wiped};
 
     /// A request whose AP-REQ does not decode: kpasswd answers it with a framed KRB-ERROR.
     fn exchange(sock: &UdpSocket, to: Option<SocketAddr>) -> Option<(Vec<u8>, SocketAddr)> {
@@ -895,5 +937,83 @@ mod tests {
         );
         stop.store(true, Ordering::Relaxed);
         server.join().unwrap().unwrap();
+    }
+
+    /// MIT `process_chpw_request` (`kadmin/server/schpw.c:174-218`): the decrypted request, the new password decoded from it and the copy the change is made with are each zapped.
+    #[test]
+    fn kpasswd_zeroes_every_copy_of_the_new_password() {
+        use krb5_asn1::encode;
+        use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
+        use krb5_protocol::{
+            ReplayCache, as_req_sname, build_ap_req, build_krb_priv_with_seq, pa_enc_timestamp,
+        };
+        use krb5_types::{ChangePasswdData, PrincipalName, ascii};
+
+        krb5_config::isolate_test_krb5();
+        let (store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let key_of = |name: &PrincipalName| {
+            store
+                .get_name(name)
+                .unwrap()
+                .best_key()
+                .unwrap()
+                .key
+                .clone()
+        };
+        let (user_key, cpw_key) = (key_of(&user), key_of(&kadmin_changepw()));
+        let as_req = as_req_sname(
+            user.clone(),
+            TEST_REALM,
+            61,
+            Some(vec![pa_enc_timestamp(&user_key).unwrap()]),
+            kadmin_changepw(),
+            vec![user_key.etype().to_iana()],
+        )
+        .unwrap();
+        let as_out = krb5_kdc::issue_as(&store, &as_req).unwrap();
+        let ap = build_ap_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let password = b"scratch-wiped-pass-1";
+        let cpw = ChangePasswdData {
+            newpasswd: password.to_vec().into(),
+            targname: Some(user.clone()),
+            targrealm: Some(ascii(TEST_REALM)),
+        };
+        let cpw_der = encode(&cpw).unwrap();
+        let priv_msg = build_krb_priv_with_seq(&as_out.session_key, &cpw_der, None).unwrap();
+        let (ap_der, priv_der) = (encode(&ap).unwrap(), encode(&priv_msg).unwrap());
+        let mut req = Vec::new();
+        req.extend_from_slice(
+            &u16::try_from(6 + ap_der.len() + priv_der.len())
+                .unwrap()
+                .to_be_bytes(),
+        );
+        req.extend_from_slice(&0xff80u16.to_be_bytes());
+        req.extend_from_slice(&u16::try_from(ap_der.len()).unwrap().to_be_bytes());
+        req.extend_from_slice(&ap_der);
+        req.extend_from_slice(&priv_der);
+        let shared = krb5_kdc::shared_dump(store);
+        wiped::take();
+        let rep = super::handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .unwrap();
+        let zeroed = wiped::take();
+        assert!(
+            u16::from_be_bytes([rep[4], rep[5]]) > 0,
+            "an AP-REP: the request was read"
+        );
+        assert_eq!(
+            zeroed.len(),
+            3,
+            "the decrypted ChangePasswdData, its decoded new password, and the copy changed to"
+        );
+        assert!(zeroed.iter().all(|w| w.iter().all(|b| *b == 0)));
+        assert!(zeroed[0].len() >= cpw_der.len());
+        assert!(zeroed[1].len() >= password.len() && zeroed[2].len() >= password.len());
     }
 }

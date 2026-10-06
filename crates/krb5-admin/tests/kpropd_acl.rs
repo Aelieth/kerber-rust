@@ -72,7 +72,7 @@ fn spawn_kpropd(
             Some(&server),
             Some(TEST_REALM),
             acl.as_deref(),
-            ReplayCache::new(),
+            &ReplayCache::new(),
         )
     });
     (addr, join)

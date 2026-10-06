@@ -1198,7 +1198,7 @@ pub struct EncAsRepPart(pub EncKdcRepPart);
 pub struct EncTgsRepPart(pub EncKdcRepPart);
 
 /// Authenticator ::= [APPLICATION 2] SEQUENCE { ... }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 2)))]
 pub struct Authenticator {
     /// `authenticator-vno [0]`: format version, always 5.
@@ -1233,6 +1233,55 @@ pub struct Authenticator {
 impl Authenticator {
     /// Authenticator version.
     pub const VNO: i32 = 5;
+}
+
+/// [`Authenticator`] as it decodes, its seq-number read as MIT reads it
+/// ([`extra::WireSeqNumber`]).
+#[derive(AsnType, Decode)]
+#[rasn(tag(explicit(application, 2)))]
+struct AuthenticatorOnWire {
+    #[rasn(tag(explicit(0)))]
+    authenticator_vno: i32,
+    #[rasn(tag(explicit(1)))]
+    crealm: Realm,
+    #[rasn(tag(explicit(2)))]
+    cname: PrincipalName,
+    #[rasn(tag(explicit(3)))]
+    cksum: Option<Checksum>,
+    #[rasn(tag(explicit(4)))]
+    cusec: Microseconds,
+    #[rasn(tag(explicit(5)))]
+    ctime: KerberosTime,
+    #[rasn(tag(explicit(6)))]
+    subkey: Option<EncryptionKey>,
+    #[rasn(tag(explicit(7)))]
+    seq_number: Option<extra::WireSeqNumber>,
+    #[rasn(tag(explicit(8)))]
+    authorization_data: Option<AuthorizationData>,
+}
+
+impl Decode for Authenticator {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = AuthenticatorOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            authenticator_vno: w.authenticator_vno,
+            crealm: w.crealm,
+            cname: w.cname,
+            cksum: w.cksum,
+            cusec: w.cusec,
+            ctime: w.ctime,
+            subkey: w.subkey,
+            seq_number: w
+                .seq_number
+                .map(|s| s.value::<D::Error>(decoder.codec()))
+                .transpose()?,
+            authorization_data: w.authorization_data,
+        })
+    }
 }
 
 /// TGS-REQ ::= [APPLICATION 12] KDC-REQ

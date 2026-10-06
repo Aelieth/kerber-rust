@@ -21,9 +21,9 @@ use zeroize::{Zeroize, Zeroizing};
 
 use crate::ap_rep::verify_ap_rep;
 use crate::as_ex::AsOutcome;
+use crate::auth_con::RemoteSeq;
 use crate::error::Error;
-use crate::replay::ReplayCache;
-use crate::safe_priv::{build_krb_priv_with_seq, unwrap_krb_priv_ex, wipe_octets};
+use crate::safe_priv::{build_krb_priv_with_seq, read_krb_priv, wipe_octets};
 use crate::transport::KdcAddr;
 
 /// MIT `KRB5_KPASSWD_SUCCESS`.
@@ -316,13 +316,46 @@ fn change_or_set(
         let (code, rest) = parse_chpw_rep(&priv_rep, true)?;
         (code, rest.to_vec())
     } else {
-        verify_ap_rep(&ap_rep, &as_out.session_key, &authenticator)?;
-        let replay = ReplayCache::new();
-        let user = unwrap_krb_priv_ex(&sub, &priv_rep, &replay, false, false)?;
+        let user = get_clear_result(
+            &ap_rep,
+            &priv_rep,
+            &as_out.session_key,
+            &authenticator,
+            &sub,
+        )?;
         let (code, rest) = parse_chpw_rep(&user, false)?;
         (code, rest.to_vec())
     };
     Ok((code, data))
+}
+
+/// The result a kpasswd reply's KRB-PRIV carries, after its AP-REP.
+/// MIT `get_clear_result` (`lib/krb5/krb/chpw.c:159-181`): `krb5_rd_rep` checks the AP-REP's echo and takes its sequence number as the peer's next, the receive subkey is then put back to the request's own send subkey ("per spec") whatever subkey the AP-REP carried, and `krb5_rd_priv` on that context, which does sequence numbers, reads the KRB-PRIV under it and refuses one that does not carry that number.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] when the AP-REP does not echo the authenticator;
+/// [`Error::KrbError`] `BADORDER` (42) when the KRB-PRIV is out of order, `MSG_TYPE` (40) when
+/// it is not a KRB-PRIV; [`Error::Asn1`] or [`Error::Crypto`] when either does not decode or
+/// decrypt.
+fn get_clear_result(
+    ap_rep: &[u8],
+    priv_rep: &[u8],
+    session: &ProtocolKey,
+    authenticator: &Authenticator,
+    subkey: &ProtocolKey,
+) -> Result<Vec<u8>, Error> {
+    let rep_part = verify_ap_rep(ap_rep, session, authenticator)?;
+    // MIT `krb5_rd_rep` (`lib/krb5/krb/rd_rep.c:130-130`): the AP-REP's sequence number is the one the reply must carry.
+    let mut remote = RemoteSeq::new(rep_part.seq_number.unwrap_or(0));
+    let part = read_krb_priv(subkey, priv_rep)?;
+    if !remote.check(part.seq_number.unwrap_or(0)) {
+        return Err(Error::KrbError {
+            code: err::BADORDER,
+            text: Some("Message out of order".into()),
+        });
+    }
+    Ok(part.user_data.to_vec())
 }
 
 /// KEY_EXP plus a new-password source, not keytab.
@@ -580,6 +613,69 @@ mod parse_rep_tests {
         raw[2..4].copy_from_slice(&KPASSWD_SETPW_VERSION.to_be_bytes());
         let (_, _, from_error) = parse_kpasswd_rep(&raw).unwrap();
         assert!(from_error);
+    }
+
+    /// MIT `get_clear_result` (`chpw.c:159-181`): the reply KRB-PRIV is read under the request's own subkey, whatever subkey the AP-REP carries, and only with the AP-REP's seq-number.
+    #[test]
+    fn the_reply_krb_priv_is_read_under_the_requests_subkey_and_the_ap_reps_seq() {
+        use krb5_asn1::encode;
+        use krb5_crypto::{EncryptionType, ProtocolKey};
+        use krb5_types::{Authenticator, EncryptionKey, KerberosTime, Microseconds, PrincipalName};
+
+        use crate::ap_rep::build_ap_rep;
+        use crate::safe_priv::build_krb_priv_with_seq;
+
+        let session = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let ours = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let fresh = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let authenticator = Authenticator {
+            authenticator_vno: Authenticator::VNO,
+            crealm: krb5_types::ascii("KERBER.TEST"),
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            cksum: None,
+            cusec: Microseconds::from_subsec_micros(1),
+            ctime: KerberosTime::now(),
+            subkey: None,
+            seq_number: Some(0),
+            authorization_data: None,
+        };
+        let result = [0u8, 0];
+        let read = |rep_subkey: Option<&ProtocolKey>, priv_key: &ProtocolKey, priv_seq: u32| {
+            let wire = rep_subkey.map(|k| EncryptionKey {
+                keytype: k.etype().to_iana(),
+                keyvalue: k.as_bytes().to_vec().into(),
+            });
+            let rep = build_ap_rep(&session, &authenticator, wire, Some(77)).unwrap();
+            let msg = build_krb_priv_with_seq(priv_key, &result, Some(priv_seq)).unwrap();
+            super::get_clear_result(
+                &encode(&rep).unwrap(),
+                &encode(&msg).unwrap(),
+                &session,
+                &authenticator,
+                &ours,
+            )
+        };
+        assert_eq!(
+            read(None, &ours, 77).unwrap(),
+            result,
+            "the request's subkey"
+        );
+        assert_eq!(
+            read(Some(&fresh), &ours, 77).unwrap(),
+            result,
+            "the request's subkey, though the AP-REP carries one"
+        );
+        assert!(
+            read(Some(&fresh), &fresh, 77).is_err(),
+            "never the AP-REP's subkey"
+        );
+        match read(None, &ours, 78).unwrap_err() {
+            crate::error::Error::KrbError {
+                code: err::BADORDER,
+                ..
+            } => {}
+            e => panic!("seq 78 after an AP-REP carrying 77: {e}"),
+        }
     }
 }
 

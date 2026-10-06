@@ -60,7 +60,7 @@ pub use as_ex::{
 pub use auth_con::set_test_seq_random;
 pub use auth_con::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_DO_TIME, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext,
-    generate_seq_number, local_host_address, permitted_enctypes, permitted_enctypes_kdc,
+    RemoteSeq, generate_seq_number, local_host_address, permitted_enctypes, permitted_enctypes_kdc,
     us_timeofday,
 };
 pub use builders::{

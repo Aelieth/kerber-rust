@@ -1,25 +1,30 @@
 //! The acceptor's auth context (`krb/auth_con.c`, `rd_req_dec.c`, `mk_rep.c`, `mk_priv.c`,
-//! `gen_seqnum.c`, `gen_save_subkey.c`): what an accepted AP-REQ leaves for the AP-REP and the
-//! KRB-PRIV that answer it.
+//! `rd_priv.c`, `rd_safe.c`, `privsafe.c`, `gen_seqnum.c`, `gen_save_subkey.c`): what an accepted
+//! AP-REQ leaves for the AP-REP that answers it and the KRB-SAFE and KRB-PRIV messages after it.
 //!
 //! The context starts as `krb5_auth_con_init` leaves one (`DO_TIME`); the caller sets the flags
 //! its MIT program sets. `krb5_mk_rep` takes a fresh subkey only under `USE_SUBKEY` and otherwise
 //! echoes the authenticator's own, and its sequence number is random only when the context has
-//! none yet.
+//! none yet. `krb5_rd_priv` and `krb5_rd_safe` take the peer's messages in order under
+//! `DO_SEQUENCE`, from the authenticator's sequence number on.
 
 use std::net::IpAddr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt, parse_enctype_list};
+use krb5_crypto::{
+    CipherState, EncryptionType, KeyUsage, ProtocolKey, checksum_output_size, decrypt,
+    decrypt_with_state, encrypt, encrypt_with_state, parse_enctype_list,
+};
 use krb5_types::{
     ApRep, Authenticator, AuthorizationData, EncApRepPart, EncKrbPrivPart, EncryptedData,
-    EncryptionKey, HostAddress, KerberosTime, KrbPriv, Microseconds, OctetString, ku, pa,
+    EncryptionKey, HostAddress, KerberosTime, KrbPriv, Microseconds, OctetString, err, ku, pa,
 };
 
 use crate::ap_req::ApVerifyOk;
 use crate::error::Error;
-use crate::safe_priv::{wipe_octets, wipe_vec};
+use crate::replay::{ReplayCache, ReplayKey};
+use crate::safe_priv::{check_privsafe_addrs, verify_krb_safe_checksum, wipe_octets, wipe_vec};
 
 /// MIT `KRB5_AUTH_CONTEXT_DO_TIME`: KRB-SAFE and KRB-PRIV carry a timestamp.
 pub const AUTH_CONTEXT_DO_TIME: u32 = 0x0000_0001;
@@ -33,6 +38,9 @@ const ADDRTYPE_INET: i32 = 2;
 const ADDRTYPE_DIRECTIONAL: i32 = 3;
 const ADDRTYPE_INET6: i32 = 24;
 
+/// MIT's default `clockskew` (`DEFAULT_CLOCKSKEW`, 300 seconds), for a profile that sets none.
+const DEFAULT_CLOCKSKEW: i64 = 300;
+
 /// The acceptor's side of an authenticated exchange after the AP-REQ verified.
 pub struct AcceptorAuthContext {
     flags: u32,
@@ -41,9 +49,107 @@ pub struct AcceptorAuthContext {
     send_subkey: Option<ProtocolKey>,
     recv_subkey: Option<ProtocolKey>,
     local_seq: u32,
-    remote_seq: u32,
+    remote: RemoteSeq,
     negotiated_etype: EncryptionType,
     ap_req_use_subkey: bool,
+    local_addr: Option<HostAddress>,
+    remote_addr: Option<HostAddress>,
+    cstate: Option<CipherState>,
+    memrcache: Option<ReplayCache>,
+}
+
+/// The sequence number the peer's next KRB-SAFE or KRB-PRIV must carry, and what its earlier
+/// ones showed the peer to be (MIT `KRB5_AUTH_CONN_SANE_SEQ`, `KRB5_AUTH_CONN_HEIMDAL_SEQ`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RemoteSeq {
+    expected: u32,
+    sane: bool,
+    heimdal: bool,
+}
+
+impl RemoteSeq {
+    /// A peer whose next message must carry `expected` (`remote_seq_number`).
+    #[must_use]
+    pub const fn new(expected: u32) -> Self {
+        Self {
+            expected,
+            sane: false,
+            heimdal: false,
+        }
+    }
+
+    /// The sequence number the next message must carry.
+    #[must_use]
+    pub const fn expected(&self) -> u32 {
+        self.expected
+    }
+
+    /// Whether a message carrying `in_seq` is the next one, learning from it whether the peer
+    /// is a sane sender or an old Heimdal that sends short numbers sign-extended.
+    /// MIT `k5_privsafe_check_seqnum` (`lib/krb5/krb/privsafe.c:225-304`): a peer known sane must match exactly; otherwise a number in the ambiguous range 0xFF800000..0xFFFFFFFF matches exactly or as a Heimdal encoding of the expected one (which marks the peer Heimdal), an exact match of an expected number in the ambiguous counter ranges marks the peer sane, and an expected 0 takes Heimdal's wraparound values 0x100, 0x10000 and 0x1000000.
+    pub const fn check(&mut self, in_seq: u32) -> bool {
+        let exp_seq = self.expected;
+        if self.sane {
+            return in_seq == exp_seq;
+        }
+        if in_seq & 0xFF80_0000 == 0xFF80_0000 {
+            if exp_seq & 0xFF80_0000 == 0xFF80_0000 && in_seq == exp_seq {
+                return true;
+            }
+            if !self.heimdal && in_seq == exp_seq {
+                return true;
+            }
+            if chk_heimdal_seqnum(exp_seq, in_seq) {
+                self.heimdal = true;
+                return true;
+            }
+            return false;
+        }
+        if in_seq == exp_seq {
+            if exp_seq & 0xFFFF_FF80 == 0x0000_0080
+                || exp_seq & 0xFFFF_8000 == 0x0000_8000
+                || exp_seq & 0xFF80_0000 == 0x0080_0000
+            {
+                self.sane = true;
+            }
+            return true;
+        }
+        if exp_seq == 0 && !self.heimdal {
+            return match in_seq {
+                0x100 | 0x1_0000 | 0x100_0000 => {
+                    self.heimdal = true;
+                    true
+                }
+                _ => false,
+            };
+        }
+        false
+    }
+
+    /// The number after a message that passed (`remote_seq_number++`).
+    pub const fn advance(&mut self) {
+        self.expected = self.expected.wrapping_add(1);
+    }
+}
+
+/// MIT `chk_heimdal_seqnum` (`lib/krb5/krb/privsafe.c:206-223`): `in_seq` is `exp_seq` as an old Heimdal encodes it, a 1-, 2- or 3-octet count read back sign-extended.
+const fn chk_heimdal_seqnum(exp_seq: u32, in_seq: u32) -> bool {
+    (exp_seq & 0xFF80_0000 == 0x0080_0000
+        && in_seq & 0xFF80_0000 == 0xFF80_0000
+        && in_seq & 0x00FF_FFFF == exp_seq)
+        || (exp_seq & 0xFFFF_8000 == 0x0000_8000
+            && in_seq & 0xFFFF_8000 == 0xFFFF_8000
+            && in_seq & 0x0000_FFFF == exp_seq)
+        || (exp_seq & 0xFFFF_FF80 == 0x0000_0080
+            && in_seq & 0xFFFF_FF80 == 0xFFFF_FF80
+            && in_seq & 0x0000_00FF == exp_seq)
+}
+
+fn krb_error(code: i32, text: &str) -> Error {
+    Error::KrbError {
+        code,
+        text: Some(text.into()),
+    }
 }
 
 impl AcceptorAuthContext {
@@ -83,10 +189,29 @@ impl AcceptorAuthContext {
             send_subkey: recv_subkey.clone(),
             recv_subkey,
             local_seq,
-            remote_seq,
+            remote: RemoteSeq::new(remote_seq),
             negotiated_etype,
             ap_req_use_subkey,
+            local_addr: None,
+            remote_addr: None,
+            cstate: None,
+            memrcache: None,
         })
+    }
+
+    /// Set the addresses messages are checked against and sent from, as `krb5_auth_con_setaddrs`
+    /// does: `local` is this side's (a KRB-PRIV's or KRB-SAFE's receiver must be it when named),
+    /// `remote` the peer's (a message's sender must be it).
+    pub fn set_addrs(&mut self, local: Option<HostAddress>, remote: Option<HostAddress>) {
+        self.local_addr = local;
+        self.remote_addr = remote;
+    }
+
+    /// Start chaining KRB-PRIV encryption from the initial cipher state, as kprop and kpropd do
+    /// for the dump's blocks.
+    /// MIT `krb5_auth_con_initivector` (`lib/krb5/krb/auth_con.c:314-322`): the cipher state starts from the session key's initial state for `KRB_PRIV` encryption, and `krb5_mk_priv` and `krb5_rd_priv` chain through it from then on.
+    pub fn init_ivector(&mut self) {
+        self.cstate = Some(CipherState::initial());
     }
 
     /// The context flags (`AUTH_CONTEXT_*`).
@@ -125,10 +250,11 @@ impl AcceptorAuthContext {
         self.local_seq
     }
 
-    /// The peer's sequence number from the authenticator.
+    /// The sequence number the peer's next message must carry: the authenticator's, then
+    /// advanced by each message read.
     #[must_use]
     pub const fn remote_seq(&self) -> u32 {
-        self.remote_seq
+        self.remote.expected()
     }
 
     /// The enctype `krb5_mk_rep` gives a fresh subkey.
@@ -222,9 +348,13 @@ impl AcceptorAuthContext {
         // The user data was copied into the part only to be encoded.
         wipe_octets(part.user_data);
         let der = der?;
+        let cstate = self.cstate.as_mut();
         let cipher = KeyUsage::new(ku::KRB_PRIV_ENC_PART)
             .map_err(Error::from)
-            .and_then(|usage| Ok(encrypt(key, usage, &der)?));
+            .and_then(|usage| match cstate {
+                Some(state) => Ok(encrypt_with_state(key, usage, state, &der)?),
+                None => Ok(encrypt(key, usage, &der)?),
+            });
         // MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:97-100`): the encoded part is zeroed before it is freed, whether or not it encrypted.
         wipe_vec(der);
         let cipher = cipher?;
@@ -242,6 +372,127 @@ impl AcceptorAuthContext {
         }
         Ok(msg)
     }
+
+    /// The user data of a KRB-PRIV from the peer.
+    /// MIT `krb5_rd_priv` (`lib/krb5/krb/rd_priv.c:99-150`): decrypted under the receive subkey else the session key (through the cipher state once `krb5_auth_con_initivector` set one), its addresses checked against the context's, a replay refused under `DO_TIME`, and its sequence number checked against the peer's next one, which then advances, under `DO_SEQUENCE`.
+    /// MIT `read_krbpriv` (`lib/krb5/krb/rd_priv.c:43-97`): a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`, and the decrypted part is zeroed before it is freed.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::KrbError`] `MSG_TYPE` (40) for another message type, `BADADDR` (38) for an
+    /// address that does not match, `SKEW` (37) or `REPEAT` (34) under `DO_TIME`, and `BADORDER`
+    /// (42) for an out-of-order sequence number under `DO_SEQUENCE`; [`Error::Asn1`] when the
+    /// message or its part does not decode; [`Error::Crypto`] when it does not decrypt.
+    pub fn rd_priv(&mut self, raw: &[u8]) -> Result<Vec<u8>, Error> {
+        // MIT `krb5_is_krb_priv`: [APPLICATION 21], constructed or not.
+        if raw.first().is_none_or(|b| b & !0x20 != 0x55) {
+            return Err(krb_error(err::MSG_TYPE, "Invalid message type"));
+        }
+        let msg: KrbPriv = decode(raw)?;
+        let key = self.recv_subkey.as_ref().unwrap_or(&self.key);
+        let etype = key.etype();
+        let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
+        let cipher = msg.enc_part.cipher.as_ref();
+        let plain = match self.cstate.as_mut() {
+            Some(state) => decrypt_with_state(key, usage, state, cipher)?,
+            None => decrypt(key, usage, cipher)?,
+        };
+        let part = decode::<EncKrbPrivPart>(&plain);
+        wipe_vec(plain);
+        let part = part?;
+        let checked = check_privsafe_addrs(
+            &part.s_address,
+            part.r_address.as_ref(),
+            self.remote_addr.as_ref(),
+            self.local_addr.as_ref(),
+        )
+        .and_then(|()| {
+            let tag = ciphertext_tag(etype, cipher)?;
+            self.check_replay(part.timestamp.as_ref(), tag)
+        })
+        .and_then(|()| self.check_seq(part.seq_number));
+        let user_data = part.user_data.to_vec();
+        wipe_octets(part.user_data);
+        checked.map(|()| user_data)
+    }
+
+    /// The user data of a KRB-SAFE from the peer.
+    /// MIT `krb5_rd_safe` (`lib/krb5/krb/rd_safe.c:127-178`): its checksum verified under the receive subkey else the session key (`read_krbsafe`), a replay refused under `DO_TIME`, and its sequence number checked against the peer's next one, which then advances, under `DO_SEQUENCE`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::KrbError`] as [`verify_krb_safe_checksum`] reports a message it refuses, `SKEW`
+    /// (37) or `REPEAT` (34) under `DO_TIME`, and `BADORDER` (42) for an out-of-order sequence
+    /// number under `DO_SEQUENCE`; [`Error::Asn1`] when the message does not decode.
+    pub fn rd_safe(&mut self, raw: &[u8]) -> Result<Vec<u8>, Error> {
+        let key = self.recv_subkey.as_ref().unwrap_or(&self.key);
+        let msg = verify_krb_safe_checksum(
+            key,
+            raw,
+            self.remote_addr.as_ref(),
+            self.local_addr.as_ref(),
+        )?;
+        self.check_replay(
+            msg.safe_body.timestamp.as_ref(),
+            msg.cksum.checksum.as_ref(),
+        )?;
+        self.check_seq(msg.safe_body.seq_number)?;
+        Ok(msg.safe_body.user_data.to_vec())
+    }
+
+    /// MIT `k5_privsafe_check_replay` (`lib/krb5/krb/privsafe.c:107-141`): only under `DO_TIME`, a timestamp outside the clock skew is `KRB5KRB_AP_ERR_SKEW`, and a message whose tag the context's memory replay cache already holds is `KRB5KRB_AP_ERR_REPEAT`.
+    /// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): the clock skew is `[libdefaults] clockskew`, 300 seconds when it is unset.
+    fn check_replay(&mut self, timestamp: Option<&KerberosTime>, tag: &[u8]) -> Result<(), Error> {
+        if self.flags & AUTH_CONTEXT_DO_TIME == 0 {
+            return Ok(());
+        }
+        let skew =
+            krb5_config::load_krb5_conf().map_or(DEFAULT_CLOCKSKEW, |c| i64::from(c.clockskew));
+        let now = i64::from(KerberosTime::now().unix_seconds());
+        let then = timestamp.map_or(0, |t| i64::from(t.unix_seconds()));
+        if (now - then).abs() > skew {
+            return Err(krb_error(err::SKEW, "Clock skew too great"));
+        }
+        let key = ReplayKey {
+            client: String::new(),
+            server: String::new(),
+            ctime: 0,
+            cusec: 0,
+            auth_hash: ReplayCache::hash_authenticator(tag),
+        };
+        if self
+            .memrcache
+            .get_or_insert_with(ReplayCache::new)
+            .check_and_store(key)
+        {
+            return Err(krb_error(err::REPEAT, "Request is a replay"));
+        }
+        Ok(())
+    }
+
+    /// MIT `krb5_rd_priv` (`lib/krb5/krb/rd_priv.c:128-134`): under `DO_SEQUENCE`, a message whose sequence number (0 when it carries none) is not the peer's next is `KRB5KRB_AP_ERR_BADORDER`, and one that is moves the peer on; `krb5_rd_safe` does the same.
+    fn check_seq(&mut self, seq: Option<u32>) -> Result<(), Error> {
+        if self.flags & AUTH_CONTEXT_DO_SEQUENCE == 0 {
+            return Ok(());
+        }
+        if !self.remote.check(seq.unwrap_or(0)) {
+            return Err(krb_error(err::BADORDER, "Message out of order"));
+        }
+        self.remote.advance();
+        Ok(())
+    }
+}
+
+/// The replay tag of an encrypted message: its last checksum-length octets.
+/// MIT `k5_rc_tag_from_ciphertext` (`lib/krb5/rcache/rc_base.c:146-164`): the tag is the end of the ciphertext, as long as the enctype's checksum; a shorter ciphertext is `EINVAL`.
+fn ciphertext_tag(etype: EncryptionType, cipher: &[u8]) -> Result<&[u8], Error> {
+    let len = checksum_output_size(etype.checksum_type())
+        .ok_or_else(|| Error::Crypto("no checksum length for the enctype".into()))?;
+    let at = cipher
+        .len()
+        .checked_sub(len)
+        .ok_or_else(|| Error::Crypto("ciphertext shorter than its checksum".into()))?;
+    Ok(&cipher[at..])
 }
 
 impl std::fmt::Debug for AcceptorAuthContext {
@@ -250,7 +501,7 @@ impl std::fmt::Debug for AcceptorAuthContext {
             .field("flags", &self.flags)
             .field("negotiated_etype", &self.negotiated_etype)
             .field("local_seq", &self.local_seq)
-            .field("remote_seq", &self.remote_seq)
+            .field("remote", &self.remote)
             .field("send_subkey", &self.send_subkey)
             .field("recv_subkey", &self.recv_subkey)
             .finish_non_exhaustive()

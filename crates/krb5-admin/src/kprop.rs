@@ -17,9 +17,9 @@ use krb5_kdc::{
     load_dump, load_dump_with_stash, save_store_fresh,
 };
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, ReplayCache,
-    build_ap_req_mutual_seq, build_krb_priv_chained, build_krb_safe_ex, permitted_enctypes_kdc,
-    unwrap_krb_priv_chained, us_timeofday, verify_ap_rep, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, RemoteSeq, ReplayCache,
+    build_ap_req_mutual_seq, build_krb_priv_chained, build_krb_safe_ex, local_host_address,
+    permitted_enctypes_kdc, us_timeofday, verify_ap_rep, verify_ap_req_ex,
     verify_krb_safe_checksum,
 };
 use krb5_types::{
@@ -227,29 +227,69 @@ fn build_mit_safe(session: &ProtocolKey, user_data: &[u8], seq: u32) -> Result<V
 pub struct KpropAuth {
     session: ProtocolKey,
     local_seq: u32,
-    remote_seq: Option<u32>,
-    replay: ReplayCache,
+    /// The sequence number the peer's next message must carry: for kprop, kpropd's AP-REP one.
+    remote: RemoteSeq,
+    /// kpropd's `recvauth` auth context, which reads kprop's size KRB-SAFE and dump KRB-PRIVs.
+    acceptor: Option<AcceptorAuthContext>,
+    /// The names kpropd's KRB-ERRORs carry: its own principal and realm, and the client's.
+    names: Option<KpropdNames>,
+}
+
+/// The principals in kpropd's KRB-ERROR (MIT `send_error`'s `server` and `client`).
+struct KpropdNames {
+    server: PrincipalName,
+    realm: String,
+    client: PrincipalName,
+    crealm: krb5_types::Realm,
 }
 
 impl KpropAuth {
-    fn check_remote_seq(&mut self, got: Option<u32>) -> Result<(), Error> {
-        let s = got.ok_or_else(|| Error::Inner("kprop missing seq".into()))?;
-        if let Some(prev) = self.remote_seq
-            && s != prev.wrapping_add(1)
-        {
-            return Err(Error::Inner(format!(
-                "kprop seq {s} want {}",
-                prev.wrapping_add(1)
-            )));
-        }
-        self.remote_seq = Some(s);
-        Ok(())
-    }
-
     fn next_local_seq(&mut self) -> u32 {
         let s = self.local_seq;
         self.local_seq = self.local_seq.wrapping_add(1);
         s
+    }
+
+    fn acceptor(&mut self) -> Result<&mut AcceptorAuthContext, krb5_protocol::Error> {
+        self.acceptor
+            .as_mut()
+            .ok_or_else(|| krb5_protocol::Error::ReplyMismatch("not kpropd's context".into()))
+    }
+
+    /// MIT `send_error` (`kprop/kpropd.c:1476-1510`): a KRB-ERROR naming kpropd and the client, stamped now; an error code past the protocol's 127 is `KRB_ERR_GENERIC` with the error's message before `text`, any other carries `text` alone.
+    fn send_error(&self, stream: &mut TcpStream, e: &krb5_protocol::Error, text: &str) {
+        let Some(names) = &self.names else {
+            return;
+        };
+        let (code, text) = match e {
+            krb5_protocol::Error::KrbError { code, .. } if *code <= 127 => (*code, text.to_owned()),
+            // MIT `krb5_k_decrypt`: a ciphertext that does not decrypt is `KRB5KRB_AP_ERR_BAD_INTEGRITY`.
+            krb5_protocol::Error::Crypto(_) => (err::BAD_INTEGRITY, text.to_owned()),
+            krb5_protocol::Error::Asn1(m) => (err::GENERIC, format!("{} {text}", asn1_com_err(m))),
+            other => (err::GENERIC, format!("{other} {text}")),
+        };
+        let Ok(realm) = krb5_types::try_ascii(names.realm.as_str()) else {
+            return;
+        };
+        let (stime, susec) = us_timeofday();
+        let pdu = KrbError {
+            pvno: KrbError::PVNO,
+            msg_type: KrbError::MSG_TYPE,
+            ctime: None,
+            cusec: None,
+            stime,
+            susec,
+            error_code: code,
+            crealm: Some(names.crealm.clone()),
+            cname: Some(names.client.clone()),
+            realm,
+            sname: names.server.clone(),
+            e_text: e_text_with_nul(&text),
+            e_data: None,
+        };
+        if let Ok(der) = encode(&pdu) {
+            let _ = write_message(stream, &der);
+        }
     }
 }
 
@@ -273,7 +313,7 @@ pub fn kpropd_recvauth(
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
     acl_lines: Option<&[String]>,
-    replay: ReplayCache,
+    replay: &ReplayCache,
 ) -> Result<KpropAuth, Error> {
     let ver = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     if ver.as_slice() != SENDAUTH_VERSION {
@@ -301,7 +341,7 @@ pub fn kpropd_recvauth(
     };
     // MIT `recvauth_common` (`recvauth.c:139-205`): an AP-REQ `krb5_rd_req` refuses, an enctype the server does not permit among them, is answered with a KRB-ERROR, and a mutual one with `krb5_mk_rep`.
     // MIT `parse_args` (`kprop/kpropd.c:1056-1058`): kpropd's context reads the KDC profile, so kdc.conf's `permitted_enctypes` comes first.
-    let checked = verify_ap_req_ex(&ap_raw, &params, &replay, None).and_then(|ok| {
+    let checked = verify_ap_req_ex(&ap_raw, &params, replay, None).and_then(|ok| {
         let ac = AcceptorAuthContext::from_ap_req(&ok, &permitted_enctypes_kdc()?)?;
         Ok((ok, ac))
     });
@@ -315,6 +355,12 @@ pub fn kpropd_recvauth(
     };
     // MIT `kerberos_authenticate` (`kpropd.c:1221-1229`): the auth context does sequence numbers only.
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+    // MIT `doit` (`kpropd.c:495-526`): the address `kerberos_authenticate` takes as its own is `from`, the peer's, from `getpeername`.
+    // MIT `kerberos_authenticate` (`kpropd.c:1201-1247`): that address is set as the local one and none as the remote one, so a NAT may change the client's.
+    ac.set_addrs(
+        Some(local_host_address(stream.peer_addr().ok().map(|a| a.ip()))),
+        None,
+    );
     write_message(stream, &[]).map_err(|e| Error::Inner(e.to_string()))?;
     let session = session_from_ticket(&ok)?;
     // MIT kprop's authenticator carries no subkey, so the AP-REP echoes none: it carries the
@@ -339,8 +385,14 @@ pub fn kpropd_recvauth(
     Ok(KpropAuth {
         session,
         local_seq,
-        remote_seq: None,
-        replay,
+        remote: RemoteSeq::new(ac.remote_seq()),
+        acceptor: Some(ac),
+        names: Some(KpropdNames {
+            server: expected_server.cloned().unwrap_or_else(kpropd_server_name),
+            realm: expected_realm.unwrap_or("????").to_owned(),
+            client: ok.authenticator.cname.clone(),
+            crealm: ok.authenticator.crealm.clone(),
+        }),
     })
 }
 
@@ -584,40 +636,70 @@ fn kprop_rd_req_error(
 }
 
 /// Receive dump bytes after [`kpropd_recvauth`].
+/// MIT `recv_database` (`kprop/kpropd.c:1356-1473`): the size comes in a KRB-SAFE and the dump in KRB-PRIV blocks chained from the initial cipher state, each read by `krb5_rd_safe` / `krb5_rd_priv` on recvauth's context, so each must carry kprop's next sequence number (the authenticator's, then one more per message); a message that fails is answered with a KRB-ERROR naming what was being read, and a KRB-ERROR from kprop ends the transfer without one.
 ///
 /// # Errors
 ///
-/// [`Error::Inner`] when a read on `stream` fails or a message exceeds 8 MiB, the size
-/// KRB-SAFE does not verify, lacks or breaks the sequence number, or carries a malformed
-/// size, a KRB-PRIV chunk does not unwrap, or the chunks overrun the announced size.
+/// [`Error::Inner`] when a read on `stream` fails or a message exceeds 8 MiB, kprop sends a
+/// KRB-ERROR, the size KRB-SAFE or a block's KRB-PRIV is refused (out of order, modified, or
+/// not decrypting), the size is malformed, or the blocks overrun it.
 pub fn kpropd_recv_dump(stream: &mut TcpStream, auth: &mut KpropAuth) -> Result<Vec<u8>, Error> {
     let size_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    let (size_plain, size_seq) = verify_safe_user_data(&auth.session, &size_raw)?;
-    auth.check_remote_seq(size_seq)?;
-    let want = decode_database_size(&size_plain)?;
-    let mut state = CipherState::initial();
+    if size_raw.first() == Some(&0x7e) {
+        return Err(Error::Inner("kprop sent a KRB-ERROR".into()));
+    }
+    let size_plain = match auth.acceptor().and_then(|ac| ac.rd_safe(&size_raw)) {
+        Ok(p) => p,
+        Err(e) => {
+            auth.send_error(stream, &e, "while decoding database size");
+            return Err(Error::Inner(format!("{e} while decoding database size")));
+        }
+    };
+    let want = match decode_database_size(&size_plain) {
+        Ok(n) => n,
+        Err(e) => {
+            let generic = krb5_protocol::Error::KrbError {
+                code: err::GENERIC,
+                text: None,
+            };
+            auth.send_error(stream, &generic, "malformed database size message");
+            return Err(e);
+        }
+    };
+    auth.acceptor()
+        .map_err(|e| Error::Inner(e.to_string()))?
+        .init_ivector();
     let mut dump = Vec::with_capacity(usize::try_from(want).unwrap_or(0));
     while (dump.len() as u64) < want {
         let chunk_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-        let chunk = unwrap_krb_priv_chained(
-            &auth.session,
-            &chunk_raw,
-            &auth.replay,
-            true,
-            false,
-            &mut state,
-        )
-        .map_err(|e| Error::Inner(format!("priv chunk: {e}")))?;
-        dump.extend_from_slice(&chunk);
-        if let Some(prev) = auth.remote_seq {
-            auth.remote_seq = Some(prev.wrapping_add(1));
+        if chunk_raw.first() == Some(&0x7e) {
+            return Err(Error::Inner("kprop sent a KRB-ERROR".into()));
         }
+        let chunk = match auth.acceptor().and_then(|ac| ac.rd_priv(&chunk_raw)) {
+            Ok(c) => c,
+            Err(e) => {
+                let text = format!(
+                    "while decoding database block starting at offset {}",
+                    dump.len()
+                );
+                auth.send_error(stream, &e, &text);
+                return Err(Error::Inner(format!("{e} {text}")));
+            }
+        };
+        dump.extend_from_slice(&chunk);
     }
+    // MIT `recv_database` (`kpropd.c:1450-1458`): a dump longer than its size is reported with the same KRB-ERROR and then loaded anyway; this kpropd loads nothing it did not expect.
     if dump.len() as u64 != want {
-        return Err(Error::Inner(format!(
-            "kprop dump {} bytes, expected {want}",
+        let generic = krb5_protocol::Error::KrbError {
+            code: err::GENERIC,
+            text: None,
+        };
+        let text = format!(
+            "Received {} bytes, expected {want} bytes for database file",
             dump.len()
-        )));
+        );
+        auth.send_error(stream, &generic, &text);
+        return Err(Error::Inner(text));
     }
     Ok(dump)
 }
@@ -685,7 +767,7 @@ pub struct KpropdConfig<'a> {
 pub fn kpropd_handle_conn(
     stream: &mut TcpStream,
     cfg: &KpropdConfig<'_>,
-    replay: ReplayCache,
+    replay: &ReplayCache,
 ) -> Result<PrincipalStore, Error> {
     let KpropdConfig {
         host_keys,
@@ -790,7 +872,6 @@ pub fn kprop_sendauth(
     if !err_msg.is_empty() {
         return Err(Error::Inner("sendauth KRB-ERROR".into()));
     }
-    let replay = ReplayCache::new();
     let ap_rep_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     let usage = krb5_crypto::KeyUsage::new(krb5_types::ku::AP_REQ_AUTHENTICATOR)
         .map_err(|e| Error::Inner(e.to_string()))?;
@@ -798,14 +879,17 @@ pub fn kprop_sendauth(
         .map_err(|e| Error::Inner(e.to_string()))?;
     let authenticator: krb5_types::Authenticator =
         decode(&auth_plain).map_err(|e| Error::Inner(e.to_string()))?;
-    verify_ap_rep(&ap_rep_raw, session, &authenticator).map_err(|e| Error::Inner(e.to_string()))?;
+    let rep = verify_ap_rep(&ap_rep_raw, session, &authenticator)
+        .map_err(|e| Error::Inner(e.to_string()))?;
     // MIT kpropd expects the dump-size SAFE to use the authenticator
     // sequence, not authenticator+1 (`Message out of order`).
+    // MIT `krb5_rd_rep` (`lib/krb5/krb/rd_rep.c:130-130`): kpropd's next message must carry the AP-REP's sequence number.
     Ok(KpropAuth {
         session: session.clone(),
         local_seq: seq,
-        remote_seq: None,
-        replay,
+        remote: RemoteSeq::new(rep.seq_number.unwrap_or(0)),
+        acceptor: None,
+        names: None,
     })
 }
 
@@ -834,7 +918,14 @@ pub fn kprop_send_dump(
         write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
     }
     let ack = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    let (plain, _) = verify_safe_user_data(&auth.session, &ack)?;
+    let (plain, ack_seq) = verify_safe_user_data(&auth.session, &ack)?;
+    // MIT `xmit_database` (`kprop/kprop.c:524-529`): `krb5_rd_safe` with `DO_SEQUENCE` takes the acknowledgement only with kpropd's next sequence number, the AP-REP's.
+    if !auth.remote.check(ack_seq.unwrap_or(0)) {
+        return Err(Error::Inner(
+            "Message out of order while decoding final size packet from server".into(),
+        ));
+    }
+    auth.remote.advance();
     let got = decode_database_size(&plain)?;
     if got != dump.len() as u64 {
         return Err(Error::Inner(format!(
@@ -980,7 +1071,7 @@ mod tests {
                 Some(&host_for_server),
                 Some(TEST_REALM),
                 None,
-                ReplayCache::new(),
+                &ReplayCache::new(),
             )
         });
         thread::sleep(Duration::from_millis(20));
@@ -1051,7 +1142,7 @@ mod tests {
                 Some(&host_for_server),
                 Some(TEST_REALM),
                 None,
-                ReplayCache::new(),
+                &ReplayCache::new(),
             )
         });
         thread::sleep(Duration::from_millis(20));
@@ -1109,7 +1200,7 @@ mod tests {
                 Some(&host_for_server),
                 Some(TEST_REALM),
                 None,
-                ReplayCache::new(),
+                &ReplayCache::new(),
             )
         });
         thread::sleep(Duration::from_millis(20));
@@ -1222,7 +1313,7 @@ mod tests {
                 Some(&documented_host()),
                 Some(TEST_REALM),
                 Some(allowed.as_slice()),
-                ReplayCache::new(),
+                &ReplayCache::new(),
             )
         });
         let mut client = kprop_sends_ap_req(addr, &tgs, &admin);
@@ -1284,7 +1375,7 @@ mod tests {
                 Some(&documented_host()),
                 Some(TEST_REALM),
                 None,
-                ReplayCache::new(),
+                &ReplayCache::new(),
             )
         });
         let mut client = kprop_sends_ap_req(addr, &tgs, &admin);
@@ -1319,7 +1410,7 @@ mod tests {
                 None,
                 Some(TEST_REALM),
                 None,
-                ReplayCache::new(),
+                &ReplayCache::new(),
             )
         });
         let mut client = TcpStream::connect(addr).unwrap();
@@ -1340,5 +1431,134 @@ mod tests {
         );
         assert_eq!(e.realm.as_bytes(), TEST_REALM.as_bytes());
         assert!(join.join().expect("thread").is_err());
+    }
+
+    /// kpropd's answer when kprop's size KRB-SAFE (`size_seq`) or first block KRB-PRIV
+    /// (`block_seq`) carries the wrong seq-number, after an authenticator carrying 4242, or when
+    /// the size announces `short_by` bytes fewer than the 30-byte block.
+    fn kpropd_answer_to(size_seq: u32, block_seq: u32, short_by: u64) -> KrbError {
+        use std::net::TcpListener;
+        use std::thread;
+
+        use krb5_asn1::decode;
+        use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+
+        let (host_keys, admin, tgs) = kprop_ticket();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
+            let allowed = [format!("admin@{TEST_REALM}")];
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut auth = kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+                Some(allowed.as_slice()),
+                &ReplayCache::new(),
+            )
+            .unwrap();
+            kpropd_recv_dump(&mut stream, &mut auth)
+        });
+        let mut client = kprop_sends_ap_req(addr, &tgs, &admin);
+        assert!(read_message(&mut client).unwrap().is_empty(), "accepted");
+        let _ap_rep = read_message(&mut client).unwrap();
+        let dump = b"kdb5_util load_dump version 7\n";
+        let size = encode_database_size(dump.len() as u64 - short_by);
+        let safe = build_mit_safe(&tgs.session_key, &size, size_seq).unwrap();
+        write_message(&mut client, &safe).unwrap();
+        if size_seq == 4242 {
+            let mut state = CipherState::initial();
+            let block =
+                build_krb_priv_chained(&tgs.session_key, dump, Some(block_seq), false, &mut state)
+                    .unwrap();
+            write_message(&mut client, &encode(&block).unwrap()).unwrap();
+        }
+        let e: KrbError = decode(&read_message(&mut client).unwrap()).expect("KRB-ERROR");
+        assert!(join.join().expect("thread").is_err());
+        assert_eq!(e.cname, Some(admin), "send_error names the client");
+        e
+    }
+
+    #[test]
+    fn kpropd_refuses_kprops_messages_out_of_sequence() {
+        let size = kpropd_answer_to(4243, 0, 0);
+        assert_eq!(size.error_code, err::BADORDER);
+        assert_eq!(
+            size.e_text
+                .as_ref()
+                .map(krb5_types::KerberosString::as_bytes),
+            Some(b"while decoding database size\0".as_slice())
+        );
+        let block = kpropd_answer_to(4242, 4244, 0);
+        assert_eq!(block.error_code, err::BADORDER);
+        assert_eq!(
+            block
+                .e_text
+                .as_ref()
+                .map(krb5_types::KerberosString::as_bytes),
+            Some(b"while decoding database block starting at offset 0\0".as_slice())
+        );
+    }
+
+    /// MIT `recv_database` (`kpropd.c:1450-1458`): a dump longer than its size is answered with this KRB-ERROR and then loaded; this kpropd loads nothing (docs/security.md).
+    #[test]
+    fn kpropd_refuses_a_dump_longer_than_its_size() {
+        let e = kpropd_answer_to(4242, 4243, 5);
+        assert_eq!(e.error_code, err::GENERIC);
+        assert_eq!(
+            e.e_text.as_ref().map(krb5_types::KerberosString::as_bytes),
+            Some(b"Received 30 bytes, expected 25 bytes for database file\0".as_slice())
+        );
+    }
+
+    #[test]
+    fn kprop_refuses_an_ack_out_of_sequence() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+
+        let (host_keys, admin, tgs) = kprop_ticket();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let dump = b"kdb5_util load_dump version 7\n".to_vec();
+        let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
+            let allowed = [format!("admin@{TEST_REALM}")];
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut auth = kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+                Some(allowed.as_slice()),
+                &ReplayCache::new(),
+            )
+            .unwrap();
+            let got = kpropd_recv_dump(&mut stream, &mut auth).unwrap();
+            // The ack one seq-number past the AP-REP's, as no kpropd sends it.
+            auth.next_local_seq();
+            kpropd_send_ack(&mut stream, &mut auth, got.len() as u64).unwrap();
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        let realm = krb5_types::ascii(TEST_REALM);
+        let mut auth = kprop_sendauth(
+            &mut client,
+            tgs.rep.0.ticket.clone(),
+            &tgs.session_key,
+            &realm,
+            &admin,
+            4242,
+        )
+        .unwrap();
+        let e = kprop_send_dump(&mut client, &mut auth, &dump).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("Message out of order while decoding final size packet from server"),
+            "{e}"
+        );
+        join.join().expect("thread");
     }
 }

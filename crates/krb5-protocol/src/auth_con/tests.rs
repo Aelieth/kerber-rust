@@ -398,3 +398,300 @@ fn the_kdc_profile_a_test_pins_is_the_one_read() {
     );
     krb5_config::set_test_kdc_profile(None);
 }
+
+#[test]
+fn remote_seq_takes_the_exact_number_then_the_next() {
+    let mut r = super::RemoteSeq::new(864_518_167);
+    assert!(!r.check(864_518_168), "one too high");
+    assert!(!r.check(0), "none, where the authenticator had one");
+    assert!(r.check(864_518_167));
+    r.advance();
+    assert_eq!(r.expected(), 864_518_168);
+    let mut none = super::RemoteSeq::new(0);
+    assert!(
+        none.check(0),
+        "none where the authenticator had none (MIT kpasswd's shape)"
+    );
+    assert!(!none.check(1));
+}
+
+#[test]
+fn remote_seq_reads_old_heimdal_numbers_as_mit_does() {
+    // privsafe.c's table: an old Heimdal counter 0x80 arrives sign-extended as 0xFFFFFF80.
+    let mut one = super::RemoteSeq::new(0x80);
+    assert!(
+        one.check(0xFFFF_FF80),
+        "chk_heimdal_seqnum: the 1-octet form"
+    );
+    let mut two = super::RemoteSeq::new(0x8000);
+    assert!(two.check(0xFFFF_8000), "the 2-octet form");
+    let mut three = super::RemoteSeq::new(0x0080_0000);
+    assert!(three.check(0xFF80_0000), "the 3-octet form");
+    // An exact match of an expected number in an ambiguous range marks the peer sane, which then
+    // gets exact matches only.
+    let mut sane = super::RemoteSeq::new(0x80);
+    assert!(sane.check(0x80));
+    sane.advance();
+    assert!(
+        !sane.check(0xFFFF_FF81),
+        "a sane peer's numbers are never read as Heimdal's"
+    );
+    // Heimdal's counter wrapping through zero from an ambiguous start.
+    assert!(super::RemoteSeq::new(0).check(0x100));
+    assert!(!super::RemoteSeq::new(0).check(0x200));
+}
+
+/// A peer's KRB-PRIV, under `key`, carrying `seq` (no field when `None`).
+fn peer_priv(key: &ProtocolKey, data: &[u8], seq: Option<u32>) -> Vec<u8> {
+    encode(&crate::safe_priv::build_krb_priv_with_seq(key, data, seq).unwrap()).unwrap()
+}
+
+#[test]
+fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let subkey = ProtocolKey::random(AES256).unwrap();
+    // MIT kpasswd's shape: no seq-number in the authenticator or the KRB-PRIV.
+    let ok = accepted(&session, Some(&subkey), None, false, None);
+    let fresh = || {
+        let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+        ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+        ac
+    };
+    assert_eq!(
+        fresh().rd_priv(&peer_priv(&subkey, b"pw", None)).unwrap(),
+        b"pw"
+    );
+    let one = fresh()
+        .rd_priv(&peer_priv(&subkey, b"pw", Some(1)))
+        .unwrap_err();
+    assert!(
+        matches!(one, Error::KrbError { code: 42, .. }),
+        "seq 1 where the authenticator had none is BADORDER, got {one:?}"
+    );
+    // An authenticator seq-number: the KRB-PRIV must carry it, then the next one.
+    let ok = accepted(&session, Some(&subkey), Some(864_518_167), false, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+    for wrong in [None, Some(864_518_168)] {
+        let e = ac.rd_priv(&peer_priv(&subkey, b"pw", wrong)).unwrap_err();
+        assert!(
+            matches!(e, Error::KrbError { code: 42, .. }),
+            "{wrong:?}: {e:?}"
+        );
+    }
+    assert_eq!(
+        ac.rd_priv(&peer_priv(&subkey, b"one", Some(864_518_167)))
+            .unwrap(),
+        b"one"
+    );
+    assert_eq!(
+        ac.rd_priv(&peer_priv(&subkey, b"two", Some(864_518_168)))
+            .unwrap(),
+        b"two"
+    );
+    assert_eq!(ac.remote_seq(), 864_518_169);
+    // Without DO_SEQUENCE the number is not looked at.
+    let mut lax = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    lax.set_flags(0);
+    assert!(lax.rd_priv(&peer_priv(&subkey, b"x", Some(7))).is_ok());
+}
+
+#[test]
+fn rd_priv_refuses_a_replay_and_a_stale_time_under_do_time() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, None, None, false, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    assert_eq!(
+        ac.flags(),
+        super::AUTH_CONTEXT_DO_TIME,
+        "krb5_auth_con_init's flags"
+    );
+    let msg = encode(&crate::safe_priv::build_krb_priv(&session, b"t").unwrap()).unwrap();
+    assert_eq!(ac.rd_priv(&msg).unwrap(), b"t");
+    let again = ac.rd_priv(&msg).unwrap_err();
+    assert!(
+        matches!(again, Error::KrbError { code: 34, .. }),
+        "REPEAT, got {again:?}"
+    );
+    let untimed = crate::safe_priv::build_krb_priv_chained(
+        &session,
+        b"u",
+        None,
+        false,
+        &mut krb5_crypto::CipherState::initial(),
+    )
+    .unwrap();
+    let skew = ac.rd_priv(&encode(&untimed).unwrap()).unwrap_err();
+    assert!(
+        matches!(skew, Error::KrbError { code: 37, .. }),
+        "no timestamp under DO_TIME is SKEW, got {skew:?}"
+    );
+}
+
+#[test]
+fn rd_priv_chains_the_cipher_state_after_init_ivector() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, None, Some(500), true, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+    ac.init_ivector();
+    let mut state = krb5_crypto::CipherState::initial();
+    for (seq, block) in [(500, b"block-0"), (501, b"block-1")] {
+        let msg =
+            crate::safe_priv::build_krb_priv_chained(&session, block, Some(seq), false, &mut state)
+                .unwrap();
+        assert_eq!(ac.rd_priv(&encode(&msg).unwrap()).unwrap(), block);
+    }
+    let unchained = crate::safe_priv::build_krb_priv_chained(
+        &session,
+        b"block-2",
+        Some(502),
+        false,
+        &mut krb5_crypto::CipherState::initial(),
+    )
+    .unwrap();
+    assert!(
+        ac.rd_priv(&encode(&unchained).unwrap()).is_err(),
+        "a block not chained from the last one does not decrypt"
+    );
+}
+
+#[test]
+fn rd_safe_takes_the_size_only_with_the_authenticators_seq() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, None, Some(4242), true, None);
+    let size = 1989u32.to_be_bytes();
+    let safe = |seq: u32| {
+        encode(&crate::safe_priv::build_krb_safe_ex(&session, &size, Some(seq), false).unwrap())
+            .unwrap()
+    };
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+    let e = ac.rd_safe(&safe(4243)).unwrap_err();
+    assert!(matches!(e, Error::KrbError { code: 42, .. }), "{e:?}");
+    assert_eq!(ac.rd_safe(&safe(4242)).unwrap(), size);
+    assert_eq!(ac.remote_seq(), 4243);
+}
+
+#[test]
+fn rd_priv_refuses_another_message_type() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, None, None, false, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let e = ac.rd_priv(&[0x30, 0x00]).unwrap_err();
+    assert!(matches!(e, Error::KrbError { code: 40, .. }), "{e:?}");
+}
+
+/// A KRB-PRIV from the peer whose encrypted part is `part_der`, as given.
+fn sealed_priv(key: &ProtocolKey, part_der: &[u8]) -> Vec<u8> {
+    let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART).unwrap();
+    let cipher = krb5_crypto::encrypt(key, usage, part_der).unwrap();
+    encode(&KrbPriv {
+        pvno: KrbPriv::PVNO,
+        msg_type: KrbPriv::MSG_TYPE,
+        enc_part: krb5_types::EncryptedData {
+            etype: key.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    })
+    .unwrap()
+}
+
+fn priv_part_der(
+    data: &[u8],
+    timestamp: Option<KerberosTime>,
+    seq: Option<u32>,
+    s_address: krb5_types::HostAddress,
+    r_address: Option<krb5_types::HostAddress>,
+) -> Vec<u8> {
+    encode(&EncKrbPrivPart {
+        user_data: data.to_vec().into(),
+        usec: timestamp
+            .as_ref()
+            .map(|_| Microseconds::from_subsec_micros(5)),
+        timestamp,
+        seq_number: seq,
+        s_address,
+        r_address,
+    })
+    .unwrap()
+}
+
+/// MIT `decode_seqno` (`asn1_k_encode.c:133-146`): a seq-number sent as a negative INTEGER reads as its 32 bits unsigned, so -2 is 0xFFFFFFFE, and an old Heimdal's -128 for its count 0x80 passes `k5_privsafe_check_seqnum`'s Heimdal check.
+#[test]
+fn rd_priv_reads_a_negative_seq_number_as_mit_does() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    for (expected, sent) in [(0xFFFF_FFFE, 0xfe), (0x80, 0x80)] {
+        let ok = accepted(&session, None, Some(expected), true, None);
+        let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+        ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+        let mut der = priv_part_der(b"h", None, Some(0x7f), local_host_address(None), None);
+        let at = der
+            .windows(5)
+            .position(|w| w == [0xa3, 0x03, 0x02, 0x01, 0x7f])
+            .unwrap();
+        der[at + 4] = sent;
+        assert_eq!(
+            ac.rd_priv(&sealed_priv(&session, &der)).unwrap(),
+            b"h",
+            "the INTEGER {sent:#04x} for {expected:#010x}"
+        );
+        assert_eq!(ac.remote_seq(), expected.wrapping_add(1));
+    }
+}
+
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): under `DO_TIME`, a KRB-PRIV must be within the clock skew `[libdefaults] clockskew` sets, 300 seconds unless it is set.
+#[test]
+fn rd_priv_takes_the_clock_skew_krb5_conf_sets() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let old = KerberosTime::from_unix_seconds(KerberosTime::now().unix_seconds() - 400);
+    let msg = |data: &[u8]| {
+        sealed_priv(
+            &session,
+            &priv_part_der(
+                data,
+                Some(old.clone()),
+                None,
+                local_host_address(None),
+                None,
+            ),
+        )
+    };
+    krb5_config::isolate_test_krb5();
+    let ok = accepted(&session, None, None, false, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let err = ac.rd_priv(&msg(b"a")).unwrap_err();
+    assert!(
+        matches!(err, Error::KrbError { code: 37, .. }),
+        "400 s is outside the default 300, got {err:?}"
+    );
+    let conf = krb5_testkit::scratch_dir("p15a-clockskew").join("krb5.conf");
+    std::fs::write(&conf, "[libdefaults]\n    clockskew = 600\n").unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf]));
+    let taken = ac.rd_priv(&msg(b"b"));
+    krb5_config::set_test_krb5_paths(None);
+    assert_eq!(taken.unwrap(), b"b");
+}
+
+/// MIT `read_krbpriv` (`rd_priv.c:77-78`): a KRB-PRIV's r-address, when it has one, must be the local address the context holds.
+#[test]
+fn rd_priv_checks_the_addresses_the_context_holds() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, None, None, false, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+    let here = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7))));
+    let there = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 8))));
+    ac.set_addrs(Some(here.clone()), None);
+    let msg = |r: Option<krb5_types::HostAddress>, seq: Option<u32>| {
+        sealed_priv(&session, &priv_part_der(b"p", None, seq, there.clone(), r))
+    };
+    let err = ac.rd_priv(&msg(Some(there.clone()), None)).unwrap_err();
+    assert!(
+        matches!(err, Error::KrbError { code: 38, .. }),
+        "BADADDR, got {err:?}"
+    );
+    assert_eq!(ac.rd_priv(&msg(Some(here.clone()), None)).unwrap(), b"p");
+    assert_eq!(ac.rd_priv(&msg(None, Some(1))).unwrap(), b"p");
+}

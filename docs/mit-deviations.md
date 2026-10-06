@@ -124,3 +124,4 @@ not yet settled says so.
 | kpasswd change of another principal without privilege | result 5 `Unauthorized request` (`KADM5_AUTH_CHANGEPW`, `misc.c:45-54`; `schpw.c:250-251`) | same | `scripts/kpasswd-rust-gate.sh`; `scripts/kpasswd-mit-gate.sh` |
 | kpasswd privileged change of a missing or foreign-realm principal | `chpass_util.c:136-140`: result 2 with `Password not changed.\nPrincipal does not exist while trying to change password.\n`; admin-style changes ignore INITIAL | same | none named |
 | kpasswd request body by version | `ChangePasswdData` is decoded only for version `0xff80` (`schpw.c:17,171-184`) | same (`krb5-admin` `listen.rs`) | none named |
+| kpropd dump longer than its size | `recv_database` (`kpropd.c:1450-1458`) answers with a KRB-ERROR, then loads it | the same KRB-ERROR; nothing is loaded | `kpropd_refuses_a_dump_longer_than_its_size` |

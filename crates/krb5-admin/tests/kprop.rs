@@ -235,7 +235,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
             },
-            ReplayCache::new(),
+            &ReplayCache::new(),
         )
         .expect("kpropd_handle_conn");
         let _ = std::fs::remove_dir_all(&dir);
@@ -343,7 +343,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
             },
-            ReplayCache::new(),
+            &ReplayCache::new(),
         )
         .unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
@@ -436,7 +436,7 @@ fn kpropd_rejects_when_acl_unset() {
                 stash: &stash,
                 allowed_clients: None,
             },
-            ReplayCache::new(),
+            &ReplayCache::new(),
         )
         .unwrap_err();
         let _ = std::fs::remove_dir_all(&dir);
@@ -563,7 +563,7 @@ fn kprop_exact_acl(
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
             },
-            ReplayCache::new(),
+            &ReplayCache::new(),
         )
         .map_err(|e| format!("kpropd: {e}"))
     });

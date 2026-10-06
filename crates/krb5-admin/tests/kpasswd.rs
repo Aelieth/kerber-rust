@@ -19,7 +19,9 @@ use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id};
 use krb5_kdc::{load_store, save_store, shared_dump, tl_mod_princ_name};
 
-use krb5_protocol::{ReplayCache, as_req_sname, build_ap_req, build_krb_priv, pa_enc_timestamp};
+use krb5_protocol::{
+    ReplayCache, as_req_sname, build_ap_req, build_krb_priv_with_seq, pa_enc_timestamp,
+};
 use krb5_testkit::scratch_dir;
 use krb5_types::{ChangePasswdData, PrincipalName};
 
@@ -74,7 +76,8 @@ fn kpasswd_host_ticket_under_changepw_key_is_refused() {
     ap.ticket.sname = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.kerber.test"]);
     let ap_der = encode(&ap).expect("encode ap");
 
-    let priv_msg = build_krb_priv(&as_out.session_key, b"z1-forge-newpass-123").expect("priv");
+    let priv_msg =
+        build_krb_priv_with_seq(&as_out.session_key, b"z1-forge-newpass-123", None).expect("priv");
     let req = encode_kpasswd_req(&ap_der, &encode(&priv_msg).expect("encode priv"));
 
     let shared = shared_dump(store);
@@ -96,7 +99,7 @@ fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -140,7 +143,8 @@ fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
         targname: None,
         targrealm: None,
     };
-    let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
@@ -184,7 +188,7 @@ fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -228,7 +232,8 @@ fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
         targname: Some(PrincipalName::new(PrincipalName::NT_UNKNOWN, [TEST_USER])),
         targrealm: Some(krb5_types::ascii(TEST_REALM)),
     };
-    let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
@@ -272,7 +277,7 @@ fn kpasswd_target_realm_mismatch_is_harderror() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -316,7 +321,8 @@ fn kpasswd_target_realm_mismatch_is_harderror() {
         targname: Some(user.clone()),
         targrealm: Some(krb5_types::ascii("OTHER.TEST")),
     };
-    let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
@@ -361,7 +367,7 @@ fn kpasswd_foreign_self_change_needs_initial() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::TEST_USER;
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -407,7 +413,8 @@ fn kpasswd_foreign_self_change_needs_initial() {
         targname: Some(user.clone()),
         targrealm: Some(krb5_types::ascii("OTHER.TEST")),
     };
-    let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
@@ -451,7 +458,7 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -496,7 +503,8 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
         targname: Some(admin.clone()),
         targrealm: Some(krb5_types::ascii(TEST_REALM)),
     };
-    let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
@@ -541,7 +549,7 @@ fn kpasswd_self_change_with_initial_succeeds() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -584,7 +592,8 @@ fn kpasswd_self_change_with_initial_succeeds() {
         targname: None,
         targrealm: None,
     };
-    let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
@@ -627,7 +636,7 @@ fn kpasswd_admin_change_ignores_initial() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -664,7 +673,8 @@ fn kpasswd_admin_change_ignores_initial() {
         targname: Some(user.clone()),
         targrealm: Some(krb5_types::ascii(TEST_REALM)),
     };
-    let priv_msg = build_krb_priv(&tgs_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
@@ -718,7 +728,7 @@ fn kpasswd_policy_rejection_is_softerror() {
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
     use krb5_kdc::{NamedPolicy, shared_dump as shared_store};
 
-    use krb5_protocol::{ReplayCache, build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+    use krb5_protocol::{ReplayCache, build_ap_req, build_krb_priv_with_seq, unwrap_krb_priv_ex};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -768,7 +778,8 @@ fn kpasswd_policy_rejection_is_softerror() {
         targname: Some(user),
         targrealm: Some(krb5_types::ascii(TEST_REALM)),
     };
-    let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let replay = ReplayCache::new();
@@ -855,7 +866,8 @@ fn kpasswd_refuses_a_dictionary_word_after_the_database_is_read_again() {
             targrealm: None,
         };
         let priv_msg =
-            build_krb_priv(&as_out.session_key, &encode(&cpw).expect("cpw")).expect("priv");
+            build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).expect("cpw"), None)
+                .expect("priv");
         let req = encode_setpw(&encode(&ap).expect("ap"), &encode(&priv_msg).expect("priv"));
         let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
             .expect("reply");
@@ -1047,7 +1059,7 @@ fn kpasswd_setpw_decode_failure_is_malformed() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, unwrap_krb_priv_ex};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, unwrap_krb_priv_ex};
 
     krb5_config::isolate_test_krb5();
 
@@ -1083,7 +1095,7 @@ fn kpasswd_setpw_decode_failure_is_malformed() {
         &user,
     )
     .unwrap();
-    let priv_msg = build_krb_priv(&as_out.session_key, b"not-der-setpw").unwrap();
+    let priv_msg = build_krb_priv_with_seq(&as_out.session_key, b"not-der-setpw", None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
@@ -1125,7 +1137,7 @@ fn kpasswd_rfc3244_bumps_kvno() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, pa_enc_timestamp};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -1170,7 +1182,7 @@ fn kpasswd_rfc3244_bumps_kvno() {
         targrealm: Some(krb5_types::ascii(TEST_REALM)),
     };
     let cpw_der = encode(&cpw).unwrap();
-    let priv_msg = build_krb_priv(&as_out.session_key, &cpw_der).unwrap();
+    let priv_msg = build_krb_priv_with_seq(&as_out.session_key, &cpw_der, None).unwrap();
     let priv_der = encode(&priv_msg).unwrap();
     let req = encode_setpw(&ap_der, &priv_der);
     let shared = shared_store(store);
@@ -1233,7 +1245,7 @@ fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
     };
     use krb5_kdc::{bootstrap_realm_with_kdc_conf, shared_dump as shared_store};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -1285,7 +1297,8 @@ fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
         targname: Some(user.clone()),
         targrealm: Some(krb5_types::ascii(TEST_REALM)),
     };
-    let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw_data).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw_data).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
@@ -1309,7 +1322,7 @@ fn kpasswd_udp_listener_then_issue_as() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv, pa_enc_timestamp};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq, pa_enc_timestamp};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -1344,7 +1357,8 @@ fn kpasswd_udp_listener_then_issue_as() {
         targname: Some(user.clone()),
         targrealm: Some(krb5_types::ascii(TEST_REALM)),
     };
-    let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
 
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -1473,7 +1487,7 @@ fn kpasswd_vno1_der_stays_password() {
     use krb5_kdc::shared_dump as shared_store;
     use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER};
 
-    use krb5_protocol::{build_ap_req, build_krb_priv};
+    use krb5_protocol::{build_ap_req, build_krb_priv_with_seq};
     use krb5_types::ChangePasswdData;
 
     krb5_config::isolate_test_krb5();
@@ -1524,7 +1538,8 @@ fn kpasswd_vno1_der_stays_password() {
         targname: Some(admin.clone()),
         targrealm: Some(krb5_types::ascii(TEST_REALM)),
     };
-    let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).unwrap()).unwrap();
+    let priv_msg =
+        build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
     let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
     let shared = shared_store(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
@@ -1633,7 +1648,8 @@ fn kpasswd_stamps_kadmind_not_the_client() {
         targname: None,
         targrealm: None,
     };
-    let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).expect("cpw")).expect("priv");
+    let priv_msg = build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).expect("cpw"), None)
+        .expect("priv");
     let mut req = encode_kpasswd_req(&encode(&ap).expect("ap"), &encode(&priv_msg).expect("priv"));
     req[2..4].copy_from_slice(&0xff80u16.to_be_bytes());
     let shared = shared_dump(store);
@@ -1721,7 +1737,8 @@ fn kpasswd_keeps_an_out_of_process_principal() {
         targname: None,
         targrealm: None,
     };
-    let priv_msg = build_krb_priv(&as_out.session_key, &encode(&cpw).expect("cpw")).expect("priv");
+    let priv_msg = build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).expect("cpw"), None)
+        .expect("priv");
     let mut req = encode_kpasswd_req(&encode(&ap).expect("ap"), &encode(&priv_msg).expect("priv"));
     req[2..4].copy_from_slice(&0xff80u16.to_be_bytes());
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
@@ -1747,6 +1764,19 @@ fn mit_shaped_kpasswd_req(
     subkey: &krb5_crypto::ProtocolKey,
     password: &[u8],
 ) -> Vec<u8> {
+    kpasswd_req_with_seqs(as_out, user, subkey, password, None, None)
+}
+
+/// A kpasswd request as `mit_shaped_kpasswd_req` builds it, with the authenticator's and the
+/// KRB-PRIV's seq-numbers chosen (no field when `None`).
+fn kpasswd_req_with_seqs(
+    as_out: &krb5_kdc::IssuedAs,
+    user: &PrincipalName,
+    subkey: &krb5_crypto::ProtocolKey,
+    password: &[u8],
+    auth_seq: Option<u32>,
+    priv_seq: Option<u32>,
+) -> Vec<u8> {
     use krb5_types::{ApOptions, Authenticator, EncryptionKey, KerberosTime, Microseconds};
 
     let now = KerberosTime::now();
@@ -1761,7 +1791,7 @@ fn mit_shaped_kpasswd_req(
             keytype: subkey.etype().to_iana(),
             keyvalue: subkey.as_bytes().to_vec().into(),
         }),
-        seq_number: None,
+        seq_number: auth_seq,
         authorization_data: None,
     };
     let ap = krb5_protocol::build_ap_req_from_authenticator(
@@ -1773,8 +1803,94 @@ fn mit_shaped_kpasswd_req(
     .unwrap();
     let mut state = krb5_crypto::CipherState::initial();
     let priv_msg =
-        krb5_protocol::build_krb_priv_chained(subkey, password, None, false, &mut state).unwrap();
+        krb5_protocol::build_krb_priv_chained(subkey, password, priv_seq, false, &mut state)
+            .unwrap();
     encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap())
+}
+
+/// MIT `process_chpw_request` (`schpw.c:153-166`): `krb5_rd_priv` with `DO_SEQUENCE` takes the request's KRB-PRIV only with the authenticator's seq-number (none when it has none), else the answer is HARDERROR "Failed decrypting request" and the password stays.
+/// The five cases settled live beside MIT 1.22.2's kadmind.
+#[test]
+fn kpasswd_refuses_a_request_krb_priv_out_of_sequence() {
+    use krb5_crypto::{KeyUsage, ProtocolKey, decrypt};
+    use krb5_types::{EncKrbPrivPart, KrbPriv, ku};
+
+    krb5_config::isolate_test_krb5();
+    let s = 864_518_167;
+    for (n, (auth_seq, priv_seq, changed)) in [
+        (None, None, true),
+        (None, Some(1), false),
+        (Some(s), Some(s), true),
+        (Some(s), Some(s + 1), false),
+        (Some(s), None, false),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let cpw_key = store
+            .get_name(&kadmin_changepw())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let kvno_before = store
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 930 + u32::try_from(n).unwrap());
+        let subkey = ProtocolKey::random(as_out.session_key.etype()).unwrap();
+        let req = kpasswd_req_with_seqs(
+            &as_out,
+            &user,
+            &subkey,
+            b"p15c-new-pass-3",
+            auth_seq,
+            priv_seq,
+        );
+        let shared = shared_dump(store);
+        let rep =
+            handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
+        let (_, priv_der) = parse_kpasswd_rep(&rep).unwrap();
+        let msg: KrbPriv = krb5_asn1::decode(&priv_der).unwrap();
+        let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART).unwrap();
+        let plain = decrypt(&subkey, usage, msg.enc_part.cipher.as_ref()).unwrap();
+        let enc: EncKrbPrivPart = krb5_asn1::decode(&plain).unwrap();
+        let kvno_after = shared
+            .read()
+            .unwrap()
+            .get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap();
+        if changed {
+            assert_eq!(enc.user_data.as_ref(), &[0, 0], "case {n}: success");
+            assert!(kvno_after > kvno_before, "case {n}: the password changed");
+        } else {
+            assert_eq!(
+                enc.user_data.as_ref(),
+                b"\x00\x02Failed decrypting request",
+                "case {n}: HARDERROR"
+            );
+            assert_eq!(kvno_after, kvno_before, "case {n}: the password stayed");
+        }
+    }
 }
 
 #[test]

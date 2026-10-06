@@ -562,6 +562,29 @@ pub fn unwrap_krb_priv(
     unwrap_krb_priv_ex(session, raw, replay, true, true)
 }
 
+/// The decrypted part of a KRB-PRIV under `key`, for a caller that checks its sequence number.
+/// MIT `read_krbpriv` (`lib/krb5/krb/rd_priv.c:43-97`): a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`; the decrypted part is zeroed before it is freed.
+///
+/// # Errors
+///
+/// [`Error::KrbError`] `MSG_TYPE` (40) for another message type; [`Error::Asn1`] when the message
+/// or its part does not decode; [`Error::Crypto`] when it does not decrypt under `key`.
+pub fn read_krb_priv(key: &ProtocolKey, raw: &[u8]) -> Result<EncKrbPrivPart, Error> {
+    // MIT `krb5_is_krb_priv`: [APPLICATION 21], constructed or not.
+    if raw.first().is_none_or(|b| b & !0x20 != 0x55) {
+        return Err(Error::KrbError {
+            code: err::MSG_TYPE,
+            text: Some("Invalid message type".into()),
+        });
+    }
+    let msg: KrbPriv = decode(raw)?;
+    let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
+    let plain = decrypt(key, usage, msg.enc_part.cipher.as_ref())?;
+    let part = decode::<EncKrbPrivPart>(&plain);
+    wipe_vec(plain);
+    Ok(part?)
+}
+
 /// Decrypt a KRB-PRIV.
 ///
 /// MIT `kpasswd` (`krb5int_mk_chpw_req`) sets `DO_SEQUENCE` only, clearing
