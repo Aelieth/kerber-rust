@@ -409,6 +409,13 @@ pub struct KdcConf {
     pub dict_file: Option<PathBuf>,
     /// `[logging]` relations, name and value, in file order; read by [`LogSpecs`].
     pub logging: Vec<(String, String)>,
+    /// `[kdcdefaults] kdc_max_dgram_reply_size`: a UDP reply longer than this, taken as an
+    /// unsigned number, is replaced by `KRB_ERR_RESPONSE_TOO_BIG`.
+    /// MIT `initialize_realms` (`kdc/main.c:636-638`): the last value read as `%d`, else `MAX_DGRAM_SIZE`.
+    pub kdc_max_dgram_reply_size: i32,
+    /// `[kdcdefaults] kdc_tcp_listen_backlog`: the KDC's TCP listeners' `listen` backlog.
+    /// MIT `initialize_realms` (`kdc/main.c:639-644`): the last value read as `%d`, else `DEFAULT_TCP_LISTEN_BACKLOG`.
+    pub kdc_tcp_listen_backlog: i32,
 }
 
 /// Resolved ccache name (`krb5_cc_resolve`).

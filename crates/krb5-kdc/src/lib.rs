@@ -9,8 +9,9 @@
 //! reply cache (`lookaside`), ACL-gated admin (`acl`), keytab export, the
 //! documented test realm (`testrealm`), and MIT kadm5 names (`principals`).
 //! Ticket issuance, ACL checks, and keytab export are pure functions so tests
-//! do not need a bound socket. UDP/TCP 88 is a thin listener over
-//! [`handle_request`]. There is no C FFI.
+//! do not need a bound socket. UDP/TCP 88 is served by MIT's net-server loop
+//! (`net_server`), one loop on the caller's thread ([`serve_all_until`],
+//! [`serve_daemon`]). There is no C FFI.
 //!
 //! The public surface is the names this root re-exports, plus `principals`
 //! and `testrealm`. Every other module stays private.
@@ -67,7 +68,6 @@ pub use dblock::{
     SUFFIX_POLICY_LOCK, lock_file_exclusive, suffixed,
 };
 pub use error::Error;
-pub(crate) use issue::kdc_error_bytes;
 pub use issue::{
     IssuedAs, IssuedTgs, handle_request, handle_request_from, issue_as, issue_tgs,
     tgs_header_is_crossrealm,
@@ -90,8 +90,9 @@ pub use listen::{
     BIND_CANDIDATES, ClosingFd, ConnGuard, ConnRegistry, Datagram, ListenLimits, MAX_DGRAM_REPLY,
     MAX_TCP_REQUEST, MAX_TCP_WORKERS, PktInfo, SharedDump, SharedStore, WHILE_DISPATCHING_TCP,
     WHILE_DISPATCHING_UDP, bind_preferred, bind_rpc_listeners, bind_tcp_listeners,
-    bind_udp_listeners, recv_from_to, send_udp_reply, serve, serve_all, serve_all_until,
-    serve_until, shared_dump, shared_store, wait_for_connection,
+    bind_tcp_listeners_with_backlog, bind_udp_listeners, recv_from_to, send_udp_reply, serve,
+    serve_all, serve_all_until, serve_daemon, serve_until, shared_dump, shared_store,
+    wait_for_connection,
 };
 pub use lockout::{
     Lockout, LockoutUpdate, SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file,

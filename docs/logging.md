@@ -120,13 +120,11 @@ with `s4u` + `s4u_client`. After a KRB-ERROR it is the fail tuple, with
 the status word and `outcome=krb-error`. Unexpected transit-path errors
 are `tracing` **error** (`kdc_log.c:201-206` `LOG_ERR`).
 
-The listener logs its own `kdc.issue` lines: an empty reply at
-**debug** (a `test-hooks` build only, where `RUST_LOG` asks for it), a
-reply resent from the lookaside cache at `info` with
-`outcome=retransmit`, a duplicate that arrives while the first copy is
-being processed at `info` with `outcome=discard`, and a handler error
-at **error** with `error_suffix` `while dispatching (udp)` or
-`while dispatching (tcp)`, after the handler's own line.
+The KDC's dispatch logs its own `kdc.issue` lines: a reply resent
+from the lookaside cache at `info` with `outcome=retransmit`, and a
+duplicate that arrives while the first copy is being processed at
+`info` with `outcome=discard`. A request that panics is answered with
+nothing and logged `event=kdc.transport` at **error**.
 
 A kdcauthdata module that returns an error logs
 `event=kdc.authdata.module` at **error** with `correlation_id`,
@@ -201,10 +199,21 @@ find dictionary file …, continuing without one.` for a missing one;
 one `AS_REQ` / `TGS_REQ` line per answered request (`ISSUE` with the
 reply etypes, or the status word and the error's message) with the
 `... PROTOCOL-TRANSITION` / `... CONSTRAINED-DELEGATION` line after an
-S4U request; the transited-path lines; `closing down fd N` when a TCP
-connection ends; and per kadm5 request one `Request:` or `Unauthorized
+S4U request; the transited-path lines; MIT's net-server lines: `closing
+down fd N` when a TCP connection ends, `too many connections` and
+`dropping TCP fd N from ADDR` past the 45-stream cap, `TCP client ADDR
+wants N bytes, cap is M`, the two `DISPATCH: repeated (retransmitted?)
+request …` lines, `TEXT - while dispatching (udp)` / `(tcp)` for a
+request the KDC refuses or discards, and `Got signal to reset` / `Got
+signal to request exit` at debug; and per kadm5 request one `Request:` or `Unauthorized
 request:` line with client, service and address, plus the `chpw` /
-`setpw` lines of kpasswd.
+`setpw` lines of kpasswd. The `fd N` in the net-server lines can be
+higher than MIT's for the same socket: the signals' wake pipe holds five
+descriptors where MIT's loop holds one eventfd.
+
+Each daemon writes its lines from the one loop that serves every client,
+as MIT's does, so a destination that blocks (a pipe nobody reads, a
+stalled syslog) holds every client until it takes the line.
 
 
 As MIT's, kadmind prints only its one `fail_to_start` line on stderr when kadm5.acl does not load; the reason and the

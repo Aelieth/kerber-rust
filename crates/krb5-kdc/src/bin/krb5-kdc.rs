@@ -20,14 +20,18 @@
 //!   stanza writes its own `kdc_listen` / `kdc_ports`.
 //! - `-n` keeps the KDC in the foreground. Without it the KDC binds its sockets, detaches
 //!   (`daemon(3)`) and then writes the `-P` pid file.
-//! - `-w N` is accepted (requests already run on threads); `-R`, `-4` and `-X` are ignored; `-k`
-//!   is only checked; `-M` must be `K/M`; `-T` must be 0. `-m` is ignored when the realm stanza
-//!   names `key_stash_file`, as in MIT; otherwise the KDC stops as MIT's does when it cannot
-//!   read the master password.
+//! - `-w N` is accepted and does nothing: one loop on the main thread serves every request;
+//!   `-R`, `-4` and `-X` are ignored; `-k` is only checked; `-M` must be `K/M`; `-T` must
+//!   be 0. `-m` is ignored when the realm stanza names `key_stash_file`, as in MIT; otherwise
+//!   the KDC stops as MIT's does when it cannot read the master password.
+//!
+//! The KDC serves every client from MIT's net-server loop on its main thread: one thread, with
+//! `[kdcdefaults] kdc_max_dgram_reply_size` and `kdc_tcp_listen_backlog` read as MIT's are.
 //!
 //! The daemon log ([`krb5_log::klog`]) goes where `[logging] kdc` (else `default`) in kdc.conf
-//! and krb5.conf says, in MIT's line format, and SIGHUP reopens its files. The JSON structured
-//! log stays on standard output.
+//! and krb5.conf says, in MIT's line format; SIGHUP reopens its files, and SIGTERM, SIGINT or
+//! SIGQUIT ends the KDC. The JSON structured log goes only where `[logging] json` names a
+//! destination.
 //!
 //! Builds with the `test-hooks` feature also take the gates' forms, which stay in the
 //! foreground: `--test-realm` (the documented `KERBER.TEST` realm), `--export-keytab PATH`,
@@ -43,8 +47,9 @@ use std::path::PathBuf;
 
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
-    ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners, bind_udp_listeners,
-    detach, names_relative_database, open_database, serve_all_until, shared_store, write_pid_file,
+    ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners_with_backlog,
+    bind_udp_listeners, detach, names_relative_database, open_database, serve_daemon, shared_store,
+    write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 
@@ -355,7 +360,6 @@ fn main() {
     }
     #[cfg(feature = "test-hooks")]
     hooks::announce(&progname, persist.as_ref(), memory, &udp, &tcp);
-    signals.spawn_log_reopener();
     // MIT `main` (`kdc/main.c:1025-1028`): "commencing operation", and in the foreground
     // "<prog>: starting..." on standard error.
     klog::syslog(Severity::Info, "commencing operation");
@@ -363,16 +367,15 @@ fn main() {
         eprintln!("{progname}: starting...");
     }
     krb5_kdc::current_audit().kdc_start(true);
-    let served = serve_all_until(
-        store,
-        udp,
-        tcp,
-        signals.stop_flag(),
-        ListenLimits::default(),
-    );
-    if signals.stop_requested() {
-        klog::syslog(Severity::Debug, "Got signal to request exit");
-    }
+    // MIT `finish_dispatch` (`kdc/dispatch.c:54-55`): the reply size is compared as an unsigned number.
+    let max_dgram = kdc_conf.as_ref().map_or(krb5_kdc::MAX_DGRAM_REPLY, |c| {
+        usize::try_from(c.kdc_max_dgram_reply_size.cast_unsigned()).unwrap_or(usize::MAX)
+    });
+    let limits = ListenLimits {
+        max_dgram_reply_size: max_dgram,
+        ..ListenLimits::default()
+    };
+    let served = serve_daemon(store, udp, tcp, &signals, limits);
     if let Err(e) = served {
         krb5_kdc::current_audit().kdc_stop(false);
         klog::com_err(Some(&e.to_string()), "while serving");
@@ -456,7 +459,9 @@ fn bind_sockets(
         std::process::exit(1);
     });
     let udp = bind_udp_listeners(&udp_addrs).unwrap_or_else(|_| std::process::exit(1));
-    let tcp = bind_tcp_listeners(&tcp_addrs).unwrap_or_else(|_| std::process::exit(1));
+    // MIT `initialize_realms` (`kdc/main.c:639-644`): the TCP listeners' backlog is `kdc_tcp_listen_backlog`.
+    let tcp = bind_tcp_listeners_with_backlog(&tcp_addrs, conf.kdc_tcp_listen_backlog)
+        .unwrap_or_else(|_| std::process::exit(1));
     (udp, tcp)
 }
 

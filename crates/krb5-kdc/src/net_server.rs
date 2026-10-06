@@ -1,32 +1,38 @@
-//! MIT's net-server (`lib/apputils/net-server.c`), the stream half: each accepted TCP
-//! connection's state, its one read or write per event, and the table of stream connections
-//! with MIT's cap and its eviction of the connection that started first.
+//! MIT's net-server (`lib/apputils/net-server.c`): the one loop a daemon serves every client
+//! from, on the caller's thread.
 //!
-//! MIT runs one loop per daemon and keeps every connection in that loop's `events` set. A
-//! connection reads its four-byte length and then its body, one `read` per readable event, so
-//! a slow sender never holds up another connection; a complete request is dispatched, the reply
-//! goes out by `writev` as the socket takes it, and the connection closes. There is no timeout:
-//! a stream keeps its place until it finishes, fails, or is evicted when a connection past the
-//! cap of 45 arrives. [`Streams`] is that set and those handlers, over any [`Stream`] so the
-//! units can drive them with scripted sockets.
-
-// Until krb5kdc and kadmind are served from this loop, only the units call it.
-#![cfg_attr(not(test), allow(dead_code))]
+//! MIT runs one loop per daemon and keeps every listener and connection in that loop's `events`
+//! set. A datagram is read, dispatched and answered in one event. A stream connection reads its
+//! four-byte length and then its body, one `read` per readable event, so a slow sender never
+//! holds up another connection; a complete request is dispatched, the reply goes out by `writev`
+//! as the socket takes it, and the connection closes. There is no timeout: a stream keeps its
+//! place until it finishes, fails, or is evicted when a connection past the cap of 45 arrives.
+//! [`Streams`] is that set of streams and their handlers, over any [`Stream`] so the units can
+//! drive them with scripted sockets; [`run`] is the loop, which polls the listeners, the streams
+//! and the daemon's signals.
 
 use std::io::{self, IoSlice, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::os::fd::{AsRawFd as _, RawFd};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
+use std::os::fd::{AsFd as _, AsRawFd as _, OwnedFd, RawFd};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, SystemTime};
 
-use krb5_log::klog::{Severity, os_error_text};
+use krb5_log::klog::{self, Severity, os_error_text};
+use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 use nix::sys::socket::{setsockopt, sockopt};
 
-use crate::listen::WHILE_DISPATCHING_TCP;
+use crate::daemon::Signals;
+use crate::listen::{WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, recv_from_to, send_udp_reply};
 
 /// MIT `max_stream_data_connections` (`lib/apputils/net-server.c:85-85`): at most 45 stream connections.
 pub(crate) const MAX_STREAM_DATA_CONNECTIONS: usize = 45;
 /// MIT `accept_stream_connection` (`lib/apputils/net-server.c:1278-1278`): a stream's buffer is 1 MiB, its length word included.
 pub(crate) const BUFSIZ: usize = 1024 * 1024;
+/// The longest request a stream takes: the buffer less its length word.
+pub(crate) const MAX_REQUEST: usize = BUFSIZ - 4;
+/// MIT `MAX_DGRAM_SIZE` (`include/osconf.hin:113-113`): a datagram is read into 64 KiB.
+const MAX_DGRAM_SIZE: usize = 65_536;
 /// The most one read takes. It is not a second cap: a request is read in pieces of at most this
 /// size into a buffer the size of its length, so only the pages that receive bytes are touched.
 pub(crate) const READ_SIZE: usize = 64 * 1024;
@@ -66,13 +72,14 @@ pub(crate) enum Reply {
 /// What the daemon supplies to the loop.
 /// MIT `dispatch` (`include/net-server.h:84-86`): one request in and, through the respond callback, one reply out.
 pub(crate) trait Dispatch {
-    /// Answer one request that came to `local` from `remote`.
+    /// Answer one request that came to `local` from `remote`, logging to `log`.
     fn dispatch(
         &mut self,
         local: SocketAddr,
         remote: SocketAddr,
         request: &[u8],
         is_tcp: bool,
+        log: &mut dyn Log,
     ) -> Reply;
 
     /// The reply to a stream whose length is past the buffer.
@@ -81,6 +88,10 @@ pub(crate) trait Dispatch {
     ///
     /// The message of the error that kept the reply from being built.
     fn make_toolong_error(&mut self) -> Result<Vec<u8>, String>;
+
+    /// SIGHUP's hook, after the log is reopened; nothing by default.
+    /// MIT `do_reset` (`lib/apputils/net-server.c:246-253`): the daemon's reset function, when it gave one.
+    fn reset(&mut self) {}
 }
 
 /// Where the loop's log lines go: `klog::syslog` in the daemons, a list in the units.
@@ -91,6 +102,22 @@ pub(crate) trait Log {
     /// MIT's `com_err` through the daemon log: the error's text, ` - `, then `msg`, as an error.
     fn com_err(&mut self, error: &str, msg: &str) {
         self.syslog(Severity::Err, &format!("{error} - {msg}"));
+    }
+
+    /// Reopen the log's files (SIGHUP).
+    fn reopen(&mut self) {}
+}
+
+/// The daemon log, [`klog`].
+pub(crate) struct Klog;
+
+impl Log for Klog {
+    fn syslog(&mut self, severity: Severity, msg: &str) {
+        klog::syslog(severity, msg);
+    }
+
+    fn reopen(&mut self) {
+        klog::reopen();
     }
 }
 
@@ -165,28 +192,33 @@ enum Step {
 pub(crate) struct Streams<S> {
     conns: Vec<Conn<S>>,
     max: usize,
+    cap: usize,
     next_id: u64,
     scratch: Vec<u8>,
 }
 
 impl<S: Stream> Streams<S> {
-    /// An empty table that holds at most `max` connections.
-    pub(crate) fn new(max: usize) -> Self {
+    /// An empty table that holds at most `max` connections, each taking a request of at most
+    /// `cap` bytes ([`MAX_REQUEST`] in the daemons).
+    pub(crate) fn new(max: usize, cap: usize) -> Self {
         Self {
             conns: Vec::new(),
             max,
+            cap,
             next_id: 0,
             scratch: vec![0; READ_SIZE],
         }
     }
 
     /// How many stream connections are open (MIT's `stream_data_counter`).
-    pub(crate) fn len(&self) -> usize {
+    #[cfg(test)]
+    fn len(&self) -> usize {
         self.conns.len()
     }
 
     /// Whether no stream connection is open.
-    pub(crate) fn is_empty(&self) -> bool {
+    #[cfg(test)]
+    fn is_empty(&self) -> bool {
         self.conns.is_empty()
     }
 
@@ -284,7 +316,13 @@ impl<S: Stream> Streams<S> {
     }
 
     fn read_step(&mut self, i: usize, app: &mut dyn Dispatch, log: &mut dyn Log) -> Step {
-        let Self { conns, scratch, .. } = self;
+        let Self {
+            conns,
+            scratch,
+            cap,
+            ..
+        } = self;
+        let cap = *cap;
         let conn = &mut conns[i];
         let Io::Read {
             lenbuf,
@@ -304,14 +342,12 @@ impl<S: Stream> Streams<S> {
             }
             if *offset == 4 {
                 *msglen = usize::try_from(u32::from_be_bytes(*lenbuf)).unwrap_or(usize::MAX);
-                if *msglen > BUFSIZ - 4 {
+                if *msglen > cap {
                     log.syslog(
                         Severity::Err,
                         &format!(
-                            "TCP client {} wants {} bytes, cap is {}",
-                            conn.addrbuf,
-                            *msglen,
-                            BUFSIZ - 4
+                            "TCP client {} wants {} bytes, cap is {cap}",
+                            conn.addrbuf, *msglen
                         ),
                     );
                     return match app.make_toolong_error() {
@@ -359,7 +395,7 @@ impl<S: Stream> Streams<S> {
         };
         let request = std::mem::take(body);
         let remote = conn.remote;
-        Step::Respond(dispatch_contained(app, local, remote, &request))
+        Step::Respond(dispatch_contained(app, local, remote, &request, true, log))
     }
 
     /// Queue `reply` on connection `i`, which turns to writing, or close it unanswered.
@@ -468,9 +504,11 @@ fn dispatch_contained(
     local: SocketAddr,
     remote: SocketAddr,
     request: &[u8],
+    is_tcp: bool,
+    log: &mut dyn Log,
 ) -> Reply {
     let run = catch_unwind(AssertUnwindSafe(|| {
-        app.dispatch(local, remote, request, true)
+        app.dispatch(local, remote, request, is_tcp, log)
     }));
     run.unwrap_or_else(|_| {
         tracing::error!(
@@ -482,6 +520,209 @@ fn dispatch_contained(
         );
         Reply::Nothing
     })
+}
+
+/// How the loop learns it is to stop.
+pub(crate) enum Wake<'a> {
+    /// The daemon's signals: SIGINT, SIGTERM and SIGQUIT end the loop, SIGHUP reopens the log
+    /// and runs the application's reset; each writes a byte to the signals' wake pipe.
+    Signals(&'a Signals),
+    /// A caller's stop flag, looked at after each wait of at most `every` (an embedder's).
+    Flag {
+        /// The flag that ends the loop.
+        stop: &'a AtomicBool,
+        /// The longest wait between two looks at it.
+        every: Duration,
+    },
+}
+
+/// The second it is now, as MIT's `time(0)`.
+fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// What one poll found ready.
+enum Ready {
+    Wake,
+    Udp(usize),
+    Listener(usize),
+    Stream { id: u64, writing: bool },
+}
+
+/// Serve `udp` and `tcp` to `app` from one loop on this thread until `wake` says to stop: each
+/// datagram, accepted stream and stream event in turn, at most `max_streams` streams of at most
+/// `cap` bytes each.
+/// MIT `loop_setup_signals` (`lib/apputils/net-server.c:265-284`): SIGINT, SIGTERM and SIGQUIT end the loop, SIGHUP resets, and SIGPIPE is ignored, as the Rust runtime leaves it.
+/// MIT `setup_socket` (`lib/apputils/net-server.c:849-856`): a UDP or TCP listener is non-blocking.
+///
+/// A wake pipe that could not be made leaves the signal flags looked at every second.
+///
+/// # Errors
+///
+/// The OS error of making a listener non-blocking, or of a poll that fails other than by a
+/// signal.
+pub(crate) fn run(
+    app: &mut dyn Dispatch,
+    udp: &[UdpSocket],
+    tcp: &[TcpListener],
+    max_streams: usize,
+    cap: usize,
+    wake: &Wake<'_>,
+    log: &mut dyn Log,
+) -> io::Result<()> {
+    for u in udp {
+        u.set_nonblocking(true)?;
+    }
+    for t in tcp {
+        t.set_nonblocking(true)?;
+    }
+    let mut streams: Streams<TcpStream> = Streams::new(max_streams, cap);
+    let mut pkt = vec![0u8; MAX_DGRAM_SIZE];
+    let (pipe, timeout) = match wake {
+        Wake::Signals(s) => match s.wake_fd() {
+            Some(fd) => (Some(fd), PollTimeout::NONE),
+            None => (None, PollTimeout::from(1000u16)),
+        },
+        Wake::Flag { every, .. } => {
+            let ms = u16::try_from(every.as_millis()).unwrap_or(u16::MAX).max(1);
+            (None, PollTimeout::from(ms))
+        }
+    };
+    loop {
+        let ready = wait(pipe, udp, tcp, &streams, timeout)?;
+        for r in ready {
+            match r {
+                Ready::Wake => drain(pipe),
+                Ready::Udp(i) => process_packet(&udp[i], &mut pkt, app, log),
+                Ready::Listener(i) => streams.accept(&tcp[i], now_secs(), log),
+                Ready::Stream { id, writing: false } => streams.readable(id, app, log),
+                Ready::Stream { id, writing: true } => streams.writable(id, log),
+            }
+        }
+        match wake {
+            Wake::Signals(s) => {
+                if s.take_hup() {
+                    // MIT `do_reset` (`lib/apputils/net-server.c:246-253`): the debug line, the log reopened, then the daemon's reset.
+                    log.syslog(Severity::Debug, "Got signal to reset");
+                    log.reopen();
+                    app.reset();
+                }
+                if s.stop_requested() {
+                    // MIT `do_break` (`lib/apputils/net-server.c:235-238`): the debug line, then the loop ends.
+                    log.syslog(Severity::Debug, "Got signal to request exit");
+                    return Ok(());
+                }
+            }
+            Wake::Flag { stop, .. } => {
+                if stop.load(Ordering::Relaxed) {
+                    return Ok(());
+                }
+            }
+        }
+    }
+}
+
+/// One poll over the wake pipe, the UDP sockets, the listeners and the streams (a reading stream
+/// for input, a writing one for output); what is ready, in that order.
+fn wait(
+    pipe: Option<&OwnedFd>,
+    udp: &[UdpSocket],
+    tcp: &[TcpListener],
+    streams: &Streams<TcpStream>,
+    timeout: PollTimeout,
+) -> io::Result<Vec<Ready>> {
+    let input = PollFlags::POLLIN;
+    let mut what = Vec::new();
+    let mut fds = Vec::new();
+    if let Some(p) = pipe {
+        what.push(Ready::Wake);
+        fds.push(PollFd::new(p.as_fd(), input));
+    }
+    for (i, u) in udp.iter().enumerate() {
+        what.push(Ready::Udp(i));
+        fds.push(PollFd::new(u.as_fd(), input));
+    }
+    for (i, t) in tcp.iter().enumerate() {
+        what.push(Ready::Listener(i));
+        fds.push(PollFd::new(t.as_fd(), input));
+    }
+    for c in streams.conns() {
+        let writing = c.writing();
+        what.push(Ready::Stream { id: c.id, writing });
+        let flags = if writing { PollFlags::POLLOUT } else { input };
+        fds.push(PollFd::new(c.stream.as_fd(), flags));
+    }
+    match poll(&mut fds, timeout) {
+        Ok(_) => {}
+        Err(nix::errno::Errno::EINTR) => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    }
+    Ok(what
+        .into_iter()
+        .zip(&fds)
+        .filter(|(_, f)| f.revents().is_some_and(|r| !r.is_empty()))
+        .map(|(w, _)| w)
+        .collect())
+}
+
+/// Read what the signals wrote to the wake pipe, so it waits for the next one.
+fn drain(pipe: Option<&OwnedFd>) {
+    let Some(p) = pipe else {
+        return;
+    };
+    let mut buf = [0u8; 64];
+    while matches!(nix::unistd::read(p, &mut buf), Ok(n) if n > 0) {}
+}
+
+/// One readable event on a UDP socket: one datagram read, dispatched, and its reply sent from
+/// the address it was sent to.
+/// MIT `process_packet` (`lib/apputils/net-server.c:1150-1188`): a failed read other than an interruption, nothing to read or a refused earlier reply is logged, an empty datagram is dropped, and the request is dispatched with the address it came to.
+/// MIT `process_packet_response` (`lib/apputils/net-server.c:1101-1105`): a nonzero code is logged "while dispatching (udp)", and no reply is sent then or when there is none.
+fn process_packet(sock: &UdpSocket, buf: &mut [u8], app: &mut dyn Dispatch, log: &mut dyn Log) {
+    let d = match recv_from_to(sock, buf) {
+        Ok(d) => d,
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::Interrupted
+                    | io::ErrorKind::WouldBlock
+                    | io::ErrorKind::ConnectionRefused
+            ) =>
+        {
+            return;
+        }
+        Err(e) => {
+            log.com_err(&os_error_text(&e), "while receiving from network");
+            return;
+        }
+    };
+    if d.len == 0 {
+        return;
+    }
+    let local = match d.to {
+        Some(p) => SocketAddr::new(p.addr, sock.local_addr().map_or(0, |a| a.port())),
+        None => sock
+            .local_addr()
+            .unwrap_or_else(|_| SocketAddr::from(([0, 0, 0, 0], 0))),
+    };
+    let request = &buf[..d.len];
+    match dispatch_contained(app, local, d.from, request, false, log) {
+        Reply::Send(reply) => {
+            if let Err(e) = send_udp_reply(sock, &reply, &d) {
+                tracing::error!(
+                    event = krb5_log::events::KDC_TRANSPORT,
+                    correlation_id = krb5_log::current_correlation_id(),
+                    component = "krb5-kdc",
+                    outcome = "error",
+                    error = %e,
+                );
+            }
+        }
+        Reply::Nothing => {}
+        Reply::Failed(text) => log.com_err(&text, WHILE_DISPATCHING_UDP),
+    }
 }
 
 /// A read or write that found nothing to do: the stream waits for its next event.
@@ -646,6 +887,7 @@ mod tests {
             remote: SocketAddr,
             request: &[u8],
             is_tcp: bool,
+            _log: &mut dyn Log,
         ) -> Reply {
             self.requests
                 .push((local, remote, request.to_vec(), is_tcp));
@@ -685,7 +927,7 @@ mod tests {
 
     /// A table with one fake connection on fd 7 from 192.0.2.1:4242.
     fn one(now: u64) -> (Streams<Fake>, u64, Rc<RefCell<Wire>>, Lines) {
-        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS);
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
         let wire = Rc::new(RefCell::new(Wire::default()));
         let mut log = Lines::default();
         let id = t.add(Fake(Rc::clone(&wire)), 7, peer(4242), now, &mut log);
@@ -954,7 +1196,7 @@ mod tests {
     /// A panicking dispatch closes its stream unanswered; the loop and the other streams go on.
     #[test]
     fn a_panicking_dispatch_is_contained() {
-        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS);
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
         let mut log = Lines::default();
         let (a, b) = (
             Rc::new(RefCell::new(Wire::default())),
@@ -1022,7 +1264,7 @@ mod tests {
     /// the first of a tie from the top, and each newcomer took its victim's place.
     #[test]
     fn connections_in_one_second_evict_as_mits() {
-        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS);
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
         let mut log = Lines::default();
         let conns = fill(&mut t, &mut log, 48, |_| 100);
         assert_eq!(evicted(&conns), [45, 46, 47]);
@@ -1035,7 +1277,7 @@ mod tests {
     /// 19th and the 48th the 18th, as MIT 1.22.2 did when settled live.
     #[test]
     fn connections_over_two_seconds_evict_as_mits() {
-        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS);
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
         let mut log = Lines::default();
         let conns = fill(&mut t, &mut log, 48, |i| if i <= 20 { 100 } else { 101 });
         assert_eq!(evicted(&conns), [18, 19, 20]);
@@ -1048,7 +1290,7 @@ mod tests {
     /// same-second tie from the top, so the next newcomer evicts it though it is writing.
     #[test]
     fn a_writing_stream_moves_to_the_end_and_can_be_evicted() {
-        let mut t = Streams::new(3);
+        let mut t = Streams::new(3, MAX_REQUEST);
         let mut log = Lines::default();
         let conns = fill(&mut t, &mut log, 3, |_| 100);
         let (id1, w1) = &conns[0];
@@ -1080,7 +1322,7 @@ mod tests {
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
-        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS);
+        let mut t = Streams::new(MAX_STREAM_DATA_CONNECTIONS, MAX_REQUEST);
         let mut log = Lines::default();
         let client = TcpStream::connect(addr).unwrap();
         t.accept(&listener, 100, &mut log);
@@ -1105,6 +1347,118 @@ mod tests {
             .unwrap();
         assert_eq!((&other).read(&mut buf).unwrap(), 0, "closed");
         assert_eq!(log.take(), NO_LINES);
+    }
+
+    /// One datagram: dispatched with the addresses it came from and to, its reply sent back; a
+    /// failure logged MIT's way with no reply, nothing sent for no reply, and an empty datagram
+    /// not dispatched at all.
+    #[test]
+    fn a_datagram_is_dispatched_and_answered_as_mits() {
+        let server = UdpSocket::bind("127.0.0.1:0").unwrap();
+        server.set_nonblocking(true).unwrap();
+        let addr = server.local_addr().unwrap();
+        let client = UdpSocket::bind("127.0.0.1:0").unwrap();
+        client
+            .set_read_timeout(Some(std::time::Duration::from_millis(300)))
+            .unwrap();
+        let mut buf = vec![0u8; MAX_DGRAM_SIZE];
+        let mut log = Lines::default();
+        let mut app = App {
+            reply: Reply::Send(b"pong".to_vec()),
+            ..App::default()
+        };
+        let wait = || {
+            let mut fds = [PollFd::new(server.as_fd(), PollFlags::POLLIN)];
+            poll(&mut fds, PollTimeout::from(2000u16)).unwrap();
+        };
+        client.send_to(b"ping", addr).unwrap();
+        wait();
+        process_packet(&server, &mut buf, &mut app, &mut log);
+        let mut got = [0u8; 16];
+        let (n, from) = client.recv_from(&mut got).unwrap();
+        assert_eq!((&got[..n], from), (&b"pong"[..], addr));
+        let (local, remote, request, is_tcp) = &app.requests[0];
+        assert_eq!(
+            (*local, *remote, request.as_slice(), *is_tcp),
+            (addr, client.local_addr().unwrap(), &b"ping"[..], false)
+        );
+        for (reply, lines) in [
+            (
+                Reply::Failed("Invalid message type".into()),
+                vec![err("Invalid message type - while dispatching (udp)")],
+            ),
+            (Reply::Nothing, vec![]),
+        ] {
+            app.reply = reply;
+            client.send_to(b"ping", addr).unwrap();
+            wait();
+            process_packet(&server, &mut buf, &mut app, &mut log);
+            assert!(client.recv_from(&mut got).is_err(), "no reply");
+            assert_eq!(log.take(), lines);
+        }
+        let before = app.requests.len();
+        client.send_to(b"", addr).unwrap();
+        wait();
+        process_packet(&server, &mut buf, &mut app, &mut log);
+        assert_eq!(
+            app.requests.len(),
+            before,
+            "an empty datagram is not dispatched"
+        );
+        process_packet(&server, &mut buf, &mut app, &mut log);
+        assert_eq!(log.take(), NO_LINES, "nothing to read is not logged");
+    }
+
+    /// The loop serves a datagram and a stream on the calling thread, and returns once its stop
+    /// flag is set.
+    #[test]
+    fn the_loop_serves_udp_and_tcp_until_its_flag() {
+        use std::io::Read as _;
+        use std::sync::Arc;
+
+        let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+        let tcp = TcpListener::bind("127.0.0.1:0").unwrap();
+        let (uaddr, taddr) = (udp.local_addr().unwrap(), tcp.local_addr().unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&stop);
+        let client = std::thread::spawn(move || {
+            let c = UdpSocket::bind("127.0.0.1:0").unwrap();
+            c.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            c.send_to(b"over udp", uaddr).unwrap();
+            let mut got = [0u8; 64];
+            let n = c.recv(&mut got).unwrap();
+            let mut s = TcpStream::connect(taddr).unwrap();
+            s.write_all(&framed(b"over tcp")).unwrap();
+            let mut reply = Vec::new();
+            s.read_to_end(&mut reply).unwrap();
+            flag.store(true, Ordering::SeqCst);
+            (got[..n].to_vec(), reply)
+        });
+        let mut app = App::default();
+        let mut log = Lines::default();
+        let wake = Wake::Flag {
+            stop: &stop,
+            every: std::time::Duration::from_millis(20),
+        };
+        run(
+            &mut app,
+            &[udp],
+            &[tcp],
+            MAX_STREAM_DATA_CONNECTIONS,
+            MAX_REQUEST,
+            &wake,
+            &mut log,
+        )
+        .unwrap();
+        let (dgram, stream) = client.join().unwrap();
+        assert_eq!(dgram, b"the reply");
+        assert_eq!(stream, framed(b"the reply"));
+        let requests: Vec<_> = app.requests.iter().map(|r| (r.2.clone(), r.3)).collect();
+        assert_eq!(
+            requests,
+            [(b"over udp".to_vec(), false), (b"over tcp".to_vec(), true)]
+        );
     }
 
     #[test]

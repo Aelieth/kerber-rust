@@ -853,6 +853,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **kdc/admin.** Keep MIT's update log only with `iprop_enable`, appending one entry per change
   (`kdb_log.c`; was rewritten and flushed per write); load, `dump -i` and kpropd keep it as
   MIT's, and MIT's `kproplog` reads it. Settled; iprop gate.
+- **kdc.** krb5kdc serves every client from MIT's net-server loop on one thread: no stream timeout,
+  MIT's eviction, lookaside and `while dispatching` lines, `kdc_max_dgram_reply_size`,
+  `kdc_tcp_listen_backlog`. Settled live.
 - **client.** `kinit`, `klist`, `kvno`, `kdestroy` and `kswitch` are ports of MIT 1.22.2's: its
   option tables and usage, com_err texts and exit codes, `klist -k`, and no log lines. Settled
   beside MIT's tools in a container realm (`working/logs/f-P6/`); units.

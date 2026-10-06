@@ -1,9 +1,9 @@
 //! MIT `kdc/replay.c` lookaside reply cache: a retransmitted request, keyed by
 //! its exact request bytes, is answered from the cache instead of re-processed.
 //!
-//! MIT's KDC is single-threaded, so `kdc/replay.c` uses no locking; the Rust
-//! listener runs the UDP and TCP paths on separate threads, so a shared
-//! [`Lookaside`] is wrapped in a mutex ([`crate::listen`]). Direct callers of
+//! MIT's KDC is single-threaded, so `kdc/replay.c` uses no locking; the KDC's
+//! one net-server loop owns its [`Lookaside`] in its dispatcher
+//! ([`crate::issue::KdcDispatch`]) and uses none either. Direct callers of
 //! `issue_as`/`issue_tgs`/`handle_request` bypass the cache, as MIT's request
 //! processing does.
 

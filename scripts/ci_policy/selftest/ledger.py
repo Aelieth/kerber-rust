@@ -202,9 +202,9 @@ def _self_test_ledger() -> None:
     unit = "`udp_oversize_reply_is_response_too_big`"
 
     check_ledger_anchors(_row("none", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", proof=unit))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", proof=unit))
     check_ledger_anchors(_row("krb5-kdc/listen.rs MAX_TCP_REQUEST", proof="`kdc-gate.sh:1`"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", proof="`as-success`"))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", proof="`as-success`"))
     check_ledger_anchors(
         _row("krb5-kdc/status.rs NEEDED_PREAUTH", "`NEEDED_PREAUTH`")
     )
@@ -216,7 +216,7 @@ def _self_test_ledger() -> None:
     try:
         (fake_mit / "kdc").mkdir()
         (fake_mit / "kdc" / "kdc_util.c").write_text('int x = KRB_ERR_RESPONSE_TOO_BIG;\nstatus = "CLIENT KEY EXPIRED";\n')
-        mit_row = _row("krb5-kdc/listen.rs handle_tcp", proof=unit).replace("| x | y |", "| x | `KRB_ERR_RESPONSE_TOO_BIG` `CLIENT KEY EXPIRED` |")
+        mit_row = _row("krb5-kdc/dispatch.rs make_toolong_error", proof=unit).replace("| x | y |", "| x | `KRB_ERR_RESPONSE_TOO_BIG` `CLIENT KEY EXPIRED` |")
         check_ledger_mit_cites(mit_row, fake_mit)
         check_ledger_mit_cites(mit_row.replace("KRB_ERR_RESPONSE_TOO_BIG", "RESPONSE_TOO_BIG"), fake_mit)
         _must_die(check_ledger_mit_cites, mit_row.replace("KRB_ERR_RESPONSE_TOO_BIG", "RESPONSE_TOO_BI"), fake_mit)
@@ -234,30 +234,30 @@ def _self_test_ledger() -> None:
         _row(f"krb5-kdc/plugins.rs advertise:{advertise_at}", verdict="absent")
     )
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
-    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
-    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", "no status word", proof=unit))
-    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "NOT_A_REAL_STATUS 60"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", "FIELD_TOOLONG 52"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "no status word"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", proof="`no_such_unit_anywhere`"))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", "no status word", proof=unit))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "NOT_A_REAL_STATUS 60"))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", "FIELD_TOOLONG 52"))
     _must_die(
         check_ledger_anchors,
-        _row("krb5-kdc/listen.rs handle_tcp", "`TKT_NYV`").replace("| kdc_util.c:1 |", "| issue.rs:1 |"),
+        _row("krb5-kdc/dispatch.rs make_toolong_error", "`TKT_NYV`").replace("| kdc_util.c:1 |", "| issue.rs:1 |"),
     )
     check_ledger_anchors(
-        _row("krb5-kdc/listen.rs handle_tcp", "x", "absent").replace("| kdc_util.c:1 |", "| n/a (harness) |")
+        _row("krb5-kdc/dispatch.rs make_toolong_error", "x", "absent").replace("| kdc_util.c:1 |", "| n/a (harness) |")
     )
     _must_die(check_ledger_anchors, _row("issue.rs no_such_fn_at_all"))
-    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp:1"))
-    _must_die(check_ledger_anchors, _row("listen.rs handle_tcp"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error:1"))
+    _must_die(check_ledger_anchors, _row("listen.rs serve_all_until"))
     _must_die(check_ledger_anchors, _row("lib.rs propagate", verdict="deviation"))
     _must_die(check_ledger_anchors, _row("none"))
     _must_die(
         check_ledger_anchors,
-        _row("krb5-kdc/listen.rs handle_tcp", "`TKT_NYV`"),
+        _row("krb5-kdc/dispatch.rs make_toolong_error", "`TKT_NYV`"),
     )
-    handle_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "handle_tcp")
-    if handle_span is None or not handle_span[2].startswith("fn handle_tcp(") or not handle_span[2].rstrip().endswith("}") or handle_span[1] - handle_span[0] < 20:
-        raise AssertionError(f"handle_tcp must resolve to a brace-matched fn body, got {handle_span}")
+    handle_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "setup_socket")
+    if handle_span is None or not handle_span[2].startswith("fn setup_socket(") or not handle_span[2].rstrip().endswith("}") or handle_span[1] - handle_span[0] < 20:
+        raise AssertionError(f"setup_socket must resolve to a brace-matched fn body, got {handle_span}")
     max_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "MAX_TCP_REQUEST")
     if max_span is None:
         raise AssertionError("MAX_TCP_REQUEST const must resolve")

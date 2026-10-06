@@ -97,8 +97,36 @@ impl Default for KdcConf {
             spake_preauth_kdc_challenge: None,
             dict_file: None,
             logging: Vec::new(),
+            kdc_max_dgram_reply_size: MAX_DGRAM_SIZE,
+            kdc_tcp_listen_backlog: DEFAULT_TCP_LISTEN_BACKLOG,
         }
     }
+}
+
+/// MIT `MAX_DGRAM_SIZE` (`include/osconf.hin:113-113`): the largest UDP reply by default.
+pub const MAX_DGRAM_SIZE: i32 = 65_536;
+/// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): a TCP listener's backlog by default.
+pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 5;
+
+/// A profile value read as C's `sscanf("%d")` reads it: blanks, an optional sign, then at least
+/// one digit; a value past `long` stops there and is cut to `int` as glibc stores it.
+pub(crate) fn sscanf_int(v: &str) -> Option<i32> {
+    let t = v.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']);
+    let (neg, digits) = match t.as_bytes().first() {
+        Some(b'-') => (true, &t[1..]),
+        Some(b'+') => (false, &t[1..]),
+        _ => (false, t),
+    };
+    let run = digits.bytes().take_while(u8::is_ascii_digit).count();
+    if run == 0 {
+        return None;
+    }
+    let n = digits.as_bytes()[..run].iter().fold(0i64, |n, d| {
+        n.saturating_mul(10).saturating_add(i64::from(d - b'0'))
+    });
+    let n = if neg { n.saturating_neg() } else { n };
+    let low = n.rem_euclid(1 << 32);
+    i32::try_from(if low >= 1 << 31 { low - (1 << 32) } else { low }).ok()
 }
 
 impl KdcConf {
@@ -119,6 +147,8 @@ impl KdcConf {
         let mut realm_listen = ListenRelations::default();
         let mut default_listen = ListenRelations::default();
         let mut database_module: Option<String> = None;
+        let mut max_dgram: Option<String> = None;
+        let mut backlog: Option<String> = None;
         let mut dbmodule: Option<String> = None;
         let mut dbmodules: Vec<(String, String, String)> = Vec::new();
         for raw in text.lines() {
@@ -174,7 +204,15 @@ impl KdcConf {
                 }
             }
             if section == "kdcdefaults" && !default_listen.take(line) {
-                parse_kdcdefaults(&mut conf, line);
+                match split_kv(line) {
+                    Some((key, v)) if key.eq_ignore_ascii_case("kdc_max_dgram_reply_size") => {
+                        max_dgram = Some(v);
+                    }
+                    Some((key, v)) if key.eq_ignore_ascii_case("kdc_tcp_listen_backlog") => {
+                        backlog = Some(v);
+                    }
+                    _ => parse_kdcdefaults(&mut conf, line),
+                }
             }
             if section == "libdefaults" {
                 parse_kdc_libdefaults(&mut conf, line);
@@ -207,6 +245,15 @@ impl KdcConf {
         };
         conf.disable_last_success = flag("disable_last_success");
         conf.disable_lockout = flag("disable_lockout");
+        // MIT `krb5_aprof_get_int32` (`lib/kadm5/alt_prof.c:284-298`): the last value, read with `sscanf("%d")`; one that does not read leaves the caller's default.
+        conf.kdc_max_dgram_reply_size = max_dgram
+            .as_deref()
+            .and_then(sscanf_int)
+            .unwrap_or(MAX_DGRAM_SIZE);
+        conf.kdc_tcp_listen_backlog = backlog
+            .as_deref()
+            .and_then(sscanf_int)
+            .unwrap_or(DEFAULT_TCP_LISTEN_BACKLOG);
         Ok(conf)
     }
 

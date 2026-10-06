@@ -3,6 +3,7 @@
 
 use std::fs::File;
 use std::io::{self, Write as _};
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -153,31 +154,61 @@ pub fn json_log_filter(default: &str) -> tracing_subscriber::EnvFilter {
 }
 
 /// The signals a daemon answers: SIGINT, SIGTERM and SIGQUIT end its loop, SIGHUP reopens its
-/// log files, and SIGPIPE stays ignored, as the Rust runtime sets it.
+/// log files, and SIGPIPE stays ignored, as the Rust runtime sets it. Each also writes a byte to
+/// a pipe the daemon's loop waits on, as verto's signal events wake MIT's loop.
 /// MIT `loop_setup_signals` (`lib/apputils/net-server.c:263-286`): the three end the loop, SIGPIPE
 /// is ignored and SIGHUP resets, all set up before the network.
 #[derive(Clone)]
 pub struct Signals {
     stop: Arc<AtomicBool>,
     hup: Arc<AtomicBool>,
+    /// The pipe's read end, when the pipe was made and every signal writes to it.
+    wake: Option<Arc<OwnedFd>>,
 }
 
 impl Signals {
     /// Install the handlers, before the sockets are bound; they stay in place across [`detach`].
-    /// A handler that cannot be installed leaves that signal's default.
+    /// A handler that cannot be installed leaves that signal's default; a wake pipe that cannot
+    /// be made, or that a signal cannot write to, leaves the loop looking at the flags each
+    /// second instead.
     #[must_use]
     pub fn install() -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let hup = Arc::new(AtomicBool::new(false));
-        for sig in [
+        let ends = [
             signal_hook::consts::SIGINT,
             signal_hook::consts::SIGTERM,
             signal_hook::consts::SIGQUIT,
-        ] {
+        ];
+        for sig in ends {
             let _ = signal_hook::flag::register(sig, Arc::clone(&stop));
         }
         let _ = signal_hook::flag::register(signal_hook::consts::SIGHUP, Arc::clone(&hup));
-        Self { stop, hup }
+        // Registered after the flags, so a byte on the pipe follows its flag.
+        let wake = nix::unistd::pipe2(nix::fcntl::OFlag::O_CLOEXEC | nix::fcntl::OFlag::O_NONBLOCK)
+            .ok()
+            .and_then(|(read, write)| {
+                let all = ends
+                    .into_iter()
+                    .chain([signal_hook::consts::SIGHUP])
+                    .all(|sig| {
+                        write
+                            .try_clone()
+                            .is_ok_and(|w| signal_hook::low_level::pipe::register(sig, w).is_ok())
+                    });
+                all.then(|| Arc::new(read))
+            });
+        Self { stop, hup, wake }
+    }
+
+    /// The wake pipe's read end, when there is one.
+    pub(crate) fn wake_fd(&self) -> Option<&OwnedFd> {
+        self.wake.as_deref()
+    }
+
+    /// Whether a SIGHUP came since the last call.
+    pub(crate) fn take_hup(&self) -> bool {
+        self.hup.swap(false, Ordering::Relaxed)
     }
 
     /// The flag SIGINT, SIGTERM and SIGQUIT set.

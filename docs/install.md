@@ -222,6 +222,14 @@ PAC (LOGON_INFO with the domain SID and each principal's RID, UPN_DNS_INFO, ATTR
 REQUESTER_SID). A presented PAC that carries LOGON_INFO, such as an AD user's over a trust, keeps
 that shape in any realm.
 
+A KDC whose clients open many TCP connections at once right after a write (a password change, a
+new principal) adds `kdc_tcp_listen_backlog = 128` under `[kdcdefaults]`, as
+`examples/configs/kdc.conf` does. The KDC keeps MIT's default of 5, and it accepts no connection
+while it rereads the database after a write, so in a burst of 50 a kinit can wait about a second
+for its connection to be retried: at 5,000 principals, 428 of 500 did. Idle bursts wait too, as
+on MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals. With 128, none waited a
+second, on MIT's KDC or on kerber-rust.
+
 ### The database
 
 ```sh

@@ -37,6 +37,7 @@ file` writes its pid file.
 | Key | Used by |
 | --- | --- |
 | `kdc_listen` | `crates/krb5-kdc/src/bin/krb5-kdc.rs` (`bind_sockets`), parsed by `crates/krb5-config/src/listen.rs`: as in MIT, the KDC binds UDP and TCP on every listed address, and a bare port (`kdc_ports = 88`, or KLLDAP's `750,88`) on every local address. The realm stanza's `kdc_listen` / `kdc_ports` win over `[kdcdefaults]`, and `kdc_tcp_listen` / `kdc_tcp_ports` give TCP its own list. This file keeps the KDC on `127.0.0.1`; drop the line to listen on port 88 everywhere. |
+| `kdc_tcp_listen_backlog` | `crates/krb5-config/src/kdcconf.rs` (`kdc_tcp_listen_backlog`), the TCP listeners' `listen` backlog in `crates/krb5-kdc/src/bin/krb5-kdc.rs` (`bind_tcp_listeners_with_backlog`): unset, MIT's 5. This file sets 128, which keeps a burst of TCP connections right after a database write from waiting about a second (`docs/install.md`) |
 | `database_name`, `key_stash_file` | every KDC-side tool, through `KdcPaths` in `crates/krb5-config/src/kdcconf.rs`: the realm's own stanza (the realm is krb5.conf's `default_realm` unless the tool names one; with neither, the tool stops as MIT's does), else MIT's `/var/kerberos/krb5kdc/principal` and `/var/kerberos/krb5kdc/.k5.<REALM>` |
 | `acl_file` | `krb5-kadmind.rs` (`load_acl`) through `KdcPaths`; unset, `/var/kerberos/krb5kdc/kadm5.acl`; a missing file refuses to start |
 | `master_key_type` | `crates/krb5-kdc/src/mkey.rs` (`master_etype`) through `KdcPaths`, for `krb5-kdb` and every new stash (`crates/krb5-kdc/src/persist.rs`); a name that is no enctype refuses. Unset, the master key is aes256-cts-hmac-sha1-96, MIT's default; an existing stash keeps the type it was made with |
@@ -84,8 +85,6 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
 
 - `/path` entries in a listen list: MIT binds a UNIX-domain socket there; this
   port binds none.
-- `kdc_tcp_listen_backlog`: the TCP listen queue is MIT's default of 5
-  (`DEFAULT_TCP_LISTEN_BACKLOG`) whatever the relation says.
 - `iprop_enable` and `iprop_port`: iprop (program 100423) always answers on the
   kadmind port; there is no separate listener.
 - `kdc_timeout` and `max_retries` in `krb5.conf`: parsed, but they do not change

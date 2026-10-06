@@ -59,8 +59,10 @@ address by default), detaches unless `-n`, and writes MIT's text log
 where `[logging]` says ([logging.md](logging.md)). It always serves a
 database file and, as MIT's, keeps its user; only a `test-hooks` build
 serving the test realm without one drops to `KRB5_KDC_USER` (default
-`nobody`) after a privileged bind. TCP workers are capped
-(`MAX_TCP_WORKERS`).
+`nobody`) after a privileged bind. It serves every client from MIT's
+net-server loop on its main thread, one thread: at most 45 TCP streams
+(`MAX_TCP_WORKERS`), the one that started first evicted past that, and
+no stream timeout, as MIT's.
 As MIT's daemons, `krb5-kdc` and `krb5-kadmind` stop on SIGINT,
 SIGTERM or SIGQUIT and reopen their log files on SIGHUP. In a
 `test-hooks` build, `--test-realm`

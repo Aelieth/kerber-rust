@@ -464,7 +464,7 @@ fn builtins() -> &'static [Arc<dyn KdcPreauth>] {
     })
 }
 
-/// Extra modules after the built-ins, for every thread that has not set its own list (KDC serve workers).
+/// Extra modules after the built-ins, for every thread that has not set its own list (the KDC's loop).
 pub fn register_preauth(m: Arc<dyn KdcPreauth>) {
     EXTRA
         .lock()
@@ -480,6 +480,17 @@ pub fn set_thread_preauth(modules: Vec<Arc<dyn KdcPreauth>>) {
 /// Drop this thread's extra modules so it uses the process-wide ones.
 pub fn clear_thread_preauth() {
     THREAD_EXTRA.with(|t| *t.borrow_mut() = None);
+}
+
+/// Take this thread's own extra modules off it, leaving the process-wide ones in force on the
+/// thread.
+pub(crate) fn take_thread_preauth() -> Option<Vec<Arc<dyn KdcPreauth>>> {
+    THREAD_EXTRA.with(|t| t.borrow_mut().take())
+}
+
+/// Put back what [`take_thread_preauth`] took.
+pub(crate) fn restore_thread_preauth(modules: Option<Vec<Arc<dyn KdcPreauth>>>) {
+    THREAD_EXTRA.with(|t| *t.borrow_mut() = modules);
 }
 
 /// All modules, built-ins first, then this thread's extras when it has set them, else the
@@ -551,6 +562,17 @@ pub fn set_thread_authdata(modules: Vec<Arc<dyn KdcAuthdata>>) {
 /// Drop this thread's kdcauthdata modules so it uses the process-wide ones.
 pub fn clear_thread_authdata() {
     THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = None);
+}
+
+/// Take this thread's own kdcauthdata modules off it, leaving the process-wide ones in force on
+/// the thread.
+pub(crate) fn take_thread_authdata() -> Option<Vec<Arc<dyn KdcAuthdata>>> {
+    THREAD_EXTRA_AD.with(|t| t.borrow_mut().take())
+}
+
+/// Put back what [`take_thread_authdata`] took.
+pub(crate) fn restore_thread_authdata(modules: Option<Vec<Arc<dyn KdcAuthdata>>>) {
+    THREAD_EXTRA_AD.with(|t| *t.borrow_mut() = modules);
 }
 
 /// Loaded kdcauthdata modules: this thread's when it has set them, else the process-wide ones
@@ -834,7 +856,7 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Install the policy hook for every thread that has not set its own (KDC serve workers).
+/// Install the policy hook for every thread that has not set its own (the KDC's loop).
 pub fn set_policy(p: Arc<dyn KdcPolicy>) {
     *POLICY
         .lock()
@@ -849,6 +871,16 @@ pub fn set_thread_policy(p: Arc<dyn KdcPolicy>) {
 /// Drop the thread-local hook so this thread uses the process-wide slot.
 pub fn clear_thread_policy() {
     THREAD_POLICY.with(|t| *t.borrow_mut() = None);
+}
+
+/// Take this thread's own hook off it, leaving the process-wide slot in force on the thread.
+pub(crate) fn take_thread_policy() -> Option<Arc<dyn KdcPolicy>> {
+    THREAD_POLICY.with(|t| t.borrow_mut().take())
+}
+
+/// Put back what [`take_thread_policy`] took.
+pub(crate) fn restore_thread_policy(p: Option<Arc<dyn KdcPolicy>>) {
+    THREAD_POLICY.with(|t| *t.borrow_mut() = p);
 }
 
 /// Current policy hook.

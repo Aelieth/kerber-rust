@@ -1,29 +1,26 @@
-//! Thin UDP/TCP 88 listener around [`crate::issue::handle_request`].
-//!
-//! A duplicate that arrives while a request is in flight is dropped.
-//! An empty KDC response is not sent. Past the TCP worker cap the
-//! listener evicts the oldest live stream and keeps the new connection.
+//! The KDC's listeners: MIT's net-server sockets ([`bind_udp_listeners`], [`bind_tcp_listeners`])
+//! and the serve functions that run [`crate::net_server`]'s one loop over them on the calling
+//! thread, with [`crate::issue::KdcDispatch`] answering each request.
 
 use std::collections::BTreeMap;
-use std::io::{self, IoSlice, IoSliceMut, Read};
+use std::io::{self, IoSlice, IoSliceMut};
 use std::net::{
     IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, SocketAddr, TcpListener, TcpStream, UdpSocket,
 };
 use std::os::fd::{AsRawFd as _, OwnedFd, RawFd};
-use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 use std::thread;
 use std::time::Duration;
 
 use crate::Error;
-use crate::issue::handle_request_from;
+use crate::daemon::Signals;
+use crate::issue::{KdcDispatch, ThreadSlots};
 use crate::kdb::{KdcEnv, PrincipalRead, Store};
-use crate::lookaside::{Check, Lookaside};
+use crate::net_server::{Klog, Wake};
 use crate::store::{Policy, Principal};
 use krb5_config::listen::ListenAddr;
 use krb5_log::klog::{self, Severity, os_error_text};
-use krb5_types::HostAddress;
 use nix::sys::socket::{
     AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag, SockType,
     SockaddrStorage, bind, listen, recvmsg, sendmsg, setsockopt, socket, sockopt,
@@ -35,99 +32,6 @@ pub const WHILE_DISPATCHING_UDP: &str = "while dispatching (udp)";
 /// MIT `process_stream_response` (`net-server.c:1314-1315`): a dispatch error is logged
 /// with this text.
 pub const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
-
-fn log_dispatch_drop(_udp: bool) {
-    tracing::debug!(
-        event = krb5_log::events::KDC_ISSUE,
-        correlation_id = krb5_log::current_correlation_id(),
-        component = "krb5-kdc",
-        outcome = "ok",
-    );
-}
-
-/// The lookaside reply cache (MIT `kdc/replay.c`), shared across the UDP and
-/// TCP listener threads.
-pub(crate) type SharedCache = Arc<Mutex<Lookaside>>;
-
-fn lock_cache(cache: &Mutex<Lookaside>) -> std::sync::MutexGuard<'_, Lookaside> {
-    cache.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-/// MIT `dispatch` (`dispatch.c:126-127`): a retransmit answered from the cache is logged as
-/// `resending previous response`.
-fn log_dispatch_resend() {
-    tracing::info!(
-        event = krb5_log::events::KDC_ISSUE,
-        correlation_id = krb5_log::current_correlation_id(),
-        component = "krb5-kdc",
-        outcome = "retransmit",
-        detail = "resending previous response",
-    );
-}
-
-/// MIT `dispatch` (`dispatch.c:130-132`): a duplicate arriving during processing is dropped.
-fn log_dispatch_inflight_drop() {
-    tracing::info!(
-        event = krb5_log::events::KDC_ISSUE,
-        correlation_id = krb5_log::current_correlation_id(),
-        component = "krb5-kdc",
-        outcome = "discard",
-        detail = "dropping repeated request during processing",
-    );
-}
-
-/// Outcome of running a request through the lookaside cache.
-enum Dispatch {
-    /// Bytes to send (empty means the KDC produced no response: drop).
-    Send(Vec<u8>),
-    /// A duplicate of an in-flight request: drop it silently (MIT DISCARD).
-    Drop,
-    /// The request handler returned an internal error.
-    Error(Error),
-    /// The request handler panicked (isolated by the caller).
-    Panic,
-}
-
-/// MIT `dispatch()` with the `kdc/replay.c` lookaside: resend a cached reply, drop
-/// an in-flight duplicate, or process a fresh request under an in-progress
-/// marker and cache its reply. The marker is dropped and only a produced reply
-/// is cached, like `finish_dispatch_cache`.
-fn dispatch_via_cache(
-    store: &SharedStore,
-    cache: &Mutex<Lookaside>,
-    req: &[u8],
-    sender: Option<&HostAddress>,
-) -> Dispatch {
-    match lock_cache(cache).check_or_mark(req) {
-        Check::Hit(reply) => {
-            log_dispatch_resend();
-            return Dispatch::Send(reply);
-        }
-        Check::InProgress => {
-            log_dispatch_inflight_drop();
-            return Dispatch::Drop;
-        }
-        Check::Fresh => {}
-    }
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| {
-        read_store(store, |s| handle_request_from(s, req, sender))
-    }));
-    match result {
-        Ok(Ok(reply)) => {
-            let cached: Option<&[u8]> = (!reply.is_empty()).then_some(reply.as_slice());
-            lock_cache(cache).finish(req, cached);
-            Dispatch::Send(reply)
-        }
-        Ok(Err(e)) => {
-            lock_cache(cache).finish(req, None);
-            Dispatch::Error(e)
-        }
-        Err(_) => {
-            lock_cache(cache).finish(req, None);
-            Dispatch::Panic
-        }
-    }
-}
 
 /// Serving store: AS/TGS take a read lock; kadmind/kpasswd take a write lock
 /// so runtime mutations reach [`crate::persist::save_store`].
@@ -156,7 +60,7 @@ pub fn shared_dump(store: crate::store::PrincipalStore) -> SharedDump {
 /// every lookup with `SVC_UNAVAILABLE`, and a database that cannot be read again answers with
 /// its error, never with what the store read before.
 /// MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:771-801`): a lookup takes the shared lock, reads, and lets it go.
-fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
+pub(crate) fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
     {
         let g = store.read().unwrap_or_else(PoisonError::into_inner);
         let stale = match g.read_hold() {
@@ -183,7 +87,7 @@ fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -
 
 /// The store, without its database lock, for a reply that needs no lookup (an error built from
 /// the realm alone).
-fn plain_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
+pub(crate) fn plain_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
     let g = store.read().unwrap_or_else(PoisonError::into_inner);
     f(&**g)
 }
@@ -250,20 +154,20 @@ impl PrincipalRead for Unreadable<'_> {
 /// to listen on all interfaces.
 pub const BIND_CANDIDATES: &[&str] = &["127.0.0.1:88", "127.0.0.1:8888"];
 
-/// Default cap on concurrent TCP request handlers.
-/// MIT `max_stream_data_connections` (`net-server.c:85-85`): the cap is 45 stream
-/// connections. At the cap a new connection evicts the oldest rather than being refused.
-pub const MAX_TCP_WORKERS: usize = 45;
+/// The most stream connections a loop keeps: at the cap a new connection evicts the one that
+/// started first rather than being refused.
+/// MIT `max_stream_data_connections` (`net-server.c:85-85`): the cap is 45 stream connections.
+pub const MAX_TCP_WORKERS: usize = crate::net_server::MAX_STREAM_DATA_CONNECTIONS;
+/// The longest TCP request: FIELD_TOOLONG at `msglen > bufsiz-4`.
 /// MIT `accept_stream_connection` (`net-server.c:1278-1278`): `bufsiz` is 1 MiB.
-/// FIELD_TOOLONG at `msglen > bufsiz-4`.
-pub const MAX_TCP_REQUEST: usize = 1024 * 1024 - 4;
+pub const MAX_TCP_REQUEST: usize = crate::net_server::MAX_REQUEST;
 /// MIT `MAX_DGRAM_SIZE` / `kdc_max_dgram_reply_size` default (`osconf.hin`).
 pub const MAX_DGRAM_REPLY: usize = 65_536;
 
-/// Resource caps and I/O timeouts for [`serve_until`].
+/// The limits of one serving loop.
 #[derive(Clone, Copy, Debug)]
 pub struct ListenLimits {
-    /// Concurrent TCP workers (accepted connections being read).
+    /// The most stream connections at once, past which the one that started first is evicted.
     pub max_tcp_workers: usize,
     /// Maximum TCP length-prefix body.
     pub max_tcp_request: usize,
@@ -271,12 +175,8 @@ pub struct ListenLimits {
     /// MIT `finish_dispatch` (`dispatch.c:54-63`): a UDP reply over `max_dgram_reply_size`
     /// is replaced by the response-too-big error.
     pub max_dgram_reply_size: usize,
-    /// Read/write timeout for a single TCP exchange.
-    pub io_timeout: Duration,
-    /// How often the UDP loop wakes to check the shutdown flag. Short so
-    /// SIGTERM/SIGINT is honoured promptly (MIT's krb5kdc select() is signal-
-    /// interruptible); it does not affect request latency (recv returns on
-    /// data) or the TCP exchange timeout.
+    /// The longest wait between two looks at a caller's stop flag ([`serve_all_until`]); the
+    /// daemon's signals wake the loop at once ([`serve_daemon`]). A stream has no timeout.
     pub shutdown_poll: Duration,
 }
 
@@ -286,7 +186,6 @@ impl Default for ListenLimits {
             max_tcp_workers: MAX_TCP_WORKERS,
             max_tcp_request: MAX_TCP_REQUEST,
             max_dgram_reply_size: MAX_DGRAM_REPLY,
-            io_timeout: Duration::from_secs(5),
             shutdown_poll: Duration::from_millis(250),
         }
     }
@@ -310,8 +209,8 @@ const NO_LINGER: nix::libc::linger = nix::libc::linger {
 /// The `io::Error` from setting up the UDP socket on `addr`, or from setting up the TCP listener
 /// when the UDP socket was set up.
 pub(crate) fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListener)> {
-    let udp = UdpSocket::from(setup_socket(addr, BindType::Udp)?);
-    let tcp = TcpListener::from(setup_socket(addr, BindType::Tcp)?);
+    let udp = UdpSocket::from(setup_socket(addr, BindType::Udp, TCP_LISTEN_BACKLOG)?);
+    let tcp = TcpListener::from(setup_socket(addr, BindType::Tcp, TCP_LISTEN_BACKLOG)?);
     Ok((udp, tcp))
 }
 
@@ -363,19 +262,34 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
 /// `io::ErrorKind::InvalidInput` when an entry does not resolve, and the setup error, named with
 /// its address, for an address that does not bind.
 pub fn bind_udp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<UdpSocket>> {
-    Ok(bind_listeners(addrs, BindType::Udp)?
+    Ok(bind_listeners(addrs, BindType::Udp, TCP_LISTEN_BACKLOG)?
         .into_iter()
         .map(UdpSocket::from)
         .collect())
 }
 
-/// [`bind_udp_listeners`] for a TCP list (`kdc_tcp_listen`, `kpasswd_listen`).
+/// [`bind_udp_listeners`] for a TCP list (`kdc_tcp_listen`, `kpasswd_listen`), each listening
+/// with MIT's default backlog of 5.
 ///
 /// # Errors
 ///
 /// As [`bind_udp_listeners`].
 pub fn bind_tcp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
-    Ok(bind_listeners(addrs, BindType::Tcp)?
+    bind_tcp_listeners_with_backlog(addrs, TCP_LISTEN_BACKLOG)
+}
+
+/// [`bind_tcp_listeners`] with the backlog `listen` is given (krb5kdc's
+/// `kdc_tcp_listen_backlog`), as C's `listen` takes it: a negative one is the system's most.
+/// MIT `loop_setup_network` (`lib/apputils/net-server.c:1053-1070`): the TCP listeners listen with the backlog the daemon passes.
+///
+/// # Errors
+///
+/// As [`bind_udp_listeners`].
+pub fn bind_tcp_listeners_with_backlog(
+    addrs: &[ListenAddr],
+    backlog: i32,
+) -> io::Result<Vec<TcpListener>> {
+    Ok(bind_listeners(addrs, BindType::Tcp, backlog)?
         .into_iter()
         .map(TcpListener::from)
         .collect())
@@ -388,7 +302,7 @@ pub fn bind_tcp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> 
 ///
 /// As [`bind_udp_listeners`].
 pub fn bind_rpc_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
-    Ok(bind_listeners(addrs, BindType::Rpc)?
+    Ok(bind_listeners(addrs, BindType::Rpc, TCP_LISTEN_BACKLOG)?
         .into_iter()
         .map(TcpListener::from)
         .collect())
@@ -423,7 +337,7 @@ impl BindType {
     }
 }
 
-fn bind_listeners(addrs: &[ListenAddr], kind: BindType) -> io::Result<Vec<OwnedFd>> {
+fn bind_listeners(addrs: &[ListenAddr], kind: BindType, backlog: i32) -> io::Result<Vec<OwnedFd>> {
     let proto = kind.proto();
     let named = |a: SocketAddr, e: io::Error| io::Error::new(e.kind(), format!("{proto} {a}: {e}"));
     let mut out = Vec::new();
@@ -435,7 +349,7 @@ fn bind_listeners(addrs: &[ListenAddr], kind: BindType) -> io::Result<Vec<OwnedF
         let mut bound_any = false;
         let mut skipped = None;
         for a in resolved {
-            match setup_socket(a, kind) {
+            match setup_socket(a, kind, backlog) {
                 Ok(fd) => {
                     tracing::info!(
                         event = krb5_log::events::KDC_LISTEN,
@@ -481,7 +395,7 @@ fn bind_listeners(addrs: &[ListenAddr], kind: BindType) -> io::Result<Vec<OwnedF
 /// MIT `setup_socket` (`lib/apputils/net-server.c:813-859`): the setup is logged at debug, then the socket is created and a stream one listens, each failure logged and fatal.
 /// MIT `setup_socket` (`lib/apputils/net-server.c:861-875`): a UDP socket on a wildcard address asks for pktinfo; without it the socket is kept and the reason logged.
 /// MIT `svctcp_create` (`lib/rpc/svc_tcp.c:178-178`): an RPC listener that cannot listen is no RPC service.
-fn setup_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd> {
+fn setup_socket(addr: SocketAddr, kind: BindType, backlog: i32) -> io::Result<OwnedFd> {
     klog::syslog(
         Severity::Debug,
         &format!("Setting up {} socket for address {addr}", kind.name()),
@@ -510,7 +424,13 @@ fn setup_socket(addr: SocketAddr, kind: BindType) -> io::Result<OwnedFd> {
         }
         BindType::Udp => {}
         BindType::Tcp => {
-            listen(&fd, Backlog::new(TCP_LISTEN_BACKLOG)?)
+            // Past what `Backlog` takes, the kernel gives the system's most, as for MIT's `listen`.
+            let backlog = Backlog::new(backlog).unwrap_or(if backlog < 0 {
+                Backlog::MAXALLOWABLE
+            } else {
+                Backlog::MAXCONN
+            });
+            listen(&fd, backlog)
                 .map_err(|e| failed(e, &format!("Cannot listen on TCP server socket on {addr}")))?;
             setsockopt(&fd, sockopt::Linger, &NO_LINGER)
                 .map_err(|e| failed(e, &format!("cannot set SO_LINGER on TCP socket on {addr}")))?;
@@ -840,8 +760,7 @@ fn install_shutdown_flag(flag: &Arc<AtomicBool>) {
 ///
 /// # Errors
 ///
-/// The `io::Error` when the UDP read timeout or the TCP listener's non-blocking mode cannot be set.
-/// Per-request failures are only logged, and a panicked listener thread still yields `Ok(())`.
+/// As [`serve_all_until`].
 pub fn serve(store: SharedStore, udp: UdpSocket, tcp: TcpListener) -> io::Result<()> {
     serve_all(store, vec![udp], vec![tcp])
 }
@@ -857,13 +776,11 @@ pub fn serve_all(store: SharedStore, udp: Vec<UdpSocket>, tcp: Vec<TcpListener>)
     serve_all_until(store, udp, tcp, shutdown, ListenLimits::default())
 }
 
-/// Serve until `shutdown` is true. UDP/TCP loops poll so they can exit.
+/// Serve until `shutdown` is true, looked at every `limits.shutdown_poll`.
 ///
 /// # Errors
 ///
-/// `io::ErrorKind::InvalidInput` when `limits.shutdown_poll` is zero, and the OS error when the
-/// UDP read timeout or the TCP listener's non-blocking mode cannot be set for another reason.
-/// Per-request failures are only logged, and a panicked listener thread still yields `Ok(())`.
+/// As [`serve_all_until`].
 pub fn serve_until(
     store: SharedStore,
     udp: UdpSocket,
@@ -874,13 +791,16 @@ pub fn serve_until(
     serve_all_until(store, vec![udp], vec![tcp], shutdown, limits)
 }
 
-/// [`serve_until`] on several sockets: one thread per socket, one lookaside cache and one
-/// TCP connection cap across them all, as MIT's one net-server loop has.
+/// [`serve_until`] on several sockets: one loop on the calling thread serves them all, with one
+/// lookaside cache and one stream cap, as MIT's net-server loop does. An embedder runs it on a
+/// thread of its own; plugin modules set for the calling thread alone do not apply while it runs.
 ///
 /// # Errors
 ///
-/// As [`serve_until`], for any of the sockets.
-#[allow(clippy::needless_pass_by_value)] // Arc is cloned into the UDP/TCP threads
+/// `io::ErrorKind::InvalidInput` when `limits.shutdown_poll` is zero, and the OS error when a
+/// listener cannot be made non-blocking or the loop's poll fails. Per-request failures are only
+/// logged.
+#[allow(clippy::needless_pass_by_value)] // the loop owns the store and the stop flag
 pub fn serve_all_until(
     store: SharedStore,
     udp: Vec<UdpSocket>,
@@ -888,119 +808,55 @@ pub fn serve_all_until(
     shutdown: Arc<AtomicBool>,
     limits: ListenLimits,
 ) -> io::Result<()> {
-    // The UDP read timeout is the shutdown-check interval, not an I/O deadline.
-    for u in &udp {
-        u.set_read_timeout(Some(limits.shutdown_poll))?;
+    if limits.shutdown_poll.is_zero() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "shutdown_poll must be more than zero",
+        ));
     }
-    for t in &tcp {
-        t.set_nonblocking(true)?;
-    }
-    let cache: SharedCache = Arc::new(Mutex::new(Lookaside::new()));
-    let registry = ConnRegistry::new(limits.max_tcp_workers);
-    let mut threads = Vec::new();
-    for sock in udp {
-        let (store, flag, cache) = (
-            Arc::clone(&store),
-            Arc::clone(&shutdown),
-            Arc::clone(&cache),
-        );
-        threads.push(thread::spawn(move || {
-            udp_loop(&store, sock, &flag, limits, &cache);
-        }));
-    }
-    for listener in tcp {
-        let (store, flag, cache) = (
-            Arc::clone(&store),
-            Arc::clone(&shutdown),
-            Arc::clone(&cache),
-        );
-        let registry = Arc::clone(&registry);
-        threads.push(thread::spawn(move || {
-            tcp_loop(&store, listener, &flag, limits, &cache, &registry);
-        }));
-    }
-    for t in threads {
-        let _ = t.join();
-    }
-    Ok(())
+    let wake = Wake::Flag {
+        stop: &shutdown,
+        every: limits.shutdown_poll,
+    };
+    serve_loop(store, &udp, &tcp, &wake, limits)
 }
 
-/// MIT `make_too_big_error` (`dispatch.c:191-191`): a reply larger than a datagram is
-/// replaced by a response-too-big error.
-/// An empty dispatch result is not sent, so a discarded request produces no datagram.
-/// MIT `process_packet` (`lib/apputils/net-server.c:1153-1172`): a datagram is read with the address it was sent to, an empty one is dropped, and a failed read other than an interruption or a refused earlier reply is logged.
-#[allow(clippy::needless_pass_by_value)] // UDP socket is owned by the worker thread
-fn udp_loop(
-    store: &SharedStore,
-    sock: UdpSocket,
-    shutdown: &AtomicBool,
+/// krb5kdc's loop: serve on the calling thread until SIGINT, SIGTERM or SIGQUIT, each logged as
+/// MIT's, with SIGHUP reopening the log.
+/// MIT `main` (`kdc/main.c:1030-1030`): `verto_run` serves every realm from the one loop.
+///
+/// # Errors
+///
+/// The OS error when a listener cannot be made non-blocking or the loop's poll fails.
+#[allow(clippy::needless_pass_by_value)] // the loop owns the store
+pub fn serve_daemon(
+    store: SharedStore,
+    udp: Vec<UdpSocket>,
+    tcp: Vec<TcpListener>,
+    signals: &Signals,
     limits: ListenLimits,
-    cache: &Mutex<Lookaside>,
-) {
-    let mut buf = vec![0u8; 65_535];
-    while !shutdown.load(Ordering::Relaxed) {
-        match recv_from_to(&sock, &mut buf) {
-            Ok(d) if d.len == 0 => {}
-            Ok(d) => {
-                let payload = buf[..d.len].to_vec();
-                let sender = HostAddress::from_socket(d.from);
-                crate::audit::set_client_port(u32::from(d.from.port()));
-                match dispatch_via_cache(store, cache, &payload, Some(&sender)) {
-                    Dispatch::Send(mut reply) => {
-                        if reply.is_empty() {
-                            log_dispatch_drop(true);
-                            continue;
-                        }
-                        if reply.len() > limits.max_dgram_reply_size {
-                            reply = plain_store(store, |s| {
-                                crate::kdc_error_bytes(s, krb5_types::err::RESPONSE_TOO_BIG)
-                            });
-                        }
-                        if let Err(e) = send_udp_reply(&sock, &reply, &d) {
-                            tracing::error!(
-                                event = krb5_log::events::KDC_TRANSPORT,
-                                correlation_id = krb5_log::current_correlation_id(),
-                                component = "krb5-kdc",
-                                outcome = "error",
-                                error = %e,
-                            );
-                        }
-                    }
-                    Dispatch::Drop => {}
-                    Dispatch::Error(e) => tracing::error!(
-                        event = krb5_log::events::KDC_ISSUE,
-                        correlation_id = krb5_log::current_correlation_id(),
-                        component = "krb5-kdc",
-                        outcome = "error",
-                        error = %e,
-                        error_suffix = WHILE_DISPATCHING_UDP,
-                    ),
-                    Dispatch::Panic => tracing::error!(
-                        event = krb5_log::events::KDC_TRANSPORT,
-                        correlation_id = krb5_log::current_correlation_id(),
-                        component = "krb5-kdc",
-                        outcome = "error",
-                        error = "request panic isolated",
-                    ),
-                }
-            }
-            Err(e)
-                if e.kind() == io::ErrorKind::WouldBlock
-                    || e.kind() == io::ErrorKind::TimedOut
-                    || e.kind() == io::ErrorKind::Interrupted
-                    || e.kind() == io::ErrorKind::ConnectionRefused => {}
-            Err(e) => {
-                com_err(&e, "while receiving from network");
-                tracing::error!(
-                    event = krb5_log::events::KDC_ISSUE,
-                    component = "krb5-kdc",
-                    outcome = "error",
-                    error = %e,
-                );
-                thread::sleep(Duration::from_millis(50));
-            }
-        }
-    }
+) -> io::Result<()> {
+    serve_loop(store, &udp, &tcp, &Wake::Signals(signals), limits)
+}
+
+fn serve_loop(
+    store: SharedStore,
+    udp: &[UdpSocket],
+    tcp: &[TcpListener],
+    wake: &Wake<'_>,
+    limits: ListenLimits,
+) -> io::Result<()> {
+    let _slots = ThreadSlots::take();
+    let mut app = KdcDispatch::new(store, limits.max_dgram_reply_size);
+    crate::net_server::run(
+        &mut app,
+        udp,
+        tcp,
+        limits.max_tcp_workers,
+        limits.max_tcp_request,
+        wake,
+        &mut Klog,
+    )
 }
 
 /// Wait until one of `listeners` has a connection waiting or `timeout` passes, so an accept
@@ -1025,162 +881,6 @@ pub fn wait_for_connection(listeners: &[&TcpListener], timeout: Duration) {
     if poll(&mut fds, wait).is_err() {
         thread::sleep(timeout.min(Duration::from_millis(20)));
     }
-}
-
-/// MIT `accept_stream_connection` (`net-server.c:1282-1283`): past the connection cap the
-/// oldest stream is dropped and the new connection is kept.
-/// A read error on an existing stream does not refuse the newcomer.
-#[allow(clippy::needless_pass_by_value)] // TCP listener is owned by the worker thread
-fn tcp_loop(
-    store: &SharedStore,
-    listener: TcpListener,
-    shutdown: &AtomicBool,
-    limits: ListenLimits,
-    cache: &SharedCache,
-    registry: &Arc<ConnRegistry>,
-) {
-    while !shutdown.load(Ordering::Relaxed) {
-        match listener.accept() {
-            Ok((stream, _)) => {
-                // MIT `accept_stream_connection` (`net-server.c:1281-1282`): accept the
-                // connection and, when over the cap, evict the oldest live stream
-                // (kill_lru_stream_connection) rather than refuse the newcomer.
-                let seq = registry.register(&stream);
-                let store = Arc::clone(store);
-                let registry_g = Arc::clone(registry);
-                let cache = Arc::clone(cache);
-                let max_body = limits.max_tcp_request;
-                let timeout = limits.io_timeout;
-                let fd = stream.as_raw_fd();
-                thread::spawn(move || {
-                    let _guard = ConnGuard(registry_g, seq);
-                    let _closed = ClosingFd(fd);
-                    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        handle_tcp(&store, stream, max_body, timeout, &cache)
-                    }));
-                    match result {
-                        Ok(Ok(())) => {}
-                        Ok(Err(e)) => tracing::error!(
-                            event = krb5_log::events::KDC_ISSUE,
-                            component = "krb5-kdc",
-                            outcome = "error",
-                            error = %e,
-                        ),
-                        Err(_) => tracing::error!(
-                            event = krb5_log::events::KDC_TRANSPORT,
-                            component = "krb5-kdc",
-                            outcome = "error",
-                            error = "tcp worker panic isolated",
-                        ),
-                    }
-                });
-            }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                wait_for_connection(&[&listener], limits.shutdown_poll);
-            }
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(e) => {
-                tracing::error!(
-                    event = krb5_log::events::KDC_ISSUE,
-                    component = "krb5-kdc",
-                    outcome = "error",
-                    error = %e,
-                );
-                thread::sleep(Duration::from_millis(50));
-            }
-        }
-    }
-}
-
-/// MIT `process_stream_connection_read` (`net-server.c:1385-1391`): end of file before a
-/// length word drops the connection, and a length past the buffer is too long.
-/// A peer that sends nothing gets no KDC error, and an oversize length is answered with a
-/// field-too-long error before the body is read.
-fn handle_tcp(
-    store: &SharedStore,
-    mut stream: TcpStream,
-    max_body: usize,
-    timeout: Duration,
-    cache: &Mutex<Lookaside>,
-) -> io::Result<()> {
-    stream.set_read_timeout(Some(timeout))?;
-    stream.set_write_timeout(Some(timeout))?;
-    let mut hdr = [0u8; 4];
-    match stream.read_exact(&mut hdr) {
-        Ok(()) => {}
-        // MIT may TCP-connect :88 and leave without a PDU.
-        Err(e)
-            if e.kind() == io::ErrorKind::UnexpectedEof
-                || e.kind() == io::ErrorKind::TimedOut
-                || e.kind() == io::ErrorKind::WouldBlock =>
-        {
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    }
-    let n = usize::try_from(u32::from_be_bytes(hdr)).unwrap_or(usize::MAX);
-    if n == 0 {
-        return Ok(());
-    }
-    if n > max_body {
-        let reply = plain_store(store, |s| {
-            crate::kdc_error_bytes(s, krb5_types::err::FIELD_TOOLONG)
-        });
-        let _ = krb5_protocol::write_messages(&mut stream, &[reply.as_slice()]);
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("error constructing KRB_ERR_FIELD_TOOLONG error! length {n}"),
-        ));
-    }
-    let mut req = vec![0u8; n];
-    match stream.read_exact(&mut req) {
-        Ok(()) => {}
-        Err(e)
-            if e.kind() == io::ErrorKind::UnexpectedEof
-                || e.kind() == io::ErrorKind::TimedOut
-                || e.kind() == io::ErrorKind::WouldBlock =>
-        {
-            return Ok(());
-        }
-        Err(e) => return Err(e),
-    }
-    let peer = stream.peer_addr().ok();
-    if let Some(p) = peer {
-        crate::audit::set_client_port(u32::from(p.port()));
-    }
-    let sender = peer.map_or(
-        HostAddress {
-            addr_type: 0,
-            address: Vec::new().into(),
-        },
-        HostAddress::from_socket,
-    );
-    let reply = match dispatch_via_cache(store, cache, &req, Some(&sender)) {
-        Dispatch::Send(r) => r,
-        Dispatch::Drop => return Ok(()),
-        Dispatch::Error(e) => {
-            tracing::error!(
-                event = krb5_log::events::KDC_ISSUE,
-                component = "krb5-kdc",
-                outcome = "error",
-                error = %e,
-                error_suffix = WHILE_DISPATCHING_TCP,
-            );
-            return Err(io::Error::new(io::ErrorKind::InvalidData, e.to_string()));
-        }
-        Dispatch::Panic => {
-            return Err(io::Error::other("request panic isolated"));
-        }
-    };
-    if reply.is_empty() {
-        log_dispatch_drop(false);
-        return Ok(());
-    }
-    // MIT `process_stream_response` (`lib/apputils/net-server.c:1319-1323`): the reply's length
-    // and the reply are queued as the two pieces of one writev.
-    // MIT `process_stream_connection_write` (`lib/apputils/net-server.c:1467-1468`): that writev
-    // sends them together.
-    krb5_protocol::write_messages(&mut stream, &[reply.as_slice()])
 }
 
 /// Decrements the TCP worker counter on drop, including unwind.
@@ -1458,75 +1158,53 @@ mod tests {
         assert_eq!(BindType::Rpc.proto(), "tcp");
     }
 
-    use krb5_asn1::{decode, encode};
-    use krb5_types::{PrincipalName, err};
+    use std::io::Read as _;
+    use std::sync::atomic::Ordering;
 
-    /// A replay the lookaside no longer holds is processed again: the AS-REQ with the same
-    /// PA-ENC-TIMESTAMP and the TGS-REQ with the same authenticator each get a new ticket, where
-    /// the lookaside resent the first reply while it held it. Before, both were error 34.
-    /// MIT `dispatch` (`dispatch.c:114-140`): only the lookaside answers a repeated request, so one it no longer holds is processed again.
-    #[test]
-    fn a_replay_the_lookaside_no_longer_holds_is_issued_again() {
-        use crate::testrealm::{TEST_REALM, TEST_USER, documented_host};
+    use krb5_asn1::{decode, encode};
+    use krb5_types::{KrbError, PrincipalName, err};
+
+    /// The documented realm served by `serve_until` on a thread of its own with `limits`: the
+    /// address it serves, the stop flag, and the thread.
+    fn serving(limits: ListenLimits) -> (SocketAddr, Arc<AtomicBool>, thread::JoinHandle<()>) {
         let (store, _) = bootstrap_documented().unwrap();
-        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-        let key = store
-            .get_name(&user)
+        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
+        let addr = udp.local_addr().unwrap();
+        let flag = Arc::new(AtomicBool::new(false));
+        let stop = Arc::clone(&flag);
+        let h = thread::spawn(move || {
+            serve_until(shared_store(store), udp, tcp, stop, limits).unwrap();
+        });
+        (addr, flag, h)
+    }
+
+    fn limits() -> ListenLimits {
+        ListenLimits {
+            shutdown_poll: Duration::from_millis(50),
+            ..ListenLimits::default()
+        }
+    }
+
+    fn stop(flag: &AtomicBool, h: thread::JoinHandle<()>) {
+        flag.store(true, Ordering::SeqCst);
+        h.join().unwrap();
+    }
+
+    /// The length-prefixed reply on `c`, decoded as a KRB-ERROR.
+    fn tcp_error(c: &mut TcpStream) -> KrbError {
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut hdr = [0u8; 4];
+        c.read_exact(&mut hdr).expect("a reply's length");
+        let mut body = vec![0u8; u32::from_be_bytes(hdr) as usize];
+        c.read_exact(&mut body).expect("a reply");
+        decode(&body).expect("KRB-ERROR")
+    }
+
+    /// An AS-REQ without preauth for the documented user.
+    fn as_req_bytes(nonce: u32) -> Vec<u8> {
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
+        encode(&krb5_protocol::as_req(cname, crate::testrealm::TEST_REALM, nonce, None).unwrap())
             .unwrap()
-            .best_key()
-            .unwrap()
-            .key
-            .clone();
-        let as_req = |nonce, padata| krb5_protocol::as_req(user.clone(), TEST_REALM, nonce, padata);
-        let enc_ts = || Some(vec![krb5_protocol::pa_enc_timestamp(&key).unwrap()]);
-        let as_bytes = encode(&as_req(71, enc_ts()).unwrap()).unwrap();
-        let tgt = crate::issue_as(&store, &as_req(72, enc_ts()).unwrap()).unwrap();
-        let tgs = krb5_protocol::tgs_req(
-            tgt.rep.0.ticket.clone(),
-            &tgt.session_key,
-            TEST_REALM,
-            &user,
-            documented_host(),
-            TEST_REALM,
-            73,
-        );
-        let tgs_bytes = encode(&tgs.unwrap()).unwrap();
-        let store = shared_store(store);
-        let stale = Duration::from_millis(500);
-        let cache = Mutex::new(Lookaside::with_limits(crate::lookaside::MAX_SIZE, stale));
-        let send = |req: &[u8]| match dispatch_via_cache(&store, &cache, req, None) {
-            Dispatch::Send(reply) => reply,
-            _ => panic!("no reply"),
-        };
-        let as_first = send(&as_bytes);
-        assert_eq!(
-            send(&as_bytes),
-            as_first,
-            "the lookaside resends the AS-REP"
-        );
-        let tgs_first = send(&tgs_bytes);
-        assert_eq!(
-            send(&tgs_bytes),
-            tgs_first,
-            "the lookaside resends the TGS-REP"
-        );
-        thread::sleep(stale + Duration::from_millis(100));
-        // A later request's insert purges the stale entries, as MIT's does.
-        send(&encode(&as_req(74, None).unwrap()).unwrap());
-        let as_again = send(&as_bytes);
-        assert_eq!(
-            as_again.first(),
-            Some(&0x6b),
-            "the replayed AS-REQ issues an AS-REP"
-        );
-        assert_ne!(as_again, as_first, "a new AS-REP, not the cached one");
-        let tgs_again = send(&tgs_bytes);
-        assert_eq!(
-            tgs_again.first(),
-            Some(&0x6d),
-            "the replayed TGS-REQ issues a TGS-REP"
-        );
-        assert_ne!(tgs_again, tgs_first, "a new TGS-REP, not the cached one");
     }
 
     #[test]
@@ -1534,34 +1212,22 @@ mod tests {
         assert!(!drop_privileges_to("nobody").expect("unprivileged drop"));
     }
 
+    /// A length past the cap is answered with FIELD_TOOLONG before any body, and so is a length
+    /// one past MIT's 1 MiB buffer.
     #[test]
     fn tcp_oversize_length_is_field_toolong() {
-        let (store, _) = bootstrap_documented().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let store = shared_store(store);
-        thread::spawn(move || {
-            let (s, _) = listener.accept().unwrap();
-            let _ = handle_tcp(
-                &store,
-                s,
-                32,
-                Duration::from_secs(2),
-                &Mutex::new(Lookaside::new()),
-            );
-        });
-        let mut c = std::net::TcpStream::connect(addr).unwrap();
-        // The length word alone: body bytes the server does not read turn its close into a
-        // reset, which can reach this socket before the reply has been read.
-        c.write_all(&64u32.to_be_bytes()).unwrap();
-        c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let mut hdr = [0u8; 4];
-        c.read_exact(&mut hdr).expect("FIELD_TOOLONG length");
-        let n = u32::from_be_bytes(hdr) as usize;
-        let mut body = vec![0u8; n];
-        c.read_exact(&mut body).expect("FIELD_TOOLONG body");
-        let e: krb5_types::KrbError = decode(&body).expect("KRB-ERROR");
-        assert_eq!(e.error_code, err::FIELD_TOOLONG);
+        for (cap, n) in [(32, 64u32), (MAX_TCP_REQUEST, 1024 * 1024 + 1)] {
+            let (addr, flag, h) = serving(ListenLimits {
+                max_tcp_request: cap,
+                ..limits()
+            });
+            let mut c = TcpStream::connect(addr).unwrap();
+            // The length word alone: body bytes the server does not read turn its close into a
+            // reset, which can reach this socket before the reply has been read.
+            c.write_all(&n.to_be_bytes()).unwrap();
+            assert_eq!(tcp_error(&mut c).error_code, err::FIELD_TOOLONG);
+            stop(&flag, h);
+        }
     }
 
     #[test]
@@ -1569,52 +1235,12 @@ mod tests {
         assert_eq!(MAX_TCP_REQUEST, 1024 * 1024 - 4);
     }
 
-    #[test]
-    fn tcp_one_mib_plus_one_is_field_toolong() {
-        let (store, _) = bootstrap_documented().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let store = shared_store(store);
-        thread::spawn(move || {
-            let (s, _) = listener.accept().unwrap();
-            let _ = handle_tcp(
-                &store,
-                s,
-                MAX_TCP_REQUEST,
-                Duration::from_secs(2),
-                &Mutex::new(Lookaside::new()),
-            );
-        });
-        let mut c = std::net::TcpStream::connect(addr).unwrap();
-        c.write_all(&(1024 * 1024 + 1u32).to_be_bytes()).unwrap();
-        c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let mut hdr = [0u8; 4];
-        c.read_exact(&mut hdr).expect("FIELD_TOOLONG length");
-        let n = u32::from_be_bytes(hdr) as usize;
-        let mut body = vec![0u8; n];
-        c.read_exact(&mut body).expect("FIELD_TOOLONG body");
-        let e: krb5_types::KrbError = decode(&body).expect("KRB-ERROR");
-        assert_eq!(e.error_code, err::FIELD_TOOLONG);
-    }
-
+    /// A 128 KiB AS-REQ arrives in many reads and is answered as one request.
     #[test]
     fn tcp_128kib_unknown_cname_is_client_not_found() {
         use krb5_types::{OctetString, PaData};
 
-        let (store, _) = bootstrap_documented().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let store = shared_store(store);
-        thread::spawn(move || {
-            let (s, _) = listener.accept().unwrap();
-            let _ = handle_tcp(
-                &store,
-                s,
-                MAX_TCP_REQUEST,
-                Duration::from_secs(5),
-                &Mutex::new(Lookaside::new()),
-            );
-        });
+        let (addr, flag, h) = serving(limits());
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["nosuch"]);
         let mut req = krb5_protocol::as_req(cname, crate::testrealm::TEST_REALM, 1, None).unwrap();
         req.0.padata = Some(vec![PaData {
@@ -1623,52 +1249,38 @@ mod tests {
         }]);
         let bytes = encode(&req).unwrap();
         assert!(bytes.len() > 128 * 1024);
-        assert!(bytes.len() <= MAX_TCP_REQUEST);
-        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        let mut c = TcpStream::connect(addr).unwrap();
         c.write_all(&(u32::try_from(bytes.len()).unwrap()).to_be_bytes())
             .unwrap();
         c.write_all(&bytes).unwrap();
-        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut hdr = [0u8; 4];
-        c.read_exact(&mut hdr).expect("KRB-ERROR length");
-        let n = u32::from_be_bytes(hdr) as usize;
-        let mut body = vec![0u8; n];
-        c.read_exact(&mut body).expect("KRB-ERROR body");
-        let e: krb5_types::KrbError = decode(&body).expect("KRB-ERROR");
+        let e = tcp_error(&mut c);
         assert_eq!(e.error_code, err::C_PRINCIPAL_UNKNOWN);
         let text = e
             .e_text
             .as_ref()
             .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
         assert_eq!(text, Some("CLIENT_NOT_FOUND"));
+        stop(&flag, h);
     }
 
+    /// A zero length is not dispatched: no reply, and the stream closes at its next event.
     #[test]
     fn tcp_zero_length_is_dropped() {
-        let (store, _) = bootstrap_documented().unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = listener.local_addr().unwrap();
-        let store = shared_store(store);
-        thread::spawn(move || {
-            let (s, _) = listener.accept().unwrap();
-            handle_tcp(
-                &store,
-                s,
-                MAX_TCP_REQUEST,
-                Duration::from_secs(2),
-                &Mutex::new(Lookaside::new()),
-            )
-            .expect("zero-len drop");
-        });
-        let mut c = std::net::TcpStream::connect(addr).unwrap();
+        let (addr, flag, h) = serving(limits());
+        let mut c = TcpStream::connect(addr).unwrap();
         c.write_all(&0u32.to_be_bytes()).unwrap();
         c.set_read_timeout(Some(Duration::from_millis(400)))
             .unwrap();
         let mut hdr = [0u8; 4];
+        let waited = c.read(&mut hdr);
         assert!(
-            c.read_exact(&mut hdr).is_err(),
-            "zero-length must not reply"
+            matches!(&waited, Err(e) if e.kind() == io::ErrorKind::WouldBlock),
+            "no reply and no close yet: {waited:?}"
         );
+        c.shutdown(Shutdown::Write).unwrap();
+        c.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        assert_eq!(c.read(&mut hdr).unwrap(), 0, "closed at the next event");
+        stop(&flag, h);
     }
 
     #[test]
@@ -1678,138 +1290,45 @@ mod tests {
     }
 
     #[test]
-    fn log_dispatch_drop_udp_is_not_tcp() {
-        use std::sync::Mutex;
-        use tracing_subscriber::fmt::MakeWriter;
-
-        #[derive(Clone)]
-        struct Capture(Arc<Mutex<Vec<u8>>>);
-        impl Write for Capture {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                self.0.lock().unwrap().extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> io::Result<()> {
-                Ok(())
-            }
-        }
-        impl<'a> MakeWriter<'a> for Capture {
-            type Writer = Self;
-            fn make_writer(&'a self) -> Self::Writer {
-                self.clone()
-            }
-        }
-
-        let buf = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = tracing_subscriber::fmt()
-            .with_writer(Capture(Arc::clone(&buf)))
-            .with_ansi(false)
-            .with_max_level(tracing::Level::DEBUG)
-            .finish();
-        tracing::subscriber::with_default(subscriber, || {
-            log_dispatch_drop(true);
-            log_dispatch_drop(false);
-            let (store, _) = bootstrap_documented().unwrap();
-            let _ = crate::handle_request(&store, &[]);
-        });
-        let logged = String::from_utf8_lossy(&buf.lock().unwrap()).into_owned();
-        assert!(
-            !logged.contains(WHILE_DISPATCHING_UDP),
-            "empty drop is silent of while dispatching (udp); got {logged}"
-        );
-        assert!(
-            !logged.contains(WHILE_DISPATCHING_TCP),
-            "empty drop is silent of while dispatching (tcp); got {logged}"
-        );
-        let issue_only = {
-            let buf2 = Arc::new(Mutex::new(Vec::new()));
-            let sub2 = tracing_subscriber::fmt()
-                .with_writer(Capture(Arc::clone(&buf2)))
-                .with_ansi(false)
-                .finish();
-            tracing::subscriber::with_default(sub2, || {
-                let (store, _) = bootstrap_documented().unwrap();
-                let _ = crate::handle_request(&store, &[]);
-            });
-            String::from_utf8_lossy(&buf2.lock().unwrap()).into_owned()
-        };
-        assert!(
-            !issue_only.contains(WHILE_DISPATCHING_UDP),
-            "handle_request must not log (udp); got {issue_only}"
-        );
-    }
-
-    #[test]
     fn udp_oversize_reply_is_response_too_big() {
-        let (store, _) = bootstrap_documented().unwrap();
-        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
-        let addr = udp.local_addr().unwrap();
-        let flag = Arc::new(AtomicBool::new(false));
-        let store = shared_store(store);
-        let f2 = Arc::clone(&flag);
-        thread::spawn(move || {
-            let _ = serve_until(
-                store,
-                udp,
-                tcp,
-                f2,
-                ListenLimits {
-                    max_tcp_workers: 2,
-                    max_tcp_request: 4096,
-                    max_dgram_reply_size: 10,
-                    io_timeout: Duration::from_millis(200),
-                    shutdown_poll: Duration::from_millis(50),
-                },
-            );
+        let (addr, flag, h) = serving(ListenLimits {
+            max_dgram_reply_size: 10,
+            ..limits()
         });
-        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
-        let req = krb5_protocol::as_req(cname, crate::testrealm::TEST_REALM, 1, None).unwrap();
-        let bytes = encode(&req).unwrap();
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        sock.send_to(&bytes, addr).unwrap();
+        sock.send_to(&as_req_bytes(1), addr).unwrap();
         let mut buf = [0u8; 4096];
         let n = sock.recv(&mut buf).unwrap();
-        let e: krb5_types::KrbError = decode(&buf[..n]).unwrap();
+        let e: KrbError = decode(&buf[..n]).unwrap();
         assert_eq!(e.error_code, err::RESPONSE_TOO_BIG);
-        flag.store(true, Ordering::SeqCst);
+        stop(&flag, h);
     }
 
     #[test]
     fn serve_until_stops_on_flag() {
-        let (store, _) = bootstrap_documented().unwrap();
-        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
-        let addr = udp.local_addr().unwrap();
-        let flag = Arc::new(AtomicBool::new(false));
-        let store = shared_store(store);
-        let f2 = Arc::clone(&flag);
-        let h = thread::spawn(move || {
-            serve_until(
-                store,
-                udp,
-                tcp,
-                f2,
-                ListenLimits {
-                    max_tcp_workers: 2,
-                    max_tcp_request: 4096,
-                    max_dgram_reply_size: MAX_DGRAM_REPLY,
-                    io_timeout: Duration::from_millis(50),
-                    shutdown_poll: Duration::from_millis(50),
-                },
-            )
-        });
-        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
-        let req = krb5_protocol::as_req(cname, crate::testrealm::TEST_REALM, 1, None).unwrap();
-        let bytes = encode(&req).unwrap();
+        let (addr, flag, h) = serving(limits());
         let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
         sock.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        sock.send_to(&bytes, addr).unwrap();
+        sock.send_to(&as_req_bytes(1), addr).unwrap();
         let mut buf = [0u8; 4096];
         let n = sock.recv(&mut buf).unwrap();
-        let e: krb5_types::KrbError = decode(&buf[..n]).unwrap();
+        let e: KrbError = decode(&buf[..n]).unwrap();
         assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
-        flag.store(true, Ordering::SeqCst);
-        h.join().unwrap().unwrap();
+        stop(&flag, h);
+    }
+
+    #[test]
+    fn a_zero_shutdown_poll_is_refused() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
+        let flag = Arc::new(AtomicBool::new(false));
+        let zero = ListenLimits {
+            shutdown_poll: Duration::ZERO,
+            ..ListenLimits::default()
+        };
+        let e = serve_until(shared_store(store), udp, tcp, flag, zero).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput);
     }
 
     #[test]
@@ -1836,55 +1355,50 @@ mod tests {
         drop(server);
     }
 
+    /// Past the cap a new connection evicts the one that started first, and among connections
+    /// of the same second the one met first from the top of the table: c1 started a second
+    /// before c2 and c3, so c3 evicts c1 and takes its place at the table's start; c4 then meets
+    /// c2 first from the top, and evicts it.
+    /// MIT `kill_lru_stream_connection` (`lib/apputils/net-server.c:1198-1223`): the scan from the top keeps the first of a tie.
     #[test]
-    fn tcp_over_cap_evicts_the_oldest_connection() {
-        // MIT `accept_stream_connection` (`net-server.c:1281-1282`): at the cap a new TCP
-        // connection evicts the oldest live stream (kill_lru_stream_connection), not the
-        // newcomer. With cap 2, a third connection shuts down the first; its read = EOF.
-        use std::io::Read as _;
-        let (store, _) = bootstrap_documented().unwrap();
-        let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
-        let addr = udp.local_addr().unwrap();
-        let flag = Arc::new(AtomicBool::new(false));
-        let store = shared_store(store);
-        let f2 = Arc::clone(&flag);
-        let server = thread::spawn(move || {
-            let _ = serve_until(
-                store,
-                udp,
-                tcp,
-                f2,
-                ListenLimits {
-                    max_tcp_workers: 2,
-                    max_tcp_request: 4096,
-                    max_dgram_reply_size: MAX_DGRAM_REPLY,
-                    // Large so the worker read does not time out during the test;
-                    // the only reason c1 sees EOF is eviction.
-                    io_timeout: Duration::from_secs(30),
-                    shutdown_poll: Duration::from_millis(50),
-                },
-            );
+    fn tcp_over_cap_evicts_the_connection_that_started_first() {
+        let (addr, flag, h) = serving(ListenLimits {
+            max_tcp_workers: 2,
+            ..limits()
         });
-        // Three connections that never send a full request; each worker blocks
-        // on the 4-byte length prefix. Space them so the accept/register order
-        // is c1, c2, c3.
-        let mut c1 = TcpStream::connect(addr).unwrap();
-        thread::sleep(Duration::from_millis(80));
+        let closed = |c: &TcpStream| {
+            c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut b = [0u8; 1];
+            matches!((&*c).read(&mut b), Ok(0))
+        };
+        let open = |c: &TcpStream| {
+            c.set_read_timeout(Some(Duration::from_millis(200)))
+                .unwrap();
+            let mut b = [0u8; 1];
+            matches!((&*c).read(&mut b), Err(e) if e.kind() == io::ErrorKind::WouldBlock)
+        };
+        // Start c1 just after a second begins, and c2 / c3 just after the next.
+        let next_second = || {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap();
+            thread::sleep(
+                Duration::from_millis(1050)
+                    .saturating_sub(Duration::from_nanos(now.subsec_nanos().into())),
+            );
+        };
+        next_second();
+        let c1 = TcpStream::connect(addr).unwrap();
+        thread::sleep(Duration::from_millis(50));
+        next_second();
         let c2 = TcpStream::connect(addr).unwrap();
-        thread::sleep(Duration::from_millis(80));
+        thread::sleep(Duration::from_millis(50));
         let c3 = TcpStream::connect(addr).unwrap();
-        thread::sleep(Duration::from_millis(150));
-        // c1 (oldest) was evicted: the server shut it down, so a read returns EOF.
-        c1.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
-        let mut buf = [0u8; 1];
-        match c1.read(&mut buf) {
-            Ok(0) => {}
-            Ok(n) => panic!("c1 returned {n} bytes, expected EOF from eviction"),
-            Err(e) => panic!("c1 was not evicted (read: {e})"),
-        }
-        flag.store(true, Ordering::SeqCst);
-        drop(c2);
-        drop(c3);
-        let _ = server.join();
+        assert!(closed(&c1), "c1 started first");
+        assert!(open(&c2) && open(&c3));
+        let c4 = TcpStream::connect(addr).unwrap();
+        assert!(closed(&c2), "c2: the first of the tie from the top");
+        assert!(open(&c3) && open(&c4));
+        stop(&flag, h);
     }
 }

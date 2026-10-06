@@ -467,6 +467,16 @@ pub fn clear_thread_audit() {
     THREAD_AUDIT.with(|t| *t.borrow_mut() = None);
 }
 
+/// Take this thread's own module off it, leaving the process-wide slot in force on the thread.
+pub(crate) fn take_thread_audit() -> Option<Arc<dyn KdcAudit>> {
+    THREAD_AUDIT.with(|t| t.borrow_mut().take())
+}
+
+/// Put back what [`take_thread_audit`] took.
+pub(crate) fn restore_thread_audit(a: Option<Arc<dyn KdcAudit>>) {
+    THREAD_AUDIT.with(|t| *t.borrow_mut() = a);
+}
+
 /// Current audit module (default [`JsonAudit`]).
 #[must_use]
 pub fn current_audit() -> Arc<dyn KdcAudit> {

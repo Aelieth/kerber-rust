@@ -19,7 +19,7 @@ kerber-rust stays Apache-2.0 OR MIT; `publish = false`.
 | edition | 2024 | 2024 |
 | MSRV (`rust-version`) | 1.95 | 1.95.0 |
 | CI `msrv` job | `cargo build --workspace --all-targets --locked` on 1.95; the tests run on 1.95 in `full-test.yml`'s `msrv-test` | (klldap's own CI) |
-| async | sync (no tokio) | tokio; the embed runs the KDC on threads |
+| async | sync (no tokio) | tokio; the embed runs the KDC's loop on a thread of its own |
 | `unsafe` | product `forbid(unsafe_code)` | its `kerberos` crate's `src/ffi.rs` only (the FFI this replaces) |
 
 ## Shared crates
@@ -82,7 +82,7 @@ kerber-rust's `PrincipalStore`, so the directory stays the writer:
 | `set_principal_enabled` | `set_status` (sets / clears `KDB_DISALLOW_ALL_TIX`) | it also writes `pw_expire`: pass the current value |
 | `export_keytab_for_keycloak` | `insert_new_randkey` when missing, then `ktadd_local_atomic` / `chrand_etypes_keepold_in` with aes256 + aes128, and `Keytab::write_file` | MIT's `ktadd` re-keys, so the kvno moves on every export |
 | persistence | `load_store` / `save_store` (dump-v7 text + a stash in MIT keytab form) | an existing KLLDAP volume is MIT db2: migrate once with MIT `kdb5_util dump`, then `krb5-kdb load` |
-| the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers |
+| the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it, and a plugin module set for that thread alone does not apply while it runs |
 
 ## What the embed still has to build
 

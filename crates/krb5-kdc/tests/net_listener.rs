@@ -126,8 +126,10 @@ fn listener_retransmit_resends_the_cached_reply_like_replay_c() {
     );
 }
 
+/// Past the stream cap a new connection evicts the one that started first and is served itself,
+/// as MIT's `kill_lru_stream_connection` keeps the newcomer.
 #[test]
-fn tcp_worker_cap_drops_excess_connections() {
+fn a_connection_past_the_cap_evicts_and_is_served() {
     use std::io::{Read, Write};
     use std::net::TcpStream;
     use std::sync::atomic::AtomicBool;
@@ -140,38 +142,186 @@ fn tcp_worker_cap_drops_excess_connections() {
     let flag = Arc::new(AtomicBool::new(false));
     let store = shared_store(store);
     let f2 = Arc::clone(&flag);
-    thread::spawn(move || {
-        let _ = serve_until(
+    let h = thread::spawn(move || {
+        serve_until(
             store,
             udp,
             tcp,
             f2,
             ListenLimits {
                 max_tcp_workers: 1,
-                max_tcp_request: 4096,
-                max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
-                io_timeout: Duration::from_secs(2),
                 shutdown_poll: Duration::from_millis(50),
+                ..ListenLimits::default()
             },
-        );
+        )
+        .unwrap();
     });
-    let hold = TcpStream::connect(addr).unwrap();
-    hold.set_read_timeout(Some(Duration::from_millis(300)))
-        .unwrap();
-    thread::sleep(Duration::from_millis(40));
-    let mut extra = TcpStream::connect(addr).unwrap();
-    extra
-        .set_read_timeout(Some(Duration::from_millis(400)))
-        .unwrap();
-    extra.write_all(&4u32.to_be_bytes()).unwrap();
-    extra.write_all(&[0x6a, 0x02, 0x01, 0x00]).unwrap();
-    let mut hdr = [0u8; 4];
-    assert!(
-        extra.read_exact(&mut hdr).is_err(),
-        "worker cap must drop the extra TCP body"
+    // The accept queue keeps the order: `hold` is accepted before the newcomer.
+    let mut hold = TcpStream::connect(addr).unwrap();
+    assert!(tcp_as_answers(addr), "the newcomer is served");
+    hold.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+    let mut b = [0u8; 1];
+    assert_eq!(
+        hold.read(&mut b).unwrap(),
+        0,
+        "the first connection was evicted"
     );
-    drop(hold);
+    let _ = hold.write(&[0]);
     flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.join().unwrap();
+}
+
+/// A stream left part-way through its length for longer than the old five-second timeout is
+/// still answered when it completes: as MIT's (settled live: 615 s), a stream has no timeout.
+#[test]
+fn an_idle_stream_is_not_timed_out() {
+    use std::io::{Read, Write};
+    use std::net::TcpStream;
+    use std::sync::atomic::AtomicBool;
+
+    use krb5_kdc::{ListenLimits, serve_until};
+
+    let (store, _) = bootstrap_documented().unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
+    let addr = udp.local_addr().unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
+    let store = shared_store(store);
+    let f2 = Arc::clone(&flag);
+    let h = thread::spawn(move || {
+        serve_until(
+            store,
+            udp,
+            tcp,
+            f2,
+            ListenLimits {
+                shutdown_poll: Duration::from_millis(50),
+                ..ListenLimits::default()
+            },
+        )
+        .unwrap();
+    });
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let bytes = encode(&as_req(cname, TEST_REALM, 9, None).unwrap()).unwrap();
+    let mut framed = u32::try_from(bytes.len()).unwrap().to_be_bytes().to_vec();
+    framed.extend_from_slice(&bytes);
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.write_all(&framed[..2]).unwrap();
+    thread::sleep(Duration::from_secs(6));
+    s.write_all(&framed[2..]).unwrap();
+    s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    let mut hdr = [0u8; 4];
+    s.read_exact(&mut hdr).expect("answered after 6 s");
+    let mut buf = vec![0u8; u32::from_be_bytes(hdr) as usize];
+    s.read_exact(&mut buf).unwrap();
+    let e: krb5_types::KrbError = decode(&buf).unwrap();
+    assert_eq!(e.error_code, err::PREAUTH_REQUIRED);
+    flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.join().unwrap();
+}
+
+/// One AS-REQ for the documented user served by `serve_until` on this thread, a client thread
+/// sending it over UDP; the reply's bytes.
+fn served_on_this_thread(nonce: u32) -> Vec<u8> {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use krb5_kdc::{ListenLimits, serve_until};
+
+    let (store, _) = bootstrap_documented().unwrap();
+    let bytes = encode(&documented_as_req(nonce)).unwrap();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
+    let addr = udp.local_addr().unwrap();
+    let flag = Arc::new(AtomicBool::new(false));
+    let f2 = Arc::clone(&flag);
+    let client = thread::spawn(move || {
+        let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
+        sock.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        sock.send_to(&bytes, addr).unwrap();
+        let mut buf = [0u8; 4096];
+        let n = sock.recv(&mut buf).unwrap_or(0);
+        f2.store(true, Ordering::SeqCst);
+        buf[..n].to_vec()
+    });
+    let limits = ListenLimits {
+        shutdown_poll: Duration::from_millis(50),
+        ..ListenLimits::default()
+    };
+    serve_until(shared_store(store), udp, tcp, flag, limits).unwrap();
+    client.join().unwrap()
+}
+
+/// The documented user's AS-REQ with PA-ENC-TIMESTAMP.
+fn documented_as_req(nonce: u32) -> krb5_types::AsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let key = string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        TEST_USER_PASSWORD,
+        cname.default_salt(TEST_REALM),
+        Some(&S2K_ITERS.to_be_bytes()),
+    )
+    .unwrap();
+    as_req(
+        cname,
+        TEST_REALM,
+        nonce,
+        Some(vec![pa_enc_timestamp(&key).unwrap()]),
+    )
+    .unwrap()
+}
+
+/// A kdcpolicy module whose AS check is `verdict`: refusal, or a panic.
+struct ThreadPolicy {
+    panics: bool,
+}
+
+impl krb5_kdc::KdcPolicy for ThreadPolicy {
+    fn check_as(
+        &self,
+        _store: &dyn krb5_kdc::PrincipalRead,
+        _client: &krb5_kdc::Principal,
+        _indicators: &[String],
+    ) -> Result<krb5_kdc::PolicyAdjustment, krb5_kdc::Error> {
+        assert!(!self.panics, "the thread's own policy module ran");
+        Err(krb5_kdc::Error::Protocol {
+            code: err::POLICY,
+            text: Some("DENIED".into()),
+            e_data: None,
+            detail: None,
+        })
+    }
+    fn check_tgs(
+        &self,
+        _store: &dyn krb5_kdc::PrincipalRead,
+        _sname: &PrincipalName,
+        _indicators: &[String],
+    ) -> Result<krb5_kdc::PolicyAdjustment, krb5_kdc::Error> {
+        Ok(krb5_kdc::PolicyAdjustment::default())
+    }
+}
+
+/// A kdcpolicy module set for the calling thread alone, one that refuses or one that panics,
+/// does not reach a request the loop serves on that thread, and is the thread's own again when
+/// the loop returns.
+#[test]
+fn the_loop_does_not_take_a_slot_set_on_its_thread() {
+    use krb5_kdc::{clear_thread_policy, set_thread_policy};
+
+    for panics in [false, true] {
+        set_thread_policy(Arc::new(ThreadPolicy { panics }));
+        let own = |nonce| {
+            let (store, _) = bootstrap_documented().unwrap();
+            std::panic::catch_unwind(|| krb5_kdc::issue_as(&store, &documented_as_req(nonce)))
+                .map_or(true, |r| r.is_err())
+        };
+        assert!(own(1), "the slot applies to this thread's own calls");
+        let reply = served_on_this_thread(2);
+        assert_eq!(
+            reply.first().copied(),
+            Some(0x6b),
+            "the loop's request got its AS-REP (panics: {panics})"
+        );
+        assert!(own(3), "the slot is the thread's again");
+        clear_thread_policy();
+    }
 }
 
 #[test]
@@ -196,7 +346,6 @@ fn listener_chaos_udp_garbage_then_valid() {
                 max_tcp_workers: 4,
                 max_tcp_request: 4096,
                 max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
-                io_timeout: Duration::from_millis(200),
                 shutdown_poll: Duration::from_millis(50),
             },
         );
@@ -204,7 +353,7 @@ fn listener_chaos_udp_garbage_then_valid() {
     let sock = UdpSocket::bind("127.0.0.1:0").unwrap();
     sock.set_read_timeout(Some(Duration::from_millis(200)))
         .unwrap();
-    // MIT dispatch drops garbage with no reply; do not wait out io_timeout.
+    // MIT dispatch answers garbage with no reply.
     for junk in [&[][..], &[0xff; 8], &[0x00; 256], &[0x6a, 0x01]] {
         let _ = sock.send_to(junk, addr);
     }
@@ -322,16 +471,13 @@ fn serve_until_honours_shutdown_within_the_poll_interval() {
                 max_tcp_workers: 4,
                 max_tcp_request: 4096,
                 max_dgram_reply_size: krb5_kdc::MAX_DGRAM_REPLY,
-                io_timeout: Duration::from_secs(5),
                 shutdown_poll: Duration::from_millis(100),
             },
         );
     });
-    // Prove the UDP loop is in recv: a half-round-trip with no read can
-    // return before the first recv (the flag is checked only around the
-    // blocking read). Send a real AS-REQ and read the KRB-ERROR before
-    // storing the flag; a short pause then lets the loop re-enter recv so
-    // shutdown_poll (not io_timeout) is the honour path.
+    // Prove the loop is serving: send a real AS-REQ and read the KRB-ERROR before storing the
+    // flag; a short pause then lets the loop wait in its poll again, so the flag is honoured
+    // within shutdown_poll.
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let req = as_req(cname, TEST_REALM, 1, None).unwrap();
     let bytes = encode(&req).unwrap();
@@ -350,7 +496,7 @@ fn serve_until_honours_shutdown_within_the_poll_interval() {
     handle.join().unwrap();
     assert!(
         t0.elapsed() < Duration::from_secs(2),
-        "shutdown must be honoured within ~shutdown_poll, not io_timeout: {:?}",
+        "shutdown must be honoured within ~shutdown_poll: {:?}",
         t0.elapsed()
     );
 }
