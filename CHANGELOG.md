@@ -1437,6 +1437,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc/admin.** kadmind reads kadm5.acl as MIT's `get_line`: bytes (a Latin-1 comment loads),
+  NUL and `\` as `fgets` meets them, a directory as no line; only the abort line goes to
+  stderr, the rest to the log. Settled; units.
 - **types.** A seq-number sent as a negative INTEGER, as old Heimdal does, decodes as MIT's
   `decode_seqno` reads it, the same 32 bits unsigned, in authenticators, AP-REPs, KRB-SAFEs
   and KRB-PRIVs. Units.

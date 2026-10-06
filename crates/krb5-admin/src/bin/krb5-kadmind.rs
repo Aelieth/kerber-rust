@@ -646,9 +646,12 @@ fn acceptor_keys(store: &PrincipalStore) -> Vec<ProtocolKey> {
 }
 
 /// kadmind's ACL, `acl_file` as [`krb5_config::KdcPaths`] resolved it; `None` is self-service
-/// only. A file that cannot be read or parsed stops kadmind.
+/// only. A file that cannot be read or parsed stops kadmind: what MIT's ACL module logs goes to
+/// the log alone, and the last line, `fail_to_start`'s, to standard error and the log.
 /// MIT `main` (`kadmin/server/ovsec_kadmd.c:497-501`): `auth_init`, else "while initializing
 /// ACL file".
+/// MIT `fail_to_start` (`kadmin/server/ovsec_kadmd.c:100-114`): `progname: <message> while
+/// <doing>, aborting` on standard error, and the same, a newline after it, to the log.
 fn load_acl(progname: &str, acl_file: Option<&Path>, realm: &str) -> Acl {
     acl_for_store(realm, acl_file).unwrap_or_else(|e| {
         let msg = match e {
@@ -657,9 +660,12 @@ fn load_acl(progname: &str, acl_file: Option<&Path>, realm: &str) -> Acl {
         };
         let lines: Vec<&str> = msg.lines().collect();
         for (i, line) in lines.iter().enumerate() {
-            eprintln!("{progname}: {line}");
-            let end = if i + 1 == lines.len() { "\n" } else { "" };
-            klog::syslog(Severity::Err, &format!("{line}{end}"));
+            if i + 1 == lines.len() {
+                eprintln!("{progname}: {line}");
+                klog::syslog(Severity::Err, &format!("{line}\n"));
+            } else {
+                klog::syslog(Severity::Err, line);
+            }
         }
         std::process::exit(1);
     })

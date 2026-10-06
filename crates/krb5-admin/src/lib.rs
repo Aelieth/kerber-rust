@@ -55,9 +55,9 @@ pub use listen::{
 pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl, String> {
     match path {
         Some(p) => {
-            let t = std::fs::read_to_string(p).map_err(|e| format!("ACL {}: {e}", p.display()))?;
+            let bytes = std::fs::read(p).map_err(|e| format!("ACL {}: {e}", p.display()))?;
             let realm = actor.rsplit_once('@').map_or("", |(_, r)| r);
-            Acl::parse_with_realm(&t, realm).map_err(|e| e.to_string())
+            Acl::parse_bytes_with_realm(&bytes, realm).map_err(|e| e.to_string())
         }
         None => Acl::allow_admin(actor).map_err(|e| e.to_string()),
     }

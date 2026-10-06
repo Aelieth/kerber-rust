@@ -201,6 +201,11 @@ connection ends; and per kadm5 request one `Request:` or `Unauthorized
 request:` line with client, service and address, plus the `chpw` /
 `setpw` lines of kpasswd.
 
+
+As MIT's, kadmind prints only its one `fail_to_start` line on stderr when kadm5.acl does not load; the reason and the
+syntax line go to the `admin_server` log. With no such log (the syslog default, and no syslogd in a container), set
+`admin_server = STDERR` or `FILE:` to see them.
+
 ## Logs as metrics
 
 Every issue and crypto/ASN.1 event already carries `duration_us` and

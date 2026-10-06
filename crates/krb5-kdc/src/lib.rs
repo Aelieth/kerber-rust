@@ -160,16 +160,22 @@ pub fn default_acl_path(kdc_dir: &std::path::Path) -> std::path::PathBuf {
     kdc_dir.join("kadm5.acl")
 }
 
-/// Load `acl_file` (`auth_acl.c` `acl_init` / `load_acl_file`).
+/// Load `acl_file` (`auth_acl.c` `acl_init` / `load_acl_file`): the file's bytes, as MIT's
+/// `fgets` reads them, whether or not they are UTF-8. A directory opens, and its first read fails,
+/// which MIT's `get_line` takes for the end: an ACL with no line.
 ///
 /// `None` or an empty path is self-only.
 /// MIT `main` (`ovsec_kadmd.c:497-497`): an empty `acl_file` becomes NULL.
 /// MIT `acl_init` (`auth_acl.c:554-555`): a NULL ACL file → `KRB5_PLUGIN_NO_HANDLE`.
-/// A missing path is MIT `Cannot open … while initializing ACL file`.
+/// MIT `load_acl_file` (`auth_acl.c:398-405`): a file that does not open is logged as
+/// `<strerror> while opening ACL file <fname>`, and the context's message is `Cannot open`.
 ///
 /// # Errors
 ///
-/// [`Error::AclParse`] when the file cannot be read or does not load.
+/// [`Error::AclParse`] when the file does not open or a line does not load. Its lines but the
+/// last are what MIT logs (`parse_entry`'s message, `load_acl_file`'s); the last is the line
+/// MIT's `fail_to_start` prints and logs: `Cannot open FNAME: <strerror>`, or `FNAME: syntax
+/// error at line N <…>`, then ` while initializing ACL file, aborting`.
 pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<Acl, Error> {
     let Some(path) = acl_file else {
         return Ok(Acl::none());
@@ -177,27 +183,26 @@ pub fn acl_for_store(realm: &str, acl_file: Option<&std::path::Path>) -> Result<
     if path.as_os_str().is_empty() {
         return Ok(Acl::none());
     }
-    let text = match std::fs::read_to_string(path) {
-        Ok(t) => t,
+    let fname = path.display().to_string();
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) if e.kind() == std::io::ErrorKind::IsADirectory => Vec::new(),
         Err(e) => {
-            let why = if e.kind() == std::io::ErrorKind::NotFound {
-                "No such file or directory".to_string()
-            } else {
-                e.to_string()
-            };
+            let text = e.to_string();
+            let why = text
+                .rsplit_once(" (os error ")
+                .map_or(text.as_str(), |(t, _)| t);
             return Err(Error::AclParse(format!(
-                "Cannot open {}: {why} while initializing ACL file, aborting",
-                path.display()
+                "{why} while opening ACL file {fname}\n\
+                 Cannot open {fname}: {why} while initializing ACL file, aborting"
             )));
         }
     };
-    Acl::parse_located(&text, realm).map_err(|e| {
-        let snippet: String = e.line.chars().take(10).collect();
+    Acl::parse_located(&bytes, realm, &fname).map_err(|e| {
+        let located = e.located(&fname);
+        let logged = e.message.map(|m| format!("{m}\n")).unwrap_or_default();
         Error::AclParse(format!(
-            "{}\n{}: syntax error at line {} <{snippet}...> while initializing ACL file, aborting",
-            e.message,
-            path.display(),
-            e.lineno
+            "{logged}{located}\n{located} while initializing ACL file, aborting"
         ))
     })
 }
