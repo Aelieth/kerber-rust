@@ -8,6 +8,7 @@ use std::path::Path;
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_types::{PrincipalName, Realm, kerberos_string_from_bytes};
+use zeroize::Zeroizing;
 
 use crate::secret_file::write_secret_file;
 
@@ -45,8 +46,11 @@ pub struct Keytab {
     pub entries: Vec<KeytabEntry>,
     /// Count of entries skipped because the etype is unknown / refused.
     pub skipped_unknown_etype: usize,
-    /// Unknown-etype records (parsed-entry count before each raw blob).
-    pub unparsed: Vec<(usize, Vec<u8>)>,
+    /// Unknown-etype records (parsed-entry count before each raw blob), key included, each wiped
+    /// when it drops.
+    /// MIT `krb5_free_keytab_entry_contents` (`ktfr_entry.c:38-41`): every entry's key is zeroed
+    /// when it is freed.
+    pub unparsed: Vec<(usize, Zeroizing<Vec<u8>>)>,
 }
 
 impl std::fmt::Debug for Keytab {
@@ -141,11 +145,12 @@ impl Keytab {
             .map(|(kvno, princ, ts, etype, _)| (kvno, princ, ts, etype))
     }
 
-    /// The key bytes of an unknown-etype record (length prefix included).
+    /// The key bytes of an unknown-etype record (length prefix included), borrowed from it.
     #[must_use]
-    pub fn unparsed_key(raw: &[u8], version: u16) -> Option<Vec<u8>> {
+    pub fn unparsed_key(raw: &[u8], version: u16) -> Option<&[u8]> {
         let body = raw.get(4..)?;
-        parse_unparsed_meta(body, version).ok().map(|m| m.4)
+        let key = parse_unparsed_meta(body, version).ok()?.4;
+        body.get(key)
     }
 
     /// File-order slots: parsed entries interleaved with unknown-etype blobs.
@@ -266,7 +271,7 @@ impl Keytab {
             match parse_entry(&bytes[i..i + size], version) {
                 Ok(e) => entries.push(e),
                 Err(EntryErr::UnsupportedEtype) => {
-                    unparsed.push((entries.len(), bytes[rec..i + size].to_vec()));
+                    unparsed.push((entries.len(), Zeroizing::new(bytes[rec..i + size].to_vec())));
                 }
                 Err(EntryErr::Io(e)) => return Err(e),
             }
@@ -313,7 +318,9 @@ impl From<io::Error> for EntryErr {
     }
 }
 
-type UnparsedMeta = (u32, String, u32, i32, Vec<u8>);
+/// An unknown-etype record's kvno, principal, timestamp and enctype, and where its key lies in it
+/// (no copy of the key is made).
+type UnparsedMeta = (u32, String, u32, i32, std::ops::Range<usize>);
 
 fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<UnparsedMeta, io::Error> {
     let mut i = 0;
@@ -331,7 +338,7 @@ fn parse_unparsed_meta(body: &[u8], ver: u16) -> Result<UnparsedMeta, io::Error>
     let kvno8 = body[i];
     i += 1;
     let enctype = i32::from(take_u16(body, &mut i)?);
-    let keybytes = take_counted16(body, &mut i)?;
+    let keybytes = take_counted16_range(body, &mut i)?;
     let kvno = if ver == 0x0502 && i + 4 <= body.len() {
         take_u32(body, &mut i)?
     } else {
@@ -373,7 +380,7 @@ fn parse_entry(body: &[u8], ver: u16) -> Result<KeytabEntry, EntryErr> {
     let kvno8 = body[i];
     i += 1;
     let enctype = i32::from(take_u16(body, &mut i)?);
-    let keybytes = take_counted16(body, &mut i)?;
+    let keybytes = Zeroizing::new(take_counted16(body, &mut i)?);
     let kvno = if ver == 0x0502 && i + 4 <= body.len() {
         take_u32(body, &mut i)?
     } else {
@@ -442,6 +449,16 @@ fn take_counted16(b: &[u8], i: &mut usize) -> Result<Vec<u8>, io::Error> {
     let v = b[*i..*i + n].to_vec();
     *i += n;
     Ok(v)
+}
+
+fn take_counted16_range(b: &[u8], i: &mut usize) -> Result<std::ops::Range<usize>, io::Error> {
+    let n = usize::from(take_u16(b, i)?);
+    if *i + n > b.len() {
+        return Err(eof());
+    }
+    let r = *i..*i + n;
+    *i += n;
+    Ok(r)
 }
 
 fn eof() -> io::Error {
@@ -555,7 +572,7 @@ mod tests {
         let parsed = Keytab::parse(&bytes).unwrap();
         assert_eq!(parsed.entries.len(), 1);
         assert_eq!(parsed.unparsed.len(), 1);
-        assert_eq!(parsed.unparsed[0].1, rec);
+        assert_eq!(*parsed.unparsed[0].1, rec);
         let extra = Keytab::single(
             ascii("KERBER.TEST"),
             PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["host"]),
@@ -568,7 +585,7 @@ mod tests {
         let again = Keytab::parse(&out).unwrap();
         assert_eq!(again.entries.len(), 2);
         assert_eq!(again.unparsed.len(), 1);
-        assert_eq!(again.unparsed[0].1, rec);
+        assert_eq!(*again.unparsed[0].1, rec);
         assert!(out.windows(rec.len()).any(|w| w == rec.as_slice()));
     }
 
@@ -600,7 +617,31 @@ mod tests {
         assert_eq!(parsed.slots().len(), 2);
         assert!(matches!(parsed.slots()[0], KeytabSlot::Entry(_)));
         assert!(matches!(parsed.slots()[1], KeytabSlot::Entry(_)));
-        assert_eq!(parsed.unparsed, [] as [(usize, Vec<u8>); 0]);
+        assert_eq!(parsed.unparsed, [] as [(usize, Zeroizing<Vec<u8>>); 0]);
+    }
+
+    /// The key of a record kept raw is a slice of that record, not a copy, so the record's own
+    /// wipe (it is `Zeroizing`) is the wipe of the only copy of the key.
+    #[test]
+    fn an_unparsed_records_key_is_a_slice_of_the_record() {
+        use zeroize::Zeroize as _;
+        let mut body = marshal_entry(&sample_entry(), 0x0502);
+        patch_etype(&mut body, 99);
+        let mut bytes = 0x0502u16.to_be_bytes().to_vec();
+        bytes.extend_from_slice(&i32::try_from(body.len()).unwrap().to_be_bytes());
+        bytes.extend_from_slice(&body);
+        let mut kt = Keytab::parse(&bytes).unwrap();
+        let raw = &kt.unparsed[0].1;
+        let key = Keytab::unparsed_key(raw, kt.version).unwrap();
+        assert_eq!(key, [9u8; 16]);
+        let (start, at) = (raw.as_ptr().addr(), key.as_ptr().addr());
+        assert!(
+            start <= at && at + key.len() <= start + raw.len(),
+            "the key was copied out of its record"
+        );
+        let (off, n) = (at - start, key.len());
+        kt.unparsed[0].1.as_mut_slice().zeroize();
+        assert!(kt.unparsed[0].1[off..off + n].iter().all(|&b| b == 0));
     }
 
     #[test]
@@ -615,7 +656,7 @@ mod tests {
             version: 0x0502,
             entries: Vec::new(),
             skipped_unknown_etype: 1,
-            unparsed: vec![(0, vec![0x13, 0x37, 0xc0, 0xde])],
+            unparsed: vec![(0, Zeroizing::new(vec![0x13, 0x37, 0xc0, 0xde]))],
         };
         assert_eq!(
             format!("{kt:?}"),

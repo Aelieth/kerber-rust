@@ -51,6 +51,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **client/protocol.** `klist -k` formats a key only under `-K`, from the keytab's own bytes. The
+  reader wipes its key copies and raw records; `klist` its file bytes and listing (not stdout's
+  buffer). Settled (output unchanged); units.
 - **admin.** `kpasswd` reads `KRB5_KPASSWD_TARGET`, the gates' set-password target, only in a
   `krb5-admin/test-hooks` build (the field strings check looks for it); a release `kpasswd` changes
   the client's own password, as MIT's. Settled; units.

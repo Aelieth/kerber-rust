@@ -567,7 +567,8 @@ mod tests {
             kvno: 1,
             key: ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap(),
         });
-        kt.unparsed.push((0, vec![0, 0, 0, 4, 0, 0, 0, 0]));
+        kt.unparsed
+            .push((0, zeroize::Zeroizing::new(vec![0, 0, 0, 4, 0, 0, 0, 0])));
         let text = format_list(&kt, false, false, false);
         assert!(text.contains("   1    - (unparsed)"), "{text}");
         assert!(text.contains("   2    1 user@KERBER.TEST"), "{text}");
@@ -589,7 +590,7 @@ mod tests {
         let mut rec = i32::try_from(body.len()).unwrap().to_be_bytes().to_vec();
         rec.extend_from_slice(&body);
         kt.unparsed.clear();
-        kt.unparsed.push((0, rec));
+        kt.unparsed.push((0, zeroize::Zeroizing::new(rec)));
         let text = format_list(&kt, false, true, false);
         assert!(
             text.contains("   1    7 user@KERBER.TEST Unknown (99)"),
@@ -597,7 +598,7 @@ mod tests {
         );
         assert!(text.contains("   2    1 user@KERBER.TEST"), "{text}");
         run_line(&mut kt, "delent 1", &mut io::empty()).unwrap();
-        assert_eq!(kt.unparsed, [] as [(usize, Vec<u8>); 0]);
+        assert_eq!(kt.unparsed, [] as [(usize, zeroize::Zeroizing<Vec<u8>>); 0]);
         assert_eq!(kt.entries.len(), 1);
     }
 }

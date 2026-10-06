@@ -24,6 +24,7 @@ use krb5_config::{CcSpec, parse_ccspec, resolve_ccspec};
 use krb5_crypto::EncryptionType;
 use krb5_protocol::{CcacheCred, Keytab, KeytabSlot};
 use krb5_types::{Ticket, TicketFlags};
+use zeroize::Zeroizing;
 
 /// The width of a printed time: MIT's `timestamp_width` in the C locale (`%x %X`).
 const TIMESTAMP_WIDTH: usize = 17;
@@ -386,6 +387,10 @@ fn printtime(t: u32) -> String {
 /// MIT `do_keytab` (`klist.c:263-358`): the keytab's name, the header (`-t` adds the timestamp
 /// column), then one line per entry: the key version, `-t`'s timestamp, the principal, `-e`'s
 /// enctype and `-K`'s key.
+/// MIT `do_keytab` (`klist.c:338-343`): the key is printed only under `-K`. Here it is formatted
+/// only then, from the keytab's own bytes; the file's bytes are wiped right after parsing, and the
+/// listing, sized before it is written so that no reallocation leaves a key's hex behind, once
+/// it is printed.
 fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
     let (ktname, doing) = match name {
         Some(n) => (n.to_owned(), format!("while resolving keytab {n}")),
@@ -402,11 +407,12 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
             return 1;
         }
     };
-    let mut out = format!("Keytab name: {}\n", kt.full_name());
+    let mut head = format!("Keytab name: {}\n", kt.full_name());
     let keytab = match &kt {
         KeytabName::Memory(_) => Keytab::default(),
         KeytabName::File(path) => {
             let read = std::fs::read(path)
+                .map(Zeroizing::new)
                 .map_err(|e| keytab_read_error(&e, &path.display().to_string()))
                 .and_then(|b| {
                     Keytab::parse(&b).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
@@ -414,7 +420,7 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
             match read {
                 Ok(k) => k,
                 Err(e) => {
-                    print!("{out}");
+                    print!("{head}");
                     eprintln!("{prog}: {e} while starting keytab scan");
                     return 1;
                 }
@@ -423,20 +429,21 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
     };
     if args.times {
         let _ = writeln!(
-            out,
+            head,
             "KVNO Timestamp{}Principal",
             " ".repeat(TIMESTAMP_WIDTH + 2 - "Timestamp".len() - 1)
         );
         let _ = writeln!(
-            out,
+            head,
             "---- {} {}",
             "-".repeat(TIMESTAMP_WIDTH),
             "-".repeat(78 - TIMESTAMP_WIDTH - "KVNO".len() - 1)
         );
     } else {
-        out.push_str("KVNO Principal\n");
-        let _ = writeln!(out, "---- {}", "-".repeat(74));
+        head.push_str("KVNO Principal\n");
+        let _ = writeln!(head, "---- {}", "-".repeat(74));
     }
+    let mut lines = Vec::new();
     for slot in keytab.slots() {
         let (kvno, princ, timestamp, etype, key) = match slot {
             KeytabSlot::Entry(e) => (
@@ -445,35 +452,58 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
                     .unparse_with_realm(&String::from_utf8_lossy(e.realm.as_bytes())),
                 e.timestamp,
                 e.key.etype().to_iana(),
-                e.key.as_bytes().to_vec(),
+                args.keys.then(|| e.key.as_bytes()),
             ),
             KeytabSlot::Unparsed(raw) => {
                 let Some((kvno, princ, ts, etype)) = Keytab::unparsed_meta(raw, keytab.version)
                 else {
                     continue;
                 };
-                let key = Keytab::unparsed_key(raw, keytab.version).unwrap_or_default();
+                let key = if args.keys {
+                    Keytab::unparsed_key(raw, keytab.version)
+                } else {
+                    None
+                };
                 (kvno, princ, ts, etype, key)
             }
         };
-        let _ = write!(out, "{kvno:4} ");
+        let mut line = format!("{kvno:4} ");
         if args.times {
-            let _ = write!(out, "{} ", printtime(timestamp));
+            let _ = write!(line, "{} ", printtime(timestamp));
         }
-        out.push_str(&princ);
+        line.push_str(&princ);
         if args.etype {
-            let _ = write!(out, " ({}) ", etype_string(etype));
+            let _ = write!(line, " ({}) ", etype_string(etype));
         }
+        lines.push((line, key));
+    }
+    // ` (0x`, two hex digits a key octet, `)`.
+    let hex_len = |key: Option<&[u8]>| {
+        if args.keys {
+            5 + 2 * key.map_or(0, <[u8]>::len)
+        } else {
+            0
+        }
+    };
+    let size = head.len()
+        + lines
+            .iter()
+            .map(|(line, key)| line.len() + hex_len(*key) + 1)
+            .sum::<usize>();
+    let mut out = Zeroizing::new(String::with_capacity(size));
+    out.push_str(&head);
+    for (line, key) in &lines {
+        out.push_str(line);
         if args.keys {
             out.push_str(" (0x");
-            for b in &key {
+            for b in key.unwrap_or_default() {
                 let _ = write!(out, "{b:02x}");
             }
             out.push(')');
         }
         out.push('\n');
     }
-    print!("{out}");
+    print!("{}", out.as_str());
     0
 }
 
