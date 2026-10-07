@@ -42,6 +42,7 @@ mod testenv;
 #[cfg(test)]
 mod tests;
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -160,6 +161,19 @@ impl ProfileError {
     }
 }
 
+/// Which transports a located KDC is contacted on.
+///
+/// A profile `kdc` host uses both. An SRV `_udp` target is UDP only, and an SRV `_tcp` target is TCP only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KdcTransport {
+    /// UDP only.
+    Udp,
+    /// TCP only.
+    Tcp,
+    /// UDP and TCP.
+    Either,
+}
+
 /// One KDC (or kpasswd / admin) endpoint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Endpoint {
@@ -167,17 +181,85 @@ pub struct Endpoint {
     pub host: String,
     /// UDP/TCP port.
     pub port: u16,
+    /// Which transports to use. Profile hosts are [`KdcTransport::Either`].
+    pub transport: KdcTransport,
 }
 
 impl Endpoint {
-    /// `host:88`.
+    /// `host:88` on UDP and TCP.
     #[must_use]
     pub fn kdc(host: impl Into<String>) -> Self {
         Self {
             host: host.into(),
             port: 88,
+            transport: KdcTransport::Either,
         }
     }
+}
+
+thread_local! {
+    static HANDED_KDCS: Cell<Option<(String, Vec<Endpoint>)>> = const { Cell::new(None) };
+}
+
+/// Keep `list` for the next [`take_handed_kdcs`] of `realm`.
+///
+/// MIT `k5_locate_server` runs once per `k5_sendto_kdc`. A caller that already located the realm
+/// hands that list down so the send does not look it up again.
+pub fn hand_kdcs(realm: &str, list: Vec<Endpoint>) {
+    HANDED_KDCS.with(|cell| cell.set(Some((realm.to_owned(), list))));
+}
+
+/// Whether a handed list for `realm` starts with `host`:`port`.
+#[must_use]
+pub fn handed_matches(realm: &str, host: &str, port: u16) -> bool {
+    HANDED_KDCS.with(|cell| {
+        let cur = cell.replace(None);
+        let matches = cur.as_ref().is_some_and(|(got, list)| {
+            got == realm
+                && list
+                    .first()
+                    .is_some_and(|ep| ep.host == host && ep.port == port)
+        });
+        cell.set(cur);
+        matches
+    })
+}
+
+/// The handed list when it is for `realm` and starts with `host`:`port`. Any other handed list is dropped.
+#[must_use]
+pub fn take_handed_kdcs(realm: &str, host: &str, port: u16) -> Option<Vec<Endpoint>> {
+    HANDED_KDCS.with(|cell| {
+        let cur = cell.replace(None)?;
+        let starts = cur
+            .1
+            .first()
+            .is_some_and(|ep| cur.0 == realm && ep.host == host && ep.port == port);
+        starts.then_some(cur.1)
+    })
+}
+
+#[cfg(test)]
+mod handed_kdcs {
+    use super::{Endpoint, clear_handed, hand_kdcs, handed_matches, take_handed_kdcs};
+
+    #[test]
+    fn a_handed_list_is_taken_once_for_its_first_address() {
+        clear_handed();
+        hand_kdcs(
+            "KERBER.TEST",
+            vec![Endpoint::kdc("192.0.2.1"), Endpoint::kdc("192.0.2.2")],
+        );
+        assert!(handed_matches("KERBER.TEST", "192.0.2.1", 88));
+        assert!(!handed_matches("OTHER.TEST", "192.0.2.1", 88));
+        let got = take_handed_kdcs("KERBER.TEST", "192.0.2.1", 88).unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(take_handed_kdcs("KERBER.TEST", "192.0.2.1", 88).is_none());
+    }
+}
+
+/// Drop a handed list that will not be sent.
+pub fn clear_handed() {
+    HANDED_KDCS.with(|cell| cell.set(None));
 }
 
 /// Parsed `[libdefaults]` plus realm stanzas.

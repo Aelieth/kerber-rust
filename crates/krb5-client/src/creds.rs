@@ -215,17 +215,21 @@ impl OpenCache {
 ///
 /// [`Krb5Error`] `KRB5_REALM_UNKNOWN` when neither `krb5.conf` nor DNS names a KDC.
 pub fn kdc_for_realm(realm: &str) -> Result<KdcAddr, Krb5Error> {
-    krb5_config::discover_kdc(realm)
-        .map(|ep| KdcAddr {
-            host: ep.host,
-            port: ep.port,
-        })
-        .ok_or_else(|| {
-            Krb5Error::new(
-                Code::RealmUnknown,
-                format!("Cannot find KDC for realm \"{realm}\""),
-            )
-        })
+    let found = krb5_config::discover_kdc(realm);
+    let Some(ep) = found.first() else {
+        krb5_config::clear_handed();
+        return Err(Krb5Error::new(
+            Code::RealmUnknown,
+            format!("Cannot find KDC for realm \"{realm}\""),
+        ));
+    };
+    let addr = KdcAddr {
+        host: ep.host.clone(),
+        port: ep.port,
+    };
+    // The send consumes this list. A second discover would repeat the SRV queries.
+    krb5_config::hand_kdcs(realm, found);
+    Ok(addr)
 }
 
 /// A cached credential as the TGT [`AsOutcome`] a TGS request presents.

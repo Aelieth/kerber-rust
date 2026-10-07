@@ -662,13 +662,20 @@ fn authenticate_srealm(out: &TgsOutcome) -> Result<(), Error> {
 }
 
 fn kdc_for_realm(realm: &str, fallback: &KdcAddr) -> KdcAddr {
-    krb5_config::discover_kdc(realm).map_or_else(
-        || fallback.clone(),
-        |ep| KdcAddr {
-            host: ep.host,
-            port: ep.port,
-        },
-    )
+    if krb5_config::handed_matches(realm, &fallback.host, fallback.port) {
+        return fallback.clone();
+    }
+    let found = krb5_config::discover_kdc(realm);
+    let Some(ep) = found.first() else {
+        krb5_config::clear_handed();
+        return fallback.clone();
+    };
+    let addr = KdcAddr {
+        host: ep.host.clone(),
+        port: ep.port,
+    };
+    krb5_config::hand_kdcs(realm, found);
+    addr
 }
 
 /// One TGS-REQ as [`tgs_once`] sends it.

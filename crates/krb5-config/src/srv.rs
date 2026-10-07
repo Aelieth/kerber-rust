@@ -77,8 +77,13 @@ fn query_service(realm: &str, proto: &str, resolv: &Resolv) -> Find {
     // MIT `make_lookup_name` (`lib/krb5/os/dnssrv.c:50-78`): the name ends in `.` so the
     // search list is not appended.
     let name = format!("_kerberos.{proto}.{realm}.");
+    let transport = if proto == "_tcp" {
+        super::KdcTransport::Tcp
+    } else {
+        super::KdcTransport::Udp
+    };
     match search(&name, DNS_SRV, resolv) {
-        Ok(msg) => srv_targets(&msg),
+        Ok(msg) => srv_targets(&msg, transport),
         Err(_) => Find::None,
     }
 }
@@ -381,7 +386,7 @@ fn mit_host(host: &str) -> String {
     }
 }
 
-fn srv_targets(msg: &[u8]) -> Find {
+fn srv_targets(msg: &[u8], transport: super::KdcTransport) -> Find {
     let mut recs = parse_srv(msg);
     if recs.is_empty() {
         return Find::None;
@@ -399,6 +404,7 @@ fn srv_targets(msg: &[u8]) -> Find {
             .map(|i| Endpoint {
                 host: recs[i].0.clone(),
                 port: recs[i].2,
+                transport,
             })
             .collect(),
     )
@@ -774,6 +780,8 @@ mod tests {
         let found = locate_kdc_srv("EXAMPLE", &resolv_at(only)).unwrap();
         let hosts: Vec<_> = found.iter().map(|e| e.host.as_str()).collect();
         assert_eq!(hosts, vec!["..", "kdc.example"]);
+        assert_eq!(found[0].transport, crate::KdcTransport::Udp);
+        assert_eq!(found[1].transport, crate::KdcTransport::Tcp);
         assert_eq!(
             *hits.lock().unwrap(),
             2,

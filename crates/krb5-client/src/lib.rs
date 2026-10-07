@@ -1086,13 +1086,21 @@ pub fn local_host_addresses() -> Option<krb5_types::HostAddresses> {
 }
 
 fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
-    krb5_config::discover_kdc(realm).map_or_else(
-        || argv.clone(),
-        |ep| KdcAddr {
-            host: ep.host,
-            port: ep.port,
-        },
-    )
+    // `kdc_for_realm` already located this realm and handed the list to the send.
+    if krb5_config::handed_matches(realm, &argv.host, argv.port) {
+        return argv.clone();
+    }
+    let found = krb5_config::discover_kdc(realm);
+    let Some(ep) = found.first() else {
+        krb5_config::clear_handed();
+        return argv.clone();
+    };
+    let addr = KdcAddr {
+        host: ep.host.clone(),
+        port: ep.port,
+    };
+    krb5_config::hand_kdcs(realm, found);
+    addr
 }
 
 #[cfg(test)]
@@ -1130,7 +1138,10 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 88,
         };
-        let ep = krb5_config::discover_kdc_in([&path], "KERBER.TEST").unwrap();
+        let ep = krb5_config::discover_kdc_in([&path], "KERBER.TEST")
+            .into_iter()
+            .next()
+            .unwrap();
         let resolved = KdcAddr {
             host: ep.host,
             port: ep.port,

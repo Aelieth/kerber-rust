@@ -51,6 +51,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **client.** Every profile KDC is tried, or the SRV list when that profile list is empty. UDP then TCP. A `..` target is tried and skipped. HTTPS is not used. Settled beside MIT 1.22.2; units.
 - **client.** DNS SRV uses resolv.conf only, a random ID and a fresh UDP port, and ignores a wrong ID, question, or source. TC retries over TCP. `_kerberos._udp` then `_tcp`. Settled beside MIT 1.22.2; units.
 - **kdc/admin.** A release daemon's JSON log reads no `RUST_LOG` (`test-hooks` only) and no
   `NO_COLOR` (no `ansi`), as MIT's. Unit; strings check.

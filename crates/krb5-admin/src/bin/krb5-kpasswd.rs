@@ -77,14 +77,16 @@ fn run<R: BufRead, W: Write>(
         }
     };
     // MIT `k5_locate_server` (`locate_kdc.c:871-877`): a realm with no KDC is `KRB5_REALM_UNKNOWN`.
-    let Some(kdc) = conf
+    let Some(list) = conf
         .kdcs_for(&client.realm)
         .ok()
-        .and_then(|list| list.into_iter().next())
+        .filter(|list| !list.is_empty())
     else {
         eprintln!("{prog}: Cannot find KDC for requested realm getting initial ticket");
         return 1;
     };
+    let kdc = list[0].clone();
+    krb5_config::hand_kdcs(&client.realm, list);
     let old = match krb5_config::env_password() {
         Some(pw) => Zeroizing::new(pw),
         None => match prompter.hidden(&format!("Password for {}", client.display)) {
@@ -376,6 +378,7 @@ fn kpasswd_servers(conf: &Krb5Conf, realm: &str) -> Vec<Endpoint> {
         .map(|e| Endpoint {
             host: e.host.clone(),
             port: KPASSWD_PORT,
+            transport: e.transport,
         })
         .collect()
 }

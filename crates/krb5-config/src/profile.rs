@@ -769,6 +769,7 @@ fn parse_endpoint(v: &str) -> Endpoint {
         return Endpoint {
             host: h.to_owned(),
             port,
+            transport: super::KdcTransport::Either,
         };
     }
     Endpoint::kdc(v)
@@ -895,19 +896,24 @@ pub fn init_kdc_profile() -> Result<(), Error> {
     }
 }
 
-/// First KDC for `realm` from the given `krb5.conf` paths (merged).
+/// KDCs for `realm` from the given `krb5.conf` paths (merged).
+/// MIT `locate_server` (`lib/krb5/os/locate_kdc.c:823-836`): the profile `[realms] kdc` list when
+/// it has any entry, and DNS only when that list is empty. An unreadable profile or a failed
+/// lookup is an empty list. A `..` SRV target stays in the list.
 #[must_use]
 pub fn discover_kdc_in<P: AsRef<Path>>(
     paths: impl IntoIterator<Item = P>,
     realm: &str,
-) -> Option<Endpoint> {
-    let conf = load_krb5_conf_paths(paths).ok()?;
-    conf.kdcs_for(realm).ok()?.into_iter().next()
+) -> Vec<Endpoint> {
+    let Ok(conf) = load_krb5_conf_paths(paths) else {
+        return Vec::new();
+    };
+    conf.kdcs_for(realm).unwrap_or_default()
 }
 
-/// First KDC for `realm` from [`krb5_conf_paths`].
+/// KDCs for `realm` from [`krb5_conf_paths`], as [`discover_kdc_in`].
 #[must_use]
-pub fn discover_kdc(realm: &str) -> Option<Endpoint> {
+pub fn discover_kdc(realm: &str) -> Vec<Endpoint> {
     discover_kdc_in(krb5_conf_paths(), realm)
 }
 

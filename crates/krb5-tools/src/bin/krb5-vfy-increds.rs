@@ -64,13 +64,17 @@ fn run() -> Result<(), String> {
     let kt_path = env_ktname().unwrap_or_else(|| PathBuf::from("/etc/krb5.keytab"));
     let keytab = fs::read(&kt_path).ok().and_then(|b| Keytab::parse(&b).ok());
     let crealm = String::from_utf8_lossy(cred.client.0.as_bytes()).into_owned();
-    let addr = krb5_config::discover_kdc(&crealm).map_or_else(
+    let found = krb5_config::discover_kdc(&crealm);
+    let addr = found.first().map_or_else(
         || KdcAddr::new("127.0.0.1"),
         |ep| KdcAddr {
-            host: ep.host,
+            host: ep.host.clone(),
             port: ep.port,
         },
     );
+    if !found.is_empty() {
+        krb5_config::hand_kdcs(&crealm, found);
+    }
     verify_init_creds(
         &cred,
         server.as_ref().map(|(r, n)| (r, n)),
