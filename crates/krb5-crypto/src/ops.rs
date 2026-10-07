@@ -555,12 +555,16 @@ pub fn hmac_md5_arcfour_checksum(
         return Err(Error::InvalidKeyLength);
     }
     let mapped = crate::weak::arcfour_translate_usage(usage);
+    // MIT `krb5int_hmacmd5_checksum` (`lib/crypto/krb/checksum_hmac_md5.c:90-90`): the signing key is wiped before return.
     let ksign = if ctype == -137 {
         None
     } else {
-        Some(hmac_md5_simple(key, b"signaturekey\0")?)
+        Some(Zeroizing::new(hmac_md5_simple(key, b"signaturekey\0")?))
     };
-    let mac_key = ksign.as_deref().unwrap_or(key);
+    let mac_key = match &ksign {
+        Some(k) => k.as_slice(),
+        None => key,
+    };
     let mut hasher = Md5::new();
     hasher.update(mapped.to_le_bytes());
     hasher.update(message);

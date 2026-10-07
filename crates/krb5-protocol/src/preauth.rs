@@ -12,8 +12,9 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, SpakeGroup, checksum, cksumtype_is_keyed, decrypt,
-    encrypt, krb_fx_cf2, octetstring2key, p256_shared, pkinit_kdf_agile, spake_derive_key,
-    spake_keygen, spake_result, spake_thash_update, spake_wbytes, verify_checksum_type,
+    encrypt, hmac_md5_arcfour_checksum, krb_fx_cf2, octetstring2key, p256_shared, pkinit_kdf_agile,
+    spake_derive_key, spake_keygen, spake_result, spake_thash_update, spake_wbytes,
+    verify_checksum_type,
 };
 use krb5_types::{
     ApOptions, ApReq, AsReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey,
@@ -22,6 +23,9 @@ use krb5_types::{
 };
 
 use crate::error::Error;
+
+/// MIT `CKSUMTYPE_HMAC_MD5_ARCFOUR` (`krb5.hin`): RFC 4757's HMAC-MD5, -138.
+const CKSUMTYPE_HMAC_MD5_ARCFOUR: i32 = -138;
 
 /// Mix a FAST subkey with the armor ticket session key (RFC 6113).
 ///
@@ -777,6 +781,7 @@ pub fn pkinit_reply_key_agile(
 }
 
 /// PA-FOR-USER (S4U2Self) checksummed with the TGT session key (usage 17).
+/// MIT `make_pa_for_user_checksum` (`lib/krb5/krb/s4u_creds.c:130-133`): the checksum is HMAC-MD5 (`CKSUMTYPE_HMAC_MD5_ARCFOUR`, -138) whatever the key's type, as MS-SFU specifies.
 ///
 /// # Errors
 ///
@@ -790,14 +795,18 @@ pub fn pa_for_user(
 ) -> Result<PaData, Error> {
     let pkg = "Kerberos";
     let data = krb5_types::s4u::pa_for_user_cksum_data(&user, realm, pkg);
-    let usage = KeyUsage::new(ku::PA_FOR_USER)?;
-    let mic = checksum(session, usage, &data)?;
+    let mic = hmac_md5_arcfour_checksum(
+        session.as_bytes(),
+        ku::PA_FOR_USER,
+        &data,
+        CKSUMTYPE_HMAC_MD5_ARCFOUR,
+    )?;
     let for_user = krb5_types::s4u::PaForUser {
         user_name: user,
         user_realm: krb5_types::try_ascii(realm)
             .map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         cksum: Checksum {
-            cksumtype: session.etype().checksum_type(),
+            cksumtype: CKSUMTYPE_HMAC_MD5_ARCFOUR,
             checksum: mic.into(),
         },
         auth_package: krb5_types::try_ascii(pkg)

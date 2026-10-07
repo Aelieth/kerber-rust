@@ -14,7 +14,8 @@ use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, unkeyed_checksum};
 use krb5_protocol::{
-    AsOutcome, KdcAddr, pa_s4u_x509_user, tgs_s4u, tgs_s4u2proxy, verify_s4u2self_reply,
+    AsOutcome, KdcAddr, pa_for_user, pa_s4u_x509_user, tgs_s4u, tgs_s4u2proxy,
+    verify_s4u2self_reply,
 };
 use krb5_types::{
     EncKdcRepPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, Microseconds, OctetString,
@@ -291,4 +292,37 @@ fn s4u2proxy_outer_padata_is_1_136_167() {
         vec![pa::TGS_REQ, pa::FX_FAST, pa::PAC_OPTIONS],
         "S4U2Proxy FAST outer TGS padata is [1, 136, 167], got {types:?}"
     );
+}
+
+/// MIT `make_pa_for_user_checksum` (`lib/krb5/krb/s4u_creds.c:130-133`): HMAC-MD5 under the TGT session key whatever its type, key usage 17.
+/// The checksums below are MIT 1.22.2's own for these keys and `user@KERBER.TEST`, read live
+/// from its `krb5_c_make_checksum`.
+#[test]
+fn pa_for_user_checksum_is_mits_hmac_md5_for_any_session_key() {
+    let unhex = |s: &str| -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    };
+    for (etype, start, mit) in [
+        (
+            EncryptionType::Aes256CtsHmacSha384192,
+            0x00u8,
+            "4839F2E864BE1C971C5E1847A110EF06",
+        ),
+        (
+            EncryptionType::Aes256CtsHmacSha196,
+            0x20u8,
+            "BEA58DD0117725D78C8348CF6A32B6EF",
+        ),
+    ] {
+        let bytes: Vec<u8> = (0..32u8).map(|i| start + i).collect();
+        let session = ProtocolKey::from_bytes(etype, &bytes).unwrap();
+        let padata = pa_for_user(&session, user(), "KERBER.TEST").unwrap();
+        assert_eq!(padata.padata_type, pa::FOR_USER);
+        let for_user: krb5_types::s4u::PaForUser = decode(padata.padata_value.as_ref()).unwrap();
+        assert_eq!(for_user.cksum.cksumtype, -138, "CKSUMTYPE_HMAC_MD5_ARCFOUR");
+        assert_eq!(for_user.cksum.checksum.as_ref(), unhex(mit).as_slice());
+    }
 }

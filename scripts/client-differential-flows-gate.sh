@@ -252,6 +252,9 @@ docker exec -e KRB5_CONFIG=/tmp/proxy-krb5.conf "$NAME" \
     || die "Rust kvno -U failed"
 save_cap rust-kvno_s4u
 compare_flow kvno_s4u
+echo "==== kvno -U PA-FOR-USER checksum is HMAC-MD5 (-138) as MIT's make_pa_for_user_checksum ===="
+echo "$CMP" | grep -F 'SHAPE_MATCH pa_for_user_cksumtype=-138' \
+    || die "kvno -U PA-FOR-USER checksum type differs from MIT's -138"
 
 echo "==== flow:kvno_u2u ===="
 docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf "$NAME" \
