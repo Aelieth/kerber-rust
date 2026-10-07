@@ -1836,3 +1836,26 @@ fn init_text_is_the_failed_init_s_code_text() {
     let denied = crate::Error::Io(std::io::Error::from_raw_os_error(13));
     assert_eq!(denied.init_text(), "Permission denied");
 }
+
+/// MIT `encts_disabled` (`lib/krb5/krb/get_in_tkt.c:757-772`): the realm boolean, default false, and a value that is not a boolean stays false.
+#[test]
+fn disable_encrypted_timestamp_is_a_realm_boolean() {
+    let off = Krb5Conf::parse("[libdefaults]\n    default_realm = KERBER.TEST\n").unwrap();
+    assert!(!off.encrypted_timestamp_disabled("KERBER.TEST"));
+    let on = Krb5Conf::parse(
+        "[realms]\n    KERBER.TEST = {\n        disable_encrypted_timestamp = true\n    }\n",
+    )
+    .unwrap();
+    assert!(on.encrypted_timestamp_disabled("KERBER.TEST"));
+    assert!(!on.encrypted_timestamp_disabled("OTHER.TEST"));
+    let bad = Krb5Conf::parse(
+        "[realms]\n    KERBER.TEST = {\n        disable_encrypted_timestamp = maybe\n        disable_encrypted_timestamp = true\n    }\n",
+    )
+    .unwrap();
+    assert!(!bad.encrypted_timestamp_disabled("KERBER.TEST"));
+    let later = Krb5Conf::parse(
+        "[realms]\n    KERBER.TEST = {\n        disable_encrypted_timestamp = yes\n        disable_encrypted_timestamp = no\n    }\n",
+    )
+    .unwrap();
+    assert!(later.encrypted_timestamp_disabled("KERBER.TEST"));
+}

@@ -68,6 +68,14 @@ pub enum Error {
     /// Reply too short to classify.
     #[error("KDC reply truncated")]
     TruncatedReply,
+    /// The KDC's error carried PA-FX-FAST and this request had an armor cache but no armor key.
+    /// MIT `k5_upgrade_to_fast_p` (`lib/krb5/krb/fast.c:677-688`): that answer restarts the exchange with FAST. `as_exchange` does not return it.
+    #[error("FAST upgrade")]
+    FastUpgrade,
+    /// Encrypted timestamp is off for the client realm.
+    /// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:68-73`): `KRB5_PREAUTH_FAILED`, "Encrypted timestamp is disabled".
+    #[error("Encrypted timestamp is disabled")]
+    EnctsDisabled,
     /// I/O from keytab/ccache.
     #[error("file: {0}")]
     File(#[from] io::Error),
@@ -101,6 +109,8 @@ impl Clone for Error {
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
             Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
             Self::TruncatedReply => Self::TruncatedReply,
+            Self::FastUpgrade => Self::FastUpgrade,
+            Self::EnctsDisabled => Self::EnctsDisabled,
             Self::File(e) => Self::Io {
                 message: e.to_string(),
                 kind: e.kind(),

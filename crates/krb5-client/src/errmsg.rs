@@ -125,6 +125,14 @@ impl Krb5Error {
                 }
                 Self::new(Code::Kdc(*code), kdc_error_text(*code))
             }
+            krb5_protocol::Error::EnctsDisabled => {
+                // MIT `krb5_vwrap_error_message` (`lib/krb5/krb/kerrs.c:116-119`): the saved message is kept after the prefix and a colon.
+                // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:718-721`): that prefix is "Pre-authentication failed" when encrypted timestamp saved the failure.
+                Self::new(
+                    Code::Kdc(krb5_types::err::PREAUTH_FAILED),
+                    "Pre-authentication failed: Encrypted timestamp is disabled",
+                )
+            }
             krb5_protocol::Error::ReplyIntegrity => Self::of(Code::BadIntegrity),
             krb5_protocol::Error::Io { .. } => Self::new(
                 Code::KdcUnreach,

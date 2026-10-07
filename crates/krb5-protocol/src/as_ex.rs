@@ -172,7 +172,7 @@ mod pkinit_client_drop_tests;
 /// neither AS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
 /// [`Error::Crypto`] when a key cannot be derived or another crypto step fails.
 pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], None)
+    wrap_as(req, &[], None, false)
 }
 
 /// [`as_exchange`] using long-term keys (keytab).
@@ -194,7 +194,7 @@ pub fn as_exchange_with_keys(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, keys, None)
+    wrap_as(req, keys, None, false)
 }
 
 /// AS-REQ using long-term keys (keytab), not a password.
@@ -232,6 +232,7 @@ pub fn as_exchange_key(
         },
         keys,
         None,
+        false,
     )
 }
 
@@ -250,7 +251,41 @@ pub fn as_exchange_prompted(
     req: &AsRequest<'_>,
     prompt: &mut PasswordPrompt<'_>,
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], Some(prompt))
+    wrap_as(req, &[], Some(prompt), false)
+}
+
+/// [`as_exchange`] that returns [`Error::FastUpgrade`] when the KDC's error offers PA-FX-FAST
+/// and `req` has no armor key yet, before a password is read or a second request is sent.
+///
+/// # Errors
+///
+/// As [`as_exchange`], or [`Error::FastUpgrade`] for that restart.
+pub fn as_exchange_defer_fast(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
+    wrap_as(req, &[], None, true)
+}
+
+/// [`as_exchange_prompted`] with the same FAST deferral as [`as_exchange_defer_fast`].
+///
+/// # Errors
+///
+/// As [`as_exchange_prompted`], or [`Error::FastUpgrade`] before the prompt.
+pub fn as_exchange_prompted_defer_fast(
+    req: &AsRequest<'_>,
+    prompt: &mut PasswordPrompt<'_>,
+) -> Result<AsOutcome, Error> {
+    wrap_as(req, &[], Some(prompt), true)
+}
+
+/// [`as_exchange_with_keys`] with the same FAST deferral as [`as_exchange_defer_fast`].
+///
+/// # Errors
+///
+/// As [`as_exchange_with_keys`], or [`Error::FastUpgrade`].
+pub fn as_exchange_with_keys_defer_fast(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+) -> Result<AsOutcome, Error> {
+    wrap_as(req, keys, None, true)
 }
 
 /// Reads the AS password when the exchange first needs it.
@@ -260,11 +295,12 @@ fn wrap_as(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     prompt: Option<&mut PasswordPrompt<'_>>,
+    defer_fast: bool,
 ) -> Result<AsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
-    let result = as_exchange_inner(req, keys, prompt);
+    let result = as_exchange_inner(req, keys, prompt, defer_fast);
     emit(
         krb5_log::events::PROTOCOL_AS,
         &correlation_id,
@@ -313,6 +349,7 @@ fn as_exchange_inner(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     prompt: Option<&mut PasswordPrompt<'_>>,
+    defer_fast: bool,
 ) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     refuse_spake_combo(req)?;
@@ -353,6 +390,10 @@ fn as_exchange_inner(
     {
         clock.note(e, false);
     }
+    // MIT `k5_upgrade_to_fast_p` (`lib/krb5/krb/fast.c:677-688`): an error that carries PA-FX-FAST, with armor available and no armor key yet, restarts before preauth.
+    if defer_fast && req.fast_armor.is_none() && error_offers_fx_fast(&msg) {
+        return Err(Error::FastUpgrade);
+    }
     // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): no listed mechanism means `KRB5_PREAUTH_FAILED`, and the password prompter is not called.
     if let KdcMsg::Error(e) = &msg
         && e.error_code == err::PREAUTH_REQUIRED
@@ -360,7 +401,7 @@ fn as_exchange_inner(
     {
         return Err(preauth_failed());
     }
-    let needs_key = match &msg {
+    let mut needs_key = match &msg {
         KdcMsg::AsRep(_) => {
             refuse_spake_skip(req.want_spake)?;
             true
@@ -368,6 +409,13 @@ fn as_exchange_inner(
         KdcMsg::Error(e) => e.error_code == err::PREAUTH_REQUIRED || spake_more(e),
         KdcMsg::TgsRep => false,
     };
+    // MIT `encts_prep_questions` (`lib/krb5/krb/preauth_encts.c:44-45`): encrypted timestamp asks for no key when the realm disables it.
+    if let KdcMsg::Error(e) = &msg
+        && encrypted_timestamp_disabled(req.realm)
+        && chosen_preauth(req, e) == Some(pa::ENC_TIMESTAMP)
+    {
+        needs_key = false;
+    }
     with_prompted(req, prompt.filter(|_| needs_key), |req| match msg {
         KdcMsg::AsRep(rep) => {
             trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
@@ -595,6 +643,10 @@ fn continue_preauth(
         && !method.iter().any(|p| p.padata_type == pa::ENC_TIMESTAMP)
     {
         return Err(preauth_failed());
+    }
+    // MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:68-73`): the realm's disable fails the mechanism, with no timestamp.
+    if encrypted_timestamp_disabled(req.realm) {
+        return Err(Error::EnctsDisabled);
     }
     let (etype, salt, params) =
         select_s2k(preauth_err, &salt_cname(&req.cname), req.realm, etypes)?;
@@ -879,6 +931,34 @@ fn continue_pkinit(
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
+}
+
+/// MIT `k5_upgrade_to_fast_p` (`lib/krb5/krb/fast.c:686-687`): the error's padata lists PA-FX-FAST.
+fn error_offers_fx_fast(msg: &KdcMsg) -> bool {
+    let KdcMsg::Error(e) = msg else {
+        return false;
+    };
+    method_from_error(e).is_ok_and(|m| m.iter().any(|p| p.padata_type == pa::FX_FAST))
+}
+
+/// MIT `encts_disabled` (`lib/krb5/krb/get_in_tkt.c:757-772`): the client realm's boolean, default false.
+fn encrypted_timestamp_disabled(realm: &str) -> bool {
+    krb5_config::load_krb5_conf().is_some_and(|c| c.encrypted_timestamp_disabled(realm))
+}
+
+/// The first real mechanism the hint will run.
+/// MIT `sort_krb5_padata_sequence` (`lib/krb5/krb/get_in_tkt.c:400-471`): preferred types lead, and a real type runs only when the client has it.
+fn chosen_preauth(req: &AsRequest<'_>, err: &KrbError) -> Option<i32> {
+    if req.want_spake {
+        return Some(pa::SPAKE);
+    }
+    let method = method_from_error(err).ok()?;
+    let sorted = sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types());
+    let groups_empty = client_groups().is_empty();
+    sorted
+        .into_iter()
+        .map(|p| p.padata_type)
+        .find(|&t| t == pa::ENC_TIMESTAMP || (t == pa::SPAKE && !groups_empty))
 }
 
 fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {

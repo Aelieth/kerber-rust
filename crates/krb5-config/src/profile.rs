@@ -17,6 +17,16 @@ use super::testenv::TEST_KRB5_PATHS;
 use super::{Endpoint, Error, Krb5Conf, ProfileError};
 
 impl Krb5Conf {
+    /// Whether encrypted timestamp is off for `realm`.
+    /// MIT `encts_disabled` (`lib/krb5/krb/get_in_tkt.c:757-772`): the profile boolean, default false.
+    #[must_use]
+    pub fn encrypted_timestamp_disabled(&self, realm: &str) -> bool {
+        self.disable_encrypted_timestamp
+            .get(realm)
+            .copied()
+            .unwrap_or(false)
+    }
+
     /// Empty defaults: 300s skew, no weak crypto, DNS lookup off.
     #[must_use]
     pub fn new() -> Self {
@@ -649,6 +659,12 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
             .entry(realm.to_owned())
             .or_default()
             .push(v),
+        "disable_encrypted_timestamp" => {
+            // MIT `encts_disabled` (`lib/krb5/krb/get_in_tkt.c:767-771`): the first boolean, and a value that is not a boolean is the default false.
+            conf.disable_encrypted_timestamp
+                .entry(realm.to_owned())
+                .or_insert_with(|| mit_boolean(&v).unwrap_or(false));
+        }
         name if name.starts_with("iprop_") => conf
             .iprop
             .entry(realm.to_owned())

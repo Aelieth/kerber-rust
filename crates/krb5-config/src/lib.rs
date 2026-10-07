@@ -364,6 +364,9 @@ pub struct Krb5Conf {
     /// Realm → its stanza's `iprop_*` relations, name and value, in file order (includes
     /// followed); read by [`IpropParams`].
     pub iprop: BTreeMap<String, Vec<(String, String)>>,
+    /// Realm → `[realms] disable_encrypted_timestamp`. Absent means false.
+    /// MIT `encts_disabled` (`lib/krb5/krb/get_in_tkt.c:757-772`): a profile boolean, default false.
+    pub disable_encrypted_timestamp: BTreeMap<String, bool>,
 }
 
 /// `[libdefaults] dns_canonicalize_hostname`, MIT's tristate.

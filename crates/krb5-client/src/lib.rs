@@ -13,9 +13,10 @@ use krb5_asn1::decode;
 use krb5_config::CcSpec;
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
-    as_exchange_prompted, as_exchange_with_keys, dir_cache_path, dir_cache_path_for_store,
-    kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve,
-    memory_store, parse_principal_ex, tgs_exchange_path,
+    as_exchange_defer_fast, as_exchange_prompted, as_exchange_prompted_defer_fast,
+    as_exchange_with_keys, as_exchange_with_keys_defer_fast, dir_cache_path,
+    dir_cache_path_for_store, kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default,
+    memory_destroy, memory_retrieve, memory_store, parse_principal_ex, tgs_exchange_path,
 };
 use krb5_types::Ticket;
 use zeroize::{Zeroize, Zeroizing};
@@ -589,6 +590,15 @@ impl LazyPassword<'_> {
         let out = as_exchange_prompted(req, &mut || self.get());
         self.failed.take().map_or(Ok(out), Err)
     }
+
+    /// [`as_exchange`] that can return [`ProtocolError::FastUpgrade`] before the password is read.
+    fn as_exchange_defer(
+        &mut self,
+        req: &AsRequest<'_>,
+    ) -> Result<Result<AsOutcome, ProtocolError>, Krb5Error> {
+        let out = as_exchange_prompted_defer_fast(req, &mut || self.get());
+        self.failed.take().map_or(Ok(out), Err)
+    }
 }
 
 /// The MIT `krb5_error_code` of a `kinit_with` failure, typed (never by
@@ -603,6 +613,7 @@ pub fn mit_error_code(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Op
     match e.downcast_ref::<krb5_protocol::Error>() {
         Some(krb5_protocol::Error::KrbError { code, .. }) => Some(*code),
         Some(krb5_protocol::Error::ReplyIntegrity) => Some(krb5_types::err::BAD_INTEGRITY),
+        Some(krb5_protocol::Error::EnctsDisabled) => Some(krb5_types::err::PREAUTH_FAILED),
         _ => None,
     }
 }
@@ -694,8 +705,8 @@ pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + S
     }
 }
 
-/// The armor TGT `spec` names.
-/// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:185-212`): resolves the armor ccache and, once FAST is required, takes its TGT.
+/// The armor TGT `spec` names, once FAST will be used.
+/// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor cache's TGT is read when the request is armored.
 fn load_fast_armor(spec: &CcSpec) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
     let cc = load_ccache(spec).map_err(|e| cache_read_error(spec, e.as_ref()))?;
     let cred = cc
@@ -772,6 +783,175 @@ fn pkinit_from_conf(realm: &str) -> (Option<std::path::PathBuf>, Option<std::pat
     (id, an)
 }
 
+/// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:214-216`): a failure while building the armor AP-REQ keeps its text under this prefix.
+fn armor_build_error(err: &(dyn std::error::Error + Send + Sync + 'static)) -> Krb5Error {
+    if let Some(k) = err.downcast_ref::<Krb5Error>() {
+        return Krb5Error::new(
+            k.code,
+            format!("Error constructing AP-REQ armor: {}", k.message),
+        );
+    }
+    Krb5Error::new(
+        Code::Other,
+        format!("Error constructing AP-REQ armor: {err}"),
+    )
+}
+
+fn cache_has_fast_avail(cc: &FileCcache, realm: &str) -> bool {
+    let tgs = krb5_types::PrincipalName::krbtgt(realm).unparse_with_realm(realm);
+    cc.creds.iter().any(|c| {
+        c.is_config()
+            && c.server.1.name_string.len() == 3
+            && c.server.1.name_string[1].as_bytes() == b"fast_avail"
+            && c.server.1.name_string[2].as_bytes() == tgs.as_bytes()
+    })
+}
+
+/// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:185-203`): a cache that cannot be read is not an error yet, and leaves the first request unarmored.
+/// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:198-212`): `fast_avail` for the realm TGS arms that first request.
+fn initial_armor(
+    spec: Option<&CcSpec>,
+    realm: &str,
+) -> Result<Option<FastArmor>, Box<dyn std::error::Error + Send + Sync>> {
+    let Some(spec) = spec else {
+        return Ok(None);
+    };
+    let Ok(cc) = load_ccache(spec) else {
+        return Ok(None);
+    };
+    if !cache_has_fast_avail(&cc, realm) {
+        return Ok(None);
+    }
+    let armor = load_fast_armor(spec).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+        Box::new(armor_build_error(e.as_ref()))
+    })?;
+    trace::fast_armor(spec, realm, &armor);
+    Ok(Some(armor))
+}
+
+fn dispatch_as(
+    password: &mut LazyPassword<'_>,
+    keytab: Option<(&[krb5_crypto::ProtocolKey], &Path)>,
+    req: &AsRequest<'_>,
+    defer_fast: bool,
+) -> Result<Result<AsOutcome, ProtocolError>, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some((keys, path)) = keytab {
+        return Ok(krb5_protocol::trace::with_gak_keytab(
+            || format!("FILE:{}", path.display()),
+            || {
+                if defer_fast {
+                    as_exchange_with_keys_defer_fast(req, keys)
+                } else {
+                    as_exchange_with_keys(req, keys)
+                }
+            },
+        ));
+    }
+    let got = if defer_fast {
+        password.as_exchange_defer(req)
+    } else {
+        password.as_exchange(req)
+    };
+    got.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
+}
+
+/// The AS-REQ fields that stay put while armor is decided.
+struct AsShape<'a> {
+    cname: krb5_types::PrincipalName,
+    realm: &'a str,
+    kdc: &'a KdcAddr,
+    want_spake: bool,
+    pkinit: Option<&'a PkinitClient>,
+    canonicalize: bool,
+    sname: Option<&'a krb5_types::PrincipalName>,
+    etypes: &'a [i32],
+    ticket: AsTicketOpts,
+}
+
+impl AsShape<'_> {
+    fn request<'b>(&'b self, armor: Option<&'b FastArmor>, password: &'b [u8]) -> AsRequest<'b> {
+        AsRequest {
+            cname: self.cname.clone(),
+            realm: self.realm,
+            password,
+            kdc: self.kdc,
+            want_spake: self.want_spake,
+            fast_armor: armor,
+            pkinit: self.pkinit,
+            canonicalize: self.canonicalize,
+            sname: self.sname,
+            etypes: Some(self.etypes),
+            ticket: self.ticket.clone(),
+        }
+    }
+}
+
+/// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:210-216`): the upgrade builds the armor AP-REQ, and a failure is prefixed.
+fn load_armor_for_upgrade(
+    armor: &mut Option<FastArmor>,
+    spec: Option<&CcSpec>,
+    realm: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let Some(spec) = spec else {
+        return Err(ProtocolError::FastUpgrade.into());
+    };
+    let loaded =
+        load_fast_armor(spec).map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(armor_build_error(e.as_ref()))
+        })?;
+    trace::fast_armor(spec, realm, &loaded);
+    *armor = Some(loaded);
+    Ok(())
+}
+
+/// One AS exchange. With an armor cache and no armor key yet, a PA-FX-FAST error loads the armor and retries once.
+/// MIT `restart_init_creds_loop` (`lib/krb5/krb/get_in_tkt.c:800-801`): the upgrade sets FAST for the restarted request.
+fn exchange_shape(
+    password: &mut LazyPassword<'_>,
+    keytab: Option<(&[krb5_crypto::ProtocolKey], &Path)>,
+    armor: &mut Option<FastArmor>,
+    spec: Option<&CcSpec>,
+    shape: &AsShape<'_>,
+) -> Result<Result<AsOutcome, ProtocolError>, Box<dyn std::error::Error + Send + Sync>> {
+    let defer = spec.is_some() && armor.is_none();
+    let first = {
+        let req = shape.request(armor.as_ref(), b"");
+        dispatch_as(password, keytab, &req, defer)?
+    };
+    if !matches!(first, Err(ProtocolError::FastUpgrade)) {
+        return Ok(first);
+    }
+    load_armor_for_upgrade(armor, spec, shape.realm)?;
+    let req = shape.request(armor.as_ref(), b"");
+    dispatch_as(password, keytab, &req, false)
+}
+
+/// [`as_exchange`] with the same one-shot FAST upgrade, using `password` already in hand.
+fn exchange_shape_direct(
+    armor: &mut Option<FastArmor>,
+    spec: Option<&CcSpec>,
+    shape: &AsShape<'_>,
+    password: &[u8],
+) -> Result<AsOutcome, Box<dyn std::error::Error + Send + Sync>> {
+    let defer = spec.is_some() && armor.is_none();
+    let first = {
+        let req = shape.request(armor.as_ref(), password);
+        if defer {
+            as_exchange_defer_fast(&req)
+        } else {
+            as_exchange(&req)
+        }
+    };
+    match first {
+        Err(ProtocolError::FastUpgrade) => {
+            load_armor_for_upgrade(armor, spec, shape.realm)?;
+            let req = shape.request(armor.as_ref(), password);
+            as_exchange(&req).map_err(Into::into)
+        }
+        other => other.map_err(Into::into),
+    }
+}
+
 /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:211-214`): MIT returns any error but
 /// key-expired unchanged, and key-expired too when there is no prompter; this port changes the
 /// password on key-expired from a password AS when a prompter or a `new_password` source is
@@ -791,13 +971,7 @@ fn kinit_inner(
     }
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     let resolved = resolve_kdc(&realm_s, kdc);
-    let armor = match params.armor_ccache {
-        Some(spec) => Some(load_fast_armor(spec)?),
-        None => None,
-    };
-    if let (Some(spec), Some(a)) = (params.armor_ccache, &armor) {
-        trace::fast_armor(spec, &realm_s, a);
-    }
+    let mut armor = initial_armor(params.armor_ccache, &realm_s)?;
     let (conf_id, conf_an) = if params.pkinit_identity.is_none() || params.pkinit_anchors.is_none()
     {
         pkinit_from_conf(&realm_s)
@@ -857,27 +1031,22 @@ fn kinit_inner(
         ),
         None => None,
     };
-    let req = AsRequest {
+    let keytab = match (keytab_keys.as_deref(), params.keytab) {
+        (Some(keys), Some(path)) => Some((keys, path)),
+        _ => None,
+    };
+    let shape = AsShape {
         cname: cname.clone(),
         realm: &realm_s,
-        password: b"",
         kdc: &resolved,
         want_spake: params.want_spake,
-        fast_armor: armor.as_ref(),
         pkinit: pkinit.as_ref(),
         canonicalize: params.canonicalize || params.enterprise,
         sname: in_tkt_sname.as_ref(),
-        etypes: Some(&etypes),
+        etypes: &etypes,
         ticket,
     };
-    let as_out = match if let (Some(keys), Some(kt)) = (keytab_keys.as_deref(), params.keytab) {
-        krb5_protocol::trace::with_gak_keytab(
-            || format!("FILE:{}", kt.display()),
-            || as_exchange_with_keys(&req, keys),
-        )
-    } else {
-        password.as_exchange(&req)?
-    } {
+    let as_out = match exchange_shape(password, keytab, &mut armor, params.armor_ccache, &shape)? {
         Ok(o) => o,
         // MIT `krb5_get_init_creds_password` (`gic_pwd.c:205-240`): a typed KDC_ERR_KEY_EXP
         // from a password AS (not keytab — `krb5_get_init_creds_keytab` has no change flow)
@@ -909,20 +1078,19 @@ fn kinit_inner(
                 anonymous: false,
                 starttime: None,
             };
-            let chpw_req = AsRequest {
+            let chpw_shape = AsShape {
                 cname: cname.clone(),
                 realm: &realm_s,
-                password: b"",
                 kdc: &resolved,
                 want_spake: false,
-                fast_armor: armor.as_ref(),
                 pkinit: None,
                 canonicalize: params.canonicalize || params.enterprise,
                 sname: Some(&changepw),
-                etypes: Some(&etypes),
+                etypes: &etypes,
                 ticket: chpw_ticket,
             };
-            let chpw_as = password.as_exchange(&chpw_req)??;
+            let chpw_as =
+                exchange_shape(password, None, &mut armor, params.armor_ccache, &chpw_shape)??;
             let mut new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
                     krb5_protocol::trace::gic_pwd_changepw(3);
@@ -939,11 +1107,7 @@ fn kinit_inner(
             // the new password, is traced as a request of its own.
             krb5_protocol::trace::gic_pwd_changed();
             trace::init_creds(&cname, &realm_s, params.in_tkt_service);
-            let retry = AsRequest {
-                password: &new_pw,
-                ..req
-            };
-            let out = as_exchange(&retry);
+            let out = exchange_shape_direct(&mut armor, params.armor_ccache, &shape, &new_pw);
             new_pw.zeroize();
             out?
         }
@@ -1105,6 +1269,9 @@ fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
 }
 
 #[cfg(test)]
+mod armor_flow;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1202,10 +1369,9 @@ mod tests {
         assert_eq!(got.message, "Connection refused");
     }
 
-    /// A DIR collection's armor TGT loads. A MEMORY name this process does not hold is
-    /// `KRB5_FCC_NOFILE`.
+    /// A DIR collection's armor TGT loads. The missing-cache transcript is the exchange test.
     #[test]
-    fn dir_armor_tgt_loads_and_a_missing_memory_cache_does_not() {
+    fn dir_armor_tgt_loads() {
         let realm = krb5_types::ascii("KERBER.TEST");
         let client =
             krb5_types::PrincipalName::new(krb5_types::PrincipalName::NT_PRINCIPAL, ["alice"]);
@@ -1250,9 +1416,5 @@ mod tests {
         let armor = load_fast_armor(&spec).unwrap();
         assert_eq!(armor.crealm, realm);
         assert_eq!(armor.cname, client);
-        let Err(missing) = load_fast_armor(&CcSpec::Memory("p6g-no-such-armor".into())) else {
-            panic!("a MEMORY name this process does not hold must fail");
-        };
-        assert_eq!(missing.to_string(), "No credentials cache found");
     }
 }
