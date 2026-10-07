@@ -755,4 +755,91 @@ mod tests {
         assert_eq!(list[0].ticket, cred.ticket);
         assert_eq!(list[0].endtime, 20);
     }
+
+    /// `kcm_load` returns a stored krbtgt, which is the armor TGT `-T KCM:` reads.
+    #[test]
+    fn kcm_load_returns_an_armor_tgt() {
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let realm = krb5_types::ascii("KERBER.TEST");
+        let client = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
+        let cred = CcacheCred {
+            client: (realm.clone(), client.clone()),
+            server: (realm.clone(), PrincipalName::krbtgt("KERBER.TEST")),
+            key: crate::CcacheKeyblock {
+                etype: 18,
+                contents: vec![0x11; 32],
+            },
+            authtime: 10,
+            starttime: 10,
+            endtime: 20,
+            renew_till: 0,
+            is_skey: 0,
+            ticket_flags: 0x4000_0000,
+            addresses: Vec::new(),
+            authdata: Vec::new(),
+            ticket: vec![0x61, 0x03, 1, 2, 3],
+            second_ticket: Vec::new(),
+        };
+        let princ = marshal_primary(&realm, &client);
+        let raw = marshal_one_cred(&cred);
+        let mut list = 1u32.to_be_bytes().to_vec();
+        list.extend_from_slice(&u32::try_from(raw.len()).unwrap().to_be_bytes());
+        list.extend_from_slice(&raw);
+        let sock = krb5_testkit::socket_path(&krb5_testkit::scratch_dir("kcm-armor"), "s");
+        let path = sock.path().to_path_buf();
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let th = thread::spawn(move || {
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
+            loop {
+                let mut hdr = [0u8; 4];
+                if s.read_exact(&mut hdr).is_err() {
+                    break;
+                }
+                let n = u32::from_be_bytes(hdr) as usize;
+                let mut payload = vec![0u8; n];
+                if s.read_exact(&mut payload).is_err() {
+                    break;
+                }
+                if payload.len() < 4 {
+                    break;
+                }
+                let op = u16::from_be_bytes([payload[2], payload[3]]);
+                let empty: &[u8] = &[];
+                let body = if op == OP_GET_PRINCIPAL {
+                    princ.as_slice()
+                } else if op == OP_GET_CRED_LIST {
+                    list.as_slice()
+                } else {
+                    empty
+                };
+                let mut framed = Vec::new();
+                let mut inner = 0i32.to_be_bytes().to_vec();
+                inner.extend_from_slice(body);
+                framed.extend_from_slice(&u32::try_from(inner.len()).unwrap().to_be_bytes());
+                framed.extend_from_slice(&0i32.to_be_bytes());
+                framed.extend_from_slice(&inner);
+                if s.write_all(&framed).is_err() {
+                    break;
+                }
+            }
+        });
+        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(path.clone()));
+        let loaded = kcm_load("arm");
+        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = None);
+        drop(th.join());
+        let _ = std::fs::remove_file(&path);
+        drop(sock);
+        let cc = loaded.unwrap();
+        assert!(
+            cc.creds
+                .iter()
+                .any(|c| c.server.1.components_joined().starts_with("krbtgt/")),
+            "KCM armor cache must hold a TGT"
+        );
+    }
 }

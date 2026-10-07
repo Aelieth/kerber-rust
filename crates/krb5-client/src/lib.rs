@@ -231,8 +231,8 @@ pub struct KinitParams<'a> {
     pub in_tkt_service: Option<&'a str>,
     /// PA-SPAKE.
     pub want_spake: bool,
-    /// FAST armor ccache.
-    pub armor_ccache: Option<&'a Path>,
+    /// FAST armor ccache (`-T`), a name resolved as `-c` resolves one.
+    pub armor_ccache: Option<&'a CcSpec>,
     /// PKINIT identity PEM.
     pub pkinit_identity: Option<&'a Path>,
     /// PKINIT anchors PEM.
@@ -347,8 +347,8 @@ pub struct InitCredsOpt<'a> {
     pub service: Option<&'a str>,
     /// PA-SPAKE.
     pub want_spake: bool,
-    /// FAST armor ccache.
-    pub armor_ccache: Option<&'a Path>,
+    /// FAST armor ccache (`-T`), a name resolved as `-c` resolves one.
+    pub armor_ccache: Option<&'a CcSpec>,
     /// PKINIT identity PEM.
     pub pkinit_identity: Option<&'a Path>,
     /// PKINIT anchors PEM.
@@ -694,9 +694,10 @@ pub fn destroy_ccache(spec: &CcSpec) -> Result<(), Box<dyn std::error::Error + S
     }
 }
 
-fn load_fast_armor(path: &Path) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
-    let bytes = std::fs::read(path)?;
-    let cc = FileCcache::parse(&bytes)?;
+/// The armor TGT `spec` names.
+/// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:185-212`): resolves the armor ccache and, once FAST is required, takes its TGT.
+fn load_fast_armor(spec: &CcSpec) -> Result<FastArmor, Box<dyn std::error::Error + Send + Sync>> {
+    let cc = load_ccache(spec).map_err(|e| cache_read_error(spec, e.as_ref()))?;
     let cred = cc
         .creds
         .iter()
@@ -791,11 +792,11 @@ fn kinit_inner(
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     let resolved = resolve_kdc(&realm_s, kdc);
     let armor = match params.armor_ccache {
-        Some(p) => Some(load_fast_armor(p)?),
+        Some(spec) => Some(load_fast_armor(spec)?),
         None => None,
     };
-    if let (Some(path), Some(a)) = (params.armor_ccache, &armor) {
-        trace::fast_armor(path, &realm_s, a);
+    if let (Some(spec), Some(a)) = (params.armor_ccache, &armor) {
+        trace::fast_armor(spec, &realm_s, a);
     }
     let (conf_id, conf_an) = if params.pkinit_identity.is_none() || params.pkinit_anchors.is_none()
     {
@@ -1199,5 +1200,59 @@ mod tests {
         let e = std::io::Error::from(nix::errno::Errno::ECONNREFUSED);
         let got = cache_read_error(&CcSpec::Kcm("x".into()), &e);
         assert_eq!(got.message, "Connection refused");
+    }
+
+    /// A DIR collection's armor TGT loads. A MEMORY name this process does not hold is
+    /// `KRB5_FCC_NOFILE`.
+    #[test]
+    fn dir_armor_tgt_loads_and_a_missing_memory_cache_does_not() {
+        let realm = krb5_types::ascii("KERBER.TEST");
+        let client =
+            krb5_types::PrincipalName::new(krb5_types::PrincipalName::NT_PRINCIPAL, ["alice"]);
+        let server = krb5_types::PrincipalName::krbtgt("KERBER.TEST");
+        let key = krb5_crypto::ProtocolKey::from_bytes(
+            krb5_crypto::EncryptionType::Aes256CtsHmacSha196,
+            &[0x11; 32],
+        )
+        .unwrap();
+        let ticket = krb5_types::Ticket {
+            tkt_vno: krb5_types::Ticket::VNO,
+            realm: realm.clone(),
+            sname: server.clone(),
+            enc_part: krb5_types::EncryptedData {
+                etype: krb5_crypto::EncryptionType::Aes256CtsHmacSha196.to_iana(),
+                kvno: Some(1),
+                cipher: vec![0u8; 32].into(),
+            },
+        };
+        let cred = CcacheCred {
+            client: (realm.clone(), client.clone()),
+            server: (realm.clone(), server),
+            key: CcacheKeyblock::from_protocol(&key),
+            authtime: 10,
+            starttime: 10,
+            endtime: 20,
+            renew_till: 0,
+            is_skey: 0,
+            ticket_flags: 0,
+            addresses: Vec::new(),
+            authdata: Vec::new(),
+            ticket: krb5_asn1::encode(&ticket).unwrap(),
+            second_ticket: Vec::new(),
+        };
+        let dir = krb5_testkit::scratch_dir("p6g-armor-dir");
+        let spec = CcSpec::Dir(dir.to_str().unwrap().to_owned());
+        store_ccache(
+            &spec,
+            FileCcache::new((realm.clone(), client.clone()), vec![cred]),
+        )
+        .unwrap();
+        let armor = load_fast_armor(&spec).unwrap();
+        assert_eq!(armor.crealm, realm);
+        assert_eq!(armor.cname, client);
+        let Err(missing) = load_fast_armor(&CcSpec::Memory("p6g-no-such-armor".into())) else {
+            panic!("a MEMORY name this process does not hold must fail");
+        };
+        assert_eq!(missing.to_string(), "No credentials cache found");
     }
 }

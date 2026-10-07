@@ -58,12 +58,17 @@ pub fn keytab_lookup_failed(e: &std::io::Error, path: &std::path::Path) {
 /// `fast_avail` entry for the realm's TGS read, and FAST chosen when it is there.
 /// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor TGT is then got from that
 /// cache as a credentials request.
-pub fn fast_armor(path: &std::path::Path, realm: &str, armor: &krb5_protocol::FastArmor) {
+pub fn fast_armor(spec: &CcSpec, realm: &str, armor: &krb5_protocol::FastArmor) {
     if !trace::enabled() {
         return;
     }
-    trace::fast_armor_ccache(&path.display().to_string());
-    let Ok(cache) = OpenCache::open(CcSpec::File(path.to_path_buf())) else {
+    // A FILE armor name stays the residual path already traced for `-T FILE:`.
+    let traced = match spec {
+        CcSpec::File(p) => p.display().to_string(),
+        other => ccname(other),
+    };
+    trace::fast_armor_ccache(&traced);
+    let Ok(cache) = OpenCache::open(spec.clone()) else {
         return;
     };
     let name = ccname(&cache.spec);

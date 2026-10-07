@@ -1475,6 +1475,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** `kinit -T` resolves as `-c` does: `FILE:`, a bare path, `DIR:`, and `KCM:` load an armor TGT. A missing `MEMORY:` cache is "No credentials cache found"; an unbuilt type is "Unknown credential cache type". Units; DIR FAST cell.
 - **protocol.** `kpasswd`'s AS request (any with no etype list) asks for krb5.conf's `default_tkt_enctypes`, else `permitted_enctypes`, `DEFAULT` and family words included; it put aes256-cts first. Units; a gate cell beside MIT's kpasswd.
 - **protocol/gss.** Client authenticators (TGS, FAST armor, kpasswd, kprop, GSS, PKINIT) and
   encrypted timestamps carry the microseconds, as MIT's `krb5_us_timeofday`; they sent 0. Request

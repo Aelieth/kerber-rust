@@ -374,6 +374,13 @@ fn valrenew(prog: &str, opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     Ok(())
 }
 
+/// `-T` is a ccache name, resolved the way `-c` resolves one.
+/// MIT `k5_kinit` (`clients/kinit/kinit.c:684-686`): passes `-T` to `krb5_get_init_creds_opt_set_fast_ccache_name`.
+/// MIT `krb5_get_init_creds_opt_set_fast_ccache_name` (`lib/krb5/krb/gic_opt.c:279-292`): stores that name for resolution.
+fn armor_ccache_spec(name: &str) -> Result<CcSpec, Krb5Error> {
+    parse_ccspec(name).map_err(|e| Krb5Error::from_ccname(&e))
+}
+
 /// MIT `k5_kinit` (`kinit.c:654-795`): the initial-credentials options, the keytab, then
 /// `krb5_get_init_creds_password` or `krb5_get_init_creds_keytab` with the output cache.
 #[expect(clippy::too_many_lines, reason = "one MIT function, kept whole")]
@@ -447,11 +454,15 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     };
     let key_exp_notice = |banner: &str| eprintln!("{banner}");
     let service = gate_service(opts);
+    let armor_spec = match opts.armor_ccache.as_deref() {
+        Some(name) => Some(armor_ccache_spec(name).map_err(Failure::Error)?),
+        None => None,
+    };
     let params = KinitParams {
         service: service.as_deref(),
         in_tkt_service: in_tkt_service(opts),
         want_spake: want_spake(opts),
-        armor_ccache: opts.armor_ccache.as_deref().map(Path::new),
+        armor_ccache: armor_spec.as_ref(),
         pkinit_identity: opts.pkinit_identity.as_deref().map(Path::new),
         pkinit_anchors: opts.pkinit_anchors.as_deref().map(Path::new),
         enterprise: opts.enterprise,
@@ -609,6 +620,42 @@ mod tests {
         let a = gate::parse_host("127.0.0.1:8889");
         assert_eq!(a.host, "127.0.0.1");
         assert_eq!(a.port, 8889);
+    }
+
+    #[test]
+    fn armor_file_residual_is_the_path() {
+        let p = armor_ccache_spec("FILE:/var/tmp/p6g/armor.cc").expect("FILE residual");
+        assert_eq!(
+            p,
+            CcSpec::File(std::path::PathBuf::from("/var/tmp/p6g/armor.cc"))
+        );
+        let bare = armor_ccache_spec("/var/tmp/p6g/armor.cc").expect("bare path");
+        assert_eq!(
+            bare,
+            CcSpec::File(std::path::PathBuf::from("/var/tmp/p6g/armor.cc"))
+        );
+    }
+
+    #[test]
+    fn armor_dir_kcm_and_memory_resolve() {
+        assert_eq!(
+            armor_ccache_spec("DIR:/var/tmp/p6g/armordir").expect("DIR"),
+            CcSpec::Dir("/var/tmp/p6g/armordir".to_owned())
+        );
+        assert_eq!(
+            armor_ccache_spec("KCM:arm").expect("KCM"),
+            CcSpec::Kcm("arm".to_owned())
+        );
+        assert_eq!(
+            armor_ccache_spec("MEMORY:p6g").expect("MEMORY"),
+            CcSpec::Memory("p6g".to_owned())
+        );
+    }
+
+    #[test]
+    fn armor_keyring_is_unknown() {
+        let e = armor_ccache_spec("KEYRING:arm").expect_err("unbuilt");
+        assert_eq!(e.to_string(), "Unknown credential cache type");
     }
 
     #[test]
