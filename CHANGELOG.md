@@ -1475,6 +1475,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol/gss.** Client authenticators (TGS, FAST armor, kpasswd, kprop, GSS, PKINIT) and
+  encrypted timestamps carry the microseconds, as MIT's `krb5_us_timeofday`; they sent 0. Request
+  sizes as MIT's; units.
 - **protocol.** `kvno -U`'s PA-FOR-USER checksum is HMAC-MD5 (-138) under the TGT session key whatever its type, as MIT's `make_pa_for_user_checksum`, and that signing key is wiped; it took the key's type. MIT's bytes pinned; a gate cell.
 - **protocol.** A preauth error notes the KDC time before the prompt (`pa_offset`; `kdc_timesync`: `0` off, else on). Times, timestamp, PKINIT, challenge; no skew retry. Omitting encrypted timestamp does not prompt. Live +1 h; units; a gate cell.
 - **protocol.** Under FAST `kinit` answers with MIT's encrypted challenge (`preauth_ec.c`: KRB-FX-CF2

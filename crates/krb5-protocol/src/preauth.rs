@@ -55,8 +55,8 @@ pub fn build_fast_armor(
     cname: &PrincipalName,
     subkey: Option<&ProtocolKey>,
 ) -> Result<ApReq, Error> {
-    let now = KerberosTime::now();
-    let usec = Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
+    // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the armor authenticator's time and microseconds, from `krb5_us_timeofday`.
+    let (now, usec) = crate::auth_con::us_timeofday();
     let sub = subkey.map(|k| EncryptionKey {
         keytype: k.etype().to_iana(),
         keyvalue: k.as_bytes().to_vec().into(),
@@ -568,8 +568,6 @@ pub fn pa_pk_as_req_signed(
     body_sha1: &[u8],
     freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
-    let now = KerberosTime::now();
-    let usec = Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
     pa_pk_as_req_signed_at(
         client_public,
         cert_der,
@@ -577,7 +575,7 @@ pub fn pa_pk_as_req_signed(
         nonce,
         body_sha1,
         freshness,
-        (now, usec),
+        crate::auth_con::us_timeofday(),
     )
 }
 
@@ -632,9 +630,13 @@ pub fn pa_pk_as_req_unsigned(
     body_sha1: &[u8],
     freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
-    let now = KerberosTime::now();
-    let usec = Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
-    pa_pk_as_req_unsigned_at(client_public, nonce, body_sha1, freshness, (now, usec))
+    pa_pk_as_req_unsigned_at(
+        client_public,
+        nonce,
+        body_sha1,
+        freshness,
+        crate::auth_con::us_timeofday(),
+    )
 }
 
 /// [`pa_pk_as_req_unsigned`] with the authenticator's time given: the AS exchange's clock.

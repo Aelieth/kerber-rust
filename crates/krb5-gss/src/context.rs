@@ -13,8 +13,7 @@ use krb5_protocol::{
 };
 use krb5_types::{
     ApOptions, ApRep, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum,
-    EncApRepPart, EncryptionKey, HostAddress, KerberosTime, Microseconds, PrincipalName, Realm,
-    Ticket, ku, pa,
+    EncApRepPart, EncryptionKey, HostAddress, KerberosTime, PrincipalName, Realm, Ticket, ku, pa,
 };
 
 use super::deleg::{DelegCred, extract_delegated, krb_cred_for_deleg};
@@ -366,13 +365,14 @@ impl GssContext {
             keytype: sub.etype().to_iana(),
             keyvalue: sub.as_bytes().to_vec().into(),
         };
-        let now = KerberosTime::now();
+        // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the time and its microseconds, from `krb5_us_timeofday`.
+        let (now, usec) = krb5_protocol::us_timeofday();
         let authenticator = Authenticator {
             authenticator_vno: Authenticator::VNO,
             crealm: crealm.clone(),
             cname: cname.clone(),
             cksum: Some(cksum),
-            cusec: Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros()),
+            cusec: usec,
             ctime: now,
             subkey: Some(enc_sub),
             seq_number: Some(0),

@@ -1017,6 +1017,84 @@ fn kdc_timesync_off_keeps_the_local_time_in_the_timestamp() {
     let _ = std::fs::remove_file(&conf);
 }
 
+/// MIT `krb5_us_timeofday` (`lib/krb5/os/ustime.c:66-82`): a client authenticator and an encrypted timestamp carry the time to the microsecond.
+#[test]
+fn client_authenticators_and_timestamps_carry_microseconds() {
+    use krb5_crypto::{EncryptionType, ProtocolKey, decrypt};
+    use krb5_types::{
+        ApReq, Authenticator, EncryptedData, KerberosTime, Microseconds, PaEncTsEnc, Ticket,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let micros = |t: &KerberosTime, u: Microseconds| {
+        i128::from(t.unix_seconds()) * 1_000_000 + i128::from(u.get())
+    };
+    let clock = || {
+        i128::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_micros(),
+        )
+        .unwrap()
+    };
+    let key = krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32])
+        .unwrap();
+    let open = |key: &ProtocolKey, enc: &EncryptedData, usage: u32| -> Vec<u8> {
+        decrypt(key, KeyUsage::new(usage).unwrap(), enc.cipher.as_ref()).unwrap()
+    };
+    let ticket = Ticket {
+        tkt_vno: 5,
+        realm: ascii("KERBER.TEST"),
+        sname: PrincipalName::krbtgt("KERBER.TEST"),
+        enc_part: EncryptedData {
+            etype: 18,
+            kvno: Some(1),
+            cipher: vec![0u8; 16].into(),
+        },
+    };
+    let realm = ascii("KERBER.TEST");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    let before = clock();
+    let ap = build_ap_req(ticket.clone(), &key, &realm, &cname).unwrap();
+    let mutual =
+        krb5_protocol::build_ap_req_mutual_seq(ticket.clone(), &key, &realm, &cname, 7).unwrap();
+    let armor =
+        krb5_protocol::build_fast_armor(ticket.clone(), &key, &realm, &cname, None).unwrap();
+    let tgs = tgs_req(
+        ticket,
+        &key,
+        "KERBER.TEST",
+        &cname,
+        PrincipalName::krbtgt("KERBER.TEST"),
+        "KERBER.TEST",
+        9,
+    )
+    .unwrap();
+    let ts_pa = pa_enc_timestamp(&key).unwrap();
+    let after = clock();
+    let tgs_ap: ApReq = decode(tgs.0.padata.as_ref().unwrap()[0].padata_value.as_ref()).unwrap();
+    let mut seen = Vec::new();
+    for (enc, usage) in [
+        (&ap.authenticator, ku::AP_REQ_AUTHENTICATOR),
+        (&mutual.authenticator, ku::AP_REQ_AUTHENTICATOR),
+        (&armor.authenticator, ku::AP_REQ_AUTHENTICATOR),
+        (&tgs_ap.authenticator, ku::TGS_REQ_AUTHENTICATOR),
+    ] {
+        let a: Authenticator = decode(&open(&key, enc, usage)).unwrap();
+        seen.push(micros(&a.ctime, a.cusec));
+    }
+    let enc: EncryptedData = decode(ts_pa.padata_value.as_ref()).unwrap();
+    let ts: PaEncTsEnc = decode(&open(&key, &enc, ku::PA_ENC_TIMESTAMP)).unwrap();
+    seen.push(micros(
+        &ts.patimestamp,
+        ts.pausec.unwrap_or(Microseconds::ZERO),
+    ));
+    for t in seen {
+        assert!(before <= t && t <= after, "{before} <= {t} <= {after}");
+    }
+}
+
 /// MIT `note_req_timestamp` (`lib/krb5/krb/get_in_tkt.c:1427-1438`): the offset is the error's time less the time the error arrives, so a slow password prompt is not skew.
 #[test]
 fn a_delayed_prompt_is_not_added_to_the_kdc_offset() {

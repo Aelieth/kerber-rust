@@ -821,8 +821,8 @@ fn tgs_round_trip(
     let body_der = encode(&body)?;
     let cksum_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
     let mic = checksum(&tgt.session_key, cksum_usage, &body_der)?;
-    let now = KerberosTime::now();
-    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    // MIT `tgs_construct_ap_req` (`lib/krb5/krb/send_tgs.c:82-82`): the authenticator's time and microseconds, from `krb5_us_timeofday`.
+    let (now, usec) = crate::auth_con::us_timeofday();
     let mut raw = vec![0u8; tgt.session_key.etype().key_len()];
     getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
     let sub = ProtocolKey::from_bytes(tgt.session_key.etype(), &raw)?;
@@ -855,7 +855,7 @@ fn tgs_round_trip(
             cksumtype: tgt.session_key.etype().checksum_type(),
             checksum: mic.into(),
         }),
-        cusec: krb5_types::Microseconds::from_subsec_micros(usec),
+        cusec: usec,
         ctime: now,
         subkey: Some(EncryptionKey {
             keytype: sub.etype().to_iana(),

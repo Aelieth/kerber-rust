@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_types::{
-    ApOptions, ApReq, Authenticator, ChangePasswdData, EncryptedData, EncryptionKey, KerberosTime,
-    PrincipalName, Realm, err, ku,
+    ApOptions, ApReq, Authenticator, ChangePasswdData, EncryptedData, EncryptionKey, PrincipalName,
+    Realm, err, ku,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -269,13 +269,14 @@ fn change_or_set(
         keytype: sub.etype().to_iana(),
         keyvalue: sub.as_bytes().to_vec().into(),
     };
-    let now = KerberosTime::now();
+    // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the time and its microseconds, from `krb5_us_timeofday`.
+    let (now, usec) = crate::auth_con::us_timeofday();
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: as_out.crealm.clone(),
         cname: as_out.cname.clone(),
         cksum: None,
-        cusec: krb5_types::Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros()),
+        cusec: usec,
         ctime: now,
         subkey: Some(sub_enc),
         seq_number: Some(0),
