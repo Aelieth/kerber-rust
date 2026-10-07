@@ -2,8 +2,8 @@
 //!
 //! There is no C FFI. DNS SRV is a minimal RFC 2782 UDP client.
 //!
-//! One module per MIT source family: `profile` (krb5.conf), `kdcconf`, `iprop_params`,
-//! `ccname`, `srv`, `testenv`. In-src tests stay under `tests`.
+//! One module per MIT source family: `profile` (krb5.conf), `plugin_profile` (`[plugins]`),
+//! `kdcconf`, `iprop_params`, `ccname`, `srv`, `testenv`. In-src tests stay under `tests`.
 //!
 //! # Examples
 //!
@@ -35,6 +35,7 @@ mod iprop_params;
 mod kdcconf;
 pub mod listen;
 mod logging;
+mod plugin_profile;
 mod profile;
 mod srv;
 mod testenv;
@@ -367,6 +368,10 @@ pub struct Krb5Conf {
     /// Realm → `[realms] disable_encrypted_timestamp`. Absent means false.
     /// MIT `encts_disabled` (`lib/krb5/krb/get_in_tkt.c:757-772`): a profile boolean, default false.
     pub disable_encrypted_timestamp: BTreeMap<String, bool>,
+    /// `[plugins]` `disable` and `enable_only` for every interface in this profile.
+    ///
+    /// MIT `configure_interface` (`lib/krb5/krb/plugin.c:301-347`): a later stage reads one interface from here.
+    pub plugins: PluginProfile,
 }
 
 /// `[libdefaults] dns_canonicalize_hostname`, MIT's tristate.
@@ -502,6 +507,10 @@ pub struct KdcConf {
     /// MIT `initialize_realms` (`kdc/main.c:639-644`): the last value read as `%d`, else this default.
     /// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): MIT's value is 5; this default is 128 (`docs/mit-deviations.md`).
     pub kdc_tcp_listen_backlog: i32,
+    /// This file's `[plugins]` `disable` and `enable_only`.
+    ///
+    /// MIT `get_profile_var` (`lib/krb5/krb/plugin.c:188-203`): the relations sit under the interface name.
+    pub plugins: PluginProfile,
 }
 
 /// Resolved ccache name (`krb5_cc_resolve`).
@@ -528,6 +537,9 @@ pub use kdcconf::{
     default_stash_file, env_kdc_config, kdc_conf_path,
 };
 pub use logging::LogSpecs;
+pub use plugin_profile::{
+    PluginProfile, PluginRelations, filter_plugin_modules, kdc_plugin_relations,
+};
 pub use profile::{
     client_realm_path, discover_kdc, discover_kdc_in, env_ktname, env_new_password, env_password,
     host_to_realm, init_kdc_profile, init_profile, is_numeric_address, krb5_conf_paths,

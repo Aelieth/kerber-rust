@@ -48,7 +48,9 @@ impl Krb5Conf {
     pub fn parse(text: &str) -> Result<Self, Error> {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
-        parse_into(&mut conf, &mut seen, text, None)?;
+        let mut plugin_profile = super::plugin_profile::PluginProfile::default();
+        parse_into(&mut conf, &mut seen, text, None, &mut plugin_profile)?;
+        conf.plugins = plugin_profile;
         Ok(conf)
     }
 
@@ -64,7 +66,15 @@ impl Krb5Conf {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
         let mut stack = Vec::new();
-        load_path_into(&mut conf, &mut seen, &mut stack, path.as_ref())?;
+        let mut plugin_profile = super::plugin_profile::PluginProfile::default();
+        load_path_into(
+            &mut conf,
+            &mut seen,
+            &mut stack,
+            path.as_ref(),
+            &mut plugin_profile,
+        )?;
+        conf.plugins = plugin_profile;
         Ok(conf)
     }
 
@@ -278,6 +288,7 @@ fn parse_into(
     seen: &mut BTreeSet<String>,
     text: &str,
     mut stack: Option<&mut Vec<PathBuf>>,
+    plugin_profile: &mut super::plugin_profile::PluginProfile,
 ) -> Result<(), Error> {
     let mut section = String::new();
     // Whether the section header is `[libdefaults]` exactly, and how deep in a subsection of it
@@ -287,13 +298,16 @@ fn parse_into(
     let mut realm: Option<String> = None;
     let mut capaths_client: Option<String> = None;
     let text = join_subsection_braces(text)?;
+    let mut plugins = super::plugin_profile::Cursor::new();
     for raw in text.lines() {
         if let Some(kind) = include_directive(raw)
             && let Some(st) = stack.as_deref_mut()
         {
             match kind {
-                IncludeKind::File(p) => load_file_into(conf, seen, st, Path::new(p))?,
-                IncludeKind::Dir(p) => load_dir_into(conf, seen, st, Path::new(p))?,
+                IncludeKind::File(p) => {
+                    load_file_into(conf, seen, st, Path::new(p), plugin_profile)?;
+                }
+                IncludeKind::Dir(p) => load_dir_into(conf, seen, st, Path::new(p), plugin_profile)?,
             }
             continue;
         }
@@ -320,8 +334,19 @@ fn parse_into(
             libdefaults_depth = 0;
             realm = None;
             capaths_client = None;
+            plugins.observe_header(plugin_profile, s, false);
             continue;
         }
+        if super::plugin_profile::starred_plugins_header(line) {
+            section = "plugins".into();
+            libdefaults_exact = false;
+            libdefaults_depth = 0;
+            realm = None;
+            capaths_client = None;
+            plugins.observe_header(plugin_profile, "plugins", true);
+            continue;
+        }
+        plugins.observe_line(plugin_profile, line);
         if section == "realms" {
             if let Some(name) = line.strip_suffix('{') {
                 realm = Some(name.trim().trim_end_matches('=').trim().to_string());
@@ -387,11 +412,12 @@ fn load_path_into(
     seen: &mut BTreeSet<String>,
     stack: &mut Vec<PathBuf>,
     path: &Path,
+    plugin_profile: &mut super::plugin_profile::PluginProfile,
 ) -> Result<(), Error> {
     if path.is_dir() {
-        load_dir_into(conf, seen, stack, path)
+        load_dir_into(conf, seen, stack, path, plugin_profile)
     } else {
-        load_file_into(conf, seen, stack, path)
+        load_file_into(conf, seen, stack, path, plugin_profile)
     }
 }
 
@@ -400,6 +426,7 @@ fn load_file_into(
     seen: &mut BTreeSet<String>,
     stack: &mut Vec<PathBuf>,
     path: &Path,
+    plugin_profile: &mut super::plugin_profile::PluginProfile,
 ) -> Result<(), Error> {
     // MIT `parse_include_file` (`prof_parse.c:229-231`): an included file that does not open
     // fails the whole profile.
@@ -424,7 +451,7 @@ fn load_file_into(
     let bytes = std::fs::read(&canon).map_err(unread)?;
     let text = String::from_utf8_lossy(&bytes);
     stack.push(canon);
-    let result = parse_into(conf, seen, &text, Some(stack));
+    let result = parse_into(conf, seen, &text, Some(stack), plugin_profile);
     stack.pop();
     result
 }
@@ -434,6 +461,7 @@ fn load_dir_into(
     seen: &mut BTreeSet<String>,
     stack: &mut Vec<PathBuf>,
     dir: &Path,
+    plugin_profile: &mut super::plugin_profile::PluginProfile,
 ) -> Result<(), Error> {
     // MIT `parse_include_dir` (`prof_parse.c:271-272`): an includedir that does not list fails
     // the whole profile.
@@ -460,7 +488,7 @@ fn load_dir_into(
     for name in names {
         let p = dir.join(name);
         if p.is_file() {
-            load_file_into(conf, seen, stack, &p)?;
+            load_file_into(conf, seen, stack, &p, plugin_profile)?;
         }
     }
     Ok(())
@@ -475,7 +503,7 @@ fn opens_subsection(line: &str) -> bool {
 }
 
 /// C `isspace` in the C locale: space, tab, newline, vertical tab, form feed, carriage return.
-const fn c_isspace(c: char) -> bool {
+pub(crate) const fn c_isspace(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\u{b}' | '\u{c}' | '\r')
 }
 
@@ -684,7 +712,7 @@ pub(super) fn split_kv(line: &str) -> Option<(&str, String)> {
 /// trailing blanks cut.
 /// MIT `parse_std_line` (`prof_parse.c:169-183`): a value that starts with a quote goes through
 /// `parse_quoted_string`; any other loses its trailing whitespace.
-fn relation_value(v: &str) -> String {
+pub(crate) fn relation_value(v: &str) -> String {
     let v = v.trim_start();
     v.strip_prefix('"')
         .map_or_else(|| v.trim_end().to_owned(), parse_quoted_string)
@@ -882,11 +910,12 @@ pub fn load_krb5_conf_paths<P: AsRef<Path>>(
     let mut conf = Krb5Conf::new();
     let mut seen = BTreeSet::new();
     let mut stack = Vec::new();
+    let mut plugin_profile = super::plugin_profile::PluginProfile::default();
     let mut any = false;
     let mut access = None;
     for path in paths {
         let path = path.as_ref();
-        match load_path_into(&mut conf, &mut seen, &mut stack, path) {
+        match load_path_into(&mut conf, &mut seen, &mut stack, path, &mut plugin_profile) {
             Ok(()) => any = true,
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(Error::Io(e)) if e.kind() == std::io::ErrorKind::PermissionDenied => {
@@ -896,6 +925,7 @@ pub fn load_krb5_conf_paths<P: AsRef<Path>>(
         }
     }
     if any {
+        conf.plugins = plugin_profile;
         // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:219-248`): a context boolean that is none, or a `dns_canonicalize_hostname` that is neither one nor `fallback`, fails the context.
         if let Some(p) = conf.context_refusal {
             return Err(Error::Profile(p, p.text().to_owned()));

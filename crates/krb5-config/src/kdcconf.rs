@@ -99,6 +99,7 @@ impl Default for KdcConf {
             logging: Vec::new(),
             kdc_max_dgram_reply_size: MAX_DGRAM_SIZE,
             kdc_tcp_listen_backlog: DEFAULT_TCP_LISTEN_BACKLOG,
+            plugins: super::plugin_profile::PluginProfile::default(),
         }
     }
 }
@@ -151,6 +152,8 @@ impl KdcConf {
         let mut backlog: Option<String> = None;
         let mut dbmodule: Option<String> = None;
         let mut dbmodules: Vec<(String, String, String)> = Vec::new();
+        let mut plugin_profile = super::plugin_profile::PluginProfile::default();
+        let mut plugins = super::plugin_profile::Cursor::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
@@ -160,8 +163,17 @@ impl KdcConf {
                 section = s.trim().to_ascii_lowercase();
                 in_realm = false;
                 dbmodule = None;
+                plugins.observe_header(&mut plugin_profile, s, false);
                 continue;
             }
+            if super::plugin_profile::starred_plugins_header(line) {
+                section = "plugins".into();
+                in_realm = false;
+                dbmodule = None;
+                plugins.observe_header(&mut plugin_profile, "plugins", true);
+                continue;
+            }
+            plugins.observe_line(&mut plugin_profile, line);
             if section == "dbmodules" {
                 if let Some(head) = line.strip_suffix('{') {
                     dbmodule = Some(head.trim().trim_end_matches('=').trim().to_owned());
@@ -254,6 +266,7 @@ impl KdcConf {
             .as_deref()
             .and_then(sscanf_int)
             .unwrap_or(DEFAULT_TCP_LISTEN_BACKLOG);
+        conf.plugins = plugin_profile;
         Ok(conf)
     }
 

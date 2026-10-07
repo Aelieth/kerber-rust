@@ -527,6 +527,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **config.** Read `[plugins]` `disable` and `enable_only` as MIT's `configure_interface`: named modules, repeated relations, and order. `module` stays unread. Units.
 - **client.** `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd` and `ktutil` write MIT's
   `KRB5_TRACE` lines in a release build too, compared live with MIT 1.22.2's tools
   ([docs/logging.md](docs/logging.md)).
