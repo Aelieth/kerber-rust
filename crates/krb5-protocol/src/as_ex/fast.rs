@@ -1,12 +1,13 @@
 //! RFC 6113 FAST armor on the AS exchange (`lib/krb5/krb/fast.c`
 //! `krb5int_fast_process_response` / `krb5int_fast_process_error`).
 
+use super::clock::Clock;
 use super::ec::{EC_MODULE, client_challenge, reply_code};
 use super::{
     AsOutcome, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, PasswordPrompt, build_as_req_from,
     classify_kdc_error, find_pa, finish_as_rep, first_etype, gak_found, method_from_error,
-    pa_enc_timestamp, pick_info2, pick_key, req_sname, salt_cname, select_s2k, send_as,
-    sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
+    pa_enc_timestamp_at, pick_info2, pick_key, req_sname, request_times, salt_cname, select_s2k,
+    send_as, sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
     with_prompted,
 };
 use crate::error::Error;
@@ -42,6 +43,7 @@ pub(super) fn continue_fast(
     nonce: u32,
     bound: &AsReqTimes,
     etypes: &[i32],
+    clock: &Clock,
     prompt: Option<&mut PasswordPrompt<'_>>,
 ) -> Result<AsOutcome, Error> {
     let armor = req
@@ -83,6 +85,8 @@ pub(super) fn continue_fast(
             if !retry || inner.error_code != err::PREAUTH_REQUIRED {
                 return classify_kdc_error(&inner);
             }
+            // The KDC's time, authenticated by the armor.
+            clock.note(&inner, true);
             with_prompted(req, prompt, |req| {
                 let method = sort_krb5_padata_sequence(
                     &method_from_error(&inner).unwrap_or_default(),
@@ -107,18 +111,20 @@ pub(super) fn continue_fast(
                     inner_pa.push(c);
                 }
                 if mech == pa::ENCRYPTED_CHALLENGE {
-                    let (now, usec) = crate::auth_con::us_timeofday();
+                    // MIT `ec_process` takes the time without an unauthenticated offset.
+                    let (now, usec) = clock.now(false);
                     inner_pa.push(client_challenge(&akey, &client_key, (&now, usec))?);
                     trace::preauth_process(EC_MODULE, mech, true, 0, None);
                 } else {
                     if gak_found(keys, &client_key, etype) {
                         trace::preauth_enc_ts_key_gak((&client_key).into());
                     }
-                    inner_pa.push(pa_enc_timestamp(&client_key, true)?);
+                    inner_pa.push(pa_enc_timestamp_at(&client_key, clock.now(true), true)?);
                     trace::preauth_process(ENCTS_MODULE, mech, true, 0, None);
                 }
                 trace::preauth_output(&inner_pa);
                 let ap = fast_armor_ap(armor, &sub)?;
+                let bound = &request_times(req, clock);
                 let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
                 attach_fast(&mut req2, &ap, &akey, inner_pa)?;
                 trace::fast_encode();

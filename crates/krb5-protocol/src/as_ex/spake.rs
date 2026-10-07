@@ -13,11 +13,12 @@ use krb5_crypto::{
 use krb5_types::spake::{PaSpake, SF_NONE, SpakeChallenge};
 use krb5_types::{KrbError, PaData, err, pa};
 
+use super::clock::Clock;
 use super::{
-    AsOutcome, AsReqTimes, AsRequest, KdcMsg, S2kMaterial, build_as_req_from, classify_kdc_error,
+    AsOutcome, AsRequest, KdcMsg, S2kMaterial, build_as_req_from, classify_kdc_error,
     conf_preferred_preauth_types, find_pa, finish_as_rep, method_from_error, pick_key, req_sname,
-    salt_cname, select_s2k, select_s2k_after, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
-    trace_preauth_input, trace_reply_padata,
+    request_times, retried, salt_cname, select_s2k, select_s2k_after, send_as,
+    sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
 use crate::preauth::{pa_spake_response, pa_spake_support};
@@ -183,10 +184,10 @@ pub(super) fn continue_spake(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     nonce: u32,
-    bound: &AsReqTimes,
     etypes: &[i32],
     err: &KrbError,
     groups: &[SpakeGroup],
+    clock: &Clock,
 ) -> Result<SpakeEnd, Error> {
     let mut st = SpakeState {
         groups: groups.to_vec(),
@@ -219,7 +220,8 @@ pub(super) fn continue_spake(
             }
             _ => {}
         }
-        let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+        let bound = request_times(req, clock);
+        let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
         let body_der = encode(&req2.0.req_body)?;
         let round = match find_pa(&method, pa::SPAKE) {
             Some(p) => spake_round(
@@ -283,7 +285,7 @@ pub(super) fn continue_spake(
                     Some(pa::SPAKE),
                     req.canonicalize,
                     &req_sname(req),
-                    bound,
+                    &bound,
                     Some(&wire),
                     false,
                 )
@@ -294,6 +296,9 @@ pub(super) fn continue_spake(
                 current = e;
             }
             KdcMsg::Error(e) if e.error_code == err::PREAUTH_FAILED && !st.responded => {
+                if retried(&e) {
+                    clock.note(&e, false);
+                }
                 return Ok(SpakeEnd::Fallback(Box::new(if e.e_data.is_some() {
                     e
                 } else {
@@ -301,6 +306,9 @@ pub(super) fn continue_spake(
                 })));
             }
             KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED && !st.responded => {
+                if retried(&e) {
+                    clock.note(&e, false);
+                }
                 again = Some(e.error_code);
                 method_err = e.clone();
                 current = e;
@@ -323,15 +331,15 @@ pub(super) fn spake_forced(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     nonce: u32,
-    bound: &AsReqTimes,
     etypes: &[i32],
     err: &KrbError,
+    clock: &Clock,
 ) -> Result<AsOutcome, Error> {
     let groups = client_groups();
     if groups.is_empty() {
         return Err(Error::ReplyMismatch("SPAKE required".into()));
     }
-    match continue_spake(req, keys, nonce, bound, etypes, err, &groups)? {
+    match continue_spake(req, keys, nonce, etypes, err, &groups, clock)? {
         SpakeEnd::Done(out) => Ok(*out),
         SpakeEnd::Fallback(_) => Err(Error::ReplyMismatch("SPAKE required".into())),
     }

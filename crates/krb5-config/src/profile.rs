@@ -530,7 +530,13 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
             conf.udp_preference_limit = v.parse().ok();
         }
         "rdns" if take_first(seen, "rdns") => conf.rdns = truthy(&v),
-        "kdc_timesync" if take_first(seen, "kdc_timesync") => conf.kdc_timesync = truthy(&v),
+        "kdc_timesync" if take_first(seen, "kdc_timesync") => {
+            // MIT `parse_int` (`util/profile/prof_get.c:283-305`): `strtol` of the whole value.
+            // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:269-270`): a value that is not an integer leaves the default 1 and does not fail the context.
+            if let Some(n) = parse_profile_int(&v) {
+                conf.kdc_timesync = n != 0;
+            }
+        }
         "verify_ap_req_nofail" if take_first(seen, "verify_ap_req_nofail") => {
             conf.verify_ap_req_nofail = truthy(&v);
         }
@@ -698,6 +704,27 @@ pub(super) fn mit_boolean(v: &str) -> Option<bool> {
         "n" | "no" | "false" | "nil" | "0" | "off" => Some(false),
         _ => None,
     }
+}
+
+/// An integer as MIT's `parse_int`: `strtol` base 10 of the whole string, in C `int` range.
+/// MIT `parse_int` (`util/profile/prof_get.c:283-305`): leading space is skipped, and any other trailing byte is `PROF_BAD_INTEGER`.
+fn parse_profile_int(v: &str) -> Option<i32> {
+    let v = v.trim_start_matches(|c: char| c.is_ascii_whitespace());
+    if v.is_empty() {
+        return None;
+    }
+    let (sign, rest) = if let Some(r) = v.strip_prefix('+') {
+        (1i64, r)
+    } else if let Some(r) = v.strip_prefix('-') {
+        (-1i64, r)
+    } else {
+        (1, v)
+    };
+    if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mag = rest.parse::<i64>().ok()?;
+    i32::try_from(sign.checked_mul(mag)?).ok()
 }
 
 /// A profile boolean, a value that is none being false.

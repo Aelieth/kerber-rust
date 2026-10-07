@@ -5,7 +5,7 @@
 //! (`plugins/preauth/spake/spake_client.c`).
 
 use crate::error::Error;
-use crate::preauth::{pa_pk_as_req_signed, pkinit_reply_key_agile};
+use crate::preauth::{pa_pk_as_req_signed_at, pkinit_reply_key_agile};
 use crate::trace;
 use crate::transport::{KdcAddr, SendKind, sendto_kdc};
 use krb5_asn1::{decode, encode};
@@ -15,17 +15,19 @@ use krb5_crypto::{
 };
 use krb5_types::{
     AsRep, AsReq, EncKdcRepPart, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2, KdcOptions,
-    KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PaEncTsEnc, PrincipalName, err,
-    flag_bit, ku, pa,
+    KdcReq, KdcReqBody, KerberosTime, KrbError, MethodData, PaData, PrincipalName, err, flag_bit,
+    ku, pa,
 };
 use sha1::{Digest, Sha1};
 use std::time::Instant;
 use zeroize::{Zeroize, Zeroizing};
 
+mod clock;
 mod ec;
 mod fast;
 mod spake;
 
+use clock::Clock;
 pub use fast::FastArmor;
 use fast::continue_fast;
 pub(crate) use fast::fast_error_material;
@@ -321,13 +323,14 @@ fn as_exchange_inner(
             .collect(),
     };
     let nonce = random_nonce()?;
-    let (bound, _) = ticket_body(req);
+    let clock = Clock::new();
+    let bound = request_times(req, &clock);
 
     if req.fast_armor.is_some() {
-        return continue_fast(req, keys, nonce, &bound, &etypes, prompt);
+        return continue_fast(req, keys, nonce, &bound, &etypes, &clock, prompt);
     }
     if req.pkinit.is_some() || req.ticket.anonymous {
-        return continue_pkinit(req, nonce, &bound, &etypes);
+        return continue_pkinit(req, nonce, &bound, &etypes, &clock);
     }
     // MIT `restart_init_creds_loop` (`get_in_tkt.c:807-813`): only sets `optimistic_padata` when
     // the app called `krb5_get_init_creds_opt_set_preauth_list`. Default kinit (even with
@@ -336,24 +339,28 @@ fn as_exchange_inner(
     // `sort_krb5_padata_sequence` picks the first runnable real type (`continue_from_hint`).
     // `--spake` still forces SPAKE.
     let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
-    let mut wire = encode(&first)?;
+    let wire = encode(&first)?;
     // MIT `init_creds_step_request` (`get_in_tkt.c:1355-1356`): a request with no preauth.
     trace::init_creds_preauth_none();
-    let mut msg = send_as(req, &wire)?;
-    let mut skew_time = None;
+    // MIT `init_creds_step_reply` (`get_in_tkt.c:1759-1765`): an error to a request no mechanism
+    // answered, a clock skew among them, is the KDC's error.
+    let msg = send_as(req, &wire)?;
+    let spake_more =
+        |e: &KrbError| req.want_spake && e.error_code == err::MORE_PREAUTH_DATA_REQUIRED;
+    // MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1727-1733`): the offset is noted when the error arrives, before the next request's module reads the password.
     if let KdcMsg::Error(e) = &msg
-        && e.error_code == err::SKEW
+        && retried(e)
+        && e.error_code == err::PREAUTH_REQUIRED
     {
-        // First-reply SKEW: resync from KDC stime and retry the bare AS-REQ.
-        skew_time = Some(e.stime.clone());
-        let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
-        wire = encode(&first)?;
-        trace::init_creds_preauth_none();
-        msg = send_as(req, &wire)?;
+        clock.note(e, false);
     }
-    let spake_more = |e: &KrbError| {
-        skew_time.is_none() && req.want_spake && e.error_code == err::MORE_PREAUTH_DATA_REQUIRED
-    };
+    // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): no listed mechanism means `KRB5_PREAUTH_FAILED`, and the password prompter is not called.
+    if let KdcMsg::Error(e) = &msg
+        && e.error_code == err::PREAUTH_REQUIRED
+        && !hint_offers_real_mechanism(req, e)
+    {
+        return Err(preauth_failed());
+    }
     let needs_key = match &msg {
         KdcMsg::AsRep(_) => {
             refuse_spake_skip(req.want_spake)?;
@@ -372,10 +379,10 @@ fn as_exchange_inner(
                 trace::init_creds_preauth();
                 trace_preauth_input(&method_from_error(&e).unwrap_or_default(), &etypes);
             }
-            spake_forced(req, keys, nonce, &bound, &etypes, &e)
+            spake_forced(req, keys, nonce, &etypes, &e, &clock)
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-            continue_from_hint(req, keys, nonce, &bound, &etypes, &e, skew_time.as_ref())
+            continue_from_hint(req, keys, nonce, &etypes, &e, &clock)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -521,10 +528,9 @@ fn continue_from_hint(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     nonce: u32,
-    bound: &AsReqTimes,
     etypes: &[i32],
     err: &KrbError,
-    skew_hint: Option<&KerberosTime>,
+    clock: &Clock,
 ) -> Result<AsOutcome, Error> {
     if req.want_spake {
         // MIT `init_creds_step_request` (`get_in_tkt.c:1342-1352`): the next request is
@@ -539,7 +545,7 @@ fn continue_from_hint(
                 etypes,
             );
         }
-        return spake_forced(req, keys, nonce, bound, etypes, err);
+        return spake_forced(req, keys, nonce, etypes, err, clock);
     }
     let preferred = conf_preferred_preauth_types();
     // MIT `spake_init` (`spake_client.c:62-73`): with no permitted group there is no SPAKE module.
@@ -560,9 +566,9 @@ fn continue_from_hint(
             .find(|&t| t == pa::ENC_TIMESTAMP || (t == pa::SPAKE && !spake_failed))
             == Some(pa::SPAKE);
         if !spake_next {
-            return continue_preauth(req, keys, nonce, bound, etypes, &hint, skew_hint);
+            return continue_preauth(req, keys, nonce, etypes, &hint, clock);
         }
-        match continue_spake(req, keys, nonce, bound, etypes, &hint, &groups)? {
+        match continue_spake(req, keys, nonce, etypes, &hint, &groups, clock)? {
             SpakeEnd::Done(out) => return Ok(*out),
             SpakeEnd::Fallback(next) => {
                 spake_failed = true;
@@ -572,20 +578,25 @@ fn continue_from_hint(
     }
 }
 
-/// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1729`): MIT builds the next encrypted
-/// timestamp from the offset the PREAUTH_REQUIRED error's stime sets; this port builds it at
-/// `skew_hint`, set only after a first-reply skew error, and otherwise from the local clock.
-/// A skew error is retried once at the KDC's time, and an unsupported etype is retried once with
-/// aes256 alone, a retry MIT's error branch does not have; any other error is not another guess.
+/// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1729`): the next request, and its encrypted
+/// timestamp, are made at the time the PREAUTH_REQUIRED error's offset gives (`clock`).
+/// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1318-1336`): an error to the timestamp goes to the module's tryagain, which encrypted timestamp lacks, so the KDC's error ends the exchange.
+/// An unsupported etype is retried once with aes256 alone, a retry MIT's error branch does not
+/// have; any other error is not another guess.
 fn continue_preauth(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
     nonce: u32,
-    bound: &AsReqTimes,
     etypes: &[i32],
     preauth_err: &KrbError,
-    skew_hint: Option<&KerberosTime>,
+    clock: &Clock,
 ) -> Result<AsOutcome, Error> {
+    // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): encrypted timestamp runs only for a type the hint lists.
+    if let Ok(method) = method_from_error(preauth_err)
+        && !method.iter().any(|p| p.padata_type == pa::ENC_TIMESTAMP)
+    {
+        return Err(preauth_failed());
+    }
     let (etype, salt, params) =
         select_s2k(preauth_err, &salt_cname(&req.cname), req.realm, etypes)?;
     trace_keytab_gak(req, keys, etype);
@@ -600,65 +611,99 @@ fn continue_preauth(
     }
     // MIT `k5_preauth` (`preauth2.c:992-993`): the KDC's cookie leads the next request's padata.
     let mut padata = error_cookie(preauth_err);
-    padata.push(match skew_hint {
-        Some(t) => pa_enc_timestamp_at(&client_key, t, false)?,
-        None => pa_enc_timestamp(&client_key, false)?,
-    });
+    padata.push(pa_enc_timestamp_at(&client_key, clock.now(true), false)?);
     trace::preauth_process(ENCTS_MODULE, pa::ENC_TIMESTAMP, true, 0, None);
     trace::preauth_output(&padata);
-    let second = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
+    let bound = request_times(req, clock);
+    let second = build_as_req_from(req, nonce, &bound, Some(padata), etypes)?;
     let wire = encode(&second)?;
-    let finish = |rep: AsRep, wire: &[u8], etypes: &[i32], client_key: ProtocolKey| {
-        trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
-        trace::init_creds_as_key_preauth((&client_key).into());
-        finish_as_rep(
-            rep,
-            nonce,
-            Some(client_key),
-            req.password,
-            &req.cname,
-            req.realm,
-            Some(pa::ENC_TIMESTAMP),
-            req.canonicalize,
-            &req_sname(req),
-            bound,
-            Some(wire),
-            false,
-        )
-    };
+    let finish =
+        |rep: AsRep, wire: &[u8], etypes: &[i32], client_key: ProtocolKey, bound: &AsReqTimes| {
+            trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+            trace::init_creds_as_key_preauth((&client_key).into());
+            finish_as_rep(
+                rep,
+                nonce,
+                Some(client_key),
+                req.password,
+                &req.cname,
+                req.realm,
+                Some(pa::ENC_TIMESTAMP),
+                req.canonicalize,
+                &req_sname(req),
+                bound,
+                Some(wire),
+                false,
+            )
+        };
     match send_as(req, &wire)? {
-        KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key),
-        KdcMsg::Error(e) if e.error_code == err::SKEW => {
-            let skew_time = e.stime.clone();
-            // MIT `k5_preauth_tryagain` (`preauth2.c:926-927`): the error's cookie follows the
-            // module's retried padata.
-            trace_tryagain_input(&e);
-            let mut padata = vec![pa_enc_timestamp_at(&client_key, &skew_time, false)?];
-            tryagain_padata(error_cookie(&e), &mut padata);
-            let third = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
-            let wire = encode(&third)?;
-            match send_as(req, &wire)? {
-                KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key),
-                KdcMsg::Error(e) => classify_kdc_error(&e),
-                KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-            }
-        }
+        KdcMsg::AsRep(rep) => finish(rep, &wire, etypes, client_key, &bound),
         KdcMsg::Error(e) if e.error_code == err::ETYPE_NOSUPP => {
             let etypes = vec![EncryptionType::Aes256CtsHmacSha196.to_iana()];
             trace_tryagain_input(&e);
-            let mut padata = vec![pa_enc_timestamp(&client_key, false)?];
+            let mut padata = vec![pa_enc_timestamp_at(&client_key, clock.now(true), false)?];
             tryagain_padata(error_cookie(&e), &mut padata);
-            let retry = build_as_req_from(req, nonce, bound, Some(padata), &etypes)?;
+            let bound = request_times(req, clock);
+            let retry = build_as_req_from(req, nonce, &bound, Some(padata), &etypes)?;
             let wire = encode(&retry)?;
             match send_as(req, &wire)? {
-                KdcMsg::AsRep(rep) => finish(rep, &wire, &etypes, client_key),
+                KdcMsg::AsRep(rep) => finish(rep, &wire, &etypes, client_key, &bound),
                 KdcMsg::Error(e) => classify_kdc_error(&e),
                 KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
             }
         }
-        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::Error(e) => {
+            encts_tryagain(&e);
+            classify_kdc_error(&e)
+        }
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
+}
+
+/// No real mechanism answered the hint: MIT's `KRB5_PREAUTH_FAILED` text.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): a hint with no runnable real type fails the exchange.
+fn preauth_failed() -> Error {
+    Error::ReplyMismatch("Generic preauthentication failure".into())
+}
+
+/// Whether the hint lists a mechanism this client runs, so the password may be read.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): a real type runs only when the KDC listed it.
+fn hint_offers_real_mechanism(req: &AsRequest<'_>, err: &KrbError) -> bool {
+    if req.want_spake || !retried(err) {
+        return true;
+    }
+    let Ok(method) = method_from_error(err) else {
+        return true;
+    };
+    if method.is_empty() {
+        return true;
+    }
+    let groups = client_groups();
+    method.iter().any(|p| {
+        p.padata_type == pa::ENC_TIMESTAMP || (p.padata_type == pa::SPAKE && !groups.is_empty())
+    })
+}
+
+/// Whether MIT retries `e`, an error to an unarmored request: it carries e-data.
+/// MIT `krb5int_fast_process_error` (`lib/krb5/krb/fast.c:494-497`): without FAST, an error is retried when its e-data is not empty.
+fn retried(e: &KrbError) -> bool {
+    e.e_data.as_ref().is_some_and(|d| !d.as_ref().is_empty())
+}
+
+/// What MIT traces for an error to the encrypted timestamp that its branches leave to the
+/// mechanism: a retried one goes to the module's tryagain, which encrypted timestamp lacks.
+/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1759-1765`): an error no branch handles continues, when retried, with the selected mechanism.
+/// MIT `k5_preauth_tryagain` (`lib/krb5/krb/preauth2.c:905-922`): a module with no tryagain returns no padata and is noted failed, after the trace.
+fn encts_tryagain(e: &KrbError) {
+    let handled = matches!(
+        e.error_code,
+        err::PREAUTH_REQUIRED | err::PREAUTH_FAILED | err::MORE_PREAUTH_DATA_REQUIRED
+    );
+    if handled || !retried(e) || !trace::enabled() {
+        return;
+    }
+    trace_tryagain_input(e);
+    trace::preauth_tryagain(ENCTS_MODULE, pa::ENC_TIMESTAMP, 0, None);
 }
 
 /// MIT's name of the encrypted timestamp module (`preauth_encts.c`).
@@ -710,11 +755,13 @@ pub fn insert_module_padata_before_info_pa(list: &mut Vec<PaData>, module_pa: Pa
 /// MIT `pkinit_as_req_create` (`pkinit_clnt.c:194-195`): the freshness token is placed in the
 /// auth pack when freshness is enabled. The first request carries no PKINIT, and a reply that is
 /// not preauth-required or preauth-failed is not turned into an AuthPack.
+/// MIT `pa_pkinit_gen_req` (`plugins/preauth/pkinit/pkinit_clnt.c:125-136`): the authenticator's time is the one `get_preauth_time` gives, the KDC's after a preauth error.
 fn continue_pkinit(
     req: &AsRequest<'_>,
     nonce: u32,
     bound: &AsReqTimes,
     etypes: &[i32],
+    clock: &Clock,
 ) -> Result<AsOutcome, Error> {
     let pk = req
         .pkinit
@@ -728,6 +775,9 @@ fn continue_pkinit(
         KdcMsg::Error(e)
             if e.error_code == err::PREAUTH_REQUIRED || e.error_code == err::PREAUTH_FAILED =>
         {
+            if retried(&e) {
+                clock.note(&e, false);
+            }
             let method = method_from_error(&e)?;
             if trace::enabled() {
                 trace::init_creds_preauth();
@@ -751,22 +801,25 @@ fn continue_pkinit(
     if let Some(c) = cookie {
         extra.push(c);
     }
+    let bound = &request_times(req, clock);
     let mut req2 = build_as_req_from(req, nonce, bound, Some(extra), etypes)?;
     let body_der = encode(&req2.0.req_body)?;
     let mut h = Sha1::new();
     h.update(&body_der);
     let sha1 = h.finalize();
     let anonymous = req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname);
+    let now = clock.now(true);
     let pa = if anonymous {
-        crate::preauth::pa_pk_as_req_unsigned(&kp.public, nonce, &sha1, token.as_deref())?
+        crate::preauth::pa_pk_as_req_unsigned_at(&kp.public, nonce, &sha1, token.as_deref(), now)?
     } else {
-        pa_pk_as_req_signed(
+        pa_pk_as_req_signed_at(
             &kp.public,
             &pk.cert,
             &pk.key,
             nonce,
             &sha1,
             token.as_deref(),
+            now,
         )?
     };
     insert_module_padata_before_info_pa(req2.0.padata.get_or_insert_with(Vec::new), pa);
@@ -1242,7 +1295,7 @@ fn build_as_req_from(
     padata: Option<Vec<PaData>>,
     etypes: &[i32],
 ) -> Result<AsReq, Error> {
-    let (_, addresses) = ticket_body(req);
+    let addresses = req.ticket.addresses.clone();
     build_as_req(
         &req.cname,
         req.realm,
@@ -1340,12 +1393,18 @@ pub fn conf_etypes(tgs: bool) -> Vec<i32> {
     if v.is_empty() { preferred } else { v }
 }
 
+/// The times and options of the next request, made at the exchange's clock.
+/// MIT `set_request_times` (`lib/krb5/krb/get_in_tkt.c:707-710`): each request's times are made at `k5_init_creds_current_time`, the KDC's time once a preauth error gave it.
+/// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1278-1280`): before every request.
+fn request_times(req: &AsRequest<'_>, clock: &Clock) -> AsReqTimes {
+    ticket_body(req, &clock.now(true).0)
+}
+
 /// MIT `set_request_times` (`get_in_tkt.c:711-722`): the start time is omitted unless the caller
 /// asked for one, and a renewable end is not requested before the ticket end. Asking for a start
 /// time marks the request postdated, and omitting a renewable lifetime asks only for
 /// renewable-ok.
-fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddresses>) {
-    let now = KerberosTime::now();
+fn ticket_body(req: &AsRequest<'_>, now: &KerberosTime) -> AsReqTimes {
     // MIT `set_request_times` (`get_in_tkt.c:711-714`): omits `from` unless start_time != 0.
     // MIT `krb5_init_creds_init` (`get_in_tkt.c:932-934`): sets ALLOW_POSTDATE | POSTDATED
     // when start_time > 0.
@@ -1353,7 +1412,7 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
         Some(s) if s > 0 => now.add_seconds(i64::try_from(s).unwrap_or(i64::MAX)).ok(),
         _ => None,
     };
-    let base = from.as_ref().unwrap_or(&now);
+    let base = from.as_ref().unwrap_or(now);
     let life = req.ticket.lifetime.unwrap_or(24 * 3600);
     let till = base
         .add_seconds(i64::try_from(life).unwrap_or(i64::MAX))
@@ -1398,15 +1457,12 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
     if req.ticket.anonymous || krb5_types::pkinit::is_anonymous_principal(&req.cname) {
         opts = opts.with_bit(flag_bit::ANONYMOUS, true);
     }
-    (
-        AsReqTimes {
-            till,
-            rtime,
-            from,
-            opts,
-        },
-        req.ticket.addresses.clone(),
-    )
+    AsReqTimes {
+        till,
+        rtime,
+        from,
+        opts,
+    }
 }
 
 /// Computes the KDCOptions and the optional `from` time that MIT would set for this request.
@@ -1417,26 +1473,20 @@ fn ticket_body(req: &AsRequest<'_>) -> (AsReqTimes, Option<krb5_types::HostAddre
 /// start time, and clears RENEWABLE_OK when a renewable life is asked for.
 #[must_use]
 pub fn as_init_creds_options(req: &AsRequest<'_>) -> (KdcOptions, Option<KerberosTime>) {
-    let (t, _) = ticket_body(req);
+    let t = ticket_body(req, &KerberosTime::now());
     (t.opts, t.from)
 }
 
-/// An encrypted timestamp of now; `armored` when it goes inside FAST armor.
-fn pa_enc_timestamp(key: &ProtocolKey, armored: bool) -> Result<PaData, Error> {
-    pa_enc_timestamp_at(key, &KerberosTime::now(), armored)
-}
-
-/// An encrypted timestamp of `now`; `armored` when it goes inside FAST armor.
+/// An encrypted timestamp of `now`, the time and its microseconds; `armored` when it goes inside
+/// FAST armor.
+/// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:87-97`): the timestamp is the time `get_preauth_time` gives, the KDC's after a preauth error, encrypted with key usage 1.
 fn pa_enc_timestamp_at(
     key: &ProtocolKey,
-    now: &KerberosTime,
+    now: (KerberosTime, krb5_types::Microseconds),
     armored: bool,
 ) -> Result<PaData, Error> {
-    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
-    let ts = PaEncTsEnc {
-        patimestamp: now.clone(),
-        pausec: Some(krb5_types::Microseconds::from_subsec_micros(usec)),
-    };
+    let (now, usec) = now;
+    let ts = ec::pa_enc_ts(&now, usec);
     let der = encode(&ts)?;
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
     let cipher = encrypt(key, usage, &der)?;
@@ -1444,7 +1494,7 @@ fn pa_enc_timestamp_at(
     // as the request carries them; inside FAST armor the ciphertext prints only as its hash.
     let (sec, usec) = (
         i64::from(now.unix_seconds()),
-        i32::try_from(usec).unwrap_or_default(),
+        i32::try_from(usec.get()).unwrap_or_default(),
     );
     if armored {
         trace::preauth_enc_ts_armored(sec, usec, &der, &cipher);

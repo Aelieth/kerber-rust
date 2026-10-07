@@ -112,11 +112,22 @@ fn parse_fleet_knobs_and_ignore_heimdal_spellings() {
     .unwrap();
     assert_eq!(c.udp_preference_limit, Some(0));
     assert!(!c.rdns);
-    assert!(!c.kdc_timesync);
+    // `no` is not an integer: MIT's `strtol` leaves the default, which is on.
+    assert!(c.kdc_timesync);
     assert!(!c.verify_ap_req_nofail);
     let nf = Krb5Conf::parse("[libdefaults]\n    verify_ap_req_nofail = true\n").unwrap();
     assert!(nf.verify_ap_req_nofail);
     assert!(c.forwardable);
+    let sync =
+        |v: &str| Krb5Conf::parse(&format!("[libdefaults]\n    kdc_timesync = {v}\n")).unwrap();
+    assert!(!sync("0").kdc_timesync);
+    assert!(sync("1").kdc_timesync);
+    assert!(sync("2").kdc_timesync);
+    assert!(
+        sync("false").kdc_timesync,
+        "not an integer: the default stays on"
+    );
+    assert!(sync(" 1").kdc_timesync);
     assert!(!c.proxiable);
     let px = Krb5Conf::parse("[libdefaults]\n    proxiable = true\n").unwrap();
     assert!(px.proxiable);

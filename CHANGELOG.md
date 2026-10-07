@@ -1475,6 +1475,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** A preauth error notes the KDC time before the prompt (`pa_offset`; `kdc_timesync`: `0` off, else on). Times, timestamp, PKINIT, challenge; no skew retry. Omitting encrypted timestamp does not prompt. Live +1 h; units; a gate cell.
 - **protocol.** Under FAST `kinit` answers with MIT's encrypted challenge (`preauth_ec.c`: KRB-FX-CF2
   keys, usages 54/55, `pa_type` 138), and encrypted timestamp only when offered. Live with MIT's
   KDC and ours; units.

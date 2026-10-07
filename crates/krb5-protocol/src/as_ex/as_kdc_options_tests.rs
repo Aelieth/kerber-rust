@@ -15,7 +15,7 @@ fn options_of(ticket: AsTicketOpts) -> KdcOptions {
         etypes: None,
         ticket,
     };
-    ticket_body(&req).0.opts
+    ticket_body(&req, &KerberosTime::now()).opts
 }
 
 fn times_of(ticket: AsTicketOpts, canonicalize: bool) -> AsReqTimes {
@@ -33,7 +33,7 @@ fn times_of(ticket: AsTicketOpts, canonicalize: bool) -> AsReqTimes {
         etypes: None,
         ticket,
     };
-    ticket_body(&req).0
+    ticket_body(&req, &KerberosTime::now())
 }
 
 #[test]

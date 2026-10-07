@@ -565,9 +565,31 @@ pub fn pa_pk_as_req_signed(
     freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
     let now = KerberosTime::now();
-    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    let usec = Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
+    pa_pk_as_req_signed_at(
+        client_public,
+        cert_der,
+        leaf_secret,
+        nonce,
+        body_sha1,
+        freshness,
+        (now, usec),
+    )
+}
+
+/// [`pa_pk_as_req_signed`] with the authenticator's time given: the AS exchange's clock.
+pub(crate) fn pa_pk_as_req_signed_at(
+    client_public: &[u8],
+    cert_der: &[u8],
+    leaf_secret: &[u8; 32],
+    nonce: u32,
+    body_sha1: &[u8],
+    freshness: Option<&[u8]>,
+    now: (KerberosTime, Microseconds),
+) -> Result<PaData, Error> {
+    let (now, usec) = now;
     let pk_auth = krb5_types::pkinit::PkAuthenticator {
-        cusec: Microseconds::from_subsec_micros(usec),
+        cusec: usec,
         ctime: now,
         nonce,
         pa_checksum: Some(body_sha1.to_vec().into()),
@@ -607,9 +629,21 @@ pub fn pa_pk_as_req_unsigned(
     freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
     let now = KerberosTime::now();
-    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    let usec = Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
+    pa_pk_as_req_unsigned_at(client_public, nonce, body_sha1, freshness, (now, usec))
+}
+
+/// [`pa_pk_as_req_unsigned`] with the authenticator's time given: the AS exchange's clock.
+pub(crate) fn pa_pk_as_req_unsigned_at(
+    client_public: &[u8],
+    nonce: u32,
+    body_sha1: &[u8],
+    freshness: Option<&[u8]>,
+    now: (KerberosTime, Microseconds),
+) -> Result<PaData, Error> {
+    let (now, usec) = now;
     let pk_auth = krb5_types::pkinit::PkAuthenticator {
-        cusec: Microseconds::from_subsec_micros(usec),
+        cusec: usec,
         ctime: now,
         nonce,
         pa_checksum: Some(body_sha1.to_vec().into()),

@@ -166,6 +166,37 @@ if [ "$RUST_SKEW0_RC" -eq 0 ]; then
 fi
 echo "$RUST_SKEW0" | grep -qiE 'Clock skew|skew too great'
 echo "RUST_skew_notimesync"
+echo "==== +3 d kinit answers the preauth error at the KDC's time (note_req_timestamp) ===="
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+t = Path("/tmp/direct-krb5.conf").read_text()
+t = t.replace("[libdefaults]\n", "[libdefaults]\n    spake_preauth_groups = nosuch\n", 1)
+Path("/tmp/encts-krb5.conf").write_text(t)
+'
+skew_encts() {
+    local side=$1 cmd=$2
+    local out rc tr n
+    docker exec "$NAME" rm -f /tmp/skew-encts.trace
+    set +e
+    out="$(docker exec -e KRB5_CONFIG=/tmp/encts-krb5.conf -e KRB5_PASSWORD=userpassword \
+        -e KRB5_TRACE=/tmp/skew-encts.trace "$NAME" sh -c "$cmd" 2>&1)"
+    rc=$?
+    set -e
+    tr="$(docker exec "$NAME" cat /tmp/skew-encts.trace)"
+    echo "$out"
+    echo "$tr"
+    echo "${side}_skew_encts_rc=$rc"
+    [ "$rc" -eq 0 ] || die "$side kinit +3d with encrypted timestamp failed"
+    echo "$tr" | grep -qF 'Encrypted timestamp (for' || die "$side kinit +3d sent no encrypted timestamp"
+    n="$(echo "$tr" | grep -cF 'Sending request (' || true)"
+    [ "$n" = 2 ] || die "$side kinit +3d sent $n requests, not 2"
+    if echo "$tr" | grep -qF 'Clock skew too great'; then
+        die "$side kinit +3d took a clock skew error"
+    fi
+    echo "${side}_skew_encts_first_try"
+}
+skew_encts MIT "printf 'userpassword\n' | LD_PRELOAD=/tmp/skew.so kinit -c /tmp/cc_skew_e user@KERBER.TEST"
+skew_encts RUST "LD_PRELOAD=/tmp/skew.so /tmp/krb5-kinit -c /tmp/cc_skew_e_r user@KERBER.TEST"
 docker exec "$NAME" python3 -c '
 from pathlib import Path
 t = Path("/tmp/direct-krb5.conf").read_text().replace("kdc = 127.0.0.1:88", "kdc = 127.0.0.1:1")
