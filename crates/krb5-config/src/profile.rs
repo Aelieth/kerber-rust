@@ -69,7 +69,7 @@ impl Krb5Conf {
     /// # Errors
     ///
     /// [`Error::Dns`] when `realm` has no static KDC list, `dns_lookup_kdc` is on, and the SRV
-    /// lookup fails or finds no records.
+    /// lookup (`_kerberos._udp` then `_kerberos._tcp`) fails or finds no records.
     pub fn kdcs_for(&self, realm: &str) -> Result<Vec<Endpoint>, Error> {
         if let Some(list) = self.kdcs.get(realm)
             && !list.is_empty()

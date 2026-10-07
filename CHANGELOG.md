@@ -51,6 +51,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Security
 
+- **client.** DNS SRV uses resolv.conf only, a random ID and a fresh UDP port, and ignores a wrong ID, question, or source. TC retries over TCP. `_kerberos._udp` then `_tcp`. Settled beside MIT 1.22.2; units.
 - **kdc/admin.** A release daemon's JSON log reads no `RUST_LOG` (`test-hooks` only) and no
   `NO_COLOR` (no `ansi`), as MIT's. Unit; strings check.
 - **tool.** `krb5-iprop-pull`, the gss programs and `krb5-tools` build only with the test hooks:
@@ -829,6 +830,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **kdc.** The KDC's default TCP listen backlog is 128 (MIT's is 5). Set `[kdcdefaults] kdc_tcp_listen_backlog = 5` for MIT's. kadmind and kpasswd stay at 5. See docs/mit-deviations.md.
 - **admin.** `kpropd` takes MIT's `-r`, `-s`, `-a` and is `host/<this host>`; `kprop`, `-s` or the
   default keytab. `KRB5_KPROP_*`, `KRB5_KDC_REALM` are gone. Profile booleans, context
   refusals, keytabs, `wkt` as MIT's. Settled; units; gates.

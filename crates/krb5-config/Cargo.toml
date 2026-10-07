@@ -9,6 +9,7 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+getrandom.workspace = true
 krb5-types.workspace = true
 nix = { workspace = true, features = ["hostname"] }
 thiserror.workspace = true
