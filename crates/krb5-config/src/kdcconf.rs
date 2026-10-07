@@ -105,8 +105,8 @@ impl Default for KdcConf {
 
 /// MIT `MAX_DGRAM_SIZE` (`include/osconf.hin:113-113`): the largest UDP reply by default.
 pub const MAX_DGRAM_SIZE: i32 = 65_536;
-/// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): a TCP listener's backlog by default.
-pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 5;
+/// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): MIT's TCP listen backlog is 5; the KDC's default here is 128 (`docs/mit-deviations.md`). The name is kept for the `kdc_tcp_listen_backlog` profile lookup.
+pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 128;
 
 /// A profile value read as C's `sscanf("%d")` reads it: blanks, an optional sign, then at least
 /// one digit; a value past `long` stops there and is cut to `int` as glibc stores it.

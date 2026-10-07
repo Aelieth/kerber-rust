@@ -24,12 +24,19 @@ esac
 . "$FIELD_LIB/leg.sh"
 T0=$(date +%s)
 SS="'( sport = :88 or sport = :464 or sport = :749 )'"
-# listencheck: kdc's listeners, the set MIT's own daemons open (its leg grades the same two checks): exactly the
-# wildcard 0.0.0.0 and [::] sockets on 88 udp/tcp, 464 udp/tcp and 749 tcp, with listen queues 5 / 5 / 2.
+# listencheck: kdc's listeners, the set MIT's own daemons open (its leg grades the same socket check):
+# exactly the wildcard 0.0.0.0 and [::] sockets on 88 udp/tcp, 464 udp/tcp and 749 tcp. kadmind stays
+# at 5 and RPC at 2. Port 88 is MIT's 5 on the mit leg and kerber-rust's default 128 on the rust leg.
 listencheck() {
+    local b88
+    if [ "$LEG" = rust ]; then
+        b88=128
+    else
+        b88=5
+    fi
     check listen.sockets 'line:sockets: tcp 0.0.0.0:464 tcp 0.0.0.0:749 tcp 0.0.0.0:88 tcp [::]:464 tcp [::]:749 tcp [::]:88 udp 0.0.0.0:464 udp 0.0.0.0:88 udp [::]:464 udp [::]:88' \
         run kdc "sudo ss -H -lntup $SS; printf 'sockets: %s\n' \"\$(sudo ss -H -lntu $SS | awk '{ print \$1, \$5 }' | LC_ALL=C sort | paste -sd' ' -)\"; printf 'backlog: %s\n' \"\$(sudo ss -H -lntu $SS | awk '\$1 == \"tcp\" { n = split(\$5, a, \":\"); print a[n] \"=\" \$4 }' | LC_ALL=C sort -u | paste -sd' ' -)\""
-    checklast listen.backlog 'line:backlog: 464=5 749=2 88=5'
+    checklast listen.backlog "line:backlog: 464=5 749=2 88=$b88"
 }
 if [ "$LEG" = mit ]; then
     section "upgrade --leg mit: kdc reset to $MIT_SNAPSHOT_KDC, the stock MIT realm $REALM (the oracle); the ref under test is not installed"

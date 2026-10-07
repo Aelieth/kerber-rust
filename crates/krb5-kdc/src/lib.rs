@@ -87,11 +87,11 @@ pub use kdb_dump::{
 #[cfg(feature = "test-hooks")]
 pub use listen::drop_privileges;
 pub use listen::{
-    BIND_CANDIDATES, Datagram, ListenLimits, MAX_DGRAM_REPLY, MAX_TCP_REQUEST, MAX_TCP_WORKERS,
-    PktInfo, SharedDump, SharedStore, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP, bind_preferred,
-    bind_rpc_listeners, bind_tcp_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners,
-    recv_from_to, send_udp_reply, serve, serve_all, serve_all_until, serve_daemon, serve_until,
-    shared_dump, shared_store,
+    BIND_CANDIDATES, DEFAULT_TCP_LISTEN_BACKLOG, Datagram, ListenLimits, MAX_DGRAM_REPLY,
+    MAX_TCP_REQUEST, MAX_TCP_WORKERS, PktInfo, SharedDump, SharedStore, WHILE_DISPATCHING_TCP,
+    WHILE_DISPATCHING_UDP, bind_preferred, bind_rpc_listeners, bind_tcp_listeners,
+    bind_tcp_listeners_with_backlog, bind_udp_listeners, recv_from_to, send_udp_reply, serve,
+    serve_all, serve_all_until, serve_daemon, serve_until, shared_dump, shared_store,
 };
 pub use lockout::{
     Lockout, LockoutUpdate, SUFFIX_LOCKOUT, lockout_path, lockout_records, merge_lockout_file,

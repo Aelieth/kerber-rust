@@ -187,8 +187,14 @@ impl Default for ListenLimits {
     }
 }
 
-/// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): a TCP listener's backlog is 5.
-const TCP_LISTEN_BACKLOG: i32 = 5;
+/// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): MIT's TCP listen backlog is 5.
+/// TCP listeners that still use 5: `bind_udp_tcp` (the test-hooks pinned KDC, `--test-realm` /
+/// `KRB5_KDC_BIND`) and kadmind's kpasswd listeners (`bind_tcp_listeners_with_backlog`). UDP setup
+/// ignores this value. `bind_rpc_listeners` passes it, then an RPC socket listens at 2.
+pub const DEFAULT_TCP_LISTEN_BACKLOG: i32 = 5;
+/// The embedder's TCP `listen` backlog ([`bind_tcp_listeners`]). MIT's is 5; 128 is the deviation
+/// in `docs/mit-deviations.md`, the same default an unset `kdc_tcp_listen_backlog` takes.
+const KDC_TCP_LISTEN_BACKLOG: i32 = 128;
 /// MIT `svctcp_create` (`lib/rpc/svc_tcp.c:178-178`): an RPC listener's backlog is 2.
 const RPC_LISTEN_BACKLOG: i32 = 2;
 /// MIT `setnolinger` (`lib/apputils/net-server.c:686-691`): a TCP listener does not linger.
@@ -205,8 +211,16 @@ const NO_LINGER: nix::libc::linger = nix::libc::linger {
 /// The `io::Error` from setting up the UDP socket on `addr`, or from setting up the TCP listener
 /// when the UDP socket was set up.
 pub(crate) fn bind_udp_tcp(addr: SocketAddr) -> io::Result<(UdpSocket, TcpListener)> {
-    let udp = UdpSocket::from(setup_socket(addr, BindType::Udp, TCP_LISTEN_BACKLOG)?);
-    let tcp = TcpListener::from(setup_socket(addr, BindType::Tcp, TCP_LISTEN_BACKLOG)?);
+    let udp = UdpSocket::from(setup_socket(
+        addr,
+        BindType::Udp,
+        DEFAULT_TCP_LISTEN_BACKLOG,
+    )?);
+    let tcp = TcpListener::from(setup_socket(
+        addr,
+        BindType::Tcp,
+        DEFAULT_TCP_LISTEN_BACKLOG,
+    )?);
     Ok((udp, tcp))
 }
 
@@ -258,20 +272,22 @@ pub fn bind_preferred(candidates: &[&str]) -> io::Result<(SocketAddr, UdpSocket,
 /// `io::ErrorKind::InvalidInput` when an entry does not resolve, and the setup error, named with
 /// its address, for an address that does not bind.
 pub fn bind_udp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<UdpSocket>> {
-    Ok(bind_listeners(addrs, BindType::Udp, TCP_LISTEN_BACKLOG)?
-        .into_iter()
-        .map(UdpSocket::from)
-        .collect())
+    Ok(
+        bind_listeners(addrs, BindType::Udp, DEFAULT_TCP_LISTEN_BACKLOG)?
+            .into_iter()
+            .map(UdpSocket::from)
+            .collect(),
+    )
 }
 
-/// [`bind_udp_listeners`] for a TCP list (`kdc_tcp_listen`, `kpasswd_listen`), each listening
-/// with MIT's default backlog of 5.
+/// [`bind_udp_listeners`] for a TCP list (`kdc_tcp_listen`), each listening with the KDC's
+/// default backlog of 128. kadmind's kpasswd list passes 5 to [`bind_tcp_listeners_with_backlog`].
 ///
 /// # Errors
 ///
 /// As [`bind_udp_listeners`].
 pub fn bind_tcp_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
-    bind_tcp_listeners_with_backlog(addrs, TCP_LISTEN_BACKLOG)
+    bind_tcp_listeners_with_backlog(addrs, KDC_TCP_LISTEN_BACKLOG)
 }
 
 /// [`bind_tcp_listeners`] with the backlog `listen` is given (krb5kdc's
@@ -298,10 +314,12 @@ pub fn bind_tcp_listeners_with_backlog(
 ///
 /// As [`bind_udp_listeners`].
 pub fn bind_rpc_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> {
-    Ok(bind_listeners(addrs, BindType::Rpc, TCP_LISTEN_BACKLOG)?
-        .into_iter()
-        .map(TcpListener::from)
-        .collect())
+    Ok(
+        bind_listeners(addrs, BindType::Rpc, DEFAULT_TCP_LISTEN_BACKLOG)?
+            .into_iter()
+            .map(TcpListener::from)
+            .collect(),
+    )
 }
 
 /// A listener's kind, as a failed setup names it in the daemon log.

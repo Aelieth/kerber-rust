@@ -52,9 +52,9 @@ use krb5_cli::{MitArgs, MitOpt, Placement};
 use krb5_kdc::net_server::Sockets;
 use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
-    Acl, Error, IpropRole, OpenFailure, PrincipalStore, Signals, acl_for_store, bind_rpc_listeners,
-    bind_tcp_listeners, bind_udp_listeners, detach, names_relative_database, open_database,
-    shared_dump as shared_store, write_pid_file,
+    Acl, DEFAULT_TCP_LISTEN_BACKLOG, Error, IpropRole, OpenFailure, PrincipalStore, Signals,
+    acl_for_store, bind_rpc_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners, detach,
+    names_relative_database, open_database, shared_dump as shared_store, write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 
@@ -464,7 +464,10 @@ fn bind_sockets(
         .kpasswd_listeners()
         .unwrap_or_else(|e| fatal("kdc.conf", &e));
     let udp = bind_udp_listeners(&addrs).unwrap_or_else(|_| std::process::exit(1));
-    let tcp = bind_tcp_listeners(&addrs).unwrap_or_else(|_| std::process::exit(1));
+    // MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:173-174`): kpasswd's TCP listeners listen
+    // with `DEFAULT_TCP_LISTEN_BACKLOG` (5), not the KDC's default.
+    let tcp = bind_tcp_listeners_with_backlog(&addrs, DEFAULT_TCP_LISTEN_BACKLOG)
+        .unwrap_or_else(|_| std::process::exit(1));
     let addrs = match kadmind_port {
         Some(port) => krb5_config::listen::listen_addrs(conf.kadmind_listen.as_deref(), port),
         None => conf.kadmind_listeners(krb5_admin_server),

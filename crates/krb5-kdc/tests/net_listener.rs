@@ -35,6 +35,49 @@ fn tcp_max_request_is_one_mib_minus_four() {
     assert_eq!(MAX_TCP_REQUEST, 1024 * 1024 - 4);
 }
 
+/// The embedder's `bind_tcp_listeners` (no backlog argument) listens with the KDC default 128.
+#[test]
+fn bind_tcp_listeners_defaults_the_kdc_backlog_to_128() {
+    use krb5_kdc::bind_tcp_listeners;
+    let listener = bind_tcp_listeners(&[ListenAddr {
+        host: Some("127.0.0.1".into()),
+        port: 0,
+    }])
+    .unwrap();
+    assert_eq!(listener.len(), 1);
+    let addr = listener[0].local_addr().unwrap();
+    assert_eq!(tcp_send_queue(addr), 128, "embedder TCP backlog at {addr}");
+}
+
+/// `ss -ltn` Send-Q for a listening socket: the backlog the kernel kept.
+fn tcp_send_queue(addr: std::net::SocketAddr) -> i32 {
+    let out = std::process::Command::new("ss")
+        .args(["-ltn"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "ss -ltn: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    let port = addr.port().to_string();
+    let ip = addr.ip().to_string();
+    for line in text.lines() {
+        let cols: Vec<_> = line.split_whitespace().collect();
+        if cols.len() < 5 {
+            continue;
+        }
+        let Some((host, p)) = cols[3].rsplit_once(':') else {
+            continue;
+        };
+        if p == port && host.trim_matches(['[', ']']) == ip {
+            return cols[2].parse().unwrap();
+        }
+    }
+    panic!("no ss row for {addr}\n{text}");
+}
+
 #[test]
 fn listener_empty_and_truncated_are_dropped() {
     let (store, _) = bootstrap_documented().unwrap();

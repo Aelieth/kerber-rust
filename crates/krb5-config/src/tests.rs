@@ -328,15 +328,16 @@ fn dbmodules_lockout_flags_come_from_the_realms_module_section() {
     );
 }
 
-/// `[kdcdefaults] kdc_max_dgram_reply_size` and `kdc_tcp_listen_backlog` are read as MIT reads them:
-/// the last value, `sscanf("%d")`, MIT's default when that value does not read; the realm stanza
-/// and `[libdefaults]` do not count.
+/// `[kdcdefaults] kdc_max_dgram_reply_size` is read as MIT reads it, and `kdc_tcp_listen_backlog`
+/// the same way: the last value, `sscanf("%d")`, the caller's default when that value does not
+/// read; the realm stanza and `[libdefaults]` do not count. Unset, the datagram size is MIT's
+/// and the TCP backlog is the KDC default 128, not MIT's 5.
 #[test]
-fn kdcdefaults_dgram_size_and_backlog_read_as_mits() {
+fn kdcdefaults_dgram_reads_as_mit_and_backlog_defaults_to_128() {
     let d = KdcConf::parse("").unwrap();
     assert_eq!(
         (d.kdc_max_dgram_reply_size, d.kdc_tcp_listen_backlog),
-        (65_536, 5)
+        (65_536, 128)
     );
     let c = KdcConf::parse(
         "[kdcdefaults]\n    kdc_max_dgram_reply_size = 4096\n    kdc_max_dgram_reply_size = 1200\n\
@@ -363,7 +364,7 @@ fn kdcdefaults_dgram_size_and_backlog_read_as_mits() {
     .unwrap();
     assert_eq!(
         (c.kdc_max_dgram_reply_size, c.kdc_tcp_listen_backlog),
-        (65_536, 5)
+        (65_536, 128)
     );
     assert_eq!(crate::kdcconf::sscanf_int(" +7x"), Some(7));
     assert_eq!(crate::kdcconf::sscanf_int("4294967297"), Some(1));

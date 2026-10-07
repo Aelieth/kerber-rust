@@ -242,8 +242,8 @@ its leg ran against the right KDC.
 
 `scenarios/upgrade.sh --leg mit` is minimal: kdc back to `f4-mit`, Fedora's
 `krb5-server` binaries as packaged, `krb5kdc` and `kadmin` active, the same
-`listen.sockets` and `listen.backlog` checks as the rust leg (MIT's own sockets
-are where those expectations come from), the package versions recorded.
+`listen.sockets` check as the rust leg, and a `listen.backlog` check that expects
+MIT's port 88 at 5 (the rust leg expects 128). The package versions are recorded.
 
 `scenarios/upgrade.sh --leg rust` puts the ref under test on kdc, so it runs first:
 
@@ -265,7 +265,7 @@ are where those expectations come from), the package versions recorded.
     byte-identical to `target/release/<its build name>` (`lib/install-check.sh`),
     and `sha256sum -c` of the manifest passes;
   - `ss` shows exactly `0.0.0.0` and `[::]` on 88 udp/tcp, 464 udp/tcp and 749
-    tcp, with listen queues 5 / 5 / 2;
+    tcp, with listen queues 128 / 5 / 2 (port 88, kpasswd, RPC);
   - MIT's `set up 4 sockets` / `set up 6 sockets` lines;
   - no AVC since the window start, with a `USER_CMD` control in the same window,
     once after the start and once at the end (`selinux.avc.end`, after

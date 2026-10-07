@@ -414,7 +414,8 @@ pub struct KdcConf {
     /// MIT `initialize_realms` (`kdc/main.c:636-638`): the last value read as `%d`, else `MAX_DGRAM_SIZE`.
     pub kdc_max_dgram_reply_size: i32,
     /// `[kdcdefaults] kdc_tcp_listen_backlog`: the KDC's TCP listeners' `listen` backlog.
-    /// MIT `initialize_realms` (`kdc/main.c:639-644`): the last value read as `%d`, else `DEFAULT_TCP_LISTEN_BACKLOG`.
+    /// MIT `initialize_realms` (`kdc/main.c:639-644`): the last value read as `%d`, else this default.
+    /// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): MIT's value is 5; this default is 128 (`docs/mit-deviations.md`).
     pub kdc_tcp_listen_backlog: i32,
 }
 
