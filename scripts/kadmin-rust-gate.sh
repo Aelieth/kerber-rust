@@ -699,7 +699,7 @@ echo "$ADD_U2" | grep -F 'Principal "user2@KERBER.TEST" created.'
 ADD_SVC="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p scoped@KERBER.TEST -w scoped-secret -q 'addprinc -pw x svc/x' 2>&1 || true)"
 echo "$ADD_SVC"
-echo "$ADD_SVC" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
+echo "$ADD_SVC" | strip_mit_kadmin_banner | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
 if echo "$ADD_SVC" | grep -q 'Principal "svc/x@KERBER.TEST" created.'; then
     echo "scoped addprinc svc/x succeeded (ACL target ignored)" >&2
     exit 1
@@ -729,7 +729,7 @@ kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 DEL_NODEL="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p nodel@KERBER.TEST -w nodel-secret -q 'delprinc -force victim' 2>&1 || true)"
 echo "$DEL_NODEL"
-echo "$DEL_NODEL" | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
+echo "$DEL_NODEL" | strip_mit_kadmin_banner | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
 if echo "$DEL_NODEL" | grep -qiE 'Principal "victim@KERBER.TEST" deleted|deleted.'; then
     echo "nodel *D granted delete: $DEL_NODEL" >&2
     exit 1
@@ -747,7 +747,7 @@ kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 LIST_I="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p ro@KERBER.TEST -w ro-secret -q 'listprincs' 2>&1 || true)"
 echo "$LIST_I"
-echo "$LIST_I" | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
+echo "$LIST_I" | strip_mit_kadmin_banner | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
 if echo "$LIST_I" | grep -q 'user@KERBER.TEST'; then
     echo "ro i listed principals: $LIST_I" >&2
     exit 1
@@ -759,7 +759,7 @@ echo "$LIST_L" | grep -F 'user@KERBER.TEST'
 ADDPOL_D="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p ro@KERBER.TEST -w ro-secret -q 'addpol pol-ro' 2>&1 || true)"
 echo "$ADDPOL_D"
-echo "$ADDPOL_D" | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
+echo "$ADDPOL_D" | strip_mit_kadmin_banner | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
 SELFGET="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p user@KERBER.TEST -w userpassword -q 'getprinc user' 2>&1 || true)"
 echo "$SELFGET"

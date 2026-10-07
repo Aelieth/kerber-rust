@@ -329,7 +329,7 @@ echo "$MIT_U2"
 echo "$MIT_U2" | grep -F 'Principal "user2@KERBER.TEST" created.'
 MIT_SVC="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'addprinc -pw x svc/x' 2>&1 || true)"
 echo "$MIT_SVC"
-echo "$MIT_SVC" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
+echo "$MIT_SVC" | strip_mit_kadmin_banner | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
 MIT_REN_SVC="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'renprinc -force user2 svc/y' 2>&1 || true)"
 echo "$MIT_REN_SVC"
 echo "$MIT_REN_SVC" | grep -F 'Insufficient authorization for operation'
@@ -346,7 +346,7 @@ echo "$MIT_GET_U9" | grep -F 'Policy: [none]'
 echo "==== MIT ACL uppercase *D revokes delete ===="
 MIT_NODEL="$(mit_kadmin "$NAME_MIT" -- -p nodel -w nodel-secret -q 'delprinc -force victim' 2>&1 || true)"
 echo "$MIT_NODEL"
-echo "$MIT_NODEL" | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
+echo "$MIT_NODEL" | strip_mit_kadmin_banner | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
 if echo "$MIT_NODEL" | grep -qiE 'Principal "victim@KERBER.TEST" deleted'; then
     echo "MIT nodel *D granted delete: $MIT_NODEL" >&2
     exit 1
@@ -358,13 +358,13 @@ echo "$MIT_GET_V" | grep -F 'Principal: victim@KERBER.TEST'
 echo "==== MIT ACL list vs inquire ===="
 MIT_LIST_I="$(mit_kadmin "$NAME_MIT" -- -p ro -w ro-secret -q 'listprincs' 2>&1 || true)"
 echo "$MIT_LIST_I"
-echo "$MIT_LIST_I" | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
+echo "$MIT_LIST_I" | strip_mit_kadmin_banner | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
 MIT_LIST_L="$(mit_kadmin "$NAME_MIT" -- -p rolist -w rolist-secret -q 'listprincs' 2>&1 || true)"
 echo "$MIT_LIST_L"
 echo "$MIT_LIST_L" | grep -F 'user@KERBER.TEST'
 MIT_ADDPOL="$(mit_kadmin "$NAME_MIT" -- -p ro -w ro-secret -q 'addpol pol-ro' 2>&1 || true)"
 echo "$MIT_ADDPOL"
-echo "$MIT_ADDPOL" | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
+echo "$MIT_ADDPOL" | strip_mit_kadmin_banner | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
 MIT_SELFGET="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_SELFGET"
 echo "$MIT_SELFGET" | grep -F 'Principal: user@KERBER.TEST'
@@ -408,7 +408,7 @@ if [ "$ok" != 1 ]; then
 fi
 MIT_NOADMIN="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_NOADMIN"
-echo "$MIT_NOADMIN" | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
+echo "$MIT_NOADMIN" | strip_mit_kadmin_banner | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
 if echo "$MIT_NOADMIN" | grep -q 'Principal: user'; then
     echo "MIT admin-less ACL granted admin/admin getprinc: $MIT_NOADMIN" >&2
     exit 1
@@ -527,7 +527,7 @@ echo "$MIT_GETFOR" | grep -F 'Principal: user@OTHER.REALM' || {
 echo "==== MIT denied addprinc user@OTHER.REALM is add privilege ===="
 MIT_DENYFOR="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
 echo "$MIT_DENYFOR"
-echo "$MIT_DENYFOR" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
+echo "$MIT_DENYFOR" | strip_mit_kadmin_banner | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
     echo "MIT denied addprinc missed add privilege: $MIT_DENYFOR" >&2
     exit 1
 }

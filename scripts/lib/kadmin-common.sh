@@ -4,6 +4,14 @@
 # function reads the gate's globals ($NAME, $ROOT, the conf paths) when it is called.
 # shellcheck shell=bash
 
+# MIT kadmin prints "Authenticating as principal ... with password." to stdout
+# and the com_err sentence to stderr. Under 2>&1 the banner can land inside
+# that sentence. This is the same sed -z as kadmin-local-gate.sh's mit_local:
+# it removes the banner wherever it landed and rejoins the line.
+strip_mit_kadmin_banner() {
+    sed -z -e 's/Authenticating as principal [^\n]*with password\.\n//g'
+}
+
 _snap_key() {
     printf '%s\n' "${tree_sha:?}"
 }

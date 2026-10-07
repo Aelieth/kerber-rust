@@ -61,7 +61,7 @@ fi
 NOADMIN="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getprinc user' 2>&1 || true)"
 echo "$NOADMIN"
-echo "$NOADMIN" | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
+echo "$NOADMIN" | strip_mit_kadmin_banner | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
 if echo "$NOADMIN" | grep -q 'Principal: user'; then
     echo "admin-less ACL granted admin getprinc: $NOADMIN" >&2
     exit 1
@@ -198,7 +198,7 @@ echo "==== denied addprinc user@OTHER.REALM is add privilege ===="
 DENYFOR="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
 echo "$DENYFOR"
-echo "$DENYFOR" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
+echo "$DENYFOR" | strip_mit_kadmin_banner | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
     echo "denied addprinc missed add privilege: $DENYFOR" >&2
     exit 1
 }
