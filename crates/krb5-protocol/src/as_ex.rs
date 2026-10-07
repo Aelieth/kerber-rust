@@ -1,7 +1,8 @@
 //! AS-REQ / AS-REP with PA-ENC-TIMESTAMP, SPAKE, FAST, or PKINIT.
 //!
-//! FAST armor lives in `fast` (`lib/krb5/krb/fast.c`); SPAKE lives in
-//! `spake` (`plugins/preauth/spake/spake_client.c`).
+//! FAST armor lives in `fast` (`lib/krb5/krb/fast.c`), encrypted challenge in `ec`
+//! (`lib/krb5/krb/preauth_ec.c`); SPAKE lives in `spake`
+//! (`plugins/preauth/spake/spake_client.c`).
 
 use crate::error::Error;
 use crate::preauth::{pa_pk_as_req_signed, pkinit_reply_key_agile};
@@ -21,6 +22,7 @@ use sha1::{Digest, Sha1};
 use std::time::Instant;
 use zeroize::{Zeroize, Zeroizing};
 
+mod ec;
 mod fast;
 mod spake;
 
@@ -68,7 +70,8 @@ pub struct AsRequest<'a> {
     pub kdc: &'a KdcAddr,
     /// Use PA-SPAKE (151) in the configured groups, never another mechanism.
     pub want_spake: bool,
-    /// FAST armor (PA-FX-FAST). Inner preauth is still enc-timestamp.
+    /// FAST armor (PA-FX-FAST). The inner preauth is encrypted challenge, or encrypted timestamp
+    /// when the KDC offers it first.
     pub fast_armor: Option<&'a FastArmor>,
     /// PKINIT identity. Empty 150 first; PA-16 on the retry with the hint token.
     pub pkinit: Option<&'a PkinitClient>,
@@ -803,7 +806,7 @@ fn continue_pkinit(
             trace_reply_padata(
                 rep.0.padata.as_deref(),
                 etypes,
-                Some((PKINIT_MODULE, pa::PK_AS_REP)),
+                Some((PKINIT_MODULE, pa::PK_AS_REP, 0)),
             );
             trace::init_creds_as_key_preauth((&reply_key).into());
             finish_as_rep(
@@ -1700,16 +1703,16 @@ fn trace_etype_info(padata: &[PaData], etypes: &[i32]) {
 
 /// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1756-1789`): the AS-REP's padata goes
 /// through the preauth modules once more, with nothing produced for a next request. `module` is
-/// the real mechanism that consumes a reply padata type here.
-fn trace_reply_padata(padata: Option<&[PaData]>, etypes: &[i32], module: Option<(&str, i32)>) {
+/// the real mechanism that consumes a reply padata type here, and the code it returned.
+fn trace_reply_padata(padata: Option<&[PaData]>, etypes: &[i32], module: Option<(&str, i32, i64)>) {
     let Some(padata) = padata else {
         return;
     };
     trace_preauth_input(padata, etypes);
-    if let Some((name, patype)) = module
+    if let Some((name, patype, code)) = module
         && padata.iter().any(|p| p.padata_type == patype)
     {
-        trace::preauth_process(name, patype, true, 0, None);
+        trace::preauth_process(name, patype, true, code, None);
     }
     trace::preauth_output(&[]);
 }

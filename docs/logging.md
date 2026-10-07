@@ -252,11 +252,11 @@ Each line is `[pid] seconds.microseconds: message`. The messages are
 MIT 1.22.2's (`include/k5-trace.h` and SPAKE's `trace.h`), written
 where our exchanges do what MIT's do: the request to the KDCs and each
 send and answer, the AS exchange and its preauth (encrypted timestamp,
-SPAKE, FAST, and PKINIT's generic lines), the TGS requests with their
+encrypted challenge, SPAKE, FAST, and PKINIT's generic lines), the TGS requests with their
 referrals and S4U, the cache and keytab lookups and stores, and the
 kpasswd exchange. Where our flow differs from MIT's, the lines show
-ours: under FAST our `kinit` answers with an encrypted timestamp where
-MIT's sends an encrypted challenge. PKINIT's own lines
+ours: under FAST, when the KDC offers SPAKE, MIT's `kinit` tries SPAKE
+before the encrypted challenge and ours sends the challenge. PKINIT's own lines
 (`pkinit_trace.h`) and the DNS lookups are not traced.
 
 A key prints as its enctype and the first two bytes of its SHA-1

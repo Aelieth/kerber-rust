@@ -272,7 +272,9 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
     // outer request with the strengthened reply key (krb5int_fast_verify_nego).
     let fast = as_exchange(&request(&cname, &kdc, Some(&armor))).expect("FAST AS exchange");
     assert!(fast.fast_avail, "PA-FX-FAST echoed inside the FAST reply");
-    assert_eq!(fast.pa_type, Some(pa::ENC_TIMESTAMP));
+    // Inside FAST the KDC offers encrypted challenge and withholds encrypted timestamp; this
+    // client does not run SPAKE inside FAST, so it answers with encrypted challenge.
+    assert_eq!(fast.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
 }
 
 #[test]

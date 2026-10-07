@@ -1,6 +1,7 @@
 //! RFC 6113 FAST armor on the AS exchange (`lib/krb5/krb/fast.c`
 //! `krb5int_fast_process_response` / `krb5int_fast_process_error`).
 
+use super::ec::{EC_MODULE, client_challenge, reply_code};
 use super::{
     AsOutcome, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, PasswordPrompt, build_as_req_from,
     classify_kdc_error, find_pa, finish_as_rep, first_etype, gak_found, method_from_error,
@@ -83,16 +84,15 @@ pub(super) fn continue_fast(
                 return classify_kdc_error(&inner);
             }
             with_prompted(req, prompt, |req| {
+                let method = sort_krb5_padata_sequence(
+                    &method_from_error(&inner).unwrap_or_default(),
+                    &super::conf_preferred_preauth_types(),
+                );
                 if trace::enabled() {
                     trace::init_creds_preauth();
-                    trace_preauth_input(
-                        &sort_krb5_padata_sequence(
-                            &method_from_error(&inner).unwrap_or_default(),
-                            &super::conf_preferred_preauth_types(),
-                        ),
-                        etypes,
-                    );
+                    trace_preauth_input(&method, etypes);
                 }
+                let mech = fast_mechanism(&method)?;
                 let (etype, salt, params) =
                     select_s2k(&inner, &salt_cname(&req.cname), req.realm, etypes)?;
                 trace_keytab_gak(req, keys, etype);
@@ -100,17 +100,23 @@ pub(super) fn continue_fast(
                     || string_to_key(etype, req.password, &salt, params.as_deref()),
                     Ok,
                 )?;
-                if gak_found(keys, &client_key, etype) {
-                    trace::preauth_enc_ts_key_gak((&client_key).into());
-                }
                 // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
                 // preauth module's PA data, so the cookie leads the inner padata.
                 let mut inner_pa = Vec::new();
                 if let Some(c) = cookie {
                     inner_pa.push(c);
                 }
-                inner_pa.push(pa_enc_timestamp(&client_key, true)?);
-                trace::preauth_process(ENCTS_MODULE, pa::ENC_TIMESTAMP, true, 0, None);
+                if mech == pa::ENCRYPTED_CHALLENGE {
+                    let (now, usec) = crate::auth_con::us_timeofday();
+                    inner_pa.push(client_challenge(&akey, &client_key, (&now, usec))?);
+                    trace::preauth_process(EC_MODULE, mech, true, 0, None);
+                } else {
+                    if gak_found(keys, &client_key, etype) {
+                        trace::preauth_enc_ts_key_gak((&client_key).into());
+                    }
+                    inner_pa.push(pa_enc_timestamp(&client_key, true)?);
+                    trace::preauth_process(ENCTS_MODULE, mech, true, 0, None);
+                }
                 trace::preauth_output(&inner_pa);
                 let ap = fast_armor_ap(armor, &sub)?;
                 let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
@@ -124,7 +130,7 @@ pub(super) fn continue_fast(
                         nonce,
                         etypes,
                         &akey,
-                        Some(client_key),
+                        Some((client_key, mech)),
                         rep,
                         &wire,
                         bound,
@@ -145,6 +151,8 @@ pub(super) fn continue_fast(
 /// are not consulted again after that replacement.
 /// MIT `krb5int_fast_reply_key` (`lib/krb5/krb/fast.c:570-592`): the strengthened reply key is
 /// traced after the key it strengthens.
+/// `preauth` is the AS key the request's preauth used and its mechanism; after encrypted
+/// challenge the KDC's challenge in the reply is decrypted, and the AS key stays the reply key.
 #[expect(clippy::too_many_arguments, reason = "client AS, not a params struct")]
 fn finish_fast_as(
     req: &AsRequest<'_>,
@@ -152,17 +160,25 @@ fn finish_fast_as(
     nonce: u32,
     etypes: &[i32],
     akey: &ProtocolKey,
-    client_key: Option<ProtocolKey>,
+    preauth: Option<(ProtocolKey, i32)>,
     mut rep: AsRep,
     wire: &[u8],
     bound: &AsReqTimes,
 ) -> Result<AsOutcome, Error> {
     trace::fast_decode();
     let fast = unwrap_fast_rep_checked(akey, &rep.0.padata, nonce)?;
-    trace_reply_padata(Some(&fast.padata), etypes, None);
-    let sent_preauth = client_key.is_some();
-    let client_key = match client_key {
-        Some(k) => {
+    let ec = match &preauth {
+        Some((k, pa::ENCRYPTED_CHALLENGE)) => reply_code(&fast.padata, akey, k),
+        _ => None,
+    };
+    trace_reply_padata(
+        Some(&fast.padata),
+        etypes,
+        ec.map(|code| (EC_MODULE, pa::ENCRYPTED_CHALLENGE, code)),
+    );
+    let pa_type = preauth.as_ref().map(|(_, mech)| *mech);
+    let client_key = match preauth {
+        Some((k, _)) => {
             trace::init_creds_as_key_preauth((&k).into());
             k
         }
@@ -195,7 +211,7 @@ fn finish_fast_as(
         req.password,
         &req.cname,
         req.realm,
-        sent_preauth.then_some(pa::ENC_TIMESTAMP),
+        pa_type,
         req.canonicalize,
         &req_sname(req),
         bound,
@@ -204,6 +220,25 @@ fn finish_fast_as(
         Some(wire),
         true,
     )
+}
+
+/// The mechanism of the inner preauth: the first type in the KDC's sorted list that this client
+/// runs under armor, encrypted challenge or encrypted timestamp, so encrypted timestamp only when
+/// the KDC offers it; MIT's KDC offers encrypted challenge inside FAST and never encrypted
+/// timestamp. SPAKE inside FAST is not run here.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:663-702`): a real mechanism runs only for a type in the KDC's list, the first that succeeds in list order.
+/// MIT `enc_ts_get` (`kdc/kdc_preauth_encts.c:37-41`): the KDC withholds encrypted timestamp from an armored request.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] "Generic preauthentication failure" (MIT `KRB5_PREAUTH_FAILED`) when
+/// the list offers neither.
+pub(super) fn fast_mechanism(method: &[PaData]) -> Result<i32, Error> {
+    method
+        .iter()
+        .map(|p| p.padata_type)
+        .find(|&t| t == pa::ENCRYPTED_CHALLENGE || t == pa::ENC_TIMESTAMP)
+        .ok_or_else(|| Error::ReplyMismatch("Generic preauthentication failure".into()))
 }
 
 /// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:47-136`): with no key from preauth, the

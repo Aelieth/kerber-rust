@@ -1475,6 +1475,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** Under FAST `kinit` answers with MIT's encrypted challenge (`preauth_ec.c`: KRB-FX-CF2
+  keys, usages 54/55, `pa_type` 138), and encrypted timestamp only when offered. Live with MIT's
+  KDC and ours; units.
 - **client.** `kinit` falls back to encrypted timestamp when SPAKE fails before its response,
   as MIT's; it gave up. Units; settled.
 - **kdc.** The AS-REP after SPAKE keeps ETYPE-INFO2, as MIT's; it dropped it. Unit; settled.
