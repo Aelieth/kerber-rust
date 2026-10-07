@@ -11,7 +11,7 @@ use crate::transport::{KdcAddr, SendKind, sendto_kdc};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2, p256_generate,
-    string_to_key,
+    parse_enctype_list, string_to_key,
 };
 use krb5_types::{
     AsRep, AsReq, EncKdcRepPart, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2, KdcOptions,
@@ -81,7 +81,8 @@ pub struct AsRequest<'a> {
     pub canonicalize: bool,
     /// Optional AS sname (default `krbtgt/REALM`). `kadmin/changepw` for kpasswd.
     pub sname: Option<&'a PrincipalName>,
-    /// AS-REQ etype list. `None` is [`EncryptionType::preferred`]. `kinit` passes `krb5.conf`.
+    /// AS-REQ etype list. `None` is krb5.conf's ([`conf_etypes`]), as MIT's default for a caller
+    /// that sets none; `kinit` passes that list sorted for its keytab.
     pub etypes: Option<&'a [i32]>,
     /// Lifetime, renewable life, and KDC option flags (`kinit -l/-r/-f/-p/-a`).
     pub ticket: AsTicketOpts,
@@ -315,12 +316,10 @@ fn as_exchange_inner(
 ) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
     refuse_spake_combo(req)?;
+    // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:966-976`): a caller that sets no etype list asks for `krb5_get_default_in_tkt_ktypes`, krb5.conf's order.
     let etypes: Vec<i32> = match req.etypes {
         Some(e) if !e.is_empty() => e.to_vec(),
-        _ => EncryptionType::preferred()
-            .iter()
-            .map(|e| e.to_iana())
-            .collect(),
+        _ => conf_etypes(false),
     };
     let nonce = random_nonce()?;
     let clock = Clock::new();
@@ -1363,7 +1362,11 @@ fn build_as_req(
     }))
 }
 
-/// Etype list from `krb5.conf` (`default_tkt_enctypes` / `default_tgs_enctypes`).
+/// Etype list from `krb5.conf`: `default_tkt_enctypes` (`default_tgs_enctypes` for a TGS), else
+/// `permitted_enctypes`, in the order given, else [`EncryptionType::preferred`].
+/// MIT `krb5_get_default_in_tkt_ktypes` (`lib/krb5/krb/init_ctx.c:514-528`): `default_tkt_enctypes`, else `permitted_enctypes`, else MIT's default list.
+/// MIT `krb5int_parse_enctype_list` (`lib/krb5/krb/init_ctx.c:447-502`): `DEFAULT` and the family words expand.
+/// MIT `krb5int_c_weak_enctype` (`lib/crypto/krb/enctype_util.c:58-64`): a type is dropped only when it has `ETYPE_WEAK`, which rc4-hmac does not.
 #[must_use]
 pub fn conf_etypes(tgs: bool) -> Vec<i32> {
     let preferred: Vec<i32> = EncryptionType::preferred()
@@ -1382,15 +1385,9 @@ pub fn conf_etypes(tgs: bool) -> Vec<i32> {
     } else {
         return preferred;
     };
-    let v: Vec<i32> = names
-        .iter()
-        .filter_map(|n| {
-            EncryptionType::from_mit_name(n)
-                .ok()
-                .map(EncryptionType::to_iana)
-        })
-        .collect();
-    if v.is_empty() { preferred } else { v }
+    parse_enctype_list(&names.join(" "), conf.allow_weak_crypto)
+        .map(|list| list.into_iter().map(EncryptionType::to_iana).collect())
+        .unwrap_or(preferred)
 }
 
 /// The times and options of the next request, made at the exchange's clock.

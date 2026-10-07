@@ -1095,6 +1095,106 @@ fn client_authenticators_and_timestamps_carry_microseconds() {
     }
 }
 
+/// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:966-976`): a caller that sets no etype list, as kpasswd's, asks for `default_tkt_enctypes` in krb5.conf's order.
+#[test]
+fn an_as_request_with_no_etype_list_asks_for_krb5_confs_order() {
+    use krb5_types::{AsReq, KerberosTime, KrbError, Microseconds, err};
+    use std::net::UdpSocket;
+    use std::sync::mpsc;
+    use std::thread;
+
+    isolate_host_krb5();
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join(format!("tkt-enctypes-{}.conf", std::process::id()));
+    std::fs::write(
+        &conf,
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = aes256-cts-hmac-sha384-192 aes128-cts-hmac-sha1-96\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        if let Ok((n, src)) = udp.recv_from(&mut buf) {
+            let _ = tx.send(buf[..n].to_vec());
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::now(),
+                susec: Microseconds::ZERO,
+                error_code: err::C_PRINCIPAL_UNKNOWN,
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: None,
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let changepw = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+    let out = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"userpassword",
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: Some(&changepw),
+        etypes: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
+    });
+    assert!(out.is_err());
+    let req: AsReq = decode(&rx.recv().unwrap()).unwrap();
+    assert_eq!(req.0.req_body.etype, vec![20, 17], "krb5.conf's order");
+    let _ = std::fs::remove_file(&conf);
+}
+
+/// MIT `krb5int_parse_enctype_list` (`lib/krb5/krb/init_ctx.c:447-502`): `aes` is the four AES types, and `DEFAULT` is the eight-type default list.
+/// MIT `krb5int_c_weak_enctype` (`lib/crypto/krb/enctype_util.c:58-64`): rc4-hmac is not `ETYPE_WEAK`, so it stays when `allow_weak_crypto` is off.
+#[test]
+fn conf_etypes_expands_default_and_family_words() {
+    isolate_host_krb5();
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join(format!("family-etypes-{}.conf", std::process::id()));
+    std::fs::write(
+        &conf,
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = aes\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
+    assert_eq!(
+        krb5_protocol::conf_etypes(false),
+        vec![18, 17, 20, 19],
+        "aes is the four AES enctypes"
+    );
+    std::fs::write(
+        &conf,
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = DEFAULT\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
+    assert_eq!(
+        krb5_protocol::conf_etypes(false),
+        vec![18, 17, 20, 19, 16, 23, 25, 26],
+        "DEFAULT keeps deprecated rc4-hmac; only ETYPE_WEAK is filtered"
+    );
+    let _ = std::fs::remove_file(&conf);
+}
+
 /// MIT `note_req_timestamp` (`lib/krb5/krb/get_in_tkt.c:1427-1438`): the offset is the error's time less the time the error arrives, so a slow password prompt is not skew.
 #[test]
 fn a_delayed_prompt_is_not_added_to_the_kdc_offset() {
