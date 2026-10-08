@@ -513,7 +513,10 @@ impl GssContext {
             // server) path; a wildcard acceptor name iterates every key.
             key_kvnos: expected_server.and(service_kvnos),
             kvno: None,
-            skew: krb5_protocol::DEFAULT_SKEW,
+            // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-632`): the authenticator time is checked against the context clock skew.
+            // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): that skew is `[libdefaults] clockskew`, 300 seconds when unset.
+            skew: krb5_config::load_krb5_conf()
+                .map_or(krb5_protocol::DEFAULT_SKEW, |c| i64::from(c.clockskew)),
             remote_addr: sender.as_ref(),
             now: None,
         };

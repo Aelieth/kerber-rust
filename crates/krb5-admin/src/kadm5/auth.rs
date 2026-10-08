@@ -621,7 +621,9 @@ fn agss_init(
     };
     let token = out_tok.unwrap_or_default();
     let reply = init_res_reply(xid, res_ver, &st.handle, 0, &token, &signed_isn);
-    let skew = u32::try_from(krb5_protocol::DEFAULT_SKEW).unwrap_or(u32::MAX);
+    // MIT `gssrpc__svcauth_gssapi` (`lib/rpc/svc_auth_gssapi.c:474-478`): an established record expires at `time_rec` plus now.
+    // MIT `kg_accept_krb5` (`lib/gssapi/krb5/accept_sec_context.c:1128-1132`): `time_rec` adds the context clock skew as grace on the ticket end.
+    let skew = krb5_config::load_krb5_conf().map_or(300, |c| c.clockskew);
     st.expires = gctx.endtime().map_or_else(
         || {
             KerberosTime::now()

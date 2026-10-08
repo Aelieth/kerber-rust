@@ -21,6 +21,7 @@ required-features = ["test-hooks"]
 
 [dependencies]
 krb5-asn1.workspace = true
+krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
@@ -30,7 +31,6 @@ thiserror.workspace = true
 tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
-krb5-config.workspace = true
 krb5-kdc.workspace = true
 krb5-testkit.workspace = true
 
