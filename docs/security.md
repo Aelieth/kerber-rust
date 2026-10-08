@@ -61,9 +61,8 @@ Known behaviour laxer than MIT 1.22.2. Each is a fix to make after a MIT settle,
 | Gap | MIT | Rust | Ledger row |
 | --- | --- | --- | --- |
 | CMS ContentInfo type not checked | `cms_signeddata_verify` refuses a type other than id-signedData ("wrong oid") | `cms_parts` (`crates/krb5-types/src/pkinit/cms.rs`) reads the contentType and discards it, so a SignedData body under any OID is parsed | `pkinit_crypto_openssl.c:2022-2028` ([B1](parity/b1-client.md)) |
-| Password dictionary edges, not settled live (MIT by source) | kadmind calls `setlocale(LC_ALL, "")`, so under a single-byte locale such as ISO-8859-1 `strcasecmp` folds `É` and `é` too; a NUL inside a line ends that word and shifts the words after it; a FIFO blocks the open | ASCII folding only (MIT's in the C and UTF-8 locales, settled live); a NUL is a byte of its word; a FIFO blocks the open | `pwqual_dict.c:66-69,96-153,215-230` ([A4](parity/a4-kadmin.md)) |
 
-Settled since: a `dict_file` that `fstat` sizes at 0 bytes but never ends, such as `/dev/zero`, gives an empty dictionary on both sides, read as MIT's `init_dict` reads it (`st_size` bytes); kadmind starts and accepts a dictionary word (settled live beside MIT 1.22.2).
+Settled since: a `dict_file` that `fstat` sizes at 0 bytes but never ends, such as `/dev/zero`, gives an empty dictionary on both sides, read as MIT's `init_dict` reads it (`st_size` bytes); kadmind starts and accepts a dictionary word (settled live beside MIT 1.22.2). A FIFO with a writer is that same empty dictionary (`st_size` 0); one with no writer blocks in `open` on both sides. A NUL inside a line ends that word and shifts the words after it. `strcasecmp` folds ISO-8859-1 letters when `LC_ALL`, else `LC_CTYPE`, else `LANG`, names that codeset, and only ASCII otherwise.
 
 ## Not in this matrix
 

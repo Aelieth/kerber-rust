@@ -594,6 +594,111 @@ fn pwqual_dict_words_are_init_dict_lines_matched_as_strcasecmp() {
 }
 
 #[test]
+fn a_nul_inside_a_line_ends_that_word_and_shifts_the_rest() {
+    // MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:136-151`): newlines are counted, then each
+    // word is a C string, so a NUL ends it and the words after it shift.
+    let dict = pwqual_dict::PwqualDict::from_bytes(b"abc\0def\nxyz\nqrs\n".to_vec()).unwrap();
+    assert!(dict.contains(b"abc"), "abc");
+    assert!(dict.contains(b"DEF"), "def, ASCII-folded");
+    assert!(dict.contains(b"xyz"), "xyz");
+    assert!(!dict.contains(b"qrs"), "qrs shifted off the list");
+    assert!(!dict.contains(b"abcdef"));
+    let lead = pwqual_dict::PwqualDict::from_bytes(b"\0lead\nlast\n".to_vec()).unwrap();
+    assert!(lead.contains(b"lead"));
+    assert!(!lead.contains(b"last"), "last shifted off the list");
+    assert!(lead.contains(b""), "a leading NUL is the empty word");
+}
+
+#[test]
+fn iso8859_1_strcasecmp_folds_latin1_letters() {
+    // MIT `word_compare` (`lib/kadm5/srv/pwqual_dict.c:64-68`): `strcasecmp` in an ISO-8859-1
+    // locale folds E-acute. The C and UTF-8 locales do not (settled live). The process locale
+    // is not changed: the fold is the one `from_bytes_folded` is given.
+    let dict = pwqual_dict::PwqualDict::from_bytes_folded(
+        b"caf\xe9\n".to_vec(),
+        pwqual_dict::CaseFold::Latin1,
+    )
+    .unwrap();
+    assert!(dict.contains(b"CAF\xe9"), "ASCII fold");
+    assert!(
+        dict.contains(b"caf\xc9"),
+        "Latin-1 E-acute folds onto e-acute"
+    );
+    assert!(dict.contains(b"CAF\xc9"));
+    let ascii = pwqual_dict::PwqualDict::from_bytes_folded(
+        b"caf\xe9\n".to_vec(),
+        pwqual_dict::CaseFold::Ascii,
+    )
+    .unwrap();
+    assert!(ascii.contains(b"CAF\xe9"));
+    assert!(
+        !ascii.contains(b"caf\xc9"),
+        "C and UTF-8 leave byte C9 alone"
+    );
+}
+
+#[test]
+fn case_fold_follows_the_named_codeset_only() {
+    use pwqual_dict::{CaseFold, case_fold_for_locale};
+    let latin = [
+        "en_US.ISO-8859-1",
+        "en_US.iso88591",
+        "en_US.ISO8859-1",
+        "latin1",
+        "iso_8859-1",
+        "en_US.ISO-8859-1@euro",
+    ];
+    for spec in latin {
+        assert_eq!(case_fold_for_locale(spec), CaseFold::Latin1, "{spec}");
+    }
+    for spec in [
+        "C",
+        "C.UTF-8",
+        "",
+        "en_US",
+        "en_US.ISO-8859-15",
+        "en_US.utf8",
+        "POSIX",
+    ] {
+        assert_eq!(case_fold_for_locale(spec), CaseFold::Ascii, "{spec}");
+    }
+}
+
+#[test]
+fn a_fifo_dict_file_with_a_writer_is_empty() {
+    // MIT `init_dict` (`lib/kadm5/srv/pwqual_dict.c:120-133`): `fstat` reports 0 for a FIFO, so
+    // the read takes no bytes. A FIFO with no writer blocks in `open` on both sides.
+    let dir = krb5_testkit::scratch_dir("krb5-pwqual-fifo");
+    let path = dir.join("fifo");
+    let st = std::process::Command::new("mkfifo")
+        .arg(&path)
+        .status()
+        .unwrap();
+    assert!(st.success(), "mkfifo");
+    let path_w = path.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let writer = std::thread::spawn(move || {
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path_w)
+            .unwrap();
+        let _ = rx.recv();
+        drop(file);
+    });
+    let quiet = &mut |_: krb5_log::klog::Severity, _: &str| {};
+    let started = std::time::Instant::now();
+    let dict = pwqual_dict::PwqualDict::open(Some(&path), quiet)
+        .unwrap()
+        .unwrap();
+    let _ = tx.send(());
+    writer.join().unwrap();
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+    assert_eq!(dict.word_count(), 0);
+    assert!(!dict.contains(b"zebra"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn pwqual_dict_reads_the_fstat_size_so_dev_zero_is_empty() {
     // A character device says 0 bytes and never ends: read as MIT reads it, it is an empty
     // dictionary at once, with no notice, as MIT says nothing for a file it opened (live: MIT's
