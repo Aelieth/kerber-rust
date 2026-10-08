@@ -6,6 +6,7 @@
 
 #![cfg(unix)]
 
+use std::fmt::Write as _;
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -1282,6 +1283,75 @@ fn a_full_load_that_fails_before_the_promotion_leaves_the_update_log() {
     let out = realm.run(&["load", plain.to_str().unwrap()], "");
     assert_eq!(status(&out), 0, "{}", text(&out.stderr));
     assert_eq!(log.get_last().unwrap().sno, 1);
+}
+
+/// Settled live beside MIT 1.22.2: a
+/// `dict_file` that is a directory stops in `kadm5_init`, after `K/M` and `krbtgt` are in the
+/// database, with `Is a directory while initializing the Kerberos admin interface`. `-s` leaves
+/// the stash; without it there is none. A missing file warns and the create finishes.
+#[test]
+fn create_stops_at_kadm5_init_when_the_dictionary_cannot_be_read() {
+    let dir = scratch_dir("kdb5-dict-dir");
+    let stanza = format!("{}        dict_file = {}\n", Realm::sha1(), dir.display());
+    let realm = Realm::new("kdb5-dict-fail", &stanza);
+    let log = realm.dir.join("admin.log");
+    let mut conf = std::fs::read_to_string(&realm.kdc_conf).unwrap();
+    write!(
+        conf,
+        "[logging]\n    admin_server = FILE:{}\n",
+        log.display()
+    )
+    .unwrap();
+    std::fs::write(&realm.kdc_conf, conf).unwrap();
+    let out = realm.run(&["-P", "kl-master", "create", "-s"], "");
+    assert_eq!(status(&out), 1, "{}", text(&out.stderr));
+    assert_eq!(
+        text(&out.stderr),
+        "kdb5_util: Is a directory while initializing the Kerberos admin interface\n"
+    );
+    assert!(realm.db.exists());
+    assert!(realm.stash.exists());
+    assert!(log.exists(), "klog opens admin_server before kadm5_init");
+    let store = realm.store();
+    assert_eq!(store.ids(), ["K/M@KL.TEST", "krbtgt/KL.TEST@KL.TEST"]);
+    let nostash = Realm::new(
+        "kdb5-dict-nostash",
+        &format!("{}        dict_file = {}\n", Realm::sha1(), dir.display()),
+    );
+    let out = nostash.run(&["-P", "kl-master", "create"], "");
+    assert_eq!(status(&out), 1, "{}", text(&out.stderr));
+    assert!(nostash.db.exists());
+    assert!(!nostash.stash.exists());
+    let missing = realm.dir.join("nosuch-dict");
+    let warn = Realm::new(
+        "kdb5-dict-missing",
+        &format!(
+            "{}        dict_file = {}\n",
+            Realm::sha1(),
+            missing.display()
+        ),
+    );
+    let warn_log = warn.dir.join("admin.log");
+    let mut conf = std::fs::read_to_string(&warn.kdc_conf).unwrap();
+    write!(
+        conf,
+        "[logging]\n    admin_server = FILE:{}\n",
+        warn_log.display()
+    )
+    .unwrap();
+    std::fs::write(&warn.kdc_conf, conf).unwrap();
+    let out = warn.run(&["-P", "kl-master", "create", "-s"], "");
+    assert_eq!(status(&out), 0, "{}", text(&out.stderr));
+    let logged = std::fs::read_to_string(&warn_log).unwrap_or_default();
+    assert!(
+        logged.contains(&format!(
+            "WARNING!  Cannot find dictionary file {}, continuing without one.",
+            missing.display()
+        )),
+        "{logged}"
+    );
+    assert_eq!(warn.store().ids().len(), 4);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// Settled live: MIT's admin interface refuses iprop without `iprop_port` ("Required parameters

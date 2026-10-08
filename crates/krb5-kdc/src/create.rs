@@ -48,14 +48,34 @@ pub fn create_realm(
     master: &ProtocolKey,
     mkvno: u16,
 ) -> Result<PrincipalStore, Error> {
-    let mut store = PrincipalStore::new(realm);
+    let mut store = create_realm_db(realm, kdc, master, mkvno)?;
     if let Some(c) = kdc {
-        store.apply_kdc_conf(c)?;
         // MIT `kadm5_create_magic_princs` (`kadmin/dbutil/kadm5_create.c:100-107`): the create starts the admin side, which reads the dictionary or fails.
         store.init_pwqual(Some(c)).map_err(|e| {
             let path = c.dict_file.as_deref().unwrap_or(std::path::Path::new(""));
             Error::InvalidArgument(format!("kdc.conf dict_file {}: {e}", path.display()))
         })?;
+    }
+    add_admin_principals(&mut store, mkvno)?;
+    Ok(store)
+}
+
+/// `K/M` and `krbtgt` only, before `kadm5_create` reads the dictionary.
+/// MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:291-294`): `K/M` and `krbtgt` are added before `kadm5_create`.
+///
+/// # Errors
+///
+/// [`Error::Crypto`] when `kdc` sets a `domain_sid` that is not valid SDDL;
+/// [`Error::Rng`] when the CSPRNG fails while generating a random key.
+pub fn create_realm_db(
+    realm: &str,
+    kdc: Option<&KdcConf>,
+    master: &ProtocolKey,
+    mkvno: u16,
+) -> Result<PrincipalStore, Error> {
+    let mut store = PrincipalStore::new(realm);
+    if let Some(c) = kdc {
+        store.apply_kdc_conf(c)?;
     }
     let now = crate::store::unix_now_u32();
     let flags = store.default_create_attributes(false);
@@ -88,8 +108,19 @@ pub fn create_realm(
     tgt.mkvno = mkvno;
     tgt.tl_data = vec![creation];
     store.debug_insert(tgt);
+    Ok(store)
+}
 
-    let caller = crate::kdb5_util_id_for_realm(realm);
+/// `kadmin/admin` and `kadmin/changepw`, after the dictionary has been read.
+/// MIT `add_admin_princs` (`kadmin/dbutil/kadm5_create.c:139-154`): `kadmin/admin` and `kadmin/changepw`, their attributes and lifetimes.
+///
+/// # Errors
+///
+/// [`Error::AlreadyExists`] when one of them is already in `store`; [`Error::Rng`] when a
+/// random key cannot be made.
+pub fn add_admin_principals(store: &mut PrincipalStore, mkvno: u16) -> Result<(), Error> {
+    let realm = store.realm().to_owned();
+    let caller = crate::kdb5_util_id_for_realm(&realm);
     for (name, attributes, max_life) in [
         (
             crate::principals::kadmin_admin(),
@@ -108,10 +139,10 @@ pub fn create_realm(
             max_life,
             ..AdminEnt::default()
         };
-        store.create_principal_3_in(&name, realm, None, &[], &ent, &caller)?;
-        stamp_kadm5_create_tl(&mut store, &name, mkvno);
+        store.create_principal_3_in(&name, &realm, None, &[], &ent, &caller)?;
+        stamp_kadm5_create_tl(store, &name, mkvno);
     }
-    Ok(store)
+    Ok(())
 }
 
 /// `K/M` or `krbtgt` before its tagged data: the realm's lifetimes and expiration, and the

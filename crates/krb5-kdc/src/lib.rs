@@ -58,7 +58,7 @@ pub use audit::{
 };
 #[cfg(feature = "test-hooks")]
 pub use create::seed_test_principals;
-pub use create::{create_realm, kdc_conf_for_realm};
+pub use create::{add_admin_principals, create_realm, create_realm_db, kdc_conf_for_realm};
 pub use daemon::{
     OpenFailure, Signals, database_path, detach, json_log_filter, names_relative_database,
     open_database, write_pid_file,

@@ -7,8 +7,9 @@
 //! for that realm ([`krb5_config::KdcPaths`]), `-d` / `-sf` / `-k` name others. Messages, prompts
 //! and exit statuses are MIT's.
 //!
-//! - `create [-s] [-W]`: `K/M`, `krbtgt`, `kadmin/admin` and `kadmin/changepw`
-//!   ([`krb5_kdc::create_realm`]); the master password is `-P`, else asked twice on the
+//! - `create [-s] [-W]`: `K/M` and `krbtgt`, then `kadm5_create`'s `kadmin/admin` and
+//!   `kadmin/changepw`. A `dict_file` that cannot be read fails in that init, after the
+//!   database and an `-s` stash exist. The master password is `-P`, else asked twice on the
 //!   terminal (one line each from a pipe). `-s` keeps the stash; without it no stash is left.
 //! - `stash [-f keyfile]`: a new stash file from the stashed (or typed) master key.
 //! - `dump [-r18] [-i[N] [-c]] [-verbose] [-rev] [-recurse] [filename [principals...]]`: the
@@ -49,11 +50,11 @@ use krb5_cli::{MitArgs, MitOpt, Placement, Prompter, getopt};
 use krb5_config::{IpropParams, KdcPaths};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{
-    CreateError, DbUpdate, DumpError, DumpFile, DumpPrincipal, FullLoad, IPROP_NIL, IPROP_OK,
-    IpropHeaderError, IpropRole, KDB_DUMP_VERSION, LoadError, Lockout, LoggedWrite, PersistError,
-    PrincipalStore, Ulog, UlogLast, create_realm, create_store, kdc_conf_for_realm,
-    load_dump_with_key, master_key_from_password, parse_dump, stash_keys, string_to_enctype,
-    update_store, write_stash,
+    CreateError, DbUpdate, DbWrite, DumpError, DumpFile, DumpPrincipal, FullLoad, IPROP_NIL,
+    IPROP_OK, IpropHeaderError, IpropRole, KDB_DUMP_VERSION, LoadError, Lockout, LoggedWrite,
+    PersistError, PrincipalStore, Ulog, UlogLast, add_admin_principals, create_realm_db,
+    create_store, kdc_conf_for_realm, load_dump_with_key, master_key_from_password, parse_dump,
+    save_store_with_master, stash_keys, string_to_enctype, update_store, write_stash,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -521,13 +522,7 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
         }
     };
     let mkvno = u16::try_from(util.kvno.unwrap_or(1)).unwrap_or(1);
-    let store = create_realm(&realm, kdc.as_ref(), &master, mkvno);
-    #[cfg(feature = "test-hooks")]
-    let store = store.and_then(|mut s| {
-        hooks::seed(&mut s)?;
-        Ok(s)
-    });
-    let store = match store {
+    let mut store = match create_realm_db(&realm, kdc.as_ref(), &master, mkvno) {
         Ok(s) => s,
         Err(e) => {
             util.com_err(&e.to_string(), "while adding entries to the database");
@@ -565,6 +560,19 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
             return util.failed();
         }
     }
+    let stash = util.paths.key_stash_file.clone();
+    if do_stash && let Err(e) = write_stash(&stash, &realm, &master, u32::from(mkvno)) {
+        util.com_err(&stash_write_text(&stash, &e), "while storing key");
+        out_line("Warning: couldn't stash master key.");
+        return util.failed();
+    }
+    // MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:328-332`): the admin interface is initialized after the database and the stash exist; a failure there leaves both, and drops the stash unless `-s`.
+    if !kadm5_create(util, &mut store, kdc.as_ref(), &master, mkvno, &file) {
+        if !do_stash {
+            let _ = fs::remove_file(&stash);
+        }
+        return util.failed();
+    }
     // MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:263-289`): with iprop enabled the update log is made and started over; the realm's first principals are not logged.
     if util.iprop.enabled {
         match Ulog::map(&util.iprop.logfile, util.iprop.ulogsize) {
@@ -580,18 +588,52 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
             }
         }
     }
-    let stash = util.paths.key_stash_file.clone();
-    if do_stash {
-        if let Err(e) = write_stash(&stash, &realm, &master, u32::from(mkvno)) {
-            util.com_err(&stash_write_text(&stash, &e), "while storing key");
-            out_line("Warning: couldn't stash master key.");
-            return util.failed();
-        }
-    } else {
-        // MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:299-333`): the stash is always written for `kadm5_create`, then removed unless `-s`.
+    if !do_stash {
+        // MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:333-333`): without `-s` the stash written for `kadm5_create` is removed.
         let _ = fs::remove_file(&stash);
     }
     util.exit_status
+}
+
+/// MIT `kadm5_create_magic_princs` (`kadmin/dbutil/kadm5_create.c:91-116`): the admin log opens,
+/// `kadm5_init` reads the dictionary, then the two `kadmin/` principals are created and saved.
+/// `false` when that fails; the error is already on stderr.
+fn kadm5_create(
+    util: &Util,
+    store: &mut PrincipalStore,
+    kdc: Option<&krb5_config::KdcConf>,
+    master: &ProtocolKey,
+    mkvno: u16,
+    db: &Path,
+) -> bool {
+    let specs = krb5_config::LogSpecs::load("admin_server");
+    krb5_log::klog::init(&util.progname, &specs.specs, specs.debug);
+    if let Err(e) = store.init_pwqual(kdc) {
+        util.com_err(
+            &strerror(&e),
+            "while initializing the Kerberos admin interface",
+        );
+        krb5_log::klog::close();
+        return false;
+    }
+    if let Err(e) = add_admin_principals(store, mkvno) {
+        util.com_err(&e.to_string(), "while creating principal");
+        krb5_log::klog::close();
+        return false;
+    }
+    #[cfg(feature = "test-hooks")]
+    if let Err(e) = hooks::seed(store) {
+        util.com_err(&e.to_string(), "while adding entries to the database");
+        krb5_log::klog::close();
+        return false;
+    }
+    if let Err(e) = save_store_with_master(store, db, master, DbWrite::InPlace) {
+        util.com_err(&persist_text(&e), "while adding entries to the database");
+        krb5_log::klog::close();
+        return false;
+    }
+    krb5_log::klog::close();
+    true
 }
 
 /// The master key from a password, of the configured type; `None` when that type is unset

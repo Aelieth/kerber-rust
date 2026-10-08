@@ -1482,6 +1482,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc.** `kdb5_util create` loads `dict_file` while initializing the admin interface, after the database and an `-s` stash exist.
 - **kdc.** A dictionary word ends at an embedded NUL. `strcasecmp` folds ISO-8859-1 letters when the locale names that codeset.
 - **protocol.** Under FAST armor the client runs the first loaded real clpreauth mechanism in the KDC hint, so SPAKE when that hint lists it before encrypted challenge, and the reply key strengthens that `K'[0]`. Encrypted challenge still runs when it is first. Units.
 - **gss/admin.** The GSS acceptor and kadmind's AUTH_GSSAPI record expiry use `[libdefaults] clockskew` (300 s when unset). Units; lab.
