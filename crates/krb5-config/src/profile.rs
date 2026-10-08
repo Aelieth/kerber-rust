@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 
 use super::srv::lookup_srv_kdc;
 use super::testenv::TEST_KRB5_PATHS;
-use super::{Endpoint, Error, Krb5Conf, ProfileError};
+use super::{Endpoint, Error, Krb5Conf, ProfileError, RealmLibdefaults};
 
 impl Krb5Conf {
     /// Whether encrypted timestamp is off for `realm`.
@@ -25,6 +25,92 @@ impl Krb5Conf {
             .get(realm)
             .copied()
             .unwrap_or(false)
+    }
+
+    /// `forwardable` for `realm`: the realm subsection, then the top level.
+    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:902-908`): the caller flag, else the profile boolean, else false.
+    #[must_use]
+    pub fn forwardable_for(&self, realm: &str) -> bool {
+        self.realm_bool(realm, |node| node.forwardable)
+            .unwrap_or(self.forwardable)
+    }
+
+    /// `proxiable` for `realm`: the realm subsection, then the top level.
+    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:913-918`): the caller flag, else the profile boolean, else false.
+    #[must_use]
+    pub fn proxiable_for(&self, realm: &str) -> bool {
+        self.realm_bool(realm, |node| node.proxiable)
+            .unwrap_or(self.proxiable)
+    }
+
+    /// `canonicalize` for `realm`: the realm subsection, then the top level.
+    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:924-929`): the caller flag, else the profile boolean, else false.
+    #[must_use]
+    pub fn canonicalize_for(&self, realm: &str) -> bool {
+        self.realm_bool(realm, |node| node.canonicalize)
+            .unwrap_or(self.canonicalize)
+    }
+
+    /// `ticket_lifetime` seconds for `realm`: the realm subsection, then the top level.
+    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:939-947`): the caller lifetime, else the profile duration, else 24 hours.
+    #[must_use]
+    pub fn ticket_lifetime_for(&self, realm: &str) -> Option<u64> {
+        self.realm_libdefaults
+            .get(realm)
+            .and_then(|node| node.ticket_lifetime)
+            .or(self.ticket_lifetime)
+    }
+
+    /// `renew_lifetime` seconds for `realm`: the realm subsection, then the top level.
+    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:952-960`): the caller lifetime, else the profile duration, else 0.
+    #[must_use]
+    pub fn renew_lifetime_for(&self, realm: &str) -> Option<u64> {
+        self.realm_libdefaults
+            .get(realm)
+            .and_then(|node| node.renew_lifetime)
+            .or(self.renew_lifetime)
+    }
+
+    /// `noaddresses` for `realm`: the realm subsection, then the top level. `None` is absent.
+    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:991-1005`): absent or true sends no addresses, and false sends the local addresses.
+    #[must_use]
+    pub fn noaddresses_for(&self, realm: &str) -> Option<bool> {
+        self.realm_bool(realm, |node| node.noaddresses)
+            .or(self.noaddresses)
+    }
+
+    /// `verify_ap_req_nofail` for `realm`: the realm subsection, then the top level.
+    /// MIT `nofail` (`lib/krb5/krb/vfy_increds.c:39-51`): the client credential's realm, default false.
+    #[must_use]
+    pub fn verify_ap_req_nofail_for(&self, realm: &str) -> bool {
+        self.realm_bool(realm, |node| node.verify_ap_req_nofail)
+            .unwrap_or(self.verify_ap_req_nofail)
+    }
+
+    /// `preferred_preauth_types` for `realm`. `None` means unset, so the caller uses MIT's default.
+    /// MIT `sort_krb5_padata_sequence` (`lib/krb5/krb/get_in_tkt.c:418-424`): the realm string, else "17, 16, 15, 14".
+    #[must_use]
+    pub fn preferred_preauth_for(&self, realm: &str) -> Option<&[i32]> {
+        if let Some(list) = self
+            .realm_libdefaults
+            .get(realm)
+            .and_then(|node| node.preferred_preauth_types.as_deref())
+        {
+            return Some(list);
+        }
+        if self.preferred_preauth_types.is_empty() {
+            None
+        } else {
+            Some(self.preferred_preauth_types.as_slice())
+        }
+    }
+
+    fn realm_bool(
+        &self,
+        realm: &str,
+        pick: impl Fn(&RealmLibdefaults) -> Option<bool>,
+    ) -> Option<bool> {
+        self.realm_libdefaults.get(realm).and_then(pick)
     }
 
     /// Empty defaults: 300s skew, no weak crypto, DNS lookup off.
@@ -295,6 +381,7 @@ fn parse_into(
     // a line is: the relations `krb5_init_context` reads are only those at its top, by name.
     let mut libdefaults_exact = false;
     let mut libdefaults_depth = 0usize;
+    let mut libdefaults_realm: Option<String> = None;
     let mut realm: Option<String> = None;
     let mut capaths_client: Option<String> = None;
     let text = join_subsection_braces(text)?;
@@ -332,6 +419,7 @@ fn parse_into(
             section = s.trim().to_ascii_lowercase();
             libdefaults_exact = s == "libdefaults";
             libdefaults_depth = 0;
+            libdefaults_realm = None;
             realm = None;
             capaths_client = None;
             plugins.observe_header(plugin_profile, s, false);
@@ -341,6 +429,7 @@ fn parse_into(
             section = "plugins".into();
             libdefaults_exact = false;
             libdefaults_depth = 0;
+            libdefaults_realm = None;
             realm = None;
             capaths_client = None;
             plugins.observe_header(plugin_profile, "plugins", true);
@@ -361,14 +450,25 @@ fn parse_into(
             }
             continue;
         }
-        if section == "libdefaults" {
+        if section == "libdefaults" && libdefaults_exact {
             if line.starts_with('}') {
+                if libdefaults_depth == 1 {
+                    libdefaults_realm = None;
+                }
                 libdefaults_depth = libdefaults_depth.saturating_sub(1);
             } else if opens_subsection(line) {
+                if libdefaults_depth == 0 {
+                    libdefaults_realm = subsection_name(line);
+                }
                 libdefaults_depth += 1;
             }
-            let top = libdefaults_exact && libdefaults_depth == 0;
-            parse_libdefaults(conf, seen, line, top);
+            let top = libdefaults_depth == 0;
+            let node = if libdefaults_depth == 1 {
+                libdefaults_realm.as_deref()
+            } else {
+                None
+            };
+            parse_libdefaults(conf, seen, line, top, node);
         }
         if section == "domain_realm"
             && let Some((d, r)) = split_kv(line)
@@ -494,6 +594,31 @@ fn load_dir_into(
     Ok(())
 }
 
+fn subsection_name(line: &str) -> Option<String> {
+    let name = line.split_once('=')?.0.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_owned())
+    }
+}
+
+/// A per-realm key is accepted at the top of `[libdefaults]` or in that realm's node.
+fn realm_key(top: bool, realm: Option<&str>, k: &str, name: &str) -> bool {
+    k == name && (top || realm.is_some())
+}
+
+fn seen_key(realm: Option<&str>, name: &str) -> String {
+    match realm {
+        Some(r) => format!("{r}\0{name}"),
+        None => name.to_owned(),
+    }
+}
+
+fn realm_node<'a>(conf: &'a mut Krb5Conf, realm: &str) -> &'a mut RealmLibdefaults {
+    conf.realm_libdefaults.entry(realm.to_owned()).or_default()
+}
+
 /// Whether a relation line opens a subsection: its value is a `{` alone, unquoted (a relation with
 /// no value has been joined to the `{` of the next line by [`join_subsection_braces`]).
 /// MIT `parse_std_line` (`util/profile/prof_parse.c:75-212`): a value that starts with a quote is a string, and a `{` opens a subsection only when nothing but blanks follows it.
@@ -516,11 +641,16 @@ fn relation_name(tag: &str) -> &str {
 
 /// MIT `profile_get_string` (`prof_get.c:265-270`): a missing relation keeps the default, and
 /// a found value is what is returned.
-/// The first occurrence of a key wins, and a line with no equals sign is not a setting. The
-/// relations `krb5_init_context` reads (and `qualify_shortname`) count only when `top` (a line at
-/// the top of an exactly named `[libdefaults]`) and spelled exactly.
-/// MIT `profile_node_iterator` (`util/profile/prof_tree.c:586-616`): a lookup by section and name matches each by `strcmp`, a relation inside a subsection being under another name.
-fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &str, top: bool) {
+/// The first exact spelling of a key wins, and a line with no equals sign is not a setting.
+/// `realm` is the depth-1 subsection; only the eight per-realm keys are stored on it.
+/// MIT `profile_node_iterator` (`util/profile/prof_tree.c:586-616`): a lookup matches the section and the relation by `strcmp`.
+fn parse_libdefaults(
+    conf: &mut Krb5Conf,
+    seen: &mut BTreeSet<String>,
+    line: &str,
+    top: bool,
+    realm: Option<&str>,
+) {
     let Some((tag, v)) = split_kv(line) else {
         return;
     };
@@ -528,7 +658,9 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
     let key = k.to_ascii_lowercase();
     let exact = top && k == key;
     match key.as_str() {
-        "default_realm" if take_first(seen, "default_realm") => conf.default_realm = Some(v),
+        "default_realm" if top && k == "default_realm" && take_first(seen, "default_realm") => {
+            conf.default_realm = Some(v);
+        }
         "allow_weak_crypto" if exact && take_first(seen, "allow_weak_crypto") => {
             conf.allow_weak_crypto = context_boolean(conf, &v);
         }
@@ -553,66 +685,165 @@ fn parse_libdefaults(conf: &mut Krb5Conf, seen: &mut BTreeSet<String>, line: &st
                 refuse(conf, ProfileError::BadPathToken);
             }
         }
-        "clockskew" if take_first(seen, "clockskew") => {
+        "clockskew" if top && k == "clockskew" && take_first(seen, "clockskew") => {
             conf.clockskew = parse_duration_secs(&v)
                 .and_then(|s| u32::try_from(s).ok())
                 .unwrap_or(300);
         }
-        "dns_lookup_kdc" if take_first(seen, "dns_lookup_kdc") => {
+        "dns_lookup_kdc" if top && k == "dns_lookup_kdc" && take_first(seen, "dns_lookup_kdc") => {
             conf.dns_lookup_kdc = truthy(&v);
         }
-        "dns_lookup_realm" if take_first(seen, "dns_lookup_realm") => {
+        "dns_lookup_realm"
+            if top && k == "dns_lookup_realm" && take_first(seen, "dns_lookup_realm") =>
+        {
             conf.dns_lookup_realm = truthy(&v);
         }
-        "udp_preference_limit" if take_first(seen, "udp_preference_limit") => {
+        "udp_preference_limit"
+            if top && k == "udp_preference_limit" && take_first(seen, "udp_preference_limit") =>
+        {
             conf.udp_preference_limit = v.parse().ok();
         }
-        "rdns" if take_first(seen, "rdns") => conf.rdns = truthy(&v),
-        "kdc_timesync" if take_first(seen, "kdc_timesync") => {
+        "rdns" if top && k == "rdns" && take_first(seen, "rdns") => conf.rdns = truthy(&v),
+        "kdc_timesync" if top && k == "kdc_timesync" && take_first(seen, "kdc_timesync") => {
             // MIT `parse_int` (`util/profile/prof_get.c:283-305`): `strtol` of the whole value.
             // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:269-270`): a value that is not an integer leaves the default 1 and does not fail the context.
             if let Some(n) = parse_profile_int(&v) {
                 conf.kdc_timesync = n != 0;
             }
         }
-        "verify_ap_req_nofail" if take_first(seen, "verify_ap_req_nofail") => {
-            conf.verify_ap_req_nofail = truthy(&v);
+        "verify_ap_req_nofail"
+            if realm_key(top, realm, k, "verify_ap_req_nofail")
+                && take_first(seen, &seen_key(realm, "verify_ap_req_nofail")) =>
+        {
+            let on = truthy(&v);
+            if let Some(r) = realm {
+                realm_node(conf, r).verify_ap_req_nofail = Some(on);
+            } else {
+                conf.verify_ap_req_nofail = on;
+            }
         }
-        "permitted_enctypes" if take_first(seen, "permitted_enctypes") => {
+        "permitted_enctypes"
+            if top && k == "permitted_enctypes" && take_first(seen, "permitted_enctypes") =>
+        {
             conf.permitted_enctypes = split_ws(&v);
         }
-        "default_tkt_enctypes" if take_first(seen, "default_tkt_enctypes") => {
+        "default_tkt_enctypes"
+            if top && k == "default_tkt_enctypes" && take_first(seen, "default_tkt_enctypes") =>
+        {
             conf.default_tkt_enctypes = split_ws(&v);
         }
-        "default_tgs_enctypes" if take_first(seen, "default_tgs_enctypes") => {
+        "default_tgs_enctypes"
+            if top && k == "default_tgs_enctypes" && take_first(seen, "default_tgs_enctypes") =>
+        {
             conf.default_tgs_enctypes = split_ws(&v);
         }
-        "forwardable" if take_first(seen, "forwardable") => conf.forwardable = truthy(&v),
-        "proxiable" if take_first(seen, "proxiable") => conf.proxiable = truthy(&v),
-        "canonicalize" if take_first(seen, "canonicalize") => conf.canonicalize = truthy(&v),
-        "ticket_lifetime" if take_first(seen, "ticket_lifetime") => {
-            conf.ticket_lifetime = parse_duration_secs(&v);
+        "forwardable"
+            if realm_key(top, realm, k, "forwardable")
+                && take_first(seen, &seen_key(realm, "forwardable")) =>
+        {
+            let on = truthy(&v);
+            if let Some(r) = realm {
+                realm_node(conf, r).forwardable = Some(on);
+            } else {
+                conf.forwardable = on;
+            }
         }
-        "renew_lifetime" if take_first(seen, "renew_lifetime") => {
-            conf.renew_lifetime = parse_duration_secs(&v);
+        "proxiable"
+            if realm_key(top, realm, k, "proxiable")
+                && take_first(seen, &seen_key(realm, "proxiable")) =>
+        {
+            let on = truthy(&v);
+            if let Some(r) = realm {
+                realm_node(conf, r).proxiable = Some(on);
+            } else {
+                conf.proxiable = on;
+            }
         }
-        "kdc_timeout" if take_first(seen, "kdc_timeout") => conf.kdc_timeout = Some(v),
-        "max_retries" if take_first(seen, "max_retries") => conf.max_retries = Some(v),
-        "kcm_socket" if take_first(seen, "kcm_socket") => conf.kcm_socket = Some(v),
-        "default_ccache_name" if take_first(seen, "default_ccache_name") => {
+        "canonicalize"
+            if realm_key(top, realm, k, "canonicalize")
+                && take_first(seen, &seen_key(realm, "canonicalize")) =>
+        {
+            let on = truthy(&v);
+            if let Some(r) = realm {
+                realm_node(conf, r).canonicalize = Some(on);
+            } else {
+                conf.canonicalize = on;
+            }
+        }
+        "ticket_lifetime"
+            if realm_key(top, realm, k, "ticket_lifetime")
+                && take_first(seen, &seen_key(realm, "ticket_lifetime")) =>
+        {
+            let life = parse_duration_secs(&v);
+            if let Some(r) = realm {
+                realm_node(conf, r).ticket_lifetime = life;
+            } else {
+                conf.ticket_lifetime = life;
+            }
+        }
+        "renew_lifetime"
+            if realm_key(top, realm, k, "renew_lifetime")
+                && take_first(seen, &seen_key(realm, "renew_lifetime")) =>
+        {
+            let life = parse_duration_secs(&v);
+            if let Some(r) = realm {
+                realm_node(conf, r).renew_lifetime = life;
+            } else {
+                conf.renew_lifetime = life;
+            }
+        }
+        "noaddresses"
+            if realm_key(top, realm, k, "noaddresses")
+                && take_first(seen, &seen_key(realm, "noaddresses")) =>
+        {
+            let on = truthy(&v);
+            if let Some(r) = realm {
+                realm_node(conf, r).noaddresses = Some(on);
+            } else {
+                conf.noaddresses = Some(on);
+            }
+        }
+        "kdc_timeout" if top && k == "kdc_timeout" && take_first(seen, "kdc_timeout") => {
+            conf.kdc_timeout = Some(v);
+        }
+        "max_retries" if top && k == "max_retries" && take_first(seen, "max_retries") => {
+            conf.max_retries = Some(v);
+        }
+        "kcm_socket" if top && k == "kcm_socket" && take_first(seen, "kcm_socket") => {
+            conf.kcm_socket = Some(v);
+        }
+        "default_ccache_name"
+            if top && k == "default_ccache_name" && take_first(seen, "default_ccache_name") =>
+        {
             conf.default_ccache_name = Some(v);
         }
-        "default_keytab_name" if take_first(seen, "default_keytab_name") => {
+        "default_keytab_name"
+            if top && k == "default_keytab_name" && take_first(seen, "default_keytab_name") =>
+        {
             conf.default_keytab_name = Some(v);
         }
-        "default_client_keytab_name" if take_first(seen, "default_client_keytab_name") => {
+        "default_client_keytab_name"
+            if top
+                && k == "default_client_keytab_name"
+                && take_first(seen, "default_client_keytab_name") =>
+        {
             conf.default_client_keytab_name = Some(v);
         }
-        "spake_preauth_groups" if take_first(seen, "spake_preauth_groups") => {
+        "spake_preauth_groups"
+            if top && k == "spake_preauth_groups" && take_first(seen, "spake_preauth_groups") =>
+        {
             conf.spake_preauth_groups = Some(split_ws(&v));
         }
-        "preferred_preauth_types" if take_first(seen, "preferred_preauth_types") => {
-            conf.preferred_preauth_types = parse_i32_list(&v);
+        "preferred_preauth_types"
+            if realm_key(top, realm, k, "preferred_preauth_types")
+                && take_first(seen, &seen_key(realm, "preferred_preauth_types")) =>
+        {
+            let list = parse_i32_list(&v);
+            if let Some(r) = realm {
+                realm_node(conf, r).preferred_preauth_types = Some(list);
+            } else {
+                conf.preferred_preauth_types = list;
+            }
         }
         "ignore_acceptor_hostname" if exact && take_first(seen, "ignore_acceptor_hostname") => {
             conf.ignore_acceptor_hostname = context_boolean(conf, &v);
@@ -702,8 +933,10 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
     }
 }
 
+/// Split `name = value`. A trailing comma stays in the value.
+/// MIT `parse_std_line` (`util/profile/prof_parse.c:169-183`): trailing whitespace is cut, and a comma is kept.
 pub(super) fn split_kv(line: &str) -> Option<(&str, String)> {
-    let line = line.trim().trim_end_matches(',');
+    let line = line.trim();
     let (k, v) = line.split_once('=')?;
     Some((k.trim(), relation_value(v)))
 }

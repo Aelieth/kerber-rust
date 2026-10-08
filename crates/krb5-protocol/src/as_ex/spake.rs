@@ -16,8 +16,8 @@ use krb5_types::{KrbError, PaData, err, pa};
 use super::clock::Clock;
 use super::{
     AsOutcome, AsRequest, KdcMsg, S2kMaterial, build_as_req_from, classify_kdc_error,
-    conf_preferred_preauth_types, find_pa, finish_as_rep, method_from_error, pick_key, req_sname,
-    request_times, retried, salt_cname, select_s2k, select_s2k_after, send_as,
+    conf_preferred_preauth_types_for, find_pa, finish_as_rep, method_from_error, pick_key,
+    req_sname, request_times, retried, salt_cname, select_s2k, select_s2k_after, send_as,
     sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
@@ -214,7 +214,10 @@ pub(super) fn continue_spake(
             Some(_) if trace::enabled() => {
                 trace::init_creds_preauth();
                 trace_preauth_input(
-                    &sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types()),
+                    &sort_krb5_padata_sequence(
+                        &method,
+                        &conf_preferred_preauth_types_for(req.realm),
+                    ),
                     etypes,
                 );
             }

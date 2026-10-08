@@ -1476,6 +1476,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **config/client.** `[libdefaults]` relation names and the section name match exactly, a realm subsection is that realm's node, and the eight per-realm keys (including `noaddresses`) read it before the top level. A trailing comma stays. Units; lab.
 - **protocol.** `kinit -T` sends the first AS-REQ unarmored unless the armor cache has `fast_avail`. A PA-FX-FAST error then builds the armor; a missing cache is "Error constructing AP-REQ armor: …". Units; lab.
 - **protocol.** `[realms] disable_encrypted_timestamp` (default off) skips the password prompt and fails encrypted timestamp with "Pre-authentication failed: Encrypted timestamp is disabled". Encrypted challenge still prompts. Units; lab.
 - **protocol.** `kpasswd`'s AS request (any with no etype list) asks for krb5.conf's `default_tkt_enctypes`, else `permitted_enctypes`, `DEFAULT` and family words included; it put aes256-cts first. Units; a gate cell beside MIT's kpasswd.

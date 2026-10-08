@@ -90,7 +90,7 @@ pub(super) fn continue_fast(
             with_prompted(req, prompt, |req| {
                 let method = sort_krb5_padata_sequence(
                     &method_from_error(&inner).unwrap_or_default(),
-                    &super::conf_preferred_preauth_types(),
+                    &super::conf_preferred_preauth_types_for(req.realm),
                 );
                 if trace::enabled() {
                     trace::init_creds_preauth();

@@ -1074,7 +1074,10 @@ fn kinit_inner(
                 rlife: None,
                 forwardable: false,
                 proxiable: false,
-                addresses: None,
+                // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:991-1005`): absent or true `noaddresses` sends none, and false sends the local addresses.
+                addresses: krb5_config::load_krb5_conf()
+                    .filter(|c| c.noaddresses_for(&realm_s) == Some(false))
+                    .and_then(|_| local_host_addresses()),
                 anonymous: false,
                 starttime: None,
             };

@@ -1859,3 +1859,188 @@ fn disable_encrypted_timestamp_is_a_realm_boolean() {
     .unwrap();
     assert!(later.encrypted_timestamp_disabled("KERBER.TEST"));
 }
+
+/// A `[libdefaults]` realm subsection is that realm's node: its relations do not write the
+/// top-level fields.
+/// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): the realm subsection is looked up under the realm name, not as a top-level relation.
+#[test]
+fn pl_realm_subsection_does_not_write_the_top_level() {
+    let c = Krb5Conf::parse(
+        "[libdefaults]\n    \
+         KERBER.TEST = {\n        \
+         forwardable = true\n        \
+         proxiable = true\n        \
+         canonicalize = true\n        \
+         ticket_lifetime = 1h\n        \
+         renew_lifetime = 2h\n        \
+         verify_ap_req_nofail = true\n        \
+         preferred_preauth_types = 2\n        \
+         nested = {\n            \
+         forwardable = true\n        \
+         }\n    \
+         }\n    \
+         OTHER.TEST = {\n        \
+         forwardable = true\n    \
+         }\n",
+    )
+    .unwrap();
+    assert!(!c.forwardable, "realm forwardable wrote the top level");
+    assert!(!c.proxiable, "realm proxiable wrote the top level");
+    assert!(!c.canonicalize, "realm canonicalize wrote the top level");
+    assert!(
+        c.ticket_lifetime.is_none(),
+        "realm ticket_lifetime wrote the top level"
+    );
+    assert!(
+        c.renew_lifetime.is_none(),
+        "realm renew_lifetime wrote the top level"
+    );
+    assert!(
+        !c.verify_ap_req_nofail,
+        "realm verify_ap_req_nofail wrote the top level"
+    );
+    assert!(
+        c.preferred_preauth_types.is_empty(),
+        "realm preferred_preauth_types wrote the top level"
+    );
+}
+
+/// A miscased relation is ignored, so it does not take the slot of the exact name.
+/// MIT `profile_node_iterator` (`util/profile/prof_tree.c:586-616`): a relation name matches by `strcmp`.
+#[test]
+fn pl_miscased_relation_does_not_shadow_the_exact_name() {
+    let c = Krb5Conf::parse(
+        "[libdefaults]\n    \
+         Forwardable = false\n    \
+         forwardable = true\n    \
+         Clockskew = 10\n    \
+         clockskew = 20\n    \
+         Default_realm = NO.COM\n    \
+         default_realm = YES.COM\n",
+    )
+    .unwrap();
+    assert!(c.forwardable, "Forwardable shadowed forwardable");
+    assert_eq!(c.clockskew, 20, "Clockskew shadowed clockskew");
+    assert_eq!(
+        c.default_realm.as_deref(),
+        Some("YES.COM"),
+        "Default_realm shadowed default_realm"
+    );
+}
+
+/// `[LibDefaults]` is not `[libdefaults]`.
+/// MIT `profile_node_iterator` (`util/profile/prof_tree.c:586-616`): a section name matches by `strcmp`.
+#[test]
+fn pl_miscased_libdefaults_section_is_ignored() {
+    let c = Krb5Conf::parse(
+        "[LibDefaults]\n    forwardable = true\n    clockskew = 10\n    default_realm = EXAMPLE.COM\n",
+    )
+    .unwrap();
+    assert!(!c.forwardable, "[LibDefaults] set forwardable");
+    assert_eq!(c.clockskew, 300, "[LibDefaults] set clockskew");
+    assert!(c.default_realm.is_none(), "[LibDefaults] set default_realm");
+}
+
+/// A relation value keeps a trailing comma.
+/// MIT `parse_std_line` (`util/profile/prof_parse.c:169-183`): trailing whitespace is cut, and a comma is not whitespace.
+#[test]
+fn pl_trailing_comma_stays_in_the_value() {
+    let c = Krb5Conf::parse("[libdefaults]\n    default_realm = EXAMPLE.COM,\n").unwrap();
+    assert_eq!(c.default_realm.as_deref(), Some("EXAMPLE.COM,"));
+}
+
+/// `clockskew` is top-level only: a realm subsection does not set it.
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): `clockskew` is the top-level `[libdefaults]` relation.
+#[test]
+fn pl_clockskew_in_a_realm_node_leaves_the_default() {
+    let c = Krb5Conf::parse("[libdefaults]\n    KERBER.TEST = {\n        clockskew = 10\n    }\n")
+        .unwrap();
+    assert_eq!(c.clockskew, 300);
+}
+
+/// The first exact value wins.
+/// MIT `profile_get_values` (`util/profile/prof_get.c:179-184`): values come back in file order, so the first one is the one a caller keeps.
+#[test]
+fn pl_the_first_exact_relation_wins() {
+    let c = Krb5Conf::parse("[libdefaults]\n    forwardable = true\n    forwardable = false\n")
+        .unwrap();
+    assert!(c.forwardable);
+}
+
+/// The eight per-realm keys read the client realm's node, then the top level.
+/// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): the realm subsection, then the top-level relation.
+#[test]
+fn pl_per_realm_keys_read_the_realm_then_the_top_level() {
+    let c = Krb5Conf::parse(
+        "[libdefaults]\n    \
+         forwardable = false\n    \
+         proxiable = false\n    \
+         canonicalize = false\n    \
+         ticket_lifetime = 10h\n    \
+         renew_lifetime = 7d\n    \
+         noaddresses = true\n    \
+         preferred_preauth_types = 2\n    \
+         verify_ap_req_nofail = false\n    \
+         KERBER.TEST = {\n        \
+         forwardable = true\n        \
+         proxiable = true\n        \
+         canonicalize = true\n        \
+         ticket_lifetime = 1h\n        \
+         renew_lifetime = 2h\n        \
+         noaddresses = false\n        \
+         preferred_preauth_types = 17\n        \
+         verify_ap_req_nofail = true\n        \
+         Forwardable = false\n        \
+         clockskew = 10\n    \
+         }\n    \
+         OTHER.TEST = {\n        \
+         preferred_preauth_types = \"\"\n    \
+         }\n",
+    )
+    .unwrap();
+    assert!(c.forwardable_for("KERBER.TEST"));
+    assert!(c.proxiable_for("KERBER.TEST"));
+    assert!(c.canonicalize_for("KERBER.TEST"));
+    assert_eq!(c.ticket_lifetime_for("KERBER.TEST"), Some(3600));
+    assert_eq!(c.renew_lifetime_for("KERBER.TEST"), Some(2 * 3600));
+    assert_eq!(c.noaddresses_for("KERBER.TEST"), Some(false));
+    assert_eq!(c.preferred_preauth_for("KERBER.TEST"), Some(&[17][..]));
+    assert!(c.verify_ap_req_nofail_for("KERBER.TEST"));
+    assert!(!c.forwardable_for("OTHER.TEST"));
+    assert_eq!(c.ticket_lifetime_for("OTHER.TEST"), Some(10 * 3600));
+    assert_eq!(c.renew_lifetime_for("OTHER.TEST"), Some(7 * 24 * 3600));
+    assert_eq!(c.noaddresses_for("OTHER.TEST"), Some(true));
+    assert_eq!(c.preferred_preauth_for("OTHER.TEST"), Some(&[][..]));
+    assert!(!c.verify_ap_req_nofail_for("ABSENT.TEST"));
+    assert_eq!(c.noaddresses, Some(true));
+    assert!(!c.forwardable);
+    assert_eq!(c.clockskew, 300);
+    assert!(c.realm_libdefaults.contains_key("KERBER.TEST"));
+    assert!(!c.realm_libdefaults.contains_key("nested"));
+}
+
+/// A bad `noaddresses` boolean is false and still takes the slot.
+/// MIT `_krb5_conf_boolean` (`lib/krb5/krb/libdef_parse.c:48-63`): a value that is not a boolean is 0.
+#[test]
+fn pl_a_bad_noaddresses_boolean_is_false_and_wins() {
+    let c = Krb5Conf::parse("[libdefaults]\n    noaddresses = maybe\n    noaddresses = true\n")
+        .unwrap();
+    assert_eq!(c.noaddresses, Some(false));
+}
+
+/// Top-level lowercase relations still read as they do today.
+#[test]
+fn pl_top_level_lowercase_relations_still_apply() {
+    let c = Krb5Conf::parse(
+        "[libdefaults]\n    \
+         default_realm = KERBER.TEST\n    \
+         forwardable = true\n    \
+         clockskew = 120\n    \
+         kdc_timesync = no\n",
+    )
+    .unwrap();
+    assert_eq!(c.default_realm.as_deref(), Some("KERBER.TEST"));
+    assert!(c.forwardable_for("KERBER.TEST"));
+    assert_eq!(c.clockskew, 120);
+    assert!(c.kdc_timesync);
+}

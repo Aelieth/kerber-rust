@@ -263,6 +263,28 @@ pub fn clear_handed() {
     HANDED_KDCS.with(|cell| cell.set(None));
 }
 
+/// The eight `[libdefaults]` keys MIT reads from a realm subsection, then the top level.
+/// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): the realm node, then the top-level relation.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RealmLibdefaults {
+    /// `forwardable`. `None` means the realm did not set it.
+    pub forwardable: Option<bool>,
+    /// `proxiable`. `None` means the realm did not set it.
+    pub proxiable: Option<bool>,
+    /// `canonicalize`. `None` means the realm did not set it.
+    pub canonicalize: Option<bool>,
+    /// `ticket_lifetime` seconds. `None` means the realm did not set a duration.
+    pub ticket_lifetime: Option<u64>,
+    /// `renew_lifetime` seconds. `None` means the realm did not set a duration.
+    pub renew_lifetime: Option<u64>,
+    /// `noaddresses`. `None` means the realm did not set it.
+    pub noaddresses: Option<bool>,
+    /// `preferred_preauth_types`. `None` means the realm did not set it; `Some` of an empty list is set and empty.
+    pub preferred_preauth_types: Option<Vec<i32>>,
+    /// `verify_ap_req_nofail`. `None` means the realm did not set it.
+    pub verify_ap_req_nofail: Option<bool>,
+}
+
 /// Parsed `[libdefaults]` plus realm stanzas.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Krb5Conf {
@@ -309,6 +331,9 @@ pub struct Krb5Conf {
     pub ticket_lifetime: Option<u64>,
     /// `renew_lifetime` seconds.
     pub renew_lifetime: Option<u64>,
+    /// `[libdefaults] noaddresses`. `None` means the relation is absent.
+    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:991-1005`): absent or true sends no addresses, and false sends the local addresses.
+    pub noaddresses: Option<bool>,
     /// Heimdal `kdc_timeout` — no MIT parse site; stored and unused.
     pub kdc_timeout: Option<String>,
     /// Heimdal `max_retries` — no MIT parse site; stored and unused.
@@ -365,6 +390,9 @@ pub struct Krb5Conf {
     /// Realm → its stanza's `iprop_*` relations, name and value, in file order (includes
     /// followed); read by [`IpropParams`].
     pub iprop: BTreeMap<String, Vec<(String, String)>>,
+    /// Realm → its `[libdefaults]` subsection for the eight per-realm keys.
+    /// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): that node is read before the top-level relation.
+    pub realm_libdefaults: BTreeMap<String, RealmLibdefaults>,
     /// Realm → `[realms] disable_encrypted_timestamp`. Absent means false.
     /// MIT `encts_disabled` (`lib/krb5/krb/get_in_tkt.c:757-772`): a profile boolean, default false.
     pub disable_encrypted_timestamp: BTreeMap<String, bool>,

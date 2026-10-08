@@ -391,21 +391,27 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let mut ticket = AsTicketOpts {
         lifetime: opts
             .lifetime
-            .or_else(|| conf.as_ref().and_then(|c| c.ticket_lifetime)),
+            .or_else(|| conf.as_ref().and_then(|c| c.ticket_lifetime_for(&realm))),
         rlife: opts
             .rlife
-            .or_else(|| conf.as_ref().and_then(|c| c.renew_lifetime)),
+            .or_else(|| conf.as_ref().and_then(|c| c.renew_lifetime_for(&realm))),
         forwardable: opts
             .forwardable
-            .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.forwardable)),
+            .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.forwardable_for(&realm))),
         proxiable: opts
             .proxiable
-            .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.proxiable)),
+            .unwrap_or_else(|| conf.as_ref().is_none_or(|c| c.proxiable_for(&realm))),
         addresses: None,
         anonymous: opts.anonymous,
         starttime: opts.starttime,
     };
-    if opts.addresses == Some(true) {
+    // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:991-1005`): a caller address list wins; otherwise absent or true `noaddresses` sends none, and false sends the local addresses.
+    if opts.addresses == Some(true)
+        || (opts.addresses.is_none()
+            && conf
+                .as_ref()
+                .is_some_and(|c| c.noaddresses_for(&realm) == Some(false)))
+    {
         ticket.addresses = local_host_addresses();
     }
     let keytab = if opts.keytab {
@@ -471,7 +477,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         anonymous: opts.anonymous,
         canonicalize: opts.canonicalize
             || opts.enterprise
-            || conf.as_ref().is_some_and(|c| c.canonicalize),
+            || conf.as_ref().is_some_and(|c| c.canonicalize_for(&realm)),
         new_password: new_password.as_deref(),
         prompter: (!opts.keytab).then_some(NewPasswordPrompter(&prompter)),
         key_exp_notice: Some(KeyExpNotice(&key_exp_notice)),

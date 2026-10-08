@@ -546,9 +546,19 @@ pub const DEFAULT_PREFERRED_PREAUTH_TYPES: &[i32] = &[17, 16, 15, 14];
 /// `[libdefaults] preferred_preauth_types`, or MIT's PKINIT-first default.
 #[must_use]
 pub fn conf_preferred_preauth_types() -> Vec<i32> {
-    match krb5_config::load_krb5_conf() {
-        Some(c) if !c.preferred_preauth_types.is_empty() => c.preferred_preauth_types,
-        _ => DEFAULT_PREFERRED_PREAUTH_TYPES.to_vec(),
+    conf_preferred_preauth_types_for("")
+}
+
+/// `[libdefaults] preferred_preauth_types` for `realm`, or MIT's PKINIT-first default.
+/// MIT `sort_krb5_padata_sequence` (`lib/krb5/krb/get_in_tkt.c:418-424`): the client realm's string, else "17, 16, 15, 14".
+#[must_use]
+pub fn conf_preferred_preauth_types_for(realm: &str) -> Vec<i32> {
+    match krb5_config::load_krb5_conf()
+        .as_ref()
+        .and_then(|c| c.preferred_preauth_for(realm))
+    {
+        Some(list) => list.to_vec(),
+        None => DEFAULT_PREFERRED_PREAUTH_TYPES.to_vec(),
     }
 }
 
@@ -587,14 +597,14 @@ fn continue_from_hint(
             trace_preauth_input(
                 &sort_krb5_padata_sequence(
                     &method_from_error(err).unwrap_or_default(),
-                    &conf_preferred_preauth_types(),
+                    &conf_preferred_preauth_types_for(req.realm),
                 ),
                 etypes,
             );
         }
         return spake_forced(req, keys, nonce, etypes, err, clock);
     }
-    let preferred = conf_preferred_preauth_types();
+    let preferred = conf_preferred_preauth_types_for(req.realm);
     // MIT `spake_init` (`spake_client.c:62-73`): with no permitted group there is no SPAKE module.
     let groups = client_groups();
     let mut spake_failed = groups.is_empty();
@@ -833,7 +843,10 @@ fn continue_pkinit(
             if trace::enabled() {
                 trace::init_creds_preauth();
                 trace_preauth_input(
-                    &sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types()),
+                    &sort_krb5_padata_sequence(
+                        &method,
+                        &conf_preferred_preauth_types_for(req.realm),
+                    ),
                     etypes,
                 );
             }
@@ -953,7 +966,7 @@ fn chosen_preauth(req: &AsRequest<'_>, err: &KrbError) -> Option<i32> {
         return Some(pa::SPAKE);
     }
     let method = method_from_error(err).ok()?;
-    let sorted = sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types());
+    let sorted = sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types_for(req.realm));
     let groups_empty = client_groups().is_empty();
     sorted
         .into_iter()
