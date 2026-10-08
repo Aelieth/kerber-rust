@@ -286,6 +286,10 @@ fn main() {
     // MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then disable and enable_only select which modules load.
     // MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is the first profile file, ahead of krb5.conf.
     store.apply_kdcpreauth_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    // MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the same profile selects kdcpolicy modules.
+    store.apply_kdcpolicy_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    // MIT `plugins/kdcpolicy/test` has no `.so` here. `enable_only = test` registers it.
+    krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
     // MIT `load_preauth_plugins` (`kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.

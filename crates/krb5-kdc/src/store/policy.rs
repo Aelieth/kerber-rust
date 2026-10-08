@@ -140,6 +140,10 @@ pub struct Policy {
     ///
     /// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): the KDC walks the modules that remain loaded.
     pub kdcpreauth: krb5_config::PluginRelations,
+    /// `[plugins] kdcpolicy` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the KDC walks the modules that remain loaded.
+    pub kdcpolicy: krb5_config::PluginRelations,
 }
 
 impl Default for Policy {
@@ -174,6 +178,7 @@ impl Default for Policy {
             disable_last_success: false,
             disable_lockout: false,
             kdcpreauth: krb5_config::PluginRelations::default(),
+            kdcpolicy: krb5_config::PluginRelations::default(),
         }
     }
 }
@@ -376,6 +381,7 @@ impl PrincipalStore {
         }
         self.policy.ad_identity = conf.domain_sid.is_some();
         self.policy.kdcpreauth = conf.plugin_relations("kdcpreauth");
+        self.policy.kdcpolicy = conf.plugin_relations("kdcpolicy");
         Ok(())
     }
 
@@ -394,6 +400,25 @@ impl PrincipalStore {
             kdc.unwrap_or(&kdc_fallback),
             krb5.unwrap_or(&krb5_fallback),
             "kdcpreauth",
+        );
+    }
+
+    /// `[plugins] kdcpolicy` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
+    /// MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): `k5_plugin_load_all` applies that profile.
+    pub fn apply_kdcpolicy_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.kdcpolicy = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "kdcpolicy",
         );
     }
 

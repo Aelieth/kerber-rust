@@ -237,6 +237,13 @@ drops PA-ENC-TIMESTAMP from the preauth offer, and the KDC ignores that
 padata. The same relations in krb5.conf apply after this file. `module` is
 not read.
 
+`[plugins] kdcpolicy` `disable` and `enable_only` select named policy modules
+the same way. Each loaded module may deny the request or cap the ticket's
+lifetime and renew lifetime. With no module loaded the KDC allows the request
+and leaves the times. The same relations in krb5.conf apply after this file.
+`module` is not read. The name `test` is registered only when `enable_only`
+lists it (MIT's kdcpolicy test module). Any other name is an embedder module.
+
 ### The database
 
 ```sh

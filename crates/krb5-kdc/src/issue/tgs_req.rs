@@ -30,7 +30,7 @@ use crate::ad::{
 };
 use crate::error::Error;
 use crate::kdb::{PrincipalRead, lookup_principal_id};
-use crate::plugins::{apply_policy_times, current_policy};
+use crate::plugins::enforce_kdcpolicy_tgs;
 use crate::preauth::{FastOk, fast_finished, find_pa, proto, unwrap_fast_tgs, wrap_fast_rep};
 use crate::status;
 use crate::store::{
@@ -740,8 +740,16 @@ fn tgs_flags_times_policy<'a>(
     if s4u2self && !s4u_referral {
         flags = s4u2self_forwardable(&server, flags);
     }
-    let tgs_adj = current_policy().check_tgs(store, &server.name, &auth_indicators)?;
-    apply_policy_times(&now, &mut end, &mut ticket_renew_till, &tgs_adj);
+    enforce_kdcpolicy_tgs(
+        store,
+        body,
+        &server,
+        &enc_tkt,
+        &auth_indicators,
+        &now,
+        &mut end,
+        &mut ticket_renew_till,
+    )?;
     Ok(TgsTimes {
         tgs_padata,
         ap,

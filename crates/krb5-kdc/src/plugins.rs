@@ -7,7 +7,9 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_types::{AuthorizationData, KerberosTime, PaData, PrincipalName, pa};
+use krb5_types::{
+    AuthorizationData, EncTicketPart, KdcReqBody, KerberosTime, PaData, PrincipalName, pa,
+};
 
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
@@ -834,7 +836,16 @@ pub fn apply_policy_times(
 }
 
 /// Ticket-policy hook (etype / transited stay on DefaultPolicy).
+///
+/// Several modules may be registered by [`name`](KdcPolicy::name). `[plugins] kdcpolicy`
+/// `disable` then `enable_only` select which of them run. [`set_policy`] and
+/// [`set_thread_policy`] install one module and skip that stanza.
 pub trait KdcPolicy: Send + Sync {
+    /// Module name for `[plugins] kdcpolicy`. The default is empty, which is not a built-in name.
+    fn name(&self) -> &'static str {
+        ""
+    }
+
     /// Called after AS times are computed; `Err` denies the request.
     ///
     /// # Errors
@@ -859,6 +870,48 @@ pub trait KdcPolicy: Send + Sync {
         sname: &PrincipalName,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error>;
+
+    /// MIT `krb5_kdcpolicy_check_as_fn` (`kdcpolicy_plugin.h:95-102`): the request, both database
+    /// principals, the auth indicators, and the status out. Lifetime and renew lifetime come back
+    /// as [`PolicyAdjustment`]. The default ignores the request, the server, and the status and
+    /// calls [`Self::check_as`].
+    ///
+    /// # Errors
+    ///
+    /// The [`Error`] that denies the request. A denial stops later modules. When `status` is set,
+    /// that string is the KRB-ERROR text.
+    fn check_as_req(
+        &self,
+        _request: &KdcReqBody,
+        store: &dyn PrincipalRead,
+        client: &Principal,
+        _server: &Principal,
+        indicators: &[String],
+        _status: &mut Option<&'static str>,
+    ) -> Result<PolicyAdjustment, Error> {
+        self.check_as(store, client, indicators)
+    }
+
+    /// MIT `krb5_kdcpolicy_check_tgs_fn` (`kdcpolicy_plugin.h:111-118`): the request, the server,
+    /// the header ticket, the auth indicators, and the status out. Lifetime and renew lifetime
+    /// come back as [`PolicyAdjustment`]. The default ignores the request, the ticket, and the
+    /// status and calls [`Self::check_tgs`] with the server name.
+    ///
+    /// # Errors
+    ///
+    /// The [`Error`] that denies the request. A denial stops later modules. When `status` is set,
+    /// that string is the KRB-ERROR text.
+    fn check_tgs_req(
+        &self,
+        _request: &KdcReqBody,
+        store: &dyn PrincipalRead,
+        server: &Principal,
+        _ticket: &EncTicketPart,
+        indicators: &[String],
+        _status: &mut Option<&'static str>,
+    ) -> Result<PolicyAdjustment, Error> {
+        self.check_tgs(store, &server.name, indicators)
+    }
 }
 
 /// Default policy: records nothing; built-in ticket rules stay in issue/.
@@ -884,9 +937,12 @@ impl KdcPolicy for DefaultPolicy {
 }
 
 static POLICY: Mutex<Option<Arc<dyn KdcPolicy>>> = Mutex::new(None);
+static NAMED_POLICIES: Mutex<Vec<Arc<dyn KdcPolicy>>> = Mutex::new(Vec::new());
 
 thread_local! {
     static THREAD_POLICY: std::cell::RefCell<Option<Arc<dyn KdcPolicy>>> =
+        const { std::cell::RefCell::new(None) };
+    static THREAD_POLICIES: std::cell::RefCell<Option<Vec<Arc<dyn KdcPolicy>>>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -930,10 +986,157 @@ pub fn current_policy() -> Arc<dyn KdcPolicy> {
         .unwrap_or_else(|| Arc::new(DefaultPolicy))
 }
 
+/// Register one named kdcpolicy module for every thread that has not set its own list.
+///
+/// `test` is registered only when `enable_only` names it. [`set_policy`] still installs one module and skips this list.
+pub fn register_kdcpolicy(module: Arc<dyn KdcPolicy>) {
+    NAMED_POLICIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(module);
+}
+
+/// Install this thread's named kdcpolicy modules, used in place of [`register_kdcpolicy`] (tests).
+///
+/// An empty list allows the request and leaves the ticket times. The list is filtered by
+/// `[plugins] kdcpolicy`. It is not used while [`set_thread_policy`] is set.
+pub fn set_thread_kdcpolicies(modules: Vec<Arc<dyn KdcPolicy>>) {
+    THREAD_POLICIES.with(|slot| *slot.borrow_mut() = Some(modules));
+}
+
+/// Drop this thread's named kdcpolicy modules so it uses the process-wide registry.
+pub fn clear_thread_kdcpolicies() {
+    THREAD_POLICIES.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Named modules after `[plugins] kdcpolicy` `disable` and `enable_only`, in the order that remains.
+///
+/// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first
+/// remaining match.
+fn selected_kdcpolicies(
+    relations: &krb5_config::PluginRelations,
+    modules: Vec<Arc<dyn KdcPolicy>>,
+) -> Vec<Arc<dyn KdcPolicy>> {
+    let names: Vec<&str> = modules.iter().map(|module| module.name()).collect();
+    let kept = krb5_config::filter_plugin_modules(relations, &names);
+    let mut left = modules;
+    let mut out = Vec::new();
+    for want in kept {
+        if let Some(index) = left.iter().position(|module| module.name() == want) {
+            out.push(left.remove(index));
+        }
+    }
+    out
+}
+
+/// Modules for this request.
+///
+/// A thread slot ([`set_thread_policy`]) or the process slot ([`set_policy`]) is that one module,
+/// not filtered. Otherwise the thread's named list, if set, or the process registry, after the
+/// profile. An empty selection allows the request.
+/// MIT `check_kdcpolicy_as` (`kdc/policy.c:104-136`): a null method is skipped and no loaded module
+/// leaves the times unchanged.
+fn active_kdcpolicies(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcPolicy>> {
+    if let Some(module) = THREAD_POLICY.with(|slot| slot.borrow().clone()) {
+        return vec![module];
+    }
+    if let Some(modules) = THREAD_POLICIES.with(|slot| slot.borrow().clone()) {
+        return selected_kdcpolicies(&store.policy().kdcpolicy, modules);
+    }
+    if let Some(module) = POLICY
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+    {
+        return vec![module];
+    }
+    let modules = NAMED_POLICIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    selected_kdcpolicies(&store.policy().kdcpolicy, modules)
+}
+
+/// Walk the loaded kdcpolicy modules for an AS request and cap the ticket times.
+///
+/// MIT `check_kdcpolicy_as` (`kdc/policy.c:104-136`): each module may deny or return lifetimes;
+/// the first error stops the walk.
+/// MIT `update_ticket_times` (`kdc/policy.c:91-99`): a non-zero lifetime caps `endtime` from now,
+/// and a non-zero renew lifetime caps `renew_till`.
+///
+/// # Errors
+///
+/// The first module's denial. Times already capped by an earlier module stay capped.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "MIT check_kdcpolicy_as passes the request, both principals, the indicators and both ticket times"
+)]
+pub(crate) fn enforce_kdcpolicy_as(
+    store: &dyn PrincipalRead,
+    request: &KdcReqBody,
+    client: &Principal,
+    server: &Principal,
+    indicators: &[String],
+    now: &KerberosTime,
+    end: &mut KerberosTime,
+    renew_till: &mut Option<KerberosTime>,
+) -> Result<(), Error> {
+    for module in active_kdcpolicies(store) {
+        let mut status = None;
+        match module.check_as_req(request, store, client, server, indicators, &mut status) {
+            Ok(adj) => apply_policy_times(now, end, renew_till, &adj),
+            Err(err) => {
+                return Err(match status {
+                    Some(word) => crate::ad::with_status(err, word),
+                    None => err,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Walk the loaded kdcpolicy modules for a TGS request and cap the ticket times.
+///
+/// MIT `check_kdcpolicy_tgs` (`kdc/policy.c:144-176`): same walk as the AS check, with the header
+/// ticket and no client database entry.
+///
+/// # Errors
+///
+/// The first module's denial. Times already capped by an earlier module stay capped.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "MIT check_kdcpolicy_tgs passes the request, the server, the ticket, the indicators and both ticket times"
+)]
+pub(crate) fn enforce_kdcpolicy_tgs(
+    store: &dyn PrincipalRead,
+    request: &KdcReqBody,
+    server: &Principal,
+    ticket: &EncTicketPart,
+    indicators: &[String],
+    now: &KerberosTime,
+    end: &mut KerberosTime,
+    renew_till: &mut Option<KerberosTime>,
+) -> Result<(), Error> {
+    for module in active_kdcpolicies(store) {
+        let mut status = None;
+        match module.check_tgs_req(request, store, server, ticket, indicators, &mut status) {
+            Ok(adj) => apply_policy_times(now, end, renew_till, &adj),
+            Err(err) => {
+                return Err(match status {
+                    Some(word) => crate::ad::with_status(err, word),
+                    None => err,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::Ordering;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use krb5_types::cammac::AdKdcIssued;
 
@@ -1292,4 +1495,618 @@ mod tests {
         assert_eq!(issued.elements[0].ad_type, GREET_AD_TYPE);
         assert_eq!(issued.elements[0].ad_data.as_ref(), GREET_TEXT);
     }
+
+    /// Clears this thread's kdcpolicy slot and named list.
+    struct ClearKdcpolicy;
+
+    impl ClearKdcpolicy {
+        fn list(modules: Vec<Arc<dyn KdcPolicy>>) -> Self {
+            set_thread_kdcpolicies(modules);
+            Self
+        }
+
+        fn slot(module: Arc<dyn KdcPolicy>) -> Self {
+            set_thread_policy(module);
+            Self
+        }
+    }
+
+    impl Drop for ClearKdcpolicy {
+        fn drop(&mut self) {
+            clear_thread_kdcpolicies();
+            clear_thread_policy();
+        }
+    }
+
+    struct CapModule {
+        name: &'static str,
+        life: i64,
+        deny: bool,
+        hits: AtomicU64,
+        log: Arc<Mutex<Vec<&'static str>>>,
+    }
+
+    impl CapModule {
+        fn new(name: &'static str, life: i64, log: &Arc<Mutex<Vec<&'static str>>>) -> Arc<Self> {
+            Arc::new(Self {
+                name,
+                life,
+                deny: false,
+                hits: AtomicU64::new(0),
+                log: Arc::clone(log),
+            })
+        }
+
+        fn deny(name: &'static str, log: &Arc<Mutex<Vec<&'static str>>>) -> Arc<Self> {
+            Arc::new(Self {
+                name,
+                life: 0,
+                deny: true,
+                hits: AtomicU64::new(0),
+                log: Arc::clone(log),
+            })
+        }
+    }
+
+    impl KdcPolicy for CapModule {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn check_as(
+            &self,
+            _store: &dyn PrincipalRead,
+            _client: &Principal,
+            _indicators: &[String],
+        ) -> Result<PolicyAdjustment, Error> {
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            self.log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(self.name);
+            if self.deny {
+                return Err(Error::Protocol {
+                    code: krb5_types::err::POLICY,
+                    text: Some(status::LOCAL_POLICY.to_owned()),
+                    e_data: None,
+                    detail: None,
+                });
+            }
+            Ok(PolicyAdjustment {
+                lifetime: self.life,
+                renew_lifetime: self.life.saturating_mul(2),
+            })
+        }
+
+        fn check_tgs(
+            &self,
+            _store: &dyn PrincipalRead,
+            _sname: &PrincipalName,
+            _indicators: &[String],
+        ) -> Result<PolicyAdjustment, Error> {
+            let life = self.life / 2;
+            self.hits.fetch_add(1, Ordering::SeqCst);
+            self.log
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(self.name);
+            if self.deny {
+                return Err(Error::Protocol {
+                    code: krb5_types::err::POLICY,
+                    text: Some(status::LOCAL_POLICY.to_owned()),
+                    e_data: None,
+                    detail: None,
+                });
+            }
+            Ok(PolicyAdjustment {
+                lifetime: life,
+                renew_lifetime: life.saturating_mul(2),
+            })
+        }
+    }
+
+    struct TicketSeen {
+        end: AtomicU64,
+    }
+
+    impl KdcPolicy for TicketSeen {
+        fn name(&self) -> &'static str {
+            "ticket"
+        }
+
+        fn check_as(
+            &self,
+            _store: &dyn PrincipalRead,
+            _client: &Principal,
+            _indicators: &[String],
+        ) -> Result<PolicyAdjustment, Error> {
+            Ok(PolicyAdjustment::default())
+        }
+
+        fn check_tgs(
+            &self,
+            _store: &dyn PrincipalRead,
+            _sname: &PrincipalName,
+            _indicators: &[String],
+        ) -> Result<PolicyAdjustment, Error> {
+            Ok(PolicyAdjustment::default())
+        }
+
+        fn check_tgs_req(
+            &self,
+            _request: &KdcReqBody,
+            _store: &dyn PrincipalRead,
+            _server: &Principal,
+            ticket: &EncTicketPart,
+            _indicators: &[String],
+            _status: &mut Option<&'static str>,
+        ) -> Result<PolicyAdjustment, Error> {
+            self.end
+                .store(u64::from(ticket.endtime.unix_seconds()), Ordering::SeqCst);
+            Ok(PolicyAdjustment {
+                lifetime: 1800,
+                renew_lifetime: 0,
+            })
+        }
+    }
+
+    fn policy_log() -> Arc<Mutex<Vec<&'static str>>> {
+        Arc::new(Mutex::new(Vec::new()))
+    }
+
+    fn kdcpolicy_stanza(store: &mut crate::store::PrincipalStore, body: &str) {
+        let text = format!("[plugins]\n    kdcpolicy = {{\n{body}    }}\n");
+        store.policy.kdcpolicy = krb5_config::Krb5Conf::parse(&text)
+            .expect("stanza")
+            .plugin_relations("kdcpolicy");
+    }
+
+    fn policy_pair(store: &crate::store::PrincipalStore) -> (Principal, Principal) {
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let client = store.get_name(&user).expect("user").clone();
+        let server = store.fetch_krbtgt().expect("krbtgt").expect("krbtgt row");
+        (client, server)
+    }
+
+    fn policy_body(cname: Option<&str>, sname: Option<&str>) -> KdcReqBody {
+        let part = |s: &str| PrincipalName::new(PrincipalName::NT_PRINCIPAL, [s]);
+        KdcReqBody {
+            kdc_options: krb5_types::KdcOptions::none(),
+            cname: cname.map(part),
+            realm: krb5_types::try_ascii(TEST_REALM).expect("realm"),
+            sname: sname.map(part),
+            from: None,
+            till: KerberosTime::from_unix_seconds(2_000_000_000),
+            rtime: None,
+            nonce: 1,
+            etype: vec![18],
+            addresses: None,
+            enc_authorization_data: None,
+            additional_tickets: None,
+        }
+    }
+
+    fn open_times() -> (KerberosTime, KerberosTime, Option<KerberosTime>) {
+        let now = KerberosTime::from_unix_seconds(1_700_000_000);
+        let end = now.add_seconds(30 * 24 * 3600).expect("end");
+        let renew = Some(now.add_seconds(30 * 24 * 3600).expect("renew"));
+        (now, end, renew)
+    }
+
+    fn header_ticket(end_at: u32) -> EncTicketPart {
+        let now = KerberosTime::from_unix_seconds(1_700_000_000);
+        EncTicketPart {
+            flags: krb5_types::TicketFlags::initial_preauth(),
+            key: krb5_types::EncryptionKey {
+                keytype: 18,
+                keyvalue: vec![0u8; 32].into(),
+            },
+            crealm: krb5_types::try_ascii(TEST_REALM).expect("realm"),
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+            transited: krb5_types::TransitedEncoding::empty(),
+            authtime: now.clone(),
+            starttime: Some(now),
+            endtime: KerberosTime::from_unix_seconds(end_at),
+            renew_till: None,
+            caddr: None,
+            authorization_data: None,
+        }
+    }
+
+    #[test]
+    fn named_modules_cap_to_the_tighter_life() {
+        let (mut store, _) = bootstrap_documented().unwrap();
+        kdcpolicy_stanza(&mut store, "        disable = nosuch\n");
+        let log = policy_log();
+        let wide = CapModule::new("wide", 7 * 3600, &log);
+        let tight = CapModule::new("tight", 3600, &log);
+        let _guard = ClearKdcpolicy::list(vec![
+            Arc::clone(&wide) as Arc<dyn KdcPolicy>,
+            Arc::clone(&tight) as Arc<dyn KdcPolicy>,
+        ]);
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("both allow");
+        assert_eq!(wide.hits.load(Ordering::SeqCst), 1);
+        assert_eq!(tight.hits.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_slice(),
+            ["wide", "tight"]
+        );
+        assert_eq!(end, now.add_seconds(3600).expect("cap"));
+        assert_eq!(renew, Some(now.add_seconds(7200).expect("renew")));
+    }
+
+    #[test]
+    fn disable_drops_the_named_module() {
+        let (mut store, _) = bootstrap_documented().unwrap();
+        kdcpolicy_stanza(&mut store, "        disable = tight\n");
+        let log = policy_log();
+        let wide = CapModule::new("wide", 7 * 3600, &log);
+        let tight = CapModule::new("tight", 3600, &log);
+        let _guard = ClearKdcpolicy::list(vec![
+            Arc::clone(&wide) as Arc<dyn KdcPolicy>,
+            Arc::clone(&tight) as Arc<dyn KdcPolicy>,
+        ]);
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("wide allows");
+        assert_eq!(wide.hits.load(Ordering::SeqCst), 1);
+        assert_eq!(tight.hits.load(Ordering::SeqCst), 0);
+        assert_eq!(end, now.add_seconds(7 * 3600).expect("wide"));
+        assert_eq!(renew, Some(now.add_seconds(14 * 3600).expect("renew")));
+    }
+
+    #[test]
+    fn enable_only_orders_the_named_modules() {
+        let (mut store, _) = bootstrap_documented().unwrap();
+        kdcpolicy_stanza(
+            &mut store,
+            "        enable_only = tight\n        enable_only = wide\n",
+        );
+        let log = policy_log();
+        let wide = CapModule::new("wide", 7 * 3600, &log);
+        let tight = CapModule::new("tight", 3600, &log);
+        let _guard = ClearKdcpolicy::list(vec![
+            Arc::clone(&wide) as Arc<dyn KdcPolicy>,
+            Arc::clone(&tight) as Arc<dyn KdcPolicy>,
+        ]);
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("both allow");
+        assert_eq!(
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_slice(),
+            ["tight", "wide"]
+        );
+        assert_eq!(end, now.add_seconds(3600).expect("tighter cap stays"));
+    }
+
+    #[test]
+    fn enable_only_of_an_unknown_name_keeps_nothing() {
+        let (mut store, _) = bootstrap_documented().unwrap();
+        kdcpolicy_stanza(&mut store, "        enable_only = nosuch\n");
+        let log = policy_log();
+        let wide = CapModule::new("wide", 7 * 3600, &log);
+        let _guard = ClearKdcpolicy::list(vec![Arc::clone(&wide) as Arc<dyn KdcPolicy>]);
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        let start_end = end.clone();
+        let start_renew = renew.clone();
+        enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("nothing loaded still allows");
+        assert_eq!(wide.hits.load(Ordering::SeqCst), 0);
+        assert_eq!(end, start_end);
+        assert_eq!(renew, start_renew);
+    }
+
+    #[test]
+    fn a_denial_stops_later_modules() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let log = policy_log();
+        let first = CapModule::new("wide", 7 * 3600, &log);
+        let second = CapModule::deny("deny", &log);
+        let third = CapModule::new("tight", 3600, &log);
+        let _guard = ClearKdcpolicy::list(vec![
+            Arc::clone(&first) as Arc<dyn KdcPolicy>,
+            Arc::clone(&second) as Arc<dyn KdcPolicy>,
+            Arc::clone(&third) as Arc<dyn KdcPolicy>,
+        ]);
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        let err = enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect_err("second module denies");
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, krb5_types::err::POLICY);
+                assert_eq!(text.as_deref(), Some(status::LOCAL_POLICY));
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(first.hits.load(Ordering::SeqCst), 1);
+        assert_eq!(second.hits.load(Ordering::SeqCst), 1);
+        assert_eq!(third.hits.load(Ordering::SeqCst), 0);
+        assert_eq!(end, now.add_seconds(7 * 3600).expect("first cap stays"));
+    }
+
+    #[test]
+    fn an_empty_list_leaves_the_times() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let _guard = ClearKdcpolicy::list(Vec::new());
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        let start_end = end.clone();
+        enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("no module allows");
+        assert_eq!(end, start_end);
+    }
+
+    #[test]
+    fn a_thread_slot_ignores_the_stanza() {
+        let (mut store, _) = bootstrap_documented().unwrap();
+        kdcpolicy_stanza(&mut store, "        disable = tight\n");
+        let log = policy_log();
+        let tight = CapModule::new("tight", 3600, &log);
+        let _guard = ClearKdcpolicy::slot(Arc::clone(&tight) as Arc<dyn KdcPolicy>);
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("slot allows");
+        assert_eq!(tight.hits.load(Ordering::SeqCst), 1);
+        assert_eq!(end, now.add_seconds(3600).expect("slot cap"));
+    }
+
+    #[test]
+    fn request_client_fail_denies_before_the_database_name() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let _guard = ClearKdcpolicy::slot(Arc::new(crate::testrealm::TestPolicy));
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        let err = enforce_kdcpolicy_as(
+            &store,
+            &policy_body(Some("fail"), None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect_err("request cname fail");
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, krb5_types::err::POLICY);
+                assert_eq!(text.as_deref(), Some(status::LOCAL_POLICY));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    struct StatusOut;
+
+    impl KdcPolicy for StatusOut {
+        fn name(&self) -> &'static str {
+            "status"
+        }
+
+        fn check_as(
+            &self,
+            _store: &dyn PrincipalRead,
+            _client: &Principal,
+            _indicators: &[String],
+        ) -> Result<PolicyAdjustment, Error> {
+            Ok(PolicyAdjustment::default())
+        }
+
+        fn check_tgs(
+            &self,
+            _store: &dyn PrincipalRead,
+            _sname: &PrincipalName,
+            _indicators: &[String],
+        ) -> Result<PolicyAdjustment, Error> {
+            Ok(PolicyAdjustment::default())
+        }
+
+        fn check_as_req(
+            &self,
+            _request: &KdcReqBody,
+            _store: &dyn PrincipalRead,
+            _client: &Principal,
+            _server: &Principal,
+            _indicators: &[String],
+            status: &mut Option<&'static str>,
+        ) -> Result<PolicyAdjustment, Error> {
+            *status = Some("KDCPOLICY_STATUS");
+            Err(Error::Protocol {
+                code: krb5_types::err::POLICY,
+                text: Some("NOT_THE_STATUS".to_owned()),
+                e_data: None,
+                detail: None,
+            })
+        }
+    }
+
+    #[test]
+    fn a_status_out_is_the_denial_text() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let _guard = ClearKdcpolicy::slot(Arc::new(StatusOut));
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        let err = enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect_err("status module denies");
+        match err {
+            Error::Protocol { code, text, .. } => {
+                assert_eq!(code, krb5_types::err::POLICY);
+                assert_eq!(text.as_deref(), Some("KDCPOLICY_STATUS"));
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn tgs_module_sees_the_header_ticket() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let seen = Arc::new(TicketSeen {
+            end: AtomicU64::new(0),
+        });
+        let _guard = ClearKdcpolicy::list(vec![Arc::clone(&seen) as Arc<dyn KdcPolicy>]);
+        let (_client, server) = policy_pair(&store);
+        let ticket = header_ticket(1_800_000_000);
+        let (now, mut end, mut renew) = open_times();
+        enforce_kdcpolicy_tgs(
+            &store,
+            &policy_body(None, Some("host")),
+            &server,
+            &ticket,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("ticket module allows");
+        assert_eq!(seen.end.load(Ordering::SeqCst), 1_800_000_000);
+        assert_eq!(end, now.add_seconds(1800).expect("tgs cap"));
+    }
+
+    #[test]
+    fn kdc_conf_and_krb5_conf_disables_both_apply() {
+        let (mut store, _) = bootstrap_documented().unwrap();
+        let kdc = krb5_config::KdcConf::parse(
+            "[plugins]\n    kdcpolicy = {\n        disable = tight\n    }\n",
+        )
+        .expect("kdc.conf");
+        let krb5 = krb5_config::Krb5Conf::parse(
+            "[plugins]\n    kdcpolicy = {\n        disable = wide\n    }\n",
+        )
+        .expect("krb5.conf");
+        store.apply_kdcpolicy_plugins(Some(&kdc), Some(&krb5));
+        let log = policy_log();
+        let wide = CapModule::new("wide", 7 * 3600, &log);
+        let tight = CapModule::new("tight", 3600, &log);
+        let _guard = ClearKdcpolicy::list(vec![
+            Arc::clone(&wide) as Arc<dyn KdcPolicy>,
+            Arc::clone(&tight) as Arc<dyn KdcPolicy>,
+        ]);
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        let start_end = end.clone();
+        enforce_kdcpolicy_as(
+            &store,
+            &policy_body(None, None),
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("nothing loaded still allows");
+        assert_eq!(wide.hits.load(Ordering::SeqCst), 0);
+        assert_eq!(tight.hits.load(Ordering::SeqCst), 0);
+        assert_eq!(end, start_end);
+    }
+}
+
+#[path = "kdcpolicy_test.rs"]
+mod kdcpolicy_test;
+
+/// Register MIT's kdcpolicy test module when `enable_only` names `test`.
+///
+/// A missing `enable_only` registers nothing, so a KDC with no stanza does not
+/// deny a principal named `fail` or cap ticket lifetimes. A second call does
+/// not register a second copy. `module` is not read.
+pub fn register_kdcpolicy_test_if_selected(relations: &krb5_config::PluginRelations) {
+    let Some(names) = relations.enable_only.as_ref() else {
+        return;
+    };
+    if !names.iter().any(|name| name == "test") {
+        return;
+    }
+    let already = NAMED_POLICIES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .iter()
+        .any(|module| module.name() == "test");
+    if already {
+        return;
+    }
+    register_kdcpolicy(std::sync::Arc::new(kdcpolicy_test::TestModule));
 }

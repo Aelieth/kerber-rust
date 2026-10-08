@@ -1,6 +1,6 @@
 //! `[plugins]` `disable` and `enable_only` (`lib/krb5/krb/plugin.c`).
 //!
-//! `module` is not read. kdcpreauth and clpreauth ask this profile by name.
+//! `module` is not read. kdcpreauth, clpreauth and kdcpolicy ask this profile by name.
 
 use std::collections::BTreeMap;
 

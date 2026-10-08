@@ -22,9 +22,7 @@ use super::reply::{
 use crate::ad::{authind_add, check_indicators, handle_authdata};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::plugins::{
-    PreauthAction, PreauthRock, apply_policy_times, current_policy, run_as_preauth,
-};
+use crate::plugins::{PreauthAction, PreauthRock, enforce_kdcpolicy_as, run_as_preauth};
 use crate::preauth::{
     FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, mint_freshness_token_now,
     pa_cookie_last, proto, unwrap_fast, wrap_fast_rep,
@@ -572,8 +570,16 @@ fn finish_process_as_req(
         &starttime,
         &end,
     );
-    let as_adj = current_policy().check_as(store, &client, &auth_indicators)?;
-    apply_policy_times(&now, &mut end, &mut ticket_renew_till, &as_adj);
+    enforce_kdcpolicy_as(
+        store,
+        body,
+        &client,
+        &server,
+        &auth_indicators,
+        &now,
+        &mut end,
+        &mut ticket_renew_till,
+    )?;
     let include_pac = include_pac_for_reply(
         store,
         &server,
