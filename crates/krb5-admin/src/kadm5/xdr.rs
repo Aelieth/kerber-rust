@@ -58,7 +58,10 @@ impl<'a> XdrR<'a> {
         Ok(v)
     }
 
-    pub(super) fn nullstring(&mut self) -> Result<Option<String>, Error> {
+    /// MIT `xdr_string`: the count includes the trailing NUL, and the bytes are not
+    /// required to be UTF-8. A kadm5 password is this (`xdr_chpass3_arg` / `xdr_cprinc_arg`
+    /// `passwd`), so `caf\xe9` reaches `passwd_check`. Principal names stay on `nullstring`.
+    pub(super) fn cstring_bytes(&mut self) -> Result<Option<Vec<u8>>, Error> {
         let n = self.u32()? as usize;
         if n == 0 {
             return Ok(None);
@@ -68,8 +71,16 @@ impl<'a> XdrR<'a> {
         self.i += n;
         let pad = (4 - (n % 4)) % 4;
         self.i = self.i.saturating_add(pad).min(self.b.len());
-        let s = std::str::from_utf8(raw).map_err(|e| Error::Inner(e.to_string()))?;
-        Ok(Some(s.trim_end_matches('\0').to_owned()))
+        let end = raw.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
+        Ok(Some(raw[..end].to_vec()))
+    }
+
+    pub(super) fn nullstring(&mut self) -> Result<Option<String>, Error> {
+        let Some(raw) = self.cstring_bytes()? else {
+            return Ok(None);
+        };
+        let s = std::str::from_utf8(&raw).map_err(|e| Error::Inner(e.to_string()))?;
+        Ok(Some(s.to_owned()))
     }
 
     pub(super) fn principal(&mut self) -> Result<PrincipalName, Error> {
@@ -144,12 +155,17 @@ impl XdrW {
     }
 
     pub(super) fn nullstring(&mut self, s: Option<&str>) {
+        self.cstring_bytes(s.map(str::as_bytes));
+    }
+
+    /// An XDR string of raw octets plus the trailing NUL. `XdrR::cstring_bytes` reads it.
+    pub(super) fn cstring_bytes(&mut self, s: Option<&[u8]>) {
         match s {
             None => self.u32(0),
             Some(s) => {
                 let n = s.len() + 1;
                 self.u32(u32::try_from(n).unwrap_or(0));
-                self.b.extend_from_slice(s.as_bytes());
+                self.b.extend_from_slice(s);
                 self.b.push(0);
                 let pad = (4 - (n % 4)) % 4;
                 self.b.extend(std::iter::repeat_n(0u8, pad));

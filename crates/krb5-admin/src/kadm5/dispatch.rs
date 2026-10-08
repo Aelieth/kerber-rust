@@ -31,11 +31,11 @@ use super::policy::{
     validate_allowed_keysalts,
 };
 use super::principal::{
-    clamp_self_keepold, create_princ_mask_err, db_args_code, encode_chrand, encode_extract_keys,
-    encode_gprinc, encode_gprincs, encode_gstrings, impose_request_restrictions,
-    modify_princ_mask_err, parse_alias, parse_chpass, parse_chrand, parse_create, parse_extract,
-    parse_get, parse_gprincs, parse_gstrings, parse_ks, parse_modify, parse_one_princ,
-    parse_purgekeys, parse_rename, parse_setkey, parse_sstring, unix_now,
+    ChpassArgs, clamp_self_keepold, create_princ_mask_err, db_args_code, encode_chrand,
+    encode_extract_keys, encode_gprinc, encode_gprincs, encode_gstrings,
+    impose_request_restrictions, modify_princ_mask_err, parse_alias, parse_chpass, parse_chrand,
+    parse_create, parse_extract, parse_get, parse_gprincs, parse_gstrings, parse_ks, parse_modify,
+    parse_one_princ, parse_purgekeys, parse_rename, parse_setkey, parse_sstring, unix_now,
 };
 use super::rpc::RpcCtx;
 use super::xdr::XdrW;
@@ -436,14 +436,7 @@ pub(super) fn dispatch_kadm5_ticket(
             // `-nokey` (KADM5_KEY_DATA) also lands here — MIT would create a
             // keyless entry (ledger deviation).
             let changed = commit(&mut g, proc, API_V2, |s| {
-                s.create_principal_3_in(
-                    &c.name,
-                    &req,
-                    c.pass.as_deref().map(str::as_bytes),
-                    &c.ks,
-                    &c.ent,
-                    actor,
-                )?;
+                s.create_principal_3_in(&c.name, &req, c.pass.as_deref(), &c.ks, &c.ent, actor)?;
                 if c.ent.mask & KADM5_TL_DATA != 0 {
                     s.merge_tl_data_in(&c.name, &req, &c.tl_data)?;
                 }
@@ -490,11 +483,16 @@ pub(super) fn dispatch_kadm5_ticket(
             Ok(done(changed, API_V2))
         }
         CHPASS_PRINCIPAL | CHPASS_PRINCIPAL3 => {
-            let (name, prealm, pass, keepold, ks) =
-                match parse_ks(parse_chpass(args, proc == CHPASS_PRINCIPAL3)) {
-                    Ok(v) => v,
-                    Err(rep) => return rep,
-                };
+            let ChpassArgs {
+                name,
+                prealm,
+                pass,
+                keepold,
+                ks,
+            } = match parse_ks(parse_chpass(args, proc == CHPASS_PRINCIPAL3)) {
+                Ok(v) => v,
+                Err(rep) => return rep,
+            };
             let req = req_realm(&prealm, &realm);
             let mut g = match write_store(store, proc, API_V2) {
                 Ok(g) => g,
@@ -528,7 +526,7 @@ pub(super) fn dispatch_kadm5_ticket(
             }
             let n = clamp_self_keepold(self_change, keepold);
             let changed = commit(&mut g, proc, API_V2, |s| {
-                s.set_password_etypes_keepold_n_in(&name, &req, pass.as_bytes(), n, actor, &ks)
+                s.set_password_etypes_keepold_n_in(&name, &req, &pass, n, actor, &ks)
             });
             Ok(done(changed, API_V2))
         }
