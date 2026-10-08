@@ -724,6 +724,130 @@ fn pwqual_dict_reads_the_fstat_size_so_dev_zero_is_empty() {
 }
 
 #[test]
+fn passwd_check_logs_a_module_refusal_and_not_a_policy_floor() {
+    // MIT `passwd_check` (`lib/kadm5/srv/server_misc.c:114-134`): policy floors return before
+    // the modules, and only a module refusal is logged.
+    use krb5_log::klog::Severity;
+    let mut store = PrincipalStore::new(TEST_REALM_STR);
+    store.pwqual_dict = Some(std::sync::Arc::new(
+        pwqual_dict::PwqualDict::from_bytes(b"secret\n".to_vec()).unwrap(),
+    ));
+    let mut floors = NamedPolicy::new("floors");
+    floors.min_length = 4;
+    floors.min_classes = 2;
+    store.put_policy(floors);
+    store.put_policy(NamedPolicy::new("open"));
+    let name = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["sam"]);
+    let notes = std::cell::RefCell::new(Vec::<(Severity, String)>::new());
+    let mut note = |severity: Severity, text: &str| {
+        notes.borrow_mut().push((severity, text.to_owned()));
+    };
+    let line = |module: &str, text: &str| {
+        format!(
+            "password quality module {module} rejected password for sam@{TEST_REALM_STR}: {text}"
+        )
+    };
+    let logged = |module: &str, text: &str| [(Severity::Err, line(module, text))];
+
+    let err = store
+        .check_new_password_in(&name, TEST_REALM_STR, Some("floors"), b"ab", &mut note)
+        .unwrap_err();
+    assert!(matches!(err, Error::PasswordPolicy(t) if t == "min_length 4"));
+    assert!(notes.borrow().is_empty(), "{:?}", notes.borrow());
+
+    notes.borrow_mut().clear();
+    let err = store
+        .check_new_password_in(&name, TEST_REALM_STR, Some("floors"), b"aaaa", &mut note)
+        .unwrap_err();
+    assert!(matches!(err, Error::PasswordPolicy(t) if t == "min_classes 2"));
+    assert!(notes.borrow().is_empty(), "{:?}", notes.borrow());
+
+    store
+        .check_new_password_in(&name, TEST_REALM_STR, Some("floors"), b"caf\xe9", &mut note)
+        .unwrap();
+    assert!(notes.borrow().is_empty(), "four bytes, lower plus other");
+
+    notes.borrow_mut().clear();
+    let err = store
+        .check_new_password_in(&name, TEST_REALM_STR, Some("open"), b"Secret", &mut note)
+        .unwrap_err();
+    assert!(matches!(err, Error::PasswordPolicy(t) if t == PWQUAL_DICT));
+    assert_eq!(notes.borrow().as_slice(), logged("dict", PWQUAL_DICT));
+
+    notes.borrow_mut().clear();
+    let err = store
+        .check_new_password_in(
+            &name,
+            TEST_REALM_STR,
+            Some("open"),
+            b"secret\0trailing",
+            &mut note,
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::PasswordPolicy(t) if t == PWQUAL_DICT));
+    assert_eq!(notes.borrow().as_slice(), logged("dict", PWQUAL_DICT));
+
+    notes.borrow_mut().clear();
+    let err = store
+        .check_new_password_in(&name, TEST_REALM_STR, None, b"", &mut note)
+        .unwrap_err();
+    assert!(matches!(err, Error::PasswordPolicy(t) if t == PWQUAL_EMPTY));
+    assert_eq!(notes.borrow().as_slice(), logged("empty", PWQUAL_EMPTY));
+
+    notes.borrow_mut().clear();
+    let err = store
+        .check_new_password_in(&name, TEST_REALM_STR, Some("floors"), b"", &mut note)
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::PasswordPolicy(ref t) if t == "min_length 4"),
+        "{err:?}"
+    );
+    assert!(
+        notes.borrow().is_empty(),
+        "empty under a length floor is not the empty module"
+    );
+
+    notes.borrow_mut().clear();
+    let err = store
+        .check_new_password_in(
+            &name,
+            TEST_REALM_STR,
+            Some("open"),
+            TEST_REALM_STR.as_bytes(),
+            &mut note,
+        )
+        .unwrap_err();
+    assert!(matches!(err, Error::PasswordPolicy(t) if t == PWQUAL_DICT));
+    assert_eq!(notes.borrow().as_slice(), logged("princ", PWQUAL_DICT));
+
+    notes.borrow_mut().clear();
+    let err = store
+        .check_new_password_in(&name, TEST_REALM_STR, Some("open"), b"Sam", &mut note)
+        .unwrap_err();
+    assert!(matches!(err, Error::PasswordPolicy(t) if t == PWQUAL_PRINC));
+    assert_eq!(notes.borrow().as_slice(), logged("princ", PWQUAL_PRINC));
+
+    let (mut live, _) = crate::testrealm::bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
+    let mut hist = NamedPolicy::new("hist");
+    hist.history = 1;
+    live.put_policy(hist);
+    live.set_principal_policy(&user, Some("hist".into()))
+        .unwrap();
+    live.set_password(&user, b"Fresh-secret-1").unwrap();
+    notes.borrow_mut().clear();
+    let realm = live.realm().to_owned();
+    let err = live
+        .check_password_quality_in(&user, &realm, b"Fresh-secret-1", &mut note)
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::PasswordPolicy(ref t) if t == "history"),
+        "{err:?}"
+    );
+    assert!(notes.borrow().is_empty(), "history is not a quality module");
+}
+
+#[test]
 fn pwqual_dict_gives_mits_notices_when_there_is_no_dictionary() {
     // The notices go to a collector, not the process-wide log other tests write to.
     use krb5_log::klog::Severity;

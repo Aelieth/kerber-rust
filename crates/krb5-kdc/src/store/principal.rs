@@ -683,7 +683,15 @@ impl PrincipalStore {
             .and_then(|n| self.policies.get(n))
             .cloned();
         if let Some(pw) = password {
-            self.check_new_password(name, policy_name.as_deref(), pw)?;
+            self.check_new_password_in(
+                name,
+                princ_realm,
+                policy_name.as_deref(),
+                pw,
+                &mut |s, t| {
+                    krb5_log::klog::syslog(s, t);
+                },
+            )?;
         }
         let now = unix_now();
         let use_etypes = apply_keysalt_policy(

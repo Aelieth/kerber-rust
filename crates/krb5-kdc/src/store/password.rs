@@ -4,6 +4,7 @@
 //! including the password-history `ct_eq` compare.
 
 use krb5_crypto::{EncryptionType, ProtocolKey, parse_keysalt_list, string_to_key};
+use krb5_log::klog::{self, Severity};
 use krb5_types::PrincipalName;
 use subtle::ConstantTimeEq;
 
@@ -43,33 +44,48 @@ fn last_pwd_unix(p: &Principal) -> u32 {
         .map_or(0, u32::from_le_bytes)
 }
 
-fn check_pwqual(password: &[u8], pol: &NamedPolicy) -> Result<(), Error> {
-    let s = std::str::from_utf8(password).unwrap_or("");
-    if pol.min_length > 0 && s.len() < pol.min_length as usize {
+/// The bytes `password` holds up to its first NUL, as a C string.
+fn c_password(password: &[u8]) -> &[u8] {
+    match password.iter().position(|&b| b == 0) {
+        Some(n) => password.get(..n).unwrap_or_default(),
+        None => password,
+    }
+}
+
+/// MIT `check_against_policy` (`lib/kadm5/srv/server_misc.c:81-100`): `strlen` is the byte
+/// length, and each byte is `islower`, `isupper`, `isdigit`, `ispunct` or other. In the C and
+/// UTF-8 locales a byte at or above 128 is other, so `caf\xe9` is four bytes and two classes.
+fn check_against_policy(password: &[u8], pol: &NamedPolicy) -> Result<(), Error> {
+    if pol.min_length > 0 && password.len() < pol.min_length as usize {
         return Err(Error::PasswordPolicy(format!(
             "min_length {}",
             pol.min_length
         )));
     }
     if pol.min_classes > 0 {
-        let mut n = 0u32;
-        if s.chars().any(|c| c.is_ascii_lowercase()) {
-            n += 1;
+        let mut has_upper = false;
+        let mut has_lower = false;
+        let mut has_digit = false;
+        let mut has_punct = false;
+        let mut has_other = false;
+        for &c in password {
+            if c.is_ascii_lowercase() {
+                has_lower = true;
+            } else if c.is_ascii_uppercase() {
+                has_upper = true;
+            } else if c.is_ascii_digit() {
+                has_digit = true;
+            } else if c.is_ascii_punctuation() {
+                has_punct = true;
+            } else {
+                has_other = true;
+            }
         }
-        if s.chars().any(|c| c.is_ascii_uppercase()) {
-            n += 1;
-        }
-        if s.chars().any(|c| c.is_ascii_digit()) {
-            n += 1;
-        }
-        if s.chars().any(|c| c.is_ascii_punctuation()) {
-            n += 1;
-        }
-        if s.chars()
-            .any(|c| !(c.is_ascii_alphanumeric() || c.is_ascii_punctuation()))
-        {
-            n += 1;
-        }
+        let n = u32::from(has_upper)
+            + u32::from(has_lower)
+            + u32::from(has_digit)
+            + u32::from(has_punct)
+            + u32::from(has_other);
         if n < pol.min_classes {
             return Err(Error::PasswordPolicy(format!(
                 "min_classes {}",
@@ -78,6 +94,27 @@ fn check_pwqual(password: &[u8], pol: &NamedPolicy) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+/// The `passwd_check` line, then the error the caller returns.
+/// MIT `passwd_check` (`lib/kadm5/srv/server_misc.c:127-130`): a module refusal is logged at
+/// error severity before the error returns. A policy floor is not.
+fn module_refusal(
+    note: &mut dyn FnMut(Severity, &str),
+    module: &str,
+    princ: &str,
+    text: &str,
+) -> Error {
+    // syslog LOG_ERR, the severity MIT's passwd_check uses for a module refusal.
+    note(
+        Severity::Err,
+        &format!("password quality module {module} rejected password for {princ}: {text}"),
+    );
+    Error::PasswordPolicy(text.to_owned())
+}
+
+fn syslog_note(severity: Severity, text: &str) {
+    klog::syslog(severity, text);
 }
 
 /// MIT `apply_keysalt_policy` (`svr_principal.c:128-231`): the request's
@@ -301,7 +338,7 @@ impl PrincipalStore {
             Some(_) => Some(self.ensure_history_principal(actor)?),
             None => None,
         };
-        self.check_password_quality(name, password)?;
+        self.check_password_quality_in(name, princ_realm, password, &mut syslog_note)?;
         let Some(existing) = self.map.get(&id) else {
             return Err(Error::NotFound);
         };
@@ -427,55 +464,73 @@ impl PrincipalStore {
         policy: Option<&str>,
         password: &[u8],
     ) -> Result<(), Error> {
-        let pol = policy.and_then(|n| self.policies.get(n));
-        if let Some(pol) = pol {
-            check_pwqual(password, pol)?;
+        let realm = self.realm.clone();
+        self.check_new_password_in(name, &realm, policy, password, &mut syslog_note)
+    }
+
+    /// [`Self::check_new_password`] for `name@princ_realm`, with the module line given to `note`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::check_new_password`].
+    pub(super) fn check_new_password_in(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        policy: Option<&str>,
+        password: &[u8],
+        note: &mut dyn FnMut(Severity, &str),
+    ) -> Result<(), Error> {
+        let password = c_password(password);
+        let has_policy = policy.is_some_and(|n| self.policies.contains_key(n));
+        if let Some(pol) = policy.and_then(|n| self.policies.get(n)) {
+            check_against_policy(password, pol)?;
         }
-        self.pwqual_modules(name, pol.is_some(), password)
+        self.pwqual_modules(name, princ_realm, has_policy, password, note)
     }
 
     /// MIT built-in password-quality modules in `k5_pwqual_load` order.
-    /// MIT `init_pwqual` (`server_misc.c:44-58`): the order is `dict`, `empty`, `princ` (the
-    /// `hesiod` module registered before `princ` checks nothing in a build without Hesiod).
-    /// MIT `dict_check` (`pwqual_dict.c:222-223`): `dict` skips a principal without a policy.
-    /// MIT `princ_check` (`pwqual_princ.c:40-41`): `princ` skips a principal without a policy.
-    /// MIT `empty_check` (`pwqual_empty.c:38-44`): `empty` always applies, policy or not.
-    /// `princ_check` compares the realm first (plain `KADM5_PASS_Q_DICT`) and
-    /// then every component (`Password may not match principal name`), all
-    /// with `strcasecmp`.
+    /// MIT `init_pwqual` (`lib/kadm5/srv/server_misc.c:44-58`): the order is `dict`, `empty`, `princ` (the `hesiod` module registered before `princ` checks nothing in a build without Hesiod).
+    /// MIT `dict_check` (`lib/kadm5/srv/pwqual_dict.c:222-223`): `dict` skips a principal without a policy.
+    /// MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:40-41`): `princ` skips a principal without a policy.
+    /// MIT `empty_check` (`lib/kadm5/srv/pwqual_empty.c:38-44`): `empty` always applies, policy or not.
+    /// MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:45-56`): the realm matches first (plain `KADM5_PASS_Q_DICT`) and then every component (`Password may not match principal name`), both with `strcasecmp`.
     fn pwqual_modules(
         &self,
         name: &PrincipalName,
+        princ_realm: &str,
         has_policy: bool,
         password: &[u8],
+        note: &mut dyn FnMut(Severity, &str),
     ) -> Result<(), Error> {
+        let princ = name.unparse_with_realm(princ_realm);
         if has_policy
             && self
                 .pwqual_dict
                 .as_ref()
                 .is_some_and(|dict| dict.contains(password))
         {
-            return Err(Error::PasswordPolicy(PWQUAL_DICT.into()));
+            return Err(module_refusal(note, "dict", &princ, PWQUAL_DICT));
         }
         if password.is_empty() {
-            return Err(Error::PasswordPolicy(PWQUAL_EMPTY.into()));
+            return Err(module_refusal(note, "empty", &princ, PWQUAL_EMPTY));
         }
         if has_policy {
-            if self.realm.as_bytes().eq_ignore_ascii_case(password) {
-                return Err(Error::PasswordPolicy(PWQUAL_DICT.into()));
+            if super::pwqual_dict::eq_ignore_case(princ_realm.as_bytes(), password) {
+                return Err(module_refusal(note, "princ", &princ, PWQUAL_DICT));
             }
             if name
                 .name_string
                 .iter()
-                .any(|c| c.as_bytes().eq_ignore_ascii_case(password))
+                .any(|c| super::pwqual_dict::eq_ignore_case(c.as_bytes(), password))
             {
-                return Err(Error::PasswordPolicy(PWQUAL_PRINC.into()));
+                return Err(module_refusal(note, "princ", &princ, PWQUAL_PRINC));
             }
         }
         Ok(())
     }
 
-    /// MIT `kadm5_chpass_principal_3` (`svr_principal.c:1282-1282`): the `passwd_check` on a
+    /// MIT `kadm5_chpass_principal_3` (`lib/kadm5/srv/svr_principal.c:1282-1282`): the `passwd_check` on a
     /// password change — the bound policy's floors, the built-in quality modules, then the
     /// policy's history.
     ///
@@ -490,21 +545,51 @@ impl PrincipalStore {
         name: &PrincipalName,
         password: &[u8],
     ) -> Result<(), Error> {
-        let Some(p) = self.get_name(name) else {
+        let realm = self.realm.clone();
+        self.check_password_quality_in(name, &realm, password, &mut syslog_note)
+    }
+
+    /// [`Self::check_password_quality`] for `name@princ_realm`, with the module line given to `note`.
+    /// A history refusal is not a module line.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::check_password_quality`].
+    pub(super) fn check_password_quality_in(
+        &self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        password: &[u8],
+        note: &mut dyn FnMut(Severity, &str),
+    ) -> Result<(), Error> {
+        let password = c_password(password);
+        if self.get_in_realm(name, princ_realm).is_none() {
+            return Ok(());
+        }
+        let pol_name = self
+            .get_in_realm(name, princ_realm)
+            .and_then(|p| p.pw_policy.clone());
+        let has_policy = pol_name
+            .as_ref()
+            .is_some_and(|n| self.policies.contains_key(n));
+        if let Some(pol) = pol_name.as_ref().and_then(|n| self.policies.get(n)) {
+            check_against_policy(password, pol)?;
+        }
+        self.pwqual_modules(name, princ_realm, has_policy, password, note)?;
+        let history = pol_name
+            .as_ref()
+            .and_then(|n| self.policies.get(n))
+            .map(|pol| pol.history);
+        let Some(history) = history else {
             return Ok(());
         };
-        let pol = p.pw_policy.as_ref().and_then(|n| self.policies.get(n));
-        if let Some(pol) = pol {
-            check_pwqual(password, pol)?;
+        if history == 0 {
+            return Ok(());
         }
-        self.pwqual_modules(name, pol.is_some(), password)?;
-        let Some(pol) = pol else {
+        let Some(p) = self.get_in_realm(name, princ_realm) else {
             return Ok(());
         };
-        if pol.history == 0 {
-            return Ok(());
-        }
-        let extra = pol.history.saturating_sub(1) as usize;
+        let extra = history.saturating_sub(1) as usize;
         let mut hist: Vec<&KeyEntry> = p.key_history.iter().collect();
         let mut kvnos: Vec<u32> = hist.iter().map(|k| k.kvno).collect();
         kvnos.sort_unstable();
