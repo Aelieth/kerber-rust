@@ -40,6 +40,10 @@ name = "client_preauth_order"
 path = "tests/client_preauth_order.rs"
 
 [[test]]
+name = "clpreauth_plugins"
+path = "tests/clpreauth_plugins.rs"
+
+[[test]]
 name = "client_spake"
 path = "tests/client_spake.rs"
 

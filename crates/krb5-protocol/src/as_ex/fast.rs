@@ -88,68 +88,211 @@ pub(super) fn continue_fast(
             // The KDC's time, authenticated by the armor.
             clock.note(&inner, true);
             with_prompted(req, prompt, |req| {
-                let method = sort_krb5_padata_sequence(
-                    &method_from_error(&inner).unwrap_or_default(),
-                    &super::conf_preferred_preauth_types_for(req.realm),
-                );
-                if trace::enabled() {
-                    trace::init_creds_preauth();
-                    trace_preauth_input(&method, etypes);
-                }
-                let mech = fast_mechanism(&method)?;
-                let (etype, salt, params) =
-                    select_s2k(&inner, &salt_cname(&req.cname), req.realm, etypes)?;
-                trace_keytab_gak(req, keys, etype);
-                let client_key = pick_key(keys, Some(etype)).map_or_else(
-                    || string_to_key(etype, req.password, &salt, params.as_deref()),
-                    Ok,
-                )?;
-                // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
-                // preauth module's PA data, so the cookie leads the inner padata.
-                let mut inner_pa = Vec::new();
-                if let Some(c) = cookie {
-                    inner_pa.push(c);
-                }
-                if mech == pa::ENCRYPTED_CHALLENGE {
-                    // MIT `ec_process` takes the time without an unauthenticated offset.
-                    let (now, usec) = clock.now(false);
-                    inner_pa.push(client_challenge(&akey, &client_key, (&now, usec))?);
-                    trace::preauth_process(EC_MODULE, mech, true, 0, None);
-                } else {
-                    if gak_found(keys, &client_key, etype) {
-                        trace::preauth_enc_ts_key_gak((&client_key).into());
+                // MIT `init_creds_step_reply` (`get_in_tkt.c:1731-1740`): PREAUTH_FAILED on a
+                // mechanism that has not disabled fallback notes it failed and tries the next one.
+                let mut current = inner;
+                let mut cookie_slot = cookie;
+                let mut skip: Vec<i32> = Vec::new();
+                let mut saved_method: Vec<PaData> = Vec::new();
+                let mut last_fail: Option<KrbError> = None;
+                loop {
+                    let mut method = sort_krb5_padata_sequence(
+                        &method_from_error(&current).unwrap_or_default(),
+                        &super::conf_preferred_preauth_types_for(req.realm),
+                    );
+                    if fast_mechanism(&method, &skip).is_err() && !saved_method.is_empty() {
+                        method.clone_from(&saved_method);
                     }
-                    inner_pa.push(pa_enc_timestamp_at(&client_key, clock.now(true), true)?);
-                    trace::preauth_process(ENCTS_MODULE, mech, true, 0, None);
-                }
-                trace::preauth_output(&inner_pa);
-                let ap = fast_armor_ap(armor, &sub)?;
-                let bound = &request_times(req, clock);
-                let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
-                attach_fast(&mut req2, &ap, &akey, inner_pa)?;
-                trace::fast_encode();
-                let wire = encode(&req2)?;
-                match send_as(req, &wire)? {
-                    KdcMsg::AsRep(rep) => finish_fast_as(
-                        req,
-                        keys,
-                        nonce,
-                        etypes,
-                        &akey,
-                        Some((client_key, mech)),
-                        rep,
-                        &wire,
-                        bound,
-                    ),
-                    KdcMsg::Error(e) => {
-                        classify_kdc_error(&fast_error_material(&akey, &e, nonce)?.err)
+                    if trace::enabled() {
+                        trace::init_creds_preauth();
+                        trace_preauth_input(&method, etypes);
                     }
-                    KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+                    let mech = match fast_mechanism(&method, &skip) {
+                        Ok(mech) => mech,
+                        Err(e) => {
+                            return match last_fail {
+                                Some(err) => Err(kdc_error(&err)),
+                                None => Err(e),
+                            };
+                        }
+                    };
+                    saved_method = method;
+                    if mech == pa::SPAKE {
+                        match finish_fast_spake(
+                            req,
+                            keys,
+                            nonce,
+                            etypes,
+                            clock,
+                            armor,
+                            &sub,
+                            &akey,
+                            &current,
+                            cookie_slot,
+                        )? {
+                            SpakeFast::Done(out) => return Ok(*out),
+                            SpakeFast::Next { err, cookie: next } => {
+                                skip.push(pa::SPAKE);
+                                last_fail = Some((*err).clone());
+                                current = *err;
+                                cookie_slot = next;
+                                continue;
+                            }
+                        }
+                    }
+                    let (etype, salt, params) =
+                        select_s2k(&current, &salt_cname(&req.cname), req.realm, etypes)?;
+                    trace_keytab_gak(req, keys, etype);
+                    let client_key = pick_key(keys, Some(etype)).map_or_else(
+                        || string_to_key(etype, req.password, &salt, params.as_deref()),
+                        Ok,
+                    )?;
+                    // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
+                    // preauth module's PA data, so the cookie leads the inner padata.
+                    let mut inner_pa = Vec::new();
+                    if let Some(c) = cookie_slot {
+                        inner_pa.push(c);
+                    }
+                    if mech == pa::ENCRYPTED_CHALLENGE {
+                        // MIT `ec_process` takes the time without an unauthenticated offset.
+                        let (now, usec) = clock.now(false);
+                        inner_pa.push(client_challenge(&akey, &client_key, (&now, usec))?);
+                        trace::preauth_process(EC_MODULE, mech, true, 0, None);
+                    } else {
+                        if gak_found(keys, &client_key, etype) {
+                            trace::preauth_enc_ts_key_gak((&client_key).into());
+                        }
+                        inner_pa.push(pa_enc_timestamp_at(&client_key, clock.now(true), true)?);
+                        trace::preauth_process(ENCTS_MODULE, mech, true, 0, None);
+                    }
+                    trace::preauth_output(&inner_pa);
+                    let ap = fast_armor_ap(armor, &sub)?;
+                    let bound = &request_times(req, clock);
+                    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+                    attach_fast(&mut req2, &ap, &akey, inner_pa)?;
+                    trace::fast_encode();
+                    let wire = encode(&req2)?;
+                    return match send_as(req, &wire)? {
+                        KdcMsg::AsRep(rep) => finish_fast_as(
+                            req,
+                            keys,
+                            nonce,
+                            etypes,
+                            &akey,
+                            Some((client_key, mech)),
+                            rep,
+                            &wire,
+                            bound,
+                        ),
+                        KdcMsg::Error(e) => {
+                            classify_kdc_error(&fast_error_material(&akey, &e, nonce)?.err)
+                        }
+                        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+                    };
                 }
             })
         }
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
+}
+
+/// How a SPAKE attempt under FAST ended.
+enum SpakeFast {
+    /// The exchange finished.
+    Done(Box<AsOutcome>),
+    /// Support was sent and the KDC answered `PREAUTH_FAILED`. MIT disables fallback only after
+    /// a challenge response, so the next loaded mechanism still runs.
+    Next {
+        err: Box<KrbError>,
+        cookie: Option<PaData>,
+    },
+}
+
+/// The KDC error, as [`classify_kdc_error`] returns it.
+fn kdc_error(err: &KrbError) -> Error {
+    match classify_kdc_error(err) {
+        Err(e) => e,
+        Ok(_) => Error::UnexpectedPdu,
+    }
+}
+
+/// SPAKE inside FAST, the way MIT's `process_pa_data` runs it when PA-SPAKE is the first real
+/// mechanism in the hint. The inner body is the transcript body. A challenge's `K'[0]` is the
+/// AS key that FAST then strengthens; a support-only round uses the long-term key. A
+/// `PREAUTH_FAILED` before a challenge response is [`SpakeFast::Next`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the FAST retry's existing locals"
+)]
+fn finish_fast_spake(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    nonce: u32,
+    etypes: &[i32],
+    clock: &Clock,
+    armor: &FastArmor,
+    sub: &ProtocolKey,
+    akey: &ProtocolKey,
+    err: &KrbError,
+    mut cookie: Option<PaData>,
+) -> Result<SpakeFast, Error> {
+    let mut spake = super::spake::FastSpake::begin(req, etypes, err)?;
+    let mut current = err.clone();
+    for _ in 0..4 {
+        let bound = request_times(req, clock);
+        let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
+        let body_der = encode(&req2.0.req_body)?;
+        let (module_pa, client_key) = spake.round(req, keys, etypes, &current, &body_der)?;
+        let answered = spake.answered();
+        let mut inner_pa = Vec::new();
+        if let Some(c) = cookie.clone() {
+            inner_pa.push(c);
+        }
+        inner_pa.push(module_pa);
+        trace::preauth_output(&inner_pa);
+        let ap = fast_armor_ap(armor, sub)?;
+        attach_fast(&mut req2, &ap, akey, inner_pa)?;
+        trace::fast_encode();
+        let wire = encode(&req2)?;
+        match send_as(req, &wire)? {
+            KdcMsg::AsRep(rep) => {
+                return Ok(SpakeFast::Done(Box::new(finish_fast_as(
+                    req,
+                    keys,
+                    nonce,
+                    etypes,
+                    akey,
+                    Some((client_key, pa::SPAKE)),
+                    rep,
+                    &wire,
+                    &bound,
+                )?)));
+            }
+            KdcMsg::Error(e) => {
+                let mat = fast_error_material(akey, &e, nonce)?;
+                let code = mat.err.error_code;
+                if mat.retry && code == err::PREAUTH_FAILED && !answered {
+                    clock.note(&mat.err, true);
+                    return Ok(SpakeFast::Next {
+                        err: Box::new(mat.err),
+                        cookie: mat.cookie,
+                    });
+                }
+                if !mat.retry
+                    || (code != err::PREAUTH_REQUIRED && code != err::MORE_PREAUTH_DATA_REQUIRED)
+                {
+                    return Err(kdc_error(&mat.err));
+                }
+                clock.note(&mat.err, true);
+                cookie = mat.cookie;
+                current = mat.err;
+            }
+            KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
+        }
+    }
+    Err(Error::ReplyMismatch(
+        "Generic preauthentication failure".into(),
+    ))
 }
 
 /// MIT `krb5int_fast_process_response` (`fast.c:548-556`): once the finished checksum holds, the
@@ -228,22 +371,34 @@ fn finish_fast_as(
     )
 }
 
-/// The mechanism of the inner preauth: the first type in the KDC's sorted list that this client
-/// runs under armor, encrypted challenge or encrypted timestamp, so encrypted timestamp only when
-/// the KDC offers it; MIT's KDC offers encrypted challenge inside FAST and never encrypted
-/// timestamp. SPAKE inside FAST is not run here.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:663-702`): a real mechanism runs only for a type in the KDC's list, the first that succeeds in list order.
-/// MIT `enc_ts_get` (`kdc/kdc_preauth_encts.c:37-41`): the KDC withholds encrypted timestamp from an armored request.
+/// The first real clpreauth mechanism in the KDC's list that this client will run under armor.
+///
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): a real mechanism runs only for a
+/// type in the KDC's list, the first that a loaded module serves, in that list's order. SPAKE
+/// comes before encrypted challenge when the hint lists it first (live `kinit -T` with
+/// `disable = encrypted_timestamp`). Encrypted timestamp runs only when the list offers it.
+/// MIT `enc_ts_get` (`kdc/kdc_preauth_encts.c:37-41`): the KDC withholds encrypted timestamp from
+/// an armored request. A type whose module `[plugins] clpreauth` did not leave loaded is skipped.
 ///
 /// # Errors
 ///
 /// [`Error::ReplyMismatch`] "Generic preauthentication failure" (MIT `KRB5_PREAUTH_FAILED`) when
-/// the list offers neither.
-pub(super) fn fast_mechanism(method: &[PaData]) -> Result<i32, Error> {
+/// the list offers none of those loaded modules.
+pub(super) fn fast_mechanism(method: &[PaData], skip: &[i32]) -> Result<i32, Error> {
     method
         .iter()
         .map(|p| p.padata_type)
-        .find(|&t| t == pa::ENCRYPTED_CHALLENGE || t == pa::ENC_TIMESTAMP)
+        .find(|&t| {
+            !skip.contains(&t)
+                && matches!(
+                    crate::clpreauth::owner_of(t),
+                    Some(
+                        crate::clpreauth::Owner::Spake
+                            | crate::clpreauth::Owner::EncChallenge
+                            | crate::clpreauth::Owner::EncTs
+                    )
+                )
+        })
         .ok_or_else(|| Error::ReplyMismatch("Generic preauthentication failure".into()))
 }
 
@@ -377,4 +532,86 @@ pub(crate) fn fast_error_material(
         cookie,
         retry,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fast_mechanism;
+    use krb5_types::{PaData, pa};
+
+    fn pa_of(padata_type: i32) -> PaData {
+        PaData {
+            padata_type,
+            padata_value: Vec::<u8>::new().into(),
+        }
+    }
+
+    fn pin(extra: &str) {
+        krb5_config::isolate_test_krb5();
+        let dir = krb5_testkit::scratch_dir("pg3-fast-mech");
+        let path = dir.join("krb5.conf");
+        std::fs::write(
+            &path,
+            format!(
+                "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n{extra}"
+            ),
+        )
+        .unwrap();
+        krb5_config::set_test_krb5_paths(Some(vec![path]));
+    }
+
+    #[test]
+    fn disable_encrypted_timestamp_leaves_encrypted_challenge() {
+        pin("[plugins]\n    clpreauth = {\n        disable = encrypted_timestamp\n    }\n");
+        let method = vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::ENCRYPTED_CHALLENGE)];
+        assert_eq!(
+            fast_mechanism(&method, &[]).unwrap(),
+            pa::ENCRYPTED_CHALLENGE
+        );
+        let only_ts = vec![pa_of(pa::ENC_TIMESTAMP)];
+        let err = fast_mechanism(&only_ts, &[]).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Generic preauthentication failure"),
+            "a disabled encrypted_timestamp is not a FAST mechanism, got {err}"
+        );
+    }
+
+    #[test]
+    fn a_loaded_encrypted_timestamp_is_still_chosen_first() {
+        pin("");
+        let method = vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::ENCRYPTED_CHALLENGE)];
+        assert_eq!(fast_mechanism(&method, &[]).unwrap(), pa::ENC_TIMESTAMP);
+    }
+
+    #[test]
+    fn spake_listed_before_encrypted_challenge_is_the_fast_mechanism() {
+        pin("");
+        let method = vec![
+            pa_of(pa::FX_FAST),
+            pa_of(pa::SPAKE),
+            pa_of(pa::ENCRYPTED_CHALLENGE),
+        ];
+        assert_eq!(fast_mechanism(&method, &[]).unwrap(), pa::SPAKE);
+    }
+
+    #[test]
+    fn a_disabled_spake_lets_encrypted_challenge_run_under_armor() {
+        pin("[plugins]\n    clpreauth = {\n        disable = spake\n    }\n");
+        let method = vec![pa_of(pa::SPAKE), pa_of(pa::ENCRYPTED_CHALLENGE)];
+        assert_eq!(
+            fast_mechanism(&method, &[]).unwrap(),
+            pa::ENCRYPTED_CHALLENGE
+        );
+    }
+
+    #[test]
+    fn a_failed_spake_is_not_chosen_again() {
+        pin("");
+        let method = vec![pa_of(pa::SPAKE), pa_of(pa::ENCRYPTED_CHALLENGE)];
+        assert_eq!(
+            super::fast_mechanism(&method, &[pa::SPAKE]).unwrap(),
+            pa::ENCRYPTED_CHALLENGE
+        );
+    }
 }

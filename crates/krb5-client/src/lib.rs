@@ -24,6 +24,9 @@ use zeroize::{Zeroize, Zeroizing};
 pub use krb5_protocol::{
     CcacheCred, CcacheKeyblock, FileCcache, Keytab, KeytabEntry, parse_principal, realm, tgt_cred,
 };
+pub use krb5_protocol::{
+    ClPreauth, clear_thread_clpreauth, register_clpreauth, set_thread_clpreauth,
+};
 pub use krb5_protocol::{Error as ProtocolError, KDC_PORT};
 
 /// Credential-cache re-exports of [`krb5_protocol`]: [`FileCcache`], [`CcacheCred`],

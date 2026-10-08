@@ -527,6 +527,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **client.** Select clpreauth modules by MIT's names through `[plugins] clpreauth` `disable` and `enable_only`. Disabling `encrypted_timestamp` stops the client answering PA-ENC-TIMESTAMP. Units.
 - **types.** Dates follow the process locale: `LC_ALL`, then `LC_TIME`, then
   `LANG`, and an unknown locale stays C. `timestamp_to_sfstring` tries MIT's
   nine formats, then pads. Units for C, en_US.UTF-8, and de_DE.UTF-8.
@@ -1481,6 +1482,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** Under FAST armor the client runs the first loaded real clpreauth mechanism in the KDC hint, so SPAKE when that hint lists it before encrypted challenge, and the reply key strengthens that `K'[0]`. Encrypted challenge still runs when it is first. Units.
 - **gss/admin.** The GSS acceptor and kadmind's AUTH_GSSAPI record expiry use `[libdefaults] clockskew` (300 s when unset). Units; lab.
 - **config/client.** `[libdefaults]` relation names and the section name match exactly, a realm subsection is that realm's node, and the eight per-realm keys (including `noaddresses`) read it before the top level. A trailing comma stays. Units; lab.
 - **protocol.** `kinit -T` sends the first AS-REQ unarmored unless the armor cache has `fast_avail`. A PA-FX-FAST error then builds the armor; a missing cache is "Error constructing AP-REQ armor: …". Units; lab.

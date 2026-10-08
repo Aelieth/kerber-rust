@@ -27,6 +27,7 @@ mod ccache_dir;
 mod ccache_mem;
 mod ccmarshal;
 mod chpw;
+mod clpreauth;
 #[cfg(any(test, feature = "diff"))]
 #[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
@@ -86,6 +87,7 @@ pub use chpw::{
     chpw_result_code_string, format_chpw_failure, key_exp_should_changepw, parse_chpw_rep,
     parse_chpw_result, set_password,
 };
+pub use clpreauth::{ClPreauth, clear_thread_clpreauth, register_clpreauth, set_thread_clpreauth};
 #[cfg(feature = "diff")]
 pub use diff::{
     DiffError, StableKrbError, StableRep, compare_krb_error, compare_preauth_e_data,

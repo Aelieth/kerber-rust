@@ -171,6 +171,107 @@ fn spake_round(
     }
 }
 
+/// One FAST inner exchange's SPAKE module state.
+///
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): runs the SPAKE module on the inner
+/// request when PA-SPAKE is the first real mechanism in the armored hint. The support bytes stay
+/// for the transcript of a later challenge.
+pub(super) struct FastSpake {
+    st: SpakeState,
+    hint: S2kMaterial,
+}
+
+impl FastSpake {
+    /// # Errors
+    ///
+    /// [`Error::Asn1`] when the hint's etype-info does not decode, and [`Error::Crypto`] when
+    /// no etype in it is usable.
+    pub(super) fn begin(
+        req: &AsRequest<'_>,
+        etypes: &[i32],
+        err: &KrbError,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            st: SpakeState {
+                groups: client_groups(),
+                support: None,
+                responded: false,
+            },
+            hint: select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?,
+        })
+    }
+
+    /// The module's PA-SPAKE for this inner request, and the AS key FAST will strengthen.
+    ///
+    /// A challenge yields `K'[0]`. Support alone yields the long-term key, as an unarmored
+    /// support reply does.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ReplyMismatch`] "Generic preauthentication failure" when the hint has no
+    /// PA-SPAKE the module can answer. [`Error::Crypto`] when the long-term key cannot be made.
+    pub(super) fn round(
+        &mut self,
+        req: &AsRequest<'_>,
+        keys: &[ProtocolKey],
+        etypes: &[i32],
+        current: &KrbError,
+        body_der: &[u8],
+    ) -> Result<(PaData, ProtocolKey), Error> {
+        let method = method_from_error(current)?;
+        let Some(p) = find_pa(&method, pa::SPAKE) else {
+            trace::preauth_process(
+                SPAKE_MODULE,
+                pa::SPAKE,
+                true,
+                trace::kdc_code(err::PREAUTH_FAILED),
+                None,
+            );
+            return Err(Error::ReplyMismatch(
+                "Generic preauthentication failure".into(),
+            ));
+        };
+        let round = spake_round(
+            &mut self.st,
+            req,
+            keys,
+            etypes,
+            current,
+            &mut self.hint,
+            p.padata_value.as_ref(),
+            body_der,
+        )?;
+        let Round::Send(module_pa, k0) = round else {
+            trace::preauth_process(
+                SPAKE_MODULE,
+                pa::SPAKE,
+                true,
+                trace::kdc_code(err::PREAUTH_FAILED),
+                None,
+            );
+            return Err(Error::ReplyMismatch(
+                "Generic preauthentication failure".into(),
+            ));
+        };
+        trace::preauth_process(SPAKE_MODULE, pa::SPAKE, true, 0, None);
+        let key = if let Some(k) = k0 {
+            k
+        } else {
+            let (etype, salt, params) = self.hint.clone();
+            pick_key(keys, Some(etype)).map_or_else(
+                || string_to_key(etype, req.password, &salt, params.as_deref()),
+                Ok,
+            )?
+        };
+        Ok((module_pa, key))
+    }
+
+    /// A challenge response was sent, so MIT `disable_fallback` is in force.
+    pub(super) fn answered(&self) -> bool {
+        self.st.responded
+    }
+}
+
 /// SPAKE through the rounds of one AS exchange, from the error that offered it.
 ///
 /// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1745`): MORE_PREAUTH_DATA_REQUIRED's padata is processed next, PREAUTH_FAILED notes the mechanism failed and takes the error's hint, and PREAUTH_REQUIRED's hint replaces the method data.

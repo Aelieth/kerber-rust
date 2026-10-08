@@ -1,7 +1,7 @@
 # Extension points (traits, not dlopen)
 
-MIT Kerberos loads C `.so` plugins (`kdb5`, `kdcpreauth`, `kdcpolicy`,
-pwqual). This workspace forbids C FFI in the product, so the same
+MIT Kerberos loads C `.so` plugins (`kdb5`, `kdcpreauth`, `clpreauth`,
+`kdcpolicy`, pwqual). This workspace forbids C FFI in the product, so the same
 capabilities are **Rust traits and process-local registries**. There
 is no `dlopen`.
 
@@ -9,6 +9,7 @@ is no `dlopen`.
 | --- | --- | --- |
 | KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the default. `db_library=memory` serves [`MemoryStore`](../crates/krb5-kdc/src/kdb.rs) from a dump seed (`scripts/store-gate.sh`). Kadmind still mutates `PrincipalStore` only. The PKINIT CA lives on `KdcEnv` / process state and survives dump reload, not a full KDC restart. The lockout attributes the KDC records (`PrincipalRead::update_lockout`) live in `principal.lockout` beside a dump-v7 database and survive both; `MemoryStore` keeps them in memory. |
 | kdcpreauth | `kdcpreauth` | [`KdcPreauth`](../crates/krb5-kdc/src/plugins.rs) registry. `process_as` takes `&PreauthRock` (store, client, padata, reply key, etype, AS-REQ, body, cname). PKINIT, SPAKE, and encrypted_timestamp process AS (`EncTsOk`; caller must not re-verify). `edata` builds a module's PREAUTH_REQUIRED hint with the reply key and returns the state the KDC keeps in its cookie (MIT's `set_cookie`); SPAKE's optimistic challenge uses it, the default is `advertise`. First `process_as` that returns an action wins; EXTRA is not consulted after EncTsOk on a normal login. Observe-every-AS is a future kadm5_hook. `register_preauth` / `register_authdata` are process-wide; tests isolate with `set_thread_preauth` / `set_thread_authdata`. |
+| clpreauth | `clpreauth` | [`ClPreauth`](../crates/krb5-protocol/src/clpreauth.rs) on the client. Built-ins, in MIT's order, are `pkinit`, `spake` (only when a permitted group is configured; the client default is edwards25519), `encrypted_challenge` and `encrypted_timestamp`. `sam2` and `otp` are not implemented, so they are absent the way a module that failed to load is absent. `[plugins] clpreauth` `disable` then `enable_only` select the loaded names and any embedder-registered name. The first loaded module to claim a pa-type keeps it; a later module that lists a claimed type is dropped. `register_clpreauth` is process-wide; tests isolate with `set_thread_clpreauth`. `module` is not read. |
 | kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) `check_as` / `check_tgs` return `Result` and can deny. [`set_policy`](../crates/krb5-kdc/src/plugins.rs) is process-wide (KDC serve/worker threads see it); tests isolate with `set_thread_policy`. AS lockout stays inline, not in the swappable slot. |
 | pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store/policy.rs): five classes; history depth N (current password counts inside N; store N-1 old kvnos); `pw_failcnt_interval` / `pw_lockout_duration`. kadm5 addpol/modpol/getpol/delpol/listpols. |
 
@@ -25,6 +26,12 @@ select those and any embedder-registered name. A module that is not
 selected is left out of the PREAUTH_REQUIRED offer and does not verify
 its padata. Empty PA-FX-FAST is not a kdcpreauth module, so it stays.
 `module` is not read. The same stanza in krb5.conf applies after kdc.conf.
+
+The client's stanza is `[plugins] clpreauth`, with the same `disable` and
+`enable_only` relations and the same four built-in names. Disabling
+`encrypted_timestamp` stops the client answering PA-ENC-TIMESTAMP.
+Encrypted challenge runs under FAST only while that module stays loaded.
+An `enable_only` that names only `sam2` or `otp` keeps nothing.
 
 LDAP, db2, and LMDB are not required implementations. None is
 privileged: each backend implements the same KDB traits.
