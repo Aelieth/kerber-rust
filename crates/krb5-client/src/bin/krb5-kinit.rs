@@ -32,6 +32,8 @@ use krb5_types::PrincipalName;
 use zeroize::Zeroize;
 
 fn main() {
+    // MIT `main` (`clients/kinit/kinit.c:855-861`): the locale comes from the environment first.
+    krb5_types::timestamp::setlocale();
     #[cfg(feature = "test-hooks")]
     gate::init_logging();
     let argv: Vec<String> = std::env::args().collect();

@@ -37,6 +37,8 @@ const OPTSTRING: &str = "+x:r:p:knq:w:d:s:mc:t:e:ON";
 /// (a `-q` query that fails still exits 0, as MIT's does).
 #[must_use]
 pub fn kadmin_local_main() -> i32 {
+    // MIT `main` (`kadmin/cli/ss_wrapper.c:40-47`): the locale comes from the environment first.
+    krb5_types::timestamp::setlocale();
     let stdout = io::stdout();
     let line = stdout.is_terminal();
     let mut io = Io {

@@ -147,20 +147,8 @@ pub(crate) fn principal_terse(p: &Principal) -> String {
 /// MIT `strdate` (`kadmin.c:142-153`): `%a %b %d %H:%M:%S %Z %Y` in local time; the zone is
 /// `UTC` at offset zero and the numeric offset elsewhere (no zone abbreviations).
 pub(crate) fn strdate(when: u32) -> String {
-    let Some(t) = chrono::DateTime::from_timestamp(i64::from(when), 0) else {
-        return "(error)".to_owned();
-    };
-    let local = t.with_timezone(&chrono::Local);
-    let zone = if local.offset().local_minus_utc() == 0 {
-        "UTC".to_owned()
-    } else {
-        local.format("%Z").to_string()
-    };
-    format!(
-        "{} {zone} {}",
-        local.format("%a %b %d %H:%M:%S"),
-        local.format("%Y")
-    )
+    krb5_types::timestamp::strftime("%a %b %d %H:%M:%S %Z %Y", when, 40)
+        .unwrap_or_else(|| "(error)".to_owned())
 }
 
 /// MIT `strdur` (`kadmin.c:118-139`): `D days HH:MM:SS`, `day` when D is one.
@@ -222,5 +210,20 @@ pub(crate) fn salttype_name(t: i32) -> String {
         3 => "onlyrealm".into(),
         4 => "special".into(),
         other => format!("<Salt type 0x{other:x}>"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strdate;
+
+    /// 2026-03-05 08:40:00 UTC, through the same formatter `getprinc` prints.
+    #[test]
+    fn strdate_is_the_locale_strftime() {
+        let t = 1_772_700_000;
+        let expect = krb5_types::timestamp::strftime("%a %b %d %H:%M:%S %Z %Y", t, 40).unwrap();
+        assert_eq!(strdate(t), expect);
+        assert!(expect.contains("Mar"), "{expect}");
+        assert!(expect.contains("2026"), "{expect}");
     }
 }

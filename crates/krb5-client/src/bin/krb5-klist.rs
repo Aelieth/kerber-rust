@@ -1,14 +1,17 @@
 //! MIT `klist`: list a credential cache, the cache collection, or a keytab.
 //!
 //! Usage: `klist [-e] [[-c] [-l] [-A] [-d] [-f] [-s] [-a [-n]]] [-k [-i] [-t] [-K]] [-C] [name]`
-//! (MIT's `-V` is not taken). Times are printed as MIT's are in the C locale; addresses (`-a`)
-//! are printed numerically.
+//! (MIT's `-V` is not taken). Times follow the process locale, and the date columns are as wide
+//! as MIT's probe of that locale; addresses (`-a`) are printed numerically.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 use std::fmt::Write as _;
+use std::sync::OnceLock;
+
+use krb5_types::timestamp::timestamp_to_sfstring;
 
 use krb5_asn1::decode;
 use krb5_client::ccol::{Cache, collection, resolve};
@@ -26,10 +29,23 @@ use krb5_protocol::{CcacheCred, Keytab, KeytabSlot};
 use krb5_types::{Ticket, TicketFlags};
 use zeroize::Zeroizing;
 
-/// The width of a printed time: MIT's `timestamp_width` in the C locale (`%x %X`).
-const TIMESTAMP_WIDTH: usize = 17;
+/// The width of a printed time, probed once.
+static TIMESTAMP_WIDTH: OnceLock<usize> = OnceLock::new();
+
+/// MIT `main` (`clients/klist/klist.c:232-236`): the column width is the first `sfstring` of now
+/// that fits in 20 bytes, else in `BUFSIZ` (8192), else 15.
+fn timestamp_width() -> usize {
+    *TIMESTAMP_WIDTH.get_or_init(|| {
+        let now = unix_now();
+        timestamp_to_sfstring(now, 20, None)
+            .or_else(|| timestamp_to_sfstring(now, 8192, None))
+            .map_or(15, |s| s.len())
+    })
+}
 
 fn main() {
+    // MIT `main` (`clients/klist/klist.c:124-130`): the locale comes from the environment first.
+    krb5_types::timestamp::setlocale();
     let argv: Vec<String> = std::env::args().collect();
     let argv0 = argv.first().map_or("klist", String::as_str);
     let prog = progname(argv0);
@@ -201,8 +217,8 @@ fn show_ccache(prog: &str, out: &mut String, args: &KlistArgs, cache: &Cache) ->
     let _ = writeln!(
         out,
         "Valid starting{}Expires{}Service principal",
-        " ".repeat(TIMESTAMP_WIDTH + 3 - "Valid starting".len() - 1),
-        " ".repeat(TIMESTAMP_WIDTH + 3 - "Expires".len() - 1),
+        " ".repeat(timestamp_width() + 3 - "Valid starting".len() - 1),
+        " ".repeat(timestamp_width() + 3 - "Expires".len() - 1),
     );
     for cred in cc.creds.iter().filter(|c| !c.is_removed()) {
         if args.config || !cred.is_config() {
@@ -374,14 +390,9 @@ fn etype_string(etype: i32) -> String {
     }
 }
 
-/// MIT `printtime` (`klist.c:643-651`): the local time in `timestamp_width` columns.
+/// MIT `printtime` (`klist.c:643-651`): the local time in `timestamp_width` columns, space-filled.
 fn printtime(t: u32) -> String {
-    use chrono::{Local, TimeZone};
-    let s = match Local.timestamp_opt(i64::from(t), 0) {
-        chrono::LocalResult::Single(dt) => dt.format("%m/%d/%y %H:%M:%S").to_string(),
-        _ => t.to_string(),
-    };
-    format!("{s:<TIMESTAMP_WIDTH$}")
+    timestamp_to_sfstring(t, timestamp_width() + 1, Some(b' ')).unwrap_or_default()
 }
 
 /// MIT `do_keytab` (`klist.c:263-358`): the keytab's name, the header (`-t` adds the timestamp
@@ -430,13 +441,13 @@ fn do_keytab(prog: &str, args: &KlistArgs, name: Option<&str>) -> i32 {
         let _ = writeln!(
             head,
             "KVNO Timestamp{}Principal",
-            " ".repeat(TIMESTAMP_WIDTH + 2 - "Timestamp".len() - 1)
+            " ".repeat(timestamp_width() + 2 - "Timestamp".len() - 1)
         );
         let _ = writeln!(
             head,
             "---- {} {}",
-            "-".repeat(TIMESTAMP_WIDTH),
-            "-".repeat(78 - TIMESTAMP_WIDTH - "KVNO".len() - 1)
+            "-".repeat(timestamp_width()),
+            "-".repeat(78 - timestamp_width() - "KVNO".len() - 1)
         );
     } else {
         head.push_str("KVNO Principal\n");
@@ -613,7 +624,7 @@ mod tests {
 
     #[test]
     fn printtime_is_timestamp_width() {
-        assert_eq!(printtime(1_700_000_000).len(), TIMESTAMP_WIDTH);
+        assert_eq!(printtime(1_700_000_000).len(), timestamp_width());
         assert_eq!(etype_string(18), "aes256-cts-hmac-sha1-96");
         assert_eq!(etype_string(99), "etype 99");
         assert_eq!(one_addr(2, &[192, 0, 2, 1]), "192.0.2.1");

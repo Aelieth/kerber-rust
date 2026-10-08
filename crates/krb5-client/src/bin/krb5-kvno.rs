@@ -23,6 +23,8 @@ use krb5_config::resolve_ccspec;
 use krb5_types::{PrincipalName, Ticket};
 
 fn main() {
+    // MIT `main` (`clients/kvno/kvno.c:65-84`): the locale comes from the environment first.
+    krb5_types::timestamp::setlocale();
     let argv: Vec<String> = std::env::args().collect();
     let argv0 = argv.first().map_or("kvno", String::as_str);
     let prog = progname(argv0);

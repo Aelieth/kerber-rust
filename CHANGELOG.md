@@ -836,6 +836,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **client/admin.** `klist`, `kinit`, `kvno`, and `kadmin.local` take the process locale. `klist` probes its date-column width, and `getprinc` dates use the locale's weekday and month. Units.
 - **kdc.** The KDC's default TCP listen backlog is 128 (MIT's is 5). Set `[kdcdefaults] kdc_tcp_listen_backlog = 5` for MIT's. kadmind and kpasswd stay at 5. See docs/mit-deviations.md.
 - **admin.** `kpropd` takes MIT's `-r`, `-s`, `-a` and is `host/<this host>`; `kprop`, `-s` or the
   default keytab. `KRB5_KPROP_*`, `KRB5_KDC_REALM` are gone. Profile booleans, context
