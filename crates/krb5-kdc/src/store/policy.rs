@@ -136,6 +136,10 @@ pub struct Policy {
     /// `[dbmodules] disable_lockout`: the KDC neither counts failed authentications nor
     /// checks the lockout policy.
     pub disable_lockout: bool,
+    /// `[plugins] kdcpreauth` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): the KDC walks the modules that remain loaded.
+    pub kdcpreauth: krb5_config::PluginRelations,
 }
 
 impl Default for Policy {
@@ -169,6 +173,7 @@ impl Default for Policy {
             spake_preauth_kdc_challenge: None,
             disable_last_success: false,
             disable_lockout: false,
+            kdcpreauth: krb5_config::PluginRelations::default(),
         }
     }
 }
@@ -370,7 +375,26 @@ impl PrincipalStore {
             self.domain_sid = sid;
         }
         self.policy.ad_identity = conf.domain_sid.is_some();
+        self.policy.kdcpreauth = conf.plugin_relations("kdcpreauth");
         Ok(())
+    }
+
+    /// `[plugins] kdcpreauth` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
+    pub fn apply_kdcpreauth_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.kdcpreauth = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "kdcpreauth",
+        );
     }
 
     /// Overlay `[libdefaults]` `allow_rc4` / `allow_des3` / `permitted_enctypes`.

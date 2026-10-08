@@ -230,6 +230,13 @@ did at 10, 1,000 and 5,000 principals. At backlog 5, idle bursts wait too, as on
 MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals. With 128, none
 waited a second, on MIT's KDC or on kerber-rust.
 
+`[plugins] kdcpreauth` `disable` and `enable_only` select the KDC's preauth
+modules by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,
+`pkinit`, and an embedder module's name). `disable = encrypted_timestamp`
+drops PA-ENC-TIMESTAMP from the preauth offer, and the KDC ignores that
+padata. The same relations in krb5.conf apply after this file. `module` is
+not read.
+
 ### The database
 
 ```sh

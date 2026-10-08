@@ -316,7 +316,7 @@ impl KdcPreauth for SpakeMod {
 
 impl KdcPreauth for EncTsMod {
     fn name(&self) -> &'static str {
-        "enc-timestamp"
+        "encrypted_timestamp"
     }
     fn pa_types(&self) -> &'static [i32] {
         &[pa::ENC_TIMESTAMP]
@@ -405,7 +405,7 @@ struct EncChallengeMod;
 
 impl KdcPreauth for EncChallengeMod {
     fn name(&self) -> &'static str {
-        "encrypted-challenge"
+        "encrypted_challenge"
     }
     fn pa_types(&self) -> &'static [i32] {
         &[pa::ENCRYPTED_CHALLENGE]
@@ -588,6 +588,40 @@ pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
         .clone()
 }
 
+/// Named kdcpreauth modules after `[plugins] kdcpreauth` `disable` and `enable_only`.
+///
+/// `fast` is not a kdcpreauth module, so it stays loaded and is not a name the profile can select.
+/// MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then `k5_plugin_load_all` applies the profile.
+/// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): a caller walks only the modules that stayed loaded.
+pub(crate) fn selected_preauth(
+    relations: &krb5_config::PluginRelations,
+) -> Vec<Arc<dyn KdcPreauth>> {
+    let mut fast = Vec::new();
+    let mut named = Vec::new();
+    for module in preauth_modules() {
+        if module.name() == "fast" {
+            fast.push(module);
+        } else {
+            named.push(module);
+        }
+    }
+    let names: Vec<&str> = named.iter().map(|module| module.name()).collect();
+    let kept = krb5_config::filter_plugin_modules(relations, &names);
+    for want in kept {
+        if let Some(index) = named.iter().position(|module| module.name() == want) {
+            fast.push(named.remove(index));
+        }
+    }
+    fast
+}
+
+/// Whether `[plugins] kdcpreauth` left `name` loaded.
+pub(crate) fn kdcpreauth_loaded(store: &dyn PrincipalRead, name: &str) -> bool {
+    selected_preauth(&store.policy().kdcpreauth)
+        .iter()
+        .any(|module| module.name() == name)
+}
+
 /// METHOD-DATA modules after the leading empty PA-FX-FAST, and the cookie state they keep.
 /// `ikey` is the client's reply key, when one was selected.
 /// MIT `get_preauth_hint_list` (`kdc_preauth.c:999-1006`): the empty PA-FX-FAST and the
@@ -608,7 +642,7 @@ pub fn advertise_preauth(
         }],
         cookie: Vec::new(),
     };
-    for m in preauth_modules() {
+    for m in selected_preauth(&store.policy().kdcpreauth) {
         if m.name() == "fast" {
             continue;
         }
@@ -660,7 +694,7 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
         body_der,
         cname,
     } = *rock;
-    for m in preauth_modules() {
+    for m in selected_preauth(&store.policy().kdcpreauth) {
         match m.process_as(&PreauthRock {
             store,
             client,

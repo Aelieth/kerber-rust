@@ -324,7 +324,10 @@ fn finish_preauth(
         None => body_der,
     };
     // MIT `ec_verify` (`kdc_preauth_ec.c:71-76`): 138 outside FAST is ENOENT → 24.
-    if fast.is_none()
+    // MIT `find_pa_system` (`kdc_preauth.c:606-619`): that failure happens only when encrypted_challenge loaded.
+    let ec_loaded = crate::plugins::kdcpreauth_loaded(store, "encrypted_challenge");
+    if ec_loaded
+        && fast.is_none()
         && work_padata
             .as_deref()
             .into_iter()
@@ -440,7 +443,9 @@ fn finish_preauth(
         }
         None => {}
     }
-    if !skip_timestamp
+    // MIT `find_pa_system` (`kdc_preauth.c:606-619`): a type no loaded module owns is not verified.
+    if ec_loaded
+        && !skip_timestamp
         && let Some(f) = fast
         && let Some(blob) = find_pa(Some(&f.inner_padata), pa::ENCRYPTED_CHALLENGE)
         && !blob.is_empty()
