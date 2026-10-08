@@ -57,6 +57,11 @@ impl Clock {
         }));
     }
 
+    /// Whether [`Self::now`] will apply a noted KDC offset.
+    pub(super) fn follows_kdc(&self) -> bool {
+        self.sync && self.offset.get().is_some()
+    }
+
     /// The time now: the KDC's when an offset is noted, `kdc_timesync` is on, and the caller takes
     /// an unauthenticated offset (`allow_unauth`) or the offset is authenticated; else the local
     /// time.

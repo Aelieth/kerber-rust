@@ -1482,6 +1482,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **client.** An AS request counts `till` from `time()`'s second, so a precise clock that has just rolled does not make `RENEWABLE_OK` mark the TGT renewable.
 - **kdc.** `passwd_check` logs `password quality module NAME rejected password for PRINC: TEXT` when dict, empty or princ refuses. Policy floors count bytes.
 - **kdc.** `kdb5_util create` loads `dict_file` while initializing the admin interface, after the database and an `-s` stash exist.
 - **kdc.** A dictionary word ends at an embedded NUL. `strcasecmp` folds ISO-8859-1 letters when the locale names that codeset.

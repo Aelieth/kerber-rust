@@ -731,3 +731,33 @@ fn rd_priv_checks_the_addresses_the_context_holds() {
     assert_eq!(ac.rd_priv(&msg(Some(here.clone()), None)).unwrap(), b"p");
     assert_eq!(ac.rd_priv(&msg(None, Some(1))).unwrap(), b"p");
 }
+
+#[test]
+fn lifetime_second_follows_time_across_the_roll() {
+    assert_eq!(super::lifetime_second(101, 100), 100);
+    assert_eq!(super::lifetime_second(100, 100), 100);
+    assert_eq!(super::lifetime_second(99, 100), 99);
+    assert_eq!(super::lifetime_second(102, 100), 102);
+    assert_eq!(super::lifetime_second(0, u32::MAX), 0);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn request_till_second_is_time_while_the_precise_clock_has_rolled() {
+    let cap = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    let mut saw = false;
+    while std::time::Instant::now() < cap {
+        let precise = super::us_timeofday().0.unix_seconds();
+        let kdc = super::kdc_time_seconds();
+        if precise == kdc.saturating_add(1) {
+            let snapped = super::request_lifetime_now(KerberosTime::from_unix_seconds(precise));
+            assert_eq!(snapped.unix_seconds(), kdc);
+            saw = true;
+            break;
+        }
+    }
+    assert!(
+        saw,
+        "CLOCK_REALTIME did not lead the coarse clock within 3s"
+    );
+}

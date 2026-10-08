@@ -558,6 +558,48 @@ pub fn us_timeofday() -> (KerberosTime, Microseconds) {
     )
 }
 
+/// The second MIT's KDC uses for a ticket's start.
+/// MIT `krb5_timeofday` (`lib/krb5/os/timeofday.c:45-45`): `time()` supplies the seconds.
+/// On Linux that second stays on the previous value for the tick after `CLOCK_REALTIME` rolls.
+#[must_use]
+pub(crate) fn kdc_time_seconds() -> u32 {
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "android",
+        target_os = "emscripten",
+        target_os = "fuchsia"
+    ))]
+    if let Ok(ts) = nix::time::clock_gettime(nix::time::ClockId::CLOCK_REALTIME_COARSE) {
+        return u32::try_from(ts.tv_sec()).unwrap_or(u32::MAX);
+    }
+    us_timeofday().0.unix_seconds()
+}
+
+/// Which second an AS lifetime is counted from.
+/// A precise second exactly one past [`kdc_time_seconds`] is the tick where
+/// `gettimeofday` has rolled and `time()` has not. Counting `till` from the
+/// rolled second makes `RENEWABLE_OK` issue a renewable ticket.
+#[must_use]
+pub(crate) fn lifetime_second(precise_s: u32, kdc_s: u32) -> u32 {
+    if precise_s == kdc_s.saturating_add(1) {
+        kdc_s
+    } else {
+        precise_s
+    }
+}
+
+/// [`us_timeofday`]'s second, pulled back when it is the one `time()` has not reached.
+#[must_use]
+pub(crate) fn request_lifetime_now(precise: KerberosTime) -> KerberosTime {
+    let precise_s = precise.unix_seconds();
+    let snapped = lifetime_second(precise_s, kdc_time_seconds());
+    if snapped == precise_s {
+        precise
+    } else {
+        KerberosTime::from_unix_seconds(snapped)
+    }
+}
+
 /// A fresh initial sequence number.
 /// MIT `krb5_generate_seq_number` (`lib/krb5/krb/gen_seqnum.c:39-63`): 30 random bits, so peers that read sequence numbers as signed never see a negative one, and never 0.
 ///

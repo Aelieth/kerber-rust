@@ -1578,7 +1578,16 @@ pub fn conf_etypes(tgs: bool) -> Vec<i32> {
 /// MIT `set_request_times` (`lib/krb5/krb/get_in_tkt.c:707-710`): each request's times are made at `k5_init_creds_current_time`, the KDC's time once a preauth error gave it.
 /// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1278-1280`): before every request.
 fn request_times(req: &AsRequest<'_>, clock: &Clock) -> AsReqTimes {
-    ticket_body(req, &clock.now(true).0)
+    let (now, _) = clock.now(true);
+    // A noted KDC offset already follows the KDC. Otherwise count the lifetime
+    // from `time()`'s second: the precise clock can be one second ahead.
+    // MIT `kdc_get_ticket_renewtime` (`kdc/kdc_util.c:1735-1737`): `RENEWABLE_OK` renews when `till` is after `endtime`.
+    let now = if clock.follows_kdc() {
+        now
+    } else {
+        crate::auth_con::request_lifetime_now(now)
+    };
+    ticket_body(req, &now)
 }
 
 /// MIT `set_request_times` (`get_in_tkt.c:711-722`): the start time is omitted unless the caller
