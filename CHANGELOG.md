@@ -1482,6 +1482,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kdc.** The expired-ticket TGS test applies clock skew 0 only after the AS, and retries a one-second `SKEW`, so the result stays `TKT_EXPIRED` / `PROCESS_TGS`.
 - **client.** An AS request counts `till` from `time()`'s second, so a precise clock that has just rolled does not make `RENEWABLE_OK` mark the TGT renewable.
 - **kdc.** `passwd_check` logs `password quality module NAME rejected password for PRINC: TEXT` when dict, empty or princ refuses. Policy floors count bytes.
 - **kdc.** `kdb5_util create` loads `dict_file` while initializing the admin interface, after the database and an `-s` stash exist.

@@ -740,11 +740,41 @@ fn tgs_renew_strips_when_disallow_renewable() {
     assert!(after.renew_till.is_none());
 }
 
+fn assert_process_tgs_expired(err: Error) {
+    // MIT reports an expired header ticket at the rd_req stage: code 32 with
+    // e_text PROCESS_TGS, not TKT_EXPIRED.
+    // MIT `gather_tgs_req_info` (`do_tgs_req.c:623-623`): a `kdc_process_tgs_req` failure
+    // has the status PROCESS_TGS.
+    match err {
+        Error::Protocol { code, text, .. } => {
+            assert_eq!(code, err::TKT_EXPIRED);
+            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
+        }
+        other => panic!("expected Protocol, got {other:?}"),
+    }
+}
+
+/// Issue `build` until the refusal is the expired header ticket.
+/// A stamp taken on one second and checked on the next is `SKEW` when skew is 0;
+/// that sample is not the expiry result, so it is tried again inside the second
+/// that is already past the ticket end.
+fn tgs_once_past_end(store: &PrincipalStore, build: impl Fn() -> krb5_types::TgsReq) -> Error {
+    let mut last = None;
+    for _ in 0..8 {
+        let err = krb5_kdc::issue_tgs(store, &build()).unwrap_err();
+        let skew = matches!(&err, Error::Protocol { code, .. } if *code == err::SKEW);
+        if !skew {
+            return err;
+        }
+        last = Some(err);
+    }
+    last.expect("a TGS attempt")
+}
+
 #[test]
 // oracle: differential-gate.sh tgt-expired
 fn tgs_renew_after_endtime_is_process_tgs() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.policy.skew = 0;
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     store
         .apply_admin_fields(
@@ -760,33 +790,19 @@ fn tgs_renew_after_endtime_is_process_tgs() {
             },
         )
         .unwrap();
+    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-99`): the encrypted timestamp
+    // is `krb5_check_clockskew`. Skew 0 before this AS rejects a stamp from the
+    // adjacent second. The expired-ticket check is what needs skew 0.
     let issued = renewable_as(&store, 95);
+    store.policy.skew = 0;
     // max_life is 1 s; wait until the integer endtime second has passed.
     wait_unix_past(
         tgt_part_issue_acl_ap(&store, &issued)
             .endtime
             .unix_seconds(),
     );
-    let err = krb5_kdc::issue_tgs(&store, &host_tgs(&store, &issued, 96)).unwrap_err();
-    // MIT reports an expired header ticket at the rd_req stage: code 32 with
-    // e_text PROCESS_TGS, not TKT_EXPIRED.
-    // MIT `gather_tgs_req_info` (`do_tgs_req.c:623-623`): a `kdc_process_tgs_req` failure
-    // has the status PROCESS_TGS.
-    match err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::TKT_EXPIRED);
-            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-        }
-        other => panic!("expected Protocol, got {other:?}"),
-    }
-    let renew_err = krb5_kdc::issue_tgs(&store, &renew_tgs(&issued, 97)).unwrap_err();
-    match renew_err {
-        Error::Protocol { code, text, .. } => {
-            assert_eq!(code, err::TKT_EXPIRED);
-            assert_eq!(text.as_deref(), Some("PROCESS_TGS"));
-        }
-        other => panic!("expected Protocol, got {other:?}"),
-    }
+    assert_process_tgs_expired(tgs_once_past_end(&store, || host_tgs(&store, &issued, 96)));
+    assert_process_tgs_expired(tgs_once_past_end(&store, || renew_tgs(&issued, 97)));
 }
 
 #[test]
