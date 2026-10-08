@@ -1,4 +1,10 @@
-//! `krb5_string_to_timestamp`.
+//! MIT's absolute-time conversions: `krb5_string_to_timestamp`, and the dates MIT's tools print
+//! through `krb5_timestamp_to_string`, `krb5_timestamp_to_sfstring` and `strftime` in the locale
+//! their `setlocale(LC_ALL, "")` selects ([`setlocale`]).
+//!
+//! Formatting is glibc's `strftime` over glibc's LC_TIME data for the locale (see the `locale`
+//! and `strftime` submodules), in the local time zone (`TZ`, else `/etc/localtime`). `%Z` is
+//! `UTC` at offset zero and the numeric offset (`+02:00`) elsewhere, not the zone's abbreviation.
 //!
 //! MIT `krb5_string_to_timestamp` (`lib/krb5/krb/str_conv.c:146-196`): tries a fixed
 //! `strptime` format table against the string, in order, over a `struct tm` seeded from
@@ -9,7 +15,109 @@
 //! supported unless native strptime present"). Digit fields are the fixed widths the
 //! formats spell out; `%b` is the C-locale three-letter month, case-insensitive.
 
+use std::sync::OnceLock;
+
 use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, TimeZone, Timelike};
+
+mod locale;
+mod strftime;
+
+pub use locale::LcTime;
+pub use strftime::{Tm, strftime_tm};
+
+/// The LC_TIME [`setlocale`] chose; `C` until it runs, as in a C program.
+static LC_TIME: OnceLock<LcTime> = OnceLock::new();
+
+/// MIT's tools' `setlocale(LC_ALL, "")` (`clients/klist/klist.c` and the others call it first in
+/// `main`): the process's LC_TIME from `LC_ALL`, `LC_TIME` and `LANG`, `C` when any category's
+/// locale is not installed. Later calls keep the first one's choice.
+pub fn setlocale() {
+    let _ = LC_TIME.set(locale::resolve(
+        &|k| std::env::var_os(k).map(|v| v.to_string_lossy().into_owned()),
+        &locale::System::load(),
+    ));
+}
+
+/// The process's LC_TIME: what [`setlocale`] chose, else `C`.
+#[must_use]
+pub fn lc_time() -> LcTime {
+    LC_TIME.get().copied().unwrap_or(LcTime::C)
+}
+
+/// glibc `localtime`: `t` (read as MIT's `ts2tt` reads a `krb5_timestamp`, unsigned) broken down
+/// in the local time zone.
+#[must_use]
+pub fn localtime(t: u32) -> Option<Tm> {
+    let utc = chrono::DateTime::from_timestamp(i64::from(t), 0)?;
+    let local = utc.with_timezone(&Local);
+    let gmtoff = local.offset().local_minus_utc();
+    let int = |v: u32| i32::try_from(v).unwrap_or_default();
+    Some(Tm {
+        sec: int(local.second()),
+        min: int(local.minute()),
+        hour: int(local.hour()),
+        mday: int(local.day()),
+        mon: int(local.month0()),
+        year: local.year() - 1900,
+        wday: int(local.weekday().num_days_from_sunday()),
+        yday: int(local.ordinal0()),
+        gmtoff: i64::from(gmtoff),
+        zone: if gmtoff == 0 {
+            "UTC".to_owned()
+        } else {
+            local.offset().to_string()
+        },
+        epoch: i64::from(t),
+    })
+}
+
+/// glibc `strftime` of `t`'s local time in the process's locale: `None` where glibc returns 0
+/// (the result and its NUL do not fit in `maxsize` bytes, or it is empty).
+#[must_use]
+pub fn strftime(fmt: &str, t: u32, maxsize: usize) -> Option<String> {
+    strftime_tm(&lc_time(), fmt, &localtime(t)?, maxsize)
+}
+
+/// MIT `krb5_timestamp_to_string` (`lib/krb5/krb/str_conv.c:199-213`): `%c` of the local time in a buffer of `buflen` bytes.
+/// `None` is MIT's `ENOMEM`: it does not fit.
+#[must_use]
+pub fn timestamp_to_string(t: u32, buflen: usize) -> Option<String> {
+    strftime("%c", t, buflen)
+}
+
+/// MIT `krb5_timestamp_to_sfstring` (`lib/krb5/krb/str_conv.c:216-252`): the first format of MIT's table that fits in `buflen`.
+/// That is, in `buflen - 1` bytes: the locale's `%c`, `dd mon yyyy hh:mm:ss`, the locale's date
+/// with its time, `hh:mm:ss` or `hh:mm`, then ISO 8601 forms. With `pad` (MIT's `fill`, an ASCII
+/// byte), the rest up to `buflen - 1` bytes is filled with it. `None` is MIT's `ENOMEM`: none fits.
+#[must_use]
+pub fn timestamp_to_sfstring(t: u32, buflen: usize, pad: Option<u8>) -> Option<String> {
+    sfstring_tm(&lc_time(), &localtime(t)?, buflen, pad)
+}
+
+/// [`timestamp_to_sfstring`] of a broken-down time in locale `lc`.
+fn sfstring_tm(lc: &LcTime, tm: &Tm, buflen: usize, pad: Option<u8>) -> Option<String> {
+    /// MIT `krb5_timestamp_to_sfstring` (`lib/krb5/krb/str_conv.c:224-234`): `sftime_format_table`, tried in this order.
+    const SFTIME_FORMATS: [&str; 9] = [
+        "%c",
+        "%d %b %Y %T",
+        "%x %X",
+        "%x %T",
+        "%x %R",
+        "%Y-%m-%dT%H:%M:%S",
+        "%Y-%m-%dT%H:%M",
+        "%Y%m%d%H%M%S",
+        "%Y%m%d%H%M",
+    ];
+    let mut s = SFTIME_FORMATS
+        .iter()
+        .find_map(|f| strftime_tm(lc, f, tm, buflen))?;
+    if let Some(p) = pad.filter(u8::is_ascii) {
+        while s.len() + 1 < buflen {
+            s.push(char::from(p));
+        }
+    }
+    Some(s)
+}
 
 /// `atime_format_table` minus `%x:%X`.
 /// MIT `krb5_string_to_timestamp` (`krb/str_conv.c:152-165`): the `atime_format_table`
@@ -241,6 +349,81 @@ mod tests {
         assert_eq!(string_to_timestamp_at(" 20300102030405", now()), None);
         assert_eq!(string_to_timestamp_at("20301302030405", now()), None);
         assert_eq!(string_to_timestamp_at("02-Foo-2030:03:04:05", now()), None);
+    }
+
+    /// MIT's table walked over glibc 2.42's `strftime` for 2026-03-05 08:40:00, recorded live:
+    /// klist's 20-byte width probe and ktutil's 18-byte buffer, padded with spaces.
+    #[test]
+    fn sfstring_takes_the_first_format_that_fits() {
+        let t1 = Tm {
+            sec: 0,
+            min: 40,
+            hour: 8,
+            mday: 5,
+            mon: 2,
+            year: 126,
+            wday: 4,
+            yday: 63,
+            gmtoff: 0,
+            zone: "UTC".to_owned(),
+            epoch: 1_772_700_000,
+        };
+        let sp = Some(b' ');
+        let c = LcTime::C;
+        assert_eq!(
+            sfstring_tm(&c, &t1, 20, sp).as_deref(),
+            Some("03/05/26 08:40:00  ")
+        );
+        assert_eq!(
+            sfstring_tm(&c, &t1, 20, None).as_deref(),
+            Some("03/05/26 08:40:00")
+        );
+        assert_eq!(
+            sfstring_tm(&c, &t1, 18, sp).as_deref(),
+            Some("03/05/26 08:40:00")
+        );
+        assert_eq!(
+            sfstring_tm(&c, &t1, 13, sp).as_deref(),
+            Some("202603050840")
+        );
+        assert_eq!(sfstring_tm(&c, &t1, 12, sp), None);
+        let en = LcTime::named("en_US.UTF-8").unwrap();
+        assert_eq!(
+            sfstring_tm(&en, &t1, 20, sp).as_deref(),
+            Some("03/05/2026 08:40:00")
+        );
+        assert_eq!(
+            sfstring_tm(&en, &t1, 18, sp).as_deref(),
+            Some("03/05/2026 08:40 ")
+        );
+        let de = LcTime::named("de_DE.UTF-8").unwrap();
+        assert_eq!(
+            sfstring_tm(&de, &t1, 20, sp).as_deref(),
+            Some("05.03.2026 08:40:00")
+        );
+        assert_eq!(
+            sfstring_tm(&de, &t1, 18, sp).as_deref(),
+            Some("05.03.2026 08:40 ")
+        );
+    }
+
+    #[test]
+    fn the_process_locale_is_c_until_setlocale() {
+        assert_eq!(lc_time(), LcTime::C);
+        let tm = localtime(1_772_700_000).unwrap();
+        assert_eq!(tm.epoch, 1_772_700_000);
+        assert_eq!(
+            timestamp_to_sfstring(1_772_700_000, 20, None)
+                .unwrap()
+                .len(),
+            17
+        );
+        assert!(
+            timestamp_to_string(1_772_700_000, 256)
+                .unwrap()
+                .ends_with(" 2026")
+        );
+        assert_eq!(timestamp_to_string(1_772_700_000, 10), None);
     }
 
     #[test]

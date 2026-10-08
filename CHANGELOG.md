@@ -527,6 +527,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **types.** Dates follow the process locale: `LC_ALL`, then `LC_TIME`, then
+  `LANG`, and an unknown locale stays C. `timestamp_to_sfstring` tries MIT's
+  nine formats, then pads. Units for C, en_US.UTF-8, and de_DE.UTF-8.
 - **kdc.** Select kdcpreauth modules by MIT's names through `[plugins] kdcpreauth` `disable` and `enable_only`. Disabling `encrypted_timestamp` drops PA-ENC-TIMESTAMP from the offer and ignores it. Units.
 - **config.** Read `[plugins]` `disable` and `enable_only` as MIT's `configure_interface`: named modules, repeated relations, and order. `module` stays unread. Units.
 - **client.** `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd` and `ktutil` write MIT's

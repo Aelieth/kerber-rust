@@ -266,6 +266,11 @@ criteria = "safe-to-deploy"
 version = "1.0.107"
 criteria = "safe-to-deploy"
 
+[[exemptions.pure-rust-locales]]
+version = "0.8.2"
+criteria = "safe-to-deploy"
+notes = "glibc's locale data as generated Rust consts: one file, no dependencies, no build script, no unsafe, no I/O. krb5-types reads its LC_TIME items to print dates as MIT's tools do. No imported audit covers 0.8.2."
+
 [[exemptions.r-efi]]
 version = "6.0.0"
 criteria = "safe-to-deploy"

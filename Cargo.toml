@@ -47,6 +47,8 @@ aes = "0.8"
 bytes = "1.12"
 camellia = "0.1"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
+# glibc LC_TIME tables. krb5-types formats dates with them; defmt stays off.
+pure-rust-locales = { version = "0.8.2", default-features = false }
 cmac = "0.7"
 # SPAKE edwards25519 (MIT `edwards25519.c`). 4.1 shares cpufeatures 0.2 with the RustCrypto
 # crates; 5.0 would add cpufeatures 0.3. No `alloc`: no multiscalar API is used.
