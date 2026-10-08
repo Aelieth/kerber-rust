@@ -290,6 +290,8 @@ fn main() {
     store.apply_kdcpolicy_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
     // MIT `plugins/kdcpolicy/test` has no `.so` here. `enable_only = test` registers it.
     krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
+    // MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): the same profile selects audit modules.
+    store.apply_audit_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
     // MIT `load_preauth_plugins` (`kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
@@ -374,7 +376,12 @@ fn main() {
     if foreground {
         eprintln!("{progname}: starting...");
     }
-    krb5_kdc::current_audit().kdc_start(true);
+    {
+        let g = store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        krb5_kdc::audit_kdc_start(&**g, true);
+    }
     // MIT `finish_dispatch` (`kdc/dispatch.c:54-55`): the reply size is compared as an unsigned number.
     let max_dgram = kdc_conf.as_ref().map_or(krb5_kdc::MAX_DGRAM_REPLY, |c| {
         usize::try_from(c.kdc_max_dgram_reply_size.cast_unsigned()).unwrap_or(usize::MAX)
@@ -383,14 +390,24 @@ fn main() {
         max_dgram_reply_size: max_dgram,
         ..ListenLimits::default()
     };
-    let served = serve_daemon(store, udp, tcp, &signals, limits);
+    let served = serve_daemon(store.clone(), udp, tcp, &signals, limits);
     if let Err(e) = served {
-        krb5_kdc::current_audit().kdc_stop(false);
+        {
+            let g = store
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            krb5_kdc::audit_kdc_stop(&**g, false);
+        }
         klog::com_err(Some(&e.to_string()), "while serving");
         eprintln!("{progname}: serve: {e}");
         std::process::exit(1);
     }
-    krb5_kdc::current_audit().kdc_stop(true);
+    {
+        let g = store
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        krb5_kdc::audit_kdc_stop(&**g, true);
+    }
     // MIT `main` (`kdc/main.c:1031-1032`): "shutting down" once the loop ends.
     klog::syslog(Severity::Info, "shutting down");
     klog::close();

@@ -346,6 +346,10 @@ impl TestAudit {
 }
 
 impl KdcAudit for TestAudit {
+    fn name(&self) -> &'static str {
+        "test"
+    }
+
     fn kdc_start(&self, success: bool) {
         self.write_line(&start_stop_json("KDC_START", success));
     }

@@ -8,7 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_types::{
-    AuthorizationData, EncTicketPart, KdcReqBody, KerberosTime, PaData, PrincipalName, pa,
+    AuthorizationData, EncTicketPart, HostAddress, KdcReqBody, KerberosTime, PaData, PrincipalName,
+    pa,
 };
 
 use crate::error::Error;
@@ -912,6 +913,54 @@ pub trait KdcPolicy: Send + Sync {
     ) -> Result<PolicyAdjustment, Error> {
         self.check_tgs(store, &server.name, indicators)
     }
+
+    /// AS check with the socket peer. MIT's kdcpolicy receives no peer address.
+    /// `peer` is the address the KDC accepted the request from, not `request.addresses`.
+    /// The default ignores `peer` and calls [`Self::check_as_req`].
+    ///
+    /// # Errors
+    ///
+    /// The [`Error`] that denies the request. A denial stops later modules.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "MIT check_as plus the socket the KDC accepted"
+    )]
+    fn check_as_from(
+        &self,
+        request: &KdcReqBody,
+        store: &dyn PrincipalRead,
+        client: &Principal,
+        server: &Principal,
+        indicators: &[String],
+        peer: Option<&HostAddress>,
+        status: &mut Option<&'static str>,
+    ) -> Result<PolicyAdjustment, Error> {
+        let _ = peer;
+        self.check_as_req(request, store, client, server, indicators, status)
+    }
+
+    /// TGS check with the socket peer. The default ignores `peer` and calls [`Self::check_tgs_req`].
+    ///
+    /// # Errors
+    ///
+    /// The [`Error`] that denies the request. A denial stops later modules.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "MIT check_tgs plus the socket the KDC accepted"
+    )]
+    fn check_tgs_from(
+        &self,
+        request: &KdcReqBody,
+        store: &dyn PrincipalRead,
+        server: &Principal,
+        ticket: &EncTicketPart,
+        indicators: &[String],
+        peer: Option<&HostAddress>,
+        status: &mut Option<&'static str>,
+    ) -> Result<PolicyAdjustment, Error> {
+        let _ = peer;
+        self.check_tgs_req(request, store, server, ticket, indicators, status)
+    }
 }
 
 /// Default policy: records nothing; built-in ticket rules stay in issue/.
@@ -943,6 +992,8 @@ thread_local! {
     static THREAD_POLICY: std::cell::RefCell<Option<Arc<dyn KdcPolicy>>> =
         const { std::cell::RefCell::new(None) };
     static THREAD_POLICIES: std::cell::RefCell<Option<Vec<Arc<dyn KdcPolicy>>>> =
+        const { std::cell::RefCell::new(None) };
+    static REQUEST_PEER: std::cell::RefCell<Option<HostAddress>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -1007,6 +1058,29 @@ pub fn set_thread_kdcpolicies(modules: Vec<Arc<dyn KdcPolicy>>) {
 /// Drop this thread's named kdcpolicy modules so it uses the process-wide registry.
 pub fn clear_thread_kdcpolicies() {
     THREAD_POLICIES.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Take this thread's named kdcpolicy modules off it.
+pub(crate) fn take_thread_kdcpolicies() -> Option<Vec<Arc<dyn KdcPolicy>>> {
+    THREAD_POLICIES.with(|slot| slot.borrow_mut().take())
+}
+
+/// Put back what [`take_thread_kdcpolicies`] took.
+pub(crate) fn restore_thread_kdcpolicies(modules: Option<Vec<Arc<dyn KdcPolicy>>>) {
+    THREAD_POLICIES.with(|slot| *slot.borrow_mut() = modules);
+}
+
+/// The socket peer for policy checks on this thread. `None` outside the listener.
+///
+/// This is not the `addresses` field of the request, which is the client's claim.
+pub(crate) fn set_request_peer(peer: Option<HostAddress>) {
+    REQUEST_PEER.with(|slot| *slot.borrow_mut() = peer);
+}
+
+/// Peer address set by [`set_request_peer`].
+#[must_use]
+pub(crate) fn request_peer() -> Option<HostAddress> {
+    REQUEST_PEER.with(|slot| slot.borrow().clone())
 }
 
 /// Named modules after `[plugins] kdcpolicy` `disable` and `enable_only`, in the order that remains.
@@ -1081,9 +1155,18 @@ pub(crate) fn enforce_kdcpolicy_as(
     end: &mut KerberosTime,
     renew_till: &mut Option<KerberosTime>,
 ) -> Result<(), Error> {
+    let peer = request_peer();
     for module in active_kdcpolicies(store) {
         let mut status = None;
-        match module.check_as_req(request, store, client, server, indicators, &mut status) {
+        match module.check_as_from(
+            request,
+            store,
+            client,
+            server,
+            indicators,
+            peer.as_ref(),
+            &mut status,
+        ) {
             Ok(adj) => apply_policy_times(now, end, renew_till, &adj),
             Err(err) => {
                 return Err(match status {
@@ -1118,9 +1201,18 @@ pub(crate) fn enforce_kdcpolicy_tgs(
     end: &mut KerberosTime,
     renew_till: &mut Option<KerberosTime>,
 ) -> Result<(), Error> {
+    let peer = request_peer();
     for module in active_kdcpolicies(store) {
         let mut status = None;
-        match module.check_tgs_req(request, store, server, ticket, indicators, &mut status) {
+        match module.check_tgs_from(
+            request,
+            store,
+            server,
+            ticket,
+            indicators,
+            peer.as_ref(),
+            &mut status,
+        ) {
             Ok(adj) => apply_policy_times(now, end, renew_till, &adj),
             Err(err) => {
                 return Err(match status {
@@ -2082,6 +2174,99 @@ mod tests {
         assert_eq!(wide.hits.load(Ordering::SeqCst), 0);
         assert_eq!(tight.hits.load(Ordering::SeqCst), 0);
         assert_eq!(end, start_end);
+    }
+
+    struct ClearPeer;
+
+    impl Drop for ClearPeer {
+        fn drop(&mut self) {
+            set_request_peer(None);
+        }
+    }
+
+    struct PeerSeen {
+        octets: Mutex<Option<Vec<u8>>>,
+    }
+
+    impl KdcPolicy for PeerSeen {
+        fn name(&self) -> &'static str {
+            "peer"
+        }
+
+        fn check_as(
+            &self,
+            _store: &dyn PrincipalRead,
+            _client: &Principal,
+            _indicators: &[String],
+        ) -> Result<PolicyAdjustment, Error> {
+            Ok(PolicyAdjustment::default())
+        }
+
+        fn check_tgs(
+            &self,
+            _store: &dyn PrincipalRead,
+            _sname: &PrincipalName,
+            _indicators: &[String],
+        ) -> Result<PolicyAdjustment, Error> {
+            Ok(PolicyAdjustment::default())
+        }
+
+        fn check_as_from(
+            &self,
+            request: &KdcReqBody,
+            store: &dyn PrincipalRead,
+            client: &Principal,
+            server: &Principal,
+            indicators: &[String],
+            peer: Option<&HostAddress>,
+            status: &mut Option<&'static str>,
+        ) -> Result<PolicyAdjustment, Error> {
+            *self
+                .octets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                peer.map(|addr| addr.address.as_ref().to_vec());
+            self.check_as_req(request, store, client, server, indicators, status)
+        }
+    }
+
+    #[test]
+    fn policy_sees_the_socket_peer_not_the_request_addresses() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let seen = Arc::new(PeerSeen {
+            octets: Mutex::new(None),
+        });
+        let _guard = ClearKdcpolicy::slot(Arc::clone(&seen) as Arc<dyn KdcPolicy>);
+        set_request_peer(Some(HostAddress {
+            addr_type: HostAddress::ADDRTYPE_INET,
+            address: vec![10, 1, 2, 3].into(),
+        }));
+        let _peer = ClearPeer;
+        let mut body = policy_body(None, None);
+        body.addresses = Some(vec![HostAddress {
+            addr_type: HostAddress::ADDRTYPE_INET,
+            address: vec![10, 9, 9, 9].into(),
+        }]);
+        let (client, server) = policy_pair(&store);
+        let (now, mut end, mut renew) = open_times();
+        enforce_kdcpolicy_as(
+            &store,
+            &body,
+            &client,
+            &server,
+            &[],
+            &now,
+            &mut end,
+            &mut renew,
+        )
+        .expect("peer module allows");
+        assert_eq!(
+            seen.octets
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_deref(),
+            Some(&[10, 1, 2, 3][..])
+        );
     }
 }
 

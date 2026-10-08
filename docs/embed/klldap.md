@@ -84,6 +84,21 @@ kerber-rust's `PrincipalStore`, so the directory stays the writer:
 | persistence | `load_store` / `save_store` (dump-v7 text + a stash in MIT keytab form) | an existing KLLDAP volume is MIT db2: migrate once with MIT `kdb5_util dump`, then `krb5-kdb load` |
 | the KDC | `bind_udp_listeners` / `bind_tcp_listeners` on `KdcConf::kdc_udp_listeners` / `kdc_tcp_listeners`, then `serve_all_until` with the embedder's shutdown flag | not `serve` / `serve_all`: those install SIGTERM / SIGINT handlers; `serve_all_until` runs MIT's one loop on the thread that calls it, and a plugin module set for that thread alone does not apply while it runs |
 
+## Policy and audit
+
+KLLDAP 0.7.6's catalog (its domain-handlers policies module, `POLICY_ITEM_CATALOG`) marks each item "Not yet enforced" on the directory side. The KDC side is the MIT feature or the plugin interface an embedder registers. Nothing here reads the OU catalog.
+
+| KLLDAP item | Where it is served |
+| --- | --- |
+| `lockout-threshold` | kadm5 policy `max_fail` (`store/policy.rs` `max_fail_for`). `0` is no lockout. The KDC returns `LOCKED_OUT` / `CLIENT_REVOKED` from that count. |
+| `lockout-duration-seconds` | kadm5 policy `pw_lockout_duration` on the same policy. `0` lasts until a successful AS. |
+| `inactivity-days` | the KDC records `last_success` (`PrincipalRead::last_success_of`, `kdb.rs`). It does not disable a principal after N quiet days. `set_status` is how an account is enabled or disabled. |
+| `require-mfa` | not a KDC check. TOTP is KLLDAP's own login, and OTP preauth is not a module here. |
+| `login-hours` | not built in. An embedder `KdcPolicy` denies outside the window. `check_as` / `check_tgs` are enough; the request time is the KDC's clock. |
+| `allowed-networks` | not built in. An embedder `KdcPolicy` reads the socket peer from `check_as_from` / `check_tgs_from`. That address is the accepted socket, not `request.addresses`. |
+
+`[plugins] kdcpolicy` and `[plugins] audit` select those embedder modules by name. The audit built-in is `json`. KLLDAP's `[logging]` templates stay the kdc.conf lines already in `kerberos/kdc.template.conf` (`kdc_ports = 750,88` and the enctype list).
+
 ## What the embed still has to build
 
 These are larger than a release touch-up and belong to the embed or a later

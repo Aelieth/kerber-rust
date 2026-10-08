@@ -345,7 +345,16 @@ fn klog_tgs_req(
 }
 
 /// KDC audit plugin (`kdc_audit.c` `kau_*`).
+///
+/// Several modules may be registered by [`name`](KdcAudit::name). `[plugins] audit` `disable`
+/// then `enable_only` select which of them run. [`set_audit`] and [`set_thread_audit`] install
+/// one module and skip that stanza. With no module selected, [`JsonAudit`] is the fallback.
 pub trait KdcAudit: Send + Sync {
+    /// Module name for `[plugins] audit`. The default is empty, which is not a built-in name.
+    fn name(&self) -> &'static str {
+        ""
+    }
+
     /// KDC process start.
     fn kdc_start(&self, success: bool) {
         let _ = success;
@@ -417,6 +426,10 @@ pub struct AuditState {
 pub struct JsonAudit;
 
 impl KdcAudit for JsonAudit {
+    fn name(&self) -> &'static str {
+        "json"
+    }
+
     fn kdc_start(&self, success: bool) {
         emit_trace_record(&start_stop_json("KDC_START", success));
     }
@@ -441,9 +454,12 @@ impl KdcAudit for JsonAudit {
 }
 
 static AUDIT: Mutex<Option<Arc<dyn KdcAudit>>> = Mutex::new(None);
+static NAMED_AUDITS: Mutex<Vec<Arc<dyn KdcAudit>>> = Mutex::new(Vec::new());
 
 thread_local! {
     static THREAD_AUDIT: std::cell::RefCell<Option<Arc<dyn KdcAudit>>> =
+        const { std::cell::RefCell::new(None) };
+    static THREAD_AUDITS: std::cell::RefCell<Option<Vec<Arc<dyn KdcAudit>>>> =
         const { std::cell::RefCell::new(None) };
     static CL_PORT: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     static CUR_REQ_ID: std::cell::RefCell<Option<String>> =
@@ -490,6 +506,111 @@ pub fn current_audit() -> Arc<dyn KdcAudit> {
         .unwrap_or_else(|| Arc::new(JsonAudit))
 }
 
+/// Register one named audit module for every thread that has not set its own list.
+///
+/// [`JsonAudit`] stays the built-in named `json`. [`set_audit`] still installs one module and
+/// skips this list.
+pub fn register_audit(module: Arc<dyn KdcAudit>) {
+    NAMED_AUDITS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(module);
+}
+
+/// Install this thread's named audit modules, used in place of the process-wide list (tests).
+///
+/// An empty list records nothing. The list is filtered by `[plugins] audit`. It is not used
+/// while [`set_thread_audit`] is set.
+pub fn set_thread_audits(modules: Vec<Arc<dyn KdcAudit>>) {
+    THREAD_AUDITS.with(|slot| *slot.borrow_mut() = Some(modules));
+}
+
+/// Drop this thread's named audit modules so it uses the process-wide registry.
+pub fn clear_thread_audits() {
+    THREAD_AUDITS.with(|slot| *slot.borrow_mut() = None);
+}
+
+/// Take this thread's named audit modules off it.
+pub(crate) fn take_thread_audits() -> Option<Vec<Arc<dyn KdcAudit>>> {
+    THREAD_AUDITS.with(|slot| slot.borrow_mut().take())
+}
+
+/// Put back what [`take_thread_audits`] took.
+pub(crate) fn restore_thread_audits(modules: Option<Vec<Arc<dyn KdcAudit>>>) {
+    THREAD_AUDITS.with(|slot| *slot.borrow_mut() = modules);
+}
+
+/// Named modules after `[plugins] audit` `disable` and `enable_only`.
+///
+/// MIT `filter_enabled_modules` (`lib/krb5/krb/plugin.c:271-299`): each enabled name takes the first
+/// remaining match.
+fn selected_audits(
+    relations: &krb5_config::PluginRelations,
+    modules: Vec<Arc<dyn KdcAudit>>,
+) -> Vec<Arc<dyn KdcAudit>> {
+    let names: Vec<&str> = modules.iter().map(|module| module.name()).collect();
+    let kept = krb5_config::filter_plugin_modules(relations, &names);
+    let mut left = modules;
+    let mut out = Vec::new();
+    for want in kept {
+        if let Some(index) = left.iter().position(|module| module.name() == want) {
+            out.push(left.remove(index));
+        }
+    }
+    out
+}
+
+/// Modules for this event.
+///
+/// A thread slot or the process slot is that one module, not filtered. Otherwise the thread's
+/// named list, if set, or [`JsonAudit`] plus [`register_audit`], after the profile.
+/// MIT `kau_as_req` (`kdc/kdc_audit.c:260-272`): every loaded module is called, and none means
+/// the call returns without a record.
+fn active_audits(store: &dyn PrincipalRead) -> Vec<Arc<dyn KdcAudit>> {
+    if let Some(module) = THREAD_AUDIT.with(|slot| slot.borrow().clone()) {
+        return vec![module];
+    }
+    if let Some(modules) = THREAD_AUDITS.with(|slot| slot.borrow().clone()) {
+        return selected_audits(&store.policy().audit, modules);
+    }
+    if let Some(module) = AUDIT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+    {
+        return vec![module];
+    }
+    let mut modules: Vec<Arc<dyn KdcAudit>> = vec![Arc::new(JsonAudit)];
+    modules.extend(
+        NAMED_AUDITS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone(),
+    );
+    selected_audits(&store.policy().audit, modules)
+}
+
+/// Call `call` for every loaded audit module.
+///
+/// MIT `kau_as_req` (`kdc/kdc_audit.c:260-272`): a null method is skipped; a module error is not
+/// defined, and the next module still runs.
+fn each_audit(store: &dyn PrincipalRead, mut call: impl FnMut(&dyn KdcAudit)) {
+    for module in active_audits(store) {
+        call(module.as_ref());
+    }
+}
+
+/// MIT `kau_kdc_start` (`kdc/kdc_audit.c:244-256`): the same loaded list as a request.
+/// `disable = json` leaves no module, so this records nothing.
+pub fn audit_kdc_start(store: &dyn PrincipalRead, success: bool) {
+    each_audit(store, |module| module.kdc_start(success));
+}
+
+/// MIT `kau_kdc_stop` (`kdc/kdc_audit.c:229-241`): the same loaded list as a request.
+pub fn audit_kdc_stop(store: &dyn PrincipalRead, success: bool) {
+    each_audit(store, |module| module.kdc_stop(success));
+}
+
 /// Peer port from the UDP/TCP listener (`kau_init_kdc_req` `cl_port`).
 pub(crate) fn set_client_port(port: u32) {
     CL_PORT.with(|c| c.set(port));
@@ -517,20 +638,20 @@ fn clear_req_id() {
 }
 
 /// MIT `process_as_req` (`do_as_req.c:520-520`): seeds `kau_as_req(TRUE)` before a ticket exists.
-fn seed_as_req(req: &AsReq, sender: Option<&HostAddress>) {
+fn seed_as_req(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddress>) {
     clear_req_id();
     let mut state = base_state("AS_REQ", &req.0.req_body, sender);
     state.stage = AUTHN_REQ_CL;
-    current_audit().as_req(true, &state);
+    each_audit(store, |module| module.as_req(true, &state));
 }
 
 /// MIT `process_tgs_req` (`do_tgs_req.c:1181-1184`): seeds `kau_tgs_req(TRUE)` at `AUTHN_REQ_CL`.
-fn seed_tgs_req(req: &TgsReq, sender: Option<&HostAddress>) {
+fn seed_tgs_req(store: &dyn PrincipalRead, req: &TgsReq, sender: Option<&HostAddress>) {
     clear_req_id();
     let mut state = base_state("TGS_REQ", &req.0.req_body, sender);
     state.stage = AUTHN_REQ_CL;
     state.tkt_in_id = tgs_header_tkt_id(req);
-    current_audit().tgs_req(true, &state);
+    each_audit(store, |module| module.tgs_req(true, &state));
 }
 
 /// Unknown-server words after MIT `SRVC_PRINC`.
@@ -655,7 +776,7 @@ pub fn log_failure(
     match raw.first().copied() {
         Some(0x6a) => {
             if let Ok(req) = decode::<AsReq>(raw) {
-                as_failure(&req, sender, code, e_text);
+                as_failure(store, &req, sender, code, e_text);
             }
         }
         Some(0x6c) => {
@@ -671,7 +792,7 @@ fn as_success(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddres
     let Ok(rep) = decode::<AsRep>(bytes) else {
         return;
     };
-    seed_as_req(req, sender);
+    seed_as_req(store, req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = opt_unparse(body.cname.as_ref(), &realm, "<unknown client>");
@@ -709,12 +830,18 @@ fn as_success(store: &dyn PrincipalRead, req: &AsReq, sender: Option<&HostAddres
     let mut state = base_state("AS_REQ", body, sender);
     state.stage = ENCR_REP;
     state.tkt_out_id = Some(make_tkt_id(ticket.enc_part.cipher.as_ref()));
-    current_audit().as_req(true, &state);
+    each_audit(store, |module| module.as_req(true, &state));
     clear_req_id();
 }
 
-fn as_failure(req: &AsReq, sender: Option<&HostAddress>, code: i32, e_text: &str) {
-    seed_as_req(req, sender);
+fn as_failure(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    sender: Option<&HostAddress>,
+    code: i32,
+    e_text: &str,
+) {
+    seed_as_req(store, req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = opt_unparse(body.cname.as_ref(), &realm, "<unknown client>");
@@ -753,7 +880,7 @@ fn as_failure(req: &AsReq, sender: Option<&HostAddress>, code: i32, e_text: &str
     let mut state = base_state("AS_REQ", body, sender);
     state.stage = AUTHN_REQ_CL;
     state.status = Some(status.to_string());
-    current_audit().as_req(code == 0, &state);
+    each_audit(store, |module| module.as_req(code == 0, &state));
     clear_req_id();
 }
 
@@ -769,7 +896,7 @@ fn tgs_success(
     let Ok(rep) = decode::<TgsRep>(bytes) else {
         return;
     };
-    seed_tgs_req(req, sender);
+    seed_tgs_req(store, req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = tgs_client_name(store, req, &rep, &realm);
@@ -821,8 +948,7 @@ fn tgs_success(
     } else {
         2
     };
-    let audit = current_audit();
-    match s4u.as_ref().map(|(k, _)| *k) {
+    each_audit(store, |audit| match s4u.as_ref().map(|(k, _)| *k) {
         Some("PROTOCOL-TRANSITION") => {
             let mut s4u_state = state.clone();
             s4u_state.event_name = "S4U2SELF";
@@ -839,8 +965,8 @@ fn tgs_success(
             audit.u2u(true, &s4u_state);
         }
         _ => {}
-    }
-    audit.tgs_req(true, &state);
+    });
+    each_audit(store, |audit| audit.tgs_req(true, &state));
     clear_req_id();
 }
 
@@ -854,7 +980,7 @@ fn tgs_failure(
     code: i32,
     e_text: &str,
 ) {
-    seed_tgs_req(req, sender);
+    seed_tgs_req(store, req, sender);
     let body = &req.0.req_body;
     let realm = realm_str(&body.realm);
     let client = tgs_error_client(store, req, &realm);
@@ -901,26 +1027,27 @@ fn tgs_failure(
     state.stage = tgs_fail_stage(status);
     state.status = Some(status.to_string());
     state.tkt_in_id = tgs_header_tkt_id(req);
-    let audit = current_audit();
-    match tgs_s4u_kind(req).as_ref().map(|(k, _)| *k) {
-        Some("PROTOCOL-TRANSITION") => {
-            let mut s4u_state = state.clone();
-            s4u_state.event_name = "S4U2SELF";
-            audit.s4u2self(false, &s4u_state);
+    each_audit(store, |audit| {
+        match tgs_s4u_kind(req).as_ref().map(|(k, _)| *k) {
+            Some("PROTOCOL-TRANSITION") => {
+                let mut s4u_state = state.clone();
+                s4u_state.event_name = "S4U2SELF";
+                audit.s4u2self(false, &s4u_state);
+            }
+            Some("CONSTRAINED-DELEGATION") => {
+                let mut s4u_state = state.clone();
+                s4u_state.event_name = "S4U2PROXY";
+                audit.s4u2proxy(false, &s4u_state);
+            }
+            _ if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) => {
+                let mut s4u_state = state.clone();
+                s4u_state.event_name = "U2U";
+                audit.u2u(false, &s4u_state);
+            }
+            _ => {}
         }
-        Some("CONSTRAINED-DELEGATION") => {
-            let mut s4u_state = state.clone();
-            s4u_state.event_name = "S4U2PROXY";
-            audit.s4u2proxy(false, &s4u_state);
-        }
-        _ if body.kdc_options.bit(flag_bit::ENC_TKT_IN_SKEY) => {
-            let mut s4u_state = state.clone();
-            s4u_state.event_name = "U2U";
-            audit.u2u(false, &s4u_state);
-        }
-        _ => {}
-    }
-    audit.tgs_req(false, &state);
+    });
+    each_audit(store, |audit| audit.tgs_req(false, &state));
     clear_req_id();
 }
 
@@ -1540,5 +1667,121 @@ mod tests {
             expect.push(HEX_UP[usize::from(b & 0x0f)] as char);
         }
         assert_eq!(make_tkt_id(cipher), expect);
+    }
+
+    struct CountAudit {
+        name: &'static str,
+        hits: std::sync::atomic::AtomicU64,
+    }
+
+    impl KdcAudit for CountAudit {
+        fn name(&self) -> &'static str {
+            self.name
+        }
+
+        fn as_req(&self, _success: bool, _state: &AuditState) {
+            self.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn kdc_start(&self, _success: bool) {
+            self.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        fn kdc_stop(&self, _success: bool) {
+            self.hits.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+
+    struct ClearAudits;
+
+    impl Drop for ClearAudits {
+        fn drop(&mut self) {
+            clear_thread_audits();
+            clear_thread_audit();
+        }
+    }
+
+    #[test]
+    fn named_audit_modules_all_run_and_disable_drops_one() {
+        let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+        store.policy.audit = krb5_config::Krb5Conf::parse(
+            "[plugins]\n    audit = {\n        disable = quiet\n    }\n",
+        )
+        .expect("stanza")
+        .plugin_relations("audit");
+        let loud = Arc::new(CountAudit {
+            name: "loud",
+            hits: std::sync::atomic::AtomicU64::new(0),
+        });
+        let quiet = Arc::new(CountAudit {
+            name: "quiet",
+            hits: std::sync::atomic::AtomicU64::new(0),
+        });
+        set_thread_audits(vec![
+            Arc::clone(&loud) as Arc<dyn KdcAudit>,
+            Arc::clone(&quiet) as Arc<dyn KdcAudit>,
+        ]);
+        let _guard = ClearAudits;
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
+        let req =
+            krb5_protocol::as_req(cname, crate::testrealm::TEST_REALM, 1, None).expect("as-req");
+        as_failure(&store, &req, None, 24, "NEEDED_PREAUTH");
+        assert_eq!(loud.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        assert_eq!(quiet.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn enable_only_of_an_unknown_audit_keeps_nothing() {
+        let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+        store.policy.audit = krb5_config::Krb5Conf::parse(
+            "[plugins]\n    audit = {\n        enable_only = nosuch\n    }\n",
+        )
+        .expect("stanza")
+        .plugin_relations("audit");
+        let loud = Arc::new(CountAudit {
+            name: "loud",
+            hits: std::sync::atomic::AtomicU64::new(0),
+        });
+        set_thread_audits(vec![Arc::clone(&loud) as Arc<dyn KdcAudit>]);
+        let _guard = ClearAudits;
+        assert!(active_audits(&store).is_empty());
+    }
+
+    #[test]
+    fn json_is_the_builtin_and_disable_drops_it() {
+        let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+        let names: Vec<&str> = active_audits(&store)
+            .iter()
+            .map(|module| module.name())
+            .collect();
+        assert_eq!(names, ["json"]);
+        store.policy.audit = krb5_config::Krb5Conf::parse(
+            "[plugins]\n    audit = {\n        disable = json\n    }\n",
+        )
+        .expect("stanza")
+        .plugin_relations("audit");
+        assert!(active_audits(&store).is_empty());
+    }
+
+    #[test]
+    fn disable_json_skips_kdc_start_and_kdc_stop() {
+        let (mut store, _) = crate::testrealm::bootstrap_documented().unwrap();
+        let json = Arc::new(CountAudit {
+            name: "json",
+            hits: std::sync::atomic::AtomicU64::new(0),
+        });
+        set_thread_audits(vec![Arc::clone(&json) as Arc<dyn KdcAudit>]);
+        let _guard = ClearAudits;
+        audit_kdc_start(&store, true);
+        audit_kdc_stop(&store, true);
+        assert_eq!(json.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
+        store.policy.audit = krb5_config::Krb5Conf::parse(
+            "[plugins]\n    audit = {\n        disable = json\n    }\n",
+        )
+        .expect("stanza")
+        .plugin_relations("audit");
+        audit_kdc_start(&store, true);
+        audit_kdc_stop(&store, true);
+        assert_eq!(json.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
     }
 }

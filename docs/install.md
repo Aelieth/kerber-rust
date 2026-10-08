@@ -242,7 +242,14 @@ the same way. Each loaded module may deny the request or cap the ticket's
 lifetime and renew lifetime. With no module loaded the KDC allows the request
 and leaves the times. The same relations in krb5.conf apply after this file.
 `module` is not read. The name `test` is registered only when `enable_only`
-lists it (MIT's kdcpolicy test module). Any other name is an embedder module.
+lists it (MIT's kdcpolicy test module). Any other name is an embedder module. A policy module may also read the socket the request arrived on.
+That address is the peer the KDC accepted, not the addresses the client put
+in the request.
+
+`[plugins] audit` `disable` and `enable_only` select named audit modules
+the same way. The built-in module is `json`. Every loaded module records
+the request. `disable = json` leaves no plugin record. The same relations
+in krb5.conf apply after this file. `module` is not read.
 
 ### The database
 

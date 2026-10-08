@@ -144,6 +144,10 @@ pub struct Policy {
     ///
     /// MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the KDC walks the modules that remain loaded.
     pub kdcpolicy: krb5_config::PluginRelations,
+    /// `[plugins] audit` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): `k5_plugin_load_all` applies that profile.
+    pub audit: krb5_config::PluginRelations,
 }
 
 impl Default for Policy {
@@ -179,6 +183,7 @@ impl Default for Policy {
             disable_lockout: false,
             kdcpreauth: krb5_config::PluginRelations::default(),
             kdcpolicy: krb5_config::PluginRelations::default(),
+            audit: krb5_config::PluginRelations::default(),
         }
     }
 }
@@ -382,6 +387,7 @@ impl PrincipalStore {
         self.policy.ad_identity = conf.domain_sid.is_some();
         self.policy.kdcpreauth = conf.plugin_relations("kdcpreauth");
         self.policy.kdcpolicy = conf.plugin_relations("kdcpolicy");
+        self.policy.audit = conf.plugin_relations("audit");
         Ok(())
     }
 
@@ -419,6 +425,24 @@ impl PrincipalStore {
             kdc.unwrap_or(&kdc_fallback),
             krb5.unwrap_or(&krb5_fallback),
             "kdcpolicy",
+        );
+    }
+
+    /// `[plugins] audit` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): `k5_plugin_load_all` applies that profile.
+    pub fn apply_audit_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.audit = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "audit",
         );
     }
 

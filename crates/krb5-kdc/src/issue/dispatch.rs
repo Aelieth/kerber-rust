@@ -11,15 +11,18 @@ use krb5_log::klog::Severity;
 use krb5_types::{AsReq, HostAddress, TgsReq, err};
 
 use super::reply::{as_reply, krb_error_log_fields, tgs_reply};
-use crate::audit::{KdcAudit, restore_thread_audit, take_thread_audit};
+use crate::audit::{
+    KdcAudit, restore_thread_audit, restore_thread_audits, take_thread_audit, take_thread_audits,
+};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::listen::{SharedStore, plain_store, read_store};
 use crate::lookaside::{Check, Lookaside};
 use crate::net_server::{Dispatch, Log, Reply};
 use crate::plugins::{
-    KdcAuthdata, KdcPolicy, KdcPreauth, restore_thread_authdata, restore_thread_policy,
-    restore_thread_preauth, take_thread_authdata, take_thread_policy, take_thread_preauth,
+    KdcAuthdata, KdcPolicy, KdcPreauth, restore_thread_authdata, restore_thread_kdcpolicies,
+    restore_thread_policy, restore_thread_preauth, take_thread_authdata, take_thread_kdcpolicies,
+    take_thread_policy, take_thread_preauth,
 };
 
 /// Dispatch one UDP/TCP payload (AS-REQ or TGS-REQ) to the issue path.
@@ -695,6 +698,7 @@ impl Dispatch for KdcDispatch {
         }
         crate::audit::set_client_port(u32::from(remote.port()));
         let sender = HostAddress::from_socket(remote);
+        crate::plugins::set_request_peer(Some(sender.clone()));
         let store = &self.store;
         #[cfg(test)]
         let panics = self.panic_on.as_deref() == Some(request);
@@ -703,6 +707,7 @@ impl Dispatch for KdcDispatch {
             assert!(!panics, "a request set to panic");
             read_store(store, |s| process(s, request, &sender))
         }));
+        crate::plugins::set_request_peer(None);
         let Ok(done) = run else {
             self.lookaside.finish(request, None);
             tracing::error!(
@@ -731,9 +736,11 @@ impl Dispatch for KdcDispatch {
 /// MIT's loaded modules are.
 pub(crate) struct ThreadSlots {
     policy: Option<Arc<dyn KdcPolicy>>,
+    policies: Option<Vec<Arc<dyn KdcPolicy>>>,
     preauth: Option<Vec<Arc<dyn KdcPreauth>>>,
     authdata: Option<Vec<Arc<dyn KdcAuthdata>>>,
     audit: Option<Arc<dyn KdcAudit>>,
+    audits: Option<Vec<Arc<dyn KdcAudit>>>,
 }
 
 impl ThreadSlots {
@@ -741,9 +748,11 @@ impl ThreadSlots {
     pub(crate) fn take() -> Self {
         Self {
             policy: take_thread_policy(),
+            policies: take_thread_kdcpolicies(),
             preauth: take_thread_preauth(),
             authdata: take_thread_authdata(),
             audit: take_thread_audit(),
+            audits: take_thread_audits(),
         }
     }
 }
@@ -751,9 +760,11 @@ impl ThreadSlots {
 impl Drop for ThreadSlots {
     fn drop(&mut self) {
         restore_thread_policy(self.policy.take());
+        restore_thread_kdcpolicies(self.policies.take());
         restore_thread_preauth(self.preauth.take());
         restore_thread_authdata(self.authdata.take());
         restore_thread_audit(self.audit.take());
+        restore_thread_audits(self.audits.take());
     }
 }
 

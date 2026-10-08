@@ -53,8 +53,9 @@ pub use ad::{
 };
 pub use audit::{
     AUTHN_REQ_CL, AuditState, ENCR_REP, JsonAudit, KdcAudit, REQID_LEN, SRVC_PRINC,
-    clear_thread_audit, current_audit, enctype_name, ktypes2str, make_tkt_id, new_req_id,
-    rep_etypes2str, set_audit, set_thread_audit,
+    audit_kdc_start, audit_kdc_stop, clear_thread_audit, clear_thread_audits, current_audit,
+    enctype_name, ktypes2str, make_tkt_id, new_req_id, register_audit, rep_etypes2str, set_audit,
+    set_thread_audit, set_thread_audits,
 };
 #[cfg(feature = "test-hooks")]
 pub use create::seed_test_principals;

@@ -527,6 +527,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **kdc.** Select audit modules by name through `[plugins] audit` `disable` and `enable_only`. The policy check also sees the socket peer. Units.
 - **kdc.** Select kdcpolicy modules by name through `[plugins] kdcpolicy` `disable` and `enable_only`. `check_as` and `check_tgs` take the request, the client and server or the header ticket, the indicators, and a status out. That status is the KRB-ERROR text. A non-zero lifetime or renew lifetime caps the ticket from now. When `enable_only` names `test`, MIT's kdcpolicy test module is registered; otherwise it is not. Units.
 - **client.** Select clpreauth modules by MIT's names through `[plugins] clpreauth` `disable` and `enable_only`. Disabling `encrypted_timestamp` stops the client answering PA-ENC-TIMESTAMP. Units.
 - **types.** Dates follow the process locale: `LC_ALL`, then `LC_TIME`, then
