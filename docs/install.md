@@ -47,8 +47,7 @@ never part of `make install`; on Fedora keep the package's tools. `kinit`, `klis
 caches as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` and `-A`,
 `kdestroy -A`, `kswitch -p`, a new cache for a second principal); the satomlin kit's keytab
 checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in these:
-- `kvno -U` does not first ask the KDC for the user's realm. `kvno -S` qualifies a short host
-  and does not ask DNS.
+- `kvno -S` qualifies a short host and does not ask DNS.
 - `kvno -F` is not a release flag until it is settled against an MIT KDC with certificate
   mapping; MIT's asks for S4U2Self by the user's certificate.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet

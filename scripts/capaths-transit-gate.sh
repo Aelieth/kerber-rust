@@ -425,7 +425,7 @@ expect_s4u_mismatch() {
     set +e
     local out rc
     out="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
-        /tmp/krb5-kvno -U victim@A.TEST -c "$cc" 127.0.0.1:90 user@C.TEST 2>&1)"
+        /tmp/krb5-kvno -I victim@A.TEST -c "$cc" 127.0.0.1:90 user@C.TEST 2>&1)"
     rc=$?
     set -e
     echo "$out"
@@ -1059,7 +1059,7 @@ echo "==== same-realm S4U2Self CLIENT_NOT_OURS negative ===="
 n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-c.log' | tr -d '[:space:]')"
 set +e
 MIT_S4U_XR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
-    /tmp/krb5-kvno -c /tmp/krb5cc_mit_s4u_kvno -U user@A.TEST \
+    /tmp/krb5-kvno -c /tmp/krb5cc_mit_s4u_kvno -I user@A.TEST \
     127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
 mit_s4u_xr_rc=$?
 set -e
@@ -1092,7 +1092,7 @@ docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
 n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kdc-c-s4u.log' | tr -d '[:space:]')"
 set +e
 RUST_S4U_XR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
-    /tmp/krb5-kvno -c /tmp/krb5cc_rust_s4u_kvno -U user@A.TEST \
+    /tmp/krb5-kvno -c /tmp/krb5cc_rust_s4u_kvno -I user@A.TEST \
     127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
 rust_s4u_xr_rc=$?
 set -e

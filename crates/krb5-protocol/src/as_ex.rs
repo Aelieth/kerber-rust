@@ -1883,6 +1883,66 @@ fn pick_info(info: &EtypeInfo, default_salt: &[u8], etypes: &[i32]) -> Option<S2
     None
 }
 
+/// What one realm's KDC said to [`as_identify_realm`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum IdentifyReply {
+    /// The client exists in the request's realm.
+    Here,
+    /// A client referral: the client is to be looked for in this realm.
+    Referral(String),
+}
+
+/// One AS-REQ for `req`'s client in `req`'s realm, no preauthentication sent, to learn whether the
+/// client exists there: an AS-REP, or preauthentication required, or an expired key, says it
+/// does; a WRONG_REALM or C_PRINCIPAL_UNKNOWN error naming the client in another realm refers it
+/// there; any other error is the answer. The reply is not decrypted.
+/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1721-1726`): while identifying the realm, preauthentication required or an expired key ends the exchange: the client exists.
+/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1745-1758`): a client referral rewrites the request's realm and starts over there.
+/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1786-1789`): while identifying the realm, any reply ends the exchange.
+/// MIT `is_referral` (`lib/krb5/krb/get_in_tkt.c:1450-1458`): a referral is WRONG_REALM or C_PRINCIPAL_UNKNOWN whose client is in another realm.
+/// MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:981-983`): preauth modules are not invoked while identifying the realm.
+///
+/// # Errors
+///
+/// As [`as_exchange`] for the transport and the KDC's other errors.
+pub fn as_identify_realm(req: &AsRequest<'_>) -> Result<IdentifyReply, Error> {
+    let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
+    let etypes: Vec<i32> = match req.etypes {
+        Some(e) if !e.is_empty() => e.to_vec(),
+        _ => conf_etypes(false),
+    };
+    let nonce = random_nonce()?;
+    let clock = Clock::new();
+    let bound = request_times(req, &clock);
+    let first = build_as_req_from(req, nonce, &bound, None, &etypes)?;
+    let wire = encode(&first)?;
+    trace::init_creds_preauth_none();
+    match send_as(req, &wire)? {
+        KdcMsg::AsRep(_) => Ok(IdentifyReply::Here),
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+        KdcMsg::Error(e)
+            if e.error_code == err::PREAUTH_REQUIRED || e.error_code == err::KEY_EXPIRED =>
+        {
+            Ok(IdentifyReply::Here)
+        }
+        KdcMsg::Error(e) => {
+            let referral = (e.error_code == err::WRONG_REALM
+                || e.error_code == err::C_PRINCIPAL_UNKNOWN)
+                && e.cname.is_some();
+            if referral
+                && let Some(crealm) = e.crealm.as_ref()
+                && crealm.as_bytes() != req.realm.as_bytes()
+            {
+                let realm = String::from_utf8_lossy(crealm.as_bytes()).into_owned();
+                trace::init_creds_referral(realm.as_bytes());
+                Ok(IdentifyReply::Referral(realm))
+            } else {
+                classify_kdc_error(&e).map(|_| IdentifyReply::Here)
+            }
+        }
+    }
+}
+
 fn random_nonce() -> Result<u32, Error> {
     let mut b = [0u8; 4];
     getrandom::getrandom(&mut b).map_err(|e| Error::transport_msg(e.to_string()))?;

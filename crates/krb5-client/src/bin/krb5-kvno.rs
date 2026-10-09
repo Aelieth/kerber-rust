@@ -238,21 +238,10 @@ fn kvno(ctx: &Ctx<'_>, cache: &mut OpenCache, name: &str) -> Result<CcacheCred, 
     })
 }
 
-/// The realm of an S4U2Self user.
-/// MIT `s4u_identify_user` (`s4u_creds.c:39-88`): a user that is not an enterprise name keeps its
-/// realm; an enterprise name is looked up starting in the realm of the service (the cache's
-/// principal). That AS lookup is not sent here: the realm is the one after the name's last `@`,
-/// else the service's.
-fn identify_user(user: Princ, me: &Princ) -> Princ {
-    if user.1.name_type != PrincipalName::NT_ENTERPRISE {
-        return user;
-    }
-    let name = user.1.components_joined();
-    let realm = match name.rsplit_once('@') {
-        Some((_, r)) if !r.is_empty() => krb5_protocol::realm(r),
-        _ => me.0.clone(),
-    };
-    (realm, user.1)
+/// The S4U2Self user as parsed. `get_credentials_for_user` sends the AS realm probe.
+/// MIT `s4u_identify_user` (`lib/krb5/krb/s4u_creds.c:40-88`): an enterprise name is looked up from the service realm by that probe, not by the text after `@`.
+fn identify_user(user: Princ, _me: &Princ) -> Princ {
+    user
 }
 
 /// The server of one argument: MIT `krb5_parse_name`, or for `-S` the host-based name of `sname`

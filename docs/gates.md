@@ -144,7 +144,7 @@ not check (a unit test, or "not asserted").
   with `GET_LOCAL_TGT` on both MIT and Rust. Dest RENEW at C with issuer
   `body.realm` is refused with `GET_LOCAL_TGT` both sides. A peer-minted TGT
   for a local user (`--claim-crealm`) is `INVALID LINEAGE` on both sides. A
-  seeded C TGT plus `krb5-kvno -U victim@A.TEST user@C.TEST` is refused with
+  seeded C TGT plus `krb5-kvno -I victim@A.TEST user@C.TEST` is refused with
   `INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH` on both MIT C and Rust C (name
   collision across realms; `krb5-kvno` prints MIT's line for 36, `Ticket/authenticator don't
   match`, and the new KDC log lines carry the status). A seeded C TGT plus inbound `krbtgt`

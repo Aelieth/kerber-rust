@@ -64,6 +64,10 @@ name = "client_s4u"
 path = "tests/client_s4u.rs"
 
 [[test]]
+name = "client_identify_realm"
+path = "tests/client_identify_realm.rs"
+
+[[test]]
 name = "acceptor_rd_req"
 path = "tests/acceptor_rd_req.rs"
 

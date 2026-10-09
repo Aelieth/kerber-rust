@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **client.** kvno -U sends an AS realm probe before S4U2Self and uses the realm that probe identifies. Unit.
 - **client.** kinit -I keeps that cache's pa_type as the only preauth type, and --request-pac sends PA-PAC-REQUEST on every AS-REQ. Unit.
 - **client.** kvno -S builds the server principal through sname-to-principal, including realm_try_domains. Unit.
 - **tool.** CI lints and MSRV-builds the release configuration (no features) too; the no-features nextest run writes its own junit (`ci-nofeatures`) beside the features run's, not over it.

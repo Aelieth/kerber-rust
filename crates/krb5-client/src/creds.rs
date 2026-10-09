@@ -5,8 +5,9 @@ use krb5_asn1::decode;
 use krb5_config::{CanonPrinc, CcSpec};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
 use krb5_protocol::{
-    AsOutcome, CcacheCred, FileCcache, KdcAddr, Keytab, TgsCredsOptions, TgsOutcome,
-    tgs_exchange_path, tgs_s4u, tgs_s4u2proxy, tgt_cred,
+    AsOutcome, AsRequest, AsTicketOpts, CcacheCred, FileCcache, IdentifyReply, KdcAddr, Keytab,
+    TgsCredsOptions, TgsOutcome, as_identify_realm, tgs_exchange_path, tgs_s4u, tgs_s4u2proxy,
+    tgt_cred,
 };
 use krb5_types::{
     EncKdcRepPart, EncTicketPart, EncryptionKey, KerberosTime, PrincipalName, Realm, Ticket,
@@ -470,10 +471,8 @@ fn request_service(
         .map_err(|e| Krb5Error::from_tgs(&e, &hop))
 }
 
-/// MIT `krb5_get_credentials_for_user` (`s4u_creds.c:648-730`): for `for_user` to `me`'s service
-/// `self_sname`, a matching cached credential, else S4U2Self from the KDC, stored unless
-/// `no_store`. The enterprise realm discovery of `s4u_identify_user` is not made: the user's realm
-/// is the one given or the server's.
+/// MIT `krb5_get_credentials_for_user` (`s4u_creds.c:663-692`): a matching cached credential, else an AS realm probe for an enterprise name, a second cache lookup of that principal, else S4U2Self in the realm the probe identified.
+/// MIT `krb5_get_credentials_for_user` (`s4u_creds.c:698-714`): a reply whose client is not the one asked for returns a cached credential for the reply's client instead of storing.
 /// MIT `krb5_get_credentials_for_user` (`s4u_creds.c:723-727`): unlike the other lookups, a store that fails is the error.
 ///
 /// # Errors
@@ -500,6 +499,23 @@ pub fn get_credentials_for_user(
     if opts.cached_only {
         return Err(cache.not_found());
     }
+    let user = s4u_identify_user(for_user, self_sname, opts)?;
+    if for_user.1.name_type == PrincipalName::NT_ENTERPRISE {
+        crate::trace::tkt_creds_begin(cache, &user, self_sname);
+        let identified = MatchCreds {
+            client: Some(&user),
+            server: self_sname,
+            enctype: opts.tgs.enctype,
+            is_skey: false,
+            second_ticket: None,
+            now: unix_now(),
+        };
+        if let Some(c) =
+            crate::trace::retrieved(cache, &user, self_sname, cache.retrieve(&identified))
+        {
+            return Ok(c.clone());
+        }
+    }
     let srealm = realm_str(&self_sname.0);
     crate::trace::tgt_creds(cache, &srealm);
     let (presented, hop) = cache.tgt_for(&srealm)?;
@@ -511,14 +527,108 @@ pub fn get_credentials_for_user(
         self_sname.1.clone(),
         &hop,
         &for_user.1,
-        &realm_str(&for_user.0),
+        &realm_str(&user.0),
     )
     .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
-    let cred = cred_from_tgs(for_user, &out)?;
+    let client = (out.crealm.clone(), out.cname.clone());
+    let cred = cred_from_tgs(&client, &out)?;
+    if !princ_eq(&client, for_user) {
+        crate::trace::tkt_creds_begin(cache, &client, self_sname);
+        let replied = MatchCreds {
+            client: Some(&client),
+            server: self_sname,
+            enctype: opts.tgs.enctype,
+            is_skey: false,
+            second_ticket: None,
+            now: unix_now(),
+        };
+        if let Some(c) =
+            crate::trace::retrieved(cache, &client, self_sname, cache.retrieve(&replied))
+        {
+            return Ok(c.clone());
+        }
+    }
     if !opts.no_store {
         cache.store(cred.clone())?;
     }
     Ok(cred)
+}
+
+/// The user an S4U2Self request is for. A name that is not an enterprise name is copied, except
+/// the anonymous principal, which stands for the service. An enterprise name is the same name in
+/// the realm [`identify_realm`] finds, starting from the service's realm.
+/// MIT `s4u_identify_user` (`lib/krb5/krb/s4u_creds.c:54-73`): a name that is not an enterprise name is the user, or the service for the anonymous principal; an enterprise name is looked for from the service's realm.
+/// MIT `s4u_identify_user` (`lib/krb5/krb/s4u_creds.c:78-87`): a certificate and no client name is an empty NT-X500 principal in the service realm. This request always names a client, so that path is not taken.
+fn s4u_identify_user(
+    user: &Princ,
+    server: &Princ,
+    opts: &GetCredsOptions,
+) -> Result<Princ, Krb5Error> {
+    if user.1.name_type != PrincipalName::NT_ENTERPRISE {
+        let anonymous = user.0.as_bytes() == b"WELLKNOWN:ANONYMOUS"
+            && user
+                .1
+                .name_string
+                .iter()
+                .map(krb5_types::KerberosString::as_bytes)
+                .eq([&b"WELLKNOWN"[..], &b"ANONYMOUS"[..]]);
+        return Ok(if anonymous { server } else { user }.clone());
+    }
+    identify_realm(&user.1, &realm_str(&server.0), opts)
+}
+
+/// The realm `client` exists in, starting from `realm`: one AS request per realm, following a
+/// client referral, sixteen requests at most.
+/// MIT `k5_identify_realm` (`lib/krb5/krb/get_in_tkt.c:2062-2083`): the request asks for a 15-second ticket, neither renewable nor forwardable nor proxiable, canonicalized, and the realm it ends in is the client's.
+/// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1268-1271`): sixteen requests at most, then `KRB5_GET_IN_TKT_LOOP`.
+fn identify_realm(
+    client: &PrincipalName,
+    realm: &str,
+    opts: &GetCredsOptions,
+) -> Result<Princ, Krb5Error> {
+    let etypes = krb5_protocol::conf_etypes(false);
+    let mut realm = realm.to_owned();
+    crate::trace::init_creds(client, &realm, None);
+    for _ in 0..16 {
+        let kdc = opts.kdc(&realm)?;
+        let req = AsRequest {
+            cname: client.clone(),
+            realm: &realm,
+            password: b"",
+            kdc: &kdc,
+            want_spake: false,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: true,
+            sname: None,
+            etypes: Some(&etypes),
+            ticket: AsTicketOpts {
+                lifetime: Some(15),
+                forwardable: false,
+                proxiable: false,
+                ..AsTicketOpts::default()
+            },
+        };
+        match as_identify_realm(&req) {
+            Ok(IdentifyReply::Here) => {
+                let r = krb5_types::try_ascii(&realm)
+                    .map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
+                return Ok((r, client.clone()));
+            }
+            Ok(IdentifyReply::Referral(next)) => realm = next,
+            Err(e) => {
+                return Err(Krb5Error::from_as(
+                    &e,
+                    &client.unparse_with_realm(&realm),
+                    &realm,
+                ));
+            }
+        }
+    }
+    Err(Krb5Error::new(
+        Code::Other,
+        "Looping detected inside krb5_get_in_tkt",
+    ))
 }
 
 /// MIT `krb5_get_credentials_for_proxy` (`s4u_creds.c:1201-1260`): S4U2Proxy for `client` (the
