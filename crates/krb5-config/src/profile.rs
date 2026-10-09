@@ -851,6 +851,9 @@ fn parse_libdefaults(
         "qualify_shortname" if exact && take_first(seen, "qualify_shortname") => {
             conf.qualify_shortname = Some(v);
         }
+        "realm_try_domains" if exact && take_first(seen, "realm_try_domains") => {
+            conf.realm_try_domains = Some(v);
+        }
         "dns_canonicalize_hostname" if exact && take_first(seen, "dns_canonicalize_hostname") => {
             match canon_host(&v) {
                 Some(mode) => conf.dns_canonicalize_hostname = mode,

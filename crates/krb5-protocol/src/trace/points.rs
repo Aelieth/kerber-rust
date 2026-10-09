@@ -74,6 +74,14 @@ pub fn cc_retrieve(
     );
 }
 
+/// MIT `TRACE_CC_RETRIEVE_REF` (`include/k5-trace.h:130-131`): a cache lookup for a server in the referral realm, tried again in the client's realm.
+pub fn cc_retrieve_ref(client: Option<Princ<'_>>, server: Princ<'_>, code: i64, msg: Option<&str>) {
+    krb5int_trace(
+        "Retrying {creds} with result: {kerr}",
+        &[Arg::Creds(client, server), Arg::Kerr(code, msg)],
+    );
+}
+
 /// MIT `TRACE_CC_SET_CONFIG` (`include/k5-trace.h:132-134`): a configuration entry about to be stored in a cache.
 pub fn cc_set_config(cache: &str, princ: Option<&str>, key: &str, data: &[u8]) {
     krb5int_trace(

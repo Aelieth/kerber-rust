@@ -170,22 +170,33 @@ impl Krb5Error {
         Self::from_protocol(e, realm)
     }
 
-    /// [`Self::from_protocol`] for a TGS exchange for `server`.
-    /// MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:202-210`): an unknown server is "Server
-    /// \<server\> not found in Kerberos database".
+    /// [`Self::from_protocol`] for a TGS exchange: an unknown server is the message the reply's
+    /// processing set, which names the error's server, when the error came with e-text, else the
+    /// table's text.
+    /// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:195-216`): an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; without e-text no message is set.
     #[must_use]
-    pub fn from_tgs(e: &krb5_protocol::Error, server: &str, realm: &str) -> Self {
+    pub fn from_tgs(e: &krb5_protocol::Error, realm: &str) -> Self {
         if let krb5_protocol::Error::KrbError {
             code: krb5_types::err::S_PRINCIPAL_UNKNOWN,
-            ..
+            text: Some(t),
         } = e
+            && !t.is_empty()
         {
-            return Self::new(
-                Code::Kdc(krb5_types::err::S_PRINCIPAL_UNKNOWN),
-                format!("Server {server} not found in Kerberos database"),
-            );
+            return Self::new(Code::Kdc(krb5_types::err::S_PRINCIPAL_UNKNOWN), t.clone());
         }
         Self::from_protocol(e, realm)
+    }
+
+    /// A host-based name that [`krb5_config::sname_to_principal`] or a candidate of
+    /// [`krb5_config::CanonPrinc`] could not make: MIT's code for it, and
+    /// `KRB5_PARSE_MALFORMED` for a name this port's principal names cannot hold.
+    #[must_use]
+    pub fn from_sname(e: &krb5_config::SnameError) -> Self {
+        match e {
+            krb5_config::SnameError::UnsupportedNameType => Self::new(Code::Other, e.to_string()),
+            krb5_config::SnameError::NoDefaultRealm => Self::of(Code::NoDefRealm),
+            krb5_config::SnameError::Name(_) => Self::of(Code::ParseMalformed),
+        }
     }
 
     /// The failure of a cache name that does not resolve.
@@ -434,14 +445,19 @@ mod tests {
             Krb5Error::from_as(&unknown, "nosuch@KERBER.TEST", "KERBER.TEST").message,
             "Client 'nosuch@KERBER.TEST' not found in Kerberos database"
         );
+        let svc = "Server nfs/zima-nas.kerber.test@KERBER.TEST not found in Kerberos database";
         let server = krb5_protocol::Error::KrbError {
             code: krb5_types::err::S_PRINCIPAL_UNKNOWN,
-            text: Some("LOOKING_UP_SERVER".into()),
+            text: Some(svc.into()),
         };
-        let svc = "nfs/zima-nas.kerber.test@KERBER.TEST";
+        assert_eq!(Krb5Error::from_tgs(&server, "KERBER.TEST").message, svc);
+        let bare = krb5_protocol::Error::KrbError {
+            code: krb5_types::err::S_PRINCIPAL_UNKNOWN,
+            text: None,
+        };
         assert_eq!(
-            Krb5Error::from_tgs(&server, svc, "KERBER.TEST").message,
-            format!("Server {svc} not found in Kerberos database")
+            Krb5Error::from_tgs(&bare, "KERBER.TEST").message,
+            "Server not found in Kerberos database"
         );
         let preauth = krb5_protocol::Error::KrbError {
             code: krb5_types::err::PREAUTH_FAILED,

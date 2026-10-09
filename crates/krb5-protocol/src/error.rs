@@ -27,7 +27,9 @@ pub enum Error {
     KrbError {
         /// RFC 4120 error-code.
         code: i32,
-        /// Optional e-text.
+        /// Optional e-text. For a TGS request's unknown server that came with e-text, MIT's
+        /// message in its place, naming the error's server.
+        /// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:195-216`): an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; without e-text no message is set.
         text: Option<String>,
     },
     /// Reply tag was not AS-REP, TGS-REP, AP-REP, or KRB-ERROR.

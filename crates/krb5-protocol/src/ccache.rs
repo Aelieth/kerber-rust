@@ -183,6 +183,32 @@ impl FileCcache {
         }
     }
 
+    /// The value of the configuration entry `key` (for `principal` when one is named) that the
+    /// cache's principal holds, if any.
+    /// MIT `krb5_cc_get_config` (`lib/krb5/ccache/ccfns.c:263-292`): the entry `X-CACHECONF:` `krb5_ccache_conf_data/<key>[/<principal>]` of the cache's principal is retrieved with no other field matched, and its ticket field is the value.
+    #[must_use]
+    pub fn get_config(&self, principal: Option<&str>, key: &str) -> Option<&[u8]> {
+        let mut comps: Vec<&[u8]> = vec![b"krb5_ccache_conf_data", key.as_bytes()];
+        if let Some(p) = principal {
+            comps.push(p.as_bytes());
+        }
+        self.creds
+            .iter()
+            .find(|c| {
+                c.server.0.as_bytes() == b"X-CACHECONF:"
+                    && c.client.0.as_bytes() == self.primary.0.as_bytes()
+                    && c.client.1.name_string == self.primary.1.name_string
+                    && c.server.1.name_string.len() == comps.len()
+                    && c.server
+                        .1
+                        .name_string
+                        .iter()
+                        .zip(&comps)
+                        .all(|(have, want)| have.as_bytes() == *want)
+            })
+            .map(|c| c.ticket.as_slice())
+    }
+
     /// MIT `krb5_cc_set_config` (`ccfns.c k5_build_conf_principals`): an
     /// `X-CACHECONF:` entry named `krb5_ccache_conf_data/{key}[/{principal}]`
     /// (etype 0, the value in the ticket field), replacing an existing one.
@@ -628,6 +654,28 @@ mod tests {
         let again = FileCcache::parse(&after).expect("reparse");
         assert!(again.list().is_empty());
         assert!(again.creds.iter().all(CcacheCred::is_removed));
+    }
+
+    /// MIT `krb5_cc_get_config` (`lib/krb5/ccache/ccfns.c:263-292`): the entry `X-CACHECONF:` `krb5_ccache_conf_data/<key>[/<principal>]` of the cache's principal is retrieved with no other field matched, and its ticket field is the value.
+    #[test]
+    fn a_configuration_entry_is_the_caches_principals_by_key_and_principal() {
+        let me = (
+            realm("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        );
+        let mut cc = FileCcache::new(me, Vec::new());
+        assert_eq!(cc.get_config(None, "start_realm"), None);
+        cc.set_config(None, "start_realm", b"OTHER.TEST");
+        cc.set_config(Some("krbtgt/KERBER.TEST@KERBER.TEST"), "pa_type", b"2");
+        assert_eq!(cc.get_config(None, "start_realm"), Some(&b"OTHER.TEST"[..]));
+        assert_eq!(
+            cc.get_config(Some("krbtgt/KERBER.TEST@KERBER.TEST"), "pa_type"),
+            Some(&b"2"[..])
+        );
+        assert_eq!(cc.get_config(None, "pa_type"), None);
+        assert_eq!(cc.get_config(Some("krbtgt/X@X"), "pa_type"), None);
+        cc.primary.1 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
+        assert_eq!(cc.get_config(None, "start_realm"), None);
     }
 
     #[test]

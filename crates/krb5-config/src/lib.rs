@@ -360,6 +360,11 @@ pub struct Krb5Conf {
     /// search domain ([`local_host_name`]).
     /// MIT `qualify_shortname` (`lib/krb5/os/sn2princ.c:66-80`): the profile's value when it is set, else the resolver's.
     pub qualify_shortname: Option<String>,
+    /// `[libdefaults] realm_try_domains`, as written: how many of a host's domain suffixes, the
+    /// whole name first, are tried as its fallback realm ([`fallback_host_realm`]); unset is
+    /// MIT's -1, none.
+    /// MIT `domain_fallback_realm` (`lib/krb5/os/hostrealm_domain.c:81-84`): the integer is read from `[libdefaults]`, -1 when unset.
+    pub realm_try_domains: Option<String>,
     /// `[libdefaults] dns_canonicalize_hostname`: when a host-based service name is
     /// canonicalized, and whether through DNS.
     pub dns_canonicalize_hostname: CanonHost,
@@ -558,7 +563,10 @@ pub use ccname::{
     KRB5_CC_UNKNOWN_TYPE, default_ccache_name, default_ccspec, expand_ccache_params, parse_ccname,
     parse_ccspec, resolve_ccspec,
 };
-pub use hostname::{expand_hostname, expand_hostname_no_dns, local_host_name, this_host};
+pub use hostname::{
+    CanonPrinc, HostPrinc, SnameError, expand_hostname, expand_hostname_no_dns,
+    fallback_host_realm, local_host_name, sname_to_principal, this_host,
+};
 pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, MISSING_CONF_PARAMS};
 pub use kdcconf::{
     KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_kpropd_acl,

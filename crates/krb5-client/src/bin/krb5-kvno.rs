@@ -13,7 +13,7 @@ use krb5_asn1::decode;
 use krb5_client::ccol::{resolve, store_spec};
 use krb5_client::cli::{KvnoArgs, kvno_usage, parse_kvno, progname};
 use krb5_client::creds::{
-    GetCredsOptions, OpenCache, Princ, default_realm, get_credentials, get_credentials_for_proxy,
+    GetCredsOptions, OpenCache, Princ, get_credentials, get_credentials_for_proxy,
     get_credentials_for_user, get_u2u_ticket, parse_name, princ_eq, server_decrypt_ticket_keytab,
     string_to_enctype, unparse,
 };
@@ -87,7 +87,6 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
     {
         return fail(&e, &format!("resolving keytab {kt}"));
     }
-    let default_realm = default_realm().unwrap_or_default();
     let for_user = match &args.for_user {
         None => None,
         Some(name) => match parse_name(name, args.for_user_enterprise) {
@@ -122,7 +121,6 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
         args,
         me: &me,
         for_user: for_user.as_ref(),
-        default_realm: &default_realm,
         opts: &opts,
     };
     let mut out: Option<FileCcache> = None;
@@ -157,7 +155,6 @@ struct Ctx<'a> {
     args: &'a KvnoArgs,
     me: &'a Princ,
     for_user: Option<&'a Princ>,
-    default_realm: &'a str,
     opts: &'a GetCredsOptions,
 }
 
@@ -167,7 +164,7 @@ struct Ctx<'a> {
 fn kvno(ctx: &Ctx<'_>, cache: &mut OpenCache, name: &str) -> Result<CcacheCred, ()> {
     let prog = ctx.prog;
     let args = ctx.args;
-    let mut server = match server_principal(name, args.sname.as_deref(), ctx.default_realm) {
+    let mut server = match server_principal(name, args.sname.as_deref()) {
         Ok(p) => p,
         Err(e) => {
             if !args.quiet {
@@ -258,20 +255,16 @@ fn identify_user(user: Princ, me: &Princ) -> Princ {
     (realm, user.1)
 }
 
-/// The server of one argument: MIT `krb5_parse_name`, or for `-S` MIT `krb5_sname_to_principal`
-/// with the argument as the host: `sname/<host lowercased>`, NT-SRV-HST, in the host's realm
-/// (`[domain_realm]`) else the default realm.
-fn server_principal(name: &str, sname: Option<&str>, realm: &str) -> Result<Princ, Krb5Error> {
+/// The server of one argument: MIT `krb5_parse_name`, or for `-S` the host-based name of `sname`
+/// on the argument as [`krb5_config::sname_to_principal`] makes it.
+/// MIT `kvno` (`clients/kvno/kvno.c:308-313`): `-S` names the service on the host the argument names, through `krb5_sname_to_principal` with `KRB5_NT_SRV_HST`.
+fn server_principal(name: &str, sname: Option<&str>) -> Result<Princ, Krb5Error> {
     let Some(sname) = sname else {
         return parse_name(name, false);
     };
-    let host = name.to_ascii_lowercase();
-    let host_realm = krb5_config::load_krb5_conf()
-        .and_then(|c| c.realm_for_host(&host).map(str::to_owned))
-        .unwrap_or_else(|| realm.to_owned());
-    let p = PrincipalName::try_new(PrincipalName::NT_SRV_HST, [sname, host.as_str()])
-        .map_err(|_| Krb5Error::of(Code::ParseMalformed))?;
-    Ok((krb5_protocol::realm(&host_realm), p))
+    let conf = krb5_config::load_krb5_conf().unwrap_or_default();
+    krb5_config::sname_to_principal(&conf, Some(name), Some(sname), PrincipalName::NT_SRV_HST)
+        .map_err(|e| Krb5Error::from_sname(&e))
 }
 
 /// The gates send S4U2Self for a service other than the cache's principal, for the KDC to
@@ -371,7 +364,7 @@ mod gate {
                 args.gate.renew || args.gate.renew_ticket,
             ),
         }
-        .map_err(|e| Krb5Error::from_tgs(&e, &super::unparse(server), &hop))?;
+        .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
         let cred = cred_from_tgs(me, &out)?;
         let _ = cache.store(cred.clone());
         Ok(cred)

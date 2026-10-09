@@ -68,6 +68,10 @@ pub struct TgsCredsOptions {
     /// first hop.
     #[cfg(feature = "test-hooks")]
     pub no_transit_check: bool,
+    /// The server was asked for in the referral realm and stands here in the start realm: a
+    /// failed first referral request then falls back to the server host's fallback realm.
+    /// MIT `begin` (`lib/krb5/krb/get_creds.c:1074-1083`): a server in the referral realm is asked for in the start realm, as a referral request.
+    pub referral_realm: bool,
 }
 
 /// Request a service ticket with a TGT from [`AsOutcome`].
@@ -364,24 +368,24 @@ fn tgs_inner(
     let mut seen = vec![start.clone()];
     for _ in 0..REFERRAL_MAX_HOPS {
         let served = tgt_served_realm(&cur_tgt);
-        let extra = tgs_service_extra(creds_opts);
-        #[cfg(feature = "test-hooks")]
-        let extra = extra.with_bit(
-            flag_bit::DISABLE_TRANSITED_CHECK,
-            creds_opts.no_transit_check && cur_tgt.ticket.sname.is_krbtgt_for(realm),
-        );
-        let out = tgs_service_once(
+        let step = tgs_service_once(
             &cur_kdc,
             &cur_tgt,
             ServiceHop {
                 sname,
                 served: &served,
-                extra,
+                extra: service_extra(creds_opts, &cur_tgt, realm),
                 request_realm: realm,
                 referral_count: seen.len(),
                 creds_opts,
             },
         )?;
+        let out = match step {
+            ServiceStep::Reply(out) => *out,
+            ServiceStep::Fallback(fallback) => {
+                return tgs_fallback_realm(&cur_kdc, &cur_tgt, sname, &fallback, creds_opts, path);
+            }
+        };
         match chase_step(&start, &mut seen, sname, &served, &out)? {
             TgsHop::Done => {
                 // MIT `complete` (`lib/krb5/krb/get_creds.c:451-470`): the service's credential.
@@ -404,6 +408,57 @@ fn tgs_inner(
         }
     }
     Err(Error::Referral)
+}
+
+/// [`tgs_service_extra`] for one request with `tgt`, and in a `test-hooks` build the gates'
+/// `DISABLE_TRANSITED_CHECK` on the hop whose TGT is the service realm's.
+fn service_extra(creds_opts: &TgsCredsOptions, tgt: &AsOutcome, realm: &str) -> KdcOptions {
+    let extra = tgs_service_extra(creds_opts);
+    #[cfg(feature = "test-hooks")]
+    let extra = extra.with_bit(
+        flag_bit::DISABLE_TRANSITED_CHECK,
+        creds_opts.no_transit_check && tgt.ticket.sname.is_krbtgt_for(realm),
+    );
+    #[cfg(not(feature = "test-hooks"))]
+    let _ = (tgt, realm);
+    extra
+}
+
+/// The service asked for in its fallback realm `realm`, after the first referral request for it
+/// in the referral realm failed: a TGT for `realm` from `tgt`'s KDC, then one request without
+/// referrals, whose reply completes the walk and whose error ends it.
+/// MIT `try_fallback` (`lib/krb5/krb/get_creds.c:534-542`): the server's realm becomes the fallback realm, and a TGT for it is got before a non-referral request.
+/// MIT `step_non_referral` (`lib/krb5/krb/get_creds.c:483-487`): a non-referral request's error is the result; its reply completes.
+fn tgs_fallback_realm(
+    kdc: &KdcAddr,
+    tgt: &AsOutcome,
+    sname: &PrincipalName,
+    realm: &str,
+    creds_opts: &TgsCredsOptions,
+    mut path: Vec<AsOutcome>,
+) -> Result<(TgsOutcome, Vec<AsOutcome>), Error> {
+    trace::tkt_creds_fallback(realm.as_bytes());
+    let capaths = krb5_config::load_krb5_conf()
+        .map(|c| c.capaths)
+        .unwrap_or_default();
+    let (dest, hops) = get_dest_tgt(kdc, tgt, realm, &capaths)?;
+    path.extend(hops);
+    let served = tgt_served_realm(&dest);
+    let dest_kdc = kdc_for_realm(&served, kdc);
+    let extra = service_extra(creds_opts, &dest, realm);
+    trace::tkt_creds_service_req(trace::Princ::new(sname, realm.as_bytes()), false);
+    let req = service_request(
+        sname,
+        &served,
+        tgs_request_options(&dest, extra),
+        creds_opts,
+    );
+    let out = tgs_once(&dest_kdc, &dest, req)?;
+    trace::tkt_creds_complete(trace::Princ::new(
+        &out.enc_part.sname,
+        out.enc_part.srealm.as_bytes(),
+    ));
+    Ok((out, path))
 }
 
 /// Realm this TGT is accepted at (MIT `cur_tgt->server` instance).
@@ -730,14 +785,14 @@ fn tgs_once(kdc: &KdcAddr, tgt: &AsOutcome, req: TgsRequest<'_>) -> Result<TgsOu
             req.kdc_options.bit(flag_bit::CANONICALIZE),
         );
     }
-    let server = trace::enabled().then(|| req.sname.unparse_with_realm(req.realm));
+    let tracing = trace::enabled();
     let result = tgs_round_trip(kdc, tgt, req);
-    let Some(server) = server else {
+    if !tracing {
         return result;
-    };
+    }
     let kerr = match &result {
         Ok(_) => Some((0, None)),
-        Err(e) => tgs_kerr(e, ext, &server),
+        Err(e) => tgs_kerr(e, ext),
     };
     if let Some((code, msg)) = kerr {
         if ext {
@@ -750,12 +805,12 @@ fn tgs_once(kdc: &KdcAddr, tgt: &AsOutcome, req: TgsRequest<'_>) -> Result<TgsOu
 }
 
 /// The MIT code and message of a TGS request's failure, as its trace prints them; `None` for a
-/// request that reached no KDC, unless `ext`. `server` is the request's server, unparsed. Made
-/// only while tracing.
-/// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:160-332`): a KDC error with e-text
+/// request that reached no KDC, unless `ext`. Made only while tracing.
+/// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:195-216`): a KDC error with e-text
 /// is `KDC returned error string: <text>` for a generic error and `Server <name> not found in
-/// Kerberos database` for an unknown server; otherwise the table's text.
-fn tgs_kerr(e: &Error, ext: bool, server: &str) -> Option<(i64, Option<String>)> {
+/// Kerberos database` for an unknown server (the message [`Error::KrbError`] already holds);
+/// otherwise the table's text.
+fn tgs_kerr(e: &Error, ext: bool) -> Option<(i64, Option<String>)> {
     Some(match e {
         Error::KrbError { code, text } => {
             let text = text.as_ref().filter(|t| !t.is_empty());
@@ -763,9 +818,7 @@ fn tgs_kerr(e: &Error, ext: bool, server: &str) -> Option<(i64, Option<String>)>
                 (krb5_types::err::GENERIC, Some(t)) => {
                     Some(format!("KDC returned error string: {t}"))
                 }
-                (krb5_types::err::S_PRINCIPAL_UNKNOWN, Some(_)) => {
-                    Some(format!("Server {server} not found in Kerberos database"))
-                }
+                (krb5_types::err::S_PRINCIPAL_UNKNOWN, Some(t)) => Some(t.clone()),
                 _ => None,
             };
             (trace::kdc_code(*code), msg)
@@ -931,6 +984,15 @@ fn tgs_round_trip(
             .as_ref()
             .and_then(|s| std::str::from_utf8(s.as_bytes()).ok())
             .map(str::to_owned);
+        let text = match text {
+            Some(t) if e.error_code == krb5_types::err::S_PRINCIPAL_UNKNOWN && !t.is_empty() => {
+                let server = e
+                    .sname
+                    .unparse_with_realm(&String::from_utf8_lossy(e.realm.as_bytes()));
+                Some(format!("Server {server} not found in Kerberos database"))
+            }
+            text => text,
+        };
         return Err(Error::KrbError {
             code: e.error_code,
             text,
@@ -1254,8 +1316,7 @@ pub enum TgsFallback {
     HostRealm,
 }
 
-/// Decide the MIT `try_fallback` arm. Host-realm DNS rewrite is not
-/// applied here (`HostRealm` keeps the original error).
+/// Decide the MIT `try_fallback` arm.
 #[must_use]
 pub fn tgs_try_fallback(
     referral_count: usize,
@@ -1280,6 +1341,36 @@ pub fn tgs_non_referral_options(opts: KdcOptions) -> KdcOptions {
     opts.with_bit(flag_bit::CANONICALIZE, false)
 }
 
+/// What one service request of the walk gave.
+enum ServiceStep {
+    /// The KDC's reply.
+    Reply(Box<TgsOutcome>),
+    /// The first referral request for a server in the referral realm failed, and the server
+    /// host's fallback realm is another realm: the server is asked for there.
+    Fallback(String),
+}
+
+/// [`krb5_config::fallback_host_realm`] of `sname`'s host, its second component.
+fn fallback_realm(sname: &PrincipalName) -> Option<String> {
+    let conf = krb5_config::load_krb5_conf().unwrap_or_default();
+    let host = sname.name_string.get(1)?;
+    krb5_config::fallback_host_realm(&conf, &String::from_utf8_lossy(host.as_bytes()))
+}
+
+/// A service request for `sname` presented to `served`'s KDC with `kdc_options`, carrying the
+/// caller's second ticket and enctype.
+fn service_request<'a>(
+    sname: &PrincipalName,
+    served: &'a str,
+    kdc_options: KdcOptions,
+    creds_opts: &TgsCredsOptions,
+) -> TgsRequest<'a> {
+    let mut req = TgsRequest::new(sname.clone(), served, kdc_options);
+    req.additional_tickets = creds_opts.second_ticket.clone().map(|t| vec![t]);
+    req.enctype = creds_opts.enctype;
+    req
+}
+
 /// One service request of the referral walk, as [`tgs_service_once`] sends it.
 struct ServiceHop<'a> {
     sname: &'a PrincipalName,
@@ -1296,11 +1387,15 @@ struct ServiceHop<'a> {
 /// First referral TGS, then `try_fallback` on a KDC error.
 /// MIT `make_request_for_service` (`get_creds.c:365-367`): the referral request adds
 /// `canonicalize` to the caller's options; the non-referral retry sends the caller's alone.
+/// MIT `try_fallback` (`lib/krb5/krb/get_creds.c:524-532`): for a server in the referral realm the fallback realm is the host's, and when it is the server's realm the request is made again there without referrals.
+/// The fallback realm is [`krb5_config::fallback_host_realm`]'s for the server's second
+/// component; when it has none (no default realm, or a `realm_try_domains` that is no integer)
+/// the KDC's error stays, where MIT's is the profile's.
 fn tgs_service_once(
     kdc: &KdcAddr,
     tgt: &AsOutcome,
     hop: ServiceHop<'_>,
-) -> Result<TgsOutcome, Error> {
+) -> Result<ServiceStep, Error> {
     let ServiceHop {
         sname,
         served,
@@ -1309,30 +1404,35 @@ fn tgs_service_once(
         referral_count,
         creds_opts,
     } = hop;
-    let request = |kdc_options: KdcOptions| {
-        let mut req = TgsRequest::new(sname.clone(), served, kdc_options);
-        req.additional_tickets = creds_opts.second_ticket.clone().map(|t| vec![t]);
-        req.enctype = creds_opts.enctype;
-        req
-    };
     let referral = tgs_request_options(tgt, extra.clone().with_bit(flag_bit::CANONICALIZE, true));
     // MIT `make_request_for_service` (`lib/krb5/krb/get_creds.c:347-379`): each service request
     // is traced with its server and whether it allows a referral.
     let server = trace::Princ::new(sname, served.as_bytes());
     trace::tkt_creds_service_req(server, true);
-    match tgs_once(kdc, tgt, request(referral)) {
-        Ok(out) => Ok(out),
+    let non_referral = || {
+        trace::tkt_creds_service_req(server, false);
+        let req = service_request(sname, served, tgs_request_options(tgt, extra), creds_opts);
+        tgs_once(kdc, tgt, req).map(|out| ServiceStep::Reply(Box::new(out)))
+    };
+    match tgs_once(
+        kdc,
+        tgt,
+        service_request(sname, served, referral, creds_opts),
+    ) {
+        Ok(out) => Ok(ServiceStep::Reply(Box::new(out))),
         Err(e @ Error::KrbError { .. }) => match tgs_try_fallback(
             referral_count,
-            !request_realm.is_empty(),
+            !request_realm.is_empty() && !creds_opts.referral_realm,
             sname.name_string.len(),
         ) {
-            TgsFallback::NonReferral => {
-                trace::tkt_creds_service_req(server, false);
-                tgs_once(kdc, tgt, request(tgs_request_options(tgt, extra)))
-            }
+            TgsFallback::NonReferral => non_referral(),
             TgsFallback::HostRealmUnknown => Err(Error::ReplyMismatch("host realm unknown".into())),
-            TgsFallback::KeepError | TgsFallback::HostRealm => Err(e),
+            TgsFallback::HostRealm => match fallback_realm(sname) {
+                Some(r) if r == request_realm => non_referral(),
+                Some(r) => Ok(ServiceStep::Fallback(r)),
+                None => Err(e),
+            },
+            TgsFallback::KeepError => Err(e),
         },
         Err(e) => Err(e),
     }

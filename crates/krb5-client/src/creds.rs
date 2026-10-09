@@ -2,7 +2,7 @@
 //! runs them: the cache is asked first, then the KDC, and what the KDC issued is stored back.
 
 use krb5_asn1::decode;
-use krb5_config::CcSpec;
+use krb5_config::{CanonPrinc, CcSpec};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
 use krb5_protocol::{
     AsOutcome, CcacheCred, FileCcache, KdcAddr, Keytab, TgsCredsOptions, TgsOutcome,
@@ -141,6 +141,38 @@ impl OpenCache {
     #[must_use]
     pub fn retrieve(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
         self.cc.creds.iter().find(|c| m.matches(c))
+    }
+
+    /// After [`Self::retrieve`] found nothing for `m`: for a server in the referral realm and a
+    /// named client, the first credential matching it in the client's realm, the lookup traced.
+    /// MIT `krb5_cc_retrieve_cred` (`lib/krb5/ccache/ccfns.c:97-111`): a lookup that finds nothing for a server in the referral realm is made again with the client's realm.
+    #[must_use]
+    pub fn retrieve_referral(&self, m: &MatchCreds<'_>) -> Option<&CcacheCred> {
+        let client = m.client?;
+        if !m.server.0.as_bytes().is_empty() {
+            return None;
+        }
+        let server = (client.0.clone(), m.server.1.clone());
+        let again = MatchCreds {
+            client: m.client,
+            server: &server,
+            enctype: m.enctype,
+            is_skey: m.is_skey,
+            second_ticket: m.second_ticket,
+            now: m.now,
+        };
+        let found = self.retrieve(&again);
+        crate::trace::retrieve_ref(self, client, &server, found.is_some());
+        found
+    }
+
+    /// The realm a request for a server in the referral realm starts in: the cache's
+    /// `start_realm` configuration, else `client`'s realm.
+    /// MIT `krb5_tkt_creds_init` (`lib/krb5/krb/get_creds.c:1143-1151`): the start realm is the cache's `start_realm` configuration, else the client's realm.
+    fn start_realm(&self, client: &Princ) -> String {
+        self.cc
+            .get_config(None, "start_realm")
+            .map_or_else(|| realm_str(&client.0), |r| String::from_utf8_lossy(r).into_owned())
     }
 
     /// MIT `krb5_cc_store_cred`: `cred` joins the cache now: appended to a FILE or DIR cache's
@@ -329,11 +361,15 @@ impl GetCredsOptions {
 /// cache is `KRB5_CC_NOTFOUND`.
 /// MIT `complete` (`get_creds.c:468-471`): the store's failure is ignored; so is a cross-realm TGT's.
 /// MIT `step_get_tgt` (`get_creds.c:952-954`): a cross-realm TGT asked for on the path is stored, its failure ignored.
+/// MIT `krb5_tkt_creds_init` (`lib/krb5/krb/get_creds.c:1124-1134`): the KDC is asked for the server's first candidate name ([`CanonPrinc`]), while the cache is searched for the server as asked for.
+/// MIT `krb5_tkt_creds_step` (`lib/krb5/krb/get_creds.c:1292-1305`): a request the KDC answers with an unknown server is made again for the next candidate; with none left that error stands.
+/// MIT `complete` (`lib/krb5/krb/get_creds.c:458-462`): the credential is stored and returned under the server asked for.
 ///
 /// # Errors
 ///
 /// [`Krb5Error`] `KRB5_CC_NOTFOUND` when `cached_only` finds nothing or the cache holds no TGT;
-/// the KDC's refusal or the transport failure as [`Krb5Error::from_tgs`] reports it.
+/// the KDC's refusal or the transport failure as [`Krb5Error::from_tgs`] reports it;
+/// `KRB5_CONFIG_NODEFREALM` or a malformed name when a candidate cannot be made.
 pub fn get_credentials(
     cache: &mut OpenCache,
     me: &Princ,
@@ -357,20 +393,38 @@ pub fn get_credentials(
         now,
     };
     crate::trace::tkt_creds_begin(cache, me, server);
-    if let Some(c) = crate::trace::retrieved(cache, me, server, cache.retrieve(&m)) {
+    let conf = krb5_config::load_krb5_conf().unwrap_or_default();
+    let mut candidates = CanonPrinc::new(&conf, server);
+    let mut candidate = candidates
+        .next_candidate()
+        .map_err(|e| Krb5Error::from_sname(&e))?
+        .ok_or_else(|| {
+            let code = krb5_types::err::S_PRINCIPAL_UNKNOWN;
+            Krb5Error::new(Code::Kdc(code), crate::errmsg::kdc_error_text(code))
+        })?;
+    let found = crate::trace::retrieved(cache, me, server, cache.retrieve(&m))
+        .or_else(|| cache.retrieve_referral(&m));
+    if let Some(c) = found {
         return Ok(c.clone());
     }
     if opts.cached_only {
         return Err(cache.not_found());
     }
-    let srealm = realm_str(&server.0);
-    crate::trace::tgt_for(cache, &srealm);
-    let (presented, hop) = cache.tgt_for(&srealm)?;
-    let kdc = opts.kdc(&hop)?;
-    let tgt = outcome_from_cred(&presented)?;
-    let (out, path) = tgs_exchange_path(&kdc, &tgt, server.1.clone(), &srealm, &opts.tgs)
-        .map_err(|e| Krb5Error::from_tgs(&e, &unparse(server), &hop))?;
+    let start_realm = cache.start_realm(me);
+    let (out, path) = loop {
+        match request_service(cache, &candidate, &start_realm, opts) {
+            Err(e) if e.code == Code::Kdc(krb5_types::err::S_PRINCIPAL_UNKNOWN) => match candidates
+                .next_candidate()
+                .map_err(|e| Krb5Error::from_sname(&e))?
+            {
+                Some(next) => candidate = next,
+                None => return Err(e),
+            },
+            got => break got?,
+        }
+    };
     let mut cred = cred_from_tgs(me, &out)?;
+    cred.server = server.clone();
     if let Some(t) = second {
         cred.is_skey = 1;
         cred.second_ticket = t;
@@ -384,6 +438,36 @@ pub fn get_credentials(
         let _ = cache.store(cred.clone());
     }
     Ok(cred)
+}
+
+/// One candidate `server` asked of the KDC: a server in the referral realm in `start_realm`, as a
+/// referral request; the TGT for its realm presented.
+/// MIT `begin` (`lib/krb5/krb/get_creds.c:1074-1087`): a server in the referral realm takes the start realm, and the request starts with the TGT for the server's realm.
+fn request_service(
+    cache: &OpenCache,
+    server: &Princ,
+    start_realm: &str,
+    opts: &GetCredsOptions,
+) -> Result<(TgsOutcome, Vec<AsOutcome>), Krb5Error> {
+    let mut srealm = realm_str(&server.0);
+    let mut tgs = opts.tgs.clone();
+    if srealm.is_empty() {
+        start_realm.clone_into(&mut srealm);
+        tgs.referral_realm = true;
+    }
+    let named = (
+        krb5_types::try_ascii(&srealm).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?,
+        server.1.clone(),
+    );
+    if tgs.referral_realm {
+        crate::trace::referral_realm(&named);
+    }
+    crate::trace::tgt_for(cache, &srealm);
+    let (presented, hop) = cache.tgt_for(&srealm)?;
+    let kdc = opts.kdc(&hop)?;
+    let tgt = outcome_from_cred(&presented)?;
+    tgs_exchange_path(&kdc, &tgt, server.1.clone(), &srealm, &tgs)
+        .map_err(|e| Krb5Error::from_tgs(&e, &hop))
 }
 
 /// MIT `krb5_get_credentials_for_user` (`s4u_creds.c:648-730`): for `for_user` to `me`'s service
@@ -429,7 +513,7 @@ pub fn get_credentials_for_user(
         &for_user.1,
         &realm_str(&for_user.0),
     )
-    .map_err(|e| Krb5Error::from_tgs(&e, &unparse(self_sname), &hop))?;
+    .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
     let cred = cred_from_tgs(for_user, &out)?;
     if !opts.no_store {
         cache.store(cred.clone())?;
@@ -485,7 +569,7 @@ pub fn get_credentials_for_proxy(
         let ticket: Ticket =
             decode(&evidence.ticket).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
         let out = tgs_s4u2proxy(&kdc, &tgt, server.1.clone(), &hop, ticket)
-            .map_err(|e| Krb5Error::from_tgs(&e, &unparse(server), &hop))?;
+            .map_err(|e| Krb5Error::from_tgs(&e, &hop))?;
         let mut cred = cred_from_tgs(&(out.crealm.clone(), out.cname.clone()), &out)?;
         cred.server = server.clone();
         cred.second_ticket.clone_from(&evidence.ticket);
@@ -545,7 +629,7 @@ pub fn get_valrenewed_creds(
     } else {
         krb5_protocol::tgs_renew(&kdc, &tgt)
     }
-    .map_err(|e| Krb5Error::from_tgs(&e, &unparse(&server), &realm))?;
+    .map_err(|e| Krb5Error::from_tgs(&e, &realm))?;
     cred_from_tgs(client, &out)
 }
 
@@ -768,6 +852,47 @@ mod tests {
         );
         assert_eq!(cache.cc.creds.len(), 2);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// MIT `krb5_cc_retrieve_cred` (`lib/krb5/ccache/ccfns.c:97-111`): a lookup that finds nothing for a server in the referral realm is made again with the client's realm.
+    /// MIT `krb5_tkt_creds_init` (`lib/krb5/krb/get_creds.c:1143-1151`): the start realm is the cache's `start_realm` configuration, else the client's realm.
+    #[test]
+    fn a_server_in_the_referral_realm_is_looked_up_in_the_clients_realm() {
+        let me = (
+            realm("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]),
+        );
+        let referral = (
+            realm(""),
+            PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x"]),
+        );
+        let mut cache = OpenCache {
+            spec: CcSpec::Memory("t".into()),
+            cc: FileCcache::new(me.clone(), vec![cred("host/x", 100, 0, 18)]),
+        };
+        let m = |client| MatchCreds {
+            client,
+            server: &referral,
+            enctype: None,
+            is_skey: false,
+            second_ticket: None,
+            now: 10,
+        };
+        assert!(cache.retrieve(&m(Some(&me))).is_none());
+        assert_eq!(
+            cache.retrieve_referral(&m(Some(&me))).map(|c| c.endtime),
+            Some(100)
+        );
+        assert!(cache.retrieve_referral(&m(None)).is_none());
+        let other = (realm("OTHER.TEST"), referral.1.clone());
+        let named = MatchCreds {
+            server: &other,
+            ..m(Some(&me))
+        };
+        assert!(cache.retrieve_referral(&named).is_none());
+        assert_eq!(cache.start_realm(&me), "KERBER.TEST");
+        cache.cc.set_config(None, "start_realm", b"OTHER.TEST");
+        assert_eq!(cache.start_realm(&me), "OTHER.TEST");
     }
 
     /// Live MIT 1.22.2 `kvno -e bogus-etype`: "Invalid argument while converting etype".

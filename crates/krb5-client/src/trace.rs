@@ -142,6 +142,27 @@ pub fn retrieve(cache: &OpenCache, client: Option<&Princ>, server: &Princ, found
     );
 }
 
+/// MIT `krb5_cc_retrieve_cred` (`lib/krb5/ccache/ccfns.c:103-110`): the lookup again with the client's realm for a server in the referral realm, traced with its result.
+pub fn retrieve_ref(cache: &OpenCache, client: &Princ, server: &Princ, found: bool) {
+    if !trace::enabled() {
+        return;
+    }
+    let msg = cache.not_found().message;
+    let (code, msg) = if found {
+        (0, None)
+    } else {
+        (trace::KRB5_CC_NOTFOUND, Some(msg.as_str()))
+    };
+    trace::cc_retrieve_ref(Some(princ(client)), princ(server), code, msg);
+}
+
+/// MIT `begin` (`lib/krb5/krb/get_creds.c:1076-1080`): a server in the referral realm starts in the start realm, traced with that realm.
+pub fn referral_realm(server: &Princ) {
+    if trace::enabled() {
+        trace::tkt_creds_referral_realm(princ(server));
+    }
+}
+
 /// [`retrieve`] of the lookup whose result is `found`, which is handed back.
 #[must_use]
 pub fn retrieved<'c>(

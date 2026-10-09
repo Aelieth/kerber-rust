@@ -48,8 +48,7 @@ caches as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` a
 `kdestroy -A`, `kswitch -p`, a new cache for a second principal); the satomlin kit's keytab
 checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in these:
 - `kinit -I`, `--request-pac`, and `--no-request-pac` are missing; `kvno -U` does not first ask
-  the KDC for the user's realm; `kvno -S` takes a host name as given, without MIT's
-  `qualify_shortname` domain for a short name or its DNS fallback.
+  the KDC for the user's realm. `kvno -S` qualifies a short host and does not ask DNS.
 - `kvno -F` is not a release flag until it is settled against an MIT KDC with certificate
   mapping; MIT's asks for S4U2Self by the user's certificate.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
