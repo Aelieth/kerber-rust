@@ -1,8 +1,8 @@
 //! MIT `klist`: list a credential cache, the cache collection, or a keytab.
 //!
-//! Usage: `klist [-e] [[-c] [-l] [-A] [-d] [-f] [-s] [-a [-n]]] [-k [-i] [-t] [-K]] [-C] [name]`
-//! (MIT's `-V` is not taken). Times follow the process locale, and the date columns are as wide
-//! as MIT's probe of that locale; addresses (`-a`) are printed numerically.
+//! Usage: `klist [-e] [-V] [[-c] [-l] [-A] [-d] [-f] [-s] [-a [-n]]] [-k [-i] [-t] [-K]] [-C] [name]`
+//! `-V` prints the version and exits. Times follow the process locale, and the date columns are as
+//! wide as MIT's probe of that locale; addresses (`-a`) are printed numerically.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -28,6 +28,9 @@ use krb5_crypto::EncryptionType;
 use krb5_protocol::{CcacheCred, Keytab, KeytabSlot};
 use krb5_types::{Ticket, TicketFlags};
 use zeroize::Zeroizing;
+
+/// MIT `main` (`klist.c:220-226`): `-V` prints "Kerberos 5 version 1.22.2" and exits 0 after the usage checks.
+const VERSION_LINE: &str = "Kerberos 5 version 1.22.2";
 
 /// The width of a printed time, probed once.
 static TIMESTAMP_WIDTH: OnceLock<usize> = OnceLock::new();
@@ -63,6 +66,10 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if args.version {
+        println!("{VERSION_LINE}");
+        std::process::exit(0);
+    }
     std::process::exit(run(prog, &args));
 }
 

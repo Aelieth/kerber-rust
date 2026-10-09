@@ -47,7 +47,7 @@ never part of `make install`; on Fedora keep the package's tools. `kinit`, `klis
 caches as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` and `-A`,
 `kdestroy -A`, `kswitch -p`, a new cache for a second principal); the satomlin kit's keytab
 checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in these:
-- `kinit -I`, `--request-pac` and `--no-request-pac`, `klist -V` and `kvno -F` are missing, and
+- `kinit -I`, `--request-pac`, `--no-request-pac`, and `kvno -F` are missing, and
   `kvno -U` does not first ask the KDC for the user's realm.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
   compared with MIT's tools may read differently from MIT's text.

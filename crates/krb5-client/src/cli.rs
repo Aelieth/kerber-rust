@@ -382,6 +382,8 @@ pub struct KlistArgs {
     pub show_all: bool,
     /// `-C`.
     pub config: bool,
+    /// `-V`: print the version and exit.
+    pub version: bool,
 }
 
 /// Why a `klist` argv is not run.
@@ -420,8 +422,8 @@ pub fn klist_usage(prog: &str) -> String {
 }
 
 /// Parse `klist` arguments after argv0.
-/// MIT `main` (`klist.c:137-218`): the options `dfetKsnacki45lAC` (`-V` is not taken), `-c` and
-/// `-k` choosing the mode once, the options each mode refuses, and one name at most.
+/// MIT `main` (`klist.c:137-218`): the options `dfetKsnacki45lAVC`, `-c` and `-k` choosing the
+/// mode once, the options each mode refuses, and one name at most.
 ///
 /// # Errors
 ///
@@ -430,7 +432,7 @@ pub fn klist_usage(prog: &str) -> String {
 /// second name.
 pub fn parse_klist(args: &[String]) -> Result<KlistArgs, KlistParseError> {
     let usage = |lines: Vec<String>| KlistParseError::Usage(UsageError::Lines(lines));
-    let (opts, rest) = getopt(args, "dfetKsnacki45lAC", &[])
+    let (opts, rest) = getopt(args, "dfetKsnacki45lAVC", &[])
         .map_err(|e| KlistParseError::Usage(UsageError::Getopt(e)))?;
     let mut out = KlistArgs::default();
     let mut mode_set = false;
@@ -455,6 +457,7 @@ pub fn parse_klist(args: &[String]) -> Result<KlistArgs, KlistParseError> {
             'l' => out.list_all = true,
             'A' => out.show_all = true,
             'C' => out.config = true,
+            'V' => out.version = true,
             _ => {}
         }
     }
@@ -967,6 +970,14 @@ mod tests {
         assert!(a.flags && a.etype);
         assert_eq!(a.ccache.as_deref(), Some("/tmp/cc"));
         assert!(!a.silent);
+    }
+
+    /// Live MIT 1.22.2 `klist -V`: taken, and the usage checks still come first.
+    #[test]
+    fn klist_takes_v_after_the_usage_checks() {
+        assert!(parse_klist(&s(&["-V"])).unwrap().version);
+        assert!(parse_klist(&s(&["-V", "-k", "-f"])).is_err());
+        assert!(parse_klist(&s(&["-V", "a", "b"])).is_err());
     }
 
     #[test]
