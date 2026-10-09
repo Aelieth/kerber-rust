@@ -93,8 +93,9 @@ pub struct KinitGateArgs {
 /// Why a `kinit` argv is not run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KinitParseError {
-    /// `-4`: "Kerberos 4 is no longer supported", exit 3.
-    Krb4,
+    /// `-4`: the lines the option loop printed before it, then "Kerberos 4 is no longer supported", exit 3.
+    /// MIT `parse_options` (`kinit.c:359-361`): `-4` exits at once, after what the loop printed.
+    Krb4(UsageError),
     /// The usage text, after these lines.
     Usage(UsageError),
 }
@@ -198,8 +199,8 @@ fn kinit_longs() -> Vec<LongOpt> {
 ///
 /// # Errors
 ///
-/// [`KinitParseError::Krb4`] for `-4`; [`KinitParseError::Usage`] with MIT's lines for every
-/// refusal above.
+/// [`KinitParseError::Krb4`] for `-4`, with the lines printed before it; [`KinitParseError::Usage`]
+/// with MIT's lines for every refusal above.
 pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
     let (each, rest) = getopt_each(args, KINIT_OPTSTRING, &kinit_longs());
     let mut out = KinitArgs::default();
@@ -257,7 +258,7 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
             }
             'C' => out.canonicalize = true,
             'E' => out.enterprise = true,
-            '4' => return Err(KinitParseError::Krb4),
+            '4' => return Err(KinitParseError::Krb4(UsageError::Each(lines))),
             _ => {}
         }
     }
@@ -911,7 +912,20 @@ mod tests {
         let forced = parse_kinit(&s(&["-t", "/etc/krb5.keytab", "host/x"])).unwrap();
         assert!(forced.keytab);
         assert_eq!(forced.notices, ["keytab specified, forcing -k"]);
-        assert_eq!(parse_kinit(&s(&["-4"])), Err(KinitParseError::Krb4));
+        assert_eq!(
+            parse_kinit(&s(&["-4"])),
+            Err(KinitParseError::Krb4(UsageError::Each(Vec::new())))
+        );
+        // Live MIT 1.22.2: what the loop printed before `-4` stays printed.
+        let Err(KinitParseError::Krb4(before)) =
+            parse_kinit(&s(&["-Z", "-l", "bad", "-4", "-c", "x"]))
+        else {
+            panic!("-4 did not stop kinit's option loop");
+        };
+        assert_eq!(
+            before.lines("kinit"),
+            ["kinit: invalid option -- 'Z'", "Bad lifetime value bad"]
+        );
         let r = parse_kinit(&s(&["-R"])).unwrap();
         assert!(r.renew && r.principal.is_none());
         let last = parse_kinit(&s(&["-R", "-k", "-v"])).unwrap();

@@ -18,7 +18,10 @@ fn main() {
     let prog = progname(argv0);
     let args = match parse(argv.get(1..).unwrap_or_default()) {
         Ok(a) => a,
-        Err(Parsed::Krb4) => {
+        Err(Parsed::Krb4(e)) => {
+            for line in e.lines(argv0) {
+                eprintln!("{line}");
+            }
             eprintln!("Kerberos 4 is no longer supported");
             std::process::exit(3);
         }
@@ -49,8 +52,9 @@ struct Args {
 /// Why an argv is not run.
 #[derive(Debug, PartialEq, Eq)]
 enum Parsed {
-    /// `-4`.
-    Krb4,
+    /// `-4`, after the lines the option loop printed before it.
+    /// MIT `main` (`kdestroy.c:124-126`): `-4` exits at once, after what the loop printed.
+    Krb4(UsageError),
     /// A usage error.
     Usage(UsageError),
 }
@@ -95,7 +99,7 @@ fn parse(args: &[String]) -> Result<Args, Parsed> {
                 errflg = true;
             }
             'p' => out.princ = o.arg,
-            '4' => return Err(Parsed::Krb4),
+            '4' => return Err(Parsed::Krb4(UsageError::Each(lines))),
             _ => {}
         }
     }
@@ -246,7 +250,20 @@ mod tests {
             lines(&["-c", "a", "-c", "b"]),
             ["Only one -c option allowed"]
         );
-        assert_eq!(parse(&s(&["-4"])), Err(Parsed::Krb4));
+        assert_eq!(
+            parse(&s(&["-4"])),
+            Err(Parsed::Krb4(UsageError::Each(Vec::new())))
+        );
+        let Err(Parsed::Krb4(before)) = parse(&s(&["-Z", "-c", "a", "-c", "b", "-4"])) else {
+            panic!("-4 did not stop kdestroy's option loop");
+        };
+        assert_eq!(
+            before.lines("kdestroy"),
+            [
+                "kdestroy: invalid option -- 'Z'",
+                "Only one -c option allowed"
+            ]
+        );
         assert_eq!(lines(&["extra"]), Vec::<String>::new());
         // glibc's getopt goes on past a bad option, as MIT's `kdestroy` loop does.
         assert_eq!(

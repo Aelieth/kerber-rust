@@ -41,7 +41,10 @@ fn main() {
     let prog = progname(argv0);
     let opts = match parse_kinit(argv.get(1..).unwrap_or_default()) {
         Ok(o) => o,
-        Err(KinitParseError::Krb4) => {
+        Err(KinitParseError::Krb4(e)) => {
+            for line in e.lines(argv0) {
+                eprintln!("{line}");
+            }
             eprintln!("Kerberos 4 is no longer supported");
             std::process::exit(3);
         }
