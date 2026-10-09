@@ -453,27 +453,32 @@ fn as_exchange_inner(
     {
         needs_key = false;
     }
-    with_prompted(req, prompt.filter(|_| needs_key), preauth, |req| match msg {
-        KdcMsg::AsRep(rep) => {
-            trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
-            finish_as_rep_keys(req, rep, nonce, keys, &etypes, &bound, Some(&wire))
-        }
-        KdcMsg::Error(e) if spake_more(&e) => {
-            if !crate::clpreauth::loaded("spake") {
-                return Err(preauth_failed());
+    with_prompted(
+        req,
+        prompt.filter(|_| needs_key),
+        preauth,
+        |req| match msg {
+            KdcMsg::AsRep(rep) => {
+                trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
+                finish_as_rep_keys(req, rep, nonce, keys, &etypes, &bound, Some(&wire))
             }
-            if trace::enabled() {
-                trace::init_creds_preauth();
-                trace_preauth_input(&method_from_error(&e).unwrap_or_default(), &etypes);
+            KdcMsg::Error(e) if spake_more(&e) => {
+                if !crate::clpreauth::loaded("spake") {
+                    return Err(preauth_failed());
+                }
+                if trace::enabled() {
+                    trace::init_creds_preauth();
+                    trace_preauth_input(&method_from_error(&e).unwrap_or_default(), &etypes);
+                }
+                spake_forced(req, keys, nonce, &etypes, &e, &clock)
             }
-            spake_forced(req, keys, nonce, &etypes, &e, &clock)
-        }
-        KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-            continue_from_hint(req, keys, nonce, &etypes, &e, &clock)
-        }
-        KdcMsg::Error(e) => classify_kdc_error(&e),
-        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-    })
+            KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
+                continue_from_hint(req, keys, nonce, &etypes, &e, &clock)
+            }
+            KdcMsg::Error(e) => classify_kdc_error(&e),
+            KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+        },
+    )
 }
 
 /// MIT `get_as_key_keytab` (`gic_keytab.c:68-71`): the reply etype selects the keytab key, and a
@@ -869,8 +874,7 @@ fn hint_offers_real_mechanism(req: &AsRequest<'_>, err: &KrbError) -> bool {
         return true;
     }
     method.iter().any(|p| {
-        req.ticket.preauth_allowed(p.padata_type)
-            && unarmored_mech(p.padata_type, false).is_some()
+        req.ticket.preauth_allowed(p.padata_type) && unarmored_mech(p.padata_type, false).is_some()
     })
 }
 
@@ -1096,9 +1100,10 @@ fn chosen_preauth(req: &AsRequest<'_>, err: &KrbError) -> Option<i32> {
     }
     let method = method_from_error(err).ok()?;
     let sorted = sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types_for(req.realm));
-    sorted.into_iter().map(|p| p.padata_type).find(|&t| {
-        req.ticket.preauth_allowed(t) && unarmored_mech(t, false).is_some()
-    })
+    sorted
+        .into_iter()
+        .map(|p| p.padata_type)
+        .find(|&t| req.ticket.preauth_allowed(t) && unarmored_mech(t, false).is_some())
 }
 
 fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {

@@ -225,19 +225,20 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
         (None, None) => return None,
     };
     let out_spec = out_spec.unwrap_or_else(|| out.spec());
-    // MIT `k5_begin` (`kinit.c:575-585`): the input cache is resolved after the output cache, and a name that does not resolve ends kinit.
+    // MIT `k5_begin` (`kinit.c:575-580`): resolving the input cache fails kinit. A name that
+    // resolves is used even when the file is not there yet.
+    // MIT `read_allowed_preauth_type` (`get_in_tkt.c:743-745`): a `pa_type` read that fails
+    // leaves the allowed type unset, and kinit continues.
     let in_cc = match &opts.in_ccache {
         None => None,
-        Some(n) => match armor_ccache_spec(n).and_then(|spec| {
-            krb5_client::load_ccache(&spec).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
-        }) {
-            Ok(c) => {
+        Some(n) => match armor_ccache_spec(n) {
+            Err(e) => return fail(&e, &format!("resolving ccache {n}")),
+            Ok(spec) => {
                 if opts.verbose {
                     eprintln!("Using specified input cache: {n}");
                 }
-                Some(c)
+                krb5_client::load_ccache(&spec).ok()
             }
-            Err(e) => return fail(&e, &format!("resolving ccache {n}")),
         },
     };
     let name = unparse(&me);
