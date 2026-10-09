@@ -43,8 +43,12 @@ tracing-subscriber = { workspace = true, optional = true }
 zeroize.workspace = true
 
 [features]
-# The gates' client options and request shapes (kvno's --body-realm, --renew, --renew-ticket,
-# --disable-transited-check), with the gates' environment inputs; off by default.
+# The gates' inputs, off by default and never in a release build: kinit's --spake, --fast,
+# --armor-ccache, --pkinit and --pkinit-anchors, its positional [kdc-host] principal [ccache
+# [service]], -S as a TGS-REQ after the TGT, and its log lines on stdout; kvno's
+# --disable-transited-check, --body-realm, --renew and --renew-ticket, a KDC host before the
+# services, and S4U2Self for a service other than the cache's own; and, through
+# krb5-config/test-hooks, KRB5_PASSWORD and KRB5_NEW_PASSWORD (docs/testing.md lists them).
 test-hooks = ["dep:tracing-subscriber", "krb5-config/test-hooks", "krb5-protocol/test-hooks"]
 
 [lints]

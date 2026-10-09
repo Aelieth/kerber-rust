@@ -47,8 +47,11 @@ never part of `make install`; on Fedora keep the package's tools. `kinit`, `klis
 caches as MIT's do in `FILE:`, `DIR:` and `KCM:` collections (`klist -k`, `-l` and `-A`,
 `kdestroy -A`, `kswitch -p`, a new cache for a second principal); the satomlin kit's keytab
 checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in these:
-- `kinit -I`, `--request-pac`, `--no-request-pac`, and `kvno -F` are missing, and
-  `kvno -U` does not first ask the KDC for the user's realm.
+- `kinit -I`, `--request-pac`, and `--no-request-pac` are missing; `kvno -U` does not first ask
+  the KDC for the user's realm; `kvno -S` takes a host name as given, without MIT's
+  `qualify_shortname` domain for a short name or its DNS fallback.
+- `kvno -F` is not a release flag until it is settled against an MIT KDC with certificate
+  mapping; MIT's asks for S4U2Self by the user's certificate.
 - `klist` prints dates as the C locale does, where MIT's follow the locale, and an error not yet
   compared with MIT's tools may read differently from MIT's text.
 - `[libdefaults] request_timeout` is only checked (a malformed one stops a program, as MIT's
@@ -92,8 +95,9 @@ make build
 
 `make build` is `cargo build --release --locked` of the KDC, admin and client crates with no
 cargo features: the programs read no password, and no database or stash path, from the
-environment. The release `kvno` still accepts four options the gates use and MIT's does not
-(`--disable-transited-check`, `--body-realm`, `--renew`, `--renew-ticket`). Run it as yourself.
+environment, and the gates' own options (`kinit --spake`, `kvno --body-realm` and the others
+[`testing.md`](testing.md#test-only-inputs-test-hooks) lists) are refused as MIT's tools refuse
+them. Run it as yourself.
 `sudo make install` installs that build and never compiles (sudo would not find your toolchain),
 and no install goal compiles as root: it stops if the build is missing or the sources are newer.
 Build on the distribution you install on: the programs link against its C library.
