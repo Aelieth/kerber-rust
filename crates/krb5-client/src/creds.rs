@@ -109,14 +109,13 @@ impl MatchCreds<'_> {
     }
 }
 
-/// One cache, open: its contents and the credentials added since it was read, which
-/// [`OpenCache::flush`] writes back as MIT's `krb5_cc_store_cred` would.
+/// One cache, open: its contents as read, and each credential [`OpenCache::store`] has stored
+/// since.
 pub struct OpenCache {
     /// The resolved name.
     pub spec: CcSpec,
     /// Its contents.
     pub cc: FileCcache,
-    added: Vec<CcacheCred>,
 }
 
 impl OpenCache {
@@ -129,11 +128,7 @@ impl OpenCache {
     pub fn open(spec: CcSpec) -> Result<Self, Krb5Error> {
         let cc =
             crate::load_ccache(&spec).map_err(|e| crate::cache_read_error(&spec, e.as_ref()))?;
-        Ok(Self {
-            spec,
-            cc,
-            added: Vec::new(),
-        })
+        Ok(Self { spec, cc })
     }
 
     /// The cache's default principal.
@@ -148,29 +143,35 @@ impl OpenCache {
         self.cc.creds.iter().find(|c| m.matches(c))
     }
 
-    /// MIT `krb5_cc_store_cred`: `cred` joins the cache.
-    pub fn store(&mut self, cred: CcacheCred) {
-        crate::trace::store(&self.spec, &cred);
-        self.cc.creds.push(cred.clone());
-        self.added.push(cred);
-    }
-
-    /// Write the stored credentials back: a FILE, DIR or MEMORY cache is rewritten whole, a KCM
-    /// cache gets one STORE per new credential.
+    /// MIT `krb5_cc_store_cred`: `cred` joins the cache now: appended to a FILE or DIR cache's
+    /// file under its lock ([`krb5_protocol::fcc_store`]), one STORE to a KCM cache, the MEMORY
+    /// cache replaced. A credential the store refused is not kept here either, so a later lookup
+    /// in this run asks the KDC again, as MIT's would.
+    /// MIT `fcc_store` (`cc_file.c:987-1026`): one append write of the record, under the file's exclusive lock; the error names the file.
     ///
     /// # Errors
     ///
-    /// [`Krb5Error`] with the write's message when the cache cannot be written.
-    pub fn flush(&mut self) -> Result<(), Krb5Error> {
-        if self.added.is_empty() {
-            return Ok(());
-        }
-        let added = std::mem::take(&mut self.added);
-        let result = match &self.spec {
-            CcSpec::Kcm(n) => krb5_protocol::kcm_store_creds(n, &added).map_err(Into::into),
-            spec => crate::store_ccache_keep_default(spec, self.cc.clone()),
+    /// [`Krb5Error`] as MIT reports the store's failure: for a file, its code and text with the
+    /// file name (`KRB5_FCC_NOFILE` for a file gone since it was read, the lock's errno text for
+    /// a refused lock); for KCM, as [`Krb5Error::from_kcm`].
+    pub fn store(&mut self, cred: CcacheCred) -> Result<(), Krb5Error> {
+        crate::trace::store(&self.spec, &cred);
+        let stored = match &self.spec {
+            CcSpec::Kcm(n) => krb5_protocol::kcm_store_creds(n, std::slice::from_ref(&cred))
+                .map_err(|e| Krb5Error::from_kcm(&e)),
+            CcSpec::Memory(_) => {
+                let mut cc = self.cc.clone();
+                cc.creds.push(cred.clone());
+                crate::store_ccache_keep_default(&self.spec, cc)
+                    .map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
+            }
+            CcSpec::File(_) | CcSpec::Dir(_) => match crate::cache_file_path(&self.spec) {
+                Some(path) => krb5_protocol::fcc_store(&path, &cred)
+                    .map_err(|e| Krb5Error::from_file_cache(&e, &path)),
+                None => Err(Krb5Error::of(Code::FccNofile)),
+            },
         };
-        result.map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
+        stored.map(|()| self.cc.creds.push(cred))
     }
 
     /// The `KRB5_CC_NOTFOUND` of a lookup in this cache, with the file name MIT adds for a file.
@@ -326,6 +327,8 @@ impl GetCredsOptions {
 /// `server`, else the KDC's, stored with the cross-realm TGTs it took unless `no_store`.
 /// MIT `check_cache` (`get_creds.c:1042-1065`): with `cached_only`, a credential missing from the
 /// cache is `KRB5_CC_NOTFOUND`.
+/// MIT `complete` (`get_creds.c:468-471`): the store's failure is ignored; so is a cross-realm TGT's.
+/// MIT `step_get_tgt` (`get_creds.c:952-954`): a cross-realm TGT asked for on the path is stored, its failure ignored.
 ///
 /// # Errors
 ///
@@ -376,9 +379,9 @@ pub fn get_credentials(
         for p in path {
             let hop_cred = tgt_cred(&p.crealm, &p.cname, &p.ticket, &p.session_key, &p.enc_part)
                 .map_err(|e| Krb5Error::new(Code::Other, e.to_string()))?;
-            cache.store(hop_cred);
+            let _ = cache.store(hop_cred);
         }
-        cache.store(cred.clone());
+        let _ = cache.store(cred.clone());
     }
     Ok(cred)
 }
@@ -387,10 +390,11 @@ pub fn get_credentials(
 /// `self_sname`, a matching cached credential, else S4U2Self from the KDC, stored unless
 /// `no_store`. The enterprise realm discovery of `s4u_identify_user` is not made: the user's realm
 /// is the one given or the server's.
+/// MIT `krb5_get_credentials_for_user` (`s4u_creds.c:723-727`): unlike the other lookups, a store that fails is the error.
 ///
 /// # Errors
 ///
-/// As [`get_credentials`].
+/// As [`get_credentials`], and the store's failure as [`OpenCache::store`] reports it.
 pub fn get_credentials_for_user(
     cache: &mut OpenCache,
     for_user: &Princ,
@@ -428,7 +432,7 @@ pub fn get_credentials_for_user(
     .map_err(|e| Krb5Error::from_tgs(&e, &unparse(self_sname), &hop))?;
     let cred = cred_from_tgs(for_user, &out)?;
     if !opts.no_store {
-        cache.store(cred.clone());
+        cache.store(cred.clone())?;
     }
     Ok(cred)
 }
@@ -437,7 +441,7 @@ pub fn get_credentials_for_user(
 /// evidence ticket's) to `server`, cached if a credential with that evidence is, stored unless
 /// `no_store`.
 /// MIT `k5_get_proxy_cred_from_kdc` (`s4u_creds.c:1179-1188`): the KDC's credential is stored
-/// under the server asked for.
+/// under the server asked for, a failed store ignored.
 /// MIT `kdcrep2creds` (`gc_via_tkt.c:64-74`): its client is the reply's, and it keeps the evidence
 /// ticket as its second ticket.
 /// MIT `krb5_get_credentials_for_proxy` (`s4u_creds.c:1248-1252`): a client other than the
@@ -486,7 +490,7 @@ pub fn get_credentials_for_proxy(
         cred.server = server.clone();
         cred.second_ticket.clone_from(&evidence.ticket);
         if !opts.no_store {
-            cache.store(cred.clone());
+            let _ = cache.store(cred.clone());
         }
         cred
     };
@@ -675,7 +679,6 @@ mod tests {
                 me.clone(),
                 vec![cred("host/x", 50, 1, 18), cred("host/x", 100, 0, 18)],
             ),
-            added: Vec::new(),
         };
         let m = |now, enctype, second: Option<&'static [u8]>| MatchCreds {
             client: Some(&me),
@@ -726,15 +729,45 @@ mod tests {
         let only_evidence = OpenCache {
             spec: CcSpec::Memory("t".into()),
             cc: FileCcache::new(me.clone(), vec![evidence.clone()]),
-            added: Vec::new(),
         };
         assert!(only_evidence.retrieve(&m).is_none());
         let both = OpenCache {
             spec: CcSpec::Memory("t".into()),
             cc: FileCcache::new(me, vec![evidence.clone(), proxied]),
-            added: Vec::new(),
         };
         assert_eq!(both.retrieve(&m).map(|c| c.endtime), Some(90));
+    }
+
+    /// MIT `fcc_store`: a stored credential is appended to the FILE cache, the bytes already
+    /// there kept as they were; a store into a file gone since it was read fails naming it, and
+    /// the credential is not kept.
+    #[test]
+    fn store_appends_to_a_file_cache_and_names_a_file_gone_since() {
+        let me = (
+            realm("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]),
+        );
+        let dir = krb5_testkit::scratch_dir("krb5-client-store");
+        let path = dir.join("cc");
+        FileCcache::new(me, vec![cred("host/x", 100, 0, 18)])
+            .write_file(&path)
+            .unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut cache = OpenCache::open(CcSpec::File(path.clone())).unwrap();
+        cache.store(cred("host/y", 100, 0, 18)).unwrap();
+        let after = std::fs::read(&path).unwrap();
+        assert_eq!(&after[..before.len()], before.as_slice());
+        assert_eq!(FileCcache::parse(&after).unwrap().creds.len(), 2);
+        assert_eq!(cache.cc.creds.len(), 2);
+        std::fs::remove_file(&path).unwrap();
+        let e = cache.store(cred("host/z", 100, 0, 18)).unwrap_err();
+        assert_eq!(e.code, Code::FccNofile);
+        assert_eq!(
+            e.message,
+            format!("No credentials cache found (filename: {})", path.display())
+        );
+        assert_eq!(cache.cc.creds.len(), 2);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Live MIT 1.22.2 `kvno -e bogus-etype`: "Invalid argument while converting etype".

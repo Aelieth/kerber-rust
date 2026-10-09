@@ -69,14 +69,10 @@ pub fn build_krb_safe_ex(
     seq_number: Option<u32>,
     include_time: bool,
 ) -> Result<KrbSafe, Error> {
+    // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
-        let now = KerberosTime::now();
-        (
-            Some(now.clone()),
-            Some(Microseconds::from_subsec_micros(
-                now.0.timestamp_subsec_micros(),
-            )),
-        )
+        let (now, usec) = crate::us_timeofday();
+        (Some(now), Some(usec))
     } else {
         (None, None)
     };
@@ -475,14 +471,10 @@ pub fn build_krb_priv_chained(
     include_time: bool,
     state: &mut CipherState,
 ) -> Result<KrbPriv, Error> {
+    // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
-        let now = KerberosTime::now();
-        (
-            Some(now.clone()),
-            Some(Microseconds::from_subsec_micros(
-                now.0.timestamp_subsec_micros(),
-            )),
-        )
+        let (now, usec) = crate::us_timeofday();
+        (Some(now), Some(usec))
     } else {
         (None, None)
     };
@@ -651,14 +643,13 @@ pub fn build_krb_cred(
     tickets: Vec<Ticket>,
     ticket_info: Vec<KrbCredInfo>,
 ) -> Result<KrbCred, Error> {
-    let now = KerberosTime::now();
+    // MIT `krb5_mk_ncred` (`lib/krb5/krb/mk_cred.c:177-178`): a missing timestamp is filled from one `krb5_us_timeofday` reading.
+    let (now, usec) = crate::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info,
         nonce: None,
-        timestamp: Some(now.clone()),
-        usec: Some(Microseconds::from_subsec_micros(
-            now.0.timestamp_subsec_micros(),
-        )),
+        timestamp: Some(now),
+        usec: Some(usec),
         s_address: Some(local_addr()),
         r_address: None,
     };

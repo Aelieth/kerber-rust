@@ -625,16 +625,17 @@ pub fn mit_error_code(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Op
 ///
 /// # Errors
 ///
-/// A boxed `std::io::Error` when a FILE or DIR cache cannot be read (`NotFound` if missing) or
-/// parsed (`InvalidData`, `UnexpectedEof`), or when [`dir_read_path`] or [`kcm_load`] fails;
-/// the message `No credentials cache found` when no MEMORY cache has that name.
+/// A boxed `std::io::Error` when a FILE or DIR cache cannot be read (`NotFound` if missing, an
+/// [`krb5_protocol::FccFailure`] when its lock is refused) or parsed (`InvalidData`,
+/// `UnexpectedEof`), or when [`dir_read_path`] or [`kcm_load`] fails; the message `No credentials
+/// cache found` when no MEMORY cache has that name.
 pub fn load_ccache(spec: &CcSpec) -> Result<FileCcache, Box<dyn std::error::Error + Send + Sync>> {
     match spec {
-        CcSpec::File(p) => Ok(FileCcache::parse(&std::fs::read(p)?)?),
+        CcSpec::File(p) => Ok(FileCcache::parse(&krb5_protocol::read_cache_file(p)?)?),
         CcSpec::Memory(n) => memory_retrieve(n).ok_or_else(|| "No credentials cache found".into()),
         CcSpec::Dir(r) => {
             let p = dir_read_path(r)?;
-            Ok(FileCcache::parse(&std::fs::read(p)?)?)
+            Ok(FileCcache::parse(&krb5_protocol::read_cache_file(&p)?)?)
         }
         CcSpec::Kcm(n) => kcm_load(n).map_err(Into::into),
     }

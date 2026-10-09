@@ -35,6 +35,7 @@ mod error;
 mod framing;
 mod kcm;
 mod keytab;
+mod lock_file;
 mod preauth;
 mod replay;
 mod safe_priv;
@@ -72,7 +73,8 @@ pub use builders::{
 };
 pub use capture::capture_pdu;
 pub use ccache::{
-    CcacheCred, CcacheKeyblock, FileCcache, parse_principal, parse_principal_ex, realm, tgt_cred,
+    CcacheCred, CcacheKeyblock, FccFailure, FileCcache, fcc_store, parse_principal,
+    parse_principal_ex, read_cache_file, realm, tgt_cred,
 };
 pub use ccache_dir::{
     dir_cache_path, dir_cache_path_for_store, dir_display_name, dir_gen_new, dir_primary,
@@ -104,6 +106,7 @@ pub use keytab::{
     Keytab, KeytabEntry, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
     sort_etypes_keytab_first,
 };
+pub use lock_file::{FileLock, lock_file, lock_file_how};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,
     fx_fast_padata, fx_fast_padata_over, pa_for_user, pa_pac_options, pa_pk_as_req,

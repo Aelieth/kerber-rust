@@ -139,10 +139,6 @@ fn do_v5_kvno(prog: &str, args: &KvnoArgs) -> i32 {
             Err(()) => errors += 1,
         }
     }
-    if let Err(e) = cache.flush() {
-        eprintln!("{prog}: {e} while storing credentials");
-        errors += 1;
-    }
     if errors == 0
         && let (Some(spec), Some(cc)) = (out_spec, out)
         && let Err(e) = store_ccache_keep_default(&spec, cc)
@@ -377,7 +373,7 @@ mod gate {
         }
         .map_err(|e| Krb5Error::from_tgs(&e, &super::unparse(server), &hop))?;
         let cred = cred_from_tgs(me, &out)?;
-        cache.store(cred.clone());
+        let _ = cache.store(cred.clone());
         Ok(cred)
     }
 }

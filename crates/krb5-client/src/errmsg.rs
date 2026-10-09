@@ -63,6 +63,10 @@ pub enum Code {
     KdcrepModified,
     /// `KRB5_CC_IO`.
     CcIo,
+    /// `KRB5_CC_FORMAT`.
+    CcFormat,
+    /// `KRB5_CCACHE_BADVNO`.
+    CcBadVno,
     /// `KRB5_KCM_NO_SERVER`.
     KcmNoServer,
     /// errno `ENOENT`.
@@ -217,11 +221,18 @@ impl Krb5Error {
         }
     }
 
-    /// A FILE cache's read failure, with the file name as MIT adds it.
+    /// A FILE cache's read or store failure, with the file name as MIT adds it.
     /// MIT `set_errmsg_filename` (`cc_file.c:117-124`): "\<message\> (filename: \<path\>)".
+    /// MIT `open_cache_file` (`cc_file.c:347-352`): a lock failure is the lock's errno, not `interpret_errno`'s code.
     #[must_use]
     pub fn from_file_cache(e: &io::Error, path: &Path) -> Self {
-        let code = interpret_errno(e);
+        let code = match krb5_protocol::FccFailure::of(e) {
+            Some(krb5_protocol::FccFailure::Lock(_)) => Code::Other,
+            Some(krb5_protocol::FccFailure::Format) => Code::CcFormat,
+            Some(krb5_protocol::FccFailure::BadVersion) => Code::CcBadVno,
+            Some(krb5_protocol::FccFailure::ShortWrite) => Code::CcIo,
+            None => interpret_errno(e),
+        };
         let text = if code == Code::Other {
             e.to_string()
         } else {
@@ -299,6 +310,10 @@ fn code_text(code: Code) -> &'static str {
         Code::KdcrepModified => "KDC reply did not match expectations",
         // MIT `KRB5_CC_IO` (`krb5_err.et:261-261`): the text.
         Code::CcIo => "Credentials cache I/O operation failed",
+        // MIT `KRB5_CC_FORMAT` (`krb5_err.et:267-267`): the text.
+        Code::CcFormat => "Bad format in credentials cache",
+        // MIT `KRB5_CCACHE_BADVNO` (`krb5_err.et:292-292`): the text.
+        Code::CcBadVno => "Unsupported credentials cache format version number",
         // MIT `KRB5_KCM_NO_SERVER` (`k5e1_err.et:44-44`): the text.
         Code::KcmNoServer => "No KCM server found",
         Code::Enoent => "No such file or directory",

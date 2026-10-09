@@ -5,7 +5,7 @@ use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_protocol::{ReplayCache, unwrap_krb_cred};
 use krb5_types::{
-    EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime, KrbCred, KrbCredInfo, Microseconds,
+    EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime, KrbCred, KrbCredInfo,
     PrincipalName, Realm, Ticket, TicketFlags, ku,
 };
 
@@ -59,14 +59,13 @@ pub(super) fn krb_cred_for_deleg(
         sname: Some(PrincipalName::krbtgt(realm.as_ref())),
         caddr: None,
     };
-    let now = KerberosTime::now();
+    // MIT `krb5_mk_ncred` (`lib/krb5/krb/mk_cred.c:177-178`): a missing timestamp is filled from one `krb5_us_timeofday` reading.
+    let (now, usec) = krb5_protocol::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info: vec![info],
         nonce: None,
-        timestamp: Some(now.clone()),
-        usec: Some(Microseconds::from_subsec_micros(
-            now.0.timestamp_subsec_micros(),
-        )),
+        timestamp: Some(now),
+        usec: Some(usec),
         s_address: None,
         r_address: None,
     };
