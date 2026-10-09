@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **cli.** A long option's missing or unwanted argument names the option in full, not the prefix typed. Unit.
 - **client.** kinit -4 and kdestroy -4 print the option-loop lines first, then "Kerberos 4 is no longer supported", exit 3. Unit.
 - **client/types.** kinit -s takes an absolute time when the value is no delta, glibc strptime rules; a time past is sent unpostdated. Unit.
 - **client.** kvno -I after -U keeps the enterprise flag, so -U a -I b asks for b as an enterprise name. Unit.

@@ -82,18 +82,25 @@ pub fn getopt_each(
                     continue;
                 }
             };
+            // glibc `process_long_option`: a missing or unwanted argument is named by the option matched, not the prefix typed. An unknown or ambiguous option stays named by the text typed.
             let arg = match (spec.takes_arg, inline) {
                 (true, Some(v)) => Some(v),
                 (true, None) => {
                     let Some(v) = args.get(i) else {
-                        each.push(Err(format!("option '--{name}' requires an argument")));
+                        each.push(Err(format!(
+                            "option '--{}' requires an argument",
+                            spec.name
+                        )));
                         break;
                     };
                     i += 1;
                     Some(v.clone())
                 }
                 (false, Some(_)) => {
-                    each.push(Err(format!("option '--{name}' doesn't allow an argument")));
+                    each.push(Err(format!(
+                        "option '--{}' doesn't allow an argument",
+                        spec.name
+                    )));
                     continue;
                 }
                 (false, None) => None,
@@ -303,6 +310,15 @@ mod tests {
         assert_eq!(
             getopt(&s(&["--nope=1"]), "", &longs).unwrap_err(),
             "unrecognized option '--nope=1'"
+        );
+        // Live MIT 1.22.2 `kvno --out` / `kvno --cached=1`: a prefix's complaint names the option in full.
+        assert_eq!(
+            getopt(&s(&["--armor"]), "T:", &longs).unwrap_err(),
+            "option '--armor-ccache' requires an argument"
+        );
+        assert_eq!(
+            getopt(&s(&["--spa=1"]), "", &longs).unwrap_err(),
+            "option '--spake' doesn't allow an argument"
         );
     }
 
