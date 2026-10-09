@@ -317,16 +317,28 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
 }
 
 /// Runs `then` with `req` carrying the password `prompt` reads, or with `req` itself when there
-/// is no prompt.
+/// is no prompt. A read that fails while it answers the KDC's preauthentication hint (`preauth`)
+/// is [`Error::PreauthFailed`], unless it was interrupted (an `Interrupted` I/O error).
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-698`): a keyboard interrupt stops the mechanisms with its own code.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): any other failure of the real type answered is wrapped as `KRB5_PREAUTH_FAILED`.
 fn with_prompted<T>(
     req: &AsRequest<'_>,
     prompt: Option<&mut PasswordPrompt<'_>>,
+    preauth: bool,
     then: impl FnOnce(&AsRequest<'_>) -> Result<T, Error>,
 ) -> Result<T, Error> {
     let Some(prompt) = prompt else {
         return then(req);
     };
-    let password = prompt()?;
+    let password = prompt().map_err(|e| {
+        let interrupted =
+            matches!(&e, Error::File(io) if io.kind() == std::io::ErrorKind::Interrupted);
+        if preauth && !interrupted {
+            Error::PreauthFailed(Box::new(e))
+        } else {
+            e
+        }
+    })?;
     then(&AsRequest {
         cname: req.cname.clone(),
         realm: req.realm,
@@ -414,6 +426,8 @@ fn as_exchange_inner(
         KdcMsg::Error(e) => e.error_code == err::PREAUTH_REQUIRED || spake_more(e),
         KdcMsg::TgsRep => false,
     };
+    let preauth =
+        matches!(&msg, KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED || spake_more(e));
     // MIT `encts_prep_questions` (`lib/krb5/krb/preauth_encts.c:44-45`): encrypted timestamp asks for no key when the realm disables it.
     if let KdcMsg::Error(e) = &msg
         && encrypted_timestamp_disabled(req.realm)
@@ -421,7 +435,7 @@ fn as_exchange_inner(
     {
         needs_key = false;
     }
-    with_prompted(req, prompt.filter(|_| needs_key), |req| match msg {
+    with_prompted(req, prompt.filter(|_| needs_key), preauth, |req| match msg {
         KdcMsg::AsRep(rep) => {
             trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
             finish_as_rep_keys(req, rep, nonce, keys, &etypes, &bound, Some(&wire))

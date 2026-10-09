@@ -70,7 +70,7 @@ pub(super) fn continue_fast(
     trace::fast_encode();
     let wire = encode(&probe)?;
     match send_as(req, &wire)? {
-        KdcMsg::AsRep(rep) => with_prompted(req, prompt, |req| {
+        KdcMsg::AsRep(rep) => with_prompted(req, prompt, false, |req| {
             finish_fast_as(req, keys, nonce, etypes, &akey, None, rep, &wire, bound)
         }),
         KdcMsg::Error(e) => {
@@ -87,7 +87,7 @@ pub(super) fn continue_fast(
             }
             // The KDC's time, authenticated by the armor.
             clock.note(&inner, true);
-            with_prompted(req, prompt, |req| {
+            with_prompted(req, prompt, true, |req| {
                 // MIT `init_creds_step_reply` (`get_in_tkt.c:1731-1740`): PREAUTH_FAILED on a
                 // mechanism that has not disabled fallback notes it failed and tries the next one.
                 let mut current = inner;

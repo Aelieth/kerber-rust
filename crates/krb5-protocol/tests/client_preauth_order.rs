@@ -476,3 +476,108 @@ fn spake_keeps_the_hints_etype_info_when_the_challenge_has_none() {
         );
     }
 }
+
+/// A KDC that answers every AS-REQ with KRB-ERROR `code` and counts the requests.
+fn kdc_answering(code: i32) -> (u16, Arc<Mutex<usize>>) {
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let count = Arc::new(Mutex::new(0usize));
+    let seen = Arc::clone(&count);
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok((n, src)) = udp.recv_from(&mut buf) {
+            if decode::<AsReq>(&buf[..n]).is_err() {
+                continue;
+            }
+            *seen.lock().unwrap() += 1;
+            let reply = if code == err::PREAUTH_REQUIRED {
+                encode_preauth_required(&vec![pa_of(pa::ENC_TIMESTAMP)])
+            } else {
+                encode(&KrbError {
+                    pvno: KrbError::PVNO,
+                    msg_type: KrbError::MSG_TYPE,
+                    ctime: None,
+                    cusec: None,
+                    stime: KerberosTime::now(),
+                    susec: Microseconds::ZERO,
+                    error_code: code,
+                    crealm: None,
+                    cname: None,
+                    realm: ascii("KERBER.TEST"),
+                    sname: PrincipalName::krbtgt("KERBER.TEST"),
+                    e_text: None,
+                    e_data: None,
+                })
+                .unwrap()
+            };
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    (port, count)
+}
+
+fn prompted_as(port: u16, prompt: &mut krb5_protocol::PasswordPrompt<'_>) -> krb5_protocol::Error {
+    let kdc = KdcAddr {
+        host: "127.0.0.1".into(),
+        port,
+    };
+    krb5_protocol::as_exchange_prompted(
+        &AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"",
+            kdc: &kdc,
+            want_spake: false,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: None,
+            ticket: AsTicketOpts::default(),
+        },
+        prompt,
+    )
+    .unwrap_err()
+}
+
+/// MIT asks the KDC before it reads the password: an unknown client is the KDC's error, and the
+/// prompter is never called. A read that fails answering the preauthentication hint is
+/// `KRB5_PREAUTH_FAILED` around the read, unless the read was interrupted.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): the failure of the real type answered is wrapped.
+#[test]
+fn a_password_read_that_fails_in_preauthentication_is_a_preauth_failure() {
+    isolate_host_krb5();
+    let (port, asked) = kdc_answering(err::C_PRINCIPAL_UNKNOWN);
+    let mut reads = 0;
+    let e = prompted_as(port, &mut || {
+        reads += 1;
+        Err(krb5_protocol::Error::File(std::io::Error::other(
+            "Cannot read password",
+        )))
+    });
+    assert!(
+        matches!(
+            e,
+            krb5_protocol::Error::KrbError {
+                code: err::C_PRINCIPAL_UNKNOWN,
+                ..
+            }
+        ),
+        "{e}"
+    );
+    assert_eq!((reads, *asked.lock().unwrap()), (0, 1));
+    let (port, _) = kdc_answering(err::PREAUTH_REQUIRED);
+    let e = prompted_as(port, &mut || {
+        Err(krb5_protocol::Error::File(std::io::Error::other(
+            "Cannot read password",
+        )))
+    });
+    assert!(matches!(e, krb5_protocol::Error::PreauthFailed(_)), "{e}");
+    let e = prompted_as(port, &mut || {
+        Err(krb5_protocol::Error::File(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "Password read interrupted",
+        )))
+    });
+    assert!(matches!(e, krb5_protocol::Error::File(_)), "{e}");
+}

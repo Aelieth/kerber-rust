@@ -1,8 +1,9 @@
 //! MIT `kpasswd`: change a principal's password through its realm's kpasswd service.
 //!
 //! Usage: `krb5-kpasswd [principal]`. The principal is the argument, else the default ccache's,
-//! else the login name. The current password is asked for, then the new one twice, one line each
-//! from a pipe. The server is the realm's `kpasswd_server`, else its `admin_server` on port 464;
+//! else the login name. The current password is asked for when the KDC's reply needs the key,
+//! then the new one twice, one line each from a pipe. The server is the realm's `kpasswd_server`,
+//! else its `admin_server` on port 464;
 //! TCP first, then UDP.
 //!
 //! A `test-hooks` build (the gates') takes the passwords from `KRB5_PASSWORD` and
@@ -20,7 +21,8 @@ use krb5_cli::Prompter;
 use krb5_config::{CcSpec, Endpoint, Krb5Conf};
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, Error, FileCcache, KPASSWD_PORT, KPASSWD_SUCCESS, KdcAddr,
-    as_exchange, change_password_result, format_chpw_failure, parse_principal, set_password,
+    as_exchange, as_exchange_prompted, change_password_result, format_chpw_failure,
+    parse_principal, set_password,
 };
 use krb5_types::PrincipalName;
 use zeroize::Zeroizing;
@@ -87,17 +89,9 @@ fn run<R: BufRead, W: Write>(
     };
     let kdc = list[0].clone();
     krb5_config::hand_kdcs(&client.realm, list);
-    let old = match krb5_config::env_password() {
-        Some(pw) => Zeroizing::new(pw),
-        None => match prompter.hidden(&format!("Password for {}", client.display)) {
-            Ok(pw) => pw,
-            Err(e) => {
-                eprintln!("{prog}: {e} getting initial ticket");
-                return 1;
-            }
-        },
-    };
-    let changepw = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+    let given = krb5_config::env_password().map(Zeroizing::new);
+    // MIT `k5_infer_principal_type` (`lib/krb5/krb/bld_princ.c:34-42`): "kadmin/changepw" is not krbtgt or WELLKNOWN, so `krb5_parse_name` makes it NT-PRINCIPAL.
+    let changepw = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "changepw"]);
     let kdc = KdcAddr {
         host: kdc.host,
         port: kdc.port,
@@ -109,10 +103,10 @@ fn run<R: BufRead, W: Write>(
         client.realm.as_bytes(),
     ));
     krb5_protocol::trace::init_creds_service("kadmin/changepw");
-    let as_out = match as_exchange(&AsRequest {
+    let req = AsRequest {
         cname: client.name,
         realm: &client.realm,
-        password: &old,
+        password: given.as_deref().map_or(&[][..], Vec::as_slice),
         kdc: &kdc,
         want_spake: false,
         fast_armor: None,
@@ -127,7 +121,26 @@ fn run<R: BufRead, W: Write>(
             proxiable: false,
             ..AsTicketOpts::default()
         },
-    }) {
+    };
+    // MIT `main` (`kpasswd.c:129-131`): `krb5_get_init_creds_password` is given no password, so the KDC is asked first and the prompter runs only when a reply needs the key.
+    let mut unread: Option<krb5_cli::PromptError> = None;
+    let out = if given.is_some() {
+        as_exchange(&req)
+    } else {
+        let asked = format!("Password for {}", client.display);
+        as_exchange_prompted(&req, &mut || {
+            prompter.hidden(&asked).map_err(|e| {
+                unread = Some(e);
+                let kind = if e == krb5_cli::PromptError::Interrupted {
+                    io::ErrorKind::Interrupted
+                } else {
+                    io::ErrorKind::Other
+                };
+                Error::File(io::Error::new(kind, e.to_string()))
+            })
+        })
+    };
+    let as_out = match out {
         Ok(out) => out,
         // MIT `main` (`kpasswd.c:132-142`): a wrong password is "Password incorrect", any other failure its own text.
         Err(
@@ -141,7 +154,16 @@ fn run<R: BufRead, W: Write>(
             return 1;
         }
         Err(e) => {
-            eprintln!("{prog}: {} getting initial ticket", initial_ticket_text(&e));
+            let text = match (unread, &e) {
+                // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): a read that failed answering the KDC's preauthentication hint is `KRB5_PREAUTH_FAILED`.
+                // MIT `default_com_err_proc` (`util/et/com_err.c:83-85`): kpasswd's `com_err` prints `error_message` of that code.
+                (Some(_), Error::PreauthFailed(_)) => {
+                    "Generic preauthentication failure".to_owned()
+                }
+                (Some(why), _) => why.to_string(),
+                (None, e) => initial_ticket_text(e),
+            };
+            eprintln!("{prog}: {text} getting initial ticket");
             return 1;
         }
     };

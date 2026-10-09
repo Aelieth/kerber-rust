@@ -65,6 +65,11 @@ pub enum Error {
     /// MIT `negotiate_etype` (`lib/krb5/krb/rd_req_dec.c:878-886`): `KRB5_NOPERM_ETYPE` with the enctype's name.
     #[error("{0}")]
     NopermEtype(String),
+    /// A real preauthentication type failed, the password's read among them: MIT's
+    /// `KRB5_PREAUTH_FAILED`, its message wrapping the cause.
+    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): with no real type answered, the first type's failure is wrapped as "Pre-authentication failed: \<its message\>".
+    #[error("Pre-authentication failed: {0}")]
+    PreauthFailed(Box<Error>),
     /// Reply too short to classify.
     #[error("KDC reply truncated")]
     TruncatedReply,
@@ -108,6 +113,7 @@ impl Clone for Error {
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
             Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
+            Self::PreauthFailed(e) => Self::PreauthFailed(e.clone()),
             Self::TruncatedReply => Self::TruncatedReply,
             Self::FastUpgrade => Self::FastUpgrade,
             Self::EnctsDisabled => Self::EnctsDisabled,

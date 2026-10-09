@@ -585,13 +585,15 @@ impl LazyPassword<'_> {
     }
 
     /// An AS exchange for `req` with the password [`LazyPassword::get`] gives; a failed read is
-    /// the outer error.
+    /// the outer error, `KRB5_PREAUTH_FAILED` around it when it failed answering the KDC's
+    /// preauthentication hint.
+    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): "Pre-authentication failed: \<the read's message\>".
     fn as_exchange(
         &mut self,
         req: &AsRequest<'_>,
     ) -> Result<Result<AsOutcome, ProtocolError>, Krb5Error> {
         let out = as_exchange_prompted(req, &mut || self.get());
-        self.failed.take().map_or(Ok(out), Err)
+        self.finish(out)
     }
 
     /// [`as_exchange`] that can return [`ProtocolError::FastUpgrade`] before the password is read.
@@ -600,7 +602,22 @@ impl LazyPassword<'_> {
         req: &AsRequest<'_>,
     ) -> Result<Result<AsOutcome, ProtocolError>, Krb5Error> {
         let out = as_exchange_prompted_defer_fast(req, &mut || self.get());
-        self.failed.take().map_or(Ok(out), Err)
+        self.finish(out)
+    }
+
+    /// A failed read is the outer error, wrapped when the exchange reports it as preauth.
+    fn finish(
+        &mut self,
+        out: Result<AsOutcome, ProtocolError>,
+    ) -> Result<Result<AsOutcome, ProtocolError>, Krb5Error> {
+        match (self.failed.take(), &out) {
+            (None, _) => Ok(out),
+            (Some(e), Err(ProtocolError::PreauthFailed(_))) => Err(Krb5Error::new(
+                Code::PreauthFailed,
+                format!("Pre-authentication failed: {}", e.message),
+            )),
+            (Some(e), _) => Err(e),
+        }
     }
 }
 

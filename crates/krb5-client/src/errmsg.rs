@@ -73,6 +73,8 @@ pub enum Code {
     Enoent,
     /// errno `EINVAL`.
     Einval,
+    /// `KRB5_PREAUTH_FAILED`.
+    PreauthFailed,
     /// Any other failure, under its own text.
     Other,
 }
@@ -129,6 +131,10 @@ impl Krb5Error {
                 }
                 Self::new(Code::Kdc(*code), kdc_error_text(*code))
             }
+            krb5_protocol::Error::PreauthFailed(inner) => Self::new(
+                Code::PreauthFailed,
+                format!("Pre-authentication failed: {inner}"),
+            ),
             krb5_protocol::Error::EnctsDisabled => {
                 // MIT `krb5_vwrap_error_message` (`lib/krb5/krb/kerrs.c:116-119`): the saved message is kept after the prefix and a colon.
                 // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:718-721`): that prefix is "Pre-authentication failed" when encrypted timestamp saved the failure.
@@ -318,6 +324,8 @@ fn code_text(code: Code) -> &'static str {
         Code::KcmNoServer => "No KCM server found",
         Code::Enoent => "No such file or directory",
         Code::Einval => "Invalid argument",
+        // MIT `KRB5_PREAUTH_FAILED` (`krb5_err.et:287-287`): the text.
+        Code::PreauthFailed => "Generic preauthentication failure",
     }
 }
 

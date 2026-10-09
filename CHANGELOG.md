@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **client.** kpasswd asks the KDC before the password prompt, and a password the preauth read cannot take is KRB5_PREAUTH_FAILED. Unit.
 - **admin.** kadmin.local, kadmind, and kdb5_util create stop when a realm parameter does not convert. Unit.
 - **client.** klist -V prints "Kerberos 5 version 1.22.2" and exits 0, after the usage checks. Unit.
 - **cli.** A long option's missing or unwanted argument names the option in full, not the prefix typed. Unit.
