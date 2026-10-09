@@ -105,8 +105,8 @@ pub struct AsTicketOpts {
     pub addresses: Option<krb5_types::HostAddresses>,
     /// `kinit -n`: REQUEST_ANONYMOUS + unsigned PKINIT.
     pub anonymous: bool,
-    /// Seconds from now (`kinit -s`). `None` or 0 omits `from`.
-    pub starttime: Option<u64>,
+    /// Seconds from now (`kinit -s`), negative for a time past. `None` or 0 omits `from`.
+    pub starttime: Option<i64>,
 }
 
 /// Request times/options MIT `verify_as_reply` compares to EncKDCRepPart.
@@ -1591,16 +1591,16 @@ fn request_times(req: &AsRequest<'_>, clock: &Clock) -> AsReqTimes {
 }
 
 /// MIT `set_request_times` (`get_in_tkt.c:711-722`): the start time is omitted unless the caller
-/// asked for one, and a renewable end is not requested before the ticket end. Asking for a start
-/// time marks the request postdated, and omitting a renewable lifetime asks only for
-/// renewable-ok.
+/// asked for one, and a renewable end is not requested before the ticket end. A future start
+/// marks the request postdated, and omitting a renewable lifetime asks only for renewable-ok.
 fn ticket_body(req: &AsRequest<'_>, now: &KerberosTime) -> AsReqTimes {
-    // MIT `set_request_times` (`get_in_tkt.c:711-714`): omits `from` unless start_time != 0.
-    // MIT `krb5_init_creds_init` (`get_in_tkt.c:932-934`): sets ALLOW_POSTDATE | POSTDATED
-    // when start_time > 0.
-    let from = match req.ticket.starttime {
-        Some(s) if s > 0 => now.add_seconds(i64::try_from(s).unwrap_or(i64::MAX)).ok(),
-        _ => None,
+    // MIT `set_request_times` (`get_in_tkt.c:711-716`): `from` is now plus the start time, including a time past, and `till` counts from it.
+    // MIT `krb5_init_creds_init` (`get_in_tkt.c:932-934`): ALLOW_POSTDATE | POSTDATED only when start_time > 0.
+    let start = req.ticket.starttime.unwrap_or(0);
+    let from = if start == 0 {
+        None
+    } else {
+        now.add_seconds(start).ok()
     };
     let base = from.as_ref().unwrap_or(now);
     let life = req.ticket.lifetime.unwrap_or(24 * 3600);
@@ -1615,7 +1615,7 @@ fn ticket_body(req: &AsRequest<'_>, now: &KerberosTime) -> AsReqTimes {
     if req.ticket.proxiable {
         opts = opts.with_bit(flag_bit::PROXIABLE, true);
     }
-    if from.is_some() {
+    if start > 0 {
         opts = opts
             .with_bit(flag_bit::MAY_POSTDATE, true)
             .with_bit(flag_bit::POSTDATED, true);

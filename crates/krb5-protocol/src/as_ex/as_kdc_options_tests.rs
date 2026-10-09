@@ -90,6 +90,16 @@ fn gic_opt_starttime_sets_postdated_and_from() {
     assert!(plain.from.is_none());
     assert!(!plain.opts.bit(flag_bit::POSTDATED));
     assert!(!plain.opts.bit(flag_bit::MAY_POSTDATE));
+    let past = times_of(
+        AsTicketOpts {
+            starttime: Some(-3600),
+            ..AsTicketOpts::default()
+        },
+        false,
+    );
+    assert!(past.from.is_some(), "a start in the past is still sent");
+    assert!(!past.opts.bit(flag_bit::POSTDATED));
+    assert!(!past.opts.bit(flag_bit::MAY_POSTDATE));
 }
 
 #[test]

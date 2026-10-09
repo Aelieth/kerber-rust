@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **client/types.** kinit -s takes an absolute time when the value is no delta, glibc strptime rules; a time past is sent unpostdated. Unit.
 - **client.** kvno -I after -U keeps the enterprise flag, so -U a -I b asks for b as an enterprise name. Unit.
 - **client/protocol.** kvno appends each credential under the cache file's exclusive lock; a refused store stays out, and get_credentials ignores it. Unit.
 - **client.** kinit wipes both new-password replies of an expired password on every exit, and a failed prompt says "Cannot read password". Unit.

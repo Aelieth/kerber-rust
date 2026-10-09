@@ -40,8 +40,8 @@ pub struct KinitArgs {
     pub rlife: Option<u64>,
     /// `-l`, in seconds.
     pub lifetime: Option<u64>,
-    /// `-s`, in seconds from now.
-    pub starttime: Option<u64>,
+    /// `-s`, in seconds from now; negative for a time past.
+    pub starttime: Option<i64>,
     /// `-f` / `-F`.
     pub forwardable: Option<bool>,
     /// `-p` / `-P`.
@@ -236,7 +236,7 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
             'n' => out.anonymous = true,
             'a' => yes.2 = true,
             'A' => not.2 = true,
-            's' => match krb5_config::parse_deltat(&arg).filter(|&s| s != 0) {
+            's' => match start_time(&arg) {
                 Some(s) => out.starttime = Some(s),
                 None => lines.push(own(format!("Bad start time value {arg}"))),
             },
@@ -791,6 +791,23 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
         && s.name_string[1].as_bytes() == realm
 }
 
+/// `kinit -s` as seconds from now: a delta, else an absolute time's distance from now, wrapped as
+/// MIT's 32-bit `ts_delta` wraps it. `None` for neither, or an absolute time of 0.
+/// MIT `parse_options` (`kinit.c:283-296`): `krb5_string_to_deltat`, then `krb5_string_to_timestamp`.
+fn start_time(arg: &str) -> Option<i64> {
+    match krb5_types::deltat::parse(arg) {
+        Ok(d) if d != 0 => Some(i64::from(d)),
+        _ => {
+            let abs = krb5_types::timestamp::string_to_timestamp(arg).filter(|&t| t != 0)?;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let now = u32::try_from(now & 0xffff_ffff).unwrap_or(0);
+            Some(i64::from(abs.wrapping_sub(now).cast_signed()))
+        }
+    }
+}
+
 /// `Password for <principal>: ` — the `krb5_get_init_creds_password`
 /// prompt, read through [`read_prompt_line`].
 /// MIT `krb5_get_as_key_password` (`gic_pwd.c:96-96`): the reply to the `Password for`
@@ -1114,6 +1131,18 @@ mod tests {
         let b = parse_kinit(&s(&["-C", "-s", "1h", "--noforwardable", "user@R"])).unwrap();
         assert!(b.canonicalize);
         assert_eq!(b.starttime, Some(3600));
+        // Live MIT 1.22.2: a negative delta is a start in the past; an absolute time is its
+        // distance from now; neither, or 0, is "Bad start time value".
+        let past = parse_kinit(&s(&["-s", "-1h", "user@R"])).unwrap();
+        assert_eq!(past.starttime, Some(-3600));
+        let abs = parse_kinit(&s(&["-s", "2099.12.31.12.00.00", "user@R"])).unwrap();
+        assert!(abs.starttime.is_some_and(|s| s > 0), "{:?}", abs.starttime);
+        for bad in ["0", "garbage"] {
+            let Err(KinitParseError::Usage(e)) = parse_kinit(&s(&["-s", bad, "user@R"])) else {
+                panic!("-s {bad} parsed");
+            };
+            assert_eq!(e.lines("kinit"), [format!("Bad start time value {bad}")]);
+        }
         assert_eq!(b.forwardable, Some(false));
         let v = parse_kinit(&s(&["-v", "user@R"])).unwrap();
         assert!(v.validate);
