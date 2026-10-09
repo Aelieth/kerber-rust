@@ -201,7 +201,8 @@ fn main() {
     let kdc_conf = paths.conf.as_ref();
     // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled and no `iprop_port`, kadmind does not start.
     let iprop = krb5_config::IpropParams::load(&realm, &paths.database_name);
-    if iprop.missing_required() {
+    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:207-218`): a realm value that did not convert left its required parameter unset.
+    if iprop.missing_required() || krb5_kdc::realm_kadm5_params_missing(&paths, &realm, true) {
         fail_to_start(
             &progname,
             Some(krb5_config::MISSING_CONF_PARAMS),

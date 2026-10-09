@@ -220,6 +220,9 @@ fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno
 ///
 /// As [`KdcConf::parse`].
 pub fn kdc_conf_for_realm(text: &str, realm: &str) -> Result<KdcConf, krb5_config::Error> {
+    // A stanza written `R =` with its `{` on the next line is `R`'s too: the text is read as
+    // the profile parser reads it, the brace joined first.
+    let text = &krb5_config::join_subsection_braces(text)?;
     let mut kept = String::with_capacity(text.len());
     let mut section = String::new();
     let mut depth = 0usize;

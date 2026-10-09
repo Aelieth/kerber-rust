@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** kadmin.local, kadmind, and kdb5_util create stop when a realm parameter does not convert. Unit.
 - **client.** klist -V prints "Kerberos 5 version 1.22.2" and exits 0, after the usage checks. Unit.
 - **cli.** A long option's missing or unwanted argument names the option in full, not the prefix typed. Unit.
 - **client.** kinit -4 and kdestroy -4 print the option-loop lines first, then "Kerberos 4 is no longer supported", exit 3. Unit.

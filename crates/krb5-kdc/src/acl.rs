@@ -172,27 +172,54 @@ impl Restrictions {
     }
 }
 
-/// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): `default_principal_flags`
-/// tokens split on `,`, space or tab, each fed to
-/// `krb5_flagspec_to_mask(sp, &flags, &flags)` — a `+flag` sets, a `-flag`
-/// clears — stopping at the first token the table does not know (the flags
-/// parsed so far are kept, as MIT keeps `params.flags`). Starts from
-/// `KRB5_KDB_DEF_FLAGS` (0) like MIT: when the stanza is written it *is*
-/// `params.flags`; the Rust `requires_preauth` knob only stands in for a
-/// password-keyed create when the stanza is absent
+/// The flags `default_principal_flags` sets ([`principal_flags_spec`]'s, the words read before
+/// one that does not convert kept, as MIT keeps `params.flags`). Starts from
+/// `KRB5_KDB_DEF_FLAGS` (0) like MIT: when the stanza is written it *is* `params.flags`; the Rust
+/// `requires_preauth` knob only stands in for a password-keyed create when the stanza is absent
 /// (`PrincipalStore::default_create_attributes`).
 #[must_use]
 pub fn default_principal_flags(spec: &str) -> u32 {
+    principal_flags_spec(spec).0
+}
+
+/// `default_principal_flags` as MIT's loop reads it, and whether every word converted. A word
+/// ends at the first `,` in what is left, else the first space, else the first tab; its trailing
+/// blanks are cut (its first byte never is), the next word's leading blanks skipped, so a value
+/// ending in a separator ends in an empty word, which converts to nothing. Each word goes to
+/// `krb5_flagspec_to_mask(sp, &flags, &flags)`: a `+flag` sets, a `-flag` clears.
+/// MIT `kadm5_get_config_params` (`alt_prof.c:603-627`): the first word that does not convert
+/// stops the loop, and the parameter is left unset.
+#[must_use]
+pub fn principal_flags_spec(spec: &str) -> (u32, bool) {
+    let c_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r');
     let mut flags = 0u32;
-    for token in spec.split([',', ' ', '\t']).filter(|t| !t.is_empty()) {
+    let mut rest = Some(spec);
+    while let Some(sp) = rest {
+        let cut = sp
+            .find(',')
+            .or_else(|| sp.find(' '))
+            .or_else(|| sp.find('\t'));
+        let word = if let Some(i) = cut {
+            let w = &sp[..i];
+            let keep = w
+                .char_indices()
+                .rev()
+                .find(|&(j, c)| j == 0 || !c_space(c))
+                .map_or(0, |(j, c)| j + c.len_utf8());
+            rest = Some(sp[i + 1..].trim_start_matches(c_space));
+            &w[..keep]
+        } else {
+            rest = None;
+            sp
+        };
         let mut toset = 0u32;
         let mut toclear = !0u32;
-        if !flagspec_to_mask(token, &mut toset, &mut toclear) {
-            break;
+        if !flagspec_to_mask(word, &mut toset, &mut toclear) {
+            return (flags, false);
         }
         flags = (flags | toset) & toclear;
     }
-    flags
+    (flags, true)
 }
 
 /// One ACL line: a principal pattern and permission flags.

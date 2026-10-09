@@ -637,3 +637,33 @@ fn kadmin_local_keeps_the_update_log_only_with_iprop() {
     }
     assert_eq!(std::fs::metadata(&ulog).unwrap().len(), 40 + 10 * 2048);
 }
+
+/// A realm value `kadm5_get_config_params` cannot convert leaves a required parameter unset, and
+/// kadmin.local stops at its start.
+/// MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:207-218`): a required parameter that is not set
+/// is `KADM5_MISSING_CONF_PARAMS`.
+#[test]
+fn kadmin_local_refuses_a_realm_value_kadm5_cannot_convert() {
+    let realm = Realm::new("kadmin-params");
+    let kdc_conf = realm.dir.join("kdc.conf");
+    let stanza = std::fs::read_to_string(&kdc_conf).unwrap();
+    for line in [
+        "default_principal_expiration = garbage",
+        "default_principal_flags = +preauth,+bogus",
+        "master_key_type = bogus-enctype",
+        "supported_enctypes = bogus:normal",
+    ] {
+        std::fs::write(
+            &kdc_conf,
+            stanza.replace(" }\n", &format!("  {line}\n }}\n")),
+        )
+        .unwrap();
+        let out = realm.run(&["-q", "getprinc K/M"], b"");
+        assert_eq!(out.status.code(), Some(1), "{line}");
+        assert_eq!(
+            text(&out.stderr),
+            "kadmin.local: Required parameters in kdc.conf missing while initializing kadmin.local interface\n",
+            "{line}"
+        );
+    }
+}

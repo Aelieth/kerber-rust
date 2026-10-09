@@ -29,6 +29,7 @@ mod dblock;
 mod der;
 mod error;
 mod issue;
+mod kadm5_params;
 mod kdb;
 mod kdb_dump;
 mod listen;
@@ -73,6 +74,7 @@ pub use issue::{
     IssuedAs, IssuedTgs, handle_request, handle_request_from, issue_as, issue_tgs,
     tgs_header_is_crossrealm,
 };
+pub use kadm5_params::{kadm5_params_missing, realm_kadm5_params_missing};
 pub use kdb::{
     KdcEnv, MemoryStore, PrincipalRead, PrincipalWrite, Store, StoreLifecycle, lookup_principal_id,
     open_store,

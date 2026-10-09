@@ -473,8 +473,11 @@ fn create(util: &mut Util, args: &[String]) -> u8 {
         db.display()
     ));
     // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled and no `iprop_port`, the admin interface does not start.
+    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:207-218`): nor with a realm value that did not convert (`master_key_type` aside: the master key meets it first).
     // MIT goes on to create the database and its log first; this port stops before writing anything.
-    if util.iprop.missing_required() {
+    if util.iprop.missing_required()
+        || krb5_kdc::realm_kadm5_params_missing(&util.paths, &realm, false)
+    {
         util.com_err(
             krb5_config::MISSING_CONF_PARAMS,
             "while initializing the Kerberos admin interface",

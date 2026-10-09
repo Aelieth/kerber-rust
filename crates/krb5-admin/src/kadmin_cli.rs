@@ -576,6 +576,10 @@ fn kadm5_init(
     if iprop.missing_required() {
         return Err((krb5_config::MISSING_CONF_PARAMS.to_owned(), false));
     }
+    // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:207-218`): a realm value that did not convert left its required parameter unset.
+    if krb5_kdc::realm_kadm5_params_missing(&paths, realm, true) {
+        return Err((krb5_config::MISSING_CONF_PARAMS.to_owned(), false));
+    }
     let mut db = paths.database_name.clone();
     for arg in &o.db_args {
         match db2_arg(arg) {

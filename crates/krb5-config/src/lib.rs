@@ -570,8 +570,8 @@ pub use plugin_profile::{
 };
 pub use profile::{
     client_realm_path, discover_kdc, discover_kdc_in, env_ktname, env_new_password, env_password,
-    host_to_realm, init_kdc_profile, init_profile, is_numeric_address, krb5_conf_paths,
-    load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
+    host_to_realm, init_kdc_profile, init_profile, is_numeric_address, join_subsection_braces,
+    krb5_conf_paths, load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
     udp_preference_limit,
 };
 pub use srv::lookup_srv_kdc;

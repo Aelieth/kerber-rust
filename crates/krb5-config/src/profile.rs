@@ -272,7 +272,7 @@ fn profile_lines(text: &str) -> impl Iterator<Item = &str> {
 ///
 /// [`Error::Profile`] with [`ProfileError::Syntax`] when the line after a relation with no value
 /// does not start with `{`.
-pub(crate) fn join_subsection_braces(text: &str) -> Result<String, Error> {
+pub fn join_subsection_braces(text: &str) -> Result<String, Error> {
     let mut out = String::with_capacity(text.len());
     let mut in_section = false;
     let mut pending: Option<&str> = None;
