@@ -247,11 +247,12 @@ fn tgs_failed_before_authtime(status: &str) -> bool {
 enum MitOutcome<'a> {
     /// A ticket was issued.
     Issue { authtime: u32, etypes: &'a str },
-    /// A KRB-ERROR was sent.
+    /// A KRB-ERROR was sent. `emsg` is the `k5_setmsg` text when one was set.
     Fail {
         status: &'a str,
         code: i32,
         authtime: u32,
+        emsg: &'a str,
     },
 }
 
@@ -270,9 +271,11 @@ fn as_req_line(
         MitOutcome::Issue { authtime, etypes } => format!(
             "AS_REQ ({req_etypes}) {from}: ISSUE: authtime {authtime}, {etypes}, {client} for {server}"
         ),
-        MitOutcome::Fail { status, code, .. } => format!(
+        MitOutcome::Fail {
+            status, code, emsg, ..
+        } => format!(
             "AS_REQ ({req_etypes}) {from}: {status}: {client} for {server}, {}",
-            kdc_error_message(*code)
+            failure_emsg(*code, emsg)
         ),
     }
 }
@@ -296,6 +299,7 @@ fn tgs_req_lines(
             status,
             code,
             authtime,
+            ..
         } if *code == err::SERVER_NOMATCH => {
             let alt = limit_string(s4u.map_or("<unknown>", |(_, c)| c));
             return vec![format!(
@@ -309,9 +313,10 @@ fn tgs_req_lines(
             status,
             code,
             authtime,
+            emsg,
         } => format!(
             "TGS_REQ ({req_etypes}) {from}: {status}: authtime {authtime},  {client} for {server}, {}",
-            kdc_error_message(*code)
+            failure_emsg(*code, emsg)
         ),
     };
     let mut lines = vec![line];
@@ -667,6 +672,17 @@ fn tgs_fail_stage(e_text: &str) -> i32 {
     }
 }
 
+/// MIT `log_as_req` (`kdc/kdc_log.c:87-89`): a failure appends the context message when one was set.
+/// MIT `log_tgs_req` (`kdc/kdc_log.c:146-152`): the same message follows the client and server.
+/// MIT `armor_ap_request` (`kdc/fast_util.c:57-58`): an armor failure's message is that error plus while handling ap-request armor.
+fn failure_emsg(code: i32, setmsg: &str) -> String {
+    if setmsg.is_empty() {
+        kdc_error_message(code)
+    } else {
+        setmsg.to_owned()
+    }
+}
+
 fn tgs_fail_emsg(code: i32) -> &'static str {
     if code == err::S_PRINCIPAL_UNKNOWN {
         "Server not found in Kerberos database"
@@ -772,16 +788,18 @@ pub fn log_failure(
     _bytes: &[u8],
     code: i32,
     e_text: &str,
+    detail: Option<&str>,
 ) {
+    let emsg = detail.unwrap_or("");
     match raw.first().copied() {
         Some(0x6a) => {
             if let Ok(req) = decode::<AsReq>(raw) {
-                as_failure(store, &req, sender, code, e_text);
+                as_failure(store, &req, sender, code, e_text, emsg);
             }
         }
         Some(0x6c) => {
             if let Ok(req) = decode::<TgsReq>(raw) {
-                tgs_failure(store, &req, sender, code, e_text);
+                tgs_failure(store, &req, sender, code, e_text, emsg);
             }
         }
         _ => {}
@@ -840,6 +858,7 @@ fn as_failure(
     sender: Option<&HostAddress>,
     code: i32,
     e_text: &str,
+    emsg: &str,
 ) {
     seed_as_req(store, req, sender);
     let body = &req.0.req_body;
@@ -864,7 +883,7 @@ fn as_failure(
         &server,
         None,
         false,
-        "",
+        emsg,
     );
     klog_as_req(
         &req_etypes,
@@ -873,6 +892,7 @@ fn as_failure(
             status,
             code,
             authtime: 0,
+            emsg,
         },
         &client,
         &server,
@@ -979,6 +999,7 @@ fn tgs_failure(
     sender: Option<&HostAddress>,
     code: i32,
     e_text: &str,
+    emsg: &str,
 ) {
     seed_tgs_req(store, req, sender);
     let body = &req.0.req_body;
@@ -1005,7 +1026,11 @@ fn tgs_failure(
         &server,
         None,
         nomatch,
-        tgs_fail_emsg(code),
+        if emsg.is_empty() {
+            tgs_fail_emsg(code)
+        } else {
+            emsg
+        },
     );
     let early = tgs_failed_before_authtime(status);
     let s4u = (!early || status == status::RBCD_PAC_PRINC)
@@ -1018,6 +1043,7 @@ fn tgs_failure(
             status,
             code,
             authtime: if early { 0 } else { authtime },
+            emsg,
         },
         &client,
         &server,
@@ -1172,26 +1198,22 @@ fn tgs_header_tkt_id(req: &TgsReq) -> Option<String> {
 }
 
 fn tgs_header_authtime(store: &dyn PrincipalRead, req: &TgsReq) -> u32 {
-    let Some(pa) = req
+    header_enc_part(store, req).map_or(0, |p| p.authtime.unix_seconds())
+}
+
+/// MIT `kdc_get_server_key` (`kdc/kdc_util.c:377-379`): the header ticket opens under its own server key, including a cross-realm krbtgt.
+fn header_enc_part(store: &dyn PrincipalRead, req: &TgsReq) -> Option<EncTicketPart> {
+    let pa = req
         .0
         .padata
-        .as_ref()
-        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
-    else {
-        return 0;
-    };
-    let Ok(ap) = decode::<krb5_types::ApReq>(pa.padata_value.as_ref()) else {
-        return 0;
-    };
-    let Some(tgt) = store.fetch_krbtgt().ok().flatten() else {
-        return 0;
-    };
-    let Some(key) = ticket_key(&tgt, ap.ticket.enc_part.etype, store.policy()) else {
-        return 0;
-    };
-    decrypt_ticket_part(&key.key, &ap.ticket)
+        .as_ref()?
+        .iter()
+        .find(|p| p.padata_type == pa::TGS_REQ)?;
+    let ap: krb5_types::ApReq = decode(pa.padata_value.as_ref()).ok()?;
+    let etype = EncryptionType::known(ap.ticket.enc_part.etype).ok()?;
+    crate::issue::decrypt_presented_tgt(store, &ap, etype)
         .ok()
-        .map_or(0, |p| p.authtime.unix_seconds())
+        .map(|(part, _, _, _)| part)
 }
 
 fn tgs_client_name(store: &dyn PrincipalRead, req: &TgsReq, rep: &TgsRep, realm: &str) -> String {
@@ -1203,23 +1225,17 @@ fn tgs_client_name(store: &dyn PrincipalRead, req: &TgsReq, rep: &TgsRep, realm:
 }
 
 fn tgs_error_client(store: &dyn PrincipalRead, req: &TgsReq, realm: &str) -> String {
-    header_cname(store, req).map_or_else(
-        || "<unknown client>".into(),
-        |n| n.unparse_with_realm(realm),
-    )
-}
-
-fn header_cname(store: &dyn PrincipalRead, req: &TgsReq) -> Option<PrincipalName> {
-    let pa = req
-        .0
-        .padata
-        .as_ref()?
-        .iter()
-        .find(|p| p.padata_type == pa::TGS_REQ)?;
-    let ap: krb5_types::ApReq = decode(pa.padata_value.as_ref()).ok()?;
-    let tgt = store.fetch_krbtgt().ok().flatten()?;
-    let key = ticket_key(&tgt, ap.ticket.enc_part.etype, store.policy())?;
-    Some(decrypt_ticket_part(&key.key, &ap.ticket).ok()?.cname)
+    let Some(part) = header_enc_part(store, req) else {
+        return "<unknown client>".into();
+    };
+    // MIT `unparse_and_limit` (`kdc/kdc_log.c:105-109`): the logged client keeps the header ticket's own realm.
+    let crealm = realm_str(&part.crealm);
+    let realm = if crealm.is_empty() {
+        realm
+    } else {
+        crealm.as_str()
+    };
+    part.cname.unparse_with_realm(realm)
 }
 
 fn tgs_s4u_kind(req: &TgsReq) -> Option<(&'static str, String)> {
@@ -1548,7 +1564,8 @@ mod tests {
                 &MitOutcome::Fail {
                     status: "NEEDED_PREAUTH",
                     code: err::PREAUTH_REQUIRED,
-                    authtime: 0
+                    authtime: 0,
+                    emsg: "",
                 },
                 "alice@KERBER.TEST",
                 "krbtgt/KERBER.TEST@KERBER.TEST"
@@ -1563,7 +1580,8 @@ mod tests {
                 &MitOutcome::Fail {
                     status: "CLIENT_NOT_FOUND",
                     code: 6,
-                    authtime: 0
+                    authtime: 0,
+                    emsg: "",
                 },
                 "nosuch@SETTLE.TEST",
                 "krbtgt/SETTLE.TEST@SETTLE.TEST"
@@ -1600,7 +1618,8 @@ mod tests {
                 &MitOutcome::Fail {
                     status: status::LOOKING_UP_SERVER,
                     code: err::S_PRINCIPAL_UNKNOWN,
-                    authtime: 0
+                    authtime: 0,
+                    emsg: "",
                 },
                 "alice@SETTLE.TEST",
                 "nosuch/kdc.settle.test@SETTLE.TEST",
@@ -1632,7 +1651,8 @@ mod tests {
                 &MitOutcome::Fail {
                     status: "2ND_TKT_MISMATCH",
                     code: err::SERVER_NOMATCH,
-                    authtime: 5
+                    authtime: 5,
+                    emsg: "ap-request armor for something other than the local TGS",
                 },
                 "a@R",
                 "b@R",
@@ -1667,6 +1687,217 @@ mod tests {
             expect.push(HEX_UP[usize::from(b & 0x0f)] as char);
         }
         assert_eq!(make_tkt_id(cipher), expect);
+    }
+
+    /// A cross-realm TGS logs LOOKING_UP_SERVER with the header ticket's client and that client's realm.
+    #[test]
+    fn cross_realm_header_client_is_logged_with_its_own_realm() {
+        use krb5_asn1::encode;
+        use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
+        use krb5_types::{
+            ApOptions, ApReq, EncryptedData, EncryptionKey, KdcOptions, KdcReq, KdcReqBody,
+            KerberosTime, PaData, Ticket, TicketFlags, TransitedEncoding, ku,
+        };
+
+        use crate::kdb::{MemoryStore, PrincipalWrite};
+        use crate::store::{KeyEntry, PrincipalFields, random_key};
+
+        const LOCAL: &str = "KERBER.TEST";
+        const OTHER: &str = "AD.KERBER.TEST";
+        const AUTHTIME: u32 = 1_790_893_601;
+
+        fn header_req(
+            ticket_realm: &str,
+            key: &ProtocolKey,
+            client: &str,
+            client_realm: &str,
+            authtime: u32,
+        ) -> TgsReq {
+            let etype = key.etype();
+            let when = KerberosTime::from_unix_seconds(authtime);
+            let end = when.add_hours(10).unwrap_or_else(|_| when.clone());
+            let till = when.add_hours(1).unwrap_or_else(|_| when.clone());
+            let part = EncTicketPart {
+                flags: TicketFlags::none(),
+                key: EncryptionKey {
+                    keytype: etype.to_iana(),
+                    keyvalue: key.as_bytes().to_vec().into(),
+                },
+                crealm: krb5_types::try_ascii(client_realm).unwrap(),
+                cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [client]),
+                transited: TransitedEncoding {
+                    tr_type: 1,
+                    contents: Vec::<u8>::new().into(),
+                },
+                authtime: when,
+                starttime: None,
+                endtime: end,
+                renew_till: None,
+                caddr: None,
+                authorization_data: None,
+            };
+            let usage = KeyUsage::new(ku::TICKET).unwrap();
+            let cipher = encrypt(key, usage, &encode(&part).unwrap()).unwrap();
+            let ticket = Ticket {
+                tkt_vno: Ticket::VNO,
+                realm: krb5_types::try_ascii(ticket_realm).unwrap(),
+                sname: PrincipalName::krbtgt(LOCAL),
+                enc_part: EncryptedData {
+                    etype: etype.to_iana(),
+                    kvno: Some(1),
+                    cipher: cipher.into(),
+                },
+            };
+            let ap = ApReq {
+                pvno: ApReq::PVNO,
+                msg_type: ApReq::MSG_TYPE,
+                ap_options: ApOptions::none(),
+                ticket,
+                authenticator: EncryptedData {
+                    etype: etype.to_iana(),
+                    kvno: None,
+                    cipher: vec![0u8].into(),
+                },
+            };
+            TgsReq(KdcReq {
+                pvno: KdcReq::PVNO,
+                msg_type: KdcReq::MSG_TGS_REQ,
+                padata: Some(vec![PaData {
+                    padata_type: pa::TGS_REQ,
+                    padata_value: encode(&ap).unwrap().into(),
+                }]),
+                req_body: KdcReqBody {
+                    kdc_options: KdcOptions::none(),
+                    cname: None,
+                    realm: krb5_types::try_ascii(LOCAL).unwrap(),
+                    sname: Some(PrincipalName::new(
+                        PrincipalName::NT_SRV_HST,
+                        ["host", "client2"],
+                    )),
+                    from: None,
+                    till,
+                    rtime: None,
+                    nonce: 1,
+                    etype: vec![20, 19, 18, 17, 26, 25],
+                    addresses: None,
+                    enc_authorization_data: None,
+                    additional_tickets: None,
+                },
+            })
+        }
+
+        let etype = EncryptionType::Aes256CtsHmacSha196;
+        let local_key = random_key(etype).unwrap();
+        let cross_key = random_key(etype).unwrap();
+        let fields = PrincipalFields {
+            requires_preauth: false,
+            max_life: 0,
+            locked: false,
+            pw_expire: 0,
+        };
+        let mut store = MemoryStore::new(LOCAL);
+        store
+            .put_principal(Principal::from_keys(
+                PrincipalName::krbtgt(LOCAL),
+                LOCAL.into(),
+                vec![KeyEntry::new(etype, local_key.clone(), 1)],
+                Vec::new(),
+                fields,
+            ))
+            .unwrap();
+        let req = header_req(OTHER, &cross_key, "kbruser", OTHER, AUTHTIME);
+        assert_eq!(tgs_error_client(&store, &req, LOCAL), "<unknown client>");
+        assert_eq!(tgs_header_authtime(&store, &req), 0);
+
+        store
+            .put_principal(Principal::from_keys(
+                PrincipalName::krbtgt(LOCAL),
+                OTHER.into(),
+                vec![KeyEntry::new(etype, cross_key.clone(), 1)],
+                Vec::new(),
+                fields,
+            ))
+            .unwrap();
+        assert_eq!(
+            tgs_error_client(&store, &req, LOCAL),
+            "kbruser@AD.KERBER.TEST"
+        );
+        assert_eq!(tgs_header_authtime(&store, &req), AUTHTIME);
+        let local_req = header_req(LOCAL, &local_key, "alice", LOCAL, AUTHTIME);
+        assert_eq!(
+            tgs_error_client(&store, &local_req, LOCAL),
+            "alice@KERBER.TEST"
+        );
+
+        let client = tgs_error_client(&store, &req, LOCAL);
+        let line = tgs_req_lines(
+            &ktypes2str(&[20, 19, 18, 17, 26, 25]),
+            "192.168.177.22",
+            &MitOutcome::Fail {
+                status: status::LOOKING_UP_SERVER,
+                code: err::S_PRINCIPAL_UNKNOWN,
+                authtime: 0,
+                emsg: "",
+            },
+            &client,
+            "host/client2@KERBER.TEST",
+            None,
+        );
+        assert_eq!(
+            line[0],
+            "TGS_REQ (6 etypes {aes256-cts-hmac-sha384-192(20), aes128-cts-hmac-sha256-128(19), \
+             aes256-cts-hmac-sha1-96(18), aes128-cts-hmac-sha1-96(17), camellia256-cts-cmac(26), \
+             camellia128-cts-cmac(25)}) 192.168.177.22: LOOKING_UP_SERVER: authtime 0,  \
+             kbruser@AD.KERBER.TEST for host/client2@KERBER.TEST, Server not found in Kerberos database"
+        );
+    }
+
+    #[test]
+    fn failure_line_uses_the_k5_setmsg_text() {
+        let msg = "Decrypt integrity check failed while handling ap-request armor";
+        let as_line = as_req_line(
+            "1 etypes {aes256-cts-hmac-sha1-96(18)}",
+            "127.0.0.1",
+            &MitOutcome::Fail {
+                status: status::FIND_FAST,
+                code: 31,
+                authtime: 0,
+                emsg: msg,
+            },
+            "alice@KERBER.TEST",
+            "krbtgt/KERBER.TEST@KERBER.TEST",
+        );
+        assert!(as_line.ends_with(&format!(", {msg}")), "{as_line}");
+        let plain = as_req_line(
+            "1 etypes {aes256-cts-hmac-sha1-96(18)}",
+            "127.0.0.1",
+            &MitOutcome::Fail {
+                status: status::FIND_FAST,
+                code: 31,
+                authtime: 0,
+                emsg: "",
+            },
+            "alice@KERBER.TEST",
+            "krbtgt/KERBER.TEST@KERBER.TEST",
+        );
+        assert!(
+            plain.ends_with(", Decrypt integrity check failed"),
+            "{plain}"
+        );
+        let tgs = tgs_req_lines(
+            "1 etypes {aes256-cts-hmac-sha1-96(18)}",
+            "127.0.0.1",
+            &MitOutcome::Fail {
+                status: status::FIND_FAST,
+                code: 31,
+                authtime: 0,
+                emsg: msg,
+            },
+            "alice@KERBER.TEST",
+            "host/client2@KERBER.TEST",
+            None,
+        );
+        assert!(tgs[0].ends_with(&format!(", {msg}")), "{}", tgs[0]);
     }
 
     struct CountAudit {
@@ -1725,7 +1956,7 @@ mod tests {
         let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [crate::testrealm::TEST_USER]);
         let req =
             krb5_protocol::as_req(cname, crate::testrealm::TEST_REALM, 1, None).expect("as-req");
-        as_failure(&store, &req, None, 24, "NEEDED_PREAUTH");
+        as_failure(&store, &req, None, 24, "NEEDED_PREAUTH", "");
         assert_eq!(loud.hits.load(std::sync::atomic::Ordering::SeqCst), 2);
         assert_eq!(quiet.hits.load(std::sync::atomic::Ordering::SeqCst), 0);
     }

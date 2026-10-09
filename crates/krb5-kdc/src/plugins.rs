@@ -625,6 +625,43 @@ pub(crate) fn kdcpreauth_loaded(store: &dyn PrincipalRead, name: &str) -> bool {
         .any(|module| module.name() == name)
 }
 
+/// Lines MIT writes while loading kdcpreauth, before the network is set up.
+///
+/// MIT `kdcpreauth_otp_initvt` (`plugins/preauth/otp/main.c:387-388`): code 0 logs Loaded at info when the vtable is installed.
+/// MIT `pkinit_server_plugin_init` (`plugins/preauth/pkinit/pkinit_srv.c:1384-1390`): one realm's failure is prefixed with PKINIT initialization failed.
+/// MIT `pkinit_init_kdc_profile` (`plugins/preauth/pkinit/pkinit_srv.c:960-964`): a missing identity is No pkinit_identity supplied for realm.
+/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:213-216`): a failed module init is logged and that module is left out.
+///
+/// `pkinit_ready` is true when this process already holds a PKINIT identity (the test CA).
+/// A disabled module is absent, as `disable` / `enable_only` leave it out of the load.
+#[must_use]
+pub fn preauth_startup_lines(
+    realm: &str,
+    relations: &krb5_config::PluginRelations,
+    pkinit_ready: bool,
+) -> Vec<(&'static str, String)> {
+    let mut lines = Vec::new();
+    if startup_module_loaded(relations, "otp") {
+        lines.push(("info", "Loaded".to_owned()));
+    }
+    if startup_module_loaded(relations, "pkinit") && !pkinit_ready {
+        lines.push((
+            "error",
+            format!(
+                "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm {realm}"
+            ),
+        ));
+    }
+    lines
+}
+
+/// Whether MIT would install `name` under these `[plugins] kdcpreauth` relations.
+fn startup_module_loaded(relations: &krb5_config::PluginRelations, name: &str) -> bool {
+    krb5_config::filter_plugin_modules(relations, &[name])
+        .iter()
+        .any(|kept| kept == name)
+}
+
 /// METHOD-DATA modules after the leading empty PA-FX-FAST, and the cookie state they keep.
 /// `ikey` is the client's reply key, when one was selected.
 /// MIT `get_preauth_hint_list` (`kdc_preauth.c:999-1006`): the empty PA-FX-FAST and the
@@ -1586,6 +1623,51 @@ mod tests {
         let issued: AdKdcIssued = krb5_asn1::decode(inner[0].ad_data.as_ref()).unwrap();
         assert_eq!(issued.elements[0].ad_type, GREET_AD_TYPE);
         assert_eq!(issued.elements[0].ad_data.as_ref(), GREET_TEXT);
+    }
+
+    /// Startup logs Loaded, then the pkinit identity error when no identity is configured. A ready identity logs Loaded only.
+    #[test]
+    fn startup_lines_match_the_mit_kdc_log() {
+        let lines = preauth_startup_lines(
+            "KERBER.TEST",
+            &krb5_config::PluginRelations::default(),
+            false,
+        );
+        assert_eq!(
+            lines,
+            vec![
+                ("info", "Loaded".to_owned()),
+                (
+                    "error",
+                    "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm KERBER.TEST".to_owned(),
+                ),
+            ]
+        );
+        let ready = preauth_startup_lines(
+            "KERBER.TEST",
+            &krb5_config::PluginRelations::default(),
+            true,
+        );
+        assert_eq!(ready, vec![("info", "Loaded".to_owned())]);
+        let off = krb5_config::PluginRelations {
+            disable: Some(vec!["otp".to_owned(), "pkinit".to_owned()]),
+            ..krb5_config::PluginRelations::default()
+        };
+        assert_eq!(
+            preauth_startup_lines("KERBER.TEST", &off, false),
+            Vec::<(&str, String)>::new()
+        );
+        let only_pkinit = krb5_config::PluginRelations {
+            enable_only: Some(vec!["pkinit".to_owned()]),
+            ..krb5_config::PluginRelations::default()
+        };
+        assert_eq!(
+            preauth_startup_lines("R", &only_pkinit, false),
+            vec![(
+                "error",
+                "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm R".to_owned(),
+            )]
+        );
     }
 
     /// Clears this thread's kdcpolicy slot and named list.

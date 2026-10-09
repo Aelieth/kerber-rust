@@ -315,7 +315,7 @@ if [ "$pol_rc" -ne 2 ]; then
     exit 1
 fi
 echo "$POL" | grep -qi 'Password change rejected'
-echo "$POL" | grep -F 'min_length 8'
+echo "$POL" | grep -F 'New password is too short.'
 echo "==== kpasswd policy is result_code=4 (Rust) ===="
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf -e KRB5CCNAME=FILE:/tmp/krb5cc_kpw4 \
     "$NAME" sh -c 'printf "rust-kpw\n" | kinit user@KERBER.TEST'

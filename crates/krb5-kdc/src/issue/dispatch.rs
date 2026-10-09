@@ -91,7 +91,15 @@ fn process_logged(
                     e_text = "NEEDED_PREAUTH".into();
                 }
                 log_krb_error(duration_us, code, &e_text, detail.as_deref());
-                crate::audit::log_failure(store, raw, sender, &bytes, code, &e_text);
+                crate::audit::log_failure(
+                    store,
+                    raw,
+                    sender,
+                    &bytes,
+                    code,
+                    &e_text,
+                    detail.as_deref(),
+                );
             } else {
                 tracing::info!(
                     event = krb5_log::events::KDC_ISSUE,

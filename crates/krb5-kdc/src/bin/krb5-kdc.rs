@@ -294,7 +294,19 @@ fn main() {
     store.apply_audit_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
-    // MIT `load_preauth_plugins` (`kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
+    // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
+    for (level, line) in krb5_kdc::preauth_startup_lines(
+        store.realm(),
+        &store.policy.kdcpreauth,
+        store.pkinit_ca().is_some(),
+    ) {
+        let severity = if level == "error" {
+            Severity::Err
+        } else {
+            Severity::Info
+        };
+        klog::syslog(severity, &line);
+    }
     if let Err(msg) = store.policy.spake_kdc() {
         klog::syslog(
             Severity::Err,

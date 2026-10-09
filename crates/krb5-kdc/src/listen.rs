@@ -351,6 +351,11 @@ impl BindType {
     }
 }
 
+/// MIT `setup_addresses` (`lib/apputils/net-server.c:1029-1030`): EAFNOSUPPORT is skipped when another address of the entry binds.
+fn is_unsupported_family(err: &io::Error) -> bool {
+    err.raw_os_error() == Some(nix::errno::Errno::EAFNOSUPPORT as i32)
+}
+
 fn bind_listeners(addrs: &[ListenAddr], kind: BindType, backlog: i32) -> io::Result<Vec<OwnedFd>> {
     let proto = kind.proto();
     let named = |a: SocketAddr, e: io::Error| io::Error::new(e.kind(), format!("{proto} {a}: {e}"));
@@ -378,7 +383,8 @@ fn bind_listeners(addrs: &[ListenAddr], kind: BindType, backlog: i32) -> io::Res
                 }
                 Err(e) => {
                     klog::syslog(Severity::Err, &setup_failure_line(a, kind));
-                    if e.raw_os_error() != Some(nix::errno::Errno::EAFNOSUPPORT as i32) {
+                    // MIT `setup_addresses` (`lib/apputils/net-server.c:1029-1030`): EAFNOSUPPORT is skipped when another address of the entry binds.
+                    if !is_unsupported_family(&e) {
                         log_network_failure(&e);
                         return Err(named(a, e));
                     }
@@ -1252,5 +1258,15 @@ mod tests {
         assert!(closed(&c2), "c2: the first of the tie from the top");
         assert!(open(&c3) && open(&c4));
         stop(&flag, h);
+    }
+
+    #[test]
+    fn unsupported_address_family_is_skipped_and_other_errors_are_not() {
+        let unsupported = io::Error::from_raw_os_error(nix::errno::Errno::EAFNOSUPPORT as i32);
+        assert!(super::is_unsupported_family(&unsupported));
+        let in_use = io::Error::from_raw_os_error(nix::errno::Errno::EADDRINUSE as i32);
+        assert!(!super::is_unsupported_family(&in_use));
+        let plain = io::Error::new(io::ErrorKind::AddrNotAvailable, "no address");
+        assert!(!super::is_unsupported_family(&plain));
     }
 }

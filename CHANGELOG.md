@@ -1484,6 +1484,12 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **kpasswd.** An empty password whose named policy is missing gets the policy-lookup failure text. The change itself is not refused for that missing policy. Unit.
+- **kdc.** An AS or TGS failure line ends with the k5_setmsg text when one was set, and the error-table text otherwise. A server-mismatch line stays the second-ticket form. Unit.
+- **kpasswd.** A quality refusal's reply is MIT's chpass paragraph. The log keeps the kadm5 text, or the module message for an empty password or a principal-name match. Unit.
+- **kdc.** Binding a listener skips `EAFNOSUPPORT` and still fails any other bind error. Unit.
+- **kdc.** Startup logs `Loaded`, then `preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm ...` when no PKINIT identity is configured. Unit.
+- **kdc.** A TGS failure names the header ticket's client and that ticket's realm, including a cross-realm TGT. It logged `<unknown client>`. Unit.
 - **kdc.** The expired-ticket TGS test applies clock skew 0 only after the AS, and retries a one-second `SKEW`, so the result stays `TKT_EXPIRED` / `PROCESS_TGS`.
 - **client.** An AS request counts `till` from `time()`'s second, so a precise clock that has just rolled does not make `RENEWABLE_OK` mark the TGT renewable.
 - **kdc.** `passwd_check` logs `password quality module NAME rejected password for PRINC: TEXT` when dict, empty or princ refuses. Policy floors count bytes.

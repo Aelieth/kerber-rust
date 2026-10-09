@@ -109,6 +109,7 @@ pub use persist::{
     read_db_locked, read_stash, save_dump_text, save_store, save_store_fresh,
     save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
 };
+pub use plugins::preauth_startup_lines;
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock,
     apply_policy_times, clear_thread_authdata, clear_thread_kdcpolicies, clear_thread_policy,

@@ -241,7 +241,7 @@ pub(super) fn kdc_get_ticket_endtime(
 /// MIT `kdc_get_server_key` (`kdc_util.c:377-379`): the server key is the ticket's own server,
 /// with no fallback principal. A local TGS searches every enctype at the ticket kvno, and a
 /// missing server is not that ticket's key.
-pub(super) fn decrypt_presented_tgt(
+pub(crate) fn decrypt_presented_tgt(
     store: &dyn PrincipalRead,
     ap: &krb5_types::ApReq,
     tkt_etype: EncryptionType,

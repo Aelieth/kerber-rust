@@ -379,6 +379,107 @@ fn changepw_verify_keys(
     (keys, kvnos)
 }
 
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:195-200`): too short names the policy minimum.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:205-210`): too few classes names the five classes and the minimum.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:151-155`): a dictionary code, a principal-name match included, uses the dictionary paragraph.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:145-148`): history reuse uses the reuse sentence.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:173-178`): a too-short code with no policy uses the code text and Password not changed.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:185-192`): a too-short code whose policy lookup fails names that failure and the code text.
+fn kpasswd_quality_reply(msg: &str, empty_policy: &EmptyPolicy) -> String {
+    if let Some(n) = quality_count(msg, "min_length ") {
+        return too_short_text(n);
+    }
+    if let Some(n) = quality_count(msg, "min_classes ") {
+        return too_few_classes_text(n);
+    }
+    if msg == krb5_kdc::PWQUAL_DICT || msg == krb5_kdc::PWQUAL_PRINC {
+        return DICT_REPLY.to_owned();
+    }
+    if msg == "history" {
+        return REUSE_REPLY.to_owned();
+    }
+    if msg == krb5_kdc::PWQUAL_EMPTY {
+        return match empty_policy {
+            EmptyPolicy::MinLength(n) => too_short_text(*n),
+            EmptyPolicy::Missing => MISSING_POLICY_EMPTY.to_owned(),
+            EmptyPolicy::Unbound => EMPTY_NO_POLICY.to_owned(),
+        };
+    }
+    msg.to_owned()
+}
+
+fn quality_count(msg: &str, prefix: &str) -> Option<u32> {
+    msg.strip_prefix(prefix)?.parse().ok()
+}
+
+fn too_short_text(n: u32) -> String {
+    format!(
+        "New password is too short.\nPlease choose a password which is at least {n} characters long."
+    )
+}
+
+fn too_few_classes_text(n: u32) -> String {
+    format!(
+        "New password does not have enough character classes.\n\
+The character classes are:\n\
+\t- lower-case letters,\n\
+\t- upper-case letters,\n\
+\t- digits,\n\
+\t- punctuation, and\n\
+\t- all other characters (e.g., control characters).\n\
+Please choose a password with at least {n} character classes."
+    )
+}
+
+const DICT_REPLY: &str = "New password was found in a dictionary of possible passwords and\n\
+therefore may be easily guessed. Please choose another password.\n\
+See the kpasswd man page for help in choosing a good password.";
+
+const REUSE_REPLY: &str = "New password was used previously. Please choose a different password.";
+
+const EMPTY_NO_POLICY: &str = "Password is too short\n\nPassword not changed.";
+
+/// The chpass_util paragraph when the too-short code's policy lookup fails. The final space is MIT's format.
+const MISSING_POLICY_EMPTY: &str = "Policy does not exist while getting policy info.\n\
+Password is too short while trying to change password.\n\
+\n\
+Password not changed.\n ";
+
+/// How an empty-password refusal relates to the principal's named policy.
+enum EmptyPolicy {
+    /// No policy name. The reply is the code text plus `Password not changed.`
+    Unbound,
+    /// The name is set and the policy exists. The reply uses its minimum length.
+    MinLength(u32),
+    /// The name is set and the policy is gone. The reply is the lookup failure.
+    Missing,
+}
+
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:212-247`): the notice logs `krb5_get_error_message` of the kadm5 code.
+/// MIT `empty_check` (`lib/kadm5/srv/pwqual_empty.c:41-43`): an empty password sets Empty passwords are not allowed.
+/// MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:53-55`): a component match sets Password may not match principal name.
+fn kpasswd_quality_log(msg: &str) -> String {
+    if msg == krb5_kdc::PWQUAL_EMPTY || msg == krb5_kdc::PWQUAL_PRINC {
+        return msg.to_owned();
+    }
+    crate::kadm5::chpass_error_text(&Error::PasswordPolicy(msg.to_owned()))
+}
+
+/// MIT `get_policy` (`lib/kadm5/srv/svr_principal.c:112-117`): a missing policy is not a failed change. It only changes the too-short reply.
+fn empty_policy(store: &krb5_kdc::PrincipalStore, name: &PrincipalName) -> EmptyPolicy {
+    let Some(pol_name) = store
+        .get_name(name)
+        .and_then(|p| p.pw_policy.as_ref())
+        .filter(|s| !s.is_empty())
+    else {
+        return EmptyPolicy::Unbound;
+    };
+    match store.policies().get(pol_name) {
+        Some(pol) => EmptyPolicy::MinLength(pol.min_length),
+        None => EmptyPolicy::Missing,
+    }
+}
+
 fn too_soon_text(until: u32) -> String {
     let when = krb5_types::KerberosTime::from_unix_seconds(until)
         .0
@@ -563,8 +664,17 @@ pub(crate) fn handle_kpasswd_from(
         match changed {
             Ok(()) => (0u16, String::new(), "success".to_owned()),
             Err(Error::PasswordPolicy(msg)) => {
-                let text = crate::kadm5::chpass_error_text(&Error::PasswordPolicy(msg.clone()));
-                (4, msg, text)
+                let empty = if msg == krb5_kdc::PWQUAL_EMPTY {
+                    empty_policy(&g, &targ)
+                } else {
+                    EmptyPolicy::Unbound
+                };
+                // MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:145-210`): the reply is the paragraph for that code.
+                (
+                    4,
+                    kpasswd_quality_reply(&msg, &empty),
+                    kpasswd_quality_log(&msg),
+                )
             }
             Err(Error::PassTooSoon { until }) => (
                 4,
@@ -924,5 +1034,115 @@ mod tests {
         assert!(zeroed.iter().all(|w| w.iter().all(|b| *b == 0)));
         assert!(zeroed[0].len() >= cpw_der.len());
         assert!(zeroed[1].len() >= password.len() && zeroed[2].len() >= password.len());
+    }
+
+    #[test]
+    fn kpasswd_quality_reply_is_the_chpass_util_paragraph() {
+        let short = super::kpasswd_quality_reply("min_length 8", &super::EmptyPolicy::Unbound);
+        assert_eq!(
+            short,
+            "New password is too short.\nPlease choose a password which is at least 8 characters long."
+        );
+        let classes = super::kpasswd_quality_reply("min_classes 3", &super::EmptyPolicy::Unbound);
+        assert!(classes.starts_with(
+            "New password does not have enough character classes.\nThe character classes are:\n\t- lower-case letters,\n"
+        ));
+        assert!(classes.contains("\t- punctuation, and\n"));
+        assert!(classes.ends_with("Please choose a password with at least 3 character classes."));
+        let dict = "New password was found in a dictionary of possible passwords and\ntherefore may be easily guessed. Please choose another password.\nSee the kpasswd man page for help in choosing a good password.";
+        assert_eq!(
+            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_DICT, &super::EmptyPolicy::Unbound),
+            dict
+        );
+        assert_eq!(
+            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_PRINC, &super::EmptyPolicy::Unbound),
+            dict
+        );
+        assert_eq!(
+            super::kpasswd_quality_reply("history", &super::EmptyPolicy::Unbound),
+            "New password was used previously. Please choose a different password."
+        );
+        assert_eq!(
+            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_EMPTY, &super::EmptyPolicy::Unbound),
+            "Password is too short\n\nPassword not changed."
+        );
+        assert_eq!(
+            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_EMPTY, &super::EmptyPolicy::Missing),
+            "Policy does not exist while getting policy info.\nPassword is too short while trying to change password.\n\nPassword not changed.\n "
+        );
+        assert_eq!(
+            super::kpasswd_quality_reply(krb5_kdc::PWQUAL_EMPTY, &super::EmptyPolicy::MinLength(0)),
+            "New password is too short.\nPlease choose a password which is at least 0 characters long."
+        );
+        assert_eq!(
+            super::kpasswd_quality_log(krb5_kdc::PWQUAL_EMPTY),
+            krb5_kdc::PWQUAL_EMPTY
+        );
+        assert_eq!(
+            super::kpasswd_quality_log(krb5_kdc::PWQUAL_PRINC),
+            krb5_kdc::PWQUAL_PRINC
+        );
+        assert_eq!(
+            super::kpasswd_quality_log("min_length 8"),
+            "Password is too short"
+        );
+        assert_eq!(
+            super::kpasswd_quality_log("min_classes 3"),
+            "Password does not contain enough character classes"
+        );
+        assert_eq!(
+            super::kpasswd_quality_log("history"),
+            "Cannot reuse password"
+        );
+        assert_eq!(
+            super::kpasswd_quality_log(krb5_kdc::PWQUAL_DICT),
+            "Password is in the password dictionary"
+        );
+    }
+
+    #[test]
+    fn a_missing_named_policy_is_not_a_failed_change() {
+        let (mut store, _) = krb5_kdc::testrealm::bootstrap_documented().unwrap();
+        let name = krb5_types::PrincipalName::new(
+            krb5_types::PrincipalName::NT_PRINCIPAL,
+            [krb5_kdc::testrealm::TEST_USER],
+        );
+        assert!(matches!(
+            super::empty_policy(&store, &name),
+            super::EmptyPolicy::Unbound
+        ));
+        store
+            .apply_admin_fields_in(
+                &name,
+                krb5_kdc::testrealm::TEST_REALM,
+                krb5_kdc::AdminFields {
+                    policy: Some("gone".into()),
+                    pw_expire: Some(0),
+                    ..krb5_kdc::AdminFields::default()
+                },
+                "kadmind@KERBER.TEST",
+            )
+            .unwrap();
+        assert!(matches!(
+            super::empty_policy(&store, &name),
+            super::EmptyPolicy::Missing
+        ));
+        store.put_policy(krb5_kdc::NamedPolicy::new("keep"));
+        store
+            .apply_admin_fields_in(
+                &name,
+                krb5_kdc::testrealm::TEST_REALM,
+                krb5_kdc::AdminFields {
+                    policy: Some("keep".into()),
+                    pw_expire: Some(0),
+                    ..krb5_kdc::AdminFields::default()
+                },
+                "kadmind@KERBER.TEST",
+            )
+            .unwrap();
+        assert!(matches!(
+            super::empty_policy(&store, &name),
+            super::EmptyPolicy::MinLength(0)
+        ));
     }
 }
