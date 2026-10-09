@@ -34,18 +34,22 @@ echo "$MITK"
 LIST="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/mit.keytab\nlist -t -e\n" | /tmp/krb5-ktutil')"
 echo "$LIST"
 echo "$LIST" | grep -q 'user@KERBER.TEST'
+# MIT `klist -k -t` prints the kvno, then `krb5_timestamp_to_sfstring`, then the principal.
+# MIT `ktutil_list` (`kadmin/ktutil/ktutil.c:234-248`) prints the slot, the kvno, then that same sfstring.
+# MIT `ktutil_list` (`kadmin/ktutil/ktutil.c:260`) wraps the enctype as ` (%s) `. `$NF` keeps the parentheses. There is no `t=` field.
 MIT_KVNO="$(echo "$MITK" | awk '/user@KERBER.TEST/{print $1; exit}')"
 RUST_KVNO="$(echo "$LIST" | awk '/user@KERBER.TEST/{print $2; exit}')"
 MIT_ET="$(echo "$MITK" | awk -F'[()]' '/user@KERBER.TEST/{print $2; exit}')"
-RUST_ET="$(echo "$LIST" | awk '/user@KERBER.TEST/{print $NF; exit}')"
-RUST_T="$(echo "$LIST" | awk '/user@KERBER.TEST/{for(i=1;i<=NF;i++) if($i ~ /^t=/){print substr($i,3); exit}}')"
+RUST_ET="$(echo "$LIST" | awk -F'[()]' '/user@KERBER.TEST/{print $2; exit}')"
+MIT_TS="$(echo "$MITK" | awk '/user@KERBER.TEST/{print $2, $3; exit}')"
+RUST_TS="$(echo "$LIST" | awk '/user@KERBER.TEST/{print $3, $4; exit}')"
 echo "mit_kvno=$MIT_KVNO rust_kvno=$RUST_KVNO"
 echo "mit_etype=$MIT_ET rust_etype=$RUST_ET"
-echo "rust_timestamp=$RUST_T"
+echo "mit_timestamp=$MIT_TS rust_timestamp=$RUST_TS"
 test "$MIT_KVNO" = "$RUST_KVNO"
 test "$MIT_ET" = "$RUST_ET"
-test -n "$RUST_T"
-test "$RUST_T" -gt 0
+test -n "$RUST_TS"
+test "$RUST_TS" = "$MIT_TS"
 
 echo "==== MIT unknown-etype keytab listed by Rust ktutil ===="
 docker exec -i "$NAME" python3 - <<'PY'
@@ -67,11 +71,20 @@ MITU="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/unk.keytab\nlist\n" | ktutil
 echo "$MITU"
 echo "$MITU" | grep -q 'user@KERBER.TEST'
 echo "$MITU" | grep -Eq ' 3 .*user@KERBER.TEST'
-RUSTU="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/unk.keytab\nlist -e\n" | /tmp/krb5-ktutil')"
+# MIT `krb5_enctype_to_name` (`lib/crypto/krb/enctype_util.c:145-147`) returns EINVAL for etype 99.
+# MIT `ktutil_list` (`kadmin/ktutil/ktutil.c:253-258`) then com_err and returns, with no `Unknown (99)` text.
+# com_err writes the conversion failure on stderr (`ktutil.c:255`). Capture it with the listing.
+MITE="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/unk.keytab\nlist -e\n" | ktutil' 2>&1)"
+echo "$MITE"
+RUSTU="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/unk.keytab\nlist -e\n" | /tmp/krb5-ktutil' 2>&1)"
 echo "$RUSTU"
-echo "$RUSTU" | grep -q 'user@KERBER.TEST'
-echo "$RUSTU" | grep -q 'Unknown (99)'
-echo "$RUSTU" | grep -Eq ' 3 .*user@KERBER.TEST Unknown \(99\)'
+# `grep -q` under `pipefail` is SIGPIPE when the match is the first line. A case match reads the whole string.
+case "$MITE" in *'user@KERBER.TEST'*) ;; *) echo "mit_list_e_missing_principal"; exit 1 ;; esac
+case "$RUSTU" in *'user@KERBER.TEST'*) ;; *) echo "rust_list_e_missing_principal"; exit 1 ;; esac
+case "$MITE" in *'While converting enctype to string'*) ;; *) echo "mit_list_e_missing_error"; exit 1 ;; esac
+case "$RUSTU" in *'While converting enctype to string'*) ;; *) echo "rust_list_e_missing_error"; exit 1 ;; esac
+case "$MITE" in *' 3 '*'user@KERBER.TEST'*) ;; *) echo "mit_list_e_missing_kvno"; exit 1 ;; esac
+case "$RUSTU" in *' 3 '*'user@KERBER.TEST'*) ;; *) echo "rust_list_e_missing_kvno"; exit 1 ;; esac
 
 echo "==== Rust ktutil-written keytab MIT kinit -k ===="
 docker exec -e KRB5_PASSWORD=userpassword "$NAME" sh -c \
@@ -92,8 +105,9 @@ docker exec "$NAME" sh -c 'printf "\005\001" >/tmp/v1.keytab'
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'ktadd -k /tmp/v1.keytab -norandkey user'
 docker exec "$NAME" od -A d -t x1 -N 10 /tmp/v1.keytab
 MITV1="$(docker exec "$NAME" klist -k -e /tmp/v1.keytab | awk '/user@KERBER.TEST/{split($0, a, /[()]/); print $1, a[2]}')"
+# Same parentheses as `ktutil.c:260`. The kvno is the second whitespace field before the `(`; `$NF` would keep the parentheses.
 RUSTV1="$(docker exec "$NAME" sh -c 'printf "rkt /tmp/v1.keytab\nlist -e\n" | /tmp/krb5-ktutil' |
-    awk '/user@KERBER.TEST/{print $2, $NF}')"
+    awk -F'[()]' '/user@KERBER.TEST/{split($1, f, " "); print f[2], $2}')"
 echo "mit_v1: $(echo "$MITV1" | paste -sd,)"
 echo "rust_v1: $(echo "$RUSTV1" | paste -sd,)"
 echo "$MITV1" | grep -q '^300 '

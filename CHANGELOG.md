@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **gate.** ktutil-gate matches MIT list -t -e (parenthesized enctype, human timestamp) and list -e's unknown-etype error.
 - **docs.** Parity rows cite the moved anchors, and FILE ccache versions 1-3 stay refused.
 - **admin.** ktutil reads its requests from the ss loop and exits 0 whatever argv was. Unit.
 - **client.** kvno -U sends an AS realm probe before S4U2Self and uses the realm that probe identifies. Unit.
