@@ -234,7 +234,11 @@ pub(crate) const ESCAPE_DISABLED: &str = "Shell escapes are disabled";
 
 /// MIT `ss_parse` (`util/ss/parse.c:57-169`): words split on blanks; `"` quotes, inside a word
 /// too, and `""` within quotes is one `"`; an open quote is `Unbalanced quotes in command line`.
-pub(crate) fn parse(line: &str) -> Result<Vec<String>, &'static str> {
+///
+/// # Errors
+///
+/// `Unbalanced quotes in command line`, the text MIT's `ss_error` prints, for a quote left open.
+pub fn parse(line: &str) -> Result<Vec<String>, &'static str> {
     let mut argv = Vec::new();
     let mut cur = String::new();
     let mut in_token = false;

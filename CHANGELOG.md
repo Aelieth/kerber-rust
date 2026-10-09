@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** ktutil reads its requests from the ss loop and exits 0 whatever argv was. Unit.
 - **client.** kvno -U sends an AS realm probe before S4U2Self and uses the realm that probe identifies. Unit.
 - **client.** kinit -I keeps that cache's pa_type as the only preauth type, and --request-pac sends PA-PAC-REQUEST on every AS-REQ. Unit.
 - **client.** kvno -S builds the server principal through sname-to-principal, including realm_try_domains. Unit.

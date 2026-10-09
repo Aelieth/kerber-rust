@@ -54,7 +54,8 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   compared with MIT's tools may read differently from MIT's text.
 - `[libdefaults] request_timeout` is only checked (a malformed one stops a program, as MIT's
   context does); its value is ignored.
-- `ktutil` has no `?` request, does not echo requests, and lists entries in its own format.
+- `ktutil` `rkt` takes a filesystem path, where MIT's takes a keytab name; `addent` rejects `-s`
+  and `-f`, and refuses a `-key` whose length is not the enctype's; a `!` line is passed over.
 - `kinit -k` with no principal asks for `host/<host name>` in the default realm, where MIT's asks
   for the host's canonical name.
 - `kinit` sends an expired password's change to the KDC's host on port 464, where MIT's sends it

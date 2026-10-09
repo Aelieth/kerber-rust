@@ -32,7 +32,7 @@ pub use kadm5::{
     check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok,
     iprop_fullresync, iprop_pull, kadm5_handle_rpc, serve_kadm5_conn,
 };
-pub use kadmin_cli::kadmin_local_main;
+pub use kadmin_cli::{kadmin_local_main, ss_parse};
 pub use kadmind::{Kadmind, acceptor_keys, serve_kadmind, serve_kadmind_until};
 pub use kprop::{
     IpropPoll, KpropAuth, KpropdConfig, KpropdKeys, KpropdKeytabError, KpropdLookup,

@@ -14,6 +14,8 @@ mod ss;
 mod stdio;
 mod texts;
 
+pub use ss::parse as ss_parse;
+
 use std::io::{self, IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 
