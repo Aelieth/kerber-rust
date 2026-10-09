@@ -475,6 +475,14 @@ mod tests {
             Krb5Error::from_protocol(&generic, "R").message,
             "KDC returned error string: why"
         );
+        let s4u = krb5_protocol::Error::KrbError {
+            code: krb5_types::err::PADATA_TYPE_NOSUPP,
+            text: None,
+        };
+        assert_eq!(
+            Krb5Error::from_tgs(&s4u, "KERBER.TEST").message,
+            "KDC has no support for padata type"
+        );
         let nofile = io::Error::from(io::ErrorKind::NotFound);
         let e = Krb5Error::from_file_cache(&nofile, Path::new("/tmp/none"));
         assert_eq!(e.code, Code::FccNofile);

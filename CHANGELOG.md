@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **client.** `kvno -U` reports a final S4U2Self reply whose client is the requested server as `KRB5KDC_ERR_PADATA_TYPE_NOSUPP` ("KDC has no support for padata type").
 - **gate.** ktutil-gate matches MIT list -t -e (parenthesized enctype, human timestamp) and list -e's unknown-etype error.
 - **docs.** Parity rows cite the moved anchors, and FILE ccache versions 1-3 stay refused.
 - **admin.** ktutil reads its requests from the ss loop and exits 0 whatever argv was. Unit.

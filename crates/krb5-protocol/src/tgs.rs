@@ -1162,9 +1162,9 @@ fn princ_eq(
 ///
 /// # Errors
 ///
-/// [`Error::ReplyMismatch`] when a final S4U2Self reply names the requested server as its client
-/// (`KRB5KDC_ERR_PADATA_TYPE_NOSUPP`), or, on any hop but a final S4U2Self or S4U2Proxy one, the
-/// reply client is not the TGT client (`KRB5_KDCREP_MODIFIED`).
+/// [`Error::KrbError`] code `PADATA_TYPE_NOSUPP` when a final S4U2Self reply names the requested
+/// server as its client, or [`Error::ReplyMismatch`] on any hop but a final S4U2Self or
+/// S4U2Proxy one when the reply client is not the TGT client (`KRB5_KDCREP_MODIFIED`).
 #[expect(clippy::too_many_arguments, reason = "name and realm stay separate")]
 pub fn tgs_reply_client_ok(
     tgt_cname: &PrincipalName,
@@ -1179,7 +1179,10 @@ pub fn tgs_reply_client_ok(
 ) -> Result<(), Error> {
     if s4u2self && !reply_sname.is_krbtgt() {
         if princ_eq(reply_cname, reply_crealm, requested, request_realm) {
-            return Err(Error::ReplyMismatch("TGS-REP S4U2Self unsupported".into()));
+            return Err(Error::KrbError {
+                code: krb5_types::err::PADATA_TYPE_NOSUPP,
+                text: None,
+            });
         }
         return Ok(());
     }
