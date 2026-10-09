@@ -226,6 +226,10 @@ impl KdcPolicy for TestPolicy {
         client: &Principal,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
+        // Distinct from `kdcpolicy_test::TestModule::check_as`. Identical bodies
+        // become one symbol, and that symbol's name would carry `testrealm` into
+        // the release `krb5-kdc` (`strings-check.sh`).
+        let _ = std::hint::black_box(0u8);
         if first_comp(&client.name).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
         }
@@ -237,6 +241,8 @@ impl KdcPolicy for TestPolicy {
         sname: &PrincipalName,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
+        // Same split as `check_as`: keep this body off `TestModule::check_tgs`.
+        let _ = std::hint::black_box(0u8);
         if first_comp(sname).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
         }

@@ -251,6 +251,12 @@ the same way. The built-in module is `json`. Every loaded module records
 the request. `disable = json` leaves no plugin record. The same relations
 in krb5.conf apply after this file. `module` is not read.
 
+`[plugins] pwqual` `disable` and `enable_only` select the password-quality
+modules `dict`, `empty`, `hesiod` and `princ`, and an embedder module's
+name. `disable = empty` allows an empty password when no policy length
+forbids it. The same relations in krb5.conf apply after this file.
+`module` is not read.
+
 ### The database
 
 ```sh

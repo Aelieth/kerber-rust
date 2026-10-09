@@ -12,7 +12,7 @@ is no `dlopen`.
 | clpreauth | `clpreauth` | [`ClPreauth`](../crates/krb5-protocol/src/clpreauth.rs) on the client. Built-ins, in MIT's order, are `pkinit`, `spake` (only when a permitted group is configured; the client default is edwards25519), `encrypted_challenge` and `encrypted_timestamp`. `sam2` and `otp` are not implemented, so they are absent the way a module that failed to load is absent. `[plugins] clpreauth` `disable` then `enable_only` select the loaded names and any embedder-registered name. The first loaded module to claim a pa-type keeps it; a later module that lists a claimed type is dropped. `register_clpreauth` is process-wide; tests isolate with `set_thread_clpreauth`. `module` is not read. |
 | kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) `check_as` / `check_tgs` return `Result` and can deny. [`set_policy`](../crates/krb5-kdc/src/plugins.rs) is process-wide (KDC serve/worker threads see it); tests isolate with `set_thread_policy`. AS lockout stays inline, not in the swappable slot. `check_as_req` and `check_tgs_req` take the request, the client and the server (for TGS, the server and the header ticket), the indicators, and a status out. A set status is the KRB-ERROR text. Lifetime and renew lifetime come back as `PolicyAdjustment` and cap the ticket from now. The older methods stay for a module that does not use them. `register_kdcpolicy` adds a named module. `[plugins] kdcpolicy` `disable` then `enable_only` select the loaded names. Modules run in that order; the first error denies the request and a non-zero lifetime caps `endtime` and `renew_till` from now. An empty selection allows the request and leaves the times. `set_policy` and `set_thread_policy` install one module and skip the stanza. Tests isolate a list with `set_thread_kdcpolicies`. `module` is not read. There is no `dlopen`. The name `test` is registered only when `enable_only` lists it. `check_as_from` and `check_tgs_from` also receive the socket the KDC accepted; that address is not `request.addresses`. |
 | audit | `audit` | [`KdcAudit`](../crates/krb5-kdc/src/audit.rs) `as_req` / `tgs_req` / `s4u2self` / `s4u2proxy` / `u2u`. [`JsonAudit`](../crates/krb5-kdc/src/audit.rs) is the built-in name `json`. `register_audit` adds a named module. `[plugins] audit` `disable` then `enable_only` select the loaded names, including `json`. Every selected module runs; one module does not stop the others. `set_audit` and `set_thread_audit` install one module and skip the stanza. Tests isolate a list with `set_thread_audits`. `module` is not read. There is no `dlopen`. |
-| pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store/policy.rs): five classes; history depth N (current password counts inside N; store N-1 old kvnos); `pw_failcnt_interval` / `pw_lockout_duration`. kadm5 addpol/modpol/getpol/delpol/listpols. |
+| pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store/policy.rs): five classes; history depth N (current password counts inside N; store N-1 old kvnos); `pw_failcnt_interval` / `pw_lockout_duration`. kadm5 addpol/modpol/getpol/delpol/listpols. Quality modules are `dict`, `empty`, `hesiod` and `princ`, plus [`register_pwqual`](../crates/krb5-kdc/src/store/pwqual.rs). `[plugins] pwqual` `disable` then `enable_only` select the loaded names. The first error stops the walk. `hesiod` allows every password. `module` is not read. There is no `dlopen`. |
 
 Preauth modules run in registry order (built-ins, then EXTRA). The
 first `process_as(&PreauthRock)` that returns `Some(PreauthAction)` issues or
@@ -44,6 +44,12 @@ does not see it.
 way. The built-in name is `json`. Every selected module is called. A module
 does not stop the walk. `disable = json` leaves no plugin record. `set_audit`
 installs one module and skips the stanza. `module` is not read.
+
+`[plugins] pwqual` `disable` and `enable_only` select password-quality
+modules on `kadmin` `cpw`, `kadmin.local` and kpasswd. The built-in names
+are `dict`, `empty`, `hesiod` and `princ`. `dict` and `princ` run only
+when a policy is bound. `empty` runs either way. `hesiod` allows every
+password. The first error stops the walk. `module` is not read.
 
 The client's stanza is `[plugins] clpreauth`, with the same `disable` and
 `enable_only` relations and the same four built-in names. Disabling

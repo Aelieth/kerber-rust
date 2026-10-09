@@ -153,9 +153,11 @@ impl Open {
         if let Some(conf) = &self.conf {
             store.apply_kdc_conf(conf).map_err(|e| e.to_string())?;
         }
-        if let Some(conf) = krb5_config::load_krb5_conf() {
-            store.apply_libdefaults(&conf);
+        let krb5_conf = krb5_config::load_krb5_conf();
+        if let Some(conf) = &krb5_conf {
+            store.apply_libdefaults(conf);
         }
+        store.apply_pwqual_plugins(self.conf.as_ref(), krb5_conf.as_ref());
         if !self.keysalts.is_empty() {
             store.policy.supported_enctypes.clone_from(&self.keysalts);
         }

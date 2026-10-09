@@ -224,6 +224,7 @@ fn main() {
         store.set_capaths(c.capaths.clone());
         store.apply_libdefaults(c);
     }
+    store.apply_pwqual_plugins(kdc_conf, krb5_conf.as_ref());
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:459-462`): the propagation-only mode needs
     // iprop_enable; with it, this port has no separate iprop listener to run alone.
     if args.flag("-proponly") {

@@ -132,9 +132,9 @@ pub use store::{
     KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
     KDB_V1_BASE_LENGTH, KadmData, KeyEntry, KeyLookup, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT,
-    PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, RID_FIRST_USER, RID_KRBTGT,
-    S2K_ITERS, SpakeKdc, TlData, apply_keysalt_policy, kadm5_mask, random_key, s2k_params,
-    strip_db_args,
+    PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, Pwqual, RID_FIRST_USER,
+    RID_KRBTGT, S2K_ITERS, SpakeKdc, TlData, apply_keysalt_policy, clear_thread_pwqual, kadm5_mask,
+    random_key, register_pwqual, s2k_params, set_thread_pwqual, strip_db_args,
 };
 #[cfg(any(test, feature = "test-hooks"))]
 pub use ulog::UlogEntry;
