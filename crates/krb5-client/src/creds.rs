@@ -171,9 +171,10 @@ impl OpenCache {
     /// `start_realm` configuration, else `client`'s realm.
     /// MIT `krb5_tkt_creds_init` (`lib/krb5/krb/get_creds.c:1143-1151`): the start realm is the cache's `start_realm` configuration, else the client's realm.
     fn start_realm(&self, client: &Princ) -> String {
-        self.cc
-            .get_config(None, "start_realm")
-            .map_or_else(|| realm_str(&client.0), |r| String::from_utf8_lossy(r).into_owned())
+        self.cc.get_config(None, "start_realm").map_or_else(
+            || realm_str(&client.0),
+            |r| String::from_utf8_lossy(r).into_owned(),
+        )
     }
 
     /// MIT `krb5_cc_store_cred`: `cred` joins the cache now: appended to a FILE or DIR cache's
