@@ -100,6 +100,8 @@ pub(super) fn continue_fast(
                         &method_from_error(&current).unwrap_or_default(),
                         &super::conf_preferred_preauth_types_for(req.realm),
                     );
+                    // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a type the input cache does not allow is not tried.
+                    method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
                     if fast_mechanism(&method, &skip).is_err() && !saved_method.is_empty() {
                         method.clone_from(&saved_method);
                     }

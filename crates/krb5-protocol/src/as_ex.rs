@@ -107,6 +107,13 @@ pub struct AsTicketOpts {
     pub anonymous: bool,
     /// Seconds from now (`kinit -s`), negative for a time past. `None` or 0 omits `from`.
     pub starttime: Option<i64>,
+    /// `kinit --request-pac` (true) / `--no-request-pac` (false): a PA-PAC-REQUEST on every
+    /// AS-REQ; `None` sends none.
+    /// MIT `maybe_add_pac_request` (`lib/krb5/krb/get_in_tkt.c:1243-1245`): the request is added only when the option was set.
+    pub pac_request: Option<bool>,
+    /// The one real preauthentication type an input cache allows; `None` allows any.
+    /// MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): with an allowed type, only that real type is tried.
+    pub allowed_preauth_type: Option<i32>,
 }
 
 /// Request times/options MIT `verify_as_reply` compares to EncKDCRepPart.
@@ -128,7 +135,18 @@ impl Default for AsTicketOpts {
             addresses: None,
             anonymous: false,
             starttime: None,
+            pac_request: None,
+            allowed_preauth_type: None,
         }
+    }
+}
+
+impl AsTicketOpts {
+    /// Whether the real preauthentication type `pa_type` may be tried.
+    /// MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): any type when none is allowed in particular, else that one.
+    #[must_use]
+    pub fn preauth_allowed(&self, pa_type: i32) -> bool {
+        self.allowed_preauth_type.is_none_or(|t| t == pa_type)
     }
 }
 
@@ -643,9 +661,13 @@ fn continue_from_hint(
         trace_preauth_input(&sorted, etypes);
         // MIT `process_pa_data` (`preauth2.c:648-728`): the first real mechanism that a loaded
         // module serves; one that failed is not tried again.
-        let next = sorted
-            .iter()
-            .find_map(|p| unarmored_mech(p.padata_type, spake_failed));
+        // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a real type the input cache does not allow is skipped.
+        let next = sorted.iter().find_map(|p| {
+            if !req.ticket.preauth_allowed(p.padata_type) {
+                return None;
+            }
+            unarmored_mech(p.padata_type, spake_failed)
+        });
         match next {
             Some(Unarmored::Spake) => {
                 match continue_spake(req, keys, nonce, etypes, &hint, &groups, clock)? {
@@ -846,9 +868,10 @@ fn hint_offers_real_mechanism(req: &AsRequest<'_>, err: &KrbError) -> bool {
     if method.is_empty() {
         return true;
     }
-    method
-        .iter()
-        .any(|p| unarmored_mech(p.padata_type, false).is_some())
+    method.iter().any(|p| {
+        req.ticket.preauth_allowed(p.padata_type)
+            && unarmored_mech(p.padata_type, false).is_some()
+    })
 }
 
 /// Whether MIT retries `e`, an error to an unarmored request: it carries e-data.
@@ -1073,10 +1096,9 @@ fn chosen_preauth(req: &AsRequest<'_>, err: &KrbError) -> Option<i32> {
     }
     let method = method_from_error(err).ok()?;
     let sorted = sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types_for(req.realm));
-    sorted
-        .into_iter()
-        .map(|p| p.padata_type)
-        .find(|&t| unarmored_mech(t, false).is_some())
+    sorted.into_iter().map(|p| p.padata_type).find(|&t| {
+        req.ticket.preauth_allowed(t) && unarmored_mech(t, false).is_some()
+    })
 }
 
 fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {
@@ -1493,7 +1515,7 @@ fn build_as_req_from(
     etypes: &[i32],
 ) -> Result<AsReq, Error> {
     let addresses = req.ticket.addresses.clone();
-    build_as_req(
+    let mut as_req = build_as_req(
         &req.cname,
         req.realm,
         nonce,
@@ -1505,7 +1527,16 @@ fn build_as_req_from(
         padata,
         etypes,
         &req_sname(req),
-    )
+    )?;
+    // MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1387-1389`): the PAC request is added after the other padata, before FAST wraps the request.
+    if let Some(include_pac) = req.ticket.pac_request {
+        let value = encode(&krb5_types::PaPacRequest { include_pac })?;
+        as_req.0.padata.get_or_insert_with(Vec::new).push(PaData {
+            padata_type: pa::PAC_REQUEST,
+            padata_value: value.into(),
+        });
+    }
+    Ok(as_req)
 }
 
 /// MIT `init_creds_step_request` (`get_in_tkt.c:1365-1372`): every request advertises an empty

@@ -60,6 +60,10 @@ pub struct KinitArgs {
     pub pa_attrs: Vec<String>,
     /// `-T armor_ccache`.
     pub armor_ccache: Option<String>,
+    /// `-I input_ccache`.
+    pub in_ccache: Option<String>,
+    /// `--request-pac` (true) / `--no-request-pac` (false).
+    pub request_pac: Option<bool>,
     /// `-X X509_user_identity=`.
     pub pkinit_identity: Option<String>,
     /// `-X X509_anchors=`.
@@ -139,7 +143,7 @@ pub fn kinit_usage(prog: &str) -> String {
 }
 
 /// MIT `kinit`'s options without an argument value, as `getopt_long` takes them.
-const KINIT_OPTSTRING: &str = "r:fpFPn54aAVl:s:c:kit:T:RS:vX:CE";
+const KINIT_OPTSTRING: &str = "r:fpFPn54aAVl:s:c:kI:it:T:RS:vX:CE";
 
 fn kinit_longs() -> Vec<LongOpt> {
     let long = |name, short| LongOpt {
@@ -156,6 +160,16 @@ fn kinit_longs() -> Vec<LongOpt> {
         long("noaddresses", 'A'),
         long("canonicalize", 'C'),
         long("enterprise", 'E'),
+        LongOpt {
+            name: "request-pac",
+            takes_arg: false,
+            short: None,
+        },
+        LongOpt {
+            name: "no-request-pac",
+            takes_arg: false,
+            short: None,
+        },
     ];
     #[cfg(feature = "test-hooks")]
     let longs = {
@@ -207,6 +221,7 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
     let mut lines = Vec::new();
     let mut not = (false, false, false);
     let mut yes = (false, false, false);
+    let mut pac = (false, false);
     for o in each {
         let o = match o {
             Ok(o) => o,
@@ -219,6 +234,17 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
         #[cfg(feature = "test-hooks")]
         if gate_long(&mut out, &o) {
             continue;
+        }
+        match o.long {
+            Some("request-pac") => {
+                pac.0 = true;
+                continue;
+            }
+            Some("no-request-pac") => {
+                pac.1 = true;
+                continue;
+            }
+            _ => {}
         }
         match o.flag {
             'V' => out.verbose = true,
@@ -252,6 +278,8 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
             'v' => out.action = KinitAction::Validate,
             'c' if out.ccache.is_some() => lines.push(own("Only one -c option allowed")),
             'c' => out.ccache = Some(arg),
+            'I' if out.in_ccache.is_some() => lines.push(own("Only one -I option allowed")),
+            'I' => out.in_ccache = Some(arg),
             'X' => {
                 apply_x_attr(&mut out, &arg);
                 out.pa_attrs.push(arg);
@@ -271,9 +299,15 @@ pub fn parse_kinit(args: &[String]) -> Result<KinitArgs, KinitParseError> {
     if yes.2 && not.2 {
         lines.push(own("Only one of -a and -A allowed"));
     }
+    if pac.0 && pac.1 {
+        lines.push(own(
+            "Only one of --request-pac and --no-request-pac allowed",
+        ));
+    }
     out.forwardable = (yes.0 || not.0).then_some(yes.0);
     out.proxiable = (yes.1 || not.1).then_some(yes.1);
     out.addresses = (yes.2 || not.2).then_some(yes.2);
+    out.request_pac = (pac.0 || pac.1).then_some(pac.0);
     if out.keytab_path.is_some() && out.client_keytab {
         lines.push(own("Only one of -t and -i allowed"));
     }
@@ -1137,6 +1171,33 @@ mod tests {
         assert_eq!(p.pkinit_identity.as_deref(), Some("/u.pem"));
         assert_eq!(p.pkinit_anchors.as_deref(), Some("/ca.pem"));
         assert_eq!(p.armor_ccache.as_deref(), Some("/a"));
+    }
+
+    #[test]
+    fn kinit_takes_an_input_cache_and_a_pac_request() {
+        let a = parse_kinit(&s(&["-I", "FILE:/tmp/in", "--request-pac", "user@R"])).unwrap();
+        assert_eq!(a.in_ccache.as_deref(), Some("FILE:/tmp/in"));
+        assert_eq!(a.request_pac, Some(true));
+        let b = parse_kinit(&s(&["--no-request-pac", "user@R"])).unwrap();
+        assert_eq!(b.request_pac, Some(false));
+        let both = parse_kinit(&s(&["--request-pac", "--no-request-pac", "user@R"])).unwrap_err();
+        let KinitParseError::Usage(u) = both else {
+            panic!("both pac flags");
+        };
+        assert!(
+            u.lines("kinit")
+                .iter()
+                .any(|l| l.contains("Only one of --request-pac and --no-request-pac allowed"))
+        );
+        let twice = parse_kinit(&s(&["-I", "A", "-I", "B", "user@R"])).unwrap_err();
+        let KinitParseError::Usage(u) = twice else {
+            panic!("two -I");
+        };
+        assert!(
+            u.lines("kinit")
+                .iter()
+                .any(|l| l.contains("Only one -I option allowed"))
+        );
     }
 
     #[test]

@@ -477,6 +477,70 @@ fn spake_keeps_the_hints_etype_info_when_the_challenge_has_none() {
     }
 }
 
+/// MIT `maybe_add_pac_request` (`lib/krb5/krb/get_in_tkt.c:1243-1253`): `include-pac` is the option, and with no option the padata is absent.
+#[test]
+fn every_as_request_carries_the_pac_request_when_asked() {
+    isolate_host_krb5();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        if let Ok((n, src)) = udp.recv_from(&mut buf) {
+            let _ = tx.send(buf[..n].to_vec());
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::now(),
+                susec: Microseconds::ZERO,
+                error_code: err::C_PRINCIPAL_UNKNOWN,
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: None,
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let kdc = KdcAddr {
+        host: "127.0.0.1".into(),
+        port,
+    };
+    let req = AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"pw",
+        kdc: &kdc,
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts {
+            pac_request: Some(false),
+            ..AsTicketOpts::default()
+        },
+    };
+    let _ = krb5_protocol::as_exchange(&req);
+    let raw = rx.recv_timeout(Duration::from_secs(2)).expect("AS-REQ");
+    let as_req: AsReq = decode(&raw).expect("AS-REQ");
+    let pac = as_req
+        .0
+        .padata
+        .unwrap_or_default()
+        .into_iter()
+        .find(|p| p.padata_type == pa::PAC_REQUEST)
+        .expect("PA-PAC-REQUEST");
+    let body: krb5_types::PaPacRequest = decode(pac.padata_value.as_ref()).unwrap();
+    assert!(!body.include_pac);
+}
+
 /// A KDC that answers every AS-REQ with KRB-ERROR `code` and counts the requests.
 fn kdc_answering(code: i32) -> (u16, Arc<Mutex<usize>>) {
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();

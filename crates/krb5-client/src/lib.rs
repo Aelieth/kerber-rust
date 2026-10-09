@@ -247,6 +247,9 @@ pub struct KinitParams<'a> {
     pub keytab: Option<&'a Path>,
     /// AS ticket options.
     pub ticket: AsTicketOpts,
+    /// `kinit -I`'s input cache, read once: its `pa_type` for the request's server is the only
+    /// preauthentication type that request may use.
+    pub in_ccache: Option<InputCcache<'a>>,
     /// `kinit -n` (anonymous PKINIT).
     pub anonymous: bool,
     /// `kinit -C` / `[libdefaults] canonicalize`.
@@ -264,6 +267,37 @@ pub struct KinitParams<'a> {
     /// Where the KEY_EXP banner goes when `new_password` answers the change: it is called
     /// with the banner just before the change is sent. `None` shows no banner.
     pub key_exp_notice: Option<KeyExpNotice<'a>>,
+}
+
+/// `kinit -I`'s input cache, as read; Debug names it without its credentials.
+#[derive(Clone, Copy)]
+pub struct InputCcache<'a>(pub &'a FileCcache);
+
+impl std::fmt::Debug for InputCcache<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InputCcache")
+    }
+}
+
+/// The one real preauthentication type `in_ccache` allows for a request to `server`.
+/// MIT `read_allowed_preauth_type` (`lib/krb5/krb/get_in_tkt.c:732-754`): the input cache's `pa_type` for the request's server, kept only when `strtol` consumes the whole value and it is not 0.
+fn allowed_preauth_type(
+    in_ccache: Option<InputCcache<'_>>,
+    server: &krb5_types::PrincipalName,
+    realm: &str,
+) -> Option<i32> {
+    // The input cache's `pa_config_data` is not read. PKINIT's per-type config stays out of this step.
+    let value = in_ccache?
+        .0
+        .get_config(Some(&server.unparse_with_realm(realm)), "pa_type")?;
+    let text = String::from_utf8_lossy(value);
+    let t = text.trim_start_matches(|c: char| c.is_ascii_whitespace() || c == '\u{000b}');
+    let digits = t.strip_prefix(['+', '-']).unwrap_or(t);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let n = t.parse::<i64>().ok()?;
+    i32::try_from(n).ok().filter(|&n| n != 0)
 }
 
 /// `krb5_prompter_fct` narrowed to the KEY_EXP new-password prompts.
@@ -1052,6 +1086,11 @@ fn kinit_inner(
         ),
         None => None,
     };
+    let pa_server = in_tkt_sname
+        .clone()
+        .unwrap_or_else(|| krb5_types::PrincipalName::krbtgt(&realm_s));
+    ticket.allowed_preauth_type = allowed_preauth_type(params.in_ccache, &pa_server, &realm_s);
+    let pac_request = ticket.pac_request;
     let keytab = match (keytab_keys.as_deref(), params.keytab) {
         (Some(keys), Some(path)) => Some((keys, path)),
         _ => None,
@@ -1101,6 +1140,8 @@ fn kinit_inner(
                     .and_then(|_| local_host_addresses()),
                 anonymous: false,
                 starttime: None,
+                pac_request,
+                allowed_preauth_type: allowed_preauth_type(params.in_ccache, &changepw, &realm_s),
             };
             let chpw_shape = AsShape {
                 cname: cname.clone(),

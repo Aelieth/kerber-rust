@@ -2,8 +2,8 @@
 //!
 //! Usage: `kinit [-V] [-l lifetime] [-s start_time] [-r renewable_life] [-f | -F] [-p | -P] [-n]
 //! [-a | -A] [-C] [-E] [-v] [-R] [-k [-i|-t keytab_file]] [-c cachename] [-S service_name]
-//! [-T ticket_armor_cache] [-X <attribute>[=<value>]] [principal]` (MIT's `-I`, `--request-pac`
-//! and `--no-request-pac` are not taken). A `test-hooks` build also takes the gates' options and
+//! [-T ticket_armor_cache] [-I input_ccache] [--request-pac | --no-request-pac]
+//! [-X <attribute>[=<value>]] [principal]`. A `test-hooks` build also takes the gates' options and
 //! prints the gates' log lines and an `ok` line on stdout.
 
 #![forbid(unsafe_code)]
@@ -82,6 +82,8 @@ struct K5 {
     out_spec: CcSpec,
     /// Whether that cache becomes its collection's primary.
     switch_to_cache: bool,
+    /// `-I`, read once.
+    in_cc: Option<FileCcache>,
 }
 
 /// MIT `k5_begin` (`kinit.c:413-605`): the output cache (`-c`, else the default cache) and the
@@ -223,6 +225,21 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
         (None, None) => return None,
     };
     let out_spec = out_spec.unwrap_or_else(|| out.spec());
+    // MIT `k5_begin` (`kinit.c:575-585`): the input cache is resolved after the output cache, and a name that does not resolve ends kinit.
+    let in_cc = match &opts.in_ccache {
+        None => None,
+        Some(n) => match armor_ccache_spec(n).and_then(|spec| {
+            krb5_client::load_ccache(&spec).map_err(|e| Krb5Error::new(Code::Other, e.to_string()))
+        }) {
+            Ok(c) => {
+                if opts.verbose {
+                    eprintln!("Using specified input cache: {n}");
+                }
+                Some(c)
+            }
+            Err(e) => return fail(&e, &format!("resolving ccache {n}")),
+        },
+    };
     let name = unparse(&me);
     if opts.verbose {
         eprintln!("Using principal: {name}");
@@ -233,6 +250,7 @@ fn k5_begin(prog: &str, opts: &KinitArgs) -> Option<K5> {
         out,
         out_spec,
         switch_to_cache,
+        in_cc,
     })
 }
 
@@ -409,6 +427,8 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         addresses: None,
         anonymous: opts.anonymous,
         starttime: opts.starttime,
+        pac_request: opts.request_pac,
+        allowed_preauth_type: None,
     };
     // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:991-1005`): a caller address list wins; otherwise absent or true `noaddresses` sends none, and false sends the local addresses.
     if opts.addresses == Some(true)
@@ -485,6 +505,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         new_password: new_password.as_deref(),
         prompter: (!opts.keytab).then_some(NewPasswordPrompter(&prompter)),
         key_exp_notice: Some(KeyExpNotice(&key_exp_notice)),
+        in_ccache: k5.in_cc.as_ref().map(krb5_client::InputCcache),
     };
     let spec = &k5.out_spec;
     let result = match given {
