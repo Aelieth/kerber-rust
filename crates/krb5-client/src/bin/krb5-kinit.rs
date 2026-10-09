@@ -22,9 +22,9 @@ use krb5_client::creds::{
 };
 use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_client::{
-    FileCcache, KeyExpNotice, KeytabName, KinitParams, NewPasswordPrompter, kinit_prompted,
-    kinit_with, kt_client_default_name, kt_default_name, kt_resolve, local_host_addresses,
-    mit_error_code, store_ccache_keep_default,
+    FileCcache, KeyExpNotice, KeytabName, KinitParams, NewPasswordPrompter, PromptReply,
+    kinit_prompted, kinit_with, kt_client_default_name, kt_default_name, kt_resolve,
+    local_host_addresses, mit_error_code, store_ccache_keep_default,
 };
 use krb5_config::{CcSpec, env_new_password, env_password, parse_ccspec, resolve_ccspec};
 use krb5_protocol::{AsTicketOpts, KdcAddr, Keytab};
@@ -445,15 +445,14 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let prompted = std::cell::Cell::new(given.is_some());
     let mut read_password = || {
         prompted.set(true);
-        read_password_line(&k5.name)
-            .map_err(|_| Krb5Error::new(Code::Other, "Cannot read password"))
+        read_password_line(&k5.name).map_err(|e| Krb5Error::new(Code::Other, e))
     };
     let new_password = env_new_password();
     // MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): the banner, then
     // `Enter new password` / `Enter it again`.
     // MIT `kinit_prompter` (`kinit.c:621-636`): those prompts go through this prompter,
     // which hands them to `krb5_prompter_posix`.
-    let prompter = |banner: &str| -> Result<(Vec<u8>, Vec<u8>), String> {
+    let prompter = |banner: &str| -> PromptReply {
         // MIT `krb5_prompter_posix` (`prompter.c:54-54`): prints the banner on stdout.
         println!("{banner}");
         let a = read_prompt_line("Enter new password")?;

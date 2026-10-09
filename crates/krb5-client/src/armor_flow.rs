@@ -334,7 +334,7 @@ fn disable_encrypted_timestamp_does_not_prompt_and_fails() {
     let mut prompts = 0u32;
     let mut prompt = || {
         prompts += 1;
-        Ok(TEST_USER_PASSWORD.to_vec())
+        Ok(zeroize::Zeroizing::new(TEST_USER_PASSWORD.to_vec()))
     };
     let result = kinit_prompted(
         &cap.addr,

@@ -800,21 +800,21 @@ fn is_local_tgt(cred: &CcacheCred, realm: &[u8]) -> bool {
 ///
 /// # Errors
 ///
-/// The message `failed to read password from stdin` when stdin ends or cannot be read.
-pub fn read_password_line(principal: &str) -> Result<Vec<u8>, String> {
+/// As [`read_prompt_line`].
+pub fn read_password_line(principal: &str) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
     read_prompt_line(&format!("Password for {principal}"))
 }
 
 /// One hidden prompt, `prompt` and `: ` on stdout, through the shared MIT prompter
-/// [`krb5_cli::prompt_hidden`].
+/// [`krb5_cli::prompt_hidden`]. The reply is wiped when dropped.
+/// MIT `krb5_prompter_posix` (`prompter.c:93-100`): a reply that does not read is `KRB5_LIBOS_CANTREADPWD`, or `KRB5_LIBOS_PWDINTR` when `SIGINT` came.
 ///
 /// # Errors
 ///
-/// The message `failed to read password from stdin` when stdin ends or cannot be read.
-pub fn read_prompt_line(prompt: &str) -> Result<Vec<u8>, String> {
-    krb5_cli::prompt_hidden(prompt)
-        .map(|reply| reply.to_vec())
-        .map_err(|_| "failed to read password from stdin".to_owned())
+/// MIT's text: `Cannot read password` when stdin ends or cannot be read, `Password read
+/// interrupted` on `SIGINT`.
+pub fn read_prompt_line(prompt: &str) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
+    krb5_cli::prompt_hidden(prompt).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -823,6 +823,22 @@ mod tests {
     use krb5_crypto::{EncryptionType, ProtocolKey};
     use krb5_protocol::{CcacheKeyblock, realm};
     use krb5_types::PrincipalName;
+
+    /// MIT `krb5_prompter_posix` (`prompter.c:93-100`): end of input is "Cannot read password", and `SIGINT` is "Password read interrupted", not "failed to read password from stdin".
+    #[test]
+    fn a_prompt_that_cannot_be_read_reports_mits_text() {
+        let mut out = Vec::new();
+        let err = krb5_cli::Prompter::new(&b""[..], &mut out)
+            .hidden("Password for user@REALM")
+            .map_err(|e| e.to_string())
+            .expect_err("empty input");
+        assert_eq!(err, "Cannot read password");
+        assert_eq!(
+            krb5_cli::PromptError::Interrupted.to_string(),
+            "Password read interrupted"
+        );
+        assert_ne!(err, "failed to read password from stdin");
+    }
 
     fn s(v: &[&str]) -> Vec<String> {
         v.iter().map(|x| (*x).to_owned()).collect()

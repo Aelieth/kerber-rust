@@ -272,8 +272,9 @@ pub struct KinitParams<'a> {
 #[derive(Clone, Copy)]
 pub struct NewPasswordPrompter<'a>(pub &'a (dyn Fn(&str) -> PromptReply + 'a));
 
-/// The two `KRB5_PROMPT_TYPE_NEW_PASSWORD*` replies, or the prompter's error.
-pub type PromptReply = Result<(Vec<u8>, Vec<u8>), String>;
+/// The two `KRB5_PROMPT_TYPE_NEW_PASSWORD*` replies, each wiped when dropped, or the prompter's
+/// error.
+pub type PromptReply = Result<(Zeroizing<Vec<u8>>, Zeroizing<Vec<u8>>), String>;
 
 impl std::fmt::Debug for NewPasswordPrompter<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -534,7 +535,7 @@ fn chpw_error(e: ProtocolError) -> Box<dyn std::error::Error + Send + Sync> {
 pub fn kinit_prompted(
     kdc: &KdcAddr,
     principal: &str,
-    prompt: &mut dyn FnMut() -> Result<Vec<u8>, Krb5Error>,
+    prompt: &mut dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Krb5Error>,
     spec: &CcSpec,
     params: KinitParams<'_>,
 ) -> Result<KinitResult, Box<dyn std::error::Error + Send + Sync>> {
@@ -555,7 +556,7 @@ pub fn kinit_prompted(
 /// `gak_data` every later AS of the same `krb5_get_init_creds_password` shares.
 struct LazyPassword<'p> {
     given: &'p [u8],
-    prompt: Option<&'p mut dyn FnMut() -> Result<Vec<u8>, Krb5Error>>,
+    prompt: Option<&'p mut dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Krb5Error>>,
     read: Option<Zeroizing<Vec<u8>>>,
     failed: Option<Krb5Error>,
 }
@@ -572,7 +573,6 @@ impl LazyPassword<'_> {
         };
         match prompt() {
             Ok(p) => {
-                let p = Zeroizing::new(p);
                 self.read = Some(p.clone());
                 Ok(p)
             }
@@ -1097,14 +1097,14 @@ fn kinit_inner(
             };
             let chpw_as =
                 exchange_shape(password, None, &mut armor, params.armor_ccache, &chpw_shape)??;
-            let mut new_pw = match (params.new_password, params.prompter) {
+            let new_pw = match (params.new_password, params.prompter) {
                 (Some(p), _) => {
                     krb5_protocol::trace::gic_pwd_changepw(3);
                     if let Some(n) = params.key_exp_notice {
                         (n.0)(KEY_EXP_BANNER);
                     }
                     krb5_protocol::change_password(&resolved, &chpw_as, p).map_err(chpw_error)?;
-                    p.to_vec()
+                    Zeroizing::new(p.to_vec())
                 }
                 (None, Some(prompter)) => prompt_and_change(&resolved, &chpw_as, prompter)?,
                 (None, None) => return Err(e.into()),
@@ -1113,9 +1113,7 @@ fn kinit_inner(
             // the new password, is traced as a request of its own.
             krb5_protocol::trace::gic_pwd_changed();
             trace::init_creds(&cname, &realm_s, params.in_tkt_service);
-            let out = exchange_shape_direct(&mut armor, params.armor_ccache, &shape, &new_pw);
-            new_pw.zeroize();
-            out?
+            exchange_shape_direct(&mut armor, params.armor_ccache, &shape, &new_pw)?
         }
         Err(e) => return Err(e.into()),
     };
@@ -1194,11 +1192,12 @@ const KEY_EXP_BANNER: &str = "Password expired.  You must change it now.";
 /// accepted password.
 /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:249-326`): three tries; a soft kpasswd
 /// result re-prompts with the result text in the banner, anything else is the error.
+/// MIT `krb5_get_init_creds_password` (`gic_pwd.c:340-344`): both new-password buffers are zeroed on every exit; the replies here are `Zeroizing`, wiped whichever way the loop ends.
 fn prompt_and_change(
     kdc: &KdcAddr,
     chpw_as: &krb5_protocol::AsOutcome,
     prompter: NewPasswordPrompter<'_>,
-) -> Result<Vec<u8>, Box<dyn std::error::Error + Send + Sync>> {
+) -> Result<Zeroizing<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
     let mut banner = KEY_EXP_BANNER.to_owned();
     // `KRB5_CHPW_FAIL` "set in case the retry loop falls through" (`:299`).
     let mut ret = "Password change failed";
@@ -1206,7 +1205,7 @@ fn prompt_and_change(
         // MIT `krb5_get_init_creds_password` (`gic_pwd.c:256-258`): each try is traced with the
         // tries left.
         krb5_protocol::trace::gic_pwd_changepw(tries);
-        let (mut pw0, mut pw1) = (prompter.0)(&banner)?;
+        let (pw0, pw1) = (prompter.0)(&banner)?;
         if pw0 != pw1 {
             // KRB5_LIBOS_BADPWDMATCH (`:268-271`)
             ret = "Password mismatch";
@@ -1219,14 +1218,11 @@ fn prompt_and_change(
             let (code, data) =
                 krb5_protocol::change_password_result(kdc, chpw_as, &pw0).map_err(chpw_error)?;
             if code == krb5_protocol::KPASSWD_SUCCESS {
-                pw1.zeroize();
                 return Ok(pw0);
             }
             ret = "Password change failed";
             if code != krb5_protocol::KPASSWD_SOFTERROR {
                 // `:301-305`: a hard result is KRB5_CHPW_FAIL, no retry.
-                pw0.zeroize();
-                pw1.zeroize();
                 return Err(ret.into());
             }
             // `:309-323`: "<code string>: <message>.  Please try again."
@@ -1235,8 +1231,6 @@ fn prompt_and_change(
                 krb5_protocol::format_chpw_failure(code, &data)
             );
         }
-        pw0.zeroize();
-        pw1.zeroize();
     }
     Err(ret.into())
 }
