@@ -696,10 +696,8 @@ pub fn parse_kvno(args: &[String]) -> Result<KvnoArgs, UsageError> {
                     return Err(UsageError::Lines(lines));
                 }
             }
-            (None, 'I') => {
-                out.for_user = o.arg;
-                out.for_user_enterprise = false;
-            }
+            // MIT `main` (`kvno.c:129-137`): `-I` names the user and leaves an earlier `-U`'s enterprise flag set; `-U` names the user and sets it.
+            (None, 'I') => out.for_user = o.arg,
             (None, 'U') => {
                 out.for_user = o.arg;
                 out.for_user_enterprise = true;
@@ -982,6 +980,13 @@ mod tests {
         assert!(i.proxy && !i.for_user_enterprise);
         let e = parse_kvno(&s(&["-U", "victim@A.TEST", "user@C.TEST"])).unwrap();
         assert!(e.for_user_enterprise);
+        // Live MIT 1.22.2: `-U a -I b` asks for `b` as an enterprise name, as `-I b -U a` asks for `a`.
+        let ui = parse_kvno(&s(&["-U", "a", "-I", "b", "host/x"])).unwrap();
+        assert_eq!(ui.for_user.as_deref(), Some("b"));
+        assert!(ui.for_user_enterprise);
+        let iu = parse_kvno(&s(&["-I", "b", "-U", "a", "host/x"])).unwrap();
+        assert_eq!(iu.for_user.as_deref(), Some("a"));
+        assert!(iu.for_user_enterprise);
         let w = parse_kvno(&s(&["--u2u", "FILE:/tmp/host", "host/x"])).unwrap();
         assert_eq!(w.u2u.as_deref(), Some("FILE:/tmp/host"));
     }

@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **client.** kvno -I after -U keeps the enterprise flag, so -U a -I b asks for b as an enterprise name. Unit.
 - **client/protocol.** kvno appends each credential under the cache file's exclusive lock; a refused store stays out, and get_credentials ignores it. Unit.
 - **client.** kinit wipes both new-password replies of an expired password on every exit, and a failed prompt says "Cannot read password". Unit.
 - **kpasswd.** An empty password whose named policy is missing gets the policy-lookup failure text. The change itself is not refused for that missing policy. Unit.
