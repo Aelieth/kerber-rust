@@ -1486,6 +1486,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **tool.** CI lints and MSRV-builds the release configuration (no features) too; the no-features nextest run writes its own junit (`ci-nofeatures`) beside the features run's, not over it.
 - **docs.** The install notes name the client gaps still open, and a release build refuses the gates' kvno and kinit options.
 - **client.** kpasswd asks the KDC before the password prompt, and a password the preauth read cannot take is KRB5_PREAUTH_FAILED. Unit.
 - **admin.** kadmin.local, kadmind, and kdb5_util create stop when a realm parameter does not convert. Unit.

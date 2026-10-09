@@ -666,7 +666,7 @@ cleanly without the keytab.
 MSRV is 1.95 (`package.rust-version`), edition 2024, matching KLLDAP
 (local checkout 0.7.4; upstream `Aelieth/klldap` 0.7.6). The `msrv` CI
 job is `cargo build --workspace --all-targets --locked` on that
-toolchain; the full `cargo test --workspace --locked` on MSRV is the
+toolchain, with the test-hooks features and without; the full `cargo test --workspace --locked` on MSRV is the
 `msrv-test` job of `full-test.yml` (nightly + `v*` tags). `rasn` is
 unpinned (`0.28`); golden MIT DER is the protocol net if encodings
 drift. There is no unlocked `--locked` fallback. KLLDAP alignment:
@@ -710,10 +710,10 @@ all of the above).
 
 | Job | Runs |
 | --- | --- |
-| `test` | `cargo fmt --check`, `cargo clippy --all-targets --all-features -D warnings`, `cargo nextest run --workspace --profile ci` |
+| `test` | `cargo fmt --check`, `cargo clippy --all-targets -D warnings` with `--all-features` and with none, `cargo nextest run --workspace --profile ci` with the test-hooks features, then without (`--profile ci-nofeatures`) |
 | `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings` (sibling of `test`) |
 | `shellcheck` | `shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh` with `.shellcheckrc` (`external-sources=true`, `SC2329` off); zero inline disables (`make shellcheck`). ShellCheck is installed by version and sha256 (`SHELLCHECK_VERSION`, v0.11.0 — the runner's package is 0.9.0 and reports hundreds of SC2317/SC2119 notes 0.11.0 does not); the Makefile fallback image and the hygiene inventory name the same version, and `ci-policy.py` keeps the three in step |
-| `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95 |
+| `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
 | `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` (CI pins cargo-vet **0.10.0**; local 0.10.2 is not an oracle) |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
@@ -819,7 +819,8 @@ turns on `krb5-gss/test-hooks`. Only such a build reads these inputs or builds t
 programs (`krb5-tools`', `krb5-gss`'s, `krb5-iprop-pull`): a release build has neither, as
 MIT's tools read none of these inputs. CI's test job and `make test` then run the
 workspace's tests once more without features
-(`cargo nextest run --workspace --profile ci --locked`), so the release-only units
+(`cargo nextest run --workspace --profile ci-nofeatures --locked`, its junit beside the first
+run's), so the release-only units
 run too: a release `kvno` and `kinit` refusing the gates' options, `kinit -S`
 asking the AS, `a_release_build_reads_no_path_override`, and every test's release
 branch.

@@ -38,6 +38,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: clippy (no features)
+        # The release configuration, as `make build` makes it: code under
+        # `cfg(not(feature = "test-hooks"))` is linted only here.
+        run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Install cargo-nextest
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
@@ -50,10 +54,11 @@ jobs:
         run: cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
       - name: test (release build, no features)
         # The release-only units: a build without the test-hooks features, as `make build` makes.
+        # Its own profile keeps its junit beside the features run's, not over it.
         timeout-minutes: 10
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
-        run: cargo nextest run --workspace --profile ci --locked
+        run: cargo nextest run --workspace --profile ci-nofeatures --locked
       - name: doctests
         env:
           KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
@@ -62,13 +67,19 @@ jobs:
         # Job logs are private; the annotations are public and are what
         # scripts/ci-status.py reads. One ::error per failed testcase.
         if: failure()
-        run: python3 scripts/lib/junit-annotate.py target/nextest/ci/junit.xml
+        run: |
+          python3 scripts/lib/junit-annotate.py target/nextest/ci/junit.xml
+          if [ -f target/nextest/ci-nofeatures/junit.xml ]; then
+            python3 scripts/lib/junit-annotate.py target/nextest/ci-nofeatures/junit.xml
+          fi
       - name: Upload nextest junit
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nextest-junit
-          path: target/nextest/ci/junit.xml
+          path: |
+            target/nextest/ci/junit.xml
+            target/nextest/ci-nofeatures/junit.xml
           retention-days: 7
           if-no-files-found: error
 
@@ -120,6 +131,8 @@ jobs:
           toolchain: "1.95"
       - name: MSRV 1.95 build (locked)
         run: cargo build --workspace --all-targets --locked --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
+      - name: MSRV 1.95 build (locked, no features)
+        run: cargo build --workspace --all-targets --locked
 
   audit:
     runs-on: ubuntu-latest
