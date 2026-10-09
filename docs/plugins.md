@@ -1,7 +1,7 @@
 # Extension points (traits, not dlopen)
 
 MIT Kerberos loads C `.so` plugins (`kdb5`, `kdcpreauth`, `clpreauth`,
-`kdcpolicy`, `audit`, pwqual). This workspace forbids C FFI in the product, so the same
+`kdcpolicy`, `audit`, pwqual, `kadm5_hook`). This workspace forbids C FFI in the product, so the same
 capabilities are **Rust traits and process-local registries**. There
 is no `dlopen`.
 
@@ -13,6 +13,7 @@ is no `dlopen`.
 | kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) `check_as` / `check_tgs` return `Result` and can deny. [`set_policy`](../crates/krb5-kdc/src/plugins.rs) is process-wide (KDC serve/worker threads see it); tests isolate with `set_thread_policy`. AS lockout stays inline, not in the swappable slot. `check_as_req` and `check_tgs_req` take the request, the client and the server (for TGS, the server and the header ticket), the indicators, and a status out. A set status is the KRB-ERROR text. Lifetime and renew lifetime come back as `PolicyAdjustment` and cap the ticket from now. The older methods stay for a module that does not use them. `register_kdcpolicy` adds a named module. `[plugins] kdcpolicy` `disable` then `enable_only` select the loaded names. Modules run in that order; the first error denies the request and a non-zero lifetime caps `endtime` and `renew_till` from now. An empty selection allows the request and leaves the times. `set_policy` and `set_thread_policy` install one module and skip the stanza. Tests isolate a list with `set_thread_kdcpolicies`. `module` is not read. There is no `dlopen`. The name `test` is registered only when `enable_only` lists it. `check_as_from` and `check_tgs_from` also receive the socket the KDC accepted; that address is not `request.addresses`. |
 | audit | `audit` | [`KdcAudit`](../crates/krb5-kdc/src/audit.rs) `as_req` / `tgs_req` / `s4u2self` / `s4u2proxy` / `u2u`. [`JsonAudit`](../crates/krb5-kdc/src/audit.rs) is the built-in name `json`. `register_audit` adds a named module. `[plugins] audit` `disable` then `enable_only` select the loaded names, including `json`. Every selected module runs; one module does not stop the others. `set_audit` and `set_thread_audit` install one module and skip the stanza. Tests isolate a list with `set_thread_audits`. `module` is not read. There is no `dlopen`. |
 | pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store/policy.rs): five classes; history depth N (current password counts inside N; store N-1 old kvnos); `pw_failcnt_interval` / `pw_lockout_duration`. kadm5 addpol/modpol/getpol/delpol/listpols. Quality modules are `dict`, `empty`, `hesiod` and `princ`, plus [`register_pwqual`](../crates/krb5-kdc/src/store/pwqual.rs). `[plugins] pwqual` `disable` then `enable_only` select the loaded names. The first error stops the walk. `hesiod` allows every password. `module` is not read. There is no `dlopen`. |
+| kadm5_hook | `kadm5_hook` | [`Kadm5Hook`](../crates/krb5-kdc/src/store/kadm5_hook.rs) on chpass (including `cpw -randkey`), create, modify, rename, remove and alias. [`register_kadm5_hook`](../crates/krb5-kdc/src/store/kadm5_hook.rs) adds a named module. `[plugins] kadm5_hook` `disable` then `enable_only` select the loaded names. A precommit error stops the walk and writes nothing. A postcommit error is logged and the walk continues; the operation still succeeds. No module is built in. `module` is not read. There is no `dlopen`. |
 
 Preauth modules run in registry order (built-ins, then EXTRA). The
 first `process_as(&PreauthRock)` that returns `Some(PreauthAction)` issues or
@@ -50,6 +51,11 @@ modules on `kadmin` `cpw`, `kadmin.local` and kpasswd. The built-in names
 are `dict`, `empty`, `hesiod` and `princ`. `dict` and `princ` run only
 when a policy is bound. `empty` runs either way. `hesiod` allows every
 password. The first error stops the walk. `module` is not read.
+
+`[plugins] kadm5_hook` `disable` and `enable_only` select embedder modules
+for chpass, create, modify, rename, remove and alias. A module error before
+the write cancels the operation. An error after the write is logged and the
+operation still succeeds. No module is built in. `module` is not read.
 
 The client's stanza is `[plugins] clpreauth`, with the same `disable` and
 `enable_only` relations and the same four built-in names. Disabling

@@ -126,15 +126,16 @@ pub use store::{
     decode_kdbe_bytes, encode_incr_update, encode_kdbe, walk_incr_update,
 };
 pub use store::{
-    AdminEnt, AdminFields, IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK, IPROP_PERM_DENIED,
-    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE, KDB_DISALLOW_POSTDATED,
-    KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS,
-    KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
+    AdminEnt, AdminFields, HookStage, IPROP_ERROR, IPROP_FULL_RESYNC, IPROP_NIL, IPROP_OK,
+    IPROP_PERM_DENIED, KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_DUP_SKEY, KDB_DISALLOW_FORWARDABLE,
+    KDB_DISALLOW_POSTDATED, KDB_DISALLOW_RENEWABLE, KDB_DISALLOW_SVR, KDB_DISALLOW_TGT_BASED,
+    KDB_LOCKDOWN_KEYS, KDB_NO_AUTH_DATA_REQUIRED, KDB_OK_AS_DELEGATE, KDB_OK_TO_AUTH_AS_DELEGATE,
     KDB_PWCHANGE_SERVICE, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KDB_REQUIRES_PWCHANGE,
-    KDB_V1_BASE_LENGTH, KadmData, KeyEntry, KeyLookup, MAX_ALIAS_DEPTH, NamedPolicy, PWQUAL_DICT,
-    PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, Pwqual, RID_FIRST_USER,
-    RID_KRBTGT, S2K_ITERS, SpakeKdc, TlData, apply_keysalt_policy, clear_thread_pwqual, kadm5_mask,
-    random_key, register_pwqual, s2k_params, set_thread_pwqual, strip_db_args,
+    KDB_V1_BASE_LENGTH, Kadm5Hook, KadmData, KeyEntry, KeyLookup, MAX_ALIAS_DEPTH, NamedPolicy,
+    PWQUAL_DICT, PWQUAL_EMPTY, PWQUAL_PRINC, Policy, Principal, PrincipalStore, Pwqual,
+    RID_FIRST_USER, RID_KRBTGT, S2K_ITERS, SpakeKdc, TlData, apply_keysalt_policy,
+    clear_thread_kadm5_hook, clear_thread_pwqual, kadm5_mask, random_key, register_kadm5_hook,
+    register_pwqual, s2k_params, set_thread_kadm5_hook, set_thread_pwqual, strip_db_args,
 };
 #[cfg(any(test, feature = "test-hooks"))]
 pub use ulog::UlogEntry;

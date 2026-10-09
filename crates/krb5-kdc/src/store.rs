@@ -10,6 +10,7 @@ mod flags;
 mod history;
 mod iprop_ulog;
 pub(crate) mod iprop_xdr;
+mod kadm5_hook;
 mod kdb_convert;
 mod keys;
 mod password;
@@ -679,6 +680,9 @@ pub use iprop_ulog::{
 pub use iprop_xdr::{
     IncrLayout, KeyWrap, UlogTime, XdrError, decode_incr_update, decode_kdbe_bytes,
     encode_incr_update, encode_kdbe, walk_incr_update,
+};
+pub use kadm5_hook::{
+    HookStage, Kadm5Hook, clear_thread_kadm5_hook, register_kadm5_hook, set_thread_kadm5_hook,
 };
 pub use kdb_convert::{
     AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,

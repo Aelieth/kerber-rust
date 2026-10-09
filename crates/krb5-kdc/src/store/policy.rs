@@ -152,6 +152,10 @@ pub struct Policy {
     ///
     /// MIT `k5_pwqual_load` (`lib/kadm5/srv/pwqual.c:42-96`): `k5_plugin_load_all` applies that profile.
     pub pwqual: krb5_config::PluginRelations,
+    /// `[plugins] kadm5_hook` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `k5_kadm5_hook_load` (`lib/kadm5/srv/kadm5_hook.c:40-94`): `k5_plugin_load_all` applies that profile.
+    pub kadm5_hook: krb5_config::PluginRelations,
 }
 
 impl Default for Policy {
@@ -189,6 +193,7 @@ impl Default for Policy {
             kdcpolicy: krb5_config::PluginRelations::default(),
             audit: krb5_config::PluginRelations::default(),
             pwqual: krb5_config::PluginRelations::default(),
+            kadm5_hook: krb5_config::PluginRelations::default(),
         }
     }
 }
@@ -394,6 +399,7 @@ impl PrincipalStore {
         self.policy.kdcpolicy = conf.plugin_relations("kdcpolicy");
         self.policy.audit = conf.plugin_relations("audit");
         self.policy.pwqual = conf.plugin_relations("pwqual");
+        self.policy.kadm5_hook = conf.plugin_relations("kadm5_hook");
         Ok(())
     }
 
@@ -467,6 +473,24 @@ impl PrincipalStore {
             kdc.unwrap_or(&kdc_fallback),
             krb5.unwrap_or(&krb5_fallback),
             "pwqual",
+        );
+    }
+
+    /// `[plugins] kadm5_hook` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `k5_kadm5_hook_load` (`lib/kadm5/srv/kadm5_hook.c:40-94`): `k5_plugin_load_all` applies that profile.
+    pub fn apply_kadm5_hook_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.kadm5_hook = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "kadm5_hook",
         );
     }
 

@@ -306,7 +306,8 @@ impl PrincipalStore {
     /// password fails the quality or history checks; [`Error::BadKeysalts`] when `etypes` names
     /// an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the CSPRNG
     /// fails creating `kadmin/history`; [`Error::Crypto`] when sealing the replaced keys into
-    /// the history fails; [`Error::Db`] when saving the store to `persist_paths` fails.
+    /// the history fails; [`Error::Db`] when saving the store to `persist_paths` fails;
+    /// the error from a `kadm5_hook` precommit module.
     pub fn set_password_etypes_keepold_n_in(
         &mut self,
         name: &PrincipalName,
@@ -352,11 +353,29 @@ impl PrincipalStore {
             .unwrap_or(0)
             .saturating_add(1);
         let new_keys = keys_from_password(&use_etypes, password, &salt, next_kvno)?;
+        super::kadm5_hook::hook_chpass(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            name,
+            princ_realm,
+            keepold,
+            Some(password),
+            &use_etypes,
+        )?;
         self.replace_password_keys(&id, new_keys, nhist.zip(hist), keepold, actor)?;
         self.apply_pw_max_life_in(name, princ_realm)?;
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_chpass(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            name,
+            princ_realm,
+            keepold,
+            Some(password),
+            &use_etypes,
+        )
     }
 
     pub(super) fn apply_pw_max_life_in(

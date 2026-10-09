@@ -257,6 +257,12 @@ name. `disable = empty` allows an empty password when no policy length
 forbids it. The same relations in krb5.conf apply after this file.
 `module` is not read.
 
+`[plugins] kadm5_hook` `disable` and `enable_only` select embedder modules
+for chpass, create, modify, rename, remove and alias. A module error before
+the write cancels the operation. An error after the write is logged and the
+operation still succeeds. No module is built in. The same relations in
+krb5.conf apply after this file. `module` is not read.
+
 ### The database
 
 ```sh

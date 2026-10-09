@@ -245,7 +245,8 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
     /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
+    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails;
+    /// the error from a `kadm5_hook` precommit module.
     pub fn chrand_etypes_keepold_in(
         &mut self,
         name: &PrincipalName,
@@ -271,9 +272,18 @@ impl PrincipalStore {
         let use_etypes =
             apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
         let mut new_keys = Vec::new();
-        for etype in use_etypes {
-            new_keys.push(KeyEntry::new(etype, random_key(etype)?, next_kvno));
+        for etype in &use_etypes {
+            new_keys.push(KeyEntry::new(*etype, random_key(*etype)?, next_kvno));
         }
+        super::kadm5_hook::hook_chpass(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            name,
+            princ_realm,
+            keepold,
+            None,
+            &use_etypes,
+        )?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             let old = std::mem::replace(&mut p.keys, new_keys.clone());
@@ -297,6 +307,15 @@ impl PrincipalStore {
             return Err(Error::Crypto("injected chrand save fail".into()));
         }
         self.save_if_configured()?;
+        super::kadm5_hook::hook_chpass(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            name,
+            princ_realm,
+            keepold,
+            None,
+            &use_etypes,
+        )?;
         Ok(new_keys)
     }
 

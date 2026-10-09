@@ -527,6 +527,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **admin.** Offer `kadm5_hook` precommit and postcommit on chpass, create, modify, rename, remove and alias. `[plugins] kadm5_hook` selects the names. A postcommit error is logged and the operation still succeeds. Units.
 - **admin.** Select pwqual modules by name through `[plugins] pwqual` `disable` and `enable_only`. Built-ins are `dict`, `empty`, `hesiod` and `princ`. Units.
 - **kdc.** Select audit modules by name through `[plugins] audit` `disable` and `enable_only`. The policy check also sees the socket peer. Units.
 - **kdc.** Select kdcpolicy modules by name through `[plugins] kdcpolicy` `disable` and `enable_only`. `check_as` and `check_tgs` take the request, the client and server or the header ticket, the indicators, and a status out. That status is the KRB-ERROR text. A non-zero lifetime or renew lifetime caps the ticket from now. When `enable_only` names `test`, MIT's kdcpolicy test module is registered; otherwise it is not. Units.

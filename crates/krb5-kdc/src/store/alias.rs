@@ -44,7 +44,8 @@ impl PrincipalStore {
     ///
     /// [`Error::AliasRealm`] when `alias_realm` and `target_realm` differ;
     /// [`Error::AlreadyExists`] when the alias name already resolves to an entry;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails;
+    /// the error from a `kadm5_hook` precommit module.
     pub fn create_alias_in(
         &mut self,
         alias: &PrincipalName,
@@ -60,6 +61,14 @@ impl PrincipalStore {
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);
         }
+        super::kadm5_hook::hook_alias(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            alias,
+            alias_realm,
+            target,
+            target_realm,
+        )?;
         let mut p = Principal::from_keys(
             alias.clone(),
             alias_realm.to_owned(),
@@ -89,6 +98,14 @@ impl PrincipalStore {
         });
         self.note_ulog(id.clone(), false, Some(p.clone()));
         self.map.insert(id, p);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_alias(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            alias,
+            alias_realm,
+            target,
+            target_realm,
+        )
     }
 }

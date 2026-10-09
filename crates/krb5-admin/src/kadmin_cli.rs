@@ -158,6 +158,7 @@ impl Open {
             store.apply_libdefaults(conf);
         }
         store.apply_pwqual_plugins(self.conf.as_ref(), krb5_conf.as_ref());
+        store.apply_kadm5_hook_plugins(self.conf.as_ref(), krb5_conf.as_ref());
         if !self.keysalts.is_empty() {
             store.policy.supported_enctypes.clone_from(&self.keysalts);
         }

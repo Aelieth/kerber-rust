@@ -476,9 +476,25 @@ pub struct AdminFields {
 
 impl PrincipalStore {
     pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
+        let (name, realm) = {
+            let principal = self.map.get(id).ok_or(Error::NotFound)?;
+            (principal.name.clone(), principal.realm.clone())
+        };
+        super::kadm5_hook::hook_remove(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            &name,
+            &realm,
+        )?;
         self.map.remove(id).ok_or(Error::NotFound)?;
         self.note_ulog(id.to_owned(), true, None);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_remove(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            &name,
+            &realm,
+        )
     }
 
     /// Permit `from` to S4U2Proxy to `name` (RBCD). A bare name is the local realm.
@@ -661,7 +677,8 @@ impl PrincipalStore {
     /// [`Error::PasswordPolicy`] when `password` is empty or fails the `ent` policy's checks;
     /// [`Error::BadKeysalts`] when `etypes` names an enctype outside that policy's
     /// `allowed_keysalts`; [`Error::Rng`] when `password` is `None` and the CSPRNG fails;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails;
+    /// the error from a `kadm5_hook` precommit module.
     pub fn create_principal_3_in(
         &mut self,
         name: &PrincipalName,
@@ -760,8 +777,26 @@ impl PrincipalStore {
             refresh_kadm_tl(&mut p);
         }
         stamp_admin_tl(&mut p, true, actor);
+        super::kadm5_hook::hook_create(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            name,
+            princ_realm,
+            ent.mask,
+            password,
+            &use_etypes,
+        )?;
         self.put_principal(p);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_create(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            name,
+            princ_realm,
+            ent.mask,
+            password,
+            &use_etypes,
+        )
     }
 
     /// ACL-gated create of a random-key host (or other) principal.
@@ -1109,7 +1144,8 @@ impl PrincipalStore {
     ///
     /// [`Error::AlreadyExists`] when `new` already resolves to an entry; [`Error::NotFound`]
     /// when `old` is missing; [`Error::AliasUnsupported`] when `old` is an alias;
-    /// [`Error::Db`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails;
+    /// the error from a `kadm5_hook` precommit module.
     pub fn rename_unchecked(
         &mut self,
         old: &PrincipalName,
@@ -1132,6 +1168,14 @@ impl PrincipalStore {
         {
             return Err(Error::AliasUnsupported);
         }
+        super::kadm5_hook::hook_rename(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            old,
+            old_realm,
+            new,
+            new_realm,
+        )?;
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
         new_realm.clone_into(&mut p.realm);
@@ -1142,7 +1186,15 @@ impl PrincipalStore {
         stamp_admin_tl(&mut p, false, actor);
         self.note_ulog(p.id(), false, Some(p.clone()));
         self.map.insert(p.id(), p);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_rename(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            old,
+            old_realm,
+            new,
+            new_realm,
+        )
     }
 
     pub(super) fn insert_password(
@@ -1197,7 +1249,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
-    /// store to `persist_paths` fails.
+    /// store to `persist_paths` fails; the error from a `kadm5_hook` precommit module.
     pub fn apply_admin_fields_in(
         &mut self,
         name: &PrincipalName,
@@ -1215,6 +1267,34 @@ impl PrincipalStore {
             max_renewable_life,
         } = fields;
         let id = self.canonical_id(name, princ_realm)?;
+        let mut mask = 0u32;
+        if attributes.is_some() {
+            mask |= kadm5_mask::ATTRIBUTES;
+        }
+        if max_life.is_some() {
+            mask |= kadm5_mask::MAX_LIFE;
+        }
+        if expiration.is_some() {
+            mask |= kadm5_mask::PRINC_EXPIRE_TIME;
+        }
+        if pw_expire.is_some() {
+            mask |= kadm5_mask::PW_EXPIRATION;
+        }
+        if clear_policy {
+            mask |= kadm5_mask::POLICY_CLR;
+        } else if policy.is_some() {
+            mask |= kadm5_mask::POLICY;
+        }
+        if max_renewable_life.is_some() {
+            mask |= kadm5_mask::MAX_RLIFE;
+        }
+        super::kadm5_hook::hook_modify(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            name,
+            princ_realm,
+            mask,
+        )?;
         let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -1250,7 +1330,14 @@ impl PrincipalStore {
         }
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_modify(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            name,
+            princ_realm,
+            mask,
+        )
     }
 
     /// Impose kadm5.acl restrictions after create/modify (`auth.c` `impose_restrictions`).

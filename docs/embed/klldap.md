@@ -121,9 +121,9 @@ kerber-rust point release:
 - **Bootstrap.** `PrincipalStore::bootstrap` creates a test user and admin with
   passwords; KLLDAP wants krbtgt, `kadmin/*` and a random-key admin with no
   password. Build it from `PrincipalStore::new` and `create_principal_3_in`.
-- **The `kadm5_hook` / `kadm5_auth` plugin traits** are not implemented
-  (`docs/parity/a4-kadmin.md`, deferred); the embed does not need them, since
-  the directory calls the store directly.
+- **`kadm5_hook`** is [`Kadm5Hook`](../../crates/krb5-kdc/src/store/kadm5_hook.rs):
+  an embedder registers a module with `register_kadm5_hook`. The directory does
+  not have to. **`kadm5_auth`** is still not implemented (`docs/parity/a4-kadmin.md`).
 
 ## KLLDAP-side items the embed should carry
 
