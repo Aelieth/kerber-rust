@@ -11,9 +11,9 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
-    encrypt, krb_fx_cf2, octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile,
-    spake_derive_key, spake_public_wbytes, spake_result_wbytes, spake_thash_update, spake_wbytes,
+    EncryptionType, KeyUsage, ProtocolKey, SpakeGroup, checksum, cksumtype_is_keyed, decrypt,
+    encrypt, hmac_md5_arcfour_checksum, krb_fx_cf2, octetstring2key, p256_shared, pkinit_kdf_agile,
+    spake_derive_key, spake_keygen, spake_result, spake_thash_update, spake_wbytes,
     verify_checksum_type,
 };
 use krb5_types::{
@@ -23,6 +23,9 @@ use krb5_types::{
 };
 
 use crate::error::Error;
+
+/// MIT `CKSUMTYPE_HMAC_MD5_ARCFOUR` (`krb5.hin`): RFC 4757's HMAC-MD5, -138.
+const CKSUMTYPE_HMAC_MD5_ARCFOUR: i32 = -138;
 
 /// Mix a FAST subkey with the armor ticket session key (RFC 6113).
 ///
@@ -52,8 +55,8 @@ pub fn build_fast_armor(
     cname: &PrincipalName,
     subkey: Option<&ProtocolKey>,
 ) -> Result<ApReq, Error> {
-    let now = KerberosTime::now();
-    let usec = Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
+    // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the armor authenticator's time and microseconds, from `krb5_us_timeofday`.
+    let (now, usec) = crate::auth_con::us_timeofday();
     let sub = subkey.map(|k| EncryptionKey {
         keytype: k.etype().to_iana(),
         keyvalue: k.as_bytes().to_vec().into(),
@@ -348,11 +351,13 @@ pub fn apply_strengthen(
     krb_fx_cf2(&sk, base, b"strengthenkey", b"replykey").map_err(Into::into)
 }
 
-/// PA-SPAKE support advertisement (P-256).
+/// PA-SPAKE support message naming `groups` in order.
+///
+/// MIT `send_support` (`spake_client.c:155-167`): the client's permitted groups, in configuration order.
 #[must_use]
-pub fn pa_spake_support() -> PaData {
+pub fn pa_spake_support(groups: &[SpakeGroup]) -> PaData {
     let msg = krb5_types::spake::PaSpake::Support(krb5_types::spake::SpakeSupport {
-        groups: vec![krb5_types::spake::GROUP_P256],
+        groups: groups.iter().map(|g| g.number()).collect(),
     });
     PaData {
         padata_type: pa::SPAKE,
@@ -360,49 +365,42 @@ pub fn pa_spake_support() -> PaData {
     }
 }
 
-/// Build a PA-SPAKE response matching MIT 1.22.2 (`K'[0]` reply key).
+/// A PA-SPAKE response to a challenge in `group`, and the reply key `K'[0]`.
 ///
 /// `support_der` is the client's PA-SPAKE support encoding (empty if none).
 /// `challenge_der` is the KDC PA-SPAKE challenge encoding. `body_der` is
 /// the KDC-REQ-BODY of the response AS-REQ.
 ///
+/// MIT `process_challenge` (`spake_client.c:210-282`): the transcript is the support message, the challenge and the client's element; the SF-NONE factor is encrypted in `K'[1]`.
+///
 /// # Errors
 ///
-/// [`Error::Crypto`] when `challenge_pubkey` is not a P-256 point, or the key generation, a
-/// SPAKE derivation, or the factor encryption fails; [`Error::Asn1`] when the second factor or
-/// the response does not encode.
+/// [`Error::Crypto`] when `challenge_pubkey` is not an element of `group`, or the key
+/// generation, a SPAKE derivation, or the factor encryption fails; [`Error::Asn1`] when the
+/// second factor or the response does not encode.
 pub fn pa_spake_response(
     ikey: &ProtocolKey,
+    group: SpakeGroup,
     support_der: &[u8],
     challenge_der: &[u8],
     challenge_pubkey: &[u8],
     body_der: &[u8],
 ) -> Result<(PaData, ProtocolKey), Error> {
-    let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
-    let kp = p256_generate()?;
-    let pub_x = spake_public_wbytes(&wbytes, &kp.secret, false)?;
-    let result = spake_result_wbytes(&wbytes, &kp.secret, challenge_pubkey, false)?;
-    let z = [0u8; 32];
-    let thash = spake_thash_update(&z, support_der, challenge_der);
-    let thash = spake_thash_update(&thash, &pub_x, &[]);
-    let k0 = spake_derive_key(
-        ikey,
-        SPAKE_GROUP_P256,
-        &wbytes,
-        &result,
-        &thash,
-        body_der,
-        0,
-    )?;
-    let k1 = spake_derive_key(
-        ikey,
-        SPAKE_GROUP_P256,
-        &wbytes,
-        &result,
-        &thash,
-        body_der,
-        1,
-    )?;
+    let wbytes = spake_wbytes(ikey, group)?;
+    let (secret, pub_x) = spake_keygen(group, &wbytes, false)?;
+    // MIT `group_keygen` (`plugins/preauth/spake/groups.c:333-371`): the public value is traced.
+    crate::trace::spake_keygen(&pub_x);
+    let result = spake_result(group, &wbytes, &secret, challenge_pubkey, false)?;
+    // MIT `group_result` (`plugins/preauth/spake/groups.c:374-412`): the result is traced, which
+    // `trace::spake_result` prints as a hash only.
+    crate::trace::spake_result(&result);
+    let thash = spake_thash_update(group, &[], support_der, challenge_der);
+    let thash = spake_thash_update(group, &thash, &pub_x, &[]);
+    // MIT `process_challenge` (`plugins/preauth/spake/spake_client.c:181-298`): the transcript
+    // hash, a hash of the public values, is traced before the keys are derived from it.
+    crate::trace::spake_client_thash(&thash);
+    let k0 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 0)?;
+    let k1 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 1)?;
     let factor = krb5_types::spake::SpakeSecondFactor {
         factor_type: 1,
         data: None,
@@ -418,6 +416,7 @@ pub fn pa_spake_response(
             cipher: factor_ct.into(),
         },
     });
+    crate::trace::spake_send_response();
     Ok((
         PaData {
             padata_type: pa::SPAKE,
@@ -569,10 +568,30 @@ pub fn pa_pk_as_req_signed(
     body_sha1: &[u8],
     freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
-    let now = KerberosTime::now();
-    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    pa_pk_as_req_signed_at(
+        client_public,
+        cert_der,
+        leaf_secret,
+        nonce,
+        body_sha1,
+        freshness,
+        crate::auth_con::us_timeofday(),
+    )
+}
+
+/// [`pa_pk_as_req_signed`] with the authenticator's time given: the AS exchange's clock.
+pub(crate) fn pa_pk_as_req_signed_at(
+    client_public: &[u8],
+    cert_der: &[u8],
+    leaf_secret: &[u8; 32],
+    nonce: u32,
+    body_sha1: &[u8],
+    freshness: Option<&[u8]>,
+    now: (KerberosTime, Microseconds),
+) -> Result<PaData, Error> {
+    let (now, usec) = now;
     let pk_auth = krb5_types::pkinit::PkAuthenticator {
-        cusec: Microseconds::from_subsec_micros(usec),
+        cusec: usec,
         ctime: now,
         nonce,
         pa_checksum: Some(body_sha1.to_vec().into()),
@@ -611,10 +630,26 @@ pub fn pa_pk_as_req_unsigned(
     body_sha1: &[u8],
     freshness: Option<&[u8]>,
 ) -> Result<PaData, Error> {
-    let now = KerberosTime::now();
-    let usec = now.0.timestamp_subsec_micros() % 1_000_000;
+    pa_pk_as_req_unsigned_at(
+        client_public,
+        nonce,
+        body_sha1,
+        freshness,
+        crate::auth_con::us_timeofday(),
+    )
+}
+
+/// [`pa_pk_as_req_unsigned`] with the authenticator's time given: the AS exchange's clock.
+pub(crate) fn pa_pk_as_req_unsigned_at(
+    client_public: &[u8],
+    nonce: u32,
+    body_sha1: &[u8],
+    freshness: Option<&[u8]>,
+    now: (KerberosTime, Microseconds),
+) -> Result<PaData, Error> {
+    let (now, usec) = now;
     let pk_auth = krb5_types::pkinit::PkAuthenticator {
-        cusec: Microseconds::from_subsec_micros(usec),
+        cusec: usec,
         ctime: now,
         nonce,
         pa_checksum: Some(body_sha1.to_vec().into()),
@@ -748,6 +783,7 @@ pub fn pkinit_reply_key_agile(
 }
 
 /// PA-FOR-USER (S4U2Self) checksummed with the TGT session key (usage 17).
+/// MIT `make_pa_for_user_checksum` (`lib/krb5/krb/s4u_creds.c:130-133`): the checksum is HMAC-MD5 (`CKSUMTYPE_HMAC_MD5_ARCFOUR`, -138) whatever the key's type, as MS-SFU specifies.
 ///
 /// # Errors
 ///
@@ -761,14 +797,18 @@ pub fn pa_for_user(
 ) -> Result<PaData, Error> {
     let pkg = "Kerberos";
     let data = krb5_types::s4u::pa_for_user_cksum_data(&user, realm, pkg);
-    let usage = KeyUsage::new(ku::PA_FOR_USER)?;
-    let mic = checksum(session, usage, &data)?;
+    let mic = hmac_md5_arcfour_checksum(
+        session.as_bytes(),
+        ku::PA_FOR_USER,
+        &data,
+        CKSUMTYPE_HMAC_MD5_ARCFOUR,
+    )?;
     let for_user = krb5_types::s4u::PaForUser {
         user_name: user,
         user_realm: krb5_types::try_ascii(realm)
             .map_err(|e| Error::ReplyMismatch(e.to_string()))?,
         cksum: Checksum {
-            cksumtype: session.etype().checksum_type(),
+            cksumtype: CKSUMTYPE_HMAC_MD5_ARCFOUR,
             checksum: mic.into(),
         },
         auth_package: krb5_types::try_ascii(pkg)

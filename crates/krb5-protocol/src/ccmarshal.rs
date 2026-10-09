@@ -8,13 +8,26 @@ use krb5_types::{PrincipalName, Realm, kerberos_string_from_bytes};
 /// FILE v4 header tag: KDC time offset (`sec`, `usec`).
 pub const FCC_TAG_DELTATIME: u16 = 1;
 
-/// MIT FILE/KCM/KEYRING v4 keyblock. Enctype 0 is a config entry.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// MIT FILE/KCM/KEYRING v4 keyblock. Enctype 0 is a config entry. `Debug` shows the enctype
+/// and the key's length, never its octets.
+#[derive(Clone, PartialEq, Eq)]
 pub struct CcacheKeyblock {
     /// Enctype as stored (16-bit, sign-extended on read).
     pub etype: i16,
     /// Key octets.
     pub contents: Vec<u8>,
+}
+
+impl std::fmt::Debug for CcacheKeyblock {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CcacheKeyblock")
+            .field("etype", &self.etype)
+            .field(
+                "contents",
+                &format_args!("<redacted, {} octets>", self.contents.len()),
+            )
+            .finish()
+    }
 }
 
 impl CcacheKeyblock {
@@ -190,6 +203,34 @@ pub(crate) fn marshal_cred(w: &mut Writer, c: &CcacheCred) {
     w.data(&c.second_ticket);
 }
 
+/// The length of `c` as [`marshal_cred`] writes it, so that a record's buffer is sized before
+/// the session key goes in and no reallocation leaves a copy of it behind.
+/// MIT `k5_marshal_cred` (`ccmarshal.c:429-447`): the client, the server, the keyblock, the times, `is_skey`, the flags, the addresses, the authdata, the ticket and the second ticket, in turn.
+pub(crate) fn cred_len(c: &CcacheCred) -> usize {
+    let data = |b: &[u8]| 4 + b.len();
+    let princ = |realm: &Realm, name: &PrincipalName| {
+        8 + data(realm.as_bytes())
+            + name
+                .name_string
+                .iter()
+                .map(|s| data(s.as_bytes()))
+                .sum::<usize>()
+    };
+    princ(&c.client.0, &c.client.1)
+        + princ(&c.server.0, &c.server.1)
+        + 2
+        + data(&c.key.contents)
+        + 4 * 4
+        + 1
+        + 4
+        + 4
+        + c.addresses.iter().map(|(_, v)| 2 + data(v)).sum::<usize>()
+        + 4
+        + c.authdata.iter().map(|(_, v)| 2 + data(v)).sum::<usize>()
+        + data(&c.ticket)
+        + data(&c.second_ticket)
+}
+
 /// MIT `k5_unmarshal_cred` (`ccmarshal.c:306-310`): a truncated credential is a format error and is
 /// not returned half-parsed.
 /// An address or authdata count larger than the bytes still in the buffer is rejected before those
@@ -293,4 +334,21 @@ pub(crate) fn take_data(b: &[u8], i: &mut usize) -> Result<Vec<u8>, io::Error> {
 
 fn eof() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "ccache truncated")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_keyblocks_debug_shows_its_enctype_and_length_not_its_octets() {
+        let block = CcacheKeyblock {
+            etype: 18,
+            contents: vec![0x13, 0x37, 0xc0, 0xde, 0x22, 0x5c, 0x0a, 0xa5],
+        };
+        assert_eq!(
+            format!("{block:?}"),
+            "CcacheKeyblock { etype: 18, contents: <redacted, 8 octets> }"
+        );
+    }
 }

@@ -64,6 +64,7 @@ fn spawn_kpropd(
     let addr = listener.local_addr().unwrap();
     let server = documented_host();
     let join = thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (mut stream, _) = listener.accept().unwrap();
         kpropd_recvauth(
             &mut stream,
@@ -71,7 +72,7 @@ fn spawn_kpropd(
             Some(&server),
             Some(TEST_REALM),
             acl.as_deref(),
-            ReplayCache::new(),
+            &ReplayCache::new(),
         )
     });
     (addr, join)

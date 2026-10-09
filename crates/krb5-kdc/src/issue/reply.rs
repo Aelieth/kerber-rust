@@ -227,18 +227,12 @@ pub(super) struct MintTicket<'a> {
     pub renew_till: Option<KerberosTime>,
     /// KDC store the PAC modules read.
     pub store: &'a dyn PrincipalRead,
-    /// Include a PAC.
-    pub include_pac: bool,
-    /// Logon-info override bytes.
-    pub logon_override: Option<&'a [u8]>,
+    /// The PAC, when the ticket carries one.
+    pub pac: Option<TicketPac<'a>>,
     /// Ticket start time.
     pub starttime: &'a KerberosTime,
-    /// Subject PAC bytes for S4U.
-    pub subject_pac: Option<&'a [u8]>,
     /// Client addresses.
     pub caddr: Option<HostAddresses>,
-    /// S4U client info string.
-    pub s4u_client_info: Option<&'a str>,
     /// Authorization data supplied by the caller.
     pub extra_ad: Option<AuthorizationData>,
     /// Auth indicators.
@@ -249,6 +243,24 @@ pub(super) struct MintTicket<'a> {
     pub krbtgt_key: &'a ProtocolKey,
     /// Skip authorization data.
     pub no_auth_data: bool,
+}
+
+/// The PAC a ticket carries, as the caller decided it with `ad.rs` `pac_has_ad_data`.
+pub(super) enum TicketPac<'a> {
+    /// MIT's PAC, for a ticket without AD data (`ad.rs` `mit_ticket_pac`).
+    Mit(crate::ad::HandlePac<'a>),
+    /// The AD-shaped PAC, for a ticket with AD data.
+    Ad {
+        /// LOGON_INFO to carry in place of the subject's (a cross-realm subject's, SID-filtered).
+        logon_override: Option<&'a [u8]>,
+        /// The subject PAC whose buffers are carried; `None` mints a new PAC.
+        subject_pac: Option<&'a [u8]>,
+        /// The CLIENT_INFO name of an S4U ticket.
+        s4u_client_info: Option<&'a str>,
+        /// Whose identity a new PAC carries, when not the ticket client's: an S4U2Self user of
+        /// this realm, also on the hop that refers the request to another realm.
+        identity: Option<(&'a PrincipalName, &'a str)>,
+    },
 }
 
 /// MIT `tgs_issue_ticket` (`do_tgs_req.c:1056-1060`): a user-to-user ticket's kvno is zero, and
@@ -271,12 +283,9 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         transited,
         renew_till,
         store,
-        include_pac,
-        logon_override,
+        pac,
         starttime,
-        subject_pac,
         caddr,
-        s4u_client_info,
         extra_ad,
         indicators,
         krbtgt,
@@ -307,43 +316,59 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
             &part,
         )?;
     }
-    if include_pac {
+    if let Some(pac) = pac {
+        // MIT `krb5_kdc_sign_ticket` (`pac_sign.c:389-398`): the ticket checksum is taken with a dummy PAC as the first authdata element.
         let placeholder = wrap_win2k_pac(&[0])?;
         let mut checksum_ad = extra.clone();
         checksum_ad.splice(0..0, placeholder);
         part.authorization_data = Some(checksum_ad);
         let checksum_der = encode(&part)?;
-        let ident = if let Some(b) = logon_override {
-            let v = parse_kerb_validation_info(b).map_err(|e| {
-                proto_d(
-                    err::BAD_INTEGRITY,
-                    status::HANDLE_AUTHDATA,
-                    format!("PAC logon: {e}"),
-                )
-            })?;
-            PacIdentity {
-                sam: v.effective_name.value,
-                realm: crealm.to_owned(),
-                domain_sid: v.logon_domain_id,
-                rid: v.user_id,
-            }
-        } else {
-            store.pac_identity(cname, crealm)
+        let ticket = crate::ad::PacTicket {
+            server: service_key,
+            kdc: kdc_key,
+            enc_tkt_der: &checksum_der,
+            is_service_tkt: crate::ad::should_have_ticket_signature(sname),
         };
-        let pac = crate::ad::sign_reply_pac_s4u(
-            cname,
-            authtime.unix_seconds(),
-            &crate::ad::PacTicket {
-                server: service_key,
-                kdc: kdc_key,
-                enc_tkt_der: &checksum_der,
-                is_service_tkt: crate::ad::should_have_ticket_signature(sname),
-            },
-            &ident,
-            logon_override,
-            subject_pac,
-            s4u_client_info,
-        )?;
+        let pac = match pac {
+            TicketPac::Mit(req) => {
+                crate::ad::mit_ticket_pac(&req, cname, authtime.unix_seconds(), &ticket)?
+            }
+            TicketPac::Ad {
+                logon_override,
+                subject_pac,
+                s4u_client_info,
+                identity,
+            } => {
+                let ident = if let Some(b) = logon_override {
+                    let v = parse_kerb_validation_info(b).map_err(|e| {
+                        proto_d(
+                            err::BAD_INTEGRITY,
+                            status::HANDLE_AUTHDATA,
+                            format!("PAC logon: {e}"),
+                        )
+                    })?;
+                    PacIdentity {
+                        sam: v.effective_name.value,
+                        realm: crealm.to_owned(),
+                        domain_sid: v.logon_domain_id,
+                        rid: v.user_id,
+                    }
+                } else if let Some((name, realm)) = identity {
+                    store.pac_identity(name, realm)
+                } else {
+                    store.pac_identity(cname, crealm)
+                };
+                crate::ad::sign_reply_pac_s4u(
+                    cname,
+                    authtime.unix_seconds(),
+                    &ticket,
+                    &ident,
+                    logon_override,
+                    subject_pac,
+                    s4u_client_info,
+                )?
+            }
+        };
         let mut signed = wrap_win2k_pac(&pac)?;
         signed.extend(extra);
         part.authorization_data = Some(signed);

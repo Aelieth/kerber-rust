@@ -632,15 +632,20 @@ fn encrypted_challenge_stale_ts_is_skew() {
     assert_eq!(issue_code(err), err::SKEW);
 }
 
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:121-128`): no replay cache, so a replayed challenge inside the skew verifies again and issues a new ticket.
 #[test]
-fn encrypted_challenge_replayed_blob_is_repeat() {
+fn encrypted_challenge_replayed_blob_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let key = user_key();
     let now = KerberosTime::now();
     let req = fast_challenge_req(&store, &key, &now, 821, 820);
-    krb5_kdc::issue_as(&store, &req).expect("first challenge");
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("replay");
-    assert_eq!(issue_code(err), err::REPEAT);
+    let first = krb5_kdc::issue_as(&store, &req).expect("first challenge");
+    let again = krb5_kdc::issue_as(&store, &req).expect("the replay issues again");
+    assert_ne!(
+        first.session_key.as_bytes(),
+        again.session_key.as_bytes(),
+        "the replay is processed again, not answered from a cache"
+    );
 }
 
 #[test]
@@ -1168,7 +1173,7 @@ fn cookie_survives_krbtgt_kvno_rollover() {
         .expect("aes256-sha1 key")
         .key
         .clone();
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let req1 = as_req(cname.clone(), TEST_REALM, 701, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {
@@ -1226,6 +1231,7 @@ fn cookie_survives_krbtgt_kvno_rollover() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, spake_key) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -1399,4 +1405,18 @@ fn armor_tgt_labelled_n_sealed_under_n_plus_1_is_bad_integrity() {
     let err = fast_as_with_armor_ticket(&store, mislabelled, &tgt.session_key, 0x2600_0066)
         .expect_err("mislabelled kvno");
     assert_find_fast_z6_armor_enctype(err, err::BAD_INTEGRITY);
+}
+
+/// MIT `armor_ap_request` → `krb5_rd_req`'s `negotiate_etype` on the KDC's context (settled live
+/// beside MIT 1.22.2's krb5kdc): armor whose TGT is an aes256 ticket with an aes128 session key
+/// (and an aes128 subkey) is 60 `FIND_FAST` once the KDC permits aes256 only, though the ticket
+/// itself still decrypts.
+#[test]
+fn armor_whose_session_enctype_the_kdc_does_not_permit_is_find_fast() {
+    krb5_config::isolate_test_krb5();
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let (req, _) = fast_as_prepared_etype(&store, 0x2600_0070, AES128);
+    store.policy.permitted_enctypes = Some(vec![AES256]);
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("armor enctypes");
+    assert_find_fast(err, err::GENERIC, "FAST armor enctype not permitted");
 }

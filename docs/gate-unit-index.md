@@ -17,6 +17,7 @@ test that is gone. Extra tags on diffsend cases that do not pin an
 | `armor-ap-req-as-pa-tgs-req` | 12 | `PROCESS_TGS` | `tgs_header_ticket_if_relevant_ad_fx_armor_is_policy` (`crates/krb5-kdc/tests/tgs_fast.rs`) |
 | `as-bad-msg-type` | 60 | `VALIDATE_MESSAGE_TYPE` | `as_bad_msg_type_is_validate_message_type` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 | `as-hw-preauth` | 25 | `NEEDED_HW_PREAUTH` | `as_hw_auth_required_rejects_enc_ts` (`crates/krb5-kdc/tests/as_flags_policy.rs`) |
+| `as-locked-out` | 18 | `LOCKED_OUT` | `last_failed_nonzero_without_unlock_tl_still_locks` (`crates/krb5-kdc/tests/as_lockout.rs`) |
 | `as-needchange` | 23 | `REQUIRED PWCHANGE` | `as_needchange_is_key_expired_unless_changepw` (`crates/krb5-kdc/tests/kpasswd.rs`) |
 | `as-needpreauth-hints-unpermitted` | 25 | `NEEDED_PREAUTH` | `hint_omits_enc_ts_when_the_only_key_is_not_requested` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 | `as-request-anonymous` | 13 | `VALIDATE_ANONYMOUS_PRINCIPAL` | `as_request_anonymous_from_named_client_is_validate_anonymous_principal` (`crates/krb5-kdc/tests/as_flags_policy.rs`) |
@@ -90,4 +91,4 @@ test that is gone. Extra tags on diffsend cases that do not pin an
 | `unknown-sname` | 7 | `SERVER_NOT_FOUND` | `as_unknown_sname_is_server_not_found` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 | `wrong-realm` | 6 | `CLIENT_NOT_FOUND` | `as_wrong_realm_is_chaseable` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 
-Paired **75/75** status-word cells.
+Paired **76/76** status-word cells.

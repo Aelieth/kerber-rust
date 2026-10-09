@@ -36,6 +36,7 @@ struct WrappedIov {
 }
 
 fn contexts() -> (GssContext, GssContext) {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(
@@ -94,6 +95,7 @@ fn user_host() -> (
     ProtocolKey,
     PrincipalName,
 ) {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(
@@ -225,6 +227,7 @@ fn bare_ctx(key: ProtocolKey, initiator: bool) -> GssContext {
         ticket_realm: None,
         ap_rep_key: None,
         dce_style: false,
+        ap_req_time: None,
     }
 }
 
@@ -424,7 +427,7 @@ fn hostile_gss_oid_length_is_truncated_not_panic() {
 
 #[test]
 fn process_ap_rep_acceptor_subkey_unwrap() {
-    use krb5_types::{EncApRepPart, EncryptedData, EncryptionKey, KerberosTime, Microseconds};
+    use krb5_types::{EncApRepPart, EncryptedData, EncryptionKey};
 
     let (mut init, _acc) = contexts();
     let et = init.session_key().etype();
@@ -434,9 +437,10 @@ fn process_ap_rep_acceptor_subkey_unwrap() {
     let mut raw = vec![0u8; et.key_len()];
     getrandom::getrandom(&mut raw).unwrap();
     let sub = ProtocolKey::from_bytes(et, &raw).unwrap();
+    let (ctime, cusec) = init.ap_req_time.clone().unwrap();
     let part = EncApRepPart {
-        ctime: KerberosTime::now(),
-        cusec: Microseconds::new(0).unwrap(),
+        ctime,
+        cusec,
         subkey: Some(EncryptionKey {
             keytype: et.to_iana(),
             keyvalue: sub.as_bytes().to_vec().into(),
@@ -719,4 +723,300 @@ fn unwrap_iov_integ_rejects_non_aes() {
         matches!(err, Err(Error::Inner(ref s)) if s.contains("aes")),
         "non-AES unwrap_iov_integ must fail, got {err:?}"
     );
+}
+
+/// The EncAPRepPart of an acceptor's AP-REP token, framed or raw (DCE).
+fn acceptor_ap_rep(tok: &[u8], ticket_session: &ProtocolKey) -> krb5_types::EncApRepPart {
+    let der = if tok.first() == Some(&0x60) {
+        let inner = gss_unwrap_app(tok).unwrap();
+        assert_eq!(inner[..2], TOK_AP_REP);
+        inner[2..].to_vec()
+    } else {
+        tok.to_vec()
+    };
+    let ap: ApRep = decode(&der).unwrap();
+    let usage = KeyUsage::new(ku::AP_REP_ENC_PART).unwrap();
+    decode(&decrypt(ticket_session, usage, ap.enc_part.cipher.as_ref()).unwrap()).unwrap()
+}
+
+fn token_seq(tok: &[u8]) -> u64 {
+    u64::from_be_bytes(tok[8..16].try_into().unwrap())
+}
+
+#[test]
+fn mutual_ap_rep_carries_a_fresh_subkey_and_a_random_seq_that_key_both_sides() {
+    let (mut init, mut acc, rep, session) = mutual_pair();
+    let part = acceptor_ap_rep(&rep, &session);
+    let subkey = part.subkey.unwrap();
+    assert_ne!(
+        subkey.keyvalue.as_ref(),
+        init.session_key().as_bytes(),
+        "fresh"
+    );
+    let seq = part.seq_number.unwrap();
+    assert!(seq != 0 && seq < 1 << 30, "random 30-bit seq, got {seq}");
+    assert_eq!(acc.send_seq, u64::from(seq));
+    assert_eq!(
+        acc.acceptor_subkey.as_ref().map(ProtocolKey::as_bytes),
+        Some(subkey.keyvalue.as_ref())
+    );
+    init.process_ap_rep(&rep, &session).unwrap();
+    assert_eq!(init.recv_seq, u64::from(seq));
+
+    let up = init.wrap(b"to-acceptor").unwrap();
+    assert_eq!(up[2], FLAG_ACCEPTOR_SUBKEY | FLAG_SEALED);
+    assert_eq!(acc.unwrap(&up).unwrap(), b"to-acceptor");
+    let down = acc.wrap(b"to-initiator").unwrap();
+    assert_eq!(down[2], FLAG_ACCEPTOR_SUBKEY | FLAG_SEALED | 0x01);
+    assert_eq!(
+        token_seq(&down),
+        u64::from(seq),
+        "the AP-REP's seq comes first"
+    );
+    assert_eq!(init.unwrap(&down).unwrap(), b"to-initiator");
+    let mic = init.get_mic(b"m").unwrap();
+    assert_eq!(mic[2], FLAG_ACCEPTOR_SUBKEY);
+    acc.verify_mic(b"m", &mic).unwrap();
+    let mic = acc.get_mic(b"n").unwrap();
+    assert_eq!(mic[2], FLAG_ACCEPTOR_SUBKEY | 0x01);
+    init.verify_mic(b"n", &mic).unwrap();
+    let integ = acc.wrap_integ(b"i").unwrap();
+    assert_eq!(integ[2], FLAG_ACCEPTOR_SUBKEY | 0x01);
+    assert_eq!(init.unwrap(&integ).unwrap(), b"i");
+}
+
+#[test]
+fn without_mutual_the_acceptor_sends_from_the_initiators_seq() {
+    let (_as_out, tgs_out, skey, cname) = user_host();
+    let flags = GSS_C_INTEG | GSS_C_CONF | GSS_C_REPLAY | GSS_C_SEQUENCE;
+    let now = KerberosTime::now();
+    let authenticator = krb5_types::Authenticator {
+        authenticator_vno: krb5_types::Authenticator::VNO,
+        crealm: ascii(TEST_REALM),
+        cname,
+        cksum: Some(Checksum {
+            cksumtype: GSS_CHECKSUM_TYPE,
+            checksum: authenticator_checksum(None, flags, None).into(),
+        }),
+        cusec: Microseconds::from_subsec_micros(0),
+        ctime: now,
+        subkey: None,
+        seq_number: Some(4242),
+        authorization_data: None,
+    };
+    let ap = krb5_protocol::build_ap_req_from_authenticator(
+        tgs_out.rep.0.ticket.clone(),
+        &tgs_out.session_key,
+        ApOptions::none(),
+        &authenticator,
+    )
+    .unwrap();
+    let token = gss_wrap_app(TOK_AP_REQ, &encode(&ap).unwrap());
+    let (mut acc, rep) = GssContext::accept_sec_context(
+        &token,
+        std::slice::from_ref(&skey),
+        None,
+        Some(&documented_host()),
+        Some(TEST_REALM),
+        &ReplayCache::new(),
+    )
+    .unwrap();
+    assert!(rep.is_none());
+    assert!(acc.acceptor_subkey.is_none());
+    assert_eq!(token_seq(&acc.wrap(b"x").unwrap()), 4242);
+}
+
+#[test]
+fn an_ap_rep_that_does_not_echo_the_authenticator_is_not_mutual_authentication() {
+    let (mut init, _acc, rep, session) = mutual_pair();
+    let (ctime, _) = init.ap_req_time.clone().unwrap();
+    init.ap_req_time = Some((ctime, Microseconds::from_subsec_micros(1)));
+    match init.process_ap_rep(&rep, &session) {
+        Err(Error::Inner(m)) => assert_eq!(m, "Mutual authentication failed"),
+        other => panic!("want Mutual authentication failed, got {other:?}"),
+    }
+    assert!(init.acceptor_subkey.is_none());
+}
+
+#[test]
+fn dce_third_leg_carries_the_acceptors_random_seq() {
+    let (_as_out, tgs_out, skey, cname) = user_host();
+    let flags = GSS_C_INTEG | GSS_C_CONF | GSS_C_MUTUAL | GSS_C_DCE;
+    let subkey = random_subkey(&tgs_out.session_key).unwrap();
+    let ap = build_ap_req_with_cksum(
+        tgs_out.rep.0.ticket.clone(),
+        &tgs_out.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        ApOptions::mutual_required(),
+        Some(Checksum {
+            cksumtype: GSS_CHECKSUM_TYPE,
+            checksum: authenticator_checksum(None, flags, None).into(),
+        }),
+        Some(EncryptionKey {
+            keytype: subkey.etype().to_iana(),
+            keyvalue: subkey.as_bytes().to_vec().into(),
+        }),
+    )
+    .unwrap();
+    let (mut acc, rep) = GssContext::accept_sec_context(
+        &encode(&ap).unwrap(),
+        std::slice::from_ref(&skey),
+        None,
+        Some(&documented_host()),
+        Some(TEST_REALM),
+        &ReplayCache::new(),
+    )
+    .unwrap();
+    let part = acceptor_ap_rep(&rep.unwrap(), &tgs_out.session_key);
+    assert!(part.subkey.is_some(), "DCE implies an acceptor subkey");
+    let seq = part.seq_number.unwrap();
+    let third_leg = |nonce: u32| {
+        let now = KerberosTime::now();
+        let leg = krb5_types::EncApRepPart {
+            ctime: now,
+            cusec: Microseconds::from_subsec_micros(0),
+            subkey: None,
+            seq_number: Some(nonce),
+        };
+        let usage = KeyUsage::new(ku::AP_REP_ENC_PART).unwrap();
+        let cipher = encrypt(&tgs_out.session_key, usage, &encode(&leg).unwrap()).unwrap();
+        encode(&ApRep {
+            pvno: ApRep::PVNO,
+            msg_type: ApRep::MSG_TYPE,
+            enc_part: EncryptedData {
+                etype: tgs_out.session_key.etype().to_iana(),
+                kvno: None,
+                cipher: cipher.into(),
+            },
+        })
+        .unwrap()
+    };
+    assert!(matches!(
+        acc.accept_dce(&third_leg(seq.wrapping_add(1))),
+        Err(Error::Integrity)
+    ));
+    acc.accept_dce(&third_leg(seq)).unwrap();
+}
+
+/// A mutual context and the acceptor's AP-REP token, as `user_host` issues them.
+fn mutual_pair() -> (GssContext, GssContext, Vec<u8>, ProtocolKey) {
+    let (_as_out, tgs_out, skey, cname) = user_host();
+    let (init, token) = GssContext::init_sec_context(
+        tgs_out.rep.0.ticket.clone(),
+        &tgs_out.session_key,
+        &ascii(TEST_REALM),
+        &cname,
+        true,
+        None,
+        None,
+    )
+    .unwrap();
+    let (acc, rep) = GssContext::accept_sec_context(
+        &token,
+        std::slice::from_ref(&skey),
+        None,
+        Some(&documented_host()),
+        Some(TEST_REALM),
+        &ReplayCache::new(),
+    )
+    .unwrap();
+    (init, acc, rep.unwrap(), tgs_out.session_key)
+}
+
+/// MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-50`): the ticket's own enctype is refused first, with the error table's text alone; once the ticket's is permitted, `negotiate_etype` names the session key's or the subkey's.
+#[test]
+fn the_acceptor_refuses_ticket_and_session_enctypes_it_does_not_permit() {
+    let (_as_out, tgs_out, skey, cname) = user_host();
+    assert_eq!(
+        tgs_out.session_key.etype(),
+        EncryptionType::Aes256CtsHmacSha196
+    );
+    assert_eq!(
+        tgs_out.rep.0.ticket.enc_part.etype,
+        EncryptionType::Aes256CtsHmacSha196.to_iana()
+    );
+    // The same ticket sealed under an aes128-cts service key.
+    let aes128 = ProtocolKey::random(EncryptionType::Aes128CtsHmacSha196).unwrap();
+    let usage = KeyUsage::new(ku::TICKET).unwrap();
+    let mut resealed = tgs_out.rep.0.ticket.clone();
+    let plain = decrypt(&skey, usage, resealed.enc_part.cipher.as_ref()).unwrap();
+    resealed.enc_part.cipher = encrypt(&aes128, usage, &plain).unwrap().into();
+    resealed.enc_part.etype = aes128.etype().to_iana();
+    let dir = krb5_testkit::scratch_dir("p15a-gss-permitted");
+    let conf = dir.join("krb5.conf");
+    std::fs::write(
+        &conf,
+        "[libdefaults]\n    permitted_enctypes = aes128-cts-hmac-sha1-96\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf]));
+    let accept = |ticket: &krb5_types::Ticket, key: &ProtocolKey| {
+        let (_init, token) = GssContext::init_sec_context(
+            ticket.clone(),
+            &tgs_out.session_key,
+            &ascii(TEST_REALM),
+            &cname,
+            true,
+            None,
+            None,
+        )
+        .unwrap();
+        GssContext::accept_sec_context(
+            &token,
+            std::slice::from_ref(key),
+            None,
+            Some(&documented_host()),
+            Some(TEST_REALM),
+            &ReplayCache::new(),
+        )
+        .map(|_| ())
+    };
+    let ticket_first = accept(&tgs_out.rep.0.ticket, &skey);
+    let session_next = accept(&resealed, &aes128);
+    krb5_config::set_test_krb5_paths(None);
+    let _ = std::fs::remove_dir_all(&dir);
+    for (got, want) in [
+        (ticket_first, "Encryption type not permitted"),
+        (
+            session_next,
+            "Encryption type aes256-cts-hmac-sha1-96 not permitted",
+        ),
+    ] {
+        match got {
+            Err(Error::Inner(m)) => assert_eq!(m, want),
+            Err(e) => panic!("want {want:?}, got {e}"),
+            Ok(()) => panic!("an aes256 enctype outside permitted_enctypes was accepted"),
+        }
+    }
+}
+
+#[test]
+fn wrap_iov_both_ways_under_the_acceptor_subkey() {
+    let (mut init, mut acc, rep, session) = mutual_pair();
+    init.process_ap_rep(&rep, &session).unwrap();
+    let mut up = wrap_iov_once(&mut init, b"iov-up", Some(b"rpc-hdr"));
+    assert_eq!(up.header[2], FLAG_ACCEPTOR_SUBKEY | FLAG_SEALED);
+    unwrap_iov_once(
+        &mut acc,
+        &mut up.header,
+        &mut up.data,
+        &mut up.padding,
+        &mut up.trailer,
+        Some(&mut up.sign),
+    )
+    .unwrap();
+    assert_eq!(up.data, b"iov-up");
+    let mut down = wrap_iov_once(&mut acc, b"iov-down", None);
+    assert_eq!(down.header[2], FLAG_ACCEPTOR_SUBKEY | FLAG_SEALED | 0x01);
+    unwrap_iov_once(
+        &mut init,
+        &mut down.header,
+        &mut down.data,
+        &mut down.padding,
+        &mut down.trailer,
+        None,
+    )
+    .unwrap();
+    assert_eq!(down.data, b"iov-down");
 }

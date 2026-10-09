@@ -107,7 +107,6 @@ KPROP="$(docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
     "$NAME" /tmp/krb5-kprop -P 754 -s /tmp/host.keytab -n testhost.kerber.test 127.0.0.1 2>&1 || true)"
 echo "$KPROP"
 echo "==== kpropd.log ===="

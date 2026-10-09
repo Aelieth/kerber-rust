@@ -103,7 +103,7 @@ FL match; operational details are kept outside the repository.)*
 
 `scripts/samba-ad-gate.sh` — the **only `exit 0`** is a live Samba `kinit` +
 `kvno` + `klist` content match; missing docker/image/KDC is `exit 2` +
-`samba-ad-gate-unavailable.log` (Heimdal/SSPI-style honesty). It reads:
+`samba-ad-gate-unavailable.log` (as `heimdal-gate` does). It reads:
 
 ```bash
 SAMBA_AD_IMAGE=samba-ad-dc:latest \

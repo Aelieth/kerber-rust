@@ -12,6 +12,8 @@ autotests = false
 [features]
 default = ["diff"]
 diff = []
+# The gates' raw PDU capture (`KERBER_CAPTURE_DIR`); off by default.
+test-hooks = []
 
 [[test]]
 name = "golden_traces"
@@ -38,6 +40,14 @@ name = "client_preauth_order"
 path = "tests/client_preauth_order.rs"
 
 [[test]]
+name = "clpreauth_plugins"
+path = "tests/clpreauth_plugins.rs"
+
+[[test]]
+name = "client_spake"
+path = "tests/client_spake.rs"
+
+[[test]]
 name = "client_gic"
 path = "tests/client_gic.rs"
 
@@ -54,6 +64,10 @@ name = "client_s4u"
 path = "tests/client_s4u.rs"
 
 [[test]]
+name = "client_identify_realm"
+path = "tests/client_identify_realm.rs"
+
+[[test]]
 name = "acceptor_rd_req"
 path = "tests/acceptor_rd_req.rs"
 
@@ -62,17 +76,22 @@ name = "acceptor_sname"
 path = "tests/acceptor_sname.rs"
 
 [dependencies]
+bytes.workspace = true
 getrandom.workspace = true
 krb5-asn1.workspace = true
 krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-log.workspace = true
 krb5-types.workspace = true
-nix = { workspace = true, features = ["fs"] }
+nix = { workspace = true, features = ["fs", "time"] }
 sha1.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 zeroize.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+regex-automata.workspace = true
+rustix.workspace = true
 
 [dev-dependencies]
 krb5-kdc.workspace = true

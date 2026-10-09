@@ -23,7 +23,7 @@ content-asserting CI gate over this substrate.
 ## Quick start
 
 ```sh
-cargo build -p krb5-kdc -p krb5-admin
+./scripts/lib/build-bins.sh     # the bins, with the test-hooks feature
 ./harness/prod/env-up.sh        # network + 3 capped nodes + self-smoke
 ./harness/prod/env-status.sh    # IPs, listeners, live mem/cpu vs caps
 ./scripts/prod-realm-gate.sh    # kadmin + kprop + failover + logs/pcap

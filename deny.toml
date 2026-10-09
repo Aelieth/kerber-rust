@@ -30,6 +30,14 @@ skip = [
     { name = "syn", version = "3" },
 ]
 
+# SPAKE edwards25519 (krb5-crypto `spake/edwards25519.rs`): curve25519-dalek with exactly the
+# features krb5-crypto asks for, so a new dependent cannot turn on `legacy_compatibility`
+# (unreduced scalars) or the `digest` / `rand_core` / `group` APIs unnoticed.
+[[bans.features]]
+crate = "curve25519-dalek"
+allow = ["precomputed-tables", "zeroize"]
+exact = true
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"

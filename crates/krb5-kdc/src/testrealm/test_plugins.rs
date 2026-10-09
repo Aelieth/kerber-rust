@@ -13,7 +13,8 @@ use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, checksum};
 use krb5_types::cammac::AdKdcIssued;
 use krb5_types::{
-    AuthorizationData, AuthorizationDataValue, Checksum, PaData, PrincipalName, ku, pa,
+    AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, KdcReqBody, PaData,
+    PrincipalName, ku, pa,
 };
 
 use crate::audit::{AuditState, KdcAudit, start_stop_json};
@@ -178,12 +179,57 @@ fn output_from_indicator(indicators: &[String], divisor: i64) -> Result<PolicyAd
 }
 
 impl KdcPolicy for TestPolicy {
+    fn name(&self) -> &'static str {
+        "test"
+    }
+
+    fn check_as_req(
+        &self,
+        request: &KdcReqBody,
+        store: &dyn PrincipalRead,
+        client: &Principal,
+        _server: &Principal,
+        indicators: &[String],
+        status_out: &mut Option<&'static str>,
+    ) -> Result<PolicyAdjustment, Error> {
+        if request.cname.as_ref().and_then(first_comp).as_deref() == Some("fail") {
+            *status_out = Some(status::LOCAL_POLICY);
+            return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
+        }
+        self.check_as(store, client, indicators).inspect_err(|_| {
+            *status_out = Some(status::LOCAL_POLICY);
+        })
+    }
+
+    fn check_tgs_req(
+        &self,
+        request: &KdcReqBody,
+        store: &dyn PrincipalRead,
+        server: &Principal,
+        _ticket: &EncTicketPart,
+        indicators: &[String],
+        status_out: &mut Option<&'static str>,
+    ) -> Result<PolicyAdjustment, Error> {
+        if request.sname.as_ref().and_then(first_comp).as_deref() == Some("fail") {
+            *status_out = Some(status::LOCAL_POLICY);
+            return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
+        }
+        self.check_tgs(store, &server.name, indicators)
+            .inspect_err(|_| {
+                *status_out = Some(status::LOCAL_POLICY);
+            })
+    }
+
     fn check_as(
         &self,
         _store: &dyn PrincipalRead,
         client: &Principal,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
+        // Distinct from `kdcpolicy_test::TestModule::check_as`. Identical bodies
+        // become one symbol, and that symbol's name would carry `testrealm` into
+        // the release `krb5-kdc` (`strings-check.sh`).
+        let _ = std::hint::black_box(0u8);
         if first_comp(&client.name).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
         }
@@ -195,6 +241,8 @@ impl KdcPolicy for TestPolicy {
         sname: &PrincipalName,
         indicators: &[String],
     ) -> Result<PolicyAdjustment, Error> {
+        // Same split as `check_as`: keep this body off `TestModule::check_tgs`.
+        let _ = std::hint::black_box(0u8);
         if first_comp(sname).as_deref() == Some("fail") {
             return Err(proto(krb5_types::err::POLICY, status::LOCAL_POLICY));
         }
@@ -304,6 +352,10 @@ impl TestAudit {
 }
 
 impl KdcAudit for TestAudit {
+    fn name(&self) -> &'static str {
+        "test"
+    }
+
     fn kdc_start(&self, success: bool) {
         self.write_line(&start_stop_json("KDC_START", success));
     }

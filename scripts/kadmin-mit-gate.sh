@@ -89,6 +89,22 @@ PY
 docker exec "$NAME_MIT" sh -c 'kdb5_util load /tmp/bd.dump >/dev/null 2>&1'
 MIT_BD="$(mit_kadmin_local "$NAME_MIT" -- -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_BD" | grep -F 'Last password change: Sun Sep 09 01:46:40 UTC 2001'
+echo "==== MIT iprop program without iprop_enable is not registered (ovsec_kadmd.c setup_loop, svc.c svc_do_xprt): AUTH_GSSAPI INIT SUCCESS, DATA no-context AUTH_FAILED, AUTH_NONE, kiprop RPCSEC_GSS and established AUTH_GSSAPI PROG_UNAVAIL ===="
+kadmin_q_try mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -randkey kiprop/testhost.kerber.test'
+docker exec -d "$NAME_MIT" kadmind
+require_port_in "$NAME_MIT" "$KADMIND_PORT" "MIT kadmind without iprop on :$KADMIND_PORT"
+MIT_NOIPROP="$(kadmind_iprop_auth_gssapi "$NAME_MIT" "$KADMIND_PORT" 2>&1 || true)"
+echo "$MIT_NOIPROP"
+echo "$MIT_NOIPROP" | grep -F 'kadmin_on_iprop kind=init label=SUCCESS'
+echo "$MIT_NOIPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_FAILED'
+echo "$MIT_NOIPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=PROG_UNAVAIL'
+compile_kadm5_probe "$NAME_MIT"
+MIT_NOIPROP_OK="$(kadm5_probe "$NAME_MIT" admin/admin iprop-valid /etc/krb5.conf kiprop/testhost.kerber.test@KERBER.TEST "$KADMIND_PORT" 2>&1 || true)"
+echo "$MIT_NOIPROP_OK"
+echo "$MIT_NOIPROP_OK" | grep -F 'iprop-valid label=ACCEPT code=1 '
+MIT_NOIPROP_AG="$(kadm5_probe "$NAME_MIT" admin/admin iprop-auth-gssapi /etc/krb5.conf kadmin/admin@KERBER.TEST "$KADMIND_PORT" 2>&1 || true)"
+echo "$MIT_NOIPROP_AG"
+echo "$MIT_NOIPROP_AG" | grep -F 'iprop-auth-gssapi label=RPC_ERROR clnt_stat=8 '
 docker exec "$NAME_MIT" sh -c '
 for comm in /proc/[0-9]*/comm; do
     [ -f "$comm" ] || continue
@@ -313,7 +329,7 @@ echo "$MIT_U2"
 echo "$MIT_U2" | grep -F 'Principal "user2@KERBER.TEST" created.'
 MIT_SVC="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'addprinc -pw x svc/x' 2>&1 || true)"
 echo "$MIT_SVC"
-echo "$MIT_SVC" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
+echo "$MIT_SVC" | strip_mit_kadmin_banner | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
 MIT_REN_SVC="$(mit_kadmin "$NAME_MIT" -- -p scoped -w scoped-secret -q 'renprinc -force user2 svc/y' 2>&1 || true)"
 echo "$MIT_REN_SVC"
 echo "$MIT_REN_SVC" | grep -F 'Insufficient authorization for operation'
@@ -330,7 +346,7 @@ echo "$MIT_GET_U9" | grep -F 'Policy: [none]'
 echo "==== MIT ACL uppercase *D revokes delete ===="
 MIT_NODEL="$(mit_kadmin "$NAME_MIT" -- -p nodel -w nodel-secret -q 'delprinc -force victim' 2>&1 || true)"
 echo "$MIT_NODEL"
-echo "$MIT_NODEL" | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
+echo "$MIT_NODEL" | strip_mit_kadmin_banner | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
 if echo "$MIT_NODEL" | grep -qiE 'Principal "victim@KERBER.TEST" deleted'; then
     echo "MIT nodel *D granted delete: $MIT_NODEL" >&2
     exit 1
@@ -342,13 +358,13 @@ echo "$MIT_GET_V" | grep -F 'Principal: victim@KERBER.TEST'
 echo "==== MIT ACL list vs inquire ===="
 MIT_LIST_I="$(mit_kadmin "$NAME_MIT" -- -p ro -w ro-secret -q 'listprincs' 2>&1 || true)"
 echo "$MIT_LIST_I"
-echo "$MIT_LIST_I" | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
+echo "$MIT_LIST_I" | strip_mit_kadmin_banner | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
 MIT_LIST_L="$(mit_kadmin "$NAME_MIT" -- -p rolist -w rolist-secret -q 'listprincs' 2>&1 || true)"
 echo "$MIT_LIST_L"
 echo "$MIT_LIST_L" | grep -F 'user@KERBER.TEST'
 MIT_ADDPOL="$(mit_kadmin "$NAME_MIT" -- -p ro -w ro-secret -q 'addpol pol-ro' 2>&1 || true)"
 echo "$MIT_ADDPOL"
-echo "$MIT_ADDPOL" | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
+echo "$MIT_ADDPOL" | strip_mit_kadmin_banner | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
 MIT_SELFGET="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_SELFGET"
 echo "$MIT_SELFGET" | grep -F 'Principal: user@KERBER.TEST'
@@ -392,7 +408,7 @@ if [ "$ok" != 1 ]; then
 fi
 MIT_NOADMIN="$(mit_kadmin "$NAME_MIT" -- -p admin/admin -w adminpassword -q 'getprinc user' 2>&1 || true)"
 echo "$MIT_NOADMIN"
-echo "$MIT_NOADMIN" | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
+echo "$MIT_NOADMIN" | strip_mit_kadmin_banner | grep -F $'get_principal: Operation requires ``get\'\' privilege while retrieving "user@KERBER.TEST".'
 if echo "$MIT_NOADMIN" | grep -q 'Principal: user'; then
     echo "MIT admin-less ACL granted admin/admin getprinc: $MIT_NOADMIN" >&2
     exit 1
@@ -511,7 +527,7 @@ echo "$MIT_GETFOR" | grep -F 'Principal: user@OTHER.REALM' || {
 echo "==== MIT denied addprinc user@OTHER.REALM is add privilege ===="
 MIT_DENYFOR="$(mit_kadmin "$NAME_MIT" -- -p user -w userpassword -q 'addprinc -pw x denied@OTHER.REALM' 2>&1 || true)"
 echo "$MIT_DENYFOR"
-echo "$MIT_DENYFOR" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
+echo "$MIT_DENYFOR" | strip_mit_kadmin_banner | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "denied@OTHER.REALM".' || {
     echo "MIT denied addprinc missed add privilege: $MIT_DENYFOR" >&2
     exit 1
 }

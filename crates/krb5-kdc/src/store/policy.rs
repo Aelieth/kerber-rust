@@ -6,12 +6,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use krb5_crypto::EncryptionType;
+use krb5_crypto::{EncryptionType, SpakeGroup, spake_parse_groups};
 use krb5_types::PrincipalName;
 use krb5_types::pac::RpcSid;
 
 use super::PrincipalStore;
-use super::keys::{KeyEntry, KeyLookup, randkey_etypes};
+use super::keys::{KeyEntry, KeyLookup, default_supported_enctypes};
 use super::principal::{Principal, refresh_kadm_tl};
 use super::transit::permitted_transited;
 use crate::error::Error;
@@ -81,7 +81,8 @@ pub struct Policy {
     pub allow_des3: bool,
     /// MIT `permitted_enctypes`. `None` = DEFAULT (every implemented type).
     pub permitted_enctypes: Option<Vec<EncryptionType>>,
-    /// MIT `supported_enctypes`. Empty = AES 17–20.
+    /// MIT `supported_enctypes`. Empty = MIT's default, aes256-cts-hmac-sha1-96 and
+    /// aes128-cts-hmac-sha1-96.
     pub supported_enctypes: Vec<EncryptionType>,
     /// Default requires_preauth for new principals.
     pub requires_preauth: bool,
@@ -103,6 +104,10 @@ pub struct Policy {
     pub reject_bad_transit: bool,
     /// MIT `disable_pac` (default false): issue no PAC.
     pub disable_pac: bool,
+    /// kdc.conf `domain_sid` is set: the realm has an AD identity, so a PAC minted for one of its
+    /// principals has AD data and takes the AD shape (`ad.rs` `pac_has_ad_data`). Unset (the
+    /// default), the KDC issues MIT's PAC.
+    pub ad_identity: bool,
     /// MIT `restrict_anonymous_to_tgt` (default false).
     pub restrict_anon: bool,
     /// MIT `pkinit_require_freshness` (default false).
@@ -119,15 +124,38 @@ pub struct Policy {
     pub pkinit_indicators: Vec<String>,
     /// `[realms] spake_preauth_indicator` (repeatable).
     pub spake_preauth_indicators: Vec<String>,
-    /// `[libdefaults] spake_preauth_groups` as implemented group numbers.
-    /// Empty = MIT KDC default — SPAKE is not advertised.
+    /// `[libdefaults] spake_preauth_groups`: the groups the KDC permits, in configuration order.
+    /// Empty, MIT's KDC default, leaves the SPAKE module unloaded.
     /// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's default group list is empty.
-    pub spake_preauth_groups: Vec<i32>,
-    /// `[realms] dict_file` words, ASCII-lowercased and sorted, for the MIT
-    /// `dict` password-quality module.
-    /// MIT `word_compare` (`pwqual_dict.c:66-68`): dictionary words sort and match in
-    /// `strcasecmp` order. Empty = no dictionary.
-    pub(crate) dict_words: Vec<String>,
+    pub spake_preauth_groups: Vec<SpakeGroup>,
+    /// `[kdcdefaults] spake_preauth_kdc_challenge`, as written: the group of the optimistic
+    /// challenge the KDC sends with PREAUTH_REQUIRED. `None` = none.
+    pub spake_preauth_kdc_challenge: Option<String>,
+    /// `[dbmodules] disable_last_success`: the KDC records no successful authentication.
+    pub disable_last_success: bool,
+    /// `[dbmodules] disable_lockout`: the KDC neither counts failed authentications nor
+    /// checks the lockout policy.
+    pub disable_lockout: bool,
+    /// `[plugins] kdcpreauth` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): the KDC walks the modules that remain loaded.
+    pub kdcpreauth: krb5_config::PluginRelations,
+    /// `[plugins] kdcpolicy` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the KDC walks the modules that remain loaded.
+    pub kdcpolicy: krb5_config::PluginRelations,
+    /// `[plugins] audit` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): `k5_plugin_load_all` applies that profile.
+    pub audit: krb5_config::PluginRelations,
+    /// `[plugins] pwqual` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `k5_pwqual_load` (`lib/kadm5/srv/pwqual.c:42-96`): `k5_plugin_load_all` applies that profile.
+    pub pwqual: krb5_config::PluginRelations,
+    /// `[plugins] kadm5_hook` `disable` and `enable_only`. Absent relations load every named module.
+    ///
+    /// MIT `k5_kadm5_hook_load` (`lib/kadm5/srv/kadm5_hook.c:40-94`): `k5_plugin_load_all` applies that profile.
+    pub kadm5_hook: krb5_config::PluginRelations,
 }
 
 impl Default for Policy {
@@ -148,6 +176,7 @@ impl Default for Policy {
             capaths: BTreeMap::new(),
             reject_bad_transit: true,
             disable_pac: false,
+            ad_identity: false,
             restrict_anon: false,
             pkinit_require_freshness: false,
             host_based_services: String::new(),
@@ -157,41 +186,62 @@ impl Default for Policy {
             pkinit_indicators: Vec::new(),
             spake_preauth_indicators: Vec::new(),
             spake_preauth_groups: Vec::new(),
-            dict_words: Vec::new(),
+            spake_preauth_kdc_challenge: None,
+            disable_last_success: false,
+            disable_lockout: false,
+            kdcpreauth: krb5_config::PluginRelations::default(),
+            kdcpolicy: krb5_config::PluginRelations::default(),
+            audit: krb5_config::PluginRelations::default(),
+            pwqual: krb5_config::PluginRelations::default(),
+            kadm5_hook: krb5_config::PluginRelations::default(),
         }
     }
 }
 
-/// MIT `init_dict` (`pwqual_dict.c:136-150`): every `\n`-terminated line is
-/// a word (an unterminated last line is not; a blank line is the empty
-/// word), sorted with `strcasecmp`. Lowercased here so a `binary_search` is
-/// that comparison.
-#[must_use]
-pub fn parse_dict_words(text: &str) -> Vec<String> {
-    let mut words: Vec<String> = text
-        .split_inclusive('\n')
-        .filter_map(|l| l.strip_suffix('\n'))
-        .map(str::to_ascii_lowercase)
-        .collect();
-    words.sort_unstable();
-    words.dedup();
-    words
+/// The KDC's SPAKE module as MIT loads it: the permitted groups and the optimistic challenge group.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpakeKdc<'a> {
+    /// The permitted groups, in configuration order.
+    pub groups: &'a [SpakeGroup],
+    /// The group of the challenge sent with PREAUTH_REQUIRED, if one is configured.
+    pub challenge: Option<SpakeGroup>,
 }
 
-/// MIT `parse_groups` (`groups.c:175-210`): unknown names skipped.
-/// Rust implements P-256 only; other IANA names are skipped.
-#[must_use]
-pub(crate) fn parse_spake_preauth_groups(names: &[String]) -> Vec<i32> {
-    let mut out = Vec::new();
-    for n in names {
-        if n.eq_ignore_ascii_case("P-256") && !out.contains(&krb5_types::spake::GROUP_P256) {
-            out.push(krb5_types::spake::GROUP_P256);
-        }
-    }
-    out
+/// The permitted groups of a `spake_preauth_groups` value split into words by the profile parser.
+fn parse_spake_preauth_groups(words: &[String]) -> Vec<SpakeGroup> {
+    spake_parse_groups(&words.join(" "))
 }
 
 impl Policy {
+    /// The SPAKE module's configuration, or the message MIT logs when the module does not load.
+    ///
+    /// MIT `group_init_state` (`groups.c:213-281`): no permitted group, or a challenge group that is unknown or not permitted, fails the module's init.
+    ///
+    /// # Errors
+    ///
+    /// MIT's message when the module would not load: "No SPAKE preauth groups configured", or
+    /// "SPAKE challenge group not a permitted group: " and the configured value.
+    pub fn spake_kdc(&self) -> Result<SpakeKdc<'_>, String> {
+        if self.spake_preauth_groups.is_empty() {
+            return Err("No SPAKE preauth groups configured".to_owned());
+        }
+        let challenge = match self.spake_preauth_kdc_challenge.as_deref() {
+            None => None,
+            Some(name) => match SpakeGroup::from_name(name) {
+                Some(group) if self.spake_preauth_groups.contains(&group) => Some(group),
+                _ => {
+                    return Err(format!(
+                        "SPAKE challenge group not a permitted group: {name}"
+                    ));
+                }
+            },
+        };
+        Ok(SpakeKdc {
+            groups: &self.spake_preauth_groups,
+            challenge,
+        })
+    }
+
     /// MIT `krb5_check_transited_list`: anonymous crealm passes; then capaths if present, else hierarchical.
     #[must_use]
     pub(crate) fn transit_allowed(&self, crealm: &str, srealm: &str, hops: &[String]) -> bool {
@@ -212,6 +262,15 @@ impl Policy {
         self.permitted_enctypes
             .as_ref()
             .is_none_or(|v| v.contains(&e))
+    }
+
+    /// The KDC context's `permitted_enctypes` as a list, MIT's `DEFAULT` one when none is set.
+    /// MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:573-595`): with no `permitted_enctypes`, the `DEFAULT` list, filtered by `allow_weak_crypto`.
+    #[must_use]
+    pub fn permitted_list(&self) -> Vec<EncryptionType> {
+        self.permitted_enctypes.clone().unwrap_or_else(|| {
+            krb5_crypto::parse_enctype_list("DEFAULT", self.allow_weak_crypto).unwrap_or_default()
+        })
     }
 
     /// MIT `krb5_dbe_find_enctype` under this policy's `permitted_enctypes`
@@ -249,10 +308,11 @@ impl Policy {
     }
 
     /// Long-term keys minted by addprinc/cpw when `-e` is omitted.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:650-654`): the realm's `supported_enctypes`, else `KRB5_DEFAULT_SUPPORTED_ENCTYPES`.
     #[must_use]
     pub fn password_etypes(&self) -> Vec<EncryptionType> {
         if self.supported_enctypes.is_empty() {
-            randkey_etypes().to_vec()
+            default_supported_enctypes().to_vec()
         } else {
             self.supported_enctypes.clone()
         }
@@ -260,12 +320,12 @@ impl Policy {
 }
 
 impl PrincipalStore {
-    /// Apply `kdc.conf` ticket policy.
+    /// Apply `kdc.conf` ticket policy. `dict_file` is not read here: the password dictionary is
+    /// the admin side's ([`Self::init_pwqual`]), and the KDC never reads it.
     ///
     /// # Errors
     ///
-    /// [`Error::Crypto`] when `domain_sid` is not valid SDDL; [`Error::InvalidArgument`] when
-    /// reading `dict_file` fails for any reason but a missing file.
+    /// [`Error::Crypto`] when `domain_sid` is not valid SDDL.
     pub fn apply_kdc_conf(&mut self, conf: &krb5_config::KdcConf) -> Result<(), Error> {
         self.policy.max_life = conf.max_life;
         self.policy.max_renewable_life = conf.max_renewable_life;
@@ -300,6 +360,8 @@ impl PrincipalStore {
             .and_then(krb5_types::timestamp::string_to_timestamp)
             .unwrap_or(0);
         self.policy.reject_bad_transit = conf.reject_bad_transit;
+        self.policy.disable_last_success = conf.disable_last_success;
+        self.policy.disable_lockout = conf.disable_lockout;
         self.policy.disable_pac = conf.disable_pac;
         self.policy.restrict_anon = conf.restrict_anon;
         self.policy.pkinit_require_freshness = conf.pkinit_require_freshness;
@@ -321,6 +383,9 @@ impl PrincipalStore {
         if let Some(names) = &conf.spake_preauth_groups {
             self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);
         }
+        if let Some(group) = &conf.spake_preauth_kdc_challenge {
+            self.policy.spake_preauth_kdc_challenge = Some(group.clone());
+        }
         if let Some(s) = conf.domain_sid.as_deref() {
             let Some(sid) = RpcSid::from_sddl(s) else {
                 return Err(Error::Crypto(format!(
@@ -329,26 +394,104 @@ impl PrincipalStore {
             };
             self.domain_sid = sid;
         }
-        if let Some(path) = &conf.dict_file {
-            // MIT `init_dict` (`pwqual_dict.c:96-111`): a missing file is logged
-            // and the server continues without a dictionary; any other open
-            // or read failure is returned and kadm5_init fails.
-            match std::fs::read(path) {
-                Ok(bytes) => {
-                    self.policy.dict_words = parse_dict_words(&String::from_utf8_lossy(&bytes));
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                    self.policy.dict_words = Vec::new();
-                }
-                Err(e) => {
-                    return Err(Error::InvalidArgument(format!(
-                        "kdc.conf dict_file {}: {e}",
-                        path.display()
-                    )));
-                }
-            }
-        }
+        self.policy.ad_identity = conf.domain_sid.is_some();
+        self.policy.kdcpreauth = conf.plugin_relations("kdcpreauth");
+        self.policy.kdcpolicy = conf.plugin_relations("kdcpolicy");
+        self.policy.audit = conf.plugin_relations("audit");
+        self.policy.pwqual = conf.plugin_relations("pwqual");
+        self.policy.kadm5_hook = conf.plugin_relations("kadm5_hook");
         Ok(())
+    }
+
+    /// `[plugins] kdcpreauth` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
+    pub fn apply_kdcpreauth_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.kdcpreauth = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "kdcpreauth",
+        );
+    }
+
+    /// `[plugins] kdcpolicy` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
+    /// MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): `k5_plugin_load_all` applies that profile.
+    pub fn apply_kdcpolicy_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.kdcpolicy = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "kdcpolicy",
+        );
+    }
+
+    /// `[plugins] audit` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): `k5_plugin_load_all` applies that profile.
+    pub fn apply_audit_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.audit = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "audit",
+        );
+    }
+
+    /// `[plugins] pwqual` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `k5_pwqual_load` (`lib/kadm5/srv/pwqual.c:42-66`): `k5_plugin_load_all` applies that profile.
+    pub fn apply_pwqual_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.pwqual = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "pwqual",
+        );
+    }
+
+    /// `[plugins] kadm5_hook` from kdc.conf, then krb5.conf. A missing file adds no relations.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `k5_kadm5_hook_load` (`lib/kadm5/srv/kadm5_hook.c:40-94`): `k5_plugin_load_all` applies that profile.
+    pub fn apply_kadm5_hook_plugins(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.kadm5_hook = krb5_config::kdc_plugin_relations(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+            "kadm5_hook",
+        );
     }
 
     /// Overlay `[libdefaults]` `allow_rc4` / `allow_des3` / `permitted_enctypes`.
@@ -380,11 +523,22 @@ impl PrincipalStore {
         &self.policies
     }
 
-    /// Insert or replace a named policy.
+    /// Insert or replace a named policy; a failed save is not reported (see
+    /// [`Self::put_policy_and_save`]).
     pub fn put_policy(&mut self, pol: NamedPolicy) {
-        self.note_ulog(format!("policy:{}", pol.name), false, None);
+        let _ = self.put_policy_and_save(pol);
+    }
+
+    /// Insert or replace a named policy and save the store when it persists.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Db`] when the store cannot be saved, a writer that may not write the database
+    /// included; the policy stays in memory and nothing on disk changes.
+    pub fn put_policy_and_save(&mut self, pol: NamedPolicy) -> Result<(), Error> {
+        self.note_ulog_reset();
         self.policies.insert(pol.name.clone(), pol);
-        let _ = self.save_if_configured();
+        self.save_if_configured()
     }
 
     /// Load a dump policy without logging (dump/iprop apply).
@@ -396,11 +550,11 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when no policy is named `name`; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         self.policies.remove(name).ok_or(Error::NotFound)?;
-        self.note_ulog(format!("policy:{name}"), true, None);
+        self.note_ulog_reset();
         self.save_if_configured()
     }
 
@@ -408,7 +562,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_principal_policy(
         &mut self,
@@ -423,7 +577,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn set_principal_policy_in(
         &mut self,

@@ -1,255 +1,313 @@
-//! MIT 1.22.2 SPAKE2 (draft-ietf-kitten-krb-spake-preauth) on P-256.
+//! MIT 1.22.2 SPAKE preauth (draft-ietf-kitten-krb-spake-preauth): the registered groups, the
+//! group interface and its configuration words, the edwards25519 group, the P-256 group, and the
+//! derivations the KDC and the client share.
 //!
-//! A point that does not decode, a scalar that is zero, or a scalar of
-//! the wrong length is `Error::Integrity`. The only group is P-256.
+//! An element or scalar of the wrong length, or an element that does not decode, is
+//! `Error::Integrity` (MIT's `EINVAL`). MIT built with OpenSSL also has P-384 and P-521; this port
+//! has edwards25519 and P-256, so those two names are unknown words here.
+
+mod edwards25519;
+mod p256;
 
 use sha2::{Digest as Sha2Digest, Sha256};
-use zeroize::Zeroize;
+use zeroize::Zeroizing;
 
 use crate::error::Error;
 use crate::key::ProtocolKey;
+use crate::krb_fx_cf2;
 use crate::prf::prf_plus;
-use crate::{krb_fx_cf2, p256_generate};
+use crate::wipe::wipe;
 
-/// SPAKE group P-256 (IANA / MIT).
-pub const SPAKE_GROUP_P256: i32 = 2;
-
-/// Compressed P-256 M from the SPAKE IANA registry (MIT `iana.c`).
-pub const SPAKE_M: [u8; 33] = [
-    0x02, 0x88, 0x6e, 0x2f, 0x97, 0xac, 0xe4, 0x6e, 0x55, 0xba, 0x9d, 0xd7, 0x24, 0x25, 0x79, 0xf2,
-    0x99, 0x3b, 0x64, 0xe1, 0x6e, 0xf3, 0xdc, 0xab, 0x95, 0xaf, 0xd4, 0x97, 0x33, 0x3d, 0x8f, 0xa1,
-    0x2f,
-];
-/// Compressed P-256 N from the SPAKE IANA registry.
-pub const SPAKE_N: [u8; 33] = [
-    0x03, 0xd8, 0xbb, 0xd6, 0xc6, 0x39, 0xc6, 0x29, 0x37, 0xb0, 0x4d, 0x99, 0x7f, 0x38, 0xc3, 0x77,
-    0x07, 0x19, 0xc6, 0x29, 0xd7, 0x01, 0x4d, 0x49, 0xa2, 0x4b, 0x4f, 0x98, 0xba, 0xa1, 0x29, 0x2b,
-    0x49,
-];
-
-/// MIT `derive_wbytes`: PRF+(`ikey`, `"SPAKEsecret" || group-id`).
+/// A SPAKE group: its number, name, lengths and constants are MIT's registry entry.
 ///
-/// # Errors
-///
-/// None: the PRF+ length is the fixed 32 octets, and PRF cannot fail on a [`ProtocolKey`].
-pub fn spake_wbytes(ikey: &ProtocolKey, group: i32) -> Result<Vec<u8>, Error> {
-    let mut seed = b"SPAKEsecret".to_vec();
-    seed.extend_from_slice(&group.to_be_bytes());
-    prf_plus(ikey, &seed, 32)
+/// MIT `spake_iana_edwards25519` (`iana.c:93-96`): number 1, `edwards25519`, 32-octet scalars and elements, SHA-256.
+/// MIT `spake_iana_p256` (`iana.c:98-100`): number 2, `P-256`, 32-octet scalars, 33-octet elements, SHA-256.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SpakeGroup {
+    /// edwards25519 (group 1): MIT's built-in group and its client default.
+    Edwards25519,
+    /// P-256 (group 2).
+    P256,
 }
 
-/// IANA compressed M (33 octets).
+/// MIT `DEFAULT_GROUPS_CLIENT` (`groups.c:59-59`): a client without `spake_preauth_groups` permits edwards25519.
+pub const SPAKE_DEFAULT_GROUPS_CLIENT: &str = "edwards25519";
+
+/// MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): a KDC without `spake_preauth_groups` permits none, so it offers no SPAKE.
+pub const SPAKE_DEFAULT_GROUPS_KDC: &str = "";
+
+impl SpakeGroup {
+    /// MIT `groupdefs` (`groups.c:89-97`): edwards25519 first, then the OpenSSL groups.
+    pub const ALL: [Self; 2] = [Self::Edwards25519, Self::P256];
+
+    /// MIT `find_gdef` (`groups.c:99-111`): the group a number names, or none.
+    #[must_use]
+    pub fn from_number(group: i32) -> Option<Self> {
+        Self::ALL.into_iter().find(|g| g.number() == group)
+    }
+
+    /// MIT `find_gnum` (`groups.c:113-124`): the group a name names, compared without case.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|g| g.name().eq_ignore_ascii_case(name))
+    }
+
+    /// The IANA group number.
+    #[must_use]
+    pub const fn number(self) -> i32 {
+        match self {
+            Self::Edwards25519 => 1,
+            Self::P256 => 2,
+        }
+    }
+
+    /// The name `spake_preauth_groups` and `spake_preauth_kdc_challenge` use.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Edwards25519 => "edwards25519",
+            Self::P256 => "P-256",
+        }
+    }
+
+    /// Octets in a scalar (`w`, `x`, `y`).
+    #[must_use]
+    pub const fn mult_len(self) -> usize {
+        32
+    }
+
+    /// Octets in a group element (`T`, `S`, `K`).
+    #[must_use]
+    pub const fn elem_len(self) -> usize {
+        match self {
+            Self::Edwards25519 => 32,
+            Self::P256 => 33,
+        }
+    }
+
+    /// Octets in the group's hash output.
+    #[must_use]
+    pub const fn hash_len(self) -> usize {
+        32
+    }
+
+    /// The registry's M, the KDC's constant.
+    #[must_use]
+    pub const fn m(self) -> &'static [u8] {
+        match self {
+            Self::Edwards25519 => &edwards25519::M,
+            Self::P256 => &p256::M,
+        }
+    }
+
+    /// The registry's N, the client's constant.
+    #[must_use]
+    pub const fn n(self) -> &'static [u8] {
+        match self {
+            Self::Edwards25519 => &edwards25519::N,
+            Self::P256 => &p256::N,
+        }
+    }
+}
+
+/// The groups a `spake_preauth_groups` value permits, in its order.
+///
+/// MIT `parse_groups` (`groups.c:176-211`): words split at space, tab, CR, LF or comma; an unknown word is skipped and a repeat kept once.
 #[must_use]
-pub fn spake_m_bytes() -> &'static [u8] {
-    &SPAKE_M
+pub fn spake_parse_groups(value: &str) -> Vec<SpakeGroup> {
+    let mut out = Vec::new();
+    for word in value
+        .split([' ', '\t', '\r', '\n', ','])
+        .filter(|w| !w.is_empty())
+    {
+        let Some(group) = SpakeGroup::from_name(word) else {
+            tracing::debug!(name = word, "Unrecognized SPAKE group name");
+            continue;
+        };
+        if !out.contains(&group) {
+            out.push(group);
+        }
+    }
+    out
 }
 
-/// IANA compressed N (33 octets).
-#[must_use]
-pub fn spake_n_bytes() -> &'static [u8] {
-    &SPAKE_N
-}
-
-/// Decode a compressed P-256 SPAKE element. Hostile input returns [`Error::Integrity`].
+/// The multiplier octets `w` the initial key gives for `group`.
+///
+/// MIT `derive_wbytes` (`util.c:101-141`): PRF+ of the initial key over "SPAKEsecret" and the big-endian group number, `mult_len` octets.
 ///
 /// # Errors
 ///
-/// [`Error::Integrity`] when `bytes` is not a SEC1 encoding of a point on P-256.
-pub fn spake_decode_point(bytes: &[u8]) -> Result<(), Error> {
-    decode_compressed(bytes).map(|_| ())
+/// None: the PRF+ length is the group's 32 octets, and PRF cannot fail on a [`ProtocolKey`].
+pub fn spake_wbytes(ikey: &ProtocolKey, group: SpakeGroup) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let mut input = b"SPAKEsecret".to_vec();
+    input.extend_from_slice(&group.number().to_be_bytes());
+    Ok(Zeroizing::new(prf_plus(ikey, &input, group.mult_len())?))
 }
 
-fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
-    use p256::elliptic_curve::{PrimeField, ff::Field};
-    let s = Option::<p256::Scalar>::from(p256::Scalar::from_repr((*b).into()))
-        .ok_or(Error::Integrity)?;
-    if bool::from(s.is_zero()) {
-        return Err(Error::Integrity);
-    }
-    Ok(s)
-}
-
-fn scalar_from_wbytes(wbytes: &[u8]) -> Result<p256::Scalar, Error> {
-    use p256::U256;
-    use p256::elliptic_curve::ff::Field;
-    use p256::elliptic_curve::ops::Reduce;
-    if wbytes.len() != 32 {
-        return Err(Error::Integrity);
-    }
-    let n = U256::from_be_slice(wbytes);
-    let s: p256::Scalar = Reduce::reduce(n);
-    if bool::from(s.is_zero()) {
-        return Err(Error::Integrity);
-    }
-    Ok(s)
-}
-
-fn decode_compressed(bytes: &[u8]) -> Result<p256::ProjectivePoint, Error> {
-    use p256::elliptic_curve::sec1::FromEncodedPoint;
-    use p256::{AffinePoint, EncodedPoint, ProjectivePoint};
-    let ep = EncodedPoint::from_bytes(bytes).map_err(|_| Error::Integrity)?;
-    let aff = Option::<AffinePoint>::from(AffinePoint::from_encoded_point(&ep))
-        .ok_or(Error::Integrity)?;
-    Ok(ProjectivePoint::from(aff))
-}
-
-fn encode_compressed(p: p256::ProjectivePoint) -> Vec<u8> {
-    use p256::AffinePoint;
-    use p256::elliptic_curve::sec1::ToEncodedPoint;
-    AffinePoint::from(p)
-        .to_encoded_point(true)
-        .as_bytes()
-        .to_vec()
-}
-
-fn spake_m() -> Result<p256::ProjectivePoint, Error> {
-    decode_compressed(&SPAKE_M)
-}
-
-fn spake_n() -> Result<p256::ProjectivePoint, Error> {
-    decode_compressed(&SPAKE_N)
-}
-
-/// SPAKE2 public share as a compressed P-256 point (MIT `elem_len` = 33).
+/// A random private scalar and its public element: `T = x·G + w·M` on the KDC, `S = y·G + w·N` on
+/// the client.
 ///
-/// KDC (`server`) computes `xG + wM`; client computes `yG + wN`.
+/// MIT `group_keygen` (`groups.c:332-371`): the KDC uses M and the client N, and `w` is the group's `mult_len` octets.
 ///
 /// # Errors
 ///
-/// [`Error::Integrity`] when `w` reduces to zero modulo the P-256 order, or `secret` is zero or
-/// not below that order.
-pub fn spake_public(w: &[u8; 32], secret: &[u8; 32], server: bool) -> Result<Vec<u8>, Error> {
-    spake_public_wbytes(w, secret, server)
-}
-
-/// Like [`spake_public`] with unreduced MIT `wbytes`.
-///
-/// # Errors
-///
-/// [`Error::Integrity`] when `wbytes` is not 32 octets or reduces to zero modulo the P-256 order,
-/// or `secret` is zero or not below that order.
-pub fn spake_public_wbytes(
+/// [`Error::Rng`] when the CSPRNG fails; [`Error::Integrity`] when `wbytes` is not the group's
+/// `mult_len` octets.
+pub fn spake_keygen(
+    group: SpakeGroup,
     wbytes: &[u8],
-    secret: &[u8; 32],
-    server: bool,
-) -> Result<Vec<u8>, Error> {
-    use p256::ProjectivePoint;
-    let ws = scalar_from_wbytes(wbytes)?;
-    let xs = scalar_from_bytes32(secret)?;
-    // MIT: KDC uses M, client uses N.
-    let mn = if server { spake_m()? } else { spake_n()? };
-    Ok(encode_compressed(ProjectivePoint::GENERATOR * xs + mn * ws))
-}
-
-/// SPAKE2 shared element (compressed, 33 octets) matching MIT `group_result`.
-///
-/// KDC: `x(S - wN)`; client: `y(T - wM)`.
-///
-/// # Errors
-///
-/// [`Error::Integrity`] when `w` reduces to zero modulo the P-256 order, `secret` is zero or not
-/// below that order, `peer_public` is not a SEC1 point on P-256, or the result is the identity.
-pub fn spake_finish(
-    w: &[u8; 32],
-    secret: &[u8; 32],
-    peer_public: &[u8],
-    we_are_server: bool,
-) -> Result<[u8; 32], Error> {
-    let elem = spake_result_wbytes(w, secret, peer_public, we_are_server)?;
-    let mut x = [0u8; 32];
-    if elem.len() == 33 {
-        x.copy_from_slice(&elem[1..]);
-    } else if elem.len() == 32 {
-        x.copy_from_slice(&elem);
-    } else {
+    kdc: bool,
+) -> Result<(Zeroizing<Vec<u8>>, Vec<u8>), Error> {
+    if wbytes.len() != group.mult_len() {
         return Err(Error::Integrity);
     }
-    Ok(x)
+    match group {
+        SpakeGroup::Edwards25519 => edwards25519::keygen(wbytes, kdc),
+        SpakeGroup::P256 => p256::keygen(wbytes, kdc),
+    }
 }
 
-/// Compressed SPAKE result (33 bytes) used as MIT `spakeresult`.
+/// The public element [`spake_keygen`] makes from a given private scalar (MIT's vectors give `x`
+/// and `y`).
 ///
 /// # Errors
 ///
-/// [`Error::Integrity`] when `wbytes` is not 32 octets or reduces to zero modulo the P-256 order,
-/// `secret` is zero or not below that order, or `peer_public` is not a SEC1 point on P-256.
-pub fn spake_result_wbytes(
+/// [`Error::Integrity`] when `wbytes` or `private` is not the group's `mult_len` octets, or (P-256)
+/// the element is the point at infinity.
+pub fn spake_public(
+    group: SpakeGroup,
     wbytes: &[u8],
-    secret: &[u8; 32],
-    peer_public: &[u8],
-    we_are_server: bool,
+    private: &[u8],
+    kdc: bool,
 ) -> Result<Vec<u8>, Error> {
-    let ws = scalar_from_wbytes(wbytes)?;
-    let xs = scalar_from_bytes32(secret)?;
-    let peer = decode_compressed(peer_public)?;
-    // MIT: KDC subtracts N; client subtracts M.
-    let mn = if we_are_server {
-        spake_n()?
-    } else {
-        spake_m()?
-    };
-    Ok(encode_compressed((peer - mn * ws) * xs))
+    if wbytes.len() != group.mult_len() || private.len() != group.mult_len() {
+        return Err(Error::Integrity);
+    }
+    match group {
+        SpakeGroup::Edwards25519 => edwards25519::public(wbytes, private, kdc),
+        SpakeGroup::P256 => p256::public(wbytes, private, kdc),
+    }
 }
 
-/// Transcript hash: `SHA-256(thash || data1 || data2)` (MIT `update_thash`).
-#[must_use]
-pub fn spake_thash_update(thash: &[u8], data1: &[u8], data2: &[u8]) -> [u8; 32] {
-    let mut h = <Sha256 as Sha2Digest>::new();
-    Sha2Digest::update(&mut h, thash);
-    Sha2Digest::update(&mut h, data1);
-    Sha2Digest::update(&mut h, data2);
-    Sha2Digest::finalize(h).into()
-}
-
-/// MIT `derive_key`: `K'[n] = CF2(ikey, "SPAKE", random-to-key(H), "keyderiv")`.
+/// The SPAKE result `K = x·(S − w·N)` on the KDC, `K = y·(T − w·M)` on the client.
+///
+/// MIT `group_result` (`groups.c:373-412`): lengths are checked first, and each side removes the other party's constant.
 ///
 /// # Errors
 ///
-/// None: the hash seed is cut to `ikey`'s key length, and [`krb_fx_cf2`] cannot fail.
+/// [`Error::Integrity`] when a length is not the group's, `theirpub` does not decode, or (P-256)
+/// `K` is the point at infinity.
+pub fn spake_result(
+    group: SpakeGroup,
+    wbytes: &[u8],
+    ourpriv: &[u8],
+    theirpub: &[u8],
+    kdc: bool,
+) -> Result<Zeroizing<Vec<u8>>, Error> {
+    if wbytes.len() != group.mult_len()
+        || ourpriv.len() != group.mult_len()
+        || theirpub.len() != group.elem_len()
+    {
+        return Err(Error::Integrity);
+    }
+    match group {
+        SpakeGroup::Edwards25519 => edwards25519::result(wbytes, ourpriv, theirpub, !kdc),
+        SpakeGroup::P256 => p256::result(wbytes, ourpriv, theirpub, !kdc),
+    }
+}
+
+/// Whether `bytes` is a group element of `group` (the fuzz target's decoder).
+///
+/// # Errors
+///
+/// [`Error::Integrity`] when `bytes` is not the group's `elem_len` octets or does not decode.
+pub fn spake_decode_point(group: SpakeGroup, bytes: &[u8]) -> Result<(), Error> {
+    if bytes.len() != group.elem_len() {
+        return Err(Error::Integrity);
+    }
+    match group {
+        SpakeGroup::Edwards25519 => edwards25519::element(bytes).map(|_| ()),
+        SpakeGroup::P256 => p256::element(bytes).map(|_| ()),
+    }
+}
+
+/// The group's hash over the concatenation of `parts`.
+///
+/// MIT `builtin_sha256` (`edwards25519.c:1741-1746`): edwards25519 hashes with SHA-256.
+/// MIT `ossl_hash` (`plugins/preauth/spake/openssl.c:271-288`): P-256 hashes with SHA-256 too.
+fn group_hash(group: SpakeGroup, parts: &[&[u8]]) -> sha2::digest::Output<Sha256> {
+    match group {
+        SpakeGroup::Edwards25519 | SpakeGroup::P256 => {
+            let mut h = <Sha256 as Sha2Digest>::new();
+            for part in parts {
+                Sha2Digest::update(&mut h, part);
+            }
+            Sha2Digest::finalize(h)
+        }
+    }
+}
+
+/// The transcript hash after `data1` and `data2`.
+///
+/// MIT `update_thash` (`util.c:69-99`): the group's hash of the old value, `data1` and `data2`; an empty value starts as `hash_len` zeros.
+#[must_use]
+pub fn spake_thash_update(group: SpakeGroup, thash: &[u8], data1: &[u8], data2: &[u8]) -> Vec<u8> {
+    let zeros = vec![0u8; group.hash_len()];
+    let old = if thash.is_empty() { &zeros } else { thash };
+    group_hash(group, &[old, data1, data2]).to_vec()
+}
+
+/// `K'[n]`, a key of the initial key's enctype.
+///
+/// The seed's own allocation, the whole hashed block, is wiped on every return; each hash output
+/// it is copied from, a stack value, is not.
+///
+/// MIT `derive_key` (`util.c:143-212`): `CF2(ikey, "SPAKE", random-to-key(seed), "keyderiv")`, the seed the enctype's random-to-key length of hash blocks.
+///
+/// # Errors
+///
+/// None: the seed is cut to the random-to-key length of `ikey`'s enctype, and [`krb_fx_cf2`]
+/// cannot fail.
 pub fn spake_derive_key(
     ikey: &ProtocolKey,
-    group: i32,
+    group: SpakeGroup,
     wbytes: &[u8],
     spakeresult: &[u8],
     thash: &[u8],
     der_req: &[u8],
     n: u32,
 ) -> Result<ProtocolKey, Error> {
-    let seedlen = ikey.etype().key_len();
-    let hashlen = 32usize;
+    let etype = ikey.etype();
+    let seedlen = etype.keybytes();
+    let hashlen = group.hash_len();
     let nblocks = seedlen.div_ceil(hashlen);
+    let groupn = group.number().to_be_bytes();
+    let etypen = etype.to_iana().to_be_bytes();
+    let nbuf = n.to_be_bytes();
     let mut seed = vec![0u8; nblocks * hashlen];
-    for i in 0..nblocks {
-        let bcount = u8::try_from(i + 1).unwrap_or(u8::MAX);
-        let mut h = <Sha256 as Sha2Digest>::new();
-        Sha2Digest::update(&mut h, b"SPAKEkey");
-        Sha2Digest::update(&mut h, group.to_be_bytes());
-        Sha2Digest::update(&mut h, ikey.etype().to_iana().to_be_bytes());
-        Sha2Digest::update(&mut h, wbytes);
-        Sha2Digest::update(&mut h, spakeresult);
-        Sha2Digest::update(&mut h, thash);
-        Sha2Digest::update(&mut h, der_req);
-        Sha2Digest::update(&mut h, n.to_be_bytes());
-        Sha2Digest::update(&mut h, [bcount]);
-        let out = Sha2Digest::finalize(h);
-        seed[i * hashlen..i * hashlen + hashlen].copy_from_slice(&out);
+    for (i, block) in seed.chunks_exact_mut(hashlen).enumerate() {
+        let bcount = [u8::try_from(i + 1).unwrap_or(u8::MAX)];
+        block.copy_from_slice(&group_hash(
+            group,
+            &[
+                b"SPAKEkey",
+                &groupn,
+                &etypen,
+                wbytes,
+                spakeresult,
+                thash,
+                der_req,
+                &nbuf,
+                &bcount,
+            ],
+        ));
     }
     seed.truncate(seedlen);
-    let hkey = ProtocolKey::from_bytes(ikey.etype(), &seed)?;
-    seed.zeroize();
-    krb_fx_cf2(ikey, &hkey, b"SPAKE", b"keyderiv")
-}
-
-/// Generate a KDC SPAKE keypair (compressed public, 32-byte secret).
-///
-/// # Errors
-///
-/// [`Error::Rng`] when the CSPRNG fails; [`Error::Integrity`] when `wbytes` is not 32 octets or
-/// reduces to zero modulo the P-256 order.
-pub fn spake_kdc_keygen(wbytes: &[u8]) -> Result<([u8; 32], Vec<u8>), Error> {
-    let kp = p256_generate()?;
-    let pub_y = spake_public_wbytes(wbytes, &kp.secret, true)?;
-    Ok((kp.secret, pub_y))
+    let hkey = ProtocolKey::from_random(etype, &seed);
+    wipe(&mut seed);
+    krb_fx_cf2(ikey, &hkey?, b"SPAKE", b"keyderiv")
 }
 
 #[cfg(test)]
@@ -257,7 +315,6 @@ mod tests {
     use super::*;
     use crate::etype::EncryptionType;
     use crate::ops::string_to_key;
-    use crate::p256_generate;
 
     fn test_key() -> ProtocolKey {
         string_to_key(
@@ -269,53 +326,122 @@ mod tests {
         .unwrap()
     }
 
+    /// MIT frees w, the private scalar and K with `zapfree`; here each is a `Zeroizing`, which
+    /// zeroes its whole buffer when dropped, from either group and either side.
     #[test]
-    fn spake_compressed_agrees() {
+    fn w_the_private_scalar_and_k_are_zeroizing() {
         let ikey = test_key();
-        let w = spake_wbytes(&ikey, SPAKE_GROUP_P256).unwrap();
-        let client = p256_generate().unwrap();
-        let server = p256_generate().unwrap();
-        let x = spake_public_wbytes(&w, &client.secret, false).unwrap();
-        let y = spake_public_wbytes(&w, &server.secret, true).unwrap();
-        assert_eq!(x.len(), 33);
-        assert_eq!(y.len(), 33);
-        let c = spake_result_wbytes(&w, &client.secret, &y, false).unwrap();
-        let s = spake_result_wbytes(&w, &server.secret, &x, true).unwrap();
-        assert_eq!(c, s);
-        assert_eq!(c.len(), 33);
+        for group in SpakeGroup::ALL {
+            let w: Zeroizing<Vec<u8>> = spake_wbytes(&ikey, group).unwrap();
+            let (x, t): (Zeroizing<Vec<u8>>, Vec<u8>) = spake_keygen(group, &w, true).unwrap();
+            let (y, s) = spake_keygen(group, &w, false).unwrap();
+            let k: Zeroizing<Vec<u8>> = spake_result(group, &w, &x, &s, true).unwrap();
+            assert_eq!(*k, *spake_result(group, &w, &y, &t, false).unwrap());
+        }
     }
 
     #[test]
-    fn spake_k0_uses_cf2_not_x_coordinate() {
+    fn both_groups_agree_on_k_from_either_side() {
         let ikey = test_key();
-        let w = spake_wbytes(&ikey, SPAKE_GROUP_P256).unwrap();
-        let client = p256_generate().unwrap();
-        let server = p256_generate().unwrap();
-        let x = spake_public_wbytes(&w, &client.secret, false).unwrap();
-        let y = spake_public_wbytes(&w, &server.secret, true).unwrap();
-        let result = spake_result_wbytes(&w, &server.secret, &x, true).unwrap();
-        let thash = [0u8; 32];
-        let der_req = b"fake-kdc-req-body";
-        let k0 =
-            spake_derive_key(&ikey, SPAKE_GROUP_P256, &w, &result, &thash, der_req, 0).unwrap();
-        assert_ne!(k0.as_bytes(), &result[1..]);
-        let k0b =
-            spake_derive_key(&ikey, SPAKE_GROUP_P256, &w, &result, &thash, der_req, 0).unwrap();
-        assert_eq!(k0.as_bytes(), k0b.as_bytes());
-        let k1 =
-            spake_derive_key(&ikey, SPAKE_GROUP_P256, &w, &result, &thash, der_req, 1).unwrap();
+        for group in SpakeGroup::ALL {
+            let w = spake_wbytes(&ikey, group).unwrap();
+            let (x, t) = spake_keygen(group, &w, true).unwrap();
+            let (y, s) = spake_keygen(group, &w, false).unwrap();
+            assert_eq!(t.len(), group.elem_len());
+            assert_eq!(s.len(), group.elem_len());
+            assert_eq!(spake_public(group, &w, &x, true).unwrap(), t);
+            let kdc = spake_result(group, &w, &x, &s, true).unwrap();
+            let client = spake_result(group, &w, &y, &t, false).unwrap();
+            assert_eq!(kdc, client, "{group:?}");
+            assert_eq!(kdc.len(), group.elem_len());
+            // The wrong constant gives another K.
+            let swapped = spake_result(group, &w, &x, &s, false).unwrap();
+            assert_ne!(kdc, swapped, "{group:?}");
+        }
+    }
+
+    #[test]
+    fn a_wrong_length_or_an_undecodable_element_is_integrity() {
+        let w = [1u8; 32];
+        for group in SpakeGroup::ALL {
+            let (x, t) = spake_keygen(group, &w, true).unwrap();
+            assert_eq!(
+                spake_result(group, &w, &x, &t[1..], true),
+                Err(Error::Integrity)
+            );
+            assert_eq!(
+                spake_result(group, &w[1..], &x, &t, true),
+                Err(Error::Integrity)
+            );
+            assert_eq!(
+                spake_result(group, &w, &x[1..], &t, true),
+                Err(Error::Integrity)
+            );
+            assert_eq!(spake_keygen(group, &w[1..], true), Err(Error::Integrity));
+        }
+        // y = 2 is not on edwards25519 (u/v is not a square).
+        let mut not_on_curve = [0u8; 32];
+        not_on_curve[0] = 2;
+        assert_eq!(
+            spake_decode_point(SpakeGroup::Edwards25519, &not_on_curve),
+            Err(Error::Integrity)
+        );
+        // x = 0x0101…01 is not on P-256 (x³ − 3x + b is not a square).
+        let mut off_p256 = [0x01u8; 33];
+        off_p256[0] = 0x02;
+        assert_eq!(
+            spake_decode_point(SpakeGroup::P256, &off_p256),
+            Err(Error::Integrity)
+        );
+        // An uncompressed encoding is not 33 octets.
+        let (_, t) = spake_keygen(SpakeGroup::P256, &w, true).unwrap();
+        assert!(spake_decode_point(SpakeGroup::P256, &t).is_ok());
+        assert_eq!(
+            spake_decode_point(SpakeGroup::P256, &[4u8; 65]),
+            Err(Error::Integrity)
+        );
+    }
+
+    #[test]
+    fn group_words_parse_like_mit() {
+        use SpakeGroup::{Edwards25519, P256};
+        assert_eq!(
+            spake_parse_groups(SPAKE_DEFAULT_GROUPS_CLIENT),
+            [Edwards25519]
+        );
+        assert_eq!(spake_parse_groups(SPAKE_DEFAULT_GROUPS_KDC), []);
+        assert_eq!(
+            spake_parse_groups("p-256,EDWARDS25519\tP-384 bogus\r\nP-256"),
+            [P256, Edwards25519]
+        );
+        assert_eq!(spake_parse_groups(" , ,"), []);
+        assert_eq!(SpakeGroup::from_number(1), Some(Edwards25519));
+        assert_eq!(SpakeGroup::from_number(2), Some(P256));
+        assert_eq!(SpakeGroup::from_number(3), None);
+        assert_eq!(SpakeGroup::from_name("P-521"), None);
+    }
+
+    #[test]
+    fn thash_starts_from_hash_len_zeros() {
+        let group = SpakeGroup::Edwards25519;
+        let a = spake_thash_update(group, &[], b"abc", b"def");
+        assert_eq!(a, spake_thash_update(group, &[0u8; 32], b"abc", b"def"));
+        assert_eq!(a, spake_thash_update(group, &[], b"abcd", b"ef"));
+        assert_ne!(a, spake_thash_update(group, &[], b"abc", b""));
+    }
+
+    #[test]
+    fn k0_and_k1_differ_and_repeat() {
+        let ikey = test_key();
+        let group = SpakeGroup::Edwards25519;
+        let w = spake_wbytes(&ikey, group).unwrap();
+        let k = [7u8; 32];
+        let thash = [9u8; 32];
+        let k0 = spake_derive_key(&ikey, group, &w, &k, &thash, b"body", 0).unwrap();
+        let again = spake_derive_key(&ikey, group, &w, &k, &thash, b"body", 0).unwrap();
+        let k1 = spake_derive_key(&ikey, group, &w, &k, &thash, b"body", 1).unwrap();
+        assert_eq!(k0.as_bytes(), again.as_bytes());
         assert_ne!(k0.as_bytes(), k1.as_bytes());
-        let _ = y;
-        let _ = client;
-    }
-
-    #[test]
-    fn thash_starts_from_zeros() {
-        let z = [0u8; 32];
-        let a = spake_thash_update(&z, b"abc", b"def");
-        let b = spake_thash_update(&z, b"abc", b"def");
-        assert_eq!(a, b);
-        let c = spake_thash_update(&z, b"abc", b"");
-        assert_ne!(a, c);
+        assert_eq!(k0.etype(), ikey.etype());
     }
 }

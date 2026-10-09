@@ -812,8 +812,8 @@ pub struct ExtraSid {
     pub attributes: u32,
 }
 
-/// MS-PAC `KERB_VALIDATION_INFO` (NDR32).
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// MS-PAC `KERB_VALIDATION_INFO` (NDR32). `Debug` never shows the session key.
+#[derive(Clone, PartialEq, Eq)]
 pub struct KerbValidationInfo {
     /// LogonTime FILETIME.
     pub logon_time: u64,
@@ -879,6 +879,45 @@ pub struct KerbValidationInfo {
     pub resource_group_domain_sid: Option<RpcSid>,
     /// Resource group memberships.
     pub resource_groups: Vec<GroupMembership>,
+}
+
+impl std::fmt::Debug for KerbValidationInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KerbValidationInfo")
+            .field("logon_time", &self.logon_time)
+            .field("logoff_time", &self.logoff_time)
+            .field("kickoff_time", &self.kickoff_time)
+            .field("password_last_set", &self.password_last_set)
+            .field("password_can_change", &self.password_can_change)
+            .field("password_must_change", &self.password_must_change)
+            .field("effective_name", &self.effective_name)
+            .field("full_name", &self.full_name)
+            .field("logon_script", &self.logon_script)
+            .field("profile_path", &self.profile_path)
+            .field("home_directory", &self.home_directory)
+            .field("home_directory_drive", &self.home_directory_drive)
+            .field("logon_count", &self.logon_count)
+            .field("bad_password_count", &self.bad_password_count)
+            .field("user_id", &self.user_id)
+            .field("primary_group_id", &self.primary_group_id)
+            .field("groups", &self.groups)
+            .field("user_flags", &self.user_flags)
+            .field("session_key", &format_args!("<redacted>"))
+            .field("logon_server", &self.logon_server)
+            .field("logon_domain_name", &self.logon_domain_name)
+            .field("logon_domain_id", &self.logon_domain_id)
+            .field("reserved1", &self.reserved1)
+            .field("user_account_control", &self.user_account_control)
+            .field("sub_auth_status", &self.sub_auth_status)
+            .field("last_successful_ilogon", &self.last_successful_ilogon)
+            .field("last_failed_ilogon", &self.last_failed_ilogon)
+            .field("failed_ilogon_count", &self.failed_ilogon_count)
+            .field("reserved3", &self.reserved3)
+            .field("extra_sids", &self.extra_sids)
+            .field("resource_group_domain_sid", &self.resource_group_domain_sid)
+            .field("resource_groups", &self.resource_groups)
+            .finish()
+    }
 }
 
 /// Client identity for PAC issuance (domain SID + RID from the store).

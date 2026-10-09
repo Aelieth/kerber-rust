@@ -4,11 +4,10 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2};
-use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
     AsRep, AsReq, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2, EtypeInfo2Entry,
-    EtypeInfoEntry, KdcReqBody, KerberosString, KerberosTime, MethodData, Microseconds,
-    OctetString, PaData, PaEncTsEnc, PrincipalName, TransitedEncoding, err, flag_bit, ku, pa,
+    EtypeInfoEntry, KdcReqBody, KerberosString, KerberosTime, MethodData, OctetString, PaData,
+    PaEncTsEnc, PrincipalName, TransitedEncoding, err, flag_bit, ku, pa,
 };
 
 use super::fast_util::{check_fast_options, fast_hides_client, wrap_as_fast};
@@ -18,21 +17,20 @@ use super::kdc_util::{
     utf8_realm, validate_as_request,
 };
 use super::reply::{
-    MintTicket, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
+    MintTicket, TicketPac, enc_rep_part, encode_enc_kdc_rep_part, mint_ticket, return_enc_padata,
 };
 use crate::ad::{authind_add, check_indicators, handle_authdata};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::plugins::{
-    PreauthAction, PreauthRock, apply_policy_times, current_policy, run_as_preauth,
-};
+use crate::plugins::{PreauthAction, PreauthRock, enforce_kdcpolicy_as, run_as_preauth};
 use crate::preauth::{
     FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, mint_freshness_token_now,
     pa_cookie_last, proto, unwrap_fast, wrap_fast_rep,
 };
 use crate::status;
 use crate::store::{
-    KDB_NO_AUTH_DATA_REQUIRED, KDB_REQUIRES_HW_AUTH, KeyEntry, Principal, random_key,
+    KDB_NO_AUTH_DATA_REQUIRED, KDB_REQUIRES_HW_AUTH, KDB_REQUIRES_PRE_AUTH, KeyEntry, Principal,
+    random_key,
 };
 
 /// Issued AS-REP plus the session key (for tests that decrypt the TGT).
@@ -148,6 +146,10 @@ struct AsPreauth {
     anonymous_as: bool,
 }
 
+/// One AS exchange at the request's time, then the KDB's audit of its outcome for the client
+/// it looked up.
+/// MIT `process_as_req` (`kdc/do_as_req.c:522-526`): the request's time is taken once and used for every check and the ticket's times.
+/// MIT `finish_process_as_req` (`kdc/do_as_req.c:340-365`): the outcome is logged, and audited, with the request's time and the client entry looked up.
 fn issue_as_body(
     store: &dyn PrincipalRead,
     req: &AsReq,
@@ -155,9 +157,39 @@ fn issue_as_body(
     body: &KdcReqBody,
     fast: Option<&FastOk>,
 ) -> Result<IssuedAs, Error> {
-    let lookup = lookup_client(store, req, body, fast)?;
+    let kdc_time = crate::store::unix_now_u32();
+    let mut client = None;
+    let out = issue_as_steps(store, req, raw, body, fast, kdc_time, &mut client);
+    if let Some(client) = &client {
+        crate::lockout::lockout_audit(store, client, kdc_time, crate::lockout::as_outcome(&out));
+    }
+    out
+}
+
+fn issue_as_steps(
+    store: &dyn PrincipalRead,
+    req: &AsReq,
+    raw: Option<&[u8]>,
+    body: &KdcReqBody,
+    fast: Option<&FastOk>,
+    kdc_time: u32,
+    audited: &mut Option<Principal>,
+) -> Result<IssuedAs, Error> {
+    let lookup = lookup_client(store, req, body, fast, kdc_time, audited)?;
     let pre = finish_preauth(store, req, raw, body, fast, lookup)?;
-    finish_process_as_req(store, req, raw, body, fast, pre)
+    finish_process_as_req(store, req, raw, body, fast, pre, kdc_time)
+}
+
+/// The client entry as the outcome's audit sees it: an anonymous request's has
+/// `REQUIRES_PRE_AUTH`, so its reply stamps `last_success`. Only the audit's copy has the flag;
+/// the stored entry keeps its own.
+/// MIT `process_as_req` (`kdc/do_as_req.c:718-733`): a REQUEST_ANONYMOUS request for the anonymous principal sets `REQUIRES_PRE_AUTH` on the client entry the audit is given.
+fn audit_entry(client: &Principal, body: &KdcReqBody, req_cname: &PrincipalName) -> Principal {
+    let mut entry = client.clone();
+    if body.kdc_options.bit(flag_bit::ANONYMOUS) && is_anonymous_principal(req_cname) {
+        entry.attributes |= KDB_REQUIRES_PRE_AUTH;
+    }
+    entry
 }
 
 /// MIT `lookup_client` plus the AS server lookup, `validate_as_request`, `select_client_key`,
@@ -172,11 +204,15 @@ fn issue_as_body(
 /// `select_session_keytype` over the server entry and the requested etypes.
 /// MIT `kdc_find_fast` (`fast_util.c:226-226`): a FAST request with an unsupported critical
 /// option is rejected.
+/// The client entry found is given its lockout attributes as they are now and kept in
+/// `audited` for the outcome's audit ([`audit_entry`]).
 fn lookup_client(
     store: &dyn PrincipalRead,
     req: &AsReq,
     body: &KdcReqBody,
     fast: Option<&FastOk>,
+    kdc_time: u32,
+    audited: &mut Option<Principal>,
 ) -> Result<AsLookup, Error> {
     if let Some(f) = fast {
         check_fast_options(&f.fast_options)?;
@@ -188,8 +224,10 @@ fn lookup_client(
         .cname
         .clone()
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::NULL_CLIENT))?;
-    let client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
+    let mut client = lookup_as_princ(store, &req_cname, status::LOOKING_UP_CLIENT)?
         .ok_or_else(|| proto(err::C_PRINCIPAL_UNKNOWN, status::CLIENT_NOT_FOUND))?;
+    store.merge_lockout(&mut client);
+    *audited = Some(audit_entry(&client, body, &req_cname));
     let cname = if req_cname.name_type == PrincipalName::NT_ENTERPRISE
         || body.kdc_options.bit(flag_bit::CANONICALIZE)
     {
@@ -206,7 +244,7 @@ fn lookup_client(
     // MIT validate_as_request runs after the client/server lookups and before preauth.
     // MIT `process_as_req` (`do_as_req.c:630-630`): `validate_as_request` precedes
     // check_padata at :758.
-    validate_as_request(store, &client, &server, body)?;
+    validate_as_request(store, &client, &server, body, kdc_time)?;
     let session_etype = select_session_keytype(&server, &body.etype, store.policy())?;
     let work_padata = if let Some(f) = fast {
         Some(f.inner_padata.clone())
@@ -284,7 +322,10 @@ fn finish_preauth(
         None => body_der,
     };
     // MIT `ec_verify` (`kdc_preauth_ec.c:71-76`): 138 outside FAST is ENOENT → 24.
-    if fast.is_none()
+    // MIT `find_pa_system` (`kdc_preauth.c:606-619`): that failure happens only when encrypted_challenge loaded.
+    let ec_loaded = crate::plugins::kdcpreauth_loaded(store, "encrypted_challenge");
+    if ec_loaded
+        && fast.is_none()
         && work_padata
             .as_deref()
             .into_iter()
@@ -387,9 +428,10 @@ fn finish_preauth(
             });
         }
         Some(PreauthAction::SpakeDone(k)) => {
+            // MIT `verify_response` (`spake_kdc.c:464-464`): K'[0] replaces the reply key as a strengthened one.
+            // MIT `replace_reply_key` (`kdc_preauth.c:567-580`): a strengthened key does not mark the reply key replaced, so the AS-REP keeps its etype-info.
             as_rep_key = k;
             skip_timestamp = true;
-            reply_key_replaced = true;
             for ind in &store.policy().spake_preauth_indicators {
                 authind_add(&mut auth_indicators, ind);
             }
@@ -399,24 +441,22 @@ fn finish_preauth(
         }
         None => {}
     }
-    if !skip_timestamp
+    // MIT `find_pa_system` (`kdc_preauth.c:606-619`): a type no loaded module owns is not verified.
+    if ec_loaded
+        && !skip_timestamp
         && let Some(f) = fast
         && let Some(blob) = find_pa(Some(&f.inner_padata), pa::ENCRYPTED_CHALLENGE)
         && !blob.is_empty()
     {
-        match verify_encrypted_challenge(store, &client, &ckey.key, &f.armor_key, blob) {
+        match verify_encrypted_challenge(store, &ckey.key, &f.armor_key, blob) {
             Ok(()) => {
-                store.record_as_outcome(&cname, true);
                 skip_timestamp = true;
                 extra_padata.push(kdc_encrypted_challenge(&f.armor_key, &ckey.key)?);
                 if let Some(ai) = store.policy().encrypted_challenge_indicator.as_deref() {
                     authind_add(&mut auth_indicators, ai);
                 }
             }
-            Err(e) => {
-                store.record_as_outcome(&cname, false);
-                return Err(e);
-            }
+            Err(e) => return Err(e),
         }
     }
     if (client.requires_preauth || anonymous_as) && !skip_timestamp {
@@ -475,6 +515,7 @@ fn finish_process_as_req(
     body: &KdcReqBody,
     fast: Option<&FastOk>,
     pre: AsPreauth,
+    kdc_time: u32,
 ) -> Result<IssuedAs, Error> {
     let AsPreauth {
         client,
@@ -503,7 +544,8 @@ fn finish_process_as_req(
         extra_padata.push(pa_pkinit_kx(&as_rep_key, &session)?);
         session = krb_fx_cf2(&session, &as_rep_key, b"PKINIT", b"KEYEXCHANGE")?;
     }
-    let now = KerberosTime::now();
+    // MIT `process_as_req` (`kdc/do_as_req.c:672-672`): the ticket's authtime is the request's time.
+    let now = KerberosTime::from_unix_seconds(kdc_time);
     let starttime = if body.kdc_options.bit(flag_bit::POSTDATED) {
         body.from
             .clone()
@@ -528,8 +570,16 @@ fn finish_process_as_req(
         &starttime,
         &end,
     );
-    let as_adj = current_policy().check_as(store, &client, &auth_indicators)?;
-    apply_policy_times(&now, &mut end, &mut ticket_renew_till, &as_adj);
+    enforce_kdcpolicy_as(
+        store,
+        body,
+        &client,
+        &server,
+        &auth_indicators,
+        &now,
+        &mut end,
+        &mut ticket_renew_till,
+    )?;
     let include_pac = include_pac_for_reply(
         store,
         &server,
@@ -598,12 +648,21 @@ fn finish_process_as_req(
         transited: TransitedEncoding::empty(),
         renew_till: ticket_renew_till.clone(),
         store,
-        include_pac,
-        logon_override: None,
+        // MIT `handle_pac` (`kdc_authdata.c:540-544`): a new PAC names the ticket client without the realm.
+        pac: include_pac.then(|| {
+            if crate::ad::pac_has_ad_data(store.policy(), None, true) {
+                TicketPac::Ad {
+                    logon_override: None,
+                    subject_pac: None,
+                    s4u_client_info: None,
+                    identity: None,
+                }
+            } else {
+                TicketPac::Mit(crate::ad::HandlePac::default())
+            }
+        }),
         starttime: &starttime,
-        subject_pac: None,
         caddr: body.addresses.clone(),
-        s4u_client_info: None,
         extra_ad,
         indicators: &auth_indicators,
         krbtgt: &krbtgt_p,
@@ -784,9 +843,9 @@ pub(crate) fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetS
     })
 }
 
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:121-128`): a timestamp inside the clock skew verifies, and a replayed one verifies again.
 fn verify_encrypted_challenge(
     store: &dyn PrincipalRead,
-    client: &Principal,
     long_term: &ProtocolKey,
     armor_key: &ProtocolKey,
     blob: &[u8],
@@ -811,16 +870,6 @@ fn verify_encrypted_challenge(
     let then = i64::from(ts.patimestamp.unix_seconds());
     if (now - then).abs() > store.policy().skew {
         return Err(proto(err::SKEW, status::PREAUTH_FAILED));
-    }
-    let rkey = ReplayKey {
-        client: client.id(),
-        server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
-        ctime: ts.patimestamp.unix_seconds(),
-        cusec: ts.pausec.map_or(0, Microseconds::get),
-        auth_hash: ReplayCache::hash_authenticator(blob),
-    };
-    if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::REPEAT, status::PREAUTH_FAILED));
     }
     Ok(())
 }
@@ -853,9 +902,9 @@ fn kdc_encrypted_challenge(
     })
 }
 
+/// MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-101`): a timestamp inside the clock skew verifies, and a replayed one verifies again.
 pub(crate) fn verify_enc_timestamp(
     store: &dyn PrincipalRead,
-    client: &Principal,
     key: &ProtocolKey,
     blob: &[u8],
 ) -> Result<(), Error> {
@@ -871,16 +920,6 @@ pub(crate) fn verify_enc_timestamp(
     let then = i64::from(ts.patimestamp.unix_seconds());
     if (now - then).abs() > store.policy().skew {
         return Err(proto(err::SKEW, status::PREAUTH_FAILED));
-    }
-    let rkey = ReplayKey {
-        client: client.id(),
-        server: format!("krbtgt/{}@{}", store.realm(), store.realm()),
-        ctime: ts.patimestamp.unix_seconds(),
-        cusec: ts.pausec.map_or(0, Microseconds::get),
-        auth_hash: ReplayCache::hash_authenticator(blob),
-    };
-    if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::REPEAT, status::PREAUTH_FAILED));
     }
     Ok(())
 }
@@ -905,7 +944,9 @@ fn preauth_hint_edata(
     armor: bool,
     request_padata: Option<&[PaData]>,
 ) -> Vec<u8> {
-    let mut method: MethodData = crate::plugins::advertise_preauth(store, client, armor, requested);
+    let hint =
+        crate::plugins::advertise_preauth(store, client, armor, requested, ckey.map(|k| &k.key));
+    let mut method: MethodData = hint.padata;
     // MIT `add_etype_info` (`kdc_preauth.c:776-778`): skip when no client key.
     if let Some(ckey) = ckey {
         let info = etype_info_padata(client, ckey, requested);
@@ -930,7 +971,8 @@ fn preauth_hint_edata(
             padata_value: tok.into(),
         });
     }
-    if let Ok(c) = make_cookie(store, &client.name, &[]) {
+    // MIT `kdc_fast_make_cookie` (`fast_util.c:655-721`): the state the modules set, or `MIT`.
+    if let Ok(c) = make_cookie(store, &client.name, &hint.cookie) {
         method.push(PaData {
             padata_type: pa::FX_COOKIE,
             padata_value: c.into(),

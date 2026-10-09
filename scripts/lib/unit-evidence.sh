@@ -2,6 +2,7 @@
 # Stamped unit green / parent-red helpers. Source after cd "$ROOT".
 # shellcheck shell=bash
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/test-hooks.sh"
 
 # Every #[test] / #[tokio::test] fn name in the named files, one per line.
 _unit_test_names() {
@@ -53,7 +54,7 @@ unit_green() {
     echo "==== unit_green $name filter=$filter ===="
     local out rc
     set +e
-    out="$(cargo nextest run --workspace --profile ci -E "test($filter)" 2>&1)"
+    out="$(cargo nextest run --workspace --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks -E "test($filter)" 2>&1)"
     rc=$?
     set -e
     printf '%s\n' "$out"
@@ -153,6 +154,13 @@ unit_red_at() {
             echo "unit_red_at: --all needs at least one tests/*.rs inject" >&2
             return 2
         fi
+    fi
+    # A parent from before the test-hooks feature builds without it.
+    local features
+    features="$(test_hooks_features "$parent" "$@")"
+    echo "test_hooks_features=${features:-none}"
+    if [ -n "$features" ]; then
+        cargo_args+=(--features "$features")
     fi
     local out rc
     set +e

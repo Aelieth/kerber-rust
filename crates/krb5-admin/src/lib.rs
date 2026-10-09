@@ -2,35 +2,45 @@
 //! kpasswd (RFC 3244 on 464), kprop / kpropd (dump v7 on 754),
 //! iprop (`IPROP_GET_UPDATES` / `FULL_RESYNC`, `krb5-iprop-pull`), and ktutil.
 //!
-//! The kadmind path enforces the KDC ACL. There is no C FFI.
+//! The kadmind path enforces the KDC ACL. kadmind serves kpasswd and kadm5 from
+//! MIT's one net-server loop (`krb5_kdc::net_server`) on the caller's thread
+//! ([`serve_kadmind`]). There is no C FFI.
 //!
-//! The public surface is the names this root re-exports. `kadm5`, `kprop`,
-//! and `listen` stay private.
+//! The public surface is the names this root re-exports. `kadm5`, `kadmind`,
+//! `kprop`, and `listen` stay private.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod getdate;
 mod kadm5;
+mod kadmin_cli;
+mod kadmind;
 mod kprop;
 mod listen;
 
 use krb5_crypto::EncryptionType;
-use krb5_kdc::{Acl, AdminOp, PrincipalStore, kadmin_flagspec};
+use krb5_kdc::{Acl, AdminOp, PrincipalStore};
 use krb5_protocol::{Keytab, ReplayCache, verify_ap_req};
 use krb5_types::PrincipalName;
 use thiserror::Error;
 
+pub use getdate::{DateError, get_date_rel, parse_date, parse_interval};
 pub use kadm5::{
-    IpropLast, IpropPull, Kadm5RpcError, Kadm5RpcSession, RpcCtx, changepw_acceptor,
+    IpropLast, IpropPull, Kadm5RpcSession, RpcCtx, RpcPeer, UnhandledRpc, changepw_acceptor,
     check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok,
     iprop_fullresync, iprop_pull, kadm5_handle_rpc, serve_kadm5_conn,
 };
+pub use kadmin_cli::{kadmin_local_main, ss_parse};
+pub use kadmind::{Kadmind, acceptor_keys, serve_kadmind, serve_kadmind_until};
 pub use kprop::{
-    IpropPoll, KpropAuth, KpropdConfig, iprop_poll_once, kprop_dump_bytes, kprop_dump_iprop,
-    kprop_expired_ap_req, kprop_load_bytes, kprop_send_dump, kprop_send_store,
-    kprop_send_store_iprop, kprop_sendauth, kpropd_handle_conn, kpropd_recv_dump, kpropd_recvauth,
-    kpropd_send_ack,
+    IpropPoll, KpropAuth, KpropdConfig, KpropdKeys, KpropdKeytabError, KpropdLookup,
+    iprop_dump_last, iprop_poll_once, iprop_snapshot, is_iprop_dump, kprop_dump_bytes,
+    kprop_dump_iprop, kprop_expired_ap_req, kprop_keytab_file, kprop_load_bytes,
+    kprop_load_with_stash, kprop_send_dump, kprop_send_store, kprop_send_store_iprop,
+    kprop_sendauth, kpropd_handle_conn, kpropd_keytab_keys, kpropd_recv_dump, kpropd_recvauth,
+    kpropd_send_ack, kpropd_server_name, kpropd_server_name_for, load_replica,
 };
 pub use listen::{
     KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, dispatch_kadmind, encode_kadmind_req,
@@ -38,48 +48,10 @@ pub use listen::{
     parse_kpasswd_rep, serve_kpasswd_tcp, serve_kpasswd_udp,
 };
 
-/// MIT `kadmin_startup` (`kadmin.c:455-536`): the `princstr` for `kadm5_init` is `-p` /
-/// explicit name, else `$USER/admin@REALM`, else the euid's passwd name `/admin@REALM`.
-#[must_use]
-pub fn kadmin_local_princstr(realm: &str, explicit: Option<&str>) -> String {
-    if let Some(p) = explicit.filter(|s| !s.is_empty()) {
-        return if p.contains('@') {
-            p.to_owned()
-        } else {
-            format!("{p}@{realm}")
-        };
-    }
-    let user = std::env::var("USER")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .or_else(euid_passwd_name)
-        .unwrap_or_else(|| "root".into());
-    format!("{user}/admin@{realm}")
-}
-
-fn euid_passwd_name() -> Option<String> {
-    let status = std::fs::read_to_string("/proc/self/status").ok()?;
-    let uid = status
-        .lines()
-        .find(|l| l.starts_with("Uid:"))?
-        .split_whitespace()
-        .nth(1)?;
-    let passwd = std::fs::read_to_string("/etc/passwd").ok()?;
-    for line in passwd.lines() {
-        let mut parts = line.split(':');
-        let name = parts.next()?;
-        let _pw = parts.next()?;
-        if parts.next()? == uid {
-            return Some(name.to_owned());
-        }
-    }
-    None
-}
-
 /// Load a kadm5 ACL file. `None` is MIT `kadmin.local` full privs for `actor`.
 ///
 /// The ACL is not a security boundary here: the actor is self-chosen via
-/// `-p` / `KRB5_KADMIN_PRINCIPAL`. A set-but-unreadable path is a hard error.
+/// `-p`. A set-but-unreadable path is a hard error.
 ///
 /// # Errors
 ///
@@ -89,45 +61,12 @@ fn euid_passwd_name() -> Option<String> {
 pub fn load_acl_file(actor: &str, path: Option<&std::path::Path>) -> Result<Acl, String> {
     match path {
         Some(p) => {
-            let t = std::fs::read_to_string(p).map_err(|e| format!("ACL {}: {e}", p.display()))?;
+            let bytes = std::fs::read(p).map_err(|e| format!("ACL {}: {e}", p.display()))?;
             let realm = actor.rsplit_once('@').map_or("", |(_, r)| r);
-            Acl::parse_with_realm(&t, realm).map_err(|e| e.to_string())
+            Acl::parse_bytes_with_realm(&bytes, realm).map_err(|e| e.to_string())
         }
         None => Acl::allow_admin(actor).map_err(|e| e.to_string()),
     }
-}
-
-/// Parsed `kadmin.local` verb operands (`-randkey` / `-pw` / `+attr`).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct KadminArgs {
-    /// Principal spec (no flags).
-    pub name: String,
-    /// `-randkey`.
-    pub randkey: bool,
-    /// `-norandkey` (ktadd).
-    pub norandkey: bool,
-    /// `-pw`.
-    pub pw: Option<String>,
-    /// `-policy`.
-    pub policy: Option<String>,
-    /// `ktadd -k`.
-    pub ktpath: Option<String>,
-    /// `+attr` bits.
-    pub attr_set: u32,
-    /// `-attr` bits.
-    pub attr_clear: u32,
-    /// `addprinc -e` keysalt list.
-    pub etypes: Vec<EncryptionType>,
-    /// `modprinc -unlock`.
-    pub unlock: bool,
-    /// `cpw -keepold`.
-    pub keepold: bool,
-    /// `modprinc -maxlife` seconds.
-    pub max_life: Option<u64>,
-    /// `modprinc -maxrenewlife` seconds.
-    pub max_renewable_life: Option<u64>,
-    /// `modprinc -expire` unix timestamp.
-    pub expire: Option<u32>,
 }
 
 /// Parsed `kadmin.local addpol` operands.
@@ -178,97 +117,6 @@ pub fn strdur(duration: i64) -> String {
         if neg { "-" } else { "" },
         if days == 1 { "day" } else { "days" },
     )
-}
-
-/// Parse flags after the verb. Unknown `-foo` / `+foo` is an error.
-///
-/// # Errors
-///
-/// A message when `-pw`, `-policy`, `-k`, `-e`, `-maxlife`, `-maxrenewlife`, or `-expire` has
-/// no value, `-e` names no known keysalt, a duration or `-expire` timestamp does not parse
-/// (`Invalid date specification`), a `-`/`+` flag is unknown, or there is no principal or more
-/// than one (`missing principal`, `extra argument`).
-pub fn parse_kadmin_args(parts: &[&str]) -> Result<KadminArgs, String> {
-    let mut out = KadminArgs::default();
-    let mut rest = Vec::new();
-    let mut i = 0;
-    while i < parts.len() {
-        let p = parts[i];
-        match p {
-            "-randkey" => out.randkey = true,
-            "-keepold" => out.keepold = true,
-            "-norandkey" => out.norandkey = true,
-            "-unlock" => out.unlock = true,
-            "-pw" => {
-                i += 1;
-                out.pw = Some(
-                    parts
-                        .get(i)
-                        .copied()
-                        .ok_or("-pw needs a password")?
-                        .to_owned(),
-                );
-            }
-            "-policy" => {
-                i += 1;
-                out.policy = Some(
-                    parts
-                        .get(i)
-                        .copied()
-                        .ok_or("-policy needs a name")?
-                        .to_owned(),
-                );
-            }
-            "-k" => {
-                i += 1;
-                out.ktpath = Some(parts.get(i).copied().ok_or("-k needs a path")?.to_owned());
-            }
-            "-e" => {
-                i += 1;
-                let spec = parts.get(i).copied().ok_or("-e needs a keysalt list")?;
-                out.etypes = krb5_crypto::parse_keysalt_list(spec);
-                if out.etypes.is_empty() {
-                    return Err(format!("-e unknown keysalt {spec}"));
-                }
-            }
-            "-maxlife" => {
-                i += 1;
-                let spec = parts.get(i).copied().ok_or("-maxlife needs a duration")?;
-                out.max_life = Some(u64::from(parse_pol_interval(spec)?));
-            }
-            "-maxrenewlife" => {
-                i += 1;
-                let spec = parts
-                    .get(i)
-                    .copied()
-                    .ok_or("-maxrenewlife needs a duration")?;
-                out.max_renewable_life = Some(u64::from(parse_pol_interval(spec)?));
-            }
-            "-expire" => {
-                i += 1;
-                let spec = parts.get(i).copied().ok_or("-expire needs a timestamp")?;
-                out.expire = Some(
-                    spec.parse()
-                        .map_err(|_| format!("Invalid date specification \"{spec}\"."))?,
-                );
-            }
-            s if let Some((set, clear)) = kadmin_flagspec(s) => {
-                out.attr_set |= set;
-                out.attr_clear |= clear;
-            }
-            s if s.starts_with('-') || s.starts_with('+') => {
-                return Err(format!("unknown flag {s}"));
-            }
-            other => rest.push(other),
-        }
-        i += 1;
-    }
-    match rest.len() {
-        0 => return Err("missing principal".into()),
-        1 => rest[0].clone_into(&mut out.name),
-        _ => return Err("extra argument".into()),
-    }
-    Ok(out)
 }
 
 /// Parse `addpol` flags. Last token is the policy name.
@@ -336,13 +184,9 @@ pub fn parse_policy_args(parts: &[&str]) -> Result<PolicyArgs, String> {
 }
 
 fn parse_pol_interval(s: &str) -> Result<u32, String> {
-    // MIT `parse_interval` (`kadmin.c:170-195`): krb5_string_to_deltat, else getdate.y
-    // (natural-language dates are the deferred getdate.y gap). The error text is
-    // parse_date's `Invalid date specification "%s".`.
-    krb5_types::deltat::parse(s)
-        .ok()
-        .and_then(|v| u32::try_from(v).ok())
-        .ok_or_else(|| format!("Invalid date specification \"{s}\"."))
+    getdate::parse_interval(s, getdate::now())
+        .map(getdate::low32)
+        .map_err(|e| e.to_string())
 }
 
 /// Admin error.
@@ -403,8 +247,6 @@ pub enum Op {
     Ktadd = 3,
     /// Change password (kpasswd / RFC 3244 style).
     Cpw = 4,
-    /// Dump (kdb5_util / kprop).
-    Dump = 5,
 }
 
 /// Authenticated admin session: AP-REQ must succeed and ACL is checked per op.
@@ -447,6 +289,18 @@ impl<'a> AdminSession<'a> {
 
     fn reload(&mut self) -> Result<(), Error> {
         self.store.reload_if_stale().map_err(Error::from)
+    }
+
+    /// `f` as one change to the database under its exclusive lock, from a fresh read to one
+    /// write ([`PrincipalStore::change`]), with the session's ACL and actor.
+    fn change<T>(
+        &mut self,
+        f: impl FnOnce(&mut PrincipalStore, &Acl, &str) -> Result<T, krb5_kdc::Error>,
+    ) -> Result<T, krb5_kdc::Error> {
+        let (acl, actor) = (self.acl, self.actor.as_str());
+        self.store
+            .change(|s| f(s, acl, actor))
+            .and_then(|done| done)
     }
 
     fn target_id(&self, name: &PrincipalName) -> String {
@@ -501,8 +355,7 @@ impl<'a> AdminSession<'a> {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .create_password_etypes(self.acl, &self.actor, name, password, etypes)
+        self.change(|s, acl, actor| s.create_password_etypes(acl, actor, name, password, etypes))
             .map_err(Error::from)
     }
 
@@ -528,8 +381,7 @@ impl<'a> AdminSession<'a> {
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .create_host_etypes(self.acl, &self.actor, name, etypes)
+        self.change(|s, acl, actor| s.create_host_etypes(acl, actor, name, etypes))
             .map_err(Error::from)
     }
 
@@ -553,8 +405,7 @@ impl<'a> AdminSession<'a> {
         policy: Option<&str>,
     ) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .create_etypes_pol(self.acl, &self.actor, name, password, etypes, policy)
+        self.change(|s, acl, actor| s.create_etypes_pol(acl, actor, name, password, etypes, policy))
             .map_err(Error::from)
     }
 
@@ -588,8 +439,7 @@ impl<'a> AdminSession<'a> {
         self.acl
             .check(&self.actor, AdminOp::ChangePassword, Some(&tid))
             .map_err(Error::from)?;
-        self.store
-            .chrand_etypes_keepold(name, etypes, u32::from(keepold), &self.actor)
+        self.change(|s, _, actor| s.chrand_etypes_keepold(name, etypes, u32::from(keepold), actor))
             .map(|_| ())
             .map_err(Error::from)
     }
@@ -611,8 +461,7 @@ impl<'a> AdminSession<'a> {
     /// `name` is not in the store; [`Error::Inner`] when the store cannot be reloaded or saved.
     pub fn delete(&mut self, name: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .delete(self.acl, &self.actor, name)
+        self.change(|s, acl, actor| s.delete(acl, actor, name))
             .map_err(Error::from)
     }
 
@@ -625,8 +474,7 @@ impl<'a> AdminSession<'a> {
     /// `old` is an alias stub, or the store cannot be reloaded or saved.
     pub fn rename(&mut self, old: &PrincipalName, new: &PrincipalName) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .rename(self.acl, &self.actor, old, new)
+        self.change(|s, acl, actor| s.rename(acl, actor, old, new))
             .map_err(Error::from)
     }
 
@@ -645,15 +493,16 @@ impl<'a> AdminSession<'a> {
         target_realm: &str,
     ) -> Result<(), Error> {
         self.reload()?;
-        self.store
-            .create_alias_in(alias, alias_realm, target, target_realm, &self.actor)
-            .map_err(|e| match e {
-                // MIT KADM5_DUP text (kadm5_create_alias / kdb_get_entry).
-                krb5_kdc::Error::AlreadyExists => {
-                    Error::Inner("Principal or policy already exists".into())
-                }
-                other => Error::from(other),
-            })
+        self.change(|s, _, actor| {
+            s.create_alias_in(alias, alias_realm, target, target_realm, actor)
+        })
+        .map_err(|e| match e {
+            // MIT KADM5_DUP text (kadm5_create_alias / kdb_get_entry).
+            krb5_kdc::Error::AlreadyExists => {
+                Error::Inner("Principal or policy already exists".into())
+            }
+            other => Error::from(other),
+        })
     }
 
     /// Over-the-wire ktadd (ACL `e` / extract).
@@ -750,9 +599,10 @@ impl<'a> AdminSession<'a> {
                 .map_err(Error::from)?;
         }
         let realm = self.store.realm().to_owned();
-        self.store
-            .set_password_etypes_keepold_n_in(name, &realm, password, 0, &self.actor, etypes)
-            .map_err(Error::from)
+        self.change(|s, _, actor| {
+            s.set_password_etypes_keepold_n_in(name, &realm, password, 0, actor, etypes)
+        })
+        .map_err(Error::from)
     }
 
     /// Realm of the bound store.
@@ -767,19 +617,11 @@ impl<'a> AdminSession<'a> {
         self.store.ids()
     }
 
-    /// `listprincs [glob]` with MIT `glob_to_regexp` semantics (implicit `@*`).
+    /// `listprincs [glob]` with MIT `glob_to_regexp` semantics (implicit `@*`); an empty
+    /// expression lists nothing, as `^@.*$` matches no principal name.
     #[must_use]
     pub fn list_ids_glob(&self, glob: Option<&str>) -> Vec<String> {
-        let ids = self.store.ids();
-        match glob {
-            Some(g) if g != "*" && !g.is_empty() => {
-                let pat = crate::kadm5::glob_expand(g, true);
-                ids.into_iter()
-                    .filter(|id| crate::kadm5::glob_is_match(pat.as_bytes(), id.as_bytes()))
-                    .collect()
-            }
-            _ => ids,
-        }
+        crate::kadm5::principals_matching(self.store, glob)
     }
 
     /// `getprinc` display id.
@@ -834,8 +676,11 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .apply_admin_fields_in(
+        let acl = self.acl;
+        let restrictions = acl.restrictions(&self.actor, Some(&tid));
+        // MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
+        self.change(|s, _, actor| {
+            s.apply_admin_fields_in(
                 name,
                 &realm,
                 krb5_kdc::AdminFields {
@@ -847,15 +692,14 @@ impl<'a> AdminSession<'a> {
                     clear_policy: false,
                     max_renewable_life: None,
                 },
-                &self.actor,
-            )
-            .map_err(Error::from)?;
-        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
-            self.store
-                .impose_acl_restrictions(name, rs)
-                .map_err(Error::from)?;
-        }
-        Ok(())
+                actor,
+            )?;
+            if let Some(rs) = restrictions {
+                s.impose_acl_restrictions(name, rs)?;
+            }
+            Ok(())
+        })
+        .map_err(Error::from)
     }
 
     /// `modprinc -expire`.
@@ -875,8 +719,8 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .apply_admin_fields_in(
+        self.change(|s, _, actor| {
+            s.apply_admin_fields_in(
                 name,
                 &realm,
                 krb5_kdc::AdminFields {
@@ -888,9 +732,10 @@ impl<'a> AdminSession<'a> {
                     clear_policy: false,
                     max_renewable_life: None,
                 },
-                &self.actor,
+                actor,
             )
-            .map_err(Error::from)
+        })
+        .map_err(Error::from)
     }
 
     /// `modprinc -unlock`.
@@ -906,8 +751,7 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .admin_unlock_in(name, &realm, &self.actor)
+        self.change(|s, _, actor| s.admin_unlock_in(name, &realm, actor))
             .map_err(Error::from)
     }
 
@@ -929,8 +773,11 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .apply_admin_fields_in(
+        let acl = self.acl;
+        let restrictions = acl.restrictions(&self.actor, Some(&tid));
+        // MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
+        self.change(|s, _, actor| {
+            s.apply_admin_fields_in(
                 name,
                 &realm,
                 krb5_kdc::AdminFields {
@@ -942,15 +789,14 @@ impl<'a> AdminSession<'a> {
                     clear_policy: false,
                     max_renewable_life,
                 },
-                &self.actor,
-            )
-            .map_err(Error::from)?;
-        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
-            self.store
-                .impose_acl_restrictions(name, rs)
-                .map_err(Error::from)?;
-        }
-        Ok(())
+                actor,
+            )?;
+            if let Some(rs) = restrictions {
+                s.impose_acl_restrictions(name, rs)?;
+            }
+            Ok(())
+        })
+        .map_err(Error::from)
     }
 
     /// `modprinc -policy`.
@@ -966,8 +812,11 @@ impl<'a> AdminSession<'a> {
             .check(&self.actor, AdminOp::Modify, Some(&tid))
             .map_err(Error::from)?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .apply_admin_fields_in(
+        let acl = self.acl;
+        let restrictions = acl.restrictions(&self.actor, Some(&tid));
+        // MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:601-689`): the fields are set on the entry, then one put writes it.
+        self.change(|s, _, actor| {
+            s.apply_admin_fields_in(
                 name,
                 &realm,
                 krb5_kdc::AdminFields {
@@ -979,15 +828,14 @@ impl<'a> AdminSession<'a> {
                     clear_policy: false,
                     max_renewable_life: None,
                 },
-                &self.actor,
-            )
-            .map_err(Error::from)?;
-        if let Some(rs) = self.acl.restrictions(&self.actor, Some(&tid)) {
-            self.store
-                .impose_acl_restrictions(name, rs)
-                .map_err(Error::from)?;
-        }
-        Ok(())
+                actor,
+            )?;
+            if let Some(rs) = restrictions {
+                s.impose_acl_restrictions(name, rs)?;
+            }
+            Ok(())
+        })
+        .map_err(Error::from)
     }
 
     /// `addpol`.
@@ -1005,14 +853,14 @@ impl<'a> AdminSession<'a> {
     /// [`Error::Inner`] with the MIT text of `KADM5_BAD_KEYSALTS` (a tab in `-allowedkeysalts`),
     /// `KADM5_DUP` (the policy exists), `KADM5_BAD_POLICY` (an empty or non-printable name), or
     /// `KADM5_BAD_MIN_PASS_LIFE`, `KADM5_BAD_LENGTH`, `KADM5_BAD_CLASS`, or `KADM5_BAD_HISTORY`
-    /// (an explicit value outside MIT's bounds).
+    /// (an explicit value outside MIT's bounds), or when the store cannot be saved.
     pub fn add_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
         let exists = self.store.policies().contains_key(&a.name);
         let pol =
             crate::kadm5::create_policy_local(exists, a).map_err(|t| Error::Inner(t.to_owned()))?;
-        self.store.put_policy(pol);
-        Ok(())
+        self.change(|s, _, _| s.put_policy_and_save(pol))
+            .map_err(Error::from)
     }
 
     /// `modpol` on the merged record.
@@ -1024,7 +872,7 @@ impl<'a> AdminSession<'a> {
     /// [`Error::Inner`] `Policy does not exist` when no policy is named `a.name`, or with the MIT
     /// text of `KADM5_BAD_KEYSALTS` (a tab in `-allowedkeysalts`) or `KADM5_BAD_MIN_PASS_LIFE`,
     /// `KADM5_BAD_LENGTH`, `KADM5_BAD_CLASS`, or `KADM5_BAD_HISTORY` (a merged value outside
-    /// MIT's bounds).
+    /// MIT's bounds), or when the store cannot be saved.
     pub fn modify_policy_ent(&mut self, a: &PolicyArgs) -> Result<(), Error> {
         let _ = self.reload();
         let existing = self
@@ -1035,8 +883,8 @@ impl<'a> AdminSession<'a> {
             .ok_or_else(|| Error::Inner("Policy does not exist".into()))?;
         let pol = crate::kadm5::modify_policy_local(&existing, a)
             .map_err(|t| Error::Inner(t.to_owned()))?;
-        self.store.put_policy(pol);
-        Ok(())
+        self.change(|s, _, _| s.put_policy_and_save(pol))
+            .map_err(Error::from)
     }
 
     /// `delpol`.
@@ -1047,7 +895,8 @@ impl<'a> AdminSession<'a> {
     /// be saved.
     pub fn delete_policy(&mut self, name: &str) -> Result<(), Error> {
         let _ = self.reload();
-        self.store.delete_policy(name).map_err(Error::from)
+        self.change(|s, _, _| s.delete_policy(name))
+            .map_err(Error::from)
     }
 
     /// `listpols`.
@@ -1058,23 +907,11 @@ impl<'a> AdminSession<'a> {
         n
     }
 
-    /// `listpols [glob]` with MIT `glob_to_regexp` semantics (no realm append).
+    /// `listpols [glob]` with MIT `glob_to_regexp` semantics (no realm append); an empty
+    /// expression lists nothing, as `^$` matches no policy name.
     #[must_use]
     pub fn list_policies_glob(&self, glob: Option<&str>) -> Vec<String> {
-        let mut n: Vec<String> = match glob {
-            Some(g) if g != "*" && !g.is_empty() => {
-                let pat = crate::kadm5::glob_expand(g, false);
-                self.store
-                    .policies()
-                    .keys()
-                    .filter(|k| crate::kadm5::glob_is_match(pat.as_bytes(), k.as_bytes()))
-                    .cloned()
-                    .collect()
-            }
-            _ => self.store.policies().keys().cloned().collect(),
-        };
-        n.sort();
-        n
+        crate::kadm5::policies_matching(self.store, glob)
     }
 
     /// `getpol`, durations via `strdur`.
@@ -1119,8 +956,7 @@ impl<'a> AdminSession<'a> {
     ) -> Result<(), Error> {
         self.reload()?;
         let realm = self.store.realm().to_owned();
-        self.store
-            .set_string_in(name, &realm, key, Some(val), &self.actor)
+        self.change(|s, _, actor| s.set_string_in(name, &realm, key, Some(val), actor))
             .map_err(Error::from)
     }
 
@@ -1171,55 +1007,6 @@ mod tests {
     use super::*;
 
     use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
-    use krb5_kdc::{KDB_LOCKDOWN_KEYS, KDB_OK_TO_AUTH_AS_DELEGATE, KDB_REQUIRES_PRE_AUTH};
-
-    #[test]
-    fn parse_kadmin_args_flags() {
-        let a = parse_kadmin_args(&["-randkey", "svc"]).unwrap();
-        assert!(a.randkey);
-        assert_eq!(a.name, "svc");
-        let a = parse_kadmin_args(&["+requires_preauth", "user"]).unwrap();
-        assert_eq!(a.attr_set, KDB_REQUIRES_PRE_AUTH);
-        assert_eq!(a.name, "user");
-        assert!(parse_kadmin_args(&["-bogus", "user"]).is_err());
-        assert!(parse_kadmin_args(&["-randkey"]).is_err());
-        let a = parse_kadmin_args(&["-k", "/tmp/x.keytab", "-norandkey", "host/x"]).unwrap();
-        assert_eq!(a.ktpath.as_deref(), Some("/tmp/x.keytab"));
-        assert!(a.norandkey);
-        assert_eq!(a.name, "host/x");
-        let a = parse_kadmin_args(&["+lockdown_keys", "lockee"]).unwrap();
-        assert_eq!(a.attr_set, KDB_LOCKDOWN_KEYS);
-        let a = parse_kadmin_args(&["+ok_to_auth_as_delegate", "host/x"]).unwrap();
-        assert_eq!(a.attr_set, KDB_OK_TO_AUTH_AS_DELEGATE);
-        let a = parse_kadmin_args(&["-e", "rc4-hmac:normal", "-pw", "x", "rc4user"]).unwrap();
-        assert_eq!(a.etypes, vec![EncryptionType::Rc4Hmac]);
-        assert_eq!(a.name, "rc4user");
-        let a = parse_kadmin_args(&["-unlock", "locked"]).unwrap();
-        assert!(a.unlock);
-        let a = parse_kadmin_args(&["-maxrenewlife", "1d", "user"]).unwrap();
-        assert_eq!(a.max_renewable_life, Some(86_400));
-        let a = parse_kadmin_args(&["-maxlife", "2h", "user"]).unwrap();
-        assert_eq!(a.max_life, Some(7_200));
-        let a = parse_kadmin_args(&[
-            "-randkey",
-            "-keepold",
-            "-e",
-            "aes128-cts-hmac-sha1-96:normal",
-            "krbtgt/KERBER.TEST",
-        ])
-        .unwrap();
-        assert!(a.randkey && a.keepold);
-        assert_eq!(a.etypes, vec![EncryptionType::Aes128CtsHmacSha196]);
-        let a = parse_kadmin_args(&["+0x1ffffffff", "wide"]).unwrap();
-        assert_eq!(a.attr_set, 0xffff_ffff);
-        assert_eq!(a.name, "wide");
-        let a = parse_kadmin_args(&["-allow_renewable", "user"]).unwrap();
-        assert_eq!(a.attr_set, krb5_kdc::KDB_DISALLOW_RENEWABLE);
-        let a = parse_kadmin_args(&["+allow_renewable", "user"]).unwrap();
-        assert_eq!(a.attr_clear, krb5_kdc::KDB_DISALLOW_RENEWABLE);
-        let a = parse_kadmin_args(&["-expire", "1", "expiredsvc"]).unwrap();
-        assert_eq!(a.expire, Some(1));
-    }
 
     #[test]
     fn parse_policy_args_and_strdur() {
@@ -1273,18 +1060,6 @@ mod tests {
         assert!(
             ks.contains("Allowed key/salt types: aes256-cts:normal"),
             "{ks}"
-        );
-    }
-
-    #[test]
-    fn kadmin_local_princstr_canonicalizes_explicit_like_parse_name() {
-        assert_eq!(
-            kadmin_local_princstr("KERBER.TEST", Some("admin/admin")),
-            "admin/admin@KERBER.TEST"
-        );
-        assert_eq!(
-            kadmin_local_princstr("KERBER.TEST", Some("joe/admin@OTHER.TEST")),
-            "joe/admin@OTHER.TEST"
         );
     }
 }

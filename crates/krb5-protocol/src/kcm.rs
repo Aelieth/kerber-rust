@@ -8,8 +8,9 @@
 //! (same as MIT `kinit`). A second principal uses GEN_NEW (kcm-gate)
 //! rather than MIT `krb5_cc_new_unique` on a plain `KCM:` residual.
 
-use std::env;
+use std::ffi::OsStr;
 use std::io::{self, Read, Write};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
@@ -42,19 +43,44 @@ const KRB5_CC_NOSUPP: i32 = -1_765_328_137;
 const KRB5_CC_IO: i32 = -1_765_328_183;
 const KRB5_FCC_INTERNAL: i32 = -1_765_328_188;
 const KRB5_FCC_NOFILE: i32 = -1_765_328_189;
+// MIT `KRB5_KCM_NO_SERVER` (`k5e1_err.et:44-44`): the code for no KCM daemon on the socket.
+const KRB5_KCM_NO_SERVER: i32 = -1_750_600_181;
 
-/// Default Heimdal/sssd-kcm socket (MIT `DEFAULT_KCM_SOCKET_PATH`).
+/// The KCM socket when `kcm_socket` names none.
+/// MIT `DEFAULT_KCM_SOCKET_PATH` (`kcm.h:43-43`): the path.
 pub const KCM_SOCKET_DEFAULT: &str = "/var/run/.heim_org.h5l.kcm-socket";
+
+/// `sizeof(struct sockaddr_un.sun_path)` on Linux.
+const SUN_PATH_LEN: usize = 108;
 
 struct KcmIo {
     stream: UnixStream,
 }
 
 impl KcmIo {
+    /// MIT `kcmio_unix_socket_connect` (`cc_kcm.c:313-330`): a `kcm_socket` of `-`, or a socket
+    /// that is not there, is `KRB5_KCM_NO_SERVER`; any other failure to connect is its errno.
+    /// The path is cut to `sun_path`, as MIT's `strlcpy` cuts it.
     fn connect() -> io::Result<Self> {
         let path = kcm_socket_path();
-        let stream = UnixStream::connect(&path)
-            .map_err(|e| io::Error::new(e.kind(), format!("KCM socket {}: {e}", path.display())))?;
+        if path.as_os_str() == "-" {
+            return Err(kcm_status(KRB5_KCM_NO_SERVER));
+        }
+        let bytes = path.as_os_str().as_bytes();
+        let stream = if bytes.is_empty() {
+            connect_unnamed()
+        } else {
+            UnixStream::connect(Path::new(OsStr::from_bytes(
+                &bytes[..bytes.len().min(SUN_PATH_LEN - 1)],
+            )))
+        }
+        .map_err(|e| {
+            if e.kind() == io::ErrorKind::NotFound {
+                kcm_status(KRB5_KCM_NO_SERVER)
+            } else {
+                e
+            }
+        })?;
         stream.set_read_timeout(Some(std::time::Duration::from_secs(10)))?;
         stream.set_write_timeout(Some(std::time::Duration::from_secs(10)))?;
         Ok(Self { stream })
@@ -116,6 +142,7 @@ impl std::fmt::Display for KcmStatus {
                 write!(f, "KCM operation unsupported ({})", self.0)
             }
             KRB5_CC_IO => write!(f, "KCM I/O ({})", self.0),
+            KRB5_KCM_NO_SERVER => f.write_str("No KCM server found"),
             c => write!(f, "KCM error {c}"),
         }
     }
@@ -134,6 +161,12 @@ fn kcm_status(code: i32) -> io::Error {
 
 fn kcm_code(err: &io::Error) -> Option<i32> {
     err.get_ref()?.downcast_ref::<KcmStatus>().map(|s| s.0)
+}
+
+/// Whether `err` is MIT's `KRB5_KCM_NO_SERVER`: no KCM daemon on the socket.
+#[must_use]
+pub fn kcm_no_server(err: &io::Error) -> bool {
+    kcm_code(err) == Some(KRB5_KCM_NO_SERVER)
 }
 
 fn unsupported(err: &io::Error) -> bool {
@@ -173,36 +206,49 @@ thread_local! {
         const { std::cell::RefCell::new(None) };
 }
 
-/// Socket path: `KCM_SOCKET`, else `[libdefaults] kcm_socket`, else the
-/// Heimdal default (and `/run` twin).
+/// The KCM socket: `[libdefaults] kcm_socket`, else [`KCM_SOCKET_DEFAULT`]; `-` names none.
+/// MIT `kcmio_unix_socket_connect` (`cc_kcm.c:308-310`): the profile's `kcm_socket`, with
+/// `DEFAULT_KCM_SOCKET_PATH` its default; no environment variable is read.
 #[must_use]
 pub fn kcm_socket_path() -> PathBuf {
     #[cfg(test)]
     if let Some(p) = SOCKET_OVERRIDE.with(|s| s.borrow().clone()) {
         return p;
     }
-    resolve_kcm_socket(
-        env::var("KCM_SOCKET").ok().filter(|s| !s.is_empty()),
-        krb5_config::load_krb5_conf().and_then(|c| c.kcm_socket),
-    )
+    socket_path_from(krb5_config::load_krb5_conf().and_then(|c| c.kcm_socket))
 }
 
-fn resolve_kcm_socket(env_path: Option<String>, conf_path: Option<String>) -> PathBuf {
-    if let Some(p) = env_path {
-        return PathBuf::from(p);
+fn socket_path_from(kcm_socket: Option<String>) -> PathBuf {
+    PathBuf::from(kcm_socket.unwrap_or_else(|| KCM_SOCKET_DEFAULT.to_owned()))
+}
+
+/// The connect MIT makes for an empty value, `kcm_socket = ""`: its `sun_path` all zero, given
+/// with the whole `sizeof(addr)`, is the abstract socket named by 107 NUL bytes, which nothing
+/// binds, so the connect is refused (`ECONNREFUSED`); where there are no abstract sockets, that
+/// refusal is returned as is.
+/// MIT `kcmio_unix_socket_connect` (`cc_kcm.c:324-328`): `strlcpy` of the path into a zeroed
+/// address, then `connect` with `sizeof(addr)`.
+fn connect_unnamed() -> io::Result<UnixStream> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::linux::net::SocketAddrExt as _;
+        let addr = std::os::unix::net::SocketAddr::from_abstract_name([0u8; SUN_PATH_LEN - 1])?;
+        UnixStream::connect_addr(&addr)
     }
-    if let Some(p) = conf_path {
-        return PathBuf::from(p);
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err(io::Error::from(io::ErrorKind::ConnectionRefused))
     }
-    let default = Path::new(KCM_SOCKET_DEFAULT);
-    if default.exists() {
-        return default.to_path_buf();
-    }
-    let run = Path::new("/run/.heim_org.h5l.kcm-socket");
-    if run.exists() {
-        return run.to_path_buf();
-    }
-    default.to_path_buf()
+}
+
+/// A connection to the KCM daemon, made and closed: what MIT's `kcm_resolve` checks first.
+/// MIT `kcm_resolve` (`cc_kcm.c:750-752`): a cache name resolves only with a KCM daemon to ask.
+///
+/// # Errors
+///
+/// As the connection's: `KRB5_KCM_NO_SERVER` ([`kcm_no_server`]) or the connect's errno.
+pub fn kcm_reachable() -> io::Result<()> {
+    KcmIo::connect().map(drop)
 }
 
 fn request_frame(opcode: u16, args: &[u8]) -> Vec<u8> {
@@ -360,6 +406,37 @@ pub fn kcm_store_keep_default(residual: &str, cc: &FileCcache) -> io::Result<()>
     kcm_put(residual, cc, false)
 }
 
+/// The collection's primary cache name.
+/// MIT `k5_kcm_primary_name` (`cc_kcm.c:770-793`): the GET_DEFAULT_CACHE answer.
+///
+/// # Errors
+///
+/// The OS error when the KCM socket cannot be connected or a read or write on it fails or
+/// times out; `ErrorKind::NotFound` or `ErrorKind::Other` for a nonzero status;
+/// `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 name.
+pub fn kcm_primary_name() -> io::Result<String> {
+    let mut io = KcmIo::connect()?;
+    cstring(&io.call(OP_GET_DEFAULT_CACHE, &[])?)
+}
+
+/// Add `creds` to `KCM:residual` (empty is the primary), leaving its other credentials.
+/// MIT `kcm_store` (`cc_kcm.c:865-875`): one STORE request per credential.
+///
+/// # Errors
+///
+/// The OS error when the KCM socket cannot be connected or a read or write on it fails or
+/// times out; `ErrorKind::NotFound` (`KRB5_FCC_NOFILE`) or `ErrorKind::Other` for a nonzero
+/// status on the default-cache lookup or a STORE; `ErrorKind::InvalidData` for a reply over
+/// 10 MiB or a non-UTF-8 cache name.
+pub fn kcm_store_creds(residual: &str, creds: &[CcacheCred]) -> io::Result<()> {
+    let mut io = KcmIo::connect()?;
+    let name = default_or(&mut io, residual)?;
+    for c in creds {
+        store_one(&mut io, &name, c)?;
+    }
+    Ok(())
+}
+
 fn kcm_put(residual: &str, cc: &FileCcache, set_default: bool) -> io::Result<()> {
     let mut io = KcmIo::connect()?;
     let name = default_or_create(&mut io, residual)?;
@@ -438,29 +515,37 @@ pub fn kcm_cache_names() -> io::Result<Vec<String>> {
     Ok(names)
 }
 
-/// `kswitch -p` over the KCM collection.
+/// The default principal of the cache `name`.
+/// MIT `kcm_get_princ` (`cc_kcm.c:932-954`): a GET_PRINCIPAL request; a cache that is not
+/// initialized is `KRB5_FCC_NOFILE`.
 ///
 /// # Errors
 ///
-/// `ErrorKind::NotFound` when no cache's principal is `princ`; the OS error when the KCM
-/// socket cannot be connected or a read or write on it fails or times out; `ErrorKind::Other`
-/// for a nonzero status on the cache listing other than `KRB5_FCC_NOFILE`, and
-/// `ErrorKind::NotFound` or `ErrorKind::Other` for one on the switch; `ErrorKind::InvalidData`
-/// for a reply over 10 MiB, a bad cache UUID list, or a non-UTF-8 cache name.
-pub fn kcm_switch_principal(princ: &str) -> io::Result<()> {
+/// The OS error when the KCM socket cannot be connected or a read or write on it fails or
+/// times out; `ErrorKind::NotFound` (`KRB5_FCC_NOFILE`, also for an empty answer) or
+/// `ErrorKind::Other` for a nonzero status; `ErrorKind::InvalidData` or `UnexpectedEof` for a
+/// malformed principal.
+pub fn kcm_principal(name: &str) -> io::Result<(Realm, PrincipalName)> {
     let mut io = KcmIo::connect()?;
-    for name in kcm_cache_names()? {
-        let Ok(primary) = get_principal(&mut io, &name) else {
-            continue;
-        };
-        if FileCcache::format_principal(&primary.0, &primary.1) == princ {
-            return io.call(OP_SET_DEFAULT_CACHE, &zname(&name)).map(|_| ());
-        }
+    let raw = io.call(OP_GET_PRINCIPAL, &zname(name))?;
+    if raw.is_empty() {
+        return Err(kcm_status(KRB5_FCC_NOFILE));
     }
-    Err(io::Error::new(
-        io::ErrorKind::NotFound,
-        format!("no cache for {princ}"),
-    ))
+    let mut i = 0;
+    unmarshal_princ(&raw, &mut i)
+}
+
+/// A new cache in the collection, not yet initialized.
+/// MIT `kcm_gen_new` (`cc_kcm.c:795-822`): the GEN_NEW answer names it.
+///
+/// # Errors
+///
+/// The OS error when the KCM socket cannot be connected or a read or write on it fails or
+/// times out; `ErrorKind::NotFound` or `ErrorKind::Other` for a nonzero status;
+/// `ErrorKind::InvalidData` for a reply over 10 MiB or a non-UTF-8 name.
+pub fn kcm_gen_new() -> io::Result<String> {
+    let mut io = KcmIo::connect()?;
+    cstring(&io.call(OP_GEN_NEW, &[])?)
 }
 
 #[cfg(test)]
@@ -594,18 +679,43 @@ mod tests {
         assert_eq!(&f[8..], args.as_slice());
     }
 
+    /// Live MIT 1.22.2 (cc_kcm.c): `kcm_socket` names the socket, else the compiled default.
     #[test]
-    fn kcm_socket_env_overrides_conf_then_default() {
-        let env = resolve_kcm_socket(Some("/tmp/env.sock".into()), Some("/tmp/conf.sock".into()));
-        assert_eq!(env, PathBuf::from("/tmp/env.sock"));
-        let conf = resolve_kcm_socket(None, Some("/tmp/conf.sock".into()));
-        assert_eq!(conf, PathBuf::from("/tmp/conf.sock"));
-        let def = resolve_kcm_socket(None, None);
-        assert!(
-            def.ends_with(".heim_org.h5l.kcm-socket"),
-            "default socket, got {}",
-            def.display()
+    fn kcm_socket_is_the_relation_else_the_default() {
+        assert_eq!(
+            socket_path_from(Some("/tmp/conf.sock".into())),
+            PathBuf::from("/tmp/conf.sock")
         );
+        assert_eq!(
+            socket_path_from(None),
+            PathBuf::from("/var/run/.heim_org.h5l.kcm-socket")
+        );
+    }
+
+    /// Live MIT 1.22.2: `kcm_socket = -` and a socket that is not there are "No KCM server
+    /// found"; a path that is no socket, or none, is its errno.
+    #[test]
+    fn no_socket_is_no_kcm_server() {
+        // A socket that is not there: a short path under /proc/self, which never holds this file. A
+        // scratch path can pass sun_path's 107 bytes and be cut, as MIT cuts it, onto its directory,
+        // which connects as "Connection refused".
+        for path in ["-".into(), PathBuf::from("/proc/self/kerber-no-kcm.sock")] {
+            SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(path));
+            let e = kcm_primary_name().unwrap_err();
+            assert!(kcm_no_server(&e), "{e}");
+            assert_eq!(e.to_string(), "No KCM server found");
+        }
+        // A path that is no socket, short on every host for the same reason.
+        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(PathBuf::from("/dev/null")));
+        let e = kcm_primary_name().unwrap_err();
+        assert!(!kcm_no_server(&e), "{e}");
+        assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused);
+        // Live MIT 1.22.2: an empty value (`kcm_socket = ""`) is "Connection refused" too.
+        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(PathBuf::new()));
+        let e = kcm_primary_name().unwrap_err();
+        assert!(!kcm_no_server(&e), "{e}");
+        assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused);
+        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = None);
     }
 
     #[test]
@@ -644,5 +754,92 @@ mod tests {
         assert_eq!(list[0].key.contents, cred.key.contents);
         assert_eq!(list[0].ticket, cred.ticket);
         assert_eq!(list[0].endtime, 20);
+    }
+
+    /// `kcm_load` returns a stored krbtgt, which is the armor TGT `-T KCM:` reads.
+    #[test]
+    fn kcm_load_returns_an_armor_tgt() {
+        use std::os::unix::net::UnixListener;
+        use std::thread;
+
+        let realm = krb5_types::ascii("KERBER.TEST");
+        let client = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["alice"]);
+        let cred = CcacheCred {
+            client: (realm.clone(), client.clone()),
+            server: (realm.clone(), PrincipalName::krbtgt("KERBER.TEST")),
+            key: crate::CcacheKeyblock {
+                etype: 18,
+                contents: vec![0x11; 32],
+            },
+            authtime: 10,
+            starttime: 10,
+            endtime: 20,
+            renew_till: 0,
+            is_skey: 0,
+            ticket_flags: 0x4000_0000,
+            addresses: Vec::new(),
+            authdata: Vec::new(),
+            ticket: vec![0x61, 0x03, 1, 2, 3],
+            second_ticket: Vec::new(),
+        };
+        let princ = marshal_primary(&realm, &client);
+        let raw = marshal_one_cred(&cred);
+        let mut list = 1u32.to_be_bytes().to_vec();
+        list.extend_from_slice(&u32::try_from(raw.len()).unwrap().to_be_bytes());
+        list.extend_from_slice(&raw);
+        let sock = krb5_testkit::socket_path(&krb5_testkit::scratch_dir("kcm-armor"), "s");
+        let path = sock.path().to_path_buf();
+        let _ = std::fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let th = thread::spawn(move || {
+            let Ok((mut s, _)) = listener.accept() else {
+                return;
+            };
+            loop {
+                let mut hdr = [0u8; 4];
+                if s.read_exact(&mut hdr).is_err() {
+                    break;
+                }
+                let n = u32::from_be_bytes(hdr) as usize;
+                let mut payload = vec![0u8; n];
+                if s.read_exact(&mut payload).is_err() {
+                    break;
+                }
+                if payload.len() < 4 {
+                    break;
+                }
+                let op = u16::from_be_bytes([payload[2], payload[3]]);
+                let empty: &[u8] = &[];
+                let body = if op == OP_GET_PRINCIPAL {
+                    princ.as_slice()
+                } else if op == OP_GET_CRED_LIST {
+                    list.as_slice()
+                } else {
+                    empty
+                };
+                let mut framed = Vec::new();
+                let mut inner = 0i32.to_be_bytes().to_vec();
+                inner.extend_from_slice(body);
+                framed.extend_from_slice(&u32::try_from(inner.len()).unwrap().to_be_bytes());
+                framed.extend_from_slice(&0i32.to_be_bytes());
+                framed.extend_from_slice(&inner);
+                if s.write_all(&framed).is_err() {
+                    break;
+                }
+            }
+        });
+        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(path.clone()));
+        let loaded = kcm_load("arm");
+        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = None);
+        drop(th.join());
+        let _ = std::fs::remove_file(&path);
+        drop(sock);
+        let cc = loaded.unwrap();
+        assert!(
+            cc.creds
+                .iter()
+                .any(|c| c.server.1.components_joined().starts_with("krbtgt/")),
+            "KCM armor cache must hold a TGT"
+        );
     }
 }

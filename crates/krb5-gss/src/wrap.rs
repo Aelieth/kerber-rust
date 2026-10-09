@@ -187,16 +187,15 @@ pub(super) fn mit_shaped_wrap_flags(
 }
 
 impl GssContext {
-    pub(super) fn recv_key(&self, flags: u8) -> Result<&ProtocolKey, Error> {
-        if flags & FLAG_ACCEPTOR_SUBKEY != 0 {
-            self.acceptor_subkey
-                .as_ref()
-                .ok_or_else(|| Error::Inner("gss acceptor subkey".into()))
-        } else {
-            Ok(&self.session)
+    /// MIT `unwrap_v3` (`unwrap.c:307-313`): a token flagged with the acceptor subkey is read under it when this context has one, any other under the initiator subkey.
+    pub(super) fn recv_key(&self, flags: u8) -> &ProtocolKey {
+        match &self.acceptor_subkey {
+            Some(k) if flags & FLAG_ACCEPTOR_SUBKEY != 0 => k,
+            _ => &self.session,
         }
     }
 
+    /// MIT `gss_krb5int_make_seal_token_v3` (`k5sealv3.c:94-100`): once there is an acceptor subkey, both sides send every token under it.
     pub(super) fn send_key(&self) -> (&ProtocolKey, u8) {
         if let Some(k) = &self.acceptor_subkey {
             (k, FLAG_ACCEPTOR_SUBKEY)
@@ -224,9 +223,9 @@ impl GssContext {
     /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
     /// wrap token, has a bad filler, has an EC or length that does not fit its checksum, or
     /// decrypts to a header that differs from its own; [`Error::Integrity`] when the token comes
-    /// from this side or its checksum or seal does not verify; [`Error::Inner`] when it names an
-    /// acceptor subkey this context lacks or its sealed payload is too short to decrypt;
-    /// [`Error::Sequence`] when its sequence number is a replay or outside the receive window.
+    /// from this side or its checksum or seal does not verify under the key its flags select;
+    /// [`Error::Inner`] when its sealed payload is too short to decrypt; [`Error::Sequence`] when
+    /// its sequence number is a replay or outside the receive window.
     pub fn unwrap(&mut self, token: &[u8]) -> Result<Vec<u8>, Error> {
         Ok(self.unwrap_v3(token)?.0)
     }
@@ -242,9 +241,9 @@ impl GssContext {
     /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
     /// wrap token, has a bad filler, has an EC or length that does not fit its checksum, or
     /// decrypts to a header that differs from its own; [`Error::Integrity`] when the token comes
-    /// from this side or its checksum or seal does not verify; [`Error::Inner`] when it names an
-    /// acceptor subkey this context lacks or its sealed payload is too short to decrypt;
-    /// [`Error::Sequence`] when its sequence number is a replay or outside the receive window.
+    /// from this side or its checksum or seal does not verify under the key its flags select;
+    /// [`Error::Inner`] when its sealed payload is too short to decrypt; [`Error::Sequence`] when
+    /// its sequence number is a replay or outside the receive window.
     pub fn unwrap_conf(&mut self, token: &[u8]) -> Result<(Vec<u8>, bool), Error> {
         self.unwrap_v3(token)
     }
@@ -273,7 +272,7 @@ impl GssContext {
         let seq = u64::from_be_bytes(header[8..16].try_into().map_err(|_| Error::Truncated)?);
         let payload = rotate_rrc(&inner[16..], rrc);
         let usage = seal_usage(!self.initiator);
-        let key = self.recv_key(flags)?;
+        let key = self.recv_key(flags);
         let conf = flags & FLAG_SEALED != 0;
         let msg = if flags & FLAG_SEALED == 0 {
             let ctype = key.etype().checksum_type();
@@ -322,13 +321,15 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// [`Error::Inner`] when the keyed checksum under the session key cannot be computed.
+    /// [`Error::Inner`] when the keyed checksum under the send key cannot be computed.
     pub fn wrap_integ(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = seal_usage(self.initiator);
+        let (key, extra) = self.send_key();
         let mut header = wrap_header(self.initiator, false, self.send_seq);
+        header[2] |= extra;
         let mut to_ck = plaintext.to_vec();
         to_ck.extend_from_slice(&header);
-        let mac = checksum(&self.session, usage, &to_ck)?;
+        let mac = checksum(key, usage, &to_ck)?;
         let ec = u16::try_from(mac.len()).map_err(|_| Error::Truncated)?;
         header[4..6].copy_from_slice(&ec.to_be_bytes());
         self.send_seq = self.send_seq.wrapping_add(1);

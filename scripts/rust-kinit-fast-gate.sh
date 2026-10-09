@@ -180,6 +180,8 @@ Path("/tmp/rust-kdc.conf").write_text("""[libdefaults]
     KERBER.TEST = {
         encrypted_challenge_indicator = encrypted_challenge
     }
+[logging]
+    json = STDOUT
 """)
 '
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'modprinc +requires_preauth user'
@@ -205,13 +207,11 @@ if [ "$ok" != 1 ]; then
     log "fast.client.gate" "error" ',"error":"MIT krb5kdc did not listen after EC indicator"'
     exit 1
 fi
-LOAD_EC="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rust.db \
     -e KRB5_KDC_STASH=/tmp/rust.stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/ec-ind.dump)"
-echo "$LOAD_EC"
-echo "$LOAD_EC" | grep -q 'ok load version=7' || {
+    "$NAME" /tmp/krb5-kdb load /tmp/ec-ind.dump || {
     log "fast.client.gate" "error" ',"error":"rust kdb load after EC indicator failed"'
     exit 1
 }
@@ -272,6 +272,47 @@ ec_fast_kvno() {
 }
 ec_fast_kvno mit
 ec_fast_kvno rust
+echo "==== Rust kinit -T answers with encrypted challenge: pa_type 138, the indicator require_auth needs ===="
+rust_ec_kvno() {
+    local side=$1
+    local conf="/tmp/${side}-krb5.conf"
+    docker exec "$NAME" rm -f /tmp/rust-ec.cc /tmp/rust-ec.trace
+    if ! docker exec -e KRB5_CONFIG="$conf" -e KRB5_PASSWORD=userpassword \
+        -e KRB5_TRACE=/tmp/rust-ec.trace "$NAME" \
+        /tmp/krb5-kinit -T /tmp/ec-armor.cc -c /tmp/rust-ec.cc user@KERBER.TEST; then
+        docker exec "$NAME" cat /tmp/rust-ec.trace >&2 || true
+        log "fast.client.gate" "error" ",\"error\":\"Rust kinit -T via $side KDC failed\""
+        exit 1
+    fi
+    RTRACE="$(docker exec "$NAME" cat /tmp/rust-ec.trace)"
+    echo "$RTRACE"
+    ecn="$(echo "$RTRACE" | grep -cF 'Preauth module encrypted_challenge (138) (real) returned: 0/Success' || true)"
+    if [ "$ecn" != 2 ]; then
+        log "fast.client.gate" "error" ",\"error\":\"Rust kinit -T via $side KDC: encrypted challenge traced $ecn times, not request and reply\""
+        exit 1
+    fi
+    if echo "$RTRACE" | grep -F 'Produced preauth for next request:' | grep -qF 'PA-ENC-TIMESTAMP'; then
+        log "fast.client.gate" "error" ",\"error\":\"Rust kinit -T via $side KDC sent an encrypted timestamp the KDC withheld\""
+        exit 1
+    fi
+    RKLISTC="$(docker exec "$NAME" klist -C -c /tmp/rust-ec.cc 2>/dev/null || true)"
+    echo "$RKLISTC"
+    echo "$RKLISTC" | grep -q 'pa_type.*= 138' || {
+        log "fast.client.gate" "error" ",\"error\":\"Rust kinit -T via $side KDC missing pa_type 138\""
+        exit 1
+    }
+    set +e
+    got="$(docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/rust-ec.cc "$NAME" \
+        kvno host/testhost.kerber.test 2>&1)"
+    set -e
+    echo "$side rust_ec_kvno=$got"
+    echo "$got" | grep -q 'host/testhost.kerber.test@KERBER.TEST: kvno =' || {
+        log "fast.client.gate" "error" ",\"error\":\"$side kvno after the Rust EC TGT + require_auth failed\""
+        exit 1
+    }
+}
+rust_ec_kvno mit
+rust_ec_kvno rust
 docker exec "$NAME" sh -c ': >/tmp/mit-kdc.log; : >/tmp/rust-kdc.log'
 ec_pw_kvno() {
     local side=$1

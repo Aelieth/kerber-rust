@@ -8,7 +8,7 @@ MIT 1.22.2, Heimdal and Samba peers; [`docs/gates.md`](../docs/gates.md) lists w
 
 | File | What it is |
 |---|---|
-| `lib/gate-common.sh` | The gate preamble: `log`, `die`, `unavailable`, cleanups, the one scratch default, the listener and log waits, `retry_until`, `shell_container`, `stock_mit_kdc`, `assert_no_error_log`. |
+| `lib/gate-common.sh` | The gate preamble: `log`, `die`, `unavailable`, cleanups, the one scratch default, the listener and log waits, `retry_until`, `shell_container`, `stock_mit_kdc`, `assert_no_error_log`, `mit_oracle_cc` / `mit_oracle_brand` (an oracle built in the container and the `libkrb5` it loads). |
 | `lib/provenance.sh` | Stamps every gate artefact with the tested tree; its `ERR` trap names the failing command. |
 | `lib/kadmin-q.sh` | Every kadmin query a gate or a lib helper runs, but for the keyed container sites: `kadmin_q` / `kadmin_q_as`, the runners `mit_kadmin_local` / `mit_kadmin` / `rust_kadmin_local`, `kadmin_q_ok` (the verb's MIT success line, or the effect read back for a verb silent on success) and `kadmin_q_try` (best-effort cleanups). |
 | `lib/kadmin-common.sh` | The kadmin gates' shared cells: the kadm5 probe builds, the RPCSEC_GSS and framing cells, the snapshot helpers. |
@@ -23,6 +23,7 @@ MIT 1.22.2, Heimdal and Samba peers; [`docs/gates.md`](../docs/gates.md) lists w
 | `lib/lab-realm.sh` | Refuses a host whose `/etc/krb5.conf` names a real realm (the local evidence runners). |
 | `lib/settle.sh` | Captures a live settle: provenance, the command, its verbatim output. |
 | `lib/unit-evidence.sh` | Stamped unit-test greens and parent reds. |
+| `lib/test-hooks.sh` | `test_hooks_features`: the `test-hooks` cargo features a SHA defines, for `red-at-sha.sh` and `unit_red_at`. |
 | `lib/unit-red-check.py` | Exits 0 only when every expected test failed. |
 | `lib/run-peer-step.sh` | The peers workflow's wrapper: exit 2 (oracle unavailable) is not a job failure. |
 | `lib/hygiene_inventory.py` | Writes a hygiene snapshot (counts, gate cells by reachability, shellcheck). |
@@ -39,6 +40,11 @@ MIT 1.22.2, Heimdal and Samba peers; [`docs/gates.md`](../docs/gates.md) lists w
 
 ## `oracle/` — MIT programs the gates build inside the container
 
+A gate builds each with `mit_oracle_cc`: `krb5-config`'s `--cflags` and `--libs`, whose rpath loads the
+image's MIT 1.22.2 libraries (a plain `cc … -lkrb5` loads Debian's 1.20.1 `libkrb5`, which `build-essential`
+pulls in through `libtirpc3`). Before an oracle's first use the gate prints the `libkrb5` it loads and that
+library's `KRB5_BRAND`, and goes red unless it is `krb5-1.22.2-final` with every krb5 library beside it.
+
 | File | What it is |
 |---|---|
 | `oracle/gss-mit-client.c` | An MIT `libgssapi_krb5` initiator: AP-REQ plus a wrap token to the Rust acceptor (it can dump the AP-REQ for the replay cell). |
@@ -52,4 +58,5 @@ MIT 1.22.2, Heimdal and Samba peers; [`docs/gates.md`](../docs/gates.md) lists w
 | `oracle/t_vfy_increds.c` | MIT's own test program for `krb5_verify_init_creds`. |
 
 `ccache-mit-addr-u2u.c` stays in `scripts/`: no gate builds it; it generated the committed
-`tests/traces/ccache-mit-addr-u2u.bin` (a MIT `kinit -a` TGT plus a user-to-user cred).
+`tests/traces/ccache-mit-addr-u2u.bin` (a MIT `kinit -a` TGT plus a user-to-user cred). Build it the same
+way: `cc -o ccache-mit-addr-u2u ccache-mit-addr-u2u.c $(krb5-config --libs krb5)`.

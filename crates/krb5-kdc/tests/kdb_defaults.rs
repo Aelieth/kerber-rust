@@ -95,7 +95,7 @@ fn default_principal_flags_is_params_flags_for_a_create() {
     assert_eq!(
         store.get_name(&name("z1knob")).unwrap().attributes,
         KDB_REQUIRES_PRE_AUTH,
-        "no stanza: the knob's bit alone on a password-keyed create (docs/security.md)"
+        "no stanza: the knob's bit alone on a password-keyed create (docs/mit-deviations.md)"
     );
     // A random-key (service) create without the stanza is MIT's
     // KRB5_KDB_DEF_FLAGS 0: the knob's scope is password-keyed creates, so

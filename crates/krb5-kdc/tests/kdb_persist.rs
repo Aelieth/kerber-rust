@@ -78,39 +78,91 @@ fn persist_survives_restart_without_key_regen() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// With iprop on, a change of a database is logged after its write, and the log is a file the next
+/// process reads; with iprop off, no log is written at all (settled live on MIT 1.22.2).
 #[test]
 fn persist_ulog_survives_reload() {
     let dir = scratch_dir("krb5-ulog");
     let db = dir.join("principal");
     let stash = dir.join("stash");
+    let ulog = dir.join("principal.ulog");
     let (mut store, acl) = bootstrap_documented().unwrap();
     store.persist_paths = Some((db.clone(), stash.clone()));
     save_store(&store, &db, &stash).unwrap();
+    let off = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "off.kerber.test"]);
+    store
+        .change(|s| s.create_host(&acl, &documented_admin_id(), &off))
+        .unwrap()
+        .unwrap();
+    assert!(!ulog.exists(), "no update log without iprop");
+    store
+        .map_ulog(&ulog, 1000, krb5_kdc::IpropRole::Primary)
+        .unwrap();
+    let start = store.ulog_last().unwrap();
     let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "ulog.kerber.test"]);
     store
-        .create_host(&acl, &documented_admin_id(), &extra)
+        .change(|s| s.create_host(&acl, &documented_admin_id(), &extra))
+        .unwrap()
         .unwrap();
-    let sno = store.serial();
-    assert!(sno > 0);
-    let before = store.ulog();
-    assert!(
-        before.iter().any(|e| e.name.contains("ulog.kerber.test")),
-        "ulog must record the create: {before:?}"
-    );
-    let loaded = load_store(&db, &stash).unwrap();
-    assert_eq!(loaded.serial(), sno);
-    let after = loaded.ulog();
-    assert!(
-        after
-            .iter()
-            .any(|e| e.name.contains("ulog.kerber.test") && e.princ.is_some()),
-        "reloaded ulog must keep extra: {after:?}"
-    );
-    let delta = loaded.updates_after(sno.saturating_sub(1));
-    assert!(
-        !delta.is_empty(),
+    let after = store.ulog_last().unwrap();
+    assert_eq!(after.sno, start.sno + 1, "one create is one entry");
+    let mut loaded = load_store(&db, &stash).unwrap();
+    assert!(loaded.ulog().is_none(), "a store maps no log by itself");
+    loaded
+        .map_ulog(&ulog, 1000, krb5_kdc::IpropRole::Primary)
+        .unwrap();
+    assert_eq!(loaded.ulog_last(), Some(after));
+    let delta = loaded.ulog_get_entries(start);
+    assert_eq!(delta.status, krb5_kdc::IPROP_OK);
+    assert_eq!(delta.updates.len(), 1);
+    assert_eq!(
+        krb5_kdc::walk_incr_update(&delta.updates[0]).unwrap().name,
+        "host/ulog.kerber.test@KERBER.TEST",
         "replica poll after restart must stay incremental"
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// MIT `ulog_replay`: a put that fails ends the replay and reinitializes the replica's log, so
+/// its next request is a full resync. Here the replica's database may not be written.
+#[cfg(feature = "test-hooks")]
+#[cfg(unix)]
+#[test]
+fn a_replica_whose_database_write_fails_starts_its_log_over() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = scratch_dir("krb5-replay-write");
+    let db = dir.join("principal");
+    let stash = dir.join("stash");
+    let (mut master, acl) = bootstrap_documented().unwrap();
+    let mkey = krb5_kdc::testrealm::map_memory_ulog(&mut master, 100, krb5_kdc::IpropRole::Primary)
+        .unwrap();
+    let start = master.ulog_last().unwrap();
+    let extra = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "replay.kerber.test"]);
+    master
+        .create_host(&acl, &documented_admin_id(), &extra)
+        .unwrap();
+    let updates: Vec<krb5_kdc::IpropUpdate> = master
+        .ulog_get_entries(start)
+        .updates
+        .iter()
+        .map(|u| krb5_kdc::decode_incr_update(u, Some(&mkey)).unwrap().0)
+        .collect();
+    let (mut replica, _) = bootstrap_documented().unwrap();
+    replica.persist_paths = Some((db.clone(), stash.clone()));
+    save_store(&replica, &db, &stash).unwrap();
+    replica.set_ulog(
+        krb5_kdc::Ulog::memory(100).unwrap(),
+        krb5_kdc::IpropRole::Replica,
+    );
+    replica.ulog().unwrap().set_last(start).unwrap();
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let written = replica.change(|s| s.apply_updates(&updates));
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o600)).unwrap();
+    assert!(written.is_err(), "{written:?}");
+    let hdr = replica.ulog().unwrap().header_now().unwrap();
+    assert_eq!((hdr.num, hdr.first_sno, hdr.last_sno), (1, 1, 1));
+    assert!(replica.get_name(&extra).is_none());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -142,7 +194,8 @@ fn reload_if_stale_sees_kadmin_create() {
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["extra"]);
     writer.persist_paths = Some((db.clone(), stash.clone()));
     writer
-        .create_password(&acl, &documented_admin_id(), &extra, b"extra-secret")
+        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"extra-secret"))
+        .unwrap()
         .unwrap();
     reader.reload_if_stale().unwrap();
     assert!(
@@ -157,11 +210,9 @@ fn reload_if_stale_sees_kadmin_create() {
 }
 
 #[test]
-fn reload_if_stale_keeps_lockout_and_pa_replay() {
+fn reload_if_stale_keeps_lockout() {
     use krb5_kdc::NamedPolicy;
     use krb5_kdc::testrealm::TEST_USER;
-
-    use krb5_protocol::ReplayKey;
 
     let dir = scratch_dir("krb5-reload-overlay");
     let db = dir.join("principal");
@@ -187,25 +238,26 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
     let mut reader = load_store(&db, &stash).unwrap();
     let before = reader.get_name(&user).unwrap();
     assert_eq!(reader.max_fail_for(before), 3);
-    reader.record_as_outcome(&user, false);
-    reader.record_as_outcome(&user, false);
+    let wrong =
+        krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32])
+            .unwrap();
+    for nonce in [31, 32] {
+        let req = as_req(
+            user.clone(),
+            TEST_REALM,
+            nonce,
+            Some(vec![pa_enc_timestamp(&wrong).unwrap()]),
+        )
+        .unwrap();
+        assert!(krb5_kdc::issue_as(&reader, &req).is_err());
+    }
     let after_fail = reader.get_name(&user).unwrap();
     assert_eq!(reader.fail_auth_of(after_fail), 2);
-    let rk = ReplayKey {
-        client: format!("{TEST_USER}@{TEST_REALM}"),
-        server: format!("krbtgt/{TEST_REALM}@{TEST_REALM}"),
-        ctime: 1,
-        cusec: 2,
-        auth_hash: [7u8; 20],
-    };
-    assert!(
-        !reader.pa_replay().check_and_store(rk.clone()),
-        "first PA must insert"
-    );
     writer.persist_paths = Some((db.clone(), stash.clone()));
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["unrelated"]);
     writer
-        .create_password(&acl, &documented_admin_id(), &extra, b"unrelated-secret")
+        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"unrelated-secret"))
+        .unwrap()
         .unwrap();
     reader.reload_if_stale().unwrap();
     assert!(reader.get_name(&extra).is_some(), "reload must see extra");
@@ -214,10 +266,6 @@ fn reload_if_stale_keeps_lockout_and_pa_replay() {
         reader.fail_auth_of(after),
         2,
         "lockout overlay must survive reload_if_stale"
-    );
-    assert!(
-        reader.pa_replay().check_and_store(rk),
-        "PA replay cache must survive reload_if_stale"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -244,9 +292,12 @@ fn persist_paths_saves_password_lock_and_expiry() {
         .max()
         .unwrap();
     store
-        .change_password(&acl, &documented_admin_id(), &user, b"rotated-secret")
+        .change(|s| {
+            s.change_password(&acl, &documented_admin_id(), &user, b"rotated-secret")?;
+            s.set_status(&user, true, 1_700_000_123)
+        })
+        .unwrap()
         .unwrap();
-    store.set_status(&user, true, 1_700_000_123).unwrap();
     let loaded = load_store(&db, &stash).unwrap();
     let p = loaded.get_name(&user).unwrap();
     let kvno_after = p.keys.iter().map(|k| k.kvno).max().unwrap();
@@ -392,6 +443,59 @@ fn legacy_raw_stash_loads_then_is_rewritten_as_keytab() {
     let bytes = std::fs::read(&stash).unwrap();
     assert_eq!(&bytes[..2], &[0x05, 0x02], "raw stash rewritten as keytab");
     load_store(&db, &stash).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The keytab rewrite of a legacy raw stash is optional: a stash the writer may only read
+/// still serves the save, and stays as it was.
+#[cfg(unix)]
+#[test]
+fn legacy_raw_stash_the_writer_may_not_write_is_kept() {
+    use std::os::unix::fs::PermissionsExt as _;
+    if nix::unistd::geteuid().is_root() {
+        return;
+    }
+    let dir = scratch_dir("krb5-stash-raw-ro");
+    let db = dir.join("principal");
+    let stash = dir.join(".k5.KERBER.TEST");
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    let kt = krb5_protocol::Keytab::parse(&std::fs::read(&stash).unwrap()).unwrap();
+    let raw = kt.entries[0].key.as_bytes().to_vec();
+    std::fs::write(&stash, &raw).unwrap();
+    std::fs::set_permissions(&stash, std::fs::Permissions::from_mode(0o400)).unwrap();
+    let loaded = load_store(&db, &stash).unwrap();
+    save_store(&loaded, &db, &stash).unwrap();
+    assert_eq!(
+        std::fs::read(&stash).unwrap(),
+        raw,
+        "the raw stash is left alone"
+    );
+    load_store(&db, &stash).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A full load leaves a new 0600 database owned by the writer (MIT `kdb5_util load`, kpropd);
+/// no update log is written beside it.
+#[cfg(unix)]
+#[test]
+fn a_full_load_save_leaves_a_new_database_file() {
+    use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
+    let dir = scratch_dir("krb5-save-fresh");
+    let db = dir.join("principal");
+    let ulog = dir.join("principal.ulog");
+    let stash = dir.join(".k5.KERBER.TEST");
+    let (store, _) = bootstrap_documented().unwrap();
+    save_store(&store, &db, &stash).unwrap();
+    std::fs::set_permissions(&db, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let db_ino = std::fs::metadata(&db).unwrap().ino();
+    let loaded = load_store(&db, &stash).unwrap();
+    krb5_kdc::save_store_fresh(&loaded, &db, &stash, false, None).unwrap();
+    let meta = std::fs::metadata(&db).unwrap();
+    assert_eq!(meta.permissions().mode() & 0o777, 0o600);
+    assert_ne!(meta.ino(), db_ino);
+    assert!(!ulog.exists(), "a load writes no update log");
+    assert_eq!(load_store(&db, &stash).unwrap().ids(), loaded.ids());
     let _ = std::fs::remove_dir_all(&dir);
 }
 

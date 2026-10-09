@@ -186,7 +186,7 @@ fn pin_timesync(on: bool) {
         std::process::id(),
         if on { "on" } else { "off" }
     ));
-    let flag = if on { "yes" } else { "no" };
+    let flag = if on { "1" } else { "0" };
     std::fs::write(&path, format!("[libdefaults]\n    kdc_timesync = {flag}\n"))
         .expect("write timesync conf");
     set_test_krb5_paths(Some(vec![path]));

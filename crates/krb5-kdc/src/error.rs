@@ -43,6 +43,14 @@ pub enum Error {
         /// `last_pwd_change + pw_min_life`.
         until: u32,
     },
+    /// The principal database, its update log or its stash could not be read or written: an
+    /// I/O failure with the system's own text (`strerror`), or a file that does not load.
+    Db {
+        /// What failed: `PermissionDenied` for a writer that may not write the database.
+        kind: std::io::ErrorKind,
+        /// The system's text for it, without Rust's `(os error N)`, or the format failure.
+        text: String,
+    },
     /// `EINVAL` from `krb5_db_put_principal` / DB2 `db_args`.
     /// MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): any `db_args` is `EINVAL`,
     /// since DB2 supports no DB arguments for a principal.
@@ -79,7 +87,7 @@ impl fmt::Display for Error {
             Self::PassTooSoon { .. } => {
                 write!(f, "Current password's minimum life has not expired")
             }
-            Self::InvalidArgument(s) => write!(f, "{s}"),
+            Self::Db { text, .. } | Self::InvalidArgument(text) => write!(f, "{text}"),
             Self::UnexpectedPdu => write!(f, "unexpected PDU"),
             Self::PreauthRequired { .. } => write!(f, "preauth required"),
         }
@@ -91,6 +99,46 @@ impl std::error::Error for Error {}
 impl From<krb5_crypto::Error> for Error {
     fn from(e: krb5_crypto::Error) -> Self {
         Self::Crypto(e.to_string())
+    }
+}
+
+impl From<crate::persist::PersistError> for Error {
+    fn from(e: crate::persist::PersistError) -> Self {
+        use crate::persist::PersistError;
+        match e {
+            PersistError::Io(e) => Self::Db {
+                kind: e.kind(),
+                text: strerror(&e),
+            },
+            PersistError::Crypto(s) => Self::Crypto(s),
+            PersistError::Format(text) => Self::Db {
+                kind: std::io::ErrorKind::InvalidData,
+                text,
+            },
+            PersistError::UnknownDbLibrary(name) => Self::Db {
+                kind: std::io::ErrorKind::Unsupported,
+                text: format!("unknown db_library: {name}"),
+            },
+            PersistError::Lock(e) => Self::Db {
+                kind: e.kind(),
+                text: e.to_string(),
+            },
+            e @ PersistError::Unopenable { .. } => Self::Db {
+                kind: std::io::ErrorKind::InvalidData,
+                text: e.to_string(),
+            },
+        }
+    }
+}
+
+/// The system's text for `e` (`strerror`): Rust's display without its ` (os error N)`.
+fn strerror(e: &std::io::Error) -> String {
+    let text = e.to_string();
+    match e.raw_os_error() {
+        Some(code) => text
+            .strip_suffix(&format!(" (os error {code})"))
+            .map_or_else(|| text.clone(), str::to_owned),
+        None => text,
     }
 }
 
@@ -122,5 +170,28 @@ pub fn errcode_to_protocol(code: i32) -> i32 {
         code
     } else {
         krb5_types::err::GENERIC
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persist::PersistError;
+
+    #[test]
+    fn a_refused_save_is_a_database_error_with_the_system_text() {
+        let e = Error::from(PersistError::Io(std::io::Error::from_raw_os_error(13)));
+        assert_eq!(
+            e,
+            Error::Db {
+                kind: std::io::ErrorKind::PermissionDenied,
+                text: "Permission denied".into(),
+            }
+        );
+        assert_eq!(e.to_string(), "Permission denied");
+        let e = Error::from(PersistError::Crypto(
+            "stash is not a usable master key".into(),
+        ));
+        assert_eq!(e.to_string(), "crypto: stash is not a usable master key");
     }
 }

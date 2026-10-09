@@ -17,6 +17,7 @@ use krb5_protocol::ReplayCache;
 use krb5_types::{PrincipalName, TicketFlags, ascii, ku};
 
 fn contexts() -> (GssContext, GssContext) {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(
@@ -158,6 +159,7 @@ fn unwrap_non_conf_ec_not_cksumsize_is_defective() {
 }
 
 fn linked() -> (GssContext, GssContext) {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, 40);
@@ -242,6 +244,7 @@ fn rrc_reduces_modulo_the_payload_length() {
 
 #[test]
 fn delegation_sets_the_deleg_flag() {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let tgt = issue_tgt(&store, TEST_USER, 42);

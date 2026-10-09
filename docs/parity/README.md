@@ -16,17 +16,22 @@ A2 owns AS/`kdc_util`, A3 owns FAST residue.
 
 ## Files
 
-One file per section. Each holds its heading, a short scope note and one
-table in the schema below; a row lives in exactly one file.
+One or more files per section, each named `<key>-<subject>.md`; A4 and B1
+have two. Each holds a heading that names its section, a short scope note
+and one table in the schema below; a row lives in exactly one file, and a
+section's count is the sum over its files.
 
 | File | Section |
 | --- | --- |
 | [a1-tgs.md](a1-tgs.md) | A1 — TGS: `tgs_policy.c`, `do_tgs_req.c`, `kdc_transit.c` |
 | [a2-as.md](a2-as.md) | A2 — AS and the KDC core: `do_as_req.c`, `kdc_util.c`, `policy.c`, `replay.c`, `dispatch.c` |
 | [a3-preauth.md](a3-preauth.md) | A3 — preauth, FAST, authdata, CAMMAC, KDC logging |
-| [a4-kadmin.md](a4-kadmin.md) | A4 — kadmind and kadm5, the KDB, `kdb5_util`, `kadmin.local`, kpasswd |
+| [a4-kadmin.md](a4-kadmin.md) | A4 — kadmind and kadm5, `kadmin.local`, kpasswd |
+| [a4-kdb.md](a4-kdb.md) | A4 — `kdb5_util` (dump and load), the KDB library and plugins, the KDB lock |
 | [a5-prop.md](a5-prop.md) | A5 — kprop, kpropd, iprop and the gssrpc layer |
-| [b1-client.md](b1-client.md) | B1 — the client library, crypto, GSS, the acceptor and the client tools |
+| [b1-client.md](b1-client.md) | B1 — the client library, crypto, the AP-REQ acceptor, ccache and keytab |
+| [b1-gss.md](b1-gss.md) | B1 — the GSS-API krb5 mechanism and SPNEGO: context, wrap / unwrap, sequence window, status, credentials |
+| [b1-tools.md](b1-tools.md) | B1 — the client tools: `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd`, `ktutil` |
 
 FAST unwrap failures put the MIT status word
 `FIND_FAST` on the wire `e_text` (`do_as_req.c:808`,
@@ -35,13 +40,13 @@ FAST unwrap failures put the MIT status word
 mismatch are `exact` here.
 
 Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_text + code | verdict | proof`.
-Verdict ∈ {exact, stricter-documented (`docs/security.md` row), absent,
+Verdict ∈ {exact, stricter-documented (`docs/mit-deviations.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The 111 live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The 112 live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `as-needpreauth-hints-unpermitted`,
-`skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`,
+`skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`, `as-locked-out`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
 `as-request-anonymous`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`,
 `fast-armor-no-subkey`, `armor-ap-req-as-pa-tgs-req`, `tgs-ad-fx-armor-authenticator`,
@@ -86,14 +91,17 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**462** = A1 128 + A2 93 + A3 79 + A4 58 + A5 25 + B1 79.
-exact 362 · stricter-documented 16 · deviation 33 ·
-absent 2 · deferred 49.
+**482** = A1 129 + A2 94 + A3 80 + A4 62 + A5 32 + B1 85.
+exact 387 · stricter-documented 15 · deviation 34 ·
+absent 2 · deferred 44.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and
 69 of B1's 79; A4's `session_enctypes` row moved to A2. No row's text
-changed.
+changed. Later A4 and B1 each became two files by subject (A4: 51 in
+`a4-kadmin.md`, 8 in `a4-kdb.md`; B1: 73 in `b1-client.md`, 6 in
+`b1-tools.md`), each row moved byte for byte. B1's 11 GSS-API rows
+later moved byte for byte from `b1-client.md` to `b1-gss.md`.
 
 Counting rule: a row with two verdicts (`exact (unit)`,
 `deviation (decision)`, `absent (otp)`) counts under its **first**

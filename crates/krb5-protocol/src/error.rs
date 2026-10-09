@@ -27,7 +27,9 @@ pub enum Error {
     KrbError {
         /// RFC 4120 error-code.
         code: i32,
-        /// Optional e-text.
+        /// Optional e-text. For a TGS request's unknown server that came with e-text, MIT's
+        /// message in its place, naming the error's server.
+        /// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:195-216`): an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; without e-text no message is set.
         text: Option<String>,
     },
     /// Reply tag was not AS-REP, TGS-REP, AP-REP, or KRB-ERROR.
@@ -52,9 +54,35 @@ pub enum Error {
     /// No overlapping etype with the KDC.
     #[error("no mutually supported etype")]
     NoEtype,
+    /// The KDC's etype-info names an enctype this client has, but none the request asked for.
+    /// MIT `KRB5_CONFIG_ETYPE_NOSUPP` (`krb5_err.et:326-326`): the code and text.
+    #[error("No supported encryption types (config file error?)")]
+    ConfigEtypeNosupp,
+    /// The KDC's etype-info names no enctype this client has.
+    /// MIT `KRB5_PROG_ETYPE_NOSUPP` (`krb5_err.et:204-204`): the code and text.
+    #[error("Program lacks support for encryption type")]
+    ProgEtypeNosupp,
+    /// An AP-REQ's session key or subkey is of an enctype the acceptor does not permit; the
+    /// text names it.
+    /// MIT `negotiate_etype` (`lib/krb5/krb/rd_req_dec.c:878-886`): `KRB5_NOPERM_ETYPE` with the enctype's name.
+    #[error("{0}")]
+    NopermEtype(String),
+    /// A real preauthentication type failed, the password's read among them: MIT's
+    /// `KRB5_PREAUTH_FAILED`, its message wrapping the cause.
+    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): with no real type answered, the first type's failure is wrapped as "Pre-authentication failed: \<its message\>".
+    #[error("Pre-authentication failed: {0}")]
+    PreauthFailed(Box<Error>),
     /// Reply too short to classify.
     #[error("KDC reply truncated")]
     TruncatedReply,
+    /// The KDC's error carried PA-FX-FAST and this request had an armor cache but no armor key.
+    /// MIT `k5_upgrade_to_fast_p` (`lib/krb5/krb/fast.c:677-688`): that answer restarts the exchange with FAST. `as_exchange` does not return it.
+    #[error("FAST upgrade")]
+    FastUpgrade,
+    /// Encrypted timestamp is off for the client realm.
+    /// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:68-73`): `KRB5_PREAUTH_FAILED`, "Encrypted timestamp is disabled".
+    #[error("Encrypted timestamp is disabled")]
+    EnctsDisabled,
     /// I/O from keytab/ccache.
     #[error("file: {0}")]
     File(#[from] io::Error),
@@ -84,7 +112,13 @@ impl Clone for Error {
             Self::ReplyMismatch(s) => Self::ReplyMismatch(s.clone()),
             Self::Referral => Self::Referral,
             Self::NoEtype => Self::NoEtype,
+            Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
+            Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
+            Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
+            Self::PreauthFailed(e) => Self::PreauthFailed(e.clone()),
             Self::TruncatedReply => Self::TruncatedReply,
+            Self::FastUpgrade => Self::FastUpgrade,
+            Self::EnctsDisabled => Self::EnctsDisabled,
             Self::File(e) => Self::Io {
                 message: e.to_string(),
                 kind: e.kind(),

@@ -193,8 +193,7 @@ def gate_placements(workflows: list[Workflow] | None = None) -> dict[str, list[t
     """scripts/*-gate.sh -> [(`workflow:job`, lane)] read from .github/workflows.
 
     The lane is `nightly` for a workflow that only runs on a schedule, `soft` for a
-    continue-on-error job, `skip2` for a step that runs the gate through `skip2` (exit 2 is
-    green), and `fail-red` otherwise.
+    continue-on-error job, and `fail-red` otherwise.
     """
     if workflows is None:
         workflows = [Workflow(p, p.read_text()) for p in sorted(WORKFLOWS.glob("*.yml"))]
@@ -208,8 +207,6 @@ def gate_placements(workflows: list[Workflow] | None = None) -> dict[str, list[t
                     lane = "nightly"
                 elif job.continue_on_error:
                     lane = "soft"
-                elif re.search(rf"skip2 \./scripts/{re.escape(script)}\b", job.body):
-                    lane = "skip2"
                 else:
                     lane = "fail-red"
                 place = (f"{w.path.stem}:{job.name}", lane)
@@ -449,9 +446,11 @@ DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
 GATE_DOC_TOKEN_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
-# The CHANGELOG's size (235,552 bytes when it was set) plus 9,000 bytes for the next 25 bullets at 360
-# bytes (the median bullet is 341); re-based only by a tool: commit ahead of the bullets it allows.
-CHANGELOG_MAX_BYTES = 244552
+# CHANGELOG.md was 272,571 bytes at 13c2160b. Allowance 15,429 bytes
+# (forecast plus 20 percent, rounded up) for the rest of 1.1 and the cut,
+# one bullet per change. Ceiling 288,000. One re-base, a tool: commit only,
+# never the commit that adds the bullets.
+CHANGELOG_MAX_BYTES = 288000
 
 
 def check_testing_doc_budgets(

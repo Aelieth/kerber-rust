@@ -226,7 +226,7 @@ fn ap_req_checksum_uses_declared_type() {
         expected_server: None,
         expected_realm: None,
         skew: krb5_protocol::DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     verify_ap_req_ex(&raw, &params, &ReplayCache::new(), Some(app)).expect("declared RSA-MD5");
@@ -341,8 +341,9 @@ fn non_ascii_realm_as_exchange_is_err() {
     assert!(err.is_err(), "non-ASCII realm must not panic");
 }
 
+/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1759-1765`): an error to a request no mechanism answered is the KDC's error, with no second request.
 #[test]
-fn first_bare_as_req_skew_is_retried() {
+fn first_bare_as_req_skew_is_the_kdcs_error_like_mit() {
     use std::net::UdpSocket;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -384,7 +385,7 @@ fn first_bare_as_req_skew_is_retried() {
             let _ = udp.send_to(&reply, src);
         }
     });
-    let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+    let out = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
         cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
         realm: "KERBER.TEST",
         password: b"userpassword",
@@ -401,8 +402,13 @@ fn first_bare_as_req_skew_is_retried() {
         ticket: krb5_protocol::AsTicketOpts::default(),
     });
     assert!(
-        hits.load(Ordering::SeqCst) >= 2,
-        "first bare SKEW must resync/retry, not fail on the first PDU"
+        matches!(out, Err(krb5_protocol::Error::KrbError { code, .. }) if code == err::SKEW),
+        "the KDC's skew error: {out:?}"
+    );
+    assert_eq!(
+        hits.load(Ordering::SeqCst),
+        1,
+        "no second request after a bare request's skew error"
     );
 }
 
@@ -854,4 +860,509 @@ fn golden_application_tags() {
         e_data: None,
     };
     assert_eq!(encode(&e).unwrap()[0], 0x7e);
+}
+
+/// A KDC that answers the first AS-REQ with PREAUTH_REQUIRED at `kdc_time` (hint: ETYPE-INFO2
+/// aes256-cts with the user's salt, and PA-ENC-TIMESTAMP), and the second with PREAUTH_FAILED;
+/// returns both requests.
+fn preauth_at(kdc_time: u32) -> (krb5_types::AsReq, krb5_types::AsReq) {
+    use krb5_types::{
+        AsReq, EtypeInfo2Entry, KerberosTime, KrbError, Microseconds, PaData, err, pa,
+    };
+    use std::net::UdpSocket;
+    use std::sync::mpsc;
+    use std::thread;
+
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        for round in 0..2 {
+            let Ok((n, src)) = udp.recv_from(&mut buf) else {
+                return;
+            };
+            let _ = tx.send(buf[..n].to_vec());
+            let info = vec![EtypeInfo2Entry {
+                etype: 18,
+                salt: Some(ascii("KERBER.TESTuser")),
+                s2kparams: None,
+            }];
+            let method = vec![
+                PaData {
+                    padata_type: pa::ETYPE_INFO2,
+                    padata_value: encode(&info).unwrap().into(),
+                },
+                PaData {
+                    padata_type: pa::ENC_TIMESTAMP,
+                    padata_value: Vec::new().into(),
+                },
+            ];
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::from_unix_seconds(kdc_time),
+                susec: Microseconds::new(123_456).unwrap(),
+                error_code: if round == 0 {
+                    err::PREAUTH_REQUIRED
+                } else {
+                    err::PREAUTH_FAILED
+                },
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: Some(encode(&method).unwrap().into()),
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let out = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"userpassword",
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: Some(&[18]),
+        ticket: krb5_protocol::AsTicketOpts::default(),
+    });
+    assert!(out.is_err(), "the stub ends with PREAUTH_FAILED");
+    let first: AsReq = decode(&rx.recv().unwrap()).unwrap();
+    let second: AsReq = decode(&rx.recv().unwrap()).unwrap();
+    (first, second)
+}
+
+/// The request's encrypted timestamp, opened with the user's aes256-cts key.
+fn timestamp_of(req: &krb5_types::AsReq) -> krb5_types::PaEncTsEnc {
+    use krb5_crypto::{EncryptionType, string_to_key};
+    use krb5_types::{EncryptedData, pa};
+    let p = req
+        .0
+        .padata
+        .as_ref()
+        .unwrap()
+        .iter()
+        .find(|p| p.padata_type == pa::ENC_TIMESTAMP)
+        .expect("PA-ENC-TIMESTAMP");
+    let enc: EncryptedData = decode(p.padata_value.as_ref()).unwrap();
+    let key = string_to_key(
+        EncryptionType::Aes256CtsHmacSha196,
+        b"userpassword",
+        b"KERBER.TESTuser",
+        None,
+    )
+    .unwrap();
+    let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP).unwrap();
+    decode(&krb5_crypto::decrypt(&key, usage, enc.cipher.as_ref()).unwrap()).unwrap()
+}
+
+/// MIT `note_req_timestamp` (`lib/krb5/krb/get_in_tkt.c:1433-1438`): a retried PREAUTH_REQUIRED sets the offset of the KDC's time.
+/// MIT `k5_init_creds_current_time` (`lib/krb5/krb/get_in_tkt.c:683-697`): the next request's times and its encrypted timestamp are then the KDC's.
+#[test]
+fn after_preauth_required_the_timestamp_and_times_are_the_kdcs() {
+    isolate_host_krb5();
+    let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
+    let kdc = u32::try_from(now + 3600).unwrap();
+    let (first, second) = preauth_at(kdc);
+    let near = |a: i64, b: i64| (a - b).abs() <= 5;
+    assert!(
+        near(
+            i64::from(first.0.req_body.till.unix_seconds()),
+            now + 86_400
+        ),
+        "the first request is made at the local time"
+    );
+    assert!(
+        near(
+            i64::from(second.0.req_body.till.unix_seconds()),
+            now + 3600 + 86_400
+        ),
+        "the second request's till is the KDC's time plus the lifetime"
+    );
+    let ts = timestamp_of(&second);
+    assert!(
+        near(i64::from(ts.patimestamp.unix_seconds()), now + 3600),
+        "the timestamp is the KDC's time"
+    );
+}
+
+/// MIT `k5_init_creds_current_time` (`lib/krb5/krb/get_in_tkt.c:683-697`): with `kdc_timesync = 0` the local time stays.
+#[test]
+fn kdc_timesync_off_keeps_the_local_time_in_the_timestamp() {
+    isolate_host_krb5();
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join(format!("timesync-off-{}.conf", std::process::id()));
+    std::fs::write(
+        &conf,
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    kdc_timesync = 0\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
+    let now = i64::from(krb5_types::KerberosTime::now().unix_seconds());
+    let (_, second) = preauth_at(u32::try_from(now + 3600).unwrap());
+    let ts = timestamp_of(&second);
+    assert!((i64::from(ts.patimestamp.unix_seconds()) - now).abs() <= 5);
+    let _ = std::fs::remove_file(&conf);
+}
+
+/// MIT `krb5_us_timeofday` (`lib/krb5/os/ustime.c:66-82`): a client authenticator and an encrypted timestamp carry the time to the microsecond.
+#[test]
+fn client_authenticators_and_timestamps_carry_microseconds() {
+    use krb5_crypto::{EncryptionType, ProtocolKey, decrypt};
+    use krb5_types::{
+        ApReq, Authenticator, EncryptedData, KerberosTime, Microseconds, PaEncTsEnc, Ticket,
+    };
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let micros = |t: &KerberosTime, u: Microseconds| {
+        i128::from(t.unix_seconds()) * 1_000_000 + i128::from(u.get())
+    };
+    let clock = || {
+        i128::try_from(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_micros(),
+        )
+        .unwrap()
+    };
+    let key = krb5_crypto::ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[7u8; 32])
+        .unwrap();
+    let open = |key: &ProtocolKey, enc: &EncryptedData, usage: u32| -> Vec<u8> {
+        decrypt(key, KeyUsage::new(usage).unwrap(), enc.cipher.as_ref()).unwrap()
+    };
+    let ticket = Ticket {
+        tkt_vno: 5,
+        realm: ascii("KERBER.TEST"),
+        sname: PrincipalName::krbtgt("KERBER.TEST"),
+        enc_part: EncryptedData {
+            etype: 18,
+            kvno: Some(1),
+            cipher: vec![0u8; 16].into(),
+        },
+    };
+    let realm = ascii("KERBER.TEST");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+    let before = clock();
+    let ap = build_ap_req(ticket.clone(), &key, &realm, &cname).unwrap();
+    let mutual =
+        krb5_protocol::build_ap_req_mutual_seq(ticket.clone(), &key, &realm, &cname, 7).unwrap();
+    let armor =
+        krb5_protocol::build_fast_armor(ticket.clone(), &key, &realm, &cname, None).unwrap();
+    let tgs = tgs_req(
+        ticket,
+        &key,
+        "KERBER.TEST",
+        &cname,
+        PrincipalName::krbtgt("KERBER.TEST"),
+        "KERBER.TEST",
+        9,
+    )
+    .unwrap();
+    let ts_pa = pa_enc_timestamp(&key).unwrap();
+    let after = clock();
+    let tgs_ap: ApReq = decode(tgs.0.padata.as_ref().unwrap()[0].padata_value.as_ref()).unwrap();
+    let mut seen = Vec::new();
+    for (enc, usage) in [
+        (&ap.authenticator, ku::AP_REQ_AUTHENTICATOR),
+        (&mutual.authenticator, ku::AP_REQ_AUTHENTICATOR),
+        (&armor.authenticator, ku::AP_REQ_AUTHENTICATOR),
+        (&tgs_ap.authenticator, ku::TGS_REQ_AUTHENTICATOR),
+    ] {
+        let a: Authenticator = decode(&open(&key, enc, usage)).unwrap();
+        seen.push(micros(&a.ctime, a.cusec));
+    }
+    let enc: EncryptedData = decode(ts_pa.padata_value.as_ref()).unwrap();
+    let ts: PaEncTsEnc = decode(&open(&key, &enc, ku::PA_ENC_TIMESTAMP)).unwrap();
+    seen.push(micros(
+        &ts.patimestamp,
+        ts.pausec.unwrap_or(Microseconds::ZERO),
+    ));
+    for t in seen {
+        assert!(before <= t && t <= after, "{before} <= {t} <= {after}");
+    }
+}
+
+/// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:966-976`): a caller that sets no etype list, as kpasswd's, asks for `default_tkt_enctypes` in krb5.conf's order.
+#[test]
+fn an_as_request_with_no_etype_list_asks_for_krb5_confs_order() {
+    use krb5_types::{AsReq, KerberosTime, KrbError, Microseconds, err};
+    use std::net::UdpSocket;
+    use std::sync::mpsc;
+    use std::thread;
+
+    isolate_host_krb5();
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join(format!("tkt-enctypes-{}.conf", std::process::id()));
+    std::fs::write(
+        &conf,
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = aes256-cts-hmac-sha384-192 aes128-cts-hmac-sha1-96\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        if let Ok((n, src)) = udp.recv_from(&mut buf) {
+            let _ = tx.send(buf[..n].to_vec());
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::now(),
+                susec: Microseconds::ZERO,
+                error_code: err::C_PRINCIPAL_UNKNOWN,
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: None,
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let changepw = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+    let out = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"userpassword",
+        kdc: &krb5_protocol::KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: Some(&changepw),
+        etypes: None,
+        ticket: krb5_protocol::AsTicketOpts::default(),
+    });
+    assert!(out.is_err());
+    let req: AsReq = decode(&rx.recv().unwrap()).unwrap();
+    assert_eq!(req.0.req_body.etype, vec![20, 17], "krb5.conf's order");
+    let _ = std::fs::remove_file(&conf);
+}
+
+/// MIT `krb5int_parse_enctype_list` (`lib/krb5/krb/init_ctx.c:447-502`): `aes` is the four AES types, and `DEFAULT` is the eight-type default list.
+/// MIT `krb5int_c_weak_enctype` (`lib/crypto/krb/enctype_util.c:58-64`): rc4-hmac is not `ETYPE_WEAK`, so it stays when `allow_weak_crypto` is off.
+#[test]
+fn conf_etypes_expands_default_and_family_words() {
+    isolate_host_krb5();
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let conf = dir.join(format!("family-etypes-{}.conf", std::process::id()));
+    std::fs::write(
+        &conf,
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = aes\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
+    assert_eq!(
+        krb5_protocol::conf_etypes(false),
+        vec![18, 17, 20, 19],
+        "aes is the four AES enctypes"
+    );
+    std::fs::write(
+        &conf,
+        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    default_tkt_enctypes = DEFAULT\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![conf.clone()]));
+    assert_eq!(
+        krb5_protocol::conf_etypes(false),
+        vec![18, 17, 20, 19, 16, 23, 25, 26],
+        "DEFAULT keeps deprecated rc4-hmac; only ETYPE_WEAK is filtered"
+    );
+    let _ = std::fs::remove_file(&conf);
+}
+
+/// MIT `note_req_timestamp` (`lib/krb5/krb/get_in_tkt.c:1427-1438`): the offset is the error's time less the time the error arrives, so a slow password prompt is not skew.
+#[test]
+fn a_delayed_prompt_is_not_added_to_the_kdc_offset() {
+    use krb5_types::{
+        AsReq, EtypeInfo2Entry, KerberosTime, KrbError, Microseconds, PaData, err, pa,
+    };
+    use std::net::UdpSocket;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+    use zeroize::Zeroizing;
+
+    isolate_host_krb5();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        for round in 0..2 {
+            let Ok((n, src)) = udp.recv_from(&mut buf) else {
+                return;
+            };
+            let _ = tx.send(buf[..n].to_vec());
+            let info = vec![EtypeInfo2Entry {
+                etype: 18,
+                salt: Some(ascii("KERBER.TESTuser")),
+                s2kparams: None,
+            }];
+            let method = vec![
+                PaData {
+                    padata_type: pa::ETYPE_INFO2,
+                    padata_value: encode(&info).unwrap().into(),
+                },
+                PaData {
+                    padata_type: pa::ENC_TIMESTAMP,
+                    padata_value: Vec::new().into(),
+                },
+            ];
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::now(),
+                susec: Microseconds::ZERO,
+                error_code: if round == 0 {
+                    err::PREAUTH_REQUIRED
+                } else {
+                    err::PREAUTH_FAILED
+                },
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: Some(encode(&method).unwrap().into()),
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let mut after_prompt = 0i64;
+    let err = krb5_protocol::as_exchange_prompted(
+        &krb5_protocol::AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"",
+            kdc: &krb5_protocol::KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake: false,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: Some(&[18]),
+            ticket: krb5_protocol::AsTicketOpts::default(),
+        },
+        &mut || {
+            thread::park_timeout(Duration::from_secs(2));
+            after_prompt = i64::from(KerberosTime::now().unix_seconds());
+            Ok(Zeroizing::new(b"userpassword".to_vec()))
+        },
+    );
+    assert!(err.is_err(), "the stub ends with PREAUTH_FAILED");
+    let _first = rx.recv().unwrap();
+    let second: AsReq = decode(&rx.recv().unwrap()).unwrap();
+    let ts = i64::from(timestamp_of(&second).patimestamp.unix_seconds());
+    assert!(
+        (ts - after_prompt).abs() <= 1,
+        "timestamp {ts} is the clock after the prompt ({after_prompt}), not the clock before it"
+    );
+}
+
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): a hint with no encrypted timestamp and no FAST fails `KRB5_PREAUTH_FAILED` without reading the password.
+#[test]
+fn a_hint_without_enc_ts_fails_without_prompting() {
+    use krb5_types::{EtypeInfo2Entry, KerberosTime, KrbError, Microseconds, PaData, err, pa};
+    use std::net::UdpSocket;
+    use std::sync::{Arc, Mutex};
+    use std::thread;
+    use zeroize::Zeroizing;
+
+    isolate_host_krb5();
+    let shots = Arc::new(Mutex::new(0u32));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let shots2 = shots.clone();
+    thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        if let Ok((n, src)) = udp.recv_from(&mut buf) {
+            *shots2.lock().unwrap() += 1;
+            let _ = n;
+            let info = vec![EtypeInfo2Entry {
+                etype: 18,
+                salt: Some(ascii("KERBER.TESTuser")),
+                s2kparams: None,
+            }];
+            let method = vec![PaData {
+                padata_type: pa::ETYPE_INFO2,
+                padata_value: encode(&info).unwrap().into(),
+            }];
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::now(),
+                susec: Microseconds::ZERO,
+                error_code: err::PREAUTH_REQUIRED,
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: Some(encode(&method).unwrap().into()),
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let mut prompted = false;
+    let err = krb5_protocol::as_exchange_prompted(
+        &krb5_protocol::AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"",
+            kdc: &krb5_protocol::KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake: false,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: Some(&[18]),
+            ticket: krb5_protocol::AsTicketOpts::default(),
+        },
+        &mut || {
+            prompted = true;
+            Ok(Zeroizing::new(b"userpassword".to_vec()))
+        },
+    );
+    let msg = err.expect_err("no mechanism").to_string();
+    assert!(msg.contains("Generic preauthentication failure"), "{msg}");
+    assert!(!prompted, "MIT does not prompt");
+    thread::park_timeout(std::time::Duration::from_millis(200));
+    assert_eq!(*shots.lock().unwrap(), 1, "no second AS-REQ");
 }

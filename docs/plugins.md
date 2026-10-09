@@ -1,16 +1,19 @@
 # Extension points (traits, not dlopen)
 
-MIT Kerberos loads C `.so` plugins (`kdb5`, `kdcpreauth`, `kdcpolicy`,
-pwqual). This workspace forbids C FFI in the product, so the same
+MIT Kerberos loads C `.so` plugins (`kdb5`, `kdcpreauth`, `clpreauth`,
+`kdcpolicy`, `audit`, pwqual, `kadm5_hook`). This workspace forbids C FFI in the product, so the same
 capabilities are **Rust traits and process-local registries**. There
 is no `dlopen`.
 
 | Surface | MIT analogue | In tree |
 | --- | --- | --- |
-| KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the default. `db_library=memory` serves [`MemoryStore`](../crates/krb5-kdc/src/kdb.rs) from a dump seed (`scripts/store-gate.sh`). Kadmind still mutates `PrincipalStore` only. Replay caches, PKINIT CA, and the AS-fail overlay live on `KdcEnv` / process state and survive dump reload, not a full KDC restart. |
-| kdcpreauth | `kdcpreauth` | [`KdcPreauth`](../crates/krb5-kdc/src/plugins.rs) registry. `process_as` takes `&PreauthRock` (store, client, padata, reply key, etype, AS-REQ, body, cname). PKINIT, SPAKE, and enc-timestamp process AS (`EncTsOk`; caller must not re-verify). First `process_as` that returns an action wins; EXTRA is not consulted after EncTsOk on a normal login. Observe-every-AS is a future kadm5_hook. |
-| kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) `check_as` / `check_tgs` return `Result` and can deny. [`set_policy`](../crates/krb5-kdc/src/plugins.rs) is process-wide (KDC serve/worker threads see it); tests isolate with `set_thread_policy`. AS lockout stays inline, not in the swappable slot. |
-| pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store/policy.rs): five classes; history depth N (current password counts inside N; store N-1 old kvnos); `pw_failcnt_interval` / `pw_lockout_duration`. kadm5 addpol/modpol/getpol/delpol/listpols. |
+| KDB | `kdb5` plugin / `db_library` | [`PrincipalRead`](../crates/krb5-kdc/src/kdb.rs) / `PrincipalWrite` / `StoreLifecycle`. Dump-v7 is the default. `db_library=memory` serves [`MemoryStore`](../crates/krb5-kdc/src/kdb.rs) from a dump seed (`scripts/store-gate.sh`). Kadmind still mutates `PrincipalStore` only. The PKINIT CA lives on `KdcEnv` / process state and survives dump reload, not a full KDC restart. The lockout attributes the KDC records (`PrincipalRead::update_lockout`) live in `principal.lockout` beside a dump-v7 database and survive both; `MemoryStore` keeps them in memory. |
+| kdcpreauth | `kdcpreauth` | [`KdcPreauth`](../crates/krb5-kdc/src/plugins.rs) registry. `process_as` takes `&PreauthRock` (store, client, padata, reply key, etype, AS-REQ, body, cname). PKINIT, SPAKE, and encrypted_timestamp process AS (`EncTsOk`; caller must not re-verify). `edata` builds a module's PREAUTH_REQUIRED hint with the reply key and returns the state the KDC keeps in its cookie (MIT's `set_cookie`); SPAKE's optimistic challenge uses it, the default is `advertise`. First `process_as` that returns an action wins; EXTRA is not consulted after EncTsOk on a normal login. Observe-every-AS is a future kadm5_hook. `register_preauth` / `register_authdata` are process-wide; tests isolate with `set_thread_preauth` / `set_thread_authdata`. |
+| clpreauth | `clpreauth` | [`ClPreauth`](../crates/krb5-protocol/src/clpreauth.rs) on the client. Built-ins, in MIT's order, are `pkinit`, `spake` (only when a permitted group is configured; the client default is edwards25519), `encrypted_challenge` and `encrypted_timestamp`. `sam2` and `otp` are not implemented, so they are absent the way a module that failed to load is absent. `[plugins] clpreauth` `disable` then `enable_only` select the loaded names and any embedder-registered name. The first loaded module to claim a pa-type keeps it; a later module that lists a claimed type is dropped. `register_clpreauth` is process-wide; tests isolate with `set_thread_clpreauth`. `module` is not read. |
+| kdcpolicy | `kdcpolicy` | [`KdcPolicy`](../crates/krb5-kdc/src/plugins.rs) `check_as` / `check_tgs` return `Result` and can deny. [`set_policy`](../crates/krb5-kdc/src/plugins.rs) is process-wide (KDC serve/worker threads see it); tests isolate with `set_thread_policy`. AS lockout stays inline, not in the swappable slot. `check_as_req` and `check_tgs_req` take the request, the client and the server (for TGS, the server and the header ticket), the indicators, and a status out. A set status is the KRB-ERROR text. Lifetime and renew lifetime come back as `PolicyAdjustment` and cap the ticket from now. The older methods stay for a module that does not use them. `register_kdcpolicy` adds a named module. `[plugins] kdcpolicy` `disable` then `enable_only` select the loaded names. Modules run in that order; the first error denies the request and a non-zero lifetime caps `endtime` and `renew_till` from now. An empty selection allows the request and leaves the times. `set_policy` and `set_thread_policy` install one module and skip the stanza. Tests isolate a list with `set_thread_kdcpolicies`. `module` is not read. There is no `dlopen`. The name `test` is registered only when `enable_only` lists it. `check_as_from` and `check_tgs_from` also receive the socket the KDC accepted; that address is not `request.addresses`. |
+| audit | `audit` | [`KdcAudit`](../crates/krb5-kdc/src/audit.rs) `as_req` / `tgs_req` / `s4u2self` / `s4u2proxy` / `u2u`. [`JsonAudit`](../crates/krb5-kdc/src/audit.rs) is the built-in name `json`. `register_audit` adds a named module. `[plugins] audit` `disable` then `enable_only` select the loaded names, including `json`. Every selected module runs; one module does not stop the others. `set_audit` and `set_thread_audit` install one module and skip the stanza. Tests isolate a list with `set_thread_audits`. `module` is not read. There is no `dlopen`. |
+| pwqual | `pwqual` | Named [`NamedPolicy`](../crates/krb5-kdc/src/store/policy.rs): five classes; history depth N (current password counts inside N; store N-1 old kvnos); `pw_failcnt_interval` / `pw_lockout_duration`. kadm5 addpol/modpol/getpol/delpol/listpols. Quality modules are `dict`, `empty`, `hesiod` and `princ`, plus [`register_pwqual`](../crates/krb5-kdc/src/store/pwqual.rs). `[plugins] pwqual` `disable` then `enable_only` select the loaded names. The first error stops the walk. `hesiod` allows every password. `module` is not read. There is no `dlopen`. |
+| kadm5_hook | `kadm5_hook` | [`Kadm5Hook`](../crates/krb5-kdc/src/store/kadm5_hook.rs) on chpass (including `cpw -randkey`), create, modify, rename, remove and alias. [`register_kadm5_hook`](../crates/krb5-kdc/src/store/kadm5_hook.rs) adds a named module. `[plugins] kadm5_hook` `disable` then `enable_only` select the loaded names. A precommit error stops the walk and writes nothing. A postcommit error is logged and the walk continues; the operation still succeeds. No module is built in. `module` is not read. There is no `dlopen`. |
 
 Preauth modules run in registry order (built-ins, then EXTRA). The
 first `process_as(&PreauthRock)` that returns `Some(PreauthAction)` issues or
@@ -19,22 +22,69 @@ success is `EncTsOk`, so an EXTRA demo module is reached on
 PREAUTH_REQUIRED (no action yet) and skipped on a normal password
 login. Counting every AS (kadm5_hook) is not this cascade.
 
+Built-in names are MIT's: `pkinit`, `spake`, `encrypted_challenge`, and
+`encrypted_timestamp`. `[plugins] kdcpreauth` `disable` and `enable_only`
+select those and any embedder-registered name. A module that is not
+selected is left out of the PREAUTH_REQUIRED offer and does not verify
+its padata. Empty PA-FX-FAST is not a kdcpreauth module, so it stays.
+`module` is not read. The same stanza in krb5.conf applies after kdc.conf.
+
+`[plugins] kdcpolicy` `disable` and `enable_only` select embedder-registered
+policy modules by name. Each loaded module may deny the request or cap the
+ticket lifetime and renew lifetime. The first error stops the walk. With no
+module selected the KDC allows the request and leaves the times. `set_policy`
+installs one module and skips the stanza. `module` is not read. The name
+`test` is registered only when `enable_only` lists it (MIT's kdcpolicy test:
+a first component `fail` is denied, `ONE_HOUR` and `SEVEN_HOURS` cap the
+ticket, and any other indicator is denied). The check also receives the socket the KDC accepted,
+through `check_as_from` and `check_tgs_from`. That address is not
+`request.addresses`. A module that implements only `check_as` or `check_tgs`
+does not see it.
+
+`[plugins] audit` `disable` and `enable_only` select audit modules the same
+way. The built-in name is `json`. Every selected module is called. A module
+does not stop the walk. `disable = json` leaves no plugin record. `set_audit`
+installs one module and skips the stanza. `module` is not read.
+
+`[plugins] pwqual` `disable` and `enable_only` select password-quality
+modules on `kadmin` `cpw`, `kadmin.local` and kpasswd. The built-in names
+are `dict`, `empty`, `hesiod` and `princ`. `dict` and `princ` run only
+when a policy is bound. `empty` runs either way. `hesiod` allows every
+password. The first error stops the walk. `module` is not read.
+
+`[plugins] kadm5_hook` `disable` and `enable_only` select embedder modules
+for chpass, create, modify, rename, remove and alias. A module error before
+the write cancels the operation. An error after the write is logged and the
+operation still succeeds. No module is built in. `module` is not read.
+
+The client's stanza is `[plugins] clpreauth`, with the same `disable` and
+`enable_only` relations and the same four built-in names. Disabling
+`encrypted_timestamp` stops the client answering PA-ENC-TIMESTAMP.
+Encrypted challenge runs under FAST only while that module stays loaded.
+An `enable_only` that names only `sam2` or `otp` keeps nothing.
+
 LDAP, db2, and LMDB are not required implementations. None is
 privileged: each backend implements the same KDB traits.
 
-Iprop is not a plugin. The store keeps a monotonic serial and a
-circular update log. kadmind serves MIT program **100423**
-(`IPROP_GET_UPDATES`, `IPROP_FULL_RESYNC`). First contact
-(`last_sno == 0`) returns full-resync; a slave then takes an
-`ipropx` dump (`kprop -i` / `kdb5_util dump -i1`). Serial-delta is
+Iprop is not a plugin. With `iprop_enable` the primary's kadmind,
+kadmin.local and kdb5_util keep MIT's update log (`kdb_log.c`: one
+entry appended per principal put or delete, `iprop_ulogsize` of them
+in a ring; a policy change starts it over), and kadmind serves MIT
+program **100423** (`IPROP_GET_UPDATES`, `IPROP_FULL_RESYNC`);
+without it nothing is logged and the program is not registered. First
+contact (`last_sno == 0`) returns full-resync; a slave then takes an
+`ipropx` dump (`kprop -i` / `kdb5_util dump -i1`), which this kadmind
+does not push itself. Serial-delta is
 MIT `kdb_incr_update_t` over RPCSEC_GSS (`krb5-iprop-pull` or
 `iprop_poll_once`). `kdb_last_t` must echo the dump-header
-timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`. Incremental
-kdbe carries the password history as MIT's `AT_PW_HIST` entries plus
-the `osa_princ_ent_rec` record inside `AT_TL_DATA` (`KRB5_TL_KADM_DATA`),
+timestamp or MIT returns `UPDATE_FULL_RESYNC_NEEDED`. As MIT's
+`kdb_convert.c`, an update carries only the attributes its change
+touched, and a replica applies only those to its own record; the
+policy and the password history ride in the `osa_princ_ent_rec`
+record inside `AT_TL_DATA` (`KRB5_TL_KADM_DATA`), the history
 decrypted under the `kadmin/history` key on apply (`scripts/iprop-gate.sh`
 history cell); policies themselves reach a replica only by full resync,
-as with MIT (`kdb5.c` logs principals only).
+as with MIT (`kdb5.c` starts the log over on a policy change).
 
 Gates: `scripts/policy-gate.sh` (MIT `kadmin` policies + `kinit`
 `CLIENT_REVOKED`, minclasses 5, lockout time, history-N);

@@ -216,7 +216,8 @@ assert etext == b"Invalid message type\x00", etext
 
 need_image
 
-shell_container
+# A host name with a dot, as the shared shell's: kpropd's own name is then the hostname as it is.
+shell_container 3600 testhost.kerber.test
 
 if ! docker exec "$NAME" sh -c 'command -v kprop >/dev/null'; then
     log "kprop.gate" "error" ',"error":"kprop binary missing"'
@@ -281,12 +282,10 @@ kill_comm krb5-kpropd
 kill_comm kpropd
 docker exec -d \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
-    -e KRB5_KPROP_ACL=/tmp/kpropd.acl \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd 127.0.0.1:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -308,9 +307,9 @@ kpropd_asn1_ap_req 754
 echo "==== Rust kpropd expired AP-REQ is 32 Ticket expired ===="
 kpropd_expired_ap_req 754
 
-echo "==== MIT kprop localhost ===="
+echo "==== MIT kprop to kpropd's own name ===="
 KPROP="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
-    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
+    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true)"
 echo "$KPROP"
 echo "==== kpropd.log ===="
 docker exec "$NAME" cat /tmp/kpropd.log 2>/dev/null || true

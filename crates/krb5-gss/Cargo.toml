@@ -8,27 +8,36 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+# The gss gate's acceptor and initiator, test tools: a release build does not build them.
 [[bin]]
 name = "krb5-gss-accept"
 path = "src/bin/krb5-gss-accept.rs"
+required-features = ["test-hooks"]
 
 [[bin]]
 name = "krb5-gss-init"
 path = "src/bin/krb5-gss-init.rs"
+required-features = ["test-hooks"]
 
 [dependencies]
 krb5-asn1.workspace = true
+krb5-config.workspace = true
 krb5-crypto.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
 getrandom.workspace = true
 md-5.workspace = true
 thiserror.workspace = true
-tracing-subscriber.workspace = true
+tracing-subscriber = { workspace = true, optional = true }
 
 [dev-dependencies]
 krb5-kdc.workspace = true
 krb5-testkit.workspace = true
+
+[features]
+# The gates' hook (the delegated credential's copy in `GSS_DELEG_CCACHE`) and the two test
+# programs; off by default. krb5-admin's test-hooks turns it on.
+test-hooks = ["dep:tracing-subscriber"]
 
 [lints]
 workspace = true

@@ -1,19 +1,27 @@
-//! Env-gated raw PDU capture (`KERBER_CAPTURE_DIR`).
+//! The gates' raw PDU capture (`KERBER_CAPTURE_DIR`), in a `test-hooks` build only.
 //!
 //! Writes each request/reply at the Rust socket boundary so MIT 1.22.2
-//! DER can be archived under `tests/traces/` with no packet sniffer.
+//! DER can be archived under `tests/traces/` with no packet sniffer. A
+//! release build captures nothing, as MIT's tools capture nothing.
 
-/// Write `bytes` as `{label}-<nonce>.der` when `KERBER_CAPTURE_DIR` is set.
+/// Write `bytes` as `{label}-<nonce>.der` when `KERBER_CAPTURE_DIR` is set, in a `test-hooks`
+/// build; a release build does nothing.
 pub fn capture_pdu(label: &str, bytes: &[u8]) {
-    let Ok(dir) = std::env::var("KERBER_CAPTURE_DIR") else {
-        return;
-    };
-    if dir.is_empty() {
-        return;
+    #[cfg(feature = "test-hooks")]
+    {
+        let Ok(dir) = std::env::var("KERBER_CAPTURE_DIR") else {
+            return;
+        };
+        if dir.is_empty() {
+            return;
+        }
+        write_capture(&dir, label, bytes);
     }
-    write_capture(&dir, label, bytes);
+    #[cfg(not(feature = "test-hooks"))]
+    let _ = (label, bytes);
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 fn write_capture(dir: &str, label: &str, bytes: &[u8]) {
     let _ = std::fs::create_dir_all(dir);
     let mut n = [0u8; 4];
@@ -76,10 +84,14 @@ mod tests {
         assert!(ok, "capture child");
         let count = dir_count(&dir);
         let _ = std::fs::remove_dir_all(&dir);
-        assert!(
-            count >= 1,
-            "shipped capture_pdu must write when KERBER_CAPTURE_DIR is set"
-        );
+        if cfg!(feature = "test-hooks") {
+            assert!(
+                count >= 1,
+                "a test-hooks capture_pdu must write when KERBER_CAPTURE_DIR is set"
+            );
+        } else {
+            assert_eq!(count, 0, "a release capture_pdu writes nothing");
+        }
     }
 
     #[test]

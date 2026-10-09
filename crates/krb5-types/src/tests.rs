@@ -688,3 +688,195 @@ fn parse_dh_spki_round_trips_p_and_y() {
     assert_eq!(got_y, y);
     assert!(pkinit::decode_ec_spki(&spki).is_none());
 }
+
+/// Key octets with a quote, a backslash, a newline and a NUL, so each rendering differs.
+const SECRET: [u8; 16] = [
+    0x13, 0x37, 0xc0, 0xde, 0x22, 0x5c, 0x0a, 0xa5, 0x9e, 0x41, 0x42, 0x43, 0x7f, 0x00, 0xfe, 0x5a,
+];
+
+/// Whether `debug` shows `secret` as hex, as a list of numbers, as an escaped byte string (an
+/// `OctetString`'s derived `Debug`), or as text.
+fn shows(debug: &str, secret: &[u8]) -> bool {
+    use std::fmt::Write as _;
+    let hex = secret.iter().fold(String::new(), |mut s, b| {
+        let _ = write!(s, "{b:02x}");
+        s
+    });
+    let numbers = format!("{secret:?}");
+    let escaped = format!("{:?}", bytes::Bytes::copy_from_slice(secret));
+    debug.to_lowercase().contains(&hex)
+        || debug.contains(&numbers[1..numbers.len() - 1])
+        || debug.contains(&escaped[2..escaped.len() - 1])
+        || std::str::from_utf8(secret).is_ok_and(|text| debug.contains(text))
+}
+
+fn secret_key() -> EncryptionKey {
+    EncryptionKey {
+        keytype: 18,
+        keyvalue: OctetString::from(SECRET.to_vec()),
+    }
+}
+
+#[test]
+fn an_encryption_keys_debug_shows_its_type_and_length_not_its_octets() {
+    let debug = format!("{:?}", secret_key());
+    assert!(!shows(&debug, &SECRET), "{debug}");
+    assert_eq!(
+        debug,
+        "EncryptionKey { keytype: 18, keyvalue: <redacted, 16 octets> }"
+    );
+}
+
+#[test]
+fn a_key_holders_debug_shows_no_key_octets() {
+    let info = KrbCredInfo {
+        key: secret_key(),
+        prealm: None,
+        pname: None,
+        flags: None,
+        authtime: None,
+        starttime: None,
+        endtime: None,
+        renew_till: None,
+        srealm: None,
+        sname: None,
+        caddr: None,
+    };
+    for debug in [format!("{info:?}"), format!("{info:#?}")] {
+        assert!(!shows(&debug, &SECRET), "{debug}");
+        assert!(debug.contains("<redacted, 16 octets>"), "{debug}");
+    }
+}
+
+#[test]
+fn a_password_changes_debug_shows_no_password() {
+    let password = b"correct horse battery staple";
+    let data = ChangePasswdData {
+        newpasswd: OctetString::from_static(password),
+        targname: None,
+        targrealm: None,
+    };
+    let debug = format!("{data:?}");
+    assert!(!shows(&debug, password), "{debug}");
+    assert_eq!(
+        debug,
+        "ChangePasswdData { newpasswd: <redacted>, targname: None, targrealm: None }"
+    );
+}
+
+#[test]
+fn a_pac_logon_infos_debug_shows_no_session_key() {
+    let sid = pac::RpcSid::dummy_domain();
+    let mut info = pac::KerbValidationInfo::for_client("user", "KERBER.TEST", &sid, 1104);
+    info.session_key = SECRET;
+    let debug = format!("{info:?}");
+    assert!(!shows(&debug, &SECRET), "{debug}");
+    assert!(debug.contains("session_key: <redacted>"), "{debug}");
+}
+
+#[test]
+fn a_pkinit_cas_debug_shows_no_private_scalar() {
+    let ca = pkinit::PkinitCa::generate().unwrap();
+    let debug = format!("{ca:?}");
+    assert!(
+        !shows(&debug, &ca.ca_secret),
+        "the CA scalar is in its Debug"
+    );
+    assert!(debug.contains("ca_secret: <redacted>"), "{debug}");
+}
+
+/// MIT `decode_seqno` (`asn1_k_encode.c:133-146`): a seq-number from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one as its 32 bits unsigned, and anything wider does not.
+#[test]
+fn seq_numbers_decode_as_mit_decode_seqno_reads_them() {
+    fn negated(mut der: Vec<u8>, field: u8) -> Vec<u8> {
+        let at = der
+            .windows(5)
+            .position(|w| w == [field, 0x03, 0x02, 0x01, 0x7f])
+            .unwrap();
+        der[at + 4] = 0x80;
+        der
+    }
+    fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag, u8::try_from(body.len()).unwrap()];
+        out.extend_from_slice(body);
+        out
+    }
+    let ap_rep_part = |seq: &[u8]| {
+        let mut fields = tlv(0xa0, &tlv(0x18, b"20261005120000Z"));
+        fields.extend(tlv(0xa1, &tlv(0x02, &[0x05])));
+        fields.extend(tlv(0xa3, &tlv(0x02, seq)));
+        tlv(0x7b, &tlv(0x30, &fields))
+    };
+    let seq_of =
+        |seq: &[u8]| rasn::der::decode::<EncApRepPart>(&ap_rep_part(seq)).map(|p| p.seq_number);
+    assert_eq!(seq_of(&[0x80]).unwrap(), Some(0xFFFF_FF80), "-128");
+    assert_eq!(
+        seq_of(&[0x80, 0, 0, 0]).unwrap(),
+        Some(0x8000_0000),
+        "INT32_MIN"
+    );
+    assert_eq!(
+        seq_of(&[0, 0xff, 0xff, 0xff, 0xff]).unwrap(),
+        Some(u32::MAX)
+    );
+    assert!(
+        seq_of(&[0xff, 0x7f, 0xff, 0xff, 0xff]).is_err(),
+        "INT32_MIN - 1"
+    );
+    assert!(seq_of(&[0x01, 0, 0, 0, 0]).is_err(), "2^32");
+
+    // The authenticator, KRB-SAFE body and KRB-PRIV part read a negative one the same way.
+    let addr = HostAddress {
+        addr_type: 2,
+        address: vec![127, 0, 0, 1].into(),
+    };
+    let now = KerberosTime::from_unix_seconds(1_790_000_000);
+    let authenticator = Authenticator {
+        authenticator_vno: Authenticator::VNO,
+        crealm: ascii("KERBER.TEST"),
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        cksum: None,
+        cusec: Microseconds::from_subsec_micros(5),
+        ctime: now.clone(),
+        subkey: None,
+        seq_number: Some(0x7f),
+        authorization_data: None,
+    };
+    let der = negated(rasn::der::encode(&authenticator).unwrap(), 0xa7);
+    let back = rasn::der::decode::<Authenticator>(&der).unwrap();
+    assert_eq!(back.seq_number, Some(0xFFFF_FF80));
+    let body = KrbSafeBody {
+        user_data: b"s".to_vec().into(),
+        timestamp: None,
+        usec: None,
+        seq_number: Some(0x7f),
+        s_address: addr.clone(),
+        r_address: None,
+    };
+    let der = negated(rasn::der::encode(&body).unwrap(), 0xa3);
+    assert_eq!(
+        rasn::der::decode::<KrbSafeBody>(&der).unwrap().seq_number,
+        Some(0xFFFF_FF80)
+    );
+    let part = EncKrbPrivPart {
+        user_data: b"p".to_vec().into(),
+        timestamp: None,
+        usec: None,
+        seq_number: Some(0x7f),
+        s_address: addr,
+        r_address: None,
+    };
+    let der = negated(rasn::der::encode(&part).unwrap(), 0xa3);
+    assert_eq!(
+        rasn::der::decode::<EncKrbPrivPart>(&der)
+            .unwrap()
+            .seq_number,
+        Some(0xFFFF_FF80)
+    );
+    // Encoding is unchanged: an unsigned INTEGER, as MIT's `encode_seqno` writes it.
+    let back = rasn::der::encode(&back).unwrap();
+    assert!(
+        back.windows(7)
+            .any(|w| w == [0xa7, 0x07, 0x02, 0x05, 0x00, 0xff, 0xff])
+    );
+}

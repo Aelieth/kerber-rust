@@ -58,13 +58,25 @@ def write_lines(path: pathlib.Path, header: str, lines: list[str]) -> None:
     path.write_text(body, encoding="utf-8")
 
 
+def test_hooks_features(root: pathlib.Path) -> list[str]:
+    """`--features krb5-kdc/test-hooks,…` for the crates whose manifest under `root` defines the
+    feature; nothing for a tree from before it (a snapshot of an older root)."""
+    crates = []
+    for crate in ("krb5-kdc", "krb5-admin", "krb5-client"):
+        manifest = root / "crates" / crate / "Cargo.toml"
+        text = manifest.read_text(encoding="utf-8") if manifest.is_file() else ""
+        if re.search(r"(?m)^test-hooks\s*=", text):
+            crates.append(f"{crate}/test-hooks")
+    return ["--features", ",".join(crates)] if crates else []
+
+
 def list_tests(root: pathlib.Path) -> list[str]:
     env = os.environ.copy()
     conf = root / "harness" / "nextest-krb5.conf"
     if conf.is_file():
         env["KRB5_CONFIG"] = str(conf)
     proc = _run(
-        ["cargo", "nextest", "list", "--workspace", "--message-format", "json"],
+        ["cargo", "nextest", "list", "--workspace", *test_hooks_features(root), "--message-format", "json"],
         root,
         timeout=600,
     )
@@ -336,9 +348,10 @@ def ledger_rows(root: pathlib.Path) -> tuple[list[str], dict[str, int]]:
     """Every ledger row as `mit_cite<TAB>check<TAB>verdict<TAB>file`, and the verdict recount.
 
     A row is keyed by its MIT cite and check cells (ci-policy's `check_ledger_layout` identity),
-    and its file is a separate column, so a row that moves between `docs/mit-parity-ledger.md`
-    and `docs/parity/` reads as moved, not removed. The root's own ci-policy supplies the layout
-    reader (`ledger_sources`); a tree from before that reader reads the single file. A tree with
+    and its file is a separate column, so a row that changes file (`docs/mit-parity-ledger.md` to
+    `docs/parity/`, or between the files of one section) reads as moved, not removed. The root's own
+    ci-policy supplies the layout reader (`ledger_sources`), every file of a section included; a
+    tree from before that reader reads the single file. A tree with
     `docs/parity/` whose ci-policy has no `ledger_sources` fails: read as one file, the split
     ledger would count no rows.
     """
@@ -369,7 +382,8 @@ def ledger_rows(root: pathlib.Path) -> tuple[list[str], dict[str, int]]:
 
 
 def self_test_ledger_rows() -> int:
-    """Ledger rows keep their key across the split; an old tree reads the single file."""
+    """Ledger rows keep their key across the split and between a section's files; an old tree reads
+    the single file."""
     here = pathlib.Path(__file__).resolve().parents[1]
     table = "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n| --- | --- | --- | --- | --- | --- | --- |\n"
     row = "| kdc_util.c:1 | x | y | z | w | exact | none |\n"
@@ -393,6 +407,12 @@ def self_test_ledger_rows() -> int:
         split, recount = ledger_rows(root)
         if split != ["kdc_util.c:1\tx\texact\tdocs/parity/a1-tgs.md"] or recount.get("exact") != 1:
             raise SystemExit(f"split ledger rows must keep the key and name the new file: {split} {recount}")
+        n += 1
+        (parity / "a1-tgs.md").write_text("# A1 — tgs\n" + table, encoding="utf-8")
+        (parity / "a1-more.md").write_text("# A1 — more\n" + table + row, encoding="utf-8")
+        second, recount = ledger_rows(root)
+        if second != ["kdc_util.c:1\tx\texact\tdocs/parity/a1-more.md"] or recount.get("exact") != 1:
+            raise SystemExit(f"a row in a section's second file must keep its key and name it: {second} {recount}")
         n += 1
         (root / "scripts" / "ci-policy.py").write_text(
             "import re\n"
@@ -631,7 +651,7 @@ GREP_Q_RE = re.compile(r"\bgrep\s+(?:-[A-Za-z]+\s+)*-[A-Za-z]*q[A-Za-z]*\b")
 DIFF_SUB_RE = re.compile(r"\bdiff\s+<\(")
 # The version the ci.yml shellcheck job installs and make shellcheck falls back to.
 SHELLCHECK_IMAGE = "koalaman/shellcheck:v0.11.0"
-SHELL_GLOBS = ("scripts/*.sh", "scripts/lib/*.sh", "harness/*.sh", "harness/prod/*.sh")
+SHELL_GLOBS = ("scripts/*.sh", "scripts/lib/*.sh", "harness/*.sh", "harness/prod/*.sh", "dist/*.sh")
 WARN_LINE_RE = re.compile(r"^(?:warning|error)(?:\[[^\]]+\])?: ")
 WARN_SUMMARY_RE = re.compile(
     r"^(?:warning|error): (?:aborting|could not|build failed|\d+ warnings? emitted|`[^`]+` \([^)]*\) generated)"
@@ -1818,7 +1838,7 @@ def quality_compiler(root: pathlib.Path, out: pathlib.Path, members: list[dict])
     (out / "doc-strict.log").write_text(doc_strict.stderr[-20000:], encoding="utf-8")
 
     doctest = subprocess.run(
-        ["cargo", "test", "--workspace", "--doc"],
+        ["cargo", "test", "--workspace", "--doc", *test_hooks_features(root)],
         cwd=root,
         env=env,
         capture_output=True,

@@ -107,11 +107,15 @@ impl PrincipalStore {
     /// `kadmin/history` on first use.
     /// MIT `create_hist` (`server_kdb.c:141-164`): the first-use creation has MIT's shape —
     /// `max_life` 64 s (`KRB5_KDB_DISALLOW_ALL_TIX` assigned to `max_life`), no attributes,
-    /// one random key of the master enctype at kvno 2.
+    /// one random key of the master enctype, created at kvno 1 and randomized again to kvno 2.
+    /// Each is its own put, so the update log holds both, and the database is saved before the
+    /// caller goes on, held saves or not: a password change that then fails (`passwd_check`)
+    /// leaves `kadmin/history` in the database, as MIT's committed puts do.
     ///
     /// # Errors
     ///
-    /// [`Error::Rng`] when `kadmin/history` must be created and the CSPRNG fails.
+    /// [`Error::Rng`] when `kadmin/history` must be created and the CSPRNG fails;
+    /// [`Error::Db`] when saving it fails.
     pub(crate) fn ensure_history_principal(
         &mut self,
         actor: &str,
@@ -124,12 +128,11 @@ impl PrincipalStore {
             .get(&format!("K/M@{}", self.realm))
             .and_then(|km| km.keys.first().map(|k| k.etype))
             .unwrap_or_else(crate::mkey::default_master_etype);
-        let key = random_key(etype)?;
         let salt = name.default_salt(&self.realm);
         let mut p = Principal::from_keys(
             name,
             self.realm.clone(),
-            vec![KeyEntry::new(etype, key.clone(), INITIAL_HIST_KVNO)],
+            vec![KeyEntry::new(etype, random_key(etype)?, 1)],
             salt,
             crate::store::PrincipalFields {
                 requires_preauth: false,
@@ -141,7 +144,14 @@ impl PrincipalStore {
         p.max_renewable_life = self.policy.max_renewable_life;
         refresh_kadm_tl(&mut p);
         stamp_admin_tl(&mut p, true, actor);
+        let id = p.id();
         self.put_principal(p);
+        let key = random_key(etype)?;
+        let mut p = self.map.get(&id).cloned().ok_or(Error::NotFound)?;
+        p.keys = vec![KeyEntry::new(etype, key.clone(), INITIAL_HIST_KVNO)];
+        stamp_admin_tl(&mut p, true, actor);
+        self.put_principal(p);
+        self.save_through()?;
         Ok((INITIAL_HIST_KVNO, key))
     }
 

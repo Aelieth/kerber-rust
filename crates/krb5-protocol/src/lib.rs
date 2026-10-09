@@ -9,7 +9,8 @@
 //! differential tooling (`capture`, `diff`). There is no C FFI.
 //!
 //! The public surface is the names this root re-exports. Child modules
-//! stay private.
+//! stay private, but for `trace`, MIT's `KRB5_TRACE` log and its trace
+//! points, which the tools call where MIT's library does.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -18,6 +19,7 @@
 mod ap_rep;
 mod ap_req;
 mod as_ex;
+mod auth_con;
 mod builders;
 mod capture;
 mod ccache;
@@ -25,40 +27,58 @@ mod ccache_dir;
 mod ccache_mem;
 mod ccmarshal;
 mod chpw;
+mod clpreauth;
 #[cfg(any(test, feature = "diff"))]
 #[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
 mod error;
+mod framing;
 mod kcm;
 mod keytab;
+mod lock_file;
 mod preauth;
 mod replay;
 mod safe_priv;
 mod secret_file;
+#[cfg(target_os = "linux")]
+mod selabel;
 mod tgs;
+pub mod trace;
 mod transport;
 mod vfy_increds;
 
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
-    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, build_ap_req, build_ap_req_mutual_seq,
-    build_ap_req_opts, build_ap_req_with_cksum, sname_match, verify_ap_req, verify_ap_req_ex,
+    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, address_search, build_ap_req,
+    build_ap_req_from_authenticator, build_ap_req_mutual_seq, build_ap_req_opts,
+    build_ap_req_with_cksum, sname_match, verify_ap_req, verify_ap_req_ex,
 };
 pub use as_ex::{
-    AsOutcome, AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, FastArmor, PkinitClient,
-    as_exchange, as_exchange_key, as_exchange_with_keys, as_init_creds_options, check_as_rep_times,
+    AsOutcome, AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, FastArmor, IdentifyReply,
+    PasswordPrompt, PkinitClient, as_exchange, as_exchange_defer_fast, as_exchange_key,
+    as_exchange_prompted, as_exchange_prompted_defer_fast, as_exchange_with_keys,
+    as_exchange_with_keys_defer_fast, as_identify_realm, as_init_creds_options, check_as_rep_times,
     conf_etypes, conf_preferred_preauth_types, insert_module_padata_before_info_pa,
     sort_krb5_padata_sequence, verify_as_reply_req_times, verify_as_reply_server,
+};
+#[cfg(feature = "test-hooks")]
+pub use auth_con::set_test_seq_random;
+pub use auth_con::{
+    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_DO_TIME, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext,
+    RemoteSeq, check_ticket_etype, generate_seq_number, local_host_address,
+    negotiate_ap_req_etypes, permitted_enctypes, permitted_enctypes_kdc, us_timeofday,
 };
 pub use builders::{
     TgsReqParams, as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,
 };
 pub use capture::capture_pdu;
 pub use ccache::{
-    CcacheCred, CcacheKeyblock, FileCcache, parse_principal, parse_principal_ex, realm, tgt_cred,
+    CcacheCred, CcacheKeyblock, FccFailure, FileCcache, fcc_store, parse_principal,
+    parse_principal_ex, read_cache_file, realm, tgt_cred,
 };
 pub use ccache_dir::{
-    dir_cache_path, dir_cache_path_for_store, dir_display_name, dir_subsidiaries, dir_switch,
+    dir_cache_path, dir_cache_path_for_store, dir_display_name, dir_gen_new, dir_primary,
+    dir_subsidiaries, dir_switch,
 };
 pub use ccache_mem::{memory_destroy, memory_retrieve, memory_store};
 pub use ccmarshal::FCC_TAG_DELTATIME;
@@ -69,19 +89,24 @@ pub use chpw::{
     chpw_result_code_string, format_chpw_failure, key_exp_should_changepw, parse_chpw_rep,
     parse_chpw_result, set_password,
 };
+pub use clpreauth::{ClPreauth, clear_thread_clpreauth, register_clpreauth, set_thread_clpreauth};
 #[cfg(feature = "diff")]
 pub use diff::{
     DiffError, StableKrbError, StableRep, compare_krb_error, compare_preauth_e_data,
     compare_stable_rep, decode_enc_kdc_rep, stable_krb_error, stable_rep,
 };
 pub use error::Error;
+pub use framing::write_messages;
 pub use kcm::{
-    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_load, kcm_socket_path, kcm_store,
-    kcm_store_keep_default, kcm_switch, kcm_switch_principal,
+    KCM_SOCKET_DEFAULT, kcm_cache_names, kcm_destroy, kcm_gen_new, kcm_load, kcm_no_server,
+    kcm_primary_name, kcm_principal, kcm_reachable, kcm_socket_path, kcm_store, kcm_store_creds,
+    kcm_store_keep_default, kcm_switch,
 };
 pub use keytab::{
-    Keytab, KeytabEntry, KeytabSlot, keytab_init_creds_keys, sort_etypes_keytab_first,
+    Keytab, KeytabEntry, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
+    sort_etypes_keytab_first,
 };
+pub use lock_file::{FileLock, lock_file, lock_file_how};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,
     fx_fast_padata, fx_fast_padata_over, pa_for_user, pa_pac_options, pa_pk_as_req,
@@ -97,13 +122,19 @@ pub use safe_priv::{
     unwrap_krb_priv_chained, unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
     verify_krb_safe_checksum,
 };
-pub use secret_file::{destroy_secret_file, write_secret_file};
+pub use secret_file::{
+    check_secret_file_writable, destroy_secret_file, read_secret_file, write_fresh_secret_file,
+    write_secret_file, write_secret_file_like,
+};
+#[cfg(target_os = "linux")]
+pub use selabel::create_labeled;
+#[cfg(feature = "test-hooks")]
+pub use tgs::tgs_exchange_once;
 pub use tgs::{
-    TgsFallback, TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_ex, tgs_exchange_once,
-    tgs_exchange_path, tgs_forward, tgs_forward_options, tgs_non_referral_options, tgs_renew,
-    tgs_renew_options, tgs_reply_client_ok, tgs_reply_req_times, tgs_reply_server_consistent,
-    tgs_s4u, tgs_s4u2proxy, tgs_strip_ok_as_delegate, tgs_try_fallback, tgs_u2u, tgs_validate,
-    tgs_validate_options,
+    TgsCredsOptions, TgsFallback, TgsOutcome, referral_hop_realm, tgs_exchange, tgs_exchange_path,
+    tgs_forward, tgs_forward_options, tgs_non_referral_options, tgs_renew, tgs_renew_options,
+    tgs_reply_client_ok, tgs_reply_req_times, tgs_reply_server_consistent, tgs_s4u, tgs_s4u2proxy,
+    tgs_strip_ok_as_delegate, tgs_try_fallback, tgs_u2u, tgs_validate, tgs_validate_options,
 };
 pub use transport::{KDC_PORT, KdcAddr, exchange, exchange_on_tcp, exchange_with_failover};
 pub use vfy_increds::{

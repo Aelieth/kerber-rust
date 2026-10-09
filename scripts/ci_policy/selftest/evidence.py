@@ -9,13 +9,142 @@ import subprocess
 import sys
 import tempfile
 
-from ..common import SCRIPTS, _die, _scratch_root
+from ..common import (
+    GIT_LOCATION_VARS, ROOT, SCRIPTS, _die, _scratch_root, reported_git_vars, scrub_git_env, without_git_env,
+)
 from ..evidence import (
     _claim_audit_module, check_ci_status_save, check_evidence_check_tool, check_index_check_scratch,
     check_no_red_target_trees, check_red_at_sha_build, check_red_at_sha_inject, check_red_at_sha_overlay_order,
     check_red_at_sha_target_trap, check_settle_helper, check_unit_evidence_helper,
 )
 from .common import _must_die, _must_die_msg
+
+_SCRATCH_IDENT = {
+    "GIT_AUTHOR_NAME": "fx",
+    "GIT_AUTHOR_EMAIL": "fx@x",
+    "GIT_COMMITTER_NAME": "fx",
+    "GIT_COMMITTER_EMAIL": "fx@x",
+}
+
+
+def _self_test_git_env_scrub() -> None:
+    """A scratch repository never touches the repository an inherited GIT_* names.
+
+    An exported GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE once made a scratch `git init` write core.worktree into
+    the checkout's shared config. Decoy repositories stand in for that checkout: the scratch commands under the
+    raw environment change one (so the comparison can see a leak); under the scrub, in ci-policy and in
+    hygiene-diff.py's own self-test, they leave theirs byte for byte as they were."""
+    root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    inherited = {k: v for k, v in os.environ.items() if k.startswith("GIT_")}
+
+    def git(cwd: pathlib.Path, env: dict[str, str], *args: str, check: bool = True) -> None:
+        subprocess.run(["git", *args], cwd=cwd, env=env, check=check, capture_output=True)
+
+    def repo(name: str) -> pathlib.Path:
+        d = root / name
+        d.mkdir()
+        (d / "f").write_text(f"{name}\n")
+        for args in (("init", "-q"), ("add", "-A"), ("commit", "-q", "-m", name)):
+            git(d, {**without_git_env(), **_SCRATCH_IDENT}, *args)
+        return d
+
+    def state(d: pathlib.Path) -> dict[str, bytes]:
+        g = d / ".git"
+        return {str(p.relative_to(g)): p.read_bytes() for p in sorted(g.rglob("*")) if p.is_file()}
+
+    def naming(d: pathlib.Path) -> dict[str, str]:
+        work = root / f"{d.name}-work"
+        work.mkdir()
+        (work / "w").write_text("work\n")
+        g = d / ".git"
+        paths = {
+            "GIT_DIR": g,
+            "GIT_WORK_TREE": work,
+            "GIT_INDEX_FILE": g / "index",
+            "GIT_COMMON_DIR": g,
+            "GIT_OBJECT_DIRECTORY": g / "objects",
+        }
+        return {name: str(paths[name]) for name in GIT_LOCATION_VARS}
+
+    def scratch(env: dict[str, str], check: bool = True) -> None:
+        # The commands the Frozen-at fixture runs in its scratch repository.
+        s = pathlib.Path(tempfile.mkdtemp(dir=root))
+        (s / "g").write_text("scratch\n")
+        for args in (("init", "-q"), ("add", "-A"), ("commit", "-q", "-m", "scratch")):
+            git(s, env, *args, check=check)
+
+    def restore() -> None:
+        for name in [k for k in os.environ if k.startswith("GIT_")]:
+            del os.environ[name]
+        os.environ.update(inherited)
+
+    try:
+        raw = repo("raw")
+        before = state(raw)
+        scratch({**os.environ, **_SCRATCH_IDENT, **naming(raw)}, check=False)
+        if state(raw) == before:
+            _die("the GIT_* scrub self-test must see a raw scratch repository change the repository GIT_DIR names")
+        decoy = repo("decoy")
+        before = state(decoy)
+        os.environ.update(naming(decoy))
+        try:
+            scratch({**without_git_env(), **_SCRATCH_IDENT})
+        finally:
+            restore()
+        if state(decoy) != before:
+            _die("a scratch repository built under an exported GIT_* changed the repository it names")
+        os.environ.update({**naming(repo("scrub")), "GIT_CONFIG_PARAMETERS": "'core.bare'='true'"})
+        try:
+            dropped = scrub_git_env()
+            left = sorted(k for k in os.environ if k.startswith("GIT_"))
+        finally:
+            restore()
+        if left or not {*GIT_LOCATION_VARS, "GIT_CONFIG_PARAMETERS"} <= set(dropped):
+            _die(f"scrub_git_env must drop every GIT_* variable: dropped {dropped}, left {left}")
+        config = ["GIT_CONFIG_COUNT", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_KEY_0", "GIT_CONFIG_PARAMETERS",
+                  "GIT_CONFIG_VALUE_0"]
+        quiet = ["GIT_AUTHOR_NAME", "GIT_EDITOR", "GIT_PAGER"]
+        reported = reported_git_vars(sorted([*GIT_LOCATION_VARS, *config, *quiet]))
+        if sorted(reported) != sorted([*GIT_LOCATION_VARS, *config]):
+            _die(f"ci-policy must report the dropped location and GIT_CONFIG* variables only, got {reported}")
+        hd = repo("hygiene-diff")
+        before = state(hd)
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS / "hygiene-diff.py"), "--self-test"],
+            cwd=ROOT,
+            env={**without_git_env(), **naming(hd)},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if r.returncode != 0 or state(hd) != before:
+            _die(
+                "hygiene-diff.py --self-test under an exported GIT_* must pass and leave the repository it names "
+                f"alone (rc={r.returncode}): {(r.stdout + r.stderr)[-300:]}"
+            )
+    finally:
+        restore()
+        subprocess.run(["rm", "-rf", str(root)], check=False)
+
+
+def _self_test_unreadable_checkout() -> None:
+    """A checkout git cannot read fails the red-at-sha probes with git's own error.
+
+    Here a GIT_DIR naming no repository stands in for it; in the field it is a dubious-ownership refusal once
+    the scrub drops a safe.directory passed through the environment. The HEAD probe used to skip silently and
+    the base probes to report a shallow clone."""
+    root = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    saved = os.environ.get("GIT_DIR")
+    os.environ["GIT_DIR"] = str(root / "no-repository")
+    try:
+        _must_die_msg("git cannot read this checkout", check_red_at_sha_build)
+        _must_die_msg("git cannot read this checkout", check_red_at_sha_inject)
+    finally:
+        if saved is None:
+            os.environ.pop("GIT_DIR", None)
+        else:
+            os.environ["GIT_DIR"] = saved
+        subprocess.run(["rm", "-rf", str(root)], check=False)
 
 
 def _self_test_evidence() -> None:
@@ -24,6 +153,7 @@ def _self_test_evidence() -> None:
     check_evidence_check_tool()
     check_ci_status_save()
     check_red_at_sha_inject()
+    _self_test_unreadable_checkout()
     _overlay_dirs = ('    for d in lib oracle ci_policy; do\n        rm -rf "$WT/scripts/$d"\n'
                      '        cp -a "$ROOT/scripts/$d" "$WT/scripts/$d"\n    done\n')
     check_red_at_sha_overlay_order(
@@ -225,6 +355,7 @@ def _self_test_evidence() -> None:
     # W1-Z Z3.1 freeze rule: a `Frozen-at: <sha>` summary resolves its cites at
     # that commit, so a later gate edit that drops the assertion does not
     # re-open the closed summary; the same bullet without the header is red.
+    _self_test_git_env_scrub()
     froot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:
         (froot / "scripts").mkdir()
@@ -237,13 +368,7 @@ def _self_test_evidence() -> None:
             "echo \"$MIT_OUT\" | grep -F 'value=1'\n"
         )
         gate.write_text(asserting)
-        genv = {
-            **os.environ,
-            "GIT_AUTHOR_NAME": "fx",
-            "GIT_AUTHOR_EMAIL": "fx@x",
-            "GIT_COMMITTER_NAME": "fx",
-            "GIT_COMMITTER_EMAIL": "fx@x",
-        }
+        genv = {**without_git_env(), **_SCRATCH_IDENT}
         for cmd in (
             ["git", "init", "-q"],
             ["git", "add", "-A"],
@@ -251,7 +376,7 @@ def _self_test_evidence() -> None:
         ):
             subprocess.run(cmd, cwd=froot, check=True, env=genv, capture_output=True)
         sha = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=froot, check=True, capture_output=True, text=True
+            ["git", "rev-parse", "HEAD"], cwd=froot, check=True, capture_output=True, text=True, env=genv
         ).stdout.strip()
         gate.write_text(asserting.replace("grep -F 'value=1'", "cat"))
         fev = froot / "logs"

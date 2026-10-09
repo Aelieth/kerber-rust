@@ -1,9 +1,8 @@
 //! RFC 6113 KRB-FX-CF2 and P-256 ECDH used by FAST, SPAKE, and PKINIT.
 //!
 //! CF2 is PRF+ of each key under its pepper, XOR, then random-to-key.
-//! The first PRF+ output, which holds the XOR, is wiped once the key is
-//! built. The second output and the blocks inside `prf_plus` are not
-//! wiped.
+//! Both PRF+ outputs, and the buffer each key below is cut from, are wiped
+//! on every return; the hash outputs on the stack are not.
 
 use sha1::{Digest as Sha1Digest, Sha1};
 use sha2::{Digest as Sha2Digest, Sha256};
@@ -13,28 +12,29 @@ use crate::error::Error;
 use crate::etype::EncryptionType;
 use crate::key::ProtocolKey;
 use crate::prf::prf_plus;
+use crate::wipe::Wiped;
 
 /// KRB-FX-CF2(k1, k2, pepper1, pepper2) = random-to-key(PRF+(k1,p1) XOR PRF+(k2,p2)).
 ///
+/// MIT `krb5_c_fx_cf2_simple` (`cf2.c:123-176`): each PRF+ is `k1`'s random-to-key input length, so des3 takes 21 octets.
+///
 /// # Errors
 ///
-/// None: both [`prf_plus`] calls ask for `k1`'s key length, which is never 0 (the only length it
-/// refuses), and [`ProtocolKey::from_bytes`] gets exactly that many octets.
+/// None: both [`prf_plus`] calls ask for `k1`'s random-to-key input length, which is never 0
+/// (the only length it refuses), and the key is made from exactly that many octets.
 pub fn krb_fx_cf2(
     k1: &ProtocolKey,
     k2: &ProtocolKey,
     pepper1: &[u8],
     pepper2: &[u8],
 ) -> Result<ProtocolKey, Error> {
-    let n = k1.etype().key_len();
-    let mut a = prf_plus(k1, pepper1, n)?;
-    let b = prf_plus(k2, pepper2, n)?;
+    let n = k1.etype().keybytes();
+    let mut a = Wiped(prf_plus(k1, pepper1, n)?);
+    let b = Wiped(prf_plus(k2, pepper2, n)?);
     for (x, y) in a.iter_mut().zip(b.iter()) {
         *x ^= *y;
     }
-    let key = ProtocolKey::from_bytes(k1.etype(), &a)?;
-    a.zeroize();
-    Ok(key)
+    ProtocolKey::from_random(k1.etype(), &a)
 }
 
 /// Truncate or hash `bytes` to an etype-sized protocol key.
@@ -51,7 +51,7 @@ pub fn key_from_shared(etype: EncryptionType, bytes: &[u8]) -> Result<ProtocolKe
     let mut h = <Sha256 as Sha2Digest>::new();
     Sha2Digest::update(&mut h, bytes);
     let out = Sha2Digest::finalize(h);
-    let mut buf = vec![0u8; n];
+    let mut buf = Wiped(vec![0u8; n]);
     for (i, b) in buf.iter_mut().enumerate() {
         *b = out[i % out.len()];
     }
@@ -59,11 +59,22 @@ pub fn key_from_shared(etype: EncryptionType, bytes: &[u8]) -> Result<ProtocolKe
 }
 
 /// P-256 ECDH: 32-byte scalar and 65-byte uncompressed public key.
+///
+/// The scalar is zeroized where the value lies when it drops. It is an inline array, so a copy
+/// that a move of the value leaves, or that is taken out of it, is not wiped.
 pub struct P256Keypair {
     /// Scalar (secret).
     pub secret: [u8; 32],
     /// Uncompressed SEC1 public key.
     pub public: Vec<u8>,
+}
+
+impl Drop for P256Keypair {
+    fn drop(&mut self) {
+        self.secret.zeroize();
+        #[cfg(test)]
+        let _ = crate::wipe::tests::DROPPED_SCALARS.try_with(|d| d.borrow_mut().push(self.secret));
+    }
 }
 
 /// Generate a P-256 keypair.
@@ -168,7 +179,7 @@ fn scalar_from_bytes32(b: &[u8; 32]) -> Result<p256::Scalar, Error> {
 /// [`ProtocolKey::from_bytes`] requires.
 pub fn octetstring2key(etype: EncryptionType, x: &[u8]) -> Result<ProtocolKey, Error> {
     let n = etype.key_len();
-    let mut buf = Vec::with_capacity(n + 20);
+    let mut buf = Wiped(Vec::with_capacity(n + 20));
     let mut i = 0u8;
     while buf.len() < n {
         let mut h = <Sha1 as Sha1Digest>::new();
@@ -200,7 +211,7 @@ pub fn pkinit_kdf_agile(
     other_info: &[u8],
 ) -> Result<ProtocolKey, Error> {
     let n = etype.key_len();
-    let mut buf = Vec::with_capacity(n + 32);
+    let mut buf = Wiped(Vec::with_capacity(n + 32));
     let mut counter = 1u32;
     while buf.len() < n {
         let mut h = Sha256::new();

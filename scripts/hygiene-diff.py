@@ -643,6 +643,18 @@ def _self_test_ledger_rekey(root: pathlib.Path) -> int:
     if rc == 0 or "FAIL ledger rekey entry not pinned to docs/parity/a1-tgs.md at the old tree" not in out:
         raise SystemExit(f"hygiene-diff --self-test: a rekey entry pinned to another blob must fail: {out[-300:]}")
     n += 1
+    # A section may span files: a row reworded as it moves from a1-tgs.md to a1-more.md is read in its new file.
+    (repo / "docs" / "parity" / "a1-more.md").write_text(
+        "# A1 — more\n" + head + "| a.c:1 | Rust follows MIT | m | r | e | exact | pa |\n", encoding="utf-8")
+    moved = snap(root / "rk-new12", "Rust follows MIT", "exact", commit(""))
+    (moved / "ledger-rows.txt").write_text(
+        "#\na.c:1\tRust follows MIT\texact\tdocs/parity/a1-more.md\nb.c:2\tcheck b\texact\tdocs/parity/a1-tgs.md\n",
+        encoding="utf-8")
+    rc, out = run(moved, good)
+    if rc != 0 or ("info ledger row reworded (check cell): docs/parity/a1-tgs.md a.c:1 (now in "
+                   "docs/parity/a1-more.md)") not in out:
+        raise SystemExit(f"hygiene-diff --self-test: a reword that moved to a sibling file must re-key: {out[-300:]}")
+    n += 1
     return n
 
 
@@ -1163,7 +1175,11 @@ def _compare(args) -> int:
             fail(f"ledger rekey entry not pinned to {path} at the old tree: {what}")
             continue
         old_doc = _git_out(git_dir, "cat-file", "blob", blob)
-        new_doc = _git_out(git_dir, "show", f"{new_head}:{path}") if new_head else None
+        # A section may span files, so the new row is read in the file the new snapshot names for it.
+        new_path = new_led[k_new][1] or path
+        if new_path != path:
+            what = f"{what} (now in {new_path})"
+        new_doc = _git_out(git_dir, "show", f"{new_head}:{new_path}") if new_head else None
         old_cells = _ledger_row_cells(old_doc or "", old_cite, old_check)
         new_cells = _ledger_row_cells(new_doc or "", new_cite, new_check)
         if old_cells is None or new_cells is None:
@@ -1408,6 +1424,10 @@ def _compare(args) -> int:
 
 
 def main() -> int:
+    # The self-test builds scratch repositories and the compare reads the old tree with `git -C`: an inherited
+    # GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or any other GIT_* would point git at another repository.
+    for name in [k for k in os.environ if k.startswith("GIT_")]:
+        del os.environ[name]
     if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         n = _self_test()
         print(f"hygiene-diff: self-test ok ({n} cases)")

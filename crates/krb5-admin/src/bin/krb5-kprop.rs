@@ -2,33 +2,65 @@
 //!
 //! Usage: `krb5-kprop [-P port] [-s keytab] [-n host-instance] replica`
 //!
-//! Loads `KRB5_KDC_DB` / `KRB5_KDC_STASH`, issues a `host/<instance>`
-//! ticket from that store, and calls [`krb5_admin::kprop_send_store`].
-//! Dump keys are wrapped with `KRB5_MASTER_PASSWORD`.
+//! Loads the database and stash [`krb5_config::KdcPaths`] resolves, issues a `host/<instance>`
+//! ticket from that store, and calls [`krb5_admin::kprop_send_store`]. The dump's keys are
+//! wrapped under the stash's master key, as MIT's kprop sends a dump of the database that stash
+//! opens; with the `test-hooks` feature, `KRB5_MASTER_PASSWORD` names it instead when set.
+//!
+//! The keytab is `-s`'s, else the default keytab (`KRB5_KTNAME`, else krb5.conf's
+//! `default_keytab_name`, else `/etc/krb5.keytab`), as MIT's kprop finds it; one that cannot be
+//! read stops kprop with MIT's error "while getting initial credentials". Its first principal is
+//! the client, where MIT's is `host/<this host>` with that keytab's key. kprop reads no
+//! environment of its own: MIT's reads none.
+//!
+//! `-i` sends an iprop dump (`ipropx 1`), what MIT's kadmind sends a replica that asked for a
+//! full resync after `kdb5_util dump -i`: it needs `iprop_enable` for the realm, and the dump's
+//! header carries the update log's last serial and time, read before the database is, as MIT's
+//! dump reads them.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::net::TcpStream;
-use std::path::PathBuf;
+use std::path::Path;
 
-use krb5_admin::{KPROP_PORT, kprop_send_store, kprop_send_store_iprop};
-use krb5_kdc::{issue_as, issue_tgs, load_store};
+use krb5_admin::{KPROP_PORT, iprop_snapshot, kprop_send_store, kprop_send_store_iprop};
+use krb5_crypto::ProtocolKey;
+use krb5_kdc::{PrincipalStore, issue_as, issue_tgs, load_store};
+use krb5_log::klog::JsonLog;
 use krb5_protocol::Keytab;
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::PrincipalName;
 
 fn main() {
-    let _ = tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "krb5_admin=info,krb5_kdc=info".into()),
-        )
-        .try_init();
+    // MIT `main` (`kprop/kprop.c:101-105`): the library context first, its profile krb5.conf; a
+    // profile it refuses ends kprop.
+    if let Err(e) = krb5_config::init_profile() {
+        let argv0 = std::env::args()
+            .next()
+            .unwrap_or_else(|| "kprop".to_owned());
+        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    }
+    // The JSON log only where the KDC profile's `[logging] json` names a destination (MIT has
+    // none).
+    if let Some(json) = krb5_config::LogSpecs::load_json().and_then(|s| JsonLog::open("kprop", &s))
+    {
+        let _ = tracing_subscriber::fmt()
+            .json()
+            .with_writer(json.make_writer())
+            .with_env_filter(krb5_kdc::json_log_filter(
+                "krb5_admin=info,krb5_kdc=info,krb5_protocol=warn",
+            ))
+            .try_init();
+    }
 
     let mut port = KPROP_PORT;
-    let mut keytab: Option<PathBuf> = std::env::var("KRB5_KPROP_KEYTAB").ok().map(PathBuf::from);
+    let argv0 = std::env::args()
+        .next()
+        .unwrap_or_else(|| "kprop".to_owned());
+    // MIT `parse_args` (`kprop/kprop.c:143-145`): `-s` names the keytab.
+    let mut keytab: Option<String> = None;
     let mut instance: Option<String> = None;
     let mut replica: Option<String> = None;
     let mut iprop = false;
@@ -44,7 +76,7 @@ fn main() {
                 });
             }
             "-s" => {
-                keytab = Some(PathBuf::from(args.next().unwrap_or_else(|| need_arg("-s"))));
+                keytab = Some(args.next().unwrap_or_else(|| need_arg("-s")));
             }
             "-n" => {
                 instance = Some(args.next().unwrap_or_else(|| need_arg("-n")));
@@ -59,26 +91,58 @@ fn main() {
     let Some(replica) = replica else {
         usage();
     };
-    let master = std::env::var("KRB5_MASTER_PASSWORD").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_MASTER_PASSWORD");
-        std::process::exit(2);
-    });
-    let db = PathBuf::from(std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_KDC_DB");
-        std::process::exit(2);
-    }));
-    let stash = PathBuf::from(std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_KDC_STASH");
-        std::process::exit(2);
-    }));
-    let store = load_store(&db, &stash).unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: load store: {e}");
+    let paths = krb5_config::KdcPaths::resolve(None).unwrap_or_else(|e| {
+        // MIT `parse_args` (`kprop/kprop.c:154-159`): no realm prints only this context (MIT
+        // passes errno, 0, to com_err), exit 1.
+        if matches!(e, krb5_config::Error::NoDefaultRealm) {
+            eprintln!("krb5-kprop: while getting default realm");
+        } else {
+            eprintln!("krb5-kprop: {e}");
+        }
         std::process::exit(1);
     });
+    // The database is judged first, then the stash, which opens it and wraps the dump: one that
+    // cannot be read is named before anything is sent.
+    // MIT `open_db_and_mkey` (`kadmin/dbutil/kdb5_util.c:378-401`): the dump kprop sends opens the database, and reads its master entry, before the master key is fetched.
+    if let Err(e) = krb5_kdc::check_database(&paths.database_name) {
+        eprintln!("krb5-kprop: load store: {e}");
+        std::process::exit(1);
+    }
+    if let Err(e) = std::fs::File::open(&paths.key_stash_file) {
+        eprintln!("krb5-kprop: stash {}: {e}", paths.key_stash_file.display());
+        std::process::exit(1);
+    }
+    // MIT `dump_db` (`kadmin/dbutil/dump.c:1173-1192`): an iprop dump needs iprop enabled; its header is the update log's last serial and time.
+    // MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1333`): that serial and time are read before the database, so the dump holds at least what they say.
+    let (store, iprop_last) = if iprop {
+        let realm = paths.realm.clone().unwrap_or_default();
+        let params = krb5_config::IpropParams::load(&realm, &paths.database_name);
+        if !params.enabled {
+            eprintln!("Iprop not enabled");
+            std::process::exit(1);
+        }
+        let (store, last) = iprop_snapshot(&paths.database_name, &paths.key_stash_file, &params)
+            .unwrap_or_else(|e| {
+                eprintln!("krb5-kprop: {e}");
+                std::process::exit(1);
+            });
+        (store, Some(last))
+    } else {
+        let store = load_store(&paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
+            eprintln!("krb5-kprop: load store: {e}");
+            std::process::exit(1);
+        });
+        (store, None)
+    };
+    let master =
+        master_key(&store, &paths.database_name, &paths.key_stash_file).unwrap_or_else(|e| {
+            eprintln!("krb5-kprop: {e}");
+            std::process::exit(1);
+        });
     let realm = store.realm().to_owned();
     let host_inst = instance.unwrap_or_else(|| replica.clone());
     let server = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host_inst.as_str()]);
-    let client = client_name(keytab.as_deref(), &server);
+    let client = client_name(&argv0, keytab.as_deref(), &realm);
     let Some(princ) = store.get_name(&client) else {
         eprintln!("krb5-kprop: missing client {}", client.components_joined());
         std::process::exit(1);
@@ -125,20 +189,29 @@ fn main() {
         eprintln!("krb5-kprop: connect {addr}: {e}");
         std::process::exit(1);
     });
-    let send = if iprop {
-        kprop_send_store_iprop
-    } else {
-        kprop_send_store
-    };
-    send(
-        &mut stream,
-        &store,
-        master.as_bytes(),
-        tgs_out.rep.0.ticket,
-        &tgs_out.session_key,
-        &krb5_types::ascii(&realm),
-        &client,
-    )
+    let crealm = krb5_types::ascii(&realm);
+    let (ticket, session) = (tgs_out.rep.0.ticket, &tgs_out.session_key);
+    match iprop_last {
+        Some(last) => kprop_send_store_iprop(
+            &mut stream,
+            &store,
+            &master,
+            last,
+            ticket,
+            session,
+            &crealm,
+            &client,
+        ),
+        None => kprop_send_store(
+            &mut stream,
+            &store,
+            &master,
+            ticket,
+            session,
+            &crealm,
+            &client,
+        ),
+    }
     .unwrap_or_else(|e| {
         eprintln!("krb5-kprop: send: {e}");
         std::process::exit(1);
@@ -146,20 +219,65 @@ fn main() {
     println!("kprop ok {addr}");
 }
 
-fn client_name(keytab: Option<&std::path::Path>, server: &PrincipalName) -> PrincipalName {
-    if let Some(path) = keytab {
-        match std::fs::read(path)
-            .and_then(|b| Keytab::parse(&b).map_err(|e| std::io::Error::other(e.to_string())))
-        {
-            Ok(kt) => {
-                if let Some(e) = kt.entries.first() {
-                    return e.name.clone();
-                }
-            }
-            Err(e) => eprintln!("krb5-kprop: keytab {}: {e}", path.display()),
+/// The key the dump's keys are wrapped under: the stash's (it opened `store`), or with the
+/// `test-hooks` feature one derived from `KRB5_MASTER_PASSWORD` with the type of the store's
+/// `K/M` key.
+fn master_key(store: &PrincipalStore, db: &Path, stash: &Path) -> Result<ProtocolKey, String> {
+    #[cfg(feature = "test-hooks")]
+    let hooked = std::env::var("KRB5_MASTER_PASSWORD")
+        .ok()
+        .map(zeroize::Zeroizing::new);
+    #[cfg(not(feature = "test-hooks"))]
+    let hooked: Option<zeroize::Zeroizing<String>> = None;
+    match hooked {
+        Some(pw) => {
+            let etype = store
+                .get(&format!("K/M@{}", store.realm()))
+                .and_then(|km| km.keys.first())
+                .map_or_else(krb5_kdc::default_master_etype, |k| k.etype);
+            krb5_kdc::master_key_from_password(store.realm(), pw.as_bytes(), etype)
+                .map_err(|e| e.to_string())
+        }
+        None => {
+            krb5_kdc::read_stash(stash, db).map_err(|e| format!("stash {}: {e}", stash.display()))
         }
     }
-    server.clone()
+}
+
+/// The client: the first principal of kprop's keytab (`-s`, else the default keytab). A keytab
+/// that cannot be read stops kprop with MIT's error.
+/// MIT `get_tickets` (`kprop/kprop.c:195-208`): a name that does not resolve fails "while resolving keytab", and a keytab `krb5_get_init_creds_keytab` cannot use fails "while getting initial credentials", each ending kprop.
+fn client_name(argv0: &str, keytab: Option<&str>, realm: &str) -> PrincipalName {
+    let fail = |text: &str, during: &str| -> ! {
+        eprintln!("{argv0}: {text} {during}");
+        std::process::exit(1);
+    };
+    let file =
+        krb5_admin::kprop_keytab_file(keytab).unwrap_or_else(|e| fail(e, "while resolving keytab"));
+    let creds = "while getting initial credentials\n";
+    let bytes = match file.as_deref().map(krb5_protocol::read_secret_file) {
+        Some(Ok(bytes)) => Some(bytes),
+        Some(Err(e)) => fail(&krb5_log::klog::os_error_text(&e), creds),
+        None => None,
+    };
+    if let Some(bytes) = &bytes
+        && (bytes.len() < 2 || bytes[0] != 0x05 || !matches!(bytes[1], 0x01 | 0x02))
+    {
+        fail("Unsupported key table format version number", creds);
+    }
+    let first = bytes
+        .and_then(|b| Keytab::parse(&b).ok())
+        .and_then(|kt| kt.entries.into_iter().next());
+    if let Some(entry) = first {
+        return entry.name;
+    }
+    // MIT `get_tickets` (`kprop/kprop.c:173-174`): kprop's own name is `host` and this host, made by its krb5.conf context.
+    let conf = krb5_config::load_krb5_conf().unwrap_or_default();
+    let host = krb5_config::local_host_name(&conf);
+    fail(
+        &format!("Keytab contains no suitable keys for host/{host}@{realm}"),
+        creds,
+    )
 }
 
 fn need_arg(flag: &str) -> String {

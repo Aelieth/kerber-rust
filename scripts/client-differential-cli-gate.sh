@@ -166,6 +166,37 @@ if [ "$RUST_SKEW0_RC" -eq 0 ]; then
 fi
 echo "$RUST_SKEW0" | grep -qiE 'Clock skew|skew too great'
 echo "RUST_skew_notimesync"
+echo "==== +3 d kinit answers the preauth error at the KDC's time (note_req_timestamp) ===="
+docker exec "$NAME" python3 -c '
+from pathlib import Path
+t = Path("/tmp/direct-krb5.conf").read_text()
+t = t.replace("[libdefaults]\n", "[libdefaults]\n    spake_preauth_groups = nosuch\n", 1)
+Path("/tmp/encts-krb5.conf").write_text(t)
+'
+skew_encts() {
+    local side=$1 cmd=$2
+    local out rc tr n
+    docker exec "$NAME" rm -f /tmp/skew-encts.trace
+    set +e
+    out="$(docker exec -e KRB5_CONFIG=/tmp/encts-krb5.conf -e KRB5_PASSWORD=userpassword \
+        -e KRB5_TRACE=/tmp/skew-encts.trace "$NAME" sh -c "$cmd" 2>&1)"
+    rc=$?
+    set -e
+    tr="$(docker exec "$NAME" cat /tmp/skew-encts.trace)"
+    echo "$out"
+    echo "$tr"
+    echo "${side}_skew_encts_rc=$rc"
+    [ "$rc" -eq 0 ] || die "$side kinit +3d with encrypted timestamp failed"
+    echo "$tr" | grep -qF 'Encrypted timestamp (for' || die "$side kinit +3d sent no encrypted timestamp"
+    n="$(echo "$tr" | grep -cF 'Sending request (' || true)"
+    [ "$n" = 2 ] || die "$side kinit +3d sent $n requests, not 2"
+    if echo "$tr" | grep -qF 'Clock skew too great'; then
+        die "$side kinit +3d took a clock skew error"
+    fi
+    echo "${side}_skew_encts_first_try"
+}
+skew_encts MIT "printf 'userpassword\n' | LD_PRELOAD=/tmp/skew.so kinit -c /tmp/cc_skew_e user@KERBER.TEST"
+skew_encts RUST "LD_PRELOAD=/tmp/skew.so /tmp/krb5-kinit -c /tmp/cc_skew_e_r user@KERBER.TEST"
 docker exec "$NAME" python3 -c '
 from pathlib import Path
 t = Path("/tmp/direct-krb5.conf").read_text().replace("kdc = 127.0.0.1:88", "kdc = 127.0.0.1:1")
@@ -213,9 +244,7 @@ fi
 echo "$RUST_P" | grep -q 'requires'
 
 echo "==== gss-mit-client → Rust acceptor majors ===="
-if ! docker exec "$NAME" cc -o /tmp/gss-mit-client /tmp/gss-mit-client.c -lgssapi_krb5 -lkrb5; then
-    die "cc gss-mit-client failed"
-fi
+mit_oracle_cc "$NAME" /tmp/gss-mit-client /tmp/gss-mit-client.c gssapi
 docker exec -d "$NAME" sh -c '/tmp/krb5-gss-accept --keytab /tmp/host.keytab --listen 127.0.0.1:4444 >/tmp/gss-accept.log 2>&1'
 ok=0
 for _ in $(seq 1 20); do
@@ -335,9 +364,7 @@ echo "RUST_kinit_keyexp_changepw"
 
 echo "==== vfy_increds (vfy_increds.c) ===="
 docker cp "$ROOT/scripts/oracle/t_vfy_increds.c" "$NAME":/tmp/t_vfy_increds.c
-if ! docker exec "$NAME" cc -o /tmp/t_vfy_increds /tmp/t_vfy_increds.c -lkrb5 -lcom_err; then
-    die "MIT t_vfy_increds compile failed"
-fi
+mit_oracle_cc "$NAME" /tmp/t_vfy_increds /tmp/t_vfy_increds.c krb5
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-vfy-increds" "$NAME":/tmp/krb5-vfy-increds
 docker exec "$NAME" chmod +x /tmp/krb5-vfy-increds
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/vfy.kerber.test' >/dev/null
@@ -415,9 +442,7 @@ echo "RUST_vfy_increds_nofail"
 echo "==== chpw texts + setpw (chpw.c) ===="
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpasswd" "$NAME":/tmp/krb5-kpasswd
 docker cp "$ROOT/scripts/oracle/kpasswd-tgs-client.c" "$NAME":/tmp/kpasswd-tgs-client.c
-if ! docker exec "$NAME" cc -o /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c -lkrb5; then
-    die "MIT kpasswd-tgs-client compile failed"
-fi
+mit_oracle_cc "$NAME" /tmp/kpasswd-tgs-client /tmp/kpasswd-tgs-client.c krb5
 docker exec "$NAME" chmod +x /tmp/krb5-kpasswd
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addpol -minlength 8 chpwmin' >/dev/null
 kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -policy chpwmin -pw LongPass1 chpwpol' >/dev/null
@@ -429,7 +454,7 @@ echo "$MIT_CHPW_POL"
 echo "$MIT_CHPW_POL" | grep -q 'Password change rejected'
 RUST_CHPW_POL="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf \
     -e KRB5_PASSWORD=LongPass1 -e KRB5_NEW_PASSWORD=short "$NAME" \
-    /tmp/krb5-kpasswd 127.0.0.1 chpwpol@KERBER.TEST 2>&1)" || true
+    /tmp/krb5-kpasswd chpwpol@KERBER.TEST 2>&1)" || true
 echo "$RUST_CHPW_POL"
 echo "$RUST_CHPW_POL" | grep -q 'Password change rejected'
 echo "MIT_kpasswd_soft_rejected"
@@ -447,7 +472,7 @@ echo "$MIT_SETPW" | grep -q 'Access denied'
 RUST_SETPW="$(docker exec -e KRB5_CONFIG=/tmp/direct-krb5.conf \
     -e KRB5_PASSWORD=setold -e KRB5_NEW_PASSWORD=shouldfail \
     -e KRB5_KPASSWD_TARGET=chpwother@KERBER.TEST "$NAME" \
-    /tmp/krb5-kpasswd 127.0.0.1 chpwset@KERBER.TEST 2>&1)" || true
+    /tmp/krb5-kpasswd chpwset@KERBER.TEST 2>&1)" || true
 echo "$RUST_SETPW"
 echo "$RUST_SETPW" | grep -q 'Access denied'
 echo "MIT_kpasswd_setpw_denied"
@@ -970,8 +995,7 @@ echo "==== Z1.3 acceptor validate_times + key pinning (forged) ===="
 # replay it via the Rust initiator (which uses the cached ticket bytes as-is)
 # to both the Rust acceptor and MIT's gss-server. Both must refuse; the
 # untouched ticket must be accepted by both (the control).
-docker exec "$NAME" cc -o /tmp/gss-mit-server /tmp/gss-mit-server.c -lgssapi_krb5 -lkrb5 \
-    || die "cc gss-mit-server failed"
+mit_oracle_cc "$NAME" /tmp/gss-mit-server /tmp/gss-mit-server.c gssapi
 
 # Source ccache: a real TGT + host/testhost service ticket to forge from
 # (Rust tools so the initiator parses the ccache format).

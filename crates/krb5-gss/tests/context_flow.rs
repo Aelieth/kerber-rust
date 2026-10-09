@@ -23,6 +23,7 @@ struct WrappedIov {
 }
 
 fn contexts() -> (GssContext, GssContext) {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(
@@ -81,6 +82,7 @@ fn user_host() -> (
     ProtocolKey,
     PrincipalName,
 ) {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(
@@ -287,6 +289,7 @@ fn verify_mic_bad_filler_is_truncated() {
 
 #[test]
 fn channel_bindings_must_match() {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(
@@ -401,6 +404,7 @@ fn spnego_accept_emits_neg_token_resp() {
 
 #[test]
 fn acceptor_rejects_wrong_service_name() {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(

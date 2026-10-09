@@ -47,7 +47,7 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 fi
 
 for b in krb5-kdc krb5-kadmind krb5-kpropd krb5-kprop krb5-kdb; do
-    [ -x "target/debug/$b" ] || die "missing target/debug/$b — run: cargo build -p krb5-kdc -p krb5-admin"
+    [ -x "target/debug/$b" ] || die "missing target/debug/$b — run: scripts/lib/build-bins.sh"
 done
 
 # Safety ceiling: never launch past KERBER_PROD_MAX_NODES capped containers.
@@ -84,6 +84,8 @@ for n in "$PRIMARY" "$REPLICA"; do
     docker cp target/debug/krb5-kdb     "$n":/usr/local/bin/krb5-kdb
     docker exec "$n" chmod +x /usr/local/bin/krb5-kdc /usr/local/bin/krb5-kadmind \
         /usr/local/bin/krb5-kpropd /usr/local/bin/krb5-kprop /usr/local/bin/krb5-kdb
+    # The JSON log the gates read (kdc.issue) goes out only where `[logging] json` asks for it.
+    docker exec "$n" sh -c 'printf "\n[logging]\n    json = STDOUT\n" >>/etc/krb5kdc/kdc.conf'
 done
 say "staged Rust binaries on kdc1 + kdc2"
 
@@ -104,12 +106,12 @@ CREATE="$(docker exec \
     -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
     -e KRB5_TEST_USER_PASSWORD="$KERBER_PROD_USER_PW" \
     -e KRB5_TEST_ADMIN_PASSWORD="$KERBER_PROD_ADMIN_PW" \
-    "$PRIMARY" /usr/local/bin/krb5-kdb create "$REALM" 2>&1)" || {
+    "$PRIMARY" /usr/local/bin/krb5-kdb -r "$REALM" create -s 2>&1)" || {
     echo "$CREATE" >&2
-    die "krb5-kdb create $REALM failed"
+    die "krb5-kdb -r $REALM create -s failed"
 }
-echo "$CREATE" | grep -q "ok create version=7" || die "create did not report dump v7: $CREATE"
-echo "$CREATE" | grep -q "realm=$REALM" || die "create did not report realm: $CREATE"
+echo "$CREATE" | grep -qF "Initializing database '/tmp/prod.db' for realm '$REALM'," \
+    || die "create did not name the database and realm: $CREATE"
 docker exec "$PRIMARY" head -1 /tmp/prod.db | grep -q 'kdb5_util load_dump version 7' \
     || die "created db is not dump version 7"
 docker exec "$PRIMARY" grep -q "krbtgt/${REALM}@${REALM}" /tmp/prod.db \
@@ -180,11 +182,13 @@ if docker exec "$PRIMARY" sh -c 'command -v tcpdump >/dev/null'; then
 fi
 
 docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" kdestroy -A >/dev/null 2>&1 || true
+# The smoke's client output, on this host in env-up's scratch dir (gate-common SCRATCH).
+SMOKE_LOG="$SCRATCH/prod-smoke.log"
 smoke_rc=0
 docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" \
-    sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" >/tmp/prod-smoke.log 2>&1 || smoke_rc=1
+    sh -c "printf '%s\n' '$KERBER_PROD_USER_PW' | kinit user@$REALM" >"$SMOKE_LOG" 2>&1 || smoke_rc=1
 docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" \
-    kvno "host/testhost.${DNS_DOMAIN}@$REALM" >>/tmp/prod-smoke.log 2>&1 || smoke_rc=1
+    kvno "host/testhost.${DNS_DOMAIN}@$REALM" >>"$SMOKE_LOG" 2>&1 || smoke_rc=1
 KL="$(docker exec -e KRB5_CONFIG=/tmp/prod-krb5.conf "$CLIENT" klist 2>&1)"
 while IFS= read -r line; do printf '    %s\n' "$line"; done <<<"$KL"
 echo "$KL" | grep -q "krbtgt/$REALM" || smoke_rc=1
@@ -199,7 +203,7 @@ if [ "$CAP" = 1 ]; then
 fi
 
 if [ "$smoke_rc" != 0 ]; then
-    docker exec "$CLIENT" cat /tmp/prod-smoke.log 2>&1 | tail -40 | sed 's/^/    /'
+    tail -40 "$SMOKE_LOG" 2>&1 | sed 's/^/    /'
     die "smoke failed (MIT kinit/kvno against $REALM)"
 fi
 say "SMOKE OK — cross-container AS+TGS proven (MIT client -> Rust KDC over $NET)"

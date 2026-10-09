@@ -1,10 +1,9 @@
 //! Published known-answer tests. These call the public RFC 3961 API only.
 
 use krb5_crypto::{
-    EncryptionType, Error, KeyUsage, ProtocolKey, checksum, decrypt, derive_keys, encrypt,
-    encrypt_with_confounder, kdb_decrypt_key, kdb_encrypt_key, octetstring2key, prf, prf_plus,
-    spake_decode_point, spake_m_bytes, spake_n_bytes, spake_public_wbytes, spake_thash_update,
-    string_to_key,
+    EncryptionType, Error, KeyUsage, ProtocolKey, SpakeGroup, checksum, decrypt, derive_keys,
+    encrypt, encrypt_with_confounder, kdb_decrypt_key, kdb_encrypt_key, octetstring2key, prf,
+    prf_plus, spake_decode_point, spake_public, spake_thash_update, string_to_key,
 };
 
 fn hex(s: &str) -> Vec<u8> {
@@ -531,11 +530,13 @@ fn rfc4556_octetstring2key() {
     assert_eq!(k2.as_bytes(), hex("dd3742ec1a4d2a5b563a2b62aef7fc4a"));
 }
 
-/// SPAKE IANA compressed M/N plus a fixed-scalar public and transcript.
+/// SPAKE IANA compressed M/N plus a fixed-scalar public and transcript (P-256; MIT's
+/// `t_vectors.c` cases are `spake_vectors.rs`).
 #[test]
 fn spake_iana_mn_and_fixed_scalar() {
-    let m = spake_m_bytes();
-    let n = spake_n_bytes();
+    let group = SpakeGroup::P256;
+    let m = group.m();
+    let n = group.n();
     assert_eq!(
         m,
         hex("02886e2f97ace46e55ba9dd7242579f2993b64e16ef3dcab95afd497333d8fa12f").as_slice()
@@ -544,20 +545,20 @@ fn spake_iana_mn_and_fixed_scalar() {
         n,
         hex("03d8bbd6c639c62937b04d997f38c3770719c629d7014d49a24b4f98baa1292b49").as_slice()
     );
-    spake_decode_point(m).expect("IANA M");
-    spake_decode_point(n).expect("IANA N");
-    assert!(spake_decode_point(&[0u8; 8]).is_err());
+    spake_decode_point(group, m).expect("IANA M");
+    spake_decode_point(group, n).expect("IANA N");
+    assert!(spake_decode_point(group, &[0u8; 8]).is_err());
 
     let mut secret = [0u8; 32];
     secret[31] = 1;
     let mut w = [0u8; 32];
     w[31] = 2;
-    let pub_s = spake_public_wbytes(&w, &secret, true).unwrap();
+    let pub_s = spake_public(group, &w, &secret, true).unwrap();
     assert_eq!(
         pub_s,
         hex("02cae70a1517dcfe1d30fe368abaa3048eea46260ada39c78ceb0ef6222fccd61a")
     );
-    let thash = spake_thash_update(&[0u8; 32], m, n);
+    let thash = spake_thash_update(group, &[0u8; 32], m, n);
     assert_eq!(
         thash,
         hex("2c7135478945a1ec1fdfe1285536e83e5ad7ff03ee3b6ae44d379659f7bbb743").as_slice()

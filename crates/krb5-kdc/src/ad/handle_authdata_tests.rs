@@ -235,7 +235,7 @@ fn module_error_is_logged_as_kdc_authdata_module_with_the_schema_fields() {
         Some(&rest[..rest.find('"')?])
     }
 
-    crate::plugins::register_authdata(Arc::new(Failing));
+    crate::plugins::set_thread_authdata(vec![Arc::new(Failing)]);
     let buf = Arc::new(Mutex::new(Vec::<u8>::new()));
     let writer = Arc::clone(&buf);
     let subscriber = tracing_subscriber::fmt()
@@ -247,6 +247,7 @@ fn module_error_is_logged_as_kdc_authdata_module_with_the_schema_fields() {
     let out = tracing::subscriber::with_default(subscriber, || {
         handle_authdata(false, false, None, None, None, None, None, None)
     });
+    crate::plugins::clear_thread_authdata();
     assert!(out.is_ok(), "a module error is logged, not returned");
     let text = String::from_utf8(buf.lock().unwrap().clone()).unwrap();
     let line = text

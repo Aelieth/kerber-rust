@@ -16,7 +16,7 @@ use super::codes::{
 };
 use super::dispatch::generic_ret;
 use super::iprop::tl_u32;
-use super::xdr::{XdrR, XdrW, xdr_tl_type};
+use super::xdr::{XdrR, XdrW, opaque_len, xdr_tl_type};
 use crate::Error;
 
 /// `krb5_timeofday` for `impose_restrictions`' `-expire`/`-pwexpire` caps.
@@ -139,8 +139,9 @@ pub(super) struct CreateFields {
     pub(super) prealm: String,
     /// `None` is the XDR NULL `passwd` of `kadmin addprinc -randkey` (1.8+).
     /// MIT `kadm5_create_principal_3` (`svr_principal.c:463-470`): a NULL password creates
-    /// with a random key, and `:369` skips `passwd_check`.
-    pub(super) pass: Option<String>,
+    /// with a random key, and `:369` skips `passwd_check`. The string is octets
+    /// (`xdr_string`), not UTF-8, so a Latin-1 password is the bytes the client sent.
+    pub(super) pass: Option<Vec<u8>>,
     /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3`
     /// applies under `mask`, as sent.
     /// MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): a field under `mask` is
@@ -162,7 +163,7 @@ pub(super) fn parse_create(args: &[u8], v3: bool) -> Result<CreateFields, Error>
     let (fields, n_key_data) = parse_principal_ent_rest(&mut r)?;
     let mask = r.u32()?;
     let ks = if v3 { r.key_salt_tuples()? } else { Vec::new() };
-    let pass = r.nullstring()?;
+    let pass = r.cstring_bytes()?;
     let ent = AdminEnt {
         mask,
         attributes: fields.attributes,
@@ -196,21 +197,35 @@ pub(super) fn parse_ks<T>(r: Result<T, Error>) -> Result<T, Result<Vec<u8>, Erro
     }
 }
 
-pub(super) fn parse_chpass(
-    args: &[u8],
-    v3: bool,
-) -> Result<(PrincipalName, String, String, bool, Vec<EncryptionType>), Error> {
+pub(super) struct ChpassArgs {
+    pub(super) name: PrincipalName,
+    pub(super) prealm: String,
+    pub(super) pass: Vec<u8>,
+    pub(super) keepold: bool,
+    pub(super) ks: Vec<EncryptionType>,
+}
+
+pub(super) fn parse_chpass(args: &[u8], v3: bool) -> Result<ChpassArgs, Error> {
     let mut r = XdrR::new(args);
     let _ = r.u32()?;
-    let (princ, prealm) = r.principal_realm()?;
+    let (name, prealm) = r.principal_realm()?;
     let (keepold, ks) = if v3 {
         let k = r.u32()? != 0;
         (k, r.key_salt_tuples()?)
     } else {
         (false, Vec::new())
     };
-    let pass = r.nullstring()?.unwrap_or_default();
-    Ok((princ, prealm, pass, keepold, ks))
+    // MIT `xdr_chpass3_arg` `passwd` is `xdr_string`: octets, not UTF-8. Rejecting a
+    // non-UTF-8 password here is RPC `SYSTEM_ERR` (`Communication failure`) before
+    // `passwd_check`.
+    let pass = r.cstring_bytes()?.unwrap_or_default();
+    Ok(ChpassArgs {
+        name,
+        prealm,
+        pass,
+        keepold,
+        ks,
+    })
 }
 
 pub(super) fn parse_get(args: &[u8]) -> Result<(PrincipalName, String, u32), Error> {
@@ -560,8 +575,14 @@ pub(super) fn encode_gprincs(ids: &[String]) -> Vec<u8> {
     w.b
 }
 
+/// The `chrand` reply: the new keys, in one buffer of its size, which the caller wipes.
 pub(super) fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
-    let mut w = XdrW::default();
+    let size = 12
+        + keys
+            .iter()
+            .map(|k| 4 + opaque_len(k.key.as_bytes().len()))
+            .sum::<usize>();
+    let mut w = XdrW::with_capacity(size);
     w.u32(API_V2);
     w.u32(0);
     w.u32(u32::try_from(keys.len()).unwrap_or(0));
@@ -572,13 +593,21 @@ pub(super) fn encode_chrand(keys: &[krb5_kdc::KeyEntry]) -> Vec<u8> {
     w.b
 }
 
+/// The `get_principal_keys` reply: the keys of `kvno` (all when 0), in one buffer of its size,
+/// which the caller wipes.
 pub(super) fn encode_extract_keys(api: u32, p: &krb5_kdc::Principal, kvno: u32) -> Vec<u8> {
     let keys: Vec<&krb5_kdc::KeyEntry> = p
         .keys
         .iter()
         .filter(|k| kvno == 0 || k.kvno == kvno)
         .collect();
-    let mut w = XdrW::default();
+    let salt = |k: &krb5_kdc::KeyEntry| k.kdb_salt.as_deref().unwrap_or(p.salt.as_slice()).len();
+    let size = 12
+        + keys
+            .iter()
+            .map(|k| 12 + opaque_len(k.key.as_bytes().len()) + opaque_len(salt(k)))
+            .sum::<usize>();
+    let mut w = XdrW::with_capacity(size);
     w.u32(api);
     w.u32(0);
     w.u32(u32::try_from(keys.len()).unwrap_or(0));

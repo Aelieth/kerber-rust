@@ -9,3 +9,12 @@ fail-fast = false
 
 [profile.ci.junit]
 path = "junit.xml"
+
+# CI's second run, without features (the release configuration): the same settings, its junit in
+# target/nextest/ci-nofeatures/ so that the features run's is kept.
+[profile.ci-nofeatures]
+slow-timeout = { period = "60s", terminate-after = 3 }
+fail-fast = false
+
+[profile.ci-nofeatures.junit]
+path = "junit.xml"

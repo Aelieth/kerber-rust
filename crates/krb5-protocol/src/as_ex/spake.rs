@@ -1,152 +1,458 @@
-//! SPAKE client (`plugins/preauth/spake/spake_client.c`
-//! `contains_sf_none` / the P-256 response).
+//! The SPAKE clpreauth module.
+//!
+//! The client's groups are `[libdefaults] spake_preauth_groups`, edwards25519 when unset; with no
+//! group it knows, there is no SPAKE module. A challenge in one of its groups gets a response whose
+//! SF-NONE factor is encrypted in `K'[1]`, and `K'[0]` becomes the reply key; an empty PA-SPAKE, or a
+//! challenge in a group it lacks, gets one support message. A failure before the response moves
+//! the exchange to the next mechanism; after it there is no fallback.
 
+use krb5_asn1::{decode, encode};
+use krb5_crypto::{
+    ProtocolKey, SPAKE_DEFAULT_GROUPS_CLIENT, SpakeGroup, spake_parse_groups, string_to_key,
+};
+use krb5_types::spake::{PaSpake, SF_NONE, SpakeChallenge};
+use krb5_types::{KrbError, PaData, err, pa};
+
+use super::clock::Clock;
 use super::{
-    AsOutcome, AsReqTimes, AsRequest, KdcMsg, build_as_req_from, classify, classify_kdc_error,
-    find_pa, finish_as_rep, method_from_error, pick_key, req_sname, salt_cname, select_s2k,
+    AsOutcome, AsRequest, KdcMsg, S2kMaterial, build_as_req_from, classify_kdc_error,
+    conf_preferred_preauth_types_for, find_pa, finish_as_rep, method_from_error, pick_key,
+    req_sname, request_times, retried, salt_cname, select_s2k, select_s2k_after, send_as,
+    sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
 use crate::preauth::{pa_spake_response, pa_spake_support};
-use crate::transport::exchange;
-use krb5_asn1::{decode, encode};
-use krb5_crypto::{ProtocolKey, string_to_key};
-use krb5_types::{KrbError, PaData, err, pa};
+use crate::trace;
 
-pub(super) fn continue_spake(
-    req: &AsRequest<'_>,
-    keys: &[ProtocolKey],
-    nonce: u32,
-    bound: &AsReqTimes,
-    etypes: &[i32],
-    err: &KrbError,
-) -> Result<AsOutcome, Error> {
-    let support = pa_spake_support();
-    let method = method_from_error(err)?;
-    if spake_challenge(&method)?.is_some() {
-        return send_spake_response(req, keys, nonce, bound, etypes, err, &support);
-    }
-    let mut padata = Vec::new();
-    if let Some(c) = find_pa(&method, pa::FX_COOKIE) {
-        padata.push(c.clone());
-    }
-    padata.push(support.clone());
-    let second = build_as_req_from(req, nonce, bound, Some(padata), etypes)?;
-    let wire = encode(&second)?;
-    let reply = exchange(req.kdc, &wire)?;
-    match classify(&reply)? {
-        KdcMsg::AsRep(_) => Err(Error::ReplyMismatch("SPAKE required".into())),
-        KdcMsg::Error(e)
-            if e.error_code == err::PREAUTH_REQUIRED
-                || e.error_code == err::MORE_PREAUTH_DATA_REQUIRED =>
-        {
-            send_spake_response(req, keys, nonce, bound, etypes, &e, &support)
-        }
-        KdcMsg::Error(e) => classify_kdc_error(&e),
-        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-    }
+/// MIT's name of the SPAKE module (`spake_client.c`).
+const SPAKE_MODULE: &str = "spake";
+
+/// The groups the client permits, in configuration order; none means no SPAKE module.
+///
+/// MIT `group_init_state` (`groups.c:213-239`): `[libdefaults] spake_preauth_groups`, the client default when unset; no permitted group fails the module's init.
+pub(super) fn client_groups() -> Vec<SpakeGroup> {
+    let value = krb5_config::load_krb5_conf()
+        .and_then(|c| c.spake_preauth_groups)
+        .map(|words| words.join(" "));
+    spake_parse_groups(value.as_deref().unwrap_or(SPAKE_DEFAULT_GROUPS_CLIENT))
 }
 
-/// MIT `process_challenge` (`spake_client.c:221-222`): a challenge that does not offer SF-NONE is
-/// preauth-failed. The cookie is placed ahead of the SPAKE response so the freshness and
-/// enc-pa-rep advertisements stay on the request.
-fn send_spake_response(
+/// One AS exchange's SPAKE state.
+///
+/// MIT `reqstate` (`spake_client.c:41-47`): the support message sent (for the transcript), and whether a challenge was answered.
+struct SpakeState {
+    groups: Vec<SpakeGroup>,
+    support: Option<Vec<u8>>,
+    responded: bool,
+}
+
+/// How a SPAKE attempt ends.
+pub(super) enum SpakeEnd {
+    /// The AS exchange finished.
+    Done(Box<AsOutcome>),
+    /// The module failed before answering a challenge: the next mechanism runs on this error's
+    /// METHOD-DATA.
+    Fallback(Box<KrbError>),
+}
+
+/// What the module adds to the next request.
+enum Round {
+    /// PA-SPAKE to send, and `K'[0]` when it is a response.
+    Send(PaData, Option<ProtocolKey>),
+    /// The module failed on this message.
+    Failed,
+}
+
+/// The support message: the client's groups in configuration order, kept for the transcript.
+///
+/// MIT `send_support` (`spake_client.c:149-178`): the permitted groups, saved in `st->support`.
+fn send_support(st: &mut SpakeState) -> PaData {
+    let support = pa_spake_support(&st.groups);
+    st.support = Some(support.padata_value.as_ref().to_vec());
+    trace::spake_send_support();
+    support
+}
+
+/// The answer to a challenge.
+///
+/// MIT `process_challenge` (`spake_client.c:180-298`): a second challenge after a response fails; a group the client lacks gets support unless support was sent; a factor list without SF-NONE fails; otherwise the response, `K'[0]` the reply key, and no fallback after it.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the AS round's state, no value type"
+)]
+fn process_challenge(
+    st: &mut SpakeState,
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    nonce: u32,
-    bound: &AsReqTimes,
     etypes: &[i32],
-    err: &KrbError,
-    support: &PaData,
-) -> Result<AsOutcome, Error> {
-    let method = method_from_error(err)?;
-    let (spa, chal) = spake_challenge(&method)?
-        .ok_or_else(|| Error::ReplyMismatch("SPAKE challenge missing".into()))?;
-    if chal.group != krb5_types::spake::GROUP_P256 {
-        return Err(Error::ReplyMismatch(format!(
-            "SPAKE group {} (want P-256)",
-            chal.group
-        )));
+    current: &KrbError,
+    hint: &mut S2kMaterial,
+    ch: &SpakeChallenge,
+    der_msg: &[u8],
+    body_der: &[u8],
+) -> Result<Round, Error> {
+    if st.responded {
+        return Ok(Round::Failed);
     }
-    // MIT `process_challenge` (`spake_client.c:221-221`): without second-factor support the
-    // only answerable challenge is one that offers SF-NONE; a challenge whose factor list omits
-    // it is KRB5KDC_ERR_PREAUTH_FAILED there, so refuse it rather than deriving a key against a
-    // factor set we cannot satisfy.
-    if !spake_contains_sf_none(&chal) {
-        return Err(Error::ReplyMismatch(
-            "SPAKE challenge offers no SF-NONE factor".into(),
-        ));
+    let Some(group) = SpakeGroup::from_number(ch.group).filter(|g| st.groups.contains(g)) else {
+        trace::spake_reject_challenge(ch.group);
+        if st.support.is_some() {
+            return Ok(Round::Failed);
+        }
+        return Ok(Round::Send(send_support(st), None));
+    };
+    trace::spake_receive_challenge(ch.group, ch.pubkey.as_ref());
+    if !spake_contains_sf_none(ch) {
+        return Ok(Round::Failed);
     }
-    let cookie = find_pa(&method, pa::FX_COOKIE)
-        .cloned()
-        .ok_or_else(|| Error::ReplyMismatch("SPAKE FX_COOKIE missing".into()))?;
-    let (etype, salt, params) = select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?;
+    // MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:790-854`): the challenge's own etype-info, when it has any, replaces the hint's.
+    *hint = select_s2k_after(
+        current,
+        &salt_cname(&req.cname),
+        req.realm,
+        etypes,
+        hint.clone(),
+    )?;
+    let (etype, salt, params) = hint.clone();
+    trace_keytab_gak(req, keys, etype);
     let ikey = pick_key(keys, Some(etype)).map_or_else(
         || string_to_key(etype, req.password, &salt, params.as_deref()),
         Ok,
     )?;
-    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
-    let body_der = encode(&req2.0.req_body)?;
-    let (resp, k0) = pa_spake_response(
+    let support = st.support.clone().unwrap_or_default();
+    // A challenge element that does not decode fails the module, before the fallback is off.
+    let Ok((resp, k0)) = pa_spake_response(
         &ikey,
-        support.padata_value.as_ref(),
-        spa.padata_value.as_ref(),
-        chal.pubkey.as_ref(),
-        &body_der,
-    )?;
-    // MIT k5_preauth copies the FX-COOKIE first, then the module's PA-SPAKE,
-    // and init_creds_step_request appends the info_pa_permitted pair (150,
-    // 149) that build_as_req already put on the list; replacing the list here
-    // dropped 149, so the KDC echoed no enc-pa-rep checksum (KDCREP_MODIFIED).
-    let mut padata = vec![cookie, resp];
-    padata.extend(req2.0.padata.take().unwrap_or_default());
-    req2.0.padata = Some(padata);
-    let wire = encode(&req2)?;
-    let reply = exchange(req.kdc, &wire)?;
-    match classify(&reply)? {
-        KdcMsg::AsRep(rep) => finish_as_rep(
-            rep,
-            nonce,
-            Some(k0),
-            req.password,
-            &req.cname,
-            req.realm,
-            Some(pa::SPAKE),
-            req.canonicalize,
-            &req_sname(req),
-            bound,
-            Some(&wire),
-            false,
-        ),
-        KdcMsg::Error(e) => classify_kdc_error(&e),
-        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+        group,
+        &support,
+        der_msg,
+        ch.pubkey.as_ref(),
+        body_der,
+    ) else {
+        return Ok(Round::Failed);
+    };
+    st.responded = true;
+    Ok(Round::Send(resp, Some(k0)))
+}
+
+/// The module's answer to the PA-SPAKE of one KDC message.
+///
+/// MIT `spake_process` (`spake_client.c:322-363`): an empty PA-SPAKE gets support, once; a challenge goes to `process_challenge`; a message that does not decode, encdata or any other type fails.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the AS round's state, no value type"
+)]
+fn spake_round(
+    st: &mut SpakeState,
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    etypes: &[i32],
+    current: &KrbError,
+    hint: &mut S2kMaterial,
+    pa_in: &[u8],
+    body_der: &[u8],
+) -> Result<Round, Error> {
+    if pa_in.is_empty() {
+        if st.support.is_some() {
+            return Ok(Round::Failed);
+        }
+        return Ok(Round::Send(send_support(st), None));
+    }
+    // MIT `spake_prep_questions` (`spake_client.c:123-130`): a message that does not decode leaves no message, and processing it fails.
+    let Ok(msg) = decode::<PaSpake>(pa_in) else {
+        return Ok(Round::Failed);
+    };
+    match msg {
+        PaSpake::Challenge(ch) => {
+            process_challenge(st, req, keys, etypes, current, hint, &ch, pa_in, body_der)
+        }
+        // MIT `process_encdata` (`spake_client.c:300-320`): no second factors, so encdata fails.
+        PaSpake::EncData(_) | PaSpake::Support(_) | PaSpake::Response(_) => Ok(Round::Failed),
+    }
+}
+
+/// One FAST inner exchange's SPAKE module state.
+///
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): runs the SPAKE module on the inner
+/// request when PA-SPAKE is the first real mechanism in the armored hint. The support bytes stay
+/// for the transcript of a later challenge.
+pub(super) struct FastSpake {
+    st: SpakeState,
+    hint: S2kMaterial,
+}
+
+impl FastSpake {
+    /// # Errors
+    ///
+    /// [`Error::Asn1`] when the hint's etype-info does not decode, and [`Error::Crypto`] when
+    /// no etype in it is usable.
+    pub(super) fn begin(
+        req: &AsRequest<'_>,
+        etypes: &[i32],
+        err: &KrbError,
+    ) -> Result<Self, Error> {
+        Ok(Self {
+            st: SpakeState {
+                groups: client_groups(),
+                support: None,
+                responded: false,
+            },
+            hint: select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?,
+        })
+    }
+
+    /// The module's PA-SPAKE for this inner request, and the AS key FAST will strengthen.
+    ///
+    /// A challenge yields `K'[0]`. Support alone yields the long-term key, as an unarmored
+    /// support reply does.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::ReplyMismatch`] "Generic preauthentication failure" when the hint has no
+    /// PA-SPAKE the module can answer. [`Error::Crypto`] when the long-term key cannot be made.
+    pub(super) fn round(
+        &mut self,
+        req: &AsRequest<'_>,
+        keys: &[ProtocolKey],
+        etypes: &[i32],
+        current: &KrbError,
+        body_der: &[u8],
+    ) -> Result<(PaData, ProtocolKey), Error> {
+        let method = method_from_error(current)?;
+        let Some(p) = find_pa(&method, pa::SPAKE) else {
+            trace::preauth_process(
+                SPAKE_MODULE,
+                pa::SPAKE,
+                true,
+                trace::kdc_code(err::PREAUTH_FAILED),
+                None,
+            );
+            return Err(Error::ReplyMismatch(
+                "Generic preauthentication failure".into(),
+            ));
+        };
+        let round = spake_round(
+            &mut self.st,
+            req,
+            keys,
+            etypes,
+            current,
+            &mut self.hint,
+            p.padata_value.as_ref(),
+            body_der,
+        )?;
+        let Round::Send(module_pa, k0) = round else {
+            trace::preauth_process(
+                SPAKE_MODULE,
+                pa::SPAKE,
+                true,
+                trace::kdc_code(err::PREAUTH_FAILED),
+                None,
+            );
+            return Err(Error::ReplyMismatch(
+                "Generic preauthentication failure".into(),
+            ));
+        };
+        trace::preauth_process(SPAKE_MODULE, pa::SPAKE, true, 0, None);
+        let key = if let Some(k) = k0 {
+            k
+        } else {
+            let (etype, salt, params) = self.hint.clone();
+            pick_key(keys, Some(etype)).map_or_else(
+                || string_to_key(etype, req.password, &salt, params.as_deref()),
+                Ok,
+            )?
+        };
+        Ok((module_pa, key))
+    }
+
+    /// A challenge response was sent, so MIT `disable_fallback` is in force.
+    pub(super) fn answered(&self) -> bool {
+        self.st.responded
+    }
+}
+
+/// SPAKE through the rounds of one AS exchange, from the error that offered it.
+///
+/// MIT `init_creds_step_reply` (`get_in_tkt.c:1727-1745`): MORE_PREAUTH_DATA_REQUIRED's padata is processed next, PREAUTH_FAILED notes the mechanism failed and takes the error's hint, and PREAUTH_REQUIRED's hint replaces the method data.
+/// MIT `init_creds_step_request` (`get_in_tkt.c:1309-1345`): a failure without the fallback off moves to the next mechanism on the method data; with it off, the exchange fails.
+///
+/// # Errors
+///
+/// The KDC's error once a response was sent, or any other KDC error; [`Error::Asn1`] when
+/// METHOD-DATA does not decode; [`Error::Crypto`] when a string-to-key fails; transport errors.
+pub(super) fn continue_spake(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    nonce: u32,
+    etypes: &[i32],
+    err: &KrbError,
+    groups: &[SpakeGroup],
+    clock: &Clock,
+) -> Result<SpakeEnd, Error> {
+    let mut st = SpakeState {
+        groups: groups.to_vec(),
+        support: None,
+        responded: false,
+    };
+    // MIT `method_padata`: what the next mechanism runs on.
+    let mut method_err = err.clone();
+    // MIT `more_padata`, else `method_padata`: what this round processes.
+    let mut current = err.clone();
+    // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:987-990`): each error's etype-info is read as it arrives; a challenge that answers a request carrying the cookie names none, so the hint's stands.
+    let mut hint = select_s2k(err, &salt_cname(&req.cname), req.realm, etypes)?;
+    // The error that started this round, past the first, whose padata the trace shows first.
+    let mut again: Option<i32> = None;
+    loop {
+        let method = method_from_error(&current)?;
+        // MIT `init_creds_step_request` (`get_in_tkt.c:1308-1352`): more padata continues the
+        // chosen mechanism; a new hint is preauthentication from the KDC's method data.
+        match again {
+            Some(err::MORE_PREAUTH_DATA_REQUIRED) => {
+                trace::init_creds_preauth_more(pa::SPAKE);
+                trace_preauth_input(&method, etypes);
+            }
+            Some(_) if trace::enabled() => {
+                trace::init_creds_preauth();
+                trace_preauth_input(
+                    &sort_krb5_padata_sequence(
+                        &method,
+                        &conf_preferred_preauth_types_for(req.realm),
+                    ),
+                    etypes,
+                );
+            }
+            _ => {}
+        }
+        let bound = request_times(req, clock);
+        let mut req2 = build_as_req_from(req, nonce, &bound, None, etypes)?;
+        let body_der = encode(&req2.0.req_body)?;
+        let round = match find_pa(&method, pa::SPAKE) {
+            Some(p) => spake_round(
+                &mut st,
+                req,
+                keys,
+                etypes,
+                &current,
+                &mut hint,
+                p.padata_value.as_ref(),
+                &body_der,
+            )?,
+            None => Round::Failed,
+        };
+        let Round::Send(module_pa, k0) = round else {
+            // MIT `process_pa_data` (`preauth2.c:648-728`): the module's failure is traced.
+            trace::preauth_process(
+                SPAKE_MODULE,
+                pa::SPAKE,
+                true,
+                trace::kdc_code(err::PREAUTH_FAILED),
+                None,
+            );
+            if st.responded {
+                return Err(Error::KrbError {
+                    code: err::PREAUTH_FAILED,
+                    text: Some("SPAKE failed after its response".into()),
+                });
+            }
+            return Ok(SpakeEnd::Fallback(Box::new(method_err)));
+        };
+        // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:992-1019`): the KDC's cookie first, then the module's padata; `init_creds_step_request` appends 150 and 149.
+        let mut padata: Vec<PaData> = find_pa(&method, pa::FX_COOKIE)
+            .cloned()
+            .into_iter()
+            .collect();
+        padata.push(module_pa);
+        trace::preauth_process(SPAKE_MODULE, pa::SPAKE, true, 0, None);
+        trace::preauth_output(&padata);
+        padata.extend(req2.0.padata.take().unwrap_or_default());
+        req2.0.padata = Some(padata);
+        let wire = encode(&req2)?;
+        match send_as(req, &wire)? {
+            KdcMsg::AsRep(rep) => {
+                trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+                // A reply to support alone is in the long-term key, as MIT's `gak_fct` gives it.
+                let key = match k0 {
+                    Some(k) => {
+                        trace::init_creds_as_key_preauth((&k).into());
+                        Some(k)
+                    }
+                    None => pick_key(keys, Some(hint.0)),
+                };
+                return finish_as_rep(
+                    rep,
+                    nonce,
+                    key,
+                    req.password,
+                    &req.cname,
+                    req.realm,
+                    Some(pa::SPAKE),
+                    req.canonicalize,
+                    &req_sname(req),
+                    &bound,
+                    Some(&wire),
+                    false,
+                )
+                .map(|out| SpakeEnd::Done(Box::new(out)));
+            }
+            KdcMsg::Error(e) if e.error_code == err::MORE_PREAUTH_DATA_REQUIRED => {
+                again = Some(e.error_code);
+                current = e;
+            }
+            KdcMsg::Error(e) if e.error_code == err::PREAUTH_FAILED && !st.responded => {
+                if retried(&e) {
+                    clock.note(&e, false);
+                }
+                return Ok(SpakeEnd::Fallback(Box::new(if e.e_data.is_some() {
+                    e
+                } else {
+                    method_err
+                })));
+            }
+            KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED && !st.responded => {
+                if retried(&e) {
+                    clock.note(&e, false);
+                }
+                again = Some(e.error_code);
+                method_err = e.clone();
+                current = e;
+            }
+            KdcMsg::Error(e) => {
+                return classify_kdc_error(&e).map(|out| SpakeEnd::Done(Box::new(out)));
+            }
+            KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
+        }
+    }
+}
+
+/// `--spake` in a `test-hooks` build: SPAKE with the configured groups, and no fallback.
+///
+/// # Errors
+///
+/// [`Error::ReplyMismatch`] "SPAKE required" when the client has no group or SPAKE would fall
+/// back; otherwise as [`continue_spake`].
+pub(super) fn spake_forced(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    nonce: u32,
+    etypes: &[i32],
+    err: &KrbError,
+    clock: &Clock,
+) -> Result<AsOutcome, Error> {
+    let groups = client_groups();
+    if groups.is_empty() {
+        return Err(Error::ReplyMismatch("SPAKE required".into()));
+    }
+    match continue_spake(req, keys, nonce, etypes, err, &groups, clock)? {
+        SpakeEnd::Done(out) => Ok(*out),
+        SpakeEnd::Fallback(_) => Err(Error::ReplyMismatch("SPAKE required".into())),
     }
 }
 
 /// MIT `contains_sf_none` (`spake_client.c:51-51`): true when the challenge lists the SF-NONE
 /// second factor, the only factor type this client can answer.
-pub(super) fn spake_contains_sf_none(chal: &krb5_types::spake::SpakeChallenge) -> bool {
-    chal.factors
-        .iter()
-        .any(|f| f.factor_type == krb5_types::spake::SF_NONE)
-}
-
-fn spake_challenge(
-    method: &[PaData],
-) -> Result<Option<(PaData, krb5_types::spake::SpakeChallenge)>, Error> {
-    let Some(p) = find_pa(method, pa::SPAKE) else {
-        return Ok(None);
-    };
-    // MIT `spake_edata` (`spake_kdc.c:321-321`): PREAUTH_REQUIRED advertises an empty PA-SPAKE.
-    // That is not a challenge.
-    // MIT `send_support` (`spake_client.c:151-151`): an empty message is answered with support
-    // instead.
-    if p.padata_value.as_ref().is_empty() {
-        return Ok(None);
-    }
-    match decode::<krb5_types::spake::PaSpake>(p.padata_value.as_ref())? {
-        krb5_types::spake::PaSpake::Challenge(c) => Ok(Some((p.clone(), c))),
-        _ => Ok(None),
-    }
+pub(super) fn spake_contains_sf_none(chal: &SpakeChallenge) -> bool {
+    chal.factors.iter().any(|f| f.factor_type == SF_NONE)
 }
 
 pub(super) fn refuse_spake_skip(want_spake: bool) -> Result<(), Error> {

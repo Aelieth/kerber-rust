@@ -157,7 +157,12 @@ fn tgs_reply_s4u2self_client_eq_server_is_nosupp() {
         false,
     )
     .unwrap_err();
-    assert!(err.to_string().contains("S4U2Self unsupported"), "{err}");
+    match err {
+        krb5_protocol::Error::KrbError { code, text: None } => {
+            assert_eq!(code, krb5_types::err::PADATA_TYPE_NOSUPP);
+        }
+        other => panic!("{other}"),
+    }
 }
 
 #[test]

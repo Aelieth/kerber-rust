@@ -2,6 +2,8 @@
 //!
 //! Usage: `krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>`
 //! Optional: `--enc-tkt-out` (raw decrypted EncTicketPart), `--krbtgt-keytab`, `--keys-out`.
+//! `--server <name[@realm]>` picks the ticket for that server; `--print-layout` prints the PAC's
+//! buffers in order as `type:size`, the PAC's length and the ticket's.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -36,6 +38,8 @@ fn main() -> ExitCode {
     let mut print_rid = false;
     let mut print_transited = false;
     let mut print_types = false;
+    let mut print_layout = false;
+    let mut server_sel: Option<String> = None;
     let mut print_ad_types = false;
     let mut print_tgt = false;
     let mut print_delegation = false;
@@ -80,6 +84,18 @@ fn main() -> ExitCode {
                 print_types = true;
                 i += 1;
             }
+            "--print-layout" => {
+                print_layout = true;
+                i += 1;
+            }
+            "--server" => {
+                let Some(name) = args.get(i + 1) else {
+                    eprintln!("usage: krb5-pac-extract ... --server <name[@realm]>: no name given");
+                    return ExitCode::from(2);
+                };
+                server_sel = Some(name.clone());
+                i += 2;
+            }
             "--print-ad-types" => {
                 print_ad_types = true;
                 i += 1;
@@ -104,9 +120,9 @@ fn main() -> ExitCode {
                 eprintln!(
                     "usage: krb5-pac-extract --keytab <kt> --ccache <cc> [--out <pac>] \
                      [--enc-tkt-out <der>] [--krbtgt-keytab <kt>] [--keys-out <txt>] \
-                     [--print-rid] [--print-transited] [--print-types] \
-                     [--print-ad-types] [--tgt] [--print-delegation] [--last] \
-                     [--verify-privsvr <enctype>]"
+                     [--print-rid] [--print-transited] [--print-types] [--print-layout] \
+                     [--print-ad-types] [--tgt] [--server <name[@realm]>] \
+                     [--print-delegation] [--last] [--verify-privsvr <enctype>]"
                 );
                 return ExitCode::from(2);
             }
@@ -121,6 +137,7 @@ fn main() -> ExitCode {
     if out.is_none()
         && !print_transited
         && !print_types
+        && !print_layout
         && !print_ad_types
         && !print_delegation
         && verify_privsvr.is_none()
@@ -166,14 +183,26 @@ fn main() -> ExitCode {
             !cred.is_config() && cred.server.1.components_joined().starts_with("krbtgt/")
         })
         .collect();
-    let Some(cred) = (if print_tgt {
-        tgt_creds.first()
-    } else if last_host {
-        host_creds.last()
-    } else {
-        host_creds.first()
-    })
-    .copied() else {
+    let named = server_sel.as_deref().and_then(|want| {
+        cc.creds.iter().find(|cred| {
+            let name = cred.server.1.components_joined();
+            let realm = std::str::from_utf8(cred.server.0.as_bytes()).unwrap_or("");
+            !cred.is_config() && (name == want || format!("{name}@{realm}") == want)
+        })
+    });
+    if let (Some(want), None) = (server_sel.as_deref(), named) {
+        eprintln!("krb5-pac-extract: no {want} ticket in ccache");
+        return ExitCode::from(1);
+    }
+    let Some(cred) = named.or_else(|| {
+        if print_tgt {
+            tgt_creds.first().copied()
+        } else if last_host {
+            host_creds.last().copied()
+        } else {
+            host_creds.first().copied()
+        }
+    }) else {
         eprintln!(
             "krb5-pac-extract: no {} ticket in ccache",
             if print_tgt { "krbtgt/" } else { "host/" }
@@ -205,6 +234,7 @@ fn main() -> ExitCode {
             if out.is_none()
                 && !print_transited
                 && !print_types
+                && !print_layout
                 && !print_delegation
                 && verify_privsvr.is_none()
             {
@@ -227,7 +257,12 @@ fn main() -> ExitCode {
             };
             println!("transited_realms={realms}");
             println!("transited_policy_checked={checked}");
-            if out.is_none() && !print_types && !print_delegation && verify_privsvr.is_none() {
+            if out.is_none()
+                && !print_types
+                && !print_layout
+                && !print_delegation
+                && verify_privsvr.is_none()
+            {
                 return ExitCode::SUCCESS;
             }
         }
@@ -235,6 +270,7 @@ fn main() -> ExitCode {
             if print_transited
                 && out.is_none()
                 && !print_types
+                && !print_layout
                 && !print_delegation
                 && verify_privsvr.is_none()
             {
@@ -242,7 +278,7 @@ fn main() -> ExitCode {
             }
             continue;
         };
-        if print_types || print_delegation {
+        if print_types || print_layout || print_delegation {
             match krb5_types::pac::Pac::parse(&pac) {
                 Ok(parsed) => {
                     if print_types {
@@ -254,6 +290,17 @@ fn main() -> ExitCode {
                             .collect::<Vec<_>>()
                             .join(",");
                         println!("pac_types={joined}");
+                    }
+                    if print_layout {
+                        let layout = parsed
+                            .buffers
+                            .iter()
+                            .map(|b| format!("{}:{}", b.kind, b.data.len()))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        println!("pac_layout={layout}");
+                        println!("pac_len={}", pac.len());
+                        println!("ticket_len={}", cred.ticket.len());
                     }
                     if print_delegation {
                         let Some(buf) = parsed

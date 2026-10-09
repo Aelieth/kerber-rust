@@ -173,18 +173,18 @@ def _self_test_docs() -> None:
     lanes_wf = [
         Workflow(pathlib.Path("ci.yml"),
                  "name: ci\non:\n  push:\n    branches: [main]\njobs:\n  harness:\n    steps:\n"
-                 "      - run: ./scripts/red-gate.sh\n      - run: skip2 ./scripts/two-gate.sh\n"
+                 "      - run: ./scripts/red-gate.sh\n"
                  "  slo:\n    continue-on-error: true\n    steps:\n      - run: ./scripts/soft-gate.sh\n"),
         Workflow(pathlib.Path("peers.yml"),
                  "name: peers\non:\n  schedule:\n    - cron: '0 3 * * *'\njobs:\n  lab:\n    steps:\n"
                  "      - run: ./scripts/night-gate.sh\n"),
     ]
     lanes_want = {
-        "red-gate.sh": [("ci:harness", "fail-red")], "two-gate.sh": [("ci:harness", "skip2")],
+        "red-gate.sh": [("ci:harness", "fail-red")],
         "soft-gate.sh": [("ci:slo", "soft")], "night-gate.sh": [("peers:lab", "nightly")],
     }
     if gate_placements(lanes_wf) != lanes_want:
-        _die(f"gate_placements must read fail-red, skip2, soft and nightly: {gate_placements(lanes_wf)}")
+        _die(f"gate_placements must read fail-red, soft and nightly: {gate_placements(lanes_wf)}")
     wrap_row = "| `scripts/kadmin-gate.sh` | MIT | wrapper | — | runs the kadmin legs |\n"
     wrap_gates = {"kadmin-gate.sh": "#!/bin/sh\n"}
     if gate_doc_violations(head + wrap_row, wrap_gates, {}, frozenset({"kadmin-gate.sh"})):

@@ -88,6 +88,7 @@ DIFFSEND_CASES = frozenset(
         "as-needchange",
         "as-invalid-opts",
         "as-validate-before-preauth",
+        "as-locked-out",
         "as-optimistic-encts-wrong-etype",
         "as-retransmit",
         "as-request-anonymous",
@@ -159,11 +160,13 @@ def ledger_sources(root: pathlib.Path | None = None) -> list[tuple[str, str, str
 
     Split layout, once `docs/parity/` holds section files: `docs/parity/README.md` first (the
     header: counts, verdict tally, the live diffsend list; no rows; key None), then every
-    `docs/parity/<a1..a5|b1>-*.md` in sorted order, keyed by its file name. Single layout
-    otherwise: `docs/mit-parity-ledger.md`, key None (its `## A1` ... headings give the sections).
+    `docs/parity/<a1..a5|b1>-<subject>.md` in sorted order, keyed by its file name. A section
+    may span several files (`a4-kadmin.md`, `a4-kdb.md`), each opening with a heading that names
+    its key; `check_ledger_tally` sums a section's count over them. Single layout otherwise:
+    `docs/mit-parity-ledger.md`, key None (its `## A1` ... headings give the sections).
     Red: a split with no README, a section file whose name or first heading gives no section or
-    the wrong one, two files for one section, rows in the README, and rows left in
-    `docs/mit-parity-ledger.md` beside the split.
+    the wrong one, rows in the README, and rows left in `docs/mit-parity-ledger.md` beside the
+    split. A row held twice, in one file or in two, is `check_ledger_layout`'s red.
     """
     root = ROOT if root is None else root
     single = root / "docs" / "mit-parity-ledger.md"
@@ -182,15 +185,11 @@ def ledger_sources(root: pathlib.Path | None = None) -> list[tuple[str, str, str
     if single.is_file() and _ledger_rows(single.read_text(encoding="utf-8")):
         _die("docs/mit-parity-ledger.md still holds rows beside docs/parity/; it must be a pointer")
     out: list[tuple[str, str, str | None]] = [("docs/parity/README.md", head, None)]
-    seen: dict[str, str] = {}
     for path in sections:
         m = _PARITY_FILE.match(path.name)
         key = m.group("key").upper() if m else None
         if key not in _LEDGER_KEYS:
             _die(f"docs/parity/{path.name} names no ledger section (want a1..a5 or b1)")
-        if key in seen:
-            _die(f"docs/parity/{path.name} and docs/parity/{seen[key]} both hold section {key}")
-        seen[key] = path.name
         text = path.read_text(encoding="utf-8")
         first = next((line for line in text.splitlines() if line.startswith("# ")), "")
         if not re.match(rf"^# {key}\b", first):
@@ -203,7 +202,7 @@ def check_ledger_layout(root: pathlib.Path | None = None) -> None:
     """The ledger's files are well formed (`ledger_sources`) and no row appears twice.
 
     A row is identified by its MIT cite and check cells, so a moved row left behind in its old file,
-    or one row copied into two files, is red in either layout.
+    or one row copied into two files (of one section or of two), is red in either layout.
     """
     seen: dict[tuple[str, str], str] = {}
     for name, text, _key in ledger_sources(root):
@@ -469,7 +468,7 @@ def check_ledger_tally(text: str | None = None, root: pathlib.Path | None = None
     """Header verdict counts must equal a recount of the table cells, in total and per section.
 
     `text` is a single-file ledger (the fixtures); otherwise the layout `ledger_sources` finds is
-    read, the header from its first file and the per-section counts from the section files.
+    read, the header from its first file and each section's count summed over its files.
     """
     sources = [("docs/mit-parity-ledger.md", text, None)] if text is not None else ledger_sources(root)
     hname, head, _key = sources[0]

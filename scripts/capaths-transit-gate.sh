@@ -139,6 +139,8 @@ EOF
 cat >/tmp/kdc-rust-referral.conf <<EOF
 [kdcdefaults]
     host_based_services = *
+[logging]
+    json = STDOUT
 EOF
 cat >/tmp/client-garbage.conf <<EOF
 [libdefaults]
@@ -423,7 +425,7 @@ expect_s4u_mismatch() {
     set +e
     local out rc
     out="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
-        /tmp/krb5-kvno -U victim@A.TEST -c "$cc" 127.0.0.1:90 user@C.TEST 2>&1)"
+        /tmp/krb5-kvno -I victim@A.TEST -c "$cc" 127.0.0.1:90 user@C.TEST 2>&1)"
     rc=$?
     set -e
     echo "$out"
@@ -432,8 +434,9 @@ expect_s4u_mismatch() {
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
         exit 1
     fi
-    # MIT sets this status with KRB5KRB_AP_ERR_BADMATCH (36) alone (tgs_policy.c:275-276).
-    echo "$out" | grep -qxF 'kvno: INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'
+    # MIT sets this status with KRB5KRB_AP_ERR_BADMATCH (36) alone (tgs_policy.c:275-276). The
+    # kvno port names itself as MIT's does, argv[0]'s base name (kvno.c:87-88): krb5-kvno here.
+    echo "$out" | grep -qxF "krb5-kvno: Ticket/authenticator don't match while getting credentials for user@C.TEST"
     if ! docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog} | grep -q 'INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH'"; then
         echo "$label: new lines of ${klog} missing INVALID_S4U2SELF_REQUEST_SERVER_MISMATCH" >&2
         docker exec "$NAME" sh -c "tail -n +$((n + 1)) ${klog}" >&2 || true
@@ -1056,7 +1059,7 @@ echo "==== same-realm S4U2Self CLIENT_NOT_OURS negative ===="
 n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-c.log' | tr -d '[:space:]')"
 set +e
 MIT_S4U_XR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
-    /tmp/krb5-kvno -c /tmp/krb5cc_mit_s4u_kvno -U user@A.TEST \
+    /tmp/krb5-kvno -c /tmp/krb5cc_mit_s4u_kvno -I user@A.TEST \
     127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
 mit_s4u_xr_rc=$?
 set -e
@@ -1089,7 +1092,7 @@ docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
 n="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kdc-c-s4u.log' | tr -d '[:space:]')"
 set +e
 RUST_S4U_XR="$(docker exec -e KRB5_CONFIG=/tmp/s4u-c.conf "$NAME" \
-    /tmp/krb5-kvno -c /tmp/krb5cc_rust_s4u_kvno -U user@A.TEST \
+    /tmp/krb5-kvno -c /tmp/krb5cc_rust_s4u_kvno -I user@A.TEST \
     127.0.0.1:90 host/svc.c.test@C.TEST 2>&1)"
 rust_s4u_xr_rc=$?
 set -e
@@ -1144,6 +1147,7 @@ docker exec "$NAME" /tmp/krb5-forge-tgt \
     --tgt krbtgt/A.TEST --claim-realm B.TEST \
     --key-hex "${MIT_A_TGT_KEY}" \
     --reseal-password "${XR_PW}" --reseal-principal 'krbtgt/A.TEST@B.TEST'
+na16="$(docker exec "$NAME" sh -c 'wc -l < /tmp/mit-a.log' | tr -d '[:space:]')"
 set +e
 MIT_RENEW="$(docker exec -e KRB5_CONFIG=/tmp/client-capaths.conf "$NAME" \
     /tmp/krb5-kvno --renew --body-realm A.TEST -c /tmp/krb5cc_mit_r16_xr \
@@ -1156,8 +1160,15 @@ if [ "$mit_renew_rc" -eq 0 ]; then
     echo "MIT A RENEW of krbtgt/A@B as krbtgt/A@A must be 26" >&2
     exit 1
 fi
-echo "$MIT_RENEW" | grep -q "SERVER DIDN'T MATCH TICKET FOR RENEW" || {
-    echo "MIT A R16: kvno missing SERVER DIDN'T MATCH TICKET FOR RENEW" >&2
+# The kvno port prints MIT's line for KDC_ERR_SERVER_NOMATCH (26), its table text: only a generic
+# error shows the KDC's e-text (gc_via_tkt.c:194-201). The KDC's reason is in its log.
+R16_LINE="krb5-kvno: Requested server and ticket don't match while getting credentials for krbtgt/A.TEST@A.TEST"
+echo "$MIT_RENEW" | grep -qxF "$R16_LINE" || {
+    echo "MIT A R16: kvno did not report 26 (Requested server and ticket don't match)" >&2
+    exit 1
+}
+docker exec "$NAME" sh -c "tail -n +$((na16 + 1)) /tmp/mit-a.log | grep -q \"SERVER DIDN'T MATCH TICKET FOR RENEW\"" || {
+    echo "MIT A R16: KDC log missing SERVER DIDN'T MATCH TICKET FOR RENEW" >&2
     exit 1
 }
 docker exec "$NAME" sh -c 'kill -9 "$(cat /tmp/mit-a.pid)" 2>/dev/null || true'
@@ -1208,8 +1219,13 @@ if [ "$rust_renew_rc" -eq 0 ]; then
     docker exec "$NAME" cat /tmp/kdc-a-r16.log >&2 || true
     exit 1
 fi
-echo "$RUST_RENEW" | grep -q "SERVER DIDN'T MATCH TICKET FOR RENEW" || {
-    echo "Rust A R16: kvno missing SERVER DIDN'T MATCH TICKET FOR RENEW" >&2
+echo "$RUST_RENEW" | grep -qxF "$R16_LINE" || {
+    echo "Rust A R16: kvno did not report 26 (Requested server and ticket don't match)" >&2
+    docker exec "$NAME" cat /tmp/kdc-a-r16.log >&2 || true
+    exit 1
+}
+docker exec "$NAME" sh -c "grep -q \"SERVER DIDN'T MATCH TICKET FOR RENEW\" /tmp/kdc-a-r16.log" || {
+    echo "Rust A R16: KDC log missing SERVER DIDN'T MATCH TICKET FOR RENEW" >&2
     docker exec "$NAME" cat /tmp/kdc-a-r16.log >&2 || true
     exit 1
 }

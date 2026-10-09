@@ -5,11 +5,12 @@
 //! Env: `KRB5_PASSWORD`, `KERBER_PAUSER_PASSWORD`, `KERBER_DIFF_REALM`,
 //! `KERBER_KRBTGT_KEYTAB`, `KERBER_HOST_KEYTAB`.
 //!
-//! The 111 cases, in send order (`DIFFSEND_CASES` in `scripts/ci-policy.py` pins the same
+//! The 112 cases, in send order (`DIFFSEND_CASES` in `scripts/ci-policy.py` pins the same
 //! set):
 //! `garbage-pdu`, `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`,
 //! `pauser-no-preauth`, `as-needpreauth-hints-unpermitted`, `skewed-timestamp`, `as-needchange`,
-//! `as-invalid-opts`, `as-validate-before-preauth`, `as-optimistic-encts-wrong-etype`,
+//! `as-invalid-opts`, `as-validate-before-preauth`, `as-locked-out`,
+//! `as-optimistic-encts-wrong-etype`,
 //! `unknown-sname`, `as-success`, `as-retransmit`, `as-request-anonymous`, `tgs-success`,
 //! `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`, `fast-armor-no-subkey`,
 //! `armor-ap-req-as-pa-tgs-req`, `tgs-ad-fx-armor-authenticator`, `as-bad-msg-type`,
@@ -1316,6 +1317,15 @@ fn run() -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-validate-before-preauth", &req, err::KEY_EXPIRED)?;
 
+    // lockedu is past its policy's maxfailure 1 with no lockout expiry.
+    // MIT `krb5_db2_check_policy_as` (`plugins/kdb/db2/kdb_db2.c:1539-1550`): the failcount
+    // lockout is CLIENT_REVOKED (18) with the DB module's status "LOCKED_OUT", the last
+    // check of validate_as_request, before preauth.
+    let lockedu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockedu"]);
+    let req = encode(&as_req(lockedu, realm, 0x1000_0097, None).map_err(|e| e.to_string())?)
+        .map_err(|e| e.to_string())?;
+    expect_error(&cfg, "as-locked-out", &req, err::CLIENT_REVOKED)?;
+
     // PA-ENC-TIMESTAMP declaring des3 (etype 16), which pauser has no key for:
     // enc_ts_verify krb5_dbe_search_enctype misses -> KRB5_KDB_NO_MATCHING_KEY
     // -> KDC_ERR_PREAUTH_FAILED (24) on both legs.
@@ -1856,7 +1866,7 @@ fn run() -> Result<(), String> {
                 user.clone(),
                 realm,
                 0x1000_002a,
-                Some(vec![pa_spake_support()]),
+                Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
             )
             .map_err(|e| e.to_string())?,
         )
@@ -4798,7 +4808,7 @@ fn run() -> Result<(), String> {
         rt.endtime.unix_seconds()
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":111}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":112}}"#);
     Ok(())
 }
 

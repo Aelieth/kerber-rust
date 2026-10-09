@@ -11,8 +11,9 @@ use krb5_crypto::{
 };
 use krb5_types::cammac::{Cammac, VerifierMac};
 use krb5_types::pac::{
-    PAC_CLIENT_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM, PAC_SERVER_CHECKSUM,
-    PAC_TICKET_CHECKSUM, parse_client_info,
+    PAC_CLIENT_INFO, PAC_DELEGATION_INFO, PAC_FULL_CHECKSUM, PAC_LOGON_INFO, PAC_PRIVSVR_CHECKSUM,
+    PAC_SERVER_CHECKSUM, PAC_TICKET_CHECKSUM, Pac, PacBuffer, client_info_buffer,
+    parse_client_info, signature_buffer,
 };
 use krb5_types::{
     AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, EncryptedData,
@@ -290,6 +291,171 @@ pub fn should_have_ticket_signature(sname: &PrincipalName) -> bool {
         && sname.name_string[0].as_bytes() == b"kadmin"
         && sname.name_string[1].as_bytes() == b"changepw";
     !(sname.is_krbtgt() || changepw)
+}
+
+/// Whether a ticket's PAC has AD data, which turns the AD shape on: LOGON_INFO, UPN_DNS_INFO,
+/// ATTRIBUTES_INFO and REQUESTER_SID besides CLIENT_INFO and the signatures.
+///
+/// - A PAC minted for one of the realm's own principals (`initial`: an AS-REQ, or an S4U2Self
+///   whose user has an entry in this realm) has AD data when kdc.conf gives the realm an AD
+///   identity, `domain_sid` ([`crate::store::Policy::ad_identity`]).
+/// - A PAC carried from a presented ticket (a TGS-REQ's header ticket, also for an S4U2Self user
+///   of another realm, and S4U2Proxy's evidence ticket) has AD data when that PAC holds a
+///   LOGON_INFO buffer.
+///
+/// Without AD data the ticket gets MIT's PAC ([`mit_ticket_pac`]).
+/// MIT `handle_pac` (`kdc_authdata.c:507-515`): only the KDB's `issue_pac` adds identity buffers, and the db2 KDB has none.
+/// MIT `handle_pac` (`kdc_authdata.c:507-509`): `issue_pac` is given the client's entry, which for an S4U2Self user of another realm is none.
+pub(crate) fn pac_has_ad_data(
+    policy: &crate::store::Policy,
+    subject_pac: Option<&[u8]>,
+    initial: bool,
+) -> bool {
+    if initial {
+        return policy.ad_identity;
+    }
+    subject_pac
+        .and_then(|raw| Pac::parse(raw).ok())
+        .is_some_and(|pac| pac.buffer(PAC_LOGON_INFO).is_some())
+}
+
+/// MIT `handle_pac`'s request inputs for the new PAC.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct HandlePac<'a> {
+    /// MIT `subject_pac`: the header ticket's verified PAC, or S4U2Proxy's evidence ticket's.
+    pub(crate) subject: Option<&'a [u8]>,
+    /// MIT `KRB5_KDB_FLAGS_S4U`: an S4U2Self or S4U2Proxy request.
+    pub(crate) s4u: bool,
+    /// MIT `KRB5_KDB_FLAG_ISSUING_REFERRAL`.
+    pub(crate) issuing_referral: bool,
+    /// S4U2Proxy within the realm (MIT constrained delegation, not cross-realm): `req->server`
+    /// and the evidence ticket's server with its realm.
+    pub(crate) delegation: Option<(&'a PrincipalName, &'a str)>,
+    /// MIT `altcprinc`: the S4U subject and its realm.
+    pub(crate) altcprinc: Option<(&'a PrincipalName, &'a str)>,
+}
+
+/// MIT's PAC for a ticket without AD data ([`pac_has_ad_data`]): MIT `handle_pac` with a KDB that
+/// has no `issue_pac` (db2), signed as `krb5_kdc_sign_ticket` signs it. In MIT's order: the
+/// DELEGATION_INFO, the subject's CLIENT_INFO (a TGS-REQ that is not S4U), the ticket checksum (a
+/// service ticket), a new CLIENT_INFO (an AS-REQ or S4U), the server and KDC checksums, and the
+/// full checksum (a service ticket).
+/// MIT `handle_pac` (`kdc_authdata.c:520-532`): S4U2Proxy within the realm adds new delegation info, and any other subject PAC's is copied.
+/// MIT `handle_pac` (`kdc_authdata.c:534-557`): an S4U referral names the subject with its realm, a new PAC or S4U ticket names the ticket client, and any other TGS-REQ copies the subject's client info.
+/// MIT `krb5_kdc_sign_ticket` (`pac_sign.c:396-409`): a service ticket's checksum is added first, over the ticket with a dummy PAC, then `sign_pac` runs.
+/// MIT `sign_pac` (`pac_sign.c:223-244`): the client info, then zeroed server, KDC and (a service ticket) full checksums.
+/// MIT `sign_pac` (`pac_sign.c:251-271`): the full checksum, then the server checksum over the PAC, then the KDC checksum over the server checksum.
+///
+/// # Errors
+///
+/// [`Error::Protocol`] `GENERIC` with status `HANDLE_AUTHDATA` when the subject PAC does not
+/// parse, holds DELEGATION_INFO twice, or lacks the CLIENT_INFO it should give; [`Error::Crypto`]
+/// when a checksum cannot be computed.
+pub(crate) fn mit_ticket_pac(
+    req: &HandlePac<'_>,
+    client: &PrincipalName,
+    authtime: u32,
+    ticket: &PacTicket<'_>,
+) -> Result<Vec<u8>, Error> {
+    let subject = req
+        .subject
+        .map(|raw| Pac::parse(raw).map_err(|_| handle_authdata_error()))
+        .transpose()?;
+    let mut buffers = Vec::new();
+    if let Some((target, transited)) = req.delegation {
+        let di = delegation_info_for(subject.as_ref(), target, transited)?;
+        buffers.push(PacBuffer::new(PAC_DELEGATION_INFO, di));
+    } else if let Some(s) = &subject
+        && let Some(di) = s
+            .unique_buffer(PAC_DELEGATION_INFO)
+            .map_err(|_| handle_authdata_error())?
+    {
+        buffers.push(PacBuffer::new(PAC_DELEGATION_INFO, di.to_vec()));
+    }
+    let client_name = if req.s4u && req.issuing_referral {
+        let (name, realm) = req.altcprinc.ok_or_else(handle_authdata_error)?;
+        Some(client_info_name(name, Some(realm)))
+    } else if subject.is_none() || req.s4u {
+        Some(client_info_name(client, None))
+    } else {
+        let info = subject
+            .as_ref()
+            .and_then(|s| s.unique_buffer(PAC_CLIENT_INFO).ok().flatten())
+            .ok_or_else(handle_authdata_error)?;
+        buffers.push(PacBuffer::new(PAC_CLIENT_INFO, info.to_vec()));
+        None
+    };
+    let PacTicket {
+        server,
+        kdc,
+        enc_tkt_der,
+        is_service_tkt,
+    } = *ticket;
+    let usage = KeyUsage::new(ku::KERB_NON_KERB_CKSUM_SALT)?;
+    let server_type = server.etype().checksum_type();
+    let kdc_type = kdc.etype().checksum_type();
+    if is_service_tkt {
+        let mac = checksum(kdc, usage, enc_tkt_der)?;
+        buffers.push(PacBuffer::new(
+            PAC_TICKET_CHECKSUM,
+            signature_buffer(kdc_type, &mac),
+        ));
+    }
+    if let Some(name) = client_name {
+        buffers.push(PacBuffer::new(
+            PAC_CLIENT_INFO,
+            client_info_buffer(authtime, &name),
+        ));
+    }
+    buffers.push(PacBuffer::new(
+        PAC_SERVER_CHECKSUM,
+        zeroed_signature(server_type)?,
+    ));
+    buffers.push(PacBuffer::new(
+        PAC_PRIVSVR_CHECKSUM,
+        zeroed_signature(kdc_type)?,
+    ));
+    if is_service_tkt {
+        buffers.push(PacBuffer::new(
+            PAC_FULL_CHECKSUM,
+            zeroed_signature(kdc_type)?,
+        ));
+    }
+    let mut pac = Pac::built(0, buffers);
+    if is_service_tkt {
+        let full_mac = checksum(kdc, usage, &pac.to_bytes())?;
+        set_sig(&mut pac, PAC_FULL_CHECKSUM, kdc_type, &full_mac);
+    }
+    let server_mac = checksum(server, usage, &pac.to_bytes())?;
+    set_sig(&mut pac, PAC_SERVER_CHECKSUM, server_type, &server_mac);
+    let kdc_mac = checksum(kdc, usage, &server_mac)?;
+    set_sig(&mut pac, PAC_PRIVSVR_CHECKSUM, kdc_type, &kdc_mac);
+    Ok(pac.to_bytes())
+}
+
+/// MIT `insert_checksum` (`pac_sign.c:107-136`): a signature buffer of the checksum type's length, zero past the type.
+fn zeroed_signature(cksumtype: i32) -> Result<Vec<u8>, Error> {
+    let len = checksum_output_size(cksumtype)
+        .ok_or_else(|| Error::Crypto(format!("PAC checksum type {cksumtype} has no length")))?;
+    Ok(signature_buffer(cksumtype, &vec![0u8; len]))
+}
+
+/// The name MIT's `insert_client_info` writes: with no realm, the components quoted except `@`;
+/// with a realm, an enterprise name as it is, and any other name quoted.
+/// MIT `insert_client_info` (`pac_sign.c:52-59`): `KRB5_PRINCIPAL_UNPARSE_NO_REALM` without the realm, `KRB5_PRINCIPAL_UNPARSE_DISPLAY` for an enterprise name with it.
+fn client_info_name(name: &PrincipalName, realm: Option<&str>) -> String {
+    match realm {
+        None => name.unparse_no_realm(),
+        Some(r) if name.name_type == PrincipalName::NT_ENTERPRISE => {
+            format!("{}@{r}", name.components_joined())
+        }
+        Some(r) => name.unparse_with_realm(r),
+    }
+}
+
+/// MIT `handle_authdata`'s failure in `tgs_issue_ticket`: protocol 60, `HANDLE_AUTHDATA`.
+fn handle_authdata_error() -> Error {
+    proto(err::GENERIC, status::HANDLE_AUTHDATA)
 }
 
 /// Verify PAC server checksum with `server` and KDC checksum with `kdc`;
@@ -953,12 +1119,13 @@ pub(crate) struct SecondTicket {
 /// MIT `verify_deleg_pac` (`tgs_policy.c:366-421`): the PAC client parses with a realm at
 /// the ticket authtime, the delegation info names any given proxy target, and its last
 /// transited service is the ticket client.
+/// MIT `verify_deleg_pac` (`tgs_policy.c:393-400`): the proxy target is compared with no realm and unquoted.
 pub(crate) fn verify_deleg_pac(
     pac: &krb5_types::pac::Pac,
     enc_tkt: &EncTicketPart,
     target: Option<&PrincipalName>,
 ) -> bool {
-    let Some((_, _, authtime)) = pac_princ_with_realm(pac) else {
+    let Some((_, authtime)) = pac_princ_with_realm(pac) else {
         return false;
     };
     if authtime != enc_tkt.authtime.unix_seconds() {
@@ -971,7 +1138,7 @@ pub(crate) fn verify_deleg_pac(
         return false;
     };
     if let Some(server) = target
-        && di.proxy_target != server.unparse()
+        && di.proxy_target != server.components_joined()
     {
         return false;
     }
@@ -982,15 +1149,17 @@ pub(crate) fn verify_deleg_pac(
     *last == enc_tkt.cname.unparse_with_realm(crealm)
 }
 
-fn pac_princ_with_realm(pac: &krb5_types::pac::Pac) -> Option<(String, String, u32)> {
+/// The PAC's client as a principal with its realm, and the PAC authtime.
+/// MIT `get_pac_princ_with_realm` (`kdc_util.c:653-670`): one `@` parses with the realm required, two parse as an enterprise name, and the name type is `KRB5_NT_MS_PRINCIPAL`.
+fn pac_princ_with_realm(pac: &Pac) -> Option<(krb5_types::ParsedName, u32)> {
     let buf = pac.unique_buffer(PAC_CLIENT_INFO).ok().flatten()?;
     let (authtime, name) = parse_client_info(buf)?;
     let n = name.bytes().filter(|&b| b == b'@').count();
     if n != 1 && n != 2 {
         return None;
     }
-    let (user, realm) = name.rsplit_once('@')?;
-    Some((user.to_owned(), realm.to_owned(), authtime))
+    let parsed = krb5_types::parse_name_ex(&name, "", n == 2).ok()?;
+    parsed.has_realm.then_some((parsed, authtime))
 }
 
 /// MIT `check_tgs_s4u2proxy` (`tgs_policy.c:424-518`): a forwardable second ticket and a
@@ -1167,37 +1336,61 @@ fn check_allowed_to_delegate(impersonator: &Principal, resource: &PrincipalName)
     impersonator.s4u_allowed_to.iter().any(|n| n == &want)
 }
 
-/// First-hop `update_delegation_info`.
-/// MIT `update_delegation_info` (`kdc_authdata.c:382-439`): the proxy target is the
-/// requested server without realm, and the requesting service joins the transited list.
+/// First-hop `update_delegation_info` for the AD-shaped PAC: the subject's buffers with the
+/// updated DELEGATION_INFO last.
+///
+/// # Errors
+///
+/// As [`delegation_info_for`], and [`Error::Protocol`] `GENERIC` with status `HEADER_PAC` when
+/// `subject_pac` does not parse.
 pub(crate) fn update_delegation_info(
     subject_pac: &[u8],
     proxy_target: &PrincipalName,
     transited: &str,
 ) -> Result<Vec<u8>, Error> {
-    let parsed = krb5_types::pac::Pac::parse(subject_pac).map_err(|e| map_pac_err(&e))?;
-    let mut di = match parsed.unique_buffer(krb5_types::pac::PAC_DELEGATION_INFO) {
-        Ok(Some(buf)) => {
-            krb5_types::pac::parse_delegation_info(buf).map_err(|e| map_pac_err(&e))?
+    let parsed = Pac::parse(subject_pac).map_err(|e| map_pac_err(&e))?;
+    let buf = delegation_info_for(Some(&parsed), proxy_target, transited)?;
+    let mut buffers: Vec<PacBuffer> = parsed
+        .buffers
+        .into_iter()
+        .filter(|b| b.kind != PAC_DELEGATION_INFO)
+        .collect();
+    buffers.push(PacBuffer::new(PAC_DELEGATION_INFO, buf));
+    Ok(Pac::built(0, buffers).to_bytes())
+}
+
+/// The DELEGATION_INFO buffer of S4U2Proxy's first hop: the subject PAC's, or a new one, naming
+/// the requested server and with the requesting service appended to the transited services.
+/// MIT `update_delegation_info` (`kdc_authdata.c:391-408`): the subject's delegation info is decoded, a missing one is created, and a repeated one is an error.
+/// MIT `update_delegation_info` (`kdc_authdata.c:410-422`): the proxy target is `req->server` with no realm and unquoted, and the transited service has its realm.
+///
+/// # Errors
+///
+/// [`Error::Protocol`] `GENERIC` with status `HANDLE_AUTHDATA` when the subject PAC holds
+/// DELEGATION_INFO twice or one that does not decode.
+fn delegation_info_for(
+    subject: Option<&Pac>,
+    proxy_target: &PrincipalName,
+    transited: &str,
+) -> Result<Vec<u8>, Error> {
+    let found = match subject {
+        Some(s) => s
+            .unique_buffer(PAC_DELEGATION_INFO)
+            .map_err(|_| handle_authdata_error())?,
+        None => None,
+    };
+    let mut di = match found {
+        Some(buf) => {
+            krb5_types::pac::parse_delegation_info(buf).map_err(|_| handle_authdata_error())?
         }
-        _ => krb5_types::pac::S4uDelegationInfo {
+        None => krb5_types::pac::S4uDelegationInfo {
             proxy_target: String::new(),
             transited_services: Vec::new(),
         },
     };
-    di.proxy_target = proxy_target.unparse();
+    di.proxy_target = proxy_target.components_joined();
     di.transited_services.push(transited.to_owned());
-    let buf = krb5_types::pac::delegation_info_buffer(&di);
-    let mut buffers: Vec<krb5_types::pac::PacBuffer> = parsed
-        .buffers
-        .into_iter()
-        .filter(|b| b.kind != krb5_types::pac::PAC_DELEGATION_INFO)
-        .collect();
-    buffers.push(krb5_types::pac::PacBuffer::new(
-        krb5_types::pac::PAC_DELEGATION_INFO,
-        buf,
-    ));
-    Ok(krb5_types::pac::Pac::built(0, buffers).to_bytes())
+    Ok(krb5_types::pac::delegation_info_buffer(&di))
 }
 
 /// MIT `get_pac_princ_with_realm` for cross-realm S4U2Proxy.
@@ -1207,13 +1400,12 @@ pub(crate) fn update_delegation_info(
 pub(crate) fn rbcd_pac_client(pac: &[u8]) -> Result<(PrincipalName, String), Error> {
     let parsed = krb5_types::pac::Pac::parse(pac)
         .map_err(|_| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
-    let Some((user, realm, _)) = pac_princ_with_realm(&parsed) else {
+    let Some((name, _)) = pac_princ_with_realm(&parsed) else {
         return Err(proto(err::BADOPTION, status::RBCD_PAC_PRINC));
     };
-    Ok((
-        PrincipalName::new(PrincipalName::NT_MS_PRINCIPAL, [user.as_str()]),
-        realm,
-    ))
+    let princ = PrincipalName::try_new(PrincipalName::NT_MS_PRINCIPAL, name.components)
+        .map_err(|_| proto(err::BADOPTION, status::RBCD_PAC_PRINC))?;
+    Ok((princ, name.realm))
 }
 
 fn is_kdc_issued_type(ad_type: i32) -> bool {
@@ -1511,7 +1703,7 @@ fn cammac_check_kdcver(
         return false;
     };
     // MIT `cammac_check_kdcver` (`cammac.c:168-168`): calls `krb5_c_verify_checksum` with
-    // no keyed gate. Refuse unkeyed types on the KDC verifier (security.md).
+    // no keyed gate. Refuse unkeyed types on the KDC verifier (mit-deviations.md).
     verify_checksum_keyed(
         key,
         usage,
@@ -1603,3 +1795,9 @@ mod a2_r17_reply;
 
 #[cfg(test)]
 mod handle_authdata_tests;
+
+#[cfg(test)]
+mod mit_pac_golden;
+
+#[cfg(test)]
+mod pac_name_tests;

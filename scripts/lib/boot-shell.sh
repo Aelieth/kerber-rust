@@ -10,6 +10,7 @@ need_image
 NAME="${KERBER_SHELL:-kerber-rust-shell}"
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 docker run -d --name "$NAME" --hostname testhost.kerber.test --entrypoint sleep "$IMAGE" 7200 >/dev/null
+json_log_on "$NAME"
 docker exec "$NAME" sh -c '
     cp -a /etc/krb5.conf /etc/krb5.conf.kerber-stock
     cp -a /etc/krb5kdc/kdc.conf /etc/krb5kdc/kdc.conf.kerber-stock

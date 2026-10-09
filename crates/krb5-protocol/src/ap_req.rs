@@ -15,8 +15,8 @@ use krb5_crypto::{
 };
 use krb5_types::transited::hierarchical_walk_realms;
 use krb5_types::{
-    ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddresses, KerberosTime,
-    PrincipalName, Realm, Ticket, err, flag_bit, ku,
+    ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddress, HostAddresses,
+    KerberosTime, PrincipalName, Realm, Ticket, err, flag_bit, ku,
 };
 
 use crate::error::Error;
@@ -40,8 +40,9 @@ pub struct ApVerifyParams<'a> {
     pub expected_realm: Option<&'a str>,
     /// Clock skew in seconds.
     pub skew: i64,
-    /// Optional client addresses to check against ticket caddr.
-    pub addresses: Option<&'a HostAddresses>,
+    /// The sender's address, which the ticket's caddr must hold (MIT's auth context remote
+    /// address, see [`address_search`]); `None` checks no address.
+    pub remote_addr: Option<&'a HostAddress>,
     /// Now (for tests); default wall clock.
     pub now: Option<KerberosTime>,
 }
@@ -57,10 +58,24 @@ impl<'a> ApVerifyParams<'a> {
             expected_server: None,
             expected_realm: None,
             skew: DEFAULT_SKEW,
-            addresses: None,
+            remote_addr: None,
             now: None,
         }
     }
+}
+
+/// Whether a ticket whose address list is `list` may come from `addr`.
+/// MIT `krb5_address_search` (`lib/krb5/krb/addr_srch.c:48-65`): a ticket with no list, or whose
+/// list is one NetBIOS address, holds any address; otherwise `addr` must be one of the list's.
+#[must_use]
+pub fn address_search(addr: &HostAddress, list: Option<&HostAddresses>) -> bool {
+    let Some(list) = list else {
+        return true;
+    };
+    if list.len() == 1 && list[0].addr_type == HostAddress::ADDRTYPE_NETBIOS {
+        return true;
+    }
+    list.iter().any(|a| a == addr)
 }
 
 /// Build an AP-REQ from a service ticket and its session key.
@@ -120,8 +135,8 @@ pub fn build_ap_req_mutual_seq(
     cname: &PrincipalName,
     seq_number: u32,
 ) -> Result<ApReq, Error> {
-    let now = KerberosTime::now();
-    let usec = krb5_types::Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
+    // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the time and its microseconds, from `krb5_us_timeofday`.
+    let (now, usec) = crate::auth_con::us_timeofday();
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: crealm.clone(),
@@ -164,8 +179,8 @@ pub fn build_ap_req_with_cksum(
     cksum: Option<krb5_types::Checksum>,
     subkey: Option<krb5_types::EncryptionKey>,
 ) -> Result<ApReq, Error> {
-    let now = KerberosTime::now();
-    let usec = krb5_types::Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros());
+    // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the time and its microseconds, from `krb5_us_timeofday`.
+    let (now, usec) = crate::auth_con::us_timeofday();
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: crealm.clone(),
@@ -177,7 +192,23 @@ pub fn build_ap_req_with_cksum(
         seq_number: Some(0),
         authorization_data: None,
     };
-    let der = encode(&authenticator)?;
+    build_ap_req_from_authenticator(ticket, session_key, ap_options, &authenticator)
+}
+
+/// Build an AP-REQ around a caller-made authenticator, which the caller keeps to check the
+/// AP-REP's `ctime` / `cusec` against.
+///
+/// # Errors
+///
+/// [`Error::Asn1`] when the authenticator does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session_key` fails.
+pub fn build_ap_req_from_authenticator(
+    ticket: Ticket,
+    session_key: &ProtocolKey,
+    ap_options: ApOptions,
+    authenticator: &Authenticator,
+) -> Result<ApReq, Error> {
+    let der = encode(authenticator)?;
     let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let cipher = encrypt(session_key, usage, &der)?;
     Ok(ApReq {
@@ -404,13 +435,14 @@ fn verify_inner(
             text: Some("Ticket has invalid flag set".into()),
         });
     }
-    if let Some(addrs) = params.addresses
-        && let Some(caddr) = &ticket_part.caddr
-        && caddr != addrs
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:536-540`): with a remote address set, the ticket's
+    // address list must hold it.
+    if let Some(remote) = params.remote_addr
+        && !address_search(remote, ticket_part.caddr.as_ref())
     {
         return Err(Error::KrbError {
             code: err::BADADDR,
-            text: Some("address mismatch".into()),
+            text: Some("Incorrect net address".into()),
         });
     }
     let srealm = String::from_utf8_lossy(ap.ticket.realm.as_bytes());

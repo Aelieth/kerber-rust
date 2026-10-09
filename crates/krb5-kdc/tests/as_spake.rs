@@ -28,7 +28,13 @@ use std::time::Duration;
 fn as_spake_91_e_data_is_151_19_133() {
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 15007, Some(vec![pa_spake_support()])).unwrap();
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        15007,
+        Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
+    )
+    .unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).unwrap()).unwrap();
     let e: KrbError = decode(&bytes).unwrap();
     assert_eq!(e.error_code, err::MORE_PREAUTH_DATA_REQUIRED);
@@ -237,7 +243,7 @@ fn golden_dump_store() -> PrincipalStore {
     let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/traces/kdb/mit-dump-v7.txt");
     let mut store = load_dump_path(&p, b"masterpassword").expect("golden dump");
-    store.policy.spake_preauth_groups = vec![krb5_types::spake::GROUP_P256];
+    store.policy.spake_preauth_groups = vec![krb5_crypto::SpakeGroup::P256];
     store
 }
 
@@ -258,7 +264,7 @@ fn spake_round1(
         .expect("aes256-sha1 key")
         .key
         .clone();
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let req1 = as_req(cname, TEST_REALM, nonce, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(store, &req1).unwrap_err();
     let e_data = match err {
@@ -302,7 +308,7 @@ fn spake_challenge_then_as_rep() {
         .expect("aes256-sha1 key")
         .key
         .clone();
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let req1 = as_req(cname.clone(), TEST_REALM, 301, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {
@@ -336,6 +342,7 @@ fn spake_challenge_then_as_rep() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, spake_key) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -373,13 +380,14 @@ fn spake_cookie_round_trips_on_golden_dump() {
         "golden dump stores 20,19,18,17 so first_current ≠ best_key"
     );
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let (key, spa, cookie, chal) = spake_round1(&store, 321);
     assert!(cookie.starts_with(b"MIT1"), "SPAKE cookie is MIT1");
     let mut req2 = as_req(cname, TEST_REALM, 322, None).unwrap();
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, spake_key) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -401,7 +409,7 @@ fn spake_cookie_round_trips_on_golden_dump() {
 fn spake_unknown_cookie_kvno_is_preauth_failed() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let (key, spa, mut cookie, chal) = spake_round1(&store, 323);
     assert!(cookie.starts_with(b"MIT1") && cookie.len() > 8);
     cookie[4..8].copy_from_slice(&0xffff_ffff_u32.to_be_bytes());
@@ -409,6 +417,7 @@ fn spake_unknown_cookie_kvno_is_preauth_failed() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, _) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -440,7 +449,7 @@ fn spake_garbage_cookie_is_preauth_failed() {
         .expect("aes256-sha1 key")
         .key
         .clone();
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let req1 = as_req(cname.clone(), TEST_REALM, 303, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {
@@ -478,6 +487,7 @@ fn spake_garbage_cookie_is_preauth_failed() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, _) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -510,7 +520,7 @@ fn spake_cookie_for_user_ignored_for_admin() {
         .expect("aes256-sha1 key")
         .key
         .clone();
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let req1 = as_req(user.clone(), TEST_REALM, 305, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {
@@ -540,6 +550,7 @@ fn spake_cookie_for_user_ignored_for_admin() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, _) = pa_spake_response(
         &user_key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -571,7 +582,7 @@ fn spake_expired_cookie_is_preauth_failed() {
         .expect("aes256-sha1 key")
         .key
         .clone();
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let req1 = as_req(cname.clone(), TEST_REALM, 307, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {
@@ -616,6 +627,7 @@ fn spake_expired_cookie_is_preauth_failed() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, _) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -641,7 +653,13 @@ fn spake_expired_cookie_is_preauth_failed() {
 fn handle_request_spake_91_e_text_is_preauth_failed() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 391, Some(vec![pa_spake_support()])).unwrap();
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        391,
+        Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
+    )
+    .unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
     let e: KrbError = decode(&bytes).expect("KRB-ERROR");
     assert_eq!(e.error_code, err::MORE_PREAUTH_DATA_REQUIRED);
@@ -665,7 +683,13 @@ fn handle_request_spake_91_e_text_is_preauth_failed() {
 fn spake_91_without_cookie_carries_etype_info2() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
-    let req = as_req(cname, TEST_REALM, 711, Some(vec![pa_spake_support()])).unwrap();
+    let req = as_req(
+        cname,
+        TEST_REALM,
+        711,
+        Some(vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])]),
+    )
+    .unwrap();
     let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
     let e: KrbError = decode(&bytes).expect("KRB-ERROR");
     assert_eq!(e.error_code, err::MORE_PREAUTH_DATA_REQUIRED);

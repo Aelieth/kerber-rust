@@ -16,6 +16,13 @@ locally certify them.
 `rasn` is unpinned at 0.28; both getrandom versions stay exempt with notes
 in `config.toml`.
 
+**`curve25519-dalek` 4.1.3** (SPAKE edwards25519) has no importable
+safe-to-deploy audit (Google's is `ub-risk-1`, for 4.0.0), so it, its
+build-time `curve25519-dalek-derive` and the never-built `fiat-crypto`
+backend are exempt with notes. Its build dependencies `rustc_version`
+0.4.1 and `semver` 1.0.28 are vetted by imported Mozilla and Bytecode
+Alliance audits; `deny.toml` pins its feature set.
+
 Local audit: `rasn-derive` 0.28.14 (`audits.toml`; 0.27.0 kept). Remaining
 third-party crates are honest exemptions; the list is smaller than a blank
 `cargo vet init`.

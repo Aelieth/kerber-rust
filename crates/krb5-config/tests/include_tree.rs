@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use krb5_config::{Error, Krb5Conf, discover_kdc_in, load_krb5_conf_paths};
+use krb5_config::{Error, Krb5Conf, ProfileError, discover_kdc_in, load_krb5_conf_paths};
 use krb5_testkit::scratch_dir;
 
 fn g9a_tree(tag: &str) -> PathBuf {
@@ -40,11 +40,47 @@ fn discover_kdc_in_reads_realms_stanza() {
 ",
     )
     .unwrap();
-    let ep = discover_kdc_in([&path], "KERBER.TEST").unwrap();
+    let ep = discover_kdc_in([&path], "KERBER.TEST")
+        .into_iter()
+        .next()
+        .unwrap();
     assert_eq!(ep.host, "10.9.8.7");
     assert_eq!(ep.port, 1088);
-    assert!(discover_kdc_in([&path], "OTHER.TEST").is_none());
+    assert_eq!(discover_kdc_in([&path], "OTHER.TEST").len(), 0);
     let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn discover_kdc_in_returns_the_profile_list_and_does_not_ask_dns() {
+    let dir = scratch_dir("discover-kdc-list");
+    let path = dir.join("krb5.conf");
+    std::fs::write(
+        &path,
+        r"
+[libdefaults]
+    dns_lookup_kdc = true
+[realms]
+    KL-NO-DNS.INVALID = {
+        kdc = 192.0.2.1
+        kdc = 192.0.2.2:1088
+        kdc = ..
+    }
+",
+    )
+    .unwrap();
+    let started = std::time::Instant::now();
+    let eps = discover_kdc_in([&path], "KL-NO-DNS.INVALID");
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "a profile list must not wait on DNS"
+    );
+    assert_eq!(eps.len(), 3);
+    assert_eq!(eps[0].host, "192.0.2.1");
+    assert_eq!(eps[0].port, 88);
+    assert_eq!(eps[1].host, "192.0.2.2");
+    assert_eq!(eps[1].port, 1088);
+    assert_eq!(eps[2].host, "..");
+    assert_eq!(eps[2].port, 88);
 }
 
 #[test]
@@ -163,7 +199,7 @@ fn include_cycle_is_error() {
     .unwrap();
     let err = Krb5Conf::load_file(&a).unwrap_err();
     assert!(
-        matches!(err, Error::Parse(ref s) if s.contains("cycle")),
+        matches!(err, Error::Profile(ProfileError::IncludeFile, ref s) if s.contains("cycle")),
         "{err}"
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -202,12 +238,12 @@ fn missing_include_on_multi_path_is_error() {
     std::fs::write(&other, "[libdefaults]\n    default_realm = OTHER.TEST\n").unwrap();
     let err = load_krb5_conf_paths([&bad, &other]).unwrap_err();
     assert!(
-        matches!(err, Error::Parse(ref s) if s.contains("include target not found")),
+        matches!(err, Error::Profile(ProfileError::IncludeFile, ref s) if s.contains("include target not found")),
         "{err}"
     );
     let err2 = load_krb5_conf_paths([&other, &bad]).unwrap_err();
     assert!(
-        matches!(err2, Error::Parse(ref s) if s.contains("include target not found")),
+        matches!(err2, Error::Profile(ProfileError::IncludeFile, ref s) if s.contains("include target not found")),
         "{err2}"
     );
     let skipped = load_krb5_conf_paths([&absent, &other]).unwrap();
@@ -246,7 +282,7 @@ fn indented_include_inside_section_is_error() {
     .unwrap();
     let err = Krb5Conf::load_file(&main).unwrap_err();
     assert!(
-        matches!(err, Error::Parse(ref s) if s.contains("improper format")),
+        matches!(err, Error::Profile(ProfileError::Syntax, ref s) if s.contains("improper format")),
         "{err}"
     );
     let _ = std::fs::remove_dir_all(&root);

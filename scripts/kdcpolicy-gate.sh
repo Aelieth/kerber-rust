@@ -32,6 +32,7 @@ if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/kdcpolicy/kdcpolicy_test.
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
     docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
+    json_log_on "$NAME"
     if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/kdcpolicy/kdcpolicy_test.so; then
         log "kdcpolicy.gate" "error" ',"error":"kdcpolicy_test.so missing after rebuild"'
         exit 1

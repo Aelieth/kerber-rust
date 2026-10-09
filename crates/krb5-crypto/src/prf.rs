@@ -1,18 +1,19 @@
 //! RFC 3961 §5.3 PRF and RFC 6113 PRF+.
 //!
 //! PRF is one block for the key's etype. PRF+ concatenates blocks until
-//! the requested length is met. It wipes each counter‖seed input it
-//! built. The PRF output blocks are not wiped, and the caller owns the
-//! result.
+//! the requested length is met. It wipes each PRF output block on every
+//! return, and each counter‖seed input once its block is made; the caller
+//! owns the result.
 
 use sha1::{Digest, Sha1};
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::cts::{self, BLOCK};
 use crate::derive::{dk_rfc3961, hmac_digest, kdf_hmac_sha2};
 use crate::error::Error;
 use crate::etype::EncryptionType;
 use crate::key::ProtocolKey;
+use crate::wipe::Wiped;
 
 /// RFC 3961 / RFC 8009 pseudo-random function.
 ///
@@ -48,13 +49,13 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
     if len == 0 {
         return Err(Error::InvalidParams);
     }
-    let mut out = Vec::with_capacity(len);
+    let mut out = Wiped(Vec::with_capacity(len));
     let mut i = 1u8;
     while out.len() < len {
         let mut input = Vec::with_capacity(1 + seed.len());
         input.push(i);
         input.extend_from_slice(seed);
-        let block = prf(key, &input)?;
+        let block = Wiped(prf(key, &input)?);
         input.zeroize();
         let need = (len - out.len()).min(block.len());
         out.extend_from_slice(&block[..need]);
@@ -66,7 +67,7 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
     if out.len() < len {
         return Err(Error::InvalidParams);
     }
-    Ok(out)
+    Ok(std::mem::take(&mut out.0))
 }
 
 /// MIT `krb5_c_derive_prfplus` (`cf2.c:82-121`): PRF+ of `keybytes`, then rand2key.
@@ -92,22 +93,16 @@ pub fn derive_prfplus_enctype(
     input: &[u8],
     enctype: EncryptionType,
 ) -> Result<ProtocolKey, Error> {
-    let mut rnd = prf_plus(key, input, enctype.keybytes())?;
-    let out = if enctype == EncryptionType::Des3CbcSha1 {
+    let rnd = Wiped(prf_plus(key, input, enctype.keybytes())?);
+    if enctype == EncryptionType::Des3CbcSha1 {
         if rnd.len() != 21 {
-            rnd.zeroize();
             return Err(Error::InvalidKeyLength);
         }
-        let raw = crate::weak::des3_random_to_key(&rnd);
-        let k = ProtocolKey::from_bytes(enctype, &raw);
-        rnd.zeroize();
-        k?
+        let raw = Zeroizing::new(crate::weak::des3_random_to_key(&rnd));
+        ProtocolKey::from_bytes(enctype, &*raw)
     } else {
-        let k = ProtocolKey::from_bytes(enctype, &rnd);
-        rnd.zeroize();
-        k?
-    };
-    Ok(out)
+        ProtocolKey::from_bytes(enctype, &rnd)
+    }
 }
 
 fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
@@ -117,28 +112,22 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     // RFC 3961 §5.3 / MIT `prf_dk.c`: truncate the hash to the closest
     // multiple of the cipher block size, then encrypt.
     if key.etype() == EncryptionType::Des3CbcSha1 {
-        let mut dk = crate::weak::dk_des3(key.as_bytes(), b"prf")?;
+        let dk = Wiped(crate::weak::dk_des3(key.as_bytes(), b"prf")?);
         let trunc = (tmp1.len() / 8) * 8;
-        let c = crate::weak::des3_cbc_encrypt(&dk, [0u8; 8], &tmp1[..trunc])?;
-        dk.zeroize();
-        Ok(c)
+        crate::weak::des3_cbc_encrypt(&dk, [0u8; 8], &tmp1[..trunc])
     } else {
-        let mut dk = dk_rfc3961(key.as_bytes(), b"prf")?;
+        let dk = Wiped(dk_rfc3961(key.as_bytes(), b"prf")?);
         let trunc = (tmp1.len() / BLOCK) * BLOCK;
         let mut block = [0u8; BLOCK];
         block.copy_from_slice(&tmp1[..trunc]);
-        let enc = cts::encrypt_block(&dk, &block)?;
-        dk.zeroize();
-        Ok(enc.to_vec())
+        Ok(cts::encrypt_block(&dk, &block)?.to_vec())
     }
 }
 
 fn prf_camellia(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     // RFC 6803 §6: Kp = KDF-FEEDBACK-CMAC(protocol-key, "prf"); PRF = CMAC(Kp, octet-string).
-    let mut kp = crate::weak::dk_camellia(key.as_bytes(), b"prf")?;
-    let out = crate::weak::cmac_camellia(&kp, input)?;
-    kp.zeroize();
-    Ok(out)
+    let kp = Wiped(crate::weak::dk_camellia(key.as_bytes(), b"prf")?);
+    crate::weak::cmac_camellia(&kp, input)
 }
 
 fn prf_rfc8009(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {

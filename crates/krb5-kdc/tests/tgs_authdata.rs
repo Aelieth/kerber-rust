@@ -9,7 +9,10 @@ use krb5_crypto::{
 };
 use krb5_kdc::testrealm::{GREET_AD_TYPE, GREET_TEXT, GreetAuth};
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_host};
-use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part, issue_tgs, register_authdata};
+use krb5_kdc::{
+    Error, PrincipalStore, clear_thread_authdata, decrypt_ticket_part, issue_tgs,
+    set_thread_authdata,
+};
 
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 use krb5_testkit::{krbtgt, status, user, user_as, wrap_if_relevant};
@@ -486,7 +489,7 @@ fn pac_is_first_authdata() {
 
 #[test]
 fn greet_is_kdc_issued() {
-    register_authdata(Arc::new(GreetAuth));
+    set_thread_authdata(vec![Arc::new(GreetAuth)]);
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 28011);
     let tgs = tgs_hand(
@@ -498,6 +501,7 @@ fn greet_is_kdc_issued() {
         None,
     );
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+    clear_thread_authdata();
     let part = host_part(&store, &out);
     let ticket_ad = part.authorization_data.expect("ticket AD");
     let has_issued = ticket_ad
@@ -512,7 +516,7 @@ fn greet_is_kdc_issued() {
 
 #[test]
 fn greet_precedes_copied_ad() {
-    register_authdata(Arc::new(GreetAuth));
+    set_thread_authdata(vec![Arc::new(GreetAuth)]);
     let (store, _) = bootstrap_documented().unwrap();
     let issued = user_as(&store, 28021);
     let blob = b"r28-greet-order";
@@ -530,6 +534,7 @@ fn greet_precedes_copied_ad() {
         None,
     );
     let out = krb5_kdc::issue_tgs(&store, &tgs).unwrap();
+    clear_thread_authdata();
     let part = host_part(&store, &out);
     let ticket_ad = part.authorization_data.expect("ticket AD");
     let greet_i = ticket_ad

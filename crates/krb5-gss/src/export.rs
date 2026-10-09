@@ -172,6 +172,7 @@ impl GssContext {
             ticket_realm: None,
             ap_rep_key: None,
             dce_style: false,
+            ap_req_time: None,
         })
     }
 }

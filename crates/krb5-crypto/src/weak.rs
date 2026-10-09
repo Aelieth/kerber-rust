@@ -13,23 +13,25 @@ use md4::{Digest, Md4};
 use md5::Md5;
 use rc4::{KeyInit as Rc4KeyInit, StreamCipher};
 use sha1::Sha1;
-use zeroize::Zeroize;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::error::Error;
 use crate::etype::{EncryptionType, KeyUsage};
 use crate::key::ProtocolKey;
+use crate::wipe::Wiped;
 
 const DES_BLOCK: usize = 8;
 
-/// RC4-HMAC string-to-key: MD4(UTF-16LE password). RFC 4757.
+/// RC4-HMAC string-to-key: MD4(UTF-16LE password). RFC 4757. The UTF-16 copy of the password
+/// is sized up front, so it never moves, and is wiped on return.
 pub(crate) fn rc4_string_to_key(password: &[u8]) -> Result<ProtocolKey, Error> {
-    let utf16: Vec<u8> = std::str::from_utf8(password)
-        .unwrap_or("")
-        .encode_utf16()
-        .flat_map(u16::to_le_bytes)
-        .collect();
+    let text = std::str::from_utf8(password).unwrap_or("");
+    let mut utf16 = Wiped(Vec::with_capacity(text.len() * 2));
+    for unit in text.encode_utf16() {
+        utf16.extend_from_slice(&unit.to_le_bytes());
+    }
     let mut h = Md4::new();
-    h.update(&utf16);
+    h.update(utf16.as_slice());
     let out = h.finalize();
     ProtocolKey::from_bytes(EncryptionType::Rc4Hmac, &out)
 }
@@ -217,80 +219,52 @@ fn hmac_sha1_trunc(key: &[u8], data: &[u8], n: usize) -> Result<Vec<u8>, Error> 
 
 /// RFC 3961 §6.3 3DES string-to-key: n-fold to 168 bits, random-to-key, DK("kerberos").
 pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<ProtocolKey, Error> {
-    let mut seed = Vec::with_capacity(password.len() + salt.len());
+    let mut seed = Wiped(Vec::with_capacity((password.len() + salt.len()).max(1)));
     seed.extend_from_slice(password);
     seed.extend_from_slice(salt);
     if seed.is_empty() {
         seed.push(0);
     }
-    let mut raw21 = crate::nfold::nfold(&seed, 21)?;
-    let mut raw = des3_random_to_key(&raw21);
-    raw21.zeroize();
-    let dk = dk_des3(&raw, b"kerberos")?;
-    raw.zeroize();
+    let raw21 = Wiped(crate::nfold::nfold(&seed, 21)?);
+    let raw = Zeroizing::new(des3_random_to_key(&raw21));
+    let dk = Wiped(dk_des3(&*raw, b"kerberos")?);
     ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &dk)
 }
 
-/// RFC 3961 §6.3.1 DES3random-to-key: three 56-bit groups, last output
-/// byte collects input LSBs in reverse order, then odd parity (+ weak-key
-/// correction as in §6.2).
+/// des3 random-to-key: 21 octets spread over the three 8-octet DES keys.
+///
+/// MIT `k5_rand2key_des3` (`lib/crypto/krb/random_to_key.c:83-101`): seven octets fill a key, its eighth octet takes their low bits, then odd parity is set; a weak or semi-weak key stays as it is.
 pub(crate) fn des3_random_to_key(raw21: &[u8]) -> [u8; 24] {
+    debug_assert_eq!(raw21.len(), 21);
     let mut out = [0u8; 24];
-    for i in 0..3 {
-        let p = &raw21[i * 7..i * 7 + 7];
-        let k = &mut out[i * 8..i * 8 + 8];
-        for (j, b) in p.iter().enumerate() {
-            k[j] = b & 0xfe;
-        }
-        k[7] = (p[6] & 1) << 7
-            | (p[5] & 1) << 6
-            | (p[4] & 1) << 5
-            | (p[3] & 1) << 4
-            | (p[2] & 1) << 3
-            | (p[1] & 1) << 2
-            | (p[0] & 1) << 1;
-        des_key_correction(k);
+    let (keys, _) = out.as_chunks_mut::<8>();
+    let (sevens, _) = raw21.as_chunks::<7>();
+    for (key, seven) in keys.iter_mut().zip(sevens) {
+        key[..7].copy_from_slice(seven);
+        eighth_byte(key);
+        fixup_key_parity(key);
     }
     out
 }
 
-fn des_key_correction(key: &mut [u8]) {
-    odd_parity(key);
-    if des_is_weak(key) {
-        key[7] ^= 0xf0;
-        odd_parity(key);
-    }
+/// A DES key's eighth octet from the low bits of the first seven.
+///
+/// MIT `eighth_byte` (`lib/crypto/krb/random_to_key.c:75-81`): bit 0 of octet i goes to bit i + 1.
+fn eighth_byte(b: &mut [u8; 8]) {
+    b[7] = ((b[0] & 1) << 1)
+        | ((b[1] & 1) << 2)
+        | ((b[2] & 1) << 3)
+        | ((b[3] & 1) << 4)
+        | ((b[4] & 1) << 5)
+        | ((b[5] & 1) << 6)
+        | ((b[6] & 1) << 7);
 }
 
-fn des_is_weak(key: &[u8]) -> bool {
-    // DES weak and semi-weak keys (NIST), compared after parity is set.
-    const WEAK: [[u8; 8]; 16] = [
-        [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
-        [0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe],
-        [0xe0, 0xe0, 0xe0, 0xe0, 0xf1, 0xf1, 0xf1, 0xf1],
-        [0x1f, 0x1f, 0x1f, 0x1f, 0x0e, 0x0e, 0x0e, 0x0e],
-        [0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe],
-        [0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01],
-        [0x1f, 0xe0, 0x1f, 0xe0, 0x0e, 0xf1, 0x0e, 0xf1],
-        [0xe0, 0x1f, 0xe0, 0x1f, 0xf1, 0x0e, 0xf1, 0x0e],
-        [0x01, 0xe0, 0x01, 0xe0, 0x01, 0xf1, 0x01, 0xf1],
-        [0xe0, 0x01, 0xe0, 0x01, 0xf1, 0x01, 0xf1, 0x01],
-        [0x1f, 0xfe, 0x1f, 0xfe, 0x0e, 0xfe, 0x0e, 0xfe],
-        [0xfe, 0x1f, 0xfe, 0x1f, 0xfe, 0x0e, 0xfe, 0x0e],
-        [0x01, 0x1f, 0x01, 0x1f, 0x01, 0x0e, 0x01, 0x0e],
-        [0x1f, 0x01, 0x1f, 0x01, 0x0e, 0x01, 0x0e, 0x01],
-        [0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1, 0xfe],
-        [0xfe, 0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1],
-    ];
-    WEAK.iter().any(|w| {
-        w.iter()
-            .zip(key.iter())
-            .all(|(a, b)| (*a & 0xfe) == (*b & 0xfe))
-    })
-}
-
-fn odd_parity(block: &mut [u8]) {
-    for b in block {
+/// Odd parity in each octet's low bit.
+///
+/// MIT `k5_des_fixup_key_parity` (`lib/crypto/openssl/des/des_keys.c:33-37`): OpenSSL's `DES_set_odd_parity`.
+fn fixup_key_parity(key: &mut [u8; 8]) {
+    for b in key {
         let mut x = *b & 0xfe;
         if x.count_ones().is_multiple_of(2) {
             x |= 1;
@@ -304,9 +278,9 @@ pub(crate) fn dk_des3(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
     let folded = crate::nfold::nfold(constant, DES_BLOCK)?;
     let mut block = [0u8; DES_BLOCK];
     block.copy_from_slice(&folded);
-    let mut dr = Vec::with_capacity(24);
+    let mut dr = Wiped(Vec::with_capacity(24));
     while dr.len() < 21 {
-        let c = des3_cbc_encrypt(key, [0u8; DES_BLOCK], &block)?;
+        let c = Wiped(des3_cbc_encrypt(key, [0u8; DES_BLOCK], &block)?);
         if c.len() != DES_BLOCK {
             return Err(Error::InvalidKeyLength);
         }
@@ -314,7 +288,8 @@ pub(crate) fn dk_des3(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
         dr.extend_from_slice(&c);
     }
     dr.truncate(21);
-    Ok(des3_random_to_key(&dr).to_vec())
+    let k = Zeroizing::new(des3_random_to_key(&dr));
+    Ok(k.to_vec())
 }
 
 pub(crate) fn camellia_encrypt_with_conf(
@@ -373,22 +348,22 @@ pub(crate) fn kdf_feedback_cmac(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, 
     }
     let k_bits = u32::try_from(out_len.saturating_mul(8)).unwrap_or(u32::MAX);
     let n = out_len.div_ceil(16);
-    let mut k_prev = vec![0u8; 16];
-    let mut out = Vec::with_capacity(n * 16);
+    let mut k_prev = Wiped(vec![0u8; 16]);
+    let mut out = Wiped(Vec::with_capacity(n * 16));
     for i in 1..=n {
         let i32 = u32::try_from(i).unwrap_or(u32::MAX);
-        let mut input = Vec::with_capacity(16 + 4 + constant.len() + 1 + 4);
+        let mut input = Wiped(Vec::with_capacity(16 + 4 + constant.len() + 1 + 4));
         input.extend_from_slice(&k_prev);
         input.extend_from_slice(&i32.to_be_bytes());
         input.extend_from_slice(constant);
         input.push(0x00);
         input.extend_from_slice(&k_bits.to_be_bytes());
-        let ki = cmac_camellia(key, &input)?;
-        k_prev.clone_from(&ki);
+        let ki = Wiped(cmac_camellia(key, &input)?);
+        k_prev.clone_from(&ki.0);
         out.extend_from_slice(&ki);
     }
     out.truncate(out_len);
-    Ok(out)
+    Ok(std::mem::take(&mut out.0))
 }
 
 pub(crate) fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
@@ -408,5 +383,29 @@ pub(crate) fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
             Ok(mac.finalize().into_bytes().to_vec())
         }
         _ => Err(Error::InvalidKeyLength),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn des3_random_to_key_keeps_weak_keys_like_mit() {
+        // MIT 1.22.2's krb5_c_random_to_key (k5_rand2key_des3) gives these, settled live: parity
+        // only. 21 zero octets make the weak key 0x0101010101010101 three times.
+        assert_eq!(des3_random_to_key(&[0u8; 21]), [0x01u8; 24]);
+        let key = ProtocolKey::from_random(EncryptionType::Des3CbcSha1, &[0u8; 21]).unwrap();
+        assert_eq!(key.as_bytes(), &[0x01u8; 24]);
+        // The semi-weak key 0x01FE01FE01FE01FE stays too.
+        let semi = [0x01, 0xff, 0x01, 0xff, 0x01, 0xff, 0x01];
+        let mut random = [0u8; 21];
+        random[..7].copy_from_slice(&semi);
+        random[14..].copy_from_slice(&semi);
+        let mut want = [0x01u8; 24];
+        for at in [0, 16] {
+            want[at..at + 8].copy_from_slice(&[0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe]);
+        }
+        assert_eq!(des3_random_to_key(&random), want);
     }
 }

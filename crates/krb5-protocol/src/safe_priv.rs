@@ -10,6 +10,8 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use zeroize::{Zeroize, Zeroizing};
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     CipherState, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_keyed,
@@ -67,14 +69,10 @@ pub fn build_krb_safe_ex(
     seq_number: Option<u32>,
     include_time: bool,
 ) -> Result<KrbSafe, Error> {
+    // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
-        let now = KerberosTime::now();
-        (
-            Some(now.clone()),
-            Some(Microseconds::from_subsec_micros(
-                now.0.timestamp_subsec_micros(),
-            )),
-        )
+        let (now, usec) = crate::us_timeofday();
+        (Some(now), Some(usec))
     } else {
         (None, None)
     };
@@ -473,14 +471,10 @@ pub fn build_krb_priv_chained(
     include_time: bool,
     state: &mut CipherState,
 ) -> Result<KrbPriv, Error> {
+    // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
-        let now = KerberosTime::now();
-        (
-            Some(now.clone()),
-            Some(Microseconds::from_subsec_micros(
-                now.0.timestamp_subsec_micros(),
-            )),
-        )
+        let (now, usec) = crate::us_timeofday();
+        (Some(now), Some(usec))
     } else {
         (None, None)
     };
@@ -492,7 +486,9 @@ pub fn build_krb_priv_chained(
         s_address: local_addr(),
         r_address: None,
     };
-    let der = encode(&part)?;
+    let der = encode(&part);
+    wipe_octets(part.user_data);
+    let der = Zeroizing::new(der?);
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
     let cipher = encrypt_with_state(session, usage, state, &der)?;
     Ok(KrbPriv {
@@ -504,6 +500,40 @@ pub fn build_krb_priv_chained(
             cipher: cipher.into(),
         },
     })
+}
+
+/// Wipes an octet string's bytes when it holds the only reference to them, as a copy of a secret
+/// made only to be encoded does.
+pub(crate) fn wipe_octets(octets: OctetString) {
+    if let Ok(buf) = bytes::Bytes::from(octets).try_into_mut() {
+        wipe_vec(Vec::<u8>::from(buf));
+    }
+}
+
+/// Zeroizes every byte of `buf`'s allocation, then frees it: a plaintext that was encoded only
+/// to be encrypted. A test build keeps each wiped allocation ([`wiped::take`]) instead of freeing
+/// it, so a test can see the buffer zeroed, whole.
+pub(crate) fn wipe_vec(mut buf: Vec<u8>) {
+    buf.resize(buf.capacity(), 0);
+    buf.as_mut_slice().zeroize();
+    #[cfg(test)]
+    let _ = wiped::WIPED.try_with(|w| w.borrow_mut().push(buf));
+}
+
+/// The allocations this crate's wipes zeroed on the current thread, kept for the tests.
+#[cfg(test)]
+pub(crate) mod wiped {
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// What [`super::wipe_vec`] zeroed on this thread, kept alive.
+        pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The allocations wiped on this thread since the last call.
+    pub(crate) fn take() -> Vec<Vec<u8>> {
+        WIPED.with(|w| std::mem::take(&mut *w.borrow_mut()))
+    }
 }
 
 /// Decrypt a KRB-PRIV and return the user data.
@@ -522,6 +552,29 @@ pub fn unwrap_krb_priv(
     replay: &ReplayCache,
 ) -> Result<Vec<u8>, Error> {
     unwrap_krb_priv_ex(session, raw, replay, true, true)
+}
+
+/// The decrypted part of a KRB-PRIV under `key`, for a caller that checks its sequence number.
+/// MIT `read_krbpriv` (`lib/krb5/krb/rd_priv.c:43-97`): a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`; the decrypted part is zeroed before it is freed.
+///
+/// # Errors
+///
+/// [`Error::KrbError`] `MSG_TYPE` (40) for another message type; [`Error::Asn1`] when the message
+/// or its part does not decode; [`Error::Crypto`] when it does not decrypt under `key`.
+pub fn read_krb_priv(key: &ProtocolKey, raw: &[u8]) -> Result<EncKrbPrivPart, Error> {
+    // MIT `krb5_is_krb_priv`: [APPLICATION 21], constructed or not.
+    if raw.first().is_none_or(|b| b & !0x20 != 0x55) {
+        return Err(Error::KrbError {
+            code: err::MSG_TYPE,
+            text: Some("Invalid message type".into()),
+        });
+    }
+    let msg: KrbPriv = decode(raw)?;
+    let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
+    let plain = decrypt(key, usage, msg.enc_part.cipher.as_ref())?;
+    let part = decode::<EncKrbPrivPart>(&plain);
+    wipe_vec(plain);
+    Ok(part?)
 }
 
 /// Decrypt a KRB-PRIV.
@@ -590,14 +643,13 @@ pub fn build_krb_cred(
     tickets: Vec<Ticket>,
     ticket_info: Vec<KrbCredInfo>,
 ) -> Result<KrbCred, Error> {
-    let now = KerberosTime::now();
+    // MIT `krb5_mk_ncred` (`lib/krb5/krb/mk_cred.c:177-178`): a missing timestamp is filled from one `krb5_us_timeofday` reading.
+    let (now, usec) = crate::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info,
         nonce: None,
-        timestamp: Some(now.clone()),
-        usec: Some(Microseconds::from_subsec_micros(
-            now.0.timestamp_subsec_micros(),
-        )),
+        timestamp: Some(now),
+        usec: Some(usec),
         s_address: Some(local_addr()),
         r_address: None,
     };

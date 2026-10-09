@@ -12,9 +12,12 @@ use krb5_kdc::testrealm::{
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
-use krb5_protocol::{ApVerifyParams, DEFAULT_SKEW, ReplayCache, build_ap_req, verify_ap_req_ex};
+use krb5_protocol::{
+    ApVerifyParams, DEFAULT_SKEW, ReplayCache, address_search, build_ap_req, verify_ap_req_ex,
+};
 use krb5_types::{
-    ApReq, EncTicketPart, KerberosTime, PrincipalName, TransitedEncoding, err, flag_bit, ku,
+    ApReq, EncTicketPart, HostAddress, KerberosTime, PrincipalName, TransitedEncoding, err,
+    flag_bit, ku,
 };
 
 fn host_ap_req() -> (Vec<u8>, ProtocolKey, u32) {
@@ -70,7 +73,7 @@ fn rd_req_kvno_mismatch_is_nokey() {
         expected_server: None,
         expected_realm: None,
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     match verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None) {
@@ -95,7 +98,7 @@ fn rd_req_relabeled_ticket_kvno_is_nokey() {
         expected_server: None,
         expected_realm: None,
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     match verify_ap_req_ex(&raw2, &params, &ReplayCache::new(), None) {
@@ -121,7 +124,7 @@ fn rd_req_wrong_key_at_claimed_kvno_is_integrity() {
         expected_server: None,
         expected_realm: None,
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     match verify_ap_req_ex(&raw2, &params, &ReplayCache::new(), None) {
@@ -142,7 +145,7 @@ fn rd_req_matching_kvno_verifies() {
         expected_server: None,
         expected_realm: None,
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None).expect("matching kvno");
@@ -161,7 +164,7 @@ fn rd_req_authenticator_skew_is_skew() {
         expected_server: None,
         expected_realm: None,
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: Some(far),
     };
     match verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None) {
@@ -193,7 +196,7 @@ fn verify(
         expected_server: None,
         expected_realm: None,
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     verify_ap_req_ex(raw, &params, &ReplayCache::new(), None)
@@ -304,7 +307,7 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
         expected_server: None,
         expected_realm: None,
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     verify_ap_req_ex(raw, &params, &ReplayCache::new(), None).map(|_| ())
@@ -368,7 +371,7 @@ fn pinned_name_wrong_kvno_is_badkeyver() {
         expected_server: Some(&server),
         expected_realm: Some(TEST_REALM),
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     match verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None) {
@@ -383,4 +386,39 @@ fn pinned_name_wrong_kvno_is_badkeyver() {
         }
         other => panic!("expected BADKEYVER, got {other:?}"),
     }
+}
+
+/// The sender's address is searched for in the ticket's address list as MIT searches it: a
+/// ticket without a list, or whose list is one NetBIOS address, holds any address; an empty
+/// list holds none; otherwise the address must be one of the list's.
+/// MIT `krb5_address_search` (`lib/krb5/krb/addr_srch.c:48-65`): the rules.
+#[test]
+fn a_sender_address_is_searched_for_in_the_ticket_addresses_as_mits() {
+    let inet = |o: [u8; 4]| HostAddress {
+        addr_type: HostAddress::ADDRTYPE_INET,
+        address: o.to_vec().into(),
+    };
+    let netbios = HostAddress {
+        addr_type: HostAddress::ADDRTYPE_NETBIOS,
+        address: b"HOST            ".to_vec().into(),
+    };
+    let a = inet([10, 0, 0, 1]);
+    assert!(address_search(&a, None), "no list");
+    assert!(
+        address_search(&a, Some(&vec![netbios.clone()])),
+        "a lone NetBIOS address"
+    );
+    assert!(
+        address_search(&a, Some(&vec![inet([10, 0, 0, 2]), a.clone()])),
+        "one of two"
+    );
+    assert!(
+        !address_search(&a, Some(&vec![inet([10, 0, 0, 2])])),
+        "another address"
+    );
+    assert!(!address_search(&a, Some(&vec![])), "an empty list");
+    assert!(
+        !address_search(&a, Some(&vec![netbios, inet([10, 0, 0, 2])])),
+        "NetBIOS beside another"
+    );
 }

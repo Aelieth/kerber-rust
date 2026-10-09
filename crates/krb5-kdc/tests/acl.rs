@@ -306,6 +306,27 @@ fn acl_unknown_op_letter_includes_line_and_aborting() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// MIT `load_acl_file` reads the file with `fgets`, bytes as they are: a Latin-1 comment is a
+/// comment, and an ACL path that is a directory opens with no line in it.
+#[test]
+fn acl_file_is_read_as_bytes() {
+    let dir = scratch_dir("acl-bytes");
+    let path = dir.join("kadm5.acl");
+    std::fs::write(&path, b"# caf\xe9\n*/admin@KERBER.TEST *\n").unwrap();
+    let acl = acl_for_store("KERBER.TEST", Some(&path)).expect("a Latin-1 comment");
+    assert!(
+        acl.check("admin/admin@KERBER.TEST", AdminOp::Create, None)
+            .is_ok()
+    );
+    let none = acl_for_store("KERBER.TEST", Some(&dir)).expect("a directory");
+    assert_eq!(
+        none.check("admin/admin@KERBER.TEST", AdminOp::Create, None)
+            .unwrap_err(),
+        Error::AclDenied
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn acl_missing_default_file_refuses_start() {
     let path = std::path::Path::new("/no/such/kadm5.acl");

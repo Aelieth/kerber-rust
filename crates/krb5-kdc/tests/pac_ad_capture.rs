@@ -123,7 +123,9 @@ fn captured_pac_server_checksum_usage_17() {
 
 #[test]
 fn issued_pac_self_verifies_all_four_signatures() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
+    store.policy.ad_identity = true;
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let user = store.get_name(&cname).unwrap().best_key().unwrap();
     let req = as_req(
