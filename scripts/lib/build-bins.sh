@@ -2,7 +2,7 @@
 # One cargo build of the bins the gates and prod jobs need, with the
 # test-hooks feature the gates drive (a release build leaves it off).
 # Harness bins: kprop-expired-apreq ccache-probe loadgen krb5-vfy-increds
-# krb5-forge-tgt krb5-pac-extract diffsend.
+# krb5-forge-tgt krb5-pac-extract diffsend asn1-sweep.
 # Gates (S2) call need_bins and must not invoke cargo themselves.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

@@ -575,7 +575,7 @@ allows only the Keep-a-Changelog group names, each the whole heading, plus
 13c2160b, plus a stated 15,429-byte allowance (the forecast plus a 20
 percent margin, rounded up) for the rest of 1.1 and the cut, one bullet
 per change; ceiling 288,000; a `tool:` commit re-bases it, never the
-commit that adds the bullets). `check_gate_documented` holds `docs/gates.md`
+commit that adds the bullets). `check_gate_documented` holds `docs/gates.md` and `docs/gates-decode.md`
 to one row per `scripts/*-gate.sh`, with the workflow and lane columns
 equal to the gates' placements in `.github/workflows` (`fail-red`,
 `soft`, `nightly`; `stub` or `wrapper` for the documented
@@ -668,7 +668,8 @@ MSRV is 1.95 (`package.rust-version`), edition 2024, matching KLLDAP
 job is `cargo build --workspace --all-targets --locked` on that
 toolchain, with the test-hooks features and without; the full `cargo test --workspace --locked` on MSRV is the
 `msrv-test` job of `full-test.yml` (nightly + `v*` tags). `rasn` is
-vendored at 0.28.14 (`vendor/rasn/PATCHES.md`); golden MIT DER is the
+vendored at 0.28.14 with MIT's decode rules (`vendor/rasn/PATCHES.md`);
+golden MIT DER and the decode sweep against MIT's decoder are the
 protocol net. There is no unlocked `--locked` fallback. KLLDAP alignment:
 [`embed/klldap.md`](embed/klldap.md).
 
@@ -718,7 +719,7 @@ all of the above).
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
 | `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `history-mit-gate` |
-| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `policy-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate` |
+| `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `asn1-decode-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `policy-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate` |
 | `mit-extra` | One shared shell + one stock MIT KDC, then `cross-realm-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `rc4-session-gate` |
 | `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-flows-gate`, `client-differential-cli-gate` (local wrapper `client-differential-gate.sh`), `s4u-mit-gate`, `kcm-gate`, `capaths-transit-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |

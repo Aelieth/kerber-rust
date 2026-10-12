@@ -14,6 +14,9 @@ curl -sL https://static.crates.io/crates/rasn/rasn-0.28.14.crate | tar -xz
 diff -ru rasn-0.28.14 vendor/rasn
 ```
 
+The crates/krb5-tools decode sweep (`tests/asn1_sweep.rs`) checks each change below against MIT
+1.22.2's own decoder, and `scripts/asn1-decode-oracle-gate.sh` runs the same check live.
+
 ## From upstream: rasn 0.29.0, commit ab9d0fd565
 
 rasn 0.29.0 also rewrites the BER parser and changes its API, so it is not taken whole. This is

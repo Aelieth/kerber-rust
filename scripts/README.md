@@ -47,6 +47,7 @@ library's `KRB5_BRAND`, and goes red unless it is `krb5-1.22.2-final` with every
 
 | File | What it is |
 |---|---|
+| `oracle/asn1-decode-oracle.c` | MIT `decode_krb5_*` over the `asn1-sweep` corpus: `OK` and the FNV-1a of MIT's re-encoding, or `ERR`. |
 | `oracle/gss-mit-client.c` | An MIT `libgssapi_krb5` initiator: AP-REQ plus a wrap token to the Rust acceptor (it can dump the AP-REQ for the replay cell). |
 | `oracle/gss-mit-server.c` | An MIT `libgssapi_krb5` acceptor that prints the delegated name; the acceptor principal is optional. |
 | `oracle/ccache-mit-remove.c` | MIT `krb5_cc_remove_cred` on a Rust-written ccache. |

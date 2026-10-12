@@ -286,7 +286,7 @@ criteria = "safe-to-deploy"
 [[exemptions.rasn]]
 version = "0.28.14"
 criteria = "safe-to-deploy"
-notes = "The base of vendor/rasn (pinned =0.28.14). Local full audit deferred; golden MIT DER is the protocol net."
+notes = "The base of vendor/rasn (pinned =0.28.14). Local full audit deferred; golden MIT DER and the decode sweep against MIT 1.22.2 are the protocol net."
 
 [[exemptions.rasn-derive-impl]]
 version = "0.28.14"

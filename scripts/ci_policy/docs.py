@@ -265,15 +265,30 @@ def gate_doc_violations(
     return bad
 
 
+def gate_doc_text(root: pathlib.Path | None = None) -> str:
+    """`docs/gates.md` plus every `docs/gates-*.md`, in name order.
+
+    A size split keeps each row byte for byte in a second file. The inventory is the
+    concatenation, so a row moved out of `docs/gates.md` still resolves.
+    """
+    root = ROOT if root is None else root
+    docs = root / "docs"
+    parts: list[str] = []
+    main = docs / "gates.md"
+    if main.is_file():
+        parts.append(main.read_text(encoding="utf-8"))
+    parts.extend(path.read_text(encoding="utf-8") for path in sorted(docs.glob("gates-*.md")))
+    return "\n".join(parts)
+
+
 def check_gate_documented(root: pathlib.Path | None = None, *, allow: int | None = None) -> None:
-    """docs/gates.md has one true row per scripts/*-gate.sh (`gate_doc_violations`).
+    """docs/gates.md and docs/gates-*.md have one true row per scripts/*-gate.sh (`gate_doc_violations`).
 
     Advisory while `allow` equals the live count; hard at 0.
     """
     root = ROOT if root is None else root
     allow = GATE_DOC_ALLOW if allow is None else allow
-    doc = root / "docs" / "gates.md"
-    text = doc.read_text(encoding="utf-8") if doc.is_file() else ""
+    text = gate_doc_text(root)
     gate_names = [p.name for p in sorted((root / "scripts").glob("*-gate.sh"))]
     bad = gate_doc_violations(text, gate_names, gate_placements(), DOCUMENTED_STUBS)
     if len(bad) != allow:
@@ -299,9 +314,8 @@ def gate_doc_token_misses(root: pathlib.Path | None = None) -> list[str]:
     """Backticked tokens of each docs/gates.md row's asserts cell that appear in neither its gate script nor a
     file that script sources or runs (gate paths and `ci:` / `docs/` / `crates/` tokens are names, not claims)."""
     root = ROOT if root is None else root
-    doc = root / "docs" / "gates.md"
     bad: list[str] = []
-    for line in doc.read_text(encoding="utf-8").splitlines() if doc.is_file() else []:
+    for line in gate_doc_text(root).splitlines():
         m = _GATE_ROW.match(line)
         if not m:
             continue

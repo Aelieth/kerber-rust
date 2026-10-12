@@ -35,6 +35,8 @@ user of the realm (SMB, LDAP) and, as a SPNEGO client, reached Apache
 KDC, and SHA-2 enctypes over NFS. Against our KDC the Rust client tools ran beside MIT's and
 fail the kit's keytab check (no `klist -k`; [install.md](install.md) lists what is missing).
 
+
+Oracle rows: [gates-decode.md](gates-decode.md).
 | Gate | Oracle | Workflow | Lane | Asserts |
 | --- | --- | --- | --- | --- |
 | `scripts/ad-mit-trust-gate.sh` | Samba | stub | — | `exec`s `samba-realtrust-gate.sh`: that gate's checks and exit code |
