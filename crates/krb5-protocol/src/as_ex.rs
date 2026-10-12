@@ -10,7 +10,7 @@ use crate::trace;
 use crate::transport::{KdcAddr, SendKind, sendto_kdc};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2, p256_generate,
+    EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2, p256_generate,
     parse_enctype_list, string_to_key,
 };
 use krb5_types::{
@@ -1221,7 +1221,13 @@ fn finish_as_rep(
         string_to_key(etype, password, &salt, None)?
     };
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
-    let plain = decrypt(&key, usage, inner.enc_part.cipher.as_ref()).map_err(|e| match e {
+    let plain = decrypt_enc_data(
+        &key,
+        usage,
+        inner.enc_part.etype,
+        inner.enc_part.cipher.as_ref(),
+    )
+    .map_err(|e| match e {
         krb5_crypto::Error::Integrity => Error::ReplyIntegrity,
         other => other.into(),
     })?;
@@ -1332,7 +1338,7 @@ fn verify_anonymous(
         })?;
     let enc: EncryptedData = decode(raw.padata_value.as_ref())?;
     let usage = KeyUsage::new(ku::PA_PKINIT_KX)?;
-    let plain = decrypt(as_key, usage, enc.cipher.as_ref())?;
+    let plain = decrypt_enc_data(as_key, usage, enc.etype, enc.cipher.as_ref())?;
     let kdc_key: EncryptionKey = decode(&plain)?;
     let contrib = ProtocolKey::from_bytes(
         EncryptionType::known(kdc_key.keytype)?,

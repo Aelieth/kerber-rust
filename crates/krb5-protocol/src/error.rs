@@ -62,6 +62,10 @@ pub enum Error {
     /// MIT `KRB5_PROG_ETYPE_NOSUPP` (`krb5_err.et:204-204`): the code and text.
     #[error("Program lacks support for encryption type")]
     ProgEtypeNosupp,
+    /// An EncryptedData whose enctype is not its key's.
+    /// MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et:254-254`): the code and text, which `krb5_k_decrypt` returns.
+    #[error("Bad encryption type")]
+    BadEnctype,
     /// An AP-REQ's session key or subkey is of an enctype the acceptor does not permit; the
     /// text names it.
     /// MIT `negotiate_etype` (`lib/krb5/krb/rd_req_dec.c:878-886`): `KRB5_NOPERM_ETYPE` with the enctype's name.
@@ -114,6 +118,7 @@ impl Clone for Error {
             Self::NoEtype => Self::NoEtype,
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
+            Self::BadEnctype => Self::BadEnctype,
             Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
             Self::PreauthFailed(e) => Self::PreauthFailed(e.clone()),
             Self::TruncatedReply => Self::TruncatedReply,
@@ -183,7 +188,10 @@ impl Error {
 
 impl From<krb5_crypto::Error> for Error {
     fn from(e: krb5_crypto::Error) -> Self {
-        Self::Crypto(e.to_string())
+        match e {
+            krb5_crypto::Error::BadEnctype(_) => Self::BadEnctype,
+            e => Self::Crypto(e.to_string()),
+        }
     }
 }
 

@@ -132,6 +132,8 @@ DIFFSEND_CASES = frozenset(
         "as-spake-unknown-choice",
         "tgs-authenticator-cusec-out-of-range",
         "as-enc-timestamp-pausec-out-of-range",
+        "tgs-authenticator-etype-mismatch",
+        "as-fast-armored-data-etype-mismatch",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")

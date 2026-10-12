@@ -44,7 +44,7 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/mit-deviations.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The 121 live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The 123 live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `as-needpreauth-hints-unpermitted`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`, `as-locked-out`,
@@ -88,15 +88,16 @@ is `proposed`. The 121 live `diffsend` cases are `garbage-pdu`,
 `tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`, `as-req-malformed-addresses`,
 `as-req-trailing-body-field`, `tgs-req-nonce-int32-min`, `tgs-authenticator-malformed-subkey`,
 `tgs-authenticator-trailing-field`, `tgs-authenticator-crealm-octets`, `as-spake-unknown-choice`,
-`tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`.
+`tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`,
+`tgs-authenticator-etype-mismatch`, `as-fast-armored-data-etype-mismatch`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**498** = A1 130 + A2 94 + A3 83 + A4 63 + A5 32 + B1 96.
-exact 403 · stricter-documented 15 · deviation 34 ·
+**501** = A1 131 + A2 94 + A3 84 + A4 63 + A5 32 + B1 97.
+exact 406 · stricter-documented 15 · deviation 34 ·
 absent 2 · deferred 44.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

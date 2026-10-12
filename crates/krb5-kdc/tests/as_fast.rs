@@ -1453,3 +1453,27 @@ fn encrypted_challenge_with_an_out_of_range_pausec_is_issued() {
     attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
     krb5_kdc::issue_as(&store, &req).expect("a pausec past 999999 verifies");
 }
+
+#[test]
+// oracle: differential-gate.sh as-fast-armored-data-etype-mismatch
+fn fast_armored_data_etype_mismatch_is_generic_find_fast() {
+    // MIT `kdc_find_fast` (`kdc/fast_util.c:191-194`): the armored data decrypts through `krb5_k_decrypt`, so another enctype than the armor key's is KRB5_BAD_ENCTYPE, 60 FIND_FAST.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (armor_ap, akey) = armor_ap_key(&armor_tgt(&store, 850), 0);
+    let mut req = fast_challenge_req_with(&armor_ap, &akey, &user_key(), &KerberosTime::now(), 851);
+    let fx = req
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .expect("PA-FX-FAST");
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(fx.padata_value.as_ref()).expect("armored data");
+    assert_ne!(armored.enc_fast_req.etype, 17);
+    armored.enc_fast_req.etype = 17;
+    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .expect("PA-FX-FAST")
+        .into();
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("BAD_ENCTYPE");
+    assert_find_fast(err, err::GENERIC, "Bad encryption type");
+}

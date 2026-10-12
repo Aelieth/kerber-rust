@@ -1,7 +1,7 @@
 //! AP-REP / EncAPRepPart (RFC 4120 §5.5.2) mutual authentication.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt};
+use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data, encrypt};
 use krb5_types::{
     ApRep, Authenticator, EncApRepPart, EncryptedData, EncryptionKey, Microseconds, ku,
 };
@@ -55,7 +55,12 @@ pub fn verify_ap_rep(
 ) -> Result<EncApRepPart, Error> {
     let ap: ApRep = decode(raw)?;
     let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
-    let plain = decrypt(session, usage, ap.enc_part.cipher.as_ref())?;
+    let plain = decrypt_enc_data(
+        session,
+        usage,
+        ap.enc_part.etype,
+        ap.enc_part.cipher.as_ref(),
+    )?;
     let part: EncApRepPart = decode(&plain)?;
     if part.ctime != authenticator.ctime || part.cusec.get() != authenticator.cusec.get() {
         return Err(Error::ReplyMismatch("AP-REP ctime/cusec mismatch".into()));

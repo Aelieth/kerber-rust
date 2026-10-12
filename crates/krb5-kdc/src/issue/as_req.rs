@@ -3,7 +3,7 @@
 //! (`kdc_preauth.c`, `kdc_preauth_encts.c`, `kdc_preauth_ec.c`).
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
 use krb5_types::{
     AsRep, AsReq, EncryptedData, EncryptionKey, EtypeInfo, EtypeInfo2, EtypeInfo2Entry,
     EtypeInfoEntry, KdcReqBody, KerberosString, KerberosTime, MethodData, OctetString, PaData,
@@ -858,7 +858,7 @@ fn verify_encrypted_challenge(
         b"challengelongterm",
     )?;
     let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT)?;
-    let plain = decrypt(&chal, usage, enc.cipher.as_ref())
+    let plain = decrypt_enc_data(&chal, usage, enc.etype, enc.cipher.as_ref())
         .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     let ts: PaEncTsEnc =
         decode(&plain).map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
@@ -907,7 +907,7 @@ pub(crate) fn verify_enc_timestamp(
 ) -> Result<(), Error> {
     let enc: EncryptedData = decode(blob)?;
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
-    let plain = decrypt(key, usage, enc.cipher.as_ref())?;
+    let plain = decrypt_enc_data(key, usage, enc.etype, enc.cipher.as_ref())?;
     let ts: PaEncTsEnc = decode(&plain)?;
     // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-97`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
     let now = i64::from(KerberosTime::now().unix_seconds());

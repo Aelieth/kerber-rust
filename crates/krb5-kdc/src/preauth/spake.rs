@@ -8,8 +8,8 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    KeyUsage, ProtocolKey, SpakeGroup, decrypt, spake_derive_key, spake_keygen, spake_result,
-    spake_thash_update, spake_wbytes,
+    KeyUsage, ProtocolKey, SpakeGroup, decrypt_enc_data, spake_derive_key, spake_keygen,
+    spake_result, spake_thash_update, spake_wbytes,
 };
 use krb5_types::spake::{
     PaSpake, SF_NONE, SpakeChallenge, SpakeResponse, SpakeSecondFactor, SpakeSupport,
@@ -243,8 +243,10 @@ fn verify_response(
         return Err(failed());
     }
     let usage = KeyUsage::new(ku::SPAKE)?;
-    let factor_der =
-        Zeroizing::new(decrypt(&k1, usage, resp.factor.cipher.as_ref()).map_err(|_| failed())?);
+    let factor_der = Zeroizing::new(
+        decrypt_enc_data(&k1, usage, resp.factor.etype, resp.factor.cipher.as_ref())
+            .map_err(|_| failed())?,
+    );
     let factor = decode::<SpakeSecondFactor>(&factor_der).map_err(|_| failed())?;
     if factor.factor_type != SF_NONE {
         return Err(failed());

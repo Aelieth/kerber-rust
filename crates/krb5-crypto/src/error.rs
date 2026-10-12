@@ -34,6 +34,9 @@ pub enum Error {
     Rng,
     /// PBKDF2 iteration count exceeds the local resource limit.
     IterationLimit,
+    /// An EncryptedData's enctype (the value given) is not the key's.
+    /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): `KRB5_BAD_ENCTYPE`, before anything is decrypted.
+    BadEnctype(i32),
 }
 
 impl fmt::Display for Error {
@@ -57,6 +60,8 @@ impl fmt::Display for Error {
             Self::InappChecksum => write!(f, "inappropriate checksum type"),
             Self::Rng => write!(f, "failed to generate random confounder"),
             Self::IterationLimit => write!(f, "PBKDF2 iteration count exceeds local limit"),
+            // MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et:254-254`): the text.
+            Self::BadEnctype(_) => write!(f, "Bad encryption type"),
         }
     }
 }

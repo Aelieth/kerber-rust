@@ -7,7 +7,7 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, checksum_output_size, cksumtype_is_keyed,
-    decrypt, derive_prfplus_enctype, verify_checksum_keyed, verify_checksum_type,
+    decrypt_enc_data, derive_prfplus_enctype, verify_checksum_keyed, verify_checksum_type,
 };
 use krb5_types::cammac::{Cammac, VerifierMac};
 use krb5_types::pac::{
@@ -1459,8 +1459,8 @@ fn copy_request_authdata(
 ) -> Result<(), Error> {
     let sess_usage = KeyUsage::new(ku::TGS_REQ_AD_SESSKEY)?;
     let sub_usage = KeyUsage::new(ku::TGS_REQ_AD_SUBKEY)?;
-    let plain = decrypt(session, sess_usage, enc.cipher.as_ref())
-        .or_else(|_| decrypt(client_key, sub_usage, enc.cipher.as_ref()))?;
+    let plain = decrypt_enc_data(session, sess_usage, enc.etype, enc.cipher.as_ref())
+        .or_else(|_| decrypt_enc_data(client_key, sub_usage, enc.etype, enc.cipher.as_ref()))?;
     let ad: AuthorizationData = decode(&plain)?;
     if has_mandatory_for_kdc(&ad) {
         return Err(proto(err::POLICY, status::HANDLE_AUTHDATA));
@@ -1786,7 +1786,12 @@ fn utf8(s: &krb5_types::KerberosString) -> &str {
 /// plaintext is not an `EncTicketPart`.
 pub fn decrypt_ticket_part(key: &ProtocolKey, ticket: &Ticket) -> Result<EncTicketPart, Error> {
     let usage = KeyUsage::new(ku::TICKET)?;
-    let plain = decrypt(key, usage, ticket.enc_part.cipher.as_ref())?;
+    let plain = decrypt_enc_data(
+        key,
+        usage,
+        ticket.enc_part.etype,
+        ticket.enc_part.cipher.as_ref(),
+    )?;
     decode(&plain).map_err(Error::from)
 }
 

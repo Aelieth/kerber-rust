@@ -6,9 +6,9 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_keyed, decrypt, derive_prfplus,
-    dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2, octetstring2key,
-    p256_generate, p256_shared, pkinit_kdf_agile, verify_checksum_type,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_keyed, decrypt, decrypt_enc_data,
+    derive_prfplus, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
+    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, verify_checksum_type,
 };
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
@@ -116,7 +116,12 @@ fn kdc_find_fast(
         },
     };
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
-    let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
+    let plain = decrypt_enc_data(
+        &armor_key,
+        enc_usage,
+        armored.enc_fast_req.etype,
+        armored.enc_fast_req.cipher.as_ref(),
+    )?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
     verify_fast_req_checksum(&armor_key, checksummed_data, &armored.req_checksum)?;
     let nonce = inner.req_body.nonce;
@@ -238,7 +243,7 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     // MIT `keytab_fetch_error` (`rd_req_dec.c:137-147`): `KRB5_KT_KVNONOTFOUND` →
     // `BADKEYVER` 44 when the principal is the ticket server.
     let key = armor_ticket_key(store, &p, &ap.ticket)?;
-    let enc_tkt = match decrypt(&key, tkt_usage, cipher) {
+    let enc_tkt = match decrypt_enc_data(&key, tkt_usage, ap.ticket.enc_part.etype, cipher) {
         Ok(plain) => decode::<krb5_types::EncTicketPart>(&plain)
             .map_err(|_| proto_fast(err::BAD_INTEGRITY, "FAST armor TGT"))?,
         Err(_) => return Err(proto_fast(err::BAD_INTEGRITY, "FAST armor TGT")),
@@ -259,7 +264,12 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
-    let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
+    let auth_plain = decrypt_enc_data(
+        &session,
+        auth_usage,
+        ap.authenticator.etype,
+        ap.authenticator.cipher.as_ref(),
+    )?;
     let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
     let then = i64::from(authenticator.ctime.unix_seconds());
     if (now - then).abs() > store.policy().skew {

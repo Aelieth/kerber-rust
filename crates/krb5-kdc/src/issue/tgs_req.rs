@@ -3,7 +3,7 @@
 //! referral / alternate TGS, and the second-ticket helpers.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
 use krb5_types::{
     EncTicketPart, EncryptedData, HostAddress, HostAddresses, KdcReqBody, KerberosTime,
     OctetString, PaData, PrincipalName, TgsRep, TgsReq, TicketFlags, TransitedEncoding, err,
@@ -1091,8 +1091,13 @@ fn decrypt_2ndtkt(
     let (key, _) = find_server_key(store.policy(), &server, Some(tkt_etype), kvno)
         .map_err(|e| with_status(e, status::SECOND_TKT_SERVER))?;
     let usage = KeyUsage::new(ku::TICKET)?;
-    let plain = decrypt(&key, usage, extra.enc_part.cipher.as_ref())
-        .map_err(|_| proto(err::BAD_INTEGRITY, status::SECOND_TKT_DECRYPT))?;
+    let plain = decrypt_enc_data(
+        &key,
+        usage,
+        extra.enc_part.etype,
+        extra.enc_part.cipher.as_ref(),
+    )
+    .map_err(|_| proto(err::BAD_INTEGRITY, status::SECOND_TKT_DECRYPT))?;
     let part: EncTicketPart =
         decode(&plain).map_err(|_| proto(err::BAD_INTEGRITY, status::SECOND_TKT_DECRYPT))?;
     if extra.sname.is_krbtgt() {

@@ -1439,8 +1439,13 @@ pub fn kprop_sendauth(
     let ap_rep_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     let usage = krb5_crypto::KeyUsage::new(krb5_types::ku::AP_REQ_AUTHENTICATOR)
         .map_err(|e| Error::Inner(e.to_string()))?;
-    let auth_plain = krb5_crypto::decrypt(session, usage, ap.authenticator.cipher.as_ref())
-        .map_err(|e| Error::Inner(e.to_string()))?;
+    let auth_plain = krb5_crypto::decrypt_enc_data(
+        session,
+        usage,
+        ap.authenticator.etype,
+        ap.authenticator.cipher.as_ref(),
+    )
+    .map_err(|e| Error::Inner(e.to_string()))?;
     let authenticator: krb5_types::Authenticator =
         decode(&auth_plain).map_err(|e| Error::Inner(e.to_string()))?;
     let rep = verify_ap_rep(&ap_rep_raw, session, &authenticator)
@@ -2605,7 +2610,7 @@ mod tests {
         use std::thread;
 
         use krb5_asn1::decode;
-        use krb5_crypto::{KeyUsage, decrypt};
+        use krb5_crypto::{KeyUsage, decrypt_enc_data};
         use krb5_kdc::testrealm::{TEST_REALM, documented_host};
         use krb5_types::{ApRep, EncApRepPart, ku};
 
@@ -2631,7 +2636,13 @@ mod tests {
         assert!(read_message(&mut client).unwrap().is_empty(), "accepted");
         let rep: ApRep = decode(&read_message(&mut client).unwrap()).unwrap();
         let usage = KeyUsage::new(ku::AP_REP_ENC_PART).unwrap();
-        let plain = decrypt(&tgs.session_key, usage, rep.enc_part.cipher.as_ref()).unwrap();
+        let plain = decrypt_enc_data(
+            &tgs.session_key,
+            usage,
+            rep.enc_part.etype,
+            rep.enc_part.cipher.as_ref(),
+        )
+        .unwrap();
         let part: EncApRepPart = decode(&plain).unwrap();
         assert_eq!(
             part.subkey, None,

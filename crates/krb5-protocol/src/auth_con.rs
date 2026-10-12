@@ -13,8 +13,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    CipherState, EncryptionType, KeyUsage, ProtocolKey, checksum_output_size, decrypt,
-    decrypt_with_state, encrypt, encrypt_with_state, parse_enctype_list,
+    CipherState, EncryptionType, KeyUsage, ProtocolKey, checksum_output_size, decrypt_enc_data,
+    decrypt_enc_data_with_state, encrypt, encrypt_with_state, parse_enctype_list,
 };
 use krb5_types::{
     ApRep, Authenticator, AuthorizationData, EncApRepPart, EncKrbPrivPart, EncryptedData,
@@ -429,9 +429,10 @@ impl AcceptorAuthContext {
         let etype = key.etype();
         let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
         let cipher = msg.enc_part.cipher.as_ref();
+        let enc_etype = msg.enc_part.etype;
         let plain = match self.cstate.as_mut() {
-            Some(state) => decrypt_with_state(key, usage, state, cipher)?,
-            None => decrypt(key, usage, cipher)?,
+            Some(state) => decrypt_enc_data_with_state(key, usage, state, enc_etype, cipher)?,
+            None => decrypt_enc_data(key, usage, enc_etype, cipher)?,
         };
         let part = decode::<EncKrbPrivPart>(&plain);
         wipe_vec(plain);

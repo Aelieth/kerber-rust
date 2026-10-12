@@ -16,6 +16,7 @@ test that is gone. Extra tags on diffsend cases that do not pin an
 | --- | ---: | --- | --- |
 | `armor-ap-req-as-pa-tgs-req` | 12 | `PROCESS_TGS` | `tgs_header_ticket_if_relevant_ad_fx_armor_is_policy` (`crates/krb5-kdc/tests/tgs_fast.rs`) |
 | `as-bad-msg-type` | 60 | `VALIDATE_MESSAGE_TYPE` | `as_bad_msg_type_is_validate_message_type` (`crates/krb5-kdc/tests/as_preauth.rs`) |
+| `as-fast-armored-data-etype-mismatch` | 60 | `FIND_FAST` | `fast_armored_data_etype_mismatch_is_generic_find_fast` (`crates/krb5-kdc/tests/as_fast.rs`) |
 | `as-hw-preauth` | 25 | `NEEDED_HW_PREAUTH` | `as_hw_auth_required_rejects_enc_ts` (`crates/krb5-kdc/tests/as_flags_policy.rs`) |
 | `as-locked-out` | 18 | `LOCKED_OUT` | `last_failed_nonzero_without_unlock_tl_still_locks` (`crates/krb5-kdc/tests/as_lockout.rs`) |
 | `as-needchange` | 23 | `REQUIRED PWCHANGE` | `as_needchange_is_key_expired_unless_changepw` (`crates/krb5-kdc/tests/kpasswd.rs`) |
@@ -53,6 +54,7 @@ test that is gone. Extra tags on diffsend cases that do not pin an
 | `tgs-addr-mismatch` | 38 | `PROCESS_TGS` | `tgs_sender_mismatch_is_badaddr` (`crates/krb5-kdc/tests/tgs_caddr.rs`) |
 | `tgs-ap-options` | 12 | `PROCESS_TGS` | `tgs_ap_options_use_session_key_is_policy` (`crates/krb5-kdc/tests/tgs_options.rs`) |
 | `tgs-authenticator-crealm-octets` | 36 | `PROCESS_TGS` | `tgs_authenticator_crealm_octets_is_badmatch` (`crates/krb5-kdc/tests/tgs_errors.rs`) |
+| `tgs-authenticator-etype-mismatch` | 60 | `PROCESS_TGS` | `tgs_authenticator_etype_mismatch_is_generic` (`crates/krb5-kdc/tests/tgs_errors.rs`) |
 | `tgs-authenticator-malformed-subkey` | 60 | `PROCESS_TGS` | `tgs_authenticator_malformed_subkey_is_process_tgs` (`crates/krb5-kdc/tests/tgs_errors.rs`) |
 | `tgs-bad-msg-type` | 60 | `UNKNOWN_REASON` | `tgs_bad_msg_type_is_unknown_reason_without_cname` (`crates/krb5-kdc/tests/tgs_errors.rs`) |
 | `tgs-expired-addr-mismatch` | 38 | `PROCESS_TGS` | `tgs_expired_caddr_is_badaddr` (`crates/krb5-kdc/tests/tgs_gather.rs`) |
@@ -94,4 +96,4 @@ test that is gone. Extra tags on diffsend cases that do not pin an
 | `unknown-sname` | 7 | `SERVER_NOT_FOUND` | `as_unknown_sname_is_server_not_found` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 | `wrong-realm` | 6 | `CLIENT_NOT_FOUND` | `as_wrong_realm_is_chaseable` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 
-Paired **79/79** status-word cells.
+Paired **81/81** status-word cells.

@@ -422,3 +422,22 @@ fn a_sender_address_is_searched_for_in_the_ticket_addresses_as_mits() {
         "NetBIOS beside another"
     );
 }
+
+/// MIT `decrypt_authenticator` (`rd_req_dec.c:820-850`): the authenticator decrypts through
+/// `krb5_c_decrypt`, so an EncryptedData of another enctype than the session key's is
+/// KRB5_BAD_ENCTYPE.
+#[test]
+fn rd_req_authenticator_of_another_enctype_is_bad_enctype() {
+    let (raw, key, _) = host_ap_req();
+    let mut ap: ApReq = decode(&raw).expect("AP-REQ");
+    ap.authenticator.etype = 17;
+    match verify_ap_req_ex(
+        &encode(&ap).expect("encode"),
+        &ApVerifyParams::single_key(&key),
+        &ReplayCache::new(),
+        None,
+    ) {
+        Err(krb5_protocol::Error::BadEnctype) => {}
+        other => panic!("expected BAD_ENCTYPE, got {other:?}"),
+    }
+}

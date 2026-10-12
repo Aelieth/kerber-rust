@@ -7,7 +7,7 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_known,
-    decrypt, parse_enctype_list, verify_checksum_type,
+    decrypt_enc_data, parse_enctype_list, verify_checksum_type,
 };
 use krb5_types::{
     AuthorizationData, AuthorizationDataValue, Checksum, EncTicketPart, EncryptionKey, HostAddress,
@@ -59,7 +59,12 @@ pub(super) fn process_tgs_header(
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(sess_etype, enc_tkt.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR)?;
-    let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
+    let auth_plain = decrypt_enc_data(
+        &session,
+        auth_usage,
+        ap.authenticator.etype,
+        ap.authenticator.cipher.as_ref(),
+    )?;
     let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
     // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
     let auth_realm = utf8_realm(&authenticator.crealm)?;
@@ -268,7 +273,8 @@ pub(crate) fn decrypt_presented_tgt(
                 // MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): a ticket in an enctype the KDC does not permit is `KRB5_NOPERM_ETYPE`, 60 here, before the key is tried on it.
                 if !store.policy().etype_permitted(tkt_etype) {
                     proto(err::GENERIC, status::PROCESS_TGS)
-                } else if let Ok(plain) = decrypt(&key, usage, cipher)
+                } else if let Ok(plain) =
+                    decrypt_enc_data(&key, usage, ap.ticket.enc_part.etype, cipher)
                     && let Ok(part) = decode::<EncTicketPart>(&plain)
                 {
                     return Ok((part, key, plain, p.clone()));

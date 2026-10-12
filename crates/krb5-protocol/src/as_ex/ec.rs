@@ -7,7 +7,7 @@
 //! not check further. The AS key stays the reply key; FAST strengthens it.
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{KeyUsage, ProtocolKey, decrypt, encrypt, krb_fx_cf2};
+use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data, encrypt, krb_fx_cf2};
 use krb5_types::{EncryptedData, KerberosTime, Microseconds, PaData, PaEncTsEnc, ku, pa};
 
 use crate::error::Error;
@@ -92,13 +92,11 @@ pub(super) fn verify_kdc_challenge(
         return KRB5_BAD_ENCTYPE;
     };
     // MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-52`): ciphertext of another enctype is `KRB5_BAD_ENCTYPE`, a short one `KRB5_BAD_MSIZE`.
-    if enc.etype != 0 && enc.etype != key.etype().to_iana() {
-        return KRB5_BAD_ENCTYPE;
-    }
     let decrypted = KeyUsage::new(ku::ENC_CHALLENGE_KDC)
-        .and_then(|usage| decrypt(&key, usage, enc.cipher.as_ref()));
+        .and_then(|usage| decrypt_enc_data(&key, usage, enc.etype, enc.cipher.as_ref()));
     match decrypted {
         Ok(_) => 0,
+        Err(krb5_crypto::Error::BadEnctype(_)) => KRB5_BAD_ENCTYPE,
         Err(krb5_crypto::Error::CiphertextTooShort) => KRB5_BAD_MSIZE,
         Err(_) => kdc_code(krb5_types::err::BAD_INTEGRITY),
     }

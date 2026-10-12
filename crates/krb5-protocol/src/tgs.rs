@@ -11,7 +11,9 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2};
+use krb5_crypto::{
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt_enc_data, encrypt, krb_fx_cf2,
+};
 use krb5_types::{
     ApOptions, ApReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey,
     KdcOptions, KdcReq, KdcReqBody, KerberosTime, PaData, PrincipalName, TgsRep, TgsReq, Ticket,
@@ -1005,7 +1007,12 @@ fn tgs_round_trip(
     let (reply_key, fast_padata) = tgs_fast_reply_key(&armor_key, &sub, &mut inner, nonce)?;
     let enc_usage = ku::TGS_REP_ENC_PART_SUBKEY;
     let usage = KeyUsage::new(enc_usage)?;
-    let plain = decrypt(&reply_key, usage, inner.enc_part.cipher.as_ref())?;
+    let plain = decrypt_enc_data(
+        &reply_key,
+        usage,
+        inner.enc_part.etype,
+        inner.enc_part.cipher.as_ref(),
+    )?;
     // MIT `krb5_kdc_rep_decrypt_proc` (`kdc_rep_dc.c:69-69`): decodes the TGS-REP enc-part with
     // `decode_krb5_enc_kdc_rep_part` (APPLICATION 26 then 25 then untagged).
     let mut enc_part =

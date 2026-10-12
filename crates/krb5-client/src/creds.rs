@@ -3,7 +3,7 @@
 
 use krb5_asn1::decode;
 use krb5_config::{CanonPrinc, CcSpec};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_protocol::{
     AsOutcome, AsRequest, AsTicketOpts, CcacheCred, FileCcache, IdentifyReply, KdcAddr, Keytab,
     TgsCredsOptions, TgsOutcome, as_identify_realm, tgs_exchange_path, tgs_s4u, tgs_s4u2proxy,
@@ -801,7 +801,13 @@ pub fn server_decrypt_ticket_keytab(keytab: &str, ticket: &Ticket) -> Result<(),
 }
 
 fn decrypt_ticket(key: &ProtocolKey, usage: KeyUsage, ticket: &Ticket) -> Option<EncTicketPart> {
-    let plain = decrypt(key, usage, ticket.enc_part.cipher.as_ref()).ok()?;
+    let plain = decrypt_enc_data(
+        key,
+        usage,
+        ticket.enc_part.etype,
+        ticket.enc_part.cipher.as_ref(),
+    )
+    .ok()?;
     decode(&plain).ok()
 }
 

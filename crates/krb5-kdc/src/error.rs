@@ -7,6 +7,10 @@ use std::fmt;
 pub enum Error {
     /// Crypto layer.
     Crypto(String),
+    /// An EncryptedData whose enctype is not its key's: MIT's `KRB5_BAD_ENCTYPE`, a library code
+    /// that `errcode_to_protocol` sends as 60.
+    /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): the enctype is checked before anything is decrypted.
+    BadEnctype,
     /// DER codec.
     Asn1(String),
     /// RFC 4120 KRB-ERROR / KDC error code.
@@ -68,6 +72,7 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Crypto(s) => write!(f, "crypto: {s}"),
+            Self::BadEnctype => write!(f, "Bad encryption type"),
             Self::Asn1(s) => write!(f, "asn1: {s}"),
             Self::Protocol { code, text, .. } => match text {
                 Some(t) => write!(f, "KDC error {code}: {t}"),
@@ -98,7 +103,10 @@ impl std::error::Error for Error {}
 
 impl From<krb5_crypto::Error> for Error {
     fn from(e: krb5_crypto::Error) -> Self {
-        Self::Crypto(e.to_string())
+        match e {
+            krb5_crypto::Error::BadEnctype(_) => Self::BadEnctype,
+            e => Self::Crypto(e.to_string()),
+        }
     }
 }
 

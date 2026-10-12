@@ -1486,6 +1486,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **crypto.** Every EncryptedData decrypts through one check, MIT's `krb5_k_decrypt`'s: an enctype
+  that is neither the key's nor ENCTYPE_UNKNOWN is KRB5_BAD_ENCTYPE (60 from the KDC); it was
+  ignored. Settled live; diffsend cells.
 - **types.** rasn is vendored (`vendor/rasn`, 0.28.14) with upstream's fix: a present but
   malformed OPTIONAL field or SEQUENCE OF element no longer decodes as absent or is dropped.
   cargo-vet audits it as crates.io's.

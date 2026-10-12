@@ -11,7 +11,8 @@ use std::time::Instant;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, verify_checksum_type,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt_enc_data, encrypt,
+    verify_checksum_type,
 };
 use krb5_types::transited::hierarchical_walk_realms;
 use krb5_types::{
@@ -358,7 +359,12 @@ fn verify_inner(
             continue;
         }
         tried_any = true;
-        match decrypt(key, tkt_usage, ap.ticket.enc_part.cipher.as_ref()) {
+        match decrypt_enc_data(
+            key,
+            tkt_usage,
+            ap.ticket.enc_part.etype,
+            ap.ticket.enc_part.cipher.as_ref(),
+        ) {
             Ok(tkt_plain) => match decode::<EncTicketPart>(&tkt_plain) {
                 Ok(p) => {
                     ticket_part = Some(p);
@@ -450,7 +456,12 @@ fn verify_inner(
     let session_etype = EncryptionType::known(ticket_part.key.keytype)?;
     let session = ProtocolKey::from_bytes(session_etype, ticket_part.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
-    let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
+    let auth_plain = decrypt_enc_data(
+        &session,
+        auth_usage,
+        ap.authenticator.etype,
+        ap.authenticator.cipher.as_ref(),
+    )?;
     let authenticator: Authenticator = decode(&auth_plain)?;
     // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
     // MIT `rd_req_decoded_opt` (`rd_req_dec.c:530-532`): `krb5_principal_compare` (realm and

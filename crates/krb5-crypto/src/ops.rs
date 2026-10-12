@@ -336,6 +336,56 @@ fn update_iv(state: &mut CipherState, ciphertext: &[u8]) {
     }
 }
 
+/// MIT `ENCTYPE_UNKNOWN` (`include/krb5/krb5.hin:449-449`): an EncryptedData enctype that any key decrypts.
+pub const ENCTYPE_UNKNOWN: i32 = 0x01ff;
+
+/// The enctype check an EncryptedData passes before its ciphertext is decrypted.
+/// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): an enctype that is neither ENCTYPE_UNKNOWN nor the key's own is KRB5_BAD_ENCTYPE, zero included.
+///
+/// # Errors
+///
+/// [`Error::BadEnctype`] with `etype` when it is neither [`ENCTYPE_UNKNOWN`] nor the key's.
+pub fn check_enc_data_etype(key: &ProtocolKey, etype: i32) -> Result<(), Error> {
+    if etype != ENCTYPE_UNKNOWN && etype != key.etype().to_iana() {
+        return Err(Error::BadEnctype(etype));
+    }
+    Ok(())
+}
+
+/// Decrypt an EncryptedData's `ciphertext`, its enctype `etype`, under `key`.
+/// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:31-85`): the enctype is checked first, then the ciphertext decrypted.
+///
+/// # Errors
+///
+/// [`Error::BadEnctype`] when `etype` is neither [`ENCTYPE_UNKNOWN`] nor the key's, and the
+/// errors of [`decrypt`].
+pub fn decrypt_enc_data(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    etype: i32,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, Error> {
+    check_enc_data_etype(key, etype)?;
+    decrypt(key, usage, ciphertext)
+}
+
+/// [`decrypt_enc_data`] through a caller-managed cipher state.
+///
+/// # Errors
+///
+/// [`Error::BadEnctype`] when `etype` is neither [`ENCTYPE_UNKNOWN`] nor the key's, and the
+/// errors of [`decrypt_with_state`].
+pub fn decrypt_enc_data_with_state(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    state: &mut CipherState,
+    etype: i32,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, Error> {
+    check_enc_data_etype(key, etype)?;
+    decrypt_with_state(key, usage, state, ciphertext)
+}
+
 /// Decrypt `ciphertext` and return the plaintext with the confounder removed.
 ///
 /// # Errors
@@ -825,6 +875,37 @@ fn emit(
 mod tests {
     use super::*;
     use md5::{Digest, Md5};
+
+    /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): only the key's own enctype and ENCTYPE_UNKNOWN pass, zero included among the refused, and nothing is decrypted first; settled live with `krb5_c_decrypt` (18 and 511 decrypt, 0 and 17 are KRB5_BAD_ENCTYPE).
+    #[test]
+    fn enc_data_etype_check_is_krb5_k_decrypts() {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x44u8; 32]).unwrap();
+        let usage = KeyUsage::new(11).unwrap();
+        let cipher = encrypt(&key, usage, b"hello").unwrap();
+        for etype in [18, ENCTYPE_UNKNOWN] {
+            assert_eq!(
+                decrypt_enc_data(&key, usage, etype, &cipher).unwrap(),
+                b"hello"
+            );
+        }
+        for etype in [0, 17, 6] {
+            assert_eq!(
+                decrypt_enc_data(&key, usage, etype, &cipher),
+                Err(Error::BadEnctype(etype))
+            );
+        }
+        // The enctype is refused before the ciphertext is looked at.
+        assert_eq!(
+            decrypt_enc_data(&key, usage, 17, b"short"),
+            Err(Error::BadEnctype(17))
+        );
+        let mut state = CipherState::initial();
+        assert_eq!(
+            decrypt_enc_data_with_state(&key, usage, &mut state, 17, &cipher),
+            Err(Error::BadEnctype(17))
+        );
+    }
 
     #[test]
     fn verify_checksum_type_md5_hmac_rc4_uses_raw_key() {

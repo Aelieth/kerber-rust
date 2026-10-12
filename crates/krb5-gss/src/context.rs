@@ -6,7 +6,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, ReplayCache,
     build_ap_req_from_authenticator, permitted_enctypes, permitted_enctypes_kdc,
@@ -643,7 +643,7 @@ impl GssContext {
         let key = self.ap_rep_key.as_ref().ok_or(Error::Truncated)?;
         let ap: ApRep = decode(token)?;
         let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
-        let plain = decrypt(key, usage, ap.enc_part.cipher.as_ref())?;
+        let plain = decrypt_enc_data(key, usage, ap.enc_part.etype, ap.enc_part.cipher.as_ref())?;
         let part: EncApRepPart = decode(&plain)?;
         if part.subkey.is_some() {
             return Err(Error::Integrity);
@@ -686,8 +686,9 @@ impl GssContext {
         let usage = KeyUsage::new(ku::AP_REP_ENC_PART)?;
         let cipher = ap.enc_part.cipher.as_ref();
         // MIT `mutual_auth` (`init_sec_context.c:785-794`): ticket session, then subkey.
-        let plain = decrypt(ticket_session, usage, cipher)
-            .or_else(|_| decrypt(&self.session, usage, cipher))?;
+        let etype = ap.enc_part.etype;
+        let plain = decrypt_enc_data(ticket_session, usage, etype, cipher)
+            .or_else(|_| decrypt_enc_data(&self.session, usage, etype, cipher))?;
         let part: EncApRepPart = decode(&plain)?;
         // MIT `krb5_rd_rep` (`rd_rep.c:106-111`): an AP-REP that does not echo the authenticator's time is not mutual authentication.
         if let Some((ctime, cusec)) = &self.ap_req_time

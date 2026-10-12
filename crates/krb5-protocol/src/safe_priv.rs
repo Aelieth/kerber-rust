@@ -15,7 +15,7 @@ use zeroize::{Zeroize, Zeroizing};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     CipherState, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_keyed,
-    cksumtype_is_known, decrypt, decrypt_with_state, encrypt, encrypt_with_state,
+    cksumtype_is_known, decrypt_enc_data, decrypt_enc_data_with_state, encrypt, encrypt_with_state,
     verify_checksum_type,
 };
 use krb5_types::{
@@ -566,7 +566,7 @@ pub fn read_krb_priv(key: &ProtocolKey, raw: &[u8]) -> Result<EncKrbPrivPart, Er
     }
     let msg: KrbPriv = decode(raw)?;
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
-    let plain = decrypt(key, usage, msg.enc_part.cipher.as_ref())?;
+    let plain = decrypt_enc_data(key, usage, msg.enc_part.etype, msg.enc_part.cipher.as_ref())?;
     let part = decode::<EncKrbPrivPart>(&plain);
     wipe_vec(plain);
     Ok(part?)
@@ -613,7 +613,13 @@ pub fn unwrap_krb_priv_chained(
 ) -> Result<Vec<u8>, Error> {
     let msg: KrbPriv = decode(raw)?;
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
-    let plain = decrypt_with_state(session, usage, state, msg.enc_part.cipher.as_ref())?;
+    let plain = decrypt_enc_data_with_state(
+        session,
+        usage,
+        state,
+        msg.enc_part.etype,
+        msg.enc_part.cipher.as_ref(),
+    )?;
     let part: EncKrbPrivPart = decode(&plain)?;
     accept_fresh(
         replay,
@@ -677,7 +683,12 @@ pub fn unwrap_krb_cred(
 ) -> Result<(KrbCred, EncKrbCredPart), Error> {
     let msg: KrbCred = decode(raw)?;
     let usage = KeyUsage::new(ku::KRB_CRED_ENC_PART)?;
-    let plain = decrypt(session, usage, msg.enc_part.cipher.as_ref())?;
+    let plain = decrypt_enc_data(
+        session,
+        usage,
+        msg.enc_part.etype,
+        msg.enc_part.cipher.as_ref(),
+    )?;
     let part: EncKrbCredPart = decode(&plain)?;
     accept_fresh(
         replay,

@@ -5,7 +5,7 @@
 //! Env: `KRB5_PASSWORD`, `KERBER_PAUSER_PASSWORD`, `KERBER_DIFF_REALM`,
 //! `KERBER_KRBTGT_KEYTAB`, `KERBER_HOST_KEYTAB`.
 //!
-//! The 121 cases, in send order (`DIFFSEND_CASES` in `scripts/ci-policy.py` pins the same
+//! The 123 cases, in send order (`DIFFSEND_CASES` in `scripts/ci-policy.py` pins the same
 //! set):
 //! `garbage-pdu`, `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`,
 //! `pauser-no-preauth`, `as-needpreauth-hints-unpermitted`, `skewed-timestamp`, `as-needchange`,
@@ -45,7 +45,8 @@
 //! `tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`, `as-req-malformed-addresses`,
 //! `as-req-trailing-body-field`, `tgs-req-nonce-int32-min`, `tgs-authenticator-malformed-subkey`,
 //! `tgs-authenticator-trailing-field`, `tgs-authenticator-crealm-octets`, `as-spake-unknown-choice`,
-//! `tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`.
+//! `tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`,
+//! `tgs-authenticator-etype-mismatch`, `as-fast-armored-data-etype-mismatch`.
 
 #![forbid(unsafe_code)]
 
@@ -4820,7 +4821,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":121}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":123}}"#);
     Ok(())
 }
 
@@ -5096,6 +5097,68 @@ fn ra_cases(
         "as-enc-timestamp-pausec-out-of-range",
         &encode(&req).map_err(|e| e.to_string())?,
         user,
+    )?;
+
+    // A TGS-REQ whose authenticator's EncryptedData says aes128 for an aes256 session key.
+    // MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): another enctype than the key's is KRB5_BAD_ENCTYPE, which `errcode_to_protocol` sends as 60.
+    let mut tgs = tgs_for(0x1000_020a, &sess)?;
+    let padata = tgs.0.padata.as_mut().ok_or("no padata")?;
+    let pa_tgs = padata
+        .iter_mut()
+        .find(|x| x.padata_type == pa::TGS_REQ)
+        .ok_or("no PA-TGS-REQ")?;
+    let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    ap.authenticator.etype = 17;
+    pa_tgs.padata_value = encode(&ap).map_err(|e| e.to_string())?.into();
+    expect_error(
+        cfg,
+        "tgs-authenticator-etype-mismatch",
+        &encode(&tgs).map_err(|e| e.to_string())?,
+        err::GENERIC,
+    )?;
+
+    // An armored AS-REQ whose enc-fast-req says aes128 for an aes256 armor key.
+    // MIT `kdc_find_fast` (`kdc/fast_util.c:191-194`): the armored data decrypts through `krb5_k_decrypt`, so KRB5_BAD_ENCTYPE, 60 FIND_FAST.
+    let armor_sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let armor_sub = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let armor_tkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        user,
+        realm,
+        &PrincipalName::krbtgt(realm),
+        &armor_sess,
+        window.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    let armor_ap = build_fast_armor(
+        armor_tkt,
+        &armor_sess,
+        &krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        user,
+        Some(&armor_sub),
+    )
+    .map_err(|e| e.to_string())?;
+    let akey = armor_key(&armor_sess, Some(&armor_sub)).map_err(|e| e.to_string())?;
+    let mut fast_req = as_req(user.clone(), realm, 0x1000_020b, None).map_err(|e| e.to_string())?;
+    attach_fast(&mut fast_req, &armor_ap, &akey, Vec::new()).map_err(|e| e.to_string())?;
+    let fx = fast_req
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .ok_or("no PA-FX-FAST")?;
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    armored.enc_fast_req.etype = 17;
+    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .map_err(|e| e.to_string())?
+        .into();
+    expect_error(
+        cfg,
+        "as-fast-armored-data-etype-mismatch",
+        &encode(&fast_req).map_err(|e| e.to_string())?,
+        err::GENERIC,
     )?;
     Ok(())
 }

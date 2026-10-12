@@ -463,3 +463,45 @@ fn tgs_authenticator_cusec_out_of_range_is_issued() {
     let reply = krb5_kdc::handle_request(&store, &req).unwrap();
     assert_eq!(reply.first(), Some(&0x6d), "a TGS-REP");
 }
+
+#[test]
+// oracle: differential-gate.sh tgs-authenticator-etype-mismatch
+fn tgs_authenticator_etype_mismatch_is_generic() {
+    // MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): an authenticator EncryptedData of another enctype than the session key's is KRB5_BAD_ENCTYPE, 60 PROCESS_TGS.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        32,
+        Some(vec![pa_enc_timestamp(&client_key()).expect("pa")]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let mut tgs = tgs_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        33,
+    )
+    .expect("tgs");
+    let pa_tgs = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .unwrap();
+    let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).unwrap();
+    assert_ne!(ap.authenticator.etype, 17);
+    ap.authenticator.etype = 17;
+    pa_tgs.padata_value = encode(&ap).unwrap().into();
+    assert_eq!(
+        tgs_error(&store, &encode(&tgs).unwrap()),
+        (err::GENERIC, "PROCESS_TGS".into())
+    );
+}

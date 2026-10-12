@@ -761,3 +761,18 @@ fn request_till_second_is_time_while_the_precise_clock_has_rolled() {
         "CLOCK_REALTIME did not lead the coarse clock within 3s"
     );
 }
+
+/// MIT `read_krbpriv` (`lib/krb5/krb/rd_priv.c:68-70`): the enc-part decrypts through `krb5_k_decrypt`, so another enctype than the key's is KRB5_BAD_ENCTYPE.
+#[test]
+fn rd_priv_enc_part_of_another_enctype_is_bad_enctype() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let subkey = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, Some(&subkey), None, false, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut msg: krb5_types::KrbPriv = krb5_asn1::decode(&peer_priv(&subkey, b"pw", None)).unwrap();
+    msg.enc_part.etype = 17;
+    assert_eq!(
+        ac.rd_priv(&encode(&msg).unwrap()).unwrap_err(),
+        Error::BadEnctype
+    );
+}

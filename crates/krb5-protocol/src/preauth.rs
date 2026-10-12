@@ -11,10 +11,10 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SpakeGroup, checksum, cksumtype_is_keyed, decrypt,
-    encrypt, hmac_md5_arcfour_checksum, krb_fx_cf2, octetstring2key, p256_shared, pkinit_kdf_agile,
-    spake_derive_key, spake_keygen, spake_result, spake_thash_update, spake_wbytes,
-    verify_checksum_type,
+    EncryptionType, KeyUsage, ProtocolKey, SpakeGroup, checksum, cksumtype_is_keyed,
+    decrypt_enc_data, encrypt, hmac_md5_arcfour_checksum, krb_fx_cf2, octetstring2key, p256_shared,
+    pkinit_kdf_agile, spake_derive_key, spake_keygen, spake_result, spake_thash_update,
+    spake_wbytes, verify_checksum_type,
 };
 use krb5_types::{
     ApOptions, ApReq, AsReq, Authenticator, Checksum, EncKdcRepPart, EncryptedData, EncryptionKey,
@@ -310,7 +310,12 @@ pub fn unwrap_fast_rep(
         _ => decode::<krb5_types::fast::KrbFastArmoredRep>(raw.padata_value.as_ref())?,
     };
     let usage = KeyUsage::new(ku::FAST_REP)?;
-    let plain = decrypt(armor_key, usage, armored.enc_fast_rep.cipher.as_ref())?;
+    let plain = decrypt_enc_data(
+        armor_key,
+        usage,
+        armored.enc_fast_rep.etype,
+        armored.enc_fast_rep.cipher.as_ref(),
+    )?;
     decode(&plain).map_err(Error::from)
 }
 

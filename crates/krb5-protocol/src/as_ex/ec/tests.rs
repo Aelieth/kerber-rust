@@ -166,6 +166,29 @@ fn a_malformed_kdc_challenge_is_traced_with_mits_codes() {
     );
 }
 
+/// MIT `krb5_c_decrypt` (`lib/crypto/krb/decrypt.c:88-101`): the keyblock's key goes through `krb5_k_decrypt`.
+/// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): ENCTYPE_UNKNOWN (511) passes the check; 0 is another enctype.
+#[test]
+fn the_kdc_challenge_enctype_is_checked_as_krb5_k_decrypt_checks_it() {
+    let (armor, as_key) = sha2_pair();
+    let mut enc: EncryptedData = decode(&kdc_challenge(
+        MIT_KDC_SHA2,
+        EncryptionType::Aes256CtsHmacSha384192,
+        ku::ENC_CHALLENGE_KDC,
+    ))
+    .unwrap();
+    enc.etype = 0x01ff;
+    assert_eq!(
+        verify_kdc_challenge(&armor, &as_key, &encode(&enc).unwrap()),
+        0
+    );
+    enc.etype = 0;
+    assert_eq!(
+        verify_kdc_challenge(&armor, &as_key, &encode(&enc).unwrap()),
+        KRB5_BAD_ENCTYPE
+    );
+}
+
 #[test]
 fn only_a_reply_that_carries_a_kdc_challenge_is_processed() {
     let (armor, as_key) = sha2_pair();
