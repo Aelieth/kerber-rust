@@ -527,6 +527,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **examples.** `examples/otp-kdc` runs the KDC in-process with an RFC 6238 TOTP `OtpVerifier`, the embed path KLLDAP takes; MIT `kinit -T` logs in with a code.
 - **kdc.** OTP preauth (RFC 6560) as MIT's `otp` module, FAST only: the `otp` string attribute, the armor key as the reply key, MIT's codes and quirks; an embedder `OtpVerifier` checks the value. Units; settled live.
 - **types.** The RFC 6560 OTP messages and key usage 45, byte for byte MIT's seven vectors; a PA-OTP-REQUEST's `Debug` hides the PIN and the OTP value. Units.
 - **admin.** Offer `kadm5_hook` precommit and postcommit on chpass, create, modify, rename, remove and alias. `[plugins] kadm5_hook` selects the names. A postcommit error is logged and the operation still succeeds. Units.

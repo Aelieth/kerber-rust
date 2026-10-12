@@ -665,6 +665,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "krb5-otp-kdc-example"
+version = "1.0.0"
+dependencies = [
+ "hmac",
+ "krb5-config",
+ "krb5-kdc",
+ "krb5-log",
+ "sha1",
+ "signal-hook",
+ "subtle",
+]
+
+[[package]]
 name = "krb5-protocol"
 version = "1.0.0"
 dependencies = [
