@@ -77,6 +77,7 @@ pub mod extra;
 pub mod fast;
 mod name;
 mod name_error;
+pub mod otp;
 pub mod pac;
 pub mod pkinit;
 pub mod s4u;

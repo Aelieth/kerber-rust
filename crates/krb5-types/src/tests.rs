@@ -896,6 +896,70 @@ fn pa_spake_unknown_choice_decodes() {
     assert!(rasn::der::encode(&spake::PaSpake::Unknown).is_err());
 }
 
+// RFC 6560 OTP types (`otp.rs`) checked against MIT 1.22.2's own encodings. The
+// octets are lines 62 to 68 of MIT's `reference_encode.out`; each value is the one
+// that MIT's `ktest.c` builds in its `ktest_make_*otp*` helpers.
+
+/// MIT's reference output for `encode_krb5_otp_tokeninfo(optionals NULL)`.
+const MIT_OTP_TOKENINFO_MINIMAL: &str = "30 07 80 05 00 00 00 00 00";
+/// MIT's reference output for `encode_krb5_otp_tokeninfo`, all fields set.
+const MIT_OTP_TOKENINFO_MAXIMAL: &str = "30 72 80 05 00 77 00 00 00 81 0B 45 78 61 6D 70 6C 65 63 6F 72 70 82 05 68 61 72 6B 21 83 01 0A 84 01 02 85 09 79 6F 75 72 74 6F 6B 65 6E 86 28 75 72 6E 3A 69 65 74 66 3A 70 61 72 61 6D 73 3A 78 6D 6C 3A 6E 73 3A 6B 65 79 70 72 6F 76 3A 70 73 6B 63 3A 68 6F 74 70 A7 16 30 0B 06 09 60 86 48 01 65 03 04 02 01 30 07 06 05 2B 0E 03 02 1A 88 02 03 E8";
+/// MIT's reference output for `encode_krb5_pa_otp_challenge(optionals NULL)`.
+const MIT_PA_OTP_CHALLENGE_MINIMAL: &str =
+    "30 15 80 08 6D 69 6E 6E 6F 6E 63 65 A2 09 30 07 80 05 00 00 00 00 00";
+/// MIT's reference output for `encode_krb5_pa_otp_challenge`, all fields set.
+const MIT_PA_OTP_CHALLENGE_MAXIMAL: &str = "30 81 A5 80 08 6D 61 78 6E 6F 6E 63 65 81 0B 74 65 73 74 73 65 72 76 69 63 65 A2 7D 30 07 80 05 00 00 00 00 00 30 72 80 05 00 77 00 00 00 81 0B 45 78 61 6D 70 6C 65 63 6F 72 70 82 05 68 61 72 6B 21 83 01 0A 84 01 02 85 09 79 6F 75 72 74 6F 6B 65 6E 86 28 75 72 6E 3A 69 65 74 66 3A 70 61 72 61 6D 73 3A 78 6D 6C 3A 6E 73 3A 6B 65 79 70 72 6F 76 3A 70 73 6B 63 3A 68 6F 74 70 A7 16 30 0B 06 09 60 86 48 01 65 03 04 02 01 30 07 06 05 2B 0E 03 02 1A 88 02 03 E8 83 07 6B 65 79 73 61 6C 74 84 04 31 32 33 34";
+/// MIT's reference output for `encode_krb5_pa_otp_req(optionals NULL)`.
+const MIT_PA_OTP_REQ_MINIMAL: &str = "30 2C 80 05 00 00 00 00 00 A2 23 A0 03 02 01 00 A1 03 02 01 05 A2 17 04 15 6B 72 62 41 53 4E 2E 31 20 74 65 73 74 20 6D 65 73 73 61 67 65";
+/// MIT's reference output for `encode_krb5_pa_otp_req`, all fields set.
+const MIT_PA_OTP_REQ_MAXIMAL: &str = "30 81 B9 80 05 00 60 00 00 00 81 05 6E 6F 6E 63 65 A2 23 A0 03 02 01 00 A1 03 02 01 05 A2 17 04 15 6B 72 62 41 53 4E 2E 31 20 74 65 73 74 20 6D 65 73 73 61 67 65 A3 0B 06 09 60 86 48 01 65 03 04 02 01 84 02 03 E8 85 05 66 72 6F 67 73 86 0A 6D 79 66 69 72 73 74 70 69 6E 87 05 68 61 72 6B 21 88 0F 31 39 39 34 30 36 31 30 30 36 30 33 31 37 5A 89 03 33 34 36 8A 01 02 8B 09 79 6F 75 72 74 6F 6B 65 6E 8C 28 75 72 6E 3A 69 65 74 66 3A 70 61 72 61 6D 73 3A 78 6D 6C 3A 6E 73 3A 6B 65 79 70 72 6F 76 3A 70 73 6B 63 3A 68 6F 74 70 8D 0B 45 78 61 6D 70 6C 65 63 6F 72 70";
+/// MIT's reference output for `encode_krb5_pa_otp_enc_req`.
+const MIT_PA_OTP_ENC_REQ: &str = "30 0A 80 08 6B 72 62 35 64 61 74 61";
+
+/// The OTP algorithm identifier URN that MIT's `ktest.c` uses.
+const OTP_ALG_ID: &str = "urn:ietf:params:xml:ns:keyprov:pskc:hotp";
+
+/// `value`'s DER octets as MIT's reference output prints them: upper-case hex, a space between octets.
+fn mit_hex(der: &[u8]) -> String {
+    der.iter()
+        .map(|octet| format!("{octet:02X}"))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The octets of MIT's reference output `hex`.
+fn mit_octets(hex: &str) -> Vec<u8> {
+    hex.split_whitespace()
+        .map(|octet| u8::from_str_radix(octet, 16).unwrap())
+        .collect()
+}
+
+/// Asserts that `value` encodes to MIT's reference output `hex`, octet for octet, and that
+/// decoding those octets gives `value` back.
+fn assert_mit_encoding<T>(value: &T, hex: &str)
+where
+    T: rasn::Encode + rasn::Decode + PartialEq + std::fmt::Debug,
+{
+    let der = rasn::der::encode(value).unwrap();
+    assert_eq!(mit_hex(&der), hex, "the encoder differs from MIT");
+    let decoded: T = rasn::der::decode(&mit_octets(hex)).unwrap();
+    assert_eq!(&decoded, value, "decoding MIT's octets gives another value");
+}
+
+/// The OTP flags as the `OTPFlags` bit string of a 32-bit word (bit 0 is the most significant).
+fn otp_flags(bits: u32) -> KerberosFlags {
+    KerberosFlags::from_slice(&bits.to_be_bytes())
+}
+
+/// The EncryptedData of MIT's `ktest_make_sample_enc_data`: etype 0, kvno 5.
+fn sample_enc_data() -> EncryptedData {
+    EncryptedData {
+        etype: 0,
+        kvno: Some(5),
+        cipher: OctetString::from_static(b"krbASN.1 test message"),
+    }
+}
+
 /// MIT `opt_der_data` (`lib/krb5/asn.1/asn1_k_encode.c:65-65`): an AlgorithmIdentifier's parameters are kept as DER, so a NULL survives a decode and an encode.
 #[test]
 fn algorithm_identifier_parameters_survive_a_round_trip() {
@@ -910,4 +974,157 @@ fn algorithm_identifier_parameters_survive_a_round_trip() {
         let alg = rasn::der::decode::<pkinit::CmsAlgorithmIdentifier>(der).unwrap();
         assert_eq!(rasn::der::encode(&alg).unwrap(), der);
     }
+}
+
+/// The SHA-256 AlgorithmIdentifier of MIT's `ktest_make_sha256_alg`, with no parameters.
+fn sha256_alg() -> pkinit::CmsAlgorithmIdentifier {
+    pkinit::CmsAlgorithmIdentifier {
+        algorithm: rasn::types::ObjectIdentifier::new(vec![2, 16, 840, 1, 101, 3, 4, 2, 1])
+            .unwrap(),
+        parameters: None,
+    }
+}
+
+/// The SHA-1 AlgorithmIdentifier of MIT's `ktest_make_sha1_alg`, with no parameters.
+fn sha1_alg() -> pkinit::CmsAlgorithmIdentifier {
+    pkinit::CmsAlgorithmIdentifier {
+        algorithm: rasn::types::ObjectIdentifier::new(vec![1, 3, 14, 3, 2, 26]).unwrap(),
+        parameters: None,
+    }
+}
+
+/// MIT's `ktest_make_minimal_otp_tokeninfo`: every optional field absent.
+fn minimal_token_info() -> otp::OtpTokenInfo {
+    otp::OtpTokenInfo {
+        flags: otp_flags(0),
+        vendor: None,
+        challenge: None,
+        length: None,
+        format: None,
+        token_id: None,
+        alg_id: None,
+        supported_hash_alg: None,
+        iteration_count: None,
+    }
+}
+
+/// MIT's `ktest_make_maximal_otp_tokeninfo`: every field set.
+fn maximal_token_info() -> otp::OtpTokenInfo {
+    otp::OtpTokenInfo {
+        flags: otp_flags(
+            otp::OTP_FLAG_NEXTOTP
+                | otp::OTP_FLAG_COMBINE
+                | otp::OTP_FLAG_COLLECT_PIN
+                | otp::OTP_FLAG_ENCRYPT_NONCE
+                | otp::OTP_FLAG_SEPARATE_PIN
+                | otp::OTP_FLAG_CHECK_DIGIT,
+        ),
+        vendor: Some("Examplecorp".into()),
+        challenge: Some(OctetString::from_static(b"hark!")),
+        length: Some(10),
+        format: Some(otp::OTP_FORMAT_ALPHANUMERIC),
+        token_id: Some(OctetString::from_static(b"yourtoken")),
+        alg_id: Some(OTP_ALG_ID.into()),
+        supported_hash_alg: Some(vec![sha256_alg(), sha1_alg()]),
+        iteration_count: Some(1000),
+    }
+}
+
+/// MIT's `ktest_make_maximal_pa_otp_req`: every field set.
+fn maximal_request() -> otp::PaOtpRequest {
+    otp::PaOtpRequest {
+        flags: otp_flags(otp::OTP_FLAG_NEXTOTP | otp::OTP_FLAG_COMBINE),
+        nonce: Some(OctetString::from_static(b"nonce")),
+        enc_data: sample_enc_data(),
+        hash_alg: Some(sha256_alg()),
+        iteration_count: Some(1000),
+        otp_value: Some(OctetString::from_static(b"frogs")),
+        pin: Some("myfirstpin".into()),
+        challenge: Some(OctetString::from_static(b"hark!")),
+        time: Some(KerberosTime::from_unix_seconds(771_228_197)),
+        counter: Some(OctetString::from_static(b"346")),
+        format: Some(otp::OTP_FORMAT_ALPHANUMERIC),
+        token_id: Some(OctetString::from_static(b"yourtoken")),
+        alg_id: Some(OTP_ALG_ID.into()),
+        vendor: Some("Examplecorp".into()),
+    }
+}
+
+#[test]
+fn otp_tokeninfo_minimal_is_mits_encoding() {
+    assert_mit_encoding(&minimal_token_info(), MIT_OTP_TOKENINFO_MINIMAL);
+}
+
+#[test]
+fn otp_tokeninfo_maximal_is_mits_encoding() {
+    assert_mit_encoding(&maximal_token_info(), MIT_OTP_TOKENINFO_MAXIMAL);
+}
+
+#[test]
+fn pa_otp_challenge_minimal_is_mits_encoding() {
+    let challenge = otp::PaOtpChallenge {
+        nonce: OctetString::from_static(b"minnonce"),
+        service: None,
+        token_info: vec![minimal_token_info()],
+        salt: None,
+        s2kparams: None,
+    };
+    assert_mit_encoding(&challenge, MIT_PA_OTP_CHALLENGE_MINIMAL);
+}
+
+#[test]
+fn pa_otp_challenge_maximal_is_mits_encoding() {
+    let challenge = otp::PaOtpChallenge {
+        nonce: OctetString::from_static(b"maxnonce"),
+        service: Some("testservice".into()),
+        token_info: vec![minimal_token_info(), maximal_token_info()],
+        salt: Some(ascii("keysalt")),
+        s2kparams: Some(OctetString::from_static(b"1234")),
+    };
+    assert_mit_encoding(&challenge, MIT_PA_OTP_CHALLENGE_MAXIMAL);
+}
+
+#[test]
+fn pa_otp_req_minimal_is_mits_encoding() {
+    let request = otp::PaOtpRequest {
+        flags: otp_flags(0),
+        nonce: None,
+        enc_data: sample_enc_data(),
+        hash_alg: None,
+        iteration_count: None,
+        otp_value: None,
+        pin: None,
+        challenge: None,
+        time: None,
+        counter: None,
+        format: None,
+        token_id: None,
+        alg_id: None,
+        vendor: None,
+    };
+    assert_mit_encoding(&request, MIT_PA_OTP_REQ_MINIMAL);
+}
+
+#[test]
+fn pa_otp_req_maximal_is_mits_encoding() {
+    assert_mit_encoding(&maximal_request(), MIT_PA_OTP_REQ_MAXIMAL);
+}
+
+#[test]
+fn pa_otp_enc_request_is_mits_encoding() {
+    let enc = otp::PaOtpEncRequest {
+        nonce: OctetString::from_static(b"krb5data"),
+    };
+    assert_mit_encoding(&enc, MIT_PA_OTP_ENC_REQ);
+}
+
+#[test]
+fn a_pa_otp_requests_debug_shows_no_pin_or_otp_value() {
+    let debug = format!("{:?}", maximal_request());
+    assert!(!shows(&debug, b"myfirstpin"), "{debug}");
+    assert!(!shows(&debug, b"frogs"), "{debug}");
+    assert!(
+        debug.contains("otp_value: Some(<redacted>), pin: Some(<redacted>)"),
+        "{debug}"
+    );
 }

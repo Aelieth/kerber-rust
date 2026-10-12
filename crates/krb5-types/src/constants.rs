@@ -232,6 +232,9 @@ pub mod ku {
     /// PA-PKINIT-KX.
     /// MIT `KRB5_KEYUSAGE_PA_PKINIT_KX` (`krb5.hin:991-991`): the PA-PKINIT-KX key usage, 44.
     pub const PA_PKINIT_KX: u32 = 44;
+    /// PA-OTP-REQUEST encrypted data (RFC 6560).
+    /// MIT `KRB5_KEYUSAGE_PA_OTP_REQUEST` (`krb5.hin:992-992`): 45, the key usage of PA-OTP-REQUEST (see RFC 6560 section 4.2).
+    pub const PA_OTP_REQUEST: u32 = 45;
 }
 
 /// RFC 4120 / 6113 / 4556 PA-DATA type numbers.
