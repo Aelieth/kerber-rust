@@ -111,8 +111,9 @@ pub fn build_krb_safe_ex(
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` or `INAPP_CKSUM`
-/// for an unknown or unsuitable checksum type, and `MODIFIED` when the checksum does not verify;
+/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `INAPP_CKSUM` for an unsuitable
+/// checksum type, and `MODIFIED` when the checksum does not verify; [`Error::ProgSumtypeNosupp`]
+/// for an unknown checksum type;
 /// [`Error::Asn1`] when `raw` does not decode; [`Error::ReplyMismatch`] when the timestamp or a
 /// non-zero sequence number is missing, the timestamp is more than 300 seconds from now, or
 /// `replay` has seen the message.
@@ -128,8 +129,9 @@ pub fn unwrap_krb_safe(
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` or `INAPP_CKSUM`
-/// for an unknown or unsuitable checksum type, and `MODIFIED` when the checksum does not verify;
+/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `INAPP_CKSUM` for an unsuitable
+/// checksum type, and `MODIFIED` when the checksum does not verify; [`Error::ProgSumtypeNosupp`]
+/// for an unknown checksum type;
 /// [`Error::Asn1`] when `raw` does not decode; [`Error::ReplyMismatch`] when a required timestamp
 /// or sequence number is missing (zero counts as missing when both are required), the timestamp
 /// is more than 300 seconds from now, or `replay` has seen the message.
@@ -170,10 +172,11 @@ enum FreshPolicy {
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] `MSG_TYPE` (40) when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` (15) for an
-/// unknown checksum type, `INAPP_CKSUM` (50) for one that is not keyed and collision-proof,
-/// `BADADDR` (38) when `remote` or `local` does not match, and `MODIFIED` (41) when the checksum
-/// verifies over neither the message nor the body; [`Error::Asn1`] when `raw` does not decode.
+/// [`Error::KrbError`] `MSG_TYPE` (40) when `raw` is not a KRB-SAFE, `INAPP_CKSUM` (50) for a
+/// checksum type that is not keyed and collision-proof, `BADADDR` (38) when `remote` or `local`
+/// does not match, and `MODIFIED` (41) when the checksum verifies over neither the message nor
+/// the body; [`Error::ProgSumtypeNosupp`] for a checksum type the library does not implement;
+/// [`Error::Asn1`] when `raw` does not decode.
 pub fn verify_krb_safe_checksum(
     session: &ProtocolKey,
     raw: &[u8],
@@ -189,11 +192,9 @@ pub fn verify_krb_safe_checksum(
     // MIT `safe_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:816-816`): the msg-type decodes as the message's own.
     let (msg, body_der) = decode_safe_with_body(raw)?;
     let ctype = msg.cksum.cksumtype;
+    // MIT `read_krbsafe` (`lib/krb5/krb/rd_safe.c:66-69`): a checksum type `krb5_c_valid_cksumtype` does not know is KRB5_PROG_SUMTYPE_NOSUPP, a library code, not KDC_ERR_SUMTYPE_NOSUPP.
     if !cksumtype_is_known(ctype) {
-        return Err(Error::KrbError {
-            code: err::SUMTYPE_NOSUPP,
-            text: Some("checksum type".into()),
-        });
+        return Err(Error::ProgSumtypeNosupp);
     }
     if !cksumtype_is_coll_proof(ctype) || !cksumtype_is_keyed(ctype) {
         return Err(Error::KrbError {
@@ -756,13 +757,16 @@ mod tests {
     }
 
     #[test]
-    fn safe_unknown_cksumtype_is_sumtype_nosupp() {
+    fn safe_unknown_cksumtype_is_prog_sumtype_nosupp() {
+        // MIT `read_krbsafe` (`lib/krb5/krb/rd_safe.c:66-69`): KRB5_PROG_SUMTYPE_NOSUPP, settled live for types 1 3 4 5 6 8 10 13 127.
         let key = session();
-        let mut msg = build_krb_safe(&key, b"body").unwrap();
-        msg.cksum.cksumtype = 1;
-        match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
-            Err(Error::KrbError { code, .. }) => assert_eq!(code, err::SUMTYPE_NOSUPP),
-            other => panic!("unknown SAFE type must be 15, got {other:?}"),
+        for ctype in [1, 3, 4, 5, 6, 8, 10, 13, 127] {
+            let mut msg = build_krb_safe(&key, b"body").unwrap();
+            msg.cksum.cksumtype = ctype;
+            match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
+                Err(Error::ProgSumtypeNosupp) => {}
+                other => panic!("checksum type {ctype}: want PROG_SUMTYPE_NOSUPP, got {other:?}"),
+            }
         }
     }
 

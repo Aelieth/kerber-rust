@@ -66,6 +66,10 @@ pub enum Error {
     /// MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et:254-254`): the code and text, which `krb5_k_decrypt` returns.
     #[error("Bad encryption type")]
     BadEnctype,
+    /// A checksum type the library does not implement.
+    /// MIT `KRB5_PROG_SUMTYPE_NOSUPP` (`krb5_err.et:207-207`): the code and text, which `read_krbsafe` returns for a KRB-SAFE's.
+    #[error("Program lacks support for checksum type")]
+    ProgSumtypeNosupp,
     /// An AP-REQ's session key or subkey is of an enctype the acceptor does not permit; the
     /// text names it.
     /// MIT `negotiate_etype` (`lib/krb5/krb/rd_req_dec.c:878-886`): `KRB5_NOPERM_ETYPE` with the enctype's name.
@@ -119,6 +123,7 @@ impl Clone for Error {
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
             Self::BadEnctype => Self::BadEnctype,
+            Self::ProgSumtypeNosupp => Self::ProgSumtypeNosupp,
             Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
             Self::PreauthFailed(e) => Self::PreauthFailed(e.clone()),
             Self::TruncatedReply => Self::TruncatedReply,

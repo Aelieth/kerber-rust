@@ -1486,6 +1486,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** A KRB-SAFE whose checksum type the library does not know is
+  KRB5_PROG_SUMTYPE_NOSUPP, as MIT's `read_krbsafe`; it was KDC_ERR_SUMTYPE_NOSUPP (15). Settled
+  live.
 - **crypto.** Every EncryptedData decrypts through one check, MIT's `krb5_k_decrypt`'s: an enctype
   that is neither the key's nor ENCTYPE_UNKNOWN is KRB5_BAD_ENCTYPE (60 from the KDC); it was
   ignored. Settled live; diffsend cells.

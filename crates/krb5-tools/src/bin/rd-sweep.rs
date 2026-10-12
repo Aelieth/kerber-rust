@@ -256,6 +256,7 @@ fn rust_answer(kind: &str, ap: &[u8], msg: Option<&[u8]>) -> String {
         Error::KrbError { code, .. } => format!("krb5:{code}"),
         Error::Crypto(_) => "krb5:31".to_string(),
         Error::ProgEtypeNosupp => "krb5:150".to_string(),
+        Error::ProgSumtypeNosupp => "krb5:153".to_string(),
         Error::BadEnctype => "krb5:188".to_string(),
         Error::NopermEtype(_) => "krb5:236".to_string(),
         other => format!("other:{other}"),
