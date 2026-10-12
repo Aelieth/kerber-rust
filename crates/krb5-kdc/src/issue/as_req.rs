@@ -124,7 +124,7 @@ struct AsLookup {
     session_etype: EncryptionType,
     work_padata: Option<Vec<PaData>>,
     req_cname: PrincipalName,
-    ckey: KeyEntry,
+    ckey: Option<KeyEntry>,
 }
 
 /// MIT `finish_preauth` carried state. Data only.
@@ -135,10 +135,9 @@ struct AsPreauth {
     server: Principal,
     session_etype: EncryptionType,
     work_padata: Option<Vec<PaData>>,
-    ckey: KeyEntry,
+    ckey: Option<KeyEntry>,
     extra_padata: Vec<PaData>,
-    as_rep_key: ProtocolKey,
-    etype: EncryptionType,
+    as_rep_key: Option<ProtocolKey>,
     skip_timestamp: bool,
     hw_preauth: bool,
     reply_key_replaced: bool,
@@ -251,27 +250,12 @@ fn lookup_client(
     } else {
         req.0.padata.clone()
     };
-    // MIT `process_as_req` (`do_as_req.c:736-745`): the `select_client_key` step returns
-    // success with `ENCTYPE_NULL` when no requested etype has a permitted top-kvno key;
-    // `CANT_FIND_CLIENT_KEY` is only after preauth (`:259-265`). A preauth-required client
-    // with no padata still gets 25 so `have_client_keys` can omit ENC-TS / ENC-CHALLENGE.
+    // MIT `process_as_req` (`do_as_req.c:736-745`): no requested etype with a permitted top-kvno
+    // key is success with `ENCTYPE_NULL`; a preauth module may still replace the reply key.
+    // MIT `finish_process_as_req` (`do_as_req.c:259-265`): CANT_FIND_CLIENT_KEY is raised only after preauth.
     // MIT `have_client_keys` (`kdc_preauth.c:442-442`): true only when
     // `krb5_dbe_find_enctype` finds a key for a requested etype.
-    let Some(ckey) = select_client_key(store.policy(), &client, &body.etype) else {
-        let empty = work_padata.as_deref().is_none_or(<[PaData]>::is_empty);
-        if client.requires_preauth && empty {
-            return Err(preauth_required(
-                store,
-                &client,
-                None,
-                &body.etype,
-                fast.is_some(),
-                work_padata.as_deref(),
-            ));
-        }
-        return Err(proto(err::ETYPE_NOSUPP, status::CANT_FIND_CLIENT_KEY));
-    };
-    let ckey = ckey.clone();
+    let ckey = select_client_key(store.policy(), &client, &body.etype).cloned();
     Ok(AsLookup {
         client,
         cname,
@@ -308,8 +292,8 @@ fn finish_preauth(
         req_cname,
         ckey: ckey_owned,
     } = lookup;
-    let ckey = &ckey_owned;
-    let etype = ckey.etype;
+    let ckey = ckey_owned.as_ref();
+    let armor = fast.map(|f| &f.armor_key);
     let encoded_body;
     let body_der: &[u8] = if let Some(slice) = raw.and_then(kdc_req_body_der) {
         slice
@@ -337,7 +321,7 @@ fn finish_preauth(
             &client,
             ckey,
             &body.etype,
-            false,
+            None,
             proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED),
             work_padata.as_deref(),
         ));
@@ -355,7 +339,7 @@ fn finish_preauth(
     }
 
     let mut extra_padata: Vec<PaData> = Vec::new();
-    let mut as_rep_key = ckey.key.clone();
+    let mut as_rep_key = ckey.map(|k| k.key.clone());
     let mut skip_timestamp = false;
     let hw_preauth = false;
     let mut reply_key_replaced = false;
@@ -368,8 +352,9 @@ fn finish_preauth(
         store,
         client: &client,
         padata: work_padata.as_deref(),
-        ikey: &ckey.key,
-        etype,
+        ikey: ckey.map(|k| &k.key),
+        etype: ckey.map(|k| k.etype),
+        armor_key: armor,
         as_req_der: &as_req_der,
         body_der: pa_body,
         cname: &cname,
@@ -380,13 +365,13 @@ fn finish_preauth(
             &client,
             ckey,
             &body.etype,
-            fast.is_some(),
+            armor,
             e,
             work_padata.as_deref(),
         )
     })? {
         Some(PreauthAction::Pkinit { key, pa, signed }) => {
-            as_rep_key = key;
+            as_rep_key = Some(key);
             extra_padata.push(pa);
             skip_timestamp = true;
             reply_key_replaced = true;
@@ -403,7 +388,8 @@ fn finish_preauth(
             // 91 with a client key and no cookie in the request.
             // MIT `prepare_error_as` (`do_as_req.c:785-795`): then the cookie, last.
             let mut method = decode_edata_padata(&e_data);
-            if find_pa(work_padata.as_deref(), pa::FX_COOKIE).is_none()
+            if let Some(ckey) = ckey
+                && find_pa(work_padata.as_deref(), pa::FX_COOKIE).is_none()
                 && !method.iter().any(|p| p.padata_type == pa::ETYPE_INFO2)
             {
                 let salt =
@@ -430,7 +416,7 @@ fn finish_preauth(
         Some(PreauthAction::SpakeDone(k)) => {
             // MIT `verify_response` (`spake_kdc.c:464-464`): K'[0] replaces the reply key as a strengthened one.
             // MIT `replace_reply_key` (`kdc_preauth.c:567-580`): a strengthened key does not mark the reply key replaced, so the AS-REP keeps its etype-info.
-            as_rep_key = k;
+            as_rep_key = Some(k);
             skip_timestamp = true;
             for ind in &store.policy().spake_preauth_indicators {
                 authind_add(&mut auth_indicators, ind);
@@ -448,6 +434,10 @@ fn finish_preauth(
         && let Some(blob) = find_pa(Some(&f.inner_padata), pa::ENCRYPTED_CHALLENGE)
         && !blob.is_empty()
     {
+        // MIT `ec_verify` (`kdc_preauth_ec.c:97-98`): no client key is ENOENT, which the filter makes 24.
+        let Some(ckey) = ckey else {
+            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+        };
         match verify_encrypted_challenge(store, &ckey.key, &f.armor_key, blob) {
             Ok(()) => {
                 skip_timestamp = true;
@@ -463,9 +453,9 @@ fn finish_preauth(
         return Err(preauth_required(
             store,
             &client,
-            Some(ckey),
+            ckey,
             &body.etype,
-            fast.is_some(),
+            armor,
             work_padata.as_deref(),
         ));
     }
@@ -476,9 +466,9 @@ fn finish_preauth(
             e_data: Some(preauth_hint_edata(
                 store,
                 &client,
-                Some(ckey),
+                ckey,
                 &body.etype,
-                fast.is_some(),
+                armor,
                 work_padata.as_deref(),
             )),
             detail: None,
@@ -494,7 +484,6 @@ fn finish_preauth(
         ckey: ckey_owned,
         extra_padata,
         as_rep_key,
-        etype,
         skip_timestamp,
         hw_preauth,
         reply_key_replaced,
@@ -524,21 +513,24 @@ fn finish_process_as_req(
         server,
         session_etype,
         work_padata,
-        ckey: ckey_owned,
+        ckey,
         mut extra_padata,
         as_rep_key,
-        etype,
         skip_timestamp,
         hw_preauth,
         reply_key_replaced,
         auth_indicators,
         anonymous_as,
     } = pre;
-    let ckey = &ckey_owned;
     let skey = store
         .policy()
         .first_current_key(&server)
         .map_err(|_| proto(err::GENERIC, status::FINDING_SERVER_KEY))?;
+    // MIT `finish_process_as_req` (`do_as_req.c:259-265`): with no client key and no key a
+    // preauth module put in its place, the reply has no key to encrypt under.
+    let Some(as_rep_key) = as_rep_key else {
+        return Err(proto(err::ETYPE_NOSUPP, status::CANT_FIND_CLIENT_KEY));
+    };
     let mut session = random_key(session_etype)?;
     if anonymous_as {
         extra_padata.push(pa_pkinit_kx(&as_rep_key, &session)?);
@@ -675,15 +667,18 @@ fn finish_process_as_req(
     // MIT `return_padata` (`kdc_preauth.c:1487-1495`): key-info (`add_etype_info`, then
     // `add_pw_salt`) follows the reply key unless a module replaced it. RFC 4120 5.2.7.5
     // forbids describing a replaced reply key.
-    // MIT `add_etype_info` (`kdc_preauth.c:769-800`): the etype-info describes the client key.
+    // MIT `add_etype_info` (`kdc_preauth.c:769-800`): the etype-info describes the reply key's
+    // etype, and a keyless client has none to describe.
     // MIT `add_pw_salt` (`kdc_preauth.c:802-824`): the pw-salt, for pre-info2 clients only.
     // MIT `add_freshness_token` (`kdc_preauth.c:826-829`): not key-info; only
     // `hint_list_finish` adds the freshness token.
-    if !reply_key_replaced {
-        outer_padata.extend(as_rep_key_info(&client, ckey, &body.etype));
+    if !reply_key_replaced && ckey.is_some() {
+        outer_padata.extend(as_rep_key_info(&client, as_rep_key.etype(), &body.etype));
     }
     if let Some(f) = fast {
-        let sk = random_key(etype)?;
+        // MIT `kdc_fast_response_handle_padata` (`fast_util.c:292-296`): the strengthen key has
+        // the reply key's enctype, which is also the enc-part's.
+        let sk = random_key(as_rep_key.etype())?;
         reply_key = krb_fx_cf2(&sk, &as_rep_key, b"strengthenkey", b"replykey")?;
         let finished = fast_finished(&f.armor_key, &ticket, &cname, issue_crealm)?;
         let inner = std::mem::take(&mut outer_padata);
@@ -766,10 +761,10 @@ fn get_key_exp(client: &crate::store::Principal) -> Option<KerberosTime> {
 
 /// MIT `add_etype_info` (`kdc_preauth.c:769-799`): PA-ETYPE-INFO only for pre-info2 clients,
 /// then PA-ETYPE-INFO2 for every client.
-fn etype_info_padata(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
+fn etype_info_padata(client: &Principal, etype: EncryptionType, requested: &[i32]) -> Vec<PaData> {
     let mut out = Vec::new();
     let salt = KerberosString::try_from(String::from_utf8_lossy(&client.salt).as_ref()).ok();
-    let etype = ckey.etype.to_iana();
+    let etype = etype.to_iana();
     if !requested.iter().copied().any(enctype_requires_etype_info_2) {
         let info: EtypeInfo = vec![EtypeInfoEntry {
             etype,
@@ -804,8 +799,8 @@ fn etype_info_padata(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> 
 /// MIT `add_pw_salt` (`kdc_preauth.c:802-824`): pw-salt only for pre-info2 clients.
 /// MIT `add_freshness_token` (`kdc_preauth.c:826-829`): not AS-REP key-info; only
 /// `hint_list_finish` adds the freshness token.
-fn as_rep_key_info(client: &Principal, ckey: &KeyEntry, requested: &[i32]) -> Vec<PaData> {
-    let mut out = etype_info_padata(client, ckey, requested);
+fn as_rep_key_info(client: &Principal, etype: EncryptionType, requested: &[i32]) -> Vec<PaData> {
+    let mut out = etype_info_padata(client, etype, requested);
     if !requested.iter().copied().any(enctype_requires_etype_info_2) {
         out.push(PaData {
             padata_type: pa::PW_SALT,
@@ -935,7 +930,7 @@ fn preauth_hint_edata(
     client: &Principal,
     ckey: Option<&KeyEntry>,
     requested: &[i32],
-    armor: bool,
+    armor: Option<&ProtocolKey>,
     request_padata: Option<&[PaData]>,
 ) -> Vec<u8> {
     let hint =
@@ -943,7 +938,7 @@ fn preauth_hint_edata(
     let mut method: MethodData = hint.padata;
     // MIT `add_etype_info` (`kdc_preauth.c:776-778`): skip when no client key.
     if let Some(ckey) = ckey {
-        let info = etype_info_padata(client, ckey, requested);
+        let info = etype_info_padata(client, ckey.etype, requested);
         let at = usize::from(method.first().is_some_and(|p| p.padata_type == pa::FX_FAST));
         for (i, p) in info.into_iter().enumerate() {
             method.insert(at + i, p);
@@ -980,7 +975,7 @@ fn preauth_required(
     client: &Principal,
     ckey: Option<&KeyEntry>,
     requested: &[i32],
-    armor: bool,
+    armor: Option<&ProtocolKey>,
     request_padata: Option<&[PaData]>,
 ) -> Error {
     Error::PreauthRequired {
@@ -995,9 +990,9 @@ fn preauth_required(
 fn attach_preauth_hint(
     store: &dyn PrincipalRead,
     client: &Principal,
-    ckey: &KeyEntry,
+    ckey: Option<&KeyEntry>,
     requested: &[i32],
-    armor: bool,
+    armor: Option<&ProtocolKey>,
     e: Error,
     request_padata: Option<&[PaData]>,
 ) -> Error {
@@ -1013,7 +1008,7 @@ fn attach_preauth_hint(
             e_data: Some(preauth_hint_edata(
                 store,
                 client,
-                Some(ckey),
+                ckey,
                 requested,
                 armor,
                 request_padata,

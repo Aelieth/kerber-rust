@@ -99,10 +99,12 @@ pub struct PreauthRock<'a> {
     pub client: &'a Principal,
     /// AS-REQ padata. `None` when the request carried none.
     pub padata: Option<&'a [PaData]>,
-    /// Initial reply key.
-    pub ikey: &'a ProtocolKey,
-    /// Selected encryption type.
-    pub etype: EncryptionType,
+    /// Initial reply key; `None` for a client with no usable key (MIT `client_keyblock` is NULL).
+    pub ikey: Option<&'a ProtocolKey>,
+    /// Selected encryption type; `None` with no client key.
+    pub etype: Option<EncryptionType>,
+    /// The FAST armor key; `None` outside FAST (MIT `fast_armor`).
+    pub armor_key: Option<&'a ProtocolKey>,
     /// Encoded AS-REQ.
     pub as_req_der: &'a [u8],
     /// Encoded request body.
@@ -144,6 +146,18 @@ pub trait KdcPreauth: Send + Sync {
             padata: self.advertise(store, client, armor, requested),
             cookie: Vec::new(),
         }
+    }
+    /// [`Self::edata`] with the FAST armor key in place of its presence. The default passes
+    /// `armor.is_some()` through, so a module that does not read the key needs no change.
+    fn edata_with_armor(
+        &self,
+        store: &dyn PrincipalRead,
+        client: &Principal,
+        armor: Option<&ProtocolKey>,
+        requested: &[i32],
+        ikey: Option<&ProtocolKey>,
+    ) -> PreauthHint {
+        self.edata(store, client, armor.is_some(), requested, ikey)
     }
     /// MIT `PA_HARDWARE` (`kdcpreauth_plugin.h`). FAST is still advertised
     /// under `hw_only`.
@@ -195,6 +209,7 @@ impl KdcPreauth for FastMod {
             padata: _padata,
             ikey: _ikey,
             etype: _etype,
+            armor_key: _armor_key,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,
@@ -244,10 +259,24 @@ impl KdcPreauth for PkinitMod {
             padata,
             ikey: _ikey,
             etype,
+            armor_key: _armor_key,
             as_req_der,
             body_der,
             cname,
         } = *rock;
+        let Some(etype) = etype else {
+            // Residue (a2-as.md ORDER AS (1)): MIT issues a PKINIT reply to a keyless client. The
+            // PKINIT key derivation takes the selected etype, which only a client key supplies
+            // here, so a keyless PKINIT request keeps CANT_FIND_CLIENT_KEY.
+            return if crate::preauth::find_pa(padata, pa::PK_AS_REQ).is_some() {
+                Err(crate::preauth::proto(
+                    krb5_types::err::ETYPE_NOSUPP,
+                    status::CANT_FIND_CLIENT_KEY,
+                ))
+            } else {
+                Ok(None)
+            };
+        };
         let done = process_pkinit(
             store,
             padata,
@@ -304,10 +333,25 @@ impl KdcPreauth for SpakeMod {
             padata,
             ikey,
             etype: _etype,
+            armor_key: _armor_key,
             as_req_der: _as_req_der,
             body_der,
             cname: _cname,
         } = *rock;
+        let Some(ikey) = ikey else {
+            // MIT `send_challenge` (`spake_kdc.c:228-232`): no client keyblock is KRB5KDC_ERR_ETYPE_NOSUPP.
+            // MIT `verify_response` (`spake_kdc.c:380-384`): the same for a response.
+            return if store.policy().spake_kdc().is_ok()
+                && crate::preauth::find_pa(padata, pa::SPAKE).is_some()
+            {
+                Err(crate::preauth::proto(
+                    krb5_types::err::ETYPE_NOSUPP,
+                    status::PREAUTH_FAILED,
+                ))
+            } else {
+                Ok(None)
+            };
+        };
         Ok(
             process_spake(store, client, padata, ikey, body_der)?.map(|step| match step {
                 SpakeStep::Challenge(e_data) => PreauthAction::Challenge(e_data),
@@ -353,6 +397,7 @@ impl KdcPreauth for EncTsMod {
             padata,
             ikey: _ikey,
             etype: _etype,
+            armor_key: _armor_key,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,
@@ -439,6 +484,7 @@ impl KdcPreauth for EncChallengeMod {
             padata: _padata,
             ikey: _ikey,
             etype: _etype,
+            armor_key: _armor_key,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,
@@ -663,14 +709,15 @@ fn startup_module_loaded(relations: &krb5_config::PluginRelations, name: &str) -
 }
 
 /// METHOD-DATA modules after the leading empty PA-FX-FAST, and the cookie state they keep.
-/// `ikey` is the client's reply key, when one was selected.
+/// `armor` is the FAST armor key, when the request is FAST-tunneled. `ikey` is the client's
+/// reply key, when one was selected.
 /// MIT `get_preauth_hint_list` (`kdc_preauth.c:999-1006`): the empty PA-FX-FAST and the
 /// etype info come first, then the module hints.
 /// MIT `kdc_fast_set_cookie` (`fast_util.c:631-651`): the first state set for a padata type is the one kept.
 pub fn advertise_preauth(
     store: &dyn PrincipalRead,
     client: &Principal,
-    armor: bool,
+    armor: Option<&ProtocolKey>,
     requested: &[i32],
     ikey: Option<&ProtocolKey>,
 ) -> PreauthHint {
@@ -689,7 +736,7 @@ pub fn advertise_preauth(
         if hw_only && !m.hardware() {
             continue;
         }
-        let hint = m.edata(store, client, armor, requested, ikey);
+        let hint = m.edata_with_armor(store, client, armor, requested, ikey);
         out.padata.extend(hint.padata);
         for c in hint.cookie {
             if !out.cookie.iter().any(|p| p.padata_type == c.padata_type) {
@@ -730,6 +777,7 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
         padata,
         ikey,
         etype,
+        armor_key,
         as_req_der,
         body_der,
         cname,
@@ -741,13 +789,14 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
             padata,
             ikey,
             etype,
+            armor_key,
             as_req_der,
             body_der,
             cname,
         }) {
             Ok(Some(a)) => return Ok(Some(a)),
             Ok(None) => {}
-            Err(e) => return Err(filter_preauth_error(e)),
+            Err(e) => return Err(filter_preauth_error(m.name(), e)),
         }
     }
     Ok(None)
@@ -762,8 +811,8 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
 /// MIT `finish_preauth` (`do_as_req.c:442-442`): whatever the code, the status word
 /// is the `PREAUTH_FAILED` it sets for every module failure, so the e_text is too.
 /// FAST errors never pass here (`FastMod::process_as` is a no-op, `kdc_find_fast` is not a
-/// module in MIT either).
-pub(crate) fn filter_preauth_error(e: Error) -> Error {
+/// module in MIT either). `module` is the failing module's name, which the log detail carries.
+pub(crate) fn filter_preauth_error(module: &str, e: Error) -> Error {
     use krb5_types::err;
     const PASS_THROUGH: &[i32] = &[
         err::BAD_INTEGRITY,
@@ -816,12 +865,13 @@ pub(crate) fn filter_preauth_error(e: Error) -> Error {
             // MIT `finish_verify_padata` (`kdc_preauth.c:1224-1226`): syslogs "preauth (%s)
             // verify failure: %s".
             let why = text.filter(|t| t != status::PREAUTH_FAILED);
+            let head = format!("preauth ({module}) verify failure");
             let detail = match (why, detail, wire == code) {
                 (None, d, true) => d,
-                (Some(w), Some(d), _) => Some(format!("preauth verify failure: {w} ({code}): {d}")),
-                (Some(w), None, _) => Some(format!("preauth verify failure: {w} ({code})")),
-                (None, Some(d), false) => Some(format!("preauth verify failure ({code}): {d}")),
-                (None, None, false) => Some(format!("preauth verify failure ({code})")),
+                (Some(w), Some(d), _) => Some(format!("{head}: {w} ({code}): {d}")),
+                (Some(w), None, _) => Some(format!("{head}: {w} ({code})")),
+                (None, Some(d), false) => Some(format!("{head} ({code}): {d}")),
+                (None, None, false) => Some(format!("{head} ({code})")),
             };
             Error::Protocol {
                 code: wire,
@@ -834,7 +884,7 @@ pub(crate) fn filter_preauth_error(e: Error) -> Error {
             code: err::PREAUTH_FAILED,
             text: Some(status::PREAUTH_FAILED.to_owned()),
             e_data: None,
-            detail: Some(format!("preauth verify failure: {other}")),
+            detail: Some(format!("preauth ({module}) verify failure: {other}")),
         },
     }
 }
@@ -2073,6 +2123,39 @@ mod tests {
         )
         .expect("no module allows");
         assert_eq!(end, start_end);
+    }
+
+    #[test]
+    fn filter_preauth_error_names_the_module() {
+        // MIT `finish_verify_padata` (`kdc_preauth.c:1224-1226`): the module's name is in the log line.
+        // A code off the pass-through list is rewritten to 24, and its detail carries the name.
+        match filter_preauth_error(
+            "pkinit",
+            Error::Protocol {
+                code: krb5_types::err::GENERIC,
+                text: None,
+                e_data: None,
+                detail: Some("boom".to_owned()),
+            },
+        ) {
+            Error::Protocol { code, detail, .. } => {
+                assert_eq!(code, krb5_types::err::PREAUTH_FAILED);
+                assert_eq!(
+                    detail.as_deref(),
+                    Some("preauth (pkinit) verify failure (60): boom")
+                );
+            }
+            other => panic!("expected a protocol error, got {other:?}"),
+        }
+        match filter_preauth_error("spake", Error::Rng) {
+            Error::Protocol { detail, .. } => assert!(
+                detail
+                    .as_deref()
+                    .is_some_and(|d| d.starts_with("preauth (spake) verify failure: ")),
+                "{detail:?}"
+            ),
+            other => panic!("expected a protocol error, got {other:?}"),
+        }
     }
 
     #[test]

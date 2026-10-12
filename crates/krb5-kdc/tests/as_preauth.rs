@@ -1158,6 +1158,10 @@ fn as_server_key_only_non_permitted_is_finding_server_key() {
     assert_finding_server_key(krb5_kdc::issue_as(&store, &req));
 }
 
+/// MIT `select_client_key` (`do_as_req.c:103-131`): an etype held only at a lower kvno selects no
+/// client key, so the request is keyless.
+/// MIT `enc_ts_verify` (`kdc_preauth_encts.c:115-116`): the miss is `KRB5_KDB_NO_MATCHING_KEY`,
+/// which becomes 24 with the preauth hints. Preauth runs before the 14 of `CANT_FIND_CLIENT_KEY`.
 #[test]
 fn as_client_key_is_chosen_at_the_highest_kvno_only() {
     krb5_config::isolate_test_krb5();
@@ -1195,15 +1199,18 @@ fn as_client_key_is_chosen_at_the_highest_kvno_only() {
     )
     .unwrap();
     match krb5_kdc::issue_as(&store, &req) {
-        Err(krb5_kdc::Error::Protocol { code, text, .. }) => {
+        Err(krb5_kdc::Error::Protocol {
+            code, text, e_data, ..
+        }) => {
             assert_eq!(
                 code,
-                err::ETYPE_NOSUPP,
-                "KDC_ERR_ETYPE_NOSUPP, got {text:?}"
+                err::PREAUTH_FAILED,
+                "KDC_ERR_PREAUTH_FAILED, got {text:?}"
             );
-            assert_eq!(text.as_deref(), Some("CANT_FIND_CLIENT_KEY"));
+            assert_eq!(text.as_deref(), Some("PREAUTH_FAILED"));
+            assert!(e_data.is_some(), "the 24 carries the preauth hints");
         }
-        Err(other) => panic!("expected 14 CANT_FIND_CLIENT_KEY, got {other:?}"),
+        Err(other) => panic!("expected 24 PREAUTH_FAILED, got {other:?}"),
         Ok(_) => panic!("an etype present only at an older kvno must not select that key"),
     }
 }
@@ -1522,6 +1529,7 @@ impl krb5_kdc::KdcPreauth for FailingModule {
             padata,
             ikey: _ikey,
             etype: _etype,
+            armor_key: _armor_key,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,
@@ -1797,6 +1805,7 @@ impl KdcPreauth for DiscardMod {
             padata,
             ikey: _ikey,
             etype: _etype,
+            armor_key: _armor_key,
             as_req_der: _as_req_der,
             body_der: _body_der,
             cname: _cname,
