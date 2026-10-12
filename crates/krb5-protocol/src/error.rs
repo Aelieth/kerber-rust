@@ -66,6 +66,12 @@ pub enum Error {
     /// MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et:254-254`): the code and text, which `krb5_k_decrypt` returns.
     #[error("Bad encryption type")]
     BadEnctype,
+    /// The KDB keytab has no key to give for the ticket: the server's first permitted key at the
+    /// ticket's kvno is not of the ticket's enctype, or no key at it is of a permitted enctype.
+    /// MIT `KRB5_KDB_NO_PERMITTED_KEY` (`lib/krb5/error_tables/kdb5_err.et:72-72`): the code and text.
+    /// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:171-178`): returns it for a ticket whose enctype is not similar to the key's, and `keytab_fetch_error` passes it on.
+    #[error("No matching key in entry having a permitted enctype")]
+    KdbNoPermittedKey,
     /// A checksum type the library does not implement.
     /// MIT `KRB5_PROG_SUMTYPE_NOSUPP` (`krb5_err.et:207-207`): the code and text, which `read_krbsafe` returns for a KRB-SAFE's.
     #[error("Program lacks support for checksum type")]
@@ -123,6 +129,7 @@ impl Clone for Error {
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
             Self::BadEnctype => Self::BadEnctype,
+            Self::KdbNoPermittedKey => Self::KdbNoPermittedKey,
             Self::ProgSumtypeNosupp => Self::ProgSumtypeNosupp,
             Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
             Self::PreauthFailed(e) => Self::PreauthFailed(e.clone()),

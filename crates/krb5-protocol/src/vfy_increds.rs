@@ -160,6 +160,7 @@ fn get_vfy_cred(
         kvno: None,
         expected_server: Some(name),
         expected_realm: Some(realm_s.as_str()),
+        get_entry: None,
         skew: DEFAULT_SKEW,
         remote_addr: None,
         now: None,

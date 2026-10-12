@@ -1,7 +1,7 @@
 //! Admin whole-flow tests.
-//! The kpasswd acceptor pins the changepw service (`schpw.c` / MIT `krb5_rd_req` on the
-//! kadmin/changepw cred): a ticket whose sname is anything else (here `host/x`) is refused
-//! even when it decrypts under the changepw key, before the KRB-PRIV is read.
+//! The kpasswd acceptor names the changepw service to `krb5_rd_req` with the KDB keytab: the ticket's
+//! cleartext server is not looked at, only the changepw key at the ticket's kvno and enctype, and a
+//! ticket that decrypts under it is the changepw service's.
 //! kpasswd stamps `kadmind@REALM` as the modifier.
 //! MIT `main` (`ovsec_kadmd.c:446-446`): the global handle is `kadm5_init(…, "kadmind", …)`.
 //! MIT `dispatch` (`schpw.c:407-407`): the changepw dispatcher uses that global handle.
@@ -25,8 +25,14 @@ use krb5_protocol::{
 use krb5_testkit::scratch_dir;
 use krb5_types::{ChangePasswdData, PrincipalName};
 
+/// A ticket that decrypts under the changepw key is the changepw service's whatever server its
+/// cleartext names, and is served.
+/// MIT `try_one_princ` (`rd_req_dec.c:325-347`): the named server's keytab entry is asked for, and its key decrypts the ticket.
+/// MIT `try_one_entry` (`rd_req_dec.c:315-317`): the keytab principal becomes the ticket's server, so garbled cleartext (here `host/x`) is never compared.
 #[test]
-fn kpasswd_host_ticket_under_changepw_key_is_refused() {
+fn kpasswd_ticket_with_a_forged_cleartext_server_is_served_under_the_changepw_key() {
+    use krb5_protocol::unwrap_krb_priv_ex;
+
     krb5_config::isolate_test_krb5();
     let (store, acl) = bootstrap_documented().expect("bootstrap");
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -71,9 +77,10 @@ fn kpasswd_host_ticket_under_changepw_key_is_refused() {
         &user,
     )
     .expect("AP-REQ");
-    // Forge only the cleartext sname: the ticket still decrypts under the
-    // changepw key, but it now claims to be host/x, not kadmin/changepw.
+    // Forge only the cleartext server: the ticket still decrypts under the changepw key, but it
+    // now claims to be host/x in another realm.
     ap.ticket.sname = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "x.kerber.test"]);
+    ap.ticket.realm = krb5_types::ascii("ELSEWHERE.TEST");
     let ap_der = encode(&ap).expect("encode ap");
 
     let priv_msg =
@@ -83,13 +90,21 @@ fn kpasswd_host_ticket_under_changepw_key_is_refused() {
     let shared = shared_dump(store);
     let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
         .expect("handler returns a datagram");
-    // A refusal before processing is a framed KRB-ERROR: AP-REP length 0, not a
-    // real AP-REP for the host/x ticket.
     let ap_len = u16::from_be_bytes([rep[4], rep[5]]);
-    assert_eq!(
-        ap_len, 0,
-        "host/x ticket under the changepw key must be refused"
+    assert!(
+        ap_len > 0,
+        "the ticket is the changepw service's: an AP-REP"
     );
+    let (_, priv_rep) = parse_kpasswd_rep(&rep).expect("reply");
+    let user_data = unwrap_krb_priv_ex(
+        &as_out.session_key,
+        &priv_rep,
+        &ReplayCache::new(),
+        false,
+        false,
+    )
+    .expect("KRB-PRIV");
+    assert_eq!(&user_data[..2], &[0, 0], "the change is made");
 }
 
 #[test]
@@ -1891,6 +1906,83 @@ fn kpasswd_refuses_a_request_krb_priv_out_of_sequence() {
             assert_eq!(kvno_after, kvno_before, "case {n}: the password stayed");
         }
     }
+}
+
+/// A ticket sealed in any key of `kadmin/changepw` but its first is refused.
+/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:152-180`): the KDB keytab gives a service principal's first permitted key at the kvno, whatever the ticket's enctype, and a ticket whose enctype is not similar to it finds `KRB5_KDB_NO_PERMITTED_KEY`.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:128-137`): the refusal is AUTHERROR "Failed reading application request".
+#[test]
+fn kpasswd_ticket_sealed_in_a_later_changepw_key_is_refused() {
+    use krb5_crypto::{KeyUsage, encrypt};
+    use krb5_kdc::testrealm::{TEST_ADMIN, TEST_ADMIN_PASSWORD, TEST_USER_PASSWORD};
+    use krb5_kdc::{bootstrap_realm_with_kdc_conf, decrypt_ticket_part};
+    use krb5_types::{OctetString, ku};
+
+    krb5_config::isolate_test_krb5();
+    let kdc = krb5_config::KdcConf::parse(
+        r"
+[realms]
+    KERBER.TEST = {
+        supported_enctypes = aes256-cts-hmac-sha384-192:normal aes128-cts-hmac-sha256-128:normal aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal
+    }
+",
+    )
+    .unwrap();
+    let (store, acl) = bootstrap_realm_with_kdc_conf(
+        TEST_REALM,
+        TEST_USER,
+        TEST_USER_PASSWORD,
+        TEST_ADMIN,
+        TEST_ADMIN_PASSWORD,
+        Some(&kdc),
+    )
+    .unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let user_key = store
+        .get_name(&user)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let cpw = store.get_name(&kadmin_changepw()).unwrap().clone();
+    let first = cpw.first_current_key().unwrap().clone();
+    assert_eq!(first.etype.to_iana(), 20);
+    let as_out = changepw_as_ticket(&store, &user, &user_key, 1313);
+    let shared = shared_dump(store);
+    let mut tried = 0;
+    for later in cpw.keys.iter().filter(|k| k.etype != first.etype) {
+        let mut ap = build_ap_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        // The same ticket, sealed in this key instead of the first.
+        let part = decrypt_ticket_part(&first.key, &ap.ticket).unwrap();
+        let usage = KeyUsage::new(ku::TICKET).unwrap();
+        ap.ticket.enc_part.etype = later.etype.to_iana();
+        ap.ticket.enc_part.cipher =
+            OctetString::from(encrypt(&later.key, usage, &encode(&part).unwrap()).unwrap());
+        let priv_msg =
+            build_krb_priv_with_seq(&as_out.session_key, b"later-key-pass", None).unwrap();
+        let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+        let rep =
+            handle_kpasswd_rfc3244(&shared, &acl, &first.key, &ReplayCache::new(), &req).unwrap();
+        assert_eq!(
+            u16::from_be_bytes([rep[4], rep[5]]),
+            0,
+            "a ticket sealed in the {} key is refused",
+            later.etype.to_iana()
+        );
+        let err: krb5_types::KrbError = krb5_asn1::decode(&rep[6..]).unwrap();
+        let e_data = err.e_data.unwrap();
+        assert_eq!(&e_data.as_ref()[..2], &[0, 3]);
+        assert_eq!(&e_data.as_ref()[2..], b"Failed reading application request");
+        tried += 1;
+    }
+    assert_eq!(tried, 3);
 }
 
 #[test]

@@ -43,9 +43,10 @@ pub use kprop::{
     kpropd_send_ack, kpropd_server_name, kpropd_server_name_for, load_replica,
 };
 pub use listen::{
-    KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, dispatch_kadmind, encode_kadmind_req,
-    encode_kpasswd_req, handle_kpasswd_rfc3244, kpasswd_udp_exchange_to, kprop_recv, kprop_send,
-    parse_kpasswd_rep, serve_kpasswd_tcp, serve_kpasswd_udp,
+    ChangepwAccepted, ChangepwRefused, KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, changepw_accept,
+    dispatch_kadmind, encode_kadmind_req, encode_kpasswd_req, handle_kpasswd_rfc3244,
+    kpasswd_udp_exchange_to, kprop_recv, kprop_send, parse_kpasswd_rep, serve_kpasswd_tcp,
+    serve_kpasswd_udp,
 };
 
 /// Load a kadm5 ACL file. `None` is MIT `kadmin.local` full privs for `actor`.

@@ -514,6 +514,7 @@ impl GssContext {
             key_kvnos: expected_server.and(service_kvnos),
             key_principals: None,
             kvno: None,
+            get_entry: None,
             // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-632`): the authenticator time is checked against the context clock skew.
             // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): that skew is `[libdefaults] clockskew`, 300 seconds when unset.
             skew: krb5_config::load_krb5_conf()

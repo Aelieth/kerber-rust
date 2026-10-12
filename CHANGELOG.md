@@ -1486,6 +1486,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** kpasswd reads the AP-REQ as MIT does: the KDB's first permitted key of `kadmin/changepw`
+  at the ticket's kvno alone decrypts (a ticket in a later key is refused) and the cleartext server
+  is not compared.
 - **protocol.** With no server named, the acceptor walks its keys as MIT's `decrypt_try_server`:
   each key of the ticket's enctype whatever its kvno, then `iteration_error`'s NOKEY, NOT_US,
   BADKEYVER or BAD_INTEGRITY. Settled live.

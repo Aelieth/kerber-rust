@@ -226,6 +226,7 @@ fn ap_req_checksum_uses_declared_type() {
         kvno: None,
         expected_server: None,
         expected_realm: None,
+        get_entry: None,
         skew: krb5_protocol::DEFAULT_SKEW,
         remote_addr: None,
         now: None,

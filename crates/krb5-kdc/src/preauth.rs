@@ -24,7 +24,7 @@ use crate::der::take_der;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::status;
-use crate::store::{KeyLookup, Principal};
+use crate::store::{KtkdbError, Principal, ktkdb_get_entry};
 
 pub(crate) struct FastOk {
     pub(crate) armor_key: ProtocolKey,
@@ -188,30 +188,25 @@ fn verify_fast_req_checksum(
     Ok(())
 }
 
-/// MIT `krb5_ktkdb_get_entry` key pick.
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:152-178`): a local principal's first
-/// permitted key of the ticket kvno is picked whatever its enctype, and one that is not
-/// similar to the ticket enctype is `KRB5_KDB_NO_PERMITTED_KEY`.
+/// The armor TGT's key, as the KDB keytab gives it.
+/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): [`ktkdb_get_entry`] picks the key. A kvno the principal lacks is `KRB5_KT_KVNONOTFOUND`, which `keytab_fetch_error` makes BADKEYVER; any other refusal, `KRB5_KDB_NO_PERMITTED_KEY` included, is a generic failure.
 fn armor_ticket_key(
     store: &dyn PrincipalRead,
     p: &Principal,
     ticket: &krb5_types::Ticket,
 ) -> Result<ProtocolKey, Error> {
-    let kvno = ticket.enc_part.kvno.unwrap_or(0);
-    let tkt_etype = EncryptionType::from_iana(ticket.enc_part.etype)
-        .or_else(|_| EncryptionType::known(ticket.enc_part.etype))
-        .ok();
-    let xrealm = p.name.is_krbtgt() && !p.name.is_krbtgt_for(store.realm());
-    let search = if xrealm { tkt_etype } else { None };
-    match store.policy().find_enctype(p, search, kvno) {
-        Ok(k) => {
-            if !xrealm && tkt_etype.is_some_and(|e| e != k.etype) {
-                return Err(proto_fast(err::GENERIC, "FAST armor TGT"));
-            }
-            Ok(k.key.clone())
-        }
-        Err(KeyLookup::NoPermittedKey) => Err(proto_fast(err::GENERIC, "FAST armor TGT")),
-        Err(KeyLookup::NoMatchingKey) => Err(proto_fast(err::BADKEYVER, "FAST armor TGT")),
+    let policy = store.policy();
+    match ktkdb_get_entry(
+        Some(p),
+        &p.name,
+        store.realm(),
+        ticket.enc_part.kvno.unwrap_or(0),
+        ticket.enc_part.etype,
+        |e| policy.etype_permitted(e),
+    ) {
+        Ok(k) => Ok(k.key.clone()),
+        Err(KtkdbError::KvnoNotFound) => Err(proto_fast(err::BADKEYVER, "FAST armor TGT")),
+        Err(_) => Err(proto_fast(err::GENERIC, "FAST armor TGT")),
     }
 }
 

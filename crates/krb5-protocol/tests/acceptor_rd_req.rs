@@ -13,7 +13,8 @@ use krb5_kdc::testrealm::{
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
 use krb5_protocol::{
-    ApVerifyParams, DEFAULT_SKEW, ReplayCache, address_search, build_ap_req, verify_ap_req_ex,
+    ApVerifyParams, DEFAULT_SKEW, KeytabLookup, ReplayCache, address_search, build_ap_req,
+    verify_ap_req_ex,
 };
 use krb5_types::{
     ApReq, EncTicketPart, HostAddress, KerberosTime, PrincipalName, TransitedEncoding, err,
@@ -69,6 +70,7 @@ fn walk(keys: &[ProtocolKey], kvnos: &[u32]) -> ApVerifyParams<'static> {
         kvno: None,
         expected_server: None,
         expected_realm: None,
+        get_entry: None,
         skew: DEFAULT_SKEW,
         remote_addr: None,
         now: None,
@@ -196,6 +198,7 @@ fn rd_req_matching_kvno_verifies() {
         kvno: None,
         expected_server: None,
         expected_realm: None,
+        get_entry: None,
         skew: DEFAULT_SKEW,
         remote_addr: None,
         now: None,
@@ -216,6 +219,7 @@ fn rd_req_authenticator_skew_is_skew() {
         kvno: None,
         expected_server: None,
         expected_realm: None,
+        get_entry: None,
         skew: DEFAULT_SKEW,
         remote_addr: None,
         now: Some(far),
@@ -249,6 +253,7 @@ fn verify(
         kvno: None,
         expected_server: None,
         expected_realm: None,
+        get_entry: None,
         skew: DEFAULT_SKEW,
         remote_addr: None,
         now: None,
@@ -361,6 +366,7 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
         kvno: None,
         expected_server: None,
         expected_realm: None,
+        get_entry: None,
         skew: DEFAULT_SKEW,
         remote_addr: None,
         now: None,
@@ -426,6 +432,7 @@ fn pinned_name_wrong_kvno_is_badkeyver() {
         kvno: None,
         expected_server: Some(&server),
         expected_realm: Some(TEST_REALM),
+        get_entry: None,
         skew: DEFAULT_SKEW,
         remote_addr: None,
         now: None,
@@ -496,4 +503,109 @@ fn rd_req_authenticator_of_another_enctype_is_bad_enctype() {
         Err(krb5_protocol::Error::BadEnctype) => {}
         other => panic!("expected BAD_ENCTYPE, got {other:?}"),
     }
+}
+
+/// The parameters of an acceptor that names its server and looks the key up in a keytab by principal, as
+/// `krb5_rd_req` does with a server and the KDB keytab: `get_entry` is the lookup.
+fn named<'a>(
+    server: &'a PrincipalName,
+    get_entry: krb5_protocol::KeytabGetEntry<'a>,
+) -> ApVerifyParams<'a> {
+    ApVerifyParams {
+        keys: &[],
+        key_kvnos: None,
+        key_principals: None,
+        kvno: None,
+        expected_server: Some(server),
+        expected_realm: Some(TEST_REALM),
+        get_entry: Some(get_entry),
+        skew: DEFAULT_SKEW,
+        remote_addr: None,
+        now: None,
+    }
+}
+
+fn named_code(raw: &[u8], params: &ApVerifyParams<'_>) -> (i32, String) {
+    match verify_ap_req_ex(raw, params, &ReplayCache::new(), None) {
+        Err(krb5_protocol::Error::KrbError { code, text }) => (code, text.unwrap_or_default()),
+        other => panic!("expected a KRB-ERROR code, got {other:?}"),
+    }
+}
+
+/// A ticket that decrypts under the named server's keytab key is that server's, whatever server its
+/// cleartext names: the keytab principal replaces it.
+/// MIT `try_one_entry` (`rd_req_dec.c:315-317`): the keytab principal becomes the ticket's server.
+/// MIT `try_one_princ` (`rd_req_dec.c:325-347`): never compares the cleartext one.
+#[test]
+fn rd_req_with_a_named_server_takes_the_keytab_principal_for_the_tickets() {
+    let (raw, key, kvno) = host_ap_req();
+    let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+    let asked = std::cell::Cell::new((u32::MAX, i32::MAX));
+    let lookup = |k: u32, e: i32| {
+        asked.set((k, e));
+        Ok(key.clone())
+    };
+    let ok = verify_ap_req_ex(&raw, &named(&other, &lookup), &ReplayCache::new(), None)
+        .expect("the key decrypts it");
+    assert_eq!(
+        asked.get(),
+        (kvno, 18),
+        "the lookup is at the ticket's kvno and enctype"
+    );
+    assert_eq!(
+        ok.sname, other,
+        "the keytab principal is the ticket's server"
+    );
+    assert_eq!(ok.srealm.as_bytes(), TEST_REALM.as_bytes());
+    // With bare keys no principal is known, so the ticket's own server must be the named one.
+    let mut by_key = ApVerifyParams::single_key(&key);
+    by_key.expected_server = Some(&other);
+    by_key.expected_realm = Some(TEST_REALM);
+    assert_eq!(
+        named_code(&raw, &by_key).0,
+        err::NOT_US,
+        "a key slice keeps its pin on the ticket's server"
+    );
+}
+
+/// MIT `keytab_fetch_error` (`rd_req_dec.c:118-148`): an explicit server the keytab does not hold is
+/// NOKEY; a kvno it does not hold is BADKEYVER when the named server is the ticket's and NOT_US when
+/// not; any other code passes through.
+#[test]
+fn rd_req_with_a_named_server_maps_the_keytab_codes_as_keytab_fetch_error() {
+    let (raw, _, _) = host_ap_req();
+    let host = documented_host();
+    let elsewhere =
+        PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "elsewhere.kerber.test"]);
+    let no_entry = |_: u32, _: i32| Err(KeytabLookup::NotFound);
+    assert_eq!(named_code(&raw, &named(&host, &no_entry)).0, err::NOKEY);
+    let no_kvno = |_: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
+    assert_eq!(named_code(&raw, &named(&host, &no_kvno)).0, err::BADKEYVER);
+    assert_eq!(
+        named_code(&raw, &named(&elsewhere, &no_kvno)).0,
+        err::NOT_US
+    );
+    let other = |_: u32, _: i32| Err(KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey));
+    assert!(matches!(
+        verify_ap_req_ex(&raw, &named(&host, &other), &ReplayCache::new(), None),
+        Err(krb5_protocol::Error::KdbNoPermittedKey)
+    ));
+}
+
+/// MIT `integrity_error` (`rd_req_dec.c:162-181`): a keytab key that does not decrypt the ticket is BAD_INTEGRITY when the named server is the ticket's, NOT_US when not.
+#[test]
+fn rd_req_with_a_named_server_and_a_wrong_key_is_bad_integrity_or_not_us() {
+    let (raw, _, _) = host_ap_req();
+    let wrong = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
+    let lookup = |_: u32, _: i32| Ok(wrong.clone());
+    let host = documented_host();
+    assert!(matches!(
+        verify_ap_req_ex(&raw, &named(&host, &lookup), &ReplayCache::new(), None),
+        Err(krb5_protocol::Error::Crypto(_))
+    ));
+    let elsewhere =
+        PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "elsewhere.kerber.test"]);
+    let (code, text) = named_code(&raw, &named(&elsewhere, &lookup));
+    assert_eq!(code, err::NOT_US);
+    assert!(text.starts_with("Cannot decrypt ticket for "), "{text}");
 }

@@ -413,6 +413,7 @@ fn recvauth_with(
         kvno: None,
         expected_server: verify_server,
         expected_realm: verify_realm,
+        get_entry: None,
         skew: 300,
         remote_addr: None,
         now: None,

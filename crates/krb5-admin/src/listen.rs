@@ -11,11 +11,11 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::ProtocolKey;
-use krb5_kdc::SharedDump as SharedStore;
+use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_kdc::{KtkdbError, Principal, SharedDump as SharedStore};
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, DEFAULT_SKEW, ReplayCache,
-    local_host_address, permitted_enctypes_kdc, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyOk, ApVerifyParams, DEFAULT_SKEW,
+    KeytabLookup, ReplayCache, local_host_address, permitted_enctypes_kdc, verify_ap_req_ex,
 };
 use krb5_types::{
     ChangePasswdData, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, err,
@@ -354,29 +354,78 @@ const UNK_PRINC_PRIV: &str =
     "Password not changed.\nPrincipal does not exist while trying to change password.\n";
 const DECODE_FAIL: &str = "Failed decoding ChangePasswdData";
 
-/// MIT `krb5_rd_req` walks the changepw keytab. Ticket etype is
-/// `first_current_key` (profile order); `best_key` follows
-/// [`krb5_crypto::EncryptionType::preferred`] (sha1-first) and is not enough alone.
-fn changepw_verify_keys(
-    store: &krb5_kdc::PrincipalStore,
-    extra: &ProtocolKey,
-) -> (Vec<ProtocolKey>, Vec<u32>) {
-    let mut keys = Vec::new();
-    let mut kvnos = Vec::new();
-    if let Some(p) = store.get_name(&krb5_kdc::principals::kadmin_changepw()) {
-        for k in &p.keys {
-            keys.push(k.key.clone());
-            kvnos.push(k.kvno);
-        }
-    }
-    if !keys
-        .iter()
-        .any(|k| k.etype() == extra.etype() && k.as_bytes() == extra.as_bytes())
-    {
-        keys.push(extra.clone());
-        kvnos.push(0);
-    }
-    (keys, kvnos)
+/// What `process_chpw_request` holds once the AP-REQ is accepted: the request as verified, the auth
+/// context it leaves and the AP-REP that answers it.
+pub struct ChangepwAccepted {
+    /// The verified AP-REQ (the ticket's server is `kadmin/changepw`, as the KDB keytab names it).
+    pub ok: ApVerifyOk,
+    /// The context after it: `DO_SEQUENCE` only, no address set.
+    pub ac: AcceptorAuthContext,
+    /// The AP-REP, DER.
+    pub ap_rep: Vec<u8>,
+}
+
+/// Which of `process_chpw_request`'s two AUTHERROR answers a refused AP-REQ gets.
+#[derive(Debug)]
+pub enum ChangepwRefused {
+    /// `krb5_rd_req` failed: "Failed reading application request".
+    Read(krb5_protocol::Error),
+    /// `krb5_mk_rep` failed: "Failed replying to application request".
+    Reply(krb5_protocol::Error),
+}
+
+/// The AP-REQ half of kpasswd's request: MIT's `krb5_rd_req` for `kadmin/changepw` in the realm,
+/// its key looked up in the KDB as the KDB keytab does, then the AP-REP.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:110-113`): the auth context does sequence numbers only.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:128-137`): `krb5_rd_req` names `kadmin/changepw` against the `KDB:` keytab, and a refusal is AUTHERROR "Failed reading application request".
+/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the KDB keytab gives the principal's first permitted key at the ticket's kvno and refuses another enctype.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:140-146`): `krb5_mk_rep` follows.
+///
+/// # Errors
+///
+/// [`ChangepwRefused`], with the error that refused the request.
+pub fn changepw_accept(
+    ap_req: &[u8],
+    changepw: Option<&Principal>,
+    realm: &str,
+    permitted: &[EncryptionType],
+    replay: &ReplayCache,
+) -> Result<ChangepwAccepted, ChangepwRefused> {
+    let server = krb5_kdc::principals::kadmin_changepw();
+    let get_entry = |kvno: u32, etype: i32| {
+        krb5_kdc::ktkdb_get_entry(changepw, &server, realm, kvno, etype, |e| {
+            permitted.contains(&e)
+        })
+        .map(|entry| entry.key.clone())
+        .map_err(|e| match e {
+            KtkdbError::NotFound => KeytabLookup::NotFound,
+            KtkdbError::KvnoNotFound => KeytabLookup::KvnoNotFound,
+            KtkdbError::NoPermittedKey => {
+                KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey)
+            }
+            KtkdbError::BadEnctype => KeytabLookup::Other(krb5_protocol::Error::BadEnctype),
+        })
+    };
+    let params = ApVerifyParams {
+        keys: &[],
+        key_kvnos: None,
+        key_principals: None,
+        kvno: None,
+        expected_server: Some(&server),
+        expected_realm: Some(realm),
+        get_entry: Some(&get_entry),
+        skew: DEFAULT_SKEW,
+        remote_addr: None,
+        now: None,
+    };
+    let ok = verify_ap_req_ex(ap_req, &params, replay, None).map_err(ChangepwRefused::Read)?;
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, permitted).map_err(ChangepwRefused::Read)?;
+    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+    let ap_rep = ac
+        .mk_rep()
+        .and_then(|r| Ok(encode(&r)?))
+        .map_err(ChangepwRefused::Reply)?;
+    Ok(ChangepwAccepted { ok, ac, ap_rep })
 }
 
 /// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:195-200`): too short names the policy minimum.
@@ -501,7 +550,7 @@ security administrator."
 pub(crate) fn handle_kpasswd_from(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
-    service_key: &ProtocolKey,
+    _service_key: &ProtocolKey,
     replay: &ReplayCache,
     raw: &[u8],
     from: &str,
@@ -534,43 +583,41 @@ pub(crate) fn handle_kpasswd_from(
     }
     let ap_req = &raw[6..6 + ap_len];
     let priv_raw = &raw[6 + ap_len..];
-    let (store_realm, keys, kvnos) = {
+    let (store_realm, changepw) = {
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // The kadmin/changepw keys as the database holds them now, whoever changed them.
+        // The kadmin/changepw entry as the database holds it now, whoever changed it.
         g.reload_if_stale()?;
-        let (keys, kvnos) = changepw_verify_keys(&g, service_key);
-        (g.realm().to_owned(), keys, kvnos)
+        (
+            g.realm().to_owned(),
+            g.get_name(&krb5_kdc::principals::kadmin_changepw())
+                .cloned(),
+        )
     };
-    // MIT schpw.c / the changepw acceptor acquires the kadmin/changepw cred, so
-    // krb5_rd_req is pinned to that service: a ticket for any other principal
-    // (e.g. host/x) is refused even if it decrypts under a shared key.
-    let changepw = krb5_kdc::principals::kadmin_changepw();
-    let params = ApVerifyParams {
-        keys: &keys,
-        key_kvnos: Some(kvnos.as_slice()),
-        key_principals: None,
-        kvno: None,
-        expected_server: Some(&changepw),
-        expected_realm: Some(store_realm.as_str()),
-        skew: DEFAULT_SKEW,
-        remote_addr: None,
-        now: None,
-    };
-    // MIT `process_chpw_request` (`schpw.c:102-161`): the auth context does sequence numbers only, `krb5_rd_req` also refuses an enctype the server (on kadmind's KDC profile) does not permit, and the AP-REP is made before the request is decrypted.
-    let Ok(ok) = verify_ap_req_ex(ap_req, &params, replay, None) else {
+    // MIT `process_chpw_request` (`schpw.c:102-161`): the auth context does sequence numbers only, `krb5_rd_req` names `kadmin/changepw` against the KDB keytab and also refuses an enctype the server (on kadmind's KDC profile) does not permit, and the AP-REP is made before the request is decrypted.
+    let Ok(permitted) = permitted_enctypes_kdc() else {
         return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
     };
-    let Ok(mut ac) =
-        permitted_enctypes_kdc().and_then(|p| AcceptorAuthContext::from_ap_req(&ok, &p))
-    else {
-        return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
-    };
-    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
-    let Ok(ap_rep) = ac.mk_rep().and_then(|r| Ok(encode(&r)?)) else {
-        return kpasswd_chpwfail_error(&store_realm, 3, "Failed replying to application request");
-    };
+    let accepted =
+        match changepw_accept(ap_req, changepw.as_ref(), &store_realm, &permitted, replay) {
+            Ok(a) => a,
+            Err(ChangepwRefused::Read(_)) => {
+                return kpasswd_chpwfail_error(
+                    &store_realm,
+                    3,
+                    "Failed reading application request",
+                );
+            }
+            Err(ChangepwRefused::Reply(_)) => {
+                return kpasswd_chpwfail_error(
+                    &store_realm,
+                    3,
+                    "Failed replying to application request",
+                );
+            }
+        };
+    let ChangepwAccepted { ok, ac, ap_rep } = accepted;
     let mut reply = KpasswdReply {
         ac,
         ap_rep,

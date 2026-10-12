@@ -7,7 +7,9 @@ use krb5_protocol::{Keytab, KeytabEntry};
 use krb5_types::PrincipalName;
 
 use super::PrincipalStore;
-use super::flags::{KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PWCHANGE};
+use super::flags::{
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PWCHANGE,
+};
 use super::password::apply_keysalt_policy;
 use super::principal::{Principal, default_mod_actor, stamp_admin_tl};
 use crate::acl::{Acl, AdminOp};
@@ -44,6 +46,93 @@ pub enum KeyLookup {
     NoMatchingKey,
     /// `KRB5_KDB_NO_PERMITTED_KEY`.
     NoPermittedKey,
+}
+
+/// Why the KDB keytab found no key for a lookup.
+/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the code it returns.
+/// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:118-148`): takes `KRB5_KT_NOTFOUND` and `KRB5_KT_KVNONOTFOUND` as codes of their own and passes any other on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KtkdbError {
+    /// `KRB5_KT_NOTFOUND`: no such principal, or one that may not be a service
+    /// (`KRB5_KDB_DISALLOW_SVR`, `KRB5_KDB_DISALLOW_ALL_TIX`).
+    NotFound,
+    /// `KRB5_KT_KVNONOTFOUND`: the principal has no key at that kvno.
+    KvnoNotFound,
+    /// `KRB5_KDB_NO_PERMITTED_KEY`: the key found is not of the ticket's enctype, or every key at
+    /// the kvno is outside `permitted_enctypes`.
+    NoPermittedKey,
+    /// `KRB5_BAD_ENCTYPE`: the ticket's enctype or the key's is not one MIT implements.
+    BadEnctype,
+}
+
+/// The key the KDB keytab gives for a ticket's kvno and enctype.
+/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): for any principal but a cross-realm TGT the first permitted key at the kvno (the highest when it is 0), whatever the ticket's enctype, which must then be `krb5_c_enctype_compare`-similar to it; for a cross-realm TGT the first permitted key of the ticket's enctype. A principal that is not a service is not found.
+/// MIT `is_xrealm_tgt` (`lib/kdb/keytab.c:200-220`): `krbtgt` (a prefix of the word does) and a second component that is not the realm.
+///
+/// # Errors
+///
+/// [`KtkdbError`], as MIT's code names.
+pub fn ktkdb_get_entry<'p>(
+    principal: Option<&'p Principal>,
+    name: &PrincipalName,
+    realm: &str,
+    kvno: u32,
+    etype: i32,
+    permitted: impl Fn(EncryptionType) -> bool,
+) -> Result<&'p KeyEntry, KtkdbError> {
+    let xrealm_tgt = is_xrealm_tgt(name, realm);
+    let Some(p) = principal else {
+        return Err(KtkdbError::NotFound);
+    };
+    if p.attributes & (KDB_DISALLOW_SVR | KDB_DISALLOW_ALL_TIX) != 0 {
+        return Err(KtkdbError::NotFound);
+    }
+    let want = if xrealm_tgt {
+        match EncryptionType::known(etype) {
+            Ok(e) => Some(e),
+            Err(_) => return Err(KtkdbError::NoPermittedKey),
+        }
+    } else {
+        None
+    };
+    let key = match p.find_enctype(want, kvno, permitted) {
+        Ok(k) => k,
+        Err(KeyLookup::NoMatchingKey) => return Err(KtkdbError::KvnoNotFound),
+        Err(KeyLookup::NoPermittedKey) => return Err(KtkdbError::NoPermittedKey),
+    };
+    if etype > 0 {
+        match (enctype_class(etype), enctype_class(key.etype.to_iana())) {
+            (Some(a), Some(b)) if a == b => {}
+            (Some(_), Some(_)) => return Err(KtkdbError::NoPermittedKey),
+            _ => return Err(KtkdbError::BadEnctype),
+        }
+    }
+    Ok(key)
+}
+
+fn is_xrealm_tgt(name: &PrincipalName, realm: &str) -> bool {
+    let [c0, c1] = name.name_string.as_slice() else {
+        return false;
+    };
+    b"krbtgt".starts_with(c0.as_bytes()) && c1.as_bytes() != realm.as_bytes()
+}
+
+/// The class of enctypes `krb5_c_enctype_compare` calls similar, by enctype number: one encryption
+/// method and one string-to-key. `None` for an enctype MIT 1.22 does not implement.
+/// MIT `krb5_c_enctype_compare` (`lib/crypto/krb/enctype_util.c:73-86`): two enctypes are similar when they share an encryption method and a string-to-key.
+/// MIT `krb5int_enctypes_list` (`lib/crypto/krb/etypes.c:38-145`): des3-cbc-raw and des3-cbc-sha1 are alike, so are arcfour-hmac and its export form; each AES and Camellia enctype stands alone.
+fn enctype_class(etype: i32) -> Option<u8> {
+    match etype {
+        6 | 16 => Some(1),
+        23 | 24 => Some(2),
+        17 => Some(3),
+        18 => Some(4),
+        19 => Some(5),
+        20 => Some(6),
+        25 => Some(7),
+        26 => Some(8),
+        _ => None,
+    }
 }
 
 impl KeyEntry {
