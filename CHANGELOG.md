@@ -2920,6 +2920,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** `rd-sweep kpasswd` writes the sweep's cases as kpasswd requests and `judge-explicit` answers
+  them with kadmind's acceptor; `rd-priv-oracle` has a `kpasswd` mode that makes MIT's acceptor calls.
 - **tool.** `rd-priv-oracle-gate` also breaks the AP-REQ, KRB-PRIV and KRB-SAFE themselves: 646
   cases, none apart from MIT.
 - **tool.** A decode sweep breaks every explicit field and SEQUENCE OF element of 41 messages nine

@@ -1,0 +1,394 @@
+//! `rd-sweep`, run as the gates run it. `cases` and `judge` keep what the decode sweep and
+//! `scripts/rd-priv-oracle-gate.sh` read; `kpasswd` writes the same cases as RFC 3244 frames and
+//! `judge-explicit` answers them with kadmind's kpasswd acceptor.
+//!
+//! The ciphertext of a case differs from run to run (a fresh confounder, the clock), so what is
+//! pinned is what does not: the ids and kinds in order (`data/rd-sweep-cases.ids`), the key line,
+//! the answers the Rust acceptor gives, and the bytes `judge` prints for them.
+
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::process::Output;
+
+use krb5_asn1::decode;
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
+use krb5_kdc::principals::kadmin_changepw;
+use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_types::{ApReq, ChangePasswdData, EncKrbPrivPart, KrbPriv, ku};
+
+/// The authenticator's subkey the cases carry (`SUBKEY` in `rd-sweep.rs`).
+const SUBKEY: [u8; 32] = [0x45; 32];
+/// The master password the test realm's dump is wrapped in.
+const MASTER_PASSWORD: &str = "rd-sweep-test-master";
+
+fn sweep(args: &[&str]) -> Output {
+    std::process::Command::new(env!("CARGO_BIN_EXE_rd-sweep"))
+        .args(args)
+        .output()
+        .expect("run rd-sweep")
+}
+
+fn ok_stdout(args: &[&str]) -> String {
+    let out = sweep(args);
+    assert!(
+        out.status.success(),
+        "rd-sweep {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8(out.stdout).expect("utf-8")
+}
+
+fn scratch(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    dir
+}
+
+fn unhex(h: &str) -> Vec<u8> {
+    (0..h.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&h[i..i + 2], 16).expect("hex"))
+        .collect()
+}
+
+/// The rows, one per line, each ended by a newline.
+fn lines_of(rows: impl IntoIterator<Item = String>) -> String {
+    let mut out = String::new();
+    for row in rows {
+        out.push_str(&row);
+        out.push('\n');
+    }
+    out
+}
+
+/// The `(id, Rust answer)` of each `PART` line of a judge's output.
+fn part_answers(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            if f.len() == 4 && f[0] == "PART" {
+                Some((f[1].to_owned(), f[3].strip_prefix("Rust ")?.to_owned()))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The `Rust` answers of `judge` against an empty MIT file: every case parts, and says what it answered.
+fn rust_answers(cases: &Path) -> Vec<(String, String)> {
+    let empty = cases.with_extension("none");
+    std::fs::write(&empty, "").expect("write");
+    let out = sweep(&[
+        "judge",
+        cases.to_str().expect("path"),
+        empty.to_str().expect("path"),
+    ]);
+    part_answers(&String::from_utf8(out.stdout).expect("utf-8"))
+}
+
+/// `cases` is the decode sweep's: the same 646 ids and kinds in the same order, the service key line,
+/// and for each case the fields the oracle reads.
+#[test]
+fn cases_keep_the_decode_sweeps_ids_kinds_and_key_line() {
+    let text = ok_stdout(&["cases"]);
+    let mut lines = text.lines();
+    assert_eq!(
+        lines.next(),
+        Some(
+            "#key 18 1 4343434343434343434343434343434343434343434343434343434343434343 host/oracle.kerber.test@KERBER.TEST"
+        )
+    );
+    let mut ids = String::new();
+    for line in lines {
+        let f: Vec<&str> = line.split('\t').collect();
+        assert_eq!(f.len(), 4, "{line}");
+        assert!(matches!(f[1], "req" | "priv" | "safe"), "{line}");
+        assert_eq!((f[3] == "-"), f[1] == "req", "{line}");
+        ids.push_str(f[0]);
+        ids.push('\t');
+        ids.push_str(f[1]);
+        ids.push('\n');
+    }
+    assert_eq!(ids, include_str!("data/rd-sweep-cases.ids"));
+    assert_eq!(ids.lines().count(), 646);
+}
+
+/// `judge` prints a `SAME` or `PART` line for every case and the count, and exits 1 when any parts.
+/// The Rust acceptor accepts 69 of the 646 cases, the pristine three among them, as MIT does
+/// (`scripts/rd-priv-oracle-gate.sh`).
+#[test]
+fn judge_prints_same_and_part_lines_and_exits_one_on_a_part() {
+    let dir = scratch("rd-sweep-judge");
+    let cases = dir.join("cases.tsv");
+    std::fs::write(&cases, ok_stdout(&["cases"])).expect("write");
+    let answers = rust_answers(&cases);
+    assert_eq!(answers.len(), 646);
+    let accepts = answers.iter().filter(|(_, a)| a == "0").count();
+    assert_eq!(accepts, 69, "accepted cases");
+    for pristine in ["ap-req/pristine", "krb-priv/pristine", "krb-safe/pristine"] {
+        assert!(
+            answers.contains(&(pristine.to_owned(), "0".to_owned())),
+            "{pristine}"
+        );
+    }
+    let mit = dir.join("mit.tsv");
+    let rows = lines_of(answers.iter().map(|(id, a)| format!("{id}\t{a}")));
+    std::fs::write(&mit, &rows).expect("write");
+    let (c, m) = (cases.to_str().expect("path"), mit.to_str().expect("path"));
+    let out = sweep(&["judge", c, m]);
+    assert_eq!(out.status.code(), Some(0));
+    let same = lines_of(answers.iter().map(|(id, a)| format!("SAME\t{id}\t{a}")));
+    assert_eq!(
+        String::from_utf8(out.stdout).expect("utf-8"),
+        format!("{same}0 of 646 cases part from MIT\n")
+    );
+    // One answer MIT gives otherwise.
+    std::fs::write(
+        &mit,
+        rows.replacen("ap-req/pristine\t0", "ap-req/pristine\tkrb5:99", 1),
+    )
+    .expect("write");
+    let out = sweep(&["judge", c, m]);
+    assert_eq!(out.status.code(), Some(1));
+    let text = String::from_utf8(out.stdout).expect("utf-8");
+    assert_eq!(text.lines().filter(|l| l.starts_with("PART")).count(), 1);
+    assert!(
+        text.contains("PART\tap-req/pristine\tMIT krb5:99\tRust 0\n"),
+        "{text}"
+    );
+    assert!(text.ends_with("1 of 646 cases part from MIT\n"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A keytab of `kadmin/changepw` with these keys, in this order, at kvno 7, and the realm's name.
+fn keytab_with(dir: &Path, keys: &[EncryptionType]) -> PathBuf {
+    let mut kt: Option<krb5_protocol::Keytab> = None;
+    for &e in keys {
+        let key = krb5_kdc::random_key(e).expect("key");
+        let one =
+            krb5_protocol::Keytab::single(krb5_types::ascii(TEST_REALM), kadmin_changepw(), 7, key);
+        match kt.as_mut() {
+            Some(k) => k.entries.extend(one.entries),
+            None => kt = Some(one),
+        }
+    }
+    let path = dir.join("cpw.keytab");
+    kt.expect("a key").write_file(&path).expect("write keytab");
+    path
+}
+
+fn frames(args: &[&str]) -> Vec<(String, Vec<u8>)> {
+    ok_stdout(args)
+        .lines()
+        .map(|l| {
+            let (id, hex) = l.split_once('\t').expect("id TAB hex");
+            (id.to_owned(), unhex(hex))
+        })
+        .collect()
+}
+
+/// The AP-REQ and the KRB-PRIV of a frame, its version checked: `[plen][vno][aplen][AP-REQ][KRB-PRIV]`.
+fn split_frame(f: &[u8], vno: u16) -> (ApReq, KrbPriv) {
+    assert_eq!(
+        usize::from(u16::from_be_bytes([f[0], f[1]])),
+        f.len(),
+        "plen"
+    );
+    assert_eq!(u16::from_be_bytes([f[2], f[3]]), vno, "version");
+    let aplen = usize::from(u16::from_be_bytes([f[4], f[5]]));
+    (
+        decode(&f[6..6 + aplen]).expect("AP-REQ"),
+        decode(&f[6 + aplen..]).expect("KRB-PRIV"),
+    )
+}
+
+fn priv_part(p: &KrbPriv) -> EncKrbPrivPart {
+    let subkey =
+        ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &SUBKEY).expect("key");
+    let plain = decrypt(
+        &subkey,
+        KeyUsage::new(ku::KRB_PRIV_ENC_PART).expect("usage"),
+        p.enc_part.cipher.as_ref(),
+    )
+    .expect("decrypt");
+    decode(&plain).expect("EncKrbPrivPart")
+}
+
+/// `kpasswd` writes the cases as kpasswd frames for the keytab's entry: a ticket for `kadmin/changepw`
+/// in that entry's enctype and kvno, the pristine request first, the receiver address when given.
+#[test]
+fn kpasswd_writes_the_cases_as_frames_for_a_keytab_entry() {
+    let dir = scratch("rd-sweep-kpasswd");
+    let kt = keytab_with(
+        &dir,
+        &[
+            EncryptionType::Aes256CtsHmacSha196,
+            EncryptionType::Aes128CtsHmacSha196,
+        ],
+    );
+    let kt = kt.to_str().expect("path");
+    let all = frames(&["kpasswd", kt, "ra4user", "raddr=10.1.2.3"]);
+    assert_eq!(all[0].0, "ap-req/pristine");
+    assert_eq!(all[1].0, "krb-priv/pristine");
+    assert_eq!(all[0].1, all[1].1, "the two pristine requests are one");
+    let ids: std::collections::HashSet<&String> = all.iter().map(|(i, _)| i).collect();
+    assert_eq!(ids.len(), all.len(), "the ids are distinct");
+    let (ap, priv_msg) = split_frame(&all[0].1, 1);
+    assert_eq!(ap.ticket.sname.unparse(), "kadmin/changepw");
+    assert_eq!(
+        (ap.ticket.enc_part.etype, ap.ticket.enc_part.kvno),
+        (18, Some(7))
+    );
+    let part = priv_part(&priv_msg);
+    assert_eq!(part.user_data.as_ref(), b"rd-sweep");
+    let r = part.r_address.expect("receiver address");
+    assert_eq!((r.addr_type, r.address.as_ref()), (2, &[10, 1, 2, 3][..]));
+    // No `raddr` leaves the KRB-PRIV without one; `entry=1` seals the ticket in the second key.
+    let (_, p) = split_frame(&frames(&["kpasswd", kt, "ra4user"])[0].1, 1);
+    assert!(priv_part(&p).r_address.is_none());
+    let (ap, _) = split_frame(&frames(&["kpasswd", kt, "ra4user", "entry=1"])[0].1, 1);
+    assert_eq!(
+        (ap.ticket.enc_part.etype, ap.ticket.enc_part.kvno),
+        (17, Some(7))
+    );
+    // An entry the keytab lacks, a bad address and an unknown option are refused.
+    for bad in [
+        &["entry=2"][..],
+        &["raddr=10.1.2"],
+        &["raddr=10.1.2.300"],
+        &["frobnicate"],
+    ] {
+        let mut args = vec!["kpasswd", kt, "ra4user"];
+        args.extend_from_slice(bad);
+        assert_eq!(sweep(&args).status.code(), Some(2), "{bad:?}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// With `setpw` the version is 0xff80, the user data a ChangePasswdData for the client, and the
+/// ChangePasswdData itself is broken in `setpw/*` cases, one of them naming no target.
+#[test]
+fn kpasswd_setpw_frames_carry_a_change_passwd_data() {
+    let dir = scratch("rd-sweep-setpw");
+    let kt = keytab_with(&dir, &[EncryptionType::Aes256CtsHmacSha196]);
+    let all = frames(&["kpasswd", kt.to_str().expect("path"), "ra4user", "setpw"]);
+    let (_, priv_msg) = split_frame(&all[0].1, 0xff80);
+    let cpd: ChangePasswdData =
+        decode(priv_part(&priv_msg).user_data.as_ref()).expect("ChangePasswdData");
+    assert_eq!(cpd.targname.unparse(), "ra4user");
+    assert_eq!(cpd.targrealm.as_bytes(), TEST_REALM.as_bytes());
+    assert!(all.iter().any(|(id, _)| id == "setpw/no-target"));
+    assert!(
+        all.iter()
+            .filter(|(id, _)| id.starts_with("setpw/"))
+            .count()
+            > 10
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `judge-explicit` runs each frame through kadmind's kpasswd acceptor over the realm of an MIT
+/// dump and names the answer `0`, `req` or `priv`; it parts from an MIT answer of another class.
+#[test]
+fn judge_explicit_answers_each_frame_with_the_kpasswd_acceptor() {
+    let dir = scratch("rd-sweep-explicit");
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let dump = dir.join("realm.dump");
+    std::fs::write(
+        &dump,
+        krb5_kdc::dump_store(&store, MASTER_PASSWORD.as_bytes()).expect("dump"),
+    )
+    .expect("write");
+    // The keytab `kadmin.local ktadd -norandkey kadmin/changepw` writes: every key, in the database's order.
+    let mut kt: Option<krb5_protocol::Keytab> = None;
+    for k in &store.get_name(&kadmin_changepw()).expect("changepw").keys {
+        let one = krb5_protocol::Keytab::single(
+            krb5_types::ascii(TEST_REALM),
+            kadmin_changepw(),
+            k.kvno,
+            k.key.clone(),
+        );
+        match kt.as_mut() {
+            Some(all) => all.entries.extend(one.entries),
+            None => kt = Some(one),
+        }
+    }
+    let kt = kt.expect("keys");
+    let kt_path = dir.join("cpw.keytab");
+    kt.write_file(&kt_path).expect("write keytab");
+    let frames_path = dir.join("frames.tsv");
+    std::fs::write(
+        &frames_path,
+        ok_stdout(&["kpasswd", kt_path.to_str().expect("path"), TEST_USER]),
+    )
+    .expect("write");
+    let password = MASTER_PASSWORD;
+    let args = |mit: &Path| -> Vec<String> {
+        [
+            "judge-explicit",
+            frames_path.to_str().expect("path"),
+            mit.to_str().expect("path"),
+            dump.to_str().expect("path"),
+            password,
+        ]
+        .map(str::to_owned)
+        .to_vec()
+    };
+    let run = |mit: &Path| {
+        let a = args(mit);
+        sweep(&a.iter().map(String::as_str).collect::<Vec<_>>())
+    };
+    let none = dir.join("none.tsv");
+    std::fs::write(&none, "").expect("write");
+    let answers: HashMap<String, String> =
+        part_answers(&String::from_utf8(run(&none).stdout).expect("utf-8"))
+            .into_iter()
+            .collect();
+    let n = std::fs::read_to_string(&frames_path)
+        .expect("read")
+        .lines()
+        .count();
+    assert_eq!(answers.len(), n, "every frame is answered");
+    assert_eq!(answers["ap-req/pristine"], "0");
+    assert_eq!(answers["krb-priv/pristine"], "0");
+    let class = |c: &str| answers.values().filter(|a| *a == c).count();
+    assert!(class("req") > 0 && class("priv") > 0, "both refusals occur");
+    assert_eq!(
+        class("0") + class("req") + class("priv"),
+        n,
+        "no other answer"
+    );
+    // MIT's answers, detail after a colon and all, agree; one of another class parts.
+    let mit = dir.join("mit.tsv");
+    let rows = lines_of(answers.iter().map(|(id, a)| {
+        let detail = if a == "0" {
+            "0".to_owned()
+        } else {
+            format!("{a}:krb5:1")
+        };
+        format!("{id}\t{detail}")
+    }));
+    std::fs::write(&mit, &rows).expect("write");
+    let out = run(&mit);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        String::from_utf8(out.stdout)
+            .expect("utf-8")
+            .ends_with(&format!("0 of {n} cases part from MIT\n"))
+    );
+    std::fs::write(
+        &mit,
+        rows.replacen("ap-req/pristine\t0", "ap-req/pristine\treq:krb5:35", 1),
+    )
+    .expect("write");
+    let out = run(&mit);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        String::from_utf8(out.stdout)
+            .expect("utf-8")
+            .contains("PART\tap-req/pristine\tMIT req:krb5:35\tRust 0\n")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
