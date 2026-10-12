@@ -542,6 +542,38 @@ security administrator."
     )
 }
 
+/// MIT `trunc_name` (`kadmin/server/misc.c:124-131`): at most `MAXPRINCLEN` (125) bytes of a name,
+/// and `...` after them when it is longer.
+fn kpasswd_trunc_len(len: usize) -> (usize, &'static str) {
+    if len > 125 { (125, "...") } else { (len, "") }
+}
+
+/// The first `n` bytes of `s` as `%.*s` prints them: all of `s` when it is shorter; a cut inside
+/// a character keeps the whole characters before it.
+fn first_bytes(s: &str, n: usize) -> &str {
+    let mut end = n.min(s.len());
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// The line `process_chpw_request` logs once a change is made or refused.
+/// MIT `process_chpw_request` (`schpw.c:219-245`): `trunc_name` cuts the client to 125 bytes in both
+/// lines; a set-password line also cuts the target, and prints at that length the CLIENT's name
+/// (`targetp = clientstr`) in the `for` slot, not the target's.
+fn kpasswd_log_line(setpw: bool, from: &str, client: &str, target: &str, text: &str) -> String {
+    let (clen, cdots) = kpasswd_trunc_len(client.len());
+    let by = first_bytes(client, clen);
+    if setpw {
+        let (tlen, tdots) = kpasswd_trunc_len(target.len());
+        let slot = first_bytes(client, tlen);
+        format!("setpw request from {from} by {by}{cdots} for {slot}{tdots}: {text}")
+    } else {
+        format!("chpw request from {from} for {by}{cdots}: {text}")
+    }
+}
+
 /// MIT `process_chpw_request` (`schpw.c:62-95`): a length, version, or framing mismatch
 /// bails out before a reply is built.
 /// That mismatch returns an error and no datagram is sent. The AP-REQ is verified only as a
@@ -559,7 +591,9 @@ pub(crate) fn handle_kpasswd_from(
     // MIT `process_chpw_request` (`schpw.c:47-82`): length then version before AP-REQ;
     // ChangePasswdData only for 0xff80.
     if raw.len() < 4 {
-        return Err(Error::Inner("kpasswd truncated".into()));
+        // MIT `process_chpw_request` (`schpw.c:47-53`): a request under four octets is
+        // KRB5KRB_AP_ERR_MODIFIED, which `dispatch` logs as "Message stream modified".
+        return Err(Error::Inner("Message stream modified".into()));
     }
     let plen = usize::from(u16::from_be_bytes([raw[0], raw[1]]));
     if plen != raw.len() {
@@ -573,7 +607,9 @@ pub(crate) fn handle_kpasswd_from(
         ));
     }
     if raw.len() < 6 {
-        return Err(Error::Inner("kpasswd truncated".into()));
+        // MIT `process_chpw_request` (`schpw.c:89-95`): the AP-REQ length that is not there fails
+        // the same check as one that fills the datagram: KRB5KRB_AP_ERR_MODIFIED.
+        return Err(Error::Inner("Message stream modified".into()));
     }
     let ap_len = usize::from(u16::from_be_bytes([raw[4], raw[5]]));
     if 6 + ap_len >= raw.len() {
@@ -750,11 +786,13 @@ pub(crate) fn handle_kpasswd_from(
     // MIT `process_chpw_request` (`kadmin/server/schpw.c:215-218`): both copies of the new password are zapped once the change is made or refused.
     wipe_secret(newpass);
     let log_outcome = if code == 0 { "ok" } else { "error" };
-    let log_line = if ver == RFC3244_VERSION {
-        format!("setpw request from {from} by {client} for {target_unparsed}: {log_err}")
-    } else {
-        format!("chpw request from {from} for {client}: {log_err}")
-    };
+    let log_line = kpasswd_log_line(
+        ver == RFC3244_VERSION,
+        from,
+        &client,
+        &target_unparsed,
+        &log_err,
+    );
     tracing::info!(
         event = krb5_log::events::ADMIN,
         component = "krb5-admin",
@@ -1190,5 +1228,71 @@ mod tests {
             super::empty_policy(&store, &name),
             super::EmptyPolicy::MinLength(0)
         ));
+    }
+
+    /// MIT `process_chpw_request` (`kadmin/server/schpw.c:236-245`): in a set-password line the `for` slot prints the CLIENT's name (`targetp = clientstr`), cut to the length of the target's.
+    #[test]
+    fn a_setpw_log_line_names_the_client_cut_to_the_targets_length() {
+        let line = super::kpasswd_log_line(
+            true,
+            "10.0.0.9",
+            "ra4user@KERBER.TEST",
+            "u\u{df}r@KERBER.TEST",
+            "denied",
+        );
+        assert_eq!(
+            line,
+            "setpw request from 10.0.0.9 by ra4user@KERBER.TEST for ra4user@KERBER.T: denied"
+        );
+        // A target that is longer than the client prints the whole client.
+        let line = super::kpasswd_log_line(true, "h", "u@R", "longer@REALM", "ok");
+        assert_eq!(line, "setpw request from h by u@R for u@R: ok");
+    }
+
+    /// MIT `trunc_name` (`kadmin/server/misc.c:126-131`): a name past 125 bytes is cut there and followed by dots.
+    /// MIT `process_chpw_request` (`kadmin/server/schpw.c:219-232`): the client is cut so in both log lines, and the target in a set-password line.
+    #[test]
+    fn a_name_past_125_bytes_is_cut_with_dots_in_both_log_lines() {
+        let client = format!("{}@R", "c".repeat(130));
+        let target = format!("{}@R", "t".repeat(126));
+        let cut = "c".repeat(125);
+        assert_eq!(
+            super::kpasswd_log_line(false, "h", &client, "", "success"),
+            format!("chpw request from h for {cut}...: success")
+        );
+        assert_eq!(
+            super::kpasswd_log_line(true, "h", &client, &target, "success"),
+            format!("setpw request from h by {cut}... for {cut}...: success")
+        );
+        let exact = format!("{}@R", "c".repeat(123));
+        assert_eq!(exact.len(), 125);
+        assert_eq!(
+            super::kpasswd_log_line(false, "h", &exact, "", "success"),
+            format!("chpw request from h for {exact}: success")
+        );
+    }
+
+    /// MIT `process_chpw_request` (`kadmin/server/schpw.c:47-53`): a request under four octets is KRB5KRB_AP_ERR_MODIFIED, which `dispatch` logs as "Message stream modified".
+    /// MIT `process_chpw_request` (`kadmin/server/schpw.c:89-95`): an AP-REQ length that is not there is the same code.
+    #[test]
+    fn a_kpasswd_request_too_short_to_hold_an_ap_req_length_is_message_stream_modified() {
+        use krb5_protocol::ReplayCache;
+
+        let (store, acl) = bootstrap_documented().unwrap();
+        let key = store
+            .get_name(&kadmin_changepw())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let shared = krb5_kdc::shared_dump(store);
+        for frame in [&[0u8, 3, 0][..], &[0, 4, 0, 1], &[0, 5, 0, 1, 0]] {
+            let got =
+                super::handle_kpasswd_rfc3244(&shared, &acl, &key, &ReplayCache::new(), frame)
+                    .unwrap_err()
+                    .to_string();
+            assert_eq!(got, "Message stream modified", "{frame:?}");
+        }
     }
 }

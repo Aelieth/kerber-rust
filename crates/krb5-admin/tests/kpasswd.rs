@@ -557,6 +557,65 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
     );
 }
 
+/// A set-password line prints the CLIENT's name, cut to the length of the target's, in its `for` slot.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:236-245`): `targetp = clientstr` when a target is present, at `tlen` = the target's length.
+#[test]
+fn kpasswd_setpw_log_prints_the_client_cut_to_the_targets_length() {
+    use krb5_asn1::encode;
+    use krb5_kdc::testrealm::TEST_REALM;
+    use krb5_types::ChangePasswdData;
+
+    krb5_config::isolate_test_krb5();
+    let dir = scratch_dir("ra4-kpasswd-setpw-log");
+    let log = dir.join("kadmind.log");
+    krb5_log::klog::init("kadmind", &[format!("FILE:{}", log.display())], false);
+
+    let (store, acl) = bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let user_key = store
+        .get_name(&user)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let cpw_key = store
+        .get_name(&kadmin_changepw())
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let as_out = changepw_as_ticket(&store, &user, &user_key, 1212);
+    let ap = build_ap_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        &krb5_types::ascii(TEST_REALM),
+        &user,
+    )
+    .unwrap();
+    // `x@KERBER.TEST` is 13 octets; the client, `user@KERBER.TEST`, is 16.
+    let cpw = ChangePasswdData {
+        newpasswd: b"log-slot-pass".to_vec().into(),
+        targname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["x"]),
+        targrealm: krb5_types::ascii(TEST_REALM),
+    };
+    let priv_msg =
+        build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
+    let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+    let shared = shared_dump(store);
+    handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
+    krb5_log::klog::close();
+    let text = std::fs::read_to_string(&log).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        text.contains(
+            "setpw request from 127.0.0.1 by user@KERBER.TEST for user@KERBER.T: Operation requires ``change-password'' privilege"
+        ),
+        "{text}"
+    );
+}
+
 #[test]
 fn kpasswd_self_change_with_initial_succeeds() {
     use krb5_asn1::encode;

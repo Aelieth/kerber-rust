@@ -1486,6 +1486,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** kpasswd logs a request under six octets as "Message stream modified"; a set-password
+  line prints the client's name cut to the target's length in its `for` slot, names past 125 bytes
+  cut with dots, as MIT's.
 - **protocol.** A KRB-PRIV or KRB-SAFE read with no local address set must name a receiver among the
   host's addresses (`krb5_os_localaddr`), as MIT's: kpasswd refuses 127.0.0.1 and any address the
   machine lacks.
