@@ -527,6 +527,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **docs.** Describe OTP preauth for admins and embedders: `[otp]`, the `otp` attribute, `require_auth`, and the `OtpVerifier` that stands in for MIT's RADIUS server.
 - **kdc.** Take the OTP module's token types from `[otp]`: a section's `strip_realm` and `indicator`s reach the verifier and the ticket. A section MIT would not initialize leaves the module out and logs `preauth otp failed to initialize`. Units.
 - **config.** Read `[otp]` from kdc.conf, then krb5.conf, as MIT's `token_types_decode`: types in `strcmp` order, merged repeats, final `*`, `strip_realm`, `indicator`, `timeout`, `retries`. `server` and `secret` are refused. Units.
 - **examples.** `examples/otp-kdc` runs the KDC in-process with an RFC 6238 TOTP `OtpVerifier`, the embed path KLLDAP takes; MIT `kinit -T` logs in with a code.

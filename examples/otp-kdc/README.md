@@ -37,12 +37,29 @@ ra4user@KERBER.TEST GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ
 ```
 
 - The username is matched byte for byte. A token with no `username` carries the principal unparsed
-  with its realm, as `ra4user@KERBER.TEST`.
+  with its realm, as `ra4user@KERBER.TEST`, unless `[otp]` has a `totp` section (see below): that
+  leaves the realm out unless the section sets `strip_realm = false`.
 - The seed is RFC 4648 base32, in either case. `=` padding is optional.
 - A line that is not exactly a name and a seed is ignored. The first line for a name wins.
 - The file is read on every request, so it can change without a restart.
 - A seeds file that is unset, unreadable, or has no line for the user refuses the code.
 - Neither a seed nor a code is ever logged.
+
+## Configuration
+
+The program reads `[otp]` as `krb5kdc` does (kdc.conf, then krb5.conf), once, as it starts. A section for
+the type `totp` sets what a ticket made with the verifier carries:
+
+```ini
+[otp]
+    totp = {
+        strip_realm = false
+        indicator = mfa
+    }
+```
+
+`strip_realm = false` keeps the seeds file's `user@REALM` names. `server` and `secret` are refused:
+the program logs `preauth otp failed to initialize` and serves with no OTP.
 
 ## Admin step
 

@@ -235,7 +235,7 @@ waited a second, on MIT's KDC or on kerber-rust.
 
 `[plugins] kdcpreauth` `disable` and `enable_only` select the KDC's preauth
 modules by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,
-`pkinit`, and an embedder module's name). `disable = encrypted_timestamp`
+`pkinit`, `otp`, and an embedder module's name). `disable = encrypted_timestamp`
 drops PA-ENC-TIMESTAMP from the preauth offer, and the KDC ignores that
 padata. The same relations in krb5.conf apply after this file. `module` is
 not read.
@@ -367,6 +367,49 @@ it lists, in that order. `module` is not read. `sam2` and `otp` are not
 implemented, so an `enable_only` that names only those leaves no module.
 This is separate from `[realms] disable_encrypted_timestamp`, which leaves
 the module loaded and fails that one mechanism.
+
+### OTP preauth
+
+A user can present a one-time code in place of a password: MIT `kinit -T <armor ccache>` asks for it. MIT's KDC asks a RADIUS server whether the code is good. kerber-rust does not: an embedder registers an `OtpVerifier` ([plugins.md](plugins.md), [the KLLDAP embed](embed/klldap.md)), and `krb5kdc` itself has none, so it refuses every code. Give `otp` to a principal only on a KDC that has a verifier: `kinit` offers the code whenever the KDC does, and does not fall back to the password.
+
+The principal needs `+requires_preauth` (Fedora's `default_principal_flags = +preauth` gives new ones the flag) and an `otp` string attribute, a JSON array of tokens that names a verifier and holds no secret. MIT `kadmin` strips quotes from a word, so the JSON's quotes are doubled inside one double-quoted word:
+
+```sh
+sudo kadmin.local -q 'setstr alice otp "[{""type"":""totp""}]"'
+sudo kadmin.local -q 'getstrs alice'
+```
+
+```text
+Authenticating as principal root/admin@EXAMPLE.COM with password.
+otp: [{"type":"totp"}]
+```
+
+A token's `type` names the verifier (`DEFAULT` without one), `username` is what the verifier is told (else the principal's name), and `indicators` replace the type's. `[]` is one token with none of them. The tokens are tried in order: a refusal goes on to the next, an error from the verifier ends the login, and a value that is no such array fails it.
+
+`[otp]` in kdc.conf, then krb5.conf, configures each type:
+
+```ini
+[otp]
+    totp = {
+        strip_realm = false
+        indicator = mfa
+    }
+```
+
+- `strip_realm` (a boolean) is true for a section: the verifier is told `alice`, not `alice@EXAMPLE.COM`. A type with no section, and a realm with no `[otp]`, keep the realm, as MIT's built-in `DEFAULT` does.
+- `indicator`, repeated for more than one, is an authentication indicator the ticket carries when a token of the type is accepted, unless the token lists its own.
+- `timeout` and `retries` are read and unused: the verifier runs in the KDC.
+- `server` and `secret` are refused. A section with either, a `strip_realm` that is no boolean, or a `timeout` or `retries` that is no integer, leaves the OTP module out: the KDC starts and logs `preauth otp failed to initialize:` and the reason. A comment on a value's line is part of the value.
+
+The KDC reads `[otp]` once, as it starts; SIGHUP only reopens the log.
+
+An accepted code gives the reply key from the armor, not the password, but the KDC does not make OTP compulsory: a user who keeps a password key can still log in with the password. To require it, require the indicator. `require_auth` is a string attribute of a service principal that lists indicators, one of which must be in the ticket (MIT's authentication indicators):
+
+```sh
+sudo kadmin.local -q "setstr host/files.$DOMAIN require_auth mfa"
+```
+
+A ticket-granting ticket from a password login then cannot get a ticket for that service (`KDC policy rejects request`), nor can one if the OTP module is left out. On `krbtgt` the rule applies to every login, and the host-keytab login that fetches the armor ticket has no indicator either, so set it there only when the armor comes another way. A principal made keyless (`addprinc -nokey`) has no password to fall back on, and its verifier has to check any password itself. For some users only, an embedder's `KdcPolicy` checks the indicators in `check_as`.
 
 ## Upgrading an MIT realm
 
@@ -645,7 +688,7 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
   `kprop` takes `-s`, else the default keytab. So `make install` installs no `kprop.service`.
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
-- OTP and RADIUS preauthentication, PKINIT configured in `kdc.conf`, master key rollover
+- RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT configured in `kdc.conf`, master key rollover
   (`kdb5_util add_mkey` and the other `*_mkey` commands), `kproplog`, `sclient` / `sserver`, and
   plugin modules (plugins are Rust traits: [plugins.md](plugins.md)).
 - `KEYRING:` credential caches in the tools `make install-clients` installs. `KCM:` (Fedora's
