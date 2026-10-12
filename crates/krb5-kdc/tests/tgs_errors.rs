@@ -411,6 +411,47 @@ fn tgs_with_authenticator(rewrite: impl Fn(&mut Vec<u8>)) -> (PrincipalStore, Ve
     (store, encode(&tgs).unwrap())
 }
 
+fn tgs_error(store: &PrincipalStore, req: &[u8]) -> (i32, String) {
+    let e: KrbError = decode(&krb5_kdc::handle_request(store, req).unwrap()).unwrap();
+    let text = e
+        .e_text
+        .map(|t| String::from_utf8_lossy(t.as_bytes()).into_owned());
+    (e.error_code, text.unwrap_or_default())
+}
+
+#[test]
+// oracle: differential-gate.sh tgs-authenticator-malformed-subkey
+fn tgs_authenticator_malformed_subkey_is_process_tgs() {
+    // MIT `decode_krb5_authenticator` refuses a subkey [6] that holds a SET where its
+    // EncryptionKey belongs, and `kdc_process_tgs_req` sends that as 60 PROCESS_TGS.
+    let (store, req) = tgs_with_authenticator(|der| {
+        let at = der
+            .windows(3)
+            .rposition(|w| w[0] == 0xa6 && w[2] == 0x30)
+            .unwrap();
+        der[at + 2] = 0x31;
+    });
+    assert_eq!(
+        tgs_error(&store, &req),
+        (err::GENERIC, "PROCESS_TGS".into())
+    );
+}
+
+#[test]
+// oracle: differential-gate.sh tgs-authenticator-crealm-octets
+fn tgs_authenticator_crealm_octets_is_badmatch() {
+    // MIT reads the crealm as octets (`KERBER.TEß`), another client than the ticket's.
+    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:530-532`): another client is BADMATCH, 36 PROCESS_TGS.
+    let (store, req) = tgs_with_authenticator(|der| {
+        let at = der.windows(11).position(|w| w == b"KERBER.TEST").unwrap();
+        der[at + 9..at + 11].copy_from_slice(&[0xc3, 0x9f]);
+    });
+    assert_eq!(
+        tgs_error(&store, &req),
+        (err::BADMATCH, "PROCESS_TGS".into())
+    );
+}
+
 #[test]
 fn tgs_authenticator_cusec_out_of_range_is_issued() {
     // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.

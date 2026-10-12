@@ -5,7 +5,7 @@
 //! Env: `KRB5_PASSWORD`, `KERBER_PAUSER_PASSWORD`, `KERBER_DIFF_REALM`,
 //! `KERBER_KRBTGT_KEYTAB`, `KERBER_HOST_KEYTAB`.
 //!
-//! The 112 cases, in send order (`DIFFSEND_CASES` in `scripts/ci-policy.py` pins the same
+//! The 121 cases, in send order (`DIFFSEND_CASES` in `scripts/ci-policy.py` pins the same
 //! set):
 //! `garbage-pdu`, `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`,
 //! `pauser-no-preauth`, `as-needpreauth-hints-unpermitted`, `skewed-timestamp`, `as-needchange`,
@@ -42,7 +42,10 @@
 //! `tgs-postdated-from`, `tgs-renew-header-end-before-start`, `tgs-rbcd-pac-options`,
 //! `as-anonymous-unsigned-authpack-named-client`, `as-fast-hide-error-client`,
 //! `tgs-fast-hide-client`, `pkinit-stale-freshness`, `tgs-referral-no-dot`,
-//! `tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`.
+//! `tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`, `as-req-malformed-addresses`,
+//! `as-req-trailing-body-field`, `tgs-req-nonce-int32-min`, `tgs-authenticator-malformed-subkey`,
+//! `tgs-authenticator-trailing-field`, `tgs-authenticator-crealm-octets`, `as-spake-unknown-choice`,
+//! `tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`.
 
 #![forbid(unsafe_code)]
 
@@ -75,6 +78,12 @@ use krb5_types::{
     pa,
 };
 use sha1::{Digest, Sha1};
+
+/// The decode sweeps' DER editing (`der_breaks.rs`).
+#[allow(dead_code)]
+mod der {
+    include!("../der_breaks.rs");
+}
 
 struct Cfg {
     rust: KdcAddr,
@@ -4808,7 +4817,286 @@ fn run() -> Result<(), String> {
         rt.endtime.unix_seconds()
     );
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":112}}"#);
+    let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
+    ra_cases(&cfg, realm, &user, &host)?;
+
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":121}}"#);
+    Ok(())
+}
+
+/// Both KDCs answer `req` with a PDU tagged `tag` (`0x6b` AS-REP).
+fn expect_both_tag(cfg: &Cfg, case: &str, req: &[u8], tag: u8) -> Result<(), String> {
+    let (rust, mit) = send_both(cfg, case, req)?;
+    for (leg, raw) in [("rust", &rust), ("mit", &mit)] {
+        if raw.first() != Some(&tag) {
+            return Err(format!(
+                "{case}: {leg} tag {:02x} want {tag:02x}",
+                raw.first().unwrap_or(&0)
+            ));
+        }
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","rust_tag":"0x{tag:02x}","mit_tag":"0x{tag:02x}"}}"#
+    );
+    Ok(())
+}
+
+/// The nonce INTEGER's content octets in a TGS-REP's enc-part, decrypted in `session`.
+fn tgs_rep_nonce(raw: &[u8], session: &ProtocolKey) -> Result<Vec<u8>, String> {
+    let rep: TgsRep = decode(raw).map_err(|e| e.to_string())?;
+    let usage = KeyUsage::new(ku::TGS_REP_ENC_PART).map_err(|e| e.to_string())?;
+    let plain =
+        decrypt(session, usage, rep.0.enc_part.cipher.as_ref()).map_err(|e| e.to_string())?;
+    let root = ra_root(&plain)?;
+    let der::Der::Cons(_, kids) = &root else {
+        return Err("enc-part not constructed".into());
+    };
+    let Some(der::Der::Cons(_, fields)) = kids.first() else {
+        return Err("enc-part has no SEQUENCE".into());
+    };
+    match fields.iter().find(|f| f.tag() == 0xa2) {
+        Some(der::Der::Cons(_, inner)) => match inner.first() {
+            Some(der::Der::Prim(0x02, content)) => Ok(content.clone()),
+            _ => Err("nonce is not an INTEGER".into()),
+        },
+        _ => Err("enc-part has no nonce".into()),
+    }
+}
+
+/// The one element of `der`, parsed.
+fn ra_root(der: &[u8]) -> Result<der::Der, String> {
+    der::der_parse(der)
+        .and_then(|mut v| (v.len() == 1).then(|| v.remove(0)))
+        .ok_or_else(|| "not one DER element".to_string())
+}
+
+/// The path (child indices) from a KDC-REQ's outermost element to its KDC-REQ-BODY SEQUENCE.
+fn ra_body_path(root: &der::Der) -> Result<Vec<usize>, String> {
+    let der::Der::Cons(_, kids) = root else {
+        return Err("KDC-REQ not constructed".into());
+    };
+    let Some(der::Der::Cons(0x30, fields)) = kids.first() else {
+        return Err("KDC-REQ has no SEQUENCE".into());
+    };
+    let i = fields
+        .iter()
+        .position(|f| f.tag() == 0xa4)
+        .ok_or("KDC-REQ has no req-body")?;
+    Ok(vec![0, i, 0])
+}
+
+/// The RA cases: a KDC-REQ, or a PA-TGS-REQ authenticator, with a field MIT's decoder refuses,
+/// or one it reads where rasn did not.
+fn ra_cases(
+    cfg: &Cfg,
+    realm: &str,
+    user: &PrincipalName,
+    host: &PrincipalName,
+) -> Result<(), String> {
+    // An AS-REQ whose KDC-REQ-BODY addresses [9] holds a SET where a SEQUENCE OF belongs.
+    let mut req = as_req(user.clone(), realm, 0x1000_0201, None).map_err(|e| e.to_string())?;
+    req.0.req_body.addresses = Some(vec![HostAddress {
+        addr_type: 2,
+        address: vec![127, 0, 0, 1].into(),
+    }]);
+    let root = ra_root(&encode(&req).map_err(|e| e.to_string())?)?;
+    let body = ra_body_path(&root)?;
+    let broken = der::all_breaks(&root)
+        .into_iter()
+        .find(|(place, _)| {
+            place.starts_with(&der::path_name(&root, &body)) && place.ends_with(":a9/tag")
+        })
+        .ok_or("no addresses field to break")?;
+    // MIT `dispatch` (`dispatch.c:145-153`): a request that does not decode is dropped.
+    expect_drop(cfg, "as-req-malformed-addresses", &broken.1.bytes())?;
+
+    // An AS-REQ whose KDC-REQ-BODY ends with a field no version of KDC-REQ-BODY has, [12].
+    let req = as_req(user.clone(), realm, 0x1000_0202, None).map_err(|e| e.to_string())?;
+    let root = ra_root(&encode(&req).map_err(|e| e.to_string())?)?;
+    let body = ra_body_path(&root)?;
+    let Some(der::Der::Cons(tag, mut fields)) = der::at(&root, &body).cloned() else {
+        return Err("no KDC-REQ-BODY".into());
+    };
+    fields.push(der::Der::Cons(0xac, vec![der::Der::Prim(0x02, vec![0])]));
+    let req = der::edit(&root, &body, Some(&der::Der::Cons(tag, fields))).bytes();
+    // MIT `decode_sequence` (`asn1_encode.c:1401-1455`): every SEQUENCE is extensible.
+    expect_both_tag(cfg, "as-req-trailing-body-field", &req, 0x6b)?;
+
+    let tkt_kt = cfg.krbtgt.as_ref().ok_or("KERBER_KRBTGT_KEYTAB required")?;
+    let (tkt_key, tkt_kvno) = keytab_for(tkt_kt, 20)?;
+    let now = KerberosTime::now();
+    let window = (
+        now.clone(),
+        now.add_hours(10).unwrap_or_else(|_| now.clone()),
+    );
+    let tgs_for = |nonce: u32, sess: &ProtocolKey| -> Result<krb5_types::TgsReq, String> {
+        let tgt = mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            user,
+            realm,
+            &PrincipalName::krbtgt(realm),
+            sess,
+            window.clone(),
+            TicketFlags::initial_preauth().with_bit(krb5_types::flag_bit::FORWARDABLE, true),
+        )?;
+        tgs_req(tgt, sess, realm, user, host.clone(), realm, nonce).map_err(|e| e.to_string())
+    };
+
+    // A TGS-REQ whose nonce is INT32_MIN.
+    // MIT `req_body_7` (`lib/krb5/asn.1/asn1_k_encode.c:455-455`): the nonce is an int32.
+    let sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
+    let req = encode(&tgs_for(0x8000_0000, &sess)?).map_err(|e| e.to_string())?;
+    let (tr, tm) = send_both(cfg, "tgs-req-nonce-int32-min", &req)?;
+    let svc = cfg.host.as_ref().ok_or("KERBER_HOST_KEYTAB required")?;
+    let (rr, re, rt, _) = decrypt_tgs(&tr, &sess, svc)?;
+    let (mr, me, mt, _) = decrypt_tgs(&tm, &sess, svc)?;
+    compare_stable_rep(&rr, &re, &rt, &mr, &me, &mt)
+        .map_err(|e| format!("tgs-req-nonce-int32-min: {e}"))?;
+    let (rn, mn) = (tgs_rep_nonce(&tr, &sess)?, tgs_rep_nonce(&tm, &sess)?);
+    if rn != [0x80, 0, 0, 0] || mn != [0x80, 0, 0, 0] {
+        return Err(format!(
+            "tgs-req-nonce-int32-min: reply nonce rust={rn:02x?} mit={mn:02x?} want 80 00 00 00"
+        ));
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-req-nonce-int32-min","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","nonce":"80000000"}}"#
+    );
+
+    // A TGS-REQ whose PA-TGS-REQ authenticator is rewritten by `authenticator`, then re-encrypted.
+    let with_authenticator = |nonce: u32,
+                              sess: &ProtocolKey,
+                              f: &dyn Fn(der::Der) -> Result<der::Der, String>|
+     -> Result<Vec<u8>, String> {
+        let mut req = tgs_for(nonce, sess)?;
+        let padata = req.0.padata.as_mut().ok_or("no padata")?;
+        let pa_tgs = padata
+            .iter_mut()
+            .find(|x| x.padata_type == pa::TGS_REQ)
+            .ok_or("no PA-TGS-REQ")?;
+        let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).map_err(|e| e.to_string())?;
+        let usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).map_err(|e| e.to_string())?;
+        let plain =
+            decrypt(sess, usage, ap.authenticator.cipher.as_ref()).map_err(|e| e.to_string())?;
+        let mut authenticator: krb5_types::Authenticator =
+            decode(&plain).map_err(|e| e.to_string())?;
+        authenticator.subkey = Some(EncryptionKey {
+            keytype: sess.etype().to_iana(),
+            keyvalue: vec![0x52u8; 32].into(),
+        });
+        let root = ra_root(&encode(&authenticator).map_err(|e| e.to_string())?)?;
+        let rewritten = f(root)?.bytes();
+        ap.authenticator.cipher = encrypt(sess, usage, &rewritten)
+            .map_err(|e| e.to_string())?
+            .into();
+        pa_tgs.padata_value = encode(&ap).map_err(|e| e.to_string())?.into();
+        encode(&req).map_err(|e| e.to_string())
+    };
+
+    // Its subkey [6] holds a SET where an EncryptionKey (a SEQUENCE) belongs.
+    let req = with_authenticator(0x1000_0204, &sess, &|root| {
+        der::all_breaks(&root)
+            .into_iter()
+            .find(|(place, _)| place.ends_with(":a6/tag"))
+            .map(|(_, d)| d)
+            .ok_or_else(|| "no subkey to break".to_string())
+    })?;
+    // MIT `errcode_to_protocol` (`kdc_util.c:692-698`): rd_req's ASN.1 decode error goes out as 60.
+    expect_error(
+        cfg,
+        "tgs-authenticator-malformed-subkey",
+        &req,
+        err::GENERIC,
+    )?;
+
+    // It ends with a field no version of Authenticator has, [9].
+    let req = with_authenticator(0x1000_0205, &sess, &|root| {
+        let der::Der::Cons(app, kids) = root else {
+            return Err("authenticator not constructed".into());
+        };
+        let Some(der::Der::Cons(seq, mut fields)) = kids.into_iter().next() else {
+            return Err("authenticator has no SEQUENCE".into());
+        };
+        fields.push(der::Der::Cons(0xa9, vec![der::Der::Prim(0x02, vec![0])]));
+        Ok(der::Der::Cons(app, vec![der::Der::Cons(seq, fields)]))
+    })?;
+    expect_tgs_rep(cfg, "tgs-authenticator-trailing-field", &req)?;
+
+    // Its crealm [1] has octets that are not ASCII (UTF-8 `KERBER.TEß`).
+    let req = with_authenticator(0x1000_0206, &sess, &|root| {
+        let place = der::all_breaks(&root)
+            .into_iter()
+            .find(|(place, _)| place.ends_with(":a1/tag"))
+            .map(|(p, _)| p)
+            .ok_or("no crealm")?;
+        let path: Vec<usize> = place
+            .split('.')
+            .skip(1)
+            .filter_map(|step| step.split(':').next()?.parse().ok())
+            .collect();
+        let realm = der::Der::Cons(
+            0xa1,
+            vec![der::Der::Prim(0x1b, "KERBER.TEß".as_bytes().to_vec())],
+        );
+        Ok(der::edit(&root, &path, Some(&realm)))
+    })?;
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:530-532`): another client is BADMATCH (36).
+    expect_error(cfg, "tgs-authenticator-crealm-octets", &req, err::BADMATCH)?;
+
+    // An AS-REQ whose PA-SPAKE holds an element no PA-SPAKE alternative takes, [4].
+    // MIT `decode_cntype` (`lib/krb5/asn.1/asn1_encode.c:1277-1293`): the element is an unknown choice.
+    // MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:532-535`): an unknown choice is PREAUTH_FAILED.
+    let spake = PaData {
+        padata_type: pa::SPAKE,
+        padata_value: vec![0xa4, 0x02, 0x30, 0x00].into(),
+    };
+    let req =
+        as_req(user.clone(), realm, 0x1000_0207, Some(vec![spake])).map_err(|e| e.to_string())?;
+    expect_error(
+        cfg,
+        "as-spake-unknown-choice",
+        &encode(&req).map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+
+    // A TGS-REQ whose authenticator's cusec is past 999999.
+    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is.
+    let req = with_authenticator(0x1000_0208, &sess, &|root| {
+        let mut authenticator: krb5_types::Authenticator =
+            decode(&root.bytes()).map_err(|e| e.to_string())?;
+        authenticator.cusec = krb5_types::Microseconds(1_000_000);
+        ra_root(&encode(&authenticator).map_err(|e| e.to_string())?)
+    })?;
+    expect_tgs_rep(cfg, "tgs-authenticator-cusec-out-of-range", &req)?;
+
+    // An AS-REQ whose PA-ENC-TIMESTAMP carries a pausec past 999999.
+    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-97`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
+    let ukey = client_key(18, &cfg.user_pw, user, realm)?;
+    let ts = krb5_types::PaEncTsEnc {
+        patimestamp: KerberosTime::now(),
+        pausec: Some(krb5_types::Microseconds(1_000_000)),
+    };
+    let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP).map_err(|e| e.to_string())?;
+    let ts_der = encode(&ts).map_err(|e| e.to_string())?;
+    let enc = EncryptedData {
+        etype: 18,
+        kvno: None,
+        cipher: encrypt(&ukey, usage, &ts_der)
+            .map_err(|e| e.to_string())?
+            .into(),
+    };
+    let pa_ts = PaData {
+        padata_type: pa::ENC_TIMESTAMP,
+        padata_value: encode(&enc).map_err(|e| e.to_string())?.into(),
+    };
+    let req =
+        as_req(user.clone(), realm, 0x1000_0209, Some(vec![pa_ts])).map_err(|e| e.to_string())?;
+    let _ = expect_as_ok(
+        cfg,
+        "as-enc-timestamp-pausec-out-of-range",
+        &encode(&req).map_err(|e| e.to_string())?,
+        user,
+    )?;
     Ok(())
 }
 

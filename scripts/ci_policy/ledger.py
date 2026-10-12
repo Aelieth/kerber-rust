@@ -123,6 +123,15 @@ DIFFSEND_CASES = frozenset(
         "tgs-referral-no-dot",
         "tgs-alternate-tgs-hierarchical",
         "tgs-renew-postdated-from",
+        "as-req-malformed-addresses",
+        "as-req-trailing-body-field",
+        "tgs-req-nonce-int32-min",
+        "tgs-authenticator-malformed-subkey",
+        "tgs-authenticator-trailing-field",
+        "tgs-authenticator-crealm-octets",
+        "as-spake-unknown-choice",
+        "tgs-authenticator-cusec-out-of-range",
+        "as-enc-timestamp-pausec-out-of-range",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
@@ -261,9 +270,9 @@ DIFFSEND_SRC = ROOT / "crates/krb5-tools/src/bin/diffsend.rs"
 
 
 def diffsend_source_cases(src: str) -> set[str]:
-    """Copy 1 of the case list: every `expect_*(&cfg, "name"` call and every
-    `"case":"name"` literal the driver prints itself."""
-    names = set(re.findall(r'expect_\w+\(\s*&cfg,\s*"([^"]+)"', src, re.S))
+    """Copy 1 of the case list: every `expect_*(&cfg, "name"` call (`cfg` in a helper that takes
+    `cfg: &Cfg`) and every `"case":"name"` literal the driver prints itself."""
+    names = set(re.findall(r'expect_\w+\(\s*&?cfg,\s*"([^"]+)"', src, re.S))
     names |= set(re.findall(r'"case":"([^"{]+)"', src))
     return names
 

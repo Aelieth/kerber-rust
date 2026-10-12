@@ -24,6 +24,7 @@ test that is gone. Extra tags on diffsend cases that do not pin an
 | `as-service-not-allowed` | 27 | `SERVICE NOT ALLOWED` | `as_disallow_svr_is_service_not_allowed` (`crates/krb5-kdc/tests/as_flags_policy.rs`) |
 | `as-session-enctype` | 14 | `BAD_ENCRYPTION_TYPE` | `no_common_etype_is_etype_nosupp` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 | `as-spake-round1` | 91 | `PREAUTH_FAILED` | `handle_request_spake_91_e_text_is_preauth_failed` (`crates/krb5-kdc/tests/as_spake.rs`) |
+| `as-spake-unknown-choice` | 24 | `PREAUTH_FAILED` | `as_spake_unknown_choice_is_preauth_failed` (`crates/krb5-kdc/tests/as_spake.rs`) |
 | `ec-outside-fast` | 24 | `PREAUTH_FAILED` | `as_ec_outside_fast_is_preauth_failed` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 | `etype-nosupp` | 14 | `BAD_ENCRYPTION_TYPE` | `no_common_etype_is_etype_nosupp` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 | `fast-armor-no-subkey` | 12 | `FIND_FAST` | `fast_as_armor_without_subkey_is_policy` (`crates/krb5-kdc/tests/as_fast.rs`) |
@@ -51,6 +52,8 @@ test that is gone. Extra tags on diffsend cases that do not pin an
 | `tgs-ad-mandatory-for-kdc` | 12 | `HANDLE_AUTHDATA` | `tgs_mandatory_for_kdc_is_handle_authdata` (`crates/krb5-kdc/tests/tgs_authdata.rs`) |
 | `tgs-addr-mismatch` | 38 | `PROCESS_TGS` | `tgs_sender_mismatch_is_badaddr` (`crates/krb5-kdc/tests/tgs_caddr.rs`) |
 | `tgs-ap-options` | 12 | `PROCESS_TGS` | `tgs_ap_options_use_session_key_is_policy` (`crates/krb5-kdc/tests/tgs_options.rs`) |
+| `tgs-authenticator-crealm-octets` | 36 | `PROCESS_TGS` | `tgs_authenticator_crealm_octets_is_badmatch` (`crates/krb5-kdc/tests/tgs_errors.rs`) |
+| `tgs-authenticator-malformed-subkey` | 60 | `PROCESS_TGS` | `tgs_authenticator_malformed_subkey_is_process_tgs` (`crates/krb5-kdc/tests/tgs_errors.rs`) |
 | `tgs-bad-msg-type` | 60 | `UNKNOWN_REASON` | `tgs_bad_msg_type_is_unknown_reason_without_cname` (`crates/krb5-kdc/tests/tgs_errors.rs`) |
 | `tgs-expired-addr-mismatch` | 38 | `PROCESS_TGS` | `tgs_expired_caddr_is_badaddr` (`crates/krb5-kdc/tests/tgs_gather.rs`) |
 | `tgs-expired-badmatch` | 36 | `PROCESS_TGS` | `expired_authenticator_mismatch_is_badmatch` (`crates/krb5-kdc/tests/tgs_gather.rs`) |
@@ -91,4 +94,4 @@ test that is gone. Extra tags on diffsend cases that do not pin an
 | `unknown-sname` | 7 | `SERVER_NOT_FOUND` | `as_unknown_sname_is_server_not_found` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 | `wrong-realm` | 6 | `CLIENT_NOT_FOUND` | `as_wrong_realm_is_chaseable` (`crates/krb5-kdc/tests/as_preauth.rs`) |
 
-Paired **76/76** status-word cells.
+Paired **79/79** status-word cells.

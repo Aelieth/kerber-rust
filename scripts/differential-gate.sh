@@ -247,8 +247,8 @@ grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112.
-DIFFSEND_RATCHET=112
+# as-locked-out 112 · RA 121.
+DIFFSEND_RATCHET=121
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -258,6 +258,16 @@ grep -q '"case":"as-needchange","outcome":"ok","error_code":23,"e_text":"REQUIRE
 # The failcount lockout's status is the DB module's LOCKED_OUT, not the
 # DISALLOW_ALL_TIX text CLIENT LOCKED OUT (kdb_db2.c:1547-1548).
 grep -q '"case":"as-locked-out","outcome":"ok","error_code":18,"e_text":"LOCKED_OUT","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-locked-out not code 18 e_text LOCKED_OUT on both legs"
+# RA: a KDC-REQ, or a PA-TGS-REQ authenticator, that MIT's decoder refuses or reads where rasn did not.
+grep -q '"case":"as-req-malformed-addresses","outcome":"ok","rust_tag":"drop","mit_tag":"drop"' <<<"$DIFF" || die "as-req-malformed-addresses not dropped on both legs"
+grep -q '"case":"as-req-trailing-body-field","outcome":"ok","rust_tag":"0x6b","mit_tag":"0x6b"' <<<"$DIFF" || die "as-req-trailing-body-field not an AS-REP on both legs"
+grep -q '"case":"tgs-req-nonce-int32-min","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","nonce":"80000000"' <<<"$DIFF" || die "tgs-req-nonce-int32-min reply nonce not INT32_MIN on both legs"
+grep -q '"case":"tgs-authenticator-malformed-subkey","outcome":"ok","error_code":60,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-authenticator-malformed-subkey not code 60 e_text PROCESS_TGS on both legs"
+grep -q '"case":"tgs-authenticator-trailing-field","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-authenticator-trailing-field not a TGS-REP on both legs"
+grep -q '"case":"tgs-authenticator-crealm-octets","outcome":"ok","error_code":36,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-authenticator-crealm-octets not code 36 e_text PROCESS_TGS on both legs"
+grep -q '"case":"as-spake-unknown-choice","outcome":"ok","error_code":24,"e_text":"PREAUTH_FAILED"' <<<"$DIFF" || die "as-spake-unknown-choice not code 24 e_text PREAUTH_FAILED on both legs"
+grep -q '"case":"tgs-authenticator-cusec-out-of-range","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-authenticator-cusec-out-of-range not a TGS-REP on both legs"
+grep -q '"case":"as-enc-timestamp-pausec-out-of-range","outcome":"ok","rust_tag":"0x6b","mit_tag":"0x6b","rust_enc_tag":"0x7a","mit_enc_tag":"0x7a"' <<<"$DIFF" || die "as-enc-timestamp-pausec-out-of-range not an AS-REP on both legs"
 grep -q '"case":"fast-armor-no-subkey","outcome":"ok","error_code":12,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "fast-armor-no-subkey not code 12 e_text FIND_FAST on both legs"
 grep -q '"case":"armor-ap-req-as-pa-tgs-req","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "armor-ap-req-as-pa-tgs-req not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ad-fx-armor-authenticator not code 12 e_text PROCESS_TGS on both legs"

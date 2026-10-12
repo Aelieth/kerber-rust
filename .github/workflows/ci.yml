@@ -336,6 +336,8 @@ jobs:
         run: ./scripts/kprop-reverse-gate.sh
       - name: rd-safe-oracle-gate (MIT krb5_rd_safe non-canonical body)
         run: ./scripts/rd-safe-oracle-gate.sh
+      - name: rd-priv-oracle-gate (MIT krb5_rd_req / rd_priv / rd_safe over broken messages)
+        run: ./scripts/rd-priv-oracle-gate.sh
       - name: asn1-decode-oracle-gate (MIT's decoder over the decode sweep)
         run: ./scripts/asn1-decode-oracle-gate.sh
       - name: cross-kdc-gate (MIT TGT to Rust TGS and back on one dump)

@@ -702,3 +702,25 @@ fn spake_91_without_cookie_carries_etype_info2() {
         "91 without cookie: SPAKE+COOKIE+ETYPE-INFO2, got {types:?}"
     );
 }
+
+#[test]
+// oracle: differential-gate.sh as-spake-unknown-choice
+fn as_spake_unknown_choice_is_preauth_failed() {
+    // MIT `decode_cntype` (`lib/krb5/asn.1/asn1_encode.c:1277-1293`): a PA-SPAKE no alternative takes ([4]) is an unknown choice.
+    // MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:532-535`): an unknown choice is PREAUTH_FAILED.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let spake = PaData {
+        padata_type: pa::SPAKE,
+        padata_value: vec![0xa4, 0x02, 0x30, 0x00].into(),
+    };
+    let req = as_req(cname, TEST_REALM, 392, Some(vec![spake])).unwrap();
+    let bytes = krb5_kdc::handle_request(&store, &encode(&req).expect("der")).expect("reply");
+    let e: KrbError = decode(&bytes).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::PREAUTH_FAILED);
+    let text = e
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
+    assert_eq!(text, Some("PREAUTH_FAILED"));
+}

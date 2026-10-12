@@ -29,6 +29,7 @@ section's count is the sum over its files.
 | [a4-kadmin.md](a4-kadmin.md) | A4 — kadmind and kadm5, `kadmin.local`, kpasswd |
 | [a4-kdb.md](a4-kdb.md) | A4 — `kdb5_util` (dump and load), the KDB library and plugins, the KDB lock |
 | [a5-prop.md](a5-prop.md) | A5 — kprop, kpropd, iprop and the gssrpc layer |
+| [b1-asn1.md](b1-asn1.md) | B1 — the ASN.1 decoder: `asn1_encode.c`, `asn1_k_encode.c` against `vendor/rasn` and the wire types |
 | [b1-client.md](b1-client.md) | B1 — the client library, crypto, the AP-REQ acceptor, ccache and keytab |
 | [b1-gss.md](b1-gss.md) | B1 — the GSS-API krb5 mechanism and SPNEGO: context, wrap / unwrap, sequence window, status, credentials |
 | [b1-tools.md](b1-tools.md) | B1 — the client tools: `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd`, `ktutil` |
@@ -43,7 +44,7 @@ Schema: `MIT file:line | check | MIT status + wire code | Rust site | Rust e_tex
 Verdict ∈ {exact, stricter-documented (`docs/mit-deviations.md` row), absent,
 deviation, deferred (reason + promotion oracle)}. Proof `none` only
 with deferred. A named gate cell or `diffsend` case that does not exist
-is `proposed`. The 112 live `diffsend` cases are `garbage-pdu`,
+is `proposed`. The 121 live `diffsend` cases are `garbage-pdu`,
 `unknown-cname`, `etype-nosupp`, `as-session-enctype`, `wrong-realm`, `pauser-no-preauth`,
 `as-needpreauth-hints-unpermitted`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`, `as-locked-out`,
@@ -84,15 +85,18 @@ is `proposed`. The 112 live `diffsend` cases are `garbage-pdu`,
 `tgs-renew-header-end-before-start`,
 `as-anonymous-unsigned-authpack-named-client`, `as-fast-hide-error-client`,
 `tgs-fast-hide-client`, `pkinit-stale-freshness`, `tgs-referral-no-dot`,
-`tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`.
+`tgs-alternate-tgs-hierarchical`, `tgs-renew-postdated-from`, `as-req-malformed-addresses`,
+`as-req-trailing-body-field`, `tgs-req-nonce-int32-min`, `tgs-authenticator-malformed-subkey`,
+`tgs-authenticator-trailing-field`, `tgs-authenticator-crealm-octets`, `as-spake-unknown-choice`,
+`tgs-authenticator-cusec-out-of-range`, `as-enc-timestamp-pausec-out-of-range`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**482** = A1 129 + A2 94 + A3 80 + A4 62 + A5 32 + B1 85.
-exact 387 · stricter-documented 15 · deviation 34 ·
+**498** = A1 130 + A2 94 + A3 83 + A4 63 + A5 32 + B1 96.
+exact 403 · stricter-documented 15 · deviation 34 ·
 absent 2 · deferred 44.
 
 When the ledger was split into these files, the one-file A4 (153 rows,

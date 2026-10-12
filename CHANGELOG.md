@@ -2911,6 +2911,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** A decode sweep breaks every explicit field and SEQUENCE OF element of 41 messages nine
+  ways against MIT's answers (`asn1-decode-oracle-gate`); `rd-priv-oracle-gate` and 9 diffsend
+  cases drive MIT's rd_req/rd_priv/rd_safe and KDC.
 - **test.** `spake-gate` and `rust-kinit-spake-gate` add an edwards25519 leg with Fedora's settings,
   MIT's wire flow asserted; the field `.expect` files drop the SPAKE difference.
 - **gate.** Every in-image MIT oracle is built with `krb5-config` (`mit_oracle_cc`); a plain `-lkrb5`
