@@ -11,6 +11,10 @@ use krb5_log::klog::Severity;
 use krb5_types::{AsReq, HostAddress, TgsReq, err};
 
 use super::reply::{as_reply, krb_error_log_fields, tgs_reply};
+use crate::asn1_text::{
+    APPLICATION, ASN1_BAD_FORMAT, ASN1_BAD_ID, ASN1_BAD_LENGTH, ASN1_INDEF, ASN1_MISSING_FIELD,
+    ASN1_OVERFLOW, ASN1_PARSE_ERROR, CONTEXT, Tlv, UNIVERSAL, get_tag,
+};
 use crate::audit::{
     KdcAudit, restore_thread_audit, restore_thread_audits, take_thread_audit, take_thread_audits,
 };
@@ -20,9 +24,10 @@ use crate::listen::{SharedStore, plain_store, read_store};
 use crate::lookaside::{Check, Lookaside};
 use crate::net_server::{Dispatch, Log, Reply};
 use crate::plugins::{
-    KdcAuthdata, KdcPolicy, KdcPreauth, restore_thread_authdata, restore_thread_kdcpolicies,
-    restore_thread_policy, restore_thread_preauth, take_thread_authdata, take_thread_kdcpolicies,
-    take_thread_policy, take_thread_preauth,
+    KdcAuthdata, KdcPolicy, KdcPreauth, OtpVerifier, restore_thread_authdata,
+    restore_thread_kdcpolicies, restore_thread_otp_verifiers, restore_thread_policy,
+    restore_thread_preauth, take_thread_authdata, take_thread_kdcpolicies,
+    take_thread_otp_verifiers, take_thread_policy, take_thread_preauth,
 };
 
 /// Dispatch one UDP/TCP payload (AS-REQ or TGS-REQ) to the issue path.
@@ -196,22 +201,6 @@ const BAD_PVNO: &str = "Requested protocol version not supported";
 const WRONG_REALM: &str = "Realm not local to KDC";
 /// MIT `KRB5KDC_ERR_DISCARD` (`lib/krb5/error_tables/k5e1_err.et:36-36`): its text.
 const DISCARD: &str = "The KDC should discard this request";
-/// MIT `ASN1_MISSING_FIELD` (`lib/krb5/error_tables/asn1_err.et:3-3`): its text.
-const ASN1_MISSING_FIELD: &str = "ASN.1 structure is missing a required field";
-/// MIT `ASN1_OVERFLOW` (`lib/krb5/error_tables/asn1_err.et:6-6`): its text.
-const ASN1_OVERFLOW: &str = "ASN.1 value too large";
-/// MIT `ASN1_OVERRUN` (`lib/krb5/error_tables/asn1_err.et:7-7`): its text.
-const ASN1_OVERRUN: &str = "ASN.1 encoding ended unexpectedly";
-/// MIT `ASN1_BAD_ID` (`lib/krb5/error_tables/asn1_err.et:8-8`): its text.
-const ASN1_BAD_ID: &str = "ASN.1 identifier doesn't match expected value";
-/// MIT `ASN1_BAD_LENGTH` (`lib/krb5/error_tables/asn1_err.et:9-9`): its text.
-const ASN1_BAD_LENGTH: &str = "ASN.1 length doesn't match expected value";
-/// MIT `ASN1_BAD_FORMAT` (`lib/krb5/error_tables/asn1_err.et:10-10`): its text.
-const ASN1_BAD_FORMAT: &str = "ASN.1 badly-formatted encoding";
-/// MIT `ASN1_PARSE_ERROR` (`lib/krb5/error_tables/asn1_err.et:11-11`): its text.
-const ASN1_PARSE_ERROR: &str = "ASN.1 parse error";
-/// MIT `ASN1_INDEF` (`lib/krb5/error_tables/asn1_err.et:13-13`): its text.
-const ASN1_INDEF: &str = "ASN.1 indefinite encoding";
 
 /// Decode a KDC-REQ under APPLICATION `app` with `full`, failing with the text of the error
 /// MIT's decoder returns for the same bytes. The KDC-REQ's own fields (the tags, `pvno` 5,
@@ -233,73 +222,6 @@ fn decode_kdc_req<T>(
             Some(Err(text)) => text,
             _ => body_failure_text(&e.to_string()),
         }
-    })
-}
-
-/// One DER element as MIT's `get_tag` reads it.
-struct Tlv<'a> {
-    class: u8,
-    constructed: bool,
-    tagnum: u32,
-    contents: &'a [u8],
-    rest: &'a [u8],
-}
-
-const UNIVERSAL: u8 = 0x00;
-const APPLICATION: u8 = 0x40;
-const CONTEXT: u8 = 0x80;
-/// MIT `ASN1_TAGNUM_MAX` (`lib/krb5/asn.1/krbasn1.h:22-22`): the largest tag number, one below `INT_MAX`.
-const TAGNUM_MAX: u32 = 0x7fff_fffe;
-
-/// MIT `get_tag` (`lib/krb5/asn.1/asn1_encode.c:366-421`): an identifier and length that run past the input are an overrun, a tag number or length too large an overflow, and the indefinite length its own error.
-fn get_tag(asn1: &[u8]) -> Result<Tlv<'_>, &'static str> {
-    let (&o, mut p) = asn1.split_first().ok_or(ASN1_OVERRUN)?;
-    let mut tagnum = u32::from(o & 0x1F);
-    if o & 0x1F == 0x1F {
-        tagnum = 0;
-        loop {
-            let (&b, q) = p.split_first().ok_or(ASN1_OVERRUN)?;
-            p = q;
-            if tagnum > TAGNUM_MAX >> 7 {
-                return Err(ASN1_OVERFLOW);
-            }
-            tagnum = (tagnum << 7) | u32::from(b & 0x7F);
-            if b & 0x80 == 0 {
-                break;
-            }
-        }
-        if tagnum > TAGNUM_MAX {
-            return Err(ASN1_OVERFLOW);
-        }
-    }
-    let (&l, p) = p.split_first().ok_or(ASN1_OVERRUN)?;
-    let (clen, p) = if l & 0x80 == 0 {
-        (usize::from(l), p)
-    } else {
-        let llen = usize::from(l & 0x7F);
-        if llen > p.len() {
-            return Err(ASN1_OVERRUN);
-        }
-        if llen > std::mem::size_of::<usize>() {
-            return Err(ASN1_OVERFLOW);
-        }
-        if llen == 0 {
-            return Err(ASN1_INDEF);
-        }
-        let clen = p[..llen]
-            .iter()
-            .fold(0usize, |c, &b| (c << 8) | usize::from(b));
-        (clen, &p[llen..])
-    };
-    if clen > p.len() {
-        return Err(ASN1_OVERRUN);
-    }
-    Ok(Tlv {
-        class: o & 0xC0,
-        constructed: o & 0x20 != 0,
-        tagnum,
-        contents: &p[..clen],
-        rest: &p[clen..],
     })
 }
 
@@ -760,6 +682,7 @@ pub(crate) struct ThreadSlots {
     policies: Option<Vec<Arc<dyn KdcPolicy>>>,
     preauth: Option<Vec<Arc<dyn KdcPreauth>>>,
     authdata: Option<Vec<Arc<dyn KdcAuthdata>>>,
+    otp: Option<Vec<Arc<dyn OtpVerifier>>>,
     audit: Option<Arc<dyn KdcAudit>>,
     audits: Option<Vec<Arc<dyn KdcAudit>>>,
 }
@@ -772,6 +695,7 @@ impl ThreadSlots {
             policies: take_thread_kdcpolicies(),
             preauth: take_thread_preauth(),
             authdata: take_thread_authdata(),
+            otp: take_thread_otp_verifiers(),
             audit: take_thread_audit(),
             audits: take_thread_audits(),
         }
@@ -784,6 +708,7 @@ impl Drop for ThreadSlots {
         restore_thread_kdcpolicies(self.policies.take());
         restore_thread_preauth(self.preauth.take());
         restore_thread_authdata(self.authdata.take());
+        restore_thread_otp_verifiers(self.otp.take());
         restore_thread_audit(self.audit.take());
         restore_thread_audits(self.audits.take());
     }
@@ -797,7 +722,9 @@ mod tests {
     use krb5_types::{KrbError, PrincipalName};
 
     use super::*;
+    use crate::asn1_text::ASN1_OVERRUN;
     use crate::listen::shared_store;
+    use crate::plugins::{OtpVerdict, OtpVerifyRequest};
     use crate::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
 
     #[derive(Default)]
@@ -1128,11 +1055,22 @@ mod tests {
         }
     }
 
+    struct NoOtp;
+
+    impl OtpVerifier for NoOtp {
+        fn name(&self) -> &'static str {
+            "none"
+        }
+        fn verify(&self, _req: &OtpVerifyRequest<'_>) -> OtpVerdict {
+            OtpVerdict::Reject
+        }
+    }
+
     fn is_own<T: ?Sized>(slot: &[Arc<T>], own: &Arc<T>) -> bool {
         slot.iter().any(|m| Arc::ptr_eq(m, own))
     }
 
-    /// All four slots come off the thread while a loop holds them and go back when it is done.
+    /// All the slots come off the thread while a loop holds them and go back when it is done.
     #[test]
     fn thread_slots_come_off_and_go_back() {
         use crate::plugins::{authdata_modules, preauth_modules};
@@ -1141,25 +1079,33 @@ mod tests {
         let audit: Arc<dyn KdcAudit> = Arc::new(crate::audit::JsonAudit);
         let preauth: Arc<dyn KdcPreauth> = Arc::new(NoPreauth);
         let authdata: Arc<dyn KdcAuthdata> = Arc::new(NoAuthdata);
+        let otp: Arc<dyn OtpVerifier> = Arc::new(NoOtp);
+        let own_otp = |v: &Arc<dyn OtpVerifier>| {
+            crate::plugins::find_otp_verifier(v.name()).is_some_and(|f| Arc::ptr_eq(&f, v))
+        };
         crate::plugins::set_thread_policy(Arc::clone(&policy));
         crate::audit::set_thread_audit(Arc::clone(&audit));
         crate::plugins::set_thread_preauth(vec![Arc::clone(&preauth)]);
         crate::plugins::set_thread_authdata(vec![Arc::clone(&authdata)]);
+        crate::plugins::set_thread_otp_verifiers(vec![Arc::clone(&otp)]);
         {
             let _slots = ThreadSlots::take();
             assert!(!Arc::ptr_eq(&crate::plugins::current_policy(), &policy));
             assert!(!Arc::ptr_eq(&crate::audit::current_audit(), &audit));
             assert!(!is_own(&preauth_modules(), &preauth));
             assert!(!is_own(&authdata_modules(), &authdata));
+            assert!(!own_otp(&otp));
         }
         assert!(Arc::ptr_eq(&crate::plugins::current_policy(), &policy));
         assert!(Arc::ptr_eq(&crate::audit::current_audit(), &audit));
         assert!(is_own(&preauth_modules(), &preauth));
         assert!(is_own(&authdata_modules(), &authdata));
+        assert!(own_otp(&otp));
         // A loop that ends by a panic puts the slots back as it unwinds.
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _slots = ThreadSlots::take();
             assert!(!is_own(&preauth_modules(), &preauth));
+            assert!(!own_otp(&otp));
             panic!("the loop ends by a panic");
         }));
         assert!(unwound.is_err());
@@ -1167,9 +1113,11 @@ mod tests {
         assert!(Arc::ptr_eq(&crate::audit::current_audit(), &audit));
         assert!(is_own(&preauth_modules(), &preauth));
         assert!(is_own(&authdata_modules(), &authdata));
+        assert!(own_otp(&otp));
         crate::plugins::clear_thread_policy();
         crate::audit::clear_thread_audit();
         crate::plugins::clear_thread_preauth();
         crate::plugins::clear_thread_authdata();
+        crate::plugins::clear_thread_otp_verifiers();
     }
 }

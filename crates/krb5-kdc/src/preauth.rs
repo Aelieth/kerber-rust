@@ -16,8 +16,10 @@ use krb5_types::{
 };
 use zeroize::Zeroizing;
 
+mod otp;
 mod spake;
 
+pub(crate) use otp::{otp_edata, process_otp};
 pub(crate) use spake::{SpakeStep, process_spake, spake_edata};
 
 use crate::der::take_der;

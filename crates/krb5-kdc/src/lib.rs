@@ -22,6 +22,7 @@
 
 mod acl;
 mod ad;
+mod asn1_text;
 mod audit;
 mod create;
 mod daemon;
@@ -113,11 +114,13 @@ pub use persist::{
 };
 pub use plugins::preauth_startup_lines;
 pub use plugins::{
-    KdcAuthdata, KdcPolicy, KdcPreauth, PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock,
-    apply_policy_times, clear_thread_authdata, clear_thread_kdcpolicies, clear_thread_policy,
-    clear_thread_preauth, current_policy, register_authdata, register_kdcpolicy,
-    register_kdcpolicy_test_if_selected, register_preauth, set_policy, set_thread_authdata,
-    set_thread_kdcpolicies, set_thread_policy, set_thread_preauth,
+    KdcAuthdata, KdcPolicy, KdcPreauth, OtpVerdict, OtpVerifier, OtpVerifyRequest,
+    PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock, apply_policy_times,
+    clear_thread_authdata, clear_thread_kdcpolicies, clear_thread_otp_verifiers,
+    clear_thread_policy, clear_thread_preauth, current_policy, register_authdata,
+    register_kdcpolicy, register_kdcpolicy_test_if_selected, register_otp_verifier,
+    register_preauth, set_policy, set_thread_authdata, set_thread_kdcpolicies,
+    set_thread_otp_verifiers, set_thread_policy, set_thread_preauth,
 };
 pub use store::{
     AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,

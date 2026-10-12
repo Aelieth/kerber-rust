@@ -75,6 +75,7 @@ mod constants;
 pub mod deltat;
 pub mod extra;
 pub mod fast;
+pub mod k5json;
 mod name;
 mod name_error;
 pub mod otp;

@@ -91,13 +91,12 @@ leaves the realm cap at 7 d and new principals at 0, as in MIT
 
 ## Non-goals
 
-Stated up front so their absence is not read as a gap: OTP / SAM-2 preauth
-(PA-OTP over RADIUS), IAKERB, `KEYRING:` ccaches (post-embed), kdcproxy /
+Stated up front so their absence is not read as a gap: SAM-2 preauth, OTP
+over RADIUS (OTP preauth asks an embedder `OtpVerifier`), IAKERB, `KEYRING:` ccaches (post-embed), kdcproxy /
 MS-KKDCP, FIPS mode, MSLSA ccaches, `ksu` / `.k5login`, `kpropd` under
 inetd, `gss_wrap_size_limit`, dlopen plugins (plugins are Rust traits),
-db2 / LMDB / LDAP KDB backends, and master-key rollover. The two `absent`
-rows in the parity ledger are the first and the `gss_wrap_size_limit`
-entries of this list.
+db2 / LMDB / LDAP KDB backends, and master-key rollover. The one `absent`
+row in the parity ledger is this list's `gss_wrap_size_limit` entry.
 
 ## Quick start
 

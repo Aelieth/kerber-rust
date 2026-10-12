@@ -413,6 +413,15 @@ fn finish_preauth(
                 detail: None,
             });
         }
+        Some(PreauthAction::Otp { key, indicators }) => {
+            // MIT `on_response` (`plugins/preauth/otp/main.c:167-188`): the reply key becomes the armor key, and TKT_FLG_PRE_AUTH is set.
+            // MIT `return_padata` (`kdc/kdc_preauth.c:1470-1493`): the key is not marked replaced, so key info is still sent.
+            as_rep_key = Some(key);
+            skip_timestamp = true;
+            for ind in &indicators {
+                authind_add(&mut auth_indicators, ind);
+            }
+        }
         Some(PreauthAction::SpakeDone(k)) => {
             // MIT `verify_response` (`spake_kdc.c:464-464`): K'[0] replaces the reply key as a strengthened one.
             // MIT `replace_reply_key` (`kdc_preauth.c:567-580`): a strengthened key does not mark the reply key replaced, so the AS-REP keeps its etype-info.

@@ -132,17 +132,17 @@ fn enable_only_keeps_named_modules_in_that_order() {
 
 #[test]
 fn an_unknown_enable_only_name_keeps_no_module() {
-    let store = realm("[plugins]\n    kdcpreauth = {\n        enable_only = otp\n    }\n");
+    let store = realm("[plugins]\n    kdcpreauth = {\n        enable_only = nosuch\n    }\n");
     let types = hint_types(&store, 71_020);
     assert!(
         !types.contains(&pa::ENC_TIMESTAMP) && !types.contains(&pa::SPAKE),
-        "otp is not a loaded module, so enable_only keeps none of them: {types:?}"
+        "nosuch is not a loaded module, so enable_only keeps none of them: {types:?}"
     );
     assert!(
         types.contains(&pa::FX_FAST),
         "FX-FAST is not a kdcpreauth module: {types:?}"
     );
-    let kept = realm("[plugins]\n    kdcpreauth = {\n        disable = otp\n    }\n");
+    let kept = realm("[plugins]\n    kdcpreauth = {\n        disable = nosuch\n    }\n");
     let types = hint_types(&kept, 71_021);
     assert!(
         types.contains(&pa::ENC_TIMESTAMP) && types.contains(&pa::SPAKE),

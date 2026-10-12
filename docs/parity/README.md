@@ -96,9 +96,9 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**502** = A1 131 + A2 94 + A3 84 + A4 64 + A5 32 + B1 97.
-exact 407 · stricter-documented 16 · deviation 33 ·
-absent 2 · deferred 44.
+**508** = A1 131 + A2 94 + A3 90 + A4 64 + A5 32 + B1 97.
+exact 412 · stricter-documented 17 · deviation 34 ·
+absent 1 · deferred 44.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and
@@ -116,9 +116,8 @@ Annotation rule: an `exact` row whose proof is unit-only carries
 state is reachable only by forged PDUs / faulted stores, so no live
 differential cell can exist); rows without it name a live gate cell or
 `diffsend` case. The per-row sweep that adds the annotation to every
-unit-only `exact` row has not been done. The two
-`absent` rows are the user's stated non-goals (OTP preauth,
-`gss_wrap_size_limit`).
+unit-only `exact` row has not been done. The one
+`absent` row is the user's stated non-goal `gss_wrap_size_limit`.
 
 Draft was 209 = 108 + 56 + 45 at HEAD `bafc5f2`. Additions: A1 8 +
 A2 10 (9 report rows + the `kdc_util.c:144-191` split) + A3 10 = 28
@@ -220,6 +219,6 @@ Client library: the `tgs_req_ex` FAST sibling; ERROR-level
 kadm5 and kprop: the kadmind chpw log's `from <addr>`; `kprop.rs`'s
 per-connection replay cache.
 
-OTP kdcpreauth is not implemented (a user non-goal; its row is
-`absent (otp)`). PKINIT freshness (`a3-preauth.md`), anonymous PKINIT
+OTP kdcpreauth is MIT's `otp` module with an embedder `OtpVerifier` in
+place of RADIUS (`a3-preauth.md`). PKINIT freshness (`a3-preauth.md`), anonymous PKINIT
 (`a2-as.md`) and PA-S4U-X509-USER (`a1-tgs.md`) are graded `exact`.

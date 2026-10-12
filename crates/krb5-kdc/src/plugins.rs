@@ -36,6 +36,13 @@ pub enum PreauthAction {
     SpakeDone(ProtocolKey),
     /// PA-ENC-TIMESTAMP verified; caller must not re-verify.
     EncTsOk,
+    /// OTP verified: the reply key is the FAST armor key, and the token's indicators apply.
+    Otp {
+        /// The armor key, which replaces the reply key.
+        key: ProtocolKey,
+        /// Authentication indicators to add to the ticket.
+        indicators: Vec<String>,
+    },
 }
 
 /// What one kdcpreauth module adds to a PREAUTH_REQUIRED (or PREAUTH_FAILED) hint list.
@@ -180,6 +187,7 @@ pub trait KdcPreauth: Send + Sync {
 
 struct FastMod;
 struct PkinitMod;
+struct OtpMod;
 struct SpakeMod;
 struct EncTsMod;
 
@@ -287,6 +295,38 @@ impl KdcPreauth for PkinitMod {
             store.realm(),
         )?;
         Ok(done.map(|(key, pa, signed)| PreauthAction::Pkinit { key, pa, signed }))
+    }
+}
+
+// MIT `kdcpreauth_otp_initvt` (`plugins/preauth/otp/main.c:378-387`): the module owns PA-OTP-REQUEST.
+impl KdcPreauth for OtpMod {
+    fn name(&self) -> &'static str {
+        "otp"
+    }
+    fn pa_types(&self) -> &'static [i32] {
+        &[pa::OTP_REQUEST]
+    }
+    fn advertise(
+        &self,
+        _store: &dyn PrincipalRead,
+        _client: &Principal,
+        _armor: bool,
+        _requested: &[i32],
+    ) -> Vec<PaData> {
+        Vec::new()
+    }
+    fn edata_with_armor(
+        &self,
+        _store: &dyn PrincipalRead,
+        client: &Principal,
+        armor: Option<&ProtocolKey>,
+        _requested: &[i32],
+        _ikey: Option<&ProtocolKey>,
+    ) -> PreauthHint {
+        crate::preauth::otp_edata(client, armor)
+    }
+    fn process_as(&self, rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
+        crate::preauth::process_otp(rock)
     }
 }
 
@@ -506,6 +546,7 @@ fn builtins() -> &'static [Arc<dyn KdcPreauth>] {
         vec![
             Arc::new(FastMod) as Arc<dyn KdcPreauth>,
             Arc::new(PkinitMod),
+            Arc::new(OtpMod),
             Arc::new(SpakeMod),
             Arc::new(EncChallengeMod),
             Arc::new(EncTsMod),
@@ -559,6 +600,105 @@ pub(crate) fn preauth_modules() -> Vec<Arc<dyn KdcPreauth>> {
             .cloned(),
     );
     v
+}
+
+/// What an [`OtpVerifier`] decides about one OTP.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum OtpVerdict {
+    /// MIT Access-Accept: the user is authenticated. The token's indicators apply.
+    Accept,
+    /// Any other reply, such as MIT Access-Reject: this token is refused, and the next token of
+    /// the `otp` attribute is tried.
+    Reject,
+    /// MIT transport error: the check could not be made, so the request fails at once.
+    Error(String),
+}
+
+/// One OTP presented for a principal. Not `Debug`: `otp_value` is a secret.
+pub struct OtpVerifyRequest<'a> {
+    /// The client's database entry, under its canonical name (MIT `client_name`), not the name the
+    /// request used.
+    pub principal: &'a Principal,
+    /// The KDC's realm.
+    pub realm: &'a str,
+    /// The token type that chose this verifier.
+    pub token_type: &'a str,
+    /// The username the token names (MIT `token.username`), as octets: a JSON string's `\u`
+    /// escapes are single octets, not UTF-8.
+    pub username: &'a [u8],
+    /// The `otp-value` the client sent, empty when it sent none. Untrusted bytes, not UTF-8: it may
+    /// carry the password followed by the code, so the embedder decides what it means.
+    pub otp_value: &'a [u8],
+}
+
+/// The verdict source that MIT's OTP module takes from a RADIUS server. An embedder supplies it.
+///
+/// `verify` is synchronous and blocks the whole KDC loop. It runs under the loop's store read
+/// lock, so it must never call a writer of that store, which would deadlock. An
+/// [`OtpVerdict::Error`] counts as a failed attempt for kadm5 lockout, as MIT's RADIUS timeout
+/// does. `otp_value` is untrusted bytes, not UTF-8, and may carry the password followed by the code,
+/// so the embedder decides what it means. Replay and throttling belong to the verifier.
+pub trait OtpVerifier: Send + Sync {
+    /// The token type this verifier serves: the `type` an `otp` attribute token names.
+    fn name(&self) -> &'static str;
+    /// Decide on one presented OTP.
+    fn verify(&self, req: &OtpVerifyRequest<'_>) -> OtpVerdict;
+}
+
+static OTP_VERIFIERS: Mutex<Vec<Arc<dyn OtpVerifier>>> = Mutex::new(Vec::new());
+
+thread_local! {
+    static THREAD_OTP: std::cell::RefCell<Option<Vec<Arc<dyn OtpVerifier>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Register a verifier for every thread that has not set its own list.
+pub fn register_otp_verifier(v: Arc<dyn OtpVerifier>) {
+    OTP_VERIFIERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(v);
+}
+
+/// Install this thread's verifiers, used in place of the process-wide ones (tests).
+pub fn set_thread_otp_verifiers(v: Vec<Arc<dyn OtpVerifier>>) {
+    THREAD_OTP.with(|t| *t.borrow_mut() = Some(v));
+}
+
+/// Drop this thread's verifiers so it uses the process-wide ones.
+pub fn clear_thread_otp_verifiers() {
+    THREAD_OTP.with(|t| *t.borrow_mut() = None);
+}
+
+/// Take this thread's own verifiers off it, leaving the process-wide ones in force on the thread.
+pub(crate) fn take_thread_otp_verifiers() -> Option<Vec<Arc<dyn OtpVerifier>>> {
+    THREAD_OTP.with(|t| t.borrow_mut().take())
+}
+
+/// Put back what [`take_thread_otp_verifiers`] took.
+pub(crate) fn restore_thread_otp_verifiers(v: Option<Vec<Arc<dyn OtpVerifier>>>) {
+    THREAD_OTP.with(|t| *t.borrow_mut() = v);
+}
+
+/// The verifiers in force on this thread: its own list when it set one, else the process-wide list.
+fn otp_verifiers() -> Vec<Arc<dyn OtpVerifier>> {
+    if let Some(v) = THREAD_OTP.with(|t| t.borrow().clone()) {
+        return v;
+    }
+    OTP_VERIFIERS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// The first verifier of that name in force on this thread. The Arc is cloned out of the list.
+pub(crate) fn find_otp_verifier(name: &str) -> Option<Arc<dyn OtpVerifier>> {
+    otp_verifiers().into_iter().find(|v| v.name() == name)
+}
+
+/// The names of the verifiers in force on this thread, in order.
+pub(crate) fn otp_verifier_names() -> Vec<&'static str> {
+    otp_verifiers().iter().map(|v| v.name()).collect()
 }
 
 /// One kdcauthdata module. Errors are logged, not fatal.
@@ -2156,6 +2296,49 @@ mod tests {
             ),
             other => panic!("expected a protocol error, got {other:?}"),
         }
+    }
+
+    /// A verifier of one name and one fixed verdict.
+    struct Tagged(&'static str, OtpVerdict);
+
+    impl OtpVerifier for Tagged {
+        fn name(&self) -> &'static str {
+            self.0
+        }
+        fn verify(&self, _req: &OtpVerifyRequest<'_>) -> OtpVerdict {
+            self.1.clone()
+        }
+    }
+
+    #[test]
+    fn registry_first_name_wins_thread_list_replaces() {
+        let (store, _) = bootstrap_documented().unwrap();
+        let client = store
+            .get_name(&PrincipalName::new(
+                PrincipalName::NT_PRINCIPAL,
+                [TEST_USER],
+            ))
+            .unwrap()
+            .clone();
+        let verdict = |name: &str| {
+            let v = find_otp_verifier(name).expect("a verifier of that name");
+            v.verify(&OtpVerifyRequest {
+                principal: &client,
+                realm: TEST_REALM,
+                token_type: name,
+                username: b"u",
+                otp_value: b"1",
+            })
+        };
+        // The process-wide list: the first verifier of a name is the one used.
+        register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Accept)));
+        register_otp_verifier(Arc::new(Tagged("registry-first", OtpVerdict::Reject)));
+        assert_eq!(verdict("registry-first"), OtpVerdict::Accept);
+        // This thread's own list replaces the process-wide one.
+        set_thread_otp_verifiers(vec![Arc::new(Tagged("registry-first", OtpVerdict::Reject))]);
+        assert_eq!(verdict("registry-first"), OtpVerdict::Reject);
+        clear_thread_otp_verifiers();
+        assert_eq!(verdict("registry-first"), OtpVerdict::Accept);
     }
 
     #[test]
