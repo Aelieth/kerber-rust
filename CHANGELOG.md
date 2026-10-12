@@ -1486,6 +1486,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** With no server named, the acceptor walks its keys as MIT's `decrypt_try_server`:
+  each key of the ticket's enctype whatever its kvno, then `iteration_error`'s NOKEY, NOT_US,
+  BADKEYVER or BAD_INTEGRITY. Settled live.
 - **protocol.** A KRB-SAFE whose checksum type the library does not know is
   KRB5_PROG_SUMTYPE_NOSUPP, as MIT's `read_krbsafe`; it was KDC_ERR_SUMTYPE_NOSUPP (15). Settled
   live.

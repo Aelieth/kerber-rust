@@ -265,7 +265,20 @@ fn rust_answer(kind: &str, ap: &[u8], msg: Option<&[u8]>) -> String {
         return "other:key".into();
     };
     let replay = ReplayCache::new();
-    let ok = match verify_ap_req_ex(ap, &ApVerifyParams::single_key(&service_key), &replay, None) {
+    // The oracle's MEMORY keytab: one entry, the service at kvno 1. No server is named, so the
+    // acceptor walks the keytab as MIT's `krb5_rd_req` with a NULL server does.
+    let keys = [service_key];
+    let principal = [(
+        PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "oracle.kerber.test"]),
+        ascii("KERBER.TEST"),
+    )];
+    let params = ApVerifyParams {
+        keys: &keys,
+        key_kvnos: Some(&[1]),
+        key_principals: Some(&principal),
+        ..ApVerifyParams::single_key(&keys[0])
+    };
+    let ok = match verify_ap_req_ex(ap, &params, &replay, None) {
         Ok(ok) => ok,
         Err(e) => return class(&e),
     };

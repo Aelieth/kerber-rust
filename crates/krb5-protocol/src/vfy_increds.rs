@@ -156,6 +156,7 @@ fn get_vfy_cred(
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: Some(kvnos.as_slice()),
+        key_principals: None,
         kvno: None,
         expected_server: Some(name),
         expected_realm: Some(realm_s.as_str()),

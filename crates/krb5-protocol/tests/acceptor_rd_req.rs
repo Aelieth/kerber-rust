@@ -59,77 +59,128 @@ fn host_ap_req() -> (Vec<u8>, ProtocolKey, u32) {
     (raw, ent.key, ent.kvno)
 }
 
+/// The acceptor's parameters for a keytab walk: no server named, as MIT's `krb5_rd_req` with a
+/// NULL server.
+fn walk(keys: &[ProtocolKey], kvnos: &[u32]) -> ApVerifyParams<'static> {
+    ApVerifyParams {
+        keys: Box::leak(keys.to_vec().into_boxed_slice()),
+        key_kvnos: Some(Box::leak(kvnos.to_vec().into_boxed_slice())),
+        key_principals: None,
+        kvno: None,
+        expected_server: None,
+        expected_realm: None,
+        skew: DEFAULT_SKEW,
+        remote_addr: None,
+        now: None,
+    }
+}
+
+fn walk_code(raw: &[u8], keys: &[ProtocolKey], kvnos: &[u32]) -> (i32, String) {
+    match verify_ap_req_ex(raw, &walk(keys, kvnos), &ReplayCache::new(), None) {
+        Err(krb5_protocol::Error::KrbError { code, text }) => (code, text.unwrap_or_default()),
+        other => panic!("expected a KRB-ERROR code, got {other:?}"),
+    }
+}
+
+/// MIT `decrypt_try_server` (`rd_req_dec.c:355-443`): with no server, every key of the ticket's enctype is tried, whatever its kvno.
 #[test]
-fn rd_req_kvno_mismatch_is_nokey() {
+fn rd_req_keytab_walk_tries_every_kvno() {
     let (raw, key, kvno) = host_ap_req();
     assert_eq!(kvno, 1);
     let other = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[9u8; 32]).unwrap();
-    let keys = [other, key];
-    let kvnos = [2u32, 2];
+    verify_ap_req_ex(
+        &raw,
+        &walk(&[other, key], &[2, 2]),
+        &ReplayCache::new(),
+        None,
+    )
+    .expect("the right key at another kvno decrypts the ticket");
+}
+
+/// MIT `decrypt_try_server` (`rd_req_dec.c:355-443`): a ticket whose kvno was relabelled still decrypts under the key it was sealed with.
+#[test]
+fn rd_req_keytab_walk_takes_a_relabelled_kvno() {
+    let (raw, key, _) = host_ap_req();
+    let mut ap: ApReq = decode(&raw).expect("AP-REQ");
+    ap.ticket.enc_part.kvno = Some(2);
+    let raw2 = encode(&ap).expect("encode");
+    verify_ap_req_ex(&raw2, &walk(&[key], &[1]), &ReplayCache::new(), None)
+        .expect("relabelled kvno");
+}
+
+/// MIT `iteration_error` (`rd_req_dec.c:264-270`): a key at the ticket's kvno and enctype that does not decrypt it is BAD_INTEGRITY.
+#[test]
+fn rd_req_keytab_walk_wrong_key_at_the_ticket_kvno_is_bad_integrity() {
+    let (raw, _, kvno) = host_ap_req();
+    let dummy = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
+    let (code, text) = walk_code(&raw, &[dummy], &[kvno]);
+    assert_eq!(code, err::BAD_INTEGRITY);
+    assert!(
+        text.contains("found in keytab but cannot decrypt ticket"),
+        "{text}"
+    );
+}
+
+/// MIT `iteration_error` (`rd_req_dec.c:224-232`): an empty keytab is NOKEY, "No keys in keytab".
+#[test]
+fn rd_req_keytab_walk_without_keys_is_nokey() {
+    let (raw, _, _) = host_ap_req();
+    let (code, text) = walk_code(&raw, &[], &[]);
+    assert_eq!(code, err::NOKEY);
+    assert_eq!(text, "No keys in keytab");
+}
+
+/// MIT `iteration_error` (`rd_req_dec.c:244-256`): no key at the ticket's kvno is BADKEYVER, and a higher one says the ticket is out of date.
+#[test]
+fn rd_req_keytab_walk_without_the_ticket_kvno_is_badkeyver() {
+    let (raw, _, kvno) = host_ap_req();
+    let dummy = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
+    let (code, text) = walk_code(&raw, std::slice::from_ref(&dummy), &[kvno + 1]);
+    assert_eq!(code, err::BADKEYVER);
+    assert!(text.ends_with("ticket is likely out of date"), "{text}");
+    let mut ap: ApReq = decode(&raw).expect("AP-REQ");
+    ap.ticket.enc_part.kvno = Some(kvno + 5);
+    let (code, text) = walk_code(&encode(&ap).expect("encode"), &[dummy], &[kvno]);
+    assert_eq!(code, err::BADKEYVER);
+    assert!(text.ends_with("keytab is likely out of date"), "{text}");
+}
+
+/// MIT `iteration_error` (`rd_req_dec.c:257-263`): a key at the ticket's kvno but of another enctype is BADKEYVER.
+#[test]
+fn rd_req_keytab_walk_without_the_ticket_enctype_is_badkeyver() {
+    let (raw, _, kvno) = host_ap_req();
+    let aes128 = ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[3u8; 16]).unwrap();
+    let (code, text) = walk_code(&raw, &[aes128], &[kvno]);
+    assert_eq!(code, err::BADKEYVER);
+    assert!(
+        text.contains("found in keytab but not with enctype"),
+        "{text}"
+    );
+}
+
+/// MIT `iteration_error` (`rd_req_dec.c:239-243`): keys only for other principals are NOT_US.
+#[test]
+fn rd_req_keytab_walk_without_the_ticket_server_is_not_us() {
+    let (raw, _, kvno) = host_ap_req();
+    let dummy = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
+    let keys = [dummy];
+    let kvnos = [kvno];
+    let other = [(
+        PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "other.kerber.test"]),
+        krb5_types::ascii(TEST_REALM),
+    )];
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: Some(&kvnos),
-        kvno: None,
-        expected_server: None,
-        expected_realm: None,
-        skew: DEFAULT_SKEW,
-        remote_addr: None,
-        now: None,
+        key_principals: Some(&other),
+        ..ApVerifyParams::single_key(&keys[0])
     };
     match verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None) {
-        Err(krb5_protocol::Error::KrbError { code, .. }) => assert_eq!(code, err::NOKEY),
-        other => panic!("expected NOKEY, got {other:?}"),
-    }
-}
-
-#[test]
-fn rd_req_relabeled_ticket_kvno_is_nokey() {
-    let (raw, key, kvno) = host_ap_req();
-    assert_eq!(kvno, 1);
-    let mut ap: ApReq = decode(&raw).expect("AP-REQ");
-    ap.ticket.enc_part.kvno = Some(2);
-    let raw2 = encode(&ap).expect("encode");
-    let keys = [key];
-    let kvnos = [1u32];
-    let params = ApVerifyParams {
-        keys: &keys,
-        key_kvnos: Some(&kvnos),
-        kvno: None,
-        expected_server: None,
-        expected_realm: None,
-        skew: DEFAULT_SKEW,
-        remote_addr: None,
-        now: None,
-    };
-    match verify_ap_req_ex(&raw2, &params, &ReplayCache::new(), None) {
-        Err(krb5_protocol::Error::KrbError { code, .. }) => assert_eq!(code, err::NOKEY),
-        other => panic!("expected NOKEY, got {other:?}"),
-    }
-}
-
-#[test]
-fn rd_req_wrong_key_at_claimed_kvno_is_integrity() {
-    let (raw, key, kvno) = host_ap_req();
-    assert_eq!(kvno, 1);
-    let mut ap: ApReq = decode(&raw).expect("AP-REQ");
-    ap.ticket.enc_part.kvno = Some(2);
-    let raw2 = encode(&ap).expect("encode");
-    let dummy = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
-    let keys = [key, dummy];
-    let kvnos = [1u32, 2];
-    let params = ApVerifyParams {
-        keys: &keys,
-        key_kvnos: Some(&kvnos),
-        kvno: None,
-        expected_server: None,
-        expected_realm: None,
-        skew: DEFAULT_SKEW,
-        remote_addr: None,
-        now: None,
-    };
-    match verify_ap_req_ex(&raw2, &params, &ReplayCache::new(), None) {
-        Err(krb5_protocol::Error::Crypto(s)) => assert!(s.contains("integrity"), "{s}"),
-        other => panic!("expected integrity failure, got {other:?}"),
+        Err(krb5_protocol::Error::KrbError { code, text }) => {
+            assert_eq!(code, err::NOT_US);
+            assert!(text.unwrap_or_default().contains("not found in keytab"));
+        }
+        other => panic!("expected NOT_US, got {other:?}"),
     }
 }
 
@@ -141,6 +192,7 @@ fn rd_req_matching_kvno_verifies() {
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: Some(&kvnos),
+        key_principals: None,
         kvno: None,
         expected_server: None,
         expected_realm: None,
@@ -160,6 +212,7 @@ fn rd_req_authenticator_skew_is_skew() {
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: None,
+        key_principals: None,
         kvno: None,
         expected_server: None,
         expected_realm: None,
@@ -192,6 +245,7 @@ fn verify(
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: None,
+        key_principals: None,
         kvno: None,
         expected_server: None,
         expected_realm: None,
@@ -303,6 +357,7 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: None,
+        key_principals: None,
         kvno: None,
         expected_server: None,
         expected_realm: None,
@@ -367,6 +422,7 @@ fn pinned_name_wrong_kvno_is_badkeyver() {
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: Some(&kvnos),
+        key_principals: None,
         kvno: None,
         expected_server: Some(&server),
         expected_realm: Some(TEST_REALM),

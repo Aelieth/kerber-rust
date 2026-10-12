@@ -409,6 +409,7 @@ fn recvauth_with(
     let params = ApVerifyParams {
         keys: verify_keys,
         key_kvnos: None,
+        key_principals: None,
         kvno: None,
         expected_server: verify_server,
         expected_realm: verify_realm,

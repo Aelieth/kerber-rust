@@ -17,7 +17,7 @@ use krb5_crypto::{
 use krb5_types::transited::hierarchical_walk_realms;
 use krb5_types::{
     ApOptions, ApReq, Authenticator, EncTicketPart, EncryptedData, HostAddress, HostAddresses,
-    KerberosTime, PrincipalName, Realm, Ticket, err, flag_bit, ku,
+    KerberosTime, PrincipalName, Realm, Ticket, err, flag_bit, ku, principal_compare,
 };
 
 use crate::error::Error;
@@ -33,6 +33,9 @@ pub struct ApVerifyParams<'a> {
     pub keys: &'a [ProtocolKey],
     /// Optional kvno per `keys` slot (`krb5_kt_get_entry` / KDB keytab).
     pub key_kvnos: Option<&'a [u32]>,
+    /// Optional principal per `keys` slot (a keytab entry's name and realm), for the keytab walk
+    /// MIT makes when no server is named. A slot without one is taken as the ticket server's.
+    pub key_principals: Option<&'a [(PrincipalName, Realm)]>,
     /// Optional kvno hint from the ticket.
     pub kvno: Option<u32>,
     /// Expected server name; ticket sname must match.
@@ -55,6 +58,7 @@ impl<'a> ApVerifyParams<'a> {
         Self {
             keys: std::slice::from_ref(key),
             key_kvnos: None,
+            key_principals: None,
             kvno: None,
             expected_server: None,
             expected_realm: None,
@@ -303,20 +307,15 @@ pub fn verify_ap_req_ex(
     result
 }
 
-/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): the invalid flag is tested only after the
-/// ticket times. A ticket outside the caller skew, using starttime or else authtime, is not a
-/// successful verify.
-fn verify_inner(
-    raw: &[u8],
+/// The ticket's enc-part decrypted for a server named explicitly: its own keys, at the ticket's
+/// enctype and kvno.
+/// MIT `try_one_princ` (`rd_req_dec.c:325-347`): the server's keytab entry at the ticket's kvno and enctype, then `keytab_fetch_error` when there is none.
+fn decrypt_for_server(
+    ap: &ApReq,
     params: &ApVerifyParams<'_>,
-    replay: &ReplayCache,
-    app_cksum: Option<&[u8]>,
-) -> Result<ApVerifyOk, Error> {
-    if raw.is_empty() {
-        return Err(Error::TruncatedReply);
-    }
-    let ap: ApReq = decode(raw)?;
-    let ignore_host = krb5_config::load_krb5_conf().is_some_and(|c| c.ignore_acceptor_hostname);
+    ignore_host: bool,
+    tkt_usage: KeyUsage,
+) -> Result<EncTicketPart, Error> {
     if !sname_match(
         params.expected_server,
         params.expected_realm,
@@ -329,7 +328,6 @@ fn verify_inner(
             text: Some("ticket sname does not match expected server".into()),
         });
     }
-    let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let mut last_err = Error::KrbError {
         code: err::NOKEY,
         text: Some("no matching service key".into()),
@@ -412,6 +410,184 @@ fn verify_inner(
         }
         return Err(last_err);
     };
+    Ok(ticket_part)
+}
+
+/// MIT `is_matching` (`rd_req_dec.c:279-286`): no server, or a host-based one with no realm or no host (or with acceptor hostnames ignored), matches several keytab principals, so the keytab is walked.
+fn is_matching(server: Option<&PrincipalName>, realm: Option<&str>, ignore_host: bool) -> bool {
+    let Some(server) = server else {
+        return true;
+    };
+    server.name_type == PrincipalName::NT_SRV_HST
+        && server.name_string.len() == 2
+        && (realm.is_none_or(str::is_empty)
+            || server.name_string[1].as_bytes().is_empty()
+            || ignore_host)
+}
+
+/// The ticket's enc-part decrypted by walking every key that may be the server's.
+/// MIT `decrypt_try_server` (`rd_req_dec.c:355-443`): each entry whose principal the server matches is tried when its enctype is the ticket's, whatever its kvno, and what the walk found picks the error.
+fn decrypt_by_keytab_walk(
+    ap: &ApReq,
+    params: &ApVerifyParams<'_>,
+    ignore_host: bool,
+    tkt_usage: KeyUsage,
+) -> Result<EncTicketPart, Error> {
+    let tkt_kvno = ap.ticket.enc_part.kvno.unwrap_or(0);
+    let tkt_etype = ap.ticket.enc_part.etype;
+    let tkt_realm = String::from_utf8_lossy(ap.ticket.realm.as_bytes()).into_owned();
+    let mut walk = KeytabWalk::default();
+    for (i, key) in params.keys.iter().enumerate() {
+        // A slot with no principal is taken as the ticket server's: the caller holds that service's keys.
+        let (ename, erealm) = params
+            .key_principals
+            .and_then(|p| p.get(i))
+            .map_or((&ap.ticket.sname, tkt_realm.clone()), |(n, r)| {
+                (n, String::from_utf8_lossy(r.as_bytes()).into_owned())
+            });
+        let is_tkt_server = principal_compare(ename, &erealm, &ap.ticket.sname, &tkt_realm);
+        if !sname_match(
+            params.expected_server,
+            params.expected_realm,
+            ename,
+            erealm.as_bytes(),
+            ignore_host,
+        ) {
+            walk.tkt_server_mismatch |= is_tkt_server;
+            continue;
+        }
+        walk.found_server_match = true;
+        let similar_enctype = key.etype().to_iana() == tkt_etype;
+        if is_tkt_server {
+            walk.found_tkt_server = true;
+            let kvno = params
+                .key_kvnos
+                .and_then(|v| v.get(i))
+                .copied()
+                .unwrap_or(tkt_kvno);
+            if kvno == tkt_kvno {
+                walk.found_kvno = true;
+                walk.found_enctype |= similar_enctype;
+            } else if kvno > tkt_kvno {
+                walk.found_higher_kvno = true;
+            }
+        }
+        // MIT `try_one_entry` (`rd_req_dec.c:290-320`): a key that does not decrypt the ticket, or a ticket that then does not decode, is passed over.
+        if similar_enctype
+            && let Ok(plain) = decrypt_enc_data(
+                key,
+                tkt_usage,
+                tkt_etype,
+                ap.ticket.enc_part.cipher.as_ref(),
+            )
+            && let Ok(part) = decode::<EncTicketPart>(&plain)
+        {
+            return Ok(part);
+        }
+    }
+    Err(iteration_error(params, ap, &tkt_realm, tkt_kvno, &walk))
+}
+
+/// What a keytab walk found, in MIT's names.
+#[derive(Default)]
+struct KeytabWalk {
+    tkt_server_mismatch: bool,
+    found_server_match: bool,
+    found_tkt_server: bool,
+    found_kvno: bool,
+    found_higher_kvno: bool,
+    found_enctype: bool,
+}
+
+/// MIT `iteration_error` (`rd_req_dec.c:208-275`): the code and text for a keytab walk that decrypted nothing, chosen by what it found.
+fn iteration_error(
+    params: &ApVerifyParams<'_>,
+    ap: &ApReq,
+    tkt_realm: &str,
+    tkt_kvno: u32,
+    walk: &KeytabWalk,
+) -> Error {
+    let tsname = ap.ticket.sname.unparse_with_realm(tkt_realm);
+    let sname = params
+        .expected_server
+        .map(|s| s.unparse_with_realm(params.expected_realm.unwrap_or_default()));
+    let etype = ap.ticket.enc_part.etype;
+    let encname = EncryptionType::from_iana(etype)
+        .or_else(|_| EncryptionType::known(etype))
+        .map_or_else(|_| etype.to_string(), |e| e.to_mit_name().to_string());
+    let (code, text) = if !walk.found_server_match {
+        (
+            err::NOKEY,
+            sname.map_or_else(
+                || "No keys in keytab".to_string(),
+                |s| format!("Server principal {s} does not match any keys in keytab"),
+            ),
+        )
+    } else if walk.tkt_server_mismatch {
+        (
+            err::NOT_US,
+            format!(
+                "Request ticket server {tsname} found in keytab but does not match server principal {}",
+                sname.unwrap_or_default()
+            ),
+        )
+    } else if !walk.found_tkt_server {
+        (
+            err::NOT_US,
+            format!("Request ticket server {tsname} not found in keytab (ticket kvno {tkt_kvno})"),
+        )
+    } else if !walk.found_kvno {
+        let why = if walk.found_higher_kvno {
+            "ticket is likely out of date"
+        } else {
+            "keytab is likely out of date"
+        };
+        (
+            err::BADKEYVER,
+            format!("Request ticket server {tsname} kvno {tkt_kvno} not found in keytab; {why}"),
+        )
+    } else if !walk.found_enctype {
+        (
+            err::BADKEYVER,
+            format!(
+                "Request ticket server {tsname} kvno {tkt_kvno} found in keytab but not with enctype {encname}"
+            ),
+        )
+    } else {
+        (
+            err::BAD_INTEGRITY,
+            format!(
+                "Request ticket server {tsname} kvno {tkt_kvno} enctype {encname} found in keytab but cannot decrypt ticket"
+            ),
+        )
+    };
+    Error::KrbError {
+        code,
+        text: Some(text),
+    }
+}
+
+/// MIT `rd_req_decoded_opt` (`rd_req_dec.c:634-638`): the invalid flag is tested only after the
+/// ticket times. A ticket outside the caller skew, using starttime or else authtime, is not a
+/// successful verify.
+fn verify_inner(
+    raw: &[u8],
+    params: &ApVerifyParams<'_>,
+    replay: &ReplayCache,
+    app_cksum: Option<&[u8]>,
+) -> Result<ApVerifyOk, Error> {
+    if raw.is_empty() {
+        return Err(Error::TruncatedReply);
+    }
+    let ap: ApReq = decode(raw)?;
+    let ignore_host = krb5_config::load_krb5_conf().is_some_and(|c| c.ignore_acceptor_hostname);
+    let tkt_usage = KeyUsage::new(ku::TICKET)?;
+    let ticket_part = if is_matching(params.expected_server, params.expected_realm, ignore_host) {
+        decrypt_by_keytab_walk(&ap, params, ignore_host, tkt_usage)?
+    } else {
+        decrypt_for_server(&ap, params, ignore_host, tkt_usage)?
+    };
+    let tkt_etype = ap.ticket.enc_part.etype;
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
     let skew = params.skew.max(0);
     // MIT `krb5int_validate_times` (`valid_times.c:36-57`): use starttime, else authtime, for

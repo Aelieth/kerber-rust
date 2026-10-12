@@ -550,6 +550,7 @@ pub(crate) fn handle_kpasswd_from(
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: Some(kvnos.as_slice()),
+        key_principals: None,
         kvno: None,
         expected_server: Some(&changepw),
         expected_realm: Some(store_realm.as_str()),
