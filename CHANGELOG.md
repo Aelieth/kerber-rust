@@ -527,6 +527,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **config.** Read `[otp]` from kdc.conf, then krb5.conf, as MIT's `token_types_decode`: types in `strcmp` order, merged repeats, final `*`, `strip_realm`, `indicator`, `timeout`, `retries`. `server` and `secret` are refused. Units.
 - **examples.** `examples/otp-kdc` runs the KDC in-process with an RFC 6238 TOTP `OtpVerifier`, the embed path KLLDAP takes; MIT `kinit -T` logs in with a code.
 - **kdc.** OTP preauth (RFC 6560) as MIT's `otp` module, FAST only: the `otp` string attribute, the armor key as the reply key, MIT's codes and quirks; an embedder `OtpVerifier` checks the value. Units; settled live.
 - **types.** The RFC 6560 OTP messages and key usage 45, byte for byte MIT's seven vectors; a PA-OTP-REQUEST's `Debug` hides the PIN and the OTP value. Units.

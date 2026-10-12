@@ -3,7 +3,7 @@
 //! There is no C FFI. DNS SRV is a minimal RFC 2782 UDP client.
 //!
 //! One module per MIT source family: `profile` (krb5.conf), `plugin_profile` (`[plugins]`),
-//! `kdcconf`, `iprop_params`, `ccname`, `srv`, `testenv`. In-src tests stay under `tests`.
+//! `otp_profile` (`[otp]`), `kdcconf`, `iprop_params`, `ccname`, `srv`, `testenv`. In-src tests stay under `tests`.
 //!
 //! # Examples
 //!
@@ -35,6 +35,7 @@ mod iprop_params;
 mod kdcconf;
 pub mod listen;
 mod logging;
+mod otp_profile;
 mod plugin_profile;
 mod profile;
 mod srv;
@@ -405,6 +406,10 @@ pub struct Krb5Conf {
     ///
     /// MIT `configure_interface` (`lib/krb5/krb/plugin.c:301-347`): a later stage reads one interface from here.
     pub plugins: PluginProfile,
+    /// `[otp]` of these files, merged as one profile file.
+    ///
+    /// MIT `token_types_decode` (`plugins/preauth/otp/otp_state.c:298-344`): the otp module reads its token types from the KDC context's profile.
+    pub otp: OtpTree,
 }
 
 /// `[libdefaults] dns_canonicalize_hostname`, MIT's tristate.
@@ -544,6 +549,10 @@ pub struct KdcConf {
     ///
     /// MIT `get_profile_var` (`lib/krb5/krb/plugin.c:188-203`): the relations sit under the interface name.
     pub plugins: PluginProfile,
+    /// This file's `[otp]`.
+    ///
+    /// MIT `token_types_decode` (`plugins/preauth/otp/otp_state.c:298-344`): the otp module reads its token types from the KDC context's profile, kdc.conf first.
+    pub otp: OtpTree,
 }
 
 /// Resolved ccache name (`krb5_cc_resolve`).
@@ -573,6 +582,9 @@ pub use kdcconf::{
     default_stash_file, env_kdc_config, kdc_conf_path,
 };
 pub use logging::LogSpecs;
+pub use otp_profile::{
+    DEFAULT_OTP_TYPE, OtpInitError, OtpProfile, OtpTree, OtpType, kdc_otp_types, token_types_decode,
+};
 pub use plugin_profile::{
     PluginProfile, PluginRelations, filter_plugin_modules, kdc_plugin_relations,
 };

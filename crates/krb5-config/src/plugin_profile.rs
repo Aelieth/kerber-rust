@@ -343,7 +343,7 @@ impl Cursor {
     }
 }
 
-enum PluginLine {
+pub(crate) enum PluginLine {
     Subsection {
         name: String,
         starred: bool,
@@ -357,7 +357,7 @@ enum PluginLine {
 
 /// One relation or subsection. A tag with whitespace and then more text is skipped.
 /// A quoted value is not a subsection, and the value is not split on whitespace.
-fn parse_plugin_line(line: &str) -> Option<PluginLine> {
+pub(crate) fn parse_plugin_line(line: &str) -> Option<PluginLine> {
     let eq = line.find('=')?;
     if eq == 0 {
         return None;

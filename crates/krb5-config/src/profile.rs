@@ -386,6 +386,7 @@ fn parse_into(
     let mut capaths_client: Option<String> = None;
     let text = join_subsection_braces(text)?;
     let mut plugins = super::plugin_profile::Cursor::new();
+    let mut otp = super::otp_profile::Cursor::new();
     for raw in text.lines() {
         if let Some(kind) = include_directive(raw)
             && let Some(st) = stack.as_deref_mut()
@@ -415,6 +416,9 @@ fn parse_into(
                 "improper format: indented include".into(),
             ));
         }
+        if let Some((body, starred)) = super::otp_profile::section_header(line) {
+            otp.observe_header(&mut conf.otp, body, starred);
+        }
         if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
             section = s.trim().to_ascii_lowercase();
             libdefaults_exact = s == "libdefaults";
@@ -436,6 +440,7 @@ fn parse_into(
             continue;
         }
         plugins.observe_line(plugin_profile, line);
+        otp.observe_line(&mut conf.otp, line);
         if section == "realms" {
             if let Some(name) = line.strip_suffix('{') {
                 realm = Some(name.trim().trim_end_matches('=').trim().to_string());
@@ -988,7 +993,7 @@ pub(super) fn mit_boolean(v: &str) -> Option<bool> {
 
 /// An integer as MIT's `parse_int`: `strtol` base 10 of the whole string, in C `int` range.
 /// MIT `parse_int` (`util/profile/prof_get.c:283-305`): leading space is skipped, and any other trailing byte is `PROF_BAD_INTEGER`.
-fn parse_profile_int(v: &str) -> Option<i32> {
+pub(crate) fn parse_profile_int(v: &str) -> Option<i32> {
     let v = v.trim_start_matches(|c: char| c.is_ascii_whitespace());
     if v.is_empty() {
         return None;

@@ -100,6 +100,7 @@ impl Default for KdcConf {
             kdc_max_dgram_reply_size: MAX_DGRAM_SIZE,
             kdc_tcp_listen_backlog: DEFAULT_TCP_LISTEN_BACKLOG,
             plugins: super::plugin_profile::PluginProfile::default(),
+            otp: super::otp_profile::OtpTree::default(),
         }
     }
 }
@@ -154,10 +155,15 @@ impl KdcConf {
         let mut dbmodules: Vec<(String, String, String)> = Vec::new();
         let mut plugin_profile = super::plugin_profile::PluginProfile::default();
         let mut plugins = super::plugin_profile::Cursor::new();
+        let mut otp_tree = super::otp_profile::OtpTree::default();
+        let mut otp = super::otp_profile::Cursor::new();
         for raw in text.lines() {
             let line = raw.trim();
             if line.is_empty() || line.starts_with('#') {
                 continue;
+            }
+            if let Some((body, starred)) = super::otp_profile::section_header(line) {
+                otp.observe_header(&mut otp_tree, body, starred);
             }
             if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 section = s.trim().to_ascii_lowercase();
@@ -174,6 +180,7 @@ impl KdcConf {
                 continue;
             }
             plugins.observe_line(&mut plugin_profile, line);
+            otp.observe_line(&mut otp_tree, line);
             if section == "dbmodules" {
                 if let Some(head) = line.strip_suffix('{') {
                     dbmodule = Some(head.trim().trim_end_matches('=').trim().to_owned());
@@ -267,6 +274,7 @@ impl KdcConf {
             .and_then(sscanf_int)
             .unwrap_or(DEFAULT_TCP_LISTEN_BACKLOG);
         conf.plugins = plugin_profile;
+        conf.otp = otp_tree;
         Ok(conf)
     }
 
