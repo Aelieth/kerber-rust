@@ -146,6 +146,7 @@ opt-level = 3
 
 # rasn 0.28.14 as published, with its BER decoder made to fail a message whose OPTIONAL
 # explicit field, or SEQUENCE OF element, is present but does not decode (upstream ab9d0fd565,
-# in rasn 0.29.0). vendor/rasn/PATCHES.md has the diff and its provenance.
+# in rasn 0.29.0), and to decode as MIT 1.22.2 does. vendor/rasn/PATCHES.md has the diff and
+# its provenance.
 [patch.crates-io]
 rasn = { path = "vendor/rasn" }

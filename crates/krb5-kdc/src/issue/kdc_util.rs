@@ -61,10 +61,7 @@ pub(super) fn process_tgs_header(
     let auth_usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR)?;
     let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
     let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
-    authenticator
-        .cusec
-        .validate()
-        .map_err(|_| proto(err::GENERIC, status::PROCESS_TGS))?;
+    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
     let auth_realm = utf8_realm(&authenticator.crealm)?;
     let tkt_realm = utf8_realm(&enc_tkt.crealm)?;
     if !krb5_types::principal_compare(&authenticator.cname, auth_realm, &enc_tkt.cname, tkt_realm) {

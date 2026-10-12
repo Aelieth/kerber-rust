@@ -20,12 +20,15 @@ use krb5_kdc::testrealm::{
 use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part, pac_from_ticket_part, wrap_win2k_pac};
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
+use krb5_crypto::{KeyUsage, decrypt, encrypt};
 use krb5_testkit::{
     TgsReqBuilder, expect_status, host_tgt, issue_tgt, issue_tgt_password, pref_etypes,
     reseal_store,
 };
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac};
-use krb5_types::{ApReq, KdcOptions, KrbError, PrincipalName, err, flag_bit, pa};
+use krb5_types::{
+    ApReq, Authenticator, EncryptionKey, KdcOptions, KrbError, PrincipalName, err, flag_bit, ku, pa,
+};
 
 fn rewrite_server_cksumtype(part: &mut krb5_types::EncTicketPart, ctype: i32) {
     let raw = pac_from_ticket_part(part).unwrap();
@@ -360,4 +363,62 @@ fn tgs_ap_options_omits_crealm() {
     let e: KrbError = decode(&bytes).unwrap();
     assert_eq!(e.error_code, err::POLICY);
     no_client(&e);
+}
+
+/// A TGS-REQ whose PA-TGS-REQ authenticator (given a subkey) `rewrite` changes, re-encrypted in
+/// the session key, and the realm it goes to.
+fn tgs_with_authenticator(rewrite: impl Fn(&mut Vec<u8>)) -> (PrincipalStore, Vec<u8>) {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let req = as_req(
+        cname.clone(),
+        TEST_REALM,
+        30,
+        Some(vec![pa_enc_timestamp(&client_key()).expect("pa")]),
+    )
+    .unwrap();
+    let as_out = krb5_kdc::issue_as(&store, &req).expect("AS");
+    let mut tgs = tgs_req(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        31,
+    )
+    .expect("tgs");
+    let pa_tgs = tgs
+        .0
+        .padata
+        .as_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|p| p.padata_type == pa::TGS_REQ)
+        .unwrap();
+    let mut ap: ApReq = decode(pa_tgs.padata_value.as_ref()).unwrap();
+    let usage = KeyUsage::new(ku::TGS_REQ_AUTHENTICATOR).unwrap();
+    let plain = decrypt(&as_out.session_key, usage, ap.authenticator.cipher.as_ref()).unwrap();
+    let mut authenticator: Authenticator = decode(&plain).unwrap();
+    authenticator.subkey = Some(EncryptionKey {
+        keytype: 18,
+        keyvalue: vec![0x52; 32].into(),
+    });
+    let mut der = encode(&authenticator).unwrap();
+    rewrite(&mut der);
+    ap.authenticator.cipher = encrypt(&as_out.session_key, usage, &der).unwrap().into();
+    pa_tgs.padata_value = encode(&ap).unwrap().into();
+    (store, encode(&tgs).unwrap())
+}
+
+#[test]
+fn tgs_authenticator_cusec_out_of_range_is_issued() {
+    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
+    let (store, req) = tgs_with_authenticator(|der| {
+        let mut authenticator: Authenticator = decode(der).unwrap();
+        authenticator.cusec = krb5_types::Microseconds(1_000_000);
+        *der = encode(&authenticator).unwrap();
+    });
+    let reply = krb5_kdc::handle_request(&store, &req).unwrap();
+    assert_eq!(reply.first(), Some(&0x6d), "a TGS-REP");
 }

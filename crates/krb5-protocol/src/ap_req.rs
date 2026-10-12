@@ -249,10 +249,10 @@ pub struct ApVerifyOk {
 ///
 /// [`Error::KrbError`] with the code of the failed check: `NOKEY` (`service_key` is not the
 /// ticket's etype), `TKT_NYV` / `TKT_EXPIRED` (outside 300 seconds), `TKT_INVALID`, `ILL_CR_TKT`
-/// (transited), `BAD_INTEGRITY` (authenticator client), `SKEW`, `REPEAT` (replay).
+/// (transited), `BADMATCH` (authenticator client), `SKEW`, `REPEAT` (replay).
 /// [`Error::Crypto`] when the ticket or the authenticator does not decrypt or the session key is
 /// unusable; [`Error::Asn1`] when a part does not decode; [`Error::TruncatedReply`] for an empty
-/// `raw`; [`Error::ReplyMismatch`] for an authenticator `cusec` out of range.
+/// `raw`.
 pub fn verify_ap_req(
     raw: &[u8],
     service_key: &ProtocolKey,
@@ -267,11 +267,11 @@ pub fn verify_ap_req(
 ///
 /// [`Error::KrbError`] with the code of the failed check: `NOT_US` (not the expected server),
 /// `NOKEY` / `BADKEYVER` (no key for the etype or kvno), `TKT_NYV` / `TKT_EXPIRED` (outside
-/// `params.skew`), `TKT_INVALID`, `BADADDR`, `ILL_CR_TKT` (transited), `BAD_INTEGRITY`
+/// `params.skew`), `TKT_INVALID`, `BADADDR`, `ILL_CR_TKT` (transited), `BADMATCH`
 /// (authenticator client), `SKEW`, `REPEAT` (replay). [`Error::Crypto`] when the ticket or the
 /// authenticator does not decrypt, the session key is unusable, or the checksum over `app_cksum`
 /// does not verify; [`Error::Asn1`] when a part does not decode; [`Error::TruncatedReply`] for an
-/// empty `raw`; [`Error::ReplyMismatch`] for an authenticator `cusec` out of range.
+/// empty `raw`.
 pub fn verify_ap_req_ex(
     raw: &[u8],
     params: &ApVerifyParams<'_>,
@@ -452,13 +452,14 @@ fn verify_inner(
     let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
     let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
     let authenticator: Authenticator = decode(&auth_plain)?;
-    authenticator
-        .cusec
-        .validate()
-        .map_err(|e| Error::ReplyMismatch(e.to_string()))?;
-    if authenticator.cname != ticket_part.cname || authenticator.crealm != ticket_part.crealm {
+    // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): only the authenticator's ctime is checked, against the clock skew; its cusec is taken as it is, past 999999 too.
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:530-532`): `krb5_principal_compare` (realm and
+    // components, not the name type) or KRB5KRB_AP_ERR_BADMATCH.
+    if !authenticator.cname.components_eq(&ticket_part.cname)
+        || authenticator.crealm != ticket_part.crealm
+    {
         return Err(Error::KrbError {
-            code: err::BAD_INTEGRITY,
+            code: err::BADMATCH,
             text: Some("authenticator/ticket client mismatch".into()),
         });
     }

@@ -186,13 +186,8 @@ pub fn verify_krb_safe_checksum(
             text: Some("Invalid message type".into()),
         });
     }
+    // MIT `safe_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:816-816`): the msg-type decodes as the message's own.
     let (msg, body_der) = decode_safe_with_body(raw)?;
-    if msg.msg_type != KrbSafe::MSG_TYPE {
-        return Err(Error::KrbError {
-            code: err::MSG_TYPE,
-            text: Some("Invalid message type".into()),
-        });
-    }
     let ctype = msg.cksum.cksumtype;
     if !cksumtype_is_known(ctype) {
         return Err(Error::KrbError {

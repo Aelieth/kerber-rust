@@ -73,6 +73,19 @@ impl<'input> Decoder<'input> {
             })?;
         Ok(tag_ident.tag)
     }
+    /// Peek the next identifier (kerber-rust).
+    fn peek_identifier(&self) -> Result<Identifier> {
+        let (_, identifier) =
+            self::parser::parse_identifier_octet(self.input).map_err(|e| match e {
+                ParseNumberError::Nom(e) => {
+                    DecodeError::map_nom_err(e, self.config.current_codec())
+                }
+                ParseNumberError::Overflow => {
+                    DecodeError::integer_overflow(32u32, self.config.current_codec())
+                }
+            })?;
+        Ok(identifier)
+    }
     /// Generic helper used by the optional decoders.
     /// The function will peek the upcoming tag and only invoke `f` when the tags match.
     /// If tags won't match or input is empty, will return `None`
@@ -116,6 +129,11 @@ impl<'input> Decoder<'input> {
         let (input, (identifier, contents)) =
             self::parser::parse_value(self.config, self.input, Some(tag))?;
         self.input = input;
+        // kerber-rust: X.690 8.3.1 / 8.2.1, as MIT's check_atype_tag: INTEGER, BOOLEAN, NULL and
+        // OBJECT IDENTIFIER are primitive.
+        if identifier.is_constructed() {
+            return Err(BerDecodeErrorKind::InvalidConstructedIdentifier.into());
+        }
         match contents {
             Some(contents) => Ok((identifier, contents)),
             None => Err(BerDecodeErrorKind::IndefiniteLengthNotAllowed.into()),
@@ -144,6 +162,22 @@ impl<'input> Decoder<'input> {
     where
         F: FnOnce(&mut Self) -> Result<D>,
     {
+        self.parse_constructed_contents_then(tag, check_identifier, false, decode_fn)
+    }
+
+    /// [`Self::parse_constructed_contents`], leaving definite-length contents that `decode_fn`
+    /// did not read unread when `extensible` (kerber-rust: a SEQUENCE, as MIT's decode_sequence
+    /// reads one).
+    fn parse_constructed_contents_then<D, F>(
+        &mut self,
+        tag: Tag,
+        check_identifier: bool,
+        extensible: bool,
+        decode_fn: F,
+    ) -> Result<D>
+    where
+        F: FnOnce(&mut Self) -> Result<D>,
+    {
         self.check_recursion_depth()?;
         let (identifier, contents) = self.parse_value(tag)?;
 
@@ -167,7 +201,7 @@ impl<'input> Decoder<'input> {
         if streaming {
             self.input = inner.input;
             self.parse_eoc()?;
-        } else if !inner.input.is_empty() {
+        } else if !extensible && !inner.input.is_empty() {
             return Err(DecodeError::unexpected_extra_data(
                 inner.input.len(),
                 self.codec(),
@@ -454,27 +488,30 @@ impl<'input> crate::Decoder for Decoder<'input> {
         constraints: Constraints,
     ) -> Result<I> {
         let primitive_bytes = self.parse_primitive_value(tag)?.1;
-        let integer_width = I::WIDTH as usize / 8;
-        let result = if primitive_bytes.len() > integer_width {
-            // in the case of superfluous leading bytes (especially zeroes),
-            // we may still want to try to decode the integer even though
-            // the length is > integer width ...
-            let leading_byte = if primitive_bytes[0] & 0x80 == 0x80 {
-                0xFF
-            } else {
-                0x00
-            };
-            let input_iter = primitive_bytes
-                .iter()
-                .copied()
-                .skip_while(|n| *n == leading_byte);
-            let data_length = input_iter.clone().count();
-            I::try_from_bytes(
-                &primitive_bytes[primitive_bytes.len() - data_length..primitive_bytes.len()],
-                self.codec(),
-            )?
-        } else {
+        let result = if I::WIDTH > 64 {
             I::try_from_bytes(primitive_bytes, self.codec())?
+        } else {
+            // kerber-rust: the INTEGER's two's-complement value, as MIT's k5_asn1_decode_int
+            // reads it: up to eight octets, none dropped to make it fit, and a value outside the
+            // type is an overflow (MIT store_int). A u32 holds MIT's int32 (a kvno, a nonce, a
+            // cusec) as its 32 bits.
+            if primitive_bytes.len() > 8 {
+                return Err(DecodeError::integer_overflow(I::WIDTH, self.codec()));
+            }
+            let mut value = primitive_bytes;
+            while let [first, second, ..] = value {
+                if (*first == 0x00 && second & 0x80 == 0) || (*first == 0xFF && second & 0x80 != 0) {
+                    value = &value[1..];
+                } else {
+                    break;
+                }
+            }
+            if I::WIDTH == 32 && !I::ZERO.is_signed() {
+                let int32 = <i32 as types::IntegerType>::try_from_signed_bytes(value, self.codec())?;
+                I::try_from_unsigned_bytes(&int32.to_be_bytes(), self.codec())?
+            } else {
+                I::try_from_signed_bytes(value, self.codec())?
+            }
         };
 
         if let Some(value) = constraints.value()
@@ -692,11 +729,11 @@ impl<'input> crate::Decoder for Decoder<'input> {
         tag: Tag,
         constraints: Constraints,
     ) -> Result<types::GeneralString> {
-        <types::GeneralString>::try_from(
+        // kerber-rust: any octets, as MIT's k5_asn1_decode_bytestring reads a GeneralString.
+        Ok(types::GeneralString::from_octets(
             self.decode_octet_string::<Cow<[u8]>>(tag, constraints)?
                 .as_ref(),
-        )
-        .map_err(|e| DecodeError::permitted_alphabet_error(e, self.codec()))
+        ))
     }
 
     fn decode_graphic_string(
@@ -781,7 +818,10 @@ impl<'input> crate::Decoder for Decoder<'input> {
         default_initializer_fn: Option<DF>,
         decode_fn: F,
     ) -> Result<D> {
-        self.parse_constructed_contents(tag, true, |decoder| {
+        // kerber-rust: MIT's decode_sequence (asn1_encode.c) models every SEQUENCE as extensible:
+        // contents after the last field it reads, or from an element no later field takes,
+        // are not read.
+        self.parse_constructed_contents_then(tag, true, true, |decoder| {
             // If there are no fields, or the input is empty and we know that
             // all fields are optional or default fields, we call the default
             // initializer and skip calling the decode function at all.
@@ -802,12 +842,18 @@ impl<'input> crate::Decoder for Decoder<'input> {
     }
 
     fn decode_explicit_prefix<D: Decode>(&mut self, tag: Tag) -> Result<D> {
-        self.parse_constructed_contents(tag, false, D::decode)
+        // kerber-rust: X.690 8.14.3, as MIT's check_atype_tag: an explicit tag is constructed.
+        self.parse_constructed_contents(tag, true, D::decode)
     }
     fn decode_optional_with_explicit_prefix<D: Decode>(
         &mut self,
         tag: Tag,
     ) -> Result<Option<D>, Self::Error> {
+        // kerber-rust: a primitive element is not the explicit field, as MIT's check_atype_tag
+        // matches none for it.
+        if !self.at_end_of_contents() && self.peek_identifier()?.is_primitive() {
+            return Ok(None);
+        }
         self.decode_optional_with_check(tag, |decoder| decoder.decode_explicit_prefix(tag))
     }
 

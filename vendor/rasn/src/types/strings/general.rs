@@ -24,6 +24,12 @@ impl GeneralString {
         Ok(Self(Self::try_from_slice(bytes)?))
     }
 
+    /// The octets as they are (kerber-rust: MIT reads a GeneralString as octets,
+    /// `k5_asn1_decode_bytestring`).
+    pub(crate) fn from_octets(bytes: &[u8]) -> Self {
+        Self(bytes.to_vec())
+    }
+
     /// Provides a slice of bytes representing the current value.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {

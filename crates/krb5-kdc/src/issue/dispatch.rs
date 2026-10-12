@@ -532,8 +532,21 @@ fn framing_at(mut p: &[u8], depth: u32) -> Result<(), &'static str> {
 /// The MIT error a failure inside a well-framed request body stands for, from the Rust decoder's
 /// failure: a time that is not fifteen characters is a bad length and any other bad time a bad
 /// format; a field missing or out of place is a missing field; a wrong type tag a bad identifier.
+/// `KerberosTime`'s decoder reports `KerberosTime is not YYYYMMDDhhmmssZ (N octets)`.
 /// MIT `k5_asn1_decode_generaltime` (`lib/krb5/asn.1/asn1_encode.c:242-260`): a time must be fifteen characters, digits then `Z`.
 fn body_failure_text(e: &str) -> &'static str {
+    if let Some(n) = e
+        .split("KerberosTime is not YYYYMMDDhhmmssZ (")
+        .nth(1)
+        .and_then(|rest| rest.split(" octets)").next())
+        .and_then(|n| n.parse::<usize>().ok())
+    {
+        return if n == 15 {
+            ASN1_BAD_FORMAT
+        } else {
+            ASN1_BAD_LENGTH
+        };
+    }
     if let Some(time) = e
         .split("Invalid date string: ")
         .nth(1)

@@ -1420,3 +1420,36 @@ fn armor_whose_session_enctype_the_kdc_does_not_permit_is_find_fast() {
     let err = krb5_kdc::issue_as(&store, &req).expect_err("armor enctypes");
     assert_find_fast(err, err::GENERIC, "FAST armor enctype not permitted");
 }
+
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:124-124`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
+#[test]
+fn encrypted_challenge_with_an_out_of_range_pausec_is_issued() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (armor_ap, akey) = armor_ap_key(&armor_tgt(&store, 840), 0);
+    let chal = krb_fx_cf2(
+        &akey,
+        &user_key(),
+        b"clientchallengearmor",
+        b"challengelongterm",
+    )
+    .expect("cf2");
+    let der = encode(&PaEncTsEnc {
+        patimestamp: KerberosTime::now(),
+        pausec: Some(krb5_types::Microseconds(1_000_000)),
+    })
+    .expect("ts");
+    let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT).unwrap();
+    let enc = EncryptedData {
+        etype: chal.etype().to_iana(),
+        kvno: None,
+        cipher: encrypt(&chal, usage, &der).expect("enc").into(),
+    };
+    let inner = vec![PaData {
+        padata_type: pa::ENCRYPTED_CHALLENGE,
+        padata_value: encode(&enc).expect("ed").into(),
+    }];
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut req = as_req(cname, TEST_REALM, 841, None).unwrap();
+    attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
+    krb5_kdc::issue_as(&store, &req).expect("a pausec past 999999 verifies");
+}

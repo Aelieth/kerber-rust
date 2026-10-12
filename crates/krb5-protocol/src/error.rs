@@ -189,6 +189,19 @@ impl From<krb5_crypto::Error> for Error {
 
 impl From<krb5_asn1::Error> for Error {
     fn from(e: krb5_asn1::Error) -> Self {
-        Self::Asn1(e.to_string())
+        decode_error(&e)
     }
+}
+
+/// A decode failure as the caller of MIT's decoder sees it.
+/// MIT `krb5_version` (`lib/krb5/asn.1/asn1_k_encode.c:30-30`): a pvno or vno that is not 5 fails the decode with KRB5KDC_ERR_BAD_PVNO, not an ASN.1 error.
+fn decode_error(e: &krb5_asn1::Error) -> Error {
+    let text = e.to_string();
+    if text.contains("KRB5KDC_ERR_BAD_PVNO") {
+        return Error::KrbError {
+            code: krb5_types::err::BAD_PVNO,
+            text: Some("Protocol version mismatch".into()),
+        };
+    }
+    Error::Asn1(text)
 }

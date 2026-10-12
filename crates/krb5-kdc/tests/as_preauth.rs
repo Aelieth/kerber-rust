@@ -1418,7 +1418,7 @@ fn encts_under_a_non_permitted_etype_is_24_like_filter_preauth_error() {
 }
 
 #[test]
-fn encts_with_an_out_of_range_pausec_is_24_not_60() {
+fn encts_with_an_out_of_range_pausec_verifies() {
     krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let key = user_key_z1b_preauth_filter(&store, EncryptionType::Aes256CtsHmacSha196);
@@ -1437,10 +1437,9 @@ fn encts_with_an_out_of_range_pausec_is_24_not_60() {
         padata_type: pa::ENC_TIMESTAMP,
         padata_value: encode(&enc).unwrap().into(),
     }];
-    assert_eq!(
-        wire(&store, 0x1b07, padata),
-        (err::PREAUTH_FAILED, Some("PREAUTH_FAILED".into()))
-    );
+    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-97`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
+    let req = as_req(user(), TEST_REALM, 0x1b07, Some(padata)).unwrap();
+    krb5_kdc::issue_as(&store, &req).expect("a pausec past 999999 verifies");
 }
 
 struct RawCodePolicy(i32);

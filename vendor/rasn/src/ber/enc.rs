@@ -483,6 +483,17 @@ impl crate::Encoder<'_> for Encoder {
         _: crate::types::Identifier,
     ) -> Result<Self::Ok, Self::Error> {
         Self::check_encode_value_constraint(value, &constraints, self.codec())?;
+        if I::WIDTH == 32 && !value.is_signed() {
+            // kerber-rust: a u32 is MIT's int32 (a kvno, a nonce, a cusec), its 32 bits written
+            // as MIT's encoder writes an int32.
+            let (bytes, needed) = value.to_unsigned_bytes_be();
+            let mut word = [0u8; 4];
+            word[4 - needed..].copy_from_slice(&bytes.as_ref()[..needed]);
+            let int32 = i32::from_be_bytes(word);
+            let (bytes, needed) = <i32 as IntegerType>::to_signed_bytes_be(&int32);
+            self.encode_primitive(tag, &bytes.as_ref()[..needed]);
+            return Ok(());
+        }
         let (bytes, needed) = value.to_signed_bytes_be();
         self.encode_primitive(tag, &bytes.as_ref()[..needed]);
         Ok(())

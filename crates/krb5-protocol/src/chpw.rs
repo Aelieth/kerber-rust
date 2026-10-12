@@ -309,8 +309,8 @@ fn change_or_set(
     let (priv_plain, version) = if let Some((realm, name)) = target {
         let cpw = ChangePasswdData {
             newpasswd: new_pw.to_vec().into(),
-            targname: Some(name.clone()),
-            targrealm: Some(realm.clone()),
+            targname: name.clone(),
+            targrealm: realm.clone(),
         };
         let der = encode(&cpw);
         wipe_octets(cpw.newpasswd);

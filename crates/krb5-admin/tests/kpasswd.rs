@@ -140,8 +140,8 @@ fn kpasswd_self_change_without_initial_is_initial_flag_needed() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"tgs-new-pass".to_vec().into(),
-        targname: None,
-        targrealm: None,
+        targname: user.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -229,8 +229,8 @@ fn kpasswd_self_change_with_other_name_type_still_requires_initial() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"nt-unknown-pass".to_vec().into(),
-        targname: Some(PrincipalName::new(PrincipalName::NT_UNKNOWN, [TEST_USER])),
-        targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        targname: PrincipalName::new(PrincipalName::NT_UNKNOWN, [TEST_USER]),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -318,8 +318,8 @@ fn kpasswd_target_realm_mismatch_is_harderror() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"foreign-realm-pass".to_vec().into(),
-        targname: Some(user.clone()),
-        targrealm: Some(krb5_types::ascii("OTHER.TEST")),
+        targname: user.clone(),
+        targrealm: krb5_types::ascii("OTHER.TEST"),
     };
     let priv_msg =
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -410,8 +410,8 @@ fn kpasswd_foreign_self_change_needs_initial() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"foreign-self-pass".to_vec().into(),
-        targname: Some(user.clone()),
-        targrealm: Some(krb5_types::ascii("OTHER.TEST")),
+        targname: user.clone(),
+        targrealm: krb5_types::ascii("OTHER.TEST"),
     };
     let priv_msg =
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -500,8 +500,8 @@ fn kpasswd_unprivileged_other_principal_is_accessdenied() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"other-should-fail".to_vec().into(),
-        targname: Some(admin.clone()),
-        targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        targname: admin.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -589,8 +589,8 @@ fn kpasswd_self_change_with_initial_succeeds() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"as-new-pass".to_vec().into(),
-        targname: None,
-        targrealm: None,
+        targname: user.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -670,8 +670,8 @@ fn kpasswd_admin_change_ignores_initial() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"admin-set-user".to_vec().into(),
-        targname: Some(user.clone()),
-        targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        targname: user.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&tgs_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -775,8 +775,8 @@ fn kpasswd_policy_rejection_is_softerror() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"abc".to_vec().into(),
-        targname: Some(user),
-        targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        targname: user,
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -862,8 +862,8 @@ fn kpasswd_refuses_a_dictionary_word_after_the_database_is_read_again() {
         .expect("AP-REQ");
         let cpw = ChangePasswdData {
             newpasswd: newpw.to_vec().into(),
-            targname: None,
-            targrealm: None,
+            targname: user.clone(),
+            targrealm: krb5_types::ascii(TEST_REALM),
         };
         let priv_msg =
             build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).expect("cpw"), None)
@@ -1178,8 +1178,8 @@ fn kpasswd_rfc3244_bumps_kvno() {
     let ap_der = encode(&ap).unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"rfc3244-new".to_vec().into(),
-        targname: Some(user.clone()),
-        targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        targname: user.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let cpw_der = encode(&cpw).unwrap();
     let priv_msg = build_krb_priv_with_seq(&as_out.session_key, &cpw_der, None).unwrap();
@@ -1294,8 +1294,8 @@ fn kpasswd_accepts_first_current_ticket_when_best_key_differs() {
     .unwrap();
     let cpw_data = ChangePasswdData {
         newpasswd: b"sha384-first-pass".to_vec().into(),
-        targname: Some(user.clone()),
-        targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        targname: user.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw_data).unwrap(), None).unwrap();
@@ -1354,8 +1354,8 @@ fn kpasswd_udp_listener_then_issue_as() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"udp-new-pass".to_vec().into(),
-        targname: Some(user.clone()),
-        targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        targname: user.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -1535,8 +1535,8 @@ fn kpasswd_vno1_der_stays_password() {
     .unwrap();
     let cpw = ChangePasswdData {
         newpasswd: b"der-as-pass".to_vec().into(),
-        targname: Some(admin.clone()),
-        targrealm: Some(krb5_types::ascii(TEST_REALM)),
+        targname: admin.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg =
         build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).unwrap(), None).unwrap();
@@ -1645,8 +1645,8 @@ fn kpasswd_stamps_kadmind_not_the_client() {
     .expect("AP-REQ");
     let cpw = ChangePasswdData {
         newpasswd: b"z72-kpw-newpass-1".to_vec().into(),
-        targname: None,
-        targrealm: None,
+        targname: user.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg = build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).expect("cpw"), None)
         .expect("priv");
@@ -1734,8 +1734,8 @@ fn kpasswd_keeps_an_out_of_process_principal() {
     .expect("AP-REQ");
     let cpw = ChangePasswdData {
         newpasswd: b"z8-kpw-newpass-1".to_vec().into(),
-        targname: None,
-        targrealm: None,
+        targname: user.clone(),
+        targrealm: krb5_types::ascii(TEST_REALM),
     };
     let priv_msg = build_krb_priv_with_seq(&as_out.session_key, &encode(&cpw).expect("cpw"), None)
         .expect("priv");
@@ -2001,4 +2001,93 @@ fn kpasswd_session_enctype_outside_permitted_is_autherror() {
     let e_data = err.e_data.unwrap();
     assert_eq!(&e_data.as_ref()[..2], &[0, 3]);
     assert_eq!(&e_data.as_ref()[2..], b"Failed reading application request");
+}
+
+/// A ChangePasswdData that names no target, or whose targname does not decode, is MALFORMED and
+/// changes no password, the caller's own included.
+/// MIT `decode_krb5_setpw_req` (`lib/krb5/asn.1/asn1_k_encode.c:1253-1276`): the target is required.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:174-180`): a request that does not decode is MALFORMED "Failed decoding ChangePasswdData".
+#[test]
+fn setpw_without_a_target_is_malformed() {
+    use krb5_kdc::shared_dump as shared_store;
+    use krb5_protocol::unwrap_krb_priv_ex;
+
+    krb5_config::isolate_test_krb5();
+
+    let (store, acl) = bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let user_key = store
+        .get_name(&user)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let kvno = |s: &krb5_kdc::PrincipalStore| {
+        s.get_name(&user)
+            .unwrap()
+            .keys
+            .iter()
+            .map(|k| k.kvno)
+            .max()
+            .unwrap()
+    };
+    let kvno_before = kvno(&store);
+    let as_out = changepw_as_ticket(&store, &user, &user_key, 921);
+    let cpw_key = store
+        .get_name(&kadmin_changepw())
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let shared = shared_store(store);
+    let tlv = |tag: u8, content: &[u8]| {
+        let mut out = vec![tag, u8::try_from(content.len()).unwrap()];
+        out.extend_from_slice(content);
+        out
+    };
+    let newpasswd = tlv(0xa0, &tlv(0x04, b"no-target-pass"));
+    let targrealm = tlv(0xa2, &tlv(0x1b, TEST_REALM.as_bytes()));
+    // newpasswd [0] alone, then a targname [1] that holds a SET where a PrincipalName belongs.
+    let requests = [
+        tlv(0x30, &newpasswd),
+        tlv(
+            0x30,
+            &[newpasswd.clone(), tlv(0xa1, &tlv(0x31, &[])), targrealm].concat(),
+        ),
+    ];
+    for (i, cpw) in requests.iter().enumerate() {
+        let ap = build_ap_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let priv_msg = build_krb_priv_with_seq(&as_out.session_key, cpw, None).unwrap();
+        let req = encode_setpw(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+        let rep =
+            handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
+        let (_, priv_rep) = parse_kpasswd_rep(&rep).unwrap();
+        let user_data = unwrap_krb_priv_ex(
+            &as_out.session_key,
+            &priv_rep,
+            &ReplayCache::new(),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(&user_data[..2], &[0, 1], "request {i}: MALFORMED");
+        assert_eq!(
+            &user_data[2..],
+            b"Failed decoding ChangePasswdData",
+            "request {i}"
+        );
+    }
+    assert_eq!(
+        kvno(&shared.read().unwrap()),
+        kvno_before,
+        "no password changed"
+    );
 }

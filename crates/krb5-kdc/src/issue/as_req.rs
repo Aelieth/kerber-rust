@@ -862,10 +862,7 @@ fn verify_encrypted_challenge(
         .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
     let ts: PaEncTsEnc =
         decode(&plain).map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    if let Some(u) = ts.pausec {
-        u.validate()
-            .map_err(|_| proto(err::GENERIC, status::PREAUTH_FAILED))?;
-    }
+    // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:124-124`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
     let now = i64::from(KerberosTime::now().unix_seconds());
     let then = i64::from(ts.patimestamp.unix_seconds());
     if (now - then).abs() > store.policy().skew {
@@ -912,10 +909,7 @@ pub(crate) fn verify_enc_timestamp(
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
     let plain = decrypt(key, usage, enc.cipher.as_ref())?;
     let ts: PaEncTsEnc = decode(&plain)?;
-    if let Some(u) = ts.pausec {
-        u.validate()
-            .map_err(|_| proto(err::GENERIC, status::PREAUTH_FAILED))?;
-    }
+    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-97`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
     let now = i64::from(KerberosTime::now().unix_seconds());
     let then = i64::from(ts.patimestamp.unix_seconds());
     if (now - then).abs() > store.policy().skew {

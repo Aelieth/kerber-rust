@@ -753,14 +753,14 @@ fn a_password_changes_debug_shows_no_password() {
     let password = b"correct horse battery staple";
     let data = ChangePasswdData {
         newpasswd: OctetString::from_static(password),
-        targname: None,
-        targrealm: None,
+        targname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["u"]),
+        targrealm: ascii("R"),
     };
     let debug = format!("{data:?}");
     assert!(!shows(&debug, password), "{debug}");
-    assert_eq!(
-        debug,
-        "ChangePasswdData { newpasswd: <redacted>, targname: None, targrealm: None }"
+    assert!(
+        debug.starts_with("ChangePasswdData { newpasswd: <redacted>, targname: PrincipalName {"),
+        "{debug}"
     );
 }
 
@@ -879,4 +879,19 @@ fn seq_numbers_decode_as_mit_decode_seqno_reads_them() {
         back.windows(7)
             .any(|w| w == [0xa7, 0x07, 0x02, 0x05, 0x00, 0xff, 0xff])
     );
+}
+
+#[test]
+fn pa_spake_unknown_choice_decodes() {
+    // MIT `decode_cntype` (`asn1_encode.c:1277-1293`): an element no PA-SPAKE alternative takes, by
+    // its tag ([4]) or by its constructed bit (a primitive [1]), is an unknown choice; a [2] that
+    // does not decode as a SPAKEResponse fails the message.
+    for der in [&[0xa4, 0x02, 0x30, 0x00][..], &[0x81, 0x00][..]] {
+        assert_eq!(
+            rasn::der::decode::<spake::PaSpake>(der).unwrap(),
+            spake::PaSpake::Unknown
+        );
+    }
+    assert!(rasn::der::decode::<spake::PaSpake>(&[0xa2, 0x02, 0x31, 0x00]).is_err());
+    assert!(rasn::der::encode(&spake::PaSpake::Unknown).is_err());
 }

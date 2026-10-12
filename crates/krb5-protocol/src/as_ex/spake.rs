@@ -167,7 +167,10 @@ fn spake_round(
             process_challenge(st, req, keys, etypes, current, hint, &ch, pa_in, body_der)
         }
         // MIT `process_encdata` (`spake_client.c:300-320`): no second factors, so encdata fails.
-        PaSpake::EncData(_) | PaSpake::Support(_) | PaSpake::Response(_) => Ok(Round::Failed),
+        // MIT `spake_process` (`spake_client.c:357-359`): any other message type, an unknown one included, fails.
+        PaSpake::EncData(_) | PaSpake::Support(_) | PaSpake::Response(_) | PaSpake::Unknown => {
+            Ok(Round::Failed)
+        }
     }
 }
 

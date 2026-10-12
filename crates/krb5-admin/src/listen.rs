@@ -587,11 +587,9 @@ pub(crate) fn handle_kpasswd_from(
         // MIT `process_chpw_request` (`kadmin/server/schpw.c:174-185`): the decrypted request is zapped once ChangePasswdData is decoded from it.
         wipe_secret(user_data);
         if let Ok(cpw) = decoded {
-            let name = cpw.targname.unwrap_or_else(|| ok.ticket_part.cname.clone());
-            let realm = cpw.targrealm.as_ref().map_or_else(
-                || ticket_crealm.clone(),
-                |r| String::from_utf8_lossy(r.as_bytes()).into_owned(),
-            );
+            // MIT `decode_krb5_setpw_req` (`lib/krb5/asn.1/asn1_k_encode.c:1253-1276`): the target is required, so a request that names none, or a target that does not decode, is MALFORMED; it never changes the caller's own password.
+            let name = cpw.targname;
+            let realm = String::from_utf8_lossy(cpw.targrealm.as_bytes()).into_owned();
             let newpass = cpw.newpasswd.to_vec();
             wipe_octets(cpw.newpasswd);
             (name, realm, newpass)
@@ -1001,8 +999,8 @@ mod tests {
         let password = b"scratch-wiped-pass-1";
         let cpw = ChangePasswdData {
             newpasswd: password.to_vec().into(),
-            targname: Some(user.clone()),
-            targrealm: Some(ascii(TEST_REALM)),
+            targname: user.clone(),
+            targrealm: ascii(TEST_REALM),
         };
         let cpw_der = encode(&cpw).unwrap();
         let priv_msg = build_krb_priv_with_seq(&as_out.session_key, &cpw_der, None).unwrap();

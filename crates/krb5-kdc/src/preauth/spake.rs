@@ -287,8 +287,8 @@ pub(crate) fn process_spake(
             verify_response(store, client, padata, &resp, ikey, body_der).map(Some)
         }
         // MIT `verify_encdata` (`spake_kdc.c:477-499`): second factors are not implemented, so encdata is PREAUTH_FAILED.
-        // MIT `spake_verify` (`spake_kdc.c:532-536`): a challenge from a client is an unknown request type.
-        PaSpake::EncData(_) | PaSpake::Challenge(_) => Err(failed()),
+        // MIT `spake_verify` (`spake_kdc.c:532-536`): a challenge from a client, or an element no alternative takes, is an unknown request type.
+        PaSpake::EncData(_) | PaSpake::Challenge(_) | PaSpake::Unknown => Err(failed()),
     }
 }
 
