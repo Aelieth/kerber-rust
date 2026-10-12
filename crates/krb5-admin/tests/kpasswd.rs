@@ -1823,6 +1823,141 @@ fn kpasswd_req_with_seqs(
     encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap())
 }
 
+/// A kpasswd request as `mit_shaped_kpasswd_req` builds it, its KRB-PRIV naming `receiver` as the
+/// address it is for (none when `None`), as MIT's `kpasswd` names the server's.
+fn kpasswd_req_naming_receiver(
+    as_out: &krb5_kdc::IssuedAs,
+    user: &PrincipalName,
+    subkey: &krb5_crypto::ProtocolKey,
+    password: &[u8],
+    receiver: Option<krb5_types::HostAddress>,
+) -> Vec<u8> {
+    use krb5_crypto::{KeyUsage, encrypt};
+    use krb5_types::{
+        ApOptions, Authenticator, EncKrbPrivPart, EncryptedData, EncryptionKey, HostAddress,
+        KerberosTime, KrbPriv, Microseconds, ku,
+    };
+
+    let authenticator = Authenticator {
+        authenticator_vno: Authenticator::VNO,
+        crealm: krb5_types::ascii(TEST_REALM),
+        cname: user.clone(),
+        cksum: None,
+        cusec: Microseconds::from_subsec_micros(614_741),
+        ctime: KerberosTime::now(),
+        subkey: Some(EncryptionKey {
+            keytype: subkey.etype().to_iana(),
+            keyvalue: subkey.as_bytes().to_vec().into(),
+        }),
+        seq_number: None,
+        authorization_data: None,
+    };
+    let ap = krb5_protocol::build_ap_req_from_authenticator(
+        as_out.rep.0.ticket.clone(),
+        &as_out.session_key,
+        ApOptions::none(),
+        &authenticator,
+    )
+    .unwrap();
+    let part = EncKrbPrivPart {
+        user_data: password.to_vec().into(),
+        timestamp: None,
+        usec: None,
+        seq_number: None,
+        s_address: HostAddress {
+            addr_type: HostAddress::ADDRTYPE_INET,
+            address: vec![192, 0, 2, 9].into(),
+        },
+        r_address: receiver,
+    };
+    let cipher = encrypt(
+        subkey,
+        KeyUsage::new(ku::KRB_PRIV_ENC_PART).unwrap(),
+        &encode(&part).unwrap(),
+    )
+    .unwrap();
+    let priv_msg = KrbPriv {
+        pvno: KrbPriv::PVNO,
+        msg_type: KrbPriv::MSG_TYPE,
+        enc_part: EncryptedData {
+            etype: subkey.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap())
+}
+
+/// A request whose KRB-PRIV names a receiver address that is none of the server's is refused, and the
+/// password stays; one that names none, or whose address is the host's, is read.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:147-166`): `krb5_rd_priv` is called with no address set, and a refusal is HARDERROR "Failed decrypting request".
+/// MIT `k5_privsafe_check_addrs` (`lib/krb5/krb/privsafe.c:355-378`): the receiver address is looked up among the host's (`krb5_os_localaddr`, which leaves out 127.0.0.1).
+#[test]
+fn kpasswd_request_naming_a_receiver_the_server_does_not_have_is_refused() {
+    use krb5_crypto::{ProtocolKey, decrypt};
+    use krb5_types::HostAddress;
+
+    krb5_config::isolate_test_krb5();
+    let inet = |o: [u8; 4]| HostAddress {
+        addr_type: HostAddress::ADDRTYPE_INET,
+        address: o.to_vec().into(),
+    };
+    // RFC 5737's 203.0.113.0/24 is no machine's; 127.0.0.1 is the loopback `krb5_os_localaddr` skips.
+    for (receiver, read) in [
+        (None, true),
+        (Some(inet([203, 0, 113, 77])), false),
+        (Some(inet([127, 0, 0, 1])), false),
+    ] {
+        let (store, acl) = bootstrap_documented().unwrap();
+        let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+        let user_key = store
+            .get_name(&user)
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let cpw_key = store
+            .get_name(&kadmin_changepw())
+            .unwrap()
+            .best_key()
+            .unwrap()
+            .key
+            .clone();
+        let kvno_before = max_kvno(&store, &user);
+        let as_out = changepw_as_ticket(&store, &user, &user_key, 1414);
+        let subkey = ProtocolKey::random(as_out.session_key.etype()).unwrap();
+        let req = kpasswd_req_naming_receiver(
+            &as_out,
+            &user,
+            &subkey,
+            b"receiver-pass",
+            receiver.clone(),
+        );
+        let shared = shared_dump(store);
+        let rep =
+            handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req).unwrap();
+        let (_, priv_der) = parse_kpasswd_rep(&rep).unwrap();
+        let msg: krb5_types::KrbPriv = krb5_asn1::decode(&priv_der).unwrap();
+        let usage = krb5_crypto::KeyUsage::new(krb5_types::ku::KRB_PRIV_ENC_PART).unwrap();
+        let plain = decrypt(&subkey, usage, msg.enc_part.cipher.as_ref()).unwrap();
+        let part: krb5_types::EncKrbPrivPart = krb5_asn1::decode(&plain).unwrap();
+        let data = part.user_data.as_ref();
+        let changed = max_kvno(&shared.read().unwrap(), &user) > kvno_before;
+        if read {
+            assert_eq!(&data[..2], &[0, 0], "{receiver:?} is read: {data:?}");
+            assert!(changed, "{receiver:?}: the password is changed");
+        } else {
+            assert_eq!(
+                data,
+                [&[0u8, 2][..], b"Failed decrypting request"].concat(),
+                "{receiver:?}"
+            );
+            assert!(!changed, "{receiver:?}: the password stays");
+        }
+    }
+}
+
 /// MIT `process_chpw_request` (`schpw.c:153-166`): `krb5_rd_priv` with `DO_SEQUENCE` takes the request's KRB-PRIV only with the authenticator's seq-number (none when it has none), else the answer is HARDERROR "Failed decrypting request" and the password stays.
 /// The five cases settled live beside MIT 1.22.2's kadmind.
 #[test]

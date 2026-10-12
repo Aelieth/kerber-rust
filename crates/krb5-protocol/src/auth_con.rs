@@ -24,7 +24,9 @@ use krb5_types::{
 use crate::ap_req::ApVerifyOk;
 use crate::error::Error;
 use crate::replay::{ReplayCache, ReplayKey};
-use crate::safe_priv::{check_privsafe_addrs, verify_krb_safe_checksum, wipe_octets, wipe_vec};
+use crate::safe_priv::{
+    check_privsafe_addrs_in, verify_krb_safe_checksum_in, wipe_octets, wipe_vec,
+};
 
 /// MIT `KRB5_AUTH_CONTEXT_DO_TIME`: KRB-SAFE and KRB-PRIV carry a timestamp.
 pub const AUTH_CONTEXT_DO_TIME: u32 = 0x0000_0001;
@@ -54,6 +56,7 @@ pub struct AcceptorAuthContext {
     ap_req_use_subkey: bool,
     local_addr: Option<HostAddress>,
     remote_addr: Option<HostAddress>,
+    host_addrs: Option<Vec<HostAddress>>,
     cstate: Option<CipherState>,
     memrcache: Option<ReplayCache>,
 }
@@ -230,6 +233,7 @@ impl AcceptorAuthContext {
             ap_req_use_subkey,
             local_addr: None,
             remote_addr: None,
+            host_addrs: None,
             cstate: None,
             memrcache: None,
         })
@@ -241,6 +245,13 @@ impl AcceptorAuthContext {
     pub fn set_addrs(&mut self, local: Option<HostAddress>, remote: Option<HostAddress>) {
         self.local_addr = local;
         self.remote_addr = remote;
+    }
+
+    /// Name the addresses a message's receiver address is looked up in when no local address is
+    /// set, in place of the machine's own ([`crate::os_localaddr`], which is what `None` asks
+    /// for): the list an oracle saw on its host, or a test's.
+    pub fn set_host_addrs(&mut self, hosts: Option<Vec<HostAddress>>) {
+        self.host_addrs = hosts;
     }
 
     /// Start chaining KRB-PRIV encryption from the initial cipher state, as kprop and kpropd do
@@ -410,7 +421,7 @@ impl AcceptorAuthContext {
     }
 
     /// The user data of a KRB-PRIV from the peer.
-    /// MIT `krb5_rd_priv` (`lib/krb5/krb/rd_priv.c:99-150`): decrypted under the receive subkey else the session key (through the cipher state once `krb5_auth_con_initivector` set one), its addresses checked against the context's, a replay refused under `DO_TIME`, and its sequence number checked against the peer's next one, which then advances, under `DO_SEQUENCE`.
+    /// MIT `krb5_rd_priv` (`lib/krb5/krb/rd_priv.c:99-150`): decrypted under the receive subkey else the session key (through the cipher state once `krb5_auth_con_initivector` set one), its addresses checked against the context's (`k5_privsafe_check_addrs`, the host's own for a receiver address when no local one is set), a replay refused under `DO_TIME`, and its sequence number checked against the peer's next one, which then advances, under `DO_SEQUENCE`.
     /// MIT `read_krbpriv` (`lib/krb5/krb/rd_priv.c:43-97`): a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`, and the decrypted part is zeroed before it is freed.
     ///
     /// # Errors
@@ -437,11 +448,12 @@ impl AcceptorAuthContext {
         let part = decode::<EncKrbPrivPart>(&plain);
         wipe_vec(plain);
         let part = part?;
-        let checked = check_privsafe_addrs(
+        let checked = check_privsafe_addrs_in(
             &part.s_address,
             part.r_address.as_ref(),
             self.remote_addr.as_ref(),
             self.local_addr.as_ref(),
+            self.host_addrs.as_deref(),
         )
         .and_then(|()| {
             let tag = ciphertext_tag(etype, cipher)?;
@@ -458,16 +470,17 @@ impl AcceptorAuthContext {
     ///
     /// # Errors
     ///
-    /// [`Error::KrbError`] as [`verify_krb_safe_checksum`] reports a message it refuses, `SKEW`
+    /// [`Error::KrbError`] as [`verify_krb_safe_checksum_in`] reports a message it refuses, `SKEW`
     /// (37) or `REPEAT` (34) under `DO_TIME`, and `BADORDER` (42) for an out-of-order sequence
     /// number under `DO_SEQUENCE`; [`Error::Asn1`] when the message does not decode.
     pub fn rd_safe(&mut self, raw: &[u8]) -> Result<Vec<u8>, Error> {
         let key = self.recv_subkey.as_ref().unwrap_or(&self.key);
-        let msg = verify_krb_safe_checksum(
+        let msg = verify_krb_safe_checksum_in(
             key,
             raw,
             self.remote_addr.as_ref(),
             self.local_addr.as_ref(),
+            self.host_addrs.as_deref(),
         )?;
         self.check_replay(
             msg.safe_body.timestamp.as_ref(),

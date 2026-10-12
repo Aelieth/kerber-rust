@@ -1486,6 +1486,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** A KRB-PRIV or KRB-SAFE read with no local address set must name a receiver among the
+  host's addresses (`krb5_os_localaddr`), as MIT's: kpasswd refuses 127.0.0.1 and any address the
+  machine lacks.
 - **admin.** kpasswd reads the AP-REQ as MIT does: the KDB's first permitted key of `kadmin/changepw`
   at the ticket's kvno alone decrypts (a ticket in a later key is refused) and the cleartext server
   is not compared.
@@ -2923,6 +2926,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** `rd-priv-oracle-gate` also runs 437 kpasswd requests through MIT's acceptor calls and the Rust
+  acceptor in one container: none apart from MIT, receiver addresses and later keys included.
 - **tool.** `rd-sweep kpasswd` writes the sweep's cases as kpasswd requests and `judge-explicit` answers
   them with kadmind's acceptor; `rd-priv-oracle` has a `kpasswd` mode that makes MIT's acceptor calls.
 - **tool.** `rd-priv-oracle-gate` also breaks the AP-REQ, KRB-PRIV and KRB-SAFE themselves: 646

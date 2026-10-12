@@ -55,7 +55,7 @@ library's `KRB5_BRAND`, and goes red unless it is `krb5-1.22.2-final` with every
 | `oracle/kadm5-integrity-rpc.c` | GET_PRINCS over RPCSEC_GSS with no protection, integrity, privacy or a tampered body. |
 | `oracle/kadm5-rpc-probe.c` | Probes kadmind's RPCSEC_GSS / AUTH_GSSAPI reject machines: hand-framed calls after a real handshake. |
 | `oracle/kpasswd-tgs-client.c` | MIT `krb5_change_password` / `krb5_set_password` with a `kadmin/changepw` ticket from the TGS. |
-| `oracle/rd-priv-oracle.c` | MIT `krb5_rd_req`, `krb5_rd_priv` and `krb5_rd_safe` over the `rd-sweep` cases: answers `0`, `asn1` or the krb5 code. |
+| `oracle/rd-priv-oracle.c` | MIT `krb5_rd_req`, `krb5_rd_priv` and `krb5_rd_safe` over the `rd-sweep` cases: answers `0`, `asn1` or the krb5 code. Built with `-DKPASSWD_KDB`, `kpasswd` mode: kadmind's acceptor calls on the `rd-sweep kpasswd` frames: `0`, `req`, `priv` or `drop`. |
 | `oracle/rd-safe-oracle.c` | MIT `krb5_rd_safe` over KRB-SAFE messages it builds and rewrites (canonical, non-canonical body, seq 2^31). |
 | `oracle/t_vfy_increds.c` | MIT's own test program for `krb5_verify_init_creds`. |
 

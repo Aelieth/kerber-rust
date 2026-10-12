@@ -776,3 +776,54 @@ fn rd_priv_enc_part_of_another_enctype_is_bad_enctype() {
         Error::BadEnctype
     );
 }
+
+/// MIT `k5_privsafe_check_addrs` (`privsafe.c:355-378`): with no local address (kpasswd's context
+/// sets none), a KRB-PRIV's receiver address must be one of the host's, whatever the sender says.
+#[test]
+fn rd_priv_with_no_local_address_wants_the_receiver_among_the_hosts() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, None, None, false, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    ac.set_flags(0);
+    let here = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7))));
+    let there = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 8))));
+    ac.set_host_addrs(Some(vec![here.clone()]));
+    let msg = |r: Option<krb5_types::HostAddress>| {
+        sealed_priv(&session, &priv_part_der(b"p", None, None, there.clone(), r))
+    };
+    let err = ac.rd_priv(&msg(Some(there.clone()))).unwrap_err();
+    assert!(
+        matches!(err, Error::KrbError { code: 38, .. }),
+        "BADADDR, got {err:?}"
+    );
+    assert_eq!(ac.rd_priv(&msg(Some(here.clone()))).unwrap(), b"p");
+    assert_eq!(ac.rd_priv(&msg(None)).unwrap(), b"p");
+    // The host's addresses are not read once a local address is set.
+    ac.set_addrs(Some(there.clone()), None);
+    assert_eq!(ac.rd_priv(&msg(Some(there.clone()))).unwrap(), b"p");
+}
+
+/// The same check against the machine's own addresses, which hold no documentation address
+/// (RFC 5737's 203.0.113.0/24): kpasswd's request from a client that names such a receiver is
+/// refused as MIT refuses it.
+#[test]
+fn rd_priv_with_no_addresses_set_refuses_a_receiver_the_machine_does_not_have() {
+    let session = ProtocolKey::random(AES256).unwrap();
+    let ok = accepted(&session, None, None, false, None);
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
+    let sender = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 8))));
+    let foreign = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 77))));
+    let msg = |r: Option<krb5_types::HostAddress>| {
+        sealed_priv(
+            &session,
+            &priv_part_der(b"p", None, Some(0), sender.clone(), r),
+        )
+    };
+    let err = ac.rd_priv(&msg(Some(foreign))).unwrap_err();
+    assert!(
+        matches!(err, Error::KrbError { code: 38, .. }),
+        "BADADDR, got {err:?}"
+    );
+    assert_eq!(ac.rd_priv(&msg(None)).unwrap(), b"p");
+}

@@ -23,6 +23,7 @@ use krb5_types::{
     KrbCredInfo, KrbPriv, KrbSafe, KrbSafeBody, Microseconds, OctetString, Ticket, err, ku,
 };
 
+use crate::ap_req::address_in_list;
 use crate::error::Error;
 use crate::replay::{ReplayCache, ReplayKey};
 
@@ -183,6 +184,22 @@ pub fn verify_krb_safe_checksum(
     remote: Option<&HostAddress>,
     local: Option<&HostAddress>,
 ) -> Result<KrbSafe, Error> {
+    verify_krb_safe_checksum_in(session, raw, remote, local, None)
+}
+
+/// [`verify_krb_safe_checksum`] with the host addresses a receiver address is looked up in when
+/// `local` is `None`: `hosts`, else the machine's own ([`crate::os_localaddr`]).
+///
+/// # Errors
+///
+/// As [`verify_krb_safe_checksum`], and the error of [`crate::os_localaddr`].
+pub fn verify_krb_safe_checksum_in(
+    session: &ProtocolKey,
+    raw: &[u8],
+    remote: Option<&HostAddress>,
+    local: Option<&HostAddress>,
+    hosts: Option<&[HostAddress]>,
+) -> Result<KrbSafe, Error> {
     if !is_krb_safe(raw) {
         return Err(Error::KrbError {
             code: err::MSG_TYPE,
@@ -202,11 +219,12 @@ pub fn verify_krb_safe_checksum(
             text: Some("inapp checksum".into()),
         });
     }
-    check_privsafe_addrs(
+    check_privsafe_addrs_in(
         &msg.safe_body.s_address,
         msg.safe_body.r_address.as_ref(),
         remote,
         local,
+        hosts,
     )?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
     let mac = msg.cksum.checksum.as_ref();
@@ -229,33 +247,55 @@ pub fn verify_krb_safe_checksum(
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] 38 when a supplied comparison address does not match.
+/// [`Error::KrbError`] 38 when a supplied comparison address does not match; the error of
+/// [`crate::os_localaddr`] when the host's addresses are wanted and cannot be read.
 pub fn check_privsafe_addrs(
     msg_s: &HostAddress,
     msg_r: Option<&HostAddress>,
     remote: Option<&HostAddress>,
     local: Option<&HostAddress>,
 ) -> Result<(), Error> {
+    check_privsafe_addrs_in(msg_s, msg_r, remote, local, None)
+}
+
+/// [`check_privsafe_addrs`] with the host addresses to search when `local` is `None`: `hosts`,
+/// else the machine's own, read only when a receiver address is there to look up.
+/// MIT `k5_privsafe_check_addrs` (`privsafe.c:348-378`): the sender against the remote address; a receiver address is optional and, with no local address, must be one of `krb5_os_localaddr`'s (`krb5_address_search`, so an empty list holds none and a list of one NetBIOS address holds any).
+///
+/// # Errors
+///
+/// As [`check_privsafe_addrs`].
+pub fn check_privsafe_addrs_in(
+    msg_s: &HostAddress,
+    msg_r: Option<&HostAddress>,
+    remote: Option<&HostAddress>,
+    local: Option<&HostAddress>,
+    hosts: Option<&[HostAddress]>,
+) -> Result<(), Error> {
+    let badaddr = || Error::KrbError {
+        code: err::BADADDR,
+        text: Some("Incorrect net address".into()),
+    };
     if let Some(want) = remote
         && want != msg_s
     {
-        return Err(Error::KrbError {
-            code: err::BADADDR,
-            text: Some("Incorrect net address".into()),
-        });
+        return Err(badaddr());
     }
     let Some(got_r) = msg_r else {
         return Ok(());
     };
-    if let Some(want) = local
-        && want != got_r
-    {
-        return Err(Error::KrbError {
-            code: err::BADADDR,
-            text: Some("Incorrect net address".into()),
-        });
+    if let Some(want) = local {
+        return if want == got_r {
+            Ok(())
+        } else {
+            Err(badaddr())
+        };
     }
-    Ok(())
+    let found = match hosts {
+        Some(list) => address_in_list(got_r, list),
+        None => address_in_list(got_r, &crate::localaddr::os_localaddr()?),
+    };
+    if found { Ok(()) } else { Err(badaddr()) }
 }
 
 fn is_krb_safe(raw: &[u8]) -> bool {
@@ -854,5 +894,88 @@ mod tests {
         let raw = encode(&msg).unwrap();
         let cache = ReplayCache::new();
         assert_eq!(unwrap_krb_safe(&key, &raw, &cache).unwrap(), b"high-seq");
+    }
+
+    fn host(last: u8) -> HostAddress {
+        HostAddress {
+            addr_type: 2,
+            address: OctetString::from(vec![192, 0, 2, last]),
+        }
+    }
+
+    /// A KRB-SAFE of `p` from 127.0.0.1 to `r`, checksummed as MIT's `create_krbsafe` does.
+    fn safe_to(session: &ProtocolKey, r: Option<HostAddress>) -> Vec<u8> {
+        let body = KrbSafeBody {
+            user_data: b"p".to_vec().into(),
+            timestamp: None,
+            usec: None,
+            seq_number: None,
+            s_address: local_addr(),
+            r_address: r,
+        };
+        let body_der = encode(&body).unwrap();
+        let dummy = encode_safe_with_body(
+            KrbSafe::PVNO,
+            KrbSafe::MSG_TYPE,
+            &body_der,
+            &zero_safe_cksum(),
+        )
+        .unwrap();
+        let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM).unwrap();
+        let mic = checksum(session, usage, &dummy).unwrap();
+        encode(&KrbSafe {
+            pvno: KrbSafe::PVNO,
+            msg_type: KrbSafe::MSG_TYPE,
+            safe_body: body,
+            cksum: krb5_types::Checksum {
+                cksumtype: session.etype().checksum_type(),
+                checksum: mic.into(),
+            },
+        })
+        .unwrap()
+    }
+
+    /// MIT `k5_privsafe_check_addrs` (`privsafe.c:355-378`): with no local address a receiver
+    /// address must be one of the host's, and an empty list holds none.
+    #[test]
+    fn check_privsafe_addrs_no_local_wants_the_receiver_among_the_hosts() {
+        let s = host(1);
+        let list = [host(7), host(8)];
+        check_privsafe_addrs_in(&s, Some(&host(8)), None, None, Some(&list)).unwrap();
+        check_privsafe_addrs_in(&s, None, None, None, Some(&list)).unwrap();
+        for hosts in [&list[..1], &[][..]] {
+            let e =
+                check_privsafe_addrs_in(&s, Some(&host(8)), None, None, Some(hosts)).unwrap_err();
+            assert!(matches!(e, Error::KrbError { code: 38, .. }), "{e:?}");
+        }
+        // A list of one NetBIOS address holds any address (`krb5_address_search`).
+        let netbios = [HostAddress {
+            addr_type: HostAddress::ADDRTYPE_NETBIOS,
+            address: OctetString::from(vec![0; 16]),
+        }];
+        check_privsafe_addrs_in(&s, Some(&host(8)), None, None, Some(&netbios)).unwrap();
+        // A local address, when set, is the only one compared; the hosts are not read.
+        check_privsafe_addrs_in(&s, Some(&host(8)), None, Some(&host(8)), Some(&[])).unwrap();
+        // The sender is compared with the remote address first.
+        let e = check_privsafe_addrs_in(&s, Some(&host(7)), Some(&host(2)), None, Some(&list))
+            .unwrap_err();
+        assert!(matches!(e, Error::KrbError { code: 38, .. }), "{e:?}");
+    }
+
+    /// MIT `read_krbsafe` (`lib/krb5/krb/rd_safe.c:75-78`): a KRB-SAFE goes through the same address check.
+    #[test]
+    fn verify_krb_safe_checksum_in_looks_the_receiver_up_among_the_hosts() {
+        let key = session();
+        let hosts = [host(7)];
+        let ok = safe_to(&key, Some(host(7)));
+        verify_krb_safe_checksum_in(&key, &ok, None, None, Some(&hosts)).unwrap();
+        let no = safe_to(&key, Some(host(9)));
+        let e = verify_krb_safe_checksum_in(&key, &no, None, None, Some(&hosts)).unwrap_err();
+        assert!(matches!(e, Error::KrbError { code: 38, .. }), "{e:?}");
+        // The local address, when there is one, replaces the host list.
+        verify_krb_safe_checksum_in(&key, &no, None, Some(&host(9)), Some(&hosts)).unwrap();
+        // No receiver address: nothing to look up.
+        let none = safe_to(&key, None);
+        verify_krb_safe_checksum_in(&key, &none, None, None, Some(&[])).unwrap();
     }
 }

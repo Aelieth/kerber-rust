@@ -35,6 +35,7 @@ mod error;
 mod framing;
 mod kcm;
 mod keytab;
+mod localaddr;
 mod lock_file;
 mod preauth;
 mod replay;
@@ -106,6 +107,7 @@ pub use keytab::{
     Keytab, KeytabEntry, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
     sort_etypes_keytab_first,
 };
+pub use localaddr::{host_addresses_from, os_localaddr};
 pub use lock_file::{FileLock, lock_file, lock_file_how};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,
@@ -118,9 +120,9 @@ pub use preauth::{
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{
     build_krb_cred, build_krb_priv, build_krb_priv_chained, build_krb_priv_with_seq,
-    build_krb_safe, build_krb_safe_ex, check_privsafe_addrs, unwrap_krb_cred, unwrap_krb_priv,
-    unwrap_krb_priv_chained, unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex,
-    verify_krb_safe_checksum,
+    build_krb_safe, build_krb_safe_ex, check_privsafe_addrs, check_privsafe_addrs_in,
+    unwrap_krb_cred, unwrap_krb_priv, unwrap_krb_priv_chained, unwrap_krb_priv_ex, unwrap_krb_safe,
+    unwrap_krb_safe_ex, verify_krb_safe_checksum, verify_krb_safe_checksum_in,
 };
 pub use secret_file::{
     check_secret_file_writable, destroy_secret_file, read_secret_file, write_fresh_secret_file,

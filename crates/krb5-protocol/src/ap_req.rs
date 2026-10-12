@@ -98,9 +98,12 @@ pub type KeytabGetEntry<'a> = &'a dyn Fn(u32, i32) -> Result<ProtocolKey, Keytab
 /// list is one NetBIOS address, holds any address; otherwise `addr` must be one of the list's.
 #[must_use]
 pub fn address_search(addr: &HostAddress, list: Option<&HostAddresses>) -> bool {
-    let Some(list) = list else {
-        return true;
-    };
+    list.is_none_or(|l| address_in_list(addr, l))
+}
+
+/// [`address_search`] for a list that is there, however short: one NetBIOS address holds any
+/// address, else `addr` must equal one of the list's (`krb5_address_compare`: type and octets).
+pub(crate) fn address_in_list(addr: &HostAddress, list: &[HostAddress]) -> bool {
     if list.len() == 1 && list[0].addr_type == HostAddress::ADDRTYPE_NETBIOS {
         return true;
     }
