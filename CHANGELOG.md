@@ -1486,6 +1486,9 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **types.** rasn is vendored (`vendor/rasn`, 0.28.14) with upstream's fix: a present but
+  malformed OPTIONAL field or SEQUENCE OF element no longer decodes as absent or is dropped.
+  cargo-vet audits it as crates.io's.
 - **client.** `kinit -I` still resolves a FILE cache that is not there yet. A failed `pa_type` read leaves the allowed type unset.
 - **client.** `kvno -U` reports a final S4U2Self reply whose client is the requested server as `KRB5KDC_ERR_PADATA_TYPE_NOSUPP` ("KDC has no support for padata type").
 - **gate.** ktutil-gate matches MIT list -t -e (parenthesized enctype, human timestamp) and list -e's unknown-etype error.

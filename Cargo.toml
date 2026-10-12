@@ -63,8 +63,8 @@ num-bigint = { version = "0.4", default-features = false, features = ["std"] }
 signal-hook = { version = "0.3", default-features = false }
 p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa"] }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
-# Unpinned; take the newest 0.28 that still byte-matches MIT goldens.
-rasn = "0.28"
+# Pinned: the build takes rasn from vendor/rasn (`[patch.crates-io]` below).
+rasn = "=0.28.14"
 rc4 = "0.1"
 regex-automata = { version = "0.4", default-features = false, features = ["std", "meta", "unicode"] }
 # The xattr reads of the SELinux labeler (`security.selinux`), behind a safe API.
@@ -143,3 +143,9 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.num-bigint]
 opt-level = 3
+
+# rasn 0.28.14 as published, with its BER decoder made to fail a message whose OPTIONAL
+# explicit field, or SEQUENCE OF element, is present but does not decode (upstream ab9d0fd565,
+# in rasn 0.29.0). vendor/rasn/PATCHES.md has the diff and its provenance.
+[patch.crates-io]
+rasn = { path = "vendor/rasn" }

@@ -668,8 +668,8 @@ MSRV is 1.95 (`package.rust-version`), edition 2024, matching KLLDAP
 job is `cargo build --workspace --all-targets --locked` on that
 toolchain, with the test-hooks features and without; the full `cargo test --workspace --locked` on MSRV is the
 `msrv-test` job of `full-test.yml` (nightly + `v*` tags). `rasn` is
-unpinned (`0.28`); golden MIT DER is the protocol net if encodings
-drift. There is no unlocked `--locked` fallback. KLLDAP alignment:
+vendored at 0.28.14 (`vendor/rasn/PATCHES.md`); golden MIT DER is the
+protocol net. There is no unlocked `--locked` fallback. KLLDAP alignment:
 [`embed/klldap.md`](embed/klldap.md).
 
 ### Tier contract

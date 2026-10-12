@@ -13,8 +13,12 @@ locally certify them.
 
 **`getrandom` 0.2.17 + 0.4.3.** The product uses 0.2 (`workspace.dependencies`).
 0.4 is pulled only by `rasn-derive-impl` 0.28.14 → `uuid` 1.24 (proc-macro).
-`rasn` is unpinned at 0.28; both getrandom versions stay exempt with notes
-in `config.toml`.
+Both getrandom versions stay exempt with notes in `config.toml`.
+
+**`rasn` is vendored** (`vendor/rasn`, taken by `[patch.crates-io]`): crates.io 0.28.14 with the
+decoder patches `vendor/rasn/PATCHES.md` lists and diffs. `[policy.rasn] audit-as-crates-io = true`
+audits it as the crates.io crate (its 0.28.14 exemption); vet cannot hash a path dependency, so the
+delta is reviewed in that file.
 
 **`curve25519-dalek` 4.1.3** (SPAKE edwards25519) has no importable
 safe-to-deploy audit (Google's is `ub-risk-1`, for 4.0.0), so it, its

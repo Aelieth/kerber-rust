@@ -141,20 +141,11 @@ pub struct EncKrbPrivPart {
     pub r_address: Option<HostAddress>,
 }
 
-/// A seq-number as a KRB-SAFE, a KRB-PRIV, an AP-REP or an authenticator carries it: the value
-/// MIT reads, or `None` for an INTEGER MIT refuses. rasn reads an OPTIONAL field whose decode
-/// fails as absent, so the refusal is the message's ([`WireSeqNumber::value`]).
+/// A seq-number as a KRB-SAFE, a KRB-PRIV, an AP-REP or an authenticator carries it.
 /// MIT `decode_seqno` (`lib/krb5/asn.1/asn1_k_encode.c:133-146`): an INTEGER from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one (an old Heimdal's) as the same 32 bits unsigned, and a wider one is `ASN1_OVERFLOW`, which fails the message.
+/// MIT `encode_seqno` (`asn1_k_encode.c:124-132`): written unsigned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct WireSeqNumber(Option<u32>);
-
-impl WireSeqNumber {
-    /// The seq-number, or the error that fails the message carrying an INTEGER MIT refuses.
-    pub(crate) fn value<E: rasn::de::Error>(self, codec: rasn::Codec) -> Result<u32, E> {
-        self.0
-            .ok_or_else(|| E::custom("seq-number outside INT32_MIN..=0xFFFFFFFF", codec))
-    }
-}
+pub(crate) struct WireSeqNumber(pub(crate) u32);
 
 impl AsnType for WireSeqNumber {
     const TAG: Tag = Tag::INTEGER;
@@ -166,13 +157,17 @@ impl Decode for WireSeqNumber {
         tag: Tag,
         constraints: Constraints,
     ) -> Result<Self, D::Error> {
-        let value = decoder.decode_integer::<Integer>(tag, constraints)?;
-        Ok(Self(
-            i32::try_from(&value)
-                .map(i32::cast_unsigned)
-                .or_else(|_| u32::try_from(&value))
-                .ok(),
-        ))
+        let value = decoder.decode_integer::<i64>(tag, constraints)?;
+        i32::try_from(value)
+            .map(i32::cast_unsigned)
+            .or_else(|_| u32::try_from(value))
+            .map(Self)
+            .map_err(|_| {
+                <D::Error as rasn::de::Error>::custom(
+                    "seq-number outside INT32_MIN..=0xFFFFFFFF",
+                    decoder.codec(),
+                )
+            })
     }
 }
 
@@ -184,13 +179,8 @@ impl Encode for WireSeqNumber {
         constraints: Constraints,
         identifier: Identifier,
     ) -> Result<(), E::Error> {
-        // An unsigned INTEGER, as MIT's `encode_seqno` writes it.
-        self.0.unwrap_or_default().encode_with_tag_and_constraints(
-            encoder,
-            tag,
-            constraints,
-            identifier,
-        )
+        self.0
+            .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
     }
 }
 
@@ -219,10 +209,7 @@ impl Decode for EncApRepPart {
             ctime: w.ctime,
             cusec: w.cusec,
             subkey: w.subkey,
-            seq_number: w
-                .seq_number
-                .map(|s| s.value::<D::Error>(decoder.codec()))
-                .transpose()?,
+            seq_number: w.seq_number.map(|s| s.0),
         })
     }
 }
@@ -255,10 +242,7 @@ impl Decode for KrbSafeBody {
             user_data: w.user_data,
             timestamp: w.timestamp,
             usec: w.usec,
-            seq_number: w
-                .seq_number
-                .map(|s| s.value::<D::Error>(decoder.codec()))
-                .transpose()?,
+            seq_number: w.seq_number.map(|s| s.0),
             s_address: w.s_address,
             r_address: w.r_address,
         })
@@ -294,10 +278,7 @@ impl Decode for EncKrbPrivPart {
             user_data: w.user_data,
             timestamp: w.timestamp,
             usec: w.usec,
-            seq_number: w
-                .seq_number
-                .map(|s| s.value::<D::Error>(decoder.codec()))
-                .transpose()?,
+            seq_number: w.seq_number.map(|s| s.0),
             s_address: w.s_address,
             r_address: w.r_address,
         })

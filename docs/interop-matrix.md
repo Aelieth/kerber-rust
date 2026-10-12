@@ -70,7 +70,7 @@ implementation oracle. The Rust-only gates (Oracle `none`) are in
 
 MSRV 1.95 `cargo build --workspace --all-targets --locked` is the `msrv`
 job; `cargo test --workspace --locked` on 1.95 is `full-test.yml`'s
-`msrv-test` (nightly + tags). Edition 2024; `rasn` 0.28, goldens are the
+`msrv-test` (nightly + tags). Edition 2024; `rasn` 0.28.14 vendored, goldens are the
 DER net. `publish = false` stays;
 this matrix is the 1.0 claim, not crates.io. KLLDAP alignment:
 [`embed/klldap.md`](embed/klldap.md).

@@ -1275,10 +1275,7 @@ impl Decode for Authenticator {
             cusec: w.cusec,
             ctime: w.ctime,
             subkey: w.subkey,
-            seq_number: w
-                .seq_number
-                .map(|s| s.value::<D::Error>(decoder.codec()))
-                .transpose()?,
+            seq_number: w.seq_number.map(|s| s.0),
             authorization_data: w.authorization_data,
         })
     }

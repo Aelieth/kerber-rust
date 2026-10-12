@@ -13,6 +13,10 @@ url = "https://raw.githubusercontent.com/google/supply-chain/main/audits.toml"
 [imports.mozilla]
 url = "https://raw.githubusercontent.com/mozilla/supply-chain/main/audits.toml"
 
+[policy.rasn]
+audit-as-crates-io = true
+notes = "vendor/rasn: crates.io 0.28.14 with the decoder patches vendor/rasn/PATCHES.md lists; audited as the crates.io crate, the delta reviewed there."
+
 [[exemptions.aes]]
 version = "0.8.4"
 criteria = "safe-to-deploy"
@@ -282,7 +286,7 @@ criteria = "safe-to-deploy"
 [[exemptions.rasn]]
 version = "0.28.14"
 criteria = "safe-to-deploy"
-notes = "Unpinned 0.28. Local full audit deferred; golden MIT DER is the protocol net."
+notes = "The base of vendor/rasn (pinned =0.28.14). Local full audit deferred; golden MIT DER is the protocol net."
 
 [[exemptions.rasn-derive-impl]]
 version = "0.28.14"
