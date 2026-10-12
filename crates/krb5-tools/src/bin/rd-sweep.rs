@@ -1,8 +1,9 @@
 //! The application side of the decode sweep, for `scripts/rd-priv-oracle-gate.sh`: an AP-REQ, a
 //! KRB-PRIV and a KRB-SAFE whose authenticator, `EncKrbPrivPart` and KRB-SAFE-BODY are broken as
 //! the decode sweep breaks a message (`der_breaks.rs`), each re-encrypted or re-signed so only the
-//! break is wrong. MIT 1.22.2's `krb5_rd_req`, `krb5_rd_priv` and `krb5_rd_safe` (the rd-priv
-//! oracle under `scripts/oracle`) answer each; the Rust acceptor must answer as MIT does.
+//! break is wrong, and the three messages themselves broken the same way. MIT 1.22.2's
+//! `krb5_rd_req`, `krb5_rd_priv` and `krb5_rd_safe` (the rd-priv oracle under `scripts/oracle`)
+//! answer each; the Rust acceptor must answer as MIT does.
 //!
 //! - `rd-sweep cases`: the service key line, then `id<TAB>req|priv|safe<TAB>ap-req<TAB>msg|-`.
 //! - `rd-sweep judge <cases> <mit>`: the Rust answers to the same cases against MIT's
@@ -156,8 +157,8 @@ fn krb_safe(body: &[u8]) -> Result<Vec<u8>, String> {
 /// KRB-PRIV or KRB-SAFE after it.
 type RdCase = (String, &'static str, Vec<u8>, Option<Vec<u8>>);
 
-/// Every case: the pristine AP-REQ, KRB-PRIV and KRB-SAFE, then each with its authenticator,
-/// `EncKrbPrivPart` or KRB-SAFE-BODY broken each way.
+/// Every case: the pristine AP-REQ, KRB-PRIV and KRB-SAFE; each with its authenticator,
+/// `EncKrbPrivPart` or KRB-SAFE-BODY broken each way; then each itself broken each way.
 fn cases() -> Result<Vec<RdCase>, String> {
     let now = KerberosTime::now();
     let authenticator = Authenticator {
@@ -243,6 +244,27 @@ fn cases() -> Result<Vec<RdCase>, String> {
             "safe",
             ap.clone(),
             Some(krb_safe(&broken.bytes())?),
+        ));
+    }
+    // The AP-REQ, KRB-PRIV and KRB-SAFE themselves broken as sent: nothing is re-encrypted or
+    // re-signed, so a KRB-SAFE-BODY broken here also fails its checksum.
+    for (place, broken) in all_breaks(&root(&ap)?) {
+        out.push((format!("ap-req/{place}"), "req", broken.bytes(), None));
+    }
+    for (place, broken) in all_breaks(&root(&krb_priv(&part_der)?)?) {
+        out.push((
+            format!("krb-priv/{place}"),
+            "priv",
+            ap.clone(),
+            Some(broken.bytes()),
+        ));
+    }
+    for (place, broken) in all_breaks(&root(&krb_safe(&body_der)?)?) {
+        out.push((
+            format!("krb-safe/{place}"),
+            "safe",
+            ap.clone(),
+            Some(broken.bytes()),
         ));
     }
     Ok(out)

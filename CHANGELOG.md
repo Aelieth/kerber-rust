@@ -2920,6 +2920,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** `rd-priv-oracle-gate` also breaks the AP-REQ, KRB-PRIV and KRB-SAFE themselves: 646
+  cases, none apart from MIT.
 - **tool.** A decode sweep breaks every explicit field and SEQUENCE OF element of 41 messages nine
   ways against MIT's answers (`asn1-decode-oracle-gate`); `rd-priv-oracle-gate` and 9 diffsend
   cases drive MIT's rd_req/rd_priv/rd_safe and KDC.
