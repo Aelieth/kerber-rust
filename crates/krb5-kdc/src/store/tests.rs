@@ -247,6 +247,55 @@ fn spake_groups_and_challenge_reach_the_policy_like_mit() {
     );
 }
 
+/// The KDC profile is kdc.conf before krb5.conf: `apply_kdc_conf` stores kdc.conf's `[otp]` alone,
+/// and `apply_otp` replaces it with both files read in that order. A section that does not decode
+/// is stored as the reason the module does not initialize.
+#[test]
+fn otp_types_reach_the_policy_from_kdc_conf_then_krb5_conf() {
+    let mut store = PrincipalStore::new("KERBER.TEST");
+    assert_eq!(
+        store.policy.otp_kdc().unwrap(),
+        [krb5_config::OtpType::builtin("DEFAULT")]
+    );
+    let kdc = krb5_config::KdcConf::parse(
+        "[otp]\n    A = {\n        strip_realm = no\n        indicator = k1\n    }\n",
+    )
+    .unwrap();
+    let krb5 = krb5_config::Krb5Conf::parse(
+        "[otp]\n    A = {\n        strip_realm = yes\n        indicator = k2\n    }\n    B = {\n    }\n",
+    )
+    .unwrap();
+    store.apply_kdc_conf(&kdc).unwrap();
+    let names = |s: &PrincipalStore| -> Vec<String> {
+        s.policy
+            .otp_kdc()
+            .unwrap()
+            .iter()
+            .map(|t| t.name.clone())
+            .collect()
+    };
+    assert_eq!(names(&store), ["DEFAULT", "A"]);
+    store.apply_otp(Some(&kdc), Some(&krb5));
+    assert_eq!(names(&store), ["DEFAULT", "A", "A", "B"]);
+    let a = &store.policy.otp_kdc().unwrap()[1];
+    assert!(!a.strip_realm);
+    assert_eq!(a.indicators, ["k1", "k2"]);
+    // No file at all is the built-in DEFAULT.
+    store.apply_otp(None, None);
+    assert_eq!(names(&store), ["DEFAULT"]);
+    // A refused section is kept as the reason.
+    let bad = krb5_config::KdcConf::parse("[otp]\n    A = {\n        server = h\n    }\n").unwrap();
+    store.apply_otp(Some(&bad), None);
+    let e = store.policy.otp_kdc().unwrap_err();
+    assert_eq!(e.emsg, "Invalid argument");
+    assert!(
+        e.detail
+            .as_deref()
+            .unwrap()
+            .contains("'server' (token type 'A')")
+    );
+}
+
 #[test]
 fn apply_kdc_conf_sets_ticket_policy() {
     let mut store = PrincipalStore::new("KERBER.TEST");

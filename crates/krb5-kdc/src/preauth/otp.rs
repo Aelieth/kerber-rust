@@ -23,48 +23,35 @@ use crate::store::{Principal, unix_now_u32};
 
 /// MIT `DEFAULT_TYPE_NAME` (`plugins/preauth/otp/otp_state.c:42-42`): the type an `otp` token
 /// names when it names none.
-pub(crate) const DEFAULT_TYPE: &str = "DEFAULT";
+pub(crate) const DEFAULT_TYPE: &str = krb5_config::DEFAULT_OTP_TYPE;
 
 /// One token type of the module, without the RADIUS server and secret that MIT's `token_type`
-/// carries.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct OtpTypeConfig {
-    /// The type name a token selects.
-    pub(crate) name: String,
-    /// Whether the username of a token that names none drops the realm.
-    pub(crate) strip_realm: bool,
-    /// The indicators a token of this type adds on Accept, when the token has none of its own.
-    pub(crate) indicators: Vec<String>,
-    /// MIT's per-request timeout, reserved for the RADIUS transport this port replaces.
-    #[allow(dead_code)]
-    pub(crate) timeout_ms: u32,
-    /// MIT's retry count, reserved for the same transport.
-    #[allow(dead_code)]
-    pub(crate) retries: u32,
-}
+/// carries: `[otp]` reads it (`krb5_config::token_types_decode`).
+pub(crate) use krb5_config::OtpType as OtpTypeConfig;
 
 /// The token types in force, in order.
 pub(crate) struct OtpTypes(Vec<OtpTypeConfig>);
 
 impl OtpTypes {
-    /// MIT `token_type_default` (`plugins/preauth/otp/otp_state.c:152-166`): the DEFAULT type keeps
-    /// the realm and has no indicators. Each registered verifier name follows, with the same
-    /// defaults.
-    pub(crate) fn builtin() -> Self {
-        let entry = |name: &str| OtpTypeConfig {
-            name: name.to_owned(),
-            strip_realm: false,
-            indicators: Vec::new(),
-            timeout_ms: 5000,
-            retries: 3,
-        };
-        let mut v = vec![entry(DEFAULT_TYPE)];
+    /// The types `[otp]` configured, then one more per registered verifier name that no section
+    /// names. MIT takes its types from the profile alone; a verifier's name is the type that
+    /// selects it, so a verifier needs no section, and then it has the built-in type's defaults.
+    /// MIT `token_type_default` (`plugins/preauth/otp/otp_state.c:152-166`): the realm stays in the username and there are no indicators.
+    pub(crate) fn from_config(configured: &[OtpTypeConfig]) -> Self {
+        let mut v = configured.to_vec();
         for n in otp_verifier_names() {
             if !v.iter().any(|t| t.name == n) {
-                v.push(entry(n));
+                v.push(OtpTypeConfig::builtin(n));
             }
         }
         Self(v)
+    }
+
+    /// The types with no `[otp]` at all: the built-in DEFAULT, then the registered verifiers.
+    /// MIT `token_types_decode` (`plugins/preauth/otp/otp_state.c:298-344`): no section named DEFAULT adds the built-in one.
+    #[cfg(test)]
+    pub(crate) fn builtin() -> Self {
+        Self::from_config(&[OtpTypeConfig::builtin(DEFAULT_TYPE)])
     }
 
     /// MIT `token_decode` (`plugins/preauth/otp/otp_state.c:422-427`): the last entry of that
@@ -74,10 +61,14 @@ impl OtpTypes {
     }
 }
 
-/// The token types in force. MIT reads them from `[otp]` in `otp_state_new`; this port has the
-/// built-in types only, and a `[otp]` reader replaces this function.
-fn otp_types(_store: &dyn PrincipalRead) -> OtpTypes {
-    OtpTypes::builtin()
+/// The token types in force: `[otp]` (kdc.conf, then krb5.conf), read when the KDC started, and the
+/// verifiers registered now. A module that did not initialize is never asked, and has none.
+/// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:564-610`): the types come from the profile, once.
+fn otp_types(store: &dyn PrincipalRead) -> OtpTypes {
+    match store.policy().otp_kdc() {
+        Ok(configured) => OtpTypes::from_config(configured),
+        Err(_) => OtpTypes(Vec::new()),
+    }
 }
 
 /// One token of the `otp` attribute.
@@ -983,6 +974,32 @@ mod tests {
             let input = format!("[{{\"x\":{}{}}}]", "[".repeat(n), "]".repeat(n));
             assert_eq!(decode(input.as_bytes()).is_ok(), ok, "X3 depth {n}");
         }
+    }
+
+    /// The types in force are `[otp]`'s, in listing order, then one built-in type per registered
+    /// verifier no section names; a verifier whose name a section carries keeps the section's
+    /// settings; the last entry of a name is the one a token finds.
+    #[test]
+    fn configured_types_come_first_and_verifiers_add_the_rest() {
+        let _g = Guard;
+        set_thread_otp_verifiers(vec![
+            Arc::new(Fixed("totp", OtpVerdict::Accept)),
+            Arc::new(Fixed("sec", OtpVerdict::Accept)),
+        ]);
+        let mut sec = OtpTypeConfig::builtin("sec");
+        sec.strip_realm = true;
+        sec.indicators = vec!["mfa".into()];
+        let t = OtpTypes::from_config(&[OtpTypeConfig::builtin("DEFAULT"), sec.clone()]);
+        let names: Vec<&str> = t.0.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["DEFAULT", "sec", "totp"]);
+        assert_eq!(t.find(b"sec"), Some(&sec));
+        assert_eq!(t.find(b"totp"), Some(&OtpTypeConfig::builtin("totp")));
+        assert_eq!(t.find(b"nosuch"), None);
+        // The token found for a repeated name is the last one.
+        let mut later = sec.clone();
+        later.indicators = vec!["later".into()];
+        let t = OtpTypes::from_config(&[sec, later.clone()]);
+        assert_eq!(t.find(b"sec"), Some(&later));
     }
 
     /// The RADIUS sizes of the username and of the OTP value: 1 to 253 and 1 to 128 octets.

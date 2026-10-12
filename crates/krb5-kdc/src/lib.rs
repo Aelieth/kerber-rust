@@ -112,7 +112,6 @@ pub use persist::{
     read_db_locked, read_stash, save_dump_text, save_store, save_store_fresh,
     save_store_legacy_kdb3, save_store_with_master, stash_keys, write_stash,
 };
-pub use plugins::preauth_startup_lines;
 pub use plugins::{
     KdcAuthdata, KdcPolicy, KdcPreauth, OtpVerdict, OtpVerifier, OtpVerifyRequest,
     PolicyAdjustment, PreauthAction, PreauthHint, PreauthRock, apply_policy_times,
@@ -122,6 +121,7 @@ pub use plugins::{
     register_preauth, set_policy, set_thread_authdata, set_thread_kdcpolicies,
     set_thread_otp_verifiers, set_thread_policy, set_thread_preauth,
 };
+pub use plugins::{otp_startup_lines, preauth_startup_lines};
 pub use store::{
     AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
     AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_MOD_WHERE, AT_PRINC, AT_PW_EXP,

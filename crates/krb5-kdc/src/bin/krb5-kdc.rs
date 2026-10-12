@@ -286,6 +286,8 @@ fn main() {
     // MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then disable and enable_only select which modules load.
     // MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is the first profile file, ahead of krb5.conf.
     store.apply_kdcpreauth_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    // MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the otp module reads `[otp]` from the same profile, once, when it starts.
+    store.apply_otp(kdc_conf.as_ref(), krb5_conf.as_ref());
     // MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the same profile selects kdcpolicy modules.
     store.apply_kdcpolicy_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
     // MIT `plugins/kdcpolicy/test` has no `.so` here. `enable_only = test` registers it.
@@ -306,6 +308,10 @@ fn main() {
             Severity::Info
         };
         klog::syslog(severity, &line);
+    }
+    // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): the modules initialize in the order pkinit, otp, spake, and one that fails is logged and left out.
+    for (_, line) in krb5_kdc::otp_startup_lines(&store.policy) {
+        klog::syslog(Severity::Err, &line);
     }
     if let Err(msg) = store.policy.spake_kdc() {
         klog::syslog(

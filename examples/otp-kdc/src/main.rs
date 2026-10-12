@@ -116,6 +116,8 @@ fn main() {
         exit(2);
     }
     store.apply_kdcpreauth_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    // MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the otp module reads `[otp]` from the same profile, once, when it starts.
+    store.apply_otp(kdc_conf.as_ref(), krb5_conf.as_ref());
     store.apply_kdcpolicy_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
     krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
     store.apply_audit_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
@@ -130,6 +132,10 @@ fn main() {
             Severity::Info
         };
         klog::syslog(severity, &line);
+    }
+    // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): the modules initialize in the order pkinit, otp, spake, and one that fails is logged and left out.
+    for (_, line) in krb5_kdc::otp_startup_lines(&store.policy) {
+        klog::syslog(Severity::Err, &line);
     }
     if let Err(msg) = store.policy.spake_kdc() {
         klog::syslog(

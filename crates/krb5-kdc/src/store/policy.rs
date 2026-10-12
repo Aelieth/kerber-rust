@@ -156,6 +156,12 @@ pub struct Policy {
     ///
     /// MIT `k5_kadm5_hook_load` (`lib/kadm5/srv/kadm5_hook.c:40-94`): `k5_plugin_load_all` applies that profile.
     pub kadm5_hook: krb5_config::PluginRelations,
+    /// The otp module's token types from `[otp]` in kdc.conf, then krb5.conf, or why the module did not
+    /// initialize (then it is left out). Without a section the built-in `DEFAULT` is the only type.
+    ///
+    /// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the types come from the KDC context's profile once, when the module starts.
+    /// MIT `reset_for_hangup` (`kdc/kdc_util.c:1916-1922`): SIGHUP refreshes the database configuration and does not read `[otp]` again.
+    pub otp: Result<Vec<krb5_config::OtpType>, krb5_config::OtpInitError>,
 }
 
 impl Default for Policy {
@@ -194,6 +200,9 @@ impl Default for Policy {
             audit: krb5_config::PluginRelations::default(),
             pwqual: krb5_config::PluginRelations::default(),
             kadm5_hook: krb5_config::PluginRelations::default(),
+            otp: Ok(vec![krb5_config::OtpType::builtin(
+                krb5_config::DEFAULT_OTP_TYPE,
+            )]),
         }
     }
 }
@@ -240,6 +249,17 @@ impl Policy {
             groups: &self.spake_preauth_groups,
             challenge,
         })
+    }
+
+    /// The otp module's token types, or the reason it does not initialize.
+    ///
+    /// MIT `otp_init` (`plugins/preauth/otp/main.c:195-206`): a failed `otp_state_new` fails the module's init.
+    ///
+    /// # Errors
+    ///
+    /// The [`krb5_config::OtpInitError`] of the first `[otp]` section that does not decode.
+    pub fn otp_kdc(&self) -> Result<&[krb5_config::OtpType], &krb5_config::OtpInitError> {
+        self.otp.as_deref()
     }
 
     /// MIT `krb5_check_transited_list`: anonymous crealm passes; then capaths if present, else hierarchical.
@@ -400,7 +420,26 @@ impl PrincipalStore {
         self.policy.audit = conf.plugin_relations("audit");
         self.policy.pwqual = conf.plugin_relations("pwqual");
         self.policy.kadm5_hook = conf.plugin_relations("kadm5_hook");
+        self.policy.otp = krb5_config::kdc_otp_types(conf, &krb5_config::Krb5Conf::default());
         Ok(())
+    }
+
+    /// `[otp]` from kdc.conf, then krb5.conf. A missing file adds no sections.
+    ///
+    /// This replaces the kdc.conf-only value [`Self::apply_kdc_conf`] stored.
+    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is inserted ahead of the krb5.conf files.
+    /// MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the types are read once, from the KDC context's profile.
+    pub fn apply_otp(
+        &mut self,
+        kdc: Option<&krb5_config::KdcConf>,
+        krb5: Option<&krb5_config::Krb5Conf>,
+    ) {
+        let kdc_fallback = krb5_config::KdcConf::default();
+        let krb5_fallback = krb5_config::Krb5Conf::default();
+        self.policy.otp = krb5_config::kdc_otp_types(
+            kdc.unwrap_or(&kdc_fallback),
+            krb5.unwrap_or(&krb5_fallback),
+        );
     }
 
     /// `[plugins] kdcpreauth` from kdc.conf, then krb5.conf. A missing file adds no relations.

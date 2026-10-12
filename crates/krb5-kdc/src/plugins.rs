@@ -16,7 +16,7 @@ use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::preauth::{SpakeStep, process_pkinit, process_spake, spake_edata};
 use crate::status;
-use crate::store::{KDB_REQUIRES_HW_AUTH, Principal};
+use crate::store::{KDB_REQUIRES_HW_AUTH, Policy, Principal};
 
 /// Outcome of one preauth module on an AS-REQ.
 #[derive(Debug)]
@@ -777,25 +777,25 @@ pub(crate) fn authdata_modules() -> Vec<Arc<dyn KdcAuthdata>> {
         .clone()
 }
 
-/// Named kdcpreauth modules after `[plugins] kdcpreauth` `disable` and `enable_only`.
+/// Named kdcpreauth modules after `[plugins] kdcpreauth` `disable` and `enable_only`, less the otp
+/// module when its `[otp]` did not initialize.
 ///
 /// `fast` is not a kdcpreauth module, so it stays loaded and is not a name the profile can select.
 /// MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then `k5_plugin_load_all` applies the profile.
 /// MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): a caller walks only the modules that stayed loaded.
-pub(crate) fn selected_preauth(
-    relations: &krb5_config::PluginRelations,
-) -> Vec<Arc<dyn KdcPreauth>> {
+/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a module whose init fails is logged and not added to the systems.
+pub(crate) fn selected_preauth(policy: &Policy) -> Vec<Arc<dyn KdcPreauth>> {
     let mut fast = Vec::new();
     let mut named = Vec::new();
     for module in preauth_modules() {
         if module.name() == "fast" {
             fast.push(module);
-        } else {
+        } else if module.name() != "otp" || policy.otp.is_ok() {
             named.push(module);
         }
     }
     let names: Vec<&str> = named.iter().map(|module| module.name()).collect();
-    let kept = krb5_config::filter_plugin_modules(relations, &names);
+    let kept = krb5_config::filter_plugin_modules(&policy.kdcpreauth, &names);
     for want in kept {
         if let Some(index) = named.iter().position(|module| module.name() == want) {
             fast.push(named.remove(index));
@@ -806,7 +806,7 @@ pub(crate) fn selected_preauth(
 
 /// Whether `[plugins] kdcpreauth` left `name` loaded.
 pub(crate) fn kdcpreauth_loaded(store: &dyn PrincipalRead, name: &str) -> bool {
-    selected_preauth(&store.policy().kdcpreauth)
+    selected_preauth(store.policy())
         .iter()
         .any(|module| module.name() == name)
 }
@@ -841,6 +841,31 @@ pub fn preauth_startup_lines(
     lines
 }
 
+/// The lines MIT writes when the otp module's init fails, after the pkinit line and before the spake
+/// one, as `(level, text)` like [`preauth_startup_lines`]: the module's `com_err` line when it has
+/// one, then `preauth otp failed to initialize: <message>`. The KDC starts without the module.
+/// Nothing when `[plugins] kdcpreauth` left the module out, since its init never runs.
+///
+/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a failed init is logged at error with the module's name and message, and the next module loads.
+#[must_use]
+pub fn otp_startup_lines(policy: &Policy) -> Vec<(&'static str, String)> {
+    let Err(e) = policy.otp_kdc() else {
+        return Vec::new();
+    };
+    if !startup_module_loaded(&policy.kdcpreauth, "otp") {
+        return Vec::new();
+    }
+    let mut lines = Vec::new();
+    if let Some(detail) = &e.detail {
+        lines.push(("error", format!("{} - {detail}", e.emsg)));
+    }
+    lines.push((
+        "error",
+        format!("preauth otp failed to initialize: {}", e.emsg),
+    ));
+    lines
+}
+
 /// Whether MIT would install `name` under these `[plugins] kdcpreauth` relations.
 fn startup_module_loaded(relations: &krb5_config::PluginRelations, name: &str) -> bool {
     krb5_config::filter_plugin_modules(relations, &[name])
@@ -869,7 +894,7 @@ pub fn advertise_preauth(
         }],
         cookie: Vec::new(),
     };
-    for m in selected_preauth(&store.policy().kdcpreauth) {
+    for m in selected_preauth(store.policy()) {
         if m.name() == "fast" {
             continue;
         }
@@ -922,7 +947,7 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
         body_der,
         cname,
     } = *rock;
-    for m in selected_preauth(&store.policy().kdcpreauth) {
+    for m in selected_preauth(store.policy()) {
         match m.process_as(&PreauthRock {
             store,
             client,
@@ -1858,6 +1883,74 @@ mod tests {
                 "preauth pkinit failed to initialize: PKINIT initialization failed: No pkinit_identity supplied for realm R".to_owned(),
             )]
         );
+    }
+
+    /// An otp module that does not initialize is logged as MIT logs a failed init, after the pkinit
+    /// line and with the `com_err` line first, and is left out of the loaded modules. A module that
+    /// `[plugins] kdcpreauth` left out never initializes, so it logs nothing.
+    #[test]
+    fn a_failed_otp_init_is_logged_and_the_module_left_out() {
+        let mut store = crate::store::PrincipalStore::new("KERBER.TEST");
+        assert_eq!(
+            otp_startup_lines(store.policy()),
+            Vec::<(&str, String)>::new()
+        );
+        let kdc = krb5_config::KdcConf::parse(
+            "[otp]\n    DEFAULT = {\n        server = /s/o.sock\n    }\n",
+        )
+        .unwrap();
+        store.apply_kdc_conf(&kdc).unwrap();
+        assert_eq!(
+            otp_startup_lines(store.policy()),
+            vec![
+                (
+                    "error",
+                    "Invalid argument - Unsupported relation 'server' (token type 'DEFAULT'): RADIUS is not implemented; an embedder's OtpVerifier decides".to_owned(),
+                ),
+                (
+                    "error",
+                    "preauth otp failed to initialize: Invalid argument".to_owned(),
+                ),
+            ]
+        );
+        let loaded = |s: &crate::store::PrincipalStore| -> Vec<&'static str> {
+            selected_preauth(s.policy())
+                .iter()
+                .map(|m| m.name())
+                .collect()
+        };
+        assert!(!loaded(&store).contains(&"otp"));
+        assert!(loaded(&store).contains(&"spake"));
+        // MIT's own message for a value that is none carries no `com_err` line.
+        let kdc =
+            krb5_config::KdcConf::parse("[otp]\n    A = {\n        timeout = 5s\n    }\n").unwrap();
+        store.apply_kdc_conf(&kdc).unwrap();
+        assert_eq!(
+            otp_startup_lines(store.policy()),
+            vec![(
+                "error",
+                "preauth otp failed to initialize: Invalid integer value".to_owned(),
+            )]
+        );
+        // `disable = otp`: the module is not loaded, so nothing initializes.
+        let kdc = krb5_config::KdcConf::parse(
+            "[otp]\n    A = {\n        timeout = 5s\n    }\n[plugins]\n    kdcpreauth = {\n        disable = otp\n    }\n",
+        )
+        .unwrap();
+        store.apply_kdc_conf(&kdc).unwrap();
+        assert_eq!(
+            otp_startup_lines(store.policy()),
+            Vec::<(&str, String)>::new()
+        );
+        // A good section loads the module again.
+        let kdc =
+            krb5_config::KdcConf::parse("[otp]\n    A = {\n        timeout = 5\n    }\n").unwrap();
+        store.apply_kdc_conf(&kdc).unwrap();
+        assert_eq!(
+            otp_startup_lines(store.policy()),
+            Vec::<(&str, String)>::new()
+        );
+        assert!(loaded(&store).contains(&"otp"));
     }
 
     /// Clears this thread's kdcpolicy slot and named list.

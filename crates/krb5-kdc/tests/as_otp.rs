@@ -779,3 +779,139 @@ fn radius_sizes_fail_before_the_verifier() {
     assert_eq!(outcome(1, 128), (true, 1));
     assert_eq!(outcome(1, 129), (false, 0));
 }
+
+// `[otp]` in kdc.conf (OTP2). These use `KdcConf::parse` and `apply_kdc_conf` only.
+
+/// The indicators of `[otp]` reach the ticket (settle cell X4): the type's, repeated, replaced by a
+/// token's own `indicators` even when empty, and a token that is asked and rejects adds none.
+#[test]
+fn otp_section_indicators_reach_the_ticket() {
+    let _g = Guard;
+    let kdc = "[otp]\n    DEFAULT = {\n        indicator = typeind\n    }\n    A = {\n        indicator = aind\n    }\n    B = {\n        indicator = bind1\n        indicator = bind2\n    }\n";
+    // Whether a login with `attr` under `require_auth` = `require` issues, A rejecting and the rest accepting.
+    let issues = |attr: &str, require: &str, n: u32| -> bool {
+        let verifiers: Vec<Arc<dyn OtpVerifier>> = vec![
+            Scripted::new("DEFAULT", vec![OtpVerdict::Accept]),
+            Scripted::new("A", vec![OtpVerdict::Reject]),
+            Scripted::new("B", vec![OtpVerdict::Accept]),
+        ];
+        set_thread_otp_verifiers(verifiers);
+        let mut store = realm(Some(attr));
+        let a = armor(&store, n);
+        store
+            .apply_kdc_conf(&krb5_config::KdcConf::parse(kdc).unwrap())
+            .unwrap();
+        store
+            .set_string(
+                &PrincipalName::krbtgt(TEST_REALM),
+                "require_auth",
+                Some(require),
+            )
+            .unwrap();
+        let plain = enc_req_plain(&fresh_nonce(32));
+        match krb5_kdc::issue_as(
+            &store,
+            &fast_req(&a, vec![pa_otp(&a.key, &plain, b"1")], n + 1),
+        ) {
+            Ok(_) => true,
+            Err(e) => {
+                let (c, text, _) = code(&e);
+                assert_eq!(c, err::POLICY, "{attr} / {require}");
+                assert_eq!(text.as_deref(), Some("HIGHER_AUTHENTICATION_REQUIRED"));
+                false
+            }
+        }
+    };
+    // X4.1: the empty array is DEFAULT, whose indicator applies; one listed value must match.
+    assert!(issues("[]", "typeind", 9000));
+    assert!(!issues("[]", "other", 9010));
+    assert!(issues("[]", "other typeind", 9020));
+    // X4.2, X4.3: a token's `indicators` replace the type's, and `[]` leaves none.
+    assert!(!issues(r#"[{"indicators":["tok1"]}]"#, "typeind", 9030));
+    assert!(issues(r#"[{"indicators":["tok1"]}]"#, "tok1", 9040));
+    assert!(!issues(r#"[{"indicators":[]}]"#, "typeind", 9050));
+    // X4.4: a repeated `indicator` gives all of them, in the type of the token.
+    assert!(issues(r#"[{"type":"B"}]"#, "bind2", 9060));
+    assert!(issues(r#"[{"type":"B"}]"#, "bind1", 9070));
+    assert!(!issues(r#"[{"type":"B"}]"#, "typeind", 9080));
+    // X4.5: A rejects, so only B's indicators are in the ticket.
+    assert!(!issues(r#"[{"type":"A"},{"type":"B"}]"#, "aind", 9090));
+    assert!(issues(r#"[{"type":"A"},{"type":"B"}]"#, "bind1", 9100));
+}
+
+/// `strip_realm` defaults to true for a section and to false for the built-in types (settle cells
+/// base A and B, X2.7): the username the verifier sees keeps the realm only without a section or with
+/// `strip_realm = false`.
+#[test]
+fn strip_realm_splits_defined_sections_from_the_builtin_types() {
+    let _g = Guard;
+    let with_realm = format!("{TEST_USER}@{TEST_REALM}").into_bytes();
+    let bare = TEST_USER.as_bytes().to_vec();
+    // The username a login of `token_type` is given, for the kdc.conf text.
+    let username = |kdc: &str, token_type: &'static str, n: u32| -> Vec<u8> {
+        let v = Scripted::new(token_type, vec![OtpVerdict::Accept]);
+        set_thread_otp_verifiers(vec![v.clone()]);
+        let mut store = realm(Some(&format!(r#"[{{"type":"{token_type}"}}]"#)));
+        let a = armor(&store, n);
+        store
+            .apply_kdc_conf(&krb5_config::KdcConf::parse(kdc).unwrap())
+            .unwrap();
+        let plain = enc_req_plain(&fresh_nonce(32));
+        krb5_kdc::issue_as(
+            &store,
+            &fast_req(&a, vec![pa_otp(&a.key, &plain, b"1")], n + 1),
+        )
+        .expect("OTP login");
+        v.calls().remove(0).username
+    };
+    // No `[otp]`: the built-in DEFAULT and a verifier's own type keep the realm.
+    assert_eq!(username("", "DEFAULT", 9200), with_realm);
+    assert_eq!(username("", "totp", 9210), with_realm);
+    // A section for the type strips it, by default; `strip_realm = false` keeps it.
+    assert_eq!(username("[otp]\n DEFAULT = {\n }\n", "DEFAULT", 9220), bare);
+    assert_eq!(username("[otp]\n totp = {\n }\n", "totp", 9230), bare);
+    assert_eq!(
+        username("[otp]\n R = {\n  strip_realm = false\n }\n", "R", 9240),
+        with_realm
+    );
+    // A section for another type changes nothing for this one.
+    assert_eq!(
+        username("[otp]\n DEFAULT = {\n }\n", "totp", 9250),
+        with_realm
+    );
+}
+
+/// A `server` or `secret` leaves the whole module out, as `disable = otp` does: no hint, and a
+/// PA-OTP-REQUEST is ignored. The other modules stay. A good section keeps the module.
+#[test]
+fn a_refused_or_bad_section_leaves_the_otp_module_out() {
+    let offers_otp = |kdc: &str, n: u32| -> (bool, bool) {
+        let (store, a) = stanza_realm("[{}]", kdc, n);
+        let e = krb5_kdc::issue_as(&store, &fast_req(&a, vec![], n + 1)).unwrap_err();
+        let types: Vec<i32> = inner_hints(&a, &e).iter().map(|p| p.padata_type).collect();
+        let plain = enc_req_plain(&fresh_nonce(32));
+        let e = krb5_kdc::issue_as(
+            &store,
+            &fast_req(&a, vec![pa_otp(&a.key, &plain, b"1")], n + 2),
+        )
+        .unwrap_err();
+        // With the module out, a PA 142 is ignored and the request is the plain 25.
+        let ignored = matches!(e, Error::PreauthRequired { .. });
+        assert!(types.contains(&pa::ENCRYPTED_CHALLENGE), "{types:?}");
+        (types.contains(&pa::OTP_CHALLENGE), ignored)
+    };
+    for out in [
+        "[otp]\n DEFAULT = {\n  server = /s/otp.sock\n }\n",
+        "[otp]\n A = {\n  secret = secret.file\n }\n",
+        "[otp]\n A = {\n  strip_realm = maybe\n }\n",
+        "[otp]\n A = {\n  timeout = 5s\n }\n",
+    ] {
+        assert_eq!(offers_otp(out, 9300), (false, true), "{out:?}");
+    }
+    for kept in [
+        "",
+        "[otp]\n DEFAULT = {\n  indicator = x\n  timeout = 7\n  retries = 2\n  strip_realm = no\n }\n",
+    ] {
+        assert_eq!(offers_otp(kept, 9310), (true, false), "{kept:?}");
+    }
+}
