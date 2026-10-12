@@ -895,3 +895,19 @@ fn pa_spake_unknown_choice_decodes() {
     assert!(rasn::der::decode::<spake::PaSpake>(&[0xa2, 0x02, 0x31, 0x00]).is_err());
     assert!(rasn::der::encode(&spake::PaSpake::Unknown).is_err());
 }
+
+/// MIT `opt_der_data` (`lib/krb5/asn.1/asn1_k_encode.c:65-65`): an AlgorithmIdentifier's parameters are kept as DER, so a NULL survives a decode and an encode.
+#[test]
+fn algorithm_identifier_parameters_survive_a_round_trip() {
+    // sha256, then a NULL parameter, then the same OID with no parameter.
+    let with_null = [
+        0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01, 0x05, 0x00,
+    ];
+    let bare = [
+        0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01,
+    ];
+    for der in [&with_null[..], &bare[..]] {
+        let alg = rasn::der::decode::<pkinit::CmsAlgorithmIdentifier>(der).unwrap();
+        assert_eq!(rasn::der::encode(&alg).unwrap(), der);
+    }
+}
