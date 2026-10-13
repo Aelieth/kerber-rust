@@ -4,8 +4,8 @@ The KDB side of section A4: `kdb5_util` (`kadmin/dbutil`: its verbs and
 texts, dump and load, the principals `create` seeds), the KDB library
 (`lib/kdb`: key data, tl-data, the master-key stash), the KDB plugins
 (`plugins/kdb`) and the KDB lock. kadmind, `kadmin.local`, kpasswd and
-`lib/kadm5` are in A4's other file, [a4-kadmin.md](a4-kadmin.md); a row that
-cites both sides stays there.
+`lib/kadm5` are in A4's other files, [a4-kadmin.md](a4-kadmin.md) and [a4-rpc.md](a4-rpc.md); a row that
+cites both sides stays in the first.
 
 | MIT file:line | check (condition) | MIT status + wire code | Rust site | Rust e_text + code | verdict | proof |
 | --- | --- | --- | --- | --- | --- | --- |

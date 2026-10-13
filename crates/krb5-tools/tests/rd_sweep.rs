@@ -523,3 +523,122 @@ fn kadmind_cases_are_answered_as_the_acceptor_reads_the_kdb_keytab() {
     assert!(text.ends_with(&format!("1 of {n} cases part from MIT\n")));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A kadmind on a loopback socket over the documented realm (four keys on each service), stopped on drop.
+struct Kadmind {
+    addr: std::net::SocketAddr,
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Kadmind {
+    fn new(store: krb5_kdc::PrincipalStore, acl: krb5_kdc::Acl) -> Self {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let flag = std::sync::Arc::clone(&stop);
+        let shared = krb5_kdc::shared_dump(store);
+        let thread = std::thread::spawn(move || {
+            let mut kadmind = krb5_admin::Kadmind::new(shared, acl, None);
+            let rpc = [listener];
+            let sockets = krb5_kdc::net_server::Sockets {
+                rpc: &rpc,
+                ..krb5_kdc::net_server::Sockets::default()
+            };
+            let _ = krb5_admin::serve_kadmind_until(
+                &mut kadmind,
+                &sockets,
+                &flag,
+                std::time::Duration::from_millis(20),
+            );
+        });
+        Self {
+            addr,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for Kadmind {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// `kadmind-init` forges a ticket in one key of a service and makes an INIT call with it: the first key
+/// of `kadmin/admin` completes the context, every later one is refused (over RPCSEC_GSS `AUTH_REJECTEDCRED`,
+/// over AUTH_GSSAPI a `GSS_S_FAILURE` init_res), and the AUTH_GSSAPI credential of `kadmin/changepw` takes
+/// its own first key. MIT's kadmind answers the same (`scripts/kadmin-mit-gate.sh`, `kadmin-rust-gate.sh`).
+#[test]
+fn kadmind_init_is_accepted_in_the_first_key_and_refused_in_a_later_one() {
+    let dir = scratch("rd-sweep-kadmind-init");
+    let (store, acl) = bootstrap_documented().expect("bootstrap");
+    let mut kt: Option<krb5_protocol::Keytab> = None;
+    for name in [kadmin_admin(), kadmin_changepw()] {
+        for k in &store.get_name(&name).expect("service").keys {
+            let one = krb5_protocol::Keytab::single(
+                krb5_types::ascii(TEST_REALM),
+                name.clone(),
+                k.kvno,
+                k.key.clone(),
+            );
+            match kt.as_mut() {
+                Some(all) => all.entries.extend(one.entries),
+                None => kt = Some(one),
+            }
+        }
+    }
+    let kt_path = dir.join("ka.keytab");
+    kt.expect("keys")
+        .write_file(&kt_path)
+        .expect("write keytab");
+    let served = Kadmind::new(store, acl);
+    let addr = served.addr.to_string();
+    let init = |opts: &[&str]| {
+        let mut args = vec![
+            "kadmind-init",
+            addr.as_str(),
+            kt_path.to_str().expect("path"),
+            TEST_USER,
+        ];
+        args.extend_from_slice(opts);
+        ok_stdout(&args)
+    };
+    for (flavor, refused) in [
+        ("rpcsec", "DENIED auth_stat=2 AUTH_REJECTEDCRED"),
+        ("agss", "ACCEPTED gss_major=851968 GSS_S_FAILURE handle=4B"),
+    ] {
+        let first = init(&[&format!("flavor={flavor}")]);
+        assert!(
+            first.contains(&format!(
+                "flavor={flavor}: ACCEPTED gss_major=0 GSS_S_COMPLETE "
+            )),
+            "{first}"
+        );
+        for later in 1..4 {
+            let line = init(&[&format!("entry={later}"), &format!("flavor={flavor}")]);
+            assert!(
+                line.contains(&format!("entry={later} etype="))
+                    && line
+                        .trim_end()
+                        .ends_with(&format!("flavor={flavor}: {refused}")),
+                "{line}"
+            );
+        }
+    }
+    let changepw = init(&["service=kadmin/changepw", "flavor=agss"]);
+    assert!(changepw.contains("ACCEPTED gss_major=0 "), "{changepw}");
+    let out = sweep(&[
+        "kadmind-init",
+        addr.as_str(),
+        kt_path.to_str().expect("path"),
+        TEST_USER,
+        "entry=9",
+    ]);
+    assert_eq!(out.status.code(), Some(2), "a key the keytab lacks");
+    let _ = std::fs::remove_dir_all(&dir);
+}

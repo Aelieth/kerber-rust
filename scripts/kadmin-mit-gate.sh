@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
 . "$ROOT/scripts/lib/kadmin-common.sh"
-need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
+need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local rd-sweep
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
@@ -266,6 +266,9 @@ echo "$MIT_HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
 echo "==== MIT's service-name checks: kadm5 exact (check_rpcsec_auth), iprop any prefix of kiprop (check_iprop_rpcsec_auth) ===="
 service_name_principals mit_kadmin_local -i "$NAME_MIT" --
 service_name_cells mit "$NAME_MIT" admin/admin /etc/krb5.conf "$MIT_IPROP_PORT"
+echo "==== MIT kadmind: a ticket forged in a later key of kadmin/admin is refused, the first key completes the INIT (RPCSEC_GSS and AUTH_GSSAPI) ===="
+kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'ktadd -norandkey -k /tmp/ka.keytab kadmin/admin'
+later_key_cells "$NAME_MIT" "127.0.0.1:$KADMIND_PORT"
 echo "==== kadmin/history getprinc shape: Rust vs MIT (create_hist: max_life 64 s, no attributes, one key at kvno 2, no policy) ===="
 # Last modified date is dropped so the Z1.1 rust/MIT getprinc byte-diff
 # sees the modifier. History itself is created by kadmind RPC (`admin@`)

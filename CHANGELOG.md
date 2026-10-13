@@ -2939,6 +2939,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** `rd-sweep kadmind-init` forges an INIT in any key of a service; the kadmin gates show MIT's kadmind and ours refuse every key but the first.
 - **admin.** The kadmin gates run 17 service names against both RPC programs beside MIT. iprop serves `kiprop` alone; MIT's `strncmp` also takes `k/x` (documented).
 - **tool.** `rd-priv-oracle-gate` also runs 50 kadmind GSS-acceptor cases against MIT's `krb5_rd_req` over the KDB keytab: none apart from MIT.
 - **tool.** `rd-priv-oracle-gate` also runs 437 kpasswd requests through MIT's acceptor calls and the Rust

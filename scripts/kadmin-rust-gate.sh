@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
 . "$ROOT/scripts/lib/kadmin-common.sh"
-need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
+need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local rd-sweep
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
@@ -489,6 +489,9 @@ echo "$HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
 echo "==== service-name checks vs Rust kadmind: kadm5 exact, iprop kiprop alone (MIT's iprop takes any prefix of it: docs/mit-deviations.md) ===="
 service_name_principals mit_kadmin -i -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" -- -p admin@KERBER.TEST -w adminpassword
 service_name_cells rust "$NAME" admin@KERBER.TEST /tmp/kadmin-krb5.conf "$KADMIND_PORT"
+echo "==== Rust kadmind: a ticket forged in a later key of kadmin/admin is refused, the first key completes the INIT (RPCSEC_GSS and AUTH_GSSAPI) ===="
+kadmin_q_ok rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash "$NAME" -- -q 'ktadd -norandkey -k /tmp/ka.keytab kadmin/admin'
+later_key_cells "$NAME" "127.0.0.1:$KADMIND_PORT"
 
 echo "==== MIT kadmin listprincs ===="
 LIST="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \

@@ -720,6 +720,7 @@ dependencies = [
  "krb5-client",
  "krb5-config",
  "krb5-crypto",
+ "krb5-gss",
  "krb5-kdc",
  "krb5-protocol",
  "krb5-types",

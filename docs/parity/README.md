@@ -16,8 +16,8 @@ A2 owns AS/`kdc_util`, A3 owns FAST residue.
 
 ## Files
 
-One or more files per section, each named `<key>-<subject>.md`; A4 and B1
-have two. Each holds a heading that names its section, a short scope note
+One or more files per section, each named `<key>-<subject>.md`; A4 has
+three and B1 four. Each holds a heading that names its section, a short scope note
 and one table in the schema below; a row lives in exactly one file, and a
 section's count is the sum over its files.
 
@@ -28,6 +28,7 @@ section's count is the sum over its files.
 | [a3-preauth.md](a3-preauth.md) | A3 — preauth, FAST, authdata, CAMMAC, KDC logging |
 | [a4-kadmin.md](a4-kadmin.md) | A4 — kadmind and kadm5, `kadmin.local`, kpasswd |
 | [a4-kdb.md](a4-kdb.md) | A4 — `kdb5_util` (dump and load), the KDB library and plugins, the KDB lock |
+| [a4-rpc.md](a4-rpc.md) | A4 — kadmind's RPC front door: the listeners, the acceptor names, the KDB acceptor |
 | [a5-prop.md](a5-prop.md) | A5 — kprop, kpropd, iprop and the gssrpc layer |
 | [b1-asn1.md](b1-asn1.md) | B1 — the ASN.1 decoder: `asn1_encode.c`, `asn1_k_encode.c` against `vendor/rasn` and the wire types |
 | [b1-client.md](b1-client.md) | B1 — the client library, crypto, the AP-REQ acceptor, ccache and keytab |

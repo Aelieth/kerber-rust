@@ -27,6 +27,12 @@
 //!   `kadmin/admin` and as `kadmin/changepw` (AUTH_GSSAPI's names), against MIT's `krb5_rd_req`
 //!   (`id<TAB>noname<TAB>admin<TAB>changepw`, each `0` or the code) from the oracle's `kadmind` mode, the
 //!   three answers joined by `|` in the `SAME` and `PART` lines; exit 1 when any parts from MIT's.
+//! - `rd-sweep kadmind-init <host:port> <keytab> <client> [service=P] [entry=N] [flavor=rpcsec|agss]`: an
+//!   INIT call to a kadmind with a ticket forged in the Nth key of the keytab's service (`kadmin/admin`,
+//!   entry 0 by default; RPCSEC_GSS, or AUTH_GSSAPI with `flavor=agss`), and one line saying what it got:
+//!   `ACCEPTED gss_major=<n> <label>` (AUTH_GSSAPI answers a refused context so, GSS_S_FAILURE) or
+//!   `DENIED auth_stat=<n> <label>`. MIT's kadmind and ours take the first key
+//!   alone, so entry 1 and later are refused (the gates and the lab show both).
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -376,12 +382,8 @@ struct TicketSpec {
     svc: ProtocolKey,
 }
 
-/// The AP-REQ for `authenticator` (its DER as given), in an INITIAL ticket as `spec` says.
-fn ticket_ap_req(
-    spec: &TicketSpec,
-    authenticator: &[u8],
-    now: &KerberosTime,
-) -> Result<Vec<u8>, String> {
+/// The INITIAL ticket `spec` says, its session key `SESSION_KEY`.
+fn forged_ticket(spec: &TicketSpec, now: &KerberosTime) -> Result<Ticket, String> {
     let part = EncTicketPart {
         flags: TicketFlags::initial_preauth(),
         key: EncryptionKey {
@@ -398,7 +400,7 @@ fn ticket_ap_req(
         caddr: None,
         authorization_data: None,
     };
-    let ticket = Ticket {
+    Ok(Ticket {
         tkt_vno: Ticket::VNO,
         realm: ascii(&spec.srealm),
         sname: spec.sname.clone(),
@@ -409,12 +411,20 @@ fn ticket_ap_req(
                 .map_err(|e| e.to_string())?
                 .into(),
         },
-    };
+    })
+}
+
+/// The AP-REQ for `authenticator` (its DER as given), in an INITIAL ticket as `spec` says.
+fn ticket_ap_req(
+    spec: &TicketSpec,
+    authenticator: &[u8],
+    now: &KerberosTime,
+) -> Result<Vec<u8>, String> {
     let ap = ApReq {
         pvno: ApReq::PVNO,
         msg_type: ApReq::MSG_TYPE,
         ap_options: ApOptions::none(),
-        ticket,
+        ticket: forged_ticket(spec, now)?,
         authenticator: EncryptedData {
             etype: 18,
             kvno: None,
@@ -898,6 +908,210 @@ fn judge_kdb(cases: &str, mit: &str, dump: &str, password: &str) -> Result<bool,
     Ok(parts == 0)
 }
 
+/// A big-endian word.
+fn word(n: u32) -> [u8; 4] {
+    n.to_be_bytes()
+}
+
+/// An XDR opaque: its length, the octets, and the padding to a multiple of four.
+fn opaque(b: &[u8]) -> Vec<u8> {
+    let mut v = word(u32::try_from(b.len()).unwrap_or(u32::MAX)).to_vec();
+    v.extend_from_slice(b);
+    v.resize(v.len() + (4 - b.len() % 4) % 4, 0);
+    v
+}
+
+/// The words of a reply record, read in order.
+struct Words<'a>(&'a [u8]);
+
+impl Words<'_> {
+    fn u32(&mut self) -> Option<u32> {
+        let (w, rest) = self.0.split_first_chunk::<4>()?;
+        self.0 = rest;
+        Some(u32::from_be_bytes(*w))
+    }
+
+    fn opaque(&mut self) -> Option<Vec<u8>> {
+        let n = usize::try_from(self.u32()?).ok()?;
+        let padded = n.checked_add((4 - n % 4) % 4)?;
+        let v = self.0.get(..n)?.to_vec();
+        self.0 = self.0.get(padded..)?;
+        Some(v)
+    }
+}
+
+/// `auth_stat` in MIT's words.
+fn auth_label(why: u32) -> &'static str {
+    match why {
+        1 => "AUTH_BADCRED",
+        2 => "AUTH_REJECTEDCRED",
+        3 => "AUTH_BADVERF",
+        4 => "AUTH_REJECTEDVERF",
+        5 => "AUTH_TOOWEAK",
+        7 => "AUTH_FAILED",
+        13 => "RPCSEC_GSS_CREDPROBLEM",
+        14 => "RPCSEC_GSS_CTXPROBLEM",
+        _ => "AUTH_ERROR",
+    }
+}
+
+/// One INIT call to a kadmind: RPC program 2112 version 2, procedure 0 for RPCSEC_GSS and AUTH_GSSAPI's
+/// procedure 1 (an auth message), as MIT's client sends them. The record ends in the GSS token. What it
+/// got: the RPC layer's refusal, or the GSS major status the flavor answered with.
+fn init_call(
+    stream: &mut std::net::TcpStream,
+    agss: bool,
+    gss_token: &[u8],
+) -> Result<String, String> {
+    use std::io::{Read as _, Write as _};
+    let xid = 0x4b41_494e_u32;
+    let call = if agss {
+        // Credential version 2, an auth message, no client handle; init_arg version 4.
+        let cred = [word(2).to_vec(), word(1).to_vec(), opaque(&[])].concat();
+        [
+            [xid, 0, 2, 2112, 2, 1, 300_001].map(word).concat(),
+            opaque(&cred),
+            word(0).to_vec(),
+            opaque(&[]),
+            word(4).to_vec(),
+            opaque(gss_token),
+        ]
+        .concat()
+    } else {
+        // RPCSEC_GSS_VERS_1, RPCSEC_GSS_INIT, sequence 0, rpc_gss_svc_none, no handle.
+        let cred = [[1, 1, 0, 1].map(word).concat(), opaque(&[])].concat();
+        [
+            [xid, 0, 2, 2112, 2, 0, 6].map(word).concat(),
+            opaque(&cred),
+            word(0).to_vec(),
+            opaque(&[]),
+            opaque(gss_token),
+        ]
+        .concat()
+    };
+    let mut record =
+        word(u32::try_from(call.len()).map_err(|e| e.to_string())? | 0x8000_0000).to_vec();
+    record.extend_from_slice(&call);
+    stream
+        .write_all(&record)
+        .map_err(|e| format!("send: {e}"))?;
+    let mut mark = [0u8; 4];
+    stream
+        .read_exact(&mut mark)
+        .map_err(|e| format!("reply: {e}"))?;
+    let n = usize::try_from(u32::from_be_bytes(mark) & 0x7fff_ffff).map_err(|e| e.to_string())?;
+    let mut body = vec![0u8; n];
+    stream
+        .read_exact(&mut body)
+        .map_err(|e| format!("reply: {e}"))?;
+    let mut r = Words(&body);
+    let parsed = (|| {
+        if r.u32()? != xid || r.u32()? != 1 {
+            return Some("OTHER not a reply to the call".to_string());
+        }
+        if r.u32()? == 1 {
+            // MSG_DENIED: RPC_MISMATCH 0 or AUTH_ERROR 1, then the auth_stat.
+            return Some(if r.u32()? == 1 {
+                let why = r.u32()?;
+                format!("DENIED auth_stat={why} {}", auth_label(why))
+            } else {
+                "OTHER rpc version mismatch".to_string()
+            });
+        }
+        // MSG_ACCEPTED: the verifier, then the accept_stat.
+        let _flavor = r.u32()?;
+        let _verifier = r.opaque()?;
+        let accept = r.u32()?;
+        if accept != 0 {
+            return Some(format!("OTHER accept_stat={accept}"));
+        }
+        let (handle, major) = if agss {
+            let _version = r.u32()?;
+            let handle = r.opaque()?;
+            (handle, r.u32()?)
+        } else {
+            let handle = r.opaque()?;
+            (handle, r.u32()?)
+        };
+        let label = match major {
+            0 => "GSS_S_COMPLETE",
+            0x000d_0000 => "GSS_S_FAILURE",
+            _ => "GSS_S_OTHER",
+        };
+        Some(format!(
+            "ACCEPTED gss_major={major} {label} handle={}B",
+            handle.len()
+        ))
+    })();
+    Ok(parsed.unwrap_or_else(|| "OTHER short reply".to_string()))
+}
+
+/// `rd-sweep kadmind-init <host:port> <keytab> <client> [service=<principal>] [entry=N] [flavor=rpcsec|agss]`:
+/// an INIT call to a kadmind, for a ticket forged in the keytab's Nth key of the service (`kadmin/admin`, the
+/// first key by default), and the line saying what it got. The ticket is sealed in that entry's enctype and
+/// kvno; MIT's and our kadmind take the first key alone and refuse the rest.
+fn kadmind_init(addr: &str, keytab: &str, client: &str, opts: &[String]) -> Result<(), String> {
+    let (mut service, mut entry, mut agss) = ("kadmin/admin".to_owned(), 0usize, false);
+    for o in opts {
+        match o.split_once('=') {
+            Some(("service", v)) => v.clone_into(&mut service),
+            Some(("entry", v)) => entry = v.parse().map_err(|_| format!("bad entry {v}"))?,
+            Some(("flavor", "agss")) => agss = true,
+            Some(("flavor", "rpcsec")) => agss = false,
+            _ => return Err(format!("unknown option {o}")),
+        }
+    }
+    let bytes = std::fs::read(keytab).map_err(|e| format!("{keytab}: {e}"))?;
+    let kt = Keytab::parse(&bytes).map_err(|e| format!("{keytab}: {e}"))?;
+    let services = ka_services(&kt);
+    let svc = services
+        .iter()
+        .find(|s| s.name.unparse() == service)
+        .ok_or_else(|| format!("no keytab entry for {service}"))?;
+    let (etype, kvno, ref skey) = *svc
+        .keys
+        .get(entry)
+        .ok_or_else(|| format!("{service} has {} keys, no entry {entry}", svc.keys.len()))?;
+    let now = KerberosTime::now();
+    let ticket = forged_ticket(
+        &TicketSpec {
+            realm: svc.realm.clone(),
+            client: client.to_owned(),
+            srealm: svc.realm.clone(),
+            sname: svc.name.clone(),
+            kvno: Some(kvno),
+            etype,
+            svc: skey.clone(),
+        },
+        &now,
+    )?;
+    let who = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [client]);
+    let (_ctx, token) = krb5_gss::GssContext::init_sec_context(
+        ticket,
+        &key(&SESSION_KEY)?,
+        &ascii(&svc.realm),
+        &who,
+        true,
+        None,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let mut stream = std::net::TcpStream::connect(addr).map_err(|e| format!("{addr}: {e}"))?;
+    let timeout = Some(std::time::Duration::from_secs(10));
+    stream
+        .set_read_timeout(timeout)
+        .map_err(|e| e.to_string())?;
+    stream
+        .set_write_timeout(timeout)
+        .map_err(|e| e.to_string())?;
+    let flavor = if agss { "agss" } else { "rpcsec" };
+    let got = init_call(&mut stream, agss, &token)?;
+    println!(
+        "kadmind-init service={service} entry={entry} etype={etype} kvno={kvno} flavor={flavor}: {got}"
+    );
+    Ok(())
+}
+
 fn run(args: &[String]) -> Result<bool, String> {
     match args {
         [cmd] if cmd == "cases" => {
@@ -952,10 +1166,15 @@ fn run(args: &[String]) -> Result<bool, String> {
         [cmd, cases, mit, dump, password] if cmd == "judge-kdb" => {
             judge_kdb(cases, mit, dump, password)
         }
+        [cmd, addr, keytab, client, opts @ ..] if cmd == "kadmind-init" => {
+            kadmind_init(addr, keytab, client, opts)?;
+            Ok(true)
+        }
         _ => Err(
             "usage: rd-sweep cases | judge <cases> <mit> | kpasswd <keytab> <client> \
                   [setpw] [raddr=IP] [entry=N] | judge-explicit <frames> <mit> <dump> <password> | \
-                  kadmind <keytab> <client> | judge-kdb <cases> <mit> <dump> <password>"
+                  kadmind <keytab> <client> | judge-kdb <cases> <mit> <dump> <password> | \
+                  kadmind-init <host:port> <keytab> <client> [service=P] [entry=N] [flavor=rpcsec|agss]"
                 .into(),
         ),
     }

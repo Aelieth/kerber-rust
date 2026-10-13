@@ -182,6 +182,48 @@ EOF
     done
 }
 
+# later_key_cells CTN ADDR: a ticket forged in each key of kadmin/admin (/tmp/ka.keytab, every key `ktadd -norandkey` wrote), sent as
+# an INIT call to the kadmind at ADDR (`rd-sweep kadmind-init`): the first key completes a context and each later key is refused, over
+# RPCSEC_GSS (AUTH_REJECTEDCRED) and over AUTH_GSSAPI (a GSS_S_FAILURE init_res) alike. MIT's KDB keytab hands out the first permitted key
+# alone (kdb/keytab.c:117-185), and a kadmind of ours does the same. One shell of the container sends all nine (a batch, as above).
+later_key_cells() {
+    local ctn=$1 addr=$2 flavor refused entry out all script
+    IFS= read -r -d '' script <<'EOF' || true
+addr=$1
+for flavor in rpcsec agss; do
+    for entry in 0 1 2 3; do
+        echo "@@ $flavor $entry"
+        if [ "$entry" = 0 ]; then
+            /tmp/rd-sweep kadmind-init "$addr" /tmp/ka.keytab ra4user "flavor=$flavor" 2>&1
+        else
+            /tmp/rd-sweep kadmind-init "$addr" /tmp/ka.keytab ra4user "entry=$entry" "flavor=$flavor" 2>&1
+        fi
+    done
+done
+echo "@@ four"
+/tmp/rd-sweep kadmind-init "$addr" /tmp/ka.keytab ra4user entry=4 2>&1
+EOF
+    docker cp "${CARGO_TARGET_DIR:-target}/debug/rd-sweep" "$ctn":/tmp/rd-sweep
+    all="$(docker exec "$ctn" sh -c "$script" sh "$addr" 2>&1 || true)"
+    _probe_blocks <<<"$all"
+    for flavor in rpcsec agss; do
+        refused='DENIED auth_stat=2 AUTH_REJECTEDCRED'
+        [ "$flavor" = agss ] && refused='ACCEPTED gss_major=851968 GSS_S_FAILURE'
+        out="${PROBE_OUT["$flavor 0"]-}"
+        echo "$out"
+        [[ $out == *"flavor=$flavor: ACCEPTED gss_major=0 GSS_S_COMPLETE"* ]] \
+            || die "the first key of kadmin/admin does not complete a $flavor context"
+        for entry in 1 2 3; do
+            out="${PROBE_OUT["$flavor $entry"]-}"
+            echo "$out"
+            [[ $out == *"entry=$entry "* ]] || die "no ticket was forged in key $entry of kadmin/admin"
+            [[ $out == *"flavor=$flavor: $refused"* ]] || die "a ticket in key $entry of kadmin/admin is not refused over $flavor"
+        done
+    done
+    out="${PROBE_OUT[four]-}"
+    [[ $out == *'has 4 keys'* ]] || die "kadmin/admin has not four keys: $out"
+}
+
 # RPCSEC_GSS reject machine (svc_auth_gss.c): each malformed DATA call yields the
 # same auth/accept status on MIT and Rust. gc_handle is not compared on either.
 rpcsec_reject_cells() {
