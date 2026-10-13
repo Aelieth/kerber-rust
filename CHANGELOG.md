@@ -851,6 +851,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Changed
 
+- **admin.** `kprop` is MIT's: it sends the `kdb5_util` dump file as `host/<this host>`, writes
+  `.last_prop`; `-i`, `-n` and the database mode are gone. Settled; units; gates.
 - **client/admin.** `klist`, `kinit`, `kvno`, and `kadmin.local` take the process locale. `klist` probes its date-column width, and `getprinc` dates use the locale's weekday and month. Units.
 - **kdc.** The KDC's default TCP listen backlog is 128 (MIT's is 5). Set `[kdcdefaults] kdc_tcp_listen_backlog = 5` for MIT's. kadmind and kpasswd stay at 5. See docs/mit-deviations.md.
 - **admin.** `kpropd` takes MIT's `-r`, `-s`, `-a` and is `host/<this host>`; `kprop`, `-s` or the
@@ -1496,6 +1498,14 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** A keytab AS ends at the key that opens the reply, with the reply's own error, as
+  MIT's `decrypt_as_reply`; another key's error replaced it. Units; settled.
+- **crypto.** The AES and Camellia cipher state after a message is MIT's, so a dump of several
+  KRB-PRIV blocks crosses between kprop, kpropd and MIT's. Vectors from MIT; gates.
+- **client.** An unreadable `-k -t` keytab fails at the key lookup, after the AS-REQ, as MIT's: `kinit`
+  and `kprop` show the preauth failure, not the file's. Units; settled.
+- **admin.** `kprop` and `kpropd` send a dump size of 0 in twelve bytes and refuse a twelve-byte
+  size that fits in four, as MIT's `kprop_util` does. Unit; settled.
 - **admin.** kpasswd logs `Password is too short` for an empty password on a principal without a policy, as MIT's kadmind does. Units; settled.
 - **client.** No password (EIO), a failed read or disabled Enc-TS fails its mechanism, the next asks; ^C ends it. SPAKE asks the responder. Tests.
 - **types.** The OTP messages' vendor, algID, service and PIN are octets, as MIT decodes them: a non-UTF-8 one no longer fails the whole challenge.
