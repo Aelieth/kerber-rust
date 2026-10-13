@@ -5,6 +5,10 @@
 //! MIT's `otp.asn1` is `DEFINITIONS IMPLICIT TAGS`, so each `[n]` here is an
 //! implicit tag (`#[rasn(tag(n))]`). The explicit tags of `spake` are that
 //! module's own choice.
+//!
+//! MIT `utf8string` (`lib/krb5/asn.1/asn1_k_encode.c:89-91`): a byte string that is never checked as
+//! UTF-8. So the text fields `vendor`, `alg_id`, `service` and `pin` are octets here too, and one
+//! non-UTF-8 octet fails no decode.
 
 use std::fmt;
 
@@ -62,7 +66,7 @@ pub struct OtpTokenInfo {
     pub flags: KerberosFlags,
     /// `otp-vendor [1]`: the token's vendor.
     #[rasn(tag(1))]
-    pub vendor: Option<Utf8String>,
+    pub vendor: Option<OctetString>,
     /// `otp-challenge [2]`: the challenge the token answers.
     #[rasn(tag(2))]
     pub challenge: Option<OctetString>,
@@ -78,7 +82,7 @@ pub struct OtpTokenInfo {
     pub token_id: Option<OctetString>,
     /// `otp-algID [6]`: the token's algorithm, an AnyURI.
     #[rasn(tag(6))]
-    pub alg_id: Option<Utf8String>,
+    pub alg_id: Option<OctetString>,
     /// `supportedHashAlg [7]`: the listed hash algorithms, as AlgorithmIdentifiers.
     /// MIT `tokinfo_7` (`lib/krb5/asn.1/asn1_k_encode.c:1570-1571`): `supported_hash_alg` is the optional SEQUENCE OF AlgorithmIdentifier under implicit tag 7.
     #[rasn(tag(7))]
@@ -100,7 +104,7 @@ pub struct PaOtpChallenge {
     pub nonce: OctetString,
     /// `otp-service [1]`: the service the OTP is for.
     #[rasn(tag(1))]
-    pub service: Option<Utf8String>,
+    pub service: Option<OctetString>,
     /// `otp-tokenInfo [2]`: one `OTP-TOKENINFO` per token the KDC offers.
     /// MIT `otp_ch_2` (`lib/krb5/asn.1/asn1_k_encode.c:1589-1590`): `token_info` is the SEQUENCE OF OTP-TOKENINFO under implicit tag 2.
     #[rasn(tag(2))]
@@ -143,7 +147,7 @@ pub struct PaOtpRequest {
     pub otp_value: Option<OctetString>,
     /// `otp-pin [6]`: the user's PIN. A secret, so `Debug` redacts it.
     #[rasn(tag(6))]
-    pub pin: Option<Utf8String>,
+    pub pin: Option<OctetString>,
     /// `otp-challenge [7]`: the challenge the token answers.
     #[rasn(tag(7))]
     pub challenge: Option<OctetString>,
@@ -162,10 +166,10 @@ pub struct PaOtpRequest {
     pub token_id: Option<OctetString>,
     /// `otp-algID [12]`: the token's algorithm, an AnyURI.
     #[rasn(tag(12))]
-    pub alg_id: Option<Utf8String>,
+    pub alg_id: Option<OctetString>,
     /// `otp-vendor [13]`: the token's vendor.
     #[rasn(tag(13))]
-    pub vendor: Option<Utf8String>,
+    pub vendor: Option<OctetString>,
 }
 
 /// Stands for a PIN or an OTP value in a `Debug` output, printed as `<redacted>`.

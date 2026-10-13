@@ -1492,6 +1492,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **types.** The OTP messages' vendor, algID, service and PIN are octets, as MIT decodes them: a non-UTF-8 one no longer fails the whole challenge.
 - **admin.** kadmind's :749 acceptor reads its key from the KDB as MIT's does. `RpcCtx` and `serve_kadm5_conn` lose their keys; `acceptor_keys` goes.
 - **protocol.** The KDB-keytab hook takes the server it is asked for. With none named, the ticket's own server is looked up as in MIT's `try_one_princ`; no entry is NOT_US.
 - **kdc.** A keyless client reaches preauth as in MIT: 14 only after it, a keyless Enc-TS is 24, the FAST strengthen key follows the reply key's enctype, and the verify-failure log names the module. Units.

@@ -1019,12 +1019,12 @@ fn maximal_token_info() -> otp::OtpTokenInfo {
                 | otp::OTP_FLAG_SEPARATE_PIN
                 | otp::OTP_FLAG_CHECK_DIGIT,
         ),
-        vendor: Some("Examplecorp".into()),
+        vendor: Some(OctetString::from_static(b"Examplecorp")),
         challenge: Some(OctetString::from_static(b"hark!")),
         length: Some(10),
         format: Some(otp::OTP_FORMAT_ALPHANUMERIC),
         token_id: Some(OctetString::from_static(b"yourtoken")),
-        alg_id: Some(OTP_ALG_ID.into()),
+        alg_id: Some(OctetString::from_static(OTP_ALG_ID.as_bytes())),
         supported_hash_alg: Some(vec![sha256_alg(), sha1_alg()]),
         iteration_count: Some(1000),
     }
@@ -1039,14 +1039,14 @@ fn maximal_request() -> otp::PaOtpRequest {
         hash_alg: Some(sha256_alg()),
         iteration_count: Some(1000),
         otp_value: Some(OctetString::from_static(b"frogs")),
-        pin: Some("myfirstpin".into()),
+        pin: Some(OctetString::from_static(b"myfirstpin")),
         challenge: Some(OctetString::from_static(b"hark!")),
         time: Some(KerberosTime::from_unix_seconds(771_228_197)),
         counter: Some(OctetString::from_static(b"346")),
         format: Some(otp::OTP_FORMAT_ALPHANUMERIC),
         token_id: Some(OctetString::from_static(b"yourtoken")),
-        alg_id: Some(OTP_ALG_ID.into()),
-        vendor: Some("Examplecorp".into()),
+        alg_id: Some(OctetString::from_static(OTP_ALG_ID.as_bytes())),
+        vendor: Some(OctetString::from_static(b"Examplecorp")),
     }
 }
 
@@ -1076,7 +1076,7 @@ fn pa_otp_challenge_minimal_is_mits_encoding() {
 fn pa_otp_challenge_maximal_is_mits_encoding() {
     let challenge = otp::PaOtpChallenge {
         nonce: OctetString::from_static(b"maxnonce"),
-        service: Some("testservice".into()),
+        service: Some(OctetString::from_static(b"testservice")),
         token_info: vec![minimal_token_info(), maximal_token_info()],
         salt: Some(ascii("keysalt")),
         s2kparams: Some(OctetString::from_static(b"1234")),
@@ -1116,6 +1116,40 @@ fn pa_otp_enc_request_is_mits_encoding() {
         nonce: OctetString::from_static(b"krb5data"),
     };
     assert_mit_encoding(&enc, MIT_PA_OTP_ENC_REQ);
+}
+
+/// MIT `utf8string` (`lib/krb5/asn.1/asn1_k_encode.c:89-91`): a byte string, so a token's algID with a
+/// non-UTF-8 octet decodes, and the octets come back as sent.
+#[test]
+fn a_non_utf8_alg_id_in_a_challenge_decodes_as_mit_octets() {
+    // PA-OTP-CHALLENGE { nonce "n", tokenInfo { flags 0, algID "a\xffb" } }
+    let der = [
+        0x30, 0x13, 0x80, 0x01, 0x6e, 0xa2, 0x0e, 0x30, 0x0c, 0x80, 0x05, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x86, 0x03, 0x61, 0xff, 0x62,
+    ];
+    let challenge: otp::PaOtpChallenge = rasn::der::decode(&der).expect("MIT decodes this");
+    assert_eq!(rasn::der::encode(&challenge).unwrap(), der);
+}
+
+/// The same for PA-OTP-REQUEST: a PIN and a vendor with non-UTF-8 octets decode as MIT's do.
+#[test]
+fn a_non_utf8_pin_and_vendor_in_a_request_decode_as_mit_octets() {
+    // PA-OTP-REQUEST { flags 0, encData { etype 18, cipher "x" }, pin "\xff\xfe", vendor "\xff" }
+    let der = [
+        0x30, 0x1a, 0x80, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0xa2, 0x0a, 0xa0, 0x03, 0x02, 0x01,
+        0x12, 0xa2, 0x03, 0x04, 0x01, 0x78, 0x86, 0x02, 0xff, 0xfe, 0x8d, 0x01, 0xff,
+    ];
+    let request: otp::PaOtpRequest = rasn::der::decode(&der).expect("MIT decodes this");
+    assert_eq!(rasn::der::encode(&request).unwrap(), der);
+}
+
+/// MIT `decode_atype_to_ptr` (`lib/krb5/asn.1/asn1_encode.c:1341-1342`): non-emptiness of a sequence is not
+/// enforced, so a challenge whose tokenInfo list is empty decodes and has no token.
+#[test]
+fn an_empty_token_info_list_decodes_as_mit_does() {
+    let der = [0x30, 0x05, 0x80, 0x01, 0x6e, 0xa2, 0x00];
+    let challenge: otp::PaOtpChallenge = rasn::der::decode(&der).expect("MIT decodes this");
+    assert_eq!(challenge.token_info.len(), 0);
 }
 
 #[test]
