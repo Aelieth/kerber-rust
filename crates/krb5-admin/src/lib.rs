@@ -28,12 +28,12 @@ use thiserror::Error;
 
 pub use getdate::{DateError, get_date_rel, parse_date, parse_interval};
 pub use kadm5::{
-    IpropLast, IpropPull, Kadm5RpcSession, RpcCtx, RpcPeer, UnhandledRpc, changepw_acceptor,
-    check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth, glob_pattern_ok,
-    iprop_fullresync, iprop_pull, kadm5_handle_rpc, serve_kadm5_conn,
+    IpropLast, IpropPull, Kadm5RpcSession, RpcCtx, RpcPeer, UnhandledRpc, acceptor_names_served,
+    changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
+    glob_pattern_ok, iprop_fullresync, iprop_pull, kadm5_handle_rpc, serve_kadm5_conn,
 };
 pub use kadmin_cli::{kadmin_local_main, ss_parse};
-pub use kadmind::{Kadmind, acceptor_keys, serve_kadmind, serve_kadmind_until};
+pub use kadmind::{Kadmind, serve_kadmind, serve_kadmind_until};
 pub use kprop::{
     IpropPoll, KpropAuth, KpropdConfig, KpropdKeys, KpropdKeytabError, KpropdLookup,
     iprop_dump_last, iprop_poll_once, iprop_snapshot, is_iprop_dump, kprop_dump_bytes,

@@ -47,7 +47,7 @@ use std::net::{TcpListener, UdpSocket};
 use std::path::Path;
 use std::sync::Arc;
 
-use krb5_admin::{Kadmind, acceptor_keys, serve_kadmind};
+use krb5_admin::{Kadmind, acceptor_names_served, serve_kadmind};
 use krb5_cli::{MitArgs, MitOpt, Placement};
 use krb5_kdc::net_server::Sockets;
 use krb5_kdc::principals::kadmin_changepw;
@@ -237,8 +237,9 @@ fn main() {
         };
         fail_to_start(&progname, None, why);
     }
-    if acceptor_keys(&store).is_empty() {
-        fail_to_start(&progname, None, "Cannot set up KDB keytab");
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:476-477`): `svcauth_gssapi_set_names` acquires a credential for `kadmin/admin` and for `kadmin/changepw`, each of which the KDB keytab must have a key for.
+    if !acceptor_names_served(&store) {
+        fail_to_start(&progname, None, "Cannot set GSSAPI authentication names");
     }
     let changepw = kadmin_changepw();
     let cpw_key = store

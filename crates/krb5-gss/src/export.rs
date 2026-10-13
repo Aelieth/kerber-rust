@@ -3,7 +3,6 @@
 //! not MIT's `ser_sctx` wire.
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_protocol::ReplayCache;
 
 use super::{Error, GssContext};
 
@@ -157,7 +156,6 @@ impl GssContext {
             recv_window,
             initiator,
             rpcsec_init_window,
-            replay: ReplayCache::new(),
             client,
             delegated,
             spnego_mech_list: if sp.is_empty() {

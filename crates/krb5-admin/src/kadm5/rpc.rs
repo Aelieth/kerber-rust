@@ -11,7 +11,6 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::Arc;
 
-use krb5_crypto::ProtocolKey;
 use krb5_kdc::net_server::{RpcReply, RpcSession, read_rpc_record_with};
 use krb5_kdc::{Acl, SharedDump as SharedStore};
 use krb5_protocol::ReplayCache;
@@ -28,18 +27,19 @@ use super::log::rpc_log_flavor_refused;
 use super::xdr::{XdrR, XdrW, opaque_len};
 use crate::Error;
 
-/// Kadmind server handle: the store, ACL, service keys, and realm.
+/// Kadmind server handle: the store, ACL and realm.
+///
+/// The store is also kadmind's acceptor keytab: a context is accepted with the key the store gives
+/// the ticket's server, as MIT's KDB keytab does (`krb5_ktkdb_get_entry`).
 ///
 /// MIT `kadm5_server_handle_rec` (`lib/kadm5/server_internal.h:53-53`): the kadmind server
 /// handle record (context, current caller, config params with the realm).
 #[derive(Clone, Copy)]
 pub struct RpcCtx<'a> {
-    /// KDC store the procedure reads and writes.
+    /// KDC store the procedure reads and writes, and the acceptor's keytab.
     pub store: &'a SharedStore,
     /// Kadm5 ACL.
     pub acl: &'a Acl,
-    /// Keys that accept an AP-REQ for this service.
-    pub service_keys: &'a [ProtocolKey],
     /// Realm the acceptor name must belong to.
     pub expected_realm: &'a str,
 }
@@ -54,13 +54,12 @@ pub struct RpcCtx<'a> {
 pub fn serve_kadm5_conn(
     store: SharedStore,
     acl: Acl,
-    service_keys: Vec<ProtocolKey>,
     expected_realm: String,
     rcache: ReplayCache,
     mut stream: TcpStream,
 ) -> io::Result<()> {
     let peer = RpcPeer::new(stream.peer_addr().ok(), stream.local_addr().ok());
-    let mut conn = Kadm5Conn::new(store, acl, service_keys, expected_realm, rcache, peer, None);
+    let mut conn = Kadm5Conn::new(store, acl, expected_realm, rcache, peer, None);
     loop {
         let rec = match read_record(&mut stream) {
             Ok(r) => r,
@@ -130,11 +129,10 @@ fn sockaddr_in_addr(a: &SocketAddr) -> [u8; 4] {
 }
 
 /// One kadm5 connection's server side: its handle, its GSS state and its peer, over kadmind's
-/// store, ACL, acceptor keys and replay cache.
+/// store (its acceptor keytab too), ACL and replay cache.
 pub(crate) struct Kadm5Conn {
     store: SharedStore,
     acl: Acl,
-    service_keys: Vec<ProtocolKey>,
     realm: String,
     rcache: ReplayCache,
     handle: Vec<u8>,
@@ -144,12 +142,11 @@ pub(crate) struct Kadm5Conn {
 }
 
 impl Kadm5Conn {
-    /// The connection `peer` accepted with `service_keys` for `realm`; `report` takes the
-    /// message of each call that does not decode.
+    /// The connection `peer` accepted for `realm`; `report` takes the message of each call that
+    /// does not decode.
     pub(crate) fn new(
         store: SharedStore,
         acl: Acl,
-        service_keys: Vec<ProtocolKey>,
         realm: String,
         rcache: ReplayCache,
         peer: RpcPeer,
@@ -158,7 +155,6 @@ impl Kadm5Conn {
         Self {
             store,
             acl,
-            service_keys,
             realm,
             rcache,
             handle: random_handle(),
@@ -173,7 +169,6 @@ impl Kadm5Conn {
         let ctx = RpcCtx {
             store: &self.store,
             acl: &self.acl,
-            service_keys: &self.service_keys,
             expected_realm: &self.realm,
         };
         let Kadm5RpcSession { gss, agss } = &mut self.sess;
@@ -258,19 +253,8 @@ pub fn kadm5_handle_rpc(
     rec: &[u8],
     peer: &RpcPeer,
 ) -> Result<Vec<u8>, Error> {
-    let RpcCtx {
-        store,
-        acl,
-        service_keys,
-        expected_realm,
-    } = ctx;
     handle_rpc(
-        RpcCtx {
-            store,
-            acl,
-            service_keys,
-            expected_realm,
-        },
+        ctx,
         handle,
         &mut sess.gss,
         &mut sess.agss,

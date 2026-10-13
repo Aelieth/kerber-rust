@@ -26,7 +26,6 @@ fn auth_gssapi_on_iprop_data_is_auth_failed() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -73,7 +72,6 @@ fn auth_gssapi_on_iprop_init_is_success() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -183,8 +181,7 @@ fn kadm5_auth_gssapi_ok_requires_store_realm() {
 fn an_established_auth_gssapi_call_on_iprop_is_prog_unavail_until_iprop_is_on() {
     use krb5_kdc::testrealm::TEST_REALM;
 
-    let (store, acl, mut ctx, token, kadm_key, session) = admin_gss_token();
-    let keys = [kadm_key];
+    let (store, acl, mut ctx, token, session) = admin_gss_token();
     let rc = krb5_protocol::ReplayCache::new();
     let mut gss = None;
     let mut agss = None;
@@ -220,7 +217,6 @@ fn an_established_auth_gssapi_call_on_iprop_is_prog_unavail_until_iprop_is_on() 
     let ctx_for = |store| RpcCtx {
         store,
         acl: &acl,
-        service_keys: &keys,
         expected_realm: TEST_REALM,
     };
     let out = handle_rpc(
@@ -374,7 +370,6 @@ fn reply_words(out: &[u8]) -> Vec<u32> {
 struct Established {
     store: krb5_kdc::SharedDump,
     acl: Acl,
-    keys: [ProtocolKey; 1],
     rc: krb5_protocol::ReplayCache,
     gss: Option<RpcsecGss>,
     agss: Option<Agss>,
@@ -385,11 +380,10 @@ struct Established {
 
 impl Established {
     fn new(prog: u32, vers: u32) -> Self {
-        let (store, acl, ctx, token, kadm_key, session) = admin_gss_token();
+        let (store, acl, ctx, token, session) = admin_gss_token();
         let mut c = Self {
             store,
             acl,
-            keys: [kadm_key],
             rc: krb5_protocol::ReplayCache::new(),
             gss: None,
             agss: None,
@@ -435,7 +429,6 @@ impl Established {
             RpcCtx {
                 store: &self.store,
                 acl: &self.acl,
-                service_keys: &self.keys,
                 expected_realm: krb5_kdc::testrealm::TEST_REALM,
             },
             b"hdl",
@@ -606,7 +599,6 @@ fn an_auth_gssapi_credential_that_does_not_check_out_is_answered_with_mits_why()
             RpcCtx {
                 store: &store,
                 acl: &acl,
-                service_keys: &[],
                 expected_realm: "KERBER.TEST",
             },
             b"hdl",
@@ -801,7 +793,6 @@ fn a_call_is_authenticated_by_its_flavor_before_its_program() {
             RpcCtx {
                 store: &store,
                 acl: &acl,
-                service_keys: &[],
                 expected_realm: "KERBER.TEST",
             },
             b"hdl",
@@ -842,7 +833,6 @@ fn a_credential_or_verifier_past_400_bytes_does_not_decode() {
             RpcCtx {
                 store: &store,
                 acl: &acl,
-                service_keys: &[],
                 expected_realm: "KERBER.TEST",
             },
             b"hdl",
@@ -870,8 +860,7 @@ fn a_credential_or_verifier_past_400_bytes_does_not_decode() {
 fn a_failed_gssapi_init_keeps_an_unestablished_record() {
     use krb5_kdc::testrealm::TEST_REALM;
 
-    let (store, acl, _ctx, token, kadm_key, _session) = admin_gss_token();
-    let keys = [kadm_key];
+    let (store, acl, _ctx, token, _session) = admin_gss_token();
     let rc = krb5_protocol::ReplayCache::new();
     let (mut gss, mut agss) = (None, None);
     let mut send = |rec: &[u8]| {
@@ -879,7 +868,6 @@ fn a_failed_gssapi_init_keeps_an_unestablished_record() {
             RpcCtx {
                 store: &store,
                 acl: &acl,
-                service_keys: &keys,
                 expected_realm: TEST_REALM,
             },
             b"hdl",
@@ -1169,7 +1157,6 @@ fn send_as(
         RpcCtx {
             store: &t.store,
             acl: &t.acl,
-            service_keys: std::slice::from_ref(&t.service_key),
             expected_realm: krb5_kdc::testrealm::TEST_REALM,
         },
         b"hdl",

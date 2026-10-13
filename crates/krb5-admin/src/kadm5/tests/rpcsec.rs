@@ -28,7 +28,6 @@ fn rpcsec_bad_version_is_auth_badcred() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -73,7 +72,6 @@ fn rpcsec_unknown_program_bad_version_is_auth_badcred() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -118,7 +116,6 @@ fn rpcsec_init_non_nullproc_is_auth_failed() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -163,7 +160,6 @@ fn rpcsec_data_without_context_is_credproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -208,7 +204,6 @@ fn rpcsec_unknown_program_data_without_context_is_credproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -255,12 +250,9 @@ fn rpcsec_init_reply_mic_is_window() {
     let (store, acl, _) = setup();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
     let kadm = kadmin_admin();
-    let (admin_key, kadm_key) = {
+    let admin_key = {
         let g = store.read().unwrap();
-        (
-            g.get_name(&admin).unwrap().best_key().unwrap().key.clone(),
-            g.get_name(&kadm).unwrap().best_key().unwrap().key.clone(),
-        )
+        g.get_name(&admin).unwrap().best_key().unwrap().key.clone()
     };
     let as_req = as_req_sname(
         admin.clone(),
@@ -314,7 +306,6 @@ fn rpcsec_init_reply_mic_is_window() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[kadm_key],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -396,7 +387,6 @@ fn rpcsec_unknown_gc_proc_is_rejectedcred() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -436,7 +426,6 @@ fn rpcsec_init_garbage_token_is_rejectedcred() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -475,7 +464,6 @@ fn rpcsec_destroy_without_context_is_credproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -514,7 +502,6 @@ fn rpcsec_bad_mic_is_credproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -553,7 +540,6 @@ fn rpcsec_wrong_handle_data_is_dispatched() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -596,7 +582,6 @@ fn rpcsec_seq_over_maxseq_is_ctxproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -635,7 +620,6 @@ fn rpcsec_seq_replay_is_ctxproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -667,7 +651,6 @@ fn rpcsec_seq_replay_is_ctxproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -716,7 +699,6 @@ fn rpcsec_destroy_then_data_is_credproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -749,7 +731,6 @@ fn rpcsec_destroy_then_data_is_credproblem() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -788,7 +769,6 @@ fn rpcsec_unknown_program_data_carries_xp_verf() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -846,7 +826,6 @@ fn rpcsec_unwrap_fail_is_garbage_args_with_verf() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -878,7 +857,6 @@ fn rpcsec_integrity_data_round_trips() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -917,7 +895,6 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -970,7 +947,6 @@ fn rpcsec_none_service_data_is_plain_body() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -1022,7 +998,6 @@ fn rpcsec_privacy_body_sequence_must_match_the_credential() {
             RpcCtx {
                 store: &store,
                 acl: &acl,
-                service_keys: &[],
                 expected_realm: TEST_REALM,
             },
             b"hdl",

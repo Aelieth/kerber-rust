@@ -11,6 +11,7 @@ use krb5_log::klog::{self, Severity};
 use krb5_protocol::ReplayCache;
 use krb5_types::{KerberosTime, PrincipalName};
 
+use super::acceptor::{accept_auth_gssapi, accept_from_kdb};
 use super::codes::{
     AGSS_INDEF_EXPIRE, AGSS_INITIATION_TIMEOUT, AUTH_BADCRED, AUTH_BADVERF, AUTH_FAILED,
     AUTH_GSSAPI_CONTINUE_INIT, AUTH_GSSAPI_CREDS_VERS, AUTH_GSSAPI_DESTROY, AUTH_GSSAPI_INIT,
@@ -86,7 +87,6 @@ pub(super) fn handle_rpcsec_gss(
     let RpcCtx {
         store,
         acl,
-        service_keys,
         expected_realm,
     } = ctx;
     let _ = verf_flavor;
@@ -117,20 +117,15 @@ pub(super) fn handle_rpcsec_gss(
             };
             // MIT `svcauth_gss_accept_sec_context` (`svc_auth_gss.c:216-221`): a context that does
             // not establish is logged (`log_badauth`) and refused.
-            let (mut ctx, out_tok) = match GssContext::accept_sec_context(
-                &token,
-                service_keys,
-                None,
-                None,
-                Some(expected_realm),
-                rcache,
-            ) {
-                Ok(accepted) => accepted,
-                Err(e) => {
-                    rpc_log_badauth(addr, accept_major(&e), &e.to_string());
-                    return Ok(rpc_reply_auth_error(xid, AUTH_REJECTEDCRED));
-                }
-            };
+            // MIT `svcauth_gss_acquire_cred` (`svc_auth_gss.c:149-157`): kadmind accepts with `GSS_C_NO_NAME` against the KDB keytab.
+            let (mut ctx, out_tok) =
+                match accept_from_kdb(store, expected_realm, None, &token, None, rcache) {
+                    Ok(accepted) => accepted,
+                    Err(e) => {
+                        rpc_log_badauth(addr, accept_major(&e), &e.to_string());
+                        return Ok(rpc_reply_auth_error(xid, AUTH_REJECTEDCRED));
+                    }
+                };
             let mut body = XdrW::default();
             body.opaque(handle);
             body.u32(0);
@@ -229,7 +224,6 @@ pub(super) fn handle_rpcsec_gss(
                 RpcCtx {
                     store,
                     acl,
-                    service_keys,
                     expected_realm,
                 },
                 gd,
@@ -360,7 +354,6 @@ fn rpcsec_dispatch(
             RpcCtx {
                 store,
                 acl,
-                service_keys: ctx.service_keys,
                 expected_realm: ctx.expected_realm,
             },
             &actor,
@@ -580,23 +573,13 @@ fn agss_init(
     } else {
         None
     };
-    let accepted = GssContext::accept_sec_context(
+    let accepted = accept_auth_gssapi(
+        ctx.store,
+        ctx.expected_realm,
         &token,
-        ctx.service_keys,
         bindings.as_ref(),
-        None,
-        Some(ctx.expected_realm),
         rcache,
-    )
-    .and_then(|(gctx, out_tok)| {
-        if check_auth_gssapi_names(&gctx, ctx.expected_realm) {
-            Ok((gctx, out_tok))
-        } else {
-            Err(krb5_gss::Error::Inner(
-                "acceptor is not kadmin/admin or kadmin/changepw".into(),
-            ))
-        }
-    });
+    );
     let (mut gctx, out_tok) = match accepted {
         Ok(v) => v,
         Err(e) => {
@@ -810,7 +793,6 @@ pub(super) fn agss_dispatch(
     let RpcCtx {
         store,
         acl,
-        service_keys,
         expected_realm,
     } = ctx;
     let seq = st.seq;
@@ -841,7 +823,6 @@ pub(super) fn agss_dispatch(
             RpcCtx {
                 store,
                 acl,
-                service_keys,
                 expected_realm,
             },
             &actor,

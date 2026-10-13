@@ -125,12 +125,9 @@ pub fn init_client(
     svc: u32,
 ) -> Client {
     krb5_config::isolate_test_krb5();
-    let (client_key, service_key): (ProtocolKey, ProtocolKey) = {
+    let client_key: ProtocolKey = {
         let g = store.read().unwrap();
-        (
-            g.get_name(client).unwrap().best_key().unwrap().key.clone(),
-            g.get_name(service).unwrap().best_key().unwrap().key.clone(),
-        )
+        g.get_name(client).unwrap().best_key().unwrap().key.clone()
     };
     let as_req = as_req_sname(
         client.clone(),
@@ -167,7 +164,6 @@ pub fn init_client(
         krb5_admin::RpcCtx {
             store,
             acl,
-            service_keys: &[service_key],
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -249,7 +245,6 @@ pub fn data_call(
         krb5_admin::RpcCtx {
             store,
             acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",

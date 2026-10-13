@@ -636,7 +636,6 @@ fn the_iprop_program_is_served_only_with_the_update_log_mapped() {
             RpcCtx {
                 store,
                 acl: &acl,
-                service_keys: &[],
                 expected_realm: "KERBER.TEST",
             },
             &[],

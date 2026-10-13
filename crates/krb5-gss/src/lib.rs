@@ -24,7 +24,6 @@ mod wrap;
 mod tests;
 
 use krb5_crypto::ProtocolKey;
-use krb5_protocol::ReplayCache;
 use thiserror::Error;
 
 /// GSS-API error.
@@ -45,11 +44,20 @@ pub enum Error {
     /// Channel bindings mismatch.
     #[error("gss channel bindings")]
     ChannelBindings,
+    /// `KRB5KRB_AP_ERR_NOT_US`: the ticket is for no principal the keytab serves under the name
+    /// given. The acceptor that holds several names tries the next on it.
+    #[error("{0}")]
+    NotUs(String),
 }
 
 impl From<krb5_protocol::Error> for Error {
     fn from(e: krb5_protocol::Error) -> Self {
-        Self::Inner(e.to_string())
+        match e {
+            krb5_protocol::Error::KrbError { code, .. } if code == krb5_types::err::NOT_US => {
+                Self::NotUs(e.to_string())
+            }
+            e => Self::Inner(e.to_string()),
+        }
     }
 }
 
@@ -77,7 +85,6 @@ pub struct GssContext {
     initiator: bool,
     /// MIT libgssrpc INIT may spend GSS seq 0 on a discarded window MIC.
     rpcsec_init_window: bool,
-    replay: ReplayCache,
     /// Authenticated client `name@REALM` (set on accept; initiator from cname).
     pub client: Option<String>,
     /// Delegated client from a 0x8003 KRB-CRED trailer (`GSS_C_DELEG_FLAG`).

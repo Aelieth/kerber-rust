@@ -15,12 +15,9 @@ use krb5_kdc::net_server::{
     self, Dispatch, Klog, Log, MAX_REQUEST, MAX_STREAM_DATA_CONNECTIONS, Reply, RpcSession,
     Sockets, Wake,
 };
-use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
 use krb5_kdc::{
-    Acl, PrincipalStore, SharedDump as SharedStore, Signals, WHILE_DISPATCHING_TCP,
-    WHILE_DISPATCHING_UDP,
+    Acl, SharedDump as SharedStore, Signals, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
 };
-use krb5_log::klog::{self, Severity};
 use krb5_protocol::ReplayCache;
 
 use crate::kadm5::Kadm5Conn;
@@ -110,31 +107,18 @@ impl Dispatch for Kadmind {
         kpasswd_toolong_error(&self.realm()).map_err(|e| e.to_string())
     }
 
-    /// A kadm5 connection's session, with the acceptor keys as the database holds them now,
-    /// read under its lock as MIT's KDB keytab reads them for each context: a lock that may not
-    /// be taken leaves the session no key, so no context is accepted.
+    /// A kadm5 connection's session. Its acceptor keys are the database's, looked up for each
+    /// context it accepts, under the database's lock, as MIT's KDB keytab reads them.
     /// MIT `krb5_db2_get_principal` (`plugins/kdb/db2/kdb_db2.c:769-773`): the KDB keytab's lookup takes the shared lock, and fails when it cannot.
     fn rpc_session(
         &mut self,
         remote: SocketAddr,
         local: SocketAddr,
     ) -> Option<Box<dyn RpcSession>> {
-        let (keys, realm) = {
-            let mut g = self.store.write().unwrap_or_else(PoisonError::into_inner);
-            let keys = match g.reload_if_stale() {
-                Ok(()) => acceptor_keys(&g),
-                Err(e) => {
-                    klog::syslog(Severity::Err, &format!("{e} while reloading database"));
-                    Vec::new()
-                }
-            };
-            (keys, g.realm().to_owned())
-        };
         Some(Box::new(Kadm5Conn::new(
             Arc::clone(&self.store),
             self.acl.clone(),
-            keys,
-            realm,
+            self.realm(),
             self.rcache.clone(),
             RpcPeer::new(Some(remote), Some(local)),
             self.report.clone(),
@@ -189,33 +173,4 @@ pub fn serve_kadmind_until(
         &mut Klog,
     )
     .map(drop)
-}
-
-/// The keys a kadm5 or iprop client may authenticate to: the realm's `kadmin/admin`,
-/// `kadmin/changepw` and `kadmin/history`, and every `kiprop/<host>` (a replica's iprop service).
-/// The RPC layer then admits only the acceptor names each program allows.
-/// MIT `setup_kdb_keytab` (`kadmin/server/ovsec_kadmd.c:178-190`): the acceptor keytab is the
-/// whole database, and `check_rpcsec_auth` decides which names may call.
-#[must_use]
-pub fn acceptor_keys(store: &PrincipalStore) -> Vec<ProtocolKey> {
-    let mut keys = Vec::new();
-    for name in [kadmin_admin(), kadmin_changepw(), kadmin_history()] {
-        if let Some(p) = store.get_name(&name) {
-            keys.extend(p.keys.iter().map(|k| k.key.clone()));
-        }
-    }
-    let realm_suffix = format!("@{}", store.realm());
-    for id in store.ids() {
-        let Some(name) = id.strip_suffix(&realm_suffix) else {
-            continue;
-        };
-        if let Some(host) = name.strip_prefix("kiprop/")
-            && !host.is_empty()
-            && !host.contains('/')
-            && let Some(p) = store.get(&id)
-        {
-            keys.extend(p.keys.iter().map(|k| k.key.clone()));
-        }
-    }
-    keys
 }

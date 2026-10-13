@@ -5,11 +5,12 @@
 //! full C ABI clone.
 //!
 //! One module per MIT source family: `codes` (constants), `xdr`, `rpc`
-//! (framing and reply builders), `auth` (AUTH_GSSAPI, RPCSEC_GSS and the
-//! acceptor checks), `iprop`, `dispatch` (the procedure switch),
+//! (framing and reply builders), `acceptor` (the KDB keytab the GSS acceptor reads), `auth`
+//! (AUTH_GSSAPI, RPCSEC_GSS and the acceptor checks), `iprop`, `dispatch` (the procedure switch),
 //! `principal` and `policy` (argument and reply codecs), `glob`, `log`.
 //! In-src tests stay under `tests/`.
 
+mod acceptor;
 mod auth;
 mod codes;
 mod dispatch;
@@ -24,6 +25,7 @@ mod xdr;
 #[cfg(test)]
 mod tests;
 
+pub use acceptor::acceptor_names_served;
 pub use auth::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
 };

@@ -168,7 +168,6 @@ fn auth_none_is_auth_too_weak() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -197,7 +196,6 @@ fn bad_program_is_prog_unavail() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -227,7 +225,6 @@ fn kadm_vers_99_is_prog_mismatch_2_2() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],
@@ -269,7 +266,6 @@ fn reply_typed_rpc_is_no_reply() {
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: "KERBER.TEST",
         },
         &[],

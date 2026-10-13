@@ -11,7 +11,7 @@ use super::wrap::{FLAG_SEALED, TOK_WRAP, mit_shaped_wrap_flags};
 use super::*;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
-use krb5_protocol::build_ap_req_with_cksum;
+use krb5_protocol::{ReplayCache, build_ap_req_with_cksum};
 use krb5_types::{
     ApOptions, ApRep, Checksum, EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime,
     KrbCred, KrbCredInfo, Microseconds, PrincipalName, TicketFlags, ku,
@@ -216,7 +216,6 @@ fn bare_ctx(key: ProtocolKey, initiator: bool) -> GssContext {
         recv_window: std::collections::HashSet::new(),
         initiator,
         rpcsec_init_window: false,
-        replay: krb5_protocol::ReplayCache::new(),
         client: None,
         delegated: None,
         spnego_mech_list: None,

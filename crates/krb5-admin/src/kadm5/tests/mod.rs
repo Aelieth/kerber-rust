@@ -76,7 +76,6 @@ struct AdminTicket {
     acl: Acl,
     ticket: krb5_types::Ticket,
     session: ProtocolKey,
-    service_key: ProtocolKey,
 }
 
 /// The documented admin's ticket for `service`, its AS-REQ carrying `addresses`.
@@ -91,12 +90,9 @@ fn admin_ticket(
     krb5_config::isolate_test_krb5();
     let (store, acl, _) = setup();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
-    let (admin_key, service_key) = {
+    let admin_key = {
         let g = store.read().unwrap();
-        (
-            g.get_name(&admin).unwrap().best_key().unwrap().key.clone(),
-            g.get_name(service).unwrap().best_key().unwrap().key.clone(),
-        )
+        g.get_name(&admin).unwrap().best_key().unwrap().key.clone()
     };
     let mut as_req = as_req_sname(
         admin,
@@ -120,7 +116,6 @@ fn admin_ticket(
         acl,
         ticket: as_out.rep.0.ticket.clone(),
         session: as_out.session_key,
-        service_key,
     }
 }
 
@@ -176,14 +171,7 @@ fn decode_denied(out: &[u8]) -> (u32, u32) {
     (xid, r.u32().unwrap())
 }
 
-type AdminGssToken = (
-    krb5_kdc::SharedDump,
-    Acl,
-    GssContext,
-    Vec<u8>,
-    ProtocolKey,
-    ProtocolKey,
-);
+type AdminGssToken = (krb5_kdc::SharedDump, Acl, GssContext, Vec<u8>, ProtocolKey);
 
 fn admin_gss_token() -> AdminGssToken {
     use krb5_crypto::EncryptionType;
@@ -198,12 +186,9 @@ fn admin_gss_token() -> AdminGssToken {
     let (store, acl, _) = setup();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
     let kadm = kadmin_admin();
-    let (admin_key, kadm_key) = {
+    let admin_key = {
         let g = store.read().unwrap();
-        (
-            g.get_name(&admin).unwrap().best_key().unwrap().key.clone(),
-            g.get_name(&kadm).unwrap().best_key().unwrap().key.clone(),
-        )
+        g.get_name(&admin).unwrap().best_key().unwrap().key.clone()
     };
     let as_req = as_req_sname(
         admin.clone(),
@@ -231,7 +216,7 @@ fn admin_gss_token() -> AdminGssToken {
         None,
     )
     .unwrap();
-    (store, acl, ctx, token, kadm_key, as_out.session_key)
+    (store, acl, ctx, token, as_out.session_key)
 }
 
 fn admin_rpcsec_init() -> (
@@ -255,7 +240,7 @@ fn admin_rpcsec_init_svc(
 ) {
     use krb5_kdc::testrealm::TEST_REALM;
 
-    let (store, acl, mut ctx, token, kadm_key, session) = admin_gss_token();
+    let (store, acl, mut ctx, token, session) = admin_gss_token();
     let cred = rpcsec_cred(RPG_INIT, 0, svc, &[]);
     let mut arg = XdrW::default();
     arg.opaque(&token);
@@ -273,12 +258,10 @@ fn admin_rpcsec_init_svc(
     );
     let mut gss = None;
     let mut agss = None;
-    let keys = [kadm_key];
     let out = handle_rpc(
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &keys,
             expected_realm: TEST_REALM,
         },
         b"hdl",

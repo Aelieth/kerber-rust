@@ -8,8 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, ReplayCache,
-    build_ap_req_from_authenticator, permitted_enctypes, permitted_enctypes_kdc,
+    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, KeytabGetEntry,
+    ReplayCache, build_ap_req_from_authenticator, permitted_enctypes, permitted_enctypes_kdc,
 };
 use krb5_types::{
     ApOptions, ApRep, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum,
@@ -32,6 +32,15 @@ pub(super) const FLAG_ACCEPTOR_SUBKEY: u8 = 0x04;
 
 /// Whether this process accepts on the KDC profile ([`use_kdc_context`]).
 static KDC_CONTEXT: AtomicBool = AtomicBool::new(false);
+
+/// Where the acceptor finds the key a ticket is sealed in: keys it holds, with their kvnos when
+/// the keytab they came from labels them, or a lookup in a keytab that cannot be walked.
+#[derive(Clone, Copy)]
+struct AcceptKeys<'a> {
+    keys: &'a [ProtocolKey],
+    kvnos: Option<&'a [u32]>,
+    get_entry: Option<KeytabGetEntry<'a>>,
+}
 
 /// From now on, accept every context with the KDC profile's enctype policy, kdc.conf's
 /// `[libdefaults]` before krb5.conf's, as kadmind does.
@@ -311,7 +320,6 @@ impl GssContext {
             recv_window: std::collections::HashSet::new(),
             initiator: false,
             rpcsec_init_window: false,
-            replay: ReplayCache::new(),
             client: None,
             delegated: None,
             spnego_mech_list: None,
@@ -391,7 +399,6 @@ impl GssContext {
                 recv_window: std::collections::HashSet::new(),
                 initiator: true,
                 rpcsec_init_window: false,
-                replay: ReplayCache::new(),
                 client: Some(cname.unparse_with_realm(&String::from_utf8_lossy(crealm.as_bytes()))),
                 delegated: None,
                 spnego_mech_list: None,
@@ -469,34 +476,88 @@ impl GssContext {
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
-        let first = service_keys.first().ok_or(Error::Truncated)?;
+        if service_keys.is_empty() {
+            return Err(Error::Truncated);
+        }
+        Self::accept_inner(
+            token,
+            AcceptKeys {
+                keys: service_keys,
+                // MIT pins the ticket kvno only on the fully specified (explicit
+                // server) path; a wildcard acceptor name iterates every key.
+                kvnos: expected_server.and(service_kvnos),
+                get_entry: None,
+            },
+            channel_bindings,
+            expected_server,
+            expected_realm,
+            rcache,
+        )
+    }
+
+    /// Acceptor over a keytab that cannot be walked, the KDB's: the key is looked up by `get_entry`
+    /// for the principal `acceptor` names, or, with `GSS_C_NO_NAME` (`None`), for the server the
+    /// ticket names. `realm` is the realm `acceptor` is in.
+    /// MIT `kg_accept_krb5` (`accept_sec_context.c:829-831`): `krb5_rd_req_decoded` with the credential's `acceptor_mprinc` (NULL for `GSS_C_NO_NAME`) and its keytab.
+    /// MIT `decrypt_try_server` (`rd_req_dec.c:373-386`): a named acceptor is looked up as it is, no name takes the ticket's server (NOT_US where the keytab has none).
+    ///
+    /// # Errors
+    ///
+    /// As [`accept_sec_context_kt`](Self::accept_sec_context_kt) for a ticket that does not
+    /// verify; [`Error::NotUs`] where the ticket is for no principal the keytab serves under the
+    /// name given.
+    pub fn accept_sec_context_kdb(
+        token: &[u8],
+        acceptor: Option<&PrincipalName>,
+        realm: &str,
+        get_entry: KeytabGetEntry<'_>,
+        channel_bindings: Option<&ChannelBindings>,
+        rcache: &ReplayCache,
+    ) -> Result<(Self, Option<Vec<u8>>), Error> {
+        Self::accept_inner(
+            token,
+            AcceptKeys {
+                keys: &[],
+                kvnos: None,
+                get_entry: Some(get_entry),
+            },
+            channel_bindings,
+            acceptor,
+            Some(realm),
+            rcache,
+        )
+    }
+
+    /// The enctypes this process's acceptor permits for a ticket's session key and subkey, and for
+    /// the key a keytab gives: the KDC profile's after [`use_kdc_context`], else krb5.conf's.
+    /// MIT `krb5_gss_init_context` (`init_sec_context.c:995-1016`): the context a process that asked for the KDC context accepts on.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Inner`] when the profile's `permitted_enctypes` do not parse.
+    pub fn acceptor_permitted_enctypes() -> Result<Vec<EncryptionType>, Error> {
+        let permitted = if KDC_CONTEXT.load(Ordering::Relaxed) {
+            permitted_enctypes_kdc()
+        } else {
+            permitted_enctypes()
+        };
+        Ok(permitted?)
+    }
+
+    fn accept_inner(
+        token: &[u8],
+        keys: AcceptKeys<'_>,
+        channel_bindings: Option<&ChannelBindings>,
+        expected_server: Option<&PrincipalName>,
+        expected_realm: Option<&str>,
+        rcache: &ReplayCache,
+    ) -> Result<(Self, Option<Vec<u8>>), Error> {
         let dce_style = token.first() != Some(&0x60);
         let inner = ap_req_token(token)?;
         if inner.len() < 2 || inner[..2] != TOK_AP_REQ {
             return Err(Error::Truncated);
         }
-        let ctx = Self {
-            session: first.clone(),
-            acceptor_subkey: None,
-            send_seq: 0,
-            recv_seq: 0,
-            recv_seen: false,
-            recv_window: std::collections::HashSet::new(),
-            initiator: false,
-            rpcsec_init_window: false,
-            replay: ReplayCache::new(),
-            client: None,
-            delegated: None,
-            spnego_mech_list: None,
-            lifetime_end: 0,
-            gss_flags: 0,
-            ticket_initial: false,
-            acceptor: None,
-            ticket_realm: None,
-            ap_rep_key: None,
-            dce_style,
-            ap_req_time: None,
-        };
+        let replay = ReplayCache::new();
         // MIT `kg_accept_krb5` (`accept_sec_context.c:781-790`): an INET initiator address in the
         // channel bindings is the sender's, which an address list in the ticket must hold.
         let sender = channel_bindings
@@ -508,13 +569,11 @@ impl GssContext {
         let params = krb5_protocol::ApVerifyParams {
             expected_server,
             expected_realm,
-            keys: service_keys,
-            // MIT pins the ticket kvno only on the fully specified (explicit
-            // server) path; a wildcard acceptor name iterates every key.
-            key_kvnos: expected_server.and(service_kvnos),
+            keys: keys.keys,
+            key_kvnos: keys.kvnos,
             key_principals: None,
             kvno: None,
-            get_entry: None,
+            get_entry: keys.get_entry,
             // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-632`): the authenticator time is checked against the context clock skew.
             // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): that skew is `[libdefaults] clockskew`, 300 seconds when unset.
             skew: krb5_config::load_krb5_conf()
@@ -561,7 +620,7 @@ impl GssContext {
             channel_bindings,
             &ticket_session,
             subkey.as_ref(),
-            &ctx.replay,
+            &replay,
             ok.authenticator.authorization_data.as_ref(),
         )?;
         if dce_style {
@@ -610,7 +669,6 @@ impl GssContext {
             recv_window: std::collections::HashSet::new(),
             initiator: false,
             rpcsec_init_window: false,
-            replay: ctx.replay,
             client: Some(client),
             delegated,
             spnego_mech_list: None,
