@@ -15,7 +15,7 @@ use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_types::{
     ApOptions, ApReq, Authenticator, ChangePasswdData, EncryptedData, EncryptionKey, HostAddress,
-    PrincipalName, Realm, err, ku,
+    PrincipalName, Realm, Ticket, err, ku,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -265,47 +265,12 @@ fn change_or_set(
     getrandom::getrandom(&mut sk).map_err(|e| Error::Crypto(e.to_string()))?;
     let sub = ProtocolKey::from_bytes(as_out.session_key.etype(), &sk)?;
     sk.zeroize();
-    let sub_enc = EncryptionKey {
-        keytype: sub.etype().to_iana(),
-        keyvalue: sub.as_bytes().to_vec().into(),
-    };
-    // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the time and its microseconds, from `krb5_us_timeofday`.
-    let (now, usec) = crate::auth_con::us_timeofday();
-    let authenticator = Authenticator {
-        authenticator_vno: Authenticator::VNO,
-        crealm: as_out.crealm.clone(),
-        cname: as_out.cname.clone(),
-        cksum: None,
-        cusec: usec,
-        ctime: now,
-        subkey: Some(sub_enc),
-        seq_number: Some(0),
-        authorization_data: None,
-    };
-    let der = encode(&authenticator)?;
-    let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
-    let cipher = encrypt(&as_out.session_key, usage, &der)?;
-    // MIT `krb5_mk_req_extended` (`lib/krb5/krb/mk_req_ext.c:85-254`): the authenticator is traced
-    // with its sequence number and both keys as hashes.
-    trace::mk_req(
-        trace::Princ::new(&as_out.cname, as_out.crealm.as_bytes()),
-        trace::Princ::new(&as_out.ticket.sname, as_out.ticket.realm.as_bytes()),
-        0,
-        Some((&sub).into()),
-        (&as_out.session_key).into(),
-    );
-    let ap = ApReq {
-        pvno: ApReq::PVNO,
-        msg_type: ApReq::MSG_TYPE,
-        ap_options: ApOptions::none(),
-        ticket: as_out.ticket.clone(),
-        authenticator: EncryptedData {
-            etype: as_out.session_key.etype().to_iana(),
-            kvno: None,
-            cipher: cipher.into(),
-        },
-    };
-    let ap_der = encode(&ap)?;
+    let (authenticator, ap_der) = kpasswd_ap_req(
+        &as_out.ticket,
+        &as_out.session_key,
+        (&as_out.crealm, &as_out.cname),
+        &sub,
+    )?;
     let (priv_plain, version) = if let Some((realm, name)) = target {
         let cpw = ChangePasswdData {
             newpasswd: new_pw.to_vec().into(),
@@ -338,6 +303,60 @@ fn change_or_set(
         (code, rest.to_vec())
     };
     Ok((code, data))
+}
+
+/// The AP-REQ of a kpasswd request, and the authenticator inside it, which the caller keeps to check the AP-REP's echo. The authenticator carries the client, the time and the request's subkey, and no sequence number, checksum or authorization data.
+/// MIT `change_set_password` (`lib/krb5/os/changepw.c:230-240`): a fresh authentication context, then `krb5_mk_req_extended` asked for a subkey and nothing else.
+/// MIT `krb5_auth_con_init` (`lib/krb5/krb/auth_con.c:39-41`): the new context does time and not sequence numbers.
+/// MIT `krb5_mk_req_extended` (`lib/krb5/krb/mk_req_ext.c:137-143`): a sequence number is made only under `DO_SEQUENCE` or `RET_SEQUENCE`, which `krb5int_mk_chpw_req` sets after the authenticator is made, so the authenticator has none.
+/// MIT `authenticator_7` (`lib/krb5/asn.1/asn1_k_encode.c:693-693`): the sequence number is an `opt_seqno`, which leaves a zero out, so the field is not on the wire.
+fn kpasswd_ap_req(
+    ticket: &Ticket,
+    session: &ProtocolKey,
+    (crealm, cname): (&Realm, &PrincipalName),
+    sub: &ProtocolKey,
+) -> Result<(Authenticator, Vec<u8>), Error> {
+    let sub_enc = EncryptionKey {
+        keytype: sub.etype().to_iana(),
+        keyvalue: sub.as_bytes().to_vec().into(),
+    };
+    // MIT `generate_authenticator` (`lib/krb5/krb/mk_req_ext.c:327-327`): the time and its microseconds, from `krb5_us_timeofday`.
+    let (now, usec) = crate::auth_con::us_timeofday();
+    let authenticator = Authenticator {
+        authenticator_vno: Authenticator::VNO,
+        crealm: crealm.clone(),
+        cname: cname.clone(),
+        cksum: None,
+        cusec: usec,
+        ctime: now,
+        subkey: Some(sub_enc),
+        seq_number: None,
+        authorization_data: None,
+    };
+    let der = encode(&authenticator)?;
+    let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
+    let cipher = encrypt(session, usage, &der)?;
+    // MIT `krb5_mk_req_extended` (`lib/krb5/krb/mk_req_ext.c:85-254`): the authenticator is traced
+    // with its sequence number and both keys as hashes.
+    trace::mk_req(
+        trace::Princ::new(cname, crealm.as_bytes()),
+        trace::Princ::new(&ticket.sname, ticket.realm.as_bytes()),
+        0,
+        Some(sub.into()),
+        session.into(),
+    );
+    let ap = ApReq {
+        pvno: ApReq::PVNO,
+        msg_type: ApReq::MSG_TYPE,
+        ap_options: ApOptions::none(),
+        ticket: ticket.clone(),
+        authenticator: EncryptedData {
+            etype: session.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    Ok((authenticator, encode(&ap)?))
 }
 
 /// The result a kpasswd reply's KRB-PRIV carries, after its AP-REP.
@@ -476,7 +495,8 @@ pub(crate) fn kpasswd_sender_address(
 }
 
 /// The request for one connection: the version, the AP-REQ and a KRB-PRIV that names `sender`.
-/// MIT `krb5int_mk_chpw_req` (`lib/krb5/krb/chpw.c:13-67`): `DO_SEQUENCE` alone, the sender the auth context's local address and no receiver.
+/// MIT `krb5int_mk_chpw_req` (`lib/krb5/krb/chpw.c:13-67`): `DO_SEQUENCE` alone, the sender the auth context's local address and no receiver, so no timestamp.
+/// MIT `priv_enc_part_3` (`lib/krb5/asn.1/asn1_k_encode.c:866-866`): a sequence number of zero, the authenticator's, is left out of the part.
 fn kpasswd_request(
     sub: &ProtocolKey,
     ap_der: &[u8],
@@ -484,7 +504,7 @@ fn kpasswd_request(
     version: u16,
     sender: &HostAddress,
 ) -> Result<Vec<u8>, Error> {
-    let priv_msg = build_krb_priv_from(sub, priv_plain, Some(0), sender)?;
+    let priv_msg = build_krb_priv_from(sub, priv_plain, None, sender)?;
     let priv_der = encode(&priv_msg)?;
     Ok(encode_kpasswd_req(ap_der, &priv_der, version))
 }
@@ -779,7 +799,7 @@ mod parse_rep_tests {
             cusec: Microseconds::from_subsec_micros(1),
             ctime: KerberosTime::now(),
             subkey: None,
-            seq_number: Some(0),
+            seq_number: None,
             authorization_data: None,
         };
         let result = [0u8, 0];
@@ -1058,7 +1078,7 @@ mod sender_tests {
         assert!(kpasswd_sender_address("0.0.0.0:51000".parse().unwrap(), none).is_err());
     }
 
-    /// The KRB-PRIV in the request names the connection's address as its sender and no receiver, under the request's subkey with the first sequence number.
+    /// The KRB-PRIV in the request names the connection's address as its sender and no receiver, with no timestamp and no sequence number (zero is left out), under the request's subkey.
     /// MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:60-61`): the sender is the auth context's local address and the receiver its remote one, unset for kpasswd.
     #[test]
     fn the_krb_priv_of_a_request_names_the_sender_and_no_receiver() {
@@ -1087,7 +1107,99 @@ mod sender_tests {
         let part: EncKrbPrivPart = decode(&plain).unwrap();
         assert_eq!(part.s_address, sender);
         assert_eq!(part.r_address, None);
-        assert_eq!(part.seq_number, Some(0));
+        assert_eq!(part.timestamp, None);
+        assert_eq!(part.usec, None);
+        assert_eq!(part.seq_number, None);
         assert_eq!(part.user_data.as_ref(), b"new-password");
+    }
+}
+
+/// The AP-REQ of a kpasswd request.
+#[cfg(test)]
+mod ap_req_tests {
+    use super::kpasswd_ap_req;
+    use krb5_asn1::decode;
+    use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
+    use krb5_types::{
+        ApOptions, ApReq, Authenticator, EncryptedData, PrincipalName, Ticket, ascii, ku,
+    };
+
+    /// The tags of the fields of a DER `SEQUENCE` inside an application tag, read without the codec that wrote them.
+    fn field_tags(der: &[u8]) -> Vec<u8> {
+        fn header(b: &[u8]) -> (usize, usize) {
+            // (length of the tag and length octets, length of the content)
+            match b[1] {
+                n if n < 0x80 => (2, usize::from(n)),
+                n => {
+                    let used = usize::from(n & 0x7f);
+                    let len = b[2..2 + used]
+                        .iter()
+                        .fold(0usize, |acc, &x| (acc << 8) | usize::from(x));
+                    (2 + used, len)
+                }
+            }
+        }
+        let (outer, _) = header(der);
+        assert_eq!(der[0], 0x62, "[APPLICATION 2]");
+        let seq = &der[outer..];
+        assert_eq!(seq[0], 0x30, "SEQUENCE");
+        let (head, len) = header(seq);
+        let mut rest = &seq[head..head + len];
+        let mut tags = Vec::new();
+        while !rest.is_empty() {
+            let (head, len) = header(rest);
+            tags.push(rest[0]);
+            rest = &rest[head + len..];
+        }
+        tags
+    }
+
+    /// The authenticator of a request carries the client, the time and the request's subkey, and no sequence number, checksum or authorization data; the AP-REQ asks for nothing.
+    /// MIT `change_set_password` (`lib/krb5/os/changepw.c:230-240`): a fresh authentication context, then `krb5_mk_req_extended` asked for a subkey and nothing else.
+    /// MIT `krb5_mk_req_extended` (`lib/krb5/krb/mk_req_ext.c:137-143`): a sequence number is made only under `DO_SEQUENCE` or `RET_SEQUENCE`, which the new context does not have.
+    #[test]
+    fn the_authenticator_of_a_request_has_a_subkey_and_no_sequence_number() {
+        let session = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let sub = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let ticket = Ticket {
+            tkt_vno: Ticket::VNO,
+            realm: ascii("KERBER.TEST"),
+            sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]),
+            enc_part: EncryptedData {
+                etype: 18,
+                kvno: Some(1),
+                cipher: vec![0u8; 16].into(),
+            },
+        };
+        let crealm = ascii("KERBER.TEST");
+        let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
+        let (kept, ap_der) = kpasswd_ap_req(&ticket, &session, (&crealm, &cname), &sub).unwrap();
+
+        let ap: ApReq = decode(&ap_der).unwrap();
+        assert_eq!(ap.ap_options, ApOptions::none(), "no AP option");
+        assert_eq!(ap.ticket, ticket);
+        assert_eq!(ap.authenticator.etype, session.etype().to_iana());
+        assert_eq!(ap.authenticator.kvno, None);
+        let plain = decrypt(
+            &session,
+            KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).unwrap(),
+            ap.authenticator.cipher.as_ref(),
+        )
+        .unwrap();
+        let sent: Authenticator = decode(&plain).unwrap();
+        assert_eq!(sent, kept, "the authenticator kept is the one sent");
+        assert_eq!((&sent.crealm, &sent.cname), (&crealm, &cname));
+        assert_eq!(sent.seq_number, None, "no sequence number");
+        assert_eq!(sent.cksum, None);
+        assert_eq!(sent.authorization_data, None);
+        let subkey = sent.subkey.expect("a subkey");
+        assert_eq!(subkey.keytype, sub.etype().to_iana());
+        assert_eq!(subkey.keyvalue.as_ref(), sub.as_bytes());
+        // On the wire: version, realm, client, microseconds, time and the subkey, and no [7].
+        assert_eq!(
+            field_tags(&plain),
+            [0xa0, 0xa1, 0xa2, 0xa4, 0xa5, 0xa6],
+            "{plain:02x?}"
+        );
     }
 }

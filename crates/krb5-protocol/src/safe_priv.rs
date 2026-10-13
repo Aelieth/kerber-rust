@@ -494,9 +494,10 @@ pub fn build_krb_priv_with_seq(
     build_krb_priv_chained(session, user_data, seq_number, true, &mut state)
 }
 
-/// Build a KRB-PRIV as [`build_krb_priv_with_seq`] does, naming `sender` as its sender address.
+/// Build a KRB-PRIV that names `sender` as its sender address and carries no timestamp.
 ///
 /// MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:60-61`): the message's sender is the auth context's local address, and its receiver the remote address, which kpasswd does not set.
+/// MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:52-60`): a timestamp only under `DO_TIME`, which `krb5int_mk_chpw_req` does not set.
 ///
 /// # Errors
 ///
@@ -513,7 +514,7 @@ pub fn build_krb_priv_from(
         session,
         user_data,
         seq_number,
-        true,
+        false,
         &mut state,
         sender.clone(),
     )
