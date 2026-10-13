@@ -174,33 +174,39 @@ fn read_message(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// A dump's size as kprop and kpropd send it: four bytes for 1 through 2^32 - 1, else four zero
+/// bytes and the size in eight, so 0 takes twelve.
+/// MIT `encode_database_size` (`kprop/kprop_util.c:59-73`): only a size of 1 through `UINT32_MAX` is encoded in 32 bits.
 fn encode_database_size(size: u64) -> Vec<u8> {
-    if let Ok(n) = u32::try_from(size) {
-        n.to_be_bytes().to_vec()
-    } else {
-        let mut b = vec![0u8; 12];
-        b[0..4].copy_from_slice(&0u32.to_be_bytes());
-        b[4..12].copy_from_slice(&size.to_be_bytes());
-        b
+    match u32::try_from(size) {
+        Ok(n) if n > 0 => n.to_be_bytes().to_vec(),
+        _ => {
+            let mut b = vec![0u8; 12];
+            b[4..12].copy_from_slice(&size.to_be_bytes());
+            b
+        }
     }
 }
 
+/// A dump's size as [`encode_database_size`] encodes it.
+/// MIT `decode_database_size` (`kprop/kprop_util.c:75-99`): four bytes, or twelve whose first four are zero and whose size is not one that fits in four; anything else is `KRB5KRB_ERR_GENERIC`.
 fn decode_database_size(buf: &[u8]) -> Result<u64, Error> {
+    let bad = || Error::Inner("Generic error (see e-text)".into());
     match buf.len() {
         4 => Ok(u64::from(u32::from_be_bytes(
-            buf.try_into().map_err(|_| Error::Inner("size".into()))?,
+            buf.try_into().map_err(|_| bad())?,
         ))),
         12 => {
             if buf[..4] != [0, 0, 0, 0] {
-                return Err(Error::Inner("non-compact 64-bit dump size".into()));
+                return Err(bad());
             }
-            Ok(u64::from_be_bytes(
-                buf[4..12]
-                    .try_into()
-                    .map_err(|_| Error::Inner("size64".into()))?,
-            ))
+            let size = u64::from_be_bytes(buf[4..12].try_into().map_err(|_| bad())?);
+            if size > 0 && u32::try_from(size).is_ok() {
+                return Err(bad());
+            }
+            Ok(size)
         }
-        _ => Err(Error::Inner("dump size length".into())),
+        _ => Err(bad()),
     }
 }
 
@@ -2889,5 +2895,30 @@ mod tests {
             "{e}"
         );
         join.join().expect("thread");
+    }
+
+    /// MIT `encode_database_size` (`kprop/kprop_util.c:59-73`): a size of 1 through 2^32 - 1 is four bytes, 0 and larger sizes twelve, the first four zero.
+    /// MIT `decode_database_size` (`kprop/kprop_util.c:75-99`): a twelve-byte size that fits in four, a non-zero lead, or any other length is refused.
+    #[test]
+    fn a_dump_size_is_four_bytes_or_twelve_as_mits() {
+        assert_eq!(encode_database_size(0), [0u8; 12]);
+        assert_eq!(encode_database_size(1), [0, 0, 0, 1]);
+        assert_eq!(
+            encode_database_size(u64::from(u32::MAX)),
+            [0xff, 0xff, 0xff, 0xff]
+        );
+        let big = encode_database_size(1 << 32);
+        assert_eq!(big, [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0]);
+        for n in [0, 1, 0x1692, u64::from(u32::MAX), 1 << 32, u64::MAX] {
+            assert_eq!(decode_database_size(&encode_database_size(n)).unwrap(), n);
+        }
+        let mut small_in_twelve = [0u8; 12];
+        small_in_twelve[11] = 5;
+        assert!(decode_database_size(&small_in_twelve).is_err());
+        let mut lead = [0u8; 12];
+        lead[0] = 1;
+        assert!(decode_database_size(&lead).is_err());
+        assert!(decode_database_size(&[0u8; 8]).is_err());
+        assert!(decode_database_size(&[]).is_err());
     }
 }
