@@ -2945,6 +2945,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **ci.** Quote the two OTP gates' step names, so `ci.yml` parses again.
 - **tool.** `rust-kinit-otp-gate` logs in with both `kinit`s against the Rust KDC's `otp` module: right and
   wrong codes, end of file, `require_auth`, a bad `[otp]`.
 - **tool.** `otp-gate` logs in with MIT `kinit -T` and the Rust `kinit` against MIT's `otp` module and a RADIUS
