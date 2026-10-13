@@ -32,6 +32,7 @@ section's count is the sum over its files.
 | [a5-prop.md](a5-prop.md) | A5 — kprop, kpropd, iprop and the gssrpc layer |
 | [b1-asn1.md](b1-asn1.md) | B1 — the ASN.1 decoder: `asn1_encode.c`, `asn1_k_encode.c` against `vendor/rasn` and the wire types |
 | [b1-client.md](b1-client.md) | B1 — the client library, crypto, the AP-REQ acceptor, ccache and keytab |
+| [b1-client-preauth.md](b1-client-preauth.md) | B1 — the preauth framework and the responder: `preauth2.c`, `response_items.c`, the OTP responder in `preauth_otp.c` |
 | [b1-gss.md](b1-gss.md) | B1 — the GSS-API krb5 mechanism and SPNEGO: context, wrap / unwrap, sequence window, status, credentials |
 | [b1-tools.md](b1-tools.md) | B1 — the client tools: `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd`, `ktutil` |
 
@@ -97,8 +98,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**516** = A1 131 + A2 94 + A3 96 + A4 64 + A5 33 + B1 98.
-exact 416 · stricter-documented 19 · deviation 36 ·
+**517** = A1 131 + A2 94 + A3 96 + A4 64 + A5 33 + B1 99.
+exact 417 · stricter-documented 19 · deviation 36 ·
 absent 1 · deferred 44.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
