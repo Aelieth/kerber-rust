@@ -348,7 +348,7 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
     swapped image is checked: no `krb5-server`, the modes and owners of its
     directories as in the MIT image, `sha256sum -c` of the install manifest;
   - the fixture's KDC migrated as docs/install.md "In a container" says, its
-    three blocks taken from the archive by heading and run in one session
+    first three blocks taken from the archive by heading and run in one session
     (block 2's `docker stop` is not run: no container runs the copy). Every
     command must exit 0, and the loaded realm lists the dump's principals.
 - **Both legs:**
@@ -364,6 +364,11 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
     legs; the check is that those two are the only lines not PASS. Its KDC is
     the fixture's (mit) or the migrated copy (rust);
   - phase 80 again on a copy of the data with a fresh `key_seed`: 4 of 4.
+- **`--leg rust`, last** (both gate runs have served from the migrated
+  copy): the doc's fourth block, which removes the dump, its
+  `.dump_ok` and MIT's `mit-db2`, run in a session that has block 1's `VOLUME`
+  and `NEW_IMAGE`. It must exit 0, the three names must be gone, and
+  `listprincs` must still list the principals the load made.
 - **Against the MIT leg** (rust leg): this run's MIT leg, else
   `runs/mit-latest/klldap-swap/mit/`. The gate table line by line, the lanes'
   pass counts, and `/app/lldap` and `kerberos_manager` byte for byte. The table

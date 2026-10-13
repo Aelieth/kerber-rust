@@ -7,8 +7,10 @@
 # fails two lines on MIT too); phase 80 again on a copy with a fresh key_seed. The rust leg first builds the ref in
 # AlmaLinux 10 (docs/install.md "Build", then make install DESTDIR), checks the staged programs (strings, glibc
 # floor), applies F3's one Dockerfile hunk and migrates the fixture's KDC by docs/install.md "In a container"
-# (the doc read from the ref's archive by heading, so a doc change is what runs). It compares with the MIT leg:
-# this run's, else runs/mit-latest; with neither, each comparison is NOT-RUN, which fails. No lab VM.
+# (the doc read from the ref's archive by heading, so a doc change is what runs): its first three blocks before
+# the boot and the gates, its fourth, which removes the dump and MIT's database, once the gates have served from
+# the migrated copy. It compares with the MIT leg: this run's, else runs/mit-latest; with neither, each
+# comparison is NOT-RUN, which fails. No lab VM.
 # Inputs (field.env): FIELD_KLLDAP_REPO + FIELD_KLLDAP_PIN (`git archive` of the pin, never a copy of the working
 # tree), FIELD_KLLDAP_FIXTURE, FIELD_LLDAP_CLI. Docker names start kerber-field-<run id>-<leg>; all are removed at
 # the end (BuildKit's cache stays), and so is the leg's scratch. Run by run.sh (REC_DIR, TMPDIR, FIELD_RUN,
@@ -287,10 +289,10 @@ done
 
 KDC=$FIX/krb5kdc
 if [ "$LEG" = rust ]; then
-    section "6. the fixture's KDC migrated as docs/install.md 'In a container' says: the MIT image dumps, ours loads"
+    section "6. the fixture's KDC migrated as docs/install.md 'In a container' says (blocks 1 to 3): the MIT image dumps, ours loads"
     KDC=$T/fixture-migrated/krb5kdc
     check migrate.copy rc host "rm -rf $(q "$T/fixture-migrated") && mkdir -p $(q "$T/fixture-migrated") && cp -a $(q "$FIX/krb5kdc") $(q "$KDC") && ls -lan $(q "$KDC")"
-    check doc.migrate.blocks 'line:3' host "python3 -B $(q "$DOCB") count $(q "$STATE/install.md") '### In a container'"
+    check doc.migrate.blocks 'line:4' host "python3 -B $(q "$DOCB") count $(q "$STATE/install.md") '### In a container'"
     for b in 1 2 3; do
         case $b in
             1) opts="--set REALM=$(q "$REALM") --set VOLUME=$(q "$KDC") --set OLD_IMAGE=$N:old --set NEW_IMAGE=$N:rust" ;;
@@ -299,7 +301,7 @@ if [ "$LEG" = rust ]; then
         esac
         check "doc.migrate-$b.script" rc host "python3 -B $(q "$DOCB") script $(q "$STATE/install.md") '### In a container' $b $opts > $(q "$STATE/migrate-$b.sh")"
     done
-    note "the blocks run in one bash session, as a reader pastes them into one terminal: block 1's names and block 2's OWNER reach block 3; block 2's 'docker stop' is not run: no container runs the fixture's copy"
+    note "the blocks run in one bash session, as a reader pastes them into one terminal: block 1's names and block 2's OWNER reach block 3; block 2's 'docker stop' is not run: no container runs the fixture's copy; block 4 waits for step 10, after the gates have served from the copy"
     host "cd $(q "$STATE") && . ./migrate-1.sh > migrate-1.out 2>&1; . ./migrate-2.sh > migrate-2.out 2>&1; . ./migrate-3.sh > migrate-3.out 2>&1; cat migrate-1.out migrate-2.out migrate-3.out"
     for b in 1 2 3; do
         python3 -B "$DOCB" results "$STATE/migrate-$b.out" > "$STATE/migrate-$b.results" || _checkrow "doc.migrate-$b" FAIL units - "no command of block $b ran"
@@ -308,6 +310,7 @@ if [ "$LEG" = rust ]; then
         done < "$STATE/migrate-$b.results"
     done
     check migrate.principals '^principals: [1-9][0-9]*, the dump.s$' host "a=\$(docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v $(q "$KDC"):/var/kerberos/krb5kdc $N:rust -r $(q "$REALM") -q listprincs | grep -E '^[^ ]+@[^ ]+\$' | sort) && b=\$(awk '\$1 == \"princ\" { print \$7 }' $(q "$KDC/mit-realm.dump") | sort) && [ -n \"\$a\" ] && [ \"\$a\" = \"\$b\" ] && echo \"principals: \$(printf '%s\n' \"\$a\" | wc -l), the dump's\" && printf '%s\n' \"\$a\" && ls -lan $(q "$KDC")"
+    grep -E '^[^ ]+@[^ ]+$' "$LAST_OUT" | sort > "$STATE/principals.migrated"
 fi
 
 section "7. the image booted once, as the gate boots it (fresh volumes, no published port): the observations"
@@ -331,7 +334,18 @@ gate phase80 "$T/fixture-freshkey/data" "$KDC" 80-migration
 check phase80.result 'Gate results: 4 passed, 0 failed, 0 skipped$' host "grep -E 'Gate results: ' $(q "$REC_DIR/logs/gate-phase80.log")"
 
 if [ "$LEG" = rust ]; then
-    section "10. against the MIT leg: this run's, else runs/mit-latest (neither: each comparison NOT-RUN, a FAIL)"
+    section "10. docs/install.md 'In a container', block 4: the realm has served from the new image (the gate runs of steps 8 and 9), so the dump and MIT's database are removed"
+    check doc.migrate-4.script rc host "python3 -B $(q "$DOCB") script $(q "$STATE/install.md") '### In a container' 4 --session $(q "VOLUME=$(q "$KDC")") --session $(q "NEW_IMAGE=$N:rust") > $(q "$STATE/migrate-4.sh")"
+    note "block 4 runs in a session that has what block 1 set (VOLUME, NEW_IMAGE), as the reader's terminal does"
+    host "cd $(q "$STATE") && . ./migrate-4.sh > migrate-4.out 2>&1; cat migrate-4.out"
+    python3 -B "$DOCB" results "$STATE/migrate-4.out" > "$STATE/migrate-4.results" || _checkrow doc.migrate-4 FAIL units - "no command of block 4 ran"
+    while IFS=$'\t' read -r i rc nout first; do
+        _checkrow "doc.migrate-4.$i" "$([ "$rc" = 0 ] && echo PASS || echo FAIL)" rc "$rc" "rc=$rc, $nout output lines: $first"
+    done < "$STATE/migrate-4.results"
+    check migrate.removed '^gone: mit-realm\.dump, mit-realm\.dump\.dump_ok, mit-db2$' host "cd $(q "$KDC") && for f in mit-realm.dump mit-realm.dump.dump_ok mit-db2; do if [ -e \"\$f\" ] || [ -L \"\$f\" ]; then echo \"still there: \$f\"; exit 1; fi; done; echo 'gone: mit-realm.dump, mit-realm.dump.dump_ok, mit-db2' && ls -lan ."
+    check migrate.kept '^principals: [1-9][0-9]*, as after the load$' host "a=\$(docker run --rm --network none --entrypoint /usr/sbin/kadmin.local -v $(q "$KDC"):/var/kerberos/krb5kdc $N:rust -r $(q "$REALM") -q listprincs | grep -E '^[^ ]+@[^ ]+\$' | sort) && [ -n \"\$a\" ] && [ \"\$a\" = \"\$(cat $(q "$STATE/principals.migrated"))\" ] && echo \"principals: \$(printf '%s\n' \"\$a\" | wc -l), as after the load\" && printf '%s\n' \"\$a\" && ls -lan $(q "$KDC")"
+
+    section "11. against the MIT leg: this run's, else runs/mit-latest (neither: each comparison NOT-RUN, a FAIL)"
     REF_DIR=''
     if [ -f "$FIELD_RUN/klldap-swap/mit/result" ]; then REF_DIR=$FIELD_RUN/klldap-swap/mit
     elif [ -d "$LAB_HOME/runs/mit-latest/klldap-swap/mit" ]; then REF_DIR=$LAB_HOME/runs/mit-latest/klldap-swap/mit; fi
