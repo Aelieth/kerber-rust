@@ -563,6 +563,7 @@ fn tgs_as_tgt(prev: &AsOutcome, out: TgsOutcome) -> AsOutcome {
         fast_avail: prev.fast_avail,
         used_fast: prev.used_fast,
         pa_type: prev.pa_type,
+        pa_config: None,
     }
 }
 
@@ -1596,6 +1597,7 @@ mod tests {
             fast_avail: false,
             used_fast: false,
             pa_type: None,
+            pa_config: None,
         }
     }
 
@@ -1638,6 +1640,7 @@ mod tests {
             fast_avail: false,
             used_fast: false,
             pa_type: None,
+            pa_config: None,
         }
     }
 

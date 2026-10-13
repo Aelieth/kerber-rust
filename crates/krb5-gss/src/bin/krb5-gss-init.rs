@@ -121,6 +121,7 @@ fn main() {
             fast_avail: false,
             used_fast: false,
             pa_type: None,
+            pa_config: None,
         };
         let kdc = std::env::var("KRB5_KDC")
             .ok()

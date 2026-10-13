@@ -1,13 +1,15 @@
 //! Client preauth modules selected by `[plugins] clpreauth`.
 //!
 //! MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:120-204`): registers the built-in
-//! clpreauth modules in the order `pkinit`, `spake`, `encrypted_challenge`, `encrypted_timestamp`.
+//! clpreauth modules in the order `pkinit`, `spake`, `encrypted_challenge`, `encrypted_timestamp`,
+//! `otp`.
 //! MIT `k5_plugin_load_all` (`lib/krb5/krb/plugin.c:421-455`): applies `disable` and `enable_only`.
 //! A module whose init fails, or a dynamic module that does not load, is not kept.
 //! MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): answers only a pa-type a loaded module serves.
-//! `sam2` and `otp` are not implemented, so they are absent the way a module that failed to load
-//! is absent. `module` is not read. Embedder modules follow the built-ins; an earlier name wins a
-//! duplicate, and the first loaded module to claim a pa-type keeps it.
+//! `sam2` is not implemented, so it is absent the way a module that failed to load is absent.
+//! `otp` follows `encrypted_timestamp`, as MIT registers it. `module` is not read. Embedder modules
+//! follow the built-ins; an earlier name wins a duplicate, and the first loaded module to claim a
+//! pa-type keeps it.
 
 use std::sync::{Arc, Mutex};
 
@@ -58,6 +60,7 @@ enum Kind {
     Spake,
     EncChallenge,
     EncTs,
+    Otp,
     Embedder(Arc<dyn ClPreauth>),
 }
 
@@ -77,6 +80,8 @@ pub(crate) enum Owner {
     EncChallenge,
     /// The built-in `encrypted_timestamp` module.
     EncTs,
+    /// The built-in `otp` module.
+    Otp,
     /// An embedder module.
     Embedder(Arc<dyn ClPreauth>),
 }
@@ -168,6 +173,14 @@ fn candidates() -> Vec<Slot> {
             kind: Kind::EncTs,
         },
     );
+    push_unique(
+        &mut slots,
+        Slot {
+            name: "otp",
+            pa_types: vec![krb5_types::pa::OTP_CHALLENGE],
+            kind: Kind::Otp,
+        },
+    );
     for module in extras() {
         push_unique(
             &mut slots,
@@ -222,6 +235,7 @@ pub(crate) fn owner_of(pa_type: i32) -> Option<Owner> {
         Kind::Spake => Owner::Spake,
         Kind::EncChallenge => Owner::EncChallenge,
         Kind::EncTs => Owner::EncTs,
+        Kind::Otp => Owner::Otp,
         Kind::Embedder(module) => Owner::Embedder(module),
     })
 }
@@ -305,7 +319,7 @@ mod tests {
         ));
         assert!(owner_of(pa::ENC_TIMESTAMP).is_none());
         assert!(loaded("spake"));
-        assert!(!loaded("otp"));
+        assert!(loaded("otp"), "disable of encrypted_timestamp leaves otp");
     }
 
     #[test]
@@ -322,17 +336,74 @@ mod tests {
 
     #[test]
     fn an_unknown_enable_only_name_keeps_no_module() {
-        pin("[plugins]\n    clpreauth = {\n        enable_only = otp\n    }\n");
+        pin("[plugins]\n    clpreauth = {\n        enable_only = nosuch\n    }\n");
         assert!(
             selected_names().is_empty(),
-            "otp is not loaded, so enable_only keeps nothing: {:?}",
+            "nosuch is not a module, so enable_only keeps nothing: {:?}",
             selected_names()
         );
-        pin("[plugins]\n    clpreauth = {\n        disable = otp\n        disable = sam2\n    }\n");
+        pin(
+            "[plugins]\n    clpreauth = {\n        disable = nosuch\n        disable = sam2\n    }\n",
+        );
         assert!(
             loaded("encrypted_timestamp") && loaded("spake"),
             "disable of an absent name drops nothing"
         );
+    }
+
+    #[test]
+    fn otp_registers_after_encrypted_timestamp_and_owns_141() {
+        pin("");
+        let names = selected_names();
+        let at = names
+            .iter()
+            .position(|n| *n == "encrypted_timestamp")
+            .unwrap();
+        assert_eq!(
+            names.get(at + 1),
+            Some(&"otp"),
+            "MIT registers otp after encrypted_timestamp: {names:?}"
+        );
+        assert!(matches!(
+            owner_of(pa::OTP_CHALLENGE),
+            Some(super::Owner::Otp)
+        ));
+    }
+
+    #[test]
+    fn enable_only_otp_keeps_only_otp_and_disable_drops_it() {
+        pin("[plugins]\n    clpreauth = {\n        enable_only = otp\n    }\n");
+        assert_eq!(selected_names(), vec!["otp"]);
+        assert!(owner_of(pa::ENC_TIMESTAMP).is_none());
+        pin("[plugins]\n    clpreauth = {\n        disable = otp\n    }\n");
+        assert!(!loaded("otp") && loaded("encrypted_timestamp"));
+        assert!(owner_of(pa::OTP_CHALLENGE).is_none());
+    }
+
+    struct OtpThief;
+
+    impl ClPreauth for OtpThief {
+        fn name(&self) -> &'static str {
+            "otp_thief"
+        }
+        fn pa_types(&self) -> &'static [i32] {
+            &[pa::OTP_CHALLENGE]
+        }
+        fn process(&self, _input: &PaData) -> Result<Option<Vec<PaData>>, Error> {
+            Ok(None)
+        }
+    }
+
+    #[test]
+    fn an_embedder_cannot_take_141_from_the_built_in_otp() {
+        let _guard = Guard;
+        set_thread_clpreauth(vec![Arc::new(OtpThief)]);
+        pin("");
+        assert!(matches!(
+            owner_of(pa::OTP_CHALLENGE),
+            Some(super::Owner::Otp)
+        ));
+        assert!(!loaded("otp_thief"));
     }
 
     #[test]

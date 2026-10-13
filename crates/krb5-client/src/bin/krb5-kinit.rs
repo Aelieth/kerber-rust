@@ -430,6 +430,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         starttime: opts.starttime,
         pac_request: opts.request_pac,
         allowed_preauth_type: None,
+        pa_config_in: None,
     };
     // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:991-1005`): a caller address list wins; otherwise absent or true `noaddresses` sends none, and false sends the local addresses.
     if opts.addresses == Some(true)
@@ -484,6 +485,10 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         Ok((a, b))
     };
     let key_exp_notice = |banner: &str| eprintln!("{banner}");
+    // MIT `kinit_prompter` (`kinit.c:622-636`): a preauth module's prompts go to `krb5_prompter_posix` with the banner above and a reply buffer of 1024; only a password prompt sets `pwprompt`, so `prompted` stays as it is.
+    let preauth_prompt = |p: &krb5_protocol::PreauthPrompt<'_>| {
+        krb5_cli::Prompter::stdio().hidden_with(p.banner, p.prompt, 1024)
+    };
     let service = gate_service(opts);
     let armor_spec = match opts.armor_ccache.as_deref() {
         Some(name) => Some(armor_ccache_spec(name).map_err(Failure::Error)?),
@@ -507,6 +512,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         prompter: (!opts.keytab).then_some(NewPasswordPrompter(&prompter)),
         key_exp_notice: Some(KeyExpNotice(&key_exp_notice)),
         in_ccache: k5.in_cc.as_ref().map(krb5_client::InputCcache),
+        preauth_prompter: (!opts.keytab).then_some(krb5_client::PreauthPrompter(&preauth_prompt)),
     };
     let spec = &k5.out_spec;
     let result = match given {

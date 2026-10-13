@@ -177,13 +177,13 @@ fn enable_only_encrypted_timestamp_skips_spake() {
 #[test]
 fn enable_only_of_an_absent_name_answers_nothing() {
     pin(
-        "    spake_preauth_groups = nosuch\n[plugins]\n    clpreauth = {\n        enable_only = otp\n    }\n",
+        "    spake_preauth_groups = nosuch\n[plugins]\n    clpreauth = {\n        enable_only = nosuch\n    }\n",
     );
     let (seen, msg) = shots(vec![pa_of(pa::ENC_TIMESTAMP), pa_of(pa::SPAKE)]);
     assert_eq!(
         seen.len(),
         1,
-        "otp is not a loaded module, so enable_only keeps none: {seen:?}"
+        "nosuch is not a loaded module, so enable_only keeps none: {seen:?}"
     );
     assert!(
         msg.contains("Generic preauthentication failure"),
@@ -194,7 +194,7 @@ fn enable_only_of_an_absent_name_answers_nothing() {
 #[test]
 fn disable_of_an_absent_name_still_answers_encrypted_timestamp() {
     pin(
-        "    spake_preauth_groups = nosuch\n[plugins]\n    clpreauth = {\n        disable = otp\n        disable = sam2\n    }\n",
+        "    spake_preauth_groups = nosuch\n[plugins]\n    clpreauth = {\n        disable = nosuch\n        disable = sam2\n    }\n",
     );
     let (seen, _) = shots(vec![pa_of(pa::ENC_TIMESTAMP)]);
     assert!(seen.len() >= 2, "an absent name drops nothing: {seen:?}");
@@ -338,4 +338,14 @@ fn a_disabled_widget_is_not_answered() {
         msg.contains("Generic preauthentication failure"),
         "no loaded module is KRB5_PREAUTH_FAILED, got {msg}"
     );
+}
+
+/// MIT `otp_client_process` (`lib/krb5/krb/preauth_otp.c:1084-1087`): without a FAST armor key the
+/// module has nothing to answer with, so a PA-OTP-CHALLENGE alone leaves the hint unanswered.
+#[test]
+fn an_unarmored_otp_hint_is_not_answered() {
+    pin("    spake_preauth_groups = nosuch\n");
+    let (seen, msg) = shots(vec![pa_of(pa::OTP_CHALLENGE)]);
+    assert_eq!(seen.len(), 1, "no second AS-REQ: {seen:?}");
+    assert!(msg.contains("Generic preauthentication failure"), "{msg}");
 }

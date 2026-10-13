@@ -97,6 +97,10 @@ pub enum Error {
     /// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:68-73`): `KRB5_PREAUTH_FAILED`, "Encrypted timestamp is disabled".
     #[error("Encrypted timestamp is disabled")]
     EnctsDisabled,
+    /// A preauthentication module's own failure, shown as it is.
+    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): a module's failure, such as `KRB5_LIBOS_CANTREADPWD` "Cannot read password", is the message wrapped by [`Error::PreauthFailed`].
+    #[error("{0}")]
+    Message(String),
     /// I/O from keytab/ccache.
     #[error("file: {0}")]
     File(#[from] io::Error),
@@ -136,6 +140,7 @@ impl Clone for Error {
             Self::TruncatedReply => Self::TruncatedReply,
             Self::FastUpgrade => Self::FastUpgrade,
             Self::EnctsDisabled => Self::EnctsDisabled,
+            Self::Message(s) => Self::Message(s.clone()),
             Self::File(e) => Self::Io {
                 message: e.to_string(),
                 kind: e.kind(),

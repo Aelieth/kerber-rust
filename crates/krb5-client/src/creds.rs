@@ -306,6 +306,7 @@ pub fn outcome_from_cred(cred: &CcacheCred) -> Result<AsOutcome, Krb5Error> {
         fast_avail: false,
         used_fast: false,
         pa_type: None,
+        pa_config: None,
     })
 }
 

@@ -3,12 +3,13 @@
 
 use super::clock::Clock;
 use super::ec::{EC_MODULE, client_challenge, reply_code};
+use super::otp::{self, OTP_MODULE, OtpState};
 use super::{
-    AsOutcome, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, PasswordPrompt, build_as_req_from,
+    AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, build_as_req_from,
     classify_kdc_error, find_pa, finish_as_rep, first_etype, gak_found, method_from_error,
     pa_enc_timestamp_at, pick_info2, pick_key, req_sname, request_times, salt_cname, select_s2k,
     send_as, sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
-    with_prompted,
+    with_password, with_prompted,
 };
 use crate::error::Error;
 use crate::preauth::{
@@ -18,7 +19,9 @@ use crate::preauth::{
 use crate::trace;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
+use krb5_types::k5json::{self, Value};
 use krb5_types::{AsRep, EtypeInfo2, KrbError, MethodData, PaData, PrincipalName, err, pa};
+use zeroize::Zeroizing;
 
 /// Ticket used as RFC 6113 FAST AP-REQUEST armor.
 pub struct FastArmor {
@@ -44,7 +47,7 @@ pub(super) fn continue_fast(
     bound: &AsReqTimes,
     etypes: &[i32],
     clock: &Clock,
-    prompt: Option<&mut PasswordPrompt<'_>>,
+    prompt: Option<&mut dyn AsPrompt>,
 ) -> Result<AsOutcome, Error> {
     let armor = req
         .fast_armor
@@ -87,113 +90,277 @@ pub(super) fn continue_fast(
             }
             // The KDC's time, authenticated by the armor.
             clock.note(&inner, true);
-            with_prompted(req, prompt, true, |req| {
-                // MIT `init_creds_step_reply` (`get_in_tkt.c:1731-1740`): PREAUTH_FAILED on a
-                // mechanism that has not disabled fallback notes it failed and tries the next one.
-                let mut current = inner;
-                let mut cookie_slot = cookie;
-                let mut skip: Vec<i32> = Vec::new();
-                let mut saved_method: Vec<PaData> = Vec::new();
-                let mut last_fail: Option<KrbError> = None;
-                loop {
-                    let mut method = sort_krb5_padata_sequence(
-                        &method_from_error(&current).unwrap_or_default(),
-                        &super::conf_preferred_preauth_types_for(req.realm),
-                    );
-                    // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a type the input cache does not allow is not tried.
-                    method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
-                    if fast_mechanism(&method, &skip).is_err() && !saved_method.is_empty() {
-                        method.clone_from(&saved_method);
+            // MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): the password is read when a
+            // mechanism first needs the key, not before one is chosen; OTP never needs it.
+            let mut pw = PasswordCell::new(prompt);
+            let cc_in: Option<Value> = req
+                .ticket
+                .pa_config_in
+                .as_ref()
+                .and_then(|j| k5json::decode(j.as_bytes()).ok())
+                .filter(|v| matches!(v, Value::Object(_)));
+            let mut otp_state = OtpState::default();
+            let mut otp_failure: Option<Error> = None;
+            // MIT `init_creds_step_reply` (`get_in_tkt.c:1731-1740`): PREAUTH_FAILED on a
+            // mechanism that has not disabled fallback notes it failed and tries the next one.
+            let mut current = inner;
+            let mut cookie_slot = cookie;
+            let mut skip: Vec<i32> = Vec::new();
+            let mut saved_method: Vec<PaData> = Vec::new();
+            let mut last_fail: Option<KrbError> = None;
+            loop {
+                let mut method = sort_krb5_padata_sequence(
+                    &method_from_error(&current).unwrap_or_default(),
+                    &super::conf_preferred_preauth_types_for(req.realm),
+                );
+                // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a type the input cache does not allow is not tried.
+                method.retain(|p| req.ticket.preauth_allowed(p.padata_type));
+                if fast_mechanism(&method, &skip).is_err() && !saved_method.is_empty() {
+                    method.clone_from(&saved_method);
+                }
+                if trace::enabled() {
+                    trace::init_creds_preauth();
+                    trace_preauth_input(&method, etypes);
+                }
+                // MIT `fill_response_items` (`lib/krb5/krb/preauth2.c:937-965`): every module with
+                // a padata in the list prepares first, and a failure there ends the exchange.
+                if crate::clpreauth::loaded("otp") {
+                    for p in method.iter().filter(|p| p.padata_type == pa::OTP_CHALLENGE) {
+                        otp::prep_questions(&mut otp_state, p, cc_in.as_ref())?;
                     }
-                    if trace::enabled() {
-                        trace::init_creds_preauth();
-                        trace_preauth_input(&method, etypes);
-                    }
+                }
+                let mech = loop {
                     let mech = match fast_mechanism(&method, &skip) {
                         Ok(mech) => mech,
                         Err(e) => {
-                            return match last_fail {
-                                Some(err) => Err(kdc_error(&err)),
-                                None => Err(e),
+                            return match (last_fail, otp_failure) {
+                                (Some(err), _) => Err(kdc_error(&err)),
+                                (None, Some(first)) => Err(Error::PreauthFailed(Box::new(first))),
+                                (None, None) => Err(e),
                             };
                         }
                     };
-                    saved_method = method;
-                    if mech == pa::SPAKE {
-                        match finish_fast_spake(
-                            req,
-                            keys,
-                            nonce,
-                            etypes,
-                            clock,
-                            armor,
-                            &sub,
-                            &akey,
-                            &current,
-                            cookie_slot,
-                        )? {
-                            SpakeFast::Done(out) => return Ok(*out),
-                            SpakeFast::Next { err, cookie: next } => {
-                                skip.push(pa::SPAKE);
-                                last_fail = Some((*err).clone());
-                                current = *err;
-                                cookie_slot = next;
-                                continue;
+                    if mech != pa::OTP_CHALLENGE {
+                        break mech;
+                    }
+                    match otp::process(&otp_state, pw.ui(), &akey) {
+                        Ok((pa142, config)) => {
+                            return finish_fast_otp(
+                                req,
+                                nonce,
+                                etypes,
+                                clock,
+                                armor,
+                                &sub,
+                                &akey,
+                                cookie_slot,
+                                pa142,
+                                &config,
+                            );
+                        }
+                        Err(f) => {
+                            trace::preauth_process(
+                                OTP_MODULE,
+                                pa::OTP_CHALLENGE,
+                                true,
+                                f.code,
+                                Some(&f.text),
+                            );
+                            if f.interrupted {
+                                return Err(f.error);
                             }
+                            skip.push(pa::OTP_CHALLENGE);
+                            otp_failure.get_or_insert(f.error);
                         }
                     }
-                    let (etype, salt, params) =
-                        select_s2k(&current, &salt_cname(&req.cname), req.realm, etypes)?;
-                    trace_keytab_gak(req, keys, etype);
-                    let client_key = pick_key(keys, Some(etype)).map_or_else(
-                        || string_to_key(etype, req.password, &salt, params.as_deref()),
-                        Ok,
-                    )?;
-                    // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
-                    // preauth module's PA data, so the cookie leads the inner padata.
-                    let mut inner_pa = Vec::new();
-                    if let Some(c) = cookie_slot {
-                        inner_pa.push(c);
-                    }
-                    if mech == pa::ENCRYPTED_CHALLENGE {
-                        // MIT `ec_process` takes the time without an unauthenticated offset.
-                        let (now, usec) = clock.now(false);
-                        inner_pa.push(client_challenge(&akey, &client_key, (&now, usec))?);
-                        trace::preauth_process(EC_MODULE, mech, true, 0, None);
-                    } else {
-                        if gak_found(keys, &client_key, etype) {
-                            trace::preauth_enc_ts_key_gak((&client_key).into());
+                };
+                saved_method = method;
+                let req = &pw.request(req)?;
+                if mech == pa::SPAKE {
+                    match finish_fast_spake(
+                        req,
+                        keys,
+                        nonce,
+                        etypes,
+                        clock,
+                        armor,
+                        &sub,
+                        &akey,
+                        &current,
+                        cookie_slot,
+                    )? {
+                        SpakeFast::Done(out) => return Ok(*out),
+                        SpakeFast::Next { err, cookie: next } => {
+                            skip.push(pa::SPAKE);
+                            last_fail = Some((*err).clone());
+                            current = *err;
+                            cookie_slot = next;
+                            continue;
                         }
-                        inner_pa.push(pa_enc_timestamp_at(&client_key, clock.now(true), true)?);
-                        trace::preauth_process(ENCTS_MODULE, mech, true, 0, None);
                     }
-                    trace::preauth_output(&inner_pa);
-                    let ap = fast_armor_ap(armor, &sub)?;
-                    let bound = &request_times(req, clock);
-                    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
-                    attach_fast(&mut req2, &ap, &akey, inner_pa)?;
-                    trace::fast_encode();
-                    let wire = encode(&req2)?;
-                    return match send_as(req, &wire)? {
-                        KdcMsg::AsRep(rep) => finish_fast_as(
-                            req,
-                            keys,
-                            nonce,
-                            etypes,
-                            &akey,
-                            Some((client_key, mech)),
-                            rep,
-                            &wire,
-                            bound,
-                        ),
-                        KdcMsg::Error(e) => {
-                            classify_kdc_error(&fast_error_material(&akey, &e, nonce)?.err)
-                        }
-                        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-                    };
                 }
-            })
+                let (etype, salt, params) =
+                    select_s2k(&current, &salt_cname(&req.cname), req.realm, etypes)?;
+                trace_keytab_gak(req, keys, etype);
+                let client_key = pick_key(keys, Some(etype)).map_or_else(
+                    || string_to_key(etype, req.password, &salt, params.as_deref()),
+                    Ok,
+                )?;
+                // MIT k5_preauth copies the FX-COOKIE (copy_cookie) before the
+                // preauth module's PA data, so the cookie leads the inner padata.
+                let mut inner_pa = Vec::new();
+                if let Some(c) = cookie_slot {
+                    inner_pa.push(c);
+                }
+                if mech == pa::ENCRYPTED_CHALLENGE {
+                    // MIT `ec_process` takes the time without an unauthenticated offset.
+                    let (now, usec) = clock.now(false);
+                    inner_pa.push(client_challenge(&akey, &client_key, (&now, usec))?);
+                    trace::preauth_process(EC_MODULE, mech, true, 0, None);
+                } else {
+                    if gak_found(keys, &client_key, etype) {
+                        trace::preauth_enc_ts_key_gak((&client_key).into());
+                    }
+                    inner_pa.push(pa_enc_timestamp_at(&client_key, clock.now(true), true)?);
+                    trace::preauth_process(ENCTS_MODULE, mech, true, 0, None);
+                }
+                trace::preauth_output(&inner_pa);
+                let ap = fast_armor_ap(armor, &sub)?;
+                let bound = &request_times(req, clock);
+                let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+                attach_fast(&mut req2, &ap, &akey, inner_pa)?;
+                trace::fast_encode();
+                let wire = encode(&req2)?;
+                return match send_as(req, &wire)? {
+                    KdcMsg::AsRep(rep) => finish_fast_as(
+                        req,
+                        keys,
+                        nonce,
+                        etypes,
+                        &akey,
+                        Some((client_key, mech)),
+                        rep,
+                        &wire,
+                        bound,
+                    ),
+                    KdcMsg::Error(e) => {
+                        classify_kdc_error(&fast_error_material(&akey, &e, nonce)?.err)
+                    }
+                    KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+                };
+            }
         }
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
+    }
+}
+
+/// The password, read on first need and kept for the exchange.
+/// MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): `gak_fct` runs the first time a module wants the AS key.
+struct PasswordCell<'p> {
+    prompt: Option<&'p mut dyn AsPrompt>,
+    got: Option<Zeroizing<Vec<u8>>>,
+    none: NoPrompt,
+}
+
+/// The prompter of an exchange that was given none.
+struct NoPrompt;
+
+impl AsPrompt for NoPrompt {
+    fn password(&mut self) -> Result<Zeroizing<Vec<u8>>, Error> {
+        Err(Error::File(std::io::Error::other("Cannot read password")))
+    }
+}
+
+impl<'p> PasswordCell<'p> {
+    fn new(prompt: Option<&'p mut dyn AsPrompt>) -> Self {
+        Self {
+            prompt,
+            got: None,
+            none: NoPrompt,
+        }
+    }
+
+    /// `req` with the password in it, read now if this is the first need. A read that fails is
+    /// `KRB5_PREAUTH_FAILED` around it unless it was interrupted.
+    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-723`): a keyboard interrupt stops with its own code, any other failure is wrapped.
+    fn request<'b>(&'b mut self, req: &AsRequest<'b>) -> Result<AsRequest<'b>, Error> {
+        let Some(prompt) = self.prompt.as_deref_mut() else {
+            return Ok(with_password(req, req.password));
+        };
+        if self.got.is_none() {
+            let read = prompt.password().map_err(|e| {
+                let interrupted =
+                    matches!(&e, Error::File(io) if io.kind() == std::io::ErrorKind::Interrupted);
+                if interrupted {
+                    e
+                } else {
+                    Error::PreauthFailed(Box::new(e))
+                }
+            })?;
+            self.got = Some(read);
+        }
+        let pw: &[u8] = self.got.as_ref().map_or(&[], |p| p.as_slice());
+        Ok(with_password(req, pw))
+    }
+
+    fn ui(&mut self) -> &mut dyn AsPrompt {
+        match self.prompt.as_deref_mut() {
+            Some(p) => p,
+            None => &mut self.none,
+        }
+    }
+}
+
+/// The PA-OTP-REQUEST goes out in the FAST request and its reply ends the exchange: the armor key
+/// is the AS key, and an error reply is the KDC's, with no other mechanism after it.
+/// MIT `otp_client_process` (`lib/krb5/krb/preauth_otp.c:1118-1127`): `set_as_key(armor key)`, then `disable_fallback`.
+/// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1334-1336`): with fallback disabled a failed request is the error returned.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the FAST retry's existing locals"
+)]
+fn finish_fast_otp(
+    req: &AsRequest<'_>,
+    nonce: u32,
+    etypes: &[i32],
+    clock: &Clock,
+    armor: &FastArmor,
+    sub: &ProtocolKey,
+    akey: &ProtocolKey,
+    cookie: Option<PaData>,
+    pa142: PaData,
+    config: &Value,
+) -> Result<AsOutcome, Error> {
+    let mut inner_pa = Vec::new();
+    if let Some(c) = cookie {
+        inner_pa.push(c);
+    }
+    inner_pa.push(pa142);
+    trace::preauth_process(OTP_MODULE, pa::OTP_CHALLENGE, true, 0, None);
+    trace::preauth_output(&inner_pa);
+    let ap = fast_armor_ap(armor, sub)?;
+    let bound = &request_times(req, clock);
+    let mut req2 = build_as_req_from(req, nonce, bound, None, etypes)?;
+    attach_fast(&mut req2, &ap, akey, inner_pa)?;
+    trace::fast_encode();
+    let wire = encode(&req2)?;
+    match send_as(req, &wire)? {
+        KdcMsg::AsRep(rep) => {
+            let mut out = finish_fast_as(
+                req,
+                &[],
+                nonce,
+                etypes,
+                akey,
+                Some((akey.clone(), pa::OTP_CHALLENGE)),
+                rep,
+                &wire,
+                bound,
+            )?;
+            out.pa_config = otp::config_string(config);
+            Ok(out)
+        }
+        KdcMsg::Error(e) => classify_kdc_error(&fast_error_material(akey, &e, nonce)?.err),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
 }
@@ -398,6 +565,7 @@ pub(super) fn fast_mechanism(method: &[PaData], skip: &[i32]) -> Result<i32, Err
                         crate::clpreauth::Owner::Spake
                             | crate::clpreauth::Owner::EncChallenge
                             | crate::clpreauth::Owner::EncTs
+                            | crate::clpreauth::Owner::Otp
                     )
                 )
         })

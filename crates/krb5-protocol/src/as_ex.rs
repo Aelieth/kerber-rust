@@ -25,6 +25,7 @@ use zeroize::{Zeroize, Zeroizing};
 mod clock;
 mod ec;
 mod fast;
+mod otp;
 mod spake;
 
 use clock::Clock;
@@ -58,6 +59,10 @@ pub struct AsOutcome {
     /// The preauth type that produced the reply (MIT `selected_preauth_type`,
     /// recorded as the ccache `pa_type` config); `None` without preauth.
     pub pa_type: Option<i32>,
+    /// The preauth config the modules recorded (MIT `cc_config_out`, JSON), stored in the ccache
+    /// as `pa_config_data`; `None` when no module recorded any.
+    /// MIT `save_cc_config_out_data` (`lib/krb5/krb/get_in_tkt.c:1214-1232`): written only when the object has an entry.
+    pub pa_config: Option<String>,
 }
 
 /// Parameters for an AS-REQ.
@@ -114,6 +119,9 @@ pub struct AsTicketOpts {
     /// The one real preauthentication type an input cache allows; `None` allows any.
     /// MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): with an allowed type, only that real type is tried.
     pub allowed_preauth_type: Option<i32>,
+    /// The input cache's `pa_config_data` for the request's server, as stored (JSON).
+    /// MIT `read_cc_config_in_data` (`lib/krb5/krb/get_in_tkt.c:1176-1211`): kept only when it decodes as an object.
+    pub pa_config_in: Option<String>,
 }
 
 /// Request times/options MIT `verify_as_reply` compares to EncKDCRepPart.
@@ -137,6 +145,7 @@ impl Default for AsTicketOpts {
             starttime: None,
             pac_request: None,
             allowed_preauth_type: None,
+            pa_config_in: None,
         }
     }
 }
@@ -269,7 +278,7 @@ pub fn as_exchange_prompted(
     req: &AsRequest<'_>,
     prompt: &mut PasswordPrompt<'_>,
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], Some(prompt), false)
+    wrap_as(req, &[], Some(&mut || prompt()), false)
 }
 
 /// [`as_exchange`] that returns [`Error::FastUpgrade`] when the KDC's error offers PA-FX-FAST
@@ -291,7 +300,7 @@ pub fn as_exchange_prompted_defer_fast(
     req: &AsRequest<'_>,
     prompt: &mut PasswordPrompt<'_>,
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], Some(prompt), true)
+    wrap_as(req, &[], Some(&mut || prompt()), true)
 }
 
 /// [`as_exchange_with_keys`] with the same FAST deferral as [`as_exchange_defer_fast`].
@@ -309,10 +318,82 @@ pub fn as_exchange_with_keys_defer_fast(
 /// Reads the AS password when the exchange first needs it.
 pub type PasswordPrompt<'p> = dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Error> + 'p;
 
+/// MIT `KRB5_PROMPT_TYPE_PASSWORD` (`include/krb5/krb5.hin:7884-7884`): the numbers of the prompt types are MIT's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptType {
+    /// `KRB5_PROMPT_TYPE_PASSWORD`.
+    Password = 1,
+    /// `KRB5_PROMPT_TYPE_NEW_PASSWORD`.
+    NewPassword = 2,
+    /// `KRB5_PROMPT_TYPE_NEW_PASSWORD_AGAIN`.
+    NewPasswordAgain = 3,
+    /// `KRB5_PROMPT_TYPE_PREAUTH`.
+    Preauth = 4,
+}
+
+/// One prompt a preauth module puts to the user.
+/// MIT's `krb5_prompter_fct` takes the banner printed above the prompt, the prompt text, whether the reply is hidden, and the prompt's type.
+#[derive(Clone, Copy, Debug)]
+pub struct PreauthPrompt<'a> {
+    /// Printed on its own line before the prompt.
+    pub banner: Option<&'a str>,
+    /// The prompt text; the prompter adds `: `.
+    pub prompt: &'a str,
+    /// Whether the reply is typed with echo off.
+    pub hidden: bool,
+    /// What is being asked.
+    pub prompt_type: PromptType,
+}
+
+/// What an AS exchange may ask of its caller: the password when a reply needs the key, and a preauth
+/// module's prompts.
+/// MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): the password is read once, on first need.
+/// A preauth module's prompts go through one prompter, as MIT's `krb5_prompter_fct` does.
+pub trait AsPrompt {
+    /// The AS password. An `Error::File` of kind `Interrupted` is a keyboard interrupt
+    /// (`KRB5_LIBOS_PWDINTR`), which no other mechanism follows.
+    ///
+    /// # Errors
+    ///
+    /// Why the password could not be read.
+    fn password(&mut self) -> Result<Zeroizing<Vec<u8>>, Error>;
+
+    /// A reply to a preauth module's prompt, at most 1023 bytes. The default is no prompter:
+    /// MIT calls a `NULL` prompter there, and this port fails the module.
+    ///
+    /// # Errors
+    ///
+    /// Why the reply could not be read; kinds as for [`AsPrompt::password`].
+    fn preauth(&mut self, prompt: &PreauthPrompt<'_>) -> Result<Zeroizing<Vec<u8>>, Error> {
+        let _ = prompt;
+        Err(Error::File(std::io::Error::other("Cannot read password")))
+    }
+}
+
+impl<F: FnMut() -> Result<Zeroizing<Vec<u8>>, Error>> AsPrompt for F {
+    fn password(&mut self) -> Result<Zeroizing<Vec<u8>>, Error> {
+        self()
+    }
+}
+
+/// [`as_exchange_prompted`] with a preauth prompter as well as the password: reads them through
+/// `ui` only when the exchange needs them.
+///
+/// # Errors
+///
+/// As [`as_exchange_prompted`], and the errors `ui` returns.
+pub fn as_exchange_interactive(
+    req: &AsRequest<'_>,
+    ui: &mut dyn AsPrompt,
+    defer_fast: bool,
+) -> Result<AsOutcome, Error> {
+    wrap_as(req, &[], Some(ui), defer_fast)
+}
+
 fn wrap_as(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    prompt: Option<&mut PasswordPrompt<'_>>,
+    prompt: Option<&mut dyn AsPrompt>,
     defer_fast: bool,
 ) -> Result<AsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
@@ -334,33 +415,12 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
         .unwrap_or_else(|| PrincipalName::krbtgt(req.realm))
 }
 
-/// Runs `then` with `req` carrying the password `prompt` reads, or with `req` itself when there
-/// is no prompt. A read that fails while it answers the KDC's preauthentication hint (`preauth`)
-/// is [`Error::PreauthFailed`], unless it was interrupted (an `Interrupted` I/O error).
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-698`): a keyboard interrupt stops the mechanisms with its own code.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): any other failure of the real type answered is wrapped as `KRB5_PREAUTH_FAILED`.
-fn with_prompted<T>(
-    req: &AsRequest<'_>,
-    prompt: Option<&mut PasswordPrompt<'_>>,
-    preauth: bool,
-    then: impl FnOnce(&AsRequest<'_>) -> Result<T, Error>,
-) -> Result<T, Error> {
-    let Some(prompt) = prompt else {
-        return then(req);
-    };
-    let password = prompt().map_err(|e| {
-        let interrupted =
-            matches!(&e, Error::File(io) if io.kind() == std::io::ErrorKind::Interrupted);
-        if preauth && !interrupted {
-            Error::PreauthFailed(Box::new(e))
-        } else {
-            e
-        }
-    })?;
-    then(&AsRequest {
+/// `req` with `password` in it.
+fn with_password<'b>(req: &AsRequest<'b>, password: &'b [u8]) -> AsRequest<'b> {
+    AsRequest {
         cname: req.cname.clone(),
         realm: req.realm,
-        password: &password,
+        password,
         kdc: req.kdc,
         want_spake: req.want_spake,
         fast_armor: req.fast_armor,
@@ -369,7 +429,33 @@ fn with_prompted<T>(
         sname: req.sname,
         etypes: req.etypes,
         ticket: req.ticket.clone(),
-    })
+    }
+}
+
+/// Runs `then` with `req` carrying the password `prompt` reads, or with `req` itself when there
+/// is no prompt. A read that fails while it answers the KDC's preauthentication hint (`preauth`)
+/// is [`Error::PreauthFailed`], unless it was interrupted (an `Interrupted` I/O error).
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-698`): a keyboard interrupt stops the mechanisms with its own code.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): any other failure of the real type answered is wrapped as `KRB5_PREAUTH_FAILED`.
+fn with_prompted<T>(
+    req: &AsRequest<'_>,
+    prompt: Option<&mut dyn AsPrompt>,
+    preauth: bool,
+    then: impl FnOnce(&AsRequest<'_>) -> Result<T, Error>,
+) -> Result<T, Error> {
+    let Some(prompt) = prompt else {
+        return then(req);
+    };
+    let password = prompt.password().map_err(|e| {
+        let interrupted =
+            matches!(&e, Error::File(io) if io.kind() == std::io::ErrorKind::Interrupted);
+        if preauth && !interrupted {
+            Error::PreauthFailed(Box::new(e))
+        } else {
+            e
+        }
+    })?;
+    then(&with_password(req, &password))
 }
 
 /// MIT `restart_init_creds_loop` (`get_in_tkt.c:807-813`): optimistic preauth is sent only when
@@ -378,7 +464,7 @@ fn with_prompted<T>(
 fn as_exchange_inner(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
-    prompt: Option<&mut PasswordPrompt<'_>>,
+    prompt: Option<&mut dyn AsPrompt>,
     defer_fast: bool,
 ) -> Result<AsOutcome, Error> {
     let _ = krb5_types::try_ascii(req.realm).map_err(|e| Error::ReplyMismatch(e.to_string()))?;
@@ -1313,6 +1399,7 @@ fn finish_as_rep(
         fast_avail,
         used_fast,
         pa_type,
+        pa_config: None,
     })
 }
 

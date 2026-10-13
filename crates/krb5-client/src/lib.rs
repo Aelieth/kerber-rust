@@ -12,8 +12,8 @@ use std::path::Path;
 use krb5_asn1::decode;
 use krb5_config::CcSpec;
 use krb5_protocol::{
-    AsOutcome, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, TgsOutcome, as_exchange,
-    as_exchange_defer_fast, as_exchange_prompted, as_exchange_prompted_defer_fast,
+    AsOutcome, AsPrompt, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, PreauthPrompt,
+    TgsOutcome, as_exchange, as_exchange_defer_fast, as_exchange_interactive,
     as_exchange_with_keys, as_exchange_with_keys_defer_fast, dir_cache_path,
     dir_cache_path_for_store, kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default,
     memory_destroy, memory_retrieve, memory_store, parse_principal_ex, tgs_exchange_path,
@@ -267,6 +267,9 @@ pub struct KinitParams<'a> {
     /// Where the KEY_EXP banner goes when `new_password` answers the change: it is called
     /// with the banner just before the change is sent. `None` shows no banner.
     pub key_exp_notice: Option<KeyExpNotice<'a>>,
+    /// MIT `krb5_prompter_fct` for a preauth module's prompts (the OTP value and PIN, a token
+    /// menu): `None` leaves those modules unable to ask.
+    pub preauth_prompter: Option<PreauthPrompter<'a>>,
 }
 
 /// `kinit -I`'s input cache, as read; Debug names it without its credentials.
@@ -300,11 +303,39 @@ fn allowed_preauth_type(
     i32::try_from(n).ok().filter(|&n| n != 0)
 }
 
+/// The input cache's preauth config for a request to `server`, as stored.
+/// MIT `read_cc_config_in_data` (`lib/krb5/krb/get_in_tkt.c:1176-1211`): the `pa_config_data` entry for the request's server; the protocol layer keeps it only when it decodes as an object.
+fn pa_config_in(
+    in_ccache: Option<InputCcache<'_>>,
+    server: &krb5_types::PrincipalName,
+    realm: &str,
+) -> Option<String> {
+    let value = in_ccache?
+        .0
+        .get_config(Some(&server.unparse_with_realm(realm)), "pa_config_data")?;
+    Some(String::from_utf8_lossy(value).into_owned())
+}
+
 /// `krb5_prompter_fct` narrowed to the KEY_EXP new-password prompts.
 /// MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): shown `banner`, the prompter
 /// returns the `Enter new password` / `Enter it again` replies.
 #[derive(Clone, Copy)]
 pub struct NewPasswordPrompter<'a>(pub &'a (dyn Fn(&str) -> PromptReply + 'a));
+
+/// `krb5_prompter_fct` for a preauth module's prompt: the reply, or why none was read.
+/// MIT `doprompt` (`lib/krb5/krb/preauth_otp.c:473-500`): the banner, the prompt and `hidden` go to the application's prompter, which `kinit` backs with `krb5_prompter_posix`.
+pub type PreauthPromptFn<'a> =
+    dyn Fn(&PreauthPrompt<'_>) -> Result<Zeroizing<Vec<u8>>, krb5_cli::PromptError> + 'a;
+
+/// A [`PreauthPromptFn`] that [`KinitParams::preauth_prompter`] holds.
+#[derive(Clone, Copy)]
+pub struct PreauthPrompter<'a>(pub &'a PreauthPromptFn<'a>);
+
+impl std::fmt::Debug for PreauthPrompter<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PreauthPrompter")
+    }
+}
 
 /// The two `KRB5_PROMPT_TYPE_NEW_PASSWORD*` replies, each wiped when dropped, or the prompter's
 /// error.
@@ -506,6 +537,7 @@ pub fn kinit_with(
         prompt: None,
         read: None,
         failed: None,
+        otp: params.preauth_prompter,
     };
     let built = kinit_inner(kdc, principal, &mut lazy, params);
     let result = match built {
@@ -578,6 +610,7 @@ pub fn kinit_prompted(
         prompt: Some(prompt),
         read: None,
         failed: None,
+        otp: params.preauth_prompter,
     };
     match kinit_inner(kdc, principal, &mut lazy, params) {
         Ok((r, cc)) => write_out_ccache(spec, cc).map(|()| r),
@@ -593,6 +626,34 @@ struct LazyPassword<'p> {
     prompt: Option<&'p mut dyn FnMut() -> Result<Zeroizing<Vec<u8>>, Krb5Error>>,
     read: Option<Zeroizing<Vec<u8>>>,
     failed: Option<Krb5Error>,
+    otp: Option<PreauthPrompter<'p>>,
+}
+
+/// What an AS exchange may ask of `kinit`: the password, and a preauth module's prompts.
+/// A prompt that fails is kept in `failed` as `kinit`'s message for it.
+struct KinitPrompt<'a, 'p>(&'a mut LazyPassword<'p>);
+
+impl AsPrompt for KinitPrompt<'_, '_> {
+    fn password(&mut self) -> Result<Zeroizing<Vec<u8>>, ProtocolError> {
+        self.0.get()
+    }
+
+    fn preauth(&mut self, p: &PreauthPrompt<'_>) -> Result<Zeroizing<Vec<u8>>, ProtocolError> {
+        let Some(otp) = self.0.otp else {
+            return Err(ProtocolError::File(std::io::Error::other(
+                "Cannot read password",
+            )));
+        };
+        (otp.0)(p).map_err(|e| {
+            let kind = if e == krb5_cli::PromptError::Interrupted {
+                std::io::ErrorKind::Interrupted
+            } else {
+                std::io::ErrorKind::Other
+            };
+            self.0.failed = Some(Krb5Error::new(Code::Other, e.to_string()));
+            ProtocolError::File(std::io::Error::new(kind, e.to_string()))
+        })
+    }
 }
 
 impl LazyPassword<'_> {
@@ -626,7 +687,7 @@ impl LazyPassword<'_> {
         &mut self,
         req: &AsRequest<'_>,
     ) -> Result<Result<AsOutcome, ProtocolError>, Krb5Error> {
-        let out = as_exchange_prompted(req, &mut || self.get());
+        let out = as_exchange_interactive(req, &mut KinitPrompt(self), false);
         self.finish(out)
     }
 
@@ -635,7 +696,7 @@ impl LazyPassword<'_> {
         &mut self,
         req: &AsRequest<'_>,
     ) -> Result<Result<AsOutcome, ProtocolError>, Krb5Error> {
-        let out = as_exchange_prompted_defer_fast(req, &mut || self.get());
+        let out = as_exchange_interactive(req, &mut KinitPrompt(self), true);
         self.finish(out)
     }
 
@@ -1090,6 +1151,7 @@ fn kinit_inner(
         .clone()
         .unwrap_or_else(|| krb5_types::PrincipalName::krbtgt(&realm_s));
     ticket.allowed_preauth_type = allowed_preauth_type(params.in_ccache, &pa_server, &realm_s);
+    ticket.pa_config_in = pa_config_in(params.in_ccache, &pa_server, &realm_s);
     let pac_request = ticket.pac_request;
     let keytab = match (keytab_keys.as_deref(), params.keytab) {
         (Some(keys), Some(path)) => Some((keys, path)),
@@ -1142,6 +1204,7 @@ fn kinit_inner(
                 starttime: None,
                 pac_request,
                 allowed_preauth_type: allowed_preauth_type(params.in_ccache, &changepw, &realm_s),
+                pa_config_in: pa_config_in(params.in_ccache, &changepw, &realm_s),
             };
             let chpw_shape = AsShape {
                 cname: cname.clone(),
@@ -1222,12 +1285,13 @@ fn kinit_inner(
     let mut cache = FileCcache::new((as_out.crealm.clone(), as_out.cname.clone()), Vec::new());
     let tgt_realm = String::from_utf8_lossy(as_out.ticket.realm.as_bytes()).into_owned();
     let tgt_server = as_out.ticket.sname.unparse_with_realm(&tgt_realm);
-    if as_out.fast_avail {
-        cache.set_config(Some(&tgt_server), "fast_avail", b"yes");
-    }
-    if let Some(t) = as_out.pa_type {
-        cache.set_config(Some(&tgt_server), "pa_type", t.to_string().as_bytes());
-    }
+    record_preauth_config(
+        &mut cache,
+        &tgt_server,
+        as_out.fast_avail,
+        as_out.pa_type,
+        as_out.pa_config.as_deref(),
+    );
     cache.creds.extend(creds);
     if let Some(e) = tgs_err {
         tracing::error!(
@@ -1239,6 +1303,27 @@ fn kinit_inner(
         return Err(e.into());
     }
     Ok((KinitResult { as_out, tgs_out }, cache))
+}
+
+/// The config entries of a login: `fast_avail`, the selected `pa_type`, then the modules'
+/// `pa_config_data`.
+/// MIT `write_out_ccache` (`lib/krb5/krb/get_in_tkt.c:1635-1647`): in that order, each only when there is one, all keyed by the TGT's server.
+fn record_preauth_config(
+    cache: &mut FileCcache,
+    tgt_server: &str,
+    fast_avail: bool,
+    pa_type: Option<i32>,
+    pa_config: Option<&str>,
+) {
+    if fast_avail {
+        cache.set_config(Some(tgt_server), "fast_avail", b"yes");
+    }
+    if let Some(t) = pa_type {
+        cache.set_config(Some(tgt_server), "pa_type", t.to_string().as_bytes());
+    }
+    if let Some(c) = pa_config {
+        cache.set_config(Some(tgt_server), "pa_config_data", c.as_bytes());
+    }
 }
 
 /// Banner shown ahead of the new-password prompts, and passed to `key_exp_notice` when
@@ -1333,6 +1418,67 @@ mod armor_flow;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn tgs_name(realm: &str) -> (krb5_types::Realm, krb5_types::PrincipalName) {
+        (
+            krb5_types::ascii(realm),
+            krb5_types::PrincipalName::krbtgt(realm),
+        )
+    }
+
+    #[test]
+    fn a_login_records_fast_avail_pa_type_and_pa_config_in_mits_order() {
+        let client = (
+            krb5_types::ascii("R.TEST"),
+            krb5_types::PrincipalName::new(krb5_types::PrincipalName::NT_PRINCIPAL, ["u"]),
+        );
+        let server = "krbtgt/R.TEST@R.TEST";
+        let mut cache = FileCcache::new(client.clone(), Vec::new());
+        record_preauth_config(
+            &mut cache,
+            server,
+            true,
+            Some(141),
+            Some(r#"{"vendor":"V"}"#),
+        );
+        let keys: Vec<String> = cache
+            .creds
+            .iter()
+            .map(|c| String::from_utf8_lossy(c.server.1.name_string[1].as_bytes()).into_owned())
+            .collect();
+        assert_eq!(keys, ["fast_avail", "pa_type", "pa_config_data"]);
+        assert_eq!(cache.get_config(Some(server), "pa_type"), Some(&b"141"[..]));
+        assert_eq!(
+            cache.get_config(Some(server), "pa_config_data"),
+            Some(&br#"{"vendor":"V"}"#[..])
+        );
+        let mut bare = FileCcache::new(client, Vec::new());
+        record_preauth_config(&mut bare, server, false, None, None);
+        assert!(bare.creds.is_empty(), "nothing selected, nothing recorded");
+    }
+
+    #[test]
+    fn the_input_caches_pa_config_data_is_read_for_the_request_server() {
+        let client = (
+            krb5_types::ascii("R.TEST"),
+            krb5_types::PrincipalName::new(krb5_types::PrincipalName::NT_PRINCIPAL, ["u"]),
+        );
+        let mut cache = FileCcache::new(client, Vec::new());
+        cache.set_config(
+            Some("krbtgt/R.TEST@R.TEST"),
+            "pa_config_data",
+            br#"{"vendor":"V"}"#,
+        );
+        let (_, tgs) = tgs_name("R.TEST");
+        let got = pa_config_in(Some(InputCcache(&cache)), &tgs, "R.TEST");
+        assert_eq!(got.as_deref(), Some(r#"{"vendor":"V"}"#));
+        let other = krb5_types::PrincipalName::krbtgt("OTHER.TEST");
+        assert_eq!(
+            pa_config_in(Some(InputCcache(&cache)), &other, "OTHER.TEST"),
+            None
+        );
+        assert_eq!(pa_config_in(None, &tgs, "R.TEST"), None);
+    }
 
     #[test]
     fn load_pkinit_reads_the_identity_and_its_anchor() {
