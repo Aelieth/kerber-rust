@@ -522,8 +522,9 @@ fn as_exchange_inner(
 }
 
 /// MIT `get_as_key_keytab` (`gic_keytab.c:68-71`): the reply etype selects the keytab key, and a
-/// wrong etype is not reused. A checksum failure on that key is not final: every other supplied
-/// key is tried before the reply is rejected.
+/// wrong etype is not reused. A key that does not open the reply is not final: every other
+/// supplied key is tried before the reply is rejected, with the picked key's failure. A key that
+/// opens it is: the reply's own checks then give the one result.
 /// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:47-136`): with no key from preauth, the
 /// reply key is got from the password, with the client's own salt, or from the keytab.
 /// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:96-123`): the responder is asked for the password first, then the key is got, and `gak_fct`'s error is returned as it is.
@@ -575,48 +576,66 @@ fn finish_as_rep_keys(
     let password = req.password;
     trace_gak_salt(req, rep.0.padata.as_deref(), etypes, true);
     trace_keytab_gak(req, keys, etype);
-    if let Some(k) = pick_key(keys, Some(etype)) {
-        if gak_found(keys, &k, etype) {
-            trace::init_creds_as_key_gak((&k).into());
-        }
-        if let Ok(out) = finish_as_rep(
-            rep.clone(),
-            nonce,
-            Some(k),
-            password,
-            cname,
-            realm,
-            None,
-            canonicalize,
-            expected_sname,
-            bound,
-            req_der,
-            false,
-        ) {
-            return Ok(out);
+    // MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1824-1840`): `decrypt_as_reply` opens the reply under the one key `get_as_key_keytab` gives, and from there `verify_as_reply` and `verify_anonymous` (and the enc-pa-rep check before them) end the request with their own error, which no other key is asked to replace.
+    // MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:127-133`): a key that does not open it ends the request with that decrypt's error, here the picked key's, the others being offered after it.
+    let picked = pick_key(keys, Some(etype));
+    if let Some(k) = &picked
+        && gak_found(keys, k, etype)
+    {
+        trace::init_creds_as_key_gak(k.into());
+    }
+    let mut not_opened = None;
+    let others = keys
+        .iter()
+        .filter(|k| picked.as_ref().is_none_or(|p| !same_key(p, k)));
+    for k in picked.iter().chain(others) {
+        match opens_as_reply(&rep, k) {
+            Ok(()) => {
+                return finish_as_rep(
+                    rep,
+                    nonce,
+                    Some(k.clone()),
+                    password,
+                    cname,
+                    realm,
+                    None,
+                    canonicalize,
+                    expected_sname,
+                    bound,
+                    req_der,
+                    false,
+                );
+            }
+            Err(e) => {
+                not_opened.get_or_insert(e);
+            }
         }
     }
-    let mut last = Error::ReplyMismatch("no keytab key decrypted AS-REP".into());
-    for k in keys {
-        match finish_as_rep(
-            rep.clone(),
-            nonce,
-            Some(k.clone()),
-            password,
-            cname,
-            realm,
-            None,
-            canonicalize,
-            expected_sname,
-            bound,
-            req_der,
-            false,
-        ) {
-            Ok(out) => return Ok(out),
-            Err(e) => last = e,
-        }
-    }
-    Err(last)
+    Err(not_opened.unwrap_or_else(|| Error::ReplyMismatch("no keytab key decrypted AS-REP".into())))
+}
+
+/// Whether `key` opens `rep`'s encrypted part: the decrypt of MIT's `krb5_kdc_rep_decrypt_proc`
+/// and nothing after it. The plaintext is wiped.
+/// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:127-133`): the reply is opened under the reply key, and `krb5_k_decrypt` checks the EncryptedData's enctype against the key's first.
+fn opens_as_reply(rep: &AsRep, key: &ProtocolKey) -> Result<(), Error> {
+    let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
+    let plain = decrypt_enc_data(
+        key,
+        usage,
+        rep.0.enc_part.etype,
+        rep.0.enc_part.cipher.as_ref(),
+    )
+    .map_err(|e| match e {
+        krb5_crypto::Error::Integrity => Error::ReplyIntegrity,
+        other => other.into(),
+    })?;
+    drop(Zeroizing::new(plain));
+    Ok(())
+}
+
+/// Whether two keys are the same: one enctype, one set of octets.
+fn same_key(a: &ProtocolKey, b: &ProtocolKey) -> bool {
+    a.etype() == b.etype() && a.as_bytes() == b.as_bytes()
 }
 
 /// Whether `key` is the one MIT's `get_as_key_keytab` hands back for `etype`: made from the
