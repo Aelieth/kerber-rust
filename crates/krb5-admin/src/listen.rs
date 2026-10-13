@@ -497,11 +497,17 @@ enum EmptyPolicy {
     Missing,
 }
 
-/// MIT `process_chpw_request` (`kadmin/server/schpw.c:212-247`): the notice logs `krb5_get_error_message` of the kadm5 code.
-/// MIT `empty_check` (`lib/kadm5/srv/pwqual_empty.c:41-43`): an empty password sets Empty passwords are not allowed.
-/// MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:53-55`): a component match sets Password may not match principal name.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:212-213`): the notice logs `krb5_get_error_message(context, ret)`, which finds a quality module's `k5_setmsg` sentence only while it is still on that context.
+/// MIT `dispatch` (`kadmin/server/schpw.c:424-424`): the context is the kadm5 handle's own, the one the modules wrote to.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:158-161`): a too-short, too-few-classes or too-soon code looks the principal up before it returns.
+/// MIT `kadm5_get_principal` (`lib/kadm5/srv/svr_principal.c:759-759`): the lookup clears that message, so the notice is the code's table text.
+/// MIT `empty_check` (`lib/kadm5/srv/pwqual_empty.c:41-43`): an empty password sets Empty passwords are not allowed with the too-short code, so the notice reads the table text.
+/// MIT `KADM5_PASS_Q_TOOSHORT` (`lib/kadm5/kadm_err.et:29-29`): the table text is Password is too short.
+/// MIT `passwd_check` (`lib/kadm5/srv/server_misc.c:122-129`): the Error line is written before the clear and keeps the module's sentence.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:151-155`): a dictionary code returns before any lookup, so its sentence stays.
+/// MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:52-55`): a component match sets Password may not match principal name for that code.
 fn kpasswd_quality_log(msg: &str) -> String {
-    if msg == krb5_kdc::PWQUAL_EMPTY || msg == krb5_kdc::PWQUAL_PRINC {
+    if msg == krb5_kdc::PWQUAL_PRINC {
         return msg.to_owned();
     }
     crate::kadm5::chpass_error_text(&Error::PasswordPolicy(msg.to_owned()))
@@ -1151,14 +1157,28 @@ mod tests {
             super::kpasswd_quality_reply(krb5_kdc::PWQUAL_EMPTY, &super::EmptyPolicy::MinLength(0)),
             "New password is too short.\nPlease choose a password which is at least 0 characters long."
         );
+    }
+
+    /// The notice of a refused change is what `krb5_get_error_message` finds on the handle's context once
+    /// `_kadm5_chpass_principal_util` has run: the code's table text, unless a module gave a dictionary code its own sentence.
+    #[test]
+    fn kpasswd_quality_log_is_the_text_left_on_the_context() {
+        // MIT `empty_check` (`lib/kadm5/srv/pwqual_empty.c:41-43`): the sentence for the too-short code is cleared by the lookup that code makes next, so the notice is the table text.
         assert_eq!(
             super::kpasswd_quality_log(krb5_kdc::PWQUAL_EMPTY),
-            krb5_kdc::PWQUAL_EMPTY
+            "Password is too short"
         );
         assert_eq!(
-            super::kpasswd_quality_log(krb5_kdc::PWQUAL_PRINC),
-            krb5_kdc::PWQUAL_PRINC
+            super::kpasswd_quality_log(krb5_kdc::PWQUAL_EMPTY),
+            super::kpasswd_quality_log("min_length 8"),
+            "the empty module's refusal and the policy floor are the same code"
         );
+        // MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:52-55`): a dictionary code returns before any lookup, so its sentence stays.
+        assert_eq!(
+            super::kpasswd_quality_log(krb5_kdc::PWQUAL_PRINC),
+            "Password may not match principal name"
+        );
+        // MIT `check_against_policy` (`lib/kadm5/srv/server_misc.c:82-101`): the floors return their codes with no sentence.
         assert_eq!(
             super::kpasswd_quality_log("min_length 8"),
             "Password is too short"
@@ -1167,10 +1187,12 @@ mod tests {
             super::kpasswd_quality_log("min_classes 3"),
             "Password does not contain enough character classes"
         );
+        // MIT `check_pw_reuse` (`lib/kadm5/srv/svr_principal.c:959-959`): reuse returns its code with no sentence.
         assert_eq!(
             super::kpasswd_quality_log("history"),
             "Cannot reuse password"
         );
+        // MIT `dict_check` (`lib/kadm5/srv/pwqual_dict.c:228-231`): a dictionary hit returns its code with no sentence.
         assert_eq!(
             super::kpasswd_quality_log(krb5_kdc::PWQUAL_DICT),
             "Password is in the password dictionary"

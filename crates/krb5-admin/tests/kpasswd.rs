@@ -616,6 +616,123 @@ fn kpasswd_setpw_log_prints_the_client_cut_to_the_targets_length() {
     );
 }
 
+/// A refused change's Notice is the code's table text, not the sentence the rejecting module set: the empty module's
+/// refusal logs `Password is too short` with a policy bound or not, while its Error line keeps `Empty passwords are not
+/// allowed`. A principal-name match keeps its sentence in both.
+/// MIT `process_chpw_request` (`kadmin/server/schpw.c:212-213`): the notice reads the handle's context, where the modules wrote their sentences.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:158-161`): a too-short code looks the principal up, which clears the module's sentence.
+/// MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:151-155`): a dictionary code returns first, so a component match keeps its sentence.
+/// MIT `princ_check` (`lib/kadm5/srv/pwqual_princ.c:52-55`): the component match sets that sentence with the dictionary code.
+#[test]
+fn kpasswd_logs_the_code_text_for_an_empty_password_and_the_module_sentence_for_a_name_match() {
+    use krb5_protocol::unwrap_krb_priv_ex;
+
+    krb5_config::isolate_test_krb5();
+    let dir = scratch_dir("kn-kpasswd-empty-log");
+    let log = dir.join("kadmind.log");
+    krb5_log::klog::init("kadmind", &[format!("FILE:{}", log.display())], false);
+
+    let (store, acl) = bootstrap_documented().unwrap();
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let user_key = store
+        .get_name(&user)
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let cpw_key = store
+        .get_name(&kadmin_changepw())
+        .unwrap()
+        .best_key()
+        .unwrap()
+        .key
+        .clone();
+    let as_out = changepw_as_ticket(&store, &user, &user_key, 7101);
+    let shared = shared_dump(store);
+    // MIT `kpasswd` sends version 1: the KRB-PRIV carries the new password itself.
+    let chpw = |newpw: &[u8]| {
+        let ap = build_ap_req(
+            as_out.rep.0.ticket.clone(),
+            &as_out.session_key,
+            &krb5_types::ascii(TEST_REALM),
+            &user,
+        )
+        .unwrap();
+        let priv_msg = build_krb_priv_with_seq(&as_out.session_key, newpw, None).unwrap();
+        let req = encode_kpasswd_req(&encode(&ap).unwrap(), &encode(&priv_msg).unwrap());
+        let rep = handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
+            .expect("a refused change is a reply");
+        let (_, priv_rep) = parse_kpasswd_rep(&rep).expect("parse");
+        let data = unwrap_krb_priv_ex(
+            &as_out.session_key,
+            &priv_rep,
+            &ReplayCache::new(),
+            false,
+            false,
+        )
+        .expect("unwrap");
+        (
+            u16::from_be_bytes([data[0], data[1]]),
+            String::from_utf8_lossy(&data[2..]).into_owned(),
+        )
+    };
+
+    // No policy: the reply is the code text and `Password not changed.`
+    assert_eq!(
+        chpw(b""),
+        (
+            4,
+            "Password is too short\n\nPassword not changed.".to_owned()
+        )
+    );
+    // A policy whose floor is 0 lets the empty module refuse: the reply names the floor.
+    {
+        let mut g = shared.write().unwrap();
+        g.put_policy(krb5_kdc::NamedPolicy::new("floor0"));
+        g.set_principal_policy(&user, Some("floor0".into()))
+            .unwrap();
+    }
+    assert_eq!(
+        chpw(b""),
+        (
+            4,
+            "New password is too short.\nPlease choose a password which is at least 0 characters long."
+                .to_owned()
+        )
+    );
+    // The `princ` module checks only with a policy: its refusal is the dictionary paragraph.
+    let (code, _) = chpw(TEST_USER.as_bytes());
+    assert_eq!(code, 4);
+
+    krb5_log::klog::close();
+    let text = std::fs::read_to_string(&log).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    let after = |tag: &str| -> Vec<&str> {
+        text.lines()
+            .filter_map(|l| l.split_once(tag).map(|(_, rest)| rest))
+            .collect()
+    };
+    assert_eq!(
+        after("(Error): "),
+        [
+            "password quality module empty rejected password for user@KERBER.TEST: Empty passwords are not allowed",
+            "password quality module empty rejected password for user@KERBER.TEST: Empty passwords are not allowed",
+            "password quality module princ rejected password for user@KERBER.TEST: Password may not match principal name",
+        ],
+        "{text}"
+    );
+    assert_eq!(
+        after("(Notice): "),
+        [
+            "chpw request from 127.0.0.1 for user@KERBER.TEST: Password is too short",
+            "chpw request from 127.0.0.1 for user@KERBER.TEST: Password is too short",
+            "chpw request from 127.0.0.1 for user@KERBER.TEST: Password may not match principal name",
+        ],
+        "{text}"
+    );
+}
+
 #[test]
 fn kpasswd_self_change_with_initial_succeeds() {
     use krb5_asn1::encode;
