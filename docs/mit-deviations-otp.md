@@ -1,0 +1,9 @@
+# OTP deviations from MIT 1.22.2
+
+The rows of [mit-deviations.md](mit-deviations.md) that concern the otp module and its client, kept here whole so that file stays under its size cap.
+
+| Deviation | MIT | Rust | Why |
+| --- | --- | --- | --- |
+| OTP verification (`otp_state.c:661-735`, `lib/krad`) | the otp module sends the value to a RADIUS server (`[otp] <type> server`) and takes Access-Accept | an embedder `OtpVerifier` (`register_otp_verifier`) decides; a type with none registered is 24 `No OTP verifier registered for token type 'T'` where MIT logs the transport's errno text; RADIUS is a standing non-goal | **DEVIATION** |
+| `[otp]` `server` and `secret` (`otp_state.c:178-279`) | `server` and `secret` name the RADIUS peer and its secret file; a bad one, or a `strip_realm` that is no boolean or a `timeout` or `retries` that is no integer, fails `otp_init`: `preauth otp failed to initialize: <message>` is logged and the KDC runs without the module | A section with either relation fails the same way (`Invalid argument`, and a line naming the relation and the type); the MIT messages stay for the other failures. A registered verifier's name is a type even with no section (MIT: an unknown type fails the token). `KRB5_CONFIG` files are read as one profile | **STRICTER**: a config copied from an MIT realm is refused, not half applied |
+| OTP client: undefined behaviour in MIT is an error here (`preauth_otp.c:482-499` `doprompt`); a vendor or challenge that is not ASCII printable is dropped by MIT's `isprint` (`preauth_otp.c:851-865`) | a `NULL` prompter (a keytab `kinit -k`) makes MIT dereference `NULL` and the process ends with rc 139 | with no prompter the module fails "Cannot read password" and the next mechanism runs; the printable test is ASCII, which MIT's is in the two locales the image has, C and C.UTF-8 (other locales not settled) | **SAFER** where MIT faults |

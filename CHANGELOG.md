@@ -527,6 +527,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Added
 
+- **docs.** The parity ledger and the deviations list describe the OTP client: its module and PIN rows, the undefined-behaviour row, and the prompter's `hidden_with`.
 - **client.** kinit answers a PA-OTP-CHALLENGE under FAST as MIT's otp module: it prompts for the value and PIN, records pa_type 141, and a refused value gets no password.
 - **cli.** `hidden_with` gives a prompt a banner and a reply size, and cuts a reply at its first NUL as MIT's prompter does; `k5json` encodes JSON as MIT does.
 - **docs.** Describe OTP preauth for admins and embedders: `[otp]`, the `otp` attribute, `require_auth`, and the `OtpVerifier` that stands in for MIT's RADIUS server.

@@ -361,10 +361,10 @@ klist
 
 `[plugins] clpreauth` in this krb5.conf selects the client's preauth modules
 by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,
-`pkinit`, and an embedder module's name). `disable = encrypted_timestamp`
+`pkinit`, `otp`, and an embedder module's name). `disable = encrypted_timestamp`
 stops the client sending PA-ENC-TIMESTAMP. `enable_only` keeps only the names
-it lists, in that order. `module` is not read. `sam2` and `otp` are not
-implemented, so an `enable_only` that names only those leaves no module.
+it lists, in that order. `module` is not read. `sam2` is not
+implemented, so an `enable_only` that names only it leaves no module.
 This is separate from `[realms] disable_encrypted_timestamp`, which leaves
 the module loaded and fails that one mechanism.
 
