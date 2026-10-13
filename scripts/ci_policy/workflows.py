@@ -37,6 +37,7 @@ FAIL_RED_PER_PUSH = (
     "kpasswd-rust-gate.sh",
     "kpasswd-mit-gate.sh",
     "otp-gate.sh",
+    "rust-kinit-otp-gate.sh",
 )
 
 NIGHTLY_BLOCKING = (

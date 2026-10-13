@@ -473,6 +473,8 @@ jobs:
         run: ./scripts/capaths-transit-gate.sh
       - name: otp-gate (MIT krb5kdc otp module + RADIUS stub: MIT kinit -T and Rust kinit)
         run: ./scripts/otp-gate.sh
+      - name: rust-kinit-otp-gate (Rust KDC OTP module: MIT kinit -T and Rust kinit)
+        run: ./scripts/rust-kinit-otp-gate.sh
       - name: shared topology cleanup
         if: always()
         run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc >/dev/null 2>&1 || true

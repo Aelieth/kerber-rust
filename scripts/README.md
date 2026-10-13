@@ -39,6 +39,7 @@ MIT 1.22.2, Heimdal and Samba peers; [`docs/gates.md`](../docs/gates.md) lists w
 | `lib/otp-radius-stub.py` | A standard-library RADIUS responder on a UNIX socket (Access-Accept for the codes it is given): the verdict source MIT's `otp` module asks. |
 | `lib/otp-fast-shim.c` | An `LD_PRELOAD` observer: the plaintext of the FAST request, the FAST response and the OTP nonce passing through `krb5_c_decrypt` / `krb5_c_encrypt` in `krb5kdc` or `kinit`. |
 | `lib/otp-fastdump.py` | Reads the shim's lines and prints the inner padata types, the PA-OTP-REQUEST and PA-OTP-CHALLENGE bytes (ciphertext and nonce masked) and the nonces. |
+| `lib/otp-totp.py` | RFC 6238 TOTP from the standard library: the current code, a code that is none of the five nearest, and the RFC's own vectors. |
 | `lib/skew-preload.c` | An `LD_PRELOAD` that moves the clock three days ahead, for the skew cells. |
 | `lib/openssl-seclevel0.cnf` | The OpenSSL 3 configuration the PKINIT gates load. |
 

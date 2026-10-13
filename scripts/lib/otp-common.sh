@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The OTP gates' shared cells (otp-gate.sh). Sourced after gate-common.sh, kadmin-q.sh and
+# The OTP gates' shared cells (otp-gate.sh, rust-kinit-otp-gate.sh). Sourced after gate-common.sh, kadmin-q.sh and
 # proc-common.sh. Everything runs in $NAME under $OTP_DIR, on the realm's own kdc.conf and krb5.conf (never the
 # image's); a login is MIT's kinit (kind mit) or the Rust kinit copied to $OTP_DIR/ours/kinit (kind rust), so the
 # Rust program's messages carry MIT's name, "kinit:".

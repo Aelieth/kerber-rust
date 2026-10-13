@@ -2945,6 +2945,8 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** `rust-kinit-otp-gate` logs in with both `kinit`s against the Rust KDC's `otp` module: right and
+  wrong codes, end of file, `require_auth`, a bad `[otp]`.
 - **tool.** `otp-gate` logs in with MIT `kinit -T` and the Rust `kinit` against MIT's `otp` module and a RADIUS
   stub: same prompts, errors, ccache and PA 142 bytes.
 - **tool.** `rd-sweep kadmind-init` forges an INIT in any key of a service; the kadmin gates show MIT's kadmind and ours refuse every key but the first.
