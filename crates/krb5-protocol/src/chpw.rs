@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 use krb5_asn1::encode;
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
 use krb5_types::{
-    ApOptions, ApReq, Authenticator, ChangePasswdData, EncryptedData, EncryptionKey, PrincipalName,
-    Realm, err, ku,
+    ApOptions, ApReq, Authenticator, ChangePasswdData, EncryptedData, EncryptionKey, HostAddress,
+    PrincipalName, Realm, err, ku,
 };
 use zeroize::{Zeroize, Zeroizing};
 
@@ -23,7 +23,7 @@ use crate::ap_rep::verify_ap_rep;
 use crate::as_ex::AsOutcome;
 use crate::auth_con::RemoteSeq;
 use crate::error::Error;
-use crate::safe_priv::{build_krb_priv_with_seq, read_krb_priv, wipe_octets};
+use crate::safe_priv::{build_krb_priv_from, read_krb_priv, wipe_octets};
 use crate::trace::{self, RemoteAddr, Transport};
 use crate::transport::{KdcAddr, errno, is_timeout, read_errno};
 
@@ -318,10 +318,10 @@ fn change_or_set(
     } else {
         (Zeroizing::new(new_pw.to_vec()), 1)
     };
-    let priv_msg = build_krb_priv_with_seq(&sub, &priv_plain, Some(0))?;
-    let priv_der = encode(&priv_msg)?;
-    let req = encode_kpasswd_req(&ap_der, &priv_der, version);
-    let rep = send_kpasswd(&kdc.host, &req)?;
+    // MIT `kpasswd_sendto_msg_callback` (`lib/krb5/os/changepw.c:108-195`): the request is made once a connection to a server exists, with that connection's local address as the KRB-PRIV's sender.
+    let mut build =
+        |sender: &HostAddress| kpasswd_request(&sub, &ap_der, &priv_plain, version, sender);
+    let rep = send_kpasswd(&kdc.host, &mut build)?;
     let (ap_rep, priv_rep, from_error) = parse_kpasswd_rep(&rep)?;
     let (code, data) = if from_error {
         let (code, rest) = parse_chpw_rep(&priv_rep, true)?;
@@ -441,16 +441,64 @@ const PASS_DELAYS: [Duration; 3] = [
     Duration::from_secs(8),
 ];
 
+/// What makes a request for a connection: it is given the connection's local address, as the sender of the KRB-PRIV.
+type Build<'a> = dyn FnMut(&HostAddress) -> Result<Vec<u8>, Error> + 'a;
+
+/// The request for a connection whose socket reports `local` as its address.
+fn request_for(local: io::Result<SocketAddr>, build: &mut Build<'_>) -> Result<Vec<u8>, Error> {
+    let sender = kpasswd_sender_address(local.map_err(Error::from_io)?, crate::os_localaddr)?;
+    build(&sender)
+}
+
+/// The sender of a kpasswd request on a connection whose local address is `local`.
+/// MIT `kpasswd_sendto_msg_callback` (`lib/krb5/os/changepw.c:127-157`): the address `getsockname` gives, as `ADDRTYPE_INET` or `ADDRTYPE_INET6` unless it is the wildcard, which takes the first address of `krb5_os_localaddr`.
+/// A wildcard with no address to take is an error here, where MIT reads `addrs[0]` of an empty list; a connected socket does not have one.
+pub(crate) fn kpasswd_sender_address(
+    local: SocketAddr,
+    host: impl FnOnce() -> Result<Vec<HostAddress>, Error>,
+) -> Result<HostAddress, Error> {
+    match local.ip() {
+        std::net::IpAddr::V4(ip) if !ip.is_unspecified() => Ok(HostAddress {
+            addr_type: HostAddress::ADDRTYPE_INET,
+            address: ip.octets().to_vec().into(),
+        }),
+        std::net::IpAddr::V6(ip) if !ip.is_unspecified() => Ok(HostAddress {
+            addr_type: HostAddress::ADDRTYPE_INET6,
+            address: ip.octets().to_vec().into(),
+        }),
+        _ => host()?.into_iter().next().ok_or_else(|| {
+            Error::from_io(io::Error::new(
+                io::ErrorKind::AddrNotAvailable,
+                "no local address",
+            ))
+        }),
+    }
+}
+
+/// The request for one connection: the version, the AP-REQ and a KRB-PRIV that names `sender`.
+/// MIT `krb5int_mk_chpw_req` (`lib/krb5/krb/chpw.c:13-67`): `DO_SEQUENCE` alone, the sender the auth context's local address and no receiver.
+fn kpasswd_request(
+    sub: &ProtocolKey,
+    ap_der: &[u8],
+    priv_plain: &[u8],
+    version: u16,
+    sender: &HostAddress,
+) -> Result<Vec<u8>, Error> {
+    let priv_msg = build_krb_priv_from(sub, priv_plain, Some(0), sender)?;
+    let priv_der = encode(&priv_msg)?;
+    Ok(encode_kpasswd_req(ap_der, &priv_der, version))
+}
+
 /// MIT `change_set_password` (`changepw.c:256-265`): TCP alone first; UDP only when no TCP
 /// connection answered, as UDP resends may be taken for replays.
-fn send_kpasswd(host: &str, body: &[u8]) -> Result<Vec<u8>, Error> {
+fn send_kpasswd(host: &str, build: &mut Build<'_>) -> Result<Vec<u8>, Error> {
     trace::sendto_kdc_resolving(host);
     let addrs: Vec<SocketAddr> = (host, KPASSWD_PORT)
         .to_socket_addrs()
         .map_err(Error::from_io)?
         .collect();
-    kpasswd_tcp(&addrs, body)
-        .or_else(|| kpasswd_udp(&addrs, body))
+    kpasswd_tcp(&addrs, build)
+        .or_else(|| kpasswd_udp(&addrs, build))
         .ok_or_else(|| {
             Error::from_io(io::Error::new(
                 io::ErrorKind::TimedOut,
@@ -465,7 +513,7 @@ fn send_kpasswd(host: &str, body: &[u8]) -> Result<Vec<u8>, Error> {
 /// another within that budget, where MIT holds them open together.
 /// MIT `service_fds` (`sendto_kdc.c:1421-1421`): a connected stream is waited on without a
 /// deadline (`request_timeout` is not read here).
-fn kpasswd_tcp(addrs: &[SocketAddr], body: &[u8]) -> Option<Vec<u8>> {
+fn kpasswd_tcp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
     let slots = PASS_SLOT.saturating_mul(u32::try_from(addrs.len()).unwrap_or(u32::MAX));
     let deadline = Instant::now() + slots + PASS_DELAYS.iter().sum::<Duration>();
     for (i, addr) in addrs.iter().enumerate() {
@@ -495,7 +543,12 @@ fn kpasswd_tcp(addrs: &[SocketAddr], body: &[u8]) -> Option<Vec<u8>> {
                 continue;
             }
         };
-        let reply = tcp_round_trip(&mut stream, body, &ra);
+        // MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:936-945`): the request is built for the connection just made, and one that cannot be built fails the connection.
+        let Ok(body) = request_for(stream.local_addr(), build) else {
+            trace::sendto_kdc_tcp_disconnect(&ra);
+            continue;
+        };
+        let reply = tcp_round_trip(&mut stream, &body, &ra);
         if let Ok(reply) = &reply {
             trace::sendto_kdc_response(reply.len(), &ra);
         }
@@ -543,13 +596,30 @@ fn tcp_round_trip(stream: &mut TcpStream, body: &[u8], ra: &RemoteAddr) -> io::R
 /// pass.
 /// MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:884-990`): the first send to a server is
 /// traced as the initial request, each later one by `maybe_send` as a retry.
-fn kpasswd_udp(addrs: &[SocketAddr], body: &[u8]) -> Option<Vec<u8>> {
-    let mut socks: Vec<Option<UdpSocket>> = addrs.iter().map(|a| udp_connect(a).ok()).collect();
+fn kpasswd_udp(addrs: &[SocketAddr], build: &mut Build<'_>) -> Option<Vec<u8>> {
+    // MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:936-945`): the request is built once for each socket made, and one that cannot be built fails that server. Every resend is the same message.
+    let mut bodies: Vec<Vec<u8>> = Vec::with_capacity(addrs.len());
+    let mut socks: Vec<Option<UdpSocket>> = Vec::with_capacity(addrs.len());
+    for a in addrs {
+        let made = udp_connect(a).ok().and_then(|sock| {
+            request_for(sock.local_addr(), build)
+                .ok()
+                .map(|body| (sock, body))
+        });
+        if let Some((sock, body)) = made {
+            socks.push(Some(sock));
+            bodies.push(body);
+        } else {
+            socks.push(None);
+            bodies.push(Vec::new());
+        }
+    }
     for (pass, delay) in PASS_DELAYS.into_iter().enumerate() {
         for i in 0..socks.len() {
             let Some(sock) = &socks[i] else {
                 continue;
             };
+            let body = &bodies[i];
             let ra = udp_ra(addrs[i]);
             if pass == 0 {
                 trace::sendto_kdc_udp_send_initial(&ra);
@@ -757,6 +827,7 @@ mod parse_rep_tests {
 #[cfg(test)]
 mod transport_tests {
     use super::{kpasswd_tcp, kpasswd_udp};
+    use crate::error::Error;
     use std::io::{Read, Write};
     use std::net::{TcpListener, UdpSocket};
     use std::thread;
@@ -775,7 +846,10 @@ mod transport_tests {
             server.send_to(b"reply", from).unwrap();
             gap
         });
-        assert_eq!(kpasswd_udp(&[addr], b"req").as_deref(), Some(&b"reply"[..]));
+        assert_eq!(
+            kpasswd_udp(&[addr], &mut |_| Ok(b"req".to_vec())).as_deref(),
+            Some(&b"reply"[..])
+        );
         let gap = seen.join().unwrap();
         assert!(
             gap >= Duration::from_millis(2500) && gap <= Duration::from_millis(4500),
@@ -795,7 +869,10 @@ mod transport_tests {
             conn.write_all(&5u32.to_be_bytes()).unwrap();
             conn.write_all(b"reply").unwrap();
         });
-        assert_eq!(kpasswd_tcp(&[addr], b"req").as_deref(), Some(&b"reply"[..]));
+        assert_eq!(
+            kpasswd_tcp(&[addr], &mut |_| Ok(b"req".to_vec())).as_deref(),
+            Some(&b"reply"[..])
+        );
     }
 
     #[test]
@@ -805,12 +882,212 @@ mod transport_tests {
             .local_addr()
             .unwrap();
         let started = Instant::now();
-        assert!(kpasswd_tcp(&[addr], b"req").is_none());
-        assert!(kpasswd_udp(&[addr], b"req").is_none());
+        assert!(kpasswd_tcp(&[addr], &mut |_| Ok(b"req".to_vec())).is_none());
+        assert!(kpasswd_udp(&[addr], &mut |_| Ok(b"req".to_vec())).is_none());
         assert!(
             started.elapsed() < Duration::from_secs(2),
             "refused took {:?}",
             started.elapsed()
         );
+    }
+
+    /// The request is made for each connection, with that connection's own address as its sender: the address the server sees the client at, whatever the family.
+    /// MIT `kpasswd_sendto_msg_callback` (`lib/krb5/os/changepw.c:127-157`): `getsockname` of the connected socket, as `ADDRTYPE_INET` or `ADDRTYPE_INET6`.
+    #[test]
+    fn the_request_is_built_with_the_connections_own_address() {
+        use krb5_types::HostAddress;
+        use std::net::IpAddr;
+        let hosts = crate::os_localaddr().unwrap_or_default();
+        let mut binds = vec!["127.0.0.1:0".to_owned()];
+        if UdpSocket::bind("[::1]:0").is_ok() {
+            binds.push("[::1]:0".to_owned());
+        }
+        // The first non-loopback IPv4 address the host has, reached through itself.
+        if let Some(h) = hosts
+            .iter()
+            .find(|h| h.addr_type == HostAddress::ADDRTYPE_INET)
+        {
+            let o: [u8; 4] = h.address.as_ref().try_into().unwrap();
+            binds.push(format!("{}:0", std::net::Ipv4Addr::from(o)));
+        }
+        for bind in binds {
+            let server = TcpListener::bind(&bind).unwrap();
+            let addr = server.local_addr().unwrap();
+            let seen = thread::spawn(move || {
+                let (mut conn, from) = server.accept().unwrap();
+                let mut req = [0u8; 3];
+                conn.read_exact(&mut req).unwrap();
+                conn.write_all(&5u32.to_be_bytes()).unwrap();
+                conn.write_all(b"reply").unwrap();
+                from
+            });
+            let mut sender = None;
+            let reply = kpasswd_tcp(&[addr], &mut |s| {
+                sender = Some(s.clone());
+                Ok(b"req".to_vec())
+            });
+            assert_eq!(reply.as_deref(), Some(&b"reply"[..]), "{bind}");
+            let from = seen.join().unwrap();
+            let want = match from.ip() {
+                IpAddr::V4(ip) => (HostAddress::ADDRTYPE_INET, ip.octets().to_vec()),
+                IpAddr::V6(ip) => (HostAddress::ADDRTYPE_INET6, ip.octets().to_vec()),
+            };
+            let got = sender.unwrap();
+            assert_eq!((got.addr_type, got.address.to_vec()), want, "TCP to {addr}");
+            // The same over UDP: the connected socket's own address.
+            let server = UdpSocket::bind(&bind).unwrap();
+            let addr = server.local_addr().unwrap();
+            let seen = thread::spawn(move || {
+                let mut buf = [0u8; 8];
+                let (_, from) = server.recv_from(&mut buf).unwrap();
+                server.send_to(b"reply", from).unwrap();
+                from
+            });
+            let mut sender = None;
+            let reply = kpasswd_udp(&[addr], &mut |s| {
+                sender = Some(s.clone());
+                Ok(b"req".to_vec())
+            });
+            assert_eq!(reply.as_deref(), Some(&b"reply"[..]), "{bind}");
+            let from = seen.join().unwrap();
+            let want = match from.ip() {
+                IpAddr::V4(ip) => (HostAddress::ADDRTYPE_INET, ip.octets().to_vec()),
+                IpAddr::V6(ip) => (HostAddress::ADDRTYPE_INET6, ip.octets().to_vec()),
+            };
+            let got = sender.unwrap();
+            assert_eq!((got.addr_type, got.address.to_vec()), want, "UDP to {addr}");
+        }
+    }
+
+    /// A request that cannot be made for a connection fails that server alone, and the next is tried.
+    /// MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:936-945`): a failed callback closes the socket and marks the server failed.
+    #[test]
+    fn a_request_that_cannot_be_made_fails_the_server_not_the_exchange() {
+        let first = TcpListener::bind("127.0.0.1:0").unwrap();
+        let second = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addrs = [first.local_addr().unwrap(), second.local_addr().unwrap()];
+        thread::spawn(move || {
+            let _ = first.accept();
+        });
+        thread::spawn(move || {
+            let (mut conn, _) = second.accept().unwrap();
+            let mut req = [0u8; 3];
+            conn.read_exact(&mut req).unwrap();
+            conn.write_all(&5u32.to_be_bytes()).unwrap();
+            conn.write_all(b"reply").unwrap();
+        });
+        let mut tries = 0;
+        let reply = kpasswd_tcp(&addrs, &mut |_| {
+            tries += 1;
+            if tries == 1 {
+                Err(Error::Message("cannot be made".into()))
+            } else {
+                Ok(b"req".to_vec())
+            }
+        });
+        assert_eq!(reply.as_deref(), Some(&b"reply"[..]));
+        assert_eq!(tries, 2);
+    }
+}
+
+/// The sender of a kpasswd request, and the KRB-PRIV that carries it.
+#[cfg(test)]
+mod sender_tests {
+    use super::{kpasswd_request, kpasswd_sender_address};
+    use krb5_asn1::decode;
+    use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
+    use krb5_types::{EncKrbPrivPart, HostAddress, KrbPriv, ku};
+    use std::net::SocketAddr;
+
+    fn host_list() -> impl Fn() -> Result<Vec<HostAddress>, crate::error::Error> {
+        || {
+            Ok(vec![HostAddress {
+                addr_type: 2,
+                address: vec![198, 51, 100, 9].into(),
+            }])
+        }
+    }
+
+    /// MIT `kpasswd_sendto_msg_callback` (`lib/krb5/os/changepw.c:127-157`): an IPv4 connection is `ADDRTYPE_INET`, an IPv6 one `ADDRTYPE_INET6`, and neither is 127.0.0.1 by default.
+    #[test]
+    fn the_sender_is_the_connections_address_in_its_family() {
+        let v4: SocketAddr = "192.0.2.7:51000".parse().unwrap();
+        let v6: SocketAddr = "[2001:db8::5]:51000".parse().unwrap();
+        let got = kpasswd_sender_address(v4, host_list()).unwrap();
+        assert_eq!(
+            (got.addr_type, got.address.to_vec()),
+            (2, vec![192, 0, 2, 7])
+        );
+        let got = kpasswd_sender_address(v6, host_list()).unwrap();
+        assert_eq!(got.addr_type, 24);
+        assert_eq!(
+            got.address.to_vec(),
+            "2001:db8::5"
+                .parse::<std::net::Ipv6Addr>()
+                .unwrap()
+                .octets()
+        );
+        // Link-local and loopback stay as `getsockname` gives them: MIT filters nothing here.
+        let ll: SocketAddr = "[fe80::1]:51000".parse().unwrap();
+        assert_eq!(
+            kpasswd_sender_address(ll, host_list()).unwrap().addr_type,
+            24
+        );
+        let lo: SocketAddr = "127.0.0.1:51000".parse().unwrap();
+        assert_eq!(
+            kpasswd_sender_address(lo, host_list())
+                .unwrap()
+                .address
+                .to_vec(),
+            vec![127, 0, 0, 1]
+        );
+    }
+
+    /// MIT `kpasswd_sendto_msg_callback` (`lib/krb5/os/changepw.c:127-157`): a wildcard local address takes the first address of `krb5_os_localaddr`.
+    #[test]
+    fn a_wildcard_takes_the_first_host_address() {
+        for wild in ["0.0.0.0:51000", "[::]:51000"] {
+            let got = kpasswd_sender_address(wild.parse().unwrap(), host_list()).unwrap();
+            assert_eq!(
+                (got.addr_type, got.address.to_vec()),
+                (2, vec![198, 51, 100, 9]),
+                "{wild}"
+            );
+        }
+        let none = || Ok(Vec::new());
+        assert!(kpasswd_sender_address("0.0.0.0:51000".parse().unwrap(), none).is_err());
+    }
+
+    /// The KRB-PRIV in the request names the connection's address as its sender and no receiver, under the request's subkey with the first sequence number.
+    /// MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:60-61`): the sender is the auth context's local address and the receiver its remote one, unset for kpasswd.
+    #[test]
+    fn the_krb_priv_of_a_request_names_the_sender_and_no_receiver() {
+        let sub = ProtocolKey::random(EncryptionType::Aes256CtsHmacSha196).unwrap();
+        let sender = HostAddress {
+            addr_type: 24,
+            address: "2001:db8::5"
+                .parse::<std::net::Ipv6Addr>()
+                .unwrap()
+                .octets()
+                .to_vec()
+                .into(),
+        };
+        let req = kpasswd_request(&sub, b"ap-req", b"new-password", 1, &sender).unwrap();
+        // length, version, AP-REQ length, the AP-REQ, then the KRB-PRIV.
+        assert_eq!(u16::from_be_bytes([req[0], req[1]]) as usize, req.len());
+        assert_eq!(&req[2..4], &1u16.to_be_bytes());
+        assert_eq!(&req[6..12], b"ap-req");
+        let priv_msg: KrbPriv = decode(&req[12..]).unwrap();
+        let plain = decrypt(
+            &sub,
+            KeyUsage::new(ku::KRB_PRIV_ENC_PART).unwrap(),
+            priv_msg.enc_part.cipher.as_ref(),
+        )
+        .unwrap();
+        let part: EncKrbPrivPart = decode(&plain).unwrap();
+        assert_eq!(part.s_address, sender);
+        assert_eq!(part.r_address, None);
+        assert_eq!(part.seq_number, Some(0));
+        assert_eq!(part.user_data.as_ref(), b"new-password");
     }
 }

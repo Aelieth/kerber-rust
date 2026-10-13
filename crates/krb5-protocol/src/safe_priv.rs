@@ -494,6 +494,31 @@ pub fn build_krb_priv_with_seq(
     build_krb_priv_chained(session, user_data, seq_number, true, &mut state)
 }
 
+/// Build a KRB-PRIV as [`build_krb_priv_with_seq`] does, naming `sender` as its sender address.
+///
+/// MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:60-61`): the message's sender is the auth context's local address, and its receiver the remote address, which kpasswd does not set.
+///
+/// # Errors
+///
+/// [`Error::Asn1`] when the EncKrbPrivPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` fails.
+pub fn build_krb_priv_from(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    sender: &HostAddress,
+) -> Result<KrbPriv, Error> {
+    let mut state = CipherState::initial();
+    krb_priv_part(
+        session,
+        user_data,
+        seq_number,
+        true,
+        &mut state,
+        sender.clone(),
+    )
+}
+
 /// Build a KRB-PRIV with cipher-state chaining (MIT `auth_con_initivector`).
 ///
 /// # Errors
@@ -507,6 +532,24 @@ pub fn build_krb_priv_chained(
     include_time: bool,
     state: &mut CipherState,
 ) -> Result<KrbPriv, Error> {
+    krb_priv_part(
+        session,
+        user_data,
+        seq_number,
+        include_time,
+        state,
+        local_addr(),
+    )
+}
+
+fn krb_priv_part(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    include_time: bool,
+    state: &mut CipherState,
+    s_address: HostAddress,
+) -> Result<KrbPriv, Error> {
     // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
         let (now, usec) = crate::us_timeofday();
@@ -519,7 +562,7 @@ pub fn build_krb_priv_chained(
         timestamp,
         usec,
         seq_number,
-        s_address: local_addr(),
+        s_address,
         r_address: None,
     };
     let der = encode(&part);
