@@ -1492,6 +1492,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **protocol.** The KDB-keytab hook takes the server it is asked for. With none named, the ticket's own server is looked up as in MIT's `try_one_princ`; no entry is NOT_US.
 - **kdc.** A keyless client reaches preauth as in MIT: 14 only after it, a keyless Enc-TS is 24, the FAST strengthen key follows the reply key's enctype, and the verify-failure log names the module. Units.
 - **types.** An AlgorithmIdentifier keeps its parameters as their DER, as MIT's `opt_der_data`; a NULL parameter was lost on a decode and an encode. Unit.
 - **admin.** kpasswd logs a request under six octets as "Message stream modified"; a set-password

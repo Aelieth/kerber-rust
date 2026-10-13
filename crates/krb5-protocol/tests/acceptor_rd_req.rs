@@ -540,17 +540,22 @@ fn named_code(raw: &[u8], params: &ApVerifyParams<'_>) -> (i32, String) {
 fn rd_req_with_a_named_server_takes_the_keytab_principal_for_the_tickets() {
     let (raw, key, kvno) = host_ap_req();
     let other = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
-    let asked = std::cell::Cell::new((u32::MAX, i32::MAX));
-    let lookup = |k: u32, e: i32| {
-        asked.set((k, e));
+    let asked = std::cell::RefCell::new((
+        PrincipalName::new(0, [""]),
+        String::new(),
+        u32::MAX,
+        i32::MAX,
+    ));
+    let lookup = |n: &PrincipalName, r: &str, k: u32, e: i32| {
+        asked.replace((n.clone(), r.to_owned(), k, e));
         Ok(key.clone())
     };
     let ok = verify_ap_req_ex(&raw, &named(&other, &lookup), &ReplayCache::new(), None)
         .expect("the key decrypts it");
     assert_eq!(
-        asked.get(),
-        (kvno, 18),
-        "the lookup is at the ticket's kvno and enctype"
+        asked.into_inner(),
+        (other.clone(), TEST_REALM.to_owned(), kvno, 18),
+        "the lookup is for the named server, at the ticket's kvno and enctype"
     );
     assert_eq!(
         ok.sname, other,
@@ -577,15 +582,17 @@ fn rd_req_with_a_named_server_maps_the_keytab_codes_as_keytab_fetch_error() {
     let host = documented_host();
     let elsewhere =
         PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "elsewhere.kerber.test"]);
-    let no_entry = |_: u32, _: i32| Err(KeytabLookup::NotFound);
+    let no_entry = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::NotFound);
     assert_eq!(named_code(&raw, &named(&host, &no_entry)).0, err::NOKEY);
-    let no_kvno = |_: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
+    let no_kvno = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
     assert_eq!(named_code(&raw, &named(&host, &no_kvno)).0, err::BADKEYVER);
     assert_eq!(
         named_code(&raw, &named(&elsewhere, &no_kvno)).0,
         err::NOT_US
     );
-    let other = |_: u32, _: i32| Err(KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey));
+    let other = |_: &PrincipalName, _: &str, _: u32, _: i32| {
+        Err(KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey))
+    };
     assert!(matches!(
         verify_ap_req_ex(&raw, &named(&host, &other), &ReplayCache::new(), None),
         Err(krb5_protocol::Error::KdbNoPermittedKey)
@@ -597,7 +604,7 @@ fn rd_req_with_a_named_server_maps_the_keytab_codes_as_keytab_fetch_error() {
 fn rd_req_with_a_named_server_and_a_wrong_key_is_bad_integrity_or_not_us() {
     let (raw, _, _) = host_ap_req();
     let wrong = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
-    let lookup = |_: u32, _: i32| Ok(wrong.clone());
+    let lookup = |_: &PrincipalName, _: &str, _: u32, _: i32| Ok(wrong.clone());
     let host = documented_host();
     assert!(matches!(
         verify_ap_req_ex(&raw, &named(&host, &lookup), &ReplayCache::new(), None),
@@ -608,4 +615,107 @@ fn rd_req_with_a_named_server_and_a_wrong_key_is_bad_integrity_or_not_us() {
     let (code, text) = named_code(&raw, &named(&elsewhere, &lookup));
     assert_eq!(code, err::NOT_US);
     assert!(text.starts_with("Cannot decrypt ticket for "), "{text}");
+}
+
+/// The parameters of an acceptor that names no server over a keytab it cannot walk (the KDB's):
+/// `krb5_rd_req` with a NULL server, which looks the server the ticket names up.
+fn unnamed(get_entry: krb5_protocol::KeytabGetEntry<'_>) -> ApVerifyParams<'_> {
+    ApVerifyParams {
+        expected_server: None,
+        expected_realm: None,
+        ..named(documented_host_static(), get_entry)
+    }
+}
+
+fn documented_host_static() -> &'static PrincipalName {
+    static HOST: std::sync::OnceLock<PrincipalName> = std::sync::OnceLock::new();
+    HOST.get_or_init(documented_host)
+}
+
+/// With no server named and a keytab that cannot be walked, the principal looked up is the one the
+/// ticket names, at the ticket's kvno and enctype, and it stays the ticket's server.
+/// MIT `decrypt_try_server` (`rd_req_dec.c:379-386`): a keytab with no `start_seq_get` takes `try_one_princ(tkt_server, FALSE)`.
+#[test]
+fn rd_req_with_no_server_looks_up_the_server_the_ticket_names() {
+    let (raw, key, kvno) = host_ap_req();
+    let host = documented_host();
+    let asked = std::cell::RefCell::new((
+        PrincipalName::new(0, [""]),
+        String::new(),
+        u32::MAX,
+        i32::MAX,
+    ));
+    let lookup = |n: &PrincipalName, r: &str, k: u32, e: i32| {
+        asked.replace((n.clone(), r.to_owned(), k, e));
+        Ok(key.clone())
+    };
+    let ok = verify_ap_req_ex(&raw, &unnamed(&lookup), &ReplayCache::new(), None)
+        .expect("the key decrypts it");
+    assert_eq!(
+        asked.into_inner(),
+        (host.clone(), TEST_REALM.to_owned(), kvno, 18),
+        "the lookup is for the ticket's server"
+    );
+    assert_eq!(ok.sname, host);
+    assert_eq!(ok.srealm.as_bytes(), TEST_REALM.as_bytes());
+}
+
+/// For the ticket's own server `keytab_fetch_error` is NOT_US where the keytab has no entry (NOKEY for an
+/// explicit server), BADKEYVER at a kvno it lacks (the server is always the ticket's), and BAD_INTEGRITY
+/// for a key that does not decrypt; any other code passes through.
+/// MIT `keytab_fetch_error` (`rd_req_dec.c:118-148`): `KRB5_KT_NOTFOUND` is `explicit_server ? NOKEY : NOT_US`.
+/// MIT `integrity_error` (`rd_req_dec.c:162-181`): the server is the ticket's, so BAD_INTEGRITY.
+#[test]
+fn rd_req_with_no_server_maps_the_keytab_codes_for_the_tickets_server() {
+    let (raw, _, _) = host_ap_req();
+    let no_entry = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::NotFound);
+    assert_eq!(named_code(&raw, &unnamed(&no_entry)).0, err::NOT_US);
+    let no_kvno = |_: &PrincipalName, _: &str, _: u32, _: i32| Err(KeytabLookup::KvnoNotFound);
+    let (code, text) = named_code(&raw, &unnamed(&no_kvno));
+    assert_eq!(code, err::BADKEYVER);
+    assert!(text.starts_with("Cannot find key for "), "{text}");
+    let other = |_: &PrincipalName, _: &str, _: u32, _: i32| {
+        Err(KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey))
+    };
+    assert!(matches!(
+        verify_ap_req_ex(&raw, &unnamed(&other), &ReplayCache::new(), None),
+        Err(krb5_protocol::Error::KdbNoPermittedKey)
+    ));
+    let wrong = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[3u8; 32]).unwrap();
+    let lookup = |_: &PrincipalName, _: &str, _: u32, _: i32| Ok(wrong.clone());
+    assert!(matches!(
+        verify_ap_req_ex(&raw, &unnamed(&lookup), &ReplayCache::new(), None),
+        Err(krb5_protocol::Error::Crypto(_))
+    ));
+}
+
+/// A host-based server with no host over a keytab that cannot be walked matches the ticket's server by
+/// service (and realm), and one that does not match is refused before any lookup.
+/// MIT `decrypt_try_server` (`rd_req_dec.c:379-386`): `krb5_sname_match(server, tkt_server)`, else `nomatch_error` (NOT_US).
+#[test]
+fn rd_req_with_a_server_pattern_must_match_the_tickets_server_before_the_lookup() {
+    let (raw, key, _) = host_ap_req();
+    let looked_up = std::cell::Cell::new(false);
+    let lookup = |_: &PrincipalName, _: &str, _: u32, _: i32| {
+        looked_up.set(true);
+        Ok(key.clone())
+    };
+    let any_host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", ""]);
+    let mut params = unnamed(&lookup);
+    params.expected_realm = Some(TEST_REALM);
+    params.expected_server = Some(&any_host);
+    verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None).expect("the host service matches");
+    assert!(looked_up.get());
+    looked_up.set(false);
+    let any_nfs = PrincipalName::new(PrincipalName::NT_SRV_HST, ["nfs", ""]);
+    params.expected_server = Some(&any_nfs);
+    let (code, text) = named_code(&raw, &params);
+    assert_eq!(code, err::NOT_US);
+    assert!(
+        text.starts_with(
+            "Server principal nfs/@KERBER.TEST does not match request ticket server host/"
+        ),
+        "{text}"
+    );
+    assert!(!looked_up.get(), "refused before the keytab is asked");
 }

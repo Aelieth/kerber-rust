@@ -65,6 +65,20 @@ pub enum KtkdbError {
     BadEnctype,
 }
 
+/// The lookup code the AP-REQ verifier takes: `KRB5_KT_NOTFOUND` and `KRB5_KT_KVNONOTFOUND` as `keytab_fetch_error` names them,
+/// any other code passed on as the verifier's own error.
+/// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:118-148`): maps the two keytab codes and returns any other as it is.
+impl From<KtkdbError> for krb5_protocol::KeytabLookup {
+    fn from(e: KtkdbError) -> Self {
+        match e {
+            KtkdbError::NotFound => Self::NotFound,
+            KtkdbError::KvnoNotFound => Self::KvnoNotFound,
+            KtkdbError::NoPermittedKey => Self::Other(krb5_protocol::Error::KdbNoPermittedKey),
+            KtkdbError::BadEnctype => Self::Other(krb5_protocol::Error::BadEnctype),
+        }
+    }
+}
+
 /// The key the KDB keytab gives for a ticket's kvno and enctype.
 /// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): for any principal but a cross-realm TGT the first permitted key at the kvno (the highest when it is 0), whatever the ticket's enctype, which must then be `krb5_c_enctype_compare`-similar to it; for a cross-realm TGT the first permitted key of the ticket's enctype. A principal that is not a service is not found.
 /// MIT `is_xrealm_tgt` (`lib/kdb/keytab.c:200-220`): `krbtgt` (a prefix of the word does) and a second component that is not the realm.

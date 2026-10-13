@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
-use krb5_kdc::{KtkdbError, Principal, SharedDump as SharedStore};
+use krb5_kdc::{Principal, SharedDump as SharedStore};
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyOk, ApVerifyParams, DEFAULT_SKEW,
     KeytabLookup, ReplayCache, local_host_address, permitted_enctypes_kdc, verify_ap_req_ex,
@@ -392,19 +392,12 @@ pub fn changepw_accept(
     replay: &ReplayCache,
 ) -> Result<ChangepwAccepted, ChangepwRefused> {
     let server = krb5_kdc::principals::kadmin_changepw();
-    let get_entry = |kvno: u32, etype: i32| {
+    let get_entry = |_: &PrincipalName, _: &str, kvno: u32, etype: i32| {
         krb5_kdc::ktkdb_get_entry(changepw, &server, realm, kvno, etype, |e| {
             permitted.contains(&e)
         })
         .map(|entry| entry.key.clone())
-        .map_err(|e| match e {
-            KtkdbError::NotFound => KeytabLookup::NotFound,
-            KtkdbError::KvnoNotFound => KeytabLookup::KvnoNotFound,
-            KtkdbError::NoPermittedKey => {
-                KeytabLookup::Other(krb5_protocol::Error::KdbNoPermittedKey)
-            }
-            KtkdbError::BadEnctype => KeytabLookup::Other(krb5_protocol::Error::BadEnctype),
-        })
+        .map_err(KeytabLookup::from)
     };
     let params = ApVerifyParams {
         keys: &[],
