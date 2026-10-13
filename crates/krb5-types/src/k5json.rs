@@ -16,10 +16,10 @@ const MAX_DEPTH: usize = 64;
 pub enum Value {
     /// The `null` literal.
     Null,
-    /// A `true` or `false` literal. Its value is not kept.
-    Bool,
-    /// An integer in the signed 64-bit range. Its value is not kept.
-    Number,
+    /// A `true` or `false` literal.
+    Bool(bool),
+    /// An integer in the signed 64-bit range.
+    Number(i64),
     /// A string: its octets, each `\uXXXX` escape one octet, cut at the first NUL.
     String(Vec<u8>),
     /// An array, in order.
@@ -38,6 +38,24 @@ impl Value {
                 .iter()
                 .find(|(k, _)| k.as_slice() == key.as_bytes())
                 .map(|(_, v)| v),
+            _ => None,
+        }
+    }
+
+    /// Sets member `key` of an object: a key that is there keeps its place and takes the new value,
+    /// and a new key is added last. A value that is not an object is left as it is.
+    /// MIT `k5_json_object_set` (`util/support/json.c:426-469`): an existing key is overwritten in place, a new one appended.
+    pub fn set(&mut self, key: &str, value: Value) {
+        if let Self::Object(members) = self {
+            set_member(members, key.as_bytes().to_vec(), Some(value));
+        }
+    }
+
+    /// The octets of a string up to its first NUL, as C code reads it; `None` for any other value.
+    #[must_use]
+    pub fn as_cstr(&self) -> Option<&[u8]> {
+        match self {
+            Self::String(s) => Some(s.split(|&b| b == 0).next().unwrap_or_default()),
             _ => None,
         }
     }
@@ -115,15 +133,14 @@ impl Decoder<'_> {
                 self.depth += 1;
                 Ok(parsed.ok().map(Value::Array))
             }
-            b'-' | b'0'..=b'9' => {
-                self.parse_number()?;
-                Ok(Some(Value::Number))
-            }
+            b'-' | b'0'..=b'9' => Ok(Some(Value::Number(self.parse_number()?))),
             _ => {
                 if self.eat(b"null") {
                     Ok(Some(Value::Null))
-                } else if self.eat(b"true") || self.eat(b"false") {
-                    Ok(Some(Value::Bool))
+                } else if self.eat(b"true") {
+                    Ok(Some(Value::Bool(true)))
+                } else if self.eat(b"false") {
+                    Ok(Some(Value::Bool(false)))
                 } else {
                     Err(())
                 }
@@ -134,7 +151,7 @@ impl Decoder<'_> {
     /// MIT `parse_number` (`util/support/json.c:755-785`): an optional `-` and digits, which
     /// must be an integer in the signed 64-bit range. A leading zero is allowed.
     /// MIT `parse_number` (`util/support/json.c:774-781`): the digits must fit the signed 64-bit range.
-    fn parse_number(&mut self) -> Result<(), ()> {
+    fn parse_number(&mut self) -> Result<i64, ()> {
         let negative = self.cur() == b'-';
         if negative {
             self.p += 1;
@@ -156,7 +173,12 @@ impl Decoder<'_> {
         } else {
             (1u64 << 63) - 1
         };
-        if number > limit { Err(()) } else { Ok(()) }
+        if number > limit {
+            return Err(());
+        }
+        // The magnitude is at most 2^63, so the signed value is in the i64 range.
+        let magnitude = i128::from(number);
+        i64::try_from(if negative { -magnitude } else { magnitude }).map_err(|_| ())
     }
 
     /// MIT `parse_string` (`util/support/json.c:789-851`): a quoted string, whose escapes are
@@ -366,4 +388,141 @@ pub fn decode(input: &[u8]) -> Result<Value, JsonError> {
         return Err(JsonError);
     }
     value.ok_or(JsonError)
+}
+
+/// Encodes a value as compact JSON: no whitespace, members in their order, strings quoted.
+/// MIT `encode_value` (`util/support/json.c:630-684`): an object's members are written in order,
+/// and a number in decimal.
+/// MIT `encode_string` (`util/support/json.c:584-606`): `"`, `\` and the control characters are
+/// escaped; `/` and bytes above 0x7F are written as they are.
+#[must_use]
+pub fn encode(value: &Value) -> Vec<u8> {
+    let mut out = Vec::new();
+    encode_into(value, &mut out);
+    out
+}
+
+/// Writes a string quoted, cut at its first NUL as MIT's C string is.
+/// MIT `encode_string` (`util/support/json.c:584-606`): the control characters become `\b`, `\f`,
+/// `\n`, `\r`, `\t`, or `\u00XX` with upper-case hex.
+fn encode_string(s: &[u8], out: &mut Vec<u8>) {
+    out.push(b'"');
+    for &b in s.split(|&b| b == 0).next().unwrap_or_default() {
+        match b {
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            8 => out.extend_from_slice(b"\\b"),
+            12 => out.extend_from_slice(b"\\f"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            1..=31 => out.extend_from_slice(format!("\\u00{b:02X}").as_bytes()),
+            _ => out.push(b),
+        }
+    }
+    out.push(b'"');
+}
+
+fn encode_into(value: &Value, out: &mut Vec<u8>) {
+    match value {
+        Value::Null => out.extend_from_slice(b"null"),
+        Value::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
+        Value::Number(n) => out.extend_from_slice(n.to_string().as_bytes()),
+        Value::String(s) => encode_string(s, out),
+        Value::Array(items) => {
+            out.push(b'[');
+            for (i, item) in items.iter().enumerate() {
+                if i != 0 {
+                    out.push(b',');
+                }
+                encode_into(item, out);
+            }
+            out.push(b']');
+        }
+        Value::Object(members) => {
+            out.push(b'{');
+            for (i, (key, v)) in members.iter().enumerate() {
+                if i != 0 {
+                    out.push(b',');
+                }
+                encode_string(key, out);
+                out.push(b':');
+                encode_into(v, out);
+            }
+            out.push(b'}');
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn encode_is_compact_ordered_and_mits_quoting() {
+        let mut object = Value::Object(Vec::new());
+        object.set("vendor", Value::String(b"A\"B/\x01".to_vec()));
+        object.set("n", Value::Number(-7));
+        object.set("vendor", Value::String(b"V".to_vec()));
+        assert_eq!(encode(&object), br#"{"vendor":"V","n":-7}"#);
+        let quoted = Value::String(b"A\"B\\/\x01\x08\x7f\xc3".to_vec());
+        assert_eq!(encode(&quoted), b"\"A\\\"B\\\\/\\u0001\\b\x7f\xc3\"");
+        let cut = Value::String(b"ab\0cd".to_vec());
+        assert_eq!(encode(&cut), b"\"ab\"");
+        assert_eq!(
+            encode(&Value::Array(vec![Value::Bool(true), Value::Null])),
+            b"[true,null]"
+        );
+    }
+
+    #[test]
+    fn decode_follows_mit() {
+        assert_eq!(
+            decode(br#" {"a" : [1, true, null, "x\u0041"]} "#).unwrap(),
+            Value::Object(vec![(
+                b"a".to_vec(),
+                Value::Array(vec![
+                    Value::Number(1),
+                    Value::Bool(true),
+                    Value::Null,
+                    Value::String(b"xA".to_vec()),
+                ]),
+            )])
+        );
+        assert_eq!(
+            decode(b"-9223372036854775808").unwrap(),
+            Value::Number(i64::MIN)
+        );
+        assert_eq!(
+            decode(b"9223372036854775807").unwrap(),
+            Value::Number(i64::MAX)
+        );
+        for bad in [
+            &b"1.5"[..],
+            b"1e3",
+            b"+1",
+            b"9223372036854775808",
+            b"[1,",
+            b"[",
+            b"{\"a\":1",
+            b"1 2",
+            b"\"\\u0100\"",
+            b"\"\\u00ff\" x",
+            b"\"\\u00ff\\u0041",
+        ] {
+            assert!(decode(bad).is_err(), "{}", String::from_utf8_lossy(bad));
+        }
+        assert!(decode(b"01").is_ok());
+        assert_eq!(decode(b"\"\\u00FF\"").unwrap(), Value::String(vec![0xff]));
+        assert!(
+            decode(b"\"\\u00ff\"").is_err(),
+            "lower-case hex is not MIT's"
+        );
+        // The text ends at its first NUL, so this string is unterminated.
+        assert!(decode(b"\"ab\0cd\"").is_err());
+        assert_eq!(
+            decode(b"[1]\0 junk").unwrap(),
+            Value::Array(vec![Value::Number(1)])
+        );
+    }
 }

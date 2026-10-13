@@ -5,7 +5,7 @@ use std::io::{self, BufRead, IsTerminal as _, Write};
 
 use nix::sys::signal::Signal;
 use nix::sys::termios::{LocalFlags, SetArg, Termios, tcgetattr, tcsetattr};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::stdin::{LineEnd, SignalCatch, Stdin, fgets};
 
@@ -79,6 +79,28 @@ impl<R: BufRead, W: Write> Prompter<R, W> {
     /// echo cannot be turned off; [`PromptError::Interrupted`] when `SIGINT` comes while the
     /// reply is read from a [`Stdin`].
     pub fn hidden(&mut self, prompt: &str) -> Result<Zeroizing<Vec<u8>>, PromptError> {
+        self.hidden_with(None, prompt, usize::MAX)
+    }
+
+    /// [`Self::hidden`] with an optional `banner` and a reply buffer of `size` bytes (`usize::MAX`
+    /// for none). The banner and a newline come first. With a finite `size` a reply is at most
+    /// `size - 1` bytes and is cut at its first NUL; when no newline comes before that NUL, the rest
+    /// of the input line is read and dropped, so a NUL before the newline drops the next line too.
+    /// MIT `krb5_prompter_posix` (`lib/krb5/os/prompter.c:53-56`): the banner goes to stdout, then a newline, before any prompt.
+    /// MIT `krb5_prompter_posix` (`lib/krb5/os/prompter.c:98-112`): `strchr` finds the newline up to the reply's NUL, and with none the input line is read away.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::hidden`].
+    pub fn hidden_with(
+        &mut self,
+        banner: Option<&str>,
+        prompt: &str,
+        size: usize,
+    ) -> Result<Zeroizing<Vec<u8>>, PromptError> {
+        if let Some(banner) = banner {
+            let _ = writeln!(self.output, "{banner}");
+        }
         let sigint = SignalCatch::new(&[Signal::SIGINT]);
         let echo = if self.terminal {
             EchoOff::on_stdin()?
@@ -88,15 +110,31 @@ impl<R: BufRead, W: Write> Prompter<R, W> {
         let _ = write!(self.output, "{prompt}: ");
         let _ = self.output.flush();
         let mut line = Zeroizing::new(Vec::with_capacity(1024));
-        let read = fgets(&mut self.input, usize::MAX, &mut line);
+        let read = fgets(&mut self.input, size, &mut line);
         let _ = writeln!(self.output);
         let _ = self.output.flush();
+        if size != usize::MAX && matches!(read, LineEnd::Read) {
+            let text = line.iter().position(|&b| b == 0).unwrap_or(line.len());
+            if !line[..text].contains(&b'\n') {
+                drop_rest_of_line(&mut self.input);
+            }
+        }
         drop(echo);
         drop(sigint);
         match read {
             LineEnd::Read => {
-                if line.last() == Some(&b'\n') {
-                    line.pop();
+                if size == usize::MAX {
+                    if line.last() == Some(&b'\n') {
+                        line.pop();
+                    }
+                } else {
+                    let text = line.iter().position(|&b| b == 0).unwrap_or(line.len());
+                    let end = line[..text]
+                        .iter()
+                        .position(|&b| b == b'\n')
+                        .unwrap_or(text);
+                    line[end..].zeroize();
+                    line.truncate(end);
                 }
                 Ok(line)
             }
@@ -188,6 +226,18 @@ impl Drop for EchoOff {
     }
 }
 
+/// Reads and drops input up to and including its next newline, or to the end of the input.
+/// MIT `krb5_prompter_posix` (`lib/krb5/os/prompter.c:107-110`): `getc` reads to a newline or EOF.
+fn drop_rest_of_line<R: BufRead>(input: &mut R) {
+    loop {
+        let mut rest = Zeroizing::new(Vec::new());
+        match fgets(input, 1024, &mut rest) {
+            LineEnd::Read if rest.last() != Some(&b'\n') => {}
+            _ => break,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +313,66 @@ mod tests {
         assert_eq!(e, PromptError::Interrupted);
         assert_eq!(e.to_string(), "Password read interrupted");
         assert_eq!(out, b"Enter KDC database master key: \n");
+    }
+
+    #[test]
+    fn a_banner_comes_first_and_a_long_line_is_cut_and_flushed() {
+        let mut input = &b"0123456789\nnext\n"[..];
+        let mut out = Vec::new();
+        {
+            let mut p = Prompter::new(&mut input, &mut out);
+            let got = p.hidden_with(Some("B1\nB2"), "Enter #", 6).unwrap();
+            assert_eq!(got.as_slice(), b"01234");
+            assert_eq!(p.hidden_with(None, "Next", 6).unwrap().as_slice(), b"next");
+        }
+        assert_eq!(out, b"B1\nB2\nEnter #: \nNext: \n");
+        let mut long = vec![b'x'; 2000];
+        long.extend_from_slice(b"\nafter\n");
+        let mut input = &long[..];
+        let mut p = Prompter::new(&mut input, Vec::new());
+        assert_eq!(
+            p.hidden_with(None, "P", 1024).unwrap().as_slice(),
+            &long[..1023]
+        );
+        assert_eq!(p.hidden_with(None, "Q", 1024).unwrap().as_slice(), b"after");
+    }
+
+    #[test]
+    fn a_reply_is_cut_at_its_first_nul_and_no_size_keeps_the_whole_line() {
+        // A NUL before the newline cuts the reply, and the newline search (MIT `strchr`) stops at the
+        // NUL, so the line that follows is read away with the rest of this one.
+        let mut input = &b"ab\0cd\nnext\nX\n"[..];
+        let mut out = Vec::new();
+        {
+            let mut p = Prompter::new(&mut input, &mut out);
+            assert_eq!(p.hidden_with(None, "P", 1024).unwrap().as_slice(), b"ab");
+            assert_eq!(p.hidden_with(None, "Q", 1024).unwrap().as_slice(), b"X");
+        }
+        // A carriage return is kept.
+        let got = Prompter::new(&b"ab\r\n"[..], &mut out).hidden_with(None, "P", 1024);
+        assert_eq!(got.unwrap().as_slice(), b"ab\r");
+        // Without a size the whole line is the reply, NULs and all.
+        let line = b"a\0b\n";
+        let got = Prompter::new(&line[..], &mut out).hidden("P").unwrap();
+        assert_eq!(got.as_slice(), b"a\0b");
+    }
+
+    #[test]
+    fn a_banner_that_ends_in_a_newline_leaves_a_blank_line_before_the_prompt() {
+        let menu = "Please choose from the following:\n\t1. Vendor: Acme\n\t2. Vendor: Zed\n";
+        let challenge = "OTP Challenge: 8675309\n";
+        let mut out = Vec::new();
+        {
+            let mut p = Prompter::new(&b"2\n654321\n"[..], &mut out);
+            let choice = p.hidden_with(Some(menu), "Enter #", 1024).unwrap();
+            assert_eq!(choice.as_slice(), b"2");
+            let got = p.hidden_with(Some(challenge), "Enter OTP Token Value", 1024);
+            assert_eq!(got.unwrap().as_slice(), b"654321");
+        }
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Please choose from the following:\n\t1. Vendor: Acme\n\t2. Vendor: Zed\n\nEnter #: \n\
+             OTP Challenge: 8675309\n\nEnter OTP Token Value: \n"
+        );
     }
 }
