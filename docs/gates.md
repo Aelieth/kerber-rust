@@ -233,10 +233,10 @@ not check (a unit test, or "not asserted").
   for every case; `ci-policy` reconciles the four copies of the case list —
   the `expect_*` names in `diffsend.rs`, `DIFFSEND_CASES`, the ledger
   header, the gate greps — and the ratchet against the driver's summary
-  literal. Honest `exit 2` when docker or the MIT image is absent
-  (provenance no longer `exit 1` / `KERBER_NO_IMAGE` as a substitute).
+  literal. Honest `exit 2` when docker or the MIT image is absent.
+  The `preauth (…) verify failure:` lines of the two KDC logs are equal.
   Compare lives behind `krb5-protocol` feature `diff`
-  (`crates/krb5-tools/src/bin/diffsend.rs` and the unit fixture); `diff` is
+  (`diffsend.rs` and the unit fixture); `diff` is
   a default feature, so it is on the default public API. **TGS vehicle:**
   `tgs-success` mints a PAC-less TGT with the exported krbtgt key (etype
   20, empty `tr-type` 1). PAC-bearing cases mint a diffsend-signed PAC TGT
@@ -427,11 +427,10 @@ not check (a unit test, or "not asserted").
   Forged-realm armor (`krb5-forge-tgt --keep-cipher --claim-realm`) is 35
   on both MIT and Rust (`The ticket isn't for us`; both KDC logs `FIND_FAST`). Forged-realm FAST
   TGS (`kvno` on a forged `kinit -T` ccache) is 7 `PROCESS_TGS` on both; the
-  MIT client line is required verbatim. Not asserted by this gate: the
-  unit-red negatives MIT clients cannot emit, FAST (`as_fast.rs`) bad
-  `req_checksum` is 41, unkeyed is 12, unknown armor type is 24, AS checksum
-  ignores a dummy PA-TGS-REQ; plain TGS (`ap_req.rs`) authenticator cname
-  mismatch is 36.
+  MIT client line is required verbatim. A wrong password under FAST has
+  equal `preauth (…) verify failure:` lines in both KDC logs. Not asserted
+  here: the unit-red negatives MIT clients cannot emit (`as_fast.rs`,
+  `ap_req.rs`).
 - `scripts/pkinit-gate.sh` — **fails** unless MIT `pkinit.so` is present and
   MIT `kinit -X X509_user_identity=FILE:` succeeds against the Rust KDC. The
   KDC log must contain `rfc8636 sha256 kdf`. It also refuses MIT `kinit`
@@ -579,7 +578,8 @@ not check (a unit test, or "not asserted").
   and group 2, and `klist` shows
   `user@KERBER.TEST`. First-round KRB-ERROR **91** `e_text` is
   `PREAUTH_FAILED` (`do_as_req.c:439-442,809`) in the
-  `scripts/lib/kdc-error-proxy.py` capture and the Rust KDC log. A second leg
+  `scripts/lib/kdc-error-proxy.py` capture and the Rust KDC log, which also
+  has `preauth (spake) verify failure: More preauthentication data is required`. A second leg
   gives the Rust KDC Fedora's settings and runs MIT `kinit` with its default
   group: the `kdc-padata-proxy.py` wire must be MIT's (25 with
   `[136, 19, 151, 2, 133]`, then `[133, 151, 150, 149]`, then an AS-REP with

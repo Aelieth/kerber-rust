@@ -100,6 +100,9 @@ fi
 require_log "$NAME" /tmp/kdc.log '"code":91,"e_text":"PREAUTH_FAILED"' 'SPAKE 91 PREAUTH_FAILED in /tmp/kdc.log'
 KDCLOG="$(docker exec "$NAME" cat /tmp/kdc.log 2>/dev/null || true)"
 echo "$KDCLOG" | grep -F '"code":91,"e_text":"PREAUTH_FAILED"'
+# MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:290-292`): the answer to a support message is the module's verify failure, which `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`) logs like any other.
+grep -qF 'preauth (spake) verify failure: More preauthentication data is required' <<<"$KDCLOG" \
+    || die "the Rust KDC log has no preauth (spake) verify failure line for the first round"
 
 # Fedora's settings: krb5.conf permits edwards25519 and kdc.conf sets spake_preauth_kdc_challenge =
 # edwards25519. MIT 1.22.2's KDC then sends an edwards25519 challenge with PREAUTH_REQUIRED, and a
@@ -152,5 +155,9 @@ echo "$WIRE" | grep -F 'req#2 msg_type=10 padata=[133, 151, 150, 149]' || die "t
 echo "$WIRE" | grep -E 'rep#2 tag=0x6b' | grep -F 'padata=[19]' || die "the AS-REP after SPAKE is not MIT's {19}"
 docker exec "$NAME" klist -C -c /tmp/krb5cc_ed25519 | grep -F 'config: pa_type(krbtgt/KERBER.TEST@KERBER.TEST) = 151' \
     || die "edwards25519 kinit did not record pa_type 151"
+# A login that answers the KDC's own challenge is no module's verify failure.
+if docker exec "$NAME" grep -F 'verify failure' /tmp/kdc.log; then
+    die "the Rust KDC logged a preauth verify failure for a login that succeeded in its second request"
+fi
 log "spake.gate" "ok" ',"mode":"mit-kinit","pa_type":151,"group":2,"principal":"user@KERBER.TEST","e_text":"PREAUTH_FAILED"'
 exit 0

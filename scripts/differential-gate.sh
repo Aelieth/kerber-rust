@@ -243,6 +243,27 @@ grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' <<<"$DIFF" || 
 grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
 grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' <<<"$DIFF" || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' <<<"$DIFF" || die "as-retransmit reply not identical from the lookaside on both legs"
+# MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): a module's verify failure is its own INFO line in the KDC log. The Rust KDC's lines are MIT's, one for one and in order, and no AS_REQ line carries any of the text.
+verify_failure_lines() { sed -n -E 's/^.*\(info\): (preauth \([a-z_]+\) verify failure: .*)$/\1/p' "$1"; }
+VF_MIT="$(verify_failure_lines "$OUT/mit-kdc.log")"
+VF_RUST="$(verify_failure_lines "$OUT/rust-kdc.log")"
+[ "$VF_RUST" = "$VF_MIT" ] || {
+    diff <(echo "$VF_MIT") <(echo "$VF_RUST") >&2 || true
+    die "the Rust KDC's preauth verify failure lines are not MIT's"
+}
+for want in \
+    'preauth (encrypted_timestamp) verify failure: Clock skew too great' \
+    'preauth (encrypted_timestamp) verify failure: No matching key in entry having a permitted enctype' \
+    'preauth (spake) verify failure: More preauthentication data is required' \
+    'preauth (encrypted_challenge) verify failure: Encrypted Challenge used outside of FAST tunnel' \
+    'preauth (pkinit) verify failure: Pkinit request not signed, but client not anonymous.' \
+    'preauth (pkinit) verify failure: Preauthentication expired' \
+    'preauth (spake) verify failure: Unknown SPAKE request type'; do
+    grep -qxF "$want" <<<"$VF_MIT" || die "no verify failure line: $want"
+done
+if grep -E 'AS_REQ.*verify failure' "$OUT/rust-kdc.log" "$OUT/mit-kdc.log"; then
+    die "an AS_REQ line carries a module's verify failure text"
+fi
 # W1-Z Z3.3: the ratchet is checked against the distinct cases diffsend
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
