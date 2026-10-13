@@ -11,7 +11,8 @@
           @@ unit <i> rc=<status>
       --set gives the assignment `NAME=...` the reader's value; --drop leaves out the unit an ERE matches (each
       ERE must match exactly one unit). Both are echoed as what they are. A here-document stays whole in its
-      unit, its body unread. Every unit must parse alone (`bash -n`).
+      unit, its body unread, and so does a command whose quote runs over several lines. Every unit must parse
+      alone (`bash -n`).
   docblocks.py results <session output>
       one line per unit: <i> TAB <rc, or "none" when it did not finish> TAB <output lines> TAB <first line>
   docblocks.py output <session output> <i>
@@ -131,7 +132,9 @@ def continues(line):
 def units(block):
     """The block's top-level commands, each a list of lines (comments and blank lines between them dropped).
     A here-document's body and its delimiter line belong to the command that opens it. A command goes on past a
-    line that ends in a backslash or in &&, ||, | or |& (after a here-document too, when its opening line does)."""
+    line that ends in a backslash or in &&, ||, | or |& (after a here-document too, when its opening line does), and
+    past a line after which it does not parse alone (a quote open across lines, for one): it ends at the first line
+    where it does, as bash reads a command it has not finished."""
     out, cur, depth, pending, cont = [], [], 0, [], ""
     for ln in block:
         if pending:
@@ -157,6 +160,8 @@ def units(block):
         if pending or cont:
             continue
         if depth == 0:
+            if not parses("\n".join(cur) + "\n"):
+                continue  # a quote open across lines carries the command on, as bash reads it
             out.append(cur)
             cur = []
     if cur:
