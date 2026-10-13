@@ -17,7 +17,7 @@ A2 owns AS/`kdc_util`, A3 owns FAST residue.
 ## Files
 
 One or more files per section, each named `<key>-<subject>.md`; A4 has
-three and B1 four. Each holds a heading that names its section, a short scope note
+three and B1 five. Each holds a heading that names its section, a short scope note
 and one table in the schema below; a row lives in exactly one file, and a
 section's count is the sum over its files.
 
@@ -33,6 +33,7 @@ section's count is the sum over its files.
 | [b1-asn1.md](b1-asn1.md) | B1 — the ASN.1 decoder: `asn1_encode.c`, `asn1_k_encode.c` against `vendor/rasn` and the wire types |
 | [b1-client.md](b1-client.md) | B1 — the client library, crypto, the AP-REQ acceptor, ccache and keytab |
 | [b1-client-preauth.md](b1-client-preauth.md) | B1 — the preauth framework and the responder: `preauth2.c`, `response_items.c`, the OTP responder in `preauth_otp.c` |
+| [b1-crypto-state.md](b1-crypto-state.md) | B1 — the cipher state between messages: `krb5_c_encrypt` and `krb5_c_decrypt` through `krb5_mk_priv` and `krb5_rd_priv` |
 | [b1-gss.md](b1-gss.md) | B1 — the GSS-API krb5 mechanism and SPNEGO: context, wrap / unwrap, sequence window, status, credentials |
 | [b1-tools.md](b1-tools.md) | B1 — the client tools: `kinit`, `klist`, `kvno`, `kdestroy`, `kswitch`, `kpasswd`, `ktutil` |
 
@@ -98,9 +99,9 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 (`kdc_util.c:696-697`).
 
 Counts:
-**521** = A1 131 + A2 94 + A3 96 + A4 64 + A5 33 + B1 103.
-exact 421 · stricter-documented 19 · deviation 36 ·
-absent 1 · deferred 44.
+**523** = A1 131 + A2 94 + A3 96 + A4 64 + A5 33 + B1 105.
+exact 422 · stricter-documented 19 · deviation 36 ·
+absent 1 · deferred 45.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and

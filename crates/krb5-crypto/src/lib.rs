@@ -110,9 +110,9 @@ pub use modp::{
 pub use ops::{
     CipherState, ENCTYPE_UNKNOWN, check_enc_data_etype, checksum, checksum_output_size, decrypt,
     decrypt_cts, decrypt_enc_data, decrypt_enc_data_with_state, decrypt_with_state, encrypt,
-    encrypt_with_confounder, encrypt_with_state, hmac_md5_arcfour_checksum, integrity_mac,
-    kdb_decrypt_key, kdb_encrypt_key, string_to_key, unkeyed_checksum, verify_checksum_collproof,
-    verify_checksum_keyed, verify_checksum_type,
+    encrypt_with_confounder, encrypt_with_confounder_and_state, encrypt_with_state,
+    hmac_md5_arcfour_checksum, integrity_mac, kdb_decrypt_key, kdb_encrypt_key, string_to_key,
+    unkeyed_checksum, verify_checksum_collproof, verify_checksum_keyed, verify_checksum_type,
 };
 pub use prf::{derive_prfplus, derive_prfplus_enctype, prf, prf_plus};
 pub use spake::{

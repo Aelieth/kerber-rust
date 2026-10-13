@@ -273,6 +273,23 @@ pub fn encrypt_with_state(
     encrypt_inner_state(key, usage, &conf, plaintext, state)
 }
 
+/// [`encrypt_with_confounder`] through a caller-managed cipher state (IV chaining).
+///
+/// Required for known-answer tests of a chain, whose confounders another implementation drew.
+///
+/// # Errors
+///
+/// Those of [`encrypt_with_confounder`].
+pub fn encrypt_with_confounder_and_state(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    confounder: &[u8],
+    state: &mut CipherState,
+    plaintext: &[u8],
+) -> Result<Vec<u8>, Error> {
+    encrypt_inner_state(key, usage, confounder, plaintext, state)
+}
+
 /// MIT `krb5int_dk_encrypt` (`enc_dk_hmac.c:156-168`): the trailer is the truncated HMAC of the
 /// plaintext, not of the ciphertext.
 /// A confounder that is not one block is not encrypted.
@@ -296,7 +313,9 @@ fn encrypt_inner_state(
         }
         EncryptionType::Des3CbcSha1 => return crate::weak::des3_encrypt(key, usage, plaintext),
         EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
-            return crate::weak::camellia_encrypt_with_conf(key, usage, confounder, plaintext);
+            return crate::weak::camellia_encrypt_with_conf(
+                key, usage, confounder, plaintext, state,
+            );
         }
         _ => {}
     }
@@ -329,10 +348,20 @@ fn encrypt_inner_state(
     }
 }
 
-fn update_iv(state: &mut CipherState, ciphertext: &[u8]) {
-    if ciphertext.len() >= BLOCK {
-        let start = ciphertext.len() - BLOCK;
-        state.iv.copy_from_slice(&ciphertext[start..]);
+/// The state a CTS encrypt or decrypt leaves for the next message: the full block that ciphertext
+/// stealing writes second to last, `C_n`, at block `n - 2` of the stream counting from 0. The stream's
+/// last block is not it: that is `C_(n-1)`, cut short when the message does not end on a block boundary.
+/// A message of one block (a confounder and no data) leaves the state as it was, and is encrypted under a zero IV
+/// whatever the state is (`cts::encrypt`).
+/// MIT `krb5int_aes_encrypt` (`lib/crypto/builtin/enc_provider/aes.c:255-260`): a single block is encrypted under a zero IV and returns before the state is touched.
+/// MIT `krb5int_aes_encrypt` (`lib/crypto/builtin/enc_provider/aes.c:288-296`): the state is the CBC chain's value after the last two blocks are encrypted, `C_n`.
+/// MIT `krb5int_aes_decrypt` (`lib/crypto/builtin/enc_provider/aes.c:319-324`): a single block is decrypted under a zero IV and returns before the state is touched.
+/// MIT `krb5int_aes_decrypt` (`lib/crypto/builtin/enc_provider/aes.c:345-353`): the first of the last two ciphertext blocks of the stream is saved as the new state.
+pub(crate) fn update_iv(state: &mut CipherState, ciphertext: &[u8]) {
+    let nblocks = ciphertext.len().div_ceil(BLOCK);
+    if nblocks >= 2 {
+        let start = (nblocks - 2) * BLOCK;
+        state.iv.copy_from_slice(&ciphertext[start..start + BLOCK]);
     }
 }
 
@@ -432,6 +461,8 @@ pub fn decrypt_with_state(
 
 /// MIT `krb5int_dk_decrypt` (`enc_dk_hmac.c:259-261`): a checksum mismatch is an integrity failure.
 /// The recovered plaintext is wiped before that error is returned.
+/// MIT `krb5int_dk_decrypt` (`enc_dk_hmac.c:246-259`): the provider decrypts, and so takes the cipher state, before the hash is compared; a message that fails the check has moved the state.
+/// MIT `krb5int_etm_decrypt` (`enc_etm.c:238-250`): the MAC is compared before anything is decrypted, so a message that fails it leaves the state alone.
 fn decrypt_inner_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -442,7 +473,7 @@ fn decrypt_inner_state(
         EncryptionType::Rc4Hmac => return crate::weak::rc4_decrypt(key, usage, ciphertext),
         EncryptionType::Des3CbcSha1 => return crate::weak::des3_decrypt(key, usage, ciphertext),
         EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
-            return crate::weak::camellia_decrypt(key, usage, ciphertext);
+            return crate::weak::camellia_decrypt(key, usage, ciphertext, state);
         }
         _ => {}
     }
@@ -472,6 +503,7 @@ fn decrypt_inner_state(
         Ok(conf)
     } else {
         let mut p = cts::decrypt(&keys.ke, &iv, c)?;
+        update_iv(state, c);
         let expected = hmac_truncated(key.etype(), &keys.ki, &p)?;
         if mac_verify(mac, &expected).is_err() {
             p.zeroize();
@@ -481,7 +513,6 @@ fn decrypt_inner_state(
             p.zeroize();
             return Err(Error::CiphertextTooShort);
         }
-        update_iv(state, c);
         let plain = p[BLOCK..].to_vec();
         p.zeroize();
         Ok(plain)

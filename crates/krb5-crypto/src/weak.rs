@@ -297,6 +297,7 @@ pub(crate) fn camellia_encrypt_with_conf(
     usage: KeyUsage,
     confounder: &[u8],
     plaintext: &[u8],
+    state: &mut crate::CipherState,
 ) -> Result<Vec<u8>, Error> {
     if confounder.len() != 16 {
         return Err(Error::InvalidConfounder);
@@ -306,8 +307,9 @@ pub(crate) fn camellia_encrypt_with_conf(
     let mut data = Vec::with_capacity(16 + plaintext.len());
     data.extend_from_slice(confounder);
     data.extend_from_slice(plaintext);
-    let c = crate::cts::camellia_encrypt(&ke, &[0u8; 16], &data)?;
+    let c = crate::cts::camellia_encrypt(&ke, &state.iv, &data)?;
     let h = cmac_camellia(&ki, &data)?;
+    crate::ops::update_iv(state, &c);
     let mut out = c;
     out.extend_from_slice(&h);
     Ok(out)
@@ -317,6 +319,7 @@ pub(crate) fn camellia_decrypt(
     key: &ProtocolKey,
     usage: KeyUsage,
     ciphertext: &[u8],
+    state: &mut crate::CipherState,
 ) -> Result<Vec<u8>, Error> {
     if ciphertext.len() < 16 + 16 {
         return Err(Error::CiphertextTooShort);
@@ -324,7 +327,9 @@ pub(crate) fn camellia_decrypt(
     let (c, mac) = ciphertext.split_at(ciphertext.len() - 16);
     let ke = dk_camellia(key.as_bytes(), &usage.derivation_constant(0xAA))?;
     let ki = dk_camellia(key.as_bytes(), &usage.derivation_constant(0x55))?;
-    let p = crate::cts::camellia_decrypt(&ke, &[0u8; 16], c)?;
+    let p = crate::cts::camellia_decrypt(&ke, &state.iv, c)?;
+    // MIT `krb5int_dk_cmac_decrypt` (`enc_dk_cmac.c:163-174`): the provider decrypts, and takes the state, before the CMAC is compared.
+    crate::ops::update_iv(state, c);
     let expected = cmac_camellia(&ki, &p)?;
     crate::derive::mac_verify(mac, &expected)?;
     if p.len() < 16 {
