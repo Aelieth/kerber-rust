@@ -111,7 +111,8 @@ pub struct AsTicketOpts {
     pub forwardable: bool,
     /// Request `proxiable`.
     pub proxiable: bool,
-    /// Host addresses (`-a`). `None` omits the field.
+    /// Host addresses: [`crate::os_localaddr`]'s list for `kinit -a` or a false `noaddresses`. `None`
+    /// omits the field, and so does a list with no element.
     pub addresses: Option<krb5_types::HostAddresses>,
     /// `kinit -n`: REQUEST_ANONYMOUS + unsigned PKINIT.
     pub anonymous: bool,
@@ -1652,7 +1653,8 @@ fn build_as_req_from(
     padata: Option<Vec<PaData>>,
     etypes: &[i32],
 ) -> Result<AsReq, Error> {
-    let addresses = req.ticket.addresses.clone();
+    // MIT `DEFOPTIONALEMPTYTYPE` (`lib/krb5/asn.1/asn1_encode.h:389-396`): the request's address field is present only for a list with an element.
+    let addresses = req.ticket.addresses.clone().filter(|list| !list.is_empty());
     let mut as_req = build_as_req(
         &req.cname,
         req.realm,

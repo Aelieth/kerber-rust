@@ -24,7 +24,7 @@ use krb5_client::errmsg::{Code, Krb5Error};
 use krb5_client::{
     FileCcache, KeyExpNotice, KeytabName, KinitParams, NewPasswordPrompter, PromptReply,
     kinit_prompted, kinit_with, kt_client_default_name, kt_default_name, kt_resolve,
-    local_host_addresses, mit_error_code, store_ccache_keep_default,
+    mit_error_code, store_ccache_keep_default,
 };
 use krb5_config::{CcSpec, env_new_password, env_password, parse_ccspec, resolve_ccspec};
 use krb5_protocol::{AsTicketOpts, KdcAddr, Keytab};
@@ -432,14 +432,26 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         allowed_preauth_type: None,
         pa_config_in: None,
     };
-    // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:991-1005`): a caller address list wins; otherwise absent or true `noaddresses` sends none, and false sends the local addresses.
-    if opts.addresses == Some(true)
-        || (opts.addresses.is_none()
-            && conf
-                .as_ref()
-                .is_some_and(|c| c.noaddresses_for(&realm) == Some(false)))
-    {
-        ticket.addresses = local_host_addresses();
+    // MIT `k5_kinit` (`clients/kinit/kinit.c:674-683`): `-a` sets `krb5_os_localaddr`'s list as the request's, which fails the command when it cannot be read, and `-A` sets none.
+    // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): with neither, `noaddresses` absent or true sends none, and false sends that list.
+    match opts.addresses {
+        Some(true) => match krb5_protocol::os_localaddr() {
+            Ok(list) => ticket.addresses = Some(list),
+            Err(e) => {
+                eprintln!(
+                    "kinit: {} getting local addresses",
+                    Krb5Error::from_local_addresses(&e)
+                );
+                return Err(Failure::Reported);
+            }
+        },
+        Some(false) => {}
+        None => {
+            ticket.addresses = krb5_protocol::init_creds_addresses(
+                conf.as_ref().and_then(|c| c.noaddresses_for(&realm)),
+            )
+            .map_err(|e| Failure::Error(Krb5Error::from_local_addresses(&e)))?;
+        }
     }
     let keytab = if opts.keytab {
         let name = match (&opts.keytab_path, opts.client_keytab) {

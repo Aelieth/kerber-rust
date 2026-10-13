@@ -103,6 +103,19 @@ fn run<R: BufRead, W: Write>(
         client.realm.as_bytes(),
     ));
     krb5_protocol::trace::init_creds_service("kadmin/changepw");
+    // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): `kpasswd` sets no address list, so `noaddresses` decides: absent or true sends none, and false sends `krb5_os_localaddr`'s list.
+    let addresses = match krb5_protocol::init_creds_addresses(conf.noaddresses_for(&client.realm)) {
+        Ok(list) => list,
+        Err(e) => {
+            // MIT `main` (`kpasswd.c:132-142`): a failed request is its error's text and "getting initial ticket".
+            let text = match &e {
+                Error::Io { message, .. } => message.clone(),
+                other => other.to_string(),
+            };
+            eprintln!("{prog}: {text} getting initial ticket");
+            return 1;
+        }
+    };
     let req = AsRequest {
         cname: client.name,
         realm: &client.realm,
@@ -119,6 +132,7 @@ fn run<R: BufRead, W: Write>(
             lifetime: Some(300),
             forwardable: false,
             proxiable: false,
+            addresses,
             ..AsTicketOpts::default()
         },
     };

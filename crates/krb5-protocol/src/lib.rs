@@ -109,7 +109,7 @@ pub use keytab::{
     Keytab, KeytabEntry, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
     sort_etypes_keytab_first,
 };
-pub use localaddr::{host_addresses_from, os_localaddr};
+pub use localaddr::{host_addresses_from, init_creds_addresses, os_localaddr};
 pub use lock_file::{FileLock, lock_file, lock_file_how};
 pub use preauth::{
     apply_strengthen, armor_key, attach_fast, attach_fast_with_options, build_fast_armor,

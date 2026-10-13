@@ -207,6 +207,16 @@ impl Krb5Error {
         }
     }
 
+    /// The failure of `krb5_os_localaddr`: the errno's text, as `com_err` prints it.
+    /// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): the call returns the errno of a failed `getifaddrs`.
+    #[must_use]
+    pub fn from_local_addresses(e: &krb5_protocol::Error) -> Self {
+        match e {
+            krb5_protocol::Error::Io { message, .. } => Self::new(Code::Other, message.clone()),
+            other => Self::new(Code::Other, other.to_string()),
+        }
+    }
+
     /// An OS error under its `strerror` text, as `com_err` prints an errno.
     #[must_use]
     pub fn from_os(e: &io::Error) -> Self {
@@ -514,6 +524,20 @@ mod tests {
             Krb5Error::of(Code::KdcrepModified).message,
             "KDC reply did not match expectations"
         );
+    }
+
+    /// A failed interface walk reads as its errno's text, the one `kinit -a` prints before "getting local addresses".
+    /// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): the call returns the errno of a failed `getifaddrs`.
+    #[test]
+    fn a_failed_interface_walk_is_the_errno_text() {
+        let e = krb5_protocol::Error::Io {
+            message: "Permission denied".into(),
+            kind: io::ErrorKind::PermissionDenied,
+            retryable: false,
+        };
+        let got = Krb5Error::from_local_addresses(&e);
+        assert_eq!(got.code, Code::Other);
+        assert_eq!(got.message, "Permission denied");
     }
 
     /// Live MIT 1.22.2 `kinit -c /tmp/nonexistent-dir/cc`: "Failed to store credentials: No

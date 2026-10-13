@@ -11,17 +11,14 @@ use crate::error::Error;
 
 /// The host's addresses, in interface order.
 /// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): the addresses of the interfaces that are up, through `getifaddrs`, as [`host_addresses_from`] picks them.
-/// MIT `get_localaddrs` (`lib/krb5/os/localaddr.c:1317-1368`): the interfaces' addresses, then those `[libdefaults] extra_addresses` names; the second half is not read.
+/// MIT `get_localaddrs` (`lib/krb5/os/localaddr.c:1317-1368`): the addresses `[libdefaults] extra_addresses` names, then the interfaces'; the first part is not read.
 ///
 /// # Errors
 ///
-/// [`Error::Io`] when `getifaddrs` fails (MIT returns its errno).
+/// [`Error::Io`] when `getifaddrs` fails, carrying the errno's text as MIT's callers print it
+/// (`getifaddrs_error`).
 pub fn os_localaddr() -> Result<Vec<HostAddress>, Error> {
-    let interfaces = getifaddrs().map_err(|e| Error::Io {
-        message: format!("getifaddrs: {e}"),
-        kind: std::io::ErrorKind::Other,
-        retryable: false,
-    })?;
+    let interfaces = getifaddrs().map_err(getifaddrs_error)?;
     Ok(host_addresses_from(interfaces.map(|i| {
         let ip = i.address.and_then(|a| {
             a.as_sockaddr_in()
@@ -30,6 +27,38 @@ pub fn os_localaddr() -> Result<Vec<HostAddress>, Error> {
         });
         (i.flags.contains(InterfaceFlags::IFF_UP), ip)
     })))
+}
+
+/// The error of a failed `getifaddrs`: its errno, with the text `error_message` gives it.
+/// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): the call returns that errno, which `kinit -a` prints as `<text> getting local addresses`.
+fn getifaddrs_error(errno: nix::errno::Errno) -> Error {
+    let raw = errno as i32;
+    Error::Io {
+        message: crate::trace::error_message(i64::from(raw)),
+        kind: std::io::Error::from_raw_os_error(raw).kind(),
+        retryable: false,
+    }
+}
+
+/// The address list an AS-REQ carries when the caller set none of its own.
+/// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): `[libdefaults] noaddresses` absent or true sends none, and false sends [`os_localaddr`]'s list.
+///
+/// # Errors
+///
+/// As [`os_localaddr`], when `noaddresses` is false.
+pub fn init_creds_addresses(noaddresses: Option<bool>) -> Result<Option<Vec<HostAddress>>, Error> {
+    init_creds_addresses_from(noaddresses, os_localaddr)
+}
+
+fn init_creds_addresses_from(
+    noaddresses: Option<bool>,
+    local: impl FnOnce() -> Result<Vec<HostAddress>, Error>,
+) -> Result<Option<Vec<HostAddress>>, Error> {
+    if noaddresses == Some(false) {
+        local().map(Some)
+    } else {
+        Ok(None)
+    }
 }
 
 /// The host addresses of interface entries `(is up, address)`, an address of another family or
@@ -141,6 +170,82 @@ mod tests {
             address: a.octets().to_vec().into(),
         };
         assert_eq!(got, vec![want(global), want(mapped)]);
+    }
+
+    fn inet6(a: &str) -> HostAddress {
+        HostAddress {
+            addr_type: 24,
+            address: a.parse::<Ipv6Addr>().unwrap().octets().to_vec().into(),
+        }
+    }
+
+    /// Interface entries `(is up, address)` of a multi-homed host: loopbacks, a bridge that is down,
+    /// an entry with no address, a link-local IPv6 address, and three addresses that count.
+    fn multi_homed_host() -> Vec<(bool, Option<IpAddr>)> {
+        vec![
+            (true, Some(v4(127, 0, 0, 1))),
+            (true, Some(IpAddr::V6(Ipv6Addr::LOCALHOST))),
+            (true, Some(v4(10, 10, 42, 59))),
+            (
+                true,
+                Some(IpAddr::V6("fe80::53f2:c09:7db8:51e9".parse().unwrap())),
+            ),
+            (true, Some(IpAddr::V6("2001:db8::5".parse().unwrap()))),
+            (true, Some(v4(192, 168, 122, 1))),
+            (false, Some(v4(172, 17, 0, 1))),
+            (true, None),
+        ]
+    }
+
+    /// `kinit -a` and a false `noaddresses` send this list, not the one address a route towards 8.8.8.8 picks.
+    /// MIT `foreach_localaddr` (`lib/krb5/os/localaddr.c:415-481`): every up entry that is not a loopback or a repeat, in interface order.
+    /// MIT `add_addr` (`lib/krb5/os/localaddr.c:1162-1195`): IPv6 addresses are `ADDRTYPE_INET6`, and a link-local one is dropped.
+    #[test]
+    fn a_multi_homed_host_lists_every_up_address_ipv6_included_in_interface_order() {
+        let want = vec![
+            inet(10, 10, 42, 59),
+            inet6("2001:db8::5"),
+            inet(192, 168, 122, 1),
+        ];
+        assert_eq!(host_addresses_from(multi_homed_host()), want);
+        let sent =
+            init_creds_addresses_from(Some(false), || Ok(host_addresses_from(multi_homed_host())));
+        assert_eq!(sent.unwrap(), Some(want));
+    }
+
+    /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): only a `noaddresses` that is false reads the interfaces.
+    #[test]
+    fn noaddresses_false_alone_reads_the_interfaces() {
+        let read = std::cell::Cell::new(0);
+        let local = || {
+            read.set(read.get() + 1);
+            Ok(host_addresses_from(multi_homed_host()))
+        };
+        assert_eq!(init_creds_addresses_from(None, local).unwrap(), None);
+        assert_eq!(init_creds_addresses_from(Some(true), local).unwrap(), None);
+        assert_eq!(read.get(), 0, "an absent or true noaddresses sends none");
+        assert_eq!(
+            init_creds_addresses_from(Some(false), local)
+                .unwrap()
+                .map(|l| l.len()),
+            Some(3)
+        );
+        assert_eq!(read.get(), 1);
+    }
+
+    /// MIT `krb5_os_localaddr` (`lib/krb5/os/localaddr.c:1311-1315`): a `getifaddrs` that fails returns its errno, and `noaddresses = false` fails the request with it.
+    #[test]
+    fn a_failed_getifaddrs_is_the_errno_and_fails_a_false_noaddresses() {
+        match getifaddrs_error(nix::errno::Errno::EACCES) {
+            Error::Io { message, kind, .. } => {
+                assert_eq!(message, "Permission denied");
+                assert_eq!(kind, std::io::ErrorKind::PermissionDenied);
+            }
+            e => panic!("{e}"),
+        }
+        let failing = || Err(getifaddrs_error(nix::errno::Errno::EACCES));
+        assert!(init_creds_addresses_from(Some(false), failing).is_err());
+        assert!(init_creds_addresses_from(None, failing).unwrap().is_none());
     }
 
     #[test]

@@ -1217,10 +1217,12 @@ fn kinit_inner(
                 rlife: None,
                 forwardable: false,
                 proxiable: false,
-                // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:991-1005`): absent or true `noaddresses` sends none, and false sends the local addresses.
-                addresses: krb5_config::load_krb5_conf()
-                    .filter(|c| c.noaddresses_for(&realm_s) == Some(false))
-                    .and_then(|_| local_host_addresses()),
+                // MIT `make_chpw_options` (`lib/krb5/krb/gic_pwd.c:163-163`): this request drops the address list the caller set.
+                // MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:998-1005`): so `noaddresses` decides, as for any request; false sends `krb5_os_localaddr`'s list.
+                addresses: krb5_protocol::init_creds_addresses(
+                    krb5_config::load_krb5_conf().and_then(|c| c.noaddresses_for(&realm_s)),
+                )
+                .map_err(|e| Krb5Error::from_local_addresses(&e))?,
                 anonymous: false,
                 starttime: None,
                 pac_request,
@@ -1398,21 +1400,6 @@ fn prompt_and_change(
         }
     }
     Err(ret.into())
-}
-
-/// Local IPv4 address for `kinit -a` (MIT ADDRTYPE_INET = 2).
-#[must_use]
-pub fn local_host_addresses() -> Option<krb5_types::HostAddresses> {
-    use std::net::{SocketAddr, UdpSocket};
-    let sock = UdpSocket::bind("0.0.0.0:0").ok()?;
-    sock.connect("8.8.8.8:80").ok()?;
-    let SocketAddr::V4(v4) = sock.local_addr().ok()? else {
-        return None;
-    };
-    Some(vec![krb5_types::HostAddress {
-        addr_type: 2,
-        address: v4.ip().octets().to_vec().into(),
-    }])
 }
 
 fn resolve_kdc(realm: &str, argv: &KdcAddr) -> KdcAddr {
