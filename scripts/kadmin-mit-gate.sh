@@ -46,28 +46,34 @@ docker rm -f "$NAME_MIT" >/dev/null 2>&1 || true
 docker run -d --name "$NAME_MIT" "$IMAGE" >/dev/null
 _kadmin_cleanup "docker rm -f '$NAME_MIT' >/dev/null 2>&1 || true"
 ok=0
-for _ in $(seq 1 90); do
+for _ in $(seq 1 360); do
     logs="$(docker logs "$NAME_MIT" 2>&1 || true)"
     if echo "$logs" | grep -q '"event":"harness.kinit".*"outcome":"ok"'; then
         ok=1
         break
     fi
-    sleep 1
+    sleep 0.25
 done
 if [ "$ok" != 1 ]; then
     docker logs "$NAME_MIT" >&2 || true
     log "kadmin.gate" "error" ',"error":"MIT harness did not become ready"'
     exit 1
 fi
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw extract-secret extract/admin'
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw adminpassword admin/admin'
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw norename-secret norename'
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw scoped-secret scoped'
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw restricted-secret restricted'
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw nodel-secret nodel'
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw victim-secret victim'
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw ro-secret ro'
-kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw rolist-secret rolist'
+# One kadmin.local session makes the nine principals (nine docker execs were a second of this gate); each must say it was created.
+MIT_SETUP="$(printf '%s\n' \
+    'addprinc -pw extract-secret extract/admin' \
+    'addprinc -pw adminpassword admin/admin' \
+    'addprinc -pw norename-secret norename' \
+    'addprinc -pw scoped-secret scoped' \
+    'addprinc -pw restricted-secret restricted' \
+    'addprinc -pw nodel-secret nodel' \
+    'addprinc -pw victim-secret victim' \
+    'addprinc -pw ro-secret ro' \
+    'addprinc -pw rolist-secret rolist' | mit_kadmin_local -i "$NAME_MIT" -- 2>&1 || true)"
+echo "$MIT_SETUP"
+for p in extract/admin admin/admin norename scoped restricted nodel victim ro rolist; do
+    [[ $MIT_SETUP == *"Principal \"$p@KERBER.TEST\" created."* ]] || die "MIT setup: $p@KERBER.TEST was not created"
+done
 docker exec "$NAME_MIT" sh -c 'printf "%s\n" "*/admin@KERBER.TEST *e" "admin@KERBER.TEST *e" "extract/admin@KERBER.TEST *e" "norename@KERBER.TEST acilm" "scoped@KERBER.TEST ad *@KERBER.TEST" "restricted@KERBER.TEST a *@KERBER.TEST -clearpolicy" "nodel@KERBER.TEST *D" "ro@KERBER.TEST i" "rolist@KERBER.TEST l" "some_alias@KERBER.TEST a aliasname@KERBER.TEST" "some_alias@KERBER.TEST m user@KERBER.TEST" "restricted_alias@KERBER.TEST ai *@KERBER.TEST +requires_preauth" > /var/kerberos/krb5kdc/kadm5.acl'
 echo "==== MIT backdate user last_pwd_change to 1000000000 (kdb5_util dump, edit tl-data 1, load) ===="
 docker exec "$NAME_MIT" sh -c 'kdb5_util dump /tmp/bd.dump >/dev/null 2>&1'
@@ -257,6 +263,9 @@ echo "$MIT_HIST_GET" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 MIT_HIST_PROBE="$(kadm5_probe "$NAME_MIT" admin/admin valid /etc/krb5.conf kadmin/history@KERBER.TEST 2>&1 || true)"
 echo "$MIT_HIST_PROBE"
 echo "$MIT_HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
+echo "==== MIT's service-name checks: kadm5 exact (check_rpcsec_auth), iprop any prefix of kiprop (check_iprop_rpcsec_auth) ===="
+service_name_principals mit_kadmin_local -i "$NAME_MIT" --
+service_name_cells mit "$NAME_MIT" admin/admin /etc/krb5.conf "$MIT_IPROP_PORT"
 echo "==== kadmin/history getprinc shape: Rust vs MIT (create_hist: max_life 64 s, no attributes, one key at kvno 2, no policy) ===="
 # Last modified date is dropped so the Z1.1 rust/MIT getprinc byte-diff
 # sees the modifier. History itself is created by kadmind RPC (`admin@`)

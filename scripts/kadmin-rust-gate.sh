@@ -486,6 +486,9 @@ echo "$HIST_GET" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 HIST_PROBE="$(kadm5_probe "$NAME" admin@KERBER.TEST valid /tmp/kadmin-krb5.conf kadmin/history@KERBER.TEST 2>&1 || true)"
 echo "$HIST_PROBE"
 echo "$HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
+echo "==== service-name checks vs Rust kadmind: kadm5 exact, iprop kiprop alone (MIT's iprop takes any prefix of it: docs/mit-deviations.md) ===="
+service_name_principals mit_kadmin -i -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" -- -p admin@KERBER.TEST -w adminpassword
+service_name_cells rust "$NAME" admin@KERBER.TEST /tmp/kadmin-krb5.conf "$KADMIND_PORT"
 
 echo "==== MIT kadmin listprincs ===="
 LIST="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \

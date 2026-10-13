@@ -108,8 +108,11 @@ alias_cells() {
 
     echo "==== $leg alias: chains resolve to depth 10; 11 and a self-alias are not found ===="
     local i
+    # One kadmin session makes the ten aliases (ten kadmin clients were a second and a half); each must name its target.
+    out="$(for i in $(seq 2 11); do echo "alias a$i a$((i - 1))"; done |
+        mit_kadmin -i -e KRB5_CONFIG="$conf" "$ctn" -- -p "$admin" -w adminpassword 2>&1 || true)"
     for i in $(seq 2 11); do
-        kadm "alias a$i a$((i - 1))" | grep -F "aliased to \"a$((i - 1))@KERBER.TEST\"."
+        [[ $out == *"aliased to \"a$((i - 1))@KERBER.TEST\"."* ]] || die "$leg alias: a$i is not aliased to a$((i - 1))"
     done
     kadm 'alias selfalias selfalias' | grep -F 'Principal "selfalias@KERBER.TEST" aliased to "selfalias@KERBER.TEST".'
     out="$(kvno_alias a10)"
