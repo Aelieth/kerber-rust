@@ -19,6 +19,14 @@
 //!   kpasswd acceptor (`handle_kpasswd_rfc3244` over the realm of the MIT dump) to each frame
 //!   against MIT's (`id<TAB>0|req[:detail]|priv[:detail]|drop`) from the rd-priv oracle's `kpasswd`
 //!   mode; exit 1 when any parts from MIT's.
+//! - `rd-sweep kadmind <keytab> <client>`: AP-REQs for the keytab's service principals (as `ktadd` made it:
+//!   `kadmin/admin`, `kadmin/changepw`, `kadmin/history`, a host), each sealed in each of its keys, and in its
+//!   first with the kvno wrong or the cleartext server another's: `id<TAB>ap-req-hex`.
+//! - `rd-sweep judge-kdb <cases> <mit> <dump> <master-password>`: what kadmind's GSS acceptor reads from the
+//!   KDB keytab (`kdb_rd_req` over the realm of the MIT dump) for each case, with no name (RPCSEC_GSS), as
+//!   `kadmin/admin` and as `kadmin/changepw` (AUTH_GSSAPI's names), against MIT's `krb5_rd_req`
+//!   (`id<TAB>noname<TAB>admin<TAB>changepw`, each `0` or the code) from the oracle's `kadmind` mode, the
+//!   three answers joined by `|` in the `SAME` and `PART` lines; exit 1 when any parts from MIT's.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -356,17 +364,32 @@ struct KpEnv {
     raddr: Option<[u8; 4]>,
 }
 
-/// The AP-REQ for `authenticator` (its DER as given), in an INITIAL ticket for `kadmin/changepw`
-/// sealed in the keytab entry's key.
-fn kp_ap_req(env: &KpEnv, authenticator: &[u8], now: &KerberosTime) -> Result<Vec<u8>, String> {
+/// What a service ticket is made of: who it is for, the server its cleartext names (in the ticket's realm) and
+/// the key, enctype and kvno it is sealed in.
+struct TicketSpec {
+    realm: String,
+    client: String,
+    srealm: String,
+    sname: PrincipalName,
+    kvno: Option<u32>,
+    etype: i32,
+    svc: ProtocolKey,
+}
+
+/// The AP-REQ for `authenticator` (its DER as given), in an INITIAL ticket as `spec` says.
+fn ticket_ap_req(
+    spec: &TicketSpec,
+    authenticator: &[u8],
+    now: &KerberosTime,
+) -> Result<Vec<u8>, String> {
     let part = EncTicketPart {
         flags: TicketFlags::initial_preauth(),
         key: EncryptionKey {
             keytype: 18,
             keyvalue: OctetString::from(SESSION_KEY.to_vec()),
         },
-        crealm: ascii(&env.realm),
-        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [env.client.as_str()]),
+        crealm: ascii(&spec.realm),
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [spec.client.as_str()]),
         transited: TransitedEncoding::empty(),
         authtime: now.add_seconds(-60).map_err(|e| e.to_string())?,
         starttime: None,
@@ -377,12 +400,12 @@ fn kp_ap_req(env: &KpEnv, authenticator: &[u8], now: &KerberosTime) -> Result<Ve
     };
     let ticket = Ticket {
         tkt_vno: Ticket::VNO,
-        realm: ascii(&env.realm),
-        sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]),
+        realm: ascii(&spec.srealm),
+        sname: spec.sname.clone(),
         enc_part: EncryptedData {
-            etype: env.etype,
-            kvno: Some(env.kvno),
-            cipher: encrypt(&env.svc, usage(ku::TICKET)?, &der!(&part)?)
+            etype: spec.etype,
+            kvno: spec.kvno,
+            cipher: encrypt(&spec.svc, usage(ku::TICKET)?, &der!(&part)?)
                 .map_err(|e| e.to_string())?
                 .into(),
         },
@@ -407,6 +430,24 @@ fn kp_ap_req(env: &KpEnv, authenticator: &[u8], now: &KerberosTime) -> Result<Ve
     der!(&ap)
 }
 
+/// The AP-REQ for `authenticator` (its DER as given), in an INITIAL ticket for `kadmin/changepw`
+/// sealed in the keytab entry's key.
+fn kp_ap_req(env: &KpEnv, authenticator: &[u8], now: &KerberosTime) -> Result<Vec<u8>, String> {
+    ticket_ap_req(
+        &TicketSpec {
+            realm: env.realm.clone(),
+            client: env.client.clone(),
+            srealm: env.realm.clone(),
+            sname: PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]),
+            kvno: Some(env.kvno),
+            etype: env.etype,
+            svc: env.svc.clone(),
+        },
+        authenticator,
+        now,
+    )
+}
+
 /// A kpasswd request: `[plen:2][vno:2][aplen:2][AP-REQ][KRB-PRIV]` (RFC 3244 section 2).
 fn kp_frame(vno: u16, ap: &[u8], msg: &[u8]) -> Vec<u8> {
     let aplen = u16::try_from(ap.len()).unwrap_or(u16::MAX);
@@ -420,17 +461,12 @@ fn kp_frame(vno: u16, ap: &[u8], msg: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Every kpasswd case as a frame: the pristine request (twice, as `ap-req/pristine` and
-/// `krb-priv/pristine`); the authenticator and the `EncKrbPrivPart` broken each way and re-encrypted;
-/// the AP-REQ and the KRB-PRIV themselves broken each way; and, for `setpw`, the ChangePasswdData
-/// broken each way and one that names no target.
-fn kp_cases(env: &KpEnv) -> Result<Vec<(String, Vec<u8>)>, String> {
-    let now = KerberosTime::now();
-    let vno: u16 = if env.setpw { 0xff80 } else { 1 };
-    let authenticator = Authenticator {
+/// The authenticator every request case starts from: the client, a checksum, a subkey and a sequence number.
+fn pristine_authenticator(realm: &str, client: &str, now: &KerberosTime) -> Authenticator {
+    Authenticator {
         authenticator_vno: Authenticator::VNO,
-        crealm: ascii(&env.realm),
-        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [env.client.as_str()]),
+        crealm: ascii(realm),
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [client]),
         cksum: Some(Checksum {
             cksumtype: 16,
             checksum: OctetString::from(vec![0xcc; 12]),
@@ -452,7 +488,17 @@ fn kp_cases(env: &KpEnv) -> Result<Vec<(String, Vec<u8>)>, String> {
                 ad_data: OctetString::from(b"b".to_vec()),
             },
         ]),
-    };
+    }
+}
+
+/// Every kpasswd case as a frame: the pristine request (twice, as `ap-req/pristine` and
+/// `krb-priv/pristine`); the authenticator and the `EncKrbPrivPart` broken each way and re-encrypted;
+/// the AP-REQ and the KRB-PRIV themselves broken each way; and, for `setpw`, the ChangePasswdData
+/// broken each way and one that names no target.
+fn kp_cases(env: &KpEnv) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let now = KerberosTime::now();
+    let vno: u16 = if env.setpw { 0xff80 } else { 1 };
+    let authenticator = pristine_authenticator(&env.realm, &env.client, &now);
     let user_data: Vec<u8> = if env.setpw {
         let cpd = ChangePasswdData {
             newpasswd: OctetString::from(b"rd-sweep".to_vec()),
@@ -641,6 +687,217 @@ fn judge_explicit(frames: &str, mit: &str, dump: &str, password: &str) -> Result
     Ok(parts == 0)
 }
 
+/// A service principal of the keytab and its keys, as the entries hold them.
+struct KaService {
+    realm: String,
+    name: PrincipalName,
+    keys: Vec<(i32, u32, ProtocolKey)>,
+}
+
+/// The services of a keytab, in order of first appearance, with each one's entries in file order.
+fn ka_services(kt: &Keytab) -> Vec<KaService> {
+    let mut out: Vec<KaService> = Vec::new();
+    for e in &kt.entries {
+        let realm = String::from_utf8_lossy(e.realm.as_bytes()).into_owned();
+        let entry = (e.key.etype().to_iana(), e.kvno, e.key.clone());
+        match out
+            .iter_mut()
+            .find(|s| s.realm == realm && s.name.name_string == e.name.name_string)
+        {
+            Some(s) => s.keys.push(entry),
+            None => out.push(KaService {
+                realm,
+                name: e.name.clone(),
+                keys: vec![entry],
+            }),
+        }
+    }
+    out
+}
+
+/// Every `kadmind` case as an AP-REQ: for each service of the keytab, a ticket sealed in each of its keys at
+/// that key's kvno (`<service>` for the first, `<service>/key<N>` for the others), and, for its first key,
+/// one with the kvno 0, one at kvno 99, ones sealed in a key of an enctype the keytab lacks
+/// (`<service>/etype=<n>`: des3, rc4, camellia) and, for `kadmin/admin` and `kadmin/changepw`, ones whose
+/// cleartext server is each other service, `nosuch/service`, or in another realm.
+fn ka_cases(client: &str, services: &[KaService]) -> Result<Vec<(String, Vec<u8>)>, String> {
+    let now = KerberosTime::now();
+    let mut out = Vec::new();
+    for svc in services {
+        let name = svc.name.unparse();
+        let authenticator = der!(&pristine_authenticator(&svc.realm, client, &now))?;
+        let ticket = |sname: &PrincipalName, srealm: &str, kvno: Option<u32>, k: usize| {
+            let (etype, _, ref key) = *svc.keys.get(k).ok_or("no such key")?;
+            ticket_ap_req(
+                &TicketSpec {
+                    realm: svc.realm.clone(),
+                    client: client.to_owned(),
+                    srealm: srealm.to_owned(),
+                    sname: sname.clone(),
+                    kvno,
+                    etype,
+                    svc: key.clone(),
+                },
+                &authenticator,
+                &now,
+            )
+        };
+        for (k, (_, kvno, _)) in svc.keys.iter().enumerate() {
+            let id = if k == 0 {
+                name.clone()
+            } else {
+                format!("{name}/key{k}")
+            };
+            out.push((id, ticket(&svc.name, &svc.realm, Some(*kvno), k)?));
+        }
+        out.push((
+            format!("{name}/kvno0"),
+            ticket(&svc.name, &svc.realm, Some(0), 0)?,
+        ));
+        out.push((
+            format!("{name}/kvno99"),
+            ticket(&svc.name, &svc.realm, Some(99), 0)?,
+        ));
+        // A key in an enctype no entry of the keytab has, at the first key's kvno.
+        let first = svc.keys.first().map(|k| k.1);
+        for (etype, len) in [
+            (EncryptionType::Des3CbcSha1, 24),
+            (EncryptionType::Rc4Hmac, 16),
+            (EncryptionType::Camellia128CtsCmac, 16),
+            (EncryptionType::Camellia256CtsCmac, 32),
+        ] {
+            let spec = TicketSpec {
+                realm: svc.realm.clone(),
+                client: client.to_owned(),
+                srealm: svc.realm.clone(),
+                sname: svc.name.clone(),
+                kvno: first,
+                etype: etype.to_iana(),
+                svc: ProtocolKey::from_bytes(etype, &vec![0x43; len]).map_err(|e| e.to_string())?,
+            };
+            out.push((
+                format!("{name}/etype={}", etype.to_iana()),
+                ticket_ap_req(&spec, &authenticator, &now)?,
+            ));
+        }
+        let names = svc
+            .name
+            .name_string
+            .iter()
+            .map(|c| String::from_utf8_lossy(c.as_bytes()).into_owned())
+            .collect::<Vec<_>>();
+        if names == ["kadmin", "admin"] || names == ["kadmin", "changepw"] {
+            for other in services
+                .iter()
+                .filter(|o| o.name.name_string != svc.name.name_string)
+            {
+                out.push((
+                    format!("{name}/as={}", other.name.unparse()),
+                    ticket(&other.name, &other.realm, first, 0)?,
+                ));
+            }
+            let nosuch = PrincipalName::new(PrincipalName::NT_SRV_INST, ["nosuch", "service"]);
+            out.push((
+                format!("{name}/as=nosuch/service"),
+                ticket(&nosuch, &svc.realm, first, 0)?,
+            ));
+            out.push((
+                format!("{name}/realm=OTHER.REALM"),
+                ticket(&svc.name, "OTHER.REALM", first, 0)?,
+            ));
+        }
+    }
+    Ok(out)
+}
+
+/// `rd-sweep kadmind <keytab> <client>`: the cases, one `id<TAB>hex` line each.
+fn kadmind(keytab: &str, client: &str) -> Result<(), String> {
+    let bytes = std::fs::read(keytab).map_err(|e| format!("{keytab}: {e}"))?;
+    let kt = Keytab::parse(&bytes).map_err(|e| format!("{keytab}: {e}"))?;
+    let services = ka_services(&kt);
+    if services.is_empty() {
+        return Err("no keytab entry".into());
+    }
+    for (id, ap) in ka_cases(client, &services)? {
+        println!("{id}\t{}", hex(&ap));
+    }
+    Ok(())
+}
+
+/// How the verifier's refusal reads in the rd-priv oracle's words: `0`, `krb5:<n>` for code n of the krb5 table,
+/// `other:<n>` for another table's.
+fn kdb_answer(e: &Result<krb5_protocol::ApVerifyOk, Error>) -> String {
+    match e {
+        Ok(_) => "0".into(),
+        Err(Error::KrbError { code, .. }) => format!("krb5:{code}"),
+        // `KRB5KRB_AP_ERR_BAD_INTEGRITY`: the ticket does not decrypt under the key it was given.
+        Err(Error::Crypto(_)) => "krb5:31".into(),
+        // `KRB5_KDB_NO_PERMITTED_KEY`.
+        Err(Error::KdbNoPermittedKey) => "other:-1780008418".into(),
+        Err(Error::Asn1(_)) => "asn1".into(),
+        Err(other) => format!("other:{other}"),
+    }
+}
+
+/// `rd-sweep judge-kdb <cases> <mit> <dump> <master-password>`.
+fn judge_kdb(cases: &str, mit: &str, dump: &str, password: &str) -> Result<bool, String> {
+    let cases = std::fs::read_to_string(cases).map_err(|e| format!("{cases}: {e}"))?;
+    let mit = std::fs::read_to_string(mit).map_err(|e| format!("{mit}: {e}"))?;
+    let mit: std::collections::HashMap<&str, [&str; 3]> = mit
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split('\t').collect();
+            let [id, a, b, c] = f.as_slice() else {
+                return None;
+            };
+            Some((*id, [*a, *b, *c]))
+        })
+        .collect();
+    let store = krb5_kdc::load_dump_path(std::path::Path::new(dump), password.as_bytes())
+        .map_err(|e| format!("{dump}: {e}"))?;
+    let realm = store.realm().to_owned();
+    let shared = krb5_kdc::shared_dump(store);
+    let permitted = krb5_protocol::permitted_enctypes_kdc().map_err(|e| e.to_string())?;
+    let acceptors = [
+        None,
+        Some(krb5_kdc::principals::kadmin_admin()),
+        Some(krb5_kdc::principals::kadmin_changepw()),
+    ];
+    let (mut n, mut parts) = (0, 0);
+    for line in cases.lines().filter(|l| !l.starts_with('#')) {
+        let Some((id, hexed)) = line.split_once('\t') else {
+            return Err(format!("bad case line {line}"));
+        };
+        let ap = unhex(hexed).ok_or("bad AP-REQ hex")?;
+        let ours: Vec<String> = acceptors
+            .iter()
+            .map(|acceptor| {
+                kdb_answer(&krb5_admin::kdb_rd_req(
+                    &shared,
+                    &realm,
+                    acceptor.as_ref(),
+                    &permitted,
+                    &ap,
+                    &ReplayCache::new(),
+                ))
+            })
+            .collect();
+        let theirs = mit
+            .get(id)
+            .map_or_else(|| "none".to_owned(), |t| t.join("|"));
+        let ours = ours.join("|");
+        n += 1;
+        if theirs == ours {
+            println!("SAME\t{id}\t{theirs}");
+        } else {
+            parts += 1;
+            println!("PART\t{id}\tMIT {theirs}\tRust {ours}");
+        }
+    }
+    println!("{parts} of {n} cases part from MIT");
+    Ok(parts == 0)
+}
+
 fn run(args: &[String]) -> Result<bool, String> {
     match args {
         [cmd] if cmd == "cases" => {
@@ -688,9 +945,17 @@ fn run(args: &[String]) -> Result<bool, String> {
         [cmd, frames, mit, dump, password] if cmd == "judge-explicit" => {
             judge_explicit(frames, mit, dump, password)
         }
+        [cmd, keytab, client] if cmd == "kadmind" => {
+            kadmind(keytab, client)?;
+            Ok(true)
+        }
+        [cmd, cases, mit, dump, password] if cmd == "judge-kdb" => {
+            judge_kdb(cases, mit, dump, password)
+        }
         _ => Err(
             "usage: rd-sweep cases | judge <cases> <mit> | kpasswd <keytab> <client> \
-                  [setpw] [raddr=IP] [entry=N] | judge-explicit <frames> <mit> <dump> <password>"
+                  [setpw] [raddr=IP] [entry=N] | judge-explicit <frames> <mit> <dump> <password> | \
+                  kadmind <keytab> <client> | judge-kdb <cases> <mit> <dump> <password>"
                 .into(),
         ),
     }

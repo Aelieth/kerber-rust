@@ -19,7 +19,13 @@
  * read, `req:<code>` when krb5_rd_req or krb5_mk_rep refuses (kpasswd answers AUTHERROR),
  * `priv:<code>` when krb5_rd_priv does (HARDERROR), `drop` when the frame is one kpasswd does not
  * answer. A first line `#local <addr>,...` lists krb5_os_localaddr, the host addresses a KRB-PRIV's
- * receiver address is searched in. */
+ * receiver address is searched in.
+ *
+ * With the same define it has a `kadmind` mode, `rd-priv-oracle kadmind`, which does what kadmind's GSS
+ * acceptor does with an AP-REQ (accept_sec_context.c kg_accept_krb5): krb5_rd_req against the KDB: keytab
+ * with no server (GSS_C_NO_NAME, RPCSEC_GSS), then with kadmin/admin and with kadmin/changepw
+ * (AUTH_GSSAPI's two names). Each stdin line is `id<TAB>ap-req-hex` (`rd-sweep kadmind`); written:
+ * `id<TAB>noname<TAB>admin<TAB>changepw`, each `0` or the code as above. */
 #include <krb5.h>
 #ifdef KPASSWD_KDB
 #include <arpa/inet.h>
@@ -182,6 +188,56 @@ static int kpasswd_mode(void)
     }
     return 0;
 }
+
+static int kadmind_mode(void)
+{
+    static char line[1 << 20];
+    krb5_context ctx = NULL;
+    krb5_keytab kt = NULL;
+    krb5_principal servers[3] = {NULL, NULL, NULL};
+    char *realm = NULL;
+
+    if (kdb_keytab(&ctx, &realm, &kt) != 0)
+        return 2;
+    if (krb5_build_principal(ctx, &servers[1], strlen(realm), realm, "kadmin", "admin", NULL) != 0 ||
+        krb5_build_principal(ctx, &servers[2], strlen(realm), realm, "kadmin", "changepw", NULL) != 0)
+        return 2;
+    while (fgets(line, sizeof(line), stdin) != NULL) {
+        char *nl = strchr(line, '\n'), *id = line, *hex, text[3][64];
+        krb5_data ap;
+        unsigned char *f;
+        unsigned int n;
+        int i;
+
+        if (nl != NULL)
+            *nl = '\0';
+        hex = strchr(id, '\t');
+        if (hex == NULL)
+            continue;
+        *hex++ = '\0';
+        f = unhex(hex, &n);
+        if (f == NULL)
+            return 2;
+        ap.data = (char *)f;
+        ap.length = n;
+        for (i = 0; i < 3; i++) {
+            krb5_auth_context ac = NULL;
+            krb5_ticket *ticket = NULL;
+            krb5_error_code ret;
+
+            if (krb5_auth_con_init(ctx, &ac) != 0 ||
+                krb5_auth_con_setflags(ctx, ac, KRB5_AUTH_CONTEXT_DO_SEQUENCE) != 0)
+                return 2;
+            ret = krb5_rd_req(ctx, &ac, &ap, servers[i], kt, NULL, &ticket);
+            code_text(ret, text[i], sizeof(text[i]));
+            krb5_free_ticket(ctx, ticket);
+            krb5_auth_con_free(ctx, ac);
+        }
+        printf("%s\t%s\t%s\t%s\n", id, text[0], text[1], text[2]);
+        free(f);
+    }
+    return 0;
+}
 #endif
 
 int main(int argc, char **argv)
@@ -196,6 +252,14 @@ int main(int argc, char **argv)
     if (argc > 1 && strcmp(argv[1], "kpasswd") == 0) {
 #ifdef KPASSWD_KDB
         return kpasswd_mode();
+#else
+        fprintf(stderr, "rd-priv-oracle: built without KPASSWD_KDB\n");
+        return 2;
+#endif
+    }
+    if (argc > 1 && strcmp(argv[1], "kadmind") == 0) {
+#ifdef KPASSWD_KDB
+        return kadmind_mode();
 #else
         fprintf(stderr, "rd-priv-oracle: built without KPASSWD_KDB\n");
         return 2;

@@ -1,6 +1,7 @@
 //! `rd-sweep`, run as the gates run it. `cases` and `judge` keep what the decode sweep and
 //! `scripts/rd-priv-oracle-gate.sh` read; `kpasswd` writes the same cases as RFC 3244 frames and
-//! `judge-explicit` answers them with kadmind's kpasswd acceptor.
+//! `judge-explicit` answers them with kadmind's kpasswd acceptor; `kadmind` writes AP-REQs for
+//! kadmind's services and `judge-kdb` answers them with its GSS acceptor over the KDB keytab.
 //!
 //! The ciphertext of a case differs from run to run (a fresh confounder, the clock), so what is
 //! pinned is what does not: the ids and kinds in order (`data/rd-sweep-cases.ids`), the key line,
@@ -12,8 +13,10 @@ use std::process::Output;
 
 use krb5_asn1::decode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
-use krb5_kdc::principals::kadmin_changepw;
-use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented};
+use krb5_kdc::principals::{kadmin_admin, kadmin_changepw, kadmin_history};
+use krb5_kdc::testrealm::{
+    TEST_REALM, TEST_USER, bootstrap_documented, documented_admin_id, documented_host,
+};
 use krb5_types::{ApReq, ChangePasswdData, EncKrbPrivPart, KrbPriv, ku};
 
 /// The authenticator's subkey the cases carry (`SUBKEY` in `rd-sweep.rs`).
@@ -390,5 +393,133 @@ fn judge_explicit_answers_each_frame_with_the_kpasswd_acceptor() {
             .expect("utf-8")
             .contains("PART\tap-req/pristine\tMIT req:krb5:35\tRust 0\n")
     );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `kadmind` writes AP-REQs for a keytab's services, each sealed in each of its keys, at the wrong kvno and
+/// under the wrong cleartext server, and `judge-kdb` answers each as kadmind's GSS acceptor does over the KDB
+/// keytab: with no name (RPCSEC_GSS), as `kadmin/admin` and as `kadmin/changepw` (AUTH_GSSAPI's names).
+#[test]
+fn kadmind_cases_are_answered_as_the_acceptor_reads_the_kdb_keytab() {
+    let dir = scratch("rd-sweep-kadmind");
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store
+        .create_host(&acl, &documented_admin_id(), &kadmin_history())
+        .expect("history");
+    let dump = dir.join("realm.dump");
+    std::fs::write(
+        &dump,
+        krb5_kdc::dump_store(&store, MASTER_PASSWORD.as_bytes()).expect("dump"),
+    )
+    .expect("write");
+    // The keytab `kadmin.local ktadd -norandkey` writes for each service: every key, in the database's order.
+    let mut kt: Option<krb5_protocol::Keytab> = None;
+    for name in [
+        kadmin_admin(),
+        kadmin_changepw(),
+        kadmin_history(),
+        documented_host(),
+    ] {
+        for k in &store.get_name(&name).expect("service").keys {
+            let one = krb5_protocol::Keytab::single(
+                krb5_types::ascii(TEST_REALM),
+                name.clone(),
+                k.kvno,
+                k.key.clone(),
+            );
+            match kt.as_mut() {
+                Some(all) => all.entries.extend(one.entries),
+                None => kt = Some(one),
+            }
+        }
+    }
+    let kt_path = dir.join("ka.keytab");
+    kt.expect("keys")
+        .write_file(&kt_path)
+        .expect("write keytab");
+    let cases_path = dir.join("cases.tsv");
+    std::fs::write(
+        &cases_path,
+        ok_stdout(&["kadmind", kt_path.to_str().expect("path"), TEST_USER]),
+    )
+    .expect("write");
+    let cases = std::fs::read_to_string(&cases_path).expect("read");
+    let n = cases.lines().count();
+    let none = dir.join("none.tsv");
+    std::fs::write(&none, "").expect("write");
+    let run = |mit: &Path| {
+        sweep(&[
+            "judge-kdb",
+            cases_path.to_str().expect("path"),
+            mit.to_str().expect("path"),
+            dump.to_str().expect("path"),
+            MASTER_PASSWORD,
+        ])
+    };
+    let answers: HashMap<String, String> =
+        part_answers(&String::from_utf8(run(&none).stdout).expect("utf-8"))
+            .into_iter()
+            .collect();
+    assert_eq!(answers.len(), n, "every case is answered, each id once");
+    // noname|kadmin/admin|kadmin/changepw: MIT's `krb5_rd_req` with no server and with each name.
+    let want = |id: &str, a: &str| assert_eq!(answers[id], a, "{id}");
+    want("kadmin/admin", "0|0|krb5:35");
+    want("kadmin/changepw", "0|krb5:35|0");
+    want("kadmin/history", "0|krb5:35|krb5:35");
+    want("host/testhost.kerber.test", "0|krb5:35|krb5:35");
+    want("kadmin/admin/kvno0", "0|0|krb5:35");
+    want("kadmin/admin/kvno99", "krb5:44|krb5:44|krb5:35");
+    want("kadmin/admin/as=nosuch/service", "krb5:35|0|krb5:35");
+    want("kadmin/admin/realm=OTHER.REALM", "krb5:35|0|krb5:35");
+    want(
+        "kadmin/admin/as=host/testhost.kerber.test",
+        "krb5:31|0|krb5:35",
+    );
+    want("kadmin/admin/as=kadmin/changepw", "krb5:31|0|krb5:31");
+    want("kadmin/changepw/as=kadmin/admin", "krb5:31|krb5:31|0");
+    // A ticket sealed in a key after the first finds no permitted key, whatever name is asked for.
+    for svc in [
+        "kadmin/admin",
+        "kadmin/changepw",
+        "kadmin/history",
+        "host/testhost.kerber.test",
+    ] {
+        for k in 1..=3 {
+            want(
+                &format!("{svc}/key{k}"),
+                "other:-1780008418|other:-1780008418|other:-1780008418",
+            );
+        }
+    }
+    // MIT's answers, agreeing, are all `SAME`; one that differs is a `PART`.
+    let mit = dir.join("mit.tsv");
+    let rows = lines_of(
+        answers
+            .iter()
+            .map(|(id, a)| format!("{id}\t{}", a.replace('|', "\t"))),
+    );
+    std::fs::write(&mit, &rows).expect("write");
+    let out = run(&mit);
+    assert_eq!(out.status.code(), Some(0));
+    let text = String::from_utf8(out.stdout).expect("utf-8");
+    assert_eq!(text.lines().filter(|l| l.starts_with("SAME")).count(), n);
+    assert!(text.ends_with(&format!("0 of {n} cases part from MIT\n")));
+    std::fs::write(
+        &mit,
+        rows.replacen(
+            "kadmin/admin\t0\t0\tkrb5:35",
+            "kadmin/admin\t0\tkrb5:35\tkrb5:35",
+            1,
+        ),
+    )
+    .expect("write");
+    let out = run(&mit);
+    assert_eq!(out.status.code(), Some(1));
+    let text = String::from_utf8(out.stdout).expect("utf-8");
+    assert!(
+        text.contains("PART\tkadmin/admin\tMIT 0|krb5:35|krb5:35\tRust 0|0|krb5:35\n"),
+        "{text}"
+    );
+    assert!(text.ends_with(&format!("1 of {n} cases part from MIT\n")));
     let _ = std::fs::remove_dir_all(&dir);
 }

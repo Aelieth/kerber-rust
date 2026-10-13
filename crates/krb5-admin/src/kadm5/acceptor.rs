@@ -12,7 +12,9 @@ use krb5_gss::{ChannelBindings, GssContext};
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::{PrincipalStore, SharedDump as SharedStore, ktkdb_get_entry};
 use krb5_log::klog::{self, Severity};
-use krb5_protocol::{KeytabLookup, ReplayCache};
+use krb5_protocol::{
+    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, KeytabLookup, ReplayCache, verify_ap_req_ex,
+};
 use krb5_types::PrincipalName;
 
 /// The KDB keytab's lookup for one ticket, under the database's lock.
@@ -54,10 +56,52 @@ pub(super) fn accept_from_kdb(
     rcache: &ReplayCache,
 ) -> Result<(GssContext, Option<Vec<u8>>), krb5_gss::Error> {
     let permitted = GssContext::acceptor_permitted_enctypes()?;
-    let get_entry = |name: &PrincipalName, server_realm: &str, kvno: u32, etype: i32| {
-        kdb_keytab_entry(store, name, server_realm, kvno, etype, &permitted)
-    };
+    let get_entry = kdb_get_entry(store, &permitted);
     GssContext::accept_sec_context_kdb(token, acceptor, realm, &get_entry, bindings, rcache)
+}
+
+/// The KDB keytab's `krb5_kt_get_entry` as the AP-REQ verifier takes it.
+fn kdb_get_entry<'a>(
+    store: &'a SharedStore,
+    permitted: &'a [EncryptionType],
+) -> impl Fn(&PrincipalName, &str, u32, i32) -> Result<ProtocolKey, KeytabLookup> + 'a {
+    move |name, server_realm, kvno, etype| {
+        kdb_keytab_entry(store, name, server_realm, kvno, etype, permitted)
+    }
+}
+
+/// `krb5_rd_req` as kadmind's GSS acceptor makes it, without the GSS layer: the AP-REQ `ap_req`
+/// against the KDB keytab for `acceptor` in `realm`, or, with none (`GSS_C_NO_NAME`), for the server
+/// the ticket names. `permitted` is the enctypes the KDB gives keys of. What the rd-priv oracle gate
+/// compares with MIT's own call.
+/// MIT `kg_accept_krb5` (`lib/gssapi/krb5/accept_sec_context.c:829-831`): `krb5_rd_req_decoded` with the credential's `acceptor_mprinc` and its keytab.
+///
+/// # Errors
+///
+/// What the verifier refuses the AP-REQ with: the lookup's codes as `keytab_fetch_error` maps them, a
+/// key that does not decrypt the ticket, and the ticket and authenticator checks.
+pub fn kdb_rd_req(
+    store: &SharedStore,
+    realm: &str,
+    acceptor: Option<&PrincipalName>,
+    permitted: &[EncryptionType],
+    ap_req: &[u8],
+    rcache: &ReplayCache,
+) -> Result<ApVerifyOk, krb5_protocol::Error> {
+    let get_entry = kdb_get_entry(store, permitted);
+    let params = ApVerifyParams {
+        keys: &[],
+        key_kvnos: None,
+        key_principals: None,
+        kvno: None,
+        expected_server: acceptor,
+        expected_realm: Some(realm),
+        get_entry: Some(&get_entry),
+        skew: DEFAULT_SKEW,
+        remote_addr: None,
+        now: None,
+    };
+    verify_ap_req_ex(ap_req, &params, rcache, None)
 }
 
 /// AUTH_GSSAPI's accept: `kadmin/admin`, then `kadmin/changepw`, each with a credential of its own

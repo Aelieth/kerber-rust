@@ -9,6 +9,12 @@
 # krb5_rd_req naming kadmin/changepw against the KDB: keytab, krb5_mk_rep, krb5_rd_priv with no address)
 # and the Rust acceptor (`rd-sweep judge-explicit`) answer each, both in the container, so both see the
 # same host addresses. Red on any request answered otherwise than MIT (read, AP-REQ refused, KRB-PRIV refused).
+# Third leg: kadmind's GSS acceptor over the same database (accept_sec_context.c kg_accept_krb5: krb5_rd_req
+# against the KDB: keytab). `rd-sweep kadmind` writes AP-REQs for the services a `ktadd -norandkey` keytab holds
+# (kadmin/admin, kadmin/changepw, kadmin/history, a host), sealed in each of their keys, at the wrong kvno and
+# under the wrong cleartext server; MIT's acceptor calls (`rd-priv-oracle kadmind`: krb5_rd_req with no server,
+# the RPCSEC_GSS acceptor, then naming kadmin/admin and kadmin/changepw, AUTH_GSSAPI's two) and the Rust
+# acceptor (`rd-sweep judge-kdb`) answer each. Red on any case the Rust acceptor answers otherwise than MIT.
 # Isolated: docker --entrypoint sleep; never touches host /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -103,5 +109,49 @@ if ! docker exec "$NAME" sh -c '/tmp/rd-sweep judge-explicit /tmp/kp-frames.tsv 
     exit 1
 fi
 KP_OK="$(grep -c "${TAB}0$" "$OUT/kp-mit.tsv" || true)"
-log "rd.priv.oracle" "ok" ",\"cases\":$CASES,\"mit_accepts\":$MIT_OK,\"rust_parts\":0,\"kpasswd_cases\":$KP_CASES,\"kpasswd_mit_accepts\":$KP_OK,\"kpasswd_rust_parts\":0"
+
+# kadmind's GSS acceptor, in the same realm. kadmin/admin and kadmin/changepw exist in a database `kdb5_util
+# create` made; kadmin/history (kadmind makes it when a policy keeps history) and a host service join them, and
+# `ktadd -norandkey` writes each one's keys.
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey kadmin/history' >/dev/null
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -randkey host/testhost.kerber.test' >/dev/null
+for svc in kadmin/admin kadmin/changepw kadmin/history host/testhost.kerber.test; do
+    kadmin_q_ok mit_kadmin_local "$NAME" -- -q "ktadd -norandkey -k /tmp/ka.keytab $svc" >/dev/null
+done
+docker exec "$NAME" kdb5_util dump /tmp/mit-ka.dump
+docker exec "$NAME" sh -c '/tmp/rd-sweep kadmind /tmp/ka.keytab ra4user >/tmp/ka-cases.tsv'
+docker exec -e KRB5RCACHETYPE=none "$NAME" sh -c '/tmp/rd-priv-oracle-kdb kadmind </tmp/ka-cases.tsv >/tmp/ka-mit.tsv'
+docker cp "$NAME":/tmp/ka-cases.tsv "$OUT/ka-cases.tsv"
+docker cp "$NAME":/tmp/ka-mit.tsv "$OUT/ka-mit.tsv"
+KA_CASES="$(wc -l <"$OUT/ka-cases.tsv" | tr -d ' ')"
+[ "$KA_CASES" -gt 0 ] || die "rd-sweep kadmind wrote no case"
+[ "$(wc -l <"$OUT/ka-mit.tsv" | tr -d ' ')" = "$KA_CASES" ] || die "MIT answered $(wc -l <"$OUT/ka-mit.tsv") of $KA_CASES kadmind cases"
+# Each service is read with no name; kadmin/admin and kadmin/changepw also by their own name, never by the other's.
+# Any database principal is read with no name (RPCSEC_GSS), the history key and a host included.
+NK="other:-1780008418"
+for want in "kadmin/admin${TAB}0${TAB}0${TAB}krb5:35" "kadmin/changepw${TAB}0${TAB}krb5:35${TAB}0" \
+    "kadmin/history${TAB}0${TAB}krb5:35${TAB}krb5:35" "host/testhost.kerber.test${TAB}0${TAB}krb5:35${TAB}krb5:35"; do
+    grep -q "^$want$" "$OUT/ka-mit.tsv" || die "MIT answers the pristine kadmind ticket otherwise than $want"
+done
+# A ticket in a key after the first, or in an enctype the principal has no key in, finds no permitted key by any name.
+for cls in 'key[0-9]+' 'etype=[0-9]+'; do
+    n="$(grep -cE "/$cls${TAB}" "$OUT/ka-mit.tsv" || true)"
+    [ "$n" -ge 1 ] || die "no kadmind ticket of class $cls"
+    [ "$(grep -cE "/$cls${TAB}$NK${TAB}$NK${TAB}$NK$" "$OUT/ka-mit.tsv" || true)" = "$n" ] || die "MIT reads a kadmind ticket of class $cls"
+done
+# The kvno of the ticket's own server: BADKEYVER by the name it is read under, NOT_US by another's.
+grep -q "^kadmin/admin/kvno99${TAB}krb5:44${TAB}krb5:44${TAB}krb5:35$" "$OUT/ka-mit.tsv" || die "MIT answers kvno 99 otherwise"
+# A cleartext server another than the key's: a name takes the key it names whatever the ticket says; no name looks the
+# cleartext server up (its key does not open the ticket, an unknown server is NOT_US).
+grep -q "^kadmin/admin/as=kadmin/changepw${TAB}krb5:31${TAB}0${TAB}krb5:31$" "$OUT/ka-mit.tsv" || die "MIT answers a rewritten cleartext server otherwise"
+grep -q "^kadmin/admin/as=nosuch/service${TAB}krb5:35${TAB}0${TAB}krb5:35$" "$OUT/ka-mit.tsv" || die "MIT answers an unknown cleartext server otherwise"
+if ! docker exec "$NAME" sh -c '/tmp/rd-sweep judge-kdb /tmp/ka-cases.tsv /tmp/ka-mit.tsv /tmp/mit-ka.dump masterpassword >/tmp/ka-judge.txt'; then
+    docker cp "$NAME":/tmp/ka-judge.txt "$OUT/ka-judge.txt"
+    grep -m 20 '^PART' "$OUT/ka-judge.txt" || true
+    log "rd.priv.oracle" "error" ",\"error\":\"kadmind: $(tail -1 "$OUT/ka-judge.txt")\""
+    exit 1
+fi
+docker cp "$NAME":/tmp/ka-judge.txt "$OUT/ka-judge.txt"
+KA_OK="$(awk -F"$TAB" '$2 == "0"' "$OUT/ka-mit.tsv" | wc -l | tr -d ' ')"
+log "rd.priv.oracle" "ok" ",\"cases\":$CASES,\"mit_accepts\":$MIT_OK,\"rust_parts\":0,\"kpasswd_cases\":$KP_CASES,\"kpasswd_mit_accepts\":$KP_OK,\"kpasswd_rust_parts\":0,\"kadmind_cases\":$KA_CASES,\"kadmind_mit_accepts\":$KA_OK,\"kadmind_rust_parts\":0"
 exit 0

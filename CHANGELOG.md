@@ -2939,6 +2939,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Tests and CI
 
+- **tool.** `rd-priv-oracle-gate` also runs 50 kadmind GSS-acceptor cases against MIT's `krb5_rd_req` over the KDB keytab: none apart from MIT.
 - **tool.** `rd-priv-oracle-gate` also runs 437 kpasswd requests through MIT's acceptor calls and the Rust
   acceptor in one container: none apart from MIT, receiver addresses and later keys included.
 - **tool.** `rd-sweep kpasswd` writes the sweep's cases as kpasswd requests and `judge-explicit` answers

@@ -25,7 +25,7 @@ mod xdr;
 #[cfg(test)]
 mod tests;
 
-pub use acceptor::acceptor_names_served;
+pub use acceptor::{acceptor_names_served, kdb_rd_req};
 pub use auth::{
     changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth, check_rpcsec_auth,
 };
