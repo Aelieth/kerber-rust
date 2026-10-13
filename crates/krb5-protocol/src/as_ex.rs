@@ -26,12 +26,15 @@ mod clock;
 mod ec;
 mod fast;
 mod otp;
+mod responder;
 mod spake;
 
 use clock::Clock;
 pub use fast::FastArmor;
 use fast::continue_fast;
 pub(crate) use fast::fast_error_material;
+pub use otp::{OtpChallengeView, OtpTokenView};
+pub use responder::{QUESTION_OTP, QUESTION_PASSWORD, Responder, ResponderItems};
 use spake::{
     SpakeEnd, client_groups, continue_spake, refuse_spake_combo, refuse_spake_skip, spake_forced,
 };
@@ -59,10 +62,10 @@ pub struct AsOutcome {
     /// The preauth type that produced the reply (MIT `selected_preauth_type`,
     /// recorded as the ccache `pa_type` config); `None` without preauth.
     pub pa_type: Option<i32>,
-    /// The preauth config the modules recorded (MIT `cc_config_out`, JSON), stored in the ccache
-    /// as `pa_config_data`; `None` when no module recorded any.
+    /// The preauth config the modules recorded (MIT `cc_config_out`, JSON octets), stored in the
+    /// ccache as `pa_config_data`; `None` when no module recorded any.
     /// MIT `save_cc_config_out_data` (`lib/krb5/krb/get_in_tkt.c:1214-1232`): written only when the object has an entry.
-    pub pa_config: Option<String>,
+    pub pa_config: Option<Vec<u8>>,
 }
 
 /// Parameters for an AS-REQ.
@@ -119,9 +122,9 @@ pub struct AsTicketOpts {
     /// The one real preauthentication type an input cache allows; `None` allows any.
     /// MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): with an allowed type, only that real type is tried.
     pub allowed_preauth_type: Option<i32>,
-    /// The input cache's `pa_config_data` for the request's server, as stored (JSON).
+    /// The input cache's `pa_config_data` for the request's server, as stored (the JSON's octets).
     /// MIT `read_cc_config_in_data` (`lib/krb5/krb/get_in_tkt.c:1176-1211`): kept only when it decodes as an object.
-    pub pa_config_in: Option<String>,
+    pub pa_config_in: Option<Vec<u8>>,
 }
 
 /// Request times/options MIT `verify_as_reply` compares to EncKDCRepPart.
@@ -367,6 +370,13 @@ pub trait AsPrompt {
     fn preauth(&mut self, prompt: &PreauthPrompt<'_>) -> Result<Zeroizing<Vec<u8>>, Error> {
         let _ = prompt;
         Err(Error::File(std::io::Error::other("Cannot read password")))
+    }
+
+    /// The responder that answers the questions a module asks before the prompter is used. The
+    /// default has none, so no question is answered.
+    /// MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:1010-1016`): called once per round, when a module asked a question.
+    fn responder(&mut self) -> Option<&mut dyn Responder> {
+        None
     }
 }
 

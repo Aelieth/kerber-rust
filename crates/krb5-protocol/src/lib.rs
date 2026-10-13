@@ -56,7 +56,8 @@ pub use ap_req::{
 };
 pub use as_ex::{
     AsOutcome, AsPrompt, AsRequest, AsTicketOpts, DEFAULT_PREFERRED_PREAUTH_TYPES, FastArmor,
-    IdentifyReply, PasswordPrompt, PkinitClient, PreauthPrompt, PromptType, as_exchange,
+    IdentifyReply, OtpChallengeView, OtpTokenView, PasswordPrompt, PkinitClient, PreauthPrompt,
+    PromptType, QUESTION_OTP, QUESTION_PASSWORD, Responder, ResponderItems, as_exchange,
     as_exchange_defer_fast, as_exchange_interactive, as_exchange_key, as_exchange_prompted,
     as_exchange_prompted_defer_fast, as_exchange_with_keys, as_exchange_with_keys_defer_fast,
     as_identify_realm, as_init_creds_options, check_as_rep_times, conf_etypes,

@@ -4,12 +4,13 @@
 use super::clock::Clock;
 use super::ec::{EC_MODULE, client_challenge, reply_code};
 use super::otp::{self, OTP_MODULE, OtpState};
+use super::responder::{QUESTION_PASSWORD, Responder, ResponderItems};
 use super::{
     AsOutcome, AsPrompt, AsReqTimes, AsRequest, ENCTS_MODULE, KdcMsg, build_as_req_from,
-    classify_kdc_error, find_pa, finish_as_rep, first_etype, gak_found, method_from_error,
-    pa_enc_timestamp_at, pick_info2, pick_key, req_sname, request_times, salt_cname, select_s2k,
-    send_as, sort_krb5_padata_sequence, trace_keytab_gak, trace_preauth_input, trace_reply_padata,
-    with_password, with_prompted,
+    classify_kdc_error, encrypted_timestamp_disabled, find_pa, finish_as_rep, first_etype,
+    gak_found, method_from_error, pa_enc_timestamp_at, pick_info2, pick_key, req_sname,
+    request_times, salt_cname, select_s2k, send_as, sort_krb5_padata_sequence, trace_keytab_gak,
+    trace_preauth_input, trace_reply_padata, with_password, with_prompted,
 };
 use crate::error::Error;
 use crate::preauth::{
@@ -92,12 +93,16 @@ pub(super) fn continue_fast(
             clock.note(&inner, true);
             // MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): the password is read when a
             // mechanism first needs the key, not before one is chosen; OTP never needs it.
+            // MIT `krb5_get_as_key_password` (`lib/krb5/krb/gic_pwd.c:30-38`): the password question is asked unless the
+            // caller gave a password with no prompter, or a keytab.
+            let ask_password = keys.is_empty() && (prompt.is_some() || req.password.is_empty());
             let mut pw = PasswordCell::new(prompt);
+            let encts_off = encrypted_timestamp_disabled(req.realm);
             let cc_in: Option<Value> = req
                 .ticket
                 .pa_config_in
                 .as_ref()
-                .and_then(|j| k5json::decode(j.as_bytes()).ok())
+                .and_then(|j| k5json::decode(j).ok())
                 .filter(|v| matches!(v, Value::Object(_)));
             let mut otp_state = OtpState::default();
             let mut otp_failure: Option<Error> = None;
@@ -124,10 +129,21 @@ pub(super) fn continue_fast(
                 }
                 // MIT `fill_response_items` (`lib/krb5/krb/preauth2.c:937-965`): every module with
                 // a padata in the list prepares first, and a failure there ends the exchange.
-                if crate::clpreauth::loaded("otp") {
-                    for p in method.iter().filter(|p| p.padata_type == pa::OTP_CHALLENGE) {
-                        otp::prep_questions(&mut otp_state, p, cc_in.as_ref())?;
-                    }
+                let mut items = ResponderItems::default();
+                fill_response_items(
+                    &mut items,
+                    &mut otp_state,
+                    &method,
+                    cc_in.as_ref(),
+                    ask_password,
+                    encts_off,
+                )?;
+                // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:1010-1016`): the responder answers
+                // what was asked, before a mechanism is chosen.
+                if !items.is_empty()
+                    && let Some(r) = pw.responder()
+                {
+                    r.respond(&mut items)?;
                 }
                 let mech = loop {
                     let mech = match fast_mechanism(&method, &skip) {
@@ -143,7 +159,7 @@ pub(super) fn continue_fast(
                     if mech != pa::OTP_CHALLENGE {
                         break mech;
                     }
-                    match otp::process(&otp_state, pw.ui(), &akey) {
+                    match otp::process(&otp_state, &items, pw.ui(), &akey) {
                         Ok((pa142, config)) => {
                             return finish_fast_otp(
                                 req,
@@ -175,7 +191,7 @@ pub(super) fn continue_fast(
                     }
                 };
                 saved_method = method;
-                let req = &pw.request(req)?;
+                let req = &pw.request(req, items.get_answer(QUESTION_PASSWORD))?;
                 if mech == pa::SPAKE {
                     match finish_fast_spake(
                         req,
@@ -254,6 +270,37 @@ pub(super) fn continue_fast(
     }
 }
 
+/// MIT `fill_response_items` (`lib/krb5/krb/preauth2.c:937-965`): every loaded module with a padata
+/// in the list prepares its questions in the list's order, and a failure ends the round.
+/// MIT `ec_prep_questions` (`lib/krb5/krb/preauth_ec.c:36-45`): encrypted challenge asks the password question.
+/// MIT `encts_prep_questions` (`lib/krb5/krb/preauth_encts.c:33-47`): encrypted timestamp asks it too, unless the realm disables it.
+/// MIT `krb5_get_as_key_password` (`lib/krb5/krb/gic_pwd.c:30-38`): the question is asked only when the caller gave neither a password nor a keytab.
+fn fill_response_items(
+    items: &mut ResponderItems,
+    otp_state: &mut OtpState,
+    method: &[PaData],
+    cc_in: Option<&Value>,
+    ask_password: bool,
+    encts_off: bool,
+) -> Result<(), Error> {
+    let otp_on = crate::clpreauth::loaded(OTP_MODULE);
+    let ec_on = ask_password && crate::clpreauth::loaded(EC_MODULE);
+    let encts_on = ask_password && !encts_off && crate::clpreauth::loaded(ENCTS_MODULE);
+    for p in method {
+        match p.padata_type {
+            pa::OTP_CHALLENGE if otp_on => otp::prep_questions(otp_state, p, cc_in, items)?,
+            pa::ENCRYPTED_CHALLENGE if ec_on => {
+                items.ask_question(QUESTION_PASSWORD, Some(b"".as_slice()));
+            }
+            pa::ENC_TIMESTAMP if encts_on => {
+                items.ask_question(QUESTION_PASSWORD, Some(b"".as_slice()));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 /// The password, read on first need and kept for the exchange.
 /// MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): `gak_fct` runs the first time a module wants the AS key.
 struct PasswordCell<'p> {
@@ -280,14 +327,26 @@ impl<'p> PasswordCell<'p> {
         }
     }
 
-    /// `req` with the password in it, read now if this is the first need. A read that fails is
+    /// `req` with the password in it: the responder's answer to the password question when it gave
+    /// one, else the password `prompt` reads, read now if this is the first need. A read that fails is
     /// `KRB5_PREAUTH_FAILED` around it unless it was interrupted.
+    /// MIT `krb5_get_as_key_password` (`lib/krb5/krb/gic_pwd.c:55-66`): a responder's answer to the password
+    /// question is the password, with no prompt.
     /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-723`): a keyboard interrupt stops with its own code, any other failure is wrapped.
-    fn request<'b>(&'b mut self, req: &AsRequest<'b>) -> Result<AsRequest<'b>, Error> {
-        let Some(prompt) = self.prompt.as_deref_mut() else {
-            return Ok(with_password(req, req.password));
-        };
+    fn request<'b>(
+        &'b mut self,
+        req: &AsRequest<'b>,
+        answer: Option<&str>,
+    ) -> Result<AsRequest<'b>, Error> {
+        if self.got.is_none()
+            && let Some(a) = answer
+        {
+            self.got = Some(Zeroizing::new(a.as_bytes().to_vec()));
+        }
         if self.got.is_none() {
+            let Some(prompt) = self.prompt.as_deref_mut() else {
+                return Ok(with_password(req, req.password));
+            };
             let read = prompt.password().map_err(|e| {
                 let interrupted =
                     matches!(&e, Error::File(io) if io.kind() == std::io::ErrorKind::Interrupted);
@@ -301,6 +360,11 @@ impl<'p> PasswordCell<'p> {
         }
         let pw: &[u8] = self.got.as_ref().map_or(&[], |p| p.as_slice());
         Ok(with_password(req, pw))
+    }
+
+    /// The responder of the exchange's prompter, if it has one.
+    fn responder(&mut self) -> Option<&mut dyn Responder> {
+        self.prompt.as_deref_mut().and_then(|p| p.responder())
     }
 
     fn ui(&mut self) -> &mut dyn AsPrompt {

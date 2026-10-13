@@ -309,11 +309,11 @@ fn pa_config_in(
     in_ccache: Option<InputCcache<'_>>,
     server: &krb5_types::PrincipalName,
     realm: &str,
-) -> Option<String> {
+) -> Option<Vec<u8>> {
     let value = in_ccache?
         .0
         .get_config(Some(&server.unparse_with_realm(realm)), "pa_config_data")?;
-    Some(String::from_utf8_lossy(value).into_owned())
+    Some(value.to_vec())
 }
 
 /// `krb5_prompter_fct` narrowed to the KEY_EXP new-password prompts.
@@ -1313,7 +1313,7 @@ fn record_preauth_config(
     tgt_server: &str,
     fast_avail: bool,
     pa_type: Option<i32>,
-    pa_config: Option<&str>,
+    pa_config: Option<&[u8]>,
 ) {
     if fast_avail {
         cache.set_config(Some(tgt_server), "fast_avail", b"yes");
@@ -1322,7 +1322,7 @@ fn record_preauth_config(
         cache.set_config(Some(tgt_server), "pa_type", t.to_string().as_bytes());
     }
     if let Some(c) = pa_config {
-        cache.set_config(Some(tgt_server), "pa_config_data", c.as_bytes());
+        cache.set_config(Some(tgt_server), "pa_config_data", c);
     }
 }
 
@@ -1439,7 +1439,7 @@ mod tests {
             server,
             true,
             Some(141),
-            Some(r#"{"vendor":"V"}"#),
+            Some(br#"{"vendor":"V"}"#.as_slice()),
         );
         let keys: Vec<String> = cache
             .creds
@@ -1458,6 +1458,28 @@ mod tests {
     }
 
     #[test]
+    fn a_recorded_config_keeps_its_octets_through_the_ccache() {
+        let client = (
+            krb5_types::ascii("R.TEST"),
+            krb5_types::PrincipalName::new(krb5_types::PrincipalName::NT_PRINCIPAL, ["u"]),
+        );
+        let octets: &[u8] = b"{\"tokenID\":\"a\xffb\"}";
+        let mut cache = FileCcache::new(client, Vec::new());
+        record_preauth_config(
+            &mut cache,
+            "krbtgt/R.TEST@R.TEST",
+            false,
+            None,
+            Some(octets),
+        );
+        let (_, tgs) = tgs_name("R.TEST");
+        assert_eq!(
+            pa_config_in(Some(InputCcache(&cache)), &tgs, "R.TEST"),
+            Some(octets.to_vec())
+        );
+    }
+
+    #[test]
     fn the_input_caches_pa_config_data_is_read_for_the_request_server() {
         let client = (
             krb5_types::ascii("R.TEST"),
@@ -1471,7 +1493,7 @@ mod tests {
         );
         let (_, tgs) = tgs_name("R.TEST");
         let got = pa_config_in(Some(InputCcache(&cache)), &tgs, "R.TEST");
-        assert_eq!(got.as_deref(), Some(r#"{"vendor":"V"}"#));
+        assert_eq!(got.as_deref(), Some(br#"{"vendor":"V"}"#.as_slice()));
         let other = krb5_types::PrincipalName::krbtgt("OTHER.TEST");
         assert_eq!(
             pa_config_in(Some(InputCcache(&cache)), &other, "OTHER.TEST"),

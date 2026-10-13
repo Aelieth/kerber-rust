@@ -1,4 +1,4 @@
-//! red at tree bd74009e (the module does not exist there)
+//! red at tree bd74009e (the module does not exist there); the responder tests red at tree a1307fd6
 
 use std::collections::VecDeque;
 
@@ -14,7 +14,7 @@ use krb5_types::{KerberosFlags, OctetString, ku, pa};
 use zeroize::Zeroizing;
 
 use super::*;
-use crate::as_ex::{AsPrompt, PreauthPrompt};
+use crate::as_ex::{AsPrompt, PreauthPrompt, QUESTION_PASSWORD};
 
 fn ti() -> OtpTokenInfo {
     OtpTokenInfo {
@@ -93,7 +93,7 @@ fn state_of(chl: PaOtpChallenge) -> OtpState {
 }
 
 fn run(chl: PaOtpChallenge, ui: &mut Script) -> Result<(PaOtpRequest, Value), OtpFail> {
-    let (pa142, cfg) = process(&state_of(chl), ui, &armor())?;
+    let (pa142, cfg) = process(&state_of(chl), &ResponderItems::default(), ui, &armor())?;
     assert_eq!(pa142.padata_type, pa::OTP_REQUEST);
     Ok((decode(pa142.padata_value.as_ref()).unwrap(), cfg))
 }
@@ -325,7 +325,10 @@ fn several_tokens_with_a_challenge_choose_first_and_ask_again_until_valid() {
     want.push((Some("OTP Challenge: c2\n"), "Enter OTP Token Value"));
     assert_eq!(prompts(&ui), want);
     assert_eq!(req.vendor.as_deref(), Some(&b"Zed"[..]));
-    assert_eq!(config_string(&cfg).as_deref(), Some(r#"{"vendor":"Zed"}"#));
+    assert_eq!(
+        config_octets(&cfg).as_deref(),
+        Some(r#"{"vendor":"Zed"}"#.as_bytes())
+    );
     let mut ui = Script::of(&["99999999999999999999999"]);
     let e = run(
         challenge(vec![
@@ -491,15 +494,21 @@ fn the_request_carries_the_tokens_fields_and_the_encrypted_nonce() {
     let enc: PaOtpEncRequest = decode(&plain).unwrap();
     assert_eq!(enc.nonce.as_ref(), &[9u8; 36][..]);
     assert_eq!(
-        config_string(&cfg).as_deref(),
-        Some(r#"{"vendor":"Acme","algID":"urn:alg","tokenID":"id1"}"#)
+        config_octets(&cfg).as_deref(),
+        Some(r#"{"vendor":"Acme","algID":"urn:alg","tokenID":"id1"}"#.as_bytes())
     );
 }
 
 #[test]
 fn the_default_requests_der_is_mits() {
     let mut ui = Script::of(&["123456"]);
-    let (pa142, _) = process(&state_of(challenge(vec![ti()])), &mut ui, &armor()).unwrap();
+    let (pa142, _) = process(
+        &state_of(challenge(vec![ti()])),
+        &ResponderItems::default(),
+        &mut ui,
+        &armor(),
+    )
+    .unwrap();
     let der = pa142.padata_value.as_ref().to_vec();
     // SEQUENCE { [0] 80 05 00 00000000, [2] A2 { A0 03 02 01 12, A2 .. 04 .. }, [4] 84 01 00, [5] 85 06 "123456" }
     assert_eq!(der[0], 0x30);
@@ -538,9 +547,14 @@ fn a_prompt_that_fails_fails_the_module_and_an_interrupt_stops_it() {
     let e = run(challenge(vec![ti()]), &mut ui).unwrap_err();
     assert_eq!(e.error.to_string(), "Cannot read password");
     assert!(!e.interrupted);
-    let e = process(&state_of(challenge(vec![ti()])), &mut Int, &armor())
-        .err()
-        .unwrap();
+    let e = process(
+        &state_of(challenge(vec![ti()])),
+        &ResponderItems::default(),
+        &mut Int,
+        &armor(),
+    )
+    .err()
+    .unwrap();
     assert!(e.interrupted);
 }
 
@@ -552,4 +566,321 @@ fn a_reply_is_cut_to_1023_bytes_and_at_a_nul() {
     assert_eq!(req.otp_value.unwrap().len(), 1023);
     let (req, _) = run(challenge(vec![ti()]), &mut ui).unwrap();
     assert_eq!(req.otp_value.unwrap().as_ref(), b"ab");
+}
+
+#[test]
+fn the_challenge_json_is_mits_in_mits_order() {
+    let full = OtpTokenInfo {
+        flags: flags(OTP_FLAG_COLLECT_PIN | OTP_FLAG_SEPARATE_PIN),
+        vendor: Some(b"Acme".to_vec().into()),
+        challenge: Some(b"12 34".to_vec().into()),
+        length: Some(6),
+        format: Some(OTP_FORMAT_DECIMAL),
+        token_id: Some(b"tok\"1".to_vec().into()),
+        alg_id: Some(b"urn:ietf:params:xml:ns:keyprov:pskc:hotp".to_vec().into()),
+        ..ti()
+    };
+    let mut chl = challenge(vec![
+        full,
+        ti(),
+        OtpTokenInfo {
+            format: Some(OTP_FORMAT_BINARY),
+            flags: flags(OTP_FLAG_NEXTOTP),
+            ..ti()
+        },
+    ]);
+    chl.service = Some(b"svc".to_vec().into());
+    assert_eq!(
+        challenge_json(&chl),
+        concat!(
+            r#"{"service":"svc","tokenInfo":["#,
+            r#"{"flags":7,"vendor":"Acme","challenge":"12 34","length":6,"format":0,"tokenID":"tok\"1","algID":"urn:ietf:params:xml:ns:keyprov:pskc:hotp"},"#,
+            r#"{"flags":1},"#,
+            r#"{"flags":5}"#,
+            r#"]}"#
+        )
+        .as_bytes()
+    );
+}
+
+#[test]
+fn a_responder_answer_is_read_like_mit_and_a_bad_one_goes_to_the_prompts() {
+    let ok = |a: &str| decode_answer(Some(a), 2);
+    let (at, v, p) = ok(r#"{"tokeninfo":1,"value":"123456","pin":"99"}"#).unwrap();
+    assert_eq!(
+        (at, v.as_slice(), p.as_deref().map(Vec::as_slice)),
+        (1, &b"123456"[..], Some(&b"99"[..]))
+    );
+    // An empty value is a value, and an absent pin is no pin.
+    let (at, v, p) = ok(r#"{"tokeninfo":0,"value":""}"#).unwrap();
+    assert_eq!((at, v.len(), p), (0, 0, None));
+    for bad in [
+        r#"{"tokeninfo":2,"value":"x"}"#,
+        r#"{"tokeninfo":-1,"value":"x"}"#,
+        r#"{"tokeninfo":"0","value":"x"}"#,
+        r#"{"value":"x"}"#,
+        // MIT `codec_decode_answer` (`lib/krb5/krb/preauth_otp.c:399-412`): reads an uninitialised value here
+        // and the module crashes: no answer.
+        r#"{"tokeninfo":0}"#,
+        r#"{"tokeninfo":0,"value":5}"#,
+        r#"{"tokeninfo":0,"value":"x","pin":[]}"#,
+        r"[0]",
+        r#""x""#,
+        "{",
+    ] {
+        assert!(ok(bad).is_none(), "{bad}");
+    }
+    assert!(decode_answer(None, 2).is_none());
+}
+
+#[test]
+fn prep_asks_the_question_with_the_filtered_tokens() {
+    let chl = challenge(vec![
+        OtpTokenInfo {
+            flags: flags(OTP_FLAG_NEXTOTP),
+            ..ti()
+        },
+        vendor("A"),
+        vendor("B"),
+    ]);
+    let pa141 = PaData {
+        padata_type: pa::OTP_CHALLENGE,
+        padata_value: encode(&chl).unwrap().into(),
+    };
+    let mut items = ResponderItems::default();
+    let mut st = OtpState::default();
+    prep_questions(&mut st, &pa141, Some(&cc(r#"{"vendor":"B"}"#)), &mut items).unwrap();
+    assert_eq!(items.list_questions(), vec![QUESTION_OTP]);
+    assert_eq!(
+        items.get_challenge(QUESTION_OTP),
+        Some(br#"{"tokenInfo":[{"flags":1,"vendor":"B"}]}"#.as_slice())
+    );
+    assert_eq!(st.chl.unwrap().token_info, vec![vendor("B")]);
+    let none = PaData {
+        padata_type: pa::OTP_CHALLENGE,
+        padata_value: encode(&challenge(vec![OtpTokenInfo {
+            flags: flags(OTP_FLAG_COMBINE),
+            ..ti()
+        }]))
+        .unwrap()
+        .into(),
+    };
+    let e = prep_questions(
+        &mut OtpState::default(),
+        &none,
+        None,
+        &mut ResponderItems::default(),
+    )
+    .unwrap_err();
+    assert_eq!(e.to_string(), "No supported tokens");
+    let junk = PaData {
+        padata_type: pa::OTP_CHALLENGE,
+        padata_value: vec![0x30, 0x01].into(),
+    };
+    assert!(
+        prep_questions(
+            &mut OtpState::default(),
+            &junk,
+            None,
+            &mut ResponderItems::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn the_responder_helpers_round_trip_mits_json_and_the_answer_is_used() {
+    let full = OtpTokenInfo {
+        flags: flags(OTP_FLAG_COLLECT_PIN | OTP_FLAG_SEPARATE_PIN),
+        vendor: Some(b"Acme".to_vec().into()),
+        challenge: Some(b"12 34".to_vec().into()),
+        length: Some(6),
+        format: Some(OTP_FORMAT_DECIMAL),
+        token_id: Some(b"t1".to_vec().into()),
+        alg_id: Some(b"urn:x".to_vec().into()),
+        ..ti()
+    };
+    let mut chl = challenge(vec![vendor("A"), full]);
+    chl.service = Some(b"svc".to_vec().into());
+    let pa141 = PaData {
+        padata_type: pa::OTP_CHALLENGE,
+        padata_value: encode(&chl).unwrap().into(),
+    };
+    let mut items = ResponderItems::default();
+    let mut st = OtpState::default();
+    prep_questions(&mut st, &pa141, None, &mut items).unwrap();
+    let view = items.otp_get_challenge().unwrap().unwrap();
+    assert_eq!(
+        view,
+        OtpChallengeView {
+            service: Some("svc".into()),
+            tokeninfo: vec![
+                OtpTokenView {
+                    flags: 1,
+                    format: -1,
+                    length: -1,
+                    vendor: Some("A".into()),
+                    challenge: None,
+                    token_id: None,
+                    alg_id: None,
+                },
+                OtpTokenView {
+                    flags: 7,
+                    format: 0,
+                    length: 6,
+                    vendor: Some("Acme".into()),
+                    challenge: Some("12 34".into()),
+                    token_id: Some("t1".into()),
+                    alg_id: Some("urn:x".into()),
+                },
+            ],
+        }
+    );
+    items.otp_set_answer(1, Some("654321"), Some("99")).unwrap();
+    assert_eq!(
+        items.get_answer(QUESTION_OTP),
+        Some(r#"{"tokeninfo":1,"value":"654321","pin":"99"}"#)
+    );
+    let mut ui = Script::of(&[]);
+    let (pa142, cfg) = process(&st, &items, &mut ui, &armor()).unwrap();
+    assert!(
+        ui.asked.is_empty(),
+        "the responder answered, nothing was prompted"
+    );
+    let req: PaOtpRequest = decode(pa142.padata_value.as_ref()).unwrap();
+    assert_eq!(req.vendor.as_ref().map(AsRef::as_ref), Some(&b"Acme"[..]));
+    assert_eq!(req.pin.as_ref().map(AsRef::as_ref), Some(&b"99"[..]));
+    assert_eq!(
+        req.otp_value.as_ref().map(AsRef::as_ref),
+        Some(&b"654321"[..])
+    );
+    assert_eq!(
+        config_octets(&cfg).as_deref(),
+        Some(r#"{"vendor":"Acme","algID":"urn:x","tokenID":"t1"}"#.as_bytes())
+    );
+    items.otp_set_answer(0, None, None).unwrap();
+    assert_eq!(items.get_answer(QUESTION_OTP), Some(r#"{"tokeninfo":0}"#));
+
+    let mut none = ResponderItems::default();
+    assert_eq!(none.otp_get_challenge().unwrap(), None);
+    assert_eq!(
+        none.otp_set_answer(0, None, None).unwrap_err().to_string(),
+        "Invalid argument"
+    );
+    for bad in [
+        "[1]",
+        "{}",
+        r#"{"tokenInfo":{}}"#,
+        r#"{"tokenInfo":[1]}"#,
+        r#"{"tokenInfo":[{"vendor":"x"}]}"#,
+        r#"{"tokenInfo":[{"flags":1,"vendor":5}]}"#,
+        r#"{"service":3,"tokenInfo":[]}"#,
+    ] {
+        let mut broken = ResponderItems::default();
+        broken.ask_question(QUESTION_OTP, Some(bad.as_bytes()));
+        assert_eq!(
+            broken.otp_get_challenge().unwrap_err().to_string(),
+            "Cannot allocate memory",
+            "{bad}"
+        );
+    }
+    let mut empty = ResponderItems::default();
+    empty.ask_question(QUESTION_OTP, Some(br#"{"tokenInfo":[]}"#));
+    let none_listed = empty.otp_get_challenge().unwrap().unwrap().tokeninfo;
+    assert_eq!(none_listed.len(), 0);
+    empty.ask_question(QUESTION_PASSWORD, Some(b""));
+    assert_eq!(empty.get_answer(QUESTION_PASSWORD), None);
+}
+
+/// The config of a login as the octets the ccache keeps.
+/// MIT `save_cc_config_out_data` (`lib/krb5/krb/get_in_tkt.c:1221-1231`): the JSON is kept as octets.
+#[allow(
+    clippy::useless_conversion,
+    reason = "the octets are a Vec already, so the conversion is a no-op"
+)]
+fn config_octets(cfg: &Value) -> Option<Vec<u8>> {
+    config_string(cfg).map(Into::into)
+}
+
+/// A token whose tokenID is `61 ff 62` and whose algID is `ff`: the octets MIT keeps (cells U11, U11x).
+fn octet_token() -> OtpTokenInfo {
+    OtpTokenInfo {
+        vendor: Some(OctetString::from(b"Acme".to_vec())),
+        alg_id: Some(OctetString::from(vec![0xff])),
+        token_id: Some(OctetString::from(vec![0x61, 0xff, 0x62])),
+        ..ti()
+    }
+}
+
+#[test]
+fn a_token_config_keeps_its_octets_in_pa_config_data() {
+    // MIT `save_config_tokeninfo` (`lib/krb5/krb/preauth_otp.c:1038-1059`): the vendor, algID and tokenID
+    // are saved as C strings of their octets, and the JSON carries them as they are.
+    let mut ui = Script::of(&["123456"]);
+    let (_, cfg) = run(challenge(vec![octet_token()]), &mut ui).unwrap();
+    let mut want = br#"{"vendor":"Acme","algID":""#.to_vec();
+    want.push(0xff);
+    want.extend_from_slice(br#"","tokenID":"a"#);
+    want.extend_from_slice(&[0xff, b'b']);
+    want.extend_from_slice(br#""}"#);
+    assert_eq!(config_octets(&cfg), Some(want));
+}
+
+#[test]
+fn a_second_login_reads_the_config_octets_and_prunes_to_the_token_they_name() {
+    // MIT `read_cc_config_in_data` (`lib/krb5/krb/get_in_tkt.c:1176-1211`): the first login's config comes
+    // back as the input cache's octets.
+    // MIT `filter_config_tokeninfos` (`lib/krb5/krb/preauth_otp.c:928-973`): it keeps the one token they match.
+    let mut first = Script::of(&["123456"]);
+    let (_, cfg) = run(challenge(vec![octet_token()]), &mut first).unwrap();
+    let stored = config_octets(&cfg).unwrap();
+    let cc_in = k5json::decode(&stored).unwrap();
+    let other = OtpTokenInfo {
+        vendor: Some(OctetString::from(b"Beta".to_vec())),
+        token_id: Some(OctetString::from(b"b".to_vec())),
+        ..ti()
+    };
+    let pa141 = PaData {
+        padata_type: pa::OTP_CHALLENGE,
+        padata_value: encode(&challenge(vec![other, octet_token()]))
+            .unwrap()
+            .into(),
+    };
+    let mut st = OtpState::default();
+    prep_questions(
+        &mut st,
+        &pa141,
+        Some(&cc_in),
+        &mut ResponderItems::default(),
+    )
+    .unwrap();
+    assert_eq!(st.chl.unwrap().token_info, vec![octet_token()]);
+}
+
+/// The views hold MIT's C strings as octets, including a service, tokenID and algID that are not UTF-8.
+#[test]
+fn the_views_return_the_octets_of_mits_c_strings() {
+    // MIT `codec_decode_tokeninfo` (`lib/krb5/krb/preauth_otp.c:264-311`): each string is read as a C string,
+    // its octets cut at the first NUL.
+    // MIT `codec_decode_challenge` (`lib/krb5/krb/preauth_otp.c:314-360`): the service is read the same way.
+    let mut chl = challenge(vec![OtpTokenInfo {
+        challenge: Some(OctetString::from(b"12 34".to_vec())),
+        length: Some(6),
+        format: Some(OTP_FORMAT_DECIMAL),
+        ..octet_token()
+    }]);
+    chl.service = Some(OctetString::from(b"svc\xff".to_vec()));
+    let pa141 = PaData {
+        padata_type: pa::OTP_CHALLENGE,
+        padata_value: encode(&chl).unwrap().into(),
+    };
+    let mut items = ResponderItems::default();
+    prep_questions(&mut OtpState::default(), &pa141, None, &mut items).unwrap();
+    let view = items.otp_get_challenge().unwrap().unwrap();
+    assert_eq!(view.service, Some(b"svc\xff".to_vec()));
+    let token = &view.tokeninfo[0];
+    assert_eq!(token.vendor, Some(b"Acme".to_vec()));
+    assert_eq!(token.challenge, Some(b"12 34".to_vec()));
+    assert_eq!(token.token_id, Some(vec![0x61, 0xff, 0x62]));
+    assert_eq!(token.alg_id, Some(vec![0xff]));
 }

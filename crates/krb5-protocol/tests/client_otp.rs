@@ -1,4 +1,5 @@
-//! red at tree bd74009e (the module, AsPrompt and PromptType do not exist there)
+//! red at tree bd74009e (the module, AsPrompt and PromptType do not exist there); the responder
+//! tests red at tree a1307fd6 (Responder and ResponderItems do not exist there)
 //!
 //! The client OTP preauth module against this repo's KDC: the prompts, the request, the reply key,
 //! the ccache config and the failure that allows no fallback.
@@ -13,7 +14,7 @@ use krb5_kdc::{
 };
 use krb5_protocol::{
     AsOutcome, AsPrompt, AsRequest, AsTicketOpts, Error, FastArmor, KdcAddr, PreauthPrompt,
-    PromptType, as_exchange, as_exchange_interactive,
+    PromptType, QUESTION_PASSWORD, Responder, ResponderItems, as_exchange, as_exchange_interactive,
 };
 use krb5_types::{PrincipalName, ascii, err, pa};
 use std::collections::VecDeque;
@@ -73,6 +74,7 @@ struct Ui {
     password: Option<&'static [u8]>,
     prompts: Vec<(Option<String>, String, bool, PromptType)>,
     passwords: usize,
+    responder: Option<Box<dyn Responder>>,
 }
 
 impl Ui {
@@ -103,6 +105,13 @@ impl AsPrompt for Ui {
             .pop_front()
             .map(Zeroizing::new)
             .ok_or_else(|| Error::File(std::io::Error::other("Cannot read password")))
+    }
+
+    fn responder(&mut self) -> Option<&mut dyn Responder> {
+        match self.responder.as_mut() {
+            Some(r) => Some(&mut **r),
+            None => None,
+        }
     }
 }
 
@@ -232,4 +241,120 @@ fn preferred_preauth_types_138_runs_encrypted_challenge_before_otp() {
     assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
     assert!(ui.prompts.is_empty(), "no OTP prompt: {:?}", ui.prompts);
     assert_eq!(ui.passwords, 1);
+}
+
+/// Answers OTP with the token `ti` and `value`, and checks the questions it was asked.
+struct Answer {
+    ti: usize,
+    value: &'static str,
+    expect: Vec<&'static str>,
+}
+
+impl Responder for Answer {
+    fn respond(&mut self, items: &mut ResponderItems) -> Result<(), Error> {
+        assert_eq!(items.list_questions(), self.expect);
+        assert_eq!(
+            items.get_challenge("otp"),
+            Some(br#"{"tokenInfo":[{"flags":1}]}"#.as_slice())
+        );
+        let chl = items.otp_get_challenge()?.expect("an OTP challenge");
+        assert_eq!(chl.tokeninfo.len(), 1);
+        items.otp_set_answer(self.ti, Some(self.value), None)
+    }
+}
+
+/// Answers the password question with the user's password, and nothing else.
+struct PasswordAnswer;
+
+impl Responder for PasswordAnswer {
+    fn respond(&mut self, items: &mut ResponderItems) -> Result<(), Error> {
+        assert_eq!(items.list_questions(), vec!["otp", QUESTION_PASSWORD]);
+        let password = std::str::from_utf8(TEST_USER_PASSWORD).unwrap();
+        items.set_answer(QUESTION_PASSWORD, Some(password))
+    }
+}
+
+#[test]
+fn a_responder_answer_replaces_the_prompts() {
+    let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    let mut ui = Ui {
+        responder: Some(Box::new(Answer {
+            ti: 0,
+            value: "123456",
+            expect: vec!["otp", "password"],
+        })),
+        ..Ui::default()
+    };
+    let out = otp_login(&kdc, &armor, &mut ui).expect("OTP login by responder");
+    assert_eq!(out.pa_type, Some(pa::OTP_CHALLENGE));
+    assert!(ui.prompts.is_empty(), "the responder answered");
+}
+
+#[test]
+fn a_bad_responder_answer_falls_back_to_the_prompt() {
+    let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    let mut ui = Ui {
+        responder: Some(Box::new(Answer {
+            ti: 7,
+            value: "x",
+            expect: vec!["otp", "password"],
+        })),
+        ..Ui::answering(&["123456"])
+    };
+    let out = otp_login(&kdc, &armor, &mut ui).expect("OTP login by prompt");
+    assert_eq!(out.pa_type, Some(pa::OTP_CHALLENGE));
+    assert_eq!(ui.prompts.len(), 1);
+}
+
+#[test]
+fn a_responder_password_answer_is_the_password_with_no_prompt() {
+    let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    // OTP asks for its value and gets none, so its module fails; encrypted challenge then needs the
+    // key, and the responder's answer to the password question is the password.
+    let mut ui = Ui {
+        responder: Some(Box::new(PasswordAnswer)),
+        ..Ui::default()
+    };
+    let out = otp_login(&kdc, &armor, &mut ui).expect("password login by the responder's answer");
+    assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
+    assert_eq!(
+        ui.passwords, 0,
+        "the answer is the password: no password prompt"
+    );
+}
+
+/// The questions follow the KDC's hint and the loaded modules: a keyed user's hint offers
+/// encrypted challenge, which asks the password question (MIT `ec_prep_questions`), and with that
+/// module disabled only `otp` is asked. A keyless principal's hint has no encrypted challenge; the
+/// test store cannot make one (`set_keys` refuses an empty key list), so this is that arm.
+#[test]
+fn the_questions_follow_the_hint_and_the_loaded_modules() {
+    let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
+    let mut keyed = Ui {
+        responder: Some(Box::new(Answer {
+            ti: 0,
+            value: "123456",
+            expect: vec!["otp", "password"],
+        })),
+        ..Ui::default()
+    };
+    otp_login(&kdc, &armor, &mut keyed).expect("OTP login, keyed user");
+    krb5_config::isolate_test_krb5();
+    let dir = krb5_testkit::scratch_dir("client-otp-questions");
+    let path = dir.join("krb5.conf");
+    std::fs::write(
+        &path,
+        "[plugins]\n    clpreauth = {\n        disable = encrypted_challenge\n    }\n",
+    )
+    .unwrap();
+    krb5_config::set_test_krb5_paths(Some(vec![path]));
+    let mut alone = Ui {
+        responder: Some(Box::new(Answer {
+            ti: 0,
+            value: "123456",
+            expect: vec!["otp"],
+        })),
+        ..Ui::default()
+    };
+    otp_login(&kdc, &armor, &mut alone).expect("OTP login, encrypted challenge disabled");
 }
