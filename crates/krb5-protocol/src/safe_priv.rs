@@ -70,6 +70,24 @@ pub fn build_krb_safe_ex(
     seq_number: Option<u32>,
     include_time: bool,
 ) -> Result<KrbSafe, Error> {
+    build_krb_safe_from(session, user_data, seq_number, include_time, &local_addr())
+}
+
+/// [`build_krb_safe_ex`] from `s_address`, the sender's own address as its auth context holds
+/// it.
+/// MIT `create_krbsafe` (`lib/krb5/krb/mk_safe.c:62-63`): the s-address is the context's local address, the r-address its remote one (none here).
+///
+/// # Errors
+///
+/// [`Error::Asn1`] when the KRB-SAFE body does not encode, and [`Error::Crypto`] when the
+/// checksum under `session` cannot be computed.
+pub fn build_krb_safe_from(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    include_time: bool,
+    s_address: &HostAddress,
+) -> Result<KrbSafe, Error> {
     // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
         let (now, usec) = crate::us_timeofday();
@@ -82,7 +100,7 @@ pub fn build_krb_safe_ex(
         timestamp,
         usec,
         seq_number,
-        s_address: local_addr(),
+        s_address: s_address.clone(),
         r_address: None,
     };
     let body_der = encode(&body)?;
@@ -540,6 +558,32 @@ pub fn build_krb_priv_chained(
         include_time,
         state,
         local_addr(),
+    )
+}
+
+/// [`build_krb_priv_chained`] from `s_address`, the sender's own address as its auth context
+/// holds it.
+/// MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:60-61`): the s-address is the context's local address, the r-address its remote one (none here).
+///
+/// # Errors
+///
+/// [`Error::Asn1`] when the EncKrbPrivPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` and `state` fails.
+pub fn build_krb_priv_chained_from(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    include_time: bool,
+    s_address: &HostAddress,
+    state: &mut CipherState,
+) -> Result<KrbPriv, Error> {
+    krb_priv_part(
+        session,
+        user_data,
+        seq_number,
+        include_time,
+        state,
+        s_address.clone(),
     )
 }
 

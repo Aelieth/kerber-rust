@@ -67,8 +67,8 @@ pub use daemon::{
     open_database, write_pid_file,
 };
 pub use dblock::{
-    DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, FileLockGuard, SUFFIX_LOCK,
-    SUFFIX_POLICY_LOCK, lock_file_exclusive, suffixed,
+    DbAge, DbLock, DbLockError, DbLockHold, DbLockMode, FileLockGuard, HeldFileLock, SUFFIX_LOCK,
+    SUFFIX_POLICY_LOCK, lock_file_exclusive, lock_file_shared_nowait, suffixed,
 };
 pub use error::Error;
 pub use issue::{

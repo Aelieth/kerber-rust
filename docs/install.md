@@ -604,10 +604,11 @@ release made, five things changed:
 - The update log is MIT's: kept only with `iprop_enable` (which, as MIT's, needs `iprop_port`),
   one entry appended per change. Without iprop an earlier release's `principal.ulog` is no
   longer read or written and may be removed; with iprop the first program that maps it starts
-  it over, so each replica takes one full dump (`krb5-kprop -i`). kadmind serves iprop on its
-  own port and nothing listens on `iprop_port`, so an MIT replica's `iprop_port` names kadmind's
-  port. kadmind grants a full resync but sends no dump: each one (after a policy change, or a
-  replica the log has run past) needs `krb5-kprop -i` run by hand.
+  it over, so each replica takes one full dump (`kdb5_util dump -i1 FILE`, then
+  `kprop -f FILE REPLICA`, what MIT's kadmind runs). kadmind serves iprop on its own port and
+  nothing listens on `iprop_port`, so an MIT replica's `iprop_port` names kadmind's port. kadmind
+  grants a full resync but sends no dump: each one (after a policy change, or a replica the log
+  has run past) needs those two commands run by hand.
 
 Stop the daemons and install, and move the realm into the KDC directory only if it was kept
 elsewhere (leave `OLD` empty when it is already in `/var/kerberos/krb5kdc`):
@@ -677,15 +678,20 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 - MIT's database files (db2, LMDB) and the LDAP backend. The database is MIT's dump format, so an
   MIT realm moves over with dump and load.
 - Replica KDCs: Fedora's `kprop.service` and MIT's `kpropd` daemon. `kprop` and `kpropd` are
-  installed and open the dump with the stash. `kpropd` takes MIT's `-r`, `-s` (else the default
-  keytab) and `-a` (else `kpropd.acl` in the KDC directory) and an address (without one it
-  listens on port 754 of every address, as MIT's does), not MIT's other options (`-f`, `-P`,
+  installed; `kpropd` opens the dump with the stash. `kpropd` takes MIT's `-r`, `-s` (else the
+  default keytab) and `-a` (else `kpropd.acl` in the KDC directory) and an address (without one
+  it listens on port 754 of every address, as MIT's does), not MIT's other options (`-f`, `-P`,
   `--pid-file`, `-D`), and it does not detach. As MIT's, it accepts a ticket for its own
   `host/<this host>` only, its name as MIT makes it without DNS: a hostname without a dot gains
   `qualify_shortname`, else the resolver's first search domain, and is lowercased. MIT's DNS
   canonicalization (`dns_canonicalize_hostname = true`, its default, and the second step of
   `fallback`) is not ported, so the replica's keytab entry and `kprop`'s target must be that name.
-  `kprop` takes `-s`, else the default keytab. So `make install` installs no `kprop.service`.
+  `kprop` is MIT's (`kprop [-r realm] [-f file] [-d] [-P port] [-s keytab] replica_host`): it
+  never opens the database but sends the file `kdb5_util dump` wrote (`-f`, else
+  `replica_datatrans` in the KDC directory) as `host/<this host>`, its ticket from a KDC with the
+  key in `-s` (else the default keytab), to `-P`'s port (else `krb5_prop` in `/etc/services`),
+  then writes `FILE.REPLICA.last_prop`. The replica's `kpropd.acl` names that principal. So
+  `make install` installs no `kprop.service`.
 - SPAKE groups P-384 and P-521 (MIT's OpenSSL groups). `edwards25519`, the group Fedora's
   `krb5.conf` names and its `kdc.conf` challenges with, and P-256 work as MIT's.
 - RADIUS-backed OTP preauthentication (OTP works through an embedder's verifier: [OTP preauth](#otp-preauth)), PKINIT configured in `kdc.conf`, master key rollover

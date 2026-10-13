@@ -77,8 +77,8 @@ Rows: [decode](gates-decode.md), [OTP](gates-otp.md).
 | `scripts/kpasswd-gate.sh` | MIT | wrapper | — | local wrapper: `kpasswd-rust-gate.sh` then `kpasswd-mit-gate.sh` |
 | `scripts/kpasswd-mit-gate.sh` | MIT | `ci:harness-2` | fail-red | the oracle leg of `kpasswd-rust-gate.sh`, against MIT kadmind 464: `-minlength 8` is `SOFTERROR` (`kpasswd` rc 2, `Password change rejected`, `result_code=4`); TGT `kvno kadmin/changepw` / `kadmin/admin` refused (`KDC policy rejects request`), MIT KDC log `TGT BASED NOT ALLOWED` |
 | `scripts/kpasswd-rust-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kpasswd` vs Rust kadmind 464, then Rust `krb5-kpasswd` vs Rust kadmind: new password `kinit`; old fails; second `kpasswd` + `kinit`; `-minlength 8` is RFC 3244 `SOFTERROR` (rc 2, `Password change rejected`, `result_code=4`); TGT `kvno kadmin/changepw` is 12 `TGT BASED NOT ALLOWED` (`KDC policy rejects request`) |
-| `scripts/kprop-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kprop` dump v7 vs `krb5-kpropd` 754: MIT `kinit user` on replica; `klist` names `user@KERBER.TEST` |
-| `scripts/kprop-reverse-gate.sh` | MIT | `ci:harness-2` | fail-red | Rust `krb5-kprop` vs MIT `kpropd`: MIT `krb5kdc` + MIT `kinit user@KERBER.TEST` |
+| `scripts/kprop-gate.sh` | MIT | `ci:harness-2` | fail-red | MIT `kprop` dump v7 (+250 principals) vs `krb5-kpropd` 754: MIT `kinit user` on replica; `klist` names `user@KERBER.TEST` |
+| `scripts/kprop-reverse-gate.sh` | MIT | `ci:harness-2` | fail-red | `krb5-kdb dump` (+250 principals) + Rust `krb5-kprop -f` vs MIT `kpropd`: byte-equal, `.last_prop`; MIT `kinit user` |
 | `scripts/ktutil-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `ktadd` / Rust `ktutil` / MIT `kinit -k`: Rust list of MIT keytab; Rust-written keytab `kinit -k`; MIT's v1 keytab (kvno 300) listed alike, `wkt` onto it and to a new file as MIT's |
 | `scripts/mit-fast-kdc-gate.sh` | MIT | `ci:mit-extra` | fail-red | MIT `kinit -T` + `kvno` vs Rust KDC; forged-realm armor vs MIT + Rust; forged-realm FAST TGS: plain `kinit` TRACE `FAST negotiation: available` (RFC 6806 `enc-pa-rep`); `kinit -T` TRACE `Upgrading to FAST due to presence of PA_FX_FAST` or `Using FAST due to armor ccache negotiation result`; ≥2 `fast::KrbFastResponse` in the KDC log; forged `kinit -T` is 35 / `The ticket isn't for us` both sides (both KDC logs `FIND_FAST`); forged FAST TGS is 7 `PROCESS_TGS` + MIT `UNKNOWN SERVER: server='krbtgt/KERBER.TEST@FORGED.EXAMPLE'`; client `Server host/testhost.kerber.test@KERBER.TEST not found in Kerberos database` verbatim; MIT default-client `edwards25519` SPAKE vs a P-256-only KDC is 24 on both |
 | `scripts/pkinit-gate.sh` | MIT | `ci:harness` | fail-red | MIT `kinit -X X509_user_identity=FILE:` vs Rust KDC: `pkinit.so` present; log `rfc8636 sha256 kdf`; SAN≠cname log `pkinit client san`; anonymous `kinit -n` → `klist` `WELLKNOWN/ANONYMOUS` / `WELLKNOWN:ANONYMOUS`, `restrict_anon` `kvno` prints `KDC policy rejects request` and the Rust KDC log has `ANONYMOUS NOT ALLOWED`; RFC 8070 `pkinit_require_freshness = true`: MIT `kinit -X` succeeds and the Rust KDC log has `freshness token received`, `disable_freshness=yes` is `Preauthentication failed` + `no freshness token, rejecting` |
@@ -287,7 +287,7 @@ not check (a unit test, or "not asserted").
   (`aes256-cts-hmac-sha1-96`). A missing Heimdal image is honest `exit 2`
   plus `heimdal-gate-unavailable.log`; missing docker is `exit 2`.
 - `scripts/iprop-gate.sh` — MIT `kpropd -A` must not report IPROP program
-  unregistered. After first-contact kprop `-i` (ipropx), mutate the master,
+  unregistered. After a first ipropx `kprop -f`, mutate the master,
   restart the Rust master (`krb5-kdc` and `krb5-kadmind`), and require serial-delta with no extra
   FULL_RESYNC: MIT `kinit extra` on the MIT replica; `krb5-iprop-pull` vs
   MIT kadmind then MIT `kinit extra2` (the replica dump holds the `setstr`
@@ -416,11 +416,11 @@ not check (a unit test, or "not asserted").
   on 754 (`kprop5_01` sendauth, KRB-SAFE size, KRB-PRIV data), then MIT
   `kinit user` against the replica Rust KDC. `klist` names
   `user@KERBER.TEST`.
-- `scripts/kprop-reverse-gate.sh` — Rust `krb5-kprop` to MIT `kpropd`
-  (`kpropd -S -P 754`), then MIT `krb5kdc` + MIT `kinit user@KERBER.TEST`.
-  Additive to the in-process kprop dump/send tests in `krb5-admin`; it does
-  not replace them. Missing MIT image is `exit 2` under
-  `KERBER_SKIP_MIT_BUILD=1` (as in CI); otherwise `need_image` builds it.
+- `scripts/kprop-reverse-gate.sh` — `krb5-kdb dump`, then Rust `krb5-kprop -f`
+  of it and of +250 principals to MIT `kpropd -S -P 754` (`SUCCEEDED`,
+  `.last_prop`, byte-equal dumps), then MIT `krb5kdc` + `kinit
+  user`. No MIT image is `exit 2` under `KERBER_SKIP_MIT_BUILD=1`, else
+  `need_image`.
 - `scripts/mit-fast-kdc-gate.sh` — MIT `kinit -T` + `kvno` against the Rust
   KDC (TRACE `Upgrading to FAST due to presence of PA_FX_FAST` or `Using FAST
   due to armor ccache negotiation result`; KDC log ≥2 `KrbFastResponse`).
@@ -453,7 +453,7 @@ not check (a unit test, or "not asserted").
   loopback Rust↔Rust gate, not an oracle.
 - `scripts/prod-realm-gate.sh` — multi-host: `PROD.KERBER.TEST` on a docker
   network (Rust primary + Rust replica + MIT client). MIT `kinit`/
-  `kvno`/`kadmin addprinc+ktadd` against the primary; Rust `krb5-kprop` to
+  `kvno`/`kadmin addprinc+ktadd` against the primary; `kprop -f` of a dump to
   the replica `:754`; kill primary; MIT `kinit`/`kvno` against the replica.
   Structured-log analysis + a real eth0 pcap from tcpdump on the primary,
   which must hold AS/TGS msg types 10/11/12/13; with no tcpdump on the

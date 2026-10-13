@@ -95,8 +95,8 @@ AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
 `scripts/kpasswd-gate.sh`), `krb5-kpropd` on 754 wrapping MIT dump
 version 7 (`sendauth` `kprop5_01`, KRB-SAFE size, KRB-PRIV chunks).
 MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
-Rust `krb5-kprop` → MIT `kpropd` then MIT `kinit` is
-`scripts/kprop-reverse-gate.sh` (additive to the in-process kprop tests).
+`krb5-kdb dump`, then Rust `krb5-kprop -f` of that file → MIT `kpropd`, then
+MIT `kinit` is `scripts/kprop-reverse-gate.sh`: kprop, as MIT's, opens no database.
 A multi-host MIT client against a Rust primary and replica is
 `scripts/prod-realm-gate.sh`. Wire stress, chaos and soak over that realm
 are `scripts/stress-gate.sh`, `scripts/chaos-gate.sh`, and

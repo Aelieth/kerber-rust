@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
-need_bins krb5-kdc krb5-pac-extract krb5-kadmind krb5-kprop krb5-kpropd krb5-iprop-pull krb5-kadmin-local
+need_bins krb5-kdc krb5-pac-extract krb5-kadmind krb5-kdb krb5-kprop krb5-kpropd krb5-iprop-pull krb5-kadmin-local
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-iprop-gate"
@@ -30,11 +30,25 @@ fi
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5-pac-extract
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kprop" "$NAME":/tmp/krb5-kprop
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kpropd" "$NAME":/tmp/krb5-kpropd
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-iprop-pull" "$NAME":/tmp/krb5-iprop-pull
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmin-local" "$NAME":/tmp/krb5-kadmin-local
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-kadmind /tmp/krb5-kprop /tmp/krb5-kpropd /tmp/krb5-iprop-pull /tmp/krb5-kadmin-local
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract /tmp/krb5-kadmind /tmp/krb5-kdb /tmp/krb5-kprop /tmp/krb5-kpropd /tmp/krb5-iprop-pull /tmp/krb5-kadmin-local
+# The full dump an iprop replica takes, as MIT kadmind's resync child makes and sends it
+# (ipropd_svc.c ipropx_resync): `kdb5_util dump -i1` of the Rust master, then `kprop -f`.
+iprop_full_dump() {
+    docker exec \
+        -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf \
+        -e KRB5_KDC_DB=/tmp/principal \
+        -e KRB5_KDC_STASH=/tmp/stash \
+        -e KRB5_MASTER_PASSWORD=masterpassword \
+        "$NAME" /tmp/krb5-kdb dump -i1 /tmp/iprop.dump
+    docker exec "$NAME" head -1 /tmp/iprop.dump | grep -E '^ipropx 1 [0-9]+ [0-9]+ [0-9]+$'
+    docker exec -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+        "$NAME" /tmp/krb5-kprop -f /tmp/iprop.dump -P 754 -s /tmp/iprop.keytab testhost.kerber.test 2>&1 || true
+}
 docker exec "$NAME" sh -c 'cat >/tmp/kadm5.acl <<EOF
 admin@KERBER.TEST *
 kiprop/*@KERBER.TEST p
@@ -255,15 +269,11 @@ kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
 mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'getpol ihp' 2>&1 | grep -F 'Policy: ihp'
 
-echo "==== first contact: Rust kprop -i dump (ipropx last_sno) ===="
-KPROP="$(docker exec \
-    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    -e KRB5_KDC_DB=/tmp/principal \
-    -e KRB5_KDC_STASH=/tmp/stash \
-    -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kprop -i -P 754 -s /tmp/iprop.keytab -n testhost.kerber.test testhost.kerber.test 2>&1 || true)"
+echo "==== first contact: krb5-kdb dump -i1 (ipropx last_sno), then Rust kprop -f ===="
+KPROP="$(iprop_full_dump)"
 echo "$KPROP"
-echo "$KPROP" | grep -q 'kprop ok'
+echo "$KPROP" | grep -qE '^ipropx 1 [0-9]+ [0-9]+ [0-9]+$'
+echo "$KPROP" | grep -qx 'Database propagation to testhost.kerber.test: SUCCEEDED'
 ok=0
 for _ in $(seq 1 40); do
     if mit_kadmin_local "$NAME" -- -q 'getprinc user' 2>/dev/null | grep -q 'Principal: user@KERBER.TEST'; then
@@ -384,7 +394,7 @@ echo "==== a policy change restarts the log: MIT kpropd asks for a full resync, 
 # kdb5.c krb5_db_create_policy: a logging primary reinitializes its update log
 # after a policy change (one dummy entry at serial 1), so the replica, past it,
 # needs the full dump. This kadmind sends none itself (ipropx_resync's kprop
-# child), so it is pushed with krb5-kprop -i, as an operator would.
+# child), so it is pushed with krb5-kdb dump -i1 and krb5-kprop -f, as an operator would.
 FR_BEFORE="$(docker exec "$NAME" grep -c 'Full resync needed' /tmp/kpropd-iprop.log || true)"
 kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
     "$NAME" -- -p admin@KERBER.TEST -w adminpassword -q 'addpol -history 2 ihp2'
@@ -397,14 +407,10 @@ _full_resync_again() {
 }
 retry_until --log "$NAME" /tmp/kpropd-iprop.log -- 400 'a second Full resync needed in /tmp/kpropd-iprop.log' _full_resync_again
 echo "MIT kpropd Full resync needed: $FR_BEFORE before the policy, $(docker exec "$NAME" grep -c 'Full resync needed' /tmp/kpropd-iprop.log || true) after"
-KPROP2="$(docker exec \
-    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
-    -e KRB5_KDC_DB=/tmp/principal \
-    -e KRB5_KDC_STASH=/tmp/stash \
-    -e KRB5_MASTER_PASSWORD=masterpassword \
-    "$NAME" /tmp/krb5-kprop -i -P 754 -s /tmp/iprop.keytab -n testhost.kerber.test testhost.kerber.test 2>&1 || true)"
+KPROP2="$(iprop_full_dump)"
 echo "$KPROP2"
-echo "$KPROP2" | grep -q 'kprop ok'
+echo "$KPROP2" | grep -qE '^ipropx 1 [0-9]+ [0-9]+ [0-9]+$'
+echo "$KPROP2" | grep -qx 'Database propagation to testhost.kerber.test: SUCCEEDED'
 ok=0
 for _ in $(seq 1 40); do
     if mit_kadmin_local "$NAME" -- -q 'getpol ihp2' 2>/dev/null | grep -q 'Policy: ihp2'; then

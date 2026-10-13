@@ -1,34 +1,39 @@
-//! MIT-wire kprop/kpropd on TCP 754 wrapping a version-7 dump.
+//! MIT-wire kprop/kpropd on TCP 754 carrying a `kdb5_util` dump.
 //!
 //! Framing (MIT 1.22.2 `kprop.c` / `kpropd.c`):
 //! `sendauth` (`KRB5_SENDAUTH_V1.0` then `kprop5_01`) with
-//! `AP_OPTS_MUTUAL_REQUIRED`; KRB-SAFE 4-byte BE dump size; `initivector`;
-//! KRB-PRIV 32768-byte dump chunks; KRB-SAFE size ack. Payload is MIT
-//! `kdb5_util` dump text, not KDB3.
+//! `AP_OPTS_MUTUAL_REQUIRED`; KRB-SAFE dump size (4 bytes, or 12 for 0 and past 32 bits);
+//! `initivector`; KRB-PRIV 32768-byte dump chunks; KRB-SAFE size ack. Payload is MIT
+//! `kdb5_util` dump text, not KDB3. The sender, MIT's `kprop`, is the `send` module.
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::path::Path;
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{CipherState, EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
+use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt};
 use krb5_kdc::{
-    LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, dump_store_iprop,
-    dump_store_iprop_with_key, dump_store_with_key, load_dump, load_dump_with_stash,
-    save_store_fresh,
+    LoadLog, PrincipalStore, Ulog, UlogLast, dump_store, dump_store_with_key, load_dump,
+    load_dump_with_stash, save_store_fresh,
 };
 use krb5_protocol::{
     AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, KeytabEntry, RemoteSeq,
-    ReplayCache, build_ap_req_mutual_seq, build_krb_priv_chained, build_krb_safe_ex,
-    local_host_address, permitted_enctypes_kdc, us_timeofday, verify_ap_rep, verify_ap_req_ex,
-    verify_krb_safe_checksum,
+    ReplayCache, build_ap_req_mutual_seq, build_krb_safe_from, local_host_address,
+    permitted_enctypes_kdc, us_timeofday, verify_ap_req_ex,
 };
 use krb5_types::{
-    ApReq, EncTicketPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, NameError,
-    PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, ku,
+    ApReq, EncTicketPart, EncryptedData, EncryptionKey, HostAddress, KerberosTime, KrbError,
+    NameError, PrincipalName, Ticket, TicketFlags, TransitedEncoding, err, ku,
 };
 
 use crate::Error;
+
+mod send;
+
+pub use send::{
+    KPROP_SERVICE, KpropCreds, KpropDump, KpropError, RemoteError, kprop_get_tickets,
+    kprop_open_connection, kprop_sendauth, kprop_update_last_prop_file, kprop_xmit_database,
+};
 
 /// MIT `KPROP_PROT_VERSION`.
 const KPROP_PROT_VERSION: &[u8] = b"kprop5_01\0";
@@ -47,46 +52,6 @@ pub fn kprop_dump_bytes(store: &PrincipalStore, master_password: &[u8]) -> Resul
     dump_store(store, master_password)
         .map(String::into_bytes)
         .map_err(|e| Error::Inner(e.to_string()))
-}
-
-/// MIT `kdb5_util dump -i1` body so `kpropd -A` `load -i` sets replica last_sno: `last` is the
-/// update log's last entry, read before `store` was ([`iprop_snapshot`]).
-///
-/// # Errors
-///
-/// [`Error::Inner`] when string-to-key of `master_password` fails or a key cannot be wrapped
-/// under the derived master key.
-pub fn kprop_dump_iprop(
-    store: &PrincipalStore,
-    master_password: &[u8],
-    last: UlogLast,
-) -> Result<Vec<u8>, Error> {
-    dump_store_iprop(store, master_password, last)
-        .map(String::into_bytes)
-        .map_err(|e| Error::Inner(e.to_string()))
-}
-
-/// What `kprop -i` sends, read in MIT's order: the update log's last serial and time, then the
-/// database. The dump then holds at least what its header says, and a change made after the read
-/// reaches the replica as an update, never past it.
-/// MIT `dump_db` (`kadmin/dbutil/dump.c:1318-1333`): the update log's last serial and time are read before the database is iterated.
-///
-/// # Errors
-///
-/// [`Error::Inner`] when the update log cannot be mapped or read, or the database does not load.
-pub fn iprop_snapshot(
-    db: &Path,
-    stash: &Path,
-    params: &krb5_config::IpropParams,
-) -> Result<(PrincipalStore, UlogLast), Error> {
-    let log = Ulog::map(&params.logfile, params.ulogsize)
-        .map_err(|_| Error::Inner("Could not map log".into()))?;
-    let last = log
-        .get_last()
-        .map_err(|e| Error::Inner(format!("{e} while reading update log header")))?;
-    let store =
-        krb5_kdc::load_store(db, stash).map_err(|e| Error::Inner(format!("load store: {e}")))?;
-    Ok((store, last))
 }
 
 /// Load a kprop body as dump version 6/7. Rejects KDB3 magic and truncated
@@ -235,17 +200,15 @@ fn mit_safe_dummy_der(msg: &krb5_types::KrbSafe) -> Result<Vec<u8>, Error> {
     encode(&dummy).map_err(|e| Error::Inner(e.to_string()))
 }
 
-fn verify_safe_user_data(
+/// A KRB-SAFE of `user_data` from `s_address` carrying `seq` and no timestamp, as kprop's and
+/// kpropd's auth contexts (`DO_SEQUENCE` only) make it.
+fn build_mit_safe(
     session: &ProtocolKey,
-    raw: &[u8],
-) -> Result<(Vec<u8>, Option<u32>), Error> {
-    let msg = verify_krb_safe_checksum(session, raw, None, None)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    Ok((msg.safe_body.user_data.to_vec(), msg.safe_body.seq_number))
-}
-
-fn build_mit_safe(session: &ProtocolKey, user_data: &[u8], seq: u32) -> Result<Vec<u8>, Error> {
-    let safe = build_krb_safe_ex(session, user_data, Some(seq), false)
+    user_data: &[u8],
+    seq: u32,
+    s_address: &HostAddress,
+) -> Result<Vec<u8>, Error> {
+    let safe = build_krb_safe_from(session, user_data, Some(seq), false, s_address)
         .map_err(|e| Error::Inner(e.to_string()))?;
     let dummy = mit_safe_dummy_der(&safe)?;
     let usage = krb5_crypto::KeyUsage::new(krb5_types::ku::KRB_SAFE_CKSUM)
@@ -266,10 +229,15 @@ pub struct KpropAuth {
     local_seq: u32,
     /// The sequence number the peer's next message must carry: for kprop, kpropd's AP-REP one.
     remote: RemoteSeq,
+    /// The auth context's local address, the s-address of each KRB-SAFE and KRB-PRIV sent: for
+    /// kprop its own end of the connection, for kpropd (as MIT's sets it) the peer's.
+    local_addr: HostAddress,
     /// kpropd's `recvauth` auth context, which reads kprop's size KRB-SAFE and dump KRB-PRIVs.
     acceptor: Option<AcceptorAuthContext>,
     /// The names kpropd's KRB-ERRORs carry: its own principal and realm, and the client's.
     names: Option<KpropdNames>,
+    /// The names kprop's own KRB-ERROR carries.
+    sender: Option<send::SenderNames>,
 }
 
 /// The principals in kpropd's KRB-ERROR (MIT `send_error`'s `server` and `client`).
@@ -442,10 +410,8 @@ fn recvauth_with(
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     // MIT `doit` (`kpropd.c:495-526`): the address `kerberos_authenticate` takes as its own is `from`, the peer's, from `getpeername`.
     // MIT `kerberos_authenticate` (`kpropd.c:1201-1247`): that address is set as the local one and none as the remote one, so a NAT may change the client's.
-    ac.set_addrs(
-        Some(local_host_address(stream.peer_addr().ok().map(|a| a.ip()))),
-        None,
-    );
+    let local_addr = local_host_address(stream.peer_addr().ok().map(|a| a.ip()));
+    ac.set_addrs(Some(local_addr.clone()), None);
     write_message(stream, &[]).map_err(|e| Error::Inner(e.to_string()))?;
     let session = session_from_ticket(&ok)?;
     // MIT kprop's authenticator carries no subkey, so the AP-REP echoes none: it carries the
@@ -471,6 +437,7 @@ fn recvauth_with(
         session,
         local_seq,
         remote: RemoteSeq::new(ac.remote_seq()),
+        local_addr,
         acceptor: Some(ac),
         names: Some(KpropdNames {
             server: expected_server.cloned().unwrap_or_else(kpropd_error_server),
@@ -478,6 +445,7 @@ fn recvauth_with(
             client: ok.authenticator.cname.clone(),
             crealm: ok.authenticator.crealm.clone(),
         }),
+        sender: None,
     })
 }
 
@@ -1093,7 +1061,9 @@ pub fn kpropd_recv_dump(stream: &mut TcpStream, auth: &mut KpropAuth) -> Result<
     Ok(dump)
 }
 
-/// Send the SAFE size-ack MIT `kprop` waits for.
+/// Send the SAFE size-ack MIT `kprop` waits for, from the peer's address as MIT's kpropd sends
+/// it.
+/// MIT `recv_database` (`kprop/kpropd.c:1460-1470`): the acknowledgement is `krb5_mk_safe` of the size on recvauth's context, whose local address `kerberos_authenticate` set to the peer's.
 ///
 /// # Errors
 ///
@@ -1106,7 +1076,7 @@ pub fn kpropd_send_ack(
 ) -> Result<(), Error> {
     let seq = auth.next_local_seq();
     let body = encode_database_size(size);
-    let der = build_mit_safe(&auth.session, &body, seq)?;
+    let der = build_mit_safe(&auth.session, &body, seq, &auth.local_addr)?;
     write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
     Ok(())
 }
@@ -1410,111 +1380,21 @@ pub fn iprop_poll_once(master: &PrincipalStore, slave: &mut PrincipalStore) -> I
     }
 }
 
-/// Primary: `sendauth` then dump bytes.
+/// Send `dump` after [`kprop_sendauth`], as [`kprop_xmit_database`] sends a dump file.
 ///
 /// # Errors
 ///
-/// [`Error::Inner`] when a read or write on `stream` fails or a message exceeds 8 MiB, the
-/// replica rejects the sendauth version, the AP-REQ cannot be built, the replica answers with
-/// a KRB-ERROR, or the AP-REP does not verify under `session`.
-pub fn kprop_sendauth(
-    stream: &mut TcpStream,
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &krb5_types::Realm,
-    cname: &PrincipalName,
-    seq: u32,
-) -> Result<KpropAuth, Error> {
-    // MIT `krb5_sendauth` (`lib/krb5/krb/sendauth.c:63-67`): the two version strings go out in
-    // one write.
-    krb5_protocol::write_messages(stream, &[SENDAUTH_VERSION, KPROP_PROT_VERSION])
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    let mut resp = [0u8; 1];
-    stream
-        .read_exact(&mut resp)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    if resp[0] != 0 {
-        return Err(Error::Inner(format!("sendauth rejected {}", resp[0])));
-    }
-    let ap = build_ap_req_mutual_seq(ticket, session, crealm, cname, seq)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    let ap_der = encode(&ap).map_err(|e| Error::Inner(e.to_string()))?;
-    write_message(stream, &ap_der).map_err(|e| Error::Inner(e.to_string()))?;
-    let err_msg = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    if !err_msg.is_empty() {
-        return Err(Error::Inner("sendauth KRB-ERROR".into()));
-    }
-    let ap_rep_raw = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    let usage = krb5_crypto::KeyUsage::new(krb5_types::ku::AP_REQ_AUTHENTICATOR)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    let auth_plain = krb5_crypto::decrypt_enc_data(
-        session,
-        usage,
-        ap.authenticator.etype,
-        ap.authenticator.cipher.as_ref(),
-    )
-    .map_err(|e| Error::Inner(e.to_string()))?;
-    let authenticator: krb5_types::Authenticator =
-        decode(&auth_plain).map_err(|e| Error::Inner(e.to_string()))?;
-    let rep = verify_ap_rep(&ap_rep_raw, session, &authenticator)
-        .map_err(|e| Error::Inner(e.to_string()))?;
-    // MIT kpropd expects the dump-size SAFE to use the authenticator
-    // sequence, not authenticator+1 (`Message out of order`).
-    // MIT `krb5_rd_rep` (`lib/krb5/krb/rd_rep.c:130-130`): kpropd's next message must carry the AP-REP's sequence number.
-    Ok(KpropAuth {
-        session: session.clone(),
-        local_seq: seq,
-        remote: RemoteSeq::new(rep.seq_number.unwrap_or(0)),
-        acceptor: None,
-        names: None,
-    })
-}
-
-/// Send dump bytes after [`kprop_sendauth`].
-///
-/// # Errors
-///
-/// [`Error::Inner`] when a read or write on `stream` fails or a message exceeds 8 MiB, the size
-/// KRB-SAFE or a KRB-PRIV chunk cannot be built, the ack KRB-SAFE does not verify or carries a
-/// malformed size, or the acked size is not `dump.len()`.
+/// [`KpropError`] as [`kprop_xmit_database`] fails.
 pub fn kprop_send_dump(
     stream: &mut TcpStream,
     auth: &mut KpropAuth,
     dump: &[u8],
-) -> Result<(), Error> {
-    let size = encode_database_size(dump.len() as u64);
-    let seq = auth.next_local_seq();
-    let der = build_mit_safe(&auth.session, &size, seq)?;
-    write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
-    let mut state = CipherState::initial();
-    for chunk in dump.chunks(KPROP_BUFSIZ) {
-        let seq = auth.next_local_seq();
-        let priv_msg = build_krb_priv_chained(&auth.session, chunk, Some(seq), false, &mut state)
-            .map_err(|e| Error::Inner(e.to_string()))?;
-        let der = encode(&priv_msg).map_err(|e| Error::Inner(e.to_string()))?;
-        write_message(stream, &der).map_err(|e| Error::Inner(e.to_string()))?;
-    }
-    let ack = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
-    let (plain, ack_seq) = verify_safe_user_data(&auth.session, &ack)?;
-    // MIT `xmit_database` (`kprop/kprop.c:524-529`): `krb5_rd_safe` with `DO_SEQUENCE` takes the acknowledgement only with kpropd's next sequence number, the AP-REP's.
-    if !auth.remote.check(ack_seq.unwrap_or(0)) {
-        return Err(Error::Inner(
-            "Message out of order while decoding final size packet from server".into(),
-        ));
-    }
-    auth.remote.advance();
-    let got = decode_database_size(&plain)?;
-    if got != dump.len() as u64 {
-        return Err(Error::Inner(format!(
-            "kprop ack size {got} want {}",
-            dump.len()
-        )));
-    }
-    Ok(())
+) -> Result<(), KpropError> {
+    kprop_xmit_database(stream, auth, &mut &dump[..], dump.len() as u64, false)
 }
 
-/// Primary helper: dump v7 + sendauth + PRIV chunks. The dump's keys are wrapped under
-/// `master`, the key the primary's stash holds.
+/// `store`'s dump, its keys wrapped under `master`, sent over `stream` with the ticket
+/// `ticket` / `session` for `cname`: a test's kprop, which has the database in hand.
 ///
 /// # Errors
 ///
@@ -1529,119 +1409,36 @@ pub fn kprop_send_store(
     crealm: &krb5_types::Realm,
     cname: &PrincipalName,
 ) -> Result<(), Error> {
-    kprop_send_store_ex(stream, store, master, ticket, session, crealm, cname, None)
-}
-
-/// [`kprop_send_store`] with an ipropx dump header (`kpropd -A` `load -i`) carrying `last`, the
-/// update log's last entry read before `store` ([`iprop_snapshot`]).
-///
-/// # Errors
-///
-/// [`Error::Inner`] when a key cannot be wrapped under `master`, or when [`kprop_sendauth`] or
-/// [`kprop_send_dump`] fails.
-#[expect(clippy::too_many_arguments, reason = "krb5_creds args, no value type")]
-pub fn kprop_send_store_iprop(
-    stream: &mut TcpStream,
-    store: &PrincipalStore,
-    master: &ProtocolKey,
-    last: UlogLast,
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &krb5_types::Realm,
-    cname: &PrincipalName,
-) -> Result<(), Error> {
-    kprop_send_store_ex(
-        stream,
-        store,
-        master,
+    let dump = dump_store_with_key(store, master)
+        .map(String::into_bytes)
+        .map_err(|e| Error::Inner(e.to_string()))?;
+    let creds = KpropCreds {
         ticket,
-        session,
-        crealm,
-        cname,
-        Some(last),
-    )
-}
-
-#[expect(clippy::too_many_arguments, reason = "krb5_creds args, no value type")]
-fn kprop_send_store_ex(
-    stream: &mut TcpStream,
-    store: &PrincipalStore,
-    master: &ProtocolKey,
-    ticket: Ticket,
-    session: &ProtocolKey,
-    crealm: &krb5_types::Realm,
-    cname: &PrincipalName,
-    iprop: Option<UlogLast>,
-) -> Result<(), Error> {
-    let dump = match iprop {
-        Some(last) => dump_store_iprop_with_key(store, master, last),
-        None => dump_store_with_key(store, master),
-    }
-    .map(String::into_bytes)
-    .map_err(|e| Error::Inner(e.to_string()))?;
-    let mut auth = kprop_sendauth(stream, ticket, session, crealm, cname, 1)?;
-    kprop_send_dump(stream, &mut auth, &dump)
+        session: session.clone(),
+        client: cname.clone(),
+        crealm: crealm.clone(),
+        time_offset: 0,
+    };
+    let local = stream.local_addr().ok().map(|a| a.ip());
+    let mut auth = kprop_sendauth(stream, &creds, local_host_address(local))
+        .map_err(|e| Error::Inner(e.to_string()))?;
+    kprop_send_dump(stream, &mut auth, &dump).map_err(|e| Error::Inner(e.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use krb5_kdc::testrealm::{bootstrap_documented, documented_admin_id};
+    use krb5_crypto::CipherState;
+    use krb5_kdc::testrealm::bootstrap_documented;
+    use krb5_protocol::build_krb_priv_chained;
 
     use krb5_types::PrincipalName;
-
-    /// MIT `dump_db` reads the update log's last serial before the database: a change committed
-    /// after `kprop -i` read the database is not in the dump, and the header is the serial from
-    /// before it, so the replica asks for that change as an update instead of skipping it.
-    #[test]
-    fn an_iprop_dump_header_is_the_serial_read_before_the_database() {
-        let dir = krb5_testkit::scratch_dir("kprop-iprop-snapshot");
-        let (db, stash) = (dir.join("principal"), dir.join("stash"));
-        let log = dir.join("principal.ulog");
-        let (store, acl) = bootstrap_documented().unwrap();
-        krb5_kdc::save_store(&store, &db, &stash).unwrap();
-        let mut primary = krb5_kdc::load_store(&db, &stash).unwrap();
-        primary
-            .map_ulog(&log, 100, krb5_kdc::IpropRole::Primary)
-            .unwrap();
-        let actor = documented_admin_id();
-        let host = |h: &str| PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", h]);
-        primary
-            .change(|s| s.create_host(&acl, &actor, &host("before.kerber.test")))
-            .unwrap()
-            .unwrap();
-        let params = krb5_config::IpropParams {
-            enabled: true,
-            port: Some(2121),
-            logfile: log.clone(),
-            ulogsize: 100,
-        };
-        let (snapshot, last) = iprop_snapshot(&db, &stash, &params).unwrap();
-        // Committed between kprop's read of the database and its dump.
-        primary
-            .change(|s| s.create_host(&acl, &actor, &host("after.kerber.test")))
-            .unwrap()
-            .unwrap();
-        assert_eq!(primary.ulog_last().unwrap().sno, last.sno + 1);
-        let mkey = snapshot.iprop_master_key().unwrap();
-        let dump = dump_store_iprop_with_key(&snapshot, &mkey, last).unwrap();
-        assert_eq!(
-            dump.lines().next().unwrap(),
-            format!(
-                "ipropx 1 {} {} {}",
-                last.sno, last.time.seconds, last.time.useconds
-            )
-        );
-        assert!(dump.contains("host/before.kerber.test@KERBER.TEST"));
-        assert!(!dump.contains("host/after.kerber.test@KERBER.TEST"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 
     #[cfg(feature = "test-hooks")]
     #[test]
     fn iprop_poll_applies_delta_or_signals_resync() {
         use krb5_kdc::IpropRole;
-        use krb5_kdc::testrealm::map_memory_ulog;
+        use krb5_kdc::testrealm::{documented_admin_id, map_memory_ulog};
         let (mut master, acl) = bootstrap_documented().unwrap();
         let (mut slave, _) = bootstrap_documented().unwrap();
         map_memory_ulog(&mut master, 100, IpropRole::Primary).unwrap();
@@ -2801,7 +2598,8 @@ mod tests {
         let _ap_rep = read_message(&mut client).unwrap();
         let dump = b"kdb5_util load_dump version 7\n";
         let size = encode_database_size(dump.len() as u64 - short_by);
-        let safe = build_mit_safe(&tgs.session_key, &size, size_seq).unwrap();
+        let safe =
+            build_mit_safe(&tgs.session_key, &size, size_seq, &local_host_address(None)).unwrap();
         write_message(&mut client, &safe).unwrap();
         if size_seq == 4242 {
             let mut state = CipherState::initial();
@@ -2878,16 +2676,14 @@ mod tests {
             kpropd_send_ack(&mut stream, &mut auth, got.len() as u64).unwrap();
         });
         let mut client = TcpStream::connect(addr).unwrap();
-        let realm = krb5_types::ascii(TEST_REALM);
-        let mut auth = kprop_sendauth(
-            &mut client,
-            tgs.rep.0.ticket.clone(),
-            &tgs.session_key,
-            &realm,
-            &admin,
-            4242,
-        )
-        .unwrap();
+        let creds = KpropCreds {
+            ticket: tgs.rep.0.ticket.clone(),
+            session: tgs.session_key.clone(),
+            client: admin.clone(),
+            crealm: krb5_types::ascii(TEST_REALM),
+            time_offset: 0,
+        };
+        let mut auth = kprop_sendauth(&mut client, &creds, local_host_address(None)).unwrap();
         let e = kprop_send_dump(&mut client, &mut auth, &dump).unwrap_err();
         assert!(
             e.to_string()
@@ -2920,5 +2716,245 @@ mod tests {
         assert!(decode_database_size(&lead).is_err());
         assert!(decode_database_size(&[0u8; 8]).is_err());
         assert!(decode_database_size(&[]).is_err());
+    }
+
+    /// What a kpropd reads after recvauth: kprop's size KRB-SAFE, with the authenticator's
+    /// sequence number kpropd expects.
+    fn size_safe_from_kprop(
+        dump: &'static [u8],
+        sender: HostAddress,
+    ) -> (krb5_types::KrbSafe, u32, Result<(), KpropError>) {
+        use std::net::TcpListener;
+        use std::thread;
+
+        use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+
+        let (host_keys, admin, tgs) = kprop_ticket();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let join = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
+            let allowed = [format!("admin@{TEST_REALM}")];
+            let (mut stream, _) = listener.accept().unwrap();
+            let auth = kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+                Some(allowed.as_slice()),
+                &ReplayCache::new(),
+            )
+            .unwrap();
+            let safe: krb5_types::KrbSafe = decode(&read_message(&mut stream).unwrap()).unwrap();
+            (safe, auth.remote.expected())
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        let creds = KpropCreds {
+            ticket: tgs.rep.0.ticket.clone(),
+            session: tgs.session_key.clone(),
+            client: admin,
+            crealm: krb5_types::ascii(TEST_REALM),
+            time_offset: 0,
+        };
+        let mut auth = kprop_sendauth(&mut client, &creds, sender).unwrap();
+        // The thread reads the size and lets the connection go, so no acknowledgement comes.
+        let sent = kprop_send_dump(&mut client, &mut auth, dump);
+        let (safe, expected) = join.join().expect("kpropd thread");
+        (safe, expected, sent)
+    }
+
+    /// MIT `xmit_database` (`kprop/kprop.c:421-439`): the size goes from kprop's own address (its auth context's local address), with no receiver, carrying the authenticator's random 30-bit sequence number; an empty dump's size is twelve zero bytes.
+    #[test]
+    fn kprop_sends_its_size_from_its_own_address_with_the_authenticators_seq() {
+        let sender = HostAddress {
+            addr_type: 2,
+            address: vec![192, 0, 2, 7].into(),
+        };
+        let (safe, expected, sent) = size_safe_from_kprop(b"", sender.clone());
+        assert_eq!(safe.safe_body.s_address, sender);
+        assert_eq!(safe.safe_body.r_address, None);
+        assert_eq!(safe.safe_body.timestamp, None);
+        let seq = safe.safe_body.seq_number.expect("a sequence number");
+        assert_eq!(seq, expected, "the authenticator's");
+        assert!(seq > 0 && seq < 1 << 30, "{seq}");
+        assert_eq!(safe.safe_body.user_data.as_ref(), [0u8; 12]);
+        assert!(sent.is_err(), "no acknowledgement came");
+        let (other, _, _) = size_safe_from_kprop(b"x", local_host_address(None));
+        assert_ne!(
+            other.safe_body.seq_number,
+            Some(seq),
+            "a fresh one each time"
+        );
+        assert_eq!(other.safe_body.user_data.as_ref(), [0, 0, 0, 1]);
+    }
+
+    /// kprop's credentials for the documented realm's ticket, its clock `time_offset` seconds
+    /// from this host's.
+    fn kprop_creds(time_offset: i64) -> (Vec<ProtocolKey>, KpropCreds) {
+        use krb5_kdc::testrealm::TEST_REALM;
+
+        let (host_keys, admin, tgs) = kprop_ticket();
+        let creds = KpropCreds {
+            ticket: tgs.rep.0.ticket.clone(),
+            session: tgs.session_key.clone(),
+            client: admin,
+            crealm: krb5_types::ascii(TEST_REALM),
+            time_offset,
+        };
+        (host_keys, creds)
+    }
+
+    /// MIT `verify_as_reply` (`lib/krb5/krb/get_in_tkt.c:260-264`): the AS reply moves the context's clock to the KDC's, so kprop's authenticator carries the KDC's time; a host an hour off the KDC (and off kpropd) is refused by kpropd only when kprop dates it by its own clock.
+    #[test]
+    fn kprop_dates_its_authenticator_by_the_kdcs_clock() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+
+        for (offset, accepted) in [(0, true), (3600, false), (-3600, false)] {
+            let (host_keys, creds) = kprop_creds(offset);
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let addr = listener.local_addr().unwrap();
+            let join = thread::spawn(move || {
+                krb5_config::isolate_test_krb5();
+                let allowed = [format!("admin@{TEST_REALM}")];
+                let (mut stream, _) = listener.accept().unwrap();
+                kpropd_recvauth(
+                    &mut stream,
+                    &host_keys,
+                    Some(&documented_host()),
+                    Some(TEST_REALM),
+                    Some(allowed.as_slice()),
+                    &ReplayCache::new(),
+                )
+                .is_ok()
+            });
+            let mut client = TcpStream::connect(addr).unwrap();
+            let sent = kprop_sendauth(&mut client, &creds, local_host_address(None));
+            assert_eq!(join.join().expect("kpropd thread"), accepted, "{offset}");
+            match sent {
+                Ok(_) => assert!(accepted, "{offset}"),
+                Err(e) => {
+                    assert!(!accepted, "{offset}: {e}");
+                    assert_eq!(
+                        e.lines("kprop"),
+                        [
+                            "kprop: Server rejected authentication (during sendauth exchange) while authenticating to server",
+                            "kprop: Clock skew too great signalled from server",
+                            "Error text from server: Clock skew too great",
+                        ],
+                        "{offset}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// MIT `krb5_read_message` (`lib/krb5/os/read_msg.c:52-54`): a reply's length is allocated as it says; this kprop refuses one past 8 MiB as an allocation that failed (docs/mit-deviations.md).
+    #[test]
+    fn kprop_refuses_a_reply_past_eight_mib() {
+        use std::net::TcpListener;
+        use std::thread;
+
+        let (_, creds) = kprop_creds(0);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let join = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            // The two version strings, sendauth's answer, the AP-REQ, then a refusal whose
+            // length is 8 MiB and one byte.
+            for _ in 0..2 {
+                read_message(&mut stream).unwrap();
+            }
+            stream.write_all(&[0]).unwrap();
+            read_message(&mut stream).unwrap();
+            stream
+                .write_all(&(8 * 1024 * 1024 + 1u32).to_be_bytes())
+                .unwrap();
+        });
+        let mut client = TcpStream::connect(addr).unwrap();
+        let Err(e) = kprop_sendauth(&mut client, &creds, local_host_address(None)) else {
+            panic!("a reply past 8 MiB was read");
+        };
+        assert_eq!(
+            e.lines("kprop"),
+            ["kprop: Cannot allocate memory while authenticating to server"]
+        );
+        join.join().expect("fake kpropd");
+    }
+    /// MIT `recv_database` (`kprop/kpropd.c:1460-1470`): the acknowledgement is `krb5_mk_safe` on recvauth's context, whose local address `kerberos_authenticate` set to the peer's: its s-address is where kprop connected from, not the loopback address.
+    #[test]
+    fn kpropd_acknowledges_from_the_address_kprop_connected_from() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener};
+        use std::thread;
+
+        use krb5_kdc::testrealm::{TEST_REALM, documented_host};
+
+        let (host_keys, admin, tgs) = kprop_ticket();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        // The acknowledgement goes out on a second connection, which kprop does not read.
+        let capture = TcpListener::bind("127.0.0.1:0").unwrap();
+        let capture_addr = capture.local_addr().unwrap();
+        let kpropd = thread::spawn(move || {
+            krb5_config::isolate_test_krb5();
+            let allowed = [format!("admin@{TEST_REALM}")];
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut auth = kpropd_recvauth(
+                &mut stream,
+                &host_keys,
+                Some(&documented_host()),
+                Some(TEST_REALM),
+                Some(allowed.as_slice()),
+                &ReplayCache::new(),
+            )
+            .unwrap();
+            let got = kpropd_recv_dump(&mut stream, &mut auth).unwrap();
+            let mut side = TcpStream::connect(capture_addr).unwrap();
+            kpropd_send_ack(&mut side, &mut auth, got.len() as u64).unwrap();
+        });
+        // kprop's own end of the connection is 127.0.0.2.
+        let mut client = {
+            use nix::sys::socket::{
+                AddressFamily, SockFlag, SockType, SockaddrIn, bind, connect, socket,
+            };
+            use std::os::fd::AsRawFd as _;
+            let SocketAddr::V4(to) = addr else {
+                panic!("an IPv4 listener");
+            };
+            let fd = socket(
+                AddressFamily::Inet,
+                SockType::Stream,
+                SockFlag::empty(),
+                None,
+            )
+            .unwrap();
+            bind(fd.as_raw_fd(), &SockaddrIn::new(127, 0, 0, 2, 0)).unwrap();
+            let [a, b, c, d] = to.ip().octets();
+            connect(fd.as_raw_fd(), &SockaddrIn::new(a, b, c, d, to.port())).unwrap();
+            TcpStream::from(fd)
+        };
+        let creds = KpropCreds {
+            ticket: tgs.rep.0.ticket.clone(),
+            session: tgs.session_key.clone(),
+            client: admin,
+            crealm: krb5_types::ascii(TEST_REALM),
+            time_offset: 0,
+        };
+        let mut auth = kprop_sendauth(&mut client, &creds, local_host_address(None)).unwrap();
+        let sent = thread::spawn(move || {
+            let dump = b"kdb5_util load_dump version 7\n";
+            kprop_send_dump(&mut client, &mut auth, dump)
+        });
+        let (mut ack_stream, _) = capture.accept().unwrap();
+        let ack: krb5_types::KrbSafe = decode(&read_message(&mut ack_stream).unwrap()).unwrap();
+        assert_eq!(
+            ack.safe_body.s_address,
+            local_host_address(Some(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2))))
+        );
+        kpropd.join().expect("kpropd thread");
+        // The size went to a kpropd that never answered on this connection.
+        assert!(sent.join().expect("kprop thread").is_err());
     }
 }

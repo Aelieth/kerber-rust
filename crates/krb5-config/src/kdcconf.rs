@@ -510,6 +510,13 @@ pub fn default_kpropd_acl() -> PathBuf {
     Path::new(KDC_DIR).join("kpropd.acl")
 }
 
+/// `KDC_DIR/replica_datatrans`.
+/// MIT `KPROP_DEFAULT_FILE` (`osconf.hin:127-127`): the dump kprop sends when `-f` names none.
+#[must_use]
+pub fn default_kprop_file() -> PathBuf {
+    Path::new(KDC_DIR).join("replica_datatrans")
+}
+
 /// `KDC_DIR/.k5.<realm>`.
 /// MIT `krb5_def_store_mkey_list` (`kdb_default.c:126-129`): `DEFAULT_KEYFILE_STUB` plus the
 /// realm when no `key_stash_file` is set.

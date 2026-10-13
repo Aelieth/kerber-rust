@@ -10,8 +10,8 @@ The daemons write the JSON stream only where `[logging] json` names a
 destination: `STDOUT`, `STDERR` or `FILE:path` (appended to, created
 0640, opened once at the start and not reopened on SIGHUP). It is read
 from the profile of the daemon log below, kdc.conf first: `krb5kdc`
-and `kadmind` with their `[logging]` destinations, `kprop` and
-`kpropd` from the same KDC profile. Without it there is no stream.
+and `kadmind` with their `[logging]` destinations, `kpropd` from the
+same KDC profile (`kprop`, as MIT's, reads none). Without it there is no stream.
 MIT's daemons print none, and in the foreground (`krb5kdc -n`,
 `kadmind -nofork`) ours print what MIT prints: `krb5kdc: starting...`
 or `kadmind: starting...` on standard error. `STDOUT` and `STDERR`
@@ -21,7 +21,7 @@ shared with MIT may carry it (settled live beside MIT 1.22.2's
 `krb5kdc` and `kadmind`). Each program filters the stream with its own
 filter: `krb5_kdc=info,krb5_crypto=info,krb5_asn1=info,krb5_protocol=warn`
 for `krb5kdc`, and `krb5_admin=info,krb5_kdc=info,krb5_protocol=warn` for
-`kadmind`, `kprop` and `kpropd`. Only a `test-hooks` build (the gates')
+`kadmind` and `kpropd`. Only a `test-hooks` build (the gates')
 takes `RUST_LOG` instead; a release build reads no `RUST_LOG`, as MIT's
 programs read none. The daemons write the stream from the one loop
 that serves every client, so a destination that blocks, a pipe its
@@ -243,10 +243,11 @@ the lines on standard error; nothing else goes there or to standard
 output. A program the kernel marks secure (setuid, setgid or file
 capabilities) ignores the variable, as MIT's `secure_getenv` does.
 `krb5kdc` and `kadmind` do not read `KRB5_TRACE`, where MIT's do
-through `krb5_init_context`. `kprop` and `krb5-iprop-pull` trace their
-client halves (the AP-REP `kpropd` sends; the AS and TGS requests for
-the iprop service), and open the file at their first line rather than
-at start-up.
+through `krb5_init_context`. `kprop` traces as MIT's does (its AS
+exchange, the authenticator it sends and the AP-REP `kpropd` answers
+with), opening the file at start-up. `krb5-iprop-pull` traces its client
+half (the AS and TGS requests for the iprop service) and opens the file
+at its first line.
 
 Each line is `[pid] seconds.microseconds: message`. The messages are
 MIT 1.22.2's (`include/k5-trace.h` and SPAKE's `trace.h`), written

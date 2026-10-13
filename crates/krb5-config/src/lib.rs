@@ -578,8 +578,8 @@ pub use hostname::{
 };
 pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, MISSING_CONF_PARAMS};
 pub use kdcconf::{
-    KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_kpropd_acl,
-    default_stash_file, env_kdc_config, kdc_conf_path,
+    KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_kprop_file,
+    default_kpropd_acl, default_stash_file, env_kdc_config, kdc_conf_path,
 };
 pub use logging::LogSpecs;
 pub use otp_profile::{

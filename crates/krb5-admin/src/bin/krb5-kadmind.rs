@@ -16,7 +16,8 @@
 //! - `-nofork` keeps kadmind in the foreground; without it kadmind binds its sockets, detaches
 //!   (`daemon(3)`) and then writes the `-P` pid file.
 //! - `-W`, `-p`, `-F`, `-K` and `-k` are accepted and unused: this kadmind starts no
-//!   `kdb5_util` or `kprop` for an iprop full resync, whose dump is sent with `kprop -i`.
+//!   `kdb5_util` or `kprop` for an iprop full resync, whose dump is sent by hand:
+//!   `kdb5_util dump -i1`, then `kprop -f`.
 //!   `-proponly` stops kadmind as MIT's does when `iprop_enable` is not set, and also when it is:
 //!   there is no separate iprop listener. `-m` stops it: the master key comes from the stash.
 //!

@@ -125,6 +125,39 @@ pub fn lock_file_exclusive(file: &File) -> io::Result<FileLockGuard<'_>> {
     Ok(FileLockGuard { file, flocked })
 }
 
+/// A shared whole-file lock on a file of the caller's own, held until [`HeldFileLock::unlock`]
+/// or until the file is closed; it keeps `flock(2)`'s hold where the file system has no
+/// open-file-description locks.
+#[derive(Debug)]
+pub struct HeldFileLock {
+    flocked: Option<Flock<File>>,
+}
+
+/// Lock the whole of `file` shared without waiting, as `krb5_lock_file` does with
+/// `KRB5_LOCKMODE_SHARED | KRB5_LOCKMODE_DONTBLOCK`: a conflicting lock is `EAGAIN`.
+/// MIT `open_database` (`kprop/kprop.c:356-364`): kprop locks the dump it sends this way, and a held lock is "database locked".
+///
+/// # Errors
+///
+/// The system's error of the lock call: `EAGAIN` when another holder's lock conflicts.
+pub fn lock_file_shared_nowait(file: &File) -> io::Result<HeldFileLock> {
+    let mut flocked = None;
+    lock_file_how(file, FileLock::Shared, &mut flocked, false)?;
+    Ok(HeldFileLock { flocked })
+}
+
+impl HeldFileLock {
+    /// Let the lock on `file`, the file it was taken on, go.
+    /// MIT `close_database` (`kprop/kprop.c:388-398`): kprop unlocks the dump before it closes it.
+    ///
+    /// # Errors
+    ///
+    /// The system's error of the unlock call.
+    pub fn unlock(mut self, file: &File) -> io::Result<()> {
+        lock_file(file, FileLock::Unlock, &mut self.flocked).map_err(io::Error::from)
+    }
+}
+
 /// Take `how` (or let go of) the whole-file lock on `file`'s open file description, waiting for
 /// another holder, as `krb5_lock_file` does; `flocked` keeps `flock(2)`'s hold where the file
 /// system has no open-file-description locks, and must be the same at the lock and the unlock.

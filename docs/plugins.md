@@ -74,7 +74,7 @@ in a ring; a policy change starts it over), and kadmind serves MIT
 program **100423** (`IPROP_GET_UPDATES`, `IPROP_FULL_RESYNC`);
 without it nothing is logged and the program is not registered. First
 contact (`last_sno == 0`) returns full-resync; a slave then takes an
-`ipropx` dump (`kprop -i` / `kdb5_util dump -i1`), which this kadmind
+`ipropx` dump (`kdb5_util dump -i1`, sent by `kprop -f`), which this kadmind
 does not push itself. Serial-delta is
 MIT `kdb_incr_update_t` over RPCSEC_GSS (`krb5-iprop-pull` or
 `iprop_poll_once`). `kdb_last_t` must echo the dump-header

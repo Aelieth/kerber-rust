@@ -35,12 +35,13 @@ pub use kadm5::{
 pub use kadmin_cli::{kadmin_local_main, ss_parse};
 pub use kadmind::{Kadmind, serve_kadmind, serve_kadmind_until};
 pub use kprop::{
-    IpropPoll, KpropAuth, KpropdConfig, KpropdKeys, KpropdKeytabError, KpropdLookup,
-    iprop_dump_last, iprop_poll_once, iprop_snapshot, is_iprop_dump, kprop_dump_bytes,
-    kprop_dump_iprop, kprop_expired_ap_req, kprop_keytab_file, kprop_load_bytes,
-    kprop_load_with_stash, kprop_send_dump, kprop_send_store, kprop_send_store_iprop,
-    kprop_sendauth, kpropd_handle_conn, kpropd_keytab_keys, kpropd_recv_dump, kpropd_recvauth,
-    kpropd_send_ack, kpropd_server_name, kpropd_server_name_for, load_replica,
+    IpropPoll, KPROP_SERVICE, KpropAuth, KpropCreds, KpropDump, KpropError, KpropdConfig,
+    KpropdKeys, KpropdKeytabError, KpropdLookup, RemoteError, iprop_dump_last, iprop_poll_once,
+    is_iprop_dump, kprop_dump_bytes, kprop_expired_ap_req, kprop_get_tickets, kprop_keytab_file,
+    kprop_load_bytes, kprop_load_with_stash, kprop_open_connection, kprop_send_dump,
+    kprop_send_store, kprop_sendauth, kprop_update_last_prop_file, kprop_xmit_database,
+    kpropd_handle_conn, kpropd_keytab_keys, kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack,
+    kpropd_server_name, kpropd_server_name_for, load_replica,
 };
 pub use listen::{
     ChangepwAccepted, ChangepwRefused, KADMIND_PORT, KPASSWD_PORT, KPROP_PORT, changepw_accept,

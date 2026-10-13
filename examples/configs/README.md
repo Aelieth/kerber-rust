@@ -7,8 +7,8 @@ gets tickets with MIT `kinit` and `kvno`.
 
 | File | Read by | Install at |
 | --- | --- | --- |
-| `kdc.conf` | `krb5-kdc`, `krb5-kadmind`, `krb5-kdb`, `krb5-kadmin-local`, `krb5-kprop`, `krb5-kpropd` (and the test build's `krb5-iprop-pull`) | `KRB5_KDC_PROFILE`, else `/var/kerberos/krb5kdc/kdc.conf`; a missing file reads as empty, as MIT's does |
-| `krb5.conf` | the Rust client tools; the KDC-side tools for `default_realm`, their realm unless one is named; MIT clients | `KRB5_CONFIG`, else `/etc/krb5.conf` |
+| `kdc.conf` | `krb5-kdc`, `krb5-kadmind`, `krb5-kdb`, `krb5-kadmin-local`, `krb5-kpropd` (and the test build's `krb5-iprop-pull`) | `KRB5_KDC_PROFILE`, else `/var/kerberos/krb5kdc/kdc.conf`; a missing file reads as empty, as MIT's does |
+| `krb5.conf` | the Rust client tools and `krb5-kprop` (it alone, as MIT's kprop); the KDC-side tools for `default_realm`, their realm unless one is named; MIT clients | `KRB5_CONFIG`, else `/etc/krb5.conf` |
 | `kadm5.acl` | `krb5-kadmind` | the `acl_file` path in `kdc.conf` |
 | `kpropd.acl` (not here) | `krb5-kpropd`, for each connection | `-a`, else `/var/kerberos/krb5kdc/kpropd.acl`, as MIT's kpropd; a missing file refuses every propagation |
 
@@ -66,9 +66,9 @@ read by `crates/krb5-kdc/src/acl.rs` as MIT's `auth_acl.c` reads them; `*` and
   kdc.conf and argv alone, as MIT's tools do.
 - `KRB5_MASTER_PASSWORD`: only in a `test-hooks` build (the gates'), `krb5-kdb`
   takes it for `create` instead of `-P` or the prompts, and for `load` when there
-  is no stash (and then writes the stash); `krb5-kprop`, `krb5-kpropd` and
-  `krb5-iprop-pull` take it for the propagated dump's master key, which a release
-  build takes from the stash.
+  is no stash (and then writes the stash); `krb5-kpropd` and `krb5-iprop-pull`
+  take it for the propagated dump's master key, which a release build takes from
+  the stash. `krb5-kprop` needs no master key: it sends the dump file as written.
 - `KRB5_KDC_BIND` (builds with the `test-hooks` feature): the one address the KDC
   binds, instead of `kdc_listen`.
 - `KRB5_KPASSWD_BIND` (builds with the `test-hooks` feature): the one address a

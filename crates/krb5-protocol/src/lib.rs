@@ -121,11 +121,11 @@ pub use preauth::{
 };
 pub use replay::{ReplayCache, ReplayKey};
 pub use safe_priv::{
-    build_krb_cred, build_krb_priv, build_krb_priv_chained, build_krb_priv_from,
-    build_krb_priv_with_seq, build_krb_safe, build_krb_safe_ex, check_privsafe_addrs,
-    check_privsafe_addrs_in, unwrap_krb_cred, unwrap_krb_priv, unwrap_krb_priv_chained,
-    unwrap_krb_priv_ex, unwrap_krb_safe, unwrap_krb_safe_ex, verify_krb_safe_checksum,
-    verify_krb_safe_checksum_in,
+    build_krb_cred, build_krb_priv, build_krb_priv_chained, build_krb_priv_chained_from,
+    build_krb_priv_from, build_krb_priv_with_seq, build_krb_safe, build_krb_safe_ex,
+    build_krb_safe_from, check_privsafe_addrs, check_privsafe_addrs_in, unwrap_krb_cred,
+    unwrap_krb_priv, unwrap_krb_priv_chained, unwrap_krb_priv_ex, unwrap_krb_safe,
+    unwrap_krb_safe_ex, verify_krb_safe_checksum, verify_krb_safe_checksum_in,
 };
 pub use secret_file::{
     check_secret_file_writable, destroy_secret_file, read_secret_file, write_fresh_secret_file,
