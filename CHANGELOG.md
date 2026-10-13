@@ -1514,6 +1514,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - **client.** `kinit -a`, a false `noaddresses` and the changepw requests list every up interface's address, IPv6 too, as `krb5_os_localaddr` does, not one IPv4. Units; settled.
 - **protocol.** kpasswd's request KRB-PRIV names the connection's own address as its sender, IPv6 too, as MIT's does; it named 127.0.0.1. Units; settled.
 - **protocol.** kpasswd's request has MIT's fields: no timestamp in its KRB-PRIV, no zero sequence number in it or in the authenticator. Units; settled.
+- **kdc.** A module's verify failure, SPAKE's first round too, is logged as `preauth (NAME) verify failure: TEXT`, as MIT's; the AS_REQ line no longer holds it. Units; settled.
 - **kdc.** A keyless client reaches preauth as in MIT: 14 only after it, a keyless Enc-TS is 24, the FAST strengthen key follows the reply key's enctype, and the verify-failure log names the module. Units.
 - **types.** An AlgorithmIdentifier keeps its parameters as their DER, as MIT's `opt_der_data`; a NULL parameter was lost on a decode and an encode. Unit.
 - **admin.** kpasswd logs a request under six octets as "Message stream modified"; a set-password
