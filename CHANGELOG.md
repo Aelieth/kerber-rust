@@ -1496,6 +1496,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **admin.** kpasswd logs `Password is too short` for an empty password on a principal without a policy, as MIT's kadmind does. Units; settled.
 - **client.** No password (EIO), a failed read or disabled Enc-TS fails its mechanism, the next asks; ^C ends it. SPAKE asks the responder. Tests.
 - **types.** The OTP messages' vendor, algID, service and PIN are octets, as MIT decodes them: a non-UTF-8 one no longer fails the whole challenge.
 - **admin.** kadmind's :749 acceptor reads its key from the KDB as MIT's does. `RpcCtx` and `serve_kadm5_conn` lose their keys; `acceptor_keys` goes.

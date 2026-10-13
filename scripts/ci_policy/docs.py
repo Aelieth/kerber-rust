@@ -460,11 +460,12 @@ DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
 GATE_DOC_TOKEN_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
-# CHANGELOG.md was 272,571 bytes at 13c2160b. Allowance 15,429 bytes
-# (forecast plus 20 percent, rounded up) for the rest of 1.1 and the cut,
-# one bullet per change. Ceiling 288,000. One re-base, a tool: commit only,
-# never the commit that adds the bullets.
-CHANGELOG_MAX_BYTES = 288000
+# CHANGELOG.md was 272,571 bytes at 13c2160b. Allowance 17,429 bytes for the
+# rest of 1.1 and the cut, one bullet per change: 15,429 (forecast plus 20
+# percent, rounded up) and 2,000 more. Ceiling 290,000, raised from 288,000
+# by the user's decision on 2026-10-13, in the commit of the bullet that
+# needed it. Otherwise a tool: commit re-bases it, never a bullet commit.
+CHANGELOG_MAX_BYTES = 290000
 
 
 def check_testing_doc_budgets(
