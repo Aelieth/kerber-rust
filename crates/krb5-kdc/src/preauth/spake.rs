@@ -17,7 +17,9 @@ use krb5_types::spake::{
 use krb5_types::{MethodData, PaData, err, ku, pa};
 use zeroize::Zeroizing;
 
+use super::otp::{E_BAD_ENCTYPE, E_BAD_MSIZE, E_EINVAL};
 use super::{find_pa, make_cookie, open_cookie, proto};
+use crate::asn1_text::{decode_failure_text, pa_spake_failure_text};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::PreauthHint;
@@ -40,6 +42,13 @@ const ENCTYPE_UNKNOWN: i32 = 0x01ff;
 
 fn failed() -> Error {
     proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
+}
+
+/// A failure whose MIT code is no KRB-ERROR code, with the text `krb5_get_error_message` gives it.
+fn library_failure(message: &str) -> Error {
+    Error::PreauthModule {
+        message: message.to_owned(),
+    }
 }
 
 fn pa_spake(value: Vec<u8>) -> PaData {
@@ -232,7 +241,7 @@ fn verify_response(
         return Err(failed());
     }
     // MIT `derive_wbytes` (`util.c:114-117`): a group the KDC does not implement is EINVAL.
-    let group = SpakeGroup::from_number(cookie.group).ok_or_else(failed)?;
+    let group = SpakeGroup::from_number(cookie.group).ok_or_else(|| library_failure(E_EINVAL))?;
     let pubkey = resp.pubkey.as_ref();
     let thash = spake_thash_update(group, cookie.thash, pubkey, &[]);
     let wbytes = spake_wbytes(ikey, group)?;
@@ -240,14 +249,21 @@ fn verify_response(
     let k1 = spake_derive_key(ikey, group, &wbytes, &result, &thash, body_der, 1)?;
     // MIT `krb5_k_decrypt` (`decrypt.c:45-46`): a factor of another enctype is KRB5_BAD_ENCTYPE.
     if resp.factor.etype != ENCTYPE_UNKNOWN && resp.factor.etype != k1.etype().to_iana() {
-        return Err(failed());
+        return Err(library_failure(E_BAD_ENCTYPE));
     }
     let usage = KeyUsage::new(ku::SPAKE)?;
     let factor_der = Zeroizing::new(
-        decrypt_enc_data(&k1, usage, resp.factor.etype, resp.factor.cipher.as_ref())
-            .map_err(|_| failed())?,
+        decrypt_enc_data(&k1, usage, resp.factor.etype, resp.factor.cipher.as_ref()).map_err(
+            |e| match e {
+                krb5_crypto::Error::CiphertextTooShort => library_failure(E_BAD_MSIZE),
+                // MIT `verify_response` (`spake_kdc.c:431-432`): a failed integrity check is the wrong password, 24.
+                _ => failed(),
+            },
+        )?,
     );
-    let factor = decode::<SpakeSecondFactor>(&factor_der).map_err(|_| failed())?;
+    // MIT `verify_response` (`spake_kdc.c:435-437`): a factor that does not decode is its ASN.1 error.
+    let factor = decode::<SpakeSecondFactor>(&factor_der)
+        .map_err(|_| library_failure(decode_failure_text(&factor_der, true)))?;
     if factor.factor_type != SF_NONE {
         return Err(failed());
     }
@@ -281,7 +297,9 @@ pub(crate) fn process_spake(
     let Ok(conf) = store.policy().spake_kdc() else {
         return Ok(None);
     };
-    match decode::<PaSpake>(raw)? {
+    // MIT `spake_verify` (`spake_kdc.c:519-521`): a PA-SPAKE that does not decode is its ASN.1 error.
+    let msg = decode::<PaSpake>(raw).map_err(|_| library_failure(pa_spake_failure_text(raw)))?;
+    match msg {
         PaSpake::Support(support) => {
             verify_support(store, client, conf, &support, raw, ikey).map(Some)
         }
@@ -290,7 +308,11 @@ pub(crate) fn process_spake(
         }
         // MIT `verify_encdata` (`spake_kdc.c:477-499`): second factors are not implemented, so encdata is PREAUTH_FAILED.
         // MIT `spake_verify` (`spake_kdc.c:532-536`): a challenge from a client, or an element no alternative takes, is an unknown request type.
-        PaSpake::EncData(_) | PaSpake::Challenge(_) | PaSpake::Unknown => Err(failed()),
+        PaSpake::EncData(_) => Err(failed()),
+        // MIT `spake_verify` (`spake_kdc.c:532-535`): 24 with this text, which the verify log carries.
+        PaSpake::Challenge(_) | PaSpake::Unknown => {
+            Err(library_failure("Unknown SPAKE request type"))
+        }
     }
 }
 

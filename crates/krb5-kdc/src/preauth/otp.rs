@@ -4,7 +4,7 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, decrypt_enc_data};
-use krb5_log::klog::{self, Severity};
+use krb5_log::klog;
 use krb5_types::k5json::{self, Value};
 use krb5_types::otp::{OtpTokenInfo, PaOtpChallenge, PaOtpEncRequest, PaOtpRequest};
 use krb5_types::{KerberosFlags, PaData, PaEncTsEnc, PrincipalName, err, ku, pa};
@@ -12,6 +12,7 @@ use krb5_types::{KerberosFlags, PaData, PaEncTsEnc, PrincipalName, err, ku, pa};
 use super::{find_pa, proto};
 use crate::ad::authind_add;
 use crate::asn1_text::decode_failure_text;
+use crate::audit::kdc_error_message;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{
@@ -113,10 +114,10 @@ const E_PREAUTH_FAILED: &str = "Preauthentication failed";
 const E_GENERIC: &str = "Generic preauthentication failure";
 const E_INTEGRITY: &str = "Decrypt integrity check failed";
 const E_SKEW: &str = "Clock skew too great";
-const E_EINVAL: &str = "Invalid argument";
+pub(crate) const E_EINVAL: &str = "Invalid argument";
 const E_ASN1: &str = "ASN.1 identifier doesn't match expected value";
-const E_BAD_ENCTYPE: &str = "Bad encryption type";
-const E_BAD_MSIZE: &str = "Message size is incompatible with encryption type";
+pub(crate) const E_BAD_ENCTYPE: &str = "Bad encryption type";
+pub(crate) const E_BAD_MSIZE: &str = "Message size is incompatible with encryption type";
 /// MIT's `strerror(EMSGSIZE)`: the text of a RADIUS attribute whose value is out of its size.
 const E_MSG_SIZE: &str = "Message too long";
 /// MIT `MAX_ATTRSIZE` (`lib/krad/internal.h:49-49`): the largest RADIUS attribute value, which is the User-Name's.
@@ -283,17 +284,23 @@ fn timestamp_verify(plain: &[u8], skew: i64) -> Result<(), OtpFail> {
     }
 }
 
-/// The verify step of the module's `process_as`: the module's own failure is logged at INFO
-/// and the request sees PREAUTH_FAILED with no detail.
+/// The verify step of the module's `process_as`: the module's own failure goes to `finish_verify_padata`,
+/// which logs its message at INFO, and the request sees PREAUTH_FAILED with no detail.
 /// MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's message goes to the log at INFO.
 pub(crate) fn process_otp(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, Error> {
-    otp_verify(rock).map_err(|f| {
-        klog::syslog(
-            Severity::Info,
-            &format!("preauth (otp) verify failure: {}", f.emsg),
-        );
-        proto(f.code, status::PREAUTH_FAILED)
-    })
+    otp_verify(rock).map_err(OtpFail::into_error)
+}
+
+impl OtpFail {
+    /// The error `finish_verify_padata` logs for it: a code with its table text is that code, and
+    /// any other message belongs to a library code that is no KRB-ERROR code.
+    fn into_error(self) -> Error {
+        if self.emsg == kdc_error_message(self.code) {
+            proto(self.code, status::PREAUTH_FAILED)
+        } else {
+            Error::PreauthModule { message: self.emsg }
+        }
+    }
 }
 
 /// MIT `otp_verify` (`plugins/preauth/otp/main.c:298-355`): the PA-OTP-REQUEST is decrypted under

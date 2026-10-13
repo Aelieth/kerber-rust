@@ -130,6 +130,30 @@ pub(crate) fn decode_failure_text(der: &[u8], first_field_explicit: bool) -> &'s
     }
 }
 
+/// The text MIT's decoder gives a PA-SPAKE that does not decode from `der`. A message whose outer
+/// element is no alternative of the choice decodes as an unknown one, which is no ASN.1 error here.
+///
+/// A bad element is the tag reader's own text. An alternative with nothing inside it is an
+/// overrun; one whose content is not a SEQUENCE is an identifier error, and an empty SEQUENCE, or
+/// any field lacking inside one, a missing field.
+/// MIT `decode_cntype` (`lib/krb5/asn.1/asn1_encode.c:1277-1293`): a choice reads the element's tag, and the alternative it names reads what is inside.
+/// MIT `get_tag` (`lib/krb5/asn.1/asn1_encode.c:368-369`): an alternative with an empty body is an overrun.
+/// MIT `decode_sequence` (`lib/krb5/asn.1/asn1_encode.c:1411-1412`): an empty SEQUENCE has no field to read.
+pub(crate) fn pa_spake_failure_text(der: &[u8]) -> &'static str {
+    let top = match get_tag(der) {
+        Ok(t) => t,
+        Err(text) => return text,
+    };
+    let inner = match get_tag(top.contents) {
+        Ok(t) => t,
+        Err(text) => return text,
+    };
+    if inner.class != UNIVERSAL || !inner.constructed || inner.tagnum != SEQUENCE {
+        return ASN1_BAD_ID;
+    }
+    ASN1_MISSING_FIELD
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -153,6 +177,27 @@ mod tests {
         let badfield = [0x30, 0x03, 0x81, 0x01, 0x00];
         assert_eq!(decode_failure_text(&badfield, false), ASN1_MISSING_FIELD);
         assert_eq!(decode_failure_text(&badfield, true), ASN1_MISSING_FIELD);
+    }
+
+    /// The PA-SPAKE cells, each with the text MIT's krb5kdc logged for it.
+    #[test]
+    fn pa_spake_failure_text_matches_mits_cells() {
+        // `ffff`: a tag that runs out. `a000`: an alternative with nothing in it.
+        assert_eq!(pa_spake_failure_text(&[0xff, 0xff]), ASN1_OVERRUN);
+        assert_eq!(pa_spake_failure_text(&[0xa0, 0x00]), ASN1_OVERRUN);
+        // `a0 02 30 00`, `a2 02 30 00` and `a1 02 30 00`: an empty SEQUENCE has no field.
+        for lead in [0xa0, 0xa1, 0xa2] {
+            assert_eq!(
+                pa_spake_failure_text(&[lead, 0x02, 0x30, 0x00]),
+                ASN1_MISSING_FIELD,
+                "{lead:#x}"
+            );
+        }
+        // `a0 02 04 00`: an alternative holding an element that is no SEQUENCE.
+        assert_eq!(
+            pa_spake_failure_text(&[0xa0, 0x02, 0x04, 0x00]),
+            ASN1_BAD_ID
+        );
     }
 
     /// The stale-nonce cell: an implicit `[0]` (primitive) is the field of a PA-OTP-ENC-REQUEST,

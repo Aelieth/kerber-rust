@@ -13,6 +13,9 @@
 //! `KRB5_KDB_NO_PERMITTED_KEY` back, and it goes out as wire 60 `FIND_FAST`
 //! (`errcode_to_protocol`); no other krbtgt key is tried.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2, string_to_key,
@@ -1476,4 +1479,49 @@ fn fast_armored_data_etype_mismatch_is_generic_find_fast() {
         .into();
     let err = krb5_kdc::issue_as(&store, &req).expect_err("BAD_ENCTYPE");
     assert_find_fast(err, err::GENERIC, "Bad encryption type");
+}
+
+fn fast_verify_failures(store: &PrincipalStore, req: &krb5_types::AsReq) -> Vec<String> {
+    let raw = encode(req).unwrap();
+    let (reply, log) = common::kdc_log(|| krb5_kdc::handle_request(store, &raw));
+    reply.expect("a reply");
+    common::verify_failures(&log)
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn encrypted_challenge_wrong_key_logs_the_incorrect_password_message() {
+    // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:114-118`): no client key opens the challenge, and the module says why.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let zeros = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32]).unwrap();
+    let req = fast_challenge_req(&store, &zeros, &KerberosTime::now(), 841, 840);
+    assert_eq!(
+        fast_verify_failures(&store, &req),
+        ["preauth (encrypted_challenge) verify failure: Incorrect password in encrypted challenge"]
+    );
+}
+
+#[test]
+fn encrypted_challenge_skew_logs_clock_skew() {
+    // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:124-126`): a challenge outside the skew fails with `KRB5KRB_AP_ERR_SKEW`.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let stale = KerberosTime::now().add_seconds(-10_000).unwrap();
+    let req = fast_challenge_req(&store, &user_key(), &stale, 851, 850);
+    assert_eq!(
+        fast_verify_failures(&store, &req),
+        ["preauth (encrypted_challenge) verify failure: Clock skew too great"]
+    );
+}
+
+#[test]
+fn encrypted_challenge_that_verifies_logs_no_failure() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let req = fast_challenge_req(&store, &user_key(), &KerberosTime::now(), 861, 860);
+    assert_eq!(
+        fast_verify_failures(&store, &req),
+        [] as [&str; 0],
+        "a verified module is not a verify failure"
+    );
 }

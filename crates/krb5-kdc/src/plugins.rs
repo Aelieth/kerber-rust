@@ -7,11 +7,13 @@
 use std::sync::{Arc, Mutex, OnceLock};
 
 use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_log::klog::{self, Severity};
 use krb5_types::{
     AuthorizationData, EncTicketPart, HostAddress, KdcReqBody, KerberosTime, PaData, PrincipalName,
     pa,
 };
 
+use crate::audit::kdc_error_message;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::preauth::{SpakeStep, process_pkinit, process_spake, spake_edata};
@@ -461,33 +463,42 @@ impl KdcPreauth for EncTsMod {
         // either.
         // MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): a code off the
         // pass-through list, such as KRB5_KDB_NO_PERMITTED_KEY, becomes the same 24 on
-        // the wire. An unknown etype matches no key.
+        // the wire. An unknown etype is not permitted.
         let policy = store.policy();
         let top = client.keys.iter().map(|k| k.kvno).max();
-        let keys: Vec<_> = match krb5_crypto::EncryptionType::known(enc.etype) {
-            Ok(pa_et) if !policy.etype_permitted(pa_et) => Vec::new(),
-            Ok(pa_et) => client
-                .keys
-                .iter()
-                .filter(|k| Some(k.kvno) == top && k.etype == pa_et)
-                .collect(),
-            Err(_) => Vec::new(),
+        let Some(pa_et) = krb5_crypto::EncryptionType::known(enc.etype)
+            .ok()
+            .filter(|et| policy.etype_permitted(*et))
+        else {
+            // MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:60-61`): its message goes to the log.
+            return Err(Error::PreauthModule {
+                message: NO_PERMITTED_KEY.to_owned(),
+            });
         };
-        let mut last_err = None;
-        for k in keys {
+        for k in client
+            .keys
+            .iter()
+            .filter(|k| Some(k.kvno) == top && k.etype == pa_et)
+        {
             match crate::issue::verify_enc_timestamp(store, &k.key, blob.as_ref()) {
                 Ok(()) => return Ok(Some(PreauthAction::EncTsOk)),
-                Err(e) => last_err = Some(e),
+                // MIT `enc_ts_verify` (`kdc_preauth_encts.c:75-92`): a key that does not decrypt
+                // the timestamp sends the walk on to the next key.
+                Err(Error::Crypto(_) | Error::BadEnctype) => {}
+                // A timestamp that decrypts and then fails, by the clock or by its encoding, ends it.
+                Err(e) => return Err(e),
             }
         }
-        Err(last_err.unwrap_or_else(|| {
-            crate::preauth::proto(
-                krb5_types::err::PREAUTH_FAILED,
-                crate::status::PREAUTH_FAILED,
-            )
-        }))
+        // MIT `enc_ts_verify` (`kdc_preauth_encts.c:113-116`): no key decrypts it, the password being wrong most likely, is 24.
+        Err(crate::preauth::proto(
+            krb5_types::err::PREAUTH_FAILED,
+            crate::status::PREAUTH_FAILED,
+        ))
     }
 }
+
+/// MIT `KRB5_KDB_NO_PERMITTED_KEY` (`lib/krb5/error_tables/kdb5_err.et:72-72`): its text.
+const NO_PERMITTED_KEY: &str = "No matching key in entry having a permitted enctype";
 
 struct EncChallengeMod;
 
@@ -928,6 +939,9 @@ fn have_client_keys(store: &dyn PrincipalRead, client: &Principal, requested: &[
 /// later modules (EXTRA after EncTsOk on a normal login) are skipped.
 /// Observe-every-AS is a future kadm5_hook, not this cascade.
 ///
+/// A module that does not verify its padata is logged and filtered by [`finish_verify_padata`],
+/// and so is a SPAKE challenge, which MIT's module returns as `MORE_PREAUTH_DATA_REQUIRED`.
+///
 /// # Errors
 ///
 /// [`Error::Protocol`] with status `PREAUTH_FAILED` when the first module to fail refuses its
@@ -959,12 +973,58 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
             body_der,
             cname,
         }) {
-            Ok(Some(a)) => return Ok(Some(a)),
+            Ok(Some(a)) => {
+                // MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:290-292`): a challenge
+                // is the verify callback answering `KRB5KDC_ERR_MORE_PREAUTH_DATA_REQUIRED`.
+                if matches!(a, PreauthAction::Challenge(_)) {
+                    log_verify_failure(
+                        m.name(),
+                        &kdc_error_message(krb5_types::err::MORE_PREAUTH_DATA_REQUIRED),
+                    );
+                }
+                return Ok(Some(a));
+            }
             Ok(None) => {}
-            Err(e) => return Err(filter_preauth_error(m.name(), e)),
+            Err(e) => return Err(finish_verify_padata(m.name(), e)),
         }
     }
     Ok(None)
+}
+
+/// MIT `finish_verify_padata` (`kdc_preauth.c:1213-1228`): a module whose verify callback answers a
+/// non-zero code is logged at INFO as `preauth (NAME) verify failure: MESSAGE`, `MESSAGE` being
+/// `krb5_get_error_message` of the module's own code, which is the text the module left for that
+/// code (`k5_setmsg`) or else the code's table text. The failure then goes through
+/// [`filter_preauth_error`], which `finish_check_padata` applies (`:1206`).
+///
+/// Every verify failure of a kdcpreauth module comes through here: the cascade of
+/// [`run_as_preauth`] and the encrypted challenge, which the AS path checks inside FAST.
+/// Cases whose text is not MIT's are named in `docs/parity/a3-preauth.md`.
+pub(crate) fn finish_verify_padata(module: &str, e: Error) -> Error {
+    log_verify_failure(module, &verify_failure_text(&e));
+    filter_preauth_error(e)
+}
+
+/// `krb5_get_error_message` of the code a module failed with.
+/// A failure of the tree's own, which is no MIT code, gives its own text.
+fn verify_failure_text(e: &Error) -> String {
+    match e {
+        Error::Protocol { code, detail, .. } => detail
+            .clone()
+            .filter(|d| !d.is_empty())
+            .unwrap_or_else(|| kdc_error_message(*code)),
+        Error::PreauthRequired { .. } => kdc_error_message(krb5_types::err::PREAUTH_REQUIRED),
+        Error::PreauthModule { message } => message.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// MIT `finish_verify_padata` (`kdc_preauth.c:1226-1227`): `krb5_klog_syslog(LOG_INFO, "preauth (%s) verify failure: %s")`.
+pub(crate) fn log_verify_failure(module: &str, emsg: &str) {
+    klog::syslog(
+        Severity::Info,
+        &format!("preauth ({module}) verify failure: {emsg}"),
+    );
 }
 
 /// MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): a module failure keeps its
@@ -972,12 +1032,15 @@ pub fn run_as_preauth(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, E
 /// code such as `KRB5_KDB_NO_PERMITTED_KEY`, an ASN.1 or crypto failure, 90
 /// `PREAUTH_EXPIRED` — reaches the client as 24 `PREAUTH_FAILED`. It is applied
 /// where `finish_check_padata` applies it (`:1206`). The module's e-data rides
-/// along (`:1194-1196`), and the original failure stays in the log detail.
+/// along (`:1194-1196`).
 /// MIT `finish_preauth` (`do_as_req.c:442-442`): whatever the code, the status word
 /// is the `PREAUTH_FAILED` it sets for every module failure, so the e_text is too.
+/// MIT `finish_process_as_req` (`do_as_req.c:358-359`): the AS_REQ line gives the message of the code the
+/// client sees, so the text a module left for its own code reaches that line only while the
+/// filter keeps the code.
 /// FAST errors never pass here (`FastMod::process_as` is a no-op, `kdc_find_fast` is not a
-/// module in MIT either). `module` is the failing module's name, which the log detail carries.
-pub(crate) fn filter_preauth_error(module: &str, e: Error) -> Error {
+/// module in MIT either).
+pub(crate) fn filter_preauth_error(e: Error) -> Error {
     use krb5_types::err;
     const PASS_THROUGH: &[i32] = &[
         err::BAD_INTEGRITY,
@@ -1016,7 +1079,7 @@ pub(crate) fn filter_preauth_error(module: &str, e: Error) -> Error {
         Error::PreauthRequired { .. } => e,
         Error::Protocol {
             code,
-            text,
+            text: _,
             e_data,
             detail,
         } => {
@@ -1025,31 +1088,18 @@ pub(crate) fn filter_preauth_error(module: &str, e: Error) -> Error {
             } else {
                 err::PREAUTH_FAILED
             };
-            // The module's own status word and any code the filter rewrote
-            // survive in the log detail.
-            // MIT `finish_verify_padata` (`kdc_preauth.c:1224-1226`): syslogs "preauth (%s)
-            // verify failure: %s".
-            let why = text.filter(|t| t != status::PREAUTH_FAILED);
-            let head = format!("preauth ({module}) verify failure");
-            let detail = match (why, detail, wire == code) {
-                (None, d, true) => d,
-                (Some(w), Some(d), _) => Some(format!("{head}: {w} ({code}): {d}")),
-                (Some(w), None, _) => Some(format!("{head}: {w} ({code})")),
-                (None, Some(d), false) => Some(format!("{head} ({code}): {d}")),
-                (None, None, false) => Some(format!("{head} ({code})")),
-            };
             Error::Protocol {
                 code: wire,
                 text: Some(status::PREAUTH_FAILED.to_owned()),
                 e_data,
-                detail,
+                detail: detail.filter(|_| wire == code),
             }
         }
-        other => Error::Protocol {
+        _ => Error::Protocol {
             code: err::PREAUTH_FAILED,
             text: Some(status::PREAUTH_FAILED.to_owned()),
             e_data: None,
-            detail: Some(format!("preauth ({module}) verify failure: {other}")),
+            detail: None,
         },
     }
 }
@@ -2358,36 +2408,105 @@ mod tests {
         assert_eq!(end, start_end);
     }
 
+    /// MIT `filter_preauth_error` (`kdc_preauth.c:1092-1133`): a code off the pass-through list reaches the client as 24.
+    /// MIT `finish_process_as_req` (`do_as_req.c:358-359`): the AS_REQ line gives the message of the code the client sees, so the text a module left for its own code follows only a code the filter keeps.
     #[test]
-    fn filter_preauth_error_names_the_module() {
-        // MIT `finish_verify_padata` (`kdc_preauth.c:1224-1226`): the module's name is in the log line.
-        // A code off the pass-through list is rewritten to 24, and its detail carries the name.
-        match filter_preauth_error(
-            "pkinit",
+    fn filter_preauth_error_sends_24_and_keeps_the_text_only_with_a_kept_code() {
+        use krb5_types::err;
+        let module_text = |code, detail: &str| Error::Protocol {
+            code,
+            text: Some("CANT_FIND_CLIENT_KEY".to_owned()),
+            e_data: None,
+            detail: Some(detail.to_owned()),
+        };
+        // 60 is off the list: 24 on the wire, the module's text dropped, the status word MIT's.
+        match filter_preauth_error(module_text(err::GENERIC, "boom")) {
             Error::Protocol {
-                code: krb5_types::err::GENERIC,
-                text: None,
-                e_data: None,
-                detail: Some("boom".to_owned()),
-            },
-        ) {
-            Error::Protocol { code, detail, .. } => {
-                assert_eq!(code, krb5_types::err::PREAUTH_FAILED);
-                assert_eq!(
-                    detail.as_deref(),
-                    Some("preauth (pkinit) verify failure (60): boom")
-                );
+                code, text, detail, ..
+            } => {
+                assert_eq!(code, err::PREAUTH_FAILED);
+                assert_eq!(text.as_deref(), Some(status::PREAUTH_FAILED));
+                assert_eq!(detail, None);
             }
             other => panic!("expected a protocol error, got {other:?}"),
         }
-        match filter_preauth_error("spake", Error::Rng) {
-            Error::Protocol { detail, .. } => assert!(
-                detail
-                    .as_deref()
-                    .is_some_and(|d| d.starts_with("preauth (spake) verify failure: ")),
-                "{detail:?}"
+        // 24 and the codes on the list stay, and so does the text left for them.
+        for code in [err::PREAUTH_FAILED, err::SKEW, err::ETYPE_NOSUPP, 75] {
+            match filter_preauth_error(module_text(code, "left for it")) {
+                Error::Protocol {
+                    code: kept, detail, ..
+                } => {
+                    assert_eq!(kept, code);
+                    assert_eq!(detail.as_deref(), Some("left for it"), "code {code}");
+                }
+                other => panic!("expected a protocol error, got {other:?}"),
+            }
+        }
+        // A failure that is no KRB-ERROR code, or none of the module's, is 24 with no text.
+        for e in [
+            Error::PreauthModule {
+                message: "Invalid argument".to_owned(),
+            },
+            Error::Rng,
+            Error::Asn1("x".to_owned()),
+        ] {
+            match filter_preauth_error(e) {
+                Error::Protocol { code, detail, .. } => {
+                    assert_eq!(code, err::PREAUTH_FAILED);
+                    assert_eq!(detail, None);
+                }
+                other => panic!("expected a protocol error, got {other:?}"),
+            }
+        }
+    }
+
+    /// MIT `finish_verify_padata` (`kdc_preauth.c:1224-1228`): the line carries `krb5_get_error_message` of the module's own code: the text it left for it, else the code's table text.
+    #[test]
+    fn a_failure_is_logged_with_the_message_of_its_own_code() {
+        use krb5_types::err;
+        let protocol = |code, detail: Option<&str>| Error::Protocol {
+            code,
+            text: None,
+            e_data: None,
+            detail: detail.map(str::to_owned),
+        };
+        for (e, want) in [
+            (
+                protocol(err::PREAUTH_FAILED, None),
+                "Preauthentication failed",
             ),
-            other => panic!("expected a protocol error, got {other:?}"),
+            (protocol(err::SKEW, None), "Clock skew too great"),
+            (
+                protocol(err::PREAUTH_EXPIRED, None),
+                "Preauthentication expired",
+            ),
+            (
+                protocol(err::MORE_PREAUTH_DATA_REQUIRED, None),
+                "More preauthentication data is required",
+            ),
+            (
+                protocol(err::ETYPE_NOSUPP, None),
+                "KDC has no support for encryption type",
+            ),
+            (
+                protocol(
+                    err::PREAUTH_FAILED,
+                    Some("Pkinit request not signed, but client not anonymous."),
+                ),
+                "Pkinit request not signed, but client not anonymous.",
+            ),
+            (
+                Error::PreauthModule {
+                    message: "No matching key in entry having a permitted enctype".to_owned(),
+                },
+                "No matching key in entry having a permitted enctype",
+            ),
+            (
+                Error::PreauthRequired { e_data: Vec::new() },
+                "Additional pre-authentication required",
+            ),
+        ] {
+            assert_eq!(verify_failure_text(&e), want, "{e:?}");
         }
     }
 

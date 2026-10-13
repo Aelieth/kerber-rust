@@ -22,7 +22,9 @@ use super::reply::{
 use crate::ad::{authind_add, check_indicators, handle_authdata};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
-use crate::plugins::{PreauthAction, PreauthRock, enforce_kdcpolicy_as, run_as_preauth};
+use crate::plugins::{
+    PreauthAction, PreauthRock, enforce_kdcpolicy_as, finish_verify_padata, run_as_preauth,
+};
 use crate::preauth::{
     FastOk, decode_edata_padata, fast_finished, find_pa, make_cookie, mint_freshness_token_now,
     pa_cookie_last, proto, unwrap_fast, wrap_fast_rep,
@@ -322,7 +324,13 @@ fn finish_preauth(
             ckey,
             &body.etype,
             None,
-            proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED),
+            // MIT `ec_verify` (`kdc_preauth_ec.c:71-76`): ENOENT with this message, which the filter makes 24.
+            finish_verify_padata(
+                EC_MODULE,
+                Error::PreauthModule {
+                    message: "Encrypted Challenge used outside of FAST tunnel".to_owned(),
+                },
+            ),
             work_padata.as_deref(),
         ));
     }
@@ -445,7 +453,12 @@ fn finish_preauth(
     {
         // MIT `ec_verify` (`kdc_preauth_ec.c:97-98`): no client key is ENOENT, which the filter makes 24.
         let Some(ckey) = ckey else {
-            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
+            return Err(finish_verify_padata(
+                EC_MODULE,
+                Error::PreauthModule {
+                    message: "No such file or directory".to_owned(),
+                },
+            ));
         };
         match verify_encrypted_challenge(store, &ckey.key, &f.armor_key, blob) {
             Ok(()) => {
@@ -455,7 +468,7 @@ fn finish_preauth(
                     authind_add(&mut auth_indicators, ai);
                 }
             }
-            Err(e) => return Err(e),
+            Err(e) => return Err(finish_verify_padata(EC_MODULE, e)),
         }
     }
     if (client.requires_preauth || anonymous_as) && !skip_timestamp {
@@ -847,14 +860,26 @@ pub(crate) fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetS
     })
 }
 
+/// MIT `kdcpreauth_encrypted_challenge_initvt` (`kdc/kdc_preauth_ec.c:219-219`): the module's name, which its verify failures are logged under.
+const EC_MODULE: &str = "encrypted_challenge";
+
+/// The ASN.1 failure of `der` as MIT's decoder reports it, for a module's verify to log.
+fn asn1_failure(der: &[u8], first_field_explicit: bool) -> Error {
+    Error::PreauthModule {
+        message: crate::asn1_text::decode_failure_text(der, first_field_explicit).to_owned(),
+    }
+}
+
 /// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:121-128`): a timestamp inside the clock skew verifies, and a replayed one verifies again.
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:79-81`): an EncryptedData that does not decode is its ASN.1 error.
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:114-118`): a challenge no key decrypts is 24 with this text, which the verify log carries.
 fn verify_encrypted_challenge(
     store: &dyn PrincipalRead,
     long_term: &ProtocolKey,
     armor_key: &ProtocolKey,
     blob: &[u8],
 ) -> Result<(), Error> {
-    let enc: EncryptedData = decode(blob)?;
+    let enc: EncryptedData = decode(blob).map_err(|_| asn1_failure(blob, true))?;
     let chal = krb_fx_cf2(
         armor_key,
         long_term,
@@ -862,10 +887,12 @@ fn verify_encrypted_challenge(
         b"challengelongterm",
     )?;
     let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT)?;
-    let plain = decrypt_enc_data(&chal, usage, enc.etype, enc.cipher.as_ref())
-        .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-    let ts: PaEncTsEnc =
-        decode(&plain).map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
+    let plain = decrypt_enc_data(&chal, usage, enc.etype, enc.cipher.as_ref()).map_err(|_| {
+        Error::PreauthModule {
+            message: "Incorrect password in encrypted challenge".to_owned(),
+        }
+    })?;
+    let ts: PaEncTsEnc = decode(&plain).map_err(|_| asn1_failure(&plain, true))?;
     // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:124-124`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
     let now = i64::from(KerberosTime::now().unix_seconds());
     let then = i64::from(ts.patimestamp.unix_seconds());
@@ -912,7 +939,8 @@ pub(crate) fn verify_enc_timestamp(
     let enc: EncryptedData = decode(blob)?;
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
     let plain = decrypt_enc_data(key, usage, enc.etype, enc.cipher.as_ref())?;
-    let ts: PaEncTsEnc = decode(&plain)?;
+    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:94-95`): a timestamp that decrypts and does not decode is its ASN.1 error.
+    let ts: PaEncTsEnc = decode(&plain).map_err(|_| asn1_failure(&plain, true))?;
     // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-97`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
     let now = i64::from(KerberosTime::now().unix_seconds());
     let then = i64::from(ts.patimestamp.unix_seconds());

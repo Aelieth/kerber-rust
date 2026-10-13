@@ -3,6 +3,9 @@
 //! OTP preauthentication (RFC 6560) on the AS path: the challenge hint, the verdict and its
 //! indicators, the wire codes of the failures, and the keyless and FAST variants.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -536,6 +539,28 @@ fn reject_is_24_with_a_fresh_hint() {
     );
     let n1 = hint_nonce(&a, &e);
     assert_ne!(n0, n1, "a fresh nonce");
+}
+
+/// A rejection is the module's verify failure: `finish_verify_padata` writes its one line, and the AS_REQ line follows.
+/// MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's failure is logged once, under its name, with the message of its code.
+#[test]
+fn a_rejection_is_logged_once_as_the_modules_verify_failure() {
+    let _g = Guard;
+    let v = Scripted::new("DEFAULT", vec![OtpVerdict::Reject]);
+    set_thread_otp_verifiers(vec![v]);
+    let store = realm(Some("[]"));
+    let a = armor(&store, 9211);
+    let plain = enc_req_plain(&fresh_nonce(32));
+    let raw = encode(&fast_req(&a, vec![pa_otp(&a.key, &plain, b"000000")], 9212)).unwrap();
+    let (reply, log) = common::kdc_log(|| krb5_kdc::handle_request(&store, &raw));
+    assert!(reply.is_ok());
+    assert_eq!(
+        common::failure_trace(&log),
+        [
+            "preauth (otp) verify failure: Generic preauthentication failure",
+            "AS_REQ PREAUTH_FAILED, Preauthentication failed",
+        ]
+    );
 }
 
 /// The nonce and timestamp checks with a verifier that accepts.

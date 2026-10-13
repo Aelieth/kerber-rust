@@ -1865,3 +1865,180 @@ fn discard_module_failure_is_no_reply() {
         reply.len()
     );
 }
+
+fn traced_as(store: &PrincipalStore, nonce: u32, padata: Vec<PaData>) -> (i32, Vec<String>) {
+    let req = as_req(user(), TEST_REALM, nonce, Some(padata)).unwrap();
+    let raw = encode(&req).unwrap();
+    let (reply, log) = common::kdc_log(|| krb5_kdc::handle_request(store, &raw));
+    let e = decode::<KrbError>(&reply.expect("a KRB-ERROR reply")).expect("KRB-ERROR");
+    (e.error_code, common::failure_trace(&log))
+}
+
+#[test]
+fn enc_ts_wrong_password_logs_its_verify_failure_before_the_as_req_line() {
+    // MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's failure is its own log line, ahead of the `AS_REQ` line `finish_process_as_req` writes.
+    let (store, _) = bootstrap_documented().unwrap();
+    let wrong = password_key(TEST_USER, b"not-the-password");
+    let (code, trace) = traced_as(&store, 0x4b01, vec![pa_enc_timestamp(&wrong).unwrap()]);
+    assert_eq!(code, err::PREAUTH_FAILED);
+    assert_eq!(
+        trace,
+        [
+            "preauth (encrypted_timestamp) verify failure: Preauthentication failed",
+            "AS_REQ PREAUTH_FAILED, Preauthentication failed",
+        ]
+    );
+}
+
+#[test]
+fn enc_ts_skew_logs_clock_skew_on_both_lines() {
+    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:97-99`): a timestamp outside the skew is `KRB5KRB_AP_ERR_SKEW`, which `filter_preauth_error` lets through.
+    let (store, _) = bootstrap_documented().unwrap();
+    let stale = KerberosTime::now().add_seconds(-10_000).unwrap();
+    let padata = vec![krb5_protocol::pa_enc_timestamp_at(&user_key(), &stale).unwrap()];
+    let (code, trace) = traced_as(&store, 0x4b02, padata);
+    assert_eq!(code, err::SKEW);
+    assert_eq!(
+        trace,
+        [
+            "preauth (encrypted_timestamp) verify failure: Clock skew too great",
+            "AS_REQ PREAUTH_FAILED, Clock skew too great",
+        ]
+    );
+}
+
+#[test]
+fn enc_ts_under_an_etype_nothing_permits_logs_the_walk_error() {
+    // MIT `krb5_dbe_def_search_enctype` (`lib/kdb/kdb_default.c:60-61`): an etype `krb5_is_permitted_enctype` refuses is `KRB5_KDB_NO_PERMITTED_KEY`, and the AS_REQ line says what the wire's 24 says.
+    krb5_config::isolate_test_krb5();
+    let (mut store, _) = bootstrap_documented().unwrap();
+    let kdc = krb5_config::KdcConf::parse(
+        "[libdefaults]\n permitted_enctypes = aes256-cts-hmac-sha1-96\n",
+    )
+    .unwrap();
+    store.apply_kdc_conf(&kdc).unwrap();
+    let aes128 = user_key_z1b_preauth_filter(&store, EncryptionType::Aes128CtsHmacSha196);
+    let unknown = EncryptedData {
+        etype: 99,
+        kvno: None,
+        cipher: vec![0u8; 32].into(),
+    };
+    let unknown = PaData {
+        padata_type: pa::ENC_TIMESTAMP,
+        padata_value: encode(&unknown).unwrap().into(),
+    };
+    for (nonce, padata) in [
+        (0x4b03, pa_enc_timestamp(&aes128).unwrap()),
+        (0x4b04, unknown),
+    ] {
+        let (code, trace) = traced_as(&store, nonce, vec![padata]);
+        assert_eq!(code, err::PREAUTH_FAILED);
+        assert_eq!(
+            trace,
+            [
+                "preauth (encrypted_timestamp) verify failure: No matching key in entry having a permitted enctype",
+                "AS_REQ PREAUTH_FAILED, Preauthentication failed",
+            ],
+            "nonce {nonce:#x}"
+        );
+    }
+}
+
+#[test]
+fn enc_ts_with_a_wrong_key_of_a_held_etype_is_the_plain_failure() {
+    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:75-92`): a key that does not open the cipher sends the walk on to the next key of the etype.
+    // MIT `enc_ts_verify` (`kdc/kdc_preauth_encts.c:115-116`): a walk out of keys is `KRB5KDC_ERR_PREAUTH_FAILED`, and the verify line says so.
+    let (store, _) = bootstrap_documented().unwrap();
+    let garbage = EncryptedData {
+        etype: EncryptionType::Aes256CtsHmacSha196.to_iana(),
+        kvno: None,
+        cipher: vec![0xa5u8; 40].into(),
+    };
+    let padata = PaData {
+        padata_type: pa::ENC_TIMESTAMP,
+        padata_value: encode(&garbage).unwrap().into(),
+    };
+    let (code, trace) = traced_as(&store, 0x4b05, vec![padata]);
+    assert_eq!(code, err::PREAUTH_FAILED);
+    assert_eq!(
+        trace,
+        [
+            "preauth (encrypted_timestamp) verify failure: Preauthentication failed",
+            "AS_REQ PREAUTH_FAILED, Preauthentication failed",
+        ]
+    );
+}
+
+#[test]
+fn ec_outside_fast_logs_its_verify_failure() {
+    // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:71-76`): outside a FAST tunnel the module fails with `ENOENT` and this message.
+    let (store, _) = bootstrap_documented().unwrap();
+    let padata = PaData {
+        padata_type: pa::ENCRYPTED_CHALLENGE,
+        padata_value: b"outside-fast".to_vec().into(),
+    };
+    let (code, trace) = traced_as(&store, 0x4b06, vec![padata]);
+    assert_eq!(code, err::PREAUTH_FAILED);
+    assert_eq!(
+        trace,
+        [
+            "preauth (encrypted_challenge) verify failure: Encrypted Challenge used outside of FAST tunnel",
+            "AS_REQ PREAUTH_FAILED, Preauthentication failed",
+        ]
+    );
+}
+
+fn module_trace(selector: u8) -> (i32, Vec<String>) {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| krb5_kdc::register_preauth(Arc::new(FailingModule)));
+    let (store, _) = bootstrap_documented().unwrap();
+    let padata = PaData {
+        padata_type: PA_PRIVATE,
+        padata_value: vec![selector].into(),
+    };
+    traced_as(&store, 0x4b07, vec![padata])
+}
+
+#[test]
+fn a_module_failure_is_logged_under_its_name_and_the_as_req_line_stays_mits() {
+    // MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): any module's failure, under the module's name, with the message of its code.
+    // MIT `filter_preauth_error` (`kdc/kdc_preauth.c:1092-1133`): 90 is off the pass-through list, so the wire and the `AS_REQ` line say 24 and nothing of the module's own words.
+    assert_eq!(
+        module_trace(4),
+        (
+            err::PREAUTH_FAILED,
+            vec![
+                "preauth (z1b-failing) verify failure: Preauthentication expired".to_owned(),
+                "AS_REQ PREAUTH_FAILED, Preauthentication failed".to_owned(),
+            ]
+        )
+    );
+    // 37 is on the list: both lines say it.
+    assert_eq!(
+        module_trace(1),
+        (
+            err::SKEW,
+            vec![
+                "preauth (z1b-failing) verify failure: Clock skew too great".to_owned(),
+                "AS_REQ PREAUTH_FAILED, Clock skew too great".to_owned(),
+            ]
+        )
+    );
+    // 34 and 12 are off the list as well.
+    for (selector, message) in [
+        (5, "Request is a replay"),
+        (3, "KDC policy rejects request"),
+    ] {
+        assert_eq!(
+            module_trace(selector),
+            (
+                err::PREAUTH_FAILED,
+                vec![
+                    format!("preauth (z1b-failing) verify failure: {message}"),
+                    "AS_REQ PREAUTH_FAILED, Preauthentication failed".to_owned(),
+                ]
+            ),
+            "selector {selector}"
+        );
+    }
+}

@@ -202,7 +202,11 @@ find dictionary file …, continuing without one.` for a missing one;
 one `AS_REQ` / `TGS_REQ` line per answered request (`ISSUE` with the
 reply etypes, or the status word and the error's message) with the
 `... PROTOCOL-TRANSITION` / `... CONSTRAINED-DELEGATION` line after an
-S4U request; the transited-path lines; MIT's net-server lines: `closing
+S4U request; before the `AS_REQ` line of a request a preauth module
+refused, `preauth (NAME) verify failure: MESSAGE` for that module
+(`encrypted_timestamp`, `encrypted_challenge`, `spake`, `pkinit`, `otp`),
+SPAKE's first round with `More preauthentication data is required`;
+the transited-path lines; MIT's net-server lines: `closing
 down fd N` when a TCP or kadm5 connection ends, `too many connections`
 and `dropping TCP fd N from ADDR` (`RPC` for kadm5) past the cap of 45
 connections, `TCP client ADDR wants N bytes, cap is M`, the two

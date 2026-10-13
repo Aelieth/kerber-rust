@@ -7,6 +7,9 @@
 //! MIT `maybe_add_etype_info2` (`kdc_preauth.c:1141-1170`): a 91 reply gets PA-ETYPE-INFO2
 //! only while the request carries no cookie.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt, prf_plus};
 use krb5_kdc::testrealm::{TEST_ADMIN, TEST_REALM, TEST_USER, bootstrap_documented};
@@ -724,4 +727,139 @@ fn as_spake_unknown_choice_is_preauth_failed() {
         .as_ref()
         .and_then(|t| std::str::from_utf8(t.as_bytes()).ok());
     assert_eq!(text, Some("PREAUTH_FAILED"));
+}
+
+fn spake_traced(store: &PrincipalStore, req: &krb5_types::AsReq) -> (i32, Vec<String>) {
+    let raw = encode(req).unwrap();
+    let (reply, log) = common::kdc_log(|| krb5_kdc::handle_request(store, &raw));
+    let e: KrbError = decode(&reply.expect("a KRB-ERROR reply")).expect("KRB-ERROR");
+    (e.error_code, log)
+}
+
+fn spake_padata_req(nonce: u32, padata: Vec<PaData>) -> krb5_types::AsReq {
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    as_req(cname, TEST_REALM, nonce, Some(padata)).unwrap()
+}
+
+#[test]
+fn spake_support_message_is_logged_as_a_verify_failure() {
+    // MIT `send_challenge` (`plugins/preauth/spake/spake_kdc.c:290-292`): the module answers a support message with `KRB5KDC_ERR_MORE_PREAUTH_DATA_REQUIRED`, which `finish_verify_padata` logs like any failure of a module.
+    let (store, _) = bootstrap_documented().unwrap();
+    let req = spake_padata_req(
+        0x4b11,
+        vec![pa_spake_support(&[krb5_crypto::SpakeGroup::P256])],
+    );
+    let (code, log) = spake_traced(&store, &req);
+    assert_eq!(code, err::MORE_PREAUTH_DATA_REQUIRED);
+    assert_eq!(
+        common::failure_trace(&log),
+        [
+            "preauth (spake) verify failure: More preauthentication data is required",
+            "AS_REQ PREAUTH_FAILED, More preauthentication data is required",
+        ]
+    );
+}
+
+#[test]
+fn spake_messages_that_do_not_decode_log_the_decoders_text() {
+    // MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:519-521`): a PA-SPAKE the decoder refuses fails the module with the decoder's code.
+    // MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:532-535`): a choice no alternative takes fails with this message.
+    let (store, _) = bootstrap_documented().unwrap();
+    for (n, (der, message)) in [
+        (vec![0xff, 0xff], "ASN.1 encoding ended unexpectedly"),
+        (vec![0xa0, 0x00], "ASN.1 encoding ended unexpectedly"),
+        (
+            vec![0xa0, 0x02, 0x30, 0x00],
+            "ASN.1 structure is missing a required field",
+        ),
+        (
+            vec![0xa2, 0x02, 0x30, 0x00],
+            "ASN.1 structure is missing a required field",
+        ),
+        (
+            vec![0xa0, 0x02, 0x04, 0x00],
+            "ASN.1 identifier doesn't match expected value",
+        ),
+        (
+            vec![0xa1, 0x02, 0x30, 0x00],
+            "ASN.1 structure is missing a required field",
+        ),
+        (vec![0xa4, 0x02, 0x30, 0x00], "Unknown SPAKE request type"),
+        (vec![0x30, 0x00], "Unknown SPAKE request type"),
+        // A well-formed challenge: the KDC reads one from a client as an unknown request type.
+        (
+            vec![
+                0xa1, 0x11, 0x30, 0x0f, 0xa0, 0x03, 0x02, 0x01, 0x02, 0xa1, 0x04, 0x04, 0x02, 0xaa,
+                0xbb, 0xa2, 0x02, 0x30, 0x00,
+            ],
+            "Unknown SPAKE request type",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let padata = PaData {
+            padata_type: pa::SPAKE,
+            padata_value: der.clone().into(),
+        };
+        let req = spake_padata_req(0x4b20 + u32::try_from(n).unwrap(), vec![padata]);
+        let (code, log) = spake_traced(&store, &req);
+        assert_eq!(code, err::PREAUTH_FAILED, "{der:02x?}");
+        assert_eq!(
+            common::verify_failures(&log),
+            [format!("preauth (spake) verify failure: {message}")],
+            "{der:02x?}"
+        );
+    }
+}
+
+#[test]
+fn spake_response_failures_are_logged_as_the_plain_24_text() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
+    let wrong = krb5_testkit::password_key(TEST_USER, b"not-the-password");
+    let plain = [
+        "preauth (spake) verify failure: Preauthentication failed",
+        "AS_REQ PREAUTH_FAILED, Preauthentication failed",
+    ];
+    // MIT `verify_response` (`plugins/preauth/spake/spake_kdc.c:429-434`): a factor that does not decrypt is the wrong password.
+    let (_, spa, cookie, chal) = spake_round1(&store, 0x4b31);
+    let mut req = spake_padata_req(0x4b32, vec![]);
+    let body_der = encode(&req.0.req_body).unwrap();
+    let (resp, _) = pa_spake_response(
+        &wrong,
+        krb5_crypto::SpakeGroup::P256,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )
+    .unwrap();
+    req.0.padata = Some(vec![
+        resp,
+        PaData {
+            padata_type: pa::FX_COOKIE,
+            padata_value: cookie.into(),
+        },
+    ]);
+    let (code, log) = spake_traced(&store, &req);
+    assert_eq!(code, err::PREAUTH_FAILED);
+    assert_eq!(common::failure_trace(&log), plain, "wrong password");
+    // MIT `verify_response` (`plugins/preauth/spake/spake_kdc.c:388-391`): a response with no cookie to answer is refused the same way.
+    let (key, spa, _cookie, chal) = spake_round1(&store, 0x4b33);
+    let mut req = spake_padata_req(0x4b34, vec![]);
+    let body_der = encode(&req.0.req_body).unwrap();
+    let (resp, _) = pa_spake_response(
+        &key,
+        krb5_crypto::SpakeGroup::P256,
+        support.padata_value.as_ref(),
+        spa.padata_value.as_ref(),
+        chal.pubkey.as_ref(),
+        &body_der,
+    )
+    .unwrap();
+    req.0.padata = Some(vec![resp]);
+    let (code, log) = spake_traced(&store, &req);
+    assert_eq!(code, err::PREAUTH_FAILED);
+    assert_eq!(common::failure_trace(&log), plain, "no cookie");
 }

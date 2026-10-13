@@ -484,10 +484,11 @@ pub(crate) fn wrap_fast_rep(
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.
 ///
 /// A client-caused verify failure (CMS, cert, eContentType, checksum, ctime,
-/// AuthPack, DH group, SPKI) is logged at `info` like MIT's, with
-/// `outcome = "denied"`; the KDC's own faults stay `error`.
+/// AuthPack, DH group, SPKI) is logged at `info` with `outcome = "denied"` in the JSON log; the KDC's own
+/// faults stay `error`.
 /// MIT `finish_verify_padata` (`kdc_preauth.c:1224-1228`): a module verify failure is
-/// `LOG_INFO "preauth (%s) verify failure: %s"`.
+/// `LOG_INFO "preauth (%s) verify failure: %s"`, which `run_as_preauth` writes for each failure
+/// this returns; the message is the one the error carries, or the code's table text.
 ///
 /// # Errors
 ///
@@ -514,8 +515,12 @@ pub(crate) fn process_pkinit(
     };
     let cms = match decode::<krb5_types::pkinit::PaPkAsReq>(raw) {
         Ok(req) => req.signed_auth_pack.as_ref().to_vec(),
-        Err(_) => krb5_types::pkinit::parse_pa_pk_as_req_cms(raw)
-            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?,
+        // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:479-483`): a PA-PK-AS-REQ that does not decode is its ASN.1 error.
+        Err(_) => {
+            krb5_types::pkinit::parse_pa_pk_as_req_cms(raw).ok_or_else(|| Error::PreauthModule {
+                message: crate::asn1_text::decode_failure_text(raw, false).to_owned(),
+            })?
+        }
     };
     let ca = store
         .pkinit_ca()
