@@ -35,6 +35,10 @@ MIT 1.22.2, Heimdal and Samba peers; [`docs/gates.md`](../docs/gates.md) lists w
 | `lib/kdc-padata-proxy.py` | UDP proxy printing the padata types of each KDC-REQ. |
 | `lib/kdc-req-proxy.py` | UDP/TCP proxy printing the shape of each KDC-REQ. |
 | `lib/kdc-rewrite-proxy.py` | UDP/TCP man-in-the-middle that rewrites KDC replies. |
+| `lib/otp-common.sh` | The OTP gates' shared cells: the realm's files, one login per client with its bytes captured, the byte and ccache checks, the KDC-log slices. |
+| `lib/otp-radius-stub.py` | A standard-library RADIUS responder on a UNIX socket (Access-Accept for the codes it is given): the verdict source MIT's `otp` module asks. |
+| `lib/otp-fast-shim.c` | An `LD_PRELOAD` observer: the plaintext of the FAST request, the FAST response and the OTP nonce passing through `krb5_c_decrypt` / `krb5_c_encrypt` in `krb5kdc` or `kinit`. |
+| `lib/otp-fastdump.py` | Reads the shim's lines and prints the inner padata types, the PA-OTP-REQUEST and PA-OTP-CHALLENGE bytes (ciphertext and nonce masked) and the nonces. |
 | `lib/skew-preload.c` | An `LD_PRELOAD` that moves the clock three days ahead, for the skew cells. |
 | `lib/openssl-seclevel0.cnf` | The OpenSSL 3 configuration the PKINIT gates load. |
 

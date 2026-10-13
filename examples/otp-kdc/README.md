@@ -83,6 +83,6 @@ krb5-kadmin-local -q 'getstrs ra4user'    # otp: [{"type":"totp"}]
 ## Limits
 
 - OTP preauth is armored with FAST (RFC 6560), so a login needs an armor ticket: MIT `kinit -T
-  <armor ccache>` with the OTP prompt answered. The `krb5-kinit` in this tree does not do OTP.
+  <armor ccache>` with the OTP prompt answered. The `krb5-kinit` in this tree does the same login: `scripts/otp-gate.sh` runs it beside MIT's `kinit`.
 - The verifier reads its seeds file under the store's read lock, once per OTP request. That suits a
   demonstration, not a directory of many users.

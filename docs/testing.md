@@ -575,7 +575,7 @@ allows only the Keep-a-Changelog group names, each the whole heading, plus
 13c2160b, plus a stated 15,429-byte allowance (the forecast plus a 20
 percent margin, rounded up) for the rest of 1.1 and the cut, one bullet
 per change; ceiling 288,000; a `tool:` commit re-bases it, never the
-commit that adds the bullets). `check_gate_documented` holds `docs/gates.md` and `docs/gates-decode.md`
+commit that adds the bullets). `check_gate_documented` holds `docs/gates.md`, `docs/gates-decode.md` and `docs/gates-otp.md`
 to one row per `scripts/*-gate.sh`, with the workflow and lane columns
 equal to the gates' placements in `.github/workflows` (`fail-red`,
 `soft`, `nightly`; `stub` or `wrapper` for the documented
@@ -721,7 +721,7 @@ all of the above).
 | `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `history-mit-gate` |
 | `harness-2` | One shared shell + one stock MIT KDC, then `kpasswd-rust-gate`, `kpasswd-mit-gate` (local wrapper `kpasswd-gate.sh`), `kdb-dump-gate`, `differential-gate`, `kprop-gate`, `kprop-reverse-gate`, `rd-safe-oracle-gate`, `rd-priv-oracle-gate`, `asn1-decode-oracle-gate`, `cross-kdc-gate`, `iprop-gate`, `expire-gate`, `kdcpolicy-gate`, `flags-gate`, `renew-gate`, `postdate-gate`, `getprivs-gate`, `policy-gate`, `prop-acl-gate`, `restart-gate`, `prod-gate`, `prod-realm-gate` |
 | `mit-extra` | One shared shell + one stock MIT KDC, then `cross-realm-gate`, `capaths-compress-gate`, `spake-gate`, `rust-kinit-spake-gate`, `mit-fast-kdc-gate`, `rust-kinit-fast-gate`, `rust-kinit-pkinit-gate`, `rust-kinit-enterprise-gate`, `ktutil-gate`, `kadmin-local-gate`, `rust-kpasswd-mit-gate`, `sha2-gate`, `rc4-session-gate` |
-| `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-flows-gate`, `client-differential-cli-gate` (local wrapper `client-differential-gate.sh`), `s4u-mit-gate`, `kcm-gate`, `capaths-transit-gate` |
+| `mit-extra-2` | One shared shell + one stock MIT KDC, then `client-differential-flows-gate`, `client-differential-cli-gate` (local wrapper `client-differential-gate.sh`), `s4u-mit-gate`, `kcm-gate`, `capaths-transit-gate`, `otp-gate` |
 | `slo` (`continue-on-error`) | `stress-gate` over `harness/prod` |
 | `chaos` (`continue-on-error`) | `chaos-gate` |
 | `soak` (`continue-on-error`) | `soak-gate` (short run) |

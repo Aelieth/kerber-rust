@@ -30,7 +30,7 @@ plus packet captures outrank unit tests.
 | **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI. `publish = false` (not on crates.io). |
 | **v1.1** *(in progress)* | **General-purpose MIT completeness**: the KDC behaves like MIT across the board and the client tools stand alone. The nine 1.1 phases and the MIT 1.22.2 parity sweep have landed ([docs/stages.md](docs/stages.md)); the swept MIT functions are graded one row per check in the [parity ledger](docs/parity/README.md). |
 
-Every push runs 55 gates in `ci.yml`: 52 fail-red and 3 soft (`continue-on-error`).
+Every push runs 58 gates in `ci.yml`: 55 fail-red and 3 soft (`continue-on-error`).
 Nine more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
 pin); soak also runs longer nightly. [docs/gates.md](docs/gates.md) has one row per gate.
 
