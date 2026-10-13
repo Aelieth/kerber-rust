@@ -350,18 +350,24 @@ fn disable_encrypted_timestamp_does_not_prompt_and_fails() {
         prompts, 0,
         "encrypted timestamp asks for no key when disabled"
     );
-    assert_eq!(err.to_string(), "Encrypted timestamp is disabled");
+    assert_eq!(
+        err.to_string(),
+        "Pre-authentication failed: Encrypted timestamp is disabled"
+    );
     let proto = err
         .downcast_ref::<krb5_protocol::Error>()
         .expect("encts failure is the protocol error");
+    assert!(
+        matches!(proto, krb5_protocol::Error::PreauthFailed(inner)
+            if matches!(**inner, krb5_protocol::Error::EnctsDisabled)),
+        "{proto:?}"
+    );
     assert_eq!(
         super::Krb5Error::from_protocol(proto, TEST_REALM).to_string(),
         "Pre-authentication failed: Encrypted timestamp is disabled"
     );
-    assert_eq!(
-        mit_error_code(err.as_ref()),
-        Some(krb5_types::err::PREAUTH_FAILED)
-    );
+    // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-724`): the code is `KRB5_PREAUTH_FAILED`, not the KDC's 24, so kinit prints the message and not "Password incorrect".
+    assert_eq!(mit_error_code(err.as_ref()), None);
     let reqs = reqs_of(&cap);
     assert_eq!(
         reqs.len(),

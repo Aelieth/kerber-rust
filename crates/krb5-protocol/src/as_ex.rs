@@ -26,14 +26,16 @@ mod clock;
 mod ec;
 mod fast;
 mod otp;
+mod password;
 mod responder;
 mod spake;
 
 use clock::Clock;
 pub use fast::FastArmor;
-use fast::continue_fast;
 pub(crate) use fast::fast_error_material;
+use fast::{ask_gak_question, ask_responder, continue_fast};
 pub use otp::{OtpChallengeView, OtpTokenView};
+use password::{ModuleFail, PasswordCell};
 pub use responder::{QUESTION_OTP, QUESTION_PASSWORD, Responder, ResponderItems};
 use spake::{
     SpakeEnd, client_groups, continue_spake, refuse_spake_combo, refuse_spake_skip, spake_forced,
@@ -350,11 +352,12 @@ pub struct PreauthPrompt<'a> {
 
 /// What an AS exchange may ask of its caller: the password when a reply needs the key, and a preauth
 /// module's prompts.
-/// MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): the password is read once, on first need.
+/// MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): the password is read when a module first wants the key, and a read that works is kept; one that fails is asked again by the next module that wants the key.
 /// A preauth module's prompts go through one prompter, as MIT's `krb5_prompter_fct` does.
 pub trait AsPrompt {
     /// The AS password. An `Error::File` of kind `Interrupted` is a keyboard interrupt
-    /// (`KRB5_LIBOS_PWDINTR`), which no other mechanism follows.
+    /// (`KRB5_LIBOS_PWDINTR`), which no other mechanism follows. Any other error fails the module
+    /// that asked, and the next module that needs the key calls this again.
     ///
     /// # Errors
     ///
@@ -425,49 +428,6 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
         .unwrap_or_else(|| PrincipalName::krbtgt(req.realm))
 }
 
-/// `req` with `password` in it.
-fn with_password<'b>(req: &AsRequest<'b>, password: &'b [u8]) -> AsRequest<'b> {
-    AsRequest {
-        cname: req.cname.clone(),
-        realm: req.realm,
-        password,
-        kdc: req.kdc,
-        want_spake: req.want_spake,
-        fast_armor: req.fast_armor,
-        pkinit: req.pkinit,
-        canonicalize: req.canonicalize,
-        sname: req.sname,
-        etypes: req.etypes,
-        ticket: req.ticket.clone(),
-    }
-}
-
-/// Runs `then` with `req` carrying the password `prompt` reads, or with `req` itself when there
-/// is no prompt. A read that fails while it answers the KDC's preauthentication hint (`preauth`)
-/// is [`Error::PreauthFailed`], unless it was interrupted (an `Interrupted` I/O error).
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-698`): a keyboard interrupt stops the mechanisms with its own code.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): any other failure of the real type answered is wrapped as `KRB5_PREAUTH_FAILED`.
-fn with_prompted<T>(
-    req: &AsRequest<'_>,
-    prompt: Option<&mut dyn AsPrompt>,
-    preauth: bool,
-    then: impl FnOnce(&AsRequest<'_>) -> Result<T, Error>,
-) -> Result<T, Error> {
-    let Some(prompt) = prompt else {
-        return then(req);
-    };
-    let password = prompt.password().map_err(|e| {
-        let interrupted =
-            matches!(&e, Error::File(io) if io.kind() == std::io::ErrorKind::Interrupted);
-        if preauth && !interrupted {
-            Error::PreauthFailed(Box::new(e))
-        } else {
-            e
-        }
-    })?;
-    then(&with_password(req, &password))
-}
-
 /// MIT `restart_init_creds_loop` (`get_in_tkt.c:807-813`): optimistic preauth is sent only when
 /// the caller supplied a preauth list. The default first request therefore carries no module
 /// padata, and a preauth-required hint is what selects the real mechanism.
@@ -532,49 +492,32 @@ fn as_exchange_inner(
     {
         return Err(preauth_failed());
     }
-    let mut needs_key = match &msg {
-        KdcMsg::AsRep(_) => {
+    // MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): a preauth module reads the password when it wants the key, so a hint is not answered with a read made ahead of the module. Only a reply no module answered reads it here.
+    match msg {
+        KdcMsg::AsRep(rep) => {
             refuse_spake_skip(req.want_spake)?;
-            true
+            trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
+            let mut pw = PasswordCell::new(prompt, req.password, !keys.is_empty());
+            finish_as_rep_keys(req, rep, nonce, keys, &etypes, &bound, Some(&wire), &mut pw)
         }
-        KdcMsg::Error(e) => e.error_code == err::PREAUTH_REQUIRED || spake_more(e),
-        KdcMsg::TgsRep => false,
-    };
-    let preauth =
-        matches!(&msg, KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED || spake_more(e));
-    // MIT `encts_prep_questions` (`lib/krb5/krb/preauth_encts.c:44-45`): encrypted timestamp asks for no key when the realm disables it.
-    if let KdcMsg::Error(e) = &msg
-        && encrypted_timestamp_disabled(req.realm)
-        && chosen_preauth(req, e) == Some(pa::ENC_TIMESTAMP)
-    {
-        needs_key = false;
+        KdcMsg::Error(e) if spake_more(&e) => {
+            if !crate::clpreauth::loaded("spake") {
+                return Err(preauth_failed());
+            }
+            if trace::enabled() {
+                trace::init_creds_preauth();
+                trace_preauth_input(&method_from_error(&e).unwrap_or_default(), &etypes);
+            }
+            let mut pw = PasswordCell::new(prompt, req.password, !keys.is_empty());
+            spake_forced(req, keys, nonce, &etypes, &e, &clock, &mut pw)
+        }
+        KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
+            let mut pw = PasswordCell::new(prompt, req.password, !keys.is_empty());
+            continue_from_hint(req, keys, nonce, &etypes, &e, &clock, &mut pw)
+        }
+        KdcMsg::Error(e) => classify_kdc_error(&e),
+        KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
-    with_prompted(
-        req,
-        prompt.filter(|_| needs_key),
-        preauth,
-        |req| match msg {
-            KdcMsg::AsRep(rep) => {
-                trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
-                finish_as_rep_keys(req, rep, nonce, keys, &etypes, &bound, Some(&wire))
-            }
-            KdcMsg::Error(e) if spake_more(&e) => {
-                if !crate::clpreauth::loaded("spake") {
-                    return Err(preauth_failed());
-                }
-                if trace::enabled() {
-                    trace::init_creds_preauth();
-                    trace_preauth_input(&method_from_error(&e).unwrap_or_default(), &etypes);
-                }
-                spake_forced(req, keys, nonce, &etypes, &e, &clock)
-            }
-            KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-                continue_from_hint(req, keys, nonce, &etypes, &e, &clock)
-            }
-            KdcMsg::Error(e) => classify_kdc_error(&e),
-            KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
-        },
-    )
 }
 
 /// MIT `get_as_key_keytab` (`gic_keytab.c:68-71`): the reply etype selects the keytab key, and a
@@ -582,6 +525,16 @@ fn as_exchange_inner(
 /// key is tried before the reply is rejected.
 /// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:47-136`): with no key from preauth, the
 /// reply key is got from the password, with the client's own salt, or from the keytab.
+/// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:96-123`): the responder is asked for the password first, then the key is got, and `gak_fct`'s error is returned as it is.
+///
+/// # Errors
+///
+/// The password's failure as it is (a read that failed, or `EIO` with nothing to read it from), the
+/// responder's error, or the reply's.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the AS round's state, no value type"
+)]
 fn finish_as_rep_keys(
     req: &AsRequest<'_>,
     rep: AsRep,
@@ -590,20 +543,24 @@ fn finish_as_rep_keys(
     etypes: &[i32],
     bound: &AsReqTimes,
     req_der: Option<&[u8]>,
+    pw: &mut PasswordCell<'_, '_>,
 ) -> Result<AsOutcome, Error> {
-    let (password, cname, realm) = (req.password, &req.cname, req.realm);
+    let (cname, realm) = (&req.cname, req.realm);
     let (canonicalize, expected_sname) = (req.canonicalize, &req_sname(req));
     let etype = EncryptionType::known(rep.0.enc_part.etype)?;
     if keys.is_empty() {
-        trace_gak_salt(req, rep.0.padata.as_deref(), etypes, false);
+        trace_salt_princ(req, rep.0.padata.as_deref(), etypes);
+        ask_gak_question(pw)?;
+        trace_gak(req, rep.0.padata.as_deref(), etypes, false);
+        let password = pw.get().map_err(ModuleFail::unwrapped)?;
         let salt = salt_cname(cname).default_salt(realm);
-        let key = string_to_key(etype, password, &salt, None)?;
+        let key = string_to_key(etype, &password, &salt, None)?;
         trace::init_creds_as_key_gak((&key).into());
         return finish_as_rep(
             rep,
             nonce,
             Some(key),
-            password,
+            &password,
             cname,
             realm,
             None,
@@ -614,6 +571,7 @@ fn finish_as_rep_keys(
             false,
         );
     }
+    let password = req.password;
     trace_gak_salt(req, rep.0.padata.as_deref(), etypes, true);
     trace_keytab_gak(req, keys, etype);
     if let Some(k) = pick_key(keys, Some(etype)) {
@@ -729,6 +687,7 @@ fn continue_from_hint(
     etypes: &[i32],
     err: &KrbError,
     clock: &Clock,
+    pw: &mut PasswordCell<'_, '_>,
 ) -> Result<AsOutcome, Error> {
     if req.want_spake {
         if !crate::clpreauth::loaded("spake") {
@@ -746,12 +705,21 @@ fn continue_from_hint(
                 etypes,
             );
         }
-        return spake_forced(req, keys, nonce, etypes, err, clock);
+        return spake_forced(req, keys, nonce, etypes, err, clock, pw);
     }
     let preferred = conf_preferred_preauth_types_for(req.realm);
     // MIT `spake_init` (`spake_client.c:62-73`): with no permitted group there is no SPAKE module.
     let groups = client_groups();
-    let mut spake_failed = !crate::clpreauth::loaded("spake");
+    // MIT `k5_preauth_note_failed` (`lib/krb5/krb/preauth2.c:208-221`): the real types that failed in this authentication, which are not tried again.
+    let mut failed: Vec<i32> = Vec::new();
+    if !crate::clpreauth::loaded("spake") {
+        failed.push(pa::SPAKE);
+    }
+    // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:699-704`): the first failure of a real type is the one reported when none answers.
+    let mut first_failure: Option<Error> = None;
+    // MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1315-1317`): a `PREAUTH_FAILED` the KDC sent ends the mechanism that was answered, and its code is the error saved.
+    // MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1349-1352`): if the mechanisms after it fail too, the saved error is the one reported.
+    let mut refused: Option<KrbError> = None;
     let mut hint = err.clone();
     loop {
         let method = method_from_error(&hint)?;
@@ -760,41 +728,81 @@ fn continue_from_hint(
         // preauthenticated from the KDC's method data, which `k5_preauth` reads first.
         trace::init_creds_preauth();
         trace_preauth_input(&sorted, etypes);
-        // MIT `process_pa_data` (`preauth2.c:648-728`): the first real mechanism that a loaded
-        // module serves; one that failed is not tried again.
-        // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a real type the input cache does not allow is skipped.
-        let next = sorted.iter().find_map(|p| {
-            if !req.ticket.preauth_allowed(p.padata_type) {
-                return None;
-            }
-            unarmored_mech(p.padata_type, spake_failed)
-        });
-        match next {
-            Some(Unarmored::Spake) => {
-                match continue_spake(req, keys, nonce, etypes, &hint, &groups, clock)? {
-                    SpakeEnd::Done(out) => return Ok(*out),
-                    SpakeEnd::Fallback(next_err) => {
-                        spake_failed = true;
-                        hint = *next_err;
+        // MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:1004-1016`): the modules prepare their
+        // questions and the responder answers them before the walk.
+        ask_responder(req, pw, None, &allowed_padata(req, &sorted))?;
+        // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:667-723`): one walk over the list in
+        // its order. A real mechanism that fails is traced and the next one runs, with no new
+        // request between them; a walk that ends in a request is followed by a new one on the
+        // KDC's next hint.
+        'walk: loop {
+            // MIT `process_pa_data` (`preauth2.c:648-728`): the first real mechanism that a loaded
+            // module serves; one that failed is not tried again.
+            // MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a real type the input cache does not allow is skipped.
+            let next = sorted.iter().find_map(|p| {
+                if !req.ticket.preauth_allowed(p.padata_type) {
+                    return None;
+                }
+                unarmored_mech(p.padata_type, &failed)
+            });
+            match next {
+                Some(Unarmored::Spake) => {
+                    match continue_spake(req, keys, nonce, etypes, &hint, &groups, clock, pw)? {
+                        SpakeEnd::Done(out) => return Ok(*out),
+                        SpakeEnd::Fallback {
+                            hint: next_err,
+                            fail,
+                            refusal,
+                            new_walk,
+                        } => {
+                            failed.push(pa::SPAKE);
+                            if let Some(f) = fail {
+                                first_failure.get_or_insert(f.error);
+                            }
+                            if let Some(e) = refusal {
+                                refused = Some(*e);
+                            }
+                            hint = *next_err;
+                            if new_walk {
+                                break 'walk;
+                            }
+                        }
                     }
                 }
+                Some(Unarmored::Encts) => {
+                    match continue_preauth(req, keys, nonce, etypes, &hint, clock, pw)? {
+                        Ok(out) => return Ok(out),
+                        Err(f) => {
+                            f.trace(ENCTS_MODULE, pa::ENC_TIMESTAMP);
+                            if f.interrupted {
+                                return Err(f.error);
+                            }
+                            failed.push(pa::ENC_TIMESTAMP);
+                            first_failure.get_or_insert(f.error);
+                        }
+                    }
+                }
+                Some(Unarmored::Embedder(module, pa_type)) => {
+                    return continue_embedder(
+                        req,
+                        keys,
+                        nonce,
+                        etypes,
+                        &hint,
+                        clock,
+                        module.as_ref(),
+                        pa_type,
+                        pw,
+                    );
+                }
+                None => {
+                    return Err(match (refused, first_failure) {
+                        (Some(e), _) => kdc_error(&e),
+                        (None, Some(first)) => Error::PreauthFailed(Box::new(first)),
+                        (None, None) => preauth_failed(),
+                    });
+                }
             }
-            Some(Unarmored::Encts) => {
-                return continue_preauth(req, keys, nonce, etypes, &hint, clock);
-            }
-            Some(Unarmored::Embedder(module, pa_type)) => {
-                return continue_embedder(
-                    req,
-                    keys,
-                    nonce,
-                    etypes,
-                    &hint,
-                    clock,
-                    module.as_ref(),
-                    pa_type,
-                );
-            }
-            None => return Err(preauth_failed()),
         }
     }
 }
@@ -808,9 +816,13 @@ enum Unarmored {
 
 /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:669-674`): a pa-type with no loaded module is
 /// skipped. Encrypted challenge runs only under armor (`fast_mechanism`).
-fn unarmored_mech(pa_type: i32, spake_failed: bool) -> Option<Unarmored> {
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:675-677`): a real type that failed earlier in the authentication (`failed`) is not tried again.
+fn unarmored_mech(pa_type: i32, failed: &[i32]) -> Option<Unarmored> {
+    if failed.contains(&pa_type) {
+        return None;
+    }
     match crate::clpreauth::owner_of(pa_type) {
-        Some(crate::clpreauth::Owner::Spake) if !spake_failed => Some(Unarmored::Spake),
+        Some(crate::clpreauth::Owner::Spake) => Some(Unarmored::Spake),
         Some(crate::clpreauth::Owner::EncTs) => Some(Unarmored::Encts),
         Some(crate::clpreauth::Owner::Embedder(module)) if module.real(pa_type) => {
             Some(Unarmored::Embedder(module, pa_type))
@@ -824,6 +836,14 @@ fn unarmored_mech(pa_type: i32, spake_failed: bool) -> Option<Unarmored> {
 /// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1318-1336`): an error to the timestamp goes to the module's tryagain, which encrypted timestamp lacks, so the KDC's error ends the exchange.
 /// An unsupported etype is retried once with aes256 alone, a retry MIT's error branch does not
 /// have; any other error is not another guess.
+/// The module gets the AS key first, and a password the prompter cannot read is the module's
+/// failure, with no request sent, so the walk can go on to the next mechanism.
+/// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:75-77`): `get_as_key` runs after the disabled check, and its error is the module's.
+///
+/// # Errors
+///
+/// The exchange's error once the request is sent, or an error that is no module's failure; the
+/// module's failure is the inner `Err`.
 fn continue_preauth(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -831,24 +851,28 @@ fn continue_preauth(
     etypes: &[i32],
     preauth_err: &KrbError,
     clock: &Clock,
-) -> Result<AsOutcome, Error> {
+    pw: &mut PasswordCell<'_, '_>,
+) -> Result<Result<AsOutcome, ModuleFail>, Error> {
     // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): encrypted timestamp runs only for a type the hint lists.
     if let Ok(method) = method_from_error(preauth_err)
         && !method.iter().any(|p| p.padata_type == pa::ENC_TIMESTAMP)
     {
         return Err(preauth_failed());
     }
-    // MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:68-73`): the realm's disable fails the mechanism, with no timestamp.
+    // MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:68-73`): the realm's disable fails the mechanism, with no timestamp, and the walk goes on.
     if encrypted_timestamp_disabled(req.realm) {
-        return Err(Error::EnctsDisabled);
+        return Ok(Err(ModuleFail::encts_disabled()));
     }
     let (etype, salt, params) =
         select_s2k(preauth_err, &salt_cname(&req.cname), req.realm, etypes)?;
     trace_keytab_gak(req, keys, etype);
-    let client_key = pick_key(keys, Some(etype)).map_or_else(
-        || string_to_key(etype, req.password, &salt, params.as_deref()),
-        Ok,
-    )?;
+    let client_key = match pick_key(keys, Some(etype)) {
+        Some(key) => key,
+        None => match pw.get() {
+            Ok(password) => string_to_key(etype, &password, &salt, params.as_deref())?,
+            Err(f) => return Ok(Err(f)),
+        },
+    };
     // MIT `encts_process` (`preauth_encts.c:49-129`): the key, then the timestamp, are traced, and
     // `process_pa_data` traces what the module returned.
     if gak_found(keys, &client_key, etype) {
@@ -903,6 +927,7 @@ fn continue_preauth(
         }
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
+    .map(Ok)
 }
 
 /// An embedder clpreauth module answers the hint's pa-type.
@@ -926,6 +951,7 @@ fn continue_embedder(
     clock: &Clock,
     module: &dyn crate::clpreauth::ClPreauth,
     pa_type: i32,
+    pw: &mut PasswordCell<'_, '_>,
 ) -> Result<AsOutcome, Error> {
     let method = method_from_error(preauth_err)?;
     let Some(input) = find_pa(&method, pa_type) else {
@@ -944,7 +970,7 @@ fn continue_embedder(
     let wire = encode(&second)?;
     match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => {
-            finish_as_rep_keys(req, rep, nonce, keys, etypes, &bound, Some(&wire))
+            finish_as_rep_keys(req, rep, nonce, keys, etypes, &bound, Some(&wire), pw)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
@@ -955,6 +981,16 @@ fn continue_embedder(
 /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:648-728`): a hint with no runnable real type fails the exchange.
 fn preauth_failed() -> Error {
     Error::ReplyMismatch("Generic preauthentication failure".into())
+}
+
+/// The padata of a KDC message that the input cache allows.
+/// MIT `pa_type_allowed` (`lib/krb5/krb/preauth2.c:627-631`): a type other than the one the input cache names is not given to a module.
+pub(super) fn allowed_padata(req: &AsRequest<'_>, method: &[PaData]) -> Vec<PaData> {
+    method
+        .iter()
+        .filter(|p| req.ticket.preauth_allowed(p.padata_type))
+        .cloned()
+        .collect()
 }
 
 /// Whether the hint lists a mechanism this client runs, so the password may be read.
@@ -970,7 +1006,7 @@ fn hint_offers_real_mechanism(req: &AsRequest<'_>, err: &KrbError) -> bool {
         return true;
     }
     method.iter().any(|p| {
-        req.ticket.preauth_allowed(p.padata_type) && unarmored_mech(p.padata_type, false).is_some()
+        req.ticket.preauth_allowed(p.padata_type) && unarmored_mech(p.padata_type, &[]).is_some()
     })
 }
 
@@ -1188,20 +1224,6 @@ fn encrypted_timestamp_disabled(realm: &str) -> bool {
     krb5_config::load_krb5_conf().is_some_and(|c| c.encrypted_timestamp_disabled(realm))
 }
 
-/// The first real mechanism the hint will run.
-/// MIT `sort_krb5_padata_sequence` (`lib/krb5/krb/get_in_tkt.c:400-471`): preferred types lead, and a real type runs only when the client has it.
-fn chosen_preauth(req: &AsRequest<'_>, err: &KrbError) -> Option<i32> {
-    if req.want_spake {
-        return Some(pa::SPAKE);
-    }
-    let method = method_from_error(err).ok()?;
-    let sorted = sort_krb5_padata_sequence(&method, &conf_preferred_preauth_types_for(req.realm));
-    sorted
-        .into_iter()
-        .map(|p| p.padata_type)
-        .find(|&t| req.ticket.preauth_allowed(t) && unarmored_mech(t, false).is_some())
-}
-
 fn method_from_error(err: &KrbError) -> Result<MethodData, Error> {
     let Some(ed) = &err.e_data else {
         return Ok(Vec::new());
@@ -1223,6 +1245,14 @@ fn error_cookie(e: &KrbError) -> Vec<PaData> {
         .and_then(|m| find_pa(&m, pa::FX_COOKIE).cloned())
         .into_iter()
         .collect()
+}
+
+/// The KDC error, as [`classify_kdc_error`] returns it.
+fn kdc_error(err: &KrbError) -> Error {
+    match classify_kdc_error(err) {
+        Err(e) => e,
+        Ok(_) => Error::UnexpectedPdu,
+    }
 }
 
 fn classify_kdc_error(e: &KrbError) -> Result<AsOutcome, Error> {
@@ -2175,14 +2205,27 @@ fn trace_reply_padata(padata: Option<&[PaData]>, etypes: &[i32], module: Option<
 /// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:47-136`): then the salt the reply key is got
 /// for: the client's own for the password, as before this trace; the KDC's, if any, for a keytab.
 fn trace_gak_salt(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32], keytab: bool) {
+    trace_salt_princ(req, padata, etypes);
+    trace_gak(req, padata, etypes, keytab);
+}
+
+/// The client's own salt, traced when the KDC named none.
+/// MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1813-1822`): with no salt from the KDC, the client's own is traced first.
+fn trace_salt_princ(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32]) {
+    if !trace::enabled() || reply_salt(padata, etypes).is_some() {
+        return;
+    }
+    trace::init_creds_salt_princ(&salt_cname(&req.cname).default_salt(req.realm));
+}
+
+/// The salt the reply key is got for.
+/// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:117-121`): `TRACE_INIT_CREDS_GAK` just before `gak_fct` runs, after the responder.
+fn trace_gak(req: &AsRequest<'_>, padata: Option<&[PaData]>, etypes: &[i32], keytab: bool) {
     if !trace::enabled() {
         return;
     }
     let default_salt = salt_cname(&req.cname).default_salt(req.realm);
     let kdc_salt = reply_salt(padata, etypes);
-    if kdc_salt.is_none() {
-        trace::init_creds_salt_princ(&default_salt);
-    }
     let salt = kdc_salt.as_deref().filter(|_| keytab);
     trace::init_creds_gak(salt.unwrap_or(&default_salt), &[]);
 }

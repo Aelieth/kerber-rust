@@ -368,6 +368,11 @@ pub fn preauth_cookie(cookie: &[u8]) {
     krb5int_trace("Received cookie: {lenstr}", &[Arg::LenStr(Some(cookie))]);
 }
 
+/// MIT `TRACE_PREAUTH_ENC_TS_DISABLED` (`include/k5-trace.h:320-321`): encrypted timestamp was offered and the realm disables it.
+pub fn preauth_enc_ts_disabled() {
+    krb5int_trace("Ignoring encrypted timestamp because it is disabled", &[]);
+}
+
 /// MIT `TRACE_PREAUTH_ENC_TS_KEY_GAK` (`include/k5-trace.h:315-316`): the encrypted timestamp's key, as a hash.
 pub fn preauth_enc_ts_key_gak(key: Key<'_>) {
     krb5int_trace(

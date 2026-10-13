@@ -52,6 +52,10 @@ name = "client_otp"
 path = "tests/client_otp.rs"
 
 [[test]]
+name = "client_password_per_mechanism"
+path = "tests/client_password_per_mechanism.rs"
+
+[[test]]
 name = "client_gic"
 path = "tests/client_gic.rs"
 

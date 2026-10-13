@@ -37,7 +37,9 @@ impl fmt::Debug for ResponderItems {
     }
 }
 
-/// Answers the questions of a round before the prompter is called.
+/// Answers the questions of a round before the prompter is called. A round is one call of MIT's
+/// `k5_preauth`: the walk over a hint, a message that continues a mechanism, or a new walk over
+/// method data.
 /// MIT `k5_preauth` (`lib/krb5/krb/preauth2.c:1010-1016`): calls the responder once per round, and
 /// only when a module asked a question.
 pub trait Responder {

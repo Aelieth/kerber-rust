@@ -366,7 +366,7 @@ stops the client sending PA-ENC-TIMESTAMP. `enable_only` keeps only the names
 it lists, in that order. `module` is not read. `sam2` is not
 implemented, so an `enable_only` that names only it leaves no module.
 This is separate from `[realms] disable_encrypted_timestamp`, which leaves
-the module loaded and fails that one mechanism.
+the module loaded and fails that one mechanism; the others still run.
 
 ### OTP preauth
 

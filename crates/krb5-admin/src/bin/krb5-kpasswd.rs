@@ -160,8 +160,9 @@ fn run<R: BufRead, W: Write>(
                 (Some(_), Error::PreauthFailed(_)) => {
                     "Generic preauthentication failure".to_owned()
                 }
-                (Some(why), _) => why.to_string(),
-                (None, e) => initial_ticket_text(e),
+                // A read that failed and was not the end of the exchange (a later mechanism read the password and the KDC refused it) leaves the KDC's own error to print.
+                (Some(why), Error::File(_)) => why.to_string(),
+                (_, e) => initial_ticket_text(e),
             };
             eprintln!("{prog}: {text} getting initial ticket");
             return 1;

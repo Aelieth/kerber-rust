@@ -7,7 +7,6 @@
 //! fallback after the request.
 
 use std::fmt::Write as _;
-use std::io::ErrorKind;
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
@@ -20,10 +19,10 @@ use krb5_types::otp::{
 use krb5_types::{EncryptedData, KerberosFlags, OctetString, PaData, ku, pa};
 use zeroize::{Zeroize, Zeroizing};
 
+use super::password::{KRB5_PREAUTH_FAILED as PREAUTH_FAILED, ModuleFail};
 use super::responder::{QUESTION_OTP, ResponderItems};
 use super::{AsPrompt, PreauthPrompt, PromptType};
 use crate::error::Error;
-use crate::trace::ERROR_TABLE_BASE_KRB5;
 
 /// MIT's name of the OTP module (`preauth_otp.c`).
 pub(super) const OTP_MODULE: &str = "otp";
@@ -38,40 +37,14 @@ const R_NEXTOTP: i64 = 0x4;
 /// The reply buffers of `doprompt` callers are 1024 bytes, so a reply is at most 1023.
 const REPLY_MAX: usize = 1023;
 
-/// How `process` failed. An interrupted prompt stops every mechanism, any other failure moves on
-/// to the next one.
-/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-698`): a keyboard interrupt ends the walk.
-#[derive(Debug)]
-pub(super) struct OtpFail {
-    /// The error for the caller.
-    pub(super) error: Error,
-    /// MIT's `krb5_error_code`, for the trace line `Preauth module otp (141) (real) returned: <code>/<text>`.
-    pub(super) code: i64,
-    /// The message MIT has set for that code, for the same line.
-    pub(super) text: String,
-    /// `KRB5_LIBOS_PWDINTR`.
-    pub(super) interrupted: bool,
-}
-
-/// MIT `KRB5_LIBOS_CANTREADPWD` (`krb5_err.et`): "Cannot read password".
-const CANTREADPWD: i64 = ERROR_TABLE_BASE_KRB5 + 130;
-/// MIT `KRB5_LIBOS_PWDINTR` (`krb5_err.et`): "Password read interrupted".
-const PWDINTR: i64 = ERROR_TABLE_BASE_KRB5 + 132;
-/// MIT `KRB5_PREAUTH_FAILED` (`krb5_err.et`): "Generic preauthentication failure".
-const PREAUTH_FAILED: i64 = ERROR_TABLE_BASE_KRB5 + 210;
 /// `EINVAL`, `ERANGE`, `ENOTSUP` and `ENOMEM`.
 const EINVAL: i64 = 22;
 const ERANGE: i64 = 34;
 const ENOTSUP: i64 = 95;
 const ENOMEM: i64 = 12;
 
-fn fail(code: i64, text: &str) -> OtpFail {
-    OtpFail {
-        error: Error::Message(text.into()),
-        code,
-        text: text.into(),
-        interrupted: false,
-    }
+fn fail(code: i64, text: &str) -> ModuleFail {
+    ModuleFail::new(code, text)
 }
 
 /// What `prep_questions` leaves for `process`: the challenge with its tokens filtered.
@@ -309,31 +282,13 @@ fn value_matches(value: &[u8], ti: &OtpTokenInfo) -> bool {
     }
 }
 
-fn prompt_fail(e: Error) -> OtpFail {
-    match e {
-        Error::File(io) if io.kind() == ErrorKind::Interrupted => OtpFail {
-            text: io.to_string(),
-            error: Error::File(io),
-            code: PWDINTR,
-            interrupted: true,
-        },
-        Error::File(io) => fail(CANTREADPWD, &io.to_string()),
-        other => OtpFail {
-            text: other.to_string(),
-            error: other,
-            code: CANTREADPWD,
-            interrupted: false,
-        },
-    }
-}
-
 /// MIT `doprompt` (`lib/krb5/krb/preauth_otp.c:482-499`): one hidden prompt of type PREAUTH into
 /// a 1024-byte buffer, read as a C string: the reply is cut at its first NUL.
 fn doprompt(
     ui: &mut dyn AsPrompt,
     banner: Option<&str>,
     prompt: &str,
-) -> Result<Zeroizing<Vec<u8>>, OtpFail> {
+) -> Result<Zeroizing<Vec<u8>>, ModuleFail> {
     let mut reply = ui
         .preauth(&PreauthPrompt {
             banner,
@@ -341,7 +296,7 @@ fn doprompt(
             hidden: true,
             prompt_type: PromptType::Preauth,
         })
-        .map_err(prompt_fail)?;
+        .map_err(ModuleFail::from_read)?;
     let mut end = reply.len().min(REPLY_MAX);
     if let Some(nul) = reply[..end].iter().position(|&b| b == 0) {
         end = nul;
@@ -357,7 +312,7 @@ fn prompt_for_tokeninfo(
     ui: &mut dyn AsPrompt,
     tis: &[usize],
     all: &[OtpTokenInfo],
-) -> Result<usize, OtpFail> {
+) -> Result<usize, ModuleFail> {
     let mut menu = String::from("Please choose from the following:\n");
     for (n, &at) in tis.iter().enumerate() {
         let vendor = odata(all[at].vendor.as_ref()).unwrap_or_default();
@@ -385,7 +340,7 @@ fn prompt_for_tokeninfo(
 fn collect_pin(
     ui: &mut dyn AsPrompt,
     ti: &OtpTokenInfo,
-) -> Result<Option<Zeroizing<Vec<u8>>>, OtpFail> {
+) -> Result<Option<Zeroizing<Vec<u8>>>, ModuleFail> {
     if flags_u32(&ti.flags) & (OTP_FLAG_COLLECT_PIN | OTP_FLAG_SEPARATE_PIN) == 0 {
         return Ok(None);
     }
@@ -398,7 +353,7 @@ type Chosen = (usize, Zeroizing<Vec<u8>>, Option<Zeroizing<Vec<u8>>>);
 /// MIT `prompt_for_token` (`lib/krb5/krb/preauth_otp.c:742-811`): pick a token and read its value.
 /// One token is chosen; with several and any challenge the menu comes first; otherwise the value
 /// comes first and filters the tokens by length and format, with a menu if several remain.
-fn prompt_for_token(ui: &mut dyn AsPrompt, tis: &[OtpTokenInfo]) -> Result<Chosen, OtpFail> {
+fn prompt_for_token(ui: &mut dyn AsPrompt, tis: &[OtpTokenInfo]) -> Result<Chosen, ModuleFail> {
     if tis.is_empty() {
         return Err(fail(EINVAL, "Invalid argument"));
     }
@@ -453,7 +408,7 @@ fn make_request(
     value: &[u8],
     pin: Option<&[u8]>,
     enc_data: EncryptedData,
-) -> Result<PaOtpRequest, OtpFail> {
+) -> Result<PaOtpRequest, ModuleFail> {
     if format(ti) == OTP_FORMAT_BASE64 {
         return Err(fail(ENOTSUP, "Operation not supported"));
     }
@@ -486,8 +441,8 @@ fn make_request(
     })
 }
 
-fn other_fail(error: Error) -> OtpFail {
-    OtpFail {
+fn other_fail(error: Error) -> ModuleFail {
+    ModuleFail {
         text: error.to_string(),
         error,
         code: PREAUTH_FAILED,
@@ -606,7 +561,7 @@ pub(super) fn process(
     items: &ResponderItems,
     ui: &mut dyn AsPrompt,
     armor: &ProtocolKey,
-) -> Result<(PaData, Value), OtpFail> {
+) -> Result<(PaData, Value), ModuleFail> {
     let chl = state
         .chl
         .as_ref()

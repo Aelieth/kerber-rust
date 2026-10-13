@@ -92,7 +92,7 @@ fn state_of(chl: PaOtpChallenge) -> OtpState {
     OtpState { chl: Some(chl) }
 }
 
-fn run(chl: PaOtpChallenge, ui: &mut Script) -> Result<(PaOtpRequest, Value), OtpFail> {
+fn run(chl: PaOtpChallenge, ui: &mut Script) -> Result<(PaOtpRequest, Value), ModuleFail> {
     let (pa142, cfg) = process(&state_of(chl), &ResponderItems::default(), ui, &armor())?;
     assert_eq!(pa142.padata_type, pa::OTP_REQUEST);
     Ok((decode(pa142.padata_value.as_ref()).unwrap(), cfg))

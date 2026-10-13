@@ -75,6 +75,8 @@ pub enum Code {
     Einval,
     /// `KRB5_PREAUTH_FAILED`.
     PreauthFailed,
+    /// `KRB5_LIBOS_PWDINTR`: a password prompt that `SIGINT` interrupted.
+    PwdInterrupted,
     /// Any other failure, under its own text.
     Other,
 }
@@ -135,14 +137,6 @@ impl Krb5Error {
                 Code::PreauthFailed,
                 format!("Pre-authentication failed: {inner}"),
             ),
-            krb5_protocol::Error::EnctsDisabled => {
-                // MIT `krb5_vwrap_error_message` (`lib/krb5/krb/kerrs.c:116-119`): the saved message is kept after the prefix and a colon.
-                // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:718-721`): that prefix is "Pre-authentication failed" when encrypted timestamp saved the failure.
-                Self::new(
-                    Code::Kdc(krb5_types::err::PREAUTH_FAILED),
-                    "Pre-authentication failed: Encrypted timestamp is disabled",
-                )
-            }
             krb5_protocol::Error::ReplyIntegrity => Self::of(Code::BadIntegrity),
             krb5_protocol::Error::Io { .. } => Self::new(
                 Code::KdcUnreach,
@@ -337,6 +331,8 @@ fn code_text(code: Code) -> &'static str {
         Code::Einval => "Invalid argument",
         // MIT `KRB5_PREAUTH_FAILED` (`krb5_err.et:287-287`): the text.
         Code::PreauthFailed => "Generic preauthentication failure",
+        // MIT `KRB5_LIBOS_PWDINTR` (`krb5_err.et:178-178`): the text.
+        Code::PwdInterrupted => "Password read interrupted",
     }
 }
 

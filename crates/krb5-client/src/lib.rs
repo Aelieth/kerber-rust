@@ -650,15 +650,31 @@ impl AsPrompt for KinitPrompt<'_, '_> {
             } else {
                 std::io::ErrorKind::Other
             };
-            self.0.failed = Some(Krb5Error::new(Code::Other, e.to_string()));
+            self.0.note_failed(
+                Krb5Error::new(Code::Other, e.to_string()),
+                kind == std::io::ErrorKind::Interrupted,
+            );
             ProtocolError::File(std::io::Error::new(kind, e.to_string()))
         })
     }
 }
 
 impl LazyPassword<'_> {
-    /// The password, read now if this is its first need. A failed read is kept in `failed` and
-    /// ends the exchange.
+    /// Remember a prompt that failed. The first failure is the one kinit reports, as MIT keeps the
+    /// first failure of a real mechanism; an interrupt ends the exchange, so it is what is reported.
+    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-706`): a keyboard interrupt ends the walk with its own code, and the first other failure is the one saved.
+    fn note_failed(&mut self, e: Krb5Error, interrupted: bool) {
+        if interrupted {
+            self.failed = Some(e);
+        } else {
+            self.failed.get_or_insert(e);
+        }
+    }
+
+    /// The password, read now if it has not been read. A read that works is kept for every later
+    /// mechanism; one that fails is kept in `failed` (the first only) and holds nothing, so the next
+    /// mechanism that needs the password asks again.
+    /// MIT `krb5_get_as_key_password` (`lib/krb5/krb/gic_pwd.c:55-97`): `gp->password` is set only by a prompt that returned.
     fn get(&mut self) -> Result<Zeroizing<Vec<u8>>, ProtocolError> {
         if let Some(p) = &self.read {
             return Ok(p.clone());
@@ -672,8 +688,14 @@ impl LazyPassword<'_> {
                 Ok(p)
             }
             Err(e) => {
-                let io = std::io::Error::other(e.to_string());
-                self.failed = Some(e);
+                // MIT `krb5_prompter_posix` (`lib/krb5/os/prompter.c:93-100`): a `SIGINT` is `KRB5_LIBOS_PWDINTR`, which no other mechanism follows.
+                let kind = if e.code == Code::PwdInterrupted {
+                    std::io::ErrorKind::Interrupted
+                } else {
+                    std::io::ErrorKind::Other
+                };
+                let io = std::io::Error::new(kind, e.to_string());
+                self.note_failed(e, kind == std::io::ErrorKind::Interrupted);
                 Err(ProtocolError::File(io))
             }
         }
@@ -700,18 +722,18 @@ impl LazyPassword<'_> {
         self.finish(out)
     }
 
-    /// A failed read is the outer error, wrapped when the exchange reports it as preauth.
+    /// A failed prompt is kinit's message for the exchange only when the exchange failed with it:
+    /// an interrupt, or a failed read of the reply key, is the error as it is. A mechanism's failed
+    /// read that was not the end (a later mechanism read the password and answered, or the KDC
+    /// refused the answer) leaves the exchange's own result.
+    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:699-723`): the first failure of a real type is kept, and reported wrapped only if no type answers.
     fn finish(
         &mut self,
         out: Result<AsOutcome, ProtocolError>,
     ) -> Result<Result<AsOutcome, ProtocolError>, Krb5Error> {
-        match (self.failed.take(), &out) {
-            (None, _) => Ok(out),
-            (Some(e), Err(ProtocolError::PreauthFailed(_))) => Err(Krb5Error::new(
-                Code::PreauthFailed,
-                format!("Pre-authentication failed: {}", e.message),
-            )),
-            (Some(e), _) => Err(e),
+        match (self.failed.take(), out) {
+            (Some(e), Err(ProtocolError::File(_))) => Err(e),
+            (_, out) => Ok(out),
         }
     }
 }
@@ -728,7 +750,6 @@ pub fn mit_error_code(e: &(dyn std::error::Error + Send + Sync + 'static)) -> Op
     match e.downcast_ref::<krb5_protocol::Error>() {
         Some(krb5_protocol::Error::KrbError { code, .. }) => Some(*code),
         Some(krb5_protocol::Error::ReplyIntegrity) => Some(krb5_types::err::BAD_INTEGRITY),
-        Some(krb5_protocol::Error::EnctsDisabled) => Some(krb5_types::err::PREAUTH_FAILED),
         _ => None,
     }
 }
@@ -1455,6 +1476,63 @@ mod tests {
         let mut bare = FileCcache::new(client, Vec::new());
         record_preauth_config(&mut bare, server, false, None, None);
         assert!(bare.creds.is_empty(), "nothing selected, nothing recorded");
+    }
+
+    #[test]
+    fn an_interrupt_after_a_failed_read_is_the_error_unwrapped() {
+        // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:696-698`): a keyboard interrupt ends the walk with its own code, whatever failed before it.
+        let mut calls = 0;
+        let mut prompt = || {
+            calls += 1;
+            Err(if calls == 1 {
+                Krb5Error::new(Code::Other, "Cannot read password")
+            } else {
+                Krb5Error::new(Code::PwdInterrupted, "Password read interrupted")
+            })
+        };
+        let mut lazy = LazyPassword {
+            given: b"",
+            prompt: Some(&mut prompt),
+            read: None,
+            failed: None,
+            otp: None,
+        };
+        assert!(lazy.get().is_err(), "the first read fails");
+        let interrupted = lazy.get().expect_err("the second is interrupted");
+        assert!(
+            matches!(&interrupted, ProtocolError::File(io) if io.kind() == std::io::ErrorKind::Interrupted),
+            "{interrupted}"
+        );
+        let reported = lazy
+            .finish(Err(interrupted))
+            .expect_err("kinit's own error");
+        assert_eq!(reported.message, "Password read interrupted");
+    }
+
+    #[test]
+    fn a_failed_prompt_is_not_the_error_of_a_failure_that_was_the_kdcs() {
+        // The first mechanism's prompt failed, a later one read the password, and the KDC refused it:
+        // the refusal is the error, not the earlier prompt's text.
+        let mut prompt = || Err(Krb5Error::new(Code::Other, "Cannot read password"));
+        let mut lazy = LazyPassword {
+            given: b"",
+            prompt: Some(&mut prompt),
+            read: None,
+            failed: None,
+            otp: None,
+        };
+        assert!(lazy.get().is_err());
+        let refused = ProtocolError::KrbError {
+            code: krb5_types::err::PREAUTH_FAILED,
+            text: None,
+        };
+        let out = lazy
+            .finish(Err(refused))
+            .expect("the exchange's own result");
+        assert!(
+            matches!(out, Err(ProtocolError::KrbError { code, .. }) if code == krb5_types::err::PREAUTH_FAILED)
+        );
+        assert!(lazy.failed.is_none(), "the failure was taken");
     }
 
     #[test]

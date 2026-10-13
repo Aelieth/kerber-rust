@@ -853,9 +853,11 @@ fn start_time(arg: &str) -> Option<i64> {
 ///
 /// # Errors
 ///
-/// As [`read_prompt_line`].
-pub fn read_password_line(principal: &str) -> Result<zeroize::Zeroizing<Vec<u8>>, String> {
-    read_prompt_line(&format!("Password for {principal}"))
+/// As [`krb5_cli::prompt_hidden`]: MIT's `KRB5_LIBOS_CANTREADPWD` or `KRB5_LIBOS_PWDINTR`, so a caller can tell an interrupt.
+pub fn read_password_line(
+    principal: &str,
+) -> Result<zeroize::Zeroizing<Vec<u8>>, krb5_cli::PromptError> {
+    krb5_cli::prompt_hidden(&format!("Password for {principal}"))
 }
 
 /// One hidden prompt, `prompt` and `: ` on stdout, through the shared MIT prompter

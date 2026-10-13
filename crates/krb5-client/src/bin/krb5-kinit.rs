@@ -470,7 +470,14 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
     let prompted = std::cell::Cell::new(given.is_some());
     let mut read_password = || {
         prompted.set(true);
-        read_password_line(&k5.name).map_err(|e| Krb5Error::new(Code::Other, e))
+        read_password_line(&k5.name).map_err(|e| {
+            let code = if e == krb5_cli::PromptError::Interrupted {
+                Code::PwdInterrupted
+            } else {
+                Code::Other
+            };
+            Krb5Error::new(code, e.to_string())
+        })
     };
     let new_password = env_new_password();
     // MIT `krb5_get_init_creds_password` (`gic_pwd.c:238-263`): the banner, then
