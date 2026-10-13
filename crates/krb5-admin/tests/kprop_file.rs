@@ -39,6 +39,12 @@ fn host(name: &str) -> PrincipalName {
 }
 
 fn realm(tag: &str) -> Realm {
+    realm_with(tag, false, "")
+}
+
+/// [`realm`] whose `host/<this host>` does (or, as [`realm`] has it, does not) require preauthentication, and whose
+/// krb5.conf has `libdefaults` lines added.
+fn realm_with(tag: &str, requires_preauth: bool, libdefaults: &str) -> Realm {
     let dir = scratch_dir(tag);
     let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let port = udp.local_addr().unwrap().port();
@@ -47,7 +53,7 @@ fn realm(tag: &str) -> Realm {
         &conf,
         format!(
             "[libdefaults]\n    default_realm = {TEST_REALM}\n    qualify_shortname = kerber.test\n    \
-             dns_lookup_kdc = false\n    dns_lookup_realm = false\n\
+             dns_lookup_kdc = false\n    dns_lookup_realm = false\n{libdefaults}\
              [realms]\n    {TEST_REALM} = {{\n        kdc = 127.0.0.1:{port}\n    }}\n"
         ),
     )
@@ -58,6 +64,28 @@ fn realm(tag: &str) -> Realm {
     for name in [me.as_str(), "127.0.0.1", "other.kerber.test"] {
         store.create_host(&acl, &actor, &host(name)).unwrap();
     }
+    // `create_host` makes a principal that needs no preauthentication; the tests that want it set it.
+    let me_name = host(&me);
+    let mut attrs = store.get_name(&me_name).unwrap().attributes;
+    if requires_preauth {
+        attrs |= krb5_kdc::KDB_REQUIRES_PRE_AUTH;
+    } else {
+        attrs &= !krb5_kdc::KDB_REQUIRES_PRE_AUTH;
+    }
+    store
+        .apply_admin_fields(
+            &me_name,
+            krb5_kdc::AdminFields {
+                attributes: Some(attrs),
+                max_life: None,
+                expiration: None,
+                pw_expire: None,
+                policy: None,
+                clear_policy: false,
+                max_renewable_life: None,
+            },
+        )
+        .unwrap();
     let keytab_of = |name: &str, file: &str| {
         let ent = store.get_name(&host(name)).unwrap();
         let best = ent.best_key().unwrap();
@@ -129,6 +157,19 @@ impl Realm {
             dump
         });
         (port, join)
+    }
+
+    /// [`Self::kprop`] with `KRB5_TRACE` naming `trace`.
+    fn kprop_traced(&self, args: &[&str], trace: &Path) -> Output {
+        Command::new(KPROP)
+            .args(args)
+            .env("KRB5_CONFIG", &self.conf)
+            .env("KRB5_TRACE", trace)
+            .env_remove("KRB5_KTNAME")
+            .env_remove("KRB5_KDC_PROFILE")
+            .stdin(Stdio::null())
+            .output()
+            .unwrap()
     }
 
     fn kprop(&self, args: &[&str]) -> Output {
@@ -365,5 +406,126 @@ fn kprop_asks_for_the_replicas_name_as_mits_in_tkt_service_parses_it() {
     assert_eq!(sname.name_type, PrincipalName::NT_PRINCIPAL);
     assert_eq!(sname.components_joined(), "host/127.0.0.1");
     assert_eq!(out.status.code(), Some(1), "{}", text(&out.stderr));
+    let _ = std::fs::remove_dir_all(&r.dir);
+}
+
+/// The keytab files kprop cannot read as keytabs, as MIT's `krb5_ktfileint_open` fails them, and
+/// what `com_err` prints for each: a missing file, an empty one, one with a version MIT does not know,
+/// and a directory.
+fn unreadable_keytabs(dir: &Path) -> Vec<(PathBuf, &'static str)> {
+    let empty = dir.join("empty.keytab");
+    std::fs::write(&empty, b"").unwrap();
+    let bad_version = dir.join("badver.keytab");
+    std::fs::write(&bad_version, [0x05u8, 0x3f]).unwrap();
+    vec![
+        (dir.join("nonexistent.keytab"), "No such file or directory"),
+        (empty, "Unsupported key table format version number"),
+        (bad_version, "Unsupported key table format version number"),
+        (dir.to_path_buf(), "Is a directory"),
+    ]
+}
+
+/// A keytab that cannot be read is no error until a key is asked of it: the request is made, and a
+/// reply that no preauth answered is decrypted with the keytab's key, which fails with the keytab's
+/// error, whose table text kprop's `com_err` prints.
+/// MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): a keytab whose entries cannot be listed is traced and returns 0.
+/// MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:115-123`): `gak_fct`'s error is returned as it is.
+#[test]
+fn kprop_with_an_unreadable_keytab_makes_the_request_and_fails_the_reply_that_needs_its_key() {
+    let r = realm_with("kprop-file-unreadable-reply", false, "");
+    let dump = r.dump("dump", b"kdb5_util load_dump version 7\n");
+    for (keytab, message) in unreadable_keytabs(&r.dir) {
+        let trace = r.dir.join("trace.log");
+        let out = r.kprop_traced(
+            &["-s", s(&keytab), "-P", "9", "-f", s(&dump), "127.0.0.1"],
+            &trace,
+        );
+        assert_eq!(
+            text(&out.stderr),
+            format!("{KPROP}: {message} while getting initial credentials\n\n"),
+            "{}",
+            keytab.display()
+        );
+        assert_eq!(out.status.code(), Some(1));
+        let trace = std::fs::read_to_string(&trace).unwrap();
+        for line in [
+            "Couldn't lookup etypes in keytab:",
+            "Sending unauthenticated request",
+            "Received answer (",
+            "Getting AS key, salt",
+            &format!(
+                "Retrieving host/{}@{TEST_REALM} from FILE:{}",
+                r.me,
+                keytab.display()
+            ),
+        ] {
+            assert!(trace.contains(line), "{line}: {trace}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&r.dir);
+}
+
+/// A KDC that asks for preauthentication gets its request, and the encrypted-timestamp module is
+/// the mechanism that wants the key: with SPAKE not permitted it is the only one, fails with the keytab's
+/// error, and the exchange is `KRB5_PREAUTH_FAILED`, "Generic preauthentication failure".
+/// MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): a module that wants the key gets `gak_fct`'s error as its own.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): with no real mechanism answered the error is `KRB5_PREAUTH_FAILED`.
+#[test]
+fn kprop_with_an_unreadable_keytab_fails_the_preauth_module_that_wants_its_key() {
+    let r = realm_with(
+        "kprop-file-unreadable-preauth",
+        true,
+        "    spake_preauth_groups = bogus\n",
+    );
+    let dump = r.dump("dump", b"kdb5_util load_dump version 7\n");
+    for (keytab, _) in unreadable_keytabs(&r.dir) {
+        let trace = r.dir.join("trace.log");
+        let out = r.kprop_traced(
+            &["-s", s(&keytab), "-P", "9", "-f", s(&dump), "127.0.0.1"],
+            &trace,
+        );
+        assert_eq!(
+            text(&out.stderr),
+            format!(
+                "{KPROP}: Generic preauthentication failure while getting initial credentials\n\n"
+            ),
+            "{}",
+            keytab.display()
+        );
+        assert_eq!(out.status.code(), Some(1));
+        let trace = std::fs::read_to_string(&trace).unwrap();
+        for line in [
+            "Sending unauthenticated request",
+            "Preauthenticating using KDC method data",
+            "Preauth module encrypted_timestamp (2) (real) returned:",
+        ] {
+            assert!(trace.contains(line), "{line}: {trace}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&r.dir);
+}
+
+/// With SPAKE permitted, the KDC's refusal of the support message is the exchange's error, as
+/// kprop's `com_err` prints it, "Preauthentication failed", over the keytab's failure.
+/// MIT `init_creds_step_request` (`lib/krb5/krb/get_in_tkt.c:1349-1352`): a `KDC_ERR_PREAUTH_FAILED` the KDC sent is the error saved, and the one reported when the mechanisms after it fail.
+#[test]
+fn kprop_with_an_unreadable_keytab_reports_the_kdcs_refusal_of_spakes_support() {
+    let r = realm_with("kprop-file-unreadable-spake", true, "");
+    let dump = r.dump("dump", b"kdb5_util load_dump version 7\n");
+    for (keytab, _) in unreadable_keytabs(&r.dir) {
+        let trace = r.dir.join("trace.log");
+        let out = r.kprop_traced(
+            &["-s", s(&keytab), "-P", "9", "-f", s(&dump), "127.0.0.1"],
+            &trace,
+        );
+        assert_eq!(
+            text(&out.stderr),
+            format!("{KPROP}: Preauthentication failed while getting initial credentials\n\n"),
+            "{}",
+            keytab.display()
+        );
+        let trace = std::fs::read_to_string(&trace).unwrap();
+        assert!(trace.contains("Sending SPAKE support message"), "{trace}");
+    }
     let _ = std::fs::remove_dir_all(&r.dir);
 }

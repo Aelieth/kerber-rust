@@ -138,6 +138,8 @@ impl Krb5Error {
                 format!("Pre-authentication failed: {inner}"),
             ),
             krb5_protocol::Error::ReplyIntegrity => Self::of(Code::BadIntegrity),
+            // MIT `krb5_ktfileint_open` (`kt_file.c:753-760`): a keytab file that is not there is `ENOENT` with its own message.
+            krb5_protocol::Error::Keytab { code: 2, text } => Self::new(Code::Enoent, text.clone()),
             krb5_protocol::Error::Io { .. } => Self::new(
                 Code::KdcUnreach,
                 format!("Cannot contact any KDC for realm '{realm}'"),

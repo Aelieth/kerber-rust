@@ -150,7 +150,7 @@ fn process_challenge(
         hint.clone(),
     )?;
     let (etype, salt, params) = hint.clone();
-    trace_keytab_gak(req, keys, etype);
+    trace_keytab_gak(req, keys, pw.unreadable_keytab(), etype);
     // MIT `process_challenge` (`spake_client.c:224-226`): the module asks for the AS key after it has traced the challenge, and a key it cannot get is its failure.
     let ikey = match pick_key(keys, Some(etype)) {
         Some(key) => key,

@@ -60,6 +60,7 @@ pub use as_ex::{
     PromptType, QUESTION_OTP, QUESTION_PASSWORD, Responder, ResponderItems, as_exchange,
     as_exchange_defer_fast, as_exchange_interactive, as_exchange_key, as_exchange_prompted,
     as_exchange_prompted_defer_fast, as_exchange_with_keys, as_exchange_with_keys_defer_fast,
+    as_exchange_with_unreadable_keytab, as_exchange_with_unreadable_keytab_defer_fast,
     as_identify_realm, as_init_creds_options, check_as_rep_times, conf_etypes,
     conf_preferred_preauth_types, insert_module_padata_before_info_pa, sort_krb5_padata_sequence,
     verify_as_reply_req_times, verify_as_reply_server,
@@ -106,8 +107,8 @@ pub use kcm::{
     kcm_store_keep_default, kcm_switch,
 };
 pub use keytab::{
-    Keytab, KeytabEntry, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
-    sort_etypes_keytab_first,
+    Keytab, KeytabEntry, KeytabFailure, KeytabSlot, add_to_keytab_file, keytab_init_creds_keys,
+    read_keytab_file, sort_etypes_keytab_first,
 };
 pub use localaddr::{host_addresses_from, init_creds_addresses, os_localaddr};
 pub use lock_file::{FileLock, lock_file, lock_file_how};

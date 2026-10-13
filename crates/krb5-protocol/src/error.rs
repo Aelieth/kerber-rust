@@ -101,6 +101,15 @@ pub enum Error {
     /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): a module's failure, such as `KRB5_LIBOS_CANTREADPWD` "Cannot read password", is the message wrapped by [`Error::PreauthFailed`].
     #[error("{0}")]
     Message(String),
+    /// The keytab the exchange was given could not be read, and a key was asked of it.
+    /// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:33-80`): `krb5_kt_get_entry`'s error is what the key callback returns, an errno or `KRB5_KEYTAB_BADVNO`, and a caller that prints the code's table text prints that, where one that prints the message prints `text`.
+    #[error("{text}")]
+    Keytab {
+        /// MIT's `krb5_error_code`.
+        code: i64,
+        /// The message MIT has set for it.
+        text: String,
+    },
     /// I/O from keytab/ccache.
     #[error("file: {0}")]
     File(#[from] io::Error),
@@ -141,6 +150,10 @@ impl Clone for Error {
             Self::FastUpgrade => Self::FastUpgrade,
             Self::EnctsDisabled => Self::EnctsDisabled,
             Self::Message(s) => Self::Message(s.clone()),
+            Self::Keytab { code, text } => Self::Keytab {
+                code: *code,
+                text: text.clone(),
+            },
             Self::File(e) => Self::Io {
                 message: e.to_string(),
                 kind: e.kind(),

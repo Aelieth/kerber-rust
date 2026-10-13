@@ -12,6 +12,7 @@ use zeroize::Zeroizing;
 use super::AsPrompt;
 use super::responder::Responder;
 use crate::error::Error;
+use crate::keytab::KeytabFailure;
 use crate::trace::{self, ERROR_TABLE_BASE_KRB5};
 
 /// MIT `KRB5_LIBOS_CANTREADPWD` (`krb5_err.et`): "Cannot read password".
@@ -67,6 +68,20 @@ impl ModuleFail {
                 code: CANTREADPWD,
                 interrupted: false,
             },
+        }
+    }
+
+    /// A key wanted from a keytab that could not be read: the lookup's error, in MIT's code and message.
+    /// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): `krb5_kt_get_entry`'s error is the callback's, and a module that wanted the key fails with it.
+    pub(super) fn keytab(f: &KeytabFailure) -> Self {
+        Self {
+            error: Error::Keytab {
+                code: f.code,
+                text: f.text.clone(),
+            },
+            code: f.code,
+            text: f.text.clone(),
+            interrupted: false,
         }
     }
 
@@ -133,6 +148,8 @@ pub(super) struct PasswordCell<'p, 'g> {
     answer: Option<Zeroizing<Vec<u8>>>,
     /// The password a prompt read, or the responder's answer once a module used it.
     got: Option<Zeroizing<Vec<u8>>>,
+    /// The keytab the exchange was given and could not read: every key asked for fails with its error.
+    unreadable: Option<KeytabFailure>,
     none: NoPrompt,
 }
 
@@ -147,8 +164,21 @@ impl<'p, 'g> PasswordCell<'p, 'g> {
             asks,
             answer: None,
             got: None,
+            unreadable: None,
             none: NoPrompt,
         }
+    }
+
+    /// The exchange's keytab could not be read: every key a module or the reply asks for fails with `failure`.
+    /// MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): the failure is traced and is no error until a key is asked of the keytab.
+    pub(super) fn with_unreadable_keytab(mut self, failure: Option<&KeytabFailure>) -> Self {
+        self.unreadable = failure.cloned();
+        self
+    }
+
+    /// The keytab failure every key lookup returns, if the exchange's keytab could not be read.
+    pub(super) fn unreadable_keytab(&self) -> Option<&KeytabFailure> {
+        self.unreadable.as_ref()
     }
 
     /// Whether a module that wants the key puts the password question to the responder now: no
@@ -175,6 +205,9 @@ impl<'p, 'g> PasswordCell<'p, 'g> {
     /// The module's failure when the prompter cannot read: [`ModuleFail::from_read`]; `EIO` when
     /// there is no prompter and the caller gave no password: [`ModuleFail::no_password`].
     pub(super) fn get(&mut self) -> Result<Zeroizing<Vec<u8>>, ModuleFail> {
+        if let Some(failure) = &self.unreadable {
+            return Err(ModuleFail::keytab(failure));
+        }
         if self.got.is_none() {
             self.got.clone_from(&self.answer);
         }

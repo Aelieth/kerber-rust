@@ -71,8 +71,6 @@ const SENDAUTH_BADAPPLVERS: i64 = krb5_code(205);
 const SENDAUTH_BADRESPONSE: i64 = krb5_code(206);
 /// MIT `KRB5_SENDAUTH_REJECTED`.
 const SENDAUTH_REJECTED: i64 = krb5_code(207);
-/// MIT `KRB5_KEYTAB_BADVNO`.
-const KEYTAB_BADVNO: i64 = krb5_code(213);
 
 /// Why kprop stopped, as MIT's prints it: a `com_err` line, then the lines it prints for a
 /// KRB-ERROR the replica's kpropd answered with.
@@ -275,36 +273,28 @@ pub fn kprop_get_tickets(
     let in_tkt_service = krb5_types::principal_from_unparsed(&service, realm)
         .map_err(|_| KpropError::new(Some(PARSE_MALFORMED_TEXT.to_owned()), GETTING_CREDS))?
         .0;
-    let bytes = match path.as_deref().map(krb5_protocol::read_secret_file) {
-        Some(Ok(bytes)) => Some(bytes),
-        Some(Err(e)) => {
-            // MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:208-212`): a keytab whose entries cannot be listed is traced with its error.
-            if trace::enabled() {
-                let code = i64::from(e.raw_os_error().unwrap_or_default());
-                let msg = path
-                    .as_ref()
-                    .filter(|_| e.kind() == io::ErrorKind::NotFound)
-                    .map(|p| format!("Key table file '{}' not found", p.display()));
-                trace::init_creds_keytab_lookup_failed(code, msg.as_deref());
-            }
-            return Err(KpropError::os(&e, GETTING_CREDS));
+    // MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): a keytab that cannot be read is traced and is no error yet: the request is made, and a key asked of the keytab fails with that error, as the preauth module's or as the reply's.
+    let (keys, kt_etypes, unreadable) = match path.as_deref().map(krb5_protocol::read_keytab_file) {
+        Some(Err(failure)) => {
+            trace::init_creds_keytab_lookup_failed(failure.code, Some(&failure.text));
+            (Vec::new(), Vec::new(), Some(failure))
         }
-        None => None,
+        Some(Ok(bytes)) => {
+            // MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:216-224`): no key for the client is `KRB5_KT_NOTFOUND`, whose table text kprop's `com_err` prints.
+            let Some((keys, kt_etypes)) = Keytab::parse(&bytes)
+                .ok()
+                .and_then(|kt| krb5_protocol::keytab_init_creds_keys(&kt, &client, realm))
+            else {
+                return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS));
+            };
+            trace::init_creds_keytab_lookup(
+                trace::Princ::new(&client, realm.as_bytes()),
+                &kt_etypes,
+            );
+            (keys, kt_etypes, None)
+        }
+        None => return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS)),
     };
-    if let Some(bytes) = &bytes
-        && (bytes.len() < 2 || bytes[0] != 0x05 || !matches!(bytes[1], 0x01 | 0x02))
-    {
-        return Err(KpropError::code(KEYTAB_BADVNO, GETTING_CREDS));
-    }
-    let kt = bytes.and_then(|b| Keytab::parse(&b).ok());
-    // MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:216-224`): no key for the client is `KRB5_KT_NOTFOUND`, whose table text kprop's `com_err` prints.
-    let Some((keys, kt_etypes)) = kt
-        .as_ref()
-        .and_then(|kt| krb5_protocol::keytab_init_creds_keys(kt, &client, realm))
-    else {
-        return Err(KpropError::code(KT_NOTFOUND, GETTING_CREDS));
-    };
-    trace::init_creds_keytab_lookup(trace::Princ::new(&client, realm.as_bytes()), &kt_etypes);
     // MIT `k5_locate_server` (`lib/krb5/os/locate_kdc.c:853-878`): a realm with no KDC is `KRB5_REALM_UNKNOWN`; the located list is handed to the send, which walks it.
     let found = krb5_config::discover_kdc(realm);
     let Some(first) = found.first() else {
@@ -335,7 +325,10 @@ pub fn kprop_get_tickets(
     let request_time = i64::from(us_timeofday().0.unix_seconds());
     let out = trace::with_gak_keytab(
         || name,
-        || krb5_protocol::as_exchange_with_keys(&req, &keys),
+        || match &unreadable {
+            Some(failure) => krb5_protocol::as_exchange_with_unreadable_keytab(&req, failure),
+            None => krb5_protocol::as_exchange_with_keys(&req, &keys),
+        },
     )
     .map_err(|e| KpropError::new(Some(init_creds_text(&e)), GETTING_CREDS))?;
     // MIT `verify_as_reply` (`lib/krb5/krb/get_in_tkt.c:260-264`): with `kdc_timesync` the context's clock takes the offset of the reply's authtime from the request's time, `time(NULL)` when it was sent.
@@ -366,6 +359,8 @@ fn init_creds_text(e: &krb5_protocol::Error) -> String {
         E::NonceMismatch | E::ReplyMismatch(_) | E::Referral => error_message(KDCREP_MODIFIED),
         // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): a preauthentication that failed is `KRB5_PREAUTH_FAILED`, whose table text `com_err` prints, not the message wrapped around its cause.
         E::PreauthFailed(_) | E::EnctsDisabled => error_message(PREAUTH_FAILED),
+        // MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): the keytab lookup's code is the exchange's, whose table text `com_err` prints, not the message set for it.
+        E::Keytab { code, .. } => error_message(*code),
         E::Asn1(m) => asn1_com_err(m),
         other => other.to_string(),
     }

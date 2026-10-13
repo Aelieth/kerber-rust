@@ -183,3 +183,35 @@ fn a_failure_no_module_wraps_is_the_error_the_prompter_gave() {
         "Input/output error"
     );
 }
+
+/// A keytab that could not be read fails every key a module or the reply asks of it with the
+/// keytab's own error, asks the responder nothing, and never reads a password.
+/// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): the lookup's error is the callback's, in its code and message.
+#[test]
+fn an_unreadable_keytab_fails_every_key_with_its_error_and_reads_no_password() {
+    let failure = KeytabFailure {
+        code: 2,
+        text: "Key table file '/etc/none' not found".into(),
+    };
+    let mut ui = Script::new(&[Ok(b"never read")]);
+    let mut cell =
+        PasswordCell::new(Some(&mut ui), b"", true).with_unreadable_keytab(Some(&failure));
+    assert!(!cell.asks_question());
+    assert_eq!(cell.unreadable_keytab(), Some(&failure));
+    for _ in 0..2 {
+        let f = cell.get().expect_err("the keytab cannot be read");
+        assert_eq!(
+            (f.code, f.text.as_str(), f.interrupted),
+            (2, "Key table file '/etc/none' not found", false)
+        );
+        assert_eq!(
+            Error::PreauthFailed(Box::new(f.error.clone())).to_string(),
+            "Pre-authentication failed: Key table file '/etc/none' not found"
+        );
+        assert!(
+            matches!(f.unwrapped(), Error::Keytab { code: 2, ref text } if text == "Key table file '/etc/none' not found")
+        );
+    }
+    drop(cell);
+    assert_eq!(ui.asked, 0);
+}

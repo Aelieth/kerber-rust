@@ -5,6 +5,7 @@
 //! (`plugins/preauth/spake/spake_client.c`).
 
 use crate::error::Error;
+use crate::keytab::KeytabFailure;
 use crate::preauth::{pa_pk_as_req_signed_at, pkinit_reply_key_agile};
 use crate::trace;
 use crate::transport::{KdcAddr, SendKind, sendto_kdc};
@@ -205,7 +206,7 @@ mod pkinit_client_drop_tests;
 /// neither AS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
 /// [`Error::Crypto`] when a key cannot be derived or another crypto step fails.
 pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], None, false)
+    wrap_as(req, &[], None, None, false)
 }
 
 /// [`as_exchange`] using long-term keys (keytab).
@@ -227,7 +228,7 @@ pub fn as_exchange_with_keys(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, keys, None, false)
+    wrap_as(req, keys, None, None, false)
 }
 
 /// AS-REQ using long-term keys (keytab), not a password.
@@ -265,6 +266,7 @@ pub fn as_exchange_key(
         },
         keys,
         None,
+        None,
         false,
     )
 }
@@ -284,7 +286,7 @@ pub fn as_exchange_prompted(
     req: &AsRequest<'_>,
     prompt: &mut PasswordPrompt<'_>,
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], Some(&mut || prompt()), false)
+    wrap_as(req, &[], None, Some(&mut || prompt()), false)
 }
 
 /// [`as_exchange`] that returns [`Error::FastUpgrade`] when the KDC's error offers PA-FX-FAST
@@ -294,7 +296,7 @@ pub fn as_exchange_prompted(
 ///
 /// As [`as_exchange`], or [`Error::FastUpgrade`] for that restart.
 pub fn as_exchange_defer_fast(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], None, true)
+    wrap_as(req, &[], None, None, true)
 }
 
 /// [`as_exchange_prompted`] with the same FAST deferral as [`as_exchange_defer_fast`].
@@ -306,7 +308,7 @@ pub fn as_exchange_prompted_defer_fast(
     req: &AsRequest<'_>,
     prompt: &mut PasswordPrompt<'_>,
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], Some(&mut || prompt()), true)
+    wrap_as(req, &[], None, Some(&mut || prompt()), true)
 }
 
 /// [`as_exchange_with_keys`] with the same FAST deferral as [`as_exchange_defer_fast`].
@@ -318,7 +320,36 @@ pub fn as_exchange_with_keys_defer_fast(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, keys, None, true)
+    wrap_as(req, keys, None, None, true)
+}
+
+/// [`as_exchange_with_keys`] for a keytab that could not be read: the request is made, and a key
+/// asked of the keytab fails with `failure`, as the preauth module's that wanted it or as the
+/// reply's decrypt.
+/// MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): a keytab whose entries cannot be listed is traced and returns 0, and the exchange goes on.
+/// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): the key lookup's error is what the callback returns.
+///
+/// # Errors
+///
+/// As [`as_exchange_with_keys`], with [`Error::Keytab`] for a reply no preauth answered, and
+/// [`Error::PreauthFailed`] wrapping it when the preauth mechanisms the KDC offered all failed.
+pub fn as_exchange_with_unreadable_keytab(
+    req: &AsRequest<'_>,
+    failure: &KeytabFailure,
+) -> Result<AsOutcome, Error> {
+    wrap_as(req, &[], Some(failure), None, false)
+}
+
+/// [`as_exchange_with_unreadable_keytab`] with the same FAST deferral as [`as_exchange_defer_fast`].
+///
+/// # Errors
+///
+/// As [`as_exchange_with_unreadable_keytab`], or [`Error::FastUpgrade`].
+pub fn as_exchange_with_unreadable_keytab_defer_fast(
+    req: &AsRequest<'_>,
+    failure: &KeytabFailure,
+) -> Result<AsOutcome, Error> {
+    wrap_as(req, &[], Some(failure), None, true)
 }
 
 /// Reads the AS password when the exchange first needs it.
@@ -401,19 +432,20 @@ pub fn as_exchange_interactive(
     ui: &mut dyn AsPrompt,
     defer_fast: bool,
 ) -> Result<AsOutcome, Error> {
-    wrap_as(req, &[], Some(ui), defer_fast)
+    wrap_as(req, &[], None, Some(ui), defer_fast)
 }
 
 fn wrap_as(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
+    unreadable: Option<&KeytabFailure>,
     prompt: Option<&mut dyn AsPrompt>,
     defer_fast: bool,
 ) -> Result<AsOutcome, Error> {
     let correlation_id = krb5_log::new_correlation_id();
     let _g = krb5_log::enter_correlation(correlation_id.clone());
     let started = Instant::now();
-    let result = as_exchange_inner(req, keys, prompt, defer_fast);
+    let result = as_exchange_inner(req, keys, unreadable, prompt, defer_fast);
     emit(
         krb5_log::events::PROTOCOL_AS,
         &correlation_id,
@@ -435,6 +467,7 @@ fn req_sname(req: &AsRequest<'_>) -> PrincipalName {
 fn as_exchange_inner(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
+    unreadable: Option<&KeytabFailure>,
     prompt: Option<&mut dyn AsPrompt>,
     defer_fast: bool,
 ) -> Result<AsOutcome, Error> {
@@ -450,7 +483,9 @@ fn as_exchange_inner(
     let bound = request_times(req, &clock);
 
     if req.fast_armor.is_some() {
-        return continue_fast(req, keys, nonce, &bound, &etypes, &clock, prompt);
+        return continue_fast(
+            req, keys, unreadable, nonce, &bound, &etypes, &clock, prompt,
+        );
     }
     // MIT `k5_init_preauth_context` (`lib/krb5/krb/preauth2.c:133-146`): pkinit answers only when
     // that clpreauth module loaded. Anonymous has no other mechanism.
@@ -498,7 +533,12 @@ fn as_exchange_inner(
         KdcMsg::AsRep(rep) => {
             refuse_spake_skip(req.want_spake)?;
             trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
-            let mut pw = PasswordCell::new(prompt, req.password, !keys.is_empty());
+            let mut pw = PasswordCell::new(
+                prompt,
+                req.password,
+                !keys.is_empty() || unreadable.is_some(),
+            )
+            .with_unreadable_keytab(unreadable);
             finish_as_rep_keys(req, rep, nonce, keys, &etypes, &bound, Some(&wire), &mut pw)
         }
         KdcMsg::Error(e) if spake_more(&e) => {
@@ -509,11 +549,21 @@ fn as_exchange_inner(
                 trace::init_creds_preauth();
                 trace_preauth_input(&method_from_error(&e).unwrap_or_default(), &etypes);
             }
-            let mut pw = PasswordCell::new(prompt, req.password, !keys.is_empty());
+            let mut pw = PasswordCell::new(
+                prompt,
+                req.password,
+                !keys.is_empty() || unreadable.is_some(),
+            )
+            .with_unreadable_keytab(unreadable);
             spake_forced(req, keys, nonce, &etypes, &e, &clock, &mut pw)
         }
         KdcMsg::Error(e) if e.error_code == err::PREAUTH_REQUIRED => {
-            let mut pw = PasswordCell::new(prompt, req.password, !keys.is_empty());
+            let mut pw = PasswordCell::new(
+                prompt,
+                req.password,
+                !keys.is_empty() || unreadable.is_some(),
+            )
+            .with_unreadable_keytab(unreadable);
             continue_from_hint(req, keys, nonce, &etypes, &e, &clock, &mut pw)
         }
         KdcMsg::Error(e) => classify_kdc_error(&e),
@@ -550,6 +600,12 @@ fn finish_as_rep_keys(
     let (cname, realm) = (&req.cname, req.realm);
     let (canonicalize, expected_sname) = (req.canonicalize, &req_sname(req));
     let etype = EncryptionType::known(rep.0.enc_part.etype)?;
+    // MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:115-123`): `gak_fct` runs, traced, and its error is returned as it is: here the keytab's, which could not be read.
+    if let Some(failure) = pw.unreadable_keytab() {
+        trace_gak_salt(req, rep.0.padata.as_deref(), etypes, true);
+        trace_keytab_gak(req, keys, Some(failure), etype);
+        return Err(ModuleFail::keytab(failure).unwrapped());
+    }
     if keys.is_empty() {
         trace_salt_princ(req, rep.0.padata.as_deref(), etypes);
         ask_gak_question(pw)?;
@@ -575,7 +631,7 @@ fn finish_as_rep_keys(
     }
     let password = req.password;
     trace_gak_salt(req, rep.0.padata.as_deref(), etypes, true);
-    trace_keytab_gak(req, keys, etype);
+    trace_keytab_gak(req, keys, None, etype);
     // MIT `init_creds_step_reply` (`lib/krb5/krb/get_in_tkt.c:1824-1840`): `decrypt_as_reply` opens the reply under the one key `get_as_key_keytab` gives, and from there `verify_as_reply` and `verify_anonymous` (and the enc-pa-rep check before them) end the request with their own error, which no other key is asked to replace.
     // MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:127-133`): a key that does not open it ends the request with that decrypt's error, here the picked key's, the others being offered after it.
     let picked = pick_key(keys, Some(etype));
@@ -885,7 +941,7 @@ fn continue_preauth(
     }
     let (etype, salt, params) =
         select_s2k(preauth_err, &salt_cname(&req.cname), req.realm, etypes)?;
-    trace_keytab_gak(req, keys, etype);
+    trace_keytab_gak(req, keys, pw.unreadable_keytab(), etype);
     let client_key = match pick_key(keys, Some(etype)) {
         Some(key) => key,
         None => match pw.get() {
@@ -2266,14 +2322,31 @@ fn reply_salt(padata: Option<&[PaData]>, etypes: &[i32]) -> Option<Vec<u8>> {
 /// entry of the wanted enctype, at whatever version.
 /// MIT `krb5_kt_get_entry` (`lib/krb5/keytab/ktfns.c:57-80`): the lookup is traced with its
 /// result. Only a request [`trace::with_gak_keytab`] names a keytab for is traced.
-fn trace_keytab_gak(req: &AsRequest<'_>, keys: &[ProtocolKey], etype: EncryptionType) {
-    if keys.is_empty() || !trace::enabled() {
+fn trace_keytab_gak(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    unreadable: Option<&KeytabFailure>,
+    etype: EncryptionType,
+) {
+    if (keys.is_empty() && unreadable.is_none()) || !trace::enabled() {
         return;
     }
     let Some(name) = trace::gak_keytab() else {
         return;
     };
     let client = client_princ(req);
+    // MIT `krb5_kt_get_entry` (`lib/krb5/keytab/ktfns.c:57-80`): a keytab that cannot be read fails the lookup with the open's or the read's error.
+    if let Some(failure) = unreadable {
+        trace::kt_get_entry(
+            &name,
+            client,
+            0,
+            etype.to_iana(),
+            failure.code,
+            Some(&failure.text),
+        );
+        return;
+    }
     // MIT `krb5_ktfile_get_entry` (`lib/krb5/keytab/kt_file.c:379-391`): no entry is
     // KRB5_KT_NOTFOUND with a message naming the principal.
     let (code, msg) = if keys.iter().any(|k| k.etype() == etype) {

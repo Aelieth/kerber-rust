@@ -837,6 +837,59 @@ fn eof() -> io::Error {
     io::Error::new(io::ErrorKind::UnexpectedEof, "keytab truncated")
 }
 
+/// A keytab file that cannot be read as a keytab, and what each key lookup in it fails with.
+/// MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): a keytab whose entries cannot be listed is traced and is no error yet: the exchange is made, and a key asked of the keytab fails the same way.
+/// MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): the lookup's error is what the key callback returns, to the preauth module that wanted the key or to the reply's decrypt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeytabFailure {
+    /// MIT's `krb5_error_code`: an errno, or `KRB5_KEYTAB_BADVNO`.
+    pub code: i64,
+    /// The message MIT has set for it, which `krb5_get_error_message` returns.
+    pub text: String,
+}
+
+impl KeytabFailure {
+    /// The failure of opening or reading the keytab file at `path`.
+    /// MIT `krb5_ktfileint_open` (`lib/krb5/keytab/kt_file.c:753-760`): a file that is not there is `ENOENT` with the message `Key table file '<path>' not found`; any other failure to open it is its errno.
+    /// MIT `krb5_ktfileint_open` (`lib/krb5/keytab/kt_file.c:783-792`): a failure to read its version that is not the end of the file is its errno too, `EISDIR` for a directory.
+    #[must_use]
+    pub fn from_io(e: &io::Error, path: &Path) -> Self {
+        let code = i64::from(e.raw_os_error().unwrap_or_default());
+        let text = if e.kind() == io::ErrorKind::NotFound {
+            format!("Key table file '{}' not found", path.display())
+        } else {
+            crate::trace::error_message(code)
+        };
+        Self { code, text }
+    }
+
+    /// A file that has no version, or one MIT does not know.
+    /// MIT `krb5_ktfileint_open` (`lib/krb5/keytab/kt_file.c:783-803`): the end of the file where the version should be, or a version other than 0x0501 and 0x0502, is `KRB5_KEYTAB_BADVNO`.
+    #[must_use]
+    pub fn bad_version() -> Self {
+        let code = crate::trace::ERROR_TABLE_BASE_KRB5 + 213;
+        Self {
+            code,
+            text: crate::trace::error_message(code),
+        }
+    }
+}
+
+/// The keytab file at `path`, whole, when it can be read as a keytab.
+///
+/// # Errors
+///
+/// The [`KeytabFailure`] a key lookup in it would have: the open's or the read's errno, or a file with
+/// no version or an unknown one.
+pub fn read_keytab_file(path: &Path) -> Result<Zeroizing<Vec<u8>>, KeytabFailure> {
+    let bytes =
+        crate::secret_file::read_secret_file(path).map_err(|e| KeytabFailure::from_io(&e, path))?;
+    if bytes.len() < 2 || bytes[0] != 0x05 || !matches!(bytes[1], 0x01 | 0x02) {
+        return Err(KeytabFailure::bad_version());
+    }
+    Ok(bytes)
+}
+
 /// MIT `lookup_etypes_for_keytab` (`gic_keytab.c:84-143`): lists the etypes of the client's
 /// highest-kvno entries, skipping invalid enctypes.
 ///
@@ -1382,5 +1435,45 @@ mod tests {
             "Keytab { version: 1282, entries: [], skipped_unknown_etype: 1, \
              unparsed: [(0, <redacted, 4 octets>)] }"
         );
+    }
+    /// MIT `krb5_ktfileint_open` (`lib/krb5/keytab/kt_file.c:753-760`): a file that is not there is `ENOENT` with its own message; a directory opens and fails to read as `EISDIR`.
+    /// MIT `krb5_ktfileint_open` (`lib/krb5/keytab/kt_file.c:783-803`): a file with no version, or an unknown one, is `KRB5_KEYTAB_BADVNO`.
+    #[test]
+    fn a_keytab_that_cannot_be_read_fails_as_mits_open_does() {
+        let dir = krb5_testkit::scratch_dir("kp-keytab-failure");
+        let missing = dir.join("none.keytab");
+        assert_eq!(
+            read_keytab_file(&missing).unwrap_err(),
+            KeytabFailure {
+                code: 2,
+                text: format!("Key table file '{}' not found", missing.display()),
+            }
+        );
+        let bad = KeytabFailure {
+            code: crate::trace::ERROR_TABLE_BASE_KRB5 + 213,
+            text: "Unsupported key table format version number".into(),
+        };
+        assert_eq!(KeytabFailure::bad_version(), bad);
+        for (name, body) in [
+            ("empty", &b""[..]),
+            ("one-octet", &[5u8][..]),
+            ("v3", &[5u8, 3, 0][..]),
+            ("v4", &[4u8, 2, 0][..]),
+        ] {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            assert_eq!(read_keytab_file(&path).unwrap_err(), bad, "{name}");
+        }
+        let dir_failure = read_keytab_file(&dir).unwrap_err();
+        assert_eq!(
+            (dir_failure.code, dir_failure.text.as_str()),
+            (21, "Is a directory")
+        );
+        for (name, body) in [("v1", &[5u8, 1][..]), ("v2", &[5u8, 2, 0, 0][..])] {
+            let path = dir.join(name);
+            std::fs::write(&path, body).unwrap();
+            assert_eq!(read_keytab_file(&path).unwrap().as_slice(), body, "{name}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

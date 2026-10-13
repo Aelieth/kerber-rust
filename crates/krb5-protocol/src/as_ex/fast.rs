@@ -15,6 +15,7 @@ use super::{
     trace_keytab_gak, trace_preauth_input, trace_reply_padata,
 };
 use crate::error::Error;
+use crate::keytab::KeytabFailure;
 use crate::preauth::{
     apply_strengthen, armor_key, attach_fast, build_fast_armor, unwrap_fast_rep_checked,
     verify_fast_finished,
@@ -42,9 +43,14 @@ pub struct FastArmor {
 /// cookie leads the inner padata on the retry.
 /// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): the armor ticket's session key, the
 /// armor authenticator and the armor key are traced as they are made.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the AS round's state, no value type"
+)]
 pub(super) fn continue_fast(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
+    unreadable: Option<&KeytabFailure>,
     nonce: u32,
     bound: &AsReqTimes,
     etypes: &[i32],
@@ -77,7 +83,12 @@ pub(super) fn continue_fast(
     match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => {
             // MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:96-123`): no module answered, so the reply key is got now, from the password.
-            let mut pw = PasswordCell::new(prompt, req.password, !keys.is_empty());
+            let mut pw = PasswordCell::new(
+                prompt,
+                req.password,
+                !keys.is_empty() || unreadable.is_some(),
+            )
+            .with_unreadable_keytab(unreadable);
             finish_fast_as(
                 req,
                 keys,
@@ -106,7 +117,12 @@ pub(super) fn continue_fast(
             clock.note(&inner, true);
             // MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): the password is read when a
             // mechanism first needs the key, not before one is chosen; OTP never needs it.
-            let mut pw = PasswordCell::new(prompt, req.password, !keys.is_empty());
+            let mut pw = PasswordCell::new(
+                prompt,
+                req.password,
+                !keys.is_empty() || unreadable.is_some(),
+            )
+            .with_unreadable_keytab(unreadable);
             let cc_in: Option<Value> = req
                 .ticket
                 .pa_config_in
@@ -283,7 +299,7 @@ fn fast_key_mechanism(
         return Ok(Err(f));
     }
     let (etype, salt, params) = select_s2k(current, &salt_cname(&req.cname), req.realm, etypes)?;
-    trace_keytab_gak(req, keys, etype);
+    trace_keytab_gak(req, keys, pw.unreadable_keytab(), etype);
     let client_key = match pick_key(keys, Some(etype)) {
         Some(key) => key,
         None => match pw.get() {
@@ -759,7 +775,7 @@ fn fast_base_key(
     // MIT `decrypt_as_reply` (`lib/krb5/krb/get_in_tkt.c:96-117`): the responder is asked before the key is got, and the key is got after the salt is traced.
     ask_gak_question(pw)?;
     trace::init_creds_gak(&salt, params.as_deref().unwrap_or_default());
-    trace_keytab_gak(req, keys, etype);
+    trace_keytab_gak(req, keys, pw.unreadable_keytab(), etype);
     let key = if let Some(key) = pick_key(keys, Some(etype)) {
         key
     } else {

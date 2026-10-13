@@ -12,11 +12,12 @@ use std::path::Path;
 use krb5_asn1::decode;
 use krb5_config::CcSpec;
 use krb5_protocol::{
-    AsOutcome, AsPrompt, AsRequest, AsTicketOpts, FastArmor, KdcAddr, PkinitClient, PreauthPrompt,
-    TgsOutcome, as_exchange, as_exchange_defer_fast, as_exchange_interactive,
-    as_exchange_with_keys, as_exchange_with_keys_defer_fast, dir_cache_path,
-    dir_cache_path_for_store, kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default,
-    memory_destroy, memory_retrieve, memory_store, parse_principal_ex, tgs_exchange_path,
+    AsOutcome, AsPrompt, AsRequest, AsTicketOpts, FastArmor, KdcAddr, KeytabFailure, PkinitClient,
+    PreauthPrompt, TgsOutcome, as_exchange, as_exchange_defer_fast, as_exchange_interactive,
+    as_exchange_with_keys, as_exchange_with_keys_defer_fast, as_exchange_with_unreadable_keytab,
+    as_exchange_with_unreadable_keytab_defer_fast, dir_cache_path, dir_cache_path_for_store,
+    kcm_destroy, kcm_load, kcm_store, kcm_store_keep_default, memory_destroy, memory_retrieve,
+    memory_store, parse_principal_ex, read_keytab_file, tgs_exchange_path,
 };
 use krb5_types::Ticket;
 use zeroize::{Zeroize, Zeroizing};
@@ -966,23 +967,48 @@ fn initial_armor(
     Ok(Some(armor))
 }
 
+/// The keytab an AS exchange gets its keys from, when it is not a password's.
+#[derive(Clone, Copy)]
+enum KeytabArg<'a> {
+    /// The client's keys, read from the keytab at the path.
+    Keys(&'a [krb5_crypto::ProtocolKey], &'a Path),
+    /// A keytab at the path that could not be read: a key asked of it fails.
+    /// MIT `krb5_init_creds_set_keytab` (`lib/krb5/krb/gic_keytab.c:209-213`): the failure is traced and is no error yet.
+    Unreadable(&'a KeytabFailure, &'a Path),
+}
+
 fn dispatch_as(
     password: &mut LazyPassword<'_>,
-    keytab: Option<(&[krb5_crypto::ProtocolKey], &Path)>,
+    keytab: Option<KeytabArg<'_>>,
     req: &AsRequest<'_>,
     defer_fast: bool,
 ) -> Result<Result<AsOutcome, ProtocolError>, Box<dyn std::error::Error + Send + Sync>> {
-    if let Some((keys, path)) = keytab {
-        return Ok(krb5_protocol::trace::with_gak_keytab(
-            || format!("FILE:{}", path.display()),
-            || {
-                if defer_fast {
-                    as_exchange_with_keys_defer_fast(req, keys)
-                } else {
-                    as_exchange_with_keys(req, keys)
-                }
-            },
-        ));
+    match keytab {
+        Some(KeytabArg::Keys(keys, path)) => {
+            return Ok(krb5_protocol::trace::with_gak_keytab(
+                || format!("FILE:{}", path.display()),
+                || {
+                    if defer_fast {
+                        as_exchange_with_keys_defer_fast(req, keys)
+                    } else {
+                        as_exchange_with_keys(req, keys)
+                    }
+                },
+            ));
+        }
+        Some(KeytabArg::Unreadable(failure, path)) => {
+            return Ok(krb5_protocol::trace::with_gak_keytab(
+                || format!("FILE:{}", path.display()),
+                || {
+                    if defer_fast {
+                        as_exchange_with_unreadable_keytab_defer_fast(req, failure)
+                    } else {
+                        as_exchange_with_unreadable_keytab(req, failure)
+                    }
+                },
+            ));
+        }
+        None => {}
     }
     let got = if defer_fast {
         password.as_exchange_defer(req)
@@ -1045,7 +1071,7 @@ fn load_armor_for_upgrade(
 /// MIT `restart_init_creds_loop` (`lib/krb5/krb/get_in_tkt.c:800-801`): the upgrade sets FAST for the restarted request.
 fn exchange_shape(
     password: &mut LazyPassword<'_>,
-    keytab: Option<(&[krb5_crypto::ProtocolKey], &Path)>,
+    keytab: Option<KeytabArg<'_>>,
     armor: &mut Option<FastArmor>,
     spec: Option<&CcSpec>,
     shape: &AsShape<'_>,
@@ -1131,30 +1157,42 @@ fn kinit_inner(
     let mut etypes = krb5_protocol::conf_etypes(false);
     let mut ticket = params.ticket;
     ticket.anonymous |= params.anonymous;
+    // MIT `krb5_init_creds_set_keytab` (`gic_keytab.c:209-213`): a keytab that cannot be read is traced and is no error yet; the request is made, and a key asked of the keytab fails with that error.
+    let mut keytab_failure: Option<KeytabFailure> = None;
     let keytab_keys = if let Some(ktpath) = params.keytab {
-        let bytes = krb5_protocol::read_secret_file(ktpath).map_err(|e| {
-            trace::keytab_lookup_failed(&e, ktpath);
-            keytab_read_error(&e, &ktpath.display().to_string())
-        })?;
-        let kt = Keytab::parse(&bytes)?;
-        // MIT `krb5_init_creds_set_keytab` (`gic_keytab.c:176-232`): no key for the client is
-        // `KRB5_KT_NOTFOUND` "Keytab contains no suitable keys for <client>".
-        let (keys, kt_etypes) = krb5_protocol::keytab_init_creds_keys(&kt, &cname, &realm_s)
-            .ok_or_else(|| {
-                Krb5Error::new(
-                    Code::Other,
-                    format!(
-                        "Keytab contains no suitable keys for {}",
-                        cname.unparse_with_realm(&realm_s)
-                    ),
+        match read_keytab_file(ktpath) {
+            Err(failure) => {
+                krb5_protocol::trace::init_creds_keytab_lookup_failed(
+                    failure.code,
+                    Some(&failure.text),
+                );
+                keytab_failure = Some(failure);
+                None
+            }
+            Ok(bytes) => {
+                let kt = Keytab::parse(&bytes)?;
+                // MIT `krb5_init_creds_set_keytab` (`gic_keytab.c:176-232`): no key for the client is
+                // `KRB5_KT_NOTFOUND` "Keytab contains no suitable keys for <client>".
+                let (keys, kt_etypes) = krb5_protocol::keytab_init_creds_keys(
+                    &kt, &cname, &realm_s,
                 )
-            })?;
-        krb5_protocol::trace::init_creds_keytab_lookup(
-            krb5_protocol::trace::Princ::new(&cname, realm_s.as_bytes()),
-            &kt_etypes,
-        );
-        krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
-        Some(keys)
+                .ok_or_else(|| {
+                    Krb5Error::new(
+                        Code::Other,
+                        format!(
+                            "Keytab contains no suitable keys for {}",
+                            cname.unparse_with_realm(&realm_s)
+                        ),
+                    )
+                })?;
+                krb5_protocol::trace::init_creds_keytab_lookup(
+                    krb5_protocol::trace::Princ::new(&cname, realm_s.as_bytes()),
+                    &kt_etypes,
+                );
+                krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
+                Some(keys)
+            }
+        }
     } else {
         None
     };
@@ -1174,8 +1212,13 @@ fn kinit_inner(
     ticket.allowed_preauth_type = allowed_preauth_type(params.in_ccache, &pa_server, &realm_s);
     ticket.pa_config_in = pa_config_in(params.in_ccache, &pa_server, &realm_s);
     let pac_request = ticket.pac_request;
-    let keytab = match (keytab_keys.as_deref(), params.keytab) {
-        (Some(keys), Some(path)) => Some((keys, path)),
+    let keytab = match (
+        keytab_keys.as_deref(),
+        keytab_failure.as_ref(),
+        params.keytab,
+    ) {
+        (Some(keys), _, Some(path)) => Some(KeytabArg::Keys(keys, path)),
+        (None, Some(failure), Some(path)) => Some(KeytabArg::Unreadable(failure, path)),
         _ => None,
     };
     let shape = AsShape {
