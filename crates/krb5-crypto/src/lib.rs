@@ -89,6 +89,7 @@ mod ops;
 mod prf;
 mod spake;
 pub(crate) mod weak;
+mod wipe;
 
 pub(crate) mod cts;
 
@@ -107,14 +108,15 @@ pub use modp::{
     DhGroup, DhKeypair, OAKLEY_2048, OAKLEY_4096, dh_generate, dh_group_for_prime, dh_shared,
 };
 pub use ops::{
-    CipherState, checksum, checksum_output_size, decrypt, decrypt_cts, decrypt_with_state, encrypt,
-    encrypt_with_confounder, encrypt_with_state, hmac_md5_arcfour_checksum, integrity_mac,
-    kdb_decrypt_key, kdb_encrypt_key, string_to_key, unkeyed_checksum, verify_checksum_collproof,
-    verify_checksum_keyed, verify_checksum_type,
+    CipherState, ENCTYPE_UNKNOWN, check_enc_data_etype, checksum, checksum_output_size, decrypt,
+    decrypt_cts, decrypt_enc_data, decrypt_enc_data_with_state, decrypt_with_state, encrypt,
+    encrypt_with_confounder, encrypt_with_confounder_and_state, encrypt_with_state,
+    hmac_md5_arcfour_checksum, integrity_mac, kdb_decrypt_key, kdb_encrypt_key, string_to_key,
+    unkeyed_checksum, verify_checksum_collproof, verify_checksum_keyed, verify_checksum_type,
 };
 pub use prf::{derive_prfplus, derive_prfplus_enctype, prf, prf_plus};
 pub use spake::{
-    SPAKE_GROUP_P256, spake_decode_point, spake_derive_key, spake_finish, spake_kdc_keygen,
-    spake_m_bytes, spake_n_bytes, spake_public, spake_public_wbytes, spake_result_wbytes,
+    SPAKE_DEFAULT_GROUPS_CLIENT, SPAKE_DEFAULT_GROUPS_KDC, SpakeGroup, spake_decode_point,
+    spake_derive_key, spake_keygen, spake_parse_groups, spake_public, spake_result,
     spake_thash_update, spake_wbytes,
 };

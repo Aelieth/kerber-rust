@@ -22,10 +22,7 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kswitch" "$NAME":/tmp/krb5-ksw
 docker cp "${CARGO_TARGET_DIR:-target}/debug/ccache-probe" "$NAME":/tmp/ccache-probe
 docker cp "$ROOT/scripts/oracle/ccache-mit-remove.c" "$NAME":/tmp/ccache-mit-remove.c
 docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-klist /tmp/krb5-kdestroy /tmp/krb5-kswitch /tmp/ccache-probe
-if ! docker exec "$NAME" cc -o /tmp/ccache-mit-remove /tmp/ccache-mit-remove.c -lkrb5; then
-    log "ccache.gate" "error" ',"error":"cc ccache-mit-remove failed"'
-    exit 1
-fi
+mit_oracle_cc "$NAME" /tmp/ccache-mit-remove /tmp/ccache-mit-remove.c krb5
 
 kadmin_q_try mit_kadmin_local "$NAME" -- -q 'addprinc -pw extrapass extra' >/dev/null 2>&1
 

@@ -3,13 +3,13 @@
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, p256_generate};
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, bootstrap_documented, documented_host};
-use krb5_kdc::{Error, PrincipalStore, decrypt_ticket_part};
+use krb5_kdc::{AdminFields, Error, KDB_REQUIRES_PRE_AUTH, PrincipalStore, decrypt_ticket_part};
 use krb5_protocol::{as_req, tgs_req};
 
 use krb5_protocol::{
     armor_key, attach_fast, build_fast_armor, pa_pk_as_req_unsigned, pkinit_reply_key_agile,
 };
-use krb5_types::{KrbError, PrincipalName, ascii, err, flag_bit, pa};
+use krb5_types::{KerberosTime, KrbError, PrincipalName, ascii, err, flag_bit, pa};
 
 #[test]
 fn named_anon_without_preauth_is_validate_anonymous() {
@@ -280,4 +280,37 @@ fn unsigned_pkinit_named_is_preauth_failed() {
             .is_some_and(|d| d.contains("not signed") && d.contains("not anonymous")),
         "{detail:?}"
     );
+}
+
+/// MIT 1.22.2, settled live: an anonymous PKINIT reply stamps the anonymous principal's last
+/// success, the KDC giving the entry `REQUIRES_PRE_AUTH` for its audit; the stored entry keeps its
+/// own flags, where MIT's db2 saves the flag with the stamp.
+#[test]
+fn an_anonymous_reply_stamps_the_anonymous_principals_last_success() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    insert_anonymous(&mut store);
+    let attributes = store
+        .get_name(&wellknown_anonymous())
+        .expect("anonymous")
+        .attributes;
+    store
+        .apply_admin_fields(
+            &wellknown_anonymous(),
+            AdminFields {
+                attributes: Some(attributes & !KDB_REQUIRES_PRE_AUTH),
+                ..AdminFields::default()
+            },
+        )
+        .expect("as MIT's addprinc makes it, without +requires_preauth");
+    let before = KerberosTime::now().unix_seconds();
+    unsigned_anon_as(&store, 467);
+    let anon = store.get_name(&wellknown_anonymous()).expect("anonymous");
+    assert_eq!(
+        anon.attributes & KDB_REQUIRES_PRE_AUTH,
+        0,
+        "the flag is not stored"
+    );
+    let stamped = store.last_success_of(anon);
+    assert!(stamped >= before, "last success {stamped}, before {before}");
 }

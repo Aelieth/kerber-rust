@@ -70,14 +70,16 @@ fn parse_enterprise_is_one_component() {
     assert_eq!(n2.components_joined(), "alice@ad.example.com");
 }
 
+/// MIT `krb5_ktfileint_internal_read_entry` (`kt_file.c:890-1116`): an unknown version is an
+/// error; a truncated entry ends the keytab (`KRB5_KT_END`).
 #[test]
-fn truncated_keytab_is_error() {
+fn truncated_keytab_ends_it() {
     assert!(Keytab::parse(&[0x05, 0x03]).is_err());
     assert!(Keytab::parse(&[0x05, 0x01]).is_ok()); // empty v1 is valid
     let mut truncated = vec![0x05, 0x02];
     truncated.extend_from_slice(&20i32.to_be_bytes());
     truncated.push(0);
-    assert!(Keytab::parse(&truncated).is_err());
+    assert!(Keytab::parse(&truncated).unwrap().entries.is_empty());
 }
 
 fn ccache_put_data(buf: &mut Vec<u8>, d: &[u8]) {

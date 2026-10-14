@@ -152,5 +152,36 @@ PRIME="$(kcm_exec klist -c KCM:)"
 echo "$PRIME"
 echo "$PRIME" | grep -q 'user@KERBER.TEST'
 
+echo "==== kcm_socket names the socket, as MIT's ===="
+# MIT kcmio_unix_socket_connect (cc_kcm.c:308-330): the socket is [libdefaults] kcm_socket, else
+# the compiled default; `-` or a socket that is not there is KRB5_KCM_NO_SERVER. MIT reads no
+# KCM_SOCKET environment variable, so it changes nothing.
+docker exec "$KCM" sh -c "ln -sf /run/.heim_org.h5l.kcm-socket /tmp/kcm-link.sock
+sed -e 's|^    kcm_socket = .*|    kcm_socket = /tmp/kcm-none.sock|' /etc/krb5.conf >/tmp/kcm-none.conf
+sed -e 's|^    kcm_socket = .*|    kcm_socket = -|' /etc/krb5.conf >/tmp/kcm-dash.conf
+sed -e 's|^    kcm_socket = .*|    kcm_socket = /tmp/kcm-link.sock|' /etc/krb5.conf >/tmp/kcm-link.conf"
+for c in none dash; do
+    set +e
+    MITN="$(docker exec -e KRB5_CONFIG="/tmp/kcm-$c.conf" -e KRB5CCNAME=KCM: "$KCM" klist 2>&1)"
+    mrc=$?
+    MITN="$(printf '%s\n' "$MITN" | lf_lines)"
+    RUSTN="$(docker exec -e KRB5_CONFIG="/tmp/kcm-$c.conf" -e KRB5CCNAME=KCM: "$KCM" /tmp/krb5-klist 2>&1)"
+    rrc=$?
+    set -e
+    echo "$MITN"
+    echo "$RUSTN"
+    [ "$mrc" = 1 ] && [ "$rrc" = 1 ] || die "kcm_socket $c: klist must fail on both (MIT $mrc, Rust $rrc)"
+    [ "$MITN" = "klist: No KCM server found while resolving ccache" ] || die "kcm_socket $c: MIT's line changed"
+    [ "$RUSTN" = "krb5-klist: No KCM server found while resolving ccache" ] \
+        || die "kcm_socket $c: Rust's line is not MIT's"
+done
+LINK="$(docker exec -e KRB5_CONFIG=/tmp/kcm-link.conf -e KRB5CCNAME=KCM: "$KCM" /tmp/krb5-klist)"
+echo "$LINK"
+echo "$LINK" | grep -q 'user@KERBER.TEST' || die "kcm_socket naming a link to the socket must work"
+ENVN="$(docker exec -e KRB5_CONFIG=/etc/krb5.conf -e KRB5CCNAME=KCM: -e KCM_SOCKET=/tmp/kcm-none.sock \
+    "$KCM" /tmp/krb5-klist)"
+echo "$ENVN"
+echo "$ENVN" | grep -q 'user@KERBER.TEST' || die "KCM_SOCKET must change nothing"
+
 log "kcm.gate" "ok" ''
 echo "kcm-gate ok"

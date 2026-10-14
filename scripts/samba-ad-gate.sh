@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Content-asserting Samba 4 AD DC gate. Isolated Kerberos env only.
 # The only exit 0 is after a live Samba/AD kinit + kvno with klist content.
-# Missing docker, image, or KDC: exit 2 + unavailability log (heimdal/sspi honesty).
+# Missing docker, image, or KDC: exit 2 + unavailability log (as the Heimdal gate does).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"

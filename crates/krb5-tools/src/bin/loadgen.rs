@@ -4,6 +4,7 @@
 //!
 //! Password is `KRB5_PASSWORD`. Concurrency is `KERBER_LOAD_WORKERS` (default 8)
 //! times `KERBER_LOAD_ITERS` (default 8), or loop until `KERBER_LOAD_SECONDS`.
+//! The first failed exchanges are named on stderr, so a gate's log says why.
 
 #![forbid(unsafe_code)]
 
@@ -14,6 +15,9 @@ use std::time::{Duration, Instant};
 
 use krb5_client::kinit;
 use krb5_protocol::KdcAddr;
+
+/// The failed exchanges named on stderr; the rest are only counted.
+const SHOWN_ERRORS: u64 = 5;
 
 fn parse_u32(name: &str, default: u32) -> u32 {
     env::var(name)
@@ -91,8 +95,10 @@ fn main() {
                         Ok(_) => {
                             ok.fetch_add(1, Ordering::Relaxed);
                         }
-                        Err(_) => {
-                            err.fetch_add(1, Ordering::Relaxed);
+                        Err(e) => {
+                            if err.fetch_add(1, Ordering::Relaxed) < SHOWN_ERRORS {
+                                eprintln!("loadgen: worker {w} iteration {i}: {e}");
+                            }
                         }
                     }
                     let _ = std::fs::remove_file(&cc);

@@ -2,6 +2,8 @@
 //! (`svr_iters.c` `glob_to_regexp`): the pre-flight MIT answers `EINVAL`
 //! for, and the match itself with POSIX bracket classes.
 
+use krb5_kdc::PrincipalStore;
+
 /// MIT compiles the glob to a POSIX BRE with `regcomp`; a pattern that fails to compile
 /// (trailing `\\`, an unterminated `[...]`) is `EINVAL` from `kadm5_get_either`. This
 /// mirrors that pre-flight.
@@ -189,4 +191,41 @@ fn glob_class(pat: &[u8], c: u8) -> Option<(bool, usize)> {
         return None;
     }
     Some((matched != negate, i + 1))
+}
+
+/// The principal names `expr` lists, in the store's order: no expression is `*`, every name.
+/// MIT `kadm5_get_either` (`lib/kadm5/srv/svr_iters.c:153-211`): a missing expression is `*`,
+/// and the names are those the converted glob's regexp matches.
+/// MIT `glob_to_regexp` (`lib/kadm5/srv/svr_iters.c:55-109`): a glob naming no realm gets `@*`,
+/// so the empty expression, `^@.*$`, lists none.
+pub(crate) fn principals_matching(store: &PrincipalStore, expr: Option<&str>) -> Vec<String> {
+    let ids = store.ids();
+    match expr {
+        Some(g) if g != "*" => {
+            let pat = glob_expand(g, true);
+            ids.into_iter()
+                .filter(|id| glob_is_match(pat.as_bytes(), id.as_bytes()))
+                .collect()
+        }
+        _ => ids,
+    }
+}
+
+/// The policy names `expr` lists, sorted: no expression is `*`, every name.
+/// MIT `kadm5_get_either` (`lib/kadm5/srv/svr_iters.c:153-211`): a missing expression is `*`.
+/// MIT `glob_to_regexp` (`lib/kadm5/srv/svr_iters.c:55-109`): a policy glob gets no realm, so
+/// the empty expression, `^$`, lists none.
+pub(crate) fn policies_matching(store: &PrincipalStore, expr: Option<&str>) -> Vec<String> {
+    let pat = expr.filter(|g| *g != "*").map(|g| glob_expand(g, false));
+    let mut names: Vec<String> = store
+        .policies()
+        .keys()
+        .filter(|n| {
+            pat.as_deref()
+                .is_none_or(|p| glob_is_match(p.as_bytes(), n.as_bytes()))
+        })
+        .cloned()
+        .collect();
+    names.sort();
+    names
 }

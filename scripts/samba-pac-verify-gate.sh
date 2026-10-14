@@ -56,10 +56,20 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-pac-extract" "$NAME":/tmp/krb5
 docker cp harness/samba/pac_l1.py "$NAME":/tmp/pac_l1.py
 docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-pac-extract
 
+# AD data: a realm with an AD identity (kdc.conf domain_sid) issues the AD-shaped PAC Samba reads;
+# without one the KDC issues MIT's PAC (cross-kdc-gate.sh).
+docker exec "$NAME" sh -c "cat >/tmp/kdc.conf <<EOF
+[realms]
+    KERBER.TEST = {
+        domain_sid = S-1-5-21-4242424242-4242424242-4242424243
+    }
+EOF"
+
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_EXPORT_KEYTAB=/tmp/host.keytab \
+    -e KRB5_KDC_CONF=/tmp/kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kdc --test-realm 127.0.0.1:8888 >/tmp/rust-kdc.log 2>&1'
 
 ok=0

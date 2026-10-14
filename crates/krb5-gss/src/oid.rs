@@ -43,6 +43,9 @@ pub const GSS_C_CHANNEL_BOUND: u32 = 0x0800;
 /// MIT `GSS_C_DCE_STYLE` (`gssapi_ext.h`).
 pub const GSS_C_DCE: u32 = 0x1000;
 
+/// RFC 2744 `GSS_C_AF_INET`: a channel binding address of four IPv4 octets.
+pub const GSS_C_AF_INET: u32 = 2;
+
 /// MIT `GSS_C_IDENTIFY_FLAG`.
 pub const GSS_C_IDENTIFY: u32 = 0x2000;
 

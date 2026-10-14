@@ -1,0 +1,5 @@
+# harness/field/scenarios/nfs-client.expect: where nfs-client.sh's rust leg is known to differ from its MIT leg, by
+# check name (the INFO observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN;
+# anything else that differs is a finding. Each line names the hand record that shows the difference (in the archive
+# of field records) and what would remove it.
+# check	known difference (rust leg vs MIT)	record	removed by

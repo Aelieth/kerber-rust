@@ -1,173 +1,147 @@
-//! MIT-wire kprop sender (TCP 754) wrapping dump version 7.
+//! MIT `kprop`: send a replica KDC the dump file `kdb5_util dump` wrote.
 //!
-//! Usage: `krb5-kprop [-P port] [-s keytab] [-n host-instance] replica`
+//! ```text
+//! kprop [-r realm] [-f file] [-d] [-P port] [-s keytab] replica_host
+//! ```
 //!
-//! Loads `KRB5_KDC_DB` / `KRB5_KDC_STASH`, issues a `host/<instance>`
-//! ticket from that store, and calls [`krb5_admin::kprop_send_store`].
-//! Dump keys are wrapped with `KRB5_MASTER_PASSWORD`.
+//! The options are MIT's, read as its `getopt` reads them; any other prints the usage and exits
+//! 1, as does a count of hosts other than one.
+//! - `-r` names the realm, else krb5.conf's `default_realm`.
+//! - `-f` names the dump, else `replica_datatrans` in the KDC directory. It must have a
+//!   `<file>.dump_ok` mark no older than itself, which `kdb5_util dump` writes, and kprop locks
+//!   it shared while it sends it.
+//! - `-d` prints the bytes sent after each block.
+//! - `-P` names the port, a number or a services name, else `krb5_prop` from `/etc/services`.
+//! - `-s` names the keytab, else the default keytab (`KRB5_KTNAME`, else krb5.conf's
+//!   `default_keytab_name`, else `/etc/krb5.keytab`).
+//!
+//! kprop never opens the KDC database and reads no KDC profile, as MIT's: it gets a ticket for
+//! `host/<replica_host>` in one AS exchange with a KDC krb5.conf names, as `host/<this host>`
+//! with that principal's key from the keytab, then sends the dump. Both names are MIT's without
+//! DNS: a hostname without a dot gains `qualify_shortname`, else the resolver's first search
+//! domain, and is lowercased. On the replica's acknowledgement it writes
+//! `<file>.<replica_host>.last_prop` and prints `Database propagation to <replica_host>:
+//! SUCCEEDED`. `KRB5_TRACE` traces it as MIT's.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use std::net::TcpStream;
-use std::path::PathBuf;
+use std::process::exit;
 
-use krb5_admin::{KPROP_PORT, kprop_send_store, kprop_send_store_iprop};
-use krb5_kdc::{issue_as, issue_tgs, load_store};
-use krb5_protocol::Keytab;
-use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
-use krb5_types::PrincipalName;
+use krb5_admin::{
+    KPROP_SERVICE, KpropDump, KpropError, kprop_get_tickets, kprop_open_connection, kprop_sendauth,
+    kprop_update_last_prop_file, kprop_xmit_database,
+};
+
+/// MIT `parse_args`'s results.
+struct Args {
+    realm: String,
+    file: String,
+    debug: bool,
+    port: String,
+    keytab: Option<String>,
+    replica_host: String,
+}
 
 fn main() {
-    let _ = tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "krb5_admin=info,krb5_kdc=info".into()),
-        )
-        .try_init();
-
-    let mut port = KPROP_PORT;
-    let mut keytab: Option<PathBuf> = std::env::var("KRB5_KPROP_KEYTAB").ok().map(PathBuf::from);
-    let mut instance: Option<String> = None;
-    let mut replica: Option<String> = None;
-    let mut iprop = false;
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "-i" => iprop = true,
-            "-P" => {
-                let p = args.next().unwrap_or_else(|| need_arg("-P"));
-                port = p.parse().unwrap_or_else(|_| {
-                    eprintln!("krb5-kprop: bad port {p}");
-                    std::process::exit(2);
-                });
-            }
-            "-s" => {
-                keytab = Some(PathBuf::from(args.next().unwrap_or_else(|| need_arg("-s"))));
-            }
-            "-n" => {
-                instance = Some(args.next().unwrap_or_else(|| need_arg("-n")));
-            }
-            flag if flag.starts_with('-') => {
-                eprintln!("krb5-kprop: unknown flag {flag}");
-                usage();
-            }
-            other => replica = Some(other.to_owned()),
+    let argv: Vec<String> = std::env::args_os()
+        .map(|a| a.to_string_lossy().into_owned())
+        .collect();
+    let progname = argv.first().cloned().unwrap_or_else(|| "kprop".to_owned());
+    // MIT `main` (`kprop/kprop.c:100-105`): the library context first, its profile krb5.conf
+    // alone; a profile it refuses ends kprop.
+    let conf = krb5_config::init_profile().unwrap_or_else(|e| {
+        eprintln!("{progname}: {} while initializing krb5", e.init_text());
+        exit(1);
+    });
+    krb5_protocol::trace::init();
+    let args = parse_args(&progname, argv.get(1..).unwrap_or_default(), &conf);
+    let fail = |e: &KpropError| -> ! {
+        for line in e.lines(&progname) {
+            eprintln!("{line}");
+        }
+        exit(1);
+    };
+    // MIT `main` (`kprop/kprop.c:106-120`): tickets, the dump, the connection, sendauth, the
+    // transfer, the `.last_prop` mark, the line on standard output, then the dump's unlock.
+    let creds = kprop_get_tickets(
+        &conf,
+        &args.realm,
+        &args.replica_host,
+        args.keytab.as_deref(),
+    )
+    .unwrap_or_else(|e| fail(&e));
+    let mut dump = KpropDump::open(&args.file).unwrap_or_else(|e| fail(&e));
+    let (mut stream, sender_addr) =
+        kprop_open_connection(&args.replica_host, &args.port).unwrap_or_else(|e| fail(&e));
+    let mut auth = kprop_sendauth(&mut stream, &creds, sender_addr).unwrap_or_else(|e| fail(&e));
+    let size = dump.size();
+    if let Err(e) = kprop_xmit_database(&mut stream, &mut auth, dump.file(), size, args.debug) {
+        fail(&e);
+    }
+    if let Err(e) = kprop_update_last_prop_file(&args.replica_host, &args.file) {
+        for line in e.lines(&progname) {
+            eprintln!("{line}");
         }
     }
-    let Some(replica) = replica else {
-        usage();
-    };
-    let master = std::env::var("KRB5_MASTER_PASSWORD").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_MASTER_PASSWORD");
-        std::process::exit(2);
+    println!("Database propagation to {}: SUCCEEDED", args.replica_host);
+    if let Err(e) = dump.close() {
+        for line in e.lines(&progname) {
+            eprintln!("{line}");
+        }
+    }
+    exit(0);
+}
+
+/// MIT `parse_args` (`kprop/kprop.c:122-162`): `getopt` with `r:f:dP:s:`, exactly one host
+/// after the options, and without `-r` the default realm, whose absence ends kprop.
+fn parse_args(progname: &str, args: &[String], conf: &krb5_config::Krb5Conf) -> Args {
+    let (opts, rest) = krb5_cli::getopt(args, "r:f:dP:s:", &[]).unwrap_or_else(|e| {
+        eprintln!("{progname}: {e}");
+        usage(progname);
     });
-    let db = PathBuf::from(std::env::var("KRB5_KDC_DB").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_KDC_DB");
-        std::process::exit(2);
-    }));
-    let stash = PathBuf::from(std::env::var("KRB5_KDC_STASH").unwrap_or_else(|_| {
-        eprintln!("krb5-kprop: set KRB5_KDC_STASH");
-        std::process::exit(2);
-    }));
-    let store = load_store(&db, &stash).unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: load store: {e}");
-        std::process::exit(1);
-    });
-    let realm = store.realm().to_owned();
-    let host_inst = instance.unwrap_or_else(|| replica.clone());
-    let server = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", host_inst.as_str()]);
-    let client = client_name(keytab.as_deref(), &server);
-    let Some(princ) = store.get_name(&client) else {
-        eprintln!("krb5-kprop: missing client {}", client.components_joined());
-        std::process::exit(1);
+    let mut realm = None;
+    let mut file = None;
+    let mut debug = false;
+    let mut port = None;
+    let mut keytab = None;
+    for o in opts {
+        match (o.flag, o.arg) {
+            ('r', Some(a)) => realm = Some(a),
+            ('f', Some(a)) => file = Some(a),
+            ('d', _) => debug = true,
+            ('P', Some(a)) => port = Some(a),
+            ('s', Some(a)) => keytab = Some(a),
+            _ => usage(progname),
+        }
+    }
+    let [replica_host] = rest.as_slice() else {
+        usage(progname);
     };
-    let client_key = princ
-        .best_key()
+    // MIT `parse_args` (`kprop/kprop.c:154-161`): no realm prints this context alone (MIT passes
+    // `errno`, 0 here, to `com_err`), exit 1.
+    let realm = realm
+        .or_else(|| conf.default_realm.clone())
         .unwrap_or_else(|| {
-            eprintln!("krb5-kprop: client has no key");
-            std::process::exit(1);
-        })
-        .key
-        .clone();
-    let pa = pa_enc_timestamp(&client_key).unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: PA-ENC-TS: {e}");
-        std::process::exit(1);
-    });
-    let as_req = as_req(client.clone(), &realm, 1, Some(vec![pa])).unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: AS-REQ: {e}");
-        std::process::exit(1);
-    });
-    let as_out = issue_as(&store, &as_req).unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: issue AS: {e}");
-        std::process::exit(1);
-    });
-    let tgs = tgs_req(
-        as_out.rep.0.ticket.clone(),
-        &as_out.session_key,
-        &realm,
-        &client,
-        server,
-        &realm,
-        2,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: TGS-REQ: {e}");
-        std::process::exit(1);
-    });
-    let tgs_out = issue_tgs(&store, &tgs).unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: issue TGS: {e}");
-        std::process::exit(1);
-    });
-    let addr = format!("{replica}:{port}");
-    let mut stream = TcpStream::connect(&addr).unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: connect {addr}: {e}");
-        std::process::exit(1);
-    });
-    let send = if iprop {
-        kprop_send_store_iprop
-    } else {
-        kprop_send_store
-    };
-    send(
-        &mut stream,
-        &store,
-        master.as_bytes(),
-        tgs_out.rep.0.ticket,
-        &tgs_out.session_key,
-        &krb5_types::ascii(&realm),
-        &client,
-    )
-    .unwrap_or_else(|e| {
-        eprintln!("krb5-kprop: send: {e}");
-        std::process::exit(1);
-    });
-    println!("kprop ok {addr}");
-}
-
-fn client_name(keytab: Option<&std::path::Path>, server: &PrincipalName) -> PrincipalName {
-    if let Some(path) = keytab {
-        match std::fs::read(path)
-            .and_then(|b| Keytab::parse(&b).map_err(|e| std::io::Error::other(e.to_string())))
-        {
-            Ok(kt) => {
-                if let Some(e) = kt.entries.first() {
-                    return e.name.clone();
-                }
-            }
-            Err(e) => eprintln!("krb5-kprop: keytab {}: {e}", path.display()),
-        }
+            eprintln!("{progname}: while getting default realm");
+            exit(1);
+        });
+    Args {
+        realm,
+        file: file.unwrap_or_else(|| {
+            krb5_config::default_kprop_file()
+                .to_string_lossy()
+                .into_owned()
+        }),
+        debug,
+        port: port.unwrap_or_else(|| KPROP_SERVICE.to_owned()),
+        keytab,
+        replica_host: replica_host.clone(),
     }
-    server.clone()
 }
 
-fn need_arg(flag: &str) -> String {
-    eprintln!("krb5-kprop: {flag} needs a value");
-    usage();
-}
-
-fn usage() -> ! {
-    eprintln!("usage: krb5-kprop [-i] [-P port] [-s keytab] [-n host-instance] replica");
-    std::process::exit(2);
+/// MIT `usage` (`kprop/kprop.c:83-88`): the line between blank lines on standard error, exit 1.
+fn usage(progname: &str) -> ! {
+    eprintln!("\nUsage: {progname} [-r realm] [-f file] [-d] [-P port] [-s keytab] replica_host\n");
+    exit(1);
 }

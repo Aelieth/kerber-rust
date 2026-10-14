@@ -9,6 +9,7 @@ cd "$ROOT"
 
 CRATES=(
     krb5-log
+    krb5-cli
     krb5-crypto
     krb5-types
     krb5-asn1

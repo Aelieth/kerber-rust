@@ -1,7 +1,7 @@
 //! Realm principal records (`kdb5.c` `krb5_db_entry`) and the kadm5
 //! create / modify / rename / delete / unlock path (`svr_principal.c`,
-//! `server_stubs.c`), including `KRB5_TL_*` stamps and the AS-fail
-//! overlay (`db2/lockout.c`).
+//! `server_stubs.c`), including `KRB5_TL_*` stamps and the lockout attributes
+//! the KDC records (`db2/lockout.c`).
 
 use krb5_crypto::EncryptionType;
 use krb5_types::PrincipalName;
@@ -16,8 +16,9 @@ use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
 use crate::kdb_dump::{
     TL_ALIAS_TARGET, TL_DB_ARGS, TL_KADM_DATA, TL_KERBER_HIST, TL_KERBER_POLICY,
-    TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC,
+    TL_LAST_ADMIN_UNLOCK, TL_LAST_PWD_CHANGE, TL_MOD_PRINC, TL_STRING_ATTRS,
 };
+use crate::lockout::{Lockout, LockoutUpdate};
 use crate::osa::{INITIAL_HIST_KVNO, KADM5_POLICY, OsaKeyData, OsaPrincEnt};
 
 fn qualify_s4u_from(from: &str, local_realm: &str) -> String {
@@ -236,14 +237,6 @@ impl Principal {
     }
 }
 
-/// Process-local AS fail overlay (count + timestamps). Dump rows stay stale.
-#[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct AsFailState {
-    pub(crate) count: u32,
-    pub(crate) last_failed: u32,
-    pub(crate) last_success: u32,
-}
-
 /// The `kadm5_principal_ent_rec` fields `kadm5_create_principal_3` and
 /// `impose_restrictions` read, with the request `mask`.
 /// MIT `kadm5_create_principal_3` (`svr_principal.c:376-420`): a field is applied only when
@@ -424,23 +417,32 @@ fn canonical_mod_actor(actor: &str, realm: &str) -> String {
     }
 }
 
+/// Stamp a change of `p` by `actor` now: the password-change time when `pwd_change`, then the
+/// modifier record, each replacing its record where it is (a new one goes first), so a change
+/// that leaves their bytes as they were leaves the tagged data as it was.
+/// MIT `krb5_dbe_update_last_pwd_change` (`lib/kdb/kdb5.c:2055-2067`): the time is updated in the entry's tagged data.
+/// MIT `krb5_dbe_update_mod_princ_data` (`lib/kdb/kdb5.c:1596-1632`): the modification time and modifier are updated in the entry's tagged data.
 pub(super) fn stamp_admin_tl(p: &mut Principal, pwd_change: bool, actor: &str) {
     let now = unix_now_u32();
-    p.tl_data
-        .retain(|t| t.ty != TL_MOD_PRINC && !(pwd_change && t.ty == TL_LAST_PWD_CHANGE));
+    if pwd_change {
+        super::update_tl_data(
+            &mut p.tl_data,
+            TlData {
+                ty: TL_LAST_PWD_CHANGE,
+                contents: now.to_le_bytes().to_vec(),
+            },
+        );
+    }
     let mut modp = now.to_le_bytes().to_vec();
     modp.extend_from_slice(canonical_mod_actor(actor, &p.realm).as_bytes());
     modp.push(0);
-    p.tl_data.push(TlData {
-        ty: TL_MOD_PRINC,
-        contents: modp,
-    });
-    if pwd_change {
-        p.tl_data.push(TlData {
-            ty: TL_LAST_PWD_CHANGE,
-            contents: now.to_le_bytes().to_vec(),
-        });
-    }
+    super::update_tl_data(
+        &mut p.tl_data,
+        TlData {
+            ty: TL_MOD_PRINC,
+            contents: modp,
+        },
+    );
 }
 
 /// kadm5 modify-principal fields.
@@ -474,9 +476,25 @@ pub struct AdminFields {
 
 impl PrincipalStore {
     pub(crate) fn remove_id_inner(&mut self, id: &str) -> Result<(), Error> {
+        let (name, realm) = {
+            let principal = self.map.get(id).ok_or(Error::NotFound)?;
+            (principal.name.clone(), principal.realm.clone())
+        };
+        super::kadm5_hook::hook_remove(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            &name,
+            &realm,
+        )?;
         self.map.remove(id).ok_or(Error::NotFound)?;
         self.note_ulog(id.to_owned(), true, None);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_remove(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            &name,
+            &realm,
+        )
     }
 
     /// Permit `from` to S4U2Proxy to `name` (RBCD). A bare name is the local realm.
@@ -510,7 +528,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Crypto`] when saving the
+    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn create_password(
         &mut self,
@@ -528,7 +546,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Crypto`] when saving the
+    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn create_password_etypes(
         &mut self,
@@ -548,7 +566,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Crypto`] when saving the
+    /// [`Error::PasswordPolicy`] when the password is empty; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn create_password_etypes_in(
         &mut self,
@@ -574,7 +592,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AlreadyExists`] when `name@princ_realm` already resolves to an entry;
-    /// [`Error::PasswordPolicy`] when `password` is empty; [`Error::Crypto`] when saving the
+    /// [`Error::PasswordPolicy`] when `password` is empty; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn insert_new_password(
         &mut self,
@@ -603,7 +621,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AlreadyExists`] when `name@princ_realm` already resolves to an entry;
-    /// [`Error::Rng`] when the CSPRNG fails; [`Error::Crypto`] when saving the store to
+    /// [`Error::Rng`] when the CSPRNG fails; [`Error::Db`] when saving the store to
     /// `persist_paths` fails.
     pub fn insert_new_randkey(
         &mut self,
@@ -623,7 +641,7 @@ impl PrincipalStore {
     /// on) adds `REQUIRES_PRE_AUTH` to *password-keyed* creates only — its
     /// scope is those creates, so random-key (service) creates are MIT's 0
     /// and U2U to a fresh `-randkey` service keeps working
-    /// (`docs/security.md`). A written stanza overrides the knob for both.
+    /// (`docs/mit-deviations.md`). A written stanza overrides the knob for both.
     #[must_use]
     pub fn default_create_attributes(&self, password_keyed: bool) -> u32 {
         self.policy.default_principal_flags.unwrap_or(
@@ -659,7 +677,8 @@ impl PrincipalStore {
     /// [`Error::PasswordPolicy`] when `password` is empty or fails the `ent` policy's checks;
     /// [`Error::BadKeysalts`] when `etypes` names an enctype outside that policy's
     /// `allowed_keysalts`; [`Error::Rng`] when `password` is `None` and the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails;
+    /// the error from a `kadm5_hook` precommit module.
     pub fn create_principal_3_in(
         &mut self,
         name: &PrincipalName,
@@ -681,7 +700,15 @@ impl PrincipalStore {
             .and_then(|n| self.policies.get(n))
             .cloned();
         if let Some(pw) = password {
-            self.check_new_password(name, policy_name.as_deref(), pw)?;
+            self.check_new_password_in(
+                name,
+                princ_realm,
+                policy_name.as_deref(),
+                pw,
+                &mut |s, t| {
+                    krb5_log::klog::syslog(s, t);
+                },
+            )?;
         }
         let now = unix_now();
         let use_etypes = apply_keysalt_policy(
@@ -750,8 +777,26 @@ impl PrincipalStore {
             refresh_kadm_tl(&mut p);
         }
         stamp_admin_tl(&mut p, true, actor);
+        super::kadm5_hook::hook_create(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            name,
+            princ_realm,
+            ent.mask,
+            password,
+            &use_etypes,
+        )?;
         self.put_principal(p);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_create(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            name,
+            princ_realm,
+            ent.mask,
+            password,
+            &use_etypes,
+        )
     }
 
     /// ACL-gated create of a random-key host (or other) principal.
@@ -760,7 +805,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry; [`Error::Rng`] when
-    /// the CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// the CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_host(
         &mut self,
         acl: &Acl,
@@ -777,7 +822,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `name`;
     /// [`Error::AlreadyExists`] when `name` already resolves to an entry; [`Error::Rng`] when
-    /// the CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// the CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_host_etypes(
         &mut self,
         acl: &Acl,
@@ -792,20 +837,27 @@ impl PrincipalStore {
         }
         let realm = self.realm.clone();
         self.create_principal_3_in(name, &realm, None, etypes, &AdminEnt::default(), actor)?;
-        let self_name = name.components_joined();
-        if self_name == "kadmin/changepw"
-            && let Some(p) = self.map.get_mut(&id)
-        {
-            p.attributes |= KDB_PWCHANGE_SERVICE;
-        }
+        self.mark_pwchange_service(name, &id)?;
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
         }
-        if let Some(p) = self.map.get(&id) {
-            self.note_ulog(id.clone(), false, Some(p.clone()));
-        }
         self.save_if_configured()?;
         Ok(())
+    }
+
+    /// A created `kadmin/changepw` gets `PWCHANGE_SERVICE` by its name (`docs/mit-deviations.md`,
+    /// "Create-time name special-casing"), a change the update log records.
+    fn mark_pwchange_service(&mut self, name: &PrincipalName, id: &str) -> Result<(), Error> {
+        if name.components_joined() != "kadmin/changepw" {
+            return Ok(());
+        }
+        let Some(p) = self.map.get_mut(id) else {
+            return Ok(());
+        };
+        p.attributes |= KDB_PWCHANGE_SERVICE;
+        let snap = p.clone();
+        self.note_ulog(id.to_owned(), false, Some(snap));
+        self.save_if_configured()
     }
 
     /// ACL-gated create with an optional bound policy so
@@ -820,7 +872,7 @@ impl PrincipalStore {
     /// [`Error::PasswordPolicy`] when `password` is empty or fails `policy`'s checks;
     /// [`Error::BadKeysalts`] when `etypes` names an enctype outside `policy`'s
     /// `allowed_keysalts`; [`Error::Rng`] when `password` is `None` and the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_etypes_pol(
         &mut self,
         acl: &Acl,
@@ -840,12 +892,7 @@ impl PrincipalStore {
         }
         self.create_principal_3_in(name, &realm, password, etypes, &ent, actor)?;
         if password.is_none() {
-            let self_name = name.components_joined();
-            if self_name == "kadmin/changepw"
-                && let Some(p) = self.map.get_mut(&id)
-            {
-                p.attributes |= KDB_PWCHANGE_SERVICE;
-            }
+            self.mark_pwchange_service(name, &id)?;
         }
         if let Some(rs) = acl.restrictions(actor, Some(&id)) {
             self.apply_acl_restrictions(&id, rs)?;
@@ -857,7 +904,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_status(
         &mut self,
@@ -883,7 +930,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn admin_unlock(&mut self, name: &PrincipalName) -> Result<(), Error> {
         let realm = self.realm.clone();
@@ -901,7 +948,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn admin_unlock_in(
         &mut self,
@@ -931,7 +978,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn clear_fail_auth_count_in(
         &mut self,
@@ -949,12 +996,39 @@ impl PrincipalStore {
         self.save_if_configured()
     }
 
+    /// Give every key of `name@princ_realm` the version number `kvno` (`kadm5_modify_principal`
+    /// `KADM5_KVNO`); the password history is not touched.
+    /// MIT `kadm5_modify_principal` (`lib/kadm5/srv/svr_principal.c:645-648`): with KADM5_KVNO
+    /// each key_data's kvno becomes the entry's.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
+    /// store to `persist_paths` fails.
+    pub fn set_kvno_in(
+        &mut self,
+        name: &PrincipalName,
+        princ_realm: &str,
+        kvno: u32,
+    ) -> Result<(), Error> {
+        let id = self.canonical_id(name, princ_realm)?;
+        {
+            let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
+            for k in &mut p.keys {
+                k.kvno = kvno;
+            }
+        }
+        let snap = self.map.get(&id).cloned();
+        self.note_ulog(id, false, snap);
+        self.save_if_configured()
+    }
+
     /// Merge client-supplied `tl_data` (`kadm5_modify_principal` `KADM5_TL_DATA`).
     ///
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::InvalidArgument`] when the
-    /// merged `tl_data` carries a `KRB5_TL_DB_ARGS` entry; [`Error::Crypto`] when saving the
+    /// merged `tl_data` carries a `KRB5_TL_DB_ARGS` entry; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn merge_tl_data_in(
         &mut self,
@@ -980,7 +1054,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `name`;
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn delete(&mut self, acl: &Acl, actor: &str, name: &PrincipalName) -> Result<(), Error> {
         let realm = self.realm.clone();
@@ -992,7 +1066,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `name`;
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn delete_in(
         &mut self,
@@ -1010,7 +1084,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn remove_in(&mut self, name: &PrincipalName, princ_realm: &str) -> Result<(), Error> {
         self.remove_id_inner(&crate::kdb::lookup_principal_id(name, princ_realm))
@@ -1027,7 +1101,7 @@ impl PrincipalStore {
     /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `old` and an
     /// unrestricted add on `new`; [`Error::AlreadyExists`] when `new` already resolves to an
     /// entry; [`Error::NotFound`] when `old` is missing; [`Error::AliasUnsupported`] when `old`
-    /// is an alias; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// is an alias; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn rename(
         &mut self,
         acl: &Acl,
@@ -1046,7 +1120,7 @@ impl PrincipalStore {
     /// [`Error::AclDenied`] when the ACL does not grant `actor` delete on `old` and an
     /// unrestricted add on `new`; [`Error::AlreadyExists`] when `new` already resolves to an
     /// entry; [`Error::NotFound`] when `old` is missing; [`Error::AliasUnsupported`] when `old`
-    /// is an alias; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// is an alias; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub(crate) fn rename_in(
         &mut self,
         acl: &Acl,
@@ -1070,7 +1144,8 @@ impl PrincipalStore {
     ///
     /// [`Error::AlreadyExists`] when `new` already resolves to an entry; [`Error::NotFound`]
     /// when `old` is missing; [`Error::AliasUnsupported`] when `old` is an alias;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails;
+    /// the error from a `kadm5_hook` precommit module.
     pub fn rename_unchecked(
         &mut self,
         old: &PrincipalName,
@@ -1093,14 +1168,33 @@ impl PrincipalStore {
         {
             return Err(Error::AliasUnsupported);
         }
+        super::kadm5_hook::hook_rename(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            old,
+            old_realm,
+            new,
+            new_realm,
+        )?;
         let mut p = self.map.remove(&old_id).ok_or(Error::NotFound)?;
         p.name = new.clone();
         new_realm.clone_into(&mut p.realm);
-        stamp_admin_tl(&mut p, false, actor);
+        // MIT `krb5_db_def_rename_principal` (`lib/kdb/kdb_default.c:537-545`): the entry is put under the new name, then the old one deleted.
+        self.note_ulog(p.id(), false, Some(p.clone()));
         self.note_ulog(old_id, true, None);
+        // MIT `kadm5_rename_principal` (`lib/kadm5/srv/svr_principal.c:730-737`): then the entry is put again with its modification data.
+        stamp_admin_tl(&mut p, false, actor);
         self.note_ulog(p.id(), false, Some(p.clone()));
         self.map.insert(p.id(), p);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_rename(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            old,
+            old_realm,
+            new,
+            new_realm,
+        )
     }
 
     pub(super) fn insert_password(
@@ -1116,7 +1210,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn apply_admin_fields(
         &mut self,
@@ -1154,8 +1248,8 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
-    /// store to `persist_paths` fails.
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
+    /// store to `persist_paths` fails; the error from a `kadm5_hook` precommit module.
     pub fn apply_admin_fields_in(
         &mut self,
         name: &PrincipalName,
@@ -1173,6 +1267,34 @@ impl PrincipalStore {
             max_renewable_life,
         } = fields;
         let id = self.canonical_id(name, princ_realm)?;
+        let mut mask = 0u32;
+        if attributes.is_some() {
+            mask |= kadm5_mask::ATTRIBUTES;
+        }
+        if max_life.is_some() {
+            mask |= kadm5_mask::MAX_LIFE;
+        }
+        if expiration.is_some() {
+            mask |= kadm5_mask::PRINC_EXPIRE_TIME;
+        }
+        if pw_expire.is_some() {
+            mask |= kadm5_mask::PW_EXPIRATION;
+        }
+        if clear_policy {
+            mask |= kadm5_mask::POLICY_CLR;
+        } else if policy.is_some() {
+            mask |= kadm5_mask::POLICY;
+        }
+        if max_renewable_life.is_some() {
+            mask |= kadm5_mask::MAX_RLIFE;
+        }
+        super::kadm5_hook::hook_modify(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            name,
+            princ_realm,
+            mask,
+        )?;
         let apply_max = policy.is_some() && !clear_policy && pw_expire.is_none();
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
@@ -1208,14 +1330,21 @@ impl PrincipalStore {
         }
         let snap = self.map.get(&id).cloned();
         self.note_ulog(id, false, snap);
-        self.save_if_configured()
+        self.save_if_configured()?;
+        super::kadm5_hook::hook_modify(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            name,
+            princ_realm,
+            mask,
+        )
     }
 
     /// Impose kadm5.acl restrictions after create/modify (`auth.c` `impose_restrictions`).
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn impose_acl_restrictions(
         &mut self,
@@ -1230,7 +1359,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub(crate) fn impose_acl_restrictions_in(
         &mut self,
@@ -1276,7 +1405,9 @@ impl PrincipalStore {
             p.pw_policy.clone_from(&ent.policy);
             refresh_kadm_tl(p);
         }
-        Ok(())
+        let snap = p.clone();
+        self.note_ulog(id.to_owned(), false, Some(snap));
+        self.save_if_configured()
     }
 
     /// MIT `kadm5_get_strings`.
@@ -1308,7 +1439,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_string(
         &mut self,
@@ -1328,7 +1459,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn set_string_in(
         &mut self,
@@ -1344,63 +1475,87 @@ impl PrincipalStore {
         if let Some(v) = value {
             p.string_attrs.push((key.to_owned(), v.to_owned()));
         }
+        // MIT `krb5_dbe_set_string` (`lib/kdb/kdb5.c:2236-2240`): the strings are one record, kept even when the last is deleted.
+        super::update_tl_data(
+            &mut p.tl_data,
+            TlData {
+                ty: TL_STRING_ATTRS,
+                contents: super::encode_string_attrs(&p.string_attrs),
+            },
+        );
         stamp_admin_tl(p, false, actor);
         let snap = p.clone();
         self.note_ulog(id, false, Some(snap));
         self.save_if_configured()
     }
 
-    /// Overlay AS-fail count for lockout (absolute; success stores 0).
+    /// `p`'s lockout attributes as they are now: what this process records for it in memory,
+    /// else its record in the database's `principal.lockout` (read holding the database's lock
+    /// shared), else what the store read.
+    /// MIT `klmdb_get_principal` (`plugins/kdb/lmdb/kdb_lmdb.c:713-744`): an entry fetched takes its lockout record.
     #[must_use]
-    pub fn fail_auth_of(&self, p: &Principal) -> u32 {
-        self.as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&p.id())
-            .map_or(p.fail_auth_count, |s| s.count)
+    pub fn lockout_of(&self, p: &Principal) -> Lockout {
+        self.lockout.lookup(self.db_path(), self.dblock.as_ref(), p)
     }
 
-    /// Overlay last-failed unix seconds (dump field if the overlay is empty).
+    /// `p`'s lockout attributes as this store holds them: those it recorded in memory, else
+    /// those it read with the database. A dump of the store writes these.
     #[must_use]
-    pub fn last_failed_of(&self, p: &Principal) -> u32 {
-        self.as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&p.id())
-            .map_or(p.last_failed, |s| s.last_failed)
+    pub(crate) fn lockout_kept(&self, p: &Principal) -> Lockout {
+        self.lockout
+            .overlay_get(&p.id())
+            .unwrap_or_else(|| Lockout::of(p))
     }
 
-    /// Overlay last-success unix seconds.
-    #[must_use]
-    pub fn last_success_of(&self, p: &Principal) -> u32 {
-        self.as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&p.id())
-            .map_or(p.last_success, |s| s.last_success)
-    }
-
-    /// Zero the overlay fail count without stamping last_success (interval reset).
-    pub(crate) fn clear_as_fail_count(&self, name: &PrincipalName) {
-        let id = self.lockout_id(name);
-        let fallback = self
-            .map
-            .get(&id)
-            .map_or(AsFailState::default(), |p| AsFailState {
-                count: 0,
-                last_failed: p.last_failed,
-                last_success: p.last_success,
-            });
-        let mut g = self
-            .as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        match g.get_mut(&id) {
-            Some(s) => s.count = 0,
-            None => {
-                g.insert(id, fallback);
+    /// Give each principal its record from `records`, a read of `principal.lockout`, when it
+    /// has one; no change is logged.
+    pub(crate) fn merge_lockout_records(
+        &mut self,
+        records: &std::collections::HashMap<String, Lockout>,
+    ) {
+        for p in self.map.values_mut() {
+            if let Some(l) = records.get(&p.id()) {
+                l.set_on(p);
             }
         }
+    }
+
+    /// `p`'s failed authentication count now ([`Self::lockout_of`]).
+    #[must_use]
+    pub fn fail_auth_of(&self, p: &Principal) -> u32 {
+        self.lockout_of(p).fail_auth_count
+    }
+
+    /// `p`'s last failed authentication now, Unix seconds ([`Self::lockout_of`]).
+    #[must_use]
+    pub fn last_failed_of(&self, p: &Principal) -> u32 {
+        self.lockout_of(p).last_failed
+    }
+
+    /// `p`'s last successful authentication now, Unix seconds ([`Self::lockout_of`]).
+    #[must_use]
+    pub fn last_success_of(&self, p: &Principal) -> u32 {
+        self.lockout_of(p).last_success
+    }
+
+    /// Give `p` its lockout attributes as they are now.
+    pub fn merge_lockout(&self, p: &mut Principal) {
+        self.lockout_of(p).set_on(p);
+    }
+
+    /// Record one AS outcome's lockout update for `p` at `stamp`: in its record in the
+    /// database's `principal.lockout`, in place and holding the database's lock exclusively,
+    /// starting from the record as it is then; without a side file this process may write, in
+    /// memory. The database, its update log and `p`'s flags are never touched.
+    /// MIT `klmdb_update_lockout` (`plugins/kdb/lmdb/kdb_lmdb.c:1054-1121`): the lockout record alone is written, from its stored value.
+    pub fn update_lockout(&self, p: &Principal, stamp: u32, update: LockoutUpdate) {
+        self.lockout
+            .update(self.db_path(), self.dblock.as_ref(), p, stamp, update);
+    }
+
+    /// Zero the failed authentication count this process keeps for `name`, when it keeps one.
+    pub(crate) fn clear_as_fail_count(&self, name: &PrincipalName) {
+        self.lockout.overlay_zero(&self.lockout_id(name));
     }
 
     fn lockout_id(&self, name: &PrincipalName) -> String {
@@ -1408,53 +1563,24 @@ impl PrincipalStore {
         self.resolve_id(&id).unwrap_or(id)
     }
 
-    /// Record AS password outcome (interior-mutable; dump writes the overlay).
+    /// Audit one AS outcome of `name` now as the KDC does: a success (`ok`) or a failed
+    /// preauthentication ([`crate::lockout::lockout_audit`]). A test hook: the KDC audits from
+    /// its AS exchange.
+    #[cfg(feature = "test-hooks")]
     pub fn record_as_outcome(&self, name: &PrincipalName, ok: bool) {
-        let id = self.lockout_id(name);
-        let fallback = self
-            .map
-            .get(&id)
-            .map_or(AsFailState::default(), |p| AsFailState {
-                count: p.fail_auth_count,
-                last_failed: p.last_failed,
-                last_success: p.last_success,
-            });
-        let now = unix_now_u32();
-        let mut g = self
-            .as_fail
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let cur = g.get(&id).copied().unwrap_or(fallback);
-        if ok {
-            let requires_preauth = self
-                .map
-                .get(&id)
-                .is_some_and(|p| p.attributes & KDB_REQUIRES_PRE_AUTH != 0);
-            g.insert(
-                id,
-                AsFailState {
-                    count: if requires_preauth { 0 } else { cur.count },
-                    last_failed: cur.last_failed,
-                    last_success: if requires_preauth {
-                        now
-                    } else {
-                        cur.last_success
-                    },
-                },
-            );
+        let Some(mut p) = self.map.get(&self.lockout_id(name)).cloned() else {
+            return;
+        };
+        self.merge_lockout(&mut p);
+        let status = if ok {
+            0
         } else {
-            g.insert(
-                id,
-                AsFailState {
-                    count: cur.count.saturating_add(1),
-                    last_failed: now,
-                    last_success: cur.last_success,
-                },
-            );
-        }
+            krb5_types::err::PREAUTH_FAILED
+        };
+        crate::lockout::lockout_audit(self, &p, unix_now_u32(), status);
     }
 
-    pub(super) fn put_principal(&mut self, mut p: Principal) {
+    pub(crate) fn put_principal(&mut self, mut p: Principal) {
         if strip_db_args(&mut p.tl_data).is_err() {
             return;
         }

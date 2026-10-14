@@ -14,11 +14,29 @@ use crate::store::{
     KDB_REQUIRES_PWCHANGE, KDB_SUPPORT_DESMD5,
 };
 
+/// A kadm5.acl line that did not load: the number of its first physical line, its bytes, and the
+/// message MIT's `parse_entry` logs for it (none for a line with no client or no operation list).
 #[derive(Debug, Clone)]
 pub(crate) struct AclSyntaxError {
     pub(crate) lineno: usize,
-    pub(crate) line: String,
-    pub(crate) message: String,
+    pub(crate) line: Vec<u8>,
+    pub(crate) message: Option<String>,
+}
+
+impl AclSyntaxError {
+    /// The line's syntax error as MIT words it, its first ten bytes shown (`fname: ` first when
+    /// there is a file name).
+    /// MIT `load_acl_file` (`auth_acl.c:417-423`): `%s: syntax error at line %d <%.10s...>`, logged
+    /// and set as the context's message.
+    pub(crate) fn located(&self, fname: &str) -> String {
+        let shown = String::from_utf8_lossy(&self.line[..self.line.len().min(10)]);
+        let at = format!("syntax error at line {} <{shown}...>", self.lineno);
+        if fname.is_empty() {
+            at
+        } else {
+            format!("{fname}: {at}")
+        }
+    }
 }
 
 /// Mutating admin operations gated by the ACL.
@@ -154,27 +172,54 @@ impl Restrictions {
     }
 }
 
-/// MIT `kadm5_get_config_params` (`alt_prof.c:596-632`): `default_principal_flags`
-/// tokens split on `,`, space or tab, each fed to
-/// `krb5_flagspec_to_mask(sp, &flags, &flags)` — a `+flag` sets, a `-flag`
-/// clears — stopping at the first token the table does not know (the flags
-/// parsed so far are kept, as MIT keeps `params.flags`). Starts from
-/// `KRB5_KDB_DEF_FLAGS` (0) like MIT: when the stanza is written it *is*
-/// `params.flags`; the Rust `requires_preauth` knob only stands in for a
-/// password-keyed create when the stanza is absent
+/// The flags `default_principal_flags` sets ([`principal_flags_spec`]'s, the words read before
+/// one that does not convert kept, as MIT keeps `params.flags`). Starts from
+/// `KRB5_KDB_DEF_FLAGS` (0) like MIT: when the stanza is written it *is* `params.flags`; the Rust
+/// `requires_preauth` knob only stands in for a password-keyed create when the stanza is absent
 /// (`PrincipalStore::default_create_attributes`).
 #[must_use]
 pub fn default_principal_flags(spec: &str) -> u32 {
+    principal_flags_spec(spec).0
+}
+
+/// `default_principal_flags` as MIT's loop reads it, and whether every word converted. A word
+/// ends at the first `,` in what is left, else the first space, else the first tab; its trailing
+/// blanks are cut (its first byte never is), the next word's leading blanks skipped, so a value
+/// ending in a separator ends in an empty word, which converts to nothing. Each word goes to
+/// `krb5_flagspec_to_mask(sp, &flags, &flags)`: a `+flag` sets, a `-flag` clears.
+/// MIT `kadm5_get_config_params` (`alt_prof.c:603-627`): the first word that does not convert
+/// stops the loop, and the parameter is left unset.
+#[must_use]
+pub fn principal_flags_spec(spec: &str) -> (u32, bool) {
+    let c_space = |c: char| matches!(c, ' ' | '\t' | '\n' | '\x0b' | '\x0c' | '\r');
     let mut flags = 0u32;
-    for token in spec.split([',', ' ', '\t']).filter(|t| !t.is_empty()) {
+    let mut rest = Some(spec);
+    while let Some(sp) = rest {
+        let cut = sp
+            .find(',')
+            .or_else(|| sp.find(' '))
+            .or_else(|| sp.find('\t'));
+        let word = if let Some(i) = cut {
+            let w = &sp[..i];
+            let keep = w
+                .char_indices()
+                .rev()
+                .find(|&(j, c)| j == 0 || !c_space(c))
+                .map_or(0, |(j, c)| j + c.len_utf8());
+            rest = Some(sp[i + 1..].trim_start_matches(c_space));
+            &w[..keep]
+        } else {
+            rest = None;
+            sp
+        };
         let mut toset = 0u32;
         let mut toclear = !0u32;
-        if !flagspec_to_mask(token, &mut toset, &mut toclear) {
-            break;
+        if !flagspec_to_mask(word, &mut toset, &mut toclear) {
+            return (flags, false);
         }
         flags = (flags | toset) & toclear;
     }
-    flags
+    (flags, true)
 }
 
 /// One ACL line: a principal pattern and permission flags.
@@ -228,36 +273,54 @@ impl Acl {
         Self::new()
     }
 
-    /// Parse kadm5.acl text (`auth_acl.c` `load_acl_file`).
+    /// Parse kadm5.acl text (`auth_acl.c` `load_acl_file`), as [`Self::parse_bytes_with_realm`]
+    /// does with no default realm.
     ///
     /// # Errors
     ///
     /// [`Error::AclParse`] when a line has no client or no operation list, an unknown operation
     /// letter, a client or target that is not a principal name, or restrictions that do not parse.
     pub fn parse(text: &str) -> Result<Self, Error> {
-        Self::parse_with_realm(text, "")
+        Self::parse_bytes_with_realm(text.as_bytes(), "")
     }
 
     /// Like [`Self::parse`] with MIT `krb5_parse_name` default realm.
     ///
     /// # Errors
     ///
-    /// [`Error::AclParse`] when a line has no client or no operation list, an unknown operation
-    /// letter, a client or target that is not a principal name, or restrictions that do not parse.
+    /// As [`Self::parse`].
     pub fn parse_with_realm(text: &str, default_realm: &str) -> Result<Self, Error> {
-        Self::parse_located(text, default_realm).map_err(|e| Error::AclParse(e.message))
+        Self::parse_bytes_with_realm(text.as_bytes(), default_realm)
     }
 
-    pub(crate) fn parse_located(text: &str, default_realm: &str) -> Result<Self, AclSyntaxError> {
+    /// Parse a kadm5.acl file's bytes as MIT reads them: they need not be UTF-8 (a field's bytes
+    /// that are not UTF-8 read as U+FFFD), and its lines are MIT `get_line`'s.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::AclParse`] with the message MIT logs for the first line that does not load, else
+    /// that line's syntax error, as [`Self::parse`] lists.
+    pub fn parse_bytes_with_realm(bytes: &[u8], default_realm: &str) -> Result<Self, Error> {
+        Self::parse_located(bytes, default_realm, "").map_err(|e| {
+            let located = e.located("");
+            Error::AclParse(e.message.unwrap_or(located))
+        })
+    }
+
+    /// The entries of `bytes`, else the first line that does not load; `fname` names the file in
+    /// MIT's restriction message.
+    /// MIT `load_acl_file` (`auth_acl.c:413-428`): each line `get_line` returns is parsed in turn,
+    /// and the first that does not parse ends the load.
+    pub(crate) fn parse_located(
+        bytes: &[u8],
+        default_realm: &str,
+        fname: &str,
+    ) -> Result<Self, AclSyntaxError> {
         let mut entries = Vec::new();
-        for (lineno, line) in logical_lines_numbered(text) {
-            match parse_line(&line, default_realm) {
+        for (lineno, line) in acl_lines(bytes) {
+            match parse_line(&String::from_utf8_lossy(&line), default_realm, fname) {
                 Ok(entry) => entries.push(entry),
-                Err(e) => {
-                    let message = match e {
-                        Error::AclParse(s) => s,
-                        other => other.to_string(),
-                    };
+                Err(message) => {
                     return Err(AclSyntaxError {
                         lineno,
                         line,
@@ -440,59 +503,66 @@ struct WildState {
     backref: Vec<String>,
 }
 
-/// MIT `get_line` (`auth_acl.c:102-153`): `\` continuation; `#` only at column 0.
-fn logical_lines_numbered(text: &str) -> Vec<(usize, String)> {
-    if text.is_empty() {
-        return Vec::new();
-    }
+/// The lines MIT reads from a kadm5.acl file, each with the number of its first physical line:
+/// `fgets` reads at most 127 bytes at a time, and a NUL ends what one read returned (`strlen`),
+/// so the rest of that read, its newline too, is lost; a line whose newline follows a `\`
+/// continues on the next (a CRLF line's `\r` is not a `\`); an empty line and one whose first
+/// byte is `#` are skipped, so a `#` line ending in `\` swallows the next; a last line with no
+/// newline is kept as it is, its `\` too.
+/// MIT `get_line` (`auth_acl.c:102-153`): a line ending in `\` continues; an empty or comment line
+/// starts over; at the end, an unterminated line that is not a comment is returned.
+fn acl_lines(bytes: &[u8]) -> Vec<(usize, Vec<u8>)> {
+    // `fgets(p, 128, fp)`: at most 127 bytes, through the first newline.
+    const READ: usize = 127;
     let mut out = Vec::new();
-    let mut buf = String::new();
-    let mut continuing = false;
-    let mut start = 0usize;
-    let mut phys = 0usize;
-    for raw in text.split_inclusive('\n') {
-        phys += 1;
-        // MIT `get_line` (`auth_acl.c:136-140`): strips only `\n`, so CRLF `\\\r`
-        // is not a continuation marker.
-        let chunk = raw.strip_suffix('\n').unwrap_or(raw);
-        if continuing {
-            if let Some(stripped) = chunk.strip_suffix('\\') {
-                buf.push_str(stripped);
-                continue;
+    let mut rest = bytes;
+    let mut lineno = 1;
+    let mut incr = 0;
+    let mut buf: Vec<u8> = Vec::new();
+    loop {
+        if rest.is_empty() {
+            if buf.first().is_some_and(|&b| b != b'#') {
+                out.push((lineno, buf));
             }
-            buf.push_str(chunk);
-            continuing = false;
-            if !buf.is_empty() && !buf.starts_with('#') {
-                out.push((start, std::mem::take(&mut buf)));
-            } else {
-                buf.clear();
-            }
+            return out;
+        }
+        let window = &rest[..rest.len().min(READ)];
+        let n = window
+            .iter()
+            .position(|&b| b == b'\n')
+            .map_or(window.len(), |i| i + 1);
+        let read = &rest[..n];
+        rest = &rest[n..];
+        buf.extend_from_slice(read.split(|&b| b == 0).next().unwrap_or_default());
+        if buf.last() != Some(&b'\n') {
             continue;
         }
-        if let Some(stripped) = chunk.strip_suffix('\\') {
-            buf = stripped.to_string();
-            continuing = true;
-            start = phys;
-            continue;
+        incr += 1;
+        buf.pop();
+        if buf.last() == Some(&b'\\') {
+            buf.pop();
+        } else if buf.first().is_none_or(|&b| b == b'#') {
+            lineno += incr;
+            incr = 0;
+            buf.clear();
+        } else {
+            out.push((lineno, std::mem::take(&mut buf)));
+            lineno += incr;
+            incr = 0;
         }
-        if chunk.is_empty() || chunk.starts_with('#') {
-            continue;
-        }
-        out.push((phys, chunk.to_owned()));
     }
-    if continuing && !buf.is_empty() && !buf.starts_with('#') {
-        out.push((start, buf));
-    }
-    out
 }
 
 /// MIT `parse_line` (`auth_acl.c:360-364`): the target and the restrictions may be
 /// absent, and the client and the operation list may not.
-/// A line whose client or operation list is empty is a syntax error and adds no entry.
-fn parse_line(line: &str, default_realm: &str) -> Result<AclEntry, Error> {
+/// A line whose client or operation list is empty is a syntax error, with no message of its own,
+/// and adds no entry. Any other line that does not parse gives the message MIT logs for it.
+/// MIT `parse_entry` (`auth_acl.c:276-312`): an unknown operation letter, a client or a target
+/// that is no principal name, and restrictions that do not parse are each logged.
+fn parse_line(line: &str, default_realm: &str, fname: &str) -> Result<AclEntry, Option<String>> {
     let (client_s, ops, target_s, rs_s) = split_fields(line);
     if client_s.is_empty() || ops.is_empty() {
-        return Err(Error::AclParse(format!("syntax error: {line}")));
+        return Err(None);
     }
     let mut add = false;
     let mut delete = false;
@@ -527,24 +597,36 @@ fn parse_line(line: &str, default_realm: &str) -> Result<AclEntry, Error> {
                 propagate = grant;
             }
             _ => {
-                return Err(Error::AclParse(format!(
-                    "Unrecognized ACL operation '{ch}' in {line}"
-                )));
+                return Err(Some(format!("Unrecognized ACL operation '{ch}' in {line}")));
             }
         }
     }
     let client = if client_s == "*" {
         None
     } else {
-        Some(parse_princ_pat_in(&client_s, default_realm)?)
+        Some(
+            parse_princ_pat_in(&client_s, default_realm)
+                .map_err(|_| Some(format!("Cannot parse client principal '{client_s}'")))?,
+        )
     };
     let target = match target_s.as_deref() {
         None | Some("*") => None,
-        Some(t) => Some(parse_princ_pat_in(t, default_realm)?),
+        Some(t) => Some(
+            parse_princ_pat_in(t, default_realm)
+                .map_err(|_| Some(format!("Cannot parse target principal '{t}'")))?,
+        ),
     };
+    // MIT `parse_restrictions` (`auth_acl.c:239-240`): `%s: invalid restrictions: %s`, the file
+    // name first.
     let restrictions = match rs_s.as_deref() {
         None => None,
-        Some(rs) => Some(parse_restrictions(rs)?),
+        Some(rs) => Some(parse_restrictions(rs).map_err(|_| {
+            Some(if fname.is_empty() {
+                format!("invalid restrictions: {rs}")
+            } else {
+                format!("{fname}: invalid restrictions: {rs}")
+            })
+        })?),
     };
     Ok(AclEntry {
         principal: client_s,
@@ -883,6 +965,22 @@ mod tests {
         );
         assert!(Acl::parse("   # not a comment\n").is_err());
         assert!(Acl::parse("   \n").is_err());
+    }
+
+    /// MIT `get_line` reads `fgets` lines: a NUL ends what one read returned, so the rest of that
+    /// line is lost and the next line joins it; a last line without a newline keeps its `\`; a line
+    /// longer than one 127-byte read is read whole.
+    #[test]
+    fn acl_lines_are_mit_s_get_line_lines() {
+        let nul = Acl::parse("admin@KERBER.TEST a\0 junk\n").unwrap();
+        assert!(
+            nul.check("admin@KERBER.TEST", AdminOp::Create, None)
+                .is_ok()
+        );
+        assert!(Acl::parse("admin@KERBER.TEST a\0 junk\nb@KERBER.TEST i\n").is_err());
+        assert!(Acl::parse("admin@KERBER.TEST a\\").is_err());
+        let long = format!("{}@KERBER.TEST i\nadmin@KERBER.TEST a\n", "p".repeat(200));
+        assert_eq!(Acl::parse(&long).unwrap().entries.len(), 2);
     }
 
     #[test]

@@ -34,6 +34,8 @@ docker exec "$NAME" sh -c 'cat > /tmp/rust-kdc.conf <<EOF
     KERBER.TEST = {
         pkinit_indicator = pkinit
     }
+[logging]
+    json = STDOUT
 EOF'
 docker exec -d \
     -e KRB5_TEST_USER_PASSWORD=userpassword \

@@ -67,7 +67,6 @@
 
 use chrono::{FixedOffset, NaiveDateTime, TimeZone, Timelike, Utc};
 use rasn::prelude::*;
-use zeroize::Zeroize;
 
 pub use rasn::types::{BitString, GeneralizedTime, OctetString};
 
@@ -76,14 +75,17 @@ mod constants;
 pub mod deltat;
 pub mod extra;
 pub mod fast;
+pub mod k5json;
 mod name;
 mod name_error;
+pub mod otp;
 pub mod pac;
 pub mod pkinit;
 pub mod s4u;
 pub mod spake;
 pub mod timestamp;
 pub mod transited;
+mod wipe;
 
 pub use constants::{ap_bit, err, flag_bit, ku, pa};
 pub use extra::{
@@ -92,7 +94,8 @@ pub use extra::{
 };
 pub use name::{
     ParsedName, infer_name_type, parse_name, parse_name_ex, principal_from_unparsed,
-    principal_from_unparsed_ex, quote_component, unparse_components, unparse_name,
+    principal_from_unparsed_ex, quote_component, unparse_components, unparse_components_no_realm,
+    unparse_name,
 };
 pub use name_error::{NameError, TimeError};
 
@@ -208,10 +211,195 @@ impl Microseconds {
     }
 }
 
+/// An INTEGER MIT reads as an immediate with no error, decoded as 0 and encoded as held.
+/// MIT `decode_atype` (`lib/krb5/asn.1/asn1_encode.c:1223-1232`): an immediate whose `err` is 0 takes any value of up to eight octets and keeps none.
+pub(crate) struct WireImmediate(pub(crate) i32);
+
+impl AsnType for WireImmediate {
+    const TAG: Tag = Tag::INTEGER;
+}
+
+impl Decode for WireImmediate {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        decoder
+            .decode_integer::<i64>(tag, constraints)
+            .map(|_| Self(0))
+    }
+}
+
+impl Encode for WireImmediate {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        self.0
+            .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
+}
+
+/// An `i32` field MIT keeps unsigned, a KDC-REQ's and a KDC-REP's msg-type and a KRB-ERROR's
+/// error-code: an INTEGER from 0 to `0xFFFFFFFF` decodes, kept as the same 32 bits, and anything
+/// else is `ASN1_OVERFLOW`; written unsigned.
+/// MIT `uint` (`lib/krb5/asn.1/asn1_k_encode.c:51-51`): the msg-types are an `unsigned int`.
+/// MIT `uint32` (`lib/krb5/asn.1/asn1_k_encode.c:53-53`): the error-code is a `uint32_t`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WireUint32(pub(crate) i32);
+
+impl AsnType for WireUint32 {
+    const TAG: Tag = Tag::INTEGER;
+}
+
+impl Decode for WireUint32 {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let value = decoder.decode_integer::<i64>(tag, constraints)?;
+        u32::try_from(value)
+            .map(|v| Self(v.cast_signed()))
+            .map_err(|_| {
+                <D::Error as rasn::de::Error>::custom(
+                    "an unsigned field outside 0..=0xFFFFFFFF",
+                    decoder.codec(),
+                )
+            })
+    }
+}
+
+impl Encode for WireUint32 {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        u64::from(self.0.cast_unsigned()).encode_with_tag_and_constraints(
+            encoder,
+            tag,
+            constraints,
+            identifier,
+        )
+    }
+}
+
+/// A pvno or a vno as MIT reads it.
+/// MIT `krb5_version` (`lib/krb5/asn.1/asn1_k_encode.c:30-30`): an immediate with an error, so an INTEGER of up to eight octets that is not 5 fails the message (`KRB5KDC_ERR_BAD_PVNO`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WireVersion(pub(crate) i32);
+
+impl AsnType for WireVersion {
+    const TAG: Tag = Tag::INTEGER;
+}
+
+impl Decode for WireVersion {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        match decoder.decode_integer::<i64>(tag, constraints)? {
+            5 => Ok(Self(5)),
+            _ => Err(<D::Error as rasn::de::Error>::custom(
+                "KRB5KDC_ERR_BAD_PVNO: the version is not 5",
+                decoder.codec(),
+            )),
+        }
+    }
+}
+
+impl Encode for WireVersion {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        self.0
+            .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
+}
+
 /// RFC 4120 `KerberosTime` (GeneralizedTime, UTC, no fractions).
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
 #[rasn(delegate)]
 pub struct KerberosTime(pub GeneralizedTime);
+
+/// MIT `k5_asn1_decode_generaltime` (`lib/krb5/asn.1/asn1_encode.c:242-277`): fifteen octets `YYYYMMDDhhmmssZ`, the fourteen before the `Z` digits (anything else is `ASN1_BAD_LENGTH`, `ASN1_BAD_FORMAT` or `ASN1_BAD_TIMEFORMAT`), read by `timegm`, which carries a field past its range into the next (month 13 is January of the next year); a result of -1 is refused.
+/// MIT `decode_kerberos_time` (`lib/krb5/asn.1/asn1_k_encode.c:168-178`): the time is kept as a 32-bit `krb5_timestamp`, which MIT reads unsigned.
+impl Decode for KerberosTime {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let octets: Vec<u8> = decoder.decode_octet_string(tag, constraints)?;
+        mit_generaltime(&octets)
+            .map(Self::from_unix_seconds)
+            .ok_or_else(|| {
+                <D::Error as rasn::de::Error>::custom(
+                    format!(
+                        "KerberosTime is not YYYYMMDDhhmmssZ ({} octets)",
+                        octets.len()
+                    ),
+                    decoder.codec(),
+                )
+            })
+    }
+}
+
+/// The 32-bit `krb5_timestamp` MIT keeps for a KerberosTime's octets, or `None` where MIT refuses
+/// them.
+fn mit_generaltime(s: &[u8]) -> Option<u32> {
+    if s.len() != 15 || s[14] != b'Z' {
+        return None;
+    }
+    if s == b"19700101000000Z" {
+        return Some(0);
+    }
+    let digits = |from: usize, to: usize| -> Option<i64> {
+        s[from..to].iter().try_fold(0i64, |acc, &c| {
+            let d = c.wrapping_sub(b'0');
+            (d <= 9).then_some(acc * 10 + i64::from(d))
+        })
+    };
+    let (year, month) = (digits(0, 4)?, digits(4, 6)? - 1);
+    let (mday, hour, min, sec) = (
+        digits(6, 8)?,
+        digits(8, 10)?,
+        digits(10, 12)?,
+        digits(12, 14)?,
+    );
+    // timegm: the month carries into the year, the day into the month.
+    let (y, m) = (year + month.div_euclid(12), month.rem_euclid(12) + 1);
+    let days = days_from_civil(y, m) + mday - 1;
+    let t = days * 86_400 + hour * 3_600 + min * 60 + sec;
+    if t == -1 {
+        return None;
+    }
+    // The krb5_timestamp is the low 32 bits of the time_t.
+    Some(u32::try_from(t.rem_euclid(1 << 32)).unwrap_or_default())
+}
+
+/// Days from 1970-01-01 to the first of month `m` (1-12) of proleptic Gregorian year `y`.
+fn days_from_civil(y: i64, m: i64) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
 
 /// Principal name: type hint plus name-string components.
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
@@ -324,6 +512,13 @@ impl PrincipalName {
     #[must_use]
     pub fn unparse_with_realm(&self, realm: &str) -> String {
         crate::unparse_name(&self.component_strings(), realm)
+    }
+
+    /// MIT `krb5_unparse_name_flags` with `KRB5_PRINCIPAL_UNPARSE_NO_REALM`: quoted components,
+    /// an `@` unquoted.
+    #[must_use]
+    pub fn unparse_no_realm(&self) -> String {
+        crate::unparse_components_no_realm(&self.component_strings())
     }
 
     fn component_strings(&self) -> Vec<String> {
@@ -474,21 +669,39 @@ pub struct EncryptedData {
 }
 
 /// EncryptionKey ::= SEQUENCE { keytype, keyvalue }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+///
+/// Dropping a key zeroizes the whole allocation of [`Self::keyvalue`] in place when the key holds
+/// the last handle on it, as a key decoded from DER or built from a `Vec` does. A clone shares the
+/// buffer, so the key that drops last wipes it. Left unwiped: a buffer whose last handle is a bare
+/// `OctetString` clone, one whose last two handles drop at the same moment on two threads, and a
+/// static buffer.
+///
+/// `Debug` shows the keytype and the key's length, never its octets.
+#[derive(AsnType, Clone, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct EncryptionKey {
     /// IANA etype of [`Self::keyvalue`].
     #[rasn(tag(explicit(0)))]
     pub keytype: i32,
-    /// Protocol key octets. Wiped on drop when the buffer is uniquely owned.
+    /// Protocol key octets, wiped on drop as the type says.
     #[rasn(tag(explicit(1)))]
     pub keyvalue: OctetString,
 }
 
 impl Drop for EncryptionKey {
     fn drop(&mut self) {
-        let mut v = self.keyvalue.to_vec();
-        v.zeroize();
-        self.keyvalue = OctetString::from(Vec::<u8>::new());
+        wipe::wipe_octets(std::mem::take(&mut self.keyvalue));
+    }
+}
+
+impl std::fmt::Debug for EncryptionKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EncryptionKey")
+            .field("keytype", &self.keytype)
+            .field(
+                "keyvalue",
+                &format_args!("<redacted, {} octets>", self.keyvalue.len()),
+            )
+            .finish()
     }
 }
 
@@ -504,7 +717,7 @@ pub struct Checksum {
 }
 
 /// Ticket ::= [APPLICATION 1] SEQUENCE { tkt-vno, realm, sname, enc-part }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 1)))]
 pub struct Ticket {
     /// `tkt-vno [0]`: ticket format version, always 5.
@@ -524,6 +737,36 @@ pub struct Ticket {
 impl Ticket {
     /// RFC 4120 ticket version number.
     pub const VNO: i32 = 5;
+}
+
+/// [`Ticket`] as it decodes: its tkt_vno as MIT reads it ([`WireVersion`]).
+#[derive(AsnType, Decode)]
+#[rasn(tag(explicit(application, 1)))]
+struct TicketOnWire {
+    #[rasn(tag(explicit(0)))]
+    tkt_vno: WireVersion,
+    #[rasn(tag(explicit(1)))]
+    realm: Realm,
+    #[rasn(tag(explicit(2)))]
+    sname: PrincipalName,
+    #[rasn(tag(explicit(3)))]
+    enc_part: EncryptedData,
+}
+
+impl Decode for Ticket {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = TicketOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            tkt_vno: w.tkt_vno.0,
+            realm: w.realm,
+            sname: w.sname,
+            enc_part: w.enc_part,
+        })
+    }
 }
 
 /// TicketFlags ::= KerberosFlags
@@ -742,7 +985,7 @@ fn flags_to_u32(bits: &KerberosFlags) -> u32 {
 }
 
 /// KDC-REQ (untagged). AS-REQ is APPLICATION 10 wrapping this SEQUENCE.
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KdcReq {
     /// `pvno [1]`: protocol version number, always 5.
     #[rasn(tag(explicit(1)))]
@@ -765,6 +1008,53 @@ impl KdcReq {
     pub const MSG_AS_REQ: i32 = 10;
     /// TGS-REQ msg-type.
     pub const MSG_TGS_REQ: i32 = 12;
+}
+
+/// [`KdcReq`] as it decodes: its pvno as MIT reads it ([`WireVersion`]).
+#[derive(AsnType, Decode, Encode)]
+struct KdcReqOnWire {
+    #[rasn(tag(explicit(1)))]
+    pvno: WireVersion,
+    #[rasn(tag(explicit(2)))]
+    msg_type: WireUint32,
+    #[rasn(tag(explicit(3)))]
+    padata: Option<SequenceOf<PaData>>,
+    #[rasn(tag(explicit(4)))]
+    req_body: KdcReqBody,
+}
+
+impl Decode for KdcReq {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = KdcReqOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            pvno: w.pvno.0,
+            msg_type: w.msg_type.0,
+            padata: w.padata,
+            req_body: w.req_body,
+        })
+    }
+}
+
+impl Encode for KdcReq {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        KdcReqOnWire {
+            pvno: WireVersion(self.pvno),
+            msg_type: WireUint32(self.msg_type),
+            padata: self.padata.clone(),
+            req_body: self.req_body.clone(),
+        }
+        .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
 }
 
 /// Remainder of a KDC-REQ; checksums over this field.
@@ -814,7 +1104,7 @@ pub struct KdcReqBody {
 pub struct AsReq(pub KdcReq);
 
 /// KDC-REP (untagged). AS-REP is APPLICATION 11 wrapping this SEQUENCE.
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KdcRep {
     /// `pvno [0]`: protocol version number, always 5.
     #[rasn(tag(explicit(0)))]
@@ -848,13 +1138,72 @@ impl KdcRep {
     pub const MSG_TGS_REP: i32 = 13;
 }
 
+/// [`KdcRep`] as it decodes: its pvno as MIT reads it ([`WireVersion`]).
+#[derive(AsnType, Decode, Encode)]
+struct KdcRepOnWire {
+    #[rasn(tag(explicit(0)))]
+    pvno: WireVersion,
+    #[rasn(tag(explicit(1)))]
+    msg_type: WireUint32,
+    #[rasn(tag(explicit(2)))]
+    padata: Option<SequenceOf<PaData>>,
+    #[rasn(tag(explicit(3)))]
+    crealm: Realm,
+    #[rasn(tag(explicit(4)))]
+    cname: PrincipalName,
+    #[rasn(tag(explicit(5)))]
+    ticket: Ticket,
+    #[rasn(tag(explicit(6)))]
+    enc_part: EncryptedData,
+}
+
+impl Decode for KdcRep {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = KdcRepOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            pvno: w.pvno.0,
+            msg_type: w.msg_type.0,
+            padata: w.padata,
+            crealm: w.crealm,
+            cname: w.cname,
+            ticket: w.ticket,
+            enc_part: w.enc_part,
+        })
+    }
+}
+
+impl Encode for KdcRep {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        KdcRepOnWire {
+            pvno: WireVersion(self.pvno),
+            msg_type: WireUint32(self.msg_type),
+            padata: self.padata.clone(),
+            crealm: self.crealm.clone(),
+            cname: self.cname.clone(),
+            ticket: self.ticket.clone(),
+            enc_part: self.enc_part.clone(),
+        }
+        .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
+}
+
 /// AS-REP ::= [APPLICATION 11] KDC-REP
 #[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 11)), delegate)]
 pub struct AsRep(pub KdcRep);
 
 /// AP-REQ ::= [APPLICATION 14] SEQUENCE { pvno, msg-type, ap-options, ticket, authenticator }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 14)))]
 pub struct ApReq {
     /// `pvno [0]`: protocol version number, always 5.
@@ -879,6 +1228,41 @@ impl ApReq {
     pub const PVNO: i32 = 5;
     /// AP-REQ msg-type.
     pub const MSG_TYPE: i32 = 14;
+}
+
+/// [`ApReq`] as it decodes, its msg-type the message's own.
+/// MIT `ap_req_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:747-747`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+#[derive(AsnType, Decode)]
+#[rasn(tag(explicit(application, 14)))]
+struct ApReqOnWire {
+    #[rasn(tag(explicit(0)))]
+    pvno: WireVersion,
+    #[rasn(tag(explicit(1)))]
+    #[allow(dead_code)]
+    msg_type: WireImmediate,
+    #[rasn(tag(explicit(2)))]
+    ap_options: ApOptions,
+    #[rasn(tag(explicit(3)))]
+    ticket: Ticket,
+    #[rasn(tag(explicit(4)))]
+    authenticator: EncryptedData,
+}
+
+impl Decode for ApReq {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = ApReqOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            pvno: w.pvno.0,
+            msg_type: Self::MSG_TYPE,
+            ap_options: w.ap_options,
+            ticket: w.ticket,
+            authenticator: w.authenticator,
+        })
+    }
 }
 
 /// APOptions ::= KerberosFlags
@@ -921,7 +1305,7 @@ impl ApOptions {
 }
 
 /// KRB-ERROR ::= [APPLICATION 30] SEQUENCE { ... }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 30)))]
 pub struct KrbError {
     /// `pvno [0]`: protocol version number, always 5.
@@ -970,6 +1354,92 @@ impl KrbError {
     pub const PVNO: i32 = 5;
     /// KRB-ERROR msg-type.
     pub const MSG_TYPE: i32 = 30;
+}
+
+/// [`KrbError`] as it decodes, its msg-type the message's own.
+/// MIT `error_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:911-911`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+#[derive(AsnType, Decode, Encode)]
+#[rasn(tag(explicit(application, 30)))]
+struct KrbErrorOnWire {
+    #[rasn(tag(explicit(0)))]
+    pvno: WireVersion,
+    #[rasn(tag(explicit(1)))]
+    #[allow(dead_code)]
+    msg_type: WireImmediate,
+    #[rasn(tag(explicit(2)))]
+    ctime: Option<KerberosTime>,
+    #[rasn(tag(explicit(3)))]
+    cusec: Option<Microseconds>,
+    #[rasn(tag(explicit(4)))]
+    stime: KerberosTime,
+    #[rasn(tag(explicit(5)))]
+    susec: Microseconds,
+    #[rasn(tag(explicit(6)))]
+    error_code: WireUint32,
+    #[rasn(tag(explicit(7)))]
+    crealm: Option<Realm>,
+    #[rasn(tag(explicit(8)))]
+    cname: Option<PrincipalName>,
+    #[rasn(tag(explicit(9)))]
+    realm: Realm,
+    #[rasn(tag(explicit(10)))]
+    sname: PrincipalName,
+    #[rasn(tag(explicit(11)))]
+    e_text: Option<KerberosString>,
+    #[rasn(tag(explicit(12)))]
+    e_data: Option<OctetString>,
+}
+
+impl Decode for KrbError {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = KrbErrorOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            pvno: w.pvno.0,
+            msg_type: Self::MSG_TYPE,
+            ctime: w.ctime,
+            cusec: w.cusec,
+            stime: w.stime,
+            susec: w.susec,
+            error_code: w.error_code.0,
+            crealm: w.crealm,
+            cname: w.cname,
+            realm: w.realm,
+            sname: w.sname,
+            e_text: w.e_text,
+            e_data: w.e_data,
+        })
+    }
+}
+
+impl Encode for KrbError {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        KrbErrorOnWire {
+            pvno: WireVersion(self.pvno),
+            msg_type: WireImmediate(self.msg_type),
+            ctime: self.ctime.clone(),
+            cusec: self.cusec,
+            stime: self.stime.clone(),
+            susec: self.susec,
+            error_code: WireUint32(self.error_code),
+            crealm: self.crealm.clone(),
+            cname: self.cname.clone(),
+            realm: self.realm.clone(),
+            sname: self.sname.clone(),
+            e_text: self.e_text.clone(),
+            e_data: self.e_data.clone(),
+        }
+        .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
 }
 
 /// Parse RFC 4120 UTC KerberosTime (`YYYYMMDDHHMMSSZ`).
@@ -1172,7 +1642,7 @@ pub struct EncAsRepPart(pub EncKdcRepPart);
 pub struct EncTgsRepPart(pub EncKdcRepPart);
 
 /// Authenticator ::= [APPLICATION 2] SEQUENCE { ... }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 2)))]
 pub struct Authenticator {
     /// `authenticator-vno [0]`: format version, always 5.
@@ -1207,6 +1677,75 @@ pub struct Authenticator {
 impl Authenticator {
     /// Authenticator version.
     pub const VNO: i32 = 5;
+}
+
+/// [`Authenticator`] on the wire, its seq-number as MIT reads and writes it
+/// ([`extra::WireSeqNumber`]).
+#[derive(AsnType, Decode, Encode)]
+#[rasn(tag(explicit(application, 2)))]
+struct AuthenticatorOnWire {
+    #[rasn(tag(explicit(0)))]
+    authenticator_vno: WireVersion,
+    #[rasn(tag(explicit(1)))]
+    crealm: Realm,
+    #[rasn(tag(explicit(2)))]
+    cname: PrincipalName,
+    #[rasn(tag(explicit(3)))]
+    cksum: Option<Checksum>,
+    #[rasn(tag(explicit(4)))]
+    cusec: Microseconds,
+    #[rasn(tag(explicit(5)))]
+    ctime: KerberosTime,
+    #[rasn(tag(explicit(6)))]
+    subkey: Option<EncryptionKey>,
+    #[rasn(tag(explicit(7)))]
+    seq_number: Option<extra::WireSeqNumber>,
+    #[rasn(tag(explicit(8)))]
+    authorization_data: Option<AuthorizationData>,
+}
+
+impl Decode for Authenticator {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = AuthenticatorOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            authenticator_vno: w.authenticator_vno.0,
+            crealm: w.crealm,
+            cname: w.cname,
+            cksum: w.cksum,
+            cusec: w.cusec,
+            ctime: w.ctime,
+            subkey: w.subkey,
+            seq_number: w.seq_number.map(|s| s.0),
+            authorization_data: w.authorization_data,
+        })
+    }
+}
+
+impl Encode for Authenticator {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        AuthenticatorOnWire {
+            authenticator_vno: WireVersion(self.authenticator_vno),
+            crealm: self.crealm.clone(),
+            cname: self.cname.clone(),
+            cksum: self.cksum.clone(),
+            cusec: self.cusec,
+            ctime: self.ctime.clone(),
+            subkey: self.subkey.clone(),
+            seq_number: self.seq_number.map(extra::WireSeqNumber),
+            authorization_data: self.authorization_data.clone(),
+        }
+        .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
 }
 
 /// TGS-REQ ::= [APPLICATION 12] KDC-REQ

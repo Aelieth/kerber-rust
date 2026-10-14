@@ -10,10 +10,12 @@
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use zeroize::{Zeroize, Zeroizing};
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     CipherState, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_keyed,
-    cksumtype_is_known, decrypt, decrypt_with_state, encrypt, encrypt_with_state,
+    cksumtype_is_known, decrypt_enc_data, decrypt_enc_data_with_state, encrypt, encrypt_with_state,
     verify_checksum_type,
 };
 use krb5_types::{
@@ -21,6 +23,7 @@ use krb5_types::{
     KrbCredInfo, KrbPriv, KrbSafe, KrbSafeBody, Microseconds, OctetString, Ticket, err, ku,
 };
 
+use crate::ap_req::address_in_list;
 use crate::error::Error;
 use crate::replay::{ReplayCache, ReplayKey};
 
@@ -67,14 +70,28 @@ pub fn build_krb_safe_ex(
     seq_number: Option<u32>,
     include_time: bool,
 ) -> Result<KrbSafe, Error> {
+    build_krb_safe_from(session, user_data, seq_number, include_time, &local_addr())
+}
+
+/// [`build_krb_safe_ex`] from `s_address`, the sender's own address as its auth context holds
+/// it.
+/// MIT `create_krbsafe` (`lib/krb5/krb/mk_safe.c:62-63`): the s-address is the context's local address, the r-address its remote one (none here).
+///
+/// # Errors
+///
+/// [`Error::Asn1`] when the KRB-SAFE body does not encode, and [`Error::Crypto`] when the
+/// checksum under `session` cannot be computed.
+pub fn build_krb_safe_from(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    include_time: bool,
+    s_address: &HostAddress,
+) -> Result<KrbSafe, Error> {
+    // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
-        let now = KerberosTime::now();
-        (
-            Some(now.clone()),
-            Some(Microseconds::from_subsec_micros(
-                now.0.timestamp_subsec_micros(),
-            )),
-        )
+        let (now, usec) = crate::us_timeofday();
+        (Some(now), Some(usec))
     } else {
         (None, None)
     };
@@ -83,7 +100,7 @@ pub fn build_krb_safe_ex(
         timestamp,
         usec,
         seq_number,
-        s_address: local_addr(),
+        s_address: s_address.clone(),
         r_address: None,
     };
     let body_der = encode(&body)?;
@@ -113,8 +130,9 @@ pub fn build_krb_safe_ex(
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` or `INAPP_CKSUM`
-/// for an unknown or unsuitable checksum type, and `MODIFIED` when the checksum does not verify;
+/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `INAPP_CKSUM` for an unsuitable
+/// checksum type, and `MODIFIED` when the checksum does not verify; [`Error::ProgSumtypeNosupp`]
+/// for an unknown checksum type;
 /// [`Error::Asn1`] when `raw` does not decode; [`Error::ReplyMismatch`] when the timestamp or a
 /// non-zero sequence number is missing, the timestamp is more than 300 seconds from now, or
 /// `replay` has seen the message.
@@ -130,8 +148,9 @@ pub fn unwrap_krb_safe(
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` or `INAPP_CKSUM`
-/// for an unknown or unsuitable checksum type, and `MODIFIED` when the checksum does not verify;
+/// [`Error::KrbError`] `MSG_TYPE` when `raw` is not a KRB-SAFE, `INAPP_CKSUM` for an unsuitable
+/// checksum type, and `MODIFIED` when the checksum does not verify; [`Error::ProgSumtypeNosupp`]
+/// for an unknown checksum type;
 /// [`Error::Asn1`] when `raw` does not decode; [`Error::ReplyMismatch`] when a required timestamp
 /// or sequence number is missing (zero counts as missing when both are required), the timestamp
 /// is more than 300 seconds from now, or `replay` has seen the message.
@@ -172,15 +191,32 @@ enum FreshPolicy {
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] `MSG_TYPE` (40) when `raw` is not a KRB-SAFE, `SUMTYPE_NOSUPP` (15) for an
-/// unknown checksum type, `INAPP_CKSUM` (50) for one that is not keyed and collision-proof,
-/// `BADADDR` (38) when `remote` or `local` does not match, and `MODIFIED` (41) when the checksum
-/// verifies over neither the message nor the body; [`Error::Asn1`] when `raw` does not decode.
+/// [`Error::KrbError`] `MSG_TYPE` (40) when `raw` is not a KRB-SAFE, `INAPP_CKSUM` (50) for a
+/// checksum type that is not keyed and collision-proof, `BADADDR` (38) when `remote` or `local`
+/// does not match, and `MODIFIED` (41) when the checksum verifies over neither the message nor
+/// the body; [`Error::ProgSumtypeNosupp`] for a checksum type the library does not implement;
+/// [`Error::Asn1`] when `raw` does not decode.
 pub fn verify_krb_safe_checksum(
     session: &ProtocolKey,
     raw: &[u8],
     remote: Option<&HostAddress>,
     local: Option<&HostAddress>,
+) -> Result<KrbSafe, Error> {
+    verify_krb_safe_checksum_in(session, raw, remote, local, None)
+}
+
+/// [`verify_krb_safe_checksum`] with the host addresses a receiver address is looked up in when
+/// `local` is `None`: `hosts`, else the machine's own ([`crate::os_localaddr`]).
+///
+/// # Errors
+///
+/// As [`verify_krb_safe_checksum`], and the error of [`crate::os_localaddr`].
+pub fn verify_krb_safe_checksum_in(
+    session: &ProtocolKey,
+    raw: &[u8],
+    remote: Option<&HostAddress>,
+    local: Option<&HostAddress>,
+    hosts: Option<&[HostAddress]>,
 ) -> Result<KrbSafe, Error> {
     if !is_krb_safe(raw) {
         return Err(Error::KrbError {
@@ -188,19 +224,12 @@ pub fn verify_krb_safe_checksum(
             text: Some("Invalid message type".into()),
         });
     }
+    // MIT `safe_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:816-816`): the msg-type decodes as the message's own.
     let (msg, body_der) = decode_safe_with_body(raw)?;
-    if msg.msg_type != KrbSafe::MSG_TYPE {
-        return Err(Error::KrbError {
-            code: err::MSG_TYPE,
-            text: Some("Invalid message type".into()),
-        });
-    }
     let ctype = msg.cksum.cksumtype;
+    // MIT `read_krbsafe` (`lib/krb5/krb/rd_safe.c:66-69`): a checksum type `krb5_c_valid_cksumtype` does not know is KRB5_PROG_SUMTYPE_NOSUPP, a library code, not KDC_ERR_SUMTYPE_NOSUPP.
     if !cksumtype_is_known(ctype) {
-        return Err(Error::KrbError {
-            code: err::SUMTYPE_NOSUPP,
-            text: Some("checksum type".into()),
-        });
+        return Err(Error::ProgSumtypeNosupp);
     }
     if !cksumtype_is_coll_proof(ctype) || !cksumtype_is_keyed(ctype) {
         return Err(Error::KrbError {
@@ -208,11 +237,12 @@ pub fn verify_krb_safe_checksum(
             text: Some("inapp checksum".into()),
         });
     }
-    check_privsafe_addrs(
+    check_privsafe_addrs_in(
         &msg.safe_body.s_address,
         msg.safe_body.r_address.as_ref(),
         remote,
         local,
+        hosts,
     )?;
     let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM)?;
     let mac = msg.cksum.checksum.as_ref();
@@ -235,33 +265,55 @@ pub fn verify_krb_safe_checksum(
 ///
 /// # Errors
 ///
-/// [`Error::KrbError`] 38 when a supplied comparison address does not match.
+/// [`Error::KrbError`] 38 when a supplied comparison address does not match; the error of
+/// [`crate::os_localaddr`] when the host's addresses are wanted and cannot be read.
 pub fn check_privsafe_addrs(
     msg_s: &HostAddress,
     msg_r: Option<&HostAddress>,
     remote: Option<&HostAddress>,
     local: Option<&HostAddress>,
 ) -> Result<(), Error> {
+    check_privsafe_addrs_in(msg_s, msg_r, remote, local, None)
+}
+
+/// [`check_privsafe_addrs`] with the host addresses to search when `local` is `None`: `hosts`,
+/// else the machine's own, read only when a receiver address is there to look up.
+/// MIT `k5_privsafe_check_addrs` (`privsafe.c:348-378`): the sender against the remote address; a receiver address is optional and, with no local address, must be one of `krb5_os_localaddr`'s (`krb5_address_search`, so an empty list holds none and a list of one NetBIOS address holds any).
+///
+/// # Errors
+///
+/// As [`check_privsafe_addrs`].
+pub fn check_privsafe_addrs_in(
+    msg_s: &HostAddress,
+    msg_r: Option<&HostAddress>,
+    remote: Option<&HostAddress>,
+    local: Option<&HostAddress>,
+    hosts: Option<&[HostAddress]>,
+) -> Result<(), Error> {
+    let badaddr = || Error::KrbError {
+        code: err::BADADDR,
+        text: Some("Incorrect net address".into()),
+    };
     if let Some(want) = remote
         && want != msg_s
     {
-        return Err(Error::KrbError {
-            code: err::BADADDR,
-            text: Some("Incorrect net address".into()),
-        });
+        return Err(badaddr());
     }
     let Some(got_r) = msg_r else {
         return Ok(());
     };
-    if let Some(want) = local
-        && want != got_r
-    {
-        return Err(Error::KrbError {
-            code: err::BADADDR,
-            text: Some("Incorrect net address".into()),
-        });
+    if let Some(want) = local {
+        return if want == got_r {
+            Ok(())
+        } else {
+            Err(badaddr())
+        };
     }
-    Ok(())
+    let found = match hosts {
+        Some(list) => address_in_list(got_r, list),
+        None => address_in_list(got_r, &crate::localaddr::os_localaddr()?),
+    };
+    if found { Ok(()) } else { Err(badaddr()) }
 }
 
 fn is_krb_safe(raw: &[u8]) -> bool {
@@ -460,6 +512,32 @@ pub fn build_krb_priv_with_seq(
     build_krb_priv_chained(session, user_data, seq_number, true, &mut state)
 }
 
+/// Build a KRB-PRIV that names `sender` as its sender address and carries no timestamp.
+///
+/// MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:60-61`): the message's sender is the auth context's local address, and its receiver the remote address, which kpasswd does not set.
+/// MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:52-60`): a timestamp only under `DO_TIME`, which `krb5int_mk_chpw_req` does not set.
+///
+/// # Errors
+///
+/// [`Error::Asn1`] when the EncKrbPrivPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` fails.
+pub fn build_krb_priv_from(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    sender: &HostAddress,
+) -> Result<KrbPriv, Error> {
+    let mut state = CipherState::initial();
+    krb_priv_part(
+        session,
+        user_data,
+        seq_number,
+        false,
+        &mut state,
+        sender.clone(),
+    )
+}
+
 /// Build a KRB-PRIV with cipher-state chaining (MIT `auth_con_initivector`).
 ///
 /// # Errors
@@ -473,14 +551,54 @@ pub fn build_krb_priv_chained(
     include_time: bool,
     state: &mut CipherState,
 ) -> Result<KrbPriv, Error> {
+    krb_priv_part(
+        session,
+        user_data,
+        seq_number,
+        include_time,
+        state,
+        local_addr(),
+    )
+}
+
+/// [`build_krb_priv_chained`] from `s_address`, the sender's own address as its auth context
+/// holds it.
+/// MIT `create_krbpriv` (`lib/krb5/krb/mk_priv.c:60-61`): the s-address is the context's local address, the r-address its remote one (none here).
+///
+/// # Errors
+///
+/// [`Error::Asn1`] when the EncKrbPrivPart does not encode, and [`Error::Crypto`] when encrypting
+/// it under `session` and `state` fails.
+pub fn build_krb_priv_chained_from(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    include_time: bool,
+    s_address: &HostAddress,
+    state: &mut CipherState,
+) -> Result<KrbPriv, Error> {
+    krb_priv_part(
+        session,
+        user_data,
+        seq_number,
+        include_time,
+        state,
+        s_address.clone(),
+    )
+}
+
+fn krb_priv_part(
+    session: &ProtocolKey,
+    user_data: &[u8],
+    seq_number: Option<u32>,
+    include_time: bool,
+    state: &mut CipherState,
+    s_address: HostAddress,
+) -> Result<KrbPriv, Error> {
+    // MIT `k5_privsafe_gen_rdata` (`lib/krb5/krb/privsafe.c:53-55`): the timestamp and its microseconds come from one `krb5_us_timeofday` reading.
     let (timestamp, usec) = if include_time {
-        let now = KerberosTime::now();
-        (
-            Some(now.clone()),
-            Some(Microseconds::from_subsec_micros(
-                now.0.timestamp_subsec_micros(),
-            )),
-        )
+        let (now, usec) = crate::us_timeofday();
+        (Some(now), Some(usec))
     } else {
         (None, None)
     };
@@ -489,10 +607,12 @@ pub fn build_krb_priv_chained(
         timestamp,
         usec,
         seq_number,
-        s_address: local_addr(),
+        s_address,
         r_address: None,
     };
-    let der = encode(&part)?;
+    let der = encode(&part);
+    wipe_octets(part.user_data);
+    let der = Zeroizing::new(der?);
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
     let cipher = encrypt_with_state(session, usage, state, &der)?;
     Ok(KrbPriv {
@@ -504,6 +624,40 @@ pub fn build_krb_priv_chained(
             cipher: cipher.into(),
         },
     })
+}
+
+/// Wipes an octet string's bytes when it holds the only reference to them, as a copy of a secret
+/// made only to be encoded does.
+pub(crate) fn wipe_octets(octets: OctetString) {
+    if let Ok(buf) = bytes::Bytes::from(octets).try_into_mut() {
+        wipe_vec(Vec::<u8>::from(buf));
+    }
+}
+
+/// Zeroizes every byte of `buf`'s allocation, then frees it: a plaintext that was encoded only
+/// to be encrypted. A test build keeps each wiped allocation ([`wiped::take`]) instead of freeing
+/// it, so a test can see the buffer zeroed, whole.
+pub(crate) fn wipe_vec(mut buf: Vec<u8>) {
+    buf.resize(buf.capacity(), 0);
+    buf.as_mut_slice().zeroize();
+    #[cfg(test)]
+    let _ = wiped::WIPED.try_with(|w| w.borrow_mut().push(buf));
+}
+
+/// The allocations this crate's wipes zeroed on the current thread, kept for the tests.
+#[cfg(test)]
+pub(crate) mod wiped {
+    use std::cell::RefCell;
+
+    thread_local! {
+        /// What [`super::wipe_vec`] zeroed on this thread, kept alive.
+        pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// The allocations wiped on this thread since the last call.
+    pub(crate) fn take() -> Vec<Vec<u8>> {
+        WIPED.with(|w| std::mem::take(&mut *w.borrow_mut()))
+    }
 }
 
 /// Decrypt a KRB-PRIV and return the user data.
@@ -522,6 +676,29 @@ pub fn unwrap_krb_priv(
     replay: &ReplayCache,
 ) -> Result<Vec<u8>, Error> {
     unwrap_krb_priv_ex(session, raw, replay, true, true)
+}
+
+/// The decrypted part of a KRB-PRIV under `key`, for a caller that checks its sequence number.
+/// MIT `read_krbpriv` (`lib/krb5/krb/rd_priv.c:43-97`): a message that is not a KRB-PRIV is `KRB5KRB_AP_ERR_MSG_TYPE`; the decrypted part is zeroed before it is freed.
+///
+/// # Errors
+///
+/// [`Error::KrbError`] `MSG_TYPE` (40) for another message type; [`Error::Asn1`] when the message
+/// or its part does not decode; [`Error::Crypto`] when it does not decrypt under `key`.
+pub fn read_krb_priv(key: &ProtocolKey, raw: &[u8]) -> Result<EncKrbPrivPart, Error> {
+    // MIT `krb5_is_krb_priv`: [APPLICATION 21], constructed or not.
+    if raw.first().is_none_or(|b| b & !0x20 != 0x55) {
+        return Err(Error::KrbError {
+            code: err::MSG_TYPE,
+            text: Some("Invalid message type".into()),
+        });
+    }
+    let msg: KrbPriv = decode(raw)?;
+    let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
+    let plain = decrypt_enc_data(key, usage, msg.enc_part.etype, msg.enc_part.cipher.as_ref())?;
+    let part = decode::<EncKrbPrivPart>(&plain);
+    wipe_vec(plain);
+    Ok(part?)
 }
 
 /// Decrypt a KRB-PRIV.
@@ -565,7 +742,13 @@ pub fn unwrap_krb_priv_chained(
 ) -> Result<Vec<u8>, Error> {
     let msg: KrbPriv = decode(raw)?;
     let usage = KeyUsage::new(ku::KRB_PRIV_ENC_PART)?;
-    let plain = decrypt_with_state(session, usage, state, msg.enc_part.cipher.as_ref())?;
+    let plain = decrypt_enc_data_with_state(
+        session,
+        usage,
+        state,
+        msg.enc_part.etype,
+        msg.enc_part.cipher.as_ref(),
+    )?;
     let part: EncKrbPrivPart = decode(&plain)?;
     accept_fresh(
         replay,
@@ -590,14 +773,13 @@ pub fn build_krb_cred(
     tickets: Vec<Ticket>,
     ticket_info: Vec<KrbCredInfo>,
 ) -> Result<KrbCred, Error> {
-    let now = KerberosTime::now();
+    // MIT `krb5_mk_ncred` (`lib/krb5/krb/mk_cred.c:177-178`): a missing timestamp is filled from one `krb5_us_timeofday` reading.
+    let (now, usec) = crate::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info,
         nonce: None,
-        timestamp: Some(now.clone()),
-        usec: Some(Microseconds::from_subsec_micros(
-            now.0.timestamp_subsec_micros(),
-        )),
+        timestamp: Some(now),
+        usec: Some(usec),
         s_address: Some(local_addr()),
         r_address: None,
     };
@@ -630,7 +812,12 @@ pub fn unwrap_krb_cred(
 ) -> Result<(KrbCred, EncKrbCredPart), Error> {
     let msg: KrbCred = decode(raw)?;
     let usage = KeyUsage::new(ku::KRB_CRED_ENC_PART)?;
-    let plain = decrypt(session, usage, msg.enc_part.cipher.as_ref())?;
+    let plain = decrypt_enc_data(
+        session,
+        usage,
+        msg.enc_part.etype,
+        msg.enc_part.cipher.as_ref(),
+    )?;
     let part: EncKrbCredPart = decode(&plain)?;
     accept_fresh(
         replay,
@@ -698,13 +885,16 @@ mod tests {
     }
 
     #[test]
-    fn safe_unknown_cksumtype_is_sumtype_nosupp() {
+    fn safe_unknown_cksumtype_is_prog_sumtype_nosupp() {
+        // MIT `read_krbsafe` (`lib/krb5/krb/rd_safe.c:66-69`): KRB5_PROG_SUMTYPE_NOSUPP, settled live for types 1 3 4 5 6 8 10 13 127.
         let key = session();
-        let mut msg = build_krb_safe(&key, b"body").unwrap();
-        msg.cksum.cksumtype = 1;
-        match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
-            Err(Error::KrbError { code, .. }) => assert_eq!(code, err::SUMTYPE_NOSUPP),
-            other => panic!("unknown SAFE type must be 15, got {other:?}"),
+        for ctype in [1, 3, 4, 5, 6, 8, 10, 13, 127] {
+            let mut msg = build_krb_safe(&key, b"body").unwrap();
+            msg.cksum.cksumtype = ctype;
+            match verify_krb_safe_checksum(&key, &encode(&msg).unwrap(), None, None) {
+                Err(Error::ProgSumtypeNosupp) => {}
+                other => panic!("checksum type {ctype}: want PROG_SUMTYPE_NOSUPP, got {other:?}"),
+            }
         }
     }
 
@@ -792,5 +982,88 @@ mod tests {
         let raw = encode(&msg).unwrap();
         let cache = ReplayCache::new();
         assert_eq!(unwrap_krb_safe(&key, &raw, &cache).unwrap(), b"high-seq");
+    }
+
+    fn host(last: u8) -> HostAddress {
+        HostAddress {
+            addr_type: 2,
+            address: OctetString::from(vec![192, 0, 2, last]),
+        }
+    }
+
+    /// A KRB-SAFE of `p` from 127.0.0.1 to `r`, checksummed as MIT's `create_krbsafe` does.
+    fn safe_to(session: &ProtocolKey, r: Option<HostAddress>) -> Vec<u8> {
+        let body = KrbSafeBody {
+            user_data: b"p".to_vec().into(),
+            timestamp: None,
+            usec: None,
+            seq_number: None,
+            s_address: local_addr(),
+            r_address: r,
+        };
+        let body_der = encode(&body).unwrap();
+        let dummy = encode_safe_with_body(
+            KrbSafe::PVNO,
+            KrbSafe::MSG_TYPE,
+            &body_der,
+            &zero_safe_cksum(),
+        )
+        .unwrap();
+        let usage = KeyUsage::new(ku::KRB_SAFE_CKSUM).unwrap();
+        let mic = checksum(session, usage, &dummy).unwrap();
+        encode(&KrbSafe {
+            pvno: KrbSafe::PVNO,
+            msg_type: KrbSafe::MSG_TYPE,
+            safe_body: body,
+            cksum: krb5_types::Checksum {
+                cksumtype: session.etype().checksum_type(),
+                checksum: mic.into(),
+            },
+        })
+        .unwrap()
+    }
+
+    /// MIT `k5_privsafe_check_addrs` (`privsafe.c:355-378`): with no local address a receiver
+    /// address must be one of the host's, and an empty list holds none.
+    #[test]
+    fn check_privsafe_addrs_no_local_wants_the_receiver_among_the_hosts() {
+        let s = host(1);
+        let list = [host(7), host(8)];
+        check_privsafe_addrs_in(&s, Some(&host(8)), None, None, Some(&list)).unwrap();
+        check_privsafe_addrs_in(&s, None, None, None, Some(&list)).unwrap();
+        for hosts in [&list[..1], &[][..]] {
+            let e =
+                check_privsafe_addrs_in(&s, Some(&host(8)), None, None, Some(hosts)).unwrap_err();
+            assert!(matches!(e, Error::KrbError { code: 38, .. }), "{e:?}");
+        }
+        // A list of one NetBIOS address holds any address (`krb5_address_search`).
+        let netbios = [HostAddress {
+            addr_type: HostAddress::ADDRTYPE_NETBIOS,
+            address: OctetString::from(vec![0; 16]),
+        }];
+        check_privsafe_addrs_in(&s, Some(&host(8)), None, None, Some(&netbios)).unwrap();
+        // A local address, when set, is the only one compared; the hosts are not read.
+        check_privsafe_addrs_in(&s, Some(&host(8)), None, Some(&host(8)), Some(&[])).unwrap();
+        // The sender is compared with the remote address first.
+        let e = check_privsafe_addrs_in(&s, Some(&host(7)), Some(&host(2)), None, Some(&list))
+            .unwrap_err();
+        assert!(matches!(e, Error::KrbError { code: 38, .. }), "{e:?}");
+    }
+
+    /// MIT `read_krbsafe` (`lib/krb5/krb/rd_safe.c:75-78`): a KRB-SAFE goes through the same address check.
+    #[test]
+    fn verify_krb_safe_checksum_in_looks_the_receiver_up_among_the_hosts() {
+        let key = session();
+        let hosts = [host(7)];
+        let ok = safe_to(&key, Some(host(7)));
+        verify_krb_safe_checksum_in(&key, &ok, None, None, Some(&hosts)).unwrap();
+        let no = safe_to(&key, Some(host(9)));
+        let e = verify_krb_safe_checksum_in(&key, &no, None, None, Some(&hosts)).unwrap_err();
+        assert!(matches!(e, Error::KrbError { code: 38, .. }), "{e:?}");
+        // The local address, when there is one, replaces the host list.
+        verify_krb_safe_checksum_in(&key, &no, None, Some(&host(9)), Some(&hosts)).unwrap();
+        // No receiver address: nothing to look up.
+        let none = safe_to(&key, None);
+        verify_krb_safe_checksum_in(&key, &none, None, None, Some(&[])).unwrap();
     }
 }

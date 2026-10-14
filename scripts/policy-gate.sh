@@ -239,7 +239,9 @@ kadmin_q_ok kadmin_q 'delprinc -force duruser' >/dev/null
 kadmin_q_ok kadmin_q 'delpol -force durpol' >/dev/null
 
 echo "==== MIT kadmin interval-only failcnt reset ===="
-kadmin_q_ok kadmin_q 'addpol -minlength 8 -minclasses 1 -maxfailure 1 -lockoutduration 0s -failurecountinterval 2s intpol' >/dev/null
+# MIT's KDC resets the count after the interval but never a lock: with maxfailure 1 the first
+# failure would lock for good, so two allowed failures show the reset.
+kadmin_q_ok kadmin_q 'addpol -minlength 8 -minclasses 1 -maxfailure 2 -lockoutduration 0s -failurecountinterval 2s intpol' >/dev/null
 IGET="$(kadmin_q 'getpol intpol')"
 echo "$IGET"
 echo "$IGET" | grep -qiE 'failure count reset interval: 0 days 00:00:02'
@@ -255,6 +257,12 @@ echo "$I2" | grep -qiE 'revoked|CLIENT_REVOKED' && {
     log "policy.gate" "error" ',"error":"interval-only elapsed must not lock on next wrong"'
     exit 1
 }
+if ! docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf \
+    "$NAME" sh -c 'printf "Time-sec1\n" | kinit intuser@KERBER.TEST'; then
+    log "policy.gate" "error" ',"error":"a failure past the interval counts from one again"'
+    exit 1
+fi
+docker exec -e KRB5_CONFIG=/tmp/policy-krb5.conf "$NAME" kdestroy -A >/dev/null 2>&1 || true
 kadmin_q_ok kadmin_q 'delprinc -force intuser' >/dev/null
 kadmin_q_ok kadmin_q 'delpol -force intpol' >/dev/null
 

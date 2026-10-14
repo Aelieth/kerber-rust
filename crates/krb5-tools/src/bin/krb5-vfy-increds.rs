@@ -38,10 +38,6 @@ fn run() -> Result<(), String> {
         .cloned()
         .ok_or_else(|| "ccache has no credentials".to_string())?;
     let conf = load_krb5_conf();
-    let nofail = verify_init_creds_nofail(
-        opt_nofail,
-        conf.as_ref().is_some_and(|c| c.verify_ap_req_nofail),
-    );
     let server = if let Some(raw) = args.first() {
         let (name, realm_s) = if raw.contains('@') {
             parse_principal(raw)?
@@ -64,13 +60,23 @@ fn run() -> Result<(), String> {
     let kt_path = env_ktname().unwrap_or_else(|| PathBuf::from("/etc/krb5.keytab"));
     let keytab = fs::read(&kt_path).ok().and_then(|b| Keytab::parse(&b).ok());
     let crealm = String::from_utf8_lossy(cred.client.0.as_bytes()).into_owned();
-    let addr = krb5_config::discover_kdc(&crealm).map_or_else(
+    // MIT `nofail` (`lib/krb5/krb/vfy_increds.c:39-51`): the client credential's realm, default false.
+    let nofail = verify_init_creds_nofail(
+        opt_nofail,
+        conf.as_ref()
+            .is_some_and(|c| c.verify_ap_req_nofail_for(&crealm)),
+    );
+    let found = krb5_config::discover_kdc(&crealm);
+    let addr = found.first().map_or_else(
         || KdcAddr::new("127.0.0.1"),
         |ep| KdcAddr {
-            host: ep.host,
+            host: ep.host.clone(),
             port: ep.port,
         },
     );
+    if !found.is_empty() {
+        krb5_config::hand_kdcs(&crealm, found);
+    }
     verify_init_creds(
         &cred,
         server.as_ref().map(|(r, n)| (r, n)),

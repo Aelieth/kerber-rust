@@ -121,8 +121,8 @@ def _self_test_ledger() -> None:
         "**1** = A1 0 + A2 1 + A3 0.",
     )
     _must_die(check_ledger_tally, ledger_tally_wrong_split)
-    # The ledger in either layout: one file, or docs/parity/ with a README header and one file
-    # per section keyed by its name. A row's identity is its MIT cite and check cells.
+    # The ledger in either layout: one file, or docs/parity/ with a README header and one or more
+    # files per section keyed by their names. A row's identity is its MIT cite and check cells.
     lroot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
     try:
         (lroot / "docs").mkdir()
@@ -163,8 +163,27 @@ def _self_test_ledger() -> None:
         (parity / "c1-other.md").write_text("# C1 — other\n\n" + table, encoding="utf-8")
         _must_die_msg("names no ledger section", ledger_sources, lroot)
         (parity / "c1-other.md").unlink()
-        (parity / "a1-more.md").write_text("# A1 — more\n\n" + table, encoding="utf-8")
-        _must_die_msg("both hold section A1", ledger_sources, lroot)
+        # A section may span files: A1 in a1-more.md and a1-tgs.md, read in name order, its count
+        # summed over both. A row in both files, or a second file whose heading names another
+        # section, stays red.
+        row_a1b = "| kdc_util.c:3 | u | y | z | w | exact | diffsend `unknown-cname` |\n"
+        (parity / "a1-more.md").write_text("# A1 — more\n\n" + table + row_a1b, encoding="utf-8")
+        head2 = head.replace("**2** = A1 1", "**3** = A1 2").replace("exact 1 ·", "exact 2 ·")
+        (parity / "README.md").write_text(head2, encoding="utf-8")
+        check_ledger_layout(lroot)
+        check_ledger_tally(root=lroot)
+        if [n for n, _t, _k in ledger_sources(lroot)][1:3] != ["docs/parity/a1-more.md", "docs/parity/a1-tgs.md"] \
+                or [k for _n, _t, k in ledger_sources(lroot)] != [None, "A1", "A1", "B1"]:
+            _die("ledger_sources must read every file of a section, in name order")
+        (parity / "README.md").write_text(head2.replace("A1 2 + A2 0", "A1 1 + A2 1"), encoding="utf-8")
+        _must_die_msg("section split", check_ledger_tally, None, lroot)
+        (parity / "README.md").write_text(head2, encoding="utf-8")
+        (parity / "a1-more.md").write_text("# A1 — more\n\n" + table + row_a1b + row_a1, encoding="utf-8")
+        _must_die_msg(
+            "docs/parity/a1-tgs.md:5 repeats the ledger row at docs/parity/a1-more.md:6", check_ledger_layout, lroot
+        )
+        (parity / "a1-more.md").write_text("# A2 — more\n\n" + table + row_a1b, encoding="utf-8")
+        _must_die_msg("a1-more.md: first heading '# A2 — more' does not name section A1", ledger_sources, lroot)
         (parity / "a1-more.md").unlink()
         (parity / "README.md").write_text(head + table + row_a1, encoding="utf-8")
         _must_die_msg("README.md holds ledger rows", ledger_sources, lroot)
@@ -183,9 +202,9 @@ def _self_test_ledger() -> None:
     unit = "`udp_oversize_reply_is_response_too_big`"
 
     check_ledger_anchors(_row("none", verdict="absent"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", proof=unit))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", proof=unit))
     check_ledger_anchors(_row("krb5-kdc/listen.rs MAX_TCP_REQUEST", proof="`kdc-gate.sh:1`"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", proof="`as-success`"))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", proof="`as-success`"))
     check_ledger_anchors(
         _row("krb5-kdc/status.rs NEEDED_PREAUTH", "`NEEDED_PREAUTH`")
     )
@@ -197,7 +216,7 @@ def _self_test_ledger() -> None:
     try:
         (fake_mit / "kdc").mkdir()
         (fake_mit / "kdc" / "kdc_util.c").write_text('int x = KRB_ERR_RESPONSE_TOO_BIG;\nstatus = "CLIENT KEY EXPIRED";\n')
-        mit_row = _row("krb5-kdc/listen.rs handle_tcp", proof=unit).replace("| x | y |", "| x | `KRB_ERR_RESPONSE_TOO_BIG` `CLIENT KEY EXPIRED` |")
+        mit_row = _row("krb5-kdc/dispatch.rs make_toolong_error", proof=unit).replace("| x | y |", "| x | `KRB_ERR_RESPONSE_TOO_BIG` `CLIENT KEY EXPIRED` |")
         check_ledger_mit_cites(mit_row, fake_mit)
         check_ledger_mit_cites(mit_row.replace("KRB_ERR_RESPONSE_TOO_BIG", "RESPONSE_TOO_BIG"), fake_mit)
         _must_die(check_ledger_mit_cites, mit_row.replace("KRB_ERR_RESPONSE_TOO_BIG", "RESPONSE_TOO_BI"), fake_mit)
@@ -215,30 +234,30 @@ def _self_test_ledger() -> None:
         _row(f"krb5-kdc/plugins.rs advertise:{advertise_at}", verdict="absent")
     )
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
-    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "no status word"))
-    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", proof="`no_such_unit_anywhere`"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", "no status word", proof=unit))
-    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp", "NOT_A_REAL_STATUS 60"))
-    check_ledger_anchors(_row("krb5-kdc/listen.rs handle_tcp", "FIELD_TOOLONG 52"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "no status word"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", proof="`no_such_unit_anywhere`"))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", "no status word", proof=unit))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "NOT_A_REAL_STATUS 60"))
+    check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", "FIELD_TOOLONG 52"))
     _must_die(
         check_ledger_anchors,
-        _row("krb5-kdc/listen.rs handle_tcp", "`TKT_NYV`").replace("| kdc_util.c:1 |", "| issue.rs:1 |"),
+        _row("krb5-kdc/dispatch.rs make_toolong_error", "`TKT_NYV`").replace("| kdc_util.c:1 |", "| issue.rs:1 |"),
     )
     check_ledger_anchors(
-        _row("krb5-kdc/listen.rs handle_tcp", "x", "absent").replace("| kdc_util.c:1 |", "| n/a (harness) |")
+        _row("krb5-kdc/dispatch.rs make_toolong_error", "x", "absent").replace("| kdc_util.c:1 |", "| n/a (harness) |")
     )
     _must_die(check_ledger_anchors, _row("issue.rs no_such_fn_at_all"))
-    _must_die(check_ledger_anchors, _row("krb5-kdc/listen.rs handle_tcp:1"))
-    _must_die(check_ledger_anchors, _row("listen.rs handle_tcp"))
+    _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error:1"))
+    _must_die(check_ledger_anchors, _row("listen.rs serve_all_until"))
     _must_die(check_ledger_anchors, _row("lib.rs propagate", verdict="deviation"))
     _must_die(check_ledger_anchors, _row("none"))
     _must_die(
         check_ledger_anchors,
-        _row("krb5-kdc/listen.rs handle_tcp", "`TKT_NYV`"),
+        _row("krb5-kdc/dispatch.rs make_toolong_error", "`TKT_NYV`"),
     )
-    handle_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "handle_tcp")
-    if handle_span is None or not handle_span[2].startswith("fn handle_tcp(") or not handle_span[2].rstrip().endswith("}") or handle_span[1] - handle_span[0] < 20:
-        raise AssertionError(f"handle_tcp must resolve to a brace-matched fn body, got {handle_span}")
+    handle_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "setup_socket")
+    if handle_span is None or not handle_span[2].startswith("fn setup_socket(") or not handle_span[2].rstrip().endswith("}") or handle_span[1] - handle_span[0] < 20:
+        raise AssertionError(f"setup_socket must resolve to a brace-matched fn body, got {handle_span}")
     max_span = _item_span(ROOT / "crates/krb5-kdc/src/listen.rs", "MAX_TCP_REQUEST")
     if max_span is None:
         raise AssertionError("MAX_TCP_REQUEST const must resolve")

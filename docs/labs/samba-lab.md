@@ -58,6 +58,11 @@ passwords are test fixtures, not real secrets.
 host/svc.ad.kerber.test`) for the S4U work. Names mirror
 [`ad-lab.md`](ad-lab.md) so the same gates apply.
 
+`Administrator`, `kbruser` and `kbrsvc` never expire (`userAccountControl` has
+`DONT_EXPIRE_PASSWORD`, set at build time). The domain's password age is 42
+days and the passwords are set once, when the image is built: without the flag
+a local image older than that fails every `kinit` with "Password expired".
+
 ## Provisioning recipe (target — finalized in `harness/samba/`)
 
 Run once inside the image build/entrypoint (throwaway `<...>` passwords come from
@@ -74,6 +79,7 @@ samba-tool domain provision \
 
 samba-tool user create kbruser "$SAMBA_KBRUSER_PASSWORD"
 samba-tool user create kbrsvc  "$SAMBA_KBRSVC_PASSWORD"
+for u in kbruser kbrsvc Administrator; do samba-tool user setexpiry "$u" --noexpiry; done
 samba-tool spn add host/svc.ad.kerber.test kbrsvc
 
 # AES-only (0x18=24) via LDIF; constrained delegation + protocol transition for S4U (A4)
@@ -103,7 +109,7 @@ FL match; operational details are kept outside the repository.)*
 
 `scripts/samba-ad-gate.sh` — the **only `exit 0`** is a live Samba `kinit` +
 `kvno` + `klist` content match; missing docker/image/KDC is `exit 2` +
-`samba-ad-gate-unavailable.log` (Heimdal/SSPI-style honesty). It reads:
+`samba-ad-gate-unavailable.log` (as `heimdal-gate` does). It reads:
 
 ```bash
 SAMBA_AD_IMAGE=samba-ad-dc:latest \

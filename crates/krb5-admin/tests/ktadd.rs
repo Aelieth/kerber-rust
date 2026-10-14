@@ -95,7 +95,8 @@ fn setstr_reload_keeps_concurrent_create() {
     local.persist_paths = Some((db.clone(), stash.clone()));
     let extra = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["m5extra"]);
     kadmind
-        .create_password(&acl, &documented_admin_id(), &extra, b"m5-secret")
+        .change(|s| s.create_password(&acl, &documented_admin_id(), &extra, b"m5-secret"))
+        .unwrap()
         .unwrap();
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     {

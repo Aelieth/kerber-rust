@@ -56,6 +56,7 @@ SHAPE_FIELDS = (
     "sname_nt",
     "addl_tickets",
     "enc_authdata",
+    "pa_for_user_cksumtype",
 )
 
 
@@ -211,6 +212,38 @@ def _padata_types(inner: bytes) -> list[int]:
     return types
 
 
+def _for_user_cksumtype(inner: bytes) -> int | None:
+    """The checksum type of the PA-FOR-USER (129) in a padata list, else None."""
+    j = 0
+    while j < len(inner):
+        _, pa, j = _tlv(inner, j)
+        ptype, value = None, b""
+        k = 0
+        while k < len(pa):
+            ptag, pval, k = _tlv(pa, k)
+            if ptag == 0xA1:
+                _, pt, _ = _tlv(pval, 0)
+                ptype = _int(pt)
+            elif ptag == 0xA2:
+                _, value, _ = _tlv(pval, 0)
+        if ptype != 129 or not value:
+            continue
+        _, seq, _ = _tlv(value, 0)
+        k = 0
+        while k < len(seq):
+            ftag, fval, k = _tlv(seq, k)
+            if ftag != 0xA2:
+                continue
+            _, cksum, _ = _tlv(fval, 0)
+            m = 0
+            while m < len(cksum):
+                ctag, cval, m = _tlv(cksum, m)
+                if ctag == 0xA0:
+                    _, ct, _ = _tlv(cval, 0)
+                    return _int(ct)
+    return None
+
+
 def parse_kdc_req_shape(pdu: bytes) -> dict | None:
     """Shape dict of an AS-REQ (0x6a) or TGS-REQ (0x6c), else None."""
     if not pdu or pdu[0] not in (0x6A, 0x6C):
@@ -220,6 +253,7 @@ def parse_kdc_req_shape(pdu: bytes) -> dict | None:
         _, seq, _ = _tlv(seq, 0)
     msg_type = 10 if pdu[0] == 0x6A else 12
     padata: list[int] = []
+    for_user_cksumtype = None
     body = None
     i = 0
     while i < len(seq):
@@ -232,6 +266,7 @@ def parse_kdc_req_shape(pdu: bytes) -> dict | None:
             msg_type = _int(inner)
         elif num == 3:
             padata = _padata_types(inner)
+            for_user_cksumtype = _for_user_cksumtype(inner)
         elif num == 4:
             body = inner
             if body and body[0] == 0x30:
@@ -258,6 +293,7 @@ def parse_kdc_req_shape(pdu: bytes) -> dict | None:
         "addresses": False,
         "enc_authdata": False,
         "addl_tickets": False,
+        "pa_for_user_cksumtype": for_user_cksumtype,
     }
     if body is None:
         return shape
@@ -685,6 +721,24 @@ def _self_test() -> int:
     assert shape["till_unix"] == 1767268800, shape
     assert "forwardable" in shape["kdc_options"], shape
     assert "renewable_ok" in shape["kdc_options"], shape
+    assert shape["pa_for_user_cksumtype"] is None, shape
+    cksum = _tlv_enc(
+        0x30,
+        _tlv_enc(0xA0, _tlv_enc(0x02, (-138).to_bytes(2, "big", signed=True)))
+        + _tlv_enc(0xA1, _tlv_enc(0x04, bytes(16))),
+    )
+    for_user = _tlv_enc(
+        0x30,
+        _tlv_enc(0xA0, cname)
+        + _tlv_enc(0xA1, _tlv_enc(0x1B, realm))
+        + _tlv_enc(0xA2, cksum)
+        + _tlv_enc(0xA3, _tlv_enc(0x1B, b"Kerberos")),
+    )
+    pa_129 = _tlv_enc(
+        0x30,
+        _tlv_enc(0xA1, _tlv_enc(0x02, _int_enc(129))) + _tlv_enc(0xA2, _tlv_enc(0x04, for_user)),
+    )
+    assert _for_user_cksumtype(pa_129) == -138
     mit = [shape]
     rust = [dict(shape)]
     compare_flows(mit, rust, "self")

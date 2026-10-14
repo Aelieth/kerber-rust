@@ -1,10 +1,12 @@
-# Every cargo invocation in this tree runs on the current stable with rustfmt
-# and clippy present, locally and in the ten stable CI jobs. The msrv jobs
+# Every cargo invocation in this tree runs on this one stable release with
+# rustfmt and clippy present, locally and in the ten stable CI jobs (the
+# rust-preamble action's default toolchain installs the same release). A new
+# Rust release changes nothing until this pin is bumped by hand. The msrv jobs
 # override with RUSTUP_TOOLCHAIN=1.95 (this file outranks `rustup default`,
 # which is all dtolnay/rust-toolchain sets); fuzz.yml uses `cargo +nightly`.
 # ci-policy.py check_msrv_pinned keeps the three in step with
 # [workspace.package] rust-version.
 [toolchain]
-channel = "stable"
+channel = "1.99.0"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

@@ -9,7 +9,7 @@ import tempfile
 from .comments import (
     check_mit_anchor_form, check_mit_anchor_truth, check_no_docs_process_tags, check_no_process_history,
 )
-from .common import WORKFLOWS, _die, _scratch_root
+from .common import WORKFLOWS, _die, _scratch_root, reported_git_vars, scrub_git_env
 from .docs import (
     check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size, check_gate_doc_tokens,
     check_gate_documented,
@@ -51,6 +51,13 @@ from .workflows import (
 
 
 def main() -> None:
+    # Every git command this run makes, or a script it runs makes, is about this checkout or a scratch
+    # repository a self-test builds. An inherited GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE or any other GIT_*
+    # would point it at another repository, so none survives into the run; the ones that name a repository
+    # or carry git configuration are reported.
+    named = reported_git_vars(scrub_git_env())
+    if named:
+        print(f"ci-policy: ignoring the inherited {', '.join(named)}", file=sys.stderr)
     # The scripts the checks run stamp through provenance.sh, and the self-tests make temp trees: give
     # both this run's scratch as KERBER_SCRATCH and, unless the caller set one, as TMPDIR, never host /tmp.
     os.environ.setdefault("KERBER_SCRATCH", str(_scratch_root()))

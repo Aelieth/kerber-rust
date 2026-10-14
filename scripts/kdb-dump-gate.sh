@@ -122,14 +122,11 @@ echo "$ALIAS_LINE" | grep -q '	12	17	75736572404b45524245522e5445535400	'
 docker exec "$NAME" sh -c 'kdb5_util destroy -f >/dev/null 2>&1'
 
 echo "==== half A: krb5-kdb load MIT dump (with the alias) ===="
-LOAD_A="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/mit-alias.dump)"
-echo "$LOAD_A"
-echo "$LOAD_A" | grep -q 'ok load version=7'
-echo "$LOAD_A" | grep -q 'realm=KERBER.TEST'
+    "$NAME" /tmp/krb5-kdb load /tmp/mit-alias.dump
 
 echo "==== half A: Rust reads MIT's history — the old password is a reuse, the policy is bound, kadmin/history keeps MIT's shape ===="
 REUSE_A="$(rust_local 'cpw -pw s3cret1 histee' || true)"
@@ -169,7 +166,7 @@ STASHCMD="$(docker exec \
     -e KRB5_KDC_STASH=/tmp/stash \
     "$NAME" /tmp/krb5-kdb stash 2>&1 || true)"
 echo "$STASHCMD"
-echo "$STASHCMD" | grep -q 'ok stash realm=KERBER.TEST'
+echo "$STASHCMD" | grep -qx 'Using existing stashed keys to update stash file.'
 docker exec "$NAME" klist -k -t -K /tmp/stash 2>&1 | grep -q 'K/M@KERBER.TEST'
 
 echo "==== Rust KDC loads the keytab stash with no ERROR log ===="
@@ -445,13 +442,11 @@ if [ "$free" != 1 ]; then
     log "kdb.dump.gate" "error" ',"error":"MIT krb5kdc still bound :88 after rlife0 dump"'
     exit 1
 fi
-LOAD_R0="$(docker exec \
+docker exec \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rlife0-principal \
     -e KRB5_KDC_STASH=/tmp/rlife0-stash \
-    "$NAME" /tmp/krb5-kdb load /tmp/rlife0.dump)"
-echo "$LOAD_R0"
-echo "$LOAD_R0" | grep -q 'ok load version=7'
+    "$NAME" /tmp/krb5-kdb load /tmp/rlife0.dump
 GET_R0="$(rust_kadmin_local \
     -e KRB5_MASTER_PASSWORD=masterpassword \
     -e KRB5_KDC_DB=/tmp/rlife0-principal \

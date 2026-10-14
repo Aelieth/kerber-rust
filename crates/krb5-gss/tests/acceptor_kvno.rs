@@ -17,6 +17,7 @@ use krb5_types::{PrincipalName, ascii};
 /// Build a real host/… GSS AP-REQ token and return it with the ticket-enc key
 /// and its kvno.
 fn host_token() -> (Vec<u8>, krb5_crypto::ProtocolKey, u32) {
+    krb5_config::isolate_test_krb5();
     let (store, acl) = bootstrap_documented().expect("bootstrap");
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = krb5_crypto::string_to_key(
@@ -118,4 +119,85 @@ fn gss_accept_kt_matching_kvno_verifies() {
         &ReplayCache::new(),
     )
     .expect("matching kvno verifies");
+}
+
+/// An acceptor over a keytab it cannot walk, the KDB's, asks for the key by principal: for the server
+/// the ticket names when it holds no name (`GSS_C_NO_NAME`), for the name it holds otherwise, and the
+/// context's acceptor is then that principal, whatever server the ticket's cleartext names.
+/// MIT `kg_accept_krb5` (`accept_sec_context.c:829-831`): `krb5_rd_req_decoded` with `acceptor_mprinc`, NULL for no name.
+/// MIT `try_one_entry` (`rd_req_dec.c:315-317`): the keytab principal becomes the ticket's server.
+#[test]
+fn gss_accept_kdb_asks_for_the_tickets_server_or_the_name_it_holds() {
+    let (token, skey, kvno) = host_token();
+    let host = documented_host();
+    let asked = std::cell::RefCell::new(Vec::new());
+    let lookup = |n: &PrincipalName, r: &str, k: u32, e: i32| {
+        asked.borrow_mut().push((n.clone(), r.to_owned(), k, e));
+        Ok(skey.clone())
+    };
+    let (ctx, _) = GssContext::accept_sec_context_kdb(
+        &token,
+        None,
+        TEST_REALM,
+        &lookup,
+        None,
+        &ReplayCache::new(),
+    )
+    .expect("no name: the ticket's server");
+    assert_eq!(ctx.acceptor.as_ref(), Some(&host));
+    let named = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"]);
+    let (ctx, _) = GssContext::accept_sec_context_kdb(
+        &token,
+        Some(&named),
+        TEST_REALM,
+        &lookup,
+        None,
+        &ReplayCache::new(),
+    )
+    .expect("a name: its key decrypts the ticket");
+    assert_eq!(ctx.acceptor.as_ref(), Some(&named));
+    assert_eq!(
+        *asked.borrow(),
+        [
+            (host, TEST_REALM.to_owned(), kvno, 18),
+            (named, TEST_REALM.to_owned(), kvno, 18)
+        ]
+    );
+}
+
+/// A lookup that finds no such principal is NOT_US where no name is held, which an acceptor with
+/// several names goes on from, and NOKEY where the name is explicit.
+/// MIT `keytab_fetch_error` (`rd_req_dec.c:118-148`): `KRB5_KT_NOTFOUND` is `explicit_server ? NOKEY : NOT_US`.
+#[test]
+fn gss_accept_kdb_with_no_such_principal_is_not_us_unless_the_name_is_explicit() {
+    let (token, _, _) = host_token();
+    let none =
+        |_: &PrincipalName, _: &str, _: u32, _: i32| Err(krb5_protocol::KeytabLookup::NotFound);
+    let refused = GssContext::accept_sec_context_kdb(
+        &token,
+        None,
+        TEST_REALM,
+        &none,
+        None,
+        &ReplayCache::new(),
+    )
+    .map(|_| ());
+    assert!(
+        matches!(refused, Err(krb5_gss::Error::NotUs(_))),
+        "{refused:?}"
+    );
+    let named = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"]);
+    let refused = GssContext::accept_sec_context_kdb(
+        &token,
+        Some(&named),
+        TEST_REALM,
+        &none,
+        None,
+        &ReplayCache::new(),
+    )
+    .map(|_| ());
+    assert!(
+        matches!(refused, Err(krb5_gss::Error::Inner(_))),
+        "{refused:?}"
+    );
 }

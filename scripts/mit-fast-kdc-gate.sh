@@ -13,6 +13,9 @@ NAME="kerber-rust-mit-fast-kdc-gate"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
+# The `preauth (<module>) verify failure: <message>` lines of a KDC log on stdin.
+verify_failure_lines() { sed -n -E 's/^.*\(info\): (preauth \([a-z_]+\) verify failure: .*)$/\1/p'; }
+
 if ! command -v docker >/dev/null 2>&1; then
     log "fast.kdc.gate" "error" ',"error":"docker not available"'
     exit 1
@@ -328,6 +331,7 @@ fi
 
 echo "==== Rust KDC: FAST wrong-password and unknown-server outer shapes ===="
 docker exec "$NAME" sh -c ':> /tmp/fast-err-rust.txt'
+RB_BEFORE="$(docker exec "$NAME" sh -c 'wc -l < /tmp/kdc.log' | tr -d '[:space:]')"
 set +e
 RUST_BADPW="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf "$NAME" \
     sh -c 'printf "wrongpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_bad user@KERBER.TEST' 2>&1)"
@@ -356,6 +360,8 @@ if echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ error_code=91'; then
     exit 1
 fi
 RUST_BADPW_SHAPE="$(echo "$RUST_BADPW_PROXY" | grep -E 'rep#[0-9]+ (error_code=|tag=)' | sed -E 's/^rep#[0-9]+ //' | sort -u || true)"
+RUST_BADPW_VF="$(docker exec "$NAME" sh -c "tail -n +$((RB_BEFORE + 1)) /tmp/kdc.log" | verify_failure_lines)"
+echo "$RUST_BADPW_VF"
 
 docker exec "$NAME" sh -c ':> /tmp/fast-err-rust.txt'
 set +e
@@ -397,6 +403,7 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 docker exec "$MITNAME" sh -c ':> /tmp/fast-err-mit.txt'
+MB_BEFORE="$(docker exec "$MITNAME" sh -c 'wc -l < /tmp/mit-kdc.log' | tr -d '[:space:]')"
 set +e
 MIT_BADPW="$(docker exec -e KRB5_CONFIG=/tmp/krb5-fast-proxy.conf -e KRB5_TRACE=/tmp/mit-badpw.trace "$MITNAME" \
     sh -c 'printf "wrongpassword\n" | kinit -T /tmp/krb5cc_armor -c /tmp/krb5cc_bad user@KERBER.TEST' 2>&1)"
@@ -430,6 +437,18 @@ echo "rust_fast_badpw_shape=$RUST_BADPW_SHAPE"
 echo "mit_fast_badpw_shape=$MIT_BADPW_SHAPE"
 if [ "$RUST_BADPW_SHAPE" != "$MIT_BADPW_SHAPE" ]; then
     echo "FAST wrong-password outer shape differs rust vs MIT" >&2
+    exit 1
+fi
+# MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the wrong password under FAST is the encrypted_challenge module's verify failure, and the Rust KDC's lines are MIT's.
+MIT_BADPW_VF="$(docker exec "$MITNAME" sh -c "tail -n +$((MB_BEFORE + 1)) /tmp/mit-kdc.log" | verify_failure_lines)"
+echo "rust_fast_badpw_verify_failures=$RUST_BADPW_VF"
+echo "mit_fast_badpw_verify_failures=$MIT_BADPW_VF"
+if [ "$RUST_BADPW_VF" != "$MIT_BADPW_VF" ]; then
+    echo "FAST wrong-password verify failure lines differ rust vs MIT" >&2
+    exit 1
+fi
+if ! grep -qxF 'preauth (encrypted_challenge) verify failure: Incorrect password in encrypted challenge' <<<"$MIT_BADPW_VF"; then
+    echo "FAST wrong-password has no encrypted_challenge verify failure line: $MIT_BADPW_VF" >&2
     exit 1
 fi
 

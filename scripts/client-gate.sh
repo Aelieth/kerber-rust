@@ -191,8 +191,10 @@ echo "default_uid=${NUID} krb5cc_0=$KEEP uid_file_gone=yes"
 test "$KEEP" = "keep"
 
 echo "==== C1 Rust krb5-kinit KEY_EXP with no kpasswd listener: banner, then the error ===="
-# The harness runs krb5kdc only, so the change password step finds nothing on 464;
-# stderr is byte-equal to 0d5fa7f4's on that path.
+# The harness runs krb5kdc only, so the change password step finds nothing on 464. stderr is
+# the banner, then MIT's line for that case under the port's name (live MIT 1.22.2: "kinit:
+# Cannot contact any KDC for requested realm while getting initial credentials"; changepw.c:258-266
+# returns k5_sendto's KRB5_KDC_UNREACH, which has no realm text).
 if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',464),0.3)" 2>/dev/null; then
     die "C1 needs nothing listening on 464 in $NAME"
 fi
@@ -203,8 +205,8 @@ docker exec -e KRB5_PASSWORD=exp-old -e KRB5_NEW_PASSWORD=exp-new "$NAME" \
 echo "s4kc1: rc=$(docker exec "$NAME" cat /tmp/s4kc1.rc)"
 docker exec "$NAME" sed 's/^/  s4kc1 stderr| /' /tmp/s4kc1.err
 [ "$(docker exec "$NAME" cat /tmp/s4kc1.rc)" = 1 ] || die "C1 krb5-kinit did not fail"
-docker exec "$NAME" sh -c "printf 'Password expired.  You must change it now.\\nkinit failed: transport: Connection refused (os error 111)\\n' | cmp -s - /tmp/s4kc1.err" \
-    || die "C1 stderr differs from 0d5fa7f4 (banner, then kinit failed: transport: Connection refused)"
+docker exec "$NAME" sh -c "printf 'Password expired.  You must change it now.\\nkrb5-kinit: Cannot contact any KDC for requested realm while getting initial credentials\\n' | cmp -s - /tmp/s4kc1.err" \
+    || die "C1 stderr differs from MIT's (banner, then Cannot contact any KDC for requested realm)"
 echo "RUST_kinit_keyexp_banner_chpw_refused"
 
 log "client.gate" "ok" ',"principal":"user@KERBER.TEST"'

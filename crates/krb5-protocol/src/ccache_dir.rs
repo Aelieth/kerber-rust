@@ -121,6 +121,53 @@ pub fn dir_switch(residual: &str) -> io::Result<()> {
     write_primary(dir, name)
 }
 
+/// The subsidiary the `primary` file of `dir` names, without creating anything; `None` when
+/// there is no readable primary file.
+/// MIT `dcc_ptcursor_new` (`cc_dir.c:579-632`): a primary file that cannot be read leaves the
+/// collection with no primary.
+#[must_use]
+pub fn dir_primary(dir: &Path) -> Option<PathBuf> {
+    match read_primary(dir, false) {
+        Ok(name) if dir.join("primary").is_file() => Some(dir.join(name)),
+        _ => None,
+    }
+}
+
+/// A new empty subsidiary `tkt` + six random characters in the collection `dir`, created
+/// exclusively with mode 0600.
+/// MIT `dcc_gen_new` (`cc_dir.c:387-429`): the `tktXXXXXX` template made unique in the
+/// collection directory, which is created if missing.
+///
+/// # Errors
+///
+/// The OS error when the directory cannot be made or no unique name can be created; the error
+/// of the random source.
+pub fn dir_gen_new(dir: &Path) -> io::Result<PathBuf> {
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    ensure_dir(dir)?;
+    loop {
+        let mut raw = [0u8; 6];
+        getrandom::getrandom(&mut raw).map_err(|e| io::Error::other(e.to_string()))?;
+        let suffix: String = raw
+            .iter()
+            .map(|b| char::from(CHARS[usize::from(*b) % CHARS.len()]))
+            .collect();
+        let path = dir.join(format!("tkt{suffix}"));
+        let mut opts = OpenOptions::new();
+        opts.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        match opts.open(&path) {
+            Ok(_) => return Ok(path),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
 /// Subsidiary FILE paths (`tkt*`) in `dir`.
 ///
 /// # Errors

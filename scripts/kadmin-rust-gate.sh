@@ -8,7 +8,7 @@ cd "$ROOT"
 . "$ROOT/scripts/lib/kadmin-q.sh"
 . "$ROOT/scripts/lib/kadmin-glob-cells.sh"
 . "$ROOT/scripts/lib/kadmin-common.sh"
-need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local
+need_bins krb5-kdc krb5-kdb krb5-kadmind krb5-kadmin-local rd-sweep
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kadmin-gate"
@@ -74,10 +74,16 @@ EOF'
 echo "==== backdate user last_pwd_change to 1000000000 before kadmind loads the store ===="
 docker exec -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash \
     "$NAME" /tmp/krb5-kdb setlastpwd user 1000000000
+# This kadmind runs with iprop on, as the MIT leg's does: the container's kdc.conf with
+# iprop_enable, its update log /tmp/principal.ulog. Without iprop the program is not registered
+# (the second kadmind below).
+docker exec "$NAME" sh -c '{ sed -n "1,/^    KERBER.TEST = {/p" /etc/krb5kdc/kdc.conf; printf "        iprop_enable = true\n        iprop_port = 749\n        iprop_logfile = /tmp/principal.ulog\n"; sed "1,/^    KERBER.TEST = {/d" /etc/krb5kdc/kdc.conf; } >/tmp/rust-iprop-kdc.conf'
+docker exec "$NAME" grep -q '^        iprop_enable = true$' /tmp/rust-iprop-kdc.conf
 docker exec -d \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KDC_PROFILE=/tmp/rust-iprop-kdc.conf \
     "$NAME" sh -c '/tmp/krb5-kadmind 127.0.0.1:749 >/tmp/kadmind.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
@@ -251,6 +257,27 @@ echo "$IPROP_ADM" | grep -F 'iprop-valid label=AUTH_TOOWEAK'
 IPROP_AG="$(kadm5_probe "$NAME" admin@KERBER.TEST iprop-auth-gssapi /tmp/kadmin-krb5.conf kadmin/admin@KERBER.TEST "$KADMIND_PORT" 2>&1 || true)"
 echo "$IPROP_AG"
 echo "$IPROP_AG" | grep -F 'iprop-auth-gssapi label=AUTH_TOOWEAK'
+echo "==== iprop program on a Rust kadmind without iprop_enable is not registered: AUTH_GSSAPI INIT SUCCESS, DATA no-context AUTH_FAILED, AUTH_NONE, kiprop RPCSEC_GSS and established AUTH_GSSAPI PROG_UNAVAIL (as the MIT leg's) ===="
+docker exec -d \
+    -e KRB5_KDC_DB=/tmp/principal \
+    -e KRB5_KDC_STASH=/tmp/stash \
+    -e KRB5_ACL_FILE=/tmp/kadm5.acl \
+    -e KRB5_KPASSWD_BIND=127.0.0.1:7464 \
+    "$NAME" sh -c '/tmp/krb5-kadmind -P /tmp/kadmind-noiprop.pid 127.0.0.1:7749 >/tmp/kadmind-noiprop.log 2>&1'
+require_log "$NAME" /tmp/kadmind-noiprop.log '^listening ' "the kadmind without iprop listening"
+NOIPROP="$(kadmind_iprop_auth_gssapi "$NAME" 7749 2>&1 || true)"
+echo "$NOIPROP"
+echo "$NOIPROP" | grep -F 'kadmin_on_iprop kind=init label=SUCCESS'
+echo "$NOIPROP" | grep -F 'kadmin_on_iprop kind=data label=AUTH_FAILED'
+echo "$NOIPROP" | grep -F 'kadmin_on_iprop kind=auth_none label=PROG_UNAVAIL'
+NOIPROP_OK="$(kadm5_probe "$NAME" admin@KERBER.TEST iprop-valid /tmp/kadmin-krb5.conf kiprop/testhost.kerber.test@KERBER.TEST 7749 2>&1 || true)"
+echo "$NOIPROP_OK"
+echo "$NOIPROP_OK" | grep -F 'iprop-valid label=ACCEPT code=1 '
+NOIPROP_AG="$(kadm5_probe "$NAME" admin@KERBER.TEST iprop-auth-gssapi /tmp/kadmin-krb5.conf kadmin/admin@KERBER.TEST 7749 2>&1 || true)"
+echo "$NOIPROP_AG"
+echo "$NOIPROP_AG" | grep -F 'iprop-auth-gssapi label=RPC_ERROR clnt_stat=8 '
+docker exec "$NAME" sh -c 'kill "$(cat /tmp/kadmind-noiprop.pid)"'
+wait_gone_in "$NAME" 7749 || die "the kadmind without iprop still bound :7749 after kill"
 echo "==== RPCSEC_GSS integrity service listprincs vs Rust kadmind ===="
 compile_kadm5_integrity "$NAME"
 INT_LIST="$(kadm5_integrity_list "$NAME" admin@KERBER.TEST adminpassword integrity /tmp/kadmin-krb5.conf 2>&1 || true)"
@@ -459,6 +486,12 @@ echo "$HIST_GET" | grep -F 'Principal: kadmin/history@KERBER.TEST'
 HIST_PROBE="$(kadm5_probe "$NAME" admin@KERBER.TEST valid /tmp/kadmin-krb5.conf kadmin/history@KERBER.TEST 2>&1 || true)"
 echo "$HIST_PROBE"
 echo "$HIST_PROBE" | grep -F 'valid label=AUTH_TOOWEAK'
+echo "==== service-name checks vs Rust kadmind: kadm5 exact, iprop kiprop alone (MIT's iprop takes any prefix of it: docs/mit-deviations.md) ===="
+service_name_principals mit_kadmin -i -e KRB5_CONFIG=/tmp/kadmin-krb5.conf "$NAME" -- -p admin@KERBER.TEST -w adminpassword
+service_name_cells rust "$NAME" admin@KERBER.TEST /tmp/kadmin-krb5.conf "$KADMIND_PORT"
+echo "==== Rust kadmind: a ticket forged in a later key of kadmin/admin is refused, the first key completes the INIT (RPCSEC_GSS and AUTH_GSSAPI) ===="
+kadmin_q_ok rust_kadmin_local -e KRB5_KDC_DB=/tmp/principal -e KRB5_KDC_STASH=/tmp/stash "$NAME" -- -q 'ktadd -norandkey -k /tmp/ka.keytab kadmin/admin'
+later_key_cells "$NAME" "127.0.0.1:$KADMIND_PORT"
 
 echo "==== MIT kadmin listprincs ===="
 LIST="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
@@ -672,7 +705,7 @@ echo "$ADD_U2" | grep -F 'Principal "user2@KERBER.TEST" created.'
 ADD_SVC="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p scoped@KERBER.TEST -w scoped-secret -q 'addprinc -pw x svc/x' 2>&1 || true)"
 echo "$ADD_SVC"
-echo "$ADD_SVC" | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
+echo "$ADD_SVC" | strip_mit_kadmin_banner | grep -F $'add_principal: Operation requires ``add\'\' privilege while creating "svc/x@KERBER.TEST".'
 if echo "$ADD_SVC" | grep -q 'Principal "svc/x@KERBER.TEST" created.'; then
     echo "scoped addprinc svc/x succeeded (ACL target ignored)" >&2
     exit 1
@@ -702,7 +735,7 @@ kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 DEL_NODEL="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p nodel@KERBER.TEST -w nodel-secret -q 'delprinc -force victim' 2>&1 || true)"
 echo "$DEL_NODEL"
-echo "$DEL_NODEL" | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
+echo "$DEL_NODEL" | strip_mit_kadmin_banner | grep -F $'delete_principal: Operation requires ``delete\'\' privilege while deleting principal "victim@KERBER.TEST"'
 if echo "$DEL_NODEL" | grep -qiE 'Principal "victim@KERBER.TEST" deleted|deleted.'; then
     echo "nodel *D granted delete: $DEL_NODEL" >&2
     exit 1
@@ -720,7 +753,7 @@ kadmin_q_ok mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
 LIST_I="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p ro@KERBER.TEST -w ro-secret -q 'listprincs' 2>&1 || true)"
 echo "$LIST_I"
-echo "$LIST_I" | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
+echo "$LIST_I" | strip_mit_kadmin_banner | grep -F $'get_principals: Operation requires ``list\'\' privilege while retrieving list.'
 if echo "$LIST_I" | grep -q 'user@KERBER.TEST'; then
     echo "ro i listed principals: $LIST_I" >&2
     exit 1
@@ -732,7 +765,7 @@ echo "$LIST_L" | grep -F 'user@KERBER.TEST'
 ADDPOL_D="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p ro@KERBER.TEST -w ro-secret -q 'addpol pol-ro' 2>&1 || true)"
 echo "$ADDPOL_D"
-echo "$ADDPOL_D" | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
+echo "$ADDPOL_D" | strip_mit_kadmin_banner | grep -F $'add_policy: Operation requires ``add\'\' privilege while creating policy "pol-ro".'
 SELFGET="$(mit_kadmin -e KRB5_CONFIG=/tmp/kadmin-krb5.conf \
     "$NAME" -- -p user@KERBER.TEST -w userpassword -q 'getprinc user' 2>&1 || true)"
 echo "$SELFGET"

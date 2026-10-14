@@ -238,7 +238,12 @@ fn request<'a>(
 #[test]
 fn fast_exchange_negotiates_through_the_armor_like_mit() {
     isolate_host_krb5();
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // The client's default group is edwards25519 (MIT `DEFAULT_GROUPS_CLIENT`).
+    store.policy.spake_preauth_groups = vec![
+        krb5_crypto::SpakeGroup::Edwards25519,
+        krb5_crypto::SpakeGroup::P256,
+    ];
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
@@ -267,7 +272,9 @@ fn fast_exchange_negotiates_through_the_armor_like_mit() {
     // outer request with the strengthened reply key (krb5int_fast_verify_nego).
     let fast = as_exchange(&request(&cname, &kdc, Some(&armor))).expect("FAST AS exchange");
     assert!(fast.fast_avail, "PA-FX-FAST echoed inside the FAST reply");
-    assert_eq!(fast.pa_type, Some(pa::ENC_TIMESTAMP));
+    // Inside FAST the KDC lists SPAKE before encrypted challenge and withholds encrypted
+    // timestamp. MIT `process_pa_data` runs that first loaded real module.
+    assert_eq!(fast.pa_type, Some(pa::SPAKE));
 }
 
 #[test]
@@ -761,5 +768,88 @@ fn fast_tgs_error_is_the_inner_fx_error() {
             assert_eq!(text.as_deref(), Some("mitm"));
         }
         other => panic!("want the outer KRB-ERROR 60, got {other:?}"),
+    }
+}
+
+/// The documented realm, which also issues a des3 session key, with a user whose only key is des3 and who must preauthenticate, and the user's key.
+fn realm_with_des3_user() -> (PrincipalStore, PrincipalName, ProtocolKey) {
+    let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store.policy.allow_des3 = true;
+    // No SPAKE: the encrypted challenge is the only mechanism under armor, as on a KDC that does not configure SPAKE.
+    store.policy.spake_preauth_groups = Vec::new();
+    store
+        .set_string(
+            &PrincipalName::krbtgt(TEST_REALM),
+            "session_enctypes",
+            Some("aes256-cts,aes128-cts,des3-cbc-sha1"),
+        )
+        .expect("session_enctypes");
+    let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["des3user"]);
+    store
+        .create_password_etypes(
+            &acl,
+            &krb5_kdc::testrealm::documented_admin_id(),
+            &user,
+            b"des3-secret",
+            &[EncryptionType::Des3CbcSha1],
+        )
+        .expect("addprinc -e des3");
+    let key = krb5_crypto::string_to_key(
+        EncryptionType::Des3CbcSha1,
+        b"des3-secret",
+        user.default_salt(TEST_REALM),
+        None,
+    )
+    .expect("string-to-key");
+    (store, user, key)
+}
+
+/// Under FAST armor the encrypted-timestamp module meets a keytab key of bad parity as it does without armor: its encryption fails with
+/// the key's code, the module fails, and with no other mechanism the exchange ends "Pre-authentication failed: <the key's message>".
+/// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:87-97`): `krb5_encrypt_helper` fails with `KRB5DES_BAD_KEYPAR`, the module's failure.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): with no real mechanism answered, the first failure is wrapped as "Pre-authentication failed: <message>"; armor does not change it.
+#[test]
+fn a_keytab_key_of_bad_parity_fails_the_encrypted_timestamp_module_under_armor() {
+    isolate_host_krb5();
+    let (store, user, key) = realm_with_des3_user();
+    let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
+    let port = udp.local_addr().unwrap().port();
+    let store = shared_store(store);
+    thread::spawn(move || {
+        let _ = serve(store, udp, tcp);
+    });
+    let kdc = KdcAddr {
+        host: "127.0.0.1".into(),
+        port,
+    };
+    // The armor ticket is the documented user's TGT.
+    let armor_user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let tgt = as_exchange(&request(&armor_user, &kdc, None)).expect("the armor TGT");
+    let armor = FastArmor {
+        ticket: tgt.ticket.clone(),
+        session: tgt.session_key.clone(),
+        crealm: tgt.crealm.clone(),
+        cname: tgt.cname.clone(),
+    };
+    let des3 = [EncryptionType::Des3CbcSha1.to_iana()];
+    let ask = |password: &'static [u8]| AsRequest {
+        password,
+        etypes: Some(&des3),
+        ..request(&user, &kdc, Some(&armor))
+    };
+    // The good key logs in under armor: the harness is sound.
+    let ok = krb5_protocol::as_exchange_with_keys(&ask(b""), std::slice::from_ref(&key))
+        .expect("the key as it is");
+    assert_eq!(ok.session_key.etype(), EncryptionType::Des3CbcSha1);
+    // The key with one octet's parity flipped is the module's failure.
+    let mut bytes = key.as_bytes().to_vec();
+    bytes[3] ^= 1;
+    let bad = ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &bytes).expect("loads");
+    let r = krb5_protocol::as_exchange_with_keys(&ask(b""), std::slice::from_ref(&bad));
+    match r {
+        Err(Error::PreauthFailed(inner)) => {
+            assert!(matches!(*inner, Error::DesBadParity), "{inner:?}");
+        }
+        other => panic!("expected Pre-authentication failed around the key's error, got {other:?}"),
     }
 }

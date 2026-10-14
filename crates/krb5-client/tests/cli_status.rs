@@ -93,3 +93,32 @@ fn sample(end: u32, server: PrincipalName) -> CcacheCred {
         second_ticket: Vec::new(),
     }
 }
+
+/// `kdestroy` and `kswitch` keep com_err's default hook: their error line ends `\n`, as Fedora's
+/// MIT prints it (the system com_err), with no carriage return.
+#[test]
+fn kdestroy_and_kswitch_end_an_error_line_with_a_newline() {
+    let dir = scratch_dir("com-err-line");
+    let conf = dir.join("krb5.conf");
+    std::fs::write(&conf, "[libdefaults]\n    default_realm = X.TEST\n").unwrap();
+    for (bin, end) in [
+        (
+            env!("CARGO_BIN_EXE_krb5-kdestroy"),
+            " while resolving ccache\n",
+        ),
+        (
+            env!("CARGO_BIN_EXE_krb5-kswitch"),
+            " while resolving XYZ:nope\n",
+        ),
+    ] {
+        let out = Command::new(bin)
+            .args(["-c", "XYZ:nope"])
+            .env("KRB5_CONFIG", &conf)
+            .output()
+            .expect("spawn");
+        assert_eq!(out.status.code(), Some(1), "{bin}");
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(err.ends_with(end) && !err.contains('\r'), "{bin}: {err:?}");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}

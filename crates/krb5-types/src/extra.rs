@@ -8,7 +8,7 @@ use crate::{
 };
 
 /// AP-REP ::= [APPLICATION 15] SEQUENCE { pvno, msg-type, enc-part }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 15)))]
 pub struct ApRep {
     /// Protocol version.
@@ -29,8 +29,37 @@ impl ApRep {
     pub const MSG_TYPE: i32 = 15;
 }
 
+/// [`ApRep`] as it decodes, its msg-type the message's own.
+/// MIT `ap_rep_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:760-760`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+#[derive(AsnType, Decode)]
+#[rasn(tag(explicit(application, 15)))]
+struct ApRepOnWire {
+    #[rasn(tag(explicit(0)))]
+    pvno: crate::WireVersion,
+    #[rasn(tag(explicit(1)))]
+    #[allow(dead_code)]
+    msg_type: crate::WireImmediate,
+    #[rasn(tag(explicit(2)))]
+    enc_part: EncryptedData,
+}
+
+impl Decode for ApRep {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = ApRepOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            pvno: w.pvno.0,
+            msg_type: Self::MSG_TYPE,
+            enc_part: w.enc_part,
+        })
+    }
+}
+
 /// EncAPRepPart ::= [APPLICATION 27] SEQUENCE { ctime, cusec, subkey, seq-number }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 27)))]
 pub struct EncApRepPart {
     /// Client time from the AP-REQ authenticator.
@@ -48,7 +77,7 @@ pub struct EncApRepPart {
 }
 
 /// KRB-SAFE ::= [APPLICATION 20] SEQUENCE { pvno, msg-type, safe-body, cksum }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 20)))]
 pub struct KrbSafe {
     /// Protocol version.
@@ -72,8 +101,40 @@ impl KrbSafe {
     pub const MSG_TYPE: i32 = 20;
 }
 
+/// [`KrbSafe`] as it decodes, its msg-type the message's own.
+/// MIT `safe_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:816-816`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+#[derive(AsnType, Decode)]
+#[rasn(tag(explicit(application, 20)))]
+struct KrbSafeOnWire {
+    #[rasn(tag(explicit(0)))]
+    pvno: crate::WireVersion,
+    #[rasn(tag(explicit(1)))]
+    #[allow(dead_code)]
+    msg_type: crate::WireImmediate,
+    #[rasn(tag(explicit(2)))]
+    safe_body: KrbSafeBody,
+    #[rasn(tag(explicit(3)))]
+    cksum: Checksum,
+}
+
+impl Decode for KrbSafe {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = KrbSafeOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            pvno: w.pvno.0,
+            msg_type: Self::MSG_TYPE,
+            safe_body: w.safe_body,
+            cksum: w.cksum,
+        })
+    }
+}
+
 /// KRB-SAFE-BODY
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KrbSafeBody {
     /// Application payload.
     #[rasn(tag(explicit(0)))]
@@ -96,7 +157,7 @@ pub struct KrbSafeBody {
 }
 
 /// KRB-PRIV ::= [APPLICATION 21] SEQUENCE { pvno, msg-type, enc-part }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 21)))]
 pub struct KrbPriv {
     /// Protocol version.
@@ -117,8 +178,37 @@ impl KrbPriv {
     pub const MSG_TYPE: i32 = 21;
 }
 
+/// [`KrbPriv`] as it decodes, its msg-type the message's own.
+/// MIT `priv_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:845-845`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+#[derive(AsnType, Decode)]
+#[rasn(tag(explicit(application, 21)))]
+struct KrbPrivOnWire {
+    #[rasn(tag(explicit(0)))]
+    pvno: crate::WireVersion,
+    #[rasn(tag(explicit(1)))]
+    #[allow(dead_code)]
+    msg_type: crate::WireImmediate,
+    #[rasn(tag(explicit(3)))]
+    enc_part: EncryptedData,
+}
+
+impl Decode for KrbPriv {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = KrbPrivOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            pvno: w.pvno.0,
+            msg_type: Self::MSG_TYPE,
+            enc_part: w.enc_part,
+        })
+    }
+}
+
 /// EncKrbPrivPart ::= [APPLICATION 28] SEQUENCE { ... }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 28)))]
 pub struct EncKrbPrivPart {
     /// Application payload.
@@ -141,8 +231,209 @@ pub struct EncKrbPrivPart {
     pub r_address: Option<HostAddress>,
 }
 
+/// A seq-number as a KRB-SAFE, a KRB-PRIV, an AP-REP or an authenticator carries it.
+/// MIT `decode_seqno` (`lib/krb5/asn.1/asn1_k_encode.c:133-146`): an INTEGER from `INT32_MIN` to `0xFFFFFFFF` decodes, a negative one (an old Heimdal's) as the same 32 bits unsigned, and a wider one is `ASN1_OVERFLOW`, which fails the message.
+/// MIT `encode_seqno` (`asn1_k_encode.c:124-132`): written unsigned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WireSeqNumber(pub(crate) u32);
+
+impl AsnType for WireSeqNumber {
+    const TAG: Tag = Tag::INTEGER;
+}
+
+impl Decode for WireSeqNumber {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let value = decoder.decode_integer::<i64>(tag, constraints)?;
+        i32::try_from(value)
+            .map(i32::cast_unsigned)
+            .or_else(|_| u32::try_from(value))
+            .map(Self)
+            .map_err(|_| {
+                <D::Error as rasn::de::Error>::custom(
+                    "seq-number outside INT32_MIN..=0xFFFFFFFF",
+                    decoder.codec(),
+                )
+            })
+    }
+}
+
+impl Encode for WireSeqNumber {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        u64::from(self.0).encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
+}
+
+/// [`EncApRepPart`] on the wire, its seq-number as MIT reads and writes it.
+#[derive(AsnType, Decode, Encode)]
+#[rasn(tag(explicit(application, 27)))]
+struct EncApRepPartOnWire {
+    #[rasn(tag(explicit(0)))]
+    ctime: KerberosTime,
+    #[rasn(tag(explicit(1)))]
+    cusec: Microseconds,
+    #[rasn(tag(explicit(2)))]
+    subkey: Option<EncryptionKey>,
+    #[rasn(tag(explicit(3)))]
+    seq_number: Option<WireSeqNumber>,
+}
+
+impl Decode for EncApRepPart {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = EncApRepPartOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            ctime: w.ctime,
+            cusec: w.cusec,
+            subkey: w.subkey,
+            seq_number: w.seq_number.map(|s| s.0),
+        })
+    }
+}
+
+impl Encode for EncApRepPart {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        EncApRepPartOnWire {
+            ctime: self.ctime.clone(),
+            cusec: self.cusec,
+            subkey: self.subkey.clone(),
+            seq_number: self.seq_number.map(WireSeqNumber),
+        }
+        .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
+}
+
+/// [`KrbSafeBody`] on the wire, its seq-number as MIT reads and writes it.
+#[derive(AsnType, Decode, Encode)]
+struct KrbSafeBodyOnWire {
+    #[rasn(tag(explicit(0)))]
+    user_data: OctetString,
+    #[rasn(tag(explicit(1)))]
+    timestamp: Option<KerberosTime>,
+    #[rasn(tag(explicit(2)))]
+    usec: Option<Microseconds>,
+    #[rasn(tag(explicit(3)))]
+    seq_number: Option<WireSeqNumber>,
+    #[rasn(tag(explicit(4)))]
+    s_address: HostAddress,
+    #[rasn(tag(explicit(5)))]
+    r_address: Option<HostAddress>,
+}
+
+impl Decode for KrbSafeBody {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = KrbSafeBodyOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            user_data: w.user_data,
+            timestamp: w.timestamp,
+            usec: w.usec,
+            seq_number: w.seq_number.map(|s| s.0),
+            s_address: w.s_address,
+            r_address: w.r_address,
+        })
+    }
+}
+
+impl Encode for KrbSafeBody {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        KrbSafeBodyOnWire {
+            user_data: self.user_data.clone(),
+            timestamp: self.timestamp.clone(),
+            usec: self.usec,
+            seq_number: self.seq_number.map(WireSeqNumber),
+            s_address: self.s_address.clone(),
+            r_address: self.r_address.clone(),
+        }
+        .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
+}
+
+/// [`EncKrbPrivPart`] on the wire, its seq-number as MIT reads and writes it.
+#[derive(AsnType, Decode, Encode)]
+#[rasn(tag(explicit(application, 28)))]
+struct EncKrbPrivPartOnWire {
+    #[rasn(tag(explicit(0)))]
+    user_data: OctetString,
+    #[rasn(tag(explicit(1)))]
+    timestamp: Option<KerberosTime>,
+    #[rasn(tag(explicit(2)))]
+    usec: Option<Microseconds>,
+    #[rasn(tag(explicit(3)))]
+    seq_number: Option<WireSeqNumber>,
+    #[rasn(tag(explicit(4)))]
+    s_address: HostAddress,
+    #[rasn(tag(explicit(5)))]
+    r_address: Option<HostAddress>,
+}
+
+impl Decode for EncKrbPrivPart {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = EncKrbPrivPartOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            user_data: w.user_data,
+            timestamp: w.timestamp,
+            usec: w.usec,
+            seq_number: w.seq_number.map(|s| s.0),
+            s_address: w.s_address,
+            r_address: w.r_address,
+        })
+    }
+}
+
+impl Encode for EncKrbPrivPart {
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        constraints: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        EncKrbPrivPartOnWire {
+            user_data: self.user_data.clone(),
+            timestamp: self.timestamp.clone(),
+            usec: self.usec,
+            seq_number: self.seq_number.map(WireSeqNumber),
+            s_address: self.s_address.clone(),
+            r_address: self.r_address.clone(),
+        }
+        .encode_with_tag_and_constraints(encoder, tag, constraints, identifier)
+    }
+}
+
 /// KRB-CRED ::= [APPLICATION 22] SEQUENCE { pvno, msg-type, tickets, enc-part }
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+#[derive(AsnType, Clone, Debug, Encode, PartialEq, Eq, Hash)]
 #[rasn(tag(explicit(application, 22)))]
 pub struct KrbCred {
     /// Protocol version.
@@ -164,6 +455,38 @@ impl KrbCred {
     pub const PVNO: i32 = 5;
     /// KRB-CRED msg-type.
     pub const MSG_TYPE: i32 = 22;
+}
+
+/// [`KrbCred`] as it decodes, its msg-type the message's own.
+/// MIT `cred_msg_type` (`lib/krb5/asn.1/asn1_k_encode.c:877-877`): the msg-type is an immediate with no error, so any INTEGER of up to eight octets decodes and none is kept.
+#[derive(AsnType, Decode)]
+#[rasn(tag(explicit(application, 22)))]
+struct KrbCredOnWire {
+    #[rasn(tag(explicit(0)))]
+    pvno: crate::WireVersion,
+    #[rasn(tag(explicit(1)))]
+    #[allow(dead_code)]
+    msg_type: crate::WireImmediate,
+    #[rasn(tag(explicit(2)))]
+    tickets: SequenceOf<Ticket>,
+    #[rasn(tag(explicit(3)))]
+    enc_part: EncryptedData,
+}
+
+impl Decode for KrbCred {
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        constraints: Constraints,
+    ) -> Result<Self, D::Error> {
+        let w = KrbCredOnWire::decode_with_tag_and_constraints(decoder, tag, constraints)?;
+        Ok(Self {
+            pvno: w.pvno.0,
+            msg_type: Self::MSG_TYPE,
+            tickets: w.tickets,
+            enc_part: w.enc_part,
+        })
+    }
 }
 
 /// EncKrbCredPart ::= [APPLICATION 29] SEQUENCE { ... }
@@ -228,16 +551,27 @@ pub struct KrbCredInfo {
     pub caddr: Option<crate::HostAddresses>,
 }
 
-/// RFC 3244 `ChangePasswdData`.
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+/// RFC 3244 `ChangePasswdData`. `Debug` never shows the new password, nor its length.
+#[derive(AsnType, Clone, Decode, Encode, PartialEq, Eq, Hash)]
 pub struct ChangePasswdData {
     /// New password octets.
     #[rasn(tag(explicit(0)))]
     pub newpasswd: OctetString,
-    /// Optional target name.
+    /// Target name; a request without it fails to decode and changes no password (MALFORMED).
+    /// MIT `setpw_req` (`lib/krb5/asn.1/asn1_k_encode.c:944-947`): every field is required, the target's name and realm too.
     #[rasn(tag(explicit(1)))]
-    pub targname: Option<PrincipalName>,
-    /// Optional target realm.
+    pub targname: PrincipalName,
+    /// Target realm, required as `targname` is.
     #[rasn(tag(explicit(2)))]
-    pub targrealm: Option<Realm>,
+    pub targrealm: Realm,
+}
+
+impl std::fmt::Debug for ChangePasswdData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChangePasswdData")
+            .field("newpasswd", &format_args!("<redacted>"))
+            .field("targname", &self.targname)
+            .field("targrealm", &self.targrealm)
+            .finish()
+    }
 }

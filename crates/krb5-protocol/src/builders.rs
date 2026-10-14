@@ -76,28 +76,43 @@ pub fn as_req_sname(
     }))
 }
 
-/// PA-ENC-TIMESTAMP encrypted with the client long-term key (usage 1).
+/// PA-ENC-TIMESTAMP encrypted with the client long-term key (usage 1), at the time now and its
+/// microseconds.
+/// MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:87-89`): the time and its microseconds as `get_preauth_time` gives them.
 ///
 /// # Errors
 ///
 /// [`Error::Asn1`] when the timestamp or its EncryptedData does not encode, and
 /// [`Error::Crypto`] when encrypting it under `key` fails.
 pub fn pa_enc_timestamp(key: &ProtocolKey) -> Result<PaData, Error> {
-    pa_enc_timestamp_at(key, &KerberosTime::now())
+    let (now, usec) = crate::auth_con::us_timeofday();
+    pa_enc_timestamp_usec(key, &now, usec)
 }
 
-/// PA-ENC-TIMESTAMP with an explicit client time (SKEW retry).
+/// PA-ENC-TIMESTAMP with an explicit client time, its microseconds those of `now`.
 ///
 /// # Errors
 ///
 /// [`Error::Asn1`] when the timestamp or its EncryptedData does not encode, and
 /// [`Error::Crypto`] when encrypting it under `key` fails.
 pub fn pa_enc_timestamp_at(key: &ProtocolKey, now: &KerberosTime) -> Result<PaData, Error> {
+    pa_enc_timestamp_usec(
+        key,
+        now,
+        Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros()),
+    )
+}
+
+/// PA-ENC-TIMESTAMP at `now` and `usec`; MIT encodes `pausec` only when it is not zero.
+/// MIT `pa_enc_ts_1` (`lib/krb5/asn.1/asn1_k_encode.c:935-935`): `pausec` is an `opt_int32`, omitted when 0.
+fn pa_enc_timestamp_usec(
+    key: &ProtocolKey,
+    now: &KerberosTime,
+    usec: Microseconds,
+) -> Result<PaData, Error> {
     let ts = PaEncTsEnc {
         patimestamp: now.clone(),
-        pausec: Some(Microseconds::from_subsec_micros(
-            now.0.timestamp_subsec_micros(),
-        )),
+        pausec: (usec.get() != 0).then_some(usec),
     };
     let der = encode(&ts)?;
     let usage = KeyUsage::new(ku::PA_ENC_TIMESTAMP)?;
@@ -240,7 +255,8 @@ pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
     let body_der = encode(&body)?;
     let cksum_usage = KeyUsage::new(ku::TGS_REQ_AUTH_CKSUM)?;
     let mic = checksum(session, cksum_usage, &body_der)?;
-    let now = KerberosTime::now();
+    // MIT `tgs_construct_ap_req` (`lib/krb5/krb/send_tgs.c:82-82`): the authenticator's time and microseconds, from `krb5_us_timeofday`.
+    let (now, usec) = crate::auth_con::us_timeofday();
     let authenticator = Authenticator {
         authenticator_vno: Authenticator::VNO,
         crealm: krb5_types::try_ascii(crealm).map_err(|e| Error::ReplyMismatch(e.to_string()))?,
@@ -249,7 +265,7 @@ pub fn tgs_req_ex(p: TgsReqParams<'_>) -> Result<TgsReq, Error> {
             cksumtype: session.etype().checksum_type(),
             checksum: mic.into(),
         }),
-        cusec: Microseconds::from_subsec_micros(now.0.timestamp_subsec_micros()),
+        cusec: usec,
         ctime: now,
         subkey: subkey.map(|k| EncryptionKey {
             keytype: k.etype().to_iana(),

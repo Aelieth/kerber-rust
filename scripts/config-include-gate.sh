@@ -22,6 +22,8 @@ docker exec "$NAME" chmod +x /tmp/krb5-kinit /tmp/krb5-kvno /tmp/krb5-klist
 
 docker exec -i "$NAME" bash -s <<'EOS'
 set -euo pipefail
+# gate-common.sh's lf_lines, here in the MIT container: MIT's `\r\n` line ends read as `\n`.
+lf_lines() { sed 's/\r$//'; }
 BASE=/tmp/g9a-include
 rm -rf "$BASE"
 mkdir -p "$BASE/d.d" "$BASE/merge" "$BASE/miss"
@@ -143,8 +145,9 @@ test "$MIT_D" -ne 0
 test "$RUST_D" -ne 0
 test "$MIT_D" -ne 124
 test "$RUST_D" -ne 124
-echo "$MIT_D_OUT" | grep -q 'Included profile file could not be read'
-echo "$RUST_D_OUT" | grep -q 'include target not found'
+# MIT fails in krb5_init_context (kinit.c:425-429); the port prints MIT's line under its name.
+echo "$MIT_D_OUT" | lf_lines | grep -qxF 'kinit: Included profile file could not be read while initializing Kerberos 5 library'
+echo "$RUST_D_OUT" | grep -qxF 'krb5-kinit: Included profile file could not be read while initializing Kerberos 5 library'
 
 echo "==== (e) missing top-level KRB5_CONFIG path is still skipped ===="
 echo userpassword | env KRB5_CONFIG="$BASE/miss/does-not-exist.conf:$BASE/merge/a.conf" \
@@ -198,8 +201,8 @@ echo "$MIT_G_OUT"
 echo "$RUST_G_OUT"
 test "$MIT_G" -ne 0
 test "$RUST_G" -ne 0
-echo "$MIT_G_OUT" | grep -q 'Improper format of Kerberos configuration file'
-echo "$RUST_G_OUT" | grep -q 'improper format'
+echo "$MIT_G_OUT" | lf_lines | grep -qxF 'kinit: Improper format of Kerberos configuration file while initializing Kerberos 5 library'
+echo "$RUST_G_OUT" | grep -qxF 'krb5-kinit: Improper format of Kerberos configuration file while initializing Kerberos 5 library'
 
 echo "==== (h) unterminated %{ in default_ccache_name is an error ===="
 cat >"$BASE/miss/unterm.conf" <<EOF
@@ -224,8 +227,9 @@ echo "$MIT_H_OUT"
 echo "$RUST_H_OUT"
 test "$MIT_H" -ne 0
 test "$RUST_H" -ne 0
-echo "$MIT_H_OUT" | grep -q 'Internal credentials cache error'
-echo "$RUST_H_OUT" | grep -q 'unterminated'
+# MIT's krb5_cc_default finds no default name (ccdefault.c:48-53): KRB5_FCC_INTERNAL.
+echo "$MIT_H_OUT" | lf_lines | grep -qxF 'kinit: Internal credentials cache error while getting default ccache'
+echo "$RUST_H_OUT" | grep -qxF 'krb5-kinit: Internal credentials cache error while getting default ccache'
 EOS
 
 log "config.include.gate" "ok" ',"dotted_conf":true,"first_wins":true,"malformed_no_hang":true'

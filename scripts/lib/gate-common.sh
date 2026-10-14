@@ -3,7 +3,8 @@
 # Provides: log, die, unavailable, register_cleanup, wait_listen, wait_log,
 # require_listen, require_log, require_port_in, retry_until, wait_port_in,
 # wait_udp_in, wait_tcp_bound_in, wait_gone_in, wait_pid_gone, need_image,
-# need_bins, shell_container, stock_mit_kdc. One EXIT trap writes gate_wall_s=
+# need_bins, mit_oracle_cc, mit_oracle_brand, shell_container, json_log_on,
+# stock_mit_kdc. One EXIT trap writes gate_wall_s=
 # and runs registered cleanups. Does not replace provenance's ERR. The port
 # waits probe inside $NAME (wait_port_in, wait_gone_in).
 
@@ -67,6 +68,12 @@ die() {
     echo "$1" >&2
     exit 1
 }
+
+# lf_lines: stdin with each line's `\r\n` end made `\n`. MIT built with its own com_err (the
+# gates' MIT image) ends a com_err line `\r\n`; Fedora's MIT, built with the system com_err, ends
+# it `\n`, as the Rust tools do. A gate that compares MIT's stderr with a line reads it through
+# this, so the line end of the MIT build at hand does not decide the cell.
+lf_lines() { sed 's/\r$//'; }
 
 # Product capture has no path policy (S2-R R1). Gates must not point
 # KERBER_CAPTURE_DIR or TRACE_DST at the golden home.
@@ -441,6 +448,53 @@ need_bins() {
     done
 }
 
+# The MIT release every in-image oracle must load: the tag in libkrb5's KRB5_BRAND string (MIT brand.c).
+MIT_ORACLE_BRAND="krb5-1.22.2-final"
+
+# mit_oracle_cc CTN OUT SRC LIBS [CFLAG...]: build an MIT oracle inside CTN the way `krb5-config` links
+# one (LIBS: its library names, e.g. `krb5`, `gssapi`, `kadm-client`), then mit_oracle_brand. Its
+# --libs carry an rpath to the image's MIT 1.22.2 libdir; a plain `cc … -lkrb5` resolves at run time
+# to Debian's libkrb5 1.20.1, which build-essential pulls into the image. Red if cc fails.
+mit_oracle_cc() {
+    local ctn=$1 out=$2 src=$3 libs=$4
+    shift 4
+    # shellcheck disable=SC2016 # expanded by the container's sh, not here
+    docker exec "$ctn" sh -c 'o=$1 s=$2 l=$3; shift 3
+        exec cc "$@" -o "$o" "$s" $(krb5-config --cflags $l) $(krb5-config --libs $l)' \
+        sh "$out" "$src" "$libs" "$@" || die "cc $out ($libs, krb5-config) failed in $ctn"
+    mit_oracle_brand "$ctn" "$out"
+}
+
+# mit_oracle_brand CTN BIN: print the libkrb5 the oracle BIN loads in CTN (`ldd` there) and that
+# library's KRB5_BRAND. Red unless the brand is MIT_ORACLE_BRAND and every krb5 library BIN loads
+# sits beside that libkrb5, symlinks resolved (none of Debian's).
+mit_oracle_brand() {
+    local ctn=$1 bin=$2 libs krb5 brand home i n p stray=
+    local -a names=() paths=() canon=()
+    libs="$(docker exec "$ctn" ldd "$bin")" || die "ldd $bin failed in $ctn"
+    krb5="$(printf '%s\n' "$libs" | awk '$1 == "libkrb5.so.3" { print $3 }')"
+    [ -n "$krb5" ] || die "oracle $bin loads no libkrb5.so.3 in $ctn"
+    # shellcheck disable=SC2016 # expanded by the container's sh, not here
+    brand="$(docker exec "$ctn" sh -c 'strings -a "$1" | grep -m1 "^KRB5_BRAND: "' sh "$krb5" || true)"
+    echo "oracle $bin: libkrb5.so.3 => $krb5 (${brand:-no KRB5_BRAND})"
+    case "$brand" in
+        "KRB5_BRAND: $MIT_ORACLE_BRAND "*) ;;
+        *) die "oracle $bin loads $krb5, not $MIT_ORACLE_BRAND (${brand:-no KRB5_BRAND})" ;;
+    esac
+    while read -r n p; do
+        names+=("$n")
+        paths+=("$p")
+    done < <(printf '%s\n' "$libs" |
+        awk '$1 ~ /^lib(krb5|krb5support|k5crypto|gssapi_krb5|gssrpc|kadm5clnt_mit|kdb5|krad|com_err)\.so/ { print $1, $3 }')
+    mapfile -t canon < <(docker exec "$ctn" readlink -f "$krb5" "${paths[@]}")
+    [ "${#canon[@]}" -eq $((${#paths[@]} + 1)) ] || die "readlink -f of $bin's libraries failed in $ctn"
+    home=${canon[0]%/*}
+    for i in "${!names[@]}"; do
+        [ "${canon[$((i + 1))]%/*}" = "$home" ] || stray+="${names[$i]} => ${paths[$i]}; "
+    done
+    [ -z "$stray" ] || die "oracle $bin loads krb5 libraries outside $home: $stray"
+}
+
 shell_container() {
     local keep="${1:-3600}"
     local host="${2:-}"
@@ -519,6 +573,20 @@ EOS
         docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" "$keep" >/dev/null
     fi
     register_cleanup "docker rm -f '$NAME' >/dev/null 2>&1 || true"
+    json_log_on "$NAME"
+}
+
+# json_log_on [CONTAINER]: the daemons write their JSON log only where `[logging] json` names a
+# destination (MIT prints none and does not read the relation). The gates read it from the
+# daemons' standard output, so each container they start carries `json = STDOUT` in its stock
+# kdc.conf and krb5.conf, before any copy of them is kept.
+json_log_on() {
+    docker exec "${1:-$NAME}" sh -c '
+        for f in /etc/krb5kdc/kdc.conf /etc/krb5.conf; do
+            [ -f "$f" ] || continue
+            grep -qs "^[[:space:]]*json[[:space:]]*=" "$f" \
+                || printf "\n[logging]\n    json = STDOUT\n" >>"$f"
+        done'
 }
 
 # Shared-job attach (KERBER_LIVE=1): the boot-stock-mit.sh step may
@@ -578,6 +646,7 @@ stock_mit_kdc() {
     docker run -d --name "$n" \
         -e "CORRELATION_ID=${CORRELATION_ID}" \
         "$IMAGE" >/dev/null
+    json_log_on "$n" || true
     NAME="$n"
     if [ "${KERBER_STOCK_KEEP:-}" != 1 ]; then
         register_cleanup "docker rm -f '$n' >/dev/null 2>&1 || true"

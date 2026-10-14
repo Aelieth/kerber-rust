@@ -1,0 +1,16 @@
+# kerber-rust: Fedora krb5-server's kadmin.service, with make install's paths.
+[Unit]
+Description=Kerberos 5 Password-changing and Administration
+Wants=network-online.target
+After=syslog.target network.target network-online.target
+AssertPathExists=!@KDCDIR@/kpropd.acl
+
+[Service]
+Type=forking
+PIDFile=/run/kadmind.pid
+EnvironmentFile=-@SYSCONFIGDIR@/kadmin
+ExecStart=@SBINDIR@/kadmind -P /run/kadmind.pid $KADMIND_ARGS
+ExecReload=/bin/kill -HUP $MAINPID
+
+[Install]
+WantedBy=multi-user.target

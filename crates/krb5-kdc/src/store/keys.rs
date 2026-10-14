@@ -7,7 +7,9 @@ use krb5_protocol::{Keytab, KeytabEntry};
 use krb5_types::PrincipalName;
 
 use super::PrincipalStore;
-use super::flags::{KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PWCHANGE};
+use super::flags::{
+    KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_SVR, KDB_LOCKDOWN_KEYS, KDB_REQUIRES_PWCHANGE,
+};
 use super::password::apply_keysalt_policy;
 use super::principal::{Principal, default_mod_actor, stamp_admin_tl};
 use crate::acl::{Acl, AdminOp};
@@ -46,6 +48,107 @@ pub enum KeyLookup {
     NoPermittedKey,
 }
 
+/// Why the KDB keytab found no key for a lookup.
+/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the code it returns.
+/// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:118-148`): takes `KRB5_KT_NOTFOUND` and `KRB5_KT_KVNONOTFOUND` as codes of their own and passes any other on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KtkdbError {
+    /// `KRB5_KT_NOTFOUND`: no such principal, or one that may not be a service
+    /// (`KRB5_KDB_DISALLOW_SVR`, `KRB5_KDB_DISALLOW_ALL_TIX`).
+    NotFound,
+    /// `KRB5_KT_KVNONOTFOUND`: the principal has no key at that kvno.
+    KvnoNotFound,
+    /// `KRB5_KDB_NO_PERMITTED_KEY`: the key found is not of the ticket's enctype, or every key at
+    /// the kvno is outside `permitted_enctypes`.
+    NoPermittedKey,
+    /// `KRB5_BAD_ENCTYPE`: the ticket's enctype or the key's is not one MIT implements.
+    BadEnctype,
+}
+
+/// The lookup code the AP-REQ verifier takes: `KRB5_KT_NOTFOUND` and `KRB5_KT_KVNONOTFOUND` as `keytab_fetch_error` names them,
+/// any other code passed on as the verifier's own error.
+/// MIT `keytab_fetch_error` (`lib/krb5/krb/rd_req_dec.c:118-148`): maps the two keytab codes and returns any other as it is.
+impl From<KtkdbError> for krb5_protocol::KeytabLookup {
+    fn from(e: KtkdbError) -> Self {
+        match e {
+            KtkdbError::NotFound => Self::NotFound,
+            KtkdbError::KvnoNotFound => Self::KvnoNotFound,
+            KtkdbError::NoPermittedKey => Self::Other(krb5_protocol::Error::KdbNoPermittedKey),
+            KtkdbError::BadEnctype => Self::Other(krb5_protocol::Error::BadEnctype),
+        }
+    }
+}
+
+/// The key the KDB keytab gives for a ticket's kvno and enctype.
+/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): for any principal but a cross-realm TGT the first permitted key at the kvno (the highest when it is 0), whatever the ticket's enctype, which must then be `krb5_c_enctype_compare`-similar to it; for a cross-realm TGT the first permitted key of the ticket's enctype. A principal that is not a service is not found.
+/// MIT `is_xrealm_tgt` (`lib/kdb/keytab.c:200-220`): `krbtgt` (a prefix of the word does) and a second component that is not the realm.
+///
+/// # Errors
+///
+/// [`KtkdbError`], as MIT's code names.
+pub fn ktkdb_get_entry<'p>(
+    principal: Option<&'p Principal>,
+    name: &PrincipalName,
+    realm: &str,
+    kvno: u32,
+    etype: i32,
+    permitted: impl Fn(EncryptionType) -> bool,
+) -> Result<&'p KeyEntry, KtkdbError> {
+    let xrealm_tgt = is_xrealm_tgt(name, realm);
+    let Some(p) = principal else {
+        return Err(KtkdbError::NotFound);
+    };
+    if p.attributes & (KDB_DISALLOW_SVR | KDB_DISALLOW_ALL_TIX) != 0 {
+        return Err(KtkdbError::NotFound);
+    }
+    let want = if xrealm_tgt {
+        match EncryptionType::known(etype) {
+            Ok(e) => Some(e),
+            Err(_) => return Err(KtkdbError::NoPermittedKey),
+        }
+    } else {
+        None
+    };
+    let key = match p.find_enctype(want, kvno, permitted) {
+        Ok(k) => k,
+        Err(KeyLookup::NoMatchingKey) => return Err(KtkdbError::KvnoNotFound),
+        Err(KeyLookup::NoPermittedKey) => return Err(KtkdbError::NoPermittedKey),
+    };
+    if etype > 0 {
+        match (enctype_class(etype), enctype_class(key.etype.to_iana())) {
+            (Some(a), Some(b)) if a == b => {}
+            (Some(_), Some(_)) => return Err(KtkdbError::NoPermittedKey),
+            _ => return Err(KtkdbError::BadEnctype),
+        }
+    }
+    Ok(key)
+}
+
+fn is_xrealm_tgt(name: &PrincipalName, realm: &str) -> bool {
+    let [c0, c1] = name.name_string.as_slice() else {
+        return false;
+    };
+    b"krbtgt".starts_with(c0.as_bytes()) && c1.as_bytes() != realm.as_bytes()
+}
+
+/// The class of enctypes `krb5_c_enctype_compare` calls similar, by enctype number: one encryption
+/// method and one string-to-key. `None` for an enctype MIT 1.22 does not implement.
+/// MIT `krb5_c_enctype_compare` (`lib/crypto/krb/enctype_util.c:73-86`): two enctypes are similar when they share an encryption method and a string-to-key.
+/// MIT `krb5int_enctypes_list` (`lib/crypto/krb/etypes.c:38-145`): des3-cbc-raw and des3-cbc-sha1 are alike, so are arcfour-hmac and its export form; each AES and Camellia enctype stands alone.
+fn enctype_class(etype: i32) -> Option<u8> {
+    match etype {
+        6 | 16 => Some(1),
+        23 | 24 => Some(2),
+        17 => Some(3),
+        18 => Some(4),
+        19 => Some(5),
+        20 => Some(6),
+        25 => Some(7),
+        26 => Some(8),
+        _ => None,
+    }
+}
+
 impl KeyEntry {
     /// Key without dump salt metadata (`ver` 1 on write).
     #[must_use]
@@ -69,23 +172,28 @@ pub(super) fn cap_key_versions(keys: &mut Vec<KeyEntry>, n: u32) {
     keys.retain(|k| keep.contains(&k.kvno));
 }
 
-/// Fill a random protocol key of `etype`.
+/// A random protocol key of `etype`: every key this KDC draws, a principal's `-randkey` and `ktadd` keys, the
+/// krbtgt, history and master keys and the session and sub keys of its replies.
+/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the
+/// enctype's random-to-key, so a des3 key is 21 octets spread over 24 with odd parity on each (`k5_rand2key_des3`,
+/// `k5_des_fixup_key_parity`), and every other enctype takes its random octets as the key.
 ///
 /// # Errors
 ///
 /// [`Error::Rng`] when the CSPRNG fails.
 pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
-    let mut buf = vec![0u8; etype.key_len()];
-    getrandom::getrandom(&mut buf).map_err(|_| Error::Rng)?;
-    ProtocolKey::from_bytes(etype, &buf).map_err(Error::from)
+    ProtocolKey::random(etype).map_err(|e| match e {
+        krb5_crypto::Error::Rng => Error::Rng,
+        e => Error::from(e),
+    })
 }
 
-pub(super) fn randkey_etypes() -> [EncryptionType; 4] {
+/// The key types a new key set takes when kdc.conf names no `supported_enctypes`.
+/// MIT `KRB5_DEFAULT_SUPPORTED_ENCTYPES` (`include/osconf.hin:109-111`): aes256-cts-hmac-sha1-96 and aes128-cts-hmac-sha1-96, normal salt.
+pub(super) fn default_supported_enctypes() -> [EncryptionType; 2] {
     [
         EncryptionType::Aes256CtsHmacSha196,
         EncryptionType::Aes128CtsHmacSha196,
-        EncryptionType::Aes256CtsHmacSha384192,
-        EncryptionType::Aes128CtsHmacSha256128,
     ]
 }
 
@@ -141,18 +249,17 @@ impl PrincipalStore {
         Self::keytab_from(p)
     }
 
-    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`.
-    ///
-    /// On export, write, or chrand-save failure a rotation is rolled back
-    /// so the dump kvno is unchanged. Standalone `chrand` does not roll
-    /// back. A rollback save error is returned with the original failure
-    /// (not swallowed).
+    /// Local `ktadd`: optional rotate, export ignoring lockdown, then `write`, as one change to
+    /// the database under its exclusive lock ([`Self::change`]): the rotation is written only
+    /// once `write` succeeded, so a failed export or `write` leaves the database's kvno as it was
+    /// (a store with no database puts the old keys back). Standalone `chrand` does not roll back.
     ///
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing or has no keys; [`Error::Rng`] when
-    /// the rotation's CSPRNG fails; [`Error::Crypto`] when saving the rotation or its rollback
-    /// fails, or the realm is not a GeneralString; and any error `write` returns.
+    /// the rotation's CSPRNG fails; [`Error::Db`] when the database cannot be locked, read again
+    /// or written; [`Error::Crypto`] when the realm is not a GeneralString; and any error `write`
+    /// returns.
     pub fn ktadd_local_atomic(
         &mut self,
         name: &PrincipalName,
@@ -161,30 +268,24 @@ impl PrincipalStore {
         write: impl FnOnce(&Keytab) -> Result<(), Error>,
     ) -> Result<Keytab, Error> {
         let snap = self.get_name(name).cloned().ok_or(Error::NotFound)?;
-        if rotate && let Err(e) = self.chrand_etypes_keepold(name, &[], 0, actor) {
-            return Err(self.rollback_rotate(true, snap, e));
-        }
-        let kt = match self.export_keytab_local(name) {
-            Ok(kt) => kt,
-            Err(e) => return Err(self.rollback_rotate(rotate, snap, e)),
-        };
-        match write(&kt) {
-            Ok(()) => Ok(kt),
-            Err(e) => Err(self.rollback_rotate(rotate, snap, e)),
-        }
-    }
-
-    fn rollback_rotate(&mut self, rotate: bool, snap: Principal, e: Error) -> Error {
-        if !rotate {
-            return e;
-        }
-        let id = snap.id();
-        self.note_ulog(id.clone(), false, Some(snap.clone()));
-        self.map.insert(id, snap);
-        match self.save_if_configured() {
-            Ok(()) => e,
-            Err(re) => Error::Crypto(format!("{e}; rollback failed: {re}")),
-        }
+        let persisted = self.persist_paths.is_some();
+        self.change(|s| {
+            let done = (|| {
+                if rotate {
+                    s.chrand_etypes_keepold(name, &[], 0, actor)?;
+                }
+                let kt = s.export_keytab_local(name)?;
+                write(&kt)?;
+                Ok(kt)
+            })();
+            if done.is_err() && rotate && !persisted {
+                let id = snap.id();
+                s.note_ulog(id.clone(), false, Some(snap.clone()));
+                s.map.insert(id, snap);
+                let _ = s.log_pending();
+            }
+            done
+        })?
     }
 
     fn keytab_from(p: &Principal) -> Result<Keytab, Error> {
@@ -221,7 +322,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand(&mut self, name: &PrincipalName) -> Result<Vec<KeyEntry>, Error> {
         self.chrand_keepold_n(name, 0)
     }
@@ -231,7 +332,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Rng`] when the CSPRNG fails;
-    /// [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_keepold_n(
         &mut self,
         name: &PrincipalName,
@@ -252,7 +353,8 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
     /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails;
+    /// the error from a `kadm5_hook` precommit module.
     pub fn chrand_etypes_keepold_in(
         &mut self,
         name: &PrincipalName,
@@ -278,9 +380,18 @@ impl PrincipalStore {
         let use_etypes =
             apply_keysalt_policy(allowed.as_deref(), etypes, &self.policy.password_etypes())?;
         let mut new_keys = Vec::new();
-        for etype in use_etypes {
-            new_keys.push(KeyEntry::new(etype, random_key(etype)?, next_kvno));
+        for etype in &use_etypes {
+            new_keys.push(KeyEntry::new(*etype, random_key(*etype)?, next_kvno));
         }
+        super::kadm5_hook::hook_chpass(
+            self,
+            super::kadm5_hook::HookStage::Precommit,
+            name,
+            princ_realm,
+            keepold,
+            None,
+            &use_etypes,
+        )?;
         {
             let p = self.map.get_mut(&id).ok_or(Error::NotFound)?;
             let old = std::mem::replace(&mut p.keys, new_keys.clone());
@@ -290,6 +401,9 @@ impl PrincipalStore {
                     cap_key_versions(&mut p.keys, keepold);
                 }
             }
+            // MIT `kadm5_randkey_principal_3` (`lib/kadm5/srv/svr_principal.c:1452-1475`): new keys clear REQUIRES_PWCHANGE and unlock the principal on this KDC.
+            p.attributes &= !KDB_REQUIRES_PWCHANGE;
+            p.fail_auth_count = 0;
             stamp_admin_tl(p, true, actor);
         }
         self.apply_pw_max_life_in(name, princ_realm)?;
@@ -301,6 +415,15 @@ impl PrincipalStore {
             return Err(Error::Crypto("injected chrand save fail".into()));
         }
         self.save_if_configured()?;
+        super::kadm5_hook::hook_chpass(
+            self,
+            super::kadm5_hook::HookStage::Postcommit,
+            name,
+            princ_realm,
+            keepold,
+            None,
+            &use_etypes,
+        )?;
         Ok(new_keys)
     }
 
@@ -310,7 +433,7 @@ impl PrincipalStore {
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::BadKeysalts`] when `etypes`
     /// names an enctype outside the bound policy's `allowed_keysalts`; [`Error::Rng`] when the
-    /// CSPRNG fails; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// CSPRNG fails; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn chrand_etypes_keepold(
         &mut self,
         name: &PrincipalName,
@@ -327,7 +450,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn purgekeys(&mut self, name: &PrincipalName, keepkvno: i32) -> Result<(), Error> {
         let realm = self.realm.clone();
@@ -342,7 +465,7 @@ impl PrincipalStore {
     ///
     /// # Errors
     ///
-    /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when saving the
+    /// [`Error::NotFound`] when the principal is missing; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn purgekeys_in(
         &mut self,
@@ -373,8 +496,8 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is
-    /// empty, its entries carry different kvnos, `keepold` collides with an existing kvno, or
-    /// saving the store to `persist_paths` fails.
+    /// empty, its entries carry different kvnos or `keepold` collides with an existing kvno;
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_keys(
         &mut self,
         name: &PrincipalName,
@@ -391,8 +514,8 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::NotFound`] when the principal is missing; [`Error::Crypto`] when `keys` is
-    /// empty, its entries carry different kvnos, `keepold` collides with an existing kvno, or
-    /// saving the store to `persist_paths` fails.
+    /// empty, its entries carry different kvnos or `keepold` collides with an existing kvno;
+    /// [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_keys_in(
         &mut self,
         name: &PrincipalName,

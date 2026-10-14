@@ -7,6 +7,16 @@ use std::fmt;
 pub enum Error {
     /// Crypto layer.
     Crypto(String),
+    /// An EncryptedData whose enctype is not its key's: MIT's `KRB5_BAD_ENCTYPE`, a library code
+    /// that `errcode_to_protocol` sends as 60.
+    /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): the enctype is checked before anything is decrypted.
+    BadEnctype,
+    /// A des3 key with an octet of even parity: MIT's `KRB5DES_BAD_KEYPAR`, a library code that `errcode_to_protocol` sends as 60.
+    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): every use of the key, in an encryption, a decryption or a checksum, fails with it.
+    DesBadParity,
+    /// A des3 key with a weak or semi-weak DES key among its three: MIT's `KRB5DES_WEAK_KEY`, sent as 60 likewise.
+    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): the code after the parity of that DES key and before the next one's.
+    DesWeakKey,
     /// DER codec.
     Asn1(String),
     /// RFC 4120 KRB-ERROR / KDC error code.
@@ -43,6 +53,14 @@ pub enum Error {
         /// `last_pwd_change + pw_min_life`.
         until: u32,
     },
+    /// The principal database, its update log or its stash could not be read or written: an
+    /// I/O failure with the system's own text (`strerror`), or a file that does not load.
+    Db {
+        /// What failed: `PermissionDenied` for a writer that may not write the database.
+        kind: std::io::ErrorKind,
+        /// The system's text for it, without Rust's `(os error N)`, or the format failure.
+        text: String,
+    },
     /// `EINVAL` from `krb5_db_put_principal` / DB2 `db_args`.
     /// MIT `krb5_db2_put_principal` (`kdb_db2.c:817-822`): any `db_args` is `EINVAL`,
     /// since DB2 supports no DB arguments for a principal.
@@ -54,12 +72,25 @@ pub enum Error {
         /// DER METHOD-DATA (ETYPE-INFO2).
         e_data: Vec<u8>,
     },
+    /// A kdcpreauth module's failure whose `krb5_error_code` is not a KRB-ERROR code: a KDB, ASN.1,
+    /// system or library code. `message` is what `krb5_get_error_message` gives that code, which
+    /// `finish_verify_padata` logs, and the filter sends 24.
+    /// MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's own code is the one logged.
+    PreauthModule {
+        /// The module's message for its code.
+        message: String,
+    },
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Crypto(s) => write!(f, "crypto: {s}"),
+            Self::BadEnctype => write!(f, "Bad encryption type"),
+            // MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): the text.
+            Self::DesBadParity => write!(f, "DES key has bad parity"),
+            // MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): the text.
+            Self::DesWeakKey => write!(f, "DES key is a weak key"),
             Self::Asn1(s) => write!(f, "asn1: {s}"),
             Self::Protocol { code, text, .. } => match text {
                 Some(t) => write!(f, "KDC error {code}: {t}"),
@@ -79,9 +110,10 @@ impl fmt::Display for Error {
             Self::PassTooSoon { .. } => {
                 write!(f, "Current password's minimum life has not expired")
             }
-            Self::InvalidArgument(s) => write!(f, "{s}"),
+            Self::Db { text, .. } | Self::InvalidArgument(text) => write!(f, "{text}"),
             Self::UnexpectedPdu => write!(f, "unexpected PDU"),
             Self::PreauthRequired { .. } => write!(f, "preauth required"),
+            Self::PreauthModule { message } => write!(f, "{message}"),
         }
     }
 }
@@ -90,7 +122,66 @@ impl std::error::Error for Error {}
 
 impl From<krb5_crypto::Error> for Error {
     fn from(e: krb5_crypto::Error) -> Self {
-        Self::Crypto(e.to_string())
+        match e {
+            krb5_crypto::Error::BadEnctype(_) => Self::BadEnctype,
+            krb5_crypto::Error::DesBadParity => Self::DesBadParity,
+            krb5_crypto::Error::DesWeakKey => Self::DesWeakKey,
+            e => Self::Crypto(e.to_string()),
+        }
+    }
+}
+
+impl Error {
+    /// The `krb5_error_code` MIT's library returns for a des3 key it refuses, which a log line prints as a number.
+    /// MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): `ERROR_TABLE_BASE_krb5` (-1765328384) plus 186.
+    /// MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): the same base plus 187.
+    #[must_use]
+    pub(crate) fn des_key_code(&self) -> Option<i64> {
+        match self {
+            Self::DesBadParity => Some(-1_765_328_198),
+            Self::DesWeakKey => Some(-1_765_328_197),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::persist::PersistError> for Error {
+    fn from(e: crate::persist::PersistError) -> Self {
+        use crate::persist::PersistError;
+        match e {
+            PersistError::Io(e) => Self::Db {
+                kind: e.kind(),
+                text: strerror(&e),
+            },
+            PersistError::Crypto(s) => Self::Crypto(s),
+            PersistError::Format(text) => Self::Db {
+                kind: std::io::ErrorKind::InvalidData,
+                text,
+            },
+            PersistError::UnknownDbLibrary(name) => Self::Db {
+                kind: std::io::ErrorKind::Unsupported,
+                text: format!("unknown db_library: {name}"),
+            },
+            PersistError::Lock(e) => Self::Db {
+                kind: e.kind(),
+                text: e.to_string(),
+            },
+            e @ PersistError::Unopenable { .. } => Self::Db {
+                kind: std::io::ErrorKind::InvalidData,
+                text: e.to_string(),
+            },
+        }
+    }
+}
+
+/// The system's text for `e` (`strerror`): Rust's display without its ` (os error N)`.
+fn strerror(e: &std::io::Error) -> String {
+    let text = e.to_string();
+    match e.raw_os_error() {
+        Some(code) => text
+            .strip_suffix(&format!(" (os error {code})"))
+            .map_or_else(|| text.clone(), str::to_owned),
+        None => text,
     }
 }
 
@@ -122,5 +213,28 @@ pub fn errcode_to_protocol(code: i32) -> i32 {
         code
     } else {
         krb5_types::err::GENERIC
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::persist::PersistError;
+
+    #[test]
+    fn a_refused_save_is_a_database_error_with_the_system_text() {
+        let e = Error::from(PersistError::Io(std::io::Error::from_raw_os_error(13)));
+        assert_eq!(
+            e,
+            Error::Db {
+                kind: std::io::ErrorKind::PermissionDenied,
+                text: "Permission denied".into(),
+            }
+        );
+        assert_eq!(e.to_string(), "Permission denied");
+        let e = Error::from(PersistError::Crypto(
+            "stash is not a usable master key".into(),
+        ));
+        assert_eq!(e.to_string(), "crypto: stash is not a usable master key");
     }
 }

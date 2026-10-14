@@ -1,17 +1,23 @@
-//! MIT FILE credential cache version 4: write, read, list, X-CACHECONF.
+//! MIT FILE credential cache version 4: write, read, list, X-CACHECONF, and one credential
+//! appended under the file's lock.
 
-use std::io;
+use std::fs::File;
+use std::io::{self, Read as _, Write as _};
 use std::path::Path;
 
 use krb5_asn1::encode;
 use krb5_crypto::ProtocolKey;
 use krb5_types::{PrincipalName, Realm, Ticket};
+use nix::errno::Errno;
+use nix::fcntl::Flock;
+use zeroize::Zeroizing;
 
 use crate::ccmarshal::{
-    FCC_TAG_DELTATIME, Writer, marshal_cred, marshal_princ, take_u16, unmarshal_cred,
+    FCC_TAG_DELTATIME, Writer, cred_len, marshal_cred, marshal_princ, take_u16, unmarshal_cred,
     unmarshal_princ,
 };
-use crate::secret_file::write_secret_file;
+use crate::lock_file::{FileLock, lock_file};
+use crate::secret_file::write_fresh_cache_file;
 
 pub use crate::ccmarshal::{CcacheCred, CcacheKeyblock};
 
@@ -76,14 +82,15 @@ impl FileCcache {
         Ok(w.buf)
     }
 
-    /// Atomic exclusive write with mode 0600.
+    /// Atomic exclusive write: always a new file, mode 0600, owned by the writer and given no
+    /// SELinux context of its own, as MIT `fcc_initialize` leaves a cache.
     ///
     /// # Errors
     ///
     /// Create, write, sync, or rename failed.
     pub fn write_file(&self, path: impl AsRef<Path>) -> Result<(), io::Error> {
         let bytes = self.to_bytes()?;
-        write_secret_file(path.as_ref(), &bytes)
+        write_fresh_cache_file(path.as_ref(), &bytes)
     }
 
     /// Parse a FILE ccache v4.
@@ -174,6 +181,32 @@ impl FileCcache {
                 c.tombstone();
             }
         }
+    }
+
+    /// The value of the configuration entry `key` (for `principal` when one is named) that the
+    /// cache's principal holds, if any.
+    /// MIT `krb5_cc_get_config` (`lib/krb5/ccache/ccfns.c:263-292`): the entry `X-CACHECONF:` `krb5_ccache_conf_data/<key>[/<principal>]` of the cache's principal is retrieved with no other field matched, and its ticket field is the value.
+    #[must_use]
+    pub fn get_config(&self, principal: Option<&str>, key: &str) -> Option<&[u8]> {
+        let mut comps: Vec<&[u8]> = vec![b"krb5_ccache_conf_data", key.as_bytes()];
+        if let Some(p) = principal {
+            comps.push(p.as_bytes());
+        }
+        self.creds
+            .iter()
+            .find(|c| {
+                c.server.0.as_bytes() == b"X-CACHECONF:"
+                    && c.client.0.as_bytes() == self.primary.0.as_bytes()
+                    && c.client.1.name_string == self.primary.1.name_string
+                    && c.server.1.name_string.len() == comps.len()
+                    && c.server
+                        .1
+                        .name_string
+                        .iter()
+                        .zip(&comps)
+                        .all(|(have, want)| have.as_bytes() == *want)
+            })
+            .map(|c| c.ticket.as_slice())
     }
 
     /// MIT `krb5_cc_set_config` (`ccfns.c k5_build_conf_principals`): an
@@ -301,6 +334,180 @@ pub fn tgt_cred(
         ticket: ticket_der,
         second_ticket: Vec::new(),
     })
+}
+
+/// A FILE cache failure MIT reports under its own code, or as the lock call's errno, rather than
+/// through `interpret_errno`; it travels inside the `io::Error` that [`read_cache_file`] and
+/// [`fcc_store`] return ([`FccFailure::of`] finds it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FccFailure {
+    /// `krb5_lock_file`'s errno, which MIT returns as it is.
+    Lock(Errno),
+    /// `KRB5_CC_FORMAT`: the header does not read.
+    Format,
+    /// `KRB5_CCACHE_BADVNO`: a format version outside 1–4, or one this port does not write.
+    BadVersion,
+    /// `KRB5_CC_IO`: a write shorter than the record.
+    ShortWrite,
+}
+
+impl std::fmt::Display for FccFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Lock(errno) => {
+                let text = io::Error::from(*errno).to_string();
+                let text = text
+                    .rsplit_once(" (os error ")
+                    .map_or(text.as_str(), |(t, _)| t);
+                f.write_str(text)
+            }
+            Self::Format => f.write_str("Bad format in credentials cache"),
+            Self::BadVersion => f.write_str("Unsupported credentials cache format version number"),
+            Self::ShortWrite => f.write_str("Credentials cache I/O operation failed"),
+        }
+    }
+}
+
+impl std::error::Error for FccFailure {}
+
+impl FccFailure {
+    /// The failure `e` carries, when it is one of these rather than a system error.
+    #[must_use]
+    pub fn of(e: &io::Error) -> Option<Self> {
+        e.get_ref()?.downcast_ref::<Self>().copied()
+    }
+
+    fn into_io(self) -> io::Error {
+        io::Error::other(self)
+    }
+}
+
+/// MIT's `FVNO_BASE`: a cache file's first two bytes are this plus its format version.
+const FVNO_BASE: u16 = 0x0500;
+
+/// An existing cache file, open and locked; [`CacheFile::close`] lets the lock go.
+struct CacheFile {
+    file: File,
+    flocked: Option<Flock<File>>,
+}
+
+/// MIT `open_cache_file` (`cc_file.c:331-363`): an existing cache file, read-only under a shared lock or `O_RDWR | O_APPEND` under an exclusive one, the lock waiting for its holder; a lock failure closes the file and is the lock's errno.
+fn open_cache_file(path: &Path, writable: bool) -> io::Result<CacheFile> {
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .append(writable)
+        .open(path)?;
+    let mut flocked = None;
+    let how = if writable {
+        FileLock::Exclusive
+    } else {
+        FileLock::Shared
+    };
+    lock_file(&file, how, &mut flocked).map_err(|e| FccFailure::Lock(e).into_io())?;
+    Ok(CacheFile { file, flocked })
+}
+
+impl CacheFile {
+    /// MIT `close_cache_file` (`cc_file.c:366-379`): the lock let go, then the file closed; the unlock's errno first, else the close's error.
+    fn close(self) -> io::Result<()> {
+        let Self { file, mut flocked } = self;
+        let unlocked = lock_file(&file, FileLock::Unlock, &mut flocked);
+        drop(flocked);
+        let closed = nix::unistd::close(file);
+        unlocked.map_err(|e| FccFailure::Lock(e).into_io())?;
+        closed.map_err(io::Error::from)
+    }
+}
+
+/// A big-endian 16-bit field of a version 4 header; a short read is `KRB5_CC_FORMAT`.
+fn read16(file: &mut impl io::Read) -> io::Result<u16> {
+    let mut b = [0u8; 2];
+    file.read_exact(&mut b)
+        .map_err(|_| FccFailure::Format.into_io())?;
+    Ok(u16::from_be_bytes(b))
+}
+
+/// MIT `read_header` (`cc_file.c:383-440`): the format version; `KRB5_CC_FORMAT` when it does not read, `KRB5_CCACHE_BADVNO` outside 1–4, and for version 4 the tagged fields read through with each length checked.
+fn read_header(file: &mut impl io::Read) -> io::Result<u16> {
+    let format = || FccFailure::Format.into_io();
+    let mut two = [0u8; 2];
+    file.read_exact(&mut two).map_err(|_| format())?;
+    let version = u16::from_be_bytes(two).wrapping_sub(FVNO_BASE);
+    if !(1..=4).contains(&version) {
+        return Err(FccFailure::BadVersion.into_io());
+    }
+    if version < 4 {
+        return Ok(version);
+    }
+    let mut fields_len = read16(file)?;
+    while fields_len > 0 {
+        if fields_len < 4 {
+            return Err(format());
+        }
+        let tag = read16(file)?;
+        let flen = read16(file)?;
+        if flen > fields_len - 4 || (tag == FCC_TAG_DELTATIME && flen != 8) {
+            return Err(format());
+        }
+        let mut skip = vec![0u8; usize::from(flen)];
+        file.read_exact(&mut skip).map_err(|_| format())?;
+        fields_len -= 4 + flen;
+    }
+    Ok(version)
+}
+
+/// The bytes of the existing cache file at `path`, read under its shared lock, so that a store
+/// another process is appending is never seen half written.
+/// MIT `open_cache_file` (`cc_file.c:331-363`): a reader holds the file's shared lock.
+///
+/// # Errors
+///
+/// The open's or the read's system error (`NotFound` for a missing file), or an [`FccFailure`]
+/// `Lock` when the lock is refused.
+pub fn read_cache_file(path: &Path) -> io::Result<Zeroizing<Vec<u8>>> {
+    let mut cf = open_cache_file(path, false)?;
+    // Sized from the file's length before the first byte, so that no reallocation leaves a copy
+    // of a key behind; one byte more lets the read see the end without growing.
+    let len = cf.file.metadata().map_or(0, |m| m.len());
+    let mut bytes = Zeroizing::new(Vec::with_capacity(
+        usize::try_from(len).unwrap_or(0).saturating_add(1),
+    ));
+    let read = cf.file.read_to_end(&mut bytes).map(drop);
+    let closed = cf.close();
+    read.and(closed)?;
+    Ok(bytes)
+}
+
+/// `cred` appended to the existing cache file at `path` in one write, under the file's
+/// exclusive lock, after its header gives the format version; the record's bytes are wiped once
+/// written. A version 1–3 file, which [`FileCcache::parse`] does not read, is refused as
+/// `KRB5_CCACHE_BADVNO` rather than written in its own format.
+/// MIT `fcc_store` (`cc_file.c:987-1026`): open for append and lock, read the header, one append write of the marshalled credential, a short write `KRB5_CC_IO`; the first error, else the close's.
+///
+/// # Errors
+///
+/// The open's, write's or close's system error (`NotFound` for a missing file: nothing is
+/// created), or an [`FccFailure`]: `Lock`, `Format`, `BadVersion` or `ShortWrite`.
+pub fn fcc_store(path: &Path, cred: &CcacheCred) -> io::Result<()> {
+    let mut cf = open_cache_file(path, true)?;
+    let stored = append_cred(&mut cf.file, cred);
+    let closed = cf.close();
+    stored.and(closed)
+}
+
+fn append_cred(file: &mut File, cred: &CcacheCred) -> io::Result<()> {
+    if read_header(file)? != 4 {
+        return Err(FccFailure::BadVersion.into_io());
+    }
+    let mut w = Writer {
+        buf: Vec::with_capacity(cred_len(cred)),
+    };
+    marshal_cred(&mut w, cred);
+    let record = Zeroizing::new(w.buf);
+    if file.write(&record)? != record.len() {
+        return Err(FccFailure::ShortWrite.into_io());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -449,6 +656,28 @@ mod tests {
         assert!(again.creds.iter().all(CcacheCred::is_removed));
     }
 
+    /// MIT `krb5_cc_get_config` (`lib/krb5/ccache/ccfns.c:263-292`): the entry `X-CACHECONF:` `krb5_ccache_conf_data/<key>[/<principal>]` of the cache's principal is retrieved with no other field matched, and its ticket field is the value.
+    #[test]
+    fn a_configuration_entry_is_the_caches_principals_by_key_and_principal() {
+        let me = (
+            realm("KERBER.TEST"),
+            PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        );
+        let mut cc = FileCcache::new(me, Vec::new());
+        assert_eq!(cc.get_config(None, "start_realm"), None);
+        cc.set_config(None, "start_realm", b"OTHER.TEST");
+        cc.set_config(Some("krbtgt/KERBER.TEST@KERBER.TEST"), "pa_type", b"2");
+        assert_eq!(cc.get_config(None, "start_realm"), Some(&b"OTHER.TEST"[..]));
+        assert_eq!(
+            cc.get_config(Some("krbtgt/KERBER.TEST@KERBER.TEST"), "pa_type"),
+            Some(&b"2"[..])
+        );
+        assert_eq!(cc.get_config(None, "pa_type"), None);
+        assert_eq!(cc.get_config(Some("krbtgt/X@X"), "pa_type"), None);
+        cc.primary.1 = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
+        assert_eq!(cc.get_config(None, "start_realm"), None);
+    }
+
     #[test]
     fn mit_addr_u2u_golden_is_identity() {
         let bytes = include_bytes!("../../../tests/traces/ccache-mit-addr-u2u.bin");
@@ -478,5 +707,97 @@ mod tests {
             msg.contains("GeneralString") || msg.contains("UTF-8") || msg.contains("principal"),
             "{msg}"
         );
+    }
+
+    /// fcc_store's record is one allocation: `cred_len` is each credential's marshalled length
+    /// exactly (MIT's cache with addresses, authdata and a second ticket), so its buffer never
+    /// grows.
+    #[test]
+    fn a_stored_record_is_sized_before_its_key() {
+        let cc = FileCcache::parse(GOLDEN).unwrap();
+        for c in &cc.creds {
+            let n = cred_len(c);
+            let mut w = Writer {
+                buf: Vec::with_capacity(n),
+            };
+            marshal_cred(&mut w, c);
+            assert_eq!(w.buf.len(), n, "cred_len is the record's length");
+            assert_eq!(w.buf.capacity(), n, "the record's buffer grew");
+        }
+    }
+
+    const GOLDEN: &[u8] = include_bytes!("../../../tests/traces/ccache-mit-addr-u2u.bin");
+
+    /// A scratch cache file holding `bytes`.
+    fn cache_file(name: &str, bytes: &[u8]) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = krb5_testkit::scratch_dir(name);
+        let path = dir.join("cc");
+        std::fs::write(&path, bytes).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn a_store_appends_one_record_after_the_bytes_already_there() {
+        let (dir, path) = cache_file("krb5-fcc-append", GOLDEN);
+        let cc = FileCcache::parse(GOLDEN).unwrap();
+        let cred = cc.creds.last().unwrap().clone();
+        fcc_store(&path, &cred).unwrap();
+        let after = std::fs::read(&path).unwrap();
+        let mut w = Writer::default();
+        marshal_cred(&mut w, &cred);
+        assert_eq!(&after[..GOLDEN.len()], GOLDEN);
+        assert_eq!(&after[GOLDEN.len()..], w.buf.as_slice());
+        let again = FileCcache::parse(&after).unwrap();
+        assert_eq!(again.creds.len(), cc.creds.len() + 1);
+        assert_eq!(read_cache_file(&path).unwrap().as_slice(), after.as_slice());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_store_waits_for_the_files_lock() {
+        let (dir, path) = cache_file("krb5-fcc-lock", GOLDEN);
+        let cred = FileCcache::parse(GOLDEN).unwrap().creds[0].clone();
+        let holder = File::options().read(true).write(true).open(&path).unwrap();
+        let mut held = None;
+        lock_file(&holder, FileLock::Exclusive, &mut held).unwrap();
+        let store_path = path.clone();
+        let store = std::thread::spawn(move || fcc_store(&store_path, &cred));
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        assert_eq!(std::fs::read(&path).unwrap().as_slice(), GOLDEN);
+        lock_file(&holder, FileLock::Unlock, &mut held).unwrap();
+        store.join().unwrap().unwrap();
+        assert!(std::fs::read(&path).unwrap().len() > GOLDEN.len());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_store_neither_makes_a_missing_file_nor_writes_another_format() {
+        let cred = FileCcache::parse(GOLDEN).unwrap().creds[0].clone();
+        let dir = krb5_testkit::scratch_dir("krb5-fcc-missing");
+        let missing = dir.join("cc");
+        let e = fcc_store(&missing, &cred).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::NotFound);
+        assert!(!missing.exists());
+        assert_eq!(
+            read_cache_file(&missing).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        let _ = std::fs::remove_dir_all(dir);
+        for (bytes, want) in [
+            (&[0x05, 0x03, 0, 0][..], FccFailure::BadVersion),
+            (&[0x05, 0x09][..], FccFailure::BadVersion),
+            (&[0x05][..], FccFailure::Format),
+            (&[0x05, 0x04, 0x00, 0x03, 0, 1, 0][..], FccFailure::Format),
+            (
+                &[0x05, 0x04, 0x00, 0x08, 0, 1, 0, 4, 0, 0, 0, 0][..],
+                FccFailure::Format,
+            ),
+        ] {
+            let (dir, path) = cache_file("krb5-fcc-format", bytes);
+            let e = fcc_store(&path, &cred).unwrap_err();
+            assert_eq!(FccFailure::of(&e), Some(want), "{bytes:02x?}");
+            assert_eq!(std::fs::read(&path).unwrap().as_slice(), bytes);
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 }

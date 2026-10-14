@@ -14,11 +14,11 @@ use super::{Error, GssContext};
 
 const TOK_MIC: [u8; 2] = [0x04, 0x04];
 
-fn mic_header(initiator: bool, seq: u64) -> [u8; 16] {
+fn mic_header(initiator: bool, extra: u8, seq: u64) -> [u8; 16] {
     let mut h = [0xff; 16];
     h[0] = TOK_MIC[0];
     h[1] = TOK_MIC[1];
-    h[2] = if initiator { 0 } else { FLAG_SENT_BY_ACCEPTOR };
+    h[2] = extra | if initiator { 0 } else { FLAG_SENT_BY_ACCEPTOR };
     h[8..16].copy_from_slice(&seq.to_be_bytes());
     h
 }
@@ -28,13 +28,14 @@ impl GssContext {
     ///
     /// # Errors
     ///
-    /// [`Error::Inner`] when the keyed checksum under the session key cannot be computed.
+    /// [`Error::Inner`] when the keyed checksum under the send key cannot be computed.
     pub fn get_mic(&mut self, data: &[u8]) -> Result<Vec<u8>, Error> {
         let usage = sign_usage(self.initiator);
-        let header = mic_header(self.initiator, self.send_seq);
+        let (key, extra) = self.send_key();
+        let header = mic_header(self.initiator, extra, self.send_seq);
         let mut buf = data.to_vec();
         buf.extend_from_slice(&header);
-        let mic = checksum(&self.session, usage, &buf)?;
+        let mic = checksum(key, usage, &buf)?;
         self.send_seq = self.send_seq.wrapping_add(1);
         let mut tok = header.to_vec();
         tok.extend_from_slice(&mic);
@@ -47,9 +48,9 @@ impl GssContext {
     ///
     /// [`Error::Truncated`] when the token is badly framed or under its 16-byte header, is not a
     /// MIC token, has a bad filler, or its checksum is the wrong length; [`Error::Integrity`] when
-    /// the token comes from this side or its checksum does not verify; [`Error::Inner`] when it
-    /// names an acceptor subkey this context lacks; [`Error::Sequence`] when its sequence number
-    /// is a replay or outside the receive window.
+    /// the token comes from this side or its checksum does not verify under the key its flags
+    /// select; [`Error::Sequence`] when its sequence number is a replay or outside the receive
+    /// window.
     pub fn verify_mic(&mut self, data: &[u8], token: &[u8]) -> Result<(), Error> {
         let owned = message_token(token)?;
         let inner = owned.as_slice();
@@ -62,7 +63,7 @@ impl GssContext {
         }
         check_direction(inner[2], self.initiator)?;
         let usage = sign_usage(!self.initiator);
-        let key = self.recv_key(inner[2])?;
+        let key = self.recv_key(inner[2]);
         let ctype = key.etype().checksum_type();
         let ckhdr = rfc4121_ckhdr(TOK_MIC, inner[2], seq, true);
         let mut buf = data.to_vec();

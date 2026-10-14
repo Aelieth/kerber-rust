@@ -2,10 +2,10 @@
 //! and the 0x8003 checksum cred.
 
 use krb5_asn1::encode;
-use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, encrypt};
-use krb5_protocol::{CcacheCred, CcacheKeyblock, FileCcache, ReplayCache, unwrap_krb_cred};
+use krb5_crypto::{KeyUsage, ProtocolKey, encrypt};
+use krb5_protocol::{ReplayCache, unwrap_krb_cred};
 use krb5_types::{
-    EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime, KrbCred, KrbCredInfo, Microseconds,
+    EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime, KrbCred, KrbCredInfo,
     PrincipalName, Realm, Ticket, TicketFlags, ku,
 };
 
@@ -59,14 +59,13 @@ pub(super) fn krb_cred_for_deleg(
         sname: Some(PrincipalName::krbtgt(realm.as_ref())),
         caddr: None,
     };
-    let now = KerberosTime::now();
+    // MIT `krb5_mk_ncred` (`lib/krb5/krb/mk_cred.c:177-178`): a missing timestamp is filled from one `krb5_us_timeofday` reading.
+    let (now, usec) = krb5_protocol::us_timeofday();
     let part = EncKrbCredPart {
         ticket_info: vec![info],
         nonce: None,
-        timestamp: Some(now.clone()),
-        usec: Some(Microseconds::from_subsec_micros(
-            now.0.timestamp_subsec_micros(),
-        )),
+        timestamp: Some(now),
+        usec: Some(usec),
         s_address: None,
         r_address: None,
     };
@@ -126,53 +125,71 @@ pub(super) fn extract_delegated(
         .pname
         .as_ref()
         .map_or_else(String::new, |n| n.unparse_with_realm(&realm));
-    if let Ok(path) = std::env::var("GSS_DELEG_CCACHE")
-        && !path.is_empty()
-    {
-        write_deleg_ccache(&path, &part.0, &part.1)?;
-    }
+    #[cfg(feature = "test-hooks")]
+    hooks::write_deleg_ccache(&part.0, &part.1)?;
     Ok(Some(name))
 }
 
-fn write_deleg_ccache(path: &str, cred: &KrbCred, part: &EncKrbCredPart) -> Result<(), Error> {
-    let info = part.ticket_info.first().ok_or(Error::Truncated)?;
-    let ticket = cred.tickets.first().ok_or(Error::Truncated)?;
-    let prealm = info.prealm.clone().ok_or(Error::Truncated)?;
-    let pname = info.pname.clone().ok_or(Error::Truncated)?;
-    let etype = EncryptionType::from_iana(info.key.keytype).map_err(Error::from)?;
-    let session =
-        ProtocolKey::from_bytes(etype, info.key.keyvalue.as_ref()).map_err(Error::from)?;
-    let srealm = info.srealm.clone().unwrap_or_else(|| prealm.clone());
-    let sname = info
-        .sname
-        .clone()
-        .unwrap_or_else(|| PrincipalName::krbtgt(&String::from_utf8_lossy(prealm.as_bytes())));
-    let cc = FileCcache::new(
-        (prealm.clone(), pname.clone()),
-        vec![CcacheCred {
-            client: (prealm, pname),
-            server: (srealm, sname),
-            key: CcacheKeyblock::from_protocol(&session),
-            authtime: info.authtime.as_ref().map_or(0, KerberosTime::unix_seconds),
-            starttime: info
-                .starttime
-                .as_ref()
-                .or(info.authtime.as_ref())
-                .map_or(0, KerberosTime::unix_seconds),
-            endtime: info.endtime.as_ref().map_or(0, KerberosTime::unix_seconds),
-            renew_till: info
-                .renew_till
-                .as_ref()
-                .map_or(0, KerberosTime::unix_seconds),
-            is_skey: 0,
-            ticket_flags: info.flags.as_ref().map_or(0, TicketFlags::to_u32),
-            addresses: Vec::new(),
-            authdata: Vec::new(),
-            ticket: encode(ticket).map_err(|e| Error::Inner(e.to_string()))?,
-            second_ticket: Vec::new(),
-        }],
-    );
-    cc.write_file(path).map_err(|e| Error::Inner(e.to_string()))
+/// The gates' copy of a delegated credential, in a `test-hooks` build only: MIT's acceptor hands
+/// the credential to its caller and reads no environment for it, so a release acceptor (kadmind's
+/// RPCSEC_GSS) keeps only the name.
+#[cfg(feature = "test-hooks")]
+mod hooks {
+    use krb5_asn1::encode;
+    use krb5_crypto::{EncryptionType, ProtocolKey};
+    use krb5_protocol::{CcacheCred, CcacheKeyblock, FileCcache};
+    use krb5_types::{EncKrbCredPart, KerberosTime, KrbCred, PrincipalName, TicketFlags};
+
+    use super::Error;
+
+    /// Write the credential to the FILE ccache `GSS_DELEG_CCACHE` names, when it names one.
+    pub(super) fn write_deleg_ccache(cred: &KrbCred, part: &EncKrbCredPart) -> Result<(), Error> {
+        let Ok(path) = std::env::var("GSS_DELEG_CCACHE") else {
+            return Ok(());
+        };
+        if path.is_empty() {
+            return Ok(());
+        }
+        let info = part.ticket_info.first().ok_or(Error::Truncated)?;
+        let ticket = cred.tickets.first().ok_or(Error::Truncated)?;
+        let prealm = info.prealm.clone().ok_or(Error::Truncated)?;
+        let pname = info.pname.clone().ok_or(Error::Truncated)?;
+        let etype = EncryptionType::from_iana(info.key.keytype).map_err(Error::from)?;
+        let session =
+            ProtocolKey::from_bytes(etype, info.key.keyvalue.as_ref()).map_err(Error::from)?;
+        let srealm = info.srealm.clone().unwrap_or_else(|| prealm.clone());
+        let sname = info
+            .sname
+            .clone()
+            .unwrap_or_else(|| PrincipalName::krbtgt(&String::from_utf8_lossy(prealm.as_bytes())));
+        let cc = FileCcache::new(
+            (prealm.clone(), pname.clone()),
+            vec![CcacheCred {
+                client: (prealm, pname),
+                server: (srealm, sname),
+                key: CcacheKeyblock::from_protocol(&session),
+                authtime: info.authtime.as_ref().map_or(0, KerberosTime::unix_seconds),
+                starttime: info
+                    .starttime
+                    .as_ref()
+                    .or(info.authtime.as_ref())
+                    .map_or(0, KerberosTime::unix_seconds),
+                endtime: info.endtime.as_ref().map_or(0, KerberosTime::unix_seconds),
+                renew_till: info
+                    .renew_till
+                    .as_ref()
+                    .map_or(0, KerberosTime::unix_seconds),
+                is_skey: 0,
+                ticket_flags: info.flags.as_ref().map_or(0, TicketFlags::to_u32),
+                addresses: Vec::new(),
+                authdata: Vec::new(),
+                ticket: encode(ticket).map_err(|e| Error::Inner(e.to_string()))?,
+                second_ticket: Vec::new(),
+            }],
+        );
+        cc.write_file(&path)
+            .map_err(|e| Error::Inner(e.to_string()))
+    }
 }
 
 impl GssContext {

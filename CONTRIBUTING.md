@@ -78,7 +78,7 @@ or a MIT file named in prose) is not an anchor and is legal. The
 guarantee is what this port does; where the port deviates, the anchor
 line says so ("MIT does X; this port does Y") and the deviation has a
 parity-ledger row under `docs/parity/` (verdict `deviation` or
-`stricter-documented`) or a `docs/security.md` row.
+`stricter-documented`) or a `docs/mit-deviations.md` row.
 
 **R2.** State the invariant, not the steps: an ordering, a fail-closed
 rule, a key-material rule, an attacker-relevant subtlety, or a deliberate

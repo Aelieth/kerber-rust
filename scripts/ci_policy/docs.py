@@ -193,8 +193,7 @@ def gate_placements(workflows: list[Workflow] | None = None) -> dict[str, list[t
     """scripts/*-gate.sh -> [(`workflow:job`, lane)] read from .github/workflows.
 
     The lane is `nightly` for a workflow that only runs on a schedule, `soft` for a
-    continue-on-error job, `skip2` for a step that runs the gate through `skip2` (exit 2 is
-    green), and `fail-red` otherwise.
+    continue-on-error job, and `fail-red` otherwise.
     """
     if workflows is None:
         workflows = [Workflow(p, p.read_text()) for p in sorted(WORKFLOWS.glob("*.yml"))]
@@ -208,8 +207,6 @@ def gate_placements(workflows: list[Workflow] | None = None) -> dict[str, list[t
                     lane = "nightly"
                 elif job.continue_on_error:
                     lane = "soft"
-                elif re.search(rf"skip2 \./scripts/{re.escape(script)}\b", job.body):
-                    lane = "skip2"
                 else:
                     lane = "fail-red"
                 place = (f"{w.path.stem}:{job.name}", lane)
@@ -268,15 +265,30 @@ def gate_doc_violations(
     return bad
 
 
+def gate_doc_text(root: pathlib.Path | None = None) -> str:
+    """`docs/gates.md` plus every `docs/gates-*.md`, in name order.
+
+    A size split keeps each row byte for byte in a second file. The inventory is the
+    concatenation, so a row moved out of `docs/gates.md` still resolves.
+    """
+    root = ROOT if root is None else root
+    docs = root / "docs"
+    parts: list[str] = []
+    main = docs / "gates.md"
+    if main.is_file():
+        parts.append(main.read_text(encoding="utf-8"))
+    parts.extend(path.read_text(encoding="utf-8") for path in sorted(docs.glob("gates-*.md")))
+    return "\n".join(parts)
+
+
 def check_gate_documented(root: pathlib.Path | None = None, *, allow: int | None = None) -> None:
-    """docs/gates.md has one true row per scripts/*-gate.sh (`gate_doc_violations`).
+    """docs/gates.md and docs/gates-*.md have one true row per scripts/*-gate.sh (`gate_doc_violations`).
 
     Advisory while `allow` equals the live count; hard at 0.
     """
     root = ROOT if root is None else root
     allow = GATE_DOC_ALLOW if allow is None else allow
-    doc = root / "docs" / "gates.md"
-    text = doc.read_text(encoding="utf-8") if doc.is_file() else ""
+    text = gate_doc_text(root)
     gate_names = [p.name for p in sorted((root / "scripts").glob("*-gate.sh"))]
     bad = gate_doc_violations(text, gate_names, gate_placements(), DOCUMENTED_STUBS)
     if len(bad) != allow:
@@ -302,9 +314,8 @@ def gate_doc_token_misses(root: pathlib.Path | None = None) -> list[str]:
     """Backticked tokens of each docs/gates.md row's asserts cell that appear in neither its gate script nor a
     file that script sources or runs (gate paths and `ci:` / `docs/` / `crates/` tokens are names, not claims)."""
     root = ROOT if root is None else root
-    doc = root / "docs" / "gates.md"
     bad: list[str] = []
-    for line in doc.read_text(encoding="utf-8").splitlines() if doc.is_file() else []:
+    for line in gate_doc_text(root).splitlines():
         m = _GATE_ROW.match(line)
         if not m:
             continue
@@ -449,9 +460,12 @@ DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
 GATE_DOC_TOKEN_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
-# The CHANGELOG's size (235,552 bytes when it was set) plus 9,000 bytes for the next 25 bullets at 360
-# bytes (the median bullet is 341); re-based only by a tool: commit ahead of the bullets it allows.
-CHANGELOG_MAX_BYTES = 244552
+# CHANGELOG.md was 272,571 bytes at 13c2160b. Allowance 17,429 bytes for the
+# rest of 1.1 and the cut, one bullet per change: 15,429 (forecast plus 20
+# percent, rounded up) and 2,000 more. Ceiling 290,000, raised from 288,000
+# by the user's decision on 2026-10-13, in the commit of the bullet that
+# needed it. Otherwise a tool: commit re-bases it, never a bullet commit.
+CHANGELOG_MAX_BYTES = 290000
 
 
 def check_testing_doc_budgets(

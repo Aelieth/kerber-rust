@@ -9,7 +9,9 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+bytes.workspace = true
 chrono.workspace = true
+pure-rust-locales.workspace = true
 getrandom.workspace = true
 p256.workspace = true
 rasn.workspace = true

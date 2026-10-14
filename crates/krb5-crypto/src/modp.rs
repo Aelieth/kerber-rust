@@ -1,14 +1,15 @@
 //! RFC 3526 Oakley MODP groups used by RFC 4556 PKINIT.
 //!
-//! The exponent is wiped on drop. The public value is `g^x mod p`,
-//! padded to the prime length. The groups are 14 (2048) and 16 (4096).
+//! The exponent's own allocation is wiped on drop; the `BigUint` copies of it that
+//! `dh_generate` and `dh_shared` make for `modpow` are not. The public value is
+//! `g^x mod p`, padded to the prime length. The groups are 14 (2048) and 16 (4096).
 
 use std::sync::OnceLock;
 
 use num_bigint::BigUint;
-use zeroize::Zeroize;
 
 use crate::error::Error;
+use crate::wipe::wipe;
 
 /// RFC 3526 group 14 (2048-bit) and group 16 (4096-bit).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,7 +33,7 @@ pub struct DhKeypair {
 
 impl Drop for DhKeypair {
     fn drop(&mut self) {
-        self.secret.zeroize();
+        wipe(&mut self.secret);
     }
 }
 

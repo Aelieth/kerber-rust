@@ -35,6 +35,7 @@ if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; th
     docker rm -f "$NAME" >/dev/null 2>&1 || true
     docker build -f harness/Dockerfile -t "$IMAGE" "$ROOT"
     docker run -d --name "$NAME" --entrypoint sleep "$IMAGE" 3600 >/dev/null
+    json_log_on "$NAME"
     if ! docker exec "$NAME" test -f /usr/lib/krb5/plugins/audit/k5audit_test.so; then
         log "kdc.gate" "error" ',"error":"k5audit_test.so missing after rebuild"'
         exit 1
@@ -81,8 +82,8 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n
 fi
 KLIST1="$(docker exec "$NAME" klist)"
 echo "$KLIST1"
-echo "$KLIST1" | grep -q 'user@KERBER.TEST'
-echo "$KLIST1" | grep -Ei 'Flags:|flags:' || echo "$KLIST1" | grep -q krbtgt
+grep -q 'user@KERBER.TEST' <<<"$KLIST1"
+grep -Ei 'Flags:|flags:' <<<"$KLIST1" || grep -q krbtgt <<<"$KLIST1"
 
 echo "==== MIT kvno host/testhost.kerber.test ===="
 if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.test; then
@@ -94,8 +95,8 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.tes
 fi
 KLIST2="$(docker exec "$NAME" klist)"
 echo "$KLIST2"
-echo "$KLIST2" | grep -q 'user@KERBER.TEST'
-echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
+grep -q 'user@KERBER.TEST' <<<"$KLIST2"
+grep -q 'host/testhost.kerber.test' <<<"$KLIST2"
 
 echo "==== rust KDC ISSUE tuple after kinit + kvno ===="
 require_log "$NAME" /tmp/kdc.log 'ISSUE' "ISSUE in /tmp/kdc.log"
@@ -103,13 +104,13 @@ require_log "$NAME" /tmp/kdc.log 'krbtgt/KERBER.TEST' "krbtgt/KERBER.TEST in /tm
 require_log "$NAME" /tmp/kdc.log 'host/testhost.kerber.test' "host/testhost.kerber.test in /tmp/kdc.log"
 RUSTLOG="$(docker exec "$NAME" cat /tmp/kdc.log)"
 echo "$RUSTLOG"
-echo "$RUSTLOG" | grep -q 'ISSUE' # RUST_issue_as
-echo "$RUSTLOG" | grep -q 'user@KERBER.TEST'
-echo "$RUSTLOG" | grep -q 'krbtgt/KERBER.TEST'
-echo "$RUSTLOG" | grep -F 'etypes {rep='
-echo "$RUSTLOG" | grep -q 'host/testhost.kerber.test' # RUST_issue_tgs
-echo "$RUSTLOG" | grep -F 'tkt='
-echo "$RUSTLOG" | grep -F 'ses='
+grep -q 'ISSUE' <<<"$RUSTLOG" # RUST_issue_as
+grep -q 'user@KERBER.TEST' <<<"$RUSTLOG"
+grep -q 'krbtgt/KERBER.TEST' <<<"$RUSTLOG"
+grep -F 'etypes {rep=' <<<"$RUSTLOG"
+grep -q 'host/testhost.kerber.test' <<<"$RUSTLOG" # RUST_issue_tgs
+grep -F 'tkt=' <<<"$RUSTLOG"
+grep -F 'ses=' <<<"$RUSTLOG"
 
 echo "==== MIT kinit -a then kvno via 127.0.0.1 is BADADDR ===="
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
@@ -120,7 +121,7 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n
 fi
 KLISTA="$(docker exec "$NAME" klist -a -n)"
 echo "$KLISTA"
-echo "$KLISTA" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' <<<"$KLISTA"
 set +e
 KVNOA="$(docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.test 2>&1)"
 KVNOA_RC=$?
@@ -130,7 +131,7 @@ if [ "$KVNOA_RC" -eq 0 ]; then
     log "kdc.gate" "error" ',"error":"kinit -a kvno via 127.0.0.1 unexpectedly succeeded"'
     exit 1
 fi
-echo "$KVNOA" | grep -qiE "Incorrect net address|BADADDR|KRB5KRB_AP_ERR_BADADDR"
+grep -qiE "Incorrect net address|BADADDR|KRB5KRB_AP_ERR_BADADDR" <<<"$KVNOA"
 
 echo "==== MIT kinit -a + kvno via bridge address ===="
 BRIDGE="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NAME")"
@@ -163,8 +164,8 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.tes
 fi
 KLISTB="$(docker exec "$NAME" klist -a -n)"
 echo "$KLISTB"
-echo "$KLISTB" | grep -q 'host/testhost.kerber.test'
-echo "$KLISTB" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+grep -q 'host/testhost.kerber.test' <<<"$KLISTB"
+grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' <<<"$KLISTB"
 
 TRACE_DST="${KERBER_TRACE_DST:-${KERBER_SCRATCH:-$ROOT/target}/traces}"
 refuse_golden_capture_dir "$TRACE_DST"
@@ -238,13 +239,13 @@ require_log "$NAME" /tmp/mit-issue.log 'krbtgt/KERBER.TEST' "krbtgt/KERBER.TEST 
 require_log "$NAME" /tmp/mit-issue.log 'host/testhost.kerber.test' "host/testhost.kerber.test in /tmp/mit-issue.log"
 MITLOG="$(docker exec "$NAME" cat /tmp/mit-issue.log 2>/dev/null || true)"
 echo "$MITLOG"
-echo "$MITLOG" | grep -q 'ISSUE' # MIT_issue_as
-echo "$MITLOG" | grep -q 'user@KERBER.TEST'
-echo "$MITLOG" | grep -q 'krbtgt/KERBER.TEST'
-echo "$MITLOG" | grep -F 'etypes {rep='
-echo "$MITLOG" | grep -q 'host/testhost.kerber.test' # MIT_issue_tgs
-echo "$MITLOG" | grep -F 'tkt='
-echo "$MITLOG" | grep -F 'ses='
+grep -q 'ISSUE' <<<"$MITLOG" # MIT_issue_as
+grep -q 'user@KERBER.TEST' <<<"$MITLOG"
+grep -q 'krbtgt/KERBER.TEST' <<<"$MITLOG"
+grep -F 'etypes {rep=' <<<"$MITLOG"
+grep -q 'host/testhost.kerber.test' <<<"$MITLOG" # MIT_issue_tgs
+grep -F 'tkt=' <<<"$MITLOG"
+grep -F 'ses=' <<<"$MITLOG"
 
 echo "==== audit field names both legs ===="
 # /tmp/au.log is rewritten by the live MIT audit plugin after rm -f.
@@ -394,8 +395,9 @@ echo "MIT_tgs_audit_seed"
 echo "RUST_tgs_audit_seed"
 
 # examples/configs as written: krb5-kdb creates EXAMPLE.COM from kdc.conf,
-# krb5-kdc and krb5-kadmind start on kdc.conf alone, MIT kadmin adds principals
-# through kadm5.acl, and MIT kinit + kvno read krb5.conf.
+# krb5-kdc and krb5-kadmind start on kdc.conf and krb5.conf alone (its
+# default_realm is their realm, as MIT's), MIT kadmin adds principals through
+# kadm5.acl, and MIT kinit + kvno read krb5.conf.
 echo "==== example configuration (examples/configs) ===="
 EXAMPLE="$ROOT/examples/configs"
 for f in kdc.conf krb5.conf kadm5.acl; do
@@ -412,18 +414,16 @@ docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kadmind" "$NAME":/tmp/krb5-kadmind
 docker exec "$NAME" chmod +x /tmp/krb5-kdb /tmp/krb5-kadmind
 docker exec "$NAME" sh -c 'grep -q " kdc.example.com$" /etc/hosts || echo "127.0.0.1 kdc.example.com" >>/etc/hosts'
-docker exec -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    -e KRB5_KDC_DB=/var/lib/kerber-rust/principal \
-    -e KRB5_KDC_STASH=/var/lib/kerber-rust/.k5.EXAMPLE.COM \
-    -e KRB5_MASTER_PASSWORD=example-master \
+docker exec -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
     -e KRB5_TEST_USER_PASSWORD=example-user \
     -e KRB5_TEST_ADMIN_PASSWORD=example-admin \
-    "$NAME" /tmp/krb5-kdb create EXAMPLE.COM || die "example: krb5-kdb create EXAMPLE.COM failed"
-docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    "$NAME" sh -c '/tmp/krb5-kdc >/tmp/example-kdc.log 2>&1'
+    "$NAME" /tmp/krb5-kdb -r EXAMPLE.COM -P example-master create -s \
+    || die "example: krb5-kdb -r EXAMPLE.COM create -s failed"
+docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc -n >/tmp/example-kdc.log 2>&1'
 require_listen "$NAME" /tmp/example-kdc.log "the example KDC (kdc.conf kdc_listen)"
-docker exec -d -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
-    "$NAME" sh -c '/tmp/krb5-kadmind >/tmp/example-kadmind.log 2>&1'
+docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kadmind -nofork >/tmp/example-kadmind.log 2>&1'
 require_listen "$NAME" /tmp/example-kadmind.log "the example kadmind (kdc.conf acl_file)"
 echo "RUST_example_kdc_kadmind"
 # ex: a MIT client in the container on the example krb5.conf and its own cache.
@@ -450,6 +450,64 @@ echo "$KLISTX"
 grep -q 'Default principal: alice@EXAMPLE.COM' <<<"$KLISTX" || die "example: klist does not name alice@EXAMPLE.COM"
 grep -q 'host/kdc.example.com@EXAMPLE.COM' <<<"$KLISTX" || die "example: klist has no host/kdc.example.com ticket"
 echo "MIT_example_kadmin_kinit_kvno"
+
+# The same realm restarted on KLLDAP's kdc.conf shape: [kdcdefaults] kdc_ports =
+# 750,88 and no listener relation for kadmind or kpasswd. MIT reads a bare port
+# as every local address (net-server.c loop_add_addresses), so MIT kinit reaches
+# the KDC over the container's own non-loopback address on TCP 88 and UDP 750,
+# and MIT kadmin reaches kadmind there on 749.
+echo "==== kdc_ports = 750,88 on every local address (KLLDAP kdc.conf shape) ===="
+docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) $(pidof krb5-kadmind) 2>/dev/null; true'
+wait_gone_in "$NAME" 88 || die "the example KDC still holds port 88"
+docker exec "$NAME" sh -c 'sed -i "s/^    kdc_listen = .*/    kdc_ports = 750,88/" /etc/kerber-rust/kdc.conf'
+docker exec "$NAME" grep -q '^    kdc_ports = 750,88$' /etc/kerber-rust/kdc.conf \
+    || die "listen: kdc.conf was not rewritten to kdc_ports = 750,88"
+LIP="$(docker exec "$NAME" hostname -i | tr ' ' '\n' | grep -v '^127\.' | grep -v ':' | head -1)"
+[ -n "$LIP" ] || die "listen: the container has no non-loopback IPv4 address"
+docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kdc -n >/tmp/listen-kdc.log 2>&1'
+require_listen "$NAME" /tmp/listen-kdc.log "the KDC on kdc_ports = 750,88"
+docker exec -d -e KRB5_CONFIG=/etc/kerber-rust/krb5.conf -e KRB5_KDC_PROFILE=/etc/kerber-rust/kdc.conf \
+    "$NAME" sh -c '/tmp/krb5-kadmind -nofork >/tmp/listen-kadmind.log 2>&1'
+require_listen "$NAME" /tmp/listen-kadmind.log "kadmind on its default listeners"
+docker exec "$NAME" cat /tmp/listen-kdc.log /tmp/listen-kadmind.log | grep -E '^(listening|kpasswd) '
+# lconf PORT UDP_LIMIT: a client krb5.conf naming the KDC and kadmind by address.
+lconf() {
+    docker exec "$NAME" sh -c "sed -e 's/kdc = kdc.example.com:88/kdc = $LIP:$1/' \
+        -e 's/admin_server = kdc.example.com:749/admin_server = $LIP:749/' \
+        -e 's/^\[libdefaults\]/[libdefaults]\n    udp_preference_limit = $2/' \
+        /etc/kerber-rust/krb5.conf >/tmp/listen-krb5-$1.conf"
+}
+lconf 88 1
+lconf 750 4096
+lx() {
+    local conf=$1
+    shift
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=FILE:/tmp/listen-cc -e KRB5_TRACE=/dev/stdout "$NAME" "$@"
+}
+TCP88="$(lx /tmp/listen-krb5-88.conf sh -c 'printf "alice-secret\n" | kinit alice@EXAMPLE.COM' 2>&1)" \
+    || { echo "$TCP88" >&2; die "listen: MIT kinit over TCP to $LIP:88 failed"; }
+grep -q "stream $LIP:88" <<<"$TCP88" || { echo "$TCP88" >&2; die "listen: kinit did not use TCP $LIP:88"; }
+echo "MIT_kinit_tcp_${LIP}_88"
+UDP750="$(lx /tmp/listen-krb5-750.conf sh -c 'printf "alice-secret\n" | kinit alice@EXAMPLE.COM' 2>&1)" \
+    || { echo "$UDP750" >&2; die "listen: MIT kinit over UDP to $LIP:750 failed"; }
+grep -q "dgram $LIP:750" <<<"$UDP750" || { echo "$UDP750" >&2; die "listen: kinit did not use UDP $LIP:750"; }
+grep -q "Received answer" <<<"$UDP750" || { echo "$UDP750" >&2; die "listen: no UDP answer from $LIP:750"; }
+echo "MIT_kinit_udp_${LIP}_750"
+KAD="$(mit_kadmin -e KRB5_CONFIG=/tmp/listen-krb5-88.conf -e KRB5CCNAME=FILE:/tmp/listen-cc "$NAME" -- \
+    -p admin@EXAMPLE.COM -w example-admin -q 'addprinc -randkey host/listen.example.com' 2>&1)" || true
+echo "$KAD"
+grep -q 'Principal "host/listen.example.com@EXAMPLE.COM" created' <<<"$KAD" \
+    || die "listen: MIT kadmin addprinc over $LIP:749 failed"
+KTA="$(mit_kadmin -e KRB5_CONFIG=/tmp/listen-krb5-88.conf -e KRB5CCNAME=FILE:/tmp/listen-cc "$NAME" -- \
+    -p admin@EXAMPLE.COM -w example-admin -q 'ktadd -k /tmp/listen.keytab host/listen.example.com' 2>&1)" || true
+echo "$KTA"
+grep -q 'Entry for principal host/listen.example.com with kvno 2' <<<"$KTA" \
+    || die "listen: MIT kadmin ktadd over $LIP:749 failed"
+lx /tmp/listen-krb5-88.conf kinit -k -t /tmp/listen.keytab host/listen.example.com >/dev/null \
+    || die "listen: MIT kinit -k with the ktadd keytab failed"
+echo "MIT_kadmin_${LIP}_749_addprinc_ktadd_kinit_k"
+docker exec "$NAME" rm -f /tmp/listen-cc /tmp/listen.keytab /tmp/listen-krb5-88.conf /tmp/listen-krb5-750.conf
 docker exec "$NAME" sh -c 'kill $(pidof krb5-kdc) $(pidof krb5-kadmind) 2>/dev/null; rm -rf /etc/kerber-rust /var/lib/kerber-rust /tmp/example-cc; true'
 
 log "kdc.gate" "ok" ",\"principal\":\"user@KERBER.TEST\",\"service\":\"host/testhost.kerber.test\",\"issue\":true,\"audit\":true"

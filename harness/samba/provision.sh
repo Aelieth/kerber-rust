@@ -1,8 +1,9 @@
 #!/bin/sh
 # Build-time provisioning of the Samba AD DC (realm AD.KERBER.TEST).
 # Runs offline against the local sam.ldb — no samba daemon needed here.
-# Baseline steps (provision + accounts + SPN) are must-pass; the AES-only and
-# delegation refinements are logged-best-effort (A2/A4 tune them further).
+# Baseline steps (provision + accounts + no-expiry + SPN) are must-pass; the
+# AES-only and delegation refinements are logged-best-effort (A2/A4 tune them
+# further).
 set -eu
 
 : "${SAMBA_REALM:?realm required}"
@@ -64,6 +65,19 @@ echo "[provision] create test accounts"
 samba-tool user create kbruser "$SAMBA_KBRUSER_PASSWORD"
 samba-tool user create kbrsvc  "$SAMBA_KBRSVC_PASSWORD"
 
+# The domain's password policy ages a password out after 42 days, and these
+# passwords are set once, when the image is built. An image kept longer than
+# that failed every kinit of kbruser with "Password expired" (a local
+# samba-ad-dc:latest of 2026-08-25, from 2026-10-06); CI rebuilds daily and
+# never saw it. The accounts the gates log in as therefore never expire
+# (userAccountControl DONT_EXPIRE_PASSWORD). Administrator is the account the
+# samba-ad-gate and the trust gate use; Samba may already give it the flag,
+# and setting it again changes nothing.
+echo "[provision] password never expires: kbruser kbrsvc Administrator"
+for u in kbruser kbrsvc Administrator; do
+    samba-tool user setexpiry "$u" --noexpiry
+done
+
 echo "[provision] register SPN $SVC_SPN on kbrsvc"
 samba-tool spn add "$SVC_SPN" kbrsvc
 
@@ -91,6 +105,17 @@ samba-tool delegation add-service kbrsvc "$SVC_SPN" \
 echo "[provision] verify accounts exist offline"
 ldbsearch -H "$SAM_LDB" -b "$BASE_DN" "(|(sAMAccountName=kbruser)(sAMAccountName=kbrsvc))" sAMAccountName objectSid \
     | grep -E 'sAMAccountName|objectSid' || true
+
+echo "[provision] verify password never expires (userAccountControl has 65536, DONT_EXPIRE_PASSWORD)"
+for u in kbruser kbrsvc Administrator; do
+    uac=$(ldbsearch -H "$SAM_LDB" -b "$BASE_DN" "(sAMAccountName=$u)" userAccountControl \
+        | sed -n 's/^userAccountControl: //p')
+    echo "[provision]   $u userAccountControl=${uac:-none}"
+    if [ $(( ${uac:-0} & 65536 )) -eq 0 ]; then
+        echo "[provision] ERROR: the password of $u can expire" >&2
+        exit 1
+    fi
+done
 
 echo "[provision] domain object SID (for the record):"
 ldbsearch -H "$SAM_LDB" -b "$BASE_DN" -s base objectSid | grep -i objectSid || true

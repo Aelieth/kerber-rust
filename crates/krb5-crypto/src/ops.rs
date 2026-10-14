@@ -16,6 +16,7 @@ use crate::derive::{self, derive_usage_keys, hmac_truncated, mac_verify};
 use crate::error::Error;
 use crate::etype::{EncryptionType, KeyUsage};
 use crate::key::ProtocolKey;
+use crate::wipe::Wiped;
 
 /// Reject iteration counts above this. RFC 3962 test vectors use at most 1200;
 /// RFC 8009 defaults to 32768. Zero (RFC 3962 = 2^32) is refused.
@@ -46,7 +47,8 @@ fn parse_iterations(etype: EncryptionType, params: Option<&[u8]>) -> Result<u32,
 /// # Errors
 ///
 /// [`Error::InvalidParams`] when `params` is present with a length other than 0 or 4, or the
-/// count is 0; [`Error::IterationLimit`] when the count is above 5,000,000.
+/// count is 0; [`Error::IterationLimit`] when the count is above 5,000,000; [`Error::DesWeakKey`]
+/// when a des3-cbc-sha1 password's folded key is a weak DES key, as MIT's `krb5int_dk_string_to_key`.
 pub fn string_to_key(
     etype: EncryptionType,
     password: impl AsRef<[u8]>,
@@ -79,7 +81,7 @@ fn string_to_key_inner(
 ) -> Result<ProtocolKey, Error> {
     let iter = parse_iterations(etype, params)?;
     let key_len = etype.key_len();
-    let mut tkey = vec![0u8; key_len];
+    let mut tkey = Wiped(vec![0u8; key_len]);
 
     if etype.is_rfc8009() {
         let mut saltp = Vec::new();
@@ -107,17 +109,17 @@ fn string_to_key_inner(
                 return Err(Error::UnsupportedEtype(etype.to_iana()));
             }
         }
-        let mut base =
-            derive::kdf_hmac_sha2(etype, &tkey, b"kerberos", None, derive::bits_u32(key_len))?;
-        tkey.zeroize();
-        let key = ProtocolKey::from_bytes(etype, &base);
-        base.zeroize();
-        key
+        let base = Wiped(derive::kdf_hmac_sha2(
+            etype,
+            &tkey,
+            b"kerberos",
+            None,
+            derive::bits_u32(key_len),
+        )?);
+        ProtocolKey::from_bytes(etype, &base)
     } else if etype == EncryptionType::Rc4Hmac {
-        tkey.zeroize();
         crate::weak::rc4_string_to_key(password)
     } else if etype == EncryptionType::Des3CbcSha1 {
-        tkey.zeroize();
         crate::weak::des3_string_to_key(password, salt)
     } else if etype.is_camellia() {
         let mut saltp = Vec::new();
@@ -130,18 +132,12 @@ fn string_to_key_inner(
         saltp.push(0x00);
         saltp.extend_from_slice(salt);
         pbkdf2_hmac::<Sha1>(password, &saltp, iter, &mut tkey);
-        let mut base = crate::weak::dk_camellia(&tkey, b"kerberos")?;
-        tkey.zeroize();
-        let key = ProtocolKey::from_bytes(etype, &base);
-        base.zeroize();
-        key
+        let base = Wiped(crate::weak::dk_camellia(&tkey, b"kerberos")?);
+        ProtocolKey::from_bytes(etype, &base)
     } else {
         pbkdf2_hmac::<Sha1>(password, salt, iter, &mut tkey);
-        let mut base = derive::dk_rfc3961(&tkey, b"kerberos")?;
-        tkey.zeroize();
-        let key = ProtocolKey::from_bytes(etype, &base);
-        base.zeroize();
-        key
+        let base = Wiped(derive::dk_rfc3961(&tkey, b"kerberos")?);
+        ProtocolKey::from_bytes(etype, &base)
     }
 }
 
@@ -174,7 +170,8 @@ impl CipherState {
 ///
 /// # Errors
 ///
-/// [`Error::Rng`] when the CSPRNG fails.
+/// [`Error::Rng`] when the CSPRNG fails; [`Error::DesBadParity`] and [`Error::DesWeakKey`] when `key` is a des3-cbc-sha1 key MIT refuses (a key
+/// of any parity loads, and its first use is where MIT refuses it).
 pub fn encrypt(key: &ProtocolKey, usage: KeyUsage, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
     let mut conf = [0u8; BLOCK];
     getrandom::getrandom(&mut conf).map_err(|_| Error::Rng)?;
@@ -191,7 +188,7 @@ pub fn encrypt(key: &ProtocolKey, usage: KeyUsage, plaintext: &[u8]) -> Result<V
 /// # Errors
 ///
 /// [`Error::InvalidKeyLength`] when `raw_key` is longer than `u16::MAX` octets; [`Error::Rng`]
-/// when the CSPRNG fails.
+/// when the CSPRNG fails; the refusals of [`encrypt`] when `mkey` is a des3-cbc-sha1 key MIT refuses.
 pub fn kdb_encrypt_key(mkey: &ProtocolKey, raw_key: &[u8]) -> Result<Vec<u8>, Error> {
     let key_len = u16::try_from(raw_key.len()).map_err(|_| Error::InvalidKeyLength)?;
     let cipher = encrypt(mkey, KeyUsage::from_rfc(0), raw_key)?;
@@ -208,7 +205,8 @@ pub fn kdb_encrypt_key(mkey: &ProtocolKey, raw_key: &[u8]) -> Result<Vec<u8>, Er
 /// [`Error::CiphertextTooShort`] when `ciphertext` is shorter than the 2-octet prefix plus the
 /// etype's confounder and checksum; [`Error::Integrity`] when the checksum does not match;
 /// [`Error::InvalidKeyLength`] when the prefix does not match the decrypted length, or a
-/// des3-cbc-sha1 ciphertext is not a whole number of 8-octet blocks.
+/// des3-cbc-sha1 ciphertext is not a whole number of 8-octet blocks; the refusals of [`decrypt`]
+/// when `mkey` is a des3-cbc-sha1 key MIT refuses.
 pub fn kdb_decrypt_key(mkey: &ProtocolKey, ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
     if ciphertext.len() < 2 {
         return Err(Error::CiphertextTooShort);
@@ -231,7 +229,7 @@ pub fn kdb_decrypt_key(mkey: &ProtocolKey, ciphertext: &[u8]) -> Result<Vec<u8>,
 ///
 /// [`Error::InvalidConfounder`] when `confounder` is not 16 octets (AES, Camellia) or is shorter
 /// than 8 (rc4-hmac, which uses the first 8); [`Error::Rng`] when the CSPRNG fails for
-/// des3-cbc-sha1, which ignores `confounder` and draws its own.
+/// des3-cbc-sha1, which ignores `confounder` and draws its own; the refusals of [`encrypt`].
 pub fn encrypt_with_confounder(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -266,7 +264,7 @@ fn encrypt_inner(
 ///
 /// # Errors
 ///
-/// [`Error::Rng`] when the CSPRNG fails.
+/// [`Error::Rng`] when the CSPRNG fails; the refusals of [`encrypt`].
 pub fn encrypt_with_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -276,6 +274,23 @@ pub fn encrypt_with_state(
     let mut conf = [0u8; BLOCK];
     getrandom::getrandom(&mut conf).map_err(|_| Error::Rng)?;
     encrypt_inner_state(key, usage, &conf, plaintext, state)
+}
+
+/// [`encrypt_with_confounder`] through a caller-managed cipher state (IV chaining).
+///
+/// Required for known-answer tests of a chain, whose confounders another implementation drew.
+///
+/// # Errors
+///
+/// Those of [`encrypt_with_confounder`].
+pub fn encrypt_with_confounder_and_state(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    confounder: &[u8],
+    state: &mut CipherState,
+    plaintext: &[u8],
+) -> Result<Vec<u8>, Error> {
+    encrypt_inner_state(key, usage, confounder, plaintext, state)
 }
 
 /// MIT `krb5int_dk_encrypt` (`enc_dk_hmac.c:156-168`): the trailer is the truncated HMAC of the
@@ -301,7 +316,9 @@ fn encrypt_inner_state(
         }
         EncryptionType::Des3CbcSha1 => return crate::weak::des3_encrypt(key, usage, plaintext),
         EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
-            return crate::weak::camellia_encrypt_with_conf(key, usage, confounder, plaintext);
+            return crate::weak::camellia_encrypt_with_conf(
+                key, usage, confounder, plaintext, state,
+            );
         }
         _ => {}
     }
@@ -334,11 +351,71 @@ fn encrypt_inner_state(
     }
 }
 
-fn update_iv(state: &mut CipherState, ciphertext: &[u8]) {
-    if ciphertext.len() >= BLOCK {
-        let start = ciphertext.len() - BLOCK;
-        state.iv.copy_from_slice(&ciphertext[start..]);
+/// The state a CTS encrypt or decrypt leaves for the next message: the full block that ciphertext
+/// stealing writes second to last, `C_n`, at block `n - 2` of the stream counting from 0. The stream's
+/// last block is not it: that is `C_(n-1)`, cut short when the message does not end on a block boundary.
+/// A message of one block (a confounder and no data) leaves the state as it was, and is encrypted under a zero IV
+/// whatever the state is (`cts::encrypt`).
+/// MIT `krb5int_aes_encrypt` (`lib/crypto/builtin/enc_provider/aes.c:255-260`): a single block is encrypted under a zero IV and returns before the state is touched.
+/// MIT `krb5int_aes_encrypt` (`lib/crypto/builtin/enc_provider/aes.c:288-296`): the state is the CBC chain's value after the last two blocks are encrypted, `C_n`.
+/// MIT `krb5int_aes_decrypt` (`lib/crypto/builtin/enc_provider/aes.c:319-324`): a single block is decrypted under a zero IV and returns before the state is touched.
+/// MIT `krb5int_aes_decrypt` (`lib/crypto/builtin/enc_provider/aes.c:345-353`): the first of the last two ciphertext blocks of the stream is saved as the new state.
+pub(crate) fn update_iv(state: &mut CipherState, ciphertext: &[u8]) {
+    let nblocks = ciphertext.len().div_ceil(BLOCK);
+    if nblocks >= 2 {
+        let start = (nblocks - 2) * BLOCK;
+        state.iv.copy_from_slice(&ciphertext[start..start + BLOCK]);
     }
+}
+
+/// MIT `ENCTYPE_UNKNOWN` (`include/krb5/krb5.hin:449-449`): an EncryptedData enctype that any key decrypts.
+pub const ENCTYPE_UNKNOWN: i32 = 0x01ff;
+
+/// The enctype check an EncryptedData passes before its ciphertext is decrypted.
+/// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): an enctype that is neither ENCTYPE_UNKNOWN nor the key's own is KRB5_BAD_ENCTYPE, zero included.
+///
+/// # Errors
+///
+/// [`Error::BadEnctype`] with `etype` when it is neither [`ENCTYPE_UNKNOWN`] nor the key's.
+pub fn check_enc_data_etype(key: &ProtocolKey, etype: i32) -> Result<(), Error> {
+    if etype != ENCTYPE_UNKNOWN && etype != key.etype().to_iana() {
+        return Err(Error::BadEnctype(etype));
+    }
+    Ok(())
+}
+
+/// Decrypt an EncryptedData's `ciphertext`, its enctype `etype`, under `key`.
+/// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:31-85`): the enctype is checked first, then the ciphertext decrypted.
+///
+/// # Errors
+///
+/// [`Error::BadEnctype`] when `etype` is neither [`ENCTYPE_UNKNOWN`] nor the key's, and the
+/// errors of [`decrypt`].
+pub fn decrypt_enc_data(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    etype: i32,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, Error> {
+    check_enc_data_etype(key, etype)?;
+    decrypt(key, usage, ciphertext)
+}
+
+/// [`decrypt_enc_data`] through a caller-managed cipher state.
+///
+/// # Errors
+///
+/// [`Error::BadEnctype`] when `etype` is neither [`ENCTYPE_UNKNOWN`] nor the key's, and the
+/// errors of [`decrypt_with_state`].
+pub fn decrypt_enc_data_with_state(
+    key: &ProtocolKey,
+    usage: KeyUsage,
+    state: &mut CipherState,
+    etype: i32,
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, Error> {
+    check_enc_data_etype(key, etype)?;
+    decrypt_with_state(key, usage, state, ciphertext)
 }
 
 /// Decrypt `ciphertext` and return the plaintext with the confounder removed.
@@ -348,7 +425,7 @@ fn update_iv(state: &mut CipherState, ciphertext: &[u8]) {
 /// [`Error::CiphertextTooShort`] when `ciphertext` is shorter than the etype's confounder plus
 /// checksum; [`Error::Integrity`] when the checksum does not match (the decrypted buffer is
 /// discarded); [`Error::InvalidKeyLength`] when a des3-cbc-sha1 ciphertext is not a whole
-/// number of 8-octet blocks.
+/// number of 8-octet blocks; [`Error::DesBadParity`] and [`Error::DesWeakKey`] when `key` is a des3-cbc-sha1 key MIT refuses, before the checksum is read.
 pub fn decrypt(key: &ProtocolKey, usage: KeyUsage, ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
@@ -375,7 +452,8 @@ fn decrypt_inner(key: &ProtocolKey, usage: KeyUsage, ciphertext: &[u8]) -> Resul
 ///
 /// [`Error::CiphertextTooShort`] when `ciphertext` is shorter than the etype's confounder plus
 /// checksum; [`Error::Integrity`] when the checksum does not match; [`Error::InvalidKeyLength`]
-/// when a des3-cbc-sha1 ciphertext is not a whole number of 8-octet blocks.
+/// when a des3-cbc-sha1 ciphertext is not a whole number of 8-octet blocks; the refusals of
+/// [`decrypt`].
 pub fn decrypt_with_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -387,6 +465,8 @@ pub fn decrypt_with_state(
 
 /// MIT `krb5int_dk_decrypt` (`enc_dk_hmac.c:259-261`): a checksum mismatch is an integrity failure.
 /// The recovered plaintext is wiped before that error is returned.
+/// MIT `krb5int_dk_decrypt` (`enc_dk_hmac.c:246-259`): the provider decrypts, and so takes the cipher state, before the hash is compared; a message that fails the check has moved the state.
+/// MIT `krb5int_etm_decrypt` (`enc_etm.c:238-250`): the MAC is compared before anything is decrypted, so a message that fails it leaves the state alone.
 fn decrypt_inner_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -397,7 +477,7 @@ fn decrypt_inner_state(
         EncryptionType::Rc4Hmac => return crate::weak::rc4_decrypt(key, usage, ciphertext),
         EncryptionType::Des3CbcSha1 => return crate::weak::des3_decrypt(key, usage, ciphertext),
         EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
-            return crate::weak::camellia_decrypt(key, usage, ciphertext);
+            return crate::weak::camellia_decrypt(key, usage, ciphertext, state);
         }
         _ => {}
     }
@@ -427,6 +507,7 @@ fn decrypt_inner_state(
         Ok(conf)
     } else {
         let mut p = cts::decrypt(&keys.ke, &iv, c)?;
+        update_iv(state, c);
         let expected = hmac_truncated(key.etype(), &keys.ki, &p)?;
         if mac_verify(mac, &expected).is_err() {
             p.zeroize();
@@ -436,7 +517,6 @@ fn decrypt_inner_state(
             p.zeroize();
             return Err(Error::CiphertextTooShort);
         }
-        update_iv(state, c);
         let plain = p[BLOCK..].to_vec();
         p.zeroize();
         Ok(plain)
@@ -492,10 +572,13 @@ pub fn decrypt_cts(
 
 /// Keyed checksum (RFC 3961 `get_mic` / RFC 8009 section 6).
 ///
+/// MIT `krb5int_dk_checksum` (`lib/crypto/krb/checksum_dk_hmac.c:33-58`): des3-cbc-sha1 signs with `Kc`, the key derived for the usage and the constant `0x99` with the enctype's own 3DES derivation and random-to-key (the one its encryption uses), and HMAC-SHA1 under it, 20 octets.
+///
 /// # Errors
 ///
-/// [`Error::InvalidKeyLength`] when `key` is des3-cbc-sha1, whose 24-octet key the AES-based
-/// `Kc` derivation refuses.
+/// [`Error::DesBadParity`] and [`Error::DesWeakKey`] when `key` is a des3-cbc-sha1 key MIT refuses (`validate_and_schedule`
+/// refuses it in the derivation of `Kc`); every other derivation takes the key's own length, which a
+/// [`ProtocolKey`] always has.
 pub fn checksum(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
@@ -517,7 +600,12 @@ fn checksum_inner(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<
             hmac_md5_arcfour_checksum(key.as_bytes(), usage.get(), message, -138)
         }
         EncryptionType::Des3CbcSha1 => {
-            let kc = derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x99))?;
+            // MIT `krb5int_dk_checksum` (`checksum_dk_hmac.c:33-58`): `krb5int_derive_key` over the
+            // enctype's provider, so the 3DES derivation and `k5_rand2key_des3`, not the AES block cipher.
+            let kc = Wiped(crate::weak::dk_des3(
+                key.as_bytes(),
+                &usage.derivation_constant(0x99),
+            )?);
             crate::weak::hmac_sha1_export(&kc, message, 20)
         }
         EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
@@ -560,12 +648,16 @@ pub fn hmac_md5_arcfour_checksum(
         return Err(Error::InvalidKeyLength);
     }
     let mapped = crate::weak::arcfour_translate_usage(usage);
+    // MIT `krb5int_hmacmd5_checksum` (`lib/crypto/krb/checksum_hmac_md5.c:90-90`): the signing key is wiped before return.
     let ksign = if ctype == -137 {
         None
     } else {
-        Some(hmac_md5_simple(key, b"signaturekey\0")?)
+        Some(Zeroizing::new(hmac_md5_simple(key, b"signaturekey\0")?))
     };
-    let mac_key = ksign.as_deref().unwrap_or(key);
+    let mac_key = match &ksign {
+        Some(k) => k.as_slice(),
+        None => key,
+    };
     let mut hasher = Md5::new();
     hasher.update(mapped.to_le_bytes());
     hasher.update(message);
@@ -616,8 +708,8 @@ pub fn unkeyed_checksum(cksumtype: i32, message: &[u8]) -> Result<Vec<u8>, Error
 ///
 /// [`Error::UnsupportedChecksum`] when the type is unknown or its cipher does not match `key`'s;
 /// [`Error::BadChecksumSize`] when `mac` is not the type's length; [`Error::Integrity`] when it
-/// does not match; [`Error::InvalidKeyLength`] for type 12 (hmac-sha1-des3-kd), whose 24-octet
-/// key the AES-based derivation refuses.
+/// does not match; the refusals of [`checksum`] when `key` is a des3-cbc-sha1 key MIT refuses
+/// (MIT's `krb5_c_verify_checksum` returns the key's code, not "invalid").
 pub fn verify_checksum_type(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -672,7 +764,7 @@ pub fn verify_checksum_type(
 /// [`Error::InappChecksum`] when `cksumtype` is not keyed (0 and unknown types included);
 /// otherwise as [`verify_checksum_type`]: [`Error::UnsupportedChecksum`] when its cipher does not
 /// match `key`'s, [`Error::BadChecksumSize`] on a wrong `mac` length, [`Error::Integrity`] on a
-/// mismatch, [`Error::InvalidKeyLength`] for type 12 (hmac-sha1-des3-kd).
+/// mismatch, and the refusals of [`checksum`].
 pub fn verify_checksum_keyed(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -695,8 +787,8 @@ pub fn verify_checksum_keyed(
 ///
 /// [`Error::UnsupportedChecksum`] when `cksumtype` is unknown (0 included) or its cipher does
 /// not match `key`'s; [`Error::InappChecksum`] when it is not collision-proof or not keyed;
-/// [`Error::BadChecksumSize`] on a wrong `mac` length; [`Error::Integrity`] on a mismatch;
-/// [`Error::InvalidKeyLength`] for type 12 (hmac-sha1-des3-kd).
+/// [`Error::BadChecksumSize`] on a wrong `mac` length; [`Error::Integrity`] on a mismatch; the
+/// refusals of [`checksum`].
 pub fn verify_checksum_collproof(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -826,6 +918,37 @@ fn emit(
 mod tests {
     use super::*;
     use md5::{Digest, Md5};
+
+    /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): only the key's own enctype and ENCTYPE_UNKNOWN pass, zero included among the refused, and nothing is decrypted first; settled live with `krb5_c_decrypt` (18 and 511 decrypt, 0 and 17 are KRB5_BAD_ENCTYPE).
+    #[test]
+    fn enc_data_etype_check_is_krb5_k_decrypts() {
+        let key =
+            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x44u8; 32]).unwrap();
+        let usage = KeyUsage::new(11).unwrap();
+        let cipher = encrypt(&key, usage, b"hello").unwrap();
+        for etype in [18, ENCTYPE_UNKNOWN] {
+            assert_eq!(
+                decrypt_enc_data(&key, usage, etype, &cipher).unwrap(),
+                b"hello"
+            );
+        }
+        for etype in [0, 17, 6] {
+            assert_eq!(
+                decrypt_enc_data(&key, usage, etype, &cipher),
+                Err(Error::BadEnctype(etype))
+            );
+        }
+        // The enctype is refused before the ciphertext is looked at.
+        assert_eq!(
+            decrypt_enc_data(&key, usage, 17, b"short"),
+            Err(Error::BadEnctype(17))
+        );
+        let mut state = CipherState::initial();
+        assert_eq!(
+            decrypt_enc_data_with_state(&key, usage, &mut state, 17, &cipher),
+            Err(Error::BadEnctype(17))
+        );
+    }
 
     #[test]
     fn verify_checksum_type_md5_hmac_rc4_uses_raw_key() {

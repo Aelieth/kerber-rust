@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-# Rust krb5-kprop → MIT kpropd (dump version 7) then MIT kinit.
-# Isolated: docker --entrypoint sleep; never touches host /etc/krb5.conf.
+# krb5-kdb dump, then Rust krb5-kprop -f of that file → MIT kpropd (dump version 7), then MIT
+# kinit against the MIT replica. Isolated: docker --entrypoint sleep; never touches host
+# /etc/krb5.conf.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 . "$ROOT/scripts/lib/provenance.sh"
 . "$ROOT/scripts/lib/gate-common.sh"
 . "$ROOT/scripts/lib/proc-common.sh"
-need_bins krb5-kdc krb5-kprop
+need_bins krb5-kdc krb5-kdb krb5-kprop
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-kprop-reverse-gate"
@@ -26,8 +27,9 @@ if ! docker exec "$NAME" sh -c 'command -v kpropd >/dev/null && command -v kdb5_
 fi
 
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdc" "$NAME":/tmp/krb5-kdc
+docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kdb" "$NAME":/tmp/krb5-kdb
 docker cp "${CARGO_TARGET_DIR:-target}/debug/krb5-kprop" "$NAME":/tmp/krb5-kprop
-docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kprop
+docker exec "$NAME" chmod +x /tmp/krb5-kdc /tmp/krb5-kdb /tmp/krb5-kprop
 
 docker exec "$NAME" sh -c 'cat >/tmp/kprop-krb5.conf <<EOF
 [libdefaults]
@@ -101,18 +103,29 @@ if [ "$ok" != 1 ]; then
     exit 1
 fi
 
-echo "==== Rust krb5-kprop ===="
-KPROP="$(docker exec \
-    -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
+echo "==== krb5-kdb dump, then Rust krb5-kprop -f, as MIT's kdb5_util dump + kprop ===="
+# kprop opens no database: it sends the file krb5-kdb dump wrote (with its .dump_ok), with a
+# ticket from the Rust KDC for the replica's host/ name, as host/<this host> from -s.
+docker exec \
     -e KRB5_KDC_DB=/tmp/principal \
     -e KRB5_KDC_STASH=/tmp/stash \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
-    "$NAME" /tmp/krb5-kprop -P 754 -s /tmp/host.keytab -n testhost.kerber.test 127.0.0.1 2>&1 || true)"
+    "$NAME" /tmp/krb5-kdb dump /tmp/prop.dump
+docker exec "$NAME" test -f /tmp/prop.dump.dump_ok
+KPROP="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
+    "$NAME" /tmp/krb5-kprop -f /tmp/prop.dump -P 754 -s /tmp/host.keytab -d testhost.kerber.test 2>&1 || true)"
 echo "$KPROP"
 echo "==== kpropd.log ===="
 docker exec "$NAME" cat /tmp/kpropd.log 2>/dev/null || true
-echo "$KPROP" | grep -q 'kprop ok'
+echo "$KPROP" | grep -qx 'Database propagation to testhost.kerber.test: SUCCEEDED'
+echo "$KPROP" | grep -qE '^[0-9]+ bytes sent\.$'
+docker exec "$NAME" grep -q 'authenticated client: host/testhost.kerber.test@KERBER.TEST' /tmp/kpropd.log
+LAST="$(docker exec "$NAME" od -An -tx1 /tmp/prop.dump.testhost.kerber.test.last_prop)"
+echo "last_prop:$LAST"
+[ "$(echo "$LAST" | tr -d ' ')" = 00 ] || {
+    log "kprop.reverse.gate" "error" ',"error":"no one-NUL .last_prop"'
+    exit 1
+}
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" test -s /tmp/from_kprop.dump 2>/dev/null; then
@@ -128,6 +141,37 @@ fi
 DUMP_HEAD="$(docker exec "$NAME" head -1 /tmp/from_kprop.dump)"
 echo "$DUMP_HEAD"
 echo "$DUMP_HEAD" | grep -q 'kdb5_util load_dump version 7'
+docker exec "$NAME" cmp /tmp/prop.dump /tmp/from_kprop.dump
+
+echo "==== a dump of several KRB-PRIV blocks: the same dump and 250 principals more, past 64 KiB ===="
+# kprop chains one cipher state through a dump's blocks, and only a dump of more than one block
+# shows whether this side chains it as MIT's kpropd does.
+docker cp "$ROOT/scripts/lib/bulk-dump.py" "$NAME":/tmp/bulk-dump.py
+docker exec "$NAME" python3 /tmp/bulk-dump.py /tmp/prop.dump /tmp/bulk.dump 250
+BULK="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
+    "$NAME" /tmp/krb5-kprop -f /tmp/bulk.dump -P 754 -s /tmp/host.keytab -d testhost.kerber.test 2>&1 || true)"
+echo "$BULK"
+echo "$BULK" | grep -qx 'Database propagation to testhost.kerber.test: SUCCEEDED'
+[ "$(echo "$BULK" | grep -cE '^[0-9]+ bytes sent\.$')" -ge 3 ]
+docker exec "$NAME" cmp /tmp/bulk.dump /tmp/from_kprop.dump
+
+echo "==== the same dump under each AES enctype as the ticket's session key ===="
+# The cipher state each enctype chains is its own code: the sha1 and the sha2 enctypes differ in what
+# their MAC covers. The session key is the one kprop asks for, so its trace names the one used.
+for pair in aes128-cts-hmac-sha1-96:aes128-cts aes256-cts-hmac-sha1-96:aes256-cts \
+    aes128-cts-hmac-sha256-128:aes128-sha2 aes256-cts-hmac-sha384-192:aes256-sha2; do
+    et="${pair%%:*}"
+    short="${pair##*:}"
+    docker exec "$NAME" sh -c "rm -f /tmp/from_kprop.dump /tmp/et.trace
+sed 's/^\[libdefaults\]/&\n    default_tkt_enctypes = $et/' /tmp/kprop-krb5.conf >/tmp/kprop-krb5-et.conf"
+    BULK="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5-et.conf -e KRB5_TRACE=/tmp/et.trace \
+        "$NAME" /tmp/krb5-kprop -f /tmp/bulk.dump -P 754 -s /tmp/host.keytab -d testhost.kerber.test 2>&1 || true)"
+    echo "$et: $(echo "$BULK" | tail -1)"
+    echo "$BULK" | grep -qx 'Database propagation to testhost.kerber.test: SUCCEEDED'
+    [ "$(echo "$BULK" | grep -cE '^[0-9]+ bytes sent\.$')" -ge 3 ]
+    docker exec "$NAME" grep -q "session key is: $short/" /tmp/et.trace
+    docker exec "$NAME" cmp /tmp/bulk.dump /tmp/from_kprop.dump
+done
 
 echo "==== stop Rust KDC; MIT krb5kdc on replica ===="
 kill_comm krb5-kdc
@@ -146,6 +190,7 @@ fi
 
 # kpropd -p kdb5_util should have loaded; load again if the replica is empty.
 docker exec "$NAME" sh -c 'kdb5_util load /tmp/from_kprop.dump >/tmp/kdb-load.log 2>&1 || true'
+[ "$(docker exec "$NAME" sh -c 'kdb5_util dump | grep -c "^princ.*bulk0250@KERBER.TEST"')" = 1 ]
 STARTLOG="$(docker exec "$NAME" sh -c 'krb5kdc' 2>&1 || true)"
 echo "$STARTLOG"
 ok=0

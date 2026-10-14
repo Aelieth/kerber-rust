@@ -60,19 +60,95 @@ pub struct SpakeResponse {
 }
 
 /// `PA-SPAKE ::= CHOICE { support[0], challenge[1], response[2], encData[3] }`
-#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
-#[rasn(choice)]
+///
+/// MIT `decode_cntype` (`lib/krb5/asn.1/asn1_encode.c:1277-1293`): every CHOICE is extensible, so an element no alternative takes, by its tag or by its constructed bit, decodes as an unknown choice (`SPAKE_MSGTYPE_UNKNOWN`).
+/// MIT `spake_verify` (`plugins/preauth/spake/spake_kdc.c:532-535`): the KDC answers an unknown choice with PREAUTH_FAILED.
+/// MIT `spake_process` (`plugins/preauth/spake/spake_client.c:357-359`): the client takes it as an unexpected message, as it takes a support or a response.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum PaSpake {
     /// Client support advertisement.
-    #[rasn(tag(explicit(0)))]
     Support(SpakeSupport),
     /// KDC challenge.
-    #[rasn(tag(explicit(1)))]
     Challenge(SpakeChallenge),
     /// Client response.
-    #[rasn(tag(explicit(2)))]
     Response(SpakeResponse),
     /// Encrypted data after the SPAKE key is established.
+    EncData(EncryptedData),
+    /// An alternative MIT does not know; it is never encoded.
+    Unknown,
+}
+
+/// [`PaSpake`]'s four alternatives, as rasn derives them.
+#[derive(AsnType, Decode, Encode)]
+#[rasn(choice)]
+enum PaSpakeKnown {
+    #[rasn(tag(explicit(0)))]
+    Support(SpakeSupport),
+    #[rasn(tag(explicit(1)))]
+    Challenge(SpakeChallenge),
+    #[rasn(tag(explicit(2)))]
+    Response(SpakeResponse),
     #[rasn(tag(explicit(3)))]
     EncData(EncryptedData),
+}
+
+impl AsnType for PaSpake {
+    const TAG: Tag = Tag::EOC;
+    const IS_CHOICE: bool = true;
+}
+
+impl Decode for PaSpake {
+    fn decode<D: Decoder>(decoder: &mut D) -> Result<Self, D::Error> {
+        let element = Any::decode(decoder)?;
+        let der = element.as_bytes();
+        // `[0]` to `[3]`, context-specific and constructed: one of the four.
+        if der.first().is_some_and(|&id| (0xa0..=0xa3).contains(&id)) {
+            let known: PaSpakeKnown = rasn::der::decode(der).map_err(D::Error::from)?;
+            return Ok(match known {
+                PaSpakeKnown::Support(v) => Self::Support(v),
+                PaSpakeKnown::Challenge(v) => Self::Challenge(v),
+                PaSpakeKnown::Response(v) => Self::Response(v),
+                PaSpakeKnown::EncData(v) => Self::EncData(v),
+            });
+        }
+        Ok(Self::Unknown)
+    }
+
+    fn decode_with_tag_and_constraints<D: Decoder>(
+        decoder: &mut D,
+        tag: Tag,
+        _: Constraints,
+    ) -> Result<Self, D::Error> {
+        decoder.decode_explicit_prefix(tag)
+    }
+}
+
+impl Encode for PaSpake {
+    fn encode<'b, E: Encoder<'b>>(&self, encoder: &mut E) -> Result<(), E::Error> {
+        let known = match self {
+            Self::Support(v) => PaSpakeKnown::Support(v.clone()),
+            Self::Challenge(v) => PaSpakeKnown::Challenge(v.clone()),
+            Self::Response(v) => PaSpakeKnown::Response(v.clone()),
+            Self::EncData(v) => PaSpakeKnown::EncData(v.clone()),
+            Self::Unknown => {
+                return Err(<E::Error as rasn::enc::Error>::custom(
+                    "PA-SPAKE has no known choice",
+                    encoder.codec(),
+                ));
+            }
+        };
+        known.encode(encoder)
+    }
+
+    fn encode_with_tag_and_constraints<'b, E: Encoder<'b>>(
+        &self,
+        encoder: &mut E,
+        tag: Tag,
+        _: Constraints,
+        identifier: Identifier,
+    ) -> Result<(), E::Error> {
+        encoder
+            .encode_explicit_prefix(tag, self, identifier)
+            .map(drop)
+    }
 }

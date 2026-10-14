@@ -12,5 +12,4 @@ COPY harness/kcm/probe-opcodes.py /usr/local/bin/kcm-probe-opcodes.py
 RUN chmod 600 /etc/sssd/sssd.conf \
     && chmod +x /usr/local/bin/kcm-entrypoint.sh /usr/local/bin/kcm-probe-opcodes.py
 
-ENV KCM_SOCKET=/run/.heim_org.h5l.kcm-socket
 ENTRYPOINT ["/usr/local/bin/kcm-entrypoint.sh"]

@@ -9,7 +9,6 @@ cd "$ROOT"
 
 IMAGE="kerber-rust-mit-kdc:1.22.2"
 NAME="kerber-rust-rd-safe-oracle"
-MIT_LIBS="-lkrb5 -lk5crypto -lcom_err"
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 
@@ -22,7 +21,7 @@ fi
 shell_container 180
 
 docker cp "$ROOT/scripts/oracle/rd-safe-oracle.c" "$NAME":/tmp/rd-safe-oracle.c
-docker exec "$NAME" sh -c "gcc -O1 -o /tmp/rd-safe-oracle /tmp/rd-safe-oracle.c $MIT_LIBS"
+mit_oracle_cc "$NAME" /tmp/rd-safe-oracle /tmp/rd-safe-oracle.c krb5 -O1
 OUT="$(docker exec "$NAME" /tmp/rd-safe-oracle)"
 printf '%s\n' "$OUT"
 printf '%s\n' "$OUT" | grep -q 'SAFE_CANON_OK'

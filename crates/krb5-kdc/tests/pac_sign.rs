@@ -199,7 +199,9 @@ fn tgs_from_client_info_only_tgt_does_not_invent_logon() {
 
 #[test]
 fn tgs_from_local_tgt_keeps_subject_logon() {
-    let (store, _) = bootstrap_documented().unwrap();
+    let (mut store, _) = bootstrap_documented().unwrap();
+    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
+    store.policy.ad_identity = true;
     let as_out = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 6150);
     let svc = krb5_kdc::issue_tgs(&store, &host_tgs(&as_out, 6151)).unwrap();
     let host = store
@@ -574,7 +576,9 @@ fn as_and_tgs_tickets_carry_verifiable_pac() {
 
 #[test]
 fn pac_logon_info_is_ndr() {
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
+    store.policy.ad_identity = true;
     let issued = issue_tgt_password(&store, TEST_USER, TEST_USER_PASSWORD, 54);
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     let part = decrypt_ticket_part(&krbtgt.key, &issued.rep.0.ticket).expect("TGT");

@@ -17,3 +17,4 @@ drive them live in `scripts/`; the gates are listed in
 | `samba/` | the Samba 4 AD DC image and the PAC oracles for the `samba-*` gates |
 | `kcm/` | the Fedora `sssd-kcm` image and opcode probe for the KCM gates |
 | `prod/` | the multi-host prod-realm substrate ([prod/README.md](prod/README.md)) |
+| `field/` | the KVM field lab for section F: libvirt network, VMs, `lab.sh` ([field/README.md](field/README.md)) |

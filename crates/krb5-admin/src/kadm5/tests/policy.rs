@@ -37,7 +37,7 @@ fn policy_min_max_life_round_trip_and_min_life() {
         let mut g = store.write().unwrap();
         g.set_principal_policy(&user, Some("life".into())).unwrap();
         assert!(g.get_name(&user).unwrap().pw_expire > 0);
-        g.set_last_pwd_unix(&user, 1);
+        g.set_last_pwd_unix(&user, 1).unwrap();
     }
     let once = dispatch_kadm5(
         &store,

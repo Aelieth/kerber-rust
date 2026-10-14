@@ -1,6 +1,6 @@
 [package]
 name = "krb5-crypto"
-description = "Kerberos V5 etypes 17–20, weak etypes 16/23/25/26 behind allow_weak_crypto, plus SPAKE, MODP, CF2, and PRF+"
+description = "Kerberos V5 etypes 17–20, weak etypes 16/23/25/26 behind allow_weak_crypto, plus SPAKE (edwards25519, P-256), MODP, CF2, and PRF+"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +12,7 @@ publish.workspace = true
 aes.workspace = true
 camellia.workspace = true
 cmac.workspace = true
+curve25519-dalek.workspace = true
 des.workspace = true
 getrandom.workspace = true
 hmac.workspace = true

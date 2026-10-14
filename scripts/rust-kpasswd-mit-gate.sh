@@ -46,7 +46,7 @@ docker exec "$NAME" chmod +x /tmp/krb5-kpasswd /tmp/krb5-kinit
 
 echo "==== Rust kpasswd vs MIT kadmind ===="
 docker exec -e KRB5_PASSWORD=userpassword -e KRB5_NEW_PASSWORD=mit-rust-pw \
-    "$NAME" /tmp/krb5-kpasswd 127.0.0.1 user@KERBER.TEST
+    "$NAME" /tmp/krb5-kpasswd user@KERBER.TEST
 docker exec "$NAME" sh -c 'printf "mit-rust-pw\n" | kinit user@KERBER.TEST'
 KLIST="$(docker exec "$NAME" klist)"
 echo "$KLIST"
@@ -59,6 +59,21 @@ if [ "$old" -eq 0 ]; then
     log "kpasswd.mit.gate" "error" ',"error":"old password still works"'
     exit 1
 fi
+
+echo "==== kpasswd's AS request asks krb5.conf's enctype order: the reply key's enctype is MIT kpasswd's ===="
+kadmin_q_ok mit_kadmin_local "$NAME" -- -q 'addprinc -pw etype-old kpwetype' >/dev/null
+docker exec -e KRB5_TRACE=/tmp/kpw-mit.trace "$NAME" \
+    sh -c "printf 'etype-old\netype-mid\netype-mid\n' | kpasswd kpwetype@KERBER.TEST" >/dev/null \
+    || die "MIT kpasswd (enctype order) failed"
+docker exec -e KRB5_TRACE=/tmp/kpw-rust.trace -e KRB5_PASSWORD=etype-mid \
+    -e KRB5_NEW_PASSWORD=etype-new "$NAME" /tmp/krb5-kpasswd kpwetype@KERBER.TEST >/dev/null \
+    || die "Rust kpasswd (enctype order) failed"
+MIT_ET="$(docker exec "$NAME" grep -o 'AS key obtained from gak_fct: [a-z0-9-]*' /tmp/kpw-mit.trace || true)"
+RUST_ET="$(docker exec "$NAME" grep -o 'AS key obtained from gak_fct: [a-z0-9-]*' /tmp/kpw-rust.trace || true)"
+echo "MIT_kpasswd $MIT_ET"
+echo "RUST_kpasswd $RUST_ET"
+echo "$MIT_ET" | grep -qF 'aes256-sha2' || die "MIT kpasswd's reply key is not krb5.conf's first enctype"
+[ "$MIT_ET" = "$RUST_ET" ] || die "Rust kpasswd's reply key enctype differs from MIT kpasswd's"
 
 # keyexp_run TAG PRINCIPAL CCACHE: Rust krb5-kinit with an expired password and
 # KRB5_NEW_PASSWORD; stdout, stderr and rc land in /tmp/TAG.{out,err,rc}.
@@ -88,8 +103,10 @@ echo "RUST_kinit_keyexp_banner_success"
 echo "==== K2 Rust krb5-kinit KEY_EXP change, then the ccache write fails: banner, then the error ===="
 keyexp_run s4kx2 s4kx2 /tmp/nonexistent-dir/cc
 [ "$(docker exec "$NAME" cat /tmp/s4kx2.rc)" = 1 ] || die "K2 krb5-kinit did not fail on the ccache write"
-keyexp_stderr_is s4kx2 "${BANNER}kinit failed: No such file or directory (os error 2)\n" \
-    || die "K2 stderr differs from 0d5fa7f4 (banner, then kinit failed: No such file or directory)"
+# MIT's line for a cache that cannot be written (get_in_tkt.c:1846-1848, no file name), under
+# the port's name.
+keyexp_stderr_is s4kx2 "${BANNER}krb5-kinit: Failed to store credentials: No credentials cache found while getting initial credentials\n" \
+    || die "K2 stderr differs from MIT's (banner, then Failed to store credentials: No credentials cache found)"
 docker exec "$NAME" sh -c 'printf "exp-new\n" | kinit -c /tmp/cc_s4kx2_mit s4kx2@KERBER.TEST' \
     || die "K2 MIT kinit with the new password failed (the change did not land)"
 echo "RUST_kinit_keyexp_banner_store_fail"

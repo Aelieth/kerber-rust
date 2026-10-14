@@ -33,7 +33,12 @@ fn config_value(cache: &FileCcache, key: &str, server: &str) -> Option<Vec<u8>> 
 #[test]
 fn kinit_records_fast_avail_and_pa_type_like_write_out_ccache() {
     isolate_host_krb5();
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // The client's default group is edwards25519 (MIT `DEFAULT_GROUPS_CLIENT`).
+    store.policy.spake_preauth_groups = vec![
+        krb5_crypto::SpakeGroup::Edwards25519,
+        krb5_crypto::SpakeGroup::P256,
+    ];
     let (udp, tcp) = krb5_testkit::loopback_udp_tcp();
     let addr = udp.local_addr().unwrap();
     let store = shared_store(store);

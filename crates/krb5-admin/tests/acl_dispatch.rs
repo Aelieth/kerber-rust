@@ -111,6 +111,19 @@ fn kadmind_wire_create_is_visible_after_reload() {
         loaded.get_name(&created).is_some(),
         "kadmind create must persist to stash/db"
     );
+
+    // A ktadd's reply holds the keytab behind the status, in one buffer of its size.
+    let ap = build_ap_req(
+        tgs_out.rep.0.ticket.clone(),
+        &tgs_out.session_key,
+        &krb5_types::ascii(TEST_REALM),
+        &admin,
+    )
+    .unwrap();
+    let body = encode_kadmind_req(Op::Ktadd, &encode(&ap).unwrap(), b"wireuser");
+    let reply = dispatch_kadmind(&shared, &acl, &host_key, &replay, &body).expect("ktadd");
+    assert_eq!(&reply[..6], &[0, 0, 0, 0, 0x05, 0x02]);
+    assert_eq!(reply.capacity(), reply.len());
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -124,6 +137,18 @@ fn load_acl_file_missing_is_error() {
         acl.check("admin@KERBER.TEST", AdminOp::Create, None)
             .is_ok()
     );
+}
+
+#[test]
+fn load_acl_file_reads_bytes() {
+    let path = krb5_testkit::scratch_dir("krb5-acl-bytes").join("acl");
+    std::fs::write(&path, b"# caf\xe9\nadmin@KERBER.TEST *\n").unwrap();
+    let acl = load_acl_file("other@KERBER.TEST", Some(&path)).unwrap();
+    assert!(
+        acl.check("admin@KERBER.TEST", AdminOp::Create, None)
+            .is_ok()
+    );
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]

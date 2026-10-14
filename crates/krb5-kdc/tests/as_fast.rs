@@ -13,6 +13,9 @@
 //! `KRB5_KDB_NO_PERMITTED_KEY` back, and it goes out as wire 60 `FIND_FAST`
 //! (`errcode_to_protocol`); no other krbtgt key is tried.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, krb_fx_cf2, string_to_key,
@@ -632,15 +635,20 @@ fn encrypted_challenge_stale_ts_is_skew() {
     assert_eq!(issue_code(err), err::SKEW);
 }
 
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:121-128`): no replay cache, so a replayed challenge inside the skew verifies again and issues a new ticket.
 #[test]
-fn encrypted_challenge_replayed_blob_is_repeat() {
+fn encrypted_challenge_replayed_blob_is_issued_again() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
     let key = user_key();
     let now = KerberosTime::now();
     let req = fast_challenge_req(&store, &key, &now, 821, 820);
-    krb5_kdc::issue_as(&store, &req).expect("first challenge");
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("replay");
-    assert_eq!(issue_code(err), err::REPEAT);
+    let first = krb5_kdc::issue_as(&store, &req).expect("first challenge");
+    let again = krb5_kdc::issue_as(&store, &req).expect("the replay issues again");
+    assert_ne!(
+        first.session_key.as_bytes(),
+        again.session_key.as_bytes(),
+        "the replay is processed again, not answered from a cache"
+    );
 }
 
 #[test]
@@ -1168,7 +1176,7 @@ fn cookie_survives_krbtgt_kvno_rollover() {
         .expect("aes256-sha1 key")
         .key
         .clone();
-    let support = pa_spake_support();
+    let support = pa_spake_support(&[krb5_crypto::SpakeGroup::P256]);
     let req1 = as_req(cname.clone(), TEST_REALM, 701, Some(vec![support.clone()])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req1).unwrap_err();
     let e_data = match err {
@@ -1226,6 +1234,7 @@ fn cookie_survives_krbtgt_kvno_rollover() {
     let body_der = encode(&req2.0.req_body).expect("body");
     let (resp, spake_key) = pa_spake_response(
         &key,
+        krb5_crypto::SpakeGroup::P256,
         support.padata_value.as_ref(),
         spa.padata_value.as_ref(),
         chal.pubkey.as_ref(),
@@ -1399,4 +1408,120 @@ fn armor_tgt_labelled_n_sealed_under_n_plus_1_is_bad_integrity() {
     let err = fast_as_with_armor_ticket(&store, mislabelled, &tgt.session_key, 0x2600_0066)
         .expect_err("mislabelled kvno");
     assert_find_fast_z6_armor_enctype(err, err::BAD_INTEGRITY);
+}
+
+/// MIT `armor_ap_request` → `krb5_rd_req`'s `negotiate_etype` on the KDC's context (settled live
+/// beside MIT 1.22.2's krb5kdc): armor whose TGT is an aes256 ticket with an aes128 session key
+/// (and an aes128 subkey) is 60 `FIND_FAST` once the KDC permits aes256 only, though the ticket
+/// itself still decrypts.
+#[test]
+fn armor_whose_session_enctype_the_kdc_does_not_permit_is_find_fast() {
+    krb5_config::isolate_test_krb5();
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    let (req, _) = fast_as_prepared_etype(&store, 0x2600_0070, AES128);
+    store.policy.permitted_enctypes = Some(vec![AES256]);
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("armor enctypes");
+    assert_find_fast(err, err::GENERIC, "FAST armor enctype not permitted");
+}
+
+/// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:124-124`): only the timestamp is checked, against the clock skew; its pausec is taken as it is.
+#[test]
+fn encrypted_challenge_with_an_out_of_range_pausec_is_issued() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (armor_ap, akey) = armor_ap_key(&armor_tgt(&store, 840), 0);
+    let chal = krb_fx_cf2(
+        &akey,
+        &user_key(),
+        b"clientchallengearmor",
+        b"challengelongterm",
+    )
+    .expect("cf2");
+    let der = encode(&PaEncTsEnc {
+        patimestamp: KerberosTime::now(),
+        pausec: Some(krb5_types::Microseconds(1_000_000)),
+    })
+    .expect("ts");
+    let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT).unwrap();
+    let enc = EncryptedData {
+        etype: chal.etype().to_iana(),
+        kvno: None,
+        cipher: encrypt(&chal, usage, &der).expect("enc").into(),
+    };
+    let inner = vec![PaData {
+        padata_type: pa::ENCRYPTED_CHALLENGE,
+        padata_value: encode(&enc).expect("ed").into(),
+    }];
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let mut req = as_req(cname, TEST_REALM, 841, None).unwrap();
+    attach_fast(&mut req, &armor_ap, &akey, inner).expect("FAST wrap");
+    krb5_kdc::issue_as(&store, &req).expect("a pausec past 999999 verifies");
+}
+
+#[test]
+// oracle: differential-gate.sh as-fast-armored-data-etype-mismatch
+fn fast_armored_data_etype_mismatch_is_generic_find_fast() {
+    // MIT `kdc_find_fast` (`kdc/fast_util.c:191-194`): the armored data decrypts through `krb5_k_decrypt`, so another enctype than the armor key's is KRB5_BAD_ENCTYPE, 60 FIND_FAST.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (armor_ap, akey) = armor_ap_key(&armor_tgt(&store, 850), 0);
+    let mut req = fast_challenge_req_with(&armor_ap, &akey, &user_key(), &KerberosTime::now(), 851);
+    let fx = req
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .expect("PA-FX-FAST");
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(fx.padata_value.as_ref()).expect("armored data");
+    assert_ne!(armored.enc_fast_req.etype, 17);
+    armored.enc_fast_req.etype = 17;
+    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .expect("PA-FX-FAST")
+        .into();
+    let err = krb5_kdc::issue_as(&store, &req).expect_err("BAD_ENCTYPE");
+    assert_find_fast(err, err::GENERIC, "Bad encryption type");
+}
+
+fn fast_verify_failures(store: &PrincipalStore, req: &krb5_types::AsReq) -> Vec<String> {
+    let raw = encode(req).unwrap();
+    let (reply, log) = common::kdc_log(|| krb5_kdc::handle_request(store, &raw));
+    reply.expect("a reply");
+    common::verify_failures(&log)
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn encrypted_challenge_wrong_key_logs_the_incorrect_password_message() {
+    // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:114-118`): no client key opens the challenge, and the module says why.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let zeros = ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32]).unwrap();
+    let req = fast_challenge_req(&store, &zeros, &KerberosTime::now(), 841, 840);
+    assert_eq!(
+        fast_verify_failures(&store, &req),
+        ["preauth (encrypted_challenge) verify failure: Incorrect password in encrypted challenge"]
+    );
+}
+
+#[test]
+fn encrypted_challenge_skew_logs_clock_skew() {
+    // MIT `ec_verify` (`kdc/kdc_preauth_ec.c:124-126`): a challenge outside the skew fails with `KRB5KRB_AP_ERR_SKEW`.
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let stale = KerberosTime::now().add_seconds(-10_000).unwrap();
+    let req = fast_challenge_req(&store, &user_key(), &stale, 851, 850);
+    assert_eq!(
+        fast_verify_failures(&store, &req),
+        ["preauth (encrypted_challenge) verify failure: Clock skew too great"]
+    );
+}
+
+#[test]
+fn encrypted_challenge_that_verifies_logs_no_failure() {
+    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let req = fast_challenge_req(&store, &user_key(), &KerberosTime::now(), 861, 860);
+    assert_eq!(
+        fast_verify_failures(&store, &req),
+        [] as [&str; 0],
+        "a verified module is not a verify failure"
+    );
 }

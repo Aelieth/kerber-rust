@@ -156,11 +156,13 @@ fn get_vfy_cred(
     let params = ApVerifyParams {
         keys: &keys,
         key_kvnos: Some(kvnos.as_slice()),
+        key_principals: None,
         kvno: None,
         expected_server: Some(name),
         expected_realm: Some(realm_s.as_str()),
+        get_entry: None,
         skew: DEFAULT_SKEW,
-        addresses: None,
+        remote_addr: None,
         now: None,
     };
     verify_ap_req_ex(&raw, &params, &ReplayCache::new(), None)?;
@@ -196,5 +198,6 @@ fn cred_as_outcome(creds: &CcacheCred, session: &ProtocolKey, ticket: Ticket) ->
         fast_avail: false,
         used_fast: false,
         pa_type: None,
+        pa_config: None,
     }
 }

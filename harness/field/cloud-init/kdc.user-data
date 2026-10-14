@@ -1,0 +1,112 @@
+#cloud-config
+# kdc.kerber.test: the field lab's KDC host (harness/field/README.md).
+# MIT krb5-server (the oracle) and kerber-rust are installed later by the
+# field scenarios. This file installs no Kerberos server software.
+#
+# lab.sh renders this template into ~/kerber-lab/seeds (outside git):
+#   @SSH_PUBKEY@        the lab public key, ~/kerber-lab/ssh/lab_ed25519.pub
+#   @LAB_PASSWD_HASH@   SHA-512 crypt of the console password, ~/kerber-lab/secrets
+#   @LAN_MAC@           MAC of the LAN NIC (macvtap)
+hostname: kdc
+fqdn: kdc.kerber.test
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: false
+timezone: UTC
+users:
+  - name: lab
+    gecos: kerber-lab operator
+    groups: [wheel]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: "@LAB_PASSWD_HASH@"
+    ssh_authorized_keys:
+      - "@SSH_PUBKEY@"
+disable_root: true
+ssh_pwauth: false
+package_upgrade: true
+packages:
+  - chrony
+  - qemu-guest-agent
+  - tcpdump
+  - jq
+  - bind-utils
+  - tar
+  - rsync
+  - nftables
+bootcmd:
+  # The LAN NIC (macvtap) sits on the user's real LAN. It exists only so the AD
+  # DC (10.10.38.38) can reach this KDC and RA3's SPNEGO target on tcp 80
+  # (F2-AD). bootcmd runs in cloud-init's
+  # network stage, which is ordered before sshd.service, so the NIC is confined
+  # before anything listens. The script runs once per instance (it relies on
+  # the image's nftables). On every later boot, kerber-lab-lan-filter.service
+  # loads the filter before the network comes up.
+  - |
+    set -e
+    cat > /usr/local/sbin/kerber-lab-lan-nic <<'SCRIPT'
+    #!/bin/sh
+    # kerber-lab-lan-nic <mac> <ad-dc-ip>: confine kdc's LAN NIC (macvtap on
+    # the user's real LAN).
+    #  1. nftables, on that NIC only: accept established/related traffic, DHCP
+    #     replies (udp 67 -> 68) and the AD DC to tcp/udp 88 and tcp 80. Drop
+    #     everything else. The lab NIC and loopback are not filtered.
+    #  2. NetworkManager: no default route, DHCP routes, DNS or IPv6 from it.
+    set -eu
+    mac=$1
+    dc=$2
+    dev=$(ip -o link | awk -v m="$mac" 'tolower($0) ~ m { sub(/:$/, "", $2); print $2; exit }')
+    [ -n "$dev" ] || { echo "kerber-lab-lan-nic: no NIC with MAC $mac" >&2; exit 1; }
+    mkdir -p /etc/nftables
+    cat > /etc/nftables/kerber-lab-lan.nft <<EOF
+    # kerber-lab: inbound filter on kdc's LAN NIC $dev ($mac).
+    # Written by /usr/local/sbin/kerber-lab-lan-nic; loaded at boot by
+    # kerber-lab-lan-filter.service. Counters: nft list table inet kerber_lab_lan
+    table inet kerber_lab_lan
+    delete table inet kerber_lab_lan
+    table inet kerber_lab_lan {
+        chain input {
+            type filter hook input priority filter; policy accept;
+            iifname "$dev" jump lan_in
+        }
+        chain lan_in {
+            ct state established,related counter accept
+            udp sport 67 udp dport 68 counter accept comment "DHCP replies: the lease renews"
+            ip saddr $dc tcp dport 88 counter accept comment "AD DC to the KDC"
+            ip saddr $dc udp dport 88 counter accept comment "AD DC to the KDC"
+            ip saddr $dc tcp dport 80 counter accept comment "AD DC to the RA3 SPNEGO target"
+            counter drop comment "everything else from the LAN"
+        }
+    }
+    EOF
+    cat > /etc/systemd/system/kerber-lab-lan-filter.service <<'EOF'
+    [Unit]
+    Description=kerber-lab inbound filter on kdc's LAN NIC
+    Documentation=file:/etc/nftables/kerber-lab-lan.nft
+    Wants=network-pre.target
+    Before=network-pre.target
+
+    [Service]
+    Type=oneshot
+    RemainAfterExit=yes
+    ExecStart=/usr/sbin/nft -f /etc/nftables/kerber-lab-lan.nft
+    ExecReload=/usr/sbin/nft -f /etc/nftables/kerber-lab-lan.nft
+
+    [Install]
+    WantedBy=multi-user.target
+    EOF
+    nft -f /etc/nftables/kerber-lab-lan.nft
+    systemctl daemon-reload
+    systemctl enable kerber-lab-lan-filter.service
+    con=$(nmcli -g GENERAL.CONNECTION device show "$dev")
+    [ -n "$con" ] || { echo "kerber-lab-lan-nic: no connection on $dev" >&2; exit 1; }
+    nmcli connection modify "$con" ipv4.never-default yes ipv4.ignore-auto-dns yes \
+        ipv4.ignore-auto-routes yes ipv6.method disabled
+    nmcli connection up "$con"
+    SCRIPT
+    chmod 0755 /usr/local/sbin/kerber-lab-lan-nic
+    if [ ! -e /var/lib/kerber-lab-lan-nic.done ]; then
+      /usr/local/sbin/kerber-lab-lan-nic "@LAN_MAC@" 10.10.38.38 && touch /var/lib/kerber-lab-lan-nic.done
+    fi
+runcmd:
+  - [systemctl, enable, --now, chronyd.service, qemu-guest-agent.service]

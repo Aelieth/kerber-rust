@@ -2,6 +2,8 @@
 //!
 //! Speaks the MIT `gss-sample` TCP framing: 4-byte length prefix then token.
 //! Usage: `krb5-gss-accept --keytab PATH [--listen HOST:PORT] [--channel-bindings DATA] [--accept-only]`
+//!
+//! The gss gate's test tool, built only with the `test-hooks` feature: a release build has none.
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]

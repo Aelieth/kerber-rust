@@ -6,22 +6,27 @@
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    EncryptionType, KeyUsage, ProtocolKey, SPAKE_GROUP_P256, checksum, cksumtype_is_keyed, decrypt,
+    EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_keyed, decrypt, decrypt_enc_data,
     derive_prfplus, dh_generate, dh_group_for_prime, dh_shared, encrypt, krb_fx_cf2,
-    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, spake_derive_key,
-    spake_kdc_keygen, spake_result_wbytes, spake_thash_update, spake_wbytes, verify_checksum_type,
+    octetstring2key, p256_generate, p256_shared, pkinit_kdf_agile, verify_checksum_type,
 };
-use krb5_protocol::{ReplayCache, ReplayKey};
 use krb5_types::{
     AsReq, EncryptedData, EncryptionKey, KdcReqBody, KerberosTime, MethodData, Microseconds,
     PaData, PrincipalName, TypedData, TypedDataList, err, flag_bit, ku, pa,
 };
+use zeroize::Zeroizing;
+
+mod otp;
+mod spake;
+
+pub(crate) use otp::{otp_edata, process_otp};
+pub(crate) use spake::{SpakeStep, process_spake, spake_edata};
 
 use crate::der::take_der;
 use crate::error::Error;
-use crate::kdb::{PrincipalRead, lookup_principal_id};
+use crate::kdb::PrincipalRead;
 use crate::status;
-use crate::store::{KeyLookup, Principal};
+use crate::store::{KtkdbError, Principal, ktkdb_get_entry};
 
 pub(crate) struct FastOk {
     pub(crate) armor_key: ProtocolKey,
@@ -113,7 +118,12 @@ fn kdc_find_fast(
         },
     };
     let enc_usage = KeyUsage::new(ku::FAST_ENC)?;
-    let plain = decrypt(&armor_key, enc_usage, armored.enc_fast_req.cipher.as_ref())?;
+    let plain = decrypt_enc_data(
+        &armor_key,
+        enc_usage,
+        armored.enc_fast_req.etype,
+        armored.enc_fast_req.cipher.as_ref(),
+    )?;
     let inner: krb5_types::fast::KrbFastReq = decode(&plain)?;
     verify_fast_req_checksum(&armor_key, checksummed_data, &armored.req_checksum)?;
     let nonce = inner.req_body.nonce;
@@ -180,30 +190,25 @@ fn verify_fast_req_checksum(
     Ok(())
 }
 
-/// MIT `krb5_ktkdb_get_entry` key pick.
-/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:152-178`): a local principal's first
-/// permitted key of the ticket kvno is picked whatever its enctype, and one that is not
-/// similar to the ticket enctype is `KRB5_KDB_NO_PERMITTED_KEY`.
+/// The armor TGT's key, as the KDB keytab gives it.
+/// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): [`ktkdb_get_entry`] picks the key. A kvno the principal lacks is `KRB5_KT_KVNONOTFOUND`, which `keytab_fetch_error` makes BADKEYVER; any other refusal, `KRB5_KDB_NO_PERMITTED_KEY` included, is a generic failure.
 fn armor_ticket_key(
     store: &dyn PrincipalRead,
     p: &Principal,
     ticket: &krb5_types::Ticket,
 ) -> Result<ProtocolKey, Error> {
-    let kvno = ticket.enc_part.kvno.unwrap_or(0);
-    let tkt_etype = EncryptionType::from_iana(ticket.enc_part.etype)
-        .or_else(|_| EncryptionType::known(ticket.enc_part.etype))
-        .ok();
-    let xrealm = p.name.is_krbtgt() && !p.name.is_krbtgt_for(store.realm());
-    let search = if xrealm { tkt_etype } else { None };
-    match store.policy().find_enctype(p, search, kvno) {
-        Ok(k) => {
-            if !xrealm && tkt_etype.is_some_and(|e| e != k.etype) {
-                return Err(proto_fast(err::GENERIC, "FAST armor TGT"));
-            }
-            Ok(k.key.clone())
-        }
-        Err(KeyLookup::NoPermittedKey) => Err(proto_fast(err::GENERIC, "FAST armor TGT")),
-        Err(KeyLookup::NoMatchingKey) => Err(proto_fast(err::BADKEYVER, "FAST armor TGT")),
+    let policy = store.policy();
+    match ktkdb_get_entry(
+        Some(p),
+        &p.name,
+        store.realm(),
+        ticket.enc_part.kvno.unwrap_or(0),
+        ticket.enc_part.etype,
+        |e| policy.etype_permitted(e),
+    ) {
+        Ok(k) => Ok(k.key.clone()),
+        Err(KtkdbError::KvnoNotFound) => Err(proto_fast(err::BADKEYVER, "FAST armor TGT")),
+        Err(_) => Err(proto_fast(err::GENERIC, "FAST armor TGT")),
     }
 }
 
@@ -235,9 +240,13 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     // MIT `keytab_fetch_error` (`rd_req_dec.c:137-147`): `KRB5_KT_KVNONOTFOUND` →
     // `BADKEYVER` 44 when the principal is the ticket server.
     let key = armor_ticket_key(store, &p, &ap.ticket)?;
-    let enc_tkt = match decrypt(&key, tkt_usage, cipher) {
+    let enc_tkt = match decrypt_enc_data(&key, tkt_usage, ap.ticket.enc_part.etype, cipher) {
         Ok(plain) => decode::<krb5_types::EncTicketPart>(&plain)
             .map_err(|_| proto_fast(err::BAD_INTEGRITY, "FAST armor TGT"))?,
+        // MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the armor TGT's server key is a des3 key MIT refuses, a library code, so 60 and its message.
+        Err(e @ (krb5_crypto::Error::DesBadParity | krb5_crypto::Error::DesWeakKey)) => {
+            return Err(proto_fast(err::GENERIC, e.to_string()));
+        }
         Err(_) => return Err(proto_fast(err::BAD_INTEGRITY, "FAST armor TGT")),
     };
     if enc_tkt.flags.invalid() {
@@ -252,19 +261,31 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     if i64::from(enc_tkt.endtime.unix_seconds()) < now {
         return Err(proto_fast(err::TKT_EXPIRED, "FAST armor expired"));
     }
-    // MIT `armor_ap_request` (`fast_util.c:51-68`): 26 only after rd_req decrypts.
-    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
-        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
-    }
     let etype = EncryptionType::from_iana(enc_tkt.key.keytype)
         .or_else(|_| EncryptionType::known(enc_tkt.key.keytype))?;
     let session = ProtocolKey::from_bytes(etype, enc_tkt.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
-    let auth_plain = decrypt(&session, auth_usage, ap.authenticator.cipher.as_ref())?;
+    let auth_plain = decrypt_enc_data(
+        &session,
+        auth_usage,
+        ap.authenticator.etype,
+        ap.authenticator.cipher.as_ref(),
+    )?;
     let authenticator: krb5_types::Authenticator = decode(&auth_plain)?;
     let then = i64::from(authenticator.ctime.unix_seconds());
     if (now - then).abs() > store.policy().skew {
         return Err(proto_fast(err::SKEW, "FAST armor authenticator"));
+    }
+    // MIT `rd_req_decoded_opt` (`rd_req_dec.c:652-723`): the `krb5_rd_req` of `armor_ap_request` negotiates the armor authenticator's subkey and the armor TGT's session key against the KDC's `permitted_enctypes`, and one it leaves out is `KRB5_NOPERM_ETYPE`, 60 `FIND_FAST`.
+    krb5_protocol::negotiate_ap_req_etypes(
+        &authenticator,
+        enc_tkt.key.keytype,
+        &store.policy().permitted_list(),
+    )
+    .map_err(|_| proto_fast(err::GENERIC, "FAST armor enctype not permitted"))?;
+    // MIT `armor_ap_request` (`fast_util.c:51-68`): 26 only once `krb5_rd_req` has accepted it.
+    if !ap.ticket.sname.is_krbtgt_for(store.realm()) {
+        return Err(proto_fast(err::SERVER_NOMATCH, "FAST armor TGT"));
     }
     let Some(sub) = authenticator.subkey else {
         return Err(proto_fast(err::POLICY, "ap-request armor without subkey"));
@@ -376,10 +397,11 @@ pub(crate) fn make_cookie_at(
         return Ok(b"MIT".to_vec());
     };
     let key = derive_cookie_key(&krbtgt.key, client, store.realm())?;
-    let der = encode(&krb5_types::fast::SecureCookie {
+    // MIT `kdc_fast_make_cookie` (`fast_util.c:714-717`): the encoded plaintext, which may hold SPAKE's private scalar, is zapped.
+    let der = Zeroizing::new(encode(&krb5_types::fast::SecureCookie {
         time,
         data: contents.to_vec(),
-    })?;
+    })?);
     let usage = KeyUsage::new(ku::PA_FX_COOKIE)?;
     let cipher = encrypt(&key, usage, &der)?;
     let mut out = Vec::with_capacity(8 + cipher.len());
@@ -417,6 +439,8 @@ pub(crate) fn open_cookie(
     let Ok(plain) = decrypt(&key, usage, &blob[8..]) else {
         return Vec::new();
     };
+    // MIT `kdc_fast_read_cookie` (`fast_util.c:604-610`): the decrypted plaintext is zapped.
+    let plain = Zeroizing::new(plain);
     let Ok(cookie) = decode::<krb5_types::fast::SecureCookie>(&plain) else {
         return Vec::new();
     };
@@ -461,162 +485,14 @@ pub(crate) fn wrap_fast_rep(
     })
 }
 
-/// SPAKE: support → challenge; response → shared key.
-pub(crate) enum SpakeStep {
-    /// Need a challenge (PREAUTH_REQUIRED).
-    Challenge(Vec<u8>),
-    /// Finished; key encrypts AS-REP.
-    Done(ProtocolKey),
-}
-
-/// MIT `next_padata` (`kdc_preauth.c:1306-1307`): a padata type that is not a module is
-/// skipped rather than failed.
-/// With no SPAKE groups configured a PA-SPAKE is skipped, and an empty token when groups
-/// are configured is preauth-failed.
-///
-/// # Errors
-///
-/// [`Error::Protocol`] `PREAUTH_FAILED` when SPAKE groups are configured and the PA-SPAKE token is
-/// empty, a Support shares no configured group or the first one it shares is not P-256, or a
-/// Response has no readable FX-COOKIE secret or a factor that does not decrypt, does not decode,
-/// or is not factor type 1.
-/// [`Error::Asn1`] when the PA-SPAKE does not decode or the challenge does not encode, and
-/// [`Error::Crypto`] when a SPAKE derivation or the cookie encryption fails. No PA-SPAKE, no
-/// configured groups, and a Challenge or EncData message from the client are `Ok(None)`.
-pub(crate) fn process_spake(
-    store: &dyn PrincipalRead,
-    client: &Principal,
-    padata: Option<&[PaData]>,
-    ikey: &ProtocolKey,
-    body_der: &[u8],
-) -> Result<Option<SpakeStep>, Error> {
-    let Some(raw) = find_pa(padata, pa::SPAKE) else {
-        return Ok(None);
-    };
-    // MIT `next_padata` (`kdc_preauth.c:1306-1307`): empty groups → SPAKE not a pa_system;
-    // a stray PA-SPAKE is skipped, not 24.
-    // MIT `DEFAULT_GROUPS_KDC` (`groups.c:60-60`): the KDC's groups are empty by default.
-    if store.policy().spake_preauth_groups.is_empty() {
-        return Ok(None);
-    }
-    if raw.is_empty() {
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-    }
-    let msg: krb5_types::spake::PaSpake = decode(raw)?;
-    if let krb5_types::spake::PaSpake::Response(resp) = &msg {
-        let cookie = find_pa(padata, pa::FX_COOKIE)
-            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        let inner = open_cookie(store, &client.name, cookie);
-        let secret = inner
-            .iter()
-            .find(|p| p.padata_type == pa::SPAKE)
-            .map(|p| p.padata_value.as_ref())
-            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        if secret.len() != 64 {
-            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-        }
-        let mut sec = [0u8; 32];
-        sec.copy_from_slice(&secret[..32]);
-        let mut thash = [0u8; 32];
-        thash.copy_from_slice(&secret[32..]);
-        let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
-        let result = spake_result_wbytes(&wbytes, &sec, resp.pubkey.as_ref(), true)?;
-        let thash = spake_thash_update(&thash, resp.pubkey.as_ref(), &[]);
-        let k1 = spake_derive_key(
-            ikey,
-            SPAKE_GROUP_P256,
-            &wbytes,
-            &result,
-            &thash,
-            body_der,
-            1,
-        )?;
-        let usage = KeyUsage::new(ku::SPAKE)?;
-        let factor_der = decrypt(&k1, usage, resp.factor.cipher.as_ref())
-            .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        let factor = decode::<krb5_types::spake::SpakeSecondFactor>(&factor_der)
-            .map_err(|_| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?;
-        if factor.factor_type != 1 {
-            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-        }
-        let k0 = spake_derive_key(
-            ikey,
-            SPAKE_GROUP_P256,
-            &wbytes,
-            &result,
-            &thash,
-            body_der,
-            0,
-        )?;
-        return Ok(Some(SpakeStep::Done(k0)));
-    }
-    if let krb5_types::spake::PaSpake::Support(sup) = &msg {
-        let group = sup
-            .groups
-            .iter()
-            .copied()
-            .find(|g| store.policy().spake_preauth_groups.contains(g));
-        if group != Some(krb5_types::spake::GROUP_P256) {
-            return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-        }
-        return send_spake_challenge(store, &client.name, ikey, raw);
-    }
-    Ok(None)
-}
-
-/// MIT `send_challenge` (`spake_kdc.c:241-246`): the challenge offers only the factor type none.
-/// The private scalar is stored in the cookie, and a key-generation failure is not sent as a
-/// challenge.
-fn send_spake_challenge(
-    store: &dyn PrincipalRead,
-    client: &PrincipalName,
-    ikey: &ProtocolKey,
-    support_der: &[u8],
-) -> Result<Option<SpakeStep>, Error> {
-    let wbytes = spake_wbytes(ikey, SPAKE_GROUP_P256)?;
-    let (secret, pub_y) = spake_kdc_keygen(&wbytes)?;
-    let challenge = krb5_types::spake::PaSpake::Challenge(krb5_types::spake::SpakeChallenge {
-        group: krb5_types::spake::GROUP_P256,
-        pubkey: pub_y.into(),
-        factors: vec![krb5_types::spake::SpakeSecondFactor {
-            factor_type: 1,
-            data: None,
-        }],
-    });
-    let chal_der = encode(&challenge)?;
-    let z = [0u8; 32];
-    let thash = spake_thash_update(&z, support_der, &chal_der);
-    let mut cookie_pt = Vec::with_capacity(64);
-    cookie_pt.extend_from_slice(&secret);
-    cookie_pt.extend_from_slice(&thash);
-    let cookie = make_cookie(
-        store,
-        client,
-        &[PaData {
-            padata_type: pa::SPAKE,
-            padata_value: cookie_pt.into(),
-        }],
-    )?;
-    let method: MethodData = vec![
-        PaData {
-            padata_type: pa::SPAKE,
-            padata_value: chal_der.into(),
-        },
-        PaData {
-            padata_type: pa::FX_COOKIE,
-            padata_value: cookie.into(),
-        },
-    ];
-    Ok(Some(SpakeStep::Challenge(encode(&method)?)))
-}
-
 /// PKINIT: ECDH reply key from PA-PK-AS-REQ.
 ///
 /// A client-caused verify failure (CMS, cert, eContentType, checksum, ctime,
-/// AuthPack, DH group, SPKI) is logged at `info` like MIT's, with
-/// `outcome = "denied"`; the KDC's own faults stay `error`.
+/// AuthPack, DH group, SPKI) is logged at `info` with `outcome = "denied"` in the JSON log; the KDC's own
+/// faults stay `error`.
 /// MIT `finish_verify_padata` (`kdc_preauth.c:1224-1228`): a module verify failure is
-/// `LOG_INFO "preauth (%s) verify failure: %s"`.
+/// `LOG_INFO "preauth (%s) verify failure: %s"`, which `run_as_preauth` writes for each failure
+/// this returns; the message is the one the error carries, or the code's table text.
 ///
 /// # Errors
 ///
@@ -625,7 +501,7 @@ fn send_spake_challenge(
 /// the clock skew; `DH_KEY_PARAMETERS_NOT_ACCEPTED` when a signed request has no DH public value,
 /// or its group or value is not accepted; `PREAUTH_FAILED` for every other check that fails (the
 /// request encoding, a KDC with no PKINIT CA, the CMS signature, the client certificate, the
-/// eContentType, the paChecksum, a required freshness token, the ctime, a replay, an unsigned
+/// eContentType, the paChecksum, a required freshness token, the ctime, an unsigned
 /// request from a client that is not anonymous, the reply signature). [`Error::Crypto`] when the
 /// key agreement or the reply-key derivation fails, and [`Error::Asn1`] when the reply does not
 /// encode. A request without PA-PK-AS-REQ is `Ok(None)`.
@@ -643,8 +519,12 @@ pub(crate) fn process_pkinit(
     };
     let cms = match decode::<krb5_types::pkinit::PaPkAsReq>(raw) {
         Ok(req) => req.signed_auth_pack.as_ref().to_vec(),
-        Err(_) => krb5_types::pkinit::parse_pa_pk_as_req_cms(raw)
-            .ok_or_else(|| proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED))?,
+        // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:479-483`): a PA-PK-AS-REQ that does not decode is its ASN.1 error.
+        Err(_) => {
+            krb5_types::pkinit::parse_pa_pk_as_req_cms(raw).ok_or_else(|| Error::PreauthModule {
+                message: crate::asn1_text::decode_failure_text(raw, false).to_owned(),
+            })?
+        }
     };
     let ca = store
         .pkinit_ca()
@@ -746,7 +626,7 @@ pub(crate) fn process_pkinit(
             );
         }
     }
-    let (ctime, cusec) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
+    let (ctime, _) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
         tracing::info!(
             event = krb5_log::events::KDC_PKINIT,
             component = "krb5-kdc",
@@ -755,19 +635,10 @@ pub(crate) fn process_pkinit(
         );
         proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
     })?;
+    // MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:528-532`): the ctime need only lie inside the clock skew, so a replayed AuthPack verifies again.
     let now = i64::from(KerberosTime::now().unix_seconds());
     if (now - i64::from(ctime)).abs() > store.policy().skew {
         return Err(proto(err::SKEW, status::PREAUTH_FAILED));
-    }
-    let rkey = ReplayKey {
-        client: lookup_principal_id(cname, realm),
-        server: format!("krbtgt/{realm}@{realm}"),
-        ctime,
-        cusec,
-        auth_hash: ReplayCache::hash_authenticator(&cms),
-    };
-    if store.pa_replay().check_and_store(rkey) {
-        return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
     }
     let (nonce, spki) = krb5_types::pkinit::parse_authpack_maybe_dh(&inner).ok_or_else(|| {
         tracing::info!(
@@ -794,9 +665,9 @@ pub(crate) fn process_pkinit(
     let agile = krb5_types::pkinit::authpack_wants_sha256_kdf(&inner);
     let (z, info) = if let Some(peer) = krb5_types::pkinit::decode_ec_spki(&spki) {
         let kp = p256_generate()?;
-        let shared = p256_shared(&kp.secret, &peer)?;
+        let shared = Zeroizing::new(p256_shared(&kp.secret, &peer)?);
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public, nonce);
-        (shared.to_vec(), info)
+        (Zeroizing::new(shared.to_vec()), info)
     } else if let Some((p, y)) = krb5_types::pkinit::parse_dh_spki(&spki) {
         let group = dh_group_for_prime(&p).ok_or_else(|| {
             tracing::info!(
@@ -816,9 +687,11 @@ pub(crate) fn process_pkinit(
             bits = group.bits
         );
         let kp = dh_generate(group)?;
-        let shared = dh_shared(group, &kp.secret, &y)
-            .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?;
-        let z = pad_z(&shared, p.len());
+        let shared = Zeroizing::new(
+            dh_shared(group, &kp.secret, &y)
+                .map_err(|_| proto(err::DH_KEY_PARAMETERS_NOT_ACCEPTED, status::PREAUTH_FAILED))?,
+        );
+        let z = Zeroizing::new(pad_z(&shared, p.len()));
         let info = krb5_types::pkinit::encode_kdc_dh_key_info(&kp.public_der, nonce);
         (z, info)
     } else {

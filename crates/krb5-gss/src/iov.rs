@@ -213,9 +213,9 @@ impl GssContext {
     /// [`Error::Truncated`] when a HEADER, TRAILER, or DATA buffer is missing, a HEADER or
     /// TRAILER is repeated or the wrong size, the token header is malformed, or the plaintext
     /// does not fill the DATA buffers; [`Error::Integrity`] when the token comes from this side
-    /// or its seal or checksum does not verify; [`Error::Inner`] when the receive key is not AES,
-    /// the token names an acceptor subkey this context lacks, or the payload is too short to
-    /// decrypt; [`Error::Sequence`] when its sequence number is a replay or outside the window.
+    /// or its seal or checksum does not verify; [`Error::Inner`] when the receive key is not AES
+    /// or the payload is too short to decrypt; [`Error::Sequence`] when its sequence number is a
+    /// replay or outside the window.
     pub fn unwrap_iov(&mut self, iov: &mut [IovBuf<'_>]) -> Result<(), Error> {
         let sealed = iov
             .iter()
@@ -337,7 +337,7 @@ impl GssContext {
                 let hdr = iov_find(iov, IovType::Header)?;
                 *hdr.get(2).ok_or(Error::Truncated)?
             };
-            require_aes(self.recv_key(flags)?.etype())?;
+            require_aes(self.recv_key(flags).etype())?;
             let tok = join_wrap_token(iov)?;
             let plain = self.unwrap(&tok)?;
             write_iov_data(iov, &plain)?;
@@ -360,7 +360,7 @@ impl GssContext {
         let ec = usize::from(u16::from_be_bytes(
             tok_hdr[4..6].try_into().map_err(|_| Error::Truncated)?,
         ));
-        let key = self.recv_key(tok_hdr[2])?.clone();
+        let key = self.recv_key(tok_hdr[2]).clone();
         require_aes(key.etype())?;
         let hmac_len = key.etype().hmac_output_len();
         let trailer = iov_find(iov, IovType::Trailer)?.to_vec();
@@ -410,7 +410,7 @@ impl GssContext {
             .find(|b| b.kind == IovType::Header)
             .and_then(|b| b.data.get(2).copied())
             .ok_or(Error::Truncated)?;
-        require_aes(self.recv_key(flags)?.etype())?;
+        require_aes(self.recv_key(flags).etype())?;
         let tok = join_wrap_token(iov)?;
         let plain = self.unwrap(&tok)?;
         write_iov_data(iov, &plain)

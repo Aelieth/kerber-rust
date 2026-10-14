@@ -719,6 +719,8 @@ fn realm_qualified_foreign_grant_matches() {
 #[test]
 fn s4u2proxy_takes_cname_from_evidence() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // AD data: the realm has an AD identity (kdc.conf `domain_sid`), so its PACs are AD-shaped.
+    store.policy.ad_identity = true;
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN]);
     store.allow_s4u_to(&user, &documented_host().components_joined());

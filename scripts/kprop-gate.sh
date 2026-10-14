@@ -216,7 +216,8 @@ assert etext == b"Invalid message type\x00", etext
 
 need_image
 
-shell_container
+# A host name with a dot, as the shared shell's: kpropd's own name is then the hostname as it is.
+shell_container 3600 testhost.kerber.test
 
 if ! docker exec "$NAME" sh -c 'command -v kprop >/dev/null'; then
     log "kprop.gate" "error" ',"error":"kprop binary missing"'
@@ -281,12 +282,10 @@ kill_comm krb5-kpropd
 kill_comm kpropd
 docker exec -d \
     -e KRB5_MASTER_PASSWORD=masterpassword \
-    -e KRB5_KPROP_KEYTAB=/tmp/host.keytab \
-    -e KRB5_KPROP_ACL=/tmp/kpropd.acl \
     -e KRB5_KDC_DB=/tmp/replica \
     -e KRB5_KDC_STASH=/tmp/replica.stash \
     -e KRB5_TEST_REALM=KERBER.TEST \
-    "$NAME" sh -c '/tmp/krb5-kpropd 127.0.0.1:754 >/tmp/kpropd.log 2>&1'
+    "$NAME" sh -c '/tmp/krb5-kpropd -s /tmp/host.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" grep -q '^listening ' /tmp/kpropd.log 2>/dev/null; then
@@ -308,14 +307,68 @@ kpropd_asn1_ap_req 754
 echo "==== Rust kpropd expired AP-REQ is 32 Ticket expired ===="
 kpropd_expired_ap_req 754
 
-echo "==== MIT kprop localhost ===="
+echo "==== MIT kprop to kpropd's own name ===="
 KPROP="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
-    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d localhost 2>&1 || true)"
+    "$NAME" kprop -f /tmp/dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true)"
 echo "$KPROP"
 echo "==== kpropd.log ===="
 docker exec "$NAME" cat /tmp/kpropd.log 2>/dev/null || true
 echo "$KPROP" | grep -q 'SUCCEEDED'
 docker exec "$NAME" test -f /tmp/replica
+
+echo "==== a dump of several KRB-PRIV blocks: the same dump and 250 principals more, past 64 KiB ===="
+# MIT kprop chains one cipher state through a dump's blocks, and only a dump of more than one
+# block shows whether kpropd reads that state as MIT's does.
+docker cp "$ROOT/scripts/lib/bulk-dump.py" "$NAME":/tmp/bulk-dump.py
+docker exec "$NAME" python3 /tmp/bulk-dump.py /tmp/dump /tmp/bulk.dump 250
+BULK="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
+    "$NAME" kprop -f /tmp/bulk.dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true)"
+echo "$BULK"
+echo "$BULK" | grep -q 'SUCCEEDED'
+[ "$(echo "$BULK" | grep -cE '^[0-9]+ bytes sent\.$')" -ge 3 ]
+ok=0
+for _ in $(seq 1 40); do
+    if [ "$(docker exec "$NAME" sh -c 'grep -c "^princ.*bulk0250@KERBER.TEST" /tmp/replica || true')" = 1 ]; then
+        ok=1
+        break
+    fi
+    sleep 0.25
+done
+if [ "$ok" != 1 ]; then
+    docker exec "$NAME" cat /tmp/kpropd.log >&2 || true
+    log "kprop.gate" "error" ',"error":"the replica did not take the multi-block dump"'
+    exit 1
+fi
+
+echo "==== the same dump under each AES enctype as the ticket's session key ===="
+# The cipher state each enctype chains is its own code: the sha1 and the sha2 enctypes differ in what
+# their MAC covers. The session key is the one kprop asks for, so its trace names the one used.
+for pair in aes128-cts-hmac-sha1-96:aes128-cts aes256-cts-hmac-sha1-96:aes256-cts \
+    aes128-cts-hmac-sha256-128:aes128-sha2 aes256-cts-hmac-sha384-192:aes256-sha2; do
+    et="${pair%%:*}"
+    short="${pair##*:}"
+    docker exec "$NAME" sh -c "rm -f /tmp/replica /tmp/et.trace
+sed 's/^\[libdefaults\]/&\n    default_tkt_enctypes = $et/' /tmp/kprop-krb5.conf >/tmp/kprop-krb5-et.conf"
+    BULK="$(docker exec -e KRB5_CONFIG=/tmp/kprop-krb5-et.conf -e KRB5_TRACE=/tmp/et.trace \
+        "$NAME" kprop -f /tmp/bulk.dump -s /tmp/host.keytab -P 754 -d "$HN" 2>&1 || true)"
+    echo "$et: $(echo "$BULK" | tail -1)"
+    echo "$BULK" | grep -q 'SUCCEEDED'
+    [ "$(echo "$BULK" | grep -cE '^[0-9]+ bytes sent\.$')" -ge 3 ]
+    docker exec "$NAME" grep -q "session key is: $short/" /tmp/et.trace
+    ok=0
+    for _ in $(seq 1 40); do
+        if [ "$(docker exec "$NAME" sh -c 'grep -c "^princ.*bulk0250@KERBER.TEST" /tmp/replica || true')" = 1 ]; then
+            ok=1
+            break
+        fi
+        sleep 0.25
+    done
+    if [ "$ok" != 1 ]; then
+        docker exec "$NAME" cat /tmp/kpropd.log >&2 || true
+        log "kprop.gate" "error" ',"error":"the replica did not take the multi-block dump under '"$et"'"'
+        exit 1
+    fi
+done
 
 echo "==== stop MIT krb5kdc; Rust KDC on replica ===="
 kill_comm krb5kdc

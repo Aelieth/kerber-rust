@@ -53,7 +53,11 @@ for _ in $(seq 1 25); do
     sleep 0.2
 done
 
-./target/debug/krb5-kdc --test-realm "$BIND" >"$LOG" 2>&1 &
+# The JSON log this gate analyses goes out only where `[logging] json` asks for it: one more
+# krb5.conf file carries the relation, after the host's, which stays as it is.
+printf '[logging]\n    json = STDOUT\n' >"$OUT/json.conf"
+KRB5_CONFIG="${KRB5_CONFIG:-/etc/krb5.conf}:$OUT/json.conf" \
+    ./target/debug/krb5-kdc --test-realm "$BIND" >"$LOG" 2>&1 &
 KDC_PID=$!
 # tcpdump is root-owned (`sudo -n tcpdump`); a plain kill gets EPERM.
 prod_cleanup() {

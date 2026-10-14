@@ -24,7 +24,6 @@ mod wrap;
 mod tests;
 
 use krb5_crypto::ProtocolKey;
-use krb5_protocol::ReplayCache;
 use thiserror::Error;
 
 /// GSS-API error.
@@ -45,11 +44,20 @@ pub enum Error {
     /// Channel bindings mismatch.
     #[error("gss channel bindings")]
     ChannelBindings,
+    /// `KRB5KRB_AP_ERR_NOT_US`: the ticket is for no principal the keytab serves under the name
+    /// given. The acceptor that holds several names tries the next on it.
+    #[error("{0}")]
+    NotUs(String),
 }
 
 impl From<krb5_protocol::Error> for Error {
     fn from(e: krb5_protocol::Error) -> Self {
-        Self::Inner(e.to_string())
+        match e {
+            krb5_protocol::Error::KrbError { code, .. } if code == krb5_types::err::NOT_US => {
+                Self::NotUs(e.to_string())
+            }
+            e => Self::Inner(e.to_string()),
+        }
     }
 }
 
@@ -77,7 +85,6 @@ pub struct GssContext {
     initiator: bool,
     /// MIT libgssrpc INIT may spend GSS seq 0 on a discarded window MIC.
     rpcsec_init_window: bool,
-    replay: ReplayCache,
     /// Authenticated client `name@REALM` (set on accept; initiator from cname).
     pub client: Option<String>,
     /// Delegated client from a 0x8003 KRB-CRED trailer (`GSS_C_DELEG_FLAG`).
@@ -94,15 +101,17 @@ pub struct GssContext {
     /// Ticket session for DCE third-leg `krb5_rd_rep_dce`.
     ap_rep_key: Option<ProtocolKey>,
     dce_style: bool,
+    /// The initiator's authenticator `ctime` / `cusec`, which its AP-REP must echo.
+    ap_req_time: Option<(krb5_types::KerberosTime, krb5_types::Microseconds)>,
 }
 
-pub use context::{ChannelBindings, InquireOk};
+pub use context::{ChannelBindings, InquireOk, use_kdc_context};
 pub use deleg::DelegCred;
 pub use iov::{IovBuf, IovType};
 pub use oid::{
-    GSS_C_CHANNEL_BOUND, GSS_C_CONF, GSS_C_DCE, GSS_C_DELEG, GSS_C_EXTENDED_ERROR, GSS_C_IDENTIFY,
-    GSS_C_INTEG, GSS_C_MUTUAL, GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE, GSS_C_TRANS,
-    GSS_CHECKSUM_TYPE, KRB5_OID, SPNEGO_OID,
+    GSS_C_AF_INET, GSS_C_CHANNEL_BOUND, GSS_C_CONF, GSS_C_DCE, GSS_C_DELEG, GSS_C_EXTENDED_ERROR,
+    GSS_C_IDENTIFY, GSS_C_INTEG, GSS_C_MUTUAL, GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE,
+    GSS_C_TRANS, GSS_CHECKSUM_TYPE, KRB5_OID, SPNEGO_OID,
 };
 pub use spnego::{is_spnego, spnego_accept, spnego_accept_kt, spnego_init, spnego_inner};
 pub use wrap::mit_shaped_wrap;

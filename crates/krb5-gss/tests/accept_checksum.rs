@@ -22,6 +22,7 @@ fn host_ticket() -> (
     krb5_crypto::ProtocolKey,
     PrincipalName,
 ) {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(
@@ -364,6 +365,7 @@ fn accept_trailing_extensions_are_skipped() {
 
 #[test]
 fn accept_zero_token_cb_with_acceptor_cb_is_ok() {
+    krb5_config::isolate_test_krb5();
     let (store, _) = bootstrap_documented().unwrap();
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let key = string_to_key(

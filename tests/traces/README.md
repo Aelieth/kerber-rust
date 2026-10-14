@@ -6,11 +6,12 @@ to equal the captured bytes (plus named fields). A divergence fails the
 unit `test` CI job. `mit-krb-error-preauth.der` is the KRB-ERROR we emit
 (PREAUTH_REQUIRED), not a MIT-KDC reply.
 
-Set `KERBER_CAPTURE_DIR` when running the KDC or client: each raw PDU is
+Set `KERBER_CAPTURE_DIR` when running the KDC or client of a `test-hooks`
+build (the gates', `scripts/lib/build-bins.sh`): each raw PDU is
 written as `{kdc,client}-{req,rep}-<nonce>.der` at the Rust socket
 boundary (no packet sniffer required). Unset or empty
 `KERBER_CAPTURE_DIR` writes nothing — the product has no default
-directory. Gate scripts set the variable (container `/tmp/traces`) and
+directory — and a release build has no capture at all. Gate scripts set the variable (container `/tmp/traces`) and
 copy out to `${KERBER_TRACE_DST:-${KERBER_SCRATCH:-target}/traces}`;
 `refuse_golden_capture_dir` refuses a path under `tests/traces/`. This
 directory keeps only the 13 tracked files (README + 12 goldens);
@@ -35,7 +36,7 @@ AD keytabs, FILE ccaches, and pcaps live in operator-held `~/adlab/`
 | `kdb/mit-dump-v7.txt` | dump | MIT 1.22.2 `kdb5_util dump` (default **version 7**) of `KERBER.TEST` (`user`/`pauser`/`host/testhost.kerber.test`; `nosvr` with `DISALLOW_SVR` and `hwuser` with `REQUIRES_HW_AUTH` regenerated through MIT `kadmin.local addprinc` + `kdb5_util dump` so their key blobs are principal-derived, not clones of `user`/`pwprau`; master password `masterpassword`). Keys are master-key-encrypted; the test-realm password is already public. |
 | `kdb/mit-dump-v6.txt` | dump | Same realm via `kdb5_util dump -r18` (**version 6**). Princ grammar matches v7. |
 | `kdb/getprinc-pauser.txt` | text | `kadmin.local getprinc pauser` at dump time. `Attributes: REQUIRES_PRE_AUTH` is dump field **128**, not `0x8`. |
-| `ccache-mit-addr-u2u.bin` | FILE v4 | MIT 1.22.2 `kinit -a` TGT (addresses) plus a MIT `krb5_cc_store_cred` user-to-user cred (`is_skey`, authdata, `second_ticket`). Identity: `FileCcache::parse` → `to_bytes`. Test-realm keys; password already public. |
+| `ccache-mit-addr-u2u.bin` | FILE v4 | MIT 1.22.2 `kinit -a` TGT (addresses) plus a MIT `krb5_cc_store_cred` user-to-user cred (`is_skey`, authdata, `second_ticket`) from `scripts/ccache-mit-addr-u2u.c`: MIT 1.22.2's writer and Debian's 1.20.1, which a plain `-lkrb5` build in the image loads, append the same bytes to the same cache. Identity: `FileCcache::parse` → `to_bytes`. Test-realm keys; password already public. |
 
 Reply goldens must be MIT-KDC bytes from the Rust client socket
 (`client-rep-*.der`), not Rust-KDC socket dumps (`kdc-rep-*.der`).

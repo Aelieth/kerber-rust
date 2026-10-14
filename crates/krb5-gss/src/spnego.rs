@@ -356,9 +356,8 @@ impl GssContext {
     ///
     /// [`Error::Truncated`] when the context holds no SPNEGO mechanism list, or the token is not
     /// a NegTokenResp with a well-formed `mechListMIC`; [`Error::Integrity`] when the MIC comes
-    /// from this side or does not verify; [`Error::Inner`] when it names an acceptor subkey this
-    /// context lacks; [`Error::Sequence`] when its sequence number is a replay or outside the
-    /// receive window.
+    /// from this side or does not verify; [`Error::Sequence`] when its sequence number is a
+    /// replay or outside the receive window.
     pub fn verify_spnego_mic(&mut self, token: &[u8]) -> Result<(), Error> {
         let list = self.spnego_mech_list.clone().ok_or(Error::Truncated)?;
         let mic = parse_neg_resp_mic(token)?;

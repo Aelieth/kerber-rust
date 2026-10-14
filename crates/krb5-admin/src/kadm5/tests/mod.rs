@@ -3,6 +3,11 @@
 
 use krb5_crypto::ProtocolKey;
 use krb5_gss::GssContext;
+use krb5_kdc::{
+    AT_ATTRFLAGS, AT_EXP, AT_FAIL_AUTH_COUNT, AT_KEYDATA, AT_LAST_FAILED, AT_LAST_SUCCESS, AT_LEN,
+    AT_MAX_LIFE, AT_MAX_RENEW_LIFE, AT_MOD_PRINC, AT_MOD_TIME, AT_PRINC, AT_PW_EXP,
+    AT_PW_LAST_CHANGE, AT_TL_DATA,
+};
 use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TlData};
 use krb5_types::PrincipalName;
 
@@ -59,6 +64,104 @@ fn rpcsec_call(id: RpcCallId, cred: &[u8], verf_flavor: u32, verf: &[u8], args: 
     w.b
 }
 
+/// A connection from 127.0.0.1 to kadmind's port on 127.0.0.1.
+fn peer() -> RpcPeer {
+    let loopback = std::net::SocketAddr::from(([127, 0, 0, 1], 749));
+    RpcPeer::new(Some(loopback), Some(loopback))
+}
+
+/// The documented admin's ticket for a service, from the documented realm's KDC.
+struct AdminTicket {
+    store: krb5_kdc::SharedDump,
+    acl: Acl,
+    ticket: krb5_types::Ticket,
+    session: ProtocolKey,
+}
+
+/// The documented admin's ticket for `service`, its AS-REQ carrying `addresses`.
+fn admin_ticket(
+    service: &PrincipalName,
+    addresses: Option<krb5_types::HostAddresses>,
+) -> AdminTicket {
+    use krb5_crypto::EncryptionType;
+    use krb5_kdc::testrealm::TEST_REALM;
+    use krb5_protocol::{as_req_sname, pa_enc_timestamp};
+
+    krb5_config::isolate_test_krb5();
+    let (store, acl, _) = setup();
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+    let admin_key = {
+        let g = store.read().unwrap();
+        g.get_name(&admin).unwrap().best_key().unwrap().key.clone()
+    };
+    let mut as_req = as_req_sname(
+        admin,
+        TEST_REALM,
+        7,
+        Some(vec![pa_enc_timestamp(&admin_key).unwrap()]),
+        service.clone(),
+        EncryptionType::preferred()
+            .iter()
+            .map(|e| e.to_iana())
+            .collect(),
+    )
+    .unwrap();
+    as_req.0.req_body.addresses = addresses;
+    let as_out = {
+        let g = store.read().unwrap();
+        krb5_kdc::issue_as(&*g, &as_req).unwrap()
+    };
+    AdminTicket {
+        store,
+        acl,
+        ticket: as_out.rep.0.ticket.clone(),
+        session: as_out.session_key,
+    }
+}
+
+impl AdminTicket {
+    /// A new initiator context on the ticket and its first token, binding `cb`.
+    fn token(&self, cb: Option<&krb5_gss::ChannelBindings>) -> (GssContext, Vec<u8>) {
+        use krb5_kdc::testrealm::TEST_REALM;
+
+        let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+        GssContext::init_sec_context(
+            self.ticket.clone(),
+            &self.session,
+            &krb5_types::ascii(TEST_REALM),
+            &admin,
+            true,
+            cb,
+            None,
+        )
+        .unwrap()
+    }
+}
+
+/// Lines kadmind's daemon log gets during a test, in a scratch directory of their own (each test
+/// runs in a process of its own).
+struct KlogFile(std::path::PathBuf);
+
+impl KlogFile {
+    fn new(name: &str) -> Self {
+        let dir = krb5_testkit::scratch_dir(&format!("kadm5-klog-{name}"));
+        let file = dir.join("kadmind.log");
+        krb5_log::klog::init("kadmind", &[format!("FILE:{}", file.display())], false);
+        Self(dir)
+    }
+
+    fn text(&self) -> String {
+        std::fs::read_to_string(self.0.join("kadmind.log")).unwrap_or_default()
+    }
+}
+
+impl Drop for KlogFile {
+    fn drop(&mut self) {
+        krb5_log::klog::close();
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 fn decode_denied(out: &[u8]) -> (u32, u32) {
     let mut r = XdrR::new(out);
     let xid = r.u32().unwrap();
@@ -68,14 +171,7 @@ fn decode_denied(out: &[u8]) -> (u32, u32) {
     (xid, r.u32().unwrap())
 }
 
-type AdminGssToken = (
-    krb5_kdc::SharedDump,
-    Acl,
-    GssContext,
-    Vec<u8>,
-    ProtocolKey,
-    ProtocolKey,
-);
+type AdminGssToken = (krb5_kdc::SharedDump, Acl, GssContext, Vec<u8>, ProtocolKey);
 
 fn admin_gss_token() -> AdminGssToken {
     use krb5_crypto::EncryptionType;
@@ -86,15 +182,13 @@ fn admin_gss_token() -> AdminGssToken {
     use krb5_protocol::{as_req_sname, pa_enc_timestamp};
     use krb5_types::ascii;
 
+    krb5_config::isolate_test_krb5();
     let (store, acl, _) = setup();
     let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
     let kadm = kadmin_admin();
-    let (admin_key, kadm_key) = {
+    let admin_key = {
         let g = store.read().unwrap();
-        (
-            g.get_name(&admin).unwrap().best_key().unwrap().key.clone(),
-            g.get_name(&kadm).unwrap().best_key().unwrap().key.clone(),
-        )
+        g.get_name(&admin).unwrap().best_key().unwrap().key.clone()
     };
     let as_req = as_req_sname(
         admin.clone(),
@@ -122,7 +216,7 @@ fn admin_gss_token() -> AdminGssToken {
         None,
     )
     .unwrap();
-    (store, acl, ctx, token, kadm_key, as_out.session_key)
+    (store, acl, ctx, token, as_out.session_key)
 }
 
 fn admin_rpcsec_init() -> (
@@ -146,7 +240,7 @@ fn admin_rpcsec_init_svc(
 ) {
     use krb5_kdc::testrealm::TEST_REALM;
 
-    let (store, acl, mut ctx, token, kadm_key, session) = admin_gss_token();
+    let (store, acl, mut ctx, token, session) = admin_gss_token();
     let cred = rpcsec_cred(RPG_INIT, 0, svc, &[]);
     let mut arg = XdrW::default();
     arg.opaque(&token);
@@ -164,12 +258,10 @@ fn admin_rpcsec_init_svc(
     );
     let mut gss = None;
     let mut agss = None;
-    let keys = [kadm_key];
     let out = handle_rpc(
         RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &keys,
             expected_realm: TEST_REALM,
         },
         b"hdl",
@@ -177,7 +269,7 @@ fn admin_rpcsec_init_svc(
         &mut agss,
         &krb5_protocol::ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut r = XdrR::new(&out);
@@ -248,6 +340,34 @@ fn rpcsec_data_rec(
         &mic,
         &arg.b,
     )
+}
+
+/// An RPCSEC_GSS privacy DATA call whose sealed body opens with `body_seq`.
+fn rpcsec_priv_rec(
+    ctx: &mut GssContext,
+    id: RpcCallId,
+    seq: u32,
+    body_seq: u32,
+    handle: &[u8],
+    args: &[u8],
+) -> Vec<u8> {
+    let cred = rpcsec_cred(RPG_DATA, seq, GSS_PRIVACY, handle);
+    let mut header = XdrW::default();
+    header.u32(id.xid);
+    header.u32(MSG_CALL);
+    header.u32(RPC_VERSION);
+    header.u32(id.prog);
+    header.u32(id.vers);
+    header.u32(id.proc);
+    header.u32(FLAVOR_GSS);
+    header.opaque(&cred);
+    let mic = ctx.get_mic(&header.b).unwrap();
+    let mut databody = Vec::with_capacity(4 + args.len());
+    databody.extend_from_slice(&body_seq.to_be_bytes());
+    databody.extend_from_slice(args);
+    let mut arg = XdrW::default();
+    arg.opaque(&ctx.wrap(&databody).unwrap());
+    rpcsec_call(id, &cred, FLAVOR_GSS, &mic, &arg.b)
 }
 
 fn rpcsec_integ_rec(
@@ -633,6 +753,7 @@ fn modify_policy_floor_code(mask: u32, set: impl Fn(&mut krb5_kdc::NamedPolicy))
 // with: `save_store` writes a keytab stash for the fresh bootstrap, then
 // `persist_paths` points `iprop_master_key` at it. Without this a store has
 // no master key and the encoder refuses to ship keys (see the negative test).
+#[cfg(feature = "test-hooks")]
 fn seed_master_key(store: &krb5_kdc::SharedDump) {
     let dir = krb5_testkit::scratch_dir("krb5-iprop-mk");
     let _ = std::fs::create_dir_all(&dir);
@@ -656,6 +777,7 @@ mod framing;
 mod getprinc;
 mod glob;
 mod iprop;
+mod iprop_mit;
 mod keysalt;
 mod lockdown;
 mod policy;

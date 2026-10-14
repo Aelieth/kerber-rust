@@ -121,6 +121,28 @@ fn changepw_service_getprivs_is_ok() {
     assert_eq!(r.u32().unwrap(), !0);
 }
 
+// A password that is not UTF-8 is still a kadm5 xdr_string. Decoding it as UTF-8
+// used to fail the RPC with SYSTEM_ERR before passwd_check (the MIT client's
+// "Communication failure with server").
+#[test]
+fn chpass_password_keeps_non_utf8_octets() {
+    let pass = b"caf\xe9p16a";
+    let mut w = XdrW::default();
+    w.u32(API_V2);
+    w.nullstring(Some("nosuch-latin@KERBER.TEST"));
+    w.cstring_bytes(Some(pass));
+    let got = parse_chpass(&w.b, false).unwrap();
+    assert_eq!(got.name.components_joined(), "nosuch-latin");
+    assert_eq!(got.prealm, "KERBER.TEST");
+    assert_eq!(got.pass, pass);
+    assert!(!got.keepold);
+    assert_eq!(got.ks.len(), 0);
+
+    let (store, acl, actor) = setup();
+    let out = dispatch_kadm5(&store, &acl, &actor, CHPASS_PRINCIPAL, &w.b).unwrap();
+    assert_eq!(ret_code(&out), KADM5_UNK_PRINC);
+}
+
 #[test]
 fn changepw_acceptor_requires_store_realm() {
     let cpw = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);

@@ -235,9 +235,11 @@ fn renew_skips_alternate_tgs() {
     }
 }
 
-#[test]
-fn s4u2self_case2_cross_local_user_referral_issues() {
+/// MIT case 2: a service of OTHER.TEST asks for a user of this realm, so this realm refers the
+/// request back to OTHER.TEST.
+fn s4u2self_case2(ad_identity: bool) -> (krb5_kdc::IssuedTgs, krb5_crypto::ProtocolKey) {
     let (mut store, acl) = bootstrap_documented().expect("bootstrap");
+    store.policy.ad_identity = ad_identity;
     let ir = aes_key(0x44);
     store
         .create_interrealm_key(&acl, &documented_admin_id(), "OTHER.TEST", ir.clone())
@@ -281,10 +283,48 @@ fn s4u2self_case2_cross_local_user_referral_issues() {
     .build()
     .unwrap();
     let out = krb5_kdc::issue_tgs(&store, &req).expect("S4U2Self case 2");
+    (out, ir)
+}
+
+#[test]
+fn s4u2self_case2_cross_local_user_referral_issues() {
+    // With no AD data the referral carries MIT's S4U referral PAC; a TGT has no ticket or full
+    // checksum. MIT `handle_pac` (`kdc_authdata.c:534-539`): an S4U referral's CLIENT_INFO
+    // names `altcprinc`, the S4U2Self user, with the realm.
+    let (out, ir) = s4u2self_case2(false);
     assert_eq!(
         out.rep.0.ticket.sname.components_joined(),
         "krbtgt/OTHER.TEST"
     );
+    let part = decrypt_ticket_part(&ir, &out.rep.0.ticket).expect("referral");
+    let pac = Pac::parse(&pac_from_ticket_part(&part).expect("PAC")).expect("parse");
+    let kinds: Vec<u32> = pac.buffers.iter().map(|b| b.kind).collect();
+    assert_eq!(
+        kinds,
+        [
+            PAC_CLIENT_INFO,
+            krb5_types::pac::PAC_SERVER_CHECKSUM,
+            krb5_types::pac::PAC_PRIVSVR_CHECKSUM
+        ]
+    );
+    let (_, name) = parse_client_info(pac.buffer(PAC_CLIENT_INFO).expect("client")).unwrap();
+    assert_eq!(name, format!("{TEST_USER}@{TEST_REALM}"));
+}
+
+#[test]
+fn s4u2self_referral_with_ad_data_carries_the_users_logon_info() {
+    // MIT gives `issue_pac` the S4U2Self user's entry as its client on this hop too, so the
+    // identity a KDB with AD data mints is the user's, not the requesting service's.
+    let (out, ir) = s4u2self_case2(true);
+    let part = decrypt_ticket_part(&ir, &out.rep.0.ticket).expect("referral");
+    let pac = Pac::parse(&pac_from_ticket_part(&part).expect("PAC")).expect("parse");
+    let logon = krb5_types::pac::parse_kerb_validation_info(
+        pac.buffer(krb5_types::pac::PAC_LOGON_INFO).expect("logon"),
+    )
+    .expect("NDR");
+    assert_eq!(logon.effective_name.value, TEST_USER);
+    let (_, name) = parse_client_info(pac.buffer(PAC_CLIENT_INFO).expect("client")).unwrap();
+    assert_eq!(name, format!("{TEST_USER}@{TEST_REALM}"));
 }
 
 #[test]

@@ -2,7 +2,8 @@
 
 This tree is cryptographic software: a Kerberos V5 implementation with
 AES-CTS-HMAC (IANA 17–20), RFC 3961 3DES, Camellia-CTS-CMAC, RC4-HMAC,
-HMAC, PBKDF2, Oakley MODP Diffie–Hellman, ECDH P-256, and SPAKE. It is
+HMAC, PBKDF2, Oakley MODP Diffie–Hellman, ECDH P-256, and SPAKE (edwards25519,
+P-256). It is
 not a toy or a documentation-only stub.
 
 ## Classification (honest, not a determination)

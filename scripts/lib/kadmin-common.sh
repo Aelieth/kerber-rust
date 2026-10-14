@@ -4,6 +4,14 @@
 # function reads the gate's globals ($NAME, $ROOT, the conf paths) when it is called.
 # shellcheck shell=bash
 
+# MIT kadmin prints "Authenticating as principal ... with password." to stdout
+# and the com_err sentence to stderr. Under 2>&1 the banner can land inside
+# that sentence. This is the same sed -z as kadmin-local-gate.sh's mit_local:
+# it removes the banner wherever it landed and rejoins the line.
+strip_mit_kadmin_banner() {
+    sed -z -e 's/Authenticating as principal [^\n]*with password\.\n//g'
+}
+
 _snap_key() {
     printf '%s\n' "${tree_sha:?}"
 }
@@ -23,17 +31,7 @@ _kadmin_cleanup() {
 compile_kadm5_changepw() {
     local ctn=$1
     docker cp "$ROOT/scripts/oracle/kadm5-changepw-rpc.c" "$ctn":/tmp/kadm5-changepw-rpc.c
-    if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
-        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-cc.err"
-    then
-        if ! docker exec "$ctn" cc -o /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c \
-            -lkadm5clnt -lgssrpc -lgssapi_krb5 -lkrb5 -lcom_err 2>>"$SCRATCH/kadm5-cc.err"
-        then
-            cat "$SCRATCH/kadm5-cc.err" >&2 || true
-            log "kadmin.gate" "error" ',"error":"kadm5-changepw-rpc compile failed"'
-            exit 1
-        fi
-    fi
+    mit_oracle_cc "$ctn" /tmp/kadm5-changepw-rpc /tmp/kadm5-changepw-rpc.c kadm-client
 }
 
 kadm5_changepw_list() {
@@ -45,44 +43,185 @@ kadm5_changepw_list() {
 compile_kadm5_integrity() {
     local ctn=$1
     docker cp "$ROOT/scripts/oracle/kadm5-integrity-rpc.c" "$ctn":/tmp/kadm5-integrity-rpc.c
-    if ! docker exec "$ctn" cc -o /tmp/kadm5-integrity-rpc /tmp/kadm5-integrity-rpc.c \
-        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-int-cc.err"
-    then
-        cat "$SCRATCH/kadm5-int-cc.err" >&2 || true
-        log "kadmin.gate" "error" ',"error":"kadm5-integrity-rpc compile failed"'
-        exit 1
-    fi
+    mit_oracle_cc "$ctn" /tmp/kadm5-integrity-rpc /tmp/kadm5-integrity-rpc.c kadm-client
 }
 
 # kadmin/admin is DISALLOW_TGT_BASED, so kinit -S takes an initial service
 # ticket the RPCSEC_GSS acceptor accepts.
 kadm5_integrity_list() {
     local ctn=$1 client=$2 pass=$3 svc=$4 conf=${5:-/etc/krb5.conf} port=${6:-749}
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c \
-        "printf '%s\n' '$pass' | kinit -S kadmin/admin@KERBER.TEST -c /tmp/int-cc '$client'" >/dev/null 2>&1 || true
-    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/int-cc "$ctn" \
-        /tmp/kadm5-integrity-rpc 127.0.0.1 kadmin/admin@KERBER.TEST "$svc" "$port"
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/int-cc "$ctn" sh -c \
+        "printf '%s\n' '$pass' | kinit -S kadmin/admin@KERBER.TEST '$client' >/dev/null 2>&1; \
+        exec /tmp/kadm5-integrity-rpc 127.0.0.1 kadmin/admin@KERBER.TEST '$svc' '$port'"
 }
 
 compile_kadm5_probe() {
     local ctn=$1
+    # The gates build it again where a cell needs it; a container is made for one run, so what is there is this source's build.
+    docker exec "$ctn" test -x /tmp/kadm5-rpc-probe && return 0
     docker cp "$ROOT/scripts/oracle/kadm5-rpc-probe.c" "$ctn":/tmp/kadm5-rpc-probe.c
-    if ! docker exec "$ctn" cc -o /tmp/kadm5-rpc-probe /tmp/kadm5-rpc-probe.c \
-        -lkadm5clnt_mit -lgssrpc -lgssapi_krb5 -lkrb5 -lk5crypto -lcom_err 2>"$SCRATCH/kadm5-probe-cc.err"
-    then
-        cat "$SCRATCH/kadm5-probe-cc.err" >&2 || true
-        log "kadmin.gate" "error" ',"error":"kadm5-rpc-probe compile failed"'
-        exit 1
-    fi
+    mit_oracle_cc "$ctn" /tmp/kadm5-rpc-probe /tmp/kadm5-rpc-probe.c kadm-client
 }
 
+# The ticket and the probe run in one shell of the container: a docker exec is about 0.1 s, and the gates make dozens of probes.
 kadm5_probe() {
     local ctn=$1 client=$2 mode=$3 conf=${4:-/etc/krb5.conf}
     local service=${5:-kadmin/admin@KERBER.TEST} port=${6:-749}
-    docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c \
-        "printf 'adminpassword\n' | kinit -S '$service' -c /tmp/probe-cc '$client'" >/dev/null 2>&1 || true
-    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/probe-cc "$ctn" \
-        /tmp/kadm5-rpc-probe 127.0.0.1 "$service" "$mode" "$port"
+    docker exec -e KRB5_CONFIG="$conf" -e KRB5CCNAME=/tmp/probe-cc "$ctn" sh -c \
+        "printf 'adminpassword\n' | kinit -S '$service' '$client' >/dev/null 2>&1; \
+        exec /tmp/kadm5-rpc-probe 127.0.0.1 '$service' '$mode' '$port'"
+}
+
+# The acceptor names kadmind's two RPC programs are asked with, one probe each, and the label each answers. kadm5's
+# check_rpcsec_auth (kadm_rpc_svc.c:333-337) is exact: two components, the realm, `kadmin`, not `history`. iprop's
+# check_iprop_rpcsec_auth (ipropd_svc.c:513-514) is a strncmp over the component's own length, so MIT's iprop program
+# also serves any prefix of `kiprop`; ours serves `kiprop` alone (docs/mit-deviations.md, docs/security.md).
+# Columns: name, the kadm5 program's label, the iprop program's on MIT, the iprop program's on ours.
+SERVICE_NAME_CELLS=(
+    "kadmin/admin SUCCESS AUTH_TOOWEAK AUTH_TOOWEAK"
+    "kadmin/changepw SUCCESS AUTH_TOOWEAK AUTH_TOOWEAK"
+    "kadmin/history AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+    "kadmin/testhost.kerber.test SUCCESS AUTH_TOOWEAK AUTH_TOOWEAK"
+    "kadmins/admin AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+    "kadmin AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+    "kadmin/testhost.kerber.test/x AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+    "host/testhost.kerber.test AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+    "kiprop/testhost.kerber.test AUTH_TOOWEAK SUCCESS SUCCESS"
+    "k/testhost.kerber.test AUTH_TOOWEAK SUCCESS AUTH_TOOWEAK"
+    "kip/testhost.kerber.test AUTH_TOOWEAK SUCCESS AUTH_TOOWEAK"
+    "kipro/testhost.kerber.test AUTH_TOOWEAK SUCCESS AUTH_TOOWEAK"
+    "kiprop2/testhost.kerber.test AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+    "K/testhost.kerber.test AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+    "/testhost.kerber.test AUTH_TOOWEAK SUCCESS AUTH_TOOWEAK"
+    "kiprop AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+    "kiprop/testhost.kerber.test/x AUTH_TOOWEAK AUTH_TOOWEAK AUTH_TOOWEAK"
+)
+
+# A batch is run by one shell of the container (a docker exec is about 0.1 s, and the table is 34 probes): its output is a run of
+# blocks, each headed by a line "@@ KEY". _probe_blocks reads that on stdin into PROBE_OUT[KEY], the block's lines, and prints
+# whatever precedes the first header (the exec's own error), so the host judges the claims one at a time, a transcript line each.
+declare -A PROBE_OUT=()
+_probe_blocks() {
+    local line key='' before=''
+    PROBE_OUT=()
+    while IFS= read -r line; do
+        if [[ $line == '@@ '* ]]; then
+            key=${line#@@ }
+            PROBE_OUT["$key"]=
+        elif [ -n "$key" ]; then
+            PROBE_OUT["$key"]+=${PROBE_OUT["$key"]:+$'\n'}$line
+        else
+            before+=$line$'\n'
+        fi
+    done
+    printf '%s' "$before"
+}
+
+# service_name_principals RUNNER [DOCKER-EXEC-OPTIONS...] CONTAINER -- [KADMIN-ARGS...]: one kadmin session, its queries on stdin
+# (the runner takes -i and no -q), makes the principal of every name in the table; best-effort, as some exist.
+service_name_principals() {
+    local cell name
+    for cell in "${SERVICE_NAME_CELLS[@]}"; do
+        read -r name _ <<<"$cell"
+        printf 'addprinc -randkey %s\n' "$name"
+    done | kadmin_q_try "$@"
+    echo
+}
+
+# service_name_cells LEG CTN CLIENT CONF IPROP_PORT: LEG is mit or rust. One shell in CTN takes every name's ticket at once (kinit -S,
+# each into a cache of its own that was removed first, so a refused ticket is no probe of the name before it), then asks the kadm5
+# program and the iprop program, a stream each (two connections at a time), with each ticket in turn.
+service_name_cells() {
+    local leg=$1 ctn=$2 client=$3 conf=$4 iprop_port=$5 cell name kadm5 mit ours want out all script
+    local -a svcs=()
+    IFS= read -r -d '' script <<'EOF' || true
+client=$1 port=$2
+shift 2
+i=0
+for svc in "$@"; do
+    i=$((i + 1))
+    rm -f "/tmp/probe-cc-$i"
+    (printf 'adminpassword\n' | KRB5CCNAME="/tmp/probe-cc-$i" kinit -S "$svc" "$client" >/dev/null 2>&1) &
+done
+wait
+(
+    i=0
+    for svc in "$@"; do
+        i=$((i + 1))
+        echo "@@ kadm5 $svc"
+        KRB5CCNAME="/tmp/probe-cc-$i" /tmp/kadm5-rpc-probe 127.0.0.1 "$svc" valid 749 2>&1 </dev/null
+    done
+) >/tmp/probe-kadm5.out &
+(
+    i=0
+    for svc in "$@"; do
+        i=$((i + 1))
+        echo "@@ iprop $svc"
+        KRB5CCNAME="/tmp/probe-cc-$i" /tmp/kadm5-rpc-probe 127.0.0.1 "$svc" iprop-valid "$port" 2>&1 </dev/null
+    done
+) >/tmp/probe-iprop.out &
+wait
+cat /tmp/probe-kadm5.out /tmp/probe-iprop.out
+EOF
+    for cell in "${SERVICE_NAME_CELLS[@]}"; do
+        read -r name _ <<<"$cell"
+        svcs+=("$name@KERBER.TEST")
+    done
+    all="$(docker exec -e KRB5_CONFIG="$conf" "$ctn" sh -c "$script" sh "$client" "$iprop_port" "${svcs[@]}" 2>&1 || true)"
+    _probe_blocks <<<"$all"
+    for cell in "${SERVICE_NAME_CELLS[@]}"; do
+        read -r name kadm5 mit ours <<<"$cell"
+        out="${PROBE_OUT["kadm5 $name@KERBER.TEST"]-}"
+        echo "$leg kadm5 program, acceptor $name: $out"
+        [[ $out == *"valid label=$kadm5"* ]] || die "$leg kadm5 program, acceptor $name: not $kadm5"
+        want=$ours
+        [ "$leg" = mit ] && want=$mit
+        out="${PROBE_OUT["iprop $name@KERBER.TEST"]-}"
+        echo "$leg iprop program, acceptor $name: $out"
+        [[ $out == *"iprop-valid label=$want"* ]] || die "$leg iprop program, acceptor $name: not $want"
+    done
+}
+
+# later_key_cells CTN ADDR: a ticket forged in each key of kadmin/admin (/tmp/ka.keytab, every key `ktadd -norandkey` wrote), sent as
+# an INIT call to the kadmind at ADDR (`rd-sweep kadmind-init`): the first key completes a context and each later key is refused, over
+# RPCSEC_GSS (AUTH_REJECTEDCRED) and over AUTH_GSSAPI (a GSS_S_FAILURE init_res) alike. MIT's KDB keytab hands out the first permitted key
+# alone (kdb/keytab.c:117-185), and a kadmind of ours does the same. One shell of the container sends all nine (a batch, as above).
+later_key_cells() {
+    local ctn=$1 addr=$2 flavor refused entry out all script
+    IFS= read -r -d '' script <<'EOF' || true
+addr=$1
+for flavor in rpcsec agss; do
+    for entry in 0 1 2 3; do
+        echo "@@ $flavor $entry"
+        if [ "$entry" = 0 ]; then
+            /tmp/rd-sweep kadmind-init "$addr" /tmp/ka.keytab ra4user "flavor=$flavor" 2>&1
+        else
+            /tmp/rd-sweep kadmind-init "$addr" /tmp/ka.keytab ra4user "entry=$entry" "flavor=$flavor" 2>&1
+        fi
+    done
+done
+echo "@@ four"
+/tmp/rd-sweep kadmind-init "$addr" /tmp/ka.keytab ra4user entry=4 2>&1
+EOF
+    docker cp "${CARGO_TARGET_DIR:-target}/debug/rd-sweep" "$ctn":/tmp/rd-sweep
+    all="$(docker exec "$ctn" sh -c "$script" sh "$addr" 2>&1 || true)"
+    _probe_blocks <<<"$all"
+    for flavor in rpcsec agss; do
+        refused='DENIED auth_stat=2 AUTH_REJECTEDCRED'
+        [ "$flavor" = agss ] && refused='ACCEPTED gss_major=851968 GSS_S_FAILURE'
+        out="${PROBE_OUT["$flavor 0"]-}"
+        echo "$out"
+        [[ $out == *"flavor=$flavor: ACCEPTED gss_major=0 GSS_S_COMPLETE"* ]] \
+            || die "the first key of kadmin/admin does not complete a $flavor context"
+        for entry in 1 2 3; do
+            out="${PROBE_OUT["$flavor $entry"]-}"
+            echo "$out"
+            [[ $out == *"entry=$entry "* ]] || die "no ticket was forged in key $entry of kadmin/admin"
+            [[ $out == *"flavor=$flavor: $refused"* ]] || die "a ticket in key $entry of kadmin/admin is not refused over $flavor"
+        done
+    done
+    out="${PROBE_OUT[four]-}"
+    [[ $out == *'has 4 keys'* ]] || die "kadmin/admin has not four keys: $out"
 }
 
 # RPCSEC_GSS reject machine (svc_auth_gss.c): each malformed DATA call yields the
@@ -345,7 +484,7 @@ body += xdr_u32(300001) + xdr_opaque(cred)
 body += xdr_u32(0) + xdr_opaque(b"")
 emit("data", exchange(body))
 
-# AUTH_NONE IPROP: MIT kadmind 749 is PROG_UNAVAIL; Rust serves 100423 as AUTH_TOOWEAK.
+# AUTH_NONE IPROP: PROG_UNAVAIL without iprop_enable (the program is not registered), AUTH_TOOWEAK with it.
 xid = 0x11111111
 body = struct.pack(">10I", xid, 0, 2, 100423, 1, 0, 0, 0, 0, 0)
 emit("auth_none", exchange(body))

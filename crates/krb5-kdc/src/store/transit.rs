@@ -88,7 +88,7 @@ impl PrincipalStore {
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `krbtgt/FOREIGN`;
     /// [`Error::AlreadyExists`] when that principal exists; [`Error::PasswordPolicy`] when
-    /// `password` is empty; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// `password` is empty; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn create_interrealm(
         &mut self,
         acl: &Acl,
@@ -119,7 +119,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on `krbtgt/FOREIGN`;
-    /// [`Error::AlreadyExists`] when that principal exists; [`Error::Crypto`] when saving the
+    /// [`Error::AlreadyExists`] when that principal exists; [`Error::Db`] when saving the
     /// store to `persist_paths` fails.
     pub fn create_interrealm_key(
         &mut self,
@@ -140,9 +140,11 @@ impl PrincipalStore {
             self.realm.clone(),
             vec![KeyEntry::new(key.etype(), key, 1)],
             salt,
+            // MIT `kadm5_create_principal_3` (`lib/kadm5/srv/svr_principal.c:391-394`): a principal
+            // created without a `max_life` takes the realm's.
             crate::store::PrincipalFields {
                 requires_preauth: false,
-                max_life: 0,
+                max_life: self.policy.max_life,
                 locked: false,
                 pw_expire: 0,
             },
@@ -160,7 +162,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on the incoming trust
-    /// principal; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// principal; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn add_interrealm_decrypt_key(
         &mut self,
         acl: &Acl,
@@ -176,7 +178,7 @@ impl PrincipalStore {
     /// # Errors
     ///
     /// [`Error::AclDenied`] when the ACL does not grant `actor` add on the incoming trust
-    /// principal; [`Error::Crypto`] when saving the store to `persist_paths` fails.
+    /// principal; [`Error::Db`] when saving the store to `persist_paths` fails.
     pub fn set_interrealm_decrypt_key(
         &mut self,
         acl: &Acl,
@@ -228,7 +230,7 @@ impl PrincipalStore {
             salt,
             crate::store::PrincipalFields {
                 requires_preauth: false,
-                max_life: 0,
+                max_life: self.policy.max_life,
                 locked: false,
                 pw_expire: 0,
             },

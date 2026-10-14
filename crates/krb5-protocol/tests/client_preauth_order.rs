@@ -10,6 +10,7 @@
 mod common;
 use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
+use krb5_crypto::SpakeGroup;
 use krb5_kdc::testrealm::{TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented};
 
 use krb5_protocol::{
@@ -133,6 +134,71 @@ fn optimistic_hint_picks_spake_before_enc_ts() {
         "default password path must not jump to enc-ts when 151 is advertised, got {:?}",
         seen[1]
     );
+}
+
+/// The encrypted-timestamp request that answers PREAUTH_REQUIRED sends the error's cookie back
+/// first and verbatim, as MIT's kinit does against MIT's KDC (live MIT 1.22.2:
+/// `[133, 2, 150, 149]`).
+/// MIT `k5_preauth` (`preauth2.c:992-993`): `copy_cookie` runs before any module adds padata.
+#[test]
+fn enc_timestamp_request_returns_the_cookie_first() {
+    isolate_host_krb5();
+    let seen: Arc<Mutex<Vec<Vec<PaData>>>> = Arc::new(Mutex::new(Vec::new()));
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let record = Arc::clone(&seen);
+    thread::spawn(move || {
+        let hint: MethodData = vec![
+            pa_of(pa::ENC_TIMESTAMP),
+            PaData {
+                padata_type: pa::FX_COOKIE,
+                padata_value: b"MIT-cookie".to_vec().into(),
+            },
+        ];
+        let mut buf = [0u8; 4096];
+        while let Ok((n, src)) = udp.recv_from(&mut buf) {
+            let Ok(req) = decode::<AsReq>(&buf[..n]) else {
+                continue;
+            };
+            let mut seen = record.lock().unwrap();
+            seen.push(req.0.padata.unwrap_or_default());
+            let reply = if seen.len() == 1 {
+                encode_preauth_required(&hint)
+            } else {
+                encode_preauth_failed()
+            };
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let _ = as_exchange(&AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"userpassword",
+        kdc: &KdcAddr {
+            host: "127.0.0.1".into(),
+            port,
+        },
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts::default(),
+    });
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "one PREAUTH_REQUIRED, one answer: {seen:?}");
+    assert_eq!(
+        types(&seen[1]),
+        vec![
+            pa::FX_COOKIE,
+            pa::ENC_TIMESTAMP,
+            pa::AS_FRESHNESS,
+            pa::REQ_ENC_PA_REP
+        ],
+        "MIT kinit's second AS-REQ"
+    );
+    assert_eq!(seen[1][0].padata_value.as_ref(), b"MIT-cookie");
 }
 
 fn encode_preauth_required(method: &MethodData) -> Vec<u8> {
@@ -289,7 +355,9 @@ fn pkinit_padata_module_before_info_without_cookie() {
 #[test]
 fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
     isolate_host_krb5();
-    let (store, _) = bootstrap_documented().expect("bootstrap");
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    // The client's default group is edwards25519 (MIT `DEFAULT_GROUPS_CLIENT`).
+    store.policy.spake_preauth_groups = vec![SpakeGroup::Edwards25519, SpakeGroup::P256];
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
     let seen: Arc<Mutex<Vec<Vec<i32>>>> = Arc::new(Mutex::new(Vec::new()));
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
@@ -346,4 +414,234 @@ fn spake_response_request_keeps_the_advertised_padata_in_mit_order() {
         matches!((cookie, spake), (Some(c), Some(s)) if c < s),
         "cookie precedes PA-SPAKE like k5_preauth copy_cookie; sent {last:?}"
     );
+}
+
+/// The SPAKE challenge that answers a request carrying the cookie names no etype-info, so the
+/// key comes from the PREAUTH_REQUIRED hint: here aes256-cts-hmac-sha1-96, the only key type
+/// the user has, though the request asks for aes256-cts-hmac-sha384-192 first (the harness
+/// image's krb5.conf order). Taking the first requested type there instead made every SPAKE
+/// response PREAUTH_FAILED (slo/soak, CI run 751).
+/// MIT `k5_get_etype_info` (`lib/krb5/krb/preauth2.c:790-854`): an error without etype-info leaves the enctype and salt an earlier error set.
+#[test]
+fn spake_keeps_the_hints_etype_info_when_the_challenge_has_none() {
+    isolate_host_krb5();
+    // The client's default group is edwards25519 (MIT `DEFAULT_GROUPS_CLIENT`).
+    let kdc = krb5_config::KdcConf::parse(
+        "[libdefaults]\n    spake_preauth_groups = edwards25519 P-256\n[realms]\n    KERBER.TEST = {\n        supported_enctypes = aes256-cts-hmac-sha1-96:normal aes128-cts-hmac-sha1-96:normal\n    }\n",
+    )
+    .unwrap();
+    let store = krb5_kdc::PrincipalStore::bootstrap_with_kdc_conf(
+        TEST_REALM,
+        TEST_USER,
+        TEST_USER_PASSWORD,
+        "admin",
+        b"adminpassword",
+        Some(&kdc),
+    )
+    .unwrap();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok((n, src)) = udp.recv_from(&mut buf) {
+            if let Ok(reply) = krb5_kdc::handle_request(&store, &buf[..n]) {
+                let _ = udp.send_to(&reply, src);
+            }
+        }
+    });
+    let sha384_first = [20, 19, 18, 17];
+    for want_spake in [false, true] {
+        let out = as_exchange(&AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]),
+            realm: TEST_REALM,
+            password: TEST_USER_PASSWORD,
+            kdc: &KdcAddr {
+                host: "127.0.0.1".into(),
+                port,
+            },
+            want_spake,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: Some(&sha384_first),
+            ticket: AsTicketOpts::default(),
+        })
+        .unwrap_or_else(|e| panic!("want_spake={want_spake}: {e}"));
+        assert_eq!(out.pa_type, Some(pa::SPAKE), "want_spake={want_spake}");
+        assert_eq!(
+            out.client_key.etype().to_iana(),
+            18,
+            "want_spake={want_spake}"
+        );
+    }
+}
+
+/// MIT `maybe_add_pac_request` (`lib/krb5/krb/get_in_tkt.c:1243-1253`): `include-pac` is the option, and with no option the padata is absent.
+#[test]
+fn every_as_request_carries_the_pac_request_when_asked() {
+    isolate_host_krb5();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        if let Ok((n, src)) = udp.recv_from(&mut buf) {
+            let _ = tx.send(buf[..n].to_vec());
+            let reply = encode(&KrbError {
+                pvno: KrbError::PVNO,
+                msg_type: KrbError::MSG_TYPE,
+                ctime: None,
+                cusec: None,
+                stime: KerberosTime::now(),
+                susec: Microseconds::ZERO,
+                error_code: err::C_PRINCIPAL_UNKNOWN,
+                crealm: None,
+                cname: None,
+                realm: ascii("KERBER.TEST"),
+                sname: PrincipalName::krbtgt("KERBER.TEST"),
+                e_text: None,
+                e_data: None,
+            })
+            .unwrap();
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    let kdc = KdcAddr {
+        host: "127.0.0.1".into(),
+        port,
+    };
+    let req = AsRequest {
+        cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+        realm: "KERBER.TEST",
+        password: b"pw",
+        kdc: &kdc,
+        want_spake: false,
+        fast_armor: None,
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts {
+            pac_request: Some(false),
+            ..AsTicketOpts::default()
+        },
+    };
+    let _ = krb5_protocol::as_exchange(&req);
+    let raw = rx.recv_timeout(Duration::from_secs(2)).expect("AS-REQ");
+    let as_req: AsReq = decode(&raw).expect("AS-REQ");
+    let pac = as_req
+        .0
+        .padata
+        .unwrap_or_default()
+        .into_iter()
+        .find(|p| p.padata_type == pa::PAC_REQUEST)
+        .expect("PA-PAC-REQUEST");
+    let body: krb5_types::PaPacRequest = decode(pac.padata_value.as_ref()).unwrap();
+    assert!(!body.include_pac);
+}
+
+/// A KDC that answers every AS-REQ with KRB-ERROR `code` and counts the requests.
+fn kdc_answering(code: i32) -> (u16, Arc<Mutex<usize>>) {
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let count = Arc::new(Mutex::new(0usize));
+    let seen = Arc::clone(&count);
+    thread::spawn(move || {
+        let mut buf = [0u8; 4096];
+        while let Ok((n, src)) = udp.recv_from(&mut buf) {
+            if decode::<AsReq>(&buf[..n]).is_err() {
+                continue;
+            }
+            *seen.lock().unwrap() += 1;
+            let reply = if code == err::PREAUTH_REQUIRED {
+                encode_preauth_required(&vec![pa_of(pa::ENC_TIMESTAMP)])
+            } else {
+                encode(&KrbError {
+                    pvno: KrbError::PVNO,
+                    msg_type: KrbError::MSG_TYPE,
+                    ctime: None,
+                    cusec: None,
+                    stime: KerberosTime::now(),
+                    susec: Microseconds::ZERO,
+                    error_code: code,
+                    crealm: None,
+                    cname: None,
+                    realm: ascii("KERBER.TEST"),
+                    sname: PrincipalName::krbtgt("KERBER.TEST"),
+                    e_text: None,
+                    e_data: None,
+                })
+                .unwrap()
+            };
+            let _ = udp.send_to(&reply, src);
+        }
+    });
+    (port, count)
+}
+
+fn prompted_as(port: u16, prompt: &mut krb5_protocol::PasswordPrompt<'_>) -> krb5_protocol::Error {
+    let kdc = KdcAddr {
+        host: "127.0.0.1".into(),
+        port,
+    };
+    krb5_protocol::as_exchange_prompted(
+        &AsRequest {
+            cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+            realm: "KERBER.TEST",
+            password: b"",
+            kdc: &kdc,
+            want_spake: false,
+            fast_armor: None,
+            pkinit: None,
+            canonicalize: false,
+            sname: None,
+            etypes: None,
+            ticket: AsTicketOpts::default(),
+        },
+        prompt,
+    )
+    .unwrap_err()
+}
+
+/// MIT asks the KDC before it reads the password: an unknown client is the KDC's error, and the
+/// prompter is never called. A read that fails answering the preauthentication hint is
+/// `KRB5_PREAUTH_FAILED` around the read, unless the read was interrupted.
+/// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): the failure of the real type answered is wrapped.
+#[test]
+fn a_password_read_that_fails_in_preauthentication_is_a_preauth_failure() {
+    isolate_host_krb5();
+    let (port, asked) = kdc_answering(err::C_PRINCIPAL_UNKNOWN);
+    let mut reads = 0;
+    let e = prompted_as(port, &mut || {
+        reads += 1;
+        Err(krb5_protocol::Error::File(std::io::Error::other(
+            "Cannot read password",
+        )))
+    });
+    assert!(
+        matches!(
+            e,
+            krb5_protocol::Error::KrbError {
+                code: err::C_PRINCIPAL_UNKNOWN,
+                ..
+            }
+        ),
+        "{e}"
+    );
+    assert_eq!((reads, *asked.lock().unwrap()), (0, 1));
+    let (port, _) = kdc_answering(err::PREAUTH_REQUIRED);
+    let e = prompted_as(port, &mut || {
+        Err(krb5_protocol::Error::File(std::io::Error::other(
+            "Cannot read password",
+        )))
+    });
+    assert!(matches!(e, krb5_protocol::Error::PreauthFailed(_)), "{e}");
+    let e = prompted_as(port, &mut || {
+        Err(krb5_protocol::Error::File(std::io::Error::new(
+            std::io::ErrorKind::Interrupted,
+            "Password read interrupted",
+        )))
+    });
+    assert!(matches!(e, krb5_protocol::Error::File(_)), "{e}");
 }

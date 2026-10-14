@@ -6,7 +6,8 @@
 #        scripts/red-at-sha.sh --print-build <base-sha> <command...>
 # --no-overlay keeps the base tree's scripts/ and harness/ (a red for the tooling itself).
 # A gate command gets the base SHA's bins: its own scripts/lib/build-bins.sh when that file exists
-# at the base, else the five bins the older gates need. --print-build prints that choice and stops.
+# at the base (it carries the base's own cargo features), else the five bins the older gates need,
+# with the test-hooks features when the base defines them. --print-build prints that choice and stops.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -83,6 +84,7 @@ KERBER_PROV_MEMO="$(mktemp "$KERBER_SCRATCH/prov-memo.XXXXXX")"
 export KERBER_PROV_MEMO
 trap 'rm -f "$KERBER_PROV_MEMO"' EXIT
 . "$ROOT/scripts/lib/provenance.sh"
+. "$ROOT/scripts/lib/test-hooks.sh"
 
 BASE="$(git rev-parse --verify "$1^{commit}")"
 shift
@@ -96,6 +98,10 @@ for b in krb5-kdc krb5-kadmind krb5-kpasswd krb5-kinit krb5-forge-tgt; do
     crate="${path#crates/}"
     FIVE_BINS+=(-p "${crate%%/*}" --bin "$b")
 done
+BASE_FEATURES="$(test_hooks_features "$BASE" "${INJECT[@]}")"
+if [ -n "$BASE_FEATURES" ]; then
+    FIVE_BINS+=(--features "$BASE_FEATURES")
+fi
 if git cat-file -e "$BASE:scripts/lib/build-bins.sh" 2>/dev/null; then
     BUILD_HOW="scripts/lib/build-bins.sh at ${BASE:0:12}"
 else
@@ -105,6 +111,7 @@ if [ "$PRINT_BUILD" = 1 ]; then
     echo "==== red-at-sha build ===="
     echo "base_sha=$BASE"
     echo "build=$BUILD_HOW"
+    echo "test_hooks_features=${BASE_FEATURES:-none}"
     exit 0
 fi
 WT="$KERBER_SCRATCH/red-at-${BASE:0:12}"

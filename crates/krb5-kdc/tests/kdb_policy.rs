@@ -98,7 +98,7 @@ fn dict_file_words_are_rejected_case_insensitively_only_with_a_policy() {
         ..Default::default()
     };
     let (mut store, _acl) = bootstrap_documented().unwrap();
-    store.apply_kdc_conf(&conf).unwrap();
+    store.init_pwqual(Some(&conf)).unwrap();
     store.put_policy(NamedPolicy::new("pq"));
     let u = name("dictu");
     assert_eq!(
@@ -125,10 +125,10 @@ fn dict_file_words_are_rejected_case_insensitively_only_with_a_policy() {
         rejected(store.check_new_password(&u, Some("long"), b"correcthorse")),
         "min_length 20"
     );
-    // ENOENT: no dictionary, and apply_kdc_conf still succeeds.
+    // ENOENT: no dictionary, and init_pwqual still succeeds.
     conf.dict_file = Some(dir.join("missing.txt"));
     let mut store2: PrincipalStore = bootstrap_documented().unwrap().0;
-    store2.apply_kdc_conf(&conf).unwrap();
+    store2.init_pwqual(Some(&conf)).unwrap();
     store2.put_policy(NamedPolicy::new("pq"));
     store2
         .check_new_password(&u, Some("pq"), b"correcthorse")

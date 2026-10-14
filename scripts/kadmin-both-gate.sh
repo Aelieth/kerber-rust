@@ -28,6 +28,8 @@ if ! docker inspect "$NAME" >/dev/null 2>&1 || ! docker inspect "$NAME_MIT" >/de
     die "kadmin-both-gate needs rust+mit containers (run rust then mit with KERBER_KADMIN_KEEP=1)"
 fi
 register_cleanup "docker rm -f '$NAME' '$NAME_MIT' >/dev/null 2>&1 || true"
+mit_oracle_brand "$NAME" /tmp/kadm5-changepw-rpc
+mit_oracle_brand "$NAME_MIT" /tmp/kadm5-changepw-rpc
 echo "==== kadm5 modify reserved TL type and nonzero failcount both kadminds ===="
 kadm5_modify_validate() {
     local ctn=$1 client=$2 conf=$3 princ=$4

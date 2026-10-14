@@ -13,6 +13,7 @@ use crate::cts::{self, BLOCK};
 use crate::error::Error;
 use crate::etype::EncryptionType;
 use crate::nfold::nfold;
+use crate::wipe::wipe;
 
 /// Output length in bits for RFC 8009 KDF-HMAC-SHA2 (`L`).
 pub(crate) fn bits_u32(nbytes: usize) -> u32 {
@@ -59,8 +60,8 @@ pub(crate) fn kdf_hmac_sha2(
 
     let mut mac = hmac_digest(etype, key, &msg)?;
     if mac.len() > k_len {
-        let mut tail = mac.split_off(k_len);
-        tail.zeroize();
+        mac[k_len..].zeroize();
+        mac.truncate(k_len);
     }
     Ok(mac)
 }
@@ -103,8 +104,8 @@ pub(crate) fn hmac_truncated(
     let mut mac = hmac_digest(etype, key, data)?;
     let n = etype.hmac_output_len();
     if mac.len() > n {
-        let mut tail = mac.split_off(n);
-        tail.zeroize();
+        mac[n..].zeroize();
+        mac.truncate(n);
     }
     Ok(mac)
 }
@@ -116,7 +117,8 @@ pub(crate) fn mac_verify(got: &[u8], expected: &[u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// Three keys derived for one usage: Kc, Ke, Ki.
+/// Three keys derived for one usage: Kc, Ke, Ki. Each key's own allocation is wiped, whole, on
+/// drop.
 pub struct DerivedKeys {
     /// Checksum key.
     pub kc: Vec<u8>,
@@ -130,9 +132,9 @@ pub(crate) type UsageKeys = DerivedKeys;
 
 impl Drop for DerivedKeys {
     fn drop(&mut self) {
-        self.kc.zeroize();
-        self.ke.zeroize();
-        self.ki.zeroize();
+        wipe(&mut self.kc);
+        wipe(&mut self.ke);
+        wipe(&mut self.ki);
     }
 }
 

@@ -1,0 +1,10 @@
+# harness/field/scenarios/upgrade.expect: where upgrade.sh's rust leg is known to differ from MIT's, by check name
+# (the INFO observations of checks.tsv). The comparison of the two legs grades a listed check KNOWN; anything else
+# that differs is a finding. Each line names the hand record that shows the difference (in the archive of field
+# records) and what would remove it.
+# check	known difference (rust leg vs MIT)	record	removed by
+obs.kadmin.aprep	kadmind's AP-REP: subkey (null), seqnum 0; MIT's carries an acceptor subkey and a random seqnum	f-UP1 README, MIT facts (kadmin AP-REP row); docs/parity/b1-gss.md	open item "kadmind's GSS acceptor AP-REP" (P15 family)
+obs.kpasswd.aprep	kpasswd's AP-REP: subkey (null), seqnum 1; MIT's carries an acceptor subkey and a random seqnum	f-UP1 README, MIT facts (kpasswd AP-REP row)	the AP-REP family (P15)
+obs.log.loaded	no "(info): Loaded" line, nor MIT's pkinit-init (Error) line, at start	f-UP1 README, MIT facts; f-L2-rust F4	P15
+obs.rss.start	daemon RSS at start: krb5kdc about 27 MiB where MIT's is about 5 MiB; it grows with use (recorded, not graded)	f-UP1 README, observation O1	P16 (investigation)
+obs.rss.end	as obs.rss.start, after the scenario's client traffic	f-UP1 README, observation O1	P16 (investigation)

@@ -15,7 +15,7 @@
 mod common;
 use common::*;
 
-use krb5_admin::{Kadm5RpcError, Kadm5RpcSession, kadm5_handle_rpc, serve_kadm5_conn};
+use krb5_admin::{Kadm5RpcSession, kadm5_handle_rpc, serve_kadm5_conn};
 use krb5_gss::GssContext;
 use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
@@ -53,15 +53,9 @@ fn rpcsec_data_without_context_is_credproblem() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
-        let _ = serve_kadm5_conn(
-            store,
-            acl,
-            Vec::new(),
-            "KERBER.TEST".into(),
-            ReplayCache::new(),
-            s,
-        );
+        let _ = serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s);
     });
     let mut cred = Vec::new();
     push_u32(&mut cred, RPCSEC_GSS_VERS);
@@ -109,15 +103,9 @@ fn rpcsec_bad_version_is_auth_badcred() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
-        let _ = serve_kadm5_conn(
-            store,
-            acl,
-            Vec::new(),
-            "KERBER.TEST".into(),
-            ReplayCache::new(),
-            s,
-        );
+        let _ = serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s);
     });
     let mut cred = Vec::new();
     push_u32(&mut cred, 99);
@@ -190,14 +178,13 @@ fn rpcsec_integrity_request_is_databody_plus_mic() {
         krb5_admin::RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut i = 0;
@@ -217,14 +204,13 @@ fn rpcsec_integrity_reply_is_databody_plus_mic() {
         krb5_admin::RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut i = 0;
@@ -265,14 +251,13 @@ fn rpcsec_none_service_body_is_plain() {
         krb5_admin::RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut i = 0;
@@ -295,14 +280,13 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
         krb5_admin::RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut i = 0;
@@ -322,14 +306,13 @@ fn rpcsec_wrong_handle_with_valid_mic_dispatches() {
         krb5_admin::RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
         &rec,
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     let mut i = 0;
@@ -358,15 +341,9 @@ fn unknown_program_auth_none_is_prog_unavail() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
-        let _ = serve_kadm5_conn(
-            store,
-            acl,
-            Vec::new(),
-            "KERBER.TEST".into(),
-            ReplayCache::new(),
-            s,
-        );
+        let _ = serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s);
     });
     let mut c = TcpStream::connect(addr).unwrap();
     c.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
@@ -406,15 +383,9 @@ fn auth_gssapi_on_iprop_init_is_success() {
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
-        let _ = serve_kadm5_conn(
-            store,
-            acl,
-            Vec::new(),
-            "KERBER.TEST".into(),
-            ReplayCache::new(),
-            s,
-        );
+        let _ = serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s);
     });
     let mut cred = Vec::new();
     push_u32(&mut cred, AUTH_GSSAPI_CREDS_VERS);
@@ -484,14 +455,13 @@ fn reply_words(version: u32) -> Vec<u32> {
         krb5_admin::RpcCtx {
             store: &store,
             acl: &acl,
-            service_keys: &[],
             expected_realm: TEST_REALM,
         },
         b"hdl",
         &mut sess,
         &ReplayCache::new(),
         &init_call(77, version),
-        "127.0.0.1",
+        &peer(),
     )
     .unwrap();
     out.as_chunks::<4>()
@@ -537,35 +507,45 @@ fn init_arg_version_5_is_auth_badcred() {
     );
 }
 
+/// A call that does not decode gets no reply, and the connection answers the next call, as MIT's
+/// does; the server returns once the client is gone.
 #[test]
-fn unhandled_rpc_reaches_the_server_as_a_kadm5_rpc_error() {
+fn an_unhandled_rpc_is_not_answered_and_the_connection_goes_on() {
     let (store, acl) = bootstrap_documented().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let store = shared_dump(store);
     let server = thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (s, _) = listener.accept().unwrap();
-        serve_kadm5_conn(
-            store,
-            acl,
-            Vec::new(),
-            "KERBER.TEST".into(),
-            ReplayCache::new(),
-            s,
-        )
+        serve_kadm5_conn(store, acl, "KERBER.TEST".into(), ReplayCache::new(), s)
     });
     let mut c = TcpStream::connect(addr).unwrap();
+    c.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
     // One record holding a single zero byte: the call does not decode.
     c.write_all(&(LAST_FRAG | 1).to_be_bytes()).unwrap();
     c.write_all(&[0]).unwrap();
-    let err = server
-        .join()
-        .unwrap()
-        .expect_err("an RPC that does not decode ends the connection");
-    assert_eq!(err.kind(), std::io::ErrorKind::Other);
-    let rpc = err
-        .get_ref()
-        .and_then(|e| e.downcast_ref::<Kadm5RpcError>())
-        .expect("the handling error carries a Kadm5RpcError");
-    assert_eq!(rpc.to_string(), "rpc garbage args");
+    // Then an AUTH_NONE call to procedure 99: AUTH_TOOWEAK.
+    let call: Vec<u8> = [9u32, MSG_CALL, 2, KADM_PROG, KADM_VERS, 99, 0, 0, 0, 0]
+        .iter()
+        .flat_map(|w| w.to_be_bytes())
+        .collect();
+    c.write_all(&(LAST_FRAG | u32::try_from(call.len()).unwrap()).to_be_bytes())
+        .unwrap();
+    c.write_all(&call).unwrap();
+    let mut mark = [0u8; 4];
+    c.read_exact(&mut mark).unwrap();
+    let mut reply = vec![0u8; usize::try_from(u32::from_be_bytes(mark) & !LAST_FRAG).unwrap()];
+    c.read_exact(&mut reply).unwrap();
+    let words: Vec<u32> = reply
+        .chunks(4)
+        .map(|w| u32::from_be_bytes(w.try_into().unwrap()))
+        .collect();
+    assert_eq!(
+        words,
+        [9, MSG_REPLY, MSG_DENIED, REJECT_AUTH_ERROR, 5],
+        "the first reply is the second call's: AUTH_TOOWEAK"
+    );
+    drop(c);
+    server.join().unwrap().expect("the client left");
 }

@@ -12,6 +12,7 @@ HOST_SMOKE="host/testhost.${DNS_DOMAIN}"
 HOST_APP="host/app.${DNS_DOMAIN}"
 HOST_REPLICA="host/kdc2.${DNS_DOMAIN}"
 REPLICA_FQDN="kdc2.${DNS_DOMAIN}"
+HOST_PRIMARY="host/kdc1.${DNS_DOMAIN}"
 CONF=/tmp/prod-krb5.conf
 
 prod_ip_of() {
@@ -52,6 +53,17 @@ prod_loadgen() {
         "$CLIENT" /usr/local/bin/loadgen "$kdc_ip" "user@$REALM" "$HOST_SMOKE" "$@"
 }
 
+# prod_loadgen_failed LOG WHY: print loadgen's log, keep the primary KDC's log as
+# $OUT/kdc-at-failure.log and print its last non-ok lines, then die WHY.
+prod_loadgen_failed() {
+    echo "==== loadgen log ($1) ===="
+    sed 's/^/    /' "$1" 2>/dev/null || true
+    docker cp "$PRIMARY":/tmp/kdc.log "$OUT/kdc-at-failure.log" >/dev/null 2>&1 || true
+    echo "==== primary KDC log, last non-ok lines ($OUT/kdc-at-failure.log) ===="
+    grep -v '"outcome":"ok"' "$OUT/kdc-at-failure.log" 2>/dev/null | tail -40 | sed 's/^/    /' || true
+    die "$2"
+}
+
 prod_mit_sample() {
     local tag="$1"
     prod_client kdestroy -A >/dev/null 2>&1 || true
@@ -74,30 +86,47 @@ prod_kprop_replica() {
         -q "addprinc -randkey $HOST_REPLICA"
     kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$CONF" "$CLIENT" -- -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
         -q "ktadd -k /tmp/kdc2.keytab $HOST_REPLICA"
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$CONF" "$CLIENT" -- -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
+        -q "addprinc -randkey $HOST_PRIMARY"
+    kadmin_q_ok mit_kadmin -e KRB5_CONFIG="$CONF" "$CLIENT" -- -p "admin@$REALM" -w "$KERBER_PROD_ADMIN_PW" \
+        -q "ktadd -k /tmp/kdc1.keytab $HOST_PRIMARY"
     docker cp "$CLIENT":/tmp/kdc2.keytab "$OUT/kdc2.keytab" || return 1
-    docker cp "$OUT/kdc2.keytab" "$PRIMARY":/tmp/kdc2.keytab || return 1
+    docker cp "$CLIENT":/tmp/kdc1.keytab "$OUT/kdc1.keytab" || return 1
     docker cp "$OUT/kdc2.keytab" "$REPLICA":/tmp/kdc2.keytab || return 1
+    docker cp "$OUT/kdc1.keytab" "$PRIMARY":/tmp/kdc1.keytab || return 1
     docker exec "$REPLICA" mkdir -p /tmp/pdus || return 1
 
-    docker exec "$REPLICA" sh -c "printf '%s@%s\\n' '$HOST_REPLICA' '$REALM' >/tmp/kpropd.acl"
+    # MIT's layout: the replica's kpropd.acl names the primary's host principal, kprop's client.
+    docker exec "$REPLICA" sh -c "printf '%s@%s\\n' '$HOST_PRIMARY' '$REALM' >/tmp/kpropd.acl"
     docker exec -d \
         -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
-        -e KRB5_KPROP_KEYTAB=/tmp/kdc2.keytab \
-        -e KRB5_KPROP_ACL=/tmp/kpropd.acl \
         -e KRB5_KDC_DB=/tmp/replica.db \
         -e KRB5_KDC_STASH=/tmp/replica.stash \
-        -e KRB5_KDC_REALM="$REALM" \
         -e RUST_LOG=info \
-        "$REPLICA" sh -c '/usr/local/bin/krb5-kpropd 0.0.0.0:754 >/tmp/kpropd.log 2>&1'
+        "$REPLICA" sh -c "/usr/local/bin/krb5-kpropd -r '$REALM' -s /tmp/kdc2.keytab -a /tmp/kpropd.acl 0.0.0.0:754 >/tmp/kpropd.log 2>&1"
     prod_wait_log "$REPLICA" /tmp/kpropd.log '^listening' 40 || return 1
 
+    # MIT's replication: kdb5_util dump on the primary, then kprop -f of that file, kprop's
+    # ticket from the primary KDC as host/<primary> with its key from kdc1.keytab.
+    docker exec "$PRIMARY" sh -c "cat >/tmp/kprop-krb5.conf <<EOF
+[libdefaults]
+    default_realm = $REALM
+    dns_lookup_kdc = false
+    dns_lookup_realm = false
+    rdns = false
+[realms]
+    $REALM = {
+        kdc = $(prod_ip_of "$PRIMARY")
+    }
+EOF" || return 1
     docker exec \
         -e KRB5_KDC_DB=/tmp/prod.db \
         -e KRB5_KDC_STASH=/tmp/prod.stash \
         -e KRB5_MASTER_PASSWORD="$KERBER_PROD_MASTER_PW" \
-        -e KRB5_KPROP_KEYTAB=/tmp/kdc2.keytab \
-        "$PRIMARY" /usr/local/bin/krb5-kprop -P 754 -s /tmp/kdc2.keytab -n "$REPLICA_FQDN" "$REPLICA_FQDN" \
-        | tee "$OUT/kprop.log" | grep -q 'kprop ok' || return 1
+        "$PRIMARY" /usr/local/bin/krb5-kdb -r "$REALM" dump /tmp/prod.dump || return 1
+    docker exec -e KRB5_CONFIG=/tmp/kprop-krb5.conf \
+        "$PRIMARY" /usr/local/bin/krb5-kprop -f /tmp/prod.dump -P 754 -s /tmp/kdc1.keytab "$REPLICA_FQDN" \
+        | tee "$OUT/kprop.log" | grep -qx "Database propagation to $REPLICA_FQDN: SUCCEEDED" || return 1
 
     refuse_golden_capture_dir /tmp/pdus
     docker exec -d \

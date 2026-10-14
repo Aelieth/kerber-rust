@@ -7,12 +7,14 @@
 //! refused peer just sees the socket close.
 //! Live oracle: MIT kpropd in `scripts/prop-acl-gate.sh` (`acl-*` cells).
 
-use krb5_admin::{Error, KpropAuth, kprop_send_dump, kprop_sendauth, kpropd_recvauth};
+use krb5_admin::{
+    Error, KpropAuth, KpropCreds, KpropError, kprop_send_dump, kprop_sendauth, kpropd_recvauth,
+};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::{TEST_HOST, TEST_REALM, bootstrap_documented, documented_host};
 use krb5_kdc::{PrincipalStore, issue_as, issue_tgs};
 
-use krb5_protocol::{ReplayCache, as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{ReplayCache, as_req, local_host_address, pa_enc_timestamp, tgs_req};
 use krb5_types::Ticket;
 use std::net::{TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
@@ -64,6 +66,7 @@ fn spawn_kpropd(
     let addr = listener.local_addr().unwrap();
     let server = documented_host();
     let join = thread::spawn(move || {
+        krb5_config::isolate_test_krb5();
         let (mut stream, _) = listener.accept().unwrap();
         kpropd_recvauth(
             &mut stream,
@@ -71,31 +74,40 @@ fn spawn_kpropd(
             Some(&server),
             Some(TEST_REALM),
             acl.as_deref(),
-            ReplayCache::new(),
+            &ReplayCache::new(),
         )
     });
     (addr, join)
 }
 
-fn kprop_against(acl: Option<Vec<String>>) -> (Result<KpropAuth, Error>, Result<KpropAuth, Error>) {
+/// kprop's credentials for the documented host's ticket to itself.
+fn creds(ticket: Ticket, session: ProtocolKey) -> KpropCreds {
+    KpropCreds {
+        ticket,
+        session,
+        client: documented_host(),
+        crealm: krb5_types::ascii(TEST_REALM),
+        time_offset: 0,
+    }
+}
+
+fn kprop_against(
+    acl: Option<Vec<String>>,
+) -> (Result<KpropAuth, Error>, Result<KpropAuth, KpropError>) {
     let (store, _) = bootstrap_documented().unwrap();
     let (ticket, session, _) = host_ticket(&store);
     let (addr, join) = spawn_kpropd(&store, acl);
     let mut client = TcpStream::connect(addr).unwrap();
-    let cname = documented_host();
     let client_auth = kprop_sendauth(
         &mut client,
-        ticket,
-        &session,
-        &krb5_types::ascii(TEST_REALM),
-        &cname,
-        7,
+        &creds(ticket, session),
+        local_host_address(None),
     );
     let server_auth = join.join().expect("kpropd thread");
     (server_auth, client_auth)
 }
 
-fn shown(r: &Result<KpropAuth, Error>) -> Result<(), String> {
+fn shown<E: std::fmt::Display>(r: &Result<KpropAuth, E>) -> Result<(), String> {
     r.as_ref().map(|_| ()).map_err(ToString::to_string)
 }
 
@@ -228,11 +240,8 @@ fn kpropd_refuses_after_the_ap_rep_so_kprop_fails_on_the_dump_not_sendauth() {
     let mut client = TcpStream::connect(addr).unwrap();
     let mut auth = kprop_sendauth(
         &mut client,
-        ticket,
-        &session,
-        &krb5_types::ascii(TEST_REALM),
-        &documented_host(),
-        7,
+        &creds(ticket, session),
+        local_host_address(None),
     )
     .expect("sendauth (AP-REP) succeeds before the ACL check, like MIT");
     let server = join.join().expect("kpropd thread");

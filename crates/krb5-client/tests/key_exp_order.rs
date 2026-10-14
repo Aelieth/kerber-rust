@@ -8,6 +8,8 @@
 //! getting initial credentials".
 //! Drives the shipped `krb5-kinit` against an in-process KDC: no new-password prompt comes
 //! before the changepw AS, and the KDC error is matched by its code, not its text.
+//! The password prompt itself comes only once a KDC reply needs the key, so an unknown client is
+//! reported unprompted, and `-S` asks the AS for that service.
 
 use std::io::{Read, Write};
 use std::process::{Command, Stdio};
@@ -85,25 +87,46 @@ fn expired_user_store() -> PrincipalStore {
     store
 }
 
-/// Run `krb5-kinit KDC user@KERBER.TEST` with `password` from the
-/// environment and `stdin` on hand for any new-password prompt; returns
-/// (exit code, stdout + stderr — prompts and banners go to stdout like
+/// Run `krb5-kinit -c cc user@KERBER.TEST` with the realm's KDC at `kdc` in its krb5.conf,
+/// `password` on the first line of stdin and `stdin` after it for any new-password prompt;
+/// returns (exit code, stdout + stderr — prompts and banners go to stdout like
 /// `krb5_prompter_posix`, errors to stderr).
 fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
+    kinit_as(kdc, &format!("{TEST_USER}@{TEST_REALM}"), password, stdin)
+}
+
+/// [`kinit`] for `principal`.
+fn kinit_as(kdc: &str, principal: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
+    let (code, out, _) = kinit_full(kdc, &[], principal, password, stdin);
+    (code, out)
+}
+
+/// [`kinit_as`] with `extra` options before the principal; also returns the cache it wrote.
+fn kinit_full(
+    kdc: &str,
+    extra: &[&str],
+    principal: &str,
+    password: &str,
+    stdin: &str,
+) -> (Option<i32>, String, Option<krb5_protocol::FileCcache>) {
     let dir = scratch_dir("z1b-kinit");
     let conf = dir.join("krb5.conf");
     std::fs::write(
         &conf,
-        "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    dns_lookup_realm = false\n",
+        format!(
+            "[libdefaults]\n    default_realm = KERBER.TEST\n    dns_lookup_kdc = false\n    \
+             dns_lookup_realm = false\n[realms]\n    KERBER.TEST = {{\n        kdc = {kdc}\n    }}\n"
+        ),
     )
     .unwrap();
     let cc = dir.join("cc");
     let mut child = Command::new(env!("CARGO_BIN_EXE_krb5-kinit"))
-        .args([kdc, &format!("{TEST_USER}@{TEST_REALM}")])
         .arg("-c")
         .arg(&cc)
+        .args(extra)
+        .arg(principal)
         .env("KRB5_CONFIG", &conf)
-        .env("KRB5_PASSWORD", password)
+        .env_remove("KRB5_PASSWORD")
         .env_remove("KRB5_NEW_PASSWORD")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -114,14 +137,17 @@ fn kinit(kdc: &str, password: &str, stdin: &str) -> (Option<i32>, String) {
         .stdin
         .take()
         .unwrap()
-        .write_all(stdin.as_bytes())
+        .write_all(format!("{password}\n{stdin}").as_bytes())
         .unwrap();
     let out = child.wait_with_output().unwrap();
+    let cache = std::fs::read(&cc)
+        .ok()
+        .and_then(|b| krb5_protocol::FileCcache::parse(&b).ok());
     let _ = std::fs::remove_dir_all(&dir);
     let mut err = String::from_utf8_lossy(&out.stdout).into_owned();
     err.push_str(&String::from_utf8_lossy(&out.stderr));
     eprintln!("krb5-kinit rc={:?} output:\n{err}", out.status.code());
-    (out.status.code(), err)
+    (out.status.code(), err, cache)
 }
 
 #[test]
@@ -153,7 +179,9 @@ fn changepw_as_failure_is_reported_before_any_prompt() {
         "prompted before the changepw AS: {err}"
     );
     assert!(
-        err.contains("KRB-ERROR 7"),
+        err.contains(
+            "kinit: Server not found in Kerberos database while getting initial credentials"
+        ),
         "changepw AS error missing: {err}"
     );
 }
@@ -197,4 +225,66 @@ fn wrong_password_without_preauth_is_bad_integrity_password_incorrect() {
             .any(|l| l.starts_with("kinit:") && l.contains("integrity check failed")),
         "raw crypto text leaked to the user: {err}"
     );
+}
+
+/// Live MIT 1.22.2 `kinit nosuch`: the KDC's error to the first
+/// AS-REQ, and no password prompt.
+/// MIT `encts_process` (`preauth_encts.c:75-75`): the password is read only to answer the KDC's
+/// preauth hint.
+#[test]
+fn unknown_client_is_reported_without_a_password_prompt() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let kdc = serve(store);
+    let (code, out) = kinit_as(&kdc, &format!("nosuch@{TEST_REALM}"), "x", "");
+    assert_eq!(code, Some(1), "output: {out}");
+    assert!(
+        !out.contains("Password for"),
+        "prompted for an unknown client: {out}"
+    );
+    assert!(
+        out.contains(
+            "kinit: Client 'nosuch@KERBER.TEST' not found in Kerberos database while getting \
+             initial credentials"
+        ),
+        "output: {out}"
+    );
+}
+
+#[test]
+fn the_password_is_read_once_when_preauth_needs_it() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let kdc = serve(store);
+    let (code, out) = kinit(&kdc, "userpassword", "");
+    assert_eq!(code, Some(0), "output: {out}");
+    let prompt = format!("Password for {TEST_USER}@{TEST_REALM}: ");
+    assert_eq!(out.matches(&prompt).count(), 1, "output: {out}");
+}
+
+/// Live MIT 1.22.2 `kinit -S host/…@OTHER.TEST alice`: one AS-REQ for that service in the client's
+/// realm, and the cache holds that ticket alone. (A `test-hooks` build keeps the gates' `-S`, a
+/// TGS-REQ after the TGT.)
+/// MIT `build_in_tkt_name` (`get_in_tkt.c:473-512`): the service's own realm is not used.
+#[cfg(not(feature = "test-hooks"))]
+#[test]
+fn dash_s_asks_the_as_for_that_service() {
+    let (store, _) = bootstrap_documented().unwrap();
+    let kdc = serve(store);
+    let (code, out, cache) = kinit_full(
+        &kdc,
+        &["-S", "host/testhost.kerber.test@OTHER.TEST"],
+        &format!("{TEST_USER}@{TEST_REALM}"),
+        "userpassword",
+        "",
+    );
+    assert_eq!(code, Some(0), "output: {out}");
+    let cache = cache.expect("kinit -S wrote no cache");
+    let servers: Vec<String> = cache
+        .list()
+        .iter()
+        .map(|c| {
+            let realm = String::from_utf8_lossy(c.server.0.as_bytes()).into_owned();
+            c.server.1.unparse_with_realm(&realm)
+        })
+        .collect();
+    assert_eq!(servers, ["host/testhost.kerber.test@KERBER.TEST"]);
 }

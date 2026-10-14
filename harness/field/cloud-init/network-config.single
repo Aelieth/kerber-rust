@@ -1,0 +1,8 @@
+# cloud-init network config (v2) for a VM with one NIC on kerber-lab.
+# lab.sh fills in @LAB_MAC@. libvirt's DHCP hands out the static address.
+version: 2
+ethernets:
+  lab:
+    match:
+      macaddress: "@LAB_MAC@"
+    dhcp4: true

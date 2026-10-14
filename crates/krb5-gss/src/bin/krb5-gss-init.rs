@@ -2,6 +2,9 @@
 //!
 //! Speaks the MIT `gss-sample` TCP framing: 4-byte length prefix then token.
 //! Usage: `krb5-gss-init --ccache PATH --host HOST --ip IP --port PORT [--deleg]`
+//!
+//! The gss gate's test tool, built only with the `test-hooks` feature: a release build has none.
+//! `KRB5_KDC` names the KDC a `--deleg` run asks for the forwarded ticket (default `127.0.0.1`).
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -118,6 +121,7 @@ fn main() {
             fast_avail: false,
             used_fast: false,
             pa_type: None,
+            pa_config: None,
         };
         let kdc = std::env::var("KRB5_KDC")
             .ok()

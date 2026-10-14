@@ -3,6 +3,9 @@
 //! The tests drive the shipped `issue_as` / `issue_tgs` / `PrincipalStore` entry points of a
 //! bootstrapped realm.
 
+#[path = "common/mod.rs"]
+mod common;
+
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, checksum, decrypt, dh_generate, dh_shared,
@@ -112,10 +115,8 @@ fn empty_150_hint_carries_populated_token() {
     assert!(i150 < i133, "150 before cookie, types={types:?}");
 }
 
-#[test]
-fn stale_freshness_token_is_preauth_failed() {
-    let (mut store, _) = bootstrap_documented().expect("bootstrap");
-    store.enable_pkinit_ca().expect("PKINIT CA");
+/// A signed PKINIT request carrying a freshness token ten minutes past its time.
+fn stale_freshness_req(store: &krb5_kdc::PrincipalStore) -> krb5_types::AsReq {
     let ca = store.pkinit_ca().expect("CA").clone();
     let (cert, key) = ca
         .client_identity_for("user@KERBER.TEST")
@@ -147,11 +148,39 @@ fn stale_freshness_token_is_preauth_failed() {
             padata_value: Vec::<u8>::new().into(),
         },
     ]);
+    req
+}
+
+#[test]
+fn stale_freshness_token_is_preauth_failed() {
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let req = stale_freshness_req(&store);
     let (code, _) = match krb5_kdc::issue_as(&store, &req).unwrap_err() {
         Error::Protocol { code, text, .. } => (code, text),
         other => panic!("want Protocol 24, got {other:?}"),
     };
     assert_eq!(code, err::PREAUTH_FAILED);
+}
+
+#[test]
+fn stale_freshness_token_logs_preauth_expired_and_the_as_req_line_says_24() {
+    // MIT `check_freshness_token` (`kdc/kdc_preauth.c:564-564`): a token the checks refuse, its age among them, is `KRB5KDC_ERR_PREAUTH_EXPIRED`.
+    // MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's message is the verify line's.
+    // MIT `filter_preauth_error` (`kdc/kdc_preauth.c:1092-1133`): 90 is off the pass-through list, so the `AS_REQ` line reads like a 24.
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let raw = encode(&stale_freshness_req(&store)).expect("AS-REQ");
+    let (reply, log) = common::kdc_log(|| krb5_kdc::handle_request(&store, &raw));
+    let e = decode::<krb5_types::KrbError>(&reply.expect("a KRB-ERROR reply")).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::PREAUTH_FAILED);
+    assert_eq!(
+        common::failure_trace(&log),
+        [
+            "preauth (pkinit) verify failure: Preauthentication expired",
+            "AS_REQ PREAUTH_FAILED, Preauthentication failed",
+        ]
+    );
 }
 
 fn wellknown_anonymous() -> PrincipalName {
@@ -820,8 +849,9 @@ fn pkinit_two_authpacks_same_second_both_issue() {
     krb5_kdc::issue_as(&store, &req2).expect("second AuthPack same second");
 }
 
+/// MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:528-532`): no replay cache, so a replayed AuthPack inside the skew verifies again and issues a new ticket.
 #[test]
-fn pkinit_replayed_authpack_is_refused() {
+fn pkinit_replayed_authpack_is_issued_again() {
     let (mut store, _) = bootstrap_documented().expect("bootstrap");
     store.enable_pkinit_ca().expect("PKINIT CA");
     let ca = store.pkinit_ca().expect("CA").clone();
@@ -830,12 +860,13 @@ fn pkinit_replayed_authpack_is_refused() {
     let req = pkinit_as_req(cname, 440, |ck| {
         pa_pk_as_req(&kp.public, &ca, Some(ck)).expect("PA-PK-AS-REQ")
     });
-    krb5_kdc::issue_as(&store, &req).expect("first PKINIT");
-    let err = krb5_kdc::issue_as(&store, &req).expect_err("replay");
-    match err {
-        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
-        other => panic!("expected PREAUTH_FAILED, got {other}"),
-    }
+    let first = krb5_kdc::issue_as(&store, &req).expect("first PKINIT");
+    let again = krb5_kdc::issue_as(&store, &req).expect("the replay issues again");
+    assert_ne!(
+        first.session_key.as_bytes(),
+        again.session_key.as_bytes(),
+        "the replay is processed again, not answered from a cache"
+    );
 }
 
 #[test]
@@ -961,4 +992,69 @@ fn pkinit_enterprise_san_binds_issued_cname() {
             .expect("issued san")
     });
     krb5_kdc::issue_as(&store, &req_ok).expect("SAN matches issued cname");
+}
+
+#[test]
+fn pkinit_padata_that_does_not_decode_logs_the_decoders_text() {
+    // MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:479-483`): a PA-PK-AS-REQ the decoder refuses fails the module with the decoder's code.
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    for (n, (der, message)) in [
+        (vec![0xff, 0xff], "ASN.1 encoding ended unexpectedly"),
+        (
+            vec![0x30, 0x00],
+            "ASN.1 structure is missing a required field",
+        ),
+        (
+            vec![0x04, 0x00],
+            "ASN.1 identifier doesn't match expected value",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut req = as_req(user(), TEST_REALM, 0x4b40 + u32::try_from(n).unwrap(), None).unwrap();
+        req.0.padata = Some(vec![PaData {
+            padata_type: pa::PK_AS_REQ,
+            padata_value: der.clone().into(),
+        }]);
+        let raw = encode(&req).expect("AS-REQ");
+        let (reply, log) = common::kdc_log(|| krb5_kdc::handle_request(&store, &raw));
+        let e =
+            decode::<krb5_types::KrbError>(&reply.expect("a KRB-ERROR reply")).expect("KRB-ERROR");
+        assert_eq!(e.error_code, err::PREAUTH_FAILED, "{der:02x?}");
+        assert_eq!(
+            common::failure_trace(&log),
+            [
+                format!("preauth (pkinit) verify failure: {message}"),
+                "AS_REQ PREAUTH_FAILED, Preauthentication failed".to_owned(),
+            ],
+            "{der:02x?}"
+        );
+    }
+}
+
+#[test]
+fn unsigned_pkinit_for_a_client_that_is_not_anonymous_logs_its_message() {
+    // MIT `pkinit_server_verify_padata` (`plugins/preauth/pkinit/pkinit_srv.c:508-516`): an unsigned request from a client that is not anonymous is refused with this message.
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.enable_pkinit_ca().expect("PKINIT CA");
+    let kp = p256_generate().expect("ecdh");
+    let mut req = as_req(user(), TEST_REALM, 0x4b50, None).unwrap();
+    let body = encode(&req.0.req_body).expect("body");
+    let ck = kdc_req_body_checksum(&body);
+    req.0.padata = Some(vec![
+        pa_pk_as_req_unsigned(&kp.public, 0x4b50, &ck, None).expect("unsigned"),
+    ]);
+    let raw = encode(&req).expect("AS-REQ");
+    let (reply, log) = common::kdc_log(|| krb5_kdc::handle_request(&store, &raw));
+    let e = decode::<krb5_types::KrbError>(&reply.expect("a KRB-ERROR reply")).expect("KRB-ERROR");
+    assert_eq!(e.error_code, err::PREAUTH_FAILED);
+    assert_eq!(
+        common::failure_trace(&log),
+        [
+            "preauth (pkinit) verify failure: Pkinit request not signed, but client not anonymous.",
+            "AS_REQ PREAUTH_FAILED, Pkinit request not signed, but client not anonymous.",
+        ]
+    );
 }

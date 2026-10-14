@@ -9,8 +9,10 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+bytes.workspace = true
 chrono.workspace = true
 krb5-asn1.workspace = true
+krb5-cli.workspace = true
 krb5-config.workspace = true
 getrandom.workspace = true
 krb5-crypto.workspace = true
@@ -19,6 +21,7 @@ krb5-kdc.workspace = true
 krb5-log.workspace = true
 krb5-protocol.workspace = true
 krb5-types.workspace = true
+nix = { workspace = true, features = ["fs"] }
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -36,9 +39,11 @@ path = "src/bin/krb5-kpropd.rs"
 name = "krb5-kprop"
 path = "src/bin/krb5-kprop.rs"
 
+# The iprop gate's client, a test tool: a release build does not build it.
 [[bin]]
 name = "krb5-iprop-pull"
 path = "src/bin/krb5-iprop-pull.rs"
+required-features = ["test-hooks"]
 
 [[bin]]
 name = "krb5-ktutil"
@@ -54,6 +59,11 @@ path = "src/bin/krb5-kpasswd.rs"
 
 [dev-dependencies]
 krb5-testkit.workspace = true
+nix = { workspace = true, features = ["signal"] }
+
+[features]
+# krb5-kdc's and krb5-gss's test-hooks, plus this crate's own gate and test hooks; off by default.
+test-hooks = ["krb5-kdc/test-hooks", "krb5-gss/test-hooks"]
 
 [lints]
 workspace = true

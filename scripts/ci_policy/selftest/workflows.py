@@ -312,47 +312,62 @@ jobs:
         "full-test.yml": msrv_wf.format(job="msrv-test"),
     }
     manifest_ok = '[package]\nrust-version = "1.95"\n'
-    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "stable"\n', msrv_ok)
+    preamble_pin = (
+        "inputs:\n  toolchain:\n    description: rustup toolchain\n    required: false\n"
+        '    default: "1.99.0"\n  components:\n    default: ""\n'
+    )
+    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "1.99.0"\n', msrv_ok, preamble_pin)
     sha_pinned = msrv_ok["ci.yml"].replace(
         "      - uses: dtolnay/rust-toolchain@1.95\n",
         "      - uses: dtolnay/rust-toolchain@" + "a" * 40 + " # stable\n        with:\n          toolchain: \"1.95\"\n",
     )
-    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "stable"\n', {"ci.yml": sha_pinned, "full-test.yml": msrv_ok["full-test.yml"]})
+    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "1.99.0"\n', {"ci.yml": sha_pinned, "full-test.yml": msrv_ok["full-test.yml"]}, preamble_pin)
     via_preamble = msrv_ok["ci.yml"].replace(
         "      - uses: dtolnay/rust-toolchain@1.95\n",
         "      - uses: ./.github/actions/rust-preamble\n        with:\n          toolchain: \"1.95\"\n",
     )
-    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "stable"\n', {"ci.yml": via_preamble, "full-test.yml": msrv_ok["full-test.yml"]})
+    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "1.99.0"\n', {"ci.yml": via_preamble, "full-test.yml": msrv_ok["full-test.yml"]}, preamble_pin)
     _must_die(
         check_msrv_pinned,
         manifest_ok,
         manifest_ok,
-        'channel = "stable"\n',
+        'channel = "1.99.0"\n',
         {"ci.yml": via_preamble.replace('          toolchain: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+        preamble_pin,
     )
     _must_die(
         check_msrv_pinned,
         manifest_ok,
         manifest_ok,
-        'channel = "stable"\n',
+        'channel = "1.99.0"\n',
         {"ci.yml": sha_pinned.replace('          toolchain: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+        preamble_pin,
     )
-    _must_die(check_msrv_pinned, '[package]\nrust-version = "1.90"\n', manifest_ok, 'channel = "stable"\n', msrv_ok)
-    _must_die(check_msrv_pinned, manifest_ok, "[package]\n", 'channel = "stable"\n', msrv_ok)
-    _must_die(check_msrv_pinned, manifest_ok, manifest_ok, 'channel = "1.95.0"\n', msrv_ok)
+    _must_die(check_msrv_pinned, '[package]\nrust-version = "1.90"\n', manifest_ok, 'channel = "1.99.0"\n', msrv_ok, preamble_pin)
+    _must_die(check_msrv_pinned, manifest_ok, "[package]\n", 'channel = "1.99.0"\n', msrv_ok, preamble_pin)
+    # A floating channel, a two-part version, and a pin the preamble does not install.
+    _must_die(check_msrv_pinned, manifest_ok, manifest_ok, 'channel = "stable"\n', msrv_ok, preamble_pin)
+    _must_die(check_msrv_pinned, manifest_ok, manifest_ok, 'channel = "1.99"\n', msrv_ok, preamble_pin)
+    _must_die(check_msrv_pinned, manifest_ok, manifest_ok, 'channel = "1.98.0"\n', msrv_ok, preamble_pin)
+    _must_die(
+        check_msrv_pinned, manifest_ok, manifest_ok, 'channel = "1.99.0"\n', msrv_ok,
+        preamble_pin.replace('default: "1.99.0"', "default: stable"),
+    )
     _must_die(
         check_msrv_pinned,
         manifest_ok,
         manifest_ok,
-        'channel = "stable"\n',
+        'channel = "1.99.0"\n',
         {"ci.yml": msrv_wf.format(job="msrv").replace('      RUSTUP_TOOLCHAIN: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+        preamble_pin,
     )
     _must_die(
         check_msrv_pinned,
         manifest_ok,
         manifest_ok,
-        'channel = "stable"\n',
+        'channel = "1.99.0"\n',
         {"ci.yml": msrv_ok["ci.yml"], "full-test.yml": msrv_ok["full-test.yml"].replace("@1.95", "@stable")},
+        preamble_pin,
     )
     _must_die(
         check_rust_cache_shared_key,
