@@ -4,14 +4,17 @@
   NAT to the internet on 192.168.177.0/24. libvirt's dnsmasq serves DHCP
   with static leases and the DNS domain kerber.test. The domain is local
   only (never forwarded upstream) and has forward and reverse records.
-  The klldap address is reserved for the F3 VM.
+  The klldap address is reserved for the F3 VM, the mitd3 address for the VM
+  that carries upstream MIT krb5 (the des3 oracle, B22).
 
   ad.kerber.test is forwarded to the AD test DC on the LAN (F2-AD), so lab
   VMs can resolve test-server.ad.kerber.test. The more specific forwarder
   wins over the local kerber.test domain in dnsmasq.
 
   The MACs here must match the VM table in lab.sh.
-  lab.sh up defines this network. By hand: virsh -c qemu:///system net-define <this file>
+  lab.sh up defines this network, and adds the entries of a VM that joined
+  the table after the network was defined (net-update). By hand:
+  virsh -c qemu:///system net-define <this file>
 -->
 <network>
   <name>kerber-lab</name>
@@ -40,6 +43,9 @@
     <host ip='192.168.177.30'>
       <hostname>klldap.kerber.test</hostname>
     </host>
+    <host ip='192.168.177.31'>
+      <hostname>mitd3.kerber.test</hostname>
+    </host>
   </dns>
   <ip address='192.168.177.1' netmask='255.255.255.0'>
     <dhcp>
@@ -49,6 +55,7 @@
       <host mac='52:54:00:4b:52:15' name='client1' ip='192.168.177.21'/>
       <host mac='52:54:00:4b:52:16' name='client2' ip='192.168.177.22'/>
       <host mac='52:54:00:4b:52:1e' name='klldap' ip='192.168.177.30'/>
+      <host mac='52:54:00:4b:52:1f' name='mitd3' ip='192.168.177.31'/>
     </dhcp>
   </ip>
 </network>

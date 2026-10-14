@@ -1,0 +1,47 @@
+#cloud-config
+# mitd3.kerber.test: the des3 oracle (B22). Fedora's MIT krb5 has no
+# des3-cbc-sha1 (krb5_c_valid_enctype is 0 for it), so the one MIT that can
+# make and use des3 long-term keys is upstream's: it is built on this VM from
+# the 1.22.2 release tarball (the pinned sha256 of harness/Dockerfile), under
+# /opt/mit-1.22.2 and outside /etc/krb5*, after `lab.sh up mitd3`. This
+# template installs MIT's build dependencies from the Fedora repos and
+# nothing of Kerberos: no krb5-server, no krb5-workstation, no realm.
+#
+# lab.sh renders this template into ~/kerber-lab/seeds (outside git):
+#   @SSH_PUBKEY@        the lab public key, ~/kerber-lab/ssh/lab_ed25519.pub
+#   @LAB_PASSWD_HASH@   SHA-512 crypt of the console password, ~/kerber-lab/secrets
+hostname: mitd3
+fqdn: mitd3.kerber.test
+prefer_fqdn_over_hostname: true
+manage_etc_hosts: false
+timezone: UTC
+users:
+  - name: lab
+    gecos: kerber-lab operator
+    groups: [wheel]
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    shell: /bin/bash
+    lock_passwd: false
+    passwd: "@LAB_PASSWD_HASH@"
+    ssh_authorized_keys:
+      - "@SSH_PUBKEY@"
+disable_root: true
+ssh_pwauth: false
+package_upgrade: true
+packages:
+  - chrony
+  - qemu-guest-agent
+  - tcpdump
+  - jq
+  - bind-utils
+  - tar
+  - rsync
+  - gcc
+  - make
+  - bison
+  - byacc
+  - openssl-devel
+  - perl
+  - python3
+runcmd:
+  - [systemctl, enable, --now, chronyd.service, qemu-guest-agent.service]

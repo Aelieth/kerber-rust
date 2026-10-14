@@ -4,13 +4,14 @@ Section F proves kerber-rust against real systems: Fedora clients (SSSD,
 gssproxy, NFS, sshd, Firefox), Keycloak, Windows/AD and KLLDAP. Every scenario
 runs first against a stock Fedora MIT `krb5-server` realm (the oracle), then
 against kerber-rust. This directory builds the lab those scenarios run in:
-five libvirt VMs on this host, on a private NAT network with its own DNS.
+six libvirt VMs on this host, on a private NAT network with its own DNS.
 
 `lab.sh` is a harness. It drives libvirt, cloud-init and Anaconda, and it
 asserts nothing about Kerberos. The VMs carry no Kerberos server software and
 no realm. The field scenarios install those: by hand first (the hand records
 `f-<scenario>`), then repeatably through `run.sh`
-([Field runs](#field-runs-runsh)).
+([Field runs](#field-runs-runsh)). The one VM that is meant to carry a
+Kerberos build is `mitd3` ([below](#mitd3-upstream-mit-with-des3)).
 
 ## Address plan
 
@@ -24,6 +25,7 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 | `client1.kerber.test` | `.21` | `kerber-client1` | Fedora Kinoite 43 | 4 / 6 GiB / 40 GB | the fleet's client type (satomlin-kit twin), SPICE desktop |
 | `client2.kerber.test` | `.22` | `kerber-client2` | Fedora 43 Cloud | 2 / 3 GiB / 20 GB | sshd target, second NFS client, headless checks |
 | `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
+| `mitd3.kerber.test` | `.31` | `kerber-mitd3` | Fedora 43 Cloud | 4 / 4 GiB / 20 GB | upstream MIT krb5 1.22.2 built from the release tarball: the des3 oracle (B22) |
 
 - **DHCP:** static leases by MAC (`network-kerber-lab.xml`, the table in
   `lab.sh`). Other machines get `.100`–`.199`.
@@ -411,7 +413,7 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
 
 ## What `up` builds
 
-- **Cloud VMs (`kdc`, `services`, `client2`, `klldap`):**
+- **Cloud VMs (`kdc`, `services`, `client2`, `klldap`, `mitd3`):**
   - Disk: a qcow2 overlay on the Fedora 43 Cloud Base image (`43-1.6`).
   - Seed: a NoCloud ISO (`cidata`) rendered from `cloud-init/<vm>.user-data`
     and `cloud-init/network-config.*`.
@@ -419,8 +421,9 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
     (wheel, NOPASSWD sudo, the lab key, a console password; no SSH password
     login), upgrades all packages, and installs `chrony qemu-guest-agent
     tcpdump jq bind-utils tar rsync`. `services` also gets `podman`,
-    `klldap` gets `moby-engine` (KLLDAP is Docker-only), and `kdc` gets
-    `nftables` plus its LAN NIC confinement.
+    `klldap` gets `moby-engine` (KLLDAP is Docker-only), `kdc` gets
+    `nftables` plus its LAN NIC confinement, and `mitd3` gets MIT's build
+    dependencies (`gcc make bison byacc openssl-devel perl python3`).
   - chronyd and the guest agent are enabled, and on `klldap` also
     `docker.service`.
 - **`client1`:**
@@ -462,6 +465,26 @@ pin (`--no-optional-locks`), never a copy of the checkout's working tree.
 `moby-engine` 29.6.2 (containerd 2.2.8, runc 1.5.2) with `docker.service`
 enabled. Fedora's unit starts dockerd with `--selinux-enabled`, so containers
 run as `container_t`. The image's `podman` stays installed.
+
+`mitd3` is the cloud column plus MIT's build dependencies and, at its snapshot
+`base`, still no Kerberos server software.
+
+### `mitd3`: upstream MIT with des3
+
+Fedora's MIT krb5 (`krb5-libs-1.22.2-4.fc43`, on every other VM) has no
+`des3-cbc-sha1`: `krb5_c_valid_enctype` is 0 for it, `kadmin.local addprinc
+-e des3-cbc-sha1:normal` silently makes only the default AES keys, and
+`ktutil addent -e des3-cbc-sha1` says "Bad encryption type". Upstream MIT 1.22.2
+has the type, so the one oracle for des3 long-term keys is a build of
+upstream's release tarball, `krb5-1.22.2.tar.gz` with the sha256 pinned in
+`harness/Dockerfile`. It is built on `mitd3` under `/opt/mit-1.22.2`, with its
+sysconfdir and localstatedir under `/opt/mit-1.22.2` as well, so that it reads
+nothing of `/etc/krb5*`. The VM takes the tarball over ssh stdin (it never
+reaches web.mit.edu); its only network use is the Fedora repos of cloud-init.
+The build, the private realm `D3.TEST` and the snapshot `mit-d3` that carries
+them are recorded in `working/logs/f-B22/mitd3-provision/`. `lab.sh up mitd3`
+builds only this VM, and adds its DHCP lease and DNS record to a network
+defined before it joined the table (`net-update`, no restart).
 
 ## Where things live
 

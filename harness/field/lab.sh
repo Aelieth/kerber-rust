@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # harness/field/lab.sh: the kerber-rust KVM field lab (section F0).
 #
-# Builds, runs and resets five VMs on libvirt qemu:///system: kdc, services,
-# client1 (Fedora Kinoite 43), client2 and klldap (the Docker host for
-# KLLDAP). They sit on the NAT network kerber-lab (192.168.177.0/24, DNS
-# domain kerber.test). kdc also has a LAN NIC (macvtap) so the AD test DC can
-# reach it. See harness/field/README.md.
+# Builds, runs and resets six VMs on libvirt qemu:///system: kdc, services,
+# client1 (Fedora Kinoite 43), client2, klldap (the Docker host for KLLDAP)
+# and mitd3 (upstream MIT krb5 built from the release tarball: the des3
+# oracle, which Fedora's MIT cannot be). They sit on the NAT network
+# kerber-lab (192.168.177.0/24, DNS domain kerber.test). kdc also has a LAN
+# NIC (macvtap) so the AD test DC can reach it. See harness/field/README.md.
 #
 # Runs on the host, or in a distrobox where virsh is not on PATH. In that
 # case every host command (virsh, virt-install, xorriso, ip) goes through
@@ -64,16 +65,16 @@ BASE_VOL=fedora-43-cloud-base-1.6.qcow2
 ISO_VOL=fedora-kinoite-43-1.6.iso
 
 # The VM table. The MACs must match network-kerber-lab.xml.
-ALL_VMS=(kdc services client1 client2 klldap)
-declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud)
-declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2)
-declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072)
-declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30)
+ALL_VMS=(kdc services client1 client2 klldap mitd3)
+declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud)
+declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4)
+declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096)
+declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20)
 declare -A IP=([kdc]=192.168.177.10 [services]=192.168.177.11 [client1]=192.168.177.21
-               [client2]=192.168.177.22 [klldap]=192.168.177.30)
+               [client2]=192.168.177.22 [klldap]=192.168.177.30 [mitd3]=192.168.177.31)
 declare -A MAC=([kdc]=52:54:00:4b:52:0a [services]=52:54:00:4b:52:0b
                 [client1]=52:54:00:4b:52:15 [client2]=52:54:00:4b:52:16
-                [klldap]=52:54:00:4b:52:1e)
+                [klldap]=52:54:00:4b:52:1e [mitd3]=52:54:00:4b:52:1f)
 KDC_LAN_MAC=52:54:00:4b:4c:0a
 
 say()  { printf '[lab] %s\n' "$*"; }
@@ -181,6 +182,31 @@ ensure_net() {
     if [ "$(vsh net-info "$NET" | awk '$1 == "Active:" { print $2 }')" != yes ]; then
         vsh net-start "$NET" >/dev/null
     fi
+    ensure_net_hosts
+}
+
+# ensure_net_hosts: the network has a DHCP lease and a DNS record for every VM
+# of the table. A network defined before a VM joined the table lacks its two
+# entries (net-define runs only when the network is missing); they are added
+# live and to the stored definition with net-update, which restarts nothing
+# and touches no other VM. A VM whose MAC and name are present is left alone.
+ensure_net_hosts() {
+    local vm xml
+    xml=$(vsh net-dumpxml "$NET")
+    for vm in "${ALL_VMS[@]}"; do
+        case $xml in
+            *"mac='${MAC[$vm]}'"*) ;;
+            *) say "network $NET: adding the DHCP lease of $vm (${MAC[$vm]} -> ${IP[$vm]})"
+               vsh net-update "$NET" add ip-dhcp-host \
+                   "<host mac='${MAC[$vm]}' name='$vm' ip='${IP[$vm]}'/>" --live --config >/dev/null ;;
+        esac
+        case $xml in
+            *"<hostname>$vm.$DNS_DOMAIN</hostname>"*) ;;
+            *) say "network $NET: adding the DNS record of $vm.$DNS_DOMAIN -> ${IP[$vm]}"
+               vsh net-update "$NET" add dns-host \
+                   "<host ip='${IP[$vm]}'><hostname>$vm.$DNS_DOMAIN</hostname></host>" --live --config >/dev/null ;;
+        esac
+    done
 }
 
 ensure_pool() {
