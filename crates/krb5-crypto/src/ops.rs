@@ -568,10 +568,11 @@ pub fn decrypt_cts(
 
 /// Keyed checksum (RFC 3961 `get_mic` / RFC 8009 section 6).
 ///
+/// MIT `krb5int_dk_checksum` (`lib/crypto/krb/checksum_dk_hmac.c:33-58`): des3-cbc-sha1 signs with `Kc`, the key derived for the usage and the constant `0x99` with the enctype's own 3DES derivation and random-to-key (the one its encryption uses), and HMAC-SHA1 under it, 20 octets.
+///
 /// # Errors
 ///
-/// [`Error::InvalidKeyLength`] when `key` is des3-cbc-sha1, whose 24-octet key the AES-based
-/// `Kc` derivation refuses.
+/// None: every derivation takes the key's own length, which a [`ProtocolKey`] always has.
 pub fn checksum(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
@@ -593,7 +594,12 @@ fn checksum_inner(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<
             hmac_md5_arcfour_checksum(key.as_bytes(), usage.get(), message, -138)
         }
         EncryptionType::Des3CbcSha1 => {
-            let kc = derive::dk_rfc3961(key.as_bytes(), &usage.derivation_constant(0x99))?;
+            // MIT `krb5int_dk_checksum` (`checksum_dk_hmac.c:33-58`): `krb5int_derive_key` over the
+            // enctype's provider, so the 3DES derivation and `k5_rand2key_des3`, not the AES block cipher.
+            let kc = Wiped(crate::weak::dk_des3(
+                key.as_bytes(),
+                &usage.derivation_constant(0x99),
+            )?);
             crate::weak::hmac_sha1_export(&kc, message, 20)
         }
         EncryptionType::Camellia128CtsCmac | EncryptionType::Camellia256CtsCmac => {
@@ -696,8 +702,7 @@ pub fn unkeyed_checksum(cksumtype: i32, message: &[u8]) -> Result<Vec<u8>, Error
 ///
 /// [`Error::UnsupportedChecksum`] when the type is unknown or its cipher does not match `key`'s;
 /// [`Error::BadChecksumSize`] when `mac` is not the type's length; [`Error::Integrity`] when it
-/// does not match; [`Error::InvalidKeyLength`] for type 12 (hmac-sha1-des3-kd), whose 24-octet
-/// key the AES-based derivation refuses.
+/// does not match.
 pub fn verify_checksum_type(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -752,7 +757,7 @@ pub fn verify_checksum_type(
 /// [`Error::InappChecksum`] when `cksumtype` is not keyed (0 and unknown types included);
 /// otherwise as [`verify_checksum_type`]: [`Error::UnsupportedChecksum`] when its cipher does not
 /// match `key`'s, [`Error::BadChecksumSize`] on a wrong `mac` length, [`Error::Integrity`] on a
-/// mismatch, [`Error::InvalidKeyLength`] for type 12 (hmac-sha1-des3-kd).
+/// mismatch.
 pub fn verify_checksum_keyed(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -775,8 +780,7 @@ pub fn verify_checksum_keyed(
 ///
 /// [`Error::UnsupportedChecksum`] when `cksumtype` is unknown (0 included) or its cipher does
 /// not match `key`'s; [`Error::InappChecksum`] when it is not collision-proof or not keyed;
-/// [`Error::BadChecksumSize`] on a wrong `mac` length; [`Error::Integrity`] on a mismatch;
-/// [`Error::InvalidKeyLength`] for type 12 (hmac-sha1-des3-kd).
+/// [`Error::BadChecksumSize`] on a wrong `mac` length; [`Error::Integrity`] on a mismatch.
 pub fn verify_checksum_collproof(
     key: &ProtocolKey,
     usage: KeyUsage,

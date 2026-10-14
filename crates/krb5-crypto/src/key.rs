@@ -127,3 +127,39 @@ const _: fn() = || {
     impl<T: ?Sized + PartialEq<Vec<u8>>> AmbiguousIfComparable<u32> for T {}
     let _ = <ProtocolKey as AmbiguousIfComparable<_>>::check;
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// MIT's own output, `tests/data/mit-des3.kat` (made by the C program beside it, run on MIT 1.22.2).
+    const KAT: &str = include_str!("../tests/data/mit-des3.kat");
+
+    fn hex(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).expect("hex"))
+            .collect()
+    }
+
+    fn odd_parity(octets: &[u8]) -> bool {
+        octets.iter().all(|b| b.count_ones() % 2 == 1)
+    }
+
+    /// MIT `k5_rand2key_des3` (`lib/crypto/krb/random_to_key.c:83-101`): the 21 octets spread over 24, the eighth octet of each DES key from the others' low bits, and odd parity on all.
+    #[test]
+    fn des3_random_to_key_is_mits() {
+        let mut n = 0;
+        for line in KAT.lines() {
+            let p: Vec<&str> = line.split(' ').collect();
+            if p[0] != "rtk" {
+                continue;
+            }
+            let key = ProtocolKey::from_random(EncryptionType::Des3CbcSha1, &hex(p[1])).unwrap();
+            assert_eq!(key.as_bytes(), hex(p[2]), "{line}");
+            assert!(odd_parity(key.as_bytes()), "{line}");
+            n += 1;
+        }
+        assert_eq!(n, 12);
+    }
+}

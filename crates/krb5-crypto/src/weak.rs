@@ -413,4 +413,25 @@ mod tests {
         }
         assert_eq!(des3_random_to_key(&random), want);
     }
+
+    /// The derived keys MIT's `t_derive` test (`lib/crypto/crypto_tests/t_derive.c`) pins for one des3 key and usage 2:
+    /// `Kc` for the constant `0x99`, `Ke` for `0xAA`, `Ki` for `0x55`, each with the parity random-to-key gives.
+    #[test]
+    fn dk_des3_is_mits_t_derive_vectors() {
+        fn hex(s: &str) -> Vec<u8> {
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
+        }
+        let key = hex("850bb51358548cd05e86768c313e3bfef7511937dcf72c3e");
+        for (constant, want) in [
+            (0x99u8, "f78c496d16e6c2dae0e0b6c24057a84c0426aeef26fd6dce"),
+            (0xaa, "5b5723d0b634cb684c3eba5264e9a70d52e683231ad3c4ce"),
+            (0x55, "a77c94980e9b7345a81525c423a737ce67f4cd91b6b3da45"),
+        ] {
+            let got = dk_des3(&key, &[0, 0, 0, 2, constant]).unwrap();
+            assert_eq!(got, hex(want), "constant {constant:#x}");
+        }
+    }
 }

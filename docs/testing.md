@@ -609,6 +609,10 @@ the clause it is in (semicolon-separated).
   `t_prf.c` PRF / RFC 6113 PRF+, RFC 4556 `octetstring2key`, RFC 4757
   RC4 s2k, SPAKE IANA M/N + fixed-scalar public, MIT `t_derive.c` /
   `t_cksums.c`).
+- MIT 1.22.2's own des3-cbc-sha1 keys and hmac-sha1-des3-kd checksums in `crates/krb5-crypto/tests/mit_des3.rs`:
+  `crates/krb5-crypto/tests/data/mit-des3.kat` is the output of a C program run against MIT's libkrb5 (192 `krb5_c_make_checksum`
+  values for three keys, eight key usages and eight lengths of data; `krb5_c_random_to_key` and
+  `krb5_c_string_to_key` outputs, every key of odd parity).
 - MIT's SPAKE test vectors (`t_vectors.c`) in `crates/krb5-crypto/tests/spake_vectors.rs`, from
   the KDC's side and the client's: edwards25519 with des3, rc4, aes128, aes256 and an optimistic
   challenge, and P-256.
