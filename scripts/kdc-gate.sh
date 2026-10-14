@@ -82,8 +82,8 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n
 fi
 KLIST1="$(docker exec "$NAME" klist)"
 echo "$KLIST1"
-echo "$KLIST1" | grep -q 'user@KERBER.TEST'
-echo "$KLIST1" | grep -Ei 'Flags:|flags:' || echo "$KLIST1" | grep -q krbtgt
+grep -q 'user@KERBER.TEST' <<<"$KLIST1"
+grep -Ei 'Flags:|flags:' <<<"$KLIST1" || grep -q krbtgt <<<"$KLIST1"
 
 echo "==== MIT kvno host/testhost.kerber.test ===="
 if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.test; then
@@ -95,8 +95,8 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.tes
 fi
 KLIST2="$(docker exec "$NAME" klist)"
 echo "$KLIST2"
-echo "$KLIST2" | grep -q 'user@KERBER.TEST'
-echo "$KLIST2" | grep -q 'host/testhost.kerber.test'
+grep -q 'user@KERBER.TEST' <<<"$KLIST2"
+grep -q 'host/testhost.kerber.test' <<<"$KLIST2"
 
 echo "==== rust KDC ISSUE tuple after kinit + kvno ===="
 require_log "$NAME" /tmp/kdc.log 'ISSUE' "ISSUE in /tmp/kdc.log"
@@ -104,13 +104,13 @@ require_log "$NAME" /tmp/kdc.log 'krbtgt/KERBER.TEST' "krbtgt/KERBER.TEST in /tm
 require_log "$NAME" /tmp/kdc.log 'host/testhost.kerber.test' "host/testhost.kerber.test in /tmp/kdc.log"
 RUSTLOG="$(docker exec "$NAME" cat /tmp/kdc.log)"
 echo "$RUSTLOG"
-echo "$RUSTLOG" | grep -q 'ISSUE' # RUST_issue_as
-echo "$RUSTLOG" | grep -q 'user@KERBER.TEST'
-echo "$RUSTLOG" | grep -q 'krbtgt/KERBER.TEST'
-echo "$RUSTLOG" | grep -F 'etypes {rep='
-echo "$RUSTLOG" | grep -q 'host/testhost.kerber.test' # RUST_issue_tgs
-echo "$RUSTLOG" | grep -F 'tkt='
-echo "$RUSTLOG" | grep -F 'ses='
+grep -q 'ISSUE' <<<"$RUSTLOG" # RUST_issue_as
+grep -q 'user@KERBER.TEST' <<<"$RUSTLOG"
+grep -q 'krbtgt/KERBER.TEST' <<<"$RUSTLOG"
+grep -F 'etypes {rep=' <<<"$RUSTLOG"
+grep -q 'host/testhost.kerber.test' <<<"$RUSTLOG" # RUST_issue_tgs
+grep -F 'tkt=' <<<"$RUSTLOG"
+grep -F 'ses=' <<<"$RUSTLOG"
 
 echo "==== MIT kinit -a then kvno via 127.0.0.1 is BADADDR ===="
 docker exec "$NAME" kdestroy -A >/dev/null 2>&1 || true
@@ -121,7 +121,7 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" sh -c 'printf "userpassword\n
 fi
 KLISTA="$(docker exec "$NAME" klist -a -n)"
 echo "$KLISTA"
-echo "$KLISTA" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' <<<"$KLISTA"
 set +e
 KVNOA="$(docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.test 2>&1)"
 KVNOA_RC=$?
@@ -131,7 +131,7 @@ if [ "$KVNOA_RC" -eq 0 ]; then
     log "kdc.gate" "error" ',"error":"kinit -a kvno via 127.0.0.1 unexpectedly succeeded"'
     exit 1
 fi
-echo "$KVNOA" | grep -qiE "Incorrect net address|BADADDR|KRB5KRB_AP_ERR_BADADDR"
+grep -qiE "Incorrect net address|BADADDR|KRB5KRB_AP_ERR_BADADDR" <<<"$KVNOA"
 
 echo "==== MIT kinit -a + kvno via bridge address ===="
 BRIDGE="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$NAME")"
@@ -164,8 +164,8 @@ if ! docker exec -e KRB5_TRACE=/dev/stderr "$NAME" kvno host/testhost.kerber.tes
 fi
 KLISTB="$(docker exec "$NAME" klist -a -n)"
 echo "$KLISTB"
-echo "$KLISTB" | grep -q 'host/testhost.kerber.test'
-echo "$KLISTB" | grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+'
+grep -q 'host/testhost.kerber.test' <<<"$KLISTB"
+grep -qE 'Addresses: [0-9]+\.[0-9]+\.[0-9]+\.[0-9]+' <<<"$KLISTB"
 
 TRACE_DST="${KERBER_TRACE_DST:-${KERBER_SCRATCH:-$ROOT/target}/traces}"
 refuse_golden_capture_dir "$TRACE_DST"
@@ -239,13 +239,13 @@ require_log "$NAME" /tmp/mit-issue.log 'krbtgt/KERBER.TEST' "krbtgt/KERBER.TEST 
 require_log "$NAME" /tmp/mit-issue.log 'host/testhost.kerber.test' "host/testhost.kerber.test in /tmp/mit-issue.log"
 MITLOG="$(docker exec "$NAME" cat /tmp/mit-issue.log 2>/dev/null || true)"
 echo "$MITLOG"
-echo "$MITLOG" | grep -q 'ISSUE' # MIT_issue_as
-echo "$MITLOG" | grep -q 'user@KERBER.TEST'
-echo "$MITLOG" | grep -q 'krbtgt/KERBER.TEST'
-echo "$MITLOG" | grep -F 'etypes {rep='
-echo "$MITLOG" | grep -q 'host/testhost.kerber.test' # MIT_issue_tgs
-echo "$MITLOG" | grep -F 'tkt='
-echo "$MITLOG" | grep -F 'ses='
+grep -q 'ISSUE' <<<"$MITLOG" # MIT_issue_as
+grep -q 'user@KERBER.TEST' <<<"$MITLOG"
+grep -q 'krbtgt/KERBER.TEST' <<<"$MITLOG"
+grep -F 'etypes {rep=' <<<"$MITLOG"
+grep -q 'host/testhost.kerber.test' <<<"$MITLOG" # MIT_issue_tgs
+grep -F 'tkt=' <<<"$MITLOG"
+grep -F 'ses=' <<<"$MITLOG"
 
 echo "==== audit field names both legs ===="
 # /tmp/au.log is rewritten by the live MIT audit plugin after rm -f.
