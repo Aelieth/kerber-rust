@@ -613,6 +613,14 @@ the clause it is in (semicolon-separated).
   `crates/krb5-crypto/tests/data/mit-des3.kat` is the output of a C program run against MIT's libkrb5 (192 `krb5_c_make_checksum`
   values for three keys, eight key usages and eight lengths of data; `krb5_c_random_to_key` and
   `krb5_c_string_to_key` outputs, every key of odd parity).
+- What MIT 1.22.2's libkrb5 returns for a des3-cbc-sha1 key whose parity is wrong or which holds a weak DES key, in
+  `crates/krb5-crypto/tests/mit_des3_parity.rs`: `crates/krb5-crypto/tests/data/mit-des3-parity.kat` is the output of a C
+  program run against MIT's libkrb5 (what `krb5_c_encrypt`, `krb5_c_decrypt`, `krb5_c_make_checksum`,
+  `krb5_c_verify_checksum` and `krb5_c_prf` return for 53 keys at three key usages, in the order MIT checks them). The
+  answers of the KDC, `kinit -k -t`, the TGS and FAST clients and the acceptor to such a key are in
+  `crates/krb5-kdc/tests/des3_keys.rs`, `crates/krb5-client/tests/kinit_keytab_des3_parity.rs`,
+  `crates/krb5-protocol/tests/des3_subkeys.rs`, `crates/krb5-protocol/tests/client_fast.rs` and
+  `crates/krb5-protocol/tests/acceptor_rd_req.rs`.
 - MIT's SPAKE test vectors (`t_vectors.c`) in `crates/krb5-crypto/tests/spake_vectors.rs`, from
   the KDC's side and the client's: edwards25519 with des3, rc4, aes128, aes256 and an optimistic
   challenge, and P-256.

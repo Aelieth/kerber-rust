@@ -19,7 +19,9 @@ use crate::wipe::Wiped;
 ///
 /// # Errors
 ///
-/// None: no PRF step can fail on a [`ProtocolKey`], whose length always matches its etype.
+/// [`Error::DesBadParity`] and [`Error::DesWeakKey`] when `key` is a des3-cbc-sha1 key MIT refuses (`validate_and_schedule`
+/// refuses it in the derivation of the PRF key); every other step takes the key's own length, which
+/// a [`ProtocolKey`] always has.
 pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     match key.etype() {
         EncryptionType::Aes128CtsHmacSha196
@@ -44,7 +46,7 @@ pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
 ///
 /// # Errors
 ///
-/// [`Error::InvalidParams`] when `len` is 0.
+/// [`Error::InvalidParams`] when `len` is 0; the refusals of [`prf`].
 pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, Error> {
     if len == 0 {
         return Err(Error::InvalidParams);
@@ -74,8 +76,9 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
 ///
 /// # Errors
 ///
-/// None: PRF+ returns exactly `keybytes()` octets for `key`'s etype (never 0), so the des3
-/// length check and [`ProtocolKey::from_bytes`] always pass.
+/// The refusals of [`prf`] for a des3-cbc-sha1 `key` MIT refuses; otherwise none: PRF+ returns
+/// exactly `keybytes()` octets for `key`'s etype (never 0), so the des3 length check and
+/// [`ProtocolKey::from_bytes`] always pass.
 pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Error> {
     derive_prfplus_enctype(key, input, key.etype())
 }
@@ -86,8 +89,9 @@ pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Er
 ///
 /// # Errors
 ///
-/// None: PRF+ returns exactly `enctype.keybytes()` octets (never 0), so the des3 length check
-/// and [`ProtocolKey::from_bytes`] always pass.
+/// The refusals of [`prf`] for a des3-cbc-sha1 `key` MIT refuses; otherwise none: PRF+ returns
+/// exactly `enctype.keybytes()` octets (never 0), so the des3 length check and
+/// [`ProtocolKey::from_bytes`] always pass.
 pub fn derive_prfplus_enctype(
     key: &ProtocolKey,
     input: &[u8],

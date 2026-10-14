@@ -237,3 +237,62 @@ fn the_subkey_of_a_fast_armor_under_a_des3_session_key_has_odd_parity() {
         ));
     }
 }
+
+/// A des3 session key of bad parity, as an earlier build's KDC issued it and a ticket, a credential cache or a reply carries it.
+fn session_of_bad_parity() -> ProtocolKey {
+    let mut bytes = ProtocolKey::random(DES3).unwrap().as_bytes().to_vec();
+    bytes[3] ^= 1;
+    ProtocolKey::from_bytes(DES3, &bytes).expect("a 24-octet key loads, whatever its parity")
+}
+
+/// A TGT whose session key has bad parity cannot seal the authenticator of a TGS-REQ: the request is refused with MIT's code, and
+/// nothing is sent. MIT's own `kvno` says the same ("DES key has bad parity while getting credentials for ...").
+/// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): the encryption of the authenticator under the session key fails with `KRB5DES_BAD_KEYPAR`.
+#[test]
+fn a_tgt_whose_session_key_has_bad_parity_is_refused_before_the_tgs_request_is_sent() {
+    isolate_host_krb5();
+    let session = session_of_bad_parity();
+    let (kdc, shots) = recorder();
+    let service =
+        PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", "des3.kerber.test"]).unwrap();
+    let r = tgs_exchange(&kdc, &tgt(&session), service, "KERBER.TEST");
+    assert!(
+        matches!(r, Err(krb5_protocol::Error::DesBadParity)),
+        "{r:?}"
+    );
+    assert_eq!(shots.lock().unwrap().len(), 0, "nothing was sent");
+}
+
+/// The same for the armor session key of a FAST AS-REQ: the armor AP-REQ cannot be made.
+/// MIT `fast_armor_ap_request` (`lib/krb5/krb/fast.c:52-108`): `krb5_mk_req_extended` encrypts the armor authenticator under the armor ticket's session key.
+#[test]
+fn an_armor_session_key_of_bad_parity_is_refused_before_the_as_request_is_sent() {
+    isolate_host_krb5();
+    let session = session_of_bad_parity();
+    let (kdc, shots) = recorder();
+    let armor = FastArmor {
+        ticket: krbtgt_ticket(),
+        session,
+        crealm: ascii("KERBER.TEST"),
+        cname: user(),
+    };
+    let r = as_exchange(&AsRequest {
+        cname: user(),
+        realm: "KERBER.TEST",
+        password: b"x",
+        kdc: &kdc,
+        want_spake: false,
+        fast_armor: Some(&armor),
+        pkinit: None,
+        canonicalize: false,
+        sname: None,
+        etypes: None,
+        ticket: AsTicketOpts::default(),
+    });
+    assert!(
+        matches!(r, Err(krb5_protocol::Error::DesBadParity)),
+        "{r:?}"
+    );
+    // The first request of a FAST AS is the armored one; it is never made.
+    assert_eq!(shots.lock().unwrap().len(), 0, "nothing was sent");
+}

@@ -204,7 +204,8 @@ mod pkinit_client_drop_tests;
 /// GeneralString, SPAKE with FAST or PKINIT, anonymous without a PKINIT identity);
 /// [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for one that is
 /// neither AS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
-/// [`Error::Crypto`] when a key cannot be derived or another crypto step fails.
+/// [`Error::Crypto`] when a key cannot be derived or another crypto step fails;
+/// [`Error::DesBadParity`] or [`Error::DesWeakKey`] when a key of the reply is a des3 key MIT refuses.
 pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
     wrap_as(req, &[], None, None, false)
 }
@@ -223,7 +224,9 @@ pub fn as_exchange(req: &AsRequest<'_>) -> Result<AsOutcome, Error> {
 /// GeneralString, SPAKE with FAST or PKINIT, anonymous without a PKINIT identity);
 /// [`Error::TruncatedReply`] for an empty reply and [`Error::UnexpectedPdu`] for one that is
 /// neither AS-REP nor KRB-ERROR; [`Error::Asn1`] when a message does not encode or decode;
-/// [`Error::Crypto`] when a key cannot be derived or another crypto step fails.
+/// [`Error::Crypto`] when a key cannot be derived or another crypto step fails; [`Error::DesBadParity`] or
+/// [`Error::DesWeakKey`] when a key of the AS reply is a des3 key MIT refuses, and, when the encrypted
+/// timestamp is what met it, [`Error::PreauthFailed`] around it with no second request sent.
 pub fn as_exchange_with_keys(
     req: &AsRequest<'_>,
     keys: &[ProtocolKey],
@@ -243,7 +246,8 @@ pub fn as_exchange_with_keys(
 /// checksum, or a SPAKE exchange) or `realm` is not a GeneralString; [`Error::TruncatedReply`]
 /// for an empty reply and [`Error::UnexpectedPdu`] for one that is neither AS-REP nor KRB-ERROR;
 /// [`Error::Asn1`] when a message does not encode or decode; [`Error::Crypto`] when a key cannot
-/// be derived or another crypto step fails.
+/// be derived or another crypto step fails; [`Error::DesBadParity`] or [`Error::DesWeakKey`] when a
+/// key is a des3 key MIT refuses, [`Error::PreauthFailed`] around it when the timestamp met it.
 pub fn as_exchange_key(
     cname: PrincipalName,
     realm: &str,
@@ -956,7 +960,14 @@ fn continue_preauth(
     }
     // MIT `k5_preauth` (`preauth2.c:992-993`): the KDC's cookie leads the next request's padata.
     let mut padata = error_cookie(preauth_err);
-    padata.push(pa_enc_timestamp_at(&client_key, clock.now(true), false)?);
+    // MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:87-97`): `krb5_encrypt_helper` fails with the key's code when the key is a des3 key MIT refuses, and that is the module's failure.
+    match pa_enc_timestamp_at(&client_key, clock.now(true), false) {
+        Ok(p) => padata.push(p),
+        Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
+            return Ok(Err(ModuleFail::des_key(e)));
+        }
+        Err(e) => return Err(e),
+    }
     trace::preauth_process(ENCTS_MODULE, pa::ENC_TIMESTAMP, true, 0, None);
     trace::preauth_output(&padata);
     let bound = request_times(req, clock);

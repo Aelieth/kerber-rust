@@ -21,6 +21,10 @@ pub(super) const CANTREADPWD: i64 = ERROR_TABLE_BASE_KRB5 + 130;
 pub(super) const PWDINTR: i64 = ERROR_TABLE_BASE_KRB5 + 132;
 /// MIT `KRB5_PREAUTH_FAILED` (`krb5_err.et`): "Generic preauthentication failure".
 pub(super) const KRB5_PREAUTH_FAILED: i64 = ERROR_TABLE_BASE_KRB5 + 210;
+/// MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): "DES key has bad parity".
+pub(super) const DES_BAD_KEYPAR: i64 = ERROR_TABLE_BASE_KRB5 + 186;
+/// MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): "DES key is a weak key".
+pub(super) const DES_WEAK_KEY: i64 = ERROR_TABLE_BASE_KRB5 + 187;
 /// `EIO` (errno 5), whose message is "Input/output error".
 pub(super) const EIO: i64 = 5;
 
@@ -46,6 +50,21 @@ impl ModuleFail {
             error: Error::Message(text.into()),
             code,
             text: text.into(),
+            interrupted: false,
+        }
+    }
+
+    /// A des3 key MIT refuses, met where the module encrypts with it: the key's code and message, and the walk goes on to the next mechanism.
+    /// MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:684-698`): the module's `KRB5DES_BAD_KEYPAR` or `KRB5DES_WEAK_KEY` is traced as `<code>/<message>` and is the first failure reported as "Pre-authentication failed: <message>" when no mechanism answers.
+    pub(super) fn des_key(e: Error) -> Self {
+        let code = match e {
+            Error::DesWeakKey => DES_WEAK_KEY,
+            _ => DES_BAD_KEYPAR,
+        };
+        Self {
+            text: e.to_string(),
+            error: e,
+            code,
             interrupted: false,
         }
     }

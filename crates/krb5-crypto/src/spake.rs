@@ -139,7 +139,8 @@ pub fn spake_parse_groups(value: &str) -> Vec<SpakeGroup> {
 ///
 /// # Errors
 ///
-/// None: the PRF+ length is the group's 32 octets, and PRF cannot fail on a [`ProtocolKey`].
+/// The refusals of [`crate::prf`] for a des3-cbc-sha1 `ikey` MIT refuses; otherwise none: the PRF+ length
+/// is the group's 32 octets.
 pub fn spake_wbytes(ikey: &ProtocolKey, group: SpakeGroup) -> Result<Zeroizing<Vec<u8>>, Error> {
     let mut input = b"SPAKEsecret".to_vec();
     input.extend_from_slice(&group.number().to_be_bytes());
@@ -268,8 +269,8 @@ pub fn spake_thash_update(group: SpakeGroup, thash: &[u8], data1: &[u8], data2: 
 ///
 /// # Errors
 ///
-/// None: the seed is cut to the random-to-key length of `ikey`'s enctype, and [`krb_fx_cf2`]
-/// cannot fail.
+/// The refusals of [`krb_fx_cf2`] for a des3-cbc-sha1 `ikey` MIT refuses; otherwise none: the seed
+/// is cut to the random-to-key length of `ikey`'s enctype.
 pub fn spake_derive_key(
     ikey: &ProtocolKey,
     group: SpakeGroup,

@@ -1442,8 +1442,56 @@ fn add_filtered_authdata(dst: &mut AuthorizationData, src: &[AuthorizationDataVa
     dst.extend(src.iter().filter(|e| !is_kdc_issued_authdatum(e)).cloned());
 }
 
+/// A des3 key MIT refuses, met at a site that sets the status word: the failure leaves with the site's status and code 60.
+/// MIT `errcode_to_protocol` (`kdc/kdc_util.c:691-697`): `KRB5DES_BAD_KEYPAR` and `KRB5DES_WEAK_KEY` are past the table's protocol codes, so they are sent as `KRB_ERR_GENERIC`; the log line prints the code's message.
+/// Any other failure is left as it was: this port's other mappings of a crypto failure are not touched.
+pub(crate) fn key_refused_at(e: Error, st: &'static str) -> Error {
+    if e.des_key_code().is_some() {
+        proto_d(err::GENERIC, st, e.to_string())
+    } else {
+        e
+    }
+}
+
+/// [`key_refused_at`] for the result of a crypto call.
+pub(crate) fn crypto_at<T>(r: Result<T, krb5_crypto::Error>, st: &'static str) -> Result<T, Error> {
+    r.map_err(|e| key_refused_at(Error::from(e), st))
+}
+
+/// The failure of `handle_authdata` (its PAC step, which signs under the server and KDC keys, included), as its caller reports it.
+/// MIT `finish_process_as_req` (`kdc/do_as_req.c:270-282`): the failure is logged at INFO as `AS_REQ : handle_authdata (%d)` with the errcode as a number, and the status is HANDLE_AUTHDATA.
+/// MIT `tgs_issue_ticket` (`kdc/do_tgs_req.c:1038-1048`): the same line with `TGS_REQ`, and the same status.
+/// MIT `errcode_to_protocol` (`kdc/kdc_util.c:691-697`): a des3 key MIT refuses is `KRB5DES_BAD_KEYPAR` or `KRB5DES_WEAK_KEY`, past the table's protocol codes, so sent as 60.
+/// A failure that is already a HANDLE_AUTHDATA is logged with the table base added to its code; any other failure is left as it was, since this port's other mappings of a failure inside the PAC step are not touched.
+pub(crate) fn authdata_failed(kind: &str, e: Error) -> Error {
+    let (code, e) = match e.des_key_code() {
+        Some(code) => (
+            code,
+            proto_d(err::GENERIC, status::HANDLE_AUTHDATA, e.to_string()),
+        ),
+        None => match &e {
+            Error::Protocol {
+                code,
+                text: Some(t),
+                ..
+            } if t == status::HANDLE_AUTHDATA => (ERROR_TABLE_BASE_KRB5 + i64::from(*code), e),
+            _ => return e,
+        },
+    };
+    krb5_log::klog::syslog(
+        krb5_log::klog::Severity::Info,
+        &format!("{kind} : handle_authdata ({code})"),
+    );
+    e
+}
+
+/// `ERROR_TABLE_BASE_krb5`, the code of `KRB5KDC_ERR_NONE`, to which a protocol error code is added.
+const ERROR_TABLE_BASE_KRB5: i64 = -1_765_328_384;
+
 fn map_ad_fail(e: Error) -> Error {
     match e {
+        // A des3 key MIT refuses stays what it is until `authdata_failed` logs it with its code.
+        Error::DesBadParity | Error::DesWeakKey => e,
         Error::Crypto(_) => proto(err::BAD_INTEGRITY, status::HANDLE_AUTHDATA),
         Error::Asn1(_) => proto(err::GENERIC, status::HANDLE_AUTHDATA),
         p @ Error::Protocol { .. } => with_status(p, status::HANDLE_AUTHDATA),

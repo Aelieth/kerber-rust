@@ -900,7 +900,8 @@ fn tgs_issue_ticket(
         enc_tkt.authorization_data.as_ref(),
         Some(&session),
         Some((&krbtgt_p.name, store.realm())),
-    )?;
+    )
+    .map_err(|e| crate::ad::authdata_failed("TGS_REQ", e))?;
     let ticket_sname = if renew || validate {
         ap.ticket.sname.clone()
     } else if is_referral {
@@ -962,6 +963,7 @@ fn tgs_issue_ticket(
         krbtgt: &krbtgt_p,
         krbtgt_key: &krbtgt_key.key,
         no_auth_data: attr(&server, KDB_NO_AUTH_DATA_REQUIRED),
+        kind: "TGS_REQ",
     })?;
     let mut s4u_rep_pa = None;
     let mut s4u_enc_pa = None;
@@ -1004,7 +1006,7 @@ fn tgs_issue_ticket(
     )?;
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let usage = KeyUsage::new(enc_usage)?;
-    let cipher = encrypt(&enc_key, usage, &enc_der)?;
+    let cipher = crate::ad::crypto_at(encrypt(&enc_key, usage, &enc_der), status::UNKNOWN_REASON)?;
     let padata = if let Some(f) = tgs_fast {
         let finished = fast_finished(&f.armor_key, &ticket, &ticket_cname, &ticket_crealm)?;
         let inner: Vec<PaData> = s4u_rep_pa.into_iter().collect();

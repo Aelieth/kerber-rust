@@ -160,6 +160,66 @@ pub(crate) fn des3_decrypt(
     Ok(p[DES_BLOCK..].to_vec())
 }
 
+/// The sixteen weak and semi-weak DES keys, each with odd parity.
+///
+/// MIT `weak` (`lib/crypto/builtin/des/weak_key.c:44-69`): the table `mit_des_is_weak_key` compares a key with.
+const WEAK_DES_KEYS: [[u8; 8]; 16] = [
+    // weak keys
+    [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
+    [0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe],
+    [0x1f, 0x1f, 0x1f, 0x1f, 0x0e, 0x0e, 0x0e, 0x0e],
+    [0xe0, 0xe0, 0xe0, 0xe0, 0xf1, 0xf1, 0xf1, 0xf1],
+    // semi-weak keys
+    [0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe],
+    [0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01],
+    [0x1f, 0xe0, 0x1f, 0xe0, 0x0e, 0xf1, 0x0e, 0xf1],
+    [0xe0, 0x1f, 0xe0, 0x1f, 0xf1, 0x0e, 0xf1, 0x0e],
+    [0x01, 0xe0, 0x01, 0xe0, 0x01, 0xf1, 0x01, 0xf1],
+    [0xe0, 0x01, 0xe0, 0x01, 0xf1, 0x01, 0xf1, 0x01],
+    [0x1f, 0xfe, 0x1f, 0xfe, 0x0e, 0xfe, 0x0e, 0xfe],
+    [0xfe, 0x1f, 0xfe, 0x1f, 0xfe, 0x0e, 0xfe, 0x0e],
+    [0x01, 0x1f, 0x01, 0x1f, 0x01, 0x0e, 0x01, 0x0e],
+    [0x1f, 0x01, 0x1f, 0x01, 0x0e, 0x01, 0x0e, 0x01],
+    [0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1, 0xfe],
+    [0xfe, 0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1],
+];
+
+/// A DES key has the correct parity when every octet has an odd number of one bits.
+///
+/// MIT `mit_des_check_key_parity` (`lib/crypto/builtin/des/f_parity.c:48-62`): false at the first octet whose low bit equals the parity of its other seven.
+fn des_check_key_parity(key: [u8; 8]) -> bool {
+    key.iter().all(|b| b.count_ones() % 2 == 1)
+}
+
+/// A weak or semi-weak DES key, by an exact match with the sixteen.
+///
+/// MIT `mit_des_is_weak_key` (`lib/crypto/builtin/des/weak_key.c:76-88`): `memcmp` with each entry of the table.
+fn des_is_weak_key(key: [u8; 8]) -> bool {
+    WEAK_DES_KEYS.contains(&key)
+}
+
+/// The 3DES cipher of a des3 key, which MIT refuses when any of its three DES keys has bad parity or is weak.
+///
+/// MIT `mit_des3_key_sched` (`lib/crypto/builtin/des/d3_kysched.c:29-53`): for each DES key in turn, its parity (`-1`) and then its weakness (`-2`), so the first failure in that order decides.
+/// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): `-1` is `KRB5DES_BAD_KEYPAR` ([`Error::DesBadParity`]) and `-2` `KRB5DES_WEAK_KEY` ([`Error::DesWeakKey`]), returned after the key length, whatever the data is: every encryption, decryption and key derivation under the key goes through it.
+///
+/// # Errors
+///
+/// [`Error::InvalidKeyLength`] unless `key` is 24 octets; [`Error::DesBadParity`] and [`Error::DesWeakKey`] as above.
+fn des3_key_sched(key: &[u8]) -> Result<TdesEde3, Error> {
+    let key24: &[u8; 24] = key.try_into().map_err(|_| Error::InvalidKeyLength)?;
+    let (keys, _) = key24.as_chunks::<8>();
+    for &k in keys {
+        if !des_check_key_parity(k) {
+            return Err(Error::DesBadParity);
+        }
+        if des_is_weak_key(k) {
+            return Err(Error::DesWeakKey);
+        }
+    }
+    <TdesEde3 as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)
+}
+
 pub(crate) fn des3_cbc_encrypt(
     key: &[u8],
     iv: [u8; DES_BLOCK],
@@ -168,7 +228,7 @@ pub(crate) fn des3_cbc_encrypt(
     if key.len() != 24 || !plain.len().is_multiple_of(DES_BLOCK) {
         return Err(Error::InvalidKeyLength);
     }
-    let cipher = <TdesEde3 as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
+    let cipher = des3_key_sched(key)?;
     let mut prev = iv;
     let mut out = vec![0u8; plain.len()];
     for (i, chunk) in plain.chunks(DES_BLOCK).enumerate() {
@@ -188,7 +248,7 @@ fn des3_cbc_decrypt(key: &[u8], iv: [u8; DES_BLOCK], cipher_text: &[u8]) -> Resu
     if key.len() != 24 || !cipher_text.len().is_multiple_of(DES_BLOCK) {
         return Err(Error::InvalidKeyLength);
     }
-    let cipher = <TdesEde3 as KeyInit>::new_from_slice(key).map_err(|_| Error::InvalidKeyLength)?;
+    let cipher = des3_key_sched(key)?;
     let mut prev = iv;
     let mut out = vec![0u8; cipher_text.len()];
     for (i, chunk) in cipher_text.chunks(DES_BLOCK).enumerate() {
@@ -412,6 +472,60 @@ mod tests {
             want[at..at + 8].copy_from_slice(&[0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe]);
         }
         assert_eq!(des3_random_to_key(&random), want);
+    }
+
+    /// MIT's table of weak and semi-weak DES keys: sixteen distinct keys, each with the odd parity a DES key has.
+    #[test]
+    fn the_sixteen_weak_des_keys_are_distinct_and_of_odd_parity() {
+        for (i, &k) in WEAK_DES_KEYS.iter().enumerate() {
+            assert!(des_check_key_parity(k), "{k:02x?}");
+            assert!(des_is_weak_key(k), "{k:02x?}");
+            assert!(!WEAK_DES_KEYS[i + 1..].contains(&k), "{k:02x?} twice");
+        }
+    }
+
+    /// MIT's `mit_des_check_key_parity`: every octet has an odd number of one bits, so `0x01` and `0xfe` do and `0x00` and `0xff` do not.
+    #[test]
+    fn a_des_key_has_correct_parity_when_every_octet_is_odd() {
+        assert!(des_check_key_parity([0x01; 8]));
+        assert!(des_check_key_parity([0xfe; 8]));
+        assert!(!des_check_key_parity([0x00; 8]));
+        assert!(!des_check_key_parity([0xff; 8]));
+        let mut k = [0x01u8; 8];
+        k[7] = 0x03;
+        assert!(!des_check_key_parity(k), "the last octet alone");
+    }
+
+    /// MIT's `mit_des3_key_sched` checks the first DES key's parity and then its weakness before it looks at the second, and so on.
+    #[test]
+    fn the_key_schedule_stops_at_the_first_fault_in_mits_order() {
+        let good = [0x01u8, 0x02, 0x04, 0x07, 0x08, 0x0b, 0x0d, 0x0e];
+        assert!(good.iter().all(|b| b.count_ones() % 2 == 1));
+        let weak = WEAK_DES_KEYS[0];
+        let mut bad = good;
+        bad[0] ^= 1;
+        let join = |a: [u8; 8], b: [u8; 8], c: [u8; 8]| [a, b, c].concat();
+        assert!(des3_key_sched(&join(good, good, good)).is_ok());
+        assert_eq!(
+            des3_key_sched(&join(bad, weak, good)).err(),
+            Some(Error::DesBadParity)
+        );
+        assert_eq!(
+            des3_key_sched(&join(weak, bad, good)).err(),
+            Some(Error::DesWeakKey)
+        );
+        assert_eq!(
+            des3_key_sched(&join(good, good, bad)).err(),
+            Some(Error::DesBadParity)
+        );
+        assert_eq!(
+            des3_key_sched(&join(good, weak, bad)).err(),
+            Some(Error::DesWeakKey)
+        );
+        assert_eq!(
+            des3_key_sched(&[0u8; 23]).err(),
+            Some(Error::InvalidKeyLength)
+        );
     }
 
     /// The derived keys MIT's `t_derive` test (`lib/crypto/crypto_tests/t_derive.c`) pins for one des3 key and usage 2:

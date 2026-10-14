@@ -11,6 +11,12 @@ pub enum Error {
     /// that `errcode_to_protocol` sends as 60.
     /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): the enctype is checked before anything is decrypted.
     BadEnctype,
+    /// A des3 key with an octet of even parity: MIT's `KRB5DES_BAD_KEYPAR`, a library code that `errcode_to_protocol` sends as 60.
+    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): every use of the key, in an encryption, a decryption or a checksum, fails with it.
+    DesBadParity,
+    /// A des3 key with a weak or semi-weak DES key among its three: MIT's `KRB5DES_WEAK_KEY`, sent as 60 likewise.
+    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): the code after the parity of that DES key and before the next one's.
+    DesWeakKey,
     /// DER codec.
     Asn1(String),
     /// RFC 4120 KRB-ERROR / KDC error code.
@@ -81,6 +87,10 @@ impl fmt::Display for Error {
         match self {
             Self::Crypto(s) => write!(f, "crypto: {s}"),
             Self::BadEnctype => write!(f, "Bad encryption type"),
+            // MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): the text.
+            Self::DesBadParity => write!(f, "DES key has bad parity"),
+            // MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): the text.
+            Self::DesWeakKey => write!(f, "DES key is a weak key"),
             Self::Asn1(s) => write!(f, "asn1: {s}"),
             Self::Protocol { code, text, .. } => match text {
                 Some(t) => write!(f, "KDC error {code}: {t}"),
@@ -114,7 +124,23 @@ impl From<krb5_crypto::Error> for Error {
     fn from(e: krb5_crypto::Error) -> Self {
         match e {
             krb5_crypto::Error::BadEnctype(_) => Self::BadEnctype,
+            krb5_crypto::Error::DesBadParity => Self::DesBadParity,
+            krb5_crypto::Error::DesWeakKey => Self::DesWeakKey,
             e => Self::Crypto(e.to_string()),
+        }
+    }
+}
+
+impl Error {
+    /// The `krb5_error_code` MIT's library returns for a des3 key it refuses, which a log line prints as a number.
+    /// MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): `ERROR_TABLE_BASE_krb5` (-1765328384) plus 186.
+    /// MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): the same base plus 187.
+    #[must_use]
+    pub(crate) fn des_key_code(&self) -> Option<i64> {
+        match self {
+            Self::DesBadParity => Some(-1_765_328_198),
+            Self::DesWeakKey => Some(-1_765_328_197),
+            _ => None,
         }
     }
 }

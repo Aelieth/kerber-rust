@@ -6,7 +6,8 @@ use thiserror::Error;
 /// Failure of an AS/TGS/AP exchange or transport.
 #[derive(Debug, Error)]
 pub enum Error {
-    /// Crypto layer failed.
+    /// Crypto layer failed. A des3 key that MIT refuses to use is [`Error::DesBadParity`] or
+    /// [`Error::DesWeakKey`] instead, wherever a doc here says this.
     #[error("crypto: {0}")]
     Crypto(String),
     /// DER codec failed.
@@ -66,6 +67,14 @@ pub enum Error {
     /// MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et:254-254`): the code and text, which `krb5_k_decrypt` returns.
     #[error("Bad encryption type")]
     BadEnctype,
+    /// A des3 key with an octet of even parity, met where it is used to encrypt or decrypt.
+    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): `KRB5DES_BAD_KEYPAR`, the code and text, which every encryption, decryption and checksum under such a key returns.
+    #[error("DES key has bad parity")]
+    DesBadParity,
+    /// A des3 key with a weak or semi-weak DES key among its three.
+    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): `KRB5DES_WEAK_KEY`, the code and text.
+    #[error("DES key is a weak key")]
+    DesWeakKey,
     /// The KDB keytab has no key to give for the ticket: the server's first permitted key at the
     /// ticket's kvno is not of the ticket's enctype, or no key at it is of a permitted enctype.
     /// MIT `KRB5_KDB_NO_PERMITTED_KEY` (`lib/krb5/error_tables/kdb5_err.et:72-72`): the code and text.
@@ -142,6 +151,8 @@ impl Clone for Error {
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,
             Self::ProgEtypeNosupp => Self::ProgEtypeNosupp,
             Self::BadEnctype => Self::BadEnctype,
+            Self::DesBadParity => Self::DesBadParity,
+            Self::DesWeakKey => Self::DesWeakKey,
             Self::KdbNoPermittedKey => Self::KdbNoPermittedKey,
             Self::ProgSumtypeNosupp => Self::ProgSumtypeNosupp,
             Self::NopermEtype(s) => Self::NopermEtype(s.clone()),
@@ -220,6 +231,8 @@ impl From<krb5_crypto::Error> for Error {
     fn from(e: krb5_crypto::Error) -> Self {
         match e {
             krb5_crypto::Error::BadEnctype(_) => Self::BadEnctype,
+            krb5_crypto::Error::DesBadParity => Self::DesBadParity,
+            krb5_crypto::Error::DesWeakKey => Self::DesWeakKey,
             e => Self::Crypto(e.to_string()),
         }
     }

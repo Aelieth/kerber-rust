@@ -16,7 +16,7 @@ use super::as_req::{ANONYMOUS_REALM, anonymous_principal_name, issue_as_from};
 use super::fast_util::{peek_as_hides_client, peek_tgs_hides_client};
 use super::kdc_util::{enc_pa_rep_padata, encryption_key, ks, omit_start_if_auth};
 use super::tgs_req::{issue_tgs_from, tgs_header_client};
-use crate::ad::{add_auth_indicators, wrap_win2k_pac};
+use crate::ad::{add_auth_indicators, authdata_failed, crypto_at, key_refused_at, wrap_win2k_pac};
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::preauth::{find_pa, prepare_as_edata, proto_d};
@@ -243,6 +243,8 @@ pub(super) struct MintTicket<'a> {
     pub krbtgt_key: &'a ProtocolKey,
     /// Skip authorization data.
     pub no_auth_data: bool,
+    /// The request's log word, `AS_REQ` or `TGS_REQ`, which `handle_authdata`'s failure line starts with.
+    pub kind: &'static str,
 }
 
 /// The PAC a ticket carries, as the caller decided it with `ad.rs` `pac_has_ad_data`.
@@ -291,6 +293,7 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         krbtgt,
         krbtgt_key,
         no_auth_data,
+        kind,
     } = p;
     let mut extra = extra_ad.unwrap_or_default();
     let mut part = EncTicketPart {
@@ -314,7 +317,8 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
             krbtgt,
             krbtgt_key,
             &part,
-        )?;
+        )
+        .map_err(|e| authdata_failed(kind, e))?;
     }
     if let Some(pac) = pac {
         // MIT `krb5_kdc_sign_ticket` (`pac_sign.c:389-398`): the ticket checksum is taken with a dummy PAC as the first authdata element.
@@ -331,7 +335,8 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
         };
         let pac = match pac {
             TicketPac::Mit(req) => {
-                crate::ad::mit_ticket_pac(&req, cname, authtime.unix_seconds(), &ticket)?
+                crate::ad::mit_ticket_pac(&req, cname, authtime.unix_seconds(), &ticket)
+                    .map_err(|e| authdata_failed(kind, e))?
             }
             TicketPac::Ad {
                 logon_override,
@@ -366,7 +371,8 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
                     logon_override,
                     subject_pac,
                     s4u_client_info,
-                )?
+                )
+                .map_err(|e| authdata_failed(kind, e))?
             }
         };
         let mut signed = wrap_win2k_pac(&pac)?;
@@ -377,7 +383,7 @@ pub(super) fn mint_ticket(p: MintTicket<'_>) -> Result<Ticket, Error> {
     }
     let der = encode(&part)?;
     let usage = KeyUsage::new(ku::TICKET)?;
-    let cipher = encrypt(service_key, usage, &der)?;
+    let cipher = crypto_at(encrypt(service_key, usage, &der), status::UNKNOWN_REASON)?;
     Ok(Ticket {
         tkt_vno: Ticket::VNO,
         realm: ks(srealm)?,
@@ -445,7 +451,10 @@ pub(super) fn return_enc_padata(
         out.push(p);
     }
     if want_enc_pa && let Some(pkt) = raw {
-        out.extend(enc_pa_rep_padata(reply_key, pkt)?);
+        out.extend(
+            enc_pa_rep_padata(reply_key, pkt)
+                .map_err(|e| key_refused_at(e, status::KDC_RETURN_ENC_PADATA))?,
+        );
     }
     if let Some(raw_po) = find_pa(padata, pa::PAC_OPTIONS)
         && let Ok(opts) = decode::<PaPacOptions>(raw_po)

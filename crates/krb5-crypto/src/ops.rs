@@ -47,7 +47,8 @@ fn parse_iterations(etype: EncryptionType, params: Option<&[u8]>) -> Result<u32,
 /// # Errors
 ///
 /// [`Error::InvalidParams`] when `params` is present with a length other than 0 or 4, or the
-/// count is 0; [`Error::IterationLimit`] when the count is above 5,000,000.
+/// count is 0; [`Error::IterationLimit`] when the count is above 5,000,000; [`Error::DesWeakKey`]
+/// when a des3-cbc-sha1 password's folded key is a weak DES key, as MIT's `krb5int_dk_string_to_key`.
 pub fn string_to_key(
     etype: EncryptionType,
     password: impl AsRef<[u8]>,
@@ -169,7 +170,8 @@ impl CipherState {
 ///
 /// # Errors
 ///
-/// [`Error::Rng`] when the CSPRNG fails.
+/// [`Error::Rng`] when the CSPRNG fails; [`Error::DesBadParity`] and [`Error::DesWeakKey`] when `key` is a des3-cbc-sha1 key MIT refuses (a key
+/// of any parity loads, and its first use is where MIT refuses it).
 pub fn encrypt(key: &ProtocolKey, usage: KeyUsage, plaintext: &[u8]) -> Result<Vec<u8>, Error> {
     let mut conf = [0u8; BLOCK];
     getrandom::getrandom(&mut conf).map_err(|_| Error::Rng)?;
@@ -186,7 +188,7 @@ pub fn encrypt(key: &ProtocolKey, usage: KeyUsage, plaintext: &[u8]) -> Result<V
 /// # Errors
 ///
 /// [`Error::InvalidKeyLength`] when `raw_key` is longer than `u16::MAX` octets; [`Error::Rng`]
-/// when the CSPRNG fails.
+/// when the CSPRNG fails; the refusals of [`encrypt`] when `mkey` is a des3-cbc-sha1 key MIT refuses.
 pub fn kdb_encrypt_key(mkey: &ProtocolKey, raw_key: &[u8]) -> Result<Vec<u8>, Error> {
     let key_len = u16::try_from(raw_key.len()).map_err(|_| Error::InvalidKeyLength)?;
     let cipher = encrypt(mkey, KeyUsage::from_rfc(0), raw_key)?;
@@ -203,7 +205,8 @@ pub fn kdb_encrypt_key(mkey: &ProtocolKey, raw_key: &[u8]) -> Result<Vec<u8>, Er
 /// [`Error::CiphertextTooShort`] when `ciphertext` is shorter than the 2-octet prefix plus the
 /// etype's confounder and checksum; [`Error::Integrity`] when the checksum does not match;
 /// [`Error::InvalidKeyLength`] when the prefix does not match the decrypted length, or a
-/// des3-cbc-sha1 ciphertext is not a whole number of 8-octet blocks.
+/// des3-cbc-sha1 ciphertext is not a whole number of 8-octet blocks; the refusals of [`decrypt`]
+/// when `mkey` is a des3-cbc-sha1 key MIT refuses.
 pub fn kdb_decrypt_key(mkey: &ProtocolKey, ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
     if ciphertext.len() < 2 {
         return Err(Error::CiphertextTooShort);
@@ -226,7 +229,7 @@ pub fn kdb_decrypt_key(mkey: &ProtocolKey, ciphertext: &[u8]) -> Result<Vec<u8>,
 ///
 /// [`Error::InvalidConfounder`] when `confounder` is not 16 octets (AES, Camellia) or is shorter
 /// than 8 (rc4-hmac, which uses the first 8); [`Error::Rng`] when the CSPRNG fails for
-/// des3-cbc-sha1, which ignores `confounder` and draws its own.
+/// des3-cbc-sha1, which ignores `confounder` and draws its own; the refusals of [`encrypt`].
 pub fn encrypt_with_confounder(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -261,7 +264,7 @@ fn encrypt_inner(
 ///
 /// # Errors
 ///
-/// [`Error::Rng`] when the CSPRNG fails.
+/// [`Error::Rng`] when the CSPRNG fails; the refusals of [`encrypt`].
 pub fn encrypt_with_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -422,7 +425,7 @@ pub fn decrypt_enc_data_with_state(
 /// [`Error::CiphertextTooShort`] when `ciphertext` is shorter than the etype's confounder plus
 /// checksum; [`Error::Integrity`] when the checksum does not match (the decrypted buffer is
 /// discarded); [`Error::InvalidKeyLength`] when a des3-cbc-sha1 ciphertext is not a whole
-/// number of 8-octet blocks.
+/// number of 8-octet blocks; [`Error::DesBadParity`] and [`Error::DesWeakKey`] when `key` is a des3-cbc-sha1 key MIT refuses, before the checksum is read.
 pub fn decrypt(key: &ProtocolKey, usage: KeyUsage, ciphertext: &[u8]) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
@@ -449,7 +452,8 @@ fn decrypt_inner(key: &ProtocolKey, usage: KeyUsage, ciphertext: &[u8]) -> Resul
 ///
 /// [`Error::CiphertextTooShort`] when `ciphertext` is shorter than the etype's confounder plus
 /// checksum; [`Error::Integrity`] when the checksum does not match; [`Error::InvalidKeyLength`]
-/// when a des3-cbc-sha1 ciphertext is not a whole number of 8-octet blocks.
+/// when a des3-cbc-sha1 ciphertext is not a whole number of 8-octet blocks; the refusals of
+/// [`decrypt`].
 pub fn decrypt_with_state(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -572,7 +576,9 @@ pub fn decrypt_cts(
 ///
 /// # Errors
 ///
-/// None: every derivation takes the key's own length, which a [`ProtocolKey`] always has.
+/// [`Error::DesBadParity`] and [`Error::DesWeakKey`] when `key` is a des3-cbc-sha1 key MIT refuses (`validate_and_schedule`
+/// refuses it in the derivation of `Kc`); every other derivation takes the key's own length, which a
+/// [`ProtocolKey`] always has.
 pub fn checksum(key: &ProtocolKey, usage: KeyUsage, message: &[u8]) -> Result<Vec<u8>, Error> {
     let correlation_id = krb5_log::current_correlation_id();
     let started = Instant::now();
@@ -702,7 +708,8 @@ pub fn unkeyed_checksum(cksumtype: i32, message: &[u8]) -> Result<Vec<u8>, Error
 ///
 /// [`Error::UnsupportedChecksum`] when the type is unknown or its cipher does not match `key`'s;
 /// [`Error::BadChecksumSize`] when `mac` is not the type's length; [`Error::Integrity`] when it
-/// does not match.
+/// does not match; the refusals of [`checksum`] when `key` is a des3-cbc-sha1 key MIT refuses
+/// (MIT's `krb5_c_verify_checksum` returns the key's code, not "invalid").
 pub fn verify_checksum_type(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -757,7 +764,7 @@ pub fn verify_checksum_type(
 /// [`Error::InappChecksum`] when `cksumtype` is not keyed (0 and unknown types included);
 /// otherwise as [`verify_checksum_type`]: [`Error::UnsupportedChecksum`] when its cipher does not
 /// match `key`'s, [`Error::BadChecksumSize`] on a wrong `mac` length, [`Error::Integrity`] on a
-/// mismatch.
+/// mismatch, and the refusals of [`checksum`].
 pub fn verify_checksum_keyed(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -780,7 +787,8 @@ pub fn verify_checksum_keyed(
 ///
 /// [`Error::UnsupportedChecksum`] when `cksumtype` is unknown (0 included) or its cipher does
 /// not match `key`'s; [`Error::InappChecksum`] when it is not collision-proof or not keyed;
-/// [`Error::BadChecksumSize`] on a wrong `mac` length; [`Error::Integrity`] on a mismatch.
+/// [`Error::BadChecksumSize`] on a wrong `mac` length; [`Error::Integrity`] on a mismatch; the
+/// refusals of [`checksum`].
 pub fn verify_checksum_collproof(
     key: &ProtocolKey,
     usage: KeyUsage,

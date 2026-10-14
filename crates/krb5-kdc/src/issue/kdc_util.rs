@@ -271,15 +271,20 @@ pub(crate) fn decrypt_presented_tgt(
             Ok((key, found)) => {
                 kvno = found;
                 // MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): a ticket in an enctype the KDC does not permit is `KRB5_NOPERM_ETYPE`, 60 here, before the key is tried on it.
-                if !store.policy().etype_permitted(tkt_etype) {
-                    proto(err::GENERIC, status::PROCESS_TGS)
-                } else if let Ok(plain) =
-                    decrypt_enc_data(&key, usage, ap.ticket.enc_part.etype, cipher)
-                    && let Ok(part) = decode::<EncTicketPart>(&plain)
-                {
-                    return Ok((part, key, plain, p.clone()));
+                if store.policy().etype_permitted(tkt_etype) {
+                    match decrypt_enc_data(&key, usage, ap.ticket.enc_part.etype, cipher) {
+                        Ok(plain) => match decode::<EncTicketPart>(&plain) {
+                            Ok(part) => return Ok((part, key, plain, p.clone())),
+                            Err(_) => proto(err::BAD_INTEGRITY, status::PROCESS_TGS),
+                        },
+                        // MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the krbtgt key is a des3 key MIT refuses, a library code, so 60 and its message.
+                        Err(
+                            e @ (krb5_crypto::Error::DesBadParity | krb5_crypto::Error::DesWeakKey),
+                        ) => proto_d(err::GENERIC, status::PROCESS_TGS, e.to_string()),
+                        Err(_) => proto(err::BAD_INTEGRITY, status::PROCESS_TGS),
+                    }
                 } else {
-                    proto(err::BAD_INTEGRITY, status::PROCESS_TGS)
+                    proto(err::GENERIC, status::PROCESS_TGS)
                 }
             }
             Err(e) => e,

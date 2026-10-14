@@ -639,7 +639,8 @@ fn finish_process_as_req(
         None,
         None,
         None,
-    )?;
+    )
+    .map_err(|e| crate::ad::authdata_failed("AS_REQ", e))?;
     check_indicators(&server, &auth_indicators)?;
     let issue_crealm = if anonymous_as {
         ANONYMOUS_REALM
@@ -682,6 +683,7 @@ fn finish_process_as_req(
         krbtgt: &krbtgt_p,
         krbtgt_key: &krbtgt_key.key,
         no_auth_data: attr(&server, KDB_NO_AUTH_DATA_REQUIRED),
+        kind: "AS_REQ",
     })?;
     let renew_till = ticket_renew_till;
     let mut reply_key = as_rep_key.clone();
@@ -728,7 +730,8 @@ fn finish_process_as_req(
     )?;
     let enc_der = encode_enc_kdc_rep_part(enc_part)?;
     let usage = KeyUsage::new(ku::AS_REP_ENC_PART)?;
-    let cipher = encrypt(&reply_key, usage, &enc_der)?;
+    let cipher =
+        crate::ad::crypto_at(encrypt(&reply_key, usage, &enc_der), status::UNKNOWN_REASON)?;
     // MIT `finish_process_as_req` (`do_as_req.c:329-329`): sets reply.enc_part.kvno only after
     // krb5_encode_kdc_rep, so the wire AS-REP enc-part carries no kvno.
     let kvno = None;

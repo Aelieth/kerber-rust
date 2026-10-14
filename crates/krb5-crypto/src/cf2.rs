@@ -20,8 +20,9 @@ use crate::wipe::Wiped;
 ///
 /// # Errors
 ///
-/// None: both [`prf_plus`] calls ask for `k1`'s random-to-key input length, which is never 0
-/// (the only length it refuses), and the key is made from exactly that many octets.
+/// The refusals of [`prf`](crate::prf) for a des3-cbc-sha1 `k1` or `k2` MIT refuses; otherwise none:
+/// both [`prf_plus`] calls ask for `k1`'s random-to-key input length, which is never 0 (the only
+/// length it refuses), and the key is made from exactly that many octets.
 pub fn krb_fx_cf2(
     k1: &ProtocolKey,
     k2: &ProtocolKey,

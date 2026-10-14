@@ -37,6 +37,14 @@ pub enum Error {
     /// An EncryptedData's enctype (the value given) is not the key's.
     /// MIT `krb5_k_decrypt` (`lib/crypto/krb/decrypt.c:45-46`): `KRB5_BAD_ENCTYPE`, before anything is decrypted.
     BadEnctype(i32),
+    /// A des3 key with an octet of even parity.
+    /// MIT `mit_des3_key_sched` (`lib/crypto/builtin/des/d3_kysched.c:29-53`): the parity of each DES key is checked first, and an octet of even parity gives `-1`.
+    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): that `-1` is `KRB5DES_BAD_KEYPAR`, returned to every encryption, decryption and derivation under the key.
+    DesBadParity,
+    /// A des3 key with a weak or semi-weak DES key among its three.
+    /// MIT `mit_des3_key_sched` (`lib/crypto/builtin/des/d3_kysched.c:29-53`): the weakness of each DES key is checked after its parity, and a weak key gives `-2`.
+    /// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): that `-2` is `KRB5DES_WEAK_KEY`.
+    DesWeakKey,
 }
 
 impl fmt::Display for Error {
@@ -62,6 +70,10 @@ impl fmt::Display for Error {
             Self::IterationLimit => write!(f, "PBKDF2 iteration count exceeds local limit"),
             // MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et:254-254`): the text.
             Self::BadEnctype(_) => write!(f, "Bad encryption type"),
+            // MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): the text.
+            Self::DesBadParity => write!(f, "DES key has bad parity"),
+            // MIT `KRB5DES_WEAK_KEY` (`krb5_err.et:252-252`): the text.
+            Self::DesWeakKey => write!(f, "DES key is a weak key"),
         }
     }
 }

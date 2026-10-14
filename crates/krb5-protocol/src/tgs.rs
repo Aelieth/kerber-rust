@@ -829,6 +829,9 @@ fn tgs_kerr(e: &Error, ext: bool) -> Option<(i64, Option<String>)> {
         Error::Io { .. } if !ext => return None,
         Error::Io { .. } => (trace::KRB5_KDC_UNREACH, None),
         Error::Crypto(_) => (trace::kdc_code(krb5_types::err::BAD_INTEGRITY), None),
+        // MIT `KRB5DES_BAD_KEYPAR` (`krb5_err.et:251-251`): the code a des3 key with bad parity gives the request.
+        Error::DesBadParity => (trace::ERROR_TABLE_BASE_KRB5 + 186, None),
+        Error::DesWeakKey => (trace::ERROR_TABLE_BASE_KRB5 + 187, None),
         Error::UnexpectedPdu => (trace::kdc_code(krb5_types::err::MSG_TYPE), None),
         _ => (trace::KRB5_KDCREP_MODIFIED, None),
     })

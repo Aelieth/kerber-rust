@@ -317,13 +317,31 @@ fn fast_key_mechanism(
     if mech == pa::ENCRYPTED_CHALLENGE {
         // MIT `ec_process` takes the time without an unauthenticated offset.
         let (now, usec) = clock.now(false);
-        inner_pa.push(client_challenge(akey, &client_key, (&now, usec))?);
+        // MIT `ec_process` (`lib/krb5/krb/preauth_ec.c:108-112`): the challenge key is made from the client key with `krb5_c_fx_cf2_simple`, which fails with the key's code when it is a des3 key MIT refuses, and that is the module's failure.
+        match client_challenge(akey, &client_key, (&now, usec)) {
+            Ok(p) => inner_pa.push(p),
+            Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
+                let f = ModuleFail::des_key(e);
+                f.trace(name, mech);
+                return Ok(Err(f));
+            }
+            Err(e) => return Err(e),
+        }
         trace::preauth_process(EC_MODULE, mech, true, 0, None);
     } else {
         if gak_found(keys, &client_key, etype) {
             trace::preauth_enc_ts_key_gak((&client_key).into());
         }
-        inner_pa.push(pa_enc_timestamp_at(&client_key, clock.now(true), true)?);
+        // MIT `encts_process` (`lib/krb5/krb/preauth_encts.c:87-97`): `krb5_encrypt_helper` fails with the key's code when the key is a des3 key MIT refuses, and that is the module's failure.
+        match pa_enc_timestamp_at(&client_key, clock.now(true), true) {
+            Ok(p) => inner_pa.push(p),
+            Err(e @ (Error::DesBadParity | Error::DesWeakKey)) => {
+                let f = ModuleFail::des_key(e);
+                f.trace(name, mech);
+                return Ok(Err(f));
+            }
+            Err(e) => return Err(e),
+        }
         trace::preauth_process(ENCTS_MODULE, mech, true, 0, None);
     }
     trace::preauth_output(&inner_pa);

@@ -484,7 +484,10 @@ impl KdcPreauth for EncTsMod {
                 Ok(()) => return Ok(Some(PreauthAction::EncTsOk)),
                 // MIT `enc_ts_verify` (`kdc_preauth_encts.c:75-92`): a key that does not decrypt
                 // the timestamp sends the walk on to the next key.
-                Err(Error::Crypto(_) | Error::BadEnctype) => {}
+                // MIT `enc_ts_verify` (`kdc_preauth_encts.c:74-92`): any decrypt failure, a des3 key MIT refuses included, sends the walk on to the next key.
+                Err(
+                    Error::Crypto(_) | Error::BadEnctype | Error::DesBadParity | Error::DesWeakKey,
+                ) => {}
                 // A timestamp that decrypts and then fails, by the clock or by its encoding, ends it.
                 Err(e) => return Err(e),
             }

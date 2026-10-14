@@ -243,6 +243,10 @@ fn armor_key_from_ap(store: &dyn PrincipalRead, ap_raw: &[u8]) -> Result<Protoco
     let enc_tkt = match decrypt_enc_data(&key, tkt_usage, ap.ticket.enc_part.etype, cipher) {
         Ok(plain) => decode::<krb5_types::EncTicketPart>(&plain)
             .map_err(|_| proto_fast(err::BAD_INTEGRITY, "FAST armor TGT"))?,
+        // MIT `errcode_to_protocol` (`kdc_util.c:691-697`): the armor TGT's server key is a des3 key MIT refuses, a library code, so 60 and its message.
+        Err(e @ (krb5_crypto::Error::DesBadParity | krb5_crypto::Error::DesWeakKey)) => {
+            return Err(proto_fast(err::GENERIC, e.to_string()));
+        }
         Err(_) => return Err(proto_fast(err::BAD_INTEGRITY, "FAST armor TGT")),
     };
     if enc_tkt.flags.invalid() {

@@ -719,3 +719,133 @@ fn rd_req_with_a_server_pattern_must_match_the_tickets_server_before_the_lookup(
     );
     assert!(!looked_up.get(), "refused before the keytab is asked");
 }
+
+/// An AP-REQ to a service whose key is des3, that key, and its version.
+fn des3_host_ap_req() -> (Vec<u8>, ProtocolKey, u32) {
+    krb5_config::isolate_test_krb5();
+    let (mut store, _) = bootstrap_documented().expect("bootstrap");
+    store.policy.allow_des3 = true;
+    let key = ProtocolKey::random(EncryptionType::Des3CbcSha1).unwrap();
+    store
+        .set_keys(
+            &documented_host(),
+            vec![krb5_kdc::KeyEntry::new(
+                EncryptionType::Des3CbcSha1,
+                key.clone(),
+                0,
+            )],
+            0,
+        )
+        .expect("setkey");
+    let kvno = store
+        .get_name(&documented_host())
+        .unwrap()
+        .keys
+        .iter()
+        .map(|k| k.kvno)
+        .max()
+        .unwrap();
+    let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
+    let ckey = client_key();
+    let as_out = krb5_kdc::issue_as(
+        &store,
+        &as_req(
+            cname.clone(),
+            TEST_REALM,
+            0x2000_0011,
+            Some(vec![pa_enc_timestamp(&ckey).expect("pa")]),
+        )
+        .unwrap(),
+    )
+    .expect("AS");
+    let tgs = tgs_req(
+        as_out.rep.0.ticket,
+        &as_out.session_key,
+        TEST_REALM,
+        &cname,
+        documented_host(),
+        TEST_REALM,
+        0x2000_0012,
+    )
+    .expect("TGS-REQ");
+    let tgs_out = krb5_kdc::issue_tgs(&store, &tgs).expect("TGS");
+    assert_eq!(
+        tgs_out.rep.0.ticket.enc_part.etype, 16,
+        "sealed under the des3 key"
+    );
+    let ap = build_ap_req(
+        tgs_out.rep.0.ticket,
+        &tgs_out.session_key,
+        &krb5_types::ascii(TEST_REALM),
+        &cname,
+    )
+    .expect("AP-REQ");
+    (encode(&ap).expect("encode"), key, kvno)
+}
+
+fn with_bad_parity(key: &ProtocolKey) -> ProtocolKey {
+    let mut bytes = key.as_bytes().to_vec();
+    bytes[3] ^= 1;
+    ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &bytes).expect("a 24-octet key loads")
+}
+
+/// An acceptor that names its server has the one keytab entry tried, and that entry's key, of bad parity, is refused with its own code.
+/// MIT `try_one_entry` (`rd_req_dec.c:290-320`): `krb5_decrypt_tkt_part` fails with `KRB5DES_BAD_KEYPAR`, which only `KRB5KRB_AP_ERR_BAD_INTEGRITY` is turned into another error (`:337-338`).
+#[test]
+fn rd_req_with_a_server_named_and_its_key_of_bad_parity_is_refused_with_the_keys_code() {
+    let (raw, key, kvno) = des3_host_ap_req();
+    let server = documented_host();
+    let params = |keys: &'static [ProtocolKey]| ApVerifyParams {
+        keys,
+        key_kvnos: Some(Box::leak(vec![kvno].into_boxed_slice())),
+        key_principals: None,
+        kvno: None,
+        expected_server: Some(Box::leak(Box::new(server.clone()))),
+        expected_realm: Some(TEST_REALM),
+        get_entry: None,
+        skew: DEFAULT_SKEW,
+        remote_addr: None,
+        now: None,
+    };
+    verify_ap_req_ex(
+        &raw,
+        &params(Box::leak(vec![key.clone()].into_boxed_slice())),
+        &ReplayCache::new(),
+        None,
+    )
+    .expect("the key as it is");
+    let r = verify_ap_req_ex(
+        &raw,
+        &params(Box::leak(vec![with_bad_parity(&key)].into_boxed_slice())),
+        &ReplayCache::new(),
+        None,
+    );
+    assert!(
+        matches!(r, Err(krb5_protocol::Error::DesBadParity)),
+        "{r:?}"
+    );
+}
+
+/// With no server named the keytab is walked, an entry that does not decrypt is passed over, and the walk's end is chosen by what it found: a key at the ticket's kvno and enctype that cannot decrypt it is BAD_INTEGRITY.
+/// MIT `decrypt_try_server` (`rd_req_dec.c:355-443`): `try_one_entry`'s failure, whatever it is, moves the walk on; `iteration_error` (`:264-270`) then gives `KRB5KRB_AP_ERR_BAD_INTEGRITY`.
+#[test]
+fn rd_req_keytab_walk_over_a_key_of_bad_parity_is_bad_integrity() {
+    let (raw, key, kvno) = des3_host_ap_req();
+    walk_ok(&raw, &key, kvno);
+    let (code, text) = walk_code(&raw, &[with_bad_parity(&key)], &[kvno]);
+    assert_eq!(code, err::BAD_INTEGRITY);
+    assert!(
+        text.contains("found in keytab but cannot decrypt ticket"),
+        "{text}"
+    );
+}
+
+fn walk_ok(raw: &[u8], key: &ProtocolKey, kvno: u32) {
+    verify_ap_req_ex(
+        raw,
+        &walk(std::slice::from_ref(key), &[kvno]),
+        &ReplayCache::new(),
+        None,
+    )
+    .expect("the key as it is");
+}
