@@ -66,7 +66,7 @@ p256 = { version = "0.13", default-features = false, features = ["arithmetic", "
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 # Pinned: the build takes rasn from vendor/rasn (`[patch.crates-io]` below).
 rasn = "=0.28.14"
-rc4 = "0.1"
+rc4 = "0.2"
 regex-automata = { version = "0.4", default-features = false, features = ["std", "meta", "unicode"] }
 # The xattr reads of the SELinux labeler (`security.selinux`), behind a safe API.
 rustix = { version = "1.1", default-features = false, features = ["fs", "std"] }
