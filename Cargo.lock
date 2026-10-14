@@ -383,17 +383,6 @@ dependencies = [
 
 [[package]]
 name = "getrandom"
-version = "0.2.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
-dependencies = [
- "cfg-if",
- "libc",
- "wasi",
-]
-
-[[package]]
-name = "getrandom"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "300e883d756b2e4ec94e02791f39b04b522276138852cfc41d9fb7e904106099"
@@ -495,7 +484,7 @@ version = "1.1.0"
 dependencies = [
  "bytes",
  "chrono",
- "getrandom 0.2.17",
+ "getrandom",
  "krb5-asn1",
  "krb5-cli",
  "krb5-config",
@@ -557,7 +546,7 @@ dependencies = [
 name = "krb5-config"
 version = "1.1.0"
 dependencies = [
- "getrandom 0.2.17",
+ "getrandom",
  "krb5-testkit",
  "krb5-types",
  "nix",
@@ -583,7 +572,7 @@ dependencies = [
  "cmac",
  "curve25519-dalek",
  "des",
- "getrandom 0.2.17",
+ "getrandom",
  "hmac",
  "krb5-log",
  "md-5",
@@ -604,7 +593,7 @@ dependencies = [
 name = "krb5-gss"
 version = "1.1.0"
 dependencies = [
- "getrandom 0.2.17",
+ "getrandom",
  "krb5-asn1",
  "krb5-config",
  "krb5-crypto",
@@ -621,7 +610,7 @@ dependencies = [
 name = "krb5-kdc"
 version = "1.1.0"
 dependencies = [
- "getrandom 0.2.17",
+ "getrandom",
  "krb5-asn1",
  "krb5-cli",
  "krb5-config",
@@ -659,7 +648,7 @@ name = "krb5-log"
 version = "1.1.0"
 dependencies = [
  "chrono",
- "getrandom 0.2.17",
+ "getrandom",
  "krb5-testkit",
  "nix",
 ]
@@ -682,7 +671,7 @@ name = "krb5-protocol"
 version = "1.1.0"
 dependencies = [
  "bytes",
- "getrandom 0.2.17",
+ "getrandom",
  "krb5-asn1",
  "krb5-config",
  "krb5-crypto",
@@ -732,7 +721,7 @@ version = "1.1.0"
 dependencies = [
  "bytes",
  "chrono",
- "getrandom 0.2.17",
+ "getrandom",
  "p256",
  "pure-rust-locales",
  "rasn",
@@ -1377,7 +1366,7 @@ version = "1.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2cefc03fd367c0c6d4305de1b312cf00248c4114f4a0418ce6a6af769e3b0bd9"
 dependencies = [
- "getrandom 0.4.3",
+ "getrandom",
 ]
 
 [[package]]
@@ -1391,12 +1380,6 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
-
-[[package]]
-name = "wasi"
-version = "0.11.1+wasi-snapshot-preview1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ccf3ec651a847eb01de73ccad15eb7d99f80485de043efb2f370cd654f4ea44b"
 
 [[package]]
 name = "wasm-bindgen"
