@@ -14,21 +14,22 @@ change touches (`**kdc.**`, `**client.**`, `**tool.**`; two components as
 lines. Name no pass, round or plan item. `check_changelog_headings` refuses
 any other `###` heading.
 
-## [Unreleased] — targeting 1.1.0
+## [Unreleased]
 
-The **1.1** line is *general-purpose MIT 1.22.2 completeness*: making the KDC
-behave like MIT across the board and stand alone as a client toolset. The
-roadmap is nine gated phases — **G1** faithfulness (enforce expiration +
+## [1.1.0] - 2026-10-14
+
+The **1.1** line is *general-purpose MIT 1.22.2 completeness*: the KDC
+behaves like MIT across the board and stands alone as a client toolset. The
+roadmap was nine gated phases — **G1** faithfulness (enforce expiration +
 principal flags, real `GET_PRIVS`, iprop/kpropd ACLs) · **G2** ticket
 renewal + postdating · **G3** full kadmin verbs · **G4** iprop fidelity ·
 **G5** GSS breadth (delegation / SPNEGO / IOV) · **G6** client-side preauth +
 NT-ENTERPRISE · **G7** standalone user CLIs · **G8** KEYRING ccache · **G9**
-config breadth. Each phase lands behind a real-MIT gate before it counts as
-done. The entries below are the post-1.0 groundwork already in tree (Tier-1
-plugin/policy/propagation parity + the KLLDAP 0.7.5 toolchain alignment).
-**G1–G9 have landed** (faithfulness, renewal/postdating, kadmin,
-iprop, GSS breadth, client preauth, user CLIs, ccache/KCM, config
-breadth). 1.1 is cut after the remaining polish/general pass.
+config breadth. Each phase landed behind a real-MIT gate before it counted as
+done. The entries below are the post-1.0 work (Tier-1 plugin/policy/propagation
+parity + the KLLDAP 0.7.5 toolchain alignment, then **G1–G9**: faithfulness,
+renewal/postdating, kadmin, iprop, GSS breadth, client preauth, user CLIs,
+ccache/KCM, config breadth). 1.1 was cut after the polish/general pass.
 
 Deferred (committed G7 ledger; not this 1.1 cut): kvno `-U`/`-P`;
 G7g remote AUTH_GSSAPI `kadmin` client; ktutil argv-join; kpasswd
@@ -4293,3 +4294,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 - Stage 5: `krb5-kdc` AS/TGS issue, kadm5.acl-style admin, MIT keytab
   v2 export, AP-REQ verify, UDP/TCP 88 listener. Gate:
   `scripts/kdc-gate.sh` (MIT `kinit` + `kvno` against the Rust KDC).
+
+[Unreleased]: https://github.com/Aelieth/kerber-rust/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Aelieth/kerber-rust/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/Aelieth/kerber-rust/releases/tag/v1.0.0
