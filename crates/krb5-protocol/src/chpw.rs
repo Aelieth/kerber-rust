@@ -952,7 +952,7 @@ mod transport_tests {
             let addr = server.local_addr().unwrap();
             let seen = thread::spawn(move || {
                 let (mut conn, from) = server.accept().unwrap();
-                let mut req = [0u8; 3];
+                let mut req = [0u8; 7];
                 conn.read_exact(&mut req).unwrap();
                 conn.write_all(&5u32.to_be_bytes()).unwrap();
                 conn.write_all(b"reply").unwrap();
@@ -1008,7 +1008,7 @@ mod transport_tests {
         });
         thread::spawn(move || {
             let (mut conn, _) = second.accept().unwrap();
-            let mut req = [0u8; 3];
+            let mut req = [0u8; 7];
             conn.read_exact(&mut req).unwrap();
             conn.write_all(&5u32.to_be_bytes()).unwrap();
             conn.write_all(b"reply").unwrap();
