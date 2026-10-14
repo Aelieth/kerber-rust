@@ -17,7 +17,7 @@ use krb5_types::{
     ApOptions, ApReq, Authenticator, ChangePasswdData, EncryptedData, EncryptionKey, HostAddress,
     PrincipalName, Realm, Ticket, err, ku,
 };
-use zeroize::{Zeroize, Zeroizing};
+use zeroize::Zeroizing;
 
 use crate::ap_rep::verify_ap_rep;
 use crate::as_ex::AsOutcome;
@@ -261,10 +261,27 @@ fn change_or_set(
     new_pw: &[u8],
     target: Option<(&Realm, &PrincipalName)>,
 ) -> Result<(u16, Vec<u8>), Error> {
-    let mut sk = vec![0u8; as_out.session_key.etype().key_len()];
-    getrandom::getrandom(&mut sk).map_err(|e| Error::Crypto(e.to_string()))?;
-    let sub = ProtocolKey::from_bytes(as_out.session_key.etype(), &sk)?;
-    sk.zeroize();
+    change_or_set_via(
+        &mut |build| send_kpasswd(&kdc.host, build),
+        as_out,
+        new_pw,
+        target,
+    )
+}
+
+/// How a kpasswd request reaches the server: it is given the builder of the request for a connection and returns the reply.
+type SendRequest<'a> = dyn FnMut(&mut Build<'_>) -> Result<Vec<u8>, Error> + 'a;
+
+/// [`change_or_set`] over `send`.
+/// MIT `change_set_password` (`lib/krb5/os/changepw.c:230-240`): the request's subkey is made once, by `krb5_mk_req_extended`, before any connection.
+/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `krb5_generate_subkey` draws that subkey with it, so a des3 subkey has odd parity.
+fn change_or_set_via(
+    send: &mut SendRequest<'_>,
+    as_out: &AsOutcome,
+    new_pw: &[u8],
+    target: Option<(&Realm, &PrincipalName)>,
+) -> Result<(u16, Vec<u8>), Error> {
+    let sub = ProtocolKey::random(as_out.session_key.etype())?;
     let (authenticator, ap_der) = kpasswd_ap_req(
         &as_out.ticket,
         &as_out.session_key,
@@ -286,7 +303,7 @@ fn change_or_set(
     // MIT `kpasswd_sendto_msg_callback` (`lib/krb5/os/changepw.c:108-195`): the request is made once a connection to a server exists, with that connection's local address as the KRB-PRIV's sender.
     let mut build =
         |sender: &HostAddress| kpasswd_request(&sub, &ap_der, &priv_plain, version, sender);
-    let rep = send_kpasswd(&kdc.host, &mut build)?;
+    let rep = send(&mut build)?;
     let (ap_rep, priv_rep, from_error) = parse_kpasswd_rep(&rep)?;
     let (code, data) = if from_error {
         let (code, rest) = parse_chpw_rep(&priv_rep, true)?;
@@ -1201,5 +1218,94 @@ mod ap_req_tests {
             [0xa0, 0xa1, 0xa2, 0xa4, 0xa5, 0xa6],
             "{plain:02x?}"
         );
+    }
+
+    /// The subkey a request carries is MIT's `krb5_generate_subkey` kind: `krb5_c_make_random_key` of the session key's
+    /// enctype, so under a des3 session key it is a des3 key of odd parity on every octet. Before, 24 raw random octets,
+    /// which a MIT kpasswd service could not use ("DES key has bad parity").
+    #[test]
+    fn the_subkey_of_a_request_under_a_des3_session_key_has_odd_parity() {
+        use super::change_or_set_via;
+        use crate::as_ex::AsOutcome;
+        use crate::error::Error;
+        use krb5_types::{
+            EncKdcRepPart, EncryptionKey, HostAddress, KerberosTime, OctetString, TicketFlags,
+        };
+
+        let now = KerberosTime::now();
+        let sname = PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"]);
+        let sender = HostAddress {
+            addr_type: HostAddress::ADDRTYPE_INET,
+            address: vec![127, 0, 0, 1].into(),
+        };
+        for _ in 0..32 {
+            let session = ProtocolKey::random(EncryptionType::Des3CbcSha1).unwrap();
+            let as_out = AsOutcome {
+                ticket: Ticket {
+                    tkt_vno: Ticket::VNO,
+                    realm: ascii("KERBER.TEST"),
+                    sname: sname.clone(),
+                    enc_part: EncryptedData {
+                        etype: 16,
+                        kvno: Some(1),
+                        cipher: vec![0u8; 16].into(),
+                    },
+                },
+                enc_part: EncKdcRepPart {
+                    key: EncryptionKey {
+                        keytype: 16,
+                        keyvalue: OctetString::from(session.as_bytes().to_vec()),
+                    },
+                    last_req: vec![],
+                    nonce: 1,
+                    key_expiration: None,
+                    flags: TicketFlags::none(),
+                    authtime: now.clone(),
+                    starttime: None,
+                    endtime: now.clone(),
+                    renew_till: None,
+                    srealm: ascii("KERBER.TEST"),
+                    sname: sname.clone(),
+                    caddr: None,
+                    encrypted_pa_data: None,
+                },
+                client_key: session.clone(),
+                session_key: session.clone(),
+                cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
+                crealm: ascii("KERBER.TEST"),
+                fast_avail: false,
+                used_fast: false,
+                pa_type: None,
+                pa_config: None,
+            };
+            let mut sent = Vec::new();
+            let result = change_or_set_via(
+                &mut |build| {
+                    sent = build(&sender)?;
+                    Err(Error::ReplyMismatch("recorded".into()))
+                },
+                &as_out,
+                b"new-password",
+                None,
+            );
+            assert!(matches!(result, Err(Error::ReplyMismatch(ref m)) if m == "recorded"));
+            // length, version, AP-REQ length, the AP-REQ, then the KRB-PRIV.
+            let ap_len = usize::from(u16::from_be_bytes([sent[4], sent[5]]));
+            let ap: ApReq = decode(&sent[6..6 + ap_len]).unwrap();
+            let plain = decrypt(
+                &session,
+                KeyUsage::new(ku::AP_REQ_AUTHENTICATOR).unwrap(),
+                ap.authenticator.cipher.as_ref(),
+            )
+            .unwrap();
+            let sub = decode::<Authenticator>(&plain)
+                .unwrap()
+                .subkey
+                .expect("a subkey");
+            assert_eq!(sub.keytype, EncryptionType::Des3CbcSha1.to_iana());
+            let key = sub.keyvalue.as_ref();
+            assert_eq!(key.len(), 24);
+            assert!(key.iter().all(|b| b.count_ones() % 2 == 1), "{key:02x?}");
+        }
     }
 }

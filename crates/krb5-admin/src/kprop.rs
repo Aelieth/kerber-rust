@@ -593,10 +593,7 @@ pub fn kprop_expired_ap_req(
     let past = now
         .add_seconds(-400)
         .map_err(|e| Error::Inner(e.to_string()))?;
-    let mut kb = vec![0u8; host_key.etype().key_len()];
-    getrandom::getrandom(&mut kb).map_err(|e| Error::Inner(e.to_string()))?;
-    let session =
-        ProtocolKey::from_bytes(host_key.etype(), &kb).map_err(|e| Error::Inner(e.to_string()))?;
+    let session = ProtocolKey::random(host_key.etype()).map_err(|e| Error::Inner(e.to_string()))?;
     let realm_ks = krb5_types::try_ascii(realm).map_err(|e| Error::Inner(e.to_string()))?;
     let part = EncTicketPart {
         flags: TicketFlags::initial_preauth(),
@@ -1773,6 +1770,27 @@ mod tests {
             recvauth_protocol_text(err::BADMATCH),
             "Ticket/authenticator don't match"
         );
+    }
+
+    /// The session key in the ticket of the expired AP-REQ that the `kprop-expired-apreq` gate tool makes, under a des3
+    /// host key, is a des3 key of odd parity on every octet, as a MIT service's `krb5_rd_req` needs it. Before, 24 raw random octets.
+    /// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the enctype's random-to-key, which gives des3 its parity.
+    #[test]
+    fn the_session_key_of_an_expired_ap_req_under_a_des3_host_key_has_odd_parity() {
+        use krb5_asn1::decode;
+        let host_key = ProtocolKey::random(EncryptionType::Des3CbcSha1).unwrap();
+        let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "des3.kerber.test"]);
+        for _ in 0..32 {
+            let der = kprop_expired_ap_req(&host_key, 1, &host, "KERBER.TEST").unwrap();
+            let ap: ApReq = decode(&der).unwrap();
+            let usage = KeyUsage::new(ku::TICKET).unwrap();
+            let plain = decrypt(&host_key, usage, ap.ticket.enc_part.cipher.as_ref()).unwrap();
+            let part: EncTicketPart = decode(&plain).unwrap();
+            assert_eq!(part.key.keytype, EncryptionType::Des3CbcSha1.to_iana());
+            let key = part.key.keyvalue.as_ref();
+            assert_eq!(key.len(), 24);
+            assert!(key.iter().all(|b| b.count_ones() % 2 == 1), "{key:02x?}");
+        }
     }
 
     #[test]

@@ -60,9 +60,7 @@ pub(super) fn continue_fast(
     let armor = req
         .fast_armor
         .ok_or_else(|| Error::ReplyMismatch("FAST armor missing".into()))?;
-    let mut raw = vec![0u8; armor.session.etype().key_len()];
-    getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
-    let sub = ProtocolKey::from_bytes(armor.session.etype(), &raw)?;
+    let sub = ProtocolKey::random(armor.session.etype())?;
     let akey = armor_key(&armor.session, Some(&sub))?;
     // RFC 6113 reply-key base is the PA-ETYPE-INFO2 long-term key, not preferred()[0].
     let ap = fast_armor_ap(armor, &sub)?;

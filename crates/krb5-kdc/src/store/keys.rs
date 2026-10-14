@@ -172,15 +172,20 @@ pub(super) fn cap_key_versions(keys: &mut Vec<KeyEntry>, n: u32) {
     keys.retain(|k| keep.contains(&k.kvno));
 }
 
-/// Fill a random protocol key of `etype`.
+/// A random protocol key of `etype`: every key this KDC draws, a principal's `-randkey` and `ktadd` keys, the
+/// krbtgt, history and master keys and the session and sub keys of its replies.
+/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the
+/// enctype's random-to-key, so a des3 key is 21 octets spread over 24 with odd parity on each (`k5_rand2key_des3`,
+/// `k5_des_fixup_key_parity`), and every other enctype takes its random octets as the key.
 ///
 /// # Errors
 ///
 /// [`Error::Rng`] when the CSPRNG fails.
 pub fn random_key(etype: EncryptionType) -> Result<ProtocolKey, Error> {
-    let mut buf = vec![0u8; etype.key_len()];
-    getrandom::getrandom(&mut buf).map_err(|_| Error::Rng)?;
-    ProtocolKey::from_bytes(etype, &buf).map_err(Error::from)
+    ProtocolKey::random(etype).map_err(|e| match e {
+        krb5_crypto::Error::Rng => Error::Rng,
+        e => Error::from(e),
+    })
 }
 
 /// The key types a new key set takes when kdc.conf names no `supported_enctypes`.

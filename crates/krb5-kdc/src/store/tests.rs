@@ -1324,3 +1324,73 @@ fn as_missing_krbtgt_is_get_local_tgt() {
         other => panic!("expected 60 GET_LOCAL_TGT, got {other:?}"),
     }
 }
+
+const DES3: EncryptionType = EncryptionType::Des3CbcSha1;
+
+/// A DES key octet has an odd number of one bits: its low bit is the parity.
+fn odd_parity(octets: &[u8]) -> bool {
+    octets.iter().all(|b| b.count_ones() % 2 == 1)
+}
+
+/// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the
+/// enctype's random-to-key, so a des3 key is 24 octets of odd parity (`k5_rand2key_des3`,
+/// `k5_des_fixup_key_parity`) and every other enctype's key is its length. 24 raw random octets are all of odd
+/// parity with probability 2^-24, so 64 keys decide it.
+#[test]
+fn random_key_of_des3_is_24_octets_of_odd_parity() {
+    for _ in 0..64 {
+        let key = random_key(DES3).unwrap();
+        assert_eq!(key.etype(), DES3);
+        assert_eq!(key.as_bytes().len(), 24);
+        assert!(odd_parity(key.as_bytes()), "{:02x?}", key.as_bytes());
+    }
+    for etype in [
+        A128,
+        A256,
+        EncryptionType::Aes128CtsHmacSha256128,
+        EncryptionType::Aes256CtsHmacSha384192,
+        EncryptionType::Rc4Hmac,
+        EncryptionType::Camellia128CtsCmac,
+        EncryptionType::Camellia256CtsCmac,
+    ] {
+        let key = random_key(etype).unwrap();
+        assert_eq!(key.etype(), etype);
+        assert_eq!(key.as_bytes().len(), etype.key_len());
+    }
+}
+
+/// The keys `addprinc -randkey -e des3-cbc-sha1:normal` and `cpw -randkey -e des3-cbc-sha1:normal` give a
+/// principal are drawn like MIT's `krb5_dbe_crk` / `krb5_dbe_cpw` draw them, with `krb5_c_make_random_key`: a des3
+/// key of odd parity on every octet, which a MIT `kinit`, `kvno` or `kdb5_util load` takes. Before, they were 24 raw
+/// random octets and MIT said "DES key has bad parity".
+#[test]
+fn randkey_principals_hold_des3_keys_of_odd_parity() {
+    let (mut store, acl) = crate::testrealm::bootstrap_documented().unwrap();
+    let admin = crate::testrealm::documented_admin_id();
+    let name = PrincipalName::new(
+        PrincipalName::NT_SRV_HST,
+        ["host", "des3randkey.kerber.test"],
+    );
+    store
+        .create_host_etypes(&acl, &admin, &name, &[DES3, A256])
+        .unwrap();
+    let created: Vec<KeyEntry> = store.get_name(&name).unwrap().keys.clone();
+    assert_eq!(created.len(), 2);
+    for k in &created {
+        assert_eq!(k.key.as_bytes().len(), k.etype.key_len());
+    }
+    let des3 = created
+        .iter()
+        .find(|k| k.etype == DES3)
+        .expect("a des3 key");
+    assert!(odd_parity(des3.key.as_bytes()), "addprinc -randkey");
+    let rekeyed = store
+        .chrand_etypes_keepold_in(&name, TEST_REALM_STR, &[DES3], 0, &admin)
+        .unwrap();
+    let des3 = rekeyed
+        .iter()
+        .find(|k| k.etype == DES3)
+        .expect("a des3 key");
+    assert!(odd_parity(des3.key.as_bytes()), "cpw -randkey");
+    assert_eq!(rekeyed.len(), 1);
+}

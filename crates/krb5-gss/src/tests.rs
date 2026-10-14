@@ -430,12 +430,8 @@ fn process_ap_rep_acceptor_subkey_unwrap() {
 
     let (mut init, _acc) = contexts();
     let et = init.session_key().etype();
-    let mut ticket_raw = vec![0u8; et.key_len()];
-    getrandom::getrandom(&mut ticket_raw).unwrap();
-    let ticket = ProtocolKey::from_bytes(et, &ticket_raw).unwrap();
-    let mut raw = vec![0u8; et.key_len()];
-    getrandom::getrandom(&mut raw).unwrap();
-    let sub = ProtocolKey::from_bytes(et, &raw).unwrap();
+    let ticket = ProtocolKey::random(et).unwrap();
+    let sub = ProtocolKey::random(et).unwrap();
     let (ctime, cusec) = init.ap_req_time.clone().unwrap();
     let part = EncApRepPart {
         ctime,

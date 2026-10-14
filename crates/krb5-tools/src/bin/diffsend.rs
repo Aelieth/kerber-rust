@@ -1157,9 +1157,7 @@ fn expect_tgs_ad_pa(
 }
 
 fn random_session(etype: EncryptionType) -> Result<ProtocolKey, String> {
-    let mut buf = vec![0u8; etype.key_len()];
-    getrandom::getrandom(&mut buf).map_err(|e| e.to_string())?;
-    ProtocolKey::from_bytes(etype, &buf).map_err(|e| e.to_string())
+    ProtocolKey::random(etype).map_err(|e| e.to_string())
 }
 
 fn load_cfg() -> Result<Cfg, String> {

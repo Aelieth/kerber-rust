@@ -162,4 +162,33 @@ mod tests {
         }
         assert_eq!(n, 12);
     }
+
+    /// MIT `krb5_c_make_random_key` (`lib/crypto/krb/make_random_key.c:31-76`): `keybytes` random octets through the enctype's random-to-key, so a des3 key has 24 octets, every one of odd parity.
+    /// A key of 24 raw random octets would have it by chance with probability 2^-24, so 64 keys decide it.
+    #[test]
+    fn a_random_des3_key_has_odd_parity_on_every_octet() {
+        for _ in 0..64 {
+            let key = ProtocolKey::random(EncryptionType::Des3CbcSha1).unwrap();
+            assert_eq!(key.as_bytes().len(), 24);
+            assert!(odd_parity(key.as_bytes()), "{:02x?}", key.as_bytes());
+        }
+    }
+
+    /// MIT `k5_rand2key_direct` (`lib/crypto/krb/random_to_key.c:63-73`): every other enctype takes the random octets as the key, `key_len()` of them.
+    #[test]
+    fn the_other_random_keys_are_the_etypes_length() {
+        for etype in [
+            EncryptionType::Aes128CtsHmacSha196,
+            EncryptionType::Aes256CtsHmacSha196,
+            EncryptionType::Aes128CtsHmacSha256128,
+            EncryptionType::Aes256CtsHmacSha384192,
+            EncryptionType::Rc4Hmac,
+            EncryptionType::Camellia128CtsCmac,
+            EncryptionType::Camellia256CtsCmac,
+        ] {
+            let key = ProtocolKey::random(etype).unwrap();
+            assert_eq!(key.etype(), etype);
+            assert_eq!(key.as_bytes().len(), etype.key_len());
+        }
+    }
 }

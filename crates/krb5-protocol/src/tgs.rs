@@ -879,9 +879,7 @@ fn tgs_round_trip(
     let mic = checksum(&tgt.session_key, cksum_usage, &body_der)?;
     // MIT `tgs_construct_ap_req` (`lib/krb5/krb/send_tgs.c:82-82`): the authenticator's time and microseconds, from `krb5_us_timeofday`.
     let (now, usec) = crate::auth_con::us_timeofday();
-    let mut raw = vec![0u8; tgt.session_key.etype().key_len()];
-    getrandom::getrandom(&mut raw).map_err(|e| Error::transport_msg(e.to_string()))?;
-    let sub = ProtocolKey::from_bytes(tgt.session_key.etype(), &raw)?;
+    let sub = ProtocolKey::random(tgt.session_key.etype())?;
     // MIT `k5_make_tgs_req` (`lib/krb5/krb/send_tgs.c:113-300`): the subkey, then the enctypes
     // asked for, are traced as the request is made.
     trace::send_tgs_subkey((&sub).into());

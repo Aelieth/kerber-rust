@@ -72,6 +72,10 @@ name = "client_s4u"
 path = "tests/client_s4u.rs"
 
 [[test]]
+name = "des3_subkeys"
+path = "tests/des3_subkeys.rs"
+
+[[test]]
 name = "client_identify_realm"
 path = "tests/client_identify_realm.rs"
 
