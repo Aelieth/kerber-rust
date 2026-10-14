@@ -1498,6 +1498,7 @@ FULL_RESYNC wait `$ok` printed-not-enforced.
 
 ### Fixed
 
+- **crypto.** A des3 key signs and verifies as MIT's `krb5int_dk_checksum`, the keys we draw have odd parity, and a key of bad parity is refused. Vectors from MIT; units.
 - **protocol.** A keytab AS ends at the key that opens the reply, with the reply's own error, as
   MIT's `decrypt_as_reply`; another key's error replaced it. Units; settled.
 - **crypto.** The AES and Camellia cipher state after a message is MIT's, so a dump of several
