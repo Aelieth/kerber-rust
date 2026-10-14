@@ -115,7 +115,7 @@ implementation oracle. The Rust-only gates (Oracle `none`) are in
 | golden MIT DER + crypto KATs | in-repo fixtures, not a live peer | test |
 | 9 cargo-fuzz targets | `fuzz.yml` smoke, not an interop peer | fuzz |
 | in-process `bounded_stress` | not the wire stress-gate | unit |
-| cargo-vet exemptions | shrinking list; not a full local audit of every crate | documented |
+| cargo-vet exemptions | 121 crates exempt (114 at 1.0), 20 fully audited; not a full local audit of every crate | documented |
 | in-process metrics counters | deferred; logs-as-metrics only (`logging.md`) | n/a |
 
 MSRV 1.95 `cargo build --workspace --all-targets --locked` is the `msrv`
