@@ -46,7 +46,7 @@ aes = "0.8"
 # rasn's `OctetString` buffer; `try_into_mut` lets the last handle on a key, or on a secret copy
 # made to be encoded (`safe_priv::wipe_octets`), wipe it in place.
 bytes = "1.12"
-camellia = "0.1"
+camellia = "0.2"
 chrono = { version = "0.4", default-features = false, features = ["alloc", "clock", "std"] }
 # glibc LC_TIME tables. krb5-types formats dates with them; defmt stays off.
 pure-rust-locales = { version = "0.8.2", default-features = false }
