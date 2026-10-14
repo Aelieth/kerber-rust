@@ -28,7 +28,7 @@ plus packet captures outrank unit tests.
 | | |
 |---|---|
 | **v1.0.0** | Tagged interop milestone: the MIT 1.22.2 / Heimdal / Active Directory core, proven by content-asserting external gates in CI. `publish = false` (not on crates.io). |
-| **v1.1** *(in progress)* | **General-purpose MIT completeness**: the KDC behaves like MIT across the board and the client tools stand alone. The nine 1.1 phases and the MIT 1.22.2 parity sweep have landed ([docs/stages.md](docs/stages.md)); the swept MIT functions are graded one row per check in the [parity ledger](docs/parity/README.md). |
+| **v1.1.0** | **General-purpose MIT completeness**: the KDC behaves like MIT across the board and the client tools stand alone. It installs and runs like MIT's `krb5-server` on Fedora ([docs/install.md](docs/install.md): MIT-named commands, systemd units, the upgrade from an MIT realm), and real consumers use it in the field beside the same scenario on MIT 1.22.2: SSSD login, renewal and `passwd`, sshd GSSAPI, NFS 4.2 `krb5i` / `krb5p`, Keycloak SPNEGO, an Active Directory trust, and KLLDAP with `krb5-server` swapped out ([interop matrix](docs/interop-matrix.md#field-consumers); repeatable through [harness/field](harness/field/README.md)). The nine 1.1 phases and the MIT 1.22.2 parity sweep have landed ([docs/stages.md](docs/stages.md)); the swept MIT functions are graded one row per check in the [parity ledger](docs/parity/README.md). `publish = false` (not on crates.io). |
 
 Every push runs 59 gates in `ci.yml`: 56 fail-red and 3 soft (`continue-on-error`).
 Nine more run only nightly (the eight Samba / AD / Heimdal peers and the KCM opcode
