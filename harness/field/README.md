@@ -185,6 +185,9 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
     session's own `/tmp/claude-<uid>` out of the `/tmp` check, because the
     session writes there on every tool call. The `post.host.tmp` line says how
     many entries it left out.
+  - Every run also leaves `/tmp/grok-file-lock-<uid>` out of that check and
+    counts it on the same line. A Grok session writes its usage lock there
+    even when it is not the process driving the run.
 - **Limits:** a scenario has `FIELD_SCENARIO_TIMEOUT` seconds (default 1800),
   and each of its commands `FIELD_CMD_TIMEOUT` (default 900), cut to what is
   left of the scenario's time. A command over its limit is stopped and fails

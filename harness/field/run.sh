@@ -12,7 +12,8 @@
 # directory); every snapshot baseline.env names exists; `lab.sh check --lab-only` of the VMs the selected
 # scenarios use (ssh, DNS, time sync: no internet, LAN or AD DC probe); the sha256 of /etc/krb5.conf, and from
 # a distrobox of the host's own. Postflight, also after a stop or an interruption: those sums unchanged, nothing
-# new in the host's /tmp owned by the user, the secret scan of the whole run with its planted control first.
+# new in the host's /tmp owned by the user (Claude's /tmp/claude-<uid> when CLAUDECODE=1, and
+# /tmp/grok-file-lock-<uid>, each counted), the secret scan of the whole run with its planted control first.
 # Any failure fails the run. A scenario that did not run is NOT-RUN, never green. Exit 0 only when every
 # selected scenario passed and every guard held.
 # Limits: a scenario has FIELD_SCENARIO_TIMEOUT seconds (default 1800; its commands are cut to what is left,
@@ -111,18 +112,23 @@ declare -a ROWS=()
 
 # postflight: the guards that hold whatever happened before them.
 postflight() {
-    local mark=$RUN/tmp/.start excl='' left=''
+    local mark=$RUN/tmp/.start excl='' left='' grok_excl
+    local -a prune
     section "postflight"
     krb5_sums > "$RUN/guards/krb5.conf.end"
     check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
+    # A Grok session writes this tree for the same user even when it is not the process driving the run.
+    grok_excl="/tmp/grok-file-lock-$(id -u)"
+    prune=(-path "$grok_excl" -prune -o)
+    note "left out of the /tmp guard (and counted): $grok_excl"
+    left="; left out: $(find "$grok_excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $grok_excl"
     if [ "${CLAUDECODE:-}" = 1 ]; then
         excl="/tmp/claude-$(id -u)"
         note "driven from a Claude Code session (CLAUDECODE=1): the session writes its own $excl on every tool call, so that one tree is left out of the /tmp guard (and counted)"
-        left="; left out: $(find "$excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $excl"
-        find /tmp -xdev -path "$excl" -prune -o -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
-    else
-        find /tmp -xdev -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
+        left+="; left out: $(find "$excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $excl"
+        prune=(-path "$excl" -prune -o "${prune[@]}")
     fi
+    find /tmp -xdev "${prune[@]}" -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
     printf 'new in /tmp: %s%s\n' "$(grep -c . "$RUN/guards/host-tmp.txt" || true)" "$left" >> "$RUN/guards/host-tmp.txt"
     check post.host.tmp '^new in /tmp: 0(;|$)' host "cat $(printf '%q' "$RUN/guards/host-tmp.txt")"
     check post.secret.scan rc host "python3 -B $(printf '%q' "$FIELD_LIB/scan-secrets.py") $(printf '%q' "$RUN")"
@@ -277,7 +283,7 @@ for leg in "${LEGS[@]}"; do
         rc=0
         REC_DIR=$dir TMPDIR=$RUN/tmp/$sc-$leg FIELD_RUN=$RUN FIELD_TREE_TAR=$RUN/tmp/tree.tar FIELD_SHA=$SHA \
             FIELD_REF=$REF FIELD_DEADLINE=$(( t + SCEN_LIMIT )) \
-            timeout -k 60 $(( SCEN_LIMIT + 120 )) bash "$HERE/scenarios/$sc.sh" --leg "$leg" 9>&- \
+            timeout -k 60 $(( SCEN_LIMIT + 120 )) bash "$HERE/scenarios/$sc.sh" --leg "$leg" \
             > >(tee -i -a "$RUN/run.log" 9>&-) 2>&1 &
         SCEN=$!
         while :; do
