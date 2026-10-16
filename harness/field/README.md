@@ -26,6 +26,7 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 | `client2.kerber.test` | `.22` | `kerber-client2` | Fedora 43 Cloud | 2 / 3 GiB / 20 GB | sshd target, second NFS client, headless checks |
 | `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
 | `mitd3.kerber.test` | `.31` | `kerber-mitd3` | Fedora 43 Cloud | 4 / 4 GiB / 20 GB | upstream MIT krb5 1.22.2 built from the release tarball: the des3 oracle (B22) |
+| `ub26.kerber.test` | `.32` | `kerber-ub26` | Ubuntu 26.04 Cloud | 4 / 8 GiB / 60 GB | CI mirror. `lab.sh up` does not start it; `lab.sh up ub26` does. Parked unless that run is under way |
 
 - **DHCP:** static leases by MAC (`network-kerber-lab.xml`, the table in
   `lab.sh`). Other machines get `.100`–`.199`.

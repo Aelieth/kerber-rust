@@ -46,6 +46,9 @@
     <host ip='192.168.177.31'>
       <hostname>mitd3.kerber.test</hostname>
     </host>
+    <host ip='192.168.177.32'>
+      <hostname>ub26.kerber.test</hostname>
+    </host>
   </dns>
   <ip address='192.168.177.1' netmask='255.255.255.0'>
     <dhcp>
@@ -56,6 +59,7 @@
       <host mac='52:54:00:4b:52:16' name='client2' ip='192.168.177.22'/>
       <host mac='52:54:00:4b:52:1e' name='klldap' ip='192.168.177.30'/>
       <host mac='52:54:00:4b:52:1f' name='mitd3' ip='192.168.177.31'/>
+      <host mac='52:54:00:4b:52:20' name='ub26' ip='192.168.177.32'/>
     </dhcp>
   </ip>
 </network>

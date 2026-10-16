@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 # harness/field/lab.sh: the kerber-rust KVM field lab (section F0).
 #
-# Builds, runs and resets six VMs on libvirt qemu:///system: kdc, services,
-# client1 (Fedora Kinoite 43), client2, klldap (the Docker host for KLLDAP)
-# and mitd3 (upstream MIT krb5 built from the release tarball: the des3
-# oracle, which Fedora's MIT cannot be). They sit on the NAT network
+# Builds, runs and resets six field VMs on libvirt qemu:///system: kdc,
+# services, client1 (Fedora Kinoite 43), client2, klldap (the Docker host
+# for KLLDAP) and mitd3 (upstream MIT krb5 built from the release tarball:
+# the des3 oracle, which Fedora's MIT cannot be). ub26 (Ubuntu 26.04) is a
+# seventh VM for the CI mirror. `up` and `up all` do not start it; name it.
+# They sit on the NAT network
 # kerber-lab (192.168.177.0/24, DNS domain kerber.test). kdc also has a LAN
 # NIC (macvtap) so the AD test DC can reach it. See harness/field/README.md.
 #
@@ -63,18 +65,26 @@ FEDORA_KEY=/etc/pki/rpm-gpg/RPM-GPG-KEY-fedora-43-primary
 FEDORA_KEY_FPR=C6E7F081CF80E13146676E88829B606631645531
 BASE_VOL=fedora-43-cloud-base-1.6.qcow2
 ISO_VOL=fedora-kinoite-43-1.6.iso
+# Ubuntu 26.04 cloud image, pinned to the release SHA256SUMS fetched
+# 2026-10-16. A replaced image fails closed until this pin moves.
+UBUNTU_URL=https://cloud-images.ubuntu.com/releases/26.04/release
+UBUNTU_IMG=ubuntu-26.04-server-cloudimg-amd64.img
+UBUNTU_SHA256=8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2
+UBUNTU_VOL=ubuntu-26.04-cloud.img
 
 # The VM table. The MACs must match network-kerber-lab.xml.
-ALL_VMS=(kdc services client1 client2 klldap mitd3)
-declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud)
-declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4)
-declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096)
-declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20)
+ALL_VMS=(kdc services client1 client2 klldap mitd3 ub26)
+declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud [ub26]=ubuntu)
+declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4 [ub26]=4)
+declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096 [ub26]=8192)
+declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20 [ub26]=60)
 declare -A IP=([kdc]=192.168.177.10 [services]=192.168.177.11 [client1]=192.168.177.21
-               [client2]=192.168.177.22 [klldap]=192.168.177.30 [mitd3]=192.168.177.31)
+               [client2]=192.168.177.22 [klldap]=192.168.177.30 [mitd3]=192.168.177.31
+               [ub26]=192.168.177.32)
 declare -A MAC=([kdc]=52:54:00:4b:52:0a [services]=52:54:00:4b:52:0b
                 [client1]=52:54:00:4b:52:15 [client2]=52:54:00:4b:52:16
-                [klldap]=52:54:00:4b:52:1e [mitd3]=52:54:00:4b:52:1f)
+                [klldap]=52:54:00:4b:52:1e [mitd3]=52:54:00:4b:52:1f
+                [ub26]=52:54:00:4b:52:20)
 KDC_LAN_MAC=52:54:00:4b:4c:0a
 
 say()  { printf '[lab] %s\n' "$*"; }
@@ -105,12 +115,18 @@ has_snapshot() { vsh snapshot-info "$(dom "$1")" --snapshotname "$2" >/dev/null 
 # in_install <vm>: the domain still boots the installer kernel (client1 before its first boot).
 in_install() { [ "$(vsh dumpxml --inactive "$(dom "$1")" | awk '/<kernel>/ { n++ } END { print n + 0 }')" -gt 0 ]; }
 
-# select_vms <args...>: SEL = the named VMs, or every VM when none (or 'all') is named.
+# select_vms <args...>: SEL = the named VMs, or the field VMs when none (or 'all')
+# is named. ub26 is not in that set; name it.
 SEL=()
 select_vms() {
     SEL=()
     if [ $# -eq 0 ] || [ "$1" = all ]; then
-        SEL=("${ALL_VMS[@]}")
+        local vm
+        for vm in "${ALL_VMS[@]}"; do
+            # ub26 stays shut off unless a command names it.
+            [ "${KIND[$vm]}" = ubuntu ] && continue
+            SEL+=("$vm")
+        done
         return 0
     fi
     local vm
@@ -265,6 +281,26 @@ ensure_base_vol() {
     upload_vol "$LAB_HOME/images/$CLOUD_IMG" "$BASE_VOL" qcow2
 }
 
+ensure_ubuntu_vol() {
+    vol_exists "$UBUNTU_VOL" && return 0
+    local dir=$LAB_HOME/images sums listed have
+    mkdir -p "$dir"
+    sums=$dir/ubuntu-26.04-SHA256SUMS
+    curl -fsSL --retry 5 -o "$sums" "$UBUNTU_URL/SHA256SUMS"
+    listed=$(awk -v f="$UBUNTU_IMG" '$2 == f || $2 == ("*" f) { print $1; exit }' "$sums")
+    [ "$listed" = "$UBUNTU_SHA256" ] || die "Ubuntu SHA256SUMS lists ${listed:-nothing}, pin is $UBUNTU_SHA256"
+    if [ ! -f "$dir/$UBUNTU_IMG" ]; then
+        say "downloading $UBUNTU_IMG"
+        curl -fSL --retry 5 -C - -o "$dir/$UBUNTU_IMG.part" "$UBUNTU_URL/$UBUNTU_IMG"
+        mv "$dir/$UBUNTU_IMG.part" "$dir/$UBUNTU_IMG"
+    fi
+    have=$(sha256sum "$dir/$UBUNTU_IMG" | cut -d' ' -f1)
+    [ "$have" = "$UBUNTU_SHA256" ] || die "$UBUNTU_IMG: sha256 $have does not match the pin"
+    say "verified $UBUNTU_IMG (sha256 $UBUNTU_SHA256)"
+    say "uploading $UBUNTU_IMG to pool volume $UBUNTU_VOL"
+    upload_vol "$dir/$UBUNTU_IMG" "$UBUNTU_VOL" qcow2
+}
+
 ensure_iso_vol() {
     vol_exists "$ISO_VOL" && return 0
     fetch_verified "$MIRROR/Kinoite/x86_64/iso" "$KINOITE_ISO" "$KINOITE_SUMS"
@@ -341,6 +377,39 @@ create_cloud() {
         --disk "vol=$POOL/$d.qcow2,bus=virtio,discard=unmap" \
         --disk "vol=$POOL/$d-seed.iso,device=cdrom" \
         "${nets[@]}" \
+        --graphics none --console pty,target_type=serial --rng /dev/urandom \
+        --import --noautoconsole >/dev/null
+}
+
+create_ubuntu() {
+    local vm=$1 d s
+    d=$(dom "$vm")
+    s="$LAB_HOME/seeds/$vm"
+    ensure_ubuntu_vol
+    (umask 077; mkdir -p "$s")
+    render "$HERE/cloud-init/$vm.user-data" "$s/user-data" "$vm"
+    render "$HERE/cloud-init/network-config.single" "$s/network-config" "$vm"
+    printf 'instance-id: kerber-%s-%s\nlocal-hostname: %s.%s\n' \
+        "$vm" "$(date -u +%Y%m%dT%H%M%SZ)" "$vm" "$DNS_DOMAIN" > "$s/meta-data"
+    rm -f "$s/seed.iso"
+    xo -as mkisofs -output "$s/seed.iso" -volid cidata -joliet -rock \
+        "$s/user-data" "$s/meta-data" "$s/network-config"
+    upload_vol "$s/seed.iso" "$d-seed.iso" raw
+    if vol_exists "$d.qcow2"; then vsh vol-delete --pool "$POOL" "$d.qcow2" >/dev/null; fi
+    vsh vol-create-as "$POOL" "$d.qcow2" "${DISK[$vm]}G" --format qcow2 \
+        --backing-vol "$UBUNTU_VOL" --backing-vol-format qcow2 >/dev/null
+    forget_host_key "$vm"
+    say "creating $d (${CPUS[$vm]} vCPU, ${MEM[$vm]} MiB, ${DISK[$vm]} GiB, Ubuntu 26.04 Cloud)"
+    # This host's osinfo-db has no ubuntu26.04 id (newest Ubuntu entry is 25.10).
+    # generic also omits the virtio guest-agent channel that fedora43 adds.
+    hx virt-install --connect "$URI" --name "$d" --osinfo detect=on,require=off \
+        --metadata "description=kerber-rust field lab: $vm.$DNS_DOMAIN (harness/field)" \
+        --vcpus "${CPUS[$vm]}" --memory "${MEM[$vm]}" --cpu host-passthrough \
+        --disk "vol=$POOL/$d.qcow2,bus=virtio,discard=unmap" \
+        --disk "vol=$POOL/$d-seed.iso,device=cdrom" \
+        --network "network=$NET,mac=${MAC[$vm]},model=virtio" \
+        --controller type=virtio-serial,index=0 \
+        --channel unix,target_type=virtio,name=org.qemu.guest_agent.0 \
         --graphics none --console pty,target_type=serial --rng /dev/urandom \
         --import --noautoconsole >/dev/null
 }
@@ -479,7 +548,11 @@ cmd_up() {
     ensure_pool
     for vm in "${vms[@]}"; do
         if ! dom_exists "$vm"; then
-            if [ "${KIND[$vm]}" = kinoite ]; then create_kinoite; else create_cloud "$vm"; fi
+            case ${KIND[$vm]} in
+                kinoite) create_kinoite ;;
+                ubuntu) create_ubuntu "$vm" ;;
+                *) create_cloud "$vm" ;;
+            esac
         elif has_snapshot "$vm" base; then
             if ! is_state "$vm" running; then
                 say "starting $(dom "$vm")"
@@ -508,7 +581,11 @@ cmd_up() {
 
 cmd_down() {
     local vms vm
-    select_vms "$@"
+    if [ $# -eq 0 ]; then
+        SEL=("${ALL_VMS[@]}")
+    else
+        select_vms "$@"
+    fi
     vms=("${SEL[@]}")
     for vm in "${vms[@]}"; do
         dom_exists "$vm" || continue
