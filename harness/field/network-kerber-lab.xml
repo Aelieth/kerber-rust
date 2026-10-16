@@ -5,7 +5,8 @@
   with static leases and the DNS domain kerber.test. The domain is local
   only (never forwarded upstream) and has forward and reverse records.
   The klldap address is reserved for the F3 VM, the mitd3 address for the VM
-  that carries upstream MIT krb5 (the des3 oracle, B22).
+  that carries upstream MIT krb5 (the des3 oracle, B22). deb13 is the Debian
+  13 peer. rocky10 is the Rocky Linux 10 VM for a closeout and the final.
 
   ad.kerber.test is forwarded to the AD test DC on the LAN (F2-AD), so lab
   VMs can resolve test-server.ad.kerber.test. The more specific forwarder
@@ -49,6 +50,12 @@
     <host ip='192.168.177.32'>
       <hostname>ub26.kerber.test</hostname>
     </host>
+    <host ip='192.168.177.33'>
+      <hostname>deb13.kerber.test</hostname>
+    </host>
+    <host ip='192.168.177.34'>
+      <hostname>rocky10.kerber.test</hostname>
+    </host>
   </dns>
   <ip address='192.168.177.1' netmask='255.255.255.0'>
     <dhcp>
@@ -60,6 +67,8 @@
       <host mac='52:54:00:4b:52:1e' name='klldap' ip='192.168.177.30'/>
       <host mac='52:54:00:4b:52:1f' name='mitd3' ip='192.168.177.31'/>
       <host mac='52:54:00:4b:52:20' name='ub26' ip='192.168.177.32'/>
+      <host mac='52:54:00:4b:52:21' name='deb13' ip='192.168.177.33'/>
+      <host mac='52:54:00:4b:52:22' name='rocky10' ip='192.168.177.34'/>
     </dhcp>
   </ip>
 </network>

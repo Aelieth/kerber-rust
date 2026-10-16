@@ -4,7 +4,8 @@ Section F proves kerber-rust against real systems: Fedora clients (SSSD,
 gssproxy, NFS, sshd, Firefox), Keycloak, Windows/AD and KLLDAP. Every scenario
 runs first against a stock Fedora MIT `krb5-server` realm (the oracle), then
 against kerber-rust. This directory builds the lab those scenarios run in:
-six libvirt VMs on this host, on a private NAT network with its own DNS.
+the Fedora VMs on this host, plus `deb13` (Debian 13), `ub26` (Ubuntu 26.04)
+and `rocky10` (Rocky Linux 10), on a private NAT network with its own DNS.
 
 `lab.sh` is a harness. It drives libvirt, cloud-init and Anaconda, and it
 asserts nothing about Kerberos. The VMs carry no Kerberos server software and
@@ -27,6 +28,8 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 | `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
 | `mitd3.kerber.test` | `.31` | `kerber-mitd3` | Fedora 43 Cloud | 4 / 4 GiB / 20 GB | upstream MIT krb5 1.22.2 built from the release tarball: the des3 oracle (B22) |
 | `ub26.kerber.test` | `.32` | `kerber-ub26` | Ubuntu 26.04 Cloud | 4 / 8 GiB / 60 GB | CI mirror. `lab.sh up` does not start it; `lab.sh up ub26` does. Parked unless that run is under way |
+| `deb13.kerber.test` | `.33` | `kerber-deb13` | Debian 13 | 2 / 3 GiB / 30 GB | lagging peer (krb5 1.21.3). Started with the field VMs. Not built from the Fedora image |
+| `rocky10.kerber.test` | `.34` | `kerber-rocky10` | Rocky Linux 10 | 2 / 3 GiB / 20 GB | closeout and the 1.2.0 final only. `lab.sh up` does not start it; `lab.sh up rocky10` does |
 
 - **DHCP:** static leases by MAC (`network-kerber-lab.xml`, the table in
   `lab.sh`). Other machines get `.100`–`.199`.
@@ -81,12 +84,22 @@ starts, so nothing listens on the LAN unfiltered.
 
 ## Usage
 
-Run from the repo root, on the host or inside the `rust-dev` distrobox. In the
-distrobox, `lab.sh` sends host commands through `distrobox-host-exec`. It
-needs membership in the `libvirt` group and no sudo.
+Run on the host or inside the `rust-dev` distrobox. In the distrobox, `lab.sh`
+sends host commands through `distrobox-host-exec`, with the working directory
+set to the directory that contains `lab.sh`. The caller's cwd is not used.
+That directory has to be a path the host can see (this checkout is). A copy
+whose path exists only inside the container still cannot see the VMs. The
+script needs membership in the `libvirt` group and no sudo.
+
+`up`, `down`, `destroy`, `rebuild`, `reset` and `snapshot` take
+`~/kerber-lab/state/lab.lock` with `flock -w 60`. When that lock is held, the
+command exits 1 and says the lab is held. `status`, `ssh`, `ip`, `check` and
+`collect` do not take it. `run.sh` holds the same file on fd 9 for the whole
+field run; a `lab.sh reset` that run starts keeps the hold instead of waiting
+on it.
 
 ```sh
-harness/field/lab.sh up                 # build or start everything; idempotent
+harness/field/lab.sh up                 # build or start the field VMs; not ub26 or rocky10
 harness/field/lab.sh status             # VMs, addresses, snapshots, kdc's LAN address
 harness/field/lab.sh check              # ssh, DNS + reverse, time sync, internet; kdc LAN + filter + AD DC :88; client1 SDDM
 harness/field/lab.sh check --lab-only kdc   # the same without what reaches past the lab: internet, LAN address, AD DC
@@ -94,7 +107,8 @@ harness/field/lab.sh ssh kdc            # shell as 'lab' (passwordless sudo)
 harness/field/lab.sh ssh client2 -- sudo dnf -y install krb5-workstation
 harness/field/lab.sh ip kdc             # 192.168.177.10   (ip kdc lan: the LAN address)
 harness/field/lab.sh snapshot kdc mit-oracle   # offline snapshot (shut down, snapshot, start)
-harness/field/lab.sh reset all          # revert every VM to 'base' and boot it
+harness/field/lab.sh reset all          # revert to 'base' and boot; mitd3 stays on 'mit-d3'
+harness/field/lab.sh reset all base     # name base to take mitd3 to 'base' too
 harness/field/lab.sh reset kdc mit-oracle
 harness/field/lab.sh collect kdc working/logs/f-r1 /var/log/krb5kdc.log /etc/krb5.conf
 harness/field/lab.sh down               # shut the VMs down (the network stays up)
@@ -102,13 +116,17 @@ harness/field/lab.sh rebuild kdc --yes  # one VM from scratch (after a template 
 harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and network
 ```
 
-- **`up`:** builds each missing VM, waits for provisioning and takes snapshot
-  `base`.
+- **`up`:** builds each missing Fedora or Ubuntu VM, waits for provisioning
+  and takes snapshot `base`. `up` and `up all` leave `ub26` and `rocky10`
+  shut off; name either one to start it. `deb13` and `rocky10` are not built
+  from an image in this script. A missing domain is an error.
   - Timing: about 20 minutes from nothing with the images already downloaded
     (measured 2026-10-01). Most of it is the Kinoite install and upgrade and
     the cloud VMs' package upgrade. Downloading the 4.5 GB of Fedora media
     first took 6 minutes more.
-  - `reset all` brings every VM back at `base` in about 30 seconds.
+  - `reset all` brings every selected VM back at `base` and boots it, except
+    `mitd3`, which stays on `mit-d3` (the snapshot with the MIT build).
+    `reset all base` names `base`, so `mitd3` goes there too. About 30 seconds.
   - Interruptions: a VM without `base` is finished from whatever state it is
     in. An install that ended is never booted again.
   - Later runs only start stopped VMs.
@@ -485,7 +503,9 @@ reaches web.mit.edu); its only network use is the Fedora repos of cloud-init.
 The build, the private realm `D3.TEST` and the snapshot `mit-d3` that carries
 them are recorded in `working/logs/f-B22/mitd3-provision/`. `lab.sh up mitd3`
 builds only this VM, and adds its DHCP lease and DNS record to a network
-defined before it joined the table (`net-update`, no restart).
+defined before it joined the table (`net-update`, no restart). `check` asks
+every VM for `mitd3.kerber.test` as well as the other field names. `reset`
+with no snapshot name leaves this VM on `mit-d3`.
 
 ## Where things live
 
