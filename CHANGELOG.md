@@ -20,6 +20,7 @@ any other `###` heading.
 
 - **ci.** Cap `[Unreleased]` at 24,000 bytes and pin CI to `ubuntu-24.04` with upload-artifact 7.0.2. Released sections are frozen. ci-policy enforces the cap.
 - **field.** Add `ad-trust`, the real AD DC against both legs' KDCs: an AD user logs into client2's sshd. It runs only as `run.sh ad-trust` and starts from a recorded DC state.
+- **field.** `ad-trust` adds KERBER.TEST users at the DC's SMB and LDAP and the DC's SPNEGO login to Apache on kdc; the DC changes they need are undone in the same run.
 
 ## [1.1.0] - 2026-10-14
 
