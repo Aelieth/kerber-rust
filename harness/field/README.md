@@ -151,6 +151,7 @@ not a gate: no ci-policy judge, ledger row or CI job runs it.
 make field PROFILE=nightly REF=f-functional               # every scenario of the profile
 make field PROFILE=nightly REF=f-functional ONLY=upgrade  # one of them
 harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the same, without make
+harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgrade, then ad-trust
 ```
 
 - **Options:**
@@ -163,6 +164,9 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
     uses the kdc that leg's `upgrade` left, so a leg without `upgrade` runs
     against whatever kdc holds, and its `kdc.leg` check fails when that is not
     the leg's KDC.
+- **`run.sh ad-trust`** is the only way to run `ad-trust`, which changes the AD
+  DC and undoes it (`--profile ad-trust` is refused); it is in no profile, so a
+  DC outage or a DC clock past 240 s never reddens the nightly.
 - **The tree under test** is `git archive <ref>` of this repository, read-only
   (`GIT_OPTIONAL_LOCKS=0`; `FIELD_REPO` in `field.env` names another). A dirty
   checkout runs the harness, never the product.
@@ -223,7 +227,9 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
   `field.env.example`).
 - **A hand runner** takes the same lock, so no field run starts under it:
   `flock -n ~/kerber-lab/state/lab.lock bash` (held while that shell runs).
-- **Never:** a snapshot created or deleted, a git ref written, the AD DC touched.
+- **Never:** a snapshot created or deleted, a git ref written, the AD DC touched,
+  but for `ad-trust`'s changes #1-#4 and #7 (`lib/ad.sh`), each undone in the
+  same run (Phil's standing OK, 2026-10-16).
 
 `lib/`, shared by `run.sh` and the scenarios:
 
@@ -242,6 +248,7 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `nfs-probe.sh`, `spnego-probe.sh`, `check_spnego.lab.sh` | S2's probes, run in throwaway containers on services (image `localhost/s2-nfs-probe:f43`, own network namespace): the kit's NFS client set-up and alice's, root's and bob's NFS access; the kit's `check_spnego` (its helper block and function verbatim from kit commit `e9f3325`, only the four SSO constants set to the lab's) and the two requests by hand |
 | `kc-events.sh` | Keycloak's events since a time, read-only through the admin API from the host (the admin password on stdin, the token through a pipe) |
 | `lldap-membership.sh` | S1's: one lldap group membership added or removed on services (lldap's admin password on stdin) |
+| `ad.sh`, `ad/*.ps1`, `dc-ps.py` | `ad-trust`'s DC: each PowerShell script run over WinRM (`dc-ps.py`, the AD secrets from `FIELD_ADLAB_ENV`) and shown whole in the record; the DC's state against `ad/baseline.txt` before and after; every change logged before it is made and undone by `ad/undo.ps1`, which touches only those changes |
 | `ptydrive.py` | R2's pty driver: `su`, `passwd` and `pamtester` on a pseudo-terminal, their prompts answered from stdin |
 
 ## Scenarios
@@ -252,6 +259,7 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `services` | nightly, weekly | mit, rust | services: `f4-mit` / `services-rust` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 | `nfs-client` | nightly, weekly | mit, rust | client2: `f4-mit` / `rust-ssh`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 | `sssd-login` | nightly, weekly | mit, rust | client1: `f4-mit` / `rust-nfs-sso`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
+| `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; the AD DC TEST-SERVER (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
 | `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 
 With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).

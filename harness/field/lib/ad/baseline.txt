@@ -1,0 +1,8 @@
+alt: Kerberos:user@KERBER.TEST
+hosts: 824 2D6BDFB341BE3A6234B24742377F93AA7C7CFB0D9FD64EFA9282C87852E57085
+kdcnames: 10.10.44.154 |
+realmflags: 1
+hosttorealm:
+task: False
+taskfile: False
+trust: KERBER.TEST direction=3 type=3 attributes=0 enctypes=24 changed=2026-08-24

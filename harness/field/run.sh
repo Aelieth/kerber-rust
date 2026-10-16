@@ -2,6 +2,7 @@
 # harness/field/run.sh: one field run on the lab (harness/field/README.md, "Field runs" and "Scenarios").
 #
 #   run.sh --profile nightly|weekly [--ref <git ref>] [--only <scenario,...>] [--leg mit|rust|both]
+#   run.sh ad-trust [--ref <git ref>] [--leg mit|rust|both]   (upgrade, then the real AD DC: scenarios/ad-trust.sh)
 #
 # The tree under test is `git archive <ref>` of the repository run.sh lives in (read-only, GIT_OPTIONAL_LOCKS=0;
 # FIELD_REPO in field.env names another), never a working tree. Each selected scenario's leg drives the real
@@ -30,17 +31,20 @@ LOCK=$LAB_HOME/state/lab.lock
 KEEP=30
 # The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
 # under test), and the other scenarios use the kdc it left.
-declare -A PROFILES=([nightly]="upgrade services nfs-client sssd-login klldap-swap" [weekly]="upgrade services nfs-client sssd-login klldap-swap")
+declare -A PROFILES=([nightly]="upgrade services nfs-client sssd-login klldap-swap" [weekly]="upgrade services nfs-client sssd-login klldap-swap"
+    [ad-trust]="upgrade ad-trust")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }
-usage() { sed -n '4p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
+usage() { sed -n '4,5p' "${BASH_SOURCE[0]}" | sed 's/^# *//'; }
 PROFILE='' REF=f-functional ONLY='' LEG=rust
+# The AD DC scenario changes the DC (and undoes it), so it runs only in this one form.
+if [ "${1:-}" = ad-trust ]; then PROFILE=ad-trust; shift; fi
 while [ $# -gt 0 ]; do
     case $1 in
         --profile | --ref | --only | --leg) [ $# -ge 2 ] || die "$1 needs a value" ;;
     esac
     case $1 in
-        --profile) PROFILE=$2; shift 2 ;;
+        --profile) [ "$2" != ad-trust ] || die "the AD DC scenario runs as: run.sh ad-trust [--ref R] [--leg L]"; PROFILE=$2; shift 2 ;;
         --ref) REF=$2; shift 2 ;;
         --only) ONLY=$2; shift 2 ;;
         --leg) LEG=$2; shift 2 ;;
@@ -168,7 +172,7 @@ wrapup() {
         if [ "$i" -lt $(( ${#ids[@]} - KEEP )) ] && [ "${results[$i]}" = PASS ]; then drop+=("${ids[$i]}"); fi
     done
     for id in "${drop[@]}"; do
-        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly)$ ]] || continue
+        [[ $id =~ ^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}-(nightly|weekly|ad-trust)$ ]] || continue
         rm -rf -- "${RUNS:?}/$id"
         awk -F'\t' -v id="$id" '$1 != id' "$RUNS/index.tsv" > "$RUNS/index.tsv.new" && mv "$RUNS/index.tsv.new" "$RUNS/index.tsv"
     done
