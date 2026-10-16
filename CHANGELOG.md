@@ -16,6 +16,10 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Tests and CI
+
+- **ci.** Cap `[Unreleased]` at 24,000 bytes and pin CI to `ubuntu-24.04` with upload-artifact 7.0.2. Released sections are frozen. ci-policy enforces the cap.
+
 ## [1.1.0] - 2026-10-14
 
 The **1.1** line is *general-purpose MIT 1.22.2 completeness*: the KDC

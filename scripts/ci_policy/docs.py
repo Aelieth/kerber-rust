@@ -164,14 +164,23 @@ def check_changelog_headings(text: str | None = None, *, allow: int | None = Non
         _die(f"CHANGELOG.md has {n} ### headings outside the Keep-a-Changelog set, allow {allow}")
 
 
+def _unreleased_section_len(text: str) -> int | None:
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, line in enumerate(lines) if line.rstrip("\r\n") == "## [Unreleased]"), None)
+    if start is None:
+        return None
+    end = next((j for j in range(start + 1, len(lines)) if lines[j].startswith("## [")), len(lines))
+    return len("".join(lines[start:end]).encode())
+
+
 def check_docs_size(
     root: pathlib.Path | None = None, *, allow: int | None = None, changelog_max: int | None = None
 ) -> None:
-    """No docs/**/*.md is over DOCS_SIZE_LIMIT bytes, and CHANGELOG.md (history, exempt from that
-    limit) is not over CHANGELOG_MAX_BYTES. Advisory while `allow` equals the live count."""
+    """No docs/**/*.md is over DOCS_SIZE_LIMIT (advisory while `allow` is the live count), and the
+    ## [Unreleased] section of CHANGELOG.md is not over its ceiling."""
     root = ROOT if root is None else root
     allow = DOCS_SIZE_ALLOW if allow is None else allow
-    changelog_max = CHANGELOG_MAX_BYTES if changelog_max is None else changelog_max
+    changelog_max = CHANGELOG_UNRELEASED_MAX_BYTES if changelog_max is None else changelog_max
     over = [
         f"{p.relative_to(root)} {p.stat().st_size}"
         for p in sorted((root / "docs").rglob("*.md"))
@@ -180,8 +189,13 @@ def check_docs_size(
     if len(over) != allow:
         _die(f"{len(over)} docs file(s) over {DOCS_SIZE_LIMIT} bytes, allow {allow}: " + "; ".join(over))
     log = root / "CHANGELOG.md"
-    if log.is_file() and log.stat().st_size > changelog_max:
-        _die(f"CHANGELOG.md is {log.stat().st_size} bytes, over its ceiling {changelog_max}")
+    if not log.is_file():
+        return
+    n = _unreleased_section_len(log.read_text(encoding="utf-8"))
+    if n is None:
+        _die("CHANGELOG.md has no ## [Unreleased] section")
+    if n > changelog_max:
+        _die(f"CHANGELOG.md [Unreleased] is {n} bytes, over its ceiling {changelog_max}")
 
 
 WRAPPER_GATES = frozenset({"kadmin-gate.sh", "kpasswd-gate.sh", "client-differential-gate.sh"})
@@ -460,12 +474,7 @@ DOCS_SIZE_ALLOW = 0
 GATE_DOC_ALLOW = 0
 GATE_DOC_TOKEN_ALLOW = 0
 DOCS_SIZE_LIMIT = 60 * 1024
-# CHANGELOG.md was 272,571 bytes at 13c2160b. Allowance 17,429 bytes for the
-# rest of 1.1 and the cut, one bullet per change: 15,429 (forecast plus 20
-# percent, rounded up) and 2,000 more. Ceiling 290,000, raised from 288,000
-# by the user's decision on 2026-10-13, in the commit of the bullet that
-# needed it. Otherwise a tool: commit re-bases it, never a bullet commit.
-CHANGELOG_MAX_BYTES = 290000
+CHANGELOG_UNRELEASED_MAX_BYTES = 24000
 
 
 def check_testing_doc_budgets(

@@ -570,14 +570,10 @@ suffixed `-1`, `-2`); links in code are not links. `check_doc_file_cites`
 reads the same files except the CHANGELOG. `check_changelog_headings`
 allows only the Keep-a-Changelog group names, each the whole heading, plus
 `Tests and CI` and `How to …` headings, as `###` headings; `check_docs_size` holds every
-`docs/**/*.md` to 60 KiB and `CHANGELOG.md` to its ceiling
-(`CHANGELOG_MAX_BYTES`: its size when last re-based, 272,571 bytes at
-13c2160b, plus a stated 17,429-byte allowance for the rest of 1.1 and the
-cut, one bullet per change: 15,429 (the forecast plus a 20 percent margin,
-rounded up) and 2,000 more; ceiling 290,000, raised from 288,000 by the
-user's decision on 2026-10-13, in the commit of the bullet that needed it.
-Otherwise a `tool:` commit re-bases it, never the commit that adds the
-bullets). `check_gate_documented` holds `docs/gates.md`, `docs/gates-decode.md` and `docs/gates-otp.md`
+`docs/**/*.md` to 60 KiB and the `## [Unreleased]` section of `CHANGELOG.md`
+to 24,000 bytes (`CHANGELOG_UNRELEASED_MAX_BYTES`). Released sections are
+frozen and are not counted. At a cut, that section becomes the release
+heading and the cap applies to the next `[Unreleased]`. `check_gate_documented` holds `docs/gates.md`, `docs/gates-decode.md` and `docs/gates-otp.md`
 to one row per `scripts/*-gate.sh`, with the workflow and lane columns
 equal to the gates' placements in `.github/workflows` (`fail-red`,
 `soft`, `nightly`; `stub` or `wrapper` for the documented

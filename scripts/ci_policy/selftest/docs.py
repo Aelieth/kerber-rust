@@ -59,9 +59,11 @@ def _self_test_docs() -> None:
         check_docs_size(droot, allow=1, changelog_max=10)
         _must_die_msg("1 docs file(s) over", check_docs_size, droot, allow=0, changelog_max=10)
         (droot / "docs" / "big.md").unlink()
-        (droot / "CHANGELOG.md").write_text("y" * 11, encoding="utf-8")
-        _must_die_msg("over its ceiling 10", check_docs_size, droot, allow=0, changelog_max=10)
-        check_docs_size(droot, allow=0, changelog_max=11)
+        section = "## [Unreleased]\n\n"
+        (droot / "CHANGELOG.md").write_text(section + "## [1.0.0]\n" + ("y" * 4000), encoding="utf-8")
+        cap = len(section.encode())
+        _must_die_msg(f"over its ceiling {cap - 1}", check_docs_size, droot, allow=0, changelog_max=cap - 1)
+        check_docs_size(droot, allow=0, changelog_max=cap)
     finally:
         subprocess.run(["rm", "-rf", str(droot)], check=False)
     gates = ["a-gate.sh", "b-gate.sh", "s-gate.sh", "w-gate.sh"]
