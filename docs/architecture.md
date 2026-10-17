@@ -110,8 +110,9 @@ relaunch (`scripts/restart-gate.sh`). The database is locked between
 processes as MIT's db2 module locks it (`dblock.rs`): `principal.ok` and
 `principal.kadm5.lock` beside it, whole-file OFD locks, shared for every read
 (the KDC only while it sees whether the database changed and reads it again,
-or reads a client's lockout record) and exclusive for every change from a
-fresh read of the dump to its one write and the age bump
+or reads a client's lockout record) and exclusive for every change from the
+database as it now is (read again when another writer moved its age or file,
+else its lockout records merged) to its one write and the age bump
 (`PrincipalStore::change`), so a concurrent local `addprinc` survives a remote
 `cpw` and no writer saves over another. The KDC takes it exclusively only to
 update a client's record in `principal.lockout` in place (`lockout/file.rs`), which

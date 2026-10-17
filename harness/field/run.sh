@@ -31,7 +31,7 @@ LOCK=$LAB_HOME/state/lab.lock
 KEEP=30
 # The scenarios of each profile, in order; upgrade is first: it puts the leg's KDC on kdc (MIT's baseline, or the ref
 # under test), and the other scenarios use the kdc it left.
-declare -A PROFILES=([nightly]="upgrade services nfs-client sssd-login klldap-swap" [weekly]="upgrade services nfs-client sssd-login klldap-swap kdc-profile kpasswd"
+declare -A PROFILES=([nightly]="upgrade services nfs-client sssd-login klldap-swap" [weekly]="upgrade services nfs-client sssd-login klldap-swap kdc-profile kdb-writes kpasswd"
     [ad-trust]="upgrade ad-trust")
 
 die() { printf 'run.sh: %s\n' "$*" >&2; exit 1; }

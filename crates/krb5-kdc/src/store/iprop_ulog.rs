@@ -28,6 +28,20 @@ use crate::ulog::{Ulog, UlogBatch, UlogError, UlogLast, UlogUpdates};
 pub(crate) struct PrincipalMap {
     map: HashMap<String, Principal>,
     logged: HashMap<String, Option<Principal>>,
+    undo: Undo,
+}
+
+/// What puts a change of a store with a database back when it fails.
+#[derive(Clone, Debug, Default)]
+enum Undo {
+    /// No change is under way.
+    #[default]
+    Off,
+    /// Each record as it was before the change first touched it, none for a new one.
+    On(HashMap<String, Option<Principal>>),
+    /// The change wrote a record past the journal (a replica's apply): only a read of the
+    /// database puts it back.
+    Lost,
 }
 
 impl PrincipalMap {
@@ -69,12 +83,20 @@ impl PrincipalMap {
 
     /// A record read from the database, or put by a replica's apply: no change of this store's.
     pub(crate) fn insert_unlogged(&mut self, id: String, p: Principal) {
+        self.lose_undo();
         self.map.insert(id, p);
     }
 
     /// A replica's delete: no change of this store's.
     fn remove_unlogged(&mut self, id: &str) {
+        self.lose_undo();
         self.map.remove(id);
+    }
+
+    fn lose_undo(&mut self) {
+        if matches!(self.undo, Undo::On(_)) {
+            self.undo = Undo::Lost;
+        }
     }
 
     fn keep(&mut self, id: &str) {
@@ -82,6 +104,43 @@ impl PrincipalMap {
             let before = self.map.get(id).cloned();
             self.logged.insert(id.to_owned(), before);
         }
+        let map = &self.map;
+        if let Undo::On(undo) = &mut self.undo {
+            undo.entry(id.to_owned())
+                .or_insert_with(|| map.get(id).cloned());
+        }
+    }
+
+    /// A change of a store with a database starts: the previous change's journal goes, as a read
+    /// of the database would drop it, and each record is kept as the change first touches it.
+    pub(crate) fn begin_change(&mut self) {
+        self.logged.clear();
+        self.undo = Undo::On(HashMap::new());
+    }
+
+    /// The change stands.
+    pub(crate) fn end_change(&mut self) {
+        self.undo = Undo::Off;
+    }
+
+    /// The change failed: every record it touched as it was before, and its journal dropped.
+    /// False when it went past the journal, which only a read of the database puts back.
+    pub(crate) fn undo_change(&mut self) -> bool {
+        let Undo::On(before) = std::mem::take(&mut self.undo) else {
+            return false;
+        };
+        for (id, p) in before {
+            match p {
+                Some(p) => {
+                    self.map.insert(id, p);
+                }
+                None => {
+                    self.map.remove(&id);
+                }
+            }
+        }
+        self.logged.clear();
+        true
     }
 
     /// The record the update log compares a change of `id` with, which `now` replaces.

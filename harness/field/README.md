@@ -158,6 +158,7 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgrade, then ad-trust
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg both   # 464's cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
+harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --leg both   # the store's write cells, on demand
 ```
 
 - **Options:**
@@ -266,6 +267,7 @@ harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile -
 | `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; the AD DC TEST-SERVER (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
 | `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 2 / 2 min |
+| `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
 | `kpasswd` | weekly, last (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 
 With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).
@@ -376,6 +378,13 @@ would remove it.
   skew decides. A second realm stanza (`DUMMY.TEST`, `max_life = 1h`) leaves
   alice's TGT life as it was. Each cell starts from the saved kdc.conf, which
   is restored at the end, also when the scenario stops early.
+- **`kdb-writes.sh`** (SW, MIT kinit and kadmin from client2): `swlock`, under a
+  policy with `maxfailure 10`, fails kinit three times, kadmind changes another
+  principal twice, `swlock` fails twice more and kadmind writes once more:
+  `getprinc` shows five failed attempts, so no kadmind write puts a stale count
+  back over the KDC's. A `cpw` the principal's policy refuses leaves its keys,
+  and the next `cpw -randkey` changes them. The scratch principals and policies
+  go at the end, also when the scenario stops early.
 - **`kpasswd.sh`** (KH, client2 against kdc's 464; `lib/setpw.py` drives MIT's
   libkrb5): admin/admin sets a fresh principal's password (0, kvno + 1); an
   unprivileged user is refused (5, kvno kept); a self change with a changepw

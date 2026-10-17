@@ -104,6 +104,9 @@ pub struct PrincipalStore {
     pub(crate) dblock: Option<Arc<DbLock>>,
     /// Whether a mutation asked for a save during the current [`Self::change`].
     changed: ChangeMark,
+    /// Whether the current [`Self::change`] wrote the database before its end
+    /// ([`Self::save_through`]).
+    wrote_through: ChangeMark,
     /// Per-realm NT domain SID (never the dummy `S-1-5-21-1-2-3`).
     domain_sid: RpcSid,
     /// Next RID to allocate (`RID_FIRST_USER` and up).
@@ -150,6 +153,40 @@ impl Drop for HeldSaves<'_> {
     }
 }
 
+/// What a change may set besides the principal records, as it was before the change.
+struct Before {
+    policies: HashMap<String, NamedPolicy>,
+    next_rid: u32,
+    domain_sid: RpcSid,
+}
+
+impl Before {
+    fn of(store: &PrincipalStore) -> Self {
+        Self {
+            policies: store.policies.clone(),
+            next_rid: store.next_rid,
+            domain_sid: store.domain_sid.clone(),
+        }
+    }
+
+    /// Put `store` back as it was before a change `f` refused, without reading the database;
+    /// false when the change went past the journal.
+    fn restore(self, store: &mut PrincipalStore) -> bool {
+        if !store.map.undo_change() {
+            return false;
+        }
+        store.policies = self.policies;
+        store.next_rid = self.next_rid;
+        store.domain_sid = self.domain_sid;
+        store
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        true
+    }
+}
+
 pub(crate) fn unix_now_u32() -> u32 {
     u32::try_from(
         std::time::SystemTime::now()
@@ -177,6 +214,7 @@ impl PrincipalStore {
             db_stamp: None,
             dblock: None,
             changed: ChangeMark::default(),
+            wrote_through: ChangeMark::default(),
             domain_sid: generate_domain_sid().unwrap_or_else(|_| {
                 eprintln!("krb5-kdc: getrandom failed generating domain SID");
                 std::process::exit(1);
@@ -359,6 +397,7 @@ impl PrincipalStore {
     /// change must not take back: what MIT commits with its own put, logged as that put is.
     fn save_through(&self) -> Result<(), Error> {
         self.inside_change()?;
+        self.wrote_through.0.store(true, Ordering::Relaxed);
         self.logged_write(|| self.write_database())
     }
 
@@ -392,10 +431,12 @@ impl PrincipalStore {
     }
 
     /// One change to the database, whole, under its exclusive lock: the lock is taken (waiting
-    /// for any other holder), the database is read again, `f` runs on the store, and when `f`
-    /// returns `Ok` after a mutation the database is written once and its age moves forward;
-    /// when `f` returns `Err`, the store is read back, so nothing of it stays in memory or on
-    /// disk. A store with no database runs `f` alone, and so does a change inside a change.
+    /// for any other holder), the store is brought up to the database ([`Self::refresh_for_change`]),
+    /// `f` runs on the store, and when `f` returns `Ok` after a mutation the database is written
+    /// once and its age moves forward; when `f` returns `Err`, what it changed is put back, so
+    /// nothing of it stays in memory or on disk (a change that wrote part of itself early, or
+    /// whose save failed, is read back from the database). A store with no database runs `f`
+    /// alone, and so does a change inside a change.
     /// With an update log mapped as a primary's, each put and delete the change made is encoded
     /// before the write and appended to the log after it, one entry each, in order.
     /// MIT `krb5_db2_put_principal` (`plugins/kdb/db2/kdb_db2.c:828-854`): a put takes the exclusive lock, writes, moves the age and unlocks.
@@ -422,8 +463,11 @@ impl PrincipalStore {
         let held = lock
             .hold(DbLockMode::Exclusive)
             .map_err(|e| Error::from(PersistError::from(e)))?;
-        self.reread(&lock)?;
+        self.refresh_for_change(&lock, &db)?;
         self.changed.0.store(false, Ordering::Relaxed);
+        self.wrote_through.0.store(false, Ordering::Relaxed);
+        let before = Before::of(self);
+        self.map.begin_change();
         let done = {
             let inside = HeldSaves::new(self);
             f(&mut *inside.0)
@@ -438,6 +482,7 @@ impl PrincipalStore {
                     });
                 match written {
                     Ok(()) | Err(LoggedWrite::After(_)) => {
+                        self.map.end_change();
                         self.db_stamp = DbStamp::now(&lock, &db);
                         tracing::info!(
                             event = krb5_log::events::ADMIN,
@@ -449,19 +494,55 @@ impl PrincipalStore {
                         written.map(|()| Ok(v)).map_err(LoggedWrite::into_error)
                     }
                     Err(e) => {
-                        let _ = self.reread(&lock);
+                        self.read_back(&lock);
                         Err(e.into_error())
                     }
                 }
             }
-            Ok(v) => Ok(Ok(v)),
+            Ok(v) => {
+                self.map.end_change();
+                Ok(Ok(v))
+            }
             Err(e) => {
-                let _ = self.reread(&lock);
+                if self.wrote_through.0.load(Ordering::Relaxed) || !before.restore(self) {
+                    self.read_back(&lock);
+                }
                 Ok(Err(e))
             }
         };
         drop(held);
         out
+    }
+
+    /// Under a change's exclusive lock, the store as the database holds it now. The database is
+    /// read again when another writer moved its stamp, when the stamp is unknown (a panic, or a
+    /// failed read), or when notes of an unwritten change are pending. Otherwise the store is
+    /// what this process last wrote or read, but for the lockout records, which the KDC writes in
+    /// place without moving the stamp: those are merged again, so the save that ends the change
+    /// writes no stale count back over the KDC's.
+    /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:439-455`): the exclusive lock reopens the database, so the put starts from what is on disk.
+    fn refresh_for_change(
+        &mut self,
+        lock: &Arc<DbLock>,
+        db: &std::path::Path,
+    ) -> Result<(), Error> {
+        let pending = !self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty();
+        if pending || self.db_stamp.is_none() || self.db_stamp != DbStamp::now(lock, db) {
+            return self.reread(lock);
+        }
+        crate::lockout::merge_lockout_file(self, db);
+        Ok(())
+    }
+
+    /// A failed change's store, read back from the database; when that read fails too, the stamp
+    /// stays unknown, so the next use reads it.
+    fn read_back(&mut self, lock: &Arc<DbLock>) {
+        self.db_stamp = None;
+        let _ = self.reread(lock);
     }
 
     /// Hold the database's lock exclusively until [`Self::unlock_database`], across changes:
