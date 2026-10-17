@@ -53,8 +53,8 @@ pub(crate) mod tests {
 
     use crate::{
         EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, SpakeGroup, derive_keys,
-        derive_prfplus, dh_generate, key_from_shared, krb_fx_cf2, octetstring2key, p256_generate,
-        pkinit_kdf_agile, prf, spake_derive_key, string_to_key,
+        derive_prfplus, dh_generate, krb_fx_cf2, octetstring2key, p256_generate, pkinit_kdf_agile,
+        prf, spake_derive_key, string_to_key,
     };
 
     thread_local! {
@@ -184,12 +184,9 @@ pub(crate) mod tests {
         let keys = [
             octetstring2key(EncryptionType::Aes128CtsHmacSha256128, b"z").unwrap(),
             pkinit_kdf_agile(aes256, b"z", b"other info").unwrap(),
-            key_from_shared(EncryptionType::Aes128CtsHmacSha256128, b"short").unwrap(),
-            key_from_shared(EncryptionType::Aes128CtsHmacSha256128, &[7; 40]).unwrap(),
         ];
-        // The SHA-1 stream (16 + 20), the SHA-256 stream (32 + 32), the hashed short secret;
-        // a secret long enough is cut in place and leaves no buffer.
-        assert_eq!(take_wiped(), zeroed(&[36, 64, 16]));
+        // The SHA-1 stream (16 + 20), then the SHA-256 stream (32 + 32).
+        assert_eq!(take_wiped(), zeroed(&[36, 64]));
         drop(keys);
     }
 

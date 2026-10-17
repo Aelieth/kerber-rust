@@ -38,27 +38,6 @@ pub fn krb_fx_cf2(
     ProtocolKey::from_random(k1.etype(), &a)
 }
 
-/// Truncate or hash `bytes` to an etype-sized protocol key.
-///
-/// # Errors
-///
-/// None: the key is always `etype.key_len()` octets (a prefix of `bytes`, or its SHA-256
-/// repeated), the length [`ProtocolKey::from_bytes`] requires.
-pub fn key_from_shared(etype: EncryptionType, bytes: &[u8]) -> Result<ProtocolKey, Error> {
-    let n = etype.key_len();
-    if bytes.len() >= n {
-        return ProtocolKey::from_bytes(etype, &bytes[..n]);
-    }
-    let mut h = <Sha256 as Sha2Digest>::new();
-    Sha2Digest::update(&mut h, bytes);
-    let out = Sha2Digest::finalize(h);
-    let mut buf = Wiped(vec![0u8; n]);
-    for (i, b) in buf.iter_mut().enumerate() {
-        *b = out[i % out.len()];
-    }
-    ProtocolKey::from_bytes(etype, &buf)
-}
-
 /// P-256 ECDH: 32-byte scalar and 65-byte uncompressed public key.
 ///
 /// The scalar is zeroized where the value lies when it drops. It is an inline array, so a copy

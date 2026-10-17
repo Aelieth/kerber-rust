@@ -6,22 +6,22 @@
 
 use krb5_types::PrincipalName;
 
-/// `kadmin/admin` as NT-SRV-INST (MIT kadmind acceptor).
+/// MIT `k5_infer_principal_type` (`lib/krb5/krb/bld_princ.c:31-43`): `kadmin/admin` is NT-PRINCIPAL.
 #[must_use]
 pub fn kadmin_admin() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "admin"])
+    PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "admin"])
 }
 
-/// `kadmin/changepw` as NT-SRV-INST (RFC 3244 kpasswd acceptor).
+/// MIT `k5_infer_principal_type` (`lib/krb5/krb/bld_princ.c:31-43`): `kadmin/changepw` is NT-PRINCIPAL.
 #[must_use]
 pub fn kadmin_changepw() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "changepw"])
+    PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "changepw"])
 }
 
-/// `kadmin/history` as NT-SRV-INST, the key-history principal MIT `create_hist` creates.
+/// MIT `k5_infer_principal_type` (`lib/krb5/krb/bld_princ.c:31-43`): `kadmin/history` is NT-PRINCIPAL.
 /// MIT `kdb_init_hist` (`lib/kadm5/srv/server_kdb.c:124-131`): the history principal is parsed
-/// from `kadmin/history@REALM`, so MIT's copy is NT-PRINCIPAL.
+/// from `kadmin/history@REALM`.
 #[must_use]
 pub fn kadmin_history() -> PrincipalName {
-    PrincipalName::new(PrincipalName::NT_SRV_INST, ["kadmin", "history"])
+    PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["kadmin", "history"])
 }

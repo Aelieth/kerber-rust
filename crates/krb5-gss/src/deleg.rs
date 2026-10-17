@@ -154,7 +154,10 @@ mod hooks {
         let ticket = cred.tickets.first().ok_or(Error::Truncated)?;
         let prealm = info.prealm.clone().ok_or(Error::Truncated)?;
         let pname = info.pname.clone().ok_or(Error::Truncated)?;
-        let etype = EncryptionType::from_iana(info.key.keytype).map_err(Error::from)?;
+        // MIT `make_cred_list` (`lib/krb5/krb/rd_cred.c:109-110`): the stored session key is the credential's keyblock.
+        let etype = EncryptionType::from_iana(info.key.keytype)
+            .or_else(|_| EncryptionType::known(info.key.keytype))
+            .map_err(Error::from)?;
         let session =
             ProtocolKey::from_bytes(etype, info.key.keyvalue.as_ref()).map_err(Error::from)?;
         let srealm = info.srealm.clone().unwrap_or_else(|| prealm.clone());
