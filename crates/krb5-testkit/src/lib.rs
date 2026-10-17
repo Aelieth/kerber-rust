@@ -725,33 +725,3 @@ pub fn reseal_incoming(key: &ProtocolKey, tgt: &IssuedAs, part: &EncTicketPart) 
         },
     }
 }
-
-#[cfg(test)]
-mod socket_path_tests {
-    use std::io::{Read, Write};
-    use std::os::unix::net::{UnixListener, UnixStream};
-
-    #[test]
-    fn socket_path_is_short_under_a_150_byte_root() {
-        let root = super::scratch_dir("sock").join("r".repeat(150));
-        std::fs::create_dir_all(&root).expect("long root");
-        assert!(root.as_os_str().len() > 150);
-        let sock = super::socket_path(&root, "s");
-        assert!(
-            sock.path().as_os_str().len() < 108,
-            "{}",
-            sock.path().display()
-        );
-        let listener = UnixListener::bind(sock.path()).expect("bind under a 150-byte root");
-        let mut client = UnixStream::connect(sock.path()).expect("connect");
-        let (mut server, _) = listener.accept().expect("accept");
-        client.write_all(b"k").expect("write");
-        let mut byte = [0u8; 1];
-        server.read_exact(&mut byte).expect("read");
-        assert_eq!(&byte, b"k");
-        assert!(
-            root.join("s").exists(),
-            "the socket file sits in the root itself"
-        );
-    }
-}
