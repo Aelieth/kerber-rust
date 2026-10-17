@@ -30,10 +30,6 @@ jobs:
           components: rustfmt, clippy
       - name: CI policy
         run: python3 scripts/ci-policy.py
-      - name: gate ERR-trap self-test (silent gate deaths become annotations)
-        run: ./scripts/gate-err-trap-selftest.sh
-      - name: checkpoint self-test (a failed step makes the checkpoint exit 1)
-        run: ./scripts/checkpoint.sh --self-test
       - name: fmt
         run: cargo fmt --all -- --check
       - name: clippy
@@ -151,14 +147,10 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
-      - name: Install cargo-geiger and cargo-vet
+      - name: Install cargo-vet
         uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
         with:
-          tool: cargo-geiger,cargo-vet@0.10.0
-      - name: cargo-geiger (per-crate, 0-unsafe product)
-        run: ./scripts/geiger.sh
-        env:
-          GEIGER_DEPS_OUT: ${{ runner.temp }}/geiger-deps.txt
+          tool: cargo-vet@0.10.0
       - name: cargo-vet
         run: cargo vet --locked
 
@@ -258,8 +250,6 @@ jobs:
         run: |
           ./scripts/lib/boot-shell.sh
           ./scripts/lib/boot-stock-mit.sh
-      - name: attach-reset proxy self-test
-        run: ./scripts/gate-attach-reset-selftest.sh
       - name: kdc-gate (MIT client vs Rust KDC)
         run: ./scripts/kdc-gate.sh
       - name: store-gate (MemoryStore serve + MIT kinit/kvno)

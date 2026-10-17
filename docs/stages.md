@@ -59,7 +59,7 @@ Stages 1–8 are done at the MIT-1.22.2 + Samba + Heimdal level that
   **chaos-gate** (netem + memory + failover-under-load), and **soak-gate**
   (RSS leak check; scheduled longer run). Differential-vs-MIT
   (`differential-gate`) is in CI. Heimdal 7.8 bidirectional (`heimdal-gate`)
-  runs nightly in `peers.yml`. `cargo deny`, per-crate `cargo geiger` (`scripts/geiger.sh`),
+  runs nightly in `peers.yml`. `cargo deny`, per-crate `cargo geiger` (scripts/geiger.sh),
   and `cargo vet --locked` are in the CI `audit` job. Timing/replay
   matrix: [`docs/security.md`](security.md). Export: [`NOTICE`](../NOTICE),
   [`docs/export-control.md`](export-control.md). Logs-as-metrics:

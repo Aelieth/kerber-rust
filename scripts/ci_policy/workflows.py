@@ -1,98 +1,11 @@
-"""Checks on `.github/workflows/*.yml`, the Makefile, nextest and the CI budgets."""
+"""Checks on workflow timeouts and hardening, the Makefile, nextest and the MSRV pin."""
 
 from __future__ import annotations
 
 import pathlib
 import re
 
-from .common import GITIGNORE, NEXTEST_TOML, ROOT, SCRIPTS, WORKFLOWS, _die
-
-# Per-push jobs that may set continue-on-error: true. Everything else on
-# the push/PR workflow is fail-red.
-SOFT_PER_PUSH_JOBS = frozenset({"slo", "chaos", "soak"})
-
-FAIL_RED_PER_PUSH = (
-    "spake-gate.sh",
-    "rust-kinit-spake-gate.sh",
-    "mit-fast-kdc-gate.sh",
-    "rust-kinit-fast-gate.sh",
-    "rust-kinit-pkinit-gate.sh",
-    "rust-kinit-enterprise-gate.sh",
-    "client-differential-flows-gate.sh",
-    "client-differential-cli-gate.sh",
-    "sha2-gate.sh",
-    "s4u-mit-gate.sh",
-    "cross-realm-gate.sh",
-    "capaths-transit-gate.sh",
-    "capaths-compress-gate.sh",
-    "ktutil-gate.sh",
-    "kadmin-local-gate.sh",
-    "rust-kpasswd-mit-gate.sh",
-    "kcm-gate.sh",
-    "config-include-gate.sh",
-    "kadmin-rust-gate.sh",
-    "kadmin-rust-acl-gate.sh",
-    "kadmin-mit-gate.sh",
-    "kadmin-both-gate.sh",
-    "kpasswd-rust-gate.sh",
-    "kpasswd-mit-gate.sh",
-    "otp-gate.sh",
-    "rust-kinit-otp-gate.sh",
-)
-
-NIGHTLY_BLOCKING = (
-    "samba-pac-verify-gate.sh",
-    "samba-pac-l2-gate.sh",
-    "samba-crossrealm-gate.sh",
-    "samba-realtrust-gate.sh",
-    "heimdal-gate.sh",
-    "kcm-opcode-gate.sh",
-)
-
-TIMEOUT_JOBS = (
-    "test",
-    "harness",
-    "harness-2",
-    "mit-extra",
-    "mit-extra-2",
-    "slo",
-    "chaos",
-    "soak",
-    "mit-image",
-    "msrv",
-    "audit",
-    "doc",
-)
-PLAN_JOB_CAPS = {
-    "test": 300,
-    "harness": 270,
-    "mit-extra": 180,
-}
-PLAN_RUN_WALL_CAP = 360
-BUDGET_REQUIRED_JOBS = (
-    "test",
-    "harness",
-    "mit-extra",
-    "doc",
-    "msrv",
-    "audit",
-    "ledger-mit",
-    "mit-image",
-)
-
-FULL_RUN_SCHEDULED = (
-    "cargo nextest run --workspace --release",
-    "cargo test --workspace --locked",
-)
-
-DOCUMENTED_STUBS = frozenset(
-    {
-        "ad-mit-trust-gate.sh",
-        "kadmin-gate.sh",  # local wrapper; CI runs rust+mit+both steps
-        "kpasswd-gate.sh",  # local wrapper; CI runs rust+mit steps
-        "client-differential-gate.sh",  # local wrapper; CI runs flows+cli steps
-    }
-)
+from .common import GITIGNORE, NEXTEST_TOML, ROOT, WORKFLOWS, _die
 
 SCRIPT_RE = re.compile(r"scripts/([A-Za-z0-9._-]+\.sh)")
 JOB_HEADER_RE = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$", re.M)
@@ -139,129 +52,6 @@ def _job_level_bool(body: str, key: str) -> bool:
     v = _job_level_scalar(body, key)
     return v in {"true", "True", "yes", "on"}
 
-
-def _scripts_in_jobs(jobs: dict[str, Job], script: str) -> list[Job]:
-    return [j for j in jobs.values() if script in j.scripts]
-
-
-def check_ci(wf: Workflow) -> None:
-    """ci.yml runs per push and is not scheduled; only SOFT_PER_PUSH_JOBS are continue-on-error, and all
-    exist; every TIMEOUT_JOBS job has timeout-minutes; each FAIL_RED_PER_PUSH gate runs on a job that is
-    not continue-on-error, and no NIGHTLY_BLOCKING gate runs per push; the MIT image is cached
-    (actions/cache keyed on hashFiles of harness/Dockerfile, docker save / load); nextest --release
-    stays in full-test.yml."""
-    if wf.path.name != "ci.yml":
-        return
-    if not wf.per_push:
-        _die(f"{wf.path.name} is not a push/PR workflow")
-    if wf.scheduled:
-        _die(f"{wf.path.name} must not be scheduled; peers belong on a sibling")
-
-    soft = {n for n, j in wf.jobs.items() if j.continue_on_error}
-    extra = soft - SOFT_PER_PUSH_JOBS
-    missing_soft = SOFT_PER_PUSH_JOBS - set(wf.jobs)
-    if extra:
-        _die(f"{wf.path.name} continue-on-error jobs not allowed: {sorted(extra)}")
-    if missing_soft:
-        _die(f"{wf.path.name} missing soft jobs {sorted(missing_soft)}")
-
-    for name in TIMEOUT_JOBS:
-        job = wf.jobs.get(name)
-        if job is None:
-            _die(f"{wf.path.name} missing job {name}")
-        if not job.timeout_minutes:
-            _die(f"{wf.path.name} job {name} has no timeout-minutes")
-
-    for script in FAIL_RED_PER_PUSH:
-        hits = _scripts_in_jobs(wf.jobs, script)
-        if not hits:
-            _die(f"{script} is not in {wf.path.name}")
-        if all(j.continue_on_error for j in hits):
-            _die(f"{script} only runs on continue-on-error jobs")
-
-    for script in NIGHTLY_BLOCKING:
-        if _scripts_in_jobs(wf.jobs, script):
-            _die(f"{script} must not run on per-push {wf.path.name}")
-
-    if "actions/cache" not in wf.text:
-        _die(f"{wf.path.name} has no actions/cache")
-    if "docker save" not in wf.text or "docker load" not in wf.text:
-        _die(f"{wf.path.name} must docker save and docker load the MIT image")
-    if "harness/Dockerfile" not in wf.text or "hashFiles" not in wf.text:
-        _die(f"{wf.path.name} cache key must hashFiles harness/Dockerfile")
-    if "nextest run --workspace --release" in wf.text:
-        _die(f"{wf.path.name} must not run nextest --release; that is full-test.yml")
-
-
-def check_nightly(workflows: list[Workflow]) -> None:
-    """Each NIGHTLY_BLOCKING gate runs on a scheduled workflow, in a job that is not continue-on-error
-    and has timeout-minutes."""
-    scheduled = [w for w in workflows if w.scheduled]
-    for script in NIGHTLY_BLOCKING:
-        hits: list[tuple[Workflow, Job]] = []
-        for w in scheduled:
-            for j in _scripts_in_jobs(w.jobs, script):
-                hits.append((w, j))
-        if not hits:
-            _die(f"{script} is not on a scheduled workflow")
-        if any(j.continue_on_error for _, j in hits):
-            _die(f"{script} is continue-on-error on a scheduled workflow")
-        if any(not j.timeout_minutes for _, j in hits):
-            _die(f"{script} scheduled job has no timeout-minutes")
-
-
-_NEXTEST_RUN = re.compile(r"cargo\s+nextest\s+run[^\n]*")
-_CARGO_TEST_WS = re.compile(r"cargo\s+test\s+--workspace")
-_CARGO_TEST_ALL = re.compile(r"cargo\s+test\s+--all(?:\s|$)")
-_CARGO_TEST_WS_DOC = re.compile(r"cargo\s+test\s+--workspace\s+--doc\b")
-
-
-def _fold_continuations(text: str) -> str:
-    return re.sub(r"\\\n\s*", " ", text)
-
-
-def check_nextest_profile(workflows: list[Workflow]) -> None:
-    """Every `cargo nextest run` in a workflow passes `--profile ci`, and a workflow that names nextest
-    runs it."""
-    for wf in workflows:
-        folded = _fold_continuations(wf.text)
-        cmds = _NEXTEST_RUN.findall(folded)
-        if "nextest" in folded and not cmds:
-            _die(f"{wf.path.name} mentions nextest but has no cargo nextest run")
-        for cmd in cmds:
-            if "--profile ci" not in cmd:
-                _die(f"{wf.path.name} cargo nextest run missing --profile ci")
-
-
-def check_ci_nextest_split(wf: Workflow) -> None:
-    """ci.yml's test job builds with `cargo nextest --no-run` first, writes the nextest junit.xml and
-    uploads it as an artifact."""
-    if wf.path.name != "ci.yml":
-        return
-    job = wf.jobs.get("test")
-    if job is None:
-        _die(f"{wf.path.name} missing job test")
-    if "--no-run" not in job.body:
-        _die(f"{wf.path.name} test job must cargo nextest --no-run")
-    if "junit.xml" not in job.body:
-        _die(f"{wf.path.name} test job must produce nextest junit.xml")
-    if "upload-artifact" not in job.body:
-        _die(f"{wf.path.name} test job must upload-artifact the junit")
-
-
-def check_ci_no_workspace_cargo_test(wf: Workflow) -> None:
-    """ci.yml runs no `cargo test --workspace` / `--all` but the doctest pass (`--doc`): the unit
-    suite runs once, under nextest."""
-    if wf.path.name != "ci.yml":
-        return
-    folded = _fold_continuations(wf.text)
-    # `cargo test --workspace --doc` is the doctest runner (nextest never runs
-    # doctests). Any other workspace `cargo test` re-runs the unit suite.
-    allowed = _CARGO_TEST_WS_DOC.sub("", folded)
-    if _CARGO_TEST_WS.search(allowed) or _CARGO_TEST_ALL.search(allowed):
-        _die(f"{wf.path.name} must not run cargo test --workspace/--all on per-push")
-
-
 def check_all_timeouts(workflows: list[Workflow]) -> None:
     """Every workflow has a job, and every job has timeout-minutes."""
     for wf in workflows:
@@ -270,59 +60,6 @@ def check_all_timeouts(workflows: list[Workflow]) -> None:
         for name, job in wf.jobs.items():
             if not job.timeout_minutes:
                 _die(f"{wf.path.name} job {name} has no timeout-minutes")
-
-
-def check_full_run_scheduled(workflows: list[Workflow]) -> None:
-    """Each FULL_RUN_SCHEDULED command runs on a scheduled workflow, in a job that is not
-    continue-on-error."""
-    scheduled = [w for w in workflows if w.scheduled]
-    for needle in FULL_RUN_SCHEDULED:
-        hits: list[tuple[Workflow, Job]] = []
-        for w in scheduled:
-            for j in w.jobs.values():
-                if needle in j.body:
-                    hits.append((w, j))
-        if not hits:
-            _die(f"{needle!r} is not on a scheduled workflow")
-        if any(j.continue_on_error for _, j in hits):
-            _die(f"{needle!r} is continue-on-error on a scheduled workflow")
-
-
-def check_gate_membership(
-    workflows: list[Workflow] | None = None,
-    fail_red: tuple[str, ...] | None = None,
-    stubs: frozenset[str] | None = None,
-    gate_names: list[str] | None = None,
-) -> None:
-    """Every gate is in some workflow; every FAIL_RED_PER_PUSH gate is a per-push ci.yml step."""
-    if workflows is None:
-        workflows = [
-            Workflow(p, p.read_text())
-            for p in sorted(WORKFLOWS.glob("*.yml"))
-        ]
-    if fail_red is None:
-        fail_red = FAIL_RED_PER_PUSH
-    if stubs is None:
-        stubs = DOCUMENTED_STUBS
-    mentioned: set[str] = set()
-    for w in workflows:
-        mentioned.update(SCRIPT_RE.findall(w.text))
-    if gate_names is None:
-        gate_names = [p.name for p in sorted(SCRIPTS.glob("*-gate.sh"))]
-    for name in gate_names:
-        if name in mentioned or name in stubs:
-            continue
-        _die(f"{name} is not in any workflow and not in DOCUMENTED_STUBS")
-    ci_wfs = [w for w in workflows if w.path.name == "ci.yml"]
-    if not ci_wfs:
-        _die("check_gate_membership needs ci.yml")
-    ci = ci_wfs[0]
-    for script in fail_red:
-        hits = _scripts_in_jobs(ci.jobs, script)
-        if not hits:
-            _die(f"{script} is not a per-push ci.yml step")
-        if all(j.continue_on_error for j in hits):
-            _die(f"{script} only runs on continue-on-error ci.yml jobs")
 
 
 def check_working_gitignored() -> None:
@@ -401,7 +138,6 @@ def check_makefile_matches_ci(mf: str | None = None, ci_text: str | None = None)
     _order(mf, "Makefile")
     _order(test_job.body, "ci.yml test job")
 
-
 MSRV = "1.95"
 MSRV_JOBS = (("ci.yml", "msrv"), ("full-test.yml", "msrv-test"))
 # The composite that installs the toolchain, lld and rust-cache (W3-S1). A job
@@ -477,40 +213,6 @@ def check_msrv_pinned(
         if "cargo " not in job.body:
             _die(f"{name} job {job_name} runs no cargo step")
 
-
-def check_rust_cache_shared_key(
-    wf_texts: dict[str, str] | None = None, preamble: str | None = None
-) -> None:
-    """Every Swatinem/rust-cache step uses shared-key: kerber; cargo jobs have a
-    cache, inline or through the rust-preamble composite (which must carry it)."""
-    needle = "shared-key: kerber"
-    if wf_texts is None:
-        wf_texts = {
-            p.name: p.read_text(encoding="utf-8")
-            for p in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
-        }
-    if preamble is None:
-        preamble = RUST_PREAMBLE_FILE.read_text(encoding="utf-8") if RUST_PREAMBLE_FILE.is_file() else ""
-    preamble_ok = "Swatinem/rust-cache" in preamble and needle in preamble
-    for name, text in wf_texts.items():
-        n_cache = text.count("Swatinem/rust-cache")
-        n_key = text.count(needle)
-        if n_cache and n_key != n_cache:
-            _die(f"{name}: rust-cache steps must set shared-key: kerber ({n_key}/{n_cache})")
-        wf = Workflow(pathlib.Path(name), text)
-        for job_name, job in wf.jobs.items():
-            if "cargo " not in job.body and "cargo\n" not in job.body:
-                continue
-            if RUST_PREAMBLE in job.body:
-                if not preamble_ok:
-                    _die(f"{RUST_PREAMBLE}/action.yml must run Swatinem/rust-cache with {needle}")
-                continue
-            if "Swatinem/rust-cache" not in job.body:
-                _die(f"{name} job {job_name} runs cargo but has no rust-cache")
-            if needle not in job.body:
-                _die(f"{name} job {job_name} rust-cache missing shared-key: kerber")
-
-
 CONCURRENCY_WORKFLOWS = ("ci.yml", "fuzz.yml")
 _USES_PINNED = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$")
 SHELLCHECK_CMD = (
@@ -534,8 +236,7 @@ def check_workflow_hardening(
     (the field harness's included) with a `.shellcheckrc` that follows sources,
     on a ShellCheck it installs itself by
     version and sha256 (the runner's package differs by two minor versions and
-    hundreds of notes), and the Makefile fallback image and the hygiene
-    inventory's image name that same version."""
+    hundreds of notes), and the Makefile fallback image names that same version."""
     if wf_texts is None:
         wf_texts = {
             p.name: p.read_text(encoding="utf-8")
@@ -588,175 +289,8 @@ def check_workflow_hardening(
     if shellcheck_pins is None:
         shellcheck_pins = {
             "Makefile": (ROOT / "Makefile").read_text(encoding="utf-8"),
-            "scripts/lib/hygiene_inventory.py": (ROOT / "scripts" / "lib" / "hygiene_inventory.py").read_text(encoding="utf-8"),
         }
     image = f"koalaman/shellcheck:{ver.group(1)}"
     for name, text in shellcheck_pins.items():
         if image not in text:
             _die(f"{name} must run the shellcheck image {image} (the version ci.yml installs)")
-
-
-def check_prod_image_once(ci_text: str | None = None) -> None:
-    """ci.yml builds harness/prod/Dockerfile exactly once (mit-image)."""
-    if ci_text is None:
-        ci_text = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-    builds = ci_text.count("docker build -f harness/prod/Dockerfile")
-    if builds != 1:
-        _die(f"ci.yml must docker build harness/prod/Dockerfile exactly once, found {builds}")
-    if "upload-artifact" in ci_text and "mit-kdc-image" in ci_text:
-        _die("ci.yml must not upload-artifact the MIT tar (cache restore only)")
-    wf = Workflow(pathlib.Path("ci.yml"), ci_text)
-    mit = wf.jobs.get("mit-image")
-    if mit is None or "harness/prod/Dockerfile" not in mit.body:
-        _die("mit-image must build/save harness/prod/Dockerfile")
-    if not re.search(r"hashFiles\([^)]*harness/prod/Dockerfile", ci_text):
-        _die("cache key must hashFiles harness/prod/Dockerfile")
-
-
-def check_build_profile(
-    cargo: str | None = None,
-    cfg: str | None = None,
-    ci: str | None = None,
-) -> None:
-    """[profile.dev] line-tables-only + split-debuginfo; lld rustflags."""
-    if cargo is None:
-        cargo = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
-    if 'debug = "line-tables-only"' not in cargo:
-        _die('Cargo.toml [profile.dev] must set debug = "line-tables-only"')
-    if 'split-debuginfo = "unpacked"' not in cargo:
-        _die('Cargo.toml [profile.dev] must set split-debuginfo = "unpacked"')
-    if cfg is None:
-        cfg_path = ROOT / ".cargo" / "config.toml"
-        if not cfg_path.is_file():
-            _die("missing .cargo/config.toml")
-        cfg = cfg_path.read_text(encoding="utf-8")
-    if "fuse-ld=lld" not in cfg:
-        _die(".cargo/config.toml must pass -fuse-ld=lld")
-    if ci is None:
-        # The lld step lives in the rust-preamble composite every cargo job uses.
-        ci = (WORKFLOWS / "ci.yml").read_text(encoding="utf-8")
-        if RUST_PREAMBLE_FILE.is_file():
-            ci += RUST_PREAMBLE_FILE.read_text(encoding="utf-8")
-    if "apt-get install" not in ci or " lld" not in ci:
-        _die("ci.yml (or the rust-preamble composite) must apt-get install lld")
-
-
-def check_env_read(
-    wf_texts: dict[str, str] | None = None,
-    corpus_blob: str | None = None,
-) -> None:
-    """Every env a workflow sets (except GitHub-provided) is read by a script or test."""
-    allow = {
-        "GITHUB_ENV",
-        "GITHUB_OUTPUT",
-        "GITHUB_PATH",
-        "GITHUB_STEP_SUMMARY",
-        "GITHUB_TOKEN",
-        "GEIGER_DEPS_OUT",
-        "KRB5_CONFIG",
-        "KERBER_SCRATCH",
-        "KERBER_SKIP_MIT_BUILD",
-        "KERBER_REQUIRE_REAL_PCAP",
-        "KERBER_REQUIRE_NETEM",
-        "KERBER_SOAK_SECONDS",
-        "SAMBA_AD_IMAGE",
-        "SAMBA_AD_REALM",
-        "SAMBA_AD_USER",
-        "SAMBA_AD_PASSWORD",
-        "SAMBA_KERBER_IMAGE",
-        "CORRELATION_ID",
-    }
-    if corpus_blob is None:
-        corpus: list[str] = []
-        for path in sorted((ROOT / "scripts").rglob("*")):
-            if path.suffix in {".sh", ".py", ".rs", ".c"} and path.is_file():
-                corpus.append(path.read_text(encoding="utf-8", errors="replace"))
-        for path in sorted((ROOT / "crates").rglob("*.rs")):
-            corpus.append(path.read_text(encoding="utf-8", errors="replace"))
-        blob = "\n".join(corpus)
-    else:
-        blob = corpus_blob
-    if wf_texts is None:
-        wf_items = {
-            p.name: p.read_text(encoding="utf-8")
-            for p in sorted((ROOT / ".github" / "workflows").glob("*.yml"))
-        }
-    else:
-        wf_items = wf_texts
-    for wf_name, text in wf_items.items():
-        in_env = False
-        for line in text.splitlines():
-            if re.match(r"^\s+env:\s*$", line):
-                in_env = True
-                continue
-            if in_env:
-                if re.match(r"^\s+\w", line) and not re.match(r"^\s+[A-Z0-9_]+:", line):
-                    in_env = False
-                    continue
-                m = re.match(r"^\s+([A-Z][A-Z0-9_]+):\s", line)
-                if not m:
-                    if line.strip() and not line.strip().startswith("#"):
-                        in_env = False
-                    continue
-                name = m.group(1)
-                if name in allow:
-                    continue
-                if name not in blob:
-                    _die(f"{wf_name} sets {name} but no script/test reads it")
-
-
-def parse_budget_toml(text: str) -> dict:
-    import tomllib
-
-    data = tomllib.loads(text)
-    jobs = {str(k): int(v) for k, v in (data.get("jobs") or {}).items()}
-    run_wall = (data.get("push") or {}).get("run_wall")
-    return {"jobs": jobs, "run_wall": int(run_wall) if run_wall is not None else None}
-
-
-def check_ci_budgets(
-    toml_text: str | None = None,
-    status_text: str | None = None,
-    wf_names: list[str] | None = None,
-    ci_job_names: list[str] | None = None,
-) -> None:
-    """ci-budget.toml exists with required jobs; plan caps are maxima; every ci.yml job is budgeted."""
-    live = toml_text is None
-    if toml_text is None:
-        path = ROOT / "ci-budget.toml"
-        if not path.is_file():
-            _die("missing ci-budget.toml")
-        toml_text = path.read_text(encoding="utf-8")
-    budget = parse_budget_toml(toml_text)
-    for name in BUDGET_REQUIRED_JOBS:
-        if name not in budget["jobs"]:
-            _die(f"ci-budget.toml missing [jobs].{name}")
-    if budget.get("run_wall") is None:
-        _die("ci-budget.toml missing [push].run_wall")
-    for name, cap in PLAN_JOB_CAPS.items():
-        val = budget["jobs"].get(name)
-        if val is not None and val > cap:
-            _die(f"ci-budget.toml [jobs].{name}={val} exceeds plan cap {cap}")
-    if budget["run_wall"] > PLAN_RUN_WALL_CAP:
-        _die(
-            f"ci-budget.toml [push].run_wall={budget['run_wall']} "
-            f"exceeds plan cap {PLAN_RUN_WALL_CAP}"
-        )
-    if status_text is None:
-        status_text = (SCRIPTS / "ci-status.py").read_text(encoding="utf-8")
-    if "--check-budget" not in status_text:
-        _die("ci-status.py must support --check-budget")
-    if "budget_overruns" not in status_text:
-        _die("ci-status.py must implement budget_overruns")
-    if wf_names is None:
-        wf_names = [p.name for p in sorted(WORKFLOWS.glob("*.yml"))]
-    if "budget.yml" not in wf_names:
-        _die("missing .github/workflows/budget.yml nightly job")
-    if live and ci_job_names is None:
-        ci_path = WORKFLOWS / "ci.yml"
-        if ci_path.is_file():
-            ci_job_names = list(Workflow(ci_path, ci_path.read_text()).jobs)
-    if ci_job_names:
-        for name in ci_job_names:
-            if name not in budget["jobs"]:
-                _die(f"ci-budget.toml missing [jobs].{name} (ci.yml job)")

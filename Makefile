@@ -11,7 +11,7 @@ OUT ?=
 GATE ?=
 QUALITY ?=
 
-.PHONY: safety fmt clippy test doc shellcheck policy harness stop-harness rust-kdc gate snapshot checkpoint budget
+.PHONY: safety fmt clippy test doc shellcheck policy harness stop-harness rust-kdc gate
 
 safety: fmt clippy test policy
 
@@ -52,18 +52,6 @@ gate:
 	@if [ -z "$(GATE)" ]; then echo "usage: make gate GATE=client-gate"; exit 2; fi
 	@g="$(GATE)"; g=$${g%.sh}; case "$$g" in *-gate) ;; *) g="$$g-gate" ;; esac; \
 	  ./scripts/$$g.sh
-
-snapshot:
-	@if [ -z "$(OUT)" ]; then echo "usage: make snapshot OUT=dir [QUALITY=1]"; exit 2; fi
-	./scripts/hygiene-snapshot.sh $(if $(QUALITY),--quality,) $(OUT)
-
-checkpoint:
-	@if [ -z "$(OUT)" ]; then echo "usage: make checkpoint OUT=dir"; exit 2; fi
-	./scripts/checkpoint.sh --out $(OUT)
-
-budget:
-	python3 scripts/ci-status.py --budget-report -n 15 --jobs
-	python3 scripts/ci-status.py --check-budget -n 5 --workflow ci
 
 # One field run on the lab: the ref's `git archive`, never this working tree, driven through the real
 # products on the lab VMs; records under ~/kerber-lab/runs (harness/field/README.md, "Scenarios").

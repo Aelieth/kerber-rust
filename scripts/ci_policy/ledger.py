@@ -7,7 +7,8 @@ import pathlib
 import re
 import sys
 
-from .common import ROOT, SCRIPTS, _die, _hygiene_inventory
+from .common import ROOT, SCRIPTS, _die
+from .hygiene import cfg_test_files_in_pkg
 
 DIFFSEND_CASES = frozenset(
     {
@@ -561,13 +562,12 @@ def _src_index(
     crates = ROOT / "crates" if crates is None else crates
     if not crates.is_dir():
         return by_crate, by_base
-    inv = _hygiene_inventory()
     for crate_dir in sorted(crates.iterdir()):
         src = crate_dir / "src"
         if not crate_dir.is_dir() or not src.is_dir():
             continue
         crate = crate_dir.name
-        src_test = {crate_dir / rel for rel in inv.cfg_test_files_in_pkg(crate_dir)}
+        src_test = {crate_dir / rel for rel in cfg_test_files_in_pkg(crate_dir)}
         for p in src.rglob("*.rs"):
             if p in src_test:
                 continue

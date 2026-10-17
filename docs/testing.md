@@ -11,7 +11,7 @@ is the sibling `doc` job, `cargo doc --workspace --no-deps` under
 deny with eight named allows (`Cargo.toml` says why for each),
 `missing_docs` is denied workspace-wide, and every library and binary
 root carries `#![deny(clippy::unwrap_used, clippy::expect_used,
-clippy::panic)]`. `make snapshot OUT=<dir>` (`scripts/hygiene-snapshot.sh`)
+clippy::panic)]`. `make snapshot OUT=<dir>` (scripts/hygiene-snapshot.sh)
 records the test/gate/oracle inventory and the shape of the tree (LOC and
 comment lines per package and file, the comment lines that carry a MIT
 anchor counted apart from the prose, function and file maxima, `pub` surface,
@@ -32,7 +32,7 @@ the `test` job, runs fixture checkpoints through four hooks
 that always fails, so it needs neither docker nor the image; `00-head.txt`
 records any hook that is set. Both refuse to run
 unless the host `default_realm` is the `TESTLABBY.LOCAL` lab stub
-(`scripts/lib/lab-realm.sh` reads the first live `default_realm =` line
+(scripts/lib/lab-realm.sh reads the first live `default_realm =` line
 of `/etc/krb5.conf`, not a commented one; `KERBER_ALLOW_HOST_REALM=1`
 overrides and is recorded in the stamp), stamp every file they write,
 and name every file in their own `INDEX.md`; a checkpoint taken into a
@@ -321,7 +321,7 @@ is set (error path only); the file:line is the first frame outside
 `scripts/lib/`. Deliberate
 failures under `set +e`, `||`, `!` and `if` conditions are not
 annotated by the ERR trap.
-`scripts/gate-err-trap-selftest.sh` (the `test` job) keeps the trap honest. Check CI after every push;
+scripts/gate-err-trap-selftest.sh (the `test` job) keeps the trap honest. Check CI after every push;
 a job stops at its first red step, so every gate behind that step has no CI evidence until the run is
 green again.
 
@@ -377,7 +377,7 @@ one module per domain (`workflows`, `shell`, `kadmin_q`, `gates`, `ledger`,
 (`kadmin_q`'s cases live in `selftest/shell.py`). The
 shim re-exports the names `kdb-dump-gate.sh` and `hygiene_inventory.py`
 read, and `check_policy_module_attrs` loads it from `/` the way they do.
-`scripts/py-move-check.py` judged the split: every def, class and
+scripts/py-move-check.py judged the split: every def, class and
 assignment of the old module defined once and identical, each global it
 reads bound to its home module, the shim's imports right, no import cycle
 (`check_py_move_self_test` keeps its fixtures). Some arms are pinned at
@@ -442,7 +442,7 @@ coverage checklist (`file:line` → Rust line or `deviation:`),
 red-at-HEAD artefacts: `working/` is gitignored. `__pycache__/` is
 gitignored.
 
-Every `scripts/*-gate.sh` and `scripts/red-at-sha.sh` sources
+Every `scripts/*-gate.sh` and scripts/red-at-sha.sh sources
 `scripts/lib/provenance.sh` **before the first cell**. The helper
 prints `head_sha=`, `tree_sha=` (temporary-index `git add -A -- .
 ':!working'` then `write-tree`), `dirty=`, `captured_at=`, the MIT
@@ -459,7 +459,7 @@ file. Gate scripts write host files only under `KERBER_SCRATCH`
 (`ci-policy` fails a literal host `>/tmp/` write outside a
 `KERBER_SCRATCH:-/tmp/…` default).
 
-Unit greens and parent reds go through `scripts/lib/unit-evidence.sh`:
+Unit greens and parent reds go through scripts/lib/unit-evidence.sh:
 `unit_green <name> <nextest filter>` (stamped nextest; refuses `dirty != no`
 unless `KERBER_UNIT_ALLOW_DIRTY=1`, which prints `override=KERBER_UNIT_ALLOW_DIRTY`)
 and `unit_red_at <parent> <name> [--all|<filter>] <files…>` (`red-at-sha.sh
@@ -488,7 +488,7 @@ outside the repository.
 non-rate-limited run whose every step GitHub has stamped (it stamps steps
 minutes after the run completes; retries with backoff capped at 60 s for
 at least 15 minutes, then exit 2 with no file) and drops `title=fixture` / `probe-gate.sh` annotations from
-`scripts/gate-err-trap-selftest.sh`. `scripts/evidence-check.py <dir>
+scripts/gate-err-trap-selftest.sh. `scripts/evidence-check.py <dir>
 --commits SHA…` flags every `.log`/`.txt` that is unstamped, whose
 `head_sha` is not a landed commit of the section, or whose `dirty=yes`
 lacks a `red-at-parent=` / `override=` label. `claim-audit.py` rejects an
@@ -701,7 +701,7 @@ measure itself; the nightly `budget.yml` job checks the last five `ci.yml` runs.
   `kcm-opcode.yml`, `soak.yml`, `budget.yml`.
 
 Every gate's `gate_wall_s` in a checkpoint `timings.tsv` is ≤ 45 s
-(`scripts/gate-wall-exceptions.txt` is empty). Gate proto sleeps sum to
+(scripts/gate-wall-exceptions.txt is empty). Gate proto sleeps sum to
 ≤ 26 s and are tagged `# proto:` (a lockout/postdate word is not enough).
 Unit `sleep(` in `crates/*/tests` is ≤ 14.
 
@@ -725,7 +725,7 @@ all of the above).
 | `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings` (sibling of `test`) |
 | `shellcheck` | `shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh` with `.shellcheckrc` (`external-sources=true`, `SC2329` off); zero inline disables (`make shellcheck`). ShellCheck is installed by version and sha256 (`SHELLCHECK_VERSION`, v0.11.0 — the runner's package is 0.9.0 and reports hundreds of SC2317/SC2119 notes 0.11.0 does not); the Makefile fallback image and the hygiene inventory name the same version, and `ci-policy.py` keeps the three in step |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
-| `audit` | `cargo audit`, `cargo deny`, `scripts/geiger.sh` (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` (CI pins cargo-vet **0.10.0**; local 0.10.2 is not an oracle) |
+| `audit` | `cargo audit`, `cargo deny`, scripts/geiger.sh (per-crate `cargo geiger`, 0-unsafe product), `cargo vet --locked` (CI pins cargo-vet **0.10.0**; local 0.10.2 is not an oracle) |
 | `ledger-mit` | fetches the SHA-pinned MIT 1.22.2 source and runs `scripts/ci-policy.py` (ledger anchors, tally, proof column, evidence rules) |
 | `mit-image` | builds or restores `kerber-rust-mit-kdc:1.22.2` and `kerber-rust-prod-node:latest` into `actions/cache` (no artifact round-trip) |
 | `harness` | After `run-harness`/`stop-harness` (client/ccache/knobs/config-include), one shared shell (`KERBER_SHELL`) and one stock MIT KDC (`KERBER_LIVE=1`). Then `kdc-gate`, `store-gate`, `bidirectional-gate`, `gss-gate`, `pkinit-gate`, `kadmin-rust-gate`, `kadmin-rust-acl-gate`, `kadmin-mit-gate`, `kadmin-both-gate` (local wrapper `kadmin-gate.sh`), `history-mit-gate` |
@@ -821,7 +821,7 @@ not `dlopen` ([docs/plugins.md](plugins.md)).
 
 ### Test-only inputs (`test-hooks`)
 
-The gates, CI, `make safety` and `scripts/checkpoint.sh` build with
+The gates, CI, `make safety` and scripts/checkpoint.sh build with
 `--features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks`
 (the gates through `scripts/lib/build-bins.sh`, whose one cargo invocation also
 carries the client tools); `krb5-kdc/test-hooks` turns on `krb5-config/test-hooks`

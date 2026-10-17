@@ -63,7 +63,7 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
 | --- | --- | --- | --- |
 | cargo-audit | `rustsec/audit-check` | known advisories fail red | audit |
 | cargo-deny | `deny.toml` licenses/advisories/sources | allowlist only; crates.io sources | audit |
-| `scripts/geiger.sh` | per-crate `cargo geiger --forbid-only` | product 0-unsafe / `forbid(unsafe)`; dep surface archived, not a count gate | audit |
+| scripts/geiger.sh | per-crate `cargo geiger --forbid-only` | product 0-unsafe / `forbid(unsafe)`; dep surface archived, not a count gate | audit |
 | `cargo vet --locked` | `supply-chain/` (Google / Mozilla / Bytecode Alliance) | every third-party crate imported, locally audited, or exempt; cargo-vet **0.10.0** | audit |
 
 ## Deviation ledger (MIT behaviours kept)

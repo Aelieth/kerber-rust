@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import pathlib
 import re
 import sys
 
-from .common import ROOT, SCRIPTS, _die
+from .common import ROOT, _die
 # S4. A commit that changes a live hit count updates the matching
 # constant in that commit. Hard means 0.
 MIT_ANCHOR_ALLOW = 0
@@ -80,27 +79,76 @@ def _anchor_line_problems(comment: str) -> list[str]:
     return problems
 
 
-def _comment_lexer():
-    spec = importlib.util.spec_from_file_location(
-        "hygiene_fn_diff_comments", SCRIPTS / "hygiene-fn-diff.py"
-    )
-    if spec is None or spec.loader is None:
-        _die("missing scripts/hygiene-fn-diff.py")
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+def _ident_prev(src: str, i: int) -> bool:
+    if i <= 0:
+        return False
+    return src[i - 1].isalnum() or src[i - 1] == "_"
 
 
-_COMMENT_LEXER = None
+def _scan_quoted(src: str, i: int) -> int:
+    """Index past a `"…"` / `b"…"` starting at the opening quote."""
+    n = len(src)
+    j = i + 1
+    while j < n:
+        if src[j] == "\\":
+            j += 2
+            continue
+        if src[j] == '"':
+            return j + 1
+        j += 1
+    return n
+
+
+def _scan_raw(src: str, i: int) -> int | None:
+    """Index past `r"…"`, `r#"…"#`, `br"…"` starting at `r` (or `b` of `br`)."""
+    n = len(src)
+    j = i
+    if src[j] == "b":
+        j += 1
+        if j >= n or src[j] != "r":
+            return None
+    if j >= n or src[j] != "r":
+        return None
+    if _ident_prev(src, i):
+        return None
+    j += 1
+    hashes = 0
+    while j < n and src[j] == "#":
+        hashes += 1
+        j += 1
+    if j >= n or src[j] != '"':
+        return None
+    close = '"' + "#" * hashes
+    k = src.find(close, j + 1)
+    return n if k < 0 else k + len(close)
+
+
+def _scan_char(src: str, i: int) -> int | None:
+    """Index past `'x'` / `b'x'` / `'\\n'`; None for a lifetime `'a`."""
+    n = len(src)
+    j = i
+    if src[j] == "b":
+        j += 1
+        if j >= n or src[j] != "'":
+            return None
+        if _ident_prev(src, i):
+            return None
+    elif src[j] != "'":
+        return None
+    nxt = src[j + 1] if j + 1 < n else ""
+    if nxt == "\\":
+        k = src.find("'", j + 2)
+        if 0 < k <= j + 12:
+            return k + 1
+        return None
+    if j + 2 < n and src[j + 2] == "'":
+        return j + 3
+    return None
 
 
 def _comment_lines(src: str) -> list[tuple[int, str]]:
     """Comment lines outside string literals: every `//`, `///` and `//!`
     line, and every line of a (nested) `/* */`, `/** */` or `/*! */` block."""
-    global _COMMENT_LEXER
-    if _COMMENT_LEXER is None:
-        _COMMENT_LEXER = _comment_lexer()
-    mod = _COMMENT_LEXER
     out: list[tuple[int, str]] = []
     i, n = 0, len(src)
     line = 1
@@ -137,13 +185,13 @@ def _comment_lines(src: str) -> list[tuple[int, str]]:
         nxt = src[i + 1] if i + 1 < n else ""
         end: int | None = None
         if c == "r" or (c == "b" and nxt == "r"):
-            end = mod._scan_raw(src, i)
+            end = _scan_raw(src, i)
         if end is None and c == "b" and nxt == '"':
-            end = mod._scan_quoted(src, i + 1)
+            end = _scan_quoted(src, i + 1)
         if end is None and c == '"':
-            end = mod._scan_quoted(src, i)
+            end = _scan_quoted(src, i)
         if end is None and c in "'b":
-            end = mod._scan_char(src, i)
+            end = _scan_char(src, i)
         if end is not None:
             bump(src[i:end])
             i = end
@@ -622,6 +670,71 @@ _DOCS_PROCESS_TAG = re.compile(
 )
 
 
+_CITE_FILE = re.compile(
+    r"(?<![\w/.-])((?:[\w.-]+/)*[\w.-]+\.(?:sh|py|c|h|rs|md|toml|yml|yaml|conf|env))"
+    r"(:[0-9]+(?:-[0-9]+)?(?:,\s?[0-9]+(?:-[0-9]+)?)*)?"
+)
+_CITE_CONT = re.compile(r"(?<![\w.)\]])(:[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*)(?![\w:])")
+_CITE_SECTION = re.compile(r"`(==== .+? ====)`")
+_CITE_FUNCTION = re.compile(r"`([A-Za-z_][\w]*)\(\)`")
+_BARE_MIT_NAMES = frozenset({"t_vfy_increds.c"})
+
+
+def scripts_by_name(root: pathlib.Path) -> dict[str, pathlib.Path]:
+    """Every scripts/**/*.(sh|py|c) by its file name (the first in sorted order when two share one)."""
+    scripts = root / "scripts"
+    by_name: dict[str, pathlib.Path] = {}
+    for p in sorted(scripts.rglob("*")) if scripts.is_dir() else []:
+        if p.suffix in (".sh", ".py", ".c") and p.is_file() and "__pycache__" not in p.parts:
+            by_name.setdefault(p.name, p)
+    return by_name
+
+
+def line_script_cites(
+    root: pathlib.Path, line: str, by_name: dict[str, pathlib.Path]
+) -> tuple[list[str], list[tuple[str, pathlib.Path, bool]]]:
+    """One doc line's script cites, and its section and function cites as (text, script, resolved)."""
+    cites: list[str] = []
+    sections: list[tuple[str, pathlib.Path, bool]] = []
+    for cell in re.split(r"(?<!\\)\|", line) if line.lstrip().startswith("|") else [line]:
+        events = [(m.start(), "file", m) for m in _CITE_FILE.finditer(cell)]
+        events += [(m.start(), "cont", m) for m in _CITE_CONT.finditer(cell)]
+        events += [(m.start(), "section", m) for m in _CITE_SECTION.finditer(cell)]
+        events += [(m.start(), "function", m) for m in _CITE_FUNCTION.finditer(cell)]
+        current: pathlib.Path | None = None
+        last_end = -1
+        in_script = False
+        for _pos, kind, m in sorted(events, key=lambda e: e[0]):
+            if kind == "file":
+                name = m.group(1)
+                if name.startswith("scripts/"):
+                    current = root / name
+                elif "/" not in name and name in by_name and name not in _BARE_MIT_NAMES:
+                    current = by_name[name]
+                else:
+                    current = None
+                in_script = current is not None and bool(m.group(2))
+                last_end = m.end() + 1 if current is not None else -1
+                if in_script:
+                    cites.append(m.group(0))
+            elif kind == "cont":
+                ranged = "-" in m.group(1) or "," in m.group(1)
+                if (in_script or (current is not None and ranged)) and not cell[: m.start()].endswith(
+                    tuple("0123456789")
+                ):
+                    cites.append(m.group(1))
+            elif kind == "function":
+                if current is not None and cell[last_end:m.start()].strip() == "":
+                    text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
+                    name = m.group(1)
+                    ok = re.search(rf"^\s*(?:function\s+)?{re.escape(name)}\s*\(\)", text, re.M) is not None
+                    sections.append((f"{name}()", current, ok))
+            elif current is not None:
+                text = current.read_text(encoding="utf-8", errors="replace") if current.is_file() else ""
+                sections.append((m.group(1), current, m.group(1) in text))
+    return cites, sections
+
+
 def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
     """`path:line` of every docs/**/*.md line outside a code fence that carries a process tag.
 
@@ -629,8 +742,6 @@ def docs_process_tag_lines(root: pathlib.Path | None = None) -> list[str]:
     judge's rule) is the script's text, quoted faithfully, and is not counted; unresolved, it counts. This arm is
     temporary: 31 gate sections carry a tag in their own echo text, and the commit that renames them deletes it.
     """
-    from .docs import line_script_cites, scripts_by_name
-
     root = ROOT if root is None else root
     by_name = scripts_by_name(root)
     out = []
