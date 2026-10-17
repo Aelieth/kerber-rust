@@ -21,7 +21,8 @@
 //!   `-proponly` is refused. With `iprop_enable` unset the text is MIT's (`-proponly can only be
 //!   used when iprop_enable is true`); with it set, iprop is served on the kadm5 port
 //!   (`-proponly is not supported: iprop is served on the kadm5 port`). `-m` reads the master
-//!   key from the keyboard when kdc.conf names no `key_stash_file`.
+//!   key from the keyboard, including when kdc.conf names a `key_stash_file`. In the foreground
+//!   it is read twice.
 //!
 //! With `iprop_enable` set for the realm ([`krb5_config::IpropParams`], which also needs
 //! `iprop_port`), kadmind maps the update log as the primary's, logs every principal put and
@@ -57,7 +58,7 @@ use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
     Acl, DEFAULT_TCP_LISTEN_BACKLOG, Error, IpropRole, OpenFailure, PrincipalStore, Signals,
     acl_for_store, bind_rpc_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners,
-    copy_persist_master, detach, manual_master_key, names_relative_database, open_database,
+    copy_persist_master, detach, kadmind_mkey_from_kbd, names_relative_database, open_database,
     open_database_with_key, open_database_with_password, shared_dump as shared_store,
     write_pid_file,
 };
@@ -193,7 +194,7 @@ fn main() {
     }
     // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf.
     krb5_gss::use_kdc_context();
-    let (mut store, paths) = open_realm(&progname, &args, test_realm);
+    let (mut store, paths) = open_realm(&progname, &args, test_realm, nofork);
     let realm = store.realm().to_owned();
     let kdc_conf = paths.conf.as_ref();
     // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled and no `iprop_port`, kadmind does not start.
@@ -245,7 +246,7 @@ fn main() {
         .map(|k| k.key.clone());
     #[cfg(feature = "test-hooks")]
     let persist = store.persist_paths.clone();
-    let keyboard = manual_master_key(args.flag("-m"), &paths);
+    let keyboard = kadmind_mkey_from_kbd(args.flag("-m"));
     let held_master = if keyboard {
         copy_persist_master(&store)
     } else {
@@ -391,6 +392,7 @@ fn open_realm(
     progname: &str,
     args: &MitArgs,
     test_realm: bool,
+    nofork: bool,
 ) -> (PrincipalStore, krb5_config::KdcPaths) {
     #[cfg(feature = "test-hooks")]
     let realm = if test_realm {
@@ -412,7 +414,8 @@ fn open_realm(
     let _ = test_realm;
     let db_args: Vec<String> = args.values("-x").into_iter().map(str::to_owned).collect();
     let realm_name = paths.realm.clone().unwrap_or_default();
-    let store = if manual_master_key(args.flag("-m"), &paths) {
+    let keyboard = kadmind_mkey_from_kbd(args.flag("-m"));
+    let mut store = if keyboard {
         open_database_with_password(&paths, &db_args, "K/M", &realm_name)
     } else {
         open_database(&paths, &db_args, "K/M")
@@ -421,6 +424,14 @@ fn open_realm(
         let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
         fail_to_start(progname, Some(&msg), "initializing")
     });
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:502-519`): the handle is destroyed and `kadm5_init` runs again, so `-nofork` reads the master key twice.
+    if nofork && keyboard {
+        store =
+            open_database_with_password(&paths, &db_args, "K/M", &realm_name).unwrap_or_else(|e| {
+                let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
+                fail_to_start(progname, Some(&msg), "initializing")
+            });
+    }
     (store, paths)
 }
 

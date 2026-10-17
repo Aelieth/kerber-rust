@@ -38,6 +38,7 @@ any other `###` heading.
 - **kdc.** A preauth module's text is kept only with its own code. Garbage PA-ENC-TIMESTAMP is error 24, and PKINIT without a CA is ignored.
 - **crypto.** A des3 usage key uses the 3DES DK, a delegated session key keeps a weak enctype, and kadmin names are NT-PRINCIPAL.
 - **kdc.** `krb5kdc -m` and `kadmind -m` read the master key once from the keyboard when kdc.conf names no stash.
+- **kdc.** A foreground `-m` reads the master key twice, and `kadmind -m` reads it when a stash is named.
 
 ## [1.1.0] - 2026-10-14
 

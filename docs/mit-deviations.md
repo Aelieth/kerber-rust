@@ -165,3 +165,4 @@ not yet settled says so.
 | `krb5kdc -w` | worker processes | `-w N` is accepted and does nothing | Not ported |
 | `kadmind -proponly` without iprop | refused: `-proponly can only be used when iprop_enable is true` | the same text | The refusal matches MIT |
 | `kadmind -proponly` with iprop | iprop runs alone | refused: `-proponly is not supported: iprop is served on the kadm5 port` | No separate iprop listener |
+| Daemonized `-m` | `main` (`kdc/main.c:992-1016`, `kadmin/server/ovsec_kadmd.c:502-519`) finishes the realm and initializes it again after `daemon(0, 0)`, so the second read has no terminal and logs `Cannot read password` | the key is read once before the fork, and the daemon serves | **Deviation**: a working `-m` without `-n` or `-nofork`. Copying the failure would drop a path that already serves |

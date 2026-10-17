@@ -270,6 +270,10 @@ fn main() {
     };
     #[cfg(not(feature = "test-hooks"))]
     let mut store = init_realm(&progname, &realm, &paths, &opts.args);
+    // MIT `main` (`kdc/main.c:992-1016`): the realm is finished and initialized again, so `-n` reads the master key twice.
+    if foreground && !test_realm && manual_master_key(opts.args.manual, &paths) {
+        store = init_realm(&progname, &realm, &paths, &opts.args);
+    }
     // MIT builds the KDC profile with kdc.conf before krb5.conf, so kdc.conf
     // wins (`init_os_ctx.c add_kdc_config_file`). Apply krb5.conf [libdefaults]
     // first as the base, then let kdc.conf override.

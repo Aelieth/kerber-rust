@@ -138,6 +138,20 @@ pub fn manual_master_key(manual: bool, paths: &krb5_config::KdcPaths) -> bool {
         .is_none_or(|c| c.key_stash_file.is_none())
 }
 
+/// Whether kadmind `-m` reads the master key from the keyboard.
+/// MIT `main` (`kadmin/server/ovsec_kadmd.c:386-388`): `-m` sets `mkey_from_kbd` with or without a stash.
+#[must_use]
+pub fn kadmind_mkey_from_kbd(manual: bool) -> bool {
+    if !manual {
+        return false;
+    }
+    #[cfg(feature = "test-hooks")]
+    if std::env::var_os("KRB5_KDC_STASH").is_some() {
+        return false;
+    }
+    true
+}
+
 /// The master key [`open_database_with_password`] stored on `store`, for a second open after
 /// `daemon()` that must not prompt again.
 #[must_use]
