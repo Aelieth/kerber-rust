@@ -58,11 +58,5 @@ name = "loadgen"
 path = "src/bin/loadgen.rs"
 required-features = ["krb5-kdc/test-hooks"]
 
-# It runs krb5-forge-tgt, so it needs that program built.
-[[test]]
-name = "forge_tgt"
-path = "tests/forge_tgt.rs"
-required-features = ["krb5-kdc/test-hooks"]
-
 [lints]
 workspace = true

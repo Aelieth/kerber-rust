@@ -43,6 +43,7 @@ any other `###` heading.
 - **cli.** Unit tests outside the keep list are gone. The wiped-buffer line test stays.
 - **asn1.** Unit tests outside the keep list are gone. The four DER-strict tests stay.
 - **crypto.** Unit tests outside the keep list are gone. The known-answer tests and the parity-row proofs stay.
+- **tools.** Unit tests outside the keep list are gone. The decode-sweep golden test stays.
 
 ### Fixed
 
