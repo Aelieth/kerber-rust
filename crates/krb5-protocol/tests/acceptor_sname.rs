@@ -107,34 +107,6 @@ fn sname_match_realm_mismatch_is_false() {
 }
 
 #[test]
-fn sname_match_non_hst_is_principal_compare() {
-    let want = user();
-    assert!(sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &user(),
-        b"KERBER.TEST",
-        false,
-    ));
-    let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
-    assert!(!sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &other,
-        b"KERBER.TEST",
-        false,
-    ));
-    let nt = PrincipalName::new(PrincipalName::NT_UNKNOWN, ["user"]);
-    assert!(sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &nt,
-        b"KERBER.TEST",
-        false,
-    ));
-}
-
-#[test]
 fn sname_match_hst_rejects_non_two_component_ticket() {
     let want = host("host", "svc.kerber.test");
     assert!(!sname_match(

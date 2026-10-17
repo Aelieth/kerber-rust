@@ -236,6 +236,17 @@ def _self_test_ledger() -> None:
     _must_die(check_ledger_anchors, _row("krb5-kdc/plugins.rs advertise:1", verdict="absent"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "no status word"))
     _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", proof="`no_such_unit_anywhere`"))
+    check_ledger_anchors(
+        _row(
+            "krb5-kdc/dispatch.rs make_toolong_error",
+            "no status word",
+            proof="proven against MIT by `no_such_unit_anywhere` at `495637f3`, since removed",
+        )
+    )
+    _must_die(
+        check_ledger_anchors,
+        _row("krb5-kdc/dispatch.rs make_toolong_error", "no status word", proof="since removed"),
+    )
     check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", "no status word", proof=unit))
     _must_die(check_ledger_anchors, _row("krb5-kdc/dispatch.rs make_toolong_error", "NOT_A_REAL_STATUS 60"))
     check_ledger_anchors(_row("krb5-kdc/dispatch.rs make_toolong_error", "FIELD_TOOLONG 52"))

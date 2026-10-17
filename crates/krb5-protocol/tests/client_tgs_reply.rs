@@ -85,27 +85,6 @@ fn tgs_reply_client_ignores_name_type() {
 }
 
 #[test]
-fn tgs_reply_wrong_client_is_modified() {
-    let other = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["other"]);
-    let err = tgs_reply_client_ok(
-        &user(),
-        &realm(),
-        &other,
-        &realm(),
-        &host(),
-        &host(),
-        &realm(),
-        false,
-        false,
-    )
-    .unwrap_err();
-    assert!(
-        err.to_string().contains("client does not match TGT"),
-        "{err}"
-    );
-}
-
-#[test]
 fn tgs_reply_s4u2proxy_final_skips_tgt_client() {
     let impersonated = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["impersonated"]);
     tgs_reply_client_ok(

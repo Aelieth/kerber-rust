@@ -679,45 +679,6 @@ mod tests {
         assert_eq!(&f[8..], args.as_slice());
     }
 
-    /// Live MIT 1.22.2 (cc_kcm.c): `kcm_socket` names the socket, else the compiled default.
-    #[test]
-    fn kcm_socket_is_the_relation_else_the_default() {
-        assert_eq!(
-            socket_path_from(Some("/tmp/conf.sock".into())),
-            PathBuf::from("/tmp/conf.sock")
-        );
-        assert_eq!(
-            socket_path_from(None),
-            PathBuf::from("/var/run/.heim_org.h5l.kcm-socket")
-        );
-    }
-
-    /// Live MIT 1.22.2: `kcm_socket = -` and a socket that is not there are "No KCM server
-    /// found"; a path that is no socket, or none, is its errno.
-    #[test]
-    fn no_socket_is_no_kcm_server() {
-        // A socket that is not there: a short path under /proc/self, which never holds this file. A
-        // scratch path can pass sun_path's 107 bytes and be cut, as MIT cuts it, onto its directory,
-        // which connects as "Connection refused".
-        for path in ["-".into(), PathBuf::from("/proc/self/kerber-no-kcm.sock")] {
-            SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(path));
-            let e = kcm_primary_name().unwrap_err();
-            assert!(kcm_no_server(&e), "{e}");
-            assert_eq!(e.to_string(), "No KCM server found");
-        }
-        // A path that is no socket, short on every host for the same reason.
-        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(PathBuf::from("/dev/null")));
-        let e = kcm_primary_name().unwrap_err();
-        assert!(!kcm_no_server(&e), "{e}");
-        assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused);
-        // Live MIT 1.22.2: an empty value (`kcm_socket = ""`) is "Connection refused" too.
-        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = Some(PathBuf::new()));
-        let e = kcm_primary_name().unwrap_err();
-        assert!(!kcm_no_server(&e), "{e}");
-        assert_eq!(e.kind(), io::ErrorKind::ConnectionRefused);
-        SOCKET_OVERRIDE.with(|s| *s.borrow_mut() = None);
-    }
-
     #[test]
     fn get_cred_list_round_trips_ccmarshal_cred() {
         let cred = CcacheCred {

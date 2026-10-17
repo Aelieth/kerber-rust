@@ -47,6 +47,8 @@ any other `###` heading.
 - **ci.** `gate-common` and the three smoke gates read captured text. A match is grep's status.
 - **crypto.** The des3 PKINIT reply-key test stays. It is that parity row's only proof.
 - **testkit.** Unit tests outside the keep list are gone. The helpers stay.
+- **parity.** Five client-library rows keep a historic MIT proof. The capaths gate proves the closer hop.
+- **ci.** An exact row with no status word may cite a removed test when the proof says since removed.
 
 ### Removed
 

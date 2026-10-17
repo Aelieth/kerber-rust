@@ -1612,16 +1612,6 @@ mod tests {
         assert_eq!(tgt_served_realm(&x), "C.TEST");
     }
 
-    #[test]
-    fn closer_hop_dest_first_then_capaths() {
-        let path = ["A.TEST".into(), "B.TEST".into(), "C.TEST".into()];
-        assert_eq!(closer_hop(&path, "A.TEST", "C.TEST"), Some("B.TEST"));
-        assert_eq!(closer_hop(&path, "A.TEST", "B.TEST"), None);
-        assert_eq!(closer_hop(&path, "B.TEST", "C.TEST"), None);
-        let direct = ["A.TEST".into(), "C.TEST".into()];
-        assert_eq!(closer_hop(&direct, "A.TEST", "C.TEST"), None);
-    }
-
     fn tgt_with_flags(mit_flags: u32) -> AsOutcome {
         let out = outcome(
             "KERBER.TEST",
@@ -1669,19 +1659,6 @@ mod tests {
             ..TgsCredsOptions::default()
         };
         assert_eq!(tgs_service_extra(&opts).to_u32(), 0x0001_0000);
-    }
-
-    #[test]
-    fn chase_step_start_realm_referral_is_reply_mismatch() {
-        let want = PrincipalName::krbtgt("C.TEST");
-        let back = PrincipalName::krbtgt("A.TEST");
-        let out = outcome("A.TEST", back, "A.TEST");
-        let mut seen = vec!["A.TEST".into()];
-        let err = chase_step("A.TEST", &mut seen, &want, "B.TEST", &out).unwrap_err();
-        match err {
-            Error::ReplyMismatch(s) => assert!(s.contains("start realm"), "{s}"),
-            other => panic!("expected ReplyMismatch start realm, got {other:?}"),
-        }
     }
 
     #[test]

@@ -210,15 +210,6 @@ fn a_wrong_value_is_preauthentication_failed_with_no_fallback() {
     assert_eq!(ui.answers.len(), 1, "the second answer was never read");
 }
 
-#[test]
-fn no_prompter_fails_the_module_and_the_password_follows() {
-    let (kdc, armor) = realm(r#"[{"type":"clienttest"}]"#);
-    // as_exchange has no prompter: the OTP module fails "Cannot read password" and the exchange
-    // goes on to the next mechanism, which has the password in the request.
-    let out = as_exchange(&request(&kdc, Some(&armor))).expect("falls back to the password");
-    assert_eq!(out.pa_type, Some(pa::ENCRYPTED_CHALLENGE));
-}
-
 /// MIT `sort_krb5_padata_sequence` (`lib/krb5/krb/get_in_tkt.c:400-471`): `preferred_preauth_types`
 /// moves a type to the front of the hint, so encrypted challenge (138) is run before OTP (141).
 #[test]

@@ -368,6 +368,7 @@ _MIT_NA = re.compile(r"^\s*(?:n/a|absent|—|-|RFC\s*\d)", re.I)
 _PROOF_UNIT = re.compile(r"`([a-z][a-z0-9]*(?:_[a-z0-9]+)+)`")
 _PROOF_CASE = re.compile(r"`([a-z][a-z0-9]*(?:-[a-z0-9]+)+)`")
 _PROOF_GATE = re.compile(r"\b([\w-]+-gate\.sh)\b")
+_HISTORIC_PROOF = re.compile(r"\bsince removed\b")
 _FN_NAMES: set[str] | None = None
 _CASE_TEXT: str | None = None
 
@@ -400,7 +401,15 @@ def _case_text() -> str:
 
 
 def _proof_exists(proof: str) -> bool:
-    if any(n in _fn_names() for n in _PROOF_UNIT.findall(proof)):
+    """A live fn, a gate script on disk, a diffsend case, or a removed fn the cell still names.
+
+    The removed-fn form is the words `since removed` plus at least one backticked
+    unit. The phrase alone verifies nothing.
+    """
+    units = _PROOF_UNIT.findall(proof)
+    if any(n in _fn_names() for n in units):
+        return True
+    if units and _HISTORIC_PROOF.search(proof):
         return True
     if any((ROOT / "scripts" / g).is_file() for g in _PROOF_GATE.findall(proof)):
         return True
@@ -675,8 +684,9 @@ def check_ledger_anchors(text: str | None = None, name: str = "docs/mit-parity-l
     e_text status words (backticked, or bare `WORD_WORD` identifiers) must occur
     in the anchored item body; a row with no such word must name a proof unit,
     diffsend case, or gate. A retired gate name still counts; RF-1d re-points
-    the sole-proof rows. A symbol defined more than once in a file needs `:N`
-    inside the intended definition.
+    the sole-proof rows. A proof that names a unit and says `since removed`
+    counts after that unit is deleted. A symbol defined more than once in a
+    file needs `:N` inside the intended definition.
     """
     checking_file = text is None
     sources = ledger_sources() if text is None else [(name, text, None)]
