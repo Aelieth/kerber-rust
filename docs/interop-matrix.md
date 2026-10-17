@@ -41,8 +41,6 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
 - **The GSS initiator's sequence number.** The authenticator's sequence number and the per-message start are 0; MIT
   draws a random one. MIT accepts ours, and a cross-context replay still fails the MIC.
 - **Client messages and logs.** None changes an outcome.
-  - A KDC name that resolves first to a link-local IPv6 address: MIT's clients reach the KDC over UDP; ours print
-    `UDP error sending … Address family not supported by protocol` three times per request, then succeed over TCP.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
     `Incorrect password in encrypted challenge`.
   - The KDC answers a SPAKE support message from a client whose only key is des3 with PREAUTH_FAILED even when the

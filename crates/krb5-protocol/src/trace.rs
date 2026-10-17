@@ -401,6 +401,31 @@ fn is_word(word: &str) -> bool {
     WORDS.contains(&word)
 }
 
+/// MIT `k5_print_addr_port` (`lib/krb5/os/addr.c:94-110`): numeric host and port, `[%s]:%s` for
+/// IPv6. A scope id prints as the interface name, or the number when that name is not there.
+fn print_addr_port(addr: &SocketAddr) -> String {
+    match addr {
+        SocketAddr::V4(v4) => format!("{}:{}", v4.ip(), v4.port()),
+        SocketAddr::V6(v6) => {
+            let port = v6.port();
+            let host = v6.ip();
+            let scope = v6.scope_id();
+            if scope == 0 {
+                format!("[{host}]:{port}")
+            } else {
+                format!("[{host}%{}]:{port}", scope_name(scope))
+            }
+        }
+    }
+}
+
+fn scope_name(id: u32) -> String {
+    nix::net::if_::if_indextoname(id).map_or_else(
+        |_| id.to_string(),
+        |name| name.into_string().unwrap_or_else(|_| id.to_string()),
+    )
+}
+
 /// One `{word}` of [`trace_format`]; an argument of another kind prints nothing.
 fn format_word(buf: &mut String, word: &str, arg: &Arg<'_>) {
     match (word, *arg) {
@@ -425,7 +450,7 @@ fn format_word(buf: &mut String, word: &str, arg: &Arg<'_>) {
                 Transport::Udp => "dgram",
                 Transport::Tcp => "stream",
             });
-            let _ = write!(buf, " {}", ra.addr);
+            let _ = write!(buf, " {}", print_addr_port(&ra.addr));
         }
         ("errno", Arg::Errno(e)) => {
             let _ = write!(buf, "{e}/{}", strerror(e));

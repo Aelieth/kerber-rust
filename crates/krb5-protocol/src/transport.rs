@@ -1,7 +1,7 @@
 //! UDP and TCP exchanges with a KDC (RFC 4120 §7.2).
 
 use std::io::Read;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
 use std::time::{Duration, Instant};
 
 use krb5_asn1::decode;
@@ -107,7 +107,6 @@ pub(crate) fn sendto_kdc(
 
 /// One located KDC, resolved once. A name that does not resolve has no socket.
 struct Located {
-    addr: KdcAddr,
     transport: KdcTransport,
     dest: Option<SocketAddr>,
     udp: Option<UdpSocket>,
@@ -116,7 +115,6 @@ struct Located {
 impl Located {
     fn prepare(addr: &KdcAddr, transport: KdcTransport) -> Self {
         Self {
-            addr: addr.clone(),
             transport,
             dest: dest_addr(addr).ok(),
             udp: None,
@@ -322,16 +320,26 @@ fn exchange_passes(
     walk.done()
 }
 
+/// A UDP socket of `dest`'s family. Loopback binds loopback so a reply stays on `lo`.
+/// MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:884-990`): `socket(state->addr.family, ...)`.
+fn udp_socket_for(dest: &SocketAddr) -> std::io::Result<UdpSocket> {
+    let ip = match (dest.ip().is_loopback(), dest.is_ipv4()) {
+        (true, true) => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        (true, false) => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        (false, true) => IpAddr::V4(Ipv4Addr::UNSPECIFIED),
+        (false, false) => IpAddr::V6(Ipv6Addr::UNSPECIFIED),
+    };
+    UdpSocket::bind(SocketAddr::new(ip, 0))
+}
+
 fn open_udp(server: &mut Located) -> Result<(), Error> {
     if server.udp.is_some() {
         return Ok(());
     }
-    let bind = if server.addr.host == "127.0.0.1" || server.addr.host == "localhost" {
-        "127.0.0.1:0"
-    } else {
-        "0.0.0.0:0"
-    };
-    let sock = UdpSocket::bind(bind).map_err(|e| Error::transport_msg(format!("udp bind: {e}")))?;
+    let dest = server
+        .dest
+        .ok_or_else(|| Error::transport_msg("no KDC address"))?;
+    let sock = udp_socket_for(&dest).map_err(|e| Error::transport_msg(format!("udp bind: {e}")))?;
     server.udp = Some(sock);
     Ok(())
 }
@@ -486,7 +494,7 @@ fn exchange_one(
         }
         return reply;
     }
-    let reply = match exchange_udp(addr, dest, request) {
+    let reply = match exchange_udp(dest, request) {
         Ok(reply) if is_response_too_big(&reply) => {
             tracing::info!(
                 event = krb5_log::events::PROTOCOL_TRANSPORT,
@@ -589,19 +597,12 @@ pub(crate) fn errno(e: &std::io::Error) -> i32 {
 /// MIT `start_connection` (`lib/krb5/os/sendto_kdc.c:884-990`): the first send is traced as the
 /// initial request.
 /// MIT `maybe_send` (`lib/krb5/os/sendto_kdc.c:1003-1035`): each later one as a retry.
-fn exchange_udp(addr: &KdcAddr, dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
+fn exchange_udp(dest: SocketAddr, request: &[u8]) -> Result<Vec<u8>, Error> {
     let ra = RemoteAddr {
         transport: Transport::Udp,
         addr: dest,
     };
-    // Bind loopback when the KDC is loopback so replies stay on lo (Docker
-    // bridge + 0.0.0.0 ephemeral ports drop UDP replies).
-    let bind = if addr.host == "127.0.0.1" || addr.host == "localhost" {
-        "127.0.0.1:0"
-    } else {
-        "0.0.0.0:0"
-    };
-    let sock = UdpSocket::bind(bind).map_err(|e| Error::transport_msg(format!("udp bind: {e}")))?;
+    let sock = udp_socket_for(&dest).map_err(|e| Error::transport_msg(format!("udp bind: {e}")))?;
     sock.set_write_timeout(Some(TIMEOUT))
         .map_err(|e| Error::transport_msg(e.to_string()))?;
     // send_to/recv_from (not connect): some stacks drop connected-UDP replies
