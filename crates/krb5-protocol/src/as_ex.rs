@@ -1833,8 +1833,8 @@ pub fn conf_etypes(tgs: bool) -> Vec<i32> {
         &conf.default_tgs_enctypes
     } else if !tgs && !conf.default_tkt_enctypes.is_empty() {
         &conf.default_tkt_enctypes
-    } else if !conf.permitted_enctypes.is_empty() {
-        &conf.permitted_enctypes
+    } else if let Some(names) = conf.permitted_enctypes.as_ref().filter(|n| !n.is_empty()) {
+        names
     } else {
         return preferred;
     };

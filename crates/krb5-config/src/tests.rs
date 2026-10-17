@@ -136,7 +136,7 @@ fn parse_fleet_knobs_and_ignore_heimdal_spellings() {
     assert!(cn.canonicalize);
     assert_eq!(c.ticket_lifetime, Some(10 * 3600));
     assert_eq!(c.renew_lifetime, Some(7 * 86400));
-    assert_eq!(c.permitted_enctypes.len(), 2);
+    assert_eq!(c.permitted_enctypes.as_ref().map(Vec::len), Some(2));
     assert_eq!(c.default_tkt_enctypes, ["aes256-cts-hmac-sha1-96"]);
     assert_eq!(c.kdc_timeout.as_deref(), Some("1"));
     assert_eq!(c.max_retries.as_deref(), Some("1"));
@@ -441,7 +441,10 @@ fn parse_kdc_conf_policy() {
         rc4.allow_weak_crypto, None,
         "[kdcdefaults] allow_weak_crypto is ignored like MIT's get_boolean(LIBDEFAULTS)"
     );
-    assert_eq!(rc4.permitted_enctypes, vec!["aes256-cts", "arcfour-hmac"]);
+    assert_eq!(
+        rc4.permitted_enctypes,
+        Some(vec!["aes256-cts".to_owned(), "arcfour-hmac".to_owned()])
+    );
     let elsewhere = KdcConf::parse(
         r"
 [kdcdefaults]
@@ -461,7 +464,7 @@ fn parse_kdc_conf_policy() {
     assert_eq!(elsewhere.allow_rc4, None);
     assert_eq!(elsewhere.allow_des3, None);
     assert_eq!(elsewhere.allow_weak_crypto, None);
-    assert_eq!(elsewhere.permitted_enctypes, [] as [String; 0]);
+    assert_eq!(elsewhere.permitted_enctypes, None);
     assert_eq!(
         rc4.supported_enctypes,
         vec!["aes256-cts:normal", "rc4-hmac:normal"]

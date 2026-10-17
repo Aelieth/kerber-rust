@@ -216,6 +216,13 @@ pub struct SpakeKdc<'a> {
     pub challenge: Option<SpakeGroup>,
 }
 
+/// A written `permitted_enctypes` as the KDC's context parses it: a value that names no enctype
+/// (empty, or only names it does not know) permits none.
+/// MIT `krb5int_parse_enctype_list` (`lib/krb5/krb/init_ctx.c:497-500`): a list left empty is `KRB5_CONFIG_ETYPE_NOSUPP`, and `krb5_is_permitted_enctype` then permits nothing.
+fn parse_permitted(names: &[String], allow_weak: bool) -> Vec<EncryptionType> {
+    krb5_crypto::parse_enctype_list(&names.join(" "), allow_weak).unwrap_or_default()
+}
+
 /// The permitted groups of a `spake_preauth_groups` value split into words by the profile parser.
 fn parse_spake_preauth_groups(words: &[String]) -> Vec<SpakeGroup> {
     spake_parse_groups(&words.join(" "))
@@ -359,11 +366,9 @@ impl PrincipalStore {
         if let Some(v) = conf.allow_des3 {
             self.policy.allow_des3 = v;
         }
-        if !conf.permitted_enctypes.is_empty() {
-            self.policy.permitted_enctypes = krb5_crypto::parse_enctype_list(
-                &conf.permitted_enctypes.join(" "),
-                self.policy.allow_weak_crypto,
-            );
+        if let Some(names) = &conf.permitted_enctypes {
+            self.policy.permitted_enctypes =
+                Some(parse_permitted(names, self.policy.allow_weak_crypto));
         }
         if !conf.supported_enctypes.is_empty() {
             self.policy.supported_enctypes =
@@ -571,11 +576,11 @@ impl PrincipalStore {
         if let Some(v) = conf.allow_des3 {
             self.policy.allow_des3 = v;
         }
-        if !conf.permitted_enctypes.is_empty() {
-            self.policy.permitted_enctypes = krb5_crypto::parse_enctype_list(
-                &conf.permitted_enctypes.join(" "),
+        if let Some(names) = &conf.permitted_enctypes {
+            self.policy.permitted_enctypes = Some(parse_permitted(
+                names,
                 self.policy.allow_weak_crypto || conf.allow_weak_crypto,
-            );
+            ));
         }
         if let Some(names) = &conf.spake_preauth_groups {
             self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);

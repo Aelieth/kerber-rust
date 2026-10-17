@@ -75,7 +75,7 @@ impl Default for KdcConf {
             allow_weak_crypto: None,
             allow_rc4: None,
             allow_des3: None,
-            permitted_enctypes: Vec::new(),
+            permitted_enctypes: None,
             clockskew: None,
             supported_enctypes: Vec::new(),
             requires_preauth: true,
@@ -202,6 +202,7 @@ impl KdcConf {
         let mut section = String::new();
         let mut in_realm = false;
         let mut libdefaults_depth = 0usize;
+        let mut libdefaults_seen = Vec::new();
         let mut booleans = RealmBooleans::default();
         let mut realm_listen = ListenRelations::default();
         let mut default_listen = ListenRelations::default();
@@ -298,7 +299,7 @@ impl KdcConf {
                 } else if line == "}" {
                     libdefaults_depth = libdefaults_depth.saturating_sub(1);
                 } else if libdefaults_depth == 0 {
-                    parse_kdc_libdefaults(&mut conf, line);
+                    parse_kdc_libdefaults(&mut conf, &mut libdefaults_seen, line);
                 }
             }
             if section == "logging"
@@ -450,27 +451,26 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
 /// MIT reads the enctype policy knobs from `[libdefaults]` only
 /// (`krb/init_ctx.c get_boolean`, `krb5_get_permitted_enctypes`); a copy under
 /// `[kdcdefaults]` or a realm stanza is ignored, so the KDC's own context
-/// sees what every krb5 library on the host sees.
-fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
+/// sees what every krb5 library on the host sees. Each relation is the first one written: `seen`
+/// holds the names taken.
+/// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:218-232`): the KDC context reads `allow_weak_crypto`, `allow_des3` and `allow_rc4` with `get_boolean`, so the first value.
+fn parse_kdc_libdefaults(conf: &mut KdcConf, seen: &mut Vec<String>, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;
     };
-    // MIT `profile_get_integer` (`util/profile/prof_get.c:309-333`): the first value, and one that is no integer is the default.
-    if k == "clockskew" {
-        if conf.clockskew.is_none() {
-            conf.clockskew = Some(parse_profile_int(&v).map_or(300, i64::from));
-        }
+    if seen.iter().any(|s| s == k) {
         return;
     }
     match k {
+        // MIT `profile_get_integer` (`util/profile/prof_get.c:309-333`): one that is no integer is the default.
+        "clockskew" => conf.clockskew = Some(parse_profile_int(&v).map_or(300, i64::from)),
         "allow_weak_crypto" => conf.allow_weak_crypto = Some(truthy(&v)),
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
         "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
-        "permitted_enctypes" => conf.permitted_enctypes = split_ws(&v),
+        // MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:585-587`): `profile_get_string`, so the first value.
+        "permitted_enctypes" => conf.permitted_enctypes = Some(split_ws(&v)),
         // MIT `group_init_state` (`groups.c:227-229`): `profile_get_string`, so the first value.
-        "spake_preauth_groups" if conf.spake_preauth_groups.is_none() => {
-            conf.spake_preauth_groups = Some(split_ws(&v));
-        }
+        "spake_preauth_groups" => conf.spake_preauth_groups = Some(split_ws(&v)),
         // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
         // [kdcdefaults] or a realm stanza, never [libdefaults]; no fallthrough,
         // so a kdcdefaults knob placed under [libdefaults] is ignored like MIT.
@@ -478,8 +478,9 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         // `kdc_ports`.
         // MIT `initialize_realms` (`kdc/main.c:622-626`): the `[kdcdefaults]` `kdc_listen`,
         // then `kdc_ports`.
-        _ => {}
+        _ => return,
     }
+    seen.push(k.to_owned());
 }
 
 /// The KDC booleans as written: the realm stanza's last `reject_bad_transit`, `disable_pac` and

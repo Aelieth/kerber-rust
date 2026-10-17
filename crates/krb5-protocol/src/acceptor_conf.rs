@@ -19,7 +19,8 @@ pub struct AcceptorConfig {
     /// time check.
     pub clockskew: i32,
     /// `[libdefaults] permitted_enctypes` (MIT's `DEFAULT` when unset), less the weak enctypes
-    /// unless `allow_weak_crypto` is set; empty when the list names no enctype.
+    /// unless `allow_weak_crypto` is set; empty when the list names no enctype, an empty value
+    /// among them.
     pub permitted_enctypes: Vec<EncryptionType>,
     /// `[libdefaults] ignore_acceptor_hostname`.
     pub ignore_acceptor_hostname: bool,
@@ -39,11 +40,10 @@ impl AcceptorConfig {
     /// MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:574-595`): the first `permitted_enctypes` the profile holds, else `DEFAULT`.
     #[must_use]
     pub fn from_krb5_conf(conf: &Krb5Conf) -> Self {
-        let profstr = if conf.permitted_enctypes.is_empty() {
-            "DEFAULT".to_owned()
-        } else {
-            conf.permitted_enctypes.join(" ")
-        };
+        let profstr = conf
+            .permitted_enctypes
+            .as_ref()
+            .map_or_else(|| "DEFAULT".to_owned(), |names| names.join(" "));
         Self {
             clockskew: conf.clockskew,
             permitted_enctypes: parse_enctype_list(&profstr, conf.allow_weak_crypto)

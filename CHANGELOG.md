@@ -71,6 +71,7 @@ any other `###` heading.
 - **kdc.** A foreground `-m` reads the master key twice, and `kadmind -m` reads it when a stash is named.
 - **kdc.** A master key that does not decrypt logs MIT's failure while fetching the master keys list.
 - **protocol.** A negative `clockskew` fails every ticket and authenticator time check, as MIT's; `verify_init_creds` takes the profile's skew, not 300 s.
+- **kdc.** kdc.conf's `[libdefaults]` `permitted_enctypes` and `allow_*` are the first values, as MIT's KDC context reads them; an empty list permits nothing. Lab beside MIT.
 
 ## [1.1.0] - 2026-10-14
 

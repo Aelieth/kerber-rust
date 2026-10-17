@@ -321,8 +321,9 @@ pub struct Krb5Conf {
     /// `verify_ap_req_nofail`.
     /// MIT `nofail` (`vfy_increds.c:38-51`): `verify_ap_req_nofail` defaults to false.
     pub verify_ap_req_nofail: bool,
-    /// `permitted_enctypes`.
-    pub permitted_enctypes: Vec<String>,
+    /// `permitted_enctypes`, the first one; `None` when it is not written, and an empty list
+    /// when it is written empty (MIT then permits no enctype).
+    pub permitted_enctypes: Option<Vec<String>>,
     /// `default_tkt_enctypes`.
     pub default_tkt_enctypes: Vec<String>,
     /// `default_tgs_enctypes`.
@@ -482,8 +483,9 @@ pub struct KdcConf {
     pub allow_rc4: Option<bool>,
     /// `allow_des3`.
     pub allow_des3: Option<bool>,
-    /// `permitted_enctypes` (empty = MIT DEFAULT).
-    pub permitted_enctypes: Vec<String>,
+    /// `[libdefaults] permitted_enctypes`, the first one; `None` leaves krb5.conf's, and an empty
+    /// list (one written empty) permits no enctype.
+    pub permitted_enctypes: Option<Vec<String>>,
     /// `[libdefaults] clockskew`, top level, the first value: seconds, 300 for a value that is
     /// no integer. `None` leaves krb5.conf's.
     /// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): the KDC context reads `clockskew` with `get_integer`, from kdc.conf first.

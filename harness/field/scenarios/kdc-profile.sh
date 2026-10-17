@@ -14,6 +14,11 @@
 #   CF.f: an include line naming a file whose KERBER.TEST stanza sets max_life = 2h: alice's TGT life is 7200 s;
 #   CF.g: a KERBER.TEST stanza with Max_Life = 1h, a name MIT matches only as written: alice's TGT life is what it
 #         was;
+#   CF.h: two [libdefaults] permitted_enctypes lines, aes256-cts-hmac-sha1-96 then aes128-cts-hmac-sha1-96: the KDC
+#         takes the first, as MIT's context reads it, so alice's kinit asking for aes256 alone is issued and one
+#         asking for aes128 alone is refused (client2's copies of krb5.conf ask for one enctype each). Then an empty
+#         first permitted_enctypes line: MIT's KDC permits no enctype, so the aes256 kinit is refused. Each
+#         refusal's kinit line is recorded;
 #   CF.e0: strace on kadmind while client2 changes cfpw's password and runs a kadmin session, and on a second kpropd
 #         (port 7754, its own kdc.conf, database, keytab and ACL) while kdc's kprop sends it the realm: neither opens
 #         krb5.conf or kdc.conf for a request (lib/profile-opens.sh). strace is installed when kdc lacks it.
@@ -72,6 +77,11 @@ kpwskewed() {
     run client2 "sudo systemctl start chronyd"
     waitsync client2
 }
+# etkinit <check> <enctype> <ERE>: alice's kinit from client2 through the copy of krb5.conf that asks for that enctype
+# alone.
+etkinit() {
+    check "$1" "$3" runin client2 "alice's password ($ALICE)" "KRB5_CONFIG=\$HOME/cf/$2.conf kinit -c FILE:\$HOME/cf/e.cc alice 2>&1; echo \"kinit rc=\$?\"" < <(once "$ALICE")
+}
 # life <name>: alice's TGT life in seconds from a fresh kinit, in LIFE.
 life() {
     runin client2 "alice's password ($ALICE)" "kdestroy -c FILE:\$HOME/cf/l.cc 2> /dev/null; kinit -c FILE:\$HOME/cf/l.cc alice > /dev/null && klist -f -c FILE:\$HOME/cf/l.cc" < <(once "$ALICE")
@@ -122,6 +132,16 @@ section "CF.g a KERBER.TEST stanza with Max_Life = 1h: a name MIT does not know,
 kdcwith CF.g.kdc "\n[realms]\n    $REALM = {\n        Max_Life = 1h\n    }\n"
 life CF.g.life-after
 check CF.g.life "^same TGT life: ${L0:-none} s\$" host "echo 'same TGT life: ${LIFE:-none} s'"
+
+section "CF.h two [libdefaults] permitted_enctypes lines: the KDC takes the first (MIT and ours)"
+kdcwith CF.h.kdc '\n[libdefaults]\n    permitted_enctypes = aes256-cts-hmac-sha1-96\n    permitted_enctypes = aes128-cts-hmac-sha1-96\n'
+check CF.h.client '^two copies$' run client2 "for e in aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96; do awk -v e=\$e '/^\\[libdefaults\\]/ && !d { print; print \"    default_tkt_enctypes = \" e; print \"    permitted_enctypes = \" e; d = 1; next } { print }' /etc/krb5.conf > ~/cf/\$e.conf; done; grep -h 'default_tkt_enctypes' ~/cf/aes*.conf; echo 'two copies'"
+etkinit CF.h.first aes256-cts-hmac-sha1-96 '^kinit rc=0$'
+etkinit CF.h.second aes128-cts-hmac-sha1-96 '^kinit rc=1$'
+observelast obs.CF.h.second 'kinit: .*'
+kdcwith CF.h.empty.kdc '\n[libdefaults]\n    permitted_enctypes =\n    permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96\n'
+etkinit CF.h.empty aes256-cts-hmac-sha1-96 '^kinit rc=1$'
+observelast obs.CF.h.empty 'kinit: .*'
 
 section "kdc.conf restored"
 check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo mv $KC.cf $KC && sudo systemctl restart krb5kdc kadmin && systemctl is-active krb5kdc kadmin > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active'"

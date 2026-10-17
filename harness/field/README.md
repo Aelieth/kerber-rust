@@ -381,7 +381,12 @@ would remove it.
   A second realm stanza (`DUMMY.TEST`, `max_life = 1h`) leaves alice's TGT life
   as it was. An `include` line naming a file whose KERBER.TEST stanza sets
   `max_life = 2h` makes it 7200 s, and `Max_Life = 1h`, a name MIT matches only as
-  written, leaves it as it was. Each cell starts from the saved kdc.conf, which is
+  written, leaves it as it was. Two `[libdefaults]` `permitted_enctypes` lines
+  (aes256-cts-hmac-sha1-96, then aes128-cts-hmac-sha1-96) leave the KDC the
+  first: alice's kinit asking for aes256 alone is issued and one asking for
+  aes128 alone is refused. An empty first `permitted_enctypes` line permits no
+  enctype, so the aes256 kinit is refused too. Each cell starts from the saved
+  kdc.conf, which is
   restored with krb5kdc and kadmin restarted at the end, also when the scenario
   stops early. Then CF.e0 (`lib/profile-opens.sh`): strace on kadmind while
   client2 changes cfpw's password and runs a kadmin session, and on a second

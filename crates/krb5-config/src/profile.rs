@@ -850,7 +850,7 @@ fn parse_libdefaults(
         "permitted_enctypes"
             if top && k == "permitted_enctypes" && take_first(seen, "permitted_enctypes") =>
         {
-            conf.permitted_enctypes = split_ws(&v);
+            conf.permitted_enctypes = Some(split_ws(&v));
         }
         "default_tkt_enctypes"
             if top && k == "default_tkt_enctypes" && take_first(seen, "default_tkt_enctypes") =>
