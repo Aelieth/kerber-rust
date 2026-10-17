@@ -570,7 +570,7 @@ suffixed `-1`, `-2`); links in code are not links. `check_doc_file_cites`
 reads the same files except the CHANGELOG. `check_changelog_headings`
 allows only the Keep-a-Changelog group names, each the whole heading, plus
 `Tests and CI` and `How to …` headings, as `###` headings; `check_docs_size` holds every
-`docs/**/*.md` to 60 KiB and the `## [Unreleased]` section of `CHANGELOG.md`
+`docs/**/*.md` to 100 KiB and the `## [Unreleased]` section of `CHANGELOG.md`
 to 24,000 bytes (`CHANGELOG_UNRELEASED_MAX_BYTES`). Released sections are
 frozen and are not counted. At a cut, that section becomes the release
 heading and the cap applies to the next `[Unreleased]`. `check_gate_documented` holds `docs/gates.md`, `docs/gates-decode.md` and `docs/gates-otp.md`
