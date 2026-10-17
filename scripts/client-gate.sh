@@ -11,7 +11,7 @@ need_bins krb5-kinit krb5-klist krb5-kdestroy krb5-kvno
 CORRELATION_ID="${CORRELATION_ID:-$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')}"
 export CORRELATION_ID
 NAME="kerber-rust-mit-kdc"
-if ! docker ps -q --filter "name=^${NAME}$" | grep -q .; then
+if ! grep -q . <<<"$(docker ps -q --filter "name=^${NAME}$")"; then
     echo "start the harness first: ./scripts/run-harness.sh" >&2
     exit 1
 fi
@@ -32,33 +32,33 @@ docker cp "$NAME":/tmp/client-traces/. "$TRACE_DST/" 2>/dev/null || true
 echo "==== MIT klist of Rust FILE ccache ===="
 KLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_rust)"
 echo "$KLIST"
-echo "$KLIST" | grep -q 'user@KERBER.TEST'
-echo "$KLIST" | grep -q 'host/testhost.kerber.test'
+grep -q 'user@KERBER.TEST' <<<"$KLIST"
+grep -q 'host/testhost.kerber.test' <<<"$KLIST"
 
 echo "==== MIT kinit FILE ccache for Rust klist ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_mit user@KERBER.TEST'
 echo "==== Rust klist -c -f -e of MIT FILE ccache ===="
 RKLIST="$(docker exec "$NAME" /tmp/krb5-klist -c /tmp/krb5cc_mit -f -e)"
 echo "$RKLIST"
-echo "$RKLIST" | grep -q 'Default principal: user@KERBER.TEST'
-echo "$RKLIST" | grep -q 'krbtgt/KERBER.TEST@KERBER.TEST'
-echo "$RKLIST" | grep -q 'Flags:'
-echo "$RKLIST" | grep -q 'Etype (skey, tkt):'
+grep -q 'Default principal: user@KERBER.TEST' <<<"$RKLIST"
+grep -q 'krbtgt/KERBER.TEST@KERBER.TEST' <<<"$RKLIST"
+grep -q 'Flags:' <<<"$RKLIST"
+grep -q 'Etype (skey, tkt):' <<<"$RKLIST"
 
 echo "==== MIT klist -f -e of Rust FILE ccache ===="
 MKLIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_rust -f -e)"
 echo "$MKLIST"
-echo "$MKLIST" | grep -q 'user@KERBER.TEST'
-echo "$MKLIST" | grep -q 'host/testhost.kerber.test'
-echo "$MKLIST" | grep -q 'Flags:'
-echo "$MKLIST" | grep -q 'Etype (skey, tkt):'
+grep -q 'user@KERBER.TEST' <<<"$MKLIST"
+grep -q 'host/testhost.kerber.test' <<<"$MKLIST"
+grep -q 'Flags:' <<<"$MKLIST"
+grep -q 'Etype (skey, tkt):' <<<"$MKLIST"
 echo "==== Rust klist -f -e of Rust FILE ccache ===="
 RK2="$(docker exec "$NAME" /tmp/krb5-klist -c /tmp/krb5cc_rust -f -e)"
 echo "$RK2"
-echo "$RK2" | grep -q 'Default principal: user@KERBER.TEST'
-echo "$RK2" | grep -q 'host/testhost.kerber.test'
-echo "$RK2" | grep -q 'Flags:'
-echo "$RK2" | grep -q 'Etype (skey, tkt):'
+grep -q 'Default principal: user@KERBER.TEST' <<<"$RK2"
+grep -q 'host/testhost.kerber.test' <<<"$RK2"
+grep -q 'Flags:' <<<"$RK2"
+grep -q 'Etype (skey, tkt):' <<<"$RK2"
 MIT_FLAGS="$(echo "$MKLIST" | grep -oE 'Flags: [A-Za-z]+')"
 RUST_FLAGS="$(echo "$RK2" | grep -oE 'Flags: [A-Za-z]+')"
 echo "mit_flags=$MIT_FLAGS"
@@ -75,11 +75,11 @@ docker exec -e KRB5_PASSWORD=userpassword "$NAME" \
     /tmp/krb5-kinit -c /tmp/krb5cc_kvno user@KERBER.TEST
 KVNO="$(docker exec "$NAME" /tmp/krb5-kvno -c /tmp/krb5cc_kvno host/testhost.kerber.test)"
 echo "$KVNO"
-echo "$KVNO" | grep -q 'host/testhost.kerber.test'
-echo "$KVNO" | grep -q 'kvno ='
+grep -q 'host/testhost.kerber.test' <<<"$KVNO"
+grep -q 'kvno =' <<<"$KVNO"
 MKVNO="$(docker exec "$NAME" klist -c /tmp/krb5cc_kvno)"
 echo "$MKVNO"
-echo "$MKVNO" | grep -q 'host/testhost.kerber.test'
+grep -q 'host/testhost.kerber.test' <<<"$MKVNO"
 
 echo "==== Rust kvno keeps MIT X-CACHECONF entries ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_lossless user@KERBER.TEST'
@@ -87,15 +87,15 @@ BEFORE="$(docker exec "$NAME" sh -c 'wc -c < /tmp/krb5cc_lossless')"
 echo "bytes_before=$BEFORE"
 KCONF0="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_lossless)"
 echo "$KCONF0"
-echo "$KCONF0" | grep -q '^config:'
+grep -q '^config:' <<<"$KCONF0"
 docker exec "$NAME" /tmp/krb5-kvno -c /tmp/krb5cc_lossless host/testhost.kerber.test
 AFTER="$(docker exec "$NAME" sh -c 'wc -c < /tmp/krb5cc_lossless')"
 echo "bytes_after=$AFTER"
 test "$AFTER" -ge "$BEFORE"
 KCONF1="$(docker exec "$NAME" klist -C -c /tmp/krb5cc_lossless)"
 echo "$KCONF1"
-echo "$KCONF1" | grep -q '^config:'
-echo "$KCONF1" | grep -q 'host/testhost.kerber.test'
+grep -q '^config:' <<<"$KCONF1"
+grep -q 'host/testhost.kerber.test' <<<"$KCONF1"
 
 echo "==== MIT and Rust klist -s agree on the same FILE ===="
 MIT_S_RC="$(docker exec "$NAME" sh -c 'klist -s -c /tmp/krb5cc_mit >/tmp/mit-s-out 2>/tmp/mit-s-err; echo $?')"
@@ -122,13 +122,14 @@ ktrc=$?
 set -e
 echo "$KT"
 test "$ktrc" -eq 0
-docker exec "$NAME" klist -c /tmp/krb5cc_kt | grep -q 'user@KERBER.TEST'
+KT_LIST="$(docker exec "$NAME" klist -c /tmp/krb5cc_kt)"
+grep -q 'user@KERBER.TEST' <<<"$KT_LIST"
 
 echo "==== MIT kinit -r then Rust klist renew until ===="
 docker exec "$NAME" sh -c 'echo userpassword | kinit -r 1d -c /tmp/krb5cc_renew user@KERBER.TEST'
 RENEW="$(docker exec "$NAME" /tmp/krb5-klist -c /tmp/krb5cc_renew)"
 echo "$RENEW"
-echo "$RENEW" | grep -q 'renew until'
+grep -q 'renew until' <<<"$RENEW"
 
 echo "==== MIT vs Rust klist Ticket server text-diff ===="
 MIT_PLAIN="$(docker exec "$NAME" klist -c /tmp/krb5cc_mit)"
@@ -150,7 +151,7 @@ docker exec "$NAME" sh -c 'echo userpassword | kinit -c /tmp/krb5cc_mitkvno user
 docker exec "$NAME" kvno -c /tmp/krb5cc_mitkvno host/testhost.kerber.test
 RKVNO="$(docker exec "$NAME" /tmp/krb5-klist -c /tmp/krb5cc_mitkvno)"
 echo "$RKVNO"
-echo "$RKVNO" | grep -q 'host/testhost.kerber.test'
+grep -q 'host/testhost.kerber.test' <<<"$RKVNO"
 
 echo "==== Rust kdestroy then MIT klist ===="
 docker exec "$NAME" /tmp/krb5-kdestroy -c /tmp/krb5cc_rust
@@ -159,7 +160,7 @@ GONE="$(docker exec "$NAME" klist -c /tmp/krb5cc_rust 2>&1)"
 grc=$?
 set -e
 echo "$GONE"
-echo "$GONE" | grep -qi 'No credentials cache'
+grep -qi 'No credentials cache' <<<"$GONE"
 test "$grc" -ne 0
 
 echo "==== kdestroy refuses a symlink and leaves the target intact ===="
@@ -172,7 +173,7 @@ symrc=$?
 set -e
 echo "$SYMOUT"
 test "$symrc" -ne 0
-echo "$SYMOUT" | grep -qi 'not a regular file'
+grep -qi 'not a regular file' <<<"$SYMOUT"
 TARGET="$(docker exec "$NAME" cat /tmp/kdestroy-target)"
 echo "kdestroy_symlink_target=$TARGET"
 test "$TARGET" = "secret-target"

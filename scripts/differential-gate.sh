@@ -607,7 +607,7 @@ RUSTCPW="$(rust_kadmin_local \
     "$NAME" -- -q 'cpw -randkey -keepold -e aes128-cts-hmac-sha1-96:normal krbtgt/KERBER.TEST')"
 echo "$RUSTCPW"
 grep -qi 'randomized' <<<"$RUSTCPW" || die "rust cpw -keepold krbtgt failed"
-docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue; echo "$cmd" | grep -q "/tmp/krb5-kdc" || continue; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
+docker exec "$NAME" sh -c 'for p in /proc/[0-9]*; do comm=$(cat "$p/comm" 2>/dev/null) || continue; [ "$comm" = krb5-kdc ] || continue; cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null) || continue; case "$cmd" in */tmp/krb5-kdc*) ;; *) continue ;; esac; kill -9 "${p#/proc/}" 2>/dev/null || true; done'
 ok=0
 for _ in $(seq 1 40); do
     if docker exec "$NAME" python3 -c "import socket;s=socket.create_connection(('127.0.0.1',8888),0.15)" 2>/dev/null; then

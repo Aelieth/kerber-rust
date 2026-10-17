@@ -44,6 +44,11 @@ any other `###` heading.
 - **asn1.** Unit tests outside the keep list are gone. The four DER-strict tests stay.
 - **crypto.** Unit tests outside the keep list are gone. The known-answer tests and the parity-row proofs stay.
 - **tools.** Unit tests outside the keep list are gone. The decode-sweep golden test stays.
+- **ci.** `gate-common` and the three smoke gates read captured text. A match is grep's status.
+
+### Removed
+
+- **ci.** The budget workflow is gone. The six per-push walls live in `ci-budget.toml`.
 
 ### Fixed
 

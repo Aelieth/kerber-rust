@@ -14,6 +14,8 @@ Overlap (PROCESS_TGS, GET_LOCAL_TGT, FIND_FAST, HANDLE_AUTHDATA,
 AD-FX-ARMOR) is left in both sections on purpose — A1 owns TGS gather,
 A2 owns AS/`kdc_util`, A3 owns FAST residue.
 
+A row keeps the proof it names until a later edit points that row at a lab cell or a test that stays.
+
 ## Files
 
 One or more files per section, each named `<key>-<subject>.md`; A4 has
