@@ -18,10 +18,7 @@ client (`kinit`), GSS-API, and the admin/propagation daemons (`kadmind`,
 `kpasswd`, `kprop`/`kpropd`, iprop). Every feature is proven against a
 **real** external implementation — never a Rust-only round-trip.
 
-**The one rule:** a feature is *done* only when a content-asserting gate
-drives a real external implementation (MIT primary; then Samba / Heimdal).
-A Rust-vs-Rust round-trip is never proof, and production structured logs
-plus packet captures outrank unit tests.
+**The one rule:** a feature is *done* only when it works in production against MIT 1.22.2 on the lab VMs, MIT first, and against the real AD where it reaches it; a Rust-vs-Rust round-trip is never proof.
 
 ## Status
 

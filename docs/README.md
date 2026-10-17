@@ -17,10 +17,7 @@ entry says what the file holds.
    assertions.
 5. [security.md](security.md): timing, replay and secret handling.
 6. [mit-deviations.md](mit-deviations.md): the deliberate deviations from MIT,
-   and the parity decisions that are not deviations; the OTP ones are in
-   [mit-deviations-otp.md](mit-deviations-otp.md), kprop's in
-   [mit-deviations-kprop.md](mit-deviations-kprop.md), the GSS initiator's in
-   [mit-deviations-gss.md](mit-deviations-gss.md).
+   and the parity decisions that are not deviations.
 7. [parity/README.md](parity/README.md): the MIT 1.22.2 parity ledger, one or
    more files per section: [A1](parity/a1-tgs.md), [A2](parity/a2-as.md),
    [A3](parity/a3-preauth.md), A4 ([kadmin](parity/a4-kadmin.md),

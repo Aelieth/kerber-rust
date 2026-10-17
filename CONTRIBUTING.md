@@ -36,10 +36,7 @@ A good PR has:
   interop against the MIT 1.22.2 harness over re-implemented oracles.
   When automation is impractical, document thorough manual testing with
   logs (and traces where relevant).
-- For protocol behaviour, a content-asserting gate that drives a real
-  implementation (MIT 1.22.2 first, then Samba or Heimdal). A feature is
-  done only when such a gate proves it; a Rust-vs-Rust round-trip is never
-  proof.
+- For protocol behaviour, a feature is done only when it works in production against MIT 1.22.2 on the lab VMs, MIT first, and against the real AD where it reaches it; a Rust-vs-Rust round-trip is never proof.
 - For a change to behaviour MIT also has, its row in the parity ledger
   (`docs/parity/`: MIT cite, check, verdict, proof), added or updated in
   the same PR.
@@ -63,6 +60,11 @@ and protocol subtleties. Do not restate the obvious, and do not raise the
 comment density: a sentence the next two lines already say is deleted.
 Public APIs need rustdoc. Four rules give the form; the comment budget moves
 from process tags into invariants that are otherwise unstated.
+
+A MIT citation is one line naming what the code ports and pointing at the
+docs, for example `// MIT krb5_db_def_rename_principal; see docs/parity/a1-store.md`.
+Comments are at most 3% of the code, and doc comments count. Tests are at
+most 10% of the code, and plan-12 adds none.
 
 **R1.** A MIT anchor is one line, in one form:
 ``MIT `<symbol>` (`<path>:<a>-<b>`): <what the port guarantees>``.
