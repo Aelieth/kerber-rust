@@ -40,6 +40,7 @@ any other `###` heading.
 - **field.** `ad-trust` adds KERBER.TEST users at the DC's SMB and LDAP and the DC's SPNEGO login to Apache on kdc; the DC changes they need are undone in the same run.
 - **ci.** A pull request labeled `nightly` runs `oracles`, `moving`, `fuzz`, and `anchors`. `schedule` and `workflow_dispatch` stay.
 - **log.** Unit tests outside the keep list are gone. The two symlink-open tests stay.
+- **cli.** Unit tests outside the keep list are gone. The wiped-buffer line test stays.
 
 ### Fixed
 

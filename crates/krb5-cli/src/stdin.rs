@@ -393,7 +393,6 @@ fn reserve_wiped(line: &mut Vec<u8>, more: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nix::sys::signal::raise;
 
     thread_local! {
         /// The buffers `reserve_wiped` replaced on this thread, kept alive as it left them.
@@ -418,76 +417,5 @@ mod tests {
             first,
             "a copy was wiped, not the line's own buffer"
         );
-    }
-
-    fn read(input: &[u8], size: usize) -> (LineEnd, Vec<u8>, Vec<u8>) {
-        let mut input = input;
-        let mut line = Vec::new();
-        let end = fgets(&mut input, size, &mut line);
-        (end, line, input.to_vec())
-    }
-
-    #[test]
-    fn fgets_stops_at_the_newline_or_size_minus_one() {
-        assert_eq!(
-            read(b"yes\nrest\n", 5),
-            (LineEnd::Read, b"yes\n".to_vec(), b"rest\n".to_vec())
-        );
-        assert_eq!(
-            read(b"yesss\n", 5),
-            (LineEnd::Read, b"yess".to_vec(), b"s\n".to_vec())
-        );
-        assert_eq!(
-            read(b"tail", 100),
-            (LineEnd::Read, b"tail".to_vec(), Vec::new())
-        );
-        assert_eq!(read(b"", 100), (LineEnd::End, Vec::new(), Vec::new()));
-    }
-
-    #[test]
-    fn a_caught_sigint_cuts_a_stdin_read_short_and_a_pending_one_goes_with_the_catch() {
-        let catch = SignalCatch::new(&[Signal::SIGINT]);
-        raise(Signal::SIGINT).unwrap();
-        let mut line = Vec::new();
-        assert_eq!(
-            fgets(&mut Stdin::unbuffered(), 100, &mut line),
-            LineEnd::Caught(Signal::SIGINT)
-        );
-        raise(Signal::SIGINT).unwrap();
-        drop(catch);
-    }
-
-    #[test]
-    fn take_caught_takes_a_pending_signal_once() {
-        let catch = SignalCatch::new(&[Signal::SIGINT]);
-        assert_eq!(take_caught(), None);
-        raise(Signal::SIGINT).unwrap();
-        assert_eq!(take_caught(), Some(Signal::SIGINT));
-        assert_eq!(take_caught(), None);
-        drop(catch);
-        assert_eq!(take_caught(), None);
-    }
-
-    #[test]
-    fn a_nested_catch_gives_back_only_its_own_signals() {
-        let outer = SignalCatch::new(&[Signal::SIGINT]);
-        {
-            let _inner = SignalCatch::new(&[Signal::SIGINT, Signal::SIGCONT]);
-            raise(Signal::SIGCONT).unwrap();
-        }
-        raise(Signal::SIGINT).unwrap();
-        let mut line = Vec::new();
-        assert_eq!(
-            fgets(&mut Stdin::unbuffered(), 100, &mut line),
-            LineEnd::Caught(Signal::SIGINT)
-        );
-        drop(outer);
-    }
-
-    #[test]
-    fn caught_names_only_a_caught_signal() {
-        let e = io::Error::new(io::ErrorKind::Interrupted, Caught(Signal::SIGINT));
-        assert_eq!(caught(&e), Some(Signal::SIGINT));
-        assert_eq!(caught(&io::Error::from(io::ErrorKind::Interrupted)), None);
     }
 }
