@@ -282,7 +282,9 @@ echo "RUST_z1b2_keyexp_order"
 echo "==== Z7.2 kpasswd stamps kadmind@REALM (ovsec_kadmd.c:446) ===="
 # Fresh principals: user@ already has min_life leftover from earlier cells.
 z72_mod() { sed -n -E 's/^Last modified: .* \((.*)\)$/\1/p'; }
-kadmin_q 'addprinc -pw z72old z72kpw' | grep -F 'Principal "z72kpw@KERBER.TEST" created.'
+z72_add=$(kadmin_q 'addprinc -pw z72old z72kpw')
+printf '%s\n' "$z72_add" >&2
+printf '%s\n' "$z72_add" | grep -F 'Principal "z72kpw@KERBER.TEST" created.'
 kadmin_q_ok mit_kadmin_local "$NAME_MIT" -- -q 'addprinc -pw z72old z72kpw' >/dev/null
 docker exec -e KRB5_CONFIG=/tmp/kpasswd-krb5.conf \
     "$NAME" sh -c 'printf "z72old\nz72new\nz72new\n" | kpasswd z72kpw@KERBER.TEST'
