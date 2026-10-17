@@ -43,7 +43,7 @@ R=${REALM//./\\.}
 KC=/var/kerberos/krb5kdc/kdc.conf
 CF="export KRB5_CONFIG=\$HOME/cf/krb5.conf"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl restart krb5kdc kadmin; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh" > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'sudo systemctl start chronyd; rm -rf ~/cf; true' < /dev/null > /dev/null 2>&1
 }
@@ -53,7 +53,9 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 # kdcwith <check> <text appended to kdc.conf>: the original kdc.conf plus that text, then the KDC restarted.
 kdcwith() {
-    check "$1" '^krb5kdc: active, 88 listening$' run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl restart krb5kdc && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 6 $KC; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
+    local expect='^krb5kdc: active, 88 listening$'
+    [ -n "${3:-}" ] && expect=$3
+    check "$1" "$expect" run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc && for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; sudo tail -n 6 $KC; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\"; if [ \"\$(systemctl is-active krb5kdc)\" != active ]; then sudo systemctl status krb5kdc --no-pager -n 12 || true; fi"
 }
 # skewed <check> <seconds> <ERE>: client2's clock moved ahead by that much (chronyd stopped), cfskew's kinit through
 # the copy of krb5.conf with its trace's preauth and KDC error lines after it, then chronyd started again to step it
@@ -67,7 +69,7 @@ skewed() {
 }
 # admrestart <check>: kadmin restarted on kdc.conf as it now is.
 admrestart() {
-    check "$1" '^kadmin: active, 464 listening$' run kdc "sudo systemctl restart kadmin && for i in \$(seq 1 40); do ss -Hlun 'sport = :464' | grep -q . && break; sleep 0.25; done; echo \"kadmin: \$(systemctl is-active kadmin), 464 \$(ss -Hlun 'sport = :464' | grep -q . && echo listening)\""
+    check "$1" '^kadmin: active, 464 listening$' run kdc "sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart kadmin && for i in \$(seq 1 40); do ss -Hlun 'sport = :464' | grep -q . && break; sleep 0.25; done; echo \"kadmin: \$(systemctl is-active kadmin), 464 \$(ss -Hlun 'sport = :464' | grep -q . && echo listening)\"; if [ \"\$(systemctl is-active kadmin)\" != active ]; then sudo systemctl status kadmin --no-pager -n 12; fi"
 }
 # kpwskewed <check> <seconds> <ERE>: client2's clock moved ahead by that much, cfpw's kpasswd through the copy of
 # krb5.conf (the old password, then the new one twice), then chronyd started again to step the clock back.
@@ -139,12 +141,13 @@ check CF.h.client '^two copies$' run client2 "for e in aes256-cts-hmac-sha1-96 a
 etkinit CF.h.first aes256-cts-hmac-sha1-96 '^kinit rc=0$'
 etkinit CF.h.second aes128-cts-hmac-sha1-96 '^kinit rc=1$'
 observelast obs.CF.h.second 'kinit: .*'
-kdcwith CF.h.empty.kdc '\n[libdefaults]\n    permitted_enctypes =\n    permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96\n'
+kdcwith CF.h.empty.kdc '\n[libdefaults]\n    permitted_enctypes =\n    permitted_enctypes = aes256-cts-hmac-sha1-96 aes128-cts-hmac-sha1-96\n' 'krb5kdc: failed'
+checklast CF.h.empty.kdc.status 'Improper format of Kerberos configuration file'
 etkinit CF.h.empty aes256-cts-hmac-sha1-96 '^kinit rc=1$'
 observelast obs.CF.h.empty 'kinit: .*'
 
 section "kdc.conf restored"
-check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo mv $KC.cf $KC && sudo systemctl restart krb5kdc kadmin && systemctl is-active krb5kdc kadmin > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active'"
+check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo mv $KC.cf $KC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin && systemctl is-active krb5kdc kadmin > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active' || sudo systemctl status krb5kdc kadmin --no-pager -n 12"
 
 # opens <name> <pid expression>: strace attached to the daemon that pid names.
 opens() {
