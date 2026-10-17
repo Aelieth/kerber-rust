@@ -17,7 +17,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -80,7 +80,7 @@ jobs:
           if-no-files-found: error
 
   doc:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -93,12 +93,13 @@ jobs:
         run: cargo check --manifest-path fuzz/Cargo.toml --bins
 
   shellcheck:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     env:
       # The version make shellcheck and the hygiene inventory run (koalaman/shellcheck:v0.11.0).
-      # ubuntu-24.04's package is 0.9.0, whose SC2317/SC2119 heuristics report ~490 notes
-      # 0.11.0 does not; the checks must not move with the runner image.
+      # The image package is not this pin. Ubuntu 24.04 shipped 0.9.0, whose
+      # SC2317/SC2119 heuristics report about 490 notes. 0.11.0 does not, so the
+      # checks must not move with the runner image.
       SHELLCHECK_VERSION: v0.11.0
       SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
     steps:
@@ -117,7 +118,7 @@ jobs:
           shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh
 
   msrv:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     # rust-toolchain.toml pins stable; the env pin outranks it (ci-policy check_msrv_pinned).
     env:
@@ -133,7 +134,7 @@ jobs:
         run: cargo build --workspace --all-targets --locked
 
   audit:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 20
     # rustsec/audit-check writes a check run and files advisory issues.
     permissions:
@@ -157,7 +158,7 @@ jobs:
         run: cargo vet --locked
 
   mit-smoke:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
