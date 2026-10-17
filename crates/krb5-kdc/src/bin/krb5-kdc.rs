@@ -48,9 +48,9 @@ use std::path::PathBuf;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners_with_backlog,
-    bind_udp_listeners, copy_persist_master, detach, manual_master_key, names_relative_database,
-    open_database, open_database_with_key, open_database_with_password, serve_daemon, shared_store,
-    write_pid_file,
+    bind_udp_listeners, copy_persist_master, detach, manual_master_key, mkey_log_context,
+    names_relative_database, open_database, open_database_with_key, open_database_with_password,
+    serve_daemon, shared_store, write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 
@@ -403,7 +403,14 @@ fn main() {
                         msg,
                         format!("while initializing database for realm {realm}"),
                     ),
-                    OpenFailure::MasterKey(msg) => (msg, fetching),
+                    OpenFailure::MasterKey(msg) => {
+                        let during = mkey_log_context(
+                            &msg,
+                            &realm,
+                            opts.args.mkey_name.as_deref().unwrap_or("K/M"),
+                        );
+                        (msg, during)
+                    }
                 };
                 cannot_initialize(&progname, &realm, &msg, &during);
             }
@@ -487,7 +494,6 @@ fn init_realm(
 ) -> PrincipalStore {
     let opening = format!("while initializing database for realm {realm}");
     let mkey_name = args.mkey_name.as_deref().unwrap_or("K/M");
-    let fetching = format!("while fetching master key {mkey_name} for realm {realm}");
     let opened = if manual_master_key(args.manual, paths) {
         open_database_with_password(paths, &args.db_args, mkey_name, realm)
     } else {
@@ -495,7 +501,10 @@ fn init_realm(
     };
     match opened {
         Err(OpenFailure::Database(e)) => cannot_initialize(progname, realm, &e, &opening),
-        Err(OpenFailure::MasterKey(e)) => cannot_initialize(progname, realm, &e, &fetching),
+        Err(OpenFailure::MasterKey(e)) => {
+            let during = mkey_log_context(&e, realm, mkey_name);
+            cannot_initialize(progname, realm, &e, &during)
+        }
         Ok(store) => store,
     }
 }

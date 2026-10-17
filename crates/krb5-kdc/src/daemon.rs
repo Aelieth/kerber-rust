@@ -114,10 +114,27 @@ fn refuse_other_mkey(mkey_name: &str) -> Result<(), OpenFailure> {
 fn open_prepared(db: &Path, key: &krb5_crypto::ProtocolKey) -> Result<PrincipalStore, OpenFailure> {
     match crate::load_store_with_master(db, key) {
         Ok(store) => Ok(store),
+        Err(crate::PersistError::Crypto(s)) if s == "integrity check failed" => {
+            Err(OpenFailure::MasterKey(BAD_MASTER_KEY.into()))
+        }
         Err(crate::PersistError::Crypto(s)) => {
             Err(OpenFailure::MasterKey(format!("persist crypto: {s}")))
         }
         Err(e) => Err(OpenFailure::Database(e.to_string())),
+    }
+}
+
+/// MIT `krb5_def_fetch_mkey_list` (`lib/kdb/kdb_default.c:454-458`): the provided key did not decrypt the latest master key.
+const BAD_MASTER_KEY: &str = "Unable to decrypt latest master key with the provided master key";
+
+/// The `com_err` context for a master-key open failure.
+/// MIT `init_realm` (`kdc/main.c:393-396`): a key that does not decrypt is `while fetching master keys list for realm`.
+#[must_use]
+pub fn mkey_log_context(error: &str, realm: &str, mkey_name: &str) -> String {
+    if error == BAD_MASTER_KEY {
+        format!("while fetching master keys list for realm {realm}")
+    } else {
+        format!("while fetching master key {mkey_name} for realm {realm}")
     }
 }
 
