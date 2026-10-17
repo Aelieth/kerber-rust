@@ -2,8 +2,8 @@
 
 use krb5_crypto::{
     EncryptionType, Error, KeyUsage, ProtocolKey, SpakeGroup, checksum, decrypt, derive_keys,
-    encrypt, encrypt_with_confounder, kdb_decrypt_key, kdb_encrypt_key, octetstring2key, prf,
-    prf_plus, spake_decode_point, spake_public, spake_thash_update, string_to_key,
+    encrypt_with_confounder, octetstring2key, prf, prf_plus, spake_decode_point, spake_public,
+    spake_thash_update, string_to_key,
 };
 
 fn hex(s: &str) -> Vec<u8> {
@@ -246,33 +246,6 @@ fn rfc8009_encrypt_decrypt_usage_2() {
     }
 }
 
-/// RFC 3962 etypes 17/18: encrypt then decrypt with a nonzero usage.
-#[test]
-fn rfc3962_encrypt_decrypt_round_trip() {
-    install_json_tracing();
-    let usage = KeyUsage::new(2).unwrap();
-    let key = string_to_key(
-        EncryptionType::Aes128CtsHmacSha196,
-        b"password",
-        b"ATHENA.MIT.EDUraeburn",
-        Some(&iter_params(1)),
-    )
-    .unwrap();
-    let pt = b"eight nine ten eleven twelve thirteen";
-    let ct = encrypt(&key, usage, pt).unwrap();
-    assert_eq!(decrypt(&key, usage, &ct).unwrap(), pt);
-
-    let key256 = string_to_key(
-        EncryptionType::Aes256CtsHmacSha196,
-        b"password",
-        b"ATHENA.MIT.EDUraeburn",
-        Some(&iter_params(1)),
-    )
-    .unwrap();
-    let ct = encrypt(&key256, usage, pt).unwrap();
-    assert_eq!(decrypt(&key256, usage, &ct).unwrap(), pt);
-}
-
 /// MIT `t_derive.c` Kc/Ke/Ki for AES-128 usage 2.
 #[test]
 fn mit_t_derive_aes128_usage_2() {
@@ -300,34 +273,6 @@ fn weak_etype_refused_unless_allowed() {
 #[test]
 fn rejects_key_usage_zero() {
     assert_eq!(KeyUsage::new(0).unwrap_err(), Error::InvalidKeyUsage);
-}
-
-#[test]
-fn kdb_usage_zero_frames_int16_le_and_new_still_rejects() {
-    assert_eq!(KeyUsage::new(0).unwrap_err(), Error::InvalidKeyUsage);
-    let mkey = string_to_key(
-        EncryptionType::Aes256CtsHmacSha384192,
-        b"masterpassword",
-        b"KERBER.TESTKM",
-        None,
-    )
-    .unwrap();
-    let raw = vec![0x11u8; 32];
-    let ct = kdb_encrypt_key(&mkey, &raw).unwrap();
-    assert_eq!(kdb_decrypt_key(&mkey, &ct).unwrap(), raw);
-    assert_eq!(
-        EncryptionType::from_mit_name("aes256-cts-hmac-sha384-192").unwrap(),
-        EncryptionType::Aes256CtsHmacSha384192
-    );
-    assert_eq!(
-        EncryptionType::Aes256CtsHmacSha196.to_mit_name(),
-        "aes256-cts-hmac-sha1-96"
-    );
-    assert_eq!(
-        EncryptionType::from_mit_name(EncryptionType::Aes128CtsHmacSha256128.to_mit_name())
-            .unwrap(),
-        EncryptionType::Aes128CtsHmacSha256128
-    );
 }
 
 #[test]

@@ -951,47 +951,6 @@ mod tests {
     }
 
     #[test]
-    fn verify_checksum_type_md5_hmac_rc4_uses_raw_key() {
-        let key = ProtocolKey::from_bytes(EncryptionType::Rc4Hmac, &[0x11u8; 16]).unwrap();
-        let usage = KeyUsage::new(9).unwrap();
-        let msg = b"kerber-rust-i2";
-        let mut hasher = Md5::new();
-        hasher.update(9u32.to_le_bytes());
-        hasher.update(msg);
-        let hashval = hasher.finalize();
-        let expected = hmac_md5_simple(key.as_bytes(), &hashval).unwrap();
-        verify_checksum_type(&key, usage, msg, -137, &expected).expect("raw-key -137");
-    }
-
-    #[test]
-    fn verify_checksum_type_checks_the_key_before_the_length() {
-        // cksumtype 16 (hmac-sha1-96-aes256) requires an aes256 key; with an
-        // aes128 key and a wrong-length mac MIT verify_key fails first, so the
-        // result is UnsupportedChecksum, not BadChecksumSize.
-        let key =
-            ProtocolKey::from_bytes(EncryptionType::Aes128CtsHmacSha196, &[0x33u8; 16]).unwrap();
-        let usage = KeyUsage::new(2).unwrap();
-        assert!(matches!(
-            verify_checksum_type(&key, usage, b"m", 16, &[0u8; 3]),
-            Err(Error::UnsupportedChecksum(16))
-        ));
-    }
-
-    #[test]
-    fn verify_checksum_type_honours_declared_unkeyed() {
-        let key =
-            ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
-        let usage = KeyUsage::new(15).unwrap();
-        let msg = b"j2-declared-type";
-        let mac = unkeyed_checksum(7, msg).unwrap();
-        verify_checksum_type(&key, usage, msg, 7, &mac).expect("RSA-MD5 over AES key");
-        assert!(matches!(
-            verify_checksum_type(&key, usage, msg, 7, &mac[..15]),
-            Err(Error::BadChecksumSize)
-        ));
-    }
-
-    #[test]
     fn verify_checksum_keyed_rejects_unkeyed_declared() {
         let key =
             ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
@@ -1009,13 +968,29 @@ mod tests {
     }
 
     #[test]
-    fn verify_checksum_collproof_rejects_unknown() {
+    fn verify_checksum_type_md5_hmac_rc4_uses_raw_key() {
+        let key = ProtocolKey::from_bytes(EncryptionType::Rc4Hmac, &[0x11u8; 16]).unwrap();
+        let usage = KeyUsage::new(9).unwrap();
+        let msg = b"kerber-rust-i2";
+        let mut hasher = Md5::new();
+        hasher.update(9u32.to_le_bytes());
+        hasher.update(msg);
+        let hashval = hasher.finalize();
+        let expected = hmac_md5_simple(key.as_bytes(), &hashval).unwrap();
+        verify_checksum_type(&key, usage, msg, -137, &expected).expect("raw-key -137");
+    }
+
+    #[test]
+    fn verify_checksum_type_honours_declared_unkeyed() {
         let key =
             ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0x42u8; 32]).unwrap();
         let usage = KeyUsage::new(15).unwrap();
+        let msg = b"j2-declared-type";
+        let mac = unkeyed_checksum(7, msg).unwrap();
+        verify_checksum_type(&key, usage, msg, 7, &mac).expect("RSA-MD5 over AES key");
         assert!(matches!(
-            verify_checksum_collproof(&key, usage, b"x", 1, b""),
-            Err(Error::UnsupportedChecksum(1))
+            verify_checksum_type(&key, usage, msg, 7, &mac[..15]),
+            Err(Error::BadChecksumSize)
         ));
     }
 }

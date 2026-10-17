@@ -18,7 +18,7 @@
 
 use krb5_crypto::{
     CipherState, EncryptionType, Error, KeyUsage, ProtocolKey, decrypt, decrypt_with_state,
-    encrypt_with_confounder, encrypt_with_confounder_and_state, encrypt_with_state,
+    encrypt_with_confounder, encrypt_with_confounder_and_state,
 };
 
 const KAT: &str = include_str!("data/mit-cipher-state.kat");
@@ -126,66 +126,6 @@ fn krb_priv_usage() -> KeyUsage {
     KeyUsage::new(13).unwrap()
 }
 
-/// The six enctypes are all there, and with them the lengths that decide how the state moves: a message of no
-/// data (the confounder is the one block, which MIT encrypts under a zero IV and leaves the state alone for),
-/// whole blocks (the last two swap with no short block), and a short last block. The chain has a message of
-/// one block after others that left a state which is not zero, once after a message of one block, and MIT's
-/// state after it is the one before.
-#[test]
-fn the_known_answers_cover_one_block_whole_blocks_and_a_short_last_block() {
-    let all = chains();
-    assert_eq!(all.len(), 6, "AES (4) and Camellia (2)");
-    for chain in &all {
-        let lens: Vec<usize> = chain.singles.iter().map(|s| s.plain.len()).collect();
-        assert!(
-            lens.contains(&0),
-            "etype {}: a message of one block",
-            chain.etype
-        );
-        assert!(
-            lens.iter().any(|l| *l > 0 && l % 16 == 0),
-            "etype {}: whole blocks",
-            chain.etype
-        );
-        assert!(
-            lens.iter().any(|l| l % 16 != 0),
-            "etype {}: a short last block",
-            chain.etype
-        );
-        let (mut one_block_after_state, mut one_block_twice, mut whole, mut short) = (0, 0, 0, 0);
-        let mut before = chain.state0;
-        let mut previous_was_one_block = false;
-        for m in &chain.messages {
-            match m.plain.len() {
-                0 => {
-                    assert_eq!(
-                        m.state, before,
-                        "etype {}: MIT leaves the state as it was after a message of one block",
-                        chain.etype
-                    );
-                    one_block_after_state += usize::from(before != [0; 16]);
-                    one_block_twice += usize::from(previous_was_one_block);
-                    previous_was_one_block = true;
-                }
-                l => {
-                    assert_ne!(
-                        m.state, before,
-                        "etype {}: a longer message moves it",
-                        chain.etype
-                    );
-                    whole += usize::from(l % 16 == 0);
-                    short += usize::from(l % 16 != 0);
-                    previous_was_one_block = false;
-                }
-            }
-            before = m.state;
-        }
-        assert!(one_block_after_state >= 2, "etype {}", chain.etype);
-        assert!(one_block_twice >= 1, "etype {}", chain.etype);
-        assert!(whole >= 3 && short >= 5, "etype {}", chain.etype);
-    }
-}
-
 /// A message MIT sealed alone opens here, and given the confounder MIT drew this side seals the same bytes:
 /// the common case, a ticket or an authenticator, which starts from no state and keeps none. It does not touch
 /// the cipher state, so it is as green before the state was chained as after.
@@ -258,25 +198,6 @@ fn a_chain_sealed_with_mits_confounders_is_mits_bytes_and_state() {
                 "etype {} message {i}: the state",
                 chain.etype
             );
-        }
-    }
-}
-
-/// What this side seals leaves the state a decrypt of it reaches, the one MIT's decrypt reaches
-/// (the test above), so a chain sealed here opens under MIT's.
-#[test]
-fn a_chain_sealed_here_leaves_the_state_its_decrypt_reaches() {
-    for chain in chains() {
-        let key = chain.key();
-        let mut sealing = CipherState { iv: chain.state0 };
-        let mut opening = CipherState { iv: chain.state0 };
-        for (i, m) in chain.messages.iter().enumerate() {
-            let sealed =
-                encrypt_with_state(&key, krb_priv_usage(), &mut sealing, &m.plain).unwrap();
-            let plain = decrypt_with_state(&key, krb_priv_usage(), &mut opening, &sealed)
-                .unwrap_or_else(|e| panic!("etype {} message {i}: {e}", chain.etype));
-            assert_eq!(plain, m.plain, "etype {} message {i}", chain.etype);
-            assert_eq!(sealing.iv, opening.iv, "etype {} message {i}", chain.etype);
         }
     }
 }

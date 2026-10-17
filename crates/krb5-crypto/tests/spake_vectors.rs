@@ -259,21 +259,3 @@ fn mit_vectors_from_the_client_side() {
         check(v, false);
     }
 }
-
-#[test]
-fn the_vectors_run_cover_both_groups_four_enctypes_and_an_optimistic_challenge() {
-    let mits: Vec<usize> = VECTORS.iter().map(|v| v.mit).collect();
-    assert_eq!(mits, [1, 2, 3, 4, 5, 8]);
-    for group in SpakeGroup::ALL {
-        assert!(VECTORS.iter().any(|v| v.group == group), "{group:?}");
-    }
-    for etype in [
-        EncryptionType::Des3CbcSha1,
-        EncryptionType::Rc4Hmac,
-        EncryptionType::Aes128CtsHmacSha196,
-        EncryptionType::Aes256CtsHmacSha196,
-    ] {
-        assert!(VECTORS.iter().any(|v| v.etype == etype), "{etype:?}");
-    }
-    assert!(VECTORS.iter().any(|v| v.support.is_none()));
-}

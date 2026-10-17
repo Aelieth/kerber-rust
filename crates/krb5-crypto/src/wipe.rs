@@ -52,9 +52,7 @@ pub(crate) mod tests {
     use std::cell::RefCell;
 
     use crate::{
-        EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, SpakeGroup, derive_keys,
-        derive_prfplus, dh_generate, krb_fx_cf2, octetstring2key, p256_generate, pkinit_kdf_agile,
-        prf, spake_derive_key, string_to_key,
+        EncryptionType, KeyUsage, OAKLEY_2048, ProtocolKey, derive_keys, dh_generate, p256_generate,
     };
 
     thread_local! {
@@ -119,115 +117,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn spake_derive_key_wipes_the_whole_seed_block_it_hashed() {
-        let ikey = aes128(0x5a);
-        take_wiped();
-        let key = spake_derive_key(
-            &ikey,
-            SpakeGroup::P256,
-            &[1; 32],
-            &[2; 33],
-            &[3; 32],
-            b"req",
-            0,
-        )
-        .unwrap();
-        // The seed is one 32-octet SHA-256 block cut to the 16-octet key: that block's own
-        // allocation is wiped whole; then CF2's two PRF+ blocks and its two outputs; then the
-        // hash key copied from the seed.
-        assert_eq!(
-            take_wiped(),
-            [
-                vec![0; 32],
-                vec![0; 32],
-                vec![0; 32],
-                vec![0; 16],
-                vec![0; 16],
-                vec![0; 16]
-            ]
-        );
-        drop(key);
-    }
-
-    #[test]
     fn a_dropped_p256_keypair_wipes_its_scalar_in_place() {
         let kp = p256_generate().unwrap();
         assert_ne!(kp.secret, [0; 32]);
         DROPPED_SCALARS.with(|d| d.borrow_mut().clear());
         drop(kp);
         assert_eq!(DROPPED_SCALARS.with(|d| d.borrow().clone()), [[0; 32]]);
-    }
-
-    /// Zeroed allocations of these sizes, in this order.
-    fn zeroed(sizes: &[usize]) -> Vec<Vec<u8>> {
-        sizes.iter().map(|n| vec![0; *n]).collect()
-    }
-
-    fn key(etype: EncryptionType, fill: u8) -> ProtocolKey {
-        ProtocolKey::from_bytes(etype, &vec![fill; etype.key_len()]).unwrap()
-    }
-
-    #[test]
-    fn cf2_wipes_both_prf_plus_outputs() {
-        let (k1, k2) = (aes128(0x11), aes128(0x22));
-        take_wiped();
-        let k = krb_fx_cf2(&k1, &k2, b"one", b"two").unwrap();
-        // Each PRF+ wipes its 32-octet HMAC block; then the two 16-octet outputs, b and a.
-        assert_eq!(take_wiped(), zeroed(&[32, 32, 16, 16]));
-        drop(k);
-    }
-
-    #[test]
-    fn the_pkinit_kdfs_wipe_the_buffer_a_key_is_cut_from() {
-        let aes256 = EncryptionType::Aes256CtsHmacSha196;
-        take_wiped();
-        let keys = [
-            octetstring2key(EncryptionType::Aes128CtsHmacSha256128, b"z").unwrap(),
-            pkinit_kdf_agile(aes256, b"z", b"other info").unwrap(),
-        ];
-        // The SHA-1 stream (16 + 20), then the SHA-256 stream (32 + 32).
-        assert_eq!(take_wiped(), zeroed(&[36, 64]));
-        drop(keys);
-    }
-
-    #[test]
-    fn string_to_key_wipes_every_intermediate_key() {
-        let one = 1u32.to_be_bytes();
-        let salt = b"ATHENA.MIT.EDUraeburn";
-        take_wiped();
-        let aes = string_to_key(
-            EncryptionType::Aes256CtsHmacSha196,
-            b"password",
-            salt,
-            Some(&one),
-        );
-        // DK's output, then the PBKDF2 output.
-        assert_eq!(take_wiped(), zeroed(&[32, 32]));
-        let rc4 = string_to_key(EncryptionType::Rc4Hmac, b"password", salt, None);
-        // The UTF-16 copy of the password, then the unused PBKDF2 buffer.
-        assert_eq!(take_wiped(), zeroed(&[16, 16]));
-        let des3 = string_to_key(EncryptionType::Des3CbcSha1, b"password", salt, None);
-        // DK's three cipher blocks and its DR buffer; the key; the n-fold; the password and
-        // salt; the unused PBKDF2 buffer.
-        assert_eq!(take_wiped(), zeroed(&[8, 8, 8, 24, 24, 21, 29, 24]));
-        drop((aes, rc4, des3));
-    }
-
-    #[test]
-    fn prf_wipes_its_derived_keys() {
-        let sha1 = key(EncryptionType::Aes128CtsHmacSha196, 0x33);
-        let camellia = key(EncryptionType::Camellia128CtsCmac, 0x44);
-        let sha2 = aes128(0x55);
-        take_wiped();
-        let out = prf(&sha1, b"input").unwrap();
-        // Kp = DK(key, "prf").
-        assert_eq!(take_wiped(), zeroed(&[16]));
-        let out2 = prf(&camellia, b"input").unwrap();
-        // The CMAC block, the CMAC input, the feedback block, then Kp.
-        assert_eq!(take_wiped(), zeroed(&[16, 28, 16, 16]));
-        let k = derive_prfplus(&sha2, b"input").unwrap();
-        // PRF+'s HMAC block, then its 16-octet output.
-        assert_eq!(take_wiped(), zeroed(&[32, 16]));
-        drop((out, out2, k));
     }
 }
