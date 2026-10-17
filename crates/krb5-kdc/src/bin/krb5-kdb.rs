@@ -651,10 +651,12 @@ fn realm_kdc_conf(util: &Util, realm: &str) -> Result<Option<krb5_config::KdcCon
     if util.paths.conf.is_none() {
         return Ok(None);
     }
-    let bytes = fs::read(&util.paths.profile).map_err(|e| strerror(&e))?;
-    krb5_config::KdcConf::parse_for_realm(&String::from_utf8_lossy(&bytes), realm)
+    krb5_config::KdcConf::load_file_for_realm(&util.paths.profile, realm)
         .map(Some)
-        .map_err(|e| e.to_string())
+        .map_err(|e| match e {
+            krb5_config::Error::Io(e) => strerror(&e),
+            e => e.to_string(),
+        })
 }
 
 /// The opened database: its realm, the master entry, and the master key when one was fetched and

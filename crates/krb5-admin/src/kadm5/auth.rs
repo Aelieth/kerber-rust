@@ -613,7 +613,7 @@ fn agss_init(
                 .unix_seconds()
                 .saturating_add(AGSS_INDEF_EXPIRE)
         },
-        |end| end.saturating_add(skew),
+        |end| end.saturating_add_signed(skew),
     );
     st.ctx = Some(gctx);
     st.seq = seq;

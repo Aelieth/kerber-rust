@@ -233,6 +233,13 @@ did at 10, 1,000 and 5,000 principals. At backlog 5, idle bursts wait too, as on
 MIT's KDC: 19, 46 and 67 of 500 at 10, 1,000 and 5,000 principals. With 128, none
 waited a second, on MIT's KDC or on kerber-rust.
 
+The KDC and kadmind read `kdc.conf` and `krb5.conf` once, when they start, so an edit takes a
+restart (SIGHUP reopens the logs only). As MIT's, `kdc.conf`'s `[libdefaults]` values come
+before `krb5.conf`'s, its `include` and `includedir` lines are followed, and section and relation
+names match only as written. `clockskew` there is both the KDC's and kpasswd's allowance for a
+client's clock (300 seconds by default). A relation MIT reads that kerber-rust does not, such as
+`master_key_name`, `iprop_listen` or a `pkinit_*` one, is named in the log when the daemon starts.
+
 `[plugins] kdcpreauth` `disable` and `enable_only` select the KDC's preauth
 modules by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,
 `pkinit`, `otp`, and an embedder module's name). `disable = encrypted_timestamp`

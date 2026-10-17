@@ -32,7 +32,7 @@ impl ListenRelations {
         let Some((k, v)) = split_kv(line) else {
             return false;
         };
-        let slot = match k.to_ascii_lowercase().as_str() {
+        let slot = match k {
             "kdc_listen" => &mut self.listen,
             "kdc_ports" => &mut self.ports,
             "kdc_tcp_listen" => &mut self.tcp_listen,
@@ -103,6 +103,7 @@ impl Default for KdcConf {
             kdc_tcp_listen_backlog: DEFAULT_TCP_LISTEN_BACKLOG,
             plugins: super::plugin_profile::PluginProfile::default(),
             otp: super::otp_profile::OtpTree::default(),
+            unsupported: Vec::new(),
         }
     }
 }
@@ -178,14 +179,22 @@ impl KdcConf {
         Ok(Self::parse_joined(&stanza_of(&text, None)))
     }
 
-    /// [`Self::parse_without_realms`] of the file at `path`.
+    /// [`Self::parse_without_realms`] of the file at `path`, its includes followed.
     ///
     /// # Errors
     ///
     /// As [`Self::load_file`].
     pub fn load_file_without_realms(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let bytes = std::fs::read(path)?;
-        Self::parse_without_realms(&String::from_utf8_lossy(&bytes))
+        Self::parse_without_realms(&read_with_includes(path.as_ref())?)
+    }
+
+    /// [`Self::parse_for_realm`] of the file at `path`, its includes followed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load_file`].
+    pub fn load_file_for_realm(path: impl AsRef<Path>, realm: &str) -> Result<Self, Error> {
+        Self::parse_for_realm(&read_with_includes(path.as_ref())?, realm)
     }
 
     fn parse_joined(text: &str) -> Self {
@@ -214,7 +223,7 @@ impl KdcConf {
                 otp.observe_header(&mut otp_tree, body, starred);
             }
             if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                section = s.trim().to_ascii_lowercase();
+                s.trim().clone_into(&mut section);
                 in_realm = false;
                 libdefaults_depth = 0;
                 dbmodule = None;
@@ -236,7 +245,7 @@ impl KdcConf {
                 } else if line == "}" {
                     dbmodule = None;
                 } else if let (Some(module), Some((k, v))) = (&dbmodule, split_kv(line)) {
-                    dbmodules.push((module.clone(), k.to_ascii_lowercase(), v));
+                    dbmodules.push((module.clone(), k.to_owned(), v));
                 }
                 continue;
             }
@@ -261,7 +270,7 @@ impl KdcConf {
                 if in_realm {
                     if database_module.is_none()
                         && let Some((k, v)) = split_kv(line)
-                        && k.eq_ignore_ascii_case("database_module")
+                        && k == "database_module"
                     {
                         database_module = Some(v);
                     }
@@ -272,10 +281,10 @@ impl KdcConf {
             }
             if section == "kdcdefaults" && !default_listen.take(line) {
                 match split_kv(line) {
-                    Some((key, v)) if key.eq_ignore_ascii_case("kdc_max_dgram_reply_size") => {
+                    Some(("kdc_max_dgram_reply_size", v)) => {
                         max_dgram = Some(v);
                     }
-                    Some((key, v)) if key.eq_ignore_ascii_case("kdc_tcp_listen_backlog") => {
+                    Some(("kdc_tcp_listen_backlog", v)) => {
                         backlog = Some(v);
                     }
                     _ if booleans.defaults(line) => {}
@@ -314,6 +323,11 @@ impl KdcConf {
                 .find(|(m, k, _)| *m == module && k == name)
                 .is_some_and(|(_, _, v)| truthy(v))
         };
+        for (m, k, _) in &dbmodules {
+            if *m == module && matches!(k.as_str(), "db_library" | "db_module_dir") {
+                note_unsupported(&mut conf, k);
+            }
+        }
         conf.disable_last_success = flag("disable_last_success");
         conf.disable_lockout = flag("disable_lockout");
         // MIT `krb5_aprof_get_int32` (`lib/kadm5/alt_prof.c:284-298`): the last value, read with `sscanf("%d")`; one that does not read leaves the caller's default.
@@ -409,10 +423,9 @@ impl KdcConf {
     /// # Errors
     ///
     /// [`Error::Io`] when `path` cannot be read (its bytes need not be UTF-8, as MIT's need not
-    /// be); [`Error::Profile`] as [`KdcConf::parse`].
+    /// be); [`Error::Profile`] as [`KdcConf::parse`], and when an included file does not read.
     pub fn load_file(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let bytes = std::fs::read(path)?;
-        Self::parse(&String::from_utf8_lossy(&bytes))
+        Self::parse(&read_with_includes(path.as_ref())?)
     }
 }
 
@@ -420,12 +433,15 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;
     };
-    match k.to_ascii_lowercase().as_str() {
+    match k {
         "host_based_services" => combine_ws(&mut conf.host_based_services, &v),
         "no_host_referral" => combine_ws(&mut conf.no_host_referral, &v),
         // MIT `group_init_state` (`groups.c:247-249`): `profile_get_string`, so the first value.
         "spake_preauth_kdc_challenge" if conf.spake_preauth_kdc_challenge.is_none() => {
             conf.spake_preauth_kdc_challenge = Some(v);
+        }
+        k if k.starts_with("pkinit_") && k != "pkinit_require_freshness" => {
+            note_unsupported(conf, k);
         }
         _ => {}
     }
@@ -446,7 +462,7 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
         }
         return;
     }
-    match k.to_ascii_lowercase().as_str() {
+    match k {
         "allow_weak_crypto" => conf.allow_weak_crypto = Some(truthy(&v)),
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
         "allow_des3" => conf.allow_des3 = Some(truthy(&v)),
@@ -549,7 +565,7 @@ fn stanza_names(text: &str) -> Vec<String> {
         if depth == 0
             && let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
         {
-            section = s.trim().to_ascii_lowercase();
+            s.trim().clone_into(&mut section);
         } else if section == "realms" {
             if line.ends_with('{') {
                 if depth == 0 {
@@ -579,7 +595,7 @@ fn stanza_of(text: &str, realm: Option<&str>) -> String {
         if depth == 0
             && let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
         {
-            section = s.trim().to_ascii_lowercase();
+            s.trim().clone_into(&mut section);
             keep = true;
         } else if section == "realms" {
             if line.ends_with('{') {
@@ -611,7 +627,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;
     };
-    match k.to_ascii_lowercase().as_str() {
+    match k {
         "max_life" => conf.max_life = parse_duration_secs(&v).unwrap_or(conf.max_life),
         "max_renewable_life" => {
             if let Some(secs) = parse_duration_secs(&v) {
@@ -648,7 +664,65 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         }
         "kadmind_port" if conf.kadmind_port.is_none() => conf.kadmind_port = v.parse().ok(),
         "kpasswd_port" if conf.kpasswd_port.is_none() => conf.kpasswd_port = v.parse().ok(),
+        "master_key_name" | "iprop_listen" => note_unsupported(conf, k),
+        k if k.starts_with("pkinit_") && k != "pkinit_require_freshness" => {
+            note_unsupported(conf, k);
+        }
         _ => {}
+    }
+}
+
+/// Record that the relation `k` is there and read past.
+fn note_unsupported(conf: &mut KdcConf, k: &str) {
+    if !conf.unsupported.iter().any(|u| u == k) {
+        conf.unsupported.push(k.to_owned());
+    }
+}
+
+impl KdcConf {
+    /// One line for each relation MIT's programs read that this port reads past, for the startup
+    /// log: the relations [`Self::unsupported`] names, a `supported_enctypes` salt type other
+    /// than `normal`, and a UNIX-domain socket in a listen list.
+    /// MIT `init_realm` (`kdc/main.c:247-250`): `master_key_name` names the master key principal.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:517-522`): `iprop_listen` lists kadmind's iprop listeners.
+    /// MIT `krb5_string_to_keysalts` (`lib/kadm5/str_conv.c:319-366`): a tuple's salt type is kept.
+    #[must_use]
+    pub fn unsupported_lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .unsupported
+            .iter()
+            .map(|k| format!("kdc.conf: {k} is not supported and is ignored"))
+            .collect();
+        let mut salts: Vec<&str> = Vec::new();
+        for tuple in &self.supported_enctypes {
+            if let Some((_, salt)) = tuple.split_once(':')
+                && salt != "normal"
+                && !salts.contains(&salt)
+            {
+                salts.push(salt);
+                lines.push(format!(
+                    "kdc.conf: supported_enctypes salt type {salt} is not supported; keys get the normal salt"
+                ));
+            }
+        }
+        let lists = [
+            ("kdc_listen", Some(&self.kdc_listen)),
+            ("kdc_tcp_listen", self.kdc_tcp_listen.as_ref()),
+            ("kadmind_listen", self.kadmind_listen.as_ref()),
+            ("kpasswd_listen", self.kpasswd_listen.as_ref()),
+        ];
+        for (name, list) in lists {
+            for entry in list
+                .into_iter()
+                .flat_map(|l| l.split(|c: char| c == ',' || c.is_ascii_whitespace()))
+                .filter(|e| e.starts_with('/'))
+            {
+                lines.push(format!(
+                    "kdc.conf: {name} entry {entry} is a UNIX-domain socket, which is not supported; it is skipped"
+                ));
+            }
+        }
+        lines
     }
 }
 
@@ -738,7 +812,7 @@ pub(super) fn kdc_conf_path_in(env: &dyn Fn(&str) -> Option<OsString>) -> PathBu
 /// (`EACCES` / `EPERM`) file is skipped, so its defaults apply; any other failure is fatal.
 fn read_kdc_profile(path: &Path) -> Result<Option<String>, Error> {
     match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+        Ok(bytes) => Ok(Some(with_includes(path, &bytes)?)),
         Err(e)
             if matches!(
                 e.kind(),
@@ -752,6 +826,18 @@ fn read_kdc_profile(path: &Path) -> Result<Option<String>, Error> {
             format!("{}: {e}", path.display()),
         ))),
     }
+}
+
+/// The text of the kdc.conf at `path`, its includes followed.
+fn read_with_includes(path: &Path) -> Result<String, Error> {
+    with_includes(path, &std::fs::read(path)?)
+}
+
+/// `bytes`, read from the kdc.conf at `path`, as text with its includes followed: the KDC profile
+/// is one profile file, and MIT's parser follows a file's includes wherever it is read.
+fn with_includes(path: &Path, bytes: &[u8]) -> Result<String, Error> {
+    let mut stack = vec![std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())];
+    super::profile::resolve_includes(&String::from_utf8_lossy(bytes), &mut stack)
 }
 
 /// The path relations of one realm's `[realms]` stanza.
@@ -779,7 +865,7 @@ impl RealmPaths {
                 continue;
             }
             if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-                section = s.trim().to_ascii_lowercase();
+                s.trim().clone_into(&mut section);
                 current = None;
                 continue;
             }
@@ -800,7 +886,7 @@ impl RealmPaths {
             let Some((k, v)) = split_kv(line) else {
                 continue;
             };
-            match k.to_ascii_lowercase().as_str() {
+            match k {
                 "database_name" => out.database_name = Some(PathBuf::from(v)),
                 "key_stash_file" => out.key_stash_file = Some(PathBuf::from(v)),
                 "acl_file" => out.acl_file = Some(PathBuf::from(v)),

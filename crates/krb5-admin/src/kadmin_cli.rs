@@ -152,15 +152,14 @@ impl Open {
             }
             None => krb5_kdc::load_store(&self.db, &self.stash).map_err(|e| self.load_text(e))?,
         };
-        if let Some(conf) = &self.conf {
-            store.apply_kdc_conf(conf).map_err(|e| e.to_string())?;
-        }
-        let krb5_conf = krb5_config::load_krb5_conf();
-        if let Some(conf) = &krb5_conf {
-            store.apply_libdefaults(conf);
-        }
-        store.apply_pwqual_plugins(self.conf.as_ref(), krb5_conf.as_ref());
-        store.apply_kadm5_hook_plugins(self.conf.as_ref(), krb5_conf.as_ref());
+        // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:202-205`): the realm's profile, kdc.conf before krb5.conf, in the KDC's order.
+        // `Krb5Conf::new`, not `default`: no krb5.conf leaves MIT's defaults (clockskew 300).
+        let krb5 = match krb5_config::load_krb5_conf() {
+            Some(conf) => conf,
+            None => krb5_config::Krb5Conf::new(),
+        };
+        let profile = krb5_config::ProfileSet::from_structs(store.realm(), krb5, self.conf.clone());
+        store.apply_profile(&profile).map_err(|e| e.to_string())?;
         if !self.keysalts.is_empty() {
             store.policy.supported_enctypes.clone_from(&self.keysalts);
         }

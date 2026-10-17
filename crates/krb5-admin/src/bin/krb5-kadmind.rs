@@ -213,18 +213,20 @@ fn main() {
     if let Err(e) = store.init_pwqual(kdc_conf) {
         fail_to_start(&progname, Some(&os_error_text(&e)), "initializing");
     }
-    if let Some(conf) = kdc_conf
-        && let Err(e) = store.apply_kdc_conf(conf)
-    {
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:446-457`): `kadm5_init` and `kadm5_get_config_params` read the realm's profile, kdc.conf before krb5.conf; here it is read once and applied in the KDC's order.
+    let profile = krb5_config::ProfileSet::from_env_files(&paths)
+        .unwrap_or_else(|e| fail_to_start(&progname, Some(&e.init_text()), "initializing context"));
+    if let Err(e) = store.apply_profile(&profile) {
         fail_to_start(&progname, Some(&e.to_string()), "getting config parameters");
     }
-    let krb5_conf = krb5_config::load_krb5_conf();
-    if let Some(c) = &krb5_conf {
-        store.set_capaths(c.capaths.clone());
-        store.apply_libdefaults(c);
+    // A relation MIT's programs read and this one reads past is named once in the log.
+    for line in profile
+        .kdc
+        .iter()
+        .flat_map(krb5_config::KdcConf::unsupported_lines)
+    {
+        klog::syslog(Severity::Warning, &line);
     }
-    store.apply_pwqual_plugins(kdc_conf, krb5_conf.as_ref());
-    store.apply_kadm5_hook_plugins(kdc_conf, krb5_conf.as_ref());
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:459-462`): the propagation-only mode needs
     // iprop_enable; with it, this port has no separate iprop listener to run alone.
     if args.flag("-proponly") {
@@ -266,7 +268,7 @@ fn main() {
         test_realm,
         pinned,
         kdc_conf,
-        krb5_admin_server(krb5_conf.as_ref(), &realm).as_deref(),
+        krb5_admin_server(Some(&profile.krb5), &realm).as_deref(),
         kadmind_port,
     );
     klog::syslog(

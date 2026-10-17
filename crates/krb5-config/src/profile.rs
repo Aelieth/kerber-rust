@@ -327,6 +327,114 @@ fn valid_include_name(name: &str) -> bool {
         .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 
+/// `text`, as [`join_subsection_braces`] gives it, with each column-0 `include` / `includedir`
+/// line replaced by the files it names, read the same way. `stack` holds the files being read,
+/// the including one last. A fragment starts in no section, and the including file then goes on
+/// in its own: a `[ ]` heading, which no reader takes, comes before the fragment and the including
+/// file's last heading after it. An include inside a `{}` group is refused, as these readers
+/// cannot go back into the group.
+/// MIT `parse_line` (`util/profile/prof_parse.c:290-306`): a column-0 `include` or `includedir` line names a file or a directory to parse.
+/// MIT `parse_include_file` (`util/profile/prof_parse.c:215-235`): each file starts in a state of its own and shares the root section; one that does not open fails the profile.
+/// MIT `parse_include_dir` (`util/profile/prof_parse.c:264-288`): a directory's valid names, in order.
+///
+/// # Errors
+///
+/// [`Error::Profile`] with [`ProfileError::IncludeFile`] or [`ProfileError::IncludeDir`] when an
+/// included file or directory does not read, or the includes nest too deep or loop;
+/// [`ProfileError::Syntax`] as [`join_subsection_braces`], and for an include inside a group.
+pub(crate) fn resolve_includes(text: &str, stack: &mut Vec<PathBuf>) -> Result<String, Error> {
+    let joined = join_subsection_braces(text)?;
+    let mut out = String::with_capacity(joined.len());
+    let mut heading = "[ ]";
+    let mut depth = 0usize;
+    for line in joined.lines() {
+        if let Some(kind) = include_directive(line) {
+            if depth > 0 {
+                return Err(Error::Profile(
+                    ProfileError::Syntax,
+                    "an include inside a { } group is not supported".into(),
+                ));
+            }
+            out.push_str("[ ]\n");
+            match kind {
+                IncludeKind::File(p) => out.push_str(&include_file_text(Path::new(p), stack)?),
+                IncludeKind::Dir(d) => out.push_str(&include_dir_text(Path::new(d), stack)?),
+            }
+            out.push_str(heading);
+            out.push('\n');
+            continue;
+        }
+        let t = line.trim();
+        if depth == 0 && t.starts_with('[') {
+            heading = line;
+        } else if !t.starts_with(['#', ';']) {
+            if t.ends_with('{') {
+                depth += 1;
+            } else if t.starts_with('}') {
+                depth = depth.saturating_sub(1);
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// The text of the included file at `path`, its own includes followed.
+fn include_file_text(path: &Path, stack: &mut Vec<PathBuf>) -> Result<String, Error> {
+    let include = |what: String| Error::Profile(ProfileError::IncludeFile, what);
+    let unread = |e: std::io::Error| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            include(format!("include target not found: {}", path.display()))
+        } else {
+            include(format!("include target {}: {e}", path.display()))
+        }
+    };
+    if stack.len() >= MAX_INCLUDE_DEPTH {
+        return Err(include("include nesting too deep".into()));
+    }
+    let canon = std::fs::canonicalize(path).map_err(unread)?;
+    if stack.iter().any(|p| p == &canon) {
+        return Err(include("include cycle".into()));
+    }
+    let bytes = std::fs::read(&canon).map_err(unread)?;
+    stack.push(canon);
+    let text = resolve_includes(&String::from_utf8_lossy(&bytes), stack);
+    stack.pop();
+    text
+}
+
+/// The texts of the valid names in the included directory `dir`, in order.
+fn include_dir_text(dir: &Path, stack: &mut Vec<PathBuf>) -> Result<String, Error> {
+    let unlisted = |what: String| Error::Profile(ProfileError::IncludeDir, what);
+    if !dir.is_dir() {
+        return Err(unlisted(format!(
+            "includedir not a directory: {}",
+            dir.display()
+        )));
+    }
+    let list = |e: std::io::Error| unlisted(format!("includedir {}: {e}", dir.display()));
+    let mut names = Vec::new();
+    for ent in std::fs::read_dir(dir).map_err(list)? {
+        let name = ent.map_err(list)?.file_name();
+        if let Some(s) = name.to_str()
+            && valid_include_name(s)
+        {
+            names.push(s.to_owned());
+        }
+    }
+    names.sort();
+    let mut out = String::new();
+    for name in names {
+        let p = dir.join(name);
+        if p.is_file() {
+            out.push_str("[ ]\n");
+            out.push_str(&include_file_text(&p, stack)?);
+        }
+    }
+    Ok(out)
+}
+
 /// MIT `k5_is_numeric_address` (`hostrealm.c:318-338`): a name of only digits and three dots
 /// (IPv4), or with a colon (IPv6), is a numeric address.
 #[must_use]
@@ -691,8 +799,8 @@ fn parse_libdefaults(
             }
         }
         "clockskew" if top && k == "clockskew" && take_first(seen, "clockskew") => {
-            // MIT `profile_get_integer` (`util/profile/prof_get.c:309-333`): a value that is no integer leaves the default. A negative one, which MIT keeps and then fails every time check with, reads as 0.
-            conf.clockskew = parse_profile_int(&v).map_or(300, |n| u32::try_from(n).unwrap_or(0));
+            // MIT `profile_get_integer` (`util/profile/prof_get.c:309-333`): a value that is no integer leaves the default; a negative one is kept.
+            conf.clockskew = parse_profile_int(&v).unwrap_or(300);
         }
         "dns_lookup_kdc" if top && k == "dns_lookup_kdc" && take_first(seen, "dns_lookup_kdc") => {
             conf.dns_lookup_kdc = truthy(&v);

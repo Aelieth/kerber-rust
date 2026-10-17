@@ -14,8 +14,8 @@ use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_kdc::{Principal, SharedDump as SharedStore};
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyOk, ApVerifyParams, DEFAULT_SKEW,
-    KeytabLookup, ReplayCache, local_host_address, permitted_enctypes_kdc, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyOk, ApVerifyParams, KeytabLookup,
+    ReplayCache, local_host_address, permitted_enctypes_kdc, verify_ap_req_ex,
 };
 use krb5_types::{
     ChangePasswdData, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, err,
@@ -381,6 +381,7 @@ pub enum ChangepwRefused {
 /// MIT `process_chpw_request` (`kadmin/server/schpw.c:128-137`): `krb5_rd_req` names `kadmin/changepw` against the `KDB:` keytab, and a refusal is AUTHERROR "Failed reading application request".
 /// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the KDB keytab gives the principal's first permitted key at the ticket's kvno and refuses another enctype.
 /// MIT `process_chpw_request` (`kadmin/server/schpw.c:140-146`): `krb5_mk_rep` follows.
+/// MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): the authenticator's time is checked against kadmind's context's `clockskew`, `skew` here.
 ///
 /// # Errors
 ///
@@ -390,6 +391,7 @@ pub fn changepw_accept(
     changepw: Option<&Principal>,
     realm: &str,
     permitted: &[EncryptionType],
+    skew: i64,
     replay: &ReplayCache,
 ) -> Result<ChangepwAccepted, ChangepwRefused> {
     let server = krb5_kdc::principals::kadmin_changepw();
@@ -408,7 +410,7 @@ pub fn changepw_accept(
         expected_server: Some(&server),
         expected_realm: Some(realm),
         get_entry: Some(&get_entry),
-        skew: DEFAULT_SKEW,
+        skew,
         remote_addr: None,
         now: None,
     };
@@ -624,7 +626,7 @@ pub(crate) fn handle_kpasswd_from(
         return Err(Error::Inner("Invalid message type".into()));
     }
     let priv_raw = &raw[6 + ap_len..];
-    let (store_realm, changepw) = {
+    let (store_realm, changepw, skew) = {
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -637,30 +639,33 @@ pub(crate) fn handle_kpasswd_from(
                 g.get_name(&krb5_kdc::principals::kadmin_changepw())
                     .cloned()
             }),
+            g.policy().skew,
         )
     };
     // MIT `process_chpw_request` (`schpw.c:102-161`): the auth context does sequence numbers only, `krb5_rd_req` names `kadmin/changepw` against the KDB keytab and also refuses an enctype the server (on kadmind's KDC profile) does not permit, and the AP-REP is made before the request is decrypted.
     let Ok(permitted) = permitted_enctypes_kdc() else {
         return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
     };
-    let accepted =
-        match changepw_accept(ap_req, changepw.as_ref(), &store_realm, &permitted, replay) {
-            Ok(a) => a,
-            Err(ChangepwRefused::Read(_)) => {
-                return kpasswd_chpwfail_error(
-                    &store_realm,
-                    3,
-                    "Failed reading application request",
-                );
-            }
-            Err(ChangepwRefused::Reply(_)) => {
-                return kpasswd_chpwfail_error(
-                    &store_realm,
-                    3,
-                    "Failed replying to application request",
-                );
-            }
-        };
+    let accepted = match changepw_accept(
+        ap_req,
+        changepw.as_ref(),
+        &store_realm,
+        &permitted,
+        skew,
+        replay,
+    ) {
+        Ok(a) => a,
+        Err(ChangepwRefused::Read(_)) => {
+            return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
+        }
+        Err(ChangepwRefused::Reply(_)) => {
+            return kpasswd_chpwfail_error(
+                &store_realm,
+                3,
+                "Failed replying to application request",
+            );
+        }
+    };
     let ChangepwAccepted { ok, ac, ap_rep } = accepted;
     let mut reply = KpasswdReply {
         ac,

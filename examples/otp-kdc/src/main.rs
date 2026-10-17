@@ -17,7 +17,7 @@ use std::process::exit;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, PoisonError};
 
-use krb5_config::{KdcConf, KdcPaths, LogSpecs};
+use krb5_config::{KdcConf, KdcPaths, LogSpecs, ProfileSet};
 use krb5_kdc::{ListenLimits, MAX_DGRAM_REPLY, OpenFailure, SharedStore};
 use krb5_log::klog::{self, Severity};
 
@@ -102,25 +102,26 @@ fn main() {
         ),
     };
 
-    // krb5.conf's [libdefaults] is the base, and kdc.conf is applied over it.
-    let krb5_conf = krb5_config::load_krb5_conf();
-    if let Some(conf) = krb5_conf.as_ref() {
-        store.set_capaths(conf.capaths.clone());
-        store.apply_libdefaults(conf);
-    }
-    let kdc_conf = paths.conf;
-    if let Some(conf) = &kdc_conf
-        && let Err(e) = store.apply_kdc_conf(conf)
-    {
+    // The realm's profile, read once and applied in one order: krb5.conf, then kdc.conf over it,
+    // then `[plugins]` and `[otp]` from both.
+    let profile = ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
+        eprintln!("{progname}: {} while initializing krb5", e.init_text());
+        exit(1);
+    });
+    if let Err(e) = store.apply_profile(&profile) {
         eprintln!("{progname}: kdc.conf: {e}");
         exit(2);
     }
-    store.apply_kdcpreauth_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
-    // MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the otp module reads `[otp]` from the same profile, once, when it starts.
-    store.apply_otp(kdc_conf.as_ref(), krb5_conf.as_ref());
-    store.apply_kdcpolicy_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    // A relation MIT's programs read and this one reads past is named once in the log.
+    for line in profile
+        .kdc
+        .iter()
+        .flat_map(krb5_config::KdcConf::unsupported_lines)
+    {
+        klog::syslog(Severity::Warning, &line);
+    }
     krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
-    store.apply_audit_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    let kdc_conf = paths.conf;
     for (level, line) in krb5_kdc::preauth_startup_lines(
         store.realm(),
         &store.policy.kdcpreauth,

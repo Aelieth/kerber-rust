@@ -266,7 +266,7 @@ harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --
 | `sssd-login` | nightly, weekly | mit, rust | client1: `f4-mit` / `rust-nfs-sso`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
 | `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; the AD DC TEST-SERVER (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
 | `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
-| `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 2 / 2 min |
+| `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 4 / 4 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
 | `kpasswd` | weekly, last (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 
@@ -375,9 +375,15 @@ would remove it.
   `kdc_timesync = 0` (the timestamp is client2's clock), `clockskew = 900` and
   `[plugins] clpreauth` `enable_only = encrypted_timestamp` (SPAKE, which the
   lab enables, sends no timestamp), so only the KDC's
-  skew decides. A second realm stanza (`DUMMY.TEST`, `max_life = 1h`) leaves
-  alice's TGT life as it was. Each cell starts from the saved kdc.conf, which
-  is restored at the end, also when the scenario stops early.
+  skew decides. With `clockskew = 60` and kadmin restarted on it, cfpw's kpasswd
+  from client2 120 s ahead is refused for its authenticator's time; cfpw is made
+  `-requires_preauth`, so its changepw ticket comes without a timestamp to judge.
+  A second realm stanza (`DUMMY.TEST`, `max_life = 1h`) leaves alice's TGT life
+  as it was. An `include` line naming a file whose KERBER.TEST stanza sets
+  `max_life = 2h` makes it 7200 s, and `Max_Life = 1h`, a name MIT matches only as
+  written, leaves it as it was. Each cell starts from the saved kdc.conf, which is
+  restored with krb5kdc and kadmin restarted at the end, also when the scenario
+  stops early.
 - **`kdb-writes.sh`** (SW, MIT kinit and kadmin from client2): `swlock`, under a
   policy with `maxfailure 10`, fails kinit three times, kadmind changes another
   principal twice, `swlock` fails twice more and kadmind writes once more:

@@ -38,6 +38,7 @@ mod logging;
 mod otp_profile;
 mod plugin_profile;
 mod profile;
+mod profile_set;
 mod srv;
 mod testenv;
 
@@ -297,8 +298,9 @@ pub struct Krb5Conf {
     pub allow_rc4: Option<bool>,
     /// `allow_des3`.
     pub allow_des3: Option<bool>,
-    /// Clock skew in seconds (default 300).
-    pub clockskew: u32,
+    /// Clock skew in seconds (default 300). A negative value is kept, as MIT keeps it, and then
+    /// fails every time check.
+    pub clockskew: i32,
     /// `dns_lookup_kdc`.
     pub dns_lookup_kdc: bool,
     /// `dns_lookup_realm` (MIT `krb5_get_host_realm`).
@@ -549,6 +551,9 @@ pub struct KdcConf {
     /// MIT `initialize_realms` (`kdc/main.c:639-644`): the last value read as `%d`, else this default.
     /// MIT `DEFAULT_TCP_LISTEN_BACKLOG` (`include/osconf.hin:100-100`): MIT's value is 5; this default is 128 (`docs/mit-deviations.md`).
     pub kdc_tcp_listen_backlog: i32,
+    /// The relations MIT's programs read that this port reads past, each named once, in the order
+    /// met ([`KdcConf::unsupported_lines`]).
+    pub unsupported: Vec<String>,
     /// This file's `[plugins]` `disable` and `enable_only`.
     ///
     /// MIT `get_profile_var` (`lib/krb5/krb/plugin.c:188-203`): the relations sit under the interface name.
@@ -598,5 +603,6 @@ pub use profile::{
     krb5_conf_paths, load_krb5_conf, load_krb5_conf_paths, parse_deltat, split_krb5_config_paths,
     udp_preference_limit,
 };
+pub use profile_set::ProfileSet;
 pub use srv::lookup_srv_kdc;
 pub use testenv::{isolate_test_krb5, set_test_kdc_profile, set_test_krb5_paths};

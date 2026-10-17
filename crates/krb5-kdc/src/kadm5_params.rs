@@ -49,10 +49,7 @@ pub fn realm_kadm5_params_missing(
     if paths.conf.is_none() {
         return false;
     }
-    let Ok(bytes) = std::fs::read(&paths.profile) else {
-        return false;
-    };
-    KdcConf::parse_for_realm(&String::from_utf8_lossy(&bytes), realm)
+    KdcConf::load_file_for_realm(&paths.profile, realm)
         .is_ok_and(|conf| kadm5_params_missing(&conf, with_master_key_type))
 }
 

@@ -536,10 +536,34 @@ impl PrincipalStore {
         );
     }
 
+    /// Apply a program's profile in one order: krb5.conf's `[libdefaults]`, `[capaths]` and
+    /// `[domain_realm]`, then the realm's kdc.conf, whose values win, then `[plugins]` and `[otp]`
+    /// from both files.
+    /// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:340-366`): kdc.conf is the KDC profile's first file, so its `[libdefaults]` values are read before krb5.conf's.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::apply_kdc_conf`].
+    pub fn apply_profile(&mut self, profile: &krb5_config::ProfileSet) -> Result<(), Error> {
+        self.set_capaths(profile.krb5.capaths.clone());
+        self.apply_libdefaults(&profile.krb5);
+        let (kdc, krb5) = (profile.kdc.as_ref(), Some(&profile.krb5));
+        if let Some(conf) = kdc {
+            self.apply_kdc_conf(conf)?;
+        }
+        self.apply_kdcpreauth_plugins(kdc, krb5);
+        self.apply_otp(kdc, krb5);
+        self.apply_kdcpolicy_plugins(kdc, krb5);
+        self.apply_audit_plugins(kdc, krb5);
+        self.apply_pwqual_plugins(kdc, krb5);
+        self.apply_kadm5_hook_plugins(kdc, krb5);
+        Ok(())
+    }
+
     /// Overlay `[libdefaults]` `allow_rc4` / `allow_des3` / `permitted_enctypes`.
     pub fn apply_libdefaults(&mut self, conf: &krb5_config::Krb5Conf) {
         // krb5.conf [libdefaults] is the base; kdc.conf overrides it (applied
-        // last in the KDC bin), so `allow_weak_crypto` here reaches the KDC.
+        // after it by `apply_profile`), so `allow_weak_crypto` here reaches the KDC.
         self.policy.allow_weak_crypto = conf.allow_weak_crypto;
         if let Some(v) = conf.allow_rc4 {
             self.policy.allow_rc4 = v;

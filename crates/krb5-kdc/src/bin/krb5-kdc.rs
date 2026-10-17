@@ -274,31 +274,27 @@ fn main() {
     if foreground && !test_realm && manual_master_key(opts.args.manual, &paths) {
         store = init_realm(&progname, &realm, &paths, &opts.args);
     }
-    // MIT builds the KDC profile with kdc.conf before krb5.conf, so kdc.conf
-    // wins (`init_os_ctx.c add_kdc_config_file`). Apply krb5.conf [libdefaults]
-    // first as the base, then let kdc.conf override.
-    let krb5_conf = krb5_config::load_krb5_conf();
-    if let Some(c) = krb5_conf.as_ref() {
-        store.set_capaths(c.capaths.clone());
-        store.apply_libdefaults(c);
-    }
-    if let Some(conf) = &kdc_conf
-        && let Err(e) = store.apply_kdc_conf(conf)
-    {
+    // MIT `main` (`kdc/main.c:917-921`): the realm's profile, kdc.conf before krb5.conf, read once
+    // and applied in one order; a profile that does not load ends krb5kdc.
+    let profile = krb5_config::ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
+        let argv0 = argv.first().map_or("krb5kdc", String::as_str);
+        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    });
+    if let Err(e) = store.apply_profile(&profile) {
         eprintln!("{progname}: kdc.conf: {e}");
         std::process::exit(2);
     }
-    // MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then disable and enable_only select which modules load.
-    // MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is the first profile file, ahead of krb5.conf.
-    store.apply_kdcpreauth_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
-    // MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the otp module reads `[otp]` from the same profile, once, when it starts.
-    store.apply_otp(kdc_conf.as_ref(), krb5_conf.as_ref());
-    // MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the same profile selects kdcpolicy modules.
-    store.apply_kdcpolicy_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    // A relation MIT's programs read and this one reads past is named once in the log.
+    for line in profile
+        .kdc
+        .iter()
+        .flat_map(krb5_config::KdcConf::unsupported_lines)
+    {
+        klog::syslog(Severity::Warning, &line);
+    }
     // MIT `plugins/kdcpolicy/test` has no `.so` here. `enable_only = test` registers it.
     krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
-    // MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): the same profile selects audit modules.
-    store.apply_audit_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
     // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
