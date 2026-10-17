@@ -146,6 +146,7 @@ pub fn manual_master_key(manual: bool, paths: &krb5_config::KdcPaths) -> bool {
         return false;
     }
     #[cfg(feature = "test-hooks")]
+    #[allow(clippy::disallowed_methods, reason = "a test-hooks build's override")]
     if std::env::var_os("KRB5_KDC_STASH").is_some() {
         return false;
     }
@@ -343,6 +344,10 @@ impl Signals {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
 mod tests {
     use super::*;
     use krb5_log::klog::{self, Severity};

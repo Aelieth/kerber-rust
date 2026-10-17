@@ -1424,6 +1424,7 @@ fn master_for_save(
         let etype = persist_master_etype(realm)?;
         // MIT `kdb5_create` (`kadmin/dbutil/kdb5_create.c:200-220`): the master password is `-P` or typed, never the environment; the gates' variable is a test hook.
         #[cfg(feature = "test-hooks")]
+        #[allow(clippy::disallowed_methods, reason = "a test-hooks build's override")]
         let hooked = std::env::var("KRB5_MASTER_PASSWORD")
             .ok()
             .map(zeroize::Zeroizing::new);
@@ -1481,6 +1482,10 @@ fn legacy_key(stash: Option<&[u8]>) -> Result<&[u8], PersistError> {
 /// [`krb5_config::KdcPaths::master_key_type`] resolves for it (the realm's kdc.conf
 /// `master_key_type`, or what overrides that resolver takes), else
 /// [`crate::default_master_etype`], as `krb5-kdb` resolves it.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "read once, as the database is made"
+)]
 fn persist_master_etype(realm: &str) -> Result<EncryptionType, PersistError> {
     let paths = krb5_config::KdcPaths::resolve(Some(realm))
         .map_err(|e| PersistError::Format(format!("kdc.conf: {e}")))?;

@@ -49,6 +49,10 @@
 //! `tgs-authenticator-etype-mismatch`, `as-fast-armored-data-etype-mismatch`.
 
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::env;
 use std::fmt::Write as _;

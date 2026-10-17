@@ -83,6 +83,10 @@ fn set_trace_filename(name: &std::ffi::OsStr) -> Option<File> {
 /// glibc's `secure_getenv`: nothing in a program the kernel marks secure (`AT_SECURE`, a setuid,
 /// setgid or file-capability exec), so such a program never writes a file its caller names. The
 /// kernel is asked only when the variable is set.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "MIT reads KRB5_TRACE as each context is made"
+)]
 fn secure_getenv(name: &str) -> Option<OsString> {
     let value = std::env::var_os(name)?;
     (!secure_exec()).then_some(value)

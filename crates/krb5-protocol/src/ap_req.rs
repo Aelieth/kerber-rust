@@ -52,8 +52,13 @@ pub struct ApVerifyParams<'a> {
     /// in place of `keys` and `key_kvnos`: for the named server, or, when none is named, for the
     /// server the ticket names.
     pub get_entry: Option<KeytabGetEntry<'a>>,
-    /// Clock skew in seconds.
+    /// Clock skew in seconds; a negative one fails every time check.
     pub skew: i64,
+    /// `ignore_acceptor_hostname`: a host-based server name matches a key of that service for any
+    /// host.
+    pub ignore_acceptor_hostname: bool,
+    /// `[capaths]`, for the transited check of a cross-realm ticket.
+    pub capaths: &'a BTreeMap<String, BTreeMap<String, Vec<String>>>,
     /// The sender's address, which the ticket's caddr must hold (MIT's auth context remote
     /// address, see [`address_search`]); `None` checks no address.
     pub remote_addr: Option<&'a HostAddress>,
@@ -61,8 +66,11 @@ pub struct ApVerifyParams<'a> {
     pub now: Option<KerberosTime>,
 }
 
+/// No `[capaths]`.
+static NO_CAPATHS: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+
 impl<'a> ApVerifyParams<'a> {
-    /// Single service key, 300s skew, no name check.
+    /// Single service key, 300s skew, no name check, the hostname kept, no `[capaths]`.
     #[must_use]
     pub fn single_key(key: &'a ProtocolKey) -> Self {
         Self {
@@ -74,6 +82,8 @@ impl<'a> ApVerifyParams<'a> {
             expected_realm: None,
             get_entry: None,
             skew: DEFAULT_SKEW,
+            ignore_acceptor_hostname: false,
+            capaths: &NO_CAPATHS,
             remote_addr: None,
             now: None,
         }
@@ -712,7 +722,7 @@ fn verify_inner(
         return Err(Error::TruncatedReply);
     }
     let ap: ApReq = decode(raw)?;
-    let ignore_host = krb5_config::load_krb5_conf().is_some_and(|c| c.ignore_acceptor_hostname);
+    let ignore_host = params.ignore_acceptor_hostname;
     let tkt_usage = KeyUsage::new(ku::TICKET)?;
     let explicit = !is_matching(params.expected_server, params.expected_realm, ignore_host);
     let by_lookup = params.get_entry.is_some();
@@ -734,7 +744,8 @@ fn verify_inner(
     };
     let tkt_etype = ap.ticket.enc_part.etype;
     let now = params.now.clone().unwrap_or_else(KerberosTime::now);
-    let skew = params.skew.max(0);
+    // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:250-252`): the skew is the profile's integer as written, a negative one too.
+    let skew = params.skew;
     // MIT `krb5int_validate_times` (`valid_times.c:36-57`): use starttime, else authtime, for
     // the not-yet-valid test — a ticket with no starttime is gated by its authtime, not left
     // unchecked.
@@ -742,13 +753,13 @@ fn verify_inner(
         .starttime
         .as_ref()
         .unwrap_or(&ticket_part.authtime);
-    if now.delta_seconds(start) < -skew {
+    if now.delta_seconds(start) < skew.saturating_neg() {
         return Err(Error::KrbError {
             code: err::TKT_NYV,
             text: Some("ticket not yet valid".into()),
         });
     }
-    if ticket_part.endtime.delta_seconds(&now) < -skew {
+    if ticket_part.endtime.delta_seconds(&now) < skew.saturating_neg() {
         return Err(Error::KrbError {
             code: err::TKT_EXPIRED,
             text: Some("ticket expired".into()),
@@ -773,7 +784,7 @@ fn verify_inner(
         });
     }
     let srealm_text = String::from_utf8_lossy(srealm.as_bytes()).into_owned();
-    check_ap_req_transited(&ticket_part, &srealm_text)?;
+    check_ap_req_transited(&ticket_part, &srealm_text, params.capaths)?;
     let session_etype = EncryptionType::known(ticket_part.key.keytype)?;
     let session = ProtocolKey::from_bytes(session_etype, ticket_part.key.keyvalue.as_ref())?;
     let auth_usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
@@ -795,9 +806,9 @@ fn verify_inner(
             text: Some("authenticator/ticket client mismatch".into()),
         });
     }
+    // MIT `krb5_check_clockskew` (`lib/krb5/os/timeofday.c:55-67`): `ts_within` the skew, which a negative skew never is.
     let skew_delta = now.delta_seconds(&authenticator.ctime).unsigned_abs();
-    let skew_limit = u64::try_from(skew.max(0)).unwrap_or(u64::MAX);
-    if skew_delta > skew_limit {
+    if !u64::try_from(skew).is_ok_and(|limit| skew_delta <= limit) {
         return Err(Error::KrbError {
             code: err::SKEW,
             text: Some("authenticator clock skew".into()),
@@ -843,7 +854,11 @@ fn verify_inner(
 /// and the transited field is non-empty, `krb5_check_transited_list` checks the transited list.
 /// MIT `krb5_check_transited_list` (`chk_trans.c:309-355`): requires every hop in the
 /// `krb5_walk_realm_tree` list. Anonymous crealm skips the check.
-fn check_ap_req_transited(part: &EncTicketPart, srealm: &str) -> Result<(), Error> {
+fn check_ap_req_transited(
+    part: &EncTicketPart,
+    srealm: &str,
+    capaths: &BTreeMap<String, BTreeMap<String, Vec<String>>>,
+) -> Result<(), Error> {
     if part.flags.bit(flag_bit::TRANSITED_POLICY_CHECKED) {
         return Ok(());
     }
@@ -862,10 +877,7 @@ fn check_ap_req_transited(part: &EncTicketPart, srealm: &str) -> Result<(), Erro
             code: err::ILL_CR_TKT,
             text: Some("ill-formed transited list".into()),
         })?;
-    let capaths = krb5_config::load_krb5_conf()
-        .map(|c| c.capaths)
-        .unwrap_or_default();
-    let allowed = walk_realm_tree(&capaths, &crealm, srealm);
+    let allowed = walk_realm_tree(capaths, &crealm, srealm);
     for h in hops {
         if !allowed.iter().any(|a| a == &h) {
             return Err(Error::KrbError {

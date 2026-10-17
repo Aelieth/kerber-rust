@@ -134,6 +134,7 @@ pub(super) fn extract_delegated(
 /// the credential to its caller and reads no environment for it, so a release acceptor (kadmind's
 /// RPCSEC_GSS) keeps only the name.
 #[cfg(feature = "test-hooks")]
+#[allow(clippy::disallowed_methods, reason = "a test-hooks build's override")]
 mod hooks {
     use krb5_asn1::encode;
     use krb5_crypto::{EncryptionType, ProtocolKey};

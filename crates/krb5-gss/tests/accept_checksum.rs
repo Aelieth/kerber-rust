@@ -13,7 +13,7 @@ use krb5_kdc::testrealm::{
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
-use krb5_protocol::{ReplayCache, build_ap_req_with_cksum};
+use krb5_protocol::{AcceptorConfig, ReplayCache, build_ap_req_with_cksum};
 use krb5_types::{ApOptions, Checksum, EncryptionKey, PrincipalName, ascii, ku};
 
 fn host_ticket() -> (
@@ -105,6 +105,7 @@ fn accept_no_checksum_is_flags_zero_and_no_ap_rep() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     assert!(rep.is_none());
@@ -147,6 +148,7 @@ fn accept_non_8003_empty_with_subkey_uses_session_key() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     assert!(rep.is_some());
@@ -184,6 +186,7 @@ fn accept_cb_mismatch_is_bad_bindings() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) {
         Err(Error::ChannelBindings) => {}
         Err(e) => panic!("expected channel bindings, got {e}"),
@@ -215,6 +218,7 @@ fn accept_cb_match_sets_channel_bound() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     assert_ne!(acc.inquire_context().flags & GSS_C_CHANNEL_BOUND, 0);
@@ -247,6 +251,7 @@ fn accept_cb_len_not_16_is_failure() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) {
         Err(Error::Inner(s)) if s.contains("gss failure") => {}
         Err(e) => panic!("expected gss failure, got {e}"),
@@ -282,6 +287,7 @@ fn accept_initiator_flags_are_masked() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     let flags = acc.inquire_context().flags;
@@ -320,6 +326,7 @@ fn accept_bad_deleg_option_id_is_failure() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) {
         Err(Error::Inner(s)) if s.contains("gss failure") => {}
         Err(e) => panic!("expected gss failure, got {e}"),
@@ -357,6 +364,7 @@ fn accept_trailing_extensions_are_skipped() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     assert!(rep.is_some());
@@ -417,6 +425,7 @@ fn accept_zero_token_cb_with_acceptor_cb_is_ok() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .expect("all-zero token CB is accepted when the acceptor has bindings");
 }

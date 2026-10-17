@@ -14,7 +14,9 @@ use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::{TEST_HOST, TEST_REALM, bootstrap_documented, documented_host};
 use krb5_kdc::{PrincipalStore, issue_as, issue_tgs};
 
-use krb5_protocol::{ReplayCache, as_req, local_host_address, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{
+    AcceptorConfig, ReplayCache, as_req, local_host_address, pa_enc_timestamp, tgs_req,
+};
 use krb5_types::Ticket;
 use std::net::{TcpListener, TcpStream};
 use std::thread::{self, JoinHandle};
@@ -75,6 +77,7 @@ fn spawn_kpropd(
             Some(TEST_REALM),
             acl.as_deref(),
             &ReplayCache::new(),
+            &AcceptorConfig::default(),
         )
     });
     (addr, join)

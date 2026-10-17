@@ -11,7 +11,7 @@ use super::wrap::{FLAG_SEALED, TOK_WRAP, mit_shaped_wrap_flags};
 use super::*;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{KeyUsage, decrypt, encrypt};
-use krb5_protocol::{ReplayCache, build_ap_req_with_cksum};
+use krb5_protocol::{AcceptorConfig, ReplayCache, build_ap_req_with_cksum};
 use krb5_types::{
     ApOptions, ApRep, Checksum, EncKrbCredPart, EncryptedData, EncryptionKey, KerberosTime,
     KrbCred, KrbCredInfo, Microseconds, PrincipalName, TicketFlags, ku,
@@ -84,6 +84,7 @@ fn contexts() -> (GssContext, GssContext) {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     (init, acc)
@@ -264,6 +265,7 @@ fn accept_short_8003_is_channel_bindings() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) {
         Err(Error::ChannelBindings) => {}
         Err(err) => panic!("short 0x8003 must be ChannelBindings, got {err}"),
@@ -291,6 +293,7 @@ fn accept_non_8003_over_data_is_bad_sig() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) {
         Err(Error::Integrity) => {}
         Err(err) => panic!("non-0x8003 over data must be Integrity, got {err}"),
@@ -358,6 +361,7 @@ fn spnego_accept_rejects_mech_list_without_krb5() {
             Some(&documented_host()),
             Some(TEST_REALM),
             &ReplayCache::new(),
+            &AcceptorConfig::default(),
         ),
         Err(Error::Truncated)
     ));
@@ -394,6 +398,7 @@ fn spnego_duplicate_mech_types_is_truncated() {
             Some(&documented_host()),
             Some(TEST_REALM),
             &ReplayCache::new(),
+            &AcceptorConfig::default(),
         ),
         Err(Error::Truncated)
     ));
@@ -408,7 +413,15 @@ fn spnego_hostile_length_is_truncated_not_panic() {
     assert!(r.is_ok(), "hostile SPNEGO length must not panic");
     assert!(matches!(r.unwrap(), Err(Error::Truncated)));
     assert!(matches!(
-        spnego_accept(&tok, &[], None, None, None, &ReplayCache::new()),
+        spnego_accept(
+            &tok,
+            &[],
+            None,
+            None,
+            None,
+            &ReplayCache::new(),
+            &AcceptorConfig::default()
+        ),
         Err(Error::Truncated)
     ));
 }
@@ -547,6 +560,7 @@ fn accept_hostile_dlgth_is_truncated() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) else {
         panic!("hostile Dlgth must not accept")
     };
@@ -626,6 +640,7 @@ fn accept_plaintext_krb_cred_is_refused() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) else {
         panic!("plaintext EncKrbCredPart must not populate delegated()")
     };
@@ -814,6 +829,7 @@ fn without_mutual_the_acceptor_sends_from_the_initiators_seq() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     assert!(rep.is_none());
@@ -861,6 +877,7 @@ fn dce_third_leg_carries_the_acceptors_random_seq() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     let part = acceptor_ap_rep(&rep.unwrap(), &tgs_out.session_key);
@@ -914,6 +931,7 @@ fn mutual_pair() -> (GssContext, GssContext, Vec<u8>, ProtocolKey) {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     (init, acc, rep.unwrap(), tgs_out.session_key)
@@ -938,14 +956,11 @@ fn the_acceptor_refuses_ticket_and_session_enctypes_it_does_not_permit() {
     let plain = decrypt(&skey, usage, resealed.enc_part.cipher.as_ref()).unwrap();
     resealed.enc_part.cipher = encrypt(&aes128, usage, &plain).unwrap().into();
     resealed.enc_part.etype = aes128.etype().to_iana();
-    let dir = krb5_testkit::scratch_dir("p15a-gss-permitted");
-    let conf = dir.join("krb5.conf");
-    std::fs::write(
-        &conf,
+    let profile = krb5_config::Krb5Conf::parse(
         "[libdefaults]\n    permitted_enctypes = aes128-cts-hmac-sha1-96\n",
     )
     .unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![conf]));
+    let conf = AcceptorConfig::from_krb5_conf(&profile);
     let accept = |ticket: &krb5_types::Ticket, key: &ProtocolKey| {
         let (_init, token) = GssContext::init_sec_context(
             ticket.clone(),
@@ -964,13 +979,12 @@ fn the_acceptor_refuses_ticket_and_session_enctypes_it_does_not_permit() {
             Some(&documented_host()),
             Some(TEST_REALM),
             &ReplayCache::new(),
+            &conf,
         )
         .map(|_| ())
     };
     let ticket_first = accept(&tgs_out.rep.0.ticket, &skey);
     let session_next = accept(&resealed, &aes128);
-    krb5_config::set_test_krb5_paths(None);
-    let _ = std::fs::remove_dir_all(&dir);
     for (got, want) in [
         (ticket_first, "Encryption type not permitted"),
         (

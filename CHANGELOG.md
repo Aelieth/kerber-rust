@@ -23,12 +23,14 @@ any other `###` heading.
 - **config.** kdc.conf is read for the served realm alone, and `reject_bad_transit`, `disable_pac` and `restrict_anonymous_to_tgt` as MIT reads them. Lab beside MIT.
 - **config/kdc.** `[libdefaults] clockskew`, kdc.conf's first, is the KDC's skew (it was always 300), read as MIT's integer. Lab beside MIT.
 - **admin.** kpasswd checks an AP-REQ's time against the profile's `clockskew`, kdc.conf's first, not a fixed 300 s; a negative one is kept, as MIT's. Lab beside MIT.
+- **admin/gss.** kadmind and kpropd read the profile once, kdc.conf first: no request opens krb5.conf or kdc.conf, and kpropd's skew is the profile's. Lab beside MIT.
 
 ### Changed
 
 - **kdc.** A database change skips the whole-realm reread when no other writer moved the database, merging only the KDC's lockout records; a failed change is undone in memory.
 - **config.** The KDC, kadmind and kadmin.local read their profile once and apply it in one order, kdc.conf over krb5.conf; kadmind let krb5.conf win.
 - **config.** kdc.conf follows `include` and `includedir` and matches names as written, as MIT; the daemons log each relation MIT reads that is not supported.
+- **protocol/gss.** `AcceptorConfig` holds an acceptor's profile values; the GSS accept calls, kpasswd and kpropd take it, and `use_kdc_context` is gone.
 
 ### Tests and CI
 
@@ -47,6 +49,7 @@ any other `###` heading.
 - **kdc.** `krb5kdc -m` and `kadmind -m` read the master key once from the keyboard when kdc.conf names no stash.
 - **kdc.** A foreground `-m` reads the master key twice, and `kadmind -m` reads it when a stash is named.
 - **kdc.** A master key that does not decrypt logs MIT's failure while fetching the master keys list.
+- **protocol.** A negative `clockskew` fails every ticket and authenticator time check, as MIT's; `verify_init_creds` takes the profile's skew, not 300 s.
 
 ## [1.1.0] - 2026-10-14
 

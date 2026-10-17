@@ -8,7 +8,8 @@ use krb5_types::{
     EncKdcRepPart, EncryptionKey, KerberosTime, PrincipalName, Realm, Ticket, TicketFlags,
 };
 
-use crate::ap_req::{ApVerifyParams, DEFAULT_SKEW, build_ap_req, verify_ap_req_ex};
+use crate::acceptor_conf::AcceptorConfig;
+use crate::ap_req::{ApVerifyParams, build_ap_req, verify_ap_req_ex};
 use crate::as_ex::AsOutcome;
 use crate::ccmarshal::CcacheCred;
 use crate::error::Error;
@@ -79,12 +80,17 @@ pub fn verify_init_creds(
     kdc: &KdcAddr,
     nofail: bool,
 ) -> Result<(), Error> {
+    // MIT `get_vfy_cred` (`lib/krb5/krb/vfy_increds.c:151-151`): `krb5_rd_req` on the caller's own context, whose profile is krb5.conf.
+    let profile = krb5_config::load_krb5_conf();
+    let conf = profile
+        .as_ref()
+        .map_or_else(AcceptorConfig::default, AcceptorConfig::from_krb5_conf);
     let mut last = Err(no_verify_keys());
     let mut have_keys = false;
     if let Some((realm, name)) = server {
         if let Some(kt) = keytab.filter(|kt| keytab_has_server(kt, realm, name)) {
             have_keys = true;
-            last = get_vfy_cred(creds, realm, name, kt, kdc);
+            last = get_vfy_cred(creds, realm, name, kt, kdc, &conf);
         }
     } else if let Some(kt) = keytab {
         let hosts = host_princs_from_keytab(kt);
@@ -92,7 +98,7 @@ pub fn verify_init_creds(
             have_keys = true;
             last = Err(no_verify_keys());
             for (realm, name) in &hosts {
-                last = get_vfy_cred(creds, realm, name, kt, kdc);
+                last = get_vfy_cred(creds, realm, name, kt, kdc, &conf);
                 if last.is_ok() {
                     break;
                 }
@@ -125,6 +131,7 @@ fn get_vfy_cred(
     name: &PrincipalName,
     keytab: &Keytab,
     kdc: &KdcAddr,
+    conf: &AcceptorConfig,
 ) -> Result<(), Error> {
     let session = creds.session_key()?;
     let ticket: Ticket = decode(&creds.ticket)?;
@@ -161,7 +168,9 @@ fn get_vfy_cred(
         expected_server: Some(name),
         expected_realm: Some(realm_s.as_str()),
         get_entry: None,
-        skew: DEFAULT_SKEW,
+        skew: i64::from(conf.clockskew),
+        ignore_acceptor_hostname: conf.ignore_acceptor_hostname,
+        capaths: &conf.capaths,
         remote_addr: None,
         now: None,
     };

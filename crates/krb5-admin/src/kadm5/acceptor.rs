@@ -13,7 +13,7 @@ use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::{PrincipalStore, SharedDump as SharedStore, ktkdb_get_entry};
 use krb5_log::klog::{self, Severity};
 use krb5_protocol::{
-    ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, KeytabLookup, ReplayCache, verify_ap_req_ex,
+    AcceptorConfig, ApVerifyOk, ApVerifyParams, KeytabLookup, ReplayCache, verify_ap_req_ex,
 };
 use krb5_types::PrincipalName;
 
@@ -45,7 +45,7 @@ fn kdb_keytab_entry(
 }
 
 /// A context accepted from `token` with the key the KDB keytab gives: for `acceptor`, or, with no
-/// name (`GSS_C_NO_NAME`), for the server the ticket names.
+/// name (`GSS_C_NO_NAME`), for the server the ticket names; `conf` is kadmind's KDC context's.
 /// MIT `kg_accept_krb5` (`lib/gssapi/krb5/accept_sec_context.c:829-831`): `krb5_rd_req_decoded` takes the credential's `acceptor_mprinc` (NULL for no name) and its keytab.
 pub(super) fn accept_from_kdb(
     store: &SharedStore,
@@ -54,10 +54,11 @@ pub(super) fn accept_from_kdb(
     token: &[u8],
     bindings: Option<&ChannelBindings>,
     rcache: &ReplayCache,
+    conf: &AcceptorConfig,
 ) -> Result<(GssContext, Option<Vec<u8>>), krb5_gss::Error> {
-    let permitted = GssContext::acceptor_permitted_enctypes()?;
-    let get_entry = kdb_get_entry(store, &permitted);
-    GssContext::accept_sec_context_kdb(token, acceptor, realm, &get_entry, bindings, rcache)
+    let permitted = conf.permitted()?;
+    let get_entry = kdb_get_entry(store, permitted);
+    GssContext::accept_sec_context_kdb(token, acceptor, realm, &get_entry, bindings, rcache, conf)
 }
 
 /// The KDB keytab's `krb5_kt_get_entry` as the AP-REQ verifier takes it.
@@ -72,23 +73,24 @@ fn kdb_get_entry<'a>(
 
 /// `krb5_rd_req` as kadmind's GSS acceptor makes it, without the GSS layer: the AP-REQ `ap_req`
 /// against the KDB keytab for `acceptor` in `realm`, or, with none (`GSS_C_NO_NAME`), for the server
-/// the ticket names. `permitted` is the enctypes the KDB gives keys of. What the rd-priv oracle gate
-/// compares with MIT's own call.
+/// the ticket names, on the profile values `conf` (the KDB gives keys of the enctypes it permits).
+/// What the rd-priv oracle gate compares with MIT's own call.
 /// MIT `kg_accept_krb5` (`lib/gssapi/krb5/accept_sec_context.c:829-831`): `krb5_rd_req_decoded` with the credential's `acceptor_mprinc` and its keytab.
 ///
 /// # Errors
 ///
-/// What the verifier refuses the AP-REQ with: the lookup's codes as `keytab_fetch_error` maps them, a
-/// key that does not decrypt the ticket, and the ticket and authenticator checks.
+/// [`krb5_protocol::Error::ConfigEtypeNosupp`] when `conf` permits no enctype; what the verifier
+/// refuses the AP-REQ with: the lookup's codes as `keytab_fetch_error` maps them, a key that does
+/// not decrypt the ticket, and the ticket and authenticator checks.
 pub fn kdb_rd_req(
     store: &SharedStore,
     realm: &str,
     acceptor: Option<&PrincipalName>,
-    permitted: &[EncryptionType],
+    conf: &AcceptorConfig,
     ap_req: &[u8],
     rcache: &ReplayCache,
 ) -> Result<ApVerifyOk, krb5_protocol::Error> {
-    let get_entry = kdb_get_entry(store, permitted);
+    let get_entry = kdb_get_entry(store, conf.permitted()?);
     let params = ApVerifyParams {
         keys: &[],
         key_kvnos: None,
@@ -97,7 +99,9 @@ pub fn kdb_rd_req(
         expected_server: acceptor,
         expected_realm: Some(realm),
         get_entry: Some(&get_entry),
-        skew: DEFAULT_SKEW,
+        skew: i64::from(conf.clockskew),
+        ignore_acceptor_hostname: conf.ignore_acceptor_hostname,
+        capaths: &conf.capaths,
         remote_addr: None,
         now: None,
     };
@@ -115,10 +119,11 @@ pub(super) fn accept_auth_gssapi(
     token: &[u8],
     bindings: Option<&ChannelBindings>,
     rcache: &ReplayCache,
+    conf: &AcceptorConfig,
 ) -> Result<(GssContext, Option<Vec<u8>>), krb5_gss::Error> {
     let mut result = Err(krb5_gss::Error::Truncated);
     for name in [kadmin_admin(), kadmin_changepw()] {
-        result = accept_from_kdb(store, realm, Some(&name), token, bindings, rcache);
+        result = accept_from_kdb(store, realm, Some(&name), token, bindings, rcache, conf);
         if !matches!(result, Err(krb5_gss::Error::NotUs(_))) {
             break;
         }
@@ -131,8 +136,8 @@ pub(super) fn accept_auth_gssapi(
 /// MIT `check_keytab` (`lib/gssapi/krb5/acquire_cred.c:126-138`): a credential for a name that is not host-based asks `krb5_kt_get_entry(kt, princ, 0, 0)` for it.
 /// MIT `main` (`kadmin/server/ovsec_kadmd.c:476-477`): kadmind fails to start, "Cannot set GSSAPI authentication names", when a credential cannot be acquired.
 #[must_use]
-pub fn acceptor_names_served(store: &PrincipalStore) -> bool {
-    let Ok(permitted) = GssContext::acceptor_permitted_enctypes() else {
+pub fn acceptor_names_served(store: &PrincipalStore, conf: &AcceptorConfig) -> bool {
+    let Ok(permitted) = conf.permitted() else {
         return false;
     };
     let realm = store.realm();

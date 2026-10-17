@@ -1,5 +1,10 @@
 //! On-disk include-tree and discover_kdc_in integration tests.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
+
 use std::path::PathBuf;
 
 use krb5_config::{Error, Krb5Conf, ProfileError, discover_kdc_in, load_krb5_conf_paths};

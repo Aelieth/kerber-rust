@@ -132,10 +132,23 @@ impl Krb5Conf {
     /// `includedir` directive (no `=`) sits inside a section, or a relation with no value is not
     /// followed by a line that starts with `{` (MIT's improper format); no other line fails.
     pub fn parse(text: &str) -> Result<Self, Error> {
+        Self::parse_files(&[text])
+    }
+
+    /// Parse the texts of several files as one profile, the first file first: a relation is
+    /// taken from the first file that sets it, as [`load_krb5_conf_paths`] merges files. No
+    /// `include` is followed.
+    ///
+    /// # Errors
+    ///
+    /// As [`Krb5Conf::parse`], for any of the texts.
+    pub fn parse_files(texts: &[&str]) -> Result<Self, Error> {
         let mut conf = Self::new();
         let mut seen = BTreeSet::new();
         let mut plugin_profile = super::plugin_profile::PluginProfile::default();
-        parse_into(&mut conf, &mut seen, text, None, &mut plugin_profile)?;
+        for text in texts {
+            parse_into(&mut conf, &mut seen, text, None, &mut plugin_profile)?;
+        }
         conf.plugins = plugin_profile;
         Ok(conf)
     }

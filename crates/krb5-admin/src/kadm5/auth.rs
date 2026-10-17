@@ -86,8 +86,9 @@ pub(super) fn handle_rpcsec_gss(
 ) -> Result<Vec<u8>, Error> {
     let RpcCtx {
         store,
-        acl,
         expected_realm,
+        conf,
+        ..
     } = ctx;
     let _ = verf_flavor;
     let mut r = XdrR::new(args);
@@ -119,7 +120,7 @@ pub(super) fn handle_rpcsec_gss(
             // not establish is logged (`log_badauth`) and refused.
             // MIT `svcauth_gss_acquire_cred` (`svc_auth_gss.c:149-157`): kadmind accepts with `GSS_C_NO_NAME` against the KDB keytab.
             let (mut ctx, out_tok) =
-                match accept_from_kdb(store, expected_realm, None, &token, None, rcache) {
+                match accept_from_kdb(store, expected_realm, None, &token, None, rcache, conf) {
                     Ok(accepted) => accepted,
                     Err(e) => {
                         rpc_log_badauth(addr, accept_major(&e), &e.to_string());
@@ -221,11 +222,7 @@ pub(super) fn handle_rpcsec_gss(
                 }
             };
             Ok(rpcsec_dispatch(
-                RpcCtx {
-                    store,
-                    acl,
-                    expected_realm,
-                },
+                ctx,
                 gd,
                 xid,
                 proc,
@@ -319,12 +316,7 @@ fn rpcsec_dispatch(
     seq: u32,
     addr: &str,
 ) -> Vec<u8> {
-    let RpcCtx {
-        store,
-        acl,
-        expected_realm,
-        ..
-    } = ctx;
+    let RpcCtx { expected_realm, .. } = ctx;
     let Some(actor) = gd.ctx.client.clone() else {
         return rpc_reply_weakauth(xid);
     };
@@ -351,11 +343,7 @@ fn rpcsec_dispatch(
     // clear are built in buffers of their size and wiped once used.
     let result = Zeroizing::new(
         match kadm5_or_iprop(
-            RpcCtx {
-                store,
-                acl,
-                expected_realm: ctx.expected_realm,
-            },
+            ctx,
             &actor,
             proc,
             kadm_args,
@@ -579,6 +567,7 @@ fn agss_init(
         &token,
         bindings.as_ref(),
         rcache,
+        ctx.conf,
     );
     let (mut gctx, out_tok) = match accepted {
         Ok(v) => v,
@@ -606,14 +595,13 @@ fn agss_init(
     let reply = init_res_reply(xid, res_ver, &st.handle, 0, &token, &signed_isn);
     // MIT `gssrpc__svcauth_gssapi` (`lib/rpc/svc_auth_gssapi.c:474-478`): an established record expires at `time_rec` plus now.
     // MIT `kg_accept_krb5` (`lib/gssapi/krb5/accept_sec_context.c:1128-1132`): `time_rec` adds the context clock skew as grace on the ticket end.
-    let skew = krb5_config::load_krb5_conf().map_or(300, |c| c.clockskew);
     st.expires = gctx.endtime().map_or_else(
         || {
             KerberosTime::now()
                 .unix_seconds()
                 .saturating_add(AGSS_INDEF_EXPIRE)
         },
-        |end| end.saturating_add_signed(skew),
+        |end| end.saturating_add_signed(ctx.conf.clockskew),
     );
     st.ctx = Some(gctx);
     st.seq = seq;
@@ -790,11 +778,7 @@ pub(super) fn agss_dispatch(
     reply_verf: &[u8],
     addr: &str,
 ) -> Vec<u8> {
-    let RpcCtx {
-        store,
-        acl,
-        expected_realm,
-    } = ctx;
+    let RpcCtx { expected_realm, .. } = ctx;
     let seq = st.seq;
     let Some(gctx) = st.ctx.as_mut() else {
         return rpc_reply_agss_status(xid, reply_verf, SYSTEM_ERR);
@@ -820,11 +804,7 @@ pub(super) fn agss_dispatch(
     // The result can carry keys (chrand, get_principal_keys): it is wiped once sealed.
     let result = Zeroizing::new(
         match kadm5_or_iprop(
-            RpcCtx {
-                store,
-                acl,
-                expected_realm,
-            },
+            ctx,
             &actor,
             proc,
             kadm_args,

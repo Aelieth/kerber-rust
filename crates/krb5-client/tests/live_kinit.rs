@@ -1,5 +1,10 @@
 //! Live AS/TGS against the MIT 1.22.2 harness when port 88 is reachable.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
+
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::time::Duration;

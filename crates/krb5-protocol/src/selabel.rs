@@ -470,6 +470,10 @@ fn may_match(regex: &str, path: &str) -> bool {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
 pub(crate) mod tests {
     use super::*;
     use std::cell::RefCell;

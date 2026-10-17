@@ -7,6 +7,10 @@
 //! The first failed exchanges are named on stderr, so a gate's log says why.
 
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::env;
 use std::sync::atomic::{AtomicU64, Ordering};

@@ -15,6 +15,10 @@
 
 mod getdate;
 mod kadm5;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a client operation reads its own profile (CF-4)"
+)]
 mod kadmin_cli;
 mod kadmind;
 mod kprop;

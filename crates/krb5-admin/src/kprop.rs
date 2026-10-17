@@ -17,9 +17,9 @@ use krb5_kdc::{
     load_dump_with_stash, save_store_fresh,
 };
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyParams, KeytabEntry, RemoteSeq,
-    ReplayCache, build_ap_req_mutual_seq, build_krb_safe_from, local_host_address,
-    permitted_enctypes_kdc, us_timeofday, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, AcceptorConfig, ApVerifyParams, KeytabEntry,
+    RemoteSeq, ReplayCache, build_ap_req_mutual_seq, build_krb_safe_from, local_host_address,
+    us_timeofday, verify_ap_req_ex,
 };
 use krb5_types::{
     ApReq, EncTicketPart, EncryptedData, EncryptionKey, HostAddress, KerberosTime, KrbError,
@@ -28,6 +28,10 @@ use krb5_types::{
 
 use crate::Error;
 
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a client operation reads its own profile (CF-4)"
+)]
 mod send;
 
 pub(crate) use send::is_app_tag;
@@ -320,6 +324,7 @@ pub fn kpropd_recvauth(
     expected_realm: Option<&str>,
     acl_lines: Option<&[String]>,
     replay: &ReplayCache,
+    conf: &AcceptorConfig,
 ) -> Result<KpropAuth, Error> {
     let keys = RecvauthKeys {
         keys: host_keys,
@@ -332,6 +337,7 @@ pub fn kpropd_recvauth(
         expected_realm,
         acl_lines,
         replay,
+        conf,
     )
 }
 
@@ -342,7 +348,7 @@ struct RecvauthKeys<'a> {
 }
 
 /// [`kpropd_recvauth`] with kpropd's keytab, whose key for the ticket is chosen as MIT's
-/// `krb5_rd_req` chooses it ([`kpropd_ticket_key`]).
+/// `krb5_rd_req` chooses it ([`kpropd_ticket_key`]), on kpropd's profile values `conf`.
 fn recvauth_with(
     stream: &mut TcpStream,
     keys: &RecvauthKeys<'_>,
@@ -350,6 +356,7 @@ fn recvauth_with(
     expected_realm: Option<&str>,
     acl_lines: Option<&[String]>,
     replay: &ReplayCache,
+    conf: &AcceptorConfig,
 ) -> Result<KpropAuth, Error> {
     let ver = read_message(stream).map_err(|e| Error::Inner(e.to_string()))?;
     if ver.as_slice() != SENDAUTH_VERSION {
@@ -369,7 +376,7 @@ fn recvauth_with(
     // decrypts the ticket, whatever server the ticket names.
     let chosen: [ProtocolKey; 1];
     let (verify_keys, verify_server, verify_realm) = match keys.keytab {
-        Some(kt) => match kpropd_ticket_key(&ap_raw, kt, expected_server, expected_realm) {
+        Some(kt) => match kpropd_ticket_key(&ap_raw, kt, expected_server, expected_realm, conf) {
             Ok(key) => {
                 chosen = [key];
                 (&chosen[..], None, None)
@@ -389,14 +396,16 @@ fn recvauth_with(
         expected_server: verify_server,
         expected_realm: verify_realm,
         get_entry: None,
-        skew: 300,
+        skew: i64::from(conf.clockskew),
+        ignore_acceptor_hostname: conf.ignore_acceptor_hostname,
+        capaths: &conf.capaths,
         remote_addr: None,
         now: None,
     };
     // MIT `recvauth_common` (`recvauth.c:139-205`): an AP-REQ `krb5_rd_req` refuses, an enctype the server does not permit among them, is answered with a KRB-ERROR, and a mutual one with `krb5_mk_rep`.
-    // MIT `parse_args` (`kprop/kpropd.c:1056-1058`): kpropd's context reads the KDC profile, so kdc.conf's `permitted_enctypes` comes first.
+    // MIT `parse_args` (`kprop/kpropd.c:1056-1058`): kpropd's context reads the KDC profile, so kdc.conf's `clockskew` and `permitted_enctypes` come first.
     let checked = verify_ap_req_ex(&ap_raw, &params, replay, None).and_then(|ok| {
-        let ac = AcceptorAuthContext::from_ap_req(&ok, &permitted_enctypes_kdc()?)?;
+        let ac = AcceptorAuthContext::from_ap_req(&ok, conf)?;
         Ok((ok, ac))
     });
     let (ok, mut ac) = match checked {
@@ -637,17 +646,17 @@ fn e_text_with_nul(text: &str) -> Option<krb5_types::KerberosString> {
 }
 
 /// The principal kpropd answers as, its realm aside: `host/` and this host's name
-/// ([`kpropd_server_name_for`] of `gethostname`'s).
+/// ([`kpropd_server_name_for`] of `gethostname`'s), on kpropd's profile `profile`.
 ///
 /// # Errors
 ///
 /// As [`kpropd_server_name_for`].
-pub fn kpropd_server_name() -> Result<PrincipalName, NameError> {
-    kpropd_server_name_for(&krb5_config::this_host())
+pub fn kpropd_server_name(profile: &krb5_config::Krb5Conf) -> Result<PrincipalName, NameError> {
+    kpropd_server_name_for(&krb5_config::this_host(), profile)
 }
 
 /// `host/` and `host`, as MIT's kpropd makes its own name with the profile its context reads
-/// (kdc.conf, then krb5.conf). Under `dns_canonicalize_hostname = fallback` (Fedora's) the name
+/// (`profile`: kdc.conf, then krb5.conf). Under `dns_canonicalize_hostname = fallback` (Fedora's) the name
 /// is kept as it is, and kpropd's keytab entry is looked up under the name expanded when the
 /// ticket comes ([`KpropdKeys::lookup`]); otherwise it is the expanded name. The name is expanded
 /// without DNS ([`krb5_config::expand_hostname`]): a name without a dot gains
@@ -662,13 +671,14 @@ pub fn kpropd_server_name() -> Result<PrincipalName, NameError> {
 ///
 /// [`NameError::NotGeneralString`] for a name that is not ASCII, which this port's principal
 /// names cannot hold (MIT's can): kpropd then stops, as MIT's does when it cannot make the name.
-pub fn kpropd_server_name_for(host: &str) -> Result<PrincipalName, NameError> {
-    let conf = krb5_config::load_krb5_conf_paths(crate::kadmin_cli::krb5_conf_paths_with_kdc())
-        .unwrap_or_default();
-    let host = if conf.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback {
+pub fn kpropd_server_name_for(
+    host: &str,
+    profile: &krb5_config::Krb5Conf,
+) -> Result<PrincipalName, NameError> {
+    let host = if profile.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback {
         host.to_owned()
     } else {
-        krb5_config::expand_hostname(host, &conf)
+        krb5_config::expand_hostname(host, profile)
     };
     PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", host.as_str()])
 }
@@ -711,10 +721,11 @@ fn kpropd_lookup_name(
     }
 }
 
-/// kpropd's own name for a KRB-ERROR that has no server given: [`kpropd_server_name`], else, for
-/// a name this port cannot hold, `????` as MIT's recvauth names a server it was not given.
+/// The server a KRB-ERROR names when recvauth was given none. kpropd itself always gives its own
+/// principal, as MIT's does.
+/// MIT `recvauth_common` (`lib/krb5/krb/recvauth.c:156-162`): with no server, the name `????` that `krb5_parse_name` makes.
 fn kpropd_error_server() -> PrincipalName {
-    kpropd_server_name().unwrap_or_else(|_| PrincipalName::new(PrincipalName::NT_UNKNOWN, ["????"]))
+    PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["????"])
 }
 
 /// MIT `recvauth_common` (`recvauth.c:150-188`): AP-REQ failure is a length-prefixed KRB-ERROR.
@@ -788,6 +799,7 @@ fn kpropd_ticket_key(
     kt: &KpropdKeys,
     server: Option<&PrincipalName>,
     realm: Option<&str>,
+    conf: &AcceptorConfig,
 ) -> Result<ProtocolKey, (Vec<u8>, String)> {
     let refuse = |code: i32| {
         let text = recvauth_protocol_text(code);
@@ -807,7 +819,7 @@ fn kpropd_ticket_key(
         return Err(generic(text));
     }
     // MIT `krb5_is_permitted_enctype` (`lib/krb5/krb/init_ctx.c:603-605`): a permitted list that cannot be had permits nothing.
-    let permitted = permitted_enctypes_kdc().unwrap_or_default();
+    let permitted = conf.permitted().unwrap_or_default();
     let ticket = &ap.ticket;
     let realm_b = realm.unwrap_or_default().as_bytes();
     let (tkt_kvno, tkt_etype) = (ticket.enc_part.kvno.unwrap_or(0), ticket.enc_part.etype);
@@ -843,7 +855,7 @@ fn kpropd_ticket_key(
             KtGet::KvnoNotFound => return Err(refuse(err::NOT_US)),
             KtGet::NotFound => return Err(refuse(err::NOKEY)),
         };
-        return match decrypt_ticket_part(&entry.key, ticket, &permitted) {
+        return match decrypt_ticket_part(&entry.key, ticket, permitted) {
             Ok(()) => Ok(entry.key.clone()),
             Err(TicketPart::Integrity) if own => Err(refuse(err::BAD_INTEGRITY)),
             Err(TicketPart::Integrity) => Err(refuse(err::NOT_US)),
@@ -878,7 +890,7 @@ fn kpropd_ticket_key(
             kvno |= e.kvno == tkt_kvno;
             enctype |= e.kvno == tkt_kvno && similar;
         }
-        if similar && decrypt_ticket_part(&e.key, ticket, &permitted).is_ok() {
+        if similar && decrypt_ticket_part(&e.key, ticket, permitted).is_ok() {
             return Ok(e.key.clone());
         }
     }
@@ -1088,6 +1100,10 @@ pub fn kpropd_send_ack(
 ///
 /// `krb5_kt_resolve`'s text for a name of a type it does not know ("Unknown Key table type"), or
 /// "Invalid argument" for a default name that is not UTF-8 or whose parameters do not expand.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "kprop, the client, names its keytab once per run"
+)]
 pub fn kprop_keytab_file(keytab: Option<&str>) -> Result<Option<std::path::PathBuf>, &'static str> {
     crate::kadmin_cli::keytab_file_in(keytab, krb5_config::krb5_conf_paths())
 }
@@ -1124,7 +1140,8 @@ pub enum KpropdKeytabError {
 /// (`KRB5_KTNAME`, else the KDC profile's `default_keytab_name`, else `FILE:/etc/krb5.keytab`),
 /// read with [`read_secret_file`](krb5_protocol::read_secret_file), the KDC profile's
 /// `ignore_acceptor_hostname`, and the name `server`'s entry is looked up under
-/// ([`KpropdKeys::lookup`]), expanded now as MIT expands it for each ticket. A keytab that does
+/// ([`KpropdKeys::lookup`]), expanded now as MIT expands it for each ticket. `profile` is the KDC
+/// profile, read when kpropd started. A keytab that does
 /// not exist or may not be read, or a `MEMORY:` one, has no entries; one that is no keytab gives
 /// MIT's error for it, and a default name that does not resolve MIT's error for that. A keytab
 /// damaged after its version has no entries either: MIT stops at the damaged entry
@@ -1140,19 +1157,18 @@ pub enum KpropdKeytabError {
 pub fn kpropd_keytab_keys(
     keytab: Option<&str>,
     server: Option<&PrincipalName>,
+    profile: &krb5_config::Krb5Conf,
 ) -> Result<KpropdKeys, &'static str> {
-    let conf = krb5_config::load_krb5_conf_paths(crate::kadmin_cli::krb5_conf_paths_with_kdc())
-        .unwrap_or_default();
-    let fallback = conf.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback;
+    let fallback = profile.dns_canonicalize_hostname == krb5_config::CanonHost::Fallback;
     let lookup = server.map_or(KpropdLookup::Server, |s| {
-        kpropd_lookup_name(s, fallback, |h| krb5_config::expand_hostname(h, &conf))
+        kpropd_lookup_name(s, fallback, |h| krb5_config::expand_hostname(h, profile))
     });
     let empty = KpropdKeys {
-        ignore_acceptor_hostname: conf.ignore_acceptor_hostname,
+        ignore_acceptor_hostname: profile.ignore_acceptor_hostname,
         lookup,
         ..KpropdKeys::default()
     };
-    let path = match crate::kadmin_cli::keytab_file(keytab) {
+    let path = match crate::kadmin_cli::keytab_file_of(keytab, profile) {
         Ok(Some(path)) => path,
         Ok(None) => return Ok(empty),
         Err(e) if keytab.is_none() => {
@@ -1228,6 +1244,8 @@ pub struct KpropdConfig<'a> {
     /// The replica realm's iprop parameters when `iprop_enable` is set: the dump must then be an
     /// iprop one, and the update log takes its serial and time.
     pub iprop: Option<&'a krb5_config::IpropParams>,
+    /// kpropd's acceptor profile values, its KDC context's.
+    pub conf: &'a AcceptorConfig,
 }
 
 /// The serial and time an iprop dump's header carries; `None` for a dump without one.
@@ -1301,6 +1319,7 @@ pub fn kpropd_handle_conn(
         stash,
         allowed_clients,
         iprop,
+        conf,
     } = *cfg;
     let keys = RecvauthKeys {
         keys: host_keys,
@@ -1313,6 +1332,7 @@ pub fn kpropd_handle_conn(
         expected_realm,
         allowed_clients,
         replay,
+        conf,
     )?;
     let stash_bytes = match master_password {
         Some(_) => None,
@@ -1424,6 +1444,10 @@ pub fn kprop_send_store(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
 mod tests {
     use super::*;
     use krb5_crypto::CipherState;
@@ -1508,14 +1532,14 @@ mod tests {
         );
         let p = path.display().to_string();
         for name in [p.clone(), format!("FILE:{p}"), format!("WRFILE:{p}")] {
-            let k = kpropd_keytab_keys(Some(&name), None).unwrap();
+            let k = kpropd_keytab_keys(Some(&name), None, &krb5_config::Krb5Conf::new()).unwrap();
             let kvnos: Vec<_> = k.entries.iter().map(|e| e.kvno).collect();
             assert_eq!(kvnos, [2, 3, 4], "{name}");
             assert_eq!(k.entries[1].key.as_bytes(), [2u8; 32], "{name}");
             assert_eq!(k.error, None, "{name}");
         }
         let missing = dir.join("absent.keytab").display().to_string();
-        let k = kpropd_keytab_keys(Some(&missing), None).unwrap();
+        let k = kpropd_keytab_keys(Some(&missing), None, &krb5_config::Krb5Conf::new()).unwrap();
         assert!(k.entries.is_empty() && k.error.is_none());
         for (file, bytes) in [
             ("junk.keytab", b"not a keytab".as_slice()),
@@ -1523,7 +1547,7 @@ mod tests {
         ] {
             std::fs::write(dir.join(file), bytes).unwrap();
             let junk = dir.join(file).display().to_string();
-            let k = kpropd_keytab_keys(Some(&junk), None).unwrap();
+            let k = kpropd_keytab_keys(Some(&junk), None, &krb5_config::Krb5Conf::new()).unwrap();
             assert!(k.entries.is_empty());
             assert_eq!(
                 k.error,
@@ -1533,10 +1557,11 @@ mod tests {
                 "{file}"
             );
         }
-        let k = kpropd_keytab_keys(Some("MEMORY:kpropd"), None).unwrap();
+        let k =
+            kpropd_keytab_keys(Some("MEMORY:kpropd"), None, &krb5_config::Krb5Conf::new()).unwrap();
         assert!(k.entries.is_empty() && k.error.is_none());
         assert_eq!(
-            kpropd_keytab_keys(Some("KDB:"), None).unwrap_err(),
+            kpropd_keytab_keys(Some("KDB:"), None, &krb5_config::Krb5Conf::new()).unwrap_err(),
             "Unknown Key table type"
         );
         let _ = std::fs::remove_dir_all(&dir);
@@ -1617,12 +1642,22 @@ mod tests {
         assert_eq!(pick(&zero, 4), 4, "but a matching kvno ends the scan");
     }
 
+    /// The KDC context's profile as kpropd reads it when it starts: kdc.conf, then the krb5.conf
+    /// files, as the environment names them.
+    fn kdc_profile() -> krb5_config::Krb5Conf {
+        krb5_config::load_krb5_conf_paths(crate::kadmin_cli::krb5_conf_paths_with_kdc())
+            .unwrap_or_else(|_| krb5_config::Krb5Conf::new())
+    }
+
     /// The keytab `kpropd_keytab_keys(None, ..)` reads, printed by a child of the next test.
     #[test]
     fn kpropd_default_keytab_child() {
         if std::env::var_os("KERBER_KPROPD_KT_CHILD").is_some() {
-            let file = crate::kadmin_cli::keytab_file(None).ok().flatten();
-            let keys = kpropd_keytab_keys(None, None).unwrap();
+            let profile = kdc_profile();
+            let file = crate::kadmin_cli::keytab_file_of(None, &profile)
+                .ok()
+                .flatten();
+            let keys = kpropd_keytab_keys(None, None, &profile).unwrap();
             let kvnos: Vec<_> = keys.entries.iter().map(|e| e.kvno).collect();
             let file = file.map(|f| f.display().to_string()).unwrap_or_default();
             println!("keytab=[{file}] kvnos={kvnos:?} error={:?}", keys.error);
@@ -1693,8 +1728,9 @@ mod tests {
     #[test]
     fn kpropd_server_name_child() {
         if std::env::var_os("KERBER_KPROPD_NAME_CHILD").is_some() {
+            let profile = kdc_profile();
             for host in ["kdc2", "KDC2"] {
-                match kpropd_server_name_for(host) {
+                match kpropd_server_name_for(host, &profile) {
                     Ok(name) => println!("{host}=[{}]", name.components_joined()),
                     Err(e) => println!("{host}=error {e}"),
                 }
@@ -1826,6 +1862,7 @@ mod tests {
                 Some(TEST_REALM),
                 None,
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
         });
         thread::sleep(Duration::from_millis(20));
@@ -1897,6 +1934,7 @@ mod tests {
                 Some(TEST_REALM),
                 None,
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
         });
         thread::sleep(Duration::from_millis(20));
@@ -1955,6 +1993,7 @@ mod tests {
                 Some(TEST_REALM),
                 None,
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
         });
         thread::sleep(Duration::from_millis(20));
@@ -2081,12 +2120,10 @@ mod tests {
         let server = server.clone();
         let join = thread::spawn(move || {
             krb5_config::isolate_test_krb5();
-            let dir = krb5_testkit::scratch_dir("kpropd-profile");
-            if let Some(text) = kdc_conf {
-                let path = dir.join("kdc.conf");
-                std::fs::write(&path, text).unwrap();
-                krb5_config::set_test_kdc_profile(Some(path));
-            }
+            let conf = kdc_conf.map_or_else(AcceptorConfig::default, |text| {
+                let profile = krb5_config::Krb5Conf::parse_files(&[text]).unwrap();
+                AcceptorConfig::from_krb5_conf(&profile)
+            });
             let (mut stream, _) = listener.accept().unwrap();
             let keys = RecvauthKeys {
                 keys: &[],
@@ -2099,6 +2136,7 @@ mod tests {
                 Some(TEST_REALM),
                 None,
                 &ReplayCache::new(),
+                &conf,
             )
             .map(|_| ())
         });
@@ -2420,7 +2458,9 @@ mod tests {
         };
         let raw = encode(&ap).unwrap();
         let realm = Some(krb5_kdc::testrealm::TEST_REALM);
-        let Err((der, text)) = kpropd_ticket_key(&raw, &kt, Some(&host), realm) else {
+        let Err((der, text)) =
+            kpropd_ticket_key(&raw, &kt, Some(&host), realm, &AcceptorConfig::default())
+        else {
             panic!("a short ticket must be refused");
         };
         assert_eq!(text, "Message size is incompatible with encryption type");
@@ -2454,6 +2494,7 @@ mod tests {
                 Some(TEST_REALM),
                 Some(allowed.as_slice()),
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
         });
         let mut client = kprop_sends_ap_req(addr, &tgs, &admin);
@@ -2502,18 +2543,15 @@ mod tests {
             tgs.session_key.etype(),
             krb5_crypto::EncryptionType::Aes256CtsHmacSha196
         );
-        let dir = krb5_testkit::scratch_dir("p15a-kpropd-permitted");
-        let conf = dir.join("krb5.conf");
-        std::fs::write(
-            &conf,
+        let profile = krb5_config::Krb5Conf::parse(
             "[libdefaults]\n    permitted_enctypes = aes128-cts-hmac-sha1-96\n",
         )
         .unwrap();
+        let conf = AcceptorConfig::from_krb5_conf(&profile);
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let join = thread::spawn(move || {
             krb5_config::isolate_test_krb5();
-            krb5_config::set_test_krb5_paths(Some(vec![conf]));
             let (mut stream, _) = listener.accept().unwrap();
             kpropd_recvauth(
                 &mut stream,
@@ -2522,6 +2560,7 @@ mod tests {
                 Some(TEST_REALM),
                 None,
                 &ReplayCache::new(),
+                &conf,
             )
         });
         let mut client = kprop_sends_ap_req(addr, &tgs, &admin);
@@ -2532,7 +2571,6 @@ mod tests {
             Some(b"Encryption type not permitted\0".as_slice())
         );
         assert!(join.join().expect("thread").is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -2545,6 +2583,8 @@ mod tests {
         use krb5_kdc::testrealm::TEST_REALM;
 
         let (host_keys, _, _) = kprop_ticket();
+        // kpropd gives recvauth its own principal, made once from its profile (here an empty one).
+        let own = kpropd_server_name(&krb5_config::Krb5Conf::new()).unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let join = thread::spawn(move || {
@@ -2553,10 +2593,11 @@ mod tests {
             kpropd_recvauth(
                 &mut stream,
                 &host_keys,
-                None,
+                Some(&own),
                 Some(TEST_REALM),
                 None,
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
         });
         let mut client = TcpStream::connect(addr).unwrap();
@@ -2608,6 +2649,7 @@ mod tests {
                 Some(TEST_REALM),
                 Some(allowed.as_slice()),
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
             .unwrap();
             kpropd_recv_dump(&mut stream, &mut auth)
@@ -2687,6 +2729,7 @@ mod tests {
                 Some(TEST_REALM),
                 Some(allowed.as_slice()),
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
             .unwrap();
             let got = kpropd_recv_dump(&mut stream, &mut auth).unwrap();
@@ -2762,6 +2805,7 @@ mod tests {
                 Some(TEST_REALM),
                 Some(allowed.as_slice()),
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
             .unwrap();
             let safe: krb5_types::KrbSafe = decode(&read_message(&mut stream).unwrap()).unwrap();
@@ -2846,6 +2890,7 @@ mod tests {
                     Some(TEST_REALM),
                     Some(allowed.as_slice()),
                     &ReplayCache::new(),
+                    &AcceptorConfig::default(),
                 )
                 .is_ok()
             });
@@ -2927,6 +2972,7 @@ mod tests {
                 Some(TEST_REALM),
                 Some(allowed.as_slice()),
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
             .unwrap();
             let got = kpropd_recv_dump(&mut stream, &mut auth).unwrap();

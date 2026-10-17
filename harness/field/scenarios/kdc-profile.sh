@@ -13,7 +13,10 @@
 #         without it;
 #   CF.f: an include line naming a file whose KERBER.TEST stanza sets max_life = 2h: alice's TGT life is 7200 s;
 #   CF.g: a KERBER.TEST stanza with Max_Life = 1h, a name MIT matches only as written: alice's TGT life is what it
-#         was.
+#         was;
+#   CF.e0: strace on kadmind while client2 changes cfpw's password and runs a kadmin session, and on a second kpropd
+#         (port 7754, its own kdc.conf, database, keytab and ACL) while kdc's kprop sends it the realm: neither opens
+#         krb5.conf or kdc.conf for a request (lib/profile-opens.sh). strace is installed when kdc lacks it.
 # Graded on both legs, MIT's first.
 # vms: kdc client2
 # legs: mit rust
@@ -30,12 +33,13 @@ esac
 . "$HERE/../baseline.env"
 # shellcheck source=../lib/leg.sh
 . "$FIELD_LIB/leg.sh"
-legset ALICE
+legset ALICE ALICE_TEMP ADMIN
 R=${REALM//./\\.}
 KC=/var/kerberos/krb5kdc/kdc.conf
 CF="export KRB5_CONFIG=\$HOME/cf/krb5.conf"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl restart krb5kdc kadmin; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl restart krb5kdc kadmin; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh" > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'sudo systemctl start chronyd; rm -rf ~/cf; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -121,4 +125,29 @@ check CF.g.life "^same TGT life: ${L0:-none} s\$" host "echo 'same TGT life: ${L
 
 section "kdc.conf restored"
 check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo mv $KC.cf $KC && sudo systemctl restart krb5kdc kadmin && systemctl is-active krb5kdc kadmin > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active'"
+
+# opens <name> <pid expression>: strace attached to the daemon that pid names.
+opens() {
+    check "CF.e0.$1.attach" "^$1 [0-9]+ traced by [1-9][0-9]*\$" runin kdc "lib/profile-opens.sh" "sudo sh -s -- attach $1 $2" < "$FIELD_LIB/profile-opens.sh"
+}
+# opened <name>: strace detached; the daemon took requests, and opened neither krb5.conf nor kdc.conf for them.
+opened() {
+    check "CF.e0.$1.live" "^$1 live: [1-9][0-9]* accept/recv lines\$" runin kdc "lib/profile-opens.sh" "sudo sh -s -- detach $1" < "$FIELD_LIB/profile-opens.sh"
+    checklast "CF.e0.$1.opens" "^$1 profile opens: 0\$"
+}
+
+section "CF.e0 kadmind takes a kpasswd change and a kadmin session without opening krb5.conf or kdc.conf (MIT and ours)"
+check CF.e0.strace '^strace-[0-9]' run kdc "rpm -q strace > /dev/null 2>&1 || sudo dnf -y -q install strace > /dev/null 2>&1; rpm -q strace"
+opens kadmind "\$(systemctl show -p MainPID --value kadmin)"
+check CF.e0.kpasswd '^Password changed\.$' runin client2 "cfpw's password ($ALICE), then alice-changed's twice ($ALICE_TEMP)" "kpasswd cfpw 2>&1" < <(chpw "$ALICE" "$ALICE_TEMP")
+check CF.e0.kadmin "^Principal: cfpw@$R\$" runin client2 "admin/admin's password ($ADMIN)" "kadmin -p admin/admin -q 'getprinc cfpw' 2>&1" < <(once "$ADMIN")
+opened kadmind
+
+section "CF.e0 a second kpropd takes one kprop without opening krb5.conf or kdc.conf (MIT and ours)"
+check CF.e0.kpropd.start '^kpropd [0-9]+ listening on 7754$' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-start $LEG $REALM" < "$FIELD_LIB/profile-opens.sh"
+opens kpropd "\$(cat /var/tmp/cf-e0/kpropd.pid)"
+check CF.e0.kprop 'SUCCEEDED$' run kdc "sudo kprop -r $REALM -f /var/tmp/cf-e0/dump -P 7754 -s /var/tmp/cf-e0/kt \$(hostname -f) 2>&1"
+check CF.e0.kpropd.loaded '^loaded$' run kdc "for i in \$(seq 1 40); do sudo test -e /var/tmp/cf-e0/replica/principal && break; sleep 0.25; done; sleep 1; sudo test -e /var/tmp/cf-e0/replica/principal && echo loaded"
+opened kpropd
+check CF.e0.kpropd.stop '^kpropd stopped' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh"
 finish

@@ -45,6 +45,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::io::Write as _;
 use std::net::{TcpListener, UdpSocket};
@@ -63,6 +67,7 @@ use krb5_kdc::{
     write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
+use krb5_protocol::AcceptorConfig;
 
 /// MIT `main` (`kadmin/server/ovsec_kadmd.c:362-432`): kadmind's options, each matched by
 /// spelling; a test-hooks build adds the gates' `--test-realm`.
@@ -192,8 +197,6 @@ fn main() {
             ))
             .try_init();
     }
-    // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf.
-    krb5_gss::use_kdc_context();
     let (mut store, paths) = open_realm(&progname, &args, test_realm, nofork);
     let realm = store.realm().to_owned();
     let kdc_conf = paths.conf.as_ref();
@@ -227,6 +230,8 @@ fn main() {
     {
         klog::syslog(Severity::Warning, &line);
     }
+    // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf; kpasswd's `krb5_rd_req` too.
+    let conf = AcceptorConfig::from_profile(&profile);
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:459-462`): the propagation-only mode needs
     // iprop_enable; with it, this port has no separate iprop listener to run alone.
     if args.flag("-proponly") {
@@ -238,7 +243,7 @@ fn main() {
         fail_to_start(&progname, None, why);
     }
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:476-477`): `svcauth_gssapi_set_names` acquires a credential for `kadmin/admin` and for `kadmin/changepw`, each of which the KDB keytab must have a key for.
-    if !acceptor_names_served(&store) {
+    if !acceptor_names_served(&store, &conf) {
         fail_to_start(&progname, None, "Cannot set GSSAPI authentication names");
     }
     let changepw = kadmin_changepw();
@@ -360,9 +365,10 @@ fn main() {
         tcp,
         rpc: &listeners,
     };
-    let mut kadmind = Kadmind::new(shared, acl, cpw_key).report_unhandled(Arc::new(|message| {
-        let _ = writeln!(std::io::stderr(), "kadm5: {message}");
-    }));
+    let mut kadmind =
+        Kadmind::new(shared, acl, cpw_key, conf).report_unhandled(Arc::new(|message| {
+            let _ = writeln!(std::io::stderr(), "kadm5: {message}");
+        }));
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:538-540`): "starting", and in the foreground
     // "<prog>: starting..." on standard error.
     klog::syslog(Severity::Info, "starting");

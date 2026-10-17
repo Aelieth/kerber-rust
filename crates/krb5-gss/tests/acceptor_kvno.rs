@@ -11,7 +11,7 @@ use krb5_kdc::testrealm::{
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::{PrincipalName, ascii};
 
 /// Build a real host/… GSS AP-REQ token and return it with the ticket-enc key
@@ -78,6 +78,7 @@ fn gss_accept_kt_pins_ticket_kvno() {
         Some(&host),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .expect("plain accept ignores kvno labels");
 
@@ -93,6 +94,7 @@ fn gss_accept_kt_pins_ticket_kvno() {
         Some(&host),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) {
         Ok(_) => panic!("kt accept must pin the ticket kvno"),
         Err(e) => {
@@ -117,6 +119,7 @@ fn gss_accept_kt_matching_kvno_verifies() {
         Some(&host),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .expect("matching kvno verifies");
 }
@@ -142,6 +145,7 @@ fn gss_accept_kdb_asks_for_the_tickets_server_or_the_name_it_holds() {
         &lookup,
         None,
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .expect("no name: the ticket's server");
     assert_eq!(ctx.acceptor.as_ref(), Some(&host));
@@ -153,6 +157,7 @@ fn gss_accept_kdb_asks_for_the_tickets_server_or_the_name_it_holds() {
         &lookup,
         None,
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .expect("a name: its key decrypts the ticket");
     assert_eq!(ctx.acceptor.as_ref(), Some(&named));
@@ -180,6 +185,7 @@ fn gss_accept_kdb_with_no_such_principal_is_not_us_unless_the_name_is_explicit()
         &none,
         None,
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .map(|_| ());
     assert!(
@@ -194,6 +200,7 @@ fn gss_accept_kdb_with_no_such_principal_is_not_us_unless_the_name_is_explicit()
         &none,
         None,
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .map(|_| ());
     assert!(

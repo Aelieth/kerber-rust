@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use krb5_kdc::{Error, PrincipalStore};
 use krb5_types::PrincipalName;
 
-pub(crate) use kt_cmds::{keytab_file, keytab_file_in};
+pub(crate) use kt_cmds::{keytab_file_in, keytab_file_of};
 pub(crate) use stdio::{Io, LineRead, Stdout};
 
 /// The name every message is prefixed with: MIT's `whoami`, the program's base name, which an

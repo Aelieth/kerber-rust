@@ -276,6 +276,7 @@ impl PrincipalStore {
             return Some(master.clone());
         }
         #[cfg(feature = "test-hooks")]
+        #[allow(clippy::disallowed_methods, reason = "a test-hooks build's override")]
         let hooked = std::env::var("KRB5_MASTER_PASSWORD")
             .ok()
             .map(zeroize::Zeroizing::new);

@@ -4,6 +4,11 @@
 //! Live oracle: MIT kprop beside this one, settled case by case, and
 //! `scripts/kprop-reverse-gate.sh`.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
+
 use std::fs::{File, OpenOptions};
 use std::io::{Read as _, Write as _};
 use std::net::{TcpListener, TcpStream};
@@ -17,7 +22,7 @@ use krb5_admin::{kpropd_recv_dump, kpropd_recvauth, kpropd_send_ack};
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented, documented_admin_id};
 use krb5_kdc::{serve, shared_store};
-use krb5_protocol::{Keytab, ReplayCache};
+use krb5_protocol::{AcceptorConfig, Keytab, ReplayCache};
 use krb5_testkit::scratch_dir;
 use krb5_types::PrincipalName;
 
@@ -150,6 +155,7 @@ impl Realm {
                 Some(TEST_REALM),
                 Some(allowed.as_slice()),
                 &ReplayCache::new(),
+                &AcceptorConfig::default(),
             )
             .unwrap();
             let dump = kpropd_recv_dump(&mut stream, &mut auth).unwrap();

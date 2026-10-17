@@ -13,7 +13,7 @@ use krb5_kdc::testrealm::{
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::{PrincipalName, TicketFlags, ascii, ku};
 
 fn contexts() -> (GssContext, GssContext) {
@@ -65,6 +65,7 @@ fn contexts() -> (GssContext, GssContext) {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     (init, acc)
@@ -193,6 +194,7 @@ fn linked() -> (GssContext, GssContext) {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     (init, acc)
@@ -289,6 +291,7 @@ fn delegation_sets_the_deleg_flag() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     assert!(acc.delegated().is_some(), "delegated credential stored");

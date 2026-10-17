@@ -20,6 +20,10 @@ use krb5_types::{
     ApReq, EncTicketPart, HostAddress, KerberosTime, PrincipalName, TransitedEncoding, err,
     flag_bit, ku,
 };
+use std::collections::BTreeMap;
+
+/// No `[capaths]`, for the parameters that outlive the function that makes them.
+static NO_CAPATHS: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
 
 fn host_ap_req() -> (Vec<u8>, ProtocolKey, u32) {
     krb5_config::isolate_test_krb5();
@@ -72,6 +76,8 @@ fn walk(keys: &[ProtocolKey], kvnos: &[u32]) -> ApVerifyParams<'static> {
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     }
@@ -200,6 +206,8 @@ fn rd_req_matching_kvno_verifies() {
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };
@@ -221,6 +229,8 @@ fn rd_req_authenticator_skew_is_skew() {
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: Some(far),
     };
@@ -255,6 +265,8 @@ fn verify(
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };
@@ -368,6 +380,8 @@ fn accept(raw: &[u8], key: &ProtocolKey) -> Result<(), krb5_protocol::Error> {
         expected_realm: None,
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };
@@ -434,6 +448,8 @@ fn pinned_name_wrong_kvno_is_badkeyver() {
         expected_realm: Some(TEST_REALM),
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };
@@ -520,6 +536,8 @@ fn named<'a>(
         expected_realm: Some(TEST_REALM),
         get_entry: Some(get_entry),
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     }
@@ -804,6 +822,8 @@ fn rd_req_with_a_server_named_and_its_key_of_bad_parity_is_refused_with_the_keys
         expected_realm: Some(TEST_REALM),
         get_entry: None,
         skew: DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &NO_CAPATHS,
         remote_addr: None,
         now: None,
     };

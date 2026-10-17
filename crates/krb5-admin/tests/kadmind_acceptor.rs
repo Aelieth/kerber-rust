@@ -23,7 +23,7 @@ use krb5_kdc::testrealm::{
     documented_admin_id, documented_host,
 };
 use krb5_kdc::{KeyEntry, PrincipalStore, bootstrap_realm_with_kdc_conf, decrypt_ticket_part};
-use krb5_protocol::{as_req_sname, pa_enc_timestamp};
+use krb5_protocol::{AcceptorConfig, as_req_sname, pa_enc_timestamp};
 use krb5_types::{OctetString, PrincipalName, Ticket, ascii, ku};
 
 /// RPC words: AUTH_REJECTEDCRED, AUTH_TOOWEAK, GSS_S_FAILURE.
@@ -76,7 +76,7 @@ impl Served {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let thread = std::thread::spawn(move || {
-            let mut kadmind = Kadmind::new(served_store, acl, None);
+            let mut kadmind = Kadmind::new(served_store, acl, None, AcceptorConfig::default());
             let rpc = [rpc];
             let sockets = Sockets {
                 rpc: &rpc,
@@ -454,7 +454,10 @@ fn kadmind_starts_only_when_both_authentication_names_are_served() {
     let actor = documented_admin_id();
     {
         let mut g = store.write().unwrap();
-        assert!(krb5_admin::acceptor_names_served(&g));
+        assert!(krb5_admin::acceptor_names_served(
+            &g,
+            &AcceptorConfig::default()
+        ));
         g.apply_admin_fields_in(
             &kadmin_changepw(),
             TEST_REALM,
@@ -466,7 +469,7 @@ fn kadmind_starts_only_when_both_authentication_names_are_served() {
         )
         .unwrap();
         assert!(
-            !krb5_admin::acceptor_names_served(&g),
+            !krb5_admin::acceptor_names_served(&g, &AcceptorConfig::default()),
             "kadmin/changepw may not be a service"
         );
     }

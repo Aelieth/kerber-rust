@@ -222,6 +222,7 @@ pub(crate) fn case_fold_for_locale(spec: &str) -> CaseFold {
 }
 
 /// `LC_ALL`, else `LC_CTYPE`, else `LANG`; empty when none of them is set to a non-empty value.
+#[allow(clippy::disallowed_methods, reason = "the process's locale, read once")]
 fn locale_spec() -> String {
     for key in ["LC_ALL", "LC_CTYPE", "LANG"] {
         if let Ok(value) = std::env::var(key)

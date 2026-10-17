@@ -1,6 +1,11 @@
 //! `krb5-forge-tgt` decrypts a profile-first TGT. This package owns
 //! the bin, so Cargo sets `CARGO_BIN_EXE_krb5-forge-tgt`.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
+
 use krb5_asn1::decode_enc_kdc_rep_part;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt};
 use krb5_kdc::testrealm::{

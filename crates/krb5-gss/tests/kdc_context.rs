@@ -1,14 +1,14 @@
-//! The acceptor on a KDC context (`krb5_gss::use_kdc_context`, MIT `krb5_gss_use_kdc_context`):
-//! `permitted_enctypes` comes from the KDC profile first. The switch is process-wide, so this
-//! test binary holds this one test alone.
+//! The acceptor on a KDC context (MIT `krb5_gss_use_kdc_context`): `permitted_enctypes` comes from
+//! the KDC profile first, kdc.conf ahead of krb5.conf (`AcceptorConfig::from_profile`).
 
+use krb5_config::ProfileSet;
 use krb5_crypto::{EncryptionType, ProtocolKey, string_to_key};
 use krb5_gss::{Error, GssContext};
 use krb5_kdc::S2K_ITERS;
 use krb5_kdc::testrealm::{
     TEST_REALM, TEST_USER, TEST_USER_PASSWORD, bootstrap_documented, documented_host,
 };
-use krb5_protocol::{ReplayCache, as_req, pa_enc_timestamp, tgs_req};
+use krb5_protocol::{AcceptorConfig, ReplayCache, as_req, pa_enc_timestamp, tgs_req};
 use krb5_types::{PrincipalName, ascii};
 
 /// A fresh initial token from the documented user to the documented host (an aes256-cts
@@ -60,7 +60,7 @@ fn host_token() -> (Vec<u8>, ProtocolKey) {
     (token, host.best_key().unwrap().key.clone())
 }
 
-fn accept(token: &[u8], skey: &ProtocolKey) -> Result<(), Error> {
+fn accept(token: &[u8], skey: &ProtocolKey, conf: &AcceptorConfig) -> Result<(), Error> {
     GssContext::accept_sec_context(
         token,
         std::slice::from_ref(skey),
@@ -68,6 +68,7 @@ fn accept(token: &[u8], skey: &ProtocolKey) -> Result<(), Error> {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        conf,
     )
     .map(|_| ())
 }
@@ -75,21 +76,21 @@ fn accept(token: &[u8], skey: &ProtocolKey) -> Result<(), Error> {
 #[test]
 fn a_kdc_context_reads_permitted_enctypes_from_the_kdc_profile_first() {
     krb5_config::isolate_test_krb5();
-    let kdc = krb5_testkit::scratch_dir("p15a-gss-kdc-context").join("kdc.conf");
-    std::fs::write(
-        &kdc,
-        "[libdefaults]\n    permitted_enctypes = aes128-cts-hmac-sha1-96\n",
-    )
-    .unwrap();
-    krb5_config::set_test_kdc_profile(Some(kdc));
+    let kdc = "[libdefaults]\n    permitted_enctypes = aes128-cts-hmac-sha1-96\n";
+    let profile = ProfileSet::from_text(TEST_REALM, "", Some(kdc)).unwrap();
     let (token, skey) = host_token();
     assert!(
-        accept(&token, &skey).is_ok(),
+        accept(
+            &token,
+            &skey,
+            &AcceptorConfig::from_krb5_conf(&profile.krb5)
+        )
+        .is_ok(),
         "a plain context reads krb5.conf alone, which permits MIT's DEFAULT"
     );
-    krb5_gss::use_kdc_context();
     let (token, skey) = host_token();
-    let Err(Error::Inner(msg)) = accept(&token, &skey) else {
+    let Err(Error::Inner(msg)) = accept(&token, &skey, &AcceptorConfig::from_profile(&profile))
+    else {
         panic!("a KDC context reads the KDC profile's aes128-only list first");
     };
     // MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-50`): the aes256 ticket is refused first.

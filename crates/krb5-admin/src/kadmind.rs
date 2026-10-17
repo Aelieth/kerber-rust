@@ -18,32 +18,40 @@ use krb5_kdc::net_server::{
 use krb5_kdc::{
     Acl, SharedDump as SharedStore, Signals, WHILE_DISPATCHING_TCP, WHILE_DISPATCHING_UDP,
 };
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 
 use crate::kadm5::Kadm5Conn;
 use crate::listen::{client_addr, handle_kpasswd_from, kpasswd_toolong_error};
 use crate::{RpcPeer, UnhandledRpc};
 
 /// kadmind's side of the loop: kpasswd's requests and each kadm5 connection's session, over one
-/// store, one ACL and one replay cache for the kadm5 acceptor.
+/// store, one ACL, one replay cache for the kadm5 acceptor and one set of acceptor profile values.
 pub struct Kadmind {
     store: SharedStore,
     acl: Acl,
     cpw_key: Option<ProtocolKey>,
     rcache: ReplayCache,
+    conf: Arc<AcceptorConfig>,
     report: Option<UnhandledRpc>,
 }
 
 impl Kadmind {
-    /// kadmind over `store` and `acl`. A kpasswd request is verified with the `kadmin/changepw`
-    /// keys the database holds and `cpw_key`; without `cpw_key` it gets no answer.
+    /// kadmind over `store` and `acl`, its acceptors on the profile values `conf` (the KDC
+    /// context's, [`AcceptorConfig::from_profile`]). A kpasswd request is verified with the
+    /// `kadmin/changepw` keys the database holds, and only while there is a `cpw_key`.
     #[must_use]
-    pub fn new(store: SharedStore, acl: Acl, cpw_key: Option<ProtocolKey>) -> Self {
+    pub fn new(
+        store: SharedStore,
+        acl: Acl,
+        cpw_key: Option<ProtocolKey>,
+        conf: AcceptorConfig,
+    ) -> Self {
         Self {
             store,
             acl,
             cpw_key,
             rcache: ReplayCache::new(),
+            conf: Arc::new(conf),
             report: None,
         }
     }
@@ -77,13 +85,21 @@ impl Dispatch for Kadmind {
         is_tcp: bool,
         _log: &mut dyn Log,
     ) -> Reply {
-        let Some(key) = &self.cpw_key else {
+        if self.cpw_key.is_none() {
             return Reply::Nothing;
-        };
+        }
         let replay = ReplayCache::new();
         let from = client_addr(remote.ip());
         let here = Some(local.ip());
-        match handle_kpasswd_from(&self.store, &self.acl, key, &replay, request, &from, here) {
+        match handle_kpasswd_from(
+            &self.store,
+            &self.acl,
+            &self.conf,
+            &replay,
+            request,
+            &from,
+            here,
+        ) {
             Ok(reply) => Reply::Send(reply),
             Err(e) => {
                 let suffix = if is_tcp {
@@ -120,6 +136,7 @@ impl Dispatch for Kadmind {
             self.acl.clone(),
             self.realm(),
             self.rcache.clone(),
+            Arc::clone(&self.conf),
             RpcPeer::new(Some(remote), Some(local)),
             self.report.clone(),
         )))

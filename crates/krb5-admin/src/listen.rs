@@ -11,11 +11,11 @@ use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
 use krb5_asn1::{decode, encode};
-use krb5_crypto::{EncryptionType, ProtocolKey};
+use krb5_crypto::ProtocolKey;
 use krb5_kdc::{Principal, SharedDump as SharedStore};
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, ApVerifyOk, ApVerifyParams, KeytabLookup,
-    ReplayCache, local_host_address, permitted_enctypes_kdc, verify_ap_req_ex,
+    AUTH_CONTEXT_DO_SEQUENCE, AcceptorAuthContext, AcceptorConfig, ApVerifyOk, ApVerifyParams,
+    KeytabLookup, ReplayCache, local_host_address, verify_ap_req_ex,
 };
 use krb5_types::{
     ChangePasswdData, HostAddress, KerberosTime, KrbError, Microseconds, PrincipalName, err,
@@ -334,20 +334,12 @@ impl KpasswdReply {
 pub fn handle_kpasswd_rfc3244(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
-    service_key: &ProtocolKey,
+    conf: &AcceptorConfig,
     replay: &ReplayCache,
     raw: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let loopback = std::net::IpAddr::from([127, 0, 0, 1]);
-    handle_kpasswd_from(
-        store,
-        acl,
-        service_key,
-        replay,
-        raw,
-        "127.0.0.1",
-        Some(loopback),
-    )
+    handle_kpasswd_from(store, acl, conf, replay, raw, "127.0.0.1", Some(loopback))
 }
 
 const RFC3244_VERSION: u16 = 0xff80;
@@ -376,12 +368,13 @@ pub enum ChangepwRefused {
 }
 
 /// The AP-REQ half of kpasswd's request: MIT's `krb5_rd_req` for `kadmin/changepw` in the realm,
-/// its key looked up in the KDB as the KDB keytab does, then the AP-REP.
+/// on kadmind's acceptor profile values `conf`, its key looked up in the KDB as the KDB keytab
+/// does, then the AP-REP.
 /// MIT `process_chpw_request` (`kadmin/server/schpw.c:110-113`): the auth context does sequence numbers only.
 /// MIT `process_chpw_request` (`kadmin/server/schpw.c:128-137`): `krb5_rd_req` names `kadmin/changepw` against the `KDB:` keytab, and a refusal is AUTHERROR "Failed reading application request".
 /// MIT `krb5_ktkdb_get_entry` (`lib/kdb/keytab.c:117-185`): the KDB keytab gives the principal's first permitted key at the ticket's kvno and refuses another enctype.
 /// MIT `process_chpw_request` (`kadmin/server/schpw.c:140-146`): `krb5_mk_rep` follows.
-/// MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): the authenticator's time is checked against kadmind's context's `clockskew`, `skew` here.
+/// MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-631`): the authenticator's time is checked against kadmind's context's `clockskew`.
 ///
 /// # Errors
 ///
@@ -390,10 +383,10 @@ pub fn changepw_accept(
     ap_req: &[u8],
     changepw: Option<&Principal>,
     realm: &str,
-    permitted: &[EncryptionType],
-    skew: i64,
+    conf: &AcceptorConfig,
     replay: &ReplayCache,
 ) -> Result<ChangepwAccepted, ChangepwRefused> {
+    let permitted = conf.permitted().map_err(ChangepwRefused::Read)?;
     let server = krb5_kdc::principals::kadmin_changepw();
     let get_entry = |_: &PrincipalName, _: &str, kvno: u32, etype: i32| {
         krb5_kdc::ktkdb_get_entry(changepw, &server, realm, kvno, etype, |e| {
@@ -410,12 +403,14 @@ pub fn changepw_accept(
         expected_server: Some(&server),
         expected_realm: Some(realm),
         get_entry: Some(&get_entry),
-        skew,
+        skew: i64::from(conf.clockskew),
+        ignore_acceptor_hostname: conf.ignore_acceptor_hostname,
+        capaths: &conf.capaths,
         remote_addr: None,
         now: None,
     };
     let ok = verify_ap_req_ex(ap_req, &params, replay, None).map_err(ChangepwRefused::Read)?;
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, permitted).map_err(ChangepwRefused::Read)?;
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, conf).map_err(ChangepwRefused::Read)?;
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     let ap_rep = ac
         .mk_rep()
@@ -584,7 +579,7 @@ fn kpasswd_log_line(setpw: bool, from: &str, client: &str, target: &str, text: &
 pub(crate) fn handle_kpasswd_from(
     store: &SharedStore,
     acl: &krb5_kdc::Acl,
-    _service_key: &ProtocolKey,
+    conf: &AcceptorConfig,
     replay: &ReplayCache,
     raw: &[u8],
     from: &str,
@@ -626,7 +621,7 @@ pub(crate) fn handle_kpasswd_from(
         return Err(Error::Inner("Invalid message type".into()));
     }
     let priv_raw = &raw[6 + ap_len..];
-    let (store_realm, changepw, skew) = {
+    let (store_realm, changepw) = {
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -639,21 +634,10 @@ pub(crate) fn handle_kpasswd_from(
                 g.get_name(&krb5_kdc::principals::kadmin_changepw())
                     .cloned()
             }),
-            g.policy().skew,
         )
     };
     // MIT `process_chpw_request` (`schpw.c:102-161`): the auth context does sequence numbers only, `krb5_rd_req` names `kadmin/changepw` against the KDB keytab and also refuses an enctype the server (on kadmind's KDC profile) does not permit, and the AP-REP is made before the request is decrypted.
-    let Ok(permitted) = permitted_enctypes_kdc() else {
-        return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
-    };
-    let accepted = match changepw_accept(
-        ap_req,
-        changepw.as_ref(),
-        &store_realm,
-        &permitted,
-        skew,
-        replay,
-    ) {
+    let accepted = match changepw_accept(ap_req, changepw.as_ref(), &store_realm, conf, replay) {
         Ok(a) => a,
         Err(ChangepwRefused::Read(_)) => {
             return kpasswd_chpwfail_error(&store_realm, 3, "Failed reading application request");
@@ -914,10 +898,11 @@ pub fn serve_kpasswd_udp(
     store: SharedStore,
     acl: krb5_kdc::Acl,
     service_key: ProtocolKey,
+    conf: AcceptorConfig,
     sock: UdpSocket,
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<()> {
-    let mut kadmind = Kadmind::new(store, acl, Some(service_key));
+    let mut kadmind = Kadmind::new(store, acl, Some(service_key), conf);
     let udp = [sock];
     let sockets = krb5_kdc::net_server::Sockets {
         udp: &udp,
@@ -941,10 +926,11 @@ pub fn serve_kpasswd_tcp(
     store: SharedStore,
     acl: krb5_kdc::Acl,
     service_key: ProtocolKey,
+    conf: AcceptorConfig,
     listener: TcpListener,
     shutdown: Arc<AtomicBool>,
 ) -> io::Result<()> {
-    let mut kadmind = Kadmind::new(store, acl, Some(service_key));
+    let mut kadmind = Kadmind::new(store, acl, Some(service_key), conf);
     let tcp = [listener];
     let sockets = krb5_kdc::net_server::Sockets {
         tcp: &tcp,
@@ -1007,6 +993,7 @@ mod tests {
     use krb5_config::listen::ListenAddr;
     use krb5_kdc::principals::kadmin_changepw;
     use krb5_kdc::testrealm::bootstrap_documented;
+    use krb5_protocol::AcceptorConfig;
 
     use super::{encode_kpasswd_req, serve_kpasswd_udp, wiped};
 
@@ -1047,7 +1034,9 @@ mod tests {
         let to = SocketAddr::from(([127, 0, 0, 2], sock.local_addr().unwrap().port()));
         let stop = Arc::new(AtomicBool::new(false));
         let (shared, flag) = (krb5_kdc::shared_dump(store), Arc::clone(&stop));
-        let server = thread::spawn(move || serve_kpasswd_udp(shared, acl, key, sock, flag));
+        let server = thread::spawn(move || {
+            serve_kpasswd_udp(shared, acl, key, AcceptorConfig::default(), sock, flag)
+        });
         let plain = UdpSocket::bind("127.0.0.1:0").unwrap();
         let (rep, src) = exchange(&plain, Some(to)).expect("a reply");
         assert_eq!(src, to, "the reply's source");
@@ -1084,7 +1073,7 @@ mod tests {
                 .key
                 .clone()
         };
-        let (user_key, cpw_key) = (key_of(&user), key_of(&kadmin_changepw()));
+        let user_key = key_of(&user);
         let as_req = as_req_sname(
             user.clone(),
             TEST_REALM,
@@ -1123,8 +1112,14 @@ mod tests {
         req.extend_from_slice(&priv_der);
         let shared = krb5_kdc::shared_dump(store);
         wiped::take();
-        let rep = super::handle_kpasswd_rfc3244(&shared, &acl, &cpw_key, &ReplayCache::new(), &req)
-            .unwrap();
+        let rep = super::handle_kpasswd_rfc3244(
+            &shared,
+            &acl,
+            &AcceptorConfig::default(),
+            &ReplayCache::new(),
+            &req,
+        )
+        .unwrap();
         let zeroed = wiped::take();
         assert!(
             u16::from_be_bytes([rep[4], rep[5]]) > 0,
@@ -1315,19 +1310,17 @@ mod tests {
         use krb5_protocol::ReplayCache;
 
         let (store, acl) = bootstrap_documented().unwrap();
-        let key = store
-            .get_name(&kadmin_changepw())
-            .unwrap()
-            .best_key()
-            .unwrap()
-            .key
-            .clone();
         let shared = krb5_kdc::shared_dump(store);
         for frame in [&[0u8, 3, 0][..], &[0, 4, 0, 1], &[0, 5, 0, 1, 0]] {
-            let got =
-                super::handle_kpasswd_rfc3244(&shared, &acl, &key, &ReplayCache::new(), frame)
-                    .unwrap_err()
-                    .to_string();
+            let got = super::handle_kpasswd_rfc3244(
+                &shared,
+                &acl,
+                &AcceptorConfig::default(),
+                &ReplayCache::new(),
+                frame,
+            )
+            .unwrap_err()
+            .to_string();
             assert_eq!(got, "Message stream modified", "{frame:?}");
         }
     }

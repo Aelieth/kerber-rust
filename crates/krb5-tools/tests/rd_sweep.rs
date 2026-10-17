@@ -539,7 +539,12 @@ impl Kadmind {
         let flag = std::sync::Arc::clone(&stop);
         let shared = krb5_kdc::shared_dump(store);
         let thread = std::thread::spawn(move || {
-            let mut kadmind = krb5_admin::Kadmind::new(shared, acl, None);
+            let mut kadmind = krb5_admin::Kadmind::new(
+                shared,
+                acl,
+                None,
+                krb5_protocol::AcceptorConfig::default(),
+            );
             let rpc = [listener];
             let sockets = krb5_kdc::net_server::Sockets {
                 rpc: &rpc,

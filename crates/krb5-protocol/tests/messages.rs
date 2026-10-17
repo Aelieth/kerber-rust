@@ -15,6 +15,7 @@ use krb5_protocol::{
     verify_ap_req_ex,
 };
 use krb5_types::{EncTgsRepPart, PrincipalName, ascii, ku};
+use std::collections::BTreeMap;
 
 /// Capture `n` UDP requests and return them without waiting out the client
 /// UDP retry backoff (0.5+1+2 s) after the stub has what the test asserts.
@@ -228,6 +229,8 @@ fn ap_req_checksum_uses_declared_type() {
         expected_realm: None,
         get_entry: None,
         skew: krb5_protocol::DEFAULT_SKEW,
+        ignore_acceptor_hostname: false,
+        capaths: &BTreeMap::new(),
         remote_addr: None,
         now: None,
     };

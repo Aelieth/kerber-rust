@@ -2,7 +2,7 @@
 //! mech-list MIC, and the krb5 optimistic token.
 
 use krb5_crypto::ProtocolKey;
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::PrincipalName;
 
 use super::context::{ChannelBindings, TOK_AP_REQ};
@@ -259,6 +259,7 @@ pub fn spnego_accept(
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
     rcache: &ReplayCache,
+    conf: &AcceptorConfig,
 ) -> Result<(GssContext, Vec<u8>), Error> {
     spnego_accept_kt(
         token,
@@ -268,6 +269,7 @@ pub fn spnego_accept(
         expected_server,
         expected_realm,
         rcache,
+        conf,
     )
 }
 
@@ -283,6 +285,10 @@ pub fn spnego_accept(
 /// when the `mechListMIC` sequence is refused; [`Error::Inner`] for any other AP-REQ or
 /// `mechListMIC` refusal (see [`GssContext::accept_sec_context_kt`]) and when the reply MIC
 /// cannot be computed.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "gss_accept_sec_context's inputs and the acceptor's profile"
+)]
 pub fn spnego_accept_kt(
     token: &[u8],
     service_keys: &[ProtocolKey],
@@ -291,6 +297,7 @@ pub fn spnego_accept_kt(
     expected_server: Option<&PrincipalName>,
     expected_realm: Option<&str>,
     rcache: &ReplayCache,
+    conf: &AcceptorConfig,
 ) -> Result<(GssContext, Vec<u8>), Error> {
     let init = parse_neg_init(token)?;
     if !mech_list_has_krb5(&init.mech_list_der)? {
@@ -305,6 +312,7 @@ pub fn spnego_accept_kt(
         expected_server,
         expected_realm,
         rcache,
+        conf,
     )?;
     if let Some(mic) = &init.mic {
         ctx.verify_mic(&init.mech_list_der, mic)?;

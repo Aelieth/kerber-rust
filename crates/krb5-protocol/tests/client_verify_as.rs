@@ -3,6 +3,11 @@
 //! server, and the requested server unless a canonicalizing request asked for a TGS and got one.
 //! Live oracle: `client-differential-gate.sh`.
 
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a test sets up its own profile and environment"
+)]
+
 use krb5_config::set_test_krb5_paths;
 use krb5_protocol::{check_as_rep_times, verify_as_reply_req_times, verify_as_reply_server};
 use krb5_types::{

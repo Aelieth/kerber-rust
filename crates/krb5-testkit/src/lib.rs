@@ -4,6 +4,10 @@
 //! `[dependencies]` must not take an edge on it.
 
 #![forbid(unsafe_code)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "test support: scratch paths from the environment"
+)]
 
 mod builders;
 pub use builders::{AsReqBuilder, TgsReqBuilder};

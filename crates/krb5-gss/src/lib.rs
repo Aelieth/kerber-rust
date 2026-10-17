@@ -105,7 +105,7 @@ pub struct GssContext {
     ap_req_time: Option<(krb5_types::KerberosTime, krb5_types::Microseconds)>,
 }
 
-pub use context::{ChannelBindings, InquireOk, use_kdc_context};
+pub use context::{ChannelBindings, InquireOk};
 pub use deleg::DelegCred;
 pub use iov::{IovBuf, IovType};
 pub use oid::{

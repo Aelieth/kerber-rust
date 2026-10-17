@@ -16,23 +16,40 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod acceptor_conf;
 mod ap_rep;
 mod ap_req;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a client operation reads its own profile (CF-4)"
+)]
 mod as_ex;
 mod auth_con;
 mod builders;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a test-hooks build's capture switch"
+)]
 mod capture;
 mod ccache;
 mod ccache_dir;
 mod ccache_mem;
 mod ccmarshal;
 mod chpw;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a client operation reads its own profile (CF-4)"
+)]
 mod clpreauth;
 #[cfg(any(test, feature = "diff"))]
 #[cfg_attr(not(feature = "diff"), allow(dead_code))]
 mod diff;
 mod error;
 mod framing;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a client operation reads its own profile (CF-4)"
+)]
 mod kcm;
 mod keytab;
 mod localaddr;
@@ -43,11 +60,24 @@ mod safe_priv;
 mod secret_file;
 #[cfg(target_os = "linux")]
 mod selabel;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a client operation reads its own profile (CF-4)"
+)]
 mod tgs;
 pub mod trace;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a client operation reads its own profile (CF-4)"
+)]
 mod transport;
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a client operation reads its own profile (CF-4)"
+)]
 mod vfy_increds;
 
+pub use acceptor_conf::AcceptorConfig;
 pub use ap_rep::{build_ap_rep, verify_ap_rep};
 pub use ap_req::{
     ApVerifyOk, ApVerifyParams, DEFAULT_SKEW, KeytabGetEntry, KeytabLookup, address_search,
@@ -70,7 +100,7 @@ pub use auth_con::set_test_seq_random;
 pub use auth_con::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_DO_TIME, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext,
     RemoteSeq, check_ticket_etype, generate_seq_number, local_host_address,
-    negotiate_ap_req_etypes, permitted_enctypes, permitted_enctypes_kdc, us_timeofday,
+    negotiate_ap_req_etypes, us_timeofday,
 };
 pub use builders::{
     TgsReqParams, as_req, as_req_sname, pa_enc_timestamp, pa_enc_timestamp_at, tgs_req, tgs_req_ex,

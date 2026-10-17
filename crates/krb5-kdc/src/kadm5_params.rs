@@ -41,6 +41,10 @@ pub fn kadm5_params_missing(conf: &KdcConf, with_master_key_type: bool) -> bool 
 /// [`kadm5_params_missing`] for `realm`'s own stanza of the KDC profile `paths` read; a profile
 /// that is not there, or does not load, leaves every parameter its default.
 #[must_use]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a program's check when it starts"
+)]
 pub fn realm_kadm5_params_missing(
     paths: &KdcPaths,
     realm: &str,

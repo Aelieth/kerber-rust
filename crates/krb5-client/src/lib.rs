@@ -6,6 +6,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the client library reads its own profile per operation; the client context is in embed-deferred.md"
+)]
 
 use std::path::Path;
 

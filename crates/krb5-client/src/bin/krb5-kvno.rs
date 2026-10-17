@@ -8,6 +8,10 @@
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use krb5_asn1::decode;
 use krb5_client::ccol::{resolve, store_spec};

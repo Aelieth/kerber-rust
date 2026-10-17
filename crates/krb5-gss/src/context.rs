@@ -3,13 +3,11 @@
 //! `generic/util_seqstate.c`, `util_cksum.c`): AP-REQ/AP-REP, channel
 //! bindings, and the sequence window.
 
-use std::sync::atomic::{AtomicBool, Ordering};
-
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt_enc_data};
 use krb5_protocol::{
-    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, KeytabGetEntry,
-    ReplayCache, build_ap_req_from_authenticator, permitted_enctypes, permitted_enctypes_kdc,
+    AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, AcceptorConfig,
+    KeytabGetEntry, ReplayCache, build_ap_req_from_authenticator,
 };
 use krb5_types::{
     ApOptions, ApRep, Authenticator, AuthorizationData, AuthorizationDataValue, Checksum,
@@ -30,9 +28,6 @@ pub(super) const TOK_AP_REP: [u8; 2] = [0x02, 0x00];
 
 pub(super) const FLAG_ACCEPTOR_SUBKEY: u8 = 0x04;
 
-/// Whether this process accepts on the KDC profile ([`use_kdc_context`]).
-static KDC_CONTEXT: AtomicBool = AtomicBool::new(false);
-
 /// Where the acceptor finds the key a ticket is sealed in: keys it holds, with their kvnos when
 /// the keytab they came from labels them, or a lookup in a keytab that cannot be walked.
 #[derive(Clone, Copy)]
@@ -40,13 +35,6 @@ struct AcceptKeys<'a> {
     keys: &'a [ProtocolKey],
     kvnos: Option<&'a [u32]>,
     get_entry: Option<KeytabGetEntry<'a>>,
-}
-
-/// From now on, accept every context with the KDC profile's enctype policy, kdc.conf's
-/// `[libdefaults]` before krb5.conf's, as kadmind does.
-/// MIT `krb5int_gss_use_kdc_context` (`lib/gssapi/krb5/init_sec_context.c:1018-1036`): the switch is process-wide, and every krb5 context made after it reads the KDC profile.
-pub fn use_kdc_context() {
-    KDC_CONTEXT.store(true, Ordering::Relaxed);
 }
 
 const INITIATOR_FLAGS: u32 = GSS_C_INTEG
@@ -428,9 +416,8 @@ impl GssContext {
     /// when the ticket or authenticator fails its integrity check; [`Error::ChannelBindings`] when
     /// the 0x8003 checksum is under 24 bytes or its bindings (sent or demanded) do not match;
     /// [`Error::Inner`] for every other refusal of the AP-REQ (a session key or subkey enctype
-    /// outside `permitted_enctypes`, the KDC profile's after [`use_kdc_context`], among them),
-    /// its subkey, 0x8003 checksum, authorization data, or delegated KRB-CRED, and when the
-    /// AP-REP cannot be built.
+    /// `conf` does not permit among them), its subkey, 0x8003 checksum, authorization data, or
+    /// delegated KRB-CRED, and when the AP-REP cannot be built.
     pub fn accept_sec_context(
         token: &[u8],
         service_keys: &[ProtocolKey],
@@ -438,6 +425,7 @@ impl GssContext {
         expected_server: Option<&PrincipalName>,
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
+        conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         Self::accept_sec_context_kt(
             token,
@@ -447,6 +435,7 @@ impl GssContext {
             expected_server,
             expected_realm,
             rcache,
+            conf,
         )
     }
 
@@ -464,9 +453,12 @@ impl GssContext {
     /// when the ticket or authenticator fails its integrity check; [`Error::ChannelBindings`] when
     /// the 0x8003 checksum is under 24 bytes or its bindings (sent or demanded) do not match;
     /// [`Error::Inner`] for every other refusal of the AP-REQ (a session key or subkey enctype
-    /// outside `permitted_enctypes`, the KDC profile's after [`use_kdc_context`], among them),
-    /// its subkey, 0x8003 checksum, authorization data, or delegated KRB-CRED, and when the
-    /// AP-REP cannot be built.
+    /// `conf` does not permit among them), its subkey, 0x8003 checksum, authorization data, or
+    /// delegated KRB-CRED, and when the AP-REP cannot be built.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "gss_accept_sec_context's inputs and the acceptor's profile"
+    )]
     pub fn accept_sec_context_kt(
         token: &[u8],
         service_keys: &[ProtocolKey],
@@ -475,6 +467,7 @@ impl GssContext {
         expected_server: Option<&PrincipalName>,
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
+        conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         if service_keys.is_empty() {
             return Err(Error::Truncated);
@@ -492,6 +485,7 @@ impl GssContext {
             expected_server,
             expected_realm,
             rcache,
+            conf,
         )
     }
 
@@ -513,6 +507,7 @@ impl GssContext {
         get_entry: KeytabGetEntry<'_>,
         channel_bindings: Option<&ChannelBindings>,
         rcache: &ReplayCache,
+        conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         Self::accept_inner(
             token,
@@ -525,23 +520,8 @@ impl GssContext {
             acceptor,
             Some(realm),
             rcache,
+            conf,
         )
-    }
-
-    /// The enctypes this process's acceptor permits for a ticket's session key and subkey, and for
-    /// the key a keytab gives: the KDC profile's after [`use_kdc_context`], else krb5.conf's.
-    /// MIT `krb5_gss_init_context` (`init_sec_context.c:995-1016`): the context a process that asked for the KDC context accepts on.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Inner`] when the profile's `permitted_enctypes` do not parse.
-    pub fn acceptor_permitted_enctypes() -> Result<Vec<EncryptionType>, Error> {
-        let permitted = if KDC_CONTEXT.load(Ordering::Relaxed) {
-            permitted_enctypes_kdc()
-        } else {
-            permitted_enctypes()
-        };
-        Ok(permitted?)
     }
 
     fn accept_inner(
@@ -551,6 +531,7 @@ impl GssContext {
         expected_server: Option<&PrincipalName>,
         expected_realm: Option<&str>,
         rcache: &ReplayCache,
+        conf: &AcceptorConfig,
     ) -> Result<(Self, Option<Vec<u8>>), Error> {
         let dce_style = token.first() != Some(&0x60);
         let inner = ap_req_token(token)?;
@@ -575,9 +556,9 @@ impl GssContext {
             kvno: None,
             get_entry: keys.get_entry,
             // MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:631-632`): the authenticator time is checked against the context clock skew.
-            // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): that skew is `[libdefaults] clockskew`, 300 seconds when unset.
-            skew: krb5_config::load_krb5_conf()
-                .map_or(krb5_protocol::DEFAULT_SKEW, |c| i64::from(c.clockskew)),
+            skew: i64::from(conf.clockskew),
+            ignore_acceptor_hostname: conf.ignore_acceptor_hostname,
+            capaths: &conf.capaths,
             remote_addr: sender.as_ref(),
             now: None,
         };
@@ -588,14 +569,8 @@ impl GssContext {
             }
             Err(e) => return Err(e.into()),
         };
-        // MIT `krb5_gss_init_context` (`init_sec_context.c:995-1016`): a process that asked for the KDC context accepts on the KDC profile.
-        let permitted = if KDC_CONTEXT.load(Ordering::Relaxed) {
-            permitted_enctypes_kdc()
-        } else {
-            permitted_enctypes()
-        };
         // MIT `kg_accept_krb5` (`accept_sec_context.c:829-837`): `krb5_rd_req_decoded` negotiates the enctypes before the context exists, then the auth context takes `DO_SEQUENCE`.
-        let mut ac = permitted.and_then(|p| AcceptorAuthContext::from_ap_req(&ok, &p))?;
+        let mut ac = AcceptorAuthContext::from_ap_req(&ok, conf)?;
         ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
         let crealm = String::from_utf8_lossy(ok.ticket_part.crealm.as_bytes()).into_owned();
         let client = ok.authenticator.cname.unparse_with_realm(&crealm);

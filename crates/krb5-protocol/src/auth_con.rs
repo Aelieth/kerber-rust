@@ -14,13 +14,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
     CipherState, EncryptionType, KeyUsage, ProtocolKey, checksum_output_size, decrypt_enc_data,
-    decrypt_enc_data_with_state, encrypt, encrypt_with_state, parse_enctype_list,
+    decrypt_enc_data_with_state, encrypt, encrypt_with_state,
 };
 use krb5_types::{
     ApRep, Authenticator, AuthorizationData, EncApRepPart, EncKrbPrivPart, EncryptedData,
     EncryptionKey, HostAddress, KerberosTime, KrbPriv, Microseconds, OctetString, err, ku, pa,
 };
 
+use crate::acceptor_conf::AcceptorConfig;
 use crate::ap_req::ApVerifyOk;
 use crate::error::Error;
 use crate::replay::{ReplayCache, ReplayKey};
@@ -40,9 +41,6 @@ const ADDRTYPE_INET: i32 = 2;
 const ADDRTYPE_DIRECTIONAL: i32 = 3;
 const ADDRTYPE_INET6: i32 = 24;
 
-/// MIT's default `clockskew` (`DEFAULT_CLOCKSKEW`, 300 seconds), for a profile that sets none.
-const DEFAULT_CLOCKSKEW: i64 = 300;
-
 /// The acceptor's side of an authenticated exchange after the AP-REQ verified.
 pub struct AcceptorAuthContext {
     flags: u32,
@@ -59,6 +57,7 @@ pub struct AcceptorAuthContext {
     host_addrs: Option<Vec<HostAddress>>,
     cstate: Option<CipherState>,
     memrcache: Option<ReplayCache>,
+    clockskew: i64,
 }
 
 /// The sequence number the peer's next KRB-SAFE or KRB-PRIV must carry, and what its earlier
@@ -194,17 +193,19 @@ pub fn negotiate_ap_req_etypes(
 }
 
 impl AcceptorAuthContext {
-    /// The auth context an accepted AP-REQ leaves, checked against the `permitted` enctypes.
+    /// The auth context an accepted AP-REQ leaves, checked against the enctypes `conf` permits;
+    /// its KRB-SAFE and KRB-PRIV times are judged by `conf`'s clock skew.
     /// MIT `rd_req_decoded_opt` (`lib/krb5/krb/rd_req_dec.c:652-773`): the RFC 4537 list, then the subkey's and the session key's enctypes, are negotiated, the peer's sequence number and subkey are kept, and without mutual authentication the local sequence number starts from the peer's.
     /// MIT `krb5_decrypt_tkt_part` (`lib/krb5/krb/decrypt_tk.c:46-50`): the ticket's own enctype must be permitted too.
     ///
     /// # Errors
     ///
-    /// [`Error::NopermEtype`] when `permitted` lacks the ticket's, the session key's or the
-    /// subkey's enctype; [`Error::ProgEtypeNosupp`] for a ticket enctype not implemented;
+    /// [`Error::ConfigEtypeNosupp`] when `conf` permits no enctype; [`Error::NopermEtype`]
+    /// when it does not permit the ticket's, the session key's or the subkey's enctype; [`Error::ProgEtypeNosupp`] for a ticket enctype not implemented;
     /// [`Error::Asn1`] when the authenticator's AD-ETYPE-NEGOTIATION list does not decode;
     /// [`Error::Crypto`] when the session key or the subkey is not a usable key.
-    pub fn from_ap_req(ok: &ApVerifyOk, permitted: &[EncryptionType]) -> Result<Self, Error> {
+    pub fn from_ap_req(ok: &ApVerifyOk, conf: &AcceptorConfig) -> Result<Self, Error> {
+        let permitted = conf.permitted()?;
         check_ticket_etype(ok.ticket_etype, permitted)?;
         let key = protocol_key(&ok.ticket_part.key)?;
         let authenticator = ok.authenticator.clone();
@@ -236,6 +237,7 @@ impl AcceptorAuthContext {
             host_addrs: None,
             cstate: None,
             memrcache: None,
+            clockskew: i64::from(conf.clockskew),
         })
     }
 
@@ -491,13 +493,12 @@ impl AcceptorAuthContext {
     }
 
     /// MIT `k5_privsafe_check_replay` (`lib/krb5/krb/privsafe.c:107-141`): only under `DO_TIME`, a timestamp outside the clock skew is `KRB5KRB_AP_ERR_SKEW`, and a message whose tag the context's memory replay cache already holds is `KRB5KRB_AP_ERR_REPEAT`.
-    /// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): the clock skew is `[libdefaults] clockskew`, 300 seconds when it is unset.
+    /// MIT `krb5_check_clockskew` (`lib/krb5/os/timeofday.c:55-67`): the skew is the context's, which the acceptor's profile gave it.
     fn check_replay(&mut self, timestamp: Option<&KerberosTime>, tag: &[u8]) -> Result<(), Error> {
         if self.flags & AUTH_CONTEXT_DO_TIME == 0 {
             return Ok(());
         }
-        let skew =
-            krb5_config::load_krb5_conf().map_or(DEFAULT_CLOCKSKEW, |c| i64::from(c.clockskew));
+        let skew = self.clockskew;
         let now = i64::from(KerberosTime::now().unix_seconds());
         let then = timestamp.map_or(0, |t| i64::from(t.unix_seconds()));
         if (now - then).abs() > skew {
@@ -646,46 +647,6 @@ fn seq_random() -> Result<u32, Error> {
     let mut b = [0u8; 4];
     getrandom::getrandom(&mut b).map_err(|e| Error::Crypto(e.to_string()))?;
     Ok(u32::from_ne_bytes(b))
-}
-
-/// The enctypes an acceptor permits: krb5.conf `permitted_enctypes`, else MIT's default list.
-///
-/// # Errors
-///
-/// [`Error::ConfigEtypeNosupp`] when the configured list names no enctype.
-pub fn permitted_enctypes() -> Result<Vec<EncryptionType>, Error> {
-    permitted_enctypes_in(None, krb5_config::load_krb5_conf().as_ref())
-}
-
-/// The enctypes a server on the KDC profile permits (kadmind, the kpasswd service in it, and
-/// kpropd): kdc.conf's `[libdefaults]` relations first, then krb5.conf's.
-/// MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): a KDC context lists kdc.conf ahead of the krb5.conf files, so its relations are found first.
-///
-/// # Errors
-///
-/// [`Error::ConfigEtypeNosupp`] when the list that applies names no enctype.
-pub fn permitted_enctypes_kdc() -> Result<Vec<EncryptionType>, Error> {
-    let kdc = krb5_config::KdcConf::load_file_without_realms(krb5_config::kdc_conf_path()).ok();
-    permitted_enctypes_in(kdc.as_ref(), krb5_config::load_krb5_conf().as_ref())
-}
-
-/// MIT `krb5_get_permitted_enctypes` (`lib/krb5/krb/init_ctx.c:573-595`): the first profile file that sets `permitted_enctypes` gives the list (else `DEFAULT`), filtered by `allow_weak_crypto` as the first file setting it says.
-fn permitted_enctypes_in(
-    kdc: Option<&krb5_config::KdcConf>,
-    krb5: Option<&krb5_config::Krb5Conf>,
-) -> Result<Vec<EncryptionType>, Error> {
-    let allow_weak = kdc
-        .and_then(|k| k.allow_weak_crypto)
-        .unwrap_or_else(|| krb5.is_some_and(|c| c.allow_weak_crypto));
-    let profstr = kdc
-        .map(|k| &k.permitted_enctypes)
-        .filter(|list| !list.is_empty())
-        .or_else(|| {
-            krb5.map(|c| &c.permitted_enctypes)
-                .filter(|list| !list.is_empty())
-        })
-        .map_or_else(|| "DEFAULT".to_owned(), |list| list.join(" "));
-    parse_enctype_list(&profstr, allow_weak).ok_or(Error::ConfigEtypeNosupp)
 }
 
 /// The address a reply's KRB-PRIV names as its sender: the address the request came in on.
