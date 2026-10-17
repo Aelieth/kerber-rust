@@ -70,10 +70,11 @@ budget:
 PROFILE ?= nightly
 REF ?= f-functional
 ONLY ?=
+LEG ?=
 
 .PHONY: field
 field:
-	$(ROOT)/harness/field/run.sh --profile $(PROFILE) --ref $(REF) $(if $(ONLY),--only $(ONLY))
+	$(ROOT)/harness/field/run.sh --profile $(PROFILE) --ref $(REF) $(if $(ONLY),--only $(ONLY)) $(if $(LEG),--leg $(LEG))
 
 # The product as Fedora's krb5-server and krb5-workstation lay out MIT's (docs/install.md;
 # dist/install.sh does the copying and keeps the manifest uninstall reads). `make build` is the

@@ -191,13 +191,10 @@ harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile -
   - those sha256s unchanged;
   - nothing new in the host's `/tmp` owned by the user;
   - `lib/scan-secrets.py` over the whole run, its planted control first.
-  - A run driven from a Claude Code session (`CLAUDECODE=1`) leaves that
-    session's own `/tmp/claude-<uid>` out of the `/tmp` check, because the
-    session writes there on every tool call. The `post.host.tmp` line says how
-    many entries it left out.
-  - Every run also leaves `/tmp/grok-file-lock-<uid>` out of that check and
-    counts it on the same line. A Grok session writes its usage lock there
-    even when it is not the process driving the run.
+  - Every run leaves `/tmp/claude-<uid>` and `/tmp/grok-file-lock-<uid>` out
+    of that check and counts both on the `post.host.tmp` line. Those trees are
+    CLI scratch for this user, written whether or not that CLI is driving the
+    run. Any other new path still fails the guard.
 - **Limits:** a scenario has `FIELD_SCENARIO_TIMEOUT` seconds (default 1800),
   and each of its commands `FIELD_CMD_TIMEOUT` (default 900), cut to what is
   left of the scenario's time. A command over its limit is stopped and fails

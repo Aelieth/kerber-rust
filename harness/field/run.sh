@@ -13,8 +13,8 @@
 # directory); every snapshot baseline.env names exists; `lab.sh check --lab-only` of the VMs the selected
 # scenarios use (ssh, DNS, time sync: no internet, LAN or AD DC probe); the sha256 of /etc/krb5.conf, and from
 # a distrobox of the host's own. Postflight, also after a stop or an interruption: those sums unchanged, nothing
-# new in the host's /tmp owned by the user (Claude's /tmp/claude-<uid> when CLAUDECODE=1, and
-# /tmp/grok-file-lock-<uid>, each counted), the secret scan of the whole run with its planted control first.
+# new in the host's /tmp owned by the user (/tmp/claude-<uid> and
+# /tmp/grok-file-lock-<uid> left out and counted), the secret scan of the whole run with its planted control first.
 # Any failure fails the run. A scenario that did not run is NOT-RUN, never green. Exit 0 only when every
 # selected scenario passed and every guard held.
 # Limits: a scenario has FIELD_SCENARIO_TIMEOUT seconds (default 1800; its commands are cut to what is left,
@@ -116,22 +116,18 @@ declare -a ROWS=()
 
 # postflight: the guards that hold whatever happened before them.
 postflight() {
-    local mark=$RUN/tmp/.start excl='' left='' grok_excl
+    local mark=$RUN/tmp/.start left='' grok_excl claude_excl
     local -a prune
     section "postflight"
     krb5_sums > "$RUN/guards/krb5.conf.end"
     check post.krb5.conf rc host "diff $(printf '%q' "$RUN/guards/krb5.conf.start") $(printf '%q' "$RUN/guards/krb5.conf.end") && echo unchanged: && cat $(printf '%q' "$RUN/guards/krb5.conf.end")"
-    # A Grok session writes this tree for the same user even when it is not the process driving the run.
+    # Both trees are CLI scratch for this user, written whether or not that CLI is driving the run.
     grok_excl="/tmp/grok-file-lock-$(id -u)"
-    prune=(-path "$grok_excl" -prune -o)
-    note "left out of the /tmp guard (and counted): $grok_excl"
+    claude_excl="/tmp/claude-$(id -u)"
+    prune=(-path "$grok_excl" -prune -o -path "$claude_excl" -prune -o)
+    note "left out of the /tmp guard (and counted): $grok_excl $claude_excl"
     left="; left out: $(find "$grok_excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $grok_excl"
-    if [ "${CLAUDECODE:-}" = 1 ]; then
-        excl="/tmp/claude-$(id -u)"
-        note "driven from a Claude Code session (CLAUDECODE=1): the session writes its own $excl on every tool call, so that one tree is left out of the /tmp guard (and counted)"
-        left+="; left out: $(find "$excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $excl"
-        prune=(-path "$excl" -prune -o "${prune[@]}")
-    fi
+    left+="; left out: $(find "$claude_excl" -xdev -newer "$mark" 2>/dev/null | wc -l) entries under $claude_excl"
     find /tmp -xdev "${prune[@]}" -user "$(id -un)" -newer "$mark" -print > "$RUN/guards/host-tmp.txt" 2>/dev/null || true
     printf 'new in /tmp: %s%s\n' "$(grep -c . "$RUN/guards/host-tmp.txt" || true)" "$left" >> "$RUN/guards/host-tmp.txt"
     check post.host.tmp '^new in /tmp: 0(;|$)' host "cat $(printf '%q' "$RUN/guards/host-tmp.txt")"
@@ -310,8 +306,26 @@ for leg in "${LEGS[@]}"; do
         ROWS+=("$(printf '%-12s %-5s %-8s %s pass / %s fail / %s info, %s min, exit %s%s: %s/%s/record.txt' \
             "$sc" "$leg" "$res" "$npass" "$nfail" "$ninfo" "$(( ($(date +%s) - t) / 60 ))" "$rc" \
             "$([ "$rc" = 124 ] && echo ' (over its time limit)')" "$sc" "$leg")")
+        if [ "$leg" = mit ] && [ "$res" = PASS ]; then
+            mkdir -p "$RUNS/mit-latest/$sc"
+            cp "$dir/checks.tsv" "$RUNS/mit-latest/$sc/checks.tsv"
+        fi
         say "== $sc --leg $leg: $res"
     done
+done
+
+# ---------------------------------------------------------------- grade rust against the MIT leg (this run, else mit-latest)
+for sc in "${SEL[@]}"; do
+    mit=$RUN/$sc/mit/checks.tsv
+    rust=$RUN/$sc/rust/checks.tsv
+    if [ ! -f "$mit" ] && [ -f "$RUNS/mit-latest/$sc/checks.tsv" ]; then
+        mit=$RUNS/mit-latest/$sc/checks.tsv
+    fi
+    if [ -f "$rust" ] && [ -f "$mit" ] && [ -f "$HERE/scenarios/$sc.expect" ]; then
+        python3 -I "$HERE/lib/compare.py" \
+            --expect "$HERE/scenarios/$sc.expect" --mit "$mit" --rust "$rust" \
+            --out "$RUN/$sc/grades.tsv" || ALL_PASS=0
+    fi
 done
 
 # ---------------------------------------------------------------- postflight, summary, index, retention
