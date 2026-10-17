@@ -51,6 +51,7 @@ any other `###` heading.
 - **parity.** The S4U2Proxy padata and kinit -v options point at the live client differential gate. Three client rows keep a historic MIT proof.
 - **ci.** An exact row with no status word may cite a removed test when the proof says since removed.
 - **ci.** The six per-push jobs run on `ubuntu-26.04`.
+- **ci.** Nightly and peers run on `ubuntu-26.04`. The fuzz crate check is `--locked`.
 
 ### Removed
 

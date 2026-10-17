@@ -15,7 +15,7 @@ on:
 jobs:
   oracles:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -54,7 +54,7 @@ jobs:
         run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
   moving:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -242,7 +242,7 @@ jobs:
         run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
   fuzz:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -289,7 +289,7 @@ jobs:
           if-no-files-found: ignore
   anchors:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -313,7 +313,7 @@ jobs:
 
   test-release:
     if: github.event_name != 'schedule' && github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -329,7 +329,7 @@ jobs:
 
   msrv-test:
     if: github.event_name != 'schedule' && github.event_name != 'pull_request'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 30
     # rust-toolchain.toml pins stable; the env pin outranks it (ci-policy check_msrv_pinned).
     env:

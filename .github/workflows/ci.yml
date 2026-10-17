@@ -90,7 +90,7 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
       - name: fuzz crate
-        run: cargo check --manifest-path fuzz/Cargo.toml --bins
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml --bins
 
   shellcheck:
     runs-on: ubuntu-26.04

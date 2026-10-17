@@ -106,7 +106,7 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | Job | Runs |
 | --- | --- |
 | `test` | `python3 scripts/ci-policy.py`, `cargo fmt --all -- --check`, `cargo clippy -D warnings` with `--all-features` and with none, `cargo nextest run --workspace --profile ci` with the test-hooks features, then `--profile ci-nofeatures --locked`, then doctests |
-| `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings`, then `cargo check --manifest-path fuzz/Cargo.toml --bins` |
+| `doc` | `cargo doc --workspace --no-deps` under `RUSTDOCFLAGS=-D warnings`, then `cargo check --locked --manifest-path fuzz/Cargo.toml --bins` |
 | `shellcheck` | `shellcheck -S style` on `scripts/*.sh`, `scripts/lib/*.sh`, `harness/*.sh`, `dist/*.sh`, `harness/field/*.sh`, `harness/field/lib/*.sh`, and `harness/field/scenarios/*.sh`. ShellCheck is v0.11.0, checked by sha256. `.shellcheckrc` sets `external-sources=true` and disables `SC2329` |
 | `msrv` | `cargo build --workspace --all-targets --locked` on Rust 1.95, with the test-hooks features and without |
 | `audit` | `cargo audit`, `cargo deny`, `cargo vet --locked` (cargo-vet 0.10.0) |
