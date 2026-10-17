@@ -41,6 +41,7 @@ any other `###` heading.
 - **ci.** A pull request labeled `nightly` runs `oracles`, `moving`, `fuzz`, and `anchors`. `schedule` and `workflow_dispatch` stay.
 - **log.** Unit tests outside the keep list are gone. The two symlink-open tests stay.
 - **cli.** Unit tests outside the keep list are gone. The wiped-buffer line test stays.
+- **asn1.** Unit tests outside the keep list are gone. The four DER-strict tests stay.
 
 ### Fixed
 

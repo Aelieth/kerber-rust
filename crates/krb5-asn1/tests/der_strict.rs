@@ -23,11 +23,9 @@ fn extra_trailing_bytes_rejected_or_decoded_prefix() {
     let p = PN::new(PN::NT_PRINCIPAL, ["user"]);
     let mut der = encode(&p).unwrap();
     der.extend_from_slice(&[0xff; 8]);
-    // rasn DER decode of the type may error on extra data; either is strict enough.
-    let r = decode::<PrincipalName>(&der);
-    if let Ok(p2) = r {
-        assert_eq!(p, p2);
-    }
+    // MIT `k5_asn1_full_decode` (`lib/krb5/asn.1/asn1_encode.c:1580-1581`): a nonzero remainder after the value is still a successful decode.
+    let p2 = decode::<PrincipalName>(&der).unwrap();
+    assert_eq!(p, p2);
 }
 
 #[test]
@@ -37,7 +35,7 @@ fn deep_nesting_does_not_panic() {
         bomb.extend_from_slice(&[0x30, 0x80]);
     }
     bomb.extend_from_slice(&[0x00, 0x00]);
-    let _ = std::panic::catch_unwind(|| {
-        let _ = decode::<PrincipalName>(&bomb);
-    });
+    let decoded = std::panic::catch_unwind(|| decode::<PrincipalName>(&bomb));
+    assert!(decoded.is_ok());
+    assert!(decoded.unwrap().is_err());
 }

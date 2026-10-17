@@ -620,7 +620,7 @@ the clause it is in (semicolon-separated).
 - MIT's SPAKE test vectors (`t_vectors.c`) in `crates/krb5-crypto/tests/spake_vectors.rs`, from
   the KDC's side and the client's: edwards25519 with des3, rc4, aes128, aes256 and an optimistic
   challenge, and P-256.
-- DER round-trip in `crates/krb5-asn1/tests/round_trip.rs`.
+- DER round-trip in crates/krb5-asn1/tests/round_trip.rs.
 - Downstream consumer tests in `examples/consumer`.
 
 These tests call the shipped functions. They do not reimplement AES or
