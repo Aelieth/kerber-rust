@@ -44,9 +44,26 @@ fn failed() -> Error {
     proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
 }
 
+/// `EINVAL`.
+const EINVAL: i32 = 22;
+/// MIT `KRB5_BAD_ENCTYPE` (`krb5_err.et`): `ERROR_TABLE_BASE_krb5` plus 188.
+const KRB5_BAD_ENCTYPE: i32 = -1_765_328_196;
+/// MIT `KRB5_BAD_MSIZE` (`krb5_err.et`): `ERROR_TABLE_BASE_krb5` plus 190.
+const KRB5_BAD_MSIZE: i32 = -1_765_328_194;
+
 /// A failure whose MIT code is no KRB-ERROR code, with the text `krb5_get_error_message` gives it.
 fn library_failure(message: &str) -> Error {
+    let code = if message == E_EINVAL {
+        EINVAL
+    } else if message == E_BAD_ENCTYPE {
+        KRB5_BAD_ENCTYPE
+    } else if message == E_BAD_MSIZE {
+        KRB5_BAD_MSIZE
+    } else {
+        crate::asn1_text::asn1_code(message)
+    };
     Error::PreauthModule {
+        code,
         message: message.to_owned(),
     }
 }
@@ -310,9 +327,10 @@ pub(crate) fn process_spake(
         // MIT `spake_verify` (`spake_kdc.c:532-536`): a challenge from a client, or an element no alternative takes, is an unknown request type.
         PaSpake::EncData(_) => Err(failed()),
         // MIT `spake_verify` (`spake_kdc.c:532-535`): 24 with this text, which the verify log carries.
-        PaSpake::Challenge(_) | PaSpake::Unknown => {
-            Err(library_failure("Unknown SPAKE request type"))
-        }
+        PaSpake::Challenge(_) | PaSpake::Unknown => Err(Error::PreauthModule {
+            code: krb5_types::err::PREAUTH_FAILED,
+            message: "Unknown SPAKE request type".to_owned(),
+        }),
     }
 }
 

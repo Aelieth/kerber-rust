@@ -328,6 +328,7 @@ fn finish_preauth(
             finish_verify_padata(
                 EC_MODULE,
                 Error::PreauthModule {
+                    code: ENOENT,
                     message: "Encrypted Challenge used outside of FAST tunnel".to_owned(),
                 },
             ),
@@ -456,6 +457,7 @@ fn finish_preauth(
             return Err(finish_verify_padata(
                 EC_MODULE,
                 Error::PreauthModule {
+                    code: ENOENT,
                     message: "No such file or directory".to_owned(),
                 },
             ));
@@ -866,11 +868,12 @@ pub(crate) fn extract_enc_timestamp(padata: Option<&[PaData]>) -> Option<&OctetS
 /// MIT `kdcpreauth_encrypted_challenge_initvt` (`kdc/kdc_preauth_ec.c:219-219`): the module's name, which its verify failures are logged under.
 const EC_MODULE: &str = "encrypted_challenge";
 
+/// `ENOENT`, the code `ec_verify` returns outside FAST and with no client key.
+const ENOENT: i32 = 2;
+
 /// The ASN.1 failure of `der` as MIT's decoder reports it, for a module's verify to log.
 fn asn1_failure(der: &[u8], first_field_explicit: bool) -> Error {
-    Error::PreauthModule {
-        message: crate::asn1_text::decode_failure_text(der, first_field_explicit).to_owned(),
-    }
+    crate::asn1_text::preauth_decode_failure(der, first_field_explicit)
 }
 
 /// MIT `ec_verify` (`kdc/kdc_preauth_ec.c:121-128`): a timestamp inside the clock skew verifies, and a replayed one verifies again.
@@ -892,6 +895,7 @@ fn verify_encrypted_challenge(
     let usage = KeyUsage::new(ku::ENC_CHALLENGE_CLIENT)?;
     let plain = decrypt_enc_data(&chal, usage, enc.etype, enc.cipher.as_ref()).map_err(|_| {
         Error::PreauthModule {
+            code: err::PREAUTH_FAILED,
             message: "Incorrect password in encrypted challenge".to_owned(),
         }
     })?;

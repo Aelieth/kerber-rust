@@ -72,12 +72,14 @@ pub enum Error {
         /// DER METHOD-DATA (ETYPE-INFO2).
         e_data: Vec<u8>,
     },
-    /// A kdcpreauth module's failure whose `krb5_error_code` is not a KRB-ERROR code: a KDB, ASN.1,
-    /// system or library code. `message` is what `krb5_get_error_message` gives that code, which
-    /// `finish_verify_padata` logs, and the filter sends 24.
-    /// MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): the module's own code is the one logged.
+    /// A kdcpreauth module's failure. `code` is the module's own `krb5_error_code` and `message`
+    /// is what `krb5_get_error_message` gives that code. The filter keeps the message only when
+    /// the wire code is this one.
+    /// MIT `k5_get_error` (`util/support/errors.c:68-95`): the message is returned for the code it was set under.
     PreauthModule {
-        /// The module's message for its code.
+        /// The module's `krb5_error_code`.
+        code: i32,
+        /// The module's message for `code`.
         message: String,
     },
 }
@@ -113,7 +115,7 @@ impl fmt::Display for Error {
             Self::Db { text, .. } | Self::InvalidArgument(text) => write!(f, "{text}"),
             Self::UnexpectedPdu => write!(f, "unexpected PDU"),
             Self::PreauthRequired { .. } => write!(f, "preauth required"),
-            Self::PreauthModule { message } => write!(f, "{message}"),
+            Self::PreauthModule { message, .. } => write!(f, "{message}"),
         }
     }
 }

@@ -18,6 +18,36 @@ pub(crate) const ASN1_PARSE_ERROR: &str = "ASN.1 parse error";
 /// MIT `ASN1_INDEF` (`lib/krb5/error_tables/asn1_err.et:13-13`): its text.
 pub(crate) const ASN1_INDEF: &str = "ASN.1 indefinite encoding";
 
+/// `ERROR_TABLE_BASE_asn1`, from `et_c.awk` on the table name `asn1`.
+const ASN1_BASE: i32 = 1_859_794_432;
+
+/// The `asn1` com_err code whose text is `text`. An unknown text is `ASN1_PARSE_ERROR`.
+pub(crate) fn asn1_code(text: &str) -> i32 {
+    let offset: i32 = match text {
+        ASN1_MISSING_FIELD => 1,
+        ASN1_OVERFLOW => 4,
+        ASN1_OVERRUN => 5,
+        ASN1_BAD_ID => 6,
+        ASN1_BAD_LENGTH => 7,
+        ASN1_BAD_FORMAT => 8,
+        ASN1_INDEF => 11,
+        _ => 9,
+    };
+    ASN1_BASE + offset
+}
+
+/// A module failure whose code and text are MIT's for a decode of `der`.
+pub(crate) fn preauth_decode_failure(
+    der: &[u8],
+    first_field_explicit: bool,
+) -> crate::error::Error {
+    let message = decode_failure_text(der, first_field_explicit);
+    crate::error::Error::PreauthModule {
+        code: asn1_code(message),
+        message: message.to_owned(),
+    }
+}
+
 /// The class bits of an identifier octet: universal.
 pub(crate) const UNIVERSAL: u8 = 0x00;
 /// The class bits of an identifier octet: application.

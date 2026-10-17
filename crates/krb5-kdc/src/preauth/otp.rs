@@ -9,17 +9,15 @@ use krb5_types::k5json::{self, Value};
 use krb5_types::otp::{OtpTokenInfo, PaOtpChallenge, PaOtpEncRequest, PaOtpRequest};
 use krb5_types::{KerberosFlags, PaData, PaEncTsEnc, PrincipalName, err, ku, pa};
 
-use super::{find_pa, proto};
+use super::find_pa;
 use crate::ad::authind_add;
 use crate::asn1_text::decode_failure_text;
-use crate::audit::kdc_error_message;
 use crate::error::Error;
 use crate::kdb::PrincipalRead;
 use crate::plugins::{
     OtpVerdict, OtpVerifyRequest, PreauthAction, PreauthHint, PreauthRock, find_otp_verifier,
     otp_verifier_names,
 };
-use crate::status;
 use crate::store::{Principal, unix_now_u32};
 
 /// MIT `DEFAULT_TYPE_NAME` (`plugins/preauth/otp/otp_state.c:42-42`): the type an `otp` token
@@ -111,6 +109,8 @@ fn within_skew(then: u32, skew: i64) -> bool {
 
 /// The codes and texts of the module's failures: MIT's `com_err` message for each code.
 const E_PREAUTH_FAILED: &str = "Preauthentication failed";
+/// MIT `on_response` (`plugins/preauth/otp/main.c:167-168`): an OTP reject is `KRB5_PREAUTH_FAILED`.
+const KRB5_PREAUTH_FAILED: i32 = -1_765_328_174;
 const E_GENERIC: &str = "Generic preauthentication failure";
 const E_INTEGRITY: &str = "Decrypt integrity check failed";
 const E_SKEW: &str = "Clock skew too great";
@@ -292,13 +292,11 @@ pub(crate) fn process_otp(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction
 }
 
 impl OtpFail {
-    /// The error `finish_verify_padata` logs for it: a code with its table text is that code, and
-    /// any other message belongs to a library code that is no KRB-ERROR code.
+    /// The module's code and the message set under it.
     fn into_error(self) -> Error {
-        if self.emsg == kdc_error_message(self.code) {
-            proto(self.code, status::PREAUTH_FAILED)
-        } else {
-            Error::PreauthModule { message: self.emsg }
+        Error::PreauthModule {
+            code: self.code,
+            message: self.emsg,
         }
     }
 }
@@ -402,7 +400,7 @@ fn otp_verify(rock: &PreauthRock<'_>) -> Result<Option<PreauthAction>, OtpFail> 
             OtpVerdict::Error(text) => return Err(fail(24, &text)),
         }
     }
-    Err(fail(24, E_GENERIC))
+    Err(fail(KRB5_PREAUTH_FAILED, E_GENERIC))
 }
 
 #[cfg(test)]
@@ -664,7 +662,7 @@ mod tests {
         set_thread_otp_verifiers(vec![Arc::new(Fixed("DEFAULT", OtpVerdict::Reject))]);
         assert_eq!(
             got(run(ok, Some(&a), &[pa142(&a, t, &fresh)])),
-            want(24, E_GENERIC)
+            want(KRB5_PREAUTH_FAILED, E_GENERIC)
         );
         set_thread_otp_verifiers(vec![Arc::new(Fixed(
             "DEFAULT",
