@@ -85,96 +85,145 @@ jobs:
           ./scripts/lib/boot-shell.sh
           ./scripts/lib/boot-stock-mit.sh
       - name: "kdb-dump-gate (MIT dump/load + kinit both directions)"
+        if: success() || failure()
         run: ./scripts/kdb-dump-gate.sh
       - name: "kprop-gate (MIT kprop dump v7 vs Rust kpropd)"
+        if: success() || failure()
         run: ./scripts/kprop-gate.sh
       - name: "kprop-reverse-gate (Rust kprop vs MIT kpropd)"
+        if: success() || failure()
         run: ./scripts/kprop-reverse-gate.sh
       - name: "prop-acl-gate (MIT kprop unauthorized GSS peer refused)"
+        if: success() || failure()
         run: ./scripts/prop-acl-gate.sh
       - name: "iprop-gate (MIT kpropd -A vs Rust kadmind + serial-delta)"
+        if: success() || failure()
         run: ./scripts/iprop-gate.sh
       - name: "expire-gate (MIT kinit NAME_EXP / KEY_EXPIRED / PWCHANGE_SERVICE)"
+        if: success() || failure()
         run: ./scripts/expire-gate.sh
       - name: "flags-gate (MIT modprinc DISALLOW_* / OK_AS_DELEGATE / REQUIRES_HW_AUTH)"
+        if: success() || failure()
         run: ./scripts/flags-gate.sh
       - name: "renew-gate (MIT kinit -R / kinit -p vs Rust KDC)"
+        if: success() || failure()
         run: ./scripts/renew-gate.sh
       - name: "postdate-gate (MIT kinit -s / kinit -v vs Rust KDC)"
+        if: success() || failure()
         run: ./scripts/postdate-gate.sh
       - name: "policy-gate (MIT kadmin addpol/modpol/getpol/delpol/listpols + kinit lockout)"
+        if: success() || failure()
         run: ./scripts/policy-gate.sh
       - name: "pkinit-gate (MIT pkinit.so vs Rust KDC)"
+        if: success() || failure()
         run: ./scripts/pkinit-gate.sh
       - name: "rust-kinit-pkinit-gate (Rust kinit PKINIT vs MIT KDC)"
+        if: success() || failure()
         run: ./scripts/rust-kinit-pkinit-gate.sh
       - name: "s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)"
+        if: success() || failure()
         run: ./scripts/s4u-mit-gate.sh
       - name: "capaths-transit-gate"
+        if: success() || failure()
         run: ./scripts/capaths-transit-gate.sh
       - name: "spake-gate"
+        if: success() || failure()
         run: ./scripts/spake-gate.sh
       - name: "rust-kinit-spake-gate (Rust kinit SPAKE vs MIT KDC)"
+        if: success() || failure()
         run: ./scripts/rust-kinit-spake-gate.sh
       - name: "mit-fast-kdc-gate (MIT kinit -T FAST vs Rust KDC)"
+        if: success() || failure()
         run: ./scripts/mit-fast-kdc-gate.sh
       - name: "rust-kinit-fast-gate (Rust kinit FAST vs MIT KDC)"
+        if: success() || failure()
         run: ./scripts/rust-kinit-fast-gate.sh
       - name: "otp-gate (MIT krb5kdc otp module + RADIUS stub)"
+        if: success() || failure()
         run: ./scripts/otp-gate.sh
       - name: "rust-kinit-otp-gate (Rust KDC OTP module)"
+        if: success() || failure()
         run: ./scripts/rust-kinit-otp-gate.sh
+      - name: "getprivs-gate (MIT kadmin getprivs limited ACL actor)"
+        if: success() || failure()
+        run: ./scripts/getprivs-gate.sh
+      - name: "bidirectional-gate"
+        if: success() || failure()
+        run: ./scripts/bidirectional-gate.sh
+      - name: "capaths-compress-gate"
+        if: success() || failure()
+        run: ./scripts/capaths-compress-gate.sh
+      - name: "ccache-gate"
+        if: success() || failure()
+        run: ./scripts/ccache-gate.sh
+      - name: "cross-kdc-gate"
+        if: success() || failure()
+        run: ./scripts/cross-kdc-gate.sh
+      - name: "cross-realm-gate"
+        if: success() || failure()
+        run: ./scripts/cross-realm-gate.sh
+      - name: "history-mit-gate"
+        if: success() || failure()
+        run: ./scripts/history-mit-gate.sh
+      - name: "kadmin-local-gate"
+        if: success() || failure()
+        run: ./scripts/kadmin-local-gate.sh
+      - name: "kadmin-rust-gate"
+        if: success() || failure()
+        env:
+          KERBER_KADMIN_KEEP: "1"
+        run: ./scripts/kadmin-rust-gate.sh
       - name: "kadmin-rust-acl-gate"
+        if: success() || failure()
         env:
           KERBER_KADMIN_KEEP: "1"
         run: ./scripts/kadmin-rust-acl-gate.sh
-      - name: "getprivs-gate (MIT kadmin getprivs limited ACL actor)"
-        run: ./scripts/getprivs-gate.sh
-      - name: "bidirectional-gate"
-        run: ./scripts/bidirectional-gate.sh
-      - name: "capaths-compress-gate"
-        run: ./scripts/capaths-compress-gate.sh
-      - name: "ccache-gate"
-        run: ./scripts/ccache-gate.sh
-      - name: "cross-kdc-gate"
-        run: ./scripts/cross-kdc-gate.sh
-      - name: "cross-realm-gate"
-        run: ./scripts/cross-realm-gate.sh
-      - name: "history-mit-gate"
-        run: ./scripts/history-mit-gate.sh
-      - name: "kadmin-both-gate"
-        run: ./scripts/kadmin-both-gate.sh
-      - name: "kadmin-local-gate"
-        run: ./scripts/kadmin-local-gate.sh
       - name: "kadmin-mit-gate"
+        if: success() || failure()
+        env:
+          KERBER_KADMIN_KEEP: "1"
         run: ./scripts/kadmin-mit-gate.sh
-      - name: "kadmin-rust-gate"
-        run: ./scripts/kadmin-rust-gate.sh
+      - name: "kadmin-both-gate"
+        if: success() || failure()
+        run: ./scripts/kadmin-both-gate.sh
       - name: "kdcpolicy-gate"
+        if: success() || failure()
         run: ./scripts/kdcpolicy-gate.sh
       - name: "rc4-session-gate"
+        if: success() || failure()
         run: ./scripts/rc4-session-gate.sh
       - name: "rust-kinit-enterprise-gate"
+        if: success() || failure()
         run: ./scripts/rust-kinit-enterprise-gate.sh
       - name: "sha2-gate"
+        if: success() || failure()
         run: ./scripts/sha2-gate.sh
       - name: "client-differential-cli-gate"
+        if: success() || failure()
         run: ./scripts/client-differential-cli-gate.sh
       - name: "client-differential-flows-gate"
+        if: success() || failure()
         run: ./scripts/client-differential-flows-gate.sh
       - name: "config-include-gate"
+        if: success() || failure()
         run: ./scripts/config-include-gate.sh
       - name: "gss-gate"
+        if: success() || failure()
         run: ./scripts/gss-gate.sh
       - name: "knobs-gate"
+        if: success() || failure()
         run: ./scripts/knobs-gate.sh
       - name: "kpasswd-mit-gate"
+        if: success() || failure()
         run: ./scripts/kpasswd-mit-gate.sh
       - name: "kpasswd-rust-gate"
+        if: success() || failure()
         run: ./scripts/kpasswd-rust-gate.sh
       - name: "rust-kpasswd-mit-gate"
+        if: success() || failure()
         run: ./scripts/rust-kpasswd-mit-gate.sh
       - name: "ktutil-gate"
+        if: success() || failure()
         run: ./scripts/ktutil-gate.sh
       - name: shared topology cleanup
         if: always()
@@ -217,7 +266,7 @@ jobs:
           echo "corpus ${{ matrix.target }}: $n inputs"
           test "$n" -gt 0
       - name: smoke ${{ matrix.target }}
-        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -rss_limit_mb=2048
+        run: cargo +nightly fuzz run --target x86_64-unknown-linux-gnu ${{ matrix.target }} -- -max_total_time=60 -rss_limit_mb=2048
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

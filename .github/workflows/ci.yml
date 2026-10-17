@@ -89,6 +89,8 @@ jobs:
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: -D warnings
+      - name: fuzz crate
+        run: cargo check --manifest-path fuzz/Cargo.toml --bins
 
   shellcheck:
     runs-on: ubuntu-24.04
