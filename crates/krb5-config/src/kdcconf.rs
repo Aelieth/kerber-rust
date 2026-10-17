@@ -11,7 +11,8 @@ use std::path::{Path, PathBuf};
 
 use super::listen::{self, ListenAddr};
 use super::profile::{
-    combine_ws, join_subsection_braces, parse_duration_secs, split_kv, split_ws, truthy,
+    aprof_boolean, combine_ws, join_subsection_braces, parse_duration_secs, parse_profile_int,
+    split_kv, split_ws, truthy,
 };
 use super::{Error, KdcConf};
 
@@ -75,6 +76,7 @@ impl Default for KdcConf {
             allow_rc4: None,
             allow_des3: None,
             permitted_enctypes: Vec::new(),
+            clockskew: None,
             supported_enctypes: Vec::new(),
             requires_preauth: true,
             default_principal_flags: None,
@@ -132,20 +134,66 @@ pub(crate) fn sscanf_int(v: &str) -> Option<i32> {
 }
 
 impl KdcConf {
-    /// Parse `kdc.conf` text, read by MIT's one profile parser as krb5.conf is
-    /// (`join_subsection_braces`).
+    /// Parse `kdc.conf` text with at most one realm stanza, read by MIT's one profile parser as
+    /// krb5.conf is (`join_subsection_braces`).
     ///
     /// # Errors
     ///
     /// [`Error::Profile`] with [`crate::ProfileError::Syntax`] when a relation with no value is
     /// not followed by a line that starts with `{` (MIT's `PROF_MISSING_OBRACE`); every other
-    /// malformed or unknown line is skipped.
+    /// malformed or unknown line is skipped. [`Error::Parse`] when `[realms]` holds stanzas for
+    /// more than one realm: such a file is read for one realm, [`Self::parse_for_realm`].
     pub fn parse(text: &str) -> Result<Self, Error> {
         let text = join_subsection_braces(text)?;
+        let names = stanza_names(&text);
+        if names.len() > 1 {
+            return Err(Error::Parse(format!(
+                "kdc.conf has stanzas for the realms {}; read it for one realm",
+                names.join(", ")
+            )));
+        }
+        Ok(Self::parse_joined(&text))
+    }
+
+    /// The settings of `text` that apply to `realm`: every section but `[realms]`, and only
+    /// `realm`'s own stanza there, so another realm's relations are never lent to this one.
+    /// MIT `get_string_param` (`lib/kadm5/alt_prof.c:310-336`): a realm parameter is read from that realm's stanza, else it takes the default.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Profile`] as [`Self::parse`].
+    pub fn parse_for_realm(text: &str, realm: &str) -> Result<Self, Error> {
+        let text = join_subsection_braces(text)?;
+        Ok(Self::parse_joined(&stanza_of(&text, Some(realm))))
+    }
+
+    /// The settings of `text` that belong to no realm, such as `[logging]` and `[libdefaults]`;
+    /// every realm stanza is left out.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Profile`] as [`Self::parse`].
+    pub fn parse_without_realms(text: &str) -> Result<Self, Error> {
+        let text = join_subsection_braces(text)?;
+        Ok(Self::parse_joined(&stanza_of(&text, None)))
+    }
+
+    /// [`Self::parse_without_realms`] of the file at `path`.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::load_file`].
+    pub fn load_file_without_realms(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let bytes = std::fs::read(path)?;
+        Self::parse_without_realms(&String::from_utf8_lossy(&bytes))
+    }
+
+    fn parse_joined(text: &str) -> Self {
         let mut conf = Self::default();
         let mut section = String::new();
         let mut in_realm = false;
-        let mut realm_lines = Vec::new();
+        let mut libdefaults_depth = 0usize;
+        let mut booleans = RealmBooleans::default();
         let mut realm_listen = ListenRelations::default();
         let mut default_listen = ListenRelations::default();
         let mut database_module: Option<String> = None;
@@ -168,6 +216,7 @@ impl KdcConf {
             if let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
                 section = s.trim().to_ascii_lowercase();
                 in_realm = false;
+                libdefaults_depth = 0;
                 dbmodule = None;
                 plugins.observe_header(&mut plugin_profile, s, false);
                 continue;
@@ -210,14 +259,13 @@ impl KdcConf {
                     continue;
                 }
                 if in_realm {
-                    realm_lines.push(line.to_owned());
                     if database_module.is_none()
                         && let Some((k, v)) = split_kv(line)
                         && k.eq_ignore_ascii_case("database_module")
                     {
                         database_module = Some(v);
                     }
-                    if !realm_listen.take(line) {
+                    if !realm_listen.take(line) && !booleans.realm(line) {
                         parse_kdc_realm_line(&mut conf, line);
                     }
                 }
@@ -230,11 +278,19 @@ impl KdcConf {
                     Some((key, v)) if key.eq_ignore_ascii_case("kdc_tcp_listen_backlog") => {
                         backlog = Some(v);
                     }
+                    _ if booleans.defaults(line) => {}
                     _ => parse_kdcdefaults(&mut conf, line),
                 }
             }
+            // MIT `get_integer` (`lib/krb5/krb/init_ctx.c:76-85`): a `[libdefaults]` relation is read at the section's top level; a subsection's is another name.
             if section == "libdefaults" {
-                parse_kdc_libdefaults(&mut conf, line);
+                if line.ends_with('{') {
+                    libdefaults_depth += 1;
+                } else if line == "}" {
+                    libdefaults_depth = libdefaults_depth.saturating_sub(1);
+                } else if libdefaults_depth == 0 {
+                    parse_kdc_libdefaults(&mut conf, line);
+                }
             }
             if section == "logging"
                 && let Some((k, v)) = split_kv(line)
@@ -242,11 +298,7 @@ impl KdcConf {
                 conf.logging.push((k.to_owned(), v));
             }
         }
-        // MIT `init_realm` (`kdc/main.c:286-345`): realm stanza, then `[kdcdefaults]` fallback.
-        // Re-apply realm booleans so a later defaults section cannot win.
-        for line in &realm_lines {
-            overlay_realm_booleans(&mut conf, line);
-        }
+        booleans.apply(&mut conf);
         // MIT `initialize_realms` (`kdc/main.c:622-660`): the `[kdcdefaults]` lists, else `88`.
         // MIT `init_realm` (`kdc/main.c:257-282`): the realm stanza's lists win over those.
         if let Some(v) = realm_listen.udp().or(default_listen.udp()) {
@@ -275,7 +327,7 @@ impl KdcConf {
             .unwrap_or(DEFAULT_TCP_LISTEN_BACKLOG);
         conf.plugins = plugin_profile;
         conf.otp = otp_tree;
-        Ok(conf)
+        conf
     }
 
     /// Apply `krb5kdc -p`: it replaces the default listener list (`[kdcdefaults]`, else 88) but
@@ -369,10 +421,6 @@ fn parse_kdcdefaults(conf: &mut KdcConf, line: &str) {
         return;
     };
     match k.to_ascii_lowercase().as_str() {
-        "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
-        "disable_pac" => conf.disable_pac = truthy(&v),
-        "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
-        "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
         "host_based_services" => combine_ws(&mut conf.host_based_services, &v),
         "no_host_referral" => combine_ws(&mut conf.no_host_referral, &v),
         // MIT `group_init_state` (`groups.c:247-249`): `profile_get_string`, so the first value.
@@ -391,6 +439,13 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
     let Some((k, v)) = split_kv(line) else {
         return;
     };
+    // MIT `profile_get_integer` (`util/profile/prof_get.c:309-333`): the first value, and one that is no integer is the default.
+    if k == "clockskew" {
+        if conf.clockskew.is_none() {
+            conf.clockskew = Some(parse_profile_int(&v).map_or(300, i64::from));
+        }
+        return;
+    }
     match k.to_ascii_lowercase().as_str() {
         "allow_weak_crypto" => conf.allow_weak_crypto = Some(truthy(&v)),
         "allow_rc4" => conf.allow_rc4 = Some(truthy(&v)),
@@ -411,18 +466,145 @@ fn parse_kdc_libdefaults(conf: &mut KdcConf, line: &str) {
     }
 }
 
-/// MIT realm-first booleans: a realm value beats a later `[kdcdefaults]`.
-fn overlay_realm_booleans(conf: &mut KdcConf, line: &str) {
-    let Some((k, v)) = split_kv(line) else {
-        return;
-    };
-    match k.to_ascii_lowercase().as_str() {
-        "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
-        "disable_pac" => conf.disable_pac = truthy(&v),
-        "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
-        "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
-        _ => {}
+/// The KDC booleans as written: the realm stanza's last `reject_bad_transit`, `disable_pac` and
+/// `restrict_anonymous_to_tgt`, `[kdcdefaults]`'s last `restrict_anonymous_to_tgt`, and the
+/// first `pkinit_require_freshness` of each. Their names are matched exactly, as the profile's.
+#[derive(Default)]
+struct RealmBooleans {
+    reject_bad_transit: Option<String>,
+    disable_pac: Option<String>,
+    restrict_anon: Option<String>,
+    restrict_anon_default: Option<String>,
+    freshness: Option<String>,
+    freshness_default: Option<String>,
+}
+
+impl RealmBooleans {
+    /// Record `line` of the realm stanza if it is one of them.
+    fn realm(&mut self, line: &str) -> bool {
+        let Some((k, v)) = split_kv(line) else {
+            return false;
+        };
+        match k {
+            "reject_bad_transit" => self.reject_bad_transit = Some(v),
+            "disable_pac" => self.disable_pac = Some(v),
+            "restrict_anonymous_to_tgt" => self.restrict_anon = Some(v),
+            "pkinit_require_freshness" => {
+                self.freshness.get_or_insert(v);
+            }
+            _ => return false,
+        }
+        true
     }
+
+    /// Record `line` of `[kdcdefaults]` if it is one of them. MIT reads neither
+    /// `reject_bad_transit` nor `disable_pac` there.
+    fn defaults(&mut self, line: &str) -> bool {
+        let Some((k, v)) = split_kv(line) else {
+            return false;
+        };
+        match k {
+            "restrict_anonymous_to_tgt" => self.restrict_anon_default = Some(v),
+            "pkinit_require_freshness" => {
+                self.freshness_default.get_or_insert(v);
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// MIT `init_realm` (`kdc/main.c:292-295`): a realm `restrict_anonymous_to_tgt` that does not read as a boolean leaves `[kdcdefaults]`'s.
+    /// MIT `init_realm` (`kdc/main.c:306-309`): a `reject_bad_transit` that does not read as a boolean is TRUE.
+    /// MIT `init_realm` (`kdc/main.c:338-341`): a `disable_pac` that does not read as a boolean is FALSE.
+    /// MIT `pkinit_kdcdefault_boolean` (`plugins/preauth/pkinit/pkinit_profile.c:170-184`): the realm's first value, else `[kdcdefaults]`'s, read as a yes word.
+    fn apply(self, conf: &mut KdcConf) {
+        let read = |v: Option<String>| v.as_deref().and_then(aprof_boolean);
+        conf.reject_bad_transit = read(self.reject_bad_transit).unwrap_or(true);
+        conf.disable_pac = read(self.disable_pac).unwrap_or(false);
+        conf.restrict_anon = read(self.restrict_anon)
+            .or_else(|| read(self.restrict_anon_default))
+            .unwrap_or(false);
+        conf.pkinit_require_freshness = self
+            .freshness
+            .or(self.freshness_default)
+            .is_some_and(|v| truthy(&v));
+    }
+}
+
+/// The realm a `[realms]` stanza's opening line `NAME = {` names.
+fn stanza_name(line: &str) -> &str {
+    line.trim_end_matches('{')
+        .trim()
+        .trim_end_matches('=')
+        .trim()
+}
+
+/// The names of `[realms]`' stanzas in `text` (subsection braces joined), each once, in order.
+fn stanza_names(text: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut section = String::new();
+    let mut depth = 0usize;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if depth == 0
+            && let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+        {
+            section = s.trim().to_ascii_lowercase();
+        } else if section == "realms" {
+            if line.ends_with('{') {
+                if depth == 0 {
+                    let name = stanza_name(line);
+                    if !names.iter().any(|n| n == name) {
+                        names.push(name.to_owned());
+                    }
+                }
+                depth += 1;
+            } else if line.starts_with('}') {
+                depth = depth.saturating_sub(1);
+            }
+        }
+    }
+    names
+}
+
+/// `text` (subsection braces joined) with every section but `[realms]`, and of `[realms]` only
+/// the stanza of `realm`; none with `None`.
+fn stanza_of(text: &str, realm: Option<&str>) -> String {
+    let mut kept = String::with_capacity(text.len());
+    let mut section = String::new();
+    let mut depth = 0usize;
+    let mut keep = true;
+    for raw in text.lines() {
+        let line = raw.trim();
+        if depth == 0
+            && let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
+        {
+            section = s.trim().to_ascii_lowercase();
+            keep = true;
+        } else if section == "realms" {
+            if line.ends_with('{') {
+                if depth == 0 {
+                    keep = Some(stanza_name(line)) == realm;
+                }
+                depth += 1;
+            } else if line.starts_with('}') && depth > 0 {
+                depth -= 1;
+                if depth == 0 {
+                    if keep {
+                        kept.push_str(raw);
+                        kept.push('\n');
+                    }
+                    keep = true;
+                    continue;
+                }
+            }
+        }
+        if keep {
+            kept.push_str(raw);
+            kept.push('\n');
+        }
+    }
+    kept
 }
 
 fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
@@ -447,10 +629,6 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "master_key_type" => conf.master_key_type = Some(v),
         "database_module" | "db_library" => conf.db_library = Some(v),
         "domain_sid" => conf.domain_sid = Some(v),
-        "reject_bad_transit" => conf.reject_bad_transit = truthy(&v),
-        "disable_pac" => conf.disable_pac = truthy(&v),
-        "restrict_anonymous_to_tgt" => conf.restrict_anon = truthy(&v),
-        "pkinit_require_freshness" => conf.pkinit_require_freshness = truthy(&v),
         "host_based_services" => combine_ws(&mut conf.host_based_services, &v),
         "no_host_referral" => combine_ws(&mut conf.no_host_referral, &v),
         "encrypted_challenge_indicator" => {
@@ -723,9 +901,16 @@ impl KdcPaths {
             .as_deref()
             .map(join_subsection_braces)
             .transpose()?;
-        let conf = text.as_deref().map(KdcConf::parse).transpose()?;
         let over = EnvOverrides::read(env);
         let realm = realm.map(str::to_owned).or_else(default_realm);
+        // MIT `init_realm` (`kdc/main.c:229-231`): the realm's relations are read under `[realms]` → that realm only.
+        let conf = text
+            .as_deref()
+            .map(|t| match realm.as_deref() {
+                Some(r) => KdcConf::parse_for_realm(t, r),
+                None => KdcConf::parse(t),
+            })
+            .transpose()?;
         // MIT `main` (`kdb5_util.c:304-312`): no realm is fatal before any path is read. Only the
         // gates' KRB5_KDC_DB and KRB5_KDC_STASH, naming both files, stand in for one.
         let relations = match realm.as_deref() {

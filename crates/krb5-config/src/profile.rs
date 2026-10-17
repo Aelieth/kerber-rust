@@ -691,9 +691,8 @@ fn parse_libdefaults(
             }
         }
         "clockskew" if top && k == "clockskew" && take_first(seen, "clockskew") => {
-            conf.clockskew = parse_duration_secs(&v)
-                .and_then(|s| u32::try_from(s).ok())
-                .unwrap_or(300);
+            // MIT `profile_get_integer` (`util/profile/prof_get.c:309-333`): a value that is no integer leaves the default. A negative one, which MIT keeps and then fails every time check with, reads as 0.
+            conf.clockskew = parse_profile_int(&v).map_or(300, |n| u32::try_from(n).unwrap_or(0));
         }
         "dns_lookup_kdc" if top && k == "dns_lookup_kdc" && take_first(seen, "dns_lookup_kdc") => {
             conf.dns_lookup_kdc = truthy(&v);
@@ -988,6 +987,17 @@ pub(super) fn mit_boolean(v: &str) -> Option<bool> {
         "y" | "yes" | "true" | "t" | "1" | "on" => Some(true),
         "n" | "no" | "false" | "nil" | "0" | "off" => Some(false),
         _ => None,
+    }
+}
+
+/// A KDC realm boolean as `krb5_aprof_get_boolean` reads one: [`mit_boolean`]'s words and `f`
+/// for false; `None` for any other value.
+/// MIT `string_to_boolean` (`lib/kadm5/alt_prof.c:82-101`): the kadm5 profile's false words add `f`.
+pub(super) fn aprof_boolean(v: &str) -> Option<bool> {
+    if v.eq_ignore_ascii_case("f") {
+        Some(false)
+    } else {
+        mit_boolean(v)
     }
 }
 

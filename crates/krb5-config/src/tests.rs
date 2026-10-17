@@ -860,9 +860,9 @@ fn dict_file_is_a_realm_relation_only() {
 
 #[test]
 fn libdefaults_does_not_honour_kdcdefaults_knobs() {
-    // MIT reads kdc_ports/kdc_tcp_ports/reject_bad_transit only from
-    // [kdcdefaults] or a realm stanza; a copy under [libdefaults] is ignored
-    // (no fallthrough).
+    // MIT reads kdc_ports/kdc_tcp_ports only from [kdcdefaults] or a realm
+    // stanza, and reject_bad_transit from a realm stanza only; a copy under
+    // [libdefaults] is ignored (no fallthrough).
     // MIT `init_realm` (`kdc/main.c:257-261`): the realm stanza's `kdc_listen`, then
     // `kdc_ports`.
     // MIT `initialize_realms` (`kdc/main.c:622-626`): the `[kdcdefaults]` `kdc_listen`,
@@ -883,7 +883,7 @@ fn libdefaults_does_not_honour_kdcdefaults_knobs() {
     assert!(lib.reject_bad_transit, "reject_bad_transit default kept");
     // The four enctype knobs under [libdefaults] are still honoured.
     assert_eq!(lib.allow_rc4, Some(true));
-    // The same knobs under [kdcdefaults] ARE honoured.
+    // kdc_ports under [kdcdefaults] is honoured; reject_bad_transit there is not.
     let kdc = KdcConf::parse(
         r"
 [kdcdefaults]
@@ -893,7 +893,7 @@ fn libdefaults_does_not_honour_kdcdefaults_knobs() {
     )
     .unwrap();
     assert_eq!(kdc.kdc_listen, "12345");
-    assert!(!kdc.reject_bad_transit);
+    assert!(kdc.reject_bad_transit);
 }
 
 #[test]
@@ -1028,7 +1028,10 @@ fn disable_pac_from_kdcdefaults_and_realm() {
 ",
     )
     .unwrap();
-    assert!(kdc.disable_pac);
+    assert!(
+        !kdc.disable_pac,
+        "MIT reads disable_pac from the realm stanza only"
+    );
     let realm = KdcConf::parse(
         r"
 [realms]

@@ -113,7 +113,7 @@ to restate.
 | TGS `try_fallback` (`get_creds.c:503-543`) | exact; the host-realm DNS arm deferred | `get_creds.c:503-516` and `:517-542` ([B1](parity/b1-client.md)) |
 | Forwarded TGT (`fwd_tgt.c:147-153`) | exact; the host addresses deferred | `fwd_tgt.c:147-153` and `:123-145` ([B1](parity/b1-client.md)) |
 | Acceptor clockskew / replay (`rd_req_dec.c:620-631`) | exact | `rd_req_dec.c:631` and `:620-625` ([B1](parity/b1-client.md)) |
-| kdc.conf realm vs `[kdcdefaults]` (`main.c:286-345`) | exact | `main.c:286-345` ([A2](parity/a2-as.md)) |
+| kdc.conf realm vs `[kdcdefaults]` (`main.c:229-231,292-345`) | exact | `main.c:292-295,306-309,338-341`; `pkinit_profile.c:170-184` ([A2](parity/a2-as.md)) |
 
 ### Parity decisions (not deviations)
 

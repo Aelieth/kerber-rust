@@ -369,6 +369,9 @@ impl PrincipalStore {
             self.policy.supported_enctypes =
                 krb5_crypto::parse_keysalt_list(&conf.supported_enctypes.join(" "));
         }
+        if let Some(skew) = conf.clockskew {
+            self.policy.skew = skew;
+        }
         self.policy.requires_preauth = conf.requires_preauth;
         self.policy.default_principal_flags = conf
             .default_principal_flags
@@ -553,6 +556,8 @@ impl PrincipalStore {
         if let Some(names) = &conf.spake_preauth_groups {
             self.policy.spake_preauth_groups = parse_spake_preauth_groups(names);
         }
+        // MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): the KDC's skew is the profile's `clockskew`; kdc.conf's, applied after this, wins.
+        self.policy.skew = i64::from(conf.clockskew);
         self.policy.domain_realm.clone_from(&conf.domain_realm);
     }
 

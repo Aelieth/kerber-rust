@@ -211,58 +211,13 @@ fn stamp_kadm5_create_tl(store: &mut PrincipalStore, name: &PrincipalName, mkvno
     store.debug_insert(p);
 }
 
-/// The settings of the KDC profile `text` that apply to `realm`: every section but
-/// `[realms]`, and only `realm`'s own stanza there, so another realm's relations are never
-/// lent to this one.
-/// MIT `get_string_param` (`lib/kadm5/alt_prof.c:310-336`): a realm parameter is read from that realm's stanza, else it takes the default.
+/// The settings of the KDC profile `text` that apply to `realm`: [`KdcConf::parse_for_realm`].
 ///
 /// # Errors
 ///
-/// As [`KdcConf::parse`].
+/// As [`KdcConf::parse_for_realm`].
 pub fn kdc_conf_for_realm(text: &str, realm: &str) -> Result<KdcConf, krb5_config::Error> {
-    // A stanza written `R =` with its `{` on the next line is `R`'s too: the text is read as
-    // the profile parser reads it, the brace joined first.
-    let text = &krb5_config::join_subsection_braces(text)?;
-    let mut kept = String::with_capacity(text.len());
-    let mut section = String::new();
-    let mut depth = 0usize;
-    let mut keep = true;
-    for raw in text.lines() {
-        let line = raw.trim();
-        if depth == 0
-            && let Some(s) = line.strip_prefix('[').and_then(|s| s.strip_suffix(']'))
-        {
-            section = s.trim().to_ascii_lowercase();
-            keep = true;
-        } else if section == "realms" {
-            if line.ends_with('{') {
-                if depth == 0 {
-                    let name = line
-                        .trim_end_matches('{')
-                        .trim()
-                        .trim_end_matches('=')
-                        .trim();
-                    keep = name == realm;
-                }
-                depth += 1;
-            } else if line.starts_with('}') && depth > 0 {
-                depth -= 1;
-                if depth == 0 {
-                    if keep {
-                        kept.push_str(raw);
-                        kept.push('\n');
-                    }
-                    keep = true;
-                    continue;
-                }
-            }
-        }
-        if keep {
-            kept.push_str(raw);
-            kept.push('\n');
-        }
-    }
-    KdcConf::parse(&kept)
+    KdcConf::parse_for_realm(text, realm)
 }
 
 /// The principals the gates seed beside a new realm: `user@` and `admin@` with the given

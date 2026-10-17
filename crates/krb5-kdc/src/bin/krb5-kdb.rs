@@ -53,8 +53,8 @@ use krb5_kdc::{
     CreateError, DbUpdate, DbWrite, DumpError, DumpFile, DumpPrincipal, FullLoad, IPROP_NIL,
     IPROP_OK, IpropHeaderError, IpropRole, KDB_DUMP_VERSION, LoadError, Lockout, LoggedWrite,
     PersistError, PrincipalStore, Ulog, UlogLast, add_admin_principals, create_realm_db,
-    create_store, kdc_conf_for_realm, load_dump_with_key, master_key_from_password, parse_dump,
-    save_store_with_master, stash_keys, string_to_enctype, update_store, write_stash,
+    create_store, load_dump_with_key, master_key_from_password, parse_dump, save_store_with_master,
+    stash_keys, string_to_enctype, update_store, write_stash,
 };
 use zeroize::{Zeroize as _, Zeroizing};
 
@@ -652,7 +652,7 @@ fn realm_kdc_conf(util: &Util, realm: &str) -> Result<Option<krb5_config::KdcCon
         return Ok(None);
     }
     let bytes = fs::read(&util.paths.profile).map_err(|e| strerror(&e))?;
-    kdc_conf_for_realm(&String::from_utf8_lossy(&bytes), realm)
+    krb5_config::KdcConf::parse_for_realm(&String::from_utf8_lossy(&bytes), realm)
         .map(Some)
         .map_err(|e| e.to_string())
 }

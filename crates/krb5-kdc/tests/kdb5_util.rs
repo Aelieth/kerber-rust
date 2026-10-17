@@ -14,8 +14,8 @@ use std::process::{Command, Output, Stdio};
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     KDB_DISALLOW_ALL_TIX, KDB_DISALLOW_TGT_BASED, KDB_LOCKDOWN_KEYS, KDB_PWCHANGE_SERVICE,
-    KDB_REQUIRES_PRE_AUTH, PrincipalStore, create_realm, kdc_conf_for_realm, load_store,
-    master_key_from_password, parse_dump, tl_mod_princ_name,
+    KDB_REQUIRES_PRE_AUTH, PrincipalStore, create_realm, load_store, master_key_from_password,
+    parse_dump, tl_mod_princ_name,
 };
 use krb5_testkit::scratch_dir;
 
@@ -276,9 +276,9 @@ fn create_takes_the_stanzas_flags_lifetimes_and_keysalts() {
 #[test]
 fn another_realms_stanza_is_not_read_for_this_one() {
     let text = "[realms]\n    OTHER.TEST = {\n        max_life = 1h\n    }\n    KL.TEST = {\n        max_renewable_life = 2d\n    }\n";
-    let kl = kdc_conf_for_realm(text, "KL.TEST").unwrap();
+    let kl = krb5_config::KdcConf::parse_for_realm(text, "KL.TEST").unwrap();
     assert_eq!((kl.max_life, kl.max_renewable_life), (86400, 2 * 86400));
-    let none = kdc_conf_for_realm(text, "NONE.TEST").unwrap();
+    let none = krb5_config::KdcConf::parse_for_realm(text, "NONE.TEST").unwrap();
     assert_eq!((none.max_life, none.max_renewable_life), (86400, 0));
     let master =
         master_key_from_password("KL.TEST", b"pw", EncryptionType::Aes256CtsHmacSha196).unwrap();

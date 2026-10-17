@@ -665,7 +665,7 @@ pub fn permitted_enctypes() -> Result<Vec<EncryptionType>, Error> {
 ///
 /// [`Error::ConfigEtypeNosupp`] when the list that applies names no enctype.
 pub fn permitted_enctypes_kdc() -> Result<Vec<EncryptionType>, Error> {
-    let kdc = krb5_config::KdcConf::load_file(krb5_config::kdc_conf_path()).ok();
+    let kdc = krb5_config::KdcConf::load_file_without_realms(krb5_config::kdc_conf_path()).ok();
     permitted_enctypes_in(kdc.as_ref(), krb5_config::load_krb5_conf().as_ref())
 }
 

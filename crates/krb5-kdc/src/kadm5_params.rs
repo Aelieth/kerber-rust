@@ -52,7 +52,7 @@ pub fn realm_kadm5_params_missing(
     let Ok(bytes) = std::fs::read(&paths.profile) else {
         return false;
     };
-    crate::create::kdc_conf_for_realm(&String::from_utf8_lossy(&bytes), realm)
+    KdcConf::parse_for_realm(&String::from_utf8_lossy(&bytes), realm)
         .is_ok_and(|conf| kadm5_params_missing(&conf, with_master_key_type))
 }
 
@@ -117,7 +117,7 @@ mod tests {
     fn a_two_line_realm_stanza_is_the_realm_s() {
         let text =
             "[realms]\n    R =\n    {\n        default_principal_expiration = garbage\n    }\n";
-        let conf = crate::create::kdc_conf_for_realm(text, "R").unwrap();
+        let conf = KdcConf::parse_for_realm(text, "R").unwrap();
         assert!(kadm5_params_missing(&conf, true));
     }
 

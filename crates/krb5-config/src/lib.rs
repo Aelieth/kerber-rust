@@ -16,7 +16,7 @@
 //! Ok::<(), krb5_config::Error>(())
 //! ```
 //!
-//! `clockskew` is a duration in seconds:
+//! `clockskew` is an integer number of seconds:
 //!
 //! ```
 //! use krb5_config::Krb5Conf;
@@ -478,6 +478,10 @@ pub struct KdcConf {
     pub allow_des3: Option<bool>,
     /// `permitted_enctypes` (empty = MIT DEFAULT).
     pub permitted_enctypes: Vec<String>,
+    /// `[libdefaults] clockskew`, top level, the first value: seconds, 300 for a value that is
+    /// no integer. `None` leaves krb5.conf's.
+    /// MIT `krb5_init_context_profile` (`lib/krb5/krb/init_ctx.c:251-252`): the KDC context reads `clockskew` with `get_integer`, from kdc.conf first.
+    pub clockskew: Option<i64>,
     /// Realm `supported_enctypes` keysalt list.
     pub supported_enctypes: Vec<String>,
     /// Per-principal `requires_preauth` default.
