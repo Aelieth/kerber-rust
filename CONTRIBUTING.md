@@ -56,31 +56,16 @@ We use [GitHub Flow](https://docs.github.com/en/get-started/using-git/github-flo
 ## Code comments
 
 Comments explain non-obvious intent, invariants, security considerations,
-and protocol subtleties. Do not restate the obvious, and do not raise the
-comment density: a sentence the next two lines already say is deleted.
-Public APIs need rustdoc. Four rules give the form; the comment budget moves
-from process tags into invariants that are otherwise unstated.
+and protocol subtleties. Do not restate the obvious. A doc comment is one
+line, and only where the name cannot say it. Comments are at most 3% of
+the code, and doc comments count. Tests are at most 10% of the code.
 
-A MIT citation is one line naming what the code ports and pointing at the
-docs, for example `// MIT krb5_db_def_rename_principal; see docs/parity/a1-store.md`.
-Comments are at most 3% of the code, and doc comments count. Tests are at
-most 10% of the code, and plan-12 adds none.
-
-**R1.** A MIT anchor is one line, in one form:
-``MIT `<symbol>` (`<path>:<a>-<b>`): <what the port guarantees>``.
-The symbol names the MIT definition whose extent contains the cited
-range: a C function, a `struct` / `union` / `enum` or typedef, a table
-or global, a macro or macro-generated item, an error-table entry, or an
-ASN.1 type (its `NAME ::=` comment block). Never a Rust symbol, and
-never a callee or macro standing in for the function. One anchor per
-line, opening its own sentence. A single source line is written
-`<a>-<a>`. A path whose basename names more than one MIT file carries
-enough directories to name one. A mention without a range (``MIT `X` ``,
-or a MIT file named in prose) is not an anchor and is legal. The
-guarantee is what this port does; where the port deviates, the anchor
-line says so ("MIT does X; this port does Y") and the deviation has a
-parity-ledger row under `docs/parity/` (verdict `deviation` or
-`stricter-documented`) or a `docs/mit-deviations.md` row.
+**R1.** A MIT citation is one line, a pointer:
+`// MIT <symbol>; see docs/parity/<file>.md`.
+The file exists and names the symbol. The ranged anchor
+``MIT `<symbol>` (`<path>:<a>-<b>`): <guarantee>`` stays legal until the
+pointers replace it. A mention without a range is not a citation and is
+legal.
 
 **R2.** State the invariant, not the steps: an ordering, a fail-closed
 rule, a key-material rule, an attacker-relevant subtlety, or a deliberate
@@ -94,14 +79,9 @@ hash, a backticked hash, "fails at" a hash), no red-at-parent notes
 paths. A deferred parity gap gets a ledger row and at most a one-line
 pointer.
 
-**R4.** `# Errors` names variants or conditions. It does not use a family
-word ("crypto", "DER") and it does not open with "Returns". A function
-that cannot fail says "None:" and why. `# Panics` appears only where a
-panic exists.
-
-`check_mit_anchor_form`, `check_mit_anchor_truth` and
-`check_no_process_history` in `scripts/ci-policy.py` keep R1 and R3
-true. See [docs/testing.md](docs/testing.md).
+`check_mit_anchor_form` and `check_mit_anchor_truth` in
+`scripts/ci-policy.py` keep R1 true, and `check_no_process_history`
+keeps R3 true. See [docs/testing.md](docs/testing.md).
 
 ## Local checks
 

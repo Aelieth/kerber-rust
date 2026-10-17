@@ -24,6 +24,10 @@ _ANCHOR_HEAD = re.compile(
     r"MIT `((?:(?:struct|union|enum) )?[A-Za-z_][A-Za-z0-9_]*)` "
     r"\(`([A-Za-z0-9_./+-]+\." + _ANCHOR_EXT + r"):(\d+)-(\d+)`\)"
 )
+# The pointer form, beside the anchor until the comment sweep: MIT <symbol>; see docs/parity/<file>.md
+_POINTER = re.compile(
+    r"MIT ([A-Za-z_][A-Za-z0-9_]*); see docs/parity/([A-Za-z0-9][A-Za-z0-9_-]*\.md)"
+)
 # Any MIT line cite: a source path with a line number. Outside an anchor
 # head it is the dodge the form forbids (a range that is not an anchor).
 _LINE_CITE = re.compile(
@@ -52,8 +56,20 @@ _EMPTY_GUARANTEES = {"same check", "mit"}
 
 
 def _anchor_line_problems(comment: str) -> list[str]:
-    """Why one comment line breaks the R1 anchor form (empty when it does not)."""
+    """Why one comment line breaks the R1 anchor or pointer form (empty when it does not)."""
     problems: list[str] = []
+    pointers = list(_POINTER.finditer(comment))
+    if "see docs/parity/" in comment and not pointers:
+        problems.append("pointer is not MIT <symbol>; see docs/parity/<file>.md")
+    if len(pointers) > 1:
+        problems.append("two pointers on one line")
+    if pointers and _ANCHOR_HEAD.search(comment):
+        problems.append("pointer and anchor on one line")
+    if len(pointers) == 1 and not problems:
+        if _LINE_CITE.search(comment):
+            problems.append("line cite outside the anchor form")
+        else:
+            return []
     heads = list(_ANCHOR_HEAD.finditer(comment))
     if len(heads) > 1:
         problems.append("two anchors on one line")
@@ -566,8 +582,23 @@ def check_mit_anchor_truth(
         _die(f"mit anchor truth {len(bad)} != allow {allow}")
 
 
+def _pointer_file_problems(comment: str, root: pathlib.Path) -> list[str]:
+    """A well-formed pointer names a parity file that exists and names the symbol."""
+    hits = list(_POINTER.finditer(comment))
+    if len(hits) != 1:
+        return []
+    symbol, name = hits[0].group(1), hits[0].group(2)
+    path = root / "docs" / "parity" / name
+    if not path.is_file():
+        return [f"parity file docs/parity/{name} is missing"]
+    text = path.read_text(encoding="utf-8")
+    if re.search(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])", text) is None:
+        return [f"docs/parity/{name} does not name {symbol}"]
+    return []
+
+
 def mit_anchor_violations(root: pathlib.Path | None = None) -> list[str]:
-    """Comment lines that break the R1 anchor form, one entry per line."""
+    """Comment lines that break the R1 anchor or pointer form, one entry per line."""
     root = ROOT if root is None else root
     bad: list[str] = []
     for path in _rs_under(root, ("src", "tests")):
@@ -575,6 +606,7 @@ def mit_anchor_violations(root: pathlib.Path | None = None) -> list[str]:
         rel = path.relative_to(root)
         for lineno, comment in _comment_lines(text):
             problems = _anchor_line_problems(comment)
+            problems.extend(_pointer_file_problems(comment, root))
             if problems:
                 bad.append(f"{rel}:{lineno}: {'; '.join(problems)}: {comment.strip()[:140]}")
     return bad

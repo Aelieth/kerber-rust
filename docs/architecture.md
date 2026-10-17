@@ -163,7 +163,7 @@ dev-dependency only).
   its error type.
 - Logs carry explicit fields (see [Observability](#observability)) rather
   than `#[instrument]` spans.
-- The comment and rustdoc rules (R1 to R4) are in
+- The comment rules (R1 to R3) are in
   [CONTRIBUTING.md § Code comments](../CONTRIBUTING.md#code-comments);
   `check_mit_anchor_form`, `check_mit_anchor_truth` and
   `check_no_process_history` in `scripts/ci-policy.py` keep R1 and R3 true

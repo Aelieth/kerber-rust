@@ -16,7 +16,9 @@ Clippy runs twice: `--all-features`, then with no features, both
 line under `crates/*/src` and `crates/*/tests`: `//`, `///`, `//!`, and
 each line of a `/* */`, `/** */` or `/*! */` block. A MIT anchor has the
 R1 form ([CONTRIBUTING.md § Code comments](../CONTRIBUTING.md#code-comments)),
-with a path ending in `.c`, `.h`, `.hin`, `.et`, `.x` or `.y`. A
+with a path ending in `.c`, `.h`, `.hin`, `.et`, `.x` or `.y`. A pointer
+`MIT <symbol>; see docs/parity/<file>.md` is also legal when that file
+exists and names the symbol. A
 mention, ``MIT `X` `` with no range, is legal, and so is a rangeless
 file mention (``(`gic_pwd.c`)``, a module header naming the MIT file it
 mirrors). Red: a `path.ext:N` or `path.ext:N-M` anywhere outside an
@@ -56,7 +58,7 @@ backticked seven- or eight-digit commit hash, `parent-red`, `Compiles at`,
 `item <n>`, `S<n>.<n>`, `Z<n> leftover`, a lone `B<n>` / `F<n>`, "the
 parent `…`", a `working/` path, and `fails at` plus a seven- or
 eight-digit hash. A tag inside a string literal is not a comment.
-`PROCESS_TAG_ALLOW` is 0, so the check is hard. Rule names (`R1`–`R4`)
+`PROCESS_TAG_ALLOW` is 0, so the check is hard. Rule names (`R1`–`R3`)
 live in `docs/`, never in `crates/`. `check_no_docs_process_tags` counts
 the `docs/**` lines, outside code fences, that carry a process tag, one
 arm each, disjoint, one fixture line per arm: `W1-<letter>`,

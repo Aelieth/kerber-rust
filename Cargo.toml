@@ -84,7 +84,6 @@ zeroize = { version = "1.8", features = ["derive", "alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
-missing_docs = "deny"
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

@@ -24,6 +24,12 @@ def _self_test_comments() -> None:
         good = src / "lib.rs"
         in_tests = tests_dir / "t.rs"
         in_tests.write_text("", encoding="utf-8")
+        parity = anchor_root / "docs" / "parity"
+        parity.mkdir(parents=True)
+        (parity / "a1-store.md").write_text(
+            "MIT `krb5_db_def_rename_principal` renames a principal.\n",
+            encoding="utf-8",
+        )
         accepted = {
             "fn-anchor": "/// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n",
             "line-comment": "// MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay\n",
@@ -43,6 +49,7 @@ def _self_test_comments() -> None:
             "y-anchor": "/// MIT `yyparse` (`getdate.y:210-240`): a date\n",
             "inner-doc-block": "/*! MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */\n",
             "nested-block": "/* outer /* MIT `krb5_rd_req` (`rd_req.c:10-20`): refuses a replay */ still outer */\n",
+            "pointer": "// MIT krb5_db_def_rename_principal; see docs/parity/a1-store.md\n",
         }
         for body in accepted.values():
             good.write_text(body, encoding="utf-8")
@@ -82,6 +89,9 @@ def _self_test_comments() -> None:
             "y-range": "// the rule at getdate.y:210-240 runs first\n",
             "inner-doc-block-cite": "/*! see do_as_req.c:10 */\n",
             "nested-block-cite": "/* outer /* see do_as_req.c:10 */ still outer */\n",
+            "pointer-unnamed": "// MIT krb5_other; see docs/parity/a1-store.md\n",
+            "pointer-missing": "// MIT krb5_db_def_rename_principal; see docs/parity/no-such.md\n",
+            "pointer-bad": "// MIT krb5_db_def_rename_principal; see docs/parity/\n",
         }
         for shape, body in rejected.items():
             good.write_text(body, encoding="utf-8")
@@ -105,7 +115,7 @@ def _self_test_comments() -> None:
         )
         # The shape names are part of the fixture, so a deleted shape is a
         # missing key, not a silent pass.
-        if len(accepted) != 18 or len(rejected) != 30:
+        if len(accepted) != 19 or len(rejected) != 33:
             _die("mit anchor fixtures dropped a shape")
     finally:
         subprocess.run(["rm", "-rf", str(anchor_root)], check=False)
