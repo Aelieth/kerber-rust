@@ -38,6 +38,7 @@ any other `###` heading.
 - **ci.** The docs size cap is 100 KiB. `docs/testing.md` names the same cap.
 - **field.** Add `ad-trust`, the real AD DC against both legs' KDCs: an AD user logs into client2's sshd. It runs only as `run.sh ad-trust` and starts from a recorded DC state.
 - **field.** `ad-trust` adds KERBER.TEST users at the DC's SMB and LDAP and the DC's SPNEGO login to Apache on kdc; the DC changes they need are undone in the same run.
+- **ci.** A pull request labeled `nightly` runs `oracles`, `moving`, `fuzz`, and `anchors`. `schedule` and `workflow_dispatch` stay.
 
 ### Fixed
 

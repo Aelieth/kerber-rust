@@ -7,12 +7,14 @@ on:
   schedule:
     - cron: "17 4 * * *"
   workflow_dispatch:
+  pull_request:
+    types: [labeled]
   push:
     tags: ["v*"]
 
 jobs:
   oracles:
-    if: github.event_name != 'push'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -51,7 +53,7 @@ jobs:
         if: always()
         run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
   moving:
-    if: github.event_name != 'push'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -178,7 +180,7 @@ jobs:
         if: always()
         run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
   fuzz:
-    if: github.event_name != 'push'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -225,7 +227,7 @@ jobs:
           retention-days: 30
           if-no-files-found: ignore
   anchors:
-    if: github.event_name != 'push'
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.label.name == 'nightly')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -249,7 +251,7 @@ jobs:
         run: python3 scripts/ci-policy.py
 
   test-release:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     steps:
@@ -265,7 +267,7 @@ jobs:
         run: cargo nextest run --workspace --release --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
 
   msrv-test:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.event_name != 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # rust-toolchain.toml pins stable; the env pin outranks it (ci-policy check_msrv_pinned).
