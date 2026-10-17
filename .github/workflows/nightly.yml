@@ -1,0 +1,280 @@
+name: nightly
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  oracles:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /tmp/kerber-rust-mit-kdc.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/krb5-sha2.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/entrypoint.sh') }}
+      - name: Load cached MIT image or docker build
+        run: |
+          set -euo pipefail
+          mit_tar=/tmp/kerber-rust-mit-kdc.tar
+          mit=kerber-rust-mit-kdc:1.22.2
+          if [ -f "$mit_tar" ]; then
+            docker load -i "$mit_tar"
+          else
+            docker build -f harness/Dockerfile -t "$mit" .
+            docker save "$mit" -o "$mit_tar"
+          fi
+          docker image inspect "$mit" >/dev/null
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - name: Build bins
+        run: ./scripts/lib/build-bins.sh
+      - name: shared shell + stock MIT
+        run: |
+          ./scripts/lib/boot-shell.sh
+          ./scripts/lib/boot-stock-mit.sh
+      - name: "asn1-decode-oracle-gate (MIT decoder over the decode sweep)"
+        run: ./scripts/asn1-decode-oracle-gate.sh
+      - name: "rd-priv-oracle-gate (MIT krb5_rd_req / rd_priv / rd_safe)"
+        run: ./scripts/rd-priv-oracle-gate.sh
+      - name: shared topology cleanup
+        if: always()
+        run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
+  moving:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /tmp/kerber-rust-mit-kdc.tar
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/krb5-sha2.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/entrypoint.sh') }}
+      - name: Load cached MIT image or docker build
+        run: |
+          set -euo pipefail
+          mit_tar=/tmp/kerber-rust-mit-kdc.tar
+          mit=kerber-rust-mit-kdc:1.22.2
+          if [ -f "$mit_tar" ]; then
+            docker load -i "$mit_tar"
+          else
+            docker build -f harness/Dockerfile -t "$mit" .
+            docker save "$mit" -o "$mit_tar"
+          fi
+          docker image inspect "$mit" >/dev/null
+          echo "KERBER_SKIP_MIT_BUILD=1" >> "$GITHUB_ENV"
+      - name: Scratch dir
+        run: echo "KERBER_SCRATCH=${{ runner.temp }}/kerber" >> "$GITHUB_ENV"
+      - name: Build bins
+        run: ./scripts/lib/build-bins.sh
+      - name: shared shell + stock MIT
+        run: |
+          ./scripts/lib/boot-shell.sh
+          ./scripts/lib/boot-stock-mit.sh
+      - name: "kdb-dump-gate (MIT dump/load + kinit both directions)"
+        run: ./scripts/kdb-dump-gate.sh
+      - name: "kprop-gate (MIT kprop dump v7 vs Rust kpropd)"
+        run: ./scripts/kprop-gate.sh
+      - name: "kprop-reverse-gate (Rust kprop vs MIT kpropd)"
+        run: ./scripts/kprop-reverse-gate.sh
+      - name: "prop-acl-gate (MIT kprop unauthorized GSS peer refused)"
+        run: ./scripts/prop-acl-gate.sh
+      - name: "iprop-gate (MIT kpropd -A vs Rust kadmind + serial-delta)"
+        run: ./scripts/iprop-gate.sh
+      - name: "expire-gate (MIT kinit NAME_EXP / KEY_EXPIRED / PWCHANGE_SERVICE)"
+        run: ./scripts/expire-gate.sh
+      - name: "flags-gate (MIT modprinc DISALLOW_* / OK_AS_DELEGATE / REQUIRES_HW_AUTH)"
+        run: ./scripts/flags-gate.sh
+      - name: "renew-gate (MIT kinit -R / kinit -p vs Rust KDC)"
+        run: ./scripts/renew-gate.sh
+      - name: "postdate-gate (MIT kinit -s / kinit -v vs Rust KDC)"
+        run: ./scripts/postdate-gate.sh
+      - name: "policy-gate (MIT kadmin addpol/modpol/getpol/delpol/listpols + kinit lockout)"
+        run: ./scripts/policy-gate.sh
+      - name: "pkinit-gate (MIT pkinit.so vs Rust KDC)"
+        run: ./scripts/pkinit-gate.sh
+      - name: "rust-kinit-pkinit-gate (Rust kinit PKINIT vs MIT KDC)"
+        run: ./scripts/rust-kinit-pkinit-gate.sh
+      - name: "s4u-mit-gate (MIT kvno -U / -U -P vs Rust KDC)"
+        run: ./scripts/s4u-mit-gate.sh
+      - name: "capaths-transit-gate"
+        run: ./scripts/capaths-transit-gate.sh
+      - name: "spake-gate"
+        run: ./scripts/spake-gate.sh
+      - name: "rust-kinit-spake-gate (Rust kinit SPAKE vs MIT KDC)"
+        run: ./scripts/rust-kinit-spake-gate.sh
+      - name: "mit-fast-kdc-gate (MIT kinit -T FAST vs Rust KDC)"
+        run: ./scripts/mit-fast-kdc-gate.sh
+      - name: "rust-kinit-fast-gate (Rust kinit FAST vs MIT KDC)"
+        run: ./scripts/rust-kinit-fast-gate.sh
+      - name: "otp-gate (MIT krb5kdc otp module + RADIUS stub)"
+        run: ./scripts/otp-gate.sh
+      - name: "rust-kinit-otp-gate (Rust KDC OTP module)"
+        run: ./scripts/rust-kinit-otp-gate.sh
+      - name: "kadmin-rust-acl-gate"
+        env:
+          KERBER_KADMIN_KEEP: "1"
+        run: ./scripts/kadmin-rust-acl-gate.sh
+      - name: "getprivs-gate (MIT kadmin getprivs limited ACL actor)"
+        run: ./scripts/getprivs-gate.sh
+      - name: "bidirectional-gate"
+        run: ./scripts/bidirectional-gate.sh
+      - name: "capaths-compress-gate"
+        run: ./scripts/capaths-compress-gate.sh
+      - name: "ccache-gate"
+        run: ./scripts/ccache-gate.sh
+      - name: "cross-kdc-gate"
+        run: ./scripts/cross-kdc-gate.sh
+      - name: "cross-realm-gate"
+        run: ./scripts/cross-realm-gate.sh
+      - name: "history-mit-gate"
+        run: ./scripts/history-mit-gate.sh
+      - name: "kadmin-both-gate"
+        run: ./scripts/kadmin-both-gate.sh
+      - name: "kadmin-local-gate"
+        run: ./scripts/kadmin-local-gate.sh
+      - name: "kadmin-mit-gate"
+        run: ./scripts/kadmin-mit-gate.sh
+      - name: "kadmin-rust-gate"
+        run: ./scripts/kadmin-rust-gate.sh
+      - name: "kdcpolicy-gate"
+        run: ./scripts/kdcpolicy-gate.sh
+      - name: "rc4-session-gate"
+        run: ./scripts/rc4-session-gate.sh
+      - name: "rust-kinit-enterprise-gate"
+        run: ./scripts/rust-kinit-enterprise-gate.sh
+      - name: "sha2-gate"
+        run: ./scripts/sha2-gate.sh
+      - name: "client-differential-cli-gate"
+        run: ./scripts/client-differential-cli-gate.sh
+      - name: "client-differential-flows-gate"
+        run: ./scripts/client-differential-flows-gate.sh
+      - name: "config-include-gate"
+        run: ./scripts/config-include-gate.sh
+      - name: "gss-gate"
+        run: ./scripts/gss-gate.sh
+      - name: "knobs-gate"
+        run: ./scripts/knobs-gate.sh
+      - name: "kpasswd-mit-gate"
+        run: ./scripts/kpasswd-mit-gate.sh
+      - name: "kpasswd-rust-gate"
+        run: ./scripts/kpasswd-rust-gate.sh
+      - name: "rust-kpasswd-mit-gate"
+        run: ./scripts/rust-kpasswd-mit-gate.sh
+      - name: "ktutil-gate"
+        run: ./scripts/ktutil-gate.sh
+      - name: shared topology cleanup
+        if: always()
+        run: docker rm -f kerber-rust-shell kerber-rust-mit-kdc kerber-rust-kadmin-gate kerber-rust-kadmin-mit >/dev/null 2>&1 || true
+  fuzz:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - der_decode
+          - gss_token
+          - pkinit_cms
+          - spake_point
+          - oakley_dh
+          - transited
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
+        with:
+          toolchain: nightly
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: cargo-fuzz
+      - name: seed corpus (committed seed files plus the MIT traces that fit)
+        run: |
+          set -euo pipefail
+          d="fuzz/corpus/${{ matrix.target }}"
+          mkdir -p "$d"
+          case "${{ matrix.target }}" in
+            der_decode) cp tests/traces/mit-*.der "$d/" ;;
+          esac
+          if compgen -G "fuzz/fuzz_targets/seeds/${{ matrix.target }}"/* > /dev/null; then
+            cp fuzz/fuzz_targets/seeds/${{ matrix.target }}/* "$d/" || true
+          fi
+          n=$(find "$d" -type f | wc -l)
+          echo "corpus ${{ matrix.target }}: $n inputs"
+          test "$n" -gt 0
+      - name: smoke ${{ matrix.target }}
+        run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=60 -rss_limit_mb=2048
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          retention-days: 30
+          if-no-files-found: ignore
+  anchors:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          fetch-depth: 0 # R2-T3: overlay-probe needs the historical base SHA
+      - name: Fetch MIT 1.22.2 source (SHA-pinned, same as harness/Dockerfile)
+        run: |
+          set -euo pipefail
+          url=https://web.mit.edu/kerberos/dist/krb5/1.22/krb5-1.22.2.tar.gz
+          sha=3243ffbc8ea4d4ac22ddc7dd2a1dc54c57874c40648b60ff97009763554eaf13
+          for attempt in 1 2 3; do
+            if wget -q -O /tmp/krb5.tar.gz "$url"; then break; fi
+            sleep $((attempt * 5))
+          done
+          echo "$sha  /tmp/krb5.tar.gz" | sha256sum -c -
+          mkdir -p /tmp/krb5-src
+          tar -xzf /tmp/krb5.tar.gz -C /tmp/krb5-src
+          echo "KERBER_MIT_SRC=/tmp/krb5-src/krb5-1.22.2/src" >> "$GITHUB_ENV"
+      - name: Verify MIT-side ledger anchors against the 1.22.2 tree
+        run: python3 scripts/ci-policy.py
+
+  test-release:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2.87.14
+        with:
+          tool: nextest
+      - name: test --release
+        env:
+          KRB5_CONFIG: ${{ github.workspace }}/harness/nextest-krb5.conf
+        run: cargo nextest run --workspace --release --profile ci --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
+
+  msrv-test:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # rust-toolchain.toml pins stable; the env pin outranks it (ci-policy check_msrv_pinned).
+    env:
+      RUSTUP_TOOLCHAIN: "1.95"
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: ./.github/actions/rust-preamble
+        with:
+          toolchain: "1.95"
+      - name: MSRV 1.95 test (locked)
+        run: cargo test --workspace --locked --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks

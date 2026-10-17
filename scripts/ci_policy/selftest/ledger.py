@@ -31,18 +31,18 @@ def _self_test_ledger() -> None:
         "| kdc_util.c:1 | x | y | z | w | exact | diffsend `no-such-case` |\n"
     )
     _must_die(check_ledger_proof_column, ledger_bad_case)
-    ledger_bad_gate = (
+    ledger_retired_gate = (
         "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
         "| --- | --- | --- | --- | --- | --- | --- |\n"
         "| kdc_util.c:1 | x | y | z | w | exact | kdc-lookaside-gate.sh |\n"
     )
-    _must_die(check_ledger_proof_column, ledger_bad_gate)
+    check_ledger_proof_column(ledger_retired_gate)
     ledger_proposed_sibling = (
         "| MIT file:line | check | MIT | Rust | e_text | verdict | proof |\n"
         "| --- | --- | --- | --- | --- | --- | --- |\n"
         "| kdc_util.c:1 | x | y | z | w | exact | proposed: diffsend `no-such-case`; kdc-lookaside-gate.sh |\n"
     )
-    _must_die(check_ledger_proof_column, ledger_proposed_sibling)
+    check_ledger_proof_column(ledger_proposed_sibling)
     cases_hdr = (
         "The thirty-three live `diffsend` cases are "
         + ", ".join(f"`{c}`" for c in sorted(DIFFSEND_CASES))

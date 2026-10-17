@@ -8,4 +8,6 @@ fuzz_target!(|data: &[u8]| {
     let _ = krb5_asn1::decode::<krb5_types::TgsRep>(data);
     let _ = krb5_asn1::decode::<krb5_types::KrbError>(data);
     let _ = krb5_asn1::decode::<krb5_types::Ticket>(data);
+    let _ = krb5_asn1::decode::<krb5_types::ApReq>(data);
+    let _ = krb5_asn1::decode::<krb5_types::ApRep>(data);
 });

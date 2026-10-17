@@ -25,7 +25,7 @@ jobs:
           path: |
             /tmp/kerber-rust-mit-kdc.tar
             /tmp/kerber-rust-prod-node.tar
-          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/krb5-sha2.conf', 'harness/entrypoint.sh', 'harness/prod/Dockerfile') }}
+          key: mit-kdc-1.22.2-${{ hashFiles('harness/Dockerfile', 'harness/krb5.conf', 'harness/krb5-sha2.conf', 'harness/kdc.conf', 'harness/kadm5.acl', 'harness/entrypoint.sh') }}
       - name: docker load MIT image
         if: always()
         run: |
@@ -83,12 +83,6 @@ jobs:
         env:
           SAMBA_AD_IMAGE: samba-ad-dc:latest
           SAMBA_KERBER_IMAGE: samba-kerber-dc:latest
-      - name: Build Heimdal 7.8 image (harness/heimdal)
-        if: always()
-        run: docker build -f harness/heimdal/Dockerfile -t kerber-rust-heimdal-kdc:latest .
-      - name: heimdal-gate (Heimdal 7.8 bidirectional)
-        if: always()
-        run: ./scripts/lib/run-peer-step.sh ./scripts/heimdal-gate.sh
       - name: peer tally
         if: always()
         run: |

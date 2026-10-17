@@ -79,7 +79,7 @@ jobs:
     )
     msrv_ok = {
         "ci.yml": msrv_wf.format(job="msrv"),
-        "full-test.yml": msrv_wf.format(job="msrv-test"),
+        "nightly.yml": msrv_wf.format(job="msrv-test"),
     }
     manifest_ok = '[package]\nrust-version = "1.95"\n'
     preamble_pin = (
@@ -91,18 +91,18 @@ jobs:
         "      - uses: dtolnay/rust-toolchain@1.95\n",
         "      - uses: dtolnay/rust-toolchain@" + "a" * 40 + " # stable\n        with:\n          toolchain: \"1.95\"\n",
     )
-    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "1.99.0"\n', {"ci.yml": sha_pinned, "full-test.yml": msrv_ok["full-test.yml"]}, preamble_pin)
+    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "1.99.0"\n', {"ci.yml": sha_pinned, "nightly.yml": msrv_ok["nightly.yml"]}, preamble_pin)
     via_preamble = msrv_ok["ci.yml"].replace(
         "      - uses: dtolnay/rust-toolchain@1.95\n",
         "      - uses: ./.github/actions/rust-preamble\n        with:\n          toolchain: \"1.95\"\n",
     )
-    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "1.99.0"\n', {"ci.yml": via_preamble, "full-test.yml": msrv_ok["full-test.yml"]}, preamble_pin)
+    check_msrv_pinned(manifest_ok, manifest_ok, 'channel = "1.99.0"\n', {"ci.yml": via_preamble, "nightly.yml": msrv_ok["nightly.yml"]}, preamble_pin)
     _must_die(
         check_msrv_pinned,
         manifest_ok,
         manifest_ok,
         'channel = "1.99.0"\n',
-        {"ci.yml": via_preamble.replace('          toolchain: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+        {"ci.yml": via_preamble.replace('          toolchain: "1.95"\n', ""), "nightly.yml": msrv_ok["nightly.yml"]},
         preamble_pin,
     )
     _must_die(
@@ -110,7 +110,7 @@ jobs:
         manifest_ok,
         manifest_ok,
         'channel = "1.99.0"\n',
-        {"ci.yml": sha_pinned.replace('          toolchain: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+        {"ci.yml": sha_pinned.replace('          toolchain: "1.95"\n', ""), "nightly.yml": msrv_ok["nightly.yml"]},
         preamble_pin,
     )
     _must_die(check_msrv_pinned, '[package]\nrust-version = "1.90"\n', manifest_ok, 'channel = "1.99.0"\n', msrv_ok, preamble_pin)
@@ -128,7 +128,7 @@ jobs:
         manifest_ok,
         manifest_ok,
         'channel = "1.99.0"\n',
-        {"ci.yml": msrv_wf.format(job="msrv").replace('      RUSTUP_TOOLCHAIN: "1.95"\n', ""), "full-test.yml": msrv_ok["full-test.yml"]},
+        {"ci.yml": msrv_wf.format(job="msrv").replace('      RUSTUP_TOOLCHAIN: "1.95"\n', ""), "nightly.yml": msrv_ok["nightly.yml"]},
         preamble_pin,
     )
     _must_die(
@@ -136,7 +136,7 @@ jobs:
         manifest_ok,
         manifest_ok,
         'channel = "1.99.0"\n',
-        {"ci.yml": msrv_ok["ci.yml"], "full-test.yml": msrv_ok["full-test.yml"].replace("@1.95", "@stable")},
+        {"ci.yml": msrv_ok["ci.yml"], "nightly.yml": msrv_ok["nightly.yml"].replace("@1.95", "@stable")},
         preamble_pin,
     )
     mf_ok = (

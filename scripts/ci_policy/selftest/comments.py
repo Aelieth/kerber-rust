@@ -304,5 +304,9 @@ def _self_test_comments() -> None:
         (dt_root / "docs" / "x.md").write_text("| r | `scripts/a-gate.sh` `==== Z7.2 not there ====` |\n",
                                                encoding="utf-8")
         _must_die_msg("1 docs line(s) with a process tag, allow 0", check_no_docs_process_tags, dt_root, allow=0)
+        # A section cite of a script that is no longer in the tree is retired history.
+        (dt_root / "docs" / "x.md").write_text("| r | `scripts/gone-gate.sh` `==== Z7.1 omitted till ====` |\n",
+                                               encoding="utf-8")
+        check_no_docs_process_tags(dt_root, allow=0)
     finally:
         subprocess.run(["rm", "-rf", str(dt_root)], check=False)

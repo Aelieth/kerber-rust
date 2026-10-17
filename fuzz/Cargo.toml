@@ -27,13 +27,6 @@ doc = false
 bench = false
 
 [[bin]]
-name = "as_tgs_ap"
-path = "fuzz_targets/as_tgs_ap.rs"
-test = false
-doc = false
-bench = false
-
-[[bin]]
 name = "keytab_ccache"
 path = "fuzz_targets/keytab_ccache.rs"
 test = false

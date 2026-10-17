@@ -139,7 +139,7 @@ def check_makefile_matches_ci(mf: str | None = None, ci_text: str | None = None)
     _order(test_job.body, "ci.yml test job")
 
 MSRV = "1.95"
-MSRV_JOBS = (("ci.yml", "msrv"), ("full-test.yml", "msrv-test"))
+MSRV_JOBS = (("ci.yml", "msrv"), ("nightly.yml", "msrv-test"))
 # The composite that installs the toolchain, lld and rust-cache (W3-S1). A job
 # that `uses:` it has the rust-cache step, so the checks below read through it.
 RUST_PREAMBLE = "./.github/actions/rust-preamble"
@@ -213,10 +213,10 @@ def check_msrv_pinned(
         if "cargo " not in job.body:
             _die(f"{name} job {job_name} runs no cargo step")
 
-CONCURRENCY_WORKFLOWS = ("ci.yml", "fuzz.yml")
+CONCURRENCY_WORKFLOWS = ("ci.yml",)
 _USES_PINNED = re.compile(r"^\s*(?:-\s+)?uses:\s*(\S+)(.*)$")
 SHELLCHECK_CMD = (
-    "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh harness/prod/*.sh dist/*.sh"
+    "shellcheck -S style scripts/*.sh scripts/lib/*.sh harness/*.sh dist/*.sh"
     " harness/field/*.sh harness/field/lib/*.sh harness/field/scenarios/*.sh"
 )
 
@@ -229,7 +229,7 @@ def check_workflow_hardening(
     shellcheck_pins: dict[str, str] | None = None,
 ) -> None:
     """W3-S1 CI shape: every workflow grants `contents: read` at the top;
-    `concurrency` + `cancel-in-progress` on ci.yml and fuzz.yml only; every
+    `concurrency` + `cancel-in-progress` on ci.yml only; every
     third-party `uses:` (workflows and composite actions) is a 40-hex SHA with
     the tag in a trailing comment; dependabot covers github-actions and cargo;
     ci.yml runs the fail-red shellcheck job over SHELLCHECK_CMD's script globs

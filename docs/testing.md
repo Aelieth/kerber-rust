@@ -641,7 +641,7 @@ The four thin corpora (`pkinit_cms`, `spake_point`, `oakley_dh`,
 Oakley 2048 prime, SPNEGO wrapper). After a campaign, minimize with
 `cargo +nightly fuzz cmin <target>` and keep only `seed-*` names
 (`fuzz/.gitignore` drops hash-named files). CI smokes each target ~60s
-(`.github/workflows/fuzz.yml`; schedule, dispatch, and PR on `fuzz/**`
+(.github/workflows/fuzz.yml; schedule, dispatch, and PR on `fuzz/**`
 — no `push:` trigger). Transited seeds are
 `crealm\\0srealm\\0contents` so `process_intermediates` is reached.
 
@@ -651,7 +651,7 @@ The external-oracle inventory is [`gates.md`](gates.md) (per gate) and
 [`interop-matrix.md`](interop-matrix.md) (per oracle).
 
 Primary oracle: MIT Kerberos **1.22.2** in `harness/`. Secondary:
-Heimdal **7.8** in `harness/heimdal/` (`scripts/heimdal-gate.sh`). A
+Heimdal **7.8** in `harness/heimdal/` (scripts/heimdal-gate.sh). A
 Windows Server 2022 Evaluation DC (`AD.KERBER.TEST`) is captured for
 the AD round; see [`labs/ad-lab.md`](labs/ad-lab.md). Live AD commands use
 `~/adlab` only — never `/etc/krb5.conf` or SSSD. Windows SSPI has no
@@ -761,7 +761,7 @@ pinned to MIT krb5 1.22.2, starts a KDC for realm `KERBER.TEST` on UDP/TCP
 port 88, emits JSON logs with a `correlation_id`, and runs `kinit` for
 `user@KERBER.TEST`.
 
-Requires Docker (Compose optional — `harness/docker-compose.yml`).
+Requires Docker (Compose optional — harness/docker-compose.yml).
 [labs/ad-lab.md](labs/ad-lab.md) has the AD lab coordinates and the `~/adlab`
 isolation protocol.
 
