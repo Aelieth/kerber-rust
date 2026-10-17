@@ -53,6 +53,7 @@ any other `###` heading.
 - **ci.** The six per-push jobs run on `ubuntu-26.04`.
 - **ci.** Nightly and peers run on `ubuntu-26.04`. The fuzz crate check is `--locked`.
 - **parity.** The closer hop's first TGS at A asks for `krbtgt/C.TEST`. The validate options check is the live gate.
+- **parity.** `kinit -R` options are the live client differential gate.
 
 ### Removed
 

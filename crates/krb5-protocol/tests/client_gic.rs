@@ -257,21 +257,6 @@ fn chpw_message_ad_policy_matches_mit_test_chpw_message() {
 }
 
 #[test]
-fn renew_options_are_common_mask_plus_renew() {
-    let flags = TicketFlags::from_u32(0x5480_0000);
-    let opts = tgs_renew_options(&flags);
-    assert!(opts.bit(flag_bit::FORWARDABLE));
-    assert!(opts.bit(flag_bit::PROXIABLE));
-    assert!(opts.bit(flag_bit::MAY_POSTDATE));
-    assert!(opts.bit(flag_bit::RENEWABLE));
-    assert!(opts.bit(flag_bit::RENEW), "val_renew.c:129 KDC_OPT_RENEW");
-    assert!(
-        !opts.bit(flag_bit::CANONICALIZE),
-        "renew is not the get_creds referral walk"
-    );
-}
-
-#[test]
 fn renew_options_omit_unset_ticket_flags() {
     let flags = TicketFlags::from_u32(0x4000_0000);
     let opts = tgs_renew_options(&flags);
