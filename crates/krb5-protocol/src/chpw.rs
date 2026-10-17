@@ -3,9 +3,9 @@
 //! KEY_EXP is the expired-password path. A reply that is not a
 //! KRB-ERROR is not read until its AP-REP verifies, and a success code
 //! inside a KRB-ERROR is not accepted. The random subkey buffer is wiped
-//! once the key is built; the subkey copy in the authenticator and the
-//! authenticator DER are not wiped. The copies of the new password this
-//! module and the KRB-PRIV builder make are wiped once encrypted.
+//! once the key is built, and the authenticator DER once encrypted. The
+//! copies of the new password this module and the KRB-PRIV builder make
+//! are wiped once encrypted.
 
 use std::io::{self, Read};
 use std::net::{SocketAddr, TcpStream, ToSocketAddrs, UdpSocket};
@@ -23,7 +23,7 @@ use crate::ap_rep::verify_ap_rep;
 use crate::as_ex::AsOutcome;
 use crate::auth_con::RemoteSeq;
 use crate::error::Error;
-use crate::safe_priv::{build_krb_priv_from, read_krb_priv, wipe_octets};
+use crate::safe_priv::{build_krb_priv_from, read_krb_priv, wipe_octets, wipe_vec};
 use crate::trace::{self, RemoteAddr, Transport};
 use crate::transport::{KdcAddr, errno, is_timeout, read_errno};
 
@@ -351,8 +351,12 @@ fn kpasswd_ap_req(
         authorization_data: None,
     };
     let der = encode(&authenticator)?;
-    let usage = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)?;
-    let cipher = encrypt(session, usage, &der)?;
+    let cipher = KeyUsage::new(ku::AP_REQ_AUTHENTICATOR)
+        .map_err(Error::from)
+        .and_then(|usage| Ok(encrypt(session, usage, &der)?));
+    // MIT `krb5_mk_req_extended` (`lib/krb5/krb/mk_req_ext.c:248-251`): the encoded authenticator, subkey and all, is zeroed before it is freed.
+    wipe_vec(der);
+    let cipher = cipher?;
     // MIT `krb5_mk_req_extended` (`lib/krb5/krb/mk_req_ext.c:85-254`): the authenticator is traced
     // with its sequence number and both keys as hashes.
     trace::mk_req(

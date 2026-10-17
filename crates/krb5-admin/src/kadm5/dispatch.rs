@@ -127,7 +127,7 @@ fn commit_policy(
 /// for a lock that may not be taken (a read-only lock file, a missing policy lock file), else
 /// the system's errno, as MIT's library returns it.
 /// MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:441-463`): a lock that may not be taken is KRB5_KDB_CANTLOCK_DB, a database that does not reopen is its errno.
-fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
+pub(super) fn store_code(proc: u32, e: &krb5_kdc::Error) -> u32 {
     let errno = |n: nix::errno::Errno| u32::try_from(n as i32).unwrap_or(KADM5_FAILURE);
     match e {
         krb5_kdc::Error::Db { text, .. }

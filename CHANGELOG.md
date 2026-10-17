@@ -16,6 +16,11 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Security
+
+- **admin.** kpasswd refuses a `LOCKDOWN_KEYS` principal's keys (5; MIT's 464 allows it), answers no kpasswd reply or error, and names no path. Lab beside MIT.
+- **kdc/protocol.** A new password is keyed up to its first NUL, as MIT's C string; the kpasswd client wipes its encoded authenticator. Lab beside MIT.
+
 ### Tests and CI
 
 - **ci.** Cap `[Unreleased]` at 24,000 bytes and pin CI to `ubuntu-24.04` with upload-artifact 7.0.2. Released sections are frozen. ci-policy enforces the cap.

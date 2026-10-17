@@ -24,6 +24,7 @@ use krb5_types::{
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::kadmind::{Kadmind, serve_kadmind_until};
+use crate::kprop::is_app_tag;
 use crate::{AdminSession, Error, Op};
 
 /// Ports from the Kerberos assigned set.
@@ -617,17 +618,25 @@ pub(crate) fn handle_kpasswd_from(
         return Err(Error::Inner("Message stream modified".into()));
     }
     let ap_req = &raw[6..6 + ap_len];
+    // Stricter than MIT, which answers these with a KRB-ERROR: a kpasswd reply or error is not
+    // answered, so a spoofed datagram cannot set two servers answering each other (CVE-2002-2443).
+    if ap_len == 0 || is_app_tag(ap_req, 15) || is_app_tag(ap_req, 30) {
+        return Err(Error::Inner("Invalid message type".into()));
+    }
     let priv_raw = &raw[6 + ap_len..];
     let (store_realm, changepw) = {
         let mut g = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // The kadmin/changepw entry as the database holds it now, whoever changed it.
-        g.reload_if_stale()?;
+        // The kadmin/changepw entry as the database holds it now, whoever changed it; a database
+        // that does not read leaves the KDB keytab without it, so the AP-REQ is refused.
+        let read = g.reload_if_stale();
         (
             g.realm().to_owned(),
-            g.get_name(&krb5_kdc::principals::kadmin_changepw())
-                .cloned(),
+            read.ok().and_then(|()| {
+                g.get_name(&krb5_kdc::principals::kadmin_changepw())
+                    .cloned()
+            }),
         )
     };
     // MIT `process_chpw_request` (`schpw.c:102-161`): the auth context does sequence numbers only, `krb5_rd_req` names `kadmin/changepw` against the KDB keytab and also refuses an enctype the server (on kadmind's KDC profile) does not permit, and the AP-REP is made before the request is decrypted.
@@ -733,18 +742,24 @@ pub(crate) fn handle_kpasswd_from(
         let stamp = format!("kadmind@{store_realm}");
         // MIT `ctx_lock` (`plugins/kdb/db2/kdb_db2.c:438-447`): the change locks the database
         // first, and a database the server may not write changes nothing.
-        let changed = (|| -> Result<(), Error> {
+        let changed = (|| -> Result<(), krb5_kdc::Error> {
             g.reload_if_stale()?;
+            // Stricter than MIT, whose kpasswd path has no lockdown test: the target's keys are
+            // refused as the kadm5 chpass stub refuses them.
+            // MIT `chpass_principal_2_svc` (`kadmin/server/server_stubs.c:855-861`): KADM5_PROTECT_KEYS is answered as KADM5_AUTH_CHANGEPW.
+            if g.get_in_realm(&targ, &targ_realm)
+                .is_some_and(|p| p.attributes & krb5_kdc::KDB_LOCKDOWN_KEYS != 0)
+            {
+                return Err(krb5_kdc::Error::AclDenied);
+            }
             if self_change {
                 g.check_min_life_in(&targ, &targ_realm)?;
             }
-            g.change(|s| s.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp))
-                .map_err(Error::from)?
-                .map_err(Error::from)
+            g.change(|s| s.set_password_keepold_n_in(&targ, &targ_realm, &newpass, 0, &stamp))?
         })();
         match changed {
             Ok(()) => (0u16, String::new(), "success".to_owned()),
-            Err(Error::PasswordPolicy(msg)) => {
+            Err(krb5_kdc::Error::PasswordPolicy(msg)) => {
                 let empty = if msg == krb5_kdc::PWQUAL_EMPTY {
                     empty_policy(&g, &targ)
                 } else {
@@ -757,29 +772,30 @@ pub(crate) fn handle_kpasswd_from(
                     kpasswd_quality_log(&msg),
                 )
             }
-            Err(Error::PassTooSoon { until }) => (
+            Err(krb5_kdc::Error::PassTooSoon { until }) => (
                 4,
                 too_soon_text(until),
                 "Current password's minimum life has not expired".to_owned(),
             ),
-            Err(Error::AclDenied) => (
+            Err(krb5_kdc::Error::AclDenied) => (
                 5,
                 "Unauthorized request".to_owned(),
                 "Operation requires ``change-password'' privilege".to_owned(),
             ),
-            Err(Error::NotFound) => (
+            Err(krb5_kdc::Error::NotFound) => (
                 2,
                 UNK_PRINC_PRIV.to_owned(),
                 "Principal does not exist".to_owned(),
             ),
-            Err(e) => {
-                let msg = e.to_string();
-                (
-                    2,
-                    format!("Password not changed.\n{msg} while trying to change password.\n"),
-                    msg,
-                )
-            }
+            // MIT `_kadm5_chpass_principal_util` (`lib/kadm5/chpass_util.c:132-140`): the reply names the code's table text; the detail is only logged.
+            Err(e) => (
+                2,
+                format!(
+                    "Password not changed.\n{} while trying to change password.\n",
+                    crate::kadm5::chpass_store_error_text(&e)
+                ),
+                e.to_string(),
+            ),
         }
     };
     // MIT `process_chpw_request` (`kadmin/server/schpw.c:215-218`): both copies of the new password are zapped once the change is made or refused.

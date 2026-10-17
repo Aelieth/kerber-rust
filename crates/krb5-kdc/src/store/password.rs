@@ -45,7 +45,7 @@ fn last_pwd_unix(p: &Principal) -> u32 {
 }
 
 /// The bytes `password` holds up to its first NUL, as a C string.
-fn c_password(password: &[u8]) -> &[u8] {
+pub(super) fn c_password(password: &[u8]) -> &[u8] {
     match password.iter().position(|&b| b == 0) {
         Some(n) => password.get(..n).unwrap_or_default(),
         None => password,
@@ -317,6 +317,8 @@ impl PrincipalStore {
         actor: &str,
         etypes: &[EncryptionType],
     ) -> Result<(), Error> {
+        // MIT `add_key_pwd` (`lib/kdb/kdb_cpw.c:315-315`): the key is made from the password as a C string, the bytes before its first NUL that the checks and the hooks see.
+        let password = c_password(password);
         let id = self.canonical_id(name, princ_realm)?;
         let pol = self
             .map

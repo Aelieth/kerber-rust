@@ -603,7 +603,7 @@ fn read_message(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 }
 
 /// MIT `krb5int_is_app_tag` (`include/k5-int.h:1334-1336`): the first byte, constructed bit cleared, is `tag | 0x40`.
-fn is_app_tag(raw: &[u8], tag: u8) -> bool {
+pub(crate) fn is_app_tag(raw: &[u8], tag: u8) -> bool {
     raw.first().is_some_and(|b| b & !0x20 == tag | 0x40)
 }
 

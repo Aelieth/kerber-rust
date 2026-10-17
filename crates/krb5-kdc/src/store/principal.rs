@@ -10,7 +10,7 @@ use super::flags::{
     KDB_DISALLOW_ALL_TIX, KDB_PWCHANGE_SERVICE, KDB_REQUIRES_PRE_AUTH, KDB_V1_BASE_LENGTH,
 };
 use super::keys::{KeyEntry, KeyLookup, random_key};
-use super::password::{apply_keysalt_policy, keys_from_password};
+use super::password::{apply_keysalt_policy, c_password, keys_from_password};
 use super::{PrincipalStore, kadm5_mask, unix_now, unix_now_u32};
 use crate::acl::{Acl, AdminOp, Restrictions};
 use crate::error::Error;
@@ -688,6 +688,7 @@ impl PrincipalStore {
         ent: &AdminEnt,
         actor: &str,
     ) -> Result<(), Error> {
+        let password = password.map(c_password);
         let id = crate::kdb::lookup_principal_id(name, princ_realm);
         if self.get(&id).is_some() {
             return Err(Error::AlreadyExists);

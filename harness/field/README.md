@@ -152,6 +152,7 @@ make field PROFILE=nightly REF=f-functional               # every scenario of th
 make field PROFILE=nightly REF=f-functional ONLY=upgrade  # one of them
 harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the same, without make
 harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgrade, then ad-trust
+harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg both   # 464's cells, on demand
 ```
 
 - **Options:**
@@ -250,6 +251,7 @@ harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgra
 | `lldap-membership.sh` | S1's: one lldap group membership added or removed on services (lldap's admin password on stdin) |
 | `ad.sh`, `ad/*.ps1`, `dc-ps.py` | `ad-trust`'s DC: each PowerShell script run over WinRM (`dc-ps.py`, the AD secrets from `FIELD_ADLAB_ENV`) and shown whole in the record; the DC's state against `ad/baseline.txt` before and after; every change logged before it is made and undone by `ad/undo.ps1`, which touches only those changes |
 | `ptydrive.py` | R2's pty driver: `su`, `passwd` and `pamtester` on a pseudo-terminal, their prompts answered from stdin |
+| `setpw.py`, `udp-send.py` | `kpasswd`'s drivers on client2: one set-password request through MIT's libkrb5 (ctypes; `krb5_set_password_using_ccache`, or with `--frame` the request built from `krb5_mk_req_extended` and `krb5_mk_priv` so the password may hold a NUL), and kpasswd's own error frame sent back to it |
 
 ## Scenarios
 
@@ -261,6 +263,7 @@ harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgra
 | `sssd-login` | nightly, weekly | mit, rust | client1: `f4-mit` / `rust-nfs-sso`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
 | `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; the AD DC TEST-SERVER (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
 | `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
+| `kpasswd` | weekly, last (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 
 With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).
 
@@ -357,6 +360,17 @@ would remove it.
   (the TGT is issued, the account is denied); the kit's own `--validate`. Every
   realm and directory change is undone, also when the scenario stops early.
   Recorded: the cache's size.
+- **`kpasswd.sh`** (KH, client2 against kdc's 464; `lib/setpw.py` drives MIT's
+  libkrb5): admin/admin sets a fresh principal's password (0, kvno + 1); an
+  unprivileged user is refused (5, kvno kept); a self change with a changepw
+  ticket from the TGS is refused (7); a password holding a NUL (`--frame`) keys
+  the part before it; with the database bound read-only the reply is MIT's text
+  with no path (2), and with it moved aside the AP-REQ is not read (3); kpasswd's
+  own error frame sent back (`lib/udp-send.py`): MIT answers it, ours does not;
+  kadmin/changepw's own change and admin/admin's change of krbtgt: MIT allows
+  both, ours answers 5 with the kvno kept. MIT's answers to those three are INFO
+  lines (`scenarios/kpasswd.expect`); the rest are graded on both legs. The
+  database is unmounted and moved back, also when the scenario stops early.
 
 `scenarios/klldap-swap.sh` runs KLLDAP on this host's docker, never on a lab VM
 (run.sh still holds the lab lock while it runs). It needs, from `field.env`:

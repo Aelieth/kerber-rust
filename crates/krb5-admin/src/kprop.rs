@@ -30,6 +30,7 @@ use crate::Error;
 
 mod send;
 
+pub(crate) use send::is_app_tag;
 pub use send::{
     KPROP_SERVICE, KpropCreds, KpropDump, KpropError, RemoteError, kprop_get_tickets,
     kprop_open_connection, kprop_sendauth, kprop_update_last_prop_file, kprop_xmit_database,
