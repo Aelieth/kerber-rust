@@ -129,7 +129,7 @@ The toolchain, lld, and `rust-cache` steps are one composite,
 | `test-release` | `cargo nextest run --workspace --release --profile ci` with the test-hooks features. Tags and manual runs |
 | `msrv-test` | `cargo test --workspace --locked` on Rust 1.95 with the test-hooks features. Tags and manual runs |
 
-A gate in `moving` is deleted in the commit whose production cell passes. The register `plan-RF-moving-register-1017-0800.md` is the planning record of which cell retires which gate.
+A gate in `moving` is deleted in the commit whose production cell passes. At the release cut, `moving` holds only the gates still waiting on a cell, and the `oracles` stay nightly.
 
 `peers.yml` (cron `12 6 * * *`, and manual) runs Samba AD: `samba-ad-gate`, `ad-windows-gate`, `ad-s4u-gate`, `samba-pac-verify-gate`, `samba-pac-l2-gate`, `samba-crossrealm-gate`, `samba-realtrust-gate`. Per-gate detail is in [gates.md](gates.md).
 
