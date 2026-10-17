@@ -522,7 +522,6 @@ dependencies = [
  "krb5-types",
  "rasn",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
