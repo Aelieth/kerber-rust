@@ -27,12 +27,30 @@ pub struct PaPkAsReq {
     /// CMS SignedData wrapping [`AuthPack`] (DER).
     #[rasn(tag(0))]
     pub signed_auth_pack: OctetString,
-    /// Optional trusted certifiers (opaque DER).
+    /// The CAs the client trusts. MIT's client sends one entry for each of its anchors.
+    /// MIT `pa_pk_as_req_1` (`lib/krb5/asn.1/asn1_k_encode.c:1464-1465`): `[1]`, explicit, an optional SEQUENCE OF ExternalPrincipalIdentifier.
+    /// MIT `pkinit_as_req_create` (`plugins/preauth/pkinit/pkinit_clnt.c:271-273`): the client fills it from its trusted CAs.
     #[rasn(tag(explicit(1)))]
-    pub trusted_certifiers: Option<SequenceOf<OctetString>>,
+    pub trusted_certifiers: Option<SequenceOf<ExternalPrincipalIdentifier>>,
     /// Optional KDC public-key identifier.
     #[rasn(tag(2))]
     pub kdc_pk_id: Option<OctetString>,
+}
+
+/// ExternalPrincipalIdentifier ::= SEQUENCE { subjectName, issuerAndSerialNumber,
+/// subjectKeyIdentifier }, each an optional DER encoding.
+/// MIT `external_principal_identifier_fields` (`lib/krb5/asn.1/asn1_k_encode.c:1448-1450`): three fields, each `[n]` IMPLICIT, an optional octet string.
+#[derive(AsnType, Clone, Debug, Decode, Encode, PartialEq, Eq, Hash)]
+pub struct ExternalPrincipalIdentifier {
+    /// The CA's subject `Name`.
+    #[rasn(tag(0))]
+    pub subject_name: Option<OctetString>,
+    /// The CA's `IssuerAndSerialNumber`.
+    #[rasn(tag(1))]
+    pub issuer_and_serial_number: Option<OctetString>,
+    /// The CA's subject key identifier.
+    #[rasn(tag(2))]
+    pub subject_key_identifier: Option<OctetString>,
 }
 
 /// PKAuthenticator ::= SEQUENCE { cusec, ctime, nonce, paChecksum, … }
