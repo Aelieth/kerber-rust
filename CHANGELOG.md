@@ -45,6 +45,7 @@ any other `###` heading.
 - **crypto.** Unit tests outside the keep list are gone. The known-answer tests and the parity-row proofs stay.
 - **tools.** Unit tests outside the keep list are gone. The decode-sweep golden test stays.
 - **ci.** `gate-common` and the three smoke gates read captured text. A match is grep's status.
+- **crypto.** The des3 PKINIT reply-key test stays. It is that parity row's only proof.
 
 ### Removed
 

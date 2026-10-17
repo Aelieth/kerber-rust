@@ -216,7 +216,51 @@ pub fn pkinit_kdf_agile(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::etype::EncryptionType;
+    use crate::key::ProtocolKey;
+
+    fn odd_parity(octets: &[u8]) -> bool {
+        octets.iter().all(|b| b.count_ones() % 2 == 1)
+    }
+
+    /// A des3 reply key is the first 21 octets of the stream spread over 24 with odd parity on each; every other enctype takes the octets as the key.
+    /// MIT `octetstring2key` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:2574-2646`): the stream is cut to `keybytes` octets, which go to `krb5_c_random_to_key`.
+    /// MIT `pkinit_kdf` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:2783-2868`): the SSKDF output is `keybytes` octets, which go to `krb5_c_random_to_key`.
+    #[test]
+    fn the_pkinit_keys_of_des3_are_made_through_random_to_key() {
+        use sha1::{Digest as _, Sha1};
+        use sha2::Sha256;
+        let z = b"a DH shared secret of some length, 32 octets+";
+        let other = b"other-info";
+        // RFC 4556: SHA-1(0 || Z) || SHA-1(1 || Z), the first 21 octets.
+        let mut stream = Vec::new();
+        for i in 0u8..2 {
+            let mut h = Sha1::new();
+            h.update([i]);
+            h.update(z);
+            stream.extend_from_slice(&h.finalize());
+        }
+        let want = ProtocolKey::from_random(EncryptionType::Des3CbcSha1, &stream[..21]).unwrap();
+        let got = octetstring2key(EncryptionType::Des3CbcSha1, z).unwrap();
+        assert_eq!(got.as_bytes(), want.as_bytes());
+        assert_eq!(got.as_bytes().len(), 24);
+        assert!(odd_parity(got.as_bytes()), "{:02x?}", got.as_bytes());
+        // RFC 8636: SHA-256(1 || Z || OtherInfo), the first 21 octets of the stream (one block).
+        let mut h = Sha256::new();
+        h.update(1u32.to_be_bytes());
+        h.update(z);
+        h.update(other);
+        let block = h.finalize();
+        let want = ProtocolKey::from_random(EncryptionType::Des3CbcSha1, &block[..21]).unwrap();
+        let got = pkinit_kdf_agile(EncryptionType::Des3CbcSha1, z, other).unwrap();
+        assert_eq!(got.as_bytes(), want.as_bytes());
+        assert!(odd_parity(got.as_bytes()), "{:02x?}", got.as_bytes());
+        // An AES key is the stream's first key_len() octets, as before.
+        let aes = octetstring2key(EncryptionType::Aes256CtsHmacSha196, z).unwrap();
+        assert_eq!(aes.as_bytes().len(), 32);
+        assert_eq!(&aes.as_bytes()[..20], &stream[..20]);
+    }
 
     #[test]
     fn arcfour_usage_9_is_9() {
