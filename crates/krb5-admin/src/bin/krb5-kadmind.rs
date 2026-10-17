@@ -18,8 +18,10 @@
 //! - `-W`, `-p`, `-F`, `-K` and `-k` are accepted and unused: this kadmind starts no
 //!   `kdb5_util` or `kprop` for an iprop full resync, whose dump is sent by hand:
 //!   `kdb5_util dump -i1`, then `kprop -f`.
-//!   `-proponly` stops kadmind as MIT's does when `iprop_enable` is not set, and also when it is:
-//!   there is no separate iprop listener. `-m` stops it: the master key comes from the stash.
+//!   `-proponly` is refused. With `iprop_enable` unset the text is MIT's (`-proponly can only be
+//!   used when iprop_enable is true`); with it set, iprop is served on the kadm5 port
+//!   (`-proponly is not supported: iprop is served on the kadm5 port`). `-m` reads the master
+//!   key from the keyboard when kdc.conf names no `key_stash_file`.
 //!
 //! With `iprop_enable` set for the realm ([`krb5_config::IpropParams`], which also needs
 //! `iprop_port`), kadmind maps the update log as the primary's, logs every principal put and
@@ -54,8 +56,10 @@ use krb5_kdc::net_server::Sockets;
 use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
     Acl, DEFAULT_TCP_LISTEN_BACKLOG, Error, IpropRole, OpenFailure, PrincipalStore, Signals,
-    acl_for_store, bind_rpc_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners, detach,
-    names_relative_database, open_database, shared_dump as shared_store, write_pid_file,
+    acl_for_store, bind_rpc_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners,
+    copy_persist_master, detach, manual_master_key, names_relative_database, open_database,
+    open_database_with_key, open_database_with_password, shared_dump as shared_store,
+    write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 
@@ -187,14 +191,6 @@ fn main() {
             ))
             .try_init();
     }
-    if args.flag("-m") {
-        fail_to_start(
-            &progname,
-            None,
-            "Reading the master key from the keyboard (-m) is not supported",
-        );
-    }
-
     // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf.
     krb5_gss::use_kdc_context();
     let (mut store, paths) = open_realm(&progname, &args, test_realm);
@@ -249,6 +245,12 @@ fn main() {
         .map(|k| k.key.clone());
     #[cfg(feature = "test-hooks")]
     let persist = store.persist_paths.clone();
+    let keyboard = manual_master_key(args.flag("-m"), &paths);
+    let held_master = if keyboard {
+        copy_persist_master(&store)
+    } else {
+        None
+    };
     let shared = shared_store(store);
     let kadmind_port = args
         .value("-port")
@@ -301,7 +303,15 @@ fn main() {
     // its start.
     let db_args: Vec<String> = args.values("-x").into_iter().map(str::to_owned).collect();
     if !nofork && names_relative_database(&paths, &db_args) {
-        if let Err(e) = open_database(&paths, &db_args, "K/M") {
+        let reopened = if keyboard {
+            match &held_master {
+                Some(key) => open_database_with_key(&paths, &db_args, "K/M", key).map(|_| ()),
+                None => Err(OpenFailure::MasterKey("Cannot read password".into())),
+            }
+        } else {
+            open_database(&paths, &db_args, "K/M").map(|_| ())
+        };
+        if let Err(e) = reopened {
             let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
             fail_to_start(&progname, Some(&msg), "initializing");
         }
@@ -401,7 +411,13 @@ fn open_realm(
     }
     let _ = test_realm;
     let db_args: Vec<String> = args.values("-x").into_iter().map(str::to_owned).collect();
-    let store = open_database(&paths, &db_args, "K/M").unwrap_or_else(|e| {
+    let realm_name = paths.realm.clone().unwrap_or_default();
+    let store = if manual_master_key(args.flag("-m"), &paths) {
+        open_database_with_password(&paths, &db_args, "K/M", &realm_name)
+    } else {
+        open_database(&paths, &db_args, "K/M")
+    }
+    .unwrap_or_else(|e| {
         let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
         fail_to_start(progname, Some(&msg), "initializing")
     });

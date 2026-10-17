@@ -68,6 +68,22 @@ pub fn open_database(
     db_args: &[String],
     mkey_name: &str,
 ) -> Result<PrincipalStore, OpenFailure> {
+    let db = prepare_database(paths, db_args)?;
+    refuse_other_mkey(mkey_name)?;
+    if let Err(e) = File::open(&paths.key_stash_file) {
+        return Err(OpenFailure::MasterKey(format!(
+            "Can not fetch master key (error: {}).",
+            os_error_text(&e)
+        )));
+    }
+    let lib = paths.conf.as_ref().and_then(|c| c.db_library.as_deref());
+    open_store(lib, &db, &paths.key_stash_file).map_err(|e| OpenFailure::Database(e.to_string()))
+}
+
+fn prepare_database(
+    paths: &krb5_config::KdcPaths,
+    db_args: &[String],
+) -> Result<PathBuf, OpenFailure> {
     let db = database_path(&paths.database_name, db_args).map_err(OpenFailure::Database)?;
     match crate::check_openable(&db) {
         Ok(()) => {}
@@ -83,19 +99,92 @@ pub fn open_database(
     if let Err(e) = crate::DbLock::open(&db) {
         return Err(OpenFailure::Database(e.to_string()));
     }
+    Ok(db)
+}
+
+fn refuse_other_mkey(mkey_name: &str) -> Result<(), OpenFailure> {
     if mkey_name != "K/M" {
         return Err(OpenFailure::MasterKey(
             "Can not fetch master key (error: Key table entry not found).".into(),
         ));
     }
-    if let Err(e) = File::open(&paths.key_stash_file) {
-        return Err(OpenFailure::MasterKey(format!(
-            "Can not fetch master key (error: {}).",
-            os_error_text(&e)
-        )));
+    Ok(())
+}
+
+fn open_prepared(db: &Path, key: &krb5_crypto::ProtocolKey) -> Result<PrincipalStore, OpenFailure> {
+    match crate::load_store_with_master(db, key) {
+        Ok(store) => Ok(store),
+        Err(crate::PersistError::Crypto(s)) => {
+            Err(OpenFailure::MasterKey(format!("persist crypto: {s}")))
+        }
+        Err(e) => Err(OpenFailure::Database(e.to_string())),
     }
-    let lib = paths.conf.as_ref().and_then(|c| c.db_library.as_deref());
-    open_store(lib, &db, &paths.key_stash_file).map_err(|e| OpenFailure::Database(e.to_string()))
+}
+
+/// Whether `-m` reads the master key from the keyboard.
+/// MIT `init_realm` (`kdc/main.c:285-290`): `-m` counts only when kdc.conf names no stash.
+#[must_use]
+pub fn manual_master_key(manual: bool, paths: &krb5_config::KdcPaths) -> bool {
+    if !manual {
+        return false;
+    }
+    #[cfg(feature = "test-hooks")]
+    if std::env::var_os("KRB5_KDC_STASH").is_some() {
+        return false;
+    }
+    paths
+        .conf
+        .as_ref()
+        .is_none_or(|c| c.key_stash_file.is_none())
+}
+
+/// The master key [`open_database_with_password`] stored on `store`, for a second open after
+/// `daemon()` that must not prompt again.
+#[must_use]
+pub fn copy_persist_master(store: &PrincipalStore) -> Option<krb5_crypto::ProtocolKey> {
+    store.persist_master.as_ref().map(|(_, key)| key.clone())
+}
+
+/// Open as [`open_database`] does, with the master key typed once at the keyboard. The stash is
+/// not opened.
+/// MIT `krb5_db_fetch_mkey` (`lib/kdb/kdb_default.c`) with `-m`: one prompt, `Enter KDC database
+/// master key`, then `string_to_key` over the `K/M` salt.
+///
+/// # Errors
+///
+/// [`OpenFailure`], as [`open_database`]. A prompt that gets no password is
+/// [`OpenFailure::MasterKey`].
+pub fn open_database_with_password(
+    paths: &krb5_config::KdcPaths,
+    db_args: &[String],
+    mkey_name: &str,
+    realm: &str,
+) -> Result<PrincipalStore, OpenFailure> {
+    let db = prepare_database(paths, db_args)?;
+    refuse_other_mkey(mkey_name)?;
+    let password = krb5_cli::prompt_hidden("Enter KDC database master key")
+        .map_err(|e| OpenFailure::MasterKey(e.to_string()))?;
+    let etype =
+        crate::master_etype(paths.master_key_type.as_deref()).map_err(OpenFailure::MasterKey)?;
+    let key = crate::master_key_from_password(realm, password.as_slice(), etype)
+        .map_err(|e| OpenFailure::MasterKey(e.to_string()))?;
+    open_prepared(&db, &key)
+}
+
+/// [`open_database_with_password`] for a process that already holds `key` and has no terminal.
+///
+/// # Errors
+///
+/// [`OpenFailure`], as [`open_database_with_password`] short of the prompt.
+pub fn open_database_with_key(
+    paths: &krb5_config::KdcPaths,
+    db_args: &[String],
+    mkey_name: &str,
+    key: &krb5_crypto::ProtocolKey,
+) -> Result<PrincipalStore, OpenFailure> {
+    let db = prepare_database(paths, db_args)?;
+    refuse_other_mkey(mkey_name)?;
+    open_prepared(&db, key)
 }
 
 /// Whether the realm's database or stash is named relative to the current directory, so that a

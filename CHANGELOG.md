@@ -37,6 +37,7 @@ any other `###` heading.
 - **kdc.** A TGS name that is not GeneralString is S_PRINCIPAL_UNKNOWN, not a panic.
 - **kdc.** A preauth module's text is kept only with its own code. Garbage PA-ENC-TIMESTAMP is error 24, and PKINIT without a CA is ignored.
 - **crypto.** A des3 usage key uses the 3DES DK, a delegated session key keeps a weak enctype, and kadmin names are NT-PRINCIPAL.
+- **kdc.** `krb5kdc -m` and `kadmind -m` read the master key once from the keyboard when kdc.conf names no stash.
 
 ## [1.1.0] - 2026-10-14
 

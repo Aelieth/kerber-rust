@@ -700,6 +700,11 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 - `KEYRING:` credential caches in the tools `make install-clients` installs. `KCM:` (Fedora's
   default), `DIR:` and `FILE:` work, with their collections; the tools' other gaps are listed
   above.
+- One realm per KDC process. A second `-r` stops `krb5kdc` with `Only one realm per KDC process is supported`.
+- `krb5kdc -T` other than `0` stops with `-T (a clock offset for testing) is not supported`.
+- `krb5kdc -w N` is accepted and does nothing: one loop on the main thread serves every request.
+- `kadmind -proponly` with `iprop_enable` unset stops with `-proponly can only be used when iprop_enable is true`.
+- `kadmind -proponly` with `iprop_enable` set stops with `-proponly is not supported: iprop is served on the kadm5 port`.
 
 ## Make variables
 

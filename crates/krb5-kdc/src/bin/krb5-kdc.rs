@@ -23,7 +23,7 @@
 //! - `-w N` is accepted and does nothing: one loop on the main thread serves every request;
 //!   `-R`, `-4` and `-X` are ignored; `-k` is only checked; `-M` must be `K/M`; `-T` must
 //!   be 0. `-m` is ignored when the realm stanza names `key_stash_file`, as in MIT; otherwise
-//!   the KDC stops as MIT's does when it cannot read the master password.
+//!   the master key is read once from the keyboard (`Enter KDC database master key`).
 //!
 //! The KDC serves every client from MIT's net-server loop on its main thread: one thread, with
 //! `[kdcdefaults] kdc_max_dgram_reply_size` and `kdc_tcp_listen_backlog` read as MIT's are.
@@ -48,7 +48,8 @@ use std::path::PathBuf;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners_with_backlog,
-    bind_udp_listeners, detach, names_relative_database, open_database, serve_daemon, shared_store,
+    bind_udp_listeners, copy_persist_master, detach, manual_master_key, names_relative_database,
+    open_database, open_database_with_key, open_database_with_password, serve_daemon, shared_store,
     write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
@@ -329,6 +330,12 @@ fn main() {
         .as_deref()
         .or_else(|| kdc_conf.as_ref().and_then(|c| c.db_library.as_deref()));
     let memory = lib == Some("memory");
+    let keyboard = manual_master_key(opts.args.manual, &paths);
+    let held_master = if keyboard {
+        copy_persist_master(&store)
+    } else {
+        None
+    };
     let store = if memory {
         shared_store(krb5_kdc::MemoryStore::from_dump(&store))
     } else {
@@ -373,7 +380,32 @@ fn main() {
     // MIT `main` (`kdc/main.c:1016-1016`): the realm is opened again after daemon(), so a
     // relative database or stash name now opens from `/`, or the KDC stops as at its start.
     if !foreground && names_relative_database(&paths, &opts.args.db_args) {
-        let _ = init_realm(&progname, &realm, &paths, &opts.args);
+        if keyboard {
+            let fetching = format!(
+                "while fetching master key {} for realm {realm}",
+                opts.args.mkey_name.as_deref().unwrap_or("K/M")
+            );
+            let Some(key) = &held_master else {
+                cannot_initialize(&progname, &realm, "Cannot read password", &fetching);
+            };
+            if let Err(e) = open_database_with_key(
+                &paths,
+                &opts.args.db_args,
+                opts.args.mkey_name.as_deref().unwrap_or("K/M"),
+                key,
+            ) {
+                let (msg, during) = match e {
+                    OpenFailure::Database(msg) => (
+                        msg,
+                        format!("while initializing database for realm {realm}"),
+                    ),
+                    OpenFailure::MasterKey(msg) => (msg, fetching),
+                };
+                cannot_initialize(&progname, &realm, &msg, &during);
+            }
+        } else {
+            let _ = init_realm(&progname, &realm, &paths, &opts.args);
+        }
         let mut s = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -452,20 +484,13 @@ fn init_realm(
     let opening = format!("while initializing database for realm {realm}");
     let mkey_name = args.mkey_name.as_deref().unwrap_or("K/M");
     let fetching = format!("while fetching master key {mkey_name} for realm {realm}");
-    // MIT `init_realm` (`kdc/main.c:285-290`): `-m` counts only when kdc.conf names no stash.
-    #[cfg(feature = "test-hooks")]
-    let stash_env = std::env::var_os("KRB5_KDC_STASH").is_some();
-    #[cfg(not(feature = "test-hooks"))]
-    let stash_env = false;
-    let stash_relation = paths
-        .conf
-        .as_ref()
-        .is_some_and(|c| c.key_stash_file.is_some())
-        || stash_env;
-    let keyboard = args.manual && !stash_relation;
-    match open_database(paths, &args.db_args, mkey_name) {
+    let opened = if manual_master_key(args.manual, paths) {
+        open_database_with_password(paths, &args.db_args, mkey_name, realm)
+    } else {
+        open_database(paths, &args.db_args, mkey_name)
+    };
+    match opened {
         Err(OpenFailure::Database(e)) => cannot_initialize(progname, realm, &e, &opening),
-        _ if keyboard => cannot_initialize(progname, realm, "Cannot read password", &fetching),
         Err(OpenFailure::MasterKey(e)) => cannot_initialize(progname, realm, &e, &fetching),
         Ok(store) => store,
     }
