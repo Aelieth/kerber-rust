@@ -1,0 +1,6 @@
+disallowed-methods = [
+    { path = "krb5_types::PrincipalName::new", reason = "wire or ccache text uses try_new; static text uses krb5_types::consts" },
+    { path = "krb5_types::PrincipalName::krbtgt", reason = "wire or ccache text uses try_new; static text uses krb5_types::consts::krbtgt" },
+    { path = "krb5_types::ascii", reason = "wire or ccache text uses try_ascii; static text uses krb5_types::consts::ascii" },
+    { path = "krb5_protocol::ccache::realm", reason = "wire or ccache text uses try_ascii; tests may call realm" },
+]
