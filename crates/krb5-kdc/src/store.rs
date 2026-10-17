@@ -431,7 +431,7 @@ impl PrincipalStore {
     }
 
     /// One change to the database, whole, under its exclusive lock: the lock is taken (waiting
-    /// for any other holder), the store is brought up to the database ([`Self::refresh_for_change`]),
+    /// for any other holder), the store is brought up to the database,
     /// `f` runs on the store, and when `f` returns `Ok` after a mutation the database is written
     /// once and its age moves forward; when `f` returns `Err`, what it changed is put back, so
     /// nothing of it stays in memory or on disk (a change that wrote part of itself early, or
