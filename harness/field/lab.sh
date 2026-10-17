@@ -6,8 +6,9 @@
 # for KLLDAP), mitd3 (upstream MIT krb5 built from the release tarball:
 # the des3 oracle, which Fedora's MIT cannot be) and deb13 (Debian 13,
 # krb5 1.21.3). ub26 (Ubuntu 26.04) is the CI mirror. rocky10 (Rocky Linux
-# 10) is for a closeout and the final only. `up` and `up all` do not start
-# ub26 or rocky10; name them. They sit on the NAT network kerber-lab
+# 10) is for a closeout and the final only. kdc2 (Fedora 44, .12) is the
+# replica, defined by hand. `up` and `up all` do not start ub26, rocky10,
+# or kdc2; name them. They sit on the NAT network kerber-lab
 # (192.168.177.0/24, DNS domain kerber.test). kdc also has a LAN NIC
 # (macvtap) so the AD test DC can reach it. See harness/field/README.md.
 #
@@ -24,14 +25,19 @@
 # Commands:
 #   up [vm...]              define and start the network, the pool and the VMs.
 #                           A missing VM is built, provisioned and given snapshot
-#                           'base'. Idempotent.
-#   down [vm...]            shut VMs down (the network stays up)
+#                           'base'. Idempotent. kdc2 is started only when named,
+#                           and a missing kdc2 domain is an error (not built).
+#   down [vm...]            shut VMs down (the network stays up). With no name,
+#                           every VM in the table is shut off, including kdc2.
 #   destroy --yes           remove the lab VMs, their volumes, the pool and the
 #                           network (only kerber-lab objects; images stay)
 #   rebuild <vm> --yes      remove one VM with its disks and snapshots, then
-#                           build it again from the templates (as up does)
+#                           build it again from the templates (as up does).
+#                           kdc2 is refused before any domain or volume is removed.
 #   reset <vm|all> [snap]   revert to snapshot 'base' (or snap) and boot.
-#                           With no snap named, mitd3 reverts to 'mit-d3'.
+#                           With no snap named, mitd3 reverts to 'mit-d3' and
+#                           kdc2 reverts to 'f44-base'. `reset all` does not
+#                           select kdc2.
 #   snapshot <vm> <name>    offline snapshot: shut down, snapshot, start again
 #   ssh <vm> [--] [cmd...]  ssh to the VM as 'lab' with the lab key
 #   ip <vm> [lan]           print the VM's lab address, or kdc's LAN address
@@ -79,19 +85,23 @@ UBUNTU_IMG=ubuntu-26.04-server-cloudimg-amd64.img
 UBUNTU_SHA256=8800651811af9a85465ad1d552add729947bb16488dddb4a9b5305a3d97332b2
 UBUNTU_VOL=ubuntu-26.04-cloud.img
 
-# The VM table. The MACs must match network-kerber-lab.xml.
-ALL_VMS=(kdc services client1 client2 klldap mitd3 ub26 deb13 rocky10)
-declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud [ub26]=ubuntu [deb13]=debian [rocky10]=rocky)
-declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4 [ub26]=4 [deb13]=2 [rocky10]=2)
-declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096 [ub26]=8192 [deb13]=3072 [rocky10]=3072)
-declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20 [ub26]=60 [deb13]=30 [rocky10]=20)
+# The VM table. The MACs must match network-kerber-lab.xml, except kdc2:
+# its DHCP host is already on the live network, and this script does not
+# edit that XML and does not net-update a dns-host for it.
+ALL_VMS=(kdc services client1 client2 klldap mitd3 ub26 deb13 rocky10 kdc2)
+declare -A KIND=([kdc]=cloud [services]=cloud [client1]=kinoite [client2]=cloud [klldap]=cloud [mitd3]=cloud [ub26]=ubuntu [deb13]=debian [rocky10]=rocky [kdc2]=replica)
+declare -A CPUS=([kdc]=2 [services]=4 [client1]=4 [client2]=2 [klldap]=2 [mitd3]=4 [ub26]=4 [deb13]=2 [rocky10]=2 [kdc2]=2)
+declare -A MEM=([kdc]=2048 [services]=6144 [client1]=6144 [client2]=3072 [klldap]=3072 [mitd3]=4096 [ub26]=8192 [deb13]=3072 [rocky10]=3072 [kdc2]=2048)
+declare -A DISK=([kdc]=20 [services]=40 [client1]=40 [client2]=20 [klldap]=30 [mitd3]=20 [ub26]=60 [deb13]=30 [rocky10]=20 [kdc2]=20)
 declare -A IP=([kdc]=192.168.177.10 [services]=192.168.177.11 [client1]=192.168.177.21
                [client2]=192.168.177.22 [klldap]=192.168.177.30 [mitd3]=192.168.177.31
-               [ub26]=192.168.177.32 [deb13]=192.168.177.33 [rocky10]=192.168.177.34)
+               [ub26]=192.168.177.32 [deb13]=192.168.177.33 [rocky10]=192.168.177.34
+               [kdc2]=192.168.177.12)
 declare -A MAC=([kdc]=52:54:00:4b:52:0a [services]=52:54:00:4b:52:0b
                 [client1]=52:54:00:4b:52:15 [client2]=52:54:00:4b:52:16
                 [klldap]=52:54:00:4b:52:1e [mitd3]=52:54:00:4b:52:1f
-                [ub26]=52:54:00:4b:52:20 [deb13]=52:54:00:4b:52:21 [rocky10]=52:54:00:4b:52:22)
+                [ub26]=52:54:00:4b:52:20 [deb13]=52:54:00:4b:52:21 [rocky10]=52:54:00:4b:52:22
+                [kdc2]=52:54:00:4b:52:0c)
 KDC_LAN_MAC=52:54:00:4b:4c:0a
 
 say()  { printf '[lab] %s\n' "$*"; }
@@ -147,15 +157,15 @@ has_snapshot() { vsh snapshot-info "$(dom "$1")" --snapshotname "$2" >/dev/null 
 in_install() { [ "$(vsh dumpxml --inactive "$(dom "$1")" | awk '/<kernel>/ { n++ } END { print n + 0 }')" -gt 0 ]; }
 
 # select_vms <args...>: SEL = the named VMs, or the field VMs when none (or 'all')
-# is named. ub26 and rocky10 are not in that set; name them.
+# is named. ub26, rocky10, and kdc2 are not in that set; name them.
 SEL=()
 select_vms() {
     SEL=()
     if [ $# -eq 0 ] || [ "$1" = all ]; then
         local vm
         for vm in "${ALL_VMS[@]}"; do
-            # ub26 and rocky10 stay shut off unless a command names them.
-            case ${KIND[$vm]} in ubuntu|rocky) continue ;; esac
+            # ub26, rocky10, and kdc2 stay shut off unless a command names them.
+            case ${KIND[$vm]} in ubuntu|rocky|replica) continue ;; esac
             SEL+=("$vm")
         done
         return 0
@@ -239,14 +249,19 @@ ensure_net() {
 }
 
 # ensure_net_hosts: the network has a DHCP lease and a DNS record for every VM
-# of the table. A network defined before a VM joined the table lacks its two
-# entries (net-define runs only when the network is missing); they are added
-# live and to the stored definition with net-update, which restarts nothing
-# and touches no other VM. A VM whose MAC and name are present is left alone.
+# of the table except a replica. A network defined before a VM joined the
+# table lacks its two entries (net-define runs only when the network is
+# missing); they are added live and to the stored definition with net-update,
+# which restarts nothing and touches no other VM. A VM whose MAC and name
+# are present is left alone. kdc2 is skipped: its DHCP host is already live,
+# and this script does not add a dns-host for it.
 ensure_net_hosts() {
     local vm xml
     xml=$(vsh net-dumpxml "$NET")
     for vm in "${ALL_VMS[@]}"; do
+        # kdc2's DHCP host is already on the live network. Do not add a
+        # dns-host for it, and do not edit network-kerber-lab.xml.
+        [ "${KIND[$vm]}" = replica ] && continue
         case $xml in
             *"mac='${MAC[$vm]}'"*) ;;
             *) say "network $NET: adding the DHCP lease of $vm (${MAC[$vm]} -> ${IP[$vm]})"
@@ -588,10 +603,10 @@ cmd_up() {
             case ${KIND[$vm]} in
                 kinoite) create_kinoite ;;
                 ubuntu) create_ubuntu "$vm" ;;
-                debian|rocky) die "$vm is not built by this script; define that domain by hand" ;;
+                debian|rocky|replica) die "$vm is not built by this script; define that domain by hand" ;;
                 *) create_cloud "$vm" ;;
             esac
-        elif has_snapshot "$vm" base; then
+        elif has_snapshot "$vm" base || [ "${KIND[$vm]}" = replica ]; then
             if ! is_state "$vm" running; then
                 say "starting $(dom "$vm")"
                 vsh start "$(dom "$vm")" >/dev/null
@@ -676,6 +691,10 @@ cmd_rebuild() {
         die "usage: lab.sh rebuild <vm> --yes (removes the VM, its disks and snapshots, then builds it again)"
     fi
     known_vm "$1"
+    # Die before undefine or vol-delete. create_cloud is the Fedora 43 path.
+    if [ "${KIND[$1]}" = replica ]; then
+        die "$1 is not rebuilt by this script (its domain, disks and snapshots stay)"
+    fi
     local vm=$1 d vol
     d=$(dom "$vm")
     if dom_exists "$vm"; then
@@ -704,7 +723,9 @@ cmd_reset() {
         d=$(dom "$vm")
         use=$snap
         # No name was given: mitd3 stays on the snapshot that has the MIT build.
+        # kdc2's cloud OS is f44-base. It has no snapshot named base.
         if [ "$vm" = mitd3 ] && [ -z "$named" ]; then use=mit-d3; fi
+        if [ "$vm" = kdc2 ] && [ -z "$named" ]; then use=f44-base; fi
         dom_exists "$vm" || die "$vm does not exist (lab.sh up)"
         if ! is_state "$vm" "shut off"; then vsh destroy "$d" >/dev/null 2>&1 || true; fi
         vsh snapshot-revert "$d" --snapshotname "$use" >/dev/null

@@ -23,6 +23,7 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 | --- | --- | --- | --- | --- | --- |
 | `kdc.kerber.test` | `.10` + a LAN NIC | `kerber-kdc` | Fedora 43 Cloud | 2 / 2 GiB / 20 GB | MIT `krb5-server` (oracle), then kerber-rust |
 | `services.kerber.test` | `.11` | `kerber-services` | Fedora 43 Cloud | 4 / 6 GiB / 40 GB | rootful podman: Ganesha NFS, Keycloak, lldap |
+| `kdc2.kerber.test` | `.12` | `kerber-kdc2` | Fedora 44 Cloud | 2 / 2 GiB / 20 GB | replica. Defined by hand (L22). `up` does not start it; `up kdc2` does. `rebuild kdc2` is refused. A bare `reset kdc2` uses `f44-base` |
 | `client1.kerber.test` | `.21` | `kerber-client1` | Fedora Kinoite 43 | 4 / 6 GiB / 40 GB | the fleet's client type (satomlin-kit twin), SPICE desktop |
 | `client2.kerber.test` | `.22` | `kerber-client2` | Fedora 43 Cloud | 2 / 3 GiB / 20 GB | sshd target, second NFS client, headless checks |
 | `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
@@ -99,7 +100,7 @@ field run; a `lab.sh reset` that run starts keeps the hold instead of waiting
 on it.
 
 ```sh
-harness/field/lab.sh up                 # build or start the field VMs; not ub26 or rocky10
+harness/field/lab.sh up                 # build or start the field VMs; not ub26, rocky10, or kdc2
 harness/field/lab.sh status             # VMs, addresses, snapshots, kdc's LAN address
 harness/field/lab.sh check              # ssh, DNS + reverse, time sync, internet; kdc LAN + filter + AD DC :88; client1 SDDM
 harness/field/lab.sh check --lab-only kdc   # the same without what reaches past the lab: internet, LAN address, AD DC
@@ -107,26 +108,29 @@ harness/field/lab.sh ssh kdc            # shell as 'lab' (passwordless sudo)
 harness/field/lab.sh ssh client2 -- sudo dnf -y install krb5-workstation
 harness/field/lab.sh ip kdc             # 192.168.177.10   (ip kdc lan: the LAN address)
 harness/field/lab.sh snapshot kdc mit-oracle   # offline snapshot (shut down, snapshot, start)
-harness/field/lab.sh reset all          # revert to 'base' and boot; mitd3 stays on 'mit-d3'
+harness/field/lab.sh reset all          # revert to 'base' and boot; mitd3 stays on 'mit-d3'; kdc2 is not selected
 harness/field/lab.sh reset all base     # name base to take mitd3 to 'base' too
 harness/field/lab.sh reset kdc mit-oracle
 harness/field/lab.sh collect kdc working/logs/f-r1 /var/log/krb5kdc.log /etc/krb5.conf
 harness/field/lab.sh down               # shut the VMs down (the network stays up)
-harness/field/lab.sh rebuild kdc --yes  # one VM from scratch (after a template change)
+harness/field/lab.sh rebuild kdc --yes  # one VM from scratch (after a template change). kdc2 is refused
 harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and network
 ```
 
 - **`up`:** builds each missing Fedora or Ubuntu VM, waits for provisioning
-  and takes snapshot `base`. `up` and `up all` leave `ub26` and `rocky10`
-  shut off; name either one to start it. `deb13` and `rocky10` are not built
-  from an image in this script. A missing domain is an error.
+  and takes snapshot `base`. `up` and `up all` leave `ub26`, `rocky10`, and
+  `kdc2` shut off; name one to start it. `up kdc2` starts the existing domain
+  and does not take a snapshot named `base`. `deb13`, `rocky10`, and `kdc2`
+  are not built from an image in this script. A missing domain is an error.
   - Timing: about 20 minutes from nothing with the images already downloaded
     (measured 2026-10-01). Most of it is the Kinoite install and upgrade and
     the cloud VMs' package upgrade. Downloading the 4.5 GB of Fedora media
     first took 6 minutes more.
   - `reset all` brings every selected VM back at `base` and boots it, except
     `mitd3`, which stays on `mit-d3` (the snapshot with the MIT build).
-    `reset all base` names `base`, so `mitd3` goes there too. About 30 seconds.
+    `kdc2` is not selected. `reset kdc2` with no snapshot name reverts to
+    `f44-base` and boots. `reset all base` names `base`, so `mitd3` goes
+    there too. About 30 seconds.
   - Interruptions: a VM without `base` is finished from whatever state it is
     in. An install that ended is never booted again.
   - Later runs only start stopped VMs.
