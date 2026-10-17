@@ -52,6 +52,7 @@ any other `###` heading.
 - **ci.** An exact row with no status word may cite a removed test when the proof says since removed.
 - **ci.** The six per-push jobs run on `ubuntu-26.04`.
 - **ci.** Nightly and peers run on `ubuntu-26.04`. The fuzz crate check is `--locked`.
+- **parity.** The closer hop's first TGS at A asks for `krbtgt/C.TEST`. The validate options check is the live gate.
 
 ### Removed
 

@@ -517,6 +517,9 @@ MIT_TR_TYPE="$(echo "$MIT_DUMP" | sed -n 's/^transited_tr_type=//p')"
 MIT_TR_CONTENTS="$(echo "$MIT_DUMP" | sed -n 's/^transited_contents=//p')"
 test "$MIT_TR_TYPE" = "1"
 test "$MIT_TR_CONTENTS" = "B.TEST"
+MIT_FIRST=$(printf '%s\n' "$MIT_CHASE" | grep -m1 'using TGT krbtgt/A.TEST@A.TEST' || true)
+printf '%s\n' "$MIT_FIRST" | grep -q 'Requesting TGT krbtgt/C.TEST@A.TEST' \
+    || die "MIT first TGS at A want krbtgt/C.TEST@A.TEST got: ${MIT_FIRST}"
 
 echo "==== Rust kvno bare A TGT chases MIT A/B/C ===="
 kinit_a /tmp/krb5cc_rust_bare
@@ -536,6 +539,9 @@ if [ "$bare_rc" -ne 0 ]; then
     exit 1
 fi
 echo "$BARE" | grep -q 'host/svc.c.test@C.TEST: kvno ='
+RUST_FIRST=$(printf '%s\n' "$BARE" | grep -m1 'using TGT krbtgt/A.TEST@A.TEST' || true)
+printf '%s\n' "$RUST_FIRST" | grep -q 'Requesting TGT krbtgt/C.TEST@A.TEST' \
+    || die "Rust first TGS at A want krbtgt/C.TEST@A.TEST got: ${RUST_FIRST}"
 if ! docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log | grep -q 'krbtgt/B.TEST'"; then
     echo "bare chase: MIT A new lines missing krbtgt/B.TEST" >&2
     docker exec "$NAME" sh -c "tail -n +$((na + 1)) /tmp/mit-a.log" >&2 || true

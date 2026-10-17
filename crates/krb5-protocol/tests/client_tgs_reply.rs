@@ -244,25 +244,6 @@ fn try_fallback_non_referral_drops_canonicalize() {
 }
 
 #[test]
-fn validate_options_are_common_mask_plus_validate() {
-    let flags = TicketFlags::from_u32(0x5480_0000);
-    let opts = tgs_validate_options(&flags);
-    assert!(opts.bit(flag_bit::FORWARDABLE));
-    assert!(opts.bit(flag_bit::PROXIABLE));
-    assert!(opts.bit(flag_bit::MAY_POSTDATE));
-    assert!(opts.bit(flag_bit::RENEWABLE));
-    assert!(
-        opts.bit(flag_bit::VALIDATE),
-        "val_renew.c:116-121 KDC_OPT_VALIDATE"
-    );
-    assert!(!opts.bit(flag_bit::RENEW));
-    assert!(
-        !opts.bit(flag_bit::CANONICALIZE),
-        "validate is not the get_creds referral walk"
-    );
-}
-
-#[test]
 fn validate_options_omit_unset_ticket_flags() {
     let flags = TicketFlags::from_u32(0x4000_0000);
     let opts = tgs_validate_options(&flags);
