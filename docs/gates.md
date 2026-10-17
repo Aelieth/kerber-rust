@@ -2,10 +2,8 @@
 
 Every `scripts/*-gate.sh`, one row each: the oracle it content-asserts
 against, where it runs (`workflow:job` in `.github/workflows`), its lane,
-and what it asserts. `ci-policy.py` `check_gate_documented` holds this
-table to the scripts and the workflows: a gate with no row, a row for no
-gate, a workflow or lane cell that differs from the workflows, an unknown
-oracle or an empty assertion is red. The jobs, their budgets and the tiers
+and what it asserts. This table is that record. A later commit deletes a
+row in the same commit that deletes its gate. The jobs, their budgets and the tiers
 are in [testing.md § CI lanes](testing.md#ci-lanes-which-job-runs-which-gates)
 and its Tier contract; the gate rules are in
 [testing.md § Gate discipline](testing.md#gate-discipline).
