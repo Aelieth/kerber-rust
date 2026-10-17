@@ -341,10 +341,7 @@ fn a_keytab_reply_outside_the_skew_is_kdcrep_skew_whatever_keys_follow() {
         part.endtime = part.endtime.add_seconds(3600).unwrap();
     });
     let err = keytab_as(port, &with_a_stranger_last(keys, etype));
-    assert_eq!(
-        err.to_string(),
-        "reply validation: Clock skew too great in KDC reply"
-    );
+    assert_eq!(err.to_string(), "Clock skew too great in KDC reply");
 }
 
 /// A reply the keytab's key of its enctype opens, but whose session key is of the wrong length,

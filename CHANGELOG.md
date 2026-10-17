@@ -23,6 +23,10 @@ any other `###` heading.
 - **field.** Add `ad-trust`, the real AD DC against both legs' KDCs: an AD user logs into client2's sshd. It runs only as `run.sh ad-trust` and starts from a recorded DC state.
 - **field.** `ad-trust` adds KERBER.TEST users at the DC's SMB and LDAP and the DC's SPNEGO login to Apache on kdc; the DC changes they need are undone in the same run.
 
+### Fixed
+
+- **client.** An AS failure prints MIT's table text for skew, a mismatched reply, and error 60. A generic error's e-text stays on the TGS path.
+
 ## [1.1.0] - 2026-10-14
 
 The **1.1** line is *general-purpose MIT 1.22.2 completeness*: the KDC

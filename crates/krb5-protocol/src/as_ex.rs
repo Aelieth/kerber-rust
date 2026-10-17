@@ -1686,8 +1686,8 @@ pub fn verify_as_reply_req_times(
 /// # Errors
 ///
 /// `kdc_timesync = 0` and starttime (or authtime) outside `skew` is
-/// [`Error::ReplyMismatch`] (`KRB5_KDCREP_SKEW`). An expired `endtime`
-/// in that mode is the same error class (stricter than MIT).
+/// [`Error::KdcReplySkew`] (`KRB5_KDCREP_SKEW`). An expired `endtime`
+/// in that mode is [`Error::ReplyMismatch`] (stricter than MIT).
 pub fn check_as_rep_times(enc_part: &EncKdcRepPart, now: i64, skew: i64) -> Result<(), Error> {
     let timesync = krb5_config::load_krb5_conf().is_none_or(|c| c.kdc_timesync);
     check_as_rep_times_sync(enc_part, now, skew, timesync)
@@ -1705,9 +1705,7 @@ pub(crate) fn check_as_rep_times_sync(
     }
     let start = enc_part.starttime.as_ref().unwrap_or(&enc_part.authtime);
     if (i64::from(start.unix_seconds()) - now).abs() > skew {
-        return Err(Error::ReplyMismatch(
-            "Clock skew too great in KDC reply".into(),
-        ));
+        return Err(Error::KdcReplySkew);
     }
     let end = i64::from(enc_part.endtime.unix_seconds());
     if end + skew < now {

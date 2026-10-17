@@ -45,10 +45,6 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
     `UDP error sending … Address family not supported by protocol` three times per request, then succeed over TCP.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
     `Incorrect password in encrypted challenge`.
-  - `kinit` refusing an AS reply whose time is off prints `reply validation: Clock skew too great in KDC reply`
-    where MIT omits the prefix.
-  - When the KDC answers error 60 with an e-text, MIT's `kinit` prints `Generic error (see e-text)` and ours
-    `KDC returned error string: <e-text>`.
   - The KDC answers a SPAKE support message from a client whose only key is des3 with PREAUTH_FAILED even when the
     key is good, and the client falls back to encrypted challenge or timestamp. MIT's answer with SPAKE configured
     is not settled.
