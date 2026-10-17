@@ -31,8 +31,8 @@ FIFO), holds every client until it takes the line.
 The gates read the stream from the daemons' standard output:
 `json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
 the stock kdc.conf and krb5.conf of each container they start before
-any copy of them is kept, and `harness/prod/env-up.sh` and
-`scripts/prod-gate.sh` do the same for their KDCs. A profile a gate
+any copy of them is kept, and harness/prod/env-up.sh and
+scripts/prod-gate.sh do the same for their KDCs. A profile a gate
 writes for our KDC alone, whose log it reads for a status word,
 carries the relation itself: a daemon whose kdc.conf and krb5.conf are
 both the gate's own reads neither stock file.
@@ -92,14 +92,14 @@ names are declared here and nowhere in Rust:
 | `harness` | `harness.start` | `kdc_port` | `harness/entrypoint.sh`, before the KDB is created |
 | `harness` | `harness.kdc.ready` | `kdc_port`; `error` on `outcome=error` | once `krb5kdc` listens on 88, or after the wait times out |
 | `harness` | `harness.kinit` | `principal` | after the in-container `kinit`; `outcome` `ok` or `error` |
-| `heimdal-harness` | `heimdal.start` | `kdc` (the KDC binary path) | `harness/heimdal/entrypoint.sh`, before `exec` of the KDC |
+| `heimdal-harness` | `heimdal.start` | `kdc` (the KDC binary path) | harness/heimdal/entrypoint.sh, before `exec` of the KDC |
 | `samba-harness` | `samba.start` | — | `harness/samba/entrypoint.sh`, before `exec samba` (the domain is provisioned in the image) |
 
 Gate scripts depend on two of these by exact string:
 `scripts/lib/gate-common.sh`, `scripts/run-harness.sh` and
-`scripts/kadmin-mit-gate.sh` wait for
+scripts/kadmin-mit-gate.sh wait for
 `"event":"harness.kinit"` with `"outcome":"ok"` (and fail on
-`"outcome":"error"`), and `scripts/heimdal-gate.sh` waits for
+`"outcome":"error"`), and scripts/heimdal-gate.sh waits for
 `"event":"heimdal.start"`. Renaming an event renames those greps.
 
 A request that reaches `handle_request` and gets a reply logs one

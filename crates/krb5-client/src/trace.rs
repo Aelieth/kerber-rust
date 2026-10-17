@@ -31,6 +31,13 @@ pub fn princ(p: &Princ) -> trace::Princ<'_> {
     trace::Princ::new(&p.1, p.0.as_bytes())
 }
 
+/// `krbtgt/realm` when `realm` is GeneralString. A cache or KDC realm that is not is skipped.
+fn static_tgt(realm: &str) -> Option<(krb5_types::Realm, PrincipalName)> {
+    let ks = krb5_types::try_ascii(realm).ok()?;
+    let name = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", realm]).ok()?;
+    Some((ks, name))
+}
+
 /// MIT `krb5_init_creds_init` (`lib/krb5/krb/get_in_tkt.c:850-1054`): an initial-credentials
 /// request is traced with its client.
 /// MIT `krb5_init_creds_set_service` (`lib/krb5/krb/get_in_tkt.c:1055-1071`): then its service, when
@@ -72,7 +79,9 @@ pub fn fast_armor(spec: &CcSpec, realm: &str, armor: &krb5_protocol::FastArmor) 
         return;
     };
     let name = ccname(&cache.spec);
-    let tgs = PrincipalName::krbtgt(realm);
+    let Some((realm_ks, tgs)) = static_tgt(realm) else {
+        return;
+    };
     let tgs_name = tgs.unparse_with_realm(realm);
     let avail = cache.cc.creds.iter().find(|c| {
         c.is_config()
@@ -92,7 +101,7 @@ pub fn fast_armor(spec: &CcSpec, realm: &str, armor: &krb5_protocol::FastArmor) 
         trace::fast_ccache_config();
     }
     let me = (armor.crealm.clone(), armor.cname.clone());
-    let server = (krb5_protocol::realm(realm), tgs);
+    let server = (realm_ks, tgs);
     tkt_creds_begin(&cache, &me, &server);
     retrieve(&cache, Some(&me), &server, true);
 }
@@ -193,17 +202,22 @@ pub fn tgt_for(cache: &OpenCache, srealm: &str) {
     }
     let me = cache.principal();
     let crealm = String::from_utf8_lossy(me.0.as_bytes()).into_owned();
-    let tgt = |realm: &str| (krb5_protocol::realm(realm), PrincipalName::krbtgt(realm));
+    let Some(service_tgt) = static_tgt(srealm) else {
+        return;
+    };
+    let Some(local_tgt) = static_tgt(&crealm) else {
+        return;
+    };
     if srealm != crealm {
         let service = cached_tgt(cache, srealm);
-        retrieve(cache, Some(&me), &tgt(srealm), service.is_some());
+        retrieve(cache, Some(&me), &service_tgt, service.is_some());
         if let Some(c) = service {
             trace::tkt_creds_cached_service_tgt(princ(&c.client), princ(&c.server));
             return;
         }
     }
     let local = cached_tgt(cache, &crealm);
-    retrieve(cache, Some(&me), &tgt(&crealm), local.is_some());
+    retrieve(cache, Some(&me), &local_tgt, local.is_some());
     if let Some(c) = local {
         trace::tkt_creds_local_tgt(princ(&c.client), princ(&c.server));
     }
@@ -216,7 +230,9 @@ pub fn tgt_creds(cache: &OpenCache, srealm: &str) {
         return;
     }
     let me = cache.principal();
-    let tgt = (krb5_protocol::realm(srealm), PrincipalName::krbtgt(srealm));
+    let Some(tgt) = static_tgt(srealm) else {
+        return;
+    };
     tkt_creds_begin(cache, &me, &tgt);
     retrieve(cache, Some(&me), &tgt, cached_tgt(cache, srealm).is_some());
 }

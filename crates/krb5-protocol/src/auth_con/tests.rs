@@ -12,11 +12,20 @@ use super::{
     AUTH_CONTEXT_DO_SEQUENCE, AUTH_CONTEXT_USE_SUBKEY, AcceptorAuthContext, check_ticket_etype,
     generate_seq_number, local_host_address,
 };
+use crate::acceptor_conf::AcceptorConfig;
 use crate::ap_req::ApVerifyOk;
 use crate::error::Error;
 use crate::safe_priv::wiped;
 
 const AES256: EncryptionType = EncryptionType::Aes256CtsHmacSha196;
+
+/// An empty profile's acceptor values, permitting `permitted`.
+fn conf(permitted: &[EncryptionType]) -> AcceptorConfig {
+    AcceptorConfig {
+        permitted_enctypes: permitted.to_vec(),
+        ..AcceptorConfig::default()
+    }
+}
 const AES256_SHA2: EncryptionType = EncryptionType::Aes256CtsHmacSha384192;
 
 fn enc_key(k: &ProtocolKey) -> EncryptionKey {
@@ -103,7 +112,7 @@ fn kpasswd_shaped_ap_rep_echoes_the_subkey_with_a_fresh_seq() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, Some(&subkey), None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     let part = rep_part(&ac.mk_rep().unwrap(), &session);
     assert_eq!(part.ctime, ok.authenticator.ctime);
@@ -127,7 +136,7 @@ fn use_subkey_ap_rep_carries_a_fresh_key_of_the_negotiated_etype() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, Some(&subkey), Some(864_518_167), true, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE | AUTH_CONTEXT_USE_SUBKEY);
     let part = rep_part(&ac.mk_rep().unwrap(), &session);
     let fresh = part.subkey.unwrap();
@@ -162,13 +171,13 @@ fn rfc4537_list_negotiates_the_first_permitted_enctype() {
         AES256,
         EncryptionType::Aes128CtsHmacSha196,
     ];
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &sha2_first).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&sha2_first)).unwrap();
     assert_eq!(ac.negotiated_etype(), AES256_SHA2);
     assert!(ac.ap_req_use_subkey());
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE | AUTH_CONTEXT_USE_SUBKEY);
     let part = rep_part(&ac.mk_rep().unwrap(), &session);
     assert_eq!(part.subkey.unwrap().keytype, AES256_SHA2.to_iana());
-    let sha1_first = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let sha1_first = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     assert_eq!(sha1_first.negotiated_etype(), AES256);
     assert!(!sha1_first.ap_req_use_subkey());
 }
@@ -179,7 +188,7 @@ fn a_session_key_the_acceptor_does_not_permit_is_noperm_etype() {
     let mut ok = accepted(&session, None, None, true, None);
     ok.ticket_etype = EncryptionType::Aes128CtsHmacSha196.to_iana();
     let only_aes128 = [EncryptionType::Aes128CtsHmacSha196];
-    let err = AcceptorAuthContext::from_ap_req(&ok, &only_aes128).unwrap_err();
+    let err = AcceptorAuthContext::from_ap_req(&ok, &conf(&only_aes128)).unwrap_err();
     assert_eq!(
         err.to_string(),
         "Encryption type aes256-cts-hmac-sha1-96 not permitted"
@@ -193,14 +202,14 @@ fn a_ticket_enctype_the_acceptor_does_not_permit_is_noperm_etype_first() {
     let aes128 = EncryptionType::Aes128CtsHmacSha196;
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, None, true, None);
-    let err = AcceptorAuthContext::from_ap_req(&ok, &[aes128]).unwrap_err();
+    let err = AcceptorAuthContext::from_ap_req(&ok, &conf(&[aes128])).unwrap_err();
     assert!(matches!(err, Error::NopermEtype(_)));
     assert_eq!(err.to_string(), "Encryption type not permitted");
     let permitted_session = ProtocolKey::random(aes128).unwrap();
     let ok = accepted(&permitted_session, None, None, true, None);
-    let err = AcceptorAuthContext::from_ap_req(&ok, &[aes128]).unwrap_err();
+    let err = AcceptorAuthContext::from_ap_req(&ok, &conf(&[aes128])).unwrap_err();
     assert_eq!(err.to_string(), "Encryption type not permitted");
-    assert!(AcceptorAuthContext::from_ap_req(&ok, &[AES256, aes128]).is_ok());
+    assert!(AcceptorAuthContext::from_ap_req(&ok, &conf(&[AES256, aes128])).is_ok());
 }
 
 /// MIT `krb5_decrypt_tkt_part` (`decrypt_tk.c:46-47`): an enctype the library does not
@@ -231,7 +240,7 @@ fn an_etype_list_that_does_not_decode_fails_the_request() {
     }];
     let ok = accepted(&session, None, None, true, Some(ad));
     assert!(matches!(
-        AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST),
+        AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)),
         Err(Error::Asn1(_))
     ));
 }
@@ -241,7 +250,7 @@ fn reply_krb_priv_has_no_timestamp_and_advances_the_seq() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, Some(&subkey), None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     let seq = rep_part(&ac.mk_rep().unwrap(), &session)
         .seq_number
@@ -262,7 +271,7 @@ fn reply_krb_priv_has_no_timestamp_and_advances_the_seq() {
 fn without_mutual_the_local_seq_is_the_peers() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, Some(77), false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     assert_eq!(ac.local_seq(), 77);
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     let part = rep_part(&ac.mk_rep().unwrap(), &session);
@@ -307,7 +316,7 @@ fn a_permitted_session_key_with_a_subkey_outside_the_list_is_noperm_etype() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(EncryptionType::Aes128CtsHmacSha196).unwrap();
     let ok = accepted(&session, Some(&subkey), None, true, None);
-    let err = AcceptorAuthContext::from_ap_req(&ok, &[AES256]).unwrap_err();
+    let err = AcceptorAuthContext::from_ap_req(&ok, &conf(&[AES256])).unwrap_err();
     assert_eq!(
         err.to_string(),
         "Encryption type aes128-cts-hmac-sha1-96 not permitted"
@@ -316,35 +325,33 @@ fn a_permitted_session_key_with_a_subkey_outside_the_list_is_noperm_etype() {
 
 #[test]
 fn the_kdc_profile_libdefaults_come_before_krb5_conf() {
-    use krb5_config::{KdcConf, Krb5Conf};
-
-    let krb5 =
-        Krb5Conf::parse("[libdefaults]\n permitted_enctypes = aes128-cts-hmac-sha1-96\n").unwrap();
-    let kdc_sets =
-        KdcConf::parse("[libdefaults]\n permitted_enctypes = aes256-cts-hmac-sha1-96\n").unwrap();
-    let kdc_silent = KdcConf::parse("[kdcdefaults]\n kdc_ports = 88\n").unwrap();
-    let iana = |r: Result<Vec<EncryptionType>, Error>| -> Vec<i32> {
-        r.unwrap().iter().map(|e| e.to_iana()).collect()
+    let krb5 = "[libdefaults]\n permitted_enctypes = aes128-cts-hmac-sha1-96\n";
+    let kdc_sets = "[libdefaults]\n permitted_enctypes = aes256-cts-hmac-sha1-96\n";
+    let kdc_silent = "[kdcdefaults]\n kdc_ports = 88\n";
+    let iana = |files: &[&str]| -> Vec<i32> {
+        let profile = krb5_config::Krb5Conf::parse_files(files).unwrap();
+        let conf = AcceptorConfig::from_krb5_conf(&profile);
+        conf.permitted()
+            .unwrap()
+            .iter()
+            .map(|e| e.to_iana())
+            .collect()
     };
-    let first = super::permitted_enctypes_in(Some(&kdc_sets), Some(&krb5));
-    assert_eq!(iana(first), [18], "kdc.conf's [libdefaults] wins");
-    let fallback = super::permitted_enctypes_in(Some(&kdc_silent), Some(&krb5));
-    assert_eq!(iana(fallback), [17], "else krb5.conf's");
-    let plain = super::permitted_enctypes_in(None, Some(&krb5));
-    assert_eq!(iana(plain), [17]);
-    let neither = super::permitted_enctypes_in(None, None);
     assert_eq!(
-        iana(neither),
-        [18, 17, 20, 19, 16, 23, 25, 26],
-        "MIT's DEFAULT"
+        iana(&[kdc_sets, krb5]),
+        [18],
+        "kdc.conf's [libdefaults] wins"
     );
+    assert_eq!(iana(&[kdc_silent, krb5]), [17], "else krb5.conf's");
+    assert_eq!(iana(&[krb5]), [17]);
+    assert_eq!(iana(&[]), [18, 17, 20, 19, 16, 23, 25, 26], "MIT's DEFAULT");
 }
 
 #[test]
 fn a_krb_priv_under_do_time_carries_the_time_to_the_microsecond() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, None, true, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(super::AUTH_CONTEXT_DO_TIME);
     let laddr = local_host_address(None);
     let part = priv_part(&ac.mk_priv(b"t", &laddr, None).unwrap(), &session);
@@ -360,7 +367,7 @@ fn mk_rep_zeroes_the_encoded_part_it_encrypted() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, Some(&subkey), Some(864_518_167), true, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE | AUTH_CONTEXT_USE_SUBKEY);
     wiped::take();
     let rep = ac.mk_rep().unwrap();
@@ -380,7 +387,7 @@ fn mk_priv_zeroes_its_encoded_part_and_its_copy_of_the_user_data() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, Some(&subkey), None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     let laddr = local_host_address(None);
     let secret = b"scratch-new-password";
@@ -409,30 +416,6 @@ fn generated_seq_numbers_keep_thirty_of_the_random_bits() {
         assert_eq!(generate_seq_number().unwrap(), want, "{raw:#x}");
     }
     super::set_test_seq_random(None);
-}
-
-#[test]
-fn the_kdc_profile_a_test_pins_is_the_one_read() {
-    let kdc = krb5_testkit::scratch_dir("p15a-kdc-profile").join("kdc.conf");
-    std::fs::write(
-        &kdc,
-        "[libdefaults]\n permitted_enctypes = aes128-cts-hmac-sha1-96\n",
-    )
-    .unwrap();
-    let iana = |v: Vec<EncryptionType>| -> Vec<i32> { v.iter().map(|e| e.to_iana()).collect() };
-    krb5_config::isolate_test_krb5();
-    assert_eq!(
-        iana(super::permitted_enctypes_kdc().unwrap()),
-        [18, 17, 20, 19, 16, 23, 25, 26],
-        "the isolation's empty KDC profile and realm-only krb5.conf: MIT's DEFAULT"
-    );
-    krb5_config::set_test_kdc_profile(Some(kdc));
-    assert_eq!(
-        iana(super::permitted_enctypes_kdc().unwrap()),
-        [17],
-        "the pinned kdc.conf's [libdefaults]"
-    );
-    krb5_config::set_test_kdc_profile(None);
 }
 
 #[test]
@@ -489,7 +472,7 @@ fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
     // MIT kpasswd's shape: no seq-number in the authenticator or the KRB-PRIV.
     let ok = accepted(&session, Some(&subkey), None, false, None);
     let fresh = || {
-        let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+        let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
         ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
         ac
     };
@@ -506,7 +489,7 @@ fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
     );
     // An authenticator seq-number: the KRB-PRIV must carry it, then the next one.
     let ok = accepted(&session, Some(&subkey), Some(864_518_167), false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     for wrong in [None, Some(864_518_168)] {
         let e = ac.rd_priv(&peer_priv(&subkey, b"pw", wrong)).unwrap_err();
@@ -527,7 +510,7 @@ fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
     );
     assert_eq!(ac.remote_seq(), 864_518_169);
     // Without DO_SEQUENCE the number is not looked at.
-    let mut lax = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut lax = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     lax.set_flags(0);
     assert!(lax.rd_priv(&peer_priv(&subkey, b"x", Some(7))).is_ok());
 }
@@ -536,7 +519,7 @@ fn rd_priv_takes_the_request_only_with_the_authenticators_seq() {
 fn rd_priv_refuses_a_replay_and_a_stale_time_under_do_time() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     assert_eq!(
         ac.flags(),
         super::AUTH_CONTEXT_DO_TIME,
@@ -568,7 +551,7 @@ fn rd_priv_refuses_a_replay_and_a_stale_time_under_do_time() {
 fn rd_priv_chains_the_cipher_state_after_init_ivector() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, Some(500), true, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     ac.init_ivector();
     let mut state = krb5_crypto::CipherState::initial();
@@ -601,7 +584,7 @@ fn rd_safe_takes_the_size_only_with_the_authenticators_seq() {
         encode(&crate::safe_priv::build_krb_safe_ex(&session, &size, Some(seq), false).unwrap())
             .unwrap()
     };
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     let e = ac.rd_safe(&safe(4243)).unwrap_err();
     assert!(matches!(e, Error::KrbError { code: 42, .. }), "{e:?}");
@@ -613,7 +596,7 @@ fn rd_safe_takes_the_size_only_with_the_authenticators_seq() {
 fn rd_priv_refuses_another_message_type() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     let e = ac.rd_priv(&[0x30, 0x00]).unwrap_err();
     assert!(matches!(e, Error::KrbError { code: 40, .. }), "{e:?}");
 }
@@ -660,7 +643,7 @@ fn rd_priv_reads_a_negative_seq_number_as_mit_does() {
     let session = ProtocolKey::random(AES256).unwrap();
     for (expected, sent) in [(0xFFFF_FFFE, 0xfe), (0x80, 0x80)] {
         let ok = accepted(&session, None, Some(expected), true, None);
-        let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+        let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
         ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
         let mut der = priv_part_der(b"h", None, Some(0x7f), local_host_address(None), None);
         let at = der
@@ -694,20 +677,17 @@ fn rd_priv_takes_the_clock_skew_krb5_conf_sets() {
             ),
         )
     };
-    krb5_config::isolate_test_krb5();
     let ok = accepted(&session, None, None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     let err = ac.rd_priv(&msg(b"a")).unwrap_err();
     assert!(
         matches!(err, Error::KrbError { code: 37, .. }),
         "400 s is outside the default 300, got {err:?}"
     );
-    let conf = krb5_testkit::scratch_dir("p15a-clockskew").join("krb5.conf");
-    std::fs::write(&conf, "[libdefaults]\n    clockskew = 600\n").unwrap();
-    krb5_config::set_test_krb5_paths(Some(vec![conf]));
-    let taken = ac.rd_priv(&msg(b"b"));
-    krb5_config::set_test_krb5_paths(None);
-    assert_eq!(taken.unwrap(), b"b");
+    let profile = krb5_config::Krb5Conf::parse("[libdefaults]\n    clockskew = 600\n").unwrap();
+    let mut ac =
+        AcceptorAuthContext::from_ap_req(&ok, &AcceptorConfig::from_krb5_conf(&profile)).unwrap();
+    assert_eq!(ac.rd_priv(&msg(b"b")).unwrap(), b"b");
 }
 
 /// MIT `read_krbpriv` (`rd_priv.c:77-78`): a KRB-PRIV's r-address, when it has one, must be the local address the context holds.
@@ -715,7 +695,7 @@ fn rd_priv_takes_the_clock_skew_krb5_conf_sets() {
 fn rd_priv_checks_the_addresses_the_context_holds() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     let here = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7))));
     let there = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 8))));
@@ -768,7 +748,7 @@ fn rd_priv_enc_part_of_another_enctype_is_bad_enctype() {
     let session = ProtocolKey::random(AES256).unwrap();
     let subkey = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, Some(&subkey), None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     let mut msg: krb5_types::KrbPriv = krb5_asn1::decode(&peer_priv(&subkey, b"pw", None)).unwrap();
     msg.enc_part.etype = 17;
     assert_eq!(
@@ -783,7 +763,7 @@ fn rd_priv_enc_part_of_another_enctype_is_bad_enctype() {
 fn rd_priv_with_no_local_address_wants_the_receiver_among_the_hosts() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(0);
     let here = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 7))));
     let there = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 8))));
@@ -810,7 +790,7 @@ fn rd_priv_with_no_local_address_wants_the_receiver_among_the_hosts() {
 fn rd_priv_with_no_addresses_set_refuses_a_receiver_the_machine_does_not_have() {
     let session = ProtocolKey::random(AES256).unwrap();
     let ok = accepted(&session, None, None, false, None);
-    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &DEFAULT_LIST).unwrap();
+    let mut ac = AcceptorAuthContext::from_ap_req(&ok, &conf(&DEFAULT_LIST)).unwrap();
     ac.set_flags(AUTH_CONTEXT_DO_SEQUENCE);
     let sender = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(192, 0, 2, 8))));
     let foreign = local_host_address(Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 77))));

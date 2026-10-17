@@ -375,7 +375,7 @@ fn run_with_none(
     krb5_kdc::issue_as(store, &fast_req(a, vec![pa_otp(&a.key, plain, b"1")], n))
 }
 
-/// A PA 142 outside FAST is 24 with PREAUTH_FAILED text and no detail.
+/// MIT `otp_verify` (`plugins/preauth/otp/main.c:300-301`): a PA 142 outside FAST is 24, with the table text of that code.
 #[test]
 fn no_armor_is_24() {
     let store = realm(Some("[{}]"));
@@ -387,7 +387,7 @@ fn no_armor_is_24() {
     let (c, text, d) = code(&e);
     assert_eq!(c, 24);
     assert_eq!(text.as_deref(), Some("PREAUTH_FAILED"));
-    assert_eq!(d, None);
+    assert_eq!(d.as_deref(), Some("Preauthentication failed"));
 }
 
 /// The plugins stanza selects the module by name.

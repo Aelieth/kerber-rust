@@ -20,7 +20,7 @@ use krb5_kdc::SharedDump;
 use krb5_kdc::net_server::Sockets;
 use krb5_kdc::principals::{kadmin_admin, kadmin_changepw};
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
-use krb5_protocol::{as_req_sname, pa_enc_timestamp};
+use krb5_protocol::{AcceptorConfig, as_req_sname, pa_enc_timestamp};
 use krb5_types::{KrbError, PrincipalName, ascii, err};
 
 /// kadmind's loop over the documented realm on a thread, kpasswd's TCP listener and the RPC
@@ -54,7 +54,7 @@ fn serving_with_store() -> (
     let stop = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&stop);
     let served = std::thread::spawn(move || {
-        let mut kadmind = Kadmind::new(served_store, acl, Some(key));
+        let mut kadmind = Kadmind::new(served_store, acl, Some(key), AcceptorConfig::default());
         let (tcp, rpc) = ([kpasswd], [rpc]);
         let sockets = Sockets {
             tcp: &tcp,
@@ -167,9 +167,15 @@ fn kadmind_is_served_from_another_thread_with_its_reporter() {
     let (store, acl) = bootstrap_documented().unwrap();
     let reported = Arc::new(Mutex::new(Vec::<String>::new()));
     let sink = Arc::clone(&reported);
-    let mut kadmind = Kadmind::new(krb5_kdc::shared_dump(store), acl, None).report_unhandled(
-        Arc::new(move |message: &str| sink.lock().unwrap().push(message.to_owned())),
-    );
+    let mut kadmind = Kadmind::new(
+        krb5_kdc::shared_dump(store),
+        acl,
+        None,
+        AcceptorConfig::default(),
+    )
+    .report_unhandled(Arc::new(move |message: &str| {
+        sink.lock().unwrap().push(message.to_owned());
+    }));
     let rpc = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = rpc.local_addr().unwrap();
     let flag = Arc::new(AtomicBool::new(false));

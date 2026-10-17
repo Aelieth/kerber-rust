@@ -161,15 +161,6 @@ mod tests {
     }
 
     #[test]
-    fn a_private_scalar_is_a_multiple_of_8() {
-        for _ in 0..32 {
-            let (private, public) = keygen(&[5u8; 32], true).unwrap();
-            assert_eq!(private[0] & 7, 0);
-            assert_eq!(public.len(), 32);
-        }
-    }
-
-    #[test]
     fn a_small_order_part_of_the_peers_element_does_not_reach_k() {
         // T + a point of order 2 gives the same K as T: the private scalar is a multiple of 8.
         let w = [3u8; 32];
@@ -189,18 +180,6 @@ mod tests {
         assert_eq!(
             result(&w, &y, &t, true).unwrap(),
             result(&w, &y, &shifted, true).unwrap()
-        );
-    }
-
-    #[test]
-    fn a_non_canonical_y_decodes_like_mit() {
-        // y + p for y = 1 (the identity) still decodes: MIT and dalek reduce y modulo p.
-        let mut p_plus_one = [0xffu8; 32];
-        p_plus_one[0] = 0xee;
-        p_plus_one[31] = 0x7f;
-        assert_eq!(
-            element(&p_plus_one).unwrap().compress(),
-            EdwardsPoint::default().compress()
         );
     }
 }

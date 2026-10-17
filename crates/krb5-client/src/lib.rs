@@ -6,6 +6,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "the client library reads its own profile per operation; the client context is in embed-deferred.md"
+)]
 
 use std::path::Path;
 
@@ -1247,8 +1251,9 @@ fn kinit_inner(
                 params.keytab.is_some(),
             ) =>
         {
+            // MIT `k5_infer_principal_type` (`lib/krb5/krb/bld_princ.c:31-43`): `kadmin/changepw` is NT-PRINCIPAL.
             let changepw = krb5_types::PrincipalName::new(
-                krb5_types::PrincipalName::NT_SRV_INST,
+                krb5_types::PrincipalName::NT_PRINCIPAL,
                 ["kadmin", "changepw"],
             );
             // MIT `krb5_get_init_creds_password` (`gic_pwd.c:223-233`): the expiry, then the

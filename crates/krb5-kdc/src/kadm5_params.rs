@@ -41,6 +41,10 @@ pub fn kadm5_params_missing(conf: &KdcConf, with_master_key_type: bool) -> bool 
 /// [`kadm5_params_missing`] for `realm`'s own stanza of the KDC profile `paths` read; a profile
 /// that is not there, or does not load, leaves every parameter its default.
 #[must_use]
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a program's check when it starts"
+)]
 pub fn realm_kadm5_params_missing(
     paths: &KdcPaths,
     realm: &str,
@@ -49,10 +53,7 @@ pub fn realm_kadm5_params_missing(
     if paths.conf.is_none() {
         return false;
     }
-    let Ok(bytes) = std::fs::read(&paths.profile) else {
-        return false;
-    };
-    crate::create::kdc_conf_for_realm(&String::from_utf8_lossy(&bytes), realm)
+    KdcConf::load_file_for_realm(&paths.profile, realm)
         .is_ok_and(|conf| kadm5_params_missing(&conf, with_master_key_type))
 }
 
@@ -117,7 +118,7 @@ mod tests {
     fn a_two_line_realm_stanza_is_the_realm_s() {
         let text =
             "[realms]\n    R =\n    {\n        default_principal_expiration = garbage\n    }\n";
-        let conf = crate::create::kdc_conf_for_realm(text, "R").unwrap();
+        let conf = KdcConf::parse_for_realm(text, "R").unwrap();
         assert!(kadm5_params_missing(&conf, true));
     }
 

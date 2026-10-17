@@ -72,6 +72,7 @@ pub use rasn::types::{BitString, GeneralizedTime, OctetString};
 
 pub mod cammac;
 mod constants;
+pub mod consts;
 pub mod deltat;
 pub mod extra;
 pub mod fast;

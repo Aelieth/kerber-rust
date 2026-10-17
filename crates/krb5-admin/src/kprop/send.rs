@@ -45,20 +45,10 @@ const fn krb5_code(n: i64) -> i64 {
     ERROR_TABLE_BASE_KRB5 + n
 }
 
-/// MIT `KRB5_KDCREP_MODIFIED`.
-const KDCREP_MODIFIED: i64 = krb5_code(147);
-/// MIT `KRB5_KDCREP_SKEW`.
-const KDCREP_SKEW: i64 = krb5_code(148);
-/// The AS exchange's text for a reply outside the clock skew, `KRB5_KDCREP_SKEW`'s.
-const KDCREP_SKEW_TEXT: &str = "Clock skew too great in KDC reply";
 /// MIT `KRB5_PARSE_MALFORMED`'s text.
 const PARSE_MALFORMED_TEXT: &str = "Malformed representation of principal";
 /// MIT `KRB5_REALM_UNKNOWN`.
 const REALM_UNKNOWN: i64 = krb5_code(154);
-/// MIT `KRB5_PREAUTH_FAILED`.
-const PREAUTH_FAILED: i64 = krb5_code(210);
-/// MIT `KRB5_KDC_UNREACH`.
-const KDC_UNREACH: i64 = krb5_code(156);
 /// MIT `KRB5_MUTUAL_FAILED`.
 const MUTUAL_FAILED: i64 = krb5_code(158);
 /// MIT `KRB5_KT_NOTFOUND`.
@@ -347,22 +337,16 @@ pub fn kprop_get_tickets(
 }
 
 /// The `krb5` table text of an AS exchange's failure, what kprop's `com_err` prints for it.
-/// MIT `krb5_get_init_creds_keytab` (`lib/krb5/krb/gic_keytab.c:274-341`): the exchange's code is returned as it is; a KDC error is its RFC 4120 code in the table, a KDC that does not answer `KRB5_KDC_UNREACH`, a reply that does not match the request `KRB5_KDCREP_MODIFIED`.
+/// MIT `default_com_err_proc` (`com_err.c:47-96`): the table text, not the message the library set.
+/// A keytab lookup and an ASN.1 failure keep their own table texts; every other AS failure is
+/// [`krb5_client::errmsg::Krb5Error::from_as`]'s code.
 fn init_creds_text(e: &krb5_protocol::Error) -> String {
     use krb5_protocol::Error as E;
     match e {
-        E::KrbError { code, .. } => error_message(kdc_code(*code)),
-        E::ReplyIntegrity => error_message(kdc_code(err::BAD_INTEGRITY)),
-        E::Io { .. } => error_message(KDC_UNREACH),
-        // MIT `verify_as_reply` (`lib/krb5/krb/get_in_tkt.c:264-269`): without `kdc_timesync` a starttime outside the skew is `KRB5_KDCREP_SKEW`.
-        E::ReplyMismatch(m) if m == KDCREP_SKEW_TEXT => error_message(KDCREP_SKEW),
-        E::NonceMismatch | E::ReplyMismatch(_) | E::Referral => error_message(KDCREP_MODIFIED),
-        // MIT `process_pa_data` (`lib/krb5/krb/preauth2.c:716-723`): a preauthentication that failed is `KRB5_PREAUTH_FAILED`, whose table text `com_err` prints, not the message wrapped around its cause.
-        E::PreauthFailed(_) | E::EnctsDisabled => error_message(PREAUTH_FAILED),
-        // MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): the keytab lookup's code is the exchange's, whose table text `com_err` prints, not the message set for it.
+        // MIT `get_as_key_keytab` (`lib/krb5/krb/gic_keytab.c:68-71`): the keytab lookup's code is the exchange's.
         E::Keytab { code, .. } => error_message(*code),
         E::Asn1(m) => asn1_com_err(m),
-        other => other.to_string(),
+        _ => krb5_client::errmsg::Krb5Error::from_as(e, "", "").table_text(),
     }
 }
 
@@ -619,7 +603,7 @@ fn read_message(stream: &mut TcpStream) -> io::Result<Vec<u8>> {
 }
 
 /// MIT `krb5int_is_app_tag` (`include/k5-int.h:1334-1336`): the first byte, constructed bit cleared, is `tag | 0x40`.
-fn is_app_tag(raw: &[u8], tag: u8) -> bool {
+pub(crate) fn is_app_tag(raw: &[u8], tag: u8) -> bool {
     raw.first().is_some_and(|b| b & !0x20 == tag | 0x40)
 }
 
@@ -985,10 +969,7 @@ krb5_prop       754/tcp         tell            # Kerberos slave propagation\n";
             ),
             (E::ReplyIntegrity, "Decrypt integrity check failed"),
             (io, "Cannot contact any KDC for requested realm"),
-            (
-                E::ReplyMismatch(KDCREP_SKEW_TEXT.into()),
-                "Clock skew too great in KDC reply",
-            ),
+            (E::KdcReplySkew, "Clock skew too great in KDC reply"),
             (
                 E::ReplyMismatch("Ticket modified in KDC reply".into()),
                 "KDC reply did not match expectations",

@@ -81,7 +81,7 @@ TGT PAC with the ticket key and carries its client info (and, with AD
 data, its LOGON_INFO); a TGT without a PAC gets a ticket without one.
 
 **`krb5-gss`** provides RFC 4121 wrap/MIC (MIT `libgssapi_krb5` is
-out-of-process; `scripts/gss-gate.sh`). The acceptor binds
+out-of-process; scripts/gss-gate.sh). The acceptor binds
 `expected_server` / `expected_realm` from the keytab. First wrap/MIC
 seq is checked against the AP-REQ authenticator seq; wrap/MIC use a
 windowed replay cache. Production `wrap` emits RRC=0 (MIT 1.22.2);
@@ -92,26 +92,27 @@ environment-dependent.
 AP-REQ framing (library tests) and `krb5-kadmind` ONC RPC program 2112
 / AUTH_GSSAPI flavor 300001 on TCP 749, RFC 3244 kpasswd on UDP/TCP
 464 (`kadmin/changepw`, MIT `kpasswd` gated by
-`scripts/kpasswd-gate.sh`), `krb5-kpropd` on 754 wrapping MIT dump
+scripts/kpasswd-gate.sh), `krb5-kpropd` on 754 wrapping MIT dump
 version 7 (`sendauth` `kprop5_01`, KRB-SAFE size, KRB-PRIV chunks).
 MIT `kprop` then MIT `kinit` is gated by `scripts/kprop-gate.sh`.
 `krb5-kdb dump`, then Rust `krb5-kprop -f` of that file → MIT `kpropd`, then
 MIT `kinit` is `scripts/kprop-reverse-gate.sh`: kprop, as MIT's, opens no database.
 A multi-host MIT client against a Rust primary and replica is
-`scripts/prod-realm-gate.sh`. Wire stress, chaos and soak over that realm
-are `scripts/stress-gate.sh`, `scripts/chaos-gate.sh`, and
-`scripts/soak-gate.sh`.
+scripts/prod-realm-gate.sh. Wire stress, chaos and soak over that realm
+are scripts/stress-gate.sh, scripts/chaos-gate.sh, and
+scripts/soak-gate.sh.
 MIT 1.22.2 `kadmin` add/get/list/mod/chrand/del is gated by
-`scripts/kadmin-gate.sh`. Named policies and lockout:
+scripts/kadmin-gate.sh. Named policies and lockout:
 `scripts/policy-gate.sh`. Iprop serial/ulog and `kpropd -A`:
 `scripts/iprop-gate.sh`. Extension points: [`plugins.md`](plugins.md)
 (traits, not dlopen). A kadmind mutation survives KDC process
-relaunch (`scripts/restart-gate.sh`). The database is locked between
+relaunch (scripts/restart-gate.sh). The database is locked between
 processes as MIT's db2 module locks it (`dblock.rs`): `principal.ok` and
 `principal.kadm5.lock` beside it, whole-file OFD locks, shared for every read
 (the KDC only while it sees whether the database changed and reads it again,
-or reads a client's lockout record) and exclusive for every change from a
-fresh read of the dump to its one write and the age bump
+or reads a client's lockout record) and exclusive for every change from the
+database as it now is (read again when another writer moved its age or file,
+else its lockout records merged) to its one write and the age bump
 (`PrincipalStore::change`), so a concurrent local `addprinc` survives a remote
 `cpw` and no writer saves over another. The KDC takes it exclusively only to
 update a client's record in `principal.lockout` in place (`lockout/file.rs`), which

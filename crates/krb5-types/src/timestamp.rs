@@ -35,6 +35,10 @@ static LC_TIME: OnceLock<LcTime> = OnceLock::new();
 /// MIT's tools' `setlocale(LC_ALL, "")` (`clients/klist/klist.c` and the others call it first in
 /// `main`): the process's LC_TIME from `LC_ALL`, `LC_TIME` and `LANG`, `C` when any category's
 /// locale is not installed. Later calls keep the first one's choice.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "a tool's locale, read once, first in main"
+)]
 pub fn setlocale() {
     let _ = LC_TIME.set(locale::resolve(
         &|k| std::env::var_os(k).map(|v| v.to_string_lossy().into_owned()),

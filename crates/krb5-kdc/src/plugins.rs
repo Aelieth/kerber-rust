@@ -274,6 +274,10 @@ impl KdcPreauth for PkinitMod {
             body_der,
             cname,
         } = *rock;
+        // MIT `load_preauth_plugins` (`kdc_preauth.c:207-219`): no identity, so the module is not loaded.
+        if store.pkinit_ca().is_none() {
+            return Ok(None);
+        }
         let Some(etype) = etype else {
             // Residue (a2-as.md ORDER AS (1)): MIT issues a PKINIT reply to a keyless client. The
             // PKINIT key derivation takes the selected etype, which only a client key supplies
@@ -449,7 +453,13 @@ impl KdcPreauth for EncTsMod {
         };
         let enc: krb5_types::EncryptedData = match krb5_asn1::decode(blob.as_ref()) {
             Ok(e) => e,
-            Err(_) => return Ok(None),
+            // MIT `enc_ts_verify` (`kdc_preauth_encts.c:67-68`): a decode failure is the module's failure.
+            Err(_) => {
+                return Err(crate::asn1_text::preauth_decode_failure(
+                    blob.as_ref(),
+                    true,
+                ));
+            }
         };
         // MIT `enc_ts_verify` (`kdc_preauth_encts.c:74-92`): krb5_dbe_search_enctype
         // (client, &start, etype, -1, kvno 0) walks the keys of the declared etype.
@@ -472,6 +482,7 @@ impl KdcPreauth for EncTsMod {
         else {
             // MIT `krb5_dbe_def_search_enctype` (`kdb_default.c:60-61`): its message goes to the log.
             return Err(Error::PreauthModule {
+                code: KDB_NO_PERMITTED_KEY,
                 message: NO_PERMITTED_KEY.to_owned(),
             });
         };
@@ -502,6 +513,8 @@ impl KdcPreauth for EncTsMod {
 
 /// MIT `KRB5_KDB_NO_PERMITTED_KEY` (`lib/krb5/error_tables/kdb5_err.et:72-72`): its text.
 const NO_PERMITTED_KEY: &str = "No matching key in entry having a permitted enctype";
+/// `ERROR_TABLE_BASE_kdb5` plus the index of `KRB5_KDB_NO_PERMITTED_KEY`.
+const KDB_NO_PERMITTED_KEY: i32 = -1_780_008_418;
 
 struct EncChallengeMod;
 
@@ -1017,7 +1030,7 @@ fn verify_failure_text(e: &Error) -> String {
             .filter(|d| !d.is_empty())
             .unwrap_or_else(|| kdc_error_message(*code)),
         Error::PreauthRequired { .. } => kdc_error_message(krb5_types::err::PREAUTH_REQUIRED),
-        Error::PreauthModule { message } => message.clone(),
+        Error::PreauthModule { message, .. } => message.clone(),
         other => other.to_string(),
     }
 }
@@ -1078,19 +1091,31 @@ pub(crate) fn filter_preauth_error(e: Error) -> Error {
         // MIT `finish_process_as_req` (`do_as_req.c:372-372`): suppresses the reply.
         err::DISCARD,
     ];
+    let wire_of = |code| {
+        if code == err::PREAUTH_FAILED || PASS_THROUGH.contains(&code) {
+            code
+        } else {
+            err::PREAUTH_FAILED
+        }
+    };
     match e {
         Error::PreauthRequired { .. } => e,
+        Error::PreauthModule { code, message } => {
+            let wire = wire_of(code);
+            Error::Protocol {
+                code: wire,
+                text: Some(status::PREAUTH_FAILED.to_owned()),
+                e_data: None,
+                detail: (wire == code).then_some(message),
+            }
+        }
         Error::Protocol {
             code,
             text: _,
             e_data,
             detail,
         } => {
-            let wire = if code == err::PREAUTH_FAILED || PASS_THROUGH.contains(&code) {
-                code
-            } else {
-                err::PREAUTH_FAILED
-            };
+            let wire = wire_of(code);
             Error::Protocol {
                 code: wire,
                 text: Some(status::PREAUTH_FAILED.to_owned()),
@@ -2448,6 +2473,7 @@ mod tests {
         // A failure that is no KRB-ERROR code, or none of the module's, is 24 with no text.
         for e in [
             Error::PreauthModule {
+                code: 22,
                 message: "Invalid argument".to_owned(),
             },
             Error::Rng,
@@ -2500,6 +2526,7 @@ mod tests {
             ),
             (
                 Error::PreauthModule {
+                    code: KDB_NO_PERMITTED_KEY,
                     message: "No matching key in entry having a permitted enctype".to_owned(),
                 },
                 "No matching key in entry having a permitted enctype",

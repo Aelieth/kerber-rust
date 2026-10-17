@@ -19,7 +19,7 @@ Production use is the proof. Each consumer below ran against a kerber-rust realm
 [install.md](install.md), beside the same scenario against a stock Fedora MIT 1.22.2 realm in the same lab
 (libvirt VMs on one host), MIT first. The scenarios in the last column repeat through `make field`
 ([harness/field](../harness/field/README.md)). The full pass of the 1.1 tree
-(`working/logs/f-FULL-r2/README.md`, tree `5f0ee306`) had no product failure in any leg; the cut's source differs
+(tree `5f0ee306`) had no product failure in any leg; the cut's source differs
 from that tree by one test-only change, the version, the docs and the CHANGELOG.
 
 | Consumer | What ran against both realms | Repeats as |
@@ -37,24 +37,18 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
 - **Write cost.** A kadm5 write takes 4.1 times MIT's median at 10 principals and 11.2 times at 5,000 (101 and 299 ms
   against 25 and 27 ms with fsync on): the store rereads and rewrites the whole realm. While kadmind writes, a
   kinit takes a median of 60, 156 and 473 ms at 10, 1,000 and 5,000 principals, where MIT's is 15 to 18 ms. Reads
-  match. The store redesign is after 1.1 (`working/logs/f-P18/`).
+  match. The store redesign is after 1.1.
 - **The GSS initiator's sequence number.** The authenticator's sequence number and the per-message start are 0; MIT
   draws a random one. MIT accepts ours, and a cross-context replay still fails the MIC.
 - **Client messages and logs.** None changes an outcome.
-  - A KDC name that resolves first to a link-local IPv6 address: MIT's clients reach the KDC over UDP; ours print
-    `UDP error sending … Address family not supported by protocol` three times per request, then succeed over TCP.
   - The KDC's AS_REQ line for a wrong encrypted-challenge password ends `Preauthentication failed`, where MIT's ends
     `Incorrect password in encrypted challenge`.
-  - `kinit` refusing an AS reply whose time is off prints `reply validation: Clock skew too great in KDC reply`
-    where MIT omits the prefix.
-  - When the KDC answers error 60 with an e-text, MIT's `kinit` prints `Generic error (see e-text)` and ours
-    `KDC returned error string: <e-text>`.
   - The KDC answers a SPAKE support message from a client whose only key is des3 with PREAUTH_FAILED even when the
     key is good, and the client falls back to encrypted challenge or timestamp. MIT's answer with SPAKE configured
     is not settled.
 - **Not supported:** what [install.md](install.md) lists under "Not supported", and the client tools' remaining
   differences it lists.
-- **Did not run in the 1.1 pass** (the pass's own list, `working/logs/f-FULL-r2/README.md`, "What did not run"):
+- **Did not run in the 1.1 pass** (the pass's own list, "What did not run"):
   - cells dropped by decision: one GSS clock-skew cell, a "+1 h" cell and a 330-second delay pair (behind a switch,
     off);
   - a global IPv6 on the KDC;
@@ -69,7 +63,7 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
 | --- | --- | --- | --- |
 | cargo-audit | `rustsec/audit-check` | known advisories fail red | audit |
 | cargo-deny | `deny.toml` licenses/advisories/sources | allowlist only; crates.io sources | audit |
-| `scripts/geiger.sh` | per-crate `cargo geiger --forbid-only` | product 0-unsafe / `forbid(unsafe)`; dep surface archived, not a count gate | audit |
+| scripts/geiger.sh | per-crate `cargo geiger --forbid-only` | product 0-unsafe / `forbid(unsafe)`; dep surface archived, not a count gate | audit |
 | `cargo vet --locked` | `supply-chain/` (Google / Mozilla / Bytecode Alliance) | every third-party crate imported, locally audited, or exempt; cargo-vet **0.10.0** | audit |
 
 ## Deviation ledger (MIT behaviours kept)

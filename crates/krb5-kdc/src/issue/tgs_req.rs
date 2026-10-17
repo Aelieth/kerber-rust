@@ -1219,7 +1219,11 @@ fn find_alternate_tgs(
         .unwrap_or_default();
     let hops = crate::store::walk_realm_instances(&store.policy().capaths, store.realm(), &far);
     for inst in hops.iter().skip(1).rev() {
-        let hop = PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", inst.as_str()]);
+        // MIT `find_alternate_tgs` (`do_tgs_req.c`) answers unknown for a name it cannot hold.
+        let Ok(hop) = PrincipalName::try_new(PrincipalName::NT_SRV_INST, ["krbtgt", inst.as_str()])
+        else {
+            return Err(proto(err::S_PRINCIPAL_UNKNOWN, status::UNKNOWN_SERVER));
+        };
         if let Some(p) = lookup_svc_princ(store, &hop)? {
             return Ok(p);
         }

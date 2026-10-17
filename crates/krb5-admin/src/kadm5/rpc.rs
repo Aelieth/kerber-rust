@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use krb5_kdc::net_server::{RpcReply, RpcSession, read_rpc_record_with};
 use krb5_kdc::{Acl, SharedDump as SharedStore};
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use zeroize::Zeroizing;
 
 use super::auth::{Agss, AgssAuth, RpcsecGss, agss_dispatch, handle_rpcsec_gss, svcauth_gssapi};
@@ -42,6 +42,8 @@ pub struct RpcCtx<'a> {
     pub acl: &'a Acl,
     /// Realm the acceptor name must belong to.
     pub expected_realm: &'a str,
+    /// The acceptor's profile values, kadmind's KDC context's.
+    pub conf: &'a AcceptorConfig,
 }
 
 /// Serve one TCP connection until EOF, each record on this socket in turn; a call that does not
@@ -56,10 +58,11 @@ pub fn serve_kadm5_conn(
     acl: Acl,
     expected_realm: String,
     rcache: ReplayCache,
+    conf: Arc<AcceptorConfig>,
     mut stream: TcpStream,
 ) -> io::Result<()> {
     let peer = RpcPeer::new(stream.peer_addr().ok(), stream.local_addr().ok());
-    let mut conn = Kadm5Conn::new(store, acl, expected_realm, rcache, peer, None);
+    let mut conn = Kadm5Conn::new(store, acl, expected_realm, rcache, conf, peer, None);
     loop {
         let rec = match read_record(&mut stream) {
             Ok(r) => r,
@@ -129,12 +132,13 @@ fn sockaddr_in_addr(a: &SocketAddr) -> [u8; 4] {
 }
 
 /// One kadm5 connection's server side: its handle, its GSS state and its peer, over kadmind's
-/// store (its acceptor keytab too), ACL and replay cache.
+/// store (its acceptor keytab too), ACL, replay cache and acceptor profile values.
 pub(crate) struct Kadm5Conn {
     store: SharedStore,
     acl: Acl,
     realm: String,
     rcache: ReplayCache,
+    conf: Arc<AcceptorConfig>,
     handle: Vec<u8>,
     sess: Kadm5RpcSession,
     peer: RpcPeer,
@@ -149,6 +153,7 @@ impl Kadm5Conn {
         acl: Acl,
         realm: String,
         rcache: ReplayCache,
+        conf: Arc<AcceptorConfig>,
         peer: RpcPeer,
         report: Option<UnhandledRpc>,
     ) -> Self {
@@ -157,6 +162,7 @@ impl Kadm5Conn {
             acl,
             realm,
             rcache,
+            conf,
             handle: random_handle(),
             sess: Kadm5RpcSession::default(),
             peer,
@@ -170,6 +176,7 @@ impl Kadm5Conn {
             store: &self.store,
             acl: &self.acl,
             expected_realm: &self.realm,
+            conf: &self.conf,
         };
         let Kadm5RpcSession { gss, agss } = &mut self.sess;
         handle_rpc(ctx, &self.handle, gss, agss, &self.rcache, rec, &self.peer)

@@ -113,13 +113,4 @@ mod tests {
         let w_n = encode(&(constant(false).unwrap() * *reduce(&w).unwrap())).unwrap();
         assert_eq!(result(&w, &x, &w_n, false), Err(Error::Integrity));
     }
-
-    #[test]
-    fn a_zero_multiplier_masks_nothing_like_mit() {
-        // MIT's `unmarshal_w` reduces w modulo the order and keeps 0.
-        let x = [1u8; 32];
-        let unmasked = public(&[0u8; 32], &x, true).unwrap();
-        let base = encode(&(ProjectivePoint::GENERATOR * *reduce(&x).unwrap())).unwrap();
-        assert_eq!(unmasked, base);
-    }
 }

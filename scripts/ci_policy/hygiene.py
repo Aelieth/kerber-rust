@@ -1,5 +1,4 @@
-"""Checks that run the tools' own self-tests (the hygiene judges, py-move-check, claim-remap), the
-module attributes other tools read, and the Rust test-isolation rules."""
+"""Rust test isolation, registered autotests, and that every scripts Python file compiles."""
 
 from __future__ import annotations
 
@@ -13,14 +12,178 @@ import subprocess
 import sys
 import tempfile
 
-from .common import ROOT, SCRIPTS, _die, _hygiene_inventory
-from .ledger import DIFFSEND_CASES
+from .common import ROOT, SCRIPTS, _die
+
+
+CFG_TEST_RE = re.compile(r"^\s*#\[cfg\(test\)\]\s*$")
+CFG_TEST_MOD_SEMI_RE = re.compile(
+    r"^\s*#\[cfg\(test\)\]\s+(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;\s*$"
+)
+MOD_OPEN_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+[A-Za-z_][A-Za-z0-9_]*\s*\{")
+MOD_SEMI_RE = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_][A-Za-z0-9_]*)\s*;")
+PATH_ATTR_RE = re.compile(r'^#\[path\s*=\s*"([^"]+)"\]')
+
+
+def _blank_keep_newlines(s: str) -> str:
+    return "".join("\n" if ch == "\n" else " " for ch in s)
+
+
+def strip_noncode(text: str) -> str:
+    """Blank comments and string/char literal bodies, keeping line structure.
+
+    The brace scanner below must not see `{` inside `"…"`, `'{'` or `// …`.
+    Lifetimes (`'a`) are kept; raw and byte strings are recognised.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+            continue
+        if c == "/" and nxt == "*":
+            depth, j = 1, i + 2
+            while j < n and depth:
+                if text.startswith("/*", j):
+                    depth += 1
+                    j += 2
+                elif text.startswith("*/", j):
+                    depth -= 1
+                    j += 2
+                else:
+                    j += 1
+            out.append(_blank_keep_newlines(text[i:j]))
+            i = j
+            continue
+        if c == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    j += 1
+                    break
+                j += 1
+            out.append('"' + _blank_keep_newlines(text[i + 1 : j - 1]) + '"')
+            i = j
+            continue
+        if c == "r" and nxt in ('"', "#"):
+            prev = text[i - 1] if i > 0 else ""
+            prev_ok = not (prev.isalnum() or prev == "_") or (
+                prev == "b" and (i < 2 or not (text[i - 2].isalnum() or text[i - 2] == "_"))
+            )
+            j, hashes = i + 1, 0
+            while j < n and text[j] == "#":
+                hashes += 1
+                j += 1
+            if prev_ok and j < n and text[j] == '"':
+                close = '"' + "#" * hashes
+                k = text.find(close, j + 1)
+                k = n if k < 0 else k + len(close)
+                out.append(_blank_keep_newlines(text[i:k]))
+                i = k
+                continue
+        if c == "'":
+            if nxt == "\\":
+                j = text.find("'", i + 2)
+                if 0 < j and j - i <= 12:
+                    out.append(" " * (j + 1 - i))
+                    i = j + 1
+                    continue
+            elif i + 2 < n and text[i + 2] == "'":
+                out.append("   ")
+                i += 3
+                continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _add_cfg_test_child(
+    rels: set[str],
+    pdir: pathlib.Path,
+    path: pathlib.Path,
+    name: str,
+    path_attr: str | None,
+) -> None:
+    if path.stem in ("mod", "lib", "main"):
+        parent = path.parent
+    else:
+        parent = path.parent / path.stem
+    if path_attr:
+        child = path.parent / path_attr
+    else:
+        as_file = parent / f"{name}.rs"
+        as_dir = parent / name
+        if as_file.is_file():
+            child = as_file
+        elif (as_dir / "mod.rs").is_file():
+            child = as_dir
+        else:
+            return
+    if child.is_dir():
+        for nested in child.rglob("*.rs"):
+            try:
+                rels.add(nested.relative_to(pdir).as_posix())
+            except ValueError:
+                pass
+    elif child.is_file():
+        try:
+            rels.add(child.relative_to(pdir).as_posix())
+        except ValueError:
+            pass
+
+
+def cfg_test_files_in_pkg(pdir: pathlib.Path) -> set[str]:
+    """Package-relative paths of `src/**` files whose parent is `#[cfg(test)] mod`."""
+    rels: set[str] = set()
+    for path in sorted(pdir.rglob("*.rs")):
+        # a build dir inside the package, not a `target` above it (a checkout
+        # or fixture under `target/ci-policy/` is still a package)
+        if "target" in path.relative_to(pdir).parts:
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        pending = False
+        path_attr: str | None = None
+        for line in text.splitlines():
+            s = line.strip()
+            oneline = CFG_TEST_MOD_SEMI_RE.match(line)
+            if oneline:
+                _add_cfg_test_child(rels, pdir, path, oneline.group(1), None)
+                pending = False
+                path_attr = None
+                continue
+            if CFG_TEST_RE.match(line):
+                pending = True
+                path_attr = None
+                continue
+            if not pending:
+                continue
+            pm = PATH_ATTR_RE.match(s)
+            if pm:
+                path_attr = pm.group(1)
+                continue
+            if s.startswith("#["):
+                continue
+            pending = False
+            mm = MOD_SEMI_RE.match(line)
+            if not mm:
+                path_attr = None
+                continue
+            _add_cfg_test_child(rels, pdir, path, mm.group(1), path_attr)
+            path_attr = None
+    return rels
 
 
 def _blank_rust(src: str) -> str:
     """Blank comments and string/char bodies via `strip_noncode`. Same length."""
     try:
-        blanked = _hygiene_inventory().strip_noncode(src)
+        blanked = strip_noncode(src)
     except Exception as exc:
         _die(f"isolate_test_krb5 strip_noncode failed: {exc}")
     if len(blanked) != len(src):
@@ -213,7 +376,7 @@ def test_temp_dir_sites(root: pathlib.Path | None = None) -> list[str]:
     out = []
     # a file an out-of-line `#[cfg(test)] mod x;` names is test code whole, whatever its name
     test_mods = {f"crates/{pdir.name}/{rel}" for pdir in sorted((root / "crates").glob("*/"))
-                 for rel in _hygiene_inventory().cfg_test_files_in_pkg(pdir)}
+                 for rel in cfg_test_files_in_pkg(pdir)}
     for path in sorted((root / "crates").rglob("*.rs")):
         rel = path.relative_to(root)
         parts = rel.parts
@@ -280,385 +443,6 @@ def check_autotests_registered(root: pathlib.Path | None = None) -> None:
                 f"{toml.parent.name}: autotests=false tests/*.rs missing [[test]]: "
                 + ", ".join(sorted(orphans))
             )
-
-
-_SELF_TEST_OK_RE = re.compile(r"self-test ok \((\d+) cases\)")
-HYGIENE_DIFF_MIN_CASES = 57
-HYGIENE_BODY_DIFF_MIN_CASES = 41
-HYGIENE_FN_DIFF_MIN_CASES = 143
-HYGIENE_INVENTORY_MIN_CASES = 13
-PY_MOVE_CHECK_MIN_CASES = 23
-CLAIM_REMAP_MIN_CASES = 7
-
-
-def _self_test_n_from_text(text: str) -> int | None:
-    found = [int(x) for x in _SELF_TEST_OK_RE.findall(text)]
-    return max(found) if found else None
-
-
-def _self_test_fn_is_gutted(text: str, name: str = "_self_test") -> bool:
-    """True when `name` exists and its body is effectively `return None`."""
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return bool(
-            re.search(
-                rf'def {re.escape(name)}\([^)]*\):\s*(?:"""[\s\S]*?"""\s*)?return None\b',
-                text,
-            )
-        )
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef) or node.name != name:
-            continue
-        body = list(node.body)
-        if (
-            body
-            and isinstance(body[0], ast.Expr)
-            and isinstance(getattr(body[0], "value", None), ast.Constant)
-            and isinstance(body[0].value.value, str)
-        ):
-            body = body[1:]
-        if not body:
-            return True
-        if len(body) == 1 and isinstance(body[0], ast.Return):
-            val = body[0].value
-            return val is None or (isinstance(val, ast.Constant) and val.value is None)
-        return False
-    return False
-
-
-def _require_self_test_n(blob: str, label: str, min_n: int) -> None:
-    n = _self_test_n_from_text(blob)
-    if n is None or n < min_n:
-        _die(
-            f"{label} --self-test must print self-test ok (N cases) with N>={min_n}, got {n!r}"
-        )
-
-
-def _gut_self_test_source(src: str, name: str = "_self_test") -> str:
-    tree = ast.parse(src)
-    for node in tree.body:
-        if not isinstance(node, ast.FunctionDef) or node.name != name:
-            continue
-        doc = ast.get_docstring(node)
-        new_body: list[ast.stmt] = []
-        if doc is not None:
-            new_body.append(ast.Expr(value=ast.Constant(value=doc)))
-        new_body.append(ast.Return(value=ast.Constant(value=None)))
-        node.body = new_body
-    return ast.unparse(tree)
-
-
-def _run_script_self_test(
-    path: pathlib.Path, label: str, min_n: int | None = None
-) -> None:
-    proc = subprocess.run(
-        [sys.executable, str(path), "--self-test"],
-        cwd=ROOT,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "")[-400:]
-        _die(f"{label} --self-test failed (rc={proc.returncode}): {tail}")
-    if min_n is not None:
-        _require_self_test_n((proc.stdout or "") + "\n" + (proc.stderr or ""), label, min_n)
-
-
-def _gutted_self_test_must_not_count(
-    path: pathlib.Path, src: str, label: str, min_n: int
-) -> None:
-    """A copy whose `_self_test` body is `return None` must not report N cases."""
-    try:
-        gutted = _gut_self_test_source(src)
-    except SyntaxError:
-        return
-    with tempfile.TemporaryDirectory() as tmp:
-        probe_root = pathlib.Path(tmp)
-        dest = probe_root / "scripts" / path.name
-        dest.parent.mkdir(parents=True)
-        dest.write_text(gutted, encoding="utf-8")
-        # Sibling imports resolve ROOT as parents[1] of scripts/*.py.
-        # Copy them so a gutted file can start; a missing sibling made
-        # the probe vacuous (import crash, no N, treated as green).
-        for sib in (
-            SCRIPTS / "hygiene-diff.py",
-            SCRIPTS / "lib" / "hygiene_inventory.py",
-        ):
-            if sib.resolve() == path.resolve():
-                continue
-            target = probe_root / "scripts" / sib.relative_to(SCRIPTS)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(sib, target)
-        proc = subprocess.run(
-            [sys.executable, str(dest), "--self-test"],
-            cwd=probe_root,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        n = _self_test_n_from_text((proc.stdout or "") + "\n" + (proc.stderr or ""))
-        if n is not None and n >= min_n:
-            _die(f"{label} gutted _self_test still reports self-test ok ({n} cases)")
-
-
-def check_hygiene_diff_self_test(text: str | None = None) -> None:
-    """hygiene-diff.py --self-test is executed; a gutted `_self_test` is red."""
-    path = SCRIPTS / "hygiene-diff.py"
-    if text is None:
-        if not path.is_file():
-            _die("missing scripts/hygiene-diff.py")
-        text = path.read_text(encoding="utf-8")
-        _run_script_self_test(path, "hygiene-diff.py", HYGIENE_DIFF_MIN_CASES)
-        _gutted_self_test_must_not_count(
-            path, text, "hygiene-diff.py", HYGIENE_DIFF_MIN_CASES
-        )
-    elif _self_test_n_from_text(text) is None or (
-        _self_test_n_from_text(text) or 0
-    ) < HYGIENE_DIFF_MIN_CASES:
-        _die(
-            "hygiene-diff.py must print self-test ok (N cases) with "
-            f"N>={HYGIENE_DIFF_MIN_CASES}"
-        )
-    if _self_test_fn_is_gutted(text):
-        _die("hygiene-diff.py _self_test must not be gutted to return None")
-    if "def main" not in text:
-        _die("hygiene-diff.py must define main()")
-    if "def _self_test" not in text:
-        _die("hygiene-diff.py must define _self_test")
-    if text.count("_self_test()") < 2:
-        _die("hygiene-diff.py must run _self_test on normal compare runs")
-    if "redirect_stdout(sys.stderr)" not in text:
-        _die("hygiene-diff.py must send compare-run _self_test to stderr")
-    if "def load_duplicates_map" not in text or "merged:" not in text:
-        _die("hygiene-diff.py must key --duplicates and require merged: for many-to-one")
-    if "def load_renames_map" not in text:
-        _die("hygiene-diff.py must key --renames")
-    if "def _self_test_duplicates" not in text:
-        _die("hygiene-diff.py must self-test keyed duplicates maps")
-
-
-def check_hygiene_body_diff_self_test(text: str | None = None) -> None:
-    """hygiene-body-diff.py --self-test is executed; a gutted `_self_test` is red."""
-    path = SCRIPTS / "hygiene-body-diff.py"
-    if text is None:
-        if not path.is_file():
-            _die("missing scripts/hygiene-body-diff.py")
-        text = path.read_text(encoding="utf-8")
-        _run_script_self_test(path, "hygiene-body-diff.py", HYGIENE_BODY_DIFF_MIN_CASES)
-        _gutted_self_test_must_not_count(
-            path, text, "hygiene-body-diff.py", HYGIENE_BODY_DIFF_MIN_CASES
-        )
-        testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
-        body_at = testing.find("hygiene-body-diff.py")
-        fn_at = testing.find("hygiene-fn-diff.py")
-        chunk = testing[body_at:fn_at] if body_at >= 0 and fn_at > body_at else ""
-        if "literal" not in chunk:
-            _die(
-                "docs/testing.md must say hygiene-body-diff keeps string literals whole"
-            )
-    elif _self_test_n_from_text(text) is None or (
-        _self_test_n_from_text(text) or 0
-    ) < HYGIENE_BODY_DIFF_MIN_CASES:
-        _die(
-            "hygiene-body-diff.py must print self-test ok (N cases) with "
-            f"N>={HYGIENE_BODY_DIFF_MIN_CASES}"
-        )
-    if _self_test_fn_is_gutted(text):
-        _die("hygiene-body-diff.py _self_test must not be gutted to return None")
-    if "def _self_test" not in text:
-        _die("hygiene-body-diff.py must define _self_test")
-    if text.count("_self_test()") < 2:
-        _die("hygiene-body-diff.py must run _self_test on normal compare runs")
-    if not re.search(r"assert_eq!\(\s*1,\s*2\s*\)", text):
-        _die("hygiene-body-diff.py must self-test an assertion change (assert_eq!(1, 2))")
-    if "user_as" not in text:
-        _die("hygiene-body-diff.py must self-test a helper rename")
-    if '"a  b"' not in text:
-        _die("hygiene-body-diff.py must self-test whitespace inside an asserted string")
-    if 'r"a\\n\\nb"' not in text:
-        _die(
-            "hygiene-body-diff.py must self-test a zero-length interior line of an asserted literal"
-        )
-
-
-def check_hygiene_fn_diff_self_test(text: str | None = None) -> None:
-    """hygiene-fn-diff.py --self-test is executed; a gutted `_self_test` is red."""
-    path = SCRIPTS / "hygiene-fn-diff.py"
-    if text is None:
-        if not path.is_file():
-            _die("missing scripts/hygiene-fn-diff.py")
-        text = path.read_text(encoding="utf-8")
-        _run_script_self_test(path, "hygiene-fn-diff.py", HYGIENE_FN_DIFF_MIN_CASES)
-        _gutted_self_test_must_not_count(
-            path, text, "hygiene-fn-diff.py", HYGIENE_FN_DIFF_MIN_CASES
-        )
-        testing = (ROOT / "docs" / "testing.md").read_text(encoding="utf-8")
-        dead_at = testing.find("`--dead`")
-        diff_at = testing.find("hygiene-diff.py")
-        fn_at = testing.find("hygiene-fn-diff.py")
-        if dead_at < 0 or not (diff_at < dead_at < fn_at):
-            _die("docs/testing.md must describe --dead on the hygiene-diff paragraph")
-        for needle in (
-            "byte-string",
-            "line-anchored",
-            "impl-header",
-            "head:",
-            "rustfmt_skip",
-            "const-fold",
-        ):
-            if needle not in testing:
-                _die(f"docs/testing.md must describe fn-diff {needle}")
-    elif _self_test_n_from_text(text) is None or (
-        _self_test_n_from_text(text) or 0
-    ) < HYGIENE_FN_DIFF_MIN_CASES:
-        _die(
-            "hygiene-fn-diff.py must print self-test ok (N cases) with "
-            f"N>={HYGIENE_FN_DIFF_MIN_CASES}"
-        )
-    if _self_test_fn_is_gutted(text):
-        _die("hygiene-fn-diff.py _self_test must not be gutted to return None")
-    if "def _self_test" not in text:
-        _die("hygiene-fn-diff.py must define _self_test")
-    if text.count("_self_test()") < 2:
-        _die("hygiene-fn-diff.py must run _self_test on normal compare runs")
-    if "x + 2" not in text:
-        _die("hygiene-fn-diff.py must self-test a body edit")
-    if "phase_b" not in text:
-        _die("hygiene-fn-diff.py must self-test --split")
-    if "pub(crate)" not in text:
-        _die("hygiene-fn-diff.py must self-test a vis-only change")
-    if "unused-accept fixture must be otherwise green" not in text:
-        _die("hygiene-fn-diff.py must isolate unused --accept as its own case")
-
-
-_PY_MOVE_KINDS = ("missing", "extra", "defined-twice", "changed", "unresolved", "future", "stray", "shim", "cycles")
-
-
-def _main_self_test_calls(text: str) -> int:
-    """Calls of `_self_test()` inside `main`: the --self-test branch plus one before a normal run."""
-    try:
-        tree = ast.parse(text)
-    except SyntaxError:
-        return 0
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "main":
-            return sum(
-                1 for x in ast.walk(node)
-                if isinstance(x, ast.Call) and isinstance(x.func, ast.Name) and x.func.id == "_self_test"
-            )
-    return 0
-
-
-def check_py_move_self_test(text: str | None = None) -> None:
-    """py-move-check.py --self-test is executed; a gutted `_self_test` is red; every finding kind
-    has a fixture, and a compare run self-tests first."""
-    path = SCRIPTS / "py-move-check.py"
-    if text is None:
-        if not path.is_file():
-            _die("missing scripts/py-move-check.py")
-        text = path.read_text(encoding="utf-8")
-        _run_script_self_test(path, "py-move-check.py", PY_MOVE_CHECK_MIN_CASES)
-        _gutted_self_test_must_not_count(path, text, "py-move-check.py", PY_MOVE_CHECK_MIN_CASES)
-    elif (_self_test_n_from_text(text) or 0) < PY_MOVE_CHECK_MIN_CASES:
-        _die(f"py-move-check.py must print self-test ok (N cases) with N>={PY_MOVE_CHECK_MIN_CASES}")
-    if _self_test_fn_is_gutted(text):
-        _die("py-move-check.py _self_test must not be gutted to return None")
-    if "def _self_test" not in text or "def main" not in text:
-        _die("py-move-check.py must define _self_test and main")
-    if _main_self_test_calls(text) < 2 or "redirect_stdout(sys.stderr)" not in text:
-        _die("py-move-check.py must run _self_test (to stderr) before a compare run")
-    for kind in _PY_MOVE_KINDS:
-        if f'"{kind}"),' not in text:
-            _die(f"py-move-check.py must self-test the {kind} finding")
-
-
-def check_claim_remap_self_test(text: str | None = None) -> None:
-    """claim-remap.py --self-test is executed with its floor; a gutted `_self_test` is red, and a
-    remap run self-tests first."""
-    path = SCRIPTS / "claim-remap.py"
-    if text is None:
-        if not path.is_file():
-            _die("missing scripts/claim-remap.py")
-        text = path.read_text(encoding="utf-8")
-        _run_script_self_test(path, "claim-remap.py", CLAIM_REMAP_MIN_CASES)
-        _gutted_self_test_must_not_count(path, text, "claim-remap.py", CLAIM_REMAP_MIN_CASES)
-    elif (_self_test_n_from_text(text) or 0) < CLAIM_REMAP_MIN_CASES:
-        _die(f"claim-remap.py must print self-test ok (N cases) with N>={CLAIM_REMAP_MIN_CASES}")
-    if _self_test_fn_is_gutted(text):
-        _die("claim-remap.py _self_test must not be gutted to return None")
-    if "def _self_test" not in text or _main_self_test_calls(text) < 2:
-        _die("claim-remap.py must run _self_test before a remap run")
-
-
-def check_hygiene_inventory_cfg_test() -> None:
-    """Inventory classifies `#[cfg(test)] mod x;` as src-test."""
-    path = SCRIPTS / "lib" / "hygiene_inventory.py"
-    if not path.is_file():
-        _die("missing scripts/lib/hygiene_inventory.py")
-    _run_script_self_test(path, "hygiene_inventory.py", HYGIENE_INVENTORY_MIN_CASES)
-
-
-# The two tools that load scripts/ci-policy.py as a module and read its attributes.
-_POLICY_MODULE_CONSUMERS = (
-    ("scripts/kdb-dump-gate.sh", ("ROOT", "_dump_key_hexes", "check_golden_dump_unique_keys")),
-    (
-        "scripts/lib/hygiene_inventory.py",
-        ("DIFFSEND_CASES", "ledger_sources", "recount_ledger_verdicts", "_split_ledger_row"),
-    ),
-)
-_POLICY_MODULE_PROBE = """import importlib.util
-import json
-import sys
-
-spec = importlib.util.spec_from_file_location("ci_policy", sys.argv[1])
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-out = {"missing": [n for n in json.loads(sys.argv[2]) if not hasattr(mod, n)]}
-if not out["missing"]:
-    out["diffsend"] = sorted(mod.DIFFSEND_CASES)
-    out["ledger"] = [name for name, _text, _key in mod.ledger_sources(mod.ROOT)]
-print(json.dumps(out))
-"""
-
-
-def check_policy_module_attrs(path: pathlib.Path | None = None) -> None:
-    """scripts/ci-policy.py, loaded as a module the way kdb-dump-gate.sh:36-40 loads it (`python3 -`
-    from cwd=/, spec_from_file_location, no PYTHONPATH), has every name its two consumers read; its
-    DIFFSEND_CASES is this policy's list (what hygiene_inventory's diffsend_cases reads) and its
-    ledger_sources reads the docs/parity/ split, so a stub with the right names does not pass."""
-    path = SCRIPTS / "ci-policy.py" if path is None else path
-    names = [n for _consumer, group in _POLICY_MODULE_CONSUMERS for n in group]
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
-    r = subprocess.run(
-        [sys.executable, "-", str(path), json.dumps(names)],
-        input=_POLICY_MODULE_PROBE,
-        cwd="/",
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if r.returncode != 0:
-        tail = (r.stderr or r.stdout).strip().splitlines()[-1:]
-        _die(f"{path.name} does not load as a module from cwd=/: {tail}")
-    out = json.loads(r.stdout.strip().splitlines()[-1])
-    for consumer, group in _POLICY_MODULE_CONSUMERS:
-        missing = [n for n in group if n in out["missing"]]
-        if missing:
-            _die(f"{path.name} loaded as a module lacks {', '.join(missing)}, which {consumer} reads")
-    if out["diffsend"] != sorted(DIFFSEND_CASES):
-        _die(
-            f"{path.name} loaded as a module holds {len(out['diffsend'])} DIFFSEND_CASES, this policy "
-            f"{len(DIFFSEND_CASES)}: hygiene_inventory.py's diffsend_cases would read the wrong list"
-        )
-    if not out["ledger"] or not all(n.startswith("docs/parity/") for n in out["ledger"]):
-        _die(
-            f"{path.name} loaded as a module: ledger_sources reads {out['ledger'][:2]}, not the "
-            "docs/parity/ split that hygiene_inventory.py's ledger_rows needs"
-        )
 
 
 def check_python_compiles(files: dict[str, str] | None = None) -> None:

@@ -498,6 +498,7 @@ dependencies = [
  "getrandom 0.2.17",
  "krb5-asn1",
  "krb5-cli",
+ "krb5-client",
  "krb5-config",
  "krb5-crypto",
  "krb5-gss",
@@ -521,7 +522,6 @@ dependencies = [
  "krb5-types",
  "rasn",
  "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

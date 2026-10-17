@@ -54,7 +54,7 @@ impl LogSpecs {
     /// unreadable file counts as empty) and the krb5.conf files.
     #[must_use]
     pub fn load(ename: &str) -> Self {
-        let kdc = KdcConf::load_file(kdc_conf_path()).ok();
+        let kdc = kdc_conf_logging();
         let krb5 = load_krb5_conf();
         Self::for_program(kdc.as_ref(), krb5.as_ref(), ename)
     }
@@ -63,10 +63,16 @@ impl LogSpecs {
     /// MIT-format log (kprop, kpropd).
     #[must_use]
     pub fn load_json() -> Option<String> {
-        let kdc = KdcConf::load_file(kdc_conf_path()).ok();
+        let kdc = kdc_conf_logging();
         let krb5 = load_krb5_conf();
         json_value(&relations(kdc.as_ref(), krb5.as_ref()))
     }
+}
+
+/// [`kdc_conf_path`] without its realm stanzas, which `[logging]` is not in: missing,
+/// unreadable or malformed, none.
+fn kdc_conf_logging() -> Option<KdcConf> {
+    KdcConf::load_file_without_realms(kdc_conf_path()).ok()
 }
 
 /// Every `[logging]` relation of the profile, kdc.conf's first.

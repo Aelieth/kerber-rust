@@ -10,7 +10,6 @@
 //! `otp` follows `encrypted_timestamp`, as MIT registers it. `module` is not read. Embedder modules
 //! follow the built-ins; an earlier name wins a duplicate, and the first loaded module to claim a
 //! pa-type keeps it.
-
 use std::sync::{Arc, Mutex};
 
 use krb5_crypto::SPAKE_DEFAULT_GROUPS_CLIENT;

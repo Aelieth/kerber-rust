@@ -519,12 +519,8 @@ pub(crate) fn process_pkinit(
     };
     let cms = match decode::<krb5_types::pkinit::PaPkAsReq>(raw) {
         Ok(req) => req.signed_auth_pack.as_ref().to_vec(),
-        // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:479-483`): a PA-PK-AS-REQ that does not decode is its ASN.1 error.
-        Err(_) => {
-            krb5_types::pkinit::parse_pa_pk_as_req_cms(raw).ok_or_else(|| Error::PreauthModule {
-                message: crate::asn1_text::decode_failure_text(raw, false).to_owned(),
-            })?
-        }
+        // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:479-483`): a strict decode. No lenient fallback.
+        Err(_) => return Err(crate::asn1_text::preauth_decode_failure(raw, false)),
     };
     let ca = store
         .pkinit_ca()

@@ -49,6 +49,10 @@ pub enum Error {
     /// Returned principal / sname / etype / flags did not match the request.
     #[error("reply validation: {0}")]
     ReplyMismatch(String),
+    /// AS reply starttime outside skew when `kdc_timesync` is off.
+    /// MIT `verify_as_reply` (`get_in_tkt.c:264-269`): `KRB5_KDCREP_SKEW`, and no message is set.
+    #[error("Clock skew too great in KDC reply")]
+    KdcReplySkew,
     /// Referral TGT presented as a service ticket.
     #[error("referral TGT cannot be used as the requested service ticket")]
     Referral,
@@ -146,6 +150,7 @@ impl Clone for Error {
             Self::ReplyIntegrity => Self::ReplyIntegrity,
             Self::NonceMismatch => Self::NonceMismatch,
             Self::ReplyMismatch(s) => Self::ReplyMismatch(s.clone()),
+            Self::KdcReplySkew => Self::KdcReplySkew,
             Self::Referral => Self::Referral,
             Self::NoEtype => Self::NoEtype,
             Self::ConfigEtypeNosupp => Self::ConfigEtypeNosupp,

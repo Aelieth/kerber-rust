@@ -61,6 +61,8 @@ pub enum Code {
     FccInternal,
     /// `KRB5_KDCREP_MODIFIED`.
     KdcrepModified,
+    /// `KRB5_KDCREP_SKEW`.
+    KdcrepSkew,
     /// `KRB5_CC_IO`.
     CcIo,
     /// `KRB5_CC_FORMAT`.
@@ -117,20 +119,14 @@ impl Krb5Error {
     }
 
     /// MIT `krb5_get_error_message` of a protocol failure; `realm` names the realm whose KDC was
-    /// asked.
-    /// MIT `krb5int_process_tgs_reply` (`gc_via_tkt.c:194-201`): a generic KDC error with an
-    /// e-text is "KDC returned error string: \<text\>"; every other KDC error is its table text.
+    /// asked. A KDC error is its table text. The e-text rewrite of a generic error is TGS-only,
+    /// in [`Self::from_tgs`].
     /// MIT `k5_sendto_kdc` (`sendto_kdc.c:523-529`): no answer is "Cannot contact any KDC for
     /// realm '\<realm\>'".
     #[must_use]
     pub fn from_protocol(e: &krb5_protocol::Error, realm: &str) -> Self {
         match e {
-            krb5_protocol::Error::KrbError { code, text } => {
-                if *code == krb5_types::err::GENERIC
-                    && let Some(t) = text.as_deref().filter(|t| !t.is_empty())
-                {
-                    return Self::new(Code::Kdc(*code), format!("KDC returned error string: {t}"));
-                }
+            krb5_protocol::Error::KrbError { code, .. } => {
                 Self::new(Code::Kdc(*code), kdc_error_text(*code))
             }
             krb5_protocol::Error::PreauthFailed(inner) => Self::new(
@@ -149,11 +145,16 @@ impl Krb5Error {
     }
 
     /// [`Self::from_protocol`] for an AS exchange.
+    /// MIT `verify_as_reply` (`get_in_tkt.c:257-269`): skew is `KRB5_KDCREP_SKEW` and any other
+    /// mismatch is `KRB5_KDCREP_MODIFIED`, with no message set, so the table text is what prints.
+    /// MIT `init_creds_step_reply` (`get_in_tkt.c:1762-1766`): a KDC error, including code 60, is the
+    /// table text. The e-text rewrite is TGS-only.
     /// MIT `krb5_init_creds_step` (`get_in_tkt.c:1936-1946`): an unknown client is "Client
     /// '\<client\>' not found in Kerberos database".
     #[must_use]
     pub fn from_as(e: &krb5_protocol::Error, client: &str, realm: &str) -> Self {
-        if let krb5_protocol::Error::KrbError {
+        use krb5_protocol::Error as E;
+        if let E::KrbError {
             code: krb5_types::err::C_PRINCIPAL_UNKNOWN,
             ..
         } = e
@@ -163,13 +164,18 @@ impl Krb5Error {
                 format!("Client '{client}' not found in Kerberos database"),
             );
         }
-        Self::from_protocol(e, realm)
+        match e {
+            E::KdcReplySkew => Self::of(Code::KdcrepSkew),
+            E::NonceMismatch | E::ReplyMismatch(_) | E::Referral => Self::of(Code::KdcrepModified),
+            E::EnctsDisabled => Self::new(Code::PreauthFailed, e.to_string()),
+            _ => Self::from_protocol(e, realm),
+        }
     }
 
     /// [`Self::from_protocol`] for a TGS exchange: an unknown server is the message the reply's
     /// processing set, which names the error's server, when the error came with e-text, else the
-    /// table's text.
-    /// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:195-216`): an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; without e-text no message is set.
+    /// table's text. A generic KDC error with e-text is that rewrite, not the table text.
+    /// MIT `krb5int_process_tgs_reply` (`lib/krb5/krb/gc_via_tkt.c:193-216`): an unknown server's error with e-text sets the message "Server <the error's server> not found in Kerberos database"; a generic error with e-text sets "KDC returned error string: \<text\>".
     #[must_use]
     pub fn from_tgs(e: &krb5_protocol::Error, realm: &str) -> Self {
         if let krb5_protocol::Error::KrbError {
@@ -179,6 +185,15 @@ impl Krb5Error {
             && !t.is_empty()
         {
             return Self::new(Code::Kdc(krb5_types::err::S_PRINCIPAL_UNKNOWN), t.clone());
+        }
+        if let krb5_protocol::Error::KrbError {
+            code,
+            text: Some(t),
+        } = e
+            && *code == krb5_types::err::GENERIC
+            && !t.is_empty()
+        {
+            return Self::new(Code::Kdc(*code), format!("KDC returned error string: {t}"));
         }
         Self::from_protocol(e, realm)
     }
@@ -331,6 +346,8 @@ fn code_text(code: Code) -> &'static str {
         Code::FccInternal => "Internal credentials cache error",
         // MIT `KRB5_KDCREP_MODIFIED` (`krb5_err.et:200-200`): the text.
         Code::KdcrepModified => "KDC reply did not match expectations",
+        // MIT `KRB5_KDCREP_SKEW` (`krb5_err.et:201-201`): the text.
+        Code::KdcrepSkew => "Clock skew too great in KDC reply",
         // MIT `KRB5_CC_IO` (`krb5_err.et:261-261`): the text.
         Code::CcIo => "Credentials cache I/O operation failed",
         // MIT `KRB5_CC_FORMAT` (`krb5_err.et:267-267`): the text.
@@ -480,7 +497,7 @@ mod tests {
             text: Some("why".into()),
         };
         assert_eq!(
-            Krb5Error::from_protocol(&generic, "R").message,
+            Krb5Error::from_tgs(&generic, "R").message,
             "KDC returned error string: why"
         );
         let s4u = krb5_protocol::Error::KrbError {

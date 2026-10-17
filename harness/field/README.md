@@ -4,7 +4,8 @@ Section F proves kerber-rust against real systems: Fedora clients (SSSD,
 gssproxy, NFS, sshd, Firefox), Keycloak, Windows/AD and KLLDAP. Every scenario
 runs first against a stock Fedora MIT `krb5-server` realm (the oracle), then
 against kerber-rust. This directory builds the lab those scenarios run in:
-six libvirt VMs on this host, on a private NAT network with its own DNS.
+the Fedora VMs on this host, plus `deb13` (Debian 13), `ub26` (Ubuntu 26.04)
+and `rocky10` (Rocky Linux 10), on a private NAT network with its own DNS.
 
 `lab.sh` is a harness. It drives libvirt, cloud-init and Anaconda, and it
 asserts nothing about Kerberos. The VMs carry no Kerberos server software and
@@ -22,10 +23,14 @@ Gateway, DHCP and DNS are on `192.168.177.1` (libvirt's dnsmasq).
 | --- | --- | --- | --- | --- | --- |
 | `kdc.kerber.test` | `.10` + a LAN NIC | `kerber-kdc` | Fedora 43 Cloud | 2 / 2 GiB / 20 GB | MIT `krb5-server` (oracle), then kerber-rust |
 | `services.kerber.test` | `.11` | `kerber-services` | Fedora 43 Cloud | 4 / 6 GiB / 40 GB | rootful podman: Ganesha NFS, Keycloak, lldap |
+| `kdc2.kerber.test` | `.12` | `kerber-kdc2` | Fedora 44 Cloud | 2 / 2 GiB / 20 GB | replica. Defined by hand (L22). `up` does not start it; `up kdc2` does. `rebuild kdc2` is refused. A bare `reset kdc2` uses `f44-base` |
 | `client1.kerber.test` | `.21` | `kerber-client1` | Fedora Kinoite 43 | 4 / 6 GiB / 40 GB | the fleet's client type (satomlin-kit twin), SPICE desktop |
 | `client2.kerber.test` | `.22` | `kerber-client2` | Fedora 43 Cloud | 2 / 3 GiB / 20 GB | sshd target, second NFS client, headless checks |
 | `klldap.kerber.test` | `.30` | `kerber-klldap` | Fedora 43 Cloud | 2 / 3 GiB / 30 GB | rootful Docker (`moby-engine`): KLLDAP with its own KDC (F3) |
 | `mitd3.kerber.test` | `.31` | `kerber-mitd3` | Fedora 43 Cloud | 4 / 4 GiB / 20 GB | upstream MIT krb5 1.22.2 built from the release tarball: the des3 oracle (B22) |
+| `ub26.kerber.test` | `.32` | `kerber-ub26` | Ubuntu 26.04 Cloud | 4 / 8 GiB / 60 GB | CI mirror. `lab.sh up` does not start it; `lab.sh up ub26` does. Parked unless that run is under way |
+| `deb13.kerber.test` | `.33` | `kerber-deb13` | Debian 13 | 2 / 3 GiB / 30 GB | lagging peer (krb5 1.21.3). Started with the field VMs. Not built from the Fedora image |
+| `rocky10.kerber.test` | `.34` | `kerber-rocky10` | Rocky Linux 10 | 2 / 3 GiB / 20 GB | closeout and the 1.2.0 final only. `lab.sh up` does not start it; `lab.sh up rocky10` does |
 
 - **DHCP:** static leases by MAC (`network-kerber-lab.xml`, the table in
   `lab.sh`). Other machines get `.100`–`.199`.
@@ -80,12 +85,22 @@ starts, so nothing listens on the LAN unfiltered.
 
 ## Usage
 
-Run from the repo root, on the host or inside the `rust-dev` distrobox. In the
-distrobox, `lab.sh` sends host commands through `distrobox-host-exec`. It
-needs membership in the `libvirt` group and no sudo.
+Run on the host or inside the `rust-dev` distrobox. In the distrobox, `lab.sh`
+sends host commands through `distrobox-host-exec`, with the working directory
+set to the directory that contains `lab.sh`. The caller's cwd is not used.
+That directory has to be a path the host can see (this checkout is). A copy
+whose path exists only inside the container still cannot see the VMs. The
+script needs membership in the `libvirt` group and no sudo.
+
+`up`, `down`, `destroy`, `rebuild`, `reset` and `snapshot` take
+`~/kerber-lab/state/lab.lock` with `flock -w 60`. When that lock is held, the
+command exits 1 and says the lab is held. `status`, `ssh`, `ip`, `check` and
+`collect` do not take it. `run.sh` holds the same file on fd 9 for the whole
+field run; a `lab.sh reset` that run starts keeps the hold instead of waiting
+on it.
 
 ```sh
-harness/field/lab.sh up                 # build or start everything; idempotent
+harness/field/lab.sh up                 # build or start the field VMs; not ub26, rocky10, or kdc2
 harness/field/lab.sh status             # VMs, addresses, snapshots, kdc's LAN address
 harness/field/lab.sh check              # ssh, DNS + reverse, time sync, internet; kdc LAN + filter + AD DC :88; client1 SDDM
 harness/field/lab.sh check --lab-only kdc   # the same without what reaches past the lab: internet, LAN address, AD DC
@@ -93,21 +108,29 @@ harness/field/lab.sh ssh kdc            # shell as 'lab' (passwordless sudo)
 harness/field/lab.sh ssh client2 -- sudo dnf -y install krb5-workstation
 harness/field/lab.sh ip kdc             # 192.168.177.10   (ip kdc lan: the LAN address)
 harness/field/lab.sh snapshot kdc mit-oracle   # offline snapshot (shut down, snapshot, start)
-harness/field/lab.sh reset all          # revert every VM to 'base' and boot it
+harness/field/lab.sh reset all          # revert to 'base' and boot; mitd3 stays on 'mit-d3'; kdc2 is not selected
+harness/field/lab.sh reset all base     # name base to take mitd3 to 'base' too
 harness/field/lab.sh reset kdc mit-oracle
 harness/field/lab.sh collect kdc working/logs/f-r1 /var/log/krb5kdc.log /etc/krb5.conf
 harness/field/lab.sh down               # shut the VMs down (the network stays up)
-harness/field/lab.sh rebuild kdc --yes  # one VM from scratch (after a template change)
+harness/field/lab.sh rebuild kdc --yes  # one VM from scratch (after a template change). kdc2 is refused
 harness/field/lab.sh destroy --yes      # remove the VMs, volumes, pool and network
 ```
 
-- **`up`:** builds each missing VM, waits for provisioning and takes snapshot
-  `base`.
+- **`up`:** builds each missing Fedora or Ubuntu VM, waits for provisioning
+  and takes snapshot `base`. `up` and `up all` leave `ub26`, `rocky10`, and
+  `kdc2` shut off; name one to start it. `up kdc2` starts the existing domain
+  and does not take a snapshot named `base`. `deb13`, `rocky10`, and `kdc2`
+  are not built from an image in this script. A missing domain is an error.
   - Timing: about 20 minutes from nothing with the images already downloaded
     (measured 2026-10-01). Most of it is the Kinoite install and upgrade and
     the cloud VMs' package upgrade. Downloading the 4.5 GB of Fedora media
     first took 6 minutes more.
-  - `reset all` brings every VM back at `base` in about 30 seconds.
+  - `reset all` brings every selected VM back at `base` and boots it, except
+    `mitd3`, which stays on `mit-d3` (the snapshot with the MIT build).
+    `kdc2` is not selected. `reset kdc2` with no snapshot name reverts to
+    `f44-base` and boots. `reset all base` names `base`, so `mitd3` goes
+    there too. About 30 seconds.
   - Interruptions: a VM without `base` is finished from whatever state it is
     in. An install that ended is never booted again.
   - Later runs only start stopped VMs.
@@ -132,6 +155,10 @@ not a gate: no ci-policy judge, ledger row or CI job runs it.
 make field PROFILE=nightly REF=f-functional               # every scenario of the profile
 make field PROFILE=nightly REF=f-functional ONLY=upgrade  # one of them
 harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the same, without make
+harness/field/run.sh ad-trust --ref plan-12 --leg both   # the real AD DC: upgrade, then ad-trust
+harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg both   # 464's cells, on demand
+harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
+harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --leg both   # the store's write cells, on demand
 ```
 
 - **Options:**
@@ -144,6 +171,9 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
     uses the kdc that leg's `upgrade` left, so a leg without `upgrade` runs
     against whatever kdc holds, and its `kdc.leg` check fails when that is not
     the leg's KDC.
+- **`run.sh ad-trust`** is the only way to run `ad-trust`, which changes the AD
+  DC and undoes it (`--profile ad-trust` is refused); it is in no profile, so a
+  DC outage or a DC clock past 240 s never reddens the nightly.
 - **The tree under test** is `git archive <ref>` of this repository, read-only
   (`GIT_OPTIONAL_LOCKS=0`; `FIELD_REPO` in `field.env` names another). A dirty
   checkout runs the harness, never the product.
@@ -162,10 +192,10 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
   - those sha256s unchanged;
   - nothing new in the host's `/tmp` owned by the user;
   - `lib/scan-secrets.py` over the whole run, its planted control first.
-  - A run driven from a Claude Code session (`CLAUDECODE=1`) leaves that
-    session's own `/tmp/claude-<uid>` out of the `/tmp` check, because the
-    session writes there on every tool call. The `post.host.tmp` line says how
-    many entries it left out.
+  - Every run leaves `/tmp/claude-<uid>` and `/tmp/grok-file-lock-<uid>` out
+    of that check and counts both on the `post.host.tmp` line. Those trees are
+    CLI scratch for this user, written whether or not that CLI is driving the
+    run. Any other new path still fails the guard.
 - **Limits:** a scenario has `FIELD_SCENARIO_TIMEOUT` seconds (default 1800),
   and each of its commands `FIELD_CMD_TIMEOUT` (default 900), cut to what is
   left of the scenario's time. A command over its limit is stopped and fails
@@ -201,7 +231,9 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
   `field.env.example`).
 - **A hand runner** takes the same lock, so no field run starts under it:
   `flock -n ~/kerber-lab/state/lab.lock bash` (held while that shell runs).
-- **Never:** a snapshot created or deleted, a git ref written, the AD DC touched.
+- **Never:** a snapshot created or deleted, a git ref written, the AD DC touched,
+  but for `ad-trust`'s changes #1-#4 and #7 (`lib/ad.sh`), each undone in the
+  same run (Phil's standing OK, 2026-10-16).
 
 `lib/`, shared by `run.sh` and the scenarios:
 
@@ -220,7 +252,9 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `nfs-probe.sh`, `spnego-probe.sh`, `check_spnego.lab.sh` | S2's probes, run in throwaway containers on services (image `localhost/s2-nfs-probe:f43`, own network namespace): the kit's NFS client set-up and alice's, root's and bob's NFS access; the kit's `check_spnego` (its helper block and function verbatim from kit commit `e9f3325`, only the four SSO constants set to the lab's) and the two requests by hand |
 | `kc-events.sh` | Keycloak's events since a time, read-only through the admin API from the host (the admin password on stdin, the token through a pipe) |
 | `lldap-membership.sh` | S1's: one lldap group membership added or removed on services (lldap's admin password on stdin) |
+| `ad.sh`, `ad/*.ps1`, `dc-ps.py` | `ad-trust`'s DC: each PowerShell script run over WinRM (`dc-ps.py`, the AD secrets from `FIELD_ADLAB_ENV`) and shown whole in the record; the DC's state against `ad/baseline.txt` before and after; every change logged before it is made and undone by `ad/undo.ps1`, which touches only those changes |
 | `ptydrive.py` | R2's pty driver: `su`, `passwd` and `pamtester` on a pseudo-terminal, their prompts answered from stdin |
+| `setpw.py`, `udp-send.py` | `kpasswd`'s drivers on client2: one set-password request through MIT's libkrb5 (ctypes; `krb5_set_password_using_ccache`, or with `--frame` the request built from `krb5_mk_req_extended` and `krb5_mk_priv` so the password may hold a NUL), and kpasswd's own error frame sent back to it |
 
 ## Scenarios
 
@@ -230,7 +264,11 @@ harness/field/run.sh --profile nightly --ref f-functional --only upgrade   # the
 | `services` | nightly, weekly | mit, rust | services: `f4-mit` / `services-rust` (reset); kdc as `upgrade` left it | f-S2-services; f-S2-rust | about 2 / 2 min |
 | `nfs-client` | nightly, weekly | mit, rust | client2: `f4-mit` / `rust-ssh`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R4-mit + f-R5-mit; f-R4 + f-R5 (client2's legs) | about 1.5 / 1.5 min |
 | `sssd-login` | nightly, weekly | mit, rust | client1: `f4-mit` / `rust-nfs-sso`, services: `f4-mit` / `services-rust` (both reset); kdc as `upgrade` left it | f-R2-mit; f-R2 (headless) | about 2 / 2 min |
+| `ad-trust` | none: `run.sh ad-trust` | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it; the AD DC TEST-SERVER (WinRM; its changes undone in the run) | f-RA-mit; f-RA, f-FULL-r2 `hand/ra` | about 2 / 2 min (the hand legs: 117 / 112 s) |
 | `klldap-swap` | nightly, weekly | mit, rust | none: this host's docker | f-F3-mit (mit leg), f-F3 (rust leg) | about 4 min (mit) and 8 min (rust) with BuildKit's cache warm; much longer cold (see below) |
+| `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
+| `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
+| `kpasswd` | weekly, last (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
 
 With `--leg both`, the four take 15 to 16 minutes (2026-10-02, every VM reset by the run).
 
@@ -327,6 +365,49 @@ would remove it.
   (the TGT is issued, the account is denied); the kit's own `--validate`. Every
   realm and directory change is undone, also when the scenario stops early.
   Recorded: the cache's size.
+- **`kdc-profile.sh`** (CF, client2's MIT kinit against kdc): with kdc.conf's
+  `[libdefaults] clockskew = 60` and client2's clock 120 s ahead (chronyd stopped,
+  then started again to step it back) cfskew's AS-REQ is refused for skew, and
+  with `clockskew = 600` and 400 s ahead it is accepted. cfskew is made
+  `+requires_preauth` for the cells and deleted after: the lab's principals do
+  not require preauth, so their AS-REQ has no timestamp to judge; the kinit
+  trace's preauth module line is recorded. client2's copy of krb5.conf sets
+  `kdc_timesync = 0` (the timestamp is client2's clock), `clockskew = 900` and
+  `[plugins] clpreauth` `enable_only = encrypted_timestamp` (SPAKE, which the
+  lab enables, sends no timestamp), so only the KDC's
+  skew decides. With `clockskew = 60` and kadmin restarted on it, cfpw's kpasswd
+  from client2 120 s ahead is refused for its authenticator's time; cfpw is made
+  `-requires_preauth`, so its changepw ticket comes without a timestamp to judge.
+  A second realm stanza (`DUMMY.TEST`, `max_life = 1h`) leaves alice's TGT life
+  as it was. An `include` line naming a file whose KERBER.TEST stanza sets
+  `max_life = 2h` makes it 7200 s, and `Max_Life = 1h`, a name MIT matches only as
+  written, leaves it as it was. Each cell starts from the saved kdc.conf, which is
+  restored with krb5kdc and kadmin restarted at the end, also when the scenario
+  stops early. Then CF.e0 (`lib/profile-opens.sh`): strace on kadmind while
+  client2 changes cfpw's password and runs a kadmin session, and on a second
+  kpropd (port 7754, its own kdc.conf, database, keytab and ACL, stopped and
+  removed after) while kdc's kprop sends it the realm. Each must take a
+  request, and neither may open krb5.conf or kdc.conf for one; a program a
+  child executes (MIT kpropd's `kdb5_util load`) is not counted. strace is
+  installed on kdc when it is missing.
+- **`kdb-writes.sh`** (SW, MIT kinit and kadmin from client2): `swlock`, under a
+  policy with `maxfailure 10`, fails kinit three times, kadmind changes another
+  principal twice, `swlock` fails twice more and kadmind writes once more:
+  `getprinc` shows five failed attempts, so no kadmind write puts a stale count
+  back over the KDC's. A `cpw` the principal's policy refuses leaves its keys,
+  and the next `cpw -randkey` changes them. The scratch principals and policies
+  go at the end, also when the scenario stops early.
+- **`kpasswd.sh`** (KH, client2 against kdc's 464; `lib/setpw.py` drives MIT's
+  libkrb5): admin/admin sets a fresh principal's password (0, kvno + 1); an
+  unprivileged user is refused (5, kvno kept); a self change with a changepw
+  ticket from the TGS is refused (7); a password holding a NUL (`--frame`) keys
+  the part before it; with the database bound read-only the reply is MIT's text
+  with no path (2), and with it moved aside the AP-REQ is not read (3); kpasswd's
+  own error frame sent back (`lib/udp-send.py`): MIT answers it, ours does not;
+  kadmin/changepw's own change and admin/admin's change of krbtgt: MIT allows
+  both, ours answers 5 with the kvno kept. MIT's answers to those three are INFO
+  lines (`scenarios/kpasswd.expect`); the rest are graded on both legs. The
+  database is unmounted and moved back, also when the scenario stops early.
 
 `scenarios/klldap-swap.sh` runs KLLDAP on this host's docker, never on a lab VM
 (run.sh still holds the lab lock while it runs). It needs, from `field.env`:
@@ -484,7 +565,9 @@ reaches web.mit.edu); its only network use is the Fedora repos of cloud-init.
 The build, the private realm `D3.TEST` and the snapshot `mit-d3` that carries
 them are recorded in `working/logs/f-B22/mitd3-provision/`. `lab.sh up mitd3`
 builds only this VM, and adds its DHCP lease and DNS record to a network
-defined before it joined the table (`net-update`, no restart).
+defined before it joined the table (`net-update`, no restart). `check` asks
+every VM for `mitd3.kerber.test` as well as the other field names. `reset`
+with no snapshot name leaves this VM on `mit-d3`.
 
 ## Where things live
 

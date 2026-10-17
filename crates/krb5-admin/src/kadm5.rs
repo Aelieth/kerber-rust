@@ -41,3 +41,9 @@ pub use rpc::{Kadm5RpcSession, RpcCtx, RpcPeer, UnhandledRpc, kadm5_handle_rpc, 
 pub(crate) fn chpass_error_text(e: &crate::Error) -> String {
     log::kadm5_error_text(dispatch::kadm5_code(codes::CHPASS_PRINCIPAL, e))
 }
+
+/// The message of the kadm5 code a `kadm5_chpass_principal` stub would return for the database's
+/// error `e`, an errno's text included.
+pub(crate) fn chpass_store_error_text(e: &krb5_kdc::Error) -> String {
+    log::kadm5_error_text(dispatch::store_code(codes::CHPASS_PRINCIPAL, e))
+}

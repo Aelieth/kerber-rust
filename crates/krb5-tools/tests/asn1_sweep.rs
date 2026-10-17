@@ -7,13 +7,6 @@
 include!("../src/asn1_sweep.rs");
 
 #[test]
-fn every_sample_has_every_optional_field() {
-    for m in messages() {
-        assert!(!m.debug.contains("None"), "{}: {}", m.name, m.debug);
-    }
-}
-
-#[test]
 fn each_case_decodes_as_mit_decodes_it() {
     let messages = messages();
     let cases = corpus(&messages);

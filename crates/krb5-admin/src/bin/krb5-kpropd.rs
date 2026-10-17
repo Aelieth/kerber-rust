@@ -42,6 +42,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, ToSocketAddrs};
 use std::os::fd::AsRawFd as _;
@@ -61,7 +65,8 @@ use nix::sys::socket::{
     sockopt,
 };
 
-use krb5_protocol::ReplayCache;
+use krb5_config::ProfileSet;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::PrincipalName;
 
 fn main() {
@@ -112,9 +117,17 @@ fn main() {
         std::process::exit(1);
     });
     let realm = paths.realm.clone().unwrap_or_default();
+    // MIT `parse_args` (`kprop/kpropd.c:1056-1062`): the KDC context's profile is read once, here; no connection reads it again.
+    let profile = ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
+        let argv0 = argv.first().map_or("kpropd", String::as_str);
+        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    });
+    let conf = Arc::new(AcceptorConfig::from_profile(&profile));
+    let kdc_context = Arc::new(profile.kdc_context);
     let (db, stash) = (paths.database_name, paths.key_stash_file);
     // MIT `parse_args` (`kprop/kpropd.c:1147-1153`): kpropd's own principal, `host` and this host in its realm, is made once; a name that cannot be made ends kpropd.
-    let server = kpropd_server_name().unwrap_or_else(|_| {
+    let server = kpropd_server_name(&kdc_context).unwrap_or_else(|_| {
         let argv0 = argv.first().map_or("kpropd", String::as_str);
         eprintln!(
             "{argv0}: Illegal character in component name while trying to construct my service name"
@@ -153,8 +166,11 @@ fn main() {
                 let allowed = kpropd_acl(&acl_file);
                 let replay = replay.clone();
                 let iprop = iprop.clone();
+                let conf = Arc::clone(&conf);
+                let kdc_context = Arc::clone(&kdc_context);
                 thread::spawn(move || {
-                    let Some(keys) = host_keys(&progname, keytab.as_deref(), &server) else {
+                    let Some(keys) = host_keys(&progname, keytab.as_deref(), &server, &kdc_context)
+                    else {
                         return;
                     };
                     match kpropd_handle_conn(
@@ -170,6 +186,7 @@ fn main() {
                             stash: &stash,
                             allowed_clients: allowed.as_deref(),
                             iprop: iprop.as_ref(),
+                            conf: &conf,
                         },
                         &replay,
                     ) {
@@ -351,11 +368,17 @@ fn kpropd_acl(path: &Path) -> Option<Vec<String>> {
     Some(text.split('\n').map(str::to_owned).collect())
 }
 
-/// kpropd's keytab for one connection ([`kpropd_keytab_keys`]); `None` when `-s` names a keytab
-/// of a type `krb5_kt_resolve` does not know: the connection then ends.
+/// kpropd's keytab for one connection ([`kpropd_keytab_keys`]), on the KDC profile `profile`;
+/// `None` when `-s` names a keytab of a type `krb5_kt_resolve` does not know: the connection then
+/// ends.
 /// MIT `kerberos_authenticate` (`kprop/kpropd.c:1249-1256`): a keytab name that does not resolve is logged ("Error in krb5_kt_resolve") and ends the connection.
-fn host_keys(progname: &str, keytab: Option<&str>, server: &PrincipalName) -> Option<KpropdKeys> {
-    match kpropd_keytab_keys(keytab, Some(server)) {
+fn host_keys(
+    progname: &str,
+    keytab: Option<&str>,
+    server: &PrincipalName,
+    profile: &krb5_config::Krb5Conf,
+) -> Option<KpropdKeys> {
+    match kpropd_keytab_keys(keytab, Some(server), profile) {
         Ok(keys) => Some(keys),
         Err(e) => {
             eprintln!("{progname}: Error in krb5_kt_resolve: {e}");

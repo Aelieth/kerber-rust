@@ -11,7 +11,7 @@ use krb5_kdc::testrealm::{
 };
 use krb5_protocol::{as_req, pa_enc_timestamp, tgs_req};
 
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::{PrincipalName, TicketFlags, ascii};
 
 struct WrappedIov {
@@ -71,6 +71,7 @@ fn contexts() -> (GssContext, GssContext) {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     (init, acc)
@@ -214,6 +215,7 @@ fn accept_same_token_twice_is_repeat() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &rcache,
+        &AcceptorConfig::default(),
     )
     .expect("first accept");
     match GssContext::accept_sec_context(
@@ -223,6 +225,7 @@ fn accept_same_token_twice_is_repeat() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &rcache,
+        &AcceptorConfig::default(),
     ) {
         Err(err) => {
             assert_eq!(err.to_string(), "KRB-ERROR 34: authenticator replay");
@@ -341,6 +344,7 @@ fn channel_bindings_must_match() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     let other = ChannelBindings {
@@ -354,6 +358,7 @@ fn channel_bindings_must_match() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) {
         Err(Error::ChannelBindings) => {}
         Err(e) => panic!("expected channel bindings error, got {e}"),
@@ -366,6 +371,7 @@ fn channel_bindings_must_match() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .expect("acceptor GSS_C_NO_CHANNEL_BINDINGS ignores token CB");
 }
@@ -392,6 +398,7 @@ fn spnego_accept_emits_neg_token_resp() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     assert_eq!(
@@ -453,6 +460,7 @@ fn acceptor_rejects_wrong_service_name() {
         Some(&wrong),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     ) else {
         panic!("wrong service accepted")
     };
@@ -471,6 +479,7 @@ fn acceptor_rejects_wrong_service_name() {
             Some(&documented_host()),
             Some(TEST_REALM),
             &ReplayCache::new(),
+            &AcceptorConfig::default(),
         )
         .is_ok(),
         "matching service"
@@ -520,6 +529,7 @@ fn mutual_ap_rep_decrypts_with_ticket_session() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     let tok = ap_rep.expect("mutual AP-REP");
@@ -580,6 +590,7 @@ fn accept_extracts_delegated_client() {
         Some(&documented_host()),
         Some(TEST_REALM),
         &ReplayCache::new(),
+        &AcceptorConfig::default(),
     )
     .unwrap();
     let want = format!("{TEST_USER}@{TEST_REALM}");

@@ -1182,7 +1182,12 @@ for _ in $(seq 1 40); do
     break
 done
 [ "$ok" = 1 ]
+# The KDC reads kdc.conf's stanza for its own realm only (MIT init_realm), so A.TEST gets the image's
+# KERBER.TEST stanza under its own name: its max_renewable_life makes the kinit -r below renewable.
+docker exec "$NAME" sh -c "sed 's/^    KERBER\\.TEST = {\$/    A.TEST = {/' /etc/krb5kdc/kdc.conf >/tmp/kdc-rust-a-r16.conf"
+docker exec "$NAME" grep -qx '    A.TEST = {' /tmp/kdc-rust-a-r16.conf
 docker exec -d \
+    -e KRB5_KDC_PROFILE=/tmp/kdc-rust-a-r16.conf \
     -e KRB5_TEST_USER_PASSWORD=userpassword \
     -e KRB5_TEST_ADMIN_PASSWORD=adminpassword \
     -e KRB5_TEST_REALM=A.TEST \

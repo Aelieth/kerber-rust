@@ -36,6 +36,10 @@
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 include!("../der_breaks.rs");
 
@@ -44,8 +48,8 @@ use std::process::ExitCode;
 use krb5_asn1::encode;
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, checksum, encrypt};
 use krb5_protocol::{
-    AcceptorAuthContext, ApVerifyParams, Error, Keytab, ReplayCache, unwrap_krb_priv_ex,
-    verify_ap_req_ex,
+    AcceptorAuthContext, AcceptorConfig, ApVerifyParams, Error, Keytab, ReplayCache,
+    unwrap_krb_priv_ex, verify_ap_req_ex,
 };
 use krb5_types::{
     ApOptions, ApReq, Authenticator, AuthorizationDataValue, ChangePasswdData, Checksum,
@@ -334,8 +338,11 @@ fn rust_answer(kind: &str, ap: &[u8], msg: Option<&[u8]>) -> String {
         Err(e) => return class(&e),
     };
     // `krb5_rd_req` sets up the auth context too (`rd_req_decoded_opt`).
-    let permitted = EncryptionType::preferred();
-    let mut ac = match AcceptorAuthContext::from_ap_req(&ok, &permitted) {
+    let conf = AcceptorConfig {
+        permitted_enctypes: EncryptionType::preferred().to_vec(),
+        ..AcceptorConfig::default()
+    };
+    let mut ac = match AcceptorAuthContext::from_ap_req(&ok, &conf) {
         Ok(ac) => ac,
         Err(e) => return class(&e),
     };
@@ -628,12 +635,13 @@ fn kpasswd(keytab: &str, client: &str, opts: &[String]) -> Result<(), String> {
 /// when the AP-REQ is refused (AUTHERROR "Failed reading application request"), `priv` when the
 /// KRB-PRIV is (HARDERROR "Failed decrypting request"), `0` when both are read, `drop` when no
 /// reply is made.
-fn explicit_answer(shared: &krb5_kdc::SharedDump, acl: &krb5_kdc::Acl, frame: &[u8]) -> String {
-    let Ok(service_key) = key(&SERVICE_KEY) else {
-        return "other:key".into();
-    };
-    let Ok(rep) =
-        krb5_admin::handle_kpasswd_rfc3244(shared, acl, &service_key, &ReplayCache::new(), frame)
+fn explicit_answer(
+    shared: &krb5_kdc::SharedDump,
+    acl: &krb5_kdc::Acl,
+    conf: &AcceptorConfig,
+    frame: &[u8],
+) -> String {
+    let Ok(rep) = krb5_admin::handle_kpasswd_rfc3244(shared, acl, conf, &ReplayCache::new(), frame)
     else {
         return "drop".into();
     };
@@ -667,6 +675,19 @@ fn explicit_answer(shared: &krb5_kdc::SharedDump, acl: &krb5_kdc::Acl, frame: &[
     "other:reply".into()
 }
 
+/// kadmind's acceptor profile values: the KDC context's profile, kdc.conf and then the krb5.conf
+/// files, read once.
+fn kdc_context_conf() -> AcceptorConfig {
+    let mut files = vec![krb5_config::kdc_conf_path()];
+    files.extend(krb5_config::krb5_conf_paths());
+    krb5_config::load_krb5_conf_paths(files)
+        .as_ref()
+        .map_or_else(
+            |_| AcceptorConfig::default(),
+            AcceptorConfig::from_krb5_conf,
+        )
+}
+
 /// `rd-sweep judge-explicit <frames> <mit> <dump> <master-password>`.
 fn judge_explicit(frames: &str, mit: &str, dump: &str, password: &str) -> Result<bool, String> {
     let frames = std::fs::read_to_string(frames).map_err(|e| format!("{frames}: {e}"))?;
@@ -677,13 +698,14 @@ fn judge_explicit(frames: &str, mit: &str, dump: &str, password: &str) -> Result
         .map_err(|e| format!("{dump}: {e}"))?;
     let shared = krb5_kdc::shared_dump(store);
     let acl = krb5_kdc::Acl::new();
+    let conf = kdc_context_conf();
     let (mut n, mut parts) = (0, 0);
     for line in frames.lines().filter(|l| !l.starts_with('#')) {
         let Some((id, hexed)) = line.split_once('\t') else {
             return Err(format!("bad frame line {line}"));
         };
         let frame = unhex(hexed).ok_or("bad frame hex")?;
-        let ours = explicit_answer(&shared, &acl, &frame);
+        let ours = explicit_answer(&shared, &acl, &conf, &frame);
         let theirs = mit.get(id).copied().unwrap_or("none");
         n += 1;
         if theirs.split(':').next() == Some(ours.as_str()) {
@@ -867,7 +889,7 @@ fn judge_kdb(cases: &str, mit: &str, dump: &str, password: &str) -> Result<bool,
         .map_err(|e| format!("{dump}: {e}"))?;
     let realm = store.realm().to_owned();
     let shared = krb5_kdc::shared_dump(store);
-    let permitted = krb5_protocol::permitted_enctypes_kdc().map_err(|e| e.to_string())?;
+    let conf = kdc_context_conf();
     let acceptors = [
         None,
         Some(krb5_kdc::principals::kadmin_admin()),
@@ -886,7 +908,7 @@ fn judge_kdb(cases: &str, mit: &str, dump: &str, password: &str) -> Result<bool,
                     &shared,
                     &realm,
                     acceptor.as_ref(),
-                    &permitted,
+                    &conf,
                     &ap,
                     &ReplayCache::new(),
                 ))

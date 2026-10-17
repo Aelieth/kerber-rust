@@ -11,7 +11,7 @@ use krb5_gss::GssContext;
 use krb5_kdc::testrealm::TEST_REALM;
 use krb5_kdc::{Acl, PrincipalStore, SharedDump, issue_as};
 
-use krb5_protocol::{ReplayCache, as_req_sname, pa_enc_timestamp};
+use krb5_protocol::{AcceptorConfig, ReplayCache, as_req_sname, pa_enc_timestamp};
 use krb5_types::{PrincipalName, ascii};
 
 pub const MSG_CALL: u32 = 0;
@@ -165,6 +165,7 @@ pub fn init_client(
             store,
             acl,
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
         },
         b"hdl",
         &mut sess,
@@ -246,6 +247,7 @@ pub fn data_call(
             store,
             acl,
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
         },
         b"hdl",
         &mut c.sess,

@@ -9,6 +9,7 @@ use krb5_kdc::{
     AT_PW_LAST_CHANGE, AT_TL_DATA,
 };
 use krb5_kdc::{Acl, KDB_LOCKDOWN_KEYS, SharedDump as SharedStore, TL_LAST_PWD_CHANGE, TlData};
+use krb5_protocol::AcceptorConfig;
 use krb5_types::PrincipalName;
 
 use super::{
@@ -263,6 +264,7 @@ fn admin_rpcsec_init_svc(
             store: &store,
             acl: &acl,
             expected_realm: TEST_REALM,
+            conf: &AcceptorConfig::default(),
         },
         b"hdl",
         &mut gss,

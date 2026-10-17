@@ -16,6 +16,53 @@ any other `###` heading.
 
 ## [Unreleased]
 
+### Security
+
+- **admin.** kpasswd refuses a `LOCKDOWN_KEYS` principal's keys (5; MIT's 464 allows it), answers no kpasswd reply or error, and names no path. Lab beside MIT.
+- **kdc/protocol.** A new password is keyed up to its first NUL, as MIT's C string; the kpasswd client wipes its encoded authenticator. Lab beside MIT.
+- **config.** kdc.conf is read for the served realm alone, and `reject_bad_transit`, `disable_pac` and `restrict_anonymous_to_tgt` as MIT reads them. Lab beside MIT.
+- **config/kdc.** `[libdefaults] clockskew`, kdc.conf's first, is the KDC's skew (it was always 300), read as MIT's integer. Lab beside MIT.
+- **admin.** kpasswd checks an AP-REQ's time against the profile's `clockskew`, kdc.conf's first, not a fixed 300 s; a negative one is kept, as MIT's. Lab beside MIT.
+- **admin/gss.** kadmind and kpropd read the profile once, kdc.conf first: no request opens krb5.conf or kdc.conf, and kpropd's skew is the profile's. Lab beside MIT.
+
+### Changed
+
+- **kdc.** A database change skips the whole-realm reread when no other writer moved the database, merging only the KDC's lockout records; a failed change is undone in memory.
+- **config.** The KDC, kadmind and kadmin.local read their profile once and apply it in one order, kdc.conf over krb5.conf; kadmind let krb5.conf win.
+- **config.** kdc.conf follows `include` and `includedir` and matches names as written, as MIT; the daemons log each relation MIT reads that is not supported.
+- **protocol/gss.** `AcceptorConfig` holds an acceptor's profile values; the GSS accept calls, kpasswd and kpropd take it, and `use_kdc_context` is gone.
+
+### Tests and CI
+
+- **ci.** Cap `[Unreleased]` at 24,000 bytes and pin CI to `ubuntu-24.04` with upload-artifact 7.0.2. Released sections are frozen. ci-policy enforces the cap.
+- **ci.** The docs size cap is 100 KiB. `docs/testing.md` names the same cap.
+- **field.** Add `ad-trust`, the real AD DC against both legs' KDCs: an AD user logs into client2's sshd. It runs only as `run.sh ad-trust` and starts from a recorded DC state.
+- **field.** `ad-trust` adds KERBER.TEST users at the DC's SMB and LDAP and the DC's SPNEGO login to Apache on kdc; the DC changes they need are undone in the same run.
+- **ci.** A pull request labeled `nightly` runs `oracles`, `moving`, `fuzz`, and `anchors`. `schedule` and `workflow_dispatch` stay.
+- **log.** Unit tests outside the keep list are gone. The two symlink-open tests stay.
+- **cli.** Unit tests outside the keep list are gone. The wiped-buffer line test stays.
+- **asn1.** Unit tests outside the keep list are gone. The four DER-strict tests stay.
+- **crypto.** Unit tests outside the keep list are gone. The known-answer tests and the parity-row proofs stay.
+- **tools.** Unit tests outside the keep list are gone. The decode-sweep golden test stays.
+- **ci.** `gate-common` and the three smoke gates read captured text. A match is grep's status.
+- **crypto.** The des3 PKINIT reply-key test stays. It is that parity row's only proof.
+
+### Removed
+
+- **ci.** The budget workflow is gone. The six per-push walls live in `ci-budget.toml`.
+
+### Fixed
+
+- **client.** An AS failure prints MIT's table text for skew, a mismatched reply, and error 60. A generic error's e-text stays on the TGS path.
+- **client.** A UDP socket uses the KDC address's family, and a link-local scope prints as the interface name.
+- **kdc.** A TGS name that is not GeneralString is S_PRINCIPAL_UNKNOWN, not a panic.
+- **kdc.** A preauth module's text is kept only with its own code. Garbage PA-ENC-TIMESTAMP is error 24, and PKINIT without a CA is ignored.
+- **crypto.** A des3 usage key uses the 3DES DK, a delegated session key keeps a weak enctype, and kadmin names are NT-PRINCIPAL.
+- **kdc.** `krb5kdc -m` and `kadmind -m` read the master key once from the keyboard when kdc.conf names no stash.
+- **kdc.** A foreground `-m` reads the master key twice, and `kadmind -m` reads it when a stash is named.
+- **kdc.** A master key that does not decrypt logs MIT's failure while fetching the master keys list.
+- **protocol.** A negative `clockskew` fails every ticket and authenticator time check, as MIT's; `verify_init_creds` takes the profile's skew, not 300 s.
+
 ## [1.1.0] - 2026-10-14
 
 The **1.1** line is *general-purpose MIT 1.22.2 completeness*: the KDC

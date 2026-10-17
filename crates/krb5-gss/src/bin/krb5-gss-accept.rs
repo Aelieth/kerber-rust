@@ -7,13 +7,17 @@
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
 use krb5_gss::{ChannelBindings, GssContext, IovBuf, IovType};
-use krb5_protocol::{Keytab, ReplayCache};
+use krb5_protocol::{AcceptorConfig, Keytab, ReplayCache};
 
 fn main() {
     let _ = tracing_subscriber::fmt()
@@ -90,6 +94,10 @@ fn main() {
     });
     println!("gss-accept listening {listen}");
     let rcache = ReplayCache::new();
+    // The acceptor's profile, krb5.conf's, read once.
+    let conf = krb5_config::load_krb5_conf()
+        .as_ref()
+        .map_or_else(AcceptorConfig::default, AcceptorConfig::from_krb5_conf);
     let realm = std::str::from_utf8(ent.realm.as_bytes()).unwrap_or("");
     loop {
         let (mut stream, _) = match listener.accept() {
@@ -117,6 +125,7 @@ fn main() {
                 Some(&ent.name),
                 Some(realm),
                 &rcache,
+                &conf,
             ) {
                 Ok((ctx, resp)) => {
                     println!("gss-accept spnego mic ok");
@@ -134,6 +143,7 @@ fn main() {
                 Some(&ent.name),
                 Some(realm),
                 &rcache,
+                &conf,
             )
         };
         let (mut ctx, mut ap_rep) = match accepted {

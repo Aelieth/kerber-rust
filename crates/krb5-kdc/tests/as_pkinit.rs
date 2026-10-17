@@ -619,6 +619,7 @@ fn pkinit_forged_cms_is_rejected() {
     }
 }
 
+/// MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): no PKINIT identity, so the module is not loaded.
 #[test]
 fn pkinit_without_provisioned_ca_is_rejected() {
     let (store, _) = bootstrap_documented().expect("bootstrap");
@@ -630,8 +631,8 @@ fn pkinit_without_provisioned_ca_is_rejected() {
     let req = as_req(cname, TEST_REALM, 403, Some(vec![pa])).unwrap();
     let err = krb5_kdc::issue_as(&store, &req).expect_err("PKINIT off");
     match err {
-        Error::Protocol { code, .. } => assert_eq!(code, err::PREAUTH_FAILED),
-        other => panic!("expected PREAUTH_FAILED, got {other}"),
+        Error::PreauthRequired { .. } => {}
+        other => panic!("expected PREAUTH_REQUIRED, got {other}"),
     }
 }
 

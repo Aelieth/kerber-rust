@@ -23,7 +23,7 @@
 //! - `-w N` is accepted and does nothing: one loop on the main thread serves every request;
 //!   `-R`, `-4` and `-X` are ignored; `-k` is only checked; `-M` must be `K/M`; `-T` must
 //!   be 0. `-m` is ignored when the realm stanza names `key_stash_file`, as in MIT; otherwise
-//!   the KDC stops as MIT's does when it cannot read the master password.
+//!   the master key is read once from the keyboard (`Enter KDC database master key`).
 //!
 //! The KDC serves every client from MIT's net-server loop on its main thread: one thread, with
 //! `[kdcdefaults] kdc_max_dgram_reply_size` and `kdc_tcp_listen_backlog` read as MIT's are.
@@ -41,6 +41,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::net::{TcpListener, UdpSocket};
 use std::path::PathBuf;
@@ -48,8 +52,9 @@ use std::path::PathBuf;
 use krb5_crypto::EncryptionType;
 use krb5_kdc::{
     ListenLimits, OpenFailure, PrincipalStore, Signals, bind_tcp_listeners_with_backlog,
-    bind_udp_listeners, detach, names_relative_database, open_database, serve_daemon, shared_store,
-    write_pid_file,
+    bind_udp_listeners, copy_persist_master, detach, manual_master_key, mkey_log_context,
+    names_relative_database, open_database, open_database_with_key, open_database_with_password,
+    serve_daemon, shared_store, write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
 
@@ -269,31 +274,31 @@ fn main() {
     };
     #[cfg(not(feature = "test-hooks"))]
     let mut store = init_realm(&progname, &realm, &paths, &opts.args);
-    // MIT builds the KDC profile with kdc.conf before krb5.conf, so kdc.conf
-    // wins (`init_os_ctx.c add_kdc_config_file`). Apply krb5.conf [libdefaults]
-    // first as the base, then let kdc.conf override.
-    let krb5_conf = krb5_config::load_krb5_conf();
-    if let Some(c) = krb5_conf.as_ref() {
-        store.set_capaths(c.capaths.clone());
-        store.apply_libdefaults(c);
+    // MIT `main` (`kdc/main.c:992-1016`): the realm is finished and initialized again, so `-n` reads the master key twice.
+    if foreground && !test_realm && manual_master_key(opts.args.manual, &paths) {
+        store = init_realm(&progname, &realm, &paths, &opts.args);
     }
-    if let Some(conf) = &kdc_conf
-        && let Err(e) = store.apply_kdc_conf(conf)
-    {
+    // MIT `main` (`kdc/main.c:917-921`): the realm's profile, kdc.conf before krb5.conf, read once
+    // and applied in one order; a profile that does not load ends krb5kdc.
+    let profile = krb5_config::ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
+        let argv0 = argv.first().map_or("krb5kdc", String::as_str);
+        eprintln!("{argv0}: {} while initializing krb5", e.init_text());
+        std::process::exit(1);
+    });
+    if let Err(e) = store.apply_profile(&profile) {
         eprintln!("{progname}: kdc.conf: {e}");
         std::process::exit(2);
     }
-    // MIT `get_plugin_vtables` (`kdc/kdc_preauth.c:117-163`): built-ins register, then disable and enable_only select which modules load.
-    // MIT `add_kdc_config_file` (`lib/krb5/os/init_os_ctx.c:339-366`): kdc.conf is the first profile file, ahead of krb5.conf.
-    store.apply_kdcpreauth_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
-    // MIT `otp_state_new` (`plugins/preauth/otp/otp_state.c:579-585`): the otp module reads `[otp]` from the same profile, once, when it starts.
-    store.apply_otp(kdc_conf.as_ref(), krb5_conf.as_ref());
-    // MIT `load_kdcpolicy_plugins` (`kdc/policy.c:194-246`): the same profile selects kdcpolicy modules.
-    store.apply_kdcpolicy_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
+    // A relation MIT's programs read and this one reads past is named once in the log.
+    for line in profile
+        .kdc
+        .iter()
+        .flat_map(krb5_config::KdcConf::unsupported_lines)
+    {
+        klog::syslog(Severity::Warning, &line);
+    }
     // MIT `plugins/kdcpolicy/test` has no `.so` here. `enable_only = test` registers it.
     krb5_kdc::register_kdcpolicy_test_if_selected(&store.policy().kdcpolicy);
-    // MIT `load_audit_modules` (`kdc/kdc_audit.c:71-84`): the same profile selects audit modules.
-    store.apply_audit_plugins(kdc_conf.as_ref(), krb5_conf.as_ref());
     #[cfg(feature = "test-hooks")]
     hooks::before_serving(&mut store, &opts.hooks);
     // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): a module whose init fails is logged at error and left out.
@@ -329,6 +334,12 @@ fn main() {
         .as_deref()
         .or_else(|| kdc_conf.as_ref().and_then(|c| c.db_library.as_deref()));
     let memory = lib == Some("memory");
+    let keyboard = manual_master_key(opts.args.manual, &paths);
+    let held_master = if keyboard {
+        copy_persist_master(&store)
+    } else {
+        None
+    };
     let store = if memory {
         shared_store(krb5_kdc::MemoryStore::from_dump(&store))
     } else {
@@ -373,7 +384,39 @@ fn main() {
     // MIT `main` (`kdc/main.c:1016-1016`): the realm is opened again after daemon(), so a
     // relative database or stash name now opens from `/`, or the KDC stops as at its start.
     if !foreground && names_relative_database(&paths, &opts.args.db_args) {
-        let _ = init_realm(&progname, &realm, &paths, &opts.args);
+        if keyboard {
+            let fetching = format!(
+                "while fetching master key {} for realm {realm}",
+                opts.args.mkey_name.as_deref().unwrap_or("K/M")
+            );
+            let Some(key) = &held_master else {
+                cannot_initialize(&progname, &realm, "Cannot read password", &fetching);
+            };
+            if let Err(e) = open_database_with_key(
+                &paths,
+                &opts.args.db_args,
+                opts.args.mkey_name.as_deref().unwrap_or("K/M"),
+                key,
+            ) {
+                let (msg, during) = match e {
+                    OpenFailure::Database(msg) => (
+                        msg,
+                        format!("while initializing database for realm {realm}"),
+                    ),
+                    OpenFailure::MasterKey(msg) => {
+                        let during = mkey_log_context(
+                            &msg,
+                            &realm,
+                            opts.args.mkey_name.as_deref().unwrap_or("K/M"),
+                        );
+                        (msg, during)
+                    }
+                };
+                cannot_initialize(&progname, &realm, &msg, &during);
+            }
+        } else {
+            let _ = init_realm(&progname, &realm, &paths, &opts.args);
+        }
         let mut s = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -451,22 +494,17 @@ fn init_realm(
 ) -> PrincipalStore {
     let opening = format!("while initializing database for realm {realm}");
     let mkey_name = args.mkey_name.as_deref().unwrap_or("K/M");
-    let fetching = format!("while fetching master key {mkey_name} for realm {realm}");
-    // MIT `init_realm` (`kdc/main.c:285-290`): `-m` counts only when kdc.conf names no stash.
-    #[cfg(feature = "test-hooks")]
-    let stash_env = std::env::var_os("KRB5_KDC_STASH").is_some();
-    #[cfg(not(feature = "test-hooks"))]
-    let stash_env = false;
-    let stash_relation = paths
-        .conf
-        .as_ref()
-        .is_some_and(|c| c.key_stash_file.is_some())
-        || stash_env;
-    let keyboard = args.manual && !stash_relation;
-    match open_database(paths, &args.db_args, mkey_name) {
+    let opened = if manual_master_key(args.manual, paths) {
+        open_database_with_password(paths, &args.db_args, mkey_name, realm)
+    } else {
+        open_database(paths, &args.db_args, mkey_name)
+    };
+    match opened {
         Err(OpenFailure::Database(e)) => cannot_initialize(progname, realm, &e, &opening),
-        _ if keyboard => cannot_initialize(progname, realm, "Cannot read password", &fetching),
-        Err(OpenFailure::MasterKey(e)) => cannot_initialize(progname, realm, &e, &fetching),
+        Err(OpenFailure::MasterKey(e)) => {
+            let during = mkey_log_context(&e, realm, mkey_name);
+            cannot_initialize(progname, realm, &e, &during)
+        }
         Ok(store) => store,
     }
 }

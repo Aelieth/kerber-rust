@@ -727,6 +727,7 @@ fn resolve_failure_lines(entry: &ListenAddr, error: &str) -> [String; 2] {
 /// Only as root: `io::ErrorKind::NotFound` when the target user does not exist, and
 /// `io::ErrorKind::Other` when the user lookup, `setgid` or `setuid` fails.
 #[cfg(feature = "test-hooks")]
+#[allow(clippy::disallowed_methods, reason = "a test-hooks build's override")]
 pub fn drop_privileges() -> io::Result<bool> {
     drop_privileges_to(
         std::env::var("KRB5_KDC_USER")

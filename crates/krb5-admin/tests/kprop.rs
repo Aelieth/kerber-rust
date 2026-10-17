@@ -6,7 +6,7 @@ mod common;
 use krb5_admin::*;
 use krb5_kdc::testrealm::bootstrap_documented;
 
-use krb5_protocol::ReplayCache;
+use krb5_protocol::{AcceptorConfig, ReplayCache};
 use krb5_types::PrincipalName;
 
 #[test]
@@ -236,6 +236,7 @@ fn kprop_mit_wire_sendauth_replica_issues_as() {
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
                 iprop: None,
+                conf: &AcceptorConfig::default(),
             },
             &ReplayCache::new(),
         )
@@ -346,6 +347,7 @@ fn kpropd_rejects_client_not_on_allowlist() {
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
                 iprop: None,
+                conf: &AcceptorConfig::default(),
             },
             &ReplayCache::new(),
         )
@@ -441,6 +443,7 @@ fn kpropd_rejects_when_acl_unset() {
                 stash: &stash,
                 allowed_clients: None,
                 iprop: None,
+                conf: &AcceptorConfig::default(),
             },
             &ReplayCache::new(),
         )
@@ -570,6 +573,7 @@ fn kprop_exact_acl(
                 stash: &stash,
                 allowed_clients: Some(allowed.as_slice()),
                 iprop: None,
+                conf: &AcceptorConfig::default(),
             },
             &ReplayCache::new(),
         )

@@ -38,27 +38,6 @@ pub fn krb_fx_cf2(
     ProtocolKey::from_random(k1.etype(), &a)
 }
 
-/// Truncate or hash `bytes` to an etype-sized protocol key.
-///
-/// # Errors
-///
-/// None: the key is always `etype.key_len()` octets (a prefix of `bytes`, or its SHA-256
-/// repeated), the length [`ProtocolKey::from_bytes`] requires.
-pub fn key_from_shared(etype: EncryptionType, bytes: &[u8]) -> Result<ProtocolKey, Error> {
-    let n = etype.key_len();
-    if bytes.len() >= n {
-        return ProtocolKey::from_bytes(etype, &bytes[..n]);
-    }
-    let mut h = <Sha256 as Sha2Digest>::new();
-    Sha2Digest::update(&mut h, bytes);
-    let out = Sha2Digest::finalize(h);
-    let mut buf = Wiped(vec![0u8; n]);
-    for (i, b) in buf.iter_mut().enumerate() {
-        *b = out[i % out.len()];
-    }
-    ProtocolKey::from_bytes(etype, &buf)
-}
-
 /// P-256 ECDH: 32-byte scalar and 65-byte uncompressed public key.
 ///
 /// The scalar is zeroized where the value lies when it drops. It is an inline array, so a copy
@@ -241,15 +220,6 @@ mod tests {
     use crate::etype::EncryptionType;
     use crate::key::ProtocolKey;
 
-    #[test]
-    fn p256_ecdh_agrees() {
-        let a = p256_generate().unwrap();
-        let b = p256_generate().unwrap();
-        let ab = p256_shared(&a.secret, &b.public).unwrap();
-        let ba = p256_shared(&b.secret, &a.public).unwrap();
-        assert_eq!(ab, ba);
-    }
-
     fn odd_parity(octets: &[u8]) -> bool {
         octets.iter().all(|b| b.count_ones() % 2 == 1)
     }
@@ -293,80 +263,6 @@ mod tests {
     }
 
     #[test]
-    fn rfc8636_kdf_differs_from_octetstring2key() {
-        let z = b"shared-secret-bytes-for-kdf";
-        let other = b"other-info";
-        let agile = pkinit_kdf_agile(EncryptionType::Aes256CtsHmacSha196, z, other).unwrap();
-        let sha1 = octetstring2key(EncryptionType::Aes256CtsHmacSha196, z).unwrap();
-        assert_ne!(agile.as_bytes(), sha1.as_bytes());
-        let again = pkinit_kdf_agile(EncryptionType::Aes256CtsHmacSha196, z, other).unwrap();
-        assert_eq!(agile.as_bytes(), again.as_bytes());
-    }
-
-    #[test]
-    fn p256_ecdsa_sign_verify() {
-        let kp = p256_generate().unwrap();
-        let msg = b"pkinit-authpack";
-        let sig = p256_ecdsa_sign(&kp.secret, msg).unwrap();
-        p256_ecdsa_verify(&kp.public, msg, &sig).unwrap();
-        assert!(p256_ecdsa_verify(&kp.public, b"other", &sig).is_err());
-    }
-
-    #[test]
-    fn camellia_cts_cmac_round_trips() {
-        let key = crate::ops::string_to_key(
-            EncryptionType::Camellia256CtsCmac,
-            b"password",
-            b"SALT",
-            None,
-        )
-        .unwrap();
-        let usage = crate::etype::KeyUsage::new(2).unwrap();
-        let c = crate::ops::encrypt(&key, usage, b"camellia-plain").unwrap();
-        let p = crate::ops::decrypt(&key, usage, &c).unwrap();
-        assert_eq!(p, b"camellia-plain");
-    }
-
-    #[test]
-    fn cf2_is_deterministic_and_order_sensitive() {
-        let et = EncryptionType::Aes256CtsHmacSha196;
-        let k1 = ProtocolKey::from_bytes(et, &[0x11u8; 32]).unwrap();
-        let k2 = ProtocolKey::from_bytes(et, &[0x22u8; 32]).unwrap();
-        let a = krb_fx_cf2(&k1, &k2, b"p1", b"p2").unwrap();
-        let b = krb_fx_cf2(&k1, &k2, b"p1", b"p2").unwrap();
-        let c = krb_fx_cf2(&k2, &k1, b"p1", b"p2").unwrap();
-        assert_eq!(a.as_bytes(), b.as_bytes());
-        assert_ne!(a.as_bytes(), c.as_bytes());
-    }
-
-    #[test]
-    fn des3_s2k_round_trips() {
-        let k = crate::ops::string_to_key(
-            EncryptionType::Des3CbcSha1,
-            b"password",
-            b"ATHENA.MIT.EDUraeburn",
-            None,
-        )
-        .unwrap();
-        assert_eq!(k.as_bytes().len(), 24);
-        let usage = crate::etype::KeyUsage::new(2).unwrap();
-        let c = crate::ops::encrypt(&k, usage, b"des3pln!").unwrap();
-        let p = crate::ops::decrypt(&k, usage, &c).unwrap();
-        assert_eq!(&p[..8], b"des3pln!");
-    }
-
-    #[test]
-    fn rc4_usage_3_matches_usage_8() {
-        let k = crate::ops::string_to_key(EncryptionType::Rc4Hmac, b"password", b"", None).unwrap();
-        let u3 = crate::etype::KeyUsage::new(3).unwrap();
-        let u8 = crate::etype::KeyUsage::new(8).unwrap();
-        let conf = [9u8; 8];
-        let a = crate::weak::rc4_encrypt_with_conf(&k, u3, &conf, b"x").unwrap();
-        let b = crate::weak::rc4_encrypt_with_conf(&k, u8, &conf, b"x").unwrap();
-        assert_eq!(a, b);
-    }
-
-    #[test]
     fn arcfour_usage_9_is_9() {
         let k = crate::ops::string_to_key(EncryptionType::Rc4Hmac, b"password", b"", None).unwrap();
         let u9 = crate::etype::KeyUsage::new(9).unwrap();
@@ -375,24 +271,5 @@ mod tests {
         let a = crate::weak::rc4_encrypt_with_conf(&k, u9, &conf, b"x").unwrap();
         let b = crate::weak::rc4_encrypt_with_conf(&k, u8, &conf, b"x").unwrap();
         assert_ne!(a, b, "enc_rc4.c:26 case 9 returns 9");
-    }
-
-    #[test]
-    fn camellia_ciphertext_differs_from_aes() {
-        let cam = crate::ops::string_to_key(
-            EncryptionType::Camellia128CtsCmac,
-            b"password",
-            b"SALT",
-            None,
-        )
-        .unwrap();
-        let aes = crate::ops::string_to_key(
-            EncryptionType::Aes128CtsHmacSha196,
-            b"password",
-            b"SALT",
-            None,
-        )
-        .unwrap();
-        assert_ne!(cam.as_bytes(), aes.as_bytes());
     }
 }

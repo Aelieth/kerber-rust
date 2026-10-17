@@ -142,8 +142,7 @@ impl Drop for DerivedKeys {
 ///
 /// # Errors
 ///
-/// [`Error::InvalidKeyLength`] when `key` is des3-cbc-sha1, whose 24-octet key the AES-based
-/// RFC 3961 derivation refuses.
+/// [`Error::InvalidKeyLength`] when a block-cipher step rejects the key.
 pub fn derive_keys(
     key: &crate::key::ProtocolKey,
     usage: crate::etype::KeyUsage,
@@ -183,6 +182,12 @@ pub(crate) fn derive_usage_keys(
         let kc = crate::weak::dk_camellia(base, &usage.derivation_constant(0x99))?;
         let ke = crate::weak::dk_camellia(base, &usage.derivation_constant(0xAA))?;
         let ki = crate::weak::dk_camellia(base, &usage.derivation_constant(0x55))?;
+        Ok(UsageKeys { kc, ke, ki })
+    } else if etype == EncryptionType::Des3CbcSha1 {
+        // MIT `krb5int_derive_key` (`lib/crypto/krb/derive.c:135-174`): des3 DK is random-to-key of the DR.
+        let kc = crate::weak::dk_des3(base, &usage.derivation_constant(0x99))?;
+        let ke = crate::weak::dk_des3(base, &usage.derivation_constant(0xAA))?;
+        let ki = crate::weak::dk_des3(base, &usage.derivation_constant(0x55))?;
         Ok(UsageKeys { kc, ke, ki })
     } else {
         let kc = dk_rfc3961(base, &usage.derivation_constant(0x99))?;

@@ -94,8 +94,8 @@ mod wipe;
 pub(crate) mod cts;
 
 pub use cf2::{
-    P256Keypair, key_from_shared, krb_fx_cf2, octetstring2key, p256_ecdsa_sign, p256_ecdsa_verify,
-    p256_generate, p256_shared, pkinit_kdf_agile,
+    P256Keypair, krb_fx_cf2, octetstring2key, p256_ecdsa_sign, p256_ecdsa_verify, p256_generate,
+    p256_shared, pkinit_kdf_agile,
 };
 pub use derive::{DerivedKeys, derive_keys};
 pub use error::Error;

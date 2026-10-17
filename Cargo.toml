@@ -98,6 +98,9 @@ unimplemented = "deny"
 # krb5-types alone), so this lint cannot be denied without an allow on each
 # derived type.
 no_effect_underscore_binding = "allow"
+# clippy.toml names the infallible constructors. Stays allow: static callers
+# still use them. consts is the allow module for a later raise.
+disallowed_methods = "allow"
 # Pedantic noise that is not useful in this tree: RFC vocabulary in
 # rustdoc, MIT functions ported whole, MIT flag structs mirrored 1:1, and
 # Kerberos names (cname/crealm, KAT single-letter vars).

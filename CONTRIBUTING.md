@@ -36,10 +36,7 @@ A good PR has:
   interop against the MIT 1.22.2 harness over re-implemented oracles.
   When automation is impractical, document thorough manual testing with
   logs (and traces where relevant).
-- For protocol behaviour, a content-asserting gate that drives a real
-  implementation (MIT 1.22.2 first, then Samba or Heimdal). A feature is
-  done only when such a gate proves it; a Rust-vs-Rust round-trip is never
-  proof.
+- For protocol behaviour, a feature is done only when it works in production against MIT 1.22.2 on the lab VMs, MIT first, and against the real AD where it reaches it; a Rust-vs-Rust round-trip is never proof.
 - For a change to behaviour MIT also has, its row in the parity ledger
   (`docs/parity/`: MIT cite, check, verdict, proof), added or updated in
   the same PR.
@@ -63,6 +60,11 @@ and protocol subtleties. Do not restate the obvious, and do not raise the
 comment density: a sentence the next two lines already say is deleted.
 Public APIs need rustdoc. Four rules give the form; the comment budget moves
 from process tags into invariants that are otherwise unstated.
+
+A MIT citation is one line naming what the code ports and pointing at the
+docs, for example `// MIT krb5_db_def_rename_principal; see docs/parity/a1-store.md`.
+Comments are at most 3% of the code, and doc comments count. Tests are at
+most 10% of the code, and plan-12 adds none.
 
 **R1.** A MIT anchor is one line, in one form:
 ``MIT `<symbol>` (`<path>:<a>-<b>`): <what the port guarantees>``.
@@ -104,9 +106,9 @@ true. See [docs/testing.md](docs/testing.md).
 ## Local checks
 
 The `test` job in CI is `make safety` (fmt, clippy, nextest,
-`ci-policy.py`) plus CI-only extras (nextest `--no-run`, junit, the
-gate ERR-trap self-test). `make doc` and `make shellcheck` are the
-sibling `doc` and `shellcheck` jobs. Do not run `cargo test --workspace`
+`ci-policy.py`) plus CI-only extras (nextest `--no-run`, junit).
+`make doc` and `make shellcheck` are the sibling `doc` and
+`shellcheck` jobs. Do not run `cargo test --workspace`
 — CI forbids it on per-push; nextest is the runner. Linking needs `lld`
 (`ld.lld` on `$PATH`; see
 `.cargo/config.toml`). The gates need Docker.
@@ -115,18 +117,13 @@ sibling `doc` and `shellcheck` jobs. Do not run `cargo test --workspace`
 make safety
 ```
 
-Per-push CI is three tiers (`docs/testing.md`); job walls live in
-`ci-budget.toml`. `make budget` prints medians and `--check-budget`.
+The six per-push jobs are in [docs/testing.md](docs/testing.md).
+Job walls live in `ci-budget.toml`.
 
 Live MIT oracles (when Docker is available): `make harness` then
 `make gate GATE=client-gate`, `make gate GATE=kdc-gate`,
 `make gate GATE=bidirectional-gate`. `make stop-harness` tears the
-container down. Comparison snapshot / full gate checkpoint:
-
-```bash
-make snapshot OUT=working/logs/<archive>/new QUALITY=1
-make checkpoint OUT=working/logs/<archive>/checkpoint
-```
+container down.
 
 Gate scripts write host files only under `KERBER_SCRATCH` (their default
 is `/tmp/…`; point it at a directory you own). A live MIT settle runs
@@ -134,10 +131,6 @@ through `scripts/lib/settle.sh <name> -- <command…>` so its output is
 stamped ([docs/testing.md](docs/testing.md)). `working/` is gitignored:
 plans and evidence live there, named `<kind>-<topic>-<MMDD-HHMM>.md`, and
 no tracked file cites them.
-
-Both run only where the host `default_realm` is the `TESTLABBY.LOCAL` lab
-stub, never on a machine whose `/etc/krb5.conf` names a real realm
-(`KERBER_ALLOW_HOST_REALM=1` overrides and is recorded in the stamp).
 
 Never add C FFI. `unsafe` is forbidden unless a future exception is
 audited, minimized, and documented in the PR.

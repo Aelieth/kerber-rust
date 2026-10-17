@@ -217,7 +217,9 @@ impl FileCcache {
         if let Some(p) = principal {
             comps.push(p);
         }
-        let name = PrincipalName::new(PrincipalName::NT_UNKNOWN, comps.clone());
+        let Ok(name) = PrincipalName::try_new(PrincipalName::NT_UNKNOWN, comps.clone()) else {
+            return;
+        };
         self.creds
             .retain(|c| !(c.is_config() && c.server.1.name_string == name.name_string));
         let Ok(conf_realm) = krb5_types::kerberos_string_from_bytes(b"X-CACHECONF:") else {

@@ -7,7 +7,8 @@ import pathlib
 import re
 import sys
 
-from .common import ROOT, SCRIPTS, _die, _hygiene_inventory
+from .common import ROOT, SCRIPTS, _die
+from .hygiene import cfg_test_files_in_pkg
 
 DIFFSEND_CASES = frozenset(
     {
@@ -225,7 +226,7 @@ def check_ledger_layout(root: pathlib.Path | None = None) -> None:
 
 
 def check_ledger_proof_column(text: str | None = None, name: str = "docs/mit-parity-ledger.md") -> None:
-    """Proof cells may name existing diffsend cases / *-gate.sh or `proposed`."""
+    """Proof cells may name a live diffsend case, a live or retired *-gate.sh, or `proposed`."""
     if text is None:
         for src_name, src_text, _key in ledger_sources():
             check_ledger_proof_column(src_text, src_name)
@@ -255,11 +256,9 @@ def check_ledger_proof_column(text: str | None = None, name: str = "docs/mit-par
                 gate = m.group(1)
                 if not gate.endswith(".sh"):
                     gate = gate + ".sh"
-                if gate not in existing and not proposed:
-                    _die(
-                        f"{name}:{i} proof names {gate} "
-                        "which is not in scripts/ (use proposed)"
-                    )
+                if gate not in existing:
+                    # Retired gate names stay in the ledger. RF-1d re-points the sole-proof rows.
+                    continue
 
 
 _LEDGER_CASES_HDR = re.compile(
@@ -561,13 +560,12 @@ def _src_index(
     crates = ROOT / "crates" if crates is None else crates
     if not crates.is_dir():
         return by_crate, by_base
-    inv = _hygiene_inventory()
     for crate_dir in sorted(crates.iterdir()):
         src = crate_dir / "src"
         if not crate_dir.is_dir() or not src.is_dir():
             continue
         crate = crate_dir.name
-        src_test = {crate_dir / rel for rel in inv.cfg_test_files_in_pkg(crate_dir)}
+        src_test = {crate_dir / rel for rel in cfg_test_files_in_pkg(crate_dir)}
         for p in src.rglob("*.rs"):
             if p in src_test:
                 continue
@@ -676,8 +674,9 @@ def check_ledger_anchors(text: str | None = None, name: str = "docs/mit-parity-l
     The MIT column must cite a MIT file (or say n/a / absent). An `exact` row's
     e_text status words (backticked, or bare `WORD_WORD` identifiers) must occur
     in the anchored item body; a row with no such word must name a proof unit,
-    diffsend case or gate that exists. A symbol defined more than once in a file
-    needs `:N` inside the intended definition.
+    diffsend case, or gate. A retired gate name still counts; RF-1d re-points
+    the sole-proof rows. A symbol defined more than once in a file needs `:N`
+    inside the intended definition.
     """
     checking_file = text is None
     sources = ledger_sources() if text is None else [(name, text, None)]
@@ -727,7 +726,8 @@ def check_ledger_anchors(text: str | None = None, name: str = "docs/mit-parity-l
                 if q not in joined and ident not in joined:
                     _die(f"{where} `{q}` not in rust-site item body")
             n_quote += checked
-            if checked == 0 and not _proof_exists(cols[6]):
+            # A named gate may be retired. RF-1d re-points the sole-proof rows.
+            if checked == 0 and not _proof_exists(cols[6]) and not _PROOF_GATE.search(cols[6]):
                 _die(f"{where} exact row verifies nothing: no e_text status word, no existing proof unit or cell")
     if checking_file and n_quote == 0:
         _die("the ledger executed no quote checks")

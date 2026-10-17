@@ -18,8 +18,11 @@
 //! - `-W`, `-p`, `-F`, `-K` and `-k` are accepted and unused: this kadmind starts no
 //!   `kdb5_util` or `kprop` for an iprop full resync, whose dump is sent by hand:
 //!   `kdb5_util dump -i1`, then `kprop -f`.
-//!   `-proponly` stops kadmind as MIT's does when `iprop_enable` is not set, and also when it is:
-//!   there is no separate iprop listener. `-m` stops it: the master key comes from the stash.
+//!   `-proponly` is refused. With `iprop_enable` unset the text is MIT's (`-proponly can only be
+//!   used when iprop_enable is true`); with it set, iprop is served on the kadm5 port
+//!   (`-proponly is not supported: iprop is served on the kadm5 port`). `-m` reads the master
+//!   key from the keyboard, including when kdc.conf names a `key_stash_file`. In the foreground
+//!   it is read twice.
 //!
 //! With `iprop_enable` set for the realm ([`krb5_config::IpropParams`], which also needs
 //! `iprop_port`), kadmind maps the update log as the primary's, logs every principal put and
@@ -42,6 +45,10 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
+#![allow(
+    clippy::disallowed_methods,
+    reason = "a program reads its profile and environment when it starts"
+)]
 
 use std::io::Write as _;
 use std::net::{TcpListener, UdpSocket};
@@ -54,10 +61,13 @@ use krb5_kdc::net_server::Sockets;
 use krb5_kdc::principals::kadmin_changepw;
 use krb5_kdc::{
     Acl, DEFAULT_TCP_LISTEN_BACKLOG, Error, IpropRole, OpenFailure, PrincipalStore, Signals,
-    acl_for_store, bind_rpc_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners, detach,
-    names_relative_database, open_database, shared_dump as shared_store, write_pid_file,
+    acl_for_store, bind_rpc_listeners, bind_tcp_listeners_with_backlog, bind_udp_listeners,
+    copy_persist_master, detach, kadmind_mkey_from_kbd, names_relative_database, open_database,
+    open_database_with_key, open_database_with_password, shared_dump as shared_store,
+    write_pid_file,
 };
 use krb5_log::klog::{self, JsonLog, Severity, os_error_text};
+use krb5_protocol::AcceptorConfig;
 
 /// MIT `main` (`kadmin/server/ovsec_kadmd.c:362-432`): kadmind's options, each matched by
 /// spelling; a test-hooks build adds the gates' `--test-realm`.
@@ -187,17 +197,7 @@ fn main() {
             ))
             .try_init();
     }
-    if args.flag("-m") {
-        fail_to_start(
-            &progname,
-            None,
-            "Reading the master key from the keyboard (-m) is not supported",
-        );
-    }
-
-    // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf.
-    krb5_gss::use_kdc_context();
-    let (mut store, paths) = open_realm(&progname, &args, test_realm);
+    let (mut store, paths) = open_realm(&progname, &args, test_realm, nofork);
     let realm = store.realm().to_owned();
     let kdc_conf = paths.conf.as_ref();
     // MIT `kadm5_init` (`lib/kadm5/srv/server_init.c:222-228`): with iprop enabled and no `iprop_port`, kadmind does not start.
@@ -216,18 +216,22 @@ fn main() {
     if let Err(e) = store.init_pwqual(kdc_conf) {
         fail_to_start(&progname, Some(&os_error_text(&e)), "initializing");
     }
-    if let Some(conf) = kdc_conf
-        && let Err(e) = store.apply_kdc_conf(conf)
-    {
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:446-457`): `kadm5_init` and `kadm5_get_config_params` read the realm's profile, kdc.conf before krb5.conf; here it is read once and applied in the KDC's order.
+    let profile = krb5_config::ProfileSet::from_env_files(&paths)
+        .unwrap_or_else(|e| fail_to_start(&progname, Some(&e.init_text()), "initializing context"));
+    if let Err(e) = store.apply_profile(&profile) {
         fail_to_start(&progname, Some(&e.to_string()), "getting config parameters");
     }
-    let krb5_conf = krb5_config::load_krb5_conf();
-    if let Some(c) = &krb5_conf {
-        store.set_capaths(c.capaths.clone());
-        store.apply_libdefaults(c);
+    // A relation MIT's programs read and this one reads past is named once in the log.
+    for line in profile
+        .kdc
+        .iter()
+        .flat_map(krb5_config::KdcConf::unsupported_lines)
+    {
+        klog::syslog(Severity::Warning, &line);
     }
-    store.apply_pwqual_plugins(kdc_conf, krb5_conf.as_ref());
-    store.apply_kadm5_hook_plugins(kdc_conf, krb5_conf.as_ref());
+    // MIT `kadm5_init_krb5_context` (`lib/kadm5/srv/server_init.c:334-345`): kadmind's GSS contexts, as its own, read the KDC profile, kdc.conf ahead of krb5.conf; kpasswd's `krb5_rd_req` too.
+    let conf = AcceptorConfig::from_profile(&profile);
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:459-462`): the propagation-only mode needs
     // iprop_enable; with it, this port has no separate iprop listener to run alone.
     if args.flag("-proponly") {
@@ -239,7 +243,7 @@ fn main() {
         fail_to_start(&progname, None, why);
     }
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:476-477`): `svcauth_gssapi_set_names` acquires a credential for `kadmin/admin` and for `kadmin/changepw`, each of which the KDB keytab must have a key for.
-    if !acceptor_names_served(&store) {
+    if !acceptor_names_served(&store, &conf) {
         fail_to_start(&progname, None, "Cannot set GSSAPI authentication names");
     }
     let changepw = kadmin_changepw();
@@ -249,6 +253,12 @@ fn main() {
         .map(|k| k.key.clone());
     #[cfg(feature = "test-hooks")]
     let persist = store.persist_paths.clone();
+    let keyboard = kadmind_mkey_from_kbd(args.flag("-m"));
+    let held_master = if keyboard {
+        copy_persist_master(&store)
+    } else {
+        None
+    };
     let shared = shared_store(store);
     let kadmind_port = args
         .value("-port")
@@ -263,7 +273,7 @@ fn main() {
         test_realm,
         pinned,
         kdc_conf,
-        krb5_admin_server(krb5_conf.as_ref(), &realm).as_deref(),
+        krb5_admin_server(Some(&profile.krb5), &realm).as_deref(),
         kadmind_port,
     );
     klog::syslog(
@@ -301,7 +311,15 @@ fn main() {
     // its start.
     let db_args: Vec<String> = args.values("-x").into_iter().map(str::to_owned).collect();
     if !nofork && names_relative_database(&paths, &db_args) {
-        if let Err(e) = open_database(&paths, &db_args, "K/M") {
+        let reopened = if keyboard {
+            match &held_master {
+                Some(key) => open_database_with_key(&paths, &db_args, "K/M", key).map(|_| ()),
+                None => Err(OpenFailure::MasterKey("Cannot read password".into())),
+            }
+        } else {
+            open_database(&paths, &db_args, "K/M").map(|_| ())
+        };
+        if let Err(e) = reopened {
             let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
             fail_to_start(&progname, Some(&msg), "initializing");
         }
@@ -347,9 +365,10 @@ fn main() {
         tcp,
         rpc: &listeners,
     };
-    let mut kadmind = Kadmind::new(shared, acl, cpw_key).report_unhandled(Arc::new(|message| {
-        let _ = writeln!(std::io::stderr(), "kadm5: {message}");
-    }));
+    let mut kadmind =
+        Kadmind::new(shared, acl, cpw_key, conf).report_unhandled(Arc::new(|message| {
+            let _ = writeln!(std::io::stderr(), "kadm5: {message}");
+        }));
     // MIT `main` (`kadmin/server/ovsec_kadmd.c:538-540`): "starting", and in the foreground
     // "<prog>: starting..." on standard error.
     klog::syslog(Severity::Info, "starting");
@@ -381,6 +400,7 @@ fn open_realm(
     progname: &str,
     args: &MitArgs,
     test_realm: bool,
+    nofork: bool,
 ) -> (PrincipalStore, krb5_config::KdcPaths) {
     #[cfg(feature = "test-hooks")]
     let realm = if test_realm {
@@ -401,10 +421,25 @@ fn open_realm(
     }
     let _ = test_realm;
     let db_args: Vec<String> = args.values("-x").into_iter().map(str::to_owned).collect();
-    let store = open_database(&paths, &db_args, "K/M").unwrap_or_else(|e| {
+    let realm_name = paths.realm.clone().unwrap_or_default();
+    let keyboard = kadmind_mkey_from_kbd(args.flag("-m"));
+    let mut store = if keyboard {
+        open_database_with_password(&paths, &db_args, "K/M", &realm_name)
+    } else {
+        open_database(&paths, &db_args, "K/M")
+    }
+    .unwrap_or_else(|e| {
         let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
         fail_to_start(progname, Some(&msg), "initializing")
     });
+    // MIT `main` (`kadmin/server/ovsec_kadmd.c:502-519`): the handle is destroyed and `kadm5_init` runs again, so `-nofork` reads the master key twice.
+    if nofork && keyboard {
+        store =
+            open_database_with_password(&paths, &db_args, "K/M", &realm_name).unwrap_or_else(|e| {
+                let (OpenFailure::Database(msg) | OpenFailure::MasterKey(msg)) = e;
+                fail_to_start(progname, Some(&msg), "initializing")
+            });
+    }
     (store, paths)
 }
 
