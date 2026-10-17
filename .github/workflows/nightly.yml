@@ -198,12 +198,14 @@ jobs:
       - name: "sha2-gate"
         if: success() || failure()
         run: ./scripts/sha2-gate.sh
+      - name: "client-differential-flows-gate"
+        if: success() || failure()
+        env:
+          KERBER_CLIENT_DIFF_KEEP: "1"
+        run: ./scripts/client-differential-flows-gate.sh
       - name: "client-differential-cli-gate"
         if: success() || failure()
         run: ./scripts/client-differential-cli-gate.sh
-      - name: "client-differential-flows-gate"
-        if: success() || failure()
-        run: ./scripts/client-differential-flows-gate.sh
       - name: "config-include-gate"
         if: success() || failure()
         run: ./scripts/config-include-gate.sh
