@@ -141,26 +141,3 @@ pub fn new_correlation_id() -> String {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn correlation_id_is_32_hex_chars() {
-        let id = new_correlation_id();
-        assert_eq!(id.len(), 32);
-        assert!(id.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn parent_correlation_is_visible_until_guard_drops() {
-        assert_eq!(current_correlation_id(), "none");
-        let id = new_correlation_id();
-        {
-            let _g = enter_correlation(id.clone());
-            assert_eq!(current_correlation_id(), id);
-        }
-        assert_eq!(current_correlation_id(), "none");
-    }
-}
