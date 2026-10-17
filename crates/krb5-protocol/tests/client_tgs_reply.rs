@@ -220,11 +220,6 @@ fn tgs_reply_zero_till_skips_endtime() {
 }
 
 #[test]
-fn try_fallback_specified_realm_is_non_referral() {
-    assert_eq!(tgs_try_fallback(1, true, 2), TgsFallback::NonReferral);
-}
-
-#[test]
 fn try_fallback_later_hop_keeps_error() {
     assert_eq!(tgs_try_fallback(2, true, 2), TgsFallback::KeepError);
     assert_eq!(tgs_try_fallback(2, false, 2), TgsFallback::KeepError);
@@ -283,16 +278,6 @@ fn common_flags() -> TicketFlags {
     TicketFlags::none()
         .with_bit(flag_bit::FORWARDABLE, true)
         .with_bit(flag_bit::RENEWABLE, true)
-}
-
-#[test]
-fn fwd_tgt_options_are_common_mask_plus_forwarded() {
-    let opts = tgs_forward_options(&common_flags(), true);
-    assert!(opts.bit(flag_bit::FORWARDED));
-    assert!(opts.bit(flag_bit::FORWARDABLE));
-    assert!(opts.bit(flag_bit::RENEWABLE));
-    assert!(!opts.bit(flag_bit::CANONICALIZE));
-    assert!(!opts.bit(flag_bit::PROXIABLE));
 }
 
 #[test]

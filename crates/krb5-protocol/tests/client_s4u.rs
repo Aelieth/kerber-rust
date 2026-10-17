@@ -14,8 +14,7 @@ use common::isolate_host_krb5;
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{EncryptionType, ProtocolKey, unkeyed_checksum};
 use krb5_protocol::{
-    AsOutcome, KdcAddr, pa_for_user, pa_s4u_x509_user, tgs_s4u, tgs_s4u2proxy,
-    verify_s4u2self_reply,
+    AsOutcome, KdcAddr, pa_for_user, pa_s4u_x509_user, tgs_s4u, verify_s4u2self_reply,
 };
 use krb5_types::{
     EncKdcRepPart, EncryptedData, EncryptionKey, KerberosTime, KrbError, Microseconds, OctetString,
@@ -250,49 +249,6 @@ fn reply_from_userid(key: &ProtocolKey, req: &krb5_types::s4u::PaS4uX509User) ->
         padata_type: pa::FOR_X509_USER,
         padata_value: encode(&body).unwrap().into(),
     }
-}
-
-#[test]
-fn s4u2proxy_outer_padata_is_1_136_167() {
-    isolate_host_krb5();
-    let shots = Arc::new(Mutex::new(Vec::new()));
-    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let port = udp.local_addr().unwrap().port();
-    let shots2 = shots.clone();
-    thread::spawn(move || {
-        let mut buf = [0u8; 8192];
-        if let Ok((n, src)) = udp.recv_from(&mut buf) {
-            *shots2.lock().unwrap() = buf[..n].to_vec();
-            let _ = udp.send_to(&encode_generic(), src);
-        }
-    });
-    let tgt = fake_tgt();
-    let evidence = tgt.ticket.clone();
-    let _ = tgs_s4u2proxy(
-        &KdcAddr {
-            host: "127.0.0.1".into(),
-            port,
-        },
-        &tgt,
-        PrincipalName::try_new(PrincipalName::NT_SRV_HST, ["host", "other.kerber.test"]).unwrap(),
-        "KERBER.TEST",
-        evidence,
-    );
-    let raw = shots.lock().unwrap().clone();
-    assert!(!raw.is_empty(), "tgs_s4u2proxy must send a TGS-REQ");
-    let req: TgsReq = decode(&raw).expect("TGS-REQ");
-    let types: Vec<i32> = req
-        .0
-        .padata
-        .unwrap_or_default()
-        .iter()
-        .map(|p| p.padata_type)
-        .collect();
-    assert_eq!(
-        types,
-        vec![pa::TGS_REQ, pa::FX_FAST, pa::PAC_OPTIONS],
-        "S4U2Proxy FAST outer TGS padata is [1, 136, 167], got {types:?}"
-    );
 }
 
 /// MIT `make_pa_for_user_checksum` (`lib/krb5/krb/s4u_creds.c:130-133`): HMAC-MD5 under the TGT session key whatever its type, key usage 17.

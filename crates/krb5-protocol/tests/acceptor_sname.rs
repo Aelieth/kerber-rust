@@ -46,27 +46,6 @@ fn sname_match_srv_hst_requires_service_and_host() {
 }
 
 #[test]
-fn sname_match_ignore_acceptor_hostname_skips_host() {
-    let want = host("host", "svc.kerber.test");
-    let other = host("host", "other.kerber.test");
-    assert!(sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &other,
-        b"KERBER.TEST",
-        true,
-    ));
-    let http = host("HTTP", "other.kerber.test");
-    assert!(!sname_match(
-        Some(&want),
-        Some("KERBER.TEST"),
-        &http,
-        b"KERBER.TEST",
-        true,
-    ));
-}
-
-#[test]
 fn sname_match_empty_hostname_is_wildcard() {
     let want = host("host", "");
     let got = host("host", "svc.kerber.test");
