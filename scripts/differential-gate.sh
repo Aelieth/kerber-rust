@@ -300,8 +300,8 @@ fi
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133.
-DIFFSEND_RATCHET=133
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134.
+DIFFSEND_RATCHET=134
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -398,6 +398,7 @@ grep -q '"case":"tgs-server-disallow-postdated","outcome":"ok","error_code":10,"
 grep -q '"case":"s4u2self-client-expired","outcome":"ok","error_code":1,"e_text":"CLIENT EXPIRED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-client-expired not code 1 e_text CLIENT EXPIRED on both legs"
 grep -q '"case":"s4u2self-client-locked-out","outcome":"ok","error_code":18,"e_text":"CLIENT LOCKED OUT","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "s4u2self-client-locked-out not code 18 e_text CLIENT LOCKED OUT on both legs"
 grep -q '"case":"tgs-fast-unkeyed-bad-checksum","outcome":"ok","error_code":41,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-unkeyed-bad-checksum not code 41 e_text FIND_FAST on both legs"
+grep -q '"case":"tgs-fast-explicit-armor","outcome":"ok","error_code":24,"e_text":"FIND_FAST","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-fast-explicit-armor not code 24 e_text FIND_FAST on both legs"
 grep -q '"case":"tgs-validate-invalid-non-renewable","outcome":"ok","error_code":13,"e_text":"TICKET NOT RENEWABLE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-validate-invalid-non-renewable not code 13 e_text TICKET NOT RENEWABLE on both legs"
 grep -q '"case":"tgs-postdated-is-invalid","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d".*"invalid":true' <<<"$DIFF" || die "tgs-postdated-is-invalid not invalid true on both legs"
 grep -q '"case":"tgs-no-preauth-flag","outcome":"ok","error_code":60,"e_text":"NO PREAUTH","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-no-preauth-flag not code 60 e_text NO PREAUTH on both legs"

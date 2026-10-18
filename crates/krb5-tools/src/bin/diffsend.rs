@@ -3775,6 +3775,56 @@ fn run() -> Result<(), String> {
         err::MODIFIED,
     )?;
 
+    let mut explicit = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00aa,
+    )
+    .map_err(|e| e.to_string())?;
+    let explicit_inner = explicit.0.req_body.clone();
+    wrap_tgs_fast_hide(&mut explicit, &sess, explicit_inner)?;
+    let pa_tgs = explicit
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.clone())
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    let fx = explicit
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .ok_or_else(|| "no PA-FX-FAST".to_string())?;
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    armored.armor = Some(krb5_types::fast::KrbFastArmor {
+        armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+        armor_value: pa_tgs,
+    });
+    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .map_err(|e| e.to_string())?
+        .into();
+    expect_error(
+        &cfg,
+        "tgs-fast-explicit-armor",
+        &encode(&explicit).map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+
     let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
     let post_tgt = mint_tgt(
         tkt_key,
@@ -5045,7 +5095,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":133}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":134}}"#);
     Ok(())
 }
 
