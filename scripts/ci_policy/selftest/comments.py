@@ -27,7 +27,7 @@ def _self_test_comments() -> None:
         parity = anchor_root / "docs" / "parity"
         parity.mkdir(parents=True)
         (parity / "a1-store.md").write_text(
-            "MIT `krb5_db_def_rename_principal` renames a principal.\n",
+            "| store.c:1 `krb5_db_def_rename_principal` | renames a principal | n/a | demo/lib.rs f | n/a | deferred | none |\n",
             encoding="utf-8",
         )
         accepted = {
@@ -101,6 +101,20 @@ def _self_test_comments() -> None:
                 anchor_root,
                 allow=0,
             )
+        good.write_text("", encoding="utf-8")
+        row = (parity / "a1-store.md").read_text(encoding="utf-8")
+        (parity / "a1-store.md").write_text(
+            "krb5_db_def_rename_principal is named only in this intro.\n",
+            encoding="utf-8",
+        )
+        good.write_text(accepted["pointer"], encoding="utf-8")
+        _must_die_msg(
+            "mit anchor lines 1 != allow 0",
+            check_mit_anchor_form,
+            anchor_root,
+            allow=0,
+        )
+        (parity / "a1-store.md").write_text(row, encoding="utf-8")
         good.write_text("", encoding="utf-8")
         in_tests.write_text(rejected["file-range-only"], encoding="utf-8")
         _must_die_msg(

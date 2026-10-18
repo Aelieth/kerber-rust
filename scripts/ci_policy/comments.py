@@ -582,8 +582,20 @@ def check_mit_anchor_truth(
         _die(f"mit anchor truth {len(bad)} != allow {allow}")
 
 
+def _pointer_row_names(text: str, symbol: str) -> bool:
+    """A table row names the symbol. The header and the separator do not."""
+    rx = re.compile(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])")
+    for line in text.splitlines():
+        row = line.lstrip()
+        if not row.startswith("|") or "MIT file:line" in row or re.match(r"^\|\s*-+", row):
+            continue
+        if rx.search(row):
+            return True
+    return False
+
+
 def _pointer_file_problems(comment: str, root: pathlib.Path) -> list[str]:
-    """A well-formed pointer names a parity file that exists and names the symbol."""
+    """A well-formed pointer names a parity file whose table row names the symbol."""
     hits = list(_POINTER.finditer(comment))
     if len(hits) != 1:
         return []
@@ -592,8 +604,8 @@ def _pointer_file_problems(comment: str, root: pathlib.Path) -> list[str]:
     if not path.is_file():
         return [f"parity file docs/parity/{name} is missing"]
     text = path.read_text(encoding="utf-8")
-    if re.search(rf"(?<![A-Za-z0-9_]){re.escape(symbol)}(?![A-Za-z0-9_])", text) is None:
-        return [f"docs/parity/{name} does not name {symbol}"]
+    if not _pointer_row_names(text, symbol):
+        return [f"docs/parity/{name} has no row naming {symbol}"]
     return []
 
 
