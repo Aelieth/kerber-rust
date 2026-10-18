@@ -100,7 +100,8 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `tgs-missing-pa-tgs-req`, `tgs-authenticator-cname-mismatch`,
 `tgs-authenticator-crealm-mismatch`, `tgs-server-locked-out`,
 `tgs-disallow-tgt-based`, `tgs-authenticator-replay`,
-`tgs-server-disallow-postdated`.
+`tgs-server-disallow-postdated`, `s4u2self-client-expired`,
+`s4u2self-client-locked-out`.
 
 Wire `e_text` is the MIT **status word**. MIT log messages are not
 wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`

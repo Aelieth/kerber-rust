@@ -3710,6 +3710,29 @@ fn run() -> Result<(), String> {
         err::CANNOT_POSTDATE,
     )?;
 
+    let expuser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["expuser"]);
+    let lockuser = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockuser"]);
+    expect_error(
+        &cfg,
+        "s4u2self-client-expired",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![pa_for_user(&sess, expuser, realm).map_err(|e| e.to_string())?],
+            0x1000_00a7,
+        )?,
+        err::NAME_EXP,
+    )?;
+    expect_error(
+        &cfg,
+        "s4u2self-client-locked-out",
+        &s4u_req(
+            host_hdr(&host, false)?,
+            vec![pa_for_user(&sess, lockuser, realm).map_err(|e| e.to_string())?],
+            0x1000_00a8,
+        )?,
+        err::CLIENT_REVOKED,
+    )?;
+
     let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
     let post_tgt = mint_tgt(
         tkt_key,
@@ -4980,7 +5003,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":130}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":132}}"#);
     Ok(())
 }
 
