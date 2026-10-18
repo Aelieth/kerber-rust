@@ -1,37 +1,19 @@
-//! glibc `getopt` / `getopt_long`, as the MIT tools built on it parse their argv.
-
-/// One option from [`getopt`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opt {
-    /// Short letter, or 0 when `long` is set.
     pub flag: char,
-    /// Long name without `--` when this came from a long option.
     pub long: Option<&'static str>,
-    /// Argument when the optstring requires one.
     pub arg: Option<String>,
 }
 
-/// Long option (`name`, takes argument, optional short alias).
 #[derive(Clone, Copy, Debug)]
 pub struct LongOpt {
-    /// Without the leading `--`.
     pub name: &'static str,
-    /// Whether a value is required.
     pub takes_arg: bool,
-    /// MIT short equivalent.
     pub short: Option<char>,
 }
 
-/// Split `args` (no argv0) into options and operands. Clustering is POSIX. Operands may come
-/// between options, as glibc permutes them, unless `optstring` starts with `+`: then the first
-/// operand ends the options and it and every argument after it are operands (`kadmin.local`'s
-/// `+x:r:p:…`, so a query's own `-pw` stays the query's). `--` ends the options either way.
-///
+/// A leading plus in the optstring stops at the first operand.
 /// # Errors
-///
-/// The first of [`getopt_each`]'s complaints: an option not in `optstring` or `longs`, an option
-/// that takes an argument with none, or a long option that takes none given one
-/// (`--name=value`).
 pub fn getopt(
     args: &[String],
     optstring: &str,
@@ -42,8 +24,6 @@ pub fn getopt(
     Ok((opts, rest))
 }
 
-/// [`getopt`] that goes on past a bad option, as glibc's does: each option or glibc's complaint
-/// about it (`Err`), in argv order, and the operands.
 #[must_use]
 pub fn getopt_each(
     args: &[String],
@@ -82,7 +62,6 @@ pub fn getopt_each(
                     continue;
                 }
             };
-            // glibc `process_long_option`: a missing or unwanted argument is named by the option matched, not the prefix typed. An unknown or ambiguous option stays named by the text typed.
             let arg = match (spec.takes_arg, inline) {
                 (true, Some(v)) => Some(v),
                 (true, None) => {
@@ -157,10 +136,6 @@ pub fn getopt_each(
     (each, rest)
 }
 
-/// The long option `name` names: its exact match, else the one option it is a prefix of. `Err`
-/// carries, for a prefix of several, the possibilities as glibc lists them (` '--a' '--b'`).
-/// As glibc's `getopt_long`: an exact name wins, a prefix of one option is that option, and a
-/// prefix of options that differ is ambiguous (live MIT 1.22.2 `kvno --cached`, `--no-st`).
 fn long_named<'a>(longs: &'a [LongOpt], name: &str) -> Result<&'a LongOpt, Option<String>> {
     if let Some(exact) = longs.iter().find(|l| l.name == name) {
         return Ok(exact);
