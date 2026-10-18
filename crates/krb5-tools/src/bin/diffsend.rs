@@ -3733,6 +3733,50 @@ fn run() -> Result<(), String> {
         err::CLIENT_REVOKED,
     )?;
 
+    let mut fast_bad = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00a9,
+    )
+    .map_err(|e| e.to_string())?;
+    let fast_inner = fast_bad.0.req_body.clone();
+    wrap_tgs_fast_hide(&mut fast_bad, &sess, fast_inner)?;
+    let fx = fast_bad
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .ok_or_else(|| "no PA-FX-FAST".to_string())?;
+    let mut armored = match decode::<krb5_types::fast::PaFxFast>(fx.padata_value.as_ref())
+        .map_err(|e| e.to_string())?
+    {
+        krb5_types::fast::PaFxFast::ArmoredData(a) => a,
+    };
+    armored.req_checksum.cksumtype = 7;
+    armored.req_checksum.checksum = vec![0xff; 16].into();
+    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .map_err(|e| e.to_string())?
+        .into();
+    expect_error(
+        &cfg,
+        "tgs-fast-unkeyed-bad-checksum",
+        &encode(&fast_bad).map_err(|e| e.to_string())?,
+        err::MODIFIED,
+    )?;
+
     let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
     let post_tgt = mint_tgt(
         tkt_key,
@@ -5003,7 +5047,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":132}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":133}}"#);
     Ok(())
 }
 
