@@ -1,15 +1,10 @@
-//! The wipe each zeroize-on-drop type in this crate runs on its secret buffers, and [`Wiped`]
-//! on a buffer a key is cut from.
-//!
-//! A test build keeps each wiped allocation instead of freeing it, so a test can see that the
-//! buffer a value owned is the one zeroed, whole. `P256Keypair` zeroizes its inline scalar
-//! itself, and a test build records that array as the drop left it.
-
 use std::ops::{Deref, DerefMut};
 
 use zeroize::Zeroize;
 
-/// Zeroizes every byte of `buf`'s allocation in place, then frees it and leaves `buf` empty.
+/// The allocation is resized to its capacity before it is zeroed, so the slack is cleared too.
+/// A `Wiped` buffer is wiped on drop, and that includes every `?` return.
+/// `DerefMut` can grow or clone a copy nothing wipes, so every caller sizes the buffer first.
 pub(crate) fn wipe(buf: &mut Vec<u8>) {
     let mut owned = std::mem::take(buf);
     if owned.capacity() == 0 {
@@ -21,10 +16,6 @@ pub(crate) fn wipe(buf: &mut Vec<u8>) {
     let _ = tests::WIPED.try_with(|w| w.borrow_mut().push(owned));
 }
 
-/// A temporary buffer of key material that [`wipe`] zeroes, whole, when it drops, so every
-/// return wipes it, the `?` ones included. `DerefMut` hands out the `&mut Vec<u8>`, so a push
-/// past its capacity, a `.clone()` or a `.to_vec()` leaves a copy nothing wipes; every site
-/// sizes its buffer up front.
 pub(crate) struct Wiped(pub(crate) Vec<u8>);
 
 impl Drop for Wiped {
@@ -56,9 +47,7 @@ pub(crate) mod tests {
     };
 
     thread_local! {
-        /// The allocations `wipe` zeroed on this thread, kept alive.
         pub(super) static WIPED: RefCell<Vec<Vec<u8>>> = const { RefCell::new(Vec::new()) };
-        /// The scalar of each `P256Keypair` dropped on this thread, as its drop left it.
         pub(crate) static DROPPED_SCALARS: RefCell<Vec<[u8; 32]>> =
             const { RefCell::new(Vec::new()) };
     }
@@ -101,7 +90,6 @@ pub(crate) mod tests {
         drop(derived);
         let wiped = take_wiped();
         assert_eq!(addresses(&wiped), at, "a drop wiped a copy, or nothing");
-        // Each key is cut from a 32-octet HMAC-SHA-256 output, all of which is zeroed.
         assert_eq!(wiped, [[0; 32]; 3]);
     }
 

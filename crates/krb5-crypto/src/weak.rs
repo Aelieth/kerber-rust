@@ -1,11 +1,3 @@
-//! Legacy / AD enctypes 16, 23, 25, and 26.
-//!
-//! This module applies no policy. The weak-etype gate lives only in
-//! `EncryptionType::from_iana` and `from_iana_policy`; an etype admitted
-//! through `EncryptionType::known` reaches this code whatever
-//! `allow_weak_crypto` says. RC4 string-to-key is MD4 of the UTF-16LE
-//! password.
-
 use des::TdesEde3;
 use des::cipher::{BlockDecrypt, BlockEncrypt, KeyInit};
 use hmac::{Hmac, Mac};
@@ -22,8 +14,6 @@ use crate::wipe::Wiped;
 
 const DES_BLOCK: usize = 8;
 
-/// RC4-HMAC string-to-key: MD4(UTF-16LE password). RFC 4757. The UTF-16 copy of the password
-/// is sized up front, so it never moves, and is wiped on return.
 pub(crate) fn rc4_string_to_key(password: &[u8]) -> Result<ProtocolKey, Error> {
     let text = std::str::from_utf8(password).unwrap_or("");
     let mut utf16 = Wiped(Vec::with_capacity(text.len() * 2));
@@ -92,8 +82,6 @@ fn hmac_md5(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
     Ok(mac.finalize().into_bytes().to_vec())
 }
 
-/// MIT `krb5int_arcfour_translate_usage` (`enc_rc4.c:17-35`): 3 → 8 and 23 → 13, every other
-/// usage unchanged.
 pub(crate) fn arcfour_translate_usage(usage: u32) -> u32 {
     match usage {
         3 => 8,
@@ -115,7 +103,6 @@ fn apply_rc4(key: &[u8], data: &mut [u8]) -> Result<(), Error> {
     Ok(())
 }
 
-/// 3DES-CBC-SHA1 simplified profile (etype 16). HMAC-SHA1 over confounder|plain.
 pub(crate) fn des3_encrypt(
     key: &ProtocolKey,
     usage: KeyUsage,
@@ -160,16 +147,13 @@ pub(crate) fn des3_decrypt(
     Ok(p[DES_BLOCK..].to_vec())
 }
 
-/// The sixteen weak and semi-weak DES keys, each with odd parity.
-///
-/// MIT `weak` (`lib/crypto/builtin/des/weak_key.c:44-69`): the table `mit_des_is_weak_key` compares a key with.
+// MIT weak; see docs/parity/b1-crypto-keys.md
+// MIT mit_des_is_weak_key; see docs/parity/b1-crypto-keys.md
 const WEAK_DES_KEYS: [[u8; 8]; 16] = [
-    // weak keys
     [0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01],
     [0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe, 0xfe],
     [0x1f, 0x1f, 0x1f, 0x1f, 0x0e, 0x0e, 0x0e, 0x0e],
     [0xe0, 0xe0, 0xe0, 0xe0, 0xf1, 0xf1, 0xf1, 0xf1],
-    // semi-weak keys
     [0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe],
     [0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01, 0xfe, 0x01],
     [0x1f, 0xe0, 0x1f, 0xe0, 0x0e, 0xf1, 0x0e, 0xf1],
@@ -184,28 +168,15 @@ const WEAK_DES_KEYS: [[u8; 8]; 16] = [
     [0xfe, 0xe0, 0xfe, 0xe0, 0xfe, 0xf1, 0xfe, 0xf1],
 ];
 
-/// A DES key has the correct parity when every octet has an odd number of one bits.
-///
-/// MIT `mit_des_check_key_parity` (`lib/crypto/builtin/des/f_parity.c:48-62`): false at the first octet whose low bit equals the parity of its other seven.
+// MIT mit_des_check_key_parity; see docs/parity/b1-crypto-keys.md
 fn des_check_key_parity(key: [u8; 8]) -> bool {
     key.iter().all(|b| b.count_ones() % 2 == 1)
 }
 
-/// A weak or semi-weak DES key, by an exact match with the sixteen.
-///
-/// MIT `mit_des_is_weak_key` (`lib/crypto/builtin/des/weak_key.c:76-88`): `memcmp` with each entry of the table.
 fn des_is_weak_key(key: [u8; 8]) -> bool {
     WEAK_DES_KEYS.contains(&key)
 }
 
-/// The 3DES cipher of a des3 key, which MIT refuses when any of its three DES keys has bad parity or is weak.
-///
-/// MIT `mit_des3_key_sched` (`lib/crypto/builtin/des/d3_kysched.c:29-53`): for each DES key in turn, its parity (`-1`) and then its weakness (`-2`), so the first failure in that order decides.
-/// MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): `-1` is `KRB5DES_BAD_KEYPAR` ([`Error::DesBadParity`]) and `-2` `KRB5DES_WEAK_KEY` ([`Error::DesWeakKey`]), returned after the key length, whatever the data is: every encryption, decryption and key derivation under the key goes through it.
-///
-/// # Errors
-///
-/// [`Error::InvalidKeyLength`] unless `key` is 24 octets; [`Error::DesBadParity`] and [`Error::DesWeakKey`] as above.
 fn des3_key_sched(key: &[u8]) -> Result<TdesEde3, Error> {
     let key24: &[u8; 24] = key.try_into().map_err(|_| Error::InvalidKeyLength)?;
     let (keys, _) = key24.as_chunks::<8>();
@@ -277,7 +248,6 @@ fn hmac_sha1_trunc(key: &[u8], data: &[u8], n: usize) -> Result<Vec<u8>, Error> 
     Ok(v)
 }
 
-/// RFC 3961 §6.3 3DES string-to-key: n-fold to 168 bits, random-to-key, DK("kerberos").
 pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<ProtocolKey, Error> {
     let mut seed = Wiped(Vec::with_capacity((password.len() + salt.len()).max(1)));
     seed.extend_from_slice(password);
@@ -291,9 +261,6 @@ pub(crate) fn des3_string_to_key(password: &[u8], salt: &[u8]) -> Result<Protoco
     ProtocolKey::from_bytes(EncryptionType::Des3CbcSha1, &dk)
 }
 
-/// des3 random-to-key: 21 octets spread over the three 8-octet DES keys.
-///
-/// MIT `k5_rand2key_des3` (`lib/crypto/krb/random_to_key.c:83-101`): seven octets fill a key, its eighth octet takes their low bits, then odd parity is set; a weak or semi-weak key stays as it is.
 pub(crate) fn des3_random_to_key(raw21: &[u8]) -> [u8; 24] {
     debug_assert_eq!(raw21.len(), 21);
     let mut out = [0u8; 24];
@@ -307,9 +274,7 @@ pub(crate) fn des3_random_to_key(raw21: &[u8]) -> [u8; 24] {
     out
 }
 
-/// A DES key's eighth octet from the low bits of the first seven.
-///
-/// MIT `eighth_byte` (`lib/crypto/krb/random_to_key.c:75-81`): bit 0 of octet i goes to bit i + 1.
+// MIT eighth_byte; see docs/parity/b1-crypto-keys.md
 fn eighth_byte(b: &mut [u8; 8]) {
     b[7] = ((b[0] & 1) << 1)
         | ((b[1] & 1) << 2)
@@ -320,9 +285,7 @@ fn eighth_byte(b: &mut [u8; 8]) {
         | ((b[6] & 1) << 7);
 }
 
-/// Odd parity in each octet's low bit.
-///
-/// MIT `k5_des_fixup_key_parity` (`lib/crypto/openssl/des/des_keys.c:33-37`): OpenSSL's `DES_set_odd_parity`.
+// MIT k5_des_fixup_key_parity; see docs/parity/b1-crypto-keys.md
 fn fixup_key_parity(key: &mut [u8; 8]) {
     for b in key {
         let mut x = *b & 0xfe;
@@ -333,7 +296,6 @@ fn fixup_key_parity(key: &mut [u8; 8]) {
     }
 }
 
-/// RFC 3961 DR/DK for 3DES: DR to 168 bits, then [`des3_random_to_key`].
 pub(crate) fn dk_des3(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
     let folded = crate::nfold::nfold(constant, DES_BLOCK)?;
     let mut block = [0u8; DES_BLOCK];
@@ -388,7 +350,7 @@ pub(crate) fn camellia_decrypt(
     let ke = dk_camellia(key.as_bytes(), &usage.derivation_constant(0xAA))?;
     let ki = dk_camellia(key.as_bytes(), &usage.derivation_constant(0x55))?;
     let p = crate::cts::camellia_decrypt(&ke, &state.iv, c)?;
-    // MIT `krb5int_dk_cmac_decrypt` (`enc_dk_cmac.c:163-174`): the provider decrypts, and takes the state, before the CMAC is compared.
+    // MIT krb5int_dk_cmac_decrypt; see docs/parity/b1-crypto-state.md
     crate::ops::update_iv(state, c);
     let expected = cmac_camellia(&ki, &p)?;
     crate::derive::mac_verify(mac, &expected)?;
@@ -398,14 +360,10 @@ pub(crate) fn camellia_decrypt(
     Ok(p[16..].to_vec())
 }
 
-/// RFC 6803 §3 KDF-FEEDBACK-CMAC. `key` is the protocol key (16 or 32 octets).
 pub(crate) fn dk_camellia(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
     kdf_feedback_cmac(key, constant)
 }
 
-/// RFC 6803: `K(i) = CMAC(key, K(i-1) | i | constant | 0x00 | k)` with
-/// `k` the output length in bits (big-endian 4 octets) and `i` a 4-octet
-/// counter. Output is truncated to `key.len()` octets.
 pub(crate) fn kdf_feedback_cmac(key: &[u8], constant: &[u8]) -> Result<Vec<u8>, Error> {
     let out_len = key.len();
     if out_len != 16 && out_len != 32 {
@@ -455,8 +413,6 @@ pub(crate) fn cmac_camellia(key: &[u8], data: &[u8]) -> Result<Vec<u8>, Error> {
 mod tests {
     use super::*;
 
-    /// The derived keys MIT's `t_derive` test (`lib/crypto/crypto_tests/t_derive.c`) pins for one des3 key and usage 2:
-    /// `Kc` for the constant `0x99`, `Ke` for `0xAA`, `Ki` for `0x55`, each with the parity random-to-key gives.
     #[test]
     fn dk_des3_is_mits_t_derive_vectors() {
         fn hex(s: &str) -> Vec<u8> {

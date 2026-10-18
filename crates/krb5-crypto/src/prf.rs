@@ -1,10 +1,3 @@
-//! RFC 3961 §5.3 PRF and RFC 6113 PRF+.
-//!
-//! PRF is one block for the key's etype. PRF+ concatenates blocks until
-//! the requested length is met. It wipes each PRF output block on every
-//! return, and each counter‖seed input once its block is made; the caller
-//! owns the result.
-
 use sha1::{Digest, Sha1};
 use zeroize::{Zeroize, Zeroizing};
 
@@ -15,13 +8,6 @@ use crate::etype::EncryptionType;
 use crate::key::ProtocolKey;
 use crate::wipe::Wiped;
 
-/// RFC 3961 / RFC 8009 pseudo-random function.
-///
-/// # Errors
-///
-/// [`Error::DesBadParity`] and [`Error::DesWeakKey`] when `key` is a des3-cbc-sha1 key MIT refuses (`validate_and_schedule`
-/// refuses it in the derivation of the PRF key); every other step takes the key's own length, which
-/// a [`ProtocolKey`] always has.
 pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     match key.etype() {
         EncryptionType::Aes128CtsHmacSha196
@@ -39,14 +25,6 @@ pub fn prf(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     }
 }
 
-/// RFC 6113 PRF+: concatenate `PRF(K, i || S)` until `len` octets.
-///
-/// The counter is a single octet **prepended** to the seed (RFC 6113 §5.1,
-/// not RFC 4402's append).
-///
-/// # Errors
-///
-/// [`Error::InvalidParams`] when `len` is 0; the refusals of [`prf`].
 pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, Error> {
     if len == 0 {
         return Err(Error::InvalidParams);
@@ -72,26 +50,11 @@ pub fn prf_plus(key: &ProtocolKey, seed: &[u8], len: usize) -> Result<Vec<u8>, E
     Ok(std::mem::take(&mut out.0))
 }
 
-/// MIT `krb5_c_derive_prfplus` (`cf2.c:82-121`): PRF+ of `keybytes`, then rand2key.
-///
-/// # Errors
-///
-/// The refusals of [`prf`] for a des3-cbc-sha1 `key` MIT refuses; otherwise none: PRF+ returns
-/// exactly `keybytes()` octets for `key`'s etype (never 0), so the des3 length check and
-/// [`ProtocolKey::from_bytes`] always pass.
+// MIT krb5_c_derive_prfplus; see docs/parity/b1-crypto-keys.md
 pub fn derive_prfplus(key: &ProtocolKey, input: &[u8]) -> Result<ProtocolKey, Error> {
     derive_prfplus_enctype(key, input, key.etype())
 }
 
-/// MIT `krb5_c_derive_prfplus` with an explicit output enctype.
-/// MIT `krb5_c_derive_prfplus` (`cf2.c:93-93`): the output enctype is the one given, or the
-/// input key's when it is `ENCTYPE_NULL`.
-///
-/// # Errors
-///
-/// The refusals of [`prf`] for a des3-cbc-sha1 `key` MIT refuses; otherwise none: PRF+ returns
-/// exactly `enctype.keybytes()` octets (never 0), so the des3 length check and
-/// [`ProtocolKey::from_bytes`] always pass.
 pub fn derive_prfplus_enctype(
     key: &ProtocolKey,
     input: &[u8],
@@ -113,8 +76,6 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
     let mut hasher = Sha1::new();
     hasher.update(input);
     let tmp1 = hasher.finalize();
-    // RFC 3961 §5.3 / MIT `prf_dk.c`: truncate the hash to the closest
-    // multiple of the cipher block size, then encrypt.
     if key.etype() == EncryptionType::Des3CbcSha1 {
         let dk = Wiped(crate::weak::dk_des3(key.as_bytes(), b"prf")?);
         let trunc = (tmp1.len() / 8) * 8;
@@ -129,15 +90,11 @@ fn prf_aes_sha1(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
 }
 
 fn prf_camellia(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
-    // RFC 6803 §6: Kp = KDF-FEEDBACK-CMAC(protocol-key, "prf"); PRF = CMAC(Kp, octet-string).
     let kp = Wiped(crate::weak::dk_camellia(key.as_bytes(), b"prf")?);
     crate::weak::cmac_camellia(&kp, input)
 }
 
 fn prf_rfc8009(key: &ProtocolKey, input: &[u8]) -> Result<Vec<u8>, Error> {
-    // RFC 8009 §5: PRF = KDF-HMAC-SHA2(key, "prf", octet-string, k)
-    // with k = 256 (aes128-sha2) or 384 (aes256-sha2). The octet-string
-    // is the KDF context; it is not pre-hashed.
     let k_bits = match key.etype() {
         EncryptionType::Aes128CtsHmacSha256128 => 256u32,
         EncryptionType::Aes256CtsHmacSha384192 => 384u32,

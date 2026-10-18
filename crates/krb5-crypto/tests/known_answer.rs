@@ -1,5 +1,3 @@
-//! Published known-answer tests. These call the public RFC 3961 API only.
-
 use krb5_crypto::{
     EncryptionType, Error, KeyUsage, ProtocolKey, SpakeGroup, checksum, decrypt, derive_keys,
     encrypt_with_confounder, octetstring2key, prf, prf_plus, spake_decode_point, spake_public,
@@ -26,7 +24,6 @@ fn iter_params(n: u32) -> [u8; 4] {
     n.to_be_bytes()
 }
 
-/// RFC 3962 Appendix B PBKDF2+DK string-to-key vectors.
 #[test]
 fn rfc3962_string_to_key() {
     install_json_tracing();
@@ -76,12 +73,9 @@ fn rfc3962_string_to_key() {
     );
 }
 
-/// RFC 8009 Appendix A string-to-key (salt includes a 16-byte UTF-8 prefix).
 #[test]
 fn rfc8009_string_to_key() {
     install_json_tracing();
-    // saltp = enctype-name | 0x00 | random16 | "ATHENA.MIT.EDUraeburn"
-    // string_to_key prepends enctype-name|0x00, so `salt` here is random16||realm-salt.
     let salt = hex("10df9dd783e5bc8acea1730e74355f61415448454e412e4d49542e4544557261656275726e");
 
     let k128 = string_to_key(
@@ -106,7 +100,6 @@ fn rfc8009_string_to_key() {
     );
 }
 
-/// MIT krb5 `t_derive.c`: Kc/Ke/Ki for AES-128/256 SHA-1, usage 2.
 #[test]
 fn mit_derive_and_checksum_aes_sha1() {
     install_json_tracing();
@@ -114,7 +107,6 @@ fn mit_derive_and_checksum_aes_sha1() {
     let usage3 = KeyUsage::new(3).unwrap();
     let usage4 = KeyUsage::new(4).unwrap();
 
-    // Checksum vectors from MIT t_cksums.c (usage 3 and 4 — nonzero).
     let k128 = ProtocolKey::from_bytes(
         EncryptionType::Aes128CtsHmacSha196,
         &hex("9062430c8cda3388922e6d6a509f5b7a"),
@@ -135,7 +127,6 @@ fn mit_derive_and_checksum_aes_sha1() {
         hex("e08739e3279e2903ec8e3836")
     );
 
-    // Derive-then-checksum: RFC 3962 s2k key + MIT t_derive Kc for usage 2.
     let s2k = ProtocolKey::from_bytes(
         EncryptionType::Aes128CtsHmacSha196,
         &hex("42263c6e89f4fc28b8df68ee09799f15"),
@@ -145,7 +136,6 @@ fn mit_derive_and_checksum_aes_sha1() {
     assert_eq!(mic.len(), 12);
 }
 
-/// RFC 8009 Appendix A key derivation (usage 2) plus checksums.
 #[test]
 fn rfc8009_derive_checksum() {
     install_json_tracing();
@@ -173,7 +163,6 @@ fn rfc8009_derive_checksum() {
     );
 }
 
-/// RFC 8009 Appendix A encrypt/decrypt with known confounder, usage 2.
 #[test]
 fn rfc8009_encrypt_decrypt_usage_2() {
     install_json_tracing();
@@ -246,7 +235,6 @@ fn rfc8009_encrypt_decrypt_usage_2() {
     }
 }
 
-/// MIT `t_derive.c` Kc/Ke/Ki for AES-128 usage 2.
 #[test]
 fn mit_t_derive_aes128_usage_2() {
     let key = ProtocolKey::from_bytes(
@@ -304,7 +292,6 @@ fn decrypt_bad_mac_is_error() {
     assert_eq!(decrypt(&key, usage, &ct).unwrap_err(), Error::Integrity);
 }
 
-/// RFC 3961 appendix A.4 / MIT `t_str2key.c` 3DES string-to-key output.
 #[test]
 fn rfc3961_des3_string_to_key_output() {
     let k = string_to_key(
@@ -320,7 +307,6 @@ fn rfc3961_des3_string_to_key_output() {
     );
 }
 
-/// RFC 6803 §10 Camellia-CTS-CMAC string-to-key, DK, encrypt, checksum.
 #[test]
 fn rfc6803_camellia_cts_cmac() {
     let salt = b"ATHENA.MIT.EDUraeburn";
@@ -359,10 +345,6 @@ fn rfc6803_camellia_cts_cmac() {
         hex("1178e6c5c47a8c1ae0c4b9c7d4eb7b6b")
     );
 
-    // RFC 6803 §10 sample encryptions (MIT t_decrypt.c). The empty / "1" /
-    // "9 bytesss" / … cases use key-usage 0, 1, 2, … matching the plaintext
-    // index; usage 0 is invalid on the wire (RFC 3961) but is the published
-    // empty-plaintext sample.
     let cam128: &[(u32, &str, &[u8], &str, &str)] = &[
         (
             0,
@@ -422,7 +404,6 @@ fn rfc6803_camellia_cts_cmac() {
     assert_eq!(decrypt(&cam256_empty, u0, &got256).unwrap(), b"");
 }
 
-/// MIT `crypto_tests/t_prf.c` PRF vectors (RFC 8009 etypes 19/20 and AES-SHA1 PRF+).
 #[test]
 fn mit_t_prf_and_rfc6113_prf_plus() {
     let k128 = ProtocolKey::from_bytes(
@@ -445,7 +426,6 @@ fn mit_t_prf_and_rfc6113_prf_plus() {
             "9801f69a368c2bf675e59521e177d9a07f67efe1cfde8d3c8d6f6a0256e3b17db3c1b62ad1b8553360d17367eb1514d2"
         )
     );
-    // MIT crypto_tests/t_prf.c AES-128-SHA1: PRF(K, 0x01 || "a") — the first PRF+ block.
     let k_sha1 = ProtocolKey::from_bytes(
         EncryptionType::Aes128CtsHmacSha196,
         &hex("ae272e7cdec86ac5138cdb196d8e297d"),
@@ -457,16 +437,12 @@ fn mit_t_prf_and_rfc6113_prf_plus() {
     );
 }
 
-/// RFC 4757 string-to-key is MD4(UTF-16LE(password)) — the NT hash of
-/// "password" is a published NTLM vector.
 #[test]
 fn rfc4757_rc4_string_to_key() {
     let k = string_to_key(EncryptionType::Rc4Hmac, b"password", b"", None).unwrap();
     assert_eq!(k.as_bytes(), hex("8846f7eaee8fb117ad06bdd830b7586c"));
 }
 
-/// RFC 4556 `octetstring2key`: SHA-1(0x00 || x) K-truncate. Empty `x` is
-/// NIST SHA-1 of a single 0x00 octet.
 #[test]
 fn rfc4556_octetstring2key() {
     let k = octetstring2key(EncryptionType::Aes128CtsHmacSha196, b"").unwrap();
@@ -475,8 +451,6 @@ fn rfc4556_octetstring2key() {
     assert_eq!(k2.as_bytes(), hex("dd3742ec1a4d2a5b563a2b62aef7fc4a"));
 }
 
-/// SPAKE IANA compressed M/N plus a fixed-scalar public and transcript (P-256; MIT's
-/// `t_vectors.c` cases are `spake_vectors.rs`).
 #[test]
 fn spake_iana_mn_and_fixed_scalar() {
     let group = SpakeGroup::P256;

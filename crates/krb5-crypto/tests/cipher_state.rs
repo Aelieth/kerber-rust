@@ -1,21 +1,3 @@
-//! MIT 1.22.2's AES and Camellia encryption as its own libkrb5 does it: a message sealed alone, the cipher
-//! state that chains one message to the next, and the state a message that fails its integrity check leaves.
-//!
-//! `data/mit-cipher-state.kat` is the output of the C program beside it (`data/mit-cipher-state`'s source) run on
-//! `kerber-rust-mit-kdc:1.22.2`. For each AES and Camellia enctype it holds a fixed key and
-//!  - messages that `krb5_c_encrypt` seals alone, with no cipher state, as a ticket or an authenticator is,
-//!    with the confounder it drew (`single`);
-//!  - a chain of messages that `krb5_c_encrypt` seals under one cipher state, with the confounder it drew and
-//!    the state after each: kprop and kpropd seal their KRB-PRIV blocks that way, one state for the dump;
-//!  - for some of those, the ciphertext with its last octet changed and the state `krb5_c_decrypt` leaves
-//!    when it fails its integrity check (`tamper`).
-//!
-//! MIT `krb5int_aes_encrypt` (`lib/crypto/builtin/enc_provider/aes.c:239-298`): a message of one block is one CBC block under a zero IV and leaves the state as it was; any other leaves the first of the last two blocks of the stream, `C_n` of the ciphertext stealing.
-//! MIT `krb5int_aes_decrypt` (`lib/crypto/builtin/enc_provider/aes.c:301-370`): decrypting leaves the same block.
-//! MIT `krb5int_dk_decrypt` (`lib/crypto/krb/enc_dk_hmac.c:246-259`): the provider decrypts, and so takes the state, before the hash is compared.
-//! MIT `krb5int_dk_cmac_decrypt` (`lib/crypto/krb/enc_dk_cmac.c:163-174`): the same for Camellia, before the CMAC is compared.
-//! MIT `krb5int_etm_decrypt` (`lib/crypto/krb/enc_etm.c:238-250`): the MAC, which covers the state the message began with, is compared before the decrypt.
-
 use krb5_crypto::{
     CipherState, EncryptionType, Error, KeyUsage, ProtocolKey, decrypt, decrypt_with_state,
     encrypt_with_confounder, encrypt_with_confounder_and_state,
@@ -23,7 +5,6 @@ use krb5_crypto::{
 
 const KAT: &str = include_str!("data/mit-cipher-state.kat");
 
-/// The octets of `s`; "-" is none.
 fn hex(s: &str) -> Vec<u8> {
     if s == "-" {
         return Vec::new();
@@ -34,7 +15,6 @@ fn hex(s: &str) -> Vec<u8> {
         .collect()
 }
 
-/// A message sealed alone.
 struct Single {
     conf: Vec<u8>,
     plain: Vec<u8>,
@@ -42,13 +22,10 @@ struct Single {
 }
 
 struct Message {
-    /// The confounder MIT drew for it.
     conf: Vec<u8>,
     plain: Vec<u8>,
     cipher: Vec<u8>,
     state: [u8; 16],
-    /// The ciphertext with its last octet changed, and the state MIT's decrypt of it left, from the state
-    /// the message began with.
     tamper: Option<(Vec<u8>, [u8; 16])>,
 }
 
@@ -122,13 +99,9 @@ fn chains() -> Vec<Chain> {
 }
 
 fn krb_priv_usage() -> KeyUsage {
-    // KRB5_KEYUSAGE_KRB_PRIV_ENCPART
     KeyUsage::new(13).unwrap()
 }
 
-/// A message MIT sealed alone opens here, and given the confounder MIT drew this side seals the same bytes:
-/// the common case, a ticket or an authenticator, which starts from no state and keeps none. It does not touch
-/// the cipher state, so it is as green before the state was chained as after.
 #[test]
 fn a_message_sealed_alone_is_byte_for_byte_mits() {
     for chain in chains() {
@@ -150,7 +123,6 @@ fn a_message_sealed_alone_is_byte_for_byte_mits() {
     }
 }
 
-/// A chain MIT sealed decrypts message by message, and each decrypt leaves the state MIT's did.
 #[test]
 fn a_chain_mit_sealed_decrypts_and_leaves_mits_state() {
     for chain in chains() {
@@ -169,9 +141,6 @@ fn a_chain_mit_sealed_decrypts_and_leaves_mits_state() {
     }
 }
 
-/// A chain sealed here from the state MIT began with, with the confounders MIT drew, is MIT's bytes and leaves
-/// MIT's state after each message: the encrypt side of the chain, for the aes-sha1, aes-sha2 and Camellia paths
-/// alike.
 #[test]
 fn a_chain_sealed_with_mits_confounders_is_mits_bytes_and_state() {
     for chain in chains() {
@@ -202,9 +171,6 @@ fn a_chain_sealed_with_mits_confounders_is_mits_bytes_and_state() {
     }
 }
 
-/// A message that fails its integrity check leaves the state MIT leaves: the aes-sha1 and Camellia decrypts
-/// have taken it by the time they compare the hash, the aes-sha2 decrypt compares the MAC first and leaves it,
-/// and a message of one block leaves it either way.
 #[test]
 fn a_message_failing_its_integrity_check_leaves_the_state_mit_leaves() {
     for chain in chains() {
@@ -227,7 +193,6 @@ fn a_message_failing_its_integrity_check_leaves_the_state_mit_leaves() {
                     "etype {} message {i}: the state",
                     chain.etype
                 );
-                // What MIT's data says, for the reader: moved except for aes-sha2 and for one block.
                 let moved = !aes_sha2 && !m.plain.is_empty();
                 assert_eq!(*left != before, moved, "etype {} message {i}", chain.etype);
                 tried += 1;

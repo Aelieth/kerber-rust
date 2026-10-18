@@ -1,18 +1,9 @@
-//! MIT 1.22.2's SPAKE test vectors (`plugins/preauth/spake/t_vectors.c`), run in both directions.
-//!
-//! MIT's `run_test` checks w, each side's K, the transcript hash and `K'[0..3]`; its keygen draws x
-//! and y at random, so it never checks T and S. Here the KDC direction also makes T from x and the
-//! client direction S from y. MIT's vectors 6, 7 and 9 are P-384 and P-521, which this port does
-//! not implement.
-
 use krb5_crypto::{
     EncryptionType, ProtocolKey, SpakeGroup, spake_derive_key, spake_public, spake_result,
     spake_thash_update, spake_wbytes,
 };
 
-/// One entry of MIT's `tests[]`.
 struct Vector {
-    /// The entry's position in MIT's `tests[]`, from 1.
     mit: usize,
     etype: EncryptionType,
     group: SpakeGroup,
@@ -23,7 +14,6 @@ struct Vector {
     t: &'static str,
     s: &'static str,
     k: &'static str,
-    /// `None` for an optimistic challenge: no support message is in the transcript.
     support: Option<&'static str>,
     challenge: &'static str,
     thash: &'static str,
@@ -175,8 +165,6 @@ const VECTORS: &[Vector] = &[
         k2: "d192c9044081a2aa6a97a6c69e2724e8e5671c2c9ce073dd439cdbaf96d7dab0",
         k3: "41e5bad6b67f12c53ce0e2720dd6a9887f877bf9463c2d5209c74c36f8d776b7",
     },
-    // MIT vector 6 (SPAKE_GROUP_P384) is not run: the group is not implemented.
-    // MIT vector 7 (SPAKE_GROUP_P521) is not run: the group is not implemented.
     Vector {
         mit: 8,
         etype: EncryptionType::Aes256CtsHmacSha196,
@@ -205,7 +193,6 @@ const VECTORS: &[Vector] = &[
         k2: "58018c19315a1ba5d5bb9813b58029f0aec18a6f9ca59e0847de1c60bc25945c",
         k3: "ed7e9bffd68c54d86fb19cd3c03f317f88a71ad9a5e94c28581d93fc4ec72b6a",
     },
-    // MIT vector 9 (SPAKE_GROUP_P521) is not run: the group is not implemented.
 ];
 
 fn hex(s: &str) -> Vec<u8> {
@@ -215,8 +202,6 @@ fn hex(s: &str) -> Vec<u8> {
         .collect()
 }
 
-/// One side of MIT's `run_test`: w, this side's public element from its private scalar, K from
-/// the other side's element, the transcript hash, and `K'[0..3]`.
 fn check(v: &Vector, kdc: bool) {
     let side = if kdc { "KDC" } else { "client" };
     let ikey = ProtocolKey::from_bytes(v.etype, &hex(v.ikey)).unwrap();

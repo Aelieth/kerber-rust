@@ -1,9 +1,3 @@
-//! RFC 3526 Oakley MODP groups used by RFC 4556 PKINIT.
-//!
-//! The exponent's own allocation is wiped on drop; the `BigUint` copies of it that
-//! `dh_generate` and `dh_shared` make for `modpow` are not. The public value is
-//! `g^x mod p`, padded to the prime length. The groups are 14 (2048) and 16 (4096).
-
 use std::sync::OnceLock;
 
 use num_bigint::BigUint;
@@ -11,23 +5,16 @@ use num_bigint::BigUint;
 use crate::error::Error;
 use crate::wipe::wipe;
 
-/// RFC 3526 group 14 (2048-bit) and group 16 (4096-bit).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DhGroup {
-    /// Human-readable name (`modp14` / `modp16`).
     pub name: &'static str,
-    /// Prime size in bits.
     pub bits: u16,
     p_hex: &'static [u8],
 }
 
-/// Ephemeral DH key for PKINIT.
 pub struct DhKeypair {
-    /// Exponent (big-endian, not padded).
     pub secret: Vec<u8>,
-    /// `y = g^x mod p`, big-endian, padded to `|p|`.
     pub public: Vec<u8>,
-    /// DER `INTEGER` of `y` (RFC 4556 `DHPublicKey`).
     pub public_der: Vec<u8>,
 }
 
@@ -37,7 +24,6 @@ impl Drop for DhKeypair {
     }
 }
 
-/// Oakley 2048-bit MODP group 14 (RFC 3526). RFC 4556 MUST.
 pub const OAKLEY_2048: DhGroup = DhGroup {
     name: "modp14",
     bits: 2048,
@@ -54,7 +40,6 @@ DE2BCBF6955817183995497CEA956AE515D2261898FA0510\
 15728E5A8AACAA68FFFFFFFFFFFFFFFF",
 };
 
-/// Oakley 4096-bit MODP group 16 (RFC 3526). RFC 4556 SHOULD.
 pub const OAKLEY_4096: DhGroup = DhGroup {
     name: "modp16",
     bits: 4096,
@@ -83,8 +68,6 @@ FFFFFFFFFFFFFFFF",
 };
 
 fn parse_p(hex: &'static [u8]) -> BigUint {
-    // RFC 3526 MODP primes are compile-time constants; a parse failure is a
-    // programming error in the hex tables above.
     #[allow(clippy::expect_used)]
     BigUint::parse_bytes(hex, 16).expect("RFC 3526 prime")
 }
@@ -104,20 +87,17 @@ impl DhGroup {
         if self.bits == 2048 { p2048() } else { p4096() }
     }
 
-    /// Length of the modulus in octets (padded DH secret / public).
     #[must_use]
     pub fn modulus_len(&self) -> usize {
         usize::from(self.bits / 8)
     }
 
-    /// Modulus as an unsigned big-endian integer (no leading zeros).
     #[must_use]
     pub fn prime_bytes(&self) -> Vec<u8> {
         self.prime().to_bytes_be()
     }
 }
 
-/// Identify a well-known Oakley prime from a big-endian integer.
 #[must_use]
 pub fn dh_group_for_prime(p: &[u8]) -> Option<&'static DhGroup> {
     let n = BigUint::from_bytes_be(p);
@@ -140,7 +120,6 @@ fn pad_be(n: &BigUint, len: usize) -> Vec<u8> {
     padded
 }
 
-/// DER `INTEGER` of an unsigned big-endian value.
 #[must_use]
 pub fn der_unsigned_integer(be: &[u8]) -> Vec<u8> {
     let mut n: Vec<u8> = be.iter().skip_while(|b| **b == 0).copied().collect();
@@ -164,11 +143,6 @@ pub fn der_unsigned_integer(be: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Generate an ephemeral DH key for `group` (`g = 2`, 256- or 384-bit exponent).
-///
-/// # Errors
-///
-/// [`Error::Rng`] when the CSPRNG fails.
 pub fn dh_generate(group: &DhGroup) -> Result<DhKeypair, Error> {
     let p = group.prime();
     let g = BigUint::from(2u8);
@@ -195,13 +169,6 @@ pub fn dh_generate(group: &DhGroup) -> Result<DhKeypair, Error> {
     Err(Error::Rng)
 }
 
-/// DH shared secret, padded to `|p|` (RFC 4556 octet-string of the modulus).
-///
-/// `peer_y` is a big-endian integer (leading zeros ignored).
-///
-/// # Errors
-///
-/// [`Error::Integrity`] when `peer_y` is out of range for a safe prime.
 pub fn dh_shared(group: &DhGroup, secret: &[u8], peer_y: &[u8]) -> Result<Vec<u8>, Error> {
     let p = group.prime();
     let y = BigUint::from_bytes_be(peer_y);

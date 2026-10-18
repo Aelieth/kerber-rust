@@ -1,8 +1,3 @@
-//! AES CBC-CS3 (RFC 3962 / NIST SP 800-38A addendum), matching MIT krb5 1.22.2.
-//!
-//! An AES key that is not 16 or 32 bytes is `Error::InvalidKeyLength`.
-//! The block size is 16.
-
 use aes::{
     Aes128, Aes256,
     cipher::{BlockDecrypt, BlockEncrypt, KeyInit, generic_array::GenericArray},
@@ -29,7 +24,6 @@ pub(crate) fn decrypt(key: &[u8], iv: &[u8; BLOCK], ciphertext: &[u8]) -> Result
     }
 }
 
-/// Single-block AES (ECB). Used by RFC 3961 DR.
 pub(crate) fn encrypt_block(key: &[u8], block: &[u8; BLOCK]) -> Result<[u8; BLOCK], Error> {
     let mut out = *block;
     match key.len() {
@@ -112,9 +106,7 @@ fn xor_in_place(block: &mut [u8; BLOCK], mask: &[u8; BLOCK]) {
     }
 }
 
-/// MIT `krb5int_aes_encrypt` (`builtin/enc_provider/aes.c:255-258`): a single-block input is
-/// one CBC block, not ciphertext stealing.
-/// The last two blocks are encrypted and then written back swapped.
+// MIT krb5int_aes_encrypt; see docs/parity/b1-crypto-state.md
 fn encrypt_with<C: BlockEncrypt>(
     cipher: C,
     iv: &[u8; BLOCK],
@@ -125,7 +117,6 @@ fn encrypt_with<C: BlockEncrypt>(
     }
     let nblocks = plaintext.len().div_ceil(BLOCK);
     if nblocks == 1 {
-        // RFC 3962: a single block is AES (ECB), equivalent to CBC with IV = 0.
         let mut block = [0u8; BLOCK];
         block[..plaintext.len()].copy_from_slice(plaintext);
         cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
@@ -147,7 +138,6 @@ fn encrypt_with<C: BlockEncrypt>(
         out[i * BLOCK..(i + 1) * BLOCK].copy_from_slice(&block);
     }
 
-    // Last two blocks: CBC-encrypt then write back swapped (MIT krb5int_aes_encrypt).
     let mut block_n2 = [0u8; BLOCK];
     let n2_len = plaintext.len() - full_prefix;
     let take_n2 = n2_len.min(BLOCK);
@@ -164,7 +154,6 @@ fn encrypt_with<C: BlockEncrypt>(
     xor_in_place(&mut block_n1, &prev);
     cipher.encrypt_block(GenericArray::from_mut_slice(&mut block_n1));
 
-    // Write C_n (full) then truncated C_{n-1}.
     let last_len = plaintext.len() - (nblocks - 1) * BLOCK;
     out[full_prefix..full_prefix + BLOCK].copy_from_slice(&block_n1);
     let n2_out_off = full_prefix + BLOCK;
@@ -172,10 +161,7 @@ fn encrypt_with<C: BlockEncrypt>(
     Ok(out)
 }
 
-/// MIT `krb5int_aes_decrypt` (`builtin/enc_provider/aes.c:319-324`): a single-block ciphertext
-/// is one CBC block, not ciphertext stealing.
-/// The last two ciphertext blocks are swapped back before the CBC decrypt, and a short final
-/// block is not a full block.
+// MIT krb5int_aes_decrypt; see docs/parity/b1-crypto-state.md
 fn decrypt_with<C: BlockDecrypt>(
     cipher: C,
     iv: &[u8; BLOCK],
@@ -209,10 +195,8 @@ fn decrypt_with<C: BlockDecrypt>(
         out[i * BLOCK..(i + 1) * BLOCK].copy_from_slice(&block);
     }
 
-    // blockN2 = next-to-last ciphertext (full AES block = CBC C_n)
     let mut block_n2 = [0u8; BLOCK];
     block_n2.copy_from_slice(&ciphertext[full_prefix..full_prefix + BLOCK]);
-    // blockN1 = last ciphertext (possibly partial = stolen C_{n-1})
     let mut block_n1 = [0u8; BLOCK];
     block_n1[..last_len].copy_from_slice(&ciphertext[full_prefix + BLOCK..]);
 
@@ -243,7 +227,6 @@ mod tests {
             .collect()
     }
 
-    /// RFC 3962 Appendix B CBC-CS3 vectors (AES-128, IV = 0).
     #[test]
     fn rfc3962_cts_vectors() {
         let key = hex("636869636b656e207465726979616b69");

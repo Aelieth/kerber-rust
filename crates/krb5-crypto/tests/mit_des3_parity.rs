@@ -1,15 +1,3 @@
-//! What MIT 1.22.2 returns for a des3-cbc-sha1 key whose parity is wrong or which holds a weak DES key, from its own libkrb5.
-//!
-//! `data/mit-des3-parity.kat` is the output of the C program beside it, run on `kerber-rust-mit-kdc:1.22.2`, which is built
-//! with the release's default crypto (`--with-crypto-impl=builtin`). For 53 keys it holds what `krb5_c_encrypt`, `krb5_c_decrypt`,
-//! `krb5_c_make_checksum` and `krb5_c_verify_checksum` (cksumtype 12) and `krb5_c_prf` return, by operation and key usage:
-//! the good keys, a key with one octet of even parity in each of its three DES keys, a key with every octet wrong, the weak
-//! and semi-weak keys in each of the three places, and keys that have both faults, which decide the order of the checks.
-//!
-//! MIT `mit_des3_key_sched` (`lib/crypto/builtin/des/d3_kysched.c:29-53`): for each DES key in turn, its parity (`-1`) and then its weakness (`-2`).
-//! MIT `validate_and_schedule` (`lib/crypto/builtin/enc_provider/des3.c:33-53`): `-1` is `KRB5DES_BAD_KEYPAR` and `-2` is `KRB5DES_WEAK_KEY`, returned by every use of the key.
-//! The same key loads: a keytab, a dump or a ticket's session key is taken as it is, and only its first use fails.
-
 use krb5_crypto::{
     EncryptionType, Error, KeyUsage, ProtocolKey, checksum, decrypt, encrypt, prf,
     verify_checksum_type,
@@ -30,11 +18,8 @@ fn hex(s: &str) -> Vec<u8> {
 
 struct Kat {
     keys: Vec<(String, Vec<u8>)>,
-    /// The ciphertext MIT made of 24 octets under the key `good`, key usage 1.
     ct: Vec<u8>,
-    /// The checksum MIT made of `hello` under the key `good`, key usage 6.
     mac: Vec<u8>,
-    /// `(operation, key, usage, MIT's word)`.
     ops: Vec<(String, String, u32, String)>,
 }
 
@@ -66,13 +51,11 @@ fn kat() -> Kat {
     k
 }
 
-/// MIT's word for what an operation returned, as this port's result.
 fn expect(word: &str) -> Result<(), Error> {
     match word {
         "OK" => Ok(()),
         "BAD_KEYPAR" => Err(Error::DesBadParity),
         "WEAK_KEY" => Err(Error::DesWeakKey),
-        // `krb5_c_decrypt` and `krb5_c_verify_checksum` of data made under another key usage.
         "OTHER-1765328353" | "INVALID" => Err(Error::Integrity),
         other => panic!("a word this test does not know: {other}"),
     }
@@ -88,8 +71,6 @@ fn of(k: &Kat, name: &str) -> ProtocolKey {
     ProtocolKey::from_bytes(DES3, key).expect("a 24-octet key loads, whatever its parity")
 }
 
-/// Every operation under every key returns what MIT returns: a good key is used, and a key with a wrong octet or a weak DES
-/// key is refused with MIT's code. Before the port of `mit_des3_key_sched`, this port used any 24 octets.
 #[test]
 fn every_use_of_a_des3_key_is_refused_as_mit_refuses_it() {
     let k = kat();
@@ -110,11 +91,9 @@ fn every_use_of_a_des3_key_is_refused_as_mit_refuses_it() {
         assert_eq!(got, expect(word), "{op} under {name}, usage {usage}");
         n += 1;
     }
-    // 53 keys: encrypt, decrypt, checksum and verify at three key usages, and the PRF once.
     assert_eq!(n, 53 * (4 * 3 + 1));
 }
 
-/// The first failing check decides: parity then weakness of the first DES key, then of the second, then of the third.
 #[test]
 fn the_checks_run_in_mits_order() {
     let k = kat();
