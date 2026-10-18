@@ -3880,6 +3880,83 @@ fn run() -> Result<(), String> {
         err::PREAUTH_FAILED,
     )?;
 
+    let armor_tkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    let mut accepted = tgs_req(
+        armor_tkt.clone(),
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00ab,
+    )
+    .map_err(|e| e.to_string())?;
+    let accepted_inner = accepted.0.req_body.clone();
+    let pa_tgs_bytes = accepted
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.as_ref().to_vec())
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    let armor_sub =
+        ProtocolKey::from_bytes(sess.etype(), &[0x53u8; 32]).map_err(|e| e.to_string())?;
+    let armor_ap = build_fast_armor(
+        armor_tkt,
+        &sess,
+        &krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        &user,
+        Some(&armor_sub),
+    )
+    .map_err(|e| e.to_string())?;
+    let akey = armor_key(&sess, Some(&armor_sub)).map_err(|e| e.to_string())?;
+    let ck_usage = KeyUsage::new(ku::FAST_REQ_CHKSUM).map_err(|e| e.to_string())?;
+    let mic = checksum(&akey, ck_usage, &pa_tgs_bytes).map_err(|e| e.to_string())?;
+    let inner = krb5_types::fast::KrbFastReq {
+        fast_options: krb5_types::fast::fast_options_none(),
+        padata: Vec::new(),
+        req_body: accepted_inner,
+    };
+    let inner_der = encode(&inner).map_err(|e| e.to_string())?;
+    let enc_usage = KeyUsage::new(ku::FAST_ENC).map_err(|e| e.to_string())?;
+    let cipher = encrypt(&akey, enc_usage, &inner_der).map_err(|e| e.to_string())?;
+    let armor_der = encode(&armor_ap).map_err(|e| e.to_string())?;
+    let armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: Some(krb5_types::fast::KrbFastArmor {
+            armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+            armor_value: armor_der.into(),
+        }),
+        req_checksum: Checksum {
+            cksumtype: akey.etype().checksum_type(),
+            checksum: mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: akey.etype().to_iana(),
+            kvno: None,
+            cipher: cipher.into(),
+        },
+    };
+    accepted.0.padata.get_or_insert_with(Vec::new).push(PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+            .map_err(|e| e.to_string())?
+            .into(),
+    });
+    expect_tgs_rep(
+        &cfg,
+        "tgs-fast-armor-no-tgs-subkey",
+        &encode(&accepted).map_err(|e| e.to_string())?,
+    )?;
+
     let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
     let post_tgt = mint_tgt(
         tkt_key,
@@ -5150,7 +5227,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":134}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":135}}"#);
     Ok(())
 }
 
