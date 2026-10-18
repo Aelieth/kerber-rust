@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import subprocess
 
 from .common import GITIGNORE, NEXTEST_TOML, ROOT, WORKFLOWS, _die
 
@@ -294,3 +295,31 @@ def check_workflow_hardening(
     for name, text in shellcheck_pins.items():
         if image not in text:
             _die(f"{name} must run the shellcheck image {image} (the version ci.yml installs)")
+
+
+# A workflow step that executes ./scripts/… or ./harness/….
+EXEC_RE = re.compile(r"\./((?:scripts|harness)/[A-Za-z0-9._/-]+\.sh)")
+
+
+def check_exec_modes(scripts: list[str], modes: dict[str, str]) -> None:
+    bad = [p for p in scripts if modes.get(p) != "100755"]
+    if bad:
+        _die("workflow script mode is not 100755: " + ", ".join(bad))
+
+
+def check_workflow_exec_bits(workflows: list[Workflow]) -> None:
+    scripts = list(dict.fromkeys(EXEC_RE.findall("\n".join(w.text for w in workflows))))
+    if not scripts:
+        _die("no ./scripts or ./harness run in workflows")
+    listed = subprocess.run(
+        ["git", "ls-files", "-s"], cwd=ROOT, capture_output=True, text=True, check=False
+    )
+    if listed.returncode != 0:
+        _die(f"git ls-files: {(listed.stderr or listed.stdout).strip()[-200:]}")
+    modes = {
+        line.split("\t", 1)[1]: line.split(" ", 1)[0]
+        for line in listed.stdout.splitlines()
+        if "\t" in line
+    }
+    check_exec_modes(scripts, modes)
+    print(f"exec: {len(scripts)} workflow scripts are 100755")

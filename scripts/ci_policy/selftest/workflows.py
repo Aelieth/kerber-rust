@@ -5,13 +5,28 @@ from __future__ import annotations
 import pathlib
 
 from ..workflows import (
-    SHELLCHECK_CMD, Workflow, check_all_timeouts, check_makefile_matches_ci, check_msrv_pinned,
-    check_nextest, check_workflow_hardening, check_working_gitignored,
+    EXEC_RE, SHELLCHECK_CMD, Workflow, check_all_timeouts, check_exec_modes, check_makefile_matches_ci,
+    check_msrv_pinned, check_nextest, check_workflow_hardening, check_working_gitignored,
 )
 from .common import _must_die
 
 
+def _self_test_exec_bits() -> None:
+    text = "run: ./scripts/lib/a.sh\nrun: ./harness/b.sh\nrun: echo scripts/skipped.sh\n"
+    assert list(dict.fromkeys(EXEC_RE.findall(text))) == ["scripts/lib/a.sh", "harness/b.sh"]
+    check_exec_modes(
+        ["scripts/lib/a.sh", "harness/b.sh"],
+        {"scripts/lib/a.sh": "100755", "harness/b.sh": "100755"},
+    )
+    _must_die(
+        check_exec_modes,
+        ["scripts/lib/a.sh"],
+        {"scripts/lib/a.sh": "100644"},
+    )
+
+
 def _self_test_workflows() -> None:
+    _self_test_exec_bits()
     snippet = """name: ci
 on:
   push:

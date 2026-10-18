@@ -22,7 +22,7 @@ from .ledger import (
 from .selftest import _self_test
 from .workflows import (
     Workflow, check_all_timeouts, check_makefile_matches_ci, check_msrv_pinned, check_nextest,
-    check_workflow_hardening, check_working_gitignored,
+    check_workflow_exec_bits, check_workflow_hardening, check_working_gitignored,
 )
 
 
@@ -45,6 +45,7 @@ def main() -> None:
         _die("no workflow YAML")
     check_nextest()
     check_all_timeouts(workflows)
+    check_workflow_exec_bits(workflows)
     check_no_case_whitelists()
     check_isolate_test_krb5()
     check_makefile_matches_ci()
