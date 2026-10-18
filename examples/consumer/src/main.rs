@@ -1,8 +1,3 @@
-//! In-repo consumer of `krb5-crypto` and `krb5-asn1`.
-//!
-//! This binary is not a Kerberos client. It exercises the public encrypt and
-//! DER APIs with published vectors so CI can catch crate-boundary regressions.
-
 use krb5_asn1::{PrincipalName, decode, encode};
 use krb5_crypto::{EncryptionType, KeyUsage, ProtocolKey, decrypt, encrypt_with_confounder};
 
@@ -23,7 +18,6 @@ fn from_hex(s: &str) -> Vec<u8> {
         .collect()
 }
 
-/// RFC 8009 Appendix A, aes128-cts-hmac-sha256-128, empty plaintext, usage 2.
 fn rfc8009_empty_plaintext() -> (Vec<u8>, Vec<u8>, Vec<u8>, Vec<u8>) {
     let key = from_hex("3705d96080c17728a0e800eab6e0d23c");
     let conf = from_hex("7e5895eaf2672435bad817f545a37148");

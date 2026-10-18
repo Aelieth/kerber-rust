@@ -1,12 +1,3 @@
-//! `krb5-otp-kdc`: the kerber-rust KDC run in-process through the library's embed API, with a TOTP
-//! `OtpVerifier` registered before it serves. It is the KLLDAP integration in miniature, kept to
-//! prove OTP preauth end to end against MIT `kinit`; it is not a shipped product.
-//!
-//! It starts as `krb5-kdc` does for the realm the profile names, in the foreground: the profile,
-//! the daemon log, the realm's database and stash, kdc.conf and the plugin relations, then the
-//! listeners. One loop on this thread serves until SIGTERM or SIGINT. `-n` is accepted and changes
-//! nothing: the program never detaches and writes no pid file. The verifier is in `rfc6238`.
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
@@ -25,16 +16,12 @@ use krb5_config::{KdcConf, KdcPaths, LogSpecs, ProfileSet};
 use krb5_kdc::{ListenLimits, MAX_DGRAM_REPLY, OpenFailure, SharedStore};
 use krb5_log::klog::{self, Severity};
 
-/// The name used when `argv[0]` has none.
 const DEFAULT_PROGNAME: &str = "krb5-otp-kdc";
 
-/// The master key principal the database opens with, as `krb5-kdc` opens it without `-M`.
 const MKEY_NAME: &str = "K/M";
 
-/// The signals that set the loop's stop flag.
 const STOP_SIGNALS: [i32; 2] = [signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT];
 
-/// The program's name: `argv[0]` without its directory.
 fn progname(argv0: Option<&str>) -> String {
     argv0
         .and_then(|path| path.rsplit('/').next())
@@ -43,21 +30,17 @@ fn progname(argv0: Option<&str>) -> String {
         .to_owned()
 }
 
-/// The usage line, on standard error, then exit 1.
 fn usage(progname: &str) -> ! {
     eprintln!("usage: {progname} [-n]");
     exit(1)
 }
 
-/// The realm cannot start: the reason to the daemon log, then the message on standard error, and
-/// exit 1.
 fn cannot_initialize(progname: &str, realm: &str, error: &str, during: &str) -> ! {
     klog::com_err(Some(error), during);
     eprintln!("{progname}: cannot initialize realm {realm} - see log file for details");
     exit(1)
 }
 
-/// `audit_kdc_stop` under the store's read lock, as `krb5-kdc` calls it when its loop ends.
 fn audit_stop(store: &SharedStore, success: bool) {
     let guard = store.read().unwrap_or_else(PoisonError::into_inner);
     krb5_kdc::audit_kdc_stop(&**guard, success);
@@ -69,7 +52,6 @@ fn main() {
     if argv.iter().skip(1).any(|arg| arg != "-n") {
         usage(&progname);
     }
-    // The profile first, its kdc.conf ahead of krb5.conf; a profile it refuses ends the program.
     if let Err(e) = krb5_config::init_kdc_profile() {
         eprintln!("{progname}: {} while initializing krb5", e.init_text());
         exit(1);
@@ -106,8 +88,6 @@ fn main() {
         ),
     };
 
-    // The realm's profile, read once and applied in one order: krb5.conf, then kdc.conf over it,
-    // then `[plugins]` and `[otp]` from both.
     let profile = ProfileSet::from_env_files(&paths).unwrap_or_else(|e| {
         eprintln!("{progname}: {} while initializing krb5", e.init_text());
         exit(1);
@@ -116,7 +96,6 @@ fn main() {
         eprintln!("{progname}: kdc.conf: {e}");
         exit(2);
     }
-    // A relation MIT's programs read and this one reads past is named once in the log.
     for line in profile
         .kdc
         .iter()
@@ -138,7 +117,7 @@ fn main() {
         };
         klog::syslog(severity, &line);
     }
-    // MIT `load_preauth_plugins` (`kdc/kdc_preauth.c:207-219`): the modules initialize in the order pkinit, otp, spake, and one that fails is logged and left out.
+    // MIT load_preauth_plugins; see docs/parity/a3-preauth.md
     for (_, line) in krb5_kdc::otp_startup_lines(&store.policy) {
         klog::syslog(Severity::Err, &line);
     }
@@ -168,7 +147,6 @@ fn main() {
         }
     }
 
-    // The listeners: kdc.conf's lists, else the defaults, as `krb5-kdc` binds them.
     klog::syslog(Severity::Info, "setting up network...");
     let fallback = KdcConf::default();
     let conf = kdc_conf.as_ref().unwrap_or(&fallback);

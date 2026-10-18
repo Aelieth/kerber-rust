@@ -28,6 +28,7 @@ any other `###` heading.
 
 ### Changed
 
+- **examples.** Comments are the preauth-plugin pointer and the two invariants the code does not state.
 - **kdc.** A database change skips the whole-realm reread when no other writer moved the database, merging only the KDC's lockout records; a failed change is undone in memory.
 - **config.** The KDC, kadmind and kadmin.local read their profile once and apply it in one order, kdc.conf over krb5.conf; kadmind let krb5.conf win.
 - **config.** kdc.conf follows `include` and `includedir` and matches names as written, as MIT; the daemons log each relation MIT reads that is not supported.
