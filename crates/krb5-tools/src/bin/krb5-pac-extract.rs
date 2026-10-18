@@ -1,10 +1,3 @@
-//! Decrypt a service ticket from a FILE ccache and write PAC bytes.
-//!
-//! Usage: `krb5-pac-extract --keytab <kt> --ccache <cc> --out <pac>`
-//! Optional: `--enc-tkt-out` (raw decrypted EncTicketPart), `--krbtgt-keytab`, `--keys-out`.
-//! `--server <name[@realm]>` picks the ticket for that server; `--print-layout` prints the PAC's
-//! buffers in order as `type:size`, the PAC's length and the ticket's.
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

@@ -1,11 +1,3 @@
-//! Concurrent AS+TGS load driver against a live KDC.
-//!
-//! Usage: loadgen \<kdc-host\> \<user@REALM\> \[service\]
-//!
-//! Password is `KRB5_PASSWORD`. Concurrency is `KERBER_LOAD_WORKERS` (default 8)
-//! times `KERBER_LOAD_ITERS` (default 8), or loop until `KERBER_LOAD_SECONDS`.
-//! The first failed exchanges are named on stderr, so a gate's log says why.
-
 #![forbid(unsafe_code)]
 #![allow(
     clippy::disallowed_methods,
@@ -20,7 +12,6 @@ use std::time::{Duration, Instant};
 use krb5_client::kinit;
 use krb5_protocol::KdcAddr;
 
-/// The failed exchanges named on stderr; the rest are only counted.
 const SHOWN_ERRORS: u64 = 5;
 
 fn parse_u32(name: &str, default: u32) -> u32 {

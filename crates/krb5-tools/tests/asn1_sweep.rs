@@ -1,7 +1,3 @@
-//! The decode sweep against MIT 1.22.2's decoder: each case the Rust decoder decodes as MIT's
-//! `decode_krb5_<type>` does (`tests/data/asn1-mit-golden.tsv`, written by
-//! `scripts/asn1-decode-oracle-gate.sh`).
-
 #![allow(dead_code)]
 
 include!("../src/asn1_sweep.rs");

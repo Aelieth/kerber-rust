@@ -1,39 +1,3 @@
-//! The application side of the decode sweep, for `scripts/rd-priv-oracle-gate.sh`: an AP-REQ, a
-//! KRB-PRIV and a KRB-SAFE whose authenticator, `EncKrbPrivPart` and KRB-SAFE-BODY are broken as
-//! the decode sweep breaks a message (`der_breaks.rs`), each re-encrypted or re-signed so only the
-//! break is wrong, and the three messages themselves broken the same way. MIT 1.22.2's
-//! `krb5_rd_req`, `krb5_rd_priv` and `krb5_rd_safe` (the rd-priv oracle under `scripts/oracle`)
-//! answer each; the Rust acceptor must answer as MIT does.
-//!
-//! - `rd-sweep cases`: the service key line, then `id<TAB>req|priv|safe<TAB>ap-req<TAB>msg|-`.
-//! - `rd-sweep judge <cases> <mit>`: the Rust answers to the same cases against MIT's
-//!   (`id<TAB>code`); exit 1 when any parts from MIT's.
-//! - `rd-sweep kpasswd <keytab> <client> [setpw] [raddr=IP] [entry=N]`: the same cases as RFC 3244
-//!   kpasswd frames for the realm's `kadmin/changepw`, whose ticket key, enctype and kvno are entry
-//!   N's of the keytab (0 unless given): `id<TAB>frame-hex`, `[plen][vno][aplen][AP-REQ][KRB-PRIV]`.
-//!   The `ap-req/*` cases carry the pristine KRB-PRIV, the `krb-priv/*` cases the pristine AP-REQ;
-//!   KRB-SAFE is not read by kpasswd. With `setpw` the version is 0xff80 and the user data a
-//!   ChangePasswdData for `<client>`, and the `setpw/*` cases break that. `raddr=IP` is the
-//!   receiver address each KRB-PRIV carries (none by default).
-//! - `rd-sweep judge-explicit <frames> <mit> <dump> <master-password>`: the answer of kadmind's
-//!   kpasswd acceptor (`handle_kpasswd_rfc3244` over the realm of the MIT dump) to each frame
-//!   against MIT's (`id<TAB>0|req[:detail]|priv[:detail]|drop`) from the rd-priv oracle's `kpasswd`
-//!   mode; exit 1 when any parts from MIT's.
-//! - `rd-sweep kadmind <keytab> <client>`: AP-REQs for the keytab's service principals (as `ktadd` made it:
-//!   `kadmin/admin`, `kadmin/changepw`, `kadmin/history`, a host), each sealed in each of its keys, and in its
-//!   first with the kvno wrong or the cleartext server another's: `id<TAB>ap-req-hex`.
-//! - `rd-sweep judge-kdb <cases> <mit> <dump> <master-password>`: what kadmind's GSS acceptor reads from the
-//!   KDB keytab (`kdb_rd_req` over the realm of the MIT dump) for each case, with no name (RPCSEC_GSS), as
-//!   `kadmin/admin` and as `kadmin/changepw` (AUTH_GSSAPI's names), against MIT's `krb5_rd_req`
-//!   (`id<TAB>noname<TAB>admin<TAB>changepw`, each `0` or the code) from the oracle's `kadmind` mode, the
-//!   three answers joined by `|` in the `SAME` and `PART` lines; exit 1 when any parts from MIT's.
-//! - `rd-sweep kadmind-init <host:port> <keytab> <client> [service=P] [entry=N] [flavor=rpcsec|agss]`: an
-//!   INIT call to a kadmind with a ticket forged in the Nth key of the keytab's service (`kadmin/admin`,
-//!   entry 0 by default; RPCSEC_GSS, or AUTH_GSSAPI with `flavor=agss`), and one line saying what it got:
-//!   `ACCEPTED gss_major=<n> <label>` (AUTH_GSSAPI answers a refused context so, GSS_S_FAILURE) or
-//!   `DENIED auth_stat=<n> <label>`. MIT's kadmind and ours take the first key
-//!   alone, so entry 1 and later are refused (the gates and the lab show both).
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(
@@ -58,12 +22,10 @@ use krb5_types::{
     TransitedEncoding, ascii, ku,
 };
 
-/// The service the tickets are for, its key and kvno (the oracle puts them in a MEMORY keytab).
 const SERVICE: &str = "host/oracle.kerber.test@KERBER.TEST";
 const SERVICE_KEY: [u8; 32] = [0x43; 32];
 const SESSION_KEY: [u8; 32] = [0x44; 32];
 const SUBKEY: [u8; 32] = [0x45; 32];
-/// The sender's (127.0.0.1) and the receiver's (10.0.0.1) addresses, as the rd-safe oracle's.
 const SENDER: [u8; 4] = [127, 0, 0, 1];
 const RECEIVER: [u8; 4] = [10, 0, 0, 1];
 
@@ -94,7 +56,6 @@ fn root(bytes: &[u8]) -> Result<Der, String> {
         .ok_or_else(|| "not one DER element".to_string())
 }
 
-/// The AP-REQ for `authenticator` (its DER as given), in a ticket for [`SERVICE`].
 fn ap_req(authenticator: &[u8], now: &KerberosTime) -> Result<Vec<u8>, String> {
     let client = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]);
     let part = EncTicketPart {
@@ -145,7 +106,6 @@ fn ap_req(authenticator: &[u8], now: &KerberosTime) -> Result<Vec<u8>, String> {
     der!(&ap)
 }
 
-/// A KRB-PRIV around `part` (its DER as given), encrypted in the authenticator's subkey.
 fn krb_priv(part: &[u8]) -> Result<Vec<u8>, String> {
     let msg = KrbPriv {
         pvno: KrbPriv::PVNO,
@@ -161,7 +121,6 @@ fn krb_priv(part: &[u8]) -> Result<Vec<u8>, String> {
     der!(&msg)
 }
 
-/// A KRB-SAFE around `body` (its DER as given), its checksum over those octets in the subkey.
 fn krb_safe(body: &[u8]) -> Result<Vec<u8>, String> {
     let mac =
         checksum(&key(&SUBKEY)?, usage(ku::KRB_SAFE_CKSUM)?, body).map_err(|e| e.to_string())?;
@@ -186,12 +145,8 @@ fn krb_safe(body: &[u8]) -> Result<Vec<u8>, String> {
     Ok(safe.bytes())
 }
 
-/// One case: its id, what the acceptor reads (`req`, `priv` or `safe`), the AP-REQ, and the
-/// KRB-PRIV or KRB-SAFE after it.
 type RdCase = (String, &'static str, Vec<u8>, Option<Vec<u8>>);
 
-/// Every case: the pristine AP-REQ, KRB-PRIV and KRB-SAFE; each with its authenticator,
-/// `EncKrbPrivPart` or KRB-SAFE-BODY broken each way; then each itself broken each way.
 fn cases() -> Result<Vec<RdCase>, String> {
     let now = KerberosTime::now();
     let authenticator = Authenticator {
@@ -304,7 +259,6 @@ fn cases() -> Result<Vec<RdCase>, String> {
 }
 
 /// An answer as the oracle prints MIT's: `0` accepted, `asn1` an ASN.1 decode error, `krb5:<n>`
-/// the protocol code `n`.
 fn rust_answer(kind: &str, ap: &[u8], msg: Option<&[u8]>) -> String {
     let class = |e: &Error| match e {
         Error::Asn1(_) => "asn1".to_string(),
@@ -365,8 +319,6 @@ fn unhex(h: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
-/// What the `kpasswd` cases are made for: the realm's `kadmin/changepw` as a keytab entry holds it, and
-/// the client the ticket is for.
 struct KpEnv {
     realm: String,
     kvno: u32,
@@ -377,8 +329,6 @@ struct KpEnv {
     raddr: Option<[u8; 4]>,
 }
 
-/// What a service ticket is made of: who it is for, the server its cleartext names (in the ticket's realm) and
-/// the key, enctype and kvno it is sealed in.
 struct TicketSpec {
     realm: String,
     client: String,
@@ -389,7 +339,6 @@ struct TicketSpec {
     svc: ProtocolKey,
 }
 
-/// The INITIAL ticket `spec` says, its session key `SESSION_KEY`.
 fn forged_ticket(spec: &TicketSpec, now: &KerberosTime) -> Result<Ticket, String> {
     let part = EncTicketPart {
         flags: TicketFlags::initial_preauth(),
@@ -421,7 +370,6 @@ fn forged_ticket(spec: &TicketSpec, now: &KerberosTime) -> Result<Ticket, String
     })
 }
 
-/// The AP-REQ for `authenticator` (its DER as given), in an INITIAL ticket as `spec` says.
 fn ticket_ap_req(
     spec: &TicketSpec,
     authenticator: &[u8],
@@ -447,8 +395,6 @@ fn ticket_ap_req(
     der!(&ap)
 }
 
-/// The AP-REQ for `authenticator` (its DER as given), in an INITIAL ticket for `kadmin/changepw`
-/// sealed in the keytab entry's key.
 fn kp_ap_req(env: &KpEnv, authenticator: &[u8], now: &KerberosTime) -> Result<Vec<u8>, String> {
     ticket_ap_req(
         &TicketSpec {
@@ -465,7 +411,6 @@ fn kp_ap_req(env: &KpEnv, authenticator: &[u8], now: &KerberosTime) -> Result<Ve
     )
 }
 
-/// A kpasswd request: `[plen:2][vno:2][aplen:2][AP-REQ][KRB-PRIV]` (RFC 3244 section 2).
 fn kp_frame(vno: u16, ap: &[u8], msg: &[u8]) -> Vec<u8> {
     let aplen = u16::try_from(ap.len()).unwrap_or(u16::MAX);
     let plen = u16::try_from(6 + ap.len() + msg.len()).unwrap_or(u16::MAX);
@@ -478,7 +423,6 @@ fn kp_frame(vno: u16, ap: &[u8], msg: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The authenticator every request case starts from: the client, a checksum, a subkey and a sequence number.
 fn pristine_authenticator(realm: &str, client: &str, now: &KerberosTime) -> Authenticator {
     Authenticator {
         authenticator_vno: Authenticator::VNO,
@@ -508,10 +452,6 @@ fn pristine_authenticator(realm: &str, client: &str, now: &KerberosTime) -> Auth
     }
 }
 
-/// Every kpasswd case as a frame: the pristine request (twice, as `ap-req/pristine` and
-/// `krb-priv/pristine`); the authenticator and the `EncKrbPrivPart` broken each way and re-encrypted;
-/// the AP-REQ and the KRB-PRIV themselves broken each way; and, for `setpw`, the ChangePasswdData
-/// broken each way and one that names no target.
 fn kp_cases(env: &KpEnv) -> Result<Vec<(String, Vec<u8>)>, String> {
     let now = KerberosTime::now();
     let vno: u16 = if env.setpw { 0xff80 } else { 1 };
@@ -588,8 +528,6 @@ fn kp_cases(env: &KpEnv) -> Result<Vec<(String, Vec<u8>)>, String> {
     Ok(out)
 }
 
-/// `rd-sweep kpasswd <keytab> <client> [setpw] [raddr=IP] [entry=N]`: the frames, one `id<TAB>hex`
-/// line each.
 fn kpasswd(keytab: &str, client: &str, opts: &[String]) -> Result<(), String> {
     let (mut setpw, mut raddr, mut pick) = (false, None, 0usize);
     for o in opts {
@@ -631,10 +569,6 @@ fn kpasswd(keytab: &str, client: &str, opts: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// How kadmind's kpasswd answers a frame, as far as `krb5_rd_req` and `krb5_rd_priv` decide it: `req`
-/// when the AP-REQ is refused (AUTHERROR "Failed reading application request"), `priv` when the
-/// KRB-PRIV is (HARDERROR "Failed decrypting request"), `0` when both are read, `drop` when no
-/// reply is made.
 fn explicit_answer(
     shared: &krb5_kdc::SharedDump,
     acl: &krb5_kdc::Acl,
@@ -675,8 +609,6 @@ fn explicit_answer(
     "other:reply".into()
 }
 
-/// kadmind's acceptor profile values: the KDC context's profile, kdc.conf and then the krb5.conf
-/// files, read once.
 fn kdc_context_conf() -> AcceptorConfig {
     let mut files = vec![krb5_config::kdc_conf_path()];
     files.extend(krb5_config::krb5_conf_paths());
@@ -688,7 +620,6 @@ fn kdc_context_conf() -> AcceptorConfig {
         )
 }
 
-/// `rd-sweep judge-explicit <frames> <mit> <dump> <master-password>`.
 fn judge_explicit(frames: &str, mit: &str, dump: &str, password: &str) -> Result<bool, String> {
     let frames = std::fs::read_to_string(frames).map_err(|e| format!("{frames}: {e}"))?;
     let mit = std::fs::read_to_string(mit).map_err(|e| format!("{mit}: {e}"))?;
@@ -719,14 +650,12 @@ fn judge_explicit(frames: &str, mit: &str, dump: &str, password: &str) -> Result
     Ok(parts == 0)
 }
 
-/// A service principal of the keytab and its keys, as the entries hold them.
 struct KaService {
     realm: String,
     name: PrincipalName,
     keys: Vec<(i32, u32, ProtocolKey)>,
 }
 
-/// The services of a keytab, in order of first appearance, with each one's entries in file order.
 fn ka_services(kt: &Keytab) -> Vec<KaService> {
     let mut out: Vec<KaService> = Vec::new();
     for e in &kt.entries {
@@ -747,11 +676,6 @@ fn ka_services(kt: &Keytab) -> Vec<KaService> {
     out
 }
 
-/// Every `kadmind` case as an AP-REQ: for each service of the keytab, a ticket sealed in each of its keys at
-/// that key's kvno (`<service>` for the first, `<service>/key<N>` for the others), and, for its first key,
-/// one with the kvno 0, one at kvno 99, ones sealed in a key of an enctype the keytab lacks
-/// (`<service>/etype=<n>`: des3, rc4, camellia) and, for `kadmin/admin` and `kadmin/changepw`, ones whose
-/// cleartext server is each other service, `nosuch/service`, or in another realm.
 fn ka_cases(client: &str, services: &[KaService]) -> Result<Vec<(String, Vec<u8>)>, String> {
     let now = KerberosTime::now();
     let mut out = Vec::new();
@@ -842,7 +766,6 @@ fn ka_cases(client: &str, services: &[KaService]) -> Result<Vec<(String, Vec<u8>
     Ok(out)
 }
 
-/// `rd-sweep kadmind <keytab> <client>`: the cases, one `id<TAB>hex` line each.
 fn kadmind(keytab: &str, client: &str) -> Result<(), String> {
     let bytes = std::fs::read(keytab).map_err(|e| format!("{keytab}: {e}"))?;
     let kt = Keytab::parse(&bytes).map_err(|e| format!("{keytab}: {e}"))?;
@@ -856,8 +779,6 @@ fn kadmind(keytab: &str, client: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// How the verifier's refusal reads in the rd-priv oracle's words: `0`, `krb5:<n>` for code n of the krb5 table,
-/// `other:<n>` for another table's.
 fn kdb_answer(e: &Result<krb5_protocol::ApVerifyOk, Error>) -> String {
     match e {
         Ok(_) => "0".into(),
@@ -871,7 +792,6 @@ fn kdb_answer(e: &Result<krb5_protocol::ApVerifyOk, Error>) -> String {
     }
 }
 
-/// `rd-sweep judge-kdb <cases> <mit> <dump> <master-password>`.
 fn judge_kdb(cases: &str, mit: &str, dump: &str, password: &str) -> Result<bool, String> {
     let cases = std::fs::read_to_string(cases).map_err(|e| format!("{cases}: {e}"))?;
     let mit = std::fs::read_to_string(mit).map_err(|e| format!("{mit}: {e}"))?;
@@ -930,12 +850,10 @@ fn judge_kdb(cases: &str, mit: &str, dump: &str, password: &str) -> Result<bool,
     Ok(parts == 0)
 }
 
-/// A big-endian word.
 fn word(n: u32) -> [u8; 4] {
     n.to_be_bytes()
 }
 
-/// An XDR opaque: its length, the octets, and the padding to a multiple of four.
 fn opaque(b: &[u8]) -> Vec<u8> {
     let mut v = word(u32::try_from(b.len()).unwrap_or(u32::MAX)).to_vec();
     v.extend_from_slice(b);
@@ -943,7 +861,6 @@ fn opaque(b: &[u8]) -> Vec<u8> {
     v
 }
 
-/// The words of a reply record, read in order.
 struct Words<'a>(&'a [u8]);
 
 impl Words<'_> {
@@ -977,9 +894,7 @@ fn auth_label(why: u32) -> &'static str {
     }
 }
 
-/// One INIT call to a kadmind: RPC program 2112 version 2, procedure 0 for RPCSEC_GSS and AUTH_GSSAPI's
 /// procedure 1 (an auth message), as MIT's client sends them. The record ends in the GSS token. What it
-/// got: the RPC layer's refusal, or the GSS major status the flavor answered with.
 fn init_call(
     stream: &mut std::net::TcpStream,
     agss: bool,
@@ -1068,9 +983,6 @@ fn init_call(
     Ok(parsed.unwrap_or_else(|| "OTHER short reply".to_string()))
 }
 
-/// `rd-sweep kadmind-init <host:port> <keytab> <client> [service=<principal>] [entry=N] [flavor=rpcsec|agss]`:
-/// an INIT call to a kadmind, for a ticket forged in the keytab's Nth key of the service (`kadmin/admin`, the
-/// first key by default), and the line saying what it got. The ticket is sealed in that entry's enctype and
 /// kvno; MIT's and our kadmind take the first key alone and refuse the rest.
 fn kadmind_init(addr: &str, keytab: &str, client: &str, opts: &[String]) -> Result<(), String> {
     let (mut service, mut entry, mut agss) = ("kadmin/admin".to_owned(), 0usize, false);

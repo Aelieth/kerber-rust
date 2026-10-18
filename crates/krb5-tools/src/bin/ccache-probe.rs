@@ -1,5 +1,3 @@
-//! FILE identity, MEMORY consume, and Rust remove_cred for ccache-gate.
-
 fn main() {
     let mut args = std::env::args().skip(1);
     let cmd = args.next().unwrap_or_default();

@@ -37,15 +37,12 @@ struct Case {
     der: Vec<u8>,
 }
 
-/// The Rust decoder's verdict: refused, or decoded to this DER (empty for a value it does not
-/// encode, as an unknown PA-SPAKE choice).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Verdict {
     Refused,
     Decoded(Vec<u8>),
 }
 
-/// The Rust decoder's verdict on a case read as `$t`: a non-capturing closure, so a `fn`.
 macro_rules! verdict {
     ($t:ty) => {
         |der: &[u8]| match krb5_asn1::decode::<$t>(der) {
@@ -64,7 +61,6 @@ fn verdict_enc_kdc_rep_part(der: &[u8]) -> Verdict {
 }
 
 /// A message type: its name, MIT's decoder (`decode_krb5_<mit>`), its value's DER and `Debug`,
-/// and how the Rust decoder judges a case.
 struct Message {
     name: &'static str,
     mit: &'static str,
@@ -687,7 +683,6 @@ fn messages() -> Vec<Message> {
     out
 }
 
-/// Every case: each message as it is (`pristine`), then each target broken each way.
 fn corpus(messages: &[Message]) -> Vec<Case> {
     let mut out = Vec::new();
     for m in messages {
@@ -711,14 +706,12 @@ fn corpus(messages: &[Message]) -> Vec<Case> {
     out
 }
 
-/// FNV-1a, 64 bits: re-encodings compared by hash.
 fn fnv64(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
         (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
     })
 }
 
-/// A corpus as the oracle reads it: `id<TAB>mit-decoder<TAB>hex`, one case a line.
 fn corpus_text(cases: &[Case]) -> String {
     cases.iter().fold(String::new(), |mut out, c| {
         let _ = writeln!(out, "{}\t{}\t{}", c.id, c.mit, hex(&c.der));
@@ -744,14 +737,12 @@ fn judge_case(messages: &[Message], c: &Case) -> Option<Verdict> {
 }
 
 /// What MIT's decoder made of one case: refused, or decoded (with the hash of what MIT's encoder
-/// made of the value, `None` where libkrb5 has no encoder for the type).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Mit {
     Refused,
     Decoded(Option<u64>),
 }
 
-/// The oracle's lines: `id<TAB>ERR<TAB>code…` or `id<TAB>OK<TAB>fnv64` (`-` without an encoder).
 fn parse_mit(text: &str) -> std::collections::HashMap<String, Mit> {
     text.lines()
         .filter_map(|l| {
@@ -817,7 +808,6 @@ fn golden_text(
     (text, parts)
 }
 
-/// Each case where the Rust decoder parts from the golden, with what each did.
 fn check_golden(messages: &[Message], cases: &[Case], golden: &str) -> Vec<String> {
     let mut lines = golden.lines();
     let want = format!("# corpus {:016x}", fnv64(corpus_text(cases).as_bytes()));
