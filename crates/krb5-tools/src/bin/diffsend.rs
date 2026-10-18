@@ -22,7 +22,7 @@ use krb5_protocol::{
     attach_fast_with_options, build_fast_armor, compare_krb_error, compare_stable_rep,
     decode_enc_kdc_rep, exchange_on_tcp, pa_enc_timestamp, pa_enc_timestamp_at, pa_for_user,
     pa_pac_options, pa_pk_as_req_signed, pa_pk_as_req_unsigned, pa_s4u_x509_user, pa_spake_support,
-    tgs_req, tgs_req_ex,
+    stable_krb_error, tgs_req, tgs_req_ex,
 };
 use krb5_types::cammac::AdKdcIssued;
 use krb5_types::pac::{PAC_SERVER_CHECKSUM, Pac, PacIdentity, RpcSid};
@@ -92,6 +92,61 @@ fn send_both(cfg: &Cfg, case: &str, req: &[u8]) -> Result<(Vec<u8>, Vec<u8>), St
 
 fn expect_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
     expect_error_client(cfg, case, req, code, true)
+}
+
+fn expect_error_no_edata(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
+    let (rust, mit) = send_both(cfg, case, req)?;
+    if rust.first() != Some(&0x7e) {
+        return Err(format!(
+            "{case}: rust tag {:02x} want 0x7e",
+            rust.first().unwrap_or(&0)
+        ));
+    }
+    if mit.first() != Some(&0x7e) {
+        return Err(format!(
+            "{case}: mit tag {:02x} want 0x7e",
+            mit.first().unwrap_or(&0)
+        ));
+    }
+    let re: KrbError = decode(&rust).map_err(|e| format!("{case} rust decode: {e}"))?;
+    let me: KrbError = decode(&mit).map_err(|e| format!("{case} mit decode: {e}"))?;
+    if re.error_code != code {
+        return Err(format!(
+            "{case}: rust error_code {} want {code}",
+            re.error_code
+        ));
+    }
+    if stable_krb_error(&re) != stable_krb_error(&me) {
+        return Err(format!("{case}: krb-error stable mismatch"));
+    }
+    if re.e_data.is_some() || me.e_data.is_some() {
+        return Err(format!("{case}: e_data present"));
+    }
+    let cn = |e: &KrbError| e.cname.as_ref().map(PrincipalName::components_joined);
+    let cr = |e: &KrbError| {
+        e.crealm
+            .as_ref()
+            .map(|r| String::from_utf8_lossy(r.as_bytes()).into_owned())
+    };
+    if cn(&re) != cn(&me) || cr(&re) != cr(&me) {
+        return Err(format!(
+            "{case}: client rust=({:?},{:?}) mit=({:?},{:?})",
+            cr(&re),
+            cn(&re),
+            cr(&me),
+            cn(&me)
+        ));
+    }
+    let rust_text = re
+        .e_text
+        .as_ref()
+        .and_then(|t| std::str::from_utf8(t.as_bytes()).ok())
+        .unwrap_or("");
+    println!(
+        r#"{{"event":"diffsend","case":"{case}","outcome":"ok","error_code":{},"e_text":"{rust_text}","e_data":"absent","rust_tag":"0x7e","mit_tag":"0x7e"}}"#,
+        re.error_code
+    );
+    Ok(())
 }
 
 fn expect_hidden_client_error(cfg: &Cfg, case: &str, req: &[u8], code: i32) -> Result<(), String> {
@@ -3775,6 +3830,56 @@ fn run() -> Result<(), String> {
         err::MODIFIED,
     )?;
 
+    let mut explicit = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00aa,
+    )
+    .map_err(|e| e.to_string())?;
+    let explicit_inner = explicit.0.req_body.clone();
+    wrap_tgs_fast_hide(&mut explicit, &sess, explicit_inner)?;
+    let pa_tgs = explicit
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.clone())
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    let fx = explicit
+        .0
+        .padata
+        .as_mut()
+        .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
+        .ok_or_else(|| "no PA-FX-FAST".to_string())?;
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode(fx.padata_value.as_ref()).map_err(|e| e.to_string())?;
+    armored.armor = Some(krb5_types::fast::KrbFastArmor {
+        armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+        armor_value: pa_tgs,
+    });
+    fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
+        .map_err(|e| e.to_string())?
+        .into();
+    expect_error_no_edata(
+        &cfg,
+        "tgs-fast-explicit-armor",
+        &encode(&explicit).map_err(|e| e.to_string())?,
+        err::PREAUTH_FAILED,
+    )?;
+
     let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
     let post_tgt = mint_tgt(
         tkt_key,
@@ -5045,7 +5150,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":133}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":134}}"#);
     Ok(())
 }
 
