@@ -145,7 +145,6 @@ DIFFSEND_CASES = frozenset(
         "s4u2self-client-expired",
         "s4u2self-client-locked-out",
         "tgs-fast-unkeyed-bad-checksum",
-        "tgs-fast-explicit-armor",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
