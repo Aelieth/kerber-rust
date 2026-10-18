@@ -36,12 +36,12 @@ pub(crate) fn rc4_encrypt_with_conf(
         return Err(Error::InvalidConfounder);
     }
     let mut kusage = hmac_md5(key.as_bytes(), &rc4_usage(usage).to_le_bytes())?;
-    let mut data = Vec::with_capacity(8 + plaintext.len());
+    let mut data = Wiped(Vec::with_capacity(8 + plaintext.len()));
     data.extend_from_slice(confounder);
     data.extend_from_slice(plaintext);
     let checksum = hmac_md5(&kusage, &data)?;
     let mut kcrypt = hmac_md5(&kusage, &checksum)?;
-    let mut ed = data.clone();
+    let mut ed = Wiped((*data).clone());
     apply_rc4(&kcrypt, &mut ed)?;
     kusage.zeroize();
     kcrypt.zeroize();
@@ -112,12 +112,12 @@ pub(crate) fn des3_encrypt(
     getrandom::getrandom(&mut conf).map_err(|_| Error::Rng)?;
     let derived = dk_des3(key.as_bytes(), &usage.derivation_constant(0xAA))?;
     let ki = dk_des3(key.as_bytes(), &usage.derivation_constant(0x55))?;
-    let mut data = Vec::with_capacity(DES_BLOCK + plaintext.len());
+    let span = DES_BLOCK + plaintext.len();
+    let padded = span.div_ceil(DES_BLOCK) * DES_BLOCK;
+    let mut data = Wiped(Vec::with_capacity(padded));
     data.extend_from_slice(&conf);
     data.extend_from_slice(plaintext);
-    while !data.len().is_multiple_of(DES_BLOCK) {
-        data.push(0);
-    }
+    data.resize(padded, 0);
     let iv = [0u8; DES_BLOCK];
     let c = des3_cbc_encrypt(&derived, iv, &data)?;
     let h = hmac_sha1_trunc(&ki, &data, 20)?;
@@ -326,7 +326,7 @@ pub(crate) fn camellia_encrypt_with_conf(
     }
     let ke = dk_camellia(key.as_bytes(), &usage.derivation_constant(0xAA))?;
     let ki = dk_camellia(key.as_bytes(), &usage.derivation_constant(0x55))?;
-    let mut data = Vec::with_capacity(16 + plaintext.len());
+    let mut data = Wiped(Vec::with_capacity(16 + plaintext.len()));
     data.extend_from_slice(confounder);
     data.extend_from_slice(plaintext);
     let c = crate::cts::camellia_encrypt(&ke, &state.iv, &data)?;

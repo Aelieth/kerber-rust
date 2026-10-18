@@ -18,6 +18,7 @@ any other `###` heading.
 
 ### Security
 
+- **crypto.** Encrypt keeps the confounder and plaintext, including the RC4 copy, in a buffer that is wiped on drop.
 - **admin.** kpasswd refuses a `LOCKDOWN_KEYS` principal's keys (5; MIT's 464 allows it), answers no kpasswd reply or error, and names no path. Lab beside MIT.
 - **kdc/protocol.** A new password is keyed up to its first NUL, as MIT's C string; the kpasswd client wipes its encoded authenticator. Lab beside MIT.
 - **config.** kdc.conf is read for the served realm alone, and `reject_bad_transit`, `disable_pac` and `restrict_anonymous_to_tgt` as MIT reads them. Lab beside MIT.

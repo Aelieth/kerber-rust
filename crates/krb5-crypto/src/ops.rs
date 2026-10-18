@@ -249,7 +249,7 @@ fn encrypt_inner_state(
     }
     let keys = derive_usage_keys(key.etype(), key.as_bytes(), usage)?;
     let iv = state.iv;
-    let mut data = Vec::with_capacity(BLOCK + plaintext.len());
+    let mut data = Wiped(Vec::with_capacity(BLOCK + plaintext.len()));
     data.extend_from_slice(confounder);
     data.extend_from_slice(plaintext);
 
