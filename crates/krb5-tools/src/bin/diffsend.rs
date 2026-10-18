@@ -3588,6 +3588,51 @@ fn run() -> Result<(), String> {
         err::POLICY,
     )?;
 
+    let first = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00a5,
+    )
+    .map_err(|e| e.to_string())?;
+    let mut second = first.clone();
+    second.0.padata.get_or_insert_with(Vec::new).push(PaData {
+        padata_type: pa::ENC_UNIX_TIME,
+        padata_value: Vec::<u8>::new().into(),
+    });
+    let replay = encode(&first).map_err(|e| e.to_string())?;
+    let again = encode(&second).map_err(|e| e.to_string())?;
+    let svc_kt = cfg
+        .host
+        .as_ref()
+        .ok_or_else(|| "KERBER_HOST_KEYTAB required".to_string())?;
+    let (r1, m1) = send_both(&cfg, "tgs-authenticator-replay", &replay)?;
+    let (r2, m2) = send_both(&cfg, "tgs-authenticator-replay", &again)?;
+    let (_, r1e, _, _) = decrypt_tgs(&r1, &sess, svc_kt)?;
+    let (_, r2e, _, _) = decrypt_tgs(&r2, &sess, svc_kt)?;
+    let (_, m1e, _, _) = decrypt_tgs(&m1, &sess, svc_kt)?;
+    let (_, m2e, _, _) = decrypt_tgs(&m2, &sess, svc_kt)?;
+    if r1e.key.keyvalue.as_ref() == r2e.key.keyvalue.as_ref()
+        || m1e.key.keyvalue.as_ref() == m2e.key.keyvalue.as_ref()
+    {
+        return Err("tgs-authenticator-replay: second ticket reused the session key".to_string());
+    }
+    println!(
+        r#"{{"event":"diffsend","case":"tgs-authenticator-replay","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","replay_session_differs":true}}"#
+    );
+
     expect_error(
         &cfg,
         "tgs-postdate-on-non-postdatable",
@@ -4895,7 +4940,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":128}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":129}}"#);
     Ok(())
 }
 

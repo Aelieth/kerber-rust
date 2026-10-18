@@ -268,8 +268,8 @@ fi
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128.
-DIFFSEND_RATCHET=128
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129.
+DIFFSEND_RATCHET=129
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -360,6 +360,7 @@ grep -q '"case":"tgs-authenticator-cname-mismatch","outcome":"ok","error_code":3
 grep -q '"case":"tgs-authenticator-crealm-mismatch","outcome":"ok","error_code":36,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-authenticator-crealm-mismatch not code 36 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-server-locked-out","outcome":"ok","error_code":7,"e_text":"SERVER LOCKED OUT","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-server-locked-out not code 7 e_text SERVER LOCKED OUT on both legs"
 grep -q '"case":"tgs-disallow-tgt-based","outcome":"ok","error_code":12,"e_text":"TGT BASED NOT ALLOWED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-disallow-tgt-based not code 12 e_text TGT BASED NOT ALLOWED on both legs"
+grep -q '"case":"tgs-authenticator-replay","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","replay_session_differs":true' <<<"$DIFF" || die "tgs-authenticator-replay did not issue a second ticket with a different session key on both legs"
 grep -q '"case":"tgs-postdate-on-non-postdatable","outcome":"ok","error_code":13,"e_text":"TGT NOT POSTDATABLE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-postdate-on-non-postdatable not code 13 e_text TGT NOT POSTDATABLE on both legs"
 grep -q '"case":"tgs-validate-invalid-non-renewable","outcome":"ok","error_code":13,"e_text":"TICKET NOT RENEWABLE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-validate-invalid-non-renewable not code 13 e_text TICKET NOT RENEWABLE on both legs"
 grep -q '"case":"tgs-postdated-is-invalid","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d".*"invalid":true' <<<"$DIFF" || die "tgs-postdated-is-invalid not invalid true on both legs"

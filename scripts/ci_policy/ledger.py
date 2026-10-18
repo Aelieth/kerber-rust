@@ -140,6 +140,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-authenticator-crealm-mismatch",
         "tgs-server-locked-out",
         "tgs-disallow-tgt-based",
+        "tgs-authenticator-replay",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
