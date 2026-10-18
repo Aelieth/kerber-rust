@@ -1,23 +1,4 @@
-//! Structured logging schema for kerber-rust.
-//!
-//! Library crates emit `tracing` events using the field names in this
-//! module. Applications and tests install a subscriber; this crate does not.
-//! The daemons' MIT-format text log (`[logging]`) is [`klog`].
-//!
-//! # Event fields
-//!
-//! Every foundation event SHOULD include:
-//!
-//! | Field | Meaning |
-//! | --- | --- |
-//! | `event` | Stable name from [`events`] |
-//! | `correlation_id` | Hex ID tying one operation together |
-//! | `component` | Emitting crate (`krb5-crypto`, `krb5-asn1`, `krb5-protocol`, `krb5-kdc`, `krb5-admin`, `krb5-client`) |
-//! | `outcome` | `"ok"` or `"error"` |
-//!
-//! Crypto operations also emit `etype` (IANA number), `key_usage`, and
-//! `duration_us`. Failures emit `error` with the Display form of the error.
-//! ASN.1 operations emit `pdu` (type name) and `byte_len`.
+//! Structured log fields. The daemons' text log is [`klog`].
 
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -78,8 +59,7 @@ pub mod events {
     pub const KDC_PKINIT: &str = "kdc.pkinit";
     /// A kdcauthdata module returned an error; the KDC logs it and runs the next module.
     pub const KDC_AUTHDATA_MODULE: &str = "kdc.authdata.module";
-    /// A database, stash or keytab save could not give the new file the replaced file's owner or
-    /// group (an unprivileged writer); the save completes.
+    /// A secret-file save could not keep the replaced file's owner or group.
     pub const PROTOCOL_SECRET_FILE: &str = "protocol.secret_file";
 }
 
@@ -100,10 +80,7 @@ impl Drop for CorrelationGuard {
     }
 }
 
-/// Set the parent correlation ID for this thread until the guard is dropped.
-///
-/// Crypto and ASN.1 log using [`current_correlation_id`] so one KDC exchange
-/// keeps a single ID.
+/// Set this thread's correlation ID until the guard is dropped.
 pub fn enter_correlation(id: impl Into<String>) -> CorrelationGuard {
     let id = id.into();
     CURRENT.with(|c| {
@@ -112,19 +89,13 @@ pub fn enter_correlation(id: impl Into<String>) -> CorrelationGuard {
     })
 }
 
-/// Correlation ID for the current exchange, or `"none"` if unset.
-///
-/// Crypto and ASN.1 must not mint a new ID per operation.
+/// This thread's correlation ID, or `"none"`.
 #[must_use]
 pub fn current_correlation_id() -> String {
     CURRENT.with(|c| c.borrow().clone().unwrap_or_else(|| "none".into()))
 }
 
-/// Allocate a 128-bit correlation ID encoded as 32 lowercase hex characters.
-///
-/// Uses the OS CSPRNG when available. If the CSPRNG fails, falls back to a
-/// timestamp-derived value so logging still works; that fallback is not a
-/// cryptographic identifier.
+/// 32 lowercase hex characters; a timestamp mix if the CSPRNG fails.
 #[must_use]
 pub fn new_correlation_id() -> String {
     let mut bytes = [0u8; 16];

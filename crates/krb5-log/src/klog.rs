@@ -1,20 +1,4 @@
-//! MIT's daemon log (`lib/kadm5/logger.c`): the text lines `krb5kdc` and `kadmind` write to
-//! the `[logging]` destinations of their profile (files, standard error, the console, a device,
-//! syslog), in MIT's shape `Mmm dd hh:mm:ss host prog[pid](Severity): message`.
-//!
-//! [`init`] opens the destinations as MIT `krb5_klog_init` does, [`syslog`] writes one line to
-//! each, [`reopen`] reopens the files after a SIGHUP (logrotate's `systemctl reload`), and
-//! [`close`] closes them. Before [`init`], and after [`close`], nothing is written, so a library
-//! caller or a test that never sets the log up writes nothing. [`JsonLog`] is where `[logging]
-//! json`, a relation MIT does not read, sends the JSON structured log.
-//!
-//! # Examples
-//!
-//! ```
-//! use krb5_log::klog::{Severity, format_line};
-//! let line = format_line("Oct 01 21:59:14", "kdc.example.com", "krb5kdc", 2012, Severity::Info, "commencing operation");
-//! assert_eq!(line, "Oct 01 21:59:14 kdc.example.com krb5kdc[2012](info): commencing operation");
-//! ```
+//! Daemon text log for `[logging]`, in MIT's `Mmm dd hh:mm:ss host prog[pid](Severity): message` shape.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -48,8 +32,7 @@ pub enum Severity {
 
 impl Severity {
     /// The word in a line's parentheses.
-    /// MIT `severity2string` (`lib/kadm5/logger.c:584-618`): `EMERGENCY` … `Error`, `Warning`,
-    /// `Notice`, `info`, `debug`.
+    // MIT severity2string; see docs/parity/a3-preauth.md
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
@@ -81,7 +64,8 @@ impl Severity {
 /// `LOG_AUTH`, the facility of a `SYSLOG` destination that names none.
 const LOG_AUTH: u8 = 4 << 3;
 
-/// MIT `krb5_klog_init` (`lib/kadm5/logger.c:349-422`): the facility names, any case.
+/// Facility names, any case.
+// MIT krb5_klog_init; see docs/parity/a3-preauth.md
 fn facility(name: &str) -> Option<u8> {
     const NAMES: [(&str, u8); 19] = [
         ("AUTH", 4),
@@ -111,11 +95,11 @@ fn facility(name: &str) -> Option<u8> {
 }
 
 /// The longest line, terminator excluded.
-/// MIT `KRB5_KLOG_MAX_ERRMSG_SIZE` (`lib/kadm5/logger.c:41-41`): the line buffer is 2048 bytes.
+// MIT KRB5_KLOG_MAX_ERRMSG_SIZE; see docs/parity/a3-preauth.md
 const MAX_LINE: usize = 2047;
 
-/// One log line: `date host whoami[pid](severity): message`, cut to MIT's buffer.
-/// MIT `klog_vsyslog` (`lib/kadm5/logger.c:655-679`): the verbose header, then the message.
+/// One log line: `date host whoami[pid](severity): message`, cut to the buffer.
+// MIT klog_vsyslog; see docs/parity/a3-preauth.md
 #[must_use]
 pub fn format_line(
     date: &str,
@@ -233,8 +217,8 @@ enum Refused {
 }
 
 impl Logger {
-    /// MIT `krb5_klog_init` (`lib/kadm5/logger.c:232-522`): open every spec, warn on `err` for
-    /// the ones that do not open, and log to syslog when none does.
+    /// Open every spec, warn for the ones that do not open, and use syslog when none does.
+    // MIT krb5_klog_init; see docs/parity/a3-preauth.md
     fn open(
         whoami: &str,
         specs: &[String],
@@ -245,8 +229,8 @@ impl Logger {
         let mut dests = Vec::new();
         let mut facility_used = None;
         for spec in specs {
-            // MIT `krb5_klog_init` (`lib/kadm5/logger.c:296-303`): leading and trailing white
-            // space is not part of the spec.
+            // Leading and trailing white space is not part of the spec.
+            // MIT krb5_klog_init; see docs/parity/a3-preauth.md
             let cp = spec.trim_matches(|c: char| c.is_ascii_whitespace());
             match open_spec(cp, err) {
                 Ok((dest, facility)) => {
@@ -257,21 +241,21 @@ impl Logger {
                 }
                 Err(Refused::Reported) => {}
                 Err(Refused::Syntax) => {
-                    // MIT `krb5_klog_init` (`lib/kadm5/logger.c:470-478`): an unparsed spec is
-                    // warned about twice and skipped.
+                    // An unparsed spec is warned about twice and skipped.
+                    // MIT krb5_klog_init; see docs/parity/a3-preauth.md
                     let _ = writeln!(err, "{whoami}: cannot parse <{cp}>");
                     let _ = writeln!(err, "{whoami}: warning - logging entry syntax error");
                 }
             }
         }
-        // MIT `krb5_klog_init` (`lib/kadm5/logger.c:490-503`): with no destination that opened,
-        // the log goes to syslog, facility AUTH.
+        // With no destination that opened, the log goes to syslog, facility AUTH.
+        // MIT krb5_klog_init; see docs/parity/a3-preauth.md
         if dests.is_empty() {
             dests.push(Dest::Syslog);
             facility_used = Some(LOG_AUTH);
         }
-        // MIT `krb5_klog_init` (`lib/kadm5/logger.c:513-516`): one `openlog` with the last
-        // SYSLOG destination's facility, connected at once.
+        // One `openlog` with the last SYSLOG destination's facility, connected at once.
+        // MIT krb5_klog_init; see docs/parity/a3-preauth.md
         let syslog = facility_used.map(|facility| Syslog {
             path: syslog_path.to_path_buf(),
             tag: whoami.to_owned(),
@@ -287,8 +271,8 @@ impl Logger {
         }
     }
 
-    /// MIT `klog_vsyslog` (`lib/kadm5/logger.c:633-742`): the line to every destination, a debug
-    /// line only to syslog unless `debug` is set, a write error reported on standard error.
+    /// The line to every destination; a debug line only to syslog unless `debug` is set.
+    // MIT klog_vsyslog; see docs/parity/a3-preauth.md
     fn write(&mut self, severity: Severity, msg: &str) {
         let now = chrono::Local::now();
         let (line, head) = line_parts(
@@ -333,8 +317,8 @@ impl Logger {
         }
     }
 
-    /// MIT `krb5_klog_reopen` (`lib/kadm5/logger.c:764-791`): every file is closed and opened
-    /// again for appending, so a rotated log starts a new file.
+    /// Every file is closed and opened again for appending.
+    // MIT krb5_klog_reopen; see docs/parity/a3-preauth.md
     fn reopen(&mut self) {
         for dest in &mut self.dests {
             if let Dest::File { path, file } = dest {
@@ -351,10 +335,7 @@ impl Logger {
     }
 }
 
-/// Open the `FILE` destination at `path` as `opts` asks, never through a symlink
-/// (`O_NOFOLLOW`) and only as a regular file (`O_NONBLOCK`, so a FIFO is not waited on): a link
-/// planted in a log directory a non-root user owns would have root write a file of that user's
-/// choosing, which MIT's open of the name does.
+/// Refuse a symlink or a non-regular file, so a planted link is not written through.
 fn open_log_file(path: &str, opts: &mut OpenOptions) -> io::Result<File> {
     let file = opts
         .custom_flags((OFlag::O_NOFOLLOW | OFlag::O_NONBLOCK).bits())
@@ -368,10 +349,8 @@ fn open_log_file(path: &str, opts: &mut OpenOptions) -> io::Result<File> {
     Ok(file)
 }
 
-/// Write `line` and `end` with one `write(2)`, so that daemons appending to one file never mix
-/// their lines.
-/// MIT `klog_vsyslog` (`lib/kadm5/logger.c:707-714`): the line and its newline are formatted into
-/// the stream's buffer and flushed together.
+/// One `write(2)` of the line and its terminator, so two daemons do not mix a line.
+// MIT klog_vsyslog; see docs/parity/a3-preauth.md
 fn write_line(w: &mut impl Write, line: &str, end: &str) -> io::Result<()> {
     let mut buf = Vec::with_capacity(line.len() + end.len());
     buf.extend_from_slice(line.as_bytes());
@@ -383,8 +362,8 @@ fn write_line(w: &mut impl Write, line: &str, end: &str) -> io::Result<()> {
 /// Open one trimmed spec; the facility is `Some` for a `SYSLOG` destination.
 fn open_spec(cp: &str, err: &mut dyn Write) -> Result<(Dest, Option<u8>), Refused> {
     if let Some(rest) = strip_prefix_ci(cp, "FILE") {
-        // MIT `krb5_klog_init` (`lib/kadm5/logger.c:304-327`): `FILE:` appends and `FILE=`
-        // writes from the start without truncating, both creating the file 0640.
+        // `FILE:` appends and `FILE=` writes from the start without truncating, both mode 0640.
+        // MIT krb5_klog_init; see docs/parity/a3-preauth.md
         let append = match rest.as_bytes().first() {
             Some(b':') => true,
             Some(b'=') => false,
@@ -408,8 +387,8 @@ fn open_spec(cp: &str, err: &mut dyn Write) -> Result<(Dest, Option<u8>), Refuse
         };
     }
     if let Some(rest) = strip_prefix_ci(cp, "SYSLOG") {
-        // MIT `krb5_klog_init` (`lib/kadm5/logger.c:328-428`): `SYSLOG[:severity[:facility]]`;
-        // the severity is ignored and an unknown facility leaves AUTH.
+        // `SYSLOG[:severity[:facility]]`; the severity is ignored and an unknown facility leaves AUTH.
+        // MIT krb5_klog_init; see docs/parity/a3-preauth.md
         let fac = rest
             .strip_prefix(':')
             .and_then(|r| r.split_once(':'))
@@ -421,7 +400,8 @@ fn open_spec(cp: &str, err: &mut dyn Write) -> Result<(Dest, Option<u8>), Refuse
         return Ok((Dest::Stderr, None));
     }
     if cp.eq_ignore_ascii_case("CONSOLE") {
-        // MIT `krb5_klog_init` (`lib/kadm5/logger.c:441-452`): `/dev/console`, opened "a+".
+        // `/dev/console`, opened for append.
+        // MIT krb5_klog_init; see docs/parity/a3-preauth.md
         return OpenOptions::new()
             .read(true)
             .append(true)
@@ -439,8 +419,8 @@ fn open_spec(cp: &str, err: &mut dyn Write) -> Result<(Dest, Option<u8>), Refuse
             .map_err(|_| Refused::Syntax);
     }
     if let Some(path) = strip_prefix_ci(cp, "DEVICE").and_then(|r| r.strip_prefix('=')) {
-        // MIT `krb5_klog_init` (`lib/kadm5/logger.c:453-469`): `DEVICE=path`, opened "w"; one
-        // that does not open is a syntax error.
+        // `DEVICE=path`, opened for write; one that does not open is a syntax error.
+        // MIT krb5_klog_init; see docs/parity/a3-preauth.md
         return OpenOptions::new()
             .write(true)
             .create(true)
@@ -483,9 +463,8 @@ fn with_log(f: impl FnOnce(&mut Logger)) {
     }
 }
 
-/// Open `specs` (the `[logging]` values of the program, see `krb5_config::LogSpecs`) for
-/// program `whoami`, warning on standard error about each one that does not open, as MIT
-/// `krb5_klog_init` does. With none open the log goes to syslog, facility AUTH.
+/// Open `specs` for `whoami`, and warn on standard error for each that does not open.
+// MIT krb5_klog_init; see docs/parity/a3-preauth.md
 pub fn init(whoami: &str, specs: &[String], debug: bool) {
     let logger = Logger::open(
         whoami,
@@ -498,13 +477,13 @@ pub fn init(whoami: &str, specs: &[String], debug: bool) {
 }
 
 /// Write `msg` at `severity` to every destination; nothing before [`init`].
-/// MIT `krb5_klog_syslog` (`lib/kadm5/logger.c:745-754`): one formatted line per call.
+// MIT krb5_klog_syslog; see docs/parity/a3-preauth.md
 pub fn syslog(severity: Severity, msg: &str) {
     with_log(|l| l.write(severity, msg));
 }
 
-/// MIT `klog_com_err_proc` (`lib/kadm5/logger.c:182-208`): an error's text, ` - `, then the
-/// message at error severity; with no error, the message alone at info.
+/// An error's text, ` - `, then the message at error severity; with no error, the message at info.
+// MIT klog_com_err_proc; see docs/parity/a3-preauth.md
 pub fn com_err(error: Option<&str>, msg: &str) {
     match error {
         Some(e) => syslog(Severity::Err, &format!("{e} - {msg}")),
@@ -518,15 +497,12 @@ pub fn reopen() {
 }
 
 /// Close every destination; later lines are dropped.
-/// MIT `krb5_klog_close` (`lib/kadm5/logger.c:535-578`): the files and the syslog connection are
-/// closed.
+// MIT krb5_klog_close; see docs/parity/a3-preauth.md
 pub fn close() {
     *LOG.lock().unwrap_or_else(PoisonError::into_inner) = None;
 }
 
-/// Where the JSON structured log goes: `[logging] json` (`krb5_config::LogSpecs::json`), a
-/// relation MIT does not read. MIT's programs print no such stream, so without the relation there
-/// is none.
+/// `[logging] json`, a relation MIT does not read.
 #[derive(Clone, Debug)]
 pub enum JsonLog {
     /// `STDOUT`.
@@ -538,9 +514,7 @@ pub enum JsonLog {
 }
 
 impl JsonLog {
-    /// The destination `spec` names: `STDOUT`, `STDERR` or `FILE:<path>`, the words in any case.
-    /// A spec that names none, or a file that does not open, leaves the stream off and is
-    /// reported on standard error as an MIT-format destination is.
+    /// `STDOUT`, `STDERR`, or `FILE:<path>`; anything else, or a file that does not open, leaves it off.
     #[must_use]
     pub fn open(whoami: &str, spec: &str) -> Option<Self> {
         Self::open_reporting(whoami, spec, &mut io::stderr())
@@ -661,8 +635,7 @@ mod tests {
         assert_eq!(std::fs::metadata(victim).unwrap().modified().unwrap(), old);
     }
 
-    /// MIT opens a `FILE` destination by name, so a symlink planted there has root create,
-    /// append to or overwrite its target; this open refuses the link with MIT's message.
+    /// A planted symlink is not opened, and the target is left as it was.
     #[test]
     fn a_log_file_is_never_opened_through_a_symlink() {
         let s = Scratch::new("link");
