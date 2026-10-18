@@ -3448,6 +3448,146 @@ fn run() -> Result<(), String> {
         err::BADOPTION,
     )?;
 
+    let mut bare = tgs_req(
+        mint_tgt(
+            tkt_key,
+            tkt_kvno,
+            &user,
+            realm,
+            &krbtgt_sname,
+            &sess,
+            window10.clone(),
+            TicketFlags::initial_preauth(),
+        )?,
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00a0,
+    )
+    .map_err(|e| e.to_string())?;
+    bare.0.padata = None;
+    expect_error(
+        &cfg,
+        "tgs-missing-pa-tgs-req",
+        &encode(&bare).map_err(|e| e.to_string())?,
+        err::PADATA_TYPE_NOSUPP,
+    )?;
+
+    let admin = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["admin"]);
+    expect_error(
+        &cfg,
+        "tgs-authenticator-cname-mismatch",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &admin,
+                host.clone(),
+                realm,
+                0x1000_00a1,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADMATCH,
+    )?;
+
+    expect_error(
+        &cfg,
+        "tgs-authenticator-crealm-mismatch",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                "OTHER.TEST",
+                &user,
+                host.clone(),
+                realm,
+                0x1000_00a2,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::BADMATCH,
+    )?;
+
+    expect_error(
+        &cfg,
+        "tgs-server-locked-out",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &user,
+                PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "locked.kerber.test"]),
+                realm,
+                0x1000_00a3,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::S_PRINCIPAL_UNKNOWN,
+    )?;
+
+    expect_error(
+        &cfg,
+        "tgs-disallow-tgt-based",
+        &encode(
+            &tgs_req(
+                mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth(),
+                )?,
+                &sess,
+                realm,
+                &user,
+                PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "dupskey.kerber.test"]),
+                realm,
+                0x1000_00a4,
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::POLICY,
+    )?;
+
     expect_error(
         &cfg,
         "tgs-postdate-on-non-postdatable",
@@ -4755,7 +4895,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":123}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":128}}"#);
     Ok(())
 }
 
