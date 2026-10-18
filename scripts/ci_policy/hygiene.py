@@ -1,4 +1,4 @@
-"""Rust test isolation, registered autotests, and that every scripts Python file compiles."""
+"""Rust test isolation, registered autotests, the report-only ratio print, and that every scripts Python file compiles."""
 
 from __future__ import annotations
 
@@ -462,3 +462,181 @@ def check_python_compiles(files: dict[str, str] | None = None) -> None:
             bad.append(f"{name}:{e.lineno}: {e.msg}")
     if bad:
         _die(f"{len(bad)} Python file(s) do not compile: " + "; ".join(bad[:8]))
+
+
+# rscount.py's rule. The four names are the out-of-line test files that rule misses.
+# check_form_ratios prints and does not fail.
+_RATIO_OUTLINE = frozenset({"armor_flow.rs", "a2_r17_reply.rs", "mit_pac_golden.rs", "diff_compare.rs"})
+_RATIO_TEST_ATTR = re.compile(r"^\s*#\[cfg\((test|all\(test.*|any\(test.*)\)\]")
+
+
+def _ratio_scan(text: str) -> tuple[list[str], list[str]]:
+    """Per line: blank, comment, or code. A doc comment is a comment."""
+    lines, kinds, in_block = text.split("\n"), [], 0
+    for ln in lines:
+        s = ln.strip()
+        if in_block:
+            i, had_code = 0, False
+            while i < len(ln):
+                if ln.startswith("/*", i):
+                    in_block += 1; i += 2; continue
+                if ln.startswith("*/", i):
+                    in_block -= 1; i += 2
+                if in_block == 0:
+                    rest = ln[i:].strip()
+                    had_code = bool(rest) and not rest.startswith("//")
+                    break
+                i += 1
+            kinds.append("code" if had_code else "comment")
+            continue
+        if not s:
+            kinds.append("blank"); continue
+        if s.startswith("//"):
+            kinds.append("comment"); continue
+        if s.startswith("/*"):
+            depth, i = 0, ln.index("/*")
+            while i < len(ln):
+                if ln.startswith("/*", i):
+                    depth += 1; i += 2; continue
+                if ln.startswith("*/", i):
+                    depth -= 1; i += 2
+                    if depth == 0:
+                        rest = ln[i:].strip()
+                        if rest and not rest.startswith("//"):
+                            kinds.append("code"); break
+                    continue
+                i += 1
+            else:
+                kinds.append("comment")
+            if depth > 0:
+                in_block = depth
+            continue
+        kinds.append("code")
+    return lines, kinds
+
+
+def _ratio_braces(line: str, state: dict) -> list[str]:
+    """Brace characters outside strings and comments. `state` carries across lines."""
+    out, i, n = [], 0, len(line)
+    while i < n:
+        c = line[i]
+        if state["blk"]:
+            if line.startswith("*/", i):
+                state["blk"] -= 1; i += 2; continue
+            if line.startswith("/*", i):
+                state["blk"] += 1; i += 2; continue
+            i += 1; continue
+        if state["raw"] is not None:
+            end = '"' + "#" * state["raw"]
+            j = line.find(end, i)
+            if j < 0:
+                return out
+            i = j + len(end); state["raw"] = None; continue
+        if state["str"]:
+            if c == "\\":
+                i += 2; continue
+            if c == '"':
+                state["str"] = False
+            i += 1; continue
+        if line.startswith("//", i):
+            return out
+        if line.startswith("/*", i):
+            state["blk"] += 1; i += 2; continue
+        raw = re.match(r'b?r(#*)"', line[i:])
+        if raw and (i == 0 or not (line[i - 1].isalnum() or line[i - 1] == "_")):
+            state["raw"] = len(raw.group(1)); i += raw.end(); continue
+        if c == '"':
+            state["str"] = True; i += 1; continue
+        if c == "'":
+            quoted = re.match(r"'(\\.[^']*|[^'\\])'", line[i:])
+            i += quoted.end() if quoted else 1; continue
+        if c in "{}":
+            out.append(c)
+        i += 1
+    return out
+
+
+def _ratio_test_lines(lines: list[str]) -> list[bool]:
+    """Lines of a #[cfg(test)] item, from its attribute through the matching brace."""
+    mark = [False] * len(lines)
+    state = {"str": False, "raw": None, "blk": 0}
+    i, pending, depth, active, start = 0, False, 0, False, 0
+    while i < len(lines):
+        ln = lines[i]
+        if not active and _RATIO_TEST_ATTR.match(ln):
+            pending, start = True, i
+        braces = _ratio_braces(ln, state)
+        if pending and not active:
+            if braces:
+                active, depth = True, 0
+            elif ln.strip().endswith(";") and not ln.strip().startswith("#"):
+                for k in range(start, i + 1):
+                    mark[k] = True
+                pending = False
+        if active:
+            for brace in braces:
+                depth += 1 if brace == "{" else -1
+            if depth <= 0:
+                for k in range(start, i + 1):
+                    mark[k] = True
+                active, pending = False, False
+        i += 1
+    return mark
+
+
+def _ratio_test_path(path: str) -> bool:
+    """tests/, benches/, a tests.rs-style name, or one of the four missed modules."""
+    parts, name = path.split("/"), path.split("/")[-1]
+    if "tests" in parts or "benches" in parts:
+        return True
+    if name in ("tests.rs", "test.rs") or name.endswith(("_test.rs", "_tests.rs")):
+        return True
+    return name in _RATIO_OUTLINE
+
+
+def _ratio_totals(root: pathlib.Path) -> tuple[dict[str, int], dict[str, dict[str, int]]]:
+    """rscount.py's totals, with the four missed modules counted as test code."""
+    tot = {"code": 0, "comment": 0, "blank": 0, "test_code": 0, "test_comment": 0}
+    per: dict[str, dict[str, int]] = {}
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in ("target", ".git", "vendor")]
+        for name in filenames:
+            if not name.endswith(".rs"):
+                continue
+            path = pathlib.Path(dirpath) / name
+            rel = path.relative_to(root).as_posix()
+            lines, kinds = _ratio_scan(path.read_text(encoding="utf-8", errors="replace"))
+            mark = [True] * len(lines) if _ratio_test_path(rel) else _ratio_test_lines(lines)
+            key = rel.split("/")[1] if rel.startswith("crates/") else rel.split("/")[0]
+            row = per.setdefault(key, {"code": 0, "comment": 0, "test_code": 0, "test_comment": 0})
+            for kind, is_test in zip(kinds, mark):
+                if kind == "blank":
+                    tot["blank"] += 1; continue
+                tot[kind] += 1; row[kind] += 1
+                if is_test:
+                    tot["test_" + kind] += 1; row["test_" + kind] += 1
+    return tot, per
+
+
+def check_form_ratios(root: pathlib.Path | None = None) -> None:
+    """Print the product figures and one line per crate. This does not fail."""
+    base = ROOT if root is None else root
+    tot, per = _ratio_totals(base)
+    code, comment = tot["code"], tot["comment"]
+    product_code, product_comment = code - tot["test_code"], comment - tot["test_comment"]
+
+    def share(num: int, den: int) -> str:
+        return f"{num / den:.1%}" if den else "0.0%"
+
+    print(
+        f"form: product code {product_code}, comments {product_comment}, "
+        f"comment share {share(product_comment, product_code + product_comment)}, "
+        f"test code {tot['test_code']} of {code} ({share(tot['test_code'], code)})"
+    )
+    for name in sorted(k for k in per if (base / "crates" / k).is_dir()):
+        row = per[name]
+        print(
+            f"form: {name} code {row['code']}, comments {row['comment']}, "
+            f"comment share {share(row['comment'], row['code'] + row['comment'])}, "
+            f"test code {row['test_code']} ({share(row['test_code'], row['code'])})"
+        )

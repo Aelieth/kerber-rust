@@ -12,7 +12,9 @@ from .comments import (
 from .common import WORKFLOWS, _die, _scratch_root, reported_git_vars, scrub_git_env
 from .docs import check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size
 from .golden import check_golden_dump_unique_keys
-from .hygiene import check_autotests_registered, check_isolate_test_krb5, check_python_compiles
+from .hygiene import (
+    check_autotests_registered, check_form_ratios, check_isolate_test_krb5, check_python_compiles,
+)
 from .ledger import (
     check_diffsend_cases, check_ledger_anchors, check_ledger_layout, check_ledger_mit_cites,
     check_ledger_proof_column, check_ledger_tally, check_no_case_whitelists,
@@ -66,4 +68,5 @@ def main() -> None:
     check_mit_anchor_truth()
     check_no_process_history()
     check_no_docs_process_tags()
+    check_form_ratios()
     print("ci-policy: ok")

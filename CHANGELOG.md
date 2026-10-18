@@ -35,6 +35,7 @@ any other `###` heading.
 
 ### Tests and CI
 
+- **ci.** ci-policy prints the product and per-crate comment and test ratios and does not fail on them.
 - **ci.** Cap `[Unreleased]` at 24,000 bytes and pin CI to `ubuntu-24.04` with upload-artifact 7.0.2. Released sections are frozen. ci-policy enforces the cap.
 - **ci.** The docs size cap is 100 KiB. `docs/testing.md` names the same cap.
 - **field.** Add `ad-trust`, the real AD DC against both legs' KDCs: an AD user logs into client2's sshd. It runs only as `run.sh ad-trust` and starts from a recorded DC state.
