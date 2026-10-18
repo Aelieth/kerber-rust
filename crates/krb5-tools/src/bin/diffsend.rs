@@ -3957,6 +3957,82 @@ fn run() -> Result<(), String> {
         &encode(&accepted).map_err(|e| e.to_string())?,
     )?;
 
+    let bare_tkt = mint_tgt(
+        tkt_key,
+        tkt_kvno,
+        &user,
+        realm,
+        &krbtgt_sname,
+        &sess,
+        window10.clone(),
+        TicketFlags::initial_preauth(),
+    )?;
+    let mut bare = tgs_req(
+        bare_tkt.clone(),
+        &sess,
+        realm,
+        &user,
+        host.clone(),
+        realm,
+        0x1000_00ac,
+    )
+    .map_err(|e| e.to_string())?;
+    let bare_inner = bare.0.req_body.clone();
+    let bare_pa = bare
+        .0
+        .padata
+        .as_ref()
+        .and_then(|p| p.iter().find(|x| x.padata_type == pa::TGS_REQ))
+        .map(|p| p.padata_value.as_ref().to_vec())
+        .ok_or_else(|| "no PA-TGS-REQ".to_string())?;
+    let bare_ap = build_fast_armor(
+        bare_tkt,
+        &sess,
+        &krb5_types::try_ascii(realm).map_err(|e| e.to_string())?,
+        &user,
+        None,
+    )
+    .map_err(|e| e.to_string())?;
+    let bare_key = armor_key(&sess, None).map_err(|e| e.to_string())?;
+    let bare_ck = KeyUsage::new(ku::FAST_REQ_CHKSUM).map_err(|e| e.to_string())?;
+    let bare_mic = checksum(&bare_key, bare_ck, &bare_pa).map_err(|e| e.to_string())?;
+    let bare_fast = krb5_types::fast::KrbFastReq {
+        fast_options: krb5_types::fast::fast_options_none(),
+        padata: Vec::new(),
+        req_body: bare_inner,
+    };
+    let bare_der = encode(&bare_fast).map_err(|e| e.to_string())?;
+    let bare_enc = KeyUsage::new(ku::FAST_ENC).map_err(|e| e.to_string())?;
+    let bare_cipher = encrypt(&bare_key, bare_enc, &bare_der).map_err(|e| e.to_string())?;
+    let bare_armor = encode(&bare_ap).map_err(|e| e.to_string())?;
+    let bare_armored = krb5_types::fast::KrbFastArmoredReq {
+        armor: Some(krb5_types::fast::KrbFastArmor {
+            armor_type: krb5_types::fast::ARMOR_AP_REQUEST,
+            armor_value: bare_armor.into(),
+        }),
+        req_checksum: Checksum {
+            cksumtype: bare_key.etype().checksum_type(),
+            checksum: bare_mic.into(),
+        },
+        enc_fast_req: EncryptedData {
+            etype: bare_key.etype().to_iana(),
+            kvno: None,
+            cipher: bare_cipher.into(),
+        },
+    };
+    bare.0.padata.get_or_insert_with(Vec::new).push(PaData {
+        padata_type: pa::FX_FAST,
+        padata_value: encode(&krb5_types::fast::PaFxFast::ArmoredData(bare_armored))
+            .map_err(|e| e.to_string())?
+            .into(),
+    });
+    expect_error(
+        &cfg,
+        "tgs-fast-armor-no-subkey",
+        &encode(&bare).map_err(|e| e.to_string())?,
+        err::POLICY,
+    )?;
+
     let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
     let post_tgt = mint_tgt(
         tkt_key,
@@ -5227,7 +5303,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":135}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":136}}"#);
     Ok(())
 }
 

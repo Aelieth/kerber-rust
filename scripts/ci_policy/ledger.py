@@ -147,6 +147,7 @@ DIFFSEND_CASES = frozenset(
         "tgs-fast-unkeyed-bad-checksum",
         "tgs-fast-explicit-armor",
         "tgs-fast-armor-no-tgs-subkey",
+        "tgs-fast-armor-no-subkey",
     }
 )
 _LEDGER_GATE = re.compile(r"(?:scripts/)?([A-Za-z0-9._-]+-gate(?:\.sh)?)")
