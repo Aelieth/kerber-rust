@@ -3670,6 +3670,46 @@ fn run() -> Result<(), String> {
         err::BADOPTION,
     )?;
 
+    expect_error(
+        &cfg,
+        "tgs-server-disallow-postdated",
+        &encode(
+            &tgs_req_ex(TgsReqParams {
+                ticket: mint_tgt(
+                    tkt_key,
+                    tkt_kvno,
+                    &user,
+                    realm,
+                    &krbtgt_sname,
+                    &sess,
+                    window10.clone(),
+                    TicketFlags::initial_preauth().with_bit(flag_bit::MAY_POSTDATE, true),
+                )?,
+                session: &sess,
+                crealm: realm,
+                cname: &user,
+                sname: PrincipalName::new(
+                    PrincipalName::NT_SRV_HST,
+                    ["host", "nopost.kerber.test"],
+                ),
+                realm,
+                nonce: 0x1000_00a6,
+                kdc_options: KdcOptions::none().with_bit(flag_bit::MAY_POSTDATE, true),
+                additional_tickets: None,
+                extra_padata: Vec::new(),
+                etypes: etypes.clone(),
+                addresses: None,
+                from: None,
+                enc_authorization_data: None,
+                till: None,
+                subkey: None,
+            })
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::CANNOT_POSTDATE,
+    )?;
+
     let from = now.add_seconds(60).unwrap_or_else(|_| now.clone());
     let post_tgt = mint_tgt(
         tkt_key,
@@ -4940,7 +4980,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":129}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":130}}"#);
     Ok(())
 }
 
