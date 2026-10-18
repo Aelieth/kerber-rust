@@ -1262,7 +1262,6 @@ fn run() -> Result<(), String> {
     expect_error(&cfg, "as-invalid-opts", &req, err::BADOPTION)?;
 
     // pwprau requires preauth AND needs a password change.
-    // MIT process_as_req; see docs/parity/a2-as.md
     // check_padata (:758), so a bare AS-REQ is "REQUIRED PWCHANGE" / KEY_EXP (23), not
     // "NEEDED_PREAUTH" (25), on both legs.
     let pwprau = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["pwprau"]);
@@ -1271,7 +1270,6 @@ fn run() -> Result<(), String> {
     expect_error(&cfg, "as-validate-before-preauth", &req, err::KEY_EXPIRED)?;
 
     // lockedu is past its policy's maxfailure 1 with no lockout expiry.
-    // MIT krb5_db2_check_policy_as; see docs/parity/a2-as.md
     // lockout is CLIENT_REVOKED (18) with the DB module's status "LOCKED_OUT", the last
     // check of validate_as_request, before preauth.
     let lockedu = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockedu"]);
@@ -4455,7 +4453,6 @@ fn run() -> Result<(), String> {
         r#"{{"event":"diffsend","case":"tgs-rbcd-pac-options","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d","pac_options":true}}"#
     );
 
-    // MIT pkinit_server_verify_padata; see docs/parity/a3-preauth.md
     // client → 24.
     let kp = p256_generate().map_err(|e| e.to_string())?;
     let mut unsigned_named =
@@ -4876,7 +4873,6 @@ fn ra_cases(
     };
 
     // A TGS-REQ whose nonce is INT32_MIN.
-    // MIT req_body_7; see docs/parity/b1-asn1.md
     let sess = random_session(EncryptionType::Aes256CtsHmacSha196)?;
     let req = encode(&tgs_for(0x8000_0000, &sess)?).map_err(|e| e.to_string())?;
     let (tr, tm) = send_both(cfg, "tgs-req-nonce-int32-min", &req)?;

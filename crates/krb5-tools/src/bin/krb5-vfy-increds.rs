@@ -1,5 +1,3 @@
-// MIT t_vfy_increds; see docs/parity/b1-client.md
-
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(
@@ -62,7 +60,6 @@ fn run() -> Result<(), String> {
     let kt_path = env_ktname().unwrap_or_else(|| PathBuf::from("/etc/krb5.keytab"));
     let keytab = fs::read(&kt_path).ok().and_then(|b| Keytab::parse(&b).ok());
     let crealm = String::from_utf8_lossy(cred.client.0.as_bytes()).into_owned();
-    // MIT nofail; see docs/parity/b1-client.md
     let nofail = verify_init_creds_nofail(
         opt_nofail,
         conf.as_ref()
