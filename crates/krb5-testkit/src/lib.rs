@@ -1,8 +1,3 @@
-//! Shared test helpers for kerber-rust.
-//!
-//! This crate is a `publish = false` **dev-dependency**. Product
-//! `[dependencies]` must not take an edge on it.
-
 #![forbid(unsafe_code)]
 #![allow(
     clippy::disallowed_methods,
@@ -42,68 +37,43 @@ use krb5_types::ku;
 use krb5_types::pa;
 use krb5_types::pac::{PAC_CLIENT_INFO, Pac, PacBuffer, PacIdentity, RpcSid, client_info_buffer};
 
-/// `TEST_USER` as NT_PRINCIPAL.
-///
-/// Replaces the local `user` / `cname` copies that bind `TEST_USER`.
-/// Protocol tests that use the string `"user"` stay local.
 #[must_use]
 pub fn user() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER])
 }
 
-/// `TEST_ADMIN` as NT_PRINCIPAL.
 #[must_use]
 pub fn admin() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_ADMIN])
 }
 
-/// Documented POSIX host principal.
 #[must_use]
 pub fn host() -> PrincipalName {
     documented_host()
 }
 
-/// Cross-realm krbtgt for `OTHER.TEST`.
-///
-/// Replaces the `FOREIGN` / `["krbtgt", "OTHER.TEST"]` constructors.
 #[must_use]
 pub fn foreign() -> PrincipalName {
     PrincipalName::new(PrincipalName::NT_SRV_INST, ["krbtgt", "OTHER.TEST"])
 }
 
-/// Local-realm krbtgt principal.
 #[must_use]
 pub fn krbtgt() -> PrincipalName {
     PrincipalName::krbtgt(TEST_REALM)
 }
 
-/// Documented test realm string.
 #[must_use]
 pub fn realm() -> &'static str {
     TEST_REALM
 }
 
-/// `name` as a KerberosString realm.
-///
-/// # Panics
-///
-/// Panics if `name` is not a GeneralString — the same expect `ascii` uses.
 #[must_use]
 pub fn realm_with(name: &str) -> Realm {
     ascii(name)
 }
 
-/// Scratch directory that is never host `/tmp`.
-///
-/// Replaces the four local `scratch_dir` copies and the test
-/// `std::env::temp_dir()` sites. Prefers `CARGO_TARGET_TMPDIR`, then
-/// `CARGO_TARGET_DIR/test-krb5`, then `KERBER_SCRATCH`, then
-/// `target/test-krb5` next to the workspace.
-///
-/// # Panics
-///
-/// Panics if the directory cannot be created.
 #[must_use]
+/// The directory is never host `/tmp`.
 pub fn scratch_dir(name: &str) -> PathBuf {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let scratch = std::env::var_os("CARGO_TARGET_TMPDIR")
@@ -125,31 +95,19 @@ pub fn scratch_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// A Unix-socket path for a test, short enough for `sun_path` (108 bytes) whatever `dir`'s length.
-///
-/// On Linux the path is always `/proc/self/fd/<fd>/<name>` through a descriptor this guard holds open on
-/// `dir`, so the socket file lands in `dir` itself and the path is a few bytes long. It is valid only
-/// inside the process that holds the guard, and only while the guard lives. Elsewhere it is `dir/name`
-/// when that fits in 107 bytes.
+/// On Linux the path is `/proc/self/fd` of a descriptor held on `dir`, and it is valid only while this guard lives.
 pub struct SocketPath {
     _dir: Option<std::fs::File>,
     path: PathBuf,
 }
 
 impl SocketPath {
-    /// The path to bind and connect to.
     #[must_use]
     pub fn path(&self) -> &std::path::Path {
         &self.path
     }
 }
 
-/// A Unix-socket path under `dir` for a test (see [`SocketPath`]).
-///
-/// # Panics
-///
-/// Panics if `dir` cannot be opened, or, without `/proc/self/fd`, when `dir/name` does not fit in the
-/// 108-byte `sun_path` (the message names `CARGO_TARGET_DIR` and `KERBER_SCRATCH`, which set `dir`).
 #[must_use]
 pub fn socket_path(dir: &std::path::Path, name: &str) -> SocketPath {
     if std::path::Path::new("/proc/self/fd").is_dir() {
@@ -173,15 +131,8 @@ pub fn socket_path(dir: &std::path::Path, name: &str) -> SocketPath {
     SocketPath { _dir: None, path }
 }
 
-/// A UDP socket and a TCP listener on one ephemeral loopback port, the pair a KDC serves on.
-///
-/// The kernel picks a UDP port that is free for UDP; another socket of a parallel test run can
-/// hold the same port for TCP, so the pair is bound again on `AddrInUse`.
-///
-/// # Panics
-///
-/// Panics on a bind error other than `AddrInUse`, or when 64 tries find no free pair.
 #[must_use]
+/// A UDP port the kernel just chose can still be taken for TCP, so a busy pair is bound again.
 pub fn loopback_udp_tcp() -> (std::net::UdpSocket, std::net::TcpListener) {
     for _ in 0..64 {
         let udp = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind UDP 127.0.0.1:0");
@@ -195,11 +146,6 @@ pub fn loopback_udp_tcp() -> (std::net::UdpSocket, std::net::TcpListener) {
     panic!("no free loopback UDP + TCP port pair in 64 tries");
 }
 
-/// IANA etype numbers in MIT `preferred()` order.
-///
-/// Replaces the local `pref_etypes` copies in `krb5-kdc` tests. The two
-/// in-tree spellings (`EncryptionType::preferred` vs
-/// `krb5_crypto::EncryptionType::preferred`) were the same body.
 #[must_use]
 pub fn pref_etypes() -> Vec<i32> {
     EncryptionType::preferred()
@@ -208,27 +154,11 @@ pub fn pref_etypes() -> Vec<i32> {
         .collect()
 }
 
-/// AES-256 key of 32 repeated `seed` bytes.
-///
-/// Replaces the five identical `aes_key` copies in `krb5-kdc` tests.
-///
-/// # Panics
-///
-/// Panics if 32 bytes is not a valid AES-256 key length (it is).
 #[must_use]
 pub fn aes_key(seed: u8) -> ProtocolKey {
     ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[seed; 32]).expect("key")
 }
 
-/// AES-256 string-to-key of `password` with `name`'s default realm salt.
-///
-/// Replaces the eleven local `password_key` copies in `krb5-kdc` tests.
-/// Those copies differed only in `unwrap` vs `expect("s2k")` and whether
-/// the salt was bound to a local.
-///
-/// # Panics
-///
-/// Panics if string-to-key fails — the same expect/unwrap the copies used.
 #[must_use]
 pub fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
@@ -241,11 +171,6 @@ pub fn password_key(name: &str, password: &[u8]) -> ProtocolKey {
     .expect("s2k")
 }
 
-/// Best long-term key for the NT_PRINCIPAL named `name`.
-///
-/// # Panics
-///
-/// Panics if `name` is missing from `store` or has no key.
 #[must_use]
 pub fn store_key(store: &PrincipalStore, name: &str) -> ProtocolKey {
     let cname = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [name]);
@@ -281,29 +206,12 @@ fn as_tgt(
     krb5_kdc::issue_as(store, &req).unwrap()
 }
 
-/// AS-issued TGT for `name` using the store's best long-term key.
-///
-/// Replaces the store-key `issue_tgt` copies (unused-password and
-/// `TEST_USER`-only signatures).
-///
-/// # Panics
-///
-/// Panics if the principal is missing, timestamp preauth fails, or
-/// `issue_as` fails — the same unwraps the local copies used.
 #[must_use]
 pub fn issue_tgt(store: &PrincipalStore, name: &str, nonce: u32) -> IssuedAs {
     let key = store_key(store, name);
     as_tgt(store, name, nonce, &key, false)
 }
 
-/// AS-issued TGT for `name` using string-to-key of `password`.
-///
-/// Replaces the `password_key` `issue_tgt` copies (`unwrap` and
-/// `expect("pa")`/`expect("AS")`).
-///
-/// # Panics
-///
-/// Panics if string-to-key, timestamp preauth, or `issue_as` fails.
 #[must_use]
 pub fn issue_tgt_password(
     store: &PrincipalStore,
@@ -315,13 +223,6 @@ pub fn issue_tgt_password(
     as_tgt(store, name, nonce, &key, false)
 }
 
-/// Like [`issue_tgt`] but optionally sets RENEWABLE and `rtime` +48h.
-///
-/// Replaces `a2_r16.rs`'s four-argument `issue_tgt`.
-///
-/// # Panics
-///
-/// Same unwraps as [`issue_tgt`], plus `add_hours(48)` if `renewable`.
 #[must_use]
 pub fn issue_tgt_renewable(
     store: &PrincipalStore,
@@ -333,26 +234,11 @@ pub fn issue_tgt_renewable(
     as_tgt(store, name, nonce, &key, renewable)
 }
 
-/// AS-issued TGT for `TEST_USER` using the store's best key.
-///
-/// Replaces the eight two-argument `user_as` copies (`PrincipalName`
-/// inline vs a local `user()`/`cname()` helper).
-///
-/// # Panics
-///
-/// Same unwraps as [`issue_tgt`].
 #[must_use]
 pub fn user_as(store: &PrincipalStore, nonce: u32) -> IssuedAs {
     issue_tgt(store, TEST_USER, nonce)
 }
 
-/// Like [`user_as`] but applies `bits` to `kdc_options` before issue.
-///
-/// Replaces `a3_11.rs` and `a3_r26.rs`.
-///
-/// # Panics
-///
-/// Same unwraps as [`user_as`].
 #[must_use]
 pub fn user_as_bits(store: &PrincipalStore, nonce: u32, bits: &[(usize, bool)]) -> IssuedAs {
     let key = store_key(store, TEST_USER);
@@ -367,15 +253,6 @@ pub fn user_as_bits(store: &PrincipalStore, nonce: u32, bits: &[(usize, bool)]) 
     krb5_kdc::issue_as(store, &req).unwrap()
 }
 
-/// AS-issued TGT for the documented POSIX host principal.
-///
-/// Replaces the five identical `host_tgt` copies in `krb5-kdc` tests.
-///
-/// # Panics
-///
-/// Panics if the documented host is missing from `store`, has no key,
-/// timestamp preauth fails, or `issue_as` fails — the same unwraps the
-/// local copies used.
 #[must_use]
 pub fn host_tgt(store: &PrincipalStore, nonce: u32) -> IssuedAs {
     let host = documented_host();
@@ -393,15 +270,6 @@ pub fn host_tgt(store: &PrincipalStore, nonce: u32) -> IssuedAs {
     krb5_kdc::issue_as(store, &req).unwrap()
 }
 
-/// Sign a Win2k PAC onto an existing ticket part using `key` as both
-/// server and KDC key.
-///
-/// Replaces the four identical `attach_pac` copies in `krb5-kdc` tests.
-///
-/// # Panics
-///
-/// Panics if PAC wrap, ticket-checksum DER, or `sign_reply_pac` fails —
-/// the same unwraps the local copies used.
 pub fn attach_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) {
     let stub = Pac::built(
         0,
@@ -436,13 +304,6 @@ pub fn attach_pac(key: &ProtocolKey, part: &mut EncTicketPart, info_name: &str) 
     part.authorization_data = Some(wrap_win2k_pac(&pac).unwrap());
 }
 
-/// Protocol error code + borrowed status text.
-///
-/// Replaces the local `proto` copies.
-///
-/// # Panics
-///
-/// Panics if `err` is not [`krb5_kdc::Error::Protocol`].
 #[must_use]
 pub fn status(err: &krb5_kdc::Error) -> (i32, Option<&str>) {
     match err {
@@ -451,16 +312,6 @@ pub fn status(err: &krb5_kdc::Error) -> (i32, Option<&str>) {
     }
 }
 
-/// Protocol error code + owned status text.
-///
-/// Replaces the local `code(Error)` copies. Those copies panic with
-/// `{other:?}` (no "expected protocol error" prefix). Must not be
-/// merged with [`status`]: borrowed vs owned text, and different
-/// panic strings.
-///
-/// # Panics
-///
-/// Panics if `err` is not [`krb5_kdc::Error::Protocol`].
 #[must_use]
 pub fn expect_status(err: krb5_kdc::Error) -> (i32, Option<String>) {
     match err {
@@ -469,10 +320,6 @@ pub fn expect_status(err: krb5_kdc::Error) -> (i32, Option<String>) {
     }
 }
 
-/// Protocol code from a `Result`, or `None` if it is not a protocol error.
-///
-/// Replaces `pac_shape.rs`'s `code(&Result)`. Must not be merged with
-/// [`expect_status`]: this returns `Option` and never panics.
 #[must_use]
 pub fn protocol_code(result: &Result<(), krb5_kdc::Error>) -> Option<i32> {
     match result {
@@ -481,14 +328,6 @@ pub fn protocol_code(result: &Result<(), krb5_kdc::Error>) -> Option<i32> {
     }
 }
 
-/// Wire `KRB-ERROR` code + `e-text` (empty string when absent).
-///
-/// Replaces `a2_r19.rs`'s two-tuple `err_of`. Must not be merged with
-/// [`err_of_cname`]: that site also returns the error `cname`.
-///
-/// # Panics
-///
-/// Panics if `bytes` is not a `KRB-ERROR` — the same unwrap the copy used.
 #[must_use]
 pub fn err_of(bytes: &[u8]) -> (i32, String) {
     let e: KrbError = decode(bytes).unwrap();
@@ -501,13 +340,6 @@ pub fn err_of(bytes: &[u8]) -> (i32, String) {
     (e.error_code, text)
 }
 
-/// Wire `KRB-ERROR` code, `e-text`, and joined `cname`.
-///
-/// Replaces `a2_10_caddr.rs`'s three-tuple `err_of`.
-///
-/// # Panics
-///
-/// Same unwrap as [`err_of`].
 #[must_use]
 pub fn err_of_cname(bytes: &[u8]) -> (i32, String, Option<String>) {
     let e: KrbError = decode(bytes).unwrap();
@@ -521,13 +353,6 @@ pub fn err_of_cname(bytes: &[u8]) -> (i32, String, Option<String>) {
     (e.error_code, text, cname)
 }
 
-/// S4U TGS-REQ: header TGT, client = documented host, caller `sname` / padata / opts.
-///
-/// Replaces `a2_r17.rs`. Etypes are [`pref_etypes`].
-///
-/// # Panics
-///
-/// Panics if `tgs_req_ex` fails — the same unwrap the copy used.
 #[must_use]
 pub fn s4u_tgs(
     tgt: &IssuedAs,
@@ -553,13 +378,6 @@ pub fn s4u_tgs(
     .unwrap()
 }
 
-/// S4U2Self TGS-REQ for the documented host with FORWARDABLE and caller padata.
-///
-/// Replaces `a2_7_s4u2self.rs`.
-///
-/// # Panics
-///
-/// Same unwrap as [`s4u_tgs`].
 #[must_use]
 pub fn s4u_self(tgt: &IssuedAs, padata: Vec<PaData>, nonce: u32) -> TgsReq {
     s4u_tgs(
@@ -571,15 +389,6 @@ pub fn s4u_self(tgt: &IssuedAs, padata: Vec<PaData>, nonce: u32) -> TgsReq {
     )
 }
 
-/// S4U2Self TGS-REQ impersonating `TEST_ADMIN` with a single AES-256 etype.
-///
-/// Replaces `a3_r27.rs`. Must not call [`s4u_tgs`]: that site's etype
-/// list is AES-256 only, not [`pref_etypes`].
-///
-/// # Panics
-///
-/// Panics if `pa_for_user` or `tgs_req_ex` fails — the same unwraps
-/// the copy used.
 #[must_use]
 pub fn s4u_admin(tgt: &IssuedAs, nonce: u32, opts: KdcOptions) -> TgsReq {
     let host = documented_host();
@@ -601,15 +410,6 @@ pub fn s4u_admin(tgt: &IssuedAs, nonce: u32, opts: KdcOptions) -> TgsReq {
     .unwrap()
 }
 
-/// Admin TGS for `TEST_USER` — S4U2Proxy evidence ticket.
-///
-/// Replaces the two `evidence_for_user` copies. `a2_8` already used
-/// [`issue_tgt`]; `a4_18b` inlined the same store-key AS.
-///
-/// # Panics
-///
-/// Panics if the admin TGT, `tgs_req`, or `issue_tgs` fails — the
-/// same unwraps the copies used.
 #[must_use]
 pub fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> Ticket {
     let user = PrincipalName::new(PrincipalName::NT_PRINCIPAL, [TEST_USER]);
@@ -628,14 +428,6 @@ pub fn evidence_for_user(store: &PrincipalStore, nonce: u32) -> Ticket {
     krb5_kdc::issue_tgs(store, &req).unwrap().rep.0.ticket
 }
 
-/// IF-RELEVANT wrapper around inner authdata elements.
-///
-/// Replaces the three test copies (`a3_13`, `a3_r28`, `a3_r29`).
-/// Product `ad.rs` stays `Result`-returning and is not this helper.
-///
-/// # Panics
-///
-/// Panics if DER encode fails — the same unwrap the copies used.
 #[must_use]
 pub fn wrap_if_relevant(inner: &[AuthorizationDataValue]) -> AuthorizationData {
     let wrapped = encode(&inner.to_vec()).unwrap();
@@ -645,13 +437,6 @@ pub fn wrap_if_relevant(inner: &[AuthorizationDataValue]) -> AuthorizationData {
     }]
 }
 
-/// Re-encrypt `part` onto a clone of `ticket` with `key` (KU ticket).
-///
-/// Replaces `a2_r19.rs`.
-///
-/// # Panics
-///
-/// Panics if encode or encrypt fails — the same unwrap the copy used.
 #[must_use]
 pub fn reseal(ticket: &Ticket, part: &EncTicketPart, key: &ProtocolKey) -> Ticket {
     let der = encode(part).unwrap();
@@ -661,39 +446,17 @@ pub fn reseal(ticket: &Ticket, part: &EncTicketPart, key: &ProtocolKey) -> Ticke
     out
 }
 
-/// Re-encrypt `part` onto `ticket` in place with `key`.
-///
-/// Replaces `capaths.rs`'s `reseal`.
-///
-/// # Panics
-///
-/// Same unwraps as [`reseal`].
 pub fn reseal_mut(ticket: &mut Ticket, part: &EncTicketPart, key: &ProtocolKey) {
     let der = encode(part).unwrap();
     let usage = KeyUsage::new(ku::TICKET).unwrap();
     ticket.enc_part.cipher = encrypt(key, usage, &der).unwrap().into();
 }
 
-/// [`reseal_mut`] with the store's krbtgt key.
-///
-/// Replaces `a2_9_u2u.rs` and `a2_r23.rs`.
-///
-/// # Panics
-///
-/// Panics if the krbtgt is missing, plus [`reseal_mut`].
 pub fn reseal_store(store: &PrincipalStore, ticket: &mut Ticket, part: &EncTicketPart) {
     let krbtgt = store.krbtgt().unwrap().best_key().unwrap();
     reseal_mut(ticket, part, &krbtgt.key);
 }
 
-/// [`reseal`] of an issued TGT under the store's krbtgt key.
-///
-/// Replaces `a2_7_s4u2self.rs`. `z1_tgs_header_times.rs` stays local
-/// (decrypt + mutate).
-///
-/// # Panics
-///
-/// Same as [`reseal_store`].
 #[must_use]
 pub fn reseal_tgt(store: &PrincipalStore, tgt: &IssuedAs, part: &EncTicketPart) -> Ticket {
     reseal(
@@ -703,13 +466,6 @@ pub fn reseal_tgt(store: &PrincipalStore, tgt: &IssuedAs, part: &EncTicketPart) 
     )
 }
 
-/// Incoming cross-realm TGT: `OTHER.TEST` realm, local krbtgt sname.
-///
-/// Replaces `a2_r17`, `a2_r18`, `a2_r22`, `a4_18b`.
-///
-/// # Panics
-///
-/// Same unwraps as [`reseal`].
 #[must_use]
 pub fn reseal_incoming(key: &ProtocolKey, tgt: &IssuedAs, part: &EncTicketPart) -> Ticket {
     let der = encode(part).unwrap();

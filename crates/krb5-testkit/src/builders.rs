@@ -1,9 +1,3 @@
-//! AS-REQ / TGS-REQ builders for tests.
-//!
-//! These wrap the protocol `as_req*` / `tgs_req_ex*` helpers so test
-//! sites share one type. Product `src/` and `diffsend` keep calling
-//! the protocol functions.
-
 use krb5_crypto::ProtocolKey;
 use krb5_kdc::testrealm::TEST_REALM;
 
@@ -15,8 +9,6 @@ use krb5_types::{
 
 use crate::pref_etypes;
 
-/// AS-REQ builder. Defaults: [`TEST_REALM`], no padata, krbtgt sname
-/// and preferred etypes via [`as_req`].
 #[must_use]
 pub struct AsReqBuilder {
     cname: PrincipalName,
@@ -28,7 +20,6 @@ pub struct AsReqBuilder {
 }
 
 impl AsReqBuilder {
-    /// `cname` + `nonce`. Realm defaults to [`TEST_REALM`].
     pub fn new(cname: PrincipalName, nonce: u32) -> Self {
         Self {
             cname,
@@ -40,35 +31,26 @@ impl AsReqBuilder {
         }
     }
 
-    /// Request realm.
     pub fn realm(mut self, realm: impl Into<String>) -> Self {
         self.realm = realm.into();
         self
     }
 
-    /// Pre-authentication padata.
     pub fn padata(mut self, padata: Vec<PaData>) -> Self {
         self.padata = Some(padata);
         self
     }
 
-    /// Explicit `sname` (otherwise krbtgt of the realm).
     pub fn sname(mut self, sname: PrincipalName) -> Self {
         self.sname = Some(sname);
         self
     }
 
-    /// Explicit etype list (otherwise [`pref_etypes`]).
     pub fn etypes(mut self, etypes: Vec<i32>) -> Self {
         self.etypes = Some(etypes);
         self
     }
 
-    /// Build the AS-REQ.
-    ///
-    /// # Errors
-    ///
-    /// [`krb5_protocol::Error::ReplyMismatch`] when the realm is not ASCII GeneralString.
     pub fn build(self) -> Result<AsReq, krb5_protocol::Error> {
         match (self.sname, self.etypes) {
             (None, None) => as_req(self.cname, &self.realm, self.nonce, self.padata),
@@ -84,11 +66,6 @@ impl AsReqBuilder {
     }
 }
 
-/// TGS-REQ builder wrapping [`krb5_protocol::tgs_req_ex`].
-///
-/// Defaults match [`krb5_protocol::tgs_req`]: FORWARDABLE, no
-/// additional tickets, empty extra padata, preferred etypes, no
-/// addresses / from / enc-ad / till / subkey.
 #[must_use]
 pub struct TgsReqBuilder {
     ticket: Ticket,
@@ -110,7 +87,6 @@ pub struct TgsReqBuilder {
 }
 
 impl TgsReqBuilder {
-    /// Required fields shared by every `tgs_req_ex*` site.
     pub fn new(
         ticket: Ticket,
         session: &ProtocolKey,
@@ -140,68 +116,51 @@ impl TgsReqBuilder {
         }
     }
 
-    /// `kdc-options`.
     pub fn options(mut self, options: KdcOptions) -> Self {
         self.options = options;
         self
     }
 
-    /// Additional tickets (U2U / S4U2Proxy).
     pub fn additional_tickets(mut self, tickets: Option<Vec<Ticket>>) -> Self {
         self.additional = tickets;
         self
     }
 
-    /// Extra padata after PA-TGS-REQ.
     pub fn padata(mut self, padata: Vec<PaData>) -> Self {
         self.padata = padata;
         self
     }
 
-    /// Requested etypes.
     pub fn etypes(mut self, etypes: Vec<i32>) -> Self {
         self.etypes = etypes;
         self
     }
 
-    /// Request addresses.
     pub fn addresses(mut self, addresses: Option<HostAddresses>) -> Self {
         self.addresses = addresses;
         self
     }
 
-    /// `from` (POSTDATED).
     pub fn from(mut self, from: Option<KerberosTime>) -> Self {
         self.from = from;
         self
     }
 
-    /// Encrypted authorization-data.
     pub fn enc_authorization_data(mut self, enc_ad: Option<EncryptedData>) -> Self {
         self.enc_ad = enc_ad;
         self
     }
 
-    /// Explicit `till`.
     pub fn till(mut self, till: Option<KerberosTime>) -> Self {
         self.till = till;
         self
     }
 
-    /// Authenticator subkey.
     pub fn subkey(mut self, subkey: Option<&ProtocolKey>) -> Self {
         self.subkey = subkey.cloned();
         self
     }
 
-    /// Build the TGS-REQ.
-    ///
-    /// # Errors
-    ///
-    /// [`krb5_protocol::Error::ReplyMismatch`] when the realm or client realm is not ASCII
-    /// GeneralString; [`krb5_protocol::Error::Asn1`] when the body, authenticator, or AP-REQ
-    /// does not encode; [`krb5_protocol::Error::Crypto`] when the body checksum or the
-    /// authenticator encryption fails.
     pub fn build(self) -> Result<TgsReq, krb5_protocol::Error> {
         tgs_req_ex(TgsReqParams {
             ticket: self.ticket,
