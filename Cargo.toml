@@ -88,6 +88,9 @@ unsafe_code = "forbid"
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
+# A one-line doc has no Errors or Panics section.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
 unwrap_used = "allow"
 expect_used = "allow"
 panic = "allow"
