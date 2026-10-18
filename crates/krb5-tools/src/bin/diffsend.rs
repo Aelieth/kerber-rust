@@ -3760,11 +3760,9 @@ fn run() -> Result<(), String> {
         .as_mut()
         .and_then(|p| p.iter_mut().find(|x| x.padata_type == pa::FX_FAST))
         .ok_or_else(|| "no PA-FX-FAST".to_string())?;
-    let mut armored = match decode::<krb5_types::fast::PaFxFast>(fx.padata_value.as_ref())
-        .map_err(|e| e.to_string())?
-    {
-        krb5_types::fast::PaFxFast::ArmoredData(a) => a,
-    };
+    let krb5_types::fast::PaFxFast::ArmoredData(mut armored) =
+        decode::<krb5_types::fast::PaFxFast>(fx.padata_value.as_ref())
+            .map_err(|e| e.to_string())?;
     armored.req_checksum.cksumtype = 7;
     armored.req_checksum.checksum = vec![0xff; 16].into();
     fx.padata_value = encode(&krb5_types::fast::PaFxFast::ArmoredData(armored))
