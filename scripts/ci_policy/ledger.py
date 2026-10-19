@@ -499,6 +499,66 @@ def recount_ledger_verdicts(text: str) -> dict[str, int]:
     return counts
 
 
+def _ledger_tally_numbers(
+    sources: list[tuple[str, str, str | None]],
+) -> tuple[dict[str, int], dict[str, int]]:
+    """The verdict totals and the per-section row counts `check_ledger_tally` compares."""
+    got = {k: 0 for k in _VERDICT_KEYS}
+    for _name, body, _k in sources:
+        for k, v in recount_ledger_verdicts(body).items():
+            got[k] += v
+    if all(key is None for _name, _body, key in sources):
+        sec = recount_ledger_sections(sources[0][1])
+    else:
+        sec = {k: 0 for k in _LEDGER_KEYS}
+        for _name, body, key in sources:
+            if key is not None:
+                sec[key] += len(_ledger_rows(body))
+    return got, sec
+
+
+def rewrite_tally_header(head: str, verdicts: dict[str, int], sections: dict[str, int]) -> str:
+    """The Counts block with `verdicts` and `sections` substituted into the header's own shape."""
+    if not _HEADER_TOTAL.search(head) or not _HEADER_EXACT.search(head) or not _HEADER_ABSENT.search(head):
+        _die("missing verdict header tally")
+    n = sum(verdicts.values())
+    full = _HEADER_TOTAL.search(head).group(5) is not None
+    if full:
+        total = (
+            f"**{n}** = A1 {sections['A1']} + A2 {sections['A2']} + A3 {sections['A3']}"
+            f" + A4 {sections['A4']} + A5 {sections['A5']} + B1 {sections['B1']}"
+        )
+    else:
+        total = f"**{n}** = A1 {sections['A1']} + A2 {sections['A2']} + A3 {sections['A3']}"
+    exact = (
+        f"exact {verdicts['exact']} · stricter-documented {verdicts['stricter-documented']}"
+        f" · deviation {verdicts['deviation']}"
+    )
+    absent = f"absent {verdicts['absent']} · deferred {verdicts['deferred']}"
+    head, n1 = _HEADER_TOTAL.subn(total, head, count=1)
+    head, n2 = _HEADER_EXACT.subn(exact, head, count=1)
+    head, n3 = _HEADER_ABSENT.subn(absent, head, count=1)
+    if n1 != 1 or n2 != 1 or n3 != 1:
+        _die("missing verdict header tally")
+    return head
+
+
+def fix_ledger_tally(root: pathlib.Path | None = None) -> str:
+    """Rewrite the Counts block from the recount `check_ledger_tally` uses. Return those lines."""
+    sources = ledger_sources(root)
+    hname, head, _key = sources[0]
+    got, sec = _ledger_tally_numbers(sources)
+    new = rewrite_tally_header(head, got, sec)
+    path = (root if root is not None else ROOT) / hname
+    if new != head:
+        path.write_text(new, encoding="utf-8")
+    return "\n".join(
+        line
+        for line in new.splitlines()
+        if line.startswith("**") or line.startswith("exact ") or line.startswith("absent ")
+    )
+
+
 def check_ledger_tally(text: str | None = None, root: pathlib.Path | None = None) -> None:
     """Header verdict counts must equal a recount of the table cells, in total and per section.
 
@@ -507,10 +567,7 @@ def check_ledger_tally(text: str | None = None, root: pathlib.Path | None = None
     """
     sources = [("docs/mit-parity-ledger.md", text, None)] if text is not None else ledger_sources(root)
     hname, head, _key = sources[0]
-    got = {k: 0 for k in _VERDICT_KEYS}
-    for _name, body, _k in sources:
-        for k, v in recount_ledger_verdicts(body).items():
-            got[k] += v
+    got, sec = _ledger_tally_numbers(sources)
     exact = _HEADER_EXACT.search(head)
     absent = _HEADER_ABSENT.search(head)
     if not exact or not absent:
@@ -542,13 +599,6 @@ def check_ledger_tally(text: str | None = None, root: pathlib.Path | None = None
             f"{hname} total {header_n} "
             f"= A1 {a1} + A2 {a2} + A3 {a3} + A4 {a4} + A5 {a5} + B1 {b1} != recount {n}"
         )
-    if all(key is None for _name, _body, key in sources):
-        sec = recount_ledger_sections(head)
-    else:
-        sec = {k: 0 for k in _LEDGER_KEYS}
-        for _name, body, key in sources:
-            if key is not None:
-                sec[key] += len(_ledger_rows(body))
     want_sec = {"A1": a1, "A2": a2, "A3": a3, "A4": a4, "A5": a5, "B1": b1}
     if sec != want_sec:
         _die(

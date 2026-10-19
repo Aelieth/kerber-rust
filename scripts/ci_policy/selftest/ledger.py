@@ -12,7 +12,8 @@ from ..common import ROOT, SCRIPTS, _die, _scratch_root
 from ..ledger import (
     DIFFSEND_CASES, _item_span, _item_spans, _src_index, check_diffsend_cases, check_ledger_anchors,
     check_ledger_layout, check_ledger_mit_cites, check_ledger_proof_column, check_ledger_tally,
-    check_no_case_whitelists, ledger_sources,
+    check_no_case_whitelists, fix_ledger_tally, ledger_sources, recount_ledger_sections,
+    recount_ledger_verdicts, rewrite_tally_header,
 )
 from .common import _must_die, _must_die_msg
 
@@ -121,6 +122,19 @@ def _self_test_ledger() -> None:
         "**1** = A1 0 + A2 1 + A3 0.",
     )
     _must_die(check_ledger_tally, ledger_tally_wrong_split)
+    fixed = rewrite_tally_header(
+        ledger_tally_bad, recount_ledger_verdicts(ledger_tally_bad), recount_ledger_sections(ledger_tally_bad)
+    )
+    check_ledger_tally(fixed)
+    if rewrite_tally_header(
+        fixed, recount_ledger_verdicts(fixed), recount_ledger_sections(fixed)
+    ) != fixed:
+        _die("--fix-tally rewrote an already-correct tally")
+    lfix = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
+    (lfix / "docs").mkdir()
+    (lfix / "docs" / "mit-parity-ledger.md").write_text(ledger_tally_bad, encoding="utf-8")
+    fix_ledger_tally(lfix)
+    check_ledger_tally(root=lfix)
     # The ledger in either layout: one file, or docs/parity/ with a README header and one or more
     # files per section keyed by their names. A row's identity is its MIT cite and check cells.
     lroot = pathlib.Path(tempfile.mkdtemp(dir=_scratch_root()))
