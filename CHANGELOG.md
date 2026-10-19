@@ -58,6 +58,7 @@ any other `###` heading.
 - **parity.** The closer hop's first TGS at A asks for `krbtgt/C.TEST`. The validate options check is the live gate.
 - **parity.** `kinit -R` options are the live client differential gate.
 - **ci.** `missing_docs` is allowed. A MIT cite may be one pointer line into `docs/parity/`. The ranged anchor stays.
+- **config.** Unit tests outside the keep list are gone. Proofs a parity row still names stay.
 
 ### Removed
 

@@ -245,25 +245,6 @@ pub fn take_handed_kdcs(realm: &str, host: &str, port: u16) -> Option<Vec<Endpoi
     })
 }
 
-#[cfg(test)]
-mod handed_kdcs {
-    use super::{Endpoint, clear_handed, hand_kdcs, handed_matches, take_handed_kdcs};
-
-    #[test]
-    fn a_handed_list_is_taken_once_for_its_first_address() {
-        clear_handed();
-        hand_kdcs(
-            "KERBER.TEST",
-            vec![Endpoint::kdc("192.0.2.1"), Endpoint::kdc("192.0.2.2")],
-        );
-        assert!(handed_matches("KERBER.TEST", "192.0.2.1", 88));
-        assert!(!handed_matches("OTHER.TEST", "192.0.2.1", 88));
-        let got = take_handed_kdcs("KERBER.TEST", "192.0.2.1", 88).unwrap();
-        assert_eq!(got.len(), 2);
-        assert!(take_handed_kdcs("KERBER.TEST", "192.0.2.1", 88).is_none());
-    }
-}
-
 /// Drop a handed list that will not be sent.
 pub fn clear_handed() {
     HANDED_KDCS.with(|cell| cell.set(None));

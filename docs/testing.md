@@ -215,7 +215,7 @@ workspace's tests once more without features
 (`cargo nextest run --workspace --profile ci-nofeatures --locked`, its junit beside the first
 run's), so the release-only units
 run too: a release `kvno` and `kinit` refusing the gates' options, `kinit -S`
-asking the AS, `a_release_build_reads_no_path_override`, and every test's release
+asking the AS, and every test's release
 branch.
 
 | Input | Read by | A release build instead |
