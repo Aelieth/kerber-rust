@@ -1816,6 +1816,27 @@ fn run() -> Result<(), String> {
         err::SERVICE_EXP,
     )?;
 
+    // MIT validate_as_request; see docs/parity/a2-as.md
+    // A server with DISALLOW_ALL_TIX is SERVICE LOCKED OUT on a bare AS-REQ, before preauth.
+    let locked_server = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["lockedsvc"]);
+    expect_error(
+        &cfg,
+        "as-service-locked",
+        &encode(
+            &as_req_sname(
+                user.clone(),
+                realm,
+                0x1000_00af,
+                None,
+                locked_server,
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::S_PRINCIPAL_UNKNOWN,
+    )?;
+
     let mut opt_tgs = tgs_req(
         mint_tgt(
             tkt_key,
@@ -5332,7 +5353,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":138}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":139}}"#);
     Ok(())
 }
 

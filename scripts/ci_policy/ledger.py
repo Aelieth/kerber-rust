@@ -34,6 +34,7 @@ DIFFSEND_CASES = frozenset(
         "as-bad-pvno",
         "tgs-bad-msg-type",
         "as-service-expired",
+        "as-service-locked",
         "as-service-not-allowed",
         "tgs-ap-options",
         "tgs-header-kvno-zero",

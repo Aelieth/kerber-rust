@@ -56,7 +56,7 @@ is `proposed`. The listed live `diffsend` cases are `garbage-pdu`,
 `as-needpreauth-hints-unpermitted`,
 `skewed-timestamp`, `as-needchange`, `as-invalid-opts`, `as-validate-before-preauth`, `as-locked-out`,
 `as-optimistic-encts-wrong-etype`, `unknown-sname`, `as-success`, `as-retransmit`,
-`as-request-anonymous`, `as-reserved-option-bit`, `as-service-expired`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`,
+`as-request-anonymous`, `as-reserved-option-bit`, `as-service-expired`, `as-service-locked`, `tgs-success`, `tgs-not-a-tgt`, `tgt-expired`, `tgt-nyv`, `tgt-nyv-no-starttime`,
 `fast-armor-no-subkey`, `armor-ap-req-as-pa-tgs-req`, `tgs-ad-fx-armor-authenticator`,
 `as-bad-msg-type`, `as-bad-pvno`, `tgs-bad-msg-type`, `as-service-not-allowed`,
 `tgs-ap-options`, `tgs-header-kvno-zero`, `as-hw-preauth`, `as-spake-round1`,
@@ -111,8 +111,8 @@ wire text. `errcode_to_protocol` passes `offset ∈ [0,128]`
 
 Counts:
 **550** = A1 131 + A2 94 + A3 105 + A4 66 + A5 34 + B1 120.
-exact 432 · stricter-documented 19 · deviation 36 ·
-absent 1 · deferred 62.
+exact 433 · stricter-documented 19 · deviation 36 ·
+absent 1 · deferred 61.
 
 When the ledger was split into these files, the one-file A4 (153 rows,
 kadm5 plus the client library) was re-cut by subject: A4 58, A5 25 and
