@@ -273,6 +273,7 @@ grep -q '"case":"tgs-success".*"rust_enc_tag":"0x7a".*"mit_enc_tag":"0x7a"' <<<"
 grep -q '"case":"as-optimistic-encts-wrong-etype","outcome":"ok","error_code":24' <<<"$DIFF" || die "as-optimistic-encts-wrong-etype not code 24 on both legs"
 grep -q '"case":"as-invalid-opts","outcome":"ok","error_code":13' <<<"$DIFF" || die "as-invalid-opts (RENEW) not code 13 on both legs"
 grep -q '"case":"as-request-anonymous","outcome":"ok","error_code":13,"e_text":"VALIDATE_ANONYMOUS_PRINCIPAL","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-request-anonymous not code 13 e_text VALIDATE_ANONYMOUS_PRINCIPAL on both legs"
+grep -q '"case":"as-reserved-option-bit","outcome":"ok","error_code":25,"e_text":"NEEDED_PREAUTH".*"rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-reserved-option-bit not code 25 e_text NEEDED_PREAUTH on both legs"
 grep -q '"case":"as-validate-before-preauth","outcome":"ok","error_code":23' <<<"$DIFF" || die "as-validate-before-preauth (preauth+needchange) not code 23 on both legs"
 grep -q '"case":"as-retransmit","outcome":"ok","rust_retransmit_identical":true,"mit_retransmit_identical":true' <<<"$DIFF" || die "as-retransmit reply not identical from the lookaside on both legs"
 # MIT `finish_verify_padata` (`kdc/kdc_preauth.c:1224-1228`): a module's verify failure is its own INFO line in the KDC log. The Rust KDC's lines are MIT's, one for one and in order, and no AS_REQ line carries any of the text.
@@ -300,8 +301,8 @@ fi
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136.
-DIFFSEND_RATCHET=136
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137.
+DIFFSEND_RATCHET=137
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"

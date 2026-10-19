@@ -1410,6 +1410,14 @@ fn run() -> Result<(), String> {
     let req = encode(&anon).map_err(|e| e.to_string())?;
     expect_error(&cfg, "as-request-anonymous", &req, err::BADOPTION)?;
 
+    // MIT validate_as_request; see docs/parity/a2-as.md
+    // Bit 17 is outside AS_INVALID_OPTIONS, so this bare pauser AS-REQ is still code 25.
+    let mut reserved =
+        as_req(pauser.clone(), realm, 0x1000_00ad, None).map_err(|e| e.to_string())?;
+    reserved.0.req_body.kdc_options = reserved.0.req_body.kdc_options.with_bit(17, true);
+    let req = encode(&reserved).map_err(|e| e.to_string())?;
+    expect_error(&cfg, "as-reserved-option-bit", &req, err::PREAUTH_REQUIRED)?;
+
     let tkt_kt = cfg
         .krbtgt
         .as_ref()
@@ -5303,7 +5311,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":136}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":137}}"#);
     Ok(())
 }
 

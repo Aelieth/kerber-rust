@@ -93,6 +93,7 @@ DIFFSEND_CASES = frozenset(
         "as-optimistic-encts-wrong-etype",
         "as-retransmit",
         "as-request-anonymous",
+        "as-reserved-option-bit",
         "tgs-pac-server-cksum-wrong-enctype",
         "u2u-2nd-ticket-pac-wrong-enctype",
         "u2u-success-offered",
