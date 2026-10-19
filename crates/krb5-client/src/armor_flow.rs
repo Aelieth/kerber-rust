@@ -4,7 +4,6 @@
 
 use std::io::{Read as _, Write as _};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
@@ -16,7 +15,7 @@ use krb5_kdc::{serve, shared_store};
 use krb5_protocol::KdcAddr;
 use krb5_types::{AsReq, KrbError, MethodData, pa};
 
-use crate::{KinitParams, kinit_prompted, kinit_with, load_ccache, mit_error_code, store_ccache};
+use crate::{KinitParams, kinit_prompted, mit_error_code};
 
 const FX_FAST: i32 = pa::FX_FAST;
 
@@ -183,146 +182,9 @@ fn reqs_of(cap: &Captured) -> Vec<Vec<i32>> {
     cap.reqs.lock().expect("reqs").clone()
 }
 
-fn clear_reqs(cap: &Captured) {
-    cap.reqs.lock().expect("reqs").clear();
-}
-
 fn out_spec(name: &str) -> CcSpec {
     let dir = krb5_testkit::scratch_dir(name);
     CcSpec::File(dir.join("out.cc"))
-}
-
-fn kinit_pw(cap: &Captured, armor: Option<&CcSpec>, out: &CcSpec) -> Result<(), String> {
-    let mut pw = TEST_USER_PASSWORD.to_vec();
-    let params = KinitParams {
-        armor_ccache: armor,
-        ..KinitParams::default()
-    };
-    kinit_with(
-        &cap.addr,
-        &format!("{TEST_USER}@{TEST_REALM}"),
-        &mut pw,
-        out,
-        params,
-    )
-    .map(|_| ())
-    .map_err(|e| e.to_string())
-}
-
-fn assert_prefixed(err: &str, expected: &str, reqs: &[Vec<i32>]) {
-    assert_eq!(
-        reqs.len(),
-        1,
-        "one AS-REQ then the armor error, got {reqs:?} ({err})"
-    );
-    assert!(
-        !reqs[0].contains(&FX_FAST),
-        "the first AS-REQ is unarmored, got {:?}",
-        reqs[0]
-    );
-    assert_eq!(err, expected);
-}
-
-#[test]
-fn empty_memory_armor_sends_one_unarmored_request_then_mits_prefix() {
-    pin_conf("");
-    let cap = boot(false);
-    let armor = CcSpec::Memory("p6g-r5-no-such-memory".into());
-    let err = kinit_pw(&cap, Some(&armor), &out_spec("p6g-r5-mem-out")).unwrap_err();
-    assert_prefixed(
-        &err,
-        "Error constructing AP-REQ armor: No credentials cache found",
-        &reqs_of(&cap),
-    );
-}
-
-#[test]
-fn missing_file_armor_sends_one_unarmored_request_then_the_filename() {
-    pin_conf("");
-    let cap = boot(false);
-    let path: PathBuf = krb5_testkit::scratch_dir("p6g-r5-missing-file").join("no-such-armor.cc");
-    let armor = CcSpec::File(path.clone());
-    let err = kinit_pw(&cap, Some(&armor), &out_spec("p6g-r5-file-out")).unwrap_err();
-    assert_prefixed(
-        &err,
-        &format!(
-            "Error constructing AP-REQ armor: No credentials cache found (filename: {})",
-            path.display()
-        ),
-        &reqs_of(&cap),
-    );
-}
-
-#[test]
-fn a_kdc_that_sends_no_fx_fast_issues_an_unarmored_ticket() {
-    pin_conf("");
-    let cap = boot(true);
-    let armor = CcSpec::Memory("p6g-r5-nofast-memory".into());
-    let got = kinit_pw(&cap, Some(&armor), &out_spec("p6g-r5-nofast-out"));
-    let reqs = reqs_of(&cap);
-    let Err(err) = got else {
-        assert!(
-            reqs.iter().all(|p| !p.contains(&FX_FAST)),
-            "an unarmored ticket's requests carry no PA-FX-FAST, got {reqs:?}"
-        );
-        assert!(!reqs.is_empty(), "the KDC was asked");
-        return;
-    };
-    panic!(
-        "missing armor must still get a ticket when the KDC sends no PA-FX-FAST: {err} reqs={reqs:?}"
-    );
-}
-
-#[test]
-fn armor_without_fast_avail_upgrades_on_fx_fast() {
-    pin_conf("");
-    let cap = boot(false);
-    let held = out_spec("p6g-r5-armor-src");
-    kinit_pw(&cap, None, &held).expect("armor TGT");
-    let mut cc = load_ccache(&held).expect("read armor");
-    cc.creds.retain(|c| {
-        !(c.is_config()
-            && c.server
-                .1
-                .name_string
-                .get(1)
-                .is_some_and(|s| s.as_bytes() == b"fast_avail"))
-    });
-    let bare = CcSpec::File(krb5_testkit::scratch_dir("p6g-r5-armor-bare").join("bare.cc"));
-    store_ccache(&bare, cc).expect("store armor without fast_avail");
-    clear_reqs(&cap);
-    kinit_pw(&cap, Some(&bare), &out_spec("p6g-r5-upgraded")).expect("upgraded AS");
-    let reqs = reqs_of(&cap);
-    assert!(
-        reqs.len() >= 2,
-        "unarmored try then an armored retry, got {reqs:?}"
-    );
-    assert!(
-        !reqs[0].contains(&FX_FAST),
-        "first request unarmored: {:?}",
-        reqs[0]
-    );
-    assert!(
-        reqs[1].contains(&FX_FAST),
-        "second request armored: {:?}",
-        reqs[1]
-    );
-}
-
-#[test]
-fn fast_avail_arms_the_first_request() {
-    pin_conf("");
-    let cap = boot(false);
-    let held = out_spec("p6g-r5-avail-src");
-    kinit_pw(&cap, None, &held).expect("armor TGT with fast_avail");
-    clear_reqs(&cap);
-    kinit_pw(&cap, Some(&held), &out_spec("p6g-r5-avail-out")).expect("armed first");
-    let reqs = reqs_of(&cap);
-    assert!(!reqs.is_empty(), "a request was sent");
-    assert!(
-        reqs[0].contains(&FX_FAST),
-        "fast_avail arms the first AS-REQ, got {reqs:?}"
-    );
 }
 
 #[test]

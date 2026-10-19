@@ -59,6 +59,7 @@ any other `###` heading.
 - **parity.** `kinit -R` options are the live client differential gate.
 - **ci.** `missing_docs` is allowed. A MIT cite may be one pointer line into `docs/parity/`. The ranged anchor stays.
 - **config.** Unit tests outside the keep list are gone. Proofs a parity row still names stay.
+- **client.** Unit tests outside the keep list are gone. Rows that still name a proof name the one that stays.
 
 ### Removed
 
