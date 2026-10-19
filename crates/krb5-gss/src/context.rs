@@ -20,6 +20,7 @@ use super::oid::{
     GSS_C_INTEG, GSS_C_MUTUAL, GSS_C_PROT_READY, GSS_C_REPLAY, GSS_C_SEQUENCE, GSS_C_TRANS,
     GSS_CHECKSUM_TYPE, gss_unwrap_app, gss_wrap_app,
 };
+use super::seqstate::{SeqState, SeqStatus};
 use super::{Error, GssContext};
 
 pub(super) const TOK_AP_REQ: [u8; 2] = [0x01, 0x00];
@@ -110,13 +111,12 @@ pub struct InquireOk {
     pub client: Option<String>,
 }
 
-/// Per-message sequence window (RFC 4121 replay detection).
-const SEQ_WINDOW: u64 = 32;
-
 /// MIT `krb5_generate_subkey_extended` (`lib/krb5/krb/gen_subkey.c:29-52`): a random key of the session key's enctype.
 pub(super) fn random_subkey(session: &ProtocolKey) -> Result<ProtocolKey, Error> {
     Ok(ProtocolKey::random(session.etype())?)
 }
+
+const FIELD_TOOLONG: &str = "Field is too long for this implementation";
 
 /// MIT `kg_setup_keys` (`lib/gssapi/krb5/util_crypt.c:99-125`): DES3 and RC4 keys use the pre-CFX tokens, every other enctype CFX (`proto` 1).
 const fn pre_cfx(etype: i32) -> bool {
@@ -303,15 +303,13 @@ impl GssContext {
             session: ProtocolKey::from_bytes(EncryptionType::Aes256CtsHmacSha196, &[0u8; 32])?,
             acceptor_subkey: None,
             send_seq: 0,
-            recv_seq: 0,
-            recv_seen: false,
-            recv_window: std::collections::HashSet::new(),
+            recv: SeqState::new(0, 0, true),
             initiator: false,
-            rpcsec_init_window: false,
             client: None,
             delegated: None,
             spnego_mech_list: None,
             lifetime_end: 0,
+            acceptor_skew: 0,
             gss_flags: 0,
             ticket_initial: false,
             acceptor: Some(acceptor),
@@ -348,7 +346,12 @@ impl GssContext {
         }
         let deleg_der = if let Some(d) = deleg {
             flags |= GSS_C_DELEG;
-            Some(krb_cred_for_deleg(session, d)?)
+            let der = krb_cred_for_deleg(session, d)?;
+            // MIT make_gss_checksum; see docs/parity/b1-gss.md
+            if der.len() + 28 > 65_535 {
+                return Err(Error::Inner(FIELD_TOOLONG.into()));
+            }
+            Some(der)
         } else {
             None
         };
@@ -357,6 +360,7 @@ impl GssContext {
             checksum: authenticator_checksum(channel_bindings, flags, deleg_der.as_deref()).into(),
         };
         let sub = random_subkey(session)?;
+        let sub_etype = sub.etype().to_iana();
         let enc_sub = EncryptionKey {
             keytype: sub.etype().to_iana(),
             keyvalue: sub.as_bytes().to_vec().into(),
@@ -382,15 +386,14 @@ impl GssContext {
                 session: sub,
                 acceptor_subkey: None,
                 send_seq: 0,
-                recv_seq: 0,
-                recv_seen: false,
-                recv_window: std::collections::HashSet::new(),
+                // Without an AP-REP the acceptor's numbers start at this side's.
+                recv: SeqState::new(0, flags, !pre_cfx(sub_etype)),
                 initiator: true,
-                rpcsec_init_window: false,
                 client: Some(cname.unparse_with_realm(&String::from_utf8_lossy(crealm.as_bytes()))),
                 delegated: None,
                 spnego_mech_list: None,
                 lifetime_end: 0,
+                acceptor_skew: 0,
                 gss_flags: flags,
                 ticket_initial: false,
                 acceptor: None,
@@ -606,6 +609,7 @@ impl GssContext {
         gss_flags |= GSS_C_PROT_READY;
         let want_mutual = gss_flags & GSS_C_MUTUAL != 0;
         let sess = subkey.unwrap_or_else(|| ticket_session.clone());
+        let sess_etype = sess.etype().to_iana();
         let base = ok.authenticator.seq_number.unwrap_or(0);
         // MIT `kg_accept_krb5` (`accept_sec_context.c:1107-1113`): without mutual authentication this side's sequence numbers start at the initiator's.
         let mut send_seq = u64::from(base);
@@ -639,15 +643,13 @@ impl GssContext {
             session: sess,
             acceptor_subkey,
             send_seq,
-            recv_seq: u64::from(base),
-            recv_seen: false,
-            recv_window: std::collections::HashSet::new(),
+            recv: SeqState::new(u64::from(base), gss_flags, !pre_cfx(sess_etype)),
             initiator: false,
-            rpcsec_init_window: false,
             client: Some(client),
             delegated,
             spnego_mech_list: None,
             lifetime_end: ok.ticket_part.endtime.unix_seconds(),
+            acceptor_skew: conf.clockskew,
             gss_flags,
             ticket_initial: ok.ticket_part.flags.initial(),
             acceptor: Some(ok.sname.clone()),
@@ -732,9 +734,11 @@ impl GssContext {
             return Err(Error::Inner("Mutual authentication failed".into()));
         }
         // MIT `mutual_auth` (`init_sec_context.c:797-806`): the acceptor's sequence numbers start at the AP-REP's.
-        self.recv_seq = u64::from(part.seq_number.unwrap_or(0));
-        self.recv_seen = false;
-        self.recv_window.clear();
+        self.recv = SeqState::new(
+            u64::from(part.seq_number.unwrap_or(0)),
+            self.gss_flags,
+            !pre_cfx(self.session.etype().to_iana()),
+        );
         // MIT `mutual_auth` (`init_sec_context.c:808-825`): the acceptor's subkey is kept for a CFX or DCE context, or when its enctype is not the initiator subkey's.
         if let Some(sk) = part.subkey {
             let et = EncryptionType::from_iana(sk.keytype)
@@ -776,14 +780,15 @@ impl GssContext {
         (self.lifetime_end != 0).then_some(self.lifetime_end)
     }
 
-    /// Remaining ticket lifetime in seconds (`0` if unknown or expired).
+    // MIT krb5_gss_context_time; see docs/parity/b1-gss.md
     #[must_use]
     pub fn lifetime(&self) -> u32 {
         if self.lifetime_end == 0 {
             return 0;
         }
-        let now = KerberosTime::now().unix_seconds();
-        self.lifetime_end.saturating_sub(now)
+        let now = i64::from(KerberosTime::now().unix_seconds());
+        let start = now - i64::from(self.acceptor_skew);
+        u32::try_from((i64::from(self.lifetime_end) - start).max(0)).unwrap_or(u32::MAX)
     }
 
     /// Established GSS flags, including `GSS_C_TRANS`.
@@ -792,36 +797,14 @@ impl GssContext {
         self.gss_flags | GSS_C_TRANS
     }
 
-    /// MIT libgssrpc INIT verifier may skip GSS seq 0 (discarded window MIC).
-    ///
-    /// Only the iprop RPCSEC client sets this. Default wrap/MIC stays strict.
-    pub fn allow_rpcsec_init_window(&mut self) {
-        self.rpcsec_init_window = true;
-    }
-
+    // MIT g_seqstate_check; see docs/parity/b1-gss.md
+    // MIT hands a replayed or old token's message back with the status; it is refused here.
     pub(super) fn accept_seq(&mut self, seq: u64) -> Result<(), Error> {
-        if self.recv_window.contains(&seq) {
-            return Err(Error::Sequence);
+        let past = self.recv.do_replay && self.recv.past_window(seq);
+        match self.recv.check(seq) {
+            SeqStatus::Duplicate | SeqStatus::Old => Err(Error::Sequence),
+            SeqStatus::Unseq if past => Err(Error::Sequence),
+            SeqStatus::Complete | SeqStatus::Gap | SeqStatus::Unseq => Ok(()),
         }
-        if !self.recv_seen {
-            if seq != self.recv_seq && !self.rpcsec_init_window {
-                return Err(Error::Sequence);
-            }
-            self.recv_seen = true;
-            self.recv_window.insert(seq);
-            self.recv_seq = seq.wrapping_add(1);
-            return Ok(());
-        }
-        let next = self.recv_seq;
-        let too_old = seq.wrapping_add(SEQ_WINDOW) < next;
-        let too_new = seq >= next.wrapping_add(SEQ_WINDOW);
-        if too_old || too_new {
-            return Err(Error::Sequence);
-        }
-        self.recv_window.insert(seq);
-        if seq >= next {
-            self.recv_seq = seq.wrapping_add(1);
-        }
-        Ok(())
     }
 }

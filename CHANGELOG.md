@@ -25,6 +25,7 @@ any other `###` heading.
 - **config/kdc.** `[libdefaults] clockskew`, kdc.conf's first, is the KDC's skew (it was always 300), read as MIT's integer. Lab beside MIT.
 - **admin.** kpasswd checks an AP-REQ's time against the profile's `clockskew`, kdc.conf's first, not a fixed 300 s; a negative one is kept, as MIT's. Lab beside MIT.
 - **admin/gss.** kadmind and kpropd read the profile once, kdc.conf first: no request opens krb5.conf or kdc.conf, and kpropd's skew is the profile's. Lab beside MIT.
+- **gss/protocol.** GSS's receive window is MIT's 64-number bitmap; the replay cache keeps MIT's tag for the clock skew, and a full cache refuses a new tag, not a live one.
 
 ### Changed
 
@@ -77,6 +78,7 @@ any other `###` heading.
 - **kdc.** A master key that does not decrypt logs MIT's failure while fetching the master keys list.
 - **protocol.** A negative `clockskew` fails every ticket and authenticator time check, as MIT's; `verify_init_creds` takes the profile's skew, not 300 s.
 - **kdc.** kdc.conf's `[libdefaults]` `permitted_enctypes` and `allow_*` are the first values, as MIT's KDC context reads them; an empty list permits nothing. Lab beside MIT.
+- **gss/types.** One DER length codec: a GSS token of 64 KiB or more is framed right, and a delegated KRB-CRED too long for the checksum fails as MIT's.
 
 ## [1.1.0] - 2026-10-14
 

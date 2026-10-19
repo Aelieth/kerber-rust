@@ -821,20 +821,12 @@ fn verify_inner(
         let usage = KeyUsage::new(ku::AP_REQ_AUTH_CKSUM)?;
         verify_checksum_type(&session, usage, data, ck.cksumtype, ck.checksum.as_ref())?;
     }
-    let client = format!(
-        "{}@{}",
-        authenticator.cname.components_joined(),
-        String::from_utf8_lossy(authenticator.crealm.as_bytes())
-    );
-    let server = format!("{}@{}", sname.components_joined(), srealm_text);
-    let key = ReplayKey {
-        client,
-        server,
-        ctime: authenticator.ctime.unix_seconds(),
-        cusec: authenticator.cusec.get(),
-        auth_hash: ReplayCache::hash_authenticator(ap.authenticator.cipher.as_ref()),
-    };
-    if replay.check_and_store(key) {
+    let key = EncryptionType::known(ap.authenticator.etype)
+        .ok()
+        .and_then(|et| ReplayKey::from_ciphertext(et, ap.authenticator.cipher.as_ref()))
+        .ok_or_else(|| Error::Crypto("ciphertext shorter than its checksum".into()))?
+        .file2();
+    if replay.check_and_store(key, params.skew) {
         return Err(Error::KrbError {
             code: err::REPEAT,
             text: Some("authenticator replay".into()),

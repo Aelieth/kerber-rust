@@ -74,6 +74,7 @@ pub mod cammac;
 mod constants;
 pub mod consts;
 pub mod deltat;
+pub mod der;
 pub mod extra;
 pub mod fast;
 pub mod k5json;

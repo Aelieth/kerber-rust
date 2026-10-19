@@ -61,6 +61,7 @@ pub(super) fn message_token(token: &[u8]) -> Result<Vec<u8>, Error> {
     }
 }
 
+// MIT g_make_token_header; see docs/parity/b1-gss.md
 pub(super) fn gss_wrap_app(tok_id: [u8; 2], inner: &[u8]) -> Vec<u8> {
     let mut body = der_tlv(0x06, KRB5_OID);
     body.extend_from_slice(&tok_id);
@@ -68,57 +69,33 @@ pub(super) fn gss_wrap_app(tok_id: [u8; 2], inner: &[u8]) -> Vec<u8> {
     der_tlv(0x60, &body)
 }
 
+// MIT g_verify_token_header; see docs/parity/b1-gss.md
 pub(super) fn gss_unwrap_app(token: &[u8]) -> Result<Vec<u8>, Error> {
     if token.len() < 2 || token[0] != 0x60 {
         return Err(Error::Truncated);
     }
     let (hlen, blen) = der_len_decode(&token[1..])?;
     let start = 1 + hlen;
-    if start + blen > token.len() {
+    if start.checked_add(blen) != Some(token.len()) {
         return Err(Error::Truncated);
     }
-    let body = &token[start..start + blen];
-    if body.len() < 2 || body[0] != 0x06 {
+    let body = &token[start..];
+    if body.first() != Some(&0x06) {
         return Err(Error::Truncated);
     }
-    let oid_len = usize::from(body[1]);
-    let rest = body.get(2 + oid_len..).ok_or(Error::Truncated)?;
+    let (olen, oid_len) = der_len_decode(&body[1..])?;
+    let rest = body.get(1 + olen + oid_len..).ok_or(Error::Truncated)?;
     Ok(rest.to_vec())
 }
 
 pub(super) fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
-    let mut out = vec![tag];
-    der_len(&mut out, body.len());
-    out.extend_from_slice(body);
+    let mut out = Vec::with_capacity(1 + krb5_types::der::len_len(body.len()) + body.len());
+    krb5_types::der::push_tlv(&mut out, tag, body);
     out
 }
 
-fn der_len(out: &mut Vec<u8>, n: usize) {
-    if let Ok(b) = u8::try_from(n) {
-        if b < 128 {
-            out.push(b);
-        } else {
-            out.push(0x81);
-            out.push(b);
-        }
-        return;
-    }
-    out.push(0x82);
-    out.extend_from_slice(&(u16::try_from(n).unwrap_or(u16::MAX)).to_be_bytes());
-}
-
 pub(super) fn der_len_decode(b: &[u8]) -> Result<(usize, usize), Error> {
-    if b.is_empty() {
-        return Err(Error::Truncated);
-    }
-    if b[0] < 128 {
-        return Ok((1, usize::from(b[0])));
-    }
-    if b[0] == 0x81 && b.len() >= 2 {
-        return Ok((2, usize::from(b[1])));
-    }
-    if b[0] == 0x82 && b.len() >= 3 {
-        return Ok((3, usize::from(u16::from_be_bytes([b[1], b[2]]))));
-    }
-    Err(Error::Truncated)
+    krb5_types::der::read_len(b)
+        .map(|(len, hlen)| (hlen, len))
+        .ok_or(Error::Truncated)
 }

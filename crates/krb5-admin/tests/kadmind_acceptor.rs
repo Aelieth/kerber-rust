@@ -389,7 +389,6 @@ fn rpcsec_gss_for_any_principal_of_the_database_completes_and_is_then_too_weak()
         if !out_tok.is_empty() {
             ctx.process_ap_rep(&out_tok, &session).unwrap();
         }
-        ctx.allow_rpcsec_init_window();
         assert_eq!(weak_call(&mut c, &mut ctx, &handle, 2), AUTH_TOOWEAK);
     }
 }

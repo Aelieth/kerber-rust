@@ -1022,33 +1022,16 @@ fn etype_requires_info2(etype: EncryptionType) -> bool {
 }
 
 fn userid_der_from_pa(raw: &[u8]) -> Option<&[u8]> {
-    let (_, seq, _) = take_der_slice(raw)?;
+    let (_, seq, _) = crate::der::take_der(raw)?;
     let mut cur = seq;
     while !cur.is_empty() {
-        let (tag, inner, rest) = take_der_slice(cur)?;
+        let (tag, inner, rest) = crate::der::take_der(cur)?;
         if tag == 0xa0 {
             return Some(inner);
         }
         cur = rest;
     }
     None
-}
-
-fn take_der_slice(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-    let tag = *input.first()?;
-    let first = *input.get(1)?;
-    let (hlen, ln) = if first < 128 {
-        (1usize, usize::from(first))
-    } else if first == 0x81 && input.len() >= 3 {
-        (2, usize::from(input[2]))
-    } else if first == 0x82 && input.len() >= 4 {
-        (3, usize::from(u16::from_be_bytes([input[2], input[3]])))
-    } else {
-        return None;
-    };
-    let start = 1 + hlen;
-    let end = start.checked_add(ln)?;
-    Some((tag, input.get(start..end)?, input.get(end..)?))
 }
 
 /// Reply PA-S4U-X509-USER (`kdc_make_s4u2self_rep`).

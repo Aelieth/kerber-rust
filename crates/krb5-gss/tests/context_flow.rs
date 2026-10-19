@@ -487,29 +487,6 @@ fn acceptor_rejects_wrong_service_name() {
 }
 
 #[test]
-fn first_seq_must_match_authenticator_base() {
-    let (init, mut acc) = contexts();
-    let bad = mit_shaped_wrap(init.session_key(), true, 5, b"skip").unwrap();
-    assert!(matches!(acc.unwrap(&bad), Err(Error::Sequence)));
-    let good = mit_shaped_wrap(init.session_key(), true, 0, b"ok").unwrap();
-    assert_eq!(acc.unwrap(&good).unwrap(), b"ok");
-}
-
-#[test]
-fn rpcsec_init_window_accepts_seq_gap_default_rejects() {
-    let (mut strict, acc) = contexts();
-    let gap = mit_shaped_wrap(acc.session_key(), false, 1, b"init-win").unwrap();
-    assert!(
-        matches!(strict.unwrap(&gap), Err(Error::Sequence)),
-        "default first-recv must match authenticator base"
-    );
-    let (mut iprop, acc) = contexts();
-    iprop.allow_rpcsec_init_window();
-    let gap = mit_shaped_wrap(acc.session_key(), false, 1, b"init-win").unwrap();
-    assert_eq!(iprop.unwrap(&gap).unwrap(), b"init-win");
-}
-
-#[test]
 fn mutual_ap_rep_decrypts_with_ticket_session() {
     let (_as_out, tgs_out, skey, cname) = user_host();
     let (mut init, token) = GssContext::init_sec_context(

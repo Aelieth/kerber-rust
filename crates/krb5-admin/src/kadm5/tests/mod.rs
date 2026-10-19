@@ -289,7 +289,6 @@ fn admin_rpcsec_init_svc(
     if !out_tok.is_empty() {
         ctx.process_ap_rep(&out_tok, &session).unwrap();
     }
-    ctx.allow_rpcsec_init_window();
     ctx.verify_mic(&window.to_be_bytes(), &verf).unwrap();
     assert!(gss.is_some());
     (store, acl, ctx, handle, gss)

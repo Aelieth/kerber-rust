@@ -212,15 +212,13 @@ fn bare_ctx(key: ProtocolKey, initiator: bool) -> GssContext {
         session: key,
         acceptor_subkey: None,
         send_seq: 0,
-        recv_seq: 0,
-        recv_seen: false,
-        recv_window: std::collections::HashSet::new(),
+        recv: crate::seqstate::SeqState::new(0, GSS_C_INTEG | GSS_C_CONF, true),
         initiator,
-        rpcsec_init_window: false,
         client: None,
         delegated: None,
         spnego_mech_list: None,
         lifetime_end: 0,
+        acceptor_skew: 0,
         gss_flags: GSS_C_INTEG | GSS_C_CONF,
         ticket_initial: false,
         acceptor: None,
@@ -771,7 +769,7 @@ fn mutual_ap_rep_carries_a_fresh_subkey_and_a_random_seq_that_key_both_sides() {
         Some(subkey.keyvalue.as_ref())
     );
     init.process_ap_rep(&rep, &session).unwrap();
-    assert_eq!(init.recv_seq, u64::from(seq));
+    assert_eq!(init.recv.base, u64::from(seq));
 
     let up = init.wrap(b"to-acceptor").unwrap();
     assert_eq!(up[2], FLAG_ACCEPTOR_SUBKEY | FLAG_SEALED);

@@ -1465,7 +1465,6 @@ fn a_refused_rpcsec_gss_call_writes_mits_lines() {
         if !out_tok.is_empty() {
             ctx.process_ap_rep(&out_tok, &t.session).unwrap();
         }
-        ctx.allow_rpcsec_init_window();
         procs
             .iter()
             .map(|&(xid, proc)| {

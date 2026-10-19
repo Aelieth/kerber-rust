@@ -1469,7 +1469,7 @@ fn read_tlv(data: &[u8], off: usize) -> Option<(u8, bool, &[u8], usize)> {
         return None;
     }
     let constructed = tag & 0x20 != 0;
-    let (len, len_bytes) = read_der_len(data, off + 1)?;
+    let (len, len_bytes) = crate::der::read_len(data.get(off + 1..)?)?;
     let hdr = 1 + len_bytes;
     let start = off + hdr;
     let end = start.checked_add(len)?;
@@ -1479,41 +1479,10 @@ fn read_tlv(data: &[u8], off: usize) -> Option<(u8, bool, &[u8], usize)> {
     Some((tag, constructed, &data[start..end], hdr + len))
 }
 
-fn read_der_len(data: &[u8], off: usize) -> Option<(usize, usize)> {
-    let b = *data.get(off)?;
-    if b < 0x80 {
-        return Some((b as usize, 1));
-    }
-    let nbytes = (b & 0x7f) as usize;
-    if nbytes == 0 || nbytes > 4 || off + 1 + nbytes > data.len() {
-        return None;
-    }
-    let mut n = 0usize;
-    for i in 0..nbytes {
-        n = (n << 8) | usize::from(data[off + 1 + i]);
-    }
-    Some((n, 1 + nbytes))
-}
-
 fn encode_tlv(tag: u8, content: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(2 + content.len());
-    out.push(tag);
-    out.extend(encode_der_len(content.len()));
-    out.extend_from_slice(content);
+    let mut out = Vec::with_capacity(1 + crate::der::len_len(content.len()) + content.len());
+    crate::der::push_tlv(&mut out, tag, content);
     out
-}
-
-fn encode_der_len(n: usize) -> Vec<u8> {
-    fn b(v: usize) -> u8 {
-        u8::try_from(v & 0xff).unwrap_or(0)
-    }
-    match n {
-        0..=127 => vec![b(n)],
-        128..=255 => vec![0x81, b(n)],
-        256..=65535 => vec![0x82, b(n >> 8), b(n)],
-        65536..=16_777_215 => vec![0x83, b(n >> 16), b(n >> 8), b(n)],
-        _ => vec![0x84, b(n >> 24), b(n >> 16), b(n >> 8), b(n)],
-    }
 }
 
 #[cfg(test)]

@@ -272,17 +272,8 @@ fn wrap_app(inner: &[u8]) -> Vec<u8> {
 }
 
 fn der_tlv(tag: u8, body: &[u8]) -> Vec<u8> {
-    let mut out = vec![tag];
-    if body.len() < 128 {
-        out.push(u8::try_from(body.len()).unwrap_or(u8::MAX));
-    } else if body.len() < 256 {
-        out.push(0x81);
-        out.push(u8::try_from(body.len()).unwrap_or(u8::MAX));
-    } else {
-        out.push(0x82);
-        out.extend_from_slice(&(u16::try_from(body.len()).unwrap_or(u16::MAX)).to_be_bytes());
-    }
-    out.extend_from_slice(body);
+    let mut out = Vec::with_capacity(1 + krb5_types::der::len_len(body.len()) + body.len());
+    krb5_types::der::push_tlv(&mut out, tag, body);
     out
 }
 

@@ -351,7 +351,6 @@ fn rpcsec_init_reply_mic_is_window() {
     let verf_seq = u64::from_be_bytes(verf[8..16].try_into().unwrap());
     assert_eq!(verf_seq, u64::from(seq) + 1);
     ctx.process_ap_rep(&out_tok, &as_out.session_key).unwrap();
-    ctx.allow_rpcsec_init_window();
     ctx.verify_mic(&window.to_be_bytes(), &verf)
         .expect("INIT xp_verf is MIC(htonl(window))");
 }

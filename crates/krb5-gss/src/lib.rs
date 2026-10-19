@@ -17,6 +17,7 @@ mod export;
 mod iov;
 mod mic;
 mod oid;
+mod seqstate;
 mod spnego;
 mod wrap;
 
@@ -79,18 +80,15 @@ pub struct GssContext {
     /// MIT CFX acceptor subkey from AP-REP (`FLAG_ACCEPTOR_SUBKEY`).
     acceptor_subkey: Option<ProtocolKey>,
     send_seq: u64,
-    recv_seq: u64,
-    recv_seen: bool,
-    recv_window: std::collections::HashSet<u64>,
+    recv: seqstate::SeqState,
     initiator: bool,
-    /// MIT libgssrpc INIT may spend GSS seq 0 on a discarded window MIC.
-    rpcsec_init_window: bool,
     /// Authenticated client `name@REALM` (set on accept; initiator from cname).
     pub client: Option<String>,
     /// Delegated client from a 0x8003 KRB-CRED trailer (`GSS_C_DELEG_FLAG`).
     pub delegated: Option<String>,
     spnego_mech_list: Option<Vec<u8>>,
     lifetime_end: u32,
+    acceptor_skew: i32,
     gss_flags: u32,
     /// Ticket INITIAL flag (`gss_krb5_get_tkt_flags` / `TKT_FLG_INITIAL`).
     ticket_initial: bool,

@@ -1,33 +1,52 @@
-//! Bounded, time-windowed, thread-safe replay cache.
-//!
-//! A key already seen inside the window is a replay. The map holds at
-//! most `max_entries` keys (50,000 by default). When it is full, a new
-//! key evicts the oldest entry even if that entry is still inside the
-//! window, and the evicted key is then accepted again. A poisoned lock
-//! reads as a replay. Clones share one map.
-
-use std::collections::HashMap;
+use std::collections::{HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use sha1::{Digest, Sha1};
+use krb5_crypto::{EncryptionType, checksum_output_size};
 
-/// Replay key: client, server, ctime, cusec, authenticator hash.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+const TAG_MAX: usize = 24;
+const FILE2_TAG_LEN: usize = 12;
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub struct ReplayKey {
-    /// Client principal `name@REALM`.
-    pub client: String,
-    /// Server principal `name@REALM`.
-    pub server: String,
-    /// Authenticator ctime (unix seconds).
-    pub ctime: u32,
-    /// Authenticator cusec.
-    pub cusec: u32,
-    /// SHA-1 of the authenticator ciphertext (or full authenticator DER).
-    pub auth_hash: [u8; 20],
+    len: u8,
+    tag: [u8; TAG_MAX],
 }
 
-/// Shared replay detector. `Clone` shares the same map (does not fork state).
+impl ReplayKey {
+    /// A tag held whole, as MIT's memory cache holds it; past 24 bytes only those are kept.
+    #[must_use]
+    pub fn tag(bytes: &[u8]) -> Self {
+        let n = bytes.len().min(TAG_MAX);
+        let mut tag = [0; TAG_MAX];
+        tag[..n].copy_from_slice(&bytes[..n]);
+        Self {
+            len: u8::try_from(n).unwrap_or(u8::MAX),
+            tag,
+        }
+    }
+
+    // MIT k5_rc_tag_from_ciphertext; see docs/parity/b1-client.md
+    #[must_use]
+    pub fn from_ciphertext(etype: EncryptionType, cipher: &[u8]) -> Option<Self> {
+        let len = checksum_output_size(etype.checksum_type())?;
+        let at = cipher.len().checked_sub(len)?;
+        Some(Self::tag(&cipher[at..]))
+    }
+
+    // MIT k5_rcfile2_store; see docs/parity/b1-client.md
+    #[must_use]
+    pub fn file2(self) -> Self {
+        let mut tag = [0; TAG_MAX];
+        tag[..FILE2_TAG_LEN].copy_from_slice(&self.tag[..FILE2_TAG_LEN]);
+        Self {
+            len: u8::try_from(FILE2_TAG_LEN).unwrap_or(u8::MAX),
+            tag,
+        }
+    }
+}
+
+/// Shared replay detector. `Clone` shares the same cache (does not fork state).
 #[derive(Clone, Debug)]
 pub struct ReplayCache {
     inner: Arc<Mutex<Inner>>,
@@ -35,9 +54,11 @@ pub struct ReplayCache {
 
 #[derive(Debug)]
 struct Inner {
-    seen: HashMap<ReplayKey, Instant>,
+    seen: HashSet<ReplayKey>,
+    buckets: VecDeque<(u64, Vec<ReplayKey>)>,
     max_entries: usize,
-    window: Duration,
+    start: Instant,
+    ahead: u64,
 }
 
 impl Default for ReplayCache {
@@ -47,61 +68,56 @@ impl Default for ReplayCache {
 }
 
 impl ReplayCache {
-    /// 50_000 entries, 5-minute window (typical MIT clockskew).
     #[must_use]
     pub fn new() -> Self {
-        Self::with_limits(50_000, Duration::from_secs(300))
+        Self::with_limits(250_000)
     }
 
-    /// Custom bounds.
     #[must_use]
-    pub fn with_limits(max_entries: usize, window: Duration) -> Self {
+    pub fn with_limits(max_entries: usize) -> Self {
         Self {
             inner: Arc::new(Mutex::new(Inner {
-                seen: HashMap::new(),
+                seen: HashSet::new(),
+                buckets: VecDeque::new(),
                 max_entries: max_entries.max(1),
-                window,
+                start: Instant::now(),
+                ahead: 0,
             })),
         }
     }
 
-    /// SHA-1 of authenticator ciphertext bytes.
+    /// `true` for a replay. Unlike MIT's cache, a full one refuses every new tag.
+    // MIT k5_memrcache_store; see docs/parity/b1-client.md
     #[must_use]
-    pub fn hash_authenticator(cipher: &[u8]) -> [u8; 20] {
-        let mut h = Sha1::new();
-        h.update(cipher);
-        let out = h.finalize();
-        let mut arr = [0u8; 20];
-        arr.copy_from_slice(&out);
-        arr
-    }
-
-    /// Insert `key` if it has not been seen inside the window.
-    ///
-    /// Returns `true` if this is a replay (already present).
-    #[must_use]
-    pub fn check_and_store(&self, key: ReplayKey) -> bool {
+    pub fn check_and_store(&self, key: ReplayKey, skew: i64) -> bool {
         let Ok(mut g) = self.inner.lock() else {
             return true;
         };
-        let now = Instant::now();
-        let window = g.window;
-        g.seen
-            .retain(|_, t| now.saturating_duration_since(*t) < window);
-        if g.seen.contains_key(&key) {
+        if g.seen.contains(&key) {
             return true;
         }
-        if g.seen.len() >= g.max_entries {
-            let oldest = g
-                .seen
-                .iter()
-                .min_by_key(|(_, t)| *t)
-                .map(|(k, _)| k.clone());
-            if let Some(oldest) = oldest {
-                g.seen.remove(&oldest);
+        let now = g.start.elapsed().as_secs() + g.ahead;
+        while g.buckets.front().is_some_and(|(expiry, _)| *expiry < now) {
+            if let Some((_, keys)) = g.buckets.pop_front() {
+                for k in keys {
+                    g.seen.remove(&k);
+                }
             }
         }
-        g.seen.insert(key, now);
+        if g.seen.len() >= g.max_entries {
+            return true;
+        }
+        let expiry = now + u64::try_from(skew).unwrap_or(0);
+        match g.buckets.back_mut() {
+            Some((e, keys)) if *e == expiry => keys.push(key),
+            _ => g.buckets.push_back((expiry, vec![key])),
+        }
+        if g.seen.len() == 1_024 {
+            // Room for 28,672 tags at once: churn just past half full would grow the set again.
+            g.seen.reserve(28_672 - 1_024);
+            g.buckets.reserve(512);
+        }
+        g.seen.insert(key);
         false
     }
 
@@ -116,71 +132,77 @@ impl ReplayCache {
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+
+    #[cfg(test)]
+    fn advance(&self, secs: u64) {
+        if let Ok(mut g) = self.inner.lock() {
+            g.ahead += secs;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::thread;
 
     fn key(tag: u8) -> ReplayKey {
-        ReplayKey {
-            client: format!("user{tag}@KERBER.TEST"),
-            server: "krbtgt/KERBER.TEST@KERBER.TEST".into(),
-            ctime: 1_700_000_000,
-            cusec: u32::from(tag),
-            auth_hash: [tag; 20],
-        }
+        ReplayKey::tag(&[tag; 12])
     }
 
     #[test]
     fn window_prune_is_not_replay() {
-        let cache = ReplayCache::with_limits(8, Duration::from_millis(20));
+        let cache = ReplayCache::with_limits(8);
         let k = key(1);
-        assert!(!cache.check_and_store(k.clone()));
-        thread::sleep(Duration::from_millis(50));
+        assert!(!cache.check_and_store(k, 1));
+        cache.advance(1);
         assert!(
-            !cache.check_and_store(k),
-            "entries older than the window must not count as replays"
+            cache.check_and_store(k, 1),
+            "a tag is a replay up to its skew"
+        );
+        cache.advance(1);
+        assert!(
+            cache.check_and_store(k, 1),
+            "a held tag is looked up before the expired ones go"
+        );
+        assert!(!cache.check_and_store(key(2), 1));
+        assert!(
+            !cache.check_and_store(k, 1),
+            "entries older than their skew must not count as replays"
         );
     }
 
     #[test]
     fn cap_evicts_oldest_not_grow() {
-        let cache = ReplayCache::with_limits(2, Duration::from_secs(60));
+        let cache = ReplayCache::with_limits(2);
         let a = key(1);
         let b = key(2);
         let c = key(3);
-        assert!(!cache.check_and_store(a.clone()));
-        assert!(!cache.check_and_store(b.clone()));
-        assert_eq!(cache.len(), 2);
-        assert!(!cache.check_and_store(c.clone()));
+        assert!(!cache.check_and_store(a, 60));
+        assert!(!cache.check_and_store(b, 60));
+        assert!(
+            cache.check_and_store(c, 60),
+            "a new tag is refused while the cache is full"
+        );
         assert_eq!(cache.len(), 2, "cap must not grow unbounded");
+        assert!(cache.check_and_store(a, 60), "a held tag is still a replay");
+        cache.advance(61);
         assert!(
-            cache.check_and_store(b.clone()),
-            "live entry must still be a replay"
+            !cache.check_and_store(c, 60),
+            "room comes back as tags expire"
         );
-        assert!(
-            cache.check_and_store(c),
-            "newest live entry must still be a replay"
-        );
-        assert!(
-            !cache.check_and_store(a),
-            "evicted oldest must not count as a replay"
-        );
-        assert_eq!(cache.len(), 2);
+        assert_eq!(cache.len(), 1);
     }
 
     #[test]
     fn poison_fails_closed() {
-        let cache = ReplayCache::with_limits(8, Duration::from_secs(60));
+        let cache = ReplayCache::with_limits(8);
         let inner = Arc::clone(&cache.inner);
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _g = inner.lock().unwrap();
             panic!("poison");
         }));
         assert!(
-            cache.check_and_store(key(1)),
+            cache.check_and_store(key(1), 60),
             "a poisoned lock must be treated as a replay"
         );
     }

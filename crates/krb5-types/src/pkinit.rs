@@ -827,19 +827,8 @@ fn sha1_bytes(data: &[u8]) -> Vec<u8> {
 }
 
 fn tlv(tag: u8, body: &[u8]) -> Vec<u8> {
-    let mut out = vec![tag];
-    if let Ok(b) = u8::try_from(body.len()) {
-        if b < 128 {
-            out.push(b);
-        } else {
-            out.push(0x81);
-            out.push(b);
-        }
-    } else {
-        out.push(0x82);
-        out.extend_from_slice(&(u16::try_from(body.len()).unwrap_or(u16::MAX)).to_be_bytes());
-    }
-    out.extend_from_slice(body);
+    let mut out = Vec::with_capacity(1 + crate::der::len_len(body.len()) + body.len());
+    crate::der::push_tlv(&mut out, tag, body);
     out
 }
 
@@ -848,25 +837,16 @@ fn oid_der(arcs: &[u8]) -> Vec<u8> {
 }
 
 fn der_take_len(b: &[u8]) -> Option<(usize, usize)> {
-    let first = *b.first()?;
-    if first < 128 {
-        return Some((1, usize::from(first)));
-    }
-    if first == 0x81 && b.len() >= 2 {
-        return Some((2, usize::from(b[1])));
-    }
-    if first == 0x82 && b.len() >= 3 {
-        return Some((3, usize::from(u16::from_be_bytes([b[1], b[2]]))));
-    }
-    None
+    crate::der::read_len(b).map(|(len, hlen)| (hlen, len))
 }
 
 fn take_tlv(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     let tag = *input.first()?;
     let (hlen, ln) = der_take_len(input.get(1..)?)?;
     let start = 1 + hlen;
-    let body = input.get(start..start + ln)?;
-    let rest = input.get(start + ln..)?;
+    let end = start.checked_add(ln)?;
+    let body = input.get(start..end)?;
+    let rest = input.get(end..)?;
     Some((tag, body, rest))
 }
 

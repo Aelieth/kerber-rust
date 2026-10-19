@@ -504,17 +504,10 @@ impl AcceptorAuthContext {
         if (now - then).abs() > skew {
             return Err(krb_error(err::SKEW, "Clock skew too great"));
         }
-        let key = ReplayKey {
-            client: String::new(),
-            server: String::new(),
-            ctime: 0,
-            cusec: 0,
-            auth_hash: ReplayCache::hash_authenticator(tag),
-        };
         if self
             .memrcache
             .get_or_insert_with(ReplayCache::new)
-            .check_and_store(key)
+            .check_and_store(ReplayKey::tag(tag), skew)
         {
             return Err(krb_error(err::REPEAT, "Request is a replay"));
         }

@@ -14,13 +14,13 @@ use zeroize::{Zeroize, Zeroizing};
 
 use krb5_asn1::{decode, encode};
 use krb5_crypto::{
-    CipherState, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof, cksumtype_is_keyed,
-    cksumtype_is_known, decrypt_enc_data, decrypt_enc_data_with_state, encrypt, encrypt_with_state,
-    verify_checksum_type,
+    CipherState, EncryptionType, KeyUsage, ProtocolKey, checksum, cksumtype_is_coll_proof,
+    cksumtype_is_keyed, cksumtype_is_known, decrypt_enc_data, decrypt_enc_data_with_state, encrypt,
+    encrypt_with_state, verify_checksum_type,
 };
 use krb5_types::{
     Checksum, EncKrbCredPart, EncKrbPrivPart, EncryptedData, HostAddress, KerberosTime, KrbCred,
-    KrbCredInfo, KrbPriv, KrbSafe, KrbSafeBody, Microseconds, OctetString, Ticket, err, ku,
+    KrbCredInfo, KrbPriv, KrbSafe, KrbSafeBody, OctetString, Ticket, err, ku,
 };
 
 use crate::ap_req::address_in_list;
@@ -166,10 +166,9 @@ pub fn unwrap_krb_safe_ex(
         replay,
         "SAFE",
         msg.safe_body.timestamp.as_ref(),
-        msg.safe_body.usec.as_ref(),
         msg.safe_body.seq_number,
         fresh_policy(require_seq, require_time),
-        raw,
+        ReplayKey::tag(msg.cksum.checksum.as_ref()),
     )?;
     Ok(msg.safe_body.user_data.to_vec())
 }
@@ -375,25 +374,8 @@ fn der_i32(v: i32) -> Vec<u8> {
 }
 
 fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(2 + content.len());
-    out.push(tag);
-    out.extend(der_len(content.len()));
-    out.extend_from_slice(content);
-    out
-}
-
-fn der_len(n: usize) -> Vec<u8> {
-    if let Ok(b) = u8::try_from(n)
-        && b < 0x80
-    {
-        return vec![b];
-    }
-    let b = n.to_be_bytes();
-    let start = b.iter().position(|x| *x != 0).unwrap_or(b.len() - 1);
-    let raw = &b[start..];
-    let nlen = u8::try_from(raw.len()).unwrap_or(8);
-    let mut out = vec![0x80 | nlen];
-    out.extend_from_slice(raw);
+    let mut out = Vec::with_capacity(1 + krb5_types::der::len_len(content.len()) + content.len());
+    krb5_types::der::push_tlv(&mut out, tag, content);
     out
 }
 
@@ -404,26 +386,17 @@ fn der_take(input: &[u8]) -> Option<(u8, &[u8])> {
 
 fn der_take_rest(input: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     let tag = *input.first()?;
-    let (ln, hdr) = der_len_at(input, 1)?;
+    let (ln, hdr) = krb5_types::der::read_len(input.get(1..)?)?;
     let start = 1 + hdr;
     let end = start.checked_add(ln)?;
     Some((tag, input.get(start..end)?, input.get(end..)?))
 }
 
-fn der_len_at(data: &[u8], off: usize) -> Option<(usize, usize)> {
-    let b = *data.get(off)?;
-    if b < 0x80 {
-        return Some((b as usize, 1));
-    }
-    let nbytes = (b & 0x7f) as usize;
-    if nbytes == 0 || nbytes > 4 || off + 1 + nbytes > data.len() {
-        return None;
-    }
-    let mut n = 0usize;
-    for i in 0..nbytes {
-        n = (n << 8) | usize::from(*data.get(off + 1 + i)?);
-    }
-    Some((n, 1 + nbytes))
+fn enc_tag(enc: &EncryptedData) -> Result<ReplayKey, Error> {
+    EncryptionType::known(enc.etype)
+        .ok()
+        .and_then(|et| ReplayKey::from_ciphertext(et, enc.cipher.as_ref()))
+        .ok_or_else(|| Error::Crypto("ciphertext shorter than its checksum".into()))
 }
 
 fn fresh_policy(require_seq: bool, require_time: bool) -> FreshPolicy {
@@ -442,10 +415,9 @@ fn accept_fresh(
     replay: &ReplayCache,
     kind: &str,
     ts: Option<&KerberosTime>,
-    usec: Option<&Microseconds>,
     seq: Option<u32>,
     policy: FreshPolicy,
-    raw: &[u8],
+    key: ReplayKey,
 ) -> Result<(), Error> {
     let require_time = matches!(policy, FreshPolicy::SeqAndTime | FreshPolicy::TimeOnly);
     let require_seq = matches!(policy, FreshPolicy::SeqAndTime | FreshPolicy::SeqOnly);
@@ -470,14 +442,7 @@ fn accept_fresh(
             Some(_) => {}
         }
     }
-    let key = ReplayKey {
-        client: kind.to_owned(),
-        server: seq.map_or_else(String::new, |s| s.to_string()),
-        ctime: ts.map_or(0, KerberosTime::unix_seconds),
-        cusec: usec.map_or(0, |u| u.0),
-        auth_hash: ReplayCache::hash_authenticator(raw),
-    };
-    if replay.check_and_store(key) {
+    if replay.check_and_store(key, 300) {
         return Err(Error::ReplyMismatch(format!("{kind} replay")));
     }
     Ok(())
@@ -754,10 +719,9 @@ pub fn unwrap_krb_priv_chained(
         replay,
         "PRIV",
         part.timestamp.as_ref(),
-        part.usec.as_ref(),
         part.seq_number,
         fresh_policy(require_seq, require_time),
-        raw,
+        enc_tag(&msg.enc_part)?,
     )?;
     Ok(part.user_data.to_vec())
 }
@@ -823,10 +787,9 @@ pub fn unwrap_krb_cred(
         replay,
         "CRED",
         part.timestamp.as_ref(),
-        part.usec.as_ref(),
         None,
         FreshPolicy::TimeOnly,
-        raw,
+        enc_tag(&msg.enc_part)?,
     )?;
     Ok((msg, part))
 }

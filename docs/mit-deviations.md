@@ -93,6 +93,8 @@ to restate.
 
 | Invariant | Grade | Ledger row |
 | --- | --- | --- |
+| Replay cache bounded at 250,000 tags, a new one refused while full | stricter-documented | `memrcache.c:125-150` ([B1](parity/b1-client.md)) |
+| A GSS replay, OLD token or token past the window refused, not delivered with a supplementary status | stricter-documented | `generic/util_seqstate.c:36-117` ([B1](parity/b1-gss.md)) |
 | Transited field-count cap; transited hop-emission cap | stricter-documented | `kdc_util.c:1647` ([A1](parity/a1-tgs.md)) |
 | Append escaping; add-path bounds; encode-side X.500 RDN compression | stricter-documented | `kdc_transit.c:143` ([A1](parity/a1-tgs.md)) |
 | TGS realm octets that are not UTF-8 | stricter-documented | `asn1_k_encode.c:103-106` ([A1](parity/a1-tgs.md)) |
