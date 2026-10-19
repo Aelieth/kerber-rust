@@ -1795,6 +1795,27 @@ fn run() -> Result<(), String> {
         err::MUST_USE_USER2USER,
     )?;
 
+    // MIT validate_as_request; see docs/parity/a2-as.md
+    // An expired server is SERVICE EXPIRED on a bare AS-REQ, before preauth.
+    let expired_server = PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["expiredsvc"]);
+    expect_error(
+        &cfg,
+        "as-service-expired",
+        &encode(
+            &as_req_sname(
+                user.clone(),
+                realm,
+                0x1000_00ae,
+                None,
+                expired_server,
+                etypes.clone(),
+            )
+            .map_err(|e| e.to_string())?,
+        )
+        .map_err(|e| e.to_string())?,
+        err::SERVICE_EXP,
+    )?;
+
     let mut opt_tgs = tgs_req(
         mint_tgt(
             tkt_key,
@@ -5311,7 +5332,7 @@ fn run() -> Result<(), String> {
     let host = PrincipalName::new(PrincipalName::NT_SRV_HST, ["host", "testhost.kerber.test"]);
     ra_cases(&cfg, realm, &user, &host)?;
 
-    println!(r#"{{"event":"diffsend","outcome":"ok","cases":137}}"#);
+    println!(r#"{{"event":"diffsend","outcome":"ok","cases":138}}"#);
     Ok(())
 }
 

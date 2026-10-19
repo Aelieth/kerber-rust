@@ -301,8 +301,8 @@ fi
 # actually emitted, not the literal its summary line claims (a stale
 # "cases":N in diffsend.rs would otherwise pass). History: A'-3 R32 102 ·
 # A'-4 item 16 105 · item 17 106 · item 18 107 · W1-B F4 109 · W1-Z Z1.3 110 · Z6.2 111 ·
-# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137.
-DIFFSEND_RATCHET=137
+# as-locked-out 112 · RA 123 · a1-tgs 128 · replay 129 · nopost 130 · s4u-client 132 · fast-cksum 133 · explicit-armor 134 · armor-no-tgs-subkey 135 · armor-no-subkey 136 · reserved-option 137 · service-expired 138.
+DIFFSEND_RATCHET=138
 CASES_SEEN="$(grep -o '"case":"[^"]*","outcome":"ok"' <<<"$DIFF" | sort -u | wc -l | tr -d ' ')"
 [ "$CASES_SEEN" = "$DIFFSEND_RATCHET" ] || die "diffsend emitted $CASES_SEEN distinct ok cases; the ratchet is $DIFFSEND_RATCHET"
 grep -q "\"outcome\":\"ok\",\"cases\":$DIFFSEND_RATCHET}" <<<"$DIFF" || die "diffsend summary line does not claim $DIFFSEND_RATCHET cases"
@@ -330,6 +330,7 @@ grep -q '"case":"tgs-ad-fx-armor-authenticator","outcome":"ok","error_code":12,"
 grep -q '"case":"as-bad-msg-type","outcome":"ok","error_code":60,"e_text":"VALIDATE_MESSAGE_TYPE","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-bad-msg-type not code 60 e_text VALIDATE_MESSAGE_TYPE on both legs"
 grep -q '"case":"as-bad-pvno","outcome":"ok","rust_tag":"drop","mit_tag":"drop"' <<<"$DIFF" || die "as-bad-pvno was not both-drop"
 grep -q '"case":"tgs-bad-msg-type","outcome":"ok","error_code":60,"e_text":"UNKNOWN_REASON","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-bad-msg-type not code 60 e_text UNKNOWN_REASON on both legs"
+grep -q '"case":"as-service-expired","outcome":"ok","error_code":2,"e_text":"SERVICE EXPIRED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-service-expired not code 2 e_text SERVICE EXPIRED on both legs"
 grep -q '"case":"as-service-not-allowed","outcome":"ok","error_code":27,"e_text":"SERVICE NOT ALLOWED","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "as-service-not-allowed not code 27 e_text SERVICE NOT ALLOWED on both legs"
 grep -q '"case":"tgs-ap-options","outcome":"ok","error_code":12,"e_text":"PROCESS_TGS","rust_tag":"0x7e","mit_tag":"0x7e"' <<<"$DIFF" || die "tgs-ap-options not code 12 e_text PROCESS_TGS on both legs"
 grep -q '"case":"tgs-header-kvno-zero","outcome":"ok","rust_tag":"0x6d","mit_tag":"0x6d"' <<<"$DIFF" || die "tgs-header-kvno-zero not TGS-REP on both legs"
