@@ -256,6 +256,7 @@ fn spake_first_shot_omits_optimistic_151() {
         while udp.recv_from(&mut buf).is_ok() {}
     });
     thread::spawn(move || {
+        isolate_host_krb5();
         let _ = as_exchange(&AsRequest {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             realm: "KERBER.TEST",

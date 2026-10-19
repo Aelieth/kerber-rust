@@ -340,4 +340,4 @@ jobs:
         with:
           toolchain: "1.95"
       - name: MSRV 1.95 test (locked)
-        run: cargo test --workspace --locked --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks
+        run: cargo test --workspace --locked --features krb5-kdc/test-hooks,krb5-admin/test-hooks,krb5-client/test-hooks -- --test-threads=1

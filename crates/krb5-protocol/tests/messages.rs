@@ -423,6 +423,7 @@ fn spake_as_req_carries_pa_spake() {
 
     isolate_host_krb5();
     let pkts = capture_udp_reqs(1, preauth_required_der(), |port| {
+        isolate_host_krb5();
         let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             realm: "KERBER.TEST",
@@ -609,6 +610,7 @@ fn fast_preauth_retry_carries_fx_fast() {
         cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
     };
     let pkts = capture_udp_reqs(1, preauth_required_der(), move |port| {
+        isolate_host_krb5();
         let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             realm: "KERBER.TEST",
@@ -758,6 +760,7 @@ fn pkinit_as_req_carries_pa_pk_as_req() {
     })
     .unwrap();
     let pkts = capture_udp_reqs(2, reply, move |port| {
+        isolate_host_krb5();
         let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
             cname: PrincipalName::new(PrincipalName::NT_PRINCIPAL, ["user"]),
             realm: "KERBER.TEST",
@@ -805,6 +808,7 @@ fn enterprise_as_req_sets_name_type_and_canonicalize() {
 
     isolate_host_krb5();
     let pkts = capture_udp_reqs(1, preauth_required_der(), |port| {
+        isolate_host_krb5();
         let cname = PrincipalName::new(PrincipalName::NT_ENTERPRISE, ["user@KERBER.TEST"]);
         let _ = krb5_protocol::as_exchange(&krb5_protocol::AsRequest {
             cname,
