@@ -5,7 +5,8 @@
 #            delprinc), at least 1,000 ops, and kills at least 200 with SIGKILL: at a random time, once the database
 #            file changes, at least 50 while a compaction's .principal.tmp-* is there, and once a compaction's rename
 #            lands. After each kill an op not acknowledged shows all of its change or none, and kdb5_util dump writes
-#            a dump.
+#            a dump. The first whole write that completes after a kill left a compaction's temp file leaves none
+#            (KL.tmp-clean).
 #   KL.mit: every dump loads with MIT's kdb5_util load, and MIT's getprinc and listprincs give what the acknowledged
 #           ops left, the realm's other principals unchanged.
 # The rust leg only: MIT is the judge. kdc2 must be up for the run's preflight (lab.sh up kdc2); this scenario resets
@@ -58,6 +59,7 @@ checklast KL.ops '^ops: [1-9][0-9]{3,} attempted'
 checklast KL.kills '^kills: ([2-9][0-9]{2}|[1-9][0-9]{3,})$'
 checklast KL.compaction '^compaction kills: ([5-9][0-9]|[1-9][0-9]{2,}) '
 checklast KL.spread '^kills by mode: time ([4-9][0-9]|[1-9][0-9]{2,}), grow ([4-9][0-9]|[1-9][0-9]{2,}), compaction [1-9][0-9]*, renamed ([3-9]|[1-9][0-9]+)$'
+checklast KL.tmp-clean '^stale temps after the next whole write: 0 \(checked [1-9][0-9]* times\)$'
 observelast KL.database '^the database after a kill: .*'
 observelast KL.doubt '^in doubt: .*'
 observelast KL.stale '^stale temp files: .*'

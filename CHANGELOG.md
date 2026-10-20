@@ -80,6 +80,7 @@ any other `###` heading.
 
 ### Fixed
 
+- **kdc.** A whole write of the database destroys the `.principal.tmp-*` files a killed one left, under the exclusive lock, as MIT's next load destroys its temporary database.
 - **client.** An AS failure prints MIT's table text for skew, a mismatched reply, and error 60. A generic error's e-text stays on the TGS path.
 - **client.** A UDP socket uses the KDC address's family, and a link-local scope prints as the interface name.
 - **kdc.** A TGS name that is not GeneralString is S_PRINCIPAL_UNKNOWN, not a panic.

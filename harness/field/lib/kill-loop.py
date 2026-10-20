@@ -7,7 +7,8 @@
 drive: kadmin.local -q ops on kl000..kl099 (addprinc and modprinc, each with a maxlife no other op gives; cpw
 -randkey; delprinc), at least 1,000, until at least 200 are killed with SIGKILL: at a random time (time), once the
 database file changes (grow), while a compaction's .principal.tmp-* is there (compaction: 20 in a row, until 50
-leave that temp file), and once the next compaction's rename lands (renamed).
+leave that temp file), and once the next compaction's rename lands (renamed). The first whole write that completes
+after a kill left a temp file must leave none.
 After a kill, an op not acknowledged shows all of its change or none in kadmin.local's getprinc; then kdb5_util
 dump writes D/dumps/NNNN.dump and D/expect.jsonl what the acknowledged ops left. Stops at the first thing
 unexpected. Prints a line per kill and the totals; exit 0 when nothing was unexpected.
@@ -137,7 +138,7 @@ def drive(a):
     c = dict.fromkeys(["ops", "applied", "kills", "left", "compactions", "acked", "doubt", "doubt applied"], 0)
     modes = dict.fromkeys(["time", "grow", "compaction", "renamed"], 0)
     dbs = dict.fromkeys(["unchanged", "grown", "replaced", "cut"], 0)
-    storm, lives = 0, []
+    storm, lives, stale, checks = 0, [], False, 0
     problem = dump("before the first op") if base else "listprincs gave no principal"
     while problem is None:
         i = c["ops"]
@@ -188,6 +189,11 @@ def drive(a):
         if seen and replaced:
             c["compactions"] += 1
             storm = 0
+        if stale and replaced:
+            checks += 1
+            stale = False
+            if temps():
+                problem = f"op {i:04d} {cmd}: a whole write, and left the stale temp files {sorted(temps())}"
         if p.returncode != -signal.SIGKILL:
             lives.append(took)
             if ack not in out:
@@ -201,6 +207,7 @@ def drive(a):
         storm += why == "compaction"
         left = bool(seen) and os.path.exists(os.path.join(a.kdcdir, seen))
         c["left"] += left
+        stale = stale or left
         where = ("replaced" if replaced else "grown" if st1.st_size > st0.st_size
                  else "cut" if st1.st_size < st0.st_size else "unchanged")
         dbs[where] += 1
@@ -226,7 +233,7 @@ def drive(a):
         print(line, flush=True)
         problem = problem or dump(line)
     problem = problem or dump("after the last op")
-    stale = len(temps())
+    left_now = len(temps())
     print(f"ops: {c['ops']} attempted, {c['applied']} applied")
     print(f"kills: {c['kills']}")
     print("kills by mode: " + ", ".join(f"{m} {n}" for m, n in modes.items()))
@@ -236,7 +243,9 @@ def drive(a):
     print(f"in doubt: {c['doubt']} (applied {c['doubt applied']}, not applied {c['doubt'] - c['doubt applied']});"
           f" acknowledged before the kill landed: {c['acked']}")
     print(f"dumps: {dumps[0]} (0000 before the first op, one after each kill, the last after the last op)")
-    print(f"stale temp files: {stale - stale0} left by this run ({stale} in all)")
+    print(f"stale temps after the next whole write: {int(problem is not None and 'stale temp' in problem)}"
+          f" (checked {checks} times)")
+    print(f"stale temp files: {left_now - stale0} left by this run ({left_now} in all)")
     if problem:
         print(f"UNEXPECTED: {problem}")
     print(f"unexpected: {int(problem is not None)}")

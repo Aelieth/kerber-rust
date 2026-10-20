@@ -733,12 +733,40 @@ fn write_store_files(
     make_lockout: bool,
 ) -> Result<(), PersistError> {
     let text = write_dump(store, master)?;
-    match how {
-        DbWrite::InPlace => write_secret_file(db_path, text.as_bytes())?,
-        DbWrite::Fresh => write_fresh_secret_file(db_path, text.as_bytes())?,
-    }
+    write_db(db_path, text.as_bytes(), how)?;
     crate::lockout::reconcile(store, db_path, make_lockout)?;
     Ok(())
+}
+
+fn write_db(db: &Path, bytes: &[u8], how: DbWrite) -> std::io::Result<()> {
+    destroy_stale_temps(db);
+    match how {
+        DbWrite::InPlace => write_secret_file(db, bytes),
+        DbWrite::Fresh => write_fresh_secret_file(db, bytes),
+    }
+}
+
+fn destroy_stale_temps(db: &Path) {
+    let Some(prefix) = db
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|n| format!(".{n}.tmp-"))
+    else {
+        return;
+    };
+    let dir = db
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    for entry in fs::read_dir(dir).into_iter().flatten().flatten() {
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|n| n.starts_with(&prefix))
+        {
+            destroy_file(&entry.path());
+        }
+    }
 }
 
 /// Write `text`, dump text with no principal record, as the database: a full load
@@ -757,7 +785,7 @@ pub fn save_dump_text(db_path: &Path, text: &str, how: DbWrite) -> Result<(), Pe
     }
     let (lock, _) = WriteLock::take(&PrincipalStore::try_new("")?, db_path)?;
     check_writable(db_path, how)?;
-    write_secret_file(db_path, text.as_bytes())?;
+    write_db(db_path, text.as_bytes(), how)?;
     lock.update_age();
     Ok(())
 }
@@ -949,7 +977,7 @@ impl DbUpdate {
             return Err(DbLockError::NotLocked.into());
         }
         check_writable(&self.db, DbWrite::InPlace)?;
-        write_secret_file(&self.db, text.as_bytes())?;
+        write_db(&self.db, text.as_bytes(), DbWrite::InPlace)?;
         crate::lockout::ensure(&self.db)?;
         self.lock.update_age();
         Ok(())
@@ -1353,7 +1381,7 @@ pub fn create_store(
     lock.create_policy_lock()?;
     let written = write_dump(store, master)
         .map_err(PersistError::from)
-        .and_then(|text| Ok(write_fresh_secret_file(db_path, text.as_bytes())?))
+        .and_then(|text| Ok(write_db(db_path, text.as_bytes(), DbWrite::Fresh)?))
         .and_then(|()| {
             let lockout = crate::lockout::store_records(store);
             Ok(crate::lockout::write_loaded(db_path, &lockout, false)?)
