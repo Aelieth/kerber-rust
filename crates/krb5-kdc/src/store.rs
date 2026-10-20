@@ -285,7 +285,8 @@ impl PrincipalStore {
             return false;
         };
         let realm = self.realm.clone();
-        let mut taken = Vec::with_capacity(ops.len());
+        let count = ops.len();
+        let mut taken = Vec::with_capacity(count);
         for op in ops {
             match op {
                 JournalOp::Put(dp) => {
@@ -315,7 +316,8 @@ impl PrincipalStore {
         self.resolve_history_of(&ids);
         crate::lockout::merge_lockout_file(self, db);
         let applied = stamp.applied + u64::try_from(used).unwrap_or_default();
-        self.db_stamp = DbStamp::holding(lock, db, stamp.base, applied);
+        let records = stamp.records + u64::try_from(count).unwrap_or_default();
+        self.db_stamp = DbStamp::holding(lock, db, records, applied);
         true
     }
 
@@ -564,10 +566,13 @@ impl PrincipalStore {
                     Ok(()) | Err(LoggedWrite::After(_)) => {
                         self.map.end_change();
                         self.db_stamp = match (&append, &self.db_stamp) {
-                            (Some((_, _, at)), Some(s)) => {
-                                DbStamp::holding(&lock, &db, s.base, at + appended)
-                            }
-                            _ => DbStamp::now(&lock, &db),
+                            (Some((ids, _, at)), Some(s)) => DbStamp::holding(
+                                &lock,
+                                &db,
+                                s.records + u64::try_from(ids.len()).unwrap_or_default(),
+                                at + appended,
+                            ),
+                            _ => DbStamp::now(&lock, &db, self.map.len_u64()),
                         };
                         tracing::info!(
                             event = krb5_log::events::ADMIN,
@@ -600,7 +605,7 @@ impl PrincipalStore {
     }
 
     /// `None` writes the whole database: a policy or SID change, a write-through, a database
-    /// not read as dump text, or a journal past its base's size.
+    /// not read as dump text, or more replaced records than live ones, 256 at least.
     fn append_plan(&self, before: &Before) -> Option<(Vec<String>, krb5_crypto::ProtocolKey, u64)> {
         if self.wrote_through.0.load(Ordering::Relaxed)
             || before.policies != self.policies
@@ -609,7 +614,9 @@ impl PrincipalStore {
             return None;
         }
         let stamp = self.db_stamp.as_ref().filter(|s| s.dump)?;
-        if stamp.applied - stamp.base > stamp.base {
+        let live = self.map.len_u64();
+        let dead = stamp.records.saturating_sub(live);
+        if dead > live && dead >= 256 {
             return None;
         }
         Some((self.map.touched()?, self.journal_key()?, stamp.applied))

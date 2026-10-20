@@ -49,8 +49,8 @@ keytab v2 (the password comes from env or stdin, never argv).
 
 **`krb5-kdc`** issues AS/TGS from an in-memory store. The at-rest file
 is MIT dump version 7 (stash still holds the master key; SID/RID in
-`TL_KERBER_SID`), with each principal change appended until the appends outgrow the file and the
-next write rewrites it; readers take only what was appended. Legacy KDB3 ciphertext still loads for one release.
+`TL_KERBER_SID`), with each principal change appended until its replaced records outnumber its
+principals (256 at least) and the next write rewrites it; readers take only what was appended. Legacy KDB3 ciphertext still loads for one release.
 `krb5-kdb` is MIT's `kdb5_util` (create, stash, dump, load, destroy). `key_data` uses KDB usage 0
 with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
 stays rejected. The KDC serves a `SharedStore` (`Arc<RwLock<dyn Store>>`); kadmind and kpasswd

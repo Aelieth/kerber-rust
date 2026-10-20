@@ -126,7 +126,7 @@ pub struct DumpFile {
     pub princs: Vec<DumpPrincipal>,
     /// `policy\t…` rest (name + MIT numeric fields). Golden dumps have none.
     pub policies: Vec<String>,
-    pub(crate) base_len: usize,
+    pub(crate) records: usize,
     pub(crate) applied_len: usize,
 }
 
@@ -284,7 +284,7 @@ impl DumpFile {
         let realm = self.realm()?.to_owned();
         let mut store = PrincipalStore::try_new(realm.clone())?;
         store.loaded_span = Some((
-            u64::try_from(self.base_len).unwrap_or(u64::MAX),
+            u64::try_from(self.records).unwrap_or(u64::MAX),
             u64::try_from(self.applied_len).unwrap_or(u64::MAX),
         ));
         let mut domain: Option<RpcSid> = None;
@@ -481,13 +481,12 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
         .ok_or_else(|| DumpError::Format("empty dump".into()))?;
     let version = parse_header(header.text)?;
     let mut fold = Fold::default();
-    let (mut base_len, mut applied_len) = (text.len(), text.len());
+    let mut applied_len = text.len();
     while let Some(line) = lines.next() {
         if line.text != JOURNAL_BEGIN {
             fold.record(&line)?;
             continue;
         }
-        base_len = base_len.min(line.start);
         match read_batch(text, &line, &mut lines) {
             Some((records, end)) => {
                 for r in &records {
@@ -510,8 +509,8 @@ pub fn parse_dump(text: &str) -> Result<DumpFile, DumpError> {
     Ok(DumpFile {
         version,
         princs: fold.princs.into_iter().flatten().collect(),
+        records: fold.records,
         policies: fold.policies.into_iter().flatten().collect(),
-        base_len,
         applied_len,
     })
 }
@@ -580,6 +579,7 @@ struct Fold {
     princ_at: HashMap<String, usize>,
     policies: Vec<Option<String>>,
     policy_at: HashMap<String, usize>,
+    records: usize,
 }
 
 impl Fold {
@@ -601,12 +601,14 @@ impl Fold {
         if let Some(rest) = text.strip_prefix("princ\t") {
             let p = parse_princ_line(rest, line.no)?;
             put_last(&mut self.princs, &mut self.princ_at, p.name.clone(), p);
+            self.records += 1;
             return Ok(());
         }
         if let Some(name) = text.strip_prefix(JOURNAL_DEL) {
             if let Some(i) = self.princ_at.remove(name) {
                 self.princs[i] = None;
             }
+            self.records += 1;
             return Ok(());
         }
         Err(DumpError::Format(format!(

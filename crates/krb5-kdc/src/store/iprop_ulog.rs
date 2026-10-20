@@ -49,6 +49,10 @@ impl PrincipalMap {
         self.map.get(id)
     }
 
+    pub(crate) fn len_u64(&self) -> u64 {
+        u64::try_from(self.map.len()).unwrap_or(u64::MAX)
+    }
+
     pub(crate) fn contains_key(&self, id: &str) -> bool {
         self.map.contains_key(id)
     }

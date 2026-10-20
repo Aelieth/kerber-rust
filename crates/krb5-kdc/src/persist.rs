@@ -121,7 +121,7 @@ pub(crate) struct DbStamp {
     ino: u64,
     ctime: (i64, i64),
     len: u64,
-    pub(crate) base: u64,
+    pub(crate) records: u64,
     pub(crate) applied: u64,
     tail: u32,
     tail_len: u64,
@@ -139,12 +139,12 @@ const TAIL: u64 = 64;
 
 impl DbStamp {
     /// The stamp of the database at `db` now; read it holding the lock.
-    pub(crate) fn now(lock: &DbLock, db: &Path) -> Option<Self> {
+    pub(crate) fn now(lock: &DbLock, db: &Path, records: u64) -> Option<Self> {
         let len = fs::metadata(db).ok()?.len();
-        Self::holding(lock, db, len, len)
+        Self::holding(lock, db, records, len)
     }
 
-    pub(crate) fn holding(lock: &DbLock, db: &Path, base: u64, applied: u64) -> Option<Self> {
+    pub(crate) fn holding(lock: &DbLock, db: &Path, records: u64, applied: u64) -> Option<Self> {
         use std::os::unix::fs::FileExt as _;
         let file = fs::File::open(db).ok()?;
         let meta = file.metadata().ok()?;
@@ -157,7 +157,7 @@ impl DbStamp {
             ino: meta.ino(),
             ctime: (meta.ctime(), meta.ctime_nsec()),
             len: meta.len(),
-            base,
+            records,
             applied,
             tail: crate::lockout::crc32(&buf),
             tail_len,
@@ -444,8 +444,8 @@ fn stamp_read(
 ) -> Option<DbStamp> {
     let all = u64::try_from(blob.len()).ok()?;
     let span = store.loaded_span.take();
-    let (base, applied) = span.unwrap_or((all, all));
-    DbStamp::holding(lock, db, base, applied).map(|s| DbStamp {
+    let (records, applied) = span.unwrap_or((0, all));
+    DbStamp::holding(lock, db, records, applied).map(|s| DbStamp {
         dump: span.is_some(),
         ..s
     })

@@ -41,7 +41,7 @@ any other `###` heading.
 - **config.** kdc.conf follows `include` and `includedir` and matches names as written, as MIT; the daemons log each relation MIT reads that is not supported.
 - **protocol/gss.** `AcceptorConfig` holds an acceptor's profile values; the GSS accept calls, kpasswd and kpropd take it, and `use_kdc_context` is gone.
 - **kdc.** One store can serve the KDC and kadmind: a `SharedDump` is a `SharedStore` (`Arc<RwLock<dyn Store>>`); `PrincipalStore::try_new` returns a CSPRNG failure.
-- **kdc.** A principal change is appended to the database and flushed, not renamed; readers take only appended changes, a torn one is cut, and outgrown appends are rewritten.
+- **kdc.** A principal change is appended to the database and flushed; readers take only the appended changes, a torn one is cut, and replaced records are compacted away.
 
 ### Tests and CI
 
