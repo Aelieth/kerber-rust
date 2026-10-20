@@ -392,7 +392,9 @@ would remove it.
   TGT, from MIT's kinit and, in the rust leg, ours. With the RSA KDC identity alice's certificate
   kinit, MIT's and ours, verifies the KDC's signed reply and gets a TGT. With an 8192-bit KDC key
   and a 3-prime key for alice, both made on kdc for the cell
-  (`scripts/lib/pkinit-rsa-certs.sh`), each kinit gets a TGT and its time is recorded. With alice's
+  (`scripts/lib/pkinit-rsa-certs.sh`), each kinit gets a TGT and its time is recorded. With the KDC's
+  and alice's keys on P-224, then P-384, P-521 and secp256k1 (`scripts/lib/pkinit-ec-certs.sh`), each kinit
+  gets a TGT. With alice's
   password on stdin, a certificate the KDC refuses with e-data (`alice-unknownca`'s 70, the `<SUBJECT>(`
   rule's 24) goes on to the password and a TGT, and `alice-wrongsan`'s 75, which carries none, ends with
   rc 1. Under FAST armor (an anonymous ticket, `-T`) alice's certificate kinit runs pkinit inside the

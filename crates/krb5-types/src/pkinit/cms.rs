@@ -88,6 +88,55 @@ pub(super) fn p256_sign(secret: &[u8; 32], message: &[u8]) -> Option<Vec<u8>> {
     Some(sig.to_der().as_bytes().to_vec())
 }
 
+pub(super) fn p384_sign(secret: &[u8; 48], message: &[u8]) -> Option<Vec<u8>> {
+    use p384::ecdsa::signature::hazmat::PrehashSigner;
+    use p384::ecdsa::{Signature, SigningKey};
+    let sk = SigningKey::from_bytes(secret.into()).ok()?;
+    let sig: Signature = sk.sign_prehash(&sha256_bytes(message)).ok()?;
+    Some(sig.to_der().as_bytes().to_vec())
+}
+
+pub(super) fn p224_sign(secret: &[u8; 28], message: &[u8]) -> Option<Vec<u8>> {
+    use p224::ecdsa::signature::hazmat::PrehashSigner;
+    use p224::ecdsa::{Signature, SigningKey};
+    let sk = SigningKey::from_bytes(secret.into()).ok()?;
+    let sig: Signature = sk.sign_prehash(&sha256_bytes(message)).ok()?;
+    Some(sig.to_der().as_bytes().to_vec())
+}
+
+pub(super) fn k256_sign(secret: &[u8; 32], message: &[u8]) -> Option<Vec<u8>> {
+    use k256::ecdsa::signature::hazmat::PrehashSigner;
+    use k256::ecdsa::{Signature, SigningKey};
+    let sk = SigningKey::from_bytes(secret.into()).ok()?;
+    let sig: Signature = sk.sign_prehash(&sha256_bytes(message)).ok()?;
+    Some(sig.to_der().as_bytes().to_vec())
+}
+
+pub(super) fn p521_sign(secret: &[u8; 66], message: &[u8]) -> Option<Vec<u8>> {
+    let d = zeroize::Zeroizing::new(
+        p521::SecretKey::from_slice(secret)
+            .ok()?
+            .to_nonzero_scalar(),
+    );
+    let mut z = p521::FieldBytes::default();
+    z[34..].copy_from_slice(&sha256_bytes(message));
+    for _ in 0..8 {
+        let mut k = zeroize::Zeroizing::new(p521::FieldBytes::default());
+        getrandom::getrandom(&mut k).ok()?;
+        k[0] &= 0x01;
+        let Some(k) = p521::NonZeroScalar::from_repr(*k)
+            .into_option()
+            .map(zeroize::Zeroizing::new)
+        else {
+            continue;
+        };
+        if let Ok((sig, _)) = ecdsa::hazmat::sign_prehashed::<p521::NistP521>(&d, &k, &z) {
+            return Some(sig.to_der().as_bytes().to_vec());
+        }
+    }
+    None
+}
+
 fn p256_verify(public: &[u8], message: &[u8], der_sig: &[u8]) -> bool {
     use p256::ecdsa::signature::Verifier;
     use p256::ecdsa::{Signature, VerifyingKey};
@@ -734,7 +783,11 @@ impl Digest {
 /// id-ecPublicKey 1.2.840.10045.2.1 (OID body).
 const OID_EC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
 /// prime256v1 1.2.840.10045.3.1.7 (OID body).
-const OID_P256_CURVE: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+pub(super) const OID_P256_CURVE: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+pub(super) const OID_P384_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
+pub(super) const OID_P521_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x23];
+pub(super) const OID_P224_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x21];
+pub(super) const OID_K256_CURVE: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x0a];
 
 /// A certificate's SubjectPublicKeyInfo (its DER).
 fn cert_spki(cert: &[u8]) -> Option<&[u8]> {
@@ -773,7 +826,7 @@ fn cert_signed_by(cert: &[u8], issuer: &[u8]) -> bool {
 }
 
 /// Whether `sig` over `msg` verifies under the key of `spki`. The key's own type decides how:
-/// ECDSA on P-256, or RSASSA-PKCS1-v1_5 (RFC 8017 §8.2.2). The digest is the one `alg` names, or
+/// ECDSA on P-224, P-256, P-384, P-521 or secp256k1, or RSASSA-PKCS1-v1_5 (RFC 8017 §8.2.2). The digest is the one `alg` names, or
 /// `digest` for `rsaEncryption` / `id-ecPublicKey`; SHA-1 is refused, as the lab's crypto policy
 /// refuses it. MIT's client names its key's type with SHA-256 in its SignerInfo (`cert_sig_alg`):
 /// `ecdsa-with-SHA256` for an EC key, else `sha256WithRSAEncryption`.
@@ -807,14 +860,46 @@ fn signature_ok(spki: &[u8], alg: &[u8], digest: Option<Digest>, msg: &[u8], sig
     if key_oid == OID_RSA {
         rsa_pkcs1_ok(key, digest, &hash, sig)
     } else {
-        use p256::ecdsa::signature::hazmat::PrehashVerifier;
-        use p256::ecdsa::{Signature, VerifyingKey};
         key_oid == OID_EC_KEY
-            && take_tlv(params).is_some_and(|(_, curve, _)| curve == OID_P256_CURVE)
-            && VerifyingKey::from_sec1_bytes(key)
+            && take_tlv(params).is_some_and(|(_, curve, _)| ecdsa_ok(curve, key, &hash, sig))
+    }
+}
+
+/// Whether `sig` over `msg` verifies under the SubjectPublicKeyInfo `spki` with algorithm `alg`.
+#[must_use]
+pub fn spki_signature_ok(spki: &[u8], alg: &[u8], msg: &[u8], sig: &[u8]) -> bool {
+    signature_ok(spki, alg, None, msg, sig)
+}
+
+fn ecdsa_ok(curve: &[u8], key: &[u8], hash: &[u8], sig: &[u8]) -> bool {
+    use ecdsa::signature::hazmat::PrehashVerifier;
+    match curve {
+        OID_P256_CURVE => p256::ecdsa::VerifyingKey::from_sec1_bytes(key)
+            .ok()
+            .zip(p256::ecdsa::Signature::from_der(sig).ok())
+            .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
+        OID_P384_CURVE => p384::ecdsa::VerifyingKey::from_sec1_bytes(key)
+            .ok()
+            .zip(p384::ecdsa::Signature::from_der(sig).ok())
+            .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
+        OID_P521_CURVE => {
+            let mut prehash = vec![0u8; 33usize.saturating_sub(hash.len())];
+            prehash.extend_from_slice(hash);
+            p521::ecdsa::VerifyingKey::from_sec1_bytes(key)
                 .ok()
-                .zip(Signature::from_der(sig).ok())
-                .is_some_and(|(vk, s)| vk.verify_prehash(&hash, &s).is_ok())
+                .zip(p521::ecdsa::Signature::from_der(sig).ok())
+                .is_some_and(|(vk, s)| vk.verify_prehash(&prehash, &s).is_ok())
+        }
+        OID_P224_CURVE => p224::ecdsa::VerifyingKey::from_sec1_bytes(key)
+            .ok()
+            .zip(p224::ecdsa::Signature::from_der(sig).ok())
+            .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
+        // k256 refuses a high s, which OpenSSL takes; (r, n - s) verifies as (r, s) does.
+        OID_K256_CURVE => k256::ecdsa::VerifyingKey::from_sec1_bytes(key)
+            .ok()
+            .zip(k256::ecdsa::Signature::from_der(sig).ok())
+            .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s.normalize_s()).is_ok()),
+        _ => false,
     }
 }
 

@@ -55,6 +55,9 @@
 #   PK.rsabig: made on kdc for the cell by scripts/lib/pkinit-rsa-certs.sh, an RSA CA, a KDC identity with an
 #          8192-bit key and alice's certificate with a 3-prime key, alice's piped to client2: her kinit gets a TGT,
 #          each kinit's time observed (ms, the AS exchange with both signatures);
+#   PK.ec224, PK.ec384, PK.ec521, PK.k256: made on kdc by scripts/lib/pkinit-ec-certs.sh, a CA, a KDC identity and
+#          alice's certificate, each with a P-224 key, then P-384, P-521 and secp256k1, alice's piped to client2:
+#          her kinit gets a TGT;
 # Graded on both legs, MIT's first. In the rust leg the client cells run twice: MIT's kinit, then ours, kdc's
 # build of krb5-kinit piped to client2's ~/pk/kinit (no host file) and run by path, so MIT's stays the one on PATH.
 # vms: kdc client2
@@ -77,12 +80,13 @@ KC=/var/kerberos/krb5kdc/kdc.conf
 D=${PK_KDC_DIR:-/var/kerberos/krb5kdc/pkinit}
 C=${PK_CLIENT_DIR:-/home/lab/pkinit}
 BIG=/var/kerberos/krb5kdc/pkbig
+EC=/var/kerberos/krb5kdc/pkec
 legset ALICE
 ANON=0
 PREAUTH=0
 DBMATCH=0
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; sudo rm -rf $BIG; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; sudo rm -rf $BIG $EC; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -368,6 +372,21 @@ for k in mit ${OURS:+ours}; do
     check "PK.rsabig.$k" '^kinit rc=0 ms=[0-9]+$' run client2 "kdestroy -c FILE:\$HOME/pk/b.cc 2> /dev/null; t=\$(date +%s%N); $kinit -X X509_anchors=FILE:\$HOME/pk/big/ca.pem -X X509_user_identity=FILE:\$HOME/pk/big/client.pem,\$HOME/pk/big/client.key -c FILE:\$HOME/pk/b.cc alice < /dev/null 2>&1; echo \"kinit rc=\$? ms=\$(( (\$(date +%s%N) - t) / 1000000 ))\"; klist -c FILE:\$HOME/pk/b.cc 2>&1 | grep -E '^Default principal'"
     checklast "PK.rsabig.$k.tgt" "^Default principal: alice@$R\$"
     observelast "obs.PK.rsabig.$k.ms" 'ms=[0-9]+'
+done
+
+section "PK.ec224, PK.ec384, PK.ec521, PK.k256 the KDC's and alice's keys on P-224, then P-384, P-521 and secp256k1, made for the cells: a TGT (MIT and ours)"
+for curve in P-224 P-384 P-521 secp256k1; do
+    n=ec${curve#P-}
+    [ "$curve" = secp256k1 ] && n=k256
+    check "PK.$n.make" "^ec certs in $EC/$n\$" runin kdc "scripts/lib/pkinit-ec-certs.sh" "sudo sh -s -- $EC/$n $REALM alice $curve" < "$HERE/../../../scripts/lib/pkinit-ec-certs.sh"
+    check "PK.$n.copy" '^client2: 3 files$' host "$LABQ ssh kdc -- 'sudo tar -C $EC/$n -cf - ca.pem client.pem client.key' | $LABQ ssh client2 -- 'install -d -m 0700 ~/pk/$n && tar -C ~/pk/$n -xf - && echo \"client2: \$(ls ~/pk/$n | wc -l) files\"'"
+    pkkdc "PK.$n.kdc" "\n[kdcdefaults]\n    pkinit_identity = FILE:$EC/$n/kdc.pem,$EC/$n/kdc.key\n    pkinit_anchors = FILE:$EC/$n/ca.pem\n"
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        check "PK.$n.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/e.cc 2> /dev/null; $kinit -X X509_anchors=FILE:\$HOME/pk/$n/ca.pem -X X509_user_identity=FILE:\$HOME/pk/$n/client.pem,\$HOME/pk/$n/client.key -c FILE:\$HOME/pk/e.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/e.cc 2>&1 | grep -E '^Default principal'"
+        checklast "PK.$n.$k.tgt" "^Default principal: alice@$R\$"
+    done
 done
 
 section "kdc.conf restored"

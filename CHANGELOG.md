@@ -117,6 +117,7 @@ any other `###` heading.
 - **pkinit.** kinit's and the KDC's `KRB5_TRACE` give MIT's certificate-matching lines: each rule and regexp test, the matches found, and an identity of two with no rule.
 - **pkinit.** kpasswd, kprop and kinit's expired-password request take PKINIT from the profile, as MIT's do, and a reply to the bare request is no error with an identity.
 - **client.** kinit verifies an RSA-signed PKINIT reply, against every anchor and `pkinit_pool`, as MIT's; a reply that does not verify falls to the password, as MIT's.
+- **pkinit.** The KDC and kinit sign with P-224, P-384, P-521 and secp256k1 keys, SHA-256 on each as MIT's, and verify ECDSA on those curves in chains and signatures.
 
 ## [1.1.0] - 2026-10-14
 

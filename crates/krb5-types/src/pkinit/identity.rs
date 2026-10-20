@@ -7,7 +7,11 @@ use std::path::Path;
 
 use zeroize::{Zeroize, Zeroizing};
 
-use super::cms::{OID_ECDSA_SHA256, OID_RSA_SHA256, p256_sign, unbase64};
+use super::cms::{
+    OID_ECDSA_SHA256, OID_K256_CURVE, OID_P224_CURVE, OID_P256_CURVE, OID_P384_CURVE,
+    OID_P521_CURVE, OID_RSA_SHA256, k256_sign, p224_sign, p256_sign, p384_sign, p521_sign,
+    unbase64,
+};
 use super::matching::{MatchTrace, select_cert};
 use super::rsa::RsaKey;
 use super::take_tlv;
@@ -26,12 +30,14 @@ const NO_REASON: &str = "(null)";
 const MAX_CREDS: usize = 20;
 /// id-ecPublicKey 1.2.840.10045.2.1 (OID body).
 const OID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
-/// prime256v1 1.2.840.10045.3.1.7 (OID body).
-const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 
 #[derive(Clone)]
 pub enum IdentityKey {
     P256(Zeroizing<[u8; 32]>),
+    P384(Zeroizing<[u8; 48]>),
+    P521(Zeroizing<[u8; 66]>),
+    P224(Zeroizing<[u8; 28]>),
+    K256(Zeroizing<[u8; 32]>),
     Rsa(Box<RsaKey>),
 }
 
@@ -41,11 +47,20 @@ impl IdentityKey {
         Self::P256(Zeroizing::new(scalar))
     }
 
+    #[must_use]
+    pub fn from_pkcs8(der: &[u8]) -> Option<Self> {
+        pkcs8_ec(der).or_else(|| RsaKey::from_pkcs8(der).map(|k| Self::Rsa(Box::new(k))))
+    }
+
     // MIT cert_sig_alg; see docs/parity/a3-preauth.md
     #[must_use]
     pub fn sign_sha256(&self, msg: &[u8]) -> Option<(Vec<u8>, &'static [u8])> {
         match self {
             Self::P256(k) => Some((p256_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::P384(k) => Some((p384_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::P521(k) => Some((p521_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::P224(k) => Some((p224_sign(k, msg)?, OID_ECDSA_SHA256)),
+            Self::K256(k) => Some((k256_sign(k, msg)?, OID_ECDSA_SHA256)),
             Self::Rsa(k) => Some((k.sign_sha256(msg)?, OID_RSA_SHA256)),
         }
     }
@@ -55,6 +70,10 @@ impl std::fmt::Debug for IdentityKey {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::P256(_) => f.write_str("IdentityKey::P256"),
+            Self::P384(_) => f.write_str("IdentityKey::P384"),
+            Self::P521(_) => f.write_str("IdentityKey::P521"),
+            Self::P224(_) => f.write_str("IdentityKey::P224"),
+            Self::K256(_) => f.write_str("IdentityKey::K256"),
             Self::Rsa(k) => write!(f, "IdentityKey::Rsa({k:?})"),
         }
     }
@@ -63,7 +82,10 @@ impl std::fmt::Debug for IdentityKey {
 impl Zeroize for IdentityKey {
     fn zeroize(&mut self) {
         match self {
-            Self::P256(k) => k.zeroize(),
+            Self::P256(k) | Self::K256(k) => k.zeroize(),
+            Self::P384(k) => k.zeroize(),
+            Self::P521(k) => k.zeroize(),
+            Self::P224(k) => k.zeroize(),
             Self::Rsa(k) => k.zeroize(),
         }
     }
@@ -216,7 +238,7 @@ fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, 
         }
         KeyFault::Unsupported => IdentityError::new(
             KDC_PREAUTH_FAILED,
-            format!("Cannot use key file '{fsname}': only P-256 EC and RSA keys are supported"),
+            format!("Cannot use key file '{fsname}': only P-224, P-256, P-384, P-521 and secp256k1 EC keys and RSA keys are supported"),
         ),
     })?;
     Ok(PkinitIdentity::new(cert, key))
@@ -349,10 +371,8 @@ fn read_key(path: &str) -> Result<IdentityKey, KeyFault> {
             Zeroizing::new(unbase64(block.body).ok_or(KeyFault::Read(EIO, "bad base64 decode"))?);
         let rsa = |k: RsaKey| IdentityKey::Rsa(Box::new(k));
         let key = match block.label {
-            "PRIVATE KEY" => pkcs8_p256(&der)
-                .map(IdentityKey::P256)
-                .or_else(|| RsaKey::from_pkcs8(&der).map(rsa)),
-            "EC PRIVATE KEY" => sec1_p256(&der, true).map(IdentityKey::P256),
+            "PRIVATE KEY" => pkcs8_ec(&der).or_else(|| RsaKey::from_pkcs8(&der).map(rsa)),
+            "EC PRIVATE KEY" => sec1_ec(&der, None),
             _ => RsaKey::from_pkcs1(&der).map(rsa),
         };
         return key.ok_or(KeyFault::Unsupported);
@@ -360,41 +380,62 @@ fn read_key(path: &str) -> Result<IdentityKey, KeyFault> {
     Err(KeyFault::Read(EIO, "unsupported"))
 }
 
-/// RFC 5208 PrivateKeyInfo of an id-ecPublicKey prime256v1 key.
-fn pkcs8_p256(der: &[u8]) -> Option<Zeroizing<[u8; 32]>> {
+fn pkcs8_ec(der: &[u8]) -> Option<IdentityKey> {
     let (_, info, _) = take_tlv(der)?;
     let (_, _, rest) = take_tlv(info)?;
     let (_, alg, rest) = take_tlv(rest)?;
     let (_, alg_oid, params) = take_tlv(alg)?;
     let (_, curve, _) = take_tlv(params)?;
-    if alg_oid != OID_EC_PUBLIC_KEY || curve != OID_P256 {
+    if alg_oid != OID_EC_PUBLIC_KEY {
         return None;
     }
     let (_, key, _) = take_tlv(rest)?;
-    sec1_p256(key, false)
+    sec1_ec(key, Some(curve))
 }
 
-/// RFC 5915 ECPrivateKey: a 32-byte scalar, and (when `named` is required) prime256v1.
-fn sec1_p256(der: &[u8], named: bool) -> Option<Zeroizing<[u8; 32]>> {
+/// RFC 5915 ECPrivateKey: the scalar, on the curve it names, else the one PKCS#8 named.
+fn sec1_ec(der: &[u8], outer: Option<&[u8]>) -> Option<IdentityKey> {
     let (_, body, _) = take_tlv(der)?;
     let (_, _, rest) = take_tlv(body)?;
     let (t, scalar, mut rest) = take_tlv(rest)?;
-    if t != 0x04 || scalar.len() != 32 {
+    if t != 0x04 {
         return None;
     }
-    let mut curve_ok = !named;
+    let mut named = None;
     while let Some((t, v, next)) = take_tlv(rest) {
         if t == 0xa0 {
-            curve_ok = take_tlv(v).is_some_and(|(_, oid, _)| oid == OID_P256);
+            named = take_tlv(v).map(|(_, oid, _)| oid);
         }
         rest = next;
     }
-    if !curve_ok || p256::SecretKey::from_slice(scalar).is_err() {
-        return None;
+    let curve = match (outer, named) {
+        (Some(o), Some(n)) if o != n => return None,
+        (Some(c), _) | (None, Some(c)) => c,
+        (None, None) => return None,
+    };
+    match curve {
+        OID_P256_CURVE => scalar_on::<32>(scalar, |k| p256::SecretKey::from_slice(k).is_ok())
+            .map(IdentityKey::P256),
+        OID_P384_CURVE => scalar_on::<48>(scalar, |k| p384::SecretKey::from_slice(k).is_ok())
+            .map(IdentityKey::P384),
+        OID_P521_CURVE => scalar_on::<66>(scalar, |k| p521::SecretKey::from_slice(k).is_ok())
+            .map(IdentityKey::P521),
+        OID_P224_CURVE => scalar_on::<28>(scalar, |k| p224::SecretKey::from_slice(k).is_ok())
+            .map(IdentityKey::P224),
+        OID_K256_CURVE => scalar_on::<32>(scalar, |k| k256::SecretKey::from_slice(k).is_ok())
+            .map(IdentityKey::K256),
+        _ => None,
     }
-    let mut key = Zeroizing::new([0u8; 32]);
-    key.copy_from_slice(scalar);
-    Some(key)
+}
+
+fn scalar_on<const N: usize>(
+    scalar: &[u8],
+    valid: impl Fn(&[u8]) -> bool,
+) -> Option<Zeroizing<[u8; N]>> {
+    let start = N.checked_sub(scalar.len())?;
+    let mut key = Zeroizing::new([0u8; N]);
+    key[start..].copy_from_slice(scalar);
+    valid(&key[..]).then_some(key)
 }
 
 struct PemBlock<'a> {

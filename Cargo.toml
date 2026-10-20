@@ -64,6 +64,12 @@ nix = { version = "0.31", default-features = false, features = ["net", "uio", "u
 num-bigint = { version = "0.4", default-features = false, features = ["std"] }
 signal-hook = { version = "0.3", default-features = false }
 p256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
+p384 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
+ecdsa = { version = "0.17", default-features = false, features = ["algorithm", "der"] }
+p521 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
+# No stable 0.14 yet: the release candidate, pinned exactly.
+p224 = { version = "=0.14.0-rc.15", default-features = false, features = ["arithmetic", "ecdsa"] }
+k256 = { version = "0.14", default-features = false, features = ["arithmetic", "ecdsa"] }
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 # Pinned: the build takes rasn from vendor/rasn (`[patch.crates-io]` below).
 rasn = "=0.28.14"
@@ -143,6 +149,10 @@ opt-level = 3
 [profile.dev.package.aes]
 opt-level = 3
 [profile.dev.package.p256]
+opt-level = 3
+[profile.dev.package.p384]
+opt-level = 3
+[profile.dev.package.p521]
 opt-level = 3
 [profile.dev.package.curve25519-dalek]
 opt-level = 3
