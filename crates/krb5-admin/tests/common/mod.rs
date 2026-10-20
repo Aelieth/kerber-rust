@@ -5,7 +5,7 @@
 
 #![allow(dead_code)]
 
-use krb5_admin::{Kadm5RpcSession, RpcPeer, encode_kpasswd_req, kadm5_handle_rpc};
+use krb5_admin::{Kadm5RpcSession, Programs, RpcPeer, encode_kpasswd_req, kadm5_handle_rpc};
 use krb5_crypto::{EncryptionType, ProtocolKey};
 use krb5_gss::GssContext;
 use krb5_kdc::testrealm::TEST_REALM;
@@ -166,6 +166,7 @@ pub fn init_client(
             acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut sess,
@@ -247,6 +248,7 @@ pub fn data_call(
             acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut c.sess,

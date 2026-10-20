@@ -238,7 +238,7 @@ restart (SIGHUP reopens the logs only). As MIT's, `kdc.conf`'s `[libdefaults]` v
 before `krb5.conf`'s, its `include` and `includedir` lines are followed, and section and relation
 names match only as written. `clockskew` there is both the KDC's and kpasswd's allowance for a
 client's clock (300 seconds by default). A relation MIT reads that kerber-rust does not, such as
-`master_key_name`, `iprop_listen` or a `pkinit_*` one, is named in the log when the daemon starts.
+`master_key_name` or a `pkinit_*` one, is named in the log when the daemon starts.
 
 `[plugins] kdcpreauth` `disable` and `enable_only` select the KDC's preauth
 modules by MIT's names (`encrypted_timestamp`, `encrypted_challenge`, `spake`,
@@ -612,8 +612,9 @@ release made, five things changed:
   one entry appended per change. Without iprop an earlier release's `principal.ulog` is no
   longer read or written and may be removed; with iprop the first program that maps it starts
   it over, so each replica takes one full dump (`kdb5_util dump -i1 FILE`, then
-  `kprop -f FILE REPLICA`, what MIT's kadmind runs). kadmind serves iprop on its own port and
-  nothing listens on `iprop_port`, so an MIT replica's `iprop_port` names kadmind's port. kadmind
+  `kprop -f FILE REPLICA`, what MIT's kadmind runs). kadmind serves iprop on `iprop_listen` /
+  `iprop_port`, and on its kadm5 port too, as MIT's does; with `iprop_port` equal to kadmind's
+  port, iprop is not served at all, as MIT's is not. kadmind
   grants a full resync but sends no dump: each one (after a policy change, or a replica the log
   has run past) needs those two commands run by hand.
 
@@ -714,7 +715,6 @@ update log and lock files, the stash, `kdc.conf` and `kadm5.acl`.
 - `krb5kdc -T` other than `0` stops with `-T (a clock offset for testing) is not supported`.
 - `krb5kdc -w N` is accepted and does nothing: one loop on the main thread serves every request.
 - `kadmind -proponly` with `iprop_enable` unset stops with `-proponly can only be used when iprop_enable is true`.
-- `kadmind -proponly` with `iprop_enable` set stops with `-proponly is not supported: iprop is served on the kadm5 port`.
 
 ## Make variables
 

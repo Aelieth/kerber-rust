@@ -32,6 +32,8 @@ pub struct IpropParams {
     pub resync_timeout: i32,
     /// The host of the realm's last `admin_server`: the primary a replica polls.
     pub admin_server: Option<String>,
+    /// `iprop_listen`, the primary's iprop listeners; none is the wildcard on `iprop_port`.
+    pub listen: Option<String>,
 }
 
 impl IpropParams {
@@ -45,18 +47,10 @@ impl IpropParams {
     /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:703-704`): `iprop_resync_timeout` is a delta time, five minutes by default.
     /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:726-731`): `iprop_replica_poll`, and only when it is absent or no delta time, `iprop_slave_poll` or two minutes.
     /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:496-502`): `admin_server`'s last value, its port taken off.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:521-522`): `iprop_listen`, the last value.
     #[must_use]
     pub fn for_realm(profile: Option<&Krb5Conf>, realm: &str, dbname: &Path) -> Self {
-        let relations = profile
-            .and_then(|p| p.iprop.get(realm))
-            .map_or(&[][..], Vec::as_slice);
-        let last = |name: &str| {
-            relations
-                .iter()
-                .rev()
-                .find(|(k, _)| k == name)
-                .map(|(_, v)| v.as_str())
-        };
+        let last = |name: &str| last_value(profile, realm, name);
         let positive = |name: &str| {
             last(name)
                 .and_then(sscanf_int)
@@ -82,6 +76,7 @@ impl IpropParams {
                 .and_then(|p| p.admin_servers.get(realm))
                 .and_then(|v| v.last())
                 .map(|e| crate::listen::admin_server_host(&e.host).to_owned()),
+            listen: last("iprop_listen").map(ToOwned::to_owned),
         }
     }
 
@@ -104,6 +99,58 @@ impl IpropParams {
     pub fn missing_required(&self) -> bool {
         self.enabled && self.port.is_none()
     }
+}
+
+/// kadmind's listeners for a realm: its kadm5 and kpasswd ports and lists, read from the same
+/// profile as [`IpropParams`], each relation's last value.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KadmindListen {
+    /// The kadm5 port: one written in the last `admin_server`, else kadmind's `-port`, else the
+    /// last `kadmind_port` that reads as a number, else 749.
+    pub kadmind_port: i32,
+    /// The last `kpasswd_port` that reads as a number, else 464.
+    pub kpasswd_port: i32,
+    /// `kadmind_listen`; none is the wildcard on [`Self::kadmind_port`].
+    pub kadmind_listen: Option<String>,
+    /// `kpasswd_listen`; none is the wildcard on [`Self::kpasswd_port`].
+    pub kpasswd_listen: Option<String>,
+}
+
+impl KadmindListen {
+    /// The listeners of `realm` in `profile` (kdc.conf's relations first, then krb5.conf's),
+    /// `port_arg` being kadmind's `-port`.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:496-502`): a port written in the last `admin_server` sets kadmind's port (`parse_admin_server_port`, read with `atoi`).
+    /// MIT `get_port_param` (`lib/kadm5/alt_prof.c:342-362`): a port already set stays; else the caller's, else the last value that scans as `%d`, else the default.
+    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:517-520`): `kadmind_listen` and `kpasswd_listen`, the last values.
+    #[must_use]
+    pub fn for_realm(profile: Option<&Krb5Conf>, realm: &str, port_arg: Option<i32>) -> Self {
+        let last = |name: &str| last_value(profile, realm, name);
+        let admin_port = last("admin_server").and_then(crate::listen::admin_server_port);
+        Self {
+            kadmind_port: admin_port.or(port_arg).unwrap_or_else(|| {
+                last("kadmind_port")
+                    .and_then(sscanf_int)
+                    .unwrap_or(i32::from(crate::listen::KADMIND_PORT))
+            }),
+            kpasswd_port: last("kpasswd_port")
+                .and_then(sscanf_int)
+                .unwrap_or(i32::from(crate::listen::KPASSWD_PORT)),
+            kadmind_listen: last("kadmind_listen").map(ToOwned::to_owned),
+            kpasswd_listen: last("kpasswd_listen").map(ToOwned::to_owned),
+        }
+    }
+}
+
+/// The last value of the realm stanza relation `name` in `profile`, the files in order.
+/// MIT `krb5_aprof_get_string` (`lib/kadm5/alt_prof.c:184-211`): with `uselast`, the last of the values.
+/// MIT `krb5_aprof_get_int32` (`lib/kadm5/alt_prof.c:277-299`): with `uselast`, the last of the values.
+fn last_value<'a>(profile: Option<&'a Krb5Conf>, realm: &str, name: &str) -> Option<&'a str> {
+    profile
+        .and_then(|p| p.kadm5.get(realm))?
+        .iter()
+        .rev()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.as_str())
 }
 
 /// MIT `KADM5_MISSING_CONF_PARAMS` (`lib/kadm5/kadm_err.et:55-55`): the text of a required parameter that is not set.

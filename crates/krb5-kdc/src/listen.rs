@@ -15,7 +15,7 @@ use crate::issue::{KdcDispatch, ThreadSlots};
 use crate::kdb::{KdcEnv, PrincipalRead, Store};
 use crate::net_server::{Klog, Sockets, Wake};
 use crate::store::{Policy, Principal};
-use krb5_config::listen::ListenAddr;
+use krb5_config::listen::{BindType, ListenAddr};
 use krb5_log::klog::{self, Severity, os_error_text};
 use nix::sys::socket::{
     AddressFamily, Backlog, ControlMessage, ControlMessageOwned, MsgFlags, SockFlag, SockType,
@@ -322,32 +322,11 @@ pub fn bind_rpc_listeners(addrs: &[ListenAddr]) -> io::Result<Vec<TcpListener>> 
     )
 }
 
-/// A listener's kind, as a failed setup names it in the daemon log.
-/// MIT `enum bind_type` (`lib/apputils/net-server.c:130-132`): a UDP, TCP or RPC listener.
-#[derive(Clone, Copy)]
-enum BindType {
-    Udp,
-    Tcp,
-    /// An RPC service's TCP listener (kadmind's kadm5).
-    Rpc,
-}
-
-impl BindType {
-    /// MIT `bind_type_names` (`lib/apputils/net-server.c:134-139`): the name a failed setup logs.
-    fn name(self) -> &'static str {
-        match self {
-            Self::Udp => "UDP",
-            Self::Tcp => "TCP",
-            Self::Rpc => "RPC",
-        }
-    }
-
-    /// The transport, as the JSON log and a bind error name it.
-    fn proto(self) -> &'static str {
-        match self {
-            Self::Udp => "udp",
-            Self::Tcp | Self::Rpc => "tcp",
-        }
+/// The transport, as the JSON log and a bind error name it.
+fn proto(kind: BindType) -> &'static str {
+    match kind {
+        BindType::Udp => "udp",
+        BindType::Tcp | BindType::Rpc => "tcp",
     }
 }
 
@@ -357,7 +336,7 @@ fn is_unsupported_family(err: &io::Error) -> bool {
 }
 
 fn bind_listeners(addrs: &[ListenAddr], kind: BindType, backlog: i32) -> io::Result<Vec<OwnedFd>> {
-    let proto = kind.proto();
+    let proto = proto(kind);
     let named = |a: SocketAddr, e: io::Error| io::Error::new(e.kind(), format!("{proto} {a}: {e}"));
     let mut out = Vec::new();
     for entry in addrs {
@@ -1038,7 +1017,7 @@ mod tests {
             "Failed setting up a RPC socket (for ::)"
         );
         assert_eq!(BindType::Tcp.name(), "TCP");
-        assert_eq!(BindType::Rpc.proto(), "tcp");
+        assert_eq!(proto(BindType::Rpc), "tcp");
     }
 
     use std::io::Read as _;

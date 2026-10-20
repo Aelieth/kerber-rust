@@ -638,6 +638,7 @@ fn the_iprop_program_is_served_only_with_the_update_log_mapped() {
                 acl: &acl,
                 expected_realm: "KERBER.TEST",
                 conf: &AcceptorConfig::default(),
+                programs: Programs::BOTH,
             },
             &[],
             &mut None,

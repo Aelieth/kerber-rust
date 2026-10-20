@@ -15,7 +15,7 @@
 mod common;
 use common::*;
 
-use krb5_admin::{Kadm5RpcSession, kadm5_handle_rpc, serve_kadm5_conn};
+use krb5_admin::{Kadm5RpcSession, Programs, kadm5_handle_rpc, serve_kadm5_conn};
 use krb5_gss::GssContext;
 use krb5_kdc::principals::kadmin_admin;
 use krb5_kdc::testrealm::{TEST_REALM, bootstrap_documented};
@@ -195,6 +195,7 @@ fn rpcsec_integrity_request_is_databody_plus_mic() {
             acl: &acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut sess,
@@ -222,6 +223,7 @@ fn rpcsec_integrity_reply_is_databody_plus_mic() {
             acl: &acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut sess,
@@ -270,6 +272,7 @@ fn rpcsec_none_service_body_is_plain() {
             acl: &acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut sess,
@@ -300,6 +303,7 @@ fn rpcsec_integrity_bad_checksum_is_garbage_args() {
             acl: &acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut sess,
@@ -327,6 +331,7 @@ fn rpcsec_wrong_handle_with_valid_mic_dispatches() {
             acl: &acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut sess,
@@ -491,6 +496,7 @@ fn reply_words(version: u32) -> Vec<u32> {
             acl: &acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut sess,

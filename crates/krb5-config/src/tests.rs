@@ -426,8 +426,6 @@ fn kdc_ports_list_binds_every_port_on_the_wildcard_like_mit() {
     let c = KdcConf::parse("[kdcdefaults]\n    kdc_ports = 750,88\n").unwrap();
     assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(750), wild(88)]);
     assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(750), wild(88)]);
-    assert_eq!(c.kadmind_listeners(None).unwrap(), vec![wild(749)]);
-    assert_eq!(c.kpasswd_listeners().unwrap(), vec![wild(464)]);
     // Case 2: the realm stanza's lists beat [kdcdefaults], UDP and TCP apart.
     let c = KdcConf::parse(
         "[kdcdefaults]\n    kdc_ports = 750,88\n[realms]\n    R = {\n        kdc_listen = 127.0.0.2:8888 3333\n        kdc_tcp_listen = 9999\n    }\n",
@@ -438,18 +436,10 @@ fn kdc_ports_list_binds_every_port_on_the_wildcard_like_mit() {
         vec![at("127.0.0.2", 8888), wild(3333)]
     );
     assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(9999)]);
-    // Case 3: a TCP-only list leaves UDP on the default; kadmind and kpasswd lists.
-    let c = KdcConf::parse(
-        "[kdcdefaults]\n    kdc_tcp_ports = 7777\n[realms]\n    R = {\n        kadmind_listen = 127.0.0.3:7749\n        kpasswd_port = 7464\n    }\n",
-    )
-    .unwrap();
+    // Case 3: a TCP-only list leaves UDP on the default.
+    let c = KdcConf::parse("[kdcdefaults]\n    kdc_tcp_ports = 7777\n").unwrap();
     assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(88)]);
     assert_eq!(c.kdc_tcp_listeners().unwrap(), vec![wild(7777)]);
-    assert_eq!(
-        c.kadmind_listeners(None).unwrap(),
-        vec![at("127.0.0.3", 7749)]
-    );
-    assert_eq!(c.kpasswd_listeners().unwrap(), vec![wild(7464)]);
     // No kdc.conf listener relation at all: MIT DEFAULT_KDC_PORTLIST on the wildcard.
     let c = KdcConf::default();
     assert_eq!(c.kdc_udp_listeners().unwrap(), vec![wild(88)]);
@@ -458,19 +448,29 @@ fn kdc_ports_list_binds_every_port_on_the_wildcard_like_mit() {
 
 #[test]
 fn kadmind_port_follows_admin_server_then_kadmind_port() {
-    // MIT `kadm5_get_config_params`: a port written in admin_server sets kadmind's port
-    // before kadmind_port is read.
-    let c = KdcConf::parse("[realms]\n    R = {\n        kadmind_port = 7749\n    }\n").unwrap();
-    assert_eq!(c.kadmind_port(None), 7749);
-    assert_eq!(c.kadmind_port(Some("kdc.example.com")), 7749);
-    assert_eq!(c.kadmind_port(Some("kdc.example.com:8749")), 8749);
-    assert_eq!(c.kadmind_port(Some("[::1]:9749")), 9749);
-    let c = KdcConf::parse(
+    // MIT `kadm5_get_config_params`: a port written in the last admin_server (kdc.conf's
+    // relations, then krb5.conf's) sets kadmind's port before -port and kadmind_port are read.
+    use crate::KadmindListen;
+    let p = Krb5Conf::parse_files(&["[realms]\n    R = {\n        kadmind_port = 7749\n    }\n"])
+        .unwrap();
+    assert_eq!(
+        KadmindListen::for_realm(Some(&p), "R", None).kadmind_port,
+        7749
+    );
+    assert_eq!(
+        KadmindListen::for_realm(Some(&p), "R", Some(5749)).kadmind_port,
+        5749
+    );
+    let p = Krb5Conf::parse_files(&[
         "[realms]\n    R = {\n        admin_server = kdc.example.com:6749\n        kadmind_port = 7749\n    }\n",
-    )
+        "[realms]\n    R = {\n        admin_server = other:8749\n    }\n",
+    ])
     .unwrap();
-    assert_eq!(c.kadmind_port(Some("other:8749")), 6749);
-    assert_eq!(KdcConf::default().kadmind_port(None), 749);
+    assert_eq!(
+        KadmindListen::for_realm(Some(&p), "R", Some(5749)).kadmind_port,
+        8749
+    );
+    assert_eq!(KadmindListen::for_realm(None, "R", None).kadmind_port, 749);
 }
 
 /// MIT `parse_std_line` / `parse_line` (`prof_parse.c`), live MIT 1.22.2: a relation with no

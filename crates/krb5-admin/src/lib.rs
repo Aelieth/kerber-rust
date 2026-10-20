@@ -32,7 +32,7 @@ use thiserror::Error;
 
 pub use getdate::{DateError, get_date_rel, parse_date, parse_interval};
 pub use kadm5::{
-    IncrReply, IpropClient, Kadm5RpcSession, RpcCtx, RpcFailure, RpcPeer, UnhandledRpc,
+    IncrReply, IpropClient, Kadm5RpcSession, Programs, RpcCtx, RpcFailure, RpcPeer, UnhandledRpc,
     acceptor_names_served, changepw_acceptor, check_auth_gssapi_names, check_iprop_rpcsec_auth,
     check_rpcsec_auth, glob_pattern_ok, kadm5_handle_rpc, kdb_rd_req, serve_kadm5_conn,
 };

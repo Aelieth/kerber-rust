@@ -22,7 +22,7 @@ use krb5_protocol::{AcceptorConfig, ReplayCache};
 
 use crate::kadm5::Kadm5Conn;
 use crate::listen::{client_addr, handle_kpasswd_from, kpasswd_toolong_error};
-use crate::{RpcPeer, UnhandledRpc};
+use crate::{Programs, RpcPeer, UnhandledRpc};
 
 /// kadmind's side of the loop: kpasswd's requests and each kadm5 connection's session, over one
 /// store, one ACL, one replay cache for the kadm5 acceptor and one set of acceptor profile values.
@@ -32,6 +32,7 @@ pub struct Kadmind {
     cpw_key: Option<ProtocolKey>,
     rcache: ReplayCache,
     conf: Arc<AcceptorConfig>,
+    programs: Programs,
     report: Option<UnhandledRpc>,
 }
 
@@ -52,8 +53,17 @@ impl Kadmind {
             cpw_key,
             rcache: ReplayCache::new(),
             conf: Arc::new(conf),
+            programs: Programs::BOTH,
             report: None,
         }
+    }
+
+    /// Serve only `programs` on the RPC listeners: those kadmind set a listener up for. Without
+    /// this, both are served.
+    #[must_use]
+    pub fn serve_programs(mut self, programs: Programs) -> Self {
+        self.programs = programs;
+        self
     }
 
     /// Hand the message of each kadm5 call that does not decode (it gets no reply) to `report`;
@@ -137,6 +147,7 @@ impl Dispatch for Kadmind {
             self.realm(),
             self.rcache.clone(),
             Arc::clone(&self.conf),
+            self.programs,
             RpcPeer::new(Some(remote), Some(local)),
             self.report.clone(),
         )))

@@ -265,6 +265,7 @@ fn admin_rpcsec_init_svc(
             acl: &acl,
             expected_realm: TEST_REALM,
             conf: &AcceptorConfig::default(),
+            programs: Programs::BOTH,
         },
         b"hdl",
         &mut gss,

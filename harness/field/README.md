@@ -387,10 +387,22 @@ would remove it.
   (aes256-cts-hmac-sha1-96, then aes128-cts-hmac-sha1-96) leave the KDC the
   first: alice's kinit asking for aes256 alone is issued and one asking for
   aes128 alone is refused. An empty first `permitted_enctypes` line permits no
-  enctype, so the aes256 kinit is refused too. Each cell starts from the saved
-  kdc.conf, which is
-  restored with krb5kdc and kadmin restarted at the end, also when the scenario
-  stops early. Then CF.e0 (`lib/profile-opens.sh`): strace on kadmind while
+  enctype, so the aes256 kinit is refused too. REP2a restarts kadmin with iprop
+  on and `[logging] debug` (MIT logs the line it greps at debug), and probes it
+  from kdc with an RPC call of procedure 0 under AUTH_NONE (`lib/rpc-probe.py`):
+  with `iprop_port = 749`, kadmind's own port, the iprop listener is not added
+  ("Address already added to server") and the iprop program is PROG_UNAVAIL
+  there while kadm5 is still served (AUTH_TOOWEAK); with `iprop_port = 754` it
+  listens on 464, 749 and 754, and each RPC port serves both programs; with
+  `KADMIND_ARGS=-proponly` it listens on 754 alone, where kadm5 is PROG_UNAVAIL;
+  and with `-port 749` and a krb5.conf (named by `KRB5_CONFIG` in
+  `/etc/sysconfig/kadmin`) whose `admin_server` is `kdc.kerber.test:754`, the MIT
+  leg records the TCP ports kadmind takes and kadm5's answer on 749 and on 754,
+  and the rust leg must give the same (this run's MIT leg, else
+  `runs/mit-latest`).
+  Each cell starts from the saved kdc.conf (and `/etc/sysconfig/kadmin`), which
+  is restored with krb5kdc and kadmin restarted at the end, also when the
+  scenario stops early. Then CF.e0 (`lib/profile-opens.sh`): strace on kadmind while
   client2 changes cfpw's password and runs a kadmin session, and on a second
   kpropd (port 7754, its own kdc.conf, database, keytab and ACL, stopped and
   removed after) while kdc's kprop sends it the realm. Each must take a

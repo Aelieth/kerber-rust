@@ -60,11 +60,6 @@ impl Default for KdcConf {
             kdc_listen: listen::DEFAULT_KDC_PORTLIST.into(),
             kdc_listen_in_realm: false,
             kdc_tcp_listen: None,
-            admin_server: None,
-            kadmind_listen: None,
-            kadmind_port: None,
-            kpasswd_listen: None,
-            kpasswd_port: None,
             realm: "KERBER.TEST".into(),
             max_life: 24 * 3600,
             max_renewable_life: 0,
@@ -376,49 +371,6 @@ impl KdcConf {
         listen::listen_addrs(Some(list), listen::KDC_PORT)
     }
 
-    /// kadmind's port: the port written in `admin_server` (this file's, else
-    /// `krb5_admin_server` from krb5.conf), else `kadmind_port`, else 749.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:496-531`): `admin_server`'s port
-    /// is read before `kadmind_port`.
-    #[must_use]
-    pub fn kadmind_port(&self, krb5_admin_server: Option<&str>) -> u16 {
-        self.admin_server
-            .as_deref()
-            .or(krb5_admin_server)
-            .and_then(listen::admin_server_port)
-            .or(self.kadmind_port)
-            .unwrap_or(listen::KADMIND_PORT)
-    }
-
-    /// kadmind's RPC listeners; no `kadmind_listen` is the wildcard.
-    /// MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:153-156`): RPC on `kadmind_listen`.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Parse`] for an entry [`listen::parse_host_string`] refuses.
-    pub fn kadmind_listeners(
-        &self,
-        krb5_admin_server: Option<&str>,
-    ) -> Result<Vec<ListenAddr>, Error> {
-        listen::listen_addrs(
-            self.kadmind_listen.as_deref(),
-            self.kadmind_port(krb5_admin_server),
-        )
-    }
-
-    /// kpasswd's UDP and TCP listeners, on `kpasswd_port` (default 464).
-    /// MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:147-152`): UDP and TCP on one list.
-    ///
-    /// # Errors
-    ///
-    /// [`Error::Parse`] for an entry [`listen::parse_host_string`] refuses.
-    pub fn kpasswd_listeners(&self) -> Result<Vec<ListenAddr>, Error> {
-        listen::listen_addrs(
-            self.kpasswd_listen.as_deref(),
-            self.kpasswd_port.unwrap_or(listen::KPASSWD_PORT),
-        )
-    }
-
     /// Load from a path.
     ///
     /// # Errors
@@ -654,18 +606,7 @@ fn parse_kdc_realm_line(conf: &mut KdcConf, line: &str) {
         "pkinit_indicator" => conf.pkinit_indicators.push(v),
         "spake_preauth_indicator" => conf.spake_preauth_indicators.push(v),
         "dict_file" => conf.dict_file = Some(PathBuf::from(v)),
-        "admin_server" => {
-            conf.admin_server.get_or_insert(v);
-        }
-        "kadmind_listen" => {
-            conf.kadmind_listen.get_or_insert(v);
-        }
-        "kpasswd_listen" => {
-            conf.kpasswd_listen.get_or_insert(v);
-        }
-        "kadmind_port" if conf.kadmind_port.is_none() => conf.kadmind_port = v.parse().ok(),
-        "kpasswd_port" if conf.kpasswd_port.is_none() => conf.kpasswd_port = v.parse().ok(),
-        "master_key_name" | "iprop_listen" => note_unsupported(conf, k),
+        "master_key_name" => note_unsupported(conf, k),
         k if k.starts_with("pkinit_") && k != "pkinit_require_freshness" => {
             note_unsupported(conf, k);
         }
@@ -685,7 +626,6 @@ impl KdcConf {
     /// log: the relations [`Self::unsupported`] names, a `supported_enctypes` salt type other
     /// than `normal`, and a UNIX-domain socket in a listen list.
     /// MIT `init_realm` (`kdc/main.c:247-250`): `master_key_name` names the master key principal.
-    /// MIT `kadm5_get_config_params` (`lib/kadm5/alt_prof.c:517-522`): `iprop_listen` lists kadmind's iprop listeners.
     /// MIT `krb5_string_to_keysalts` (`lib/kadm5/str_conv.c:319-366`): a tuple's salt type is kept.
     #[must_use]
     pub fn unsupported_lines(&self) -> Vec<String> {
@@ -709,8 +649,6 @@ impl KdcConf {
         let lists = [
             ("kdc_listen", Some(&self.kdc_listen)),
             ("kdc_tcp_listen", self.kdc_tcp_listen.as_ref()),
-            ("kadmind_listen", self.kadmind_listen.as_ref()),
-            ("kpasswd_listen", self.kpasswd_listen.as_ref()),
         ];
         for (name, list) in lists {
             for entry in list

@@ -44,6 +44,27 @@ pub struct RpcCtx<'a> {
     pub expected_realm: &'a str,
     /// The acceptor's profile values, kadmind's KDC context's.
     pub conf: &'a AcceptorConfig,
+    /// The programs served.
+    pub programs: Programs,
+}
+
+/// The RPC programs kadmind serves: those it set a listener up for, each on every one of its
+/// RPC listeners.
+/// MIT `svc_register` (`lib/rpc/svc.c:161-191`): the programs are one callout list for the process, whichever transport registered them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Programs {
+    /// The kadm5 program (2112).
+    pub kadm: bool,
+    /// The iprop program (100423), served only with an update log.
+    pub iprop: bool,
+}
+
+impl Programs {
+    /// Both programs: kadmind's when its kadm5 and iprop listeners are both set up.
+    pub const BOTH: Self = Self {
+        kadm: true,
+        iprop: true,
+    };
 }
 
 /// Serve one TCP connection until EOF, each record on this socket in turn; a call that does not
@@ -62,7 +83,16 @@ pub fn serve_kadm5_conn(
     mut stream: TcpStream,
 ) -> io::Result<()> {
     let peer = RpcPeer::new(stream.peer_addr().ok(), stream.local_addr().ok());
-    let mut conn = Kadm5Conn::new(store, acl, expected_realm, rcache, conf, peer, None);
+    let mut conn = Kadm5Conn::new(
+        store,
+        acl,
+        expected_realm,
+        rcache,
+        conf,
+        Programs::BOTH,
+        peer,
+        None,
+    );
     loop {
         let rec = match read_record(&mut stream) {
             Ok(r) => r,
@@ -139,6 +169,7 @@ pub(crate) struct Kadm5Conn {
     realm: String,
     rcache: ReplayCache,
     conf: Arc<AcceptorConfig>,
+    programs: Programs,
     handle: Vec<u8>,
     sess: Kadm5RpcSession,
     peer: RpcPeer,
@@ -146,14 +177,16 @@ pub(crate) struct Kadm5Conn {
 }
 
 impl Kadm5Conn {
-    /// The connection `peer` accepted for `realm`; `report` takes the message of each call that
-    /// does not decode.
+    /// The connection `peer` accepted for `realm`, serving `programs`; `report` takes the message
+    /// of each call that does not decode.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         store: SharedStore,
         acl: Acl,
         realm: String,
         rcache: ReplayCache,
         conf: Arc<AcceptorConfig>,
+        programs: Programs,
         peer: RpcPeer,
         report: Option<UnhandledRpc>,
     ) -> Self {
@@ -163,6 +196,7 @@ impl Kadm5Conn {
             realm,
             rcache,
             conf,
+            programs,
             handle: random_handle(),
             sess: Kadm5RpcSession::default(),
             peer,
@@ -177,6 +211,7 @@ impl Kadm5Conn {
             acl: &self.acl,
             expected_realm: &self.realm,
             conf: &self.conf,
+            programs: self.programs,
         };
         let Kadm5RpcSession { gss, agss } = &mut self.sess;
         handle_rpc(ctx, &self.handle, gss, agss, &self.rcache, rec, &self.peer)
@@ -333,9 +368,11 @@ pub(super) fn handle_rpc(
         prog,
     );
 
-    let kadm = prog == KADM_PROG;
+    // MIT `svc_do_xprt` (`lib/rpc/svc.c:495-520`): a call goes to the program set up for any listener.
+    let kadm = prog == KADM_PROG && ctx.programs.kadm;
     // MIT `setup_loop` (`kadmin/server/ovsec_kadmd.c:164-171`): the iprop program is registered only with `iprop_enable`, which maps the update log.
     let iprop = prog == IPROP_PROG
+        && ctx.programs.iprop
         && ctx
             .store
             .read()

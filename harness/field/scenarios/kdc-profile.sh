@@ -19,6 +19,15 @@
 #         asking for aes128 alone is refused (client2's copies of krb5.conf ask for one enctype each). Then an empty
 #         first permitted_enctypes line: MIT's KDC permits no enctype, so the aes256 kinit is refused. Each
 #         refusal's kinit line is recorded;
+#   REP2a: kadmind's listeners, kadmin restarted with iprop on (and [logging] debug, for MIT's debug line), each probed
+#         from kdc with an RPC call of procedure 0 under AUTH_NONE (lib/rpc-probe.py): with iprop_port = 749,
+#         kadmind's own port, the iprop listener is not added ("Address already added to server") and the iprop
+#         program is PROG_UNAVAIL on 749, kadm5 still served (AUTH_TOOWEAK); with iprop_port = 754 kadmind listens
+#         on 464, 749 and 754, and each program is served on both RPC ports; with -proponly (KADMIND_ARGS) it listens
+#         on 754 alone and kadm5 is PROG_UNAVAIL there. Then, with no iprop, kadmind -port 749 and a krb5.conf (by
+#         KRB5_CONFIG in /etc/sysconfig/kadmin) whose admin_server is kdc.kerber.test:754: the MIT leg records the TCP
+#         ports kadmind listens on and kadm5's answer on 749 and on 754, and the rust leg must give the same (this run's
+#         MIT leg, else runs/mit-latest; with neither, a FAIL);
 #   CF.e0: strace on kadmind while client2 changes cfpw's password and runs a kadmin session, and on a second kpropd
 #         (port 7754, its own kdc.conf, database, keytab and ACL) while kdc's kprop sends it the realm: neither opens
 #         krb5.conf or kdc.conf for a request (lib/profile-opens.sh). strace is installed when kdc lacks it.
@@ -31,7 +40,7 @@ case "${1:-} ${2:-}" in
     "--leg mit" | "--leg rust") LEG=$2 ;;
     *) echo "usage: kdc-profile.sh --leg mit|rust" >&2; exit 1 ;;
 esac
-: "${FIELD_SHA:?run by run.sh}"
+: "${FIELD_SHA:?run by run.sh}" "${FIELD_RUN:?run by run.sh}"
 # shellcheck source=../lib/rec.sh
 . "$HERE/../lib/rec.sh"
 # shellcheck source=../baseline.env
@@ -41,9 +50,10 @@ esac
 legset ALICE ALICE_TEMP ADMIN
 R=${REALM//./\\.}
 KC=/var/kerberos/krb5kdc/kdc.conf
+SC=/etc/sysconfig/kadmin
 CF="export KRB5_CONFIG=\$HOME/cf/krb5.conf"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -f /etc/krb5-rep2a.conf; [ -e $SC.cf ] && sudo mv $SC.cf $SC; [ -e $KC.cf ] && sudo mv $KC.cf $KC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin; for p in cfskew cfpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; sudo rm -f $KC.inc; sudo pkill -x strace; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh kdc -- "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh" > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'sudo systemctl start chronyd; rm -rf ~/cf; true' < /dev/null > /dev/null 2>&1
 }
@@ -83,6 +93,25 @@ kpwskewed() {
 # alone.
 etkinit() {
     check "$1" "$3" runin client2 "alice's password ($ALICE)" "KRB5_CONFIG=\$HOME/cf/$2.conf kinit -c FILE:\$HOME/cf/e.cc alice 2>&1; echo \"kinit rc=\$?\"" < <(once "$ALICE")
+}
+# admwith <check> <text appended to kdc.conf> [kadmind options] [another sysconfig line]: the original kdc.conf plus
+# that text, KADMIND_ARGS set to the options, kadmin restarted; then the TCP ports kadmind listens on.
+admwith() {
+    check "$1" '^kadmin: active$' run kdc "sudo cp -p $KC.cf $KC && printf '%b' '$2' | sudo tee -a $KC > /dev/null && { echo 'KADMIND_ARGS=${3:-}'; [ -z '${4:-}' ] || echo '${4:-}'; } | sudo tee $SC > /dev/null && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart kadmin; for i in \$(seq 1 40); do sudo ss -Hltnp | grep -q '\"kadmind\"' && break; sleep 0.25; done; sleep 1; echo \"kadmin: \$(systemctl is-active kadmin)\"; echo \"tcp ports: \$(sudo ss -Hltnp | grep '\"kadmind\"' | awk '{print \$4}' | sed 's/.*://' | sort -un | paste -sd' ')\""
+}
+# ipropconf <port>: kdc.conf text turning iprop on at that port, with [logging] debug for MIT's debug lines.
+ipropconf() {
+    printf '%s' "\n[realms]\n    $REALM = {\n        iprop_enable = true\n        iprop_port = $1\n    }\n\n[logging]\n    debug = true\n"
+}
+# added <check> <mark> <ERE>: the "Address already added to server" lines kadmind.log gained since kdcmark <mark>.
+added() {
+    local k='' a=''
+    read -r k a 2> /dev/null < "$STATE/mark.$2" || true
+    check "$1" "$3" run kdc "printf 'already added: %s\n' \"\$(sudo tail -n +$(( ${a:-0} + 1 )) /var/log/kadmind.log | grep -c 'Address already added to server')\""
+}
+# probe <check> <port> <program> <version> <ERE>: kdc's RPC call of procedure 0 under AUTH_NONE to kadmind there.
+probe() {
+    check "$1" "$5" runin kdc "lib/rpc-probe.py" "python3 - 127.0.0.1 $2 $3 $4" < "$FIELD_LIB/rpc-probe.py"
 }
 # life <name>: alice's TGT life in seconds from a fresh kinit, in LIFE.
 life() {
@@ -146,8 +175,60 @@ checklast CF.h.empty.kdc.status 'Improper format of Kerberos configuration file'
 etkinit CF.h.empty aes256-cts-hmac-sha1-96 '^kinit rc=1$'
 observelast obs.CF.h.empty 'kinit: .*'
 
+section "REP2a iprop_port = kadmind's 749: the iprop listener is not added, so iprop is not served there (MIT and ours)"
+check REP2a.sysconfig '^KADMIND_ARGS=' run kdc "sudo cp -p $SC $SC.cf && cat $SC"
+kdcmark rep2a749
+admwith REP2a.749.kadmin "$(ipropconf 749)"
+checklast REP2a.749.ports '^tcp ports: 464 749$'
+added REP2a.749.log rep2a749 '^already added: [1-9][0-9]*$'
+probe REP2a.749.iprop 749 100423 1 'PROG_UNAVAIL$'
+probe REP2a.749.kadm5 749 2112 2 'AUTH_TOOWEAK$'
+
+section "REP2a iprop_port = 754: kadmind listens on 464, 749 and 754, and each RPC port serves both programs (MIT and ours)"
+kdcmark rep2a754
+admwith REP2a.754.kadmin "$(ipropconf 754)"
+checklast REP2a.754.ports '^tcp ports: 464 749 754$'
+added REP2a.754.log rep2a754 '^already added: 0$'
+probe REP2a.754.iprop 754 100423 1 'AUTH_TOOWEAK$'
+probe REP2a.754.iprop-on-749 749 100423 1 'AUTH_TOOWEAK$'
+probe REP2a.754.kadm5-on-754 754 2112 2 'AUTH_TOOWEAK$'
+
+section "REP2a -proponly with iprop_port = 754: kadmind listens on 754 alone and serves iprop only (MIT and ours)"
+admwith REP2a.proponly.kadmin "$(ipropconf 754)" -proponly
+checklast REP2a.proponly.ports '^tcp ports: 754$'
+probe REP2a.proponly.iprop 754 100423 1 'AUTH_TOOWEAK$'
+probe REP2a.proponly.kadm5 754 2112 2 'PROG_UNAVAIL$'
+
+section "REP2a krb5.conf plus a $REALM stanza with admin_server = kdc.kerber.test:754, the realm's last, and kadmind -port 749: the ports MIT's kadmind takes, and ours must take the same"
+check REP2a.port.krb5conf 'admin_server = kdc\.kerber\.test:754$' run kdc "{ cat /etc/krb5.conf; printf '\\n[realms]\\n    $REALM = {\\n        admin_server = kdc.kerber.test:754\\n    }\\n'; } | sudo tee /etc/krb5-rep2a.conf > /dev/null && grep -n 'admin_server' /etc/krb5-rep2a.conf"
+admwith REP2a.port.kadmin '' '-port 749' 'KRB5_CONFIG=/etc/krb5-rep2a.conf'
+REF=''
+if [ "$LEG" = rust ]; then
+    if [ -f "$FIELD_RUN/kdc-profile/mit/result" ]; then REF=$FIELD_RUN/kdc-profile/mit/checks.tsv
+    elif [ -f "$LAB_HOME/runs/mit-latest/kdc-profile/mit/checks.tsv" ]; then REF=$LAB_HOME/runs/mit-latest/kdc-profile/mit/checks.tsv; fi
+    note "REP2a.port is compared with ${REF:-no MIT leg: neither this run nor runs/mit-latest has one}"
+fi
+# portfact <fact>: the last command's line, recorded; on the rust leg it must be the MIT leg's.
+portfact() {
+    local mit=''
+    observelast "obs.REP2a.port.$1" '.+'
+    [ "$LEG" = rust ] || return 0
+    [ -n "$REF" ] && mit=$(awk -F'\t' -v n="obs.REP2a.port.$1" '$1 == n { print $5; exit }' "$REF")
+    if [ -n "$mit" ]; then
+        checklast "REP2a.port.$1" "line:$mit"
+    else
+        _checkrow "REP2a.port.$1" FAIL "as the MIT leg's obs.REP2a.port.$1" - "NOT-RUN: no MIT leg's obs.REP2a.port.$1 to compare with"
+    fi
+}
+run kdc "echo \"tcp ports: \$(sudo ss -Hltnp | grep '\"kadmind\"' | awk '{print \$4}' | sed 's/.*://' | sort -un | paste -sd' ')\""
+portfact ports
+runin kdc "lib/rpc-probe.py" "python3 - 127.0.0.1 749 2112 2" < "$FIELD_LIB/rpc-probe.py"
+portfact kadm5-749
+runin kdc "lib/rpc-probe.py" "python3 - 127.0.0.1 754 2112 2" < "$FIELD_LIB/rpc-probe.py"
+portfact kadm5-754
+
 section "kdc.conf restored"
-check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo mv $KC.cf $KC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin && systemctl is-active krb5kdc kadmin > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active' || sudo systemctl status krb5kdc kadmin --no-pager -n 12"
+check kdc.conf.restored '^restored, krb5kdc and kadmin active$' run kdc "sudo rm -f /etc/krb5-rep2a.conf && sudo mv $KC.cf $KC && sudo mv $SC.cf $SC && sudo systemctl reset-failed krb5kdc kadmin && sudo systemctl restart krb5kdc kadmin && systemctl is-active krb5kdc kadmin > /dev/null && ! sudo grep -qE '^[[:space:]]*clockskew|DUMMY\\.TEST' $KC && echo 'restored, krb5kdc and kadmin active' || sudo systemctl status krb5kdc kadmin --no-pager -n 12"
 
 # opens <name> <pid expression>: strace attached to the daemon that pid names.
 opens() {

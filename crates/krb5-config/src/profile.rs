@@ -1020,14 +1020,19 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
     let ep = parse_endpoint(&v);
     match k.to_ascii_lowercase().as_str() {
         "kdc" => conf.kdcs.entry(realm.to_owned()).or_default().push(ep),
-        "admin_server" => conf
-            .admin_servers
-            .entry(realm.to_owned())
-            .or_default()
-            .push(Endpoint {
-                port: if ep.port == 88 { 749 } else { ep.port },
-                ..ep
-            }),
+        "admin_server" => {
+            conf.admin_servers
+                .entry(realm.to_owned())
+                .or_default()
+                .push(Endpoint {
+                    port: if ep.port == 88 { 749 } else { ep.port },
+                    ..ep
+                });
+            conf.kadm5
+                .entry(realm.to_owned())
+                .or_default()
+                .push(("admin_server".to_owned(), v));
+        }
         "kpasswd_server" => conf
             .kpasswd_servers
             .entry(realm.to_owned())
@@ -1052,11 +1057,17 @@ fn parse_realm_line(conf: &mut Krb5Conf, realm: &str, line: &str) {
                 .entry(realm.to_owned())
                 .or_insert_with(|| mit_boolean(&v).unwrap_or(false));
         }
-        name if name.starts_with("iprop_") => conf
-            .iprop
-            .entry(realm.to_owned())
-            .or_default()
-            .push((name.to_owned(), v)),
+        name if name.starts_with("iprop_")
+            || matches!(
+                name,
+                "kadmind_listen" | "kadmind_port" | "kpasswd_listen" | "kpasswd_port"
+            ) =>
+        {
+            conf.kadm5
+                .entry(realm.to_owned())
+                .or_default()
+                .push((name.to_owned(), v));
+        }
         _ => {}
     }
 }

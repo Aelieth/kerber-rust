@@ -381,9 +381,11 @@ pub struct Krb5Conf {
     /// `[logging]` relations, name and value, in file order (includes followed); read by
     /// [`LogSpecs`].
     pub logging: Vec<(String, String)>,
-    /// Realm → its stanza's `iprop_*` relations, name and value, in file order (includes
-    /// followed); read by [`IpropParams`].
-    pub iprop: BTreeMap<String, Vec<(String, String)>>,
+    /// Realm → its stanza's relations `kadm5_get_config_params` reads as written (`iprop_*`,
+    /// `admin_server`, `kadmind_listen`, `kadmind_port`, `kpasswd_listen`, `kpasswd_port`), name
+    /// and value, in file order (includes followed); read by [`IpropParams`] and
+    /// [`KadmindListen`].
+    pub kadm5: BTreeMap<String, Vec<(String, String)>>,
     /// Realm → its `[libdefaults]` subsection for the eight per-realm keys.
     /// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): that node is read before the top-level relation.
     pub realm_libdefaults: BTreeMap<String, RealmLibdefaults>,
@@ -429,16 +431,6 @@ pub struct KdcConf {
     /// `[kdcdefaults]`); `None` listens on [`Self::kdc_listen`].
     /// MIT `init_realm` (`kdc/main.c:267-282`): `kdc_tcp_listen`, then `kdc_tcp_ports`.
     pub kdc_tcp_listen: Option<String>,
-    /// The realm stanza's `admin_server`, whose port (if written) is kadmind's port.
-    pub admin_server: Option<String>,
-    /// The realm stanza's `kadmind_listen` list.
-    pub kadmind_listen: Option<String>,
-    /// The realm stanza's `kadmind_port`.
-    pub kadmind_port: Option<u16>,
-    /// The realm stanza's `kpasswd_listen` list.
-    pub kpasswd_listen: Option<String>,
-    /// The realm stanza's `kpasswd_port`.
-    pub kpasswd_port: Option<u16>,
     /// Realm name.
     pub realm: String,
     /// Maximum ticket lifetime in seconds (default 1 day, `alt_prof.c`).
@@ -572,7 +564,7 @@ pub use hostname::{
     CanonPrinc, HostPrinc, SnameError, expand_hostname, expand_hostname_no_dns,
     fallback_host_realm, local_host_name, sname_to_principal, this_host,
 };
-pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, MISSING_CONF_PARAMS};
+pub use iprop_params::{DEF_ULOGENTRIES, IpropParams, KadmindListen, MISSING_CONF_PARAMS};
 pub use kdcconf::{
     KDC_DIR, KdcPaths, default_acl_file, default_kdb_file, default_kdc_profile, default_kprop_file,
     default_kpropd_acl, default_stash_file, env_kdc_config, kdc_conf_path,
