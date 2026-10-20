@@ -150,7 +150,7 @@ pub fn init_client(
         &as_out.session_key,
         &ascii(TEST_REALM),
         client,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )

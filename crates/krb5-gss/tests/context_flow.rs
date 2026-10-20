@@ -57,7 +57,7 @@ fn contexts() -> (GssContext, GssContext) {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -202,7 +202,7 @@ fn accept_same_token_twice_is_repeat() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -330,7 +330,7 @@ fn channel_bindings_must_match() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         Some(&cb),
         None,
     )
@@ -384,7 +384,7 @@ fn spnego_accept_emits_neg_token_resp() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -445,7 +445,7 @@ fn acceptor_rejects_wrong_service_name() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -494,7 +494,7 @@ fn mutual_ap_rep_decrypts_with_ticket_session() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -555,7 +555,7 @@ fn accept_extracts_delegated_client() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         Some(&deleg),
     )

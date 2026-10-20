@@ -1,6 +1,6 @@
 //! IPROP_GET_UPDATES client (ONC RPC program 100423, RPCSEC_GSS): the iprop gate's test tool.
 //!
-//! Usage: `krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
+//! Usage: `krb5-iprop-pull [--full-resync] [--skip-mic] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]`
 //!
 //! It is built only with the `test-hooks` feature (`required-features`), so a release build has
 //! no such program and none of its environment; `make install` never installed it.
@@ -53,6 +53,7 @@ fn main() {
     let mut dump: Option<PathBuf> = None;
     let mut target: Option<String> = None;
     let mut full_resync = false;
+    let mut skip_mic = false;
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
@@ -76,6 +77,7 @@ fn main() {
                 });
             }
             "--full-resync" => full_resync = true,
+            "--skip-mic" => skip_mic = true,
             "--load-dump" => {
                 dump = Some(PathBuf::from(
                     args.next().unwrap_or_else(|| need_arg("--load-dump")),
@@ -236,10 +238,20 @@ fn main() {
         println!("fullresync_status={status}");
         std::process::exit(i32::from(status != krb5_kdc::IPROP_OK));
     }
+    if skip_mic {
+        client.get_updates(mylast).unwrap_or_else(|f| {
+            eprintln!("krb5-iprop-pull: {}", f.sperror("pull"));
+            std::process::exit(1);
+        });
+        client.skip_mic();
+    }
     let reply = client.get_updates(mylast).unwrap_or_else(|f| {
         eprintln!("krb5-iprop-pull: {}", f.sperror("pull"));
         std::process::exit(1);
     });
+    if skip_mic {
+        println!("iprop refreshes={}", client.refreshes());
+    }
     let mut applied = 0;
     if reply.status == krb5_kdc::IPROP_OK && reply.count > 0 {
         let updates = reply
@@ -289,7 +301,7 @@ fn need_arg(flag: &str) -> String {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: krb5-iprop-pull [--full-resync] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]"
+        "usage: krb5-iprop-pull [--full-resync] [--skip-mic] [--last-sno N] [--last-time SEC USEC] [--load-dump PATH] [host:port]"
     );
     std::process::exit(2);
 }

@@ -331,19 +331,18 @@ impl GssContext {
         session: &ProtocolKey,
         crealm: &Realm,
         cname: &PrincipalName,
-        mutual: bool,
+        req_flags: u32,
         channel_bindings: Option<&ChannelBindings>,
         deleg: Option<&DelegCred>,
     ) -> Result<(Self, Vec<u8>), Error> {
-        let opts = if mutual {
+        // MIT kg_new_connection; see docs/parity/b1-gss.md
+        let mut flags =
+            req_flags & (INITIATOR_FLAGS & !GSS_C_DCE) | GSS_C_TRANS | GSS_C_CONF | GSS_C_INTEG;
+        let opts = if flags & GSS_C_MUTUAL != 0 {
             ApOptions::mutual_required()
         } else {
             ApOptions::none()
         };
-        let mut flags = GSS_C_INTEG | GSS_C_CONF | GSS_C_REPLAY | GSS_C_SEQUENCE;
-        if mutual {
-            flags |= GSS_C_MUTUAL;
-        }
         let deleg_der = if let Some(d) = deleg {
             flags |= GSS_C_DELEG;
             let der = krb_cred_for_deleg(session, d)?;

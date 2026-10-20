@@ -285,7 +285,7 @@ fn rpcsec_init_reply_mic_is_window() {
         &as_out.session_key,
         &ascii(TEST_REALM),
         &admin,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )

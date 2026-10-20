@@ -131,7 +131,7 @@ impl AdminTicket {
             &self.session,
             &krb5_types::ascii(TEST_REALM),
             &admin,
-            true,
+            krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
             cb,
             None,
         )
@@ -212,7 +212,7 @@ fn admin_gss_token() -> AdminGssToken {
         &as_out.session_key,
         &ascii(TEST_REALM),
         &admin,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )

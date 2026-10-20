@@ -622,6 +622,20 @@ kadmin_q_ok \
     --then 'getprinc extra2' '^Password expiration date: Sat Jun 01 00:00:00 UTC 2030$' \
     rust_kadmin_local -e KRB5_CONFIG=/tmp/iprop-krb5.conf -e KRB5_KDC_DB=/tmp/rust-replica \
     -e KRB5_KDC_STASH=/tmp/rust-replica.stash "$NAME" -- -q 'getprinc extra2'
+echo "==== Rust iprop-pull vs MIT kadmind: a MIC lost between two calls ===="
+# client_init.c:662 asks MUTUAL|REPLAY, so the primary takes a call after a gap with no refresh.
+GAP="$(docker exec \
+    -e KRB5_CONFIG=/tmp/iprop-krb5.conf \
+    -e KRB5_MASTER_PASSWORD=masterpassword \
+    -e KRB5_KDC_DB=/tmp/rust-replica \
+    -e KRB5_KDC_STASH=/tmp/rust-replica.stash \
+    -e KRB5_KPROP_KEYTAB=/tmp/mit-iprop.keytab \
+    -e KRB5_KDC=127.0.0.1 \
+    -e KRB5_IPROP_HOST=testhost.kerber.test \
+    "$NAME" /tmp/krb5-iprop-pull --skip-mic --last-sno "$SNO2" --last-time "$SEC2" "$USEC2" testhost.kerber.test:2121 2>&1 || true)"
+echo "$GAP"
+echo "$GAP" | grep -q 'iprop pull ok'
+echo "$GAP" | grep -q '^iprop refreshes=0$'
 kill_comm krb5kdc
 # A PAC carries the RID only as AD data: the replica's kdc.conf gives the realm an AD identity.
 docker exec "$NAME" sh -c "sed 's/^\( *\)KERBER.TEST = {\$/&\n\1    domain_sid = S-1-5-21-4242424242-4242424242-4242424245/' \

@@ -209,7 +209,7 @@ fn main() {
         &svc_key,
         &svc.client.0,
         &svc.client.1,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         cb.as_ref(),
         deleg_cred.as_ref(),
     )

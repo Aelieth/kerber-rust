@@ -51,7 +51,7 @@ fn contexts() -> (GssContext, GssContext) {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -180,7 +180,7 @@ fn linked() -> (GssContext, GssContext) {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -277,7 +277,7 @@ fn delegation_sets_the_deleg_flag() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         Some(&deleg),
     )

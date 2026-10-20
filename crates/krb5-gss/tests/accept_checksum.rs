@@ -170,7 +170,7 @@ fn accept_cb_mismatch_is_bad_bindings() {
         &session,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         Some(&init_cb),
         None,
     )
@@ -206,7 +206,7 @@ fn accept_cb_match_sets_channel_bound() {
         &session,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         Some(&cb),
         None,
     )
@@ -409,7 +409,7 @@ fn accept_zero_token_cb_with_acceptor_cb_is_ok() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )

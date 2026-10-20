@@ -1025,7 +1025,7 @@ fn kadmind_init(addr: &str, keytab: &str, client: &str, opts: &[String]) -> Resu
         &key(&SESSION_KEY)?,
         &ascii(&svc.realm),
         &who,
-        true,
+        krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY,
         None,
         None,
     )

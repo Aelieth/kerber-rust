@@ -51,7 +51,7 @@ fn host_token() -> (Vec<u8>, krb5_crypto::ProtocolKey, u32) {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        krb5_gss::GSS_C_REPLAY | krb5_gss::GSS_C_SEQUENCE,
         None,
         None,
     )

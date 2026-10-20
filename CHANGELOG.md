@@ -86,6 +86,7 @@ any other `###` heading.
 - **kdc.** kdc.conf's `[libdefaults]` `permitted_enctypes` and `allow_*` are the first values, as MIT's KDC context reads them; an empty list permits nothing. Lab beside MIT.
 - **gss/types.** One DER length codec: a GSS token of 64 KiB or more is framed right, and a delegated KRB-CRED too long for the checksum fails as MIT's.
 - **admin.** kadmind sets up its listeners as MIT's: iprop on its own port (not on kadmind's), `-proponly`, and `admin_server`'s port before `-port`. Lab beside MIT.
+- **gss/admin.** The GSS initiator takes its caller's flags, as MIT's; the iprop client asks for MUTUAL|REPLAY, so MIT's kadmind takes its later calls after a gap.
 
 ## [1.1.0] - 2026-10-14
 

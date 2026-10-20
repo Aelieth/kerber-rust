@@ -310,6 +310,7 @@ pub struct IpropClient {
     handle: Vec<u8>,
     xid: u32,
     seq: u32,
+    refreshes: u32,
 }
 
 impl std::fmt::Debug for IpropClient {
@@ -342,9 +343,16 @@ impl IpropClient {
         stream
             .set_read_timeout(Some(Self::TIMEOUT))
             .map_err(|e| Error::Inner(e.to_string()))?;
-        let (mut ctx, token) =
-            GssContext::init_sec_context(ticket, session, crealm, cname, true, None, None)
-                .map_err(|e| Error::Inner(e.to_string()))?;
+        let (mut ctx, token) = GssContext::init_sec_context(
+            ticket,
+            session,
+            crealm,
+            cname,
+            krb5_gss::GSS_C_MUTUAL | krb5_gss::GSS_C_REPLAY,
+            None,
+            None,
+        )
+        .map_err(|e| Error::Inner(e.to_string()))?;
         let mut xid = 1u32;
         let handle = rpcsec_init(&mut stream, &mut ctx, session, &token, &mut xid)?;
         Ok(Self {
@@ -353,7 +361,19 @@ impl IpropClient {
             handle,
             xid,
             seq: 0,
+            refreshes: 0,
         })
+    }
+
+    #[cfg(feature = "test-hooks")]
+    #[must_use]
+    pub fn refreshes(&self) -> u32 {
+        self.refreshes
+    }
+
+    #[cfg(feature = "test-hooks")]
+    pub fn skip_mic(&mut self) {
+        let _ = self.ctx.get_mic(&[]);
     }
 
     /// `IPROP_GET_UPDATES` for the updates after `last`.
@@ -427,7 +447,10 @@ impl IpropClient {
                         .ok_or(RpcFailure::CantDecodeRes);
                 }
                 (_, ReplyStat::Failed(f)) if refreshes == 0 => return Err(f),
-                (_, ReplyStat::Failed(_)) => refreshes -= 1,
+                (_, ReplyStat::Failed(_)) => {
+                    refreshes -= 1;
+                    self.refreshes += 1;
+                }
             }
         }
     }

@@ -70,7 +70,7 @@ fn contexts() -> (GssContext, GssContext) {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        crate::GSS_C_REPLAY | crate::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -336,7 +336,7 @@ fn spnego_accept_rejects_mech_list_without_krb5() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        true,
+        crate::GSS_C_MUTUAL | crate::GSS_C_REPLAY | crate::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -373,7 +373,7 @@ fn spnego_duplicate_mech_types_is_truncated() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        true,
+        crate::GSS_C_MUTUAL | crate::GSS_C_REPLAY | crate::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -509,7 +509,7 @@ fn deleg_checksum_carries_krb_cred() {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        false,
+        crate::GSS_C_REPLAY | crate::GSS_C_SEQUENCE,
         None,
         Some(&deleg),
     )
@@ -936,7 +936,7 @@ fn mutual_pair() -> (GssContext, GssContext, Vec<u8>, ProtocolKey) {
         &tgs_out.session_key,
         &ascii(TEST_REALM),
         &cname,
-        true,
+        crate::GSS_C_MUTUAL | crate::GSS_C_REPLAY | crate::GSS_C_SEQUENCE,
         None,
         None,
     )
@@ -984,7 +984,7 @@ fn the_acceptor_refuses_ticket_and_session_enctypes_it_does_not_permit() {
             &tgs_out.session_key,
             &ascii(TEST_REALM),
             &cname,
-            true,
+            crate::GSS_C_MUTUAL | crate::GSS_C_REPLAY | crate::GSS_C_SEQUENCE,
             None,
             None,
         )
