@@ -160,6 +160,7 @@ harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kpasswd --leg
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdc-profile --leg both   # kdc.conf's cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,kdb-writes --leg both   # the store's write cells, on demand
 harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,replica --leg both   # the replica cells (lab.sh up kdc2 first), on demand
+harness/field/run.sh --profile weekly --ref plan-12 --only upgrade,rollback --leg both   # "Going back to MIT", on demand (leaves kdc on MIT)
 harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab.sh up kdc2 first), on demand: upgrade, then kill-loop
 ```
 
@@ -272,6 +273,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 | `kdc-profile` | weekly; on demand with `--only upgrade,kdc-profile` for a change to how kdc.conf is read | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its kdc.conf restored after each cell | none: the CF cells' first record | about 6 / 6 min |
 | `kdb-writes` | weekly; on demand with `--only upgrade,kdb-writes` for a change to how the store writes | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it, its scratch principals and policies removed at the end | none: the SW cells' first record | about 1 / 1 min |
 | `kpasswd` | weekly, last but `replica` (on a leg that allows it, it changes krbtgt's and kadmin/changepw's keys); on demand with `--only upgrade,kpasswd` for a change to kpasswd or chpass | mit, rust | client2: `f4-mit` / `rust-ssh` (reset); kdc as `upgrade` left it | none: the KH cells' first record | about 2 / 2 min |
+| `rollback` | weekly, last but `replica` (it leaves kdc on MIT, and `replica` resets it); on demand with `--only upgrade,rollback` | mit, rust | kdc as `upgrade` left it, on MIT afterwards; client2: `f4-mit` / `rust-ssh` as the run left it | none: SW-2's export bar, docs/install.md "Going back to MIT" | about 1 / 3 min (estimate; the rust leg's dnf install from the mirrors) |
 | `replica` | weekly, last: kdc is reset to the MIT primary; on demand with `--only upgrade,replica`, and `FIELD_REPLICA_BAKED=1 --only replica --leg rust` for the parent's baked programs | mit, rust | kdc: `f4-mit` in both legs (reset); kdc2: `f4-mit-f44` / `rust-replica-f44` (up for the preflight, reset at the start and the end, then parked); client2: `f4-mit` (reset) | none: the REP cells' first record | about 6 / 7 min |
 | `kill-loop` | none: `run.sh --profile kill-loop` (upgrade, then kill-loop), the 1.2 cut's crash proof (plan-SW, SW-3) | rust (MIT is the judge) | kdc as `upgrade` left it, its kl principals and stale `.principal.tmp-*` removed at the end; kdc2: `f4-mit-f44` in the rust leg (up for the preflight, reset at the start and the end, then parked) | none: SW-3's first record | about 10 min (estimate) |
 
