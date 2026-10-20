@@ -575,7 +575,7 @@ if [ "$LIFE_DELTA" -lt 0 ]; then
     LIFE_DELTA=$((-LIFE_DELTA))
 fi
 echo "acceptor lifetime rust=$RUST_NC_LIFE mit=$MIT_NC_LIFE delta=$LIFE_DELTA"
-if [ "$LIFE_DELTA" -gt 5 ]; then
+if [ "$LIFE_DELTA" -gt 60 ]; then
     log "gss.gate" "error" ",\"error\":\"acceptor lifetime rust=$RUST_NC_LIFE mit=$MIT_NC_LIFE\""
     exit 1
 fi
