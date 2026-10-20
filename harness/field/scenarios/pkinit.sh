@@ -29,6 +29,9 @@
 #   PK.6:  kinit -n with client2's anchors: a WELLKNOWN/ANONYMOUS ticket (the principal is made for the cell);
 #   PK.fast: with that anonymous ticket as FAST armor (-T), alice's certificate kinit runs pkinit inside the armored
 #          request: a TGT, the trace's pkinit, FAST-encoding and FAST reply key lines;
+#   PK.chpw: pkexp's password expired, kinit under the same -T changes it (old password, then the new one twice on
+#          stdin) and gets a TGT: each request makes its armor afresh, so the trace has MIT's 4 "FAST armor ccache"
+#          lines (the first request 1, kadmin/changepw's 2, the final one 1), ours as many as MIT's;
 #   PK.anchors: a profile whose second pkinit_anchors value is the KDC's CA: alice's certificate kinit gets a TGT;
 #          an anchors file with no certificate: the reply does not verify (the trace's line and module 17's 70), and
 #          the password is taken (stdin), which cannot open a PKINIT reply;
@@ -94,12 +97,13 @@ C=${PK_CLIENT_DIR:-/home/lab/pkinit}
 BIG=/var/kerberos/krb5kdc/pkbig
 EC=/var/kerberos/krb5kdc/pkec
 KDCC=/var/kerberos/krb5kdc/pkkdc
-legset ALICE
+legset ALICE ALICE_TEMP
 ANON=0
 PREAUTH=0
 DBMATCH=0
+CHPW=0
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; sudo rm -rf $BIG $EC $KDCC; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; [ $CHPW = 1 ] && sudo kadmin.local -q 'delprinc -force pkexp'; sudo rm -rf $BIG $EC $KDCC; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -278,6 +282,25 @@ for k in mit ${OURS:+ours}; do
     checklast "PK.fast.$k.pkinit" '^Preauth module pkinit \(16\) \(real\) returned: 0/Success$'
     checklast "PK.fast.$k.armored" '^Encoding request body and padata into FAST request$'
     checklast "PK.fast.$k.reply" '^FAST reply key$'
+done
+
+section "PK.chpw an expired password changed under -T: each request makes its own armor (MIT and ours)"
+CHPW=1
+check PK.chpw.setup "^Principal \"pkexp@$R\" created\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'delprinc -force pkexp' > /dev/null 2>&1; sudo kadmin.local -q 'addprinc pkexp' 2>&1" < <(twice "$ALICE")
+MITARMOR=
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    check "PK.chpw.expire.$k" "^Principal \"pkexp@$R\" modified\\.\$" runin kdc "alice's password ($ALICE), twice" "sudo kadmin.local -q 'cpw pkexp' > /dev/null 2>&1; sudo kadmin.local -q 'modprinc -pwexpire now pkexp' 2>&1" < <(twice "$ALICE")
+    check "PK.chpw.$k" '^kinit rc=0$' runin client2 "pkexp's password ($ALICE), then alice-changed's twice ($ALICE_TEMP)" "kdestroy -c FILE:\$HOME/pk/exp.cc 2> /dev/null; rm -f \$HOME/pk/exp.trace; KRB5_TRACE=\$HOME/pk/exp.trace $kinit -T FILE:\$HOME/pk/armor.$k.cc -c FILE:\$HOME/pk/exp.cc pkexp > \$HOME/pk/exp.out 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/exp.cc 2>&1 | grep -E '^Default principal'; grep -oE 'Password expired' \$HOME/pk/exp.out | sort -u; echo \"armor lines: \$(grep -c 'FAST armor ccache: ' \$HOME/pk/exp.trace)\"" < <(chpw "$ALICE" "$ALICE_TEMP")
+    checklast "PK.chpw.$k.tgt" "^Default principal: pkexp@$R\$"
+    checklast "PK.chpw.$k.expired" '^Password expired$'
+    if [ "$k" = mit ]; then
+        checklast PK.chpw.mit.armor '^armor lines: 4$'
+        MITARMOR=$(sed -n 's/^armor lines: //p' "$LAST_OUT")
+    else
+        checklast PK.chpw.ours.armor "^armor lines: ${MITARMOR:-none}\$"
+    fi
 done
 
 section "PK.kpasswd pkinit_identities and pkinit_anchors in a profile: kpasswd's kadmin/changepw ticket by PKINIT (MIT and ours)"

@@ -1468,7 +1468,7 @@ fn kinit_inner(
                 ctx,
                 password,
                 None,
-                &mut armor,
+                &mut initial_armor(ctx, params.armor_ccache, &realm_s, true)?,
                 params.armor_ccache,
                 &chpw_shape,
             )??;
@@ -1488,6 +1488,12 @@ fn kinit_inner(
             // the new password, is traced as a request of its own.
             krb5_protocol::trace::gic_pwd_changed();
             trace::init_creds(&cname, &realm_s, params.in_tkt_service);
+            let mut armor = initial_armor(
+                ctx,
+                params.armor_ccache,
+                &realm_s,
+                params.in_tkt_service.is_some(),
+            )?;
             exchange_shape_direct(ctx, &mut armor, params.armor_ccache, &shape, &new_pw)?
         }
         Err(e) => return Err(e.into()),
