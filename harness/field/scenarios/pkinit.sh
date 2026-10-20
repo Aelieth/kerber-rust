@@ -29,6 +29,9 @@
 #   PK.6:  kinit -n with client2's anchors: a WELLKNOWN/ANONYMOUS ticket (the principal is made for the cell);
 #   PK.fast: with that anonymous ticket as FAST armor (-T), alice's certificate kinit runs pkinit inside the armored
 #          request: a TGT, the trace's pkinit, FAST-encoding and FAST reply key lines;
+#   PK.kpasswd: with pkinit_identities and pkinit_anchors in a profile of its own, alice's kpasswd gets its
+#          kadmin/changepw ticket by pkinit (the trace's module line) and stops at the new password (stdin empty);
+#          in the rust leg kdc's build of krb5-kpasswd runs from client2's ~/pk/kpasswd too;
 #   PK.7b: pkinit_identity names a file that is not there: the line ends "Cannot read certificate file '<file>':
 #          (null)", OpenSSL 3 giving no reason for a system error;
 #   PK.7c: the realm's pkinit_identity wins over [kdcdefaults]' missing one: alice's certificate kinit gets a TGT;
@@ -111,12 +114,18 @@ fi
 check l6.kdc '^kdc: krb5-pkinit, CA and KDC P-256, RSA KDC identity$' run kdc "rpm -q krb5-pkinit > /dev/null && for f in cacert.pem kdc.pem kdc-rsa.pem rsa-cacert.pem; do sudo openssl x509 -in $D/\$f -noout -subject; done && sudo test -r $D/kdc.key && sudo test -r $D/kdc-rsa.key && sudo openssl x509 -in $D/kdc.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && sudo openssl x509 -in $D/kdc-rsa.pem -noout -text | grep -qE 'Public Key Algorithm: rsaEncryption' && echo 'kdc: krb5-pkinit, CA and KDC P-256, RSA KDC identity'"
 check l6.client2 '^client2: krb5-pkinit, alice P-256$' run client2 "rpm -q krb5-pkinit > /dev/null && for f in alice alice-wrongsan alice-unknownca unknown-cacert alice-rsa rsa-cacert; do openssl x509 -in $C/\$f.pem -noout -subject || exit 1; done && test -r $C/alice.key && test -r $C/alice-wrongsan.key && test -r $C/alice-unknownca.key && test -r $C/alice-rsa.key && openssl x509 -in $C/alice.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'client2: krb5-pkinit, alice P-256'"
 OURS=
+OURSPW=
 if [ "$LEG" = rust ]; then
     B=kerber-rust-${FIELD_SHA:0:12}/target/release/krb5-kinit
     check ours.build '^[0-9a-f]{64}$' run kdc "sha256sum < ~/$B | cut -c1-64"
     H=$(grep -m1 -oE '^[0-9a-f]{64}$' "$LAST_OUT")
     check ours.copy "^client2: ~/pk/kinit ${H:-none}\$" host "$LABQ ssh kdc -- 'cat ~/$B' | $LABQ ssh client2 -- 'install -d ~/pk && cat > ~/pk/kinit && chmod 0755 ~/pk/kinit && echo \"client2: ~/pk/kinit \$(sha256sum < ~/pk/kinit | cut -c1-64)\"'"
     [ -n "$H" ] && grep -q "^client2: ~/pk/kinit $H\$" "$LAST_OUT" && OURS="\$HOME/pk/kinit"
+    B=kerber-rust-${FIELD_SHA:0:12}/target/release/krb5-kpasswd
+    check ours.kpasswd.build '^[0-9a-f]{64}$' run kdc "sha256sum < ~/$B | cut -c1-64"
+    H=$(grep -m1 -oE '^[0-9a-f]{64}$' "$LAST_OUT")
+    check ours.kpasswd.copy "^client2: ~/pk/kpasswd ${H:-none}\$" host "$LABQ ssh kdc -- 'cat ~/$B' | $LABQ ssh client2 -- 'install -d ~/pk && cat > ~/pk/kpasswd && chmod 0755 ~/pk/kpasswd && echo \"client2: ~/pk/kpasswd \$(sha256sum < ~/pk/kpasswd | cut -c1-64)\"'"
+    [ -n "$H" ] && grep -q "^client2: ~/pk/kpasswd $H\$" "$LAST_OUT" && OURSPW="\$HOME/pk/kpasswd"
 fi
 check kdc.conf.saved '^no pkinit_identity$' run kdc "sudo cp -p $KC $KC.pk && ! sudo grep -qE '^[[:space:]]*pkinit_identity' $KC && echo 'no pkinit_identity'"
 run kdc "sudo kadmin.local -q 'getprinc WELLKNOWN/ANONYMOUS' 2>&1 | grep -E '^Principal|does not exist'"
@@ -223,6 +232,18 @@ for k in mit ${OURS:+ours}; do
     checklast "PK.fast.$k.pkinit" '^Preauth module pkinit \(16\) \(real\) returned: 0/Success$'
     checklast "PK.fast.$k.armored" '^Encoding request body and padata into FAST request$'
     checklast "PK.fast.$k.reply" '^FAST reply key$'
+done
+
+section "PK.kpasswd pkinit_identities and pkinit_anchors in a profile: kpasswd's kadmin/changepw ticket by PKINIT (MIT and ours)"
+check PK.kpasswd.conf '^    pkinit_anchors = FILE:' run client2 "mkdir -p ~/pk && printf '[libdefaults]\n    pkinit_identities = FILE:%s/alice.pem,%s/alice.key\n    pkinit_anchors = FILE:%s/cacert.pem\n' $C $C $C > ~/pk/kp.conf && cat ~/pk/kp.conf"
+for k in mit ${OURSPW:+ours}; do
+    kpw=kpasswd
+    [ "$k" = ours ] && kpw=$OURSPW
+    check "PK.kpasswd.$k" '^kpasswd rc=1$' run client2 "rm -f \$HOME/pk/kp.trace; KRB5CCNAME=FILE:\$HOME/pk/none.cc KRB5_CONFIG=\$HOME/pk/kp.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/kp.trace $kpw alice < /dev/null > \$HOME/pk/kp.out 2>&1; echo \"kpasswd rc=\$?\"; grep -oE 'Cannot read password while reading password' \$HOME/pk/kp.out; grep -oE 'Setting initial creds service to kadmin/changepw|Preauth module pkinit \\(16\\) \\(real\\) returned: [^ ]+|Decrypted AS reply' \$HOME/pk/kp.trace | sort -u"
+    checklast "PK.kpasswd.$k.service" '^Setting initial creds service to kadmin/changepw$'
+    checklast "PK.kpasswd.$k.pkinit" '^Preauth module pkinit \(16\) \(real\) returned: 0/Success$'
+    checklast "PK.kpasswd.$k.ticket" '^Decrypted AS reply$'
+    checklast "PK.kpasswd.$k.newpw" '^Cannot read password while reading password$'
 done
 
 section "PK.7b pkinit_identity names a file that is not there: MIT's line (MIT and ours)"

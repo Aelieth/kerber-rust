@@ -121,6 +121,13 @@ fn run<R: BufRead, W: Write>(
             return 1;
         }
     };
+    let pkinit = match krb5_client::profile_pkinit(conf, &client.realm) {
+        Ok(pkinit) => pkinit,
+        Err(e) => {
+            eprintln!("{prog}: {e} getting initial ticket");
+            return 1;
+        }
+    };
     let req = AsRequest {
         cname: client.name,
         realm: &client.realm,
@@ -129,7 +136,7 @@ fn run<R: BufRead, W: Write>(
         profile: conf,
         want_spake: false,
         fast_armor: None,
-        pkinit: None,
+        pkinit: Some(pkinit.arg()),
         canonicalize: false,
         sname: Some(&changepw),
         etypes: None,

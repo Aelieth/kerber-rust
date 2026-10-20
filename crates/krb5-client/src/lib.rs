@@ -899,13 +899,14 @@ fn conf_default_realm(ctx: &ClientContext) -> Option<String> {
 }
 
 /// The client's PKINIT: an identity and anchor that loaded, or the `pkinit` module's failure.
-enum ClientPkinit {
+pub enum ClientPkinit {
     Ready(PkinitClient),
     Failed(PkinitFailure),
 }
 
 impl ClientPkinit {
-    fn arg(&self) -> Pkinit<'_> {
+    #[must_use]
+    pub fn arg(&self) -> Pkinit<'_> {
         match self {
             Self::Ready(c) => Pkinit::Client(c),
             Self::Failed(f) => Pkinit::Failed(f),
@@ -1002,6 +1003,15 @@ fn pkinit_from_conf(
         anchors,
         strings("pkinit_cert_match"),
     )
+}
+
+// MIT pkinit_client_profile; see docs/parity/b1-client-preauth.md
+pub fn profile_pkinit(
+    conf: &Krb5Conf,
+    realm: &str,
+) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
+    let (identities, anchors, rules) = pkinit_from_conf(conf, realm);
+    load_pkinit(&identities, anchors.as_deref(), &rules)
 }
 
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:214-216`): a failure while building the armor AP-REQ keeps its text under this prefix.
@@ -1374,7 +1384,7 @@ fn kinit_inner(
                 kdc: &resolved,
                 profile: &ctx.profile,
                 want_spake: false,
-                pkinit: None,
+                pkinit: Some(pkinit.arg()),
                 canonicalize: params.canonicalize || params.enterprise,
                 sname: Some(&changepw),
                 etypes: &etypes,

@@ -331,6 +331,8 @@ pub(crate) fn init_creds_keytab(
     krb5_config::hand_kdcs(realm, found);
     let mut etypes = krb5_protocol::conf_etypes(conf, false);
     krb5_protocol::sort_etypes_keytab_first(&mut etypes, &kt_etypes);
+    let pkinit = krb5_client::profile_pkinit(conf, realm)
+        .map_err(|e| KpropError::new(Some(e.to_string()), GETTING_CREDS))?;
     let req = AsRequest {
         cname: client.clone(),
         realm,
@@ -339,7 +341,7 @@ pub(crate) fn init_creds_keytab(
         profile: conf,
         want_spake: false,
         fast_armor: None,
-        pkinit: None,
+        pkinit: Some(pkinit.arg()),
         canonicalize: conf.canonicalize_for(realm),
         sname: Some(&in_tkt_service),
         etypes: Some(&etypes),

@@ -529,6 +529,14 @@ fn as_exchange_inner(
     {
         let (hint, refusal) = match continue_pkinit(req, nonce, &bound, &etypes, &clock)? {
             PkinitEnd::Done(out) => return Ok(*out),
+            PkinitEnd::Reply { rep, wire } if !req.ticket.anonymous => {
+                return finish_bare_reply(
+                    req, keys, unreadable, prompt, *rep, nonce, &etypes, &bound, &wire,
+                );
+            }
+            PkinitEnd::Reply { .. } => {
+                return Err(Error::ReplyMismatch("PKINIT expected METHOD-DATA".into()));
+            }
             PkinitEnd::Walk { hint, refusal } => (*hint, refusal.map(|r| *r)),
         };
         if req.ticket.anonymous {
@@ -580,17 +588,9 @@ fn as_exchange_inner(
     }
     // MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): a preauth module reads the password when it wants the key, so a hint is not answered with a read made ahead of the module. Only a reply no module answered reads it here.
     match msg {
-        KdcMsg::AsRep(rep) => {
-            refuse_spake_skip(req.want_spake)?;
-            trace_reply_padata(rep.0.padata.as_deref(), &etypes, None);
-            let mut pw = PasswordCell::new(
-                prompt,
-                req.password,
-                !keys.is_empty() || unreadable.is_some(),
-            )
-            .with_unreadable_keytab(unreadable);
-            finish_as_rep_keys(req, rep, nonce, keys, &etypes, &bound, Some(&wire), &mut pw)
-        }
+        KdcMsg::AsRep(rep) => finish_bare_reply(
+            req, keys, unreadable, prompt, rep, nonce, &etypes, &bound, &wire,
+        ),
         KdcMsg::Error(e) if spake_more(&e) => {
             if !crate::clpreauth::loaded(req.profile, "spake") {
                 return Err(preauth_failed());
@@ -619,6 +619,33 @@ fn as_exchange_inner(
         KdcMsg::Error(e) => classify_kdc_error(&e),
         KdcMsg::TgsRep => Err(Error::UnexpectedPdu),
     }
+}
+
+// MIT decrypt_as_reply; see docs/parity/b1-client-preauth.md
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the AS round's state, no value type"
+)]
+fn finish_bare_reply(
+    req: &AsRequest<'_>,
+    keys: &[ProtocolKey],
+    unreadable: Option<&KeytabFailure>,
+    prompt: Option<&mut dyn AsPrompt>,
+    rep: AsRep,
+    nonce: u32,
+    etypes: &[i32],
+    bound: &AsReqTimes,
+    wire: &[u8],
+) -> Result<AsOutcome, Error> {
+    refuse_spake_skip(req.want_spake)?;
+    trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+    let mut pw = PasswordCell::new(
+        prompt,
+        req.password,
+        !keys.is_empty() || unreadable.is_some(),
+    )
+    .with_unreadable_keytab(unreadable);
+    finish_as_rep_keys(req, rep, nonce, keys, etypes, bound, Some(wire), &mut pw)
 }
 
 /// MIT `get_as_key_keytab` (`gic_keytab.c:68-71`): the reply etype selects the keytab key, and a
@@ -1325,9 +1352,13 @@ fn continue_pkinit(
             (token, cookie, e)
         }
         KdcMsg::Error(e) => return classify_kdc_error(&e).map(|o| PkinitEnd::Done(Box::new(o))),
-        KdcMsg::AsRep(_) | KdcMsg::TgsRep => {
-            return Err(Error::ReplyMismatch("PKINIT expected METHOD-DATA".into()));
+        KdcMsg::AsRep(rep) => {
+            return Ok(PkinitEnd::Reply {
+                rep: Box::new(rep),
+                wire: first_wire,
+            });
         }
+        KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
     };
     let mut extra = Vec::new();
     if let Some(c) = cookie {
@@ -1430,6 +1461,10 @@ enum PkinitEnd {
     Walk {
         hint: Box<KrbError>,
         refusal: Option<Box<KrbError>>,
+    },
+    Reply {
+        rep: Box<AsRep>,
+        wire: Vec<u8>,
     },
 }
 
