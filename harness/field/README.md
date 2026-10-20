@@ -205,7 +205,7 @@ harness/field/run.sh --profile kill-loop --ref plan-12   # SW-3's kill loop (lab
 - **A stop** (SIGINT, SIGTERM or SIGHUP) ends the running scenario once its
   current command returns; the scenario's cleanup runs and the rest are NOT-RUN.
 - **The result:**
-  - any failed check or guard fails the run;
+  - any failed check or guard fails the run; a check that ran again counts once, by its last line;
   - a scenario or leg that could not run is NOT-RUN, which is never a pass;
   - the exit status is 0 only when every selected scenario passed;
   - when `upgrade` fails, the scenarios after it in that leg are NOT-RUN (kdc

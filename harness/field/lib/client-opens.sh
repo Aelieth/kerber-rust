@@ -6,8 +6,9 @@
 #                                    ("exec: <pid> <path>"), each profile file it opened ("open: <path> xN"), then
 #                                    "<name> most opens of one profile file: N"
 #   start <name> <unit> <daemon> <args...>  the unit stopped (- for none), the daemon in the foreground under strace
-#                                    for 4 s, then SIGINT, the unit started again: prints "<name> listening: N" (its
-#                                    successful listen calls), then its opens as run prints them
+#                                    for 4 s, then SIGINT, and SIGTERM 5 s later if it still runs (kpropd -D ignores
+#                                    SIGINT), the unit started again: prints "<name> listening: N" (its successful
+#                                    listen calls), then its opens as run prints them
 #   teardown                         cf4 deleted and $D removed; prints "cf4 removed"
 # shellcheck shell=sh
 set -u
@@ -57,6 +58,12 @@ start)
     s=$!
     sleep 4
     pkill -INT -P "$s"
+    i=0
+    while kill -0 "$s" 2> /dev/null && [ "$i" -lt 20 ]; do
+        sleep 0.25
+        i=$((i + 1))
+    done
+    kill -0 "$s" 2> /dev/null && pkill -TERM -P "$s"
     wait "$s"
     [ "$unit" = - ] || { systemctl reset-failed "$unit"; systemctl start "$unit"; }
     echo "$name listening: $(grep -c ' listen(.* = 0$' "$D/$name.trace")"

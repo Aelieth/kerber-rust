@@ -293,9 +293,8 @@ for leg in "${LEGS[@]}"; do
         done
         SCEN=''
         res=$(cut -d' ' -f1 "$dir/result" 2>/dev/null || true)
-        npass=$(awk -F'\t' '$2 == "PASS"' "$dir/checks.tsv" 2>/dev/null | wc -l)
-        nfail=$(awk -F'\t' '$2 == "FAIL"' "$dir/checks.tsv" 2>/dev/null | wc -l)
-        ninfo=$(awk -F'\t' '$2 == "INFO"' "$dir/checks.tsv" 2>/dev/null | wc -l)
+        npass=0 nfail=0 ninfo=0
+        if [ -f "$dir/checks.tsv" ]; then read -r npass nfail ninfo < <(_lastcounts "$dir/checks.tsv"); fi
         if [ "$rc" = 0 ] && [ "$res" = PASS ] && [ "$nfail" = 0 ] && [ "$npass" -gt 0 ]; then
             res=PASS
         else
