@@ -6,10 +6,10 @@
 # (leg mit), this port's on rust-replica-f44 with the ref's build streamed from kdc, where upgrade left it (leg rust:
 # upgrade runs first, and this scenario last, as it leaves kdc on the MIT baseline; without that build on kdc the leg
 # stops before kdc is reset, so a lone --only replica has nothing to stream). FIELD_REPLICA_BAKED=1 keeps
-# rust-replica-f44's own programs instead (the parent leg, without upgrade). Each kpropd runs from the ssh session with
-# -d, its lines in /var/tmp/rep/kpropd.log on kdc2. The stash and the keytabs go from kdc to kdc2 through an ssh pipe,
-# which the host relays without a copy, never into a file on the host or the record. Cells, graded on both legs
-# unless noted:
+# rust-replica-f44's own programs instead (the parent leg, without upgrade). Each kpropd is started from the ssh session
+# with -d in a session of its own (setsid -f), so the ssh command returns; its lines go to /var/tmp/rep/kpropd.log on
+# kdc2. The stash and the keytabs go from kdc to kdc2 through an ssh pipe, which the host relays without a copy, never
+# into a file on the host or the record. Cells, graded on both legs unless noted:
 #   REP.1: kdc2's kpropd asks for a full resync and kdc's kadmind sends the dump; kprop -f of a plain kdb5_util dump is
 #          refused, as MIT's iprop replica loads only an iprop dump (load -i); kdc2's krb5kdc then issues alice's TGT
 #          to client2, whose krb5.conf names kdc2 alone;
@@ -55,7 +55,11 @@ CO=kerber-rust-${FIELD_SHA:0:12}
 PROGS='krb5-kdc:krb5kdc krb5-kpropd:kpropd krb5-kdb:kdb5_util krb5-kadmin-local:kadmin.local'
 BINS='krb5-kdc krb5-kpropd krb5-kdb krb5-kadmin-local'
 INSTALLED='/usr/sbin/krb5kdc /usr/sbin/kpropd /usr/sbin/kdb5_util /usr/sbin/kadmin.local'
-KPROPD="cd / && sudo nohup /usr/sbin/kpropd -d -D -A kdc.kerber.test -s /etc/krb5.keytab >> $W/kpropd.log 2>&1 < /dev/null &"
+KPROPD="cd / && sudo setsid -f /usr/sbin/kpropd -d -D -A kdc.kerber.test -s /etc/krb5.keytab >> $W/kpropd.log 2>&1 < /dev/null;"
+# A line kdc2 prints itself, not its login shell (rust-replica-f44's ~/.bashrc reports a missing ~/.cargo/env first).
+OWN='^([^/]|/usr/).*'
+# The getprinc lines both KDCs must agree on.
+FIELDS='^(Principal|Maximum ticket life|Maximum renewable life|Attributes|Policy|Key: vno)'
 # kdc's kadmind restarted, and up once its iprop program listens.
 KADMIND="sudo systemctl restart kadmin; for i in \$(seq 1 40); do sudo ss -Hltnp 'sport = :$IPORT' | grep -q kadmind && break; sleep 0.25; done; echo \"kadmind: \$(systemctl is-active kadmin)\$(sudo ss -Hltnp 'sport = :$IPORT' | grep -q kadmind && echo ', iprop on $IPORT')\""
 if [ "$LEG" = mit ]; then KDC2_SNAP=$MIT_SNAPSHOT_KDC2; else KDC2_SNAP=$RUST_SNAPSHOT_KDC2; fi
@@ -80,12 +84,15 @@ replicated() {
 kpropdlog() {
     check "$1" "$2" run kdc2 "for i in \$(seq 1 ${3:-30}); do grep -qE '$2' $W/kpropd.log && break; sleep 1; done; grep -nE '$2' $W/kpropd.log | tail -n 3"
 }
-# serial <vm> <kproplog>: the last serial of the vm's update log, as MIT's kproplog -h gives it.
-serial() { run "$1" "$2 -h | grep -E 'Last serial # :' | sed -E 's/^[[:space:]]+//'"; }
+# serial <vm> <kproplog>: the last serial of the vm's update log, as MIT's kproplog -h gives it, into the run's state.
+serial() {
+    run "$1" "$2 -h | grep -E 'Last serial # :' | sed -E 's/^[[:space:]]+//'"
+    grep -E '^Last serial # :' "$LAST_OUT" > "$STATE/serial.$1"
+}
 # fields <vm> <principal> <file>: the getprinc lines both KDCs must agree on, into the run's state.
 fields() {
-    run "$1" "sudo kadmin.local -q 'getprinc $2' 2>&1 | grep -E '^(Principal|Maximum ticket life|Maximum renewable life|Attributes|Policy|Key: vno)'"
-    cp "$LAST_OUT" "$STATE/$3"
+    run "$1" "sudo kadmin.local -q 'getprinc $2' 2>&1 | grep -E '$FIELDS'"
+    grep -E "$FIELDS" "$LAST_OUT" > "$STATE/$3"
 }
 
 section "replica --leg $LEG: MIT primary on kdc ($MIT_SNAPSHOT_KDC), replica on kdc2 ($KDC2_SNAP)"
@@ -116,7 +123,7 @@ elif [ "$LEG" = rust ]; then
     check build.kdc2 '^installed 4$' hostin "the ref's programs (tar)" "$LABQ ssh kdc2 -- 'rm -rf ~/rep-bin && mkdir ~/rep-bin && tar -x -C ~/rep-bin && n=0; for p in $PROGS; do sudo install -m 0755 ~/rep-bin/\${p%%:*} /usr/sbin/\${p#*:} && n=\$((n + 1)); done; sudo restorecon $INSTALLED; echo installed \$n'" < "$STATE/build.tar"
     rm -f "$STATE/build.tar"
     run kdc2 "sha256sum $INSTALLED"
-    check build.same '^same: 4 programs$' host "diff <(cut -d' ' -f1 $(printf '%q' "$STATE/build.sums")) <(cut -d' ' -f1 $(printf '%q' "$LAST_OUT")) > /dev/null && echo 'same: 4 programs'"
+    check build.same '^same: 4 programs$' host "diff <(grep -oE '^[0-9a-f]{64}' $(printf '%q' "$STATE/build.sums")) <(grep -oE '^[0-9a-f]{64}' $(printf '%q' "$LAST_OUT")) > /dev/null && echo \"same: \$(grep -cE '^[0-9a-f]{64}' $(printf '%q' "$LAST_OUT")) programs\""
 fi
 # rust-replica-f44 has no krb5-server, so MIT's kproplog comes from kdc (Fedora 43's krb5-server 1.22.2-4) when ldd
 # finds each library it needs on kdc2, else from Fedora 44's krb5-server rpm, unpacked and not installed. It reads the
@@ -137,6 +144,8 @@ check primary.kadmind "^kadmind: active, iprop on $IPORT\$" run kdc "$KADMIND"
 for p in host/kdc2.kerber.test kiprop/kdc2.kerber.test; do
     check "primary.addprinc.${p%%/*}" "^Principal \"$p@$R\" created\\.\$" run kdc "sudo kadmin.local -q 'addprinc -randkey $p' 2>&1"
 done
+# MIT kpropd authenticates as kiprop/kdc2 to kiprop/<admin_server>, which kadmind accepts from the database (KDB:).
+check primary.kiprop "^Principal: kiprop/kdc\\.kerber\\.test@$R\$" run kdc "sudo kadmin.local -q 'getprinc kiprop/kdc.kerber.test' 2>&1 | grep -q '^Principal:' || sudo kadmin.local -q 'addprinc -randkey kiprop/kdc.kerber.test' > /dev/null 2>&1; sudo kadmin.local -q 'getprinc kiprop/kdc.kerber.test' 2>&1 | grep '^Principal:'"
 check primary.kt.kdc2 'added to keytab' run kdc "sudo kadmin.local -q 'ktadd -k $W/kdc2.keytab host/kdc2.kerber.test kiprop/kdc2.kerber.test' 2>&1"
 # kdc's own key, unchanged when the database has it: kprop's here, and the one MIT kadmind's own kprop takes from
 # /etc/krb5.keytab for a full resync.
@@ -148,6 +157,10 @@ check replica.stash '^stash copied$' host "$LABQ ssh kdc -- 'sudo cat /var/kerbe
 check replica.conf "^        iprop_port = $IPORT\$" run kdc2 "printf '[kdcdefaults]\\n    kdc_ports = 88\\n    kdc_tcp_ports = 88\\n\\n[realms]\\n    %s = {\\n        iprop_enable = true\\n        iprop_port = $IPORT\\n        iprop_replica_poll = 10s\\n    }\\n' $REALM | sudo tee $KC > /dev/null && printf '[libdefaults]\\n    default_realm = %s\\n    dns_lookup_kdc = false\\n\\n[realms]\\n    %s = {\\n        kdc = kdc.kerber.test\\n        admin_server = kdc.kerber.test\\n    }\\n' $REALM $REALM | sudo tee /etc/krb5.conf > /dev/null && echo 'host/kdc.kerber.test@$REALM' | sudo tee /var/kerberos/krb5kdc/kpropd.acl > /dev/null && sudo cat $KC"
 # The log belongs to the ssh user, whose shell opens it for kpropd's output.
 check replica.kpropd '^kpropd listening on 754$' run kdc2 "sudo mkdir -p $W && sudo install -m 0644 -o \$(id -un) /dev/null $W/kpropd.log && $KPROPD for i in \$(seq 1 40); do ss -Hltn 'sport = :754' | grep -q . && break; sleep 0.25; done; ss -Hltn 'sport = :754' | grep -q . && echo 'kpropd listening on 754'"
+if [ "$LEG" = rust ] && [ "$BAKED" = 0 ]; then
+    KH=$(awk '$2 == "krb5-kpropd" { print $1 }' "$STATE/build.sums")
+    check build.running "^running kpropd: ${KH:-none}\$" run kdc2 "echo \"running kpropd: \$(sudo sha256sum /proc/\$(pgrep -xo kpropd)/exe | cut -d' ' -f1)\""
+fi
 
 section "REP.1 the first sync: a full resync at kpropd's start, a plain dump refused, kdc2's KDC serving the realm alone"
 kpropdlog REP.1.resync 'Full resync request granted'
@@ -157,14 +170,18 @@ run kdc2 "echo '==== plain dump' >> $W/kpropd.log"
 run kdc "sudo kprop -r $REALM -f $W/dump -s $W/kprop.keytab kdc2.kerber.test 2>&1; echo \"kprop rc=\$?\""
 checklast REP.1.plain '^kprop: .* while reading response from server$'
 checklast REP.1.plain.rc '^kprop rc=1$'
-observe obs.REP.1.plain.kpropd '.+' run kdc2 "sleep 2; sed -n '/^==== plain dump\$/,\$p' $W/kpropd.log | grep -v '^====' | tail -n 6"
-check REP.1.krb5kdc '^krb5kdc: active, 88 listening$' run kdc2 "sudo systemctl start krb5kdc; for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
+observe obs.REP.1.plain.kpropd "$OWN" run kdc2 "sleep 2; sed -n '/^==== plain dump\$/,\$p' $W/kpropd.log | grep -v '^====' | tail -n 6"
+# kpropd runs unconfined from the ssh session, so the database its kdb5_util loads gets kdc.conf's directory label.
+check REP.1.krb5kdc '^krb5kdc: active, 88 listening$' run kdc2 "sudo restorecon -R /var/kerberos/krb5kdc; sudo systemctl start krb5kdc; for i in \$(seq 1 40); do ss -Hlun 'sport = :88' | grep -q . && break; sleep 0.25; done; echo \"krb5kdc: \$(systemctl is-active krb5kdc), 88 \$(ss -Hlun 'sport = :88' | grep -q . && echo listening)\""
+observe obs.REP.1.krb5kdc "$OWN" run kdc2 "systemctl is-active -q krb5kdc && echo 'krb5kdc: active' || { sudo journalctl -u krb5kdc -n 8 --no-pager -o cat; echo \"\$(sudo ausearch -m avc -ts boot 2>/dev/null | grep -c denied) AVC denials since boot\"; }"
 check REP.1.client.conf '^        kdc = kdc2\.kerber\.test$' run client2 "mkdir -p ~/rep && printf '[libdefaults]\\n    default_realm = %s\\n    dns_lookup_kdc = false\\n\\n[realms]\\n    %s = {\\n        kdc = kdc2.kerber.test\\n    }\\n' $REALM $REALM > ~/rep/krb5.conf && cat ~/rep/krb5.conf"
 check REP.1.kinit "^Default principal: alice@$R\$" runin client2 "alice's password ($ALICE)" "KRB5_CONFIG=\$HOME/rep/krb5.conf kinit -c FILE:\$HOME/rep/a.cc alice > /dev/null && klist -c FILE:\$HOME/rep/a.cc" < <(once "$ALICE")
 
 section "REP.4 kpropd.acl without the primary: the kprop is refused, as MIT's"
 run kdc2 "sudo cp -p /var/kerberos/krb5kdc/kpropd.acl $W/kpropd.acl.good && echo 'host/nobody.kerber.test@$REALM' | sudo tee /var/kerberos/krb5kdc/kpropd.acl"
-check REP.4.kprop '^kprop: Broken pipe while sending database' run kdc "sudo kprop -r $REALM -f $W/dump -s $W/kprop.keytab kdc2.kerber.test 2>&1"
+run kdc "sudo kprop -r $REALM -f $W/dump -s $W/kprop.keytab kdc2.kerber.test 2>&1; echo \"kprop rc=\$?\""
+checklast REP.4.kprop '^kprop: Broken pipe while sending database'
+checklast REP.4.kprop.rc '^kprop rc=1$'
 kpropdlog REP.4.rejected "Rejected connection from unauthorized principal host/kdc\\.kerber\\.test@$R"
 run kdc2 "sudo cp -p $W/kpropd.acl.good /var/kerberos/krb5kdc/kpropd.acl && sudo cat /var/kerberos/krb5kdc/kpropd.acl"
 
@@ -178,9 +195,8 @@ fields kdc repc repc.kdc
 fields kdc2 repc repc.kdc2
 check REP.2.equal '^repc: [0-9]+ lines, equal$' host "diff $(printf '%q' "$STATE/repc.kdc") $(printf '%q' "$STATE/repc.kdc2") && echo \"repc: \$(wc -l < $(printf '%q' "$STATE/repc.kdc")) lines, equal\""
 serial kdc "sudo kproplog"
-cp "$LAST_OUT" "$STATE/serial.kdc"
 serial kdc2 "$KPL"
-check REP.2.serial '^serials equal: Last serial # : [1-9][0-9]*$' host "diff $(printf '%q' "$STATE/serial.kdc") $(printf '%q' "$LAST_OUT") > /dev/null && echo \"serials equal: \$(cat $(printf '%q' "$LAST_OUT"))\""
+check REP.2.serial '^serials equal: Last serial # : [1-9][0-9]*$' host "diff $(printf '%q' "$STATE/serial.kdc") $(printf '%q' "$STATE/serial.kdc2") > /dev/null && echo \"serials equal: \$(cat $(printf '%q' "$STATE/serial.kdc2"))\""
 
 section "REP.3 a policy on kdc: the MIT leg records what its replica does, and the rust leg must do the same"
 run kdc2 "echo '==== REP.3' >> $W/kpropd.log"
@@ -196,7 +212,7 @@ fi
 # rep3 <fact> <command>: one line, in the same words on both legs; on the rust leg it must be the MIT leg's.
 rep3() {
     local mit=''
-    observe "obs.REP.3.$1" '.+' run kdc2 "$2"
+    observe "obs.REP.3.$1" "$OWN" run kdc2 "$2"
     [ "$LEG" = rust ] || return 0
     [ -n "$REF" ] && mit=$(awk -F'\t' -v n="obs.REP.3.$1" '$1 == n { print $5; exit }' "$REF")
     if [ -n "$mit" ]; then
@@ -237,7 +253,7 @@ check REP.5.restored "^kadmind: active, iprop on $IPORT\$" run kdc "$KADMIND"
 
 section "REP.8 kpropd started again asks from its last serial"
 serial kdc2 "$KPL"
-SNO=$(grep -oE '[0-9]+' "$LAST_OUT" | tail -n 1)
+SNO=$(grep -oE '[0-9]+' "$STATE/serial.kdc2" | tail -n 1)
 check REP.8.restart '^kpropd listening on 754$' run kdc2 "sudo pkill -x kpropd; for i in \$(seq 1 20); do pgrep -x kpropd > /dev/null || break; sleep 0.25; done; echo '==== restarted' >> $W/kpropd.log; $KPROPD for i in \$(seq 1 40); do ss -Hltn 'sport = :754' | grep -q . && break; sleep 0.25; done; ss -Hltn 'sport = :754' | grep -q . && echo 'kpropd listening on 754'"
 check REP.8.resumed "^first poll after the restart: sno=${SNO:-none}\$" run kdc2 "for i in \$(seq 1 30); do sed -n '/^==== restarted\$/,\$p' $W/kpropd.log | grep -q 'Calling iprop_get_updates_1' && break; sleep 1; done; echo \"first poll after the restart: \$(sed -n '/^==== restarted\$/,\$p' $W/kpropd.log | grep -m 1 -oE 'sno=[0-9]+')\""
 kadm 'addprinc -randkey repd'
