@@ -134,10 +134,16 @@ pub mod err {
     pub const WRONG_REALM: i32 = 68;
     /// KRB_AP_ERR_USER_TO_USER_REQUIRED
     pub const USER_TO_USER_REQUIRED: i32 = 69;
+    /// KDC_ERR_CANT_VERIFY_CERTIFICATE (PKINIT)
+    pub const CANT_VERIFY_CERTIFICATE: i32 = 70;
+    /// KDC_ERR_INVALID_CERTIFICATE (PKINIT)
+    pub const INVALID_CERTIFICATE: i32 = 71;
     /// KDC_ERR_CLIENT_NAME_MISMATCH (PKINIT)
     pub const CLIENT_NAME_MISMATCH: i32 = 75;
     /// KDC_ERR_INCONSISTENT_KEY_PURPOSE (PKINIT)
     pub const INCONSISTENT_KEY_PURPOSE: i32 = 77;
+    /// KDC_ERR_DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED (PKINIT)
+    pub const DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED: i32 = 80;
     /// KRB5KRB_AP_ERR_TKT_INVALID (`krb5_err.et` offset 145): "Ticket has
     /// invalid flag set". A library-local code, not an RFC 4120 wire number.
     /// MIT `errcode_to_protocol` (`kdc_util.c:691-697`): clamps offsets over 128 to `GENERIC`
@@ -275,6 +281,10 @@ pub mod pa {
     pub const PK_AS_REP: i32 = 17;
     /// PA-ETYPE-INFO2.
     pub const ETYPE_INFO2: i32 = 19;
+    /// TD-TRUSTED-CERTIFIERS (PKINIT RFC 4556).
+    pub const TD_TRUSTED_CERTIFIERS: i32 = 104;
+    /// TD-INVALID-CERTIFICATES (PKINIT RFC 4556).
+    pub const TD_INVALID_CERTIFICATES: i32 = 105;
     /// TD-DH-PARAMETERS (PKINIT RFC 4556).
     pub const TD_DH_PARAMETERS: i32 = 109;
     /// PA-SVR-REFERRAL-INFO.

@@ -488,30 +488,6 @@ pub fn cms_verify_full(der: &[u8], trust_anchor: &[u8]) -> Result<CmsVerified, &
     signer_verified(p)
 }
 
-/// The KDC's [`cms_verify_full`]: the signer's chain reaches one of `anchors` through
-/// `intermediates` and the SignedData's other certificates.
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2087-2105`): the untrusted certificates are `pkinit_pool`'s, then the message's.
-/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:2151-2187`): the chain is verified before the signature.
-///
-/// # Errors
-///
-/// MIT's text for a chain that does not verify, else [`cms_verify_full`]'s strings.
-pub fn cms_verify_anchored(
-    der: &[u8],
-    anchors: &[Vec<u8>],
-    intermediates: &[Vec<u8>],
-) -> Result<CmsVerified, String> {
-    let p = cms_parts(der).map_err(str::to_owned)?;
-    let pool: Vec<&[u8]> = intermediates
-        .iter()
-        .chain(&p.others)
-        .map(Vec::as_slice)
-        .collect();
-    verify_chain(&p.cert, anchors, &pool)
-        .map_err(|e| format!("Failed to verify received certificate {e}"))?;
-    signer_verified(p).map_err(str::to_owned)
-}
-
 fn signer_verified(p: CmsParts) -> Result<CmsVerified, &'static str> {
     let public = spki_uncompressed(&p.cert).ok_or("cms spki")?;
     // RFC 5652 §5.3: signedAttrs MUST be present when eContentType ≠ id-data.
@@ -694,6 +670,380 @@ fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// id-data 1.2.840.113549.1.7.1 (OID body).
+const OID_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
+/// id-signedData 1.2.840.113549.1.7.2 (OID body).
+const OID_SIGNED_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02];
+/// subjectKeyIdentifier 2.5.29.14 (OID body).
+const OID_SKID: &[u8] = &[0x55, 0x1d, 0x0e];
+
+/// Why the KDC refuses a client's signedAuthPack.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CmsFault {
+    /// The ContentInfo does not decode: OpenSSL's reason.
+    Decode(&'static str),
+    /// The pre-1.10 form, whose content is not an OCTET STRING.
+    NotOctetString,
+    /// The ContentInfo is not SignedData, or the eContentType is not id-pkinit-authData.
+    WrongOid,
+    /// No certificate names the signer, or an unsigned message carries no content.
+    NoSigner,
+    /// The signer's chain did not verify, and the certificate where it stopped.
+    Chain(ChainError, Vec<u8>),
+    /// The signature or its message digest did not verify: OpenSSL's reason.
+    Signature(&'static str),
+    /// The signed content-type attribute is not the eContentType. OpenSSL's `CMS_verify` does not
+    /// check it; RFC 5652 binds the two, and this verifier refuses the message.
+    ContentType,
+}
+
+/// A client's AuthPack from its signedAuthPack, and the certificate that signed it (none when
+/// the message is unsigned, the anonymous case).
+#[derive(Clone, Debug)]
+pub struct CmsAuthPack {
+    /// The encapsulated AuthPack.
+    pub e_content: Vec<u8>,
+    /// The signer's certificate (DER).
+    pub signer: Option<Vec<u8>>,
+}
+
+/// A client's signedAuthPack as the KDC verifies it: it decodes; the pre-1.10 form and a
+/// SignedData without signers are unsigned; the signer's certificate is found by its signer
+/// identifier among the message's certificates, then `anchors`, then `intermediates`; its chain
+/// reaches an anchor; its signature verifies; the eContentType is id-pkinit-authData.
+/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:1987-2229`): the order, and the
+/// refusal of each step.
+///
+/// # Errors
+///
+/// The [`CmsFault`] of the first step that fails.
+pub fn cms_signeddata_verify(
+    der: &[u8],
+    anchors: &[Vec<u8>],
+    intermediates: &[Vec<u8>],
+) -> Result<CmsAuthPack, CmsFault> {
+    if let Some(reason) = cms_decode_reason(der) {
+        return Err(CmsFault::Decode(reason));
+    }
+    let (_, ci, _) = take_tlv(der).ok_or(CmsFault::Decode("header too long"))?;
+    let (_, oid, rest) = take_tlv(ci).ok_or(CmsFault::Decode("field missing"))?;
+    let (_, content, _) = take_tlv(rest).ok_or(CmsFault::Decode("field missing"))?;
+    if oid == ECONTENT_AUTHDATA {
+        return match take_tlv(content) {
+            Some((0x04, octets, _)) => Ok(CmsAuthPack {
+                e_content: octets.to_vec(),
+                signer: None,
+            }),
+            _ => Err(CmsFault::NotOctetString),
+        };
+    }
+    if oid != OID_SIGNED_DATA {
+        return Err(CmsFault::WrongOid);
+    }
+    let sd = SignedDataFields::read(content).ok_or(CmsFault::NoSigner)?;
+    let Some(signer_info) = sd.signers.first() else {
+        let e_content = sd.e_content.clone().ok_or(CmsFault::NoSigner)?;
+        if sd.e_content_type != ECONTENT_AUTHDATA {
+            return Err(CmsFault::WrongOid);
+        }
+        return Ok(CmsAuthPack {
+            e_content,
+            signer: None,
+        });
+    };
+    let signer = sd
+        .certs
+        .iter()
+        .chain(anchors)
+        .chain(intermediates)
+        .find(|c| signer_info.names(c))
+        .cloned()
+        .ok_or(CmsFault::NoSigner)?;
+    let pool: Vec<&[u8]> = intermediates
+        .iter()
+        .chain(&sd.certs)
+        .map(Vec::as_slice)
+        .collect();
+    build_chain(&signer, anchors, &pool).map_err(|(e, chain)| {
+        CmsFault::Chain(e, chain.get(e.depth).cloned().unwrap_or_default())
+    })?;
+    let e_content = sd.e_content.clone().unwrap_or_default();
+    let verified = signer_info.signed_attrs.as_ref().is_some_and(|sa| {
+        let mut set = sa.clone();
+        set[0] = 0x31;
+        spki_uncompressed(&signer)
+            .is_some_and(|key| p256_verify(&key, &set, &signer_info.signature))
+    });
+    if !verified {
+        return Err(CmsFault::Signature("provider signature failure"));
+    }
+    let sa = signer_info.signed_attrs.as_deref().unwrap_or_default();
+    if !signed_attrs_digest_ok(sa, &sha256_bytes(&e_content)) {
+        return Err(CmsFault::Signature("verification failure"));
+    }
+    if signed_attrs_content_type(sa).as_deref() != Some(sd.e_content_type.as_slice()) {
+        return Err(CmsFault::ContentType);
+    }
+    if sd.e_content_type != ECONTENT_AUTHDATA {
+        return Err(CmsFault::WrongOid);
+    }
+    Ok(CmsAuthPack {
+        e_content,
+        signer: Some(signer),
+    })
+}
+
+/// A SignedData's encapsulated content, certificates and signers.
+struct SignedDataFields {
+    e_content_type: Vec<u8>,
+    e_content: Option<Vec<u8>>,
+    certs: Vec<Vec<u8>>,
+    signers: Vec<SignerFields>,
+}
+
+/// One SignerInfo: how it names its certificate, its signed attributes (`[0]`), its signature.
+struct SignerFields {
+    issuer_serial: Option<(Vec<u8>, Vec<u8>)>,
+    key_id: Option<Vec<u8>>,
+    signed_attrs: Option<Vec<u8>>,
+    signature: Vec<u8>,
+}
+
+impl SignerFields {
+    /// Whether `cert` is the one this signer names: its issuer and serial number, or its
+    /// subject key identifier.
+    fn names(&self, cert: &[u8]) -> bool {
+        if let Some(want) = &self.issuer_serial {
+            return cert_issuer_serial(cert).as_ref() == Some(want);
+        }
+        self.key_id
+            .as_deref()
+            .is_some_and(|id| cert_key_id(cert).as_deref() == Some(id))
+    }
+}
+
+impl SignedDataFields {
+    /// The fields of the `[0]` content of a SignedData ContentInfo that decoded.
+    fn read(content: &[u8]) -> Option<Self> {
+        let (_, sd, _) = take_tlv(content)?;
+        let (_, _, rest) = take_tlv(sd)?;
+        let (_, _, rest) = take_tlv(rest)?;
+        let (_, encap, mut rest) = take_tlv(rest)?;
+        let (_, e_content_type, after) = take_tlv(encap)?;
+        let e_content = take_tlv(after)
+            .and_then(|(_, expl, _)| take_tlv(expl))
+            .map(|(_, octets, _)| octets.to_vec());
+        let mut certs = Vec::new();
+        if rest.first() == Some(&0xa0) {
+            let (_, mut set, next) = take_tlv(rest)?;
+            rest = next;
+            while let Some((t, body, more)) = take_tlv(set) {
+                if t == 0x30 {
+                    certs.push(tlv(t, body));
+                }
+                set = more;
+            }
+        }
+        if rest.first() == Some(&0xa1) {
+            rest = take_tlv(rest)?.2;
+        }
+        let (_, mut set, _) = take_tlv(rest)?;
+        let mut signers = Vec::new();
+        while let Some((_, info, more)) = take_tlv(set) {
+            set = more;
+            let (_, _, after_version) = take_tlv(info)?;
+            let (sid_tag, sid, mut cur) = take_tlv(after_version)?;
+            let (issuer_serial, key_id) = if sid_tag == 0x30 {
+                let (it, issuer, after) = take_tlv(sid)?;
+                let (_, serial, _) = take_tlv(after)?;
+                (Some((tlv(it, issuer), serial.to_vec())), None)
+            } else {
+                (None, Some(sid.to_vec()))
+            };
+            cur = take_tlv(cur)?.2;
+            let signed_attrs = if cur.first() == Some(&0xa0) {
+                let (t, body, next) = take_tlv(cur)?;
+                cur = next;
+                Some(tlv(t, body))
+            } else {
+                None
+            };
+            cur = take_tlv(cur)?.2;
+            let (_, signature, _) = take_tlv(cur)?;
+            signers.push(SignerFields {
+                issuer_serial,
+                key_id,
+                signed_attrs,
+                signature: signature.to_vec(),
+            });
+        }
+        Some(Self {
+            e_content_type: e_content_type.to_vec(),
+            e_content,
+            certs,
+            signers,
+        })
+    }
+}
+
+/// A certificate's subject key identifier.
+fn cert_key_id(cert: &[u8]) -> Option<Vec<u8>> {
+    let exts = walk_tbs(cert)?.extensions?;
+    let mut id = None;
+    each_ext(exts, |oid, val| {
+        if oid != OID_SKID {
+            return false;
+        }
+        id = take_tlv(val).map(|(_, keyid, _)| keyid.to_vec());
+        true
+    });
+    id
+}
+
+/// The TD-TRUSTED-CERTIFIERS or TD-INVALID-CERTIFICATES of `certs`: one
+/// ExternalPrincipalIdentifier each, its subject name, its issuer and serial number, and its
+/// subject key identifier when it has one, each the DER of that field.
+/// MIT `create_identifiers_from_stack` (`pkinit_crypto_openssl.c:5224-5300`): the fields of each certificate, in the stack's order.
+#[must_use]
+pub fn encode_td_certifiers(certs: &[&[u8]]) -> Vec<u8> {
+    let ids: Vec<super::ExternalPrincipalIdentifier> = certs
+        .iter()
+        .map(|cert| {
+            let subject = cert_name_der(cert, false);
+            let issuer_serial = cert_issuer_serial(cert)
+                .map(|(issuer, serial)| tlv(0x30, &[issuer, tlv(0x02, &serial)].concat()));
+            super::ExternalPrincipalIdentifier {
+                subject_name: subject.map(Into::into),
+                issuer_and_serial_number: issuer_serial.map(Into::into),
+                subject_key_identifier: cert_key_id(cert).map(|id| tlv(0x04, &id).into()),
+            }
+        })
+        .collect();
+    rasn::der::encode(&ids).unwrap_or_default()
+}
+
+/// One DER element's tag, contents and the rest, with the reason OpenSSL gives for a header it
+/// cannot read or a length past the input.
+fn der_next(input: &[u8]) -> Result<(u8, &[u8], &[u8]), &'static str> {
+    let (&tag, after) = input.split_first().ok_or("header too long")?;
+    let (&first, after) = after.split_first().ok_or("header too long")?;
+    if tag & 0x1f == 0x1f || first == 0x80 {
+        return Err("header too long");
+    }
+    let (len, after) = if first < 0x80 {
+        (usize::from(first), after)
+    } else {
+        let n = usize::from(first & 0x7f);
+        if n > std::mem::size_of::<usize>() || after.len() < n {
+            return Err("header too long");
+        }
+        let len = after[..n]
+            .iter()
+            .fold(0usize, |l, b| (l << 8) | usize::from(*b));
+        (len, &after[n..])
+    };
+    if len > after.len() {
+        return Err("too long");
+    }
+    Ok((tag, &after[..len], &after[len..]))
+}
+
+/// The next element of a sequence, which must carry `tag`.
+fn der_field<'a>(cur: &mut &'a [u8], tag: u8) -> Result<&'a [u8], &'static str> {
+    if cur.is_empty() {
+        return Err("field missing");
+    }
+    let (t, body, rest) = der_next(cur)?;
+    if t != tag {
+        return Err("wrong tag");
+    }
+    *cur = rest;
+    Ok(body)
+}
+
+/// The next element of a sequence when it carries `tag`.
+fn der_optional<'a>(cur: &mut &'a [u8], tag: u8) -> Result<Option<&'a [u8]>, &'static str> {
+    if cur.first() == Some(&tag) {
+        der_field(cur, tag).map(Some)
+    } else {
+        Ok(None)
+    }
+}
+
+/// Every element of a SET OF or SEQUENCE OF, each checked by `each`.
+fn der_each(
+    mut items: &[u8],
+    each: impl Fn(u8, &[u8]) -> Result<(), &'static str>,
+) -> Result<(), &'static str> {
+    while !items.is_empty() {
+        let (t, body, rest) = der_next(items)?;
+        each(t, body)?;
+        items = rest;
+    }
+    Ok(())
+}
+
+/// OpenSSL's first reason when `d2i_CMS_ContentInfo` refuses `der`, as far as a client's
+/// signedAuthPack goes: the ContentInfo, and a SignedData's fields and signers. The inside of a
+/// certificate, an algorithm's parameters or an attribute is not walked.
+/// MIT `cms_signeddata_verify` (`pkinit_crypto_openssl.c:1989-1991`): "Failed to decode CMS message" and OpenSSL's reason.
+fn cms_decode_reason(der: &[u8]) -> Option<&'static str> {
+    if der.is_empty() {
+        return Some("too small");
+    }
+    cms_template(der).err()
+}
+
+/// The ContentInfo template walk of [`cms_decode_reason`].
+fn cms_template(der: &[u8]) -> Result<(), &'static str> {
+    let mut top = der;
+    {
+        let mut ci = der_field(&mut top, 0x30)?;
+        let oid = der_field(&mut ci, 0x06)?;
+        let mut content = der_field(&mut ci, 0xa0)?;
+        if oid == OID_DATA {
+            der_field(&mut content, 0x04)?;
+        } else if oid == OID_SIGNED_DATA {
+            let mut sd = der_field(&mut content, 0x30)?;
+            der_field(&mut sd, 0x02)?;
+            der_each(der_field(&mut sd, 0x31)?, |t, _| {
+                (t == 0x30).then_some(()).ok_or("wrong tag")
+            })?;
+            let mut encap = der_field(&mut sd, 0x30)?;
+            der_field(&mut encap, 0x06)?;
+            if let Some(mut expl) = der_optional(&mut encap, 0xa0)? {
+                der_field(&mut expl, 0x04)?;
+            }
+            if let Some(certs) = der_optional(&mut sd, 0xa0)? {
+                der_each(certs, |t, _| {
+                    matches!(t, 0x30 | 0xa0..=0xa3)
+                        .then_some(())
+                        .ok_or("wrong tag")
+                })?;
+            }
+            der_optional(&mut sd, 0xa1)?;
+            der_each(der_field(&mut sd, 0x31)?, |t, mut info| {
+                if t != 0x30 {
+                    return Err("wrong tag");
+                }
+                der_field(&mut info, 0x02)?;
+                if der_optional(&mut info, 0x80)?.is_none() {
+                    der_field(&mut info, 0x30)?;
+                }
+                der_field(&mut info, 0x30)?;
+                der_optional(&mut info, 0xa0)?;
+                der_field(&mut info, 0x30)?;
+                der_field(&mut info, 0x04)?;
+                der_optional(&mut info, 0xa1)?;
+                Ok(())
+            })?;
+        } else {
+            der_next(content)?;
+        }
+    }
+    Ok(())
+}
+
 /// Where a certificate chain failed: the depth of the certificate (0 is the end entity) and
 /// OpenSSL's `X509_verify_cert_error_string` for the error.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -709,6 +1059,9 @@ impl std::fmt::Display for ChainError {
         write!(f, "(depth {}): {}", self.depth, self.reason)
     }
 }
+
+/// Certificates (DER), the end entity first.
+type CertChain = Vec<Vec<u8>>;
 
 /// OpenSSL's default verify depth.
 const MAX_CHAIN: usize = 100;
@@ -727,6 +1080,16 @@ pub fn verify_chain(
     anchors: &[Vec<u8>],
     intermediates: &[&[u8]],
 ) -> Result<Vec<Vec<u8>>, ChainError> {
+    build_chain(leaf, anchors, intermediates).map_err(|(e, _)| e)
+}
+
+/// [`verify_chain`], and on failure the chain as far as it was built, the certificate at the
+/// error's depth included (OpenSSL's current certificate).
+fn build_chain(
+    leaf: &[u8],
+    anchors: &[Vec<u8>],
+    intermediates: &[&[u8]],
+) -> Result<CertChain, (ChainError, CertChain)> {
     let fail = |depth, reason| ChainError { depth, reason };
     let subject = |c: &[u8]| cert_name_der(c, false);
     let mut chain = vec![leaf.to_vec()];
@@ -764,17 +1127,20 @@ pub fn verify_chain(
             .or(untrusted.first().copied())
         else {
             let self_signed = issuer.is_some() && issuer == subject(current);
-            return Err(fail(
-                depth,
-                match (self_signed, depth) {
-                    (true, 0) => "self-signed certificate",
-                    (true, _) => "self-signed certificate in certificate chain",
-                    _ => "unable to get local issuer certificate",
-                },
+            return Err((
+                fail(
+                    depth,
+                    match (self_signed, depth) {
+                        (true, 0) => "self-signed certificate",
+                        (true, _) => "self-signed certificate in certificate chain",
+                        _ => "unable to get local issuer certificate",
+                    },
+                ),
+                chain.clone(),
             ));
         };
         if chain.len() > MAX_CHAIN {
-            return Err(fail(depth, "certificate chain too long"));
+            return Err((fail(depth, "certificate chain too long"), chain.clone()));
         }
         chain.push(next.to_vec());
     }
@@ -782,16 +1148,19 @@ pub fn verify_chain(
     let mut path_len = 0u64;
     for (depth, cert) in chain.iter().enumerate() {
         if cert_unhandled_critical(cert) {
-            return Err(fail(depth, "unhandled critical extension"));
+            return Err((fail(depth, "unhandled critical extension"), chain.clone()));
         }
         if depth == 0 {
             continue;
         }
         if !(cert_basic_constraints_ca(cert) || (depth == top && cert_v1(cert))) {
-            return Err(fail(depth, "invalid CA certificate"));
+            return Err((fail(depth, "invalid CA certificate"), chain.clone()));
         }
         if depth > 1 && cert_path_len(cert).is_some_and(|max| path_len > max) {
-            return Err(fail(depth, "path length constraint exceeded"));
+            return Err((
+                fail(depth, "path length constraint exceeded"),
+                chain.clone(),
+            ));
         }
         if cert_name_der(cert, true) != cert_name_der(cert, false) {
             path_len += 1;
@@ -803,25 +1172,29 @@ pub fn verify_chain(
         if depth < top {
             let issuer = &chain[depth + 1];
             if !cert_key_cert_sign_ok(issuer) {
-                return Err(fail(
-                    depth + 1,
-                    "key usage does not include certificate signing",
+                return Err((
+                    fail(depth + 1, "key usage does not include certificate signing"),
+                    chain.clone(),
                 ));
             }
             let signed = spki_uncompressed(issuer)
                 .zip(cert_tbs_sig(cert))
                 .is_some_and(|(key, (tbs, sig))| p256_verify(&key, &tbs, &sig));
             if !signed {
-                return Err(fail(depth, "certificate signature failure"));
+                return Err((fail(depth, "certificate signature failure"), chain.clone()));
             }
         }
-        let (not_before, not_after) = cert_time_window(cert)
-            .ok_or_else(|| fail(depth, "format error in certificate's notBefore field"))?;
+        let (not_before, not_after) = cert_time_window(cert).ok_or_else(|| {
+            (
+                fail(depth, "format error in certificate's notBefore field"),
+                chain.clone(),
+            )
+        })?;
         if now < not_before {
-            return Err(fail(depth, "certificate is not yet valid"));
+            return Err((fail(depth, "certificate is not yet valid"), chain.clone()));
         }
         if now > not_after {
-            return Err(fail(depth, "certificate has expired"));
+            return Err((fail(depth, "certificate has expired"), chain.clone()));
         }
     }
     Ok(chain)
@@ -1331,7 +1704,6 @@ fn parse_x509_time(tag: u8, body: &[u8]) -> Option<chrono::DateTime<chrono::Utc>
 struct CmsParts {
     e_content: Vec<u8>,
     cert: Vec<u8>,
-    others: Vec<Vec<u8>>,
     signature: Vec<u8>,
     signed_attrs: Option<Vec<u8>>,
     e_content_type: Vec<u8>,
@@ -1382,18 +1754,12 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     if t != 0xa0 {
         return Err("certs tag");
     }
-    // IMPLICIT SET OF Certificate: the signer's first, then any that complete its chain
-    let mut others = Vec::new();
-    let mut certs = cert_set;
-    while certs.first() == Some(&0x30) {
-        let (tt, body, rest) = take_tlv(certs).ok_or("cert")?;
-        others.push(tlv(tt, body));
-        certs = rest;
-    }
-    let cert = if others.is_empty() {
-        cert_set.to_vec()
+    // IMPLICIT SET OF Certificate: body is the Certificate SEQUENCE
+    let cert = if cert_set.first() == Some(&0x30) {
+        let (tt, body, _) = take_tlv(cert_set).ok_or("cert")?;
+        tlv(tt, body)
     } else {
-        others.remove(0)
+        cert_set.to_vec()
     };
     let (t, signers, _) = take_tlv(rest).ok_or("signers")?;
     if t != 0x31 {
@@ -1423,7 +1789,6 @@ fn cms_parts(der: &[u8]) -> Result<CmsParts, &'static str> {
     Ok(CmsParts {
         e_content,
         cert,
-        others,
         signature: sig.to_vec(),
         signed_attrs,
         e_content_type,

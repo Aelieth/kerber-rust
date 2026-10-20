@@ -534,50 +534,29 @@ pub(crate) fn process_pkinit(
         .ok()
         .and_then(|r| r.0.req_body.cname)
         .unwrap_or_else(|| cname.clone());
-    let (inner, is_signed) =
-        match krb5_types::pkinit::cms_verify_anchored(&cms, &kdc.anchors, &kdc.pool) {
-            Ok(verified) => {
-                if verified.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_AUTHDATA {
-                    tracing::info!(
-                        event = krb5_log::events::KDC_PKINIT,
-                        component = "krb5-kdc",
-                        outcome = "denied",
-                        error = "pkinit eContentType"
-                    );
-                    return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-                }
-                authorize_cert(store, kdc, &verified.cert, client, &req_cname, realm)?;
-                (verified.e_content, true)
-            }
-            Err(e) => {
-                let Some(inner) = krb5_types::pkinit::cms_extract_unsigned(&cms) else {
-                    tracing::info!(
-                        event = krb5_log::events::KDC_PKINIT,
-                        component = "krb5-kdc",
-                        outcome = "denied",
-                        error = e.as_str(),
-                        cms_len = cms.len()
-                    );
-                    return Err(proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED));
-                };
-                // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): an unsigned request
-                // must name the anonymous principal WITH realm, after the rewrite below.
-                // MIT `process_as_req` (`do_as_req.c:718-734`): the rewrite makes
-                // `request->client` WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS.
-                // Rewrite runs only for REQUEST_ANONYMOUS + an anonymous name.
-                let rewritten = decode::<KdcReqBody>(body_der)
-                    .is_ok_and(|b| b.kdc_options.bit(flag_bit::ANONYMOUS))
-                    && krb5_types::pkinit::is_anonymous_principal(cname);
-                if !rewritten {
-                    return Err(proto_d(
-                        err::PREAUTH_FAILED,
-                        status::PREAUTH_FAILED,
-                        "Pkinit request not signed, but client not anonymous.",
-                    ));
-                }
-                (inner, false)
-            }
-        };
+    let pack = krb5_types::pkinit::cms_signeddata_verify(&cms, &kdc.anchors, &kdc.pool)
+        .map_err(|fault| cms_fault(store, kdc, cname, fault))?;
+    let is_signed = pack.signer.is_some();
+    if let Some(cert) = &pack.signer {
+        authorize_cert(store, kdc, cert, client, &req_cname, realm)?;
+    } else {
+        // MIT `pkinit_server_verify_padata` (`pkinit_srv.c:508-516`): an unsigned request
+        // must name the anonymous principal WITH realm, after the rewrite below.
+        // MIT `process_as_req` (`do_as_req.c:718-734`): the rewrite makes
+        // `request->client` WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS.
+        // Rewrite runs only for REQUEST_ANONYMOUS + an anonymous name.
+        let rewritten = decode::<KdcReqBody>(body_der)
+            .is_ok_and(|b| b.kdc_options.bit(flag_bit::ANONYMOUS))
+            && krb5_types::pkinit::is_anonymous_principal(cname);
+        if !rewritten {
+            return Err(proto_d(
+                err::PREAUTH_FAILED,
+                status::PREAUTH_FAILED,
+                "Pkinit request not signed, but client not anonymous.",
+            ));
+        }
+    }
+    let inner = pack.e_content;
     let (ctime, _) = krb5_types::pkinit::parse_authpack_freshness(&inner).ok_or_else(|| {
         tracing::info!(
             event = krb5_log::events::KDC_PKINIT,
@@ -711,6 +690,78 @@ pub(crate) fn process_pkinit(
         padata_value: pa_bytes.into(),
     };
     Ok(Some((reply_key, pa, is_signed)))
+}
+
+/// A signedAuthPack refusal as MIT gives it: its code, its text, and for a certificate the
+/// e-data naming the KDC's anchors (70) or the certificate refused (71).
+/// MIT `cms_signeddata_verify` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:2163-2209`): "Failed to verify received certificate" is 70 when no issuer was found and 71 otherwise; a signature that does not verify is "Failed to verify CMS message".
+/// MIT `pkinit_create_edata` (`plugins/preauth/pkinit/pkinit_srv.c:101-138`): 70 carries TD-TRUSTED-CERTIFIERS, 71 TD-INVALID-CERTIFICATES.
+fn cms_fault(
+    store: &dyn PrincipalRead,
+    kdc: &crate::pkinit::PkinitKdc,
+    cname: &PrincipalName,
+    fault: krb5_types::pkinit::CmsFault,
+) -> Error {
+    use krb5_types::pkinit::CmsFault;
+    tracing::info!(
+        event = krb5_log::events::KDC_PKINIT,
+        component = "krb5-kdc",
+        outcome = "denied",
+        error = ?fault
+    );
+    let module = |code, message: String| Error::PreauthModule { code, message };
+    match fault {
+        CmsFault::Decode(reason) => module(
+            err::PREAUTH_FAILED,
+            format!("Failed to decode CMS message: {reason}"),
+        ),
+        CmsFault::NotOctetString => module(
+            err::PREAUTH_FAILED,
+            "Invalid pkinit packet: octet string expected".to_owned(),
+        ),
+        CmsFault::WrongOid => module(err::PREAUTH_FAILED, "wrong oid\n".to_owned()),
+        CmsFault::NoSigner | CmsFault::ContentType => {
+            proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
+        }
+        CmsFault::Signature(reason) => module(
+            err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
+            format!("Failed to verify CMS message: {reason}"),
+        ),
+        CmsFault::Chain(e, cert) => {
+            let no_issuer = matches!(
+                e.reason,
+                "unable to get local issuer certificate" | "unable to get issuer certificate"
+            );
+            let (code, td, certs): (i32, i32, Vec<&[u8]>) = if no_issuer {
+                (
+                    err::CANT_VERIFY_CERTIFICATE,
+                    pa::TD_TRUSTED_CERTIFIERS,
+                    kdc.anchors.iter().map(Vec::as_slice).collect(),
+                )
+            } else {
+                (
+                    err::INVALID_CERTIFICATE,
+                    pa::TD_INVALID_CERTIFICATES,
+                    std::iter::once(cert.as_slice())
+                        .filter(|c| !c.is_empty())
+                        .collect(),
+                )
+            };
+            let e_data = (!certs.is_empty()).then(|| {
+                let method = vec![PaData {
+                    padata_type: td,
+                    padata_value: krb5_types::pkinit::encode_td_certifiers(&certs).into(),
+                }];
+                encode_typed(&with_fx_cookie(store, Some(cname), method))
+            });
+            Error::Protocol {
+                code,
+                text: Some(status::PREAUTH_FAILED.to_owned()),
+                e_data,
+                detail: Some(format!("Failed to verify received certificate {e}")),
+            }
+        }
+    }
 }
 
 /// MIT `authorize_cert` (`plugins/preauth/pkinit/pkinit_srv.c:319-388`): the built-in certauth modules in their order, and a certificate none of them accepted is a name mismatch.

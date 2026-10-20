@@ -382,7 +382,11 @@ would remove it.
   identity file that is not there gives MIT's `Cannot read certificate file '<file>': (null)`; the
   realm's `pkinit_identity` wins over `[kdcdefaults]`'. When client2 also holds `alice-noeku` (alice's
   SAN, no extended key usage), its kinit is refused with 77 (`Inconsistent key purpose` in the KDC's
-  verify-failure line), and with `pkinit_eku_checking = none` it gets a TGT. The RSA KDC identity's startup line is
+  verify-failure line), and with `pkinit_eku_checking = none` it gets a TGT. `alice-wrongsan` (another
+  principal's SAN) is refused with `Client name mismatch` (75); `alice-unknownca`, from a CA client2
+  trusts and the KDC does not, with `Failed to verify received certificate (depth 0): unable to get
+  local issuer certificate` (70). With alice's `pkinit_cert_match` set to a rule `alice.pem`
+  matches, the outcome is recorded, not graded: MIT issues a TGT, kerber-rust refuses with 66. The RSA KDC identity's startup line is
   recorded, not graded: MIT serves with it, and kerber-rust's KDC identity is P-256 only. kdc.conf is
   restored with krb5kdc restarted at the end, also when the scenario stops early.
 - **`kdc-profile.sh`** (CF, client2's MIT kinit against kdc): with kdc.conf's

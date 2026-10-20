@@ -106,6 +106,8 @@ any other `###` heading.
 - **kdc/admin.** kadm5 postcommit hooks run after the write, the database unlocked, create's also on a failed write, as MIT's; kadm5 reads take the store's read guard.
 - **kdc.** A PKINIT certificate whose SAN names another client is error 75, `Client name mismatch`, as MIT's; `pkinit_allow_upn` is read.
 - **kdc.** PKINIT logs MIT's freshness lines and checks the AuthPack in MIT's order; a signed one without DH is `Unsupported PKINIT RSA request`.
+- **kdc.** A PKINIT certificate from an unknown CA is 70 with TD-TRUSTED-CERTIFIERS, and another chain failure 71 with TD-INVALID-CERTIFICATES, as MIT's.
+- **kdc.** A PKINIT CMS that does not decode or verify gets MIT's code and text: `Failed to decode CMS message: <reason>`, `wrong oid`, or 80.
 
 ## [1.1.0] - 2026-10-14
 

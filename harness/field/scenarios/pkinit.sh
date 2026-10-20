@@ -3,7 +3,8 @@
 # from kdc.conf, seen from client2's MIT kinit, kdc.conf restored after. The certificates are the lab's (L6), P-256:
 # on kdc $PK_KDC_DIR holds cacert.pem, kdc.pem and kdc.key (SAN krbtgt/REALM@REALM, EKU id-pkinit-KPKdc), and
 # kdc-rsa.pem, kdc-rsa.key and rsa-cacert.pem (an RSA 2048 KDC identity and its CA); on client2 $PK_CLIENT_DIR holds
-# cacert.pem, alice.pem and alice.key, and alice-wrongsan.pem and .key (a SAN naming another principal). Keys are never printed: only certificates' public fields are read. kdc carries
+# cacert.pem, alice.pem and alice.key, alice-wrongsan.pem and .key (a SAN naming another principal), and
+# alice-unknownca.pem and .key with their issuer unknown-cacert.pem (a CA the KDC does not trust). Keys are never printed: only certificates' public fields are read. kdc carries
 # them in the snapshot its leg's upgrade started from; client2 is reset to $PK_SNAPSHOT_CLIENT2 when that is set
 # (field.env), else used as it stands. alice is made +requires_preauth for the cells (the lab's principals are not,
 # and MIT's kinit tries PKINIT only when the KDC asks for preauthentication), and restored after.
@@ -13,6 +14,10 @@
 #          the KDC logging "PKINIT: freshness token received from alice@REALM" (MIT's kinit sends the token it got);
 #   PK.san: client2's alice-wrongsan.pem (a SAN naming another principal) is refused: "preauth (pkinit) verify
 #          failure: Client name mismatch" in the KDC log (75);
+#   PK.ca: client2's alice-unknownca.pem, issued by unknown-cacert.pem, which client2 trusts and the KDC does not:
+#          "Failed to verify received certificate (depth 0): unable to get local issuer certificate" (70);
+#   obs.PK.dbmatch (INFO): with alice's pkinit_cert_match set to "<KU>digitalSignature", which alice.pem matches,
+#          MIT issues a TGT and kerber-rust refuses with 66 (its matcher is not ported; documented);
 #   PK.6:  kinit -n with client2's anchors: a WELLKNOWN/ANONYMOUS ticket (the principal is made for the cell);
 #   PK.7b: pkinit_identity names a file that is not there: the line ends "Cannot read certificate file '<file>':
 #          (null)", OpenSSL 3 giving no reason for a system error;
@@ -44,8 +49,9 @@ D=${PK_KDC_DIR:-/var/kerberos/krb5kdc/pkinit}
 C=${PK_CLIENT_DIR:-/home/lab/pkinit}
 ANON=0
 PREAUTH=0
+DBMATCH=0
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "[ -e $KC.pk ] && sudo mv $KC.pk $KC && sudo systemctl restart krb5kdc; [ $ANON = 1 ] && sudo kadmin.local -q 'delprinc -force WELLKNOWN/ANONYMOUS'; [ $PREAUTH = 1 ] && sudo kadmin.local -q 'modprinc -requires_preauth alice'; [ $DBMATCH = 1 ] && sudo kadmin.local -q 'delstr alice pkinit_cert_match'; true" < /dev/null > /dev/null 2>&1
     timeout -k 5 60 "$LAB" ssh client2 -- 'rm -rf ~/pk; true' < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
@@ -72,7 +78,7 @@ if [ -n "${PK_SNAPSHOT_CLIENT2:-}" ]; then
     waitsync client2
 fi
 check l6.kdc '^kdc: krb5-pkinit, CA and KDC P-256, RSA KDC identity$' run kdc "rpm -q krb5-pkinit > /dev/null && for f in cacert.pem kdc.pem kdc-rsa.pem rsa-cacert.pem; do sudo openssl x509 -in $D/\$f -noout -subject; done && sudo test -r $D/kdc.key && sudo test -r $D/kdc-rsa.key && sudo openssl x509 -in $D/kdc.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && sudo openssl x509 -in $D/kdc-rsa.pem -noout -text | grep -qE 'Public Key Algorithm: rsaEncryption' && echo 'kdc: krb5-pkinit, CA and KDC P-256, RSA KDC identity'"
-check l6.client2 '^client2: krb5-pkinit, alice P-256$' run client2 "rpm -q krb5-pkinit > /dev/null && openssl x509 -in $C/alice.pem -noout -subject && openssl x509 -in $C/alice-wrongsan.pem -noout -subject && test -r $C/alice.key && test -r $C/alice-wrongsan.key && openssl x509 -in $C/alice.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'client2: krb5-pkinit, alice P-256'"
+check l6.client2 '^client2: krb5-pkinit, alice P-256$' run client2 "rpm -q krb5-pkinit > /dev/null && for f in alice alice-wrongsan alice-unknownca unknown-cacert; do openssl x509 -in $C/\$f.pem -noout -subject || exit 1; done && test -r $C/alice.key && test -r $C/alice-wrongsan.key && test -r $C/alice-unknownca.key && openssl x509 -in $C/alice.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'client2: krb5-pkinit, alice P-256'"
 check kdc.conf.saved '^no pkinit_identity$' run kdc "sudo cp -p $KC $KC.pk && ! sudo grep -qE '^[[:space:]]*pkinit_identity' $KC && echo 'no pkinit_identity'"
 run kdc "sudo kadmin.local -q 'getprinc WELLKNOWN/ANONYMOUS' 2>&1 | grep -E '^Principal|does not exist'"
 if grep -q 'does not exist' "$LAST_OUT"; then
@@ -111,6 +117,24 @@ certkinit PK.san.kinit '^kinit rc=1$' alice-wrongsan
 observelast obs.PK.san.kinit 'kinit: .*'
 kdcsince PK.san.as 'verify failure'
 checklast PK.san.line 'preauth \(pkinit\) verify failure: Client name mismatch$'
+
+section "PK.ca alice's certificate from a CA the KDC does not trust: 70 (MIT and ours)"
+kdcmark PK.ca.as
+check PK.ca.kinit '^kinit rc=1$' run client2 "mkdir -p ~/pk && kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/unknown-cacert.pem -X X509_user_identity=FILE:$C/alice-unknownca.pem,$C/alice-unknownca.key -c FILE:\$HOME/pk/u.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\""
+observelast obs.PK.ca.kinit 'kinit: .*'
+kdcsince PK.ca.as 'verify failure'
+checklast PK.ca.line 'preauth \(pkinit\) verify failure: Failed to verify received certificate \(depth 0\): unable to get local issuer certificate$'
+
+section "obs.PK.dbmatch alice's pkinit_cert_match: MIT matches it, kerber-rust refuses with 66 (INFO)"
+run kdc "sudo kadmin.local -q 'setstr alice pkinit_cert_match \"<KU>digitalSignature\"' 2>&1"
+DBMATCH=1
+kdcmark PK.dbmatch.as
+run client2 "mkdir -p ~/pk && kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/d.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\""
+observelast obs.PK.dbmatch.kinit 'kinit rc=[0-9]+'
+kdcsince PK.dbmatch.as 'verify failure'
+observelast obs.PK.dbmatch.line 'verify failure: .*'
+run kdc "sudo kadmin.local -q 'delstr alice pkinit_cert_match' 2>&1"
+DBMATCH=0
 
 section "PK.6 kinit -n with client2's anchors: an anonymous ticket (MIT and ours)"
 check PK.6.kinit '^Default principal: WELLKNOWN/ANONYMOUS@WELLKNOWN:ANONYMOUS$' run client2 "mkdir -p ~/pk && kinit -n -X X509_anchors=FILE:$C/cacert.pem -c FILE:\$HOME/pk/n.cc < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/n.cc 2>&1 | grep -E '^Default principal|krbtgt/'"
