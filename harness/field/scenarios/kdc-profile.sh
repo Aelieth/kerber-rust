@@ -31,10 +31,12 @@
 #   CF.e0: strace on kadmind while client2 changes cfpw's password and runs a kadmin session, and on a second kpropd
 #         (port 7754, its own kdc.conf, database, keytab and ACL) while kdc's kprop sends it the realm: neither opens
 #         krb5.conf or kdc.conf for a request (lib/profile-opens.sh). strace is installed when kdc lacks it;
-#   CF.4: strace on kdc's kinit (a keytab's principal), kvno and kadmin.local -q getprinc, MIT's on the mit leg and
-#         the ref's build on the rust leg (its kinit and kvno from the checkout's target/release), and on the start of
-#         krb5kdc, kadmind and a kpropd on port 7754 (each unit stopped while its daemon runs under strace for 4 s):
-#         each opens each profile file once, as MIT's context reads it (lib/client-opens.sh).
+#   CF.4: strace on kdc's kinit (a keytab's principal, into a FILE cache and a DIR collection), kvno, klist, kswitch,
+#         kdestroy, ktutil (rkt and list), kadmin.local -q getprinc, kdb5_util dump and kprop (to CF.e0's kpropd),
+#         MIT's on the mit leg and the ref's build on the rust leg (its client programs from the checkout's
+#         target/release), and on the start of krb5kdc, kadmind and a kpropd on port 7754 (each unit stopped while its
+#         daemon runs under strace for 4 s): each opens each profile file once, as MIT's context reads it
+#         (lib/client-opens.sh). kerber-rust has no remote kadmin client; MIT's against kadmind is CF.e0's.
 # Graded on both legs, MIT's first.
 # vms: kdc client2
 # legs: mit rust
@@ -246,21 +248,6 @@ opened() {
     checklast "CF.e0.$1.opens" "^$1 profile opens: 0\$"
 }
 
-section "CF.e0 kadmind takes a kpasswd change and a kadmin session without opening krb5.conf or kdc.conf (MIT and ours)"
-check CF.e0.strace '^strace-[0-9]' run kdc "rpm -q strace > /dev/null 2>&1 || sudo dnf -y -q install strace > /dev/null 2>&1; rpm -q strace"
-opens kadmind "\$(systemctl show -p MainPID --value kadmin)"
-check CF.e0.kpasswd '^Password changed\.$' runin client2 "cfpw's password ($ALICE), then alice-changed's twice ($ALICE_TEMP)" "kpasswd cfpw 2>&1" < <(chpw "$ALICE" "$ALICE_TEMP")
-check CF.e0.kadmin "^Principal: cfpw@$R\$" runin client2 "admin/admin's password ($ADMIN)" "kadmin -p admin/admin -q 'getprinc cfpw' 2>&1" < <(once "$ADMIN")
-opened kadmind
-
-section "CF.e0 a second kpropd takes one kprop without opening krb5.conf or kdc.conf (MIT and ours)"
-check CF.e0.kpropd.start '^kpropd [0-9]+ listening on 7754$' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-start $LEG $REALM" < "$FIELD_LIB/profile-opens.sh"
-opens kpropd "\$(cat /var/tmp/cf-e0/kpropd.pid)"
-check CF.e0.kprop 'SUCCEEDED$' run kdc "sudo kprop -r $REALM -f /var/tmp/cf-e0/dump -P 7754 -s /var/tmp/cf-e0/kt \$(hostname -f) 2>&1"
-check CF.e0.kpropd.loaded '^loaded$' run kdc "for i in \$(seq 1 40); do sudo test -e /var/tmp/cf-e0/replica/principal && break; sleep 0.25; done; sleep 1; sudo test -e /var/tmp/cf-e0/replica/principal && echo loaded"
-opened kpropd
-check CF.e0.kpropd.stop '^kpropd stopped' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh"
-
 # client <name> <program> <args>: the program under strace on kdc; it ran, and opened no profile file twice.
 client() {
     local name=$1
@@ -278,7 +265,23 @@ daemon() {
     checklast "CF.4.$name.opens" "^$name most opens of one profile file: 1\$"
 }
 
-section "CF.4 kinit, kvno, kadmin.local and the daemons' starts each open each profile file once (MIT and ours)"
+section "CF.e0 kadmind takes a kpasswd change and a kadmin session without opening krb5.conf or kdc.conf (MIT and ours)"
+check CF.e0.strace '^strace-[0-9]' run kdc "rpm -q strace > /dev/null 2>&1 || sudo dnf -y -q install strace > /dev/null 2>&1; rpm -q strace"
+opens kadmind "\$(systemctl show -p MainPID --value kadmin)"
+check CF.e0.kpasswd '^Password changed\.$' runin client2 "cfpw's password ($ALICE), then alice-changed's twice ($ALICE_TEMP)" "kpasswd cfpw 2>&1" < <(chpw "$ALICE" "$ALICE_TEMP")
+check CF.e0.kadmin "^Principal: cfpw@$R\$" runin client2 "admin/admin's password ($ADMIN)" "kadmin -p admin/admin -q 'getprinc cfpw' 2>&1" < <(once "$ADMIN")
+opened kadmind
+
+section "CF.e0 a second kpropd takes one kprop without opening krb5.conf or kdc.conf (MIT and ours)"
+check CF.e0.kpropd.start '^kpropd [0-9]+ listening on 7754$' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-start $LEG $REALM" < "$FIELD_LIB/profile-opens.sh"
+opens kpropd "\$(cat /var/tmp/cf-e0/kpropd.pid)"
+check CF.e0.kprop 'SUCCEEDED$' run kdc "sudo kprop -r $REALM -f /var/tmp/cf-e0/dump -P 7754 -s /var/tmp/cf-e0/kt \$(hostname -f) 2>&1"
+check CF.e0.kpropd.loaded '^loaded$' run kdc "for i in \$(seq 1 40); do sudo test -e /var/tmp/cf-e0/replica/principal && break; sleep 0.25; done; sleep 1; sudo test -e /var/tmp/cf-e0/replica/principal && echo loaded"
+opened kpropd
+client kprop "/usr/sbin/kprop -r $REALM -f /var/tmp/cf-e0/dump -P 7754 -s /var/tmp/cf-e0/kt \$(hostname -f)"
+check CF.e0.kpropd.stop '^kpropd stopped' runin kdc "lib/profile-opens.sh" "sudo sh -s -- kpropd-stop $REALM" < "$FIELD_LIB/profile-opens.sh"
+
+section "CF.4 the client programs, kadmin.local, kdb5_util and the daemons' starts each open each profile file once (MIT and ours)"
 if [ "$LEG" = rust ]; then
     BIN="\$HOME/kerber-rust-${FIELD_SHA:0:12}/target/release/krb5-"
 else
@@ -287,7 +290,13 @@ fi
 check CF.4.setup '^cf4 keytab written$' runin kdc "lib/client-opens.sh" "sudo sh -s -- setup $REALM" < "$FIELD_LIB/client-opens.sh"
 client kinit "${BIN}kinit -k -t /var/tmp/cf-4/cf4.kt -c FILE:/var/tmp/cf-4/cc cf4@$REALM"
 client kvno "${BIN}kvno -c FILE:/var/tmp/cf-4/cc cf4@$REALM"
+client klist "${BIN}klist -c FILE:/var/tmp/cf-4/cc"
+client kinit-dir "${BIN}kinit -k -t /var/tmp/cf-4/cf4.kt -c DIR:/var/tmp/cf-4/dir cf4@$REALM"
+client kswitch "env KRB5CCNAME=DIR:/var/tmp/cf-4/dir ${BIN}kswitch -p cf4@$REALM"
+client kdestroy "${BIN}kdestroy -c FILE:/var/tmp/cf-4/cc"
+client ktutil "sh -c 'printf \"rkt /var/tmp/cf-4/cf4.kt\\nlist\\nquit\\n\" | '${BIN}ktutil"
 client kadmin.local "/usr/sbin/kadmin.local -q 'getprinc cf4'"
+client kdb5_util "/usr/sbin/kdb5_util dump /var/tmp/cf-4/dump"
 daemon krb5kdc krb5kdc /usr/sbin/krb5kdc -n
 daemon kadmind kadmin /usr/sbin/kadmind -nofork
 daemon kpropd - /usr/sbin/kpropd -D -P 7754 -r "$REALM"

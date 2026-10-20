@@ -1,6 +1,7 @@
 # harness/field/lib/client-opens.sh: run on kdc as root through `sh -s --` (kdc-profile.sh's cell CF.4). How often a
 # program opens each profile file: MIT's library reads each file once, when the program's context is made.
-#   setup <realm>                    a principal cf4 and its keytab in $D; prints "cf4 keytab written"
+#   setup <realm>                    a principal cf4 and its keytab in $D, and $D/dir for a DIR collection; prints
+#                                    "cf4 keytab written"
 #   run <name> <program> <args...>   the program under strace -f: prints "<name> rc=N", each program it executed
 #                                    ("exec: <pid> <path>"), each profile file it opened ("open: <path> xN"), then
 #                                    "<name> most opens of one profile file: N"
@@ -34,6 +35,7 @@ case $cmd in
 setup)
     realm=$1
     mkdir -p "$D"
+    mkdir -m 0700 "$D/dir"
     kadmin.local -q "addprinc -randkey cf4@$realm" > /dev/null 2>&1
     kadmin.local -q "ktadd -k $D/cf4.kt -norandkey cf4@$realm" > /dev/null 2>&1
     [ -s "$D/cf4.kt" ] && echo "cf4 keytab written"
@@ -41,6 +43,7 @@ setup)
 run)
     name=$1
     shift
+    mkdir -p "$D"
     strace -f -qq -e trace="$T" -o "$D/$name.trace" "$@" > "$D/$name.out" 2>&1
     echo "$name rc=$?"
     opens "$name"
