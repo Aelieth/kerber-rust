@@ -430,9 +430,14 @@ MIT's (`doc/admin/pkinit.rst`):
     pkinit_anchors = FILE:/var/kerberos/krb5kdc/cacert.pem
 ```
 
-- **KDC identity P-256 only.** The KDC's key, its CA and the client certificates it verifies are
-  P-256 EC keys: make each one with `openssl ecparam -name prime256v1 -genkey -noout` where MIT's
-  guide runs `openssl genrsa`. An RSA key leaves PKINIT off.
+- **KDC identity P-256 only.** The KDC's key is a P-256 EC key: make it with
+  `openssl ecparam -name prime256v1 -genkey -noout` where MIT's guide runs `openssl genrsa`. An RSA
+  KDC key leaves PKINIT off. Client certificates and their CAs may be RSA or P-256, signed with
+  SHA-256, SHA-384 or SHA-512.
+- Not supported in a client's certificate, its CAs or its signature, though MIT takes them through
+  OpenSSL: RSASSA-PSS, and P-384 or P-521 keys. Such a chain is refused with 71 (`certificate
+  signature failure`), such a signature with 80. SHA-1 signatures are refused too, as Fedora's
+  DEFAULT crypto policy makes OpenSSL refuse them for MIT.
 - `pkinit_identity` is `FILE:cert[,key]`, `DIR:` (one `NAME.crt` with its `NAME.key`) or `ENV:`;
   `pkinit_anchors` and `pkinit_pool` (the intermediate CAs) are `FILE:` or `DIR:`. A relation under
   `[realms] REALM` wins over `[kdcdefaults]`.

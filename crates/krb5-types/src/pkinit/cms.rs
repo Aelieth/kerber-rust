@@ -670,6 +670,197 @@ fn cert_path_ok(leaf: &[u8], ca: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// rsaEncryption 1.2.840.113549.1.1.1 (OID body).
+const OID_RSA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01];
+/// sha256WithRSAEncryption 1.2.840.113549.1.1.11 (OID body).
+const OID_RSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0b];
+/// sha384WithRSAEncryption 1.2.840.113549.1.1.12 (OID body).
+const OID_RSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0c];
+/// sha512WithRSAEncryption 1.2.840.113549.1.1.13 (OID body).
+const OID_RSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0d];
+/// ecdsa-with-SHA256 1.2.840.10045.4.3.2 (OID body).
+const OID_ECDSA_SHA256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+/// ecdsa-with-SHA384 1.2.840.10045.4.3.3 (OID body).
+const OID_ECDSA_SHA384: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x03];
+/// ecdsa-with-SHA512 1.2.840.10045.4.3.4 (OID body).
+const OID_ECDSA_SHA512: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x04];
+/// id-sha256 2.16.840.1.101.3.4.2.1 (OID body).
+const OID_SHA256: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x01];
+/// id-sha384 2.16.840.1.101.3.4.2.2 (OID body).
+const OID_SHA384: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x02];
+/// id-sha512 2.16.840.1.101.3.4.2.3 (OID body).
+const OID_SHA512: &[u8] = &[0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02, 0x03];
+
+/// A digest a signature names. SHA-1 is not one: the lab's crypto policy refuses it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Digest {
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+impl Digest {
+    fn from_oid(oid: &[u8]) -> Option<Self> {
+        match oid {
+            OID_SHA256 => Some(Self::Sha256),
+            OID_SHA384 => Some(Self::Sha384),
+            OID_SHA512 => Some(Self::Sha512),
+            _ => None,
+        }
+    }
+
+    fn of(self, data: &[u8]) -> Vec<u8> {
+        use sha2::Digest as _;
+        match self {
+            Self::Sha256 => sha2::Sha256::digest(data).to_vec(),
+            Self::Sha384 => sha2::Sha384::digest(data).to_vec(),
+            Self::Sha512 => sha2::Sha512::digest(data).to_vec(),
+        }
+    }
+
+    /// The DER DigestInfo before the hash (RFC 8017 §9.2, note 1).
+    fn digest_info_prefix(self) -> &'static [u8] {
+        match self {
+            Self::Sha256 => &[
+                0x30, 0x31, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x01, 0x05, 0x00, 0x04, 0x20,
+            ],
+            Self::Sha384 => &[
+                0x30, 0x41, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x02, 0x05, 0x00, 0x04, 0x30,
+            ],
+            Self::Sha512 => &[
+                0x30, 0x51, 0x30, 0x0d, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x02,
+                0x03, 0x05, 0x00, 0x04, 0x40,
+            ],
+        }
+    }
+}
+
+/// id-ecPublicKey 1.2.840.10045.2.1 (OID body).
+const OID_EC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+/// prime256v1 1.2.840.10045.3.1.7 (OID body).
+const OID_P256_CURVE: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
+
+/// A certificate's SubjectPublicKeyInfo (its DER).
+fn cert_spki(cert: &[u8]) -> Option<&[u8]> {
+    let (_, body, _) = take_tlv(cert)?;
+    let (_, tbs, _) = take_tlv(body)?;
+    let mut cur = tbs;
+    if cur.first() == Some(&0xa0) {
+        cur = take_tlv(cur)?.2;
+    }
+    for _ in 0..5 {
+        cur = take_tlv(cur)?.2;
+    }
+    let (t, _, rest) = take_tlv(cur)?;
+    (t == 0x30).then(|| &cur[..cur.len() - rest.len()])
+}
+
+/// A certificate's to-be-signed DER, its signature algorithm OID and its signature.
+fn cert_signed_parts(cert: &[u8]) -> Option<(&[u8], &[u8], &[u8])> {
+    let (_, body, _) = take_tlv(cert)?;
+    let (_, _, after_tbs) = take_tlv(body)?;
+    let tbs = &body[..body.len() - after_tbs.len()];
+    let (_, alg, rest) = take_tlv(after_tbs)?;
+    let (_, oid, _) = take_tlv(alg)?;
+    let (t, bits, _) = take_tlv(rest)?;
+    if t != 0x03 {
+        return None;
+    }
+    Some((tbs, oid, bits.get(1..)?))
+}
+
+/// Whether `issuer`'s key signed `cert`.
+fn cert_signed_by(cert: &[u8], issuer: &[u8]) -> bool {
+    cert_signed_parts(cert)
+        .zip(cert_spki(issuer))
+        .is_some_and(|((tbs, alg, sig), spki)| signature_ok(spki, alg, None, tbs, sig))
+}
+
+/// Whether `sig` over `msg` verifies under the key of `spki`. The key's own type decides how:
+/// ECDSA on P-256, or RSASSA-PKCS1-v1_5 (RFC 8017 §8.2.2). The digest is the one `alg` names, or
+/// `digest` for `rsaEncryption` / `id-ecPublicKey`; SHA-1 is refused, as the lab's crypto policy
+/// refuses it. MIT's client names its key's type with SHA-256 in its SignerInfo (`cert_sig_alg`):
+/// `ecdsa-with-SHA256` for an EC key, else `sha256WithRSAEncryption`.
+fn signature_ok(spki: &[u8], alg: &[u8], digest: Option<Digest>, msg: &[u8], sig: &[u8]) -> bool {
+    let digest = match alg {
+        OID_ECDSA_SHA256 | OID_RSA_SHA256 => Some(Digest::Sha256),
+        OID_ECDSA_SHA384 | OID_RSA_SHA384 => Some(Digest::Sha384),
+        OID_ECDSA_SHA512 | OID_RSA_SHA512 => Some(Digest::Sha512),
+        OID_RSA | OID_EC_KEY => digest,
+        _ => None,
+    };
+    let Some(digest) = digest else {
+        return false;
+    };
+    let Some((_, spki_body, _)) = take_tlv(spki) else {
+        return false;
+    };
+    let Some((_, key_alg, rest)) = take_tlv(spki_body) else {
+        return false;
+    };
+    let Some((_, key_oid, params)) = take_tlv(key_alg) else {
+        return false;
+    };
+    let Some((0x03, bits, _)) = take_tlv(rest) else {
+        return false;
+    };
+    let Some(key) = bits.get(1..) else {
+        return false;
+    };
+    let hash = digest.of(msg);
+    if key_oid == OID_RSA {
+        rsa_pkcs1_ok(key, digest, &hash, sig)
+    } else {
+        use p256::ecdsa::signature::hazmat::PrehashVerifier;
+        use p256::ecdsa::{Signature, VerifyingKey};
+        key_oid == OID_EC_KEY
+            && take_tlv(params).is_some_and(|(_, curve, _)| curve == OID_P256_CURVE)
+            && VerifyingKey::from_sec1_bytes(key)
+                .ok()
+                .zip(Signature::from_der(sig).ok())
+                .is_some_and(|(vk, s)| vk.verify_prehash(&hash, &s).is_ok())
+    }
+}
+
+/// RSASSA-PKCS1-v1_5 verification of `sig` over a message whose digest is `hash`, under the
+/// RSAPublicKey `key`: `sig^e mod n` is `00 01 FF.. 00` and the DigestInfo of `hash`.
+/// Only public values are used, so no part of it is secret.
+fn rsa_pkcs1_ok(key: &[u8], digest: Digest, hash: &[u8], sig: &[u8]) -> bool {
+    use num_bigint::BigUint;
+    let Some((_, body, _)) = take_tlv(key) else {
+        return false;
+    };
+    let Some((0x02, n, rest)) = take_tlv(body) else {
+        return false;
+    };
+    let Some((0x02, e, _)) = take_tlv(rest) else {
+        return false;
+    };
+    let n_bytes = n.iter().skip_while(|b| **b == 0).count();
+    let (n, e, s) = (
+        BigUint::from_bytes_be(n),
+        BigUint::from_bytes_be(e),
+        BigUint::from_bytes_be(sig),
+    );
+    if sig.len() != n_bytes
+        || s >= n
+        || n_bytes < 11 + digest.digest_info_prefix().len() + hash.len()
+    {
+        return false;
+    }
+    let em = s.modpow(&e, &n).to_bytes_be();
+    let info_len = digest.digest_info_prefix().len() + hash.len();
+    let mut want = vec![0xff; n_bytes];
+    want[0] = 0x00;
+    want[1] = 0x01;
+    want[n_bytes - info_len - 1] = 0x00;
+    want[n_bytes - info_len..n_bytes - hash.len()].copy_from_slice(digest.digest_info_prefix());
+    want[n_bytes - hash.len()..].copy_from_slice(hash);
+    em.len() == n_bytes - 1 && em[..] == want[1..]
+}
+
 /// id-data 1.2.840.113549.1.7.1 (OID body).
 const OID_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
 /// id-signedData 1.2.840.113549.1.7.2 (OID body).
@@ -768,17 +959,25 @@ pub fn cms_signeddata_verify(
         CmsFault::Chain(e, chain.get(e.depth).cloned().unwrap_or_default())
     })?;
     let e_content = sd.e_content.clone().unwrap_or_default();
+    let digest = Digest::from_oid(&signer_info.digest_alg);
     let verified = signer_info.signed_attrs.as_ref().is_some_and(|sa| {
         let mut set = sa.clone();
         set[0] = 0x31;
-        spki_uncompressed(&signer)
-            .is_some_and(|key| p256_verify(&key, &set, &signer_info.signature))
+        cert_spki(&signer).is_some_and(|spki| {
+            signature_ok(
+                spki,
+                &signer_info.signature_alg,
+                digest,
+                &set,
+                &signer_info.signature,
+            )
+        })
     });
     if !verified {
         return Err(CmsFault::Signature("provider signature failure"));
     }
     let sa = signer_info.signed_attrs.as_deref().unwrap_or_default();
-    if !signed_attrs_digest_ok(sa, &sha256_bytes(&e_content)) {
+    if !digest.is_some_and(|d| signed_attrs_digest_ok(sa, &d.of(&e_content))) {
         return Err(CmsFault::Signature("verification failure"));
     }
     if signed_attrs_content_type(sa).as_deref() != Some(sd.e_content_type.as_slice()) {
@@ -805,7 +1004,9 @@ struct SignedDataFields {
 struct SignerFields {
     issuer_serial: Option<(Vec<u8>, Vec<u8>)>,
     key_id: Option<Vec<u8>>,
+    digest_alg: Vec<u8>,
     signed_attrs: Option<Vec<u8>>,
+    signature_alg: Vec<u8>,
     signature: Vec<u8>,
 }
 
@@ -860,7 +1061,8 @@ impl SignedDataFields {
             } else {
                 (None, Some(sid.to_vec()))
             };
-            cur = take_tlv(cur)?.2;
+            let (_, digest_alg, next) = take_tlv(cur)?;
+            cur = next;
             let signed_attrs = if cur.first() == Some(&0xa0) {
                 let (t, body, next) = take_tlv(cur)?;
                 cur = next;
@@ -868,12 +1070,14 @@ impl SignedDataFields {
             } else {
                 None
             };
-            cur = take_tlv(cur)?.2;
-            let (_, signature, _) = take_tlv(cur)?;
+            let (_, signature_alg, next) = take_tlv(cur)?;
+            let (_, signature, _) = take_tlv(next)?;
             signers.push(SignerFields {
                 issuer_serial,
                 key_id,
+                digest_alg: take_tlv(digest_alg)?.1.to_vec(),
                 signed_attrs,
+                signature_alg: take_tlv(signature_alg)?.1.to_vec(),
                 signature: signature.to_vec(),
             });
         }
@@ -1097,11 +1301,7 @@ fn build_chain(
         let depth = chain.len() - 1;
         let current = &chain[depth];
         let issuer = cert_name_der(current, true);
-        let signs = |c: &&[u8]| {
-            spki_uncompressed(c)
-                .zip(cert_tbs_sig(current))
-                .is_some_and(|(key, (tbs, sig))| p256_verify(&key, &tbs, &sig))
-        };
+        let signs = |c: &&[u8]| cert_signed_by(current, c);
         let named = |c: &&[u8]| issuer.is_some() && subject(c) == issuer;
         let trusted: Vec<&[u8]> = anchors.iter().map(Vec::as_slice).filter(named).collect();
         if let Some(a) = trusted
@@ -1177,10 +1377,7 @@ fn build_chain(
                     chain.clone(),
                 ));
             }
-            let signed = spki_uncompressed(issuer)
-                .zip(cert_tbs_sig(cert))
-                .is_some_and(|(key, (tbs, sig))| p256_verify(&key, &tbs, &sig));
-            if !signed {
+            if !cert_signed_by(cert, issuer) {
                 return Err((fail(depth, "certificate signature failure"), chain.clone()));
             }
         }
