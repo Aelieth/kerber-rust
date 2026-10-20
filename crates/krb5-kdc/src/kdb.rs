@@ -280,8 +280,6 @@ pub trait StoreLifecycle {
     }
 }
 
-/// Combined kdb extension surface. Kadmind still locks
-/// [`PrincipalStore`] (`SharedDump`); dyn-Store admin is deferred.
 pub trait Store: PrincipalRead + PrincipalWrite + StoreLifecycle + Send + Sync {}
 
 impl Store for PrincipalStore {}

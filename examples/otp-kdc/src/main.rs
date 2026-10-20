@@ -43,7 +43,7 @@ fn cannot_initialize(progname: &str, realm: &str, error: &str, during: &str) -> 
 
 fn audit_stop(store: &SharedStore, success: bool) {
     let guard = store.read().unwrap_or_else(PoisonError::into_inner);
-    krb5_kdc::audit_kdc_stop(&**guard, success);
+    krb5_kdc::audit_kdc_stop(&*guard, success);
 }
 
 fn main() {
@@ -178,7 +178,7 @@ fn main() {
     eprintln!("{progname}: starting...");
     {
         let guard = store.read().unwrap_or_else(PoisonError::into_inner);
-        krb5_kdc::audit_kdc_start(&**guard, true);
+        krb5_kdc::audit_kdc_start(&*guard, true);
     }
     let limits = ListenLimits {
         max_dgram_reply_size: max_dgram,

@@ -640,7 +640,7 @@ pub fn save_dump_text(db_path: &Path, text: &str, how: DbWrite) -> Result<(), Pe
     if how == DbWrite::Fresh {
         return Ok(load_text_full(db_path, text, &[], false, None)?);
     }
-    let (lock, _) = WriteLock::take(&PrincipalStore::new(""), db_path)?;
+    let (lock, _) = WriteLock::take(&PrincipalStore::try_new("")?, db_path)?;
     check_writable(db_path, how)?;
     write_secret_file(db_path, text.as_bytes())?;
     lock.update_age();
@@ -1546,7 +1546,7 @@ fn serialize_plain(store: &PrincipalStore) -> Vec<u8> {
 fn parse_plain(plain: &[u8], v2: bool, v3: bool) -> Result<PrincipalStore, PersistError> {
     let mut i = 0;
     let realm = take_str(plain, &mut i)?;
-    let mut store = PrincipalStore::new(realm);
+    let mut store = PrincipalStore::try_new(realm)?;
     let n = take_u32(plain, &mut i)?;
     for _ in 0..n {
         let name_s = take_str(plain, &mut i)?;

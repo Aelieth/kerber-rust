@@ -40,6 +40,7 @@ any other `###` heading.
 - **config.** The KDC, kadmind and kadmin.local read their profile once and apply it in one order, kdc.conf over krb5.conf; kadmind let krb5.conf win.
 - **config.** kdc.conf follows `include` and `includedir` and matches names as written, as MIT; the daemons log each relation MIT reads that is not supported.
 - **protocol/gss.** `AcceptorConfig` holds an acceptor's profile values; the GSS accept calls, kpasswd and kpropd take it, and `use_kdc_context` is gone.
+- **kdc.** One store can serve the KDC and kadmind: a `SharedDump` is a `SharedStore` (`Arc<RwLock<dyn Store>>`); `PrincipalStore::try_new` returns a CSPRNG failure.
 
 ### Tests and CI
 
@@ -87,6 +88,7 @@ any other `###` heading.
 - **gss/types.** One DER length codec: a GSS token of 64 KiB or more is framed right, and a delegated KRB-CRED too long for the checksum fails as MIT's.
 - **admin.** kadmind sets up its listeners as MIT's: iprop on its own port (not on kadmind's), `-proponly`, and `admin_server`'s port before `-port`. Lab beside MIT.
 - **gss/admin.** The GSS initiator takes its caller's flags, as MIT's; the iprop client asks for MUTUAL|REPLAY, so MIT's kadmind takes its later calls after a gap.
+- **kdc.** A database the KDC cannot read again answers the request under the store's read lock, not its write lock, so other requests no longer wait on it.
 
 ## [1.1.0] - 2026-10-14
 

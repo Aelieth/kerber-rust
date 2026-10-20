@@ -197,13 +197,15 @@ pub(crate) fn unix_now_u32() -> u32 {
 }
 
 impl PrincipalStore {
-    /// Empty store for `realm`.
-    /// The realm's domain SID comes from twelve CSPRNG bytes. When the CSPRNG fails, the
-    /// bytes are all zero, or the SID equals the dummy domain SID, the process exits instead
-    /// of storing a predictable domain SID.
     #[must_use]
+    #[allow(clippy::expect_used)]
     pub fn new(realm: impl Into<String>) -> Self {
-        Self {
+        Self::try_new(realm).expect("the CSPRNG gave no domain SID")
+    }
+
+    /// No predictable domain SID: a CSPRNG failure, all-zero bytes or the dummy SID is an error.
+    pub fn try_new(realm: impl Into<String>) -> Result<Self, Error> {
+        Ok(Self {
             realm: realm.into(),
             map: PrincipalMap::default(),
             policy: Policy::default(),
@@ -215,17 +217,14 @@ impl PrincipalStore {
             dblock: None,
             changed: ChangeMark::default(),
             wrote_through: ChangeMark::default(),
-            domain_sid: generate_domain_sid().unwrap_or_else(|_| {
-                eprintln!("krb5-kdc: getrandom failed generating domain SID");
-                std::process::exit(1);
-            }),
+            domain_sid: generate_domain_sid()?,
             next_rid: RID_FIRST_USER,
             policies: HashMap::new(),
             lockout: Arc::default(),
             log: None,
             pending: Arc::new(Mutex::new(Vec::new())),
             saves_held: false,
-        }
+        })
     }
 
     /// Read the database again when another process changed it since this store read it.
@@ -628,7 +627,7 @@ impl PrincipalStore {
         admin_password: &[u8],
         kdc: Option<&krb5_config::KdcConf>,
     ) -> Result<Self, Error> {
-        let mut store = Self::new(realm);
+        let mut store = Self::try_new(realm)?;
         // No profile: keep the harness create default (7 d) so `--test-realm`
         // principals match stock `max_renewable_life = 7d`. A supplied
         // kdc.conf with the key omitted then sets create = 0 and the realm

@@ -28,4 +28,6 @@ disallowed-methods = [
     { path = "std::env::var", reason = "read the environment once at start and pass what a request needs" },
     { path = "std::env::var_os", reason = "read the environment once at start and pass what a request needs" },
     { path = "std::env::set_var", reason = "the environment is the process's; tests use the krb5-config test hooks" },
+    # SS-1: a library returns its error; only a program's own start-up path ends the process.
+    { path = "std::process::exit", reason = "library code returns its error; a program's main path may exit" },
 ]

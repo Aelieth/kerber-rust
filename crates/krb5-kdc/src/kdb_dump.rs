@@ -266,7 +266,7 @@ impl DumpFile {
             }
         }
         let realm = self.realm()?.to_owned();
-        let mut store = PrincipalStore::new(realm.clone());
+        let mut store = PrincipalStore::try_new(realm.clone())?;
         let mut domain: Option<RpcSid> = None;
         for p in self.princs {
             let is_km = p.name.starts_with("K/M@");

@@ -73,7 +73,7 @@ pub fn create_realm_db(
     master: &ProtocolKey,
     mkvno: u16,
 ) -> Result<PrincipalStore, Error> {
-    let mut store = PrincipalStore::new(realm);
+    let mut store = PrincipalStore::try_new(realm)?;
     if let Some(c) = kdc {
         store.apply_kdc_conf(c)?;
     }

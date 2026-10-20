@@ -52,8 +52,9 @@ is MIT dump version 7 (stash still holds the master key; SID/RID in
 `TL_KERBER_SID`). Legacy KDB3 ciphertext still loads for one release.
 `krb5-kdb` is MIT's `kdb5_util` (create, stash, dump, load, destroy). `key_data` uses KDB usage 0
 with a cleartext `int16_LE` length prefix; protocol `KeyUsage::new(0)`
-stays rejected. The serving store is `Arc<RwLock<PrincipalStore>>` so
-kadmind/kpasswd mutations reach `save_store`. The `krb5-kdc` daemon
+stays rejected. The KDC serves a `SharedStore` (`Arc<RwLock<dyn Store>>`); kadmind and kpasswd
+hold a `SharedDump` (`Arc<RwLock<PrincipalStore>>`), which is one too, so one process can serve
+both from one store and one lock, and their mutations reach `save_store`. The `krb5-kdc` daemon
 takes MIT `krb5kdc`'s options, listens where kdc.conf says (every local
 address by default), detaches unless `-n`, and writes MIT's text log
 where `[logging]` says ([logging.md](logging.md)). It always serves a

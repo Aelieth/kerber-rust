@@ -420,7 +420,7 @@ fn main() {
         let mut s = store
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Err(e) = krb5_kdc::StoreLifecycle::reload_if_stale(&mut **s) {
+        if let Err(e) = krb5_kdc::StoreLifecycle::reload_if_stale(&mut *s) {
             cannot_initialize(
                 &progname,
                 &realm,
@@ -441,7 +441,7 @@ fn main() {
         let g = store
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        krb5_kdc::audit_kdc_start(&**g, true);
+        krb5_kdc::audit_kdc_start(&*g, true);
     }
     // MIT `finish_dispatch` (`kdc/dispatch.c:54-55`): the reply size is compared as an unsigned number.
     let max_dgram = kdc_conf.as_ref().map_or(krb5_kdc::MAX_DGRAM_REPLY, |c| {
@@ -457,7 +457,7 @@ fn main() {
             let g = store
                 .read()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            krb5_kdc::audit_kdc_stop(&**g, false);
+            krb5_kdc::audit_kdc_stop(&*g, false);
         }
         klog::com_err(Some(&e.to_string()), "while serving");
         eprintln!("{progname}: serve: {e}");
@@ -467,7 +467,7 @@ fn main() {
         let g = store
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        krb5_kdc::audit_kdc_stop(&**g, true);
+        krb5_kdc::audit_kdc_stop(&*g, true);
     }
     // MIT `main` (`kdc/main.c:1031-1032`): "shutting down" once the loop ends.
     klog::syslog(Severity::Info, "shutting down");

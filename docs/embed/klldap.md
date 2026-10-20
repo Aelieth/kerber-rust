@@ -105,10 +105,12 @@ These are larger than a release touch-up and belong to the embed or a later
 kerber-rust point release:
 
 - **One store for the KDC and the admin verbs.** The KDC serves a
-  `SharedStore` (`Arc<RwLock<Box<dyn Store>>>`); the admin verbs above are
-  methods of the concrete `PrincipalStore` and are not on `dyn Store`. Today
-  the two meet through the dump file (the KDC's `reload_if_stale` re-reads it
-  after kadmind writes), which is the two-process model inside one process.
+  `SharedStore` (`Arc<RwLock<dyn Store>>`); the admin verbs above are
+  methods of the concrete `PrincipalStore`, which a `SharedDump`
+  (`Arc<RwLock<PrincipalStore>>`) holds. A `SharedDump` is a `SharedStore`
+  too (`let kdc: SharedStore = dump.clone();`), so the KDC's loop and
+  kadmind's share one store and one lock. The trait writes still need their
+  autocommit and the kadm5 hooks their post-commit order (SS-2).
 - **kadmind as a library.** `Kadmind` and `serve_kadmind_until` run
   kadmind's loop (kpasswd over UDP and TCP, kadm5 on its RPC listeners) on
   the caller's thread over a `SharedDump`, as `krb5-kadmind` does; the
@@ -120,7 +122,7 @@ kerber-rust point release:
   a thread beside the KDC's, or `krb5-kadmind` run beside KLLDAP.
 - **Bootstrap.** `PrincipalStore::bootstrap` creates a test user and admin with
   passwords; KLLDAP wants krbtgt, `kadmin/*` and a random-key admin with no
-  password. Build it from `PrincipalStore::new` and `create_principal_3_in`.
+  password. Build it from `PrincipalStore::try_new` and `create_principal_3_in`.
 - **`kadm5_hook`** is [`Kadm5Hook`](../../crates/krb5-kdc/src/store/kadm5_hook.rs):
   an embedder registers a module with `register_kadm5_hook`. The directory does
   not have to. **`kadm5_auth`** is still not implemented (`docs/parity/a4-kadmin.md`).

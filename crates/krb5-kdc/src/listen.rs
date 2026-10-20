@@ -31,15 +31,14 @@ pub const WHILE_DISPATCHING_TCP: &str = "while dispatching (tcp)";
 
 /// Serving store: AS/TGS take a read lock; kadmind/kpasswd take a write lock
 /// so runtime mutations reach [`crate::persist::save_store`].
-pub type SharedStore = Arc<RwLock<Box<dyn Store>>>;
+pub type SharedStore = Arc<RwLock<dyn Store>>;
 
 /// Wrap a [`Store`] backend for [`serve`].
 #[must_use]
 pub fn shared_store<S: Store + 'static>(store: S) -> SharedStore {
-    Arc::new(RwLock::new(Box::new(store)))
+    Arc::new(RwLock::new(store))
 }
 
-/// Kadmind still locks [`crate::PrincipalStore`] (dyn-Store admin is deferred).
 pub type SharedDump = Arc<RwLock<crate::store::PrincipalStore>>;
 
 /// Wrap a dump-v7 store for kadmind / kpasswd.
@@ -65,27 +64,28 @@ pub(crate) fn read_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRe
                 drop(held);
                 stale
             }
-            Err(e) => return f(&Unreadable::new(&**g, &e)),
+            Err(e) => return f(&Unreadable::new(&*g, &e)),
         };
         if !stale {
-            return f(&**g);
+            return f(&*g);
         }
     }
-    {
-        let mut w = store.write().unwrap_or_else(PoisonError::into_inner);
-        if let Err(e) = w.reload_if_stale() {
-            return f(&Unreadable::new(&**w, &e));
-        }
-    }
+    let reread = store
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .reload_if_stale();
     let g = store.read().unwrap_or_else(PoisonError::into_inner);
-    f(&**g)
+    match reread {
+        Ok(()) => f(&*g),
+        Err(e) => f(&Unreadable::new(&*g, &e)),
+    }
 }
 
 /// The store, without its database lock, for a reply that needs no lookup (an error built from
 /// the realm alone).
 pub(crate) fn plain_store<R>(store: &SharedStore, f: impl FnOnce(&dyn PrincipalRead) -> R) -> R {
     let g = store.read().unwrap_or_else(PoisonError::into_inner);
-    f(&**g)
+    f(&*g)
 }
 
 /// A store whose database may not be locked or read again: every lookup fails as MIT's do when
