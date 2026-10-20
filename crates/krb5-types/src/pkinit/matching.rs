@@ -103,6 +103,73 @@ pub fn cert_match(rule: &str, cert: &[u8]) -> Result<bool, CertMatchError> {
     Ok(matched)
 }
 
+/// Which of a client's certificates it uses: the one the first rule that picks exactly one picks,
+/// a rule that does not parse (`EINVAL`) skipped; with no rule, the only one.
+/// MIT `pkinit_cert_matching` (`pkinit_matching.c:617-713`): each `pkinit_cert_match` rule in turn until one matches exactly one certificate, else `ENOENT`.
+/// MIT `crypto_cert_select_default` (`pkinit_crypto_openssl.c:4974-4991`): with no rule, exactly one certificate, else `EINVAL`.
+///
+/// # Errors
+///
+/// `EINVAL` for no rule and not one certificate, `ENOENT` when no rule picks one, a rule's other
+/// parse error, or a back-reference.
+pub fn select_cert(rules: &[String], certs: &[&[u8]]) -> Result<usize, CertMatchError> {
+    if rules.is_empty() {
+        return if certs.len() == 1 {
+            Ok(0)
+        } else {
+            Err(CertMatchError::Code(EINVAL))
+        };
+    }
+    let mut data: Option<Vec<MatchData>> = None;
+    for rule in rules {
+        let rule = rule.split('\0').next().unwrap_or_default();
+        let (relation, components) = match parse_rule_set(rule.as_bytes()) {
+            Ok(rs) => rs,
+            Err(EINVAL) => continue,
+            Err(code) => return Err(CertMatchError::Code(code)),
+        };
+        if data.is_none() {
+            let md: Result<Vec<MatchData>, i32> = certs.iter().map(|c| matching_data(c)).collect();
+            data = Some(md.map_err(|_| CertMatchError::Code(ENOENT))?);
+        }
+        let mds = data.as_deref().unwrap_or_default();
+        if let Some(i) = check_all_certs(&relation, &components, mds)? {
+            return Ok(i);
+        }
+    }
+    Err(CertMatchError::Code(ENOENT))
+}
+
+/// The certificate a rule picks when it matches exactly one.
+/// MIT `check_all_certs` (`pkinit_matching.c:541-614`): an `||` rule counts a certificate at its first hit and an `&&` rule drops it at its first miss; otherwise the last component checked decides.
+fn check_all_certs(
+    relation: &Relation,
+    components: &[Component],
+    mds: &[MatchData],
+) -> Result<Option<usize>, CertMatchError> {
+    let mut matched = false;
+    let (mut total, mut save) = (0, 0);
+    for (i, md) in mds.iter().enumerate() {
+        let mut decided = false;
+        for c in components {
+            matched = component_match(c, md)?;
+            if matched && *relation == Relation::Or {
+                (total, save) = (total + 1, i);
+                decided = true;
+                break;
+            }
+            if !matched && *relation == Relation::And {
+                decided = true;
+                break;
+            }
+        }
+        if !decided && matched {
+            (total, save) = (total + 1, i);
+        }
+    }
+    Ok((total == 1).then_some(save))
+}
+
 fn keyword_at(rule: &[u8]) -> Option<(Keyword, usize)> {
     KEYWORDS
         .iter()

@@ -246,7 +246,7 @@ pub struct KinitParams<'a> {
     pub want_spake: bool,
     /// FAST armor ccache (`-T`), a name resolved as `-c` resolves one.
     pub armor_ccache: Option<&'a CcSpec>,
-    /// PKINIT identity PEM.
+    /// PKINIT identity: an `X509_user_identity` value, `FILE:`, `DIR:` or `ENV:`.
     pub pkinit_identity: Option<&'a Path>,
     /// PKINIT anchors PEM.
     pub pkinit_anchors: Option<&'a Path>,
@@ -430,7 +430,7 @@ pub struct InitCredsOpt<'a> {
     pub want_spake: bool,
     /// FAST armor ccache (`-T`), a name resolved as `-c` resolves one.
     pub armor_ccache: Option<&'a CcSpec>,
-    /// PKINIT identity PEM.
+    /// PKINIT identity: an `X509_user_identity` value, `FILE:`, `DIR:` or `ENV:`.
     pub pkinit_identity: Option<&'a Path>,
     /// PKINIT anchors PEM.
     pub pkinit_anchors: Option<&'a Path>,
@@ -896,27 +896,37 @@ fn conf_default_realm(ctx: &ClientContext) -> Option<String> {
     ctx.profile.default_realm.clone()
 }
 
+/// The client's PKINIT identity: the first of `identities` that loads, the certificate `rules`
+/// pick among its certificates, and the anchor.
+/// MIT `pkinit_identity_initialize` (`plugins/preauth/pkinit/pkinit_identity.c:509-562`): `X509_user_identity`, else each `pkinit_identities` value until one loads.
+/// MIT `pkinit_identity_prompt` (`plugins/preauth/pkinit/pkinit_identity.c:571-606`): a client picks its certificate by `pkinit_cert_match`.
 fn load_pkinit(
-    identity: &Path,
+    identities: &[String],
     anchors: &Path,
+    rules: &[String],
 ) -> Result<PkinitClient, Box<dyn std::error::Error + Send + Sync>> {
-    let id = read_secret_file(identity)?;
-    let text = std::str::from_utf8(&id).map_err(|_| "pkinit identity PEM")?;
-    let (cert, key) = krb5_types::pkinit::parse_identity_pem(text).ok_or("pkinit identity PEM")?;
+    let mut failed = String::from("No user identity options specified");
+    let mut creds = None;
+    for value in identities {
+        match krb5_types::pkinit::load_identities(value) {
+            Ok(c) => {
+                creds = Some(c);
+                break;
+            }
+            Err(e) => failed = e,
+        }
+    }
+    let creds = creds.ok_or(failed)?;
+    let certs: Vec<&[u8]> = creds.iter().map(|c| c.cert.as_slice()).collect();
+    let pick = krb5_types::pkinit::select_cert(rules, &certs).map_err(|e| e.to_string())?;
+    let chosen = creds.get(pick).ok_or("pkinit identity")?;
     let anc = std::fs::read_to_string(anchors)?;
     let ca_cert = krb5_types::pkinit::parse_pem("CERTIFICATE", &anc).ok_or("pkinit anchors PEM")?;
-    Ok(PkinitClient { cert, key, ca_cert })
-}
-
-/// The bytes of a file that holds a key, in a buffer sized to the file up front and wiped on
-/// every return, a read that fails partway included.
-fn read_secret_file(path: &Path) -> std::io::Result<Zeroizing<Vec<u8>>> {
-    use std::io::Read as _;
-    let mut file = std::fs::File::open(path)?;
-    let len = usize::try_from(file.metadata()?.len()).unwrap_or(0);
-    let mut bytes = Zeroizing::new(Vec::with_capacity(len.saturating_add(1)));
-    file.read_to_end(&mut bytes)?;
-    Ok(bytes)
+    Ok(PkinitClient {
+        cert: chosen.cert.clone(),
+        key: *chosen.key(),
+        ca_cert,
+    })
 }
 
 fn load_pkinit_anchors(
@@ -931,21 +941,22 @@ fn load_pkinit_anchors(
     })
 }
 
+/// The realm's PKINIT options from the profile: `pkinit_identities`, the first `pkinit_anchors`
+/// and the `pkinit_cert_match` rules.
+/// MIT `pkinit_client_profile` (`plugins/preauth/pkinit/pkinit_clnt.c:670-711`): each read with `pkinit_libdefault_strings`.
 fn pkinit_from_conf(
     conf: &Krb5Conf,
     realm: &str,
-) -> (Option<std::path::PathBuf>, Option<std::path::PathBuf>) {
-    let id = conf
-        .pkinit_identities
-        .get(realm)
-        .and_then(|v| v.first())
+) -> (Vec<String>, Option<std::path::PathBuf>, Vec<String>) {
+    let strings = |option| conf.pkinit_libdefault_strings(realm, option);
+    let anchors = strings("pkinit_anchors")
+        .first()
         .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
-    let an = conf
-        .pkinit_anchors
-        .get(realm)
-        .and_then(|v| v.first())
-        .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
-    (id, an)
+    (
+        strings("pkinit_identities"),
+        anchors,
+        strings("pkinit_cert_match"),
+    )
 }
 
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:214-216`): a failure while building the armor AP-REQ keeps its text under this prefix.
@@ -1170,24 +1181,24 @@ fn kinit_inner(
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc);
     let mut armor = initial_armor(ctx, params.armor_ccache, &realm_s)?;
-    let (conf_id, conf_an) = if params.pkinit_identity.is_none() || params.pkinit_anchors.is_none()
-    {
-        pkinit_from_conf(&ctx.profile, &realm_s)
-    } else {
-        (None, None)
+    let (conf_ids, conf_an, rules) = pkinit_from_conf(&ctx.profile, &realm_s);
+    // MIT `pkinit_identity_initialize` loads no identity for the anonymous principal.
+    let identities = match params.pkinit_identity {
+        _ if params.anonymous => Vec::new(),
+        Some(p) => vec![p.to_string_lossy().into_owned()],
+        None => conf_ids,
     };
-    let id_path = params.pkinit_identity.map(Path::to_path_buf).or(conf_id);
     let an_path = params.pkinit_anchors.map(Path::to_path_buf).or(conf_an);
     // Live MIT 1.22.2 `kinit -X X509_anchors=… alice`: anchors
     // without an identity leave the password AS as it was.
-    let pkinit = match (id_path.as_deref(), an_path.as_deref(), params.anonymous) {
-        (Some(i), Some(a), _) => Some(load_pkinit(i, a)?),
-        (None, Some(a), true) => Some(load_pkinit_anchors(a)?),
-        (Some(_), None, _) => {
+    let pkinit = match (identities.is_empty(), an_path.as_deref(), params.anonymous) {
+        (false, Some(a), _) => Some(load_pkinit(&identities, a, &rules)?),
+        (true, Some(a), true) => Some(load_pkinit_anchors(a)?),
+        (false, None, _) => {
             return Err("pkinit requires identity and anchors".into());
         }
-        (None, None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
-        (None, _, false) => None,
+        (true, None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
+        (true, _, false) => None,
     };
     let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false);
     let mut ticket = params.ticket;

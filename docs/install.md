@@ -62,8 +62,9 @@ checks run on them as on MIT's. They are **not yet a drop-in** for MIT's in thes
   to `kpasswd_server`, else `admin_server`; `kpasswd` ignores a port given in `kpasswd_server`.
 - With no enctypes in `krb5.conf` the default list is the four AES types; MIT's also has DES3, RC4
   and Camellia, so the two agree only where `krb5.conf` or Fedora's crypto-policies sets the list.
-- Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file);
-  the rest, `disable_freshness` among them, are accepted and ignored.
+- Of `kinit -X`'s attributes only `X509_user_identity` and `X509_anchors` act (one anchors file;
+  a second `X509_user_identity` replaces the first, which MIT's kinit refuses); the rest,
+  `disable_freshness` among them, are accepted and ignored.
 
 Scripts that need one of these need MIT's `krb5-workstation`. With the default `PREFIX`,
 `BINDIR` is `/usr/local/bin`, which comes before `/usr/bin` in `PATH` and in sudo's
@@ -456,7 +457,9 @@ MIT's (`doc/admin/pkinit.rst`):
   supplied for realm EXAMPLE.COM`.
 
 A client needs the CA as `pkinit_anchors` in the realm's `krb5.conf` stanza. kerber-rust's kinit
-takes one `FILE:` identity and does not read krb5.conf's `pkinit_cert_match`. Anonymous PKINIT
+takes `FILE:`, `DIR:` and `ENV:` identities (`X509_user_identity`, else `pkinit_identities` in
+order) and picks the certificate by `pkinit_cert_match`, as MIT's does; its keys are P-256, and
+only the first anchor is used. Anonymous PKINIT
 (`kinit -n`) uses the same KDC identity.
 
 ## Upgrading an MIT realm

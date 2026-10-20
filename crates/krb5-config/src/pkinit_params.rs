@@ -79,3 +79,26 @@ impl PkinitParams {
         }
     }
 }
+
+impl Krb5Conf {
+    /// A client's PKINIT option for `realm`, every value of the first place that has one.
+    /// MIT `pkinit_libdefault_strings` (`plugins/preauth/pkinit/pkinit_profile.c:222-302`): `[libdefaults] REALM = { option }`, else `[realms] REALM`'s, else `[libdefaults]`'s.
+    #[must_use]
+    pub fn pkinit_libdefault_strings(&self, realm: &str, option: &str) -> Vec<String> {
+        let values = |rels: Option<&Vec<(String, String)>>| -> Vec<String> {
+            rels.into_iter()
+                .flatten()
+                .filter(|(k, _)| k == option)
+                .map(|(_, v)| v.clone())
+                .collect()
+        };
+        [
+            values(self.realm_libdefaults_pkinit.get(realm)),
+            values(self.pkinit.get(realm)),
+            values(Some(&self.libdefaults_pkinit)),
+        ]
+        .into_iter()
+        .find(|v| !v.is_empty())
+        .unwrap_or_default()
+    }
+}

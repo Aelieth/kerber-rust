@@ -396,6 +396,10 @@ pub struct Krb5Conf {
     /// `[kdcdefaults]`'s `pkinit_*` relations at the section's top, name and value, in file order;
     /// read by [`PkinitParams`].
     pub kdcdefaults_pkinit: Vec<(String, String)>,
+    /// `[libdefaults]`'s `pkinit_*` relations at the section's top, in file order.
+    pub libdefaults_pkinit: Vec<(String, String)>,
+    /// Realm → its `[libdefaults]` subsection's `pkinit_*` relations, in file order.
+    pub realm_libdefaults_pkinit: BTreeMap<String, Vec<(String, String)>>,
     /// Realm → its `[libdefaults]` subsection for the eight per-realm keys.
     /// MIT `krb5int_libdefault_string` (`lib/krb5/krb/libdef_parse.c:87-117`): that node is read before the top-level relation.
     pub realm_libdefaults: BTreeMap<String, RealmLibdefaults>,

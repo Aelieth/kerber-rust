@@ -335,7 +335,7 @@ fn gate_long(out: &mut KinitArgs, o: &Opt) -> bool {
     match o.long {
         Some("spake") => out.gate.want_spake = true,
         Some("fast") => {}
-        Some("pkinit") => out.pkinit_identity = o.arg.as_deref().map(strip_file_spec),
+        Some("pkinit") => out.pkinit_identity.clone_from(&o.arg),
         Some("pkinit-anchors") => out.pkinit_anchors = o.arg.as_deref().map(strip_file_spec),
         _ => return false,
     }
@@ -373,7 +373,7 @@ fn apply_x_attr(out: &mut KinitArgs, v: &str) {
     {
         let p = p.strip_prefix('=').unwrap_or(p);
         if !p.is_empty() {
-            out.pkinit_identity = Some(strip_file_spec(p));
+            out.pkinit_identity = Some(p.to_owned());
         }
     }
     if let Some(p) = v.strip_prefix("X509_anchors=") {

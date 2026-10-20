@@ -30,9 +30,13 @@
 #   PK.eku: when client2 also holds alice-noeku.pem and alice-noeku.key (alice's SAN, no extended key usage), its
 #          kinit is refused (77, "Inconsistent key purpose" in the KDC's verify-failure line), and with
 #          pkinit_eku_checking = none it gets a TGT;
+#   PK.dir: a DIR: identity holding both, as NAME.crt and NAME.key links: with pkinit_cert_match = <EKU>pkinit (a
+#          profile ahead of /etc/krb5.conf in KRB5_CONFIG) kinit chooses alice's certificate and gets a TGT (the
+#          no-EKU one would be refused with 77); with no rule it chooses neither (rc 1);
 #   obs.PK.rsa: the RSA KDC identity's startup line (INFO): MIT serves with it; kerber-rust's KDC identity is P-256
 #          only, so its line is the documented "Cannot use key file ...: only P-256 EC keys are supported".
-# Graded on both legs, MIT's first.
+# Graded on both legs, MIT's first. In the rust leg the client cells run twice: MIT's kinit, then ours, kdc's
+# build of krb5-kinit piped to client2's ~/pk/kinit (no host file) and run by path, so MIT's stays the one on PATH.
 # vms: kdc client2
 # legs: mit rust
 set -uo pipefail
@@ -84,6 +88,14 @@ if [ -n "${PK_SNAPSHOT_CLIENT2:-}" ]; then
 fi
 check l6.kdc '^kdc: krb5-pkinit, CA and KDC P-256, RSA KDC identity$' run kdc "rpm -q krb5-pkinit > /dev/null && for f in cacert.pem kdc.pem kdc-rsa.pem rsa-cacert.pem; do sudo openssl x509 -in $D/\$f -noout -subject; done && sudo test -r $D/kdc.key && sudo test -r $D/kdc-rsa.key && sudo openssl x509 -in $D/kdc.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && sudo openssl x509 -in $D/kdc-rsa.pem -noout -text | grep -qE 'Public Key Algorithm: rsaEncryption' && echo 'kdc: krb5-pkinit, CA and KDC P-256, RSA KDC identity'"
 check l6.client2 '^client2: krb5-pkinit, alice P-256$' run client2 "rpm -q krb5-pkinit > /dev/null && for f in alice alice-wrongsan alice-unknownca unknown-cacert alice-rsa rsa-cacert; do openssl x509 -in $C/\$f.pem -noout -subject || exit 1; done && test -r $C/alice.key && test -r $C/alice-wrongsan.key && test -r $C/alice-unknownca.key && test -r $C/alice-rsa.key && openssl x509 -in $C/alice.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'client2: krb5-pkinit, alice P-256'"
+OURS=
+if [ "$LEG" = rust ]; then
+    B=kerber-rust-${FIELD_SHA:0:12}/target/release/krb5-kinit
+    check ours.build '^[0-9a-f]{64}$' run kdc "sha256sum < ~/$B | cut -c1-64"
+    H=$(grep -m1 -oE '^[0-9a-f]{64}$' "$LAST_OUT")
+    check ours.copy "^client2: ~/pk/kinit ${H:-none}\$" host "$LABQ ssh kdc -- 'cat ~/$B' | $LABQ ssh client2 -- 'install -d ~/pk && cat > ~/pk/kinit && chmod 0755 ~/pk/kinit && echo \"client2: ~/pk/kinit \$(sha256sum < ~/pk/kinit | cut -c1-64)\"'"
+    [ -n "$H" ] && grep -q "^client2: ~/pk/kinit $H\$" "$LAST_OUT" && OURS="\$HOME/pk/kinit"
+fi
 check kdc.conf.saved '^no pkinit_identity$' run kdc "sudo cp -p $KC $KC.pk && ! sudo grep -qE '^[[:space:]]*pkinit_identity' $KC && echo 'no pkinit_identity'"
 run kdc "sudo kadmin.local -q 'getprinc WELLKNOWN/ANONYMOUS' 2>&1 | grep -E '^Principal|does not exist'"
 if grep -q 'does not exist' "$LAST_OUT"; then
@@ -181,8 +193,29 @@ if grep -q 'alice-noeku present' "$LAST_OUT"; then
     checklast PK.eku.line 'preauth \(pkinit\) verify failure: Inconsistent key purpose$'
     pkkdc PK.eku.none.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n    pkinit_eku_checking = none\n"
     certkinit PK.eku.none '^kinit rc=0$' alice-noeku
+
+    section "PK.dir a DIR: identity holding alice's certificate and her no-EKU one: <EKU>pkinit picks hers (MIT's kinit, then ours)"
+    pkkdc PK.dir.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc.pem,$D/kdc.key\n    pkinit_anchors = FILE:$D/cacert.pem\n"
+    check PK.dir.setup '^dir: alice-noeku\.crt alice-noeku\.key alice\.crt alice\.key$' run client2 "rm -rf ~/pk/dir && mkdir -p ~/pk/dir && for n in alice alice-noeku; do ln -s $C/\$n.pem ~/pk/dir/\$n.crt && ln -s $C/\$n.key ~/pk/dir/\$n.key || exit 1; done && printf '[libdefaults]\n    pkinit_cert_match = <EKU>pkinit\n' > ~/pk/match.conf && echo \"dir: \$(ls ~/pk/dir | LC_ALL=C sort | paste -sd' ' -)\""
+    # dirkinit <check> <kinit> [match]: alice's kinit with the DIR: identity, the <EKU>pkinit profile first when asked
+    dirkinit() {
+        local env='' rc=1
+        [ -n "${3:-}" ] && env="KRB5_CONFIG=\$HOME/pk/match.conf:/etc/krb5.conf " rc=0
+        check "$1" "^kinit rc=$rc\$" run client2 "kdestroy -c FILE:\$HOME/pk/d.cc 2> /dev/null; $env$2 -X X509_anchors=FILE:$C/cacert.pem -X X509_user_identity=DIR:\$HOME/pk/dir -c FILE:\$HOME/pk/d.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/d.cc 2>&1 | grep -E '^Default principal'"
+        if [ -n "${3:-}" ]; then
+            checklast "$1.tgt" "^Default principal: alice@$R\$"
+        else
+            observelast "obs.$1" 'kinit: .*'
+        fi
+    }
+    for k in mit ${OURS:+ours}; do
+        kinit=kinit
+        [ "$k" = ours ] && kinit=$OURS
+        dirkinit "PK.dir.rule.$k" "$kinit" match
+        dirkinit "PK.dir.norule.$k" "$kinit"
+    done
 else
-    note "client2 holds no alice-noeku certificate: the PK.eku cells are not run"
+    note "client2 holds no alice-noeku certificate: the PK.eku and PK.dir cells are not run"
 fi
 
 section "obs.PK.rsa an RSA KDC identity: MIT serves with it; kerber-rust's KDC identity is P-256 only (INFO)"

@@ -68,19 +68,34 @@ impl std::fmt::Debug for PkinitIdentity {
 ///
 /// MIT's message for the value that does not load.
 pub fn load_identity(value: &str) -> Result<PkinitIdentity, String> {
-    load_identity_at(value, 0)
+    let mut found = load_identities(value)?;
+    match found.len() {
+        1 => found.pop().ok_or_else(|| ENOENT.into()),
+        _ => Err(EINVAL.into()),
+    }
 }
 
-fn load_identity_at(value: &str, depth: usize) -> Result<PkinitIdentity, String> {
+/// Every certificate and key an identity value names, for a client to choose from: one for
+/// `FILE:`, each `NAME.crt` with its `NAME.key` (20 at most) for `DIR:`.
+/// MIT `crypto_load_certs` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4645-4688`): the identity's type decides how its certificates load.
+///
+/// # Errors
+///
+/// As [`load_identity`]; a `DIR:` holding no pair that loads is `ENOENT`'s text.
+pub fn load_identities(value: &str) -> Result<Vec<PkinitIdentity>, String> {
+    load_identities_at(value, 0)
+}
+
+fn load_identities_at(value: &str, depth: usize) -> Result<Vec<PkinitIdentity>, String> {
     let (kind, residual) = value.split_once(':').unwrap_or(("FILE", value));
     match kind {
         "FILE" => {
             let (cert, key) = parse_fs_options(residual).ok_or(EINVAL)?;
-            load_cert_and_key(cert, key)
+            Ok(vec![load_cert_and_key(cert, key)?])
         }
         "DIR" => load_identity_dir(residual),
         "ENV" if depth < 8 => match std::env::var(residual) {
-            Ok(v) => load_identity_at(&v, depth + 1),
+            Ok(v) => load_identities_at(&v, depth + 1),
             Err(_) => Err(EINVAL.into()),
         },
         "ENV" => Err(EINVAL.into()),
@@ -113,7 +128,7 @@ fn load_cert_and_key(cert_file: &str, key_file: &str) -> Result<PkinitIdentity, 
 }
 
 /// MIT `pkinit_get_certs_dir` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:4298-4366`): each `NAME.crt` not starting with a dot, with `NAME.key`; a pair that does not load is skipped.
-fn load_identity_dir(dir: &str) -> Result<PkinitIdentity, String> {
+fn load_identity_dir(dir: &str) -> Result<Vec<PkinitIdentity>, String> {
     let mut found = Vec::new();
     for name in dir_names(dir)? {
         let Some(stem) = name.strip_suffix(".crt") else {
@@ -131,11 +146,10 @@ fn load_identity_dir(dir: &str) -> Result<PkinitIdentity, String> {
             }
         }
     }
-    match found.len() {
-        0 => Err(ENOENT.into()),
-        1 => found.pop().ok_or_else(|| ENOENT.into()),
-        _ => Err(EINVAL.into()),
+    if found.is_empty() {
+        return Err(ENOENT.into());
     }
+    Ok(found)
 }
 
 /// The certificates of one `pkinit_anchors` or `pkinit_pool` value: `FILE:` a PEM file, or

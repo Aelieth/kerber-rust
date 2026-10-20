@@ -800,6 +800,17 @@ fn parse_libdefaults(
         return;
     };
     let k = relation_name(tag);
+    if k.starts_with("pkinit_") {
+        match (top, realm) {
+            (true, _) => conf.libdefaults_pkinit.push((k.to_owned(), v.clone())),
+            (false, Some(r)) => conf
+                .realm_libdefaults_pkinit
+                .entry(r.to_owned())
+                .or_default()
+                .push((k.to_owned(), v.clone())),
+            (false, None) => {}
+        }
+    }
     let key = k.to_ascii_lowercase();
     let exact = top && k == key;
     match key.as_str() {
