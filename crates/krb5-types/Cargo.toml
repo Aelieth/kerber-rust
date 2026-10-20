@@ -15,6 +15,7 @@ pure-rust-locales.workspace = true
 getrandom.workspace = true
 p256.workspace = true
 rasn.workspace = true
+regex-automata.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 subtle.workspace = true

@@ -1117,23 +1117,25 @@ fn write_dump_file(util: &mut Util, path: &Path, text: &str) -> Result<(), u8> {
     Ok(())
 }
 
-/// MIT `name_matches` (`kadmin/dbutil/dump.c:221-257`): a principal is dumped when no names were
-/// given or one of them, as an extended regular expression, matches the whole name.
+/// MIT `name_matches` (`kadmin/dbutil/dump.c:221-257`): a name is dumped when one pattern's leftmost-longest match is all of it.
 fn name_matches(util: &Util, name: &str, patterns: &[String]) -> bool {
     if patterns.is_empty() {
         return true;
     }
     for pat in patterns {
-        match regex_automata::meta::Regex::new(&format!("^(?:{pat})$")) {
-            Ok(re) => {
-                if re.is_match(name) {
-                    return true;
-                }
+        let re = match krb5_types::ere::Ere::new(pat.as_bytes()) {
+            Ok(re) => re,
+            Err(code) => {
+                let why = krb5_types::ere::regerror(code);
+                util.com_err0(&format!("regular expression error: {why}"));
+                return false;
             }
-            Err(e) => {
-                let why = e.to_string();
-                let first = why.lines().next().unwrap_or_default();
-                util.com_err0(&format!("regular expression error: {first}"));
+        };
+        match re.is_whole_match(name.as_bytes()) {
+            Some(true) => return true,
+            Some(false) => {}
+            None => {
+                util.com_err0("regular expression match error: back-references are not supported");
                 return false;
             }
         }

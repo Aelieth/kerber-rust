@@ -5,6 +5,10 @@
 #               twice more, kadmind changes swother again: getprinc shows 5 failed attempts;
 #   SW.undo: a cpw of swpw that its policy (swpol2, minlength 20) refuses leaves its keys; the next cpw -randkey
 #            changes them.
+#   KD: kdb5_util dump's name filter is POSIX ERE, matched against the whole name: with principals kd1 kdd kd kddd
+#       kdax kd]x kda]x, 'kd\d@.*' dumps kdd ("\d" is "d"), 'kd{,2}@.*' dumps kd and kdd ("{,2}" is {0,2}),
+#       'kd[a\]]x@.*' dumps kda]x (the bracket is "a" or a backslash, then "]"), and 'kd(' is glibc's "Unmatched ( or
+#       \(" for each principal.
 # Graded on both legs, MIT's first.
 # vms: kdc client2
 # legs: mit rust
@@ -24,8 +28,9 @@ esac
 legset ALICE ADMIN
 R=${REALM//./\\.}
 KA="kadmin -p admin/admin@$REALM -q"
+KD="kd1 kdd kd kddd kdax 'kd]x' 'kda]x'"
 cleanup() {
-    timeout -k 5 60 "$LAB" ssh kdc -- "for p in swlock swother swpw; do sudo kadmin.local -q \"delprinc -force \$p\"; done; for p in swpol swpol2; do sudo kadmin.local -q \"delpol -force \$p\"; done; true" < /dev/null > /dev/null 2>&1
+    timeout -k 5 60 "$LAB" ssh kdc -- "sudo rm -f /var/tmp/kd.dump /var/tmp/kd.dump.dump_ok; for p in swlock swother swpw $KD; do sudo kadmin.local -q \"delprinc -force \$p\"; done; for p in swpol swpol2; do sudo kadmin.local -q \"delpol -force \$p\"; done; true" < /dev/null > /dev/null 2>&1
 }
 trap cleanup EXIT
 trap 'exit 130' INT
@@ -63,4 +68,15 @@ kadm SW.undo.refused 'Password is too short' "cpw -pw short-pw-1 swpw"
 check SW.undo.kept "^Key: vno ${K0:-none}, " run kdc "sudo kadmin.local -q 'getprinc swpw' 2>&1 | grep -m1 -E '^Key: vno '"
 kadm SW.undo.next "^Key for \"swpw@$R\" randomized\\.\$" "cpw -randkey swpw"
 check SW.undo.changed "^Key: vno $(( ${K0:-0} + 1 )), " run kdc "sudo kadmin.local -q 'getprinc swpw' 2>&1 | grep -m1 -E '^Key: vno '"
+
+section "KD: kdb5_util dump's name filter is POSIX ERE, matched against the whole name (MIT and ours)"
+check KD.setup '^kd principals: 7$' run kdc "for p in $KD; do sudo kadmin.local -q \"delprinc -force \$p\" > /dev/null 2>&1; sudo kadmin.local -q \"addprinc -randkey \$p\" > /dev/null 2>&1; done; sudo kadmin.local -q listprincs 2>&1 | grep -cE '^kd(1|d{0,2}|ax|a?[]]x)@$R\$' | sed 's/^/kd principals: /'"
+# kddump <check> <ERE> <pattern>: what kdb5_util dump -verbose writes to stderr for the pattern, sorted and unique, on one line
+kddump() {
+    check "$1" "$2" run kdc "sudo kdb5_util dump -verbose /var/tmp/kd.dump '$3' 2>&1 > /dev/null | LC_ALL=C sort -u | paste -sd' ' -; sudo rm -f /var/tmp/kd.dump /var/tmp/kd.dump.dump_ok"
+}
+kddump KD.d "^kdd@$R\$" 'kd\d@.*'
+kddump KD.brace "^kd@$R kdd@$R\$" 'kd{,2}@.*'
+kddump KD.bracket "^kda[]]x@$R\$" 'kd[a\]]x@.*'
+kddump KD.bad '^kdb5_util: regular expression error: Unmatched \( or \\\($' 'kd('
 finish

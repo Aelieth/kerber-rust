@@ -90,6 +90,7 @@ any other `###` heading.
 - **admin.** kadmind sets up its listeners as MIT's: iprop on its own port (not on kadmind's), `-proponly`, and `admin_server`'s port before `-port`. Lab beside MIT.
 - **gss/admin.** The GSS initiator takes its caller's flags, as MIT's; the iprop client asks for MUTUAL|REPLAY, so MIT's kadmind takes its later calls after a gap.
 - **kdc.** A database the KDC cannot read again answers the request under the store's read lock, not its write lock, so other requests no longer wait on it.
+- **kdb.** `kdb5_util dump`'s name filter is glibc's ERE, as MIT's `regcomp(REG_EXTENDED)`, matched against the whole name, with `regerror`'s text for a bad name.
 
 ## [1.1.0] - 2026-10-14
 
