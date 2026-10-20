@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # harness/field/scenarios/pkinit.sh --leg mit|rust: PKINIT as the leg's KDC (as upgrade.sh left it on kdc) serves it
-# from kdc.conf, seen from client2's MIT kinit, kdc.conf restored after. The certificates are the lab's (L6), P-256:
+# from kdc.conf, seen from client2's MIT kinit, kdc.conf restored after. The certificates are the lab's (L6), P-256,
+# made on kdc for the run by lib/l6-certs.sh (a set already there that verifies is kept) and client2's piped there:
 # on kdc $PK_KDC_DIR holds cacert.pem, kdc.pem and kdc.key (SAN krbtgt/REALM@REALM, EKU id-pkinit-KPKdc), and
 # kdc-rsa.pem, kdc-rsa.key and rsa-cacert.pem (an RSA 2048 KDC identity and its CA); on client2 $PK_CLIENT_DIR holds
 # cacert.pem, alice.pem and alice.key, alice-wrongsan.pem and .key (a SAN naming another principal), and
 # alice-unknownca.pem and .key with their issuer unknown-cacert.pem (a CA the KDC does not trust), and
-# alice-rsa.pem and .key with rsa-cacert.pem (an RSA 2048 client certificate and its CA). Keys are never printed: only certificates' public fields are read. kdc carries
-# them in the snapshot its leg's upgrade started from; client2 is reset to $PK_SNAPSHOT_CLIENT2 when that is set
-# (field.env), else used as it stands. alice is made +requires_preauth for the cells (the lab's principals are not,
-# and MIT's kinit tries PKINIT only when the KDC asks for preauthentication), and restored after.
+# alice-rsa.pem and .key with rsa-cacert.pem (an RSA 2048 client certificate and its CA), and alice-noeku.pem and
+# .key (no EKU). Keys are never printed: only certificates' public fields are read. client2 is reset to
+# $PK_SNAPSHOT_CLIENT2 when that is set (field.env), else used as it stands. alice is made +requires_preauth for
+# the cells (the lab's principals are not, and MIT's kinit tries PKINIT only when the KDC asks for
+# preauthentication), and restored after.
 #   PK.7a: no pkinit_identity: the KDC starts and logs "preauth pkinit failed to initialize: PKINIT initialization
 #          failed: No pkinit_identity supplied for realm REALM"; alice's certificate kinit is not offered PKINIT;
 #   PK.1:  [kdcdefaults] pkinit_identity and pkinit_anchors: no such line, and alice's certificate kinit gets a TGT,
@@ -135,7 +137,12 @@ if [ -n "${PK_SNAPSHOT_CLIENT2:-}" ]; then
     check reset.client2 rc host "$LABQ reset client2 $PK_SNAPSHOT_CLIENT2"
     waitsync client2
 fi
-check l6.kdc '^kdc: krb5-pkinit, CA and KDC P-256, RSA KDC identity$' run kdc "rpm -q krb5-pkinit > /dev/null && for f in cacert.pem kdc.pem kdc-rsa.pem rsa-cacert.pem; do sudo openssl x509 -in $D/\$f -noout -subject; done && sudo test -r $D/kdc.key && sudo test -r $D/kdc-rsa.key && sudo openssl x509 -in $D/kdc.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && sudo openssl x509 -in $D/kdc-rsa.pem -noout -text | grep -qE 'Public Key Algorithm: rsaEncryption' && echo 'kdc: krb5-pkinit, CA and KDC P-256, RSA KDC identity'"
+check l6.make "^l6 certs in $D: (made|kept)\$" runin kdc "lib/l6-certs.sh" "sudo sh -s -- $D $REALM" < "$FIELD_LIB/l6-certs.sh"
+check l6.copy rc host "$LABQ ssh kdc -- 'sudo tar -C $D/client2 -cf - .' | $LABQ ssh client2 -- 'install -d -m 0700 $C && tar -C $C -xf -'"
+# MIT's KDC takes PKINIT from krb5-pkinit's plugin; ours has it built in.
+KP=
+[ "$LEG" = mit ] && KP='krb5-pkinit, '
+check l6.kdc "^kdc: ${KP}CA and KDC P-256, RSA KDC identity\$" run kdc "${KP:+rpm -q krb5-pkinit > /dev/null && }for f in cacert.pem kdc.pem kdc-rsa.pem rsa-cacert.pem; do sudo openssl x509 -in $D/\$f -noout -subject || exit 1; done && sudo test -r $D/kdc.key && sudo test -r $D/kdc-rsa.key && sudo openssl x509 -in $D/kdc.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && sudo openssl x509 -in $D/kdc-rsa.pem -noout -text | grep -qE 'Public Key Algorithm: rsaEncryption' && echo 'kdc: ${KP}CA and KDC P-256, RSA KDC identity'"
 check l6.client2 '^client2: krb5-pkinit, alice P-256$' run client2 "rpm -q krb5-pkinit > /dev/null && for f in alice alice-wrongsan alice-unknownca unknown-cacert alice-rsa rsa-cacert; do openssl x509 -in $C/\$f.pem -noout -subject || exit 1; done && test -r $C/alice.key && test -r $C/alice-wrongsan.key && test -r $C/alice-unknownca.key && test -r $C/alice-rsa.key && openssl x509 -in $C/alice.pem -noout -text | grep -qE 'ASN1 OID: prime256v1' && echo 'client2: krb5-pkinit, alice P-256'"
 OURS=
 OURSPW=
