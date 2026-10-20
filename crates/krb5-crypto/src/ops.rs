@@ -1,6 +1,7 @@
 use std::time::Instant;
 
-use pbkdf2::pbkdf2_hmac;
+use hmac::digest::KeyInit;
+use hmac::{Hmac, Mac};
 use sha1::Sha1;
 use sha2::{Sha256, Sha384};
 use zeroize::{Zeroize, Zeroizing};
@@ -29,6 +30,33 @@ fn parse_iterations(etype: EncryptionType, params: Option<&[u8]>) -> Result<u32,
         }
         Some(_) => Err(Error::InvalidParams),
     }
+}
+
+// MIT `F` (`lib/crypto/builtin/pbkdf2.c:98-137`): every U_j comes from an HMAC keyed afresh, never a copied keyed state.
+fn pbkdf2_hmac<M: Mac + KeyInit>(
+    password: &[u8],
+    salt: &[u8],
+    iter: u32,
+    out: &mut [u8],
+) -> Result<(), Error> {
+    let keyed = || <M as KeyInit>::new_from_slice(password).map_err(|_| Error::InvalidKeyLength);
+    for (i, block) in (1u32..).zip(out.chunks_mut(M::output_size())) {
+        let mut mac = keyed()?;
+        mac.update(salt);
+        mac.update(&i.to_be_bytes());
+        let mut u = mac.finalize().into_bytes();
+        block.copy_from_slice(&u[..block.len()]);
+        for _ in 1..iter {
+            let mut mac = keyed()?;
+            mac.update(&u);
+            u = mac.finalize().into_bytes();
+            for (b, x) in block.iter_mut().zip(u.iter()) {
+                *b ^= x;
+            }
+        }
+        u.as_mut_slice().zeroize();
+    }
+    Ok(())
 }
 
 // MIT krb5int_dk_string_to_key; see docs/parity/b1-crypto-keys.md
@@ -75,10 +103,10 @@ fn string_to_key_inner(
         saltp.extend_from_slice(salt);
         match etype {
             EncryptionType::Aes128CtsHmacSha256128 => {
-                pbkdf2_hmac::<Sha256>(password, &saltp, iter, &mut tkey);
+                pbkdf2_hmac::<Hmac<Sha256>>(password, &saltp, iter, &mut tkey)?;
             }
             EncryptionType::Aes256CtsHmacSha384192 => {
-                pbkdf2_hmac::<Sha384>(password, &saltp, iter, &mut tkey);
+                pbkdf2_hmac::<Hmac<Sha384>>(password, &saltp, iter, &mut tkey)?;
             }
             EncryptionType::Aes128CtsHmacSha196
             | EncryptionType::Aes256CtsHmacSha196
@@ -111,11 +139,11 @@ fn string_to_key_inner(
         );
         saltp.push(0x00);
         saltp.extend_from_slice(salt);
-        pbkdf2_hmac::<Sha1>(password, &saltp, iter, &mut tkey);
+        pbkdf2_hmac::<Hmac<Sha1>>(password, &saltp, iter, &mut tkey)?;
         let base = Wiped(crate::weak::dk_camellia(&tkey, b"kerberos")?);
         ProtocolKey::from_bytes(etype, &base)
     } else {
-        pbkdf2_hmac::<Sha1>(password, salt, iter, &mut tkey);
+        pbkdf2_hmac::<Hmac<Sha1>>(password, salt, iter, &mut tkey)?;
         let base = Wiped(derive::dk_rfc3961(&tkey, b"kerberos")?);
         ProtocolKey::from_bytes(etype, &base)
     }

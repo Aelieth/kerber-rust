@@ -63,7 +63,6 @@ nix = { version = "0.31", default-features = false, features = ["net", "uio", "u
 num-bigint = { version = "0.4", default-features = false, features = ["std"] }
 signal-hook = { version = "0.3", default-features = false }
 p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa"] }
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
 # Pinned: the build takes rasn from vendor/rasn (`[patch.crates-io]` below).
 rasn = "=0.28.14"
 rc4 = "0.1"
@@ -134,8 +133,6 @@ opt-level = 3
 [profile.dev.package.sha2]
 opt-level = 3
 [profile.dev.package.sha1]
-opt-level = 3
-[profile.dev.package.pbkdf2]
 opt-level = 3
 [profile.dev.package.hmac]
 opt-level = 3
