@@ -248,17 +248,16 @@ fn garner_at<const W: usize>(
     if !odd(modulus) {
         return None;
     }
-    let params = Zeroizing::new(params(&Zeroizing::new(uint::<W>(modulus)?))?);
-    let residue = |v: &[u8]| {
-        Some(Zeroizing::new(FixedMontyForm::new(
-            &Zeroizing::new(uint::<W>(v)?),
-            &params,
-        )))
-    };
-    let (m, a, t) = (residue(m)?, residue(a)?, residue(t)?);
-    let diff = Zeroizing::new(m.sub(&a));
-    let h = Zeroizing::new(diff.mul(&t));
-    let h = Zeroizing::new(h.retrieve());
+    let p = Zeroizing::new(uint::<W>(modulus)?);
+    let params = Zeroizing::new(params(&p)?);
+    let p_nz = Zeroizing::new(NonZero::new(*p).into_option()?);
+    let (m, a) = (Zeroizing::new(uint::<W>(m)?), Zeroizing::new(uint::<W>(a)?));
+    // m - a as m + (p - a): FixedMontyForm::sub's Uint::sub_mod compiles to a branch on the borrow.
+    let neg_a = Zeroizing::new(p.wrapping_sub(&a));
+    let diff = Zeroizing::new(m.add_mod(&neg_a, &p_nz));
+    let diff = Zeroizing::new(FixedMontyForm::new(&diff, &params));
+    let t = Zeroizing::new(FixedMontyForm::new(&Zeroizing::new(uint::<W>(t)?), &params));
+    let h = Zeroizing::new(diff.mul(&t).retrieve());
     Some(Zeroizing::new(tail(&be_bytes(&h), modulus.len())))
 }
 
