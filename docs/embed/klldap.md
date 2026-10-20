@@ -30,6 +30,11 @@ kerber-rust stays Apache-2.0 OR MIT; `publish = false`.
 | chrono 0.4, thiserror 2, tracing 0.1, sha2/hmac/md-5 0.10, zeroize 1, getrandom 0.2, serde 1 | already the same major |
 | rasn, aes/des/rc4/camellia/cmac, p256, md4, pbkdf2 | kerber-only (additive) |
 
+P-384 needs `--cfg p384_backend="fiat"` in klldap's own build too (its `.cargo/config.toml`:
+`[target.'cfg(all())'] rustflags = ["--cfg", "p384_backend=\"fiat\""]`). Our cargo config does not
+reach an embedder, and without the cfg kerber-rust refuses P-384 rather than use p384's default
+field, which is not constant-time.
+
 `rasn` is a normal `0.28` requirement (resolved **0.28.14**). MIT golden DER
 (`crates/krb5-protocol/tests/golden_traces.rs`) still byte-matches
 checked-in `tests/traces/mit-*.der`. Dual `getrandom` 0.2/0.4 remains

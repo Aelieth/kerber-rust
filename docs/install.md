@@ -100,6 +100,10 @@ them. Run it as yourself.
 `sudo make install` installs that build and never compiles (sudo would not find your toolchain),
 and no install goal compiles as root: it stops if the build is missing or the sources are newer.
 Build on the distribution you install on: the programs link against its C library.
+`.cargo/config.toml` also sets `--cfg p384_backend="fiat"`, the constant-time field of the
+`p384` crate. A `RUSTFLAGS` of your own replaces the file's flags, so carry that one too:
+without it the build has no P-384 (keys, certificates and the key-exchange group are refused),
+and `krb5kdc` logs so at start.
 
 ## Install
 

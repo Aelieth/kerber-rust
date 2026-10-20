@@ -91,6 +91,8 @@ zeroize = { version = "1.8", features = ["derive", "alloc"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
+# P-384 compiles in only under p384's fiat backend (.cargo/config.toml sets it).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(p384_backend, values("fiat", "bigint"))'] }
 
 [workspace.lints.clippy]
 all = { level = "deny", priority = -1 }

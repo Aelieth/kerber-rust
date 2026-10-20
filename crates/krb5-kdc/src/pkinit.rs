@@ -44,6 +44,14 @@ impl PkinitKdc {
                 "pkinit_require_crl_checking is not supported: (realm: {realm})"
             ));
         }
+        if !krb5_types::pkinit::P384_ENABLED {
+            tracing::warn!(
+                event = krb5_log::events::KDC_PKINIT,
+                component = "krb5-kdc",
+                outcome = "ok",
+                detail = "P-384 is refused: this build has no --cfg p384_backend=\"fiat\"",
+            );
+        }
         let dh_min_bits = krb5_types::pkinit::parse_dh_min_bits(params.dh_min_bits.as_deref())
             .unwrap_or_else(|v| {
                 krb5_protocol::trace::pkinit_dh_invalid_min_bits(&v);

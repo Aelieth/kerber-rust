@@ -7,10 +7,11 @@ use std::path::Path;
 
 use zeroize::{Zeroize, Zeroizing};
 
+#[cfg(p384_backend = "fiat")]
+use super::cms::p384_sign;
 use super::cms::{
     OID_ECDSA_SHA256, OID_K256_CURVE, OID_P224_CURVE, OID_P256_CURVE, OID_P384_CURVE,
-    OID_P521_CURVE, OID_RSA_SHA256, k256_sign, p224_sign, p256_sign, p384_sign, p521_sign,
-    unbase64,
+    OID_P521_CURVE, OID_RSA_SHA256, k256_sign, p224_sign, p256_sign, p521_sign, unbase64,
 };
 use super::matching::{MatchTrace, select_cert};
 use super::rsa::RsaKey;
@@ -57,7 +58,10 @@ impl IdentityKey {
     pub fn sign_sha256(&self, msg: &[u8]) -> Option<(Vec<u8>, &'static [u8])> {
         match self {
             Self::P256(k) => Some((p256_sign(k, msg)?, OID_ECDSA_SHA256)),
+            #[cfg(p384_backend = "fiat")]
             Self::P384(k) => Some((p384_sign(k, msg)?, OID_ECDSA_SHA256)),
+            #[cfg(not(p384_backend = "fiat"))]
+            Self::P384(_) => None,
             Self::P521(k) => Some((p521_sign(k, msg)?, OID_ECDSA_SHA256)),
             Self::P224(k) => Some((p224_sign(k, msg)?, OID_ECDSA_SHA256)),
             Self::K256(k) => Some((k256_sign(k, msg)?, OID_ECDSA_SHA256)),
@@ -416,8 +420,11 @@ fn sec1_ec(der: &[u8], outer: Option<&[u8]>) -> Option<IdentityKey> {
     match curve {
         OID_P256_CURVE => scalar_on::<32>(scalar, |k| p256::SecretKey::from_slice(k).is_ok())
             .map(IdentityKey::P256),
+        #[cfg(p384_backend = "fiat")]
         OID_P384_CURVE => scalar_on::<48>(scalar, |k| p384::SecretKey::from_slice(k).is_ok())
             .map(IdentityKey::P384),
+        #[cfg(not(p384_backend = "fiat"))]
+        OID_P384_CURVE => None,
         OID_P521_CURVE => scalar_on::<66>(scalar, |k| p521::SecretKey::from_slice(k).is_ok())
             .map(IdentityKey::P521),
         OID_P224_CURVE => scalar_on::<28>(scalar, |k| p224::SecretKey::from_slice(k).is_ok())

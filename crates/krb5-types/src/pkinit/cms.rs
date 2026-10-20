@@ -88,6 +88,7 @@ pub(super) fn p256_sign(secret: &[u8; 32], message: &[u8]) -> Option<Vec<u8>> {
     Some(sig.to_der().as_bytes().to_vec())
 }
 
+#[cfg(p384_backend = "fiat")]
 pub(super) fn p384_sign(secret: &[u8; 48], message: &[u8]) -> Option<Vec<u8>> {
     use p384::ecdsa::signature::hazmat::PrehashSigner;
     use p384::ecdsa::{Signature, SigningKey};
@@ -861,10 +862,13 @@ fn ecdsa_ok(curve: &[u8], key: &[u8], hash: &[u8], sig: &[u8]) -> bool {
             .ok()
             .zip(p256::ecdsa::Signature::from_der(sig).ok())
             .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
+        #[cfg(p384_backend = "fiat")]
         OID_P384_CURVE => p384::ecdsa::VerifyingKey::from_sec1_bytes(key)
             .ok()
             .zip(p384::ecdsa::Signature::from_der(sig).ok())
             .is_some_and(|(vk, s)| vk.verify_prehash(hash, &s).is_ok()),
+        #[cfg(not(p384_backend = "fiat"))]
+        OID_P384_CURVE => false,
         OID_P521_CURVE => {
             let mut prehash = vec![0u8; 33usize.saturating_sub(hash.len())];
             prehash.extend_from_slice(hash);

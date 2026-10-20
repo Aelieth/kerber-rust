@@ -58,9 +58,18 @@ pub enum KxGroup {
 }
 
 impl KxGroup {
+    #[cfg(p384_backend = "fiat")]
     pub const ALL: [Self; 6] = [
         Self::P256,
         Self::P384,
+        Self::P521,
+        Self::Modp2048,
+        Self::Modp4096,
+        Self::Modp1024,
+    ];
+    #[cfg(not(p384_backend = "fiat"))]
+    pub const ALL: [Self; 5] = [
+        Self::P256,
         Self::P521,
         Self::Modp2048,
         Self::Modp4096,
@@ -121,7 +130,10 @@ impl KxGroup {
         if oid == OID_EC_PUBLIC_KEY {
             return match take_tlv(params)? {
                 (0x06, OID_P256_CURVE, _) => Some(Self::P256),
+                #[cfg(p384_backend = "fiat")]
                 (0x06, OID_P384_CURVE, _) => Some(Self::P384),
+                #[cfg(not(p384_backend = "fiat"))]
+                (0x06, OID_P384_CURVE, _) => None,
                 (0x06, OID_P521_CURVE, _) => Some(Self::P521),
                 _ => None,
             };
@@ -177,7 +189,10 @@ pub fn decode_spki(spki: &[u8]) -> Option<(Option<KxGroup>, Vec<u8>)> {
     let group = KxGroup::from_algorithm(oid, params);
     let decodes = match group {
         Some(KxGroup::P256) => p256::PublicKey::from_sec1_bytes(&public).is_ok(),
+        #[cfg(p384_backend = "fiat")]
         Some(KxGroup::P384) => p384::PublicKey::from_sec1_bytes(&public).is_ok(),
+        #[cfg(not(p384_backend = "fiat"))]
+        Some(KxGroup::P384) => false,
         Some(KxGroup::P521) => p521::PublicKey::from_sec1_bytes(&public).is_ok(),
         Some(KxGroup::Modp2048 | KxGroup::Modp4096 | KxGroup::Modp1024) => {
             matches!(take_tlv(&public), Some((0x02, _, rest)) if rest.is_empty())
@@ -330,7 +345,10 @@ impl KxKey {
     pub fn from_secret(group: KxGroup, secret: &[u8]) -> Option<Self> {
         let public = match group {
             KxGroup::P256 => ec_public!(p256, secret),
+            #[cfg(p384_backend = "fiat")]
             KxGroup::P384 => ec_public!(p384, secret),
+            #[cfg(not(p384_backend = "fiat"))]
+            KxGroup::P384 => return None,
             KxGroup::P521 => ec_public!(p521, secret),
             KxGroup::Modp2048 | KxGroup::Modp4096 | KxGroup::Modp1024 => {
                 der_unsigned(&modp_pow(group, &[2], secret)?)
@@ -359,7 +377,10 @@ impl KxKey {
     pub fn shared(&self, peer: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
         match self.group {
             KxGroup::P256 => ec_shared!(p256, &self.secret, peer),
+            #[cfg(p384_backend = "fiat")]
             KxGroup::P384 => ec_shared!(p384, &self.secret, peer),
+            #[cfg(not(p384_backend = "fiat"))]
+            KxGroup::P384 => None,
             KxGroup::P521 => ec_shared!(p521, &self.secret, peer),
             KxGroup::Modp2048 | KxGroup::Modp4096 | KxGroup::Modp1024 => {
                 let (0x02, y, _) = take_tlv(peer)? else {

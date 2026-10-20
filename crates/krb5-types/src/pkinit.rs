@@ -28,6 +28,9 @@ pub use cms::{
 pub use identity::{
     IdentityError, IdentityKey, PkinitIdentity, load_ca_certs, load_identities, load_identity,
 };
+
+/// P-384 is compiled in only with `--cfg p384_backend="fiat"`, p384's constant-time field.
+pub const P384_ENABLED: bool = cfg!(p384_backend = "fiat");
 pub use kx::{
     KxGroup, KxKey, choose_td_group, decode_spki, encode_td_dh_parameters, group_desc,
     parse_dh_min_bits,

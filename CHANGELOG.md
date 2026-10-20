@@ -18,6 +18,7 @@ any other `###` heading.
 
 ### Security
 
+- **pkinit.** P-384 compiles in only with `--cfg p384_backend="fiat"`, p384's constant-time field, which our cargo config sets; a build without it refuses the curve.
 - **crypto.** AES, DES, Camellia, RC4, HMAC and the hashes wipe key and hash state on drop, via each crate's `zeroize` feature, as MIT's `aes_key_cleanup`.
 - **gss.** A DER length past the end of its token is refused, as MIT's `get_tag`; an eight-octet one overflowed, and SPNEGO and the acceptor panicked.
 - **crypto.** Encrypt keeps the confounder and plaintext, including the RC4 copy, in a buffer that is wiped on drop.
