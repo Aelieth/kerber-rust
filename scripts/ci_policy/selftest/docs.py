@@ -8,8 +8,8 @@ import tempfile
 
 from ..common import ROOT, _die, _scratch_root
 from ..docs import (
-    DOCS_SIZE_LIMIT, check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size,
-    doc_link_violations,
+    DOCS_SIZE_LIMIT, check_changelog_headings, check_cited_scripts, check_doc_file_cites, check_doc_links,
+    check_docs_size, doc_link_violations,
 )
 from .common import _die, _must_die, _must_die_msg
 
@@ -66,3 +66,16 @@ def _self_test_docs() -> None:
         subprocess.run(["rm", "-rf", str(droot)], check=False)
     check_doc_file_cites({"CHANGELOG.md": "see `crates/missing/nope.rs`\n"}, ROOT)
     check_doc_file_cites({"docs/parity/a1-tgs.md": "see `scripts/no-such-gate.sh`\n"}, ROOT)
+    check_cited_scripts({"docs/parity/a1-tgs.md": "see `scripts/differential-gate.sh`\n"}, ROOT)
+    _must_die_msg(
+        "docs/parity/a1-tgs.md: `scripts/no-such-gate.sh`",
+        check_cited_scripts,
+        {"docs/parity/a1-tgs.md": "see `scripts/no-such-gate.sh`\n"},
+        ROOT,
+    )
+    _must_die_msg(
+        "docs/gates.md: `scripts/no-such-gate.sh`",
+        check_cited_scripts,
+        {"docs/gates.md": "see scripts/no-such-gate.sh\n"},
+        ROOT,
+    )

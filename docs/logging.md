@@ -31,8 +31,7 @@ FIFO), holds every client until it takes the line.
 The gates read the stream from the daemons' standard output:
 `json_log_on` (`scripts/lib/gate-common.sh`) puts `json = STDOUT` in
 the stock kdc.conf and krb5.conf of each container they start before
-any copy of them is kept, and harness/prod/env-up.sh and
-scripts/prod-gate.sh do the same for their KDCs. A profile a gate
+any copy of them is kept. A profile a gate
 writes for our KDC alone, whose log it reads for a status word,
 carries the relation itself: a daemon whose kdc.conf and krb5.conf are
 both the gate's own reads neither stock file.
@@ -97,10 +96,9 @@ names are declared here and nowhere in Rust:
 
 Gate scripts depend on two of these by exact string:
 `scripts/lib/gate-common.sh`, `scripts/run-harness.sh` and
-scripts/kadmin-mit-gate.sh wait for
-`"event":"harness.kinit"` with `"outcome":"ok"` (and fail on
-`"outcome":"error"`), and scripts/heimdal-gate.sh waits for
-`"event":"heimdal.start"`. Renaming an event renames those greps.
+scripts/kadmin-mit-gate.sh waits for
+`"event":"harness.kinit"` with `"outcome":"ok"` (and fails on
+`"outcome":"error"`). Renaming an event renames those greps.
 
 A request that reaches `handle_request` and gets a reply logs one
 `event=kdc.issue` line at `info`, including `duration_us`:

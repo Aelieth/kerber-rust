@@ -63,7 +63,6 @@ from that tree by one test-only change, the version, the docs and the CHANGELOG.
 | --- | --- | --- | --- |
 | cargo-audit | `rustsec/audit-check` | known advisories fail red | audit |
 | cargo-deny | `deny.toml` licenses/advisories/sources | allowlist only; crates.io sources | audit |
-| scripts/geiger.sh | per-crate `cargo geiger --forbid-only` | product 0-unsafe / `forbid(unsafe)`; dep surface archived, not a count gate | audit |
 | `cargo vet --locked` | `supply-chain/` (Google / Mozilla / Bytecode Alliance) | every third-party crate imported, locally audited, or exempt; cargo-vet **0.10.0** | audit |
 
 ## Deviation ledger (MIT behaviours kept)
@@ -108,7 +107,7 @@ implementation oracle. The Rust-only gates (Oracle `none`) are in
 | --- | --- | --- |
 | golden MIT DER + crypto KATs | in-repo fixtures, not a live peer | test |
 | 9 cargo-fuzz targets | `fuzz.yml` smoke, not an interop peer | fuzz |
-| in-process `bounded_stress` | not the wire stress-gate | unit |
+| in-process `bounded_stress` | in-process unit | unit |
 | cargo-vet exemptions | 121 crates exempt (114 at 1.0), 20 fully audited; not a full local audit of every crate | documented |
 | in-process metrics counters | deferred; logs-as-metrics only (`logging.md`) | n/a |
 

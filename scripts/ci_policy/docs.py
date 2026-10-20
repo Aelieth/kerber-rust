@@ -50,6 +50,33 @@ def check_doc_file_cites(
         _die("doc file cite(s) do not exist: " + "; ".join(missing[:8]))
 
 
+_SCRIPT_CITE_RE = re.compile(r"scripts/(?:[A-Za-z0-9_.+-]+/)*[A-Za-z0-9_.+-]+\.[A-Za-z0-9]+")
+
+
+def check_cited_scripts(
+    texts: dict[str, str] | None = None,
+    root: pathlib.Path | None = None,
+) -> None:
+    """Every scripts/ file named under docs/ exists. Parity is included."""
+    root = pathlib.Path(root) if root is not None else ROOT
+    if texts is None:
+        texts = {
+            str(path.relative_to(root)): path.read_text(encoding="utf-8")
+            for path in doc_files(root)
+            if str(path.relative_to(root)).startswith("docs/")
+        }
+    missing: list[str] = []
+    for doc, text in sorted(texts.items()):
+        if not doc.startswith("docs/"):
+            continue
+        for match in _SCRIPT_CITE_RE.finditer(text):
+            rel = match.group(0)
+            if not (root / rel).is_file():
+                missing.append(f"{doc}: `{rel}`")
+    if missing:
+        _die("cited script(s) do not exist: " + "; ".join(missing[:8]))
+
+
 def doc_files(root: pathlib.Path | None = None) -> list[pathlib.Path]:
     """The public docs: README.md, CONTRIBUTING.md, CHANGELOG.md, docs/**/*.md, and every README.md
     under examples/, harness/, scripts/ and tests/."""

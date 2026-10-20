@@ -10,7 +10,9 @@ from .comments import (
     check_mit_anchor_form, check_mit_anchor_truth, check_no_docs_process_tags, check_no_process_history,
 )
 from .common import WORKFLOWS, _die, _scratch_root, reported_git_vars, scrub_git_env
-from .docs import check_changelog_headings, check_doc_file_cites, check_doc_links, check_docs_size
+from .docs import (
+    check_changelog_headings, check_cited_scripts, check_doc_file_cites, check_doc_links, check_docs_size,
+)
 from .golden import check_golden_dump_unique_keys
 from .hygiene import (
     check_autotests_registered, check_form_ratios, check_isolate_test_krb5, check_python_compiles,
@@ -66,6 +68,7 @@ def main() -> None:
     check_ledger_proof_column()
     check_diffsend_cases()
     check_doc_file_cites()
+    check_cited_scripts()
     check_doc_links()
     check_changelog_headings()
     check_docs_size()

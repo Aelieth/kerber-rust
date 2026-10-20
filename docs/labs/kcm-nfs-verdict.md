@@ -57,10 +57,7 @@ To abandon KCM later: leave kit on FILE; Rust `KCM:` resolve can stay
 
 ## Logs
 
-scripts/kcm-opcode-gate.sh (F43/F42 NVRs; `GET_CRED_LIST=ok`,
-`RETRIEVE`/`REPLACE`=`KRB5_FCC_INTERNAL`).
-scripts/kcm-gate.sh (MIT `klist` principal names, kswitch, restart,
-re-prime, kdestroy). NFS `krb5i` / `krb5p` to NFS-Ganesha through
+NFS `krb5i` / `krb5p` to NFS-Ganesha through
 rpc.gssd (the kit's gssproxy, in the path, served no credential) later ran in the KVM field lab
 ([`harness/field/README.md`](../../harness/field/README.md)), from the
 kit's `FILE:` caches, not from `KCM:`, so the test matrix's last two rows
