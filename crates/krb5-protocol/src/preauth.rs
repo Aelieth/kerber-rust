@@ -23,6 +23,7 @@ use krb5_types::{
 };
 
 use crate::error::Error;
+use crate::trace;
 
 /// MIT `CKSUMTYPE_HMAC_MD5_ARCFOUR` (`krb5.hin`): RFC 4757's HMAC-MD5, -138.
 const CKSUMTYPE_HMAC_MD5_ARCFOUR: i32 = -138;
@@ -680,21 +681,43 @@ pub(crate) fn pa_pk_as_req_unsigned_at(
     })
 }
 
+#[derive(Clone, Copy)]
+pub struct KdcTrust<'a> {
+    pub anchors: &'a [Vec<u8>],
+    pub pool: &'a [Vec<u8>],
+}
+
+impl<'a> KdcTrust<'a> {
+    #[must_use]
+    pub fn anchor(cert: &'a Vec<u8>) -> Self {
+        Self {
+            anchors: std::slice::from_ref(cert),
+            pool: &[],
+        }
+    }
+}
+
 /// Verify the KDC CMS, then require KPKdc + SAN `krbtgt/REALM@REALM` and
 /// `id-pkinit-DHKeyData` before any ECDH.
-fn verify_kdc_pkinit_cms(
-    cms: &[u8],
-    kdc_trust_anchor: &[u8],
-    realm: &str,
-) -> Result<Vec<u8>, Error> {
-    let v = krb5_types::pkinit::cms_verify_full(cms, kdc_trust_anchor)
+// MIT pkinit_as_rep_parse; see docs/parity/b1-client-preauth.md
+fn verify_kdc_pkinit_cms(cms: &[u8], trust: KdcTrust<'_>, realm: &str) -> Result<Vec<u8>, Error> {
+    let pack = krb5_types::pkinit::cms_signeddata_verify(
+        cms,
+        trust.anchors,
+        trust.pool,
+        krb5_types::pkinit::CmsSigner::Server,
+    )
+    .map_err(|fault| {
+        trace::pkinit_client_rep_dh_fail();
+        Error::PkinitReply {
+            code: trace::kdc_code(fault.code()),
+            text: fault.message(),
+        }
+    })?;
+    trace::pkinit_client_rep_dh();
+    krb5_types::pkinit::require_kdc_pkinit_cert(&pack.signer.unwrap_or_default(), realm)
         .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
-    krb5_types::pkinit::require_kdc_pkinit_cert(&v.cert, realm)
-        .map_err(|e| Error::ReplyMismatch(format!("PKINIT KDC CMS: {e}")))?;
-    if v.e_content_type.as_slice() != krb5_types::pkinit::ECONTENT_DHKEY {
-        return Err(Error::ReplyMismatch("PKINIT eContentType".into()));
-    }
-    Ok(v.e_content)
+    Ok(pack.e_content)
 }
 
 /// Derive the PKINIT reply key from PA-PK-AS-REP `dh_signed_data` (CMS or raw P-256).
@@ -702,14 +725,14 @@ fn verify_kdc_pkinit_cms(
 /// # Errors
 ///
 /// [`Error::ReplyMismatch`] when `padata` has no PA-PK-AS-REP, the reply is an encKeyPack, the
-/// KDC's CMS signature, certificate, or content type does not verify against `kdc_trust_anchor`
+/// KDC's CMS signature, certificate, or content type does not verify against `trust`
 /// and `realm`, its DH value does not decode, or the reply names the RFC 8636 SHA-256 KDF;
 /// [`Error::Asn1`] when the PA-PK-AS-REP does not decode; [`Error::Crypto`] when the ECDH fails.
 pub fn pkinit_reply_key(
     client_secret: &[u8; 32],
     padata: &Option<Vec<PaData>>,
     etype: EncryptionType,
-    kdc_trust_anchor: &[u8],
+    trust: KdcTrust<'_>,
     realm: &str,
 ) -> Result<ProtocolKey, Error> {
     let raw = padata
@@ -723,7 +746,7 @@ pub fn pkinit_reply_key(
             return Err(Error::ReplyMismatch("PKINIT encKeyPack unsupported".into()));
         }
     };
-    let inner = verify_kdc_pkinit_cms(pub_kdc.dh_signed_data.as_ref(), kdc_trust_anchor, realm)?;
+    let inner = verify_kdc_pkinit_cms(pub_kdc.dh_signed_data.as_ref(), trust, realm)?;
     let kdc_pub = krb5_types::pkinit::decode_kdc_dh_point(&inner)
         .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
         .ok_or_else(|| Error::ReplyMismatch("PKINIT KDC DH".into()))?;
@@ -743,14 +766,14 @@ pub fn pkinit_reply_key(
 /// # Errors
 ///
 /// [`Error::ReplyMismatch`] when `padata` has no PA-PK-AS-REP or it carries no dhSignedData, the
-/// KDC's CMS signature, certificate, or content type does not verify against `kdc_trust_anchor`
+/// KDC's CMS signature, certificate, or content type does not verify against `trust`
 /// and `realm`, its DH value does not decode, or the reply names a KDF other than SHA-256;
 /// [`Error::Crypto`] when the ECDH fails.
 pub fn pkinit_reply_key_agile(
     client_secret: &[u8; 32],
     padata: &Option<Vec<PaData>>,
     etype: EncryptionType,
-    kdc_trust_anchor: &[u8],
+    trust: KdcTrust<'_>,
     as_req: &[u8],
     client: &PrincipalName,
     realm: &str,
@@ -761,7 +784,7 @@ pub fn pkinit_reply_key_agile(
         .ok_or_else(|| Error::ReplyMismatch("missing PA-PK-AS-REP".into()))?;
     let cms = krb5_types::pkinit::pa_pk_as_rep_dh_signed_data(raw.padata_value.as_ref())
         .ok_or_else(|| Error::ReplyMismatch("PKINIT dhSignedData".into()))?;
-    let inner = verify_kdc_pkinit_cms(&cms, kdc_trust_anchor, realm)?;
+    let inner = verify_kdc_pkinit_cms(&cms, trust, realm)?;
     let kdc_pub = krb5_types::pkinit::decode_kdc_dh_point(&inner)
         .or_else(|| krb5_types::pkinit::decode_ec_spki(&inner))
         .ok_or_else(|| Error::ReplyMismatch("PKINIT KDC DH".into()))?;

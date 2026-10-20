@@ -373,6 +373,14 @@ pub fn pkinit_client_no_identity() {
     krb5int_trace("PKINIT client has no configured identity; giving up", &[]);
 }
 
+pub fn pkinit_client_rep_dh() {
+    krb5int_trace("PKINIT client verified DH reply", &[]);
+}
+
+pub fn pkinit_client_rep_dh_fail() {
+    krb5int_trace("PKINIT client could not verify DH reply", &[]);
+}
+
 // MIT TRACE_PKINIT_CERT_RULE; see docs/parity/a3-preauth.md
 pub fn pkinit_cert_rule(rule: &str) {
     krb5int_trace(

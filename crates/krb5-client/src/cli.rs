@@ -68,7 +68,7 @@ pub struct KinitArgs {
     /// `-X X509_user_identity=`.
     pub pkinit_identity: Option<String>,
     /// `-X X509_anchors=`.
-    pub pkinit_anchors: Option<String>,
+    pub pkinit_anchors: Vec<String>,
     /// The client principal.
     pub principal: Option<String>,
     /// MIT's notices printed before any work ("keytab specified, forcing -k").
@@ -339,7 +339,7 @@ fn gate_long(out: &mut KinitArgs, o: &Opt) -> bool {
         Some("spake") => out.gate.want_spake = true,
         Some("fast") => {}
         Some("pkinit") => out.pkinit_identity.clone_from(&o.arg),
-        Some("pkinit-anchors") => out.pkinit_anchors = o.arg.as_deref().map(strip_file_spec),
+        Some("pkinit-anchors") => out.pkinit_anchors.extend(o.arg.as_deref().map(file_spec)),
         _ => return false,
     }
     true
@@ -375,13 +375,18 @@ fn apply_x_attr(out: &mut KinitArgs, attr: &str, value: &str) {
         "X509_user_identity" if out.pkinit_identity.is_none() => {
             out.pkinit_identity = Some(value.to_owned());
         }
-        "X509_anchors" => out.pkinit_anchors = Some(strip_file_spec(value)),
+        "X509_anchors" => out.pkinit_anchors.push(value.to_owned()),
         _ => {}
     }
 }
 
-fn strip_file_spec(s: &str) -> String {
-    s.strip_prefix("FILE:").unwrap_or(s).to_owned()
+#[cfg(feature = "test-hooks")]
+fn file_spec(s: &str) -> String {
+    if s.contains(':') {
+        s.to_owned()
+    } else {
+        format!("FILE:{s}")
+    }
 }
 
 /// Parsed `klist` argv.

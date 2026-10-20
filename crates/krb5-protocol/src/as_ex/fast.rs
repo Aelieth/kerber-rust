@@ -784,7 +784,10 @@ fn finish_fast_as(
                 secret,
                 &Some(fast.padata.clone()),
                 EncryptionType::known(rep.0.enc_part.etype)?,
-                &pk.ca_cert,
+                crate::preauth::KdcTrust {
+                    anchors: &pk.anchors,
+                    pool: &pk.pool,
+                },
                 wire,
                 &req.cname,
                 req.realm,

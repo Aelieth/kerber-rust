@@ -882,6 +882,44 @@ pub enum CmsFault {
     ContentType,
 }
 
+impl CmsFault {
+    #[must_use]
+    pub fn code(&self) -> i32 {
+        match self {
+            Self::Signature(_) => crate::err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
+            Self::Chain(e, _)
+                if matches!(
+                    e.reason,
+                    "unable to get local issuer certificate" | "unable to get issuer certificate"
+                ) =>
+            {
+                crate::err::CANT_VERIFY_CERTIFICATE
+            }
+            Self::Chain(..) => crate::err::INVALID_CERTIFICATE,
+            _ => crate::err::PREAUTH_FAILED,
+        }
+    }
+
+    #[must_use]
+    pub fn message(&self) -> String {
+        match self {
+            Self::Decode(reason) => format!("Failed to decode CMS message: {reason}"),
+            Self::NotOctetString => "Invalid pkinit packet: octet string expected".to_owned(),
+            Self::WrongOid => "wrong oid\n".to_owned(),
+            Self::NoSigner | Self::ContentType => "Preauthentication failed".to_owned(),
+            Self::Signature(reason) => format!("Failed to verify CMS message: {reason}"),
+            Self::Chain(e, _) => format!("Failed to verify received certificate {e}"),
+        }
+    }
+}
+
+/// MIT's `cms_msg_type`: a client's AuthPack, which may come unsigned, or the KDC's DH reply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CmsSigner {
+    Client,
+    Server,
+}
+
 /// A client's AuthPack from its signedAuthPack, and the certificate that signed it (none when
 /// the message is unsigned, the anonymous case).
 #[derive(Clone, Debug)]
@@ -906,14 +944,19 @@ pub fn cms_signeddata_verify(
     der: &[u8],
     anchors: &[Vec<u8>],
     intermediates: &[Vec<u8>],
+    from: CmsSigner,
 ) -> Result<CmsAuthPack, CmsFault> {
+    let content_type = match from {
+        CmsSigner::Client => ECONTENT_AUTHDATA,
+        CmsSigner::Server => super::ECONTENT_DHKEY,
+    };
     if let Some(reason) = cms_decode_reason(der) {
         return Err(CmsFault::Decode(reason));
     }
     let (_, ci, _) = take_tlv(der).ok_or(CmsFault::Decode("header too long"))?;
     let (_, oid, rest) = take_tlv(ci).ok_or(CmsFault::Decode("field missing"))?;
     let (_, content, _) = take_tlv(rest).ok_or(CmsFault::Decode("field missing"))?;
-    if oid == ECONTENT_AUTHDATA {
+    if from == CmsSigner::Client && oid == ECONTENT_AUTHDATA {
         return match take_tlv(content) {
             Some((0x04, octets, _)) => Ok(CmsAuthPack {
                 e_content: octets.to_vec(),
@@ -927,6 +970,9 @@ pub fn cms_signeddata_verify(
     }
     let sd = SignedDataFields::read(content).ok_or(CmsFault::NoSigner)?;
     let Some(signer_info) = sd.signers.first() else {
+        if from == CmsSigner::Server {
+            return Err(CmsFault::NoSigner);
+        }
         let e_content = sd.e_content.clone().ok_or(CmsFault::NoSigner)?;
         if sd.e_content_type != ECONTENT_AUTHDATA {
             return Err(CmsFault::WrongOid);
@@ -977,7 +1023,7 @@ pub fn cms_signeddata_verify(
     if signed_attrs_content_type(sa).as_deref() != Some(sd.e_content_type.as_slice()) {
         return Err(CmsFault::ContentType);
     }
-    if sd.e_content_type != ECONTENT_AUTHDATA {
+    if sd.e_content_type != content_type {
         return Err(CmsFault::WrongOid);
     }
     Ok(CmsAuthPack {

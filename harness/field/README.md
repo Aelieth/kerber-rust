@@ -390,12 +390,15 @@ would remove it.
   refused with `Certificate mismatch` (66), and `<SUBJECT>(`, which `regcomp` refuses, with `Exec
   format error` (24). `alice-rsa`, an RSA 2048 certificate from an RSA CA both sides trust, gets a
   TGT, from MIT's kinit and, in the rust leg, ours. With the RSA KDC identity alice's certificate
-  kinit gets a TGT. With an 8192-bit KDC key and a 3-prime key for alice, both made on kdc for the cell
+  kinit, MIT's and ours, verifies the KDC's signed reply and gets a TGT. With an 8192-bit KDC key
+  and a 3-prime key for alice, both made on kdc for the cell
   (`scripts/lib/pkinit-rsa-certs.sh`), each kinit gets a TGT and its time is recorded. With alice's
   password on stdin, a certificate the KDC refuses with e-data (`alice-unknownca`'s 70, the `<SUBJECT>(`
   rule's 24) goes on to the password and a TGT, and `alice-wrongsan`'s 75, which carries none, ends with
   rc 1. Under FAST armor (an anonymous ticket, `-T`) alice's certificate kinit runs pkinit inside the
-  armored request and gets a TGT. With `pkinit_identities` and `pkinit_anchors` in a profile of its own,
+  armored request and gets a TGT. Each `pkinit_anchors` value counts: with the KDC's CA in the second,
+  alice's certificate kinit gets a TGT; with an anchors file holding no certificate the KDC's reply does
+  not verify, and the password is taken. With `pkinit_identities` and `pkinit_anchors` in a profile of its own,
   alice's `kpasswd` gets its `kadmin/changepw` ticket by pkinit, MIT's and, in the rust leg, ours (kdc's
   build of `krb5-kpasswd` piped to client2's `~/pk/kpasswd`). kdc.conf is restored with krb5kdc
   restarted at the end, also when the scenario stops early.

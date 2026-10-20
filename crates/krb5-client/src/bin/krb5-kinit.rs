@@ -544,7 +544,7 @@ fn init(opts: &KinitArgs, k5: &K5) -> Result<(), Failure> {
         want_spake: want_spake(opts),
         armor_ccache: armor_spec.as_ref(),
         pkinit_identity: opts.pkinit_identity.as_deref().map(Path::new),
-        pkinit_anchors: opts.pkinit_anchors.as_deref().map(Path::new),
+        pkinit_anchors: &opts.pkinit_anchors,
         enterprise: opts.enterprise,
         keytab: keytab.as_deref(),
         ticket,

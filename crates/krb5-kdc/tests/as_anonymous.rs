@@ -156,7 +156,7 @@ fn anonymous_pkinit_issues_kx() {
         &kp.secret,
         &issued.rep.0.padata,
         EncryptionType::Aes256CtsHmacSha196,
-        &ca.ca_cert,
+        krb5_protocol::KdcTrust::anchor(&ca.ca_cert),
         &encode(&req).expect("as-req"),
         &anon,
         TEST_REALM,

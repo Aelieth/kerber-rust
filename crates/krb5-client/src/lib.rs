@@ -251,7 +251,7 @@ pub struct KinitParams<'a> {
     /// PKINIT identity: an `X509_user_identity` value, `FILE:`, `DIR:` or `ENV:`.
     pub pkinit_identity: Option<&'a Path>,
     /// PKINIT anchors PEM.
-    pub pkinit_anchors: Option<&'a Path>,
+    pub pkinit_anchors: &'a [String],
     /// NT-ENTERPRISE.
     pub enterprise: bool,
     /// Keytab (`-k` / `-t`).
@@ -409,7 +409,7 @@ pub fn kinit(
             want_spake: false,
             armor_ccache: None,
             pkinit_identity: None,
-            pkinit_anchors: None,
+            pkinit_anchors: &[],
             enterprise: false,
         },
     )
@@ -435,7 +435,7 @@ pub struct InitCredsOpt<'a> {
     /// PKINIT identity: an `X509_user_identity` value, `FILE:`, `DIR:` or `ENV:`.
     pub pkinit_identity: Option<&'a Path>,
     /// PKINIT anchors PEM.
-    pub pkinit_anchors: Option<&'a Path>,
+    pub pkinit_anchors: &'a [String],
     /// NT-ENTERPRISE.
     pub enterprise: bool,
 }
@@ -890,10 +890,6 @@ fn load_fast_armor(
     })
 }
 
-fn strip_file_spec(s: &str) -> &str {
-    s.strip_prefix("FILE:").unwrap_or(s)
-}
-
 fn conf_default_realm(ctx: &ClientContext) -> Option<String> {
     ctx.profile.default_realm.clone()
 }
@@ -922,7 +918,8 @@ impl ClientPkinit {
 /// MIT `pkinit_identity_prompt` (`plugins/preauth/pkinit/pkinit_identity.c:571-660`): the certificates (with no identity, `crypto_load_certs` is `EINVAL`), the choice by `pkinit_cert_match`, then the anchors.
 fn load_pkinit(
     identities: &[String],
-    anchors: Option<&Path>,
+    anchors: &[String],
+    pool: &[String],
     rules: &[String],
 ) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
     let mut found = Err(IdentityError {
@@ -945,9 +942,9 @@ fn load_pkinit(
         }))
     };
     let base = krb5_protocol::trace::ERROR_TABLE_BASE_KRB5;
-    let Some(anchors) = anchors else {
+    if anchors.is_empty() {
         return fail(base + 210, "No pkinit_anchors supplied".into(), false);
-    };
+    }
     let creds = match found {
         Ok(c) => c,
         Err(e) => return fail(e.code, e.text, true),
@@ -963,46 +960,59 @@ fn load_pkinit(
         Err(e) => return fail(base + 24, e.to_string(), true),
     };
     let chosen = creds.get(pick).ok_or("pkinit identity")?;
-    // MIT `load_cas_and_crls` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:5044-5053`): a file that does not open or read fails with `oerr`'s default code.
-    let ca = match krb5_types::pkinit::load_ca_certs(&format!("FILE:{}", anchors.display())) {
-        Ok(certs) => certs.into_iter().next().ok_or("pkinit anchors PEM")?,
-        Err(text) => return fail(base + 24, text, true),
+    let (anchors, pool) = match (ca_certs(anchors), ca_certs(pool)) {
+        (Ok(anchors), Ok(pool)) => (anchors, pool),
+        (Err(text), _) | (_, Err(text)) => return fail(base + 24, text, true),
     };
     Ok(ClientPkinit::Ready(PkinitClient {
         cert: chosen.cert.clone(),
         key: chosen.key().clone(),
-        ca_cert: ca,
+        anchors,
+        pool,
     }))
 }
 
+/// MIT `load_cas_and_crls` (`plugins/preauth/pkinit/pkinit_crypto_openssl.c:5044-5053`): a file that does not open or read fails with `oerr`'s default code; one with no certificate loads none.
+fn ca_certs(values: &[String]) -> Result<Vec<Vec<u8>>, String> {
+    let mut certs = Vec::new();
+    for value in values {
+        for cert in krb5_types::pkinit::load_ca_certs(value)? {
+            if !certs.contains(&cert) {
+                certs.push(cert);
+            }
+        }
+    }
+    Ok(certs)
+}
+
 fn load_pkinit_anchors(
-    anchors: &Path,
+    anchors: &[String],
+    pool: &[String],
 ) -> Result<PkinitClient, Box<dyn std::error::Error + Send + Sync>> {
-    let anc = std::fs::read_to_string(anchors)?;
-    let ca_cert = krb5_types::pkinit::parse_pem("CERTIFICATE", &anc).ok_or("pkinit anchors PEM")?;
     Ok(PkinitClient {
         cert: Vec::new(),
         key: krb5_types::pkinit::IdentityKey::P256(Zeroizing::new([0u8; 32])),
-        ca_cert,
+        anchors: ca_certs(anchors)?,
+        pool: ca_certs(pool)?,
     })
 }
 
-/// The realm's PKINIT options from the profile: `pkinit_identities`, the first `pkinit_anchors`
-/// and the `pkinit_cert_match` rules.
+struct PkinitConf {
+    identities: Vec<String>,
+    anchors: Vec<String>,
+    pool: Vec<String>,
+    rules: Vec<String>,
+}
+
 /// MIT `pkinit_client_profile` (`plugins/preauth/pkinit/pkinit_clnt.c:670-711`): each read with `pkinit_libdefault_strings`.
-fn pkinit_from_conf(
-    conf: &Krb5Conf,
-    realm: &str,
-) -> (Vec<String>, Option<std::path::PathBuf>, Vec<String>) {
+fn pkinit_from_conf(conf: &Krb5Conf, realm: &str) -> PkinitConf {
     let strings = |option| conf.pkinit_libdefault_strings(realm, option);
-    let anchors = strings("pkinit_anchors")
-        .first()
-        .map(|s| std::path::PathBuf::from(strip_file_spec(s)));
-    (
-        strings("pkinit_identities"),
-        anchors,
-        strings("pkinit_cert_match"),
-    )
+    PkinitConf {
+        identities: strings("pkinit_identities"),
+        anchors: strings("pkinit_anchors"),
+        pool: strings("pkinit_pool"),
+        rules: strings("pkinit_cert_match"),
+    }
 }
 
 // MIT pkinit_client_profile; see docs/parity/b1-client-preauth.md
@@ -1010,8 +1020,8 @@ pub fn profile_pkinit(
     conf: &Krb5Conf,
     realm: &str,
 ) -> Result<ClientPkinit, Box<dyn std::error::Error + Send + Sync>> {
-    let (identities, anchors, rules) = pkinit_from_conf(conf, realm);
-    load_pkinit(&identities, anchors.as_deref(), &rules)
+    let pk = pkinit_from_conf(conf, realm);
+    load_pkinit(&pk.identities, &pk.anchors, &pk.pool, &pk.rules)
 }
 
 /// MIT `krb5int_fast_as_armor` (`lib/krb5/krb/fast.c:214-216`): a failure while building the armor AP-REQ keeps its text under this prefix.
@@ -1236,20 +1246,29 @@ fn kinit_inner(
     trace::init_creds(&cname, &realm_s, params.in_tkt_service);
     let resolved = resolve_kdc(&ctx.profile, &realm_s, kdc);
     let mut armor = initial_armor(ctx, params.armor_ccache, &realm_s)?;
-    let (conf_ids, conf_an, rules) = pkinit_from_conf(&ctx.profile, &realm_s);
+    let PkinitConf {
+        identities: conf_ids,
+        anchors: conf_an,
+        pool,
+        rules,
+    } = pkinit_from_conf(&ctx.profile, &realm_s);
     // MIT `pkinit_identity_initialize` loads no identity for the anonymous principal.
     let identities = match params.pkinit_identity {
         _ if params.anonymous => Vec::new(),
         Some(p) => vec![p.to_string_lossy().into_owned()],
         None => conf_ids,
     };
-    let an_path = params.pkinit_anchors.map(Path::to_path_buf).or(conf_an);
+    let anchors = if params.pkinit_anchors.is_empty() {
+        conf_an.as_slice()
+    } else {
+        params.pkinit_anchors
+    };
     // Live MIT 1.22.2 `kinit -X X509_anchors=… alice`: anchors
     // without an identity leave the password AS as it was.
-    let pkinit = match (an_path.as_deref(), params.anonymous) {
-        (Some(a), true) => ClientPkinit::Ready(load_pkinit_anchors(a)?),
-        (None, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
-        (a, false) => load_pkinit(&identities, a, &rules)?,
+    let pkinit = match (anchors.is_empty(), params.anonymous) {
+        (false, true) => ClientPkinit::Ready(load_pkinit_anchors(anchors, &pool)?),
+        (true, true) => return Err("anonymous PKINIT requires pkinit_anchors".into()),
+        (_, false) => load_pkinit(&identities, anchors, &pool, &rules)?,
     };
     let mut etypes = krb5_protocol::conf_etypes(&ctx.profile, false);
     let mut ticket = params.ticket;

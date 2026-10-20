@@ -29,6 +29,9 @@
 #   PK.6:  kinit -n with client2's anchors: a WELLKNOWN/ANONYMOUS ticket (the principal is made for the cell);
 #   PK.fast: with that anonymous ticket as FAST armor (-T), alice's certificate kinit runs pkinit inside the armored
 #          request: a TGT, the trace's pkinit, FAST-encoding and FAST reply key lines;
+#   PK.anchors: a profile whose second pkinit_anchors value is the KDC's CA: alice's certificate kinit gets a TGT;
+#          an anchors file with no certificate: the reply does not verify (the trace's line and module 17's 70), and
+#          the password is taken (stdin), which cannot open a PKINIT reply;
 #   PK.kpasswd: with pkinit_identities and pkinit_anchors in a profile of its own, alice's kpasswd gets its
 #          kadmin/changepw ticket by pkinit (the trace's module line) and stops at the new password (stdin empty);
 #          in the rust leg kdc's build of krb5-kpasswd runs from client2's ~/pk/kpasswd too;
@@ -48,7 +51,7 @@
 #   PK.twoid: a second X509_user_identity is refused before any request: "kinit: Preauth module pkinit:
 #          X509_user_identity can not be given twice", then " while setting 'X509_user_identity'='<value>'" (rc 1);
 #   PK.rsakdc: the RSA KDC identity (kdc-rsa.pem, kdc-rsa.key): the KDC signs its reply with the RSA key, and
-#          alice's certificate kinit, trusting both CAs, gets a TGT;
+#          alice's certificate kinit, trusting both CAs, verifies it (the trace's line) and gets a TGT, MIT's and ours;
 #   PK.rsabig: made on kdc for the cell by scripts/lib/pkinit-rsa-certs.sh, an RSA CA, a KDC identity with an
 #          8192-bit key and alice's certificate with a 3-prime key, alice's piped to client2: her kinit gets a TGT,
 #          each kinit's time observed (ms, the AS exchange with both signatures);
@@ -246,6 +249,20 @@ for k in mit ${OURSPW:+ours}; do
     checklast "PK.kpasswd.$k.newpw" '^Cannot read password while reading password$'
 done
 
+section "PK.anchors every pkinit_anchors value, and an anchors file with no certificate (MIT and ours)"
+check PK.anchors.conf '^    pkinit_anchors = FILE:.*/cacert\.pem$' run client2 "mkdir -p ~/pk && : > ~/pk/empty.pem && printf '[libdefaults]\n    pkinit_identities = FILE:%s/alice.pem,%s/alice.key\n    pkinit_anchors = FILE:%s/unknown-cacert.pem\n    pkinit_anchors = FILE:%s/cacert.pem\n' $C $C $C $C > ~/pk/an.conf && printf '[libdefaults]\n    pkinit_identities = FILE:%s/alice.pem,%s/alice.key\n    pkinit_anchors = FILE:%s/pk/empty.pem\n' $C $C \$HOME > ~/pk/an0.conf && cat ~/pk/an.conf"
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    check "PK.anchors.second.$k" '^kinit rc=0$' run client2 "kdestroy -c FILE:\$HOME/pk/an.cc 2> /dev/null; KRB5_CONFIG=\$HOME/pk/an.conf:/etc/krb5.conf $kinit -c FILE:\$HOME/pk/an.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/an.cc 2>&1 | grep -E '^Default principal'"
+    checklast "PK.anchors.second.$k.tgt" "^Default principal: alice@$R\$"
+    check "PK.anchors.empty.$k" '^kinit rc=1$' runin client2 "alice's password ($ALICE)" "kdestroy -c FILE:\$HOME/pk/an.cc 2> /dev/null; rm -f \$HOME/pk/an.trace; KRB5_CONFIG=\$HOME/pk/an0.conf:/etc/krb5.conf KRB5_TRACE=\$HOME/pk/an.trace $kinit -c FILE:\$HOME/pk/an.cc alice > \$HOME/pk/an.out 2>&1; echo \"kinit rc=\$?\"; grep -E 'kinit: ' \$HOME/pk/an.out; grep -oE 'PKINIT client could not verify DH reply|Preauth module pkinit \\(17\\) \\(real\\) returned: -?[0-9]+|Getting AS key' \$HOME/pk/an.trace | sort -u" < <(once "$ALICE")
+    checklast "PK.anchors.empty.$k.verify" '^PKINIT client could not verify DH reply$'
+    checklast "PK.anchors.empty.$k.module" '^Preauth module pkinit \(17\) \(real\) returned: -1765328314$'
+    checklast "PK.anchors.empty.$k.password" '^Getting AS key$'
+    observelast "obs.PK.anchors.empty.$k" 'kinit: .*'
+done
+
 section "PK.7b pkinit_identity names a file that is not there: MIT's line (MIT and ours)"
 pkkdc PK.7b.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:/nonexistent/kdc.pem\n    pkinit_anchors = FILE:$D/cacert.pem\n"
 kdcsince PK.7b.kdc 'preauth pkinit'
@@ -333,8 +350,13 @@ done
 
 section "PK.rsakdc an RSA KDC identity: alice's certificate kinit gets a TGT (MIT and ours)"
 pkkdc PK.rsakdc.kdc "\n[kdcdefaults]\n    pkinit_identity = FILE:$D/kdc-rsa.pem,$D/kdc-rsa.key\n    pkinit_anchors = FILE:$D/cacert.pem\n    pkinit_anchors = FILE:$D/rsa-cacert.pem\n"
-check PK.rsakdc.kinit '^kinit rc=0$' run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/k.cc 2> /dev/null; kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/rsa-cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/k.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/k.cc 2>&1 | grep -E '^Default principal'"
-checklast PK.rsakdc.tgt "^Default principal: alice@$R\$"
+for k in mit ${OURS:+ours}; do
+    kinit=kinit
+    [ "$k" = ours ] && kinit=$OURS
+    check "PK.rsakdc.$k" '^kinit rc=0$' run client2 "mkdir -p ~/pk && kdestroy -c FILE:\$HOME/pk/k.cc 2> /dev/null; rm -f \$HOME/pk/k.trace; KRB5_TRACE=\$HOME/pk/k.trace $kinit -X X509_anchors=FILE:$C/cacert.pem -X X509_anchors=FILE:$C/rsa-cacert.pem -X X509_user_identity=FILE:$C/alice.pem,$C/alice.key -c FILE:\$HOME/pk/k.cc alice < /dev/null 2>&1; echo \"kinit rc=\$?\"; klist -c FILE:\$HOME/pk/k.cc 2>&1 | grep -E '^Default principal'; grep -oE 'PKINIT client (verified|could not verify) DH reply' \$HOME/pk/k.trace"
+    checklast "PK.rsakdc.$k.tgt" "^Default principal: alice@$R\$"
+    checklast "PK.rsakdc.$k.verified" '^PKINIT client verified DH reply$'
+done
 
 section "PK.rsabig an 8192-bit RSA KDC key and alice's 3-prime RSA key, made for the cell: a TGT, timed (MIT and ours)"
 check PK.rsabig.make "^rsa certs in $BIG\$" runin kdc "scripts/lib/pkinit-rsa-certs.sh" "sudo sh -s -- $BIG $REALM alice 8192 3" < "$HERE/../../../scripts/lib/pkinit-rsa-certs.sh"

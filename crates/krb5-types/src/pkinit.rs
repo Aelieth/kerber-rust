@@ -18,7 +18,7 @@ mod rsa;
 pub use ca::{PkinitCa, cms_wrap};
 pub use cms::{
     CertSans, ChainError, CmsAlgorithmIdentifier, CmsAuthPack, CmsContentInfo, CmsEncapContentInfo,
-    CmsFault, CmsSignedData, CmsSignerInfo, CmsVerified, cert_sans, client_eku_ok,
+    CmsFault, CmsSignedData, CmsSigner, CmsSignerInfo, CmsVerified, cert_sans, client_eku_ok,
     cms_extract_unsigned, cms_sign_chain, cms_sign_leaf, cms_sign_leaf_oids, cms_signeddata_verify,
     cms_unwrap, cms_verify, cms_verify_full, cms_wrap_signed, cms_wrap_unsigned,
     encode_td_certifiers, parse_identity_pem, parse_pem, require_client_pkinit_san,

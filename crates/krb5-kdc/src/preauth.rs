@@ -534,8 +534,13 @@ pub(crate) fn process_pkinit(
         .ok()
         .and_then(|r| r.0.req_body.cname)
         .unwrap_or_else(|| cname.clone());
-    let pack = krb5_types::pkinit::cms_signeddata_verify(&cms, &kdc.anchors, &kdc.pool)
-        .map_err(|fault| cms_fault(store, kdc, cname, fault))?;
+    let pack = krb5_types::pkinit::cms_signeddata_verify(
+        &cms,
+        &kdc.anchors,
+        &kdc.pool,
+        krb5_types::pkinit::CmsSigner::Client,
+    )
+    .map_err(|fault| cms_fault(store, kdc, cname, fault))?;
     let is_signed = pack.signer.is_some();
     if let Some(cert) = &pack.signer {
         authorize_cert(store, kdc, cert, client, &req_cname, realm)?;
@@ -709,38 +714,19 @@ fn cms_fault(
         outcome = "denied",
         error = ?fault
     );
-    let module = |code, message: String| Error::PreauthModule { code, message };
+    let (code, message) = (fault.code(), fault.message());
     match fault {
-        CmsFault::Decode(reason) => module(
-            err::PREAUTH_FAILED,
-            format!("Failed to decode CMS message: {reason}"),
-        ),
-        CmsFault::NotOctetString => module(
-            err::PREAUTH_FAILED,
-            "Invalid pkinit packet: octet string expected".to_owned(),
-        ),
-        CmsFault::WrongOid => module(err::PREAUTH_FAILED, "wrong oid\n".to_owned()),
         CmsFault::NoSigner | CmsFault::ContentType => {
             proto(err::PREAUTH_FAILED, status::PREAUTH_FAILED)
         }
-        CmsFault::Signature(reason) => module(
-            err::DIGEST_IN_SIGNED_DATA_NOT_ACCEPTED,
-            format!("Failed to verify CMS message: {reason}"),
-        ),
-        CmsFault::Chain(e, cert) => {
-            let no_issuer = matches!(
-                e.reason,
-                "unable to get local issuer certificate" | "unable to get issuer certificate"
-            );
-            let (code, td, certs): (i32, i32, Vec<&[u8]>) = if no_issuer {
+        CmsFault::Chain(_, cert) => {
+            let (td, certs): (i32, Vec<&[u8]>) = if code == err::CANT_VERIFY_CERTIFICATE {
                 (
-                    err::CANT_VERIFY_CERTIFICATE,
                     pa::TD_TRUSTED_CERTIFIERS,
                     kdc.anchors.iter().map(Vec::as_slice).collect(),
                 )
             } else {
                 (
-                    err::INVALID_CERTIFICATE,
                     pa::TD_INVALID_CERTIFICATES,
                     std::iter::once(cert.as_slice())
                         .filter(|c| !c.is_empty())
@@ -758,9 +744,10 @@ fn cms_fault(
                 code,
                 text: Some(status::PREAUTH_FAILED.to_owned()),
                 e_data,
-                detail: Some(format!("Failed to verify received certificate {e}")),
+                detail: Some(message),
             }
         }
+        _ => Error::PreauthModule { code, message },
     }
 }
 

@@ -18,7 +18,8 @@ fn a_dropped_pkinit_client_wipes_its_scalar_in_place() {
     drop(PkinitClient {
         cert: Vec::new(),
         key: krb5_types::pkinit::IdentityKey::P256(zeroize::Zeroizing::new([0x5a; 32])),
-        ca_cert: Vec::new(),
+        anchors: Vec::new(),
+        pool: Vec::new(),
     });
     assert_eq!(DROPPED.with(|d| d.borrow().clone()), [[0; 32]]);
 }

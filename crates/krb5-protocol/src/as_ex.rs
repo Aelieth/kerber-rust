@@ -6,7 +6,7 @@
 
 use crate::error::Error;
 use crate::keytab::KeytabFailure;
-use crate::preauth::{pa_pk_as_req_signed_at, pkinit_reply_key_agile};
+use crate::preauth::{KdcTrust, pa_pk_as_req_signed_at, pkinit_reply_key_agile};
 use crate::trace;
 use crate::transport::{KdcAddr, SendKind, sendto_kdc};
 use krb5_asn1::{decode, encode};
@@ -199,8 +199,9 @@ pub struct PkinitClient {
     /// Leaf certificate (DER).
     pub cert: Vec<u8>,
     pub key: krb5_types::pkinit::IdentityKey,
-    /// CA certificate used to verify the KDC CMS (DER).
-    pub ca_cert: Vec<u8>,
+    /// CA certificates used to verify the KDC CMS (DER): the anchors, and `pkinit_pool`'s.
+    pub anchors: Vec<Vec<u8>>,
+    pub pool: Vec<Vec<u8>>,
 }
 
 impl Drop for PkinitClient {
@@ -529,9 +530,9 @@ fn as_exchange_inner(
     {
         let (hint, refusal) = match continue_pkinit(req, nonce, &bound, &etypes, &clock)? {
             PkinitEnd::Done(out) => return Ok(*out),
-            PkinitEnd::Reply { rep, wire } if !req.ticket.anonymous => {
+            PkinitEnd::Reply { rep, wire, traced } if !req.ticket.anonymous => {
                 return finish_bare_reply(
-                    req, keys, unreadable, prompt, *rep, nonce, &etypes, &bound, &wire,
+                    req, keys, unreadable, prompt, *rep, nonce, &etypes, &bound, &wire, traced,
                 );
             }
             PkinitEnd::Reply { .. } => {
@@ -589,7 +590,7 @@ fn as_exchange_inner(
     // MIT `get_as_key` (`lib/krb5/krb/preauth2.c:438-457`): a preauth module reads the password when it wants the key, so a hint is not answered with a read made ahead of the module. Only a reply no module answered reads it here.
     match msg {
         KdcMsg::AsRep(rep) => finish_bare_reply(
-            req, keys, unreadable, prompt, rep, nonce, &etypes, &bound, &wire,
+            req, keys, unreadable, prompt, rep, nonce, &etypes, &bound, &wire, false,
         ),
         KdcMsg::Error(e) if spake_more(&e) => {
             if !crate::clpreauth::loaded(req.profile, "spake") {
@@ -636,9 +637,12 @@ fn finish_bare_reply(
     etypes: &[i32],
     bound: &AsReqTimes,
     wire: &[u8],
+    traced: bool,
 ) -> Result<AsOutcome, Error> {
     refuse_spake_skip(req.want_spake)?;
-    trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+    if !traced {
+        trace_reply_padata(rep.0.padata.as_deref(), etypes, None);
+    }
     let mut pw = PasswordCell::new(
         prompt,
         req.password,
@@ -1356,6 +1360,7 @@ fn continue_pkinit(
             return Ok(PkinitEnd::Reply {
                 rep: Box::new(rep),
                 wire: first_wire,
+                traced: false,
             });
         }
         KdcMsg::TgsRep => return Err(Error::UnexpectedPdu),
@@ -1400,20 +1405,37 @@ fn continue_pkinit(
     match send_as(req, &wire)? {
         KdcMsg::AsRep(rep) => {
             let etype = EncryptionType::known(rep.0.enc_part.etype)?;
-            let reply_key = pkinit_reply_key_agile(
+            let padata = rep.0.padata.as_deref().unwrap_or_default();
+            trace_preauth_input(padata, etypes);
+            let trust = KdcTrust {
+                anchors: &pk.anchors,
+                pool: &pk.pool,
+            };
+            let reply_key = match pkinit_reply_key_agile(
                 &kp.secret,
                 &rep.0.padata,
                 etype,
-                &pk.ca_cert,
+                trust,
                 &wire,
                 &req.cname,
                 req.realm,
-            )?;
-            trace_reply_padata(
-                rep.0.padata.as_deref(),
-                etypes,
-                Some((PKINIT_MODULE, pa::PK_AS_REP, 0)),
-            );
+            ) {
+                Ok(key) => key,
+                Err(Error::PkinitReply { code, text }) => {
+                    ModuleFail::new(code, &text).trace(PKINIT_MODULE, pa::PK_AS_REP);
+                    trace::preauth_output(&[]);
+                    return Ok(PkinitEnd::Reply {
+                        rep: Box::new(rep),
+                        wire,
+                        traced: true,
+                    });
+                }
+                Err(e) => return Err(e),
+            };
+            if padata.iter().any(|p| p.padata_type == pa::PK_AS_REP) {
+                trace::preauth_process(PKINIT_MODULE, pa::PK_AS_REP, true, 0, None);
+            }
+            trace::preauth_output(&[]);
             trace::init_creds_as_key_preauth((&reply_key).into());
             finish_as_rep(
                 req.profile,
@@ -1465,6 +1487,7 @@ enum PkinitEnd {
     Reply {
         rep: Box<AsRep>,
         wire: Vec<u8>,
+        traced: bool,
     },
 }
 
